@@ -428,6 +428,12 @@ pub struct ObuRuntime {
     spdu_parse_failures: u64,
     /// Received envelopes that parsed but whose signature did not verify.
     spdu_signature_failures: u64,
+    /// Out-of-band P2PCD learning responses this node's P2P entity broadcast, with the
+    /// instant (node clock) each became due, waiting for the host to take them
+    /// ([`ObuRuntime::take_p2pcd_responses`]).
+    p2pcd_outbox: Vec<(SimTime, Vec<u8>)>,
+    /// The P2PCD counters as of the last `node.p2pcd` record.
+    p2pcd_seen: crate::p2pcd::P2pcdStats,
     node: NodeId,
     config: NodeConfig,
     service: ProfileServiceModel,
@@ -544,6 +550,8 @@ impl ObuRuntime {
         ObuRuntime {
             spdu_parse_failures: 0,
             spdu_signature_failures: 0,
+            p2pcd_outbox: Vec::new(),
+            p2pcd_seen: crate::p2pcd::P2pcdStats::default(),
             node,
             cpu: ServerBank::new("cpu", cpu_servers, at),
             hsm: ServerBank::new("hsm", hsm_servers, at),
@@ -628,6 +636,52 @@ impl ObuRuntime {
     /// The security stack, mutably, for a credential protocol installing real credentials.
     pub fn security_mut(&mut self) -> &mut NodeSecurity {
         &mut self.security
+    }
+
+    /// The out-of-band P2PCD learning responses (`Ieee1609dot2Peer2PeerPDU`, unsecured,
+    /// PSID [`v2xw_sec::p2pcd::P2PCD_PSID`]) this node broadcast since the last call, each
+    /// with the node-clock instant it became due. The host puts them on the air.
+    pub fn take_p2pcd_responses(&mut self) -> Vec<(SimTime, Vec<u8>)> {
+        core::mem::take(&mut self.p2pcd_outbox)
+    }
+
+    /// A learning response heard on the air: counted against this node's own response
+    /// processes and learned from (validated to an installed root first). Returns how
+    /// many CA certificates were learned.
+    ///
+    /// # Errors
+    /// The bytes are not a learning response.
+    pub fn receive_p2pcd_response(&mut self, bytes: &[u8]) -> Result<usize, v2xw_sec::SecError> {
+        self.security.p2pcd_receive_response(bytes)
+    }
+
+    /// When the earliest out-of-band response back-off expires, on the simulation's
+    /// timeline seen from `now` — the instant a host that wants exact back-off timing
+    /// wakes the node for. `None` when no response process is running.
+    #[must_use]
+    pub fn next_p2pcd_due_after(&self, now: SimTime) -> Option<SimTime> {
+        let due = self.security.p2pcd_next_due()?;
+        Some(due.max(now))
+    }
+
+    fn p2pcd_send_due(&mut self, ctx: &mut dyn NodeCtx, believed: SimTime) {
+        for pdu in self.security.p2pcd_due(ctx.now()) {
+            self.p2pcd_outbox.push((believed, pdu));
+        }
+    }
+
+    /// Records what P2PCD did since the last record, on `node.p2pcd`.
+    fn p2pcd_record(&mut self, ctx: &mut dyn NodeCtx, believed: SimTime) {
+        let p = self.security.p2pcd();
+        if let Some(delta) = p.stats.since(&self.p2pcd_seen) {
+            self.p2pcd_seen = p.stats.clone();
+            ctx.emit(crate::p2pcd::P2pcdRecord {
+                t: believed,
+                node: self.node,
+                flavor: p.flavor().as_str(),
+                delta,
+            });
+        }
     }
 
     /// The node's stores (03-interfaces.md §8).
@@ -967,6 +1021,7 @@ impl ObuRuntime {
         }
 
         self.receive(ctx, believed, inbox, &mut out);
+        self.p2pcd_send_due(ctx, believed);
         self.stores.neighbors.age(believed);
         self.stores.certs.travelled(distance_travelled_m);
         self.stores.certs.sweep(believed, &self.stores.crl);
@@ -1006,6 +1061,7 @@ impl ObuRuntime {
             );
         }
 
+        self.p2pcd_record(ctx, believed);
         if self.window.length(now) >= self.config.telemetry_period {
             out.telemetry = Some(self.close_window(ctx, now));
         }
@@ -1036,6 +1092,8 @@ impl ObuRuntime {
             return out;
         }
         self.receive(ctx, believed, inbox, &mut out);
+        self.p2pcd_send_due(ctx, believed);
+        self.p2pcd_record(ctx, believed);
         out.drops = self.drops.take_step();
         out
     }
@@ -1155,6 +1213,7 @@ impl ObuRuntime {
 
             // 3. The policy, over the queue as it is at this instant.
             self.learn_or_request(&frame);
+            self.p2pcd_rx(ctx, &frame);
             let summary = RxSummary {
                 signer: frame.signer.clone(),
                 msg_type: frame.msg_type,
@@ -1360,6 +1419,27 @@ impl ObuRuntime {
         } else if !self.stores.peers.touch(&signer) {
             self.stores.peers.record_p2pcd_request();
         }
+    }
+
+    /// The SDS's P2PCD preprocessing of one received SPDU (WP-C3): the peer's requests and
+    /// responses, and a request for an issuer or signer this node does not hold
+    /// ([`NodeSecurity::p2pcd_preprocess`]). Independent of the verification policy: the
+    /// SDS looks at every signed SPDU the SDEE hands it, verified or not.
+    fn p2pcd_rx(&mut self, ctx: &mut dyn NodeCtx, frame: &RxFrame) {
+        let Some(bytes) = frame.spdu.as_deref() else {
+            return;
+        };
+        let Some(parsed) = self.security.parse(bytes) else {
+            return;
+        };
+        let known = match &parsed.signer {
+            v2xw_sec::envelope::ParsedSigner::Digest(d) => {
+                self.stores.peers.certificate(d).is_some()
+            }
+            _ => true,
+        };
+        self.security
+            .p2pcd_preprocess(ctx, self.node, &parsed, known);
     }
 
     /// Starts every waiting signature check whose start instant is no later than `until`.

@@ -426,6 +426,28 @@ impl RxTrust {
             .count()
     }
 
+    /// Validates the CA path of `id`, a CA certificate just added to `cas` by P2PCD
+    /// (WP-C3), to an installed root. Every path cached as "issuer unknown" is forgotten
+    /// first, since the new certificate may be the missing link; a refused certificate's
+    /// own entry is dropped so the cache does not keep a path the caller removes.
+    ///
+    /// # Errors
+    /// The rule its path breaks; [`RxReject::UnknownIssuer`] when a link above it is still
+    /// missing.
+    pub fn validate_learned_ca(
+        &mut self,
+        cas: &BTreeMap<[u8; 8], Arc<Certificate>>,
+        id: [u8; 8],
+    ) -> Result<(), RxReject> {
+        self.paths
+            .retain(|_, p| !matches!(p, Err(RxReject::UnknownIssuer)));
+        let r = self.ca_path(cas, id).map(|_| ());
+        if r.is_err() {
+            self.paths.remove(&id);
+        }
+        r
+    }
+
     /// The operations performed since the last call, for the node to price with its
     /// hardware profile.
     pub fn take_ops(&mut self) -> Vec<(PrimitiveId, PrimitiveOpKind, u32)> {

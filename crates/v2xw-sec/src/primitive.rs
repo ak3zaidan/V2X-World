@@ -1186,7 +1186,7 @@ pub const EXECUTED: &[ExecutedOp] = {
 
 /// The `v2xw_sec` modules that run no cryptography of their own (types, errors, the
 /// catalogue, scheme descriptors, the test PKI).
-pub const MODULES_WITHOUT_CRYPTO: &[&str] = &["error", "primitive", "scheme", "testctx"];
+pub const MODULES_WITHOUT_CRYPTO: &[&str] = &["error", "p2pcd", "primitive", "scheme", "testctx"];
 
 /// One link of a certificate chain, as far as its validation cost is concerned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

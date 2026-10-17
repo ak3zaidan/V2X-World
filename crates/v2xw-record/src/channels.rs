@@ -228,6 +228,14 @@ pub const CHANNELS: &[ChannelSpec] = &[
         visibility: Visibility::Node,
         payload_bytes: Some(32),
     },
+    // Per-node P2PCD activity per step (WP-C3): requests, responses, certificates
+    // learned or refused. What the node itself did and saw. Never an `Event` payload.
+    ChannelSpec {
+        name: "node.p2pcd",
+        wire_id: None,
+        visibility: Visibility::Node,
+        payload_bytes: None,
+    },
     // One reception attempt followed to its fate, with the stamps of its journey. The
     // sender and the distance are ground truth, as on `phy.rx`. Not an `Event` payload:
     // at one record per attempt it is a recording and metric channel, not a UI one.

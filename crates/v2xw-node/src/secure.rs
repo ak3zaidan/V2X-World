@@ -441,6 +441,46 @@ pub struct NodeSecurity {
     trust: crate::rxval::RxTrust,
     /// The clock receiver checks read time in (TAI `Time32`).
     wall: WallClock,
+    /// Peer-to-peer certificate distribution (WP-C3, [`crate::p2pcd`]).
+    p2pcd: crate::p2pcd::P2pcd,
+    /// The CA chain (issuer first, root excluded) of each signing certificate, by its
+    /// `HashedId8`, as `HashedId3`s: what this node may answer for out-of-band.
+    own_chains: BTreeMap<[u8; 8], Vec<crate::p2pcd::Id3>>,
+}
+
+/// The RNG stream the P2PCD response back-off draws from.
+pub const P2PCD_STREAM: &str = "node/p2pcd-backoff";
+
+/// The P2PCD flavour a profile runs by default: out-of-band on the IEEE 1609.2 (US)
+/// envelope, the 1609.2-2016 form; inline on the ETSI profile, whose CAM rules are
+/// written in inline terms (TS 103 097 §7.1.1) and which forbids `p2pcdLearningRequest`
+/// (§5.2).
+pub fn default_p2pcd_flavor(profile: EnvelopeProfile) -> v2xw_sec::p2pcd::P2pcdFlavor {
+    match profile {
+        EnvelopeProfile::Ieee1609Dot2 => v2xw_sec::p2pcd::P2pcdFlavor::OutOfBand,
+        EnvelopeProfile::EtsiTs103097 => v2xw_sec::p2pcd::P2pcdFlavor::Inline,
+    }
+}
+
+/// The messages that carry P2PCD fields: the awareness messages, whose SDEE is the one
+/// that receives the trigger SPDUs (1609.2a-2017 §8.2.4: requests go "in signed SPDUs
+/// from the trigger SDEE").
+fn carries_p2pcd(msg_type: MsgType) -> bool {
+    matches!(msg_type, MsgType::Bsm | MsgType::Cam)
+}
+
+fn id3_of_id8(id: &[u8; 8]) -> crate::p2pcd::Id3 {
+    [id[5], id[6], id[7]]
+}
+
+/// The `HashedId8` an issuer field names, whichever whole-certificate hash it uses.
+fn issuer_id8(c: &Certificate) -> Option<[u8; 8]> {
+    match &c.0.issuer {
+        IssuerIdentifier::sha256AndDigest(d) | IssuerIdentifier::sha384AndDigest(d) => {
+            Some(hashedid::id8_bytes(d))
+        }
+        _ => None,
+    }
 }
 
 impl NodeSecurity {
@@ -466,7 +506,23 @@ impl NodeSecurity {
             new_neighbour_pending: false,
             trust: crate::rxval::RxTrust::default(),
             wall,
+            p2pcd: crate::p2pcd::P2pcd::new(v2xw_sec::p2pcd::P2pcdParams::recommended(
+                default_p2pcd_flavor(EnvelopeProfile::Ieee1609Dot2),
+            )),
+            own_chains: BTreeMap::new(),
         }
+    }
+
+    /// The same stack running P2PCD with `params` (flavour and the §8.2.3 parameters).
+    #[must_use]
+    pub fn with_p2pcd(mut self, params: v2xw_sec::p2pcd::P2pcdParams) -> NodeSecurity {
+        self.p2pcd = crate::p2pcd::P2pcd::new(params);
+        self
+    }
+
+    /// The P2PCD state and its counters.
+    pub fn p2pcd(&self) -> &crate::p2pcd::P2pcd {
+        &self.p2pcd
     }
 
     /// The same stack, attaching the certificate to the next awareness message whenever a
@@ -497,6 +553,9 @@ impl NodeSecurity {
             EnvelopeProfile::Ieee1609Dot2 => Envelope::ieee1609(wall),
             EnvelopeProfile::EtsiTs103097 => Envelope::etsi(wall),
         };
+        let mut params = *self.p2pcd.params();
+        params.flavor = default_p2pcd_flavor(profile);
+        self.p2pcd = crate::p2pcd::P2pcd::new(params);
         self
     }
 
@@ -627,6 +686,7 @@ impl NodeSecurity {
         // P-384 root, which is how its subordinates name it (`sha384AndDigest`).
         if let Ok(id) = cert::cert_id8(&ca) {
             self.issuers.entry(hashedid::id8_bytes(&id)).or_insert(ca);
+            self.own_chains.clear();
         }
     }
 
@@ -724,12 +784,26 @@ impl NodeSecurity {
             field: "no credential has been provisioned; a node without one stops \
                     transmitting rather than sending unsigned [CAMP-EE §2.2.10.2]",
         })?;
-        let hdr = HeaderInfoSpec {
+        let mut hdr = HeaderInfoSpec {
             psid: self.psid_for(msg_type),
             msg_type: Some(msg_type),
             generation_location: location,
             ..HeaderInfoSpec::default()
         };
+        let mut sid = sid;
+        if carries_p2pcd(msg_type) {
+            let now = ctx.now();
+            let add = self.p2pcd_header(&signer, now);
+            hdr.p2pcd_learning_request = add.learning_request;
+            hdr.inline_p2pcd_request = add.inline_request;
+            hdr.requested_certificate = add
+                .requested_ca
+                .and_then(|x| self.ca_by_id3(x))
+                .map(|c| (*c).clone());
+            if add.force_certificate {
+                sid = SignerIdChoice::Certificate;
+            }
+        }
         let pdu = self
             .crypto
             .sign_envelope(&self.envelope, ctx, &signer, payload, &hdr, sid)?;
@@ -828,6 +902,215 @@ impl NodeSecurity {
     /// first frame that is actually sent.
     pub fn withdraw_certificate(&mut self, msg_type: MsgType) {
         self.last_certificate.remove(msg_type.as_str());
+    }
+
+    /// The P2PCD fields of the next signed safety SPDU, and the note that `signer`'s chain
+    /// is in use (1609.2a-2017 §8.2.4.1, §8.2.4.2).
+    fn p2pcd_header(
+        &mut self,
+        signer: &SignerHandle,
+        now: SimTime,
+    ) -> crate::p2pcd::HeaderAdditions {
+        let own8 = hashedid::id8_bytes(signer.digest());
+        let chain = self.own_chain(signer);
+        self.p2pcd.note_signed_with(&chain, now);
+        let cas: BTreeMap<crate::p2pcd::Id3, bool> = self
+            .issuers
+            .iter()
+            .map(|(id, c)| (id3_of_id8(id), Self::servable_ca(c)))
+            .collect();
+        self.p2pcd.take_header(now, Some(id3_of_id8(&own8)), &|x| {
+            cas.get(&x).copied().unwrap_or(false)
+        })
+    }
+
+    /// A CA certificate P2PCD may hand out: it can issue, and it is not a root (roots
+    /// come from the CTL, never from a peer).
+    fn servable_ca(c: &Certificate) -> bool {
+        c.0.to_be_signed.cert_issue_permissions.is_some()
+            && !matches!(c.0.issuer, IssuerIdentifier::R_self(_))
+    }
+
+    /// The CA certificate this node holds whose `HashedId3` is `x`.
+    fn ca_by_id3(&self, x: crate::p2pcd::Id3) -> Option<Arc<Certificate>> {
+        self.issuers
+            .iter()
+            .find(|(id, c)| id3_of_id8(id) == x && Self::servable_ca(c))
+            .map(|(_, c)| Arc::clone(c))
+    }
+
+    /// `signer`'s CA chain as `HashedId3`s, issuer first, up to (not including) a root.
+    fn own_chain(&mut self, signer: &SignerHandle) -> Vec<crate::p2pcd::Id3> {
+        let key = hashedid::id8_bytes(signer.digest());
+        if let Some(c) = self.own_chains.get(&key) {
+            return c.clone();
+        }
+        let mut out = Vec::new();
+        let mut next = issuer_id8(&signer.certificate);
+        while let Some(id) = next {
+            let Some(c) = self.issuers.get(&id) else {
+                break;
+            };
+            if !Self::servable_ca(c) || out.len() >= v2xw_sec::chain::MAX_CHAIN_LENGTH {
+                break;
+            }
+            out.push(id3_of_id8(&id));
+            next = issuer_id8(c);
+        }
+        self.own_chains.insert(key, out.clone());
+        out
+    }
+
+    /// The SDS's preprocessing of a received signed SPDU for P2PCD (1609.2a-2017
+    /// §8.2.4): the peer's requests are noted (and may start a response process), a
+    /// `requestedCertificate` is learned, and an unknown issuer or signer starts a
+    /// request. `signer_known` says whether a `digest` signer resolved in the peer cache.
+    pub fn p2pcd_preprocess(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        node: NodeId,
+        parsed: &ParsedSecured,
+        signer_known: bool,
+    ) {
+        if self.p2pcd.flavor() == v2xw_sec::p2pcd::P2pcdFlavor::None {
+            return;
+        }
+        let now = ctx.now();
+        let learning = parsed
+            .p2pcd_learning_request
+            .as_ref()
+            .map(crate::p2pcd::id3_bytes);
+        let inline: Vec<crate::p2pcd::Id3> = parsed
+            .inline_p2pcd_request
+            .iter()
+            .map(crate::p2pcd::id3_bytes)
+            .collect();
+        if learning.is_some() || !inline.is_empty() {
+            let mut rng = ctx.rng(
+                v2xw_core::rng::RngDomain::plugin(P2PCD_STREAM),
+                v2xw_core::rng::EntityRef::Node(node),
+            );
+            let mut draw = || rng.f64();
+            self.p2pcd.on_requests(learning, &inline, now, &mut draw);
+        }
+        if let Some(c) = &parsed.requested_certificate {
+            if let Ok(id) = cert::cert_id3(c) {
+                self.p2pcd
+                    .on_requested_certificate(crate::p2pcd::id3_bytes(&id));
+            }
+            self.p2pcd_learn(std::slice::from_ref(c.as_ref()));
+        }
+        match &parsed.signer {
+            ParsedSigner::Certificate { certificate, .. } => {
+                if let Some(iss) = issuer_id8(certificate)
+                    && !self.issuers.contains_key(&iss)
+                {
+                    self.p2pcd.on_unknown_issuer(id3_of_id8(&iss), now);
+                }
+            }
+            ParsedSigner::Digest(d) if !signer_known => {
+                self.p2pcd
+                    .on_unknown_signer_digest(id3_of_id8(&hashedid::id8_bytes(d)));
+            }
+            _ => {}
+        }
+    }
+
+    /// A received out-of-band learning response (`Ieee1609dot2Peer2PeerPDU`): counted as
+    /// observed against any running response process for its first certificate, and
+    /// learned from. Returns how many certificates were learned; `Err` when the bytes are
+    /// not a learning response.
+    ///
+    /// # Errors
+    /// The PDU does not decode ([`v2xw_sec::p2pcd::decode_learning_response`]).
+    pub fn p2pcd_receive_response(&mut self, bytes: &[u8]) -> Result<usize, SecError> {
+        let certs = v2xw_sec::p2pcd::decode_learning_response(bytes)?;
+        if let Ok(id) = cert::cert_id3(&certs[0]) {
+            self.p2pcd
+                .on_response_observed(crate::p2pcd::id3_bytes(&id));
+        }
+        Ok(self.p2pcd_learn(&certs))
+    }
+
+    /// Learns the CA certificates of a P2PCD response, nearest the root first, each only
+    /// if its CA path validates to an installed root (when a trust store is installed).
+    /// A root, an end-entity certificate, a certificate whose chain fails and one whose
+    /// issuer is still unknown are not kept, and each is counted. Returns how many were
+    /// learned.
+    pub fn p2pcd_learn(&mut self, certs: &[Certificate]) -> usize {
+        let mut learned = 0;
+        for c in certs.iter().rev() {
+            let Ok(id) = cert::cert_id8(c) else {
+                self.p2pcd.stats.learn_refused += 1;
+                continue;
+            };
+            let id = hashedid::id8_bytes(&id);
+            if self.issuers.contains_key(&id) {
+                self.p2pcd.stats.learn_known += 1;
+                continue;
+            }
+            if !Self::servable_ca(c) {
+                self.p2pcd.stats.learn_refused += 1;
+                continue;
+            }
+            self.issuers.insert(id, Arc::new(c.clone()));
+            let verdict = if self.trust.is_installed() {
+                self.trust.validate_learned_ca(&self.issuers, id)
+            } else {
+                Ok(())
+            };
+            match verdict {
+                Ok(()) => {
+                    self.own_chains.clear();
+                    self.p2pcd.stats.learned += 1;
+                    self.p2pcd.on_learned(id3_of_id8(&id));
+                    learned += 1;
+                }
+                Err(e) => {
+                    self.issuers.remove(&id);
+                    if e == crate::rxval::RxReject::UnknownIssuer {
+                        self.p2pcd.stats.learn_unanchored += 1;
+                    } else {
+                        self.p2pcd.stats.learn_refused += 1;
+                    }
+                }
+            }
+        }
+        learned
+    }
+
+    /// The out-of-band learning responses due by `now` (their back-off expired under the
+    /// response-count threshold), encoded: `caCerts` from the requested certificate up to
+    /// the one a root issued.
+    pub fn p2pcd_due(&mut self, now: SimTime) -> Vec<Vec<u8>> {
+        let due = self.p2pcd.due_responses(now);
+        let mut out = Vec::new();
+        for x in due {
+            let Some(first) = self.ca_by_id3(x) else {
+                continue;
+            };
+            let mut chain = vec![(*first).clone()];
+            let mut next = issuer_id8(&first);
+            while let Some(id) = next {
+                let Some(c) = self.issuers.get(&id) else {
+                    break;
+                };
+                if !Self::servable_ca(c) || chain.len() >= v2xw_sec::chain::MAX_CHAIN_LENGTH {
+                    break;
+                }
+                chain.push((**c).clone());
+                next = issuer_id8(c);
+            }
+            if let Ok(bytes) = v2xw_sec::p2pcd::encode_learning_response(&chain) {
+                out.push(bytes);
+            }
+        }
+        out
+    }
+
+    /// When the earliest out-of-band response back-off expires, on this node's clock.
+    pub fn p2pcd_next_due(&self) -> Option<SimTime> {
+        self.p2pcd.next_due()
     }
 
     /// Decodes an SPDU, or `None` when the bytes are not a `SignedData` this profile

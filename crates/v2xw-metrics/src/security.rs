@@ -9,7 +9,7 @@
 //! | `verify_wait` | start − enqueue | ms | a task that never started, which has no wait to report and is therefore missing from the distribution rather than counted as an infinite wait |
 //! | `verify_queue_depth` | distribution of the depth at enqueue | count | the depth between enqueues: this is sampled at arrivals, so it is an arrival-biased estimate of the queue, not a time average |
 //! | `unverified_ratio` | delivered without verification / delivered | ratio | messages that were dropped rather than delivered |
-//! | `p2pcd_requests` | Σ P2PCD requests the nodes issued / window | 1/s | the responses, which this build does not send: a request only marks a digest-signed message whose signer was not cached |
+//! | `p2pcd_requests` | Σ digest-signed messages whose signer was not cached / window (the P2PCD trigger count) | 1/s | the exchange itself (requests sent, responses, certificates learned), which `v2xw-node::p2pcd::P2pcdStats` counts per node (WP-C3) and no telemetry field carries yet |
 //! | `full_cert_share` | messages carrying a full certificate / all messages | ratio | peer-to-peer certificate distribution responses, which carry certificates outside the ordinary message flow |
 //! | `envelope_overhead` | Σ envelope bytes / Σ payload bytes | ratio | network and MAC headers, which are neither envelope nor payload; and it is a **ratio of sums**, so it carries no confidence interval |
 //! | `revocation_latency_stage` | t(stage) − t(previous stage) for one revocation | s | a revocation whose stages a protocol does not emit: a missing stage produces no sample, and invariant I-P4 is what reports the omission |
