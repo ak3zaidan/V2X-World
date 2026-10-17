@@ -5,6 +5,13 @@
 
 use super::*;
 
+use crate::scms::pdu::{self, Pdu, PduError, RequestSigner, RequestSignerFound, SpduKind};
+use v2xw_msg::sec_types::ieee1609_dot2::VerificationKeyIndicator;
+use v2xw_msg::sec_types::ieee1609_dot2_base_types::PublicVerificationKey;
+use v2xw_msg::sec_types::ieee1609_dot2_dot1_eca_ee_interface::EcaEeInterfacePdu;
+use v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::ScmsPduContent;
+use v2xw_sec::sig1609::Signer1609;
+
 impl ScmsRun {
     /// Replaces a device's enrolment certificate: how a driver states the age of the
     /// certificate a vehicle on the road already holds (it was issued before the run, at
@@ -59,7 +66,7 @@ impl ScmsRun {
         self.inject_at(
             at,
             device,
-            ScmsMsg::EnrolRequest { device },
+            ScmsMsg::EnrolRequest { device, pdu: None },
             FlowId::Enrolment,
             run,
         );
@@ -68,6 +75,89 @@ impl ScmsRun {
 }
 
 impl ScmsState {
+    /// The enrolment certificate lifetime in 1609.2 `Duration` hours.
+    fn enrolment_hours(&self) -> u16 {
+        u16::try_from(self.params.enrolment_lifetime.as_nanos() / 3_600_000_000_000)
+            .unwrap_or(u16::MAX)
+    }
+
+    /// Device side: a fresh ECQV request key `k_U` and the self-signed
+    /// `EeEcaCertRequestSpdu` on `R_U = k_U·G`.
+    fn enrol_request_pdu(&mut self, device: NodeId, at: SimTime) -> Option<Pdu> {
+        self.pki.as_ref()?;
+        let k_u = self.pdu_rng.scalar();
+        let t = self.time32(at);
+        let p =
+            pdu::ee_eca_cert_request(t, &Point::mul_base(&k_u), t, self.enrolment_hours()).ok()?;
+        let key = Signer1609::p256(&ec::scalar_to_be32(&k_u))?;
+        let pdu = Pdu::new(pdu::signed_cert_request(&p, RequestSigner::SelfSigned(&key)).ok()?);
+        self.devices.get_mut(&device)?.enrol_request = Some((k_u, pdu.clone()));
+        Some(pdu)
+    }
+
+    /// ECA side: verify the self-signed request, issue on `R_U` with the request's
+    /// `toBeSigned`, and answer with the ECA-signed `EcaEeCertResponseSpdu`.
+    fn eca_issue(&mut self, at: SimTime, req: &Pdu) -> pdu::Result<Pdu> {
+        let pki = self.pki.clone().ok_or(PduError::Shape("PDU layer off"))?;
+        let (p, signer) = pdu::open_signed_cert_request(req.bytes(), &pki)?;
+        if !matches!(signer, RequestSignerFound::SelfSigned) {
+            return Err(PduError::Signer("an enrolment request is SignerSelf"));
+        }
+        let ScmsPduContent::eca_ee(EcaEeInterfacePdu::eeEcaCertRequest(r)) = &p.content else {
+            return Err(PduError::Shape("expected eca-ee.eeEcaCertRequest"));
+        };
+        let VerificationKeyIndicator::verificationKey(PublicVerificationKey::ecdsaNistP256(pt)) =
+            &r.tbs_cert.verify_key_indicator
+        else {
+            return Err(PduError::Shape(
+                "request key is not a P-256 verificationKey",
+            ));
+        };
+        let r_u = pdu::point_of(pt)?;
+        let t = self.time32(at);
+        let (cert, contribution) =
+            pdu::issue_enrolment(&pki, &r.tbs_cert, &r_u, &mut self.pdu_rng)?;
+        let resp = pdu::eca_ee_cert_response(t, req.hashed_id8(), &pki, cert, &contribution);
+        Ok(Pdu::new(pdu::signed(&resp, &pki.eca.cert, &pki.eca.key)?))
+    }
+
+    /// Device side: open the ECA's response and install the reconstructed credential.
+    fn ee_install_enrolment(&mut self, device: NodeId, resp: &Pdu) -> pdu::Result<()> {
+        let pki = self.pki.clone().ok_or(PduError::Shape("PDU layer off"))?;
+        let (p, signer) = pdu::open_signed_pdu(resp.bytes(), &pki)?;
+        if pdu::cert_id8(&signer) != pki.eca.id8() {
+            return Err(PduError::Signer(
+                "an enrolment response is signed by the ECA",
+            ));
+        }
+        let ScmsPduContent::eca_ee(EcaEeInterfacePdu::ecaEeCertResponse(r)) = p.content else {
+            return Err(PduError::Shape("expected eca-ee.ecaEeCertResponse"));
+        };
+        let dev = self
+            .devices
+            .get_mut(&device)
+            .ok_or(PduError::Shape("no such device"))?;
+        let Some((k_u, sent)) = dev.enrol_request.clone() else {
+            return Err(PduError::Shape("no enrolment request in flight"));
+        };
+        if v2xw_sec::hashedid::id8_bytes(&r.request_hash) != sent.hashed_id8() {
+            return Err(PduError::Shape(
+                "requestHash is not the hash of the request sent",
+            ));
+        }
+        let pki_bytes: [u8; 32] = r
+            .private_key_info
+            .as_deref()
+            .and_then(|b| b.try_into().ok())
+            .ok_or(PduError::Shape("privateKeyInfo is 32 bytes"))?;
+        let contribution =
+            ec::scalar_from_be32(&pki_bytes).map_err(|_| PduError::Key("privateKeyInfo"))?;
+        let cred = pdu::reconstruct_enrolment(&pki, &r.certificate, &k_u, &contribution)?;
+        dev.enrol_request = None;
+        dev.enrolment_credential = Some(cred);
+        Ok(())
+    }
+
     /// Handles every message of this flow; [`ScmsState::handle`] routes here.
     #[allow(unused_variables)]
     pub(super) fn handle_enrol(
@@ -78,20 +168,25 @@ impl ScmsState {
         let n = self.nodes;
         let (flow, run, to, at, from) = (d.flow, d.run, d.to, d.at, d.from);
         match d.msg {
-            ScmsMsg::EnrolRequest { device } if to == device => {
+            ScmsMsg::EnrolRequest { device, .. } if to == device => {
                 Self::sign(out, 1);
                 out.stage_at(StageId::Requested, device, None, flow, run);
+                let pdu = self.enrol_request_pdu(device, at);
+                let size = match &pdu {
+                    Some(p) => self.emit_pdu(SpduKind::EeEcaCertRequest, device, n.dcm, at, p),
+                    None => self.sizes.enrol_request(),
+                };
                 out.send(
                     n.dcm,
-                    ScmsMsg::EnrolRequest { device },
+                    ScmsMsg::EnrolRequest { device, pdu },
                     "enrol-request",
-                    self.sizes.enrol_request(),
+                    size,
                     Transport::CellularUu,
                     flow,
                     run,
                 );
             }
-            ScmsMsg::EnrolRequest { device } => {
+            ScmsMsg::EnrolRequest { device, pdu } => {
                 // Device Configuration Manager: checks the device is one it configured,
                 // re-signs and forwards to the Enrolment CA.
                 Self::verify(out, 1);
@@ -99,7 +194,7 @@ impl ScmsState {
                 out.stage_at(StageId::ProxyForwarded, to, None, flow, run);
                 out.send(
                     n.eca,
-                    ScmsMsg::EnrolForward { device },
+                    ScmsMsg::EnrolForward { device, pdu },
                     "enrol-forward",
                     self.sizes.enrol_forward(),
                     Transport::BackendNet,
@@ -146,9 +241,22 @@ impl ScmsState {
                 let checks = dev.trust.verifications.saturating_sub(before);
                 Self::verify(out, checks);
             }
-            ScmsMsg::EnrolForward { device } => {
+            ScmsMsg::EnrolForward { device, pdu } => {
                 Self::verify(out, 1);
                 Self::sign(out, 1);
+                // The real request: the ECA verifies the self-signature and issues an
+                // implicit certificate on the request key. A request that does not verify
+                // is refused, and the refusal is recorded.
+                let response = match pdu {
+                    Some(req) if self.pki.is_some() => match self.eca_issue(at, &req) {
+                        Ok(resp) => Some(resp),
+                        Err(e) => {
+                            self.reject_pdu(SpduKind::EeEcaCertRequest, to, at, e);
+                            return Ok(());
+                        }
+                    },
+                    _ => None,
+                };
                 self.issued_enrolment.insert(device);
                 self.eca.issued += 1;
                 let cert = EnrolmentCert {
@@ -157,18 +265,35 @@ impl ScmsState {
                     valid_until: self.params.enrolment_lifetime.after(at),
                 };
                 out.stage_at(StageId::Certified, to, None, flow, run);
+                let size = match &response {
+                    Some(p) => self.emit_pdu(SpduKind::EcaEeCertResponse, to, device, at, p),
+                    None => self.sizes.enrol_response(),
+                };
                 out.send(
                     device,
-                    ScmsMsg::EnrolResponse { device, cert },
+                    ScmsMsg::EnrolResponse {
+                        device,
+                        cert,
+                        pdu: response,
+                    },
                     "enrol-response",
-                    self.sizes.enrol_response(),
+                    size,
                     Transport::CellularUu,
                     flow,
                     run,
                 );
             }
-            ScmsMsg::EnrolResponse { device, cert } => {
+            ScmsMsg::EnrolResponse { device, cert, pdu } => {
                 Self::verify(out, 2);
+                // The device verifies the ECA's signature and the chain, matches the
+                // requestHash to its own request, reconstructs its private key and checks
+                // it against the certificate before installing anything.
+                if let Some(resp) = pdu {
+                    if let Err(e) = self.ee_install_enrolment(device, &resp) {
+                        self.reject_pdu(SpduKind::EcaEeCertResponse, device, at, e);
+                        return Ok(());
+                    }
+                }
                 let deferred = self.devices.get_mut(&device).and_then(|dev| {
                     dev.enrolled = true;
                     dev.enrolment = Some(cert);

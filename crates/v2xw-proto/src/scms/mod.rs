@@ -15,6 +15,7 @@ pub mod governance;
 pub mod inspect;
 pub mod msg;
 pub mod params;
+pub mod pdu;
 pub mod run;
 
 use v2xw_core::card::{

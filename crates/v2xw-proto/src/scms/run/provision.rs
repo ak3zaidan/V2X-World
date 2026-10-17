@@ -5,6 +5,16 @@
 
 use super::*;
 
+use crate::scms::pdu::{self, Pdu, PduError, RequestSigner, RequestSignerFound, SpduKind};
+use v2xw_msg::sec_types::ieee1609_dot2::{IssuerIdentifier, VerificationKeyIndicator};
+use v2xw_msg::sec_types::ieee1609_dot2_base_types::{
+    BasePublicEncryptionKey, PublicVerificationKey,
+};
+use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::{
+    AdditionalParams, ButterflyExpansion, EeRaInterfacePdu,
+};
+use v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::ScmsPduContent;
+
 /// The hash the RA knows a provisioning request by.
 ///
 /// Over the request's public material, so two different requests cannot collide and the
@@ -76,6 +86,7 @@ impl ScmsRun {
             start_i,
             periods,
             jmax,
+            spdu: None,
         };
         if let Some(d) = self.state.devices.get_mut(&device) {
             d.caterpillar = Some(cat);
@@ -191,6 +202,129 @@ impl ScmsRun {
 }
 
 impl ScmsState {
+    /// Device side: the `EeRaCertRequestSpdu` for `req` — original butterfly parameters,
+    /// signed by the enrolment certificate, encrypted to the RA. `None` when the layer is
+    /// off or the device holds no real enrolment credential.
+    fn ee_ra_request_pdu(&mut self, req: &ProvisioningRequest, at: SimTime) -> Option<Pdu> {
+        let pki = self.pki.clone()?;
+        let cred = self
+            .devices
+            .get(&req.device)?
+            .enrolment_credential
+            .clone()?;
+        let ra_key = pki.ra.enc_public()?;
+        let t = self.time32(at);
+        let first = self.time32(self.params.period_start(req.start_i));
+        let p = pdu::ee_ra_cert_request(
+            t,
+            &req.signing_public,
+            &req.encryption_public,
+            &req.ck,
+            &req.ek,
+            first,
+        )
+        .ok()?;
+        let bytes = pdu::signed_encrypted_cert_request(
+            &p,
+            RequestSigner::Cert(&cred.cert, &cred.key),
+            &pki.ra.cert,
+            &ra_key,
+            &mut self.pdu_rng,
+        )
+        .ok()?;
+        let pdu = Pdu::new(bytes);
+        if let Some(d) = self.devices.get_mut(&req.device) {
+            d.request_hash8 = Some(pdu.hashed_id8());
+        }
+        Some(pdu)
+    }
+
+    /// RA side: decrypt, verify under an ECA-issued enrolment certificate, and bind the
+    /// signed butterfly parameters to the request's `A`, `ck`, `H`, `ek`.
+    fn ra_open_request(&self, req: &ProvisioningRequest, spdu: &Pdu) -> pdu::Result<()> {
+        let pki = self.pki.clone().ok_or(PduError::Shape("PDU layer off"))?;
+        let enc = pki
+            .ra
+            .enc_private
+            .ok_or(PduError::Key("RA encryption key"))?;
+        let plain = pdu::decrypt_cert(spdu.bytes(), &pki.ra.cert, &enc)?;
+        let (p, signer) = pdu::open_signed_cert_request(&plain, &pki)?;
+        let RequestSignerFound::Cert(ec_cert) = signer else {
+            return Err(PduError::Signer(
+                "a provisioning request is signed by an enrolment certificate",
+            ));
+        };
+        let issued_by_eca = matches!(&ec_cert.0.issuer,
+            IssuerIdentifier::sha256AndDigest(h) if v2xw_sec::hashedid::id8_bytes(h) == pki.eca.id8());
+        if !issued_by_eca {
+            return Err(PduError::UntrustedSigner);
+        }
+        let ScmsPduContent::ee_ra(EeRaInterfacePdu::eeRaCertRequest(r)) = &p.content else {
+            return Err(PduError::Shape("expected ee-ra.eeRaCertRequest"));
+        };
+        let VerificationKeyIndicator::verificationKey(PublicVerificationKey::ecdsaNistP256(a)) =
+            &r.tbs_cert.verify_key_indicator
+        else {
+            return Err(PduError::Shape(
+                "verifyKeyIndicator is the caterpillar key A",
+            ));
+        };
+        let Some(AdditionalParams::original(b)) = &r.additional_params else {
+            return Err(PduError::Shape(
+                "original butterfly parameters (the US profile)",
+            ));
+        };
+        let ButterflyExpansion::aes128(ck) = &b.signing_expansion else {
+            return Err(PduError::Shape("signingExpansion aes128"));
+        };
+        let ButterflyExpansion::aes128(ek) = &b.encryption_expansion else {
+            return Err(PduError::Shape("encryptionExpansion aes128"));
+        };
+        let BasePublicEncryptionKey::eciesNistP256(h) = &b.encryption_key.public_key else {
+            return Err(PduError::Shape("encryptionKey eciesNistP256"));
+        };
+        let same = pdu::point_of(a)? == req.signing_public
+            && pdu::point_of(h)? == req.encryption_public
+            && ck[..] == req.ck[..]
+            && ek[..] == req.ek[..];
+        if !same {
+            return Err(PduError::Shape(
+                "signed butterfly parameters differ from the request's",
+            ));
+        }
+        Ok(())
+    }
+
+    /// RA side: the RA-signed `RaEeCertAckSpdu` (`firstI` = the first i-period,
+    /// `nextDlTime` = the first batch time).
+    fn ra_ack_pdu(&mut self, request_hash8: [u8; 8], start_i: u32, at: SimTime) -> Option<Pdu> {
+        let pki = self.pki.clone()?;
+        let t = self.time32(at);
+        let next = self.time32(self.params.first_batch_delay.after(at));
+        let first_i = u16::try_from(start_i).unwrap_or(u16::MAX);
+        let ack = pdu::ra_ee_cert_ack(t, request_hash8, first_i, next);
+        Some(Pdu::new(pdu::signed(&ack, &pki.ra.cert, &pki.ra.key).ok()?))
+    }
+
+    /// Device side: the ack is RA-signed and answers the request this device sent.
+    fn ee_check_ack(&self, device: NodeId, ack: &Pdu) -> pdu::Result<()> {
+        let pki = self.pki.clone().ok_or(PduError::Shape("PDU layer off"))?;
+        let (p, signer) = pdu::open_signed_pdu(ack.bytes(), &pki)?;
+        if pdu::cert_id8(&signer) != pki.ra.id8() {
+            return Err(PduError::Signer("an ack is signed by the RA"));
+        }
+        let ScmsPduContent::ee_ra(EeRaInterfacePdu::raEeCertAck(a)) = p.content else {
+            return Err(PduError::Shape("expected ee-ra.raEeCertAck"));
+        };
+        let sent = self.devices.get(&device).and_then(|d| d.request_hash8);
+        if sent != Some(v2xw_sec::hashedid::id8_bytes(&a.request_hash)) {
+            return Err(PduError::Shape(
+                "requestHash is not the hash of the request sent",
+            ));
+        }
+        Ok(())
+    }
+
     /// The PCA's answer to the RA: the certified batch.
     pub(super) fn send_batch(
         &mut self,
@@ -348,11 +482,16 @@ impl ScmsState {
                     out.charge_kem(PrimitiveOpKind::Sign, certs);
                 }
                 out.stage_at(StageId::Requested, req.device, None, flow, run);
+                req.spdu = self.ee_ra_request_pdu(&req, at);
+                let size = match req.spdu.clone() {
+                    Some(p) => self.emit_pdu(SpduKind::EeRaCertRequest, req.device, n.lop, at, &p),
+                    None => self.sizes.provisioning_request_for(certs),
+                };
                 out.send(
                     n.lop,
                     ScmsMsg::ProvisioningRequest(req),
                     "provisioning-request",
-                    self.sizes.provisioning_request_for(certs),
+                    size,
                     Transport::CellularUu,
                     flow,
                     run,
@@ -364,9 +503,12 @@ impl ScmsState {
                 // it, which is the whole reason it is a separate organisation.
                 self.lop.upstream += 1;
                 out.stage_at(StageId::ProxyForwarded, to, None, flow, run);
-                let size = self
-                    .sizes
-                    .provisioning_request_for(req.periods.saturating_mul(req.jmax));
+                let size = match req.spdu.clone() {
+                    Some(p) => self.emit_pdu(SpduKind::EeRaCertRequest, to, n.ra, at, &p),
+                    None => self
+                        .sizes
+                        .provisioning_request_for(req.periods.saturating_mul(req.jmax)),
+                };
                 out.send(
                     n.ra,
                     ScmsMsg::ProvisioningRequest(req),
@@ -379,6 +521,20 @@ impl ScmsState {
             }
             ScmsMsg::ProvisioningRequest(mut req) => {
                 Self::verify(out, 1);
+                // The real request: decrypt with the RA's encryption key, verify the
+                // enrolment-certificate signature, and require the signed butterfly
+                // parameters to be exactly the ones this request carries. Anything else is
+                // refused and recorded.
+                let request_hash8 = match req.spdu.clone() {
+                    Some(p) if self.pki.is_some() => match self.ra_open_request(&req, &p) {
+                        Ok(()) => Some(p.hashed_id8()),
+                        Err(e) => {
+                            self.reject_pdu(SpduKind::EeRaCertRequest, to, at, e);
+                            return Ok(());
+                        }
+                    },
+                    _ => None,
+                };
                 // The checks IEEE 1609.2.1 has the RA make before it spends anything: the
                 // enrolment certificate the request is signed with was issued by the ECA,
                 // is inside its validity, and is not blocklisted. A refusal is an answer,
@@ -477,16 +633,22 @@ impl ScmsState {
                     batch_ready_stamped: false,
                 });
 
+                let ack = request_hash8.and_then(|h| self.ra_ack_pdu(h, req.start_i, at));
+                let size = match &ack {
+                    Some(p) => self.emit_pdu(SpduKind::RaEeCertAck, to, n.lop, at, p),
+                    None => self.sizes.provisioning_ack(),
+                };
                 out.send(
                     n.lop,
                     ScmsMsg::ProvisioningAck {
                         device: req.device,
                         request_hash,
                         periods: req.periods,
+                        pdu: ack,
                         jmax: req.jmax,
                     },
                     "provisioning-ack",
-                    self.sizes.provisioning_ack(),
+                    size,
                     Transport::CellularUu,
                     flow,
                     run,
@@ -513,27 +675,44 @@ impl ScmsState {
                 device,
                 request_hash,
                 periods,
+                pdu,
                 jmax,
             } if to == n.lop => {
                 self.lop.downstream += 1;
+                let size = match &pdu {
+                    Some(p) => self.emit_pdu(SpduKind::RaEeCertAck, to, device, at, p),
+                    None => self.sizes.provisioning_ack(),
+                };
                 out.send(
                     device,
                     ScmsMsg::ProvisioningAck {
                         device,
                         request_hash,
                         periods,
+                        pdu,
                         jmax,
                     },
                     "provisioning-ack-proxied",
-                    self.sizes.provisioning_ack(),
+                    size,
                     Transport::CellularUu,
                     flow,
                     run,
                 );
             }
             ScmsMsg::ProvisioningAck {
-                device, periods, ..
+                device,
+                periods,
+                pdu,
+                ..
             } => {
+                // The device verifies the RA's signature and that the ack answers the
+                // request it sent; an ack that does not is ignored, and recorded.
+                if let Some(p) = pdu {
+                    if let Err(e) = self.ee_check_ack(device, &p) {
+                        self.reject_pdu(SpduKind::RaEeCertAck, device, at, e);
+                        return Ok(());
+                    }
+                }
                 // What the RA accepted, which may be less than was asked.
                 if let Some(p) = self
                     .devices

@@ -88,6 +88,15 @@ pub struct DeviceState {
     pub reenrolments: u32,
     /// CRL versions it refused because the signature did not verify.
     pub crls_rejected: u32,
+    /// Its real enrolment credential (WP-B1 PDU layer): the implicit certificate the ECA
+    /// issued and the key reconstructed from `privateKeyInfo`. `None` when the layer is
+    /// off or the device was enrolled out of band ([`ScmsRun::set_enrolment`]).
+    pub enrolment_credential: Option<crate::scms::pdu::EnrolmentCredential>,
+    /// The HashedId8 of its last `EeRaCertRequestSpdu` as sent: the 1609.2.1
+    /// `requestHash` its batch and `.info` file names are formed from.
+    pub request_hash8: Option<[u8; 8]>,
+    /// The ECQV request key `k_U` and the bytes of the enrolment request in flight.
+    enrol_request: Option<(p256::Scalar, crate::scms::pdu::Pdu)>,
     /// Whether an enrolment request is in flight.
     enrolling: bool,
     /// A provisioning request held until enrolment completes.
@@ -124,6 +133,9 @@ impl DeviceState {
             refusals: 0,
             reenrolments: 0,
             crls_rejected: 0,
+            enrolment_credential: None,
+            request_hash8: None,
+            enrol_request: None,
             enrolling: false,
             deferred: None,
             provisioning: None,
@@ -462,6 +474,18 @@ pub struct ScmsState {
     pub committees: Committees<Pending>,
     /// Committee sessions that failed for good, by role: work that never happened.
     pub threshold_failures: BTreeMap<&'static str, u64>,
+    /// The deployment PKI the real 1609.2.1 SPDUs are signed and encrypted under
+    /// (`crate::scms::pdu`); `None` when the layer is off or under a hybrid or KEM
+    /// scheme, which 1609.2.1 does not define.
+    pub pki: Option<std::sync::Arc<crate::scms::pdu::ScmsPki>>,
+    /// Every SPDU the run put on a link (bytes kept only with `params.pdu.keep_bytes`).
+    pub pdus: Vec<crate::scms::pdu::EmittedPdu>,
+    /// SPDUs a receiver refused, and why: forged, tampered or misaddressed traffic.
+    pub pdu_rejections: Vec<crate::scms::pdu::RejectedPdu>,
+    /// The layer's deterministic randomness (separate from the model streams).
+    pdu_rng: crate::scms::pdu::Drbg,
+    /// Simulated time 0 on the wall clock, for every `Time32` in a PDU.
+    wall: v2xw_core::time::WallClock,
     next_run: u32,
 }
 
@@ -569,6 +593,21 @@ impl ScmsRun {
         }
         host_governance(&mut kernel, &gov, &params);
         let committees = build_committees(&params, &nodes, &mut kernel, sizes.envelope_digest());
+        let wall = v2xw_core::time::WallClock::new(params.pdu.t0_unix_s);
+        let pki = if params.pdu.enabled && params.hybrid.is_none() && params.kem.is_none() {
+            // Component certificates valid from a year before the run starts.
+            let start = wall.time32(t0).unwrap_or(0).saturating_sub(31_556_952);
+            Some(std::sync::Arc::new(
+                crate::scms::pdu::ScmsPki::new(params.master_seed, start).map_err(|e| {
+                    ProtoError::Payload {
+                        what: "SCMS PKI",
+                        detail: e.to_string(),
+                    }
+                })?,
+            ))
+        } else {
+            None
+        };
         Ok(ScmsRun {
             state: ScmsState {
                 nodes,
@@ -594,6 +633,11 @@ impl ScmsRun {
                 faults: FaultPlan::default(),
                 committees,
                 threshold_failures: BTreeMap::new(),
+                pki,
+                pdus: Vec::new(),
+                pdu_rejections: Vec::new(),
+                pdu_rng: crate::scms::pdu::Drbg::new(params.master_seed, b"run"),
+                wall,
                 next_run: 0,
             },
             kernel,
@@ -847,6 +891,48 @@ impl ScmsRun {
 }
 
 impl ScmsState {
+    /// `Time32` (TAI seconds since the 1609.2 epoch) at simulated time `at`.
+    fn time32(&self, at: SimTime) -> u32 {
+        self.wall.time32(at).unwrap_or(0)
+    }
+
+    /// Records an SPDU put on a link and returns its charged size: the encoded length
+    /// (invariant I-S3 as equality).
+    fn emit_pdu(
+        &mut self,
+        kind: crate::scms::pdu::SpduKind,
+        from: NodeId,
+        to: NodeId,
+        at: SimTime,
+        pdu: &crate::scms::pdu::Pdu,
+    ) -> WireSize {
+        self.pdus.push(crate::scms::pdu::EmittedPdu {
+            kind,
+            from: from.index(),
+            to: to.index(),
+            at,
+            bytes: self.params.pdu.keep_bytes.then(|| pdu.clone()),
+            len: pdu.len(),
+        });
+        WireSize::real(pdu.len(), kind.name())
+    }
+
+    /// Records an SPDU its receiver refused.
+    fn reject_pdu(
+        &mut self,
+        kind: crate::scms::pdu::SpduKind,
+        node: NodeId,
+        at: SimTime,
+        reason: crate::scms::pdu::PduError,
+    ) {
+        self.pdu_rejections.push(crate::scms::pdu::RejectedPdu {
+            kind,
+            at_node: node.index(),
+            at,
+            reason,
+        });
+    }
+
     /// An empty outbox for an entity hosted on `profile`. Under a hybrid scheme every
     /// signature is two, and the post-quantum half is charged against the device's or the
     /// authority's published figure (`crate::hybrid`).

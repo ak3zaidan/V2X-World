@@ -148,6 +148,10 @@ pub struct ProvisioningRequest {
     pub periods: u32,
     /// Certificates per i-period (`j` runs `0..jmax`).
     pub jmax: u32,
+    /// The real `EeRaCertRequestSpdu` (`crate::scms::pdu`), set when the device sends it;
+    /// the RA checks that it decrypts, verifies under the enrolment certificate and
+    /// carries exactly `A`, `ck`, `H` and `ek` above.
+    pub spdu: Option<crate::scms::pdu::Pdu>,
 }
 
 /// One certified pseudonym credential as it reaches the device.
@@ -236,11 +240,17 @@ pub enum ScmsMsg {
     EnrolRequest {
         /// The device.
         device: NodeId,
+        /// `EeEcaCertRequestSpdu`.
+        /// The real 1609.2.1 SPDU (`crate::scms::pdu`); `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
     },
     /// DCM → ECA.
     EnrolForward {
         /// The device.
         device: NodeId,
+        /// The device's `EeEcaCertRequestSpdu`, relayed.
+        /// The real 1609.2.1 SPDU (`crate::scms::pdu`); `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
     },
     /// ECA → device: the enrolment certificate and the trust anchors.
     EnrolResponse {
@@ -248,6 +258,9 @@ pub enum ScmsMsg {
         device: NodeId,
         /// The enrolment certificate.
         cert: EnrolmentCert,
+        /// `EcaEeCertResponseSpdu`.
+        /// The real 1609.2.1 SPDU (`crate::scms::pdu`); `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
     },
     /// Device → LOP → RA: the butterfly provisioning request.
     ProvisioningRequest(Box<ProvisioningRequest>),
@@ -259,6 +272,10 @@ pub enum ScmsMsg {
         request_hash: [u8; 32],
         /// The i-periods the RA accepted, after clipping the request to its policy.
         periods: u32,
+        /// `RaEeCertAckSpdu`.
+        /// The real 1609.2.1 SPDU (`crate::scms::pdu`); `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+
         /// The certificates per period it accepted.
         jmax: u32,
     },

@@ -2860,6 +2860,7 @@ name = "v2xw-proto"
 version = "0.1.0"
 dependencies = [
  "p256",
+ "rasn",
  "serde",
  "serde_json",
  "thiserror",
