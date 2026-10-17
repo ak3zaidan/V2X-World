@@ -220,22 +220,38 @@ impl Ctl {
 
     /// `electorApprove`.
     pub fn elector_approve(&self) -> Vec<[u8; 48]> {
-        self.tbs.elector_approve.iter().map(|e| arr(&e.0.0[..])).collect()
+        self.tbs
+            .elector_approve
+            .iter()
+            .map(|e| arr(&e.0.0[..]))
+            .collect()
     }
 
     /// `rootCaApprove`.
     pub fn root_ca_approve(&self) -> Vec<[u8; 32]> {
-        self.tbs.root_ca_approve.iter().map(|e| arr(&e.0.0[..])).collect()
+        self.tbs
+            .root_ca_approve
+            .iter()
+            .map(|e| arr(&e.0.0[..]))
+            .collect()
     }
 
     /// `electorRemove`.
     pub fn elector_remove(&self) -> Vec<[u8; 48]> {
-        self.tbs.elector_remove.iter().map(|e| arr(&e.0.0[..])).collect()
+        self.tbs
+            .elector_remove
+            .iter()
+            .map(|e| arr(&e.0.0[..]))
+            .collect()
     }
 
     /// `rootCaRemove`.
     pub fn root_ca_remove(&self) -> Vec<[u8; 32]> {
-        self.tbs.root_ca_remove.iter().map(|e| arr(&e.0.0[..])).collect()
+        self.tbs
+            .root_ca_remove
+            .iter()
+            .map(|e| arr(&e.0.0[..]))
+            .collect()
     }
 
     /// The elector certificates attached to the signatures.
@@ -285,7 +301,8 @@ pub fn open_multi_signed_ctl(m: &MultiSignedCtl) -> Result<Ctl, CtlError> {
     }
     let tbs_coer = m.tbs_ctl.as_bytes().to_vec();
     let tbs: FullIeeeTbsCtl = decode("FullIeeeTbsCtl", &tbs_coer)?;
-    let SequenceOfCertificate(certificates) = decode("SequenceOfCertificate", m.unsigned.as_bytes())?;
+    let SequenceOfCertificate(certificates) =
+        decode("SequenceOfCertificate", m.unsigned.as_bytes())?;
     let mut signatures = Vec::with_capacity(m.signatures.len());
     for s in &m.signatures {
         let data = Ieee1609Dot2Data::new(s.protocol_version.clone(), s.content.clone());
@@ -369,7 +386,9 @@ fn ctl_spdu(m: &MultiSignedCtl) -> Result<MultiSignedCtlSpdu, CtlError> {
 
 /// Encodes a `MultiSignedCtlSpdu`.
 pub fn encode_ctl_spdu(m: &MultiSignedCtl) -> Result<Vec<u8>, CtlError> {
-    Ok(coer(&unsecured(CertManagementPdu::multiSignedCtl(m.clone()))?)?)
+    Ok(coer(&unsecured(CertManagementPdu::multiSignedCtl(
+        m.clone(),
+    ))?)?)
 }
 
 /// Encodes a certificate chain file (`CertificateChainSpdu`).
@@ -488,7 +507,9 @@ pub fn elector_cert_ok(cert: &Certificate) -> bool {
     cert.0.r_type == CertificateType::explicit
         && matches!(
             cert.0.issuer,
-            IssuerIdentifier::R_self(v2xw_msg::sec_types::ieee1609_dot2_base_types::HashAlgorithm::sha384)
+            IssuerIdentifier::R_self(
+                v2xw_msg::sec_types::ieee1609_dot2_base_types::HashAlgorithm::sha384
+            )
         )
         && matches!(sig1609::explicit_key(cert), Some((Hash1609::Sha384, _)))
         && verify_explicit_cert(cert, None)
@@ -583,8 +604,9 @@ pub fn check_roots(ctl: &Ctl) -> Result<Vec<RootCheck>, CtlError> {
                 name: cert_name(c).map(str::to_owned),
                 hashed_id32: h,
                 approved: approved.contains(&h),
-                approved_by_sha256: approved
-                    .contains(&arr::<32>(&Hash1609::Sha256.digest(&sig1609::canonical_cert_coer(c)?))),
+                approved_by_sha256: approved.contains(&arr::<32>(
+                    &Hash1609::Sha256.digest(&sig1609::canonical_cert_coer(c)?),
+                )),
                 self_signed_ok: verify_explicit_cert(c, None),
             })
         })
@@ -915,9 +937,15 @@ mod tests {
         trust.sequence = Some(1);
         assert!(!verify_ctl(&ctl, &trust).sequence_ok);
         let roots = check_roots(&ctl).unwrap();
-        assert!(roots.iter().all(|r| r.approved && r.self_signed_ok), "{roots:?}");
+        assert!(
+            roots.iter().all(|r| r.approved && r.self_signed_ok),
+            "{roots:?}"
+        );
         let next = trust_after(&ctl, &trust);
-        assert_eq!((next.quorum, next.sequence, next.roots.len()), (3, Some(1), 1));
+        assert_eq!(
+            (next.quorum, next.sequence, next.roots.len()),
+            (3, Some(1), 1)
+        );
     }
 
     /// A P-384 self-signed certificate holding the *root* SSP, not the elector SSP, does
@@ -931,7 +959,8 @@ mod tests {
         ))
         .unwrap();
         let perms = vec![PsidSsp::new(Psid(Integer::from(35u32)), Some(ssp))];
-        let cert = self_signed_certificate("notanelector", 503_136_005, 12, perms, None, &key).unwrap();
+        let cert =
+            self_signed_certificate("notanelector", 503_136_005, 12, perms, None, &key).unwrap();
         el[0] = Elector { key, cert };
         let ids: Vec<_> = el.iter().map(Elector::hashed_id48).collect();
         let tbs = full_ieee_tbs_ctl(US_CTL_SERIES_ID, 1, 679_737_605, &ids, &[], 3);
@@ -950,6 +979,24 @@ mod tests {
         assert!(elector_cert_ok(&e.cert));
         assert_eq!(app_ssp(&e.cert, 35), Some(Some(vec![0x80, 0x00, 0x02])));
         assert_eq!(validity(&e.cert).1 - validity(&e.cert).0, 12 * YEAR_S);
+    }
+
+    /// A CTL without `quorum` (as the published sequence-0 CTLs are) has no extension
+    /// bitmap, decodes, and leaves the prior quorum in force (v2xw-msg patch 0006).
+    #[test]
+    fn a_ctl_without_quorum_decodes_and_keeps_the_prior_quorum() {
+        let el = five();
+        let ids: Vec<_> = el.iter().map(Elector::hashed_id48).collect();
+        let mut tbs = full_ieee_tbs_ctl(US_CTL_SERIES_ID, 0, 503_222_405, &ids, &[], 3);
+        tbs.quorum = None;
+        let enc = coer(&tbs).unwrap();
+        assert_eq!(enc[0], 0x00, "no extension bit when quorum is absent");
+        let m = build_ctl(&tbs, vec![], &[&el[0], &el[1], &el[2]]).unwrap();
+        let ctl = decode_ctl_spdu(&encode_ctl_spdu(&m).unwrap()).unwrap();
+        assert_eq!(ctl.quorum(), None);
+        let prior = CtlTrust::us_bootstrap(ids);
+        assert!(verify_ctl(&ctl, &prior).accepted());
+        assert_eq!(trust_after(&ctl, &prior).quorum, US_QUORUM);
     }
 
     /// A CCF and a composite CRL carry the CTL and round-trip.

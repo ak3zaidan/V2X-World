@@ -53,7 +53,10 @@ fn file(rel: &str) -> Vec<u8> {
         .join("../../third_party/scms-artefacts/files")
         .join(rel);
     std::fs::read(&p).unwrap_or_else(|e| {
-        panic!("{}: {e}; run python3 -I tools/scms-artefacts/fetch.py", p.display())
+        panic!(
+            "{}: {e}; run python3 -I tools/scms-artefacts/fetch.py",
+            p.display()
+        )
     })
 }
 
@@ -85,10 +88,22 @@ fn published_elector_certificates_hash_to_their_fingerprints() {
     let _ = IGNORE;
     for (kind, fps) in [("", &PROD_ELECTORS), (".test", &TEST_ELECTORS)] {
         for (i, fp) in fps.iter().enumerate() {
-            let b = file(&format!("electors/v2xelector{}{kind}.certificate.oer", i + 1));
+            let b = file(&format!(
+                "electors/v2xelector{}{kind}.certificate.oer",
+                i + 1
+            ));
             let c: Certificate = rasn::coer::decode(&b).unwrap();
-            assert_eq!(rasn::coer::encode(&c).unwrap(), b, "elector {i}{kind} canonical");
-            assert_eq!(hex(&cert_hashed_id48(&c).unwrap()), *fp, "elector {}{kind}", i + 1);
+            assert_eq!(
+                rasn::coer::encode(&c).unwrap(),
+                b,
+                "elector {i}{kind} canonical"
+            );
+            assert_eq!(
+                hex(&cert_hashed_id48(&c).unwrap()),
+                *fp,
+                "elector {}{kind}",
+                i + 1
+            );
             assert!(ctl::elector_cert_ok(&c), "elector {}{kind}", i + 1);
         }
     }
@@ -120,15 +135,26 @@ fn check_ctl(ctl: &Ctl, fps: &[&str; 5]) -> ctl::CtlVerdict {
 fn production_ctl_2025_08_13_verifies() {
     let b = file("production-2025-08-13/production_ctl.oer");
     let ctl = decode_ctl_spdu(&b).unwrap();
-    assert_eq!(ctl::encode_ctl_spdu(&ctl.raw).unwrap(), b, "re-encodes byte for byte");
+    assert_eq!(
+        ctl::encode_ctl_spdu(&ctl.raw).unwrap(),
+        b,
+        "re-encodes byte for byte"
+    );
     check_ctl(&ctl, &PROD_ELECTORS);
     assert_eq!((ctl.sequence(), ctl.effective_date()), (1, 679_737_605));
+    assert!(ctl.elector_remove().is_empty() && ctl.root_ca_remove().is_empty());
     let roots = check_roots(&ctl).unwrap();
-    let names: Vec<_> = roots.iter().map(|r| r.name.clone().unwrap_or_default()).collect();
+    let names: Vec<_> = roots
+        .iter()
+        .map(|r| r.name.clone().unwrap_or_default())
+        .collect();
     println!("production 2025-08-13 roots: {names:?}");
     assert_eq!(roots.len(), 2);
     assert_eq!(ctl.root_ca_approve().len(), 2);
-    assert!(roots.iter().all(|r| r.approved && r.self_signed_ok), "{roots:?}");
+    assert!(
+        roots.iter().all(|r| r.approved && r.self_signed_ok),
+        "{roots:?}"
+    );
 }
 
 /// The test CTL of 2025-07-17: 5 of 5 test elector signatures, sequence 3, quorum 3;
@@ -145,7 +171,11 @@ fn test_ctl_2025_07_17_verifies_and_its_roots_match_the_published_root_files() {
     let roots = check_roots(&ctl).unwrap();
     assert_eq!(roots.len(), 6);
     assert!(roots.iter().all(|r| r.self_signed_ok));
-    let unapproved: Vec<_> = roots.iter().filter(|r| !r.approved).map(|r| r.name.clone()).collect();
+    let unapproved: Vec<_> = roots
+        .iter()
+        .filter(|r| !r.approved)
+        .map(|r| r.name.clone())
+        .collect();
     println!("test 2025-07-17 roots not on rootCaApprove: {unapproved:?}");
     assert_eq!(unapproved.len(), 1);
     let mut approved = ctl.root_ca_approve();
@@ -161,7 +191,11 @@ fn test_ctl_2025_07_17_verifies_and_its_roots_match_the_published_root_files() {
     .map(|n| {
         let rb = file(&format!("test-2025-07-17/roots/{n}"));
         let c: Certificate = rasn::coer::decode(&rb).unwrap();
-        assert_eq!(cert_hashed_id32(&c).unwrap(), sha256(&rb), "{n}: our HashedId32");
+        assert_eq!(
+            cert_hashed_id32(&c).unwrap(),
+            sha256(&rb),
+            "{n}: our HashedId32"
+        );
         assert!(verify_explicit_cert(&c, None), "{n}");
         sha256(&rb)
     })
@@ -180,14 +214,49 @@ fn published_ctl_series_install_in_order() {
     // (file, sequence, effectiveDate, quorum, roots carried, roots approved)
     type Row = (&'static str, u16, u32, Option<u32>, usize, usize);
     let prod: [Row; 2] = [
-        ("production-2025-08/production_ctl.oer", 0, 503_222_405, None, 1, 1),
-        ("production-2025-08-13/production_ctl.oer", 1, 679_737_605, Some(3), 2, 2),
+        (
+            "production-2025-08/production_ctl.oer",
+            0,
+            503_222_405,
+            None,
+            1,
+            1,
+        ),
+        (
+            "production-2025-08-13/production_ctl.oer",
+            1,
+            679_737_605,
+            Some(3),
+            2,
+            2,
+        ),
     ];
     let test: [Row; 4] = [
         ("test-2023/test_ctl.oer", 0, 503_222_405, None, 1, 1),
-        ("test-2024-04-19/test_ctl.oer", 1, 640_624_233, Some(3), 6, 6),
-        ("test-2025-03-18/test_ctl.oer", 2, 669_060_983, Some(3), 6, 6),
-        ("test-2025-07-17/test_ctl.oer", 3, 679_737_605, Some(3), 6, 5),
+        (
+            "test-2024-04-19/test_ctl.oer",
+            1,
+            640_624_233,
+            Some(3),
+            6,
+            6,
+        ),
+        (
+            "test-2025-03-18/test_ctl.oer",
+            2,
+            669_060_983,
+            Some(3),
+            6,
+            6,
+        ),
+        (
+            "test-2025-07-17/test_ctl.oer",
+            3,
+            679_737_605,
+            Some(3),
+            6,
+            5,
+        ),
     ];
     for (rows, fps) in [(&prod[..], &PROD_ELECTORS), (&test[..], &TEST_ELECTORS)] {
         let mut t = trust(fps);
@@ -208,7 +277,10 @@ fn published_ctl_series_install_in_order() {
                 let quirk = r.name == eviden && seq == 2 && rows.len() == 4;
                 assert_eq!(r.approved_by_sha256 && !r.approved, quirk, "{rel}: {r:?}");
             }
-            let either = roots.iter().filter(|r| r.approved || r.approved_by_sha256).count();
+            let either = roots
+                .iter()
+                .filter(|r| r.approved || r.approved_by_sha256)
+                .count();
             assert_eq!(either, approved, "{rel}");
             let v = verify_ctl(&ctl, &t);
             assert_eq!(v.valid_signatures, 5, "{rel}: {v:?}");
@@ -218,7 +290,10 @@ fn published_ctl_series_install_in_order() {
             installed.push(ctl);
         }
         let v = verify_ctl(&installed[0], &t);
-        assert!(!v.sequence_ok && !v.accepted(), "a replayed older CTL is refused");
+        assert!(
+            !v.sequence_ok && !v.accepted(),
+            "a replayed older CTL is refused"
+        );
     }
 }
 
@@ -263,12 +338,18 @@ fn published_chain_files_verify_to_their_roots() {
     let test = decode_ctl_spdu(&file("test-2025-07-17/test_ctl.oer")).unwrap();
     let (n, ps) = check_chain_file("production-2025-08-13/cert-chain_0.oer", &prod);
     let (m, ts) = check_chain_file("test-2025-07-17/test_cert_chain.oer", &test);
-    println!("chain files: production {n} certificates (home series {}), test {m} (home series {})", hex(&ps), hex(&ts));
+    println!(
+        "chain files: production {n} certificates (home series {}), test {m} (home series {})",
+        hex(&ps),
+        hex(&ts)
+    );
     assert_eq!(n, 6);
     assert_eq!(ps, [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00]);
     assert_ne!(
         verify_ctl(
-            &decode_certificate_chain(&file("production-2025-08-13/cert-chain_0.oer")).unwrap().0,
+            &decode_certificate_chain(&file("production-2025-08-13/cert-chain_0.oer"))
+                .unwrap()
+                .0,
             &trust(&PROD_ELECTORS)
         )
         .valid_signatures,
@@ -295,7 +376,10 @@ fn flipping_any_byte_of_the_production_ctl_breaks_it() {
             && ctl::encode_ctl_spdu(&ctl.raw).is_ok_and(|e| e == bytes)
     };
     assert!(intact(&b));
-    let stride = std::env::var("V2XW_FLIP_STRIDE").ok().and_then(|s| s.parse().ok()).unwrap_or(13);
+    let stride = std::env::var("V2XW_FLIP_STRIDE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(13);
     let mut tried = 0;
     for i in (0..b.len()).step_by(stride) {
         let mut m = b.clone();
@@ -303,7 +387,10 @@ fn flipping_any_byte_of_the_production_ctl_breaks_it() {
         assert!(!intact(&m), "flipping byte {i} left the CTL intact");
         tried += 1;
     }
-    println!("flipped {tried} of {} bytes (stride {stride}); none survived", b.len());
+    println!(
+        "flipped {tried} of {} bytes (stride {stride}); none survived",
+        b.len()
+    );
 }
 
 /// One flipped byte in a chain-file certificate's signature is caught.

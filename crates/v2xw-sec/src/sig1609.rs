@@ -372,8 +372,9 @@ impl Signer1609 {
     pub fn sign_digest(&self, digest: &[u8]) -> Signature {
         match self {
             Signer1609::P256(k) => {
-                let sig: ::p256::ecdsa::Signature =
-                    k.sign_prehash(digest).expect("a 32-byte prehash is signable");
+                let sig: ::p256::ecdsa::Signature = k
+                    .sign_prehash(digest)
+                    .expect("a 32-byte prehash is signable");
                 let (r, s) = sig.split_bytes();
                 Signature::ecdsaNistP256Signature(EcdsaP256Signature::new(
                     EccP256CurvePoint::x_only(r.to_vec().into()),
@@ -399,6 +400,9 @@ impl Signer1609 {
 }
 
 /// The `SignerIdentifier` choices a signed SCMS SPDU may carry.
+// The certificate variant dominates by design: almost every SCMS SPDU attaches one, and
+// these values are short-lived, so boxing it would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpduSigner {
     /// `certificate`: the signer's certificate is attached (CTL elector signatures,
@@ -437,8 +441,14 @@ pub fn sign_spdu(
     signer: SpduSigner,
     key: &Signer1609,
 ) -> Result<Ieee1609Dot2Data, SigError> {
-    let inner = Ieee1609Dot2Data::new(Uint8(3), Ieee1609Dot2Content::unsecuredData(Opaque(payload.into())));
-    let tbs = ToBeSignedData::new(Box::new(SignedDataPayload::new(Some(inner), None, None)), header);
+    let inner = Ieee1609Dot2Data::new(
+        Uint8(3),
+        Ieee1609Dot2Content::unsecuredData(Opaque(payload.into())),
+    );
+    let tbs = ToBeSignedData::new(
+        Box::new(SignedDataPayload::new(Some(inner), None, None)),
+        header,
+    );
     let tbs_coer = coer(&tbs)?;
     let (signer_input, sid) = match signer {
         SpduSigner::Certificate(c) => (
@@ -447,19 +457,16 @@ pub fn sign_spdu(
         ),
         // The signature covers the certificate either way, so a digest signer needs it too.
         SpduSigner::Digest(_) => {
-            return Err(SigError::Unsupported("sign_spdu needs the signer's certificate"));
+            return Err(SigError::Unsupported(
+                "sign_spdu needs the signer's certificate",
+            ));
         }
         SpduSigner::SelfSigned => (Vec::new(), SignerIdentifier::R_self(())),
     };
     let signature = key.sign_1609(&tbs_coer, &signer_input);
     Ok(Ieee1609Dot2Data::new(
         Uint8(3),
-        Ieee1609Dot2Content::signedData(SignedData::new(
-            key.hash().to_asn1(),
-            tbs,
-            sid,
-            signature,
-        )),
+        Ieee1609Dot2Content::signedData(SignedData::new(key.hash().to_asn1(), tbs, sid, signature)),
     ))
 }
 
@@ -541,7 +548,10 @@ mod tests {
     #[test]
     fn low_order_bytes_are_the_suffix() {
         let h = Hash1609::Sha256.digest(b"");
-        assert_eq!(low::<8>(&h), [0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55]);
+        assert_eq!(
+            low::<8>(&h),
+            [0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55]
+        );
         let h = Hash1609::Sha384.digest(b"");
         // SHA-384("") = 38b060a7…274edebfe76f65fbd51ad2f14898b95b (FIPS 180-4 / NIST examples).
         assert_eq!(&low::<4>(&h), &[0x48, 0x98, 0xb9, 0x5b]);

@@ -248,7 +248,8 @@ pub fn crl_contents(spec: &CrlSpec) -> CrlContents {
             index_within_i,
             individual,
         } => {
-            type Groups = BTreeMap<u8, BTreeMap<(u16, u16), BTreeMap<u16, Vec<([u8; 16], [u8; 16])>>>>;
+            type Groups =
+                BTreeMap<u8, BTreeMap<(u16, u16), BTreeMap<u16, Vec<([u8; 16], [u8; 16])>>>>;
             let mut g: Groups = BTreeMap::new();
             for r in individual {
                 g.entry(r.jmax)
@@ -281,8 +282,10 @@ pub fn crl_contents(spec: &CrlSpec) -> CrlContents {
                                                                 .into_iter()
                                                                 .map(|(s1, s2)| {
                                                                     IndividualRevocation::new(
-                                                                        LinkageSeed::new(s1).to_asn1(),
-                                                                        LinkageSeed::new(s2).to_asn1(),
+                                                                        LinkageSeed::new(s1)
+                                                                            .to_asn1(),
+                                                                        LinkageSeed::new(s2)
+                                                                            .to_asn1(),
                                                                     )
                                                                 })
                                                                 .collect(),
@@ -461,7 +464,11 @@ pub struct CrlVerdict {
 impl CrlVerdict {
     /// The device may act on the CRL.
     pub fn accepted(&self) -> bool {
-        self.header_ok && self.signature_ok && self.series_permitted && self.craca_ok && self.contents_ok
+        self.header_ok
+            && self.signature_ok
+            && self.series_permitted
+            && self.craca_ok
+            && self.contents_ok
     }
 }
 
@@ -491,7 +498,9 @@ pub fn verify_crl(
     let signature_ok = attached_matches && sig1609::verify_opened(&crl.signed, signer_cert);
     let ssp = crl_ssp(signer_cert).filter(|s| s.version.0 == 1);
     let series = crl.contents.crl_series.0.0;
-    let series_permitted = ssp.as_ref().is_some_and(|s| s.crls.iter().any(|c| c.0.0 == series));
+    let series_permitted = ssp
+        .as_ref()
+        .is_some_and(|s| s.crls.iter().any(|c| c.0.0 == series));
     let craca = &crl.contents.crl_craca.0[..];
     let craca_ok = match ssp.as_ref().map(|s| s.associated_craca) {
         Some(CracaType::isCraca) => cert_hashed_id8(signer_cert).is_ok_and(|x| x[..] == *craca),
@@ -519,7 +528,9 @@ pub fn verify_crl(
 /// series and CRACA are considered; the caller checks the CRL with [`verify_crl`] first.
 pub fn revokes(contents: &CrlContents, cert: &Certificate) -> bool {
     let tbs = &cert.0.to_be_signed;
-    if tbs.crl_series.0.0 != contents.crl_series.0.0 || tbs.craca_id.0[..] != contents.crl_craca.0[5..] {
+    if tbs.crl_series.0.0 != contents.crl_series.0.0
+        || tbs.craca_id.0[..] != contents.crl_craca.0[5..]
+    {
         return false;
     }
     match &contents.type_specific {
@@ -590,6 +601,7 @@ mod tests {
     use super::*;
     use crate::ctl::{self_signed_certificate, validity};
     use crate::linkage::{DeviceLinkageContext, linkage_seed_at};
+    use v2xw_msg::sec_types::ieee1609_dot2::LinkageData;
     use v2xw_msg::sec_types::ieee1609_dot2::{
         CertificateBase, CertificateType, ToBeSignedCertificate, VerificationKeyIndicator,
     };
@@ -597,7 +609,6 @@ mod tests {
         Duration, HashedId3, Psid, PsidSsp, SequenceOfPsidSsp, ServiceSpecificPermissions,
         ValidityPeriod,
     };
-    use v2xw_msg::sec_types::ieee1609_dot2::LinkageData;
 
     fn crl_signer(ssp: CrlSsp) -> (Certificate, Signer1609) {
         let k = Signer1609::p256(&[0x11; 32]).unwrap();
@@ -605,7 +616,10 @@ mod tests {
             Psid(rasn::types::Integer::from(256u32)),
             Some(ServiceSpecificPermissions::opaque(ssp.to_coer().into())),
         )];
-        (self_signed_certificate("crlg.sim", 600_000_000, 10, perms, None, &k).unwrap(), k)
+        (
+            self_signed_certificate("crlg.sim", 600_000_000, 10, perms, None, &k).unwrap(),
+            k,
+        )
     }
 
     /// A pseudonym-like certificate with linkage data (the fields revocation reads).
@@ -613,12 +627,17 @@ mod tests {
         let k = Signer1609::p256(&[0x22; 32]).unwrap();
         let tbs = ToBeSignedCertificate::new(
             CertificateId::linkageData(LinkageData::new(IValue(Uint16(i)), lv.to_asn1(), None)),
-            HashedId3(rasn::types::FixedOctetString::from([craca[5], craca[6], craca[7]])),
+            HashedId3(rasn::types::FixedOctetString::from([
+                craca[5], craca[6], craca[7],
+            ])),
             CrlSeries(Uint16(1)),
             ValidityPeriod::new(Time32(Uint32(700_000_000)), Duration::hours(Uint16(168))),
             None,
             None,
-            Some(SequenceOfPsidSsp(vec![PsidSsp::new(Psid(rasn::types::Integer::from(32u32)), None)])),
+            Some(SequenceOfPsidSsp(vec![PsidSsp::new(
+                Psid(rasn::types::Integer::from(32u32)),
+                None,
+            )])),
             None,
             None,
             None,
@@ -632,14 +651,21 @@ mod tests {
         Certificate(CertificateBase::new(
             Uint8(3),
             CertificateType::explicit,
-            IssuerIdentifier::sha256AndDigest(HashedId8(rasn::types::FixedOctetString::from([9u8; 8]))),
+            IssuerIdentifier::sha256AndDigest(HashedId8(rasn::types::FixedOctetString::from(
+                [9u8; 8],
+            ))),
             tbs,
             None,
         ))
     }
 
     fn device() -> DeviceLinkageContext {
-        DeviceLinkageContext::new(LaId(0x1234), LaId(0x5678), LinkageSeed::new([1; 16]), LinkageSeed::new([2; 16]))
+        DeviceLinkageContext::new(
+            LaId(0x1234),
+            LaId(0x5678),
+            LinkageSeed::new([1; 16]),
+            LinkageSeed::new([2; 16]),
+        )
     }
 
     fn linkage_crl(craca: [u8; 8], i_rev: u16, i_max: u16) -> CrlSpec {
@@ -679,14 +705,24 @@ mod tests {
         let v = verify_crl(&o, &signer, None, WireEdition::Ieee2022);
         assert!(v.accepted(), "{v:?}");
         let d = device();
-        for (i, j, want) in [(10, 0, true), (11, 19, true), (12, 5, true), (9, 0, false), (13, 0, false), (11, 20, false)] {
+        for (i, j, want) in [
+            (10, 0, true),
+            (11, 19, true),
+            (12, 5, true),
+            (9, 0, false),
+            (13, 0, false),
+            (11, 20, false),
+        ] {
             let cert = pseudonym(craca, i, d.linkage_value_for(u32::from(i), j));
             assert_eq!(revokes(&o.contents, &cert), want, "i {i} j {j}");
         }
         // Another CRACA or series does not match.
         let mut other = craca;
         other[7] ^= 1;
-        assert!(!revokes(&o.contents, &pseudonym(other, 10, d.linkage_value_for(10, 0))));
+        assert!(!revokes(
+            &o.contents,
+            &pseudonym(other, 10, d.linkage_value_for(10, 0))
+        ));
     }
 
     /// Hash CRLs for 2/3/4/256 revoke by HashedId10 only within their series and CRACA.
@@ -707,12 +743,20 @@ mod tests {
                 next_crl: 700_086_400,
                 priority: Some(1),
                 delta,
-                body: CrlBody::Hash { serial: 7, entries: vec![entry] },
+                body: CrlBody::Hash {
+                    serial: 7,
+                    entries: vec![entry],
+                },
             };
             let c = crl_contents(&spec);
-            let o = decode_crl(&encode_crl(&sign_crl(&c, &signer, &key).unwrap()).unwrap()).unwrap();
+            let o =
+                decode_crl(&encode_crl(&sign_crl(&c, &signer, &key).unwrap()).unwrap()).unwrap();
             assert!(verify_crl(&o, &signer, None, WireEdition::Ieee2022).accepted());
-            assert_eq!(revokes(&o.contents, &victim), series == 3, "series {series}");
+            assert_eq!(
+                revokes(&o.contents, &victim),
+                series == 3,
+                "series {series}"
+            );
         }
     }
 
@@ -738,7 +782,8 @@ mod tests {
         let issuer = self_signed_certificate("ma.sim", 600_000_000, 10, vec![], None, &ik).unwrap();
         let (mut signer, key) = crl_signer(CrlSsp::new(CracaType::issuerIsCraca, &[1]));
         let iid = cert_hashed_id8(&issuer).unwrap();
-        signer.0.issuer = IssuerIdentifier::sha256AndDigest(HashedId8(rasn::types::FixedOctetString::from(iid)));
+        signer.0.issuer =
+            IssuerIdentifier::sha256AndDigest(HashedId8(rasn::types::FixedOctetString::from(iid)));
         let c = crl_contents(&linkage_crl(iid, 10, 12));
         let o = open_crl(&sign_crl(&c, &signer, &key).unwrap()).unwrap();
         assert!(verify_crl(&o, &signer, Some(&issuer), WireEdition::Ieee2022).accepted());
@@ -747,7 +792,8 @@ mod tests {
         // A CRL naming some other certificate as CRACA is refused even when that
         // certificate is offered as the issuer: the signer's issuer field must name it.
         let ok2 = Signer1609::p256(&[0x56; 32]).unwrap();
-        let other = self_signed_certificate("other.sim", 600_000_000, 10, vec![], None, &ok2).unwrap();
+        let other =
+            self_signed_certificate("other.sim", 600_000_000, 10, vec![], None, &ok2).unwrap();
         let c2 = crl_contents(&linkage_crl(cert_hashed_id8(&other).unwrap(), 10, 12));
         let o2 = open_crl(&sign_crl(&c2, &signer, &key).unwrap()).unwrap();
         assert!(!verify_crl(&o2, &signer, Some(&other), WireEdition::Ieee2022).craca_ok);
@@ -757,9 +803,26 @@ mod tests {
         h.generation_time = Some(v2xw_msg::sec_types::ieee1609_dot2_base_types::Time64(
             v2xw_msg::sec_types::ieee1609_dot2_base_types::Uint64(1),
         ));
-        let d = sig1609::sign_spdu(h, coer(&c).unwrap(), SpduSigner::Certificate(signer.clone()), &key).unwrap();
+        let d = sig1609::sign_spdu(
+            h,
+            coer(&c).unwrap(),
+            SpduSigner::Certificate(signer.clone()),
+            &key,
+        )
+        .unwrap();
         let o = open_crl(&SecuredCrl(d)).unwrap();
         assert!(!verify_crl(&o, &signer, Some(&issuer), WireEdition::Ieee2022).header_ok);
+        // Nor is one under another PSID.
+        let d = sig1609::sign_spdu(
+            sig1609::header_psid_only(35),
+            coer(&c).unwrap(),
+            SpduSigner::Certificate(signer.clone()),
+            &key,
+        )
+        .unwrap();
+        let o = open_crl(&SecuredCrl(d)).unwrap();
+        let v = verify_crl(&o, &signer, Some(&issuer), WireEdition::Ieee2022);
+        assert!(v.signature_ok && !v.header_ok);
     }
 
     /// Gap row 29's mutation: an entry added after signing (outside the signed bytes as
@@ -775,13 +838,17 @@ mod tests {
             extra.ls1 = LinkageSeed::new([0xEE; 16]);
             individual.push(extra);
         }
-        let v2xw_msg::sec_types::ieee1609_dot2::Ieee1609Dot2Content::signedData(sd) = &mut crl.0.content else {
+        let v2xw_msg::sec_types::ieee1609_dot2::Ieee1609Dot2Content::signedData(sd) =
+            &mut crl.0.content
+        else {
             panic!()
         };
         sd.tbs_data.payload.data = Some(v2xw_msg::sec_types::ieee1609_dot2::Ieee1609Dot2Data::new(
             Uint8(3),
             v2xw_msg::sec_types::ieee1609_dot2::Ieee1609Dot2Content::unsecuredData(
-                v2xw_msg::sec_types::ieee1609_dot2_base_types::Opaque(coer(&crl_contents(&forged)).unwrap().into()),
+                v2xw_msg::sec_types::ieee1609_dot2_base_types::Opaque(
+                    coer(&crl_contents(&forged)).unwrap().into(),
+                ),
             ),
         ));
         let o = decode_crl(&encode_crl(&crl).unwrap()).unwrap();
@@ -796,11 +863,23 @@ mod tests {
         spec.series = 2;
         assert!(check_crl(&crl_contents(&spec), WireEdition::Ieee2022).is_err());
         spec.series = 1;
+        let hash_series_1 = CrlSpec {
+            body: CrlBody::Hash {
+                serial: 1,
+                entries: vec![],
+            },
+            ..spec.clone()
+        };
+        assert!(check_crl(&crl_contents(&hash_series_1), WireEdition::Ieee2022).is_err());
         spec.next_crl = spec.issue_date;
         assert!(check_crl(&crl_contents(&spec), WireEdition::Ieee2022).is_err());
         let spec = linkage_crl([1; 8], 10, 9);
         assert!(check_crl(&crl_contents(&spec), WireEdition::Ieee2022).is_err());
-        let info = vec![IPeriodInfo::new(Time32(Uint32(700_100_000)), Duration::hours(Uint16(168)), IValue(Uint16(20)))];
+        let info = vec![IPeriodInfo::new(
+            Time32(Uint32(700_100_000)),
+            Duration::hours(Uint16(168)),
+            IValue(Uint16(20)),
+        )];
         let c = crl_contents(&linkage_crl([1; 8], 10, 12));
         assert!(with_i_period_info(c.clone(), info.clone(), WireEdition::Ieee2022).is_err());
         assert!(with_i_period_info(c, info, WireEdition::Ieee2025).is_ok());
@@ -812,7 +891,8 @@ mod tests {
     fn crl_ssp_encoding_matches_the_published_root_ssp() {
         let s = CrlSsp::new(CracaType::isCraca, &[256]);
         assert_eq!(s.to_coer(), [0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x00]);
-        let d: CrlSsp = rasn::coer::decode(&[0x00, 0x01, 0x01, 0x01, 0x02, 0x00, 0x01, 0x00, 0x02]).unwrap();
+        let d: CrlSsp =
+            rasn::coer::decode(&[0x00, 0x01, 0x01, 0x01, 0x02, 0x00, 0x01, 0x00, 0x02]).unwrap();
         assert_eq!(d, CrlSsp::new(CracaType::issuerIsCraca, &[1, 2]));
     }
 
@@ -846,7 +926,11 @@ mod tests {
                 next_crl: 2,
                 priority: None,
                 delta: false,
-                body: CrlBody::Linkage { i_rev: 10, index_within_i: 0, individual },
+                body: CrlBody::Linkage {
+                    i_rev: 10,
+                    index_within_i: 0,
+                    individual,
+                },
             };
             coer(&crl_contents(&spec)).unwrap().len() as f64 / f64::from(n)
         };
