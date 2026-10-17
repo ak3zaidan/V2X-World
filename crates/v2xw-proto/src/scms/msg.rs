@@ -574,6 +574,9 @@ pub enum ScmsMsg {
         /// How many times it has asked again.
         tries: u32,
     },
+    /// RSU application and OBU identification certificates (WP-B3b,
+    /// `crate::scms::run::appcert`).
+    AppCert(Box<crate::scms::run::appcert::AppMsg>),
 }
 
 /// Every SCMS message size, in one place.

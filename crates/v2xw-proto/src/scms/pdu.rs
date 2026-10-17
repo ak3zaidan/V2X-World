@@ -1506,6 +1506,12 @@ pub enum SpduKind {
     EeRaSuccessorEnrollmentCertRequest,
     /// `RaEeEnrollmentCertAckSpdu` (`raEeCertInfo`, `acpcTreeId` ABSENT, Signed, RA). WP-B2.
     RaEeEnrollmentCertAck,
+    /// `RaAcaCertRequestSpdu` (SignedCertRequest, RA).
+    RaAcaCertRequest,
+    /// `AcaRaCertResponseSpdu` (Signed, ACA).
+    AcaRaCertResponse,
+    /// `AcaEeCertResponsePrivateSpdu` (EncryptedSigned, the issuing ACA).
+    AcaEeCertResponsePrivate,
 }
 
 impl SpduKind {
@@ -1521,6 +1527,9 @@ impl SpduKind {
                 "EeRaSuccessorEnrollmentCertRequestSpdu"
             }
             SpduKind::RaEeEnrollmentCertAck => "RaEeEnrollmentCertAckSpdu",
+            SpduKind::RaAcaCertRequest => "RaAcaCertRequestSpdu",
+            SpduKind::AcaRaCertResponse => "AcaRaCertResponseSpdu",
+            SpduKind::AcaEeCertResponsePrivate => "AcaEeCertResponsePrivateSpdu",
         }
     }
 }

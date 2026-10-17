@@ -36,6 +36,7 @@ use crate::sizes::{CertificateSizes, WireSize};
 use crate::spec::{AES128_BLOCK, OpDescriptor};
 use crate::stage::{FlowId, FlowRun, StageId};
 
+pub mod appcert;
 mod crl;
 mod enrol;
 mod gov;
@@ -587,6 +588,8 @@ pub struct ScmsState {
     /// Simulated time 0 on the wall clock, for every `Time32` in a PDU.
     wall: v2xw_core::time::WallClock,
     next_run: u32,
+    /// RSU application and OBU identification certificates (WP-B3b).
+    pub apps: appcert::AppCertState,
 }
 
 /// What an authority does once its committee has signed: the continuation a committee
@@ -739,6 +742,7 @@ impl ScmsRun {
                 pdu_rng: crate::scms::pdu::Drbg::new(params.master_seed, b"run"),
                 wall,
                 next_run: 0,
+                apps: appcert::AppCertState::new(params.master_seed),
             },
             kernel,
         })
@@ -1222,6 +1226,7 @@ impl ScmsState {
             | ScmsMsg::FileResponse { .. }
             | ScmsMsg::PolicyUpdate(..) => self.handle_gov(d, out),
             ScmsMsg::Committee(_) => self.handle_committee(d, out),
+            ScmsMsg::AppCert(_) => self.handle_appcert(d, out),
         }
     }
 

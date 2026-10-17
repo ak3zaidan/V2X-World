@@ -81,6 +81,12 @@ pub enum FlowId {
     ThresholdSign,
     /// A proactive share refresh.
     ThresholdRefresh,
+    /// SCMS RSU application certificate: requested weekly over the RSU backhaul, no
+    /// butterfly, CRL series 3 (WP-B3b).
+    RsuApplicationCert,
+    /// SCMS OBU identification certificate (emergency vehicles): 1 month + 1 h, original
+    /// butterfly without LinkageData, CRL series 3 (WP-B3b).
+    IdentificationCert,
 }
 
 impl FlowId {
@@ -108,6 +114,8 @@ impl FlowId {
             FlowId::ThresholdDkg => "threshold-dkg",
             FlowId::ThresholdSign => "threshold-sign",
             FlowId::ThresholdRefresh => "threshold-refresh",
+            FlowId::RsuApplicationCert => "rsu-application-cert",
+            FlowId::IdentificationCert => "identification-cert",
         }
     }
 }

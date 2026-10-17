@@ -114,6 +114,15 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
                 pdu::open_signed_cert_request(&plain, pki).expect("enrolment-signed");
             }
             SpduKind::EeRaDownloadRequest => {}
+            // WP-B3b's ACA legs (`tests/appcert.rs`); this flow never emits them.
+            SpduKind::RaAcaCertRequest
+            | SpduKind::AcaRaCertResponse
+            | SpduKind::AcaEeCertResponsePrivate => {
+                panic!(
+                    "{:?} is not emitted by enrolment or pseudonym provisioning",
+                    p.kind
+                )
+            }
         }
     }
     if let Ok(dir) = std::env::var("V2XW_PDU_OUT") {
