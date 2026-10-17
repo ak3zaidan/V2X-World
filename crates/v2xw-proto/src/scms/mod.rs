@@ -640,14 +640,20 @@ fn card(p: &ScmsParams) -> ModelCard {
         Parameter::new(
             "shuffle_threshold_requests",
             "-",
-            serde_json::json!(10_000),
-            std_src("CAMP SCMS PoC EE Requirements R1.1 §2.2.7"),
+            serde_json::json!(1_000),
+            std_src(
+                "CAMP SCMS 1.2.2 §5.2.15.5 Table 67 shuffle_threshold (SCMS-631); preset \
+                 'brecht': 10,000 [Brecht et al. 2018 §V-B]",
+            ),
         ),
         Parameter::new(
             "shuffle_window_s",
             "s",
-            serde_json::json!(86_400),
-            std_src("CAMP SCMS PoC EE Requirements R1.1 §2.2.7: 10,000 requests or one day"),
+            serde_json::json!(2 * 86_400),
+            std_src(
+                "CAMP SCMS 1.2.2 Table 67 max_cert_request_age 2 days; preset 'brecht': one \
+                 day",
+            ),
         ),
         Parameter::new(
             "report_shuffle_threshold",
@@ -821,19 +827,26 @@ fn card(p: &ScmsParams) -> ModelCard {
             "The 'first batch time' the RA returns in its acknowledgement. CAMP-EE §2.2.7.6 \
              makes it deployment-specific; take it from the RA being modelled.",
         ),
-        todo(
+        Parameter::new(
             "download_poll_interval_s",
             "s",
             serde_json::json!(p.download_poll_interval.as_nanos() / 1_000_000_000),
-            "How often a device re-reads X.info when the batch is not ready. CAMP-EE \
-             §2.2.7.8.8 describes the polling but publishes no interval.",
+            std_src(
+                "SCMS Manager 1609.2.1 Profile §2.1.21 Table 3 download-minWait 5 min; §4.3.1: \
+                 retry after minWait, up to maxReqs",
+            ),
         ),
-        todo(
+        Parameter::new(
             "max_download_polls",
             "-",
             serde_json::json!(p.max_download_polls),
-            "A termination bound, not a protocol constant: a device that polls forever would \
-             hang a run. Set it above the worst-case batch delay of the scenario.",
+            std_src("SCMS Manager 1609.2.1 Profile §2.1.21 Table 3 download-maxReqs 100"),
+        ),
+        Parameter::new(
+            "download_request_tolerance_s",
+            "s",
+            serde_json::json!(p.download_request_tolerance.as_nanos() / 1_000_000_000),
+            std_src("CAMP SCMS 1.2.2 SCMS-1203 (ra.client-signature-ttl-sec): 5 s"),
         ),
         todo(
             "download_horizon_weeks",

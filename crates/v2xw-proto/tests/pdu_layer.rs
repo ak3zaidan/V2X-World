@@ -32,6 +32,9 @@ fn kind_of(step: &str) -> Option<SpduKind> {
         "enrol-response" => SpduKind::EcaEeCertResponse,
         "provisioning-request" | "provisioning-request-proxied" => SpduKind::EeRaCertRequest,
         "provisioning-ack" | "provisioning-ack-proxied" => SpduKind::RaEeCertAck,
+        "batch-download-request" | "batch-download-request-proxied" => {
+            SpduKind::EeRaDownloadRequest
+        }
         _ => return None,
     })
 }
@@ -53,6 +56,14 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
             (SpduKind::EcaEeCertResponse, 1),
             (SpduKind::EeRaCertRequest, 2),
             (SpduKind::RaEeCertAck, 2),
+            // WP-B3a: per certificate, two sealed PLVs, one RA→ACA request, one ACA→RA
+            // response and the private response filed for the device; one download
+            // request, carried over two hops.
+            (SpduKind::EncryptedIndividualPlv, 6),
+            (SpduKind::RaAcaCertRequest, 3),
+            (SpduKind::AcaRaCertResponse, 3),
+            (SpduKind::AcaEeCertResponsePrivate, 3),
+            (SpduKind::EeRaDownloadRequest, 2),
         ])
     );
     let dev = &st.devices[&DEVICE_A];
@@ -75,7 +86,47 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
         assert_eq!(p.bytes.as_ref().map(pdu::Pdu::len), Some(p.len));
         matched += 1;
     }
-    assert_eq!(matched, 6);
+    assert_eq!(matched, 8);
+
+    // The messages that carry several SPDUs are charged exactly their sum (a stored zip
+    // for the batch file).
+    let sum = |k: SpduKind| -> u32 { st.pdus.iter().filter(|p| p.kind == k).map(|p| p.len).sum() };
+    let charged = |name: &str| -> u32 {
+        run.kernel
+            .steps
+            .iter()
+            .filter(|s| s.step == name)
+            .map(|s| s.bytes)
+            .sum()
+    };
+    assert_eq!(charged("cert-request"), sum(SpduKind::RaAcaCertRequest));
+    assert_eq!(charged("cert-response"), sum(SpduKind::AcaRaCertResponse));
+    assert_eq!(
+        charged("pre-linkage-response"),
+        sum(SpduKind::EncryptedIndividualPlv)
+    );
+    let entries: Vec<(String, u32)> = st
+        .pdus
+        .iter()
+        .filter(|p| p.kind == SpduKind::AcaEeCertResponsePrivate)
+        .enumerate()
+        .map(|(j, p)| (v2xw_proto::scms::pdu_prov::batch_entry_name(0, j as u32), p.len))
+        .collect();
+    assert_eq!(
+        charged("batch-download"),
+        v2xw_proto::scms::pdu_prov::stored_zip_len(&entries)
+    );
+    // The RA's folder: one `<requestHash>_<i>.zip` holding `0_0`, `0_1`, `0_2`.
+    let files = st.ra.batch_files(DEVICE_A);
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].0.len(), 16 + 6, "{}", files[0].0);
+    assert!(files[0].0.ends_with("_0.zip"));
+    assert_eq!(files[0].1, ["0_0", "0_1", "0_2"]);
+    // Every installed credential is the real implicit one, and usable.
+    for ((i, j), c) in &dev.credentials {
+        assert!(c.implicit.is_some(), "({i},{j}) is implicit");
+        assert!(dev.credential_is_usable(*i, *j));
+    }
 
     // Each SPDU opens with the receiver's rules.
     let pki = st.pki.as_ref().expect("layer on");
@@ -93,7 +144,21 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
                     .expect("to the RA");
                 pdu::open_signed_cert_request(&plain, pki).expect("enrolment-signed");
             }
-            SpduKind::EeRaDownloadRequest => {}
+            SpduKind::EeRaDownloadRequest => {
+                let plain = pdu::decrypt_cert(b, &pki.ra.cert, &pki.ra.enc_private.unwrap())
+                    .expect("to the RA");
+                pdu::open_signed_pdu(&plain, pki).expect("enrolment-signed");
+            }
+            SpduKind::RaAcaCertRequest => {
+                pdu::open_signed_cert_request(b, pki).expect("RA-signed");
+            }
+            SpduKind::AcaRaCertResponse => {
+                v2xw_proto::scms::pdu_prov::ra_open_aca_response(pki, b).expect("ACA-signed");
+            }
+            SpduKind::AcaEeCertResponsePrivate => {
+                pdu::open_signed(b, pki).expect("ACA-signed");
+            }
+            SpduKind::EncryptedIndividualPlv | SpduKind::RaEeCertInfo => {}
         }
     }
     if let Ok(dir) = std::env::var("V2XW_PDU_OUT") {
@@ -189,11 +254,47 @@ fn write_corpus(run: &ScmsRun, dir: &std::path::Path) {
             )
         })
         .collect();
+    // WP-B3a: what the device and the LA↔ACA link hold, so the oracle can open every
+    // provisioning PDU itself: the caterpillar, each LA's key for the epoch it sealed in,
+    // and the (i, j) each filed private response is for.
+    let st = &run.state;
+    let cat = st.devices[&DEVICE_A].caterpillar.as_ref().unwrap();
+    let keys = st.la_aca.unwrap();
+    let t_plv = st
+        .pdus
+        .iter()
+        .find(|p| p.kind == SpduKind::EncryptedIndividualPlv)
+        .map(|p| st.time32(p.at))
+        .unwrap();
+    let ij: Vec<[u32; 2]> = st
+        .ra
+        .batch_files(DEVICE_A)
+        .iter()
+        .flat_map(|(_, entries)| entries.clone())
+        .map(|e| {
+            let (i, j) = e.split_once('_').unwrap();
+            [
+                u32::from_str_radix(i, 16).unwrap(),
+                u32::from_str_radix(j, 16).unwrap(),
+            ]
+        })
+        .collect();
     let m = serde_json::json!({
         "pdus": files,
         "certs": certs,
         "ra_cert": "ra.provider-a",
         "ra_enc_private": hex(&v2xw_sec::ec::scalar_to_be32(&pki.ra.enc_private.unwrap())),
+        "device": {
+            "a": hex(&v2xw_sec::ec::scalar_to_be32(cat.a())),
+            "p": hex(&v2xw_sec::ec::scalar_to_be32(cat.p())),
+            "ck": hex(cat.ck()),
+            "ek": hex(cat.ek()),
+        },
+        "la_aca_keys": {
+            "1": hex(&keys.current(1, t_plv)),
+            "2": hex(&keys.current(2, t_plv)),
+        },
+        "private_ij": ij,
     });
     std::fs::write(
         dir.join("manifest.json"),

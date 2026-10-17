@@ -166,8 +166,28 @@ pub struct IssuedCredential {
     /// The certified public key the PCA put in the certificate.
     pub certified_public: Point,
     /// The PCA's secret randomiser, which reaches the device encrypted to its cocoon
-    /// encryption key and which it needs to derive the matching private key.
+    /// encryption key and which it needs to derive the matching private key (the modelled
+    /// explicit path; zero on the real implicit path, which uses [`Self::implicit`]).
     pub c: Scalar,
+    /// The real path (WP-B3a), ACA → RA: the `AcaRaCertResponseSpdu` the RA opens and
+    /// files. `None` on the modelled path and on the device.
+    pub response: Option<crate::scms::pdu::Pdu>,
+    /// The real path, on the device: what it derived from the decrypted
+    /// `AcaEeCertResponsePrivateSpdu`.
+    pub implicit: Option<Box<ImplicitCredential>>,
+}
+
+/// An implicit pseudonym certificate as the device derived it (WP-B3a).
+#[derive(Debug, Clone)]
+pub struct ImplicitCredential {
+    /// The certificate (COER-encodable `Certificate`).
+    pub certificate: v2xw_msg::sec_types::ieee1609_dot2::Certificate,
+    /// The issuing ACA's whole-certificate HashedId8.
+    pub aca_id8: [u8; 8],
+    /// `e`, the ECQV-1609 certificate hash.
+    pub e: Scalar,
+    /// `r`, the `privateKeyInfo`.
+    pub r: Scalar,
 }
 
 /// One request the RA sends the PCA: a cocoon key pair and two sealed pre-linkage values.
@@ -190,6 +210,8 @@ pub struct CertRequestItem {
     /// The hash of the device's provisioning request, which is all that ties the
     /// certificate back to the RA's record.
     pub request_hash: [u8; 32],
+    /// The real `RaAcaCertRequestSpdu` (WP-B3a); the ACA reads only this when present.
+    pub spdu: Option<crate::scms::pdu::Pdu>,
 }
 
 /// What one Linkage Authority answers a pre-linkage request with.
@@ -203,6 +225,9 @@ pub struct PreLinkageBatch {
     pub lci: Lci,
     /// `(i, j, plv)`, sealed for the PCA, in ascending `(i, j)`.
     pub values: Vec<(u32, u32, SealedForPca<PreLinkageValue>)>,
+    /// The real `EncryptedIndividualPLV` of each value, same order (WP-B3a); empty when
+    /// the PDU layer is off.
+    pub encrypted: Vec<v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ra_interface::EncryptedIndividualPLV>,
 }
 
 /// A misbehaviour report as it leaves a device.
@@ -327,6 +352,8 @@ pub enum ScmsMsg {
         device: NodeId,
         /// The i-period.
         i: u32,
+        /// The real `EeRaDownloadRequestSpdu` (WP-B3a), built by the device when it sends.
+        pdu: Option<crate::scms::pdu::Pdu>,
     },
     /// RA → device: the batch.
     BatchDownload {
@@ -334,8 +361,11 @@ pub enum ScmsMsg {
         device: NodeId,
         /// The i-period.
         i: u32,
-        /// The credentials.
+        /// The credentials (the modelled path).
         credentials: Box<Vec<IssuedCredential>>,
+        /// The real path: the zip `<requestHash>_<i>.zip`'s entries `i_j`, each an
+        /// `AcaEeCertResponsePrivateSpdu` only the device can open, as `(j, spdu)`.
+        files: Box<Vec<(u32, crate::scms::pdu::Pdu)>>,
     },
     /// Device → LOP → RA → MA: a misbehaviour report.
     Report(Box<ReportSubmission>),

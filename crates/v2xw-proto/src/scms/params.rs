@@ -170,13 +170,15 @@ pub struct ScmsParams {
     /// How many valid elector signatures a device requires of a trust list: any 3 of the
     /// 5 (Elector Technical Specification v1.1 §2.2; the published CTLs' `quorum` 3).
     pub elector_quorum: u32,
-    /// The RA's certificate-request shuffle window [CAMP-EE §2.2.7].
+    /// The RA's certificate-request shuffle window: the maximum age of a request in the
+    /// aggregator, 2 days by default ([CAMP122] Table 67 `max_cert_request_age`;
+    /// [`ShufflePreset`]).
     pub shuffle_window: Duration,
     /// The RA's report shuffle window [CAMP-EE SCMS-765].
     pub report_shuffle_window: Duration,
     /// How many provisioning requests release the certificate-request shuffle before its
-    /// window closes [CAMP-EE §2.2.7: "10,000 requests or one day, whichever comes
-    /// first"].
+    /// window closes: 1,000 by default ([CAMP122] Table 67 `shuffle_threshold`;
+    /// [`ShufflePreset::Brecht`] is the 10,000 / one day of [BRECHT §V-B]).
     pub shuffle_threshold: u32,
     /// How many reports release the report shuffle before its window closes
     /// [CAMP-EE SCMS-765, the same rule].
@@ -195,10 +197,15 @@ pub struct ScmsParams {
     pub publish_on_cadence: bool,
     /// How long after the acknowledgement the device first polls for a batch.
     pub first_batch_delay: Duration,
-    /// How long between polls of a repository that is not ready.
+    /// How long between polls of a repository that is not ready: `download-minWait`,
+    /// 5 minutes ([SMP] §2.1.21 Table 3; the 408 rule "retry after minWait, up to
+    /// maxReqs", [SMP] §4.3.1).
     pub download_poll_interval: Duration,
-    /// How many polls before the device gives up.
+    /// How many polls before the device gives up: `download-maxReqs`, 100 ([SMP] Table 3).
     pub max_download_polls: u32,
+    /// How far a download request's `generationTime` may be from the RA's clock: 5 s
+    /// ([CAMP122] SCMS-1203, `ra.client-signature-ttl-sec`).
+    pub download_request_tolerance: Duration,
     /// Backend servers per entity, the `c` of the M/M/c.
     pub backend_servers: u32,
     /// Per-request overhead at a backend entity, beyond the cryptography.
@@ -264,6 +271,10 @@ pub struct PduLayer {
     /// through [`v2xw_core::time::WallClock`] (TAI since the 1609.2 epoch). Default
     /// 2026-01-05T00:00:00Z; a scenario sets its `time.t0`.
     pub t0_unix_s: i64,
+    /// How often each LA's AES-128 key shared with the ACA rotates, in seconds of
+    /// `Time32` (CAMP `shared_key_update_interval`, a local option, [CAMP122] Table 68).
+    /// **Assumption**: one week, the i-period; 0 never rotates.
+    pub la_aca_key_rotation_s: u32,
 }
 
 impl Default for PduLayer {
@@ -272,7 +283,29 @@ impl Default for PduLayer {
             enabled: true,
             keep_bytes: false,
             t0_unix_s: 1_767_571_200,
+            la_aca_key_rotation_s: 7 * 86_400,
         }
+    }
+}
+
+/// The certificate-request shuffle presets (03 §11 conflict, owner decision 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShufflePreset {
+    /// CAMP 1.2.2: 1,000 requests or 2 days, whichever first (the default).
+    Camp122,
+    /// Brecht et al. 2018: 10,000 requests or one day's worth.
+    Brecht,
+}
+
+impl ShufflePreset {
+    /// Sets `p`'s certificate-request shuffle to this preset.
+    pub fn apply(self, p: &mut ScmsParams) {
+        let b = match self {
+            ShufflePreset::Camp122 => BatchPolicy::CAMP_122_CERT_SHUFFLE,
+            ShufflePreset::Brecht => BatchPolicy::CAMP_SHUFFLE,
+        };
+        p.shuffle_threshold = b.max_items;
+        p.shuffle_window = b.max_delay;
     }
 }
 
@@ -343,15 +376,16 @@ impl Default for ScmsParams {
             reenrol_lead: Duration::from_secs(7 * 86_400),
             electors: 5,
             elector_quorum: 3,
-            shuffle_window: BatchPolicy::CAMP_SHUFFLE.max_delay,
+            shuffle_window: BatchPolicy::CAMP_122_CERT_SHUFFLE.max_delay,
             report_shuffle_window: BatchPolicy::CAMP_SHUFFLE.max_delay,
-            shuffle_threshold: BatchPolicy::CAMP_SHUFFLE.max_items,
+            shuffle_threshold: BatchPolicy::CAMP_122_CERT_SHUFFLE.max_items,
             report_shuffle_threshold: BatchPolicy::CAMP_SHUFFLE.max_items,
             crl_cadence: Duration::from_secs(86_400),
             publish_on_cadence: false,
             first_batch_delay: Duration::from_secs(60),
-            download_poll_interval: Duration::from_secs(60),
-            max_download_polls: 64,
+            download_poll_interval: Duration::from_secs(5 * 60),
+            max_download_polls: 100,
+            download_request_tolerance: Duration::from_secs(5),
             backend_servers: 4,
             backend_overhead: Duration::from_millis(1),
             device_overhead: Duration::from_millis(1),

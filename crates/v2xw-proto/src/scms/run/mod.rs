@@ -199,7 +199,12 @@ impl DeviceState {
         else {
             return false;
         };
-        let private = cat.signing_private(i, j, &cred.c);
+        // The real implicit certificate: d = e·b_ij + r (02 §9.3), checked against the key
+        // a verifier reconstructs, e·P_U + Q_ACA.
+        let private = match &cred.implicit {
+            Some(imp) => cat.signing_private_implicit(i, j, &imp.e, &imp.r),
+            None => cat.signing_private(i, j, &cred.c),
+        };
         butterfly::derived_key_matches(&private, &cred.certified_public)
     }
 }
@@ -233,8 +238,13 @@ pub struct RaState {
     jobs: Vec<ProvisioningJob>,
     /// Reports waiting for the report shuffle window.
     reports: Vec<(FlowRun, ReportSubmission)>,
-    /// Batches ready for download: device → i → credentials.
-    repos: BTreeMap<NodeId, BTreeMap<u32, Vec<IssuedCredential>>>,
+    /// Batches ready for download: device → i → the batch file.
+    repos: BTreeMap<NodeId, BTreeMap<u32, RepoBatch>>,
+    /// When the armed certificate-request shuffle closes at the latest (the RA's
+    /// `nextDlTime` estimate).
+    shuffle_deadline: SimTime,
+    /// `AcaRaCertResponseSpdu`s whose request hash the RA does not know.
+    pub unrouted_responses: u32,
     shuffle_armed: bool,
     report_shuffle_armed: bool,
     /// Which batch of each shuffle is filling, bumped at each release, so the window timer
@@ -261,6 +271,36 @@ impl RaState {
     pub fn batches_held(&self) -> usize {
         self.repos.values().map(BTreeMap::len).sum()
     }
+
+    /// The batch file names the RA holds for `device` (`<requestHash>_<i>.zip`), and the
+    /// entries `i_j` in each: what an observer of the RA's storage sees.
+    #[must_use]
+    pub fn batch_files(&self, device: NodeId) -> Vec<(String, Vec<String>)> {
+        self.repos.get(&device).map_or_else(Vec::new, |r| {
+            r.iter()
+                .map(|(i, b)| {
+                    (
+                        b.name.clone(),
+                        b.files
+                            .iter()
+                            .map(|(j, _)| crate::scms::pdu_prov::batch_entry_name(*i, *j))
+                            .collect(),
+                    )
+                })
+                .collect()
+        })
+    }
+}
+
+/// One batch file in the RA's per-device folder.
+#[derive(Debug, Default, Clone)]
+struct RepoBatch {
+    /// `<requestHash, 16 hex>_<i hex>.zip` (empty on the modelled path).
+    name: String,
+    /// The modelled path's credentials.
+    modelled: Vec<IssuedCredential>,
+    /// The real path: `(j, AcaEeCertResponsePrivateSpdu)`, ciphertext the RA cannot open.
+    files: Vec<(u32, crate::scms::pdu::Pdu)>,
 }
 
 /// What the RA records about one provisioning request.
@@ -284,7 +324,16 @@ struct ProvisioningJob {
     periods: u32,
     jmax: u32,
     cocoons: BTreeMap<(u32, u32), Point>,
+    /// The cocoon encryption keys `J_ij` (`certEncKey`).
+    cocoon_enc: BTreeMap<(u32, u32), Point>,
     plv: [BTreeMap<(u32, u32), SealedForPca<PreLinkageValue>>; 2],
+    /// The LAs' `EncryptedIndividualPLV`s (the real path).
+    enc_plv: [BTreeMap<(u32, u32), v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ra_interface::EncryptedIndividualPLV>; 2],
+    /// HashedId8 of each `RaAcaCertRequestSpdu` → `(i, j)`: the RA keeps `j`, which the
+    /// ACA never sees, and routes the answer by this hash (02 §9.5).
+    aca_requests: BTreeMap<[u8; 8], (u32, u32)>,
+    /// HashedId8 of the device's `EeRaCertRequestSpdu`: the batch files' name prefix.
+    request_hash8: Option<[u8; 8]>,
     lci: [Option<Lci>; 2],
     responses: u8,
     periods_certified: u32,
@@ -484,6 +533,8 @@ pub struct ScmsState {
     pub pdu_rejections: Vec<crate::scms::pdu::RejectedPdu>,
     /// The layer's deterministic randomness (separate from the model streams).
     pdu_rng: crate::scms::pdu::Drbg,
+    /// The keys each LA shares with the ACA (`None` with the layer off).
+    pub la_aca: Option<crate::scms::pdu_prov::LaAcaKeys>,
     /// Simulated time 0 on the wall clock, for every `Time32` in a PDU.
     wall: v2xw_core::time::WallClock,
     next_run: u32,
@@ -637,6 +688,12 @@ impl ScmsRun {
                 pdus: Vec::new(),
                 pdu_rejections: Vec::new(),
                 pdu_rng: crate::scms::pdu::Drbg::new(params.master_seed, b"run"),
+                la_aca: params.pdu.enabled.then(|| {
+                    crate::scms::pdu_prov::LaAcaKeys::new(
+                        params.master_seed,
+                        params.pdu.la_aca_key_rotation_s,
+                    )
+                }),
                 wall,
                 next_run: 0,
             },
@@ -892,7 +949,8 @@ impl ScmsRun {
 
 impl ScmsState {
     /// `Time32` (TAI seconds since the 1609.2 epoch) at simulated time `at`.
-    fn time32(&self, at: SimTime) -> u32 {
+    /// The `Time32` of simulated instant `at` (the run's wall clock).
+    pub fn time32(&self, at: SimTime) -> u32 {
         self.wall.time32(at).unwrap_or(0)
     }
 
@@ -960,7 +1018,7 @@ impl ScmsState {
                 credentials,
                 flow,
                 run,
-            } => self.send_batch(device, i, *credentials, flow, run, out),
+            } => self.send_batch(device, i, *credentials, flow, run, _at, out),
             Pending::PublishCrl { flow, run } => {
                 // The simulation's real ECDSA signature stands in for the committee's (a
                 // CGGMP21 output *is* one; a FROST one is a Schnorr signature the size

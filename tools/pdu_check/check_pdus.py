@@ -30,7 +30,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', 'oracle'))
 
-from scms_oracle import certs, coer, ec, prims  # noqa: E402
+from scms_oracle import butterfly, certs, coer, ec, ecqv, prims  # noqa: E402
+import re  # noqa: E402
 
 
 class Red(Exception):
@@ -149,6 +150,39 @@ def decrypt_to(data, rcert, r):
     return plain
 
 
+def id8(b):
+    return hashlib.sha256(b).digest()[-8:]
+
+
+def symm_open(enc_data, keys, la_id):
+    """WP-B3a: SymmEncryptedSingleRecipient under LA la_id's key shared with the ACA."""
+    need(len(enc_data['recipients']) == 1, 'one RecipientInfo')
+    kind, ri = enc_data['recipients'][0]
+    need(kind == 'symmRecipInfo', 'symmRecipInfo')
+    key = bytes.fromhex(keys[str(la_id)])
+    need(ri['recipientId'] == id8(coer.encode('SymmetricEncryptionKey', ('aes128Ccm', key))),
+         'recipientId is the HashedId8 of the shared key')
+    alg, wrapped = ri['encKey']
+    need(alg == 'aes128ccm', 'encKey aes128ccm')
+    dk = prims.ccm_decrypt(key, wrapped['nonce'], wrapped['ccmCiphertext'])
+    need(dk is not None and len(dk) == 16, 'data key unwraps')
+    calg, ct = enc_data['ciphertext']
+    need(calg == 'aes128ccm', 'aes128ccm')
+    plain = prims.ccm_decrypt(dk, ct['nonce'], ct['ccmCiphertext'])
+    need(plain is not None, 'CCM tag')
+    return plain
+
+
+def open_plv(e, m):
+    need(e['version'] == 2, 'EncryptedIndividualPLV version 2')
+    la_id = int.from_bytes(e['laId'], 'big')
+    encp = e['encPlv']
+    need(encp['content'][0] == 'encryptedData', 'encPlv is encryptedData')
+    plv = symm_open(encp['content'][1], m['la_aca_keys'], la_id)
+    need(len(plv) == 9, 'a PreLinkageValue is 9 bytes')
+    return la_id, plv
+
+
 def check(kind, data, pki, m, state):
     if kind == 'EeEcaCertRequestSpdu':
         (iface, (c, req)), signer = open_cert_request(data, pki)
@@ -183,6 +217,93 @@ def check(kind, data, pki, m, state):
         need((iface, c) == ('ee-ra', 'raEeCertAck'), 'raEeCertAck')
         need(ack['requestHash'] == hashlib.sha256(state['requests'][0]).digest()[-8:], 'requestHash of the request as sent')
         need('firstI' in ack, 'firstI present for butterfly')
+    elif kind == 'EncryptedIndividualPLV':
+        open_plv(decode_canonical('EncryptedIndividualPLV', data), m)
+    elif kind == 'RaAcaCertRequestSpdu':
+        (iface, (c, req)), signer = open_cert_request(data, pki)
+        need((iface, c) == ('aca-ra', 'raAcaCertRequest'), 'raAcaCertRequest')
+        need(signer is not None and certs.hashed_id8(signer) == certs.hashed_id8(pki.by_name['ra.provider-a']),
+             'signed by the RA')
+        need(req['type'] == 'implicit', 'implicit')
+        need(req['flags'][0] == b'\x00', 'flags clear (original butterfly, not cubk)')
+        need('certEncKey' in req and 'linkageInfo' in req, 'private response requested with linkageInfo')
+        tbs = req['tbsCert']
+        need(tbs['cracaId'] == b'\x00\x00\x00' and tbs['crlSeries'] == 0, 'cracaId 000000 / crlSeries 0')
+        need(tbs['id'][0] == 'linkageData', 'id is linkageData')
+        (l1, p1), (l2, p2) = (open_plv(req['linkageInfo'][k], m) for k in ('encPlv1', 'encPlv2'))
+        need(l1 != l2, 'PLVs from two LAs')
+        lv = bytes(a ^ b for a, b in zip(p1, p2))
+        state.setdefault('aca_req', {})[id8(data)] = {'lv': lv, 'i': tbs['id'][1]['iCert'],
+                                                      'B': tbs['verifyKeyIndicator'][1][1],
+                                                      'J': req['certEncKey']['publicKey'][1]}
+    elif kind == 'AcaRaCertResponseSpdu':
+        payload, signer = open_signed(data, pki)
+        need(certs.hashed_id8(signer) == certs.hashed_id8(pki.by_name['aca.provider-a']), 'signed by the ACA')
+        iface, (c, resp) = scms_pdu(payload)
+        need((iface, c) == ('aca-ra', 'acaRaCertResponse'), 'acaRaCertResponse')
+        req = state.get('aca_req', {}).get(resp['requestHash'])
+        need(req is not None, 'requestHash names a RaAcaCertRequestSpdu as sent')
+        alt, inner = resp['acaResponse']
+        need(alt == 'private', 'acaResponse.private')
+        state.setdefault('private', {})[coer.encode('AcaEeCertResponsePrivateSpdu', inner)] = req
+    elif kind == 'AcaEeCertResponsePrivateSpdu':
+        k = state.get('n_private', 0)
+        state['n_private'] = k + 1
+        i, j = m['private_ij'][k]
+        dev = m['device']
+        a, pp = (ec.os2i(bytes.fromhex(dev[x])) for x in ('a', 'p'))
+        ck, ek = (bytes.fromhex(dev[x]) for x in ('ck', 'ek'))
+        h = butterfly.expand_private(pp, ek, butterfly.ENC, i, j)
+        b = butterfly.expand_private(a, ck, butterfly.SIGN, i, j)
+        req = state.get('private', {}).get(data)
+        need(req is not None, 'the file is the private response the ACA sent the RA')
+        J = ec.base_mul(ec.P256, h)
+        need(certs.point_from(ec.P256, req['J']) == J, 'certEncKey is J_ij = h_ij*G')
+        need(certs.point_from(ec.P256, req['B']) == ec.base_mul(ec.P256, b), 'tbsCert key is B_ij = b_ij*G')
+        payload, signer = open_signed(data, pki)
+        d = decode_canonical('Ieee1609Dot2Data', payload)
+        need(d['content'][0] == 'encryptedData', 'encrypted to the EE')
+        enc = d['content'][1]
+        need(len(enc['recipients']) == 1 and enc['recipients'][0][0] == 'rekRecipInfo', 'one rekRecipInfo')
+        ri = enc['recipients'][0][1]
+        pek = coer.encode('PublicEncryptionKey', {'supportedSymmAlg': 'aes128Ccm',
+                                                  'publicKey': ('eciesNistP256', certs.point_value(ec.P256, J))})
+        need(ri['recipientId'] == id8(pek), 'recipientId is HashedId8(COER PublicEncryptionKey J_ij)')
+        V = certs.point_from(ec.P256, ri['encKey'][1]['v'])
+        dk = prims.ecies_decrypt(h, V, ri['encKey'][1]['c'], ri['encKey'][1]['t'], prims.ecies_p1('rekRecipInfo'))
+        need(dk is not None, 'ECIES unwrap with h_ij')
+        ct = enc['ciphertext'][1]
+        plain = prims.ccm_decrypt(dk, ct['nonce'], ct['ccmCiphertext'])
+        need(plain is not None, 'CCM tag')
+        u = decode_canonical('Ieee1609Dot2Data', plain)
+        need(u['content'][0] == 'unsecuredData', 'inner unsecuredData')
+        iface, (c, resp) = scms_pdu(u['content'][1])
+        need((iface, c) == ('aca-ee', 'acaEeCertResponse') and resp['version'] == 2, 'acaEeCertResponse v2')
+        cert = resp['certificate']
+        need(cert['type'] == 'implicit', 'implicit pseudonym certificate')
+        need(cert['issuer'] == ('sha256AndDigest', certs.hashed_id8(signer)),
+             'same-ACA rule: the outer signer issued the certificate')
+        tbs = cert['toBeSigned']
+        need(tbs['id'][0] == 'linkageData' and tbs['id'][1]['iCert'] == i == req['i'], 'iCert is i')
+        need(tbs['id'][1]['linkage-value'] == req['lv'], 'lv = plv1 XOR plv2')
+        need(tbs['crlSeries'] == 1, 'crlSeries 1')
+        need(tbs['cracaId'] == certs.hashed_id8(pki.by_name['crlg.provider-a'])[-3:], 'cracaId = CRLG HashedId3')
+        r = ec.os2i(resp['privateKeyInfo'])
+        e = ecqv.e_1609(certs.tbs_bytes(cert), certs.encode_canonical(signer))
+        dd = (e * b + r) % ec.P256.n
+        _, Q = certs.verification_key(cert, signer)
+        need(ec.base_mul(ec.P256, dd) == Q, 'd*G = e*P_U + Q_ACA')
+    elif kind == 'EeRaDownloadRequestSpdu':
+        ra = pki.by_name[m['ra_cert']]
+        plain = decrypt_to(data, ra, ec.os2i(bytes.fromhex(m['ra_enc_private'])))
+        payload, signer = open_signed(plain, pki)
+        need(coer.encode('Certificate', signer) == coer.encode('Certificate', state['enrol_cert']),
+             'signed by the enrolment certificate')
+        iface, (c, dl) = scms_pdu(payload)
+        need((iface, c) == ('ee-ra', 'eeRaDownloadRequest'), 'eeRaDownloadRequest')
+        fn = dl['filename']
+        need(re.fullmatch(r'[0-9A-F]{16}_[0-9A-F]{1,8}\.zip', fn) is not None, f'batch file name {fn}')
+        need(fn[:16] == id8(state['requests'][0]).hex().upper(), 'named by the request hash')
     else:
         raise Red(f'unknown kind {kind}')
 

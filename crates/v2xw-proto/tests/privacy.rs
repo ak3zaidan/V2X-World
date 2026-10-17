@@ -84,10 +84,30 @@ fn the_ra_cannot_compute_the_certified_key_it_helped_produce() {
         cred.certified_public.compressed(),
         "the cocoon key the RA computes is not the certified key"
     );
-    // And with the PCA's randomiser it is — which is what makes the difference the RA's
-    // ignorance rather than an accident of encoding.
-    let (recomputed, _c_point) = butterfly::pca_certify_explicit(&cocoon, &cred.c);
-    assert_eq!(recomputed.compressed(), cred.certified_public.compressed());
+    // And with the ACA's contribution it is — which is what makes the difference the RA's
+    // ignorance rather than an accident of encoding. Real path (implicit, WP-B3a): the
+    // certificate's reconstruction value is P_U = B + k·G with k the ACA's secret, so
+    // P_U ≠ B, and the certified key is e·P_U + Q_ACA. Modelled path: B + c·G.
+    match &cred.implicit {
+        Some(imp) => {
+            use v2xw_msg::sec_types::ieee1609_dot2::VerificationKeyIndicator;
+            let VerificationKeyIndicator::reconstructionValue(pu) =
+                &imp.certificate.0.to_be_signed.verify_key_indicator
+            else {
+                panic!("implicit certificate");
+            };
+            let p_u = v2xw_proto::scms::pdu::point_of(pu).unwrap();
+            assert_ne!(p_u.compressed(), cocoon.compressed(), "P_U = B + k·G, k secret");
+            let pki = run.state.pki.as_ref().unwrap();
+            let q_aca = v2xw_sec::ec::Point::mul_base(pki.aca.private.as_ref().unwrap());
+            let recomputed = p_u.mul(&imp.e).add(&q_aca);
+            assert_eq!(recomputed.compressed(), cred.certified_public.compressed());
+        }
+        None => {
+            let (recomputed, _c_point) = butterfly::pca_certify_explicit(&cocoon, &cred.c);
+            assert_eq!(recomputed.compressed(), cred.certified_public.compressed());
+        }
+    }
 }
 
 #[test]

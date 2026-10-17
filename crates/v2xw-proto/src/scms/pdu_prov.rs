@@ -43,6 +43,7 @@ use v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ra_interface::{
     EncryptedIndividualPLVEncPlv, LinkageInfo, RaAcaCertRequest,
     RaAcaCertRequestFlags,
 };
+use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::EeRaInterfacePdu;
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::{ScmsPduContent, SecurityMgmtSsp};
 use v2xw_sec::butterfly::Caterpillar;
 use v2xw_sec::cert;
@@ -614,6 +615,82 @@ pub fn ee_open_aca_response(
         r: rr,
         private: d,
         public: q_u,
+    })
+}
+
+/// The device's `EeRaDownloadRequestSpdu` for `filename`: `eeRaDownloadRequest
+/// {generationTime, filename}` signed by the enrolment certificate, encrypted to the RA
+/// (03 §3.2; the CAMP `Download-Req` header carries the same, [CAMP122] §6.3).
+///
+/// # Errors
+/// Encoding fails or the RA has no encryption key.
+pub fn ee_download_request_spdu(
+    pki: &ScmsPki,
+    enrolment: &Certificate,
+    key: &v2xw_sec::sig1609::Signer1609,
+    t32: u32,
+    filename: &str,
+    g: &mut Drbg,
+) -> Result<Pdu> {
+    let ra_key = pki.ra.enc_public().ok_or(PduError::Key("RA encryption key"))?;
+    let p = pdu::ee_ra_download_request(t32, filename);
+    Ok(Pdu::new(pdu::signed_encrypted(
+        &p,
+        enrolment,
+        key,
+        &pki.ra.cert,
+        &ra_key,
+        g,
+    )?))
+}
+
+/// What the RA reads from a download request.
+#[derive(Debug, Clone)]
+pub struct OpenedDownload {
+    /// The requested file name.
+    pub filename: String,
+    /// `generationTime` (`Time32`).
+    pub generation_time: u32,
+    /// The enrolment certificate that signed it.
+    pub enrolment: Certificate,
+}
+
+/// The RA: decrypts a download request with its encryption key, verifies it under an
+/// ECA-issued enrolment certificate, and checks `generationTime` against `now` within
+/// `tolerance_s` (the client-signature TTL, 5 s, [CAMP122] SCMS-1203).
+///
+/// # Errors
+/// Decryption, signature, issuer, shape or freshness.
+pub fn ra_open_download_request(
+    pki: &ScmsPki,
+    bytes: &[u8],
+    now: u32,
+    tolerance_s: u32,
+) -> Result<OpenedDownload> {
+    let enc = pki
+        .ra
+        .enc_private
+        .ok_or(PduError::Key("RA encryption key"))?;
+    let plain = pdu::decrypt_cert(bytes, &pki.ra.cert, &enc)?;
+    let (p, signer) = pdu::open_signed_pdu(&plain, pki)?;
+    let issued_by_eca = matches!(&signer.0.issuer,
+        IssuerIdentifier::sha256AndDigest(h) if hashedid::id8_bytes(h) == pki.eca.id8());
+    if !issued_by_eca {
+        return Err(PduError::UntrustedSigner);
+    }
+    let ScmsPduContent::ee_ra(EeRaInterfacePdu::eeRaDownloadRequest(r)) = p.content else {
+        return Err(PduError::Shape("expected ee-ra.eeRaDownloadRequest"));
+    };
+    let t = r.generation_time.0.0;
+    if t.abs_diff(now) > tolerance_s {
+        return Err(PduError::Shape(
+            "download request outside the client-signature tolerance",
+        ));
+    }
+    Ok(OpenedDownload {
+        filename: r.filename.to_string(),
+        generation_time: t,
+        enrolment: signer,
     })
 }
 

@@ -33,6 +33,15 @@ impl BatchPolicy {
         max_items: 10_000,
         max_delay: Duration::from_secs(86_400),
     };
+
+    /// The CAMP 1.2.2 certificate-request shuffle, the engine's default: release at
+    /// `shuffle_threshold` = 1,000 requests ("minimum number for full privacy mode") or
+    /// when the oldest request reaches `max_cert_request_age` = 2 days, whichever comes
+    /// first ([CAMP122] §5.2.15.5 Tables 67-69, SCMS-631; 03 §6.3, §11).
+    pub const CAMP_122_CERT_SHUFFLE: BatchPolicy = BatchPolicy {
+        max_items: 1_000,
+        max_delay: Duration::from_secs(2 * 86_400),
+    };
 }
 
 /// How an entity serves requests.

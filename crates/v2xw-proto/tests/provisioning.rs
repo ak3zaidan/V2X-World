@@ -27,10 +27,27 @@ fn a_credential_from_another_index_is_not_usable_for_this_one() {
     let mut run = deployment(1);
     provisioned(&mut run, DEVICE_A, 0, 1, 2);
     let dev = run.state.devices.get_mut(&DEVICE_A).expect("device");
-    let c0 = dev.credentials[&(0, 0)].c;
-    let c1 = dev.credentials[&(0, 1)].c;
-    assert_ne!(c0, c1, "the PCA draws a fresh randomiser per certificate");
-    dev.credentials.get_mut(&(0, 0)).expect("cred").c = c1;
+    assert!(dev.credential_is_usable(0, 0));
+    // The real path (WP-B3a) issues implicit certificates: the per-certificate secret is
+    // the ACA's private-key reconstruction value r (d = e·b_ij + r); the modelled path's
+    // is the explicit randomiser c. Either way, the other index's value must not work.
+    if dev.credentials[&(0, 0)].implicit.is_some() {
+        let r0 = dev.credentials[&(0, 0)].implicit.as_ref().unwrap().r;
+        let r1 = dev.credentials[&(0, 1)].implicit.as_ref().unwrap().r;
+        assert_ne!(r0, r1, "the ACA's reconstruction value is fresh per certificate");
+        dev.credentials
+            .get_mut(&(0, 0))
+            .expect("cred")
+            .implicit
+            .as_mut()
+            .unwrap()
+            .r = r1;
+    } else {
+        let c0 = dev.credentials[&(0, 0)].c;
+        let c1 = dev.credentials[&(0, 1)].c;
+        assert_ne!(c0, c1, "the PCA draws a fresh randomiser per certificate");
+        dev.credentials.get_mut(&(0, 0)).expect("cred").c = c1;
+    }
     assert!(
         !dev.credential_is_usable(0, 0),
         "the wrong randomiser must not derive the certified key"
@@ -88,7 +105,9 @@ fn provisioning_costs_real_queueing_time_and_real_bytes() {
         .get(&(run.state.nodes.pca, "primitive/ecdsa-p256-sha256", "sign"))
         .copied()
         .unwrap_or(0);
-    assert_eq!(pca_signs, 20, "one signature per issued certificate");
+    // Two per issued certificate on the real path: the ACA signs the
+    // AcaEeCertResponsePrivateSpdu and the AcaRaCertResponseSpdu around it (03 §3.2).
+    assert_eq!(pca_signs, 2 * 20, "two ACA signatures per issued certificate");
 }
 
 #[test]
