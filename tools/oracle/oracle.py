@@ -92,6 +92,24 @@ def cmd_coer(a):
     return 0 if re == data else 1
 
 
+def cmd_real(a):
+    from scms_oracle import real
+    total = bad = 0
+    for path in a.files:
+        try:
+            rows = real.check_file(path)
+        except Exception as e:
+            rows = [('<exception>', False, f'{type(e).__name__}: {e}')]
+        for name, ok, d in rows:
+            total += 1
+            if not ok:
+                bad += 1
+            if a.verbose or not ok:
+                print(f'  {"ok " if ok else "RED"} {os.path.basename(path)}: {name} {d}')
+    print(f'real: {"PASS" if not bad else "FAIL"} ({total - bad}/{total} checks over {len(a.files)} files)')
+    return 0 if not bad else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -113,6 +131,10 @@ def main():
     c.add_argument('hex')
     c.add_argument('-v', '--verbose', action='store_true')
     c.set_defaults(fn=cmd_coer)
+    r = sub.add_parser('real')
+    r.add_argument('files', nargs='+')
+    r.add_argument('-v', '--verbose', action='store_true')
+    r.set_defaults(fn=cmd_real)
     a = ap.parse_args()
     sys.exit(a.fn(a))
 
