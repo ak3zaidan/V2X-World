@@ -48,6 +48,7 @@ pub use migrate::{Chain, Migration};
 pub use publish::{schema as scenario_schema, surface as scenario_surface};
 pub use schema::{
     Actors, Apps, Attacker, Backend, BackendEntity, BackendLink, BuildingOptions, CURRENT_SCHEMA,
+    Calendar,
     CryptoModeSpec, DemandSpec, Detection, DilationWindow, Experiment, ExporterSpec, Focus,
     FocusRegion, Messages, Meta, ModelChoice, Net, Nodes, PseudonymChangeSpec, Radio, RadioTiers,
     Rat, Rsu, RsuPlacement, Scenario, Security, SignerIdPolicySpec, TerrainOptions, Threats, Time,

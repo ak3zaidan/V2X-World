@@ -653,6 +653,45 @@ pub struct Time {
     /// Unset is none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warmup_s: Option<f64>,
+    /// Which calendar the credential system runs on (WP-D2, gap row 43). `real`, the
+    /// default, is the deployment's: one-week i-periods counted from the US epoch,
+    /// 2015-01-06 04:00 Eastern (03 §6.1; [SMP] §2.1.17 Table 2), so a run starting
+    /// 2026-10-16 provisions i = 614. `compressed` is the only way to state a shorter
+    /// `security.protocol.params.i_period_s`: its i-period numbers, validity windows and
+    /// every calendar-driven wait are not the deployment's, and the manifest and the run
+    /// report say so. Left out of the serialised scenario when real, so no existing
+    /// scenario's hash moves.
+    #[serde(default, skip_serializing_if = "Calendar::is_real")]
+    pub calendar: Calendar,
+    /// Windows the run fast-forwards through (WP-D2, gap row 44): inside one the traffic
+    /// is frozen where it stands and no radio event is generated, and the engine jumps
+    /// from one credential-system event to the next — top-up horizons, the RA's
+    /// shuffles and pre-generation, the CRL publication and fetches, re-enrolment, root
+    /// rollovers — on the mobility-step grid, so weeks of PKI behaviour on the real
+    /// calendar fit in a short run. A backend event lands on exactly the step a full run
+    /// would have handled it on. The manifest records each window, as a time-dilation
+    /// window too (radio skipped) and in its warnings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fast_forward: Vec<DilationWindow>,
+}
+
+/// The calendar the credential system runs on ([`Time::calendar`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Calendar {
+    /// The deployment's weekly grid from the 2015 epoch.
+    #[default]
+    Real,
+    /// A shorter i-period, labelled in every output.
+    Compressed,
+}
+
+impl Calendar {
+    /// Whether this is the deployment's calendar.
+    #[must_use]
+    pub fn is_real(&self) -> bool {
+        *self == Calendar::Real
+    }
 }
 
 impl Time {
@@ -688,6 +727,15 @@ impl Time {
         Duration::from_millis(self.mobility_step_ms)
     }
 
+    /// Whether `t` (simulated nanoseconds) falls inside a [`Time::fast_forward`] window
+    /// (start inclusive, end exclusive), and if so that window's end.
+    pub fn fast_forward_end(&self, t: u64) -> Option<u64> {
+        self.fast_forward.iter().find_map(|w| {
+            let (a, b) = (secs_to_ns(w.from_s), secs_to_ns(w.to_s));
+            (t >= a && t < b).then_some(b)
+        })
+    }
+
     /// The run horizon in nanoseconds, rounded to the nanosecond grid.
     ///
     /// `duration_s` is a float in the file because authors write `0.5`; the kernel is
@@ -696,6 +744,10 @@ impl Time {
     pub fn horizon_ns(&self) -> u64 {
         (self.duration_s * 1e9).round().max(0.0) as u64
     }
+}
+
+fn secs_to_ns(s: f64) -> u64 {
+    (s * 1e9).round().max(0.0) as u64
 }
 
 impl Default for Time {
@@ -708,6 +760,8 @@ impl Default for Time {
             time_dilation: Vec::new(),
             metric_period_s: None,
             warmup_s: None,
+            calendar: Calendar::Real,
+            fast_forward: Vec::new(),
         }
     }
 }

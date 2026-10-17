@@ -44,6 +44,7 @@ fn grid(signature: &str) -> Scenario {
             "download_poll_interval_s": 1
         }),
     });
+    s.time.calendar = v2xw_engine::scenario::Calendar::Compressed;
     s.net.uu = Some(ModelChoice {
         id: "cellular/uu/fixed-latency".to_string(),
         params: json!({"preset": "4g-east-coast"}),

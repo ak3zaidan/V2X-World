@@ -41,6 +41,14 @@ fn lifecycle(s: &mut Scenario, params: serde_json::Value) {
         id: v2xw_engine::phase2::CAMP_SCMS.to_string(),
         params,
     });
+    // A shorter i-period is a compressed calendar, which a scenario must declare (WP-D2).
+    if s.security
+        .protocol
+        .as_ref()
+        .is_some_and(|p| p.params.get("i_period_s").is_some())
+    {
+        s.time.calendar = v2xw_engine::scenario::Calendar::Compressed;
+    }
 }
 
 fn cellular(s: &mut Scenario) {
@@ -493,6 +501,7 @@ fn the_etsi_pki_revokes_passively_and_the_scms_actively() {
                 "crl_cadence_s": 0, "crl_fetch_interval_s": 2
             }),
         });
+        s.time.calendar = v2xw_engine::scenario::Calendar::Compressed;
         if protocol == v2xw_engine::phase2::ETSI_PKI {
             s.security.envelope = "etsi103097".to_string();
         }

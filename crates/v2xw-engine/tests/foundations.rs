@@ -616,6 +616,7 @@ fn with_backend(mut s: Scenario) -> Scenario {
             "report_shuffle_window_s": 30, "crl_cadence_s": 10, "crl_fetch_interval_s": 10,
         });
     }
+    s.time.calendar = v2xw_engine::scenario::Calendar::Compressed;
     s
 }
 
