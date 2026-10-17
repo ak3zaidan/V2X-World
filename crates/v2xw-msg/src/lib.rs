@@ -210,6 +210,8 @@ pub mod provenance {
         "0003-ieee1609dot2dot1-acara-parameterised-import.patch",
         "0004-ieee1609dot2dot1-certmanagement-crlseries-import.patch",
         "0005-ieee1609dot2-pdufunctionaltype-extension-constraint.patch",
+        "0006-ieee1609dot2dot1-ctl-quorum-may-be-absent.patch",
+        "0007-ieee1609dot2dot1-ctl-quorum-constructor.patch",
     ];
 
     /// The code generator, pinned in the workspace manifest.

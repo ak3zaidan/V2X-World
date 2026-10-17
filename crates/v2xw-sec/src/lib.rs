@@ -61,7 +61,9 @@ pub mod butterfly;
 pub mod ccm;
 pub mod cert;
 pub mod chain;
+pub mod crl;
 pub mod crypto;
+pub mod ctl;
 pub mod ec;
 pub mod ecies;
 pub mod envelope;
@@ -72,6 +74,7 @@ pub mod linkage;
 pub mod p384;
 pub mod primitive;
 pub mod scheme;
+pub mod sig1609;
 pub mod testctx;
 
 pub use crypto::{
