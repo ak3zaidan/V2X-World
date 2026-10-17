@@ -33,8 +33,11 @@ fn a_peer_run_is_its_providers_own_on_the_shared_ctl() {
         .peer_cert("provider-b", "root")
         .expect("provider-b's root");
     assert_eq!(p.gov.lccf.certs.first(), Some(b_root), "its own chain file");
-    let (b_pki, a_pki) = (p.pki.as_ref().unwrap(), h.pki.as_ref().unwrap());
-    assert_eq!(b_pki.aca.id8(), h.peer_pki[0].1.aca.id8());
+    let (b_aca, a_aca) = (
+        p.pki.as_ref().unwrap().aca.id8(),
+        h.pki.as_ref().unwrap().aca.id8(),
+    );
+    assert_eq!(b_aca, h.peer_pki[0].1.aca.id8());
     assert_ne!(p.params.master_seed, h.params.master_seed, "its own seed");
     assert!(ScmsRun::new_peer(&home, 0).is_err());
     assert!(ScmsRun::new_peer(&home, 2).is_err());
@@ -45,8 +48,8 @@ fn a_peer_run_is_its_providers_own_on_the_shared_ctl() {
     assert!(!dev.credentials.is_empty());
     for c in dev.credentials.values() {
         let imp = c.implicit.as_ref().expect("an implicit pseudonym");
-        assert_eq!(imp.aca_id8, b_pki.aca.id8(), "issued by provider-b's ACA");
-        assert_ne!(imp.aca_id8, a_pki.aca.id8());
+        assert_eq!(imp.aca_id8, b_aca, "issued by provider-b's ACA");
+        assert_ne!(imp.aca_id8, a_aca);
     }
 }
 
@@ -78,7 +81,10 @@ fn a_shared_report_crosses_the_inter_provider_link_and_is_decided_there() {
         .deployment
         .inter_provider_latency(0, 1)
         .expect("region model");
-    assert!(lat.as_nanos() > 20_000_000, "coast to coast: {lat:?}");
+    // Independent derivation (haversine in Python, R = 6371.0088 km): us-east
+    // (39.0438, -77.4874) to us-west (45.8399, -119.7006) is 3,502.6 km; at 2/3 c that is
+    // 17,525,023 ns, plus the 1 ms per-link overhead.
+    assert_eq!(lat.as_nanos(), 18_525_023, "coast to coast: {lat:?}");
     assert!(at >= sent + lat.as_nanos(), "{at} before {sent} + {lat:?}");
     assert!(
         at < sent + lat.as_nanos() + 5_000_000,
