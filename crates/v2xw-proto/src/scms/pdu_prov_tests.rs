@@ -26,6 +26,18 @@ struct One {
 }
 
 fn one(pki: &ScmsPki, keys: &LaAcaKeys, cat: &Caterpillar, i: u32, j: u32, g: &mut Drbg) -> One {
+    one_with(pki, keys, cat, i, j, g, &[])
+}
+
+fn one_with(
+    pki: &ScmsPki,
+    keys: &LaAcaKeys,
+    cat: &Caterpillar,
+    i: u32,
+    j: u32,
+    g: &mut Drbg,
+    psids: &[u64],
+) -> One {
     let seeds = [LinkageSeed::new([0x11; 16]), LinkageSeed::new([0x22; 16])];
     let ids = [1u16, 2u16];
     let plv: [PreLinkageValue; 2] = core::array::from_fn(|k| {
@@ -51,6 +63,7 @@ fn one(pki: &ScmsPki, keys: &LaAcaKeys, cat: &Caterpillar, i: u32, j: u32, g: &m
         plv: enc,
         valid_from: T,
         dummy_lv: [0xEE; PLV_BYTES],
+        psids: psids.to_vec(),
     };
     let request = ra_aca_cert_request_spdu(pki, &x).unwrap();
     let issued = aca_issue(pki, keys, request.bytes(), T, g).unwrap();
@@ -274,4 +287,53 @@ fn batch_names_follow_the_profile() {
     );
     // One 10-byte entry: 30 + 46 + 2·6 + 10 + 22.
     assert_eq!(stored_zip_len(&[("266_13".into(), 10)]), 120);
+}
+
+/// WP-C2: a receiver validates the whole chain, so the PKI's component certificates carry
+/// the published issue permissions and a pseudonym the ACA issued validates to the root
+/// under the US device policy. The RA's published `{all, 0, 0}` group is tolerated and
+/// reported; the pseudonym permits exactly the PSIDs the request asked for.
+#[test]
+fn a_pseudonym_and_every_component_validate_to_the_root_under_the_us_policy() {
+    use v2xw_sec::chain::{self, ChainPolicy};
+    let pki = pki();
+    let anchors = std::collections::BTreeSet::from([cert::hashed_id32(&pki.root.cert).unwrap()]);
+    let us = ChainPolicy::us_device(anchors, T + 10);
+    let chain_of = |c: &Certificate| -> Vec<Certificate> {
+        let mut v = vec![c.clone()];
+        while let Some(Ok(d)) = match &v.last().unwrap().0.issuer {
+            IssuerIdentifier::sha256AndDigest(d) | IssuerIdentifier::sha384AndDigest(d) => {
+                Some(Ok::<_, ()>(hashedid::id8_bytes(d)))
+            }
+            _ => None,
+        } {
+            v.push(pki.by_id8(&d).expect("issuer in the PKI").cert.clone());
+        }
+        v
+    };
+    for a in pki.all() {
+        let v = chain::validate(&chain_of(&a.cert), &us)
+            .unwrap_or_else(|e| panic!("{}: {e:?}", a.name));
+        assert_eq!(
+            v.tolerated.is_empty(),
+            a.name != "ra.provider-a",
+            "{}: only the RA uses the tolerated profile",
+            a.name
+        );
+    }
+    let keys = LaAcaKeys::new(9, 7 * 86_400);
+    let cat = cat();
+    let mut g = Drbg::new(3, b"t");
+    let psids = [0x20u64, 38, 0xE000_0016];
+    let o = one_with(&pki, &keys, &cat, 614, 3, &mut g, &psids);
+    let (_, private) = ra_open_aca_response(&pki, o.issued.to_ra.bytes()).unwrap();
+    let p = ee_open_aca_response(&pki, private.bytes(), &cat, 614, 3).unwrap();
+    let c = chain_of(&p.certificate);
+    assert_eq!(c.len(), 4, "pseudonym, ACA, ICA, root");
+    let v = chain::validate(&c, &us).expect("the pseudonym chain validates");
+    assert!(v.tolerated.is_empty());
+    for psid in psids {
+        assert!(chain::ee_permits_psid(&p.certificate, psid), "{psid:#x}");
+    }
+    assert!(!chain::ee_permits_psid(&p.certificate, 35));
 }

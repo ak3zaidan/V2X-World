@@ -211,6 +211,9 @@ pub struct RaAcaInput {
     /// The 9 random bytes the RA puts where the linkage value goes, for the ACA to
     /// replace ([ASN-2.1] note on `EeRaCertRequest.tbsCert`).
     pub dummy_lv: [u8; PLV_BYTES],
+    /// The `appPermissions` PSIDs the EE requested (the RA forwards its `tbsCert`);
+    /// empty means BSM only, the B3a profile.
+    pub psids: Vec<u64>,
 }
 
 /// `aca-ra.raAcaCertRequest` (03 §3.3): `type implicit`, `flags` all clear (not
@@ -237,10 +240,14 @@ pub fn ra_aca_cert_request(
         ),
         None,
         None,
-        Some(SequenceOfPsidSsp(vec![PsidSsp::new(
-            Psid(rasn::types::Integer::from(BSM_PSID)),
-            None,
-        )])),
+        Some(SequenceOfPsidSsp(if x.psids.is_empty() {
+            vec![PsidSsp::new(Psid(rasn::types::Integer::from(BSM_PSID)), None)]
+        } else {
+            x.psids
+                .iter()
+                .map(|p| PsidSsp::new(Psid(rasn::types::Integer::from(*p)), None))
+                .collect()
+        })),
         None,
         None,
         None,

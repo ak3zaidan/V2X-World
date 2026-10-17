@@ -499,7 +499,7 @@ fn app_permissions(role: &str) -> Vec<PsidSsp> {
 }
 
 /// A role's `certIssuePermissions`, as on the published certificates.
-fn cert_issue_permissions(role: &str) -> Option<SequenceOfPsidGroupPermissions> {
+pub(crate) fn cert_issue_permissions(role: &str) -> Option<SequenceOfPsidGroupPermissions> {
     let all = || SubjectPermissions::all(());
     let groups = match role {
         "root" => vec![
