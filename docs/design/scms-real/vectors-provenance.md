@@ -115,7 +115,7 @@ Their sha256 values: production zip `411fa8d4…3b19` (`cert-chain_0.oer` `738b3
    country containment, signatures and the CTL anchor. Bitmap SSP ranges and geometric region containment
    are reported as unsupported, not passed.
 4. The 2025 edition is not compiled by the oracle yet (`coer.EDITIONS` has only `2022`).
-5. OpenSCMS butterfly encryption vector (i = 7590, j = 0) is not in the corpus.
+5. ~~OpenSCMS butterfly encryption vector (i = 7590, j = 0) is not in the corpus.~~ Added by WP-A4 (§10).
 
 ## 7. Corpus files
 
@@ -173,3 +173,20 @@ Their sha256 values: production zip `411fa8d4…3b19` (`cert-chain_0.oer` `738b3
 | `crates/v2xw-sec/tests/vectors/xcheck/chains.json` | 500 random 1609.2-2022 chains (2–5 certificates, explicit and implicit, 13 injected rule faults), each with the oracle's `chain.validate` verdict, an SPDU signed with the EE key, and the issuance inputs of every certificate | `python -I tools/chain-xcheck/chain_xcheck.py gen <out>` (seed 20261016); `verify <file>` regenerates it byte for byte | `523500a71470836135666be704359cdc4db070316f64def4816ab87c12a6ce93` |
 
 `tools/chain-xcheck` is glue written by the WP-A3 agent, who also wrote the Rust under test. It only calls the oracle's public functions (`coer`, `certs`, `ecqv`, `prims`, `chain`) and does not change the oracle. Two judgements are the harness's own, not the oracle's: (a) the SPDU verdict for chains with implicit CAs, where the key above the first implicit level is composed from `ecqv.e_1609` and `ecqv.public_key`, because `certs.verification_key` cannot resolve an implicit issuer; (b) the space of generated chains, limited to where the oracle's rules are complete (see the script's docstring). Rules outside that space are covered only by `crates/v2xw-sec/tests/chain_rules.rs`, from the 1609.2-2022 ASN.1 notes.
+
+## 10. WP-A4 additions (butterfly and linkage)
+
+Added 2026-10-16 by the WP-A4 agent (which works on the Rust and so did not change the oracle; 00 §4.1).
+
+| File | Vectors | Source | Source sha256 | File sha256 |
+|---|---|---|---|---|
+| `openscms_bfkeyexp.json` | 2 | OpenSCMS `ra/src/core_logic/expansion_function.rs` unit tests, commit `8a6f0c26c0965f7e86c0a4443502b8968e9809b5` (Apache-2.0; values transcribed, byte arrays to hex) | `cd782ab26e215219…` | `ab16a33dff46e1536437c41dd045b5eeee264dc842882563eadb694a3b4663df` |
+| `wpa4_butterfly_response.json` | 8 | Composed by `crates/v2xw-sec/tests/data/gen_butterfly_response_vectors.py` from the oracle's ECIES, CCM, EC and asn1tools COER over `oracle/butterfly.json` (J, h_ij); every SPDU re-opened with the oracle before writing | n/a | `7cdb0d5dfeaa16ba07257c866828a947f8be5220788b08a88db64d3848c7c167` |
+
+Checks: the oracle's own `butterfly.f_int`, `f` and `expand_public` reproduce both OpenSCMS vectors (f_int, f·G and
+the cocoon key), which closes open item 5 of §6. `gen_butterfly_response_vectors.py --check` regenerates the
+response file byte for byte. The Rust acceptance test is `crates/v2xw-sec/tests/official_vectors.rs`.
+
+The response vectors fix one reading that is not yet confirmed from 1609.2.1 §9.3.4: the recipient is a
+`rekRecipInfo` with recipientId = HashedId8(COER `PublicEncryptionKey`{aes128Ccm, eciesNistP256 J}) and ECIES
+P1 = SHA-256(""). The two implementations agree on it; neither proves it.
