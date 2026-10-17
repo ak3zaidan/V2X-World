@@ -4011,3 +4011,16 @@ Merged `--no-ff`: verify (docs only, no conflicts). No code changed, so no fixes
 - **Release:** `cargo build --release -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots, and `/agent/status` reports the agent available.
 - **Digests:** unchanged (docs-only round).
 - **Still open:** see the group 5 section above (Falcon AoI verify path, selection_window, `--catalogue` regeneration, MCAP tail digest, compare veh/s label).
+
+## 2026-10-16: SCMS realism wave 1 integration (WP-A0, A1, A2)
+
+Merged `--no-ff` onto `ab3bc79` in order A1 (`ae74afa`), A2 (`13e2687`), A0 (`5d5c0cf`). There were no conflicts, and all three agents had committed their work, so no wip snapshot was needed. One fix after the merge, `821c9f1`: the comment in xcheck.py now names the Psid-defect test's real file. `cargo fmt --all` made no changes.
+
+- **Checks:** `cargo check --workspace --tests` passes. Tests were run for v2xw-core, -sec, -msg, -proto, -node and -netval. All pass except two, and both of those also fail on `ab3bc79`, so the merges did not cause them:
+  - netval `layers::network` fails at NET-03: messages are signed under PSID 0x20, which was already recorded above.
+  - proto `threshold::a_malicious_member_is_caught_by_its_share_excluded_and_the_session_restarts` expects 1 at line 335 and gets 2 (restarts or exclusions = 2). It fails the same way on every run.
+- **Oracle:** `oracle.py selftest` passes (412/412). `mutate` passes: all 24 faults go red and none is silent. `verify-emitted` passes (10/10). `xcheck.py gen` regenerates `scms_coer_xcheck.txt` byte for byte.
+- **Release:** `cargo build --release -p v2xw-cli --bins` succeeds with `-j 2`. The default job count went over heavy.sh's 4.5 GB cap while compiling, at thin LTO with codegen-units 1. `V2XW_PORT=8758 ./run-sim.sh` boots: `/agent/status` and `/rpc/schema` both return 200.
+- **Behaviour change:** WallClock time32/time64 now count TAI, which adds 5 s. 1609.2 generationTime, ETSI TimestampIts and node certificate validity all shift by those 5 s. The pinned overhead value changes from 694310400 to 694310405. Any golden digest that includes timestamps may move.
+- **Still open:** the owner needs to confirm the licence of the oracle's ASN.1 copies. Also open: the rasn nested-extension and Psid ≥ 2^63 defects, the A1/A2 Rust code not yet checked against the A0 oracle, and `civil_at` ignoring a leap second during a run. During A1, one crates.io request sent the owner's email address in its User-Agent header.
+- **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{1,2,3}` were removed, and so was `target/agents`.

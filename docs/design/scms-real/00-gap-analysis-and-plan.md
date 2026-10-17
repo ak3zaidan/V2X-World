@@ -506,7 +506,7 @@ Links (all TLS 1.2/1.3 between online components; application-layer encryption w
 
 | Wave | Packages (≤ 3) | Why together | Estimate (agent-h) |
 |---|---|---|---|
-| 1 | A0, A1, A2 | Independent: tooling, the ASN.1 layer and primitives touch different crates | 22 |
+| 1 | [x] A0, [x] A1, [x] A2 (merged 2026-10-16) | Independent: tooling, the ASN.1 layer and primitives touch different crates | 22 |
 | 2 | A3, A4, A5 | All need A1/A2. Different files: `cert`/`chain`, `butterfly`/`linkage`, `crl`/`ctl` | 26 |
 | 3 | B1, B5, C4 | B1 must land first for B2–B4. B5 is `governance.rs` only. C4 is `primitive.rs` only, pulled forward because it is independent | 22 |
 | 4 | B2, B3a, B3b | All on the split `run/*` modules from B1 | 28 |
@@ -517,6 +517,11 @@ Links (all TLS 1.2/1.3 between online components; application-layer encryption w
 | 9 | E2, E3 | Both UI, on E1's fixtures; separate component folders | 20 |
 | 10 | F1, F2 | Final validation | 16 |
 | | | **Total** | **≈ 201 agent-hours** over 10 waves, plus one merge agent per wave (≈ 2 h each) |
+
+Wave 1 status (2026-10-16, merged into `main`; details in BUILD-STATUS.md):
+- [x] **A0** (merge `5d5c0cf`): the Python oracle is in `tools/oracle`, with a vector corpus of 18 transcribed files plus 9 oracle-emitted files in `crates/v2xw-sec/tests/vectors/`. `selftest` passes (412/412), `mutate` turns all 24 faults red, and `verify-emitted` passes (10/10). Still open: no public 1609.2 implicit-certificate vector exists, the oracle does not compile the 2025 edition, and the real CTL files are not vendored (WP-A5 adds them).
+- [x] **A1** (merge `ae74afa`): the 1609.2.1-2022 bindings build through rasn-compiler, so the fallback was not needed. Adds patch 0005 (pduFunctionalType constraint), `scms_types` (WireEdition, canonicalisation) and the asn1tools COER cross-check (8,757/9,000 values re-encode byte for byte; NESTED exempt). Still open: the rasn nested-extension-addition bug and the Psid ≥ 2^63 bug, and checking this layer against the A0 oracle.
+- [x] **A2** (merge `13e2687`): Time32/64 now count TAI, using the IANA leap-second table, and the sec crate adds KDF2, MAC1, CCM, ECIES and P-384. All 21 D.6 vectors pass, plus the CAVP samples. Still open: `civil_at` ignores a leap second during a run, and the A0 oracle has not cross-checked these primitives.
 
 Critical path: A1 → A3 → A5 → B4 → C2 → D1 → E1 → E2/E3 → F1. Two things could stretch it:
 - `rasn-compiler` cannot handle the 1609.2.1 modules (WP-A1 fallback adds about 8 h).
