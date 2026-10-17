@@ -1491,6 +1491,12 @@ pub enum SpduKind {
     RaEeCertAck,
     /// `EeRaDownloadRequestSpdu` (SignedEncrypted, enrolment certificate → RA).
     EeRaDownloadRequest,
+    /// `RaAcaCertRequestSpdu` (SignedCertRequest, RA).
+    RaAcaCertRequest,
+    /// `AcaRaCertResponseSpdu` (Signed, ACA).
+    AcaRaCertResponse,
+    /// `AcaEeCertResponsePrivateSpdu` (EncryptedSigned, the issuing ACA).
+    AcaEeCertResponsePrivate,
 }
 
 impl SpduKind {
@@ -1502,6 +1508,9 @@ impl SpduKind {
             SpduKind::EeRaCertRequest => "EeRaCertRequestSpdu",
             SpduKind::RaEeCertAck => "RaEeCertAckSpdu",
             SpduKind::EeRaDownloadRequest => "EeRaDownloadRequestSpdu",
+            SpduKind::RaAcaCertRequest => "RaAcaCertRequestSpdu",
+            SpduKind::AcaRaCertResponse => "AcaRaCertResponseSpdu",
+            SpduKind::AcaEeCertResponsePrivate => "AcaEeCertResponsePrivateSpdu",
         }
     }
 }

@@ -11,6 +11,7 @@
 //! function, why a pre-linkage value is a type the RA cannot open, and why a Linkage
 //! Authority releases `ls(i)` and never `ls(0)`.
 
+pub mod appcert;
 pub mod governance;
 pub mod inspect;
 pub mod msg;
