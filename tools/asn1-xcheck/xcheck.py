@@ -265,7 +265,7 @@ class Gen:
         # (`Psid ::= INTEGER (0..MAX)`) of 2^63 or more with a spurious leading 0x00
         # (`Integer::to_unsigned_bytes_be` calls `to_signed_bytes_be` for big values).
         # The defect is pinned by `rasn_defect_psid_at_or_above_2_pow_63` in
-        # crates/v2xw-msg/tests/scms_pdus.rs; lift this cap when that test flips.
+        # crates/v2xw-msg/tests/scms_coer_xcheck.rs; lift this cap when that test flips.
         bits = r.choice([0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 56, 62, 63])
         v = base + (r.getrandbits(bits) if bits else 0)
         if lo is None and hi is None and r.random() < 0.5:
