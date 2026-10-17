@@ -766,7 +766,13 @@ enum AppPayload {
     Report(Box<v2xw_threat::MisbehaviourReport>),
     /// A certificate revocation list broadcast by the roadside: the list's version (its
     /// entry count) and the entries this frame carries.
-    Crl(Box<(u32, Vec<v2xw_sec::linkage::CrlLinkageEntry>)>),
+    Crl(
+        Box<(
+            u32,
+            Vec<v2xw_sec::linkage::CrlLinkageEntry>,
+            Option<std::sync::Arc<[u8]>>,
+        )>,
+    ),
 }
 
 impl FrameState {
@@ -1522,15 +1528,22 @@ impl Engine {
         };
         let phase2 = crate::phase2::Phase2::build(&engine.scenario, &engine.world)?;
         engine.phase2 = phase2;
-        engine.credential_factory =
-            std::sync::Arc::new(crate::credentials::CredentialFactory::for_run(
+        let (roots, chain_file) = engine
+            .phase2
+            .as_ref()
+            .map(crate::phase2::Phase2::trust_bundle)
+            .unwrap_or_default();
+        engine.credential_factory = std::sync::Arc::new(
+            crate::credentials::CredentialFactory::for_run(
                 engine.scenario.seed,
                 engine.wall,
                 engine
                     .phase2
                     .as_ref()
                     .and_then(crate::phase2::Phase2::aca_issuer),
-            ));
+            )
+            .with_trust(roots, chain_file),
+        );
         let policy = crate::pseudonym_policy::PseudonymPolicy::from_scenario(
             &engine.scenario,
             &engine.world,
@@ -6848,29 +6861,54 @@ impl Engine {
                 );
             }
             AppPayload::Crl(list) => {
-                let (version, entries) = (list.0, list.1.clone());
-                self.install_crl_at(recorder, rx, version, &entries, now, false);
+                let (version, entries, secured) = (list.0, list.1.clone(), list.2.clone());
+                self.install_crl_at(recorder, rx, version, &entries, secured, now, false);
             }
         }
     }
 
     /// A vehicle installs CRL entries it received, and enforces them.
+    ///
+    /// With the signed CRL in hand (`secured`, relayed unchanged by the store or the RSU)
+    /// and a trust store installed, the vehicle verifies it itself (WP-C2): the signer
+    /// chains to its root, `verify_crl` accepts it, and every entry the frame carries is
+    /// one the CRL signs. Otherwise the frame is refused, and the engine does not judge it.
+    #[allow(clippy::too_many_arguments)]
     fn install_crl_at(
         &mut self,
         recorder: &mut dyn RunRecorder,
         node: NodeId,
         version: u32,
         entries: &[v2xw_sec::linkage::CrlLinkageEntry],
+        secured: Option<std::sync::Arc<[u8]>>,
         now: SimTime,
         cellular: bool,
     ) {
         if self.rsus.contains_key(&node) {
             return;
         }
+        // The node's own verdict on the signed CRL, when it can form one.
+        let verified = match (secured.as_deref(), self.nodes.get_mut(&node)) {
+            (Some(bytes), Some(rt)) if rt.security().trust().is_installed() => {
+                match rt.install_secured_crl(bytes, now) {
+                    Ok(v) if entries.iter().all(|e| v.linkage.contains(e)) => Some(Some(v)),
+                    // A frame carrying an entry the signed CRL does not, or a CRL that
+                    // does not verify: refused by the node.
+                    _ => Some(None),
+                }
+            }
+            _ => None,
+        };
         let Some(phase2) = self.phase2.as_mut() else {
             return;
         };
-        let (fresh, records) = phase2.install_crl(node, version, entries, now, cellular);
+        if let Some(None) = verified {
+            phase2.crl_frame_refused(node, cellular);
+            return;
+        }
+        let craca = verified.as_ref().and_then(|v| v.as_ref().map(|v| v.craca));
+        let (fresh, records) =
+            phase2.install_crl(node, version, entries, now, cellular, craca.is_some());
         if fresh.is_empty() && records.is_empty() {
             return;
         }
@@ -6878,8 +6916,13 @@ impl Engine {
             let Some(runtime) = self.nodes.get_mut(&node) else {
                 return;
             };
-            for e in &fresh {
-                runtime.stores_mut().crl.add_linkage_entry(*e);
+            match craca {
+                Some(c) => runtime.stores_mut().crl.add_verified_linkage(c, &fresh),
+                None => {
+                    for e in &fresh {
+                        runtime.stores_mut().crl.add_linkage_entry(*e);
+                    }
+                }
             }
             // A node that finds one of its *own* certificates on the CRL stops
             // transmitting [CAMP-EE §2.2.10.2]; `CertStore::sweep` does that on the node's
@@ -7015,7 +7058,12 @@ impl Engine {
                     let kind = if mbms { "crl-mbms" } else { "crl-fetch" };
                     p.access_mut().note_exchange(kind, requested_at, now);
                 }
-                self.install_crl_at(recorder, node, version, &entries, now, true);
+                // The store serves the CRL Generator's current signed CRL unchanged.
+                let secured = self
+                    .phase2
+                    .as_ref()
+                    .and_then(crate::phase2::Phase2::secured_crl);
+                self.install_crl_at(recorder, node, version, &entries, secured, now, true);
             }
         }
     }
@@ -7036,6 +7084,9 @@ impl Engine {
             return;
         }
         let interval = phase2.params().crl_broadcast_interval;
+        // The signed CRL the unit relays unchanged (pass-through, [PRIMER] p.5): the
+        // receiver verifies it, so a unit that alters it is refused by the vehicle.
+        let secured = phase2.secured_crl();
         // Each unit asked about itself, and only a unit whose backhaul brought it the
         // list broadcasts it.
         let broadcasters: Vec<NodeId> = phase2
@@ -7115,7 +7166,7 @@ impl Engine {
                     &tx,
                     now,
                     horizon,
-                    Some(AppPayload::Crl(Box::new((version, frame)))),
+                    Some(AppPayload::Crl(Box::new((version, frame, secured.clone())))),
                 );
                 if let Some(phase2) = self.phase2.as_mut() {
                     phase2.note_crl_broadcast();

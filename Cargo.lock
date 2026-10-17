@@ -2843,6 +2843,7 @@ dependencies = [
 name = "v2xw-node"
 version = "0.1.0"
 dependencies = [
+ "rasn",
  "serde",
  "serde_json",
  "serde_yml",
@@ -2850,6 +2851,7 @@ dependencies = [
  "v2xw-core",
  "v2xw-msg",
  "v2xw-net",
+ "v2xw-proto",
  "v2xw-radio",
  "v2xw-record",
  "v2xw-sec",

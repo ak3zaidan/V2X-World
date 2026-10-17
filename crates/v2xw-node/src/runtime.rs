@@ -661,6 +661,27 @@ impl ObuRuntime {
         &mut self.stores
     }
 
+    /// Verifies a received `SecuredCrl` against this node's installed trust (WP-C2) and
+    /// charges the work (signer chain on first use, the CRL's own signature) to the CPU
+    /// bank at `now`, priced by this node's hardware profile. The caller installs what it
+    /// returns ([`crate::stores::CrlGate::add_verified_linkage`]); hash entries are
+    /// already recorded in the trust.
+    ///
+    /// # Errors
+    /// Why the CRL was refused.
+    pub fn install_secured_crl(
+        &mut self,
+        bytes: &[u8],
+        now: SimTime,
+    ) -> Result<crate::rxval::VerifiedCrl, crate::rxval::RxReject> {
+        let r = self.security.verify_secured_crl(bytes, now);
+        let cost = crate::rxval::charge(&mut self.security, &self.service.profile().id);
+        if cost.as_nanos() > 0 {
+            let _ = self.cpu.submit(now, cost);
+        }
+        r
+    }
+
     /// The hardware profile (03-interfaces.md §8).
     pub fn profile(&self) -> &HardwareProfile {
         self.service.profile()
@@ -1408,6 +1429,11 @@ impl ObuRuntime {
             let Some(cost) = self.service.service_time(ctx, &op) else {
                 continue;
             };
+            // Receiver validation runs before the server is booked, so the time it charges
+            // (chain links, reconstructions, CRL work) is in this frame's service time (WP-C2).
+            let verdict = self.classify(ctx, &frame);
+            let cost = cost
+                + crate::rxval::charge(&mut self.security, &self.service.profile().id);
             let sched = match where_ {
                 RunsOn::Hsm => self.hsm.submit(q.enqueued_at, cost),
                 RunsOn::Accelerator => self.accel.submit(q.enqueued_at, cost),
@@ -1415,7 +1441,6 @@ impl ObuRuntime {
             };
             self.window.verification(sched.wait);
 
-            let verdict = self.classify(ctx, &frame);
             let mut rec = VerifyDecisionRecord::verified(
                 self.node,
                 q.enqueued_at,
@@ -1492,13 +1517,17 @@ impl ObuRuntime {
                 // nothing. Answering `Invalid` would blame a peer for this node's own
                 // empty cache; the P2PCD request is counted in `learn_or_request`.
                 (SpduVerdict::Unverifiable, _) => return VerificationState::Unverified,
+                // A 1609.2 receiver rule refused it (crate::rxval), or a hash CRL the node
+                // verified revokes the signer or a CA above it.
+                (SpduVerdict::Refused, _) => return VerificationState::Invalid,
+                (SpduVerdict::Revoked, _) => return VerificationState::Revoked,
             },
             None => (frame.signature_valid, None),
         };
         if !authentic {
             return VerificationState::Invalid;
         }
-        let Some((i_cert, lv)) = linkage else {
+        let Some((i_cert, lv, craca, series)) = linkage else {
             return VerificationState::Verified;
         };
         // Tell the gate which i-period this node believes it is in, before asking it to
@@ -1525,7 +1554,9 @@ impl ObuRuntime {
                 self.stores.crl.set_period(mine);
             }
         }
-        match self.stores.crl.check(u32::from(i_cert), lv, authentic) {
+        match self.stores
+            .crl
+            .check_from(u32::from(i_cert), lv, craca, series, authentic) {
             crate::stores::CrlVerdict::Revoked => VerificationState::Revoked,
             crate::stores::CrlVerdict::NotRevoked => VerificationState::Verified,
             // The node refused to spend work on an implausible claim, so it has learned
@@ -1547,7 +1578,7 @@ impl ObuRuntime {
         &mut self,
         ctx: &mut dyn NodeCtx,
         bytes: &[u8],
-    ) -> (SpduVerdict, Option<(u16, v2xw_sec::linkage::LinkageValue)>) {
+    ) -> (SpduVerdict, Option<crate::rxval::LinkageKey>) {
         let Some(parsed) = self.security.parse(bytes) else {
             self.spdu_parse_failures += 1;
             return (SpduVerdict::Invalid, None);
@@ -1569,7 +1600,7 @@ impl ObuRuntime {
         if v == SpduVerdict::Invalid {
             self.spdu_signature_failures += 1;
         }
-        (v, v2xw_sec::credential::linkage_of(&certificate))
+        (v, crate::rxval::linkage_key(&certificate))
     }
 
     /// How many received SPDUs failed to parse at all.

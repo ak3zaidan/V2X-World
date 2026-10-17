@@ -580,7 +580,7 @@ impl ScmsPki {
         let key = Signer1609::p256(&ec::scalar_to_be32(&d)).ok_or(PduError::Key("P-256"))?;
         let enc_private = with_enc.then(|| g.scalar());
         let enc_public = enc_private.as_ref().map(Point::mul_base);
-        let tbs = component_tbs(
+        let mut tbs = component_tbs(
             name,
             start,
             years,
@@ -590,6 +590,12 @@ impl ScmsPki {
             VerificationKeyIndicator::verificationKey(key.public_key()),
             extra_app,
         )?;
+        // A component is revoked by hash on series 2 ([SMP] Table 1: ICA, ACA, ECA, RA,
+        // LA), under its issuer as CRACA, so a receiver can match a series-2 CRL entry to
+        // it (WP-C2: a revoked CA revokes everything that chains to it).
+        let iid = issuer.id8();
+        tbs.craca_id = HashedId3(FixedOctetString::from([iid[5], iid[6], iid[7]]));
+        tbs.crl_series = CrlSeries(Uint16(2));
         let issuer_key = match &issuer.key {
             Signer1609::P256(_) => CertKey::P256(Point::mul_base(
                 issuer

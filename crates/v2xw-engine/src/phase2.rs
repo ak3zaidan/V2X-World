@@ -2181,6 +2181,45 @@ impl Phase2 {
         v2xw_sec::credential::ImplicitIssuer::new(pki.aca.cert.clone(), d).ok()
     }
 
+    /// The trust a device of this run installs (WP-C2): the PKI's root as the
+    /// CTL-approved root and every component certificate as the local certificate chain
+    /// file. Empty with the PDU layer off.
+    ///
+    /// The governance entities (`v2xw_proto::scms::governance`) sign their CTL over their
+    /// own root key set; until the deployment topology (WP-D1) puts the PDU layer's root
+    /// on that CTL, the device installs the issuing root directly (labelled assumption).
+    #[must_use]
+    pub fn trust_bundle(
+        &self,
+    ) -> (
+        Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
+        Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
+    ) {
+        let Some(pki) = self.scms.state.pki.as_ref() else {
+            return (Vec::new(), Vec::new());
+        };
+        let roots = vec![std::sync::Arc::new(pki.root.cert.clone())];
+        let cas = pki
+            .all()
+            .iter()
+            .chain(pki.extra.iter().collect::<Vec<_>>().iter())
+            .map(|a| std::sync::Arc::new(a.cert.clone()))
+            .collect();
+        (roots, cas)
+    }
+
+    /// The current signed CRL the CRL Generator distributes (series 1, full), as the
+    /// bytes a store or an RSU relays unchanged. `None` with the PDU layer off.
+    #[must_use]
+    pub fn secured_crl(&self) -> Option<std::sync::Arc<[u8]>> {
+        self.scms
+            .state
+            .crlg
+            .secured
+            .as_ref()
+            .map(|p| std::sync::Arc::<[u8]>::from(p.bytes()))
+    }
+
     /// Forgets a retired vehicle.
     pub fn retire(&mut self, node: NodeId) {
         self.access.retire(node);
@@ -3665,6 +3704,17 @@ impl Phase2 {
         Some(out)
     }
 
+    /// A vehicle refused a CRL frame or download (its signature, its signer, or an entry
+    /// the signed CRL does not carry).
+    pub fn crl_frame_refused(&mut self, node: NodeId, cellular: bool) {
+        self.report.crl_frames_rejected += 1;
+        if let Some(n) = self.nodes.get_mut(&node)
+            && cellular
+        {
+            n.crl_fetch_in_flight = false;
+        }
+    }
+
     /// A CRL poll that ended without a download (lost, no coverage).
     pub fn crl_poll_failed(&mut self, node: NodeId) {
         if let Some(n) = self.nodes.get_mut(&node) {
@@ -3679,6 +3729,7 @@ impl Phase2 {
     /// A list may arrive split across several broadcast frames, or by both paths; an
     /// entry is installed once, and the vehicle holds `version` once it holds that many
     /// entries.
+    #[allow(clippy::too_many_arguments)]
     pub fn install_crl(
         &mut self,
         node: NodeId,
@@ -3686,26 +3737,25 @@ impl Phase2 {
         entries: &[CrlLinkageEntry],
         now: SimTime,
         cellular: bool,
+        node_verified: bool,
     ) -> (
         Vec<CrlLinkageEntry>,
         Vec<crate::sec_records::ProtoRevocation>,
     ) {
-        let mut records = Vec::new();
-        // The list is the CRL Generator's, signed: an entry it did not sign fails the
-        // signature and the frame is discarded whole. What a vehicle holds is checked
-        // against the Generator's own list, which is what its signature covers
-        // (`v2xw_proto::scms::run::crl_digest`); a roadside unit that adds or alters an
-        // entry — it holds no Generator key — produces a frame that does not verify.
-        let signed = &self.scms.state.crlg.entries;
-        if !entries.iter().all(|e| signed.contains(e)) {
-            self.report.crl_frames_rejected += 1;
-            if let Some(n) = self.nodes.get_mut(&node)
-                && cellular
-            {
-                n.crl_fetch_in_flight = false;
+        let records = Vec::new();
+        // WP-C2: with the PDU layer on, the vehicle verified the signed CRL itself
+        // (`ObuRuntime::install_secured_crl`) before this is called, and refused a frame
+        // carrying an entry the CRL does not sign. Only the modelled path (PDU layer off:
+        // no signed bytes exist) still compares against the Generator's own list, which
+        // is what the modelled digest signature covers (`crl_digest`).
+        if !node_verified {
+            let signed = &self.scms.state.crlg.entries;
+            if !entries.iter().all(|e| signed.contains(e)) {
+                self.crl_frame_refused(node, cellular);
+                return (Vec::new(), records);
             }
-            return (Vec::new(), records);
         }
+        let mut records = records;
         let Some(n) = self.nodes.get_mut(&node) else {
             return (Vec::new(), records);
         };
@@ -3811,7 +3861,7 @@ impl Phase2 {
     pub fn own_revoked(&self, node: NodeId, gate: &v2xw_node::stores::CrlGate) -> Vec<(u32, u32)> {
         self.creds(node)
             .iter()
-            .filter(|k| gate.store().revokes_linkage_at_period(k.i, k.lv))
+            .filter(|k| gate.revokes_linkage_at_period(k.i, k.lv))
             .map(|k| (k.i, k.j))
             .collect()
     }

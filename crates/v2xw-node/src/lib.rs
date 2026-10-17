@@ -100,6 +100,7 @@ pub mod queue;
 pub mod rsu;
 pub mod runtime;
 pub mod safety;
+pub mod rxval;
 pub mod secure;
 pub mod server;
 pub mod stores;

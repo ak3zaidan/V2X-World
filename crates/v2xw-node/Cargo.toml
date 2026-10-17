@@ -25,3 +25,8 @@ serde_json = { workspace = true }
 # citation attached to every number stays readable next to it.
 serde_yml = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# The node tests build a real SCMS PKI (root, ICA, ACA, CRL signer) to validate against.
+v2xw-proto = { workspace = true }
+rasn = { workspace = true }

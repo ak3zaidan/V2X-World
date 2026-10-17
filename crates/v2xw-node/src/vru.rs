@@ -1620,13 +1620,17 @@ impl VruDeviceRuntime {
             let Some(cost) = self.service.service_time(ctx, &op) else {
                 continue;
             };
+            // Receiver validation runs before the server is booked, so the time it charges
+            // (chain links, reconstructions, CRL work) is in this frame's service time (WP-C2).
+            let verdict = self.classify(ctx, &frame);
+            let cost = cost
+                + crate::rxval::charge(&mut self.security, &self.service.profile().id);
             let sched = match where_ {
                 RunsOn::Hsm => self.hsm.submit(q.enqueued_at, cost),
                 RunsOn::Accelerator => self.accel.submit(q.enqueued_at, cost),
                 RunsOn::Cpu => self.cpu.submit(q.enqueued_at, cost),
             };
             self.window.verification(sched.wait);
-            let verdict = self.classify(ctx, &frame);
             let mut rec = VerifyDecisionRecord::verified(
                 self.node,
                 q.enqueued_at,
@@ -1693,13 +1697,17 @@ impl VruDeviceRuntime {
                 (SpduVerdict::Valid, linkage) => (true, linkage),
                 (SpduVerdict::Invalid, _) => (false, None),
                 (SpduVerdict::Unverifiable, _) => return VerificationState::Unverified,
+                // A 1609.2 receiver rule refused it (crate::rxval), or a hash CRL the node
+                // verified revokes the signer or a CA above it.
+                (SpduVerdict::Refused, _) => return VerificationState::Invalid,
+                (SpduVerdict::Revoked, _) => return VerificationState::Revoked,
             },
             None => (frame.signature_valid, None),
         };
         if !authentic {
             return VerificationState::Invalid;
         }
-        let Some((i_cert, lv)) = linkage else {
+        let Some((i_cert, lv, craca, series)) = linkage else {
             return VerificationState::Verified;
         };
         if let Some(own) = self.stores.certs.active() {
@@ -1708,7 +1716,9 @@ impl VruDeviceRuntime {
                 self.stores.crl.set_period(mine);
             }
         }
-        match self.stores.crl.check(u32::from(i_cert), lv, authentic) {
+        match self.stores
+            .crl
+            .check_from(u32::from(i_cert), lv, craca, series, authentic) {
             crate::stores::CrlVerdict::Revoked => VerificationState::Revoked,
             crate::stores::CrlVerdict::NotRevoked => VerificationState::Verified,
             crate::stores::CrlVerdict::RefusedImplausiblePeriod { .. } => {
@@ -1721,7 +1731,7 @@ impl VruDeviceRuntime {
         &mut self,
         ctx: &mut dyn NodeCtx,
         bytes: &[u8],
-    ) -> (SpduVerdict, Option<(u16, v2xw_sec::linkage::LinkageValue)>) {
+    ) -> (SpduVerdict, Option<crate::rxval::LinkageKey>) {
         let Some(parsed) = self.security.parse(bytes) else {
             return (SpduVerdict::Invalid, None);
         };
@@ -1736,7 +1746,7 @@ impl VruDeviceRuntime {
         let Some(certificate) = certificate else {
             return (SpduVerdict::Unverifiable, None);
         };
-        let linkage = v2xw_sec::credential::linkage_of(&certificate);
+        let linkage = crate::rxval::linkage_key(&certificate);
         (
             self.security
                 .verify_parsed(ctx, &parsed, &certificate, self.node),

@@ -87,6 +87,9 @@ impl crate::wiring::CredentialSink for HostedNode {
     fn sink_forget(&mut self) {
         both!(self, n => n.security_mut().forget_credentials())
     }
+    fn sink_security(&mut self) -> &mut v2xw_node::NodeSecurity {
+        both!(self, n => n.security_mut())
+    }
     fn sink_install(
         &mut self,
         handle: CredentialHandle,
@@ -388,6 +391,7 @@ pub fn install_credentials<R: crate::wiring::CredentialSink + ?Sized>(
 ) -> usize {
     let policy = crate::wiring::rotation_policy(scenario);
     device.sink_forget();
+    factory.install_trust(device.sink_security());
     let stores = device.sink_stores();
     *stores = Stores {
         certs: v2xw_node::CertStore::new().with_policy(policy),

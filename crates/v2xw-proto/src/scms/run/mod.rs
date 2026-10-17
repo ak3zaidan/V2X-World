@@ -45,7 +45,7 @@ mod report;
 mod revoke;
 
 use crate::threshold::session::{CommitteeMsg, Committees, Outcome, RoleSpec};
-pub use crl::{crl_bytes, crl_digest};
+pub use crl::{crl_bytes, crl_digest, linkage_revocations};
 
 const ECDSA: PrimitiveId = PrimitiveId::ECDSA_P256_SHA256;
 const ECQV: PrimitiveId = PrimitiveId::ECQV_P256;
