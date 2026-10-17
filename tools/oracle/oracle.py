@@ -39,6 +39,10 @@ def cmd_selftest(a):
     return 0 if not bad else 1
 
 
+EMIT_FAULTS = ['ecqv-1609-sec4-truncate', 'ecqv-1609-whole-cert', 'bf-swap-prefix', 'time32-no-leap', 'kdf2-counter-0',
+               'hashedid-high-bytes', 'lv-no-pad', 'ccm-counter-1', 'ecies-dhaes']
+
+
 def cmd_mutate(a):
     clean = corpus.run_all()
     _, bad = summarize(clean)
@@ -62,6 +66,28 @@ def cmd_mutate(a):
         print(f'  {name}: {status} ({"; ".join(f"{t} {red[t]}/{n[t]}" for t in targets)})')
         if silent:
             failures.append(name)
+    # emitted files: the faults that reach the generator must change its output
+    from scms_oracle import emit
+    out = os.path.join(corpus.CORPUS_DIR, 'oracle')
+    if os.path.isdir(out) and not a.only:
+        import contextlib
+        import io
+        for name in EMIT_FAULTS:
+            faults.ACTIVE.clear()
+            faults.ACTIVE.add(name)
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    rc = emit.main(out, check_only=True)
+            except AssertionError:
+                rc = 1
+            finally:
+                faults.ACTIVE.clear()
+            print(f'  emit/{name}: {"red" if rc else "SILENT"}')
+            if not rc:
+                failures.append('emit/' + name)
+        with contextlib.redirect_stdout(io.StringIO()):
+            if emit.main(out, check_only=True):
+                failures.append('emit not green after restore')
     # restored: the corpus is green again
     after = corpus.run_all()
     _, bad_after = summarize(after)
