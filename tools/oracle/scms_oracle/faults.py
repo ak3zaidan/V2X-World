@@ -30,6 +30,9 @@ CATALOGUE = {
     'ecqv-1609-sec4-truncate': ('1609 mode truncates e to 255 bits (SEC 4 rule)', ['oracle-ecqv-1609']),
     'ecqv-1609-whole-cert': ('1609 mode hashes the whole certificate instead of H(tbs) || H(issuer)', ['oracle-ecqv-1609']),
     'time32-no-leap': ('Time32 ignores leap seconds (UTC seconds since 2004)', ['time32']),
+    'chain-skip-signature': ('chain validation does not verify certificate signatures', ['oracle-chain']),
+    'chain-skip-validity': ('chain validation skips validity-period containment', ['oracle-chain']),
+    'crl-no-advance': ('linkage CRL matching does not advance the seeds from iRev to iCert', ['oracle-crl']),
     'ec-double-bug': ('point doubling uses a = 0 instead of a = -3', ['ec-cross', 'camp-bfkeyexp', 'ieee-d6.2']),
 }
 

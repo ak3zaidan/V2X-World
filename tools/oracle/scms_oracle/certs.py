@@ -157,14 +157,5 @@ def verify_explicit(cert, issuer=None, edition='2022'):
     return prims.ecdsa_verify(C, Q, digest, r, s)
 
 
-def verify_signed_data(signed_data, signer_cert, edition='2022'):
-    """SignedData signature (02 section 7): H(H(COER tbsData) || H(signer cert or ''))."""
-    tbs = coer.encode('ToBeSignedData', signed_data['tbsData'], edition)
-    if signed_data['signer'][0] == 'self':
-        raise ValueError('self-signed SignedData needs the signer key from elsewhere')
-    C, Q = signer_cert
-    return C, Q, tbs
-
-
 def signed_data_digest(hash_name, tbs_data_bytes, signer_cert_canonical_bytes):
     return prims.digest_1609(hash_name, tbs_data_bytes, signer_cert_canonical_bytes)

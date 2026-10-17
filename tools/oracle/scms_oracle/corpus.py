@@ -301,6 +301,83 @@ def check_lib_cross():
     return [('hmac/kdf2/ccm vs libraries', r is None, r or '')]
 
 
+def _pki():
+    import random
+    from . import emit
+    rnd = random.Random(500)
+    root, d_root = emit.make_root(rnd)
+    aca, d_aca = emit.make_aca(rnd, root, d_root)
+    return rnd, emit, root, d_root, aca, d_aca
+
+
+def check_chain():
+    """Positive chain plus one negative per implemented 02 section 12 rule."""
+    import copy
+    from . import chain, certs
+    rnd, emit, root, d_root, aca, d_aca = _pki()
+    C = ec.P256
+    anchors = {prims.sha256(certs.encode_canonical(root))}
+
+    def ee(start=emit.START + 86400, hours=168, psids=(32,), issuer=aca, d_iss=d_aca):
+        d = emit.scalar(rnd)
+        t = emit.tbs(('name', 'ee.oracle.example'), ec.base_mul(C, d), start, hours, app=psids)
+        return emit.sign_explicit(t, issuer, d_iss, emit.scalar(rnd), C)[0]
+
+    out = []
+    good = [ee(), aca, root]
+    errs = chain.validate(good, anchors)
+    out.append(('valid chain', errs == [], '; '.join(errs)))
+
+    bad_sig = copy.deepcopy(good[0])
+    alg, sig = bad_sig['signature']
+    bad_sig['signature'] = (alg, dict(sig, sSig=(int.from_bytes(sig['sSig'], 'big') ^ 1).to_bytes(32, 'big')))
+    out.append(('tampered EE signature rejected', any('signature' in e for e in chain.validate([bad_sig, aca, root], anchors)), ''))
+
+    late = ee(start=emit.START + 6 * 31556952)
+    out.append(('EE validity outside ACA rejected', any('validity' in e for e in chain.validate([late, aca, root], anchors)), ''))
+
+    out.append(('root not on CTL rejected', any('CTL' in e for e in chain.validate(good, set())), ''))
+    out.append(('issuer mismatch rejected', any('issuer' in e for e in chain.validate([good[0], root], anchors)), ''))
+
+    # ACA restricted to PSID 35 with minChainLength 2 / range 0 -> EE for PSID 32 fails coverage and length
+    d = emit.scalar(rnd)
+    t = emit.tbs(('name', 'aca2.oracle.example'), ec.base_mul(C, d), emit.START, ('years', 5), app=(35,),
+                 issue=[{'subjectPermissions': ('explicit', [{'psid': 35}]), 'minChainLength': 2, 'chainLengthRange': 0,
+                         'eeType': (b'\x80', 8)}])
+    aca2 = emit.sign_explicit(t, root, d_root, emit.scalar(rnd), C)[0]
+    e2 = ee(issuer=aca2, d_iss=d)
+    errs = chain.validate([e2, aca2, root], anchors)
+    out.append(('uncovered PSID rejected', any('psid 32 not covered' in e for e in errs), '; '.join(errs)))
+    out.append(('chain-length inequality rejected', any('chain length' in e for e in errs), '; '.join(errs)))
+    return out
+
+
+def check_crl():
+    """Linkage CRL matching: a revoked device's later pseudonym (iCert = iRev + 2) matches; others do not."""
+    from . import chain, coer
+    la1, la2 = 0x8E09, 0x59CE
+    s1, s2 = bytes(range(16)), bytes(range(16, 32))
+    i_rev, i_cert, j = 3, 5, 7
+    seed1, seed2 = linkage.seed_at(la1, s1, i_rev), linkage.seed_at(la2, s2, i_rev)
+    lv = linkage.lv(la1, s1, la2, s2, i_cert, j)
+    craca = bytes(range(100, 108))
+    cert = {'version': 3, 'type': 'implicit', 'issuer': ('sha256AndDigest', b'\0' * 8),
+            'toBeSigned': {'id': ('linkageData', {'iCert': i_cert, 'linkage-value': lv}), 'cracaId': craca[-3:], 'crlSeries': 1,
+                           'validityPeriod': {'start': 0, 'duration': ('hours', 168)}, 'appPermissions': [{'psid': 32}],
+                           'verifyKeyIndicator': ('reconstructionValue', ('compressed-y-0', b'\x11' * 32))}}
+
+    def crl(sd1, sd2, series=1):
+        v = {'version': 1, 'crlSeries': series, 'crlCraca': craca, 'issueDate': 100, 'nextCrl': 200, 'priorityInfo': {},
+             'typeSpecific': ('fullLinkedCrl', {'iRev': i_rev, 'indexWithinI': 0, 'individual': [
+                 {'jmax': 20, 'contents': [{'la1Id': la1.to_bytes(2, 'big'), 'la2Id': la2.to_bytes(2, 'big'), 'contents': [
+                     {'iMax': 50, 'contents': [{'linkageSeed1': sd1, 'linkageSeed2': sd2}]}]}]}]})}
+        return coer.decode('CrlContents', coer.encode('CrlContents', v))  # through COER, as a device would see it
+
+    return [('revoked device matched', chain.linkage_crl_revokes(crl(seed1, seed2), cert), ''),
+            ('other device not matched', not chain.linkage_crl_revokes(crl(seed2, seed1), cert), ''),
+            ('other CRL series not matched', not chain.linkage_crl_revokes(crl(seed1, seed2, series=2), cert), '')]
+
+
 CHECKS = {
     'ieee-d6.1': lambda: check_ccm('ieee1609dot2a_d6_1_aes_ccm.json'),
     'ieee-d6.2': lambda: check_ecies('ieee1609dot2a_d6_2_ecies.json'),
@@ -324,6 +401,8 @@ CHECKS = {
     'nist-ccm': check_nist_ccm,
     'rfc4231': check_rfc4231,
     'oracle-ecqv-1609': check_ecqv_1609,
+    'oracle-chain': check_chain,
+    'oracle-crl': check_crl,
     'time32': check_time32,
     'ec-cross': check_ec_cross,
     'lib-cross': check_lib_cross,
