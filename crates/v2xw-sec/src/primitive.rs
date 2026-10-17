@@ -1347,6 +1347,7 @@ fn card_for(d: &PrimitiveDescriptor) -> ModelCard {
         tests: vec![
             "the_descriptor_sizes_are_the_published_ones".to_string(),
             "every_cost_row_carries_a_citation".to_string(),
+            "every_executed_primitive_is_priced_on_every_device".to_string(),
         ],
     };
     card
@@ -3902,5 +3903,40 @@ mod tests {
             ChainLink::Implicit.ops(),
             vec![(PrimitiveId::ECQV_P256, PrimitiveOpKind::Verify, 0)]
         );
+    }
+    /// The device × operation matrix the WP-C4 findings note prints, in microseconds
+    /// (`cargo test -p v2xw-sec --lib device_cost_matrix -- --nocapture`). Every cell is
+    /// priced, or the test fails.
+    #[test]
+    fn device_cost_matrix() {
+        use PrimitiveOpKind::{Sign as S, Verify as V};
+        let c = PrimitiveCatalogue::standard();
+        let cols: [(&str, PrimitiveId, PrimitiveOpKind, u32); 11] = [
+            ("SHA-256 150 B", PrimitiveId::SHA_256, V, 150),
+            ("SHA-384 300 B", PrimitiveId::SHA_384, V, 300),
+            ("AES block", PrimitiveId::AES_128, V, 16),
+            ("CCM 1 KB", PrimitiveId::AES_128_CCM, V, 1_000),
+            ("ECIES dec", PrimitiveId::ECIES_P256, V, 0),
+            ("ECIES enc", PrimitiveId::ECIES_P256, S, 0),
+            ("ECQV recon", PrimitiveId::ECQV_P256, V, 0),
+            ("P-256 verify", PrimitiveId::ECDSA_P256_SHA256, V, 0),
+            ("P-384 verify", PrimitiveId::ECDSA_P384, V, 0),
+            ("lv(i,j)", PrimitiveId::LINKAGE_VALUE, V, 0),
+            ("bf expand (RA)", PrimitiveId::BUTTERFLY_EXPAND_P256, S, 0),
+        ];
+        let mut head = String::from("| node profile |");
+        for (n, ..) in &cols {
+            head.push_str(&format!(" {n} |"));
+        }
+        println!("{head}");
+        println!("|---|{}", "---:|".repeat(cols.len()));
+        for dev in anchors::DEVICES.iter().filter(|d| !d.anchors.is_empty()) {
+            let mut line = format!("| `{}` |", dev.node_profile);
+            for (_, p, op, b) in &cols {
+                let t = c.price(*p, *op, *b, dev.anchors).expect("priced");
+                line.push_str(&format!(" {:.1} |", t.duration.as_nanos() as f64 / 1e3));
+            }
+            println!("{line}");
+        }
     }
 }
