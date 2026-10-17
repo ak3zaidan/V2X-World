@@ -1,0 +1,72 @@
+-- The wire structure of the US CV-Pilot misbehaviour report, re-expressed for the
+-- WP-B4 independent check (tools/pdu_check/check_mbr.py).
+--
+-- Source: SCMS Manager, "ASN.1 for Misbehavior Reporting", v1.1, 2019-04-23, module
+-- CvpdMbdModule {iso(1) identified-organization(3) ieee(111) ... dot2(2) tmp(256)
+-- cvpd-mbd(1)}, https://scmsmanager.org/wp-content/uploads/2020/01/ASN.1-for-Misbehavior-Reporting-v1.1.pdf
+-- (read 2026-10-17; PDF sha256 b8ae8f3718e29fafc302712abcbf6c804ddfac4e8b6c5f6c74874a5c991bfd6c).
+-- The published module is "(c) SCMS Manager LLC - All Rights Reserved" and is NOT copied
+-- here (owner decision). This file restates only the type structure needed to decode
+-- the bytes, without the published text or comments:
+--
+-- * every information-object-class field of the published module is an ASN.1 open
+--   type, which OER encodes as a length determinant followed by the value's encoding
+--   (X.696 clause 30). An unconstrained OCTET STRING has the same octets, so each such
+--   field is written OCTET STRING here and the checker decodes the inner value with the
+--   type the information-object set selects (psid 32 -> Psid20Mbr; type 1/2 ->
+--   SignedBsmsWithCertificate, 3 -> EvidenceObsImplausible; subtype -> its params);
+-- * SignedBSM is Ieee1609Dot2Data (the published WITH COMPONENTS constraint is checked
+--   by the checker: signedData over unsecuredData).
+
+CvpdMbdWire DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+
+IMPORTS
+  Ieee1609Dot2Data, Certificate FROM Ieee1609Dot2
+  Psid, Time32, Uint8, Uint16, ThreeDLocation FROM Ieee1609Dot2BaseTypes;
+
+EndEntityMaInterfacePDU ::= CHOICE {
+  eeMaApplicationSpecificMisbehaviorReport EeMaApplicationSpecificMisbehaviorReport,
+  ...
+}
+
+EeMaApplicationSpecificMisbehaviorReport ::= SEQUENCE {
+  version            Uint8,
+  generationTime     Time32,
+  generationLocation ThreeDLocation,
+  psid               Psid,
+  contents           OCTET STRING,
+  ...
+}
+
+Psid20Mbr ::= SEQUENCE {
+  version  Uint8,
+  type     INTEGER (0..255),
+  subtype  OCTET STRING,
+  evidence OCTET STRING,
+  ...
+}
+
+MbrSubtypeList ::= SEQUENCE (SIZE (1..MAX)) OF MbrSubtypeParams
+
+MbrSubtypeParams ::= SEQUENCE {
+  subtype INTEGER (0..255),
+  params  OCTET STRING
+}
+
+ParamsRandomPosition ::= SEQUENCE { gpsDrift Uint16, ... }
+ParamsThreshold ::= SEQUENCE { threshold Uint16, ... }
+ParamsObsDistance ::= SEQUENCE { threshold Uint16, gpsDrift Uint16, ... }
+
+SignedBsmsWithCertificate ::= SEQUENCE {
+  signedBsmList      SEQUENCE (SIZE (1..MAX)) OF Ieee1609Dot2Data,
+  signingCertificate Certificate,
+  ...
+}
+
+EvidenceObsImplausible ::= SEQUENCE {
+  suspectBsm  SignedBsmsWithCertificate,
+  reporterBsm SignedBsmsWithCertificate,
+  ...
+}
+
+END

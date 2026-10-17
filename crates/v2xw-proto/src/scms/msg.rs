@@ -194,6 +194,9 @@ pub struct ImplicitCredential {
     pub e: Scalar,
     /// `r`, the `privateKeyInfo`.
     pub r: Scalar,
+    /// The signing key `d = e·b_ij + r` the device derived and checked against
+    /// `e·P_U + Q_ACA` (WP-B4: it signs the device's BSMs and misbehaviour reports).
+    pub private: Scalar,
 }
 
 /// One request the RA sends the PCA: a cocoon key pair and two sealed pre-linkage values.
