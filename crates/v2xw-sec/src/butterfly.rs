@@ -1,8 +1,11 @@
 //! Butterfly key expansion — CAMP SCP1.
 //!
-//! A port of `legacy/scms_sim_ref/scms_core/butterfly.py`, algorithm for algorithm, with
-//! the Python's own outputs as the acceptance vectors (see the crate's
-//! `tests/legacy_vectors.rs`).
+//! First ported from `legacy/scms_sim_ref/scms_core/butterfly.py` (still pinned as a
+//! regression by `tests/legacy_vectors.rs`). The acceptance vectors are now official and
+//! independent (`tests/official_vectors.rs`, WP-A4): CAMP `bfkeyexp.txt` signing and
+//! encryption with every intermediate, the OpenSCMS encryption (i = 7590, j = 0) and
+//! signing vectors, and the WP-A0 oracle's cocoon keys, explicit and implicit issuance and
+//! response encryption (02 §9, IEEE 1609.2.1-2022 §9.3).
 //!
 //! # What the construction buys
 //!
@@ -50,12 +53,26 @@
 //! device: d = a + f₁(ck, ι) + c   (mod n)          and  d·G == certified
 //! ```
 //!
-//! In the full protocol the PCA also encrypts `(certificate, c)` to the cocoon encryption
-//! key `Q` and signs the ciphertext; this module stops at the key arithmetic, which is the
-//! part the simulator's credential-management protocol needs and the part that must be
-//! exactly right. The implicit-certificate variant of SCP1 is a different final step
-//! (the private key is `e·k + r`, which is [`crate::crypto::ecqv`]'s subject) and is not
-//! this function.
+//! # The implicit-certificate variant
+//!
+//! The cocoon signing key plays ECQV's `R_U` (02 §9.3):
+//!
+//! ```text
+//! ACA:    P_U = B + k·G  (reconstructionValue),  r = e·k + d_CA  (privateKeyInfo)
+//! device: d = e·b_ij + r,   b_ij = a + f₁(ck, ι)   and  d·G == e·P_U + Q_CA
+//! ```
+//!
+//! [`aca_certify_implicit`], [`aca_reconstruction_private`] and
+//! [`Caterpillar::signing_private_implicit`]. The certificate hash `e` belongs to the
+//! certificate layer and is an input here.
+//!
+//! # The response
+//!
+//! The ACA encrypts `AcaEeCertResponse` to the cocoon encryption key
+//! `J_ij = H + f₂(ek, ι)·G` and the EE opens it with `h_ij = p + f₂(ek, ι)` (original
+//! variant, 1609.2.1 §9.3.4); [`response`] builds and opens that encrypted layer. The
+//! unified and compact unified variants are named by [`ButterflyVariant`] but refused,
+//! because their §9.3.4.2 key is UNCONFIRMED (02 §9.4, §15).
 
 use p256::Scalar;
 use v2xw_core::hash::sha256;

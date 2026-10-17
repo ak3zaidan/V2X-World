@@ -499,8 +499,7 @@ fn camp_glv_group_seeds_gplv_glv_and_encrypted_index_reproduce() {
         .to_asn1();
         assert_eq!(hx(&asn.value), s(o, "glv"));
     }
-    assert!(
-        !linkage::GROUP_LINKAGE_DEFAULT,
-        "group linkage is off by default (00 §2)"
-    );
 }
+
+// Group linkage is off by default (00 §2 options).
+const _: () = assert!(!linkage::GROUP_LINKAGE_DEFAULT);

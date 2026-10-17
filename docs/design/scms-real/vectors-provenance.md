@@ -115,7 +115,7 @@ Their sha256 values: production zip `411fa8d4…3b19` (`cert-chain_0.oer` `738b3
    country containment, signatures and the CTL anchor. Bitmap SSP ranges and geometric region containment
    are reported as unsupported, not passed.
 4. The 2025 edition is not compiled by the oracle yet (`coer.EDITIONS` has only `2022`).
-5. OpenSCMS butterfly encryption vector (i = 7590, j = 0) is not in the corpus.
+5. ~~OpenSCMS butterfly encryption vector (i = 7590, j = 0) is not in the corpus.~~ Added by WP-A4 (§9).
 
 ## 7. Corpus files
 
@@ -165,3 +165,20 @@ Their sha256 values: production zip `411fa8d4…3b19` (`cert-chain_0.oer` `738b3
 | `ieee1609.2.1-2022/Ieee1609Dot2Dot1LaRaInterface.asn` | 890 | `c3e599663f5e770785fb532ad886191dd82b06a63568caf7e91c59d5f7a65420` |
 | `ieee1609.2.1-2022/Ieee1609Dot2Dot1MaRaInterface.asn` | 890 | `61321da9ee2967d9f151c1d0cd2de554b5970f9d9502fd2caa5814aa9f4ddbfc` |
 | `ieee1609.2.1-2022/Ieee1609Dot2Dot1Protocol.asn` | 45185 | `b98b1c982b17776a38dc3cf2150cfd1c080c072be2dac35950ce386cf51045ed` |
+
+## 9. WP-A4 additions (butterfly and linkage)
+
+Added 2026-10-16 by the WP-A4 agent (which works on the Rust and so did not change the oracle; 00 §4.1).
+
+| File | Vectors | Source | Source sha256 | File sha256 |
+|---|---|---|---|---|
+| `openscms_bfkeyexp.json` | 2 | OpenSCMS `ra/src/core_logic/expansion_function.rs` unit tests, commit `8a6f0c26c0965f7e86c0a4443502b8968e9809b5` (Apache-2.0; values transcribed, byte arrays to hex) | `cd782ab26e215219…` | `ab16a33dff46e1536437c41dd045b5eeee264dc842882563eadb694a3b4663df` |
+| `wpa4_butterfly_response.json` | 8 | Composed by `crates/v2xw-sec/tests/data/gen_butterfly_response_vectors.py` from the oracle's ECIES, CCM, EC and asn1tools COER over `oracle/butterfly.json` (J, h_ij); every SPDU re-opened with the oracle before writing | n/a | `7cdb0d5dfeaa16ba07257c866828a947f8be5220788b08a88db64d3848c7c167` |
+
+Checks: the oracle's own `butterfly.f_int`, `f` and `expand_public` reproduce both OpenSCMS vectors (f_int, f·G and
+the cocoon key), which closes open item 5 of §6. `gen_butterfly_response_vectors.py --check` regenerates the
+response file byte for byte. The Rust acceptance test is `crates/v2xw-sec/tests/official_vectors.rs`.
+
+The response vectors fix one reading that is not yet confirmed from 1609.2.1 §9.3.4: the recipient is a
+`rekRecipInfo` with recipientId = HashedId8(COER `PublicEncryptionKey`{aes128Ccm, eciesNistP256 J}) and ECIES
+P1 = SHA-256(""). The two implementations agree on it; neither proves it.

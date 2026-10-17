@@ -1,10 +1,12 @@
 //! SCMS linkage values — CAMP SCP2.
 //!
-//! A port of `legacy/scms_sim_ref/scms_core/linkage.py`, algorithm for algorithm, with the
-//! Python's own outputs as the acceptance vectors (see the crate's
-//! `tests/legacy_vectors.rs`). Faithful to the CAMP SCMS PoC "SCP2: Linkage Values"
-//! specification and to Brecht et al., *A Security Credential Management System for V2X
-//! Communications* (IEEE T-ITS 2018, arXiv:1802.05323).
+//! First ported from `legacy/scms_sim_ref/scms_core/linkage.py` (still pinned as a
+//! regression by `tests/legacy_vectors.rs`). The acceptance vectors are now CAMP `lv.txt`
+//! (i = 0, 1), CAMP `glv.txt` (i = 0, 1) and the WP-A0 oracle's linkage file
+//! (`tests/official_vectors.rs`, WP-A4; 02 §10). Faithful to the CAMP SCMS PoC "SCP2:
+//! Linkage Values" specification and to Brecht et al., *A Security Credential Management
+//! System for V2X Communications* (IEEE T-ITS 2018, arXiv:1802.05323). Group linkage
+//! (02 §10.2) is at the end of the module and is off by default.
 //!
 //! # The three formulas
 //!
