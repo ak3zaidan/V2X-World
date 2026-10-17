@@ -7,8 +7,8 @@ use common::{DEVICE_A, DEVICE_B, deployment, provisioned};
 use v2xw_core::ids::NodeId;
 use v2xw_core::time::{Duration, NS_PER_S};
 use v2xw_proto::scms::mbr::{self, Evidence, MbrType, MisbehaviorReport, SignedBsms, Subtype};
-use v2xw_proto::scms::params::MaMode;
 use v2xw_proto::scms::msg::SecuredReport;
+use v2xw_proto::scms::params::MaMode;
 use v2xw_proto::scms::pdu::{Drbg, Pdu, SpduKind};
 use v2xw_proto::scms::run::ScmsRun;
 use v2xw_proto::stage::{FlowId, StageId};
@@ -63,7 +63,14 @@ fn a_hundred_concurrent_cases_all_complete_with_every_stage_stamped() {
     assert!(!run.state.ra.blocklist.contains(&reporter));
     assert_eq!(run.state.crl_store.entries.len(), CASES as usize);
     // The last full CRL lists all hundred devices.
-    let last = run.state.crlg.issued.iter().rev().find(|c| !c.delta).unwrap();
+    let last = run
+        .state
+        .crlg
+        .issued
+        .iter()
+        .rev()
+        .find(|c| !c.delta)
+        .unwrap();
     assert_eq!(last.entries, CASES);
 }
 
@@ -115,8 +122,15 @@ fn manual_review_waits_for_the_operator_and_automatic_does_not() {
     }
 }
 
-fn implicit(run: &ScmsRun, d: NodeId, j: u32) -> (v2xw_msg::sec_types::ieee1609_dot2::Certificate, Signer1609) {
-    let c = run.state.devices[&d].credentials[&(0, j)].implicit.as_ref().unwrap();
+fn implicit(
+    run: &ScmsRun,
+    d: NodeId,
+    j: u32,
+) -> (v2xw_msg::sec_types::ieee1609_dot2::Certificate, Signer1609) {
+    let c = run.state.devices[&d].credentials[&(0, j)]
+        .implicit
+        .as_ref()
+        .unwrap();
     (
         c.certificate.clone(),
         Signer1609::p256(&v2xw_sec::ec::scalar_to_be32(&c.private)).unwrap(),
@@ -184,7 +198,10 @@ fn a_real_report_reaches_the_ma_through_the_ra_and_drives_the_revocation() {
     assert_eq!(o.report, report);
     assert!(o.evidence_verified);
     // The subject is the accused certificate's linkage data: the revocation finds A.
-    assert_eq!(st.ma.reports[0].subject_lv, st.devices[&DEVICE_A].credentials[&(0, 0)].lv);
+    assert_eq!(
+        st.ma.reports[0].subject_lv,
+        st.devices[&DEVICE_A].credentials[&(0, 0)].lv
+    );
     run.revoke(0, 0, 2).expect("held");
     run.run().expect("runs");
     assert!(run.state.ra.blocklist.contains(&DEVICE_A));
@@ -252,8 +269,16 @@ fn the_ra_and_the_ma_refuse_unauthenticated_misattributed_and_tampered_uploads()
     assert_eq!(rej.len(), 3, "{rej:?}");
     let ra = st.nodes.ra.index();
     let ma = st.nodes.ma.index();
-    assert_eq!(rej.iter().filter(|r| r.at_node == ra).count(), 2, "two at the RA");
-    assert_eq!(rej.iter().filter(|r| r.at_node == ma).count(), 1, "one at the MA");
+    assert_eq!(
+        rej.iter().filter(|r| r.at_node == ra).count(),
+        2,
+        "two at the RA"
+    );
+    assert_eq!(
+        rej.iter().filter(|r| r.at_node == ma).count(),
+        1,
+        "one at the MA"
+    );
     assert_eq!(st.ma.opened_reports.len(), 1);
     assert_eq!(st.ma.reports.len(), 1);
 }

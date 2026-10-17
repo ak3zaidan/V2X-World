@@ -51,7 +51,11 @@ impl ScmsRun {
     ) -> core::result::Result<FlowRun, crate::scms::pdu::PduError> {
         use crate::scms::mbr;
         use crate::scms::pdu::{Pdu, PduError};
-        let pki = self.state.pki.clone().ok_or(PduError::Shape("the PDU layer is off"))?;
+        let pki = self
+            .state
+            .pki
+            .clone()
+            .ok_or(PduError::Shape("the PDU layer is off"))?;
         let dev = self
             .state
             .devices
@@ -86,7 +90,9 @@ impl ScmsRun {
         let v2xw_msg::sec_types::ieee1609_dot2::CertificateId::linkageData(ld) =
             &report.evidence.suspect().cert.0.to_be_signed.id
         else {
-            return Err(PduError::Shape("the accused certificate has no linkageData"));
+            return Err(PduError::Shape(
+                "the accused certificate has no linkageData",
+            ));
         };
         let subject_i = u32::from(ld.i_cert.0.0);
         let mut lv = [0u8; 9];
@@ -104,8 +110,12 @@ impl ScmsRun {
             &ma_enc,
             &mut self.state.pdu_rng,
         )?;
-        let ra_enc = pki.ra.enc_public().ok_or(PduError::Key("RA encryption key"))?;
-        let header = mbr::upload_header(t32, &enrol, &pki.ra.cert, &ra_enc, &mut self.state.pdu_rng)?;
+        let ra_enc = pki
+            .ra
+            .enc_public()
+            .ok_or(PduError::Key("RA encryption key"))?;
+        let header =
+            mbr::upload_header(t32, &enrol, &pki.ra.cert, &ra_enc, &mut self.state.pdu_rng)?;
         Ok(self.submit_secured(
             reporter,
             subject_i,
@@ -236,7 +246,10 @@ impl ScmsState {
                 self.emit_pdu(SpduKind::EeRaDownloadRequest, from, to, at, &h);
             }
         }
-        WireSize::real(s.report.len() + header, SpduKind::SecuredMisbehaviorReport.name())
+        WireSize::real(
+            s.report.len() + header,
+            SpduKind::SecuredMisbehaviorReport.name(),
+        )
     }
 
     /// The RA's check of a report upload's `Download-Req` header.
@@ -246,11 +259,13 @@ impl ScmsState {
         s: &SecuredReport,
     ) -> core::result::Result<(), crate::scms::pdu::PduError> {
         use crate::scms::pdu::{self, PduError};
-        let pki = self.pki.as_ref().ok_or(PduError::Shape("the PDU layer is off"))?;
-        let h = s
-            .header
+        let pki = self
+            .pki
             .as_ref()
-            .ok_or(PduError::Shape("a report upload carries a Download-Req header"))?;
+            .ok_or(PduError::Shape("the PDU layer is off"))?;
+        let h = s.header.as_ref().ok_or(PduError::Shape(
+            "a report upload carries a Download-Req header",
+        ))?;
         let plain = pdu::decrypt_cert(
             h.bytes(),
             &pki.ra.cert,
@@ -273,7 +288,10 @@ impl ScmsState {
         if d.filename.as_str() != crate::scms::mbr::UPLOAD_FILENAME {
             return Err(PduError::Shape("Download-Req names misbehavior-report"));
         }
-        if !self.ra.is_registered(reporter, Some(pdu::cert_id8(&signer))) {
+        if !self
+            .ra
+            .is_registered(reporter, Some(pdu::cert_id8(&signer)))
+        {
             return Err(PduError::UntrustedSigner);
         }
         Ok(())
@@ -398,7 +416,10 @@ impl ScmsState {
                     let opened = match crate::scms::mbr::ma_open_report(
                         s.report.bytes(),
                         &pki.ma.cert,
-                        pki.ma.enc_private.as_ref().expect("the MA certificate has a key"),
+                        pki.ma
+                            .enc_private
+                            .as_ref()
+                            .expect("the MA certificate has a key"),
                         &pki,
                     ) {
                         Ok(o) => o,

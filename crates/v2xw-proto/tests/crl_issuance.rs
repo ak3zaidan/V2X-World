@@ -63,7 +63,11 @@ fn a_revocation_publishes_a_real_secured_crl_that_revokes_exactly_the_device() {
     let verdict = crl::verify_crl(&opened, &signer, Some(&pki.ica.cert), WireEdition::Ieee2022);
     assert!(verdict.accepted(), "{verdict:?}");
     assert_eq!(opened.contents.crl_series.0.0, crl::SERIES_PSEUDONYM);
-    assert_eq!(opened.contents.crl_craca.0[..], pki.ica.id8()[..], "crlCraca = the ICA");
+    assert_eq!(
+        opened.contents.crl_craca.0[..],
+        pki.ica.id8()[..],
+        "crlCraca = the ICA"
+    );
     // nextCrl is a week after issueDate.
     assert_eq!(
         opened.contents.next_crl.0.0 - opened.contents.issue_date.0.0,
@@ -71,8 +75,14 @@ fn a_revocation_publishes_a_real_secured_crl_that_revokes_exactly_the_device() {
     );
     // Every one of A's certificates is revoked by the signed bytes; none of B's.
     for j in 0..JMAX {
-        assert!(crl::revokes(&opened.contents, &implicit(&run, DEVICE_A, j)), "A (0,{j})");
-        assert!(!crl::revokes(&opened.contents, &implicit(&run, DEVICE_B, j)), "B (0,{j})");
+        assert!(
+            crl::revokes(&opened.contents, &implicit(&run, DEVICE_A, j)),
+            "A (0,{j})"
+        );
+        assert!(
+            !crl::revokes(&opened.contents, &implicit(&run, DEVICE_B, j)),
+            "B (0,{j})"
+        );
     }
     // The publication and the device download are charged the CRL's encoded length.
     let len = bytes.len();
@@ -114,8 +124,11 @@ fn a_revocation_publishes_a_real_secured_crl_that_revokes_exactly_the_device() {
             "not_revoked": (0..JMAX).map(|j| hex(&v2xw_sec::cert::encode(&implicit(&run, DEVICE_B, j)).unwrap())).collect::<Vec<_>>(),
             "aca": hex(&v2xw_sec::cert::encode(&pki.aca.cert).unwrap()),
         });
-        std::fs::write(dir.join("manifest.json"), serde_json::to_string_pretty(&m).unwrap())
-            .unwrap();
+        std::fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_string_pretty(&m).unwrap(),
+        )
+        .unwrap();
     }
 }
 
@@ -137,12 +150,15 @@ fn a_second_revocation_issues_a_full_and_a_delta_crl() {
     let delta = crl::decode_crl(log[2].pdu.bytes()).expect("decodes");
     assert!(matches!(
         delta.contents.type_specific,
-        v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents::deltaLinkedCrl(_)
+        v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents::deltaLinkedCrl(
+            _
+        )
     ));
     // The second full CRL at the same iRev counts up indexWithinI.
     let full2 = crl::decode_crl(log[1].pdu.bytes()).unwrap();
-    let v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents::fullLinkedCrl(t) =
-        &full2.contents.type_specific
+    let v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents::fullLinkedCrl(
+        t,
+    ) = &full2.contents.type_specific
     else {
         panic!("full linkage CRL");
     };
@@ -194,7 +210,11 @@ fn published_unix(start: (i32, u32, u32, u32, u32)) -> (i64, i64) {
     run.add_device(DEVICE_B);
     provisioned(&mut run, DEVICE_A, 0, 1, JMAX);
     let (_, issuance) = revoke_a(&mut run);
-    let issued = run.kernel.stages.at(issuance, StageId::Issued).expect("issued");
+    let issued = run
+        .kernel
+        .stages
+        .at(issuance, StageId::Issued)
+        .expect("issued");
     let published = run
         .kernel
         .stages
@@ -223,8 +243,9 @@ fn a_friday_evening_decision_publishes_on_monday() {
 
 #[test]
 fn a_federal_holiday_decision_publishes_on_the_next_business_day() {
-    // Thanksgiving, Thursday 2026-11-26.
-    let (decided, published) = published_unix((2026, 11, 26, 11, 0));
+    // Thanksgiving, Thursday 2026-11-26, decided at 07:00: a working day would publish
+    // at 10:00 the same morning; the holiday moves it to Friday.
+    let (decided, published) = published_unix((2026, 11, 26, 7, 0));
     let slot = calendar::eastern_to_unix(2026, 11, 27, 10, 0);
     assert!(
         (slot..slot + 5).contains(&published),
@@ -273,8 +294,9 @@ fn a_later_crl_walks_earlier_seeds_forward_to_its_i_rev() {
         .pdu
         .clone();
     let c = crl::decode_crl(last_full.bytes()).unwrap().contents;
-    let v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents::fullLinkedCrl(t) =
-        &c.type_specific
+    let v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents::fullLinkedCrl(
+        t,
+    ) = &c.type_specific
     else {
         panic!("full linkage CRL");
     };

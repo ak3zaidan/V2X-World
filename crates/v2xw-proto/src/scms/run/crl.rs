@@ -445,9 +445,10 @@ impl ScmsState {
             ScmsMsg::CrlPublish { entries } => {
                 let list = self.crlg.entries.clone();
                 let secured = self.crlg.secured.clone();
-                let size = secured
-                    .as_ref()
-                    .map_or_else(|| self.sizes.crl(entries).bytes(), crate::scms::pdu::Pdu::len);
+                let size = secured.as_ref().map_or_else(
+                    || self.sizes.crl(entries).bytes(),
+                    crate::scms::pdu::Pdu::len,
+                );
                 let signature = self.crlg.signature;
                 if to == n.crl_store {
                     self.crl_store.entries = list;
@@ -515,9 +516,10 @@ impl ScmsState {
                 } else {
                     self.crl_store.secured.clone()
                 };
-                let size = secured
-                    .as_ref()
-                    .map_or_else(|| self.sizes.crl(entries).bytes(), crate::scms::pdu::Pdu::len);
+                let size = secured.as_ref().map_or_else(
+                    || self.sizes.crl(entries).bytes(),
+                    crate::scms::pdu::Pdu::len,
+                );
                 out.stage_at(StageId::Downloaded, device, Some(size), flow, run);
                 // One signature verification over the list, then per entry: two SHA-256
                 // per i-period walked and two AES per index searched ([ACPC §2],
