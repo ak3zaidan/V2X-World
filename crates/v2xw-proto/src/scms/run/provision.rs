@@ -70,7 +70,17 @@ impl ScmsRun {
                 .checkout(RngDomain::Crypto, EntityRef::Node(device));
             g.fill_bytes(&mut seed);
         }
-        let cat = Caterpillar::from_seed(&seed).expect("64 bytes of seed");
+        let fresh = Caterpillar::from_seed(&seed).expect("64 bytes of seed");
+        // A top-up keeps the device's caterpillar: the butterfly keys are made once and the
+        // RA expands every later period from the same A, ck, H, ek (1609.2.1 §9.3; 03 §6.4
+        // "request once"). A fresh caterpillar here orphaned every certificate already
+        // installed: the device could no longer derive their keys (WP-B3a NYC test). The
+        // seed is still drawn so no other stream shifts.
+        let cat = match (flow, self.state.devices.get(&device).and_then(|d| d.caterpillar.clone()))
+        {
+            (FlowId::Topup, Some(c)) => c,
+            _ => fresh,
+        };
         let request = ProvisioningRequest {
             // Filled by the device when it signs the request (see its handler).
             enrolment: None,
@@ -290,16 +300,18 @@ impl ScmsState {
             .ok()
     }
 
-    /// When the RA expects a device's first batch: the armed shuffle's deadline (or a whole
-    /// window from now), plus the generation margin `first_batch_delay`. What it puts in
-    /// `RaEeCertAck.nextDlTime` (03 §3.3).
+    /// When the RA tells a device to come for its first batch (`RaEeCertAck.nextDlTime`,
+    /// 03 §3.3): no earlier than `first_batch_delay` after the ack, and no earlier than the
+    /// latest the request shuffle can close (the armed batch's deadline, or a whole window
+    /// from now). A device that polled before the shuffle's age could close would spend
+    /// its `download-maxReqs` polls on a 2-day CAMP 1.2.2 window and give up.
     pub(super) fn next_download_at(&self, at: SimTime) -> SimTime {
         let release = if self.ra.shuffle_armed {
             self.ra.shuffle_deadline.max(at)
         } else {
             self.params.shuffle_window.after(at)
         };
-        self.params.first_batch_delay.after(release)
+        self.params.first_batch_delay.after(at).max(release)
     }
 
     /// `nextDlTime` of a (verified) ack.
