@@ -25,7 +25,7 @@ fn two_reports_about_one_device_resolve_to_that_device_and_blocklist_only_it() {
     let (res, _crl) = run.investigate(0, 1, 1, 2).expect("two reports");
     run.run().expect("investigation runs");
 
-    let case = run.state.ma.case.as_ref().expect("a case");
+    let case = run.state.ma.case().expect("a case");
     assert!(case.resolved, "both Linkage Authorities must agree");
     assert_eq!(
         run.state.ra.blocklist.iter().copied().collect::<Vec<_>>(),
@@ -50,7 +50,7 @@ fn two_reports_about_two_devices_do_not_resolve() {
     let (res, _crl) = run.investigate(0, 1, 1, 2).expect("two reports");
     run.run().expect("investigation runs");
 
-    let case = run.state.ma.case.as_ref().expect("a case");
+    let case = run.state.ma.case().expect("a case");
     assert_eq!(case.same, [Some(false), Some(false)]);
     assert!(!case.resolved);
     assert!(
@@ -97,7 +97,7 @@ fn certificates_from_two_different_provisioning_requests_still_resolve_to_one_de
 
     run.investigate(0, 1, 1, 2).expect("two reports");
     run.run().expect("investigation runs");
-    let case = run.state.ma.case.as_ref().expect("a case");
+    let case = run.state.ma.case().expect("a case");
     assert_eq!(case.same, [Some(true), Some(true)]);
     assert!(case.resolved);
     assert_eq!(
@@ -153,7 +153,7 @@ fn a_linkage_value_the_pca_never_issued_resolves_to_nothing() {
     run.run().expect("runs");
     run.investigate(0, 1, 1, 2).expect("two reports");
     run.run().expect("runs");
-    let case = run.state.ma.case.as_ref().expect("a case");
+    let case = run.state.ma.case().expect("a case");
     assert_eq!(
         case.lookups.len(),
         1,

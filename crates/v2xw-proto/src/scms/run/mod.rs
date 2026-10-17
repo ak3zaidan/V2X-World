@@ -31,7 +31,7 @@ use crate::scms::msg::{
     CertRequestItem, EnrolmentCert, IssuedCredential, LaIndex, Lci, PcaLookup, PreLinkageBatch,
     ProvisioningRequest, Refusal, ReportSubmission, ScmsMsg, ScmsSizes, SealedForPca,
 };
-use crate::scms::params::{ScmsNodes, ScmsParams};
+use crate::scms::params::{MaMode, ScmsNodes, ScmsParams};
 use crate::sizes::{CertificateSizes, WireSize};
 use crate::spec::{AES128_BLOCK, OpDescriptor};
 use crate::stage::{FlowId, FlowRun, StageId};
@@ -484,10 +484,37 @@ impl LaState {
 pub struct MaState {
     /// Reports it has received, in arrival order.
     pub reports: Vec<ReportSubmission>,
-    /// The investigation in progress, if any.
-    pub case: Option<Case>,
+    /// Its case table, by resolution run: every investigation it has opened, open or
+    /// closed (gap row 27: cases run concurrently, each message names its case by run).
+    pub cases: BTreeMap<FlowRun, Case>,
+    /// The most recently opened case.
+    pub last_case: Option<FlowRun>,
     /// Devices it has concluded should be revoked, by request hash.
     pub decisions: Vec<[u8; 32]>,
+    /// Revocation requests waiting for the operator (manual-review mode), by the run
+    /// the request was given: `(report index, i_rev, jmax, two-report partner)`.
+    pub awaiting_review: BTreeMap<FlowRun, (usize, u32, u32, Option<usize>)>,
+    /// Real misbehaviour reports it opened (WP-B4), with what it learned.
+    pub opened_reports: Vec<crate::scms::mbr::OpenedReport>,
+}
+
+impl MaState {
+    /// The most recently opened case.
+    #[must_use]
+    pub fn case(&self) -> Option<&Case> {
+        self.last_case.and_then(|r| self.cases.get(&r))
+    }
+
+    /// How many cases are open.
+    #[must_use]
+    pub fn open_cases(&self) -> usize {
+        self.cases.values().filter(|c| !c.done).count()
+    }
+
+    /// The case whose CRL-issuance run is `crl_run`.
+    pub fn case_by_crl_run(&mut self, crl_run: FlowRun) -> Option<&mut Case> {
+        self.cases.values_mut().find(|c| c.crl_run == crl_run)
+    }
 }
 
 /// One investigation.
@@ -534,6 +561,23 @@ pub struct CrlState {
     pub signature: Option<([u8; 8], [u8; 64])>,
     /// How many CRL versions this entity has signed or received.
     pub versions: u32,
+    /// The current full series-1 `SecuredCrl` (WP-B4), when the PDU layer is on.
+    pub secured: Option<crate::scms::pdu::Pdu>,
+    /// The latest delta linkage CRL (CRL Generator only).
+    pub delta: Option<crate::scms::pdu::Pdu>,
+    /// Every CRL the Generator signed, in order (CRL Generator only).
+    pub issued: Vec<crl::IssuedCrl>,
+    /// CRLs signed per `iRev`, for `indexWithinI`.
+    pub crls_at_i: BTreeMap<u16, u8>,
+    /// Entries already covered by the previous publication (the delta's base).
+    pub published_entries: usize,
+    /// Certificates revoked by hash, by series (3: RSU application and OBU
+    /// identification; 4: enrolment).
+    pub hash_entries: BTreeMap<u16, Vec<v2xw_sec::crl::HashRevocation>>,
+    /// `crlSerial` per hash series.
+    pub hash_serial: BTreeMap<u16, u32>,
+    /// The latest full hash CRL per series.
+    pub hash_crls: BTreeMap<u16, crate::scms::pdu::Pdu>,
 }
 
 /// The Enrolment CA's state.
@@ -672,6 +716,8 @@ pub enum Pending {
     },
     /// The Misbehaviour Authority has reconstructed both chains' seeds.
     SeedsReleased {
+        /// The case (its resolution run).
+        case: FlowRun,
         /// LA 1's chain.
         lci1: Lci,
         /// LA 2's chain.
@@ -1130,25 +1176,14 @@ impl ScmsState {
                 // The simulation's real ECDSA signature stands in for the committee's (a
                 // CGGMP21 output *is* one; a FROST one is a Schnorr signature the size
                 // model carries).
-                self.crlg.signature = self.gov.sign_as("crlg", &crl_digest(&self.crlg.entries));
-                self.crlg.versions += 1;
-                let entries = u32::try_from(self.crlg.entries.len()).unwrap_or(u32::MAX);
-                for (to, step) in [
-                    (n.crl_store, "crl-publish"),
-                    (n.crl_broadcast, "crl-broadcast"),
-                ] {
-                    out.send(
-                        to,
-                        ScmsMsg::CrlPublish { entries },
-                        step,
-                        self.sizes.crl(entries),
-                        Transport::BackendNet,
-                        flow,
-                        run,
-                    );
-                }
+                self.publish_crl(_at, out, flow, run);
             }
-            Pending::SeedsReleased { lci1, lci2, i } => {
+            Pending::SeedsReleased {
+                case: case_run,
+                lci1,
+                lci2,
+                i,
+            } => {
                 // The MA holds a quorum of verified shares of each chain's `ls(i)` and
                 // interpolates them. The value it obtains is the one the dealer shared:
                 // the LA's own `ls(i)`, computed here from the chain it dealt.
@@ -1163,12 +1198,12 @@ impl ScmsState {
                     }
                 }
                 let (Some(la1), Some(la2)) = (seeds[0], seeds[1]) else {
-                    if let Some(case) = self.ma.case.as_mut() {
+                    if let Some(case) = self.ma.cases.get_mut(&case_run) {
                         case.done = true;
                     }
                     return Ok(());
                 };
-                let Some(case) = self.ma.case.as_mut() else {
+                let Some(case) = self.ma.cases.get_mut(&case_run) else {
                     return Ok(());
                 };
                 case.seeds = [Some(la1), Some(la2)];

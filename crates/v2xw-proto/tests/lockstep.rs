@@ -80,14 +80,18 @@ fn a_decided_certificate_is_revoked_through_both_linkage_authorities() {
             && s.bytes == 1_200)
     );
 
+    // WP-B4: the MA runs a case table; with its capacity at one, a second case is
+    // refused while the first is open (the default capacity runs them concurrently,
+    // tests/ma_cases.rs).
+    run.state.params.ma.max_open_cases = 1;
     let (resolution, issuance) = run.revoke(0, 0, 2).expect("a report is held");
     assert!(run.case_open());
     assert!(
         run.revoke(0, 0, 2).is_none(),
-        "cases are carried out one at a time"
+        "a full case table refuses a new case"
     );
     run.run_until(400 * NS_PER_S).expect("runs");
-    let case = run.state.ma.case.as_ref().expect("the case");
+    let case = run.state.ma.case().expect("the case");
     assert!(case.done && case.resolved);
     assert_eq!(case.seeds.iter().filter(|s| s.is_some()).count(), 2);
     assert!(run.state.ra.blocklist.contains(&DEVICE_A));

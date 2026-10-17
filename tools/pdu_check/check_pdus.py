@@ -389,7 +389,9 @@ def check(kind, data, pki, m, state):
         need(tbs['id'][0] == 'linkageData' and tbs['id'][1]['iCert'] == i == req['i'], 'iCert is i')
         need(tbs['id'][1]['linkage-value'] == req['lv'], 'lv = plv1 XOR plv2')
         need(tbs['crlSeries'] == 1, 'crlSeries 1')
-        need(tbs['cracaId'] == certs.hashed_id8(pki.by_name['crlg.provider-a'])[-3:], 'cracaId = CRLG HashedId3')
+        # WP-B4: the CRL signer is issuerIsCraca under the ICA (published US CRL-signer
+        # CrlSsp), so the CRACA a pseudonym certificate names is the ICA.
+        need(tbs['cracaId'] == certs.hashed_id8(pki.by_name['ica.provider-a'])[-3:], 'cracaId = ICA HashedId3')
         r = ec.os2i(resp['privateKeyInfo'])
         e = ecqv.e_1609(certs.tbs_bytes(cert), certs.encode_canonical(signer))
         dd = (e * b + r) % ec.P256.n

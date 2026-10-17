@@ -4,6 +4,8 @@
 //! helpers stay in [`super`].
 
 use super::*;
+use crate::scms::pdu::SpduKind;
+use v2xw_sec::crl::{CrlBody, CrlSpec, LinkageRevocation};
 
 /// The SHA-256 a CRL Generator signs: every entry, in order.
 #[must_use]
@@ -23,6 +25,272 @@ pub fn crl_digest(entries: &[CrlLinkageEntry]) -> [u8; 32] {
 /// The size, in bytes, of a CRL with `entries` entries under this deployment's size model.
 pub fn crl_bytes(sizes: &ScmsSizes, entries: u32) -> WireSize {
     sizes.crl(entries)
+}
+
+/// The series-1 entries of a linkage CRL with `iRev = i_rev`: each entry's seeds walked
+/// forward from its own period to `i_rev` (`ls(i+1) = H(la_id ‖ ls(i))`), and entries
+/// whose last tracked period `i + max_forward` is before `i_rev` pruned as exhausted
+/// ([CAMP122] §5.2.10.2.3). `iMax` is that last period.
+#[must_use]
+pub fn linkage_revocations(entries: &[CrlLinkageEntry], i_rev: u32) -> Vec<LinkageRevocation> {
+    entries
+        .iter()
+        .filter(|e| e.i <= i_rev && e.i.saturating_add(e.max_forward) >= i_rev)
+        .map(|e| {
+            let walk = |la: LaId, ls: LinkageSeed| {
+                (e.i..i_rev).fold(ls, |s, _| linkage::linkage_seed_next(la, s))
+            };
+            LinkageRevocation {
+                la1: e.la_id1,
+                la2: e.la_id2,
+                ls1: walk(e.la_id1, e.ls1_i),
+                ls2: walk(e.la_id2, e.ls2_i),
+                jmax: u8::try_from(e.jmax).unwrap_or(u8::MAX),
+                i_max: u16::try_from(e.i.saturating_add(e.max_forward)).unwrap_or(u16::MAX),
+            }
+        })
+        .collect()
+}
+
+/// A CRL the CRL Generator signed (the issuance log attack studies read).
+#[derive(Debug, Clone)]
+pub struct IssuedCrl {
+    /// Simulated time of signing.
+    pub at: SimTime,
+    /// `crlSeries`.
+    pub series: u16,
+    /// A delta CRL.
+    pub delta: bool,
+    /// `issueDate` / `nextCrl` (Time32).
+    pub issue_date: u32,
+    /// `nextCrl` (Time32).
+    pub next_crl: u32,
+    /// Entries it carries.
+    pub entries: u32,
+    /// The `SecuredCrl` bytes.
+    pub pdu: crate::scms::pdu::Pdu,
+}
+
+/// The device's check of a received `SecuredCrl` against the CRL list it is about to act
+/// on (see the `CrlDownload` handler).
+///
+/// # Errors
+/// The CRL does not decode, the signer is not one attached certificate that chains to
+/// the PKI, [`v2xw_sec::crl::verify_crl`] does not accept it, or `list` is not exactly
+/// what it signs.
+pub fn device_check_crl(
+    pki: &crate::scms::pdu::ScmsPki,
+    bytes: &[u8],
+    list: &[CrlLinkageEntry],
+) -> core::result::Result<(), crate::scms::pdu::PduError> {
+    use crate::scms::pdu::PduError;
+    use v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents as T;
+    let opened = v2xw_sec::crl::decode_crl(bytes).map_err(|e| PduError::Coer(e.to_string()))?;
+    let v2xw_sec::sig1609::SpduSigner::Certificate(signer) = opened.signed.signer.clone() else {
+        return Err(PduError::Signer("a CRL carries its signer's certificate"));
+    };
+    pki.signer_key(&signer)?;
+    let verdict = v2xw_sec::crl::verify_crl(
+        &opened,
+        &signer,
+        Some(&pki.ica.cert),
+        v2xw_msg::scms_types::WireEdition::default(),
+    );
+    if !verdict.accepted() {
+        return Err(if verdict.signature_ok {
+            PduError::Policy("CRL signer, series, CRACA or contents rule")
+        } else {
+            PduError::BadSignature
+        });
+    }
+    let c = &opened.contents;
+    let (i_rev, index_within_i, delta) = match &c.type_specific {
+        T::fullLinkedCrl(t) => (t.i_rev.0.0, t.index_within_i.0, false),
+        T::deltaLinkedCrl(t) => (t.i_rev.0.0, t.index_within_i.0, true),
+        _ => return Err(PduError::Shape("series-1 CRL is a linkage CRL")),
+    };
+    let spec = CrlSpec {
+        series: c.crl_series.0.0,
+        craca: {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&c.crl_craca.0[..]);
+            b
+        },
+        issue_date: c.issue_date.0.0,
+        next_crl: c.next_crl.0.0,
+        priority: c.priority_info.priority.as_ref().map(|p| p.0),
+        delta,
+        body: CrlBody::Linkage {
+            i_rev,
+            index_within_i,
+            individual: linkage_revocations(list, u32::from(i_rev)),
+        },
+    };
+    if v2xw_sec::crl::crl_contents(&spec) != *c {
+        return Err(PduError::Shape("the CRL list differs from the signed CRL"));
+    }
+    Ok(())
+}
+
+impl ScmsState {
+    /// Signs the CRL the Generator holds and sends it to the store and the broadcast path.
+    /// With the PDU layer on, the artefact is a real `SecuredCrl` and every hop is charged
+    /// its encoded length; the digest signature of the modelled path is kept alongside.
+    pub(super) fn publish_crl(
+        &mut self,
+        at: SimTime,
+        out: &mut Outbox<ScmsMsg>,
+        flow: FlowId,
+        run: FlowRun,
+    ) {
+        let n = self.nodes;
+        self.crlg.signature = self.gov.sign_as("crlg", &crl_digest(&self.crlg.entries));
+        self.crlg.versions += 1;
+        let entries = u32::try_from(self.crlg.entries.len()).unwrap_or(u32::MAX);
+        let secured = self.issue_secured_crls(at);
+        // The store first, then the broadcast path, so that two links with the same
+        // parameters stamp `published` before `first_rsu_broadcast`.
+        for (to, step) in [
+            (n.crl_store, "crl-publish"),
+            (n.crl_broadcast, "crl-broadcast"),
+        ] {
+            let size = match &secured {
+                Some(p) => self.emit_pdu(SpduKind::SecuredCrl, n.crlg, to, at, p),
+                None => self.sizes.crl(entries),
+            };
+            out.send(
+                to,
+                ScmsMsg::CrlPublish { entries },
+                step,
+                size,
+                Transport::BackendNet,
+                flow,
+                run,
+            );
+        }
+    }
+
+    /// The real CRLs of one publication (02 §11; 03 §10): a full series-1 linkage CRL
+    /// with `iRev` the current i-period (or the latest entry's), `indexWithinI` counting
+    /// the CRLs at that `iRev`, `crlCraca` the ICA, signed by the CRL signer; a delta
+    /// with the entries added since the previous publication when
+    /// [`crate::scms::params::CrlIssuance::deltas`] is set; and a full hash CRL for each
+    /// of series 3 and 4 that has entries. Returns the full linkage CRL, which is what
+    /// the store and the RSUs distribute; `None` with the layer off.
+    fn issue_secured_crls(&mut self, at: SimTime) -> Option<crate::scms::pdu::Pdu> {
+        let pki = self.pki.clone()?;
+        let i_now = u32::try_from(
+            at.saturating_sub(self.params.epoch) / self.params.i_period.as_nanos().max(1),
+        )
+        .unwrap_or(u32::MAX);
+        let i_rev = self
+            .crlg
+            .entries
+            .iter()
+            .map(|e| e.i)
+            .max()
+            .unwrap_or(0)
+            .max(i_now);
+        let i_rev16 = u16::try_from(i_rev).unwrap_or(u16::MAX);
+        let issue_date = self.time32(at);
+        let next_crl = issue_date.saturating_add(
+            u32::try_from(self.params.crl.next_crl.as_nanos() / v2xw_core::time::NS_PER_S)
+                .unwrap_or(u32::MAX),
+        );
+        let index_within_i = {
+            let n = self.crlg.crls_at_i.entry(i_rev16).or_insert(0);
+            let k = *n;
+            *n = n.saturating_add(1);
+            k
+        };
+        let craca = pki.craca_id8();
+        let sign = |spec: &CrlSpec| -> Option<crate::scms::pdu::Pdu> {
+            let contents = v2xw_sec::crl::crl_contents(spec);
+            v2xw_sec::crl::check_crl(&contents, v2xw_msg::scms_types::WireEdition::default())
+                .ok()?;
+            let crl = v2xw_sec::crl::sign_crl(&contents, &pki.crlg.cert, &pki.crlg.key).ok()?;
+            Some(crate::scms::pdu::Pdu::new(
+                v2xw_sec::crl::encode_crl(&crl).ok()?,
+            ))
+        };
+        let mut log = Vec::new();
+        let individual = linkage_revocations(&self.crlg.entries, i_rev);
+        let full_spec = CrlSpec {
+            series: v2xw_sec::crl::SERIES_PSEUDONYM,
+            craca,
+            issue_date,
+            next_crl,
+            priority: None,
+            delta: false,
+            body: CrlBody::Linkage {
+                i_rev: i_rev16,
+                index_within_i,
+                individual: individual.clone(),
+            },
+        };
+        let full = sign(&full_spec)?;
+        log.push((1, false, individual.len(), full.clone()));
+        let since = self.crlg.published_entries.min(self.crlg.entries.len());
+        if self.params.crl.deltas && self.crlg.secured.is_some() {
+            let added = linkage_revocations(&self.crlg.entries[since..], i_rev);
+            let spec = CrlSpec {
+                delta: true,
+                body: CrlBody::Linkage {
+                    i_rev: i_rev16,
+                    index_within_i,
+                    individual: added.clone(),
+                },
+                ..full_spec.clone()
+            };
+            if let Some(d) = sign(&spec) {
+                log.push((1, true, added.len(), d.clone()));
+                self.crlg.delta = Some(d);
+            }
+        }
+        for series in [
+            v2xw_sec::crl::SERIES_APPLICATION_IDENTIFICATION,
+            v2xw_sec::crl::SERIES_ENROLMENT,
+        ] {
+            let Some(entries) = self.crlg.hash_entries.get(&series).cloned() else {
+                continue;
+            };
+            let serial = {
+                let s = self.crlg.hash_serial.entry(series).or_insert(0);
+                *s += 1;
+                *s
+            };
+            let spec = CrlSpec {
+                series,
+                craca,
+                issue_date,
+                next_crl,
+                priority: None,
+                delta: false,
+                body: CrlBody::Hash {
+                    serial,
+                    entries: entries.clone(),
+                },
+            };
+            if let Some(p) = sign(&spec) {
+                log.push((series, false, entries.len(), p.clone()));
+                self.crlg.hash_crls.insert(series, p);
+            }
+        }
+        for (series, delta, n, pdu) in log {
+            self.crlg.issued.push(IssuedCrl {
+                at,
+                series,
+                delta,
+                issue_date,
+                next_crl,
+                entries: u32::try_from(n).unwrap_or(u32::MAX),
+                pdu,
+            });
+        }
+        self.crlg.published_entries = self.crlg.entries.len();
+        self.crlg.secured = Some(full.clone());
+        Some(full)
+    }
 }
 
 impl ScmsRun {
@@ -82,7 +350,7 @@ impl ScmsState {
                     max_forward: linkage::DEFAULT_MAX_FORWARD_PERIODS,
                 };
                 self.crlg.entries.push(entry);
-                if let Some(case) = self.ma.case.as_mut() {
+                if let Some(case) = self.ma.case_by_crl_run(run) {
                     case.done = true;
                 }
                 let crl_committee = self.committees.role("crl");
@@ -97,6 +365,29 @@ impl ScmsState {
                     flow,
                     run,
                 );
+                if self.params.crl.business_day_sla {
+                    // The provider's operator publishes at the next business-day slot
+                    // (Eastern time, US federal holidays observed): a change decided on a
+                    // Friday evening or a holiday goes out on the next business day, and
+                    // every entry appended before then rides along ([SM-PROV] §3.4.9).
+                    if !self.crlg.publish_armed {
+                        self.crlg.publish_armed = true;
+                        let unix = self.wall.unix_seconds_at(at);
+                        let (hh, mm) = self.params.crl.slot_et;
+                        let slot = crate::scms::calendar::next_publication_slot(unix, hh, mm);
+                        let wait = u64::try_from(slot - unix).unwrap_or(0);
+                        let sub = at % v2xw_core::time::NS_PER_S;
+                        out.start_timer(
+                            Duration::from_nanos(
+                                (wait * v2xw_core::time::NS_PER_S).saturating_sub(sub),
+                            ),
+                            ScmsMsg::CrlPublishTimer,
+                            flow,
+                            run,
+                        );
+                    }
+                    return Ok(());
+                }
                 let cadence = self.params.crl_cadence;
                 if self.params.publish_on_cadence && cadence > Duration::ZERO {
                     // The list is re-issued on the cadence, not per entry: the entry waits
@@ -131,28 +422,7 @@ impl ScmsState {
                     );
                     return Ok(());
                 }
-                self.crlg.signature = self.gov.sign_as("crlg", &crl_digest(&self.crlg.entries));
-                self.crlg.versions += 1;
-                // The store first, then the broadcast path, so that two links with the
-                // same parameters stamp `published` before `first_rsu_broadcast`.
-                out.send(
-                    n.crl_store,
-                    ScmsMsg::CrlPublish { entries },
-                    "crl-publish",
-                    self.sizes.crl(entries),
-                    Transport::BackendNet,
-                    flow,
-                    run,
-                );
-                out.send(
-                    n.crl_broadcast,
-                    ScmsMsg::CrlPublish { entries },
-                    "crl-broadcast",
-                    self.sizes.crl(entries),
-                    Transport::BackendNet,
-                    flow,
-                    run,
-                );
+                self.publish_crl(at, out, flow, run);
             }
             ScmsMsg::CrlPublishTimer => {
                 self.crlg.publish_armed = false;
@@ -170,39 +440,25 @@ impl ScmsState {
                     return Ok(());
                 }
                 Self::sign(out, 1);
-                self.crlg.signature = self.gov.sign_as("crlg", &crl_digest(&self.crlg.entries));
-                self.crlg.versions += 1;
-                let entries = u32::try_from(self.crlg.entries.len()).unwrap_or(u32::MAX);
-                out.send(
-                    n.crl_store,
-                    ScmsMsg::CrlPublish { entries },
-                    "crl-publish",
-                    self.sizes.crl(entries),
-                    Transport::BackendNet,
-                    flow,
-                    run,
-                );
-                out.send(
-                    n.crl_broadcast,
-                    ScmsMsg::CrlPublish { entries },
-                    "crl-broadcast",
-                    self.sizes.crl(entries),
-                    Transport::BackendNet,
-                    flow,
-                    run,
-                );
+                self.publish_crl(at, out, flow, run);
             }
             ScmsMsg::CrlPublish { entries } => {
                 let list = self.crlg.entries.clone();
-                let size = self.sizes.crl(entries).bytes();
+                let secured = self.crlg.secured.clone();
+                let size = secured.as_ref().map_or_else(
+                    || self.sizes.crl(entries).bytes(),
+                    crate::scms::pdu::Pdu::len,
+                );
                 let signature = self.crlg.signature;
                 if to == n.crl_store {
                     self.crl_store.entries = list;
+                    self.crl_store.secured = secured;
                     self.crl_store.signature = signature;
                     self.crl_store.versions += 1;
                     out.stage_at(StageId::Published, to, Some(size), flow, run);
                 } else {
                     self.crl_broadcast.entries = list;
+                    self.crl_broadcast.secured = secured;
                     self.crl_broadcast.signature = signature;
                     self.crl_broadcast.versions += 1;
                     out.stage_at(StageId::FirstRsuBroadcast, to, Some(size), flow, run);
@@ -221,11 +477,15 @@ impl ScmsState {
             }
             ScmsMsg::CrlDownloadRequest { device } => {
                 let entries = u32::try_from(self.crl_store.entries.len()).unwrap_or(u32::MAX);
+                let size = self.crl_store.secured.as_ref().map_or_else(
+                    || self.sizes.crl(entries),
+                    |p| WireSize::real(p.len(), SpduKind::SecuredCrl.name()),
+                );
                 out.send(
                     device,
                     ScmsMsg::CrlDownload { device, entries },
                     "crl-download",
-                    self.sizes.crl(entries),
+                    size,
                     Transport::CellularUu,
                     flow,
                     run,
@@ -236,18 +496,30 @@ impl ScmsState {
                 // cryptography: the CRL Generator already signed it, and re-signing at
                 // every RSU would be both wrong and a cost the deployment does not pay.
                 let entries = u32::try_from(self.crl_broadcast.entries.len()).unwrap_or(u32::MAX);
+                let size = self.crl_broadcast.secured.as_ref().map_or_else(
+                    || self.sizes.crl(entries),
+                    |p| WireSize::real(p.len(), SpduKind::SecuredCrl.name()),
+                );
                 out.send(
                     device,
                     ScmsMsg::CrlDownload { device, entries },
                     "crl-air-broadcast",
-                    self.sizes.crl(entries),
+                    size,
                     Transport::V2xAir,
                     flow,
                     run,
                 );
             }
             ScmsMsg::CrlDownload { device, entries } => {
-                let size = self.sizes.crl(entries).bytes();
+                let secured = if from == n.crl_broadcast {
+                    self.crl_broadcast.secured.clone()
+                } else {
+                    self.crl_store.secured.clone()
+                };
+                let size = secured.as_ref().map_or_else(
+                    || self.sizes.crl(entries).bytes(),
+                    crate::scms::pdu::Pdu::len,
+                );
                 out.stage_at(StageId::Downloaded, device, Some(size), flow, run);
                 // One signature verification over the list, then per entry: two SHA-256
                 // per i-period walked and two AES per index searched ([ACPC §2],
@@ -265,6 +537,21 @@ impl ScmsState {
                 } else {
                     (self.crl_store.entries.clone(), self.crl_store.signature)
                 };
+                // The real path (WP-B4): the device verifies the `SecuredCrl` itself —
+                // psid 256 and no other header field, the CRL signer's certificate
+                // chains to its ICA and holds a `CrlSsp` for series 1 whose
+                // `issuerIsCraca` names that ICA as `crlCraca`, the signature, the
+                // contents rules — and acts only on the entries those signed bytes
+                // carry: a list that differs from them is refused whole.
+                if let (Some(p), Some(pki)) = (secured.as_ref(), self.pki.clone()) {
+                    if let Err(e) = device_check_crl(&pki, p.bytes(), &list) {
+                        if let Some(dev) = self.devices.get_mut(&device) {
+                            dev.crls_rejected += 1;
+                        }
+                        self.reject_pdu(SpduKind::SecuredCrl, device, at, e);
+                        return Ok(());
+                    }
+                }
                 let Some(dev) = self.devices.get_mut(&device) else {
                     return Err(ProtoError::NoEntity { node: device });
                 };

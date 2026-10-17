@@ -12,9 +12,11 @@
 //! Authority releases `ls(i)` and never `ls(0)`.
 
 pub mod appcert;
+pub mod calendar;
 pub mod enrolment;
 pub mod governance;
 pub mod inspect;
+pub mod mbr;
 pub mod msg;
 pub mod params;
 pub mod pdu;

@@ -1418,6 +1418,7 @@ impl ScmsState {
                                             certificate: o.certificate,
                                             e: o.e,
                                             r: o.r,
+                                            private: o.private,
                                         },
                                     )),
                                 }),
