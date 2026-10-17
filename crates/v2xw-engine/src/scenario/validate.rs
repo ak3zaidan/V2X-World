@@ -3431,6 +3431,10 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
             crate::phase2::deployment_of(s, true)
         {
             e.push(inner);
+        } else if let Err(crate::EngineError::Scenario(inner)) =
+            crate::phase2::home_chain_file_of(s)
+        {
+            e.push(inner);
         }
     }
     let etsi = s.actors.backend.protocol.as_deref() == Some(crate::phase2::ETSI_PKI)

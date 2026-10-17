@@ -178,6 +178,11 @@ pub enum RxDisposition {
     /// The P2PCD request is counted on the peer store; the node's drop counter charges
     /// `verify_policy_skip`.
     UnknownSigner,
+    /// An unsecured out-of-band P2PCD learning response (`Ieee1609dot2Peer2PeerPDU`,
+    /// PSID 136), handed to the node's P2PCD Entity rather than to an application or the
+    /// verifier: it carries no signature, and each certificate in it is validated to an
+    /// installed root before it is learned (IEEE 1609.2a-2017 §8.2.4.1.1).
+    P2pcdResponse,
 }
 
 /// One received frame's journey through this node, reported so the engine can record it on
@@ -1211,6 +1216,26 @@ impl ObuRuntime {
             self.advance_verifications(ctx, parsed);
             self.complete_verifications(parsed, out);
 
+            // An out-of-band P2PCD learning response (PSID 136) is an unsecured PDU for
+            // the P2PCD Entity, not a message for an application or the verifier: it is
+            // counted against this node's own response processes and learned from (each
+            // certificate validated to an installed root first), and reported as
+            // reported as such. It never enters the verification queue.
+            if frame.msg_type == MsgType::P2pcd {
+                if let Some(bytes) = frame.spdu.as_deref() {
+                    let _ = self.security.p2pcd_receive_response(bytes);
+                }
+                out.rx_reports.push(RxReport {
+                    token: stamp.token,
+                    disposition: RxDisposition::P2pcdResponse,
+                    arrived,
+                    parsed,
+                    verify_start: None,
+                    verify_done: None,
+                });
+                continue;
+            }
+
             // 3. The policy, over the queue as it is at this instant.
             self.learn_or_request(&frame);
             self.p2pcd_rx(ctx, &frame);
@@ -2203,6 +2228,7 @@ fn msg_type_name(t: MsgType) -> &'static str {
         MsgType::Psm => "psm",
         MsgType::Vam => "vam",
         MsgType::Mbr => "mbr",
+        MsgType::P2pcd => "p2pcd",
         MsgType::Crl => "crl",
         _ => "other",
     }

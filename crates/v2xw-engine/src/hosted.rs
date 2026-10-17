@@ -268,10 +268,29 @@ impl HostedNode {
     ) -> StepOutcome {
         match self {
             HostedNode::Obu(o) => o.wake_timed(ctx, inbox),
-            HostedNode::Vru(_) => {
+            HostedNode::Vru(v) => {
                 debug_assert!(inbox.is_empty(), "a VRU device's inbox waits for its step");
+                // The only thing a VRU device is woken for: a P2PCD response back-off.
+                v.wake_p2pcd(ctx);
                 StepOutcome::default()
             }
+        }
+    }
+
+    /// The out-of-band P2PCD learning responses the node's P2P entity broadcast since the
+    /// last call, each with the node-clock instant its back-off expired.
+    pub fn take_p2pcd_responses(&mut self) -> Vec<(SimTime, Vec<u8>)> {
+        match self {
+            HostedNode::Obu(o) => o.take_p2pcd_responses(),
+            HostedNode::Vru(v) => v.take_p2pcd_responses(),
+        }
+    }
+
+    /// When the node's earliest running P2PCD response back-off expires, seen from `now`.
+    pub fn next_p2pcd_due_after(&self, now: SimTime) -> Option<SimTime> {
+        match self {
+            HostedNode::Obu(o) => o.next_p2pcd_due_after(now),
+            HostedNode::Vru(v) => v.next_p2pcd_due_after(now),
         }
     }
 
@@ -412,7 +431,7 @@ pub fn install_credentials<R: crate::wiring::CredentialSink + ?Sized>(
 ) -> usize {
     let policy = crate::wiring::rotation_policy(scenario);
     device.sink_forget();
-    factory.install_trust(device.sink_security());
+    factory.install_trust_for(node, false, device.sink_security());
     let stores = device.sink_stores();
     *stores = Stores {
         certs: v2xw_node::CertStore::new().with_policy(policy),

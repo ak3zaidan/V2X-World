@@ -598,6 +598,10 @@ pub struct RunReport {
     /// How many PSMs and VAMs a VRU device wanted to send and did not: the EN 302 571 duty
     /// cycle, the energy budget, or no credential (`v2xw_node::vru`).
     pub vru_suppressed: u64,
+    /// Out-of-band P2PCD learning responses (`Ieee1609dot2Peer2PeerPDU`, PSID 136) the
+    /// nodes' P2P entities put on the air, each one a radio frame of its own, handed to
+    /// the MAC at the instant its back-off expired.
+    pub p2pcd_responses_on_air: u64,
     /// What the city-scale radio gate did, when the scenario has a `scale` section with a
     /// microscopic box ([`crate::scale::RadioGate`]).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1638,6 +1642,15 @@ impl Engine {
                     .and_then(crate::phase2::Phase2::aca_issuer),
             )
             .with_trust(roots, chain_file)
+            .with_home_chain_files(if crate::phase2::home_chain_file_of(&engine.scenario)? {
+                engine
+                    .phase2
+                    .as_ref()
+                    .map(crate::phase2::Phase2::provider_chain_files)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            })
             .with_providers(
                 engine
                     .phase2
@@ -4080,7 +4093,14 @@ impl Engine {
                         .iter()
                         .any(|c| c.i == cred.i_period && c.j == cred.j_index))
             {
+                let from = (cred.i_period, cred.j_index);
                 cred.i_period = period;
+                // The security stack files the installed key by the same slot, and signs
+                // only from a slot it holds (`NodeSecurity::set_active`): moving the
+                // handle alone left every unit unable to sign, and no SPaT or MAP went
+                // on the air once the real calendar put the system past period 0.
+                let to = (cred.i_period, cred.j_index);
+                runtime.security_mut().move_signer(from, to);
             }
         }
     }
@@ -4444,6 +4464,7 @@ impl Engine {
             for tx in &outcome.transmissions {
                 self.hand_down(*id, tx, now, horizon);
             }
+            self.hand_down_p2pcd(*id, now, horizon);
         }
         self.flush_deferred_records(recorder);
 
@@ -4495,6 +4516,56 @@ impl Engine {
             if let Some(at) = next_arrival {
                 self.request_wake(*id, at, horizon);
             }
+            // A running P2PCD response process wakes the node the instant its random
+            // back-off expires (IEEE 1609.2a-2017 §8.2.1, `p2pcd_maxResponseBackoff`),
+            // not at its next periodic step: the back-off is a quarter of a second at the
+            // Annex C values, shorter than a 100 ms step's quantisation can resolve.
+            let p2pcd_due = self
+                .nodes
+                .get(id)
+                .and_then(|n| n.next_p2pcd_due_after(now));
+            if let Some(at) = p2pcd_due {
+                self.request_wake(*id, at.max(now + 1), horizon);
+            }
+        }
+    }
+
+    /// Puts the out-of-band P2PCD learning responses `node`'s P2P entity produced at this
+    /// step on the air: each an unsecured `Ieee1609dot2Peer2PeerPDU` in a frame of its own
+    /// under PSID 136, through the same MAC, PHY and congestion control as every frame,
+    /// and recorded on `node.tx` and the frame tap with its real bytes. A receiver's node
+    /// runtime hands it to its P2PCD Entity (`ObuRuntime`'s receive path).
+    fn hand_down_p2pcd(&mut self, node: NodeId, now: SimTime, horizon: SimTime) {
+        let Some(responses) = self
+            .nodes
+            .get_mut(&node)
+            .map(crate::hosted::HostedNode::take_p2pcd_responses)
+        else {
+            return;
+        };
+        for (due, pdu) in responses {
+            let bytes = u32::try_from(pdu.len()).unwrap_or(u32::MAX);
+            let mut tx = Transmission::sized(
+                v2xw_msg::MsgType::P2pcd,
+                bytes,
+                // No signer: the PDU is unsecured. The frame's signer field is never put
+                // in front of a receiver (`rx_frame`).
+                v2xw_msg::sec_types::HashedId8(Default::default()),
+                false,
+                // The MAC takes it one nanosecond after the node event that produced it:
+                // a MAC timer cannot be scheduled at the instant of a node task, which
+                // the dispatch order runs after the MAC's (02-architecture.md §5.1). An
+                // unsecured PDU costs no signature, so nothing else stands in between.
+                due.saturating_add(1),
+                due,
+            );
+            tx.signed = Some(v2xw_node::SignedFrame {
+                payload: pdu.clone(),
+                spdu: pdu,
+                cert_bytes: 0,
+            });
+            self.report.p2pcd_responses_on_air += 1;
+            self.hand_down_app(node, &tx, now, horizon, None);
         }
     }
 
@@ -4708,7 +4779,12 @@ impl Engine {
         // The engine's own application frames (a misbehaviour report, a CRL broadcast) are
         // sized from a protocol table and acted on per frame at the receiver, so they are
         // neither padded nor split: they keep `fragmenter/none`'s rule.
-        let node_message = app.is_none();
+        // An out-of-band P2PCD learning response is a node's frame but carries no
+        // signature, no application payload and no credential: it is neither padded for a
+        // post-quantum signature nor split, it registers no pseudonym and an attacker's
+        // falsification (which edits a signed claim) does not touch it.
+        let p2pcd = tx.msg_type == v2xw_msg::MsgType::P2pcd;
+        let node_message = app.is_none() && !p2pcd;
         let padding = if node_message {
             self.frag_plan.padding
         } else {
@@ -4774,7 +4850,7 @@ impl Engine {
         // node rewrote it when it issued the certificate it is about to sign with. A
         // subject a report names is a subject that was on the air, so registering here
         // registers exactly the digests that can be reported — and nothing else.
-        if let (Some(cred), Some(phase2)) = (credential.as_ref(), self.phase2.as_mut())
+        if let (Some(cred), Some(phase2), false) = (credential.as_ref(), self.phase2.as_mut(), p2pcd)
             && phase2.note_digest(node, &cred.digest, cred.i_period, cred.j_index)
             && let Some(actor) = self.node_actor.get(&node).copied()
         {
@@ -4797,7 +4873,7 @@ impl Engine {
         let mut signature_valid = true;
         let mut claimed_generation = tx.generation_time;
         let mut ghosts: Vec<v2xw_threat::attack::Emission> = Vec::new();
-        if self.phase2.as_ref().is_some_and(|p| p.is_attacker(node)) {
+        if !p2pcd && self.phase2.as_ref().is_some_and(|p| p.is_attacker(node)) {
             let actor = self
                 .node_actor
                 .get(&node)
@@ -8956,7 +9032,8 @@ impl RunRecorder for Tee<'_> {
 /// What a receiving node is handed for one decoded message of `bytes` octets.
 fn rx_frame(state: &FrameState, bytes: u32) -> RxFrame {
     RxFrame {
-        signer: Some(state.signer.clone()),
+        // An unsecured P2PCD learning response has no signer.
+        signer: (state.msg_type != v2xw_msg::MsgType::P2pcd).then(|| state.signer.clone()),
         msg_type: state.msg_type,
         bytes,
         claimed_pos: Some(state.claimed_pos),
@@ -8997,6 +9074,8 @@ fn resolve_rx(attempt: NodeRx, report: &RxReport, now: SimTime) -> NodeRx {
         RxDisposition::Dropped(cause) => a.lost(now, drop_cause_name(cause)),
         RxDisposition::NodeOff => a.lost(now, rx_cause::RECEIVER_OFF),
         RxDisposition::UnknownSigner => a.lost(now, rx_cause::UNKNOWN_SIGNER),
+        // Unsecured by design (IEEE 1609.2 clause 8): handed to the P2PCD Entity.
+        RxDisposition::P2pcdResponse => a.delivered(now, "unsecured", delivered_at),
     }
 }
 
@@ -9272,6 +9351,7 @@ fn msg_type_name(t: v2xw_msg::MsgType) -> &'static str {
         v2xw_msg::MsgType::Wsa => "wsa",
         v2xw_msg::MsgType::Crl => "crl",
         v2xw_msg::MsgType::Mbr => "mbr",
+        v2xw_msg::MsgType::P2pcd => "p2pcd",
     }
 }
 

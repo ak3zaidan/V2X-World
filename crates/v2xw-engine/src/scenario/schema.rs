@@ -2451,6 +2451,15 @@ pub struct ScmsSpec {
     /// Which providers run, what each runs and where. Absent: `us-production-2025`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployment: Option<DeploymentSpec>,
+    /// What each device's local certificate chain file holds (WP-C2, 1609.2.1 §6.3.5):
+    /// `all-providers` (default: every CTL provider's CA certificates, the global chain
+    /// file) or `home-provider` (only the CA certificates of the provider that certifies
+    /// the device, under every CTL root; ASSUMPTION, a device whose chain file predates
+    /// the other providers). Under `home-provider` a device learns another provider's
+    /// ICA and ACA over the air by P2PCD (IEEE 1609.2 clause 8) before it can verify that
+    /// provider's certificates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_file: Option<String>,
 }
 
 /// `security.scms.deployment`: the providers on the CTL and what each runs.

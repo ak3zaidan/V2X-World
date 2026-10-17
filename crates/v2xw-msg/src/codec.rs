@@ -59,11 +59,14 @@ pub enum MsgType {
     Crl,
     /// Misbehaviour report (TS 103 759).
     Mbr,
+    /// An out-of-band P2PCD learning response (IEEE 1609.2 clause 8): an unsecured
+    /// `Ieee1609dot2Peer2PeerPDU` broadcast by a station's P2PCD Entity under PSID 136.
+    P2pcd,
 }
 
 impl MsgType {
     /// Every variant, in declaration order. Handy for table-driven tests.
-    pub const ALL: [MsgType; 13] = [
+    pub const ALL: [MsgType; 14] = [
         MsgType::Bsm,
         MsgType::Cam,
         MsgType::Denm,
@@ -77,6 +80,7 @@ impl MsgType {
         MsgType::Wsa,
         MsgType::Crl,
         MsgType::Mbr,
+        MsgType::P2pcd,
     ];
 
     /// The lower-case spelling used in records, cards and scenario files.
@@ -95,6 +99,7 @@ impl MsgType {
             MsgType::Wsa => "wsa",
             MsgType::Crl => "crl",
             MsgType::Mbr => "mbr",
+            MsgType::P2pcd => "p2pcd",
         }
     }
 
@@ -118,7 +123,12 @@ impl MsgType {
             MsgType::Ssm => Some(10),
             MsgType::Cpm => Some(14),
             MsgType::Vam => Some(16),
-            MsgType::Bsm | MsgType::Psm | MsgType::Wsa | MsgType::Crl | MsgType::Mbr => None,
+            MsgType::Bsm
+            | MsgType::Psm
+            | MsgType::Wsa
+            | MsgType::Crl
+            | MsgType::Mbr
+            | MsgType::P2pcd => None,
         }
     }
 }

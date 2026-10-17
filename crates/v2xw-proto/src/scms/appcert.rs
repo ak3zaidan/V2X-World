@@ -42,7 +42,7 @@
 //! preemption), with no SSP; the RSU certificate carries SPaT/MAP (0x82) only.
 
 use p256::Scalar;
-use rasn::types::{FixedBitString, FixedOctetString, Integer, OctetString};
+use rasn::types::{FixedOctetString, Integer, OctetString};
 use v2xw_msg::sec_types::ieee1609_dot2::{
     Certificate, CertificateId, CertificateType, IssuerIdentifier, ToBeSignedCertificate,
     VerificationKeyIndicator,
@@ -53,10 +53,10 @@ use v2xw_msg::sec_types::ieee1609_dot2_base_types::{
     Uint16, Uint32, ValidityPeriod,
 };
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ee_interface::{
-    AcaEeCertResponse, AcaEeInterfacePdu,
+    AcaEeInterfacePdu,
 };
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ra_interface::{
-    AcaRaCertResponse, AcaRaInterfacePdu, AcaResponse, RaAcaCertRequest, RaAcaCertRequestFlags,
+    AcaRaInterfacePdu, AcaResponse,
 };
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::{
     AdditionalParams, ButterflyExpansion, ButterflyParamsOriginal, EeRaCertRequest,
@@ -71,7 +71,7 @@ use v2xw_sec::hashedid;
 use v2xw_sec::sig1609::Signer1609;
 
 use crate::scms::pdu::{
-    self, ButterflyOriginal, Drbg, Pdu, PduError, RequestSigner, RequestSignerFound, Result,
+    self, ButterflyOriginal, Drbg, PduError, RequestSigner, RequestSignerFound, Result,
     ScmsPki,
 };
 
@@ -434,30 +434,26 @@ pub fn ra_open_request(pki: &ScmsPki, spdu: &[u8]) -> Result<OpenedRequest> {
     })
 }
 
-/// `aca-ra.raAcaCertRequest` (03 §3.3): `type implicit`, `flags` all clear (neither
-/// `butterflyExplicit` nor `cubk`), no `linkageInfo`, `certEncKey` = the response key,
-/// `tbsCert` = the requested one with `verifyKeyIndicator = reconstructionValue(R)`.
+/// `aca-ra.raAcaCertRequest` (03 §3.3) for a non-pseudonym certificate: the one builder,
+/// [`crate::scms::pdu_prov::aca_ra_request`], with no `linkageInfo`, `certEncKey` = the
+/// response key and `tbsCert` = the requested one with `verifyKeyIndicator =
+/// reconstructionValue(R)`.
+///
+/// # Errors
+/// A key does not encode.
 pub fn ra_aca_cert_request(
     generation_time: u32,
     requested: &ToBeSignedCertificate,
     request_public: &Point,
     cert_enc_key: &Point,
 ) -> Result<ScmsPdu> {
-    let mut tbs = requested.clone();
-    let r = cert::compressed_key(request_public).map_err(|_| PduError::Key("R at infinity"))?;
-    tbs.verify_key_indicator =
-        cert::reconstruction_key_indicator(&r).map_err(|_| PduError::Key("R"))?;
-    Ok(scms(ScmsPduContent::aca_ra(
-        AcaRaInterfacePdu::raAcaCertRequest(RaAcaCertRequest::new(
-            Uint8(2),
-            Time32(Uint32(generation_time)),
-            CertificateType::implicit,
-            RaAcaCertRequestFlags(FixedBitString::<8>::ZERO),
-            None,
-            Some(encryption_key(cert_enc_key)?),
-            tbs,
-        )),
-    )))
+    crate::scms::pdu_prov::aca_ra_request(
+        generation_time,
+        requested,
+        request_public,
+        cert_enc_key,
+        None,
+    )
 }
 
 /// The RA's `RaAcaCertRequestSpdu`: [`ra_aca_cert_request`] as a `SignedCertRequest`
@@ -491,96 +487,31 @@ pub fn craca_id(pki: &ScmsPki) -> Result<[u8; 3]> {
     Ok(h.0[..].try_into().unwrap_or([0; 3]))
 }
 
-/// The ACA: verify the RA's `RaAcaCertRequestSpdu`, issue the implicit certificate
-/// (ECQV-1609 on the request's reconstruction value, `cracaId` = [`craca_id`],
-/// `crlSeries` 3), and answer with `AcaEeCertResponsePrivateSpdu` (encrypt to
-/// `certEncKey`, then sign with this ACA) inside a signed `AcaRaCertResponseSpdu` whose
-/// `requestHash` is the HashedId8 of the request as received.
+/// The ACA for a non-pseudonym request: the one issuance,
+/// [`crate::scms::pdu_prov::aca_issue_request`], with no LA keys (verify the RA's
+/// `RaAcaCertRequestSpdu`, issue the implicit certificate by ECQV-1609 on the request's
+/// reconstruction value with `cracaId` = [`craca_id`] and `crlSeries` 3, and answer with
+/// `AcaEeCertResponsePrivateSpdu` inside a signed `AcaRaCertResponseSpdu`). A pseudonym
+/// request (`linkageInfo` present) is refused.
+///
+/// # Errors
+/// As [`crate::scms::pdu_prov::aca_issue_request`].
 pub fn aca_issue(
     pki: &ScmsPki,
     request_spdu: &[u8],
     generation_time: u32,
     g: &mut Drbg,
 ) -> Result<AcaIssued> {
-    let (p, signer) = pdu::open_signed_cert_request(request_spdu, pki)?;
-    let RequestSignerFound::Cert(c) = signer else {
-        return Err(PduError::Signer("an RaAcaCertRequest is signed by the RA"));
-    };
-    if pdu::cert_id8(&c) != pki.ra.id8() {
-        return Err(PduError::Signer("an RaAcaCertRequest is signed by the RA"));
-    }
-    let ScmsPduContent::aca_ra(AcaRaInterfacePdu::raAcaCertRequest(r)) = p.content else {
-        return Err(PduError::Shape("expected aca-ra.raAcaCertRequest"));
-    };
-    if r.r_type != CertificateType::implicit {
-        return Err(PduError::Shape("implicit certificate requested"));
-    }
-    if r.flags.0 != FixedBitString::<8>::ZERO {
-        return Err(PduError::Shape(
-            "butterflyExplicit and cubk are clear for an implicit private response",
-        ));
-    }
-    if r.linkage_info.is_some() {
+    let x = crate::scms::pdu_prov::aca_issue_request(pki, None, request_spdu, generation_time, g)?;
+    if x.lv.is_some() {
         return Err(PduError::Shape(
             "linkageInfo is for pseudonym certificates (WP-B3a)",
         ));
     }
-    let enc = enc_point(
-        r.cert_enc_key
-            .as_ref()
-            .ok_or(PduError::Shape("certEncKey present: a private response"))?,
-    )?;
-    let VerificationKeyIndicator::reconstructionValue(rv) = &r.tbs_cert.verify_key_indicator else {
-        return Err(PduError::Shape(
-            "implicit request carries a reconstructionValue",
-        ));
-    };
-    let request_public = pdu::point_of(rv)?;
-    if matches!(r.tbs_cert.id, CertificateId::linkageData(_)) {
-        return Err(PduError::Shape("no LinkageData without linkageInfo"));
-    }
-    let mut tbs = r.tbs_cert.clone();
-    tbs.craca_id = HashedId3(FixedOctetString::from(craca_id(pki)?));
-    tbs.crl_series = CrlSeries(Uint16(SERIES_APPLICATION_IDENTIFICATION));
-    let d_aca = pki
-        .aca
-        .private
-        .as_ref()
-        .ok_or(PduError::Key("ACA scalar"))?;
-    let issued = cert::issue_implicit(
-        &tbs,
-        &pki.aca.cert,
-        &Point::mul_base(d_aca),
-        d_aca,
-        &request_public,
-        || g.scalar(),
-    )
-    .map_err(|_| PduError::Shape("ECQV issuance"))?;
-    let resp = scms(ScmsPduContent::aca_ee(
-        AcaEeInterfacePdu::acaEeCertResponse(AcaEeCertResponse::new(
-            Uint8(2),
-            Time32(Uint32(generation_time)),
-            issued.certificate.clone(),
-            Some(OctetString::from(
-                ec::scalar_to_be32(&issued.private_key_contribution).to_vec(),
-            )),
-        )),
-    ));
-    let private_spdu = pdu::encrypted_signed(&resp, &enc, &pki.aca.cert, &pki.aca.key, g)?;
-    let private = rasn::coer::decode(&private_spdu).map_err(|e| PduError::Coer(e.to_string()))?;
-    let answer = scms(ScmsPduContent::aca_ra(
-        AcaRaInterfacePdu::acaRaCertResponse(AcaRaCertResponse::new(
-            Uint8(2),
-            Time32(Uint32(generation_time)),
-            hashedid::id8_from_bytes(Pdu::new(request_spdu.to_vec()).hashed_id8()),
-            AcaResponse::private(private),
-        )),
-    ));
-    let aca_ra_spdu = pdu::signed(&answer, &pki.aca.cert, &pki.aca.key)?;
     Ok(AcaIssued {
-        cert: issued.certificate,
-        private_spdu,
-        aca_ra_spdu,
+        cert: x.certificate,
+        private_spdu: x.private.bytes().to_vec(),
+        aca_ra_spdu: x.to_ra.bytes().to_vec(),
     })
 }
 

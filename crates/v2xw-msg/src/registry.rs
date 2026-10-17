@@ -83,6 +83,11 @@ pub const PSID_MISBEHAVIOUR_REPORT: u64 = 38;
 pub const ITS_AID_MISBEHAVIOUR_REPORT: u64 = 1_618;
 /// CRLs: `psid-certificate-revocation-list-application` (256).
 pub const PSID_CRL: u64 = 256;
+/// P2PCD learning responses: `peer-to-peer-distribution-of-security-management-information`
+/// (136) on the IEEE RA's PSID list (owner CAMP; `v2xw_sec::p2pcd::P2PCD_PSID`, which
+/// documents why the binding is an inference). The ETSI stack sends no out-of-band
+/// response (its P2PCD is inline), so the value is the same on both stacks.
+pub const PSID_P2PCD: u64 = 136;
 /// WSA: `psid-wave-service-advertisement` (135).
 pub const PSID_WSA: u64 = 135;
 
@@ -107,6 +112,7 @@ pub const fn psid(msg: MsgType, etsi: bool) -> u64 {
         (MsgType::Crl, _) => PSID_CRL,
         (MsgType::Mbr, false) => PSID_MISBEHAVIOUR_REPORT,
         (MsgType::Mbr, true) => ITS_AID_MISBEHAVIOUR_REPORT,
+        (MsgType::P2pcd, _) => PSID_P2PCD,
     }
 }
 
@@ -161,6 +167,7 @@ mod tests {
         assert_eq!(psid(MsgType::Cpm, true), 639);
         assert_eq!(psid(MsgType::Mbr, false), 38);
         assert_eq!(psid(MsgType::Mbr, true), 1_618);
+        assert_eq!(psid(MsgType::P2pcd, false), 136);
         assert_eq!(btp_port(MsgType::Cpm), Some(2009));
         assert_eq!(btp_port(MsgType::Vam), Some(2018));
         assert_eq!(

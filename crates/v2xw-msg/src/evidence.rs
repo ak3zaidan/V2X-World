@@ -245,6 +245,14 @@ pub const EVIDENCE: &[MessageEvidence] = &[
         codec: None,
         evidence: "ETSI TS 103 759 misbehaviour report; a later phase.",
     },
+    MessageEvidence {
+        ty: MsgType::P2pcd,
+        exactness: ByteExactness::NotEncoded,
+        codec: None,
+        evidence: "IEEE 1609.2 Ieee1609dot2Peer2PeerPDU; encoded by v2xw-sec::p2pcd over the \
+                   generated COER bindings and checked byte for byte against asn1tools \
+                   (tests/vectors/p2pcd_response.json), not through a MessageCodec here.",
+    },
 ];
 
 /// The evidence for one message type.

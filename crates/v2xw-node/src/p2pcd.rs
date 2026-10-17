@@ -114,6 +114,15 @@ pub struct P2pcdStats {
     pub learn_refused: u64,
     /// Certificates in responses whose issuer is still unknown (kept out of the cache).
     pub learn_unanchored: u64,
+    /// Frames heard on the P2PCD PSID that did not decode as a learning response (a
+    /// garbled or hostile PDU): refused before anything was learned or counted as
+    /// observed.
+    pub responses_malformed: u64,
+    /// Σ, over the responses sent, of how long after its back-off expired each one left
+    /// (ns): zero when the host wakes the entity at the back-off instant, the step's
+    /// quantisation when it does not. A response that leaves late lets more peers'
+    /// responses be observed first and moves the threshold suppression.
+    pub response_lag_ns: u64,
 }
 
 impl P2pcdStats {
@@ -161,6 +170,10 @@ impl P2pcdStats {
             learn_known: self.learn_known.saturating_sub(prev.learn_known),
             learn_refused: self.learn_refused.saturating_sub(prev.learn_refused),
             learn_unanchored: self.learn_unanchored.saturating_sub(prev.learn_unanchored),
+            responses_malformed: self
+                .responses_malformed
+                .saturating_sub(prev.responses_malformed),
+            response_lag_ns: self.response_lag_ns.saturating_sub(prev.response_lag_ns),
         };
         (d != P2pcdStats::default()).then_some(d)
     }
@@ -472,6 +485,7 @@ impl P2pcd {
             let a = self.active.remove(&k).expect("listed");
             if a.observed < self.params.response_count_threshold {
                 self.stats.responses_sent += 1;
+                self.stats.response_lag_ns += now.saturating_sub(a.fire_at);
                 out.push(k);
             } else {
                 self.stats.responses_suppressed_threshold += 1;

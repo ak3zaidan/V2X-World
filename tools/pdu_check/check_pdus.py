@@ -340,11 +340,15 @@ def check(kind, data, pki, m, state):
         tbs = req['tbsCert']
         need(tbs['cracaId'] == b'\x00\x00\x00' and tbs['crlSeries'] == 0, 'cracaId 000000 / crlSeries 0')
         need(tbs['id'][0] == 'linkageData', 'id is linkageData')
+        # 1609.2.1-2022 Ieee1609Dot2Dot1AcaRaInterface, RaAcaCertRequest @param tbsCert:
+        # "If type is implicit, the request is valid only if tbsCert.verifyKeyIndicator is
+        # a reconstructionValue" (WP-P2: one builder for every certificate type).
+        need(tbs['verifyKeyIndicator'][0] == 'reconstructionValue', 'B_ij as reconstructionValue')
         (l1, p1), (l2, p2) = (open_plv(req['linkageInfo'][k], m) for k in ('encPlv1', 'encPlv2'))
         need(l1 != l2, 'PLVs from two LAs')
         lv = bytes(a ^ b for a, b in zip(p1, p2))
         state.setdefault('aca_req', {})[id8(data)] = {'lv': lv, 'i': tbs['id'][1]['iCert'],
-                                                      'B': tbs['verifyKeyIndicator'][1][1],
+                                                      'B': tbs['verifyKeyIndicator'][1],
                                                       'J': req['certEncKey']['publicKey'][1]}
     elif kind == 'AcaRaCertResponseSpdu':
         payload, signer = open_signed(data, pki)
