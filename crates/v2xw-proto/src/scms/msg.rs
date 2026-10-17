@@ -91,8 +91,13 @@ pub enum Refusal {
     Blocklisted,
     /// The enrolment certificate the request was signed with has expired.
     EnrolmentExpired,
-    /// The request was not signed by an enrolment certificate the ECA issued.
+    /// The request was not signed by an enrolment certificate the ECA issued, or one the
+    /// EE operator registered with the RA.
     UnknownEnrolment,
+    /// The ECA refused the request under the US enrolment profile ([SMP] §6.3.1: region,
+    /// series, name, permissions, validity, key reuse, request age; WP-B2). The precise
+    /// rule is recorded in the run's `pdu_rejections`.
+    ProfileViolation,
 }
 
 impl Refusal {
@@ -103,6 +108,7 @@ impl Refusal {
             Refusal::Blocklisted => "blocklisted",
             Refusal::EnrolmentExpired => "enrolment-expired",
             Refusal::UnknownEnrolment => "unknown-enrolment",
+            Refusal::ProfileViolation => "profile-violation",
         }
     }
 }
@@ -481,19 +487,63 @@ pub enum ScmsMsg {
         /// Why.
         reason: Refusal,
     },
-    /// Device → ECA: a successor enrolment certificate, signed with the current one.
+    /// Device → RA: a successor enrolment certificate
+    /// (`EeRaSuccessorEnrollmentCertRequestSpdu`: an `EeEcaCertRequestSpdu` self-signed by
+    /// the new key, signed by the current enrolment certificate, encrypted to the RA).
     SuccessorEnrolRequest {
         /// The device.
         device: NodeId,
         /// The enrolment certificate it signs with.
         current: EnrolmentCert,
+        /// The real SPDU; `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
     },
-    /// ECA → device: the successor.
+    /// RA → ECA: the inner `EeEcaCertRequestSpdu`, after the RA verified the current
+    /// enrolment certificate's signature ([SM-REENR]: the RA re-signs and forwards).
+    SuccessorEnrolForward {
+        /// The device.
+        device: NodeId,
+        /// The enrolment certificate the request was signed with.
+        current: EnrolmentCert,
+        /// The inner `EeEcaCertRequestSpdu`; `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+        /// The real certificate that signed the outer request, as the RA verified it: the
+        /// one the successor must follow without overlap.
+        current_cert: Option<Box<v2xw_msg::sec_types::ieee1609_dot2::Certificate>>,
+    },
+    /// RA → device: `RaEeEnrollmentCertAckSpdu`, the request hash and when to download.
+    SuccessorEnrolAck {
+        /// The device.
+        device: NodeId,
+        /// `nextDlTime`.
+        next_dl: v2xw_core::time::SimTime,
+        /// The real SPDU; `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+    },
+    /// Device → RA: the successor download (`EeRaDownloadRequestSpdu`, file
+    /// `<requestHash>.zip`, signed by the current enrolment certificate).
+    SuccessorEnrolDownload {
+        /// The device.
+        device: NodeId,
+        /// The real SPDU; `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+    },
+    /// ECA → RA, then RA → device on download: the successor (`EcaEeCertResponseSpdu`).
     SuccessorEnrolResponse {
         /// The device.
         device: NodeId,
         /// The new certificate.
         cert: EnrolmentCert,
+        /// The real SPDU; `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+    },
+    /// DCM (for the EE operator) → RA: register this enrolment certificate; the RA serves
+    /// only registered enrolment certificates ([SMP] §2.1.8).
+    EnrolmentRegistration {
+        /// The device.
+        device: NodeId,
+        /// The certificate's HashedId8; `None` when the layer is off.
+        cert_id8: Option<[u8; 8]>,
     },
     /// ECA → device: the successor was refused.
     EnrolRefused {
@@ -983,6 +1033,15 @@ impl ScmsSizes {
         )
     }
 
+    /// DCM → RA: the enrolment certificate to register, by digest.
+    pub const fn registration(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + HASHED_ID8_BYTES,
+            "envelope(digest) + enrolment certificate hash8",
+            DERIVATION,
+        )
+    }
+
     /// RA → ECA: the blocklisted enrolment certificate's digest.
     pub const fn blocklist_notice(&self) -> WireSize {
         WireSize::derived(
@@ -1007,7 +1066,16 @@ impl ScmsSizes {
             ("provisioning-refused", self.refusal()),
             ("provisioning-refused-proxied", self.refusal()),
             ("successor-enrol-request", self.successor_request()),
+            ("successor-enrol-forward", self.successor_request()),
+            ("successor-enrol-ack", self.provisioning_ack()),
+            (
+                "successor-enrol-download-request",
+                self.batch_download_request(),
+            ),
+            ("successor-enrol-certified", self.enrol_response()),
             ("successor-enrol-response", self.enrol_response()),
+            ("enrol-response-proxied", self.enrol_response()),
+            ("enrolment-registration", self.registration()),
             ("enrol-refused", self.refusal()),
             ("blocklist-notice", self.blocklist_notice()),
             ("policy-update", self.policy_file()),

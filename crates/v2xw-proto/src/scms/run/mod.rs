@@ -95,8 +95,28 @@ pub struct DeviceState {
     /// The HashedId8 of its last `EeRaCertRequestSpdu` as sent: the 1609.2.1
     /// `requestHash` its batch and `.info` file names are formed from.
     pub request_hash8: Option<[u8; 8]>,
+    /// Its enrolment certificate's `id.name`, unique at the ECA ([SMP] §6.3.1).
+    pub name: Option<String>,
+    /// The RA's URL, which the bootstrap installs with the RA certificate (03 §5).
+    pub ra_url: Option<String>,
+    /// The successor enrolment certificate, held until the current one ends: the
+    /// successor's validity starts when the current certificate's ends ([SM-REENR]).
+    pub successor: Option<EnrolmentCert>,
+    /// The successor's real credential (WP-B2), promoted with [`Self::successor`].
+    pub successor_credential: Option<crate::scms::pdu::EnrolmentCredential>,
+    /// Download polls the RA answered "not ready" for the successor in flight.
+    pub successor_polls: u32,
+    /// The canonical private key, made in the secure environment at manufacture
+    /// (direct authorisation, [SMP] §2.1.7); it signs the first enrolment request.
+    canonical: Option<p256::Scalar>,
     /// The ECQV request key `k_U` and the bytes of the enrolment request in flight.
     enrol_request: Option<(p256::Scalar, crate::scms::pdu::Pdu)>,
+    /// The successor request in flight: its new key `k_U`, the inner request as sent (the
+    /// ECA's `requestHash` names it), and the outer SPDU's HashedId8 (the RA's).
+    successor_request: Option<(p256::Scalar, crate::scms::pdu::Pdu, [u8; 8])>,
+    /// The flow run of the successor request in flight: an ack or a download timer of an
+    /// earlier, superseded request is ignored.
+    successor_run: Option<FlowRun>,
     /// Whether an enrolment request is in flight.
     enrolling: bool,
     /// A provisioning request held until enrolment completes.
@@ -135,11 +155,42 @@ impl DeviceState {
             crls_rejected: 0,
             enrolment_credential: None,
             request_hash8: None,
+            name: None,
+            ra_url: None,
+            successor: None,
+            successor_credential: None,
+            successor_polls: 0,
+            canonical: None,
             enrol_request: None,
+            successor_request: None,
+            successor_run: None,
             enrolling: false,
             deferred: None,
             provisioning: None,
         }
+    }
+
+    /// The enrolment certificate in force at `at`. A successor whose validity has begun
+    /// replaces the current certificate here, with its credential: there is no overlap,
+    /// so the switch is exactly at the current certificate's end.
+    pub fn roll_enrolment(&mut self, at: SimTime) -> Option<EnrolmentCert> {
+        if let Some(next) = self.successor
+            && at >= next.valid_from
+        {
+            self.enrolment = Some(next);
+            self.successor = None;
+            if let Some(c) = self.successor_credential.take() {
+                self.enrolment_credential = Some(c);
+            }
+        }
+        self.enrolment
+    }
+
+    /// The latest-ending enrolment certificate the device holds: the pending successor if
+    /// there is one, else the current certificate.
+    #[must_use]
+    pub fn latest_enrolment(&self) -> Option<EnrolmentCert> {
+        self.successor.or(self.enrolment)
     }
 
     /// The policy the device follows: its installed Local Policy File, if any.
@@ -222,6 +273,23 @@ pub struct RaState {
     pub refused: u32,
     /// Requests refused because the enrolment certificate had expired or was unknown.
     pub refused_enrolment: u32,
+    /// Enrolment certificates the EE operator registered, by device: the RA serves only
+    /// these ([SMP] §2.1.8). The HashedId8s are empty when the PDU layer is off. A
+    /// successor is registered when the ECA's answer passes through the RA, linking old
+    /// and new ([SM-REENR]).
+    pub registered: BTreeMap<NodeId, BTreeSet<[u8; 8]>>,
+    /// Requests refused because their enrolment certificate was not registered.
+    pub unregistered_refused: u32,
+    /// Successor requests the RA verified and forwarded to the ECA.
+    pub successor_requests: u32,
+    /// Successor requests a newer request from the same device invalidated before
+    /// download ([SM-REENR]).
+    pub successors_superseded: u32,
+    /// Successor certificates issued for a request that was then superseded: blocklisted,
+    /// so a second copy of the device's identity cannot be used ([SM-REENR]).
+    pub successors_blocklisted: BTreeSet<[u8; 8]>,
+    /// The successor in flight per device.
+    successors: BTreeMap<NodeId, SuccessorRecord>,
     /// Requests the RA clipped to its policy (more certificates per period, or more
     /// periods ahead, than the Local Policy File allows).
     pub clipped: u32,
@@ -243,7 +311,27 @@ pub struct RaState {
     report_shuffle_generation: u64,
 }
 
+/// One device's successor request at the RA.
+#[derive(Debug, Clone)]
+struct SuccessorRecord {
+    /// The outer request SPDU's HashedId8 (the download file name).
+    request_hash8: [u8; 8],
+    /// The inner `EeEcaCertRequestSpdu`'s HashedId8: the ECA's `requestHash`.
+    inner_hash8: Option<[u8; 8]>,
+    /// The ECA's answer, once it has arrived.
+    response: Option<(EnrolmentCert, Option<crate::scms::pdu::Pdu>)>,
+}
+
 impl RaState {
+    /// Whether `device` has a registered enrolment certificate; with `id8`, whether that
+    /// one is registered.
+    #[must_use]
+    pub fn is_registered(&self, device: NodeId, id8: Option<[u8; 8]>) -> bool {
+        self.registered
+            .get(&device)
+            .is_some_and(|s| id8.is_none_or(|h| s.contains(&h)))
+    }
+
     /// Provisioning requests waiting for their pre-linkage values or the shuffle.
     #[must_use]
     pub fn pending_jobs(&self) -> usize {
@@ -406,6 +494,18 @@ pub struct EcaState {
     pub refused: u32,
     /// Enrolment certificates the RA told it are blocklisted.
     pub blocklist: BTreeSet<NodeId>,
+    /// Canonical public keys the EE operators registered, by canonical identity (direct
+    /// authorisation, [SMP] §2.1.7).
+    pub canonical: BTreeMap<String, Point>,
+    /// Every request key it has seen (compressed SEC1): a key used before with this
+    /// operator is refused ([SMP] §6.3.1).
+    pub seen_keys: BTreeSet<[u8; 33]>,
+    /// The `id.name` of every enrolment certificate it issued, and whose it is: a name is
+    /// unique ([SMP] §6.3.1), kept only by a successor.
+    pub names: BTreeMap<String, NodeId>,
+    /// Requests refused under the US enrolment profile (the reason is in
+    /// `pdu_rejections`).
+    pub profile_refused: u32,
 }
 
 /// The Device Configuration Manager's state.
@@ -1085,7 +1185,11 @@ impl ScmsState {
             | ScmsMsg::EnrolForward { .. }
             | ScmsMsg::EnrolResponse { .. }
             | ScmsMsg::SuccessorEnrolRequest { .. }
+            | ScmsMsg::SuccessorEnrolForward { .. }
+            | ScmsMsg::SuccessorEnrolAck { .. }
+            | ScmsMsg::SuccessorEnrolDownload { .. }
             | ScmsMsg::SuccessorEnrolResponse { .. }
+            | ScmsMsg::EnrolmentRegistration { .. }
             | ScmsMsg::EnrolRefused { .. } => self.handle_enrol(d, out),
             ScmsMsg::ProvisioningRequest(..)
             | ScmsMsg::ProvisioningAck { .. }

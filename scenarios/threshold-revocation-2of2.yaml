@@ -125,6 +125,9 @@ security:
       download_poll_interval_s: 2
       enrolment_lifetime_s: 600
       reenrol_lead_s: 120
+      # The successor is fetched from the RA after nextDlTime (download-minWait, 5 min by
+      # default), compressed with the lifetime.
+      reenrol_download_delay_s: 2
       report_shuffle_window_s: 30
       crl_cadence_s: 30
       crl_fetch_interval_s: 30

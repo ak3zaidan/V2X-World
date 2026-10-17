@@ -20,6 +20,26 @@ SignerSingleCert under the (reconstructed) enrolment key; for encrypted data: on
 certRecipInfo addressed to the RA certificate, ECIES (P1 = SHA-256(canonical RA cert)) and
 AES-128-CCM decrypt; the expected inner PDU choice; and the RA ack's requestHash equals
 the low 8 bytes of SHA-256 over the request SPDU as sent. Prints one verdict line.
+
+WP-B2 additions (written by the WP-B2 agent, same independence caveat; the rules are
+re-derived from 03 §3.2–§5 and [SMP] §6.3.1, not from the Rust):
+
+    V2XW_PDU_OUT=<dir> cargo test -p v2xw-proto --test enrolment a_successor_requested
+
+* EeEcaCertRequestSpdu: with canonicalId, verified under the registered canonical key
+  (manifest "canonical"), and canonicalId must equal SHA-256 of the COER
+  PublicVerificationKey as upper-case hex (the assumed text form); the tbsCert is the US
+  enrolment profile (id.name, cracaId 000000, crlSeries 4, identifiedRegion countryOnly
+  840/124/484, no appPermissions / certIssuePermissions, one certRequestPermissions group
+  with subjectPermissions all).
+* EcaEeCertResponseSpdu: requestHash names a request the ECA received; the certificate is
+  the profile and exactly the validity, name and region requested.
+* EeRaSuccessorEnrollmentCertRequestSpdu: decrypts to the RA; the outer signer is an
+  enrolment certificate the ECA issued; the inner EeEcaCertRequestSpdu is self-signed by a
+  new key, keeps name and region, and starts exactly when the signer's validity ends.
+* RaEeEnrollmentCertAckSpdu: RA-signed raEeCertInfo for a successor request as sent.
+* EeRaDownloadRequestSpdu: decrypts to the RA, signed by an enrolment certificate, and
+  names `<requestHash, 16 upper-case hex>.zip` of a successor request.
 """
 
 import hashlib
@@ -107,27 +127,6 @@ def scms_pdu(b):
     return p['content']
 
 
-def open_cert_request(data, pki):
-    d = decode_canonical('Ieee1609Dot2Data', data)
-    need(d['content'][0] == 'signedCertificateRequest', 'expected signedCertificateRequest')
-    scr = decode_canonical('SignedCertificateRequest', d['content'][1])
-    tbs = coer.encode('ScmsPdu', scr['tbsRequest'])
-    scms_pdu(tbs)
-    kind, req = scr['tbsRequest']['content'][1]
-    if scr['signer'][0] == 'self':
-        vki = req['tbsCert']['verifyKeyIndicator']
-        need(vki[0] == 'verificationKey', 'self-signed request carries a verificationKey')
-        C = certs.CURVE_OF_KEY[vki[1][0]]
-        Q = certs.point_from(C, vki[1][1])
-        verify_sig(C, Q, tbs, b'', scr['signature'])
-        return scr['tbsRequest']['content'], None
-    need(scr['signer'][0] == 'certificate' and len(scr['signer'][1]) == 1, 'SignerSingleCert')
-    signer = scr['signer'][1][0]
-    C, Q = pki.key(signer)
-    verify_sig(C, Q, tbs, certs.encode_canonical(signer), scr['signature'])
-    return scr['tbsRequest']['content'], signer
-
-
 def decrypt_to(data, rcert, r):
     d = decode_canonical('Ieee1609Dot2Data', data)
     need(d['content'][0] == 'encryptedData', 'expected encryptedData')
@@ -149,30 +148,107 @@ def decrypt_to(data, rcert, r):
     return plain
 
 
+def open_cert_request(data, pki, canonical=None):
+    """(content, signer cert or None, canonical id or None). A self-signed request with
+    canonicalId is verified under the registered canonical key (WP-B2), else under the
+    requested verificationKey."""
+    d = decode_canonical('Ieee1609Dot2Data', data)
+    need(d['content'][0] == 'signedCertificateRequest', 'expected signedCertificateRequest')
+    scr = decode_canonical('SignedCertificateRequest', d['content'][1])
+    tbs = coer.encode('ScmsPdu', scr['tbsRequest'])
+    scms_pdu(tbs)
+    kind, req = scr['tbsRequest']['content'][1]
+    if scr['signer'][0] == 'self':
+        cid = req.get('canonicalId')
+        if cid is not None:
+            need(canonical is not None and cid in canonical, 'canonicalId registered')
+            raw = bytes.fromhex(canonical[cid])
+            C = ec.P256
+            Q = ec.decompress(C, raw[0] & 1, ec.os2i(raw[1:]))
+            # The canonical identity is SHA-256 of the COER PublicVerificationKey (assumed
+            # text form: 64 upper-case hex digits).
+            pvk = coer.encode('PublicVerificationKey', ('ecdsaNistP256', certs.point_value(C, Q)))
+            need(hashlib.sha256(pvk).hexdigest().upper() == cid, 'canonicalId is HashedId32 of the key')
+        else:
+            vki = req['tbsCert']['verifyKeyIndicator']
+            need(vki[0] == 'verificationKey', 'self-signed request carries a verificationKey')
+            C = certs.CURVE_OF_KEY[vki[1][0]]
+            Q = certs.point_from(C, vki[1][1])
+        verify_sig(C, Q, tbs, b'', scr['signature'])
+        return scr['tbsRequest']['content'], None, cid
+    need(scr['signer'][0] == 'certificate' and len(scr['signer'][1]) == 1, 'SignerSingleCert')
+    signer = scr['signer'][1][0]
+    C, Q = pki.key(signer)
+    verify_sig(C, Q, tbs, certs.encode_canonical(signer), scr['signature'])
+    return scr['tbsRequest']['content'], signer, None
+
+
+YEAR_S = 31556952
+UNIT_S = {'microseconds': 1e-6, 'milliseconds': 1e-3, 'seconds': 1, 'minutes': 60, 'hours': 3600,
+          'sixtyHours': 216000, 'years': YEAR_S}
+
+
+def validity(tbs):
+    v = tbs['validityPeriod']
+    unit, n = v['duration']
+    return v['start'], v['start'] + int(n * UNIT_S[unit])
+
+
+def check_us_enrolment_tbs(t):
+    """[SMP] §6.3.1 / 03 §3.3, re-derived from the profile text, not from the Rust."""
+    need(t['id'][0] == 'name' and len(t['id'][1]) > 0, 'id.name present')
+    need(t['cracaId'] == b'\x00\x00\x00', 'cracaId 000000')
+    need(t['crlSeries'] == 4, 'crlSeries 4')
+    reg = t.get('region')
+    need(reg is not None and reg[0] == 'identifiedRegion' and len(reg[1]) > 0, 'identifiedRegion')
+    for r in reg[1]:
+        need(r[0] == 'countryOnly' and r[1] in (840, 124, 484), f'region {r} is USA/Canada/Mexico')
+    need('appPermissions' not in t, 'appPermissions absent')
+    need('certIssuePermissions' not in t, 'certIssuePermissions absent')
+    crp = t.get('certRequestPermissions')
+    need(crp is not None and len(crp) == 1 and crp[0]['subjectPermissions'][0] == 'all',
+         'certRequestPermissions: one group, subjectPermissions all')
+
+
+def hash8(b):
+    return hashlib.sha256(b).digest()[-8:]
+
+
 def check(kind, data, pki, m, state):
+    canonical = m.get('canonical', {})
+    issued = state.setdefault('enrolment_certs', {})   # HashedId8 -> certificate
+    requests = state.setdefault('enrol_requests', {})  # HashedId8 -> (tbsCert, canonical?)
     if kind == 'EeEcaCertRequestSpdu':
-        (iface, (c, req)), signer = open_cert_request(data, pki)
+        (iface, (c, req)), signer, cid = open_cert_request(data, pki, canonical)
         need((iface, c) == ('eca-ee', 'eeEcaCertRequest') and signer is None, 'self-signed eeEcaCertRequest')
         need(req['type'] == 'implicit', 'implicit enrolment requested')
+        check_us_enrolment_tbs(req['tbsCert'])
+        requests[hash8(data)] = (req['tbsCert'], cid)
         state['enrol_req'] = data
     elif kind == 'EcaEeCertResponseSpdu':
         payload, signer = open_signed(data, pki)
         need(certs.hashed_id8(signer) == certs.hashed_id8(pki.by_name['eca.provider-a']), 'signed by the ECA')
         iface, (c, resp) = scms_pdu(payload)
         need((iface, c) == ('eca-ee', 'ecaEeCertResponse'), 'ecaEeCertResponse')
-        need(resp['requestHash'] == hashlib.sha256(state['enrol_req']).digest()[-8:], 'requestHash of the request')
+        need(resp['requestHash'] in requests, 'requestHash of a request the ECA received')
         need(len(resp.get('privateKeyInfo', b'')) == 32, 'privateKeyInfo')
         enrol = resp['certificate']
         need(enrol['type'] == 'implicit', 'implicit enrolment certificate')
         pki.key(enrol)  # ECQV reconstruction under the ECA
+        t = enrol['toBeSigned']
+        check_us_enrolment_tbs(t)
+        rt, _ = requests[resp['requestHash']]
+        need(validity(t) == validity(rt) and t['id'] == rt['id'] and t.get('region') == rt.get('region'),
+             'issued as requested')
+        issued[certs.hashed_id8(enrol)] = enrol
         state['enrol_cert'] = enrol
     elif kind == 'EeRaCertRequestSpdu':
         ra = pki.by_name[m['ra_cert']]
         plain = decrypt_to(data, ra, ec.os2i(bytes.fromhex(m['ra_enc_private'])))
-        (iface, (c, req)), signer = open_cert_request(plain, pki)
+        (iface, (c, req)), signer, _ = open_cert_request(plain, pki)
         need((iface, c) == ('ee-ra', 'eeRaCertRequest'), 'eeRaCertRequest')
-        need(signer is not None and coer.encode('Certificate', signer) == coer.encode('Certificate', state['enrol_cert']),
-             'signed by the enrolment certificate the ECA issued')
+        need(signer is not None and certs.hashed_id8(signer) in issued,
+             'signed by an enrolment certificate the ECA issued')
         need(req['additionalParams'][0] == 'original', 'original butterfly')
         need(req['tbsCert']['cracaId'] == b'\x00\x00\x00' and req['tbsCert']['crlSeries'] == 0, 'cracaId/crlSeries')
         state.setdefault('requests', []).append(data)
@@ -181,8 +257,43 @@ def check(kind, data, pki, m, state):
         need(certs.hashed_id8(signer) == certs.hashed_id8(pki.by_name['ra.provider-a']), 'signed by the RA')
         iface, (c, ack) = scms_pdu(payload)
         need((iface, c) == ('ee-ra', 'raEeCertAck'), 'raEeCertAck')
-        need(ack['requestHash'] == hashlib.sha256(state['requests'][0]).digest()[-8:], 'requestHash of the request as sent')
+        need(ack['requestHash'] in [hash8(r) for r in state['requests']], 'requestHash of a request as sent')
         need('firstI' in ack, 'firstI present for butterfly')
+    elif kind == 'EeRaSuccessorEnrollmentCertRequestSpdu':
+        ra = pki.by_name[m['ra_cert']]
+        plain = decrypt_to(data, ra, ec.os2i(bytes.fromhex(m['ra_enc_private'])))
+        (iface, (c, inner)), signer, _ = open_cert_request(plain, pki)
+        need((iface, c) == ('ee-ra', 'eeRaSuccessorEnrollmentCertRequest'), 'eeRaSuccessorEnrollmentCertRequest')
+        need(signer is not None and certs.hashed_id8(signer) in issued,
+             'outer signature by the current enrolment certificate')
+        inner_bytes = coer.encode('Ieee1609Dot2Data', inner)
+        (i2, (c2, req)), s2, cid = open_cert_request(inner_bytes, pki, canonical)
+        need((i2, c2) == ('eca-ee', 'eeEcaCertRequest') and s2 is None and cid is None,
+             'inner request self-signed by the new key')
+        t, cur = req['tbsCert'], signer['toBeSigned']
+        check_us_enrolment_tbs(t)
+        need(validity(t)[0] == validity(cur)[1], 'successor starts when the current certificate ends')
+        need(t['id'] == cur['id'] and t.get('region') == cur.get('region'), 'same name and region')
+        need(t['verifyKeyIndicator'][1] != cur['verifyKeyIndicator'][1], 'a new key')
+        requests[hash8(inner_bytes)] = (t, None)
+        state.setdefault('successors', []).append(data)
+    elif kind == 'RaEeEnrollmentCertAckSpdu':
+        payload, signer = open_signed(data, pki)
+        need(certs.hashed_id8(signer) == certs.hashed_id8(pki.by_name['ra.provider-a']), 'signed by the RA')
+        iface, (c, info) = scms_pdu(payload)
+        need((iface, c) == ('ee-ra', 'raEeCertInfo') and 'acpcTreeId' not in info, 'raEeCertInfo, no ACPC')
+        need(info['requestHash'] in [hash8(r) for r in state.get('successors', [])],
+             'requestHash of a successor request as sent')
+        need(info['nextDlTime'] > info['generationTime'], 'nextDlTime after generation')
+    elif kind == 'EeRaDownloadRequestSpdu':
+        ra = pki.by_name[m['ra_cert']]
+        plain = decrypt_to(data, ra, ec.os2i(bytes.fromhex(m['ra_enc_private'])))
+        payload, signer = open_signed(plain, pki)
+        need(certs.hashed_id8(signer) in issued, 'signed by an enrolment certificate')
+        iface, (c, dl) = scms_pdu(payload)
+        need((iface, c) == ('ee-ra', 'eeRaDownloadRequest'), 'eeRaDownloadRequest')
+        names = [hash8(r).hex().upper() + '.zip' for r in state.get('successors', [])]
+        need(dl['filename'] in names, f'file {dl["filename"]} is a successor request hash')
     else:
         raise Red(f'unknown kind {kind}')
 

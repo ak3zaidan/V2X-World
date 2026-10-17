@@ -630,6 +630,7 @@ impl LifecycleParams {
                 "download_poll_interval_s" => p.scms.download_poll_interval = secs(v.max(0.1)),
                 "enrolment_lifetime_s" => p.scms.enrolment_lifetime = secs(v.max(1.0)),
                 "reenrol_lead_s" => p.scms.reenrol_lead = secs(v),
+                "reenrol_download_delay_s" => p.scms.reenrol_download_delay = secs(v),
                 "max_periods_ahead" => {
                     p.scms.max_periods_ahead = (v.round() as u32).max(1);
                 }
@@ -684,7 +685,7 @@ impl LifecycleParams {
 }
 
 /// The lifecycle keys `security.protocol.params` accepts.
-pub const LIFECYCLE_KEYS: [&str; 18] = [
+pub const LIFECYCLE_KEYS: [&str; 19] = [
     "i_period_s",
     "cert_lifetime_s",
     "certs_per_period",
@@ -701,6 +702,7 @@ pub const LIFECYCLE_KEYS: [&str; 18] = [
     "download_poll_interval_s",
     "enrolment_lifetime_s",
     "reenrol_lead_s",
+    "reenrol_download_delay_s",
     "max_periods_ahead",
     "etsi_butterfly",
 ];
@@ -2094,13 +2096,28 @@ impl Phase2 {
                 valid_until: until,
             },
         );
+        // A vehicle already inside its renewal lead re-enrolled before the run (WP-B2:
+        // the request goes out `reenrol_lead` before expiry): it holds the successor,
+        // which starts when the current certificate ends, with no overlap.
+        let mut enrolment_until = until;
+        if remaining <= self.params.scms.reenrol_lead.as_nanos() {
+            enrolment_until = until.saturating_add(lifetime);
+            self.scms.set_successor_enrolment(
+                device,
+                v2xw_proto::scms::msg::EnrolmentCert {
+                    generation: 1,
+                    valid_from: until,
+                    valid_until: enrolment_until,
+                },
+            );
+        }
         self.nodes.insert(
             node,
             NodeSec {
                 access: Some(kind),
                 last_period: last,
                 next_crl_fetch: now,
-                enrolment_until: until,
+                enrolment_until,
                 ..NodeSec::default()
             },
         );
@@ -2857,7 +2874,7 @@ impl Phase2 {
                         .state
                         .devices
                         .get(&device)
-                        .and_then(|d| d.enrolment)
+                        .and_then(|d| d.latest_enrolment())
                         .map_or(n.enrolment_until, |e| e.valid_until);
                     renewed.push((*node, Some(until)));
                 } else if self.scms.reenrol_refusal_of(device).is_some() {
@@ -2879,7 +2896,7 @@ impl Phase2 {
                     // The certificate it signed with had run out: renew before asking
                     // again (the ECA refuses an expired one, which is then final).
                     Refusal::EnrolmentExpired => n.enrolment_until = 0,
-                    Refusal::UnknownEnrolment => n.blocked = true,
+                    Refusal::UnknownEnrolment | Refusal::ProfileViolation => n.blocked = true,
                 }
             }
         }
