@@ -62,9 +62,8 @@ impl ScmsRun {
         let g = &st.gov;
         let sys = "scms";
         let key = |role: &str| {
-            g.certs
-                .get(role)
-                .map(|c| hex_encode(&c.digest()))
+            g.cert_digest(role)
+                .map(|d| hex_encode(&d))
                 .unwrap_or_default()
         };
         let mut out = Vec::new();

@@ -40,10 +40,14 @@ fn the_dcm_bootstrap_installs_the_trust_list_chain_and_policy() {
     let d = &run.state.devices[&DEVICE_A];
     assert_eq!(
         d.trust.ctl_sequence,
-        Some(1),
-        "the electors' list is installed"
+        Some(0),
+        "the electors' genesis list (sequence 0, as the published series began) is installed"
     );
-    assert_eq!(d.trust.anchors.len(), 3, "three elector anchors");
+    assert_eq!(
+        d.trust.anchors.len(),
+        5,
+        "five elector anchors (Profile §2.1.15)"
+    );
     for role in ["root", "ica", "pca", "ra", "eca", "crlg", "ma", "pg"] {
         assert!(
             d.trust.trusts_role(role),
