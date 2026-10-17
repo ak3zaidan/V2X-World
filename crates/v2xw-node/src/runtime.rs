@@ -432,6 +432,8 @@ pub struct ObuRuntime {
     /// instant (node clock) each became due, waiting for the host to take them
     /// ([`ObuRuntime::take_p2pcd_responses`]).
     p2pcd_outbox: Vec<(SimTime, Vec<u8>)>,
+    /// The P2PCD counters as of the last `node.p2pcd` record.
+    p2pcd_seen: crate::p2pcd::P2pcdStats,
     node: NodeId,
     config: NodeConfig,
     service: ProfileServiceModel,
@@ -549,6 +551,7 @@ impl ObuRuntime {
             spdu_parse_failures: 0,
             spdu_signature_failures: 0,
             p2pcd_outbox: Vec::new(),
+            p2pcd_seen: crate::p2pcd::P2pcdStats::default(),
             node,
             cpu: ServerBank::new("cpu", cpu_servers, at),
             hsm: ServerBank::new("hsm", hsm_servers, at),
@@ -664,6 +667,20 @@ impl ObuRuntime {
     fn p2pcd_send_due(&mut self, ctx: &mut dyn NodeCtx, believed: SimTime) {
         for pdu in self.security.p2pcd_due(ctx.now()) {
             self.p2pcd_outbox.push((believed, pdu));
+        }
+    }
+
+    /// Records what P2PCD did since the last record, on `node.p2pcd`.
+    fn p2pcd_record(&mut self, ctx: &mut dyn NodeCtx, believed: SimTime) {
+        let p = self.security.p2pcd();
+        if let Some(delta) = p.stats.since(&self.p2pcd_seen) {
+            self.p2pcd_seen = p.stats.clone();
+            ctx.emit(crate::p2pcd::P2pcdRecord {
+                t: believed,
+                node: self.node,
+                flavor: p.flavor().as_str(),
+                delta,
+            });
         }
     }
 
@@ -1044,6 +1061,7 @@ impl ObuRuntime {
             );
         }
 
+        self.p2pcd_record(ctx, believed);
         if self.window.length(now) >= self.config.telemetry_period {
             out.telemetry = Some(self.close_window(ctx, now));
         }
@@ -1075,6 +1093,7 @@ impl ObuRuntime {
         }
         self.receive(ctx, believed, inbox, &mut out);
         self.p2pcd_send_due(ctx, believed);
+        self.p2pcd_record(ctx, believed);
         out.drops = self.drops.take_step();
         out
     }

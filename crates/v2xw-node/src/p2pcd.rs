@@ -116,6 +116,76 @@ pub struct P2pcdStats {
     pub learn_unanchored: u64,
 }
 
+impl P2pcdStats {
+    /// What happened since `prev` (counter by counter), or `None` when nothing did.
+    pub fn since(&self, prev: &P2pcdStats) -> Option<P2pcdStats> {
+        let d = P2pcdStats {
+            triggers: self.triggers.saturating_sub(prev.triggers),
+            requests_suppressed_active: self
+                .requests_suppressed_active
+                .saturating_sub(prev.requests_suppressed_active),
+            requests_suppressed_observed: self
+                .requests_suppressed_observed
+                .saturating_sub(prev.requests_suppressed_observed),
+            requests_sent: self.requests_sent.saturating_sub(prev.requests_sent),
+            inline_requests_sent: self
+                .inline_requests_sent
+                .saturating_sub(prev.inline_requests_sent),
+            inline_entries_sent: self
+                .inline_entries_sent
+                .saturating_sub(prev.inline_entries_sent),
+            requests_observed: self
+                .requests_observed
+                .saturating_sub(prev.requests_observed),
+            responses_triggered: self
+                .responses_triggered
+                .saturating_sub(prev.responses_triggered),
+            responses_suppressed_timeout: self
+                .responses_suppressed_timeout
+                .saturating_sub(prev.responses_suppressed_timeout),
+            responses_suppressed_capacity: self
+                .responses_suppressed_capacity
+                .saturating_sub(prev.responses_suppressed_capacity),
+            responses_suppressed_threshold: self
+                .responses_suppressed_threshold
+                .saturating_sub(prev.responses_suppressed_threshold),
+            responses_sent: self.responses_sent.saturating_sub(prev.responses_sent),
+            inline_cert_forced: self
+                .inline_cert_forced
+                .saturating_sub(prev.inline_cert_forced),
+            inline_ca_sent: self.inline_ca_sent.saturating_sub(prev.inline_ca_sent),
+            responses_observed: self
+                .responses_observed
+                .saturating_sub(prev.responses_observed),
+            learned: self.learned.saturating_sub(prev.learned),
+            learn_known: self.learn_known.saturating_sub(prev.learn_known),
+            learn_refused: self.learn_refused.saturating_sub(prev.learn_refused),
+            learn_unanchored: self.learn_unanchored.saturating_sub(prev.learn_unanchored),
+        };
+        (d != P2pcdStats::default()).then_some(d)
+    }
+}
+
+/// One node's P2PCD activity over one step, on `node.p2pcd` (only steps in which
+/// something happened). The counters are [`P2pcdStats`] deltas; `t` is the node's clock.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct P2pcdRecord {
+    /// When the step ended, node clock.
+    pub t: SimTime,
+    /// The node.
+    pub node: v2xw_core::ids::NodeId,
+    /// `out-of-band`, `inline` or `none`.
+    pub flavor: &'static str,
+    /// What happened in the step.
+    #[serde(flatten)]
+    pub delta: P2pcdStats,
+}
+
+impl v2xw_core::ctx::Record for P2pcdRecord {
+    const CHANNEL: &'static str = "node.p2pcd";
+    const VISIBILITY: v2xw_core::ctx::Visibility = v2xw_core::ctx::Visibility::Node;
+}
+
 /// One out-of-band response process (§8.2.4.2.2): the back-off and the responses observed
 /// since the request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

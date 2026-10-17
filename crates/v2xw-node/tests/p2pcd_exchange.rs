@@ -511,10 +511,17 @@ fn the_runtime_requests_answers_and_learns() {
     let mut to_asker = Vec::new();
     let mut to_new = Vec::new();
     let mut verified_new = None;
+    let mut recorded: Vec<serde_json::Value> = Vec::new();
     for k in 0..30u64 {
         let now = k * 100 * NS_PER_MS;
         let mut ctx = NodeRuntimeCtx::new(now, &reg);
         let a = asker.step(&mut ctx, core::mem::take(&mut to_asker), 0.0);
+        recorded.extend(
+            ctx.emitted()
+                .iter()
+                .filter(|r| r.channel == "node.p2pcd")
+                .map(|r| serde_json::from_slice(&r.json).expect("json")),
+        );
         let mut ctx = NodeRuntimeCtx::new(now, &reg);
         let b = newcomer.step(&mut ctx, core::mem::take(&mut to_new), 0.0);
         let _ = &b;
@@ -538,4 +545,9 @@ fn the_runtime_requests_answers_and_learns() {
     assert!(sb.responses_sent >= 1, "the newcomer's P2P entity answered");
     assert_eq!(sa.learned, 1, "the asker learned the new ACA");
     assert!(verified_new.is_some(), "and then verified the newcomer");
+    // Recorded on `node.p2pcd`: the request the asker sent, as a delta.
+    let sum = |f: &str| -> u64 { recorded.iter().map(|r| r[f].as_u64().unwrap_or(0)).sum() };
+    assert_eq!(sum("requests_sent"), sa.requests_sent, "{recorded:?}");
+    assert_eq!(sum("triggers"), sa.triggers);
+    assert!(recorded.iter().all(|r| r["flavor"] == "out-of-band"));
 }

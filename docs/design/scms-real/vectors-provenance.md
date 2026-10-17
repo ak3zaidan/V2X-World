@@ -190,3 +190,19 @@ response file byte for byte. The Rust acceptance test is `crates/v2xw-sec/tests/
 The response vectors fix one reading that is not yet confirmed from 1609.2.1 §9.3.4: the recipient is a
 `rekRecipInfo` with recipientId = HashedId8(COER `PublicEncryptionKey`{aes128Ccm, eciesNistP256 J}) and ECIES
 P1 = SHA-256(""). The two implementations agree on it; neither proves it.
+
+## WP-C3: the P2PCD learning-response PDU
+
+Added 2026-10-17 by the WP-C3 agent (which works on the Rust; the oracle's `scms_oracle/coer.py` was
+used read-only, not changed; 00 §4.1).
+
+| File | Vectors | Source | Source sha256 | File sha256 |
+|---|---|---|---|---|
+| `p2pcd_response.json` | 2 | asn1tools compiling `tools/oracle/asn1/ieee1609.2-2022/Ieee1609Dot2Peer2Peer.asn` (and its imports) over the certificates of `oracle/chain_explicit.json`, by `crates/v2xw-sec/tests/data/gen_p2pcd_response_vectors.py` | `58f80139861ec9003091db386503805904233f45929834a94e79131ebd9590ba` | `1ba551058247ae76ecf5c011e4f8b97fed044680f780be30c5212566f3ab0403` |
+
+`Ieee1609dot2Peer2PeerPDU { version 1, content caCerts }`, one and two certificates. The Rust check is
+`crates/v2xw-sec/tests/p2pcd_wire.rs`. The P2PCD PSID (136, `peer-to-peer-distribution-of-security-management-information`,
+owner CAMP) was read from Wireshark's transcription of the IEEE RA list, `epan/dissectors/asn1/ieee1609dot2/IEEE1609dot12.asn`
+(fetched 2026-10-17, sha256 `a8ad7385d6a28902e120e7883ebe132e1bdfb8e7462e92ce036c3d2f8457e559`); the clause 8 rules and the
+Annex C.2.1.3.1 values from IEEE 1609.2a-2017 (ETSI docbox copy, sha256
+`aae52bc1ab7101a1993c2282e157086cfefa1e44146ee93e61104c3ece19bc48`, not vendored: IEEE copyright).
