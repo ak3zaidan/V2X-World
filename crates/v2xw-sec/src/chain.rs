@@ -20,6 +20,11 @@
 //! | region inside the issuer's effective region (absent ⇒ inherited; absent at the root ⇒ worldwide) | §5.1.2.4; S1 note | `RegionNotContained`, `RegionUnsupported` |
 //! | optionally: every certificate current at `now` | §5.1.2.4a ("strongly recommended") | `Expired` |
 //!
+//! One documented profile deviation, off unless the policy asks for it:
+//! [`ChainPolicy::accept_published_ra_profile`] accepts the `{minChainLength 0,
+//! chainLengthRange 0}` group every published US RA certificate carries, and reports each
+//! finding it tolerated in [`ValidatedChain::tolerated`].
+//!
 //! The same-ACA rule for butterfly responses is [`same_aca_response`]; the SPDU-level
 //! PSID check is [`ee_permits_psid`].
 //!
@@ -112,7 +117,24 @@ pub struct ChainPolicy {
     /// When set, every certificate must be valid at this Time32 (TAI seconds since
     /// 2004-01-01).
     pub now: Option<u32>,
+    /// Accept the published US RA profile: a `certIssuePermissions` or
+    /// `certRequestPermissions` group `{minChainLength 0, chainLengthRange 0}`.
+    ///
+    /// **Documented profile deviation (WP-C2).** Every published US RA certificate
+    /// (SAESOL production in `certIssuePermissions`; Autocrypt, ISS and SAESOL test in
+    /// `certRequestPermissions`) carries `{all, minChainLength 0, chainLengthRange 0,
+    /// eeType app}` under an ICA whose `all` group is `{2, 0}`. The strict reading of
+    /// 02 §5 / §12 refuses it twice (`minChainLength ≥ 1`, and the chain-length
+    /// inequality against the issuer), yet deployed devices accept these RAs. A `{0, 0}`
+    /// group authorises no subordinate at all (`mcr + clr ≥ 1` fails for every
+    /// certificate below it), so tolerating exactly those two findings on the group's own
+    /// certificate grants nothing. The tolerated findings are returned in
+    /// [`ValidatedChain::tolerated`] so a run records every one; anything else stays fatal.
+    pub accept_published_ra_profile: bool,
 }
+
+/// The detail prefix of a finding [`ChainPolicy::accept_published_ra_profile`] tolerates.
+pub const NULL_GROUP_TAG: &str = "null group {0, 0}: ";
 
 impl ChainPolicy {
     /// A policy trusting exactly the given roots.
@@ -124,7 +146,18 @@ impl ChainPolicy {
         Ok(ChainPolicy {
             anchors: Some(anchors),
             now: None,
+            accept_published_ra_profile: false,
         })
+    }
+
+    /// The policy a deployed US device applies: the given trust anchors (HashedId32, as
+    /// a CTL lists them), currency at `now`, and the published RA profile accepted.
+    pub fn us_device(anchors: BTreeSet<[u8; 32]>, now: u32) -> Self {
+        ChainPolicy {
+            anchors: Some(anchors),
+            now: Some(now),
+            accept_published_ra_profile: true,
+        }
     }
 }
 
@@ -134,6 +167,9 @@ impl ChainPolicy {
 pub struct ValidatedChain {
     /// The verification key of each certificate.
     pub keys: Vec<CertKey>,
+    /// Findings the policy tolerated (the published RA profile), recorded rather than
+    /// dropped.
+    pub tolerated: Vec<ChainError>,
 }
 
 impl ValidatedChain {
@@ -340,10 +376,15 @@ fn well_formed(index: usize, c: &Certificate, errs: &mut Vec<ChainError>) {
         }
         for g in gs {
             if int(&g.min_chain_length) < 1 {
+                let null = group_len(g) == (0, 0);
                 errs.push(err(
                     index,
                     ChainErrorKind::ChainLength,
-                    "minChainLength below 1",
+                    if null {
+                        format!("{NULL_GROUP_TAG}minChainLength below 1")
+                    } else {
+                        "minChainLength below 1".to_string()
+                    },
                 ));
             }
             if int(&g.chain_length_range) < -1 {
@@ -403,7 +444,14 @@ fn check_permissions(
                         errs.push(err(index, EeTypeNotAllowed, format!("{what} {label}")));
                     }
                     if (!request || is_ee) && !chain_length_ok(group_len(ig), sub_len) {
-                        errs.push(err(index, ChainLength, format!("{what} {label}")));
+                        // The subordinate's own `{0, 0}` group against its issuer: the
+                        // published RA profile (see the policy flag).
+                        let tag = if group_len(g) == (0, 0) {
+                            NULL_GROUP_TAG
+                        } else {
+                            ""
+                        };
+                        errs.push(err(index, ChainLength, format!("{tag}{what} {label}")));
                     }
                 };
             if is_all(g) {
@@ -598,12 +646,22 @@ pub fn validate(
         }
     }
 
+    let tolerated = if policy.accept_published_ra_profile {
+        let (t, rest): (Vec<_>, Vec<_>) = errs
+            .into_iter()
+            .partition(|e| e.kind == ChainLength && e.detail.starts_with(NULL_GROUP_TAG));
+        errs = rest;
+        t
+    } else {
+        Vec::new()
+    };
     if errs.is_empty() {
         Ok(ValidatedChain {
             keys: keys
                 .into_iter()
                 .map(|k| k.expect("every key resolved"))
                 .collect(),
+            tolerated,
         })
     } else {
         errs.sort_by_key(|e| (e.index, e.kind));

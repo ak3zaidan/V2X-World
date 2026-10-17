@@ -111,6 +111,8 @@ fn five_hundred_oracle_chains_get_the_oracle_verdict() {
         let policy = ChainPolicy {
             anchors: Some(anchors),
             now: None,
+            // The oracle applies the strict 02 §12 rules.
+            accept_published_ra_profile: false,
         };
 
         // 1. The verdict.

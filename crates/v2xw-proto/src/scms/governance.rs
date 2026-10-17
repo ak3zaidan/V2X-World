@@ -1898,8 +1898,8 @@ pub struct DeviceTrust {
     pub verifications: u32,
     /// Chain certificates discarded because their root left the CTL.
     pub purged: u32,
-    /// Chain-rule findings tolerated as the published-RA conflict
-    /// ([`request_length_conflict`]).
+    /// Chain-rule findings tolerated as the published RA profile
+    /// ([`chain::ChainPolicy::accept_published_ra_profile`]).
     pub tolerated: u32,
 }
 
@@ -1919,22 +1919,13 @@ fn chain_error(kind: &ChainErrorKind) -> TrustError {
     }
 }
 
-/// Every published US RA certificate (Autocrypt, ISS and SAESOL test; SAESOL production)
-/// carries a request group `{all, minChainLength 0, chainLengthRange 0, eeType app}`
-/// (production puts it in `certIssuePermissions`) under an ICA whose `all` group has
-/// `minChainLength 2`, and [`chain::validate`] refuses it twice (`minChainLength below 1`;
-/// the request group's chain length). Deployed devices evidently accept these RAs, so the
-/// device tolerates exactly those two findings on a certificate that issues nothing and
-/// counts them in [`DeviceTrust::tolerated`]. **Conflict reported** (WP-A3 rule vs the
-/// deployment; 02 §5 states the rule for `certIssuePermissions` only).
-fn request_length_conflict(cert: &Certificate, e: &chain::ChainError) -> bool {
-    let t = &cert.0.to_be_signed;
-    e.index == 0
-        && e.kind == ChainErrorKind::ChainLength
-        && t.cert_issue_permissions.is_none()
-        && t.cert_request_permissions.is_some()
-        && (e.detail == "minChainLength below 1" || e.detail.starts_with("request "))
-}
+// Every published US RA certificate (Autocrypt, ISS and SAESOL test; SAESOL production)
+// carries a group `{all, minChainLength 0, chainLengthRange 0, eeType app}` (production
+// puts it in `certIssuePermissions`) under an ICA whose `all` group has `minChainLength
+// 2`. Deployed devices accept these RAs, so the device validates under
+// `ChainPolicy::us_device`, which tolerates exactly the two findings such a group raises
+// on its own certificate and returns them, counted in `DeviceTrust::tolerated`
+// (documented profile deviation, `chain::ChainPolicy::accept_published_ra_profile`).
 
 fn issuer_id8(c: &Certificate) -> Option<[u8; 8]> {
     match &c.0.issuer {
@@ -2067,10 +2058,7 @@ impl DeviceTrust {
                 pool.insert(d, c.clone());
             }
         }
-        let policy = ChainPolicy {
-            anchors: Some(self.roots.keys().copied().collect()),
-            now: Some(now32),
-        };
+        let policy = ChainPolicy::us_device(self.roots.keys().copied().collect(), now32);
         let mut accepted = Vec::with_capacity(others.len());
         let mut checks = 0u32;
         for c in &others {
@@ -2085,14 +2073,14 @@ impl DeviceTrust {
                 path.push(next.clone());
             }
             checks += u32::try_from(path.len()).unwrap_or(u32::MAX);
-            if let Err(errs) = chain::validate(&path, &policy) {
-                let (tolerated, real): (Vec<_>, Vec<_>) = errs
-                    .iter()
-                    .partition(|e| request_length_conflict(&path[0], e));
-                if let Some(e) = real.first() {
-                    return Err(self.reject(chain_error(&e.kind)));
+            match chain::validate(&path, &policy) {
+                Err(errs) => {
+                    let kind = errs.first().map_or(ChainErrorKind::Malformed, |e| e.kind);
+                    return Err(self.reject(chain_error(&kind)));
                 }
-                self.tolerated += u32::try_from(tolerated.len()).unwrap_or(u32::MAX);
+                Ok(v) => {
+                    self.tolerated += u32::try_from(v.tolerated.len()).unwrap_or(u32::MAX);
+                }
             }
             let root = cert_hashed_id32(path.last().expect("non-empty"))
                 .map_err(|_| TrustError::Malformed)?;
