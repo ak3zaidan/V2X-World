@@ -212,7 +212,9 @@ pub struct VerifiedCrl {
     pub issue_date: u32,
     /// `nextCrl`.
     pub next_crl: u32,
-    /// The linkage entries (series 1), empty for a hash CRL.
+    /// `iRev` of a linkage CRL.
+    pub i_rev: Option<u32>,
+    /// The linkage entries (series 1) at `iRev`, empty for a hash CRL.
     pub linkage: Vec<CrlLinkageEntry>,
     /// The `HashedId10` entries (hash CRL), empty for a linkage CRL.
     pub hashes: Vec<[u8; 10]>,
@@ -354,6 +356,30 @@ pub struct RxTrust {
     ops: Vec<(PrimitiveId, PrimitiveOpKind, u32)>,
     /// What validation did.
     pub stats: RxStats,
+}
+
+impl VerifiedCrl {
+    /// `e` (an entry at its own i-period, as the CRL Generator records it) as this CRL
+    /// carries it: seeds walked forward to `iRev` and `iMax` kept, or `None` when the
+    /// entry is exhausted before `iRev` (pruned, [CAMP122] §5.2.10.2.3) or this is not a
+    /// linkage CRL. `Some(Err(()))` when the CRL should carry it and does not.
+    pub fn signed_form(&self, e: &CrlLinkageEntry) -> Option<Result<CrlLinkageEntry, ()>> {
+        let i_rev = self.i_rev?;
+        if e.i > i_rev || e.i.saturating_add(e.max_forward) < i_rev {
+            return None;
+        }
+        let walk = |la, ls| (e.i..i_rev).fold(ls, |s, _| v2xw_sec::linkage::linkage_seed_next(la, s));
+        let r = CrlLinkageEntry {
+            i: i_rev,
+            la_id1: e.la_id1,
+            la_id2: e.la_id2,
+            ls1_i: walk(e.la_id1, e.ls1_i),
+            ls2_i: walk(e.la_id2, e.ls2_i),
+            jmax: e.jmax.min(255),
+            max_forward: e.i.saturating_add(e.max_forward).min(65_535) - i_rev,
+        };
+        Some(if self.linkage.contains(&r) { Ok(r) } else { Err(()) })
+    }
 }
 
 impl RxTrust {
@@ -657,6 +683,13 @@ impl RxTrust {
             series: series_no,
             issue_date: c.issue_date.0.0,
             next_crl: c.next_crl.0.0,
+            i_rev: match &c.type_specific {
+                v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents::fullLinkedCrl(l)
+                | v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents::deltaLinkedCrl(l) => {
+                    Some(u32::from(l.i_rev.0.0))
+                }
+                _ => None,
+            },
             linkage: v2xw_sec::crl::linkage_entries(c),
             hashes: v2xw_sec::crl::hash_entries(c).into_iter().map(|(h, _)| h).collect(),
             fresh,

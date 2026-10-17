@@ -581,6 +581,14 @@ impl LifecycleParams {
         // A run publishes the CRL on the deployment's cadence: that wait is part of what
         // revocation costs (05-protocols §2.5), and `crl_cadence_s: 0` turns it off.
         scms.publish_on_cadence = true;
+        // Every Time32 the SCMS puts in a certificate or a CRL is read on the scenario's
+        // own wall clock, the one the vehicles stamp `generationTime` from. Left at the
+        // PDU layer's default (2026-01-05), the protocol's certificates were valid on a
+        // different calendar from the air's; nothing checked until WP-C2's receivers
+        // refused every message as generated outside its signer's validity.
+        if let Ok(w) = v2xw_core::time::WallClock::parse_rfc3339(&scenario.time.t0) {
+            scms.pdu.t0_unix_s = w.t0_unix_s();
+        }
         // WP-C2: the pseudonym certificates permit every PSID the fleet signs under —
         // what the scenario's vehicles send (an emergency vehicle's SRM included) and
         // the misbehaviour report — so a receiver checking the SPDU PSID against

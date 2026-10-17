@@ -6953,7 +6953,15 @@ impl Engine {
         let verified = match (secured.as_deref(), self.nodes.get_mut(&node)) {
             (Some(bytes), Some(rt)) if rt.security().trust().is_installed() => {
                 match rt.install_secured_crl(bytes, now) {
-                    Ok(v) if entries.iter().all(|e| v.linkage.contains(e)) => Some(Some(v)),
+                    // Every entry the frame carries is one the CRL signs (in the CRL's
+                    // form: seeds at iRev), or one already exhausted before iRev.
+                    Ok(v)
+                        if entries
+                            .iter()
+                            .all(|e| !matches!(v.signed_form(e), Some(Err(())))) =>
+                    {
+                        Some(Some(v))
+                    }
                     // A frame carrying an entry the signed CRL does not, or a CRL that
                     // does not verify: refused by the node.
                     _ => Some(None),
@@ -6978,8 +6986,15 @@ impl Engine {
             let Some(runtime) = self.nodes.get_mut(&node) else {
                 return;
             };
-            match craca {
-                Some(c) => runtime.stores_mut().crl.add_verified_linkage(c, &fresh),
+            match verified.as_ref().and_then(|v| v.as_ref()) {
+                // What the node installs is what the CRL it verified signs.
+                Some(v) => {
+                    let signed: Vec<v2xw_sec::linkage::CrlLinkageEntry> = fresh
+                        .iter()
+                        .filter_map(|e| v.signed_form(e).and_then(|r| r.ok()))
+                        .collect();
+                    runtime.stores_mut().crl.add_verified_linkage(v.craca, &signed);
+                }
                 None => {
                     for e in &fresh {
                         runtime.stores_mut().crl.add_linkage_entry(*e);
