@@ -361,6 +361,8 @@ fn download_file_names_follow_the_camp_grammar() {
         "AB09281C9867DE5.info",
         "AB09281C9867DE530.info",
         "AB09281C9867DE53_123456789.zip",
+        // Nine digits that would still fit a u32: the grammar allows eight.
+        "AB09281C9867DE53_000000001.zip",
         "AB09281C9867DE53_f.zip",
         "AB09281C9867DE53_.zip",
         "AB09281C9867DE53_F.tar",
