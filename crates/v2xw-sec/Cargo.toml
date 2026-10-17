@@ -26,6 +26,14 @@ rasn = { workspace = true }
 p256 = { workspace = true }
 # The bare AES-128 block permutation the two CAMP SCMS constructions are defined over.
 aes = { workspace = true }
+# SHA-256 / SHA-384 for KDF2, MAC1 and the P-384 elector hash (02 §2).
+sha2 = { workspace = true }
+# MAC1 = HMAC-SHA-256 truncated to 128 bits, inside ECIES (1609.2a §5.3.5).
+hmac = { workspace = true }
+# AES-128-CCM, the only 1609.2 symmetric cipher in the US profile (02 §8.3).
+ccm = { workspace = true }
+# ECDSA over NIST P-384 with SHA-384, for electors (01 §3.1).
+p384 = { workspace = true }
 # Crate error type.
 thiserror = { workspace = true }
 # Card payloads and descriptor serialisation.

@@ -51,7 +51,7 @@ use v2xw_core::ids::NodeId;
 use v2xw_core::provenance::ProvSubject;
 use v2xw_core::registry::{ModelRef, ParamSet, ParamSetId};
 use v2xw_core::rng::{EntityRef, RngDomain, RngGuard};
-use v2xw_core::time::{IEEE1609_EPOCH_UNIX_S, SimTime, WallClock};
+use v2xw_core::time::{SimTime, WallClock};
 use v2xw_msg::MsgType;
 use v2xw_msg::sec_types::{Certificate, HashedId8};
 use v2xw_sec::cert::{self, CertSpec, HolderId};
@@ -541,14 +541,10 @@ impl NodeSecurity {
         }
     }
 
-    /// Seconds from the IEEE 1609.2 epoch to `at` on this stack's wall clock.
+    /// IEEE 1609.2 `Time32` (TAI seconds from the 1609.2 epoch) at `at` on this stack's
+    /// wall clock; 0 before the epoch.
     fn epoch_seconds(&self, at: SimTime) -> u32 {
-        let unix = self
-            .envelope
-            .wall_clock()
-            .t0_unix_s()
-            .saturating_add((at / 1_000_000_000) as i64);
-        u32::try_from(unix.saturating_sub(IEEE1609_EPOCH_UNIX_S)).unwrap_or(0)
+        self.envelope.wall_clock().time32(at).unwrap_or(0)
     }
 
     /// Provisions — or reuses — the signer handle for one credential.

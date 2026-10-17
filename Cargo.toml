@@ -65,6 +65,15 @@ p256 = "0.13"
 # hardware-accelerated and software paths agree bit for bit and the choice cannot
 # affect determinism (ADR 0004).
 aes = { version = "0.8", default-features = false }
+# The rest of the IEEE 1609.2 primitive set (docs/design/scms-real/02 §2, owner decision
+# 9: RustCrypto crates). `hmac` is MAC1 (HMAC-SHA-256 truncated to 128 bits) inside
+# ECIES; `ccm` is AES-128-CCM (12-byte nonce, 16-byte tag) for every 1609.2
+# `EncryptedData`; `p384` is ECDSA over NIST P-384 with SHA-384, the elector curve.
+# All three are deterministic functions of their inputs (signing uses RFC 6979), so none
+# can affect run determinism (ADR 0004).
+hmac = "0.12"
+ccm = { version = "0.5", default-features = false }
+p384 = "0.13"
 rasn = "0.28"
 # ASN.1 -> Rust code generator, used only from `v2xw-msg`'s build script (build
 # decision D2). Emits `rasn`-annotated types from the ETSI forge modules. 0.16 is the
