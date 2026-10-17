@@ -106,6 +106,12 @@ pub const BSM_PSID: u64 = 0x20;
 pub const YEAR_S: u64 = ctl::YEAR_S;
 /// The published elector certificates' start, Time32 503 136 005 (2019-12-11).
 pub const ELECTOR_START_TIME32: u32 = 503_136_005;
+/// How long before the run's `t0` the genesis Root CA, ICA and components were issued:
+/// one 1609.2 year. A deployed hierarchy predates any run, and on the real US calendar
+/// the current i-period began before `t0`, so a pseudonym valid from that week's start
+/// must still lie inside its ACA's and ICA's validity (1609.2 §5.1.2.4, checked by the
+/// WP-C2 receivers); certificates issued at `t0` itself refused every message.
+pub const GENESIS_BACKDATE_S: u32 = 31_556_952;
 /// The published electors' lifetimes, years: staggered so they expire one at a time.
 pub const ELECTOR_YEARS: [u16; 5] = [12, 15, 18, 21, 24];
 /// The US i-period epoch, 2015-01-06 04:00 EST = 09:00 UTC (03 §1 fact 4).
@@ -1154,13 +1160,14 @@ impl Governance {
             log: Vec::new(),
         };
         let label = gov.config.provider.clone();
-        let root = gov.make_authority("root", rng, gov.nodes.root, 0, None, &label, now32);
+        let issued = now32.saturating_sub(GENESIS_BACKDATE_S);
+        let root = gov.make_authority("root", rng, gov.nodes.root, 0, None, &label, issued);
         gov.roots.push(RootSlot {
             label: label.clone(),
             authority: root,
             approved: true,
         });
-        gov.certify_hierarchy(rng, online, 0, now32);
+        gov.certify_hierarchy(rng, online, 0, issued);
         let ctl = gov.build_ctl(0, now32, None, None, &gov.approved_signers());
         gov.ctl = ctl.clone();
         gov.ctl_history.push(ctl);
