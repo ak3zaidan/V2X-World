@@ -920,6 +920,29 @@ mod tests {
         assert_eq!((next.quorum, next.sequence, next.roots.len()), (3, Some(1), 1));
     }
 
+    /// A P-384 self-signed certificate holding the *root* SSP, not the elector SSP, does
+    /// not count as an elector signature even when it is in the trust set.
+    #[test]
+    fn a_signer_without_the_elector_ssp_does_not_count() {
+        let mut el = five();
+        let key = Signer1609::p384(&[0x33; 48]).unwrap();
+        let ssp = opaque_ssp(&SecurityMgmtSsp::root(
+            v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::RootCaSsp::new(Uint8(2)),
+        ))
+        .unwrap();
+        let perms = vec![PsidSsp::new(Psid(Integer::from(35u32)), Some(ssp))];
+        let cert = self_signed_certificate("notanelector", 503_136_005, 12, perms, None, &key).unwrap();
+        el[0] = Elector { key, cert };
+        let ids: Vec<_> = el.iter().map(Elector::hashed_id48).collect();
+        let tbs = full_ieee_tbs_ctl(US_CTL_SERIES_ID, 1, 679_737_605, &ids, &[], 3);
+        let m = build_ctl(&tbs, vec![], &[&el[0], &el[1], &el[2]]).unwrap();
+        let ctl = decode_ctl_spdu(&encode_ctl_spdu(&m).unwrap()).unwrap();
+        let v = verify_ctl(&ctl, &CtlTrust::us_bootstrap(ids));
+        assert!(!v.electors[0].ssp_ok && v.electors[0].signature_ok);
+        assert_eq!(v.valid_signatures, 2);
+        assert!(!v.accepted());
+    }
+
     /// The elector certificate is the published form: 80 00 02 SSP, self(sha384), P-384.
     #[test]
     fn elector_certificate_is_the_published_form() {

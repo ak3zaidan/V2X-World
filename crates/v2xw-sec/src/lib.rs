@@ -60,6 +60,7 @@ pub mod aes128;
 pub mod butterfly;
 pub mod ccm;
 pub mod cert;
+pub mod crl;
 pub mod crypto;
 pub mod ctl;
 pub mod ec;
