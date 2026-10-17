@@ -31,17 +31,15 @@ use v2xw_msg::sec_types::ieee1609_dot2::{
 };
 use v2xw_msg::sec_types::ieee1609_dot2_base_types::{
     CrlSeries, Duration as Ieee1609Duration, HashedId3, IValue, LaId as AsnLaId,
-    LinkageValue as AsnLinkageValue,
-    Psid, PsidSsp, SequenceOfPsidSsp, ServiceSpecificPermissions, Time32, Uint8, Uint16, Uint32,
-    ValidityPeriod,
+    LinkageValue as AsnLinkageValue, Psid, PsidSsp, SequenceOfPsidSsp, ServiceSpecificPermissions,
+    Time32, Uint8, Uint16, Uint32, ValidityPeriod,
 };
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ee_interface::{
     AcaEeCertResponse, AcaEeInterfacePdu,
 };
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ra_interface::{
     AcaRaCertResponse, AcaRaInterfacePdu, AcaResponse, EncryptedIndividualPLV,
-    EncryptedIndividualPLVEncPlv, LinkageInfo, RaAcaCertRequest,
-    RaAcaCertRequestFlags,
+    EncryptedIndividualPLVEncPlv, LinkageInfo, RaAcaCertRequest, RaAcaCertRequestFlags,
 };
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::EeRaInterfacePdu;
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::{ScmsPduContent, SecurityMgmtSsp};
@@ -180,7 +178,10 @@ pub fn aca_open_plv(
     };
     let rid = hashedid::id8_bytes(&s.recipient_id);
     let key = keys.find(la_id, rid, t32).ok_or(PduError::NotForMe)?;
-    let data = Ieee1609Dot2Data::new(e.enc_plv.protocol_version.clone(), e.enc_plv.content.clone());
+    let data = Ieee1609Dot2Data::new(
+        e.enc_plv.protocol_version.clone(),
+        e.enc_plv.content.clone(),
+    );
     let plain = pdu::decrypt_symm(&pdu::coer(&data)?, &key)?;
     let b: [u8; PLV_BYTES] = plain[..]
         .try_into()
@@ -219,15 +220,15 @@ pub struct RaAcaInput {
 ///
 /// # Errors
 /// A key does not encode.
-pub fn ra_aca_cert_request(x: &RaAcaInput) -> Result<v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::ScmsPdu> {
+pub fn ra_aca_cert_request(
+    x: &RaAcaInput,
+) -> Result<v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::ScmsPdu> {
     let tbs = v2xw_msg::sec_types::ieee1609_dot2::ToBeSignedCertificate::new(
-        CertificateId::linkageData(
-            v2xw_msg::sec_types::ieee1609_dot2::LinkageData::new(
-                IValue(Uint16(x.i)),
-                AsnLinkageValue(FixedOctetString::from(x.dummy_lv)),
-                None,
-            ),
-        ),
+        CertificateId::linkageData(v2xw_msg::sec_types::ieee1609_dot2::LinkageData::new(
+            IValue(Uint16(x.i)),
+            AsnLinkageValue(FixedOctetString::from(x.dummy_lv)),
+            None,
+        )),
         HashedId3(FixedOctetString::from([0u8; 3])),
         CrlSeries(Uint16(0)),
         ValidityPeriod::new(
@@ -400,8 +401,7 @@ pub fn aca_issue(
     let VerificationKeyIndicator::verificationKey(k) = &tbs.verify_key_indicator else {
         return Err(PduError::Shape("tbsCert.verifyKeyIndicator is B_ij"));
     };
-    let v2xw_msg::sec_types::ieee1609_dot2_base_types::PublicVerificationKey::ecdsaNistP256(bp) =
-        k
+    let v2xw_msg::sec_types::ieee1609_dot2_base_types::PublicVerificationKey::ecdsaNistP256(bp) = k
     else {
         return Err(PduError::Key("B_ij is P-256"));
     };
@@ -414,13 +414,11 @@ pub fn aca_issue(
     let lv = linkage::linkage_value(plv1, plv2);
     let i = ld.i_cert.0.0;
     let mut t = tbs.clone();
-    t.id = CertificateId::linkageData(
-        v2xw_msg::sec_types::ieee1609_dot2::LinkageData::new(
-            IValue(Uint16(i)),
-            lv.to_asn1(),
-            None,
-        ),
-    );
+    t.id = CertificateId::linkageData(v2xw_msg::sec_types::ieee1609_dot2::LinkageData::new(
+        IValue(Uint16(i)),
+        lv.to_asn1(),
+        None,
+    ));
     t.craca_id = HashedId3(FixedOctetString::from(pki.craca_id()));
     t.crl_series = CrlSeries(Uint16(PSEUDONYM_CRL_SERIES));
     let d_aca = pki
@@ -437,16 +435,16 @@ pub fn aca_issue(
         || g.scalar(),
     )
     .map_err(|_| PduError::Key("ECQV issuance"))?;
-    let resp = pdu::pdu(ScmsPduContent::aca_ee(AcaEeInterfacePdu::acaEeCertResponse(
-        AcaEeCertResponse::new(
+    let resp = pdu::pdu(ScmsPduContent::aca_ee(
+        AcaEeInterfacePdu::acaEeCertResponse(AcaEeCertResponse::new(
             Uint8(STRUCT_VERSION),
             Time32(Uint32(now)),
             issued.certificate.clone(),
             Some(OctetString::from(
                 ec::scalar_to_be32(&issued.private_key_contribution).to_vec(),
             )),
-        ),
-    )));
+        )),
+    ));
     let private = Pdu::new(pdu::encrypted_signed(
         &resp,
         &j_key,
@@ -455,14 +453,14 @@ pub fn aca_issue(
         g,
     )?);
     let request_hash = hashedid::id8_bytes(&hashedid::hashed_id8(request));
-    let to_ra = pdu::pdu(ScmsPduContent::aca_ra(AcaRaInterfacePdu::acaRaCertResponse(
-        AcaRaCertResponse::new(
+    let to_ra = pdu::pdu(ScmsPduContent::aca_ra(
+        AcaRaInterfacePdu::acaRaCertResponse(AcaRaCertResponse::new(
             Uint8(STRUCT_VERSION),
             Time32(Uint32(now)),
             pdu::id8(request_hash),
             AcaResponse::private(pdu::decode(private.bytes())?),
-        ),
-    )));
+        )),
+    ));
     let to_ra = Pdu::new(pdu::signed(&to_ra, &pki.aca.cert, &pki.aca.key)?);
     Ok(AcaIssued {
         private,
@@ -483,13 +481,17 @@ pub fn aca_issue(
 pub fn ra_open_aca_response(pki: &ScmsPki, bytes: &[u8]) -> Result<([u8; 8], Pdu)> {
     let (p, signer) = pdu::open_signed_pdu(bytes, pki)?;
     if !is_aca(&signer) {
-        return Err(PduError::Signer("AcaRaCertResponseSpdu is signed by an ACA"));
+        return Err(PduError::Signer(
+            "AcaRaCertResponseSpdu is signed by an ACA",
+        ));
     }
     let ScmsPduContent::aca_ra(AcaRaInterfacePdu::acaRaCertResponse(r)) = p.content else {
         return Err(PduError::Shape("expected aca-ra.acaRaCertResponse"));
     };
     let AcaResponse::private(inner) = r.aca_response else {
-        return Err(PduError::Shape("acaResponse is private (original butterfly)"));
+        return Err(PduError::Shape(
+            "acaResponse is private (original butterfly)",
+        ));
     };
     Ok((
         hashedid::id8_bytes(&r.request_hash),
@@ -524,7 +526,12 @@ pub struct OpenedPseudonym {
 
 impl core::fmt::Debug for OpenedPseudonym {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "OpenedPseudonym(i={}, lv={:?})", self.i, self.lv.as_bytes())
+        write!(
+            f,
+            "OpenedPseudonym(i={}, lv={:?})",
+            self.i,
+            self.lv.as_bytes()
+        )
     }
 }
 
@@ -555,7 +562,9 @@ pub fn ee_open_aca_response(
     let h = cat.encryption_private(i, j);
     let inner = pdu::decrypt_key(&o.payload, &h)?;
     let Ieee1609Dot2Content::unsecuredData(op) = pdu::outer(&inner)?.content else {
-        return Err(PduError::Shape("the encrypted response holds unsecuredData"));
+        return Err(PduError::Shape(
+            "the encrypted response holds unsecuredData",
+        ));
     };
     let p = pdu::scms_pdu(&op.0)?;
     let ScmsPduContent::aca_ee(AcaEeInterfacePdu::acaEeCertResponse(r)) = p.content else {
@@ -586,7 +595,9 @@ pub fn ee_open_aca_response(
     }
     let VerificationKeyIndicator::reconstructionValue(pu) = &c.0.to_be_signed.verify_key_indicator
     else {
-        return Err(PduError::Shape("implicit certificate without reconstructionValue"));
+        return Err(PduError::Shape(
+            "implicit certificate without reconstructionValue",
+        ));
     };
     let p_u = pdu::point_of(pu)?;
     let rb: [u8; 32] = r
@@ -597,8 +608,7 @@ pub fn ee_open_aca_response(
         .map_err(|_| PduError::Shape("privateKeyInfo is 32 bytes"))?;
     let rr = ec::scalar_from_be32(&rb).map_err(|_| PduError::Key("privateKeyInfo"))?;
     let e = cert::implicit_e(&c, &o.signer).map_err(|_| PduError::Shape("ECQV e"))?;
-    let (_, q_sec1) =
-        v2xw_sec::sig1609::explicit_key(&o.signer).ok_or(PduError::Key("ACA key"))?;
+    let (_, q_sec1) = v2xw_sec::sig1609::explicit_key(&o.signer).ok_or(PduError::Key("ACA key"))?;
     let q_aca = Point::from_sec1(&q_sec1).map_err(|_| PduError::Key("ACA key"))?;
     let d = cat.signing_private_implicit(i, j, &e, &rr);
     let q_u = p_u.mul(&e).add(&q_aca);
@@ -632,7 +642,10 @@ pub fn ee_download_request_spdu(
     filename: &str,
     g: &mut Drbg,
 ) -> Result<Pdu> {
-    let ra_key = pki.ra.enc_public().ok_or(PduError::Key("RA encryption key"))?;
+    let ra_key = pki
+        .ra
+        .enc_public()
+        .ok_or(PduError::Key("RA encryption key"))?;
     let p = pdu::ee_ra_download_request(t32, filename);
     Ok(Pdu::new(pdu::signed_encrypted(
         &p,

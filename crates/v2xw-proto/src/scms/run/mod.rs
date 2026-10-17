@@ -417,7 +417,10 @@ struct ProvisioningJob {
     cocoon_enc: BTreeMap<(u32, u32), Point>,
     plv: [BTreeMap<(u32, u32), SealedForPca<PreLinkageValue>>; 2],
     /// The LAs' `EncryptedIndividualPLV`s (the real path).
-    enc_plv: [BTreeMap<(u32, u32), v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ra_interface::EncryptedIndividualPLV>; 2],
+    enc_plv: [BTreeMap<
+        (u32, u32),
+        v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ra_interface::EncryptedIndividualPLV,
+    >; 2],
     /// HashedId8 of each `RaAcaCertRequestSpdu` → `(i, j)`: the RA keeps `j`, which the
     /// ACA never sees, and routes the answer by this hash (02 §9.5).
     aca_requests: BTreeMap<[u8; 8], (u32, u32)>,

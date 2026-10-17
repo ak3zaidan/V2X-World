@@ -34,7 +34,10 @@ fn a_credential_from_another_index_is_not_usable_for_this_one() {
     if dev.credentials[&(0, 0)].implicit.is_some() {
         let r0 = dev.credentials[&(0, 0)].implicit.as_ref().unwrap().r;
         let r1 = dev.credentials[&(0, 1)].implicit.as_ref().unwrap().r;
-        assert_ne!(r0, r1, "the ACA's reconstruction value is fresh per certificate");
+        assert_ne!(
+            r0, r1,
+            "the ACA's reconstruction value is fresh per certificate"
+        );
         dev.credentials
             .get_mut(&(0, 0))
             .expect("cred")
@@ -107,7 +110,11 @@ fn provisioning_costs_real_queueing_time_and_real_bytes() {
         .unwrap_or(0);
     // Two per issued certificate on the real path: the ACA signs the
     // AcaEeCertResponsePrivateSpdu and the AcaRaCertResponseSpdu around it (03 §3.2).
-    assert_eq!(pca_signs, 2 * 20, "two ACA signatures per issued certificate");
+    assert_eq!(
+        pca_signs,
+        2 * 20,
+        "two ACA signatures per issued certificate"
+    );
 }
 
 #[test]

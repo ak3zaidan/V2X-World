@@ -233,7 +233,8 @@ pub struct PreLinkageBatch {
     pub values: Vec<(u32, u32, SealedForPca<PreLinkageValue>)>,
     /// The real `EncryptedIndividualPLV` of each value, same order (WP-B3a); empty when
     /// the PDU layer is off.
-    pub encrypted: Vec<v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ra_interface::EncryptedIndividualPLV>,
+    pub encrypted:
+        Vec<v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ra_interface::EncryptedIndividualPLV>,
 }
 
 /// A misbehaviour report as it leaves a device.

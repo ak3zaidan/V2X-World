@@ -119,7 +119,12 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
         .iter()
         .filter(|p| p.kind == SpduKind::AcaEeCertResponsePrivate)
         .enumerate()
-        .map(|(j, p)| (v2xw_proto::scms::pdu_prov::batch_entry_name(0, j as u32), p.len))
+        .map(|(j, p)| {
+            (
+                v2xw_proto::scms::pdu_prov::batch_entry_name(0, j as u32),
+                p.len,
+            )
+        })
         .collect();
     assert_eq!(
         charged("batch-download"),

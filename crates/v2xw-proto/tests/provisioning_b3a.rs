@@ -29,9 +29,15 @@ fn count(run: &ScmsRun, k: SpduKind) -> usize {
 #[test]
 fn the_presets_carry_the_cited_numbers() {
     let mut p = ScmsParams::default();
-    assert_eq!((p.shuffle_threshold, p.shuffle_window), (1_000, Duration::from_secs(2 * 86_400)));
+    assert_eq!(
+        (p.shuffle_threshold, p.shuffle_window),
+        (1_000, Duration::from_secs(2 * 86_400))
+    );
     ShufflePreset::Brecht.apply(&mut p);
-    assert_eq!((p.shuffle_threshold, p.shuffle_window), (10_000, Duration::from_secs(86_400)));
+    assert_eq!(
+        (p.shuffle_threshold, p.shuffle_window),
+        (10_000, Duration::from_secs(86_400))
+    );
     ShufflePreset::Camp122.apply(&mut p);
     assert_eq!(p.shuffle_threshold, 1_000);
     assert_eq!(
@@ -61,7 +67,11 @@ fn the_shuffle_releases_at_the_age_when_the_count_is_not_reached() {
     assert_eq!(dev.credentials.len(), 1);
     assert!(dev.credentials[&(0, 0)].implicit.is_some() && dev.credential_is_usable(0, 0));
     assert!(run.kernel.stages.at(f, StageId::Installed).unwrap() > t0 + 2 * 86_400 * 1_000_000_000);
-    assert!(run.state.pdu_rejections.is_empty(), "{:?}", run.state.pdu_rejections);
+    assert!(
+        run.state.pdu_rejections.is_empty(),
+        "{:?}",
+        run.state.pdu_rejections
+    );
 }
 
 #[test]
@@ -93,14 +103,33 @@ fn a_thea_style_three_year_preload_is_one_request_for_156_periods() {
     let mut run = run_with(ScmsParams::default().quick(), &[DEVICE_A]);
     run.provision(DEVICE_A, 614, 157, 1);
     run.run().expect("runs");
-    assert_eq!(run.state.ra.clipped, 1, "157 periods clipped to the 3-year maximum");
-    assert_eq!(count(&run, SpduKind::EeRaCertRequest), 2, "one request, two hops");
+    assert_eq!(
+        run.state.ra.clipped, 1,
+        "157 periods clipped to the 3-year maximum"
+    );
+    assert_eq!(
+        count(&run, SpduKind::EeRaCertRequest),
+        2,
+        "one request, two hops"
+    );
     let dev = &run.state.devices[&DEVICE_A];
     assert_eq!(dev.credentials.len(), 156);
-    assert_eq!(run.state.ra.batch_files(DEVICE_A).len(), 156, "one zip per i-period");
-    assert!(dev.credentials.keys().all(|&(i, j)| dev.credential_is_usable(i, j)));
+    assert_eq!(
+        run.state.ra.batch_files(DEVICE_A).len(),
+        156,
+        "one zip per i-period"
+    );
+    assert!(
+        dev.credentials
+            .keys()
+            .all(|&(i, j)| dev.credential_is_usable(i, j))
+    );
     assert_eq!(count(&run, SpduKind::AcaEeCertResponsePrivate), 156);
-    assert_eq!(count(&run, SpduKind::EeRaDownloadRequest), 2 * 156, "a signed request per file");
+    assert_eq!(
+        count(&run, SpduKind::EeRaDownloadRequest),
+        2 * 156,
+        "a signed request per file"
+    );
 }
 
 #[test]
@@ -118,13 +147,25 @@ fn the_nyc_taxi_profile_installs_60_certificates_a_week() {
         assert_eq!(dev.credentials.len(), 60 * (week as usize + 1));
     }
     let dev = &run.state.devices[&DEVICE_A];
-    assert!(dev.credentials.keys().all(|&(i, j)| dev.credential_is_usable(i, j)));
+    assert!(
+        dev.credentials
+            .keys()
+            .all(|&(i, j)| dev.credential_is_usable(i, j))
+    );
     let lens: std::collections::BTreeSet<usize> = dev
         .credentials
         .values()
-        .map(|c| v2xw_sec::cert::encode(&c.implicit.as_ref().unwrap().certificate).unwrap().len())
+        .map(|c| {
+            v2xw_sec::cert::encode(&c.implicit.as_ref().unwrap().certificate)
+                .unwrap()
+                .len()
+        })
         .collect();
-    assert_eq!(lens.len(), 1, "every pseudonym certificate is the same size: {lens:?}");
+    assert_eq!(
+        lens.len(),
+        1,
+        "every pseudonym certificate is the same size: {lens:?}"
+    );
     assert_eq!(run.state.pca.issued_count, 180);
     let _ = FlowId::Topup;
 }

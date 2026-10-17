@@ -76,8 +76,13 @@ impl ScmsRun {
         // "request once"). A fresh caterpillar here orphaned every certificate already
         // installed: the device could no longer derive their keys (WP-B3a NYC test). The
         // seed is still drawn so no other stream shifts.
-        let cat = match (flow, self.state.devices.get(&device).and_then(|d| d.caterpillar.clone()))
-        {
+        let cat = match (
+            flow,
+            self.state
+                .devices
+                .get(&device)
+                .and_then(|d| d.caterpillar.clone()),
+        ) {
             (FlowId::Topup, Some(c)) => c,
             _ => fresh,
         };
@@ -1019,8 +1024,13 @@ impl ScmsState {
                             });
                         };
                         let spdu = item.spdu.expect("checked");
-                        match pdu_prov::aca_issue(&pki, &keys, spdu.bytes(), now32, &mut self.pdu_rng)
-                        {
+                        match pdu_prov::aca_issue(
+                            &pki,
+                            &keys,
+                            spdu.bytes(),
+                            now32,
+                            &mut self.pdu_rng,
+                        ) {
                             Ok(iss) => {
                                 self.pca.issued.insert(
                                     (u32::from(iss.i), *iss.lv.as_bytes()),
@@ -1265,9 +1275,12 @@ impl ScmsState {
                 if let (Some(p), Some(pki)) = (&pdu, self.pki.clone()) {
                     Self::decrypt(out, 1);
                     Self::verify(out, 1);
-                    let tol = u32::try_from(self.params.download_request_tolerance.as_nanos() / 1_000_000_000)
-                        .unwrap_or(u32::MAX);
-                    match pdu_prov::ra_open_download_request(&pki, p.bytes(), self.time32(at), tol) {
+                    let tol = u32::try_from(
+                        self.params.download_request_tolerance.as_nanos() / 1_000_000_000,
+                    )
+                    .unwrap_or(u32::MAX);
+                    match pdu_prov::ra_open_download_request(&pki, p.bytes(), self.time32(at), tol)
+                    {
                         Ok(o) => {
                             let held = self
                                 .ra
@@ -1382,7 +1395,10 @@ impl ScmsState {
                 let mut credentials = *credentials;
                 if !files.is_empty() {
                     let pki = self.pki.clone();
-                    let cat = self.devices.get(&device).and_then(|d| d.caterpillar.clone());
+                    let cat = self
+                        .devices
+                        .get(&device)
+                        .and_then(|d| d.caterpillar.clone());
                     let n_files = u32::try_from(files.len()).unwrap_or(u32::MAX);
                     Self::verify(out, n_files);
                     Self::decrypt(out, n_files);
@@ -1396,12 +1412,14 @@ impl ScmsState {
                                     certified_public: o.public,
                                     c: p256::Scalar::ZERO,
                                     response: None,
-                                    implicit: Some(Box::new(crate::scms::msg::ImplicitCredential {
-                                        aca_id8: pdu::cert_id8(&o.aca),
-                                        certificate: o.certificate,
-                                        e: o.e,
-                                        r: o.r,
-                                    })),
+                                    implicit: Some(Box::new(
+                                        crate::scms::msg::ImplicitCredential {
+                                            aca_id8: pdu::cert_id8(&o.aca),
+                                            certificate: o.certificate,
+                                            e: o.e,
+                                            r: o.r,
+                                        },
+                                    )),
                                 }),
                                 Err(e) => self.reject_pdu(
                                     SpduKind::AcaEeCertResponsePrivate,
@@ -1421,7 +1439,11 @@ impl ScmsState {
                     if dev.download_retries <= cap {
                         out.start_timer(
                             poll,
-                            ScmsMsg::BatchDownloadRequest { device, i, pdu: None },
+                            ScmsMsg::BatchDownloadRequest {
+                                device,
+                                i,
+                                pdu: None,
+                            },
                             flow,
                             run,
                         );

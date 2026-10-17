@@ -97,7 +97,11 @@ fn the_ra_cannot_compute_the_certified_key_it_helped_produce() {
                 panic!("implicit certificate");
             };
             let p_u = v2xw_proto::scms::pdu::point_of(pu).unwrap();
-            assert_ne!(p_u.compressed(), cocoon.compressed(), "P_U = B + k·G, k secret");
+            assert_ne!(
+                p_u.compressed(),
+                cocoon.compressed(),
+                "P_U = B + k·G, k secret"
+            );
             let pki = run.state.pki.as_ref().unwrap();
             let q_aca = v2xw_sec::ec::Point::mul_base(pki.aca.private.as_ref().unwrap());
             let recomputed = p_u.mul(&imp.e).add(&q_aca);

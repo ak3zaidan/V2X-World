@@ -63,8 +63,8 @@ use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::{
     EeRaDownloadRequest, EeRaInterfacePdu, RaEeCertAck, RaEeCertInfo,
 };
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::{
-    AcaSsp, CrlSignerSsp, DcmSsp, EcaSsp, IcaSsp, LaSsp, MaSsp, RaSsp, RootCaSsp, ScmsPdu, ScmsPduContent,
-    ScopedCertificateRequest, SecurityMgmtSsp, SignedCertificateRequest,
+    AcaSsp, CrlSignerSsp, DcmSsp, EcaSsp, IcaSsp, LaSsp, MaSsp, RaSsp, RootCaSsp, ScmsPdu,
+    ScmsPduContent, ScopedCertificateRequest, SecurityMgmtSsp, SignedCertificateRequest,
 };
 use v2xw_sec::butterfly::Caterpillar;
 use v2xw_sec::cert::{self, CertHash, CertKey};
@@ -992,7 +992,11 @@ pub fn signed(p: &ScmsPdu, signer: &Certificate, key: &Signer1609) -> Result<Vec
     signed_bytes(coer(p)?, signer, key)
 }
 
-pub(crate) fn signed_bytes(payload: Vec<u8>, signer: &Certificate, key: &Signer1609) -> Result<Vec<u8>> {
+pub(crate) fn signed_bytes(
+    payload: Vec<u8>,
+    signer: &Certificate,
+    key: &Signer1609,
+) -> Result<Vec<u8>> {
     let d = sig1609::sign_spdu(
         sig1609::header_psid_only(SECURITY_MGMT_PSID),
         payload,

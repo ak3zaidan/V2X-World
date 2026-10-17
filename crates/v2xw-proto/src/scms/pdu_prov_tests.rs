@@ -128,7 +128,10 @@ fn a_response_signed_by_a_different_aca_is_rejected() {
         .unwrap()
         .payload;
     let forged = pdu::signed_bytes(payload.clone(), &aca2.cert, &aca2.key).unwrap();
-    assert!(pdu::open_signed(&forged, &pki).is_ok(), "the forgery verifies");
+    assert!(
+        pdu::open_signed(&forged, &pki).is_ok(),
+        "the forgery verifies"
+    );
     assert_eq!(
         ee_open_aca_response(&pki, &forged, &cat, 614, 3).unwrap_err(),
         PduError::Signer("same-ACA rule: the outer signer did not issue the certificate")
@@ -174,7 +177,10 @@ fn only_the_right_cocoon_key_opens_a_response_and_tampering_is_caught() {
     for k in [b.len() - 70, b.len() / 2, 40] {
         let mut t = b.to_vec();
         t[k] ^= 0x01;
-        assert!(ee_open_aca_response(&pki, &t, &cat, 614, 7).is_err(), "byte {k}");
+        assert!(
+            ee_open_aca_response(&pki, &t, &cat, 614, 7).is_err(),
+            "byte {k}"
+        );
     }
 }
 
@@ -190,7 +196,9 @@ fn the_aca_refuses_requests_the_profile_does_not_allow() {
         panic!("shape");
     };
     let resign = |r: RaAcaCertRequest, signer: &pdu::Authority| {
-        let p = pdu::pdu(ScmsPduContent::aca_ra(AcaRaInterfacePdu::raAcaCertRequest(r)));
+        let p = pdu::pdu(ScmsPduContent::aca_ra(AcaRaInterfacePdu::raAcaCertRequest(
+            r,
+        )));
         pdu::signed_cert_request(&p, RequestSigner::Cert(&signer.cert, &signer.key)).unwrap()
     };
     let mut g2 = Drbg::new(6, b"u");
@@ -251,7 +259,10 @@ fn a_plv_sealed_before_a_key_rotation_still_opens_one_epoch_later() {
     // LA1's key is not LA2's.
     let mut e1 = e;
     e1.la_id = AsnLaId(FixedOctetString::from(1u16.to_be_bytes()));
-    assert_eq!(aca_open_plv(&e1, &keys, t0).unwrap_err(), PduError::NotForMe);
+    assert_eq!(
+        aca_open_plv(&e1, &keys, t0).unwrap_err(),
+        PduError::NotForMe
+    );
 }
 
 #[test]
