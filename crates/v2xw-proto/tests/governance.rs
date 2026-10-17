@@ -11,7 +11,7 @@
 mod common;
 
 use common::{DEVICE_A, DEVICE_B, deployment, provisioned};
-use v2xw_core::time::{Duration, NS_PER_S};
+use v2xw_core::time::Duration;
 use v2xw_proto::net::Transport;
 use v2xw_proto::scms::msg::{EnrolmentCert, Refusal};
 use v2xw_proto::scms::run::ScmsRun;
@@ -175,13 +175,32 @@ fn an_expired_enrolment_cannot_get_a_top_up_until_it_is_renewed() {
     );
     let r = run.reenrol_at(DEVICE_A, now);
     run.run().expect("runs");
+    // Through the RA (WP-B2): request, the RA's acknowledgement, the ECA, the download.
     assert_eq!(
         run.kernel.stages.stages(r),
-        vec![StageId::Requested, StageId::Certified, StageId::Installed]
+        vec![
+            StageId::Requested,
+            StageId::Acknowledged,
+            StageId::Certified,
+            StageId::Installed
+        ]
     );
-    let renewed = run.state.devices[&DEVICE_A].enrolment.expect("renewed");
+    // No overlap and no gap ([SM-REENR]): the successor starts exactly when the current
+    // certificate ends, and the device keeps signing with the current one until then.
+    let old_end = Duration::from_secs(3_600).after(now);
+    let d = &run.state.devices[&DEVICE_A];
+    let renewed = d.successor.expect("renewed");
     assert_eq!(renewed.generation, 1);
-    assert!(renewed.valid_until > now + 3_600 * NS_PER_S);
+    assert_eq!(renewed.valid_from, old_end);
+    assert_eq!(
+        renewed.valid_until - renewed.valid_from,
+        run.state.params.enrolment_lifetime.as_nanos()
+    );
+    assert_eq!(d.enrolment.map(|e| e.generation), Some(0));
+    let mut later = d.clone();
+    assert_eq!(later.roll_enrolment(old_end - 1).map(|e| e.generation), Some(0));
+    assert_eq!(later.roll_enrolment(old_end).map(|e| e.generation), Some(1));
+    assert!(later.successor.is_none());
     let t = run.topup(DEVICE_A, 1, JMAX);
     run.run().expect("runs");
     assert!(run.kernel.stages.at(t, StageId::Installed).is_some());

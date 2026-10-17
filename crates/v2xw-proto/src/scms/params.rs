@@ -105,6 +105,9 @@ impl ScmsNodes {
             (self.crlg, self.crl_broadcast),
             (self.dcm, self.eca),
             (self.eca, self.ra),
+            // The EE operator registers each enrolment certificate with the RA ([SMP]
+            // §2.1.8); the DCM does it at bootstrap (WP-B2).
+            (self.dcm, self.ra),
         ]
     }
 
@@ -151,19 +154,22 @@ pub struct ScmsParams {
     /// of the initial batch [PRIMER p.7: 3,120 = 156 × 20]. The RA clips a request for
     /// more.
     pub max_periods_ahead: u32,
-    /// How long an enrolment certificate is valid.
-    ///
-    /// **Uncited, `todo-calibrate`.** The CAMP design describes the enrolment certificate
-    /// as long-lived — it outlasts every pseudonym batch and is replaced by a successor
-    /// request rather than by provisioning — and no document this build can read prints a
-    /// number. Six years is the stated default; the ETSI policy's three years for the
-    /// equivalent credential [EUCP Table 11] is the nearest published figure. A run
-    /// compresses it to see re-enrolment.
+    /// How long an enrolment certificate is valid: **6 years** (365-day years), CAMP SCMS
+    /// Release 1.2.2 Table 3 / SCMS-1307 ([CAMP122]; 03 §5), the owner's default. CAMP
+    /// Release 1.1 allowed 7 years and the 5GAA draft CP 3 ([5GAA]); both are settings. A
+    /// run compresses it to see re-enrolment.
     pub enrolment_lifetime: Duration,
-    /// How long before its enrolment certificate expires a device asks the ECA for a
-    /// successor (IEEE 1609.2.1's successor enrolment). **Uncited**: a week, so a device
-    /// that is offline for a few days still renews in time.
+    /// How long before its enrolment certificate expires a device requests the successor
+    /// through the RA (IEEE 1609.2.1 `eeRaSuccessorEnrollmentCertRequest`): **18 months**
+    /// (548 days), the middle of the 12–24 months SCMS Manager's re-enrolment standard
+    /// recommends ([SM-REENR] §1–3; 03 §5, gap row 17). The successor starts when the
+    /// current certificate ends, so an early request costs no validity.
     pub reenrol_lead: Duration,
+    /// How long after a successor request the RA tells the device to come back for the
+    /// certificate (`nextDlTime` in `RaEeEnrollmentCertAck`): 5 minutes, the profile's
+    /// `download-minWait` ([SMP] Table 3; 03 §6.2). Re-enrolment is two-phase, request
+    /// then download ([SM-REENR] §1–3).
+    pub reenrol_download_delay: Duration,
     /// How many electors sign the trust list: 5 (SCMS Manager Elector Policy v1.0 §2;
     /// Profile §2.1.15: EEs are initialised with the five elector certificates).
     pub electors: u32,
@@ -340,7 +346,8 @@ impl Default for ScmsParams {
             initial_batch: 3_120,
             max_periods_ahead: 156,
             enrolment_lifetime: Duration::from_secs(6 * 365 * 86_400),
-            reenrol_lead: Duration::from_secs(7 * 86_400),
+            reenrol_lead: Duration::from_secs(548 * 86_400),
+            reenrol_download_delay: Duration::from_secs(5 * 60),
             electors: 5,
             elector_quorum: 3,
             shuffle_window: BatchPolicy::CAMP_SHUFFLE.max_delay,

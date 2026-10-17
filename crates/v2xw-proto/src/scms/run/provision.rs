@@ -236,7 +236,7 @@ impl ScmsState {
 
     /// RA side: decrypt, verify under an ECA-issued enrolment certificate, and bind the
     /// signed butterfly parameters to the request's `A`, `ck`, `H`, `ek`.
-    fn ra_open_request(&self, req: &ProvisioningRequest, spdu: &Pdu) -> pdu::Result<()> {
+    fn ra_open_request(&self, req: &ProvisioningRequest, spdu: &Pdu) -> pdu::Result<[u8; 8]> {
         let pki = self.pki.clone().ok_or(PduError::Shape("PDU layer off"))?;
         let expected = pdu::ButterflyOriginal {
             a: req.signing_public,
@@ -244,7 +244,7 @@ impl ScmsState {
             ck: req.ck,
             ek: req.ek,
         };
-        pdu::ra_open_ee_ra_cert_request(&pki, spdu.bytes(), &expected).map(|_| ())
+        pdu::ra_open_ee_ra_cert_request(&pki, spdu.bytes(), &expected).map(|c| pdu::cert_id8(&c))
     }
 
     /// RA side: the RA-signed `RaEeCertAckSpdu` (`firstI` = the first i-period,
@@ -390,7 +390,8 @@ impl ScmsState {
                         dev.deferred = Some((req, flow, run));
                         return Ok(());
                     }
-                    req.enrolment = dev.enrolment;
+                    // A successor whose validity has begun signs from now on.
+                    req.enrolment = dev.roll_enrolment(at);
                 }
                 // Every connection to the RA first asks for newer local policy and chain
                 // files (IEEE 1609.2.1's LPF and LCCF download): a policy change reaches a
@@ -477,9 +478,13 @@ impl ScmsState {
                 // enrolment-certificate signature, and require the signed butterfly
                 // parameters to be exactly the ones this request carries. Anything else is
                 // refused and recorded.
+                let mut signer_id8 = None;
                 let request_hash8 = match req.spdu.clone() {
                     Some(p) if self.pki.is_some() => match self.ra_open_request(&req, &p) {
-                        Ok(()) => Some(p.hashed_id8()),
+                        Ok(id8) => {
+                            signer_id8 = Some(id8);
+                            Some(p.hashed_id8())
+                        }
                         Err(e) => {
                             self.reject_pdu(SpduKind::EeRaCertRequest, to, at, e);
                             return Ok(());
@@ -488,14 +493,20 @@ impl ScmsState {
                     _ => None,
                 };
                 // The checks IEEE 1609.2.1 has the RA make before it spends anything: the
-                // enrolment certificate the request is signed with was issued by the ECA,
-                // is inside its validity, and is not blocklisted. A refusal is an answer,
-                // not silence, so the device knows whether to stop or to renew.
+                // enrolment certificate the request is signed with was registered with the
+                // RA by the EE operator ([SMP] §2.1.8; with the PDU layer on, that very
+                // certificate), is inside its validity, and is not blocklisted. A refusal
+                // is an answer, not silence, so the device knows whether to stop or to
+                // renew.
+                let registered = self.ra.is_registered(req.device, signer_id8);
+                if !registered && req.enrolment.is_some() {
+                    self.ra.unregistered_refused += 1;
+                }
                 let refusal = if self.ra.blocklist.contains(&req.device) {
                     Some(Refusal::Blocklisted)
                 } else {
                     match req.enrolment {
-                        Some(ec) if self.issued_enrolment.contains(&req.device) => {
+                        Some(ec) if registered => {
                             (!ec.valid_at(at)).then_some(Refusal::EnrolmentExpired)
                         }
                         _ => Some(Refusal::UnknownEnrolment),

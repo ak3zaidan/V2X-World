@@ -81,7 +81,7 @@ pub const SCMS_PDU_VERSION: u8 = 2;
 /// `Ieee1609Dot2Data.protocolVersion` (3) [IEEE 1609.2].
 pub const PROTOCOL_VERSION: u8 = 3;
 /// The version of every 1609.2.1 request/response structure (`Uint8 (2)`).
-const STRUCT_VERSION: u8 = 2;
+pub(crate) const STRUCT_VERSION: u8 = 2;
 
 /// Why a PDU could not be built or did not pass a receiver's checks.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -121,16 +121,20 @@ pub enum PduError {
     /// A key or point is unusable.
     #[error("key: {0}")]
     Key(&'static str),
+    /// The request is well formed but the issuer's policy refuses it (for enrolment, the
+    /// US profile's request-validity rules, [SMP] §6.3.1; WP-B2).
+    #[error("refused by policy: {0}")]
+    Policy(&'static str),
 }
 
 /// Result of this module.
 pub type Result<T> = core::result::Result<T, PduError>;
 
-fn coer<T: rasn::Encode>(v: &T) -> Result<Vec<u8>> {
+pub(crate) fn coer<T: rasn::Encode>(v: &T) -> Result<Vec<u8>> {
     rasn::coer::encode(v).map_err(|e| PduError::Coer(e.to_string()))
 }
 
-fn decode<T: rasn::Decode>(b: &[u8]) -> Result<T> {
+pub(crate) fn decode<T: rasn::Decode>(b: &[u8]) -> Result<T> {
     rasn::coer::decode(b).map_err(|e| PduError::Coer(e.to_string()))
 }
 
@@ -364,7 +368,12 @@ impl ScmsPki {
         let root_tbs = component_tbs(
             "root.provider-a",
             start,
-            12,
+            // 01 §2.2 [A]: the SAESOL chain in the 2025 published chain files has a 30-year
+            // root, a 25-year ICA and a 15-year ECA. The ECA must outlive the 6-year
+            // enrolment certificates it issues and their successors ([SMP] §6.3.1: the
+            // requested validity lies inside the ECA's), so the earlier 12/6/3 years made
+            // a successor unissuable (WP-B2).
+            30,
             &SecurityMgmtSsp::root(RootCaSsp::new(Uint8(2))),
             true,
             None,
@@ -385,7 +394,7 @@ impl ScmsPki {
             &root,
             &mut g,
             "ica.provider-a",
-            6,
+            25,
             &SecurityMgmtSsp::ica(IcaSsp::new(Uint8(2))),
             true,
             false,
@@ -395,7 +404,7 @@ impl ScmsPki {
             &ica,
             &mut g,
             "eca.provider-a",
-            3,
+            15,
             &SecurityMgmtSsp::eca(EcaSsp::new(Uint8(2))),
             false,
             false,
@@ -690,7 +699,7 @@ fn enrolment_tbs(
     ))
 }
 
-fn sig1609_key_of(
+pub(crate) fn sig1609_key_of(
     p: &Point,
 ) -> Result<v2xw_msg::sec_types::ieee1609_dot2_base_types::PublicVerificationKey> {
     Ok(
@@ -725,11 +734,11 @@ pub fn reconstruct_enrolment(
 // ScmsPdu contents
 // ---------------------------------------------------------------------------------------
 
-fn pdu(content: ScmsPduContent) -> ScmsPdu {
+pub(crate) fn pdu(content: ScmsPduContent) -> ScmsPdu {
     ScmsPdu::new(Uint8(SCMS_PDU_VERSION), content)
 }
 
-fn id8(b: [u8; 8]) -> HashedId8 {
+pub(crate) fn id8(b: [u8; 8]) -> HashedId8 {
     hashedid::id8_from_bytes(b)
 }
 
@@ -1139,7 +1148,7 @@ pub fn signed_encrypted_cert_request(
 // Openers
 // ---------------------------------------------------------------------------------------
 
-fn outer(bytes: &[u8]) -> Result<Ieee1609Dot2Data> {
+pub(crate) fn outer(bytes: &[u8]) -> Result<Ieee1609Dot2Data> {
     let d: Ieee1609Dot2Data = decode(bytes)?;
     if d.protocol_version.0 != PROTOCOL_VERSION {
         return Err(PduError::Version("protocolVersion"));
@@ -1491,6 +1500,12 @@ pub enum SpduKind {
     RaEeCertAck,
     /// `EeRaDownloadRequestSpdu` (SignedEncrypted, enrolment certificate → RA).
     EeRaDownloadRequest,
+    /// `EeRaSuccessorEnrollmentCertRequestSpdu` (SignedEncryptedCertRequest: the current
+    /// enrolment certificate signs an `EeEcaCertRequestSpdu` self-signed by the new key;
+    /// encrypted to the RA). WP-B2.
+    EeRaSuccessorEnrollmentCertRequest,
+    /// `RaEeEnrollmentCertAckSpdu` (`raEeCertInfo`, `acpcTreeId` ABSENT, Signed, RA). WP-B2.
+    RaEeEnrollmentCertAck,
 }
 
 impl SpduKind {
@@ -1502,6 +1517,10 @@ impl SpduKind {
             SpduKind::EeRaCertRequest => "EeRaCertRequestSpdu",
             SpduKind::RaEeCertAck => "RaEeCertAckSpdu",
             SpduKind::EeRaDownloadRequest => "EeRaDownloadRequestSpdu",
+            SpduKind::EeRaSuccessorEnrollmentCertRequest => {
+                "EeRaSuccessorEnrollmentCertRequestSpdu"
+            }
+            SpduKind::RaEeEnrollmentCertAck => "RaEeEnrollmentCertAckSpdu",
         }
     }
 }

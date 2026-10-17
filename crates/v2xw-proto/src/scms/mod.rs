@@ -11,6 +11,7 @@
 //! function, why a pre-linkage value is a type the RA cannot open, and why a Linkage
 //! Authority releases `ls(i)` and never `ls(0)`.
 
+pub mod enrolment;
 pub mod governance;
 pub mod inspect;
 pub mod msg;
@@ -156,8 +157,16 @@ pub const FLOWS: &[FlowSpec] = &[
     },
     FlowSpec {
         id: FlowId::Reenrolment,
-        participants: &["EE", "ECA"],
-        stages: &[StageId::Requested, StageId::Certified, StageId::Installed],
+        // Through the RA ([SM-REENR]; 1609.2.1 `eeRaSuccessorEnrollmentCertRequest`): the
+        // RA acknowledges with the download time, the ECA certifies, the device downloads
+        // and installs (WP-B2).
+        participants: &["EE", "RA", "ECA"],
+        stages: &[
+            StageId::Requested,
+            StageId::Acknowledged,
+            StageId::Certified,
+            StageId::Installed,
+        ],
     },
     FlowSpec {
         id: FlowId::PolicyDistribution,

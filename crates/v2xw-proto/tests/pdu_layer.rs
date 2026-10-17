@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 
 use common::{DEVICE_A, provisioned};
 use v2xw_proto::scms::params::ScmsParams;
+use v2xw_proto::scms::enrolment;
 use v2xw_proto::scms::pdu::{self, PduError, SpduKind};
 use v2xw_proto::scms::run::ScmsRun;
 use v2xw_proto::stage::{FlowId, StageId};
@@ -29,7 +30,12 @@ fn run_with_bytes() -> ScmsRun {
 fn kind_of(step: &str) -> Option<SpduKind> {
     Some(match step {
         "enrol-request" => SpduKind::EeEcaCertRequest,
-        "enrol-response" => SpduKind::EcaEeCertResponse,
+        "enrol-response" | "enrol-response-proxied" | "successor-enrol-certified"
+        | "successor-enrol-response" => SpduKind::EcaEeCertResponse,
+        "successor-enrol-request" => SpduKind::EeRaSuccessorEnrollmentCertRequest,
+        "successor-enrol-forward" => SpduKind::EeEcaCertRequest,
+        "successor-enrol-ack" => SpduKind::RaEeEnrollmentCertAck,
+        "successor-enrol-download-request" => SpduKind::EeRaDownloadRequest,
         "provisioning-request" | "provisioning-request-proxied" => SpduKind::EeRaCertRequest,
         "provisioning-ack" | "provisioning-ack-proxied" => SpduKind::RaEeCertAck,
         _ => return None,
@@ -50,7 +56,8 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
         counts,
         BTreeMap::from([
             (SpduKind::EeEcaCertRequest, 1),
-            (SpduKind::EcaEeCertResponse, 1),
+            // ECA → DCM, then DCM → device (WP-B2: the DCM relays and registers).
+            (SpduKind::EcaEeCertResponse, 2),
             (SpduKind::EeRaCertRequest, 2),
             (SpduKind::RaEeCertAck, 2),
         ])
@@ -75,7 +82,7 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
         assert_eq!(p.bytes.as_ref().map(pdu::Pdu::len), Some(p.len));
         matched += 1;
     }
-    assert_eq!(matched, 6);
+    assert_eq!(matched, 7);
 
     // Each SPDU opens with the receiver's rules.
     let pki = st.pki.as_ref().expect("layer on");
@@ -83,7 +90,19 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
         let b = p.bytes.as_ref().unwrap().bytes();
         match p.kind {
             SpduKind::EeEcaCertRequest => {
-                pdu::open_signed_cert_request(b, pki).expect("self-signed request");
+                // Signed with the canonical key the operator registered (WP-B2).
+                let canonical = &st.eca.canonical;
+                let (_, auth) = enrolment::open_ee_eca_cert_request(b, &|id| {
+                    canonical.get(id).copied()
+                })
+                .expect("canonical-signed request");
+                assert!(matches!(auth, enrolment::EnrolAuth::Canonical(_)));
+            }
+            SpduKind::EeRaSuccessorEnrollmentCertRequest => {
+                enrolment::ra_open_successor_request(pki, b).expect("to the RA");
+            }
+            SpduKind::RaEeEnrollmentCertAck => {
+                pdu::open_signed_pdu(b, pki).expect("signed");
             }
             SpduKind::EcaEeCertResponse | SpduKind::RaEeCertAck => {
                 pdu::open_signed_pdu(b, pki).expect("signed");
@@ -194,6 +213,9 @@ fn write_corpus(run: &ScmsRun, dir: &std::path::Path) {
         "certs": certs,
         "ra_cert": "ra.provider-a",
         "ra_enc_private": hex(&v2xw_sec::ec::scalar_to_be32(&pki.ra.enc_private.unwrap())),
+        "canonical": run.state.eca.canonical.iter()
+            .map(|(id, q)| (id.clone(), hex(&q.compressed().unwrap())))
+            .collect::<BTreeMap<_, _>>(),
     });
     std::fs::write(
         dir.join("manifest.json"),
