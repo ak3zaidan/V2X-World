@@ -216,17 +216,12 @@ pub struct RaAcaInput {
     pub psids: Vec<u64>,
 }
 
-/// `aca-ra.raAcaCertRequest` (03 §3.3): `type implicit`, `flags` all clear (not
-/// `butterflyExplicit`, not `cubk`), `linkageInfo`, `certEncKey = J_ij`, and `tbsCert`
-/// with `linkageData {iCert, dummy LV}`, `cracaId 000000`, `crlSeries 0`, the BSM PSID, and
-/// `verifyKeyIndicator = B_ij`.
-///
-/// # Errors
-/// A key does not encode.
-pub fn ra_aca_cert_request(
-    x: &RaAcaInput,
-) -> Result<v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::ScmsPdu> {
-    let tbs = v2xw_msg::sec_types::ieee1609_dot2::ToBeSignedCertificate::new(
+/// The pseudonym `tbsCert` the RA forwards (03 §3.3): `linkageData {iCert, dummy LV}`,
+/// `cracaId 000000`, `crlSeries 0` (the ACA replaces both), one week plus an hour from
+/// `valid_from`, and the requested PSIDs (BSM when none). Its `verifyKeyIndicator` is set
+/// by [`aca_ra_request`].
+fn pseudonym_tbs(x: &RaAcaInput) -> Result<v2xw_msg::sec_types::ieee1609_dot2::ToBeSignedCertificate> {
+    Ok(v2xw_msg::sec_types::ieee1609_dot2::ToBeSignedCertificate::new(
         CertificateId::linkageData(v2xw_msg::sec_types::ieee1609_dot2::LinkageData::new(
             IValue(Uint16(x.i)),
             AsnLinkageValue(FixedOctetString::from(x.dummy_lv)),
@@ -260,18 +255,70 @@ pub fn ra_aca_cert_request(
         None,
         None,
         None,
-    );
+    ))
+}
+
+/// THE `aca-ra.raAcaCertRequest` builder, for every certificate the ACA issues: a
+/// pseudonym certificate (`linkage` present, WP-B3a), an RSU application or an OBU
+/// identification certificate (`linkage` absent, WP-B3b).
+///
+/// The rules are the ASN.1 comments of `Ieee1609Dot2Dot1AcaRaInterface` (1609.2.1-2022,
+/// `tools/oracle/asn1/ieee1609.2.1-2022`): `type implicit` (the US profile's certificates
+/// are ECQV); `flags` all clear (neither `butterflyExplicit`, which needs `explicit`, nor
+/// `cubk`, refused in the US profile); "if type is implicit, the request is valid only if
+/// tbsCert.verifyKeyIndicator is a reconstructionValue", so `key` (the cocoon signing key
+/// `B_ij`, or the EE's request key `R_U`) goes there as the compressed point;
+/// `certEncKey` present with `cubk` clear selects `AcaEeCertResponsePrivateSpdu`, so
+/// `cert_enc_key` (`J_ij`, or the response key `U`) is the key the response is encrypted
+/// to; `linkageInfo`, when present, carries the two LAs' encrypted pre-linkage values and
+/// then `tbsCert.id` is `LinkageData` with a dummy value. The requested `cracaId` and
+/// `crlSeries` are what the ACA replaces.
+///
+/// Before WP-P2 the pseudonym path put `B_ij` in a `verificationKey`, which the module
+/// comment makes an invalid implicit request; one builder makes the two paths agree.
+///
+/// # Errors
+/// A key is the point at infinity or does not encode.
+pub fn aca_ra_request(
+    generation_time: u32,
+    requested: &v2xw_msg::sec_types::ieee1609_dot2::ToBeSignedCertificate,
+    key: &Point,
+    cert_enc_key: &Point,
+    linkage: Option<LinkageInfo>,
+) -> Result<v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::ScmsPdu> {
+    let mut tbs = requested.clone();
+    let r = cert::compressed_key(key).map_err(|_| PduError::Key("R at infinity"))?;
+    tbs.verify_key_indicator =
+        cert::reconstruction_key_indicator(&r).map_err(|_| PduError::Key("R"))?;
     Ok(pdu::pdu(ScmsPduContent::aca_ra(
         AcaRaInterfacePdu::raAcaCertRequest(RaAcaCertRequest::new(
             Uint8(STRUCT_VERSION),
-            Time32(Uint32(x.generation_time)),
+            Time32(Uint32(generation_time)),
             CertificateType::implicit,
             RaAcaCertRequestFlags(FixedBitString::default()),
-            Some(LinkageInfo::new(x.plv[0].clone(), x.plv[1].clone())),
-            Some(pdu::public_encryption_key(&x.cocoon_encryption)?),
+            linkage,
+            Some(pdu::public_encryption_key(cert_enc_key)?),
             tbs,
         )),
     )))
+}
+
+/// `aca-ra.raAcaCertRequest` for one pseudonym (03 §3.3): [`aca_ra_request`] over
+/// [`RaAcaInput`]'s `tbsCert` with `linkageInfo`, `certEncKey = J_ij` and
+/// `reconstructionValue = B_ij`.
+///
+/// # Errors
+/// A key does not encode.
+pub fn ra_aca_cert_request(
+    x: &RaAcaInput,
+) -> Result<v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::ScmsPdu> {
+    aca_ra_request(
+        x.generation_time,
+        &pseudonym_tbs(x)?,
+        &x.cocoon_signing,
+        &x.cocoon_encryption,
+        Some(LinkageInfo::new(x.plv[0].clone(), x.plv[1].clone())),
+    )
 }
 
 /// `RaAcaCertRequestSpdu`: [`ra_aca_cert_request`] signed by the RA certificate.
@@ -332,28 +379,52 @@ pub fn is_ra(c: &Certificate) -> bool {
     matches!(ssp_of(c), Some(SecurityMgmtSsp::ra(_)))
 }
 
-/// The ACA: opens one `RaAcaCertRequestSpdu` and issues.
+/// What [`aca_issue_request`] issued, for any certificate type.
+#[derive(Debug, Clone)]
+pub struct AcaIssue {
+    /// `AcaEeCertResponsePrivateSpdu`.
+    pub private: Pdu,
+    /// `AcaRaCertResponseSpdu`, carrying `private` and the request's HashedId8.
+    pub to_ra: Pdu,
+    /// The implicit certificate (the ACA's own record of what it issued).
+    pub certificate: Certificate,
+    /// The linkage value inserted (a pseudonym certificate only).
+    pub lv: Option<LinkageValue>,
+    /// `iCert` (a pseudonym certificate only).
+    pub i: Option<u16>,
+    /// The HashedId8 of the `RaAcaCertRequestSpdu` (`AcaRaCertResponse.requestHash`).
+    pub request_hash: [u8; 8],
+}
+
+/// THE ACA: opens one `RaAcaCertRequestSpdu` of any kind and issues.
 ///
 /// Checks, in the order a receiver applies them: the SignedCertRequest verifies under one
-/// certificate that chains to the PKI and carries the RA SSP; `raAcaCertRequest` version 2,
-/// `type implicit`, `flags` clear (the US profile's original butterfly; `cubk` is refused
-/// as UNCONFIRMED, 02 §9.4), `certEncKey` and `linkageInfo` present, `tbsCert.id`
-/// `linkageData`, `cracaId 000000`, `crlSeries 0`, no issue or request permissions, and a
-/// `verificationKey`. Then: decrypt both PLVs, `lv = plv1 ⊕ plv2`, insert it with
-/// `cracaId` = [`ScmsPki::craca_id`] and `crlSeries 1`, ECQV-issue with `B_ij` as `R_U`
-/// under the ACA, build `AcaEeCertResponse {certificate, privateKeyInfo = r}`, encrypt it
-/// to `J_ij` and sign with the ACA's own certificate (the same ACA that issued it), and
-/// wrap that in an ACA-signed `AcaRaCertResponse`.
+/// certificate that chains to the PKI and carries the RA SSP; version 2, `type implicit`,
+/// `flags` clear (the US profile's original butterfly; `cubk` is refused as UNCONFIRMED,
+/// 02 §9.4), `certEncKey` present (the private response), no issue or request
+/// permissions, `appPermissions` present, and `tbsCert.verifyKeyIndicator` a
+/// `reconstructionValue` (1609.2.1-2022 module comment).
+///
+/// With `linkageInfo` (a pseudonym): `tbsCert.id` is `linkageData`, `cracaId 000000`,
+/// `crlSeries 0`; both PLVs decrypt under `keys` and come from two LAs; `lv = plv1 ⊕ plv2`
+/// is inserted with `crlSeries 1`. Without it (an RSU application or OBU identification
+/// certificate, WP-B3b): `tbsCert.id` is not `linkageData`, and `crlSeries` is 3, revoked
+/// by hash. Either way `cracaId` = [`ScmsPki::craca_id`] (the ICA, the CRACA of the US CRL
+/// signer); ECQV-1609 issuance with the reconstruction value as `R_U` under this ACA;
+/// `AcaEeCertResponse {certificate, privateKeyInfo = r}` encrypted to `certEncKey` and
+/// signed by this ACA (the same ACA that issued it), inside an ACA-signed
+/// `AcaRaCertResponse` whose `requestHash` is the HashedId8 of the request as received.
 ///
 /// # Errors
-/// Any check above fails, as the [`PduError`] the run records.
-pub fn aca_issue(
+/// Any check above fails, as the [`PduError`] the run records; [`PduError::NotForMe`]
+/// for a PLV sealed under a key this ACA does not share (or no keys at all).
+pub fn aca_issue_request(
     pki: &ScmsPki,
-    keys: &LaAcaKeys,
+    keys: Option<&LaAcaKeys>,
     request: &[u8],
     now: u32,
     g: &mut Drbg,
-) -> Result<AcaIssued> {
+) -> Result<AcaIssue> {
     let (p, signer) = pdu::open_signed_cert_request(request, pki)?;
     let RequestSignerFound::Cert(signer) = signer else {
         return Err(PduError::Signer("RaAcaCertRequestSpdu is SignerSingleCert"));
@@ -368,7 +439,7 @@ pub fn aca_issue(
         return Err(PduError::Version("RaAcaCertRequest.version"));
     }
     if r.r_type != CertificateType::implicit {
-        return Err(PduError::Shape("the US pseudonym certificate is implicit"));
+        return Err(PduError::Shape("the US certificates are implicit"));
     }
     // flags BIT STRING {butterflyExplicit(0), cubk(1)} (SIZE(8)).
     if r.flags.0.any() {
@@ -376,61 +447,77 @@ pub fn aca_issue(
             "flags: butterflyExplicit and cubk are clear in the US profile (cubk UNCONFIRMED)",
         ));
     }
-    let j_key = match &r.cert_enc_key {
-        Some(k) => match &k.public_key {
-            v2xw_msg::sec_types::ieee1609_dot2_base_types::BasePublicEncryptionKey::eciesNistP256(
-                pt,
-            ) => pdu::point_of(pt)?,
-            _ => return Err(PduError::Key("certEncKey is eciesNistP256")),
-        },
+    let enc_key = match &r.cert_enc_key {
+        Some(k) => {
+            if k.supported_symm_alg
+                != v2xw_msg::sec_types::ieee1609_dot2_base_types::SymmAlgorithm::aes128Ccm
+            {
+                return Err(PduError::Shape("certEncKey supportedSymmAlg aes128Ccm"));
+            }
+            match &k.public_key {
+                v2xw_msg::sec_types::ieee1609_dot2_base_types::BasePublicEncryptionKey::eciesNistP256(
+                    pt,
+                ) => pdu::point_of(pt)?,
+                _ => return Err(PduError::Key("certEncKey is eciesNistP256")),
+            }
+        }
         None => {
             return Err(PduError::Shape(
-                "certEncKey absent: a pseudonym response is the private one",
+                "certEncKey absent: the US response is the private one",
             ));
         }
     };
-    let info = r
-        .linkage_info
-        .as_ref()
-        .ok_or(PduError::Shape("linkageInfo absent"))?;
     let tbs = &r.tbs_cert;
-    let CertificateId::linkageData(ld) = &tbs.id else {
-        return Err(PduError::Shape("tbsCert.id is linkageData"));
-    };
-    if tbs.craca_id.0[..] != [0u8; 3] || tbs.crl_series.0.0 != 0 {
-        return Err(PduError::Shape("tbsCert cracaId 000000 and crlSeries 0"));
-    }
     if tbs.cert_issue_permissions.is_some() || tbs.cert_request_permissions.is_some() {
         return Err(PduError::Shape(
-            "a pseudonym certificate carries no issue or request permissions",
+            "an end-entity certificate carries no issue or request permissions",
         ));
     }
     if tbs.app_permissions.is_none() {
         return Err(PduError::Shape("appPermissions present"));
     }
-    let VerificationKeyIndicator::verificationKey(k) = &tbs.verify_key_indicator else {
-        return Err(PduError::Shape("tbsCert.verifyKeyIndicator is B_ij"));
+    let VerificationKeyIndicator::reconstructionValue(rv) = &tbs.verify_key_indicator else {
+        return Err(PduError::Shape(
+            "an implicit request carries a reconstructionValue",
+        ));
     };
-    let v2xw_msg::sec_types::ieee1609_dot2_base_types::PublicVerificationKey::ecdsaNistP256(bp) = k
-    else {
-        return Err(PduError::Key("B_ij is P-256"));
-    };
-    let b = pdu::point_of(bp)?;
-    let (la1, plv1) = aca_open_plv(&info.enc_plv1, keys, now)?;
-    let (la2, plv2) = aca_open_plv(&info.enc_plv2, keys, now)?;
-    if la1 == la2 {
-        return Err(PduError::Shape("the two PLVs come from two different LAs"));
-    }
-    let lv = linkage::linkage_value(plv1, plv2);
-    let i = ld.i_cert.0.0;
+    let request_public = pdu::point_of(rv)?;
     let mut t = tbs.clone();
-    t.id = CertificateId::linkageData(v2xw_msg::sec_types::ieee1609_dot2::LinkageData::new(
-        IValue(Uint16(i)),
-        lv.to_asn1(),
-        None,
-    ));
+    let (lv, i) = match &r.linkage_info {
+        Some(info) => {
+            let CertificateId::linkageData(ld) = &tbs.id else {
+                return Err(PduError::Shape("tbsCert.id is linkageData"));
+            };
+            if tbs.craca_id.0[..] != [0u8; 3] || tbs.crl_series.0.0 != 0 {
+                return Err(PduError::Shape("tbsCert cracaId 000000 and crlSeries 0"));
+            }
+            let keys = keys.ok_or(PduError::NotForMe)?;
+            let (la1, plv1) = aca_open_plv(&info.enc_plv1, keys, now)?;
+            let (la2, plv2) = aca_open_plv(&info.enc_plv2, keys, now)?;
+            if la1 == la2 {
+                return Err(PduError::Shape("the two PLVs come from two different LAs"));
+            }
+            let lv = linkage::linkage_value(plv1, plv2);
+            let i = ld.i_cert.0.0;
+            t.id = CertificateId::linkageData(
+                v2xw_msg::sec_types::ieee1609_dot2::LinkageData::new(
+                    IValue(Uint16(i)),
+                    lv.to_asn1(),
+                    None,
+                ),
+            );
+            t.crl_series = CrlSeries(Uint16(PSEUDONYM_CRL_SERIES));
+            (Some(lv), Some(i))
+        }
+        None => {
+            if matches!(tbs.id, CertificateId::linkageData(_)) {
+                return Err(PduError::Shape("no LinkageData without linkageInfo"));
+            }
+            t.crl_series = CrlSeries(Uint16(v2xw_sec::crl::SERIES_APPLICATION_IDENTIFICATION));
+            (None, None)
+        }
+    };
     t.craca_id = HashedId3(FixedOctetString::from(pki.craca_id()));
-    t.crl_series = CrlSeries(Uint16(PSEUDONYM_CRL_SERIES));
     let d_aca = pki
         .aca
         .private
@@ -441,7 +528,7 @@ pub fn aca_issue(
         &pki.aca.cert,
         &Point::mul_base(d_aca),
         d_aca,
-        &b,
+        &request_public,
         || g.scalar(),
     )
     .map_err(|_| PduError::Key("ECQV issuance"))?;
@@ -457,7 +544,7 @@ pub fn aca_issue(
     ));
     let private = Pdu::new(pdu::encrypted_signed(
         &resp,
-        &j_key,
+        &enc_key,
         &pki.aca.cert,
         &pki.aca.key,
         g,
@@ -472,13 +559,39 @@ pub fn aca_issue(
         )),
     ));
     let to_ra = Pdu::new(pdu::signed(&to_ra, &pki.aca.cert, &pki.aca.key)?);
-    Ok(AcaIssued {
+    Ok(AcaIssue {
         private,
         to_ra,
         certificate: issued.certificate,
         lv,
         i,
         request_hash,
+    })
+}
+
+/// The ACA for a pseudonym request ([`aca_issue_request`] with the LA keys): a request
+/// without `linkageInfo` is refused here.
+///
+/// # Errors
+/// As [`aca_issue_request`], and `linkageInfo` absent.
+pub fn aca_issue(
+    pki: &ScmsPki,
+    keys: &LaAcaKeys,
+    request: &[u8],
+    now: u32,
+    g: &mut Drbg,
+) -> Result<AcaIssued> {
+    let x = aca_issue_request(pki, Some(keys), request, now, g)?;
+    let (Some(lv), Some(i)) = (x.lv, x.i) else {
+        return Err(PduError::Shape("linkageInfo absent"));
+    };
+    Ok(AcaIssued {
+        private: x.private,
+        to_ra: x.to_ra,
+        certificate: x.certificate,
+        lv,
+        i,
+        request_hash: x.request_hash,
     })
 }
 
