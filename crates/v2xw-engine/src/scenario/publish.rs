@@ -311,6 +311,12 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
 /// leaf publishes an empty unit, which is what it would publish without this list.
 #[cfg(test)]
 const DIMENSIONLESS: &[&str] = &[
+    // The SCMS deployment (WP-D1): instance counts, elector counts and fractions.
+    "security.scms.deployment.providers[].components.*",
+    "security.scms.deployment.providers[].fleet_share",
+    "security.scms.deployment.electors",
+    "security.scms.deployment.quorum",
+    "security.scms.deployment.fibre_fraction",
     "radio.channel_model.nakagami_shape_far",
     "seed",
     "net.geonet.hop_limit",
