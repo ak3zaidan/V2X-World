@@ -93,6 +93,7 @@ pub mod error;
 pub mod events;
 pub mod firewall;
 pub mod generate;
+pub mod p2pcd;
 pub mod policy;
 pub mod profile;
 pub mod profiles;
