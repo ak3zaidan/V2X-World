@@ -167,8 +167,9 @@ fn vehicles_sign_under_the_runs_aca() {
         match &cert.0.to_be_signed.id {
             CertificateId::linkageData(_) => {
                 assert_eq!(cert.0.to_be_signed.crl_series.0.0, 1);
-                // The protocol's certificate, not a factory one: the ACA put the CRL
-                // Generator's cracaId in it, where factory issuance puts the ACA's own.
+                // The protocol's certificate, not a factory one: the ACA put the CRACA's
+                // cracaId in it (the ICA since WP-B4), where factory issuance puts the
+                // ACA's own.
                 // (Every vehicle of this run is provisioned before it drives.)
                 assert_ne!(
                     cert.0.to_be_signed.craca_id,
