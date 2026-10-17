@@ -246,6 +246,36 @@ pub struct ScmsParams {
     /// that a two-of-two deployment with an LA down retries as a committee session does,
     /// and the two are compared like for like.
     pub seed_retry: Duration,
+    /// The real IEEE 1609.2.1 PDU layer (`crate::scms::pdu`, WP-B1).
+    pub pdu: PduLayer,
+}
+
+/// The real 1609.2.1 SPDU layer's settings (`crate::scms::pdu`).
+///
+/// On by default: every enrolment and provisioning message the run sends is a real
+/// `Ieee1609Dot2Data` carrying a `ScmsPdu` under PSID 35, signed and encrypted with real
+/// keys, charged its encoded length, and opened and verified by its receiver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PduLayer {
+    /// Build, send and verify real SPDUs. `false` falls back to the modelled sizes.
+    pub enabled: bool,
+    /// Keep every emitted SPDU's bytes on `ScmsState::pdus` (for the oracle and for
+    /// attack studies); off by default to keep long runs lean, the counts are always kept.
+    pub keep_bytes: bool,
+    /// UTC Unix seconds of simulated time 0, which every `Time32` in a PDU is derived from
+    /// through [`v2xw_core::time::WallClock`] (TAI since the 1609.2 epoch). Default
+    /// 2026-01-05T00:00:00Z; a scenario sets its `time.t0`.
+    pub t0_unix_s: i64,
+}
+
+impl Default for PduLayer {
+    fn default() -> PduLayer {
+        PduLayer {
+            enabled: true,
+            keep_bytes: false,
+            t0_unix_s: 1_767_571_200,
+        }
+    }
 }
 
 /// Which roles a committee plays, and how.
@@ -340,6 +370,7 @@ impl Default for ScmsParams {
             kem: None,
             threshold: None,
             seed_retry: Duration::from_secs(30),
+            pdu: PduLayer::default(),
         }
     }
 }
