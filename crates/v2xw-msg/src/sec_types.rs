@@ -32,6 +32,41 @@
 //! | [`ieee1609_dot2_crl_base_types`] | `Ieee1609Dot2CrlBaseTypes` | CRL contents, linkage seeds |
 //! | [`etsi_ts103097_module`] | `EtsiTs103097Module` | ETSI TS 103 097 profile (`EtsiTs103097Data`, `EtsiTs103097Certificate`) |
 //! | [`etsi_ts103097_extension_module`] | `EtsiTs103097ExtensionModule` | TS 103 097 header-info extensions |
+//! | [`ieee1609_dot2_dot1_protocol`] | `Ieee1609Dot2Dot1Protocol` | IEEE 1609.2.1 (`ScmsPdu`, every `…Spdu` wrapper, `SecurityMgmtSsp`) |
+//! | [`ieee1609_dot2_dot1_ee_ra_interface`] | `Ieee1609Dot2Dot1EeRaInterface` | `EeRaCertRequest`, `RaEeCertAck`, `RaEeCertInfo`, `EeRaDownloadRequest`, butterfly `AdditionalParams` |
+//! | [`ieee1609_dot2_dot1_aca_ra_interface`] | `Ieee1609Dot2Dot1AcaRaInterface` | `RaAcaCertRequest`, `AcaRaCertResponse`, `LinkageInfo`, `EncryptedIndividualPLV` |
+//! | [`ieee1609_dot2_dot1_aca_ee_interface`] | `Ieee1609Dot2Dot1AcaEeInterface` | `AcaEeCertResponse` |
+//! | [`ieee1609_dot2_dot1_eca_ee_interface`] | `Ieee1609Dot2Dot1EcaEeInterface` | `EeEcaCertRequest`, `EcaEeCertResponse` |
+//! | [`ieee1609_dot2_dot1_cert_management`] | `Ieee1609Dot2Dot1CertManagement` | CTL (`FullIeeeTbsCtl`, `ToBeSignedCtlSignature`), composite CRL, certificate chain, info status |
+//! | [`ieee1609_dot2_dot1_acpc`] | `Ieee1609Dot2Dot1Acpc` | ACPC (not used by the US profile) |
+//! | the other seven `ieee1609_dot2_dot1_*` | `…AcaLa`, `…AcaMa`, `…CamRa`, `…EeMa`, `…LaMa`, `…LaRa`, `…MaRa` | interfaces that 1609.2.1-2022 leaves `NULL` or nearly so |
+//!
+//! # Editions (owner decision 1, provisional)
+//!
+//! The **1609.2.1 modules are the 2022 edition** (forge tag `2022-published`, byte-identical
+//! to the IEEE download bundle). The **1609.2 modules are the 2025 edition** (forge `ieee`
+//! branch). That pairing is the modules' own: every 1609.2.1-2022 module imports 1609.2
+//! `WITH SUCCESSORS`. The 2022 and 2025 1609.2 modules differ in exactly three places of
+//! code, which a test in [`crate::scms_types`] pins (the 2022 copies are committed under
+//! `third_party/asn1/etsi/ieee1609.2-2022/` for that test and for the oracle):
+//!
+//! 1. `ToBeSignedCertificate`'s extension additions `appExtensions`,
+//!    `certIssueExtensions`, `certRequestExtension` are mandatory in 2022 and `OPTIONAL`
+//!    in 2025. The generated types are the 2025 (superset) form; the 2022 rule is enforced
+//!    by [`crate::scms_types::check_edition`].
+//! 2. `Countersignature` additionally requires `omitted ABSENT` in 2025 (a value rule).
+//! 3. `CrlContents` gains the extension addition `iPeriodInfo` in 2025.
+//!
+//! None of the three changes the COER bytes of a value that is valid in both editions,
+//! which is why one set of generated types serves both.
+//!
+//! # What the parameterised 1609.2.1 wrappers lose
+//!
+//! `rasn-compiler` expands `Ieee1609Dot2Data-Signed{Tbs, Psid}` and its siblings into
+//! structural copies of `Ieee1609Dot2Data`. Their `WITH COMPONENTS` and `CONTAINING`
+//! constraints (the signer is one certificate, the payload is a `ScmsPdu`, the PSID is
+//! 35, …) are **not checked by the generated types**. They do not change the COER
+//! encoding of a valid value; checking them is the protocol layer's job.
 //!
 //! # Encoding
 //!
@@ -39,12 +74,17 @@
 //! which is a thin wrapper that produces the right [`crate::codec::SizeSource`] and this
 //! crate's error type.
 //!
-//! # One applied patch
+//! # Applied patches
 //!
 //! `rasn-compiler` 0.16 emits an uncompilable `DEFAULT` for `PsidGroupPermissions.eeType`
 //! (a fixed-size BIT STRING). The fix is recorded in
 //! `crates/v2xw-msg/patches/0001-ieee1609dot2-endentitytype-default.patch`, applied to the
 //! generated text, and the build fails if it stops applying. Build decision D5.
+//!
+//! Patches 0002–0004 and `build.rs`'s `link_ieee1609dot2dot1_scopes` fix Rust name
+//! resolution in the generated 1609.2.1 modules (imports of parameterised types that have
+//! no Rust item, and imports that ASN.1 lets a module re-export). None changes a type or a
+//! byte.
 
 /// The generated IEEE 1609.2 / TS 103 097 modules.
 #[allow(missing_docs)]
@@ -57,6 +97,15 @@ mod generated {
 pub use generated::{
     etsi_ts103097_extension_module, etsi_ts103097_module, ieee1609_dot2, ieee1609_dot2_base_types,
     ieee1609_dot2_crl, ieee1609_dot2_crl_base_types,
+};
+pub use generated::{
+    ieee1609_dot2_dot1_aca_ee_interface, ieee1609_dot2_dot1_aca_la_interface,
+    ieee1609_dot2_dot1_aca_ma_interface, ieee1609_dot2_dot1_aca_ra_interface,
+    ieee1609_dot2_dot1_acpc, ieee1609_dot2_dot1_cam_ra_interface,
+    ieee1609_dot2_dot1_cert_management, ieee1609_dot2_dot1_eca_ee_interface,
+    ieee1609_dot2_dot1_ee_ma_interface, ieee1609_dot2_dot1_ee_ra_interface,
+    ieee1609_dot2_dot1_la_ma_interface, ieee1609_dot2_dot1_la_ra_interface,
+    ieee1609_dot2_dot1_ma_ra_interface, ieee1609_dot2_dot1_protocol,
 };
 
 // The handful of names a security implementation reaches for constantly, lifted to the

@@ -138,6 +138,7 @@ pub mod generator;
 pub mod j2735;
 pub mod j2945;
 pub mod registry;
+pub mod scms_types;
 pub mod sec_types;
 pub mod size_model;
 pub mod units;
@@ -186,10 +187,30 @@ pub mod provenance {
         "Ieee1609Dot2Crl (forge commit 77e2c822a11b)",
         "EtsiTs103097ExtensionModule (TS 103 097, forge commit 6e01cab9f15c)",
         "EtsiTs103097Module (TS 103 097, forge commit 6e01cab9f15c)",
+        "Ieee1609Dot2Dot1Protocol (IEEE 1609.2.1-2022, forge tag 2022-published, commit 329ff68846fe)",
+        "Ieee1609Dot2Dot1Acpc (IEEE 1609.2.1-2022, forge commit 329ff68846fe)",
+        "Ieee1609Dot2Dot1CertManagement (IEEE 1609.2.1-2022, forge commit 329ff68846fe)",
+        "Ieee1609Dot2Dot1EcaEeInterface (IEEE 1609.2.1-2022, forge commit 329ff68846fe)",
+        "Ieee1609Dot2Dot1EeRaInterface (IEEE 1609.2.1-2022, forge commit 329ff68846fe)",
+        "Ieee1609Dot2Dot1AcaRaInterface (IEEE 1609.2.1-2022, forge commit 329ff68846fe)",
+        "Ieee1609Dot2Dot1AcaEeInterface (IEEE 1609.2.1-2022, forge commit 329ff68846fe)",
+        "Ieee1609Dot2Dot1AcaLaInterface (IEEE 1609.2.1-2022, forge commit 329ff68846fe)",
+        "Ieee1609Dot2Dot1AcaMaInterface (IEEE 1609.2.1-2022, forge commit 329ff68846fe)",
+        "Ieee1609Dot2Dot1CamRaInterface (IEEE 1609.2.1-2022, forge commit 329ff68846fe)",
+        "Ieee1609Dot2Dot1EeMaInterface (IEEE 1609.2.1-2022, forge commit 329ff68846fe)",
+        "Ieee1609Dot2Dot1LaMaInterface (IEEE 1609.2.1-2022, forge commit 329ff68846fe)",
+        "Ieee1609Dot2Dot1LaRaInterface (IEEE 1609.2.1-2022, forge commit 329ff68846fe)",
+        "Ieee1609Dot2Dot1MaRaInterface (IEEE 1609.2.1-2022, forge commit 329ff68846fe)",
     ];
 
     /// Patches applied to the generated text (build decision D5).
-    pub const PATCHES: &[&str] = &["0001-ieee1609dot2-endentitytype-default.patch"];
+    pub const PATCHES: &[&str] = &[
+        "0001-ieee1609dot2-endentitytype-default.patch",
+        "0002-ieee1609dot2dot1-acpc-parameterised-imports.patch",
+        "0003-ieee1609dot2dot1-acara-parameterised-import.patch",
+        "0004-ieee1609dot2dot1-certmanagement-crlseries-import.patch",
+        "0005-ieee1609dot2-pdufunctionaltype-extension-constraint.patch",
+    ];
 
     /// The code generator, pinned in the workspace manifest.
     pub const GENERATOR: &str = "rasn-compiler 0.16 (RasnBackend) over rasn 0.28";

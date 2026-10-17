@@ -1,0 +1,26 @@
+# Defect: rasn 0.28.14 drops a delegate type's own value constraint when the type is
+# encoded as a SEQUENCE extension addition.
+#
+# Module:   Ieee1609Dot2 (IEEE 1609.2, ETSI forge mirror, commit 77e2c822a11b)
+# ASN.1:    HeaderInfo ::= SEQUENCE { ..., ..., pduFunctionalType PduFunctionalType OPTIONAL, ... }
+#           PduFunctionalType ::= INTEGER (0..255)
+# Emitted:  #[rasn(delegate, value("0..=255"))] pub struct PduFunctionalType(pub u8);
+#           #[rasn(extension_addition, identifier = "pduFunctionalType")]
+# Wrong:    rasn's OER `encode_extension_addition` encodes the value with the *field's*
+#           constraints, which are empty, so PduFunctionalType 219 goes out as the
+#           unconstrained integer 02 00 db inside the open type instead of the X.696
+#           fixed one-octet db; decoding the correct bytes fails. Found by the asn1tools
+#           cross-check (crates/v2xw-msg/tests/scms_coer_xcheck.rs): 166 of 200 random
+#           HeaderInfo values disagreed before this patch.
+#
+# The fix states the same constraint on the field, which rasn does honour. It is the only
+# extension addition in the security unit whose type is a constrained integer
+# (FullIeeeTbsCtl.quorum is an unconstrained INTEGER, which needs no constraint).
+unit: sec_types.rs
+expect: 1
+@@FIND@@
+        #[rasn(extension_addition, identifier = "pduFunctionalType")]
+@@REPLACE@@
+        // PATCHED by crates/v2xw-msg/patches/0005-ieee1609dot2-pdufunctionaltype-extension-constraint.patch
+        #[rasn(extension_addition, value("0..=255"), identifier = "pduFunctionalType")]
+@@END@@

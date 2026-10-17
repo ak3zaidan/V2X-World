@@ -1,0 +1,19 @@
+# Defect: rasn-compiler 0.16 does not re-export a symbol a module imports.
+#
+# Module:   Ieee1609Dot2Dot1CertManagement (IEEE 1609.2.1-2022, ETSI forge tag
+#           2022-published, commit 329ff68846fe)
+# ASN.1:    IMPORTS CrlSeries FROM Ieee1609Dot2CrlBaseTypes
+#           (Ieee1609Dot2CrlBaseTypes itself imports CrlSeries FROM Ieee1609Dot2BaseTypes;
+#           X.680 §13 lets EXPORTS ALL cover imported symbols.)
+# Error:    E0603 — `CrlSeries` is a private import of ieee1609_dot2_crl_base_types.
+#
+# The import names the defining module instead. It is the same Rust type
+# (`ieee1609_dot2_base_types::CrlSeries`, Uint16), so nothing on the wire changes.
+unit: sec_types.rs
+expect: 1
+@@FIND@@
+    use super::ieee1609_dot2_crl_base_types::CrlSeries;
+@@REPLACE@@
+    // PATCHED by crates/v2xw-msg/patches/0004-ieee1609dot2dot1-certmanagement-crlseries-import.patch
+    use super::ieee1609_dot2_base_types::CrlSeries;
+@@END@@
