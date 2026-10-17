@@ -1437,7 +1437,7 @@ fn validity_covers(vp: &ValidityPeriod, at_epoch_seconds: u64) -> bool {
 /// in microseconds is not a thing any profile issues and rounding it up would extend a
 /// certificate's life. `years` is 31,556,952 seconds — the Gregorian mean year 1609.2
 /// defines, not 365 days.
-fn duration_seconds(d: &Ieee1609Duration) -> u64 {
+pub(crate) fn duration_seconds(d: &Ieee1609Duration) -> u64 {
     match d {
         Ieee1609Duration::microseconds(v) => u64::from(v.0) / 1_000_000,
         Ieee1609Duration::milliseconds(v) => u64::from(v.0) / 1_000,
