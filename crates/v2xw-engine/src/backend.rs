@@ -251,6 +251,11 @@ pub const WIRED_RTO_MS: f64 = 200.0;
 /// TCP connection gave up waits before it opens a new one and tries again.
 pub const RECONNECT_S: f64 = 1.0;
 
+/// The longest an EE↔SCMS TLS session may live: "The max lifetime of a session shall be
+/// 5 minutes", with session resumption not supported ([SMP] §3.2; 03 §2). A message sent
+/// on a session older than this opens a new TCP connection and a full TLS handshake.
+pub const TLS_SESSION_MAX: Duration = Duration::from_secs(5 * 60);
+
 /// Every message of a backend exchange, carried by the access model the run selected.
 ///
 /// Shared between [`BackendAccess`] (the engine's own sends: a misbehaviour report, a CRL
@@ -262,6 +267,10 @@ pub struct Carrier {
     packet: Option<PacketUu>,
     tcp: TcpConfig,
     conns: BTreeMap<NodeId, TcpConn>,
+    /// When each open connection's TLS session began.
+    sessions: BTreeMap<NodeId, SimTime>,
+    /// [`TLS_SESSION_MAX`].
+    session_max: Duration,
     rsu_lines: BTreeMap<NodeId, (Backhaul, WiredLink)>,
     relay_of: BTreeMap<NodeId, NodeId>,
     internet: Duration,
@@ -289,6 +298,13 @@ pub struct CarrierStats {
     pub tcp_retransmissions: u64,
     /// TCP timeouts.
     pub tcp_rtos: u64,
+    /// Full TLS handshakes (server-authenticated, no resumption: every session pays
+    /// the whole handshake, [SMP] §3.2).
+    pub tls_handshakes: u64,
+    /// Sessions closed because they reached [`TLS_SESSION_MAX`].
+    pub tls_sessions_expired: u64,
+    /// Bytes the TCP and TLS handshakes carried, both directions, headers included.
+    pub tls_handshake_bytes: u64,
     /// Connections that gave up and were reopened.
     pub reconnects: u64,
     /// Messages that could not be carried after three attempts and were charged at the
@@ -303,6 +319,8 @@ impl Carrier {
             packet,
             tcp: TcpConfig::default(),
             conns: BTreeMap::new(),
+            sessions: BTreeMap::new(),
+            session_max: TLS_SESSION_MAX,
             rsu_lines: BTreeMap::new(),
             relay_of: BTreeMap::new(),
             internet,
@@ -327,11 +345,22 @@ impl Carrier {
             packet,
             tcp,
             conns,
+            sessions,
+            session_max,
             stats,
             ..
         } = self;
         let m = packet.as_mut()?;
         let mut t0 = at;
+        // A session past its lifetime is closed; with no resumption the next message
+        // pays a new connection and a full handshake.
+        if let Some(&began) = sessions.get(&node)
+            && at.saturating_sub(began) >= session_max.as_nanos()
+        {
+            conns.remove(&node);
+            sessions.remove(&node);
+            stats.tls_sessions_expired += 1;
+        }
         for _ in 0..3 {
             let conn = conns.entry(node).or_insert_with(|| TcpConn::new(tcp));
             let mut r = TransferReport {
@@ -343,6 +372,11 @@ impl Carrier {
             if !conn.established {
                 stats.tcp_connections += 1;
                 t = tcp_handshake(&mut (), &mut path, node, conn, tcp, t0, &mut r);
+                if t.is_some() {
+                    stats.tls_handshakes += 1;
+                    stats.tls_handshake_bytes += r.bytes_ul + r.bytes_dl;
+                    sessions.insert(node, t0);
+                }
             }
             let done = t.and_then(|t| {
                 tcp_stream(&mut (), &mut path, node, conn, tcp, dir, bytes, t, &mut r)
@@ -353,10 +387,17 @@ impl Carrier {
                 return Some(d);
             }
             conns.remove(&node);
+            sessions.remove(&node);
             stats.reconnects += 1;
             t0 = ms(RECONNECT_S * 1e3).after(r.done_at.unwrap_or(t0).max(t0));
         }
         None
+    }
+
+    /// Sets the TLS version of every new session: `session-scmsAuth` is TLS 1.2 or 1.3
+    /// ([SMP] §2.1.18; CAMP's EE suites are TLS 1.2, [CAMP122] §6.3.3.5).
+    pub fn set_tls(&mut self, tls: v2xw_radio::ip_transport::TlsVersion) {
+        self.tcp.tls = tls;
     }
 
     /// One message over roadside unit `rsu`'s backhaul, from `at`: its FIFO line (lost
@@ -1324,6 +1365,71 @@ fn backhaul_from(id: &str, params: &serde_json::Value, uu_one_way: Duration) -> 
 #[cfg(test)]
 mod carrier_tests {
     use super::*;
+    use v2xw_radio::ip_transport::TlsVersion;
+
+    fn lte() -> Carrier {
+        Carrier::new(
+            Some(PacketUu::new(
+                Rat::Lte,
+                BaseStationLayout::lattice(CellPlan::urban_macro()),
+            )),
+            Duration::ZERO,
+        )
+    }
+
+    const MIN: u64 = 60_000_000_000;
+
+    #[test]
+    fn a_tls_session_lives_at_most_five_minutes_and_is_never_resumed() {
+        let ue = NodeId::new(5);
+        let mut c = lte();
+        c.tcp_carry(ue, Direction::Uplink, 600, 0).expect("carried");
+        let first = c.stats.tls_handshake_bytes;
+        assert_eq!(c.stats.tls_handshakes, 1);
+        // Within the session: the same connection, no handshake.
+        c.tcp_carry(ue, Direction::Downlink, 600, 4 * MIN).expect("carried");
+        assert_eq!(c.stats.tls_handshakes, 1);
+        assert_eq!(c.stats.tls_sessions_expired, 0);
+        // Five minutes after it began: a new session, a full handshake of the same bytes.
+        c.tcp_carry(ue, Direction::Uplink, 600, 5 * MIN).expect("carried");
+        assert_eq!(c.stats.tls_handshakes, 2);
+        assert_eq!(c.stats.tls_sessions_expired, 1);
+        assert_eq!(c.stats.tls_handshake_bytes, 2 * first, "no abbreviated handshake");
+        assert_eq!(c.stats.tcp_connections, 2);
+        // The new session's clock starts at its own handshake.
+        c.tcp_carry(ue, Direction::Uplink, 600, 9 * MIN).expect("carried");
+        assert_eq!(c.stats.tls_handshakes, 2);
+        // Another vehicle has its own session.
+        c.tcp_carry(NodeId::new(6), Direction::Uplink, 600, 9 * MIN)
+            .expect("carried");
+        assert_eq!(c.stats.tls_handshakes, 3);
+        assert_eq!(TLS_SESSION_MAX, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn a_tls_handshake_costs_its_flights_tls12_one_round_trip_more() {
+        // TCP: SYN and SYN-ACK, 60 B each. TLS 1.3 (RFC 8446 §2): ClientHello, then the
+        // server flight; TLS 1.2 (RFC 5246 §7.3): ClientHello, server flight, client key
+        // exchange + Finished (+50 B ChangeCipherSpec and record headers), server
+        // ChangeCipherSpec + Finished (51 B). Each segment adds its 52 B of IP/TCP headers.
+        let cfg = TcpConfig::default();
+        let seg = |b: u32| u64::from(b + cfg.header * b.div_ceil(cfg.mss));
+        let ue = NodeId::new(5);
+        let mut c13 = lte();
+        let t13 = c13.tcp_carry(ue, Direction::Uplink, 1, 0).unwrap();
+        let hs13 = 120 + seg(cfg.client_hello) + seg(cfg.server_flight);
+        let mut c12 = lte();
+        c12.set_tls(TlsVersion::Tls12);
+        let t12 = c12.tcp_carry(ue, Direction::Uplink, 1, 0).unwrap();
+        let hs12 = hs13 + seg(cfg.client_finish + 50) + seg(51);
+        let got13 = c13.stats.tls_handshake_bytes;
+        let got12 = c12.stats.tls_handshake_bytes;
+        // The flights' payload bytes are exact; ACK segments ride on top.
+        assert!(got13 >= hs13 && got13 < hs13 + 400, "{got13} vs {hs13}");
+        assert!(got12 >= hs12 && got12 < hs12 + 400, "{got12} vs {hs12}");
+        assert!(got12 - got13 >= u64::from(cfg.client_finish + 50 + 51));
+        assert!(t12 > t13, "TLS 1.2 takes one more round trip: {t12} vs {t13}");
+    }
 
     #[test]
     fn mbms_waits_for_the_scheduling_period_and_serialises() {
