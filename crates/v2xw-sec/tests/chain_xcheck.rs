@@ -205,7 +205,7 @@ fn five_hundred_oracle_chains_get_the_oracle_verdict() {
         }
     }
     // The corpus must exercise what it claims to.
-    assert!(valid >= 150 && valid <= 350, "{valid} valid chains");
+    assert!((150..=350).contains(&valid), "{valid} valid chains");
     assert!(implicit_certs >= 200, "{implicit_certs} implicit issuances");
     assert!(reissued >= 1200, "{reissued} certificates re-issued");
     assert!(spdu_valid >= 150, "{spdu_valid} SPDUs verified");

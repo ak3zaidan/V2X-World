@@ -273,7 +273,10 @@ fn chain_length_ok(iss: (i64, i64), sub: (i64, i64)) -> bool {
     if ci == -1 {
         return true;
     }
-    cs != -1 && mi + ci >= ms + cs + 1
+    // Written as the standard states it (02 §12), not as clippy's `>`.
+    #[allow(clippy::int_plus_one)]
+    let ok = cs != -1 && mi + ci >= ms + cs + 1;
+    ok
 }
 
 fn group_len(g: &PsidGroupPermissions) -> (i64, i64) {
@@ -603,7 +606,7 @@ pub fn validate(
                 .collect(),
         })
     } else {
-        errs.sort_by(|a, b| (a.index, a.kind).cmp(&(b.index, b.kind)));
+        errs.sort_by_key(|e| (e.index, e.kind));
         Err(errs)
     }
 }

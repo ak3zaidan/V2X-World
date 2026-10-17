@@ -165,3 +165,11 @@ Their sha256 values: production zip `411fa8d4…3b19` (`cert-chain_0.oer` `738b3
 | `ieee1609.2.1-2022/Ieee1609Dot2Dot1LaRaInterface.asn` | 890 | `c3e599663f5e770785fb532ad886191dd82b06a63568caf7e91c59d5f7a65420` |
 | `ieee1609.2.1-2022/Ieee1609Dot2Dot1MaRaInterface.asn` | 890 | `61321da9ee2967d9f151c1d0cd2de554b5970f9d9502fd2caa5814aa9f4ddbfc` |
 | `ieee1609.2.1-2022/Ieee1609Dot2Dot1Protocol.asn` | 45185 | `b98b1c982b17776a38dc3cf2150cfd1c080c072be2dac35950ce386cf51045ed` |
+
+## 9. WP-A3 chain cross-check corpus
+
+| File | What | Generator | sha256 |
+|---|---|---|---|
+| `crates/v2xw-sec/tests/vectors/xcheck/chains.json` | 500 random 1609.2-2022 chains (2–5 certificates, explicit and implicit, 13 injected rule faults), each with the oracle's `chain.validate` verdict, an SPDU signed with the EE key, and the issuance inputs of every certificate | `python -I tools/chain-xcheck/chain_xcheck.py gen <out>` (seed 20261016); `verify <file>` regenerates it byte for byte | `523500a71470836135666be704359cdc4db070316f64def4816ab87c12a6ce93` |
+
+`tools/chain-xcheck` is glue written by the WP-A3 agent, who also wrote the Rust under test. It only calls the oracle's public functions (`coer`, `certs`, `ecqv`, `prims`, `chain`) and does not change the oracle. Two judgements are the harness's own, not the oracle's: (a) the SPDU verdict for chains with implicit CAs, where the key above the first implicit level is composed from `ecqv.e_1609` and `ecqv.public_key`, because `certs.verification_key` cannot resolve an implicit issuer; (b) the space of generated chains, limited to where the oracle's rules are complete (see the script's docstring). Rules outside that space are covered only by `crates/v2xw-sec/tests/chain_rules.rs`, from the 1609.2-2022 ASN.1 notes.

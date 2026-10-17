@@ -33,7 +33,6 @@ use v2xw_sec::chain::{self, ChainErrorKind as K, ChainPolicy};
 use v2xw_sec::ec::Point;
 
 const START: u32 = 679_737_605;
-const YEAR: u32 = 31_556_952;
 
 // ------------------------------------------------------------------------------------
 // builders
@@ -137,7 +136,7 @@ impl Spec {
     }
     fn tbs(&self, vki: VerificationKeyIndicator) -> ToBeSignedCertificate {
         ToBeSignedCertificate::new(
-            CertificateId::name(Hostname(self.name.to_string().into())),
+            CertificateId::name(Hostname(self.name.to_string())),
             HashedId3(rasn::types::FixedOctetString::from([1, 2, 3])),
             CrlSeries(Uint16(2)),
             ValidityPeriod::new(
