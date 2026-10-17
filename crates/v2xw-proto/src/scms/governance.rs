@@ -963,6 +963,9 @@ pub struct GovernanceConfig {
     pub clock: WallClock,
     /// The home provider's neutral label (owner decision: neutral provider names).
     pub provider: String,
+    /// The other providers on the same CTL (WP-D1): each gets its own Root CA, ICA and
+    /// components at the ceremony, its root on the genesis CTL beside the home one.
+    pub peers: Vec<PeerProvider>,
 }
 
 impl Default for GovernanceConfig {
@@ -970,9 +973,50 @@ impl Default for GovernanceConfig {
         GovernanceConfig {
             clock: WallClock::new(DEFAULT_T0_UNIX_S),
             provider: "provider-a".into(),
+            peers: Vec::new(),
         }
     }
 }
+
+/// Another provider on the CTL, and where its authorities are hosted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerProvider {
+    /// Its neutral label.
+    pub label: String,
+    /// Its online components' nodes.
+    pub online: ScmsNodes,
+    /// Its offline Root CA.
+    pub root: NodeId,
+    /// Its offline ICA.
+    pub ica: NodeId,
+    /// Its Policy Generator.
+    pub pg: NodeId,
+}
+
+impl PeerProvider {
+    /// Every provider of `d` after the first (the home provider), in order.
+    #[must_use]
+    pub fn of_deployment(d: &crate::scms::deployment::Deployment) -> Vec<PeerProvider> {
+        (1..d.providers.len())
+            .map(|k| {
+                let n = d.nodes(k);
+                PeerProvider {
+                    label: d.providers[k].name.clone(),
+                    online: n.online,
+                    root: n.root,
+                    ica: n.ica,
+                    pg: n.pg,
+                }
+            })
+            .collect()
+    }
+}
+
+/// The roles a peer provider certifies: everything but the factory's DCM and the CAMP
+/// reference design's LOP and CRL Store (01 §9; 00 §2.3).
+pub const PEER_ROOT_ISSUED: [&str; 3] = ROOT_ISSUED;
+/// See [`PEER_ROOT_ISSUED`].
+pub const PEER_ICA_ISSUED: [&str; 5] = ["eca", "pca", "ra", "la1", "la2"];
 
 /// The bootstrap trust a device is provisioned with (Profile §2.1.15): the elector
 /// certificates, the quorum, and its clock.
@@ -1013,6 +1057,8 @@ pub struct Governance {
     electors: Vec<ElectorSlot>,
     roots: Vec<RootSlot>,
     authorities: BTreeMap<&'static str, Authority>,
+    /// The peer providers' authorities (root, ICA and components), by label.
+    peer_authorities: BTreeMap<String, BTreeMap<&'static str, Authority>>,
     /// Superseded component certificates that have not expired (key changeover keeps
     /// them available, Provider Req. §3.5.4).
     pub retired: Vec<Certificate>,
@@ -1147,6 +1193,7 @@ impl Governance {
             electors,
             roots: Vec::new(),
             authorities: BTreeMap::new(),
+            peer_authorities: BTreeMap::new(),
             retired: Vec::new(),
             quorum: p.elector_quorum,
             ctl: placeholder_ctl,
@@ -1168,6 +1215,11 @@ impl Governance {
             approved: true,
         });
         gov.certify_hierarchy(rng, online, 0, issued);
+        // Every other provider on the CTL (WP-D1): its own offline root and ICA and its
+        // own components, certified the same way, keys drawn at its own nodes.
+        for peer in gov.config.peers.clone() {
+            gov.certify_peer(rng, &peer, issued);
+        }
         let ctl = gov.build_ctl(0, now32, None, None, &gov.approved_signers());
         gov.ctl = ctl.clone();
         gov.ctl_history.push(ctl);
@@ -1308,6 +1360,86 @@ impl Governance {
         }
     }
 
+    /// A peer provider's ceremony: its self-signed root (approved on the genesis CTL),
+    /// its ICA, the root-issued PG, MA and CRL Generator, and the ICA-issued ECA, ACA, RA,
+    /// LA1 and LA2, all under its own label.
+    fn certify_peer(&mut self, rng: &RngRegistry, peer: &PeerProvider, now32: u32) {
+        let label = peer.label.as_str();
+        let root = self.make_authority("root", rng, peer.root, 0, None, label, now32);
+        let ica = self.make_authority("ica", rng, peer.ica, 0, Some(&root), label, now32);
+        let mut set = BTreeMap::new();
+        for role in PEER_ROOT_ISSUED {
+            let node = match role {
+                "pg" => peer.pg,
+                other => role_node(other, &self.nodes, &peer.online),
+            };
+            let a = self.make_authority(role, rng, node, 0, Some(&root), label, now32);
+            set.insert(role, a);
+        }
+        for role in PEER_ICA_ISSUED {
+            let node = role_node(role, &self.nodes, &peer.online);
+            let a = self.make_authority(role, rng, node, 0, Some(&ica), label, now32);
+            set.insert(role, a);
+        }
+        set.insert("ica", ica);
+        set.insert("root", root.clone());
+        self.roots.push(RootSlot {
+            label: label.to_string(),
+            authority: root,
+            approved: true,
+        });
+        self.peer_authorities.insert(label.to_string(), set);
+    }
+
+    /// The `HashedId32` of the newest approved root of provider `label` (home or peer).
+    #[must_use]
+    pub fn root_of(&self, label: &str) -> Option<[u8; 32]> {
+        self.roots
+            .iter()
+            .rev()
+            .find(|r| r.approved && r.label == label)
+            .and_then(|r| cert_hashed_id32(&r.authority.cert).ok())
+    }
+
+    /// The labels of every provider on the deployment, the home one first.
+    #[must_use]
+    pub fn providers(&self) -> Vec<String> {
+        core::iter::once(self.config.provider.clone())
+            .chain(self.config.peers.iter().map(|p| p.label.clone()))
+            .collect()
+    }
+
+    /// Peer provider `label`'s certificate for `role` (`root`, `ica`, `pg`, `ma`,
+    /// `crlg`, `eca`, `pca`, `ra`, `la1`, `la2`).
+    #[must_use]
+    pub fn peer_cert(&self, label: &str, role: &str) -> Option<&Certificate> {
+        self.peer_authorities.get(label)?.get(role).map(|a| &a.cert)
+    }
+
+    /// Peer provider `label`'s signing key for `role`.
+    #[must_use]
+    pub fn peer_signing_key(&self, label: &str, role: &str) -> Option<&Signer1609> {
+        self.peer_authorities.get(label)?.get(role).map(|a| &a.key)
+    }
+
+    /// Signs `hash` as peer provider `label`'s `role` (see [`Governance::sign_as`]).
+    #[must_use]
+    pub fn peer_sign_as(
+        &self,
+        label: &str,
+        role: &str,
+        hash: &[u8; 32],
+    ) -> Option<([u8; 8], [u8; 64])> {
+        let a = self.peer_authorities.get(label)?.get(role)?;
+        let Signer1609::P256(k) = &a.key else {
+            return None;
+        };
+        let sig: EcdsaSig = k.sign_prehash(hash).ok()?;
+        let mut out = [0u8; 64];
+        out.copy_from_slice(&sig.to_bytes());
+        Some((cert_hashed_id8(&a.cert).ok()?, out))
+    }
+
     fn home_root(&self) -> &RootSlot {
         self.roots
             .iter()
@@ -1408,6 +1540,27 @@ impl Governance {
         for (role, a) in &self.authorities {
             if *role != "ica" {
                 out.push(a.cert.clone());
+            }
+        }
+        // Every peer provider whose root the CTL still approves (WP-D1): the SCMS
+        // Manager keeps a master chain file of every provider's sub-CAs (Provider Req.
+        // §2.1.1), which is how a device verifies another provider's pseudonyms (01 §9).
+        // A removed provider's certificates leave the file with its root.
+        for (label, set) in &self.peer_authorities {
+            let root = &set["root"];
+            let approved = self
+                .roots
+                .iter()
+                .any(|r| r.approved && r.label == *label && r.authority.cert == root.cert);
+            if !approved {
+                continue;
+            }
+            out.push(root.cert.clone());
+            out.push(set["ica"].cert.clone());
+            for (role, a) in set {
+                if !matches!(*role, "root" | "ica") {
+                    out.push(a.cert.clone());
+                }
             }
         }
         out
@@ -1568,6 +1721,7 @@ impl Governance {
             electors: self.electors.clone(),
             roots: self.roots.clone(),
             authorities: self.authorities.clone(),
+            peer_authorities: self.peer_authorities.clone(),
             retired: Vec::new(),
             quorum: self.quorum,
             ctl: self.ctl.clone(),
@@ -2193,3 +2347,6 @@ impl DeviceTrust {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod peer_tests;
