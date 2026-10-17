@@ -196,7 +196,22 @@ fn an_rsu_application_certificate_is_implicit_series_3_without_linkage_data() {
         run.kernel.stages.runs_of(FlowId::RsuApplicationCert).len(),
         1
     );
+}
 
+/// One deployment with an RSU and an emergency OBU: every SPDU verifies, and with
+/// `V2XW_APPCERT_OUT=<dir>` the corpus for `tools/pdu_check/check_appcerts.py`.
+#[test]
+fn an_rsu_and_an_emergency_obu_side_by_side_corpus_for_the_oracle() {
+    let mut run = deployment();
+    enrolled(&mut run, DEVICE_A, true);
+    enrolled(&mut run, DEVICE_B, false);
+    let t0 = run.kernel.now();
+    run.start_app_certs(DEVICE_A, AppCertKind::RsuApplication, t0);
+    run.start_app_certs(DEVICE_B, AppCertKind::ObuIdentification, t0);
+    run.run_until(t0 + 2 * HOUR).unwrap();
+    assert!(run.state.pdu_rejections.is_empty());
+    assert_eq!(installed(&run, DEVICE_A) + installed(&run, DEVICE_B), 3);
+    assert_eq!(run.state.apps.debug_secrets().len(), 3);
     if let Ok(dir) = std::env::var("V2XW_APPCERT_OUT") {
         write_corpus(&run, std::path::Path::new(&dir));
     }
