@@ -328,7 +328,26 @@ fn the_verification_policy_moves_the_verify_load() {
     row("on-demand", &o);
     assert!(o.get("verify_rate") < a.get("verify_rate"));
     assert!(o.get("unverified_ratio") > a.get("unverified_ratio"));
-    assert!(o.get("verify_wait") <= a.get("verify_wait"));
+    // WP-C2 prices receiver validation into a frame's service time: the first frame from
+    // a signer pays for its certificate (reconstruction, chain), later ones hit the cache.
+    // `on-demand` with no applications verifies only strangers, so every frame it checks
+    // is such a miss: its mean verify cost is higher and its frames queue behind full
+    // validations, so `verify_wait` is no longer lower. What the policy still moves is
+    // the load: the verifier is busy for far less time in all.
+    let busy = |m: &Measured| m.get("verify_rate") * m.get("verify_cost");
+    assert!(
+        busy(&o) < busy(&a),
+        "on-demand kept the verifier busier: {} vs {}",
+        busy(&o),
+        busy(&a)
+    );
+    assert!(o.get("verify_cost") > a.get("verify_cost"));
+    let (rx_o, rx_a) = (&o.report.receiver_validation, &a.report.receiver_validation);
+    assert_eq!(
+        rx_o.ee_validations, rx_o.checked,
+        "on-demand verifies only strangers, each a certificate the node had not validated"
+    );
+    assert!(rx_a.ee_validations < rx_a.checked);
 }
 
 /// The crypto hardware: the Craton2 HSM verifies in hundreds of microseconds, the same
@@ -827,9 +846,11 @@ fn the_attacker_share_moves_detections() {
 /// a 300 m lattice. The exchange is a request, an acknowledgement and download polls every
 /// `download_poll_interval_s` (1 s here) until the batch is ready, so its length is set by
 /// the polls as much as by the line. On lines that need the same number of polls, a 600 ms
-/// line is slower than a 200 ms one and a 128 kbit/s line slower than the default. A 5 ms
-/// line is not the fastest: its first poll reaches the authority before the batch is ready
-/// and a second poll a second later is needed, which is how a polled download behaves.
+/// line is slower than a 200 ms one and a 128 kbit/s line slower than the default. Until
+/// RAPRE a 5 ms line was not the fastest: its first poll reached the authority before the
+/// batch was ready and needed a second poll. With the RA pre-generating, the batch is
+/// ready when asked for, so every line sends the same messages and the 5 ms line is the
+/// fastest.
 /// (The thin line was 64 kbit/s until wave 4 of the SCMS realism plan: real enrolment
 /// certificates and stored-zip batch files made each exchange longer, so a 64 kbit/s line
 /// needed one extra poll and no longer met the same-polls precondition.)
@@ -890,9 +911,15 @@ fn the_backhaul_latency_and_bandwidth_move_relay_topups() {
     );
     assert!(ts > tb, "600 ms: {ts} ms against 200 ms: {tb} ms");
     assert!(tt > tb, "128 kbit/s: {tt} ms against the default: {tb} ms");
-    assert!(
-        msgs(&quick) > msgs(&base),
-        "a 5 ms line polled no more often"
+    let (_, tq) = exchange_ms(&quick.report, "topup");
+    assert!(tq < tb, "5 ms: {tq} ms against 200 ms: {tb} ms");
+    // RAPRE: a top-off downloads a batch the RA pre-generated, ready when the `.info`
+    // answer arrives, so a fast line no longer reaches the RA before its batch and polls
+    // again: every line sends the same messages and only the time moves.
+    assert_eq!(
+        msgs(&quick),
+        msgs(&base),
+        "a pre-generated batch needs no extra poll on a fast line"
     );
 }
 

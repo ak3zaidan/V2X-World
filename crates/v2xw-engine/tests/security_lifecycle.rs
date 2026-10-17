@@ -258,9 +258,13 @@ fn honest_traffic_is_not_revoked_and_the_gate_is_why() {
         s.security.verification_policy = "verify-all".to_string();
         s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
         cellular(&mut s);
+        // The MA decides as soon as its gate opens (`ma_review_s: 0`): on the real weekly
+        // calendar its default is an 8-hour manual review (WIRE), longer than this run, and
+        // what this test measures is the detection gate, not the operator.
         lifecycle(
             &mut s,
-            json!({"report_shuffle_window_s": 1, "crl_cadence_s": 0, "crl_fetch_interval_s": 5}),
+            json!({"report_shuffle_window_s": 1, "crl_cadence_s": 0, "crl_fetch_interval_s": 5,
+                   "ma_review_s": 0}),
         );
         s
     };
