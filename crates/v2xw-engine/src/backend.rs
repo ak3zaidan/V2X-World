@@ -1387,17 +1387,24 @@ mod carrier_tests {
         let first = c.stats.tls_handshake_bytes;
         assert_eq!(c.stats.tls_handshakes, 1);
         // Within the session: the same connection, no handshake.
-        c.tcp_carry(ue, Direction::Downlink, 600, 4 * MIN).expect("carried");
+        c.tcp_carry(ue, Direction::Downlink, 600, 4 * MIN)
+            .expect("carried");
         assert_eq!(c.stats.tls_handshakes, 1);
         assert_eq!(c.stats.tls_sessions_expired, 0);
         // Five minutes after it began: a new session, a full handshake of the same bytes.
-        c.tcp_carry(ue, Direction::Uplink, 600, 5 * MIN).expect("carried");
+        c.tcp_carry(ue, Direction::Uplink, 600, 5 * MIN)
+            .expect("carried");
         assert_eq!(c.stats.tls_handshakes, 2);
         assert_eq!(c.stats.tls_sessions_expired, 1);
-        assert_eq!(c.stats.tls_handshake_bytes, 2 * first, "no abbreviated handshake");
+        assert_eq!(
+            c.stats.tls_handshake_bytes,
+            2 * first,
+            "no abbreviated handshake"
+        );
         assert_eq!(c.stats.tcp_connections, 2);
         // The new session's clock starts at its own handshake.
-        c.tcp_carry(ue, Direction::Uplink, 600, 9 * MIN).expect("carried");
+        c.tcp_carry(ue, Direction::Uplink, 600, 9 * MIN)
+            .expect("carried");
         assert_eq!(c.stats.tls_handshakes, 2);
         // Another vehicle has its own session.
         c.tcp_carry(NodeId::new(6), Direction::Uplink, 600, 9 * MIN)
@@ -1428,7 +1435,10 @@ mod carrier_tests {
         assert!(got13 >= hs13 && got13 < hs13 + 400, "{got13} vs {hs13}");
         assert!(got12 >= hs12 && got12 < hs12 + 400, "{got12} vs {hs12}");
         assert!(got12 - got13 >= u64::from(cfg.client_finish + 50 + 51));
-        assert!(t12 > t13, "TLS 1.2 takes one more round trip: {t12} vs {t13}");
+        assert!(
+            t12 > t13,
+            "TLS 1.2 takes one more round trip: {t12} vs {t13}"
+        );
     }
 
     #[test]

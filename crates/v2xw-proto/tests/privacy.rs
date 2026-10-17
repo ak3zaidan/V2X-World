@@ -159,7 +159,10 @@ fn the_pca_holds_no_device_identity_only_a_request_hash() {
                 && lookup.lci2.open(nodes.la(LaIndex::Two), nodes).is_some(),
             "each LA opens its own"
         );
-        assert_ne!(lookup.lci1.open(nodes.la(LaIndex::One), nodes), Some(Lci(0)));
+        assert_ne!(
+            lookup.lci1.open(nodes.la(LaIndex::One), nodes),
+            Some(Lci(0))
+        );
         assert_ne!(lookup.handle, [0u8; 32]);
     }
 }

@@ -71,7 +71,11 @@ fn a_second_butterfly_request_is_refused_until_the_policy_changes() {
     run.run().expect("runs");
     assert_eq!(run.state.ra.max_reqs_refused, 1);
     assert_eq!(run.refusal_of(DEVICE_A), Some(Refusal::RequestLimit));
-    assert!(!run.state.devices[&DEVICE_A].credentials.contains_key(&(1, 0)));
+    assert!(
+        !run.state.devices[&DEVICE_A]
+            .credentials
+            .contains_key(&(1, 0))
+    );
     assert_eq!(run.state.ra.accepted, 1, "one request accepted");
     // A policy change is a parameter change: the next request is accepted.
     let mut policy = run.state.gov.gpf.policy;
@@ -82,7 +86,11 @@ fn a_second_butterfly_request_is_refused_until_the_policy_changes() {
     run.run().expect("runs");
     assert_eq!(run.state.ra.accepted, 2);
     assert_eq!(run.state.ra.max_reqs_refused, 1);
-    assert!(run.state.devices[&DEVICE_A].credentials.contains_key(&(1, 0)));
+    assert!(
+        run.state.devices[&DEVICE_A]
+            .credentials
+            .contains_key(&(1, 0))
+    );
 }
 
 #[test]
@@ -94,7 +102,9 @@ fn a_weekly_top_off_is_an_info_download_on_the_one_request() {
     p.certs_per_period = 60;
     let mut run = run_with(p, &[DEVICE_A]);
     provisioned(&mut run, DEVICE_A, 614, 1, 60);
-    let h8 = run.state.devices[&DEVICE_A].request_hash8.expect("real path");
+    let h8 = run.state.devices[&DEVICE_A]
+        .request_hash8
+        .expect("real path");
     for week in 1..=3u32 {
         let t = run.topup(DEVICE_A, 614 + week, 60);
         run.run().expect("runs");
@@ -132,7 +142,11 @@ fn a_weekly_top_off_is_an_info_download_on_the_one_request() {
             .keys()
             .all(|&(i, j)| dev.credential_is_usable(i, j))
     );
-    assert!(run.state.pdu_rejections.is_empty(), "{:?}", run.state.pdu_rejections);
+    assert!(
+        run.state.pdu_rejections.is_empty(),
+        "{:?}",
+        run.state.pdu_rejections
+    );
 }
 
 #[test]
@@ -151,23 +165,63 @@ fn the_ra_keeps_three_years_generated_and_adds_a_week_at_each_boundary() {
 
     let t = run.topup(DEVICE_A, 614 + 155, 1);
     run.run().expect("runs");
-    let done = run.kernel.stages.at(t, StageId::Installed).expect("installed");
+    let done = run
+        .kernel
+        .stages
+        .at(t, StageId::Installed)
+        .expect("installed");
     assert!(done < 600 * 1_000_000_000, "available at once: {done}");
     assert_eq!(run.state.ra.pregen_deferred, 0);
 
     let t = run.topup(DEVICE_A, 614 + 156, 1);
     run.run().expect("runs");
     assert_eq!(run.state.ra.pregen_deferred, 1);
-    let expanded = run.kernel.stages.at(t, StageId::Expanded).expect("expanded");
-    let done = run.kernel.stages.at(t, StageId::Installed).expect("installed");
+    let expanded = run
+        .kernel
+        .stages
+        .at(t, StageId::Expanded)
+        .expect("expanded");
+    let done = run
+        .kernel
+        .stages
+        .at(t, StageId::Installed)
+        .expect("installed");
     // Generated at the boundary, within ra-maxGenDelay (1 week) of it, and only then.
-    assert!(expanded >= WEEK_NS && expanded < WEEK_NS + 1_000_000_000, "{expanded}");
-    assert!(done >= WEEK_NS && done < 2 * WEEK_NS, "{done}");
+    assert!(
+        (WEEK_NS..WEEK_NS + 1_000_000_000).contains(&expanded),
+        "{expanded}"
+    );
+    assert!((WEEK_NS..2 * WEEK_NS).contains(&done), "{done}");
     // A period before firstI is never generated: the device is told so and stops.
     let t = run.topup(DEVICE_A, 613, 1);
     run.run().expect("runs");
     assert!(run.kernel.stages.at(t, StageId::Installed).is_none());
     assert_eq!(run.state.devices[&DEVICE_A].topoffs_unavailable, 1);
+}
+
+#[test]
+fn the_preload_horizon_is_held_between_two_weeks_and_three_years() {
+    use v2xw_proto::scms::params::{PreloadPolicy, RA_MAX_PRELOAD_PERIODS, RA_MIN_PRELOAD_PERIODS};
+    assert_eq!((RA_MIN_PRELOAD_PERIODS, RA_MAX_PRELOAD_PERIODS), (2, 156));
+    assert_eq!(PreloadPolicy::Thea3Years.device_periods(), 156);
+    assert_eq!(PreloadPolicy::Nyc1Week.device_periods(), 1);
+    for (policy, horizon) in [(1u32, 2u32), (2, 2), (40, 40), (156, 156), (400, 156)] {
+        let mut p = ScmsParams::default().quick();
+        p.max_periods_ahead = policy;
+        let mut run = run_with(p, &[DEVICE_A]);
+        provisioned(&mut run, DEVICE_A, 0, 1, 1);
+        let a = run.state.ra.accounts[&DEVICE_A].clone();
+        assert_eq!(
+            run.state.pregen_due(&a, horizon - 1),
+            Some(a.accepted_at),
+            "policy {policy}"
+        );
+        assert_eq!(
+            run.state.pregen_due(&a, horizon),
+            Some(WEEK_NS),
+            "policy {policy}"
+        );
+    }
 }
 
 #[test]
@@ -238,7 +292,7 @@ fn a_batch_that_never_comes_is_polled_every_five_minutes_at_most_one_hundred_mor
     for w in sends.windows(2) {
         let gap = w[1] - w[0];
         assert!(
-            gap >= five_min && gap < five_min + 1_000_000_000,
+            (five_min..five_min + 1_000_000_000).contains(&gap),
             "gap {gap}"
         );
     }
@@ -299,7 +353,12 @@ fn the_aca_can_link_no_certificate_to_a_device_or_to_another() {
     for ((i, _), l) in &st.pca.issued {
         let req = st.ra.handles[&l.handle];
         let owner = st.ra.requests[&req].device;
-        assert!(st.devices[&owner].credentials.keys().any(|&(ci, _)| ci == *i));
+        assert!(
+            st.devices[&owner]
+                .credentials
+                .keys()
+                .any(|&(ci, _)| ci == *i)
+        );
     }
 }
 
@@ -312,5 +371,8 @@ fn a_device_with_an_account_is_still_refused_a_top_off_once_blocklisted() {
     run.run().expect("runs");
     assert!(run.kernel.stages.at(t, StageId::Installed).is_none());
     assert_eq!(run.topup_refusal_of(DEVICE_A), Some(Refusal::Blocklisted));
-    assert_eq!(run.state.ra.pregen_periods, 0, "generation stops (SCMS-509)");
+    assert_eq!(
+        run.state.ra.pregen_periods, 0,
+        "generation stops (SCMS-509)"
+    );
 }

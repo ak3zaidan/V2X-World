@@ -739,7 +739,9 @@ pub enum DownloadFile {
 }
 
 fn upper_hex(s: &str) -> bool {
-    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))
 }
 
 fn hash8_of(s: &str) -> Option<[u8; 8]> {

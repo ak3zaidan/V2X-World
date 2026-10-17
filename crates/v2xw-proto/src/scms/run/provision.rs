@@ -341,7 +341,12 @@ impl ScmsState {
         if i < account.first_i {
             return None;
         }
-        let h = self.gov.lpf.policy.max_periods_ahead.max(1);
+        // `ra-maxPreloadTime` is 2 weeks to 3 years ([SMP] Table 3): a policy outside it
+        // is held to the range (it still clips requests as it says).
+        let h = self.gov.lpf.policy.max_periods_ahead.clamp(
+            crate::scms::params::RA_MIN_PRELOAD_PERIODS,
+            crate::scms::params::RA_MAX_PRELOAD_PERIODS,
+        );
         let covered = account.first_i.saturating_add(h);
         if i < covered || account.generated.contains(&i) {
             return Some(account.accepted_at);
@@ -369,7 +374,12 @@ impl ScmsState {
     ) -> Option<SimTime> {
         let account = self.ra.accounts.get(&device)?.clone();
         let due = self.pregen_due(&account, i)?;
-        if self.ra.repos.get(&device).is_some_and(|r| r.contains_key(&i)) {
+        if self
+            .ra
+            .repos
+            .get(&device)
+            .is_some_and(|r| r.contains_key(&i))
+        {
             return Some(at);
         }
         let ready_after = self.params.first_batch_delay;
@@ -1467,12 +1477,7 @@ impl ScmsState {
             ScmsMsg::CertResponse { i, credentials } => {
                 // The PCA does not know whose batch this is; the RA routes it by its own
                 // job (the request it holds for this run).
-                let Some(device) = self
-                    .ra
-                    .jobs
-                    .iter()
-                    .find(|j| j.run == run)
-                    .map(|j| j.device)
+                let Some(device) = self.ra.jobs.iter().find(|j| j.run == run).map(|j| j.device)
                 else {
                     self.ra.unrouted_responses += 1;
                     return Ok(());
@@ -1919,10 +1924,9 @@ impl ScmsState {
                     _ => None,
                 };
                 let size = match &body {
-                    Some(b) => WireSize::real(
-                        u32::try_from(b.len()).unwrap_or(u32::MAX),
-                        ".info Time32",
-                    ),
+                    Some(b) => {
+                        WireSize::real(u32::try_from(b.len()).unwrap_or(u32::MAX), ".info Time32")
+                    }
                     None => self.sizes.provisioning_ack(),
                 };
                 out.send(
@@ -1959,10 +1963,9 @@ impl ScmsState {
             } if to == n.lop => {
                 self.lop.downstream += 1;
                 let size = match &body {
-                    Some(b) => WireSize::real(
-                        u32::try_from(b.len()).unwrap_or(u32::MAX),
-                        ".info Time32",
-                    ),
+                    Some(b) => {
+                        WireSize::real(u32::try_from(b.len()).unwrap_or(u32::MAX), ".info Time32")
+                    }
                     None => self.sizes.provisioning_ack(),
                 };
                 out.send(

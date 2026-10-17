@@ -445,6 +445,34 @@ impl Default for ThresholdDeployment {
     }
 }
 
+/// `ra-maxPreloadTime` lower bound, in i-periods: 2 weeks ([SMP] §2.1.21 Table 3).
+pub const RA_MIN_PRELOAD_PERIODS: u32 = 2;
+/// `ra-maxPreloadTime` upper bound, in i-periods: 3 years = 156 weeks ([SMP] Table 3;
+/// [PRIMER] p.7, 3,120 = 156 × 20).
+pub const RA_MAX_PRELOAD_PERIODS: u32 = 156;
+
+/// How far ahead a fleet downloads (its device strategy, 03 §6.4): THEA took 3 years at
+/// once ([CVP-LOG] p.16), NYC one week ahead, topped off weekly ([CVP-P2] items 21, 24).
+/// The RA pre-generates `ra-maxPreloadTime` regardless; this is what the device fetches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreloadPolicy {
+    /// THEA: 156 i-periods in the first download.
+    Thea3Years,
+    /// NYC: one i-period ahead.
+    Nyc1Week,
+}
+
+impl PreloadPolicy {
+    /// The i-periods the device downloads ahead.
+    #[must_use]
+    pub const fn device_periods(self) -> u32 {
+        match self {
+            PreloadPolicy::Thea3Years => RA_MAX_PRELOAD_PERIODS,
+            PreloadPolicy::Nyc1Week => 1,
+        }
+    }
+}
+
 impl Default for ScmsParams {
     fn default() -> ScmsParams {
         ScmsParams {
