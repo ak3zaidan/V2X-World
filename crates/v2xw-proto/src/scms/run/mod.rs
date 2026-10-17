@@ -1109,7 +1109,7 @@ impl ScmsState {
             | ScmsMsg::SeedRetry { .. }
             | ScmsMsg::BlocklistNotice { .. } => self.handle_revoke(d, out),
             ScmsMsg::CrlAppend { .. }
-            | ScmsMsg::CrlPublishTimer { .. }
+            | ScmsMsg::CrlPublishTimer
             | ScmsMsg::CrlPublish { .. }
             | ScmsMsg::CrlDownloadRequest { .. }
             | ScmsMsg::CrlAirBroadcast { .. }

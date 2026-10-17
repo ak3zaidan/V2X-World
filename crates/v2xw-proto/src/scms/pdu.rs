@@ -1234,6 +1234,8 @@ pub fn open_signed_pdu(bytes: &[u8], pki: &ScmsPki) -> Result<(ScmsPdu, Certific
 }
 
 /// Who signed a certificate request, as [`open_signed_cert_request`] found it.
+// Short-lived and matched once, so the certificate is not boxed (as `sig1609::SpduSigner`).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum RequestSignerFound {
     /// `self`, verified under the requested `verifyKeyIndicator`.
@@ -1369,6 +1371,82 @@ fn decrypt_pk(
     let data_key = ecies::decrypt(private, &wrapped, p1).map_err(|_| PduError::Decrypt("ECIES"))?;
     let (nonce, ct) = ccm_parts(&enc.ciphertext)?;
     ccm::decrypt(&data_key, &nonce, &ct).map_err(|_| PduError::Decrypt("CCM"))
+}
+
+/// The original-butterfly parameters a provisioning request is expected to carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ButterflyOriginal {
+    /// The caterpillar signing key `A` (`tbsCert.verifyKeyIndicator`).
+    pub a: Point,
+    /// The caterpillar encryption key `H` (`encryptionKey`).
+    pub h: Point,
+    /// `signingExpansion` (`ck`).
+    pub ck: [u8; 16],
+    /// `encryptionExpansion` (`ek`).
+    pub ek: [u8; 16],
+}
+
+/// The RA's checks on an `EeRaCertRequestSpdu` (03 §3.2, §3.3): it decrypts with the RA
+/// certificate's encryption key; the inner `SignedCertificateRequest` is signed by one
+/// certificate, issued by this PKI's ECA, and verifies; the request is
+/// `ee-ra.eeRaCertRequest` with the original butterfly parameters, which must be exactly
+/// `expected`. Returns the enrolment certificate that signed it.
+pub fn ra_open_ee_ra_cert_request(
+    pki: &ScmsPki,
+    spdu: &[u8],
+    expected: &ButterflyOriginal,
+) -> Result<Certificate> {
+    let enc = pki
+        .ra
+        .enc_private
+        .ok_or(PduError::Key("RA encryption key"))?;
+    let plain = decrypt_cert(spdu, &pki.ra.cert, &enc)?;
+    let (p, signer) = open_signed_cert_request(&plain, pki)?;
+    let RequestSignerFound::Cert(ec_cert) = signer else {
+        return Err(PduError::Signer(
+            "a provisioning request is signed by an enrolment certificate",
+        ));
+    };
+    let issued_by_eca = matches!(&ec_cert.0.issuer,
+        IssuerIdentifier::sha256AndDigest(h) if hashedid::id8_bytes(h) == pki.eca.id8());
+    if !issued_by_eca {
+        return Err(PduError::UntrustedSigner);
+    }
+    let ScmsPduContent::ee_ra(EeRaInterfacePdu::eeRaCertRequest(r)) = &p.content else {
+        return Err(PduError::Shape("expected ee-ra.eeRaCertRequest"));
+    };
+    let VerificationKeyIndicator::verificationKey(
+        v2xw_msg::sec_types::ieee1609_dot2_base_types::PublicVerificationKey::ecdsaNistP256(a),
+    ) = &r.tbs_cert.verify_key_indicator
+    else {
+        return Err(PduError::Shape(
+            "verifyKeyIndicator is the caterpillar key A",
+        ));
+    };
+    let Some(AdditionalParams::original(b)) = &r.additional_params else {
+        return Err(PduError::Shape(
+            "original butterfly parameters (the US profile)",
+        ));
+    };
+    let ButterflyExpansion::aes128(ck) = &b.signing_expansion else {
+        return Err(PduError::Shape("signingExpansion aes128"));
+    };
+    let ButterflyExpansion::aes128(ek) = &b.encryption_expansion else {
+        return Err(PduError::Shape("encryptionExpansion aes128"));
+    };
+    let BasePublicEncryptionKey::eciesNistP256(h) = &b.encryption_key.public_key else {
+        return Err(PduError::Shape("encryptionKey eciesNistP256"));
+    };
+    let same = point_of(a)? == expected.a
+        && point_of(h)? == expected.h
+        && ck[..] == expected.ck[..]
+        && ek[..] == expected.ek[..];
+    if !same {
+        return Err(PduError::Shape(
+            "signed butterfly parameters differ from the request's",
+        ));
+    }
+    Ok(ec_cert)
 }
 
 /// Decrypts a `SymmEncryptedSingleRecipient` with the shared key.

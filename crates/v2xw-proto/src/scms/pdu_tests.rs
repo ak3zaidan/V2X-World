@@ -195,3 +195,63 @@ fn download_file_names_follow_the_profile() {
     assert_eq!(batch_filename(h, 15), "AB09281C9867DE53_F.zip");
     assert_eq!(info_filename(h), "AB09281C9867DE53.info");
 }
+
+/// A certificate that names this PKI's ICA as its issuer but was signed by another key
+/// does not chain, so nothing it signs is trusted.
+#[test]
+fn a_certificate_naming_our_issuer_but_signed_by_another_key_is_untrusted() {
+    let k = pki();
+    let other = ScmsPki::new(8, T - 1_000).unwrap();
+    let ica_key = CertKey::P256(Point::mul_base(k.ica.private.as_ref().unwrap()));
+    let forged = cert::issue_explicit_cert(
+        other.ra.cert.0.to_be_signed.clone(),
+        Some((&k.ica.cert, &ica_key)),
+        CertHash::Sha256,
+        |d| Ok(other.ica.key.sign_digest(d)),
+    )
+    .unwrap();
+    assert_eq!(k.signer_key(&forged), Err(PduError::UntrustedSigner));
+    let b = signed(&info(), &forged, &other.ra.key).unwrap();
+    assert_eq!(open_signed(&b, &k).unwrap_err(), PduError::UntrustedSigner);
+}
+
+/// The RA binds the signed butterfly parameters to the ones it will expand: a request
+/// whose signed `ck` differs from the expected one is refused.
+#[test]
+fn the_ra_refuses_a_request_whose_signed_butterfly_parameters_differ() {
+    let k = pki();
+    let mut g = Drbg::new(4, b"t");
+    let k_u = g.scalar();
+    let req = ee_eca_cert_request(T, &Point::mul_base(&k_u), T, 52_596).unwrap();
+    let ScmsPduContent::eca_ee(EcaEeInterfacePdu::eeEcaCertRequest(r)) = &req.content else {
+        panic!("eeEcaCertRequest")
+    };
+    let (cert, rr) = issue_enrolment(&k, &r.tbs_cert, &Point::mul_base(&k_u), &mut g).unwrap();
+    let cred = reconstruct_enrolment(&k, &cert, &k_u, &rr).unwrap();
+    let cat = Caterpillar::from_seed(&[6u8; 64]).unwrap();
+    let ra_req = ee_ra_cert_request_from(T, &cat, T + 3600).unwrap();
+    let ra_key = k.ra.enc_public().unwrap();
+    let b = signed_encrypted_cert_request(
+        &ra_req,
+        RequestSigner::Cert(&cred.cert, &cred.key),
+        &k.ra.cert,
+        &ra_key,
+        &mut g,
+    )
+    .unwrap();
+    let mut want = ButterflyOriginal {
+        a: cat.signing_public(),
+        h: cat.encryption_public(),
+        ck: *cat.ck(),
+        ek: *cat.ek(),
+    };
+    assert_eq!(
+        ra_open_ee_ra_cert_request(&k, &b, &want).unwrap(),
+        cred.cert
+    );
+    want.ck[0] ^= 1;
+    assert!(matches!(
+        ra_open_ee_ra_cert_request(&k, &b, &want).unwrap_err(),
+        PduError::Shape(_)
+    ));
+}

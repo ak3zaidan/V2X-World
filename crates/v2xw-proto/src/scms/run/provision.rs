@@ -1,18 +1,13 @@
-//! Pseudonym provisioning and top-up: the butterfly request, the LA pre-linkage values, the RA shuffle, PCA issuance and the batch download.
+//! Pseudonym provisioning and top-up: the butterfly request, the LA pre-linkage values,
+//! the RA shuffle, PCA issuance and the batch download.
 //!
 //! Split out of `run.rs` without behaviour change (WP-B1); the state types and the shared
 //! helpers stay in [`super`].
 
 use super::*;
 
-use crate::scms::pdu::{self, Pdu, PduError, RequestSigner, RequestSignerFound, SpduKind};
-use v2xw_msg::sec_types::ieee1609_dot2::{IssuerIdentifier, VerificationKeyIndicator};
-use v2xw_msg::sec_types::ieee1609_dot2_base_types::{
-    BasePublicEncryptionKey, PublicVerificationKey,
-};
-use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::{
-    AdditionalParams, ButterflyExpansion, EeRaInterfacePdu,
-};
+use crate::scms::pdu::{self, Pdu, PduError, RequestSigner, SpduKind};
+use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::EeRaInterfacePdu;
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::ScmsPduContent;
 
 /// The hash the RA knows a provisioning request by.
@@ -243,56 +238,13 @@ impl ScmsState {
     /// signed butterfly parameters to the request's `A`, `ck`, `H`, `ek`.
     fn ra_open_request(&self, req: &ProvisioningRequest, spdu: &Pdu) -> pdu::Result<()> {
         let pki = self.pki.clone().ok_or(PduError::Shape("PDU layer off"))?;
-        let enc = pki
-            .ra
-            .enc_private
-            .ok_or(PduError::Key("RA encryption key"))?;
-        let plain = pdu::decrypt_cert(spdu.bytes(), &pki.ra.cert, &enc)?;
-        let (p, signer) = pdu::open_signed_cert_request(&plain, &pki)?;
-        let RequestSignerFound::Cert(ec_cert) = signer else {
-            return Err(PduError::Signer(
-                "a provisioning request is signed by an enrolment certificate",
-            ));
+        let expected = pdu::ButterflyOriginal {
+            a: req.signing_public,
+            h: req.encryption_public,
+            ck: req.ck,
+            ek: req.ek,
         };
-        let issued_by_eca = matches!(&ec_cert.0.issuer,
-            IssuerIdentifier::sha256AndDigest(h) if v2xw_sec::hashedid::id8_bytes(h) == pki.eca.id8());
-        if !issued_by_eca {
-            return Err(PduError::UntrustedSigner);
-        }
-        let ScmsPduContent::ee_ra(EeRaInterfacePdu::eeRaCertRequest(r)) = &p.content else {
-            return Err(PduError::Shape("expected ee-ra.eeRaCertRequest"));
-        };
-        let VerificationKeyIndicator::verificationKey(PublicVerificationKey::ecdsaNistP256(a)) =
-            &r.tbs_cert.verify_key_indicator
-        else {
-            return Err(PduError::Shape(
-                "verifyKeyIndicator is the caterpillar key A",
-            ));
-        };
-        let Some(AdditionalParams::original(b)) = &r.additional_params else {
-            return Err(PduError::Shape(
-                "original butterfly parameters (the US profile)",
-            ));
-        };
-        let ButterflyExpansion::aes128(ck) = &b.signing_expansion else {
-            return Err(PduError::Shape("signingExpansion aes128"));
-        };
-        let ButterflyExpansion::aes128(ek) = &b.encryption_expansion else {
-            return Err(PduError::Shape("encryptionExpansion aes128"));
-        };
-        let BasePublicEncryptionKey::eciesNistP256(h) = &b.encryption_key.public_key else {
-            return Err(PduError::Shape("encryptionKey eciesNistP256"));
-        };
-        let same = pdu::point_of(a)? == req.signing_public
-            && pdu::point_of(h)? == req.encryption_public
-            && ck[..] == req.ck[..]
-            && ek[..] == req.ek[..];
-        if !same {
-            return Err(PduError::Shape(
-                "signed butterfly parameters differ from the request's",
-            ));
-        }
-        Ok(())
+        pdu::ra_open_ee_ra_cert_request(&pki, spdu.bytes(), &expected).map(|_| ())
     }
 
     /// RA side: the RA-signed `RaEeCertAckSpdu` (`firstI` = the first i-period,
