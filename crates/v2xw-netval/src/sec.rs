@@ -119,7 +119,11 @@ fn build_pki(ctx: &mut TestCtx, backend: &mut Real, count: u32, i_cert: u16) -> 
         .public_material(&backend.public_of(&root_key).expect("pub"))
         .expect("material");
     let root = Arc::new(
-        cert::trust_anchor(&CertSpec::authority(T0_1609, PSID_BSM), &root_material).expect("root"),
+        cert::trust_anchor(
+            &CertSpec::issuing_authority(T0_1609, PSID_BSM),
+            &root_material,
+        )
+        .expect("root"),
     );
     let root_coer = cert::encode(&root).expect("root encodes");
     let root_digest = certificate_digest(&root).expect("digest");
@@ -129,7 +133,7 @@ fn build_pki(ctx: &mut TestCtx, backend: &mut Real, count: u32, i_cert: u16) -> 
     let pca_material = backend
         .public_material(&backend.public_of(&pca_key).expect("pub"))
         .expect("material");
-    let mut pca_spec = CertSpec::authority(T0_1609, PSID_BSM);
+    let mut pca_spec = CertSpec::issuing_authority(T0_1609, PSID_BSM);
     pca_spec.issuer = Some(root_digest);
     let pca = Arc::new(
         cert::issue_explicit(&pca_spec, &pca_material, &root_coer, |digest| {

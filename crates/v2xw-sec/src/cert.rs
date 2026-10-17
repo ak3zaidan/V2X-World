@@ -42,9 +42,9 @@
 
 use std::sync::Arc;
 
-use v2xw_msg::codec::MsgType;
 use p256::Scalar;
 use p256::elliptic_curve::Field;
+use v2xw_msg::codec::MsgType;
 use v2xw_msg::sec_types::ieee1609_dot2::VerificationKeyIndicator;
 use v2xw_msg::sec_types::{
     Certificate, CertificateBase, CertificateId, CertificateType, HashAlgorithm, HashedId3,
@@ -52,8 +52,8 @@ use v2xw_msg::sec_types::{
     ToBeSignedCertificate, ValidityPeriod, coer,
     ieee1609_dot2_base_types::{
         BasePublicEncryptionKey, CrlSeries, Duration as Ieee1609Duration, EccP256CurvePoint,
-        EccP384CurvePoint, EcdsaP256Signature, EcdsaP384Signature, IValue,
-        Psid, PsidSsp, PublicVerificationKey, SequenceOfPsidSsp, Time32, Uint16, Uint32,
+        EccP384CurvePoint, EcdsaP256Signature, EcdsaP384Signature, IValue, Psid, PsidSsp,
+        PublicVerificationKey, SequenceOfPsidSsp, Time32, Uint16, Uint32,
     },
 };
 
@@ -98,6 +98,10 @@ pub struct CertSpec {
     pub valid_for: Ieee1609Duration,
     /// The PSIDs the holder may sign under.
     pub app_permissions: Vec<u64>,
+    /// What the holder may issue (`certIssuePermissions`); `None` for an end entity.
+    /// A CA certificate needs it, or nothing it issues passes chain validation
+    /// ([`crate::chain`], 02 §12).
+    pub issue_permissions: Option<Vec<PsidGroupPermissions>>,
 }
 
 impl CertSpec {
@@ -117,6 +121,7 @@ impl CertSpec {
             valid_from,
             valid_for: Ieee1609Duration::minutes(Uint16(10_140)),
             app_permissions: vec![psid],
+            issue_permissions: None,
         }
     }
 
@@ -131,7 +136,18 @@ impl CertSpec {
             valid_from,
             valid_for: Ieee1609Duration::years(Uint16(3)),
             app_permissions: vec![psid],
+            issue_permissions: None,
         }
+    }
+
+    /// [`CertSpec::authority`] that may also issue: one `certIssuePermissions` group,
+    /// `subjectPermissions all`, `minChainLength 1`, `chainLengthRange -1` (any depth),
+    /// `eeType app`. The certificate a test or scenario CA needs for its subordinates to
+    /// pass chain validation.
+    pub fn issuing_authority(valid_from: u32, psid: u64) -> CertSpec {
+        let mut s = CertSpec::authority(valid_from, psid);
+        s.issue_permissions = Some(vec![issue_all_group()]);
+        s
     }
 }
 
@@ -210,7 +226,9 @@ pub fn to_be_signed(
         None, // region
         None, // assuranceLevel
         Some(app_permissions),
-        None, // certIssuePermissions: a pseudonym certificate issues nothing
+        spec.issue_permissions
+            .clone()
+            .map(v2xw_msg::sec_types::ieee1609_dot2::SequenceOfPsidGroupPermissions),
         None, // certRequestPermissions
         None, // canRequestRollover
         None, // encryptionKey
@@ -434,6 +452,20 @@ fn issuer_identifier(spec: &CertSpec) -> IssuerIdentifier {
         Some(d) => IssuerIdentifier::sha256AndDigest(d.clone()),
         None => IssuerIdentifier::R_self(HashAlgorithm::sha256),
     }
+}
+
+/// The `certIssuePermissions` group "issue anything, at any depth, to application end
+/// entities": `subjectPermissions all`, `minChainLength 1`, `chainLengthRange -1`,
+/// `eeType app` (02 §5).
+pub fn issue_all_group() -> PsidGroupPermissions {
+    let mut app = rasn::types::FixedBitString::<8>::ZERO;
+    app.set(0, true);
+    PsidGroupPermissions::new(
+        v2xw_msg::sec_types::ieee1609_dot2::SubjectPermissions::all(()),
+        rasn::types::Integer::from(1),
+        rasn::types::Integer::from(-1),
+        v2xw_msg::sec_types::EndEntityType(app),
+    )
 }
 
 /// The `PsidGroupPermissions` default this crate never builds, referenced so the patched
@@ -680,16 +712,16 @@ fn low_bytes<const N: usize>(h: &[u8]) -> [u8; N] {
 
 /// The certificate's `HashedId8`, with the whole-certificate hash algorithm.
 pub fn cert_id8(cert: &Certificate) -> Result<HashedId8> {
-    Ok(HashedId8(rasn::types::FixedOctetString::from(low_bytes::<8>(
-        &whole_cert_hash(cert)?,
-    ))))
+    Ok(HashedId8(rasn::types::FixedOctetString::from(
+        low_bytes::<8>(&whole_cert_hash(cert)?),
+    )))
 }
 
 /// The certificate's `HashedId3` (what a `cracaId` holds).
 pub fn cert_id3(cert: &Certificate) -> Result<HashedId3> {
-    Ok(HashedId3(rasn::types::FixedOctetString::from(low_bytes::<3>(
-        &whole_cert_hash(cert)?,
-    ))))
+    Ok(HashedId3(rasn::types::FixedOctetString::from(
+        low_bytes::<3>(&whole_cert_hash(cert)?),
+    )))
 }
 
 /// The certificate's `HashedId10` (what a hash-based CRL lists).

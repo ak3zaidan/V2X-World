@@ -21,12 +21,12 @@ use v2xw_msg::sec_types::ieee1609_dot2_base_types::{
     CrlSeries, EccP384CurvePoint, GeographicRegion, Hostname, IdentifiedRegion, Latitude,
     Longitude, NinetyDegreeInt, OneEightyDegreeInt, PsidSsp, PsidSspRange, PublicVerificationKey,
     SequenceOfIdentifiedRegion, SequenceOfOctetString, SequenceOfPsidSsp, SequenceOfPsidSspRange,
-    SequenceOfUint8, ServiceSpecificPermissions, SspRange, TwoDLocation, UnCountryId, Uint8,
-    Uint16, Uint32,
+    SequenceOfUint8, ServiceSpecificPermissions, SspRange, TwoDLocation, Uint8, Uint16, Uint32,
+    UnCountryId,
 };
 use v2xw_msg::sec_types::{
-    Certificate, EndEntityType, HashAlgorithm, HashedId3, Ieee1609Duration, IssuerIdentifier,
-    Psid, PsidGroupPermissions, Signature, Time32, ToBeSignedCertificate, ValidityPeriod,
+    Certificate, EndEntityType, HashAlgorithm, HashedId3, Ieee1609Duration, IssuerIdentifier, Psid,
+    PsidGroupPermissions, Signature, Time32, ToBeSignedCertificate, ValidityPeriod,
 };
 use v2xw_sec::cert::{self, CertHash, CertKey};
 use v2xw_sec::chain::{self, ChainErrorKind as K, ChainPolicy};
@@ -45,7 +45,12 @@ fn ee_type(app: bool, enrol: bool) -> EndEntityType {
     EndEntityType(b)
 }
 
-fn group(psids: Option<Vec<PsidSspRange>>, min: i64, range: i64, et: EndEntityType) -> PsidGroupPermissions {
+fn group(
+    psids: Option<Vec<PsidSspRange>>,
+    min: i64,
+    range: i64,
+    et: EndEntityType,
+) -> PsidGroupPermissions {
     PsidGroupPermissions::new(
         match psids {
             None => SubjectPermissions::all(()),
@@ -196,9 +201,12 @@ fn explicit(parent: &Node, spec: Spec, seed: u64) -> Node {
     let q = Point::mul_base(&d);
     let tbs = spec.tbs(cert::verification_key_indicator(&q.compressed().unwrap()).unwrap());
     let pd = parent.d;
-    let c = cert::issue_explicit_cert(tbs, Some((&parent.cert, &parent.key)), CertHash::Sha256, |dg| {
-        cert::ecdsa_p256_sign_with_k(&pd, &Scalar::from(seed + 1), &dg.try_into().unwrap())
-    })
+    let c = cert::issue_explicit_cert(
+        tbs,
+        Some((&parent.cert, &parent.key)),
+        CertHash::Sha256,
+        |dg| cert::ecdsa_p256_sign_with_k(&pd, &Scalar::from(seed + 1), &dg.try_into().unwrap()),
+    )
     .unwrap();
     Node {
         cert: c,
@@ -213,9 +221,17 @@ fn implicit(parent: &Node, spec: Spec, seed: u64) -> Node {
         panic!("ECQV needs a P-256 issuer")
     };
     // The template's key indicator is replaced by P_U.
-    let tbs = spec.tbs(cert::verification_key_indicator(&Point::GENERATOR.compressed().unwrap()).unwrap());
-    let out = cert::issue_implicit(&tbs, &parent.cert, q_ca, &parent.d, &Point::mul_base(&ku), seq())
-        .unwrap();
+    let tbs = spec
+        .tbs(cert::verification_key_indicator(&Point::GENERATOR.compressed().unwrap()).unwrap());
+    let out = cert::issue_implicit(
+        &tbs,
+        &parent.cert,
+        q_ca,
+        &parent.d,
+        &Point::mul_base(&ku),
+        seq(),
+    )
+    .unwrap();
     let d = v2xw_sec::crypto::ecqv::subject_private_key(&out.e, &ku, &out.private_key_contribution);
     let key = cert::verification_key(&out.certificate, Some((&parent.cert, &parent.key))).unwrap();
     assert_eq!(key, CertKey::P256(Point::mul_base(&d)));
@@ -291,7 +307,10 @@ fn the_base_chain_is_valid_and_its_key_verifies_an_spdu() {
     let sig = cert::ecdsa_p256_sign_with_k(&e.d, &Scalar::from(5u64), &digest).unwrap();
     assert!(cert::ecdsa_verify_digest(v.ee_key(), &digest, &sig));
     assert!(chain::ee_permits_psid(&c[0], 32));
-    assert!(!chain::ee_permits_psid(&c[0], 35), "SPDU PSID not in appPermissions");
+    assert!(
+        !chain::ee_permits_psid(&c[0], 35),
+        "SPDU PSID not in appPermissions"
+    );
 }
 
 #[test]
@@ -301,7 +320,11 @@ fn rule_chain_length_at_most_8() {
         let mut nodes = vec![r];
         for k in 0..n {
             let parent = nodes.last().unwrap().clone();
-            nodes.push(implicit(&parent, Spec::ca("ica", all(1, -1)), 100 + k as u64));
+            nodes.push(implicit(
+                &parent,
+                Spec::ca("ica", all(1, -1)),
+                100 + k as u64,
+            ));
         }
         let e = implicit(nodes.last().unwrap(), Spec::ee(), 41);
         let p = ChainPolicy::trusting([&nodes[0].cert]).unwrap();
@@ -386,7 +409,15 @@ fn rule_explicit_signature_verifies() {
     let a = explicit(&i, s.aca.clone(), 31);
     let e = explicit(&a, s.ee.clone(), 41);
     let p = ChainPolicy::trusting([&r.cert]).unwrap();
-    valid(&[e.cert.clone(), a.cert.clone(), i.cert.clone(), r.cert.clone()], &p);
+    valid(
+        &[
+            e.cert.clone(),
+            a.cert.clone(),
+            i.cert.clone(),
+            r.cert.clone(),
+        ],
+        &p,
+    );
     // The EE signed by the ICA's key but naming the ACA.
     let wrong = Node {
         cert: a.cert.clone(),
@@ -394,7 +425,11 @@ fn rule_explicit_signature_verifies() {
         key: a.key.clone(),
     };
     let forged = explicit(&wrong, s.ee.clone(), 41);
-    only(&[forged.cert, a.cert.clone(), i.cert.clone(), r.cert.clone()], &p, K::BadSignature);
+    only(
+        &[forged.cert, a.cert.clone(), i.cert.clone(), r.cert.clone()],
+        &p,
+        K::BadSignature,
+    );
     // Tampered tbs after signing.
     let mut t = e.cert.clone();
     t.0.to_be_signed.crl_series = CrlSeries(Uint16(3));
@@ -438,7 +473,9 @@ fn p384_root() -> Node {
     };
     let mut s = Spec::ca("root384", all(1, -1));
     s.hours = u16::MAX;
-    let tbs = s.tbs(VerificationKeyIndicator::verificationKey(PublicVerificationKey::ecdsaNistP384(pt)));
+    let tbs = s.tbs(VerificationKeyIndicator::verificationKey(
+        PublicVerificationKey::ecdsaNistP384(pt),
+    ));
     let c = cert::issue_explicit_cert(tbs, None, CertHash::Sha384, |dg| {
         let sg = key.sign_digest(&dg.try_into().unwrap());
         use v2xw_msg::sec_types::ieee1609_dot2_base_types::EcdsaP384Signature;
@@ -465,7 +502,8 @@ fn a_p384_root_signs_an_explicit_ca_with_sha384() {
     let key = v2xw_sec::p384::P384SigningKey::from_be48(&[0x42; 48]).unwrap();
     let d = Scalar::from(77u64);
     let q = Point::mul_base(&d);
-    let tbs = Spec::ca("ica", all(1, 0)).tbs(cert::verification_key_indicator(&q.compressed().unwrap()).unwrap());
+    let tbs = Spec::ca("ica", all(1, 0))
+        .tbs(cert::verification_key_indicator(&q.compressed().unwrap()).unwrap());
     let ica = cert::issue_explicit_cert(tbs, Some((&r.cert, &r.key)), CertHash::Sha256, |dg| {
         let sg = key.sign_digest(&dg.try_into().unwrap());
         use v2xw_msg::sec_types::ieee1609_dot2_base_types::EcdsaP384Signature;
@@ -493,17 +531,32 @@ fn a_p384_root_signs_an_explicit_ca_with_sha384() {
 fn rule_permissions_covered() {
     // EE PSID outside the ACA's explicit list.
     let (c, p) = with(|s| {
-        s.aca.issue = Some(vec![group(Some(vec![rng(35, None)]), 1, 0, ee_type(true, false))]);
+        s.aca.issue = Some(vec![group(
+            Some(vec![rng(35, None)]),
+            1,
+            0,
+            ee_type(true, false),
+        )]);
     });
     only(&c, &p, K::PermissionNotCovered);
     // Positive: listed explicitly.
     let (c, p) = with(|s| {
-        s.aca.issue = Some(vec![group(Some(vec![rng(32, None)]), 1, 0, ee_type(true, false))]);
+        s.aca.issue = Some(vec![group(
+            Some(vec![rng(32, None)]),
+            1,
+            0,
+            ee_type(true, false),
+        )]);
     });
     valid(&c, &p);
     // A subordinate `all` group needs an issuer `all` group.
     let (c, p) = with(|s| {
-        s.ica.issue = Some(vec![group(Some(vec![rng(32, None)]), 1, 1, ee_type(true, false))]);
+        s.ica.issue = Some(vec![group(
+            Some(vec![rng(32, None)]),
+            1,
+            1,
+            ee_type(true, false),
+        )]);
     });
     only(&c, &p, K::PermissionNotCovered);
 }
@@ -541,10 +594,19 @@ fn rule_ee_type() {
 fn rule_ssp_consistency() {
     let aca_with = |r: Option<SspRange>| {
         move |s: &mut Specs| {
-            s.aca.issue = Some(vec![group(Some(vec![rng(32, r)]), 1, 0, ee_type(true, false))]);
+            s.aca.issue = Some(vec![group(
+                Some(vec![rng(32, r)]),
+                1,
+                0,
+                ee_type(true, false),
+            )]);
         }
     };
-    let opaque = |b: &[u8]| Some(ServiceSpecificPermissions::opaque(OctetString::from(b.to_vec())));
+    let opaque = |b: &[u8]| {
+        Some(ServiceSpecificPermissions::opaque(OctetString::from(
+            b.to_vec(),
+        )))
+    };
     // Opaque SSP must equal an entry of an opaque range.
     let (c, p) = with(|s| {
         aca_with(Some(opaque_range(&[b"\x01", b"\x02"])))(s);
@@ -569,7 +631,11 @@ fn rule_ssp_consistency() {
             OctetString::from(m.to_vec()),
         )))
     };
-    let bssp = |b: &[u8]| Some(ServiceSpecificPermissions::bitmapSsp(BitmapSsp(OctetString::from(b.to_vec()))));
+    let bssp = |b: &[u8]| {
+        Some(ServiceSpecificPermissions::bitmapSsp(BitmapSsp(
+            OctetString::from(b.to_vec()),
+        )))
+    };
     let (c, p) = with(|s| {
         aca_with(bm(&[0x80, 0x00], &[0xC0, 0x00]))(s);
         s.ee.app = Some(vec![app(32, bssp(&[0xBF, 0xFF]))]);
@@ -600,22 +666,52 @@ fn rule_ssp_consistency() {
     only(&c, &p, K::SspNotCovered);
     // A subordinate CA's opaque range must be a subset of the issuer's.
     let (c, p) = with(|s| {
-        s.ica.issue = Some(vec![group(Some(vec![rng(32, Some(opaque_range(&[b"\x01", b""])))]), 1, 1, ee_type(true, false))]);
-        s.aca.issue = Some(vec![group(Some(vec![rng(32, Some(opaque_range(&[b"\x02"])))]), 1, 0, ee_type(true, false))]);
+        s.ica.issue = Some(vec![group(
+            Some(vec![rng(32, Some(opaque_range(&[b"\x01", b""])))]),
+            1,
+            1,
+            ee_type(true, false),
+        )]);
+        s.aca.issue = Some(vec![group(
+            Some(vec![rng(32, Some(opaque_range(&[b"\x02"])))]),
+            1,
+            0,
+            ee_type(true, false),
+        )]);
         s.ee.app = Some(vec![app(32, opaque(b"\x02"))]);
     });
     only(&c, &p, K::SspNotCovered);
     // Bitmap range inside a bitmap range: issuer mask bits must be in the subordinate mask
     // with the same value.
     let (c, p) = with(|s| {
-        s.ica.issue = Some(vec![group(Some(vec![rng(32, bm(&[0x80], &[0x80]))]), 1, 1, ee_type(true, false))]);
-        s.aca.issue = Some(vec![group(Some(vec![rng(32, bm(&[0x80], &[0xC0]))]), 1, 0, ee_type(true, false))]);
+        s.ica.issue = Some(vec![group(
+            Some(vec![rng(32, bm(&[0x80], &[0x80]))]),
+            1,
+            1,
+            ee_type(true, false),
+        )]);
+        s.aca.issue = Some(vec![group(
+            Some(vec![rng(32, bm(&[0x80], &[0xC0]))]),
+            1,
+            0,
+            ee_type(true, false),
+        )]);
         s.ee.app = Some(vec![app(32, bssp(&[0x80]))]);
     });
     valid(&c, &p);
     let (c, p) = with(|s| {
-        s.ica.issue = Some(vec![group(Some(vec![rng(32, bm(&[0x80], &[0x80]))]), 1, 1, ee_type(true, false))]);
-        s.aca.issue = Some(vec![group(Some(vec![rng(32, bm(&[0x00], &[0x40]))]), 1, 0, ee_type(true, false))]);
+        s.ica.issue = Some(vec![group(
+            Some(vec![rng(32, bm(&[0x80], &[0x80]))]),
+            1,
+            1,
+            ee_type(true, false),
+        )]);
+        s.aca.issue = Some(vec![group(
+            Some(vec![rng(32, bm(&[0x00], &[0x40]))]),
+            1,
+            0,
+            ee_type(true, false),
+        )]);
         s.ee.app = Some(vec![app(32, bssp(&[0x80]))]);
     });
     only(&c, &p, K::SspNotCovered);
@@ -696,7 +792,10 @@ fn rule_region_inside_the_effective_issuer_region() {
     let (c, p) = with(|s| {
         s.aca.region = Some(countries(&[840]));
         s.ee.region = Some(GeographicRegion::circularRegion(CircularRegion::new(
-            TwoDLocation::new(Latitude(NinetyDegreeInt(407_000_000)), Longitude(OneEightyDegreeInt(-740_000_000))),
+            TwoDLocation::new(
+                Latitude(NinetyDegreeInt(407_000_000)),
+                Longitude(OneEightyDegreeInt(-740_000_000)),
+            ),
             Uint16(1000),
         )));
     });

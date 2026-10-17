@@ -98,7 +98,11 @@ fn camp_implicit_sec4_algebra() {
         assert_eq!(pu, point_xy(get("pux"), get("puy")), "{id}: P_U");
         let mut cert_u = hex(s("tbs_cert"));
         cert_u.extend_from_slice(&pu.compressed().unwrap());
-        assert_eq!(hx(&cert_u), get("cert_u"), "{id}: CertU = tbs ‖ compressed P_U");
+        assert_eq!(
+            hx(&cert_u),
+            get("cert_u"),
+            "{id}: CertU = tbs ‖ compressed P_U"
+        );
         let e = ecqv::cert_hash_sec4(&cert_u);
         let r = ecqv::private_key_contribution(&e, &k, &dca);
         assert_eq!(hx(&scalar_to_be32(&r)), get("r"), "{id}: r");
@@ -126,7 +130,11 @@ fn oracle_ecqv_1609_issuance_and_reconstruction() {
     for (n, v) in vectors.iter().enumerate() {
         let g = |k: &str| v[k].as_str().unwrap();
         let oracle_cert = decode_cert(g("cert_coer"));
-        assert_eq!(hx(&cert::encode(&oracle_cert).unwrap()), g("cert_coer"), "#{n}: COER round trip");
+        assert_eq!(
+            hx(&cert::encode(&oracle_cert).unwrap()),
+            g("cert_coer"),
+            "#{n}: COER round trip"
+        );
         assert_eq!(g("issuer_coer"), doc["aca_coer"].as_str().unwrap());
 
         // Issue the same certificate ourselves from the oracle's inputs.
@@ -161,8 +169,15 @@ fn oracle_ecqv_1609_issuance_and_reconstruction() {
             &cert::tbs_canonical_coer(&issued.certificate.0.to_be_signed).unwrap(),
             &cert::canonical_coer(&aca).unwrap(),
         );
-        assert_eq!(hx(&e_bytes), g("e"), "#{n}: e (full 256 bits, no SEC 4 truncation)");
-        assert_eq!(cert::implicit_e(&issued.certificate, &aca).unwrap(), issued.e);
+        assert_eq!(
+            hx(&e_bytes),
+            g("e"),
+            "#{n}: e (full 256 bits, no SEC 4 truncation)"
+        );
+        assert_eq!(
+            cert::implicit_e(&issued.certificate, &aca).unwrap(),
+            issued.e
+        );
         let pu = point_obj(&v["P_U"]);
         let r = scalar(g("r"));
         assert_eq!(
@@ -179,7 +194,9 @@ fn oracle_ecqv_1609_issuance_and_reconstruction() {
         assert_eq!(hx(&scalar_to_be32(&du)), g("d_u"), "#{n}: d_U");
 
         // Reconstruction by a relying party.
-        let q = p256(&cert::verification_key(&oracle_cert, Some((&aca, &CertKey::P256(q_aca)))).unwrap());
+        let q = p256(
+            &cert::verification_key(&oracle_cert, Some((&aca, &CertKey::P256(q_aca)))).unwrap(),
+        );
         assert_eq!(q, point_obj(&v["Q_U"]), "#{n}: Q_U");
         assert_eq!(Point::mul_base(&du), q, "#{n}: d_U·G = Q_U");
         assert_eq!(
@@ -206,7 +223,11 @@ fn oracle_butterfly_implicit_certificates_reconstruct() {
         // B as R_U: our d from the vector's b and r.
         let b = scalar(v["b"].as_str().unwrap());
         let r = scalar(imp["r"].as_str().unwrap());
-        assert_eq!(ecqv::subject_private_key(&e, &b, &r), d, "#{n}: d = e·b + r");
+        assert_eq!(
+            ecqv::subject_private_key(&e, &b, &r),
+            d,
+            "#{n}: d = e·b + r"
+        );
     }
 }
 
@@ -216,23 +237,46 @@ fn oracle_explicit_chain() {
     let g = |k: &str| doc[k].as_str().unwrap();
     let root = decode_cert(g("root_coer"));
     let aca = decode_cert(g("aca_coer"));
-    assert_eq!(hx(&cert::cert_id8(&root).unwrap().0[..]), g("root_hashed_id8"));
-    assert_eq!(hx(&cert::hashed_id32(&root).unwrap()), g("root_hashed_id32"));
-    assert_eq!(hx(&cert::cert_id8(&aca).unwrap().0[..]), g("aca_hashed_id8"));
-    assert!(cert::verify_explicit_cert(&root, None).unwrap(), "root self-signature");
+    assert_eq!(
+        hx(&cert::cert_id8(&root).unwrap().0[..]),
+        g("root_hashed_id8")
+    );
+    assert_eq!(
+        hx(&cert::hashed_id32(&root).unwrap()),
+        g("root_hashed_id32")
+    );
+    assert_eq!(
+        hx(&cert::cert_id8(&aca).unwrap().0[..]),
+        g("aca_hashed_id8")
+    );
+    assert!(
+        cert::verify_explicit_cert(&root, None).unwrap(),
+        "root self-signature"
+    );
     let root_key = cert::verification_key(&root, None).unwrap();
-    assert!(cert::verify_explicit_cert(&aca, Some((&root, &root_key))).unwrap(), "ACA by root");
+    assert!(
+        cert::verify_explicit_cert(&aca, Some((&root, &root_key))).unwrap(),
+        "ACA by root"
+    );
     let aca_key = cert::verification_key(&aca, None).unwrap();
     // The ACA signature does not verify under the wrong issuer.
     assert!(!cert::verify_explicit_cert(&aca, Some((&aca, &aca_key))).unwrap());
     for (n, v) in doc["vectors"].as_array().unwrap().iter().enumerate() {
         let s = |k: &str| v[k].as_str().unwrap();
         let ee = decode_cert(s("cert_coer"));
-        let digest = cert::explicit_cert_digest(&ee.0.to_be_signed, Some(&aca), cert::CertHash::Sha256)
-            .unwrap();
+        let digest =
+            cert::explicit_cert_digest(&ee.0.to_be_signed, Some(&aca), cert::CertHash::Sha256)
+                .unwrap();
         assert_eq!(hx(&digest), s("signed_digest"), "#{n}: signed digest");
-        assert!(cert::verify_explicit_cert(&ee, Some((&aca, &aca_key))).unwrap(), "#{n}: verifies");
-        assert_eq!(hx(&cert::cert_id8(&ee).unwrap().0[..]), s("hashed_id8"), "#{n}");
+        assert!(
+            cert::verify_explicit_cert(&ee, Some((&aca, &aca_key))).unwrap(),
+            "#{n}: verifies"
+        );
+        assert_eq!(
+            hx(&cert::cert_id8(&ee).unwrap().0[..]),
+            s("hashed_id8"),
+            "#{n}"
+        );
         assert_eq!(hx(&cert::cert_id10(&ee).unwrap()), s("hashed_id10"), "#{n}");
         // Re-issue: our own tbs encoding and issuer field reproduce the oracle's bytes
         // apart from the signature, which we produce with our own ECDSA and verify.
@@ -259,7 +303,10 @@ fn oracle_explicit_chain() {
         // A one-byte change in the tbs breaks the signature.
         let mut bad = ee.clone();
         bad.0.to_be_signed.crl_series.0.0 ^= 1;
-        assert!(!cert::verify_explicit_cert(&bad, Some((&aca, &aca_key))).unwrap(), "#{n}: tamper");
+        assert!(
+            !cert::verify_explicit_cert(&bad, Some((&aca, &aca_key))).unwrap(),
+            "#{n}: tamper"
+        );
     }
 }
 
@@ -280,10 +327,18 @@ fn ecdsa_with_k_matches_the_oracle_signatures() {
         let sig = cert::ecdsa_p256_sign_with_k(&d, &k, &digest).unwrap();
         let enc = hx(&coer::encode(MsgType::Crl, &sig).unwrap());
         assert!(enc.ends_with(&format!("{}{}", s("r"), s("s"))), "r ‖ s");
-        assert!(cert::ecdsa_verify_digest(&CertKey::P256(Point::mul_base(&d)), &digest, &sig));
+        assert!(cert::ecdsa_verify_digest(
+            &CertKey::P256(Point::mul_base(&d)),
+            &digest,
+            &sig
+        ));
         let mut wrong = digest;
         wrong[0] ^= 1;
-        assert!(!cert::ecdsa_verify_digest(&CertKey::P256(Point::mul_base(&d)), &wrong, &sig));
+        assert!(!cert::ecdsa_verify_digest(
+            &CertKey::P256(Point::mul_base(&d)),
+            &wrong,
+            &sig
+        ));
         checked += 1;
     }
     assert_eq!(checked, 6);
@@ -307,9 +362,10 @@ fn the_sec4_retry_draws_a_new_k_when_the_key_would_be_infinity() {
     let d_bad = -(e * Scalar::from(14u64)); // Q_CA = -(e·14)·G = -e·P_U, since P_U = 14·G
     let q_bad = Point::mul_base(&d_bad);
     let mut draws = vec![Scalar::from(21u64), k1];
-    let issued =
-        cert::issue_implicit(&template.0.to_be_signed, &aca, &q_bad, &d_bad, &ru, || draws.pop().unwrap())
-            .expect("issues on the second draw");
+    let issued = cert::issue_implicit(&template.0.to_be_signed, &aca, &q_bad, &d_bad, &ru, || {
+        draws.pop().unwrap()
+    })
+    .expect("issues on the second draw");
     assert_eq!(issued.attempts, 2, "the first k must be refused");
     assert_eq!(issued.k, Scalar::from(21u64));
 }

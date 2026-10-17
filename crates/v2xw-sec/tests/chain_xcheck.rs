@@ -173,7 +173,9 @@ fn five_hundred_oracle_chains_get_the_oracle_verdict() {
                 }
                 "implicit" => {
                     implicit_certs += 1;
-                    let CertKey::P256(q) = q_issuer else { unreachable!() };
+                    let CertKey::P256(q) = q_issuer else {
+                        unreachable!()
+                    };
                     let k = scalar(g("k"));
                     let ru = Point::mul_base(&scalar(g("k_u")));
                     let out = cert::issue_implicit(
@@ -185,7 +187,11 @@ fn five_hundred_oracle_chains_get_the_oracle_verdict() {
                         || k,
                     )
                     .unwrap();
-                    assert_eq!(out.private_key_contribution, scalar(g("r")), "chain {id} cert {n}: r");
+                    assert_eq!(
+                        out.private_key_contribution,
+                        scalar(g("r")),
+                        "chain {id} cert {n}: r"
+                    );
                     out.certificate
                 }
                 other => panic!("kind {other}"),
@@ -204,8 +210,20 @@ fn five_hundred_oracle_chains_get_the_oracle_verdict() {
     assert!(reissued >= 1200, "{reissued} certificates re-issued");
     assert!(spdu_valid >= 150, "{spdu_valid} SPDUs verified");
     for m in [
-        "none", "sig-tamper", "tbs-tamper", "implicit-tamper", "issuer-id", "validity", "region",
-        "psid", "eetype", "ssp", "chain-length", "min-zero", "untrusted-root", "root-sig",
+        "none",
+        "sig-tamper",
+        "tbs-tamper",
+        "implicit-tamper",
+        "issuer-id",
+        "validity",
+        "region",
+        "psid",
+        "eetype",
+        "ssp",
+        "chain-length",
+        "min-zero",
+        "untrusted-root",
+        "root-sig",
     ] {
         assert!(mutations_seen.contains(m), "no chain exercises {m}");
     }

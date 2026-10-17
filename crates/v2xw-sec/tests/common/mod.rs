@@ -123,7 +123,7 @@ where
         .expect("material");
     let root = Arc::new(
         cert::trust_anchor(
-            &CertSpec::authority(T0_1609_SECONDS, PSID_CAM),
+            &CertSpec::issuing_authority(T0_1609_SECONDS, PSID_CAM),
             &root_material,
         )
         .expect("root builds"),
@@ -138,7 +138,7 @@ where
     let pca_material = backend
         .public_material(&backend.public_of(&pca_key).expect("pub"))
         .expect("material");
-    let mut pca_spec = CertSpec::authority(T0_1609_SECONDS, PSID_CAM);
+    let mut pca_spec = CertSpec::issuing_authority(T0_1609_SECONDS, PSID_CAM);
     pca_spec.issuer = Some(root_digest.clone());
     let pca = Arc::new(
         cert::issue_explicit(&pca_spec, &pca_material, &root_coer, |digest| {

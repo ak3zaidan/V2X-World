@@ -603,3 +603,159 @@ fn a_self_issued_signer_needs_to_be_a_trust_anchor() {
             .is_verifiable()
     );
 }
+
+// ------------------------------------------------------------------------------------
+// The multi-level chain walk (WP-A3): verify_plan used to stop one level above the
+// signer; it now walks to a trust anchor or a verified cache entry, one link operation
+// per unverified certificate, and applies the non-cryptographic chain rules.
+
+fn attached(seed: u64, psid: u64) -> (common::Pki, Envelope, v2xw_sec::ParsedSecured) {
+    let mut ctx = TestCtx::new(seed);
+    let mut backend = Real::new();
+    let pki = build_pki(&mut ctx, &mut backend, 1);
+    let envelope = Envelope::ieee1609(WallClock::new(T0_UNIX));
+    let h = HeaderInfoSpec { psid, ..hdr() };
+    let pdu = envelope
+        .sign(
+            &mut ctx,
+            &mut backend,
+            &pki.entities[0].signer,
+            b"payload",
+            &h,
+            SignerIdChoice::Certificate,
+        )
+        .expect("signs");
+    let parsed = envelope.parse(pdu.bytes()).expect("parses");
+    (pki, envelope, parsed)
+}
+
+fn cert_links(plan: &v2xw_sec::VerifyPlan) -> usize {
+    plan.ops
+        .iter()
+        .filter(|o| {
+            matches!(
+                o,
+                PrimitiveOp::VerifySignature {
+                    over: SigSubject::Certificate,
+                    ..
+                } | PrimitiveOp::ReconstructImplicit { .. }
+            )
+        })
+        .count()
+}
+
+#[test]
+fn an_unverified_cached_issuer_is_itself_verified_up_to_the_anchor() {
+    let (pki, envelope, parsed) = attached(31, PSID_CAM);
+    // The PCA is cached but not yet verified: the plan must verify the EE against it
+    // and the PCA against the root — two links, not the old one.
+    let mut cache = PeerCertCache::new();
+    cache.insert(pki.pca.clone(), false).expect("encodes");
+    let plan = envelope.verify_plan(&parsed, &cache, &pki.trust_store(), &CrlStore::new());
+    assert_eq!(plan.outcome, PlanOutcome::Verifiable);
+    assert_eq!(cert_links(&plan), 2, "{:?}", plan.ops);
+    // Verified in the cache: one link, as before.
+    let mut warm = PeerCertCache::new();
+    warm.insert(pki.pca.clone(), true).expect("encodes");
+    let plan = envelope.verify_plan(&parsed, &warm, &pki.trust_store(), &CrlStore::new());
+    assert_eq!(plan.outcome, PlanOutcome::Verifiable);
+    assert_eq!(cert_links(&plan), 1);
+}
+
+#[test]
+fn a_missing_certificate_two_levels_up_is_requested_by_p2pcd() {
+    let (pki, envelope, parsed) = attached(32, PSID_CAM);
+    let mut cache = PeerCertCache::new();
+    cache.insert(pki.pca.clone(), false).expect("encodes");
+    // No trust anchors: the walk reaches the PCA's issuer, the root, and lacks it.
+    let plan = envelope.verify_plan(&parsed, &cache, &TrustStore::new(), &CrlStore::new());
+    match &plan.outcome {
+        PlanOutcome::NeedCertificate(req) => {
+            assert_eq!(req.kind, P2pcdKind::CertificateAuthority);
+            assert_eq!(req.unknown, pki.root_digest, "the root, two levels up");
+        }
+        other => panic!("expected a request for the root, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_spdu_under_a_psid_the_certificate_lacks_is_refused() {
+    let (pki, envelope, parsed) = attached(33, PSID_CAM + 1);
+    let plan = envelope.verify_plan(
+        &parsed,
+        &pki.warm_cache(),
+        &pki.trust_store(),
+        &CrlStore::new(),
+    );
+    assert_eq!(
+        plan.outcome,
+        PlanOutcome::Reject(RejectReason::PsidNotPermitted)
+    );
+}
+
+#[test]
+fn an_issuer_without_cert_issue_permissions_is_inconsistent() {
+    use v2xw_sec::crypto::CryptoBackend;
+    let mut ctx = TestCtx::new(34);
+    let mut backend = Real::new();
+    let envelope = Envelope::ieee1609(WallClock::new(T0_UNIX));
+    let p = PrimitiveId::ECDSA_P256_SHA256;
+    for issuing in [true, false] {
+        let rk = backend
+            .keygen(&mut ctx, p, v2xw_core::ids::NodeId::new(800))
+            .expect("keygen");
+        let rm = backend
+            .public_material(&backend.public_of(&rk).expect("pub"))
+            .expect("material");
+        let spec = if issuing {
+            CertSpec::issuing_authority(common::T0_1609_SECONDS, PSID_CAM)
+        } else {
+            CertSpec::authority(common::T0_1609_SECONDS, PSID_CAM)
+        };
+        let root = Arc::new(cert::trust_anchor(&spec, &rm).expect("root"));
+        let root_coer = cert::encode(&root).expect("encodes");
+        let ek = backend
+            .keygen(&mut ctx, p, v2xw_core::ids::NodeId::new(801))
+            .expect("keygen");
+        let em = backend
+            .public_material(&backend.public_of(&ek).expect("pub"))
+            .expect("material");
+        let ee_spec = CertSpec::pseudonym(
+            certificate_digest(&root).expect("digest"),
+            HolderId::None,
+            common::T0_1609_SECONDS,
+            PSID_CAM,
+        );
+        let ee = Arc::new(
+            cert::issue_explicit(&ee_spec, &em, &root_coer, |d| {
+                backend
+                    .sign_prehashed(&mut ctx, &rk, d)?
+                    .to_ieee1609_signature()
+            })
+            .expect("ee"),
+        );
+        let signer = SignerHandle::new(v2xw_core::ids::NodeId::new(801), ek, ee).expect("signer");
+        let pdu = envelope
+            .sign(
+                &mut ctx,
+                &mut backend,
+                &signer,
+                b"payload",
+                &hdr(),
+                SignerIdChoice::Certificate,
+            )
+            .expect("signs");
+        let parsed = envelope.parse(pdu.bytes()).expect("parses");
+        let mut anchors = TrustStore::new();
+        anchors.insert(root).expect("encodes");
+        let plan = envelope.verify_plan(&parsed, &PeerCertCache::new(), &anchors, &CrlStore::new());
+        if issuing {
+            assert_eq!(plan.outcome, PlanOutcome::Verifiable);
+        } else {
+            assert_eq!(
+                plan.outcome,
+                PlanOutcome::Reject(RejectReason::ChainInconsistent)
+            );
+        }
+    }
+}

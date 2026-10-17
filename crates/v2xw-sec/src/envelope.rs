@@ -555,6 +555,13 @@ pub enum RejectReason {
     UnsupportedHashAlgorithm,
     /// The attached certificate's issuer is `self` but it is not a trust anchor.
     UntrustedSelfSignedIssuer,
+    /// The SPDU's PSID is not in the signing certificate's `appPermissions`.
+    PsidNotPermitted,
+    /// A certificate in the chain is not consistent with its issuer (permissions, SSP,
+    /// chain length, validity or region; [`crate::chain`]).
+    ChainInconsistent,
+    /// The chain is longer than [`crate::chain::MAX_CHAIN_LENGTH`].
+    ChainTooLong,
 }
 
 /// A verification plan: the operations, and whether they can be run at all.
@@ -1273,53 +1280,104 @@ impl SecurityEnvelopeInfo for Envelope {
             };
         }
 
-        // Validate the certificate itself, unless the cache says it is already done.
+        // The SPDU's PSID must be one the signing certificate permits (02 §12 rule 3).
+        if !crate::chain::ee_permits_psid(certificate.as_ref(), p.psid) {
+            return VerifyPlan {
+                ops,
+                outcome: PlanOutcome::Reject(RejectReason::PsidNotPermitted),
+            };
+        }
+
+        // Build the chain upward (02 §12). Every certificate not yet verified needs its
+        // issuer — a trust anchor, or a certificate in the peer cache — and one
+        // cryptographic link operation: an ECDSA verification for an explicit certificate,
+        // an ECQV reconstruction for an implicit one. The walk stops at a trust anchor or
+        // at a certificate the cache has already verified, which vouches for everything
+        // above it; a missing issuer at any level is a P2PCD request.
+        let mut segment: Vec<Arc<Certificate>> = vec![certificate.clone()];
         if !already_verified {
-            match &certificate.0.issuer {
-                IssuerIdentifier::sha256AndDigest(issuer)
-                | IssuerIdentifier::sha384AndDigest(issuer)
-                | IssuerIdentifier::sm3AndDigest(issuer) => {
-                    ops.push(PrimitiveOp::StoreLookup {
-                        store: StoreKind::TrustStore,
-                        key: issuer.clone(),
-                    });
-                    if !anchors.contains(issuer) && cache.get(issuer).is_none() {
-                        return VerifyPlan {
-                            ops,
-                            outcome: PlanOutcome::NeedCertificate(P2pcdRequest {
-                                id3: hashed_id3_of_id8(issuer),
-                                unknown: issuer.clone(),
-                                kind: P2pcdKind::CertificateAuthority,
-                            }),
+            let mut cur = certificate.clone();
+            let mut cur_digest = signer_digest.clone();
+            loop {
+                match &cur.0.issuer {
+                    IssuerIdentifier::sha256AndDigest(issuer)
+                    | IssuerIdentifier::sha384AndDigest(issuer)
+                    | IssuerIdentifier::sm3AndDigest(issuer) => {
+                        ops.push(PrimitiveOp::StoreLookup {
+                            store: StoreKind::TrustStore,
+                            key: issuer.clone(),
+                        });
+                        let (next, stop) = if let Some(a) = anchors.get(issuer) {
+                            (a.clone(), true)
+                        } else if let Some(c) = cache.get(issuer) {
+                            (c.certificate.clone(), c.verified)
+                        } else {
+                            return VerifyPlan {
+                                ops,
+                                outcome: PlanOutcome::NeedCertificate(P2pcdRequest {
+                                    id3: hashed_id3_of_id8(issuer),
+                                    unknown: issuer.clone(),
+                                    kind: P2pcdKind::CertificateAuthority,
+                                }),
+                            };
                         };
+                        if let Some(op) = link_op(cur.as_ref(), next.as_ref()) {
+                            ops.push(op);
+                        }
+                        segment.push(next.clone());
+                        if stop {
+                            break;
+                        }
+                        if segment.len() > crate::chain::MAX_CHAIN_LENGTH {
+                            return VerifyPlan {
+                                ops,
+                                outcome: PlanOutcome::Reject(RejectReason::ChainTooLong),
+                            };
+                        }
+                        cur_digest = issuer.clone();
+                        cur = next;
                     }
-                }
-                IssuerIdentifier::R_self(_) => {
-                    // A self-signed end-entity certificate is only usable if it is itself
-                    // a trust anchor; otherwise there is nothing to chain to.
-                    ops.push(PrimitiveOp::StoreLookup {
-                        store: StoreKind::TrustStore,
-                        key: signer_digest.clone(),
-                    });
-                    if !anchors.contains(&signer_digest) {
-                        return VerifyPlan {
-                            ops,
-                            outcome: PlanOutcome::Reject(RejectReason::UntrustedSelfSignedIssuer),
-                        };
+                    IssuerIdentifier::R_self(_) => {
+                        // A self-signed certificate is only usable if it is itself a trust
+                        // anchor; otherwise there is nothing to chain to.
+                        ops.push(PrimitiveOp::StoreLookup {
+                            store: StoreKind::TrustStore,
+                            key: cur_digest.clone(),
+                        });
+                        if !anchors.contains(&cur_digest) {
+                            return VerifyPlan {
+                                ops,
+                                outcome: PlanOutcome::Reject(
+                                    RejectReason::UntrustedSelfSignedIssuer,
+                                ),
+                            };
+                        }
+                        if let Some(op) = link_op(cur.as_ref(), cur.as_ref()) {
+                            ops.push(op);
+                        }
+                        break;
                     }
+                    _ => break,
                 }
-                _ => {}
             }
-            match certificate.0.r_type {
-                CertificateType::explicit => ops.push(PrimitiveOp::VerifySignature {
-                    primitive: PrimitiveId::ECDSA_P256_SHA256,
-                    over: SigSubject::Certificate,
-                }),
-                CertificateType::implicit => ops.push(PrimitiveOp::ReconstructImplicit {
-                    primitive: PrimitiveId::ECQV_P256,
-                }),
-                _ => {}
-            }
+        }
+
+        // The consistency rules that need no cryptography, over the segment just built:
+        // permissions, SSPs, chain length, validity and region containment.
+        let refs: Vec<&Certificate> = segment.iter().map(|c| c.as_ref()).collect();
+        if let Err(errs) = crate::chain::check_links(&refs) {
+            let reason = if errs
+                .iter()
+                .any(|e| e.kind == crate::chain::ChainErrorKind::TooLong)
+            {
+                RejectReason::ChainTooLong
+            } else {
+                RejectReason::ChainInconsistent
+            };
+            return VerifyPlan {
+                ops,
+                outcome: PlanOutcome::Reject(reason),
+            };
         }
 
         // Finally the SPDU's own signature: hash the tbsData, hash the signer identifier
@@ -1403,6 +1461,34 @@ impl<C: Ctx + ?Sized> SecurityEnvelope<C> for Envelope {
             signer_id: sid,
             digest: spdu_digest,
         })
+    }
+}
+
+/// The cryptographic operation that checks `cert` against `issuer`: an ECDSA
+/// verification (P-256 or P-384 by the issuer key) for an explicit certificate, an ECQV
+/// reconstruction for an implicit one.
+fn link_op(cert: &Certificate, issuer: &Certificate) -> Option<PrimitiveOp> {
+    use v2xw_msg::sec_types::PublicVerificationKey;
+    use v2xw_msg::sec_types::ieee1609_dot2::VerificationKeyIndicator;
+    match cert.0.r_type {
+        CertificateType::explicit => {
+            let p384 = matches!(
+                &issuer.0.to_be_signed.verify_key_indicator,
+                VerificationKeyIndicator::verificationKey(PublicVerificationKey::ecdsaNistP384(_))
+            );
+            Some(PrimitiveOp::VerifySignature {
+                primitive: if p384 {
+                    PrimitiveId::ECDSA_P384
+                } else {
+                    PrimitiveId::ECDSA_P256_SHA256
+                },
+                over: SigSubject::Certificate,
+            })
+        }
+        CertificateType::implicit => Some(PrimitiveOp::ReconstructImplicit {
+            primitive: PrimitiveId::ECQV_P256,
+        }),
+        _ => None,
     }
 }
 
@@ -1500,12 +1586,18 @@ fn envelope_card(profile: EnvelopeProfile) -> ModelCard {
         "Encrypted SPDUs, countersignatures and certificate requests are out of scope; \
          only `signedData` is produced and parsed."
             .to_string(),
-        "`verify_plan` checks revocation and the validity period, and plans the signature \
-         work; it does not itself verify anything, which is the `NodeRuntime`'s job."
+        "`verify_plan` checks revocation, the validity period, the SPDU PSID and the \
+         non-cryptographic 1609.2 chain rules (`chain::check_links`) along the chain up to a \
+         trust anchor or a verified cache entry, and plans one link operation per unverified \
+         certificate; it does not itself verify anything, which is the `NodeRuntime`'s job \
+         (`chain::validate` is the cryptographic validator)."
             .to_string(),
     ];
-    card.ignores =
-        vec!["Certificate chains deeper than one level above a trust anchor.".to_string()];
+    card.ignores = vec![
+        "Region inheritance beyond the chain segment the receiver holds; geometric region \
+         containment (fails closed)."
+            .to_string(),
+    ];
     card.sources = vec![
         Source::new(SourceKind::Standard, "IEEE 1609.2 §5.3.1, §6.3.4, §6.3.29"),
         Source::new(

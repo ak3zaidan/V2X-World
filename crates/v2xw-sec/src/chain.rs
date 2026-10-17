@@ -306,9 +306,9 @@ fn well_formed(index: usize, c: &Certificate, errs: &mut Vec<ChainError>) {
         VerificationKeyIndicator::reconstructionValue(_)
     );
     match b.r_type {
-        CertificateType::explicit if !(vki_explicit && b.signature.is_some()) => {
-            errs.push(m("explicit certificate needs verificationKey and a signature"))
-        }
+        CertificateType::explicit if !(vki_explicit && b.signature.is_some()) => errs.push(m(
+            "explicit certificate needs verificationKey and a signature",
+        )),
         CertificateType::implicit if !(vki_implicit && b.signature.is_none()) => errs.push(m(
             "implicit certificate needs reconstructionValue and no signature",
         )),
@@ -319,7 +319,9 @@ fn well_formed(index: usize, c: &Certificate, errs: &mut Vec<ChainError>) {
         && t.cert_issue_permissions.is_none()
         && t.cert_request_permissions.is_none()
     {
-        errs.push(m("none of appPermissions, certIssuePermissions, certRequestPermissions"));
+        errs.push(m(
+            "none of appPermissions, certIssuePermissions, certRequestPermissions",
+        ));
     }
     if let Some(app) = &t.app_permissions {
         let mut seen = BTreeSet::new();
@@ -335,7 +337,11 @@ fn well_formed(index: usize, c: &Certificate, errs: &mut Vec<ChainError>) {
         }
         for g in gs {
             if int(&g.min_chain_length) < 1 {
-                errs.push(err(index, ChainErrorKind::ChainLength, "minChainLength below 1"));
+                errs.push(err(
+                    index,
+                    ChainErrorKind::ChainLength,
+                    "minChainLength below 1",
+                ));
             }
             if int(&g.chain_length_range) < -1 {
                 errs.push(m("chainLengthRange below -1"));
@@ -381,21 +387,22 @@ fn check_permissions(
         for g in gs {
             let what = if request { "request" } else { "issue" };
             let sub_len = if request { (0, 0) } else { group_len(g) };
-            let check_group = |ig: &PsidGroupPermissions, label: &str, errs: &mut Vec<ChainError>| {
-                let (app, enrol) = ee_bits(ig);
-                let (sapp, senrol) = ee_bits(g);
-                let allowed = if request {
-                    enrol
-                } else {
-                    (!sapp || app) && (!senrol || enrol)
+            let check_group =
+                |ig: &PsidGroupPermissions, label: &str, errs: &mut Vec<ChainError>| {
+                    let (app, enrol) = ee_bits(ig);
+                    let (sapp, senrol) = ee_bits(g);
+                    let allowed = if request {
+                        enrol
+                    } else {
+                        (!sapp || app) && (!senrol || enrol)
+                    };
+                    if !allowed {
+                        errs.push(err(index, EeTypeNotAllowed, format!("{what} {label}")));
+                    }
+                    if (!request || is_ee) && !chain_length_ok(group_len(ig), sub_len) {
+                        errs.push(err(index, ChainLength, format!("{what} {label}")));
+                    }
                 };
-                if !allowed {
-                    errs.push(err(index, EeTypeNotAllowed, format!("{what} {label}")));
-                }
-                if (!request || is_ee) && !chain_length_ok(group_len(ig), sub_len) {
-                    errs.push(err(index, ChainLength, format!("{what} {label}")));
-                }
-            };
             if is_all(g) {
                 match groups(iss).iter().find(|x| is_all(x)) {
                     None => errs.push(err(
@@ -506,21 +513,34 @@ pub fn validate(
     if !matches!(root.0.issuer, IssuerIdentifier::R_self(_))
         || root.0.r_type != CertificateType::explicit
     {
-        errs.push(err(last, NotRootedInSelfSigned, "the last certificate is not self-signed explicit"));
+        errs.push(err(
+            last,
+            NotRootedInSelfSigned,
+            "the last certificate is not self-signed explicit",
+        ));
     } else {
         match cert::verify_explicit_cert(root, None) {
             Ok(true) => keys[last] = cert::verification_key(root, None).ok(),
-            _ => errs.push(err(last, BadRootSignature, "root self-signature does not verify")),
+            _ => errs.push(err(
+                last,
+                BadRootSignature,
+                "root self-signature does not verify",
+            )),
         }
         if let Some(anchors) = &policy.anchors {
             match cert::hashed_id32(root) {
                 Ok(h) if anchors.contains(&h) => {}
-                _ => errs.push(err(last, UntrustedRoot, "root HashedId32 is not on the trust list")),
+                _ => errs.push(err(
+                    last,
+                    UntrustedRoot,
+                    "root HashedId32 is not on the trust list",
+                )),
             }
         }
     }
 
     // Links, from the root down, so each issuer key is resolved before its subordinate.
+    let refs: Vec<&Certificate> = chain.iter().collect();
     for n in (0..last).rev() {
         let (sub, iss) = (&chain[n], &chain[n + 1]);
         let named = match &sub.0.issuer {
@@ -533,13 +553,21 @@ pub fn validate(
             None => false,
         };
         if !id_ok {
-            errs.push(err(n, IssuerMismatch, "issuer HashedId8 does not name the next certificate"));
+            errs.push(err(
+                n,
+                IssuerMismatch,
+                "issuer HashedId8 does not name the next certificate",
+            ));
         }
         if let Some(ik) = keys[n + 1].clone()
             && id_ok
         {
             if named.map(|x| x.1) != Some(ik.hash()) {
-                errs.push(err(n, IssuerMismatch, "issuer hash choice does not match the issuer key"));
+                errs.push(err(
+                    n,
+                    IssuerMismatch,
+                    "issuer hash choice does not match the issuer key",
+                ));
             } else {
                 match sub.0.r_type {
                     CertificateType::explicit => {
@@ -555,23 +583,7 @@ pub fn validate(
                 }
             }
         }
-        let (st, it) = (&sub.0.to_be_signed, &iss.0.to_be_signed);
-        check_permissions(n, st, it, &mut errs);
-        let ((s0, s1), (i0, i1)) = (validity(st), validity(it));
-        if s0 < i0 || s1 > i1 {
-            errs.push(err(n, ValidityNotContained, "validity period outside the issuer's"));
-        }
-        if let Some(sr) = &st.region {
-            // The issuer's effective region: its own, else the nearest ancestor's, else
-            // worldwide.
-            if let Some(ir) = chain[n + 1..].iter().find_map(|c| c.0.to_be_signed.region.as_ref()) {
-                match region_contained(sr, ir) {
-                    Some(true) => {}
-                    Some(false) => errs.push(err(n, RegionNotContained, "region outside the issuer's")),
-                    None => errs.push(err(n, RegionUnsupported, "geometric region containment")),
-                }
-            }
-        }
+        pair_rules(n, &refs, &mut errs);
     }
 
     if let Some(now) = policy.now {
@@ -585,12 +597,90 @@ pub fn validate(
 
     if errs.is_empty() {
         Ok(ValidatedChain {
-            keys: keys.into_iter().map(|k| k.expect("every key resolved")).collect(),
+            keys: keys
+                .into_iter()
+                .map(|k| k.expect("every key resolved"))
+                .collect(),
         })
     } else {
         errs.sort_by(|a, b| (a.index, a.kind).cmp(&(b.index, b.kind)));
         Err(errs)
     }
+}
+
+/// The issuer-consistency rules for the link `chain[n]` → `chain[n + 1]` that need no
+/// cryptography: permissions, SSPs, chain length, validity and region containment (the
+/// region inherited from the nearest ancestor in `chain` that has one).
+fn pair_rules(n: usize, chain: &[&Certificate], errs: &mut Vec<ChainError>) {
+    use ChainErrorKind::*;
+    let (st, it) = (&chain[n].0.to_be_signed, &chain[n + 1].0.to_be_signed);
+    check_permissions(n, st, it, errs);
+    let ((s0, s1), (i0, i1)) = (validity(st), validity(it));
+    if s0 < i0 || s1 > i1 {
+        errs.push(err(
+            n,
+            ValidityNotContained,
+            "validity period outside the issuer's",
+        ));
+    }
+    if let Some(sr) = &st.region {
+        // The issuer's effective region: its own, else the nearest ancestor's, else
+        // worldwide.
+        if let Some(ir) = chain[n + 1..]
+            .iter()
+            .find_map(|c| c.0.to_be_signed.region.as_ref())
+        {
+            match region_contained(sr, ir) {
+                Some(true) => {}
+                Some(false) => errs.push(err(n, RegionNotContained, "region outside the issuer's")),
+                None => errs.push(err(n, RegionUnsupported, "geometric region containment")),
+            }
+        }
+    }
+}
+
+/// The rules of [`validate`] that need no cryptography, over a chain segment
+/// `[EE, …, X]` whose top `X` is either a trust anchor or a certificate already
+/// validated: well-formedness, the length bound, issuer HashedId8 linkage, permissions,
+/// SSPs, chain length, validity and region containment.
+///
+/// This is what [`crate::envelope::Envelope`]'s verification plan applies before it
+/// schedules the signature and reconstruction work: the cryptographic links are the
+/// plan's operations, and the consistency rules decide whether the plan is worth
+/// running. Region inheritance looks only as far up as the segment reaches.
+pub fn check_links(chain: &[&Certificate]) -> core::result::Result<(), Vec<ChainError>> {
+    use ChainErrorKind::*;
+    let mut errs = Vec::new();
+    if chain.is_empty() {
+        return Err(vec![err(0, Empty, "no certificates")]);
+    }
+    if chain.len() > MAX_CHAIN_LENGTH {
+        errs.push(err(
+            chain.len() - 1,
+            TooLong,
+            "longer than the 1609.2 bound",
+        ));
+    }
+    for (n, c) in chain.iter().enumerate() {
+        well_formed(n, c, &mut errs);
+    }
+    for n in 0..chain.len() - 1 {
+        let id_ok = match &chain[n].0.issuer {
+            IssuerIdentifier::sha256AndDigest(d) | IssuerIdentifier::sha384AndDigest(d) => {
+                cert::cert_id8(chain[n + 1]).is_ok_and(|h| &h == d)
+            }
+            _ => false,
+        };
+        if !id_ok {
+            errs.push(err(
+                n,
+                IssuerMismatch,
+                "issuer HashedId8 does not name the next certificate",
+            ));
+        }
+        pair_rules(n, chain, &mut errs);
+    }
+    if errs.is_empty() { Ok(()) } else { Err(errs) }
 }
 
 /// The SPDU-level permission check (02 §12 rule 3): the end-entity certificate lists
