@@ -353,8 +353,9 @@ impl ScmsState {
             return Some(account.accepted_at);
         }
         let p = &self.params;
-        let len = p.i_period.as_nanos().max(1);
-        let p0 = account.accepted_at.saturating_sub(p.epoch) / len;
+        // The i-period the request was accepted in, on the run's calendar (the real US
+        // grid from 2015-01-06 when `calendar_epoch_unix_s` is set, else from `epoch`).
+        let p0 = u64::from(p.period_at(account.accepted_at));
         let k = u64::from(i - covered) + 1;
         let boundary = u32::try_from(p0 + k).unwrap_or(u32::MAX);
         Some(p.period_start(boundary).max(account.accepted_at))
@@ -995,20 +996,26 @@ impl ScmsState {
                     batch_ready_stamped: false,
                     pregen: false,
                 });
-                let mut account_req = (*req).clone();
-                account_req.spdu = None;
-                self.ra.accounts.insert(
-                    req.device,
-                    PregenAccount {
-                        request: account_req,
-                        request_hash,
-                        request_hash8,
-                        first_i: req.start_i,
-                        accepted_at: at,
-                        lpf_version: self.gov.lpf.version,
-                        generated: (req.start_i..req.start_i + req.periods).collect(),
-                    },
-                );
+                // Pre-generation expands the butterfly keys the request carries. Under a
+                // hybrid scheme there is no post-quantum butterfly (`crate::hybrid`): the
+                // post-quantum key of each certificate is a fresh upload, so the RA cannot
+                // pre-generate, opens no account, and the device requests again per top-up.
+                if self.params.hybrid.is_none() {
+                    let mut account_req = (*req).clone();
+                    account_req.spdu = None;
+                    self.ra.accounts.insert(
+                        req.device,
+                        PregenAccount {
+                            request: account_req,
+                            request_hash,
+                            request_hash8,
+                            first_i: req.start_i,
+                            accepted_at: at,
+                            lpf_version: self.gov.lpf.version,
+                            generated: (req.start_i..req.start_i + req.periods).collect(),
+                        },
+                    );
+                }
 
                 let ack = request_hash8.and_then(|h| self.ra_ack_pdu(h, req.start_i, at));
                 let size = match &ack {
@@ -1092,7 +1099,11 @@ impl ScmsState {
                         return Ok(());
                     }
                 }
-                if let Some(dev) = self.devices.get_mut(&device) {
+                // No account under a hybrid scheme (no post-quantum butterfly to
+                // pre-generate from): the device's next top-up is a new request.
+                if self.params.hybrid.is_none()
+                    && let Some(dev) = self.devices.get_mut(&device)
+                {
                     dev.ra_account = Some(request_hash);
                 }
                 // What the RA accepted, which may be less than was asked.

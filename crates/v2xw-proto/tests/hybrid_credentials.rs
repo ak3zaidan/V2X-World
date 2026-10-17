@@ -189,3 +189,26 @@ fn a_hybrid_butterfly_authorization_uploads_one_key_per_ticket() {
         batch
     );
 }
+
+/// Merge fix (RAPRE × hybrid): pre-generation expands the request's butterfly keys, and a
+/// hybrid scheme has no post-quantum butterfly, so the RA opens no pre-generation account
+/// and each top-up is a new request carrying fresh post-quantum keys — never refused as
+/// a second request, never a `.info` top-off — and the device generates a post-quantum key
+/// for every certificate it receives. A classical run keeps the one-request account.
+#[test]
+fn a_hybrid_device_requests_afresh_for_each_top_up() {
+    let mut hybrid = scms("hybrid-mldsa44-ecdsa-p256");
+    assert!(hybrid.state.ra.accounts.is_empty());
+    hybrid.topup(DEVICE_A, PERIODS, JMAX);
+    hybrid.run().expect("runs");
+    assert_eq!(hybrid.state.ra.max_reqs_refused, 0);
+    assert_eq!(hybrid.state.devices[&DEVICE_A].info_requests, 0);
+    // One fresh post-quantum key per certificate: the first request's, then the top-up's
+    // one period of `JMAX`.
+    assert_eq!(
+        ops(&hybrid, DEVICE_A, "primitive/ml-dsa-44", "keygen"),
+        CERTS + u64::from(JMAX)
+    );
+    let classic = scms("ecdsa-p256");
+    assert!(classic.state.ra.accounts.contains_key(&DEVICE_A));
+}

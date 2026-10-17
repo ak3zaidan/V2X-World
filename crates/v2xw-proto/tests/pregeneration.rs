@@ -199,6 +199,34 @@ fn the_ra_keeps_three_years_generated_and_adds_a_week_at_each_boundary() {
     assert_eq!(run.state.devices[&DEVICE_A].topoffs_unavailable, 1);
 }
 
+/// On the real US calendar (WIRE) the weekly job runs at the real i-period boundary, not
+/// a whole week after the run's start: `pregen_due` counts boundaries on the run's own
+/// grid. Hand derivation: t0 = 2026-10-16 12:00 UTC = Unix 1 792 152 000 lies in i = 614,
+/// which began 2026-10-13 09:00 UTC = Unix 1 791 882 000 (see `scms_wiring.rs`); i = 615
+/// begins 604 800 s later, at Unix 1 792 486 800, which is 334 800 s after t0.
+#[test]
+fn on_the_real_calendar_the_next_week_is_generated_at_the_real_boundary() {
+    let mut p = ScmsParams::default().quick();
+    p.pdu.keep_bytes = true;
+    p.calendar_epoch_unix_s = Some(v2xw_proto::scms::governance::US_IPERIOD_EPOCH_UNIX_S);
+    p.pdu.t0_unix_s = 1_792_152_000;
+    let mut run = run_with(p, &[DEVICE_A]);
+    assert_eq!(run.state.params.period_at(0), 614);
+    provisioned(&mut run, DEVICE_A, 614, 1, 1);
+    let account = run.state.ra.accounts[&DEVICE_A].clone();
+    let next = 334_800 * 1_000_000_000;
+    assert!(account.accepted_at < next);
+    assert_eq!(
+        run.state.pregen_due(&account, 614 + 155),
+        Some(account.accepted_at)
+    );
+    assert_eq!(run.state.pregen_due(&account, 614 + 156), Some(next));
+    assert_eq!(
+        run.state.pregen_due(&account, 614 + 157),
+        Some(next + WEEK_NS)
+    );
+}
+
 #[test]
 fn the_preload_horizon_is_held_between_two_weeks_and_three_years() {
     use v2xw_proto::scms::params::{PreloadPolicy, RA_MAX_PRELOAD_PERIODS, RA_MIN_PRELOAD_PERIODS};
