@@ -4036,6 +4036,28 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-17: SCMS realism wave 7 integration (WP-D1, C3)
+
+Merged `--no-ff` onto `0ef491e` in order D1 (`504741b`, merge `bbab5a5`), then C3 (`1879679`, merge `bade343`). Both agents had committed their work, so no wip snapshot was needed. Git reported no conflicts, and nothing broke in the merge, so no fix commits were needed. `cargo fmt --all` made no changes.
+
+- **D1, deployment topology:** `scms/deployment.rs` adds the presets (`us-production-2025`, `us-test-ctl-2025`, `camp-reference`, `custom`), per-provider component counts (provider-b runs two ACAs), a great-circle latency model, seeded fleet assignment and MA report routing. Every provider's root sits on one CTL signed by the shared electors, each provider has its own ICA, components and PDU PKI, and an `on_ctl` flag models an untrusted provider. `ScmsRun::new_deployed` hosts and links them. The engine gains `security.scms.deployment` (the default for SCMS runs), and nodes trust every root on the CTL.
+- **C3, P2PCD:** v2xw-sec carries `p2pcdLearningRequest`, `inlineP2pcdRequest` and `requestedCertificate` in HeaderInfo (mutually exclusive, 1609.2-2022 §6.3.9) and adds the Peer2PeerPDU caCerts response (PSID 136). The v2xw-node `p2pcd.rs` implements 1609.2a §8.2.4 for the out-of-band (US) and inline (ETSI) flavours. A certificate is learned only once its CA path validates. Recordings gain `node.p2pcd`.
+- **Checks:** `cargo check --workspace --tests` passes, with only the known warnings. v2xw-sec, -msg, -proto, -node, -record and -metrics pass, except the known proto `threshold::a_malicious_member_…` failure. v2xw-engine passes: lib (91), `backend_entities` (9), `credential_handoff` (3), `phase2` (10, 1,732 s), `pq_threshold` (5), `reception` (8), `run` (11), `scenario` (15), `scms_deployment` (2), `scms_wiring` (4), `security_lifecycle` (13), `sensitivity_security` (20, 1,910 s), `unknown_signer` (1) and `wire` (4). No test pin needed `preset: camp-reference`.
+- **Oracle:** `oracle.py` passes selftest (412/412), mutate (24 faults, 0 silent) and verify-emitted (10/10). `oracle.py real` passes on D1's two-provider genesis CTL, GCCF and LCCF (113/113, dumped with `V2XW_GOV_DUMP`), and goes red on a CTL with one flipped byte (elector 4's SHA-384 signature). `gen_p2pcd_response_vectors.py` reproduces `p2pcd_response.json` byte for byte. On corpora regenerated after the merge: `check_pdus.py` passes 24/24 SPDUs and 10/10 certificates on pdu_layer, and 25/25 on enrolment. `check_mbr.py` passes 4/4, `check_run_crl.py` 19/19, and `check_appcerts.py` 18/18 (3/3 keys).
+- **Release:** `cargo build --release -j 2 -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots, and `/agent/status` and `/rpc/schema` both return 200.
+- **Behaviour change:** every SCMS run's numbers change:
+  - backend links are 1 ms within a region (an assumption), down from the flat, uncited 10 ms;
+  - the LOP hop is transparent;
+  - the CTL and the chain files carry a second provider;
+  - the home LA2 is `la2.provider-a`;
+  - the manifest lists deployment warnings.
+
+  ETSI runs now default to inline P2PCD: CAMs carry `inlineP2pcdRequest` for unknown signers, and a node attaches its certificate when asked, so CAM sizes and unknown-signer counts move. A US BSM grows by 3 B only when its issuer is unknown.
+- **Still open:**
+  - D1: vehicle credential flows run only on provider-a (about 51 `self.scms` sites in phase2 for one ScmsRun per provider). The fleet split applies to RSUs only. Per-provider `ma_mode`/`crl_publication` and the `crl_broadcast`/`mbms`/`group_linkage` options are not wired, and there is no second-ACA certificate. City-to-region latency is reported but not added.
+  - C3: the engine does not carry out-of-band response PDUs over the radio. It needs a frame type for them, and it must wake nodes at the back-off instant. RSU/VRU receive paths do not preprocess for P2PCD. The 1609.2-2016 base text was unavailable. The PSID 136 mapping is an inference. `max_active_responses` and `max_inline_entries` are assumptions. Telemetry `p2pcd_requests` still counts digest misses.
+- **Cleanup:** the worktrees and branches `worktree-wf_a4a84cd3-505-{5,6}` were removed. A stray `.claude/worktrees/wf_a4a84cd3-505-6/.cargo/config.toml` (re-created at 14:43) is left, because the rules forbid touching that file. `target/agents` was **not** removed: auto mode's permission check blocked the removal, so the owner needs to delete it.
+
 ## 2026-10-17: SCMS realism wave 6 integration (WP-C2, RAPRE, WIRE)
 
 Merged `--no-ff` onto `7c9a87e` in order C2 (`9784011`, merge `f622d60`), RAPRE (`358fef9`, merge `a84fe9a`), WIRE (`e3d4807`, merge `ef01e01`). All three agents had committed their work, so no wip snapshot was needed.
