@@ -1,0 +1,24 @@
+# Defect: rasn-compiler 0.16 emits a non-OPTIONAL SEQUENCE extension addition as a
+# mandatory field, so a CTL encoded without it cannot be decoded.
+#
+# Module:   Ieee1609Dot2Dot1CertManagement (IEEE 1609.2.1-2022, forge tag 2022-published)
+# ASN.1:    FullIeeeTbsCtl ::= SEQUENCE { ..., rootCaRemove SEQUENCE OF CtlRootCaEntry,
+#                                         ..., quorum INTEGER }
+# Emitted:  #[rasn(extension_addition)] pub quorum: Integer,
+# Wrong:    an extension addition is absent from any value encoded by a sender that
+#           predates it (X.680 §25.13, X.696 §16), and the module's own note says "If this
+#           field is absent, the quorum for the next CTL shall be the quorum for the
+#           current CTL". A real CTL omits it: the SCMS Manager test CTL of 2023
+#           (test_ctl.zip, SHA-384 bf4dfa46…) has no extension bitmap, and decoding it
+#           failed with "Extension with class `context` and tag `8` required, but not
+#           present". Found by crates/v2xw-sec/tests/real_artefacts.rs (WP-A5).
+#
+# The fix makes the field Option<Integer>. A present quorum encodes exactly as before.
+unit: sec_types.rs
+expect: 1
+@@FIND@@
+        pub quorum: Integer,
+@@REPLACE@@
+        // PATCHED by crates/v2xw-msg/patches/0006-ieee1609dot2dot1-ctl-quorum-may-be-absent.patch
+        pub quorum: Option<Integer>,
+@@END@@
