@@ -2584,7 +2584,7 @@ impl Phase2 {
     /// `security.scms.chain_file: home-provider`.
     #[must_use]
     pub fn provider_chain_files(&self) -> Vec<Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>> {
-        let st = &self.scms.state;
+        let st = &self.home().state;
         let Some(home) = st.pki.as_ref() else {
             return Vec::new();
         };
@@ -3631,14 +3631,29 @@ impl Phase2 {
             }
         };
         let held = |t: SimTime| t.max(now.saturating_add(1));
-        if let Some(t) = self.scms.kernel.next_due() {
-            offer(held(t));
+        // Every provider's own kernel and governance (WP-D1): a report one MA shares is
+        // a delivery in the receiving provider's kernel, so it is covered here.
+        for run in &self.runs {
+            if let Some(t) = run.kernel.next_due() {
+                offer(held(t));
+            }
+            for (t, _) in &run.state.gov.pending {
+                offer(held(*t));
+            }
         }
         if let Some(t) = self.etsi.as_ref().and_then(|e| e.kernel.next_due()) {
             offer(held(t));
         }
-        for (t, _) in &self.scms.state.gov.pending {
-            offer(held(*t));
+        // A provider's signed CRL reaching another provider's RA once it has crossed the
+        // inter-provider link (WP-D1): the instant that RA starts serving it.
+        let d = &self.home().state.deployment;
+        for (k, feed) in self.crl_feeds.iter().enumerate() {
+            for h in (0..self.crl_feeds.len()).filter(|&h| h != k) {
+                let lag = d.inter_provider_latency(k, h).unwrap_or(Duration::ZERO);
+                for v in feed {
+                    offer(held(v.at.saturating_add(lag.as_nanos())));
+                }
+            }
         }
         if let Some(t) = self.params.root_rollover_at {
             offer(held(t));
@@ -3647,7 +3662,7 @@ impl Phase2 {
             offer(held(t));
         }
         if self.access.crl_delivery() == crate::backend::CrlDelivery::Mbms
-            && self.published_version > 0
+            && self.published_crl_for_provider(0).0 > 0
         {
             offer(self.mbms_next);
         }
