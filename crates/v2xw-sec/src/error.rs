@@ -117,6 +117,17 @@ pub enum SecError {
         field: &'static str,
     },
 
+    /// A structure that decodes, or would encode, but breaks a rule the profile states
+    /// (for example IEEE 1609.2 §6.3.9: the two P2PCD request fields are mutually
+    /// exclusive).
+    #[error("{profile}: {rule}")]
+    ProfileViolation {
+        /// The profile whose rule was broken.
+        profile: &'static str,
+        /// The rule.
+        rule: &'static str,
+    },
+
     /// A fixed-width value had the wrong width.
     #[error("{what}: expected {expected} bytes, got {got}")]
     BadLength {

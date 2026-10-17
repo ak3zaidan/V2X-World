@@ -75,6 +75,11 @@ use crate::hashedid::{certificate_digest, certificate_hashed_id10, hashed_id3_of
 use crate::linkage::{CrlLinkageEntry, LinkageValue};
 use crate::primitive::{PrimitiveCatalogue, PrimitiveId, PrimitiveOpKind};
 
+/// The `HeaderInfo` rule that the two P2PCD request fields are mutually exclusive
+/// (IEEE 1609.2-2022 §6.3.9).
+pub const P2PCD_EXCLUSIVE_RULE: &str =
+    "headerInfo: p2pcdLearningRequest and inlineP2pcdRequest are mutually exclusive";
+
 /// The model id of the IEEE 1609.2 envelope.
 pub const IEEE_1609_2_ID: &str = "envelope/ieee-1609-2";
 
@@ -248,8 +253,12 @@ pub struct HeaderInfoSpec {
     pub expiry: Option<Duration>,
     /// An out-of-band P2PCD learning request. Forbidden by the ETSI profile.
     pub p2pcd_learning_request: Option<HashedId3>,
-    /// An inline P2PCD request naming unknown certificates.
+    /// An inline P2PCD request naming unknown certificates. Mutually exclusive with
+    /// `p2pcd_learning_request` (IEEE 1609.2-2022 §6.3.9, `HeaderInfo`).
     pub inline_p2pcd_request: Vec<HashedId3>,
+    /// An inline P2PCD response: a CA certificate a peer named in its
+    /// `inlineP2pcdRequest` (IEEE 1609.2a-2017 §8.2.4.2.3 e)2)).
+    pub requested_certificate: Option<Certificate>,
 }
 
 /// A `generationLocation`, in the units IEEE 1609.2 carries.
@@ -366,6 +375,12 @@ pub struct ParsedSecured {
     pub generation_location: Option<GenerationLocation>,
     /// Inline P2PCD requests the sender attached.
     pub inline_p2pcd_request: Vec<HashedId3>,
+    /// The out-of-band P2PCD learning request the sender attached
+    /// (`headerInfo.p2pcdLearningRequest`, IEEE 1609.2 §8.2.4.1.1).
+    pub p2pcd_learning_request: Option<HashedId3>,
+    /// The certificate an inline P2PCD responder attached (`headerInfo.requestedCertificate`,
+    /// IEEE 1609.2a-2017 §8.2.4.2.3).
+    pub requested_certificate: Option<Box<Certificate>>,
     /// The protected payload.
     pub payload: Vec<u8>,
     /// The canonical COER re-encoding of `tbsData` — what the signature is computed over.
@@ -972,6 +987,14 @@ impl Envelope {
     /// Builds the `HeaderInfo`, applying the profile's constraints.
     fn header_info(&self, spec: &HeaderInfoSpec, now: SimTime) -> Result<HeaderInfo> {
         let generation_time = self.wall.time64(now)?;
+        // IEEE 1609.2-2022 §6.3.9 (`HeaderInfo`): `p2pcdLearningRequest` "shall only be
+        // present if inlineP2pcdRequest is not present", and the converse.
+        if spec.p2pcd_learning_request.is_some() && !spec.inline_p2pcd_request.is_empty() {
+            return Err(SecError::ProfileViolation {
+                profile: self.profile.model_id(),
+                rule: P2PCD_EXCLUSIVE_RULE,
+            });
+        }
         if self.profile == EnvelopeProfile::EtsiTs103097 {
             // TS 103 097 §5.2: the profile forbids these two in a signed SPDU.
             if spec.p2pcd_learning_request.is_some() {
@@ -1002,7 +1025,7 @@ impl Envelope {
             None, // encryptionKey
             (!spec.inline_p2pcd_request.is_empty())
                 .then(|| SequenceOfHashedId3(spec.inline_p2pcd_request.clone())),
-            None, // requestedCertificate: filled by the P2PCD responder, not the signer
+            spec.requested_certificate.clone(),
             None, // pduFunctionalType
             None, // contributedExtensions
         ))
@@ -1124,6 +1147,27 @@ impl SecurityEnvelopeInfo for Envelope {
         // reject a canonical one that had travelled through a re-encoding relay.
         let tbs_coer = coer::encode(MsgType::Crl, &signed.tbs_data)?;
 
+        let hi = &signed.tbs_data.header_info;
+        if hi.p2pcd_learning_request.is_some()
+            && hi
+                .inline_p2pcd_request
+                .as_ref()
+                .is_some_and(|s| !s.0.is_empty())
+        {
+            return Err(SecError::ProfileViolation {
+                profile: self.profile.model_id(),
+                rule: P2PCD_EXCLUSIVE_RULE,
+            });
+        }
+        // TS 103 097 §5.2 forbids the out-of-band request in an ETSI SPDU; a receiver on
+        // that profile refuses one rather than act on it.
+        if self.profile == EnvelopeProfile::EtsiTs103097 && hi.p2pcd_learning_request.is_some() {
+            return Err(SecError::ProfileViolation {
+                profile: ETSI_TS_103_097_ID,
+                rule: "headerInfo.p2pcdLearningRequest must be absent (TS 103 097 §5.2)",
+            });
+        }
+
         Ok(ParsedSecured {
             profile: self.profile,
             signer,
@@ -1147,6 +1191,8 @@ impl SecurityEnvelopeInfo for Envelope {
                 .as_ref()
                 .map(|s| s.0.clone())
                 .unwrap_or_default(),
+            p2pcd_learning_request: hi.p2pcd_learning_request.clone(),
+            requested_certificate: hi.requested_certificate.clone().map(Box::new),
             payload,
             tbs_coer,
             signature,

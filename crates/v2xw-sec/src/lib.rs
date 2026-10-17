@@ -72,6 +72,7 @@ pub mod error;
 pub mod hashedid;
 pub mod kdf;
 pub mod linkage;
+pub mod p2pcd;
 pub mod p384;
 pub mod primitive;
 pub mod scheme;
