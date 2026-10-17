@@ -92,6 +92,33 @@ fn belief() -> PositionEstimate {
 /// certificate's own identity before it signs anything, and
 /// `the_station_identifier_is_the_credential_the_frame_was_signed_with` is what checks it
 /// did.
+/// The SCMS-issued key for `(node, i, j)`: an implicit pseudonym certificate from one ACA
+/// shared by every node in this test, and `d = e·b + r` (WP-C1). A node signs only with a
+/// credential installed this way.
+fn test_key(node: NodeId, i: u32, j: u32) -> v2xw_sec::credential::ImplicitKey {
+    static ISSUER: std::sync::OnceLock<v2xw_sec::credential::ImplicitIssuer> =
+        std::sync::OnceLock::new();
+    let iss = ISSUER.get_or_init(|| {
+        v2xw_sec::credential::ImplicitIssuer::standalone(b"node-tests", 0, &[0x20]).expect("issuer")
+    });
+    let mut secret = [0u8; 32];
+    secret[..4].copy_from_slice(&node.index().to_be_bytes());
+    let mut lv = [0u8; 9];
+    lv[..4].copy_from_slice(&node.index().to_be_bytes());
+    lv[4..8].copy_from_slice(&j.to_be_bytes());
+    iss.issue_factory(
+        v2xw_sec::credential::FactoryProfile::Pseudonym {
+            lv: v2xw_sec::linkage::LinkageValue::new(lv),
+        },
+        &secret,
+        i,
+        j,
+        0,
+        &[0x20],
+    )
+    .expect("issues")
+}
+
 fn credential(node: NodeId, j: u32) -> CredentialHandle {
     CredentialHandle {
         digest: pseudo_signer(node, j),
@@ -122,7 +149,11 @@ fn node_with(profile: HardwareProfile, services: ServiceSet, mode: CryptoMode) -
     };
     let mut rt = ObuRuntime::new(node, profile, Box::new(VerifyAll::new()), config, 0);
     rt.stores_mut().crl.set_period(100);
-    rt.stores_mut().certs.insert(credential(node, 0));
+    {
+        let c = credential(node, 0);
+        let k = test_key(node, c.i_period, c.j_index);
+        rt.install_credential(c, &k).expect("installs");
+    }
     rt.set_belief(belief());
     rt
 }
@@ -533,5 +564,160 @@ fn a_slow_signer_queues_behind_its_own_throughput() {
     assert!(
         slow.last() > slow.first(),
         "a slow signer that does not fall behind is a signer nobody charged"
+    );
+}
+
+// =======================================================================================
+// The SCMS credential hand-off (WP-C1)
+// =======================================================================================
+
+/// The certificate on the air is the implicit one the issuer produced, byte for byte, and
+/// a BSM that attaches it costs exactly the encoder's output for that certificate on top
+/// of the digest frame: the 8-octet digest is replaced by the one-element
+/// `SequenceOfCertificate`.
+#[test]
+fn a_bsm_with_an_attached_certificate_carries_the_issued_implicit_certificate() {
+    let mut rt = node(ServiceSet::SAE);
+    let txs = transmissions(&run(&mut rt, 2, 100 * NS_PER_MS));
+    let issued = test_key(NodeId::new(NODE), 100, 0);
+    let issued_coer = v2xw_sec::cert::encode(issued.certificate()).expect("encodes");
+    let with_cert = txs[0].signed.as_ref().expect("bytes");
+    assert!(txs[0].full_certificate && !txs[1].full_certificate);
+    assert_eq!(with_cert.cert_bytes as usize, issued_coer.len());
+    let parsed = rt.security().parse(&with_cert.spdu).expect("parses");
+    let on_air = NodeSecurity::attached_certificate(&parsed).expect("attached");
+    assert_eq!(
+        v2xw_sec::cert::encode(&on_air).expect("encodes"),
+        issued_coer,
+        "the certificate on the air is the one the SCMS issued"
+    );
+    assert_eq!(
+        on_air.0.r_type,
+        v2xw_msg::sec_types::ieee1609_dot2::CertificateType::implicit
+    );
+    // A digest signer is the choice tag and 8 octets; a certificate signer is the choice
+    // tag, the SEQUENCE OF quantity (a length octet and a one-octet count) and the
+    // certificate.
+    let delta = txs[0].envelope_bytes().expect("sized") - txs[1].envelope_bytes().expect("sized");
+    assert_eq!(delta as usize, issued_coer.len() + 2 - 8);
+    // The store names the credential by the issued certificate's own HashedId8, not by
+    // the stand-in digest it was handed with.
+    let active = rt.stores().certs.active().expect("active").digest.clone();
+    assert_eq!(active, v2xw_sec::hashed_id8(&issued_coer));
+    assert_ne!(active, pseudo_signer(NodeId::new(NODE), 0));
+}
+
+fn linked_device() -> v2xw_sec::linkage::DeviceLinkageContext {
+    v2xw_sec::linkage::DeviceLinkageContext::new(
+        v2xw_sec::linkage::LaId(1),
+        v2xw_sec::linkage::LaId(2),
+        v2xw_sec::linkage::LinkageSeed::new([7; 16]),
+        v2xw_sec::linkage::LinkageSeed::new([9; 16]),
+    )
+}
+
+/// A receiver revokes on the linkage value the sender's certificate itself carries, and
+/// on nothing else: the frame carries no side channel, and a receiver whose CRL does not
+/// list the device verifies the same bytes.
+#[test]
+fn a_receiver_revokes_on_the_certificates_own_linkage_data() {
+    let issuer = v2xw_sec::credential::ImplicitIssuer::standalone(b"revocation", 0, &[0x20])
+        .expect("issuer");
+    let dev = linked_device();
+    let sender_key = issuer
+        .issue_factory(
+            v2xw_sec::credential::FactoryProfile::Pseudonym {
+                lv: dev.linkage_value_for(100, 0),
+            },
+            &[1; 32],
+            100,
+            0,
+            0,
+            &[0x20],
+        )
+        .expect("issues");
+    let receiver_key = issuer
+        .issue_factory(
+            v2xw_sec::credential::FactoryProfile::Pseudonym {
+                lv: linked_device().linkage_value_for(100, 5),
+            },
+            &[2; 32],
+            100,
+            5,
+            0,
+            &[0x20],
+        )
+        .expect("issues");
+    let build = |node: u32, key: &v2xw_sec::credential::ImplicitKey, j: u32| {
+        let config = NodeConfig {
+            services: ServiceSet::SAE,
+            crypto_mode: CryptoMode::Real,
+            origin: origin(),
+            ..NodeConfig::default()
+        };
+        let mut rt = ObuRuntime::new(
+            NodeId::new(node),
+            reference_profile(),
+            Box::new(VerifyAll::new()),
+            config,
+            0,
+        );
+        rt.install_credential(credential(NodeId::new(node), j), key)
+            .expect("installs");
+        rt.set_belief(belief());
+        rt
+    };
+    let mut sender = build(1, &sender_key, 0);
+    let tx = first_of(
+        &transmissions(&run(&mut sender, 1, 100 * NS_PER_MS)),
+        MsgType::Bsm,
+    );
+    let signed = tx.signed.expect("bytes");
+    let verdict = |listed: bool| {
+        let mut rx = build(2, &receiver_key, 5);
+        rx.stores_mut().crl.set_period(100);
+        if listed {
+            rx.stores_mut()
+                .crl
+                .add_linkage_entry(v2xw_sec::linkage::CrlLinkageEntry::from_device(
+                    &dev,
+                    100,
+                    v2xw_sec::linkage::DEFAULT_JMAX,
+                ));
+        }
+        let frame = v2xw_node::runtime::RxFrame {
+            signer: Some(tx.signer.clone()),
+            msg_type: MsgType::Bsm,
+            bytes: signed.bytes_on_wire(),
+            claimed_pos: Some(POS),
+            claimed_speed_mps: SPEED_MPS,
+            claimed_heading_rad: 0.0,
+            claimed_generation_time: 0,
+            full_certificate: true,
+            // Deliberately the opposite of the truth: the node must not read it when it
+            // has the bytes.
+            signature_valid: false,
+            spdu: Some(signed.spdu.clone()),
+        };
+        let reg = RngRegistry::new(29);
+        let mut out = Vec::new();
+        for k in 0..20u64 {
+            let mut ctx = NodeRuntimeCtx::new(k * 10 * NS_PER_MS, &reg);
+            let inbox = if k == 0 {
+                vec![frame.clone()]
+            } else {
+                Vec::new()
+            };
+            out.extend(rx.step(&mut ctx, inbox, 0.0).delivered);
+        }
+        out.iter()
+            .find(|m| m.msg_type == MsgType::Bsm)
+            .map(|m| m.verification)
+            .expect("delivered")
+    };
+    assert_eq!(verdict(true), v2xw_node::stores::VerificationState::Revoked);
+    assert_eq!(
+        verdict(false),
+        v2xw_node::stores::VerificationState::Verified
     );
 }

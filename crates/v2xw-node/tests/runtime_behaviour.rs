@@ -50,6 +50,33 @@ fn belief(pos: Vec3, speed: f64) -> PositionEstimate {
     p
 }
 
+/// The SCMS-issued key for `(node, i, j)`: an implicit pseudonym certificate from one ACA
+/// shared by every node in this test, and `d = e·b + r` (WP-C1). A node signs only with a
+/// credential installed this way.
+fn test_key(node: NodeId, i: u32, j: u32) -> v2xw_sec::credential::ImplicitKey {
+    static ISSUER: std::sync::OnceLock<v2xw_sec::credential::ImplicitIssuer> =
+        std::sync::OnceLock::new();
+    let iss = ISSUER.get_or_init(|| {
+        v2xw_sec::credential::ImplicitIssuer::standalone(b"node-tests", 0, &[0x20]).expect("issuer")
+    });
+    let mut secret = [0u8; 32];
+    secret[..4].copy_from_slice(&node.index().to_be_bytes());
+    let mut lv = [0u8; 9];
+    lv[..4].copy_from_slice(&node.index().to_be_bytes());
+    lv[4..8].copy_from_slice(&j.to_be_bytes());
+    iss.issue_factory(
+        v2xw_sec::credential::FactoryProfile::Pseudonym {
+            lv: v2xw_sec::linkage::LinkageValue::new(lv),
+        },
+        &secret,
+        i,
+        j,
+        0,
+        &[0x20],
+    )
+    .expect("issues")
+}
+
 fn credential(node: NodeId, j: u32) -> CredentialHandle {
     CredentialHandle {
         digest: pseudo_signer(node, j),
@@ -77,7 +104,11 @@ fn node_on(profile_id: &str, services: ServiceSet) -> ObuRuntime {
     );
     rt.stores_mut().crl.set_period(100);
     for j in 0..4 {
-        rt.stores_mut().certs.insert(credential(node, j));
+        {
+            let c = credential(node, j);
+            let k = test_key(node, c.i_period, c.j_index);
+            rt.install_credential(c, &k).expect("installs");
+        }
     }
     rt.set_belief(belief(Vec3::ZERO, 10.0));
     rt
@@ -94,8 +125,6 @@ fn frame(from: u32, pos: Vec3, at: SimTime, valid: bool) -> RxFrame {
         claimed_generation_time: at,
         full_certificate: false,
         signature_valid: valid,
-        claimed_cert_period: 100,
-        claimed_linkage: None,
         spdu: None,
     }
 }
@@ -542,7 +571,11 @@ fn the_policy_is_swappable_and_reported() {
             0,
         );
         rt.stores_mut().crl.set_period(100);
-        rt.stores_mut().certs.insert(credential(node, 0));
+        {
+            let c = credential(node, 0);
+            let k = test_key(node, c.i_period, c.j_index);
+            rt.install_credential(c, &k).expect("installs");
+        }
         rt.set_belief(belief(Vec3::ZERO, 10.0));
 
         // The first message makes the peer known; the rest are routine updates, which is

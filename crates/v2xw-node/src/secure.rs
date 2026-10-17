@@ -22,25 +22,26 @@
 //! |---|---|
 //! | [`SecCtx`] | the bridge from [`NodeCtx`] to [`v2xw_core::ctx::Ctx`], which `v2xw-sec` is generic over. It carries **no** world and **no** actors: both associated types are `()`, and [`crate::firewall::scan_security_bridge`] fails the build if either stops being. |
 //! | [`NodeCrypto`] | the backend, `real` or `modeled`. Nothing outside this enum branches on which — invariant I-S1, and Phase 1 acceptance criterion 3. |
-//! | [`NodeSecurity`] | the envelope, the signer handles, and the stand-in credential issuance that keeps a node signing while no `CredentialProtocol` plug-in ships. |
+//! | [`NodeSecurity`] | the envelope, the signer handles installed from the SCMS credentials, and the node's CA certificate cache. |
 //!
-//! # The stand-in issuer, and what it is not
+//! # Where the credentials come from (WP-C1)
 //!
-//! 03-interfaces.md §7 puts enrolment and provisioning in a `CredentialProtocol` plug-in
-//! that does not exist yet. A node still has to sign with *some* key under *some*
-//! certificate, and `v2xw-sec` will not sign without both. So [`NodeSecurity`] issues its
-//! own: one local authority per node, and one explicit pseudonym certificate per
-//! credential the store holds, issued by it.
+//! A node does not issue itself anything. Every credential it signs with was handed down
+//! by the credential protocol as a [`v2xw_sec::credential::ImplicitKey`]: the implicit
+//! (ECQV) certificate the ACA issued, the ACA's own certificate, and `d = e·b + r`, which
+//! the device derived from its download (02 §9.3). [`NodeSecurity::install`] imports the
+//! key after the device's acceptance check `d·G = e·P_U + Q_ACA` and names the certificate
+//! by its own `HashedId8`, so the air identity, the linkage value a CRL revokes and the
+//! certificate bytes on the air are all the protocol's. A store handle with no installed
+//! key cannot sign, and the node then stops transmitting rather than sending unsigned.
 //!
-//! What that gives is real: a real P-256 key, a real IEEE 1609.2 certificate with a real
-//! linkage value, a real `HashedId8`, and a signature a relying party can check against
-//! the certificate the SPDU carries. What it does **not** give is a chain to a common
-//! trust anchor — each node's authority is its own — so a receiver here verifies the
-//! signature against the signer's certificate and cannot conclude that the certificate was
-//! issued by anyone it trusts. That is a gap in the credential protocol, not a gap in the
-//! cryptography, and it is stated rather than papered over: see
-//! [`NodeSecurity::verify_parsed`], and [`SpduVerdict::Unverifiable`], which is what a
-//! receiver answers rather than guessing when it holds no certificate for the signer.
+//! A relying party reconstructs a sender's key as `e·P_U + Q_ACA`, which needs the issuing
+//! ACA's certificate. A node holds the ACA certificates of its own downloads; a sender
+//! whose ACA it does not hold is [`SpduVerdict::Unverifiable`], never `Invalid` (the
+//! P2PCD case). What this module still does **not** do is walk the chain from the ACA to
+//! the root, check validity, region, PSID and SSP, or check the ACA itself for
+//! revocation: that is WP-C2's receiver validation, stated rather than papered over in
+//! [`NodeSecurity::verify_parsed`].
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -53,15 +54,16 @@ use v2xw_core::registry::{ModelRef, ParamSet, ParamSetId};
 use v2xw_core::rng::{EntityRef, RngDomain, RngGuard};
 use v2xw_core::time::{SimTime, WallClock};
 use v2xw_msg::MsgType;
+use v2xw_msg::sec_types::ieee1609_dot2::{CertificateType, IssuerIdentifier};
 use v2xw_msg::sec_types::{Certificate, HashedId8};
-use v2xw_sec::cert::{self, CertSpec, HolderId};
+use v2xw_sec::cert;
+use v2xw_sec::credential::ImplicitKey;
 use v2xw_sec::crypto::{CryptoBackend, CryptoBackendInfo, KeyHandle, PubHandle, SigToken};
 use v2xw_sec::envelope::{
     Envelope, EnvelopeProfile, GenerationLocation, HeaderInfoSpec, ParsedSecured, ParsedSigner,
     SecuredPdu, SecurityEnvelope, SecurityEnvelopeInfo, SignerHandle, SignerIdChoice,
     SignerIdPolicy,
 };
-use v2xw_sec::linkage::{DeviceLinkageContext, LaId, LinkageSeed};
 use v2xw_sec::primitive::PrimitiveId;
 use v2xw_sec::{SecError, hashedid};
 
@@ -260,6 +262,33 @@ impl NodeCrypto {
         }
     }
 
+    /// Imports the signing key of an SCMS-issued implicit certificate, `d = e·b + r`,
+    /// after the device's own acceptance check (both backends make it).
+    pub fn import_implicit(
+        &mut self,
+        owner: NodeId,
+        key: &ImplicitKey,
+    ) -> Result<KeyHandle, SecError> {
+        match self {
+            NodeCrypto::Modeled(b) => b.import_implicit(SIGN_PRIMITIVE, owner, key),
+            NodeCrypto::Real(b) => b.import_implicit(SIGN_PRIMITIVE, owner, key),
+        }
+    }
+
+    /// The key a relying party reconstructs from an implicit certificate and its issuer,
+    /// `Q_U = e·P_U + Q_CA`.
+    pub fn import_reconstructed(
+        &mut self,
+        owner: NodeId,
+        cert: &Certificate,
+        issuer: &Certificate,
+    ) -> Result<PubHandle, SecError> {
+        match self {
+            NodeCrypto::Modeled(b) => b.import_reconstructed(SIGN_PRIMITIVE, owner, cert, issuer),
+            NodeCrypto::Real(b) => b.import_reconstructed(SIGN_PRIMITIVE, owner, cert, issuer),
+        }
+    }
+
     /// Signs a 32-byte digest.
     pub fn sign_prehashed(
         &mut self,
@@ -361,14 +390,6 @@ impl SignedFrame {
     }
 }
 
-/// The stand-in issuing authority a node signs its own pseudonym certificates with.
-#[derive(Debug)]
-struct Issuer {
-    key: KeyHandle,
-    coer: Vec<u8>,
-    digest: HashedId8,
-}
-
 /// A node's security stack: the envelope, the backend, and the credentials in use.
 #[derive(Debug)]
 pub struct NodeSecurity {
@@ -382,7 +403,12 @@ pub struct NodeSecurity {
     /// The PSIDs the node's certificates permit ([`v2xw_msg::registry::permissions`]);
     /// empty means `[psid]`.
     permissions: Vec<u64>,
-    issuer: Option<Issuer>,
+    /// The CA certificates this node holds, by whole-certificate `HashedId8`: the issuers
+    /// of its own credentials (each download carries its ACA certificate) and any the
+    /// engine seeded from the local certificate chain file. A relying party needs the
+    /// issuer to reconstruct an implicit certificate's key at all, so a signer whose ACA is
+    /// not here is [`SpduVerdict::Unverifiable`], never `Invalid`.
+    issuers: BTreeMap<[u8; 8], Arc<Certificate>>,
     /// One signer handle per pseudonym, keyed by `(i_period, j_index)`.
     ///
     /// Every credential the store holds gets one, not just the active one, and that is
@@ -417,7 +443,7 @@ impl NodeSecurity {
             psid,
             stack: None,
             permissions: Vec::new(),
-            issuer: None,
+            issuers: BTreeMap::new(),
             signers: BTreeMap::new(),
             active: None,
             peer_keys: BTreeMap::new(),
@@ -532,8 +558,9 @@ impl NodeSecurity {
         }
     }
 
-    /// The PSIDs a certificate this stack issues permits.
-    fn cert_permissions(&self) -> Vec<u64> {
+    /// The PSIDs this node's certificates must permit: what a factory or a credential
+    /// request asks the issuer for.
+    pub fn cert_permissions(&self) -> Vec<u64> {
         if self.permissions.is_empty() {
             vec![self.psid]
         } else {
@@ -541,72 +568,48 @@ impl NodeSecurity {
         }
     }
 
-    /// IEEE 1609.2 `Time32` (TAI seconds from the 1609.2 epoch) at `at` on this stack's
-    /// wall clock; 0 before the epoch.
-    fn epoch_seconds(&self, at: SimTime) -> u32 {
-        self.envelope.wall_clock().time32(at).unwrap_or(0)
-    }
-
-    /// Provisions — or reuses — the signer handle for one credential.
+    /// Installs — or reuses — the signer handle for one SCMS-issued credential.
     ///
-    /// The stand-in for the `CredentialProtocol` of 03-interfaces.md §7; see the module
-    /// documentation for exactly what it does and does not model. One authority per node,
-    /// one pseudonym certificate per `(i_period, j_index)`, both on the node's own
-    /// deterministic crypto stream, so two runs of the same scenario produce the same
-    /// certificates and therefore the same `HashedId8`s.
-    pub fn provision(
+    /// `key` is what the credential protocol handed down: the implicit certificate, the
+    /// issuing ACA's certificate and `d = e·b + r`. The key is imported after the device's
+    /// own check `d·G = e·P_U + Q_ACA`, the handle names the certificate by its own
+    /// `HashedId8`, and the ACA certificate goes into this node's CA cache so that it can
+    /// verify its peers' certificates from the same ACA.
+    ///
+    /// # Errors
+    /// The key does not reconstruct, or the certificate does not encode.
+    pub fn install(
         &mut self,
-        ctx: &mut dyn NodeCtx,
         node: NodeId,
         i_period: u32,
         j_index: u32,
-        at: SimTime,
+        key: &ImplicitKey,
     ) -> Result<&SignerHandle, SecError> {
-        if self.signers.contains_key(&(i_period, j_index)) {
-            return Ok(&self.signers[&(i_period, j_index)]);
+        if !self.signers.contains_key(&(i_period, j_index)) {
+            let handle = self.crypto.import_implicit(node, key)?;
+            self.learn_issuer(Arc::clone(key.issuer()));
+            let signer = SignerHandle::new(node, handle, Arc::clone(key.certificate()))?;
+            self.signers.insert((i_period, j_index), signer);
         }
-        let valid_from = self.epoch_seconds(at);
-
-        if self.issuer.is_none() {
-            let key = self.crypto.keygen(ctx, node)?;
-            let material = self.crypto.public_material_of(&key)?;
-            let mut authority = CertSpec::authority(valid_from, self.psid);
-            authority.app_permissions = self.cert_permissions();
-            let certificate = cert::trust_anchor(&authority, &material)?;
-            let coer = cert::encode(&certificate)?;
-            let digest = hashedid::hashed_id8(&coer);
-            self.issuer = Some(Issuer { key, coer, digest });
-        }
-        let issuer = self.issuer.as_ref().expect("just set");
-
-        let key = self.crypto.keygen(ctx, node)?;
-        let material = self.crypto.public_material_of(&key)?;
-        // The linkage value is the real CAMP SCP2 construction over seeds derived from the
-        // node id, so a linked CRL that revokes `(i, j)` revokes exactly this certificate
-        // and the revocation path has something true to match on.
-        let device = device_linkage(node);
-        let mut spec = CertSpec::pseudonym(
-            issuer.digest.clone(),
-            HolderId::Linkage {
-                i_cert: u16::try_from(i_period % u32::from(u16::MAX)).unwrap_or(0),
-                linkage_value: device.linkage_value_for(i_period, j_index),
-            },
-            valid_from,
-            self.psid,
-        );
-        spec.app_permissions = self.cert_permissions();
-        let issuer_key = issuer.key;
-        let issuer_coer = issuer.coer.clone();
-        // Two steps because the signature covers `toBeSigned`: the certificate cannot
-        // exist until its own issuer has signed the bytes that will be inside it.
-        let tbs = cert::to_be_signed(&spec, cert::verification_key_indicator(&material)?)?;
-        let digest = cert::explicit_signature_input(&tbs, &issuer_coer)?;
-        let token = self.crypto.sign_prehashed(ctx, &issuer_key, &digest)?;
-        let certificate = cert::explicit(&spec, &material, token.to_ieee1609_signature()?)?;
-
-        let handle = SignerHandle::new(node, key, Arc::new(certificate))?;
-        self.signers.insert((i_period, j_index), handle);
         Ok(&self.signers[&(i_period, j_index)])
+    }
+
+    /// Adds a CA certificate to this node's cache (an ACA certificate from a download or
+    /// from the local certificate chain file). Idempotent.
+    pub fn learn_issuer(&mut self, ca: Arc<Certificate>) {
+        if let Ok(coer) = cert::encode(&ca) {
+            let id = hashedid::id8_bytes(&hashedid::hashed_id8(&coer));
+            self.issuers.entry(id).or_insert(ca);
+        }
+    }
+
+    /// The CA certificate an implicit certificate names as its issuer, if this node holds
+    /// it.
+    pub fn issuer_of(&self, c: &Certificate) -> Option<&Arc<Certificate>> {
+        match &c.0.issuer {
+            IssuerIdentifier::sha256AndDigest(d) => self.issuers.get(&hashedid::id8_bytes(d)),
+            _ => None,
+        }
     }
 
     /// Whether a full certificate is due for `msg_type` at `believed`.
@@ -781,10 +784,11 @@ impl NodeSecurity {
 
     /// Checks a parsed SPDU's signature against `certificate`.
     ///
-    /// What this does **not** do is validate the certificate's chain to a trust anchor.
-    /// See the module documentation: with no `CredentialProtocol` there is no common
-    /// anchor to chain to, and answering `Valid` on a chain nobody checked would be the
-    /// same class of defect as the constant-size stub this module replaced.
+    /// An implicit certificate's key is reconstructed under its issuing ACA's certificate
+    /// from this node's CA cache; without it the answer is `Unverifiable`.
+    ///
+    /// What this does **not** do yet is validate the chain above the ACA, validity,
+    /// region, PSID or SSP (WP-C2). See the module documentation.
     pub fn verify_parsed(
         &mut self,
         ctx: &mut dyn NodeCtx,
@@ -796,8 +800,16 @@ impl NodeSecurity {
             return SpduVerdict::Invalid;
         };
         let digest = parsed.signing_digest(&cert_coer);
-        // Material that is not a compressed point is a malformed certificate, which is the
-        // sender's fault and a rejection rather than an inconclusive answer.
+        // An implicit certificate's key exists only once it is reconstructed under the
+        // issuer, so a signer whose ACA certificate this node lacks has told it nothing.
+        if certificate.0.r_type == CertificateType::implicit
+            && self.issuer_of(certificate).is_none()
+        {
+            return SpduVerdict::Unverifiable;
+        }
+        // Material that is not a compressed point, or a reconstruction no holder's key
+        // matches, is a malformed certificate: the sender's fault and a rejection rather
+        // than an inconclusive answer.
         let Ok(key) = self.peer_key(owner, certificate, &cert_coer) else {
             return SpduVerdict::Invalid;
         };
@@ -842,35 +854,23 @@ impl NodeSecurity {
         if let Some(handle) = self.peer_keys.get(&id) {
             return Ok(*handle);
         }
-        let material = cert::public_key_material(certificate)?;
-        let handle = self.crypto.import_public(owner, &material)?;
+        let handle = if certificate.0.r_type == CertificateType::implicit {
+            let issuer = self
+                .issuer_of(certificate)
+                .cloned()
+                .ok_or(SecError::MissingField {
+                    profile: "implicit certificate",
+                    field: "the issuer certificate (needed to reconstruct the key)",
+                })?;
+            self.crypto
+                .import_reconstructed(owner, certificate, &issuer)?
+        } else {
+            let material = cert::public_key_material(certificate)?;
+            self.crypto.import_public(owner, &material)?
+        };
         self.peer_keys.insert(id, handle);
         Ok(handle)
     }
-}
-
-/// The linkage context for a node's own pseudonym certificates.
-///
-/// Derived from the node id so that it is a pure function of the scenario, and split
-/// across two linkage authorities exactly as CAMP SCP2 requires: neither authority's seed
-/// alone reveals the linkage value, which is the property the whole construction exists
-/// for [Brecht 2018 §V-B].
-fn device_linkage(node: NodeId) -> DeviceLinkageContext {
-    let n = node.index();
-    let mut s1 = [0u8; 16];
-    let mut s2 = [0u8; 16];
-    for (i, b) in s1.iter_mut().enumerate() {
-        *b = (n.wrapping_mul(0x9E37).wrapping_add(i as u32) & 0xFF) as u8;
-    }
-    for (i, b) in s2.iter_mut().enumerate() {
-        *b = (n.wrapping_mul(0x85EB).wrapping_add(i as u32 + 0x40) & 0xFF) as u8;
-    }
-    DeviceLinkageContext::new(
-        LaId(0x0001),
-        LaId(0x0002),
-        LinkageSeed::new(s1),
-        LinkageSeed::new(s2),
-    )
 }
 
 #[cfg(test)]
@@ -878,6 +878,8 @@ mod tests {
     use super::*;
     use crate::ctx::NodeRuntimeCtx;
     use v2xw_core::rng::RngRegistry;
+    use v2xw_sec::credential::{FactoryProfile, ImplicitIssuer};
+    use v2xw_sec::linkage::LinkageValue;
 
     fn stack(mode: CryptoMode) -> NodeSecurity {
         NodeSecurity::new(WallClock::new(1_767_225_600), mode, PSID_SAFETY)
@@ -894,26 +896,47 @@ mod tests {
         assert_eq!(core::mem::size_of_val(c.actors()), 0);
     }
 
-    /// A node provisions once per credential and reuses the handle.
+    fn issuer() -> ImplicitIssuer {
+        ImplicitIssuer::standalone(b"node-tests", 600_000_000, &[PSID_SAFETY]).expect("issuer")
+    }
+
+    fn key(iss: &ImplicitIssuer, node: u8, i: u32, j: u32) -> ImplicitKey {
+        iss.issue_factory(
+            FactoryProfile::Pseudonym {
+                lv: LinkageValue::new([node; 9]),
+            },
+            &[node; 32],
+            i,
+            j,
+            600_000_100,
+            &[PSID_SAFETY],
+        )
+        .expect("issues")
+    }
+
+    /// A node installs once per credential and reuses the handle; the handle names the
+    /// SCMS certificate by its own `HashedId8`, and a new pseudonym is a new certificate.
     #[test]
-    fn provisioning_is_idempotent_per_credential() {
-        let reg = RngRegistry::new(2);
-        let mut ctx = NodeRuntimeCtx::new(0, &reg);
+    fn installation_is_idempotent_per_credential() {
+        let iss = issuer();
         let mut s = stack(CryptoMode::Real);
+        let k30 = key(&iss, 1, 3, 0);
         let first = s
-            .provision(&mut ctx, NodeId::new(1), 3, 0, 0)
-            .expect("provisions")
+            .install(NodeId::new(1), 3, 0, &k30)
+            .expect("installs")
             .digest()
             .clone();
+        let coer = cert::encode(k30.certificate()).expect("enc");
+        assert_eq!(first, hashedid::hashed_id8(&coer));
         let again = s
-            .provision(&mut ctx, NodeId::new(1), 3, 0, 0)
-            .expect("provisions")
+            .install(NodeId::new(1), 3, 0, &k30)
+            .expect("installs")
             .digest()
             .clone();
         assert_eq!(first, again);
         let rotated = s
-            .provision(&mut ctx, NodeId::new(1), 3, 1, 0)
-            .expect("provisions")
+            .install(NodeId::new(1), 3, 1, &key(&iss, 1, 3, 1))
+            .expect("installs")
             .digest()
             .clone();
         assert_ne!(
@@ -922,28 +945,102 @@ mod tests {
         );
     }
 
+    /// A key that does not reconstruct is refused at installation, in both modes.
+    #[test]
+    fn a_key_that_does_not_reconstruct_is_refused() {
+        let iss = issuer();
+        let k = key(&iss, 2, 0, 0);
+        let bad = ImplicitKey::new(
+            Arc::clone(k.certificate()),
+            Arc::clone(k.issuer()),
+            *key(&iss, 2, 0, 1).private(),
+        );
+        for mode in [CryptoMode::Real, CryptoMode::Modeled] {
+            let mut s = stack(mode);
+            assert!(s.install(NodeId::new(2), 0, 0, &bad).is_err(), "{mode:?}");
+            assert!(s.install(NodeId::new(2), 0, 0, &k).is_ok(), "{mode:?}");
+        }
+    }
+
+    /// Sender and receiver are two stacks: the receiver verifies an SPDU signed under an
+    /// implicit certificate once it holds the issuing ACA certificate, answers
+    /// `Unverifiable` while it does not, and `Invalid` for a tampered signature, in both
+    /// modes.
+    #[test]
+    fn a_peer_verifies_under_the_reconstructed_key() {
+        let reg = RngRegistry::new(4);
+        let iss = issuer();
+        let k = key(&iss, 3, 0, 0);
+        for mode in [CryptoMode::Real, CryptoMode::Modeled] {
+            let mut ctx = NodeRuntimeCtx::new(0, &reg);
+            let mut tx = stack(mode);
+            tx.install(NodeId::new(3), 0, 0, &k).expect("installs");
+            assert!(tx.set_active(0, 0));
+            let (frame, _) = tx
+                .sign(
+                    &mut ctx,
+                    MsgType::Bsm,
+                    b"bsm",
+                    SignerIdChoice::Certificate,
+                    None,
+                )
+                .expect("signs");
+            let mut rx = stack(mode);
+            let parsed = rx.parse(&frame.spdu).expect("parses");
+            let c = NodeSecurity::attached_certificate(&parsed).expect("attached");
+            assert_eq!(
+                rx.verify_parsed(&mut ctx, &parsed, &c, NodeId::new(9)),
+                SpduVerdict::Unverifiable,
+                "{mode:?}: no ACA certificate, nothing concluded"
+            );
+            rx.learn_issuer(Arc::clone(iss.certificate()));
+            assert_eq!(
+                rx.verify_parsed(&mut ctx, &parsed, &c, NodeId::new(9)),
+                SpduVerdict::Valid,
+                "{mode:?}"
+            );
+            let mut tampered = frame.spdu.clone();
+            let last = tampered.len() - 1;
+            tampered[last] ^= 1;
+            let parsed = rx.parse(&tampered).expect("parses");
+            assert_eq!(
+                rx.verify_parsed(&mut ctx, &parsed, &c, NodeId::new(9)),
+                SpduVerdict::Invalid,
+                "{mode:?}"
+            );
+            assert_eq!(
+                v2xw_sec::credential::linkage_of(&c),
+                Some((0, LinkageValue::new([3; 9])))
+            );
+        }
+    }
+
     /// Both backends produce certificates and SPDUs of identical size — half of I-S1, and
-    /// the half a size model depends on.
+    /// the half a size model depends on. The certificate is the implicit one the SCMS
+    /// issues, and the size the node reports is its encoding.
     #[test]
     fn the_two_backends_agree_on_every_size() {
         let reg = RngRegistry::new(3);
+        let iss = issuer();
+        let k = key(&iss, 4, 0, 0);
         let payload = b"a payload of some length";
         let sizes = |mode| {
             let mut ctx = NodeRuntimeCtx::new(0, &reg);
             let mut s = stack(mode);
-            s.provision(&mut ctx, NodeId::new(1), 0, 0, 0)
-                .expect("prov");
+            s.install(NodeId::new(1), 0, 0, &k).expect("installs");
             assert!(s.set_active(0, 0));
             let cert_len = s.signer().expect("signer").cert_coer().len();
+            assert_eq!(cert_len, cert::encode(k.certificate()).expect("enc").len());
             let (frame, pdu) = s
                 .sign(
                     &mut ctx,
                     MsgType::Cam,
                     payload,
-                    SignerIdChoice::Digest,
+                    SignerIdChoice::Certificate,
                     None,
                 )
                 .expect("signs");
+            assert_eq!(frame.cert_bytes as usize, cert_len);
             (cert_len, frame.bytes_on_wire(), pdu.overhead())
         };
         assert_eq!(sizes(CryptoMode::Real), sizes(CryptoMode::Modeled));

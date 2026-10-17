@@ -1449,8 +1449,8 @@ fn implicit_pair_id(cert_coer: &[u8], issuer_coer: &[u8]) -> [u8; 64] {
 /// ever derived a key for (forged, altered by one bit, or presented under the wrong
 /// issuer) has no entry, and its import fails exactly where a real reconstruction gives a
 /// key nobody holds the private half of: both end in a signature that does not verify.
-fn modeled_implicit_directory()
--> &'static RwLock<BTreeMap<[u8; 64], [u8; PUBLIC_MATERIAL_BYTES]>> {
+fn modeled_implicit_directory() -> &'static RwLock<BTreeMap<[u8; 64], [u8; PUBLIC_MATERIAL_BYTES]>>
+{
     static DIRECTORY: OnceLock<RwLock<BTreeMap<[u8; 64], [u8; PUBLIC_MATERIAL_BYTES]>>> =
         OnceLock::new();
     DIRECTORY.get_or_init(|| RwLock::new(BTreeMap::new()))

@@ -1047,6 +1047,27 @@ impl RsuRuntime {
         &self.stores
     }
 
+    /// Installs one credential the SCMS issued (WP-C1): the security stack imports the
+    /// key `d = e·b + r` for the implicit certificate after the device's own check, and the
+    /// store receives `handle` naming that certificate by its own `HashedId8` and carrying
+    /// its encoding. The store holds the handle, never the key.
+    ///
+    /// # Errors
+    /// The key does not reconstruct under its issuer, which a device refuses.
+    pub fn install_credential(
+        &mut self,
+        mut handle: CredentialHandle,
+        key: &v2xw_sec::credential::ImplicitKey,
+    ) -> Result<(), v2xw_sec::SecError> {
+        let signer = self
+            .security
+            .install(self.node, handle.i_period, handle.j_index, key)?;
+        handle.digest = signer.digest().clone();
+        handle.cert_coer = signer.cert_coer().to_vec();
+        self.stores.certs.insert(handle);
+        Ok(())
+    }
+
     /// The stores, mutably, for the engine's provisioning and CRL paths.
     pub fn stores_mut(&mut self) -> &mut Stores {
         &mut self.stores
@@ -1412,18 +1433,22 @@ impl RsuRuntime {
     }
 
     fn classify(&mut self, ctx: &mut dyn NodeCtx, frame: &RxFrame) -> VerificationState {
-        let authentic = match &frame.spdu {
+        // The revocation check reads the certificate's own `linkageData` (iCert and the
+        // linkage value), out of the certificate the signature was checked against: the
+        // field a linked CRL entry is matched against [1609.2 §5.1.3.4]. Nothing else
+        // tells a receiver which certificate a frame was signed under.
+        let (authentic, linkage) = match &frame.spdu {
             Some(bytes) => match self.verify_on_the_wire(ctx, bytes) {
-                SpduVerdict::Valid => true,
-                SpduVerdict::Invalid => false,
-                SpduVerdict::Unverifiable => return VerificationState::Unverified,
+                (SpduVerdict::Valid, linkage) => (true, linkage),
+                (SpduVerdict::Invalid, _) => (false, None),
+                (SpduVerdict::Unverifiable, _) => return VerificationState::Unverified,
             },
-            None => frame.signature_valid,
+            None => (frame.signature_valid, None),
         };
         if !authentic {
             return VerificationState::Invalid;
         }
-        let Some(lv) = frame.claimed_linkage else {
+        let Some((i_cert, lv)) = linkage else {
             return VerificationState::Verified;
         };
         if let Some(own) = self.stores.certs.active() {
@@ -1432,11 +1457,7 @@ impl RsuRuntime {
                 self.stores.crl.set_period(mine);
             }
         }
-        match self
-            .stores
-            .crl
-            .check(frame.claimed_cert_period, lv, authentic)
-        {
+        match self.stores.crl.check(u32::from(i_cert), lv, authentic) {
             crate::stores::CrlVerdict::Revoked => VerificationState::Revoked,
             crate::stores::CrlVerdict::NotRevoked => VerificationState::Verified,
             crate::stores::CrlVerdict::RefusedImplausiblePeriod { .. } => {
@@ -1445,9 +1466,13 @@ impl RsuRuntime {
         }
     }
 
-    fn verify_on_the_wire(&mut self, ctx: &mut dyn NodeCtx, bytes: &[u8]) -> SpduVerdict {
+    fn verify_on_the_wire(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        bytes: &[u8],
+    ) -> (SpduVerdict, Option<(u16, v2xw_sec::linkage::LinkageValue)>) {
         let Some(parsed) = self.security.parse(bytes) else {
-            return SpduVerdict::Invalid;
+            return (SpduVerdict::Invalid, None);
         };
         let certificate = match NodeSecurity::attached_certificate(&parsed) {
             Some(c) => {
@@ -1458,10 +1483,14 @@ impl RsuRuntime {
                 .and_then(|d| self.stores.peers.certificate(&d)),
         };
         let Some(certificate) = certificate else {
-            return SpduVerdict::Unverifiable;
+            return (SpduVerdict::Unverifiable, None);
         };
-        self.security
-            .verify_parsed(ctx, &parsed, &certificate, self.node)
+        let linkage = v2xw_sec::credential::linkage_of(&certificate);
+        (
+            self.security
+                .verify_parsed(ctx, &parsed, &certificate, self.node),
+            linkage,
+        )
     }
 
     fn to_message(
@@ -1548,9 +1577,7 @@ impl RsuRuntime {
             self.drops.record_n(DropCause::TxOverflow, due.len() as u32);
             return;
         };
-        if !self.provision_all(ctx, believed)
-            || !self.security.set_active(cred.i_period, cred.j_index)
-        {
+        if !self.security.set_active(cred.i_period, cred.j_index) {
             self.drops.record_n(DropCause::TxOverflow, due.len() as u32);
             return;
         }
@@ -1670,38 +1697,6 @@ impl RsuRuntime {
             return real.clone();
         }
         vec![v2xw_msg::codec::PLACEHOLDER_FILL; length as usize]
-    }
-
-    fn provision_all(&mut self, ctx: &mut dyn NodeCtx, believed: SimTime) -> bool {
-        let pseudonyms: Vec<(u32, u32)> = self
-            .stores
-            .certs
-            .credentials()
-            .iter()
-            .map(|c| (c.i_period, c.j_index))
-            .collect();
-        for (i, j) in pseudonyms {
-            if self
-                .security
-                .provision(ctx, self.node, i, j, believed)
-                .is_err()
-            {
-                return false;
-            }
-        }
-        for cred in self.stores.certs.credentials_mut() {
-            let Some(signer) = self
-                .security
-                .signer_for_pseudonym(cred.i_period, cred.j_index)
-            else {
-                return false;
-            };
-            if cred.digest != *signer.digest() {
-                cred.digest = signer.digest().clone();
-                cred.cert_coer = signer.cert_coer().to_vec();
-            }
-        }
-        true
     }
 
     fn log_decision(

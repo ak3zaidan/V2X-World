@@ -49,6 +49,33 @@ fn surveyed(pos: Vec3) -> PositionEstimate {
     p
 }
 
+/// The SCMS-issued key for `(node, i, j)`: an implicit pseudonym certificate from one ACA
+/// shared by every node in this test, and `d = e·b + r` (WP-C1). A node signs only with a
+/// credential installed this way.
+fn test_key(node: NodeId, i: u32, j: u32) -> v2xw_sec::credential::ImplicitKey {
+    static ISSUER: std::sync::OnceLock<v2xw_sec::credential::ImplicitIssuer> =
+        std::sync::OnceLock::new();
+    let iss = ISSUER.get_or_init(|| {
+        v2xw_sec::credential::ImplicitIssuer::standalone(b"node-tests", 0, &[0x20]).expect("issuer")
+    });
+    let mut secret = [0u8; 32];
+    secret[..4].copy_from_slice(&node.index().to_be_bytes());
+    let mut lv = [0u8; 9];
+    lv[..4].copy_from_slice(&node.index().to_be_bytes());
+    lv[4..8].copy_from_slice(&j.to_be_bytes());
+    iss.issue_factory(
+        v2xw_sec::credential::FactoryProfile::Pseudonym {
+            lv: v2xw_sec::linkage::LinkageValue::new(lv),
+        },
+        &secret,
+        i,
+        j,
+        0,
+        &[0x20],
+    )
+    .expect("issues")
+}
+
 fn credential(node: NodeId, j: u32) -> CredentialHandle {
     CredentialHandle {
         digest: pseudo_signer(node, j),
@@ -74,7 +101,11 @@ fn unit(roles: RsuRoles) -> RsuRuntime {
         0,
     );
     u.stores_mut().crl.set_period(100);
-    u.stores_mut().certs.insert(credential(UNIT, 0));
+    {
+        let c = credential(UNIT, 0);
+        let k = test_key(UNIT, c.i_period, c.j_index);
+        u.install_credential(c, &k).expect("installs");
+    }
     u.set_belief(surveyed(Vec3::new(100.0, 100.0, 6.0)));
     u
 }
@@ -223,7 +254,11 @@ fn an_installed_list_goes_out_once_and_then_on_a_repeat_period() {
         0,
     );
     repeating.stores_mut().crl.set_period(100);
-    repeating.stores_mut().certs.insert(credential(UNIT, 0));
+    {
+        let c = credential(UNIT, 0);
+        let k = test_key(UNIT, c.i_period, c.j_index);
+        repeating.install_credential(c, &k).expect("installs");
+    }
     repeating.set_belief(surveyed(Vec3::new(100.0, 100.0, 6.0)));
     // The list still has to be installed: its length is the backend's, and a unit with a
     // repeat period but no installed list has nothing to re-broadcast.
@@ -361,8 +396,6 @@ fn report_frame(valid: bool) -> RxFrame {
         claimed_generation_time: 0,
         full_certificate: true,
         signature_valid: valid,
-        claimed_cert_period: 100,
-        claimed_linkage: None,
         spdu: None,
     }
 }

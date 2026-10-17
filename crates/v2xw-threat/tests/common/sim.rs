@@ -1237,8 +1237,6 @@ pub fn run(opts: &SimOptions) -> SimOut {
                             claimed_generation_time: f.claim.generation_time,
                             full_certificate: true,
                             signature_valid: f.claim.signature_valid,
-                            claimed_cert_period: 0,
-                            claimed_linkage: None,
                             // The legacy path: the harness decides validity on the node's
                             // behalf and the node only pays for the check. Carrying real
                             // SPDU bytes would mean signing every ghost with a key the

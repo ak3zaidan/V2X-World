@@ -88,9 +88,7 @@ impl ImplicitKey {
             return false;
         };
         match cert::verification_key(&self.certificate, Some((&self.issuer, &issuer_key))) {
-            Ok(CertKey::P256(q)) => {
-                Point::mul_base(&self.private).compressed() == q.compressed()
-            }
+            Ok(CertKey::P256(q)) => Point::mul_base(&self.private).compressed() == q.compressed(),
             _ => false,
         }
     }
@@ -107,12 +105,23 @@ impl ImplicitKey {
 #[must_use]
 pub fn linkage_of(c: &Certificate) -> Option<(u16, LinkageValue)> {
     match &c.0.to_be_signed.id {
-        CertificateId::linkageData(ld) => Some((
-            ld.i_cert.0.0,
-            LinkageValue::from_asn1(&ld.linkage_value),
-        )),
+        CertificateId::linkageData(ld) => {
+            Some((ld.i_cert.0.0, LinkageValue::from_asn1(&ld.linkage_value)))
+        }
         _ => None,
     }
+}
+
+/// Which end-entity certificate profile [`ImplicitIssuer::issue_factory`] issues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactoryProfile {
+    /// An OBU or VRU pseudonym certificate carrying this linkage value.
+    Pseudonym {
+        /// The linkage value (the LAs' `plv1 ⊕ plv2` in a protocol run).
+        lv: LinkageValue,
+    },
+    /// An RSU application certificate: no linkage data, `crlSeries 3`, 169 hours.
+    RsuApplication,
 }
 
 /// A CA that issues implicit certificates by ECQV-1609 without the protocol's flows.
@@ -167,7 +176,11 @@ impl ImplicitIssuer {
         let d = ec::scalar_from_be_mod_n(&v2xw_core::hash::sha256(
             &[b"v2xw-sec/credential/standalone-ca/v1".as_slice(), seed].concat(),
         ));
-        let d = if bool::from(d.is_zero()) { Scalar::ONE } else { d };
+        let d = if bool::from(d.is_zero()) {
+            Scalar::ONE
+        } else {
+            d
+        };
         let key = Point::mul_base(&d)
             .compressed()
             .ok_or(SecError::MissingField {
@@ -216,6 +229,88 @@ impl ImplicitIssuer {
             Arc::clone(&self.cert),
             d,
         ))
+    }
+
+    /// The factory path: one certificate of the end-entity profile `kind` for `(i, j)`,
+    /// issued to the holder whose request key is derived from `device_secret`, with the
+    /// CA ephemeral derived from the issuer's own secret. Deterministic, so two runs of one
+    /// scenario hold the same certificates.
+    ///
+    /// The profile is the US one the protocol issues (WP-B3a/B3b): a pseudonym carries
+    /// `linkageData {iCert, lv}`, `crlSeries 1` and is valid one week plus one hour
+    /// ([CAMP122] Table 3); an RSU application certificate has no linkage data,
+    /// `crlSeries 3` and `hours(169)` ([CAMP122] Table 68). `cracaId` is the issuer's
+    /// `HashedId3`.
+    ///
+    /// # Errors
+    /// `psids` is empty, or issuance fails.
+    pub fn issue_factory(
+        &self,
+        kind: FactoryProfile,
+        device_secret: &[u8; 32],
+        i: u32,
+        j: u32,
+        valid_from: u32,
+        psids: &[u64],
+    ) -> Result<ImplicitKey> {
+        let label = |tag: &[u8]| {
+            let mut m = Vec::with_capacity(80);
+            m.extend_from_slice(b"v2xw-sec/credential/factory/");
+            m.extend_from_slice(tag);
+            m.extend_from_slice(device_secret);
+            m.extend_from_slice(&i.to_be_bytes());
+            m.extend_from_slice(&j.to_be_bytes());
+            m
+        };
+        let nonzero = |s: Scalar| {
+            if bool::from(s.is_zero()) {
+                Scalar::ONE
+            } else {
+                s
+            }
+        };
+        let b = nonzero(ec::scalar_from_be_mod_n(&v2xw_core::hash::sha256(&label(
+            b"b",
+        ))));
+        let mut k_seed = label(b"k");
+        k_seed.extend_from_slice(&ec::scalar_to_be32(&self.private));
+        let mut attempt = 0u8;
+        let k = move || {
+            attempt = attempt.wrapping_add(1);
+            let mut m = k_seed.clone();
+            m.push(attempt);
+            nonzero(ec::scalar_from_be_mod_n(&v2xw_core::hash::sha256(&m)))
+        };
+        let coer = cert::encode(&self.cert)?;
+        let id8 = crate::hashedid::hashed_id8(&coer);
+        let craca = crate::hashedid::hashed_id3(&coer);
+        let mut spec = match kind {
+            FactoryProfile::Pseudonym { lv } => CertSpec::pseudonym(
+                id8,
+                cert::HolderId::Linkage {
+                    i_cert: u16::try_from(i % 65_536).unwrap_or(0),
+                    linkage_value: lv,
+                },
+                valid_from,
+                psids.first().copied().unwrap_or(0),
+            ),
+            FactoryProfile::RsuApplication => {
+                let mut s = CertSpec::pseudonym(
+                    id8,
+                    cert::HolderId::None,
+                    valid_from,
+                    psids.first().copied().unwrap_or(0),
+                );
+                s.crl_series = 3;
+                s.valid_for = v2xw_msg::sec_types::ieee1609_dot2_base_types::Duration::hours(
+                    v2xw_msg::sec_types::ieee1609_dot2_base_types::Uint16(169),
+                );
+                s
+            }
+        };
+        spec.craca_id = craca;
+        spec.app_permissions = psids.to_vec();
+        self.issue_spec(&spec, &b, k)
     }
 
     /// [`ImplicitIssuer::issue`] for the `toBeSigned` of `spec` (the request key is
@@ -308,23 +403,43 @@ mod tests {
         let mut n = 1;
         let good = issued(&iss, [3; 9], &mut n);
         let mut altered = (**good.certificate()).clone();
-        altered.0.to_be_signed.crl_series = v2xw_msg::sec_types::ieee1609_dot2_base_types::CrlSeries(
-            v2xw_msg::sec_types::ieee1609_dot2_base_types::Uint16(2),
-        );
+        altered.0.to_be_signed.crl_series =
+            v2xw_msg::sec_types::ieee1609_dot2_base_types::CrlSeries(
+                v2xw_msg::sec_types::ieee1609_dot2_base_types::Uint16(2),
+            );
         let digest = [9u8; 32];
         let owner = NodeId::new(1);
         // (signing d, presented certificate, presented issuer) → expected verdict.
         let cases: [(Scalar, Certificate, Arc<Certificate>, bool); 4] = [
-            (*good.private(), (**good.certificate()).clone(), Arc::clone(good.issuer()), true),
+            (
+                *good.private(),
+                (**good.certificate()).clone(),
+                Arc::clone(good.issuer()),
+                true,
+            ),
             (*good.private(), altered, Arc::clone(good.issuer()), false),
-            (*good.private(), (**good.certificate()).clone(), Arc::clone(other.certificate()), false),
-            (*good.private() + Scalar::ONE, (**good.certificate()).clone(), Arc::clone(good.issuer()), false),
+            (
+                *good.private(),
+                (**good.certificate()).clone(),
+                Arc::clone(other.certificate()),
+                false,
+            ),
+            (
+                *good.private() + Scalar::ONE,
+                (**good.certificate()).clone(),
+                Arc::clone(good.issuer()),
+                false,
+            ),
         ];
         for (idx, (d, cert_shown, issuer_shown, want)) in cases.iter().enumerate() {
             let mut ctx = TestCtx::new(5);
             let mut real_s = Real::new();
             let mut real_v = Real::new();
-            let held = ImplicitKey::new(Arc::clone(good.certificate()), Arc::clone(good.issuer()), *d);
+            let held = ImplicitKey::new(
+                Arc::clone(good.certificate()),
+                Arc::clone(good.issuer()),
+                *d,
+            );
             let real = real_s.import_implicit(p, owner, &held).is_ok_and(|k| {
                 let sig = real_s.sign_prehashed(&mut ctx, &k, &digest).expect("sign");
                 real_v
