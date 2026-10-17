@@ -24,17 +24,13 @@
 
 use super::*;
 
-use crate::scms::enrolment::{self as us, EnrolAuth, EnrolmentRequest, US_ENROLMENT_REGIONS};
+use crate::scms::enrolment::{self as us, EnrolAuth, EnrolmentRequest, RA_URL, US_ENROLMENT_REGIONS};
 use crate::scms::pdu::{self, Pdu, PduError, RequestSigner, SpduKind};
 use v2xw_msg::sec_types::ieee1609_dot2::Certificate;
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_eca_ee_interface::EcaEeInterfacePdu;
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::EeRaInterfacePdu;
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::ScmsPduContent;
 use v2xw_sec::sig1609::Signer1609;
-
-/// The RA's URL the bootstrap installs: the RA host on CAMP's RA service port 8892
-/// (03 §4.2); the provider label is neutral.
-pub const RA_URL: &str = "https://ra.provider-a:8892/";
 
 impl ScmsRun {
     /// Replaces a device's enrolment certificate: how a driver states the age of the
@@ -328,7 +324,12 @@ impl ScmsState {
     /// request for a successor that starts when the current certificate ends, self-signed
     /// by the new key, then signed by the current enrolment certificate and encrypted to
     /// the RA.
-    fn successor_request_pdu(&mut self, device: NodeId, at: SimTime) -> Option<Pdu> {
+    fn successor_request_pdu(
+        &mut self,
+        device: NodeId,
+        at: SimTime,
+        run: FlowRun,
+    ) -> Option<Pdu> {
         let pki = self.pki.clone()?;
         let cred = self.devices.get(&device)?.enrolment_credential.clone()?;
         let name = us::tbs_name(&cred.cert.0.to_be_signed)?.to_string();
@@ -359,6 +360,7 @@ impl ScmsState {
         );
         let dev = self.devices.get_mut(&device)?;
         dev.successor_request = Some((k_new, inner, spdu.hashed_id8()));
+        dev.successor_run = Some(run);
         Some(spdu)
     }
 
@@ -411,22 +413,26 @@ impl ScmsState {
         Ok(())
     }
 
+    /// Sends `device`'s refusal to `dest` (the device itself, or the DCM or RA that
+    /// relays it).
+    #[allow(clippy::too_many_arguments)]
     fn refuse_successor(
         &mut self,
         out: &mut Outbox<ScmsMsg>,
+        dest: NodeId,
         device: NodeId,
         reason: Refusal,
         flow: FlowId,
         run: FlowRun,
     ) {
         Self::sign(out, 1);
-        let transport = if self.devices.contains_key(&device) {
+        let transport = if self.devices.contains_key(&dest) {
             Transport::CellularUu
         } else {
             Transport::BackendNet
         };
         out.send(
-            device,
+            dest,
             ScmsMsg::EnrolRefused { device, reason },
             "enrol-refused",
             self.sizes.refusal(),
@@ -539,6 +545,7 @@ impl ScmsState {
                                     self.refuse_successor(
                                         out,
                                         n.dcm,
+                                        device,
                                         Refusal::ProfileViolation,
                                         flow,
                                         run,
@@ -656,7 +663,10 @@ impl ScmsState {
                 if let Some(d) = self.devices.get_mut(&device) {
                     d.successor_polls = 0;
                 }
-                let pdu = self.successor_request_pdu(device, at);
+                if let Some(d) = self.devices.get_mut(&device) {
+                    d.successor_run = Some(run);
+                }
+                let pdu = self.successor_request_pdu(device, at, run);
                 let size = match &pdu {
                     Some(p) => self.emit_pdu(
                         SpduKind::EeRaSuccessorEnrollmentCertRequest,
@@ -718,13 +728,20 @@ impl ScmsState {
                 };
                 if self.ra.blocklist.contains(&device) {
                     self.ra.refused += 1;
-                    self.refuse_successor(out, device, Refusal::Blocklisted, flow, run);
+                    self.refuse_successor(out, device, device, Refusal::Blocklisted, flow, run);
                     return Ok(());
                 }
                 let signer = current_cert.as_deref().map(pdu::cert_id8);
                 if !self.ra.is_registered(device, signer) {
                     self.ra.unregistered_refused += 1;
-                    self.refuse_successor(out, device, Refusal::UnknownEnrolment, flow, run);
+                    self.refuse_successor(
+                        out,
+                        device,
+                        device,
+                        Refusal::UnknownEnrolment,
+                        flow,
+                        run,
+                    );
                     return Ok(());
                 }
                 // A second request before the download invalidates the first; a successor
@@ -921,9 +938,13 @@ impl ScmsState {
                 let Some(dev) = self.devices.get(&device) else {
                     return Err(ProtoError::NoEntity { node: device });
                 };
+                // An answer to a request the device has since replaced is stale.
                 let Some(hash8) = dev.successor_request.as_ref().map(|r| r.2) else {
                     return Ok(());
                 };
+                if dev.successor_run != Some(run) {
+                    return Ok(());
+                }
                 if let (Some(p), Some(pki)) = (&pdu, self.pki.clone()) {
                     let ok = pdu::open_signed_pdu(p.bytes(), &pki).ok().and_then(|(q, s)| {
                         (pdu::cert_id8(&s) == pki.ra.id8()).then_some(q)
@@ -961,9 +982,9 @@ impl ScmsState {
                 if self
                     .devices
                     .get(&device)
-                    .is_none_or(|d| d.successor_request.is_none())
+                    .is_none_or(|d| d.successor_request.is_none() || d.successor_run != Some(run))
                 {
-                    // Refused meanwhile: nothing to fetch.
+                    // Refused or replaced meanwhile: nothing to fetch for this request.
                     return Ok(());
                 }
                 Self::sign(out, 1);
@@ -1081,7 +1102,7 @@ impl ScmsState {
                 // The ECA refused: the RA drops the request and tells the device.
                 Self::verify(out, 1);
                 self.ra.successors.remove(&device);
-                self.refuse_successor(out, device, reason, flow, run);
+                self.refuse_successor(out, device, device, reason, flow, run);
             }
             ScmsMsg::EnrolRefused { device, reason } if to == n.dcm => {
                 // A first enrolment the ECA refused: the factory sees it; the device stays

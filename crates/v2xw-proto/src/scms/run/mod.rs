@@ -114,6 +114,9 @@ pub struct DeviceState {
     /// The successor request in flight: its new key `k_U`, the inner request as sent (the
     /// ECA's `requestHash` names it), and the outer SPDU's HashedId8 (the RA's).
     successor_request: Option<(p256::Scalar, crate::scms::pdu::Pdu, [u8; 8])>,
+    /// The flow run of the successor request in flight: an ack or a download timer of an
+    /// earlier, superseded request is ignored.
+    successor_run: Option<FlowRun>,
     /// Whether an enrolment request is in flight.
     enrolling: bool,
     /// A provisioning request held until enrolment completes.
@@ -160,6 +163,7 @@ impl DeviceState {
             canonical: None,
             enrol_request: None,
             successor_request: None,
+            successor_run: None,
             enrolling: false,
             deferred: None,
             provisioning: None,

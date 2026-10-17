@@ -73,6 +73,10 @@ pub const MAX_REQUEST_AGE_S: u32 = 7 * 86_400;
 /// apply at the ECA as well.
 pub const CLOCK_TOLERANCE_S: u32 = 5;
 
+/// The RA's URL the bootstrap installs with the RA certificate (03 §5): the RA host on
+/// CAMP's RA service port 8892 (03 §4.2); the provider label is neutral.
+pub const RA_URL: &str = "https://ra.provider-a:8892/";
+
 /// What a device asks the ECA to certify.
 #[derive(Debug, Clone, Copy)]
 pub struct EnrolmentRequest<'a> {
