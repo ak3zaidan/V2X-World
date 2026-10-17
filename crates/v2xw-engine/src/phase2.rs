@@ -75,12 +75,14 @@
 //!
 //! # The joints, stated
 //!
-//! **1. The air credential is the SCMS credential's shape, with a stand-in key.** Each
-//! credential carries the linkage value and the i-period the SCMS provisioning issued, and
-//! the validity window of that period, so a CRL entry revokes exactly the certificates the
-//! protocol says. The signing key and the certificate bytes are the node's own
-//! (`ObuRuntime` issues a real certificate for each pseudonym on first use), because the
-//! credential protocol's key material is not handed to the node (build decision D11).
+//! **1. The air credential is the SCMS credential (WP-C1; this joint is closed).** Each
+//! vehicle signs with the implicit certificate the ACA issued in its batch and the key
+//! `d = e·b + r` it derived from its download ([`ProvisionedCred::key`],
+//! `ObuRuntime::install_credential`), so the digest on the air, the linkage value a CRL
+//! revokes and the certificate bytes are the protocol's own. A receiver reads the linkage
+//! value out of the certificate it verified against; no side channel carries it. Where no
+//! protocol flow issues a credential the same ACA issues one without the flows
+//! ([`crate::credentials`]).
 //!
 //! **2. The subject lookup.** A report names a certificate by its digest; the engine maps
 //! digest → `(node, i, j)` from what it provisioned, standing in for the PCA's own table.
@@ -500,7 +502,7 @@ pub fn l2_address(digest: &[u8]) -> [u8; 6] {
 }
 
 /// One credential the SCMS provisioning issued, as the engine installs it on the air.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ProvisionedCred {
     /// The i-period.
     pub i: u32,
@@ -512,6 +514,12 @@ pub struct ProvisionedCred {
     pub valid_from: SimTime,
     /// Its end.
     pub valid_until: SimTime,
+    /// What the device derived from its download on the real 1609.2.1 path: the implicit
+    /// certificate the ACA issued, the ACA's certificate and `d = e·b + r` (WP-C1). `None`
+    /// on the paths that issue no SPDU (the ETSI tickets, the modelled explicit path under
+    /// a hybrid or KEM scheme): those are issued by [`crate::credentials`] instead, keeping
+    /// this linkage value.
+    pub key: Option<std::sync::Arc<v2xw_sec::credential::ImplicitKey>>,
 }
 
 /// One roadside unit the scenario declared.
@@ -2033,6 +2041,7 @@ impl Phase2 {
                         lv: LinkageValue::new([0u8; 9]),
                         valid_from: from,
                         valid_until: until,
+                        key: None,
                     })
                 })
                 .collect();
@@ -2126,24 +2135,50 @@ impl Phase2 {
     }
 
     /// The device's credentials at period `from_i` and later.
+    ///
+    /// On the real path each carries what the device derived from its download (WP-C1):
+    /// the implicit certificate, the issuing ACA's certificate, and the signing key
+    /// `d = e·b_ij + r` from the device's own caterpillar. Nothing about the device's
+    /// seeds or the LAs crosses: only the certificate, its issuer and `d`.
     fn creds_of_device(&self, device: NodeId, from_i: u32) -> Vec<ProvisionedCred> {
         let Some(dev) = self.scms.state.devices.get(&device) else {
             return Vec::new();
         };
+        let pki = self.scms.state.pki.as_ref();
         dev.credentials
             .iter()
             .filter(|((i, _), _)| *i >= from_i)
             .map(|(&(i, j), c)| {
                 let (from, until) = self.params.scms.validity(i);
+                let key = match (c.implicit.as_ref(), dev.caterpillar.as_ref(), pki) {
+                    (Some(imp), Some(cat), Some(pki)) => pki.by_id8(&imp.aca_id8).map(|aca| {
+                        std::sync::Arc::new(v2xw_sec::credential::ImplicitKey::new(
+                            std::sync::Arc::new(imp.certificate.clone()),
+                            std::sync::Arc::new(aca.cert.clone()),
+                            cat.signing_private_implicit(i, j, &imp.e, &imp.r),
+                        ))
+                    }),
+                    _ => None,
+                };
                 ProvisionedCred {
                     i,
                     j,
                     lv: c.lv,
                     valid_from: from,
                     valid_until: until,
+                    key,
                 }
             })
             .collect()
+    }
+
+    /// The SCMS run's ACA as an issuer, for the credentials no protocol flow issues
+    /// ([`crate::credentials`]); `None` when the run has no PDU layer.
+    #[must_use]
+    pub fn aca_issuer(&self) -> Option<v2xw_sec::credential::ImplicitIssuer> {
+        let pki = self.scms.state.pki.as_ref()?;
+        let d = pki.aca.private?;
+        v2xw_sec::credential::ImplicitIssuer::new(pki.aca.cert.clone(), d).ok()
     }
 
     /// Forgets a retired vehicle.
@@ -2832,7 +2867,7 @@ impl Phase2 {
                 self.creds
                     .entry(node)
                     .or_default()
-                    .extend(fresh.iter().copied());
+                    .extend(fresh.iter().cloned());
                 tick.installs.push((node, fresh, bytes));
             }
         }
@@ -3449,6 +3484,7 @@ impl Phase2 {
                         lv: LinkageValue::new([0u8; 9]),
                         valid_from: from,
                         valid_until: until,
+                        key: None,
                     }
                 })
                 .collect();
@@ -3465,7 +3501,7 @@ impl Phase2 {
             self.creds
                 .entry(node)
                 .or_default()
-                .extend(fresh.iter().copied());
+                .extend(fresh.iter().cloned());
             tick.installs.push((node, fresh, 0));
         }
         let (steps, cursor) = {

@@ -1424,6 +1424,162 @@ fn modeled_card() -> ModelCard {
     card
 }
 
+// =========================================================================================
+// Implicit (ECQV) certificates: the end entity's key and the relying party's key (WP-C1)
+// =========================================================================================
+
+/// The identity of one implicit certificate under one issuer: `SHA-256(cert COER) ‖
+/// SHA-256(issuer COER)`. The reconstructed key `Q_U = e·P_U + Q_CA` is a pure function of
+/// exactly these two encodings ([`crate::cert::verification_key`]), so this is the key the
+/// modelled reconstruction directory is indexed by.
+fn implicit_pair_id(cert_coer: &[u8], issuer_coer: &[u8]) -> [u8; 64] {
+    let mut out = [0u8; 64];
+    out[..32].copy_from_slice(&sha256(cert_coer));
+    out[32..].copy_from_slice(&sha256(issuer_coer));
+    out
+}
+
+/// `(certificate, issuer)` → the modelled public material of the key the certificate's
+/// holder derived for it, for every implicit key any modelled backend has imported.
+///
+/// What stands in for ECQV reconstruction in modelled mode, for the reason
+/// [`modeled_directory`] stands in for the curve equation: whether the key a relying
+/// party reconstructs from a certificate is the holder's key is a fact of the public
+/// data alone, so it is held where every verifier can reach it. A certificate no holder
+/// ever derived a key for (forged, altered by one bit, or presented under the wrong
+/// issuer) has no entry, and its import fails exactly where a real reconstruction gives a
+/// key nobody holds the private half of: both end in a signature that does not verify.
+fn modeled_implicit_directory() -> &'static RwLock<BTreeMap<[u8; 64], [u8; PUBLIC_MATERIAL_BYTES]>>
+{
+    static DIRECTORY: OnceLock<RwLock<BTreeMap<[u8; 64], [u8; PUBLIC_MATERIAL_BYTES]>>> =
+        OnceLock::new();
+    DIRECTORY.get_or_init(|| RwLock::new(BTreeMap::new()))
+}
+
+fn implicit_inconsistent() -> SecError {
+    SecError::Crypto {
+        op: "implicit key import",
+        primitive: PrimitiveId::ECQV_P256,
+        detail: "d·G is not e·P_U + Q_CA: the holder's key does not match its certificate"
+            .to_string(),
+    }
+}
+
+fn implicit_unknown() -> SecError {
+    SecError::Crypto {
+        op: "ECQV reconstruction",
+        primitive: PrimitiveId::ECQV_P256,
+        detail: "no holder derived a key for this certificate under this issuer".to_string(),
+    }
+}
+
+impl Real {
+    /// Imports the signing key of an implicit certificate, `d = e·b + r`, which the device
+    /// derived when it opened its download (02 §9.3), after the device's own acceptance
+    /// check `d·G = e·P_U + Q_CA` ([`crate::credential::ImplicitKey::is_consistent`]).
+    ///
+    /// Both backends make the check, so a wrong `d` is refused at import in both modes
+    /// rather than signing in one and being refused by every verifier in the other.
+    ///
+    /// # Errors
+    /// The key does not reconstruct.
+    pub fn import_implicit(
+        &mut self,
+        primitive: PrimitiveId,
+        owner: NodeId,
+        key: &crate::credential::ImplicitKey,
+    ) -> Result<KeyHandle> {
+        if !key.is_consistent() {
+            return Err(implicit_inconsistent());
+        }
+        self.import(primitive, owner, key.private())
+    }
+
+    /// The verification key a relying party reconstructs from an implicit certificate and
+    /// its issuer, `Q_U = e·P_U + Q_CA` (1609.2 §5.3.2), as a public handle.
+    ///
+    /// # Errors
+    /// The issuer's key is not P-256, a point does not decode, or the reconstruction is the
+    /// point at infinity.
+    pub fn import_reconstructed(
+        &mut self,
+        primitive: PrimitiveId,
+        owner: NodeId,
+        cert: &v2xw_msg::sec_types::Certificate,
+        issuer: &v2xw_msg::sec_types::Certificate,
+    ) -> Result<PubHandle> {
+        if !self.supports_primitive(primitive) {
+            return Err(SecError::UnsupportedPrimitive {
+                backend: REAL_ID,
+                primitive,
+            });
+        }
+        let issuer_key = crate::cert::verification_key(issuer, None)?;
+        let crate::cert::CertKey::P256(q) =
+            crate::cert::verification_key(cert, Some((issuer, &issuer_key)))?
+        else {
+            return Err(implicit_unknown());
+        };
+        let material = q.compressed().ok_or_else(implicit_unknown)?;
+        Ok(self.insert_public(primitive, owner, material, REAL_ID))
+    }
+}
+
+impl Modeled {
+    /// The modelled counterpart of [`Real::import_implicit`]: the same acceptance check,
+    /// then `d` is imported as the seed and the public material that a relying party's
+    /// reconstruction stands for is recorded against `(certificate, issuer)`.
+    ///
+    /// The check is real curve arithmetic in this mode too. It runs once per credential,
+    /// at installation, never per message, and it is what keeps the directory true: an
+    /// entry is only ever the key the issuance determined.
+    ///
+    /// # Errors
+    /// The key does not reconstruct, or the primitive has no modelled signature.
+    pub fn import_implicit(
+        &mut self,
+        primitive: PrimitiveId,
+        owner: NodeId,
+        key: &crate::credential::ImplicitKey,
+    ) -> Result<KeyHandle> {
+        if !key.is_consistent() {
+            return Err(implicit_inconsistent());
+        }
+        let seed = ec::scalar_to_be32(key.private());
+        let handle = self.import_seed(primitive, owner, &seed)?;
+        let id = implicit_pair_id(
+            &crate::cert::encode(key.certificate())?,
+            &crate::cert::encode(key.issuer())?,
+        );
+        if let Ok(mut dir) = modeled_implicit_directory().write() {
+            dir.insert(id, modeled_public_material(&seed));
+        }
+        Ok(handle)
+    }
+
+    /// The modelled counterpart of [`Real::import_reconstructed`]: a directory lookup in
+    /// place of `e·P_U + Q_CA`.
+    ///
+    /// # Errors
+    /// No holder ever derived a key for this certificate under this issuer.
+    pub fn import_reconstructed(
+        &mut self,
+        primitive: PrimitiveId,
+        owner: NodeId,
+        cert: &v2xw_msg::sec_types::Certificate,
+        issuer: &v2xw_msg::sec_types::Certificate,
+    ) -> Result<PubHandle> {
+        self.catalogue_supports(primitive)?;
+        let id = implicit_pair_id(&crate::cert::encode(cert)?, &crate::cert::encode(issuer)?);
+        let material = modeled_implicit_directory()
+            .read()
+            .ok()
+            .and_then(|d| d.get(&id).copied())
+            .ok_or_else(implicit_unknown)?;
+        CryptoBackendInfo::import_public(self, primitive, owner, &material)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

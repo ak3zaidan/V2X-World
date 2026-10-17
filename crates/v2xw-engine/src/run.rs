@@ -508,6 +508,10 @@ pub struct RunReport {
     /// How many of [`RunReport::nodes_created`] were pedestrians' and cyclists' devices
     /// (`actors.vru.device_fraction`).
     pub vru_devices_created: u64,
+    /// Provisioned credentials a device refused at installation because the key it was
+    /// handed does not reconstruct under its certificate (`d·G ≠ e·P_U + Q_ACA`), or that
+    /// could not be issued: each one is a certificate the device cannot sign with (WP-C1).
+    pub credentials_refused: u64,
     /// How many PSMs and VAMs a VRU device wanted to send and did not: the EN 302 571 duty
     /// cycle, the energy budget, or no credential (`v2xw_node::vru`).
     pub vru_suppressed: u64,
@@ -677,12 +681,6 @@ struct FrameState {
     /// The transmitter's heading when the frame started, radians — its street's
     /// direction, which the high tier's corner tracer reads. `None` for a roadside unit.
     tx_heading: Option<f64>,
-    /// The i-period the signer's certificate belongs to, as the envelope states it.
-    claimed_cert_period: u32,
-    /// The linkage value the signer's certificate carries, when the credential the node
-    /// signed with has one. This is what a CRL entry revokes, so it is the field the
-    /// receiver's revocation check turns on (see [`crate::phase2`], joint 1).
-    claimed_linkage: Option<v2xw_sec::linkage::LinkageValue>,
     /// The application payload a Phase 2 message carries, for the two messages the
     /// revocation path needs and no node runtime generates.
     app: Option<AppPayload>,
@@ -903,6 +901,9 @@ pub struct Engine {
     pending_tx: BTreeMap<NodeId, Vec<(SimTime, FrameSeq)>>,
     /// The Phase 2 path, when the scenario declared one.
     phase2: Option<crate::phase2::Phase2>,
+    /// Issues the credentials no protocol flow issues, under the run's ACA
+    /// ([`crate::credentials`], WP-C1).
+    credential_factory: std::sync::Arc<crate::credentials::CredentialFactory>,
     /// The pseudonym-change strategy's engine half and the eavesdropper's coverage
     /// (`crate::pseudonym_policy`), when the scenario asks for either.
     pseudonym_policy: Option<crate::pseudonym_policy::PseudonymPolicy>,
@@ -1438,6 +1439,7 @@ impl Engine {
             mac_timers_queued: BTreeSet::new(),
             pending_tx: BTreeMap::new(),
             phase2: None,
+            credential_factory: crate::credentials::CredentialFactory::fallback(),
             pseudonym_policy: None,
             policy_odometer: BTreeMap::new(),
             rsus: BTreeMap::new(),
@@ -1520,6 +1522,15 @@ impl Engine {
         };
         let phase2 = crate::phase2::Phase2::build(&engine.scenario, &engine.world)?;
         engine.phase2 = phase2;
+        engine.credential_factory =
+            std::sync::Arc::new(crate::credentials::CredentialFactory::for_run(
+                engine.scenario.seed,
+                engine.wall,
+                engine
+                    .phase2
+                    .as_ref()
+                    .and_then(crate::phase2::Phase2::aca_issuer),
+            ));
         let policy = crate::pseudonym_policy::PseudonymPolicy::from_scenario(
             &engine.scenario,
             &engine.world,
@@ -1604,6 +1615,16 @@ impl Engine {
     /// The run report as it stands, for a caller inspecting a partial run.
     pub fn report(&self) -> &RunReport {
         &self.report
+    }
+
+    /// The certificate of the ACA every credential in this run was issued under, and
+    /// whether it is the SCMS run's own ACA (WP-C1): what an external verifier of the
+    /// run's SPDUs needs to reconstruct the signers' keys.
+    pub fn credential_issuer(&self) -> (std::sync::Arc<v2xw_msg::sec_types::Certificate>, bool) {
+        (
+            std::sync::Arc::clone(self.credential_factory.issuer_certificate()),
+            self.credential_factory.is_scms_aca(),
+        )
     }
 
     /// The Phase 2 path's state, when the scenario declared one.
@@ -1737,7 +1758,14 @@ impl Engine {
             let id = NodeId::new(self.next_node);
             self.next_node += 1;
             let env = crate::wiring::NodeEnv::new(&self.world, self.wall);
-            let mut runtime = crate::wiring::build_rsu(&self.scenario, env, &spec, id, 0);
+            let mut runtime = crate::wiring::build_rsu(
+                &self.scenario,
+                env,
+                &self.credential_factory,
+                &spec,
+                id,
+                0,
+            );
             // A surveyed position, not a fix: an RSU knows where its own mast is because
             // somebody measured it, which is why this is not a GNSS estimate and why the
             // node is not being handed ground truth it could not have (invariant I-C2).
@@ -2938,37 +2966,55 @@ impl Engine {
         // OBU; both are hosted the same way from here on.
         let mut runtime: crate::hosted::HostedNode = if crate::wiring::is_vru_class(class) {
             self.report.vru_devices_created += 1;
-            crate::hosted::build_vru_device(&self.scenario, env, id, now, class, dims).into()
+            crate::hosted::build_vru_device(
+                &self.scenario,
+                env,
+                &self.credential_factory,
+                id,
+                now,
+                class,
+                dims,
+            )
+            .into()
         } else {
-            crate::wiring::build_node(&self.scenario, env, id, now, class, dims).into()
+            crate::wiring::build_node(
+                &self.scenario,
+                env,
+                &self.credential_factory,
+                id,
+                now,
+                class,
+                dims,
+            )
+            .into()
         };
-        // Phase 2: the backend enrols and provisions the device, and the
-        // credentials it installs carry the linkage values a CRL revokes. The
-        // digest stays the `pseudo_signer` stand-in — see `crate::phase2`, joint 1
-        // — so the *pool* is the protocol's and the *identity* is not.
-        //
-        // The digest the certificate is *announced under* is not knowable here:
-        // `ObuRuntime` issues a real certificate for each pseudonym on its first
-        // transmission and writes that certificate's own `HashedId8` back into the
-        // store, replacing the stand-in this installs. So the digest → pseudonym
-        // map is filled in `hand_down_app`, at the instant a frame carries one.
+        // Phase 2: the backend enrols and provisions the device, and the device is
+        // handed the implicit certificates the ACA issued with the keys it derived
+        // (`crate::phase2`, joint 1): the identity on the air is the protocol's. The
+        // digest → pseudonym map is still filled in `hand_down_app`, at the instant
+        // a frame carries one, so it holds exactly the digests that were on the air.
         if let Some(phase2) = self.phase2.as_mut() {
             let creds = phase2.provision(id, now, &self.rng);
             phase2.phase_crl_poll(id, &self.rng, now);
             if !creds.is_empty() {
-                match runtime.as_obu_mut() {
-                    Some(obu) => {
-                        crate::wiring::install_provisioned(obu, &self.scenario, id, &creds)
-                    }
-                    None => crate::hosted::install_credentials(
-                        runtime.stores_mut(),
+                let factory = std::sync::Arc::clone(&self.credential_factory);
+                let installed = match runtime.as_obu_mut() {
+                    Some(obu) => crate::wiring::install_provisioned(
+                        obu,
                         &self.scenario,
+                        &factory,
                         id,
-                        creds
-                            .iter()
-                            .map(|c| (c.i, c.j, c.valid_from, c.valid_until)),
+                        &creds,
                     ),
-                }
+                    None => crate::hosted::install_credentials(
+                        &mut runtime,
+                        &self.scenario,
+                        &factory,
+                        id,
+                        &creds,
+                    ),
+                };
+                self.report.credentials_refused += (creds.len() - installed) as u64;
             }
         }
         self.nodes.insert(id, runtime);
@@ -4525,23 +4571,12 @@ impl Engine {
         let belief = self.nodes.get(&node).map(v2xw_core::NodeView::position);
         let frame = FrameSeq::new(self.next_frame);
         self.next_frame += 1;
-        // The credential's i-period and linkage value, which is what a CRL revokes and
-        // therefore what the receiver's revocation check reads (`crate::phase2`, joint 1).
+        // The credential the node signs with. A receiver learns its linkage value only
+        // from the certificate itself (`linkageData`), never from the engine.
         let credential = self
             .nodes
             .get(&node)
             .and_then(|n| n.stores().certs.active().cloned());
-        let (claimed_cert_period, claimed_linkage) = match (&credential, self.phase2.as_ref()) {
-            (Some(cred), Some(phase2)) => (
-                cred.i_period,
-                phase2
-                    .creds(node)
-                    .iter()
-                    .find(|c| c.i == cred.i_period && c.j == cred.j_index)
-                    .map(|c| c.lv),
-            ),
-            _ => (0, None),
-        };
         // Joint 2's map, filled here and not at spawn: this is the first instant the
         // digest a receiver will see is the digest the sender's store holds, because the
         // node rewrote it when it issued the certificate it is about to sign with. A
@@ -4882,8 +4917,6 @@ impl Engine {
             arrivals: BTreeMap::new(),
             faint: BTreeMap::new(),
             tx_heading: None,
-            claimed_cert_period,
-            claimed_linkage,
             app,
             signature_valid,
             spdu: tx.signed.as_ref().map(|f| {
@@ -5162,13 +5195,6 @@ impl Engine {
             st.claimed_pos = claim.0;
             st.claimed_speed_mps = claim.1;
             st.claimed_heading_rad = claim.2;
-            st.claimed_cert_period = i;
-            st.claimed_linkage = self.phase2.as_ref().and_then(|p| {
-                p.creds(node)
-                    .iter()
-                    .find(|c| c.i == i && c.j == j)
-                    .map(|c| c.lv)
-            });
             st.signature_valid = true;
             st.spdu = Some(signed.spdu.clone());
             st.payload_bytes = split.map(|(p, _)| p);
@@ -7189,12 +7215,9 @@ impl Engine {
         // 3. Completed top-ups.
         for (node, creds, bytes) in &tick.installs {
             if let Some(runtime) = self.nodes.get_mut(node) {
-                for c in creds {
-                    runtime
-                        .stores_mut()
-                        .certs
-                        .insert(crate::wiring::provisioned_handle(*node, c));
-                }
+                let installed =
+                    crate::wiring::add_provisioned(runtime, &self.credential_factory, *node, creds);
+                self.report.credentials_refused += (creds.len() - installed) as u64;
             }
             let rec = crate::sec_records::SecCert::new(now, *node, "top-up", None, Some(*bytes));
             self.emit(recorder, &rec);
@@ -8642,8 +8665,6 @@ fn rx_frame(state: &FrameState, bytes: u32) -> RxFrame {
         // is, unless an attacker forged it). The receiver only learns it by *spending* the
         // verification time, which `ObuRuntime::step` charges against its servers.
         signature_valid: state.signature_valid,
-        claimed_cert_period: state.claimed_cert_period,
-        claimed_linkage: state.claimed_linkage,
         spdu: state.spdu.clone(),
     }
 }

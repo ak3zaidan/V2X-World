@@ -39,6 +39,33 @@ fn belief(pos: Vec3, speed: f64) -> PositionEstimate {
     p
 }
 
+/// The SCMS-issued key for `(node, i, j)`: an implicit pseudonym certificate from one ACA
+/// shared by every node in this test, and `d = e·b + r` (WP-C1). A node signs only with a
+/// credential installed this way.
+fn test_key(node: NodeId, i: u32, j: u32) -> v2xw_sec::credential::ImplicitKey {
+    static ISSUER: std::sync::OnceLock<v2xw_sec::credential::ImplicitIssuer> =
+        std::sync::OnceLock::new();
+    let iss = ISSUER.get_or_init(|| {
+        v2xw_sec::credential::ImplicitIssuer::standalone(b"node-tests", 0, &[0x20]).expect("issuer")
+    });
+    let mut secret = [0u8; 32];
+    secret[..4].copy_from_slice(&node.index().to_be_bytes());
+    let mut lv = [0u8; 9];
+    lv[..4].copy_from_slice(&node.index().to_be_bytes());
+    lv[4..8].copy_from_slice(&j.to_be_bytes());
+    iss.issue_factory(
+        v2xw_sec::credential::FactoryProfile::Pseudonym {
+            lv: v2xw_sec::linkage::LinkageValue::new(lv),
+        },
+        &secret,
+        i,
+        j,
+        0,
+        &[0x20],
+    )
+    .expect("issues")
+}
+
 fn credential(node: NodeId, j: u32) -> CredentialHandle {
     CredentialHandle {
         digest: pseudo_signer(node, j),
@@ -65,7 +92,11 @@ fn device(services: VruServices) -> VruDeviceRuntime {
         0,
     );
     d.stores_mut().crl.set_period(100);
-    d.stores_mut().certs.insert(credential(DEVICE, 0));
+    {
+        let c = credential(DEVICE, 0);
+        let k = test_key(DEVICE, c.i_period, c.j_index);
+        d.install_credential(c, &k).expect("installs");
+    }
     d.set_belief(belief(Vec3::ZERO, 1.4));
     d
 }
@@ -360,9 +391,11 @@ fn a_beacon_has_no_receiver_and_says_so() {
     let mut beacon = VruDeviceRuntime::beacon(NodeId::new(701), 0);
     beacon.stores_mut().crl.set_period(100);
     beacon
-        .stores_mut()
-        .certs
-        .insert(credential(NodeId::new(701), 0));
+        .install_credential(
+            credential(NodeId::new(701), 0),
+            &test_key(NodeId::new(701), 100, 0),
+        )
+        .expect("installs");
     beacon.set_belief(belief(Vec3::ZERO, 1.4));
     assert_eq!(beacon.config().kind, VruDeviceKind::Beacon);
     assert_eq!(beacon.config().services, VruServices::SAE);
@@ -393,8 +426,6 @@ fn rx_frame(j: u32) -> RxFrame {
         claimed_generation_time: 0,
         full_certificate: true,
         signature_valid: true,
-        claimed_cert_period: 100,
-        claimed_linkage: None,
         spdu: None,
     }
 }

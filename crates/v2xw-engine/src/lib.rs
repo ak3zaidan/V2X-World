@@ -61,6 +61,7 @@ pub mod adapters;
 pub mod app_truth;
 pub mod backend;
 pub mod city;
+pub mod credentials;
 pub mod crypto_config;
 pub mod ctx;
 pub mod daylight;

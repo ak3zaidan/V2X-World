@@ -1237,8 +1237,6 @@ pub fn run(opts: &SimOptions) -> SimOut {
                             claimed_generation_time: f.claim.generation_time,
                             full_certificate: true,
                             signature_valid: f.claim.signature_valid,
-                            claimed_cert_period: 0,
-                            claimed_linkage: None,
                             // The legacy path: the harness decides validity on the node's
                             // behalf and the node only pays for the check. Carrying real
                             // SPDU bytes would mean signing every ghost with a key the
@@ -1391,19 +1389,44 @@ fn build_node(node: NodeId, at: SimTime, queue_capacity: usize) -> ObuRuntime {
         ..NodeConfig::default()
     };
     let mut runtime = ObuRuntime::new(node, profile, policy, config, at);
+    // One implicit pseudonym certificate from an ACA every node in the run shares, with
+    // the key its holder derived (WP-C1): a node signs only with an installed credential.
+    static ISSUER: std::sync::OnceLock<v2xw_sec::credential::ImplicitIssuer> =
+        std::sync::OnceLock::new();
+    let issuer = ISSUER.get_or_init(|| {
+        v2xw_sec::credential::ImplicitIssuer::standalone(b"threat-sim", 0, &[0x20]).expect("issuer")
+    });
+    let mut secret = [0u8; 32];
+    secret[..4].copy_from_slice(&node.index().to_be_bytes());
+    let mut lv = [0u8; 9];
+    lv[..4].copy_from_slice(&node.index().to_be_bytes());
+    let key = issuer
+        .issue_factory(
+            v2xw_sec::credential::FactoryProfile::Pseudonym {
+                lv: v2xw_sec::linkage::LinkageValue::new(lv),
+            },
+            &secret,
+            0,
+            0,
+            0,
+            &[0x20],
+        )
+        .expect("issues");
     runtime
-        .stores_mut()
-        .certs
-        .insert(v2xw_node::stores::CredentialHandle {
-            digest: v2xw_node::stores::pseudo_signer(node, 0),
-            cert_coer: vec![0u8; 117],
-            key: v2xw_sec::KeyId(u64::from(node.index())),
-            i_period: 0,
-            j_index: 0,
-            valid_from: at,
-            valid_until: SimTime::MAX,
-            state: v2xw_node::stores::CredState::Active,
-        });
+        .install_credential(
+            v2xw_node::stores::CredentialHandle {
+                digest: v2xw_node::stores::pseudo_signer(node, 0),
+                cert_coer: Vec::new(),
+                key: v2xw_sec::KeyId(u64::from(node.index())),
+                i_period: 0,
+                j_index: 0,
+                valid_from: at,
+                valid_until: SimTime::MAX,
+                state: v2xw_node::stores::CredState::Active,
+            },
+            &key,
+        )
+        .expect("installs");
     runtime
 }
 

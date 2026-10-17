@@ -77,6 +77,25 @@ macro_rules! both {
     };
 }
 
+impl crate::wiring::CredentialSink for HostedNode {
+    fn sink_stores(&mut self) -> &mut Stores {
+        both!(self, n => n.stores_mut())
+    }
+    fn sink_permissions(&self) -> Vec<u64> {
+        both!(self, n => n.security().cert_permissions())
+    }
+    fn sink_forget(&mut self) {
+        both!(self, n => n.security_mut().forget_credentials())
+    }
+    fn sink_install(
+        &mut self,
+        handle: CredentialHandle,
+        key: &v2xw_sec::credential::ImplicitKey,
+    ) -> core::result::Result<(), v2xw_sec::SecError> {
+        both!(self, n => n.install_credential(handle, key))
+    }
+}
+
 impl From<ObuRuntime> for HostedNode {
     fn from(o: ObuRuntime) -> Self {
         HostedNode::Obu(Box::new(o))
@@ -293,6 +312,7 @@ pub fn vru_services(scenario: &Scenario) -> VruServices {
 pub fn build_vru_device(
     scenario: &Scenario,
     env: NodeEnv,
+    factory: &crate::credentials::CredentialFactory,
     node: NodeId,
     at: SimTime,
     class: VehicleClass,
@@ -342,40 +362,52 @@ pub fn build_vru_device(
     device
         .security_mut()
         .set_stack(crate::wiring::etsi_facilities(scenario), &sends);
-    install_credentials(
-        device.stores_mut(),
-        scenario,
-        node,
-        (0..crate::wiring::BOOTSTRAP_PSEUDONYMS).map(|j| (0, j, at, SimTime::MAX)),
-    );
+    let pool: Vec<crate::phase2::ProvisionedCred> = (0..crate::wiring::BOOTSTRAP_PSEUDONYMS)
+        .map(|j| crate::phase2::ProvisionedCred {
+            i: 0,
+            j,
+            lv: factory.factory_linkage(node, 0, j),
+            valid_from: at,
+            valid_until: SimTime::MAX,
+            key: None,
+        })
+        .collect();
+    install_credentials(&mut device, scenario, factory, node, &pool);
     device
 }
 
-/// Replaces a device's pseudonym store with `creds` (`(i, j, valid_from, valid_until)`),
-/// under the scenario's rotation rule — the bootstrap batch, or what the SCMS provisioned.
-/// The digest, key handle and certificate size are the ones `wiring::bootstrap_credentials`
-/// gives a vehicle.
-pub fn install_credentials(
-    stores: &mut Stores,
+/// Replaces a device's pseudonym store with `creds`, under the scenario's rotation rule —
+/// the bootstrap batch, or what the SCMS provisioned — each installed with its key
+/// ([`crate::wiring::install_one`]). Returns how many were installed.
+pub fn install_credentials<R: crate::wiring::CredentialSink + ?Sized>(
+    device: &mut R,
     scenario: &Scenario,
+    factory: &crate::credentials::CredentialFactory,
     node: NodeId,
-    creds: impl IntoIterator<Item = (u32, u32, SimTime, SimTime)>,
-) {
+    creds: &[crate::phase2::ProvisionedCred],
+) -> usize {
     let policy = crate::wiring::rotation_policy(scenario);
+    device.sink_forget();
+    let stores = device.sink_stores();
     *stores = Stores {
         certs: v2xw_node::CertStore::new().with_policy(policy),
         ..core::mem::take(stores)
     };
-    for (i, j, from, until) in creds {
-        stores.certs.insert(CredentialHandle {
-            digest: v2xw_node::stores::pseudo_signer(node, j),
-            cert_coer: vec![0u8; 117],
-            key: v2xw_sec::KeyId(u64::from(node.index()) << 8 | u64::from(j)),
-            i_period: i,
-            j_index: j,
-            valid_from: from,
-            valid_until: until,
-            state: CredState::Active,
-        });
-    }
+    creds
+        .iter()
+        .filter(|c| {
+            let handle = CredentialHandle {
+                // Replaced by the issued certificate's own digest and encoding on install.
+                digest: v2xw_node::stores::pseudo_signer(node, c.j),
+                cert_coer: Vec::new(),
+                key: v2xw_sec::KeyId(u64::from(node.index()) << 8 | u64::from(c.j)),
+                i_period: c.i,
+                j_index: c.j,
+                valid_from: c.valid_from,
+                valid_until: c.valid_until,
+                state: CredState::Active,
+            };
+            crate::wiring::install_one(device, factory, node, handle, c.key.as_deref(), c.lv)
+        })
+        .count()
 }

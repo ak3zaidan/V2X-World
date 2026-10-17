@@ -96,10 +96,6 @@ pub struct RxFrame {
     /// only learns it by *spending the verification time*, which is what
     /// [`ObuRuntime::step`] charges — a node that skips the check never reads this field.
     pub signature_valid: bool,
-    /// The i-period the signer's certificate claims, for the linkage-CRL check.
-    pub claimed_cert_period: u32,
-    /// The linkage value the signer's certificate carries.
-    pub claimed_linkage: Option<v2xw_sec::linkage::LinkageValue>,
     /// The signed SPDU as it arrived on the air, when the engine carries the bytes.
     ///
     /// `Some` is the honest path: the node parses these bytes, resolves the signer's
@@ -637,6 +633,27 @@ impl ObuRuntime {
     /// The node's stores (03-interfaces.md §8).
     pub fn stores(&self) -> &Stores {
         &self.stores
+    }
+
+    /// Installs one credential the SCMS issued (WP-C1): the security stack imports the
+    /// key `d = e·b + r` for the implicit certificate after the device's own check, and the
+    /// store receives `handle` naming that certificate by its own `HashedId8` and carrying
+    /// its encoding. The store holds the handle, never the key.
+    ///
+    /// # Errors
+    /// The key does not reconstruct under its issuer, which a device refuses.
+    pub fn install_credential(
+        &mut self,
+        mut handle: CredentialHandle,
+        key: &v2xw_sec::credential::ImplicitKey,
+    ) -> Result<(), v2xw_sec::SecError> {
+        let signer = self
+            .security
+            .install(self.node, handle.i_period, handle.j_index, key)?;
+        handle.digest = signer.digest().clone();
+        handle.cert_coer = signer.cert_coer().to_vec();
+        self.stores.certs.insert(handle);
+        Ok(())
     }
 
     /// The node's stores, mutably, for the engine's provisioning and CRL paths.
@@ -1463,21 +1480,25 @@ impl ObuRuntime {
     /// signature check, so a frame whose signature failed never reaches the CRL with an
     /// attacker-chosen i-period in hand.
     fn classify(&mut self, ctx: &mut dyn NodeCtx, frame: &RxFrame) -> VerificationState {
-        let authentic = match &frame.spdu {
+        // The revocation check reads the certificate's own `linkageData` (iCert and the
+        // linkage value), out of the certificate the signature was checked against: the
+        // field a linked CRL entry is matched against [1609.2 §5.1.3.4]. Nothing else
+        // tells a receiver which certificate a frame was signed under.
+        let (authentic, linkage) = match &frame.spdu {
             Some(bytes) => match self.verify_on_the_wire(ctx, bytes) {
-                SpduVerdict::Valid => true,
-                SpduVerdict::Invalid => false,
+                (SpduVerdict::Valid, linkage) => (true, linkage),
+                (SpduVerdict::Invalid, _) => (false, None),
                 // The node holds no certificate for this signer, so it has concluded
                 // nothing. Answering `Invalid` would blame a peer for this node's own
                 // empty cache; the P2PCD request is counted in `learn_or_request`.
-                SpduVerdict::Unverifiable => return VerificationState::Unverified,
+                (SpduVerdict::Unverifiable, _) => return VerificationState::Unverified,
             },
-            None => frame.signature_valid,
+            None => (frame.signature_valid, None),
         };
         if !authentic {
             return VerificationState::Invalid;
         }
-        let Some(lv) = frame.claimed_linkage else {
+        let Some((i_cert, lv)) = linkage else {
             return VerificationState::Verified;
         };
         // Tell the gate which i-period this node believes it is in, before asking it to
@@ -1504,11 +1525,7 @@ impl ObuRuntime {
                 self.stores.crl.set_period(mine);
             }
         }
-        match self
-            .stores
-            .crl
-            .check(frame.claimed_cert_period, lv, authentic)
-        {
+        match self.stores.crl.check(u32::from(i_cert), lv, authentic) {
             crate::stores::CrlVerdict::Revoked => VerificationState::Revoked,
             crate::stores::CrlVerdict::NotRevoked => VerificationState::Verified,
             // The node refused to spend work on an implausible claim, so it has learned
@@ -1526,10 +1543,14 @@ impl ObuRuntime {
     /// named one by digest. A miss is [`SpduVerdict::Unverifiable`] — the P2PCD case —
     /// and never a rejection, because a receiver that has not been told a certificate has
     /// learned nothing about the message signed under it.
-    fn verify_on_the_wire(&mut self, ctx: &mut dyn NodeCtx, bytes: &[u8]) -> SpduVerdict {
+    fn verify_on_the_wire(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        bytes: &[u8],
+    ) -> (SpduVerdict, Option<(u16, v2xw_sec::linkage::LinkageValue)>) {
         let Some(parsed) = self.security.parse(bytes) else {
             self.spdu_parse_failures += 1;
-            return SpduVerdict::Invalid;
+            return (SpduVerdict::Invalid, None);
         };
         let certificate = match NodeSecurity::attached_certificate(&parsed) {
             Some(c) => {
@@ -1540,7 +1561,7 @@ impl ObuRuntime {
                 .and_then(|d| self.stores.peers.certificate(&d)),
         };
         let Some(certificate) = certificate else {
-            return SpduVerdict::Unverifiable;
+            return (SpduVerdict::Unverifiable, None);
         };
         let v = self
             .security
@@ -1548,7 +1569,7 @@ impl ObuRuntime {
         if v == SpduVerdict::Invalid {
             self.spdu_signature_failures += 1;
         }
-        v
+        (v, v2xw_sec::credential::linkage_of(&certificate))
     }
 
     /// How many received SPDUs failed to parse at all.
@@ -1690,19 +1711,12 @@ impl ObuRuntime {
             self.drops.record_n(DropCause::TxOverflow, wanted);
             return;
         };
-        // The credential protocol's stand-in: a real key and a real certificate for every
-        // pseudonym the store holds, and each certificate's own digest written back into
-        // the store so that what the node announces is what it can actually prove.
-        //
-        // Every pseudonym, not just the active one, and that is the difference between a
-        // revocation that sticks and one that does not: a linked CRL revokes a
-        // certificate, the node matches its own credentials against it *by digest*, and a
-        // certificate that only came into existence at the moment the node rotated onto it
-        // would let a revoked node walk away from its revocation by rotating.
-        if !self.provision_all(ctx, believed) {
-            self.drops.record_n(DropCause::TxOverflow, wanted);
-            return;
-        }
+        // Only a credential the SCMS issued and the security stack installed can sign
+        // (`install_credential`). Every pseudonym in the store was installed with its own
+        // certificate when it was handed down, so the digest a revocation is matched by is
+        // the one on the air from the first frame, and rotating cannot dodge it. A handle
+        // with no key stops the node transmitting rather than sending unsigned
+        // [CAMP-EE §2.2.10.2].
         if !self.security.set_active(cred.i_period, cred.j_index) {
             self.drops.record_n(DropCause::TxOverflow, wanted);
             return;
@@ -1790,8 +1804,6 @@ impl ObuRuntime {
                     claimed_generation_time: r.1,
                     full_certificate,
                     signature_valid: true,
-                    claimed_cert_period: cred.i_period,
-                    claimed_linkage: None,
                     spdu: None,
                 },
                 enqueued_at: believed,
@@ -1809,49 +1821,6 @@ impl ObuRuntime {
             self.window.message_out(Duration::ZERO, tx.full_certificate);
             out.transmissions.push(tx);
         }
-    }
-
-    /// Issues a certificate for every credential the store holds and writes each one's own
-    /// identity back into it. `false` if any of it failed.
-    ///
-    /// Until a `CredentialProtocol` ships, a credential arrives carrying
-    /// [`crate::stores::pseudo_signer`]'s stand-in digest and a zero-filled `cert_coer` of
-    /// the modelled length. Both are wrong in the only way that matters: the SPDU this node
-    /// is about to sign names the *real* certificate, so the store has to name it too, or
-    /// the digest a receiver sees will not be the digest the sender's store holds.
-    ///
-    /// Idempotent and therefore cheap after the first call: [`NodeSecurity::provision`]
-    /// returns the handle it already made.
-    fn provision_all(&mut self, ctx: &mut dyn NodeCtx, believed: SimTime) -> bool {
-        let pseudonyms: Vec<(u32, u32)> = self
-            .stores
-            .certs
-            .credentials()
-            .iter()
-            .map(|c| (c.i_period, c.j_index))
-            .collect();
-        for (i, j) in pseudonyms {
-            if self
-                .security
-                .provision(ctx, self.node, i, j, believed)
-                .is_err()
-            {
-                return false;
-            }
-        }
-        for cred in self.stores.certs.credentials_mut() {
-            let Some(signer) = self
-                .security
-                .signer_for_pseudonym(cred.i_period, cred.j_index)
-            else {
-                return false;
-            };
-            if cred.digest != *signer.digest() {
-                cred.digest = signer.digest().clone();
-                cred.cert_coer = signer.cert_coer().to_vec();
-            }
-        }
-        true
     }
 
     /// Builds one message from the node's belief and encodes it with its own encoder.
