@@ -507,7 +507,7 @@ Links (all TLS 1.2/1.3 between online components; application-layer encryption w
 | Wave | Packages (≤ 3) | Why together | Estimate (agent-h) |
 |---|---|---|---|
 | 1 | [x] A0, [x] A1, [x] A2 (merged 2026-10-16) | Independent: tooling, the ASN.1 layer and primitives touch different crates | 22 |
-| 2 | A3, A4, A5 | All need A1/A2. Different files: `cert`/`chain`, `butterfly`/`linkage`, `crl`/`ctl` | 26 |
+| 2 | [x] A3, [x] A4, [x] A5 (merged 2026-10-16) | All need A1/A2. Different files: `cert`/`chain`, `butterfly`/`linkage`, `crl`/`ctl` | 26 |
 | 3 | B1, B5, C4 | B1 must land first for B2–B4. B5 is `governance.rs` only. C4 is `primitive.rs` only, pulled forward because it is independent | 22 |
 | 4 | B2, B3a, B3b | All on the split `run/*` modules from B1 | 28 |
 | 5 | B4, C1 | B4 needs A5 and B1; C1 needs B3a/b. Different crates | 20 |
@@ -522,6 +522,11 @@ Wave 1 status (2026-10-16, merged into `main`; details in BUILD-STATUS.md):
 - [x] **A0** (merge `5d5c0cf`): the Python oracle is in `tools/oracle`, with a vector corpus of 18 transcribed files plus 9 oracle-emitted files in `crates/v2xw-sec/tests/vectors/`. `selftest` passes (412/412), `mutate` turns all 24 faults red, and `verify-emitted` passes (10/10). Still open: no public 1609.2 implicit-certificate vector exists, the oracle does not compile the 2025 edition, and the real CTL files are not vendored (WP-A5 adds them).
 - [x] **A1** (merge `ae74afa`): the 1609.2.1-2022 bindings build through rasn-compiler, so the fallback was not needed. Adds patch 0005 (pduFunctionalType constraint), `scms_types` (WireEdition, canonicalisation) and the asn1tools COER cross-check (8,757/9,000 values re-encode byte for byte; NESTED exempt). Still open: the rasn nested-extension-addition bug and the Psid ≥ 2^63 bug, and checking this layer against the A0 oracle.
 - [x] **A2** (merge `13e2687`): Time32/64 now count TAI, using the IANA leap-second table, and the sec crate adds KDF2, MAC1, CCM, ECIES and P-384. All 21 D.6 vectors pass, plus the CAVP samples. Still open: `civil_at` ignores a leap second during a run, and the A0 oracle has not cross-checked these primitives.
+
+Wave 2 status (2026-10-16, merged into `main`; details in BUILD-STATUS.md):
+- [x] **A3** (merge `c789875`): ECQV-1609 implicit and explicit issuance and verification (P-256/P-384), whole-cert hashing and HashedId3/8/10/32, the `chain` module covering every 02 §12 rule, and a `verify_plan` that walks the whole chain (new rejects PsidNotPermitted, ChainInconsistent, ChainTooLong). Matches the oracle on 500 chains bit for bit; 32 injected faults go red. Still open: no public 1609.2-profile ECQV vector, the oracle cannot resolve implicit issuers, geometric regions pass only when identical to the issuer's, and per-type certificate profiles (gap row 13).
+- [x] **A4** (merge `9d158d6`): butterfly B/J/h_ij helpers and the implicit variant, the encrypted ACA response (rekRecipInfo), and group linkage (off by default), against CAMP, OpenSCMS and the oracle; 7 faults go red. Still open: the unified/CUBK response key is unconfirmed (both refused), the rekRecipInfo reading and the group jValue/ei relation are unconfirmed, and the group_linkage scenario option is not wired (B phase).
+- [x] **A5** (merge `dfd7a61`): real 1609.2.1 CTLs (quorum 3 of 5 P-384 electors), CCF, composite CRL and 1609.2 CRLs (series 1 linkage, 2/3/4/256 hash, full and delta). All 6 published CTLs and both chain files verify; 26 faults go red. Still open: the owner must decide whether the SCMS Manager files ("All Rights Reserved") may be vendored, so the 7 real-artefact tests stay `#[ignore]`; not yet wired into node or engine (B4/C2).
 
 Critical path: A1 → A3 → A5 → B4 → C2 → D1 → E1 → E2/E3 → F1. Two things could stretch it:
 - `rasn-compiler` cannot handle the 1609.2.1 modules (WP-A1 fallback adds about 8 h).
