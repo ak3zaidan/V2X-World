@@ -1146,6 +1146,12 @@ pub const EXECUTED: &[ExecutedOp] = {
         exec("cert", P::ECQV_P256, S, 0),
         exec("cert", P::ECQV_P256, V, 0),
         exec("cert", P::SHA_256, V, 150),
+        // WP-C1 implicit-credential keys: ECQV issuance (request key, CA contribution)
+        // and the d·G = e·P_U + Q_ACA import check, plus the certificate hash e.
+        exec("credential", P::ECQV_P256, K, 0),
+        exec("credential", P::ECQV_P256, S, 0),
+        exec("credential", P::ECQV_P256, V, 0),
+        exec("credential", P::SHA_256, V, 150),
         exec("chain", P::ECDSA_P256_SHA256, V, 0),
         exec("chain", P::ECDSA_P384, V, 0),
         exec("chain", P::ECQV_P256, V, 0),
