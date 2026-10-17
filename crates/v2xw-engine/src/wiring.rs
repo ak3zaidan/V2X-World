@@ -13,12 +13,13 @@
 //! credential cannot sign, and `ObuRuntime::generate` correctly refuses to transmit rather
 //! than sending unsigned — so a run with no bootstrap produces no traffic at all.
 //!
-//! [`bootstrap_credentials`] is therefore explicit about what it is: a **stand-in for the
-//! protocol**, not a model of it. It installs one pseudonym per node with the scenario's
-//! rotation period, derived from the node id through `v2xw_node::stores::pseudo_signer`,
-//! and it does not model a request, a batch, a top-up latency or a provisioning failure.
-//! A scenario measuring provisioning must not use it, which is why the run report counts
-//! the credentials it installed.
+//! [`bootstrap_credentials`] gives a node the pool it left the factory with when no
+//! SCMS run issues one: [`BOOTSTRAP_PSEUDONYMS`] implicit pseudonym certificates (one RSU
+//! application certificate for a roadside unit) issued by the run's ACA through
+//! [`crate::credentials::CredentialFactory`], with real keys and linkage values. It does
+//! not model a request, a batch, a top-up latency or a provisioning failure; a scenario
+//! measuring provisioning runs the SCMS, whose certificates [`install_provisioned`]
+//! installs instead.
 
 use v2xw_core::geo::GeoOrigin;
 use v2xw_core::geom::Dims;
@@ -3283,6 +3284,7 @@ pub(crate) fn verification_policy(scenario: &Scenario) -> Box<dyn VerificationPo
 pub fn build_node(
     scenario: &Scenario,
     env: NodeEnv,
+    factory: &crate::credentials::CredentialFactory,
     node: NodeId,
     at: SimTime,
     class: VehicleClass,
@@ -3334,7 +3336,7 @@ pub fn build_node(
     });
     apply_compute_tier(&mut runtime, scenario);
     apply_security_profile(&mut runtime, scenario, env);
-    bootstrap_credentials(&mut runtime, scenario, node, at);
+    bootstrap_credentials(&mut runtime, scenario, factory, node, at, false);
     // The V2X applications (`v2xw_node::apps`), in every equipped vehicle.
     if !scenario.apps.enabled.is_empty() && !is_vru_class(class) {
         runtime.enable_apps(app_params(scenario));
@@ -3566,13 +3568,106 @@ pub fn rotation_policy(scenario: &Scenario) -> RotationPolicy {
 /// pp. 7-8; 05-protocols.md §2.4), so a rotation has somewhere to go.
 pub const BOOTSTRAP_PSEUDONYMS: u32 = 20;
 
-/// Installs the pseudonym a node starts with. See the module documentation: this stands in
-/// for the credential protocol and does not model it.
+/// A runtime a credential can be installed into: an OBU (and an RSU, which the engine
+/// hosts as one) or a VRU device.
+pub trait CredentialSink {
+    /// Its stores.
+    fn sink_stores(&mut self) -> &mut v2xw_node::Stores;
+    /// The PSIDs its certificates must permit.
+    fn sink_permissions(&self) -> Vec<u64>;
+    /// Installs one credential with its key (`install_credential`).
+    ///
+    /// # Errors
+    /// The key does not reconstruct.
+    fn sink_install(
+        &mut self,
+        handle: CredentialHandle,
+        key: &v2xw_sec::credential::ImplicitKey,
+    ) -> core::result::Result<(), v2xw_sec::SecError>;
+}
+
+impl CredentialSink for ObuRuntime {
+    fn sink_stores(&mut self) -> &mut v2xw_node::Stores {
+        self.stores_mut()
+    }
+    fn sink_permissions(&self) -> Vec<u64> {
+        self.security().cert_permissions()
+    }
+    fn sink_install(
+        &mut self,
+        handle: CredentialHandle,
+        key: &v2xw_sec::credential::ImplicitKey,
+    ) -> core::result::Result<(), v2xw_sec::SecError> {
+        self.install_credential(handle, key)
+    }
+}
+
+impl CredentialSink for v2xw_node::VruDeviceRuntime {
+    fn sink_stores(&mut self) -> &mut v2xw_node::Stores {
+        self.stores_mut()
+    }
+    fn sink_permissions(&self) -> Vec<u64> {
+        self.security().cert_permissions()
+    }
+    fn sink_install(
+        &mut self,
+        handle: CredentialHandle,
+        key: &v2xw_sec::credential::ImplicitKey,
+    ) -> core::result::Result<(), v2xw_sec::SecError> {
+        self.install_credential(handle, key)
+    }
+}
+
+/// Installs `handle` with `key`, or with a key `factory` issues for it when the protocol
+/// handed none down (keeping `lv`, the protocol's linkage value). `false` when the key
+/// was refused or could not be issued: the credential then stays out of the store, and the
+/// node cannot sign with it.
+pub fn install_one<R: CredentialSink + ?Sized>(
+    rt: &mut R,
+    factory: &crate::credentials::CredentialFactory,
+    node: NodeId,
+    handle: CredentialHandle,
+    key: Option<&v2xw_sec::credential::ImplicitKey>,
+    lv: v2xw_sec::linkage::LinkageValue,
+) -> bool {
+    let issued;
+    let key = match key {
+        Some(k) => k,
+        None => {
+            let perms = rt.sink_permissions();
+            match factory.pseudonym(
+                node,
+                handle.i_period,
+                handle.j_index,
+                lv,
+                handle.valid_from,
+                &perms,
+            ) {
+                Ok(k) => {
+                    issued = k;
+                    &issued
+                }
+                Err(_) => return false,
+            }
+        }
+    };
+    rt.sink_install(handle, key).is_ok()
+}
+
+/// Installs the pool a node starts with when no SCMS run issues one. See the module
+/// documentation.
+///
+/// A vehicle gets [`BOOTSTRAP_PSEUDONYMS`] pseudonyms, all valid for the whole run, which
+/// the store rotates within by the scenario's rule; a roadside unit gets one RSU
+/// application certificate (`rsu`), which it never rotates. Each is an implicit
+/// certificate from the run's ACA with a real key.
 pub fn bootstrap_credentials(
     runtime: &mut ObuRuntime,
     scenario: &Scenario,
+    factory: &crate::credentials::CredentialFactory,
     node: NodeId,
     at: SimTime,
+    rsu: bool,
 ) {
     let policy = rotation_policy(scenario);
     let store = runtime.stores_mut();
@@ -3580,17 +3675,13 @@ pub fn bootstrap_credentials(
         certs: core::mem::take(&mut store.certs).with_policy(policy),
         ..core::mem::take(store)
     };
-    // One week's batch of pseudonyms, all valid for the whole run; the store rotates
-    // within it by the scenario's rule. Provisioning them over the air is the credential
-    // protocol's job (`install_provisioned` when the SCMS runs).
-    for j in 0..BOOTSTRAP_PSEUDONYMS {
-        runtime.stores_mut().certs.insert(CredentialHandle {
+    let perms = runtime.security().cert_permissions();
+    let count = if rsu { 1 } else { BOOTSTRAP_PSEUDONYMS };
+    for j in 0..count {
+        let handle = CredentialHandle {
+            // Replaced by the issued certificate's own digest and encoding on install.
             digest: pseudo_signer(node, j),
-            // The encoded certificate's *size* is what the envelope overhead depends on,
-            // and 04-models.md §9.1 derives 117 bytes for an implicit 1609.2 pseudonym
-            // certificate. The bytes themselves are not a real certificate and nothing
-            // reads them; a scenario in `real` crypto mode needs the protocol.
-            cert_coer: vec![0u8; 117],
+            cert_coer: Vec::new(),
             // The handle scheme `install_provisioned` uses: one key per (node, j).
             key: v2xw_sec::KeyId(u64::from(node.index()) << 8 | u64::from(j)),
             i_period: 0,
@@ -3598,7 +3689,15 @@ pub fn bootstrap_credentials(
             valid_from: at,
             valid_until: SimTime::MAX,
             state: CredState::Active,
-        });
+        };
+        let key = if rsu {
+            factory.rsu_application(node, 0, at, &perms)
+        } else {
+            factory.pseudonym(node, 0, j, factory.factory_linkage(node, 0, j), at, &perms)
+        };
+        if let Ok(key) = key {
+            let _ = runtime.install_credential(handle, &key);
+        }
     }
 }
 
@@ -3840,6 +3939,7 @@ pub fn j2945_params(scenario: &Scenario, base: v2xw_radio::J2945Params) -> v2xw_
 pub fn build_rsu(
     scenario: &Scenario,
     env: NodeEnv,
+    factory: &crate::credentials::CredentialFactory,
     spec: &crate::phase2::RsuSpec,
     node: NodeId,
     at: SimTime,
@@ -3884,7 +3984,7 @@ pub fn build_rsu(
     let mut runtime = ObuRuntime::new(node, profile, Box::new(VerifyAll::new()), config, at);
     apply_compute_tier(&mut runtime, scenario);
     apply_security_profile(&mut runtime, scenario, env);
-    bootstrap_credentials(&mut runtime, scenario, node, at);
+    bootstrap_credentials(&mut runtime, scenario, factory, node, at, true);
     runtime
 }
 
@@ -3895,30 +3995,51 @@ pub fn build_rsu(
 /// what a linkage resolution needs, since the Misbehaviour Authority correlates two
 /// reports about two different pseudonyms.
 ///
-/// The digest stays [`pseudo_signer`]'s, and the validity window and the i-period are the
-/// protocol's. See [`crate::phase2`], joint 1, for why that split is the honest one while
-/// no `CredentialProtocol` plug-in ships.
-pub fn install_provisioned(
-    runtime: &mut ObuRuntime,
+/// Each is installed with the key the protocol handed down ([`crate::phase2`], joint 1):
+/// the store names it by the issued certificate's own digest. A credential the protocol
+/// issued without an SPDU (see [`crate::phase2::ProvisionedCred::key`]) is issued by the
+/// same ACA through `factory` with the protocol's linkage value. Returns how many were
+/// installed.
+pub fn install_provisioned<R: CredentialSink + ?Sized>(
+    runtime: &mut R,
     scenario: &Scenario,
+    factory: &crate::credentials::CredentialFactory,
     node: NodeId,
     creds: &[crate::phase2::ProvisionedCred],
-) {
+) -> usize {
     // A fresh store rather than a cleared one: `CertStore` has no `clear`, and it should
     // not — a credential store that can be emptied in place is one a bug can silently
     // empty. The rotation policy is re-applied from the scenario, exactly as
     // `bootstrap_credentials` set it.
     let policy = rotation_policy(scenario);
-    *runtime.stores_mut() = v2xw_node::Stores {
+    *runtime.sink_stores() = v2xw_node::Stores {
         certs: v2xw_node::CertStore::new().with_policy(policy),
-        ..core::mem::take(runtime.stores_mut())
+        ..core::mem::take(runtime.sink_stores())
     };
-    for cred in creds {
-        runtime
-            .stores_mut()
-            .certs
-            .insert(provisioned_handle(node, cred));
-    }
+    add_provisioned(runtime, factory, node, creds)
+}
+
+/// Adds provisioned certificates to a node's store (a completed top-up), each with its key
+/// as [`install_provisioned`] does. Returns how many were installed.
+pub fn add_provisioned<R: CredentialSink + ?Sized>(
+    runtime: &mut R,
+    factory: &crate::credentials::CredentialFactory,
+    node: NodeId,
+    creds: &[crate::phase2::ProvisionedCred],
+) -> usize {
+    creds
+        .iter()
+        .filter(|cred| {
+            install_one(
+                runtime,
+                factory,
+                node,
+                provisioned_handle(node, cred),
+                cred.key.as_deref(),
+                cred.lv,
+            )
+        })
+        .count()
 }
 
 /// The credential handle one provisioned certificate is installed as.
@@ -3932,7 +4053,7 @@ pub fn provisioned_handle(node: NodeId, cred: &crate::phase2::ProvisionedCred) -
     let index = cred.i.wrapping_mul(64).wrapping_add(cred.j);
     CredentialHandle {
         digest: pseudo_signer(node, index),
-        cert_coer: vec![0u8; 117],
+        cert_coer: Vec::new(),
         key: v2xw_sec::KeyId(u64::from(node.index()) << 24 | u64::from(index)),
         i_period: cred.i,
         j_index: cred.j,
