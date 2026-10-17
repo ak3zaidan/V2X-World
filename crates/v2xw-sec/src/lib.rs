@@ -61,6 +61,7 @@ pub mod butterfly;
 pub mod ccm;
 pub mod cert;
 pub mod chain;
+pub mod credential;
 pub mod crl;
 pub mod crypto;
 pub mod ctl;
