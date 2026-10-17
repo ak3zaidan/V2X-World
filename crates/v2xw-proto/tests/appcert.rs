@@ -125,7 +125,8 @@ fn an_rsu_application_certificate_is_implicit_series_3_without_linkage_data() {
     // week ahead and this RSU asks as early as it may.
     assert_eq!(installed(&run, DEVICE_A), 2);
     let pki = st.pki.as_ref().unwrap();
-    let ica3 = appcert::craca_id(pki).unwrap();
+    // Derived here, not through `appcert::craca_id`, so a wrong CRACA cannot pass.
+    let ica3 = v2xw_sec::cert::cert_id3(&pki.ica.cert).unwrap().0.to_vec();
     for (k, c) in st.apps.devices[&DEVICE_A].installed.iter().enumerate() {
         let t = &c.cred.cert.0.to_be_signed;
         assert_eq!(c.cred.cert.0.r_type, CertificateType::implicit);
