@@ -19,11 +19,11 @@ v2xw-sec = { workspace = true }
 # The single home of the generated IEEE 1609.2 bindings; needed to name `Certificate` when
 # asking the real encoder for its length.
 v2xw-msg = { workspace = true }
-rasn = { workspace = true }
 # The P-256 scalar type the butterfly construction's `c` randomiser is.
 p256 = { workspace = true }
 # The 1609.2.1 SPDU layer (`scms::pdu`) builds generated ASN.1 values directly
-# (`Integer`, `OctetString`, `FixedOctetString`) and COER-encodes them.
+# (`Integer`, `OctetString`, `FixedOctetString`) and COER-encodes them; governance
+# (`scms::governance`) builds real CTLs, certificates and signed policy SPDUs the same way.
 rasn = { workspace = true }
 # Card payloads, message records and size provenance.
 serde = { workspace = true }
