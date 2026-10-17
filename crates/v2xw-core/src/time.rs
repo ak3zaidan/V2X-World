@@ -930,8 +930,7 @@ mod tests {
     #[test]
     fn time32_is_tai_known_instants() {
         let t32 = |s: &str| {
-            utc_unix_to_time32(CivilDateTime::parse_rfc3339(s).unwrap().to_unix_seconds())
-                .unwrap()
+            utc_unix_to_time32(CivilDateTime::parse_rfc3339(s).unwrap().to_unix_seconds()).unwrap()
         };
         // 3 leap seconds by then (end-2005, end-2008, mid-2012): 347 619 600 + 3.
         assert_eq!(t32("2015-01-06T09:00:00Z"), 347_619_603);

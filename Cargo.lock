@@ -3,6 +3,16 @@
 version = 4
 
 [[package]]
+name = "aead"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d122413f284cf2d62fb1b7db97e02edb8cda96d769b16e443a4f6195e35662b0"
+dependencies = [
+ "crypto-common",
+ "generic-array",
+]
+
+[[package]]
 name = "aes"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -565,6 +575,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ccm"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ae3c82e4355234767756212c570e29833699ab63e6ffd161887314cc5b43847"
+dependencies = [
+ "aead",
+ "cipher",
+ "ctr",
+ "subtle",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -764,6 +786,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctr"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0369ee1ad671834580515889b80f2ea915f23b8be8d0daa4bbaf2ac5c7590835"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "darling"
 version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -858,6 +889,7 @@ dependencies = [
  "ff",
  "generic-array",
  "group",
+ "hkdf",
  "pem-rfc7468",
  "pkcs8",
  "rand_core 0.6.4",
@@ -1109,6 +1141,15 @@ name = "hermit-abi"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
+
+[[package]]
+name = "hkdf"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
+dependencies = [
+ "hmac",
+]
 
 [[package]]
 name = "hmac"
@@ -1625,6 +1666,18 @@ name = "p256"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c9863ad85fa8f4460f9c48cb909d38a0d689dba1f6f6988a5e3e0d31071bcd4b"
+dependencies = [
+ "ecdsa",
+ "elliptic-curve",
+ "primeorder",
+ "sha2",
+]
+
+[[package]]
+name = "p384"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe42f1670a52a47d448f14b6a5c61dd78fce51856e68edaa38f7ae3a46b8d6b6"
 dependencies = [
  "ecdsa",
  "elliptic-curve",
@@ -2863,10 +2916,14 @@ name = "v2xw-sec"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "ccm",
+ "hmac",
  "p256",
+ "p384",
  "rasn",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "v2xw-core",
  "v2xw-msg",

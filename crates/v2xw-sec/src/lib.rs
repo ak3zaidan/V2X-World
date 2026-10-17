@@ -58,13 +58,17 @@
 
 pub mod aes128;
 pub mod butterfly;
+pub mod ccm;
 pub mod cert;
 pub mod crypto;
 pub mod ec;
+pub mod ecies;
 pub mod envelope;
 pub mod error;
 pub mod hashedid;
+pub mod kdf;
 pub mod linkage;
+pub mod p384;
 pub mod primitive;
 pub mod scheme;
 pub mod testctx;
