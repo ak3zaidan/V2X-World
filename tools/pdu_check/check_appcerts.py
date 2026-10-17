@@ -103,7 +103,7 @@ def pek_point(pek):
 def check(kind, data, pki, m, st):
     ra = pki.by_name['ra.provider-a']
     aca = pki.by_name['aca.provider-a']
-    ica = pki.by_name['ica.provider-a']
+    ica = pki.role('ica')
     if kind == 'EeRaCertRequestSpdu':
         plain = cp.decrypt_to(data, ra, ec.os2i(bytes.fromhex(m['ra_enc_private'])))
         (iface, (c, req)), signer, _ = cp.open_cert_request(plain, pki)

@@ -78,6 +78,14 @@ class Pki:
             self.by_id8[certs.hashed_id8(c)] = c
             self.by_name[name] = c
 
+    def role(self, r):
+        """The one certificate of role `r` (the first label of its name): the ICA is
+        `ica.provider-a` under the provider's own anchors and `ica.governance` under the
+        governance root (WIRE)."""
+        names = [n for n in self.by_name if n.split('.')[0] == r]
+        need(len(names) == 1, f'exactly one {r} certificate in the PKI, not {names}')
+        return self.by_name[names[0]]
+
     def chain_ok(self, c, depth=0):
         need(depth < 6, 'chain too long')
         kind, val = c['issuer']
@@ -391,7 +399,7 @@ def check(kind, data, pki, m, state):
         need(tbs['crlSeries'] == 1, 'crlSeries 1')
         # WP-B4: the CRL signer is issuerIsCraca under the ICA (published US CRL-signer
         # CrlSsp), so the CRACA a pseudonym certificate names is the ICA.
-        need(tbs['cracaId'] == certs.hashed_id8(pki.by_name['ica.provider-a'])[-3:], 'cracaId = ICA HashedId3')
+        need(tbs['cracaId'] == certs.hashed_id8(pki.role('ica'))[-3:], 'cracaId = ICA HashedId3')
         r = ec.os2i(resp['privateKeyInfo'])
         e = ecqv.e_1609(certs.tbs_bytes(cert), certs.encode_canonical(signer))
         dd = (e * b + r) % ec.P256.n
