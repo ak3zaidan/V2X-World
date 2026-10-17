@@ -127,6 +127,9 @@ security:
       pool_periods: 2
       topup_below_periods: 1
       report_shuffle_window_s: 60
+      # The MA operator's review before a revocation (CV-pilot manual MA, 8 h, an
+      # assumption) -> 0, the automatic MA, as this run compresses the report path.
+      ma_review_s: 0
       crl_cadence_s: 60
       crl_fetch_interval_s: 60
 

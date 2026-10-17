@@ -49,6 +49,23 @@ impl ScmsRun {
         reporter: NodeId,
         report: &crate::scms::mbr::MisbehaviorReport,
     ) -> core::result::Result<FlowRun, crate::scms::pdu::PduError> {
+        let now = self.kernel.now();
+        let (subject_i, lv, secured) = self.secure_mbr(reporter, report, now)?;
+        Ok(self.submit_secured(reporter, subject_i, lv, secured))
+    }
+
+    /// The bytes a device uploads for `report` at `at` ([`ScmsRun::submit_mbr`]'s
+    /// securing, without sending it): the encrypted report and its enrolment-signed
+    /// `Download-Req` header, with the `(iCert, linkage value)` its evidence accuses.
+    ///
+    /// # Errors
+    /// As [`ScmsRun::submit_mbr`].
+    pub fn secure_mbr(
+        &mut self,
+        reporter: NodeId,
+        report: &crate::scms::mbr::MisbehaviorReport,
+        at: SimTime,
+    ) -> core::result::Result<(u32, LinkageValue, SecuredReport), crate::scms::pdu::PduError> {
         use crate::scms::mbr;
         use crate::scms::pdu::{Pdu, PduError};
         let pki = self
@@ -97,9 +114,8 @@ impl ScmsRun {
         let subject_i = u32::from(ld.i_cert.0.0);
         let mut lv = [0u8; 9];
         lv.copy_from_slice(&ld.linkage_value.0[..]);
-        let now = self.kernel.now();
-        let t32 = self.state.time32(now);
-        let t64 = self.state.wall.time64(now).unwrap_or(0);
+        let t32 = self.state.time32(at);
+        let t64 = self.state.wall.time64(at).unwrap_or(0);
         let coer = mbr::encode_report(report)?;
         let body = mbr::secure_report(
             &coer,
@@ -116,8 +132,7 @@ impl ScmsRun {
             .ok_or(PduError::Key("RA encryption key"))?;
         let header =
             mbr::upload_header(t32, &enrol, &pki.ra.cert, &ra_enc, &mut self.state.pdu_rng)?;
-        Ok(self.submit_secured(
-            reporter,
+        Ok((
             subject_i,
             LinkageValue::new(lv),
             SecuredReport {
@@ -176,6 +191,57 @@ impl ScmsRun {
         transport: Transport,
         bytes: u32,
     ) -> FlowRun {
+        self.at_proxy(
+            reporter,
+            subject_i,
+            subject_lv,
+            [detected_at, sent_at, arrive_at],
+            transport,
+            bytes,
+            None,
+        )
+    }
+
+    /// A real US misbehaviour report (the bytes of [`ScmsRun::secure_mbr`]) whose access
+    /// leg the caller carried, as [`ScmsRun::report_at_proxy`]: the leg is charged the
+    /// encrypted report plus its `Download-Req` header, and from the proxy on the RA and
+    /// the MA apply their real checks (header signature and enrolment, MA decryption,
+    /// evidence signatures), recording every refusal in `pdu_rejections`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn secured_at_proxy(
+        &mut self,
+        reporter: NodeId,
+        subject_i: u32,
+        subject_lv: LinkageValue,
+        secured: SecuredReport,
+        detected_at: SimTime,
+        sent_at: SimTime,
+        arrive_at: SimTime,
+        transport: Transport,
+    ) -> FlowRun {
+        let bytes = secured.report.len() + secured.header.as_ref().map_or(0, |h| h.len());
+        self.at_proxy(
+            reporter,
+            subject_i,
+            subject_lv,
+            [detected_at, sent_at, arrive_at],
+            transport,
+            bytes,
+            Some(secured),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn at_proxy(
+        &mut self,
+        reporter: NodeId,
+        subject_i: u32,
+        subject_lv: LinkageValue,
+        [detected_at, sent_at, arrive_at]: [SimTime; 3],
+        transport: Transport,
+        bytes: u32,
+        secured: Option<SecuredReport>,
+    ) -> FlowRun {
         let run = self.new_run();
         let flow = FlowId::Report;
         for (stage, t) in [
@@ -192,6 +258,21 @@ impl ScmsRun {
             });
         }
         let lop = self.state.nodes.lop;
+        if let Some(s) = secured.as_ref() {
+            // The real octets of the device's upload, as the kernel's own device hop
+            // records them (`ScmsState::report_size`).
+            self.state.emit_pdu(
+                SpduKind::SecuredMisbehaviorReport,
+                reporter,
+                lop,
+                sent_at,
+                &s.report,
+            );
+            if let Some(h) = s.header.as_ref() {
+                self.state
+                    .emit_pdu(SpduKind::EeRaDownloadRequest, reporter, lop, sent_at, h);
+            }
+        }
         self.kernel.steps.push(crate::stage::WireStep {
             t: sent_at,
             from: reporter,
@@ -213,7 +294,7 @@ impl ScmsRun {
                     subject_i,
                     subject_lv,
                     observed_at: detected_at,
-                    secured: None,
+                    secured,
                 })),
                 flow,
                 run,

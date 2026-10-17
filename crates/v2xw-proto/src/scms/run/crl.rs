@@ -179,10 +179,7 @@ impl ScmsState {
     /// the store and the RSUs distribute; `None` with the layer off.
     fn issue_secured_crls(&mut self, at: SimTime) -> Option<crate::scms::pdu::Pdu> {
         let pki = self.pki.clone()?;
-        let i_now = u32::try_from(
-            at.saturating_sub(self.params.epoch) / self.params.i_period.as_nanos().max(1),
-        )
-        .unwrap_or(u32::MAX);
+        let i_now = self.params.period_at(at);
         let i_rev = self
             .crlg
             .entries

@@ -105,6 +105,7 @@ use v2xw_core::geom::Vec3;
 use v2xw_core::ids::{ActorId, NodeId};
 use v2xw_core::time::{Duration, SimTime};
 use v2xw_proto::net::Transport;
+use v2xw_proto::scms::mbr::{self, MbrQueue};
 use v2xw_proto::scms::run::{ScmsRun, crl_bytes};
 use v2xw_proto::stage::{FlowRun, StageId};
 use v2xw_proto::view::{BackendView, EdgeTracker};
@@ -564,7 +565,17 @@ pub struct LifecycleParams {
     pub etsi_butterfly: bool,
     /// How often the backend's state is published for the Backend view.
     pub view_interval: Duration,
+    /// When the EAC decides the home provider's root rollover (`root_rollover_at_s`):
+    /// a new root, ICA and component certificates, and a CTL adding the new root,
+    /// published at the SLA deadline (3 business days, Provider Req. v1.1 §3.4.11).
+    pub root_rollover_at: Option<SimTime>,
+    /// When the EAC removes the superseded root (`root_removal_at_s`): a CTL without it,
+    /// published within 48 h (Elector Policy v1.0 §2.2.4).
+    pub root_removal_at: Option<SimTime>,
 }
+
+/// The US i-period: one week, 10,080 minutes [CAMP-EE §2.1.5.3.2; SMP §2.1.17 Table 2].
+pub const US_I_PERIOD_S: u64 = 7 * 86_400;
 
 fn secs(v: f64) -> Duration {
     Duration::from_nanos((v * 1e9).round().max(0.0) as u64)
@@ -582,13 +593,8 @@ impl LifecycleParams {
         // revocation costs (05-protocols §2.5), and `crl_cadence_s: 0` turns it off.
         scms.publish_on_cadence = true;
         // Every Time32 the SCMS puts in a certificate or a CRL is read on the scenario's
-        // own wall clock, the one the vehicles stamp `generationTime` from. Left at the
-        // PDU layer's default (2026-01-05), the protocol's certificates were valid on a
-        // different calendar from the air's; nothing checked until WP-C2's receivers
-        // refused every message as generated outside its signer's validity.
-        if let Ok(w) = v2xw_core::time::WallClock::parse_rfc3339(&scenario.time.t0) {
-            scms.pdu.t0_unix_s = w.t0_unix_s();
-        }
+        // own wall clock (`pdu.t0_unix_s`, set from `time.t0` below with the calendar):
+        // WP-C2's receivers refuse a message generated outside its signer's validity.
         // WP-C2: the pseudonym certificates permit every PSID the fleet signs under —
         // what the scenario's vehicles send (an emergency vehicle's SRM included) and
         // the misbehaviour report — so a receiver checking the SPDU PSID against
@@ -625,14 +631,16 @@ impl LifecycleParams {
             crl_broadcast_interval: secs(CRL_BROADCAST_INTERVAL_S),
             etsi_butterfly: false,
             view_interval: secs(BACKEND_VIEW_INTERVAL_S),
+            root_rollover_at: None,
+            root_removal_at: None,
         };
-        let Some(choice) = scenario.security.protocol.as_ref() else {
-            return Ok(p);
-        };
-        let params = &choice.params;
-        let Some(map) = params.as_object() else {
-            return Ok(p);
-        };
+        let empty = serde_json::Map::new();
+        let map = scenario
+            .security
+            .protocol
+            .as_ref()
+            .and_then(|c| c.params.as_object())
+            .unwrap_or(&empty);
         for (key, value) in map {
             let v = value.as_f64().ok_or_else(|| {
                 conflict(
@@ -678,6 +686,18 @@ impl LifecycleParams {
                     p.scms.max_periods_ahead = (v.round() as u32).max(1);
                 }
                 "etsi_butterfly" => p.etsi_butterfly = v >= 0.5,
+                "root_rollover_at_s" => p.root_rollover_at = Some(secs(v).as_nanos()),
+                "root_removal_at_s" => p.root_removal_at = Some(secs(v).as_nanos()),
+                // The MA operator's review before a revocation is carried out (gap row
+                // 28): the CV-pilot manual MA by default (8 h, an assumption,
+                // `MaMode::ManualReview`); 0 is the automatic MA.
+                "ma_review_s" => {
+                    p.scms.ma.mode = if v > 0.0 {
+                        v2xw_proto::scms::params::MaMode::ManualReview { review: secs(v) }
+                    } else {
+                        v2xw_proto::scms::params::MaMode::Automatic
+                    };
+                }
                 other => {
                     return Err(conflict(
                         "security.protocol.params",
@@ -688,6 +708,25 @@ impl LifecycleParams {
                     ));
                 }
             }
+        }
+        // The deployment's clock (gap rows 4 and 43; G8): every `Time32` a PDU carries
+        // is derived from the scenario's own `time.t0`, and on the real weekly grid the
+        // i-period counts from the US epoch, 2015-01-06 04:00 EST (03 §1 fact 4), so a
+        // run starting 2026-10-16 provisions i = 614. A compressed grid (`i_period_s`
+        // other than one week) keeps i-period 0 at the run's start: its numbers are not
+        // the deployment's and say so (WP-D2 adds the `calendar: compressed` flag).
+        if let Ok(wall) = v2xw_core::time::WallClock::parse_rfc3339(&scenario.time.t0) {
+            p.scms.pdu.t0_unix_s = wall.t0_unix_s();
+        }
+        if p.scms.i_period == v2xw_core::time::Duration::from_secs(US_I_PERIOD_S) {
+            p.scms.calendar_epoch_unix_s =
+                Some(v2xw_proto::scms::governance::US_IPERIOD_EPOCH_UNIX_S);
+        } else if !map.contains_key("ma_review_s") {
+            // A compressed calendar compresses the MA's operator with it: an 8-hour
+            // review in a run whose week lasts a minute would only hide the protocol.
+            // On the real calendar the CV-pilot manual review is the default (owner
+            // decision); `ma_review_s` sets either explicitly.
+            p.scms.ma.mode = v2xw_proto::scms::params::MaMode::Automatic;
         }
         if p.scms.cert_lifetime < p.scms.i_period {
             return Err(conflict(
@@ -704,16 +743,13 @@ impl LifecycleParams {
     /// The i-period `t` falls in.
     #[must_use]
     pub fn period_at(&self, t: SimTime) -> u32 {
-        let since = t.saturating_sub(self.scms.epoch);
-        u32::try_from(since / self.scms.i_period.as_nanos().max(1)).unwrap_or(u32::MAX)
+        self.scms.period_at(t)
     }
 
     /// The instant i-period `i` begins: the inverse of [`LifecycleParams::period_at`].
     #[must_use]
     pub fn period_start(&self, i: u32) -> SimTime {
-        self.scms
-            .epoch
-            .saturating_add(u64::from(i).saturating_mul(self.scms.i_period.as_nanos()))
+        self.scms.period_start(i)
     }
 
     /// When a device whose pool reaches `last_period` asks for its next batch: the start
@@ -728,7 +764,7 @@ impl LifecycleParams {
 }
 
 /// The lifecycle keys `security.protocol.params` accepts.
-pub const LIFECYCLE_KEYS: [&str; 19] = [
+pub const LIFECYCLE_KEYS: [&str; 22] = [
     "i_period_s",
     "cert_lifetime_s",
     "certs_per_period",
@@ -748,6 +784,9 @@ pub const LIFECYCLE_KEYS: [&str; 19] = [
     "reenrol_download_delay_s",
     "max_periods_ahead",
     "etsi_butterfly",
+    "ma_review_s",
+    "root_rollover_at_s",
+    "root_removal_at_s",
 ];
 
 /// How often, in simulated seconds, the backend's state is published on `backend.state`
@@ -825,12 +864,32 @@ struct InFlightReport {
     subject: NodeId,
 }
 
+/// A device's misbehaviour-report store, [SM-MBR] §2.2 ([`MbrQueue`]): each report
+/// weighted 1.0, multiplied by 0.9 every day at 05:00 Eastern; uploaded highest weight
+/// first (newer first on ties); over the quota the lowest weight is deleted (older first);
+/// unsent reports older than a week are deleted.
+#[derive(Debug, Clone)]
+struct ReportStore(MbrQueue<(MisbehaviourReport, SimTime)>);
+
+/// The device's report-storage quota, bytes. [SM-MBR] §2.2 leaves it device-specific;
+/// **assumption**: 64 KiB, about 30 real reports with their evidence.
+pub const REPORT_STORE_QUOTA_BYTES: u64 = 64 * 1024;
+
+impl Default for ReportStore {
+    fn default() -> Self {
+        ReportStore(MbrQueue::new(REPORT_STORE_QUOTA_BYTES))
+    }
+}
+
+/// The evidence a reporter attaches: the last signed BSMs heard from each certificate.
+const EVIDENCE_BSMS: usize = 2;
+
 /// One vehicle's security and backend state.
 #[derive(Debug, Clone, Default)]
 struct NodeSec {
     access: Option<AccessKind>,
     /// Reports waiting for connectivity, with the instant each was detected.
-    outbox: Vec<(MisbehaviourReport, SimTime)>,
+    outbox: ReportStore,
     reports_uploaded: u32,
     crl_version: u32,
     /// The CRL entries this vehicle holds, so a list arriving in several frames, or by two
@@ -909,6 +968,26 @@ pub struct Phase2Report {
     pub reports_from_rsus: u64,
     /// Reports still in an outbox at the end of the run, for want of connectivity.
     pub reports_unsent: u64,
+    /// Reports a device's store deleted to stay within its quota ([SM-MBR] §2.2).
+    pub reports_evicted: u64,
+    /// Reports a device's store deleted unsent after a week.
+    pub reports_expired: u64,
+    /// Reports sent as real US misbehaviour reports (SM-MBR v1.1: signed under PSID
+    /// 0x26 with the reporter's pseudonym, encrypted to the MA, uploaded with an
+    /// enrolment-signed `Download-Req`), their evidence the accused's own signed BSMs.
+    pub reports_mbr_real: u64,
+    /// Reports whose detection has no PSID-0x20 type and subtype in the v1.1 object
+    /// set (or ObsImplausible, off by default), sent on the modelled path.
+    pub reports_mbr_unmapped: u64,
+    /// Reports a device could not secure (no evidence heard, no certificate or key),
+    /// sent on the modelled path; see `scms.state.pdu_rejections` for the backend's.
+    pub reports_mbr_unsecured: u64,
+    /// EAC decisions the run scheduled and took (root rollover, root removal).
+    pub gov_decisions: u64,
+    /// CTLs the governance entities published during the run (after the genesis CTL).
+    pub ctls_published: u64,
+    /// [`Phase2Report::reports_mbr_unsecured`] by reason.
+    pub reports_mbr_unsecured_by: BTreeMap<String, u64>,
     /// Reports the access link lost.
     pub reports_lost: u64,
     /// How many reached the Location Obscurer Proxy.
@@ -1178,6 +1257,10 @@ pub struct Phase2 {
     checked_at: BTreeMap<(NodeId, [u8; 8]), SimTime>,
     forwarded: BTreeSet<String>,
     in_flight: BTreeMap<FlowRun, InFlightReport>,
+    /// The home root a scheduled rollover superseded (`root_removal_at_s` removes it).
+    superseded_root: Option<[u8; 32]>,
+    /// The last signed BSMs on the air per signer digest: a report's evidence.
+    evidence: BTreeMap<[u8; 8], VecDeque<Vec<u8>>>,
     stage_cursor: usize,
     step_cursor: usize,
     queue: VecDeque<Case>,
@@ -1731,6 +1814,8 @@ impl Phase2 {
             checked_at: BTreeMap::new(),
             forwarded: BTreeSet::new(),
             in_flight: BTreeMap::new(),
+            evidence: BTreeMap::new(),
+            superseded_root: None,
             stage_cursor: 0,
             step_cursor: 0,
             queue: VecDeque::new(),
@@ -1774,6 +1859,14 @@ impl Phase2 {
     #[must_use]
     pub fn params(&self) -> &LifecycleParams {
         &self.params
+    }
+
+    /// The SCMS deployment the run drives (read-only): its components' state, every
+    /// emitted SPDU and refusal, the governance entities and the stage log, for the
+    /// tests and for an attack study that inspects what the backend saw.
+    #[must_use]
+    pub fn scms(&self) -> &ScmsRun {
+        &self.scms
     }
 
     /// The roadside units to create, in declaration order.
@@ -1990,7 +2083,9 @@ impl Phase2 {
             .map(|(k, v)| ((*k).to_string(), *v))
             .collect();
         r.backend_deliveries_dropped = st.faults.dropped;
-        r.reports_unsent = self.nodes.values().map(|n| n.outbox.len() as u64).sum();
+        r.reports_unsent = self.nodes.values().map(|n| n.outbox.0.len() as u64).sum();
+        r.reports_evicted = self.nodes.values().map(|n| n.outbox.0.evicted).sum();
+        r.reports_expired = self.nodes.values().map(|n| n.outbox.0.expired).sum();
         r
     }
 
@@ -2261,7 +2356,7 @@ impl Phase2 {
         if let Some(n) = self.nodes.remove(&node) {
             // Its unsent reports leave with it; they are counted as unsent here because
             // the vehicle took them out of the run.
-            self.report.reports_lost += n.outbox.len() as u64;
+            self.report.reports_lost += n.outbox.0.len() as u64;
         }
         // Its own detector suite and the rate-limit stamps of what it checked go too: a
         // node id is never reused, and nothing but the node's own receptions reads them.
@@ -2663,19 +2758,99 @@ impl Phase2 {
         Some((node, cred.i, cred.lv))
     }
 
-    /// Queues a report the vehicle could not upload yet.
+    /// Stores a report the vehicle could not upload yet in its report store; over the
+    /// quota the store deletes its lowest-weight report (possibly this one).
     pub fn hold_report(&mut self, node: NodeId, report: MisbehaviourReport, detected_at: SimTime) {
+        let unix = v2xw_core::time::WallClock::new(self.params.scms.pdu.t0_unix_s)
+            .unix_seconds_at(detected_at);
         if let Some(n) = self.nodes.get_mut(&node) {
-            n.outbox.push((report, detected_at));
+            let _evicted = n.outbox.0.push(
+                (report, detected_at),
+                u64::from(report_bytes()),
+                mbr::Weighting::default(),
+                unix,
+            );
         }
     }
 
-    /// Takes a vehicle's held reports, to try again.
-    pub fn take_outbox(&mut self, node: NodeId) -> Vec<(MisbehaviourReport, SimTime)> {
-        self.nodes
-            .get_mut(&node)
-            .map(|n| core::mem::take(&mut n.outbox))
-            .unwrap_or_default()
+    /// Takes a vehicle's held reports at `now`, to try again, in the store's upload
+    /// order (highest weight first, newer first on ties) after the 05:00-Eastern decays
+    /// since the last look and the deletion of reports older than a week.
+    pub fn take_outbox(
+        &mut self,
+        node: NodeId,
+        now: SimTime,
+    ) -> Vec<(MisbehaviourReport, SimTime)> {
+        let unix =
+            v2xw_core::time::WallClock::new(self.params.scms.pdu.t0_unix_s).unix_seconds_at(now);
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return Vec::new();
+        };
+        drain_upload_order(&mut n.outbox.0, unix)
+    }
+
+    /// The reports `node` holds, in upload order, with their current weights.
+    #[must_use]
+    pub fn held_reports(&self, node: NodeId) -> Vec<(String, f64)> {
+        let Some(n) = self.nodes.get(&node) else {
+            return Vec::new();
+        };
+        let mut v: Vec<_> = n.outbox.0.iter().collect();
+        v.sort_by(|a, b| {
+            b.weight
+                .partial_cmp(&a.weight)
+                .unwrap_or(core::cmp::Ordering::Equal)
+                .then(b.seq.cmp(&a.seq))
+        });
+        v.into_iter()
+            .map(|e| (e.item.0.report_id.clone(), e.weight))
+            .collect()
+    }
+
+    /// The governance entities' scheduled EAC decisions that are due by `now`, then
+    /// every decided CTL whose publication time has come ([`Governance::publish_due`]):
+    /// a device fetching trust files after that installs it.
+    ///
+    /// [`Governance::publish_due`]: v2xw_proto::scms::governance::Governance::publish_due
+    fn governance_due(&mut self, now: SimTime) {
+        let st = &mut self.scms.state;
+        if let Some(at) = self.params.root_rollover_at.filter(|t| *t <= now) {
+            self.params.root_rollover_at = None;
+            let (old, _new, _publish) = st.gov.rollover_root(&st.rng, &st.nodes, at);
+            self.superseded_root = Some(old);
+            self.report.gov_decisions += 1;
+        }
+        if let Some(at) = self.params.root_removal_at.filter(|t| *t <= now) {
+            self.params.root_removal_at = None;
+            if let Some(old) = self.superseded_root
+                && st.gov.remove_root(old, at).is_some()
+            {
+                self.report.gov_decisions += 1;
+            }
+        }
+        self.report.ctls_published += u64::from(st.gov.publish_due(now));
+    }
+
+    fn note_unsecured(&mut self, why: &str) {
+        self.report.reports_mbr_unsecured += 1;
+        *self
+            .report
+            .reports_mbr_unsecured_by
+            .entry(why.to_string())
+            .or_insert(0) += 1;
+    }
+
+    /// A signed BSM `signer` put on the air: kept (the last [`EVIDENCE_BSMS`]) as the
+    /// evidence a real misbehaviour report about that certificate attaches.
+    pub fn note_signed_bsm(&mut self, signer: [u8; 8], spdu: &[u8]) {
+        if self.etsi.is_some() || self.scms.state.pki.is_none() {
+            return;
+        }
+        let q = self.evidence.entry(signer).or_default();
+        if q.len() == EVIDENCE_BSMS {
+            q.pop_front();
+        }
+        q.push_back(spdu.to_vec());
     }
 
     /// Cellular vehicles with a multi-message backend flow (a top-up or a re-enrolment)
@@ -2696,7 +2871,7 @@ impl Phase2 {
     pub fn nodes_with_outbox(&self) -> Vec<NodeId> {
         self.nodes
             .iter()
-            .filter(|(_, n)| !n.outbox.is_empty())
+            .filter(|(_, n)| !n.outbox.0.is_empty())
             .map(|(k, _)| *k)
             .collect()
     }
@@ -2728,6 +2903,11 @@ impl Phase2 {
     /// The backend takes it from here: the RA's report shuffle, the forward to the MA,
     /// the MA's own verification. The authority's *decision* happens when the MA has
     /// ingested it ([`Phase2::advance`]), not here.
+    ///
+    /// Under the SCMS with the PDU layer on, the report is a real US misbehaviour report
+    /// ([`Phase2::real_mbr`]) whenever its detection has a PSID-0x20 type and subtype:
+    /// the RA checks the enrolment-signed upload header, the MA decrypts it and verifies
+    /// the evidence, and each refusal is on `scms.state.pdu_rejections`.
     #[allow(clippy::too_many_arguments)]
     pub fn report_at_proxy(
         &mut self,
@@ -2737,6 +2917,7 @@ impl Phase2 {
         sent_at: SimTime,
         arrive_at: SimTime,
         transport: Transport,
+        location: v2xw_sec::envelope::GenerationLocation,
     ) {
         self.report.reports_received += 1;
         let kind = if transport == Transport::RsuBackhaul {
@@ -2764,18 +2945,123 @@ impl Phase2 {
                 .insert(run, InFlightReport { report, subject });
             return;
         }
-        let run = self.scms.report_at_proxy(
-            device_of(reporter),
-            i,
-            lv,
-            detected_at,
-            sent_at,
-            arrive_at,
-            transport,
-            report_bytes(),
-        );
+        let run = match self.real_mbr(&report, location) {
+            MbrBuild::Real(mbr) => match self.scms.secure_mbr(device_of(reporter), &mbr, sent_at) {
+                Ok((si, slv, secured)) => {
+                    self.report.reports_mbr_real += 1;
+                    Some(self.scms.secured_at_proxy(
+                        device_of(reporter),
+                        si,
+                        slv,
+                        secured,
+                        detected_at,
+                        sent_at,
+                        arrive_at,
+                        transport,
+                    ))
+                }
+                Err(e) => {
+                    self.note_unsecured(&e.to_string());
+                    None
+                }
+            },
+            MbrBuild::Unmapped => {
+                self.report.reports_mbr_unmapped += 1;
+                None
+            }
+            MbrBuild::Unsecured(why) => {
+                self.note_unsecured(why);
+                None
+            }
+            MbrBuild::Off => None,
+        };
+        let run = run.unwrap_or_else(|| {
+            self.scms.report_at_proxy(
+                device_of(reporter),
+                i,
+                lv,
+                detected_at,
+                sent_at,
+                arrive_at,
+                transport,
+                report_bytes(),
+            )
+        });
         self.in_flight
             .insert(run, InFlightReport { report, subject });
+    }
+
+    /// The US misbehaviour report ([SM-MBR] v1.1, PSID 0x20) a device files for `r`.
+    ///
+    /// The type and subtype come from the first fired check the v1.1 object set has:
+    /// `constantPositionFrozen` → 1VInconsistent/ConstantPosition, `positionJump` →
+    /// 1VInconsistent/RandomPosition, `implausibleAcceleration` →
+    /// Implausible/MaxAcceleration, each with the [SM-MBR] §2.3.1 default parameters
+    /// (1 m drift, 10 m/s²). ObsImplausible/Distance is off by default in the US profile
+    /// (a relay makes an innocent sender look far away, §2.3.1.4.2), and no other check
+    /// has a subtype, so those reports stay on the modelled path and are counted.
+    ///
+    /// The evidence is the accused certificate's last signed BSMs on the air, byte for
+    /// byte, with that certificate as `signingCertificate`. **Approximation:** the node
+    /// layer does not keep the frames a receiver decoded, so these are the sender's last
+    /// transmitted SPDUs, which the reporter heard if it detected on them.
+    fn real_mbr(
+        &self,
+        r: &MisbehaviourReport,
+        location: v2xw_sec::envelope::GenerationLocation,
+    ) -> MbrBuild {
+        if self.etsi.is_some() || self.scms.state.pki.is_none() {
+            return MbrBuild::Off;
+        }
+        let Some(subtype) = r.reason_codes.iter().find_map(|c| us_subtype(c)) else {
+            return MbrBuild::Unmapped;
+        };
+        if !r
+            .reporter
+            .is_some_and(|n| self.scms.state.devices.contains_key(&device_of(n)))
+        {
+            // A roadside unit holds no pseudonym or enrolment certificate of this SCMS
+            // (its application certificate is the factory's until WP-B3b is wired).
+            return MbrBuild::Unsecured("the reporter holds no SCMS enrolment");
+        }
+        let Some(digest) = decode_hex8(&r.subject_cert_digest) else {
+            return MbrBuild::Unsecured("the accused digest does not parse");
+        };
+        let Some((node, i, j)) = self.by_digest.get(&digest).copied() else {
+            return MbrBuild::Unsecured("the accused certificate is not one the run issued");
+        };
+        let Some(cert) = self
+            .scms
+            .state
+            .devices
+            .get(&device_of(node))
+            .and_then(|d| d.credentials.get(&(i, j)))
+            .and_then(|c| c.implicit.as_deref())
+            .map(|c| c.certificate.clone())
+        else {
+            return MbrBuild::Unsecured("the accused certificate is not an implicit one");
+        };
+        let bsms: Vec<_> = self
+            .evidence
+            .get(&digest)
+            .into_iter()
+            .flatten()
+            .filter_map(|b| mbr::decode_signed_bsm(b).ok())
+            .collect();
+        let mbr_type = subtype.mbr_type();
+        let bsms = match mbr_type {
+            mbr::MbrType::OneVInconsistent if bsms.len() >= 2 => bsms,
+            mbr::MbrType::Implausible if !bsms.is_empty() => bsms[bsms.len() - 1..].to_vec(),
+            _ => return MbrBuild::Unsecured("too few of the accused's signed BSMs heard"),
+        };
+        let generation_time = self.scms.state.time32(r.generation_time);
+        MbrBuild::Real(mbr::MisbehaviorReport {
+            generation_time,
+            location,
+            mbr_type,
+            subtypes: vec![subtype],
+            evidence: mbr::Evidence::Suspect(mbr::SignedBsms { bsms, cert }),
+        })
     }
 
     /// Runs the backend to `now` and turns what happened into records and actions.
@@ -2785,6 +3071,7 @@ impl Phase2 {
             return self.advance_etsi(now);
         }
         let mut tick = BackendTick::default();
+        self.governance_due(now);
         // Start any queued case the backend can take.
         self.start_cases(now);
         if let Err(e) = self.scms.run_until(now) {
@@ -3156,7 +3443,7 @@ impl Phase2 {
                         "reports_waiting_for_coverage",
                         self.nodes
                             .values()
-                            .map(|n| n.outbox.len() as u64)
+                            .map(|n| n.outbox.0.len() as u64)
                             .sum::<u64>(),
                     );
                     e.set("topups_started", r.topups_started);
@@ -3639,7 +3926,9 @@ impl Phase2 {
             // Revoke from the reported certificate's own period forward: its entry must
             // match the certificate that was reported, and forward-only linkage keeps
             // every earlier certificate unlinkable [BRECHT §VI-D].
-            if let Some(runs) = self.scms.revoke(index, i, self.params.jmax) {
+            // Through the MA's decision mode: the CV-pilot manual review by default
+            // (`ma_review_s`), the automatic MA when it is 0 (gap row 28).
+            if let Some(runs) = self.scms.request_revocation(index, i, self.params.jmax) {
                 self.report.cases_opened += 1;
                 case.runs = Some(runs);
                 self.cases.push(case);
@@ -4094,7 +4383,7 @@ impl Phase2 {
             },
             link: n.access.unwrap_or(AccessKind::Offline).as_str().to_string(),
             link_up,
-            outbox_reports: n.outbox.len() as u32,
+            outbox_reports: n.outbox.0.len() as u32,
             reports_uploaded: n.reports_uploaded,
             crl_entries,
             crl_version: n.crl_version,
@@ -4617,6 +4906,92 @@ fn digest_key(digest: &v2xw_msg::sec_types::HashedId8) -> [u8; 8] {
 }
 
 /// Eight bytes from a sixteen-character hex string.
+/// Empties a report store at `now_unix` in its upload order ([SM-MBR] §2.2): first the
+/// 05:00-Eastern decays since the last look and the deletion of week-old reports, then
+/// highest weight first, newer first on ties.
+fn drain_upload_order<T>(q: &mut MbrQueue<T>, now_unix: i64) -> Vec<T> {
+    q.decay_to(now_unix);
+    q.expire(now_unix);
+    let mut out = Vec::with_capacity(q.len());
+    while let Some(seq) = q.next_upload().map(|e| e.seq) {
+        if let Some(item) = q.confirm(seq) {
+            out.push(item);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod report_store_tests {
+    use super::*;
+
+    /// 2026-10-15 12:00 UTC (08:00 EDT), a Thursday.
+    const T: i64 = 1_792_065_600;
+    const DAY: i64 = 86_400;
+
+    /// The device store the engine holds reports in decays at 05:00 Eastern and drains
+    /// highest weight first. Fault: drain in insertion order (FIFO) and the decayed
+    /// older report comes out first.
+    #[test]
+    fn the_store_drains_by_decayed_weight_and_drops_week_old_reports() {
+        assert_eq!(ReportStore::default().0.quota, REPORT_STORE_QUOTA_BYTES);
+        let mut q: MbrQueue<&str> = MbrQueue::new(REPORT_STORE_QUOTA_BYTES);
+        let w = mbr::Weighting::default();
+        // Report 1 at T; it then crosses one 05:00 ET (Friday) before report 2.
+        q.push("old", 100, w, T);
+        q.push("new", 100, w, T + DAY);
+        let weights: Vec<f64> = {
+            let mut v: Vec<_> = q.iter().map(|e| e.weight).collect();
+            v.sort_by(f64::total_cmp);
+            v
+        };
+        assert!((weights[0] - 0.9).abs() < 1e-12, "{weights:?}");
+        assert_eq!(drain_upload_order(&mut q, T + DAY), vec!["new", "old"]);
+        // Equal weights: newer first.
+        q.push("a", 100, w, T + 2 * DAY);
+        q.push("b", 100, w, T + 2 * DAY);
+        assert_eq!(drain_upload_order(&mut q, T + 2 * DAY), vec!["b", "a"]);
+        // An unsent report older than a week is deleted, not uploaded.
+        q.push("stale", 100, w, T + 3 * DAY);
+        assert!(drain_upload_order(&mut q, T + 11 * DAY).is_empty());
+        assert_eq!(q.expired, 1);
+        // Over the quota the lowest weight goes.
+        let mut small: MbrQueue<&str> = MbrQueue::new(250);
+        small.push("x", 100, w, T);
+        small.push("y", 100, w, T + DAY);
+        let evicted = small.push("z", 100, w, T + DAY);
+        assert_eq!(evicted, vec!["x"]);
+    }
+}
+
+/// What [`Phase2::real_mbr`] made of a report.
+enum MbrBuild {
+    /// A real report.
+    Real(mbr::MisbehaviorReport),
+    /// No PSID-0x20 subtype for the detection.
+    Unmapped,
+    /// No evidence, certificate or key to build it from.
+    Unsecured(&'static str),
+    /// Not an SCMS run with the PDU layer.
+    Off,
+}
+
+/// The [SM-MBR] v1.1 PSID-0x20 subtype for a detector check, with the §2.3.1 default
+/// parameters; `None` when the object set has none (see [`Phase2::real_mbr`]).
+fn us_subtype(check: &str) -> Option<mbr::Subtype> {
+    use v2xw_threat::detect::DetectorId as D;
+    match check {
+        c if c == D::ConstantPositionFrozen.as_str() => Some(mbr::Subtype::ConstantPosition),
+        c if c == D::PositionJump.as_str() => Some(mbr::Subtype::RandomPosition {
+            gps_drift_mm: 1_000,
+        }),
+        c if c == D::ImplausibleAcceleration.as_str() => Some(mbr::Subtype::MaxAcceleration {
+            threshold_cmps2: 1_000,
+        }),
+        _ => None,
+    }
+}
+
 fn decode_hex8(s: &str) -> Option<[u8; 8]> {
     if s.len() < 16 {
         return None;

@@ -545,15 +545,12 @@ impl ScmsState {
 
     /// When local period `p` starts.
     fn app_period_start(&self, kind: AppCertKind, p: u32) -> SimTime {
-        self.app_period_len(kind)
-            .saturating_mul(u64::from(p))
-            .after(self.params.epoch)
+        self.params.period_start_of(self.app_period_len(kind), p)
     }
 
     /// The period containing `at`.
     fn app_period_at(&self, kind: AppCertKind, at: SimTime) -> u32 {
-        let len = self.app_period_len(kind).as_nanos().max(1);
-        u32::try_from(at.saturating_sub(self.params.epoch) / len).unwrap_or(u32::MAX)
+        self.params.period_at_of(self.app_period_len(kind), at)
     }
 
     /// When the EE asks for `p`: `start(p) − lead`, never earlier than the RA allows.
@@ -677,7 +674,9 @@ impl ScmsState {
                 let pdu = match pending {
                     Some(p) => p.pdu,
                     None => {
-                        let valid_from = self.time32(self.app_period_start(kind, period));
+                        let valid_from = self
+                            .params
+                            .period_start_time32_of(self.app_period_len(kind), period);
                         let t = self.time32(at);
                         let built =
                             RequestKeys::fresh(kind, period, &mut self.apps.rng).and_then(|keys| {
@@ -1225,8 +1224,12 @@ impl ScmsState {
                 ) {
                     Ok(cred) => {
                         let from = self.app_period_start(kind, period);
-                        let until = Duration::from_secs(u64::from(kind.validity_hours()) * 3_600)
-                            .after(from);
+                        // The end the certificate itself states (exact on the real
+                        // calendar even when its period began before the run).
+                        let until = Duration::from_secs(u64::from(
+                            cred.valid_until.saturating_sub(self.time32(0)),
+                        ))
+                        .after(0);
                         out.stage_at(StageId::Installed, device, None, flow, run);
                         self.app_event(device, at, period, AppEventKind::Installed(cred.id10));
                         let next_at = self.app_request_time(kind, period + 1).max(at);

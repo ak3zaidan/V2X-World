@@ -438,9 +438,53 @@ impl ScmsPki {
             false,
             start,
         )?;
+        Self::components(root, ica, &mut g, start)
+    }
+
+    /// The provider's components under the governance entities' own Root CA and ICA
+    /// (`crate::scms::governance`, WP-B5): the certificates the CTL approves and the
+    /// chain files carry, so a device that validates a pseudonym, a CRL or an SCMS SPDU
+    /// up to its trust anchor reaches the root the electors endorsed, and a root
+    /// rollover or removal reaches what the run's components sign. The other component
+    /// keys are drawn from `seed` (independently of [`ScmsPki::new`]'s draws), their
+    /// certificates valid from `start`, which must lie inside the ICA's validity.
+    ///
+    /// # Errors
+    /// An anchor key is not P-256 or P-384, or a certificate does not build.
+    pub fn under_anchors(
+        seed: u64,
+        start: u32,
+        root: (&Certificate, &Signer1609),
+        ica: (&Certificate, &Signer1609),
+    ) -> Result<ScmsPki> {
+        let mut g = Drbg::new(seed, b"pki/under-governance-anchors");
+        let anchor = |name: &str, (cert, key): (&Certificate, &Signer1609)| -> Result<Authority> {
+            let private = match key {
+                Signer1609::P256(k) => {
+                    let mut b = [0u8; 32];
+                    b.copy_from_slice(&k.to_bytes());
+                    Some(ec::scalar_from_be32(&b).map_err(|_| PduError::Key("anchor scalar"))?)
+                }
+                Signer1609::P384(_) => None,
+            };
+            Ok(Authority {
+                name: name.into(),
+                cert: cert.clone(),
+                key: key.clone(),
+                private,
+                enc_private: None,
+            })
+        };
+        let root = anchor("root.governance", root)?;
+        let ica = anchor("ica.governance", ica)?;
+        Self::components(root, ica, &mut g, start)
+    }
+
+    /// Every component under `ica`, in a fixed draw order.
+    fn components(root: Authority, ica: Authority, g: &mut Drbg, start: u32) -> Result<ScmsPki> {
         let eca = Self::issue(
             &ica,
-            &mut g,
+            g,
             "eca.provider-a",
             15,
             &SecurityMgmtSsp::eca(EcaSsp::new(Uint8(2))),
@@ -450,7 +494,7 @@ impl ScmsPki {
         )?;
         let ra = Self::issue(
             &ica,
-            &mut g,
+            g,
             "ra.provider-a",
             3,
             &SecurityMgmtSsp::ra(RaSsp::new(Uint8(2))),
@@ -460,7 +504,7 @@ impl ScmsPki {
         )?;
         let aca = Self::issue(
             &ica,
-            &mut g,
+            g,
             "aca.provider-a",
             3,
             &SecurityMgmtSsp::aca(AcaSsp::new(Uint8(2))),
@@ -470,7 +514,7 @@ impl ScmsPki {
         )?;
         let ma = Self::issue(
             &ica,
-            &mut g,
+            g,
             "ma.provider-a",
             3,
             &SecurityMgmtSsp::ma(MaSsp::new(
@@ -485,7 +529,7 @@ impl ScmsPki {
         )?;
         let la1 = Self::issue(
             &ica,
-            &mut g,
+            g,
             "la1.provider-a",
             3,
             &SecurityMgmtSsp::la(LaSsp::new(Uint8(2), Uint16(1))),
@@ -495,7 +539,7 @@ impl ScmsPki {
         )?;
         let la2 = Self::issue(
             &ica,
-            &mut g,
+            g,
             "la2.provider-b",
             3,
             &SecurityMgmtSsp::la(LaSsp::new(Uint8(2), Uint16(2))),
@@ -505,7 +549,7 @@ impl ScmsPki {
         )?;
         let dcm = Self::issue(
             &ica,
-            &mut g,
+            g,
             "dcm.provider-a",
             3,
             &SecurityMgmtSsp::dcm(DcmSsp::new(Uint8(2))),
@@ -527,7 +571,7 @@ impl ScmsPki {
         );
         let crlg = Self::issue_with(
             &ica,
-            &mut g,
+            g,
             "crlg.provider-a",
             3,
             &SecurityMgmtSsp::crl(CrlSignerSsp::new(Uint8(2))),
