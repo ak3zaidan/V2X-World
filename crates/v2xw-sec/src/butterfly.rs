@@ -85,6 +85,17 @@ pub fn f2(ek: &ExpansionKey, i: u32, j: u32) -> Scalar {
     expand(ek, &x_block(true, i, j))
 }
 
+/// The signing-expansion input block `x_sign = 0x00000000 ‖ i ‖ j ‖ 0x00000000`
+/// (IEEE 1609.2.1 §9.3; CAMP `bfkeyexp.txt` "x"; 02 §9.2).
+pub fn x_sign(i: u32, j: u32) -> [u8; aes128::BLOCK] {
+    x_block(false, i, j)
+}
+
+/// The encryption-expansion input block `x_enc = 0xFFFFFFFF ‖ i ‖ j ‖ 0x00000000`.
+pub fn x_enc(i: u32, j: u32) -> [u8; aes128::BLOCK] {
+    x_block(true, i, j)
+}
+
 /// The 128-bit AES input block `prefix³² ‖ i³² ‖ j³² ‖ 0³²`.
 fn x_block(prefix_one: bool, i: u32, j: u32) -> [u8; aes128::BLOCK] {
     let mut b = [0u8; aes128::BLOCK];
@@ -97,10 +108,17 @@ fn x_block(prefix_one: bool, i: u32, j: u32) -> [u8; aes128::BLOCK] {
     b
 }
 
-/// The three-block expansion, reduced modulo the group order.
-fn expand(key: &ExpansionKey, x: &[u8; aes128::BLOCK]) -> Scalar {
+/// Bytes of the unreduced expansion output `f_int`: three AES blocks.
+pub const F_INT_BYTES: usize = 3 * aes128::BLOCK;
+
+/// The unreduced 384-bit expansion `f_int(k, x) = (AES_k(x+1) ⊕ (x+1)) ‖ (AES_k(x+2) ⊕
+/// (x+2)) ‖ (AES_k(x+3) ⊕ (x+3))`, the additions modulo 2¹²⁸.
+///
+/// Public so the official-vector tests can check the intermediate value CAMP prints
+/// (`bfkeyexp.txt` "f_k^int(x)") and OpenSCMS asserts (`combine_f_value_with_i_and_j`).
+pub fn f_int(key: &ExpansionKey, x: &[u8; aes128::BLOCK]) -> [u8; F_INT_BYTES] {
     let base = u128::from_be_bytes(*x);
-    let mut wide = [0u8; 48];
+    let mut wide = [0u8; F_INT_BYTES];
     for m in 1u128..=3 {
         // Modulo 2^128, exactly as the reference's `& _MASK128`.
         let xm = base.wrapping_add(m).to_be_bytes();
@@ -108,7 +126,12 @@ fn expand(key: &ExpansionKey, x: &[u8; aes128::BLOCK]) -> Scalar {
         let off = ((m - 1) as usize) * aes128::BLOCK;
         wide[off..off + aes128::BLOCK].copy_from_slice(&block);
     }
-    ec::scalar_from_be_mod_n(&wide)
+    wide
+}
+
+/// The three-block expansion, reduced modulo the group order.
+fn expand(key: &ExpansionKey, x: &[u8; aes128::BLOCK]) -> Scalar {
+    ec::scalar_from_be_mod_n(&f_int(key, x))
 }
 
 /// The device's butterfly request material.
@@ -192,8 +215,27 @@ impl Caterpillar {
     }
 
     /// The cocoon encryption private key `q = p + f₂(ek, ι)`.
+    ///
+    /// This is `h_ij` of 02 §9.2 (1609.2.1 §9.3.4.1, original variant): the key the EE
+    /// decrypts the ACA's response with ([`response::ee_decrypt`]).
     pub fn encryption_private(&self, i: u32, j: u32) -> Scalar {
         self.p + f2(&self.ek, i, j)
+    }
+
+    /// The cocoon signing private key `b_ij = a + f₁(ck, ι)` (02 §9.2), the private half
+    /// of the RA's `B_ij`. It is ECQV's `k_U` when the certificate is implicit.
+    pub fn cocoon_signing_private(&self, i: u32, j: u32) -> Scalar {
+        self.a + f1(&self.ck, i, j)
+    }
+
+    /// The usable signing private key of an **implicit** butterfly certificate:
+    /// `d = e·b_ij + r` (02 §9.3; SEC 4 §3.6 with `k_U = b_ij`).
+    ///
+    /// `e` is the certificate hash the ECQV profile in use fixes (1609.2 mode:
+    /// `SHA-256(SHA-256(tbs) ‖ SHA-256(issuer))`, computed by the certificate layer) and
+    /// `r` is the ACA's `privateKeyInfo` ("private key reconstruction value").
+    pub fn signing_private_implicit(&self, i: u32, j: u32, e: &Scalar, r: &Scalar) -> Scalar {
+        crate::crypto::ecqv::subject_private_key(e, &self.cocoon_signing_private(i, j), r)
     }
 }
 
@@ -256,6 +298,273 @@ pub fn secret_randomiser(be32: &[u8; 32]) -> Result<Scalar> {
         primitive: PrimitiveId::ECQV_P256,
         detail: "c must be a scalar below the P-256 group order".to_string(),
     })
+}
+
+/// The RA's cocoon signing key alone: `B_ij = A + f₁(ck, ι)·G` (02 §9.2).
+pub fn ra_cocoon_signing_key(signing_public: &Point, ck: &ExpansionKey, i: u32, j: u32) -> Point {
+    signing_public.add(&Point::mul_base(&f1(ck, i, j)))
+}
+
+/// The RA's cocoon encryption key alone, original variant: `J_ij = H + f₂(ek, ι)·G`
+/// (02 §9.2; 1609.2.1 §9.3.4.2 for `additionalParams.original`). The ACA encrypts the
+/// response to it and the EE decrypts with `h_ij` ([`Caterpillar::encryption_private`]).
+pub fn ra_cocoon_encryption_key(
+    encryption_public: &Point,
+    ek: &ExpansionKey,
+    i: u32,
+    j: u32,
+) -> Point {
+    encryption_public.add(&Point::mul_base(&f2(ek, i, j)))
+}
+
+/// The ACA's implicit-certificate step, ECQV with the cocoon key as the request:
+/// `P_U = B + k·G` (02 §9.3: "B plays R_U"). `P_U` is the certificate's
+/// `reconstructionValue`.
+pub fn aca_certify_implicit(cocoon_signing: &Point, k: &Scalar) -> Point {
+    crate::crypto::ecqv::reconstruction_value(cocoon_signing, k)
+}
+
+/// The ACA's private-key reconstruction value `r = e·k + d_CA` (SEC 4 §3.4), returned to
+/// the EE as `AcaEeCertResponse.privateKeyInfo`.
+pub fn aca_reconstruction_private(e: &Scalar, k: &Scalar, d_ca: &Scalar) -> Scalar {
+    crate::crypto::ecqv::private_key_contribution(e, k, d_ca)
+}
+
+/// Which butterfly variant an `EeRaCertRequest.additionalParams` selects
+/// (1609.2.1-2022 `AdditionalParams`; 02 §9.4).
+///
+/// The US SCMS profile uses [`ButterflyVariant::Original`] (01 §2.2), which is the
+/// default. The other two are selectable so a scenario can name them, but their
+/// response-encryption key (1609.2.1 §9.3.4.2) has not been read from the standard's
+/// text (02 §15 item 1), so [`response_encryption_key`] refuses them rather than guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize)]
+pub enum ButterflyVariant {
+    /// `original`: separate caterpillar keys and expansion keys for signing (A, ck) and
+    /// encryption (H, ek).
+    #[default]
+    Original,
+    /// `unified`: one caterpillar key and one expansion key for both. UNCONFIRMED.
+    Unified,
+    /// `compactUnified` (CUBK): as unified, response encrypted but not signed. UNCONFIRMED.
+    CompactUnified,
+}
+
+impl ButterflyVariant {
+    /// Whether the response-encryption key derivation is confirmed from the standard.
+    pub const fn is_confirmed(self) -> bool {
+        matches!(self, ButterflyVariant::Original)
+    }
+}
+
+/// The key the ACA encrypts its response to, per variant (1609.2.1 §9.3.4.2).
+///
+/// `original` is `(H, ek)` from `ButterflyParamsOriginal`; required for
+/// [`ButterflyVariant::Original`]. The unified variants return
+/// [`response::ResponseError::Unconfirmed`].
+pub fn response_encryption_key(
+    variant: ButterflyVariant,
+    original: Option<(&Point, &ExpansionKey)>,
+    i: u32,
+    j: u32,
+) -> core::result::Result<Point, response::ResponseError> {
+    match variant {
+        ButterflyVariant::Original => {
+            let (h, ek) = original.ok_or(response::ResponseError::MissingOriginalParams)?;
+            Ok(ra_cocoon_encryption_key(h, ek, i, j))
+        }
+        v => Err(response::ResponseError::Unconfirmed(v)),
+    }
+}
+
+/// The encrypted layer of `AcaEeCertResponsePrivateSpdu`, original variant
+/// (1609.2.1-2022 `Ieee1609Dot2Dot1Protocol` notes on that type; 02 §8, §9.4).
+///
+/// The ACA wraps a fresh AES-128 data key with ECIES to the cocoon encryption key `J_ij`
+/// and encrypts the plaintext (the COER inner `Ieee1609Dot2Data`) with AES-128-CCM; the
+/// result is an `Ieee1609Dot2Data` of content `encryptedData` with one `rekRecipInfo`.
+/// The outer ACA signature is the certificate layer's job and is not here.
+///
+/// The `RecipientInfo` alternative is `rekRecipInfo` (02 §8.1 table: "response encryption
+/// key", recipientId = HashedId8 of COER `PublicEncryptionKey`, ECIES P1 = SHA-256("")),
+/// because `J_ij` is in no certificate and no signed SPDU. That 1609.2.1 names this
+/// alternative for the butterfly response is read from 1609.2's `RecipientInfo` notes, not
+/// from §9.3.4 itself (UNCONFIRMED, 02 §15).
+pub mod response {
+    use p256::Scalar;
+    use rasn::types::{OctetString, SequenceOf};
+    use v2xw_msg::sec_types::ieee1609_dot2::{
+        EncryptedData, EncryptedDataEncryptionKey, Ieee1609Dot2Content, Ieee1609Dot2Data,
+        One28BitCcmCiphertext, PKRecipientInfo, RecipientInfo, SequenceOfRecipientInfo,
+        SymmetricCiphertext,
+    };
+    use v2xw_msg::sec_types::ieee1609_dot2_base_types::{
+        BasePublicEncryptionKey, EccP256CurvePoint, EciesP256EncryptedKey, Opaque,
+        PublicEncryptionKey, SymmAlgorithm, Uint8,
+    };
+
+    use super::ButterflyVariant;
+    use crate::ec::Point;
+    use crate::{ccm, ecies, hashedid};
+
+    /// Why a response could not be built or opened.
+    #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+    #[non_exhaustive]
+    pub enum ResponseError {
+        /// The variant's response-encryption key is not confirmed from the standard.
+        #[error("butterfly variant {0:?}: the 1609.2.1 §9.3.4.2 response key is UNCONFIRMED")]
+        Unconfirmed(ButterflyVariant),
+        /// The original variant needs `(H, ek)`.
+        #[error("original butterfly variant needs the caterpillar encryption key and ek")]
+        MissingOriginalParams,
+        /// A point could not be encoded or decoded.
+        #[error("curve point: {0}")]
+        Point(&'static str),
+        /// COER encode or decode failed.
+        #[error("COER: {0}")]
+        Coer(String),
+        /// The SPDU is not `encryptedData`.
+        #[error("the response is not an encryptedData Ieee1609Dot2Data")]
+        NotEncrypted,
+        /// No `rekRecipInfo` names this key.
+        #[error("no rekRecipInfo carries the HashedId8 of this cocoon encryption key")]
+        NoRecipient,
+        /// The ciphertext is not AES-128-CCM.
+        #[error("the ciphertext is not aes128ccm")]
+        UnsupportedCipher,
+        /// ECIES failed (wrong key, or a tampered wrap).
+        #[error(transparent)]
+        Ecies(#[from] ecies::EciesError),
+        /// CCM failed (wrong data key, or tampered ciphertext).
+        #[error(transparent)]
+        Ccm(#[from] ccm::CcmError),
+    }
+
+    type R<T> = core::result::Result<T, ResponseError>;
+
+    /// COER `PublicEncryptionKey { aes128Ccm, eciesNistP256(compressed key) }`.
+    pub fn public_encryption_key_coer(key: &Point) -> R<Vec<u8>> {
+        let pek = PublicEncryptionKey::new(
+            SymmAlgorithm::aes128Ccm,
+            BasePublicEncryptionKey::eciesNistP256(
+                key.to_ecc_point()
+                    .map_err(|_| ResponseError::Point("identity"))?,
+            ),
+        );
+        rasn::coer::encode(&pek).map_err(|e| ResponseError::Coer(e.to_string()))
+    }
+
+    /// The `rekRecipInfo.recipientId`: HashedId8 of [`public_encryption_key_coer`].
+    pub fn rek_recipient_id(key: &Point) -> R<[u8; 8]> {
+        Ok(hashedid::id8_bytes(&hashedid::hashed_id8(
+            &public_encryption_key_coer(key)?,
+        )))
+    }
+
+    fn point_of(p: &EccP256CurvePoint) -> R<Point> {
+        let mut sec1 = Vec::with_capacity(65);
+        match p {
+            EccP256CurvePoint::compressed_y_0(x) => {
+                sec1.push(0x02);
+                sec1.extend_from_slice(x);
+            }
+            EccP256CurvePoint::compressed_y_1(x) => {
+                sec1.push(0x03);
+                sec1.extend_from_slice(x);
+            }
+            EccP256CurvePoint::uncompressedP256(u) => {
+                sec1.push(0x04);
+                sec1.extend_from_slice(&u.x);
+                sec1.extend_from_slice(&u.y);
+            }
+            _ => return Err(ResponseError::Point("x-only or fill is not a full point")),
+        }
+        Point::from_sec1(&sec1).map_err(|_| ResponseError::Point("not on P-256"))
+    }
+
+    /// ACA side: encrypt `plaintext` to the cocoon encryption key `recipient` (`J_ij`).
+    ///
+    /// `data_key`, `ephemeral` (ECIES `v`) and `nonce` are the caller's fresh randomness,
+    /// passed in so a run is deterministic and a vector reproducible. Returns the COER
+    /// `Ieee1609Dot2Data` (protocolVersion 3, content `encryptedData`).
+    pub fn aca_encrypt(
+        recipient: &Point,
+        plaintext: &[u8],
+        data_key: &[u8; ccm::KEY_LEN],
+        ephemeral: &Scalar,
+        nonce: &[u8; ccm::NONCE_LEN],
+    ) -> R<Vec<u8>> {
+        let p1 = ecies::p1(ecies::RecipientInfoKind::RekRecipInfo, &[]);
+        let wrap = ecies::encrypt(recipient, data_key, &p1, ephemeral)?;
+        let ct = ccm::encrypt(data_key, nonce, plaintext)?;
+        let rid = rek_recipient_id(recipient)?;
+        let enc_key = EncryptedDataEncryptionKey::eciesNistP256(EciesP256EncryptedKey::new(
+            wrap.v
+                .to_ecc_point()
+                .map_err(|_| ResponseError::Point("identity"))?,
+            OctetString::from_slice(&wrap.c),
+            OctetString::from_slice(&wrap.t),
+        ));
+        let recipients =
+            SequenceOfRecipientInfo(SequenceOf::from(vec![RecipientInfo::rekRecipInfo(
+                PKRecipientInfo::new(hashedid::id8_from_bytes(rid), enc_key),
+            )]));
+        let ciphertext = SymmetricCiphertext::aes128ccm(One28BitCcmCiphertext::new(
+            OctetString::from_slice(nonce),
+            Opaque(OctetString::from(ct)),
+        ));
+        let data = Ieee1609Dot2Data::new(
+            Uint8(3),
+            Ieee1609Dot2Content::encryptedData(EncryptedData::new(recipients, ciphertext)),
+        );
+        rasn::coer::encode(&data).map_err(|e| ResponseError::Coer(e.to_string()))
+    }
+
+    /// EE side: open an `encryptedData` response with the cocoon encryption private key
+    /// `h_ij` (1609.2.1 §9.3.4.1). Finds the `rekRecipInfo` whose recipientId is the
+    /// HashedId8 of `h_ij·G`, unwraps the data key with ECIES (P1 = SHA-256("")), then
+    /// AES-128-CCM-decrypts. Returns the plaintext (the inner COER `Ieee1609Dot2Data`).
+    pub fn ee_decrypt(private: &Scalar, spdu: &[u8]) -> R<Vec<u8>> {
+        let data: Ieee1609Dot2Data =
+            rasn::coer::decode(spdu).map_err(|e| ResponseError::Coer(e.to_string()))?;
+        let Ieee1609Dot2Content::encryptedData(enc) = data.content else {
+            return Err(ResponseError::NotEncrypted);
+        };
+        let want = rek_recipient_id(&Point::mul_base(private))?;
+        let pk = enc
+            .recipients
+            .0
+            .iter()
+            .find_map(|r| match r {
+                RecipientInfo::rekRecipInfo(pk)
+                    if hashedid::id8_bytes(&pk.recipient_id) == want =>
+                {
+                    Some(pk)
+                }
+                _ => None,
+            })
+            .ok_or(ResponseError::NoRecipient)?;
+        let EncryptedDataEncryptionKey::eciesNistP256(k) = &pk.enc_key else {
+            return Err(ResponseError::UnsupportedCipher);
+        };
+        let wrapped = ecies::EciesP256EncryptedKey {
+            v: point_of(&k.v)?,
+            c: k.c[..]
+                .try_into()
+                .map_err(|_| ResponseError::Coer("ECIES c width".into()))?,
+            t: k.t[..]
+                .try_into()
+                .map_err(|_| ResponseError::Coer("ECIES t width".into()))?,
+        };
+        let p1 = ecies::p1(ecies::RecipientInfoKind::RekRecipInfo, &[]);
+        let data_key = ecies::decrypt(private, &wrapped, &p1)?;
+        let SymmetricCiphertext::aes128ccm(c) = &enc.ciphertext else {
+            return Err(ResponseError::UnsupportedCipher);
+        };
+        let nonce: [u8; ccm::NONCE_LEN] = c.nonce[..]
+            .try_into()
+            .map_err(|_| ResponseError::Coer("CCM nonce width".into()))?;
+        Ok(ccm::decrypt(&data_key, &nonce, &c.ccm_ciphertext.0)?)
+    }
 }
 
 #[cfg(test)]

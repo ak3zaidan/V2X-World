@@ -443,6 +443,100 @@ pub fn crl_contains(
     entries.iter().any(|e| e.matches(cert_i, cert_j, cert_lv))
 }
 
+// --------------------------------------------------------------------------------------
+// Group linkage (02 §10.2; CAMP `glv.py`/`glv.txt`; 1609.2 `GroupLinkageValue`)
+// --------------------------------------------------------------------------------------
+
+/// Bytes of a group linkage value's `jValue` field and of each half of the encrypted
+/// index input.
+pub const GROUP_J_BYTES: usize = 4;
+
+/// Whether group linkage is on when a scenario does not say (00 §2 `options.group_linkage`:
+/// "specified; no deployment evidence", default off). Nothing in the engine builds a
+/// [`GroupLinkageContext`] unless that option is set.
+pub const GROUP_LINKAGE_DEFAULT: bool = false;
+
+/// `gplv_x(i, j)`: the group pre-linkage value. CAMP `glv.py` evolves and expands group
+/// seeds with the **same** functions as individual seeds, `j` being the 32-bit group
+/// value; so this is [`pre_linkage_value`] on a group seed, named for the reader.
+pub fn group_pre_linkage_value(la_id: LaId, gs_i: LinkageSeed, j: u32) -> PreLinkageValue {
+    pre_linkage_value(la_id, gs_i, j)
+}
+
+/// The CAMP encrypted index `ei = AES_ik(input) ⊕ input` over the 16-byte block
+/// `k ‖ j ‖ 0⁶⁴` (both 32-bit big-endian).
+///
+/// `glv.txt` labels the input "j ‖ k ‖ 0^64" but prints `k` first (its `k = 5A6709EA`
+/// leads the printed block in both vectors); this follows the printed bytes, as the
+/// corpus note and the oracle do. How `ei` maps to the certificate's 4-byte `jValue` is
+/// UNCONFIRMED (02 §10.2), so this function stops at the 16-byte value.
+pub fn encrypted_index(ik: &[u8; aes128::KEY], k: u32, j: u32) -> [u8; aes128::BLOCK] {
+    let mut block = [0u8; aes128::BLOCK];
+    block[..GROUP_J_BYTES].copy_from_slice(&k.to_be_bytes());
+    block[GROUP_J_BYTES..2 * GROUP_J_BYTES].copy_from_slice(&j.to_be_bytes());
+    aes128::davies_meyer(ik, &block)
+}
+
+/// A certificate's `GroupLinkageValue { jValue OCTET STRING (SIZE(4)), value (SIZE(9)) }`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GroupLinkageValue {
+    /// The 4-byte `jValue` as the issuer chose it (its derivation is UNCONFIRMED).
+    pub j_value: [u8; GROUP_J_BYTES],
+    /// `glv = gplv_1 ⊕ gplv_2`.
+    pub value: LinkageValue,
+}
+
+impl GroupLinkageValue {
+    /// The ASN.1 value for `LinkageData.group-linkage-value`.
+    pub fn to_asn1(self) -> v2xw_msg::sec_types::ieee1609_dot2_base_types::GroupLinkageValue {
+        v2xw_msg::sec_types::ieee1609_dot2_base_types::GroupLinkageValue::new(
+            rasn::types::OctetString::from_slice(&self.j_value),
+            rasn::types::OctetString::from_slice(self.value.as_bytes()),
+        )
+    }
+}
+
+/// One group's linkage material, both LAs' group seeds together (the reference-engine
+/// colocation [`DeviceLinkageContext`] documents applies here too), plus the CAMP
+/// encrypted-index key `ik`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupLinkageContext {
+    /// LA1's identifier.
+    pub la_id1: LaId,
+    /// LA2's identifier.
+    pub la_id2: LaId,
+    /// LA1's initial group seed `gs_1(0)`.
+    pub gs1_0: LinkageSeed,
+    /// LA2's initial group seed `gs_2(0)`.
+    pub gs2_0: LinkageSeed,
+    /// The encrypted-index key `ik`.
+    pub ik: [u8; aes128::KEY],
+}
+
+impl GroupLinkageContext {
+    /// `gs_x(i)` for both LAs: the same hash chain as [`linkage_seed_at`].
+    pub fn group_seeds_at(&self, i: u32) -> (LinkageSeed, LinkageSeed) {
+        (
+            linkage_seed_at(self.la_id1, self.gs1_0, i),
+            linkage_seed_at(self.la_id2, self.gs2_0, i),
+        )
+    }
+
+    /// `glv(i, j) = gplv_1(i, j) ⊕ gplv_2(i, j)`.
+    pub fn group_linkage_value_for(&self, i: u32, j: u32) -> LinkageValue {
+        let (g1, g2) = self.group_seeds_at(i);
+        linkage_value(
+            group_pre_linkage_value(self.la_id1, g1, j),
+            group_pre_linkage_value(self.la_id2, g2, j),
+        )
+    }
+
+    /// The encrypted index for member index `k` and group value `j`.
+    pub fn encrypted_index(&self, k: u32, j: u32) -> [u8; aes128::BLOCK] {
+        encrypted_index(&self.ik, k, j)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
