@@ -443,28 +443,24 @@ pub enum PrimitiveOp {
 impl PrimitiveOp {
     /// The modelled duration of this operation on `profile`.
     ///
-    /// Two operations are charged as zero, both deliberately and both stated in the
-    /// primitive descriptors rather than invented here:
-    ///
-    /// * a **store lookup** is memory work whose cost belongs to the node model, not to a
-    ///   cryptographic cost table;
-    /// * a **hash with no published anchor** — which is every profile, since 04-models.md
-    ///   §9.4 tabulates no SHA-256 figure — because hashing a V2X-sized message is
-    ///   negligible beside the point multiplication in the same plan. The
-    ///   `primitive/sha-256` descriptor's own note says so, and a plan that returned
-    ///   `None` for its total because of it would make every verification cost
-    ///   unknowable.
-    ///
-    /// A **signature verification** with no anchor is `None`, not zero: that one is the
-    /// dominant term, and a plan missing it is not a plan whose cost is nearly right.
+    /// * A **store lookup** is charged zero: it is memory work whose cost belongs to the
+    ///   node model, not to a cryptographic cost table.
+    /// * A **hash** is charged per compression call for its actual input length
+    ///   ([`crate::primitive::PrimitiveDescriptor::cost_for_len`]). With no figure on the
+    ///   profile it is `None`, not zero: WP-C4 removed the free hash, because a plan that
+    ///   hashes a certificate chain does real work and a profile that cannot price it
+    ///   cannot price the plan.
+    /// * A **signature verification** or **reconstruction** with no anchor is `None` too.
     pub fn cost(&self, catalogue: &PrimitiveCatalogue, profile: &str) -> Option<Duration> {
         match self {
             PrimitiveOp::StoreLookup { .. } => Some(Duration::ZERO),
-            PrimitiveOp::Hash { primitive, .. } => Some(
-                catalogue
-                    .get(*primitive)
-                    .and_then(|d| d.cost_duration(PrimitiveOpKind::Verify, profile, catalogue))
-                    .unwrap_or(Duration::ZERO),
+            PrimitiveOp::Hash {
+                primitive, bytes, ..
+            } => catalogue.get(*primitive)?.cost_for_len(
+                PrimitiveOpKind::Verify,
+                profile,
+                *bytes,
+                catalogue,
             ),
             PrimitiveOp::VerifySignature { primitive, .. }
             | PrimitiveOp::ReconstructImplicit { primitive } => catalogue

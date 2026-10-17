@@ -1841,11 +1841,16 @@ mod tests {
         );
         assert_eq!(a, Some(Duration::from_micros(15_300)));
         assert_eq!(a, b);
-        // ECQV resolves through its declared proxy in both modes.
+        // ECQV is priced by its recipe (WP-C4), the same figure in both modes, and it is
+        // no longer the ECDSA verify figure: one variable-base multiplication (Emill's
+        // ECDH, 906k cycles at 64 MHz) plus two SHA-256 calls of two blocks each.
+        let ecqv = real.cost(PrimitiveId::ECQV_P256, PrimitiveOpKind::Verify, profile);
         assert_eq!(
-            real.cost(PrimitiveId::ECQV_P256, PrimitiveOpKind::Verify, profile),
-            a
+            ecqv,
+            modeled.cost(PrimitiveId::ECQV_P256, PrimitiveOpKind::Verify, profile)
         );
+        assert_ne!(ecqv, a);
+        assert!(ecqv.is_some_and(|d| d > Duration::from_micros(14_156)));
     }
 
     /// SEC 4 §3.4-3.5, end to end: the subject's derived private key and the public key a

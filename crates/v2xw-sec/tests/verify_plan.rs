@@ -165,14 +165,28 @@ fn a_known_digest_signer_plans_two_hashes_and_one_verification() {
     ));
 
     // The cost is dominated by the one point multiplication, which is the number a
-    // verification-rate study is actually about.
+    // verification-rate study is actually about — but the two hashes are not free
+    // (WP-C4): each costs its FIPS 180-4 compression calls at the nRF52840's published
+    // software SHA-256 figure, 4,741.3 µs for one 4,123-byte message (65 calls).
     let cost = plan
         .cost(PrimitiveCatalogue::standard(), profiles::CORTEX_M4_NRF52840)
-        .expect("the profile has an ECDSA anchor");
+        .expect("the profile has an ECDSA and a SHA-256 anchor");
+    let blocks: u64 = plan
+        .ops
+        .iter()
+        .filter_map(|o| match o {
+            // Written out here rather than taken from the catalogue: 0x80, the 8-byte
+            // length, rounded up to whole 64-byte blocks.
+            PrimitiveOp::Hash { bytes, .. } => Some((u64::from(*bytes) + 9).div_ceil(64)),
+            _ => None,
+        })
+        .sum();
+    assert!(blocks >= 2, "two non-empty hashes");
+    let hashing_ns = (4_741_300 * blocks + 32) / 65;
     assert_eq!(
         cost,
-        v2xw_core::time::Duration::from_micros(15_300),
-        "one ECDSA P-256 verification on a Cortex-M4 at 64 MHz"
+        v2xw_core::time::Duration::from_nanos(15_300_000 + hashing_ns),
+        "one ECDSA P-256 verification on a Cortex-M4 at 64 MHz plus {blocks} SHA-256 calls"
     );
     println!(
         "MEASURED plan: {} ops, {} µs on {}",
