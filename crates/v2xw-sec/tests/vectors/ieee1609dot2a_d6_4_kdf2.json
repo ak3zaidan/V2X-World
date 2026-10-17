@@ -1,0 +1,69 @@
+{
+ "corpus": "ieee1609dot2a-d6.4-kdf2",
+ "source": {
+  "title": "IEEE Std 1609.2a-2017, Amendment 1 to IEEE Std 1609.2-2016, Annex D.6 \"Cryptographic test vectors\"",
+  "id": "S4 (docs/design/scms-real/02-cryptography-and-formats.md section 0)",
+  "url": "https://docbox.etsi.org/STF/Archive/STF538_TC_ITS/STFworkarea/libaries/IEEE_Std_1609_2a-2017.pdf",
+  "sha256": "aae52bc1ab7101a1993c2282e157086cfefa1e44146ee93e61104c3ece19bc48",
+  "licence": "IEEE copyright, no redistribution licence: values transcribed with citations, document not vendored",
+  "transcribed": "2026-10-16",
+  "method": "tools/oracle/transcribe/transcribe.py from a text extraction of the PDF; every value cross-checked against the C-array repeat printed beside it in the standard"
+ },
+ "parameters": "KDF2 (IEEE 1363a section 13.2) with SHA-256 = ANSI X9.63 KDF: K = SHA-256(ss || 00000001 || kdp) || SHA-256(ss || 00000002 || kdp) || ..., truncated to dl",
+ "note": "The D.6.4 output lines are not recoverable from the PDF text; out.key comes from the NIST CAVP X9.63 file entry with identical inputs (see out_cite).",
+ "vectors": [
+  {
+   "id": "D.6.4#1",
+   "cite": "IEEE 1609.2a-2017 D.6.4 Test Vector #1, printed page(s) 120",
+   "in": {
+    "ss": "96c05619d56c328ab95fe84b18264b08725b85e33fd34f08",
+    "kdp": "",
+    "dl": 16
+   },
+   "out": {
+    "key": "443024c3dae66b95e6f5670601558f71"
+   },
+   "out_cite": "NIST CAVP ansx963_2001.rsp line 231 ([SHA-256] COUNT = 0); equal to CAMP kdf.py line 50 known_key1"
+  },
+  {
+   "id": "D.6.4#2",
+   "cite": "IEEE 1609.2a-2017 D.6.4 Test Vector #2, printed page(s) 121",
+   "in": {
+    "ss": "96f600b73ad6ac5629577eced51743dd2c24c21b1ac83ee4",
+    "kdp": "",
+    "dl": 16
+   },
+   "out": {
+    "key": "b6295162a7804f5667ba9070f82fa522"
+   },
+   "out_cite": "NIST CAVP ansx963_2001.rsp line 236 ([SHA-256] COUNT = 1); equal to CAMP kdf.py line 59 known_key2"
+  },
+  {
+   "id": "D.6.4#3",
+   "cite": "IEEE 1609.2a-2017 D.6.4 Test Vector #3, printed page(s) 121",
+   "in": {
+    "ss": "22518b10e70f2a3f243810ae3254139efbee04aa57c7af7d",
+    "kdp": "75eef81aa3041e33b80971203d2c0c52",
+    "dl": 128
+   },
+   "out": {
+    "key": "c498af77161cc59f2962b9a713e2b215152d139766ce34a776df11866a69bf2e52a13d9c7c6fc878c50c5ea0bc7b00e0da2447cfd874f6cf92f30d0097111485500c90c3af8b487872d04685d14c8d1dc8d7fa08beb0ce0ababc11f0bd496269142d43525a78e5bc79a17f59676a5706dc54d54d4d1f0bd7e386128ec26afc21"
+   },
+   "out_cite": "NIST CAVP ansx963_2001.rsp line 286 ([SHA-256] COUNT = 0); equal to CAMP kdf.py line 68 known_key3"
+  },
+  {
+   "id": "D.6.4#4",
+   "cite": "IEEE 1609.2a-2017 D.6.4 Test Vector #4, printed page(s) 121",
+   "in": {
+    "ss": "7e335afa4b31d772c0635c7b0e06f26fcd781df947d2990a",
+    "kdp": "d65a4812733f8cdbcdfb4b2f4c191d87",
+    "dl": 128
+   },
+   "out": {
+    "key": "c0bd9e38a8f9de14c2acd35b2f3410c6988cf02400543631e0d6a4c1d030365acbf398115e51aaddebdc9590664210f9aa9fed770d4c57edeafa0b8c14f93300865251218c262d63dadc47dfa0e0284826793985137e0a544ec80abf2fdf5ab90bdaea66204012efe34971dc431d625cd9a329b8217cc8fd0d9f02b13f2f6b0b"
+   },
+   "out_cite": "NIST CAVP ansx963_2001.rsp line 291 ([SHA-256] COUNT = 1); equal to CAMP kdf.py line 77 known_key4",
+   "dl_note": "the dl line is not recoverable from the PDF text; dl taken from the NIST entry (equal to CAMP kdf.txt)"
+  }
+ ]
+}

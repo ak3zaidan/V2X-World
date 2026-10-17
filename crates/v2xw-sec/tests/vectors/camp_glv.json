@@ -1,0 +1,75 @@
+{
+ "corpus": "camp-group-linkage-values",
+ "source": {
+  "title": "CAMP SCMS crypto test vectors, glv.txt",
+  "id": "S6",
+  "url": "https://github.com/conz27/crypto-test-vectors/blob/dd5014e6c3136895744f1fe73734fa3592f37bd4/glv.txt",
+  "commit": "dd5014e6c3136895744f1fe73734fa3592f37bd4",
+  "sha256": "c22e120d5b7f28403472127af931248b956b8f4feb83d8f12e48e964c46cec75",
+  "licence": "none (repository has no licence file): values transcribed with citations, files not vendored",
+  "transcribed": "2026-10-16"
+ },
+ "note": "glv.txt labels the encrypted-indices input \"j || k || 0^64\", but the printed bytes are k || j || 0^64 (k = 5A6709EA first). out.ei_in is transcribed as printed; the oracle uses the printed byte order.",
+ "vectors": [
+  {
+   "id": "glv.txt i=0",
+   "cite": "CAMP glv.txt lines 11-20 (LA ids, k, ik), xt lines 27-93",
+   "in": {
+    "la_id1": "8e09",
+    "la_id2": "59ce",
+    "gs1_0": "6b71a7eb5755f16e89981d2189a6daea",
+    "gs2_0": "cc4db977f595ad233f0f4e65408d9a9c",
+    "i": 0,
+    "j": 1212214562,
+    "k": 1516702186,
+    "ik": "1502d9ab6786bf68fba9f210373bf221"
+   },
+   "out": {
+    "aes_in1": "8e094840ed2200000000000000000000",
+    "aes_out1": "b767579376159697e6140c52140896b0",
+    "gplv1": "396e1fd39b379697e6",
+    "aes_in2": "59ce4840ed2200000000000000000000",
+    "aes_out2": "0677aafae74faa09ea47463fcb944fb2",
+    "gplv2": "5fb9e2ba0a6daa09ea",
+    "glv": "66d7fd69915a3c9e0c",
+    "ei_in": "5a6709ea4840ed220000000000000000",
+    "ei_aes_out": "504260b3eb3677b1f43f825d0790719b",
+    "ei": "0a256959a3769a93f43f825d0790719b",
+    "gs1_i": "6b71a7eb5755f16e89981d2189a6daea",
+    "gs2_i": "cc4db977f595ad233f0f4e65408d9a9c"
+   }
+  },
+  {
+   "id": "glv.txt i=1",
+   "cite": "CAMP glv.txt lines 11-20 (LA ids, k, ik), xt lines 103-193",
+   "in": {
+    "la_id1": "8e09",
+    "la_id2": "59ce",
+    "gs1_0": "6b71a7eb5755f16e89981d2189a6daea",
+    "gs2_0": "cc4db977f595ad233f0f4e65408d9a9c",
+    "i": 1,
+    "j": 1418686487,
+    "k": 1516702186,
+    "ik": "1502d9ab6786bf68fba9f210373bf221"
+   },
+   "out": {
+    "sha_in1": "8e096b71a7eb5755f16e89981d2189a6daea0000000000000000000000000000",
+    "sha_out1": "38722c4559b4c3e96d12032b0e056a76117a40cb7f378c3fdc5f7119bb3f64d1",
+    "aes_in1": "8e09548f701700000000000000000000",
+    "aes_out1": "26d20e03d0f3e2e486e08151dfe0c756",
+    "gplv1": "a8db5a8ca0e4e2e486",
+    "sha_in2": "59cecc4db977f595ad233f0f4e65408d9a9c0000000000000000000000000000",
+    "sha_out2": "d0cbd39f60e0e5728ebf6bdfe997677c30929936d7d9df2e0c687d29d3d02610",
+    "aes_in2": "59ce548f701700000000000000000000",
+    "aes_out2": "351021f8da15f84bb1ebad0026a26267",
+    "gplv2": "6cde7577aa02f84bb1",
+    "glv": "c4052ffb0ae61aaf37",
+    "ei_in": "5a6709ea548f70170000000000000000",
+    "ei_aes_out": "18f9e5a3b817a08c80b6acd7e431cbb3",
+    "ei": "429eec49ec98d09b80b6acd7e431cbb3",
+    "gs1_i": "38722c4559b4c3e96d12032b0e056a76",
+    "gs2_i": "d0cbd39f60e0e5728ebf6bdfe997677c"
+   }
+  }
+ ]
+}

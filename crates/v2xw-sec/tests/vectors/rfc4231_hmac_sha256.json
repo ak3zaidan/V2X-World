@@ -1,0 +1,97 @@
+{
+ "corpus": "rfc4231-hmac-sha256",
+ "source": {
+  "title": "RFC 4231, Identifiers and Test Vectors for HMAC-SHA-224, HMAC-SHA-256, HMAC-SHA-384, and HMAC-SHA-512",
+  "url": "https://www.rfc-editor.org/rfc/rfc4231.txt",
+  "sha256": "72178527ce93500e730bc8eb182b857e583096d652b64ece0879c52ba1df973b",
+  "licence": "IETF Trust; test values transcribed with citation",
+  "transcribed": "2026-10-16"
+ },
+ "note": "Test Case 5 publishes only the output truncated to 128 bits.",
+ "vectors": [
+  {
+   "id": "RFC4231-TC1",
+   "cite": "RFC 4231 section 4.2 Test Case 1, lines 177-183",
+   "in": {
+    "key": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+    "data": "4869205468657265"
+   },
+   "out": {
+    "hmac_sha256": "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+   },
+   "truncated_bits": null
+  },
+  {
+   "id": "RFC4231-TC2",
+   "cite": "RFC 4231 section 4.3 Test Case 2, lines 197-203",
+   "in": {
+    "key": "4a656665",
+    "data": "7768617420646f2079612077616e7420666f72206e6f7468696e673f"
+   },
+   "out": {
+    "hmac_sha256": "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+   },
+   "truncated_bits": null
+  },
+  {
+   "id": "RFC4231-TC3",
+   "cite": "RFC 4231 section 4.4 Test Case 3, lines 236-245",
+   "in": {
+    "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "data": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+   },
+   "out": {
+    "hmac_sha256": "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe"
+   },
+   "truncated_bits": null
+  },
+  {
+   "id": "RFC4231-TC4",
+   "cite": "RFC 4231 section 4.5 Test Case 4, lines 260-269",
+   "in": {
+    "key": "0102030405060708090a0b0c0d0e0f10111213141516171819",
+    "data": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+   },
+   "out": {
+    "hmac_sha256": "82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b"
+   },
+   "truncated_bits": null
+  },
+  {
+   "id": "RFC4231-TC5",
+   "cite": "RFC 4231 section 4.6 Test Case 5, lines 291-297",
+   "in": {
+    "key": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+    "data": "546573742057697468205472756e636174696f6e"
+   },
+   "out": {
+    "hmac_sha256": "a3b6167473100ee06e0c796c2955552b"
+   },
+   "truncated_bits": 128
+  },
+  {
+   "id": "RFC4231-TC6",
+   "cite": "RFC 4231 section 4.7 Test Case 6, lines 306-322",
+   "in": {
+    "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "data": "54657374205573696e67204c6172676572205468616e20426c6f636b2d53697a65204b6579202d2048617368204b6579204669727374"
+   },
+   "out": {
+    "hmac_sha256": "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+   },
+   "truncated_bits": null
+  },
+  {
+   "id": "RFC4231-TC7",
+   "cite": "RFC 4231 section 4.8 Test Case 7, lines 348-370",
+   "in": {
+    "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "data": "5468697320697320612074657374207573696e672061206c6172676572207468616e20626c6f636b2d73697a65206b657920616e642061206c6172676572207468616e20626c6f636b2d73697a6520646174612e20546865206b6579206e6565647320746f20626520686173686564206265666f7265206265696e6720757365642062792074686520484d414320616c676f726974686d2e"
+   },
+   "out": {
+    "hmac_sha256": "9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2"
+   },
+   "truncated_bits": null
+  }
+ ]
+}

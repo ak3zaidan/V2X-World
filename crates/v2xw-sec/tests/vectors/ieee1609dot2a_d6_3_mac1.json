@@ -1,0 +1,92 @@
+{
+ "corpus": "ieee1609dot2a-d6.3-mac1",
+ "source": {
+  "title": "IEEE Std 1609.2a-2017, Amendment 1 to IEEE Std 1609.2-2016, Annex D.6 \"Cryptographic test vectors\"",
+  "id": "S4 (docs/design/scms-real/02-cryptography-and-formats.md section 0)",
+  "url": "https://docbox.etsi.org/STF/Archive/STF538_TC_ITS/STFworkarea/libaries/IEEE_Std_1609_2a-2017.pdf",
+  "sha256": "aae52bc1ab7101a1993c2282e157086cfefa1e44146ee93e61104c3ece19bc48",
+  "licence": "IEEE copyright, no redistribution licence: values transcribed with citations, document not vendored",
+  "transcribed": "2026-10-16",
+  "method": "tools/oracle/transcribe/transcribe.py from a text extraction of the PDF; every value cross-checked against the C-array repeat printed beside it in the standard"
+ },
+ "parameters": "MAC1 with SHA-256: HMAC-SHA-256 truncated to the leftmost 128 bits (the RFC 4231 inputs)",
+ "vectors": [
+  {
+   "id": "D.6.3#1",
+   "cite": "IEEE 1609.2a-2017 D.6.3 Test Vector #1, printed page(s) 114-115",
+   "in": {
+    "key": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+    "message": "4869205468657265"
+   },
+   "out": {
+    "tag": "b0344c61d8db38535ca8afceaf0bf12b"
+   }
+  },
+  {
+   "id": "D.6.3#2",
+   "cite": "IEEE 1609.2a-2017 D.6.3 Test Vector #2, printed page(s) 115",
+   "in": {
+    "key": "4a656665",
+    "message": "7768617420646f2079612077616e7420666f72206e6f7468696e673f"
+   },
+   "out": {
+    "tag": "5bdcc146bf60754e6a042426089575c7"
+   }
+  },
+  {
+   "id": "D.6.3#3",
+   "cite": "IEEE 1609.2a-2017 D.6.3 Test Vector #3, printed page(s) 115-116",
+   "in": {
+    "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "message": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+   },
+   "out": {
+    "tag": "773ea91e36800e46854db8ebd09181a7"
+   }
+  },
+  {
+   "id": "D.6.3#4",
+   "cite": "IEEE 1609.2a-2017 D.6.3 Test Vector #4, printed page(s) 116-117",
+   "in": {
+    "key": "0102030405060708090a0b0c0d0e0f10111213141516171819",
+    "message": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+   },
+   "out": {
+    "tag": "82558a389a443c0ea4cc819899f2083a"
+   }
+  },
+  {
+   "id": "D.6.3#5",
+   "cite": "IEEE 1609.2a-2017 D.6.3 Test Vector #5, printed page(s) 117",
+   "in": {
+    "key": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+    "message": "546573742057697468205472756e636174696f6e"
+   },
+   "out": {
+    "tag": "a3b6167473100ee06e0c796c2955552b"
+   }
+  },
+  {
+   "id": "D.6.3#6",
+   "cite": "IEEE 1609.2a-2017 D.6.3 Test Vector #6, printed page(s) 118-119",
+   "in": {
+    "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "message": "54657374205573696e67204c6172676572205468616e20426c6f636b2d53697a65204b6579202d2048617368204b6579204669727374"
+   },
+   "out": {
+    "tag": "60e431591ee0b67f0d8a26aacbf5b77f"
+   }
+  },
+  {
+   "id": "D.6.3#7",
+   "cite": "IEEE 1609.2a-2017 D.6.3 Test Vector #7, printed page(s) 119-120",
+   "in": {
+    "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "message": "5468697320697320612074657374207573696e672061206c6172676572207468616e20626c6f636b2d73697a65206b657920616e642061206c6172676572207468616e20626c6f636b2d73697a6520646174612e20546865206b6579206e6565647320746f20626520686173686564206265666f7265206265696e6720757365642062792074686520484d414320616c676f726974686d2e"
+   },
+   "out": {
+    "tag": "9b09ffa71b942fcb27635fbcd5b0e944"
+   }
+  }
+ ]
+}

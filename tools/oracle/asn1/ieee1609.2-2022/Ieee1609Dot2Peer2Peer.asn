@@ -1,0 +1,59 @@
+--***************************************************************************--
+--           IEEE Std 1609.2: Peer-to-Peer Distribution Data Types           --
+--***************************************************************************--
+
+/**
+ * @note Section references in this file are to clauses in IEEE Std
+ * 1609.2 unless indicated otherwise. Full forms of acronyms and
+ * abbreviations used in this file are specified in 3.2.
+ */
+
+Ieee1609Dot2Peer2Peer {iso(1) identified-organization(3) ieee(111)
+  standards-association-numbered-series-standards(2) wave-stds(1609) dot2(2)
+  management(2) peer-to-peer(1) major-version-2(2) minor-version-3(3)}
+
+DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+
+IMPORTS
+  Certificate
+FROM Ieee1609Dot2 {iso(1) identified-organization(3) ieee(111)
+  standards-association-numbered-series-standards(2) wave-stds(1609)
+  dot2(2) base(1) schema(1) major-version-2(2) minor-version-6(6)}
+WITH SUCCESSORS
+
+  Uint8
+FROM Ieee1609Dot2BaseTypes {iso(1) identified-organization(3) ieee(111)
+  standards-association-numbered-series-standards(2) wave-stds(1609) dot2(2)
+  base(1) base-types(2) major-version-2(2) minor-version-4(4)}
+WITH SUCCESSORS
+;
+
+/**
+ * @brief The fields in this structure have the following meaning:
+ *
+ * @param version: is the version number of this structure. For this version
+ * of this standard it is 1.
+ *
+ * @param content: contains the following:
+ *   - The choice caCerts is indicated.
+ *   - The caCerts field contains an array of certificates, such that: 
+ *     - Each certificate is issued by the next certificate in the array.
+ *     - The first certificate in the array is the one indicated by the 
+ * p2pcdLearningRequest value mci to which the response message is responding
+ * (see 8.4.2).
+ *     - The final certificate in the array was issued by a root CA.
+ */
+Ieee1609dot2Peer2PeerPDU ::= SEQUENCE {
+  version Uint8(1),
+  content CHOICE {
+    caCerts CaCertP2pPDU,
+    ...
+  }
+}
+
+/**
+ * @brief This type is used for clarity of definitions.
+ */
+CaCertP2pPDU ::= SEQUENCE OF Certificate
+
+END
