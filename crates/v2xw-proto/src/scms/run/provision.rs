@@ -225,7 +225,7 @@ impl ScmsState {
             .clone()?;
         let ra_key = pki.ra.enc_public()?;
         let t = self.time32(at);
-        let first = self.time32(self.params.period_start(req.start_i));
+        let first = self.params.period_start_time32(req.start_i);
         let p = pdu::ee_ra_cert_request(
             t,
             &req.signing_public,
@@ -436,7 +436,7 @@ impl ScmsState {
                                 cocoon_signing: b,
                                 cocoon_encryption: *jk,
                                 plv: [e1.clone(), e2.clone()],
-                                valid_from: self.time32(self.params.period_start(i)),
+                                valid_from: self.params.period_start_time32(i),
                                 dummy_lv: dummy,
                             };
                             pdu_prov::ra_aca_cert_request_spdu(pki, &x).ok()

@@ -566,6 +566,9 @@ pub struct LifecycleParams {
     pub view_interval: Duration,
 }
 
+/// The US i-period: one week, 10,080 minutes [CAMP-EE §2.1.5.3.2; SMP §2.1.17 Table 2].
+pub const US_I_PERIOD_S: u64 = 7 * 86_400;
+
 fn secs(v: f64) -> Duration {
     Duration::from_nanos((v * 1e9).round().max(0.0) as u64)
 }
@@ -654,6 +657,19 @@ impl LifecycleParams {
                 }
             }
         }
+        // The deployment's clock (gap rows 4 and 43; G8): every `Time32` a PDU carries
+        // is derived from the scenario's own `time.t0`, and on the real weekly grid the
+        // i-period counts from the US epoch, 2015-01-06 04:00 EST (03 §1 fact 4), so a
+        // run starting 2026-10-16 provisions i = 614. A compressed grid (`i_period_s`
+        // other than one week) keeps i-period 0 at the run's start: its numbers are not
+        // the deployment's and say so (WP-D2 adds the `calendar: compressed` flag).
+        if let Ok(wall) = v2xw_core::time::WallClock::parse_rfc3339(&scenario.time.t0) {
+            p.scms.pdu.t0_unix_s = wall.t0_unix_s();
+        }
+        if p.scms.i_period == v2xw_core::time::Duration::from_secs(US_I_PERIOD_S) {
+            p.scms.calendar_epoch_unix_s =
+                Some(v2xw_proto::scms::governance::US_IPERIOD_EPOCH_UNIX_S);
+        }
         if p.scms.cert_lifetime < p.scms.i_period {
             return Err(conflict(
                 "security.protocol.params.cert_lifetime_s",
@@ -669,16 +685,13 @@ impl LifecycleParams {
     /// The i-period `t` falls in.
     #[must_use]
     pub fn period_at(&self, t: SimTime) -> u32 {
-        let since = t.saturating_sub(self.scms.epoch);
-        u32::try_from(since / self.scms.i_period.as_nanos().max(1)).unwrap_or(u32::MAX)
+        self.scms.period_at(t)
     }
 
     /// The instant i-period `i` begins: the inverse of [`LifecycleParams::period_at`].
     #[must_use]
     pub fn period_start(&self, i: u32) -> SimTime {
-        self.scms
-            .epoch
-            .saturating_add(u64::from(i).saturating_mul(self.scms.i_period.as_nanos()))
+        self.scms.period_start(i)
     }
 
     /// When a device whose pool reaches `last_period` asks for its next batch: the start
@@ -1739,6 +1752,14 @@ impl Phase2 {
     #[must_use]
     pub fn params(&self) -> &LifecycleParams {
         &self.params
+    }
+
+    /// The SCMS deployment the run drives (read-only): its components' state, every
+    /// emitted SPDU and refusal, the governance entities and the stage log, for the
+    /// tests and for an attack study that inspects what the backend saw.
+    #[must_use]
+    pub fn scms(&self) -> &ScmsRun {
+        &self.scms
     }
 
     /// The roadside units to create, in declaration order.

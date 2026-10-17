@@ -786,7 +786,19 @@ impl ScmsRun {
             net.connect(a, b, backend);
         }
         let rng = RngRegistry::new(params.master_seed);
-        let gov = Governance::ceremony(&params, &nodes, &rng, t0);
+        // One clock for the whole deployment: the governance artefacts (CTL
+        // `effectiveDate`, component validity) and every PDU's `Time32` count from the
+        // same `t0` (`PduLayer::t0_unix_s`).
+        let gov = Governance::ceremony_with(
+            &params,
+            &nodes,
+            &rng,
+            t0,
+            crate::scms::governance::GovernanceConfig {
+                clock: v2xw_core::time::WallClock::new(params.pdu.t0_unix_s),
+                ..crate::scms::governance::GovernanceConfig::default()
+            },
+        );
         for (a, b) in governance_links(&nodes, &gov) {
             net.connect(a, b, backend);
         }
@@ -798,15 +810,23 @@ impl ScmsRun {
         let committees = build_committees(&params, &nodes, &mut kernel, sizes.envelope_digest());
         let wall = v2xw_core::time::WallClock::new(params.pdu.t0_unix_s);
         let pki = if params.pdu.enabled && params.hybrid.is_none() && params.kem.is_none() {
-            // Component certificates valid from a year before the run starts.
-            let start = wall.time32(t0).unwrap_or(0).saturating_sub(31_556_952);
+            // The Root CA and ICA are the governance entities' own (the root the
+            // genesis CTL approves, WP-B5); the online components are certified under
+            // that ICA from the start of its validity.
+            let refuse = |detail: String| ProtoError::Payload {
+                what: "SCMS PKI",
+                detail,
+            };
+            let anchor = |role: &str| {
+                gov.cert(role)
+                    .zip(gov.signing_key(role))
+                    .ok_or_else(|| refuse(format!("governance holds no {role}")))
+            };
+            let (root, ica) = (anchor("root")?, anchor("ica")?);
+            let start = ica.0.0.to_be_signed.validity_period.start.0.0;
             Some(std::sync::Arc::new(
-                crate::scms::pdu::ScmsPki::new(params.master_seed, start).map_err(|e| {
-                    ProtoError::Payload {
-                        what: "SCMS PKI",
-                        detail: e.to_string(),
-                    }
-                })?,
+                crate::scms::pdu::ScmsPki::under_anchors(params.master_seed, start, root, ica)
+                    .map_err(|e| refuse(e.to_string()))?,
             ))
         } else {
             None

@@ -142,6 +142,14 @@ pub struct ScmsParams {
     /// is what aligns the protocol's week numbering with the scenario's `time.t0`. It is a
     /// supplied instant, never a clock read.
     pub epoch: SimTime,
+    /// The real US calendar: when `Some(e)`, i-period 0 began at UTC Unix second `e`
+    /// (the US epoch is 2015-01-06 04:00 EST = 09:00 UTC, [`crate::scms::governance::US_IPERIOD_EPOCH_UNIX_S`];
+    /// 03 §1 fact 4, [SMP] §2.1.17 Table 2) and `epoch` is ignored: simulated time 0 is
+    /// [`PduLayer::t0_unix_s`], so a run starting 2026-10-16 is in i-period 614 and every
+    /// `iCert`, `iRev` and validity start carries the deployment's real value. `None`
+    /// (the default for library runs and for a compressed calendar) starts i-period 0 at
+    /// `epoch`. An engine run sets it whenever the i-period is the real week.
+    pub calendar_epoch_unix_s: Option<i64>,
     /// The i-period: 10,080 minutes [CAMP-EE §2.1.5.3.2].
     pub i_period: Duration,
     /// Certificate lifetime: 10,140 minutes, one hour of overlap [CAMP-EE §2.1.5.3.2].
@@ -450,6 +458,7 @@ impl Default for ScmsParams {
         ScmsParams {
             master_seed: 0,
             epoch: 0,
+            calendar_epoch_unix_s: None,
             i_period: Duration::from_secs(10_080 * 60),
             cert_lifetime: Duration::from_secs(10_140 * 60),
             certs_per_period: 20,
@@ -494,10 +503,72 @@ impl Default for ScmsParams {
 }
 
 impl ScmsParams {
-    /// When i-period `i` begins.
+    /// When i-period `i` begins, in simulated time (0 when it began before the run).
     #[must_use]
-    pub const fn period_start(&self, i: u32) -> SimTime {
-        self.i_period.saturating_mul(i as u64).after(self.epoch)
+    pub fn period_start(&self, i: u32) -> SimTime {
+        self.period_start_of(self.i_period, i)
+    }
+
+    /// The i-period `t` falls in.
+    #[must_use]
+    pub fn period_at(&self, t: SimTime) -> u32 {
+        self.period_at_of(self.i_period, t)
+    }
+
+    /// When period `p` of a grid of `len`-long periods begins (the i-period grid, or an
+    /// application certificate's own): from [`Self::calendar_epoch_unix_s`] on the real
+    /// calendar, else from [`Self::epoch`]; saturates at 0 for a period that began
+    /// before the run.
+    #[must_use]
+    pub fn period_start_of(&self, len: Duration, p: u32) -> SimTime {
+        match self.calendar_epoch_unix_s {
+            Some(e) => {
+                let ns = self.epoch_offset_ns(e) + i128::from(p) * i128::from(len.as_nanos());
+                u64::try_from(ns.max(0)).unwrap_or(u64::MAX)
+            }
+            None => len.saturating_mul(u64::from(p)).after(self.epoch),
+        }
+    }
+
+    /// The period of a `len` grid that `t` falls in (see [`Self::period_start_of`]).
+    #[must_use]
+    pub fn period_at_of(&self, len: Duration, t: SimTime) -> u32 {
+        let len = i128::from(len.as_nanos().max(1));
+        let since = match self.calendar_epoch_unix_s {
+            Some(e) => i128::from(t) - self.epoch_offset_ns(e),
+            None => i128::from(t.saturating_sub(self.epoch)),
+        };
+        u32::try_from((since.max(0)) / len).unwrap_or(u32::MAX)
+    }
+
+    /// The `Time32` at which period `p` of a `len` grid begins: on the real calendar the
+    /// exact TAI instant of the UTC boundary (leap seconds included, so it is the real
+    /// bits even for a period that began before the run); else `time32` of its start.
+    #[must_use]
+    pub fn period_start_time32_of(&self, len: Duration, p: u32) -> u32 {
+        let unix = match self.calendar_epoch_unix_s {
+            Some(e) => e.saturating_add(
+                i64::try_from(u128::from(len.as_nanos()) * u128::from(p) / 1_000_000_000)
+                    .unwrap_or(i64::MAX),
+            ),
+            None => self.pdu.t0_unix_s.saturating_add(
+                i64::try_from(self.period_start_of(len, p) / 1_000_000_000).unwrap_or(i64::MAX),
+            ),
+        };
+        let tai = v2xw_core::time::utc_unix_to_tai_since_1609_epoch(unix);
+        u32::try_from(tai.max(0)).unwrap_or(u32::MAX)
+    }
+
+    /// `Time32` of the start of i-period `i` (see [`Self::period_start_time32_of`]).
+    #[must_use]
+    pub fn period_start_time32(&self, i: u32) -> u32 {
+        self.period_start_time32_of(self.i_period, i)
+    }
+
+    /// Simulated nanoseconds from run start to the calendar epoch `e` (negative: the
+    /// epoch is in the run's past).
+    fn epoch_offset_ns(&self, e: i64) -> i128 {
+        (i128::from(e) - i128::from(self.pdu.t0_unix_s)) * 1_000_000_000
     }
 
     /// The validity window of a certificate issued for i-period `i`.
@@ -507,9 +578,18 @@ impl ScmsParams {
     /// CAMP-EE §2.1.5.3.2 states the two numbers separately, and the reason a device that
     /// rotates at a period boundary always has something valid to rotate to.
     #[must_use]
-    pub const fn validity(&self, i: u32) -> (SimTime, SimTime) {
+    pub fn validity(&self, i: u32) -> (SimTime, SimTime) {
         let from = self.period_start(i);
-        (from, self.cert_lifetime.after(from))
+        let until = match self.calendar_epoch_unix_s {
+            Some(e) => {
+                let ns = self.epoch_offset_ns(e)
+                    + i128::from(i) * i128::from(self.i_period.as_nanos())
+                    + i128::from(self.cert_lifetime.as_nanos());
+                u64::try_from(ns.max(0)).unwrap_or(u64::MAX)
+            }
+            None => self.cert_lifetime.after(from),
+        };
+        (from, until)
     }
 
     /// A deployment whose batching windows are short enough for a test to run through.
