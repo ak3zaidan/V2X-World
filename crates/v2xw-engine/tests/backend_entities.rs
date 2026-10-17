@@ -508,8 +508,8 @@ fn a_hybrid_signature_costs_its_post_quantum_time() {
             .collect();
         (verify, sign)
     };
-    let (_, classical) = run(base("ecdsa-p256"));
-    let (_, hybrid) = run(base("hybrid-falcon512-ecdsa-p256"));
+    let (classical_report, classical) = run(base("ecdsa-p256"));
+    let (hybrid_report, hybrid) = run(base("hybrid-falcon512-ecdsa-p256"));
     let v = records(&classical, "node.verify");
     println!("{} node.verify records; first: {:?}", v.len(), v.first());
     let (cv, cs) = costs(&classical);
@@ -525,12 +525,33 @@ fn a_hybrid_signature_costs_its_post_quantum_time() {
     );
     assert!(!cv.is_empty() && !hv.is_empty(), "nothing was verified");
     // The generic automotive SoC: ECDSA P-256 verify 645 us, Falcon-512 verify 127 us.
-    assert!(cv.iter().all(|&c| c == 645), "{:?}", &cv[..cv.len().min(5)]);
-    assert!(
-        hv.iter().all(|&c| c == 645 + 127),
-        "{:?}",
-        &hv[..hv.len().min(5)]
-    );
+    // WP-C2: a frame whose signer (or CA path) the receiver has not validated yet also
+    // pays for that validation, once (`v2xw_node::rxval::charge`); every other frame costs
+    // the signature alone. The excess over the signature is exactly the validation time
+    // the run reports (each record truncates to whole microseconds).
+    let signature_only = |v: &[u64], base: u64, r: &RunReport, what: &str| {
+        assert!(
+            v.iter().all(|&c| c >= base),
+            "{what}: a frame cost less than its signature: {:?}",
+            &v[..v.len().min(5)]
+        );
+        assert_eq!(v.iter().copied().min(), Some(base), "{what}");
+        let rx = &r.receiver_validation;
+        let misses = v.iter().filter(|&&c| c > base).count() as u64;
+        assert!(
+            misses <= rx.ca_validations + rx.ee_validations,
+            "{what}: {misses} frames paid extra, {} validations",
+            rx.ca_validations + rx.ee_validations
+        );
+        let extra: u64 = v.iter().map(|&c| c - base).sum();
+        assert!(
+            extra.abs_diff(rx.charged_ns / 1_000) <= v.len() as u64,
+            "{what}: {extra} us over the signature, {} ns of validation charged",
+            rx.charged_ns
+        );
+    };
+    signature_only(&cv, 645, &classical_report, "P-256");
+    signature_only(&hv, 645 + 127, &hybrid_report, "hybrid");
     // Signing: 244 us against 244 + 1,625 us. The stamp includes the J2945/1 hand-off
     // jitter, which only adds, so the shortest frame bounds the service time from above
     // and a hybrid frame can never be shorter than its two signatures.

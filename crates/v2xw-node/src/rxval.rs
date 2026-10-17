@@ -368,10 +368,17 @@ impl VerifiedCrl {
     /// `e` (an entry at its own i-period, as the CRL Generator records it) as this CRL
     /// carries it: seeds walked forward to `iRev` and `iMax` kept, or `None` when the
     /// entry is exhausted before `iRev` (pruned, [CAMP122] §5.2.10.2.3) or this is not a
-    /// linkage CRL. `Some(Err(()))` when the CRL should carry it and does not.
+    /// linkage CRL. `Some(Err(()))` when the CRL should carry it and does not, or when the
+    /// entry's period is after `iRev` (no CRL signs an entry from its future).
     pub fn signed_form(&self, e: &CrlLinkageEntry) -> Option<Result<CrlLinkageEntry, ()>> {
         let i_rev = self.i_rev?;
-        if e.i > i_rev || e.i.saturating_add(e.max_forward) < i_rev {
+        // An entry recorded after `iRev` is one this CRL cannot sign: the Generator's
+        // `iRev` is at least every entry's own period. Treating it as pruned let a
+        // relay append fabricated entries at the current period to an older signed CRL.
+        if e.i > i_rev {
+            return Some(Err(()));
+        }
+        if e.i.saturating_add(e.max_forward) < i_rev {
             return None;
         }
         let walk =
