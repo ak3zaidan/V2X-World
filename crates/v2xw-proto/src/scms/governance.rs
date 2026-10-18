@@ -1529,6 +1529,30 @@ impl Governance {
         changed
     }
 
+    /// Takes `from`'s own provider's current hierarchy (its root and every certificate
+    /// it issued) into this view's copy of that peer: after `from`'s root rollover or ICA
+    /// re-key, the peer's chain file must list the re-certified components, or its
+    /// devices could not verify them once the old root leaves the CTL. Returns whether
+    /// the copy changed; the local chain file is then re-signed.
+    pub fn sync_peer_from(&mut self, from: &Governance) -> bool {
+        let label = from.config.provider.clone();
+        let Some(copy) = self.peer_authorities.get(&label) else {
+            return false;
+        };
+        let mut set = from.authorities.clone();
+        set.insert("root", from.home_root().authority.clone());
+        let same = copy.len() == set.len()
+            && set
+                .iter()
+                .all(|(role, a)| copy.get(role).is_some_and(|c| c.cert == a.cert));
+        if same {
+            return false;
+        }
+        self.peer_authorities.insert(label, set);
+        self.sign_local();
+        true
+    }
+
     fn home_root(&self) -> &RootSlot {
         self.roots
             .iter()

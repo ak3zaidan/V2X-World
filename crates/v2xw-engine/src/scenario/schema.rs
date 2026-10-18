@@ -2535,6 +2535,20 @@ pub struct ProviderSpec {
     /// a rogue SCMS; nothing it certifies verifies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_ctl: Option<bool>,
+    /// Its MA's decision mode: `manual-review` (the CV-pilot operator review, the
+    /// default) or `automatic`. Overrides `security.protocol.params.ma_review_s` for
+    /// this provider only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ma_mode: Option<String>,
+    /// Under `manual-review`, the operator's review time, seconds (ASSUMPTION: 8 h, one
+    /// working shift).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ma_review_s: Option<f64>,
+    /// When its CRL Generator publishes after a decision: `sla-1-business-day` (the
+    /// SCMS Manager SLA, the US default), `cadence` (the run's `crl_cadence_s`) or
+    /// `on-decision`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crl_publication: Option<String>,
 }
 
 /// `security.scms.deployment.options`.

@@ -187,7 +187,8 @@ The engine's earlier defaults were a 512 B ClientHello and a 4,000 B server flig
 | `fibre_fraction` | 0.6667 | c | ASSUMPTION | `deployment.rs` `LatencyModel::DEFAULT_REGION` | 2/3 c, the usual figure for silica fibre (n ≈ 1.47). The radio crate's 4.9 µs/km corresponds to 0.68 c |
 | `per_link_overhead_ms` | 1 | ms | ASSUMPTION | `deployment.rs` | Routing, switching and TLS record processing. A placeholder |
 | `fleet_share` | preset | - | ASSUMPTION | `deployment.rs` | No market share is published |
-| `appcert_backhaul_latency_ms` | 20 | ms | ASSUMPTION | `run/appcert.rs` `AppCertParams` | Library-only: the B3b cycle is not yet called by the engine. It disagrees with the engine's 10 ms (open item 3) |
+| `appcert_backhaul_latency_ms` | 10 | ms | ASSUMPTION | `run/appcert.rs` `RSU_BACKHAUL_LATENCY` | The library default when a driver gives no backhaul (`ScmsRun::add_rsu`); equal to the engine's `BACKHAUL_LATENCY_MS` (checked by `scms_constants`). In the engine the RSU's own backhaul line carries every message of its certificate cycle (`ScmsRun::add_rsu_with` and the carrier), so the medium model (`backhaul/fibre`, `dsl`, `microwave`, `cellular`) decides |
+| `appcert_backhaul_capacity_mbps` | 1000 | Mbit/s | ASSUMPTION | `run/appcert.rs` `RSU_BACKHAUL_BPS` | As `backhaul_capacity_mbps`: a gigabit Ethernet port, [RSU41] §2.1 gives the interface and no rate |
 | `appcert_id_period_s` | 2592000 | s | ASSUMPTION | `run/appcert.rs` | CAMP says "1 month", taken here as 30 days |
 | `appcert_max_gen_ahead_s` | 604800 | s | CITED | `run/appcert.rs` | ra-maxGenDelay 1 week, [SMP] Table 3 |
 | `appcert_retry_wait_s` | 3600 | s | CITED | `run/appcert.rs` | ra-minWait 1 h, [SMP] Table 3 |
@@ -218,6 +219,6 @@ Two other fixes came out of the audit:
 
 1. **Real artefacts would replace these assumptions.** A provider's TLS chain, an RA acknowledgement and a batch `.zip` would turn `repo_url_bytes`, `batch_container_bytes` and the TLS chain into measurements. The SCMS Manager publications carry no such samples (01 §7).
 2. **MA review time and capacity.** No public figure exists. They stay ASSUMPTIONs that can be swept.
-3. **`AppCertParams` backhaul.** It uses 20 ms / 10 Mbit/s, while the engine uses 10 ms / 1 Gbit/s. Reconcile the two when the B3b cycle is wired into the engine (the RSU's real backhaul should drive it).
+3. **`AppCertParams` backhaul.** Resolved (RSU certificate cycle wiring): the library default now equals the engine's 10 ms / 1 Gbit/s (both ASSUMPTION), and in the engine the unit's own backhaul line carries the cycle.
 4. **TLS 1.3 client Finished.** These 80 B ride with the first request and are not counted in the handshake bytes. The undercount is small and known.
 5. **Report sizes for other evidence.** `report_bytes` assumes two BSMs. An Implausible report with one BSM is 918 B as measured (603 + 315), and a real report is always charged its own length.

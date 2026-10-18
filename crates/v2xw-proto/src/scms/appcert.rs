@@ -554,6 +554,24 @@ pub struct AppCredential {
     pub id10: [u8; 10],
 }
 
+impl AppCredential {
+    /// The credential as a node's signing key: the implicit certificate, the ACA
+    /// certificate `aca` that issued it, and `d`. `None` for a P-384 key, which the node
+    /// stack's implicit credentials do not carry.
+    #[must_use]
+    pub fn implicit_key(&self, aca: &Certificate) -> Option<v2xw_sec::credential::ImplicitKey> {
+        let Signer1609::P256(sk) = &self.key else {
+            return None;
+        };
+        let d: Scalar = *sk.as_nonzero_scalar().as_ref();
+        Some(v2xw_sec::credential::ImplicitKey::new(
+            std::sync::Arc::new(self.cert.clone()),
+            std::sync::Arc::new(aca.clone()),
+            d,
+        ))
+    }
+}
+
 impl core::fmt::Debug for AppCredential {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(

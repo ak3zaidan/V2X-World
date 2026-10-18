@@ -2039,7 +2039,13 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Wired,
         note: "Roadside units. Placed, given a profile and a role set, and they transmit. \
                A unit with the 'spat' or 'map' role must stand within 60 m of a signalised \
-               junction: it broadcasts that junction's SPaT and MAP.",
+               junction: it broadcasts that junction's SPaT and MAP. Under the SCMS each \
+               unit is in its provider's RSU application-certificate cycle (WP-B3b): \
+               enrolled and issued this week's certificate (169 h, no butterfly, CRL series \
+               3) before the run, and next week's when its backhaul is up; renewed weekly \
+               over its own backhaul line; it signs nothing once none is valid (counted as \
+               rsus_starved, rsu_starved_ns, rsu_messages_withheld). It installs its RA's \
+               composite CRL over the backhaul after verifying it.",
     },
     KeyStatus {
         path: "actors.rsus[].backhaul",
@@ -2597,13 +2603,17 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                (six roots), camp-reference (the single SCMS with LOP and a central MA) or \
                custom. providers[]: components, region (an ASSUMPTION; no provider \
                publishes one), fleet_share (roadside units are split by it), on_ctl (off: a \
-               provider nobody trusts). latency region (great-circle distance at \
+               provider nobody trusts), ma_mode (manual-review with ma_review_s, or \
+               automatic) and crl_publication (sla-1-business-day, cadence, on-decision) \
+               for that provider's run only. latency region (great-circle distance at \
                fibre_fraction of c plus per_link_ms, ASSUMPTION) or flat; options.lop \
                (off: the proxy hop is transparent) and options.butterfly (original only). \
                Every node trusts every root on the CTL and holds every such provider's \
-               chain. Partial: vehicles' credential flows all run on the home provider's \
-               backend; the other providers' components are certified, hosted and linked \
-               (MA to MA for report sharing) but carry no flows yet.",
+               chain. Each provider runs its own backend: vehicles and roadside units are \
+               split by fleet_share, every RA serves every provider's signed CRL, MAs share \
+               reports, the Backend view shows each provider's entities as \
+               <provider>/<role>, and a home root rollover re-certifies every peer's copy \
+               of the home hierarchy. Partial: extra ACA instances take no load.",
     },
     KeyStatus {
         path: "security.signature",

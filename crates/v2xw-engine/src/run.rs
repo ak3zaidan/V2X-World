@@ -279,6 +279,9 @@ enum Transfer {
         requested_at: SimTime,
         /// Broadcast on the eMBMS bearer rather than fetched (`crl_delivery: mbms`).
         mbms: bool,
+        /// The signed CRLs the transfer carries (the eMBMS carousel's, every
+        /// provider's); `None`: what the vehicle's RA serves at delivery.
+        secured: Option<Vec<std::sync::Arc<[u8]>>>,
     },
 }
 
@@ -1881,6 +1884,24 @@ impl Engine {
         }
     }
 
+    /// How many credentials a node's certificate store holds (0 for an unknown node):
+    /// what a test reads to see which certificates a unit can sign with.
+    #[must_use]
+    pub fn node_cert_count(&self, node: NodeId) -> usize {
+        self.nodes
+            .get(&node)
+            .map_or(0, |n| n.stores().certs.credentials().len())
+    }
+
+    /// How many messages a node had due and did not send for want of a usable
+    /// credential (0 for an unknown node).
+    #[must_use]
+    pub fn node_tx_uncredentialed(&self, node: NodeId) -> u64 {
+        self.nodes
+            .get(&node)
+            .map_or(0, crate::hosted::HostedNode::tx_uncredentialed)
+    }
+
     /// One node's generation phase inside the mobility step, when it has one.
     pub fn node_phase(&self, node: NodeId) -> Option<Duration> {
         self.node_phase.get(&node).copied()
@@ -1945,7 +1966,86 @@ impl Engine {
                 phase2.note_rsu(id);
                 phase2.arm_rsu_detector(id);
             }
+            // Under the SCMS the unit signs only with the application certificates its
+            // provider issued before the run (WP-B3b), not with the factory's.
+            self.install_rsu_app_certs(id, true);
         }
+    }
+
+    /// Every roadside unit in the certificate cycle whose RA serves a newer composite CRL
+    /// fetches it over its backhaul (the bytes ride its line) and installs what it
+    /// verifies: each signed CRL chains to an installed root and passes `verify_crl`,
+    /// and only the entries a CRL signs go into the unit's gate, under that CRL's CRACA.
+    /// Its receiver validation then refuses revoked senders as a vehicle's does.
+    fn install_rsu_crls(&mut self, now: SimTime) {
+        let due = self
+            .phase2
+            .as_ref()
+            .map(crate::phase2::Phase2::rsu_crls_due)
+            .unwrap_or_default();
+        for rsu in due {
+            let Some(p) = self.phase2.as_mut() else {
+                return;
+            };
+            let (version, entries, secured) = p.published_crl_for(rsu);
+            let size = p.crl_size(entries.len() as u32);
+            p.access_mut()
+                .rsu_send(rsu, v2xw_radio::cellular::Direction::Downlink, size, now);
+            let Some(rt) = self.nodes.get_mut(&rsu) else {
+                continue;
+            };
+            let mut crls = Vec::with_capacity(secured.len());
+            let mut ok = !secured.is_empty() && rt.security().trust().is_installed();
+            for bytes in &secured {
+                match rt.install_secured_crl(bytes, now) {
+                    Ok(v) => crls.push(v),
+                    Err(_) => ok = false,
+                }
+            }
+            if ok {
+                for v in &crls {
+                    let signed: Vec<v2xw_sec::linkage::CrlLinkageEntry> = entries
+                        .iter()
+                        .filter_map(|e| v.signed_form(e).and_then(|r| r.ok()))
+                        .collect();
+                    if !signed.is_empty() {
+                        rt.stores_mut().crl.add_verified_linkage(v.craca, &signed);
+                    }
+                }
+            }
+            if let Some(p) = self.phase2.as_mut() {
+                p.note_rsu_crl(rsu, version, ok);
+            }
+        }
+    }
+
+    /// Hands roadside unit `rsu` the application certificates the SCMS installed since
+    /// the last call (`replace`: the first call, which drops the factory certificate).
+    fn install_rsu_app_certs(&mut self, rsu: NodeId, replace: bool) -> Vec<crate::phase2::RsuAppCred> {
+        let Some(phase2) = self.phase2.as_mut() else {
+            return Vec::new();
+        };
+        if !phase2.rsu_in_cert_cycle(rsu) {
+            return Vec::new();
+        }
+        let creds: Vec<crate::phase2::RsuAppCred> = phase2
+            .rsu_app_installs(Some(rsu))
+            .into_iter()
+            .flat_map(|(_, c)| c)
+            .collect();
+        if let Some(runtime) = self.nodes.get_mut(&rsu) {
+            let ok = crate::wiring::install_rsu_app_certs(
+                runtime,
+                &self.scenario,
+                rsu,
+                &creds,
+                replace,
+            );
+            if let Some(p) = self.phase2.as_mut() {
+                p.note_rsu_app_refused((creds.len() - ok) as u64);
+            }
+        }
+        creds
     }
 
     /// Connects every roadside unit that broadcasts SPaT or MAP to its junction's
@@ -7361,6 +7461,7 @@ impl Engine {
                 entries,
                 requested_at,
                 mbms,
+                secured,
             } => {
                 let mut trace = v2xw_metrics::latency::TraceBuilder::new(
                     "crl-download",
@@ -7376,12 +7477,13 @@ impl Engine {
                     p.access_mut().note_exchange(kind, requested_at, now);
                 }
                 // The vehicle's RA serves every provider's signed CRL it holds, unchanged
-                // (WP-D1).
-                let secured = self
-                    .phase2
-                    .as_ref()
-                    .map(|p| p.published_crl_for(node).2)
-                    .unwrap_or_default();
+                // (WP-D1); the eMBMS bearer carries every provider's.
+                let secured = secured.unwrap_or_else(|| {
+                    self.phase2
+                        .as_ref()
+                        .map(|p| p.published_crl_for(node).2)
+                        .unwrap_or_default()
+                });
                 self.install_crl_at(recorder, node, version, &entries, &secured, now, true);
             }
         }
@@ -7446,6 +7548,10 @@ impl Engine {
                 .get(&rsu)
                 .and_then(|n| n.stores().certs.active().map(|c| c.digest.clone()))
             else {
+                // No valid certificate (a starving unit): it cannot sign the frame.
+                if let Some(p) = self.phase2.as_mut() {
+                    p.note_rsu_withheld(chunks.len() as u64);
+                }
                 continue;
             };
             let believed = self
@@ -7607,6 +7713,17 @@ impl Engine {
             let rec = crate::sec_records::SecCert::new(now, *node, "top-up", None, Some(*bytes));
             self.emit(recorder, &rec);
         }
+        // Roadside units' weekly application certificates, renewed over their backhaul.
+        let renewing: Vec<NodeId> = self.rsus.keys().copied().collect();
+        for rsu in renewing {
+            for c in self.install_rsu_app_certs(rsu, false) {
+                let id8 = v2xw_sec::sig1609::cert_hashed_id8(c.key.certificate())
+                    .ok()
+                    .map(|d| v2xw_core::hash::hex_encode(&d));
+                let rec = crate::sec_records::SecCert::new(now, rsu, "rsu-app-cert", id8, None);
+                self.emit(recorder, &rec);
+            }
+        }
         // Refused top-ups and successor enrolments, as credential events.
         for (node, event) in &tick.events {
             let rec = crate::sec_records::SecCert::new(now, *node, event, None, None);
@@ -7629,6 +7746,9 @@ impl Engine {
         for k in tick.pki.knowledge {
             self.emit(recorder, &crate::sec_records::PkiKnowledgeRecord(k));
         }
+
+        // 3b. Roadside units fetch their RA's composite CRL over the backhaul.
+        self.install_rsu_crls(now);
 
         // 4. A newly published list starts the roadside broadcast.
         if tick.published.is_some() && !self.crl_timer_armed {
@@ -7678,14 +7798,16 @@ impl Engine {
             .unwrap_or_default();
         if !mbms.is_empty() {
             let mut areas = std::collections::BTreeSet::new();
+            let mbms_secured: Vec<std::sync::Arc<[u8]>>;
             let mut covered = Vec::new();
             let mut lost = Vec::new();
             let (version, entries, size, at) = {
                 let Some(p) = self.phase2.as_mut() else {
                     return;
                 };
-                let (v, e) = p.published_crl();
-                let (v, e) = (v, e.to_vec());
+                // Every provider's signed CRL rides the bearer (WP-D1).
+                let (v, e, secured) = p.mbms_crl();
+                mbms_secured = secured;
                 let size = p.crl_size(v);
                 let a = p.access_mut();
                 let at = a.mbms().delivered(now, a.mbms_core(), size);
@@ -7737,6 +7859,7 @@ impl Engine {
                         entries: entries.clone(),
                         requested_at: now,
                         mbms: true,
+                        secured: Some(mbms_secured.clone()),
                     },
                 );
                 self.scheduler.schedule(
@@ -7833,6 +7956,7 @@ impl Engine {
                                 entries,
                                 requested_at: now,
                                 mbms: false,
+                                secured: None,
                             },
                         );
                         self.scheduler.schedule(
@@ -8232,6 +8356,20 @@ impl Engine {
         let mut changes: Vec<NodeId> = Vec::new();
         for id in ids {
             if self.rsus.contains_key(id) {
+                // A unit in the application-certificate cycle starves when none of its
+                // certificates is valid by its own clock (WP-B3b).
+                if let (Some(runtime), Some(p)) = (self.nodes.get(id), self.phase2.as_mut())
+                    && p.rsu_in_cert_cycle(*id)
+                {
+                    let t = runtime.clock().believed_time(now);
+                    let valid = runtime
+                        .stores()
+                        .certs
+                        .credentials()
+                        .iter()
+                        .any(|c| c.is_valid_at(t));
+                    p.note_rsu_cert(*id, now, valid, runtime.tx_uncredentialed());
+                }
                 continue;
             }
             let Some(runtime) = self.nodes.get(id) else {

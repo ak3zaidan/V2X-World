@@ -528,6 +528,11 @@ impl Carrier {
                     )
                 })
             }
+            // A roadside unit's own SCMS traffic (its application-certificate cycle)
+            // rides its backhaul line with no sidelink hop.
+            Transport::RsuBackhaul if self.rsu_lines.contains_key(&node) => {
+                self.line_carry(node, dir, bytes, at)
+            }
             Transport::RsuBackhaul => {
                 let rsu = *self.relay_of.get(&node)?;
                 let air = self.air(bytes);

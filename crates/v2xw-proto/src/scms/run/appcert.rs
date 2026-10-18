@@ -34,6 +34,16 @@ use super::*;
 use crate::scms::appcert::{self, AppCertKind, AppCredential, RequestKeys};
 use crate::scms::pdu::{Drbg, Pdu, PduError, SpduKind};
 
+/// The default RSU backhaul latency, one way: 10 ms, **ASSUMPTION** — the library's
+/// backend-link figure ([`ScmsParams::backend_link_latency`]), which the engine's
+/// `BACKHAUL_LATENCY_MS` also reuses so the two never disagree (constants.md §2.1).
+pub const RSU_BACKHAUL_LATENCY: Duration = Duration::from_millis(10);
+
+/// The default RSU backhaul rate: 1 Gbit/s, **ASSUMPTION** (a gigabit PoE Ethernet port;
+/// RSU Specification v4.1 §2.1 gives the interface, not a rate), as the engine's
+/// `BACKHAUL_CAPACITY_MBPS`.
+pub const RSU_BACKHAUL_BPS: u64 = 1_000_000_000;
+
 /// The cycle's parameters (cited where a source exists).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppCertParams {
@@ -53,9 +63,15 @@ pub struct AppCertParams {
     /// The RA's `nextDlTime` after an ack: the ACA's turnaround it promises (the run's
     /// `first_batch_delay`, 60 s, unless set).
     pub download_delay: Duration,
-    /// RSU backhaul one-way latency (assumption: 20 ms fibre/DSL to the provider).
+    /// RSU backhaul one-way latency when the driver gives none ([`ScmsRun::add_rsu`]):
+    /// **ASSUMPTION** [`RSU_BACKHAUL_LATENCY`], the engine's `BACKHAUL_LATENCY_MS` (no
+    /// document gives an RSU field network's latency). The engine hands each unit its
+    /// own backhaul line instead ([`ScmsRun::add_rsu_with`]).
     pub backhaul_latency: Duration,
-    /// RSU backhaul bandwidth (assumption: 10 Mbit/s).
+    /// RSU backhaul bandwidth when the driver gives none: **ASSUMPTION**
+    /// [`RSU_BACKHAUL_BPS`], a gigabit Ethernet port (USDOT RSU Specification v4.1 §2.1
+    /// requires PoE 802.3at Ethernet and states no rate), the engine's
+    /// `BACKHAUL_CAPACITY_MBPS`.
     pub backhaul_bandwidth_bps: u64,
 }
 
@@ -68,8 +84,8 @@ impl Default for AppCertParams {
             retry_wait: Duration::from_secs(3_600),
             download_poll: Duration::from_secs(300),
             download_delay: Duration::from_secs(60),
-            backhaul_latency: Duration::from_millis(20),
-            backhaul_bandwidth_bps: 10_000_000,
+            backhaul_latency: RSU_BACKHAUL_LATENCY,
+            backhaul_bandwidth_bps: RSU_BACKHAUL_BPS,
         }
     }
 }
@@ -407,9 +423,148 @@ impl ScmsRun {
         );
     }
 
+    /// Adds a roadside unit whose backhaul the driver models: `link` is its line's
+    /// nominal latency and rate (the engine's per-unit `actors.rsus[].backhaul`), and a
+    /// driver's [`crate::net::PathOracle`] may carry each message on the real line.
+    pub fn add_rsu_with(&mut self, node: NodeId, link: Link) {
+        self.add_device(node);
+        self.set_access(
+            node,
+            Link {
+                transport: Transport::RsuBackhaul,
+                ..link
+            },
+        );
+    }
+
+    /// Issues `device`'s certificate for the period containing `at` **before the run**
+    /// (on a scratch kernel, as [`ScmsRun::preload`] does for a pseudonym pool): enrolment,
+    /// request, ACA issuance, download and installation through the real SPDUs, marked
+    /// pre-run. With `ahead` the periods whose request time is already past at `at` are
+    /// issued too — what a unit whose backhaul was up before the run holds (with the
+    /// default lead of `ra-maxGenDelay`, next week's certificate) — and without it only
+    /// the current one: a unit loaded at installation that has had no backhaul since
+    /// (ASSUMPTION). Every pre-run certificate counts as installed at time 0. The cycle
+    /// then continues on the run's kernel at the next request time, so renewal happens
+    /// in the run, over the unit's backhaul.
+    ///
+    /// # Errors
+    /// A flow failed on the scratch kernel.
+    pub fn preload_app_cert(
+        &mut self,
+        device: NodeId,
+        kind: AppCertKind,
+        at: SimTime,
+        ahead: bool,
+    ) -> Result<()> {
+        if !self.state.devices.contains_key(&device) {
+            self.add_device(device);
+        }
+        let current = self.state.app_period_at(kind, at);
+        let mut scratch: Kernel<ScmsMsg> = Kernel::new_at(self.kernel.net().clone(), 0);
+        let p = self.state.params;
+        for (node, spec) in self.state.nodes.backend_service_models(&p) {
+            scratch.host(node, &spec, p.backend_profile);
+        }
+        host_governance(&mut scratch, &self.state.gov, &p);
+        host_committees(&mut scratch, &self.state.committees, &p);
+        scratch.host(
+            device,
+            &crate::service::ServiceModelSpec::new(1, p.device_overhead),
+            p.device_profile,
+        );
+        let mut real = core::mem::replace(&mut self.kernel, scratch);
+        let pdu0 = self.state.pdus.len();
+        let saved = self.state.apps.params;
+        self.state.apps.params.download_delay = Duration::ZERO;
+        // Outages are run time; the run's faults do not apply before it.
+        let outages = self
+            .state
+            .apps
+            .devices
+            .get_mut(&device)
+            .map(|d| core::mem::take(&mut d.outages))
+            .unwrap_or_default();
+        let run_faults = core::mem::take(&mut self.state.faults);
+        self.enrol_at(device, 0);
+        let mut outcome = Self::drain_into(&mut self.state, &mut self.kernel);
+        let mut deferred = None;
+        if outcome.is_ok() {
+            self.start_app_certs(device, kind, at);
+            // The cycle's own timers name the next period; one whose request falls after
+            // `at` (or any later one, without `ahead`) is the run's, not the scratch's.
+            while let Some(d) = self.kernel.next_delivery() {
+                if let ScmsMsg::AppCert(m) = &d.msg
+                    && let AppMsg::Cycle {
+                        device: dv,
+                        period,
+                        seq,
+                    } = **m
+                    && dv == device
+                    && (period > current
+                        && (!ahead || self.state.app_request_time(kind, period) > at))
+                {
+                    deferred = Some((period, seq, d.flow, d.run));
+                    continue;
+                }
+                if let Err(e) = Self::step(&mut self.state, &mut self.kernel, d) {
+                    outcome = Err(e);
+                    break;
+                }
+            }
+        }
+        core::mem::swap(&mut self.kernel, &mut real);
+        for p in &mut self.state.pdus[pdu0..] {
+            p.step = None;
+            p.preload = true;
+        }
+        self.state.apps.params = saved;
+        self.state.faults = run_faults;
+        if let Some(d) = self.state.apps.devices.get_mut(&device) {
+            d.outages = outages;
+            for c in &mut d.installed {
+                c.at = 0;
+            }
+        }
+        outcome?;
+        if let Some((period, seq, flow, run)) = deferred {
+            let t = self
+                .state
+                .app_request_time(kind, period)
+                .max(at)
+                .max(self.kernel.now());
+            self.inject_at(
+                t,
+                device,
+                wrap(AppMsg::Cycle {
+                    device,
+                    period,
+                    seq,
+                }),
+                flow,
+                run,
+            );
+        }
+        Ok(())
+    }
+
+    /// The certificates `device` has installed, oldest first (pre-run ones at time 0).
+    #[must_use]
+    pub fn app_installed(&self, device: NodeId) -> &[InstalledApp] {
+        self.state
+            .apps
+            .devices
+            .get(&device)
+            .map_or(&[], |d| d.installed.as_slice())
+    }
+
     /// The backhaul of `device` is down over `[from, until)`: nothing it sends gets out and
     /// nothing addressed to it arrives.
     pub fn set_backhaul_outage(&mut self, device: NodeId, from: SimTime, until: SimTime) {
+        // An outage declared before the cycle starts must not be lost: the unit is
+        // registered (as a roadside unit, the device a backhaul belongs to) and
+        // [`ScmsRun::start_app_certs`] keeps it.
+        self.declare_app_device(device, AppCertKind::RsuApplication);
         if let Some(d) = self.state.apps.devices.get_mut(&device) {
             d.outages.push((from, until));
         }
@@ -556,10 +711,15 @@ impl ScmsState {
     /// When the EE asks for `p`: `start(p) − lead`, never earlier than the RA allows.
     fn app_request_time(&self, kind: AppCertKind, p: u32) -> SimTime {
         let a = self.apps.params;
+        // Never more than one period ahead: on the real calendar `ra-maxGenDelay` is the
+        // RSU's one-week period, so this changes nothing; on a compressed calendar a
+        // week's lead would have the unit stockpile thousands of short periods (a unit
+        // holds at most the current and the next certificate, 03 §7).
         let lead = a
             .request_lead
             .unwrap_or(a.max_gen_ahead)
-            .min(a.max_gen_ahead);
+            .min(a.max_gen_ahead)
+            .min(self.app_period_len(kind));
         self.app_period_start(kind, p)
             .saturating_sub(lead.as_nanos())
     }
