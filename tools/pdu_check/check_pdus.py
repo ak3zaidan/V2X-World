@@ -251,7 +251,13 @@ def open_plv(e, m):
     la_id = int.from_bytes(e['laId'], 'big')
     encp = e['encPlv']
     need(encp['content'][0] == 'encryptedData', 'encPlv is encryptedData')
-    plv = symm_open(encp['content'][1], m['la_aca_keys'], la_id)
+    pt = symm_open(encp['content'][1], m['la_aca_keys'], la_id)
+    # WP-F1: 1609.2 encrypts an Ieee1609Dot2Data; a bare Tbe is first encapsulated as
+    # unsecuredData ([ASN-2.1] Protocol Ieee1609Dot2Data-Encrypted note; 02 section 8.3).
+    inner = decode_canonical('Ieee1609Dot2Data', pt)
+    need(inner['protocolVersion'] == 3 and inner['content'][0] == 'unsecuredData',
+         'the sealed PLV is Ieee1609Dot2Data-Unsecured')
+    plv = inner['content'][1]
     need(len(plv) == 9, 'a PreLinkageValue is 9 bytes')
     return la_id, plv
 
