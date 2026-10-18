@@ -1,0 +1,11 @@
+# Virtual Recording Generation Using Generative AI and Carla Simulator
+Vishal Sehgal, Nikhil Sekaran · SAE Technical Paper Series 2024 · https://doi.org/10.4271/2024-28-0261 · relevance: low · basis: abstract
+
+**Problem:** &lt;div class="section abstract"&gt;&lt;div class="htmlview paragraph"&gt;To establish and validate new systems incorporated into next generation vehicles, it is important to understand actual scenarios which the autonomous vehicles will likely encounter.
+**Approach:** Consequently, to do this, it is important to run Field Operational Tests (FOT). FOT is undertaken with many vehicles and large acquisition areas ensuing the capability and suitability of a continuous function, thus guaranteeing the randomization of test conditions.
+**Tools and scale:** Vehicular setting. The available text does not describe a V2X simulator, radio stack, traffic model or SCMS-style PKI in enough detail to report; scale not stated.
+**Results:** During the early development phase, ground truth data is not available, and data that can be reused from other projects may not match 100% with current project requirements. Car Learning to Act (CARLA) [&lt;span class="xref"&gt;1&lt;/span&gt;] is an autonomous open-source driving simulator, used for the development, training, and validation of autonomous driving systems is extended for generation of synthetic/virtual data/recordings, by ...
+**Limitations and future work (as stated by the authors):**
+- FOT and Use case(a software testing technique designed to ensure that the system under test meets and exceeds the stakeholders' expectations) scenario recordings capture is very expensive, due to the amount of necessary material (vehicles, measurement equipment/objectives, headcount, data storage ...
+**Overlap with our engine:** none: misbehaviour/intrusion detection in a vehicular context. Low relevance background for direction 1 (closed-loop misbehaviour to revocation); it does not model the joint traffic/radio/SCMS loop, closed-loop revocation or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the integrated V2X case (SCMS scale, channel load, closed-loop safety impact) is not addressed.

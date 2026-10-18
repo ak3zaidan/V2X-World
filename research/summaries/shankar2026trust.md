@@ -1,0 +1,11 @@
+# A trust-aware edge-assisted reinforcement learning framework for secure and low-latency vehicular communication
+G. Shankar, S. D. Lalitha, C. M. Nalayini et al. · Scientific Reports 2026 · https://doi.org/10.1038/s41598-026-70034-2 · relevance: medium · basis: abstract
+
+**Problem:** Abstract Vehicular Ad Hoc Networks enable real-time intelligent transportation services but remain affected by dynamic mobility, unstable routing, congestion, malicious vehicles, and delayed emergency communication.
+**Approach:** This paper proposes a Trust-Aware Edge-Assisted Reinforcement Learning framework, termed TEARL-VANET, for secure and low-latency vehicular communication. The proposed framework achieved 98.2% packet delivery, 99.1% emergency-message delivery, 97.4% attack detection, 15.8 Mbps throughput, and 42 ms end-to-end delay.
+**Tools and scale:** TEARL-VANET was evaluated using SUMO, OMNeT + + , Veins, INET, and the VeReMi Extension dataset and compared with AODV, GPSR, TrustChain-VANET, EdgeTrust-VANET, RL-VANET, IDRL-VANET, ATRL-VANET, and GNN-DRL-VANET.
+**Results:** Across 10 independent runs, paired t-tests against the strongest baseline confirmed statistically significant improvements in packet delivery, attack detection, throughput, and delay, with all corresponding p-values below 0.01. These results demonstrate the effectiveness of TEARL-VANET for reliable, secure, and adaptive vehicular communication.
+**Limitations and future work (as stated by the authors):**
+- "Abstract Vehicular Ad Hoc Networks enable real-time intelligent transportation services but remain affected by dynamic mobility, unstable routing, congestion, malicious vehicles, and delayed emergency communication."
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection (direction 1 area); security overhead or cryptography (direction 2 area); datasets/twins/surrogates (direction 3 area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

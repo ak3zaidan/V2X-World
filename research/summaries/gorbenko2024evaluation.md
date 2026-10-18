@@ -1,0 +1,11 @@
+# Evaluation and comparison of lattice-based digital signature of the "Digital Signature Schemes" PQC NIST competition
+Yu.I. Gorbenko, Ye.V. Ostrianska · Radiotekhnika 2024 · https://doi.org/10.30837/rt.2024.2.217.06 · relevance: low · basis: abstract
+
+**Problem:** However, there are no candidates of digital signature schemes left for consideration.
+**Approach:** In July 2022, at the end of Round 3 of the NIST's PQC competition, 3 candidates were proposed for the NIST standardization for post-quantum digital signatures scheme: one signature scheme based on MLWE (Crystals-Dilithium), one signature based on NTRU (Falcon), and one signature based on hash (Sphincs+). Thus, the purpose of this paper is to analyze, evaluate, and compare digital signature algorithms based on lattice cryptography, an additional PQC NIST competition, and compare them with already standardized lattice-based DS mechanisms, such as CRYSTALS-Dilithium and FALCON.
+**Tools and scale:** Not stated in the abstract beyond the above; no traffic simulator, radio stack or SCMS-scale deployment is described.
+**Results:** Acceptance of documents ended on June 1, 2023. As a result, 40 candidates were selected for the role of DS standard, namely: 6 DS algorithms based on codes, one DS algorithm based on isogenies, 7 DS algorithms based on lattice operations, 7 candidates for the role of DS algorithm based on the MPC method -in-the-Head and 10 algorithms based on multivariate transformations, 4 DS schemes were selected based on symmetric cryptographic transformations, and 5 more candidates based on other types of cryptographic transformations.
+**Limitations and future work (as stated by the authors):**
+- "Although the performance profiles and “black-box” security of these schemes are well understood, resistance to side-channel attacks remains a weak point for all of them."
+**Overlap with our engine:** partial — threshold/distributed signing or CA background relevant to the engine's threshold authorities (FROST, CGGMP21, Umbrella); no V2X simulation or SCMS integration stated in the abstract.
+**Novelty implications:** Does not rule out simulation-level claims; it is cryptographic background. Any claim of novelty in the threshold protocol itself would need to be checked against this work.

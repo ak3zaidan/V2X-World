@@ -1,0 +1,11 @@
+# Comprehensive Survey on Vehicular Communication Security
+Tayssir Ismail, Haifa Touati, Nasreddine Hajlaoui, Mohamed Hadded et al. · Journal of Cyber Security and Mobility 2024 · https://doi.org/10.13052/jcsm2245-1439.1359 · relevance: low · basis: abstract
+
+**Problem:** Significant advancements in Cooperative and Autonomous Driving via Vehicle-to-everything (V2X) communications owe much to the rapid expansion and technological progress in vehicular communications, promising benefits like enhanced traffic flow and reduced energy consumption. However, this reliance on connected vehicles opens new security vulnerabilities.
+**Approach:** This study provides a comprehensive overview of challenges in existing vehicular communications, with a specific focus on security attacks categorised by their impact on MAC, routing, and cross-layer levels. To ensure secure vehicular communication, we analyse existing solutions for both single and cross-layer attacks, evaluating their strengths and limitations from a security standpoint.
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** Significant advancements in Cooperative and Autonomous Driving via Vehicle-to-everything (V2X) communications owe much to the rapid expansion and technological progress in vehicular communications, promising benefits like enhanced traffic flow and reduced energy consumption.
+**Limitations and future work (as stated by the authors):**
+- "To ensure secure vehicular communication, we analyse existing solutions for both single and cross-layer attacks, evaluating their strengths and limitations from a security standpoint."
+**Overlap with our engine:** partial: vehicular security topic, but no simulation of traffic, radio, SCMS backend or safety outcomes is described.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

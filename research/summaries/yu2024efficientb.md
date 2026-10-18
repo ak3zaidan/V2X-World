@@ -1,0 +1,11 @@
+# Efficient Privacy-Preserving Edge-based Dynamic Aggregation Query Over Crowdsensed Data
+Yantao Yu, Yun-Guo Guan, Xiaoping Xue, Rongxing Lu · Global Communications Conference 2024 · https://doi.org/10.1109/globecom52923.2024.10901388 · relevance: medium · basis: abstract
+
+**Problem:** Aggregation query, which is one of the most crucial data analysis tools applied to vehicular crowdsensed data, is expected to extract valuable insights and support smart decision-making. Meanwhile, the edge servers are deployed to cope with the escalation of service scale, which however raises privacy concerns about the query requests and reported data.
+**Approach:** To tackle these challenges, we propose an efficient privacy-preserving edge-based dynamic aggregation query scheme with an encrypted tree-based index. Concretely, we first design two building blocks, namely the balanced spatial encoding quadtree (BSEQtree) and a predicate encryption scheme for membership testing (PEMT), which enable the edge servers to obliviously match data and queries by traversal over the ...
+**Tools and scale:** Previously reported privacy-preserving aggregation query schemes are either tailored for static datasets or lack an index structure for deployed queries, which makes them impractical in vehicular crowdsensing (VCS) scenarios characterized by large volumes of real-time data and high data update ...
+**Results:** Based on the above blocks and arithmetic secret sharing (ASS), we construct our scheme, in which the edge servers can efficiently and securely aggregate newly reported data to related query results. Our security analysis shows the privacy preservation of our scheme, and the experiment results on a real dataset validate the efficiency of our scheme.
+**Limitations and future work (as stated by the authors):**
+- To tackle these challenges, we propose an efficient privacy-preserving edge-based dynamic aggregation query scheme with an encrypted tree-based index.
+**Overlap with our engine:** none — cryptographic/authentication scheme or analysis without the closed-loop simulation, SCMS backend or counterfactual machinery of our engine.
+**Novelty implications:** No effect on our novelty claims. 

@@ -1,0 +1,11 @@
+# An Intelligent Intrusion Detection and Adaptive Analytics Architecture for Strengthening Situational Awareness in VANET Security and Attack Mitigation Systems
+Dr. Navid Pahlavan, Dr. Hoda Mirzaei · European Journal of Emerging Cybersecurity and Information Protection 2026 · https://parthenonfrontiers.com/index.php/index/article/view/643 · relevance: medium · basis: abstract
+
+**Problem:** Vehicular Ad-Hoc Networks (VANETs) form the backbone of intelligent transportation systems by enabling real-time communication among vehicles and roadside infrastructure.
+**Approach:** This research proposes an intelligent intrusion detection and adaptive analytics architecture designed to strengthen situational awareness in VANET security ecosystems. The proposed framework integrates machine learning-based anomaly detection, context-aware data fusion, and adaptive trust evaluation mechanisms to enhance attack detection accuracy and response efficiency.The study builds upon established research in vehicular security, trust management, and situational awareness modeling.
+**Tools and scale:** Not stated in the abstract.
+**Results:** The findings suggest that enhancing situational awareness through intelligent analytics significantly improves intrusion detection precision while reducing false-positive rates. The proposed system demonstrates a scalable and resilient framework suitable for next-generation intelligent transportation infrastructures.
+**Limitations and future work (as stated by the authors):**
+- "Addressing this gap, the proposed architecture introduces an adaptive analytics layer that continuously refines detection parameters based on contextual driving conditions and behavioral patterns.Furthermore, the research integrates cognitive models of situational awareness in autonomous systems, pa"
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection (direction 1 area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

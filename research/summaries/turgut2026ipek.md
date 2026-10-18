@@ -1,0 +1,12 @@
+# IPEK: Event-Criticality-Aware Evidential Trust Management against Strategic Insider Attacks in Vehicular Ad Hoc Networks
+İpek Abasıkeleş Turgut · venue unknown 2026 · https://arxiv.org/abs/2604.07532 · relevance: medium · basis: abstract
+
+**Problem:** Event-based trust management in vehicular ad hoc networks is vulnerable to strategic insider attackers who report trivial events correctly to build reputation, falsify reports on safety-critical events, and corrupt the trust feedback they provide about other vehicles.
+**Approach:** This paper proposes IPEK, an event-criticality-aware evidential trust management framework.
+**Tools and scale:** IPEK is evaluated in simulation against a trust cascading-based dissemination scheme and the beta reputation system under eight attacks, with severity-, location-, on-off- and continuously triggered attackers falsifying their reports alone or also their feedback, at attacker ratios from 10% to 40%.
+**Results:** IPEK is evaluated in simulation against a trust cascading-based dissemination scheme and the beta reputation system under eight attacks, with severity-, location-, on-off- and continuously triggered attackers falsifying their reports alone or also their feedback, at attacker ratios from 10% to 40%. With up to 25% attackers, IPEK achieves a significantly higher F1-score than both baselines under all attacks, with false positive rates of 0.9-15.5% against 7.8-49.7% and 26.0-41.4%, and it remains r
+**Limitations and future work (as stated by the authors):**
+- "With up to 25% attackers, IPEK achieves a significantly higher F1-score than both baselines under all attacks, with false positive rates of 0.9-15.5% against 7.8-49.7% and 26.0-41.4%, and it remains robust up to 40% attackers when only reports are falsified."
+- "Under fully colluding attackers that also corrupt feedback, all methods break down beyond about one third of attackers; this envelope and a longer detection delay are reported as limitations."
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection (direction 1 area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

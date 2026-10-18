@@ -1,0 +1,11 @@
+# Secure Group Key Management Scheme For Dynamic Vehicular Cloud Computing
+Nayana Hegde, Sunilkumar S. Manvi · International Journal of Advanced Networking and Applications 2021 · https://doi.org/10.35444/ijana.2021.13103 · relevance: low · basis: abstract
+
+**Problem:** Vehicular cloud facilitates a dynamic set of vehicle users to form a cloud and share the resources and services to make safe journey.A public encryption key which is shared among the users, so that anyone participating in the cloud can send a message securely and efficiently to the vehicular cloud.Users can join or leave the group efficiently without triggering a completely new key agreement protocol, which will greatly benefit the users in the vehicular cloud.We define a generic construction of dynamic asymmetric group key agreement by combining a traditional authenticated group key agreement, public key encryption and signature.We evaluate the performance of the scheme, in comparison with existing scheme.
+**Approach:** Vehicular cloud facilitates a dynamic set of vehicle users to form a cloud and share the resources and services to make safe journey.A public encryption key which is shared among the users, so that anyone participating in the cloud can send a message securely and efficiently to the vehicular cloud.Users can join or leave the group efficiently without triggering a completely new key agreement protocol, which will greatly benefit the users in the vehicular cloud.We define a generic construction of dynamic asymmetric group key agreement by combining a traditional authenticated group key agreement, public key encryption and signature.We evaluate the performance of the scheme, in comparison with existing scheme.
+**Tools and scale:** Not stated in the abstract.
+**Results:** No quantitative results stated in the abstract.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** none — low-relevance adjacent work (vehicular security, related: key management); no SCMS/1609.2 PKI backend, closed-loop revocation, joint ground truth or counterfactual reruns indicated.
+**Novelty implications:** Does not rule out any candidate direction; background only.

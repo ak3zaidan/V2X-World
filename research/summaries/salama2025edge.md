@@ -1,0 +1,11 @@
+# Edge Agentic AI Framework for Autonomous Network Optimisation in O-RAN
+Abdelaziz Salama, Zeinab Nezami, Mohammed M. H. Qazzaz, Maryam Hafeez et al. · 2025 IEEE 36th International Symposium on Personal, Indoor and Mobile Radio Communications (PIMRC) 2025 · https://doi.org/10.1109/pimrc62392.2025.11274801 · relevance: medium · basis: abstract
+
+**Problem:** The deployment of AI agents within legacy Radio Access Network (RAN) infrastructure poses significant safety and reliability challenges for future 6G networks. This paper presents a novel Edge AI framework for autonomous network optimisation in Open RAN environments, addressing these challenges through three core innovations: (1) a persona-based multi-tools architecture enabling distributed, context-aware decision-making; (2) proactive anomaly detection agent powered by traffic predictive tool; and (3) a safety, aligned reward mechanism that balances performance with operational stability.
+**Approach:** Integrated into the RAN Intelligent Controller (RIC), our framework leverages multimodal data fusion, including network KPIs, a traffic prediction model, and external information sources, to anticipate and respond to dynamic network conditions.
+**Tools and scale:** Mentioned in abstract: 5G, 6G, O-RAN, Open RAN, LLM. (From the abstract only.)
+**Results:** Extensive evaluation using realistic 5G scenarios demonstrates that the edge framework achieves zero network outages under high-stress conditions, compared to 8.4% for traditional fixed-power networks and 3.3% for large language model (LLM) agent-based approaches, while maintaining near real-time responsiveness and consistent QoS. These results establish that, when equipped with the right tools and contextual awareness, AI agents can be safely and effectively deployed in critical network infrastructure, laying the framework for intelligent and autonomous 5G and beyond network operations.
+**Limitations and future work (as stated by the authors):**
+- Not stated in the abstract.
+**Overlap with our engine:** none — Adjacent background (LLM agents for network configuration/operations); no direct overlap with the engine's traffic+radio+SCMS joint simulation.
+**Novelty implications:** Does not restrict any candidate claim.

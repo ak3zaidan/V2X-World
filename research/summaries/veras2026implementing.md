@@ -1,0 +1,13 @@
+# Implementing the L4S Architecture in the ns-3 Simulator
+Maria Eduarda Veras, Eduardo Freitas, Assis T. de Oliveira Filho, Djamel Sadok, Judith Kelner · arXiv 2026 · https://arxiv.org/abs/2603.20166 · relevance: low · basis: abstract
+
+**Problem:** The demand for ultra-low latency in modern applications, such as cloud gaming and augmented reality, has exposed the limitations of traditional congestion control algorithms regarding bufferbloat.
+**Approach:** The Low Latency, Low Loss, and Scalable Throughput (L4S) architecture addresses this challenge by combining scalable congestion controls, such as TCP Prague, low-latency queue management with prioritization, and Accurate ECN (AccECN) feedback. Although Linux kernel implementations exist, the research community lacks a complete, high-fidelity model within the Network Simulator 3 (ns-3) for reproducible experiments.
+**Tools and scale:** Non-vehicular or unspecified setting. The available text does not describe a V2X simulator, radio stack, traffic model or SCMS-style PKI in enough detail to report; scale not stated.
+**Results:** Although Linux kernel implementations exist, the research community lacks a complete, high-fidelity model within the Network Simulator 3 (ns-3) for reproducible experiments. This paper presents an implementation of end-host protocols for the L4S architecture in ns-3, focusing on the porting of TCP Prague from the Linux kernel (v6.12) and the integration of AccECN signaling.
+**Limitations and future work (as stated by the authors):**
+- The demand for ultra-low latency in modern applications, such as cloud gaming and augmented reality, has exposed the limitations of traditional congestion control algorithms regarding bufferbloat.
+- The Low Latency, Low Loss, and Scalable Throughput (L4S) architecture addresses this challenge by combining scalable congestion controls, such as TCP Prague, low-latency queue management with prioritization, and Accurate ECN (AccECN) feedback.
+- Significant engineering challenges regarding the adaptation of kernel logic are detailed, particularly the reconciliation of Linux's packet-based arithmetic with ns-3's byte-based architecture for window management and pacing.
+**Overlap with our engine:** none: simulation/digital twins outside V2X. Low relevance background for the simulator itself; it does not model the joint traffic/radio/SCMS loop, closed-loop revocation or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the integrated V2X case (SCMS scale, channel load, closed-loop safety impact) is not addressed.

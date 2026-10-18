@@ -1,0 +1,304 @@
+# Batch 14 notes
+
+All 378 papers are medium relevance; all summaries are abstract-based (48 had no abstract in the catalog). Limitation lines are sentences from the abstracts that mention limitations, open challenges or future work.
+
+## 1. Stated limitations and future work
+
+- cui2026fedauth: However, existing certificateless-based authentication schemes still exhibit three notable limitations: 1) some schemes cannot provide security against public-key replacement (PKR) attacks and key-leakage threats; 2) most existing schemes do not take realistic coalition attacks into account; and 3) 
+- cui2026fedauth: These limitations make it challenging for certificateless authentication frameworks to simultaneously ensure high security and low latency, particularly in resource-constrained FL deployments within IoV environments.
+- cui2026fedauth: To address these challenges, we propose FedAuth, a certificateless, lightweight, and privacy-enhanced authentication scheme tailored for FL in IoVs.
+- diksha2026iot: Finally, the paper concludes with future research directions related to integrating AI and IoT technologies in the smart grid ecosystem.
+- li2026privacyb: To address these limitations, we propose a privacy-preserving and accountable distributed collaborative authentication scheme for VANETs that is resilient to malicious nodes.
+- okafor2026quantum: Intrusion detection is challenging due to sensor diversity, dynamic environments, and the threat of quantum-based attacks.
+- trantruong2026systematic: Contemporary solutions face a fundamental privacy-efficiency-trust trilemma: achieving strong privacy guarantees, computational efficiency for resource-constrained devices, and decentralized trust simultaneously remains intractable with single-paradigm approaches.
+- trantruong2026systematic: Critical challenges including security guarantee composition across layers, multi-layer coordination overhead minimization, and post-quantum security integration must be addressed for practical deployment in next-generation intelligent transportation systems and IoT ecosystems.
+- godara2026quantumresilient: The classical public‐key encryption/decryption scheme employing integer‐factorization and primitive‐root‐type problems (such as the RSA system) has been commonly used for many years; however, its security is compromised by future advancements in quantum computing (through Shor's algorithm).
+- zhang2013security: Due to the limited bandwidth, high vehicle mobility and density of vehicles, scalability is a major challenge in VANETs.
+- lal2018secured: Keeping in mind the challenging requirements of the present and the future, in this paper work first previous solutions were reviewed and a new Secured Protocol for VANET with Signature Verification has been proposed.
+- guehika2019triz: However, despite this AI rapid and increasing market expansion, there are numerous related challenges need to be tackled.
+- krontiris2020enabling: For example, today's vehicles are already connected and in the very near future they will also interact directly with each other and with the road infrastructure giving rise to a new domain called Cooperative Intelligent Transport Systems (C-ITS).
+- imran2020ieee: The aim of this Special Section is to bring forth highquality research articles that articulate recent advancements in the survivability, self-healing, fault-tolerance, safety, and security of wireless networks, and to highlight open research issues and challenges, as well as indicate future directi
+- imran2020ieee: The proposed framework is an important step toward future research work in the area of resource management in beyond 5G networks.
+- imran2020ieee: The authors also highlighted open research challenges in UAV control.
+- bordin2021international: The design and implementation of energy efficient future generation communication and networking technologies fostered the development of mobile, pervasive, and large-scale computing technologies.
+- hsu2022practical: One of the main challenges for secure group-oriented applications in RIS towards 5G is how to manage RIS communications fairly in multiparty applications.
+- dave2022smart: With physical, economic, technological, and design challenges, Moore's Law is reaching its practical limits.
+- priyanka2023signature: In VANET the communication has been done by V2V, V2I and V2X, since wireless networks are available, maintaining communication protection and privacy has become a major challenge for VANETs.
+- r2024cross: As quantum computing capabilities advance, our analysis reveals the advantages and disadvantages of each cryptographic paradigm, providing insights into how classical cryptographic still offers workable solutions today while quantum cryptography hold promise for future proof security.
+- r2024cross: The purpose of these observations is direct future studies and advancement in safe vehicle communication.
+- fei2024privacy: It is also combined with the DTPKC cryptosystem to protect the user’s private information to provide reliable security for the system and ensure that the private information remains hidden from untrustworthy third parties.
+- fei2024privacy: Meanwhile, the Chinese remainder theorem (CRT) is used in the key generation phase to negotiate the key value between the two parties, and the symmetric key is derived from the key value for sending the navigation results to improve the acquisition efficiency and increase the user experience.
+- manduva2024advancing: As a result, existing machine learning techniques fall short of handling these issues, and Graph Neural Networks (GNNs), are the solution to these challenges due to their ability to model and learn from graph-structured data.
+- lin2024efficient: To address the challenges posed by large-scale vehicular topologies, zone encryption and authentication schemes have been proposed to enhance communication efficiency and privacy in VANETs.
+- tiwari2024beyond: Vehicular Ad-hoc Networks (VANETs) hold promise for traffic management and driver safety, but security and privacy challenges persist.
+- tiwari2024beyond: Existing protocols face limitations in key management and verification time costs.
+- yu2024efficientb: To tackle these challenges, we propose an efficient privacy-preserving edge-based dynamic aggregation query scheme with an encrypted tree-based index.
+- yu2024efficientc: To ensure service quality, the VCS service provider prefers to assign multi-location tasks to the workers whose future trajectories have high spatial proximity with the task locations.
+- yu2024efficientc: To address these challenges, we propose a novel efficient privacy-preserving multi-location task allocation scheme in fog-assisted VCS.
+- david2024innovative: This paper presents a comprehensive examination of the security challenges associated with FPGAs, with a focus on advanced hardware obfuscation techniques, particularly Look-Up Table (LUT) locking.
+- david2024innovative: A review of current literature identifies existing vulnerabilities in hardware obfuscation and logic locking, em-phasizing the limitations of traditional security measures against advanced attacks.
+- poonia2024special: The objective of this special issue titled “Recent Advancements in Network Security for Sustainable Development” is to discuss recent advancements of computer network security and to explore the network security concept for its sustainable future.
+- nadeem2025autoguardx: This is especially evident in US and Canada, where cyber-enabled auto theft has surged in recent years, revealing the limitations of existing security measures for connected vehicles.
+- zhai2025blockchain: Supply chain finance (SCF) faces significant challenges in multi-party data integration due to privacy constraints, data silos, and complex inter-enterprise relationships.
+- senthil2025blockchainenhanced: Traditional centralized ML approaches suffer from significant limitations, including high communication overhead, vulnerability to cyber threats, and privacy concerns due to raw data aggregation.
+- senthil2025blockchainenhanced: To address these challenges, this research introduces a Decentralized Machine Learning (DML) framework for Federated IoT Networks, integrating blockchain-based security, differential privacy, and edge-optimized model aggregation to ensure trustworthy, scalable, and privacy-preserving ML training.
+- song2025hybrid: With the rapid development of Cellular Vehicle-to-Everything (C-V2X) communication systems, ensuring the security and integrity of data exchanged between vehicles and infrastructure has become a significant challenge.
+- song2025hybrid: We discuss the challenges and opportunities in integrating these two authentication methods and highlight the potential impact of emerging technologies, such as 5G and machine learning, in optimizing the hybrid authentication process for C-V2X systems.
+- song2025hybrid: Finally, we propose future research directions to further improve the efficiency, scalability, and robustness of hybrid authentication schemes in vehicular networks.
+- zhou2025ai: However, at the same time, in-vehicle networks also face more security challenges, mainly in terms of resource constraints, dynamic attacks, protocol heterogeneity, and high real-time requirements.
+- zhou2025ai: At the same time, we also identify future research directions, including the migration path of quantum-resistant cryptography (PQC) and the application challenges of explainable AI (XAI) in security-critical authentication.
+- badhesha2025efficient: To overcome these limitations, this paper proposes a lightweight bilinear pairingbased authentication protocol that enables secure registration, pseudonym generation, and mutual authentication between vehicles and Roadside Units (RSUs).
+- menal2025analyzing: Future work will focus on extending this evaluation using simulation tools like NS-3 and examining how SAFUA can integrate with standardized remote update ecosystems such as Uptane for end-to- end integrity assurance.
+- rashmi2025beyond: However, the adoption of these technologies is being hindered by ethical challenges, such as data privacy concerns and algorithmic bias.
+- rashmi2025beyond: In this paper, AI’s transformative potential and associated challenges are examined to guide researchers and industry professionals toward sustainable and ethical implementations.
+- hong2025digital: Specifically, we introduce virtual representations of vehicles operating within an edge-centric DT architecture, thereby overcoming the limitations imposed by unstable physical links.
+- anisi2025distributed: Vehicular Digital Twin (VDT) networks address AV limitations by enabling synchronized virtual replicas.
+- anisi2025distributed: The results establish EDTAP-VDT as a future-ready authentication framework for real-time, secure VDT applications in intelligent transportation environments.
+- wang2025dynamic: However, the highly dynamic topology of modern VANETs introduces significant challenges, specifically the inefficiencies caused by frequent Roadside Unit (RSU) switching and the heavy verification burden of massive broadcast messages.
+- li2025edge: However, due to the vulnerabilities of vehicle communication, it faces numerous security challenges when performing cross-domain communication.
+- mary2025enhancing: While there are existing studies on detecting and dealing with attacks, one challenge remains: how to proactively identify compromised UAV nodes.
+- altimemi2025fs: FS-CLAS complies with IEEE 1609.2 and ETSI ITS-G5 standards, providing an option for deployment with existing and future V2X networks.
+- lin2025internet: The security of classical encryption-based data transmission has been challenged.
+- xiao2025lsha: To address these challenges, we propose a lightweight and secure handover authentication scheme called LSHA, which leverages physical layer wireless key generation (PLKG) technology to produce highly random temporary keys for handovers, preventing the leakage of critical parameters to potential atta
+- castiglione2025lightweight: Among the various communication protocols adopted in this domain, the Controller Area Network (CAN) remains the most widespread due to its reliability and performance.
+- guo2025min: Multi-Identifier Network (MIN), a novel network architecture designed for the future Internet, supports customizable identifier spaces, edge-distributed computing capabilities, and push-pull semantics integration, thereby providing strong mobility support and efficient data transmission/processing c
+- rai2025modern: The rapid digitalization of modern vehicles has introduced significant cybersecurity challenges for the automotive industry.
+- zhi2025multi: To address the critical challenges of large-scale identity credential revocation in Vehicular Ad-hoc Networks (VANETs) and potential leakage risks associated with accumulator trapdoor information, this paper proposes a multi-party batch accumulator-based identity revocation scheme, where Roadside Un
+- tiwar2025pqc: This research identifies the compelling need for secure, quantum-resistant authentication systems to protect the increasing overlap of electric vehicles and smart grid networks, with a view to maintaining secure, reliable, and future-proof energy infrastructures.
+- smith2025postb: Improvements upon the CAN protocol exist to increase throughput, although the unmodified version remains in use.
+- smith2025postb: This research is likely to be more restricted than future development.
+- zhao2025privacy: However, practical implementations face challenges such as high communication overhead, increased training latency and resource constraints related to limited channel resources, computational capabilities, storage and battery power.
+- zhao2025privacy: This strategy integrates a mobility trajectory prediction model based on Wavelet Neural Networks (WNN) and extended Long Short-Term Memory (xLSTM), providing accurate future location information to the multi-agent reinforcement learning framework for dynamically adjusting resource allocation policie
+- zhao2025privacy: Furthermore, a dynamic resource scheduling algorithm based on the Multi-Agent Deep Q-Network (MADQN) is employed to solve the channel allocation and power control challenges arising from mobility, enabling autonomous decision-making at edge nodes.In addition, we employ Shamir's Secret Sharing algori
+- bai2025privacy: To overcome these limitations, we present the Privacy-preserving Driver Monitoring System (PDMS), a novel framework based on the additive secret sharing theory and privacy-preserving Transformer-based deep learning models.
+- bai2025privacy: PDMS creates randomized secret shares from driver’s facial video data on vehicle, processes them independently through privacy-preserving Transformer models on edges, and securely aggregates partial results on vehicle, ensuring vehicles’ sensor data and final results remain protected.
+- luo2025privacy: However, traffic data often contain sensitive personal mobility information, posing critical challenges for privacy protection and data security.
+- luo2025privacy: To address these challenges, this paper proposes a privacy-aware Spatiotemporal Hybrid Attention Network (STHAN), which integrates graph neural networks, Transformer, and LSTM architectures to jointly capture complex spatiotemporal dependencies.
+- luo2025privacy: Meanwhile, the proposed framework can be extended to federated learning or secure multi-party computation settings, enabling collaborative model training while ensuring that raw traffic data remain locally stored.
+- datt2025q: The experimental results provide quantum-safe protection against both current and future computational attacks.
+- enden2025quantum: A future quantum internet brings promising applications related to security, privacy and enabling distributed quantum computing.
+- enden2025quantum: Integration of these concepts into the future trends of the automotive sector is of considerable interest, as it enables both the development of practical quantum internet use cases and the adoption of innovative technologies in the automotive sector.
+- enden2025quantum: These results can be used to target future research, engineering and venture developments for both domains.
+- rakhmanovich2025quantum: It believes that it assures safety against potentially dangerous quantum attacks in the future.
+- h2025resilient: : The rapid evolution of Internet of Things (IoT) ecosystems in the era of 6G and beyond networks introduces critical challenges for data protection, particularly in the face of emerging quantum threats.
+- h2025resilient: Existing studies on post-quantum cryptography (PQC) for IoT remain domain-specific, conceptual, or outdated, often neglecting resilience, scalability, and real-world efficiency.
+- h2025resilient: This research addresses these limitations by proposing resilient post-quantum cryptographic schemes tailored for IoT data protection in heterogeneous 6G environments.
+- sadat2025secure: Key challenges—including post-quantum security, formal verification, and supply chain vulnerabilities—are discussed.
+- sadat2025secure: Emerging research directions, such as control-flow integrity enforcement and multiprocessor ECU security frameworks, are highlighted to guide future development and standardization efforts.
+- eldalahmeh2025schnorr: The increasing adoption of vehicle-to-vehicle (V2V) communication in intelligent transportation systems (ITS) brings both benefits and challenges, particularly in the areas of security and privacy.
+- eldalahmeh2025schnorr: To address these limitations, we propose a lightweight, privacy-aware authentication scheme that integrates elliptic curve cryptography (ECC) with Schnorr signatures.
+- eldalahmeh2025schnorr: These results highlight the proposed scheme’s strong potential as a viable authentication solution for future vehicular networks.
+- liang2025traceable: However, traditional authentication schemes exhibit significant limitations in privacy protection, low latency, and multi-domain collaborative authentication, particularly in high-speed scenarios where vehicles frequently switch domains.
+- liang2025traceable: Additionally, existing solutions relying on centralized authentication architectures are vulnerable to single points of failure, further exacerbating security risks.To address these challenges, this paper proposes a Blockchain-Assisted Traceable Cross-Domain Anonymous Authentication Mechanism (BTCAA
+- boutahala2025trust: To ensure security within the cluster, an unsupervised variational autoencoder analyzes vehicle behavior to detect anomalies and confirm that each vehicle remains the same entity originally authenticated.
+- ranjan20266g: Security challenges are analyzed across device, edge, radio access, AI-model, digital-twin, orchestration, and application layers, including adversarial machine learning, model poisoning, privacy leakage, identity attacks, zero-day attacks, and supply-chain vulnerabilities.
+- ranjan20266g: Finally, unresolved challenges involving scalability, synchronization, explainability, energy efficiency, interoperability, security, standardization, and trustworthy autonomy are identified.
+- wang2026certificateless: To address the challenges of identity anonymity and communication security in the large-scale real-time data exchange within VANETs, this paper proposes a VANET anonymous authentication system based on a fault-tolerant group signature scheme.
+- mumtaz2026comprehensive: Additionally, it identifies key research challenges such as quantum attack resistance, scalable lightweight security, and efficient invalid signature detection, while suggesting future directions for developing more secure and scalable IoT communication systems.
+- alayedi2026cross: With the IoV evolving towards highly connected, autonomous and data-driven mobility ecosystems, it needs to meet challenging requirements for low latency, scalability, interoperability, security, privacy and trust.
+- alayedi2026cross: The survey also covers other significant challenges like intrusion detection, decentralized authentication, privacy-preserving learning, blockchain overhead, semantic interoperability, post-quantum security, and standardized datasets.
+- alayedi2026cross: This study is intended to serve as a structured reference for the development of scalable, trustworthy, and intelligent IoV systems by highlighting state-of-the-art techniques, open research gaps, and future directions.
+- shivsankar2026cryptographically: These upgrades provide a scalable, future-ready security layer while maintaining full compatibility with the Uptane architecture.
+- agarwal2026hybrid: Future work includes restoration mechanisms, blockchain-based trust, and quantum computing for faster detection and post-quantum privacy.
+- shi2026lifecycle: Future research should emphasize lightweight and adaptive protection, cross-layer trust coordination, privacy–utility co-optimization, trustworthy AI-assisted security operations, and evidence-based lifecycle governance.
+- zuo2026lightweight: Moreover, they exhibit limitations in fine-grained data analysis, resistance to collusion attacks, and fault tolerance.
+- kaur2026zero: The rapid growth of IoVs poses substantial security challenges for scalable authentication, certificate management, and real-time revocation.
+- luo2026traceable: However, ensuring secure, privacy preserving, and accountable data access with dynamic attribute updates in such environments remains challenging.
+- hassan2026ai: Furthermore, some of the most important open problems are identified, including data scarcity, adversarial robustness, real-time constraints, data utility-privacy conflicts, and standardization gaps.
+- yang2026ai: We systematically evaluate 32 recent studies (2022-2025) addressing key aspects including communication protocols, AI-based traffic signal optimization, security frameworks, and real-world deployment challenges.
+- yang2026ai: We propose a unified framework integrating federated learning, quantum-resistant cryptography, and multiagent coordination to address these challenges.
+- zhang2026edge: To address this privacy challenge, we introduce edge-assisted private set intersection (EA-PSI), a scheme that enables secure computation of the intersection among CAV observation sets without disclosing individual data elements.
+- d2026efficient: However, these networks are affected by security, privacy, and scalability challenges, mainly due to the centralized approach of the Public Key Infrastructure (PKI) systems.
+- d2026efficient: To address these challenges, this paper presents a secure and efficient Vehicle-to-Vehicle (V2V) communication system based on Blockchain and Ethereum Smart Contracts.
+- s2026integrated: Blockchain strengthens data provenance and accountability, whereas sustainability and energy constraints ensure that predicted responses remain physically feasible.
+- s2026integrated: The study synthesizes the selected research corpus, identifies major technological relationships, and highlights challenges involving explainability, interoperability, cybersecurity, governance, and human–AI collaboration.
+- ouyang2026application: Based on the in-depth analysis and summary of previous studies, this paper expounds the basic connotation of distributed computing, edge computing and vehicle road collaboration around the application scenarios of vehicle road collaboration, combs the cloud edge end system architecture, summarizes t
+- ouyang2026application: Finally, it looks forward to the future development directions such as combining quantum computing and large language model, in order to accelerate the development of vehicle road collaboration and the process of intelligent transportation.
+- ayyamgari2026authentication: On the other hand, authentication techniques face several security challenges because IoT devices are resource-constrained (memory, battery, processor, etc.).
+- ayyamgari2026authentication: To elaborate on this, we perform an extensive survey of authentication mechanisms in IoT, addressing the resource-constrained nature of devices, heterogeneity of networks, and prospective security challenges.
+- ayyamgari2026authentication: Our analysis shows that token-based authentication currently offers the most balanced trade-off among security, scalability, and energy overhead for general-purpose IoT deployments, while biometric and implicit biometric schemes provide the strongest resistance to impersonation at higher computation
+- medam2026automotive: The paper concludes by highlighting open challenges and future directions for scalable and resilient automotive hardware security.
+- medam2026automotive: Finally, we discuss emerging challenges such as cryptographic agility and post-quantum readiness that are likely to shape the next generation of automotive HSM architectures.
+- wijesekara2026bcrlsecurelink: Moreover, a permissioned blockchain is utilized by using one smart contract for node registration using a challenge-response mechanism with DH, public, and global key exchange; subsequent node authentication using signatures, ZKPs, attributes, and HMACs through established encrypted communication; a
+- qureshi2026blockchain: However, the rapid expansion of connected devices has created significant cybersecurity challenges.
+- qureshi2026blockchain: Conventional centralized security architectures may suffer from single points of failure, scalability limitations, privacy concerns, and difficulties in managing large numbers of heterogeneous devices.
+- qureshi2026blockchain: The paper further discusses challenges related to computational resources, scalability, latency, energy consumption, interoperability, and blockchain storage requirements.
+- li2026blichain: In the evolution of 6G-based vehicular Ad hoc networks (VANETs) from closed single-domain environments to open cross-domain environments, several security challenges arise, including heterogeneous domain trust barriers, vehicle identity privacy leakage, and high authentication overhead in dynamic sc
+- zehra2026building: As vehicles evolve into mobile computers, future transportation systems will depend on secure data sharing and collaborative computation between cars and roadside infrastructure.
+- zehra2026building: Ensuring security, privacy, and accountability in such dynamic networks is challenging because vehicles continuously join, leave, and relay data under intermittent connectivity.
+- jha2026ctr: To address these limitations, we propose the Certificate-Trust-Reliability Messaging (CTR-M) framework, where interactions between vehicles are modelled as a time behavior - driven dependent communication process.
+- yang2026certificateless: To address these challenges, we propose certificateless dual-layer anonymous privacy-preserving authentication scheme (CL-DAPA), an efficient certificateless anonymous privacy-preserving authentication scheme for the IoV.
+- loussaief2026cross: Existing public key infrastructure (PKI) schemes, built around centralized validation, remain vulnerable to single points of failure and cannot simultaneously satisfy all three requirements.
+- ali2026deep: However, rapidly changing network conditions, heterogeneous vehicle capabilities, and the need for privacy-preserving coordination present critical challenges.
+- sikarwar2026dybatch: However, high-traffic IoV networks face challenges with traditional Batch Message Verification (BMV) methods, often leading to critical alerts being unverified and dropped due to a lack of prioritization.
+- sikarwar2026dybatch: DyBatch effectively tackles message loss by classifying Basic Alert Messages (BAMs) based on urgency through a flag-based mechanism, coupled with a flexible batch size concept to overcome fixed-size limitations.
+- zhao2026eaba: However, authenticating high-frequency perception messages poses significant challenges due to stringent latency requirements and increasing vehicle density.
+- zhao2026eaba: This paper presents an Edge-Assisted Batch Authentication (EABA) framework that leverages roadside units (RSUs) as trusted edge authenticators to overcome these limitations.
+- sui2026eclas: However, addressing challenges related to security, privacy, and scalability is essential for their successful implementation and widespread adoption.
+- sui2026eclas: In this article, we propose an efficient certificateless aggregate signature scheme (ECLAS) to address the above three challenges.
+- wang2026emaca: Furthermore, we integrate a mobility-aware prediction model leveraging attention mechanisms and graph convolutions to forecast future authentication demand and support proactive association decisions.
+- gutl2026editorial: In the seventh regular issue, I am very pleased to present the following 6 accepted articles: Sang Suh and Numery Zaber from the USA address in their manuscript the limitations of traditional keyword-based resume screening by proposing an AI-powered framework that leverages contextual sentence embed
+- gutl2026editorial: Christian Schlager and Atif Mashkoor from Austria discuss in their research the challenges of time-consuming and costly separate assessments for ASPICE and ASPICE for Cybersecurity in the automotive industry by proposing a unified integrated assessment approach that systematically maps related proce
+- gutl2026editorial: Fatmaelzahra Hamdi, Ramadan Moawad, and Amr Mansour Mohsen from Egypt conduct a systematic literature review of Automated Program Repair (APR) with Large Language Models (LLMs) to examine the recent advancements, research trends, evaluation practices, and challenges of this promising area.
+- zhou2026efficient: To address this challenge, we propose a DoS-resilient signature batch verification scheme that leverages lightweight message pre-validation.
+- feng2026efficient: However, as the central hub for data sharing, the cloud platform’s untrustworthiness poses severe challenges to the integrity and reliability of shared data.
+- feng2026efficient: Even with the application of batch auditing, the overall audit latency remains inadequately addressed.
+- feng2026efficient: Moreover, Drivora supports the aggregation of challenged blocks from multiple vehicles to produce a single integrity proof and it enables Drivora to handle multiple audit tasks from different vehicles at the same time.
+- wang2026efficientb: To address these challenges, we propose an efficient heterogeneous signcryption scheme with forward privacy (HSCFP) for vehicular platoon communication.
+- eldalahmeh2026eliminating: Vehicular ad hoc networks (VANETs) enable secure vehicle‐to‐vehicle (V2V) and vehicle‐to‐infrastructure (V2I) communications but still rely heavily on centralized trusted authorities, creating scalability limitations, single‐point failures, and increased authentication latency.
+- eldalahmeh2026eliminating: The proposed framework replaces centralized challenge–response pair (CRP) storage with blockchain‐maintained cryptographic commitments verified through consortium roadside unit (RSU) validators.
+- u2026energy: Blockchain strengthens data provenance and accountability, whereas sustainability and energy constraints ensure that predicted responses remain physically feasible.
+- u2026energy: The study synthesizes the selected research corpus, identifies major technological relationships, and highlights challenges involving explainability, interoperability, cybersecurity, governance, and human–AI collaboration.
+- gantayat2026enhancing: However, ensuring strong security and privacy in DTNs remains challenging due to unreliable communication links and the lack of continuous trust relationships among nodes.
+- gantayat2026enhancing: To address these challenges, this work proposes a blockchain‐enhanced DTN architecture incorporating multiple optimization and security mechanisms.
+- gantayat2026enhancing: Future work will focus on real‐time threat detection using advanced machine learning models, energy‐aware consensus optimization, and validation through real‐world DTN testbeds to enhance scalability and practical deployment.
+- ali2026enhancing: Imitation learning enables reinforcement learning agents to acquire complex behaviors from expert demonstrations, but its performance remains strongly influenced by the quality of expert data and the balance between imitation and exploration during policy optimization.
+- ali2026enhancing: To address this limitation, this paper proposes an adaptive reward weighting mechanism to enhance imitation learning stability within the TD3-SAC-GAIL framework.
+- ali2026enhancing: Nahavandi, “A survey of imitation learning: Algorithms, recent developments, and challenges,” IEEE Transactions on Cybernetics, vol.
+- huang2026enhancing: ABSTRACT In the Internet of Vehicles (IoV), secure and low-latency authentication is challenging due to high mobility and computational constraints.
+- wegrelius2026experimental: Fully Homomorphic Encryption (FHE) enables computation directly on encrypted data and has recently been explored for Intelligent Transportation Systems (ITS), yet its practical feasibility for specific V2X tasks remains unclear.
+- liu2026ffha: Nevertheless, existing schemes face challenges including high latency, privacy breaches, poor scalability, and signature injection attacks in batch verification.
+- satya2026federated: This investigation presents a comprehensive federated learning framework designed to address the inherent privacy challenges in IoT data management through decentralized model training and secure aggregation protocols.
+- kumar2026gpu: By pushing isolated GPU polynomial arithmetic to a peak mathematical speedup of 92.7x (164 GOPS) at N = 32,768 clients, we definitively eliminate the lattice-math bottleneck to expose the system’s true limitation: unaccelerated CPU Keccak hashing, which our comprehensive profiling reveals dominates 
+- kumar2026gpu: PCIe data transfer overhead remains minimal at 0.027% of the total pipeline.
+- u2026green: Blockchain strengthens data provenance and accountability, whereas sustainability and energy constraints ensure that predicted responses remain physically feasible.
+- u2026green: The study synthesizes the selected research corpus, identifies major technological relationships, and highlights challenges involving explainability, interoperability, cybersecurity, governance, and human–AI collaboration.
+- wang2026hrc: Heterogeneous Resource-Constrained Intelligent Transportation Systems (HRC-ITS) refers to an ITS integrated with Wireless Body Area Networks (WBAN), which can overcome the limitations of traditional ITS in monitoring drivers' physiological conditions.
+- marchsreiter2026improving: Therefore, switching to PQC is a particularly challenging task in the automotive industry.
+- nguyen2026key: This makes designing an efficient key reconciliation, an essential step in the QKD post-processing, particularly challenging.
+- k2026lightweight: Providing an efficient, anonymous authentication scheme with low computational cost in Vehicular Ad-Hoc Networks (VANETs) remains a significant challenge.
+- eldalahmeh2026lightweight: Vehicular ad hoc networks (VANETs) operating within extended Internet of Vehicles (IoV) infrastructures face critical challenges related to scalability, authentication latency, privacy preservation, and infrastructure‐level attack resilience.
+- chiang2026lightweight: Therefore, designing an efficient and secure authentication mechanism has become an essential challenge in IoV development.
+- chiang2026lightweight: To address the computational overhead challenges posed by the rapid increase in the number of vehicles, we propose a lightweight authentication scheme based on a zero-knowledge proof and design a batch verification mechanism for it.
+- chiang2026lightweight: This scheme meets current IoV needs and provides a promising reference for future intelligent transportation systems.
+- erskine2026machine: And due to limitations imposed by traditional security methods, which are unable to identify malicious nodes in VANET completely, processing delays are longer.
+- zhao2026puf: Furthermore, as vehicles and charging piles are often exposed in public areas and may operate offline, the information stored within these devices requires robust physical protection.To address these challenges, this paper proposes a PUF-based quantum authentication and key agreement protocol for V2
+- zhang2026pidtree: This approach leads to significant challenges, including complex certificate management and the inherent risks of secret key escrow.
+- zhang2026pidtree: To address these limitations, we propose a pseudonym-only approach for anonymous AKA in vehicular networks.
+- gullu2026post: We propose a five-level PQC transition-readiness maturity model and identify large-scale field validation, PQC–QKD integration, and lightweight signature schemes as priority directions for future work.
+- eichen2026practical: Similar limitations affect low-power IoT devices and bandwidth- or energy-constrained terrestrial networks, where PQ authentication may restrict devices to Category 1 security or prevent ambient-powered endpoints from supporting PQ authentication altogether.
+- yadav2026privacy: All in all, the paper has shown that the implementation of AI authentication that is privacy conscious can be feasibly implemented in VINs without compromising real-time behavior to give intelligent transport systems scalable and future-proof security baseline.
+- fatima2026privacy: The rapid growth of distributed computing paradigms, such as the Internet of Things (IoT), edge computing, cloud computing and cyber-physical systems, has made privacypreserving anomaly detection a pressing research challenge.
+- fatima2026privacy: We critically discuss the methodological limitations of cross-study comparison, and we identify open challenges including non-IID data distributions, resistance to poisoning attacks, post-quantum cryptographic resilience and model explainability under privacy constraints.
+- fatima2026privacy: We close with future directions: adaptive privacy-budget mechanisms, federated unlearning for the right to be forgotten, and the integration of quantum-safe cryptographic primitives.
+- ma2026privacy: Specifically, PCDQ uses the Paillier encryption and Chinese Remainder Theorem to protect the query privacy of vehicle owners, allowing the RSU to recover individual data query requests without associating them with the original vehicles.
+- pokhrel2026quantum: We introduce an operational taxonomy linking ITS challenges to quantum computational archetypes, formalize algorithmic foundations using resource-aware complexity models (qubits, depth, shots), and provide a unified comparison of quantum versus classical pipelines using harmonized metrics (latency, 
+- kuntegowda2026quantum: A challenge arises with the advent of quantum computing, which threatens the security of widely deployed cryptographic standards such as RSA and ECC.
+- kuntegowda2026quantum: Key performance metrics such as latency, key negotiation time, and re-keying efficiency demonstrate that crypto agility can be achieved with minimal overhead, confirming its feasibility for real-world deployment.&lt;/div&gt;&lt;div class="htmlview paragraph"&gt;There is an urgent need to adopt quant
+- kuntegowda2026quantum: By embracing crypto-agile designs, automakers can mitigate long-term risks and ensure resilience against future cryptographic threats.
+- pasupuleti2026quantum: The result is a coherent reference framework for designing mobility systems that remain trustworthy as classical edge autonomy converges with post-quantum security and emerging quantum-enabled sensing and optimization.
+- su2026research: In the case analysis, AES-128 and SM4 achieved security scores of 0.92 and 0.87, respectively, while DES, due to key limitations, scored only 0.34, further validating the model's reliability.
+- sun2026revocable: To address these challenges, we propose a Revocable and Conditionally Anonymous Certificateless Authentication Scheme with Anti-Physical Theft Protection.
+- xu2026sdds: To overcome these limitations, we propose SDDS, a scalable and distributed data sharing scheme based on Registration-Based Encryption (RBE).
+- wang2026seba: With the rapid growth of connected vehicles and the increasing demand for low-latency and reliable communication, traditional vehicular networks face severe security challenges.
+- bappy2026sword: Even with the rollout of 5G, network latency between servers and peers remains a significant challenge.
+- zhang2026theoretical: The endogenous security paradigm has emerged to address the limitations of traditional cybersecurity, which relies on reactive “patching” and struggles against unknown threats, APTs, and supply chain attacks.
+- zhang2026theoretical: In a live-network pilot of the endogenous security micro-segmentation system for the 5G core, resource consumption (CPU/memory usage) of network function virtual machines remained below 3% under steady-state service loads.
+- zhang2026theoretical: The paper also critically summarizes current theoretical, engineering, and ecosystem challenges, while outlining future research directions such as “Endogenous Security as a Service” and convergence with quantum-safe technologies.
+- zhang2026privacy: To address these limitations, this paper proposes an HQC-based context-aware linkable ring signature scheme for vehicular networks.
+- zhang2026privacy: A context-aware linking tag is further introduced so that signatures generated by the same vehicle are linkable only within the same public context while remaining unlinkable across different contexts.
+- byeon2026v2x: V2X safety messaging requires low-latency authentication, confidentiality, freshness, and revocation awareness.This study enhances an existing certificate-based signcryption protocol rather than proposing a new primitive.To bind pseudonym certificates, ephemeral keys, status evidence, and replay pro
+- tangade2026zk: Our results demonstrate that zk-ScalHard provides a scalable, secure, and GDPR-compliant architecture for future Zonal SDVs.
+- kang2019secure: However, as the miners are selected from miner candidates by stake-based voting, defending against voting collusion between the candidates and compromised high-stake vehicles becomes challenging.
+- kang2019secure: To address the challenge, in this paper, we propose a two-stage soft security enhancement solution: 1) miner selection and 2) block verification.
+- lu2019survey: However, unique characteristics of VANETs make security, privacy, and trust management challenging issues in VANETs’ design.
+- lu2019survey: Finally, considering that current and near-future applications in VANETs are evaluated by simulation, we give a much-needed update on the latest mobility and network simulators as well as the integrated simulation platforms.
+- raya2008data: In this paper, we address this challenge by extending the traditional notion of trust to data-centric trust: trustworthiness attributed to node-reported data per se.
+- aloqaily2019intrusion: Abstract In the very near future, transportation will go through a transitional period that will shape the industry beyond recognition.
+- otoum2019dlids: To overcome the challenges of securing IoT devices, we propose a new deep learning–based intrusion detection system (DL‐IDS) to detect security threats in IoT environments.
+- lu2018privacy: However, trust and privacy are still open issues due to the unique characteristics of VANETs.
+- wyk2020real: Although connectivity and automation are projected to bring about a vast number of benefits, they can give rise to new challenges in terms of safety, security, and privacy.
+- lu2018bars: However, trust and privacy are still open issues due to the unique characteristics of vehicles.
+- qayyum2019securing: Connected and autonomous vehicles (CAVs) will form the backbone of future next-generation intelligent transportation systems (ITS) providing travel comfort, road safety, along with a number of value-added services.
+- qayyum2019securing: Such a transformation—which will be fuelled by concomitant advances in technologies for machine learning (ML) and wireless communications—will enable a future vehicular ecosystem that is better featured and more efficient.
+- qayyum2019securing: In this paper, we present an in-depth overview of the various challenges associated with the application of ML in vehicular networks.
+- xie2019blockchain: The modern intelligent transportation system brings not only new opportunities for vehicular Internet of Things (IoT) services but also new challenges for vehicular ad-hoc networks (VANETs).
+- arif2019survey: We provide the details of VANETs, discussed the privacy and security attacks in VANETs with their applications and challenges.
+- arif2019survey: We also discussed the potential benefits of the different proposed techniques related to VANETs, application, and challenges in details.
+- dibaei2020attacks: Although many efforts are made to improve the resilience to cyber attacks, there are still many unsolved challenges.
+- dibaei2020attacks: Remaining challenges and future directions for preventing attacks on intelligent vehicle systems have been discussed as well.
+- ju2022survey: After reviewing existing results, some potential research directions and challenges are identified.
+- hussain2021trust: Finally, we discuss some future challenges that will need to be addressed for trustworthy communications in vehicular networks.
+- sheikh2019survey: Lastly, we identified the open research challenges and gave future research directions.
+- sheikh2019survey: In addition, open research challenges and future research directions were issued.
+- azees2016comprehensive: Even though VANETs are used in enormous number of applications, there are many security challenges and issues that need to be overcome to make VANETs usable in practice.
+- azees2016comprehensive: This study provides a summary about the VANET, characteristics and security challenges.
+- nwakanma2023explainable: However, IoV is challenged with security risks in the following five (5) domains: ICV security, intelligent device security, service platform security, V2X communication security, and data security.
+- kerrache2016trust: In addition to the different communication protocols, securing such communications and establishing a certain trustiness among vehicles are among the main challenges to address, since the presence of dishonest peers can lead to unwanted situations.
+- pham2021survey: However, CAVs will face significant security challenges because many of their components are vulnerable to attacks, and a successful attack on a CAV may have significant impacts on other CAVs and infrastructures due to their communications.
+- pham2021survey: Finally, we identify some current research challenges and trends from the perspectives of both academic research and industrial development.
+- pham2021survey: This survey may give researchers and engineers a better understanding of the current status and trend of CAV security for CAV future improvement.
+- sheikh2019comprehensive: VANETs are quite different from the mobile ad hoc networks (MANETs) in terms of characteristics, challenges, system architecture, and their application.
+- sheikh2019comprehensive: In this paper, we summarize the recent state-of-the-art methods of VANETs by discussing their architecture, security, and challenges.
+- aljarrah2019intrusion: To this end, there are two distinct and key challenges that need to be addressed to ensure safety and consumer trust.
+- aljarrah2019intrusion: This paper also presents outstanding research challenges and gaps in intra-vehicle IDS research.
+- liu2020blockchain: However, due to the openness characteristics of VANETs, trust and privacy are still two challenging issues in building a more secure network environment: it is difficult to protect the privacy of vehicles and meanwhile to determine whether the message sent by the vehicle is credible.
+- alnasser2019cyber: In the near future, the vehicular network will be expanded to include the communication between vehicles and any smart devices in the roadside which is called Vehicle-to-Everything (V2X) communication.
+- alnasser2019cyber: The vehicular network causes many challenges due to heterogeneous nodes, various speeds and intermittent connection, where traditional security methods are not always efficacious.
+- alnasser2019cyber: Finally, we point out the research challenges and some future directions.
+- jeffrey2023review: This paper makes a novel contribution by identifying the key challenges that remain in the field, which include resource constraints, a lack of standardized communication protocols, extreme heterogeneity that hampers industry consensus, and different information security priorities between Operation
+- jeffrey2023review: Potential solutions and/or opportunities for further research are identified to address these selected challenges.
+- gupta2020blockchain: Finally, we explore the open issues and challenges of blockchain-based AV system.
+- yang2019blockchainb: In the future, in the case of autonomous driving, traffic information will be exchanged more frequently and more immediately.
+- javaid2020scalable: Therefore, trust establishment in IoV is a key security concern that is constantly limited by scalability challenges.
+- khan2020cyber: There is a lack of systematic and comprehensive review of the literature on cyber-attacks on the CAVs, respective mitigation strategies, anticipated readiness, and research directions for the future.
+- khan2020cyber: The vulnerability of CAVs by proximity (or physical) access to cyber-attacks is outlined with future recommendations.
+- mowla2019federated: Jamming attack detection in FANET poses new challenges for its key differences from other ad-hoc networks.
+- papadimitratos2008gnss: First, we consider replay attacks, which can be effective even in the presence of future cryptographic GNSS protection mechanisms.
+- gao2019distributed: Security assurance in Vehicular Ad hoc Network (VANET) is a crucial and challenging task due to the open-access medium.
+- gao2019distributed: However, big data from VANETs poses serious challenges to DDoS attack detection since the detection system require scalable methods to capture, store and process the big data.
+- gao2019distributed: To overcome these challenges, this paper proposes a distributed DDoS network intrusion detection system based on big data technology.
+- alalwany2024security: Despite IoV's advantages, it comes with its own set of challenges, particularly in the highly important aspects of security and trust.
+- alalwany2024security: Protecting IoV environments from diverse attacks poses significant challenges, prompting researchers to explore various technologies for security solutions and trust evaluation methods.
+- alalwany2024security: Amid these challenges, machine learning (ML) has emerged as a potent solution, leveraging its remarkable advancements to effectively address IoV's security and trust concerns.
+- loukas2019taxonomy: So, any security provision needs to abide by these limitations.
+- loukas2019taxonomy: Its aim is to help identify existing techniques that can be adopted in the industry, along with their advantages and disadvantages, as well as to identify gaps in the literature, which are attractive and highly meaningful areas of future research.
+- soleymani2015trust: Using the systematic method of review, this paper succeeds to reveal the main challenges and requirements for trust in VANETs and future research within this scope.
+- alladi2021artificial: However, the mode of communication in IoV being wireless in nature poses serious cybersecurity challenges.
+- awan2020stabtrusta: To overcome these challenges, clustering methods have been proposed to limit the communication of vehicles with the infrastructure.
+- awan2020stabtrusta: However, the significant challenge for clustering is to preserve the stability of clusters.
+- awan2020stabtrusta: In the proposed approach, we address these challenges using components of trust.
+- ullah2022hdl: However, the rapid growth of IoV has also caused many security and privacy challenges that can lead to fatal accidents.
+- wang2021i: Different from their work, in this paper, we in-depth investigate the features of Infrared light and introduce a new security challenge called I-Can-See-the-Light- Attack (ICSL Attack) that can alter environment perception results and introduce SLAM errors to the AV.
+- iqbal2019trust: Furthermore, it focuses on the unique challenges involved in designing the trust models for social Internet of vehicles.
+- arshad2018review: Based on a rigorous analysis of the existing intrusion detection approaches, the paper also identifies open challenges for an effective and collaborative design of intrusion detection system for resource-constrained IoT system in general and its applications such as IoV.
+- arshad2018review: These efforts are envisaged to highlight state of the art with respect to intrusion detection for IoT and open challenges requiring specific efforts to achieve efficient intrusion detection within these systems.
+- zhang2021blockchain: The simulation results show that the proposed scheme has an obvious limitation on malicious vehicles, and improves the accuracy of the vehicles’ judgment of events based on the received messages.
+- jiang2020poisoning: Aiming at this challenging situation, in this paper, we would like to exploit two attacks against deep learning algorithms in traffic sign recognition system by leveraging particle swarm optimization.
+- almahadin2024vanet: This research suggests a deep learning model for anomaly detection based on GRU over VANET network traffic to address this challenge.
+- patel2015trust: Establishing trust is a challenge while one or more malicious nodes attempt to disrupt route discovery or data transmission in the network.
+- zhang2021ait: To address these rapidly increasing security challenges, we have proposed an AI-enabled trust management system (AIT) in this article, which is an AI-enabled trust management system for vehicular networks using the blockchain technique.
+- ceviz2024survey: Our primary focus centers on the security challenges inherent to FANETs, acknowledging their susceptibility to insider threats due to their decentralized and dynamic nature.
+- ceviz2024survey: To provide a deeper understanding of these challenges, we simulate and analyze four distinct routing attacks on FANETs, using realistic parameters to evaluate their impact.
+- ceviz2024survey: Finally, we rigorously examine open issues, and propose research directions to guide future endeavors in this field.
+- guleng2019decentralized: Trust management in a decentralized vehicular network, such as vehicular ad hoc network, is particularly challenging due to the lack of centralized communication infrastructure and a fast varying feature of the vehicular environment.
+
+## 2. Strong overlap
+
+None. No paper in this batch reaches "strong" overlap: none combines closed-loop attacks, SCMS/PKI backend and traffic/radio co-simulation. Closest (partial):
+
+- gennaro2026revisiting: partial — revisits the ETSI ITS certificate lifecycle (enrolment/authorization), which our engine models for the US SCMS; certificateless group-signature alternative is not in our engine.
+- panahi2026micro: partial — measures ECDSA/Ed25519 signing and verification latency for V2X; our engine models verification cost inside the closed loop (direction 2).
+- boutahala2025trust: partial — targets the verification overhead of ETSI-signed CAMs using a VAE to decide trust; relates to verification policies in direction 2.
+- sikarwar2026dybatch: partial — priority-driven dynamic batch verification under load; relates to verification-policy design (direction 2).
+- zhou2026efficient: partial — DoS against signature (batch) verification; relates to verification-load attacks (runner-up NR sidelink attacks with verification load).
+- gomathy2026simulation: partial — simulates malicious-node detection in V2X; our engine executes misbehaviour detection in simulation.
+- yu2022lstm: partial — ML misbehaviour detection of false data (position falsification) in VANETs; our engine runs detectors closed-loop.
+- ahmad2018man: partial — simulates the impact of MITM attackers on VANET message delivery; our engine executes attacks in simulation and measures impact.
+- lyamin2013real: partial — jamming/DoS detection in IEEE 802.11p; our engine has an 802.11p stack and in-sim attacks.
+- hamieh2009detection: partial — radio interference (jamming) attack detection in VANET.
+- fouchal2019privacy: partial — pseudonym-certificate pool sizing and change for C-ITS privacy; our engine models pseudonym provisioning and linkability.
+- menal2025analyzing: partial — simulation-based evaluation of a secure protocol under latency/loss, the same "evaluate security in realistic network conditions" argument.
+- cadiz2025adaptive: partial — NS-3 based VANET engine with real-time control loop (blockchain consensus), different security model.
+- petit2015potential: partial — attack analysis on automated-vehicle sensors; background for attack-impact studies.
+- biron2018real: partial — DoS detection and estimation in connected-vehicle systems with traffic impact.
+- zhi2025multi: partial — batch revocation of identity credentials in VANETs (accumulator-based), compared to our linkage-based CRL revocation.
+- sun2026revocable: partial — revocation for certificateless VANET authentication; different from SCMS linkage revocation.
+- chen2026multivariate: partial — post-quantum (multivariate) anonymous certificates; relates to PQ pseudonym certificates.
+- tsai2024wots: partial — hash-based (WOTS) post-quantum CPPA for VANETs; relates to PQ signatures in our engine.
+- kumar2026gpu: partial — post-quantum ML-KEM OTA key exchange performance.
+- hortelano2010evaluating: partial — watchdog intrusion detection evaluated in VANET simulation.
+- daeinabi2011detection: partial — detection of malicious vehicles via monitoring, evaluated in simulation.
+- zaidi2016host: partial — statistical rogue-node detection of false information in VANETs, simulated.
+- kaur2026zero: partial — edge-assisted PKI architecture for IoV real-time security (certificate management latency).
+- jha2026ctr: partial — certificate-trust messaging framework with timed operational semantics for V2X.

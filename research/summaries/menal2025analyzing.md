@@ -1,0 +1,11 @@
+# Analyzing the Operational Gaps in SAFUA: Simulation-Based Evaluation of Secure Automotive Firmware Update Protocols
+Hudaila Menal, Maria Imdad · International Multi-Topic Conference 2025 · https://doi.org/10.1109/inmic65900.2025.11348613 · relevance: medium · basis: abstract
+
+**Problem:** The Secure Automotive Firmware Upgrade Approach (SAFUA) proposed a hierarchical authentication framework for in-vehicle systems, implementing the Unified Diagnostic Services (UDS) protocol to ensure secure firmware distribution (ECUs) via wireless transmission. However, despite claiming strong cryptographic potential in predicted lab conditions, SAFUA ignored the dynamic nature of real-world vehicular networks, such ...
+**Approach:** To explore these neglected dynamics, this research paper conducts a theoretical investigation using CAN-FD based firmware modeling under dynamic network and cryptographic workload conditions.
+**Tools and scale:** The Secure Automotive Firmware Upgrade Approach (SAFUA) proposed a hierarchical authentication framework for in-vehicle systems, implementing the Unified Diagnostic Services (UDS) protocol to ensure secure firmware distribution (ECUs) via wireless transmission.
+**Results:** This analysis demonstrates that SAFUA, although secure by design and structurally, turns operationally unreliable and risk prone under dynamic conditions, which reduces its effectiveness in time sensitive applications such as autonomous driving and safety critical ECU updates. Hence, this research recommends the implementation of adaptive key rotation mechanisms and cryptographic load-aware scheduling to improve ...
+**Limitations and future work (as stated by the authors):**
+- Future work will focus on extending this evaluation using simulation tools like NS-3 and examining how SAFUA can integrate with standardized remote update ecosystems such as Uptane for end-to- end integrity assurance.
+**Overlap with our engine:** partial — simulation-based evaluation of a secure protocol under latency/loss, the same "evaluate security in realistic network conditions" argument.
+**Novelty implications:** Does not remove any of our claims; it is a related point of comparison. We cannot claim to be first on the specific mechanism it covers; the joint closed-loop, multi-layer evaluation remains open as far as this abstract shows.

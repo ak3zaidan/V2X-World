@@ -1,0 +1,11 @@
+# KEDenNet-MEO: A Knowledge-Driven Deep Intrusion Detection Framework for VANETs with Realistic Mobility Simulation
+Suman Debnath, Santosh Appachu Devanira Poovaiah, N. Kh. Khurramov, Shivaprasad Ashok Chikop, Sevara Sadullaeva · 2025 International Conference on Innovations in Intelligent Systems: Advancements in Computing, Communication, and Cybersecurity (ISAC3) 2025 · https://doi.org/10.1109/isac364032.2025.11156856 · relevance: medium · basis: abstract
+
+**Problem:** Vehicular ad-hoc networks (VANETs) are increasingly targeted by sophisticated cyber-attacks that can jeopardize driver safety and traffic efficiency.
+**Approach:** This study offers a flexible intrusion-detection framework that combines realistic traffic simulation with a knowledge-driven deep classifier to detect spoofing, denial-of-service, and data-injection attacks. Using SUMO to generate microscopic urban mobility and NS-3 to emulate IEEE 802.11p communications, to synthesize labelled packet traces in which adversarial events are precisely controlled.
+**Tools and scale:** Mentioned in abstract: SUMO, NS-3, ns-3, 802.11p
+**Results:** After cleaning and temporal batching, features are pruned by a modified elite opposition-based artificial hummingbird optimization algorithm (MEO-AHBOA), which balances exploration through opposition sampling with exploitation via elitist learning, shrinking the dimensionality by 42 % while preserving discriminatory content. The reduced vectors feed a knowledge-embedded dense network (KEDenNetwork) who’s densely connected blocks are augmented with protocol-aware gating units that encode physical and MAC-layer heuristics.
+**Limitations and future work (as stated by the authors):**
+- The modular architecture permits drop-in replacement of attack libraries, feature selectors, and classifiers, facilitating reproducible benchmarking across future VANET security studies.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

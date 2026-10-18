@@ -1,0 +1,11 @@
+# CRT-Paillier Homomorphic Privacy Protection Scheme Based on BLS Signatures in Mobile Vehicular Networks
+Yuquan Zhou, Hejin Huang, Wenyu Liao, Jiyan Liu et al. · 2024 IEEE International Conferences on Internet of Things (iThings) and IEEE Green Computing & Communications (GreenCom) and IEEE Cyber, Physical & Social Computing (CPSCom) and IEEE Smart Data (SmartData) and IEEE Congress on Cybermatics 2024 · https://doi.org/10.1109/ithings-greencom-cpscom-smartdata-cybermatics62450.2024.00095 · relevance: low · basis: abstract
+
+**Problem:** However, this process can potentially lead to serious data privacy issues due to the large-scale data exchange.
+**Approach:** This paper proposes an edge-assisted homomorphic privacy protection scheme in VANETs, based on BLS signatures for homomorphic authentication and group signatures to address the conflicting requirements of participant identity verification and anonymity. The proposed scheme significantly enhances data security and operational efficiency within the VANET domain.
+**Tools and scale:** Not stated in the abstract beyond the above; no traffic simulator, radio stack or SCMS-scale deployment is described.
+**Results:** The incorporation of CRT decomposes the modulo operation in the Paillier algorithm into operations with smaller moduli, further enhancing the efficiency of the Paillier algorithm in handling large-scale datasets, and reducing computational complexity and time costs. Experimental results demonstrate that with a global precision of 1024 bits in gmpy2, for a 2048-bit key length CRT-Paillier encryption algorithm, the encryption time is 91.30 ms, and the decryption time is 9.96 ms.
+**Limitations and future work (as stated by the authors):**
+- "By utilizing the Chinese Remainder Theorem (CRT)-optimized Paillier encryption algorithm, it allows for homomorphic addition operations on encrypted data, aiming to support secure data aggregation in ciphertext states while ensuring data transmission and aggregation security."
+**Overlap with our engine:** none — a standalone authentication/crypto scheme evaluated in isolation (per the abstract); no closed-loop traffic, radio and SCMS co-simulation.
+**Novelty implications:** Leaves open how such schemes behave inside a full SCMS with realistic traffic and radio load; it does not rule out any candidate direction.

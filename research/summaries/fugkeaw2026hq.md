@@ -1,0 +1,11 @@
+# HQ-FCLB: Hybrid Post-Quantum Access Control With Fog-Assisted Ciphertext Aggregation and Dynamic Load Balancing for Industrial IoT
+Somchart Fugkeaw, Maneesha Perera, Hiroyuki Sato · IEEE Internet of Things Journal 2026 · https://doi.org/10.1109/jiot.2026.3722668 · relevance: low · basis: abstract
+
+**Problem:** Industrial Internet of Things (IIoT) systems increasingly rely on fog and cloud infrastructures to process and share large volumes of sensitive operational data. Although lattice-based ciphertext-policy attribute-based encryption (CP-ABE) provides quantum-resistant fine-grained access control, existing approaches incur high encryption and decryption overhead, lack efficient ...
+**Approach:** This article presents hybrid post-quantum access control with fog-assisted ciphertext aggregation and dynamic Load balancing for industrial IoT (HQ-FCLB), a system-level integration and optimization framework for post-quantum access control in fog-assisted IIoT environments. The framework introduces policy-aligned fog-level ciphertext aggregation, amortized user-side decryption, blockchain-anchored forward-secure ...
+**Tools and scale:** Non-vehicular setting. Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** The experimental results show that HQ-FCLB achieves lower amortized encryption and decryption overhead, higher throughput, and more stable latency than representative post-quantum access control schemes. These results demonstrate that the joint optimization of cryptographic operations and fog-level resource management provides an effective and scalable foundation for post-quantum access control in IIoT environments.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** none: post-quantum/hybrid cryptography outside V2X. It gives background for direction 2 (PQ migration of the SCMS) but does not model V2X channels, SCMS issuance, or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the vehicular case (SCMS scale, broadcast channel load, safety cost) is not addressed.

@@ -1,0 +1,11 @@
+# Evaluations of Cyber Attacks on Cooperative Control of Connected and Autonomous Vehicles at Bottleneck Points
+H. M. Sabbir Ahmad, Ehsan Sabouni, Wei Xiao, Christos G. Cassandras, Wenchao Li · venue unknown 2023 · https://doi.org/10.14722/vehiclesec.2023.23082 · relevance: medium · basis: abstract
+
+**Problem:** In this paper we analyze the effect of cyberattacks on cooperative control of connected and autonomous vehicles (CAVs) at traffic bottleneck points.We focus on three types of such bottleneck points including merging roadways, intersections and roundabouts.The coordination amongst CAVs in the network is achieved in a decentralized manner whereby each CAV formulates its own optimal control problem and solves it onboard in real time.A roadside unit is introduced to act as the coordinator that communicates and exchanges relevant data with the CAVs through wireless V2X communication.We show that th
+**Approach:** In this paper we analyze the effect of cyberattacks on cooperative control of connected and autonomous vehicles (CAVs) at traffic bottleneck points.We focus on three types of such bottleneck points including merging roadways, intersections and roundabouts.The coordination amongst CAVs in the network is achieved in a decentralized manner whereby each CAV formulates its own optimal control problem and solves it onboard in real time.A roadside unit is introduced to act as the coordinator that communicates and exchanges relevant data with the CAVs through wireless V2X communication.We show that this CAV setup is vulnerable to various cyberattacks such as Sybil attack, jamming attack and false da
+**Tools and scale:** Not stated in the abstract.
+**Results:** No quantitative results stated in the abstract.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

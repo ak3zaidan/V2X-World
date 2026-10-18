@@ -1,0 +1,120 @@
+# Batch 28 notes
+
+All 378 papers in this batch are catalogued as low relevance; none has an open-access PDF in papers/, so every summary is from the abstract (162 have no abstract and are summarised from title/metadata only).
+
+## 1. Stated limitations and future work
+
+- li2026blockchainb: In this study, we thoroughly analyze the threats and challenges within IoV systems and provide a systematic review of blockchain-based IoV security solutions.
+- li2026blockchainb: This paper summarizes blockchain solutions for addressing key challenges in IoV, including network security, communication efficiency, resource optimization, data management, and transaction operational efficiency.
+- li2026blockchainb: Additionally, this paper explores future research directions, including advanced security mechanisms, efficient consensus algorithms, the integration of edge computing, and intelligent applications, demonstrating the potential of blockchain in tackling IoV system challenges.
+- dimitrov2026cybersecurity: The primary scientific challenge is that compromising Cooperative ITS (C-ITS) can enable manipulation of critical transport functions, such as automated control, braking, and signaling, through falsified or maliciously injected communication messages.
+- ali2026collaborative: We explored how integration of 5G networks, blockchain system, and quantum computing can address these security related challenges.
+- ali2026collaborative: We address these challenges, by proposing a multi-layer AI-driven cybersecurity architecture by integrating in-vehicle anomaly detection, cloud-based correlation, and privacy-preserving federated learning.
+- rai2026detection: Furthermore, we address the unique challenge of adversarial collusion in grid topologies by deriving a provable tₘₐₓ bound, the number of colluding Byzantine nodes that can be tolerated while a quorum-capable component of honest nodes is guaranteed to survive; we show tₘₐₓ= Ω(n⁴/³) and tₘₐₓ= O(n³/²)
+- rizal2026exploring: However, the growing connectivity and diverse communication protocols also create major cybersecurity challenges, especially in the network tier of connected vehicles.
+- rizal2026exploring: The existing approaches are yet to face limitations in real-time performance, contextual accuracy, and supply chain resilience under Malaysia's tropical urban conditions.
+- lomte2026intelligent: To overcome these challenges, this work presents an intelligent spectrum sensing framework that integrates machine learning (ML), trust management, and cooperative sensing to improve detection reliability, throughput, and security in highly mobile vehicular environments.
+- abubakar2026securing: Future work will focus on improving convergence behaviour and event detection performance in larger and more densely populated vehicular networks.
+- gundeti2026security: Furthermore, the technical limitations of these strategies, performance evaluation metrics, and open challenges that must be addressed in the future to improve the security of VANETs are systematically analyzed.
+- roy2026security: Finally, we highlight open-ended research challenges such as scalability, postquantum resilience, and privacy-preserving data sharing.
+- zhang2019data: To address these security challenges, we propose a data security sharing and storage system based on the consortium blockchain (DSSCB).
+- saxena2017network: In this article, we describe the network security and privacy requirements and challenges of V2G applications.
+- sadiq2020blockchain: To address these challenges, we exploit consortium blockchain to maintain transparency and trust in trading activities.
+- sadiq2020blockchain: On the other hand, the energy trading transactions among EVs face some security and privacy protection challenges.
+- noh2020distributed: In general, the identification information remains encrypted to ensure privacy.
+- diazsanchez2019tls: Considering the advent of IoT/M2M scenarios and their particularities, it is necessary to have a closer look at TLS history to evaluate the potential challenges of using TLS and PKI in these scenarios.
+- shawky2023efficient: Using the extracted key and under binary hypothesis testing, a PHY challenge-response algorithm for multicarrier communication is proposed for re-authentication; S4.
+- jolfaei2019privacy: In this environment, there are issues in regards to the scalability of key management and computation limitations at the edge of the network.
+- gaba2020robust: These threats can be overpowered with secure sessions; however, the exchange of keys to establish a secure session over a vulnerable channel becomes a challenge.
+- alsaeed2022authentication: Finally, we discuss some open issues and future directions.
+- eldefrawy2019key: However, security and privacy challenges are still to be well addressed.
+- eldefrawy2019key: The IIoT requires different properties to achieve secure and reliable systems and these requirements create extra challenges considering the limited processing and communication power available to IIoT field devices.
+- mahmood2021digital: The conventional mechanisms, including certificate revocation list (CRL) and online certificate status protocol (OCSP), are subjected to some limitations in energy efficient environments like SG infrastructure.
+- mahmood2021digital: To address the aforementioned challenges, this paper proposes a scheme incorporating the advantages and strengths of the fog computing.
+- zeydan2022postb: Advances in quantum computing will challenge the security of existing blockchain technology based on Public Key Infrastructure (PKI) technologies.
+- aziz2020secureais: Despite the existing contributions in the literature propose some strategies to overcome the exposed weaknesses, some are insecure, others do not comply with the standard, while the remaining few ones would introduce an unacceptable overhead–that is, they would require a relevant number of AIS-time 
+- khurshid2022autocert: This issue is referred to as the Time-Of-Check to Time-Of-Use (TOCTOU) problem and remains unsolved in the context of Integrity Certificates.
+- riad2022blockchainbased: But, on the other hand, data privacy and secrecy are a challenge.
+- riad2022blockchainbased: In addition, it is also secured against the chosen‐text attack by employing the challenge‐response authentication mechanism.
+- sarsam2023cybersecurity: This review examines the critical cybersecurity challenges posed by AVs, focusing on external and internal threats including hackers, cybercriminals, and software vulnerabilities Denial of service (DoS); including AVs that rely on sophisticated communications networks, sensor systems, and artificial
+- sarsam2023cybersecurity: AI algorithms, as well as systematic challenges and regulatory gaps in AV delivery.
+- luo2022scalacert: Although blockchain enhances security, it brings new problems in scalability due to the inherent limitations of blockchain’s data structure and consensus mechanism, which become much severe for the massive access in the era of 5G and B5G.
+- malik2023l: Unfortunately, security remains a major challenge and the lack of secure links have fueled the increased attacks on IoT devices and networks.
+- xingyu2022hierarchical: All in all, making the authentication scheme more efficient and concise is the focus of our future research.
+- chen2018security: However, the security of the 5G UDN is still in its infancy, and the data communication security among the network entities is facing new challenges.
+- astorga2022revisiting: However, the implementation of PKIs and certificate lifecycle management procedures in Industrial Internet of Things (IIoT) environments presents some challenges, mainly due to the high resource consumption that they imply and the lack of trust in the centralized CAs.
+- astorga2022revisiting: This paper identifies and describes the main challenges to implement certificate-based public key cryptography in IIoT environments and it surveys the alternative approaches proposed so far in the literature to address these challenges.
+- astorga2022revisiting: The proposed alternatives are complementary and their application depends on the specific challenge to solve, the application scenario, and the capacities of the involved IIoT devices.
+- kim2016effective: Finally, they discuss the results of an evaluation provide an outlook on the future work in this field.
+- yu2024ensuring: However, the E2E security with fine-grained access control still remains as a challenging issue for resource-constrained end-devices since the existing security solutions require complicated key management and high resource consumption.
+- yu2024ensuring: In the ABE scheme, the outsourced computation is provided for encryption, and the computation cost for decryption constantly remains small, regardless of the number of attributes.
+- zhong2020weight: However, owing to limitations associated with VANETs’ own unchanging model and traditional network structure, there are still many challenging concerns such as poor flexibility and controllability to deal with.
+- li2023v2v: The C-V2X equipment transmit secret data encrypted with the opposite equipment public key to the other equipment, they authenticate each other through a challenge response protocol based on identity-based cryptography, and they negotiate the working key used to encrypt the communication data.
+- gu2020efficient: For addressing aforementioned two challenges, an efficient blockchain-based authentication and secure certificate revocation scheme is proposed.
+- cebe2020communication: However, PKC still has certain challenges in terms of certificate revocation and management.
+- cebe2020communication: In particular, distribution and storage of the Certificate Revocation List (CRL), which holds the revoked certificates, is a major challenge due to its overhead.
+- cebe2020communication: To address this challenge, in this paper, we propose a novel revocation management approach by utilizing cryptographic accumulators which reduces the space requirements for revocation information significantly and thus enables efficient distribution of such information to all smart meters.
+- zhang2020secure: Additionally, for the calculation limitation of the vehicle terminal, only 6 bilinear pairing operations are needed in the data recovering phase of the scheme.
+- chen2025anonymous: However, ensuring secure vehicle identity authentication and protecting user privacy remain two challenging issues in VANETs.
+- chen2025anonymous: Addressing these challenges, this paper seamlessly integrates blockchain technology with the InterPlanetary File System to realize a fully decentralized storage solution for identity verification information.
+- he2019indraj: To migrate IoT from poorly scalable, pair-wise symmetric encryption to PKI, a major obstacle remains: how do we certify the public keys of billions of small devices without manual checks or complex logistics?
+- kong2026ctng: —We present CTng, an evolutionary and practical PKI design that efficiently addresses multiple key challenges faced by deployed PKI systems.
+- boudagdigue2020cluster: This integration brings with it new security and privacy challenges because of the sensitive information exchanged between devices and the infrastructure.
+- tartan2021scalable: The main challenges with traditional public key infrastructures arise from the detection of fraudulent public key certificates and the timely retrieval of an up-to-date record of revoked certificates.
+- krivokapic2023authenticated: The slow propagation speed of underwater acoustic waves and low channel bandwidth are additional challenges affecting the design and implementation of security mechanisms.
+- wan2023imct: To mitigate this problem, Certificate Transparency (CT) has been widely deployed, but it brings more transmission and validation overhead, posing new challenges for IoT devices.
+- yao2023vdkms: The proposed VDKMS addresses the challenges of secure communication, privacy preservation, and efficient key management in V2X scenarios.
+- herbke2024decentralized: The transition from centralized to decentralized systems presents challenges such as trust distribution and privacy-preserving credential management.
+- herbke2024decentralized: We provide a taxonomy of the challenges of centralized systems and discuss opportunities provided by existing decentralized technologies.
+- muid2025accurevoke: Traditional revocation mechanisms like Certificate Revocation Lists (CRLs) and the Online Certificate Status Protocol (OCSP) face significant challenges, including scalability issues, high bandwidth consumption, privacy concerns, and reliance on centralized infrastructure that can become points of f
+- muid2025accurevoke: In this paper, we introduce AccuRevoke, a novel revocation scheme that leverages cryptographic accumulators and edge computing to address these challenges effectively.
+- dickinson2019leveraging: Certificate revocation strategies face scalability, effectiveness, and deployment challenges as HTTPS adoption rates have soared.
+- nezhadian2025measuring: While the phenomenon of private key sharing was extensively studied, the prevalence of public key sharing on the Internet remains largely unknown.
+- davis2006security: Interestingly, the attributes that make MANETs attractive as a network paradigm are the same phenomena that compound the challenge of designing adequate security schemes for these innovative networks.
+- struder2018flexible: The authentication of VANET messages continues to be an important research challenge.
+- struder2018flexible: Although much research has been conducted in the area of message authentication in wireless networks, VANETs pose unique challenges, such as real-time constraints, processing limitations, memory constraints, requirements for interoperability with existing standards, extensibility and flexibility for
+- wilson2020digital: The PKI security function can remain centralized while certificate issuance is decentralized, which leaves community organizations free to carry on their business as usual.
+- yan2021decentralized: This paper analyses the issues and challenges during the NFV implementation and proposes a blockchain‐based decentralized NFV certificate management mechanism.
+- kwon2018understand: The downloader graph captures the download activities across end hosts and exposes large parts of the malware download activity, which may otherwise remain undetected, by connecting the dots.
+- leaby2022secure: In vehicular ad hoc networks (VANET), the privacy of vehicle data symbolizes a big challenge towards malicious attacks.
+- ruan2023private: Blockchain is the most promising technology to tackle the security challenges of certificate revocation schemes, such as vulnerability to the single point of failure and lack of accountability systems.
+- diazsanchez2025beyond: Internet of Things (IoT) systems that manage data across cloud, fog, and edge environments—and the devices that consume those services—face substantial challenges in confidentiality, privacy, and authentication.
+- diazsanchez2025beyond: In this article, we present a collision-based DNSSEC signature-delegation mechanism designed to overcome these scalability limitations.
+- fezeu2025non: We conclude with open challenges—including deepfake-aware authentication, privacy-aware logging, and quantum-resilient evidence chains—and propose directions for standards bodies and industry adoption.
+- han2026gnn: Abstract The rapid expansion of Internet of Things deployments has introduced significant challenges in trust management and certificate lifecycle administration.
+- kayondo2026secv: S E CV addresses practical challenges in TEE–HSM trust establishment, real-time mediation, and robust attribution under compromise.
+- lin2015security: However, there are many challenges of applying security mechanisms to embedded systems, such as open environments, limited resources, strict timing requirements, and large number of devices.
+- lin2015security: These challenges make it very difficult and sometimes impossible to add security mechanisms after initial design stages without violating other system constraints.
+- lin2015security: Our methodology is different from the traditional mapping process because it not only maps functional models to architectural platforms but also explores security mechanism selection and architecture selection.We then focus on the security issues for automotive systems as they represent many of the 
+- anon2018performance: The main challenge in its implementation is to provide a secure mechanism against the various attacks and threats that have the capability to bring the network performance significantly down.
+- foltz2020public: This paper examines some of the security challenges related to PKI deployment in the context of Enterprise Level Security (ELS), an enterprise solution for a high security environment.
+- lu2022secure: However, it is still a critical challenge in IoT how to guarantee the security and efficiency of implicit certificates.
+- r2024elliptic: Furthermore, a security analysis confirms the protocol’s resistance to cyber threats, including man-in-the-middle attacks, and its potential for post-quantum adaptation.This research underscores the critical role of ECC in addressing the unique challenges of real-time secure communication in smart c
+- premont2025novel: A major challenge is to efficiently share the revocations that took place.
+- premont2025novel: Both mechanisms can be optimized but have limitations, especially due to their cumbersome nature.
+- zhao2025unified: This paper proposes a unified fault-tolerant batch authentication scheme for vehicular networks, designed to address key limitations in existing approaches, namely the segregation between in-vehicle and V2I authentication scenarios and the lack of fault tolerance in traditional batch authentication 
+- zhao2025unified: Based on a hardware–software co-design philosophy, the scheme deeply integrates the security features of hardware such as Tamper-Proof Devices (TPDs) and Physical Unclonable Functions (PUFs) with the efficiency of cryptographic primitives like Aggregate Message Authentication Codes (MACs) and the Ch
+- chen2025secure: In response to the security issues exposed in the current Internet of Vehicles, especially the data transmission security challenges faced by users when accessing vehicles through cloud servers, including privacy breaches and illegal control risks, this paper proposes a secure access method for the 
+- cybersecurityexpert2025bridging: CBA, rooted in public key infrastructure (PKI), remains a necessary requirement in compliance-focused environments and is crucial for safeguarding human and machine identities.
+- kumar2025centralised: However, microservices and other cloud-based applications encounter several challenges such as undue latency and reliability with traditional OCSP/CRL checks.
+- kumar2025centralised: Revocation checks are mandated in PCI DSS v4.0, eIDAS, and FedRAMP.Our centralised framework addresses performance and reliability challenges in certificate revocation validation for cloud-native microservices by leveraging a multi-layer validation strategy that orchestrates Bloom filters, OCSP stap
+- anon2025securing: This research article examines the implementation of Public Key Infrastructure (PKI) for securing enterprise APIs in modern digital environments.As organizations increasingly rely on APIs for system integration and data exchange, the need for robust security measures has become paramount.It analyzes
+- choi2025two: While some small-scale prototype systems have been developed, large-scale implementations that are actively used by citizens remain rare.
+- song2026lightweight: By integrating Elliptic Curve Cryptography (ECC) with highly reliable Self-Adaption Deviation Locking PUFs (SDL PUFs), we design a dynamic Challenge-Response Pair (CRP) obfuscation mechanism.
+- rahoof2026ai: This dual layered architecture offers a paradigm for an architecture for a scalable, adaptive, and quantum resilient next-generation PKI to overcome some of the immediate and long-term challenges in cybersecurity.
+- narkedimilli2026advances: Finally, we identify open challenges, including dynamic consensus tuning, cross-domain interoperability, real-world testbeds, and postquantum resilience, and outline a research roadmap toward robust, production-grade blockchain-enabled IoV ecosystems.
+- iftikhar2026b: Despite its potential, SIoV faces major challenges due to its highly dynamic environment, including secure key management, protection of location privacy, scalability, and communication latency.
+- iftikhar2026b: Additionally, adaptability, scalability, and efficient resource discovery remain major challenges in SIoV environments.
+- emran2026battlefield: The design places an outer certificate challenge on the 5G base-station called gNB, an independent inner certificate challenge on the Access and Mobility Management Function (AMF) in the 5G core network, and a TPM PCR (Platform Configuration Register) quote verified by an attestation proxy on the 5G
+- emran2026battlefield: A gNodeB (gNB) side Radio Resource Control (RRC) forwarding gate and an AMF-side save-and-replay mechanism enable multi-round certificate and attestation challenge-response exchanges to be inserted into the registration path without modifying any 3GPP Non-Access Stratum (NAS) message structures or a
+- brinzea2026blockchain: While Public Key Infrastructure (PKI) and electronic signature (ES) systems deployed under eIDAS provide strong cryptographic guarantees, standardized protocols, and cross-border legal recognition, their operational model remains largely centralized, concentrating trust in supervised authorities and
+- brinzea2026blockchain: Finally, the paper identifies current limitations, including scalability, regulatory alignment, privacy constraints, and the absence of production-scale pilot data, and outlines open research challenges for the adoption of blockchain in regulated digital trust services.
+- alagappan2026cradle: This fragmentation creates structural vulnerabilities: devices provisioned with factory-injected credentials lack mechanisms for cryptographic agility; ownership transfer protocols fail to account for multi-stakeholder trust boundaries; and end-of-life procedures remain undefined, leaving deployed d
+- ghosh2026ep: In our simulation harness, EP-CF reduces amortized rebuild-related CPU cost by over an order of magnitude relative to monolithic filters, while per-operation query and update latency remain within a small constant factor of the monolithic baselines, at the cost of a modest, bounded increase in per-q
+- li2026federated: The certificate occupies 88 bytes, a 92.7% reduction relative to a typical X.509 credential, and a complete authentication exchange, comprising public-key reconstruction, a verifier challenge, proof of private-key possession over the bound transcript and session-key confirmation, completes in 12.3 m
+- li2026federated: The trust root remains the cloud certificate authority; what the design decentralizes is the verification path, not the root itself.
+- premont2026leveraging: Managing certificate revocation remains a recurring challenge in public key infrastructure (PKI).
+
+## 2. Strong overlap
+
+- None. No paper in this batch overlaps the engine or a candidate direction strongly (all low relevance, adjacent background).

@@ -1,0 +1,279 @@
+# Batch 17 notes
+
+All 378 papers are medium relevance; all summaries are abstract-based (88 had no abstract in the catalog). Limitation lines are sentences from the abstracts that mention limitations, open challenges or future work.
+
+## 1. Stated limitations and future work
+
+- elsayed2021edge: The proposed solution also aims to overcome the limitations of the two commonly utilized approaches in this context: cloud computing and Peer-to-Peer (P2P) networking.
+- elsayed2021edge: Our framework has a set of features that make it an efficient platform to address the major security challenges in vehicular networks including latency, scalability, uncertainty, data accessibility, and malicious behavior detection.
+- sedar2022multi: The transformative Internet-of-Vehicles (IoV) paradigm comes inadvertently with challenges which involve security vulnerabilities and privacy breaches.
+- sarker2023reinforcement: Potential attackers change their behaviour over time and remain undetected due to the ad-hoc nature of VANET.
+- sarker2023reinforcement: Capturing the dynamic attacker behaviour and updating the corresponding neighbourhood information without compromising the quality of service requirements is an ongoing challenge.
+- hossain2023survey: However, as our society grows more automated and networked, criminal actors will have additional opportunities to conduct a variety of attacks, putting CAV security in danger.
+- hossain2023survey: In conclusion, a number of difficulties and unsolved issues for future research are analyzed and explored.
+- bataineh2024detecting: Machine learning-based Intrusion Detection Systems (IDSs) for vehicle networks can collaborate to enhance their performance by sharing crucial decisions when individual datasets lack diversity, which hinders effective model training.
+- bataineh2024detecting: However, such collaborative coalitions are vulnerable to poisoning attacks, where certain members tamper with training data, leading to wrong predictions by the IDSs.
+- li2025dmtas: However, the models in most existing trust schemes cannot be dynamically updated over time, failing to adapt to the high dynamics of VANETs.
+- li2025dmtas: Moreover, they lack protection for data privacy, increasing the risk of information tampering and leakage.
+- dalal2025ensuring: ABSTRACT VANETs are essential for future intelligent transportation systems, enabling communication among vehicles and infrastructure.
+- dalal2025ensuring: However, their decentralized nature presents significant security challenges.
+- muktar2025machine: However, Distributed Denial of Service (DDoS) attacks, which interfere with safety-critical communication channels, can severely impair their reliability.
+- pattnaik2014security: Implementation of mobile ad hoc networks has eventually captured practically most of the parts of day-today life.One variation of such networks represents the Vehicular Ad Hoc Networks (VANETs), widely implemented in order to control day-to-day road traffic.The major concern of VANETs is oriented ar
+- roy2015survey: However, a malicious vehicle can trace the messages and can launch varied types of malicious activity which leads to the compromise of personal privacy.
+- roy2015survey: This paper presents the security challenges faced by the network and analyzes the malicious Sybil activity.
+- bouali2016distributedb: We use Kalman filter to predict the future behavior of vehicles and classify them into three categories (white, gray and black) based on their expected trustworthiness.
+- li2019speed: However, different from traditional cognitive networks, the high mobility of CVNs makes cooperative spectrum sensing more challenging, and new attacks are frequently emerging.
+- fabi2020psychology: The future transportation systems demand an intelligent traffic system that can be achieved by connecting the vehicles to the Internet of Things (IoT) which in turn forms an Internet of Vehicles (IoV) network.
+- boualouache2022deep: However, NS has generated new network threats that might target CAVs leading to road hazards.
+- giang2022jamming: However, BSMs are vulnerable to different attacks, especially jamming attacks, due to their limited short message length and life span.
+- dang2022transfer: However, safe and secure navigation of UAVs is a key requisite for their integration in the airspace.
+- mhamdi2022trust: Given its features, this technology has the potential to provide answers to challenges encountered in a very sensitive sector, namely, Internet of Vehicles (IoV).
+- mhamdi2022trust: To overcome these challenges, the integration of blockchain technology and multi-agent systems is a key solution.
+- wang2023blockchainenhanced: However, the openness and dynamics of wireless communications and the high frequency of information interaction of MEC‐enabled intelligent vehicular collaboration services in the 6G era make them highly vulnerable to cyber attacks.
+- wang2023blockchainenhanced: How to achieve dynamically trustworthy, secure, and intelligent vehicular collaboration services in the presence of malicious node access and cyber attacks in the 6G MEC‐enabled vehicular network is a significant challenge.
+- wang2023blockchainenhanced: In this paper, we propose a novel blockchain‐enabled trust management mechanism to address this challenge.
+- li2024security: However, existing security risk monitoring measures lack linkage with attack behavior, and security defense strategies cannot fully and promptly respond to security risk levels and system vulnerabilities.
+- li2024security: The effectiveness of this model has been validated through experiments, and potential research directions in the future are discussed and analyzed.
+- khattak2024cyberattack: The monitoring system, however, reverts the system to a safe state of operation and reduces the negative impacts of cyberattacks.
+- khattak2024cyberattack: The findings have implications for the design of future resilient systems.
+- shahid2024dos: However, VANET communication is vulnerable to various types of attacks, and appropriate security mechanisms must be in place to ensure that exchanged messages are not altered or false messages created by malicious attackers.
+- babbar2024effective: However, VN are vulnerable to Distributed Denial of Service (DDoS) attacks, posing severe threats in the contemporary Internet landscape.
+- babbar2024effective: Additionally, the approach distinguishes between reconnaissance, Denial of Service (DoS), and DDoS traffic by addressing the challenges of imbalanced and overfitting dataset traces.
+- babbar2024effective: One of the significant challenges in this integration is managing the computational load and ensuring real-time performance.
+- babbar2024effective: Ensuring scalability and maintaining high detection accuracy as network traffic grows and evolves is another critical challenge.
+- hallyburton2025trust: Ad hoc networks of unmanned aerial vehicles (UAVs) allow for real-time data sharing, but they face security challenges due to their decentralized nature, making them vulnerable to cyber-physical attacks.
+- agarwal2016review: In vehicular ad hoc network (VANETs), the applications mainly focused on the road and making their journey safe and comfortable to fulfill the users' requirements.It is a challenging subclass of Mobile Ad-hoc Network, which empowers smart transmission among vehicles and between vehicles and roadside
+- sangve2017intrusion: With this every node, which is calculating the global parameter flow will get meta-information from RSUs in whose communication range remains the node.
+- zhang2020high: To overcome the shortcomings of sliding mode observer in detecting the attacks, a high gain observer design approach is presented to derive the velocity and acceleration values which can be used to estimate the delay, and the performance is compared with sliding mode observer.
+- naveen2020implementation: In order to overcome this, Vehicular Ad-hoc Network (VANETs) is considered as a key element of future Intelligent Transportation Systems (ITS).
+- alali2020reputation: Nevertheless, the criticality of this communication as it involves people's lives and its direct impact on the overall efficiency of the transportation system raises a lot of security challenges especially with the expected increase of traffic information exchange in the future with the use of auton
+- vintimillatapia2020vanetchain: Vehicular ad hoc networks (VANETs) face challenges related to the reliability of the data exchanged and the unstability of the communication links.
+- vintimillatapia2020vanetchain: These shortcomings have hampered the development of the long-awaited applications that would turn roads into a smart environment.
+- hasan2021fuzzy: However, accurate trust estimation still remains distant as existing works do not consider all malicious features of vehicles, such as dropping or delaying packets, altering content, and injecting false information.
+- wang2021deep: However, it has been shown that sensors and wireless channels are vulnerable to security attacks, and attackers can modify data sensed from sensors or received from other vehicles.
+- najafi2022decentralized: However, VANET is prone to critical risks, threats, and attacks due to its unique characteristics and dynamic topology.
+- najafi2022decentralized: Also, the certainty rate remains between 91% and 99% regardless of the simulation scenario's duration.
+- kuang2022gtms: However, due to the rapidly changing network topology and various communication capabilities, the IoV is confronted with more complex network security risks than IoT, such as trust and reputation.
+- sontakke2022optimized: The presented method overcomes the traditional PSO's drawbacks, such as easily falling into local optima, and improves its performance.
+- fayi2023survey: However, offloading to another node opens up new vulnerabilities regarding security and privacy.
+- ghaleb2023intelligent: Vehicular ad hoc networks have emerged as the main building block for the future cooperative intelligent transportation system (cITS) to improve road safety and traffic efficiency and to provide passenger comfort.
+- ghaleb2023intelligent: However, vehicular networks are decentralized, characterized by high mobility and dynamicity, and vehicles move in a hostile environment; such characteristics make VANET applications suffer many security and communication issues.
+- ghaleb2023intelligent: However, existing dissemination schemes are inefficient for safety messages and are vulnerable to malicious nodes and rely on the majority of honest assumptions.
+- ghaleb2023intelligent: Therefore, the proposed scheme can have an important role in improving the applications of future cITS.
+- bajpai2023intrusion: However, it is not practical to deploy enough RSUs, and the current RSU placement does not provide complete coverage of an area.
+- wang2024reliable: However, data routing in V2X networks often faces potential security threats, which may lead to communication interruption, data delay, or information loss.
+- khan2025enhancing: However, there exists a considerable risk to the acquisition of Position, Velocity and Time (PVT) in AVs, since the acquisition of PVT is vulnerable to Global Positioning System (GPS) spoofing attacks that could redirect the AV to wrong paths or lead to security threats.
+- cheng2025mkf: However, intruders can launch malicious attacks on the CAN due to the lack of security mechanisms.
+- wang2025observer: However, in practical environments, due to the openness and non-confidentiality of the network, vehicle platoon may be vulnerable to false data injection (FDI) attacks, resulting in malicious tampering of data on the channel.
+- s2025optimizing: However, there are several concerns with the present IoV, including privacy breaches, security holes, and the possibility of malevolent vehicles uploading false information to the network, which might cause significant traffic jams.
+- wu2025trust: Finally, we identify open challenges and propose future research directions to enhance the explainability, comprehensiveness, and accuracy of TRMSs in large-scale data-sharing ecosystems.
+- roy2017trusted: However, the generated message by a vehicle may not be reliable every time.
+- zahra2018mnp: Today, traffic security has become an obligation rather than a necessity.Hence to secure the traffic, provide comfort to the driver and the passengers, ensure safety of the pedestrians, infrastructure as well as the one's sitting inside the cars, Intelligent Transport System (ITS) was created.The ba
+- abdulkader2018malicious: But many attackers like black hole attack, wormhole attack and Sybil attack are more vulnerable to VANET.
+- kumar2020secure: The proposed Dropping behaviour of Blackhole Attacker and Wormhole Attacker spot the malicious/attacker vehicles by their absurd intrusion in communication.
+- sarker2020advanced: In CAV scenarios, an autonomous vehicle shares its current and near-future driving maneuvers in terms of different driving signals (e.g., speed, brake pedal pressure) with its nearby vehicles using wireless communication technologies.
+- sarker2020advanced: The existing black-box adversarial attacks (which are for image datasets) require many queries to the DNN model to check if a generated attack will be successful (hence long time) or high amount of perturbation (low imperceptibility), and thus cannot be applied to the time-sensitive CAV scenarios fe
+- sarker2020advanced: In this paper, we present an Advanced black-box Adversarial Attack $({\mathrm {A}}^{3})$ for the deep driving maneuver classification models.
+- sarker2020advanced: The experimental results show that the A3 attack requires up to 84.12% fewer queries and 57.67% less perturbation with 94.87% higher success rates than the existing black-box adversarial attacks.
+- atwa2020risk: However, risk estimation has not been taken into consideration in all of these models.
+- farman2021privacy: However, in heavy network scenarios, cluster-based communication mostly leads to additional overload in the form of the group leader that causes delay and disrupts the performance of a network.
+- saulaiman2021survey: Lastly we discuss the possible direction of future research related to security issues in V2X communication.
+- li2021research: However, only using the traditional random forest invasion detection model has some problems, such as: the model detection time is long, the false alarm rate is high, the ability of using platform transplantation is poor, etc.
+- alnasser2021trust: However, a V2X communication link faces a significant challenge in cyber-security.
+- alnasser2021trust: Internal attackers have valid credentials; thus, detecting them is still a challenge.
+- ahmed2022blockchainb: However, the trust of users is still an open issue in VANETs.
+- ahmad2022central: However, existing intrusion detection systems cannot be used in the vehicle-to-grid network because of the special requirements and characteristics of the vehicle-to-grid network.
+- ahmad2022central: EVs are registered with a Central Aggregator (CAG) to exchange authenticated messages, and malicious EVs are added to a blacklist for violating a set of predefined policies to limit their interaction with the CAG.
+- deepanramkumar2022defense: The Internet of Vehicles (IoV) is witnessed to play the leading role in the future of Intelligent Transportation Systems (ITS).
+- deepanramkumar2022defense: Though many works have focused on IoV improvement, there is still a lack of performance due to insufficient spectrum availability, lower data rates, and the involvement of attackers.
+- rajavel2022mobitrust: However, these works do not consider the presence of IPs and assume that the IoT devices are stationary in nature, which renders them unsuitable for MSC.
+- rajavel2022mobitrust: Therefore, in this work, we aim to address this drawback of the existing literature by proposing MobiTrust, which is comprised of two components.
+- benfriha2023survey: However, the dynamic and decentralized nature of FANETs, coupled with their vulnerability to various threats, necessitates robust trust management techniques to ensure reliable and secure communication among unmanned aerial vehicles (UAVs).
+- benfriha2023survey: Nevertheless, the current literature still lacks a comprehensive study on trust management techniques in FANET.
+- benfriha2023survey: In this survey paper, we review the existing literature on trust management techniques for FANETs, focusing on the challenges, requirements, and trust evaluation solutions.
+- benfriha2023survey: Then, we discuss the security challenges and threats in FANETs and how trust management can help mitigate them.
+- lone2023systematic: Purpose The purpose of this study is to extensively explore the vehicular network paradigm, challenges faced by them and provide a reasonable solution for securing these vulnerable networks.
+- lone2023systematic: It is high time to explore vehicular networks in detail to suggest solutions to the challenges encountered by these highly dynamic networks.
+- lone2023systematic: Design/methodology/approach This paper compiles research on various V2X topics, from a comprehensive overview of V2X networks to their unique characteristics and challenges.
+- lone2023systematic: Findings Despite the benefits offered by V2X networks, they have associated challenges.
+- attar2023analysis: However, there is no comprehensive comparative analysis of their efficiency in the IoV context.
+- ajjaj2023incremental: However, they encounter several challenges due to data being constantly generated over time; this can impact the performance of models trained on fixed datasets as well as cause the need for real-time data analysis to obtain timely responses to potential threats in the network.
+- ajjaj2023incremental: More specifically, this research addresses the detection of black hole attacks that pose a significant threat to the Ad hoc On Demand Distance Vector (AODV) routing protocol.
+- ajjaj2023incremental: Further, key features which are relevant in capturing the behavior of VANET nodes under black hole attack are monitored over time.
+- ajjaj2023incremental: The results show that ARF can be successfully applied to classify and detect black hole nodes in VANETs.
+- tang2023lightweight: However, malicious vehicles may undermine the trustiness of vehicles towards each other, and further damage these IoV networks.
+- tang2023lightweight: We also discuss some opportunities and challenges to shed a light on the future research directions in this topic.
+- limouchi2023optimized: Io V networks face numerous security challenges due to the emergence of modern types of attacks with unusual patterns.
+- wen2024defending: However, potential network attacks pose significant challenges to ensuring reliable and efficient AI agent migration.
+- kim2024fatal: This paper provides insight into DoS attacks on C-V2X network, and future studies will cover the topic of attack detection and defense.
+- zheng2024game: Ensuring safety and efficiency in the rapidly advancing autonomous vehicle (AV) industry presents a significant engineering challenge.
+- zheng2024game: This paper proposes a game-theoretic adversarial interaction method to efficiently generate critical scenarios that challenge AV systems.
+- liang2024trustworthy: However, since faulty decisions made by IVs may endanger the safety of people's lives and property, improper trust in these automated systems could potentially lead to significant risks and problems.
+- liang2024trustworthy: TRUE Autonomous Organizations and Operations (TAOs), underpinned by blockchain and smart contracts, propose a code-governed, trustworthy human-machine collaboration model, offering a promising approach to tackle those challenges.
+- wellensmiles2025systematic: There is a large volume of research investigating focused attacks and their mitigation in UTC systems; however, there is an absence of understanding of this body of knowledge, identifying challenges and unaddressed areas.
+- wellensmiles2025systematic: It discusses the implications of these vulnerabilities for public safety and traffic management, proposing future research directions to address the identified challenges.
+- wellensmiles2025systematic: Six prevalent challenges are identified in the field, emphasising the importance of up-to-date simulations for reliable integration into real-time systems.
+- saravanakumar2025beetleoptimized: However, the rapid expansion of intelligent vehicles has also led to rising cyber risks, introducing new forms of attacks that threaten security, privacy, and safety.
+- cheong2025dcaca: With the development of Internet of Vehicles (IoVs), data security emerges as a significant challenge, especially regarding data tampering and the spread of false information.
+- mianji2025enhancing: However, these networks are increasingly vulnerable to security, privacy, and trust (SPT) threats due to various emerging attacks.
+- mianji2025enhancing: This paper provides a comprehensive exploration of the SPT challenges within vehicular networks and presents RL as a promising solution for enhancing SPT provisioning.
+- mianji2025enhancing: We conclude by discussing key lessons learnt, current open challenges, and potential future directions in this rapidly evolving field.
+- digregorio2025evaluating: The challenges derived from the data-intensive nature of machine learning in conjunction with technologies that enable novel paradigms such as V2X and the potential offered by 5G communication, allow and justify the deployment of Federated Learning (FL) solutions in the vehicular intrusion detection
+- abdullahi2025interplay: Despite these benefits, 6G-ITS introduces significant security, privacy, and trust challenges that must be addressed to ensure safe deployment and sustained public confidence.
+- abdullahi2025interplay: This paper reviews the opportunities and challenges of 6G-ITS with a focus on security, privacy, and trust, including the dual role of quantum technologies that strengthen cryptographic mechanisms while introducing novel attack surfaces.
+- abdullahi2025interplay: The findings highlight the need for a comprehensive, multi-layered security framework that spans physical infrastructure, network protocols, data management, application security, and trust mechanisms to ensure the integrity and resilience of future 6G transportation ecosystems.
+- gupta2025optimized: However, as smart sensing technologies become more widely used with the advent of the Internet of Things (IoT), intruders have found vehicular sensor networks to be a soft target.
+- byeon2025trust: ABSTRACTWith the rapid development of intelligent transportation systems presents significant opportunities for vehicular ad hoc networks (VANETs) present themselves; yet, these networks also encounter numerous security challenges.
+- anjali2025x: However, this rapid digitization has also introduced significant security and privacy vulnerabilities, leading to increased susceptibility to malicious attacks that may cause catastrophic consequences.
+- jeyaram2026lightweight: Due to high node mobility, frequent topology changes, and decentralized communication architectures of VANET, making real-time and reliable data exchange a complex challenge.
+- jeyaram2026lightweight: Ensuring secure and efficient communication within VANETs faced more challenging s.
+- jeyaram2026lightweight: To address these challenges, a novel Sequential AI-Powered Lightweight Intrusion Detection System (Seq-AIIDS) is proposed.
+- qaisar2026robust: Vehicle-to-everything (V2X) networks face critical security challenges due to their dynamic nature, stringent latency requirements, and susceptibility to malicious attacks.
+- qaisar2026robust: Traditional trust management approaches often rely on centralized authorities or historical data, creating vulnerabilities and scalability limitations.
+- wang2026trustb: However, as IoV networks increase in scale and complexity, ensuring trustworthy interactions among vehicles, infrastructure, and service providers becomes paramount.
+- sernaolvera2013trust: While VANETs offer a great variety of promising applications, such as, safety-related and infotainment applications, they remain a number of security and privacy related research challenges that must be addressed.
+- abassi2018trust: However, the main applications of VANET are oriented to safety issues.
+- sarker2021context: However, previously proposed adversarial attacks fail to meet these requirements.
+- sarker2021context: To handle these challenges, in this paper, we propose a Context- aware Black-box Adversarial Attack (CBAA) for time-series DNN models in CAV scenarios.
+- sarker2021efficient: In this paper, we propose a Fast Black-box Adversarial (FBA) attack for time-series DNN models in connected autonomous vehicle (CAV) scenarios.
+- sarker2021efficient: Though different black-box adversarial attacks have been proposed previously, they are mainly for image classification, which cannot be directly adopted in the CAV scenarios due to two challenges.
+- sarker2021efficient: To handle these two challenges, FBA consists of two steps for the adversarial signal generation: offline and online.
+- sarker2021efficient: Our experiments based on real-driving datasets show the effectiveness of FBA in dealing with the two challenges compared with the existing black-box adversarial attacks.
+- sapala2022survey: The attacks that are considered are collision attacks, sybil attacks, black-hole attacks, and jamming attacks.
+- siddiqua2022trust: However, brief interaction of RSUs with the running vehicles permits inadequate time to estimate trust accurately.
+- siddiqua2022trust: In this paper, we address these limitations and propose a trust-based scheme to detect malicious RSUs that uses stable and frequent RSU-to-RSU (R2R) interaction to precisely analyze the behavior of an RSU.
+- chen2022malicious: In particular, Sybil malicious attacks hidden in the vehicle broadcast information flow are challenging to detect, thereby becoming an urgent issue requiring attention.
+- chen2022malicious: However, the detection performance of existing schemes based on plausibility checks and neighboring observers is affected by the traffic and attacker densities.
+- legashev2022message: Intelligent transport systems are the future in matters of safe roads and comfortable driving.
+- ercan2023enhanced: Vehicular communication networks should play an important role in deploying future automated and connected vehicles.
+- rahman2023blockchain: Blockchain with Fuzzy-logic Intelligence has shown its potential to solve localisation issues, trust and false data detection challenges encountered by today's autonomous vehicular system.
+- hankins2023eyes: However, VANETs have become an alluring target for cyber attacks.
+- hankins2023eyes: However, this knowledge can assist attackers in creating new cyber threats that can circumvent current protection solutions.
+- karyemsetty2023intrusion: To further enhance the model's efficacy and accuracy, it may be trained in the future on more datasets.
+- yekta2023vatt: This paper bridges the existing gaps in the formalization of cyber attacks on ITS, extending common frameworks, like MITRE ATT&CK, to encompass the unique challenges of the automotive and rail sectors.
+- jasti2024multi: This paper discusses the critical challenges in ensuring the security of CV networks where vehicle data integrity is paramount to prevent data falsification.
+- jasti2024multi: Various existing solutions, such as machine learning and reputation-based approaches, have limitations in terms of scalability and robustness.
+- lekidis2024anomaly: However, the existing mechanisms to ensure protection against such threats face major hurdles, such as 1) the lack of in-vehicle addressing schemes, 2) the abundance of V2X interfaces, and 3) the manufacturer-specific architecture of each vehicle comprised of various heterogeneous systems.
+- lekidis2024anomaly: On top of these hurdles, a solution should satisfy the real-time requirements of the resource-constrained in-vehicle architecture by remaining lightweight and highly reliable, as well as by avoiding false positive indications and alarms.
+- lekidis2024anomaly: This article presents a novel anomaly detection solution for addressing the main challenges of security mechanisms by simultaneously keeping a minimal impact on real-time in-vehicle requirements.
+- peng2024bilateral: Open radio access network (ORAN)-based vehicular networks play a pivotal role in future traffic data sharing.
+- peng2024bilateral: However, current efforts struggle to address some emerging security requirements, such as the bilateral control of sending and access rights in cellular vehicle-to-everything (C-V2X) communications, as well as evolving replay attack on encrypted data.
+- peng2024bilateral: With these challenges, this paper presents a fine-grained access control encryption (FGACE) scheme for secure communication in ORAN-based vehicular networks.
+- marchiori2024canederli: However, these systems are susceptible to adversarial evasion attacks.
+- marchiori2024canederli: While many researchers have explored this vulnerability, their studies often involve unrealistic assumptions, lack consideration for a realistic threat model, and fail to provide effective solutions.
+- sedar2024deep: However, addressing adversarial attacks poses a challenging task, requiring appropriate countermeasures to elevate the trustworthiness of the targeted AI/ML models.
+- ch2025novel: This research presents a new Adaptive Cluster-Based Federated Learning (ACFL) architecture to tackle these challenges.
+- taheri2025enhancing: We focus on major challenges such as adversarial and data poisoning attacks that can disrupt system operations and reduce detection accuracy.
+- dey2025secure: However, because of the high mobility, one of the major difficulties in 5G-V2X is the Handover (HO) process when a vehicle switches from one base station to another.
+- wong2025sustainable: By integrating a Random-Forest-based anomaly detector with intelligent feature selection and an energy-efficient routing method that accounts for residual energy, signal strength, and link stability, the suggested framework systematically addresses these challenges.
+- wong2025sustainable: This effectively addresses the scalability, latency, and energy challenges that previous systems have faced in incorporating blockchain technology and deep learning architectures.
+- sharma2015review: Therefore, they are vulnerable to several kinds of attack such as Sybil attack, Black hole attack, Denial Of Service attack, etc.
+- pougajendy2016cdai: Ensuring security in vehicular ad‐hoc networks remains a challenging task because of the high mobility of vehicles and the wireless communication environment.
+- pougajendy2016cdai: Existing defense mechanisms viz., public key infrastructure (PKI) methods incur infrastructural overheads, position based verification methods face limitations such as inadaptability to certain environments (one way roads, heavy traffic conditions), high storage, and communication overheads.
+- pougajendy2016cdai: In this paper, collaborative detection approach for impersonation attacks (CDAI), a position‐based verification scheme based on received signal strength, is proposed to overcome all the existing limitations.
+- kabbur2019detection: Security is a challenging issue for the technology to provide secured prominent approach for routing.
+- ayoob2019intrusion: However, security threats that are either seen in the ad-hoc networks or unique to VANET present considerable challenges.
+- xin2019replica: However, majority of current schemes are not good at dealing with conspiracy replicas or lack of considering peculiar characteristics of high mobility of vehicles.
+- zeng2019v: However, it has been proved that DL models suffer from crafted perturbation data, a small amount of such can misguide the classifier, thus backdoors can be created for malicious reasons.
+- dahiya2020feedback: Therefore, false information flow in-between these nodes poses the challenging trust issue in rapidly moving IoV nodes.
+- dahiya2020feedback: However, it is critical to have a robust and consistent scheme that is suitable to aggregate a reputation score for each node based on the accuracy of the shared information.
+- vitalkar2020review: In recent years, there is rapid development in smart vehicles for transmitting the information, all smart vehicles are now uses the internet services for communication.So security assurance in vehicular ad-hoc network is a crucial and challenging task due to open access medium.The main objective of 
+- bousmaha2020survey: However, the change of vehicle position allows frequent interruptions, which makes difficult to have sufficient information about the neighbors.
+- tyagi2020trust: After the scrutinized analysis of more than 90 articles related to trust in a plethora of fields, extracted from few of the apt scientific sources ((i.e., SIEEE Computer Society, ACM Digital Library, Springer Link, Science Direct, and Wiley Online Library), and hence, succeeds to bring about the maj
+- sarker2021suspicion: In the CAV scenario, several black-box adversarial attacks have been proposed, in which an attacker deliberately sends false driving signals to its nearby vehicle to fool its onboard DNN model and cause unwanted traffic incidents.
+- sarker2021suspicion: However, the previously proposed black-box adversarial attack can be easily detected.
+- sarker2021suspicion: To handle this problem, in this paper, we propose a Suspicion-free Boundary Black-box Adversarial (SBBA) attack, where the attacker utilizes the DNN model's output to design the adversarial perturbation.
+- kihei2021experimental: However, jamming attacks on the spectrum could deny V2X radios the ability to save lives on the roadway.
+- teli2021resilience: However, there seem to be some conventional views regarding adversarial attacks and object detection approaches that most researchers take for granted.
+- abuarqoub2022survey: In this paper, we address and discuss the characteristics and security issues including the existing VANETs attacks and preventive approaches to each security attack emphasising the main features and the major drawbacks.
+- jin2023enhancing: However, due to the inherent trustless nature of data transactions in IoV, concerns have arisen regarding the lack of trust between involved parties and the potential compromise of user privacy.
+- jin2023enhancing: Empirical findings demonstrate that our approach effectively enhances the performance of data transactions within the IoV while ensuring that the privacy of users remains intact.
+- shahid2023hybrid: However, the growing number of vehicles is also contributing to increased occurrences of collisions, traffic jams, air pollution, and other related problems.
+- nguyenminh2023machine: The dynamic and diverse natures of the system have been creating many challenges in ITS deployment and security.
+- nguyenminh2023machine: Machine learning-based approaches promise to deal with various challenges in networks thanks to their ability to adapt to the changing network topology and network scale.
+- ratnayake2023trust: However, one issue with blockchains is the problem of bad data and data reliability, where bad data refers to inaccurate, incomplete, or irrelevant data.
+- lu2023trust: The lack of global information, however, prevents the existing research from being applied in the context of information asymmetry.
+- sardana2024denial: There are also some challenges associated with VANETs such as the management of large-scale dynamic heterogeneous networks and secure communication over the network.
+- sardana2024denial: The research community stressed on the integration of Software-defined Networking (SDN) with traditional VANETs to address these challenges.
+- sardana2024denial: However, SDN's inherent features introduce new security vulnerabilities mainly in the control plane.
+- sardana2024denial: Finally, this paper highlights the future research directions in the domain of securing the network operations of SDN-based VANETs.
+- syedsabirmohamed2024dynamic: Classical intrusion detection systems face challenges in identifying intrusions due to the growing number of vehicles, the dynamic nature of IoV, and limited resources.
+- syedsabirmohamed2024dynamic: The efficacy of DHIDF is assessed through simulations that replicate current and potential future threats, including those related to the Internet of Things.
+- dilshad2024iov: However, we need new and creative solutions to increasingly complex data.
+- hermann2024wip: —Future vehicles will run safety-critical applications that rely on data from entities within and outside the vehicle.
+- hermann2024wip: One particular challenge in this approach is the appropriate quantification of trust.
+- zhou2025stacked: However, existing IDSs often prioritize enhancing detection accuracy while overlooking the time needed for training and detection.
+- zhou2025stacked: To overcome these challenges, we propose a stacked-model IDS architecture deployed across the CAN bus and central gateway, capable of detecting both internal and external vehicular network attacks.
+- ishtiaq2025intrusion: However, it remains vulnerable to several security threats, including DoS, fuzzy, and impersonation attacks, due to its decentralized infrastructure.
+- ishtiaq2025intrusion: The offset ratio remains a critical parameter for intrusion detection, analyzing the gap between message requests and CAN responses.
+- debnath2025kedennet: The modular architecture permits drop-in replacement of attack libraries, feature selectors, and classifiers, facilitating reproducible benchmarking across future VANET security studies.
+- gayathri2025machine: To address these challenges, we propose the Hybrid Deep Learning with Federated Learning (HDL‐FL) framework, which leverages Convolutional Neural Networks (CNNs) to capture spatial and temporal traffic patterns.
+- aloqaily2025optimized: However, the increased connectivity makes these vehicles vulnerable to a broad array of cyber threats.
+- nakayiza2026puretrust: Ensuring reliable trust management in vehicle-to-everything (V2X) networks is challenging due to the presence of malicious behavior and identity spoofing.
+- kateshiya2015review: Vehicular ad hoc networks (VANETs) are more increasing attentions from academia and deployment efforts from industry, due to the various applications and potential tremendous benefits they offer for future VANET users.VANET does not have any fixed topology and the nodes move from one location to ano
+- tripathi2018analysis: The different attacks and the limitations of the various trust based security algorithms are briefly summarize in table-1.
+- r2018prevention: Research on Vehicular Adhoc network security presents many challenging issues to the researchers.
+- ahmad2019trust: It is the future of Intelligent Transportation System (ITS) and plays a significant role in the success of emerging smart cities and Internet of Things (IoT).
+- ahmad2019trust: It is, therefore, paramount that this information remains reliable and authentic, i.e., originated from a legitimate and trusted vehicle.
+- wang2021algorithms: Unfortunately, low complexity mitigation approaches which do not compromise performance are lacking.
+- wang2021algorithms: However, the complexity of this new approach is dramatically lower than the best existing published low complexity approach, which provides performance which is substantially inferior to that provided by the new approach.
+- madl2021security: However, this data has to be authentic and trustworthy, since it will directly influence the behavior of every vehicle inside such a network.
+- wang2021trusted: As AVs rely on radar, camera, and other advanced sensors to sense its surroundings, a salient challenge of AVs is the intrinsic limitations of onboard sensors (e.g., limited awareness range, blind spots, and failure in foggy days).
+- wang2021trusted: However, this brings another fundamental issue on how to ensure trust in shared sensory data from distrustful collaborators and how to motivate AVs to participate in data sharing.
+- eze2022context: However, broadcasting trusted incident messages such as accident alerts between vehicles pose a challenge for CAVs.
+- muthumeenakshi2022adaptive: However, the identification of the intruders, who misuse the vehicles' genuine information, is a major concern.
+- agarwal2022p2pcpm: Various types of security attacks are normal in vehicular communication networks.The current study uses a support vector machine to implement a Point to Point Critical Path Monitoring (P2PCPM) based Denial of Service (DOS) Attack detection technique for Vehicular Communication Network (VCN) resource
+- abhishek2022trust: Adversaries can, however, compromise these RSUs and use them to launch cyber attacks.
+- xu2023cgan: However, this approach frequently leads to a high false positive rate.
+- xu2023cgan: Moreover, to alleviate the data imbalance problem caused by a few input attack samples of this model, a collaborative focus loss function is provided in the discriminators, which focuses on discerning challenging-to-classify data.
+- kandhro2023artificial: However, worries about safety, security, and privacy continue to grow.
+- alemu2023controller: The integration of SDN and IoV, namely, the Software-Defined Internet of Vehicles (SD- IoV) has been a promising solution for future communication.
+- alemu2023controller: However, the central controller exposes a single point of failure vulnerable to Distributed Denial of Service (DDo$S$) attacks.
+- panda2023fragility: However, increasing digitization introduces challenges related to packet drop constraints and various adversarial cyber threats, rendering AAM fragile.
+- piperigkos2023robust: However, its feasible operation may be potentially threatened by hijackers whose goal is to cause malfunctioning to critical vehicular sensors, harnessing the perception system of vehicle.
+- anwar2024dynamic: However, V2V communication also introduces security vulnerabilities that can be exploited to compromise the safety and privacy of drivers and passengers.
+- g2024hybrid: However, there are several demurrers in detecting abnormal activities efficiently as the traditional system faces imbalanced data problems.
+- sri2024review: While IoV offers numerous benefits like enhanced safety, traffic management, and user experience, it also presents significant security challenges due to its complexity, distributed nature, and critical real-time operations.
+- sri2024review: A detailed review of current security practices, evaluation techniques, and many challenges for the Internet of vehicular communications is presented.
+- jing2024deep: However, the problem of sharing the results of node trust evaluation has been seriously neglected in existing studies.
+- jing2024deep: Besides we novelly combined Echo state network and Reinforcement Learning to support vehicles to share trust information by predicting future driving directions.
+- adil2024detection: However, the continuous availability of the network is imperative for the smooth functioning of VANETs.
+- bindu2024federated: However, traditional IDS systems face issues such as scalability, flexibility in changing IoV settings, and privacy concerns due to centralized data collection.
+- bindu2024federated: However, autoencoders can generalize and reconstruct anomalies, potentially causing them to go undetected.
+- wehby2024distributed: However, these simulated attacks have primarily employed messages from the Internet domain rather than leveraging the messages exchanged between connected vehicles.
+- wehby2024distributed: While the system remains operational, the quality of the services it provides (e.g., data collection and vehicle cooperation) is severely compromised.
+- tariq2024intelligent: This research tackles the critical challenge of BeiDou signal spoofing in vehicular ad-hoc networks and addresses significant risks to vehicular safety and traffic management stemming from increased reliance on accurate satellite navigation.
+- tariq2024intelligent: Ultimately, it effectively paves the way for future research into adaptive security mechanisms that can dynamically respond to evolving cyber threats.
+- happy2024internet: Due to a lack of communication confidentiality and authentication in the IoV CAN protocol, its communications are exposed to data vulnerability, fuzzy attacks, spoofing, denial of service attacks, and several other significant security issues.
+- baalla2024machine: However, some nodes may adopt suspicious behaviors by strategically alternating between trustworthy and malicious actions to evade detection, an attack called Trust Manipulation Attack (TMA) or on-off attack.
+- baalla2024machine: This paper addresses the challenge of detecting such suspect behaviors in TMS and proposes a machine learning-based approach for TMA identification.
+- alenizi2024q: Besides, challenges like data breaches, unauthorized access, and hacking attempts are prevalent due to the interconnected nature of ICVs.
+- alenizi2024q: Several methods have been proposed to secure ICVs; however, accurate intrusion detection remains a challenging task yet to be fully achieved.
+- mohammed2024resilient: However, over the past few years, cybersecurity threats have posed significant challenges to such systems, given the ever‐evolving automotive industry.
+- mohammed2024resilient: It was demonstrated that by considering an estimator error bound ε for the attacked signal reconstruction, the SMC controller in feedback with a vehicle remains stable in the sense of Lyapunov.
+- kaur2024security: Vehicular ad hoc networks (VANETs) suffer from several challenges due to advancements in technology such as 5G and the continuous growth in the number of vehicles.These challenges include handling scalability, traffic management, security, flexibility etc.The researchers believe that integrating the
+- murshed2024vehicular: The dynamic nature of high-mobility vehicles and densely populated areas, coupled with the presence of roadside units, poses challenges in distinguishing between malicious attackers and legitimate transmitters.
+- dawson2025zero: However, implicit authentication models and considering network nodes as trusted are insufficient in protecting network security against invasive and pertinent attacks.
+- dawson2025zero: Nevertheless, implementing a ZT in vehicular networks is challenging due to the highly dynamic networking environment, uncertainty in recognizing malicious nodes, and required rapid responses to security breach incidents.
+- dawson2025zero: This article proposes a robust ZT approach addressing the challenges of implementing ZT in vehicular networks.
+- banafshehvaragh2025reliable: One of the most significant challenges of vehicular ad-hoc networks (VANETs) is establishing reliable connections with the network infrastructure despite the participation concern of attacking vehicles in routing.
+- cui2025iterative: However, RPL faces significant security challenges when adapted to vehicular networks, which differ markedly from the less hostile environments originally envisioned for RPL.
+- cui2025iterative: Specifically, we introduce a novel deep learning-based dynamic attack algorithm to expose the limitations of existing defense mechanisms and highlight RPL’s security vulnerabilities in IoV applications.
+- anon2025enhanced: However, the open and dynamic nature of VANETs presents significant privacy and security challenges, including data eavesdropping, message manipulation, and unauthorized access.
+- anon2025enhanced: By highlighting the advantages of FC—such as localized data privacy management, mobility support, and real-time decision-making—this survey establishes a foundation for future research and innovation in developing secure, scalable, and robust VANET systems.
+- richeson2025ensemble: However, the impact of adversarial attacks on UAV IDS is largely overlooked in the literature.
+- pavithra2025intrusion: However, due to their wireless nature and complex operating environment, VANETs are vulnerable to a range of malicious user assaults.
+- pavithra2025intrusion: Traditional methods are no longer effective due to some limitations like lack of data, interpretability and imbalance classes.
+- ezumalai2025real: However, due to the nature of Mobile Ad hoc Networks and high mobility of VANETs, they are vulnerable to malicious node attacks which adversely affect the reliability of the network and road safety.
+- fan2025robust: However, the openness of vehicular networks enables attackers to launch network attacks on vehicles through network ports, leading to the destruction of vehicular networks.
+- ahasan2025securing: However, EVCSs remain vulnerable to cyberattacks, such as charging profile alteration attacks (CPAAs), where malicious actors manipulate parameters like start time, end time, and energy demand, causing disruptions in charging processes and SG instability.
+- wang2025distinguishing: Nevertheless, trust-based attacks also present a formidable challenge.
+- ekpo2026hybrid: Smart cities are increasingly dependent on interconnected transportation systems; however, this connectivity exposes smart mobility networks to significant cybersecurity risks.
+- ekpo2026hybrid: To address this limitation, we propose a novel hybrid deep learning framework that combines convolutional neural networks for spatial feature extraction, long short-term memory networks for temporal pattern recognition, and an attention mechanism for adaptive feature weighting, together forming a co
+- wei2026game: However, existing protocols fail to address two critical issues, i.e., how to precisely quantify the relationship between dynamic difficulty and trust value and how to assess the motivation for mining in relation to mining costs.
+- han2026multi: However, they are vulnerable to both external and internal attacks, including identity spoofing and selfish behaviors.
+- mintemur2017attack: One of the most promising and exciting areas of communication technology is Vehicular Ad Hoc Networks (VANETs).It enables vehicles to communicate among and between each other and fixed infrastructures, and, to provide a safe and enjoyable driving experience.However, VANETs are very susceptible to at
+
+## 2. Strong overlap
+
+- None.

@@ -1,0 +1,11 @@
+# LACE-IoT: Lightweight Post-Quantum Security via Session Amortization using Ring-LWE and QC-LDPC Hybrid Encryption
+Aldrin Benny, Abel Jorlin, Leena Vishnu Namboothiri · 2026 6th International Conference on Inventive Computation and Information Technologies (ICICIT) 2026 · https://doi.org/10.1109/icicit69063.2026.11634017 · relevance: low · basis: abstract
+
+**Problem:** Deploying post-quantum cryptography on battery-powered Class-1 IoT devices ( 10 KiB RAM, 8 MHz CPU) introduces a fundamental tension: Ring-LWE lattice-based authentication and QC-LDPC hybrid encryption provide quantum resistance, yet executing the full key encapsulation for every data packet consumes 7.37 ms and 408 bits of per-packet overhead rendering the approach ...
+**Approach:** We present LACE-IoT (Lightweight Amortized Code-based Encryption for IoT), a four-phase two-tier protocol that confines the expensive post-quantum handshake to a single per-epoch initialization (Tier 1), amortizing its cost across an entire session of AEAD-protected data packets (Tier 2) via HKDF-SHA256 key derivation and AES-256-GCM authenticated encryption, with Epoch-Bounded Forward Secrecy (EB-FS) enforced ...
+**Tools and scale:** Non-vehicular setting. Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** Deploying post-quantum cryptography on battery-powered Class-1 IoT devices ( 10 KiB RAM, 8 MHz CPU) introduces a fundamental tension: Ring-LWE lattice-based authentication and QC-LDPC hybrid encryption provide quantum resistance, yet executing the full key encapsulation for every data packet consumes 7.37 ms and 408 bits of per-packet overhead rendering the approach impractical for high-frequency sensing.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** none: post-quantum/hybrid cryptography outside V2X. It gives background for direction 2 (PQ migration of the SCMS) but does not model V2X channels, SCMS issuance, or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the vehicular case (SCMS scale, broadcast channel load, safety cost) is not addressed.

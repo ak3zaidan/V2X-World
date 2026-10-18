@@ -1,0 +1,11 @@
+# A Dynamic Traffic Camouflage Method Based on Adversarial Machine Learning for Connected Vehicles
+Xinyang Bai, Ping Dong, Xiaoya Zhang et al. · IEEE Open Journal of Vehicular Technology 2026 · https://doi.org/10.1109/ojvt.2026.3666994 · relevance: medium · basis: abstract
+
+**Problem:** While improving the convenience of IoV applications, its communication process faces serious privacy and security threats.
+**Approach:** Existing research mostly focuses on website fingerprint camouflage or overall traffic statistical feature camouflage, and usually only designs a camouflage mechanism for a single application layer protocol, which is challenging to achieve unified protection in the multi-protocol scenario of the Internet of Vehicles. This paper proposes LeakGAN Packets Traffic Camouflage (LPTC), which simultaneously supports traffic camouflage for multiple application-layer protocols.
+**Tools and scale:** Not stated in the abstract.
+**Results:** While improving the convenience of IoV applications, its communication process faces serious privacy and security threats. Experimental results indicate that the proposed LPTC scheme significantly degrades the classification performance of traffic transmission models based on K-Nearest Neighbors, Support Vector Machine, Bagged Trees, and Random Forest algorithms, reducing classification accuracy by 41.23%.
+**Limitations and future work (as stated by the authors):**
+- "Existing research mostly focuses on website fingerprint camouflage or overall traffic statistical feature camouflage, and usually only designs a camouflage mechanism for a single application layer protocol, which is challenging to achieve unified protection in the multi-protocol scenario of the Inte"
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection (direction 1 area); pseudonym privacy/linkability (runner-up area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

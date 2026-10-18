@@ -1,0 +1,11 @@
+# Blockchain Integrated Security Solutions for the Internet of Vehicles: Addressing DoS Attack in Vehicle to Vehicle under AODV
+Tanuj Meshram, Mou Dasgupta · 2025 International Conference on Intelligent Systems and Computational Networks (ICISCN) 2025 · https://doi.org/10.1109/iciscn64258.2025.10934267 · relevance: low · basis: abstract
+
+**Problem:** The Internet of Vehicles (IoV) has become a critical target for security threats; vehicles have heightened the need for robust security mechanisms, particularly against Denial of Service (DoS) attacks. We proposed a blockchain based framework for enhancing IoV security by decentralized event logging in tamper-proof storage, integrated with reputation mechanisms.
+**Approach:** We proposed a blockchain based framework for enhancing IoV security by decentralized event logging in tamper-proof storage, integrated with reputation mechanisms. It detects real-time anomalies by using the novel Drop-to-Forward Ratio (D/F Ratio) metric of the proposed system and enforces penalties on malicious nodes.
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** The performance of the proposed system is evaluated based on simulations conducted for various attack scenarios that ensure a remarkable improvement in the Packet Delivery Ratio (PDR) from as low as 19.14% (under attack) to over 83.74%, and reduces End-to-End (E2E) delay from a maximum of 0.6982 seconds to as low as 0.0016 seconds, ensuring robust and efficient network performance.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial: a V2X authentication/privacy scheme; our engine implements the standard SCMS/IEEE 1609.2 path rather than this protocol, and the paper reports no closed-loop traffic, radio or revocation simulation.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

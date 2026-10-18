@@ -1,0 +1,189 @@
+# Batch 01 notes
+
+378 papers summarised (all listed as high relevance in the catalog). Basis per paper is stated in each summary; 'title only' entries need retrieval before any claim relies on them.
+
+## 1. Stated limitations and future work (one per line)
+
+- [rusek2019routenet] Accuracy degrades as inputs move away from the training distribution; wider training distributions are needed to generalise.
+- [rusek2019routenet] Architecture estimates path-level metrics; link-level metrics require modification.
+- [rusek2019unveiling] Trained on a single topology; generalisation shown to other topologies but limited in scope.
+- [zhao2020intelligent] Presents challenges and open issues of IDT-SDVN (not enumerated in abstract).
+- [boualouache2022survey] Developing effective ML-based MDSs is still an open issue.
+- [boualouache2022survey] Open research and standardisation issues highlighted (e.g., validation and deployment of MDSs).
+- [mondal2023llms] Experiments 'very preliminary'; much further testing in more complex use cases needed.
+- [mondal2023llms] Human input still required.
+- [mondal2023llms] Open whether GPT-4 can add policy incrementally without interfering with verified policy.
+- [ferriolgalmes2022routenet] No strong mathematical performance guarantees (errors bounded by no-queue and full-queue delays).
+- [ferriolgalmes2022routenet] Training data from production networks is infeasible; requires testbeds or simulators.
+- [hui2022digital] Limited data from production networks constrains data-driven models.
+- [hui2022digital] Opportunities identified in data collection, model construction and applications.
+- [ferriolgalmes2022routenetb] Requires representative training datasets covering many operational regimes; generating them from production networks is infeasible.
+- [yang2022deepqueuenet] Requires sufficient training data for each device/mechanism.
+- [kousaridas2021qos] Additional features (channel variation) beyond scope.
+- [kousaridas2021qos] Open research topics identified, e.g., acceptable prediction horizon and accuracy.
+- [ding2022digital] Ray tracing is computationally expensive (addressed partially with BEM).
+- [sliwa2020cooperative] Argues future 6G networks should provide load information to UEs; evaluation limited to one campus cell.
+- [alomar2022causalsim] Analytical recovery method relies on exact low rank, is brittle with approximate rank, applies only to discrete actions, and gives sufficient but not necessary conditions.
+- [alomar2022causalsim] Requires an initial randomized control trial.
+- [hernangomez2022berlin] Hints at potential research studies; dataset limited to the measured routes and RATs.
+- [palaios2023machine] Radio environment diversity (urban vs rural, deployment) limits model transfer.
+- [luo2023srcon] Challenges: problem size, network coupling, stochasticity.
+- [beltiukov2023netfound] Shortcut exploitation in common datasets (e.g., CIC-IDS-2017) must be fixed for valid evaluation.
+- [moreira2020qos] Open questions: which data and features are available, prediction quality.
+- [houidi2022neural] Input representations (ASTs, graph abstractions) for config languages remain open.
+- [houidi2022neural] Training data availability is a bigger limitation than model complexity.
+- [sliwa2021machine] Future work section present; SA mode and further features left open.
+- [wu2024digital] Discusses potential improvements of the DT (section V); real-world DTs limited by infrastructure access, heterogeneous data and real-time sync.
+- [torresfigueroa2020qos] COTS modems give identical KPI readings for 1-3 s, limiting precision.
+- [sliwa2019empirical] Feature impact depends strongly on network configuration, requiring per-MNO models.
+- [suarezvarela2021graph] Lessons learned for organising future competitions.
+- [hasan2023platoonsafe] Potential extensions listed in Section VII (not extracted in detail).
+- [deason2025cybersoceval] Discusses failure modes, outlier models and filtering of telemetry; future AI security evaluation needs.
+- [badiasampera2019more] Original model does not consider all particularities of real networks.
+- [zhou2025netarena] Future use: RL post-training environments since many tasks lack step-level ground truth.
+- [sliwa2019data] Predictions rely on spatially aggregated past data for future locations.
+- [kulzer2021ai4mobile] Identifies main challenges for E2E predictive QoS at high mobility.
+- [schippers2022system] No ready-proven ToD application available at large scale.
+- [simohammed2024ns] NS barriers of credibility and reliability.
+- [pegurri2026van3twin] Conservative cache invalidation on any mesh update is costly.
+- [xiang2023reproducing] Small-scale experiment; open research questions discussed.
+- [skocaj2023vehicle] Novel exploratory directions discussed.
+- [farreras2023improving] Generalisation to larger topologies remains the core limitation of GNN models.
+- [wang2025network] Agents still struggle with fault localisation and root cause.
+- [drago2022artificial] Simulating AI and its impact on the communication stack was 'still an open question'.
+- [bothra2022veritas] Domain-specific to ABR video; relies on observable TCP state.
+- [hou2024if] Future: app selection probability known only implicitly and must be learned.
+- [hou2024if] Generalise to distributed systems and temporal variability.
+- [hou2024if] Incorporate digital twins to augment logged data.
+- [sangare2018predicting] Uses analytical model instead of real measurements.
+- [guemespalau2025routenet] Limitations and future directions in Section VI (not extracted).
+- [happ2022exploring] New methods needed to cope with traffic loads and network sizes significantly different from training.
+- [lei2025voi] VoI definitions can be expanded; VoI estimation and VoI-driven optimisation are future directions.
+- [blasco2023predictive] Prediction horizons and uncertainty handling are challenges.
+- [koursioumpas2024distinqt] Communication resource limitations considered.
+- [dhamala2024performance] RouteNet's accuracy drops on divergent distributions and larger networks.
+- [roongpraiwan2025digital] Future directions outlined in conclusion.
+- [jornod2020packet] Single test-track scenario.
+- [almeida2022machine] Future work listed in conclusion (not extracted in full).
+- [beltiukov2025demystifying] Scope and metrics far from exhaustive.
+- [beltiukov2025demystifying] Cosine similarity may mislead for some models.
+- [beltiukov2025demystifying] Public datasets may be flawed or biased.
+- [ge2025iridescence] Trials preliminary.
+- [li2025m4] Prior ML simulators use fixed-size global hidden state and handle graph data poorly (addressed).
+- [jornod2019packet] Baseline for future modelling.
+- [cao2020network] Higher computational complexity.
+- [afonso2022qt] Future: combine approach with other methods.
+- [ahmadpanah2025semantic] Authors acknowledge shortcomings and suggest future directions (not extracted in detail).
+- [protogeros2026benchmarking] Evaluates intrinsic LLM capability only; RAG, prompting strategies and agentic systems left for future evaluation.
+- [protogeros2026benchmarking] Reliable automation requires iterative workflows guided by formal verification.
+- [twabi2026netagentbench] Golden-configuration benchmarks risk contamination.
+- [guemespalau2023building] Simulated scenarios fail to capture all real complexities.
+- [dearing2024deep] Preliminary results.
+- [ain2024qos] Future directions in conclusion.
+- [mason2025prata] Most prior PQoS works offline and ignore feedback effect of service adaptation.
+- [wang2025playground] Preliminary work.
+- [pegurri2026predicting] Future: real-time prediction of higher-layer network metrics using full-stack simulation.
+- [pegurri2026predicting] Model complexity constrains feasible prediction horizon.
+- [sliwa2020best] Future work: optimise prediction via cooperative methods.
+- [almeida2023position] Validated for the single considered scenario; future work in conclusion.
+- [protogeros2025continual] Preliminary poster.
+- [brehongrataloup2025predictive] Future: integrate throughput measurements, optimise retraining, larger full-scale experiment.
+- [ahmed2025simcode] Substantial room for improvement in execution accuracy.
+- [jornod2019prediction] Further deployment and other scenarios needed.
+- [ziazet2022addressing] Out-of-distribution issue of direct delay outputs.
+- [gammaa2025improving] Recommendations for future research in conclusion (not extracted).
+- [dakic2025learning] Adaptation methods reduce accuracy on original data.
+- [abenathar2025network] Future: compare algorithms under congestion and variable traffic, include response time, precompute what-if analyses.
+- [zacarias2025effectiveness] Other architectures may suit shorter training time.
+- [nakazato2025wi] Early-stage exploration.
+- [makvandi2026adaptwin] Static offline maps fail to capture dynamics; reactive NDTs ignore ray-tracing cost.
+- [ashik2026analyzing] PRR cannot capture MAC-layer resource exhaustion (motivating AoI).
+- [qchohi2026confounding] Randomised telemetry is scarce because it disrupts operation.
+- [gao2026context] LLM-based simulation is time-consuming in complex environments (scalability).
+- [gao2026context] Evaluation procedures need improvement.
+- [zhang2023learn] Small-scale testbed.
+- [shen2023learning] Open challenges and future directions listed (not in abstract).
+- [cao20236g] Model deviates as system approaches saturation.
+- [higuchi2025vehicles] Initial feasibility only.
+- [stenhammar2025clustering] Trade-off between cluster count, accuracy and overhead.
+- [simohammed2025per] Evaluation limited to a small-scale testbed.
+- [demir2025student] Simple features cannot model complex interactions for TTC.
+- [tseng2026fault] LLM-judge scoring of free-text diagnoses.
+- [bouton2026mobile] Open-loop emulation on real data rather than live deployment.
+- [bello2026ns3learn] Offline mobility traces cannot capture feedback from communication to driving (noted for prior work).
+- [liu2026netconfarena] Future: trajectory-based learning and harness-level mechanisms.
+- [ahmad2026routenet] Designed for short horizons t+1 to t+3.
+- [lu2026wirelessopsagent] Controlled benchmark, not live deployment.
+- [lu2026wirelessopsagent] Assumes telemetry metadata and provenance correctly reported.
+- [lu2026wirelessopsagent] Actuator security and concurrent control out of scope.
+- [garbi2020learning] Future: mixed multi-class and layered QNs, neural ODEs, residual networks, active learning for sampling.
+- [correia2025performance] Performance degradation at longer horizons to be addressed in future work.
+- [jeong2025agentsumo] Existing LM frameworks are imperative and command-driven (addressed).
+- [schofield2025beyond] Standard metrics do not capture causal sensitivity.
+- [mavridis2025learning] Future: fuse with communication-aware motion planning.
+- [guda2025m3net] Balance of model complexity (4 vs 8 experts).
+- [stenhammar2026advancing] No quantitative comparison with real-world data yet (future measurement campaign).
+- [stenhammar2026advancing] Ray tracing increases computational load; GPU recommended.
+- [papanikolaountais2026agentic] Not a real deployed O-RAN rApp/xApp.
+- [papanikolaountais2026agentic] Several differences not statistically significant.
+- [yan2026ctbench] Partial observability and heterogeneity expose agent limitations.
+- [quan2026closed] Future: lower latency, multiple physical vehicles, V2X-aware evaluation via communication simulation, closed-loop AEB and lane-change validation.
+- [zhou2026demo] Preliminary study.
+- [sedar2026deep] DRL vulnerable to strategic missingness-based evasion.
+- [guemespalau2026simulation] Heterogeneous evaluations complicate comparison.
+- [guemespalau2026simulation] Future: consolidate PDES and GNNs; analytical models enhancing DL; ML for evolving networks.
+- [zhang2026driving] Short horizon where alternative ego action does not alter other agents.
+- [bello2026human] Channel is an analytical surrogate whose absolute delivery ratios need field validation.
+- [bello2026human] Single stationary flooder attacker.
+- [bello2026human] Further caveats listed by the authors (four in total).
+- [stenhammar2026joint] Future: larger deployments, uplink KPIs, cell migration between rounds, online SLA integration.
+- [hu2026multi] Priorities: verifiable shared-state maintenance, robust intent alignment, safe coordinated action under communication and compute constraints.
+- [acharya2026ndt] Ongoing: evaluation of LLM backends, semantic model refinement, dynamic intent classification, packet-level simulation.
+- [wan2026neuralemu] Stationary UEs; mobility future work.
+- [wan2026neuralemu] Downlink only.
+- [wan2026neuralemu] Single operator (T-Mobile).
+- [kalogiannis2026pampos] Constant position offset (A2) and eventual stop (A9) remain undetectable.
+- [kalogiannis2026pampos] Future: augmented scoring, full ablation, temporal frequency features for DoS, model compression for devices.
+- [patel2026predictive] Limited multi-modal datasets.
+- [patel2026predictive] Poor cross-scenario generalisation.
+- [patel2026predictive] Computational overhead and weak interpretability.
+- [patel2026predictive] No unified multi-metric prediction framework.
+- [agudelo2026trustworthy] Aggregate error metrics hide biases under what-if scenarios.
+- [kunimoto2026v2x] Architectural overhead analysed; safety margin may need expansion.
+- [han2026ns3] No claim of universal superiority.
+- [papadimitratos2008certificate] Limitations of each method pointed out (not listed in abstract).
+- [malik2018blockchain] Future: smart contracts, emergency scenarios.
+- [khan2019secure] Trust management still open.
+- [hakeem2025advancing] Need for hybrid datasets integrating real data with adversarial scenarios.
+- [hakeem2025advancing] Adversarial robustness and computational cost remain challenges.
+- [malina2021post] Computational and energy constraints, lack of uniformity hinder deployment.
+- [malik2022efficient] Future work in conclusion.
+- [shim2022survey] Prioritising which fields to migrate is necessary as simultaneous replacement is hard.
+- [khezri2023sghrp] Future work in section 7.
+- [khodaei2018efficient] Future: optimal CRL interval based on revocation frequency to narrow the vulnerability window.
+- [metere2021securing] Non-technical challenges such as trust balancing.
+- [heijden2016enhanced] Future: integrate additional mechanisms and trust; study impact of intrusion response (they only detect and do not change neighbour tables).
+- [rigazzi2017optimized] Bloom-filter false positives.
+- [baee2019broadcast] Assumed traffic scenario rather than closed-loop traffic simulation (as described).
+- [han2020privacy] Lattice ring signatures need further optimisation.
+- [wang2020certificate] Challenging problems in each stage (resolution, distribution, use).
+- [salem2014case] Future work noted.
+- [yan2014location] Extendable to multiple BS.
+- [lohmiller2025survey] Open challenges identified (truncated in abstract).
+- [ramamoorthy2024enhanced] Designed for highways; urban signals and non-uniform speeds need refinement.
+- [tesei2018iota] Effectiveness to be measured in testbed.
+- [shayea2022privacy] Some results 'moderate and need improvement'.
+
+## 2. Papers with strong overlap
+
+- [zhang2026driving] strong (conceptual) - builds a simulation benchmark with matched factual/counterfactual ground truth to test world models, the core idea of direction 3, but for driving video, not V2X networking or PKI.
+- [bello2026human] strong - executes a V2X attack inside a coupled NR-V2X/traffic simulation and measures safety outcomes (hard braking, red-light running, conflicts) against matched no-attack baselines, i.e., attack-to-safety closed loop with paired comparisons; no PKI, MBD or revocation.
+- [brecht2018security] strong - this is the SCMS architecture our engine implements (RA, PCA, LA, MA, ECA, CRL, butterfly keys, linkage-based revocation).
+- [khodaei2017secmace] strong - implements and evaluates a standards-compatible VPKI with pseudonym provisioning, separation of duties and revocation, the backend role our SCMS plays; European-style, not the US SCMS with butterfly keys, and not coupled to a traffic/radio simulation.
+- [anon2022ieee] strong - normative specification our engine's SCMS end-entity interfaces implement.
+- [junior2020privacy] strong - directly analyses the US SCMS linkage/revocation mechanism our engine implements (LA1/LA2, linkage values).
+- [baee2019broadcast] strong - quantifies the safety cost of 1609.2 verification delay in dense traffic (direction 2), including a crash argument.
+- [simplicio2019acpc] strong - SCMS revocation-mechanism alternative directly applicable to our engine's revocation path (activation-code designs are also in CAMP SCMS work).
+- [simplicio2018unified] strong - modifies the SCMS butterfly key provisioning our engine implements (unified butterfly keys are part of later IEEE 1609.2.1).
+
+Near-strong (marked partial but must be cited by direction 1): khodaei2018efficient, khodaei2020scalable (city-scale CRL dissemination latency; authors name the 'vulnerability window' as future work); twardokus2025dt (C-V2X security digital twin, full text not yet read); krishnan2011verify (verify-on-demand policy, direction 2); ashik2026analyzing and twardokus2022vehicle (NR/LTE sidelink scheduling attacks); bello2026ns3learn (radio realism changes simulated safety outcomes); heijden2016enhanced (lists intrusion response as future work, supporting the closed-loop gap).

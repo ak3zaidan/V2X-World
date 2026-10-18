@@ -1,0 +1,11 @@
+# TROUVE: A trusted routing protocol for urban vehicular environments
+Chaker Abdelaziz Kerrache, Nasreddine Lagraa, Carlos T. Calafate, Abderrahmane Lakas · 2015 IEEE 11th International Conference on Wireless and Mobile Computing, Networking and Communications (WiMob) 2015 · https://doi.org/10.1109/wimob.2015.7347970 · relevance: medium · basis: title only
+
+**Problem:** Not available (no abstract in catalog); topic inferred from title: TROUVE: A trusted routing protocol for urban vehicular environments.
+**Approach:** Not stated (title only).
+**Tools and scale:** Not stated.
+**Results:** Not stated.
+**Limitations and future work (as stated by the authors):**
+- None available from title; retrieve the paper before relying on it.
+**Overlap with our engine:** none — Generic VANET/IoV trust, reputation or intrusion-detection scheme evaluated in isolation; no SCMS, revocation pipeline, or counterfactual cross-layer evaluation.
+**Novelty implications:** No effect on our novelty claims; background only.

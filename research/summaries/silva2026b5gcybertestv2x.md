@@ -1,0 +1,11 @@
+# B5GCyberTestV2X Cooperative Perception: A Co-Simulation Framework Bridging Perception and Communication in Autonomous Driving
+Antonio Santos da Silva, Rafael F. Pinto Barbosa, João Paulo J. da Costa, Giovanni Almeida Santos et al. · 2026 IEEE Vehicular Networking Conference (VNC) 2026 · https://doi.org/10.1109/vnc69225.2026.11629110 · relevance: high · basis: abstract
+
+**Problem:** Cooperative perception (CP) in Vehicle-to-Everything (V2X) systems enhances autonomous driving awareness through multi-vehicle sensor data sharing. While state-of-the-art CP algorithms achieve superior performance under ideal communication assumptions, their viability under realistic 5G network constraints remains largely unexplored.
+**Approach:** This paper presents a rigorous comparative analysis of CP data sharing strategies-intermediate fusion with a state-ofthe-art attention-based model versus late fusion with fused object lists-under realistic V2X network conditions.
+**Tools and scale:** Mentioned in abstract: OMNeT++, CARLA, Simu5G, 5G. (From the abstract only.)
+**Results:** A novel bidirectional co-simulation framework, B5GCyberTestV2X, is utilized, which tightly integrates the CARLA sensor simulator and the OMNeT++/SIMU5G network simulator, enabling a closed-loop evaluation where network performance directly impacts vehicle safety outcomes. Through extensive Monte Carlo simulations of safety-critical scenarios, it is demonstrated that communication constraints, not perception algorithms, are the dominant bottleneck. While intermediate fusion achieves a 14.1% higher detection accuracy (AP@0.5) under low network load, it fails to meet the 100 ms latency requirement at medium densities (10 vehicles), resulting in a $3.2 \times$ increase in near-miss events compared to the lightweight late fusion strategy.
+**Limitations and future work (as stated by the authors):**
+- Not stated in the abstract.
+**Overlap with our engine:** partial — CARLA + OMNeT++/Simu5G closed-loop where network performance affects safety outcomes; Monte Carlo of safety-critical scenarios.
+**Novelty implications:** Closed-loop network→safety evaluation exists for cooperative perception; closed-loop misbehaviour→revocation→safety remains open.

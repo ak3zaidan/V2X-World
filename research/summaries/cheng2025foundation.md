@@ -1,0 +1,11 @@
+# Foundation Model Empowered Synesthesia of Machines (SoM): AI-native Intelligent Multi-Modal Sensing-Communication Integration
+Xiang Cheng, Boxun Liu, Xuanyu Liu, Ensong Liu et al. · IEEE Transactions on Network Science and Engineering 2025 · https://doi.org/10.1109/tnse.2025.3587238 · relevance: medium · basis: abstract
+
+**Problem:** To support future intelligent multifunctional sixth-generation (6G) wireless communication networks, Synesthesia of Machines (SoM) is proposed as a novel paradigm for artificial intelligence (AI)-native intelligent multi-modal sensing-communication integration. However, existing SoM system designs rely on task-specific AI models and face challenges such as scarcity of massive high-quality datasets, constrained modeling capability, poor generalization, and limited universality.
+**Approach:** In this paper, we for the first time present a systematic categorization of FMs for SoM system design, dividing them into general-purpose FMs, specifically large language models (LLMs), and SoM domain-specific FMs, referred to as wireless foundation models. Furthermore, we derive key characteristics of FMs in addressing existing challenges in SoM systems and propose two corresponding roadmaps, i.e., LLM-based and wireless foundation model-based design.
+**Tools and scale:** Mentioned in abstract: 6G, LLM. (From the abstract only.)
+**Results:** Specifically, we propose LLM-based path loss generation (LLM4PG) and scatterer generation (LLM4SG) schemes, and wireless channel foundation model (WiCo) for SoM mechanism exploration, LLM-based wireless multi-task SoM transceiver (LLM4WM) and wireless foundation model (WiFo) for SoM-enhanced transceiver design, and wireless cooperative perception foundation model (WiPo) for SoM-enhanced cooperative perception, demonstrating the significant superiority of FMs over task-specific models.
+**Limitations and future work (as stated by the authors):**
+- Not stated in the abstract.
+**Overlap with our engine:** none — Adjacent background (LLM applied to wireless/vehicular networking); no direct overlap with the engine's traffic+radio+SCMS joint simulation.
+**Novelty implications:** Does not restrict any candidate claim.

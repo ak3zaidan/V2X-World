@@ -1,0 +1,11 @@
+# Efficient anonymous mutual authentication protocol based on clustering in Internet of Vehicles
+Xinyue Wang, Kai Lan · 2026 6th International Symposium on Computer Technology and Information Science (ISCTIS) 2026 · https://doi.org/10.1109/isctis70043.2026.11572211 · relevance: low · basis: abstract
+
+**Problem:** With the increase of vehicles and the development of communication, although IoV can provide intelligent transportation services, the public network communication of vehicles is vulnerable to attacks, causing traffic congestion, privacy leakage and other problems. Authentication protocols are needed to ensure data security and trustworthiness.
+**Approach:** Traditional solutions suffer from issues such as high transmission latency, high TA pressure, and authentication crashes after being compromised, as well as security risks caused by semi trusted RSUs. To this end, a clustering based EAMA protocol is proposed in IoV: constructing a clustering edge authentication architecture, determining cluster heads to maintain intra group security; RSU requires TA certification; ...
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** To this end, a clustering based EAMA protocol is proposed in IoV: constructing a clustering edge authentication architecture, determining cluster heads to maintain intra group security; RSU requires TA certification; Design CH2V and CH2R mutual authentication protocols based on lightweight encryption technology and establish session keys; Add multiple security mechanisms and conduct security verification and ...
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial: a V2X authentication/privacy scheme; our engine implements the standard SCMS/IEEE 1609.2 path rather than this protocol, and the paper reports no closed-loop traffic, radio or revocation simulation.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

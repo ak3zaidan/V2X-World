@@ -1,0 +1,11 @@
+# 6G-Bench: An Open Benchmark for Semantic Communication and Network-Level Reasoning with Foundation Models in AI-Native 6G Networks
+Mohamed Amine Ferrag, Abderrahmane Lakas, Merouane Debbah · arXiv 2026 · https://doi.org/10.1109/ojcoms.2026.3680457 · relevance: medium · basis: abstract
+
+**Problem:** Emerging sixth-generation (6G) networks are increasingly envisioned as AI-native, intent-driven systems in which foundation models act as high-level reasoning and coordination layers above standardized network functions. However, existing evaluations of large language models (LLMs) in wireless and networking domains largely focus on isolated tasks or treat networks as numeric constraints, leaving network-level semantic reasoning over intent, policy, trust, and multi-agent coordination insufficiently explored.
+**Approach:** This paper introduces 6G-Bench, an open benchmark for evaluating semantic communication and network-level reasoning in AI-native 6G networks. Starting from 113,475 scenarios, we generate a balanced pool of 10,000 very-hard multiple-choice questions using task-conditioned prompts that enforce multi-step quantitative reasoning under uncertainty and worst-case regret minimization over multi-turn horizons.
+**Tools and scale:** Mentioned in abstract: 6G, O-RAN, LLM. (From the abstract only.)
+**Results:** 6G-Bench defines a taxonomy of 30 decision-making tasks (T1–T30) extracted from ongoing 6G and AI-agent standardization activities in 3GPP, IETF, ETSI, ITU-T, and the O-RAN Alliance, and organizes them into five standardization-aligned capability categories. After automated filtering and expert human validation, 3,722 questions are retained as a high-confidence evaluation set, while the full pool is released to support training and fine-tuning of 6G-specialized models. Using 6G-Bench, we evaluate 22 foundation models spanning dense and mixture-of-experts architectures, short- and long-context designs (up to 1M tokens), and both open-weight and proprietary systems.
+**Limitations and future work (as stated by the authors):**
+- Not stated in the abstract.
+**Overlap with our engine:** none — Adjacent background (LLM agents for network configuration/operations); no direct overlap with the engine's traffic+radio+SCMS joint simulation.
+**Novelty implications:** Does not restrict any candidate claim.

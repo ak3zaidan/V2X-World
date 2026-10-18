@@ -1,0 +1,11 @@
+# Enabling Site-Specific Cellular Network Simulation Through Ray-Tracing-Driven ns-3
+Tanguy Ropitault, Matteo Bordin, Paolo Testolina, Michele Polese, Pedram Johari, Nada Golmie et al. · arXiv 2025 · https://arxiv.org/abs/2508.04004 · relevance: low · basis: abstract
+
+**Problem:** Evaluating cellular systems, from 5th generation (5G) New Radio (NR) and 5G-Advanced to 6th generation (6G), is challenging because the performance emerges from the tight coupling of propagation, beam management, scheduling, and higher-layer interactions.
+**Approach:** System-level simulation is therefore indispensable, yet the vast majority of studies rely on the statistical 3rd Generation Partnership Project (3GPP) channel models. These are well suited to capture average behavior across many statistical realizations, but cannot reproduce site-specific phenomena such as comer diffraction, street-canyon blockage, or deterministic line-of-sight conditions and angle-of- departure/arrival relationships that drive ...
+**Tools and scale:** Vehicular setting. The available text does not describe a V2X simulator, radio stack, traffic model or SCMS-style PKI in enough detail to report; scale not stated.
+**Results:** System-level simulation is therefore indispensable, yet the vast majority of studies rely on the statistical 3rd Generation Partnership Project (3GPP) channel models. These are well suited to capture average behavior across many statistical realizations, but cannot reproduce site-specific phenomena such as comer diffraction, street-canyon blockage, or deterministic line-of-sight conditions and angle-of- departure/arrival relationships that drive ...
+**Limitations and future work (as stated by the authors):**
+- The result is a geometry-based channel model that remains fully compatible with the standard 3GPP implementation in 5G-LENA, while delivering site-specific geometric fidelity.
+**Overlap with our engine:** none: threshold cryptography in a vehicular context. Low relevance background for threshold authorities; it does not model the joint traffic/radio/SCMS loop, closed-loop revocation or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the integrated V2X case (SCMS scale, channel load, closed-loop safety impact) is not addressed.

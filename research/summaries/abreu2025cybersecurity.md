@@ -1,0 +1,12 @@
+# Cybersecurity in Connected and Autonomous Vehicles: A Systematic Review of Automotive Security
+Rafael Abreu, Frederico Branco, M. Reis, Carlos Serôdio · IEEE Access 2025 · https://doi.org/10.1109/access.2025.3584649 · relevance: low · basis: abstract
+
+**Problem:** The rapid evolution of the automotive industry has driven the emergence of Connected and Autonomous Vehicles, raising significant concerns about the cybersecurity vulnerabilities inherent in their complex networks. This systematic review investigates cybersecurity in Connected and Autonomous Vehicles, focusing on internal and external networks and addressing four key research ...
+**Approach:** This systematic review investigates cybersecurity in Connected and Autonomous Vehicles, focusing on internal and external networks and addressing four key research questions: (RQ1) What security controls exist in CAV networks? (RQ2) What methodologies are employed in cybersecurity studies? (RQ3) How effective are these methods, and what limitations do they present? (RQ4) What are the key themes, common approaches, ...
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** The abstract gives no specific quantitative results.
+**Limitations and future work (as stated by the authors):**
+- "This systematic review investigates cybersecurity in Connected and Autonomous Vehicles, focusing on internal and external networks and addressing four key research questions: (RQ1) What security controls exist in CAV networks? (RQ2) What methodologies are employed in cybersecurity studies? (RQ3) ..."
+- "Furthermore, future research should prioritize the development of advanced security protocols, address scalability challenges, and explore the impact of emerging technologies such as Artificial Intelligence and 5G."
+**Overlap with our engine:** partial: a V2X authentication/privacy scheme; our engine implements the standard SCMS/IEEE 1609.2 path rather than this protocol, and the paper reports no closed-loop traffic, radio or revocation simulation.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

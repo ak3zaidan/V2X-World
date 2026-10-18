@@ -1,0 +1,13 @@
+# Privacy-Aware Resource Scheduling via Federated Multi-Agent Learning for Vehicular Edge Networks
+Ziyuan Zhao, Jin-Ming Huang, Jian Shen, Zi-Long Jin et al. · 2025 11th IEEE International Conference on Privacy Computing and Data Security (PCDS) 2025 · https://doi.org/10.1109/pcds65695.2025.00033 · relevance: medium · basis: abstract
+
+**Problem:** Federated learning has been widely adopted in mobile networks, employing distributed approaches for local and global model training. However, practical implementations face challenges such as high communication overhead, increased training latency and resource constraints related to limited channel resources, computational capabilities, storage and battery power.
+**Approach:** To address the dynamic and complex nature of resource allocation in high-mobility vehicular networks and to tackle the channel allocation and power control difficulties caused by vehicle mobility, this study proposes an adaptive resource scheduling strategy based on mobility prediction and multiagent reinforcement learning.
+**Tools and scale:** However, practical implementations face challenges such as high communication overhead, increased training latency and resource constraints related to limited channel resources, computational capabilities, storage and battery power.
+**Results:** Experimental results demonstrate that, compared to traditional methods, this approach reduces system costs and energy consumption by approximately 10%, improves model performance by about 4.1% and enhances transmission success rates by roughly 2%.
+**Limitations and future work (as stated by the authors):**
+- However, practical implementations face challenges such as high communication overhead, increased training latency and resource constraints related to limited channel resources, computational capabilities, storage and battery power.
+- This strategy integrates a mobility trajectory prediction model based on Wavelet Neural Networks (WNN) and extended Long Short-Term Memory (xLSTM), providing accurate future location information to the multi-agent reinforcement learning framework for dynamically adjusting resource allocation ...
+- Furthermore, a dynamic resource scheduling algorithm based on the Multi-Agent Deep Q-Network (MADQN) is employed to solve the channel allocation and power control challenges arising from mobility, enabling autonomous decision-making at edge nodes.In addition, we employ Shamir's Secret Sharing ...
+**Overlap with our engine:** none — cryptographic/authentication scheme or analysis without the closed-loop simulation, SCMS backend or counterfactual machinery of our engine.
+**Novelty implications:** No effect on our novelty claims. 

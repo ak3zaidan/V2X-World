@@ -1,0 +1,13 @@
+# Interplay Between Security, Privacy and Trust in 6G-Enabled Intelligent Transportation Systems
+A. Abdullahi, Erfan Bahrami, Tooska Dargahi, M. Al-Khalidi, M. Hammoudeh · IEEE Open Journal of Intelligent Transportation Systems 2025 · https://doi.org/10.1109/ojits.2025.3637333 · relevance: medium · basis: abstract
+
+**Problem:** Advancements in sixth-generation (6G) wireless technology are expected to transform the transportation sector by enabling faster, more reliable, and more intelligent mobility services. 6G-enabled Intelligent Transportation Systems (ITS) offer ultra-low-latency communication, massive connectivity, and advanced analytics that support safer, more efficient, and more sustainable mobility.
+**Approach:** Despite these benefits, 6G-ITS introduces significant security, privacy, and trust challenges that must be addressed to ensure safe deployment and sustained public confidence. This paper reviews the opportunities and challenges of 6G-ITS with a focus on security, privacy, and trust, including the dual role of quantum technologies that strengthen cryptographic mechanisms while introducing novel attack surfaces.
+**Tools and scale:** Mentioned in abstract: 5G
+**Results:** The paper highlights the benefits of 6G for transportation, including improved communication performance, enhanced device interoperability, advanced data analytics, and increased automation across transportation management and communication systems.
+**Limitations and future work (as stated by the authors):**
+- Despite these benefits, 6G-ITS introduces significant security, privacy, and trust challenges that must be addressed to ensure safe deployment and sustained public confidence.
+- This paper reviews the opportunities and challenges of 6G-ITS with a focus on security, privacy, and trust, including the dual role of quantum technologies that strengthen cryptographic mechanisms while introducing novel attack surfaces.
+- The findings highlight the need for a comprehensive, multi-layered security framework that spans physical infrastructure, network protocols, data management, application security, and trust mechanisms to ensure the integrity and resilience of future 6G transportation ecosystems.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

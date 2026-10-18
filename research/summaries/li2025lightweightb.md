@@ -1,0 +1,11 @@
+# Lightweight and Revocable PUF-Based Authentication Protocol for Secure Vehicle-to-Roadside Communication in VANETs
+Ji-Ping Li, Shou-Yin Liu, Yi-Ning Liu, Xiaoya Bu et al. · 2025 IEEE 102nd Vehicular Technology Conference (VTC2025-Fall) 2025 · https://doi.org/10.1109/vtc2025-fall65116.2025.11310386 · relevance: low · basis: abstract
+
+**Problem:** Vehicular Ad Hoc Networks (VANETs) facilitate safety-critical communication between vehicles and roadside units (RSUs) via open wireless channels. However, this open architecture inevitably introduces security vulnerabilities, enabling malicious entities to either impersonate RSUs for broadcasting fabricated commands or spoof legitimate vehicles to circumvent authentication ...
+**Approach:** However, this open architecture inevitably introduces security vulnerabilities, enabling malicious entities to either impersonate RSUs for broadcasting fabricated commands or spoof legitimate vehicles to circumvent authentication mechanisms, ultimately disrupting operational integrity and eroding system trustworthiness. To overcome these limitations, we propose LRAS2KN, a lightweight, revocable V2R authentication ...
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** Performance analyses show LRAS2KN outperforms recent schemes, achieving the lowest computation overhead, communication cost, and energy consumption cost while enhancing security.
+**Limitations and future work (as stated by the authors):**
+- "To overcome these limitations, we propose LRAS2KN, a lightweight, revocable V2R authentication scheme with session key negotiation."
+**Overlap with our engine:** partial: a V2X authentication/privacy scheme; our engine implements the standard SCMS/IEEE 1609.2 path rather than this protocol, and the paper reports no closed-loop traffic, radio or revocation simulation.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

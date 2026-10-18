@@ -1,0 +1,11 @@
+# A Hybrid Approach for Detecting of Intrusion in Vanet Using Machine Learning with Optimization Approach
+Ganga T G · International Journal of Intelligent Systems and Applications in Engineering 2024 · https://ijisae.org/index.php/IJISAE/article/view/5803 · relevance: medium · basis: abstract
+
+**Problem:** In recent times, there has been a growing focus among researchers on VANET (Vehicular Ad-hoc Network) and its diverse applications, including the improvement of traffic safety through the collection and distribution of traffic event information.
+**Approach:** In order to better address the issues raised by rapid development, this research presents a hybrid machine learning approach intended to enhance the efficacy of intrusion detection systems (IDSs).
+**Tools and scale:** The CICIDS 2017 IDS dataset is used for the evaluation, and MATLAB is used to implement the unique machine learning technique.
+**Results:** In recent times, there has been a growing focus among researchers on VANET (Vehicular Ad-hoc Network) and its diverse applications, including the improvement of traffic safety through the collection and distribution of traffic event information. The significance of carefully analyzing the Machine Learning (ML) methods used to improve the security aspects of intrusion detection systems (IDSs) is highlighted by this delicate research focus in VANET.
+**Limitations and future work (as stated by the authors):**
+- "Malfunctions in vehicles significantly affect both human safety and road safety, underscoring the importance of addressing vehicle network security as a crucial challenge."
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection (direction 1 area); security overhead or cryptography (direction 2 area); datasets/twins/surrogates (direction 3 area); pseudonym privacy/linkability (runner-up area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

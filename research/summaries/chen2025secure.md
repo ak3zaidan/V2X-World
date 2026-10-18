@@ -1,0 +1,11 @@
+# A secure access scheme for Internet of Vehicles based on privacy computing and Chebyshev chaotic mapping
+Jiaming Chen, Yuming Zhao, Xiaoming Lin et al. · venue not stated 2025 · https://doi.org/10.1145/3768184.3768279 · relevance: low · basis: abstract
+
+**Problem:** In response to the security issues exposed in the current Internet of Vehicles, especially the data transmission security challenges faced by users when accessing vehicles through cloud servers, including privacy breaches and illegal control risks, this paper proposes a secure access method for the Internet of Vehicles based on privacy computing and chaotic mapping.
+**Approach:** In response to the security issues exposed in the current Internet of Vehicles, especially the data transmission security challenges faced by users when accessing vehicles through cloud servers, including privacy breaches and illegal control risks, this paper proposes a secure access method for the Internet of Vehicles based on privacy computing and chaotic mapping.
+**Tools and scale:** Not stated in the abstract.
+**Results:** This method fully utilizes the asymmetric encryption advantages of the ElGamal algorithm and the complexity of chaotic mapping to achieve identity authentication and session key negotiation between users, cloud servers and vehicles, effectively resisting various security attacks. Specifically, the ElGamal algorithm in privacy computing is used to generate digital signatures to achieve identity authentication between users and devices, ensuring the legitimacy of access subjects.
+**Limitations and future work (as stated by the authors):**
+- In response to the security issues exposed in the current Internet of Vehicles, especially the data transmission security challenges faced by users when accessing vehicles through cloud servers, including privacy breaches and illegal control risks, this paper proposes a secure access method for the 
+**Overlap with our engine:** none — low-relevance adjacent work (vehicular security, related: digital signature); no SCMS/1609.2 PKI backend, closed-loop revocation, joint ground truth or counterfactual reruns indicated.
+**Novelty implications:** Does not rule out any candidate direction; background only.

@@ -1,0 +1,11 @@
+# Zero-Shot Wireless Blockage Detection via Foundation Models
+Man Yuan, Lixiang Lian · ICC 2026 - IEEE International Conference on Communications 2026 · https://doi.org/10.1109/icc59461.2026.11586976 · relevance: low · basis: abstract
+
+**Problem:** Wireless blockage detection (WBD) is crucial for ensuring stable communication services, yet traditional methods and deep learning (DL)-based approaches face limitations that conventional techniques struggle to distinguish line-of-sight (LoS) blockage from complex channel dynamics, while DL models rely heavily on large-scale labeled wireless data, which are costly and difficult to annotate.
+**Approach:** To address these challenges, this paper proposes FM-WBD (Foundation Model-based Wireless Blockage Detection), a zero-shot WBD framework leveraging the cross-modal reasoning and generalization capabilities of foundation models (FMs). We design a custom wireless encoder to extract semantic features from received power measurements, and employ contrastive learning to align wireless features with image features from pretrained FMs.
+**Tools and scale:** Mentions: deep learning.
+**Results:** Zero-shot detection is achieved by measuring the similarity between aligned wireless features and text prompt embeddings representing blocked/unblocked states. Additionally, a few-shot enhancement strategy is introduced to refine detection accuracy using a small number of labeled samples.
+**Limitations and future work (as stated by the authors):**
+- "Wireless blockage detection (WBD) is crucial for ensuring stable communication services, yet traditional methods and deep learning (DL)-based approaches face limitations that conventional techniques struggle to distinguish line-of-sight (LoS) blockage from complex channel dynamics, while DL models rely heavily on large-scale labeled wireless data, which are costly and difficult to annotate."
+**Overlap with our engine:** partial — Vehicular simulation/dataset work; overlaps the engine's simulation scope in part, without the integrated SCMS/PKI and per-message ground truth.
+**Novelty implications:** Low-relevance background; does not rule out any candidate direction (no SCMS linkage-based revocation, closed-loop MA, PQ SCMS migration, or counterfactual ground truth).

@@ -1,0 +1,11 @@
+# Joint Secure Offloading and Resource Allocation for Vehicular Edge Computing Network: A Multi-Agent Deep Reinforcement Learning Approach
+Ying Ju, Yuchao Chen, Zhiwei Cao, Lei Liu et al. · IEEE transactions on intelligent transportation systems (Print) 2023 · https://doi.org/10.1109/tits.2023.3242997 · relevance: medium · basis: abstract
+
+**Problem:** The mobile edge computing (MEC) technology can simultaneously provide high-speed computing services for multiple vehicular users (VUs) in vehicular edge computing (VEC) networks. Nevertheless, due to the open feature of the wireless offloading channels and the high mobility of the vehicles, the security and stability of the offloading process would be ...
+**Approach:** In this paper, by utilizing the physical layer security (PLS) technique and spectrum sharing architecture, we propose a deep reinforcement learning based joint secure offloading and resource allocation (SORA) scheme to improve the secrecy performance and resource efficiency of the multi-user VEC networks, where the VU offloading links share the frequency spectrum preoccupied with the ...
+**Tools and scale:** Simulation results demonstrate that multiple VU agents adopting the SORA scheme can rapidly adapt to the highly dynamic VEC networks and cooperate to improve the system delay performance while increasing the secrecy probability.
+**Results:** Besides, we set a punishment mechanism for the rate degradation to guarantee the communication quality of each V2V link. Simulation results demonstrate that multiple VU agents adopting the SORA scheme can rapidly adapt to the highly dynamic VEC networks and cooperate to improve the system delay performance while increasing the secrecy probability.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — LLM agents for network/security operations; our engine has an LLM agent that configures and analyses runs, but this work is not V2X and not tied to a deterministic simulator with ground truth.
+**Novelty implications:** LLM agents for SOC/NetOps/RCA are established; cross-layer V2X root-cause analysis against simulator ground truth is not covered here.

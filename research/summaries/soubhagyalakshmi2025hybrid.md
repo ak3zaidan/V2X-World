@@ -1,0 +1,11 @@
+# A Hybrid Framework for Enhancing VANET Network Security in Smart Cities Using Transfer Learning‐Based Threat Detection and Mitigation
+P. Soubhagyalakshmi, P. Saravanan, N. Jeenath Shafana, D. Priyadharshini et al. · Transactions on Emerging Telecommunications Technologies 2025 · https://doi.org/10.1002/ett.70315 · relevance: low · basis: abstract
+
+**Problem:** Instantaneous interaction and autonomous modes of transport are facilitated by Vehicular Ad Hoc Networks (VANETs), which play a crucial role in the development of smart cities. However, the flexible and autonomous architecture of VANETs poses significant security risks, including susceptibility to cyberattacks, privacy breaches, and information manipulation.
+**Approach:** This study proposes a novel security framework that leverages transfer learning‐based threat detection and mitigation techniques to address these issues. Research findings indicate that the proposed framework outperforms traditional machine learning models in terms of scalability, resilience, and the ability to detect malicious activities.
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** Research findings indicate that the proposed framework outperforms traditional machine learning models in terms of scalability, resilience, and the ability to detect malicious activities. By providing a secure communication infrastructure for VANETs, this research contributes to the development of reliable and efficient smart city systems.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial: a V2X authentication/privacy scheme; our engine implements the standard SCMS/IEEE 1609.2 path rather than this protocol, and the paper reports no closed-loop traffic, radio or revocation simulation.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

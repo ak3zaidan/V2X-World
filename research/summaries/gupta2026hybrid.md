@@ -1,0 +1,11 @@
+# Hybrid Classical–Post-Quantum Migration Framework for Brownfield SCADA Environments
+Ankit Gupta, Shilpi Mittal · IEEE Access 2026 · https://doi.org/10.1109/access.2026.3689813 · relevance: low · basis: abstract
+
+**Problem:** Brownfield supervisory control and data acquisition environments face a migration problem that is materially different from enterprise information technology.
+**Approach:** Post-quantum cryptography must be introduced into systems that privilege safety, deterministic communications, long asset lifetimes, staged outages, vendor-certified configurations, and protocol heterogeneity. This paper develops a framework for hybrid classical-post-quantum migration in brownfield SCADA settings that is evidence-based, implementation-oriented, and explicitly staged.
+**Tools and scale:** Not stated in the abstract beyond the above; no traffic simulator, radio stack or SCMS-scale deployment is described.
+**Results:** At the same time, the public standards landscape changed rapidly between 2023 and March 2026, including finalization of the NIST ML-KEM, ML-DSA, and SLH-DSA standards, publication of NIST guidance for key-encapsulation mechanisms, growth of national migration roadmaps, and active standardization of hybrid and pure post-quantum handshakes for Transport Layer Security and Internet Key Exchange. To support the applied-research claim, the framework is evaluated through standards-derived protocol-overhead analysis, a representative brownfield case demonstration, explicit scoring-model parameter rationale, sensitivity analysis, phase-gate validation criteria, and a pilot evidence package.
+**Limitations and future work (as stated by the authors):**
+- "The result is a practical path for operators who must begin quantum-safe preparation now, even where endpoint-native post-quantum support remains uneven."
+**Overlap with our engine:** partial — post-quantum/hybrid authentication scheme; the engine implements PQ and hybrid signatures, but the abstract states no SCMS-scale or traffic-coupled evaluation.
+**Novelty implications:** We cannot claim PQ authentication for vehicles is new; the end-to-end safety cost of PQ in a full SCMS remains open as far as this abstract shows.

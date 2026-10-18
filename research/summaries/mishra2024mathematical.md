@@ -1,0 +1,11 @@
+# A Mathematical Framework for Enhancing IOT Security in VANETs: Optimizing Intrusion Detection Systems through Machine Learning Algorithms
+Divya Mishra · Communications on Applied Nonlinear Analysis 2024 · https://doi.org/10.52783/cana.v31.1488 · relevance: medium · basis: abstract
+
+**Problem:** Vehicular Ad Hoc Networks (VANETs) are of paramount importance to enable secure transportation, a requirement in smart city concepts because security threats can have catastrophic consequences on road safety.
+**Approach:** To mitigate this issue, authors supervised an efficient mathematical approach in form of IDS with a set of machine-learning algorithms for effective intrusion detection mechanism which secures the VANET environment especially when it comes to IoT security. To improve the accuracy and efficiency of intrusion detection a system is proposed that combines intelligence optimization algorithm such as Genetic Algorithm (GA), Particle Swarm Optimization (PSO) and Ant Colony Optimization, along with Support Vector Machine (SVM) based Intrusion Detection System (IDS).The system will be assessed through the NSL-KDD dataset — a popular intrusion detection dataset that contains realistic network traffic 
+**Tools and scale:** Not stated in the abstract.
+**Results:** To improve the accuracy and efficiency of intrusion detection a system is proposed that combines intelligence optimization algorithm such as Genetic Algorithm (GA), Particle Swarm Optimization (PSO) and Ant Colony Optimization, along with Support Vector Machine (SVM) based Intrusion Detection System (IDS).The system will be assessed through the NSL-KDD dataset — a popular intrusion detection dataset that contains realistic network traffic data.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

@@ -1,0 +1,11 @@
+# Respond to Change with Constancy: Instruction-tuning with LLM for Non-I.I.D. Network Traffic Classification
+Xinjie Lin, Gang Xiong, Gaopeng Gou, Wenqi Dong et al. · IEEE Transactions on Information Forensics and Security 2025 · https://doi.org/10.1109/tifs.2025.3574971 · relevance: medium · basis: abstract
+
+**Problem:** Encrypted traffic classification is highly challenging in network security due to the need for extracting robust features from content-agnostic traffic data. Existing approaches face critical issues: (i) Distribution drift, caused by reliance on the closedworld assumption, limits adaptability to realworld, shifting patterns; (ii) Dependence on labeled data restricts applicability where such data is scarce or unavailable.
+**Approach:** In this paper, we introduce a novel traffic representation model named Encrypted Traffic Out-of-Distribution Instruction Tuning with LLM (ETooL), which integrates LLMs with knowledge of traffic structures through a self-supervised instruction tuning paradigm. Additionally, we construct NETD, a traffic dataset designed to support dynamic distributional shifts, and use it to validate ETooL's effectiveness under varying distributional conditions.
+**Tools and scale:** Mentioned in abstract: LLM, field. (From the abstract only.)
+**Results:** Large language models (LLMs) have demonstrated remarkable potential in offering generalizable solutions across a wide range of tasks, achieving notable success in various specialized fields. ETooL demonstrates more robust classification performance and superior generalization in both supervised and zero-shot traffic classification tasks. Notably, it achieves significant improvements in F1 scores: APP53 (I.I.D.) to 93.19%(6.62%) and 92.11%(4.19%), APP53 (O.O.D.) to 74.88%(18.17%) and 72.13%(15.15%), and ISCX-Botnet (O.O.D.) to 95.03%(9.16%) and 81.95%(12.08%).
+**Limitations and future work (as stated by the authors):**
+- Not stated in the abstract.
+**Overlap with our engine:** none — Adjacent background (LLM applied to wireless/vehicular networking); no direct overlap with the engine's traffic+radio+SCMS joint simulation.
+**Novelty implications:** Does not restrict any candidate claim.

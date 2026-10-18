@@ -1,0 +1,11 @@
+# An Efficient CNN-Enhanced Multi-Class Intrusion Detection for Smart Mobility Networks
+Otuekong Ekpo, Valentina Casola, P. Asuquo et al. · International Black Sea Conference on Communications and Networking 2026 · https://doi.org/10.1109/blackseacom69760.2026.11598093 · relevance: medium · basis: abstract
+
+**Problem:** Smart mobility networks face growing cybersecurity risks as their reliance on heterogeneous components, real-time communication, and continuous data exchange significantly expands the attack surface.
+**Approach:** To address this, we propose a CNN-MLP architecture that combines CNNs for spatial feature extraction with an MLP for multiclass attack classification, maintaining low computational complexity. These results indicate that the proposed approach provides an efficient solution for multiclass intrusion detection in smart mobility networks.
+**Tools and scale:** Our approach is evaluated using five benchmark datasets, including VeReMi Extension, CICIoV2024, Edge-IIoTset, 5G-NIDD, and UNSW-NB15. Experimental results show the F1 score ranging from 93.46% (VeReMi Extension) to 100% (CICIoV2024 and Edge-IIoTset) for all five benchmark datasets, with the 5G-NIDD dataset F1 score of 99.95% and UNSW-NB15 at 95.27%, with all datasets at almost 98% or greater PR-A
+**Results:** Experimental results show the F1 score ranging from 93.46% (VeReMi Extension) to 100% (CICIoV2024 and Edge-IIoTset) for all five benchmark datasets, with the 5G-NIDD dataset F1 score of 99.95% and UNSW-NB15 at 95.27%, with all datasets at almost 98% or greater PR-AUC while keeping the model size to less than 1.03 MB.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection (direction 1 area); datasets/twins/surrogates (direction 3 area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

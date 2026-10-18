@@ -1,0 +1,124 @@
+# Batch 05 notes
+
+378 papers summarised (all catalogued as high relevance; 92 had no abstract and are summarised from title/metadata only; 74 had PDFs and used full-text excerpts). The batch is dominated by misbehaviour detection, Sybil detection and platoon/CACC attack papers; most are offline classifiers on VeReMi.
+
+## 1. Stated limitations and future work
+
+- rachael2018review: Most trust schemes assume stable dishonest behaviour, which is unrealistic for intelligent attackers.
+- almalki2020prospectus: Prior work's stationarity assumptions unrealistic.
+- almalki2020prospectus: this is a proposal.
+- monteuuis2022v2x: Notes attack trees become too large for this many attacks.
+- monteuuis2022v2x: proposes standards inputs, not detectors.
+- su2024assessing: Results are preliminary.
+- malik2024trusted: Lists open challenges for trusted digital-twin data sharing.
+- greco2025detection: Data requirements and computational complexity.
+- greco2025detection: future multi-feature fusion and explainable AI.
+- demir2025distributed: Future: targeted poisoning, backdoor attacks, defence mechanisms.
+- sardesai2018impacts: Abstract system.
+- sardesai2018impacts: suggests need for strong assurance.
+- behfarnia2019local: One stage of the game only.
+- houmer2020risk: Future: attack-defence tree for defence strategies.
+- sumithra2021ensemble: Future: replace supervised methods with deep learning and ANNs.
+- trabelsi2022multi: Limited to position falsification.
+- trabelsi2022multi: future fog computing.
+- trabelsi2022multi: V2X credential management being explored.
+- lochbihler2023misbehaviour: Recommendations: BSM verification via neighbours and 5G network info.
+- akil2023non: Notes infrastructure-based schemes need RSUs, CRLs via RSUs and pseudonym reuse in rural areas.
+- gong2023resilient: Hard upper bound on attack duration assumed.
+- rosenstatter2023synthetic: Early-stage.
+- rosenstatter2023synthetic: outline.
+- lyons2024distributed: Undetected attacks can still degrade performance.
+- zhang2024simulation: Future: subjective logic for omission and ghost attacks.
+- zhang2024simulation: other realistic trajectories.
+- rhamdhan2020hybrid: Design only.
+- kalogeropoulos2022distributed: V2I only.
+- kalogeropoulos2022distributed: future V2V extension and reducing trust in signing authority.
+- jaimes2022generative: Discusses GAN drawbacks.
+- nabil2023game: Future: ML-based detection, prediction, reaction framework.
+- khan2025context: Dataset class imbalance evident.
+- guven2025creating: Future work on building and landscape data effects on propagation.
+- gyawali2025progress: In-progress work.
+- rivas2013reputation: Future work chapter exists (not extracted).
+- singh2015mitigation: Future: intrusion detection approach.
+- debruhl2018optimizing: Discusses design trade-offs.
+- oza2020secureb: Future: evasive attackers.
+- oza2020secureb: broader traffic models.
+- kontos2021phase: Initial results.
+- koley2022framework: Homogeneous platoons only.
+- yoshizawa2022misbehaviour: Gaps remain in current spec.
+- zhao2023imf: Future: anonymous authentication for V2I and V2V.
+- huisman2023impact: Suggests optimal controllers and new security metrics.
+- hassine2023vehicular: Identifies open challenges in platoon Sybil defence.
+- scopelliti2024demo: Demo only.
+- huisman2024optimal: Future: other optimisation strategies.
+- huisman2024optimal: detection schemes with tighter bounds.
+- silva2025evaluation: Simulation and experiment differ in scenario structure and parameters (stated limitation).
+- gong2025lightweight: Overlooks practical presumptions such as beacon privacy (future).
+- tadesse2025sybil: Calls for real-world testing.
+- chbib2025tracking: Future directions listed (not in abstract).
+- hermann2026veremi: No RSSI in dataset.
+- hermann2026veremi: future VRUs.
+- jain2014misbehavior: Same.
+- keijzer2021detection: Future: two-stage fault detection and identification.
+- qian2022survey: Future directions discussed.
+- yakan20235g: Dataset designed for VANET needed adjustment.
+- saudagar2023attack: Only two attack types.
+- saudagar2023attack: future own dataset and Bi-GRU.
+- chikh2024collaborative: Limitations discussed.
+- chikh2024collaborative: future AV integration and variable speed limits.
+- andert2024conclave: Future: all cooperative driving scenarios including path plans.
+- zhang2024enhancing: Future: trust-based MBD.
+- zhang2024enhancing: multiple traffic scenarios.
+- li2024overview: Laying groundwork.
+- li2024overview: future systemic study.
+- mokari2024vehicular: Future: heterogeneous dynamics.
+- mokari2024vehicular: ML responses.
+- li2025task: Future: distributed reputation computation.
+- ghosh2025assessment: First step toward practicable resilience.
+- ghosh2025assessment: test-bed in future.
+- n2025misbehavior: Class imbalance noted.
+- mwanje2025misbehaviour: Feature overlap under random/constant offset.
+- mwanje2025misbehaviour: post-processing weights proposed.
+- preetha2020survey: Resource testing insufficient.
+- preetha2020survey: authentication reliable.
+- almalki2022addressing: Stationarity assumptions unrealistic.
+- almalki2022online: Same.
+- naqvi2024neuro: Future: other feature selection.
+- gatti2024threat: Future directions discussed.
+- citir2024consensus: Only multi-observed objects.
+- abdullahi2024distributed: Labelled data impractical.
+- mamdouh2024effective: Future challenges highlighted.
+- bangui2024exploring: Vision only.
+- idris2024machine: Notes near-perfect scores due to low noise and few features in dataset.
+- zhang2024misbehavior: Future: runtime trust assessment simulation, realistic sensor data, ML MBD, edge trust MBD.
+- idris2024novel: Future: FL or differential privacy.
+- idris2024novel: RNN/CNN.
+- wang2025efficient: Future: post-quantum cryptography integration.
+- gupta2025evaluation: Future: ML dynamic trust, scalability.
+- zhang2025machine: Threshold trade-off between detection and false alarms noted.
+- attiaoui2025misbehavior: Convergence delay in highly adversarial settings.
+- attiaoui2025misbehavior: future integrations.
+- nagaraju2025trust: Limitations of existing trust models identified.
+- li2014research: Problems in existing methods and future directions listed.
+- saranya2015reputation: Susceptible to sophisticated collusion attacks (stated).
+- arora2016detect: Future: larger node counts.
+- jaimes2017privacy: Thesis lists limitations and future work (not extracted).
+- alipourfanid2017platoon: Notes jamming impact on stability was largely open.
+- s2019increase: Future: no restricted timestamps.
+- alnasser2020design: Thesis lists limitations and future work.
+
+## 2. Papers with strong overlap
+
+- willecke2023a4md: Simulates detection, reporting and reaction (eviction) loop in the European C-ITS, close to our closed-loop MBD-to-revocation direction. Leaves open: Closed-loop MBD-reporting simulation exists for ETSI; US SCMS (MA, linkage revocation, CRL) and safety-outcome quantification remain to differentiate.
+- zhang2024simulation: Closed-loop attack, detection and mitigation with application-level safety impact and misbehaviour reporting datasets. Leaves open: Closed-loop CPM MBD exists; PKI revocation reaction and SCMS-level time-to-neutralise remain.
+- kamel2020misbehavior: F2MD and misbehaviour reporting simulation underpin closed-loop MBD research, overlapping our MBD-in-simulation direction. Leaves open: Detection-and-reporting simulation exists; SCMS revocation and safety cost not quantified.
+- guven2025creating: Realistic-map simulation producing PHY-level labelled attack datasets, similar to our engine's dataset/benchmark role. Leaves open: Realistic RSSI Sybil dataset exists; per-message counterfactual and PKI ground truth remain open.
+- yoshizawa2022misbehaviour: Analyses multi-authority (cross-border) misbehaviour reporting, overlapping our multi-provider SCMS interoperability and MA design directions. Leaves open: Cross-jurisdiction reporting gaps already identified for ETSI; US multi-provider SCMS quantification still open.
+- scopelliti2024demo: Bounded time to revoke misbehaving pseudonyms in simulation, directly overlapping our time-to-neutralise direction. Leaves open: Bounded revocation time via self-revocation exists; SCMS CRL/linkage-based time-to-neutralise with safety outcome still differs.
+- trkulja2025vehicle: Quantifies safety outcome (crashes) of security mechanism design in closed loop, overlapping our safety-cost-of-security and closed-loop MBD directions. Leaves open: Crash reduction from trust fusion shown for CACC; PKI revocation timing and city scale remain.
+- hermann2026veremi: Simulation-generated labelled MBD benchmark with generator, close to our benchmark direction. Leaves open: New benchmark exists; per-unit counterfactual ground truth and PKI/radio joint labels remain open.
+- park2024enhancingb: Deployed local plus global MBD alongside an SCMS, matching our local-detection-to-MA-reaction pipeline. Leaves open: Real-testbed local/global MBD exists; revocation latency vs safety not quantified.
+- zhang2024enhancing: Quantifies safety-application impact of attacks and MBD in closed loop. Leaves open: Closed-loop MBD-to-safety exists for CPM/IMA; PKI revocation and SCMS timing differ.
+- wehmer2021practical: Evaluates MBD by physical impact of attacks rather than classification, as in our closed-loop safety-outcome direction. Leaves open: Impact-based MBD metrics already proposed; extension to revocation latency and SCMS open.
+- zhang2024misbehavior: Closed-loop CPM MBD framework with safety-application impact. Leaves open: Same as zhang2024simulation; revocation reaction not covered.
+- ghiro2026physics: Runtime MBD inside simulation with a reaction protocol that changes vehicle behaviour, overlapping closed-loop MBD-to-safety. Leaves open: Runtime detection plus reaction exists in Plexe; PKI revocation path not covered.

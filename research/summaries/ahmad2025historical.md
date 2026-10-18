@@ -1,0 +1,11 @@
+# Historical Prediction Attention Mechanism based Trajectory Forecasting for Proactive Work Zone Safety in a Digital Twin Environment
+Minhaj Uddin Ahmad, Mizanur Rahman, Alican Sevim, David Bodoh, Sakib Khan, Li Zhao et al. · arXiv 2025 · https://doi.org/10.1109/jiot.2026.3669235 · relevance: low · basis: abstract
+
+**Problem:** Proactive safety systems aim to mitigate risks by anticipating future potential conflicts between vehicles and enabling early intervention to prevent work-zone-related crashes.
+**Approach:** This study presents an infrastructure-enabled proactive work zone safety warning system that leverages a digital twin (DT) environment, integrating real-time multisensor data, detailed high-definition (HD) maps, and a trajectory prediction model based on a historical-prediction attention mechanism (AM). Specifically, the contributions of this study are in twofolds: 1) developing an infrastructure-enabled vehicle trajectory prediction framework ...
+**Tools and scale:** Vehicular setting. The available text does not describe a V2X simulator, radio stack, traffic model or SCMS-style PKI in enough detail to report; scale not stated.
+**Results:** Specifically, the contributions of this study are in twofolds: 1) developing an infrastructure-enabled vehicle trajectory prediction framework that leverages the historical prediction network (HPNet) model integrated with Lanelet2 HD maps and 2) developing a proactive safety warning generation application that incorporates probabilistic conflict modeling and vehicle bounding-box representations. Our analyses revealed that the ...
+**Limitations and future work (as stated by the authors):**
+- Proactive safety systems aim to mitigate risks by anticipating future potential conflicts between vehicles and enabling early intervention to prevent work-zone-related crashes.
+**Overlap with our engine:** none: simulation/digital twins in a vehicular context. Low relevance background for the simulator itself; it does not model the joint traffic/radio/SCMS loop, closed-loop revocation or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the integrated V2X case (SCMS scale, channel load, closed-loop safety impact) is not addressed.

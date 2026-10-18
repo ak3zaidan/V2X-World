@@ -1,0 +1,11 @@
+# Securing EVCS Infrastructure Against Cyberattacks with a Deep Learning-Based Detection Model
+Md Rakibul Ahasan, Shahriar Rahman Fahim, Abdulrahman Takiddin · 2025 10th International Conference on Fog and Mobile Edge Computing (FMEC) 2025 · https://doi.org/10.1109/fmec65595.2025.11119378 · relevance: medium · basis: abstract
+
+**Problem:** The rapid growth of electric vehicles (EVs) necessitates the development of secure and efficient electric vehicle charging stations (EVCSs), which, when integrated with smart grid (SG) technology, become critical components of smart city infrastructure.
+**Approach:** However, EVCSs remain vulnerable to cyberattacks, such as charging profile alteration attacks (CPAAs), where malicious actors manipulate parameters like start time, end time, and energy demand, causing disruptions in charging processes and SG instability. This study introduces a robust detection model based on a convolutional attention autoencoder network (CAENet) model, which integrates a deep autoencoder for dimensionality reduction, convolutional layers for feature extraction, and an attention mechanism to prioritize critical temporal features.
+**Tools and scale:** Not stated in the abstract.
+**Results:** This study introduces a robust detection model based on a convolutional attention autoencoder network (CAENet) model, which integrates a deep autoencoder for dimensionality reduction, convolutional layers for feature extraction, and an attention mechanism to prioritize critical temporal features. The CAENet model offers 94% detection rate against CPAAs, outperforming benchmark machine learning approaches by 7 – 12%.
+**Limitations and future work (as stated by the authors):**
+- However, EVCSs remain vulnerable to cyberattacks, such as charging profile alteration attacks (CPAAs), where malicious actors manipulate parameters like start time, end time, and energy demand, causing disruptions in charging processes and SG instability.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

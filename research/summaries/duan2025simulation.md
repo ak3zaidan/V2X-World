@@ -1,0 +1,11 @@
+# Simulation analysis of traffic flow stability for intelligent connected vehicles at mountain tunnel entrances considering nonlinear coupling effects
+Mengmeng Duan · Scientific Reports 2025 · https://doi.org/10.1038/s41598-025-21318-6 · relevance: low · basis: abstract
+
+**Problem:** The sudden changes in light and slope at the entrance of mountain tunnels can easily lead to unstable traffic flow, especially in mixed traffic flow containing ICV.
+**Approach:** The existing control methods are difficult to simultaneously address three challenges: dynamically changing lighting and slope environments, vehicle data privacy protection requirements, and insufficient adaptability to different tunnel scenarios. This study developed the MF3DQN-TF control framework to address these issues by integrating environmental perception and vehicle control.
+**Tools and scale:** Vehicular setting. The available text does not describe a V2X simulator, radio stack, traffic model or SCMS-style PKI in enough detail to report; scale not stated.
+**Results:** This study developed the MF3DQN-TF control framework to address these issues by integrating environmental perception and vehicle control. The verification results show that in typical tunnel testing scenarios, this framework significantly improves performance compared to traditional methods: the amplitude of speed fluctuations is reduced by about 40% compared to conventional control methods, the risk of rear end collisions is reduced to ...
+**Limitations and future work (as stated by the authors):**
+- The existing control methods are difficult to simultaneously address three challenges: dynamically changing lighting and slope environments, vehicle data privacy protection requirements, and insufficient adaptability to different tunnel scenarios.
+**Overlap with our engine:** none: privacy/pseudonyms in a vehicular context. Low relevance background for cross-layer linkability; it does not model the joint traffic/radio/SCMS loop, closed-loop revocation or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the integrated V2X case (SCMS scale, channel load, closed-loop safety impact) is not addressed.

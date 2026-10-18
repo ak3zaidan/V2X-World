@@ -1,0 +1,143 @@
+# Batch 04 notes
+
+Source: summaries/<id>.md for the 378 ids in batches/batch-04.txt. Most papers were summarised from abstracts only (71 had no abstract or PDF and were summarised from title and metadata only; 73 high-relevance papers with PDFs used full-text sections); limitations below are those stated by the authors in the available text.
+
+## 1. Stated limitations and future work
+
+- chen2019tmec: Authors point to social IoV relationships and community-based services as future context.
+- chen2019tmec: no explicit limitations section.
+- hurl2020trupercept: Latency and alignment issues set aside.
+- hurl2020trupercept: future: role-based trust (e.g. police cars), incentives for honest reporting, clustering of objects to reduce information, central server reputation, Bayesian/POMDP trust models.
+- iqbal2022simulating: Evaluation workflow is non-interactive since detection is post-simulation (noted as gap in prior work and their own pipeline).
+- iqbal2022simulating: future: ML detection and mitigation on the dataset.
+- taylor2022vehicular: Survey.
+- taylor2022vehicular: open challenges listed for platoon security (not extracted in detail).
+- braiteh2025platooning: A complete and secure platooning service is missing.
+- braiteh2025platooning: assumption of secure C-ITS communication does not reflect real conditions.
+- braiteh2025platooning: robustness under varied environmental and communication conditions needs study.
+- braiteh2025platooning: industrial readiness and cross-OEM/country interoperability unresolved.
+- barnwal2012heartbeat: Authors say results pave the way for further research.
+- hammi2022it: Calls for standard-compliant network and attack models and common datasets for future Sybil research.
+- ghaleb2019context: Reviews prior work assuming stationary Gaussian noise and ideal communication.
+- ghaleb2019context: their own future work section not extracted.
+- whitefield2017formal: Preservation of privacy properties of revocation protocols left for future analysis.
+- whitefield2017formal: implementation relies on heartbeats against non-delivery.
+- amanullah2022burst: Preliminary dataset.
+- zhu2024sybil: Discusses limitations of other works (location-bound detectors, cost, class imbalance).
+- vulimiri2010application: PCN alerts are periodic so received alerts may be time-shifted from the model grid.
+- vulimiri2010application: designing MDS for other applications using secondary information.
+- bimeyer2014misbehavior: Most existing solutions only tested in simulation (motivating real tests).
+- xu2022comprehensive: Remaining concerns and future directions discussed (not detailed in abstract).
+- amanullah2023taxonomy: Highlights several research challenges and future directions (not detailed in abstract).
+- yang2021risk: Future: use analysis to guide controller redesign to minimise stealthy-attack impact.
+- wang2023federated: Future work: extensive simulations in a large-scale realistic scenario.
+- kushwaha2014survey: Plan a detailed survey of critical VANET attacks.
+- yang2021robust: Using estimated data introduces uncertainty and decreases performance.
+- ghaleb2022fuzzy: Future: ML to adapt detection threshold to context.
+- ghaleb2022fuzzy: more representative context features.
+- ambrosin2019design: Authors note no system can be completely secure.
+- ambrosin2019design: techniques expected to mature with future research.
+- sangwan2022classification: Open issues and research challenges discussed.
+- liu2007probabilistic: Assumes TPD and honest majority.
+- geiler2020plausibility: Faults derived from experience.
+- geiler2020plausibility: generality across modalities claimed but tested on two scenarios.
+- ko2021approach: Future work section not extracted.
+- tsukada2021misbehavior: Future work section not detailed in extract.
+- gularte2024integrating: Identifies integration of co-simulation and AI-driven approaches as research opportunities.
+- muller2019trust: Related-work gaps listed (homogeneous agents, resource use, isolating faulty nodes, centralisation).
+- muller2019trust: future work: transfer to other network topologies.
+- zhang2019reliable: Centralised cloud approaches cannot meet delay requirements (motivation).
+- trkulja2020denial: Future work discussed in conclusion (not extracted).
+- ansari2021v2x: Open challenges for standardisation and research to achieve secure CPS (discussed).
+- li2025detecting: New attack forms may emerge.
+- li2025detecting: detector limited to fixed input time-series length (e.g. 2 s).
+- jin2014traffic: More realistic situations to be studied in future.
+- wolf2020securing: Fundamental trade-off between safety and efficiency of the mitigation.
+- huang2022detection: Precomputed thresholds limit detection.
+- huang2022detection: adaptive threshold proposed.
+- almutaz2014detecting: Only simulation data reported.
+- almutaz2014detecting: detection weaker when natural dispersion is low (vehicles platooning).
+- tyagi2015preserving: Addresses only Sybil attacks, not replay, range query, similarity, timing or transition attacks.
+- ajibuwa2023survey: Lack of objective evaluation and feasibility metrics.
+- ajibuwa2023survey: vulnerability to adversarial ML.
+- ajibuwa2023survey: limited practical deployment.
+- sharma2018pearson: Requires 4-7 s of history.
+- kim2019vehicle: Tx power too low may break function.
+- kim2019vehicle: mobility affects attack distance.
+- kim2019vehicle: future: explore efficacy of single-hop whispering further.
+- stepien2021security: Tabulates limitations of other trust schemes.
+- kim2022vanet: More advanced jamming attacks need consideration.
+- berlin2016poster: No stable system state exists to rely on.
+- baharlouei2022exploring: Future research directions arise from their observations on simulation realism.
+- slama2022misbehavior: Imbalanced data complicates multi-class learning.
+- scopelliti2024efficient: Choice of Tv trades revocation speed vs resources and desynchronisation.
+- scopelliti2024efficient: small Tv impractical in rural areas.
+- scopelliti2024efficient: future: privacy-preserving blocking of re-joining after revocation without hurting honest vehicles that lose connectivity.
+- putra2017trust: Sparse road conditions weaken approach.
+- sedar2021reinforcement: Near-zero speeds of legitimate vehicles cause incorrect RL actions.
+- yang2022overview: Challenges and future prospects summarised.
+- kalogiannis2022attack: Framework can be extended to other driving automation functions.
+- didouh2022blockchain: Future: proof of concept as a real traffic management server.
+- adele2024survey: Future research directions recommended.
+- huang2011reputation: Limitations and countermeasures section (incentivising nodes, change of direction).
+- suo2021proof: Future work not extracted.
+- velayudhan2021sybilb: related article retracted.
+- sheik2023comprehensive: Critical open challenges for securing CCAV described.
+- zhong2023tackling: Data quality, compute and real-time constraints.
+- zhong2023tackling: future: adaptive/transfer learning, FL, adversarial robustness, interpretability.
+- hamhoum2024mistralbsm: Notes prior LLM MDS works risk training data leakage via message ID or pseudo-ID features.
+- youness2025vemisnet: Reliance on simulated data (LuST only).
+- youness2025vemisnet: single 80/20 split, no k-fold or temporal CV.
+- youness2025vemisnet: potential adversarial vulnerability.
+- youness2025vemisnet: future: end-to-end deployment study with real-time throughput and latency.
+- ramsamooj2024genvram: Deep learning efficacy needs further investigation.
+- amirat2018fuzzy: Preliminary results.
+- j2019evaluation: Depends on feedback delivery to the server.
+- sharshembiev2019fail: Targeted attacks out of scope.
+- michelson2019interference: Applies similarly to C-V2X (not tested).
+- yoon2021evasive: Cost aspect of the enhancement discussed.
+- rakhi2023lcss: LCSS fails under power control (addressed by CPD).
+- slama2023one: Real data may not fit OVA assumptions.
+- sedar2024knowledge: Existing MBD suffers high false alarms and poor robustness.
+- bandarapu2025blockchain: Future use cases for multifactor authentication.
+- heijden2014open: Rare events trigger detectors.
+- heijden2014open: distinguishing anomalies from attacks is open.
+- sedar2022misbehavior: Detection curtailed for certain misbehaviour types due to partly inaccurate clustering and erratic attacker activity.
+- zhang2022trust: Future: perception uncertainty, more complex attacks, new road scenarios, semi-global RSU-based detection.
+- ma2023location: Need multi-layered privacy protection and dynamic adaptation to cross-layer attacks.
+- park2024enhancing: Fixed RSUs see truncated sequences.
+- mekonen2025detection: Needs real-world validation, broader attacks and network conditions.
+- mekonen2025detection: future hybrid/DL/RL and OMNeT++ simulation for deployment constraints.
+- kaur2015movement: Uses random waypoint mobility (unrealistic for vehicles).
+- he2020secure: Bounded uncertainties and a single attacked vehicle assumed.
+- bassiony2022detection: Unresolved challenges and future directions listed.
+- jaton2023distributed: Underperforms RF and GBT.
+- sheik2023securing: Need for future TARA work in the broader CCAV ecosystem.
+- sheik2023securing: reference architectures early-stage.
+- soares2024intrusion: Further challenges and trends suggested.
+- li2025attentionguard: Future: more network attacks in platooning and optimisation for resource-constrained devices.
+- ababsa2025deep: VeReMi extension limitations motivated new data.
+- panchal2017segregation: Very small scale (18 nodes).
+- okamura2021misbehavior: Suited to time-varying position attacks.
+- sultana2022data: Results vary due to scenario differences.
+- eldalahmeh2023intrusion: Abstract appears inconsistent with title.
+- wang2025cp: Future: query-based black-box attacks.
+- wang2025cp: need for defences.
+- guo2012misbehavior: Preliminary results only.
+
+## 2. Papers with strong overlap
+
+- twardokus2023protecting: NR sidelink scheduling attacks with roadway impact, overlapping runner-up direction (NR sidelink attacks).
+- hasrouny2019misbehavior: MDS-to-MA-to-CRL revocation pipeline with CRL distribution, which our engine implements end to end (with real SCMS linkage-based CRLs).
+- kamel2018misbehavior: misbehaviour report format to an MA, which our engine implements in the closed MBD-to-MA loop.
+- trkulja2020denial: LTE-V2X Mode 4 MAC-level DoS by resource selection, which our engine's LTE-V2X stack and attack set can reproduce.
+- wolf2020securing: explicitly couples MDS output to vehicle control and quantifies safety/efficiency trade-off, overlapping directions 1 and 2 at the local (not PKI) level.
+- eckhoff2013smartrevoc: hash-chain-based pseudonym revocation (similar in spirit to SCMS linkage values) and CRL dissemination speed simulation, overlapping our CRL broadcast and direction 1.
+- boeira2018mitigating: closed-loop detection-to-reaction showing collision prevention depends on reaction timing, overlapping direction 1 at the local level.
+- baharlouei2022exploring: demonstrates that simulator configuration changes security conclusions, the core motivation for our counterfactual reruns and sensitivity analysis.
+- scopelliti2024efficient: quantifies revocation time against passive CRL revocation under network delays, directly overlapping direction 1 (time to neutralise).
+- kalogiannis2022attack: credentialed insider attacks executed in closed-loop co-simulation with MBD and a VPKI context, overlapping our attack-in-simulation capability.
+- didouh2022blockchain: measures exposure/detection time for revocation of misbehaving vehicles, overlapping direction 1 (time to neutralise), though via blockchain, not SCMS.
+- furtado2018threat: SCMS-specific threat analysis, overlapping runner-up "quantified ISO/SAE 21434 ratings" (qualitative, not quantified).
+- yoon2021evasive: SB-SPS targeted collision attack on LTE-V2X with safety framing; our engine's LTE-V2X MAC can host this.
+- haidar2020dare: misbehaviour report stream for global MA evaluation, overlapping direction 1 (MA decision design).

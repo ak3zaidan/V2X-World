@@ -1,0 +1,11 @@
+# A SUMO-Based Framework for Traffic-AwareVehicle Routing With Quantum-Inspired andClassical Optimization
+Rohit Korade · unknown venue 2026 · https://doi.org/10.2139/ssrn.7557279 · relevance: low · basis: abstract
+
+**Problem:** Abstract—This paper presents an integrated software framework for traffic-aware vehicle routing that couples microscopictraffic simulation with classical, quantum-inspired, and quantumcombinatorial optimization algorithms.
+**Approach:** The platform interfacesa microscopic traffic simulator via a standard traffic controlinterface with an OpenStreetMap road network of Pune, India,comprising 3,559 junctions and 8,263 directed edges, updating adynamic edge-weight graph in response to extracted traffic states.A common evaluation engine bridges physical road-level routingwith six optimization methods: an exact mixed-integer linearprogramming reference, an exhaustive ...
+**Tools and scale:** Vehicular setting. The available text does not describe a V2X simulator, radio stack, traffic model or SCMS-style PKI in enough detail to report; scale not stated.
+**Results:** The platform interfacesa microscopic traffic simulator via a standard traffic controlinterface with an OpenStreetMap road network of Pune, India,comprising 3,559 junctions and 8,263 directed edges, updating adynamic edge-weight graph in response to extracted traffic states.A common evaluation engine bridges physical road-level routingwith six optimization methods: an exact mixed-integer linearprogramming reference, an exhaustive ...
+**Limitations and future work (as stated by the authors):**
+- PairedWilcoxon signed-rank tests detected no statistically significantcost differences among the evaluated algorithms, consistent withthe small benchmark scale and non-binding capacity constraints.The framework architecture, exact formulations, implementationtrade-offs, and critical scaling ...
+**Overlap with our engine:** none: post-quantum/hybrid cryptography in a vehicular context. Low relevance background for direction 2 (PQ migration of the SCMS); it does not model the joint traffic/radio/SCMS loop, closed-loop revocation or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the integrated V2X case (SCMS scale, channel load, closed-loop safety impact) is not addressed.

@@ -1,0 +1,11 @@
+# Malicious Route Detection in Vehicular Ad-hoc Network using Geographic Routing with Masked Data
+Saravanan Palani, Logesh Ravi, Vijayakumar Varadarajan, Subramaniyaswamy Vairavasundaram et al. · Recent Advances in Computer Science and Communications 2020 · https://doi.org/10.2174/2213275912666181205150739 · relevance: low · basis: abstract
+
+**Problem:** Background:Vehicular Ad-hoc Network is the subset of Mobile Ad-hoc Network, Intelligent Transport System and Internet of Things. The acting nodes in VANET are the vehicles on the road at any moment.Objective:The anonymity character of these vehicles is opening the opportunity for malicious attacks.
+**Approach:** The main objective this work is to identify the malicious routes, avoid the data transmission using these routes and increase the packet delivery ratio.Methods:In the proposed system called Geographic Routing Protocol with Masked data, two binary- codes called mask and share have been generated to identify the malicious route. Simulations were conducted with varying speed and varying network size in 20 km2 ...
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** Simulations were conducted with varying speed and varying network size in 20 km2 geographical area.Results:The average packet delivery ratio with varying speed is 0.817 and with varying networksize is 0.733.Conclusion:The proposed geographical routing protocol with masked data technique outperforms than traditional geographic protocol and Detection of Malicious Node protocol, by 0.102 and 0.264 respectively with ...
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial: a V2X authentication/privacy scheme; our engine implements the standard SCMS/IEEE 1609.2 path rather than this protocol, and the paper reports no closed-loop traffic, radio or revocation simulation.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

@@ -1,0 +1,11 @@
+# Detection and Prevention of Black Hole Attack in VANET Using Secured AODV Routing Protocol
+Salim Lachdhaf, Mohammed Mazouzi, Mohamed Abid · venue not stated 2017 · https://doi.org/10.5121/csit.2017.71503 · relevance: low · basis: abstract
+
+**Problem:** Vehicular ad hoc networks (VANETs) are becoming popular and promising technologies in the modern intelligent transportation world. They are used to provide an efficient Traffic Information System (TIS), Intelligent Transportation System (ITS), and Life Safety.The mobility of the nodes and the volatile nature of the connections in the network have made VANET vulnerable to many ...
+**Approach:** They are used to provide an efficient Traffic Information System (TIS), Intelligent Transportation System (ITS), and Life Safety.The mobility of the nodes and the volatile nature of the connections in the network have made VANET vulnerable to many security threats.Black hole attack is one of the security threat in which node presents itself in such a way to the other nodes that it has the shortest and the freshest ...
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** They are used to provide an efficient Traffic Information System (TIS), Intelligent Transportation System (ITS), and Life Safety.The mobility of the nodes and the volatile nature of the connections in the network have made VANET vulnerable to many security threats.Black hole attack is one of the security threat in which node presents itself in such a way to the other nodes that it has the shortest and the freshest ...
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial: vehicular security topic, but no simulation of traffic, radio, SCMS backend or safety outcomes is described.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

@@ -1,0 +1,11 @@
+# An Efficient Anonymous Authentication Scheme for Cross-zone Scenarios in VANETs: Efficient Authentication for Cross-Zone in VANETs
+Ruomeng Lin, Wei Ma, Kai-Yue Li · Proceedings of the 3rd International Conference on Signal Processing, Computer Networks and Communications 2024 · https://doi.org/10.1145/3712335.3712393 · relevance: medium · basis: abstract
+
+**Problem:** Vehicular Ad Hoc Networks (VANETs) serve as a critical solution for ensuring the safe and efficient operation of intelligent transportation systems and show great potential in the deployment of autonomous driving scenarios. To address the challenges posed by large-scale vehicular topologies, zone encryption and authentication schemes have been proposed to enhance communication efficiency and privacy in VANETs.
+**Approach:** To tackle the inefficiencies and privacy concerns of existing cross-zone authentication schemes, we propose a fast cross-zone authentication scheme tailored for autonomous driving scenarios in VANETs.
+**Tools and scale:** Experimental and simulation results indicate that under the proposed rapid cross-zone authentication mechanism, the computational complexity of the verification process is significantly reduced, outperforming existing comparable approaches in terms of authentication overhead and latency.
+**Results:** By integrating long-term and short-term credential issuance mechanisms, the proposed scheme reduces certificate storage overhead and achieves efficient anonymous batch authentication, significantly lowering communication delays during zone transitions. Moreover, the scheme's rapid cross-zone verification minimizes interactions with untrusted entities, achieving an authentication speed of 0.45 ms per vehicle.
+**Limitations and future work (as stated by the authors):**
+- To address the challenges posed by large-scale vehicular topologies, zone encryption and authentication schemes have been proposed to enhance communication efficiency and privacy in VANETs.
+**Overlap with our engine:** none — cryptographic/authentication scheme or analysis without the closed-loop simulation, SCMS backend or counterfactual machinery of our engine.
+**Novelty implications:** No effect on our novelty claims. 

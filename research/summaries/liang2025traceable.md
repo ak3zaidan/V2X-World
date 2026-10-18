@@ -1,0 +1,12 @@
+# Traceable Cross-Domain Anonymous Authentication for Distributed Vehicular Fog Computing Services
+Hai Liang, W. Tao, Yu-Jue Wang, Shuo Wang et al. · Asia Joint Conference on Information Security 2025 · https://doi.org/10.29007/5mk1 · relevance: medium · basis: abstract
+
+**Problem:** With the development of Distributed Vehicular Fog Services (VFS), the demand for vehicle authentication in high-speed mobility and cross-domain scenarios has grown significantly. However, traditional authentication schemes exhibit significant limitations in privacy protection, low latency, and multi-domain collaborative authentication, particularly in high-speed scenarios where vehicles frequently switch domains.
+**Approach:** Additionally, existing solutions relying on centralized authentication architectures are vulnerable to single points of failure, further exacerbating security risks.To address these challenges, this paper proposes a Blockchain-Assisted Traceable Cross-Domain Anonymous Authentication Mechanism (BTCAA), aimed at providing secure and efficient authentication for high-speed moving vehicles accessing VFS.
+**Tools and scale:** Not stated in the abstract; appears to be analytical/cryptographic or review work.
+**Results:** The mechanism adopts a lightweight design to reduce authentication overhead while supporting identity traceability, ensuring the ability to verify vehicle identities in dispute scenarios without compromising anonymity. Performance evaluations further demonstrate its high practicality and efficiency while maintaining robust security and privacy protection.
+**Limitations and future work (as stated by the authors):**
+- However, traditional authentication schemes exhibit significant limitations in privacy protection, low latency, and multi-domain collaborative authentication, particularly in high-speed scenarios where vehicles frequently switch domains.
+- Additionally, existing solutions relying on centralized authentication architectures are vulnerable to single points of failure, further exacerbating security risks.To address these challenges, this paper proposes a Blockchain-Assisted Traceable Cross-Domain Anonymous Authentication Mechanism ...
+**Overlap with our engine:** none — cryptographic/authentication scheme or analysis without the closed-loop simulation, SCMS backend or counterfactual machinery of our engine.
+**Novelty implications:** No effect on our novelty claims. 

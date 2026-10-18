@@ -1,0 +1,11 @@
+# Graph-based reinforcement learning for software-defined networking traffic engineering
+Jingwen Lu, Chaowei Tang, Wenyu Ma, Wenjuan Xing · Journal of King Saud University Computer and Information Sciences 2025 · https://doi.org/10.1007/s44443-025-00133-z · relevance: low · basis: abstract
+
+**Problem:** Abstract With the continuous expansion of global Internet infrastructure, wide area networks play a crucial role in transmitting traffic between multiple data centers and users worldwide.
+**Approach:** However, efficient traffic management has become a core challenge due to the high costs of building and maintaining these networks. Traditional traffic engineering methods based on linear programming achieve optimal solutions but suffer from exponential computational complexity growth with network size, making them impractical for real-time applications in large-scale networks.
+**Tools and scale:** Not stated in the abstract.
+**Results:** This paper proposes GRL-TE (Graph-based Reinforcement Learning for Traffic Engineering), a novel framework that achieves near-optimal performance while maintaining computational efficiency across diverse network scales. GRL-TE introduces three key innovations: (1) TopoFlowNet, a graph neural network architecture that models WANs as bipartite graphs with edge nodes representing physical links and path nodes representing candidate paths, enabling efficient bidirectional information propagation through GINConv layers while MLP modules handle collaborative relationships among paths serving the same demand; (2) A one-step A2C mechanism specifically designed for TE with immediate reward structure, eliminating the need for future state estimation and significantly simplifying training; (3) Integration of ADMM as a post-processing step to iteratively reduce constraint violations while improving solution quality.
+**Limitations and future work (as stated by the authors):**
+- Recent machine learning approaches show promise but still face fundamental limitations in handling complex network constraints and maintaining performance across different network scales.
+**Overlap with our engine:** partial — touches learned network models but not the joint traffic/radio/SCMS closed loop.
+**Novelty implications:** Nothing in our candidate directions is ruled out; useful only as background on learned network models.

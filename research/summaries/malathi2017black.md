@@ -1,0 +1,11 @@
+# Black Hole Attack Prevention and Detection in VANET using Modified DSR Protocol
+A. Malathi, Niladhuri Sreenath · International Journal of Computer Applications 2017 · https://doi.org/10.5120/ijca2017914432 · relevance: low · basis: abstract
+
+**Problem:** Vehicular Ad hoc Network is one of the interesting and attractive topics in the recent years.It has a potential to achieve intelligent inter vehicle communication for the benefit of the vehicle user.The VANET has lot of challenges.These decentralized dynamic networks require a secure communication.These networks are vulnerable to various attacks.In this paper the security ...
+**Approach:** Vehicular Ad hoc Network is one of the interesting and attractive topics in the recent years.It has a potential to achieve intelligent inter vehicle communication for the benefit of the vehicle user.The VANET has lot of challenges.These decentralized dynamic networks require a secure communication.These networks are vulnerable to various attacks.In this paper the security features of routing protocols and about the ...
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** Vehicular Ad hoc Network is one of the interesting and attractive topics in the recent years.It has a potential to achieve intelligent inter vehicle communication for the benefit of the vehicle user.The VANET has lot of challenges.These decentralized dynamic networks require a secure communication.These networks are vulnerable to various attacks.In this paper the security features of routing protocols and about the ...
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial: a V2X authentication/privacy scheme; our engine implements the standard SCMS/IEEE 1609.2 path rather than this protocol, and the paper reports no closed-loop traffic, radio or revocation simulation.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

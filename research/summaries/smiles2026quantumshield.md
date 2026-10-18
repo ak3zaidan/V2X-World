@@ -1,0 +1,11 @@
+# QuantumShield-IoT: A Quantum-Resilient Hybrid Framework for Secure Data Transmission Using Quantum Key Distribution, Lightweight Cryptography and Blockchain Technology
+Yenubarla Winstone Smiles, Dr. S. Sevugarajan · International Journal of Innovative Science and Research Technology 2026 · https://doi.org/10.38124/ijisrt/26jul281 · relevance: low · basis: abstract
+
+**Problem:** With the growing Internet of Things (IoT), many applications like traffic management, smart cities, environment monitoring, industrial automation and healthcare have been revolutionized. As the number of resourcelimited IoT devices grows and connects with each other, security issues have become more intricate and severe, such as unauthorized access, data tampering, replay ...
+**Approach:** To solve those problems, this paper proposes Quantum Shield-IoT, which is a quantum-resilient hybrid security framework that combines the Quantum Key Distribution (QKD) protocol of BB84 with ASCON lightweight authenticated encryption, blockchain security, and cloud computing to ensure secure end-to-end data transmission in IoT. The proposed framework was implemented using IBM Quantum Qiskit, ASCON-128, blockchain ...
+**Tools and scale:** Non-vehicular setting. Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** Experimental results show that quantum bit error rate (QBER) varies from 2.1% to 3.5% for typical communication and 24.8% for eavesdropping attempts, proving reliable QKD. ASCON encryption range was between 8.2 ms and 69.5 ms, and blockchain verification was less than 25 ms for 1,000 transactions with more than 99% of the integrity accuracy.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** none: post-quantum/hybrid cryptography outside V2X. It gives background for direction 2 (PQ migration of the SCMS) but does not model V2X channels, SCMS issuance, or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the vehicular case (SCMS scale, broadcast channel load, safety cost) is not addressed.

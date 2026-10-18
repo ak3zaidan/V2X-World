@@ -1,0 +1,11 @@
+# Laser-Diode LiFi With Diffused-Beam Optics: System-Level Modeling and a Cross-Validated ns-3 Simulation Framework
+Hussain Ahmad, Syed Muhammad Talha Gillani, Toheed Omer, Saleem Aslam · IEEE Journal of Indoor and Seamless Positioning and Navigation 2026 2026 · https://arxiv.org/abs/2608.10950 · relevance: low · basis: abstract
+
+**Problem:** Laser diodes (LDs) promise an order-of-magnitude bandwidth advantage over light-emitting diodes for indoor optical wireless access, but reported prototype studies frequently leave the gap between hardware demonstrations and system-level performance unquantified.
+**Approach:** This paper develops a complete, reproducible system model of a diffused-beam LD LiFi transceiver - a 500-mW laser source beam-shaped by a holographic diffuser, an intensity-modulation/ direct-detection (IM/DD) receiver, and adaptive M-QAM signaling - and embeds it in two cross validated simulators: an open ns-3 module providing full-stack network simulation (channel, PHY, ARQ MAC, Net Device, IP/UDP/TCP) and a Python link-level engine used for ...
+**Tools and scale:** Vehicular setting. The available text does not describe a V2X simulator, radio stack, traffic model or SCMS-style PKI in enough detail to report; scale not stated.
+**Results:** This paper develops a complete, reproducible system model of a diffused-beam LD LiFi transceiver - a 500-mW laser source beam-shaped by a holographic diffuser, an intensity-modulation/ direct-detection (IM/DD) receiver, and adaptive M-QAM signaling - and embeds it in two cross validated simulators: an open ns-3 module providing full-stack network simulation (channel, PHY, ARQ MAC, Net Device, IP/UDP/TCP) and a Python link-level engine used for ...
+**Limitations and future work (as stated by the authors):**
+- None stated in the available text.
+**Overlap with our engine:** none: threshold cryptography in a vehicular context. Low relevance background for threshold authorities; it does not model the joint traffic/radio/SCMS loop, closed-loop revocation or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the integrated V2X case (SCMS scale, channel load, closed-loop safety impact) is not addressed.

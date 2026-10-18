@@ -1,0 +1,11 @@
+# Dynamic encryption based secure key management for Vehicle-to-Vehicle communication in autonomous driving
+Amjad Nsour, Subramaniam Ganesan · Scientific Reports 2026 · https://doi.org/10.1038/s41598-026-50088-y · relevance: low · basis: abstract
+
+**Problem:** The emergence of autonomous vehicles has led to the need to establish a secure and effective Vehicle-to-Vehicle (V2V) communication system to support safety and trustworthiness in both highway and urban driving environments.
+**Approach:** This paper presents DASKM (Dynamic Autonomous Secure Key Management), a novel solution for secure key management that is based on dynamic encryption protocol especially used to support V2V communication in autonomous vehicle networks.
+**Tools and scale:** Wide-ranging simulations confirm the effectiveness of DASKM against man-in-the-middle, replay and spoofing, and latency is reduced by a factor of 30 per cent and security response times improved by 25 per cent compared to the fixed encryption models.
+**Results:** Nevertheless, the traditional methods of encryption are not suitable in these dynamically changing networks because of the fact that change of network topology occurs regularly, real-time processing is to be achieved and also limited access to computational resources is available. Although decentralized key distribution introduces additional coordination overhead, DASKM minimizes this through three design choices: (1) AES-128 in CTR mode is selected for its stream-oriented, hardware-accelerable operation avoiding block-padding overhead; (2) key rotation is event-driven rather than continuous, triggered only when vehicle speed or proximity crosses defined thresholds, eliminating unnecessary computation; and (3) the hierarchical structure uses pre-computed group keys for platoon members, reducing per-vehicle key negotiation to inter-group exchanges only.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** none — low-relevance adjacent work (vehicular security, related: key management); no SCMS/1609.2 PKI backend, closed-loop revocation, joint ground truth or counterfactual reruns indicated.
+**Novelty implications:** Does not rule out any candidate direction; background only.

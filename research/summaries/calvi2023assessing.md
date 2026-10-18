@@ -1,0 +1,11 @@
+# Assessing the Impact of Safety Countermeasures on Dilemma Zones at Signalized Intersections of Urban Roads: a Driving Simulator Study
+Alessandro Calvi · European Transport/Trasporti Europei 2023 · https://doi.org/10.48295/et.2023.91.4 · relevance: low · basis: abstract
+
+**Problem:** When drivers approach a signalized intersection at the start of the yellow signal, they might be reluctant to decide whether to stop or go through the intersection due to the dilemma zone (DZ), with the consequent risk of improper behaviors that can lead to rear-end collisions and right-angle crashes.
+**Approach:** The main goal of this research is to analyze the driver's behavior at the onset of the yellow signal and to identify the most effective countermeasures for the resolution of the dilemma zone in order to improve the safety and efficiency of urban signalized intersections. A driving simulator study was carried out, and three different countermeasures were specifically designed and tested: Green Signal Countdown Timers (GSCT) (C1); a new scheme of ...
+**Tools and scale:** Vehicular setting. The available text does not describe a V2X simulator, radio stack, traffic model or SCMS-style PKI in enough detail to report; scale not stated.
+**Results:** A driving simulator study was carried out, and three different countermeasures were specifically designed and tested: Green Signal Countdown Timers (GSCT) (C1); a new scheme of vertical and horizontal warning signs (C2); and an in-vehicle advanced driving assistance system that uses Augmented Reality (AR) and connected vehicle technologies (C3). The results demonstrated that with countermeasure C1, the length of the DZ increased with respect to ...
+**Limitations and future work (as stated by the authors):**
+- None stated in the available text.
+**Overlap with our engine:** none: simulation/digital twins in a vehicular context. Low relevance background for the simulator itself; it does not model the joint traffic/radio/SCMS loop, closed-loop revocation or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the integrated V2X case (SCMS scale, channel load, closed-loop safety impact) is not addressed.

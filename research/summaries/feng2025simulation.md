@@ -1,0 +1,11 @@
+# Simulation-Driven Analysis of AI-RAN Enabled Cooperative Content Delivery in Vehicular Networks
+Chenyuan Feng, Zhenyu Feng, Jia-Xin Yang, Tony Q. S. Quek · International Conference on Speech Technology and Human-Computer Dialogue 2025 · https://doi.org/10.1109/icct67417.2025.11374126 · relevance: medium · basis: abstract
+
+**Problem:** The explosive growth of data-driven applications in vehicular networks imposes stringent requirements on content dissemination in terms of latency, reliability, and scalability.
+**Approach:** Caching and cooperative distribution have emerged as promising techniques to alleviate backhaul pressure and enhance service efficiency; however, their evaluation is often constrained by over-simplified mobility assumptions and the absence of reproducible simulation environments. To address these challenges, this paper introduces a comprehensive vehicular content dissemination simulation framework that integrates SUMO for realistic traffic mobility, OMNeT++ for network simulation, and Veins for cross-layer interaction, further extended with Python/TraCI interfaces to enable fine-grained state monitoring and AI-driven decision making.
+**Tools and scale:** Mentions: SUMO, Veins; scale not stated in the abstract.
+**Results:** Extensive experiments over real urban topologies demonstrate that cooperative schemes substantially improve cache hit ratio and reduce service latency, while learning-based approaches offer additional robustness under dynamic traffic conditions.
+**Limitations and future work (as stated by the authors):**
+- We develop a system model that captures vehicular dynamics, wireless communication constraints, and cache storage limitations, and formulate the dissemination problem as a constrained optimization task that minimizes average service delay subject to storage and bandwidth budgets.
+**Overlap with our engine:** partial — addresses V2X simulation/datasets (direction 3 area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

@@ -1,0 +1,11 @@
+# Adversarial Attack Detection for Deep Learning Driving Maneuver Classifiers in Connected Autonomous Vehicles
+Tanmoy Sen, Haiying Shen · 2024 33rd International Conference on Computer Communications and Networks (ICCCN) 2024 · https://doi.org/10.1109/icccn61486.2024.10637595 · relevance: medium · basis: abstract
+
+**Problem:** Connected and autonomous vehicles (CAVs) will be equipped with onboard deep neural network (DNN) models for processing the data from different sensors and communication units in CAVs and on the roads.
+**Approach:** In the CAV scenario, each vehicle receives time-series driving signals (e.g., speed, brake status) from nearby vehicles, uses its onboard DNN model for driving maneuver prediction for the nearby vehicles, and then takes corresponding actions for safe and efficient driving. Several black-box adversarial attacks for DNN maneuver classifiers in the CAV scenario have been proposed, in which an attacker deliberately sends false driving signals (i.e., add minimum perturbation to the predicted input) to its nearby vehicle to fool its onboard DNN model to output a wrong class label and cause unwanted traffic incidents or congestion.
+**Tools and scale:** Not stated in the abstract.
+**Results:** Our trace-driven and real experiments show the combination of all four approaches performs 14% better in accuracy rate and 12% better in precision rate compared to the state-of-the-art statistical and ML-based methods. These improvements are critical for driving safety in CAV scenarios.
+**Limitations and future work (as stated by the authors):**
+- Several black-box adversarial attacks for DNN maneuver classifiers in the CAV scenario have been proposed, in which an attacker deliberately sends false driving signals (i.e., add minimum perturbation to the predicted input) to its nearby vehicle to fool its onboard DNN model to output a wrong class
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

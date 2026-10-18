@@ -1,0 +1,11 @@
+# Minimization of Denial of services attacks in Vehicular Adhoc networking by applying different constraints
+Amjad Saeed Khan · International Journal of Academic Research in Business and Social Sciences 2013 · https://doi.org/10.6007/ijarbss/v3-i7/88 · relevance: medium · basis: abstract
+
+**Problem:** The security of Vehicular ad hoc networking is of great importance as it involves serious life threats.Thus to provide secure communication amongst Vehicles on road, the conventional security system is not enough.It is necessary to prevent the network resources from wastage and give them protection against malicious nodes so that to ensure the data bandwidth availability to the legitimate nodes of the network.This work is related to provide a non conventional security system by introducing some constraints to minimize the DoS (Denial of services) especially data and bandwidth.The data packets 
+**Approach:** The security of Vehicular ad hoc networking is of great importance as it involves serious life threats.Thus to provide secure communication amongst Vehicles on road, the conventional security system is not enough.It is necessary to prevent the network resources from wastage and give them protection against malicious nodes so that to ensure the data bandwidth availability to the legitimate nodes of the network.This work is related to provide a non conventional security system by introducing some constraints to minimize the DoS (Denial of services) especially data and bandwidth.The data packets received by a node in the network will pass through a number of tests and if any of the test fails, 
+**Tools and scale:** Not stated in the abstract.
+**Results:** No quantitative results stated in the abstract.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

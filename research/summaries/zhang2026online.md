@@ -1,0 +1,11 @@
+# Online/Offline VANETs with Lightweight Authentication Framework for Vehicular Communication
+Ping-Yuan Zhang, Limin Wang · Telecom 2026 · https://doi.org/10.3390/telecom7040089 · relevance: low · basis: abstract
+
+**Problem:** Vehicular Ad Hoc Networks (VANETs) are mobile networks that offer new services and communication between moving vehicles, roadside infrastructure, and a trusted authority. With the development of autonomous and connected vehicles, the issue of authentication in VANETs has become increasingly prominent due to the lack of mutual trust among network entities.
+**Approach:** With the development of autonomous and connected vehicles, the issue of authentication in VANETs has become increasingly prominent due to the lack of mutual trust among network entities. To address this limitation, this work proposes an advanced authentication paradigm for VANETs called the online/offline VANET framework, and formalizes this novel framework to realize lightweight authentication by shifting heavy ...
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** Based on this model and a new identity-based signature, we give an efficient instantiation and use a mobile platform to evaluate it. The experimental results demonstrate that our construction achieves low online computational and communication overhead.
+**Limitations and future work (as stated by the authors):**
+- "To address this limitation, this work proposes an advanced authentication paradigm for VANETs called the online/offline VANET framework, and formalizes this novel framework to realize lightweight authentication by shifting heavy computational overhead to the offline phase."
+**Overlap with our engine:** partial: a V2X authentication/privacy scheme; our engine implements the standard SCMS/IEEE 1609.2 path rather than this protocol, and the paper reports no closed-loop traffic, radio or revocation simulation.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

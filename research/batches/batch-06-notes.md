@@ -1,0 +1,124 @@
+# Batch 06 notes
+
+378 papers summarised (misbehaviour detection/Sybil, pseudonym change, VPKI/CRL/revocation clusters).
+
+## 1. Stated limitations and future work
+
+- [abebe2022adaptive] Thesis lists a future-work chapter (not extracted in detail); authors flag possible overfitting from using GPS position as a feature.
+- [younis2022evaluation] Detection should avoid extra overhead; accuracy of localisation techniques needs continued improvement.
+- [ardakani2022fuzzy] Learn optimal fuzzy rules per environment with intelligent methods.
+- [ardakani2022fuzzy] Evaluate with different scenarios and attacker models.
+- [alwasel2023attacks] Conclusion is review-oriented; no explicit future-work items extracted.
+- [wehmer2023fast] Quantification of MBD effect in real systems is 'still elusive'; the causal design is a proposal, not executed.
+- [naqvi2024comparative] Validate in real-world VANET scenarios; large-scale experiments in urban and suburban settings.
+- [manaseer2024secure] Investigate other attacks and adapt the protocol to them.
+- [su2024cooperative] Analyse the resilience of the countermeasures (future work).
+- [franceschini2024neural] Difficulty of a universally adaptive protocol under varying traffic.
+- [franceschini2024neural] More data and refinement needed before real-world use.
+- [abdullahi2024enhanced] Examine methods to identify further attacks.
+- [lotfi2024enhancing] Find ideal weights for diminishing the influence of previous data.
+- [mathur2024identity] Authors plan to adopt ISPLM further (truncated future-work statement).
+- [sun2024interleaved] Effectiveness diminishes in high-density environments.
+- [murthy2025detecting] Results described as preliminary.
+- [dang2025sdn] Develop more sophisticated attack models and better defences against adversarial attacks.
+- [madhushri2025securing] Enhanced feature representation, advanced fuzzy logic, online learning, real-world evaluations.
+- [almajed2025securing] Training data imbalance; few real-world applications; need datasets reflecting real situations.
+- [huisman2025self] Robustness under non-ideal conditions; sensor noise may cause Zeno switching; detection and transmission delays may cause late switching; minimise required sensors.
+- [maram2025survey] Lack of adaptability to dynamic environments; future research should consider cross-layer detection and hybrid approaches.
+- [khan2026robust] Extend to untrusted RSUs.
+- [khan2026robust] More advanced location verification and better modelling of complex movement patterns.
+- [sbai2026addressing] Notes existing datasets lack diversity, are outdated or unrealistic.
+- [ravikumar2026advanced] Extend datasets to emerging attacks; improve kinematic features; hybrid DL models; trials in real VANETs on latency and data variability.
+- [buch2026adversarial] Assumes fixed detection model and constrained feature modifications.
+- [chandolia2026ecc] Excludes physical layer, end-to-end latency and transmission delay from analysis.
+- [chandolia2026ecc] Extend to large-scale IoV and edge/5G integration.
+- [wu2026bsmattacker] Results under revision; revised release in preparation.
+- [kamal2026deep] Increase type-17 messages; evaluate in large-scale fog deployments with full network simulation (SUMO with NS-3 or OMNeT++) covering RSU capacity, throughput, latency and channel congestion.
+- [aguida2026distributed] Requires predominantly benign swarm (at least four honest nodes).
+- [b2026eflo] Planned future extension (truncated).
+- [agyapong2026evaluating] Study hybrid simultaneous attack strategies.
+- [agyapong2026evaluating] Develop detection and countermeasures.
+- [agyapong2026evaluating] Evaluate in large-scale and geographically diverse networks.
+- [zhang2026stealthy] Authors argue end-to-end security evaluation is needed beyond perception-level defences.
+- [carie2026hierarchical] Seeds with pipeline failures were excluded and replaced (documented); short 90 s simulations.
+- [alkifaee2026machine] Adversarial robustness under-explored; evaluation fragmented across datasets; proxy IT datasets not valid evidence.
+- [dewangan2026misbehavior] No GenAI-crafted attack scenarios in datasets.
+- [dewangan2026misbehavior] Insufficient deployment realism (centralised, static simulations).
+- [dewangan2026misbehavior] Need Byzantine-resilient FL, XAI, interoperable standards-aligned detection, benchmarks with latency and robustness metrics.
+- [fayyad2026mitigating] Assumes attackers are a minority.
+- [saranya2026optimized] Deep meta-learners, GNN spatio-temporal modelling, colluding attackers.
+- [eslami2026resilient] Asynchronous switching, delays and packet loss, actuator saturation, heterogeneous parameters, stochastic noise, CBF collision guarantees, higher-fidelity and hardware validation.
+- [xu2026sybil] Extend to real-world V2X traces and more complex Sybil behaviour under heterogeneous mobility and communication.
+- [bourouis2026temporal] No real-world validation (noise-inclusive simulation only).
+- [boualouache2017survey] Effective pseudonym changing strategy is 'still an open issue'.
+- [boualouache2017survey] Strategies must be achieved before real-world deployment.
+- [buttyan2009slow] Silent periods trade off against safety beaconing at low speed.
+- [khan2022survey] Suggestions for future VPKI research (listed in paper).
+- [anon2013vespa] Integrate privacy-preserving methods and anonymous authentication into protocols.
+- [khodaei2020cooperative] Expand adversary to malicious vehicles or compromised RSUs leaking keys.
+- [khodaei2020cooperative] Effect of mix-zone range on overhead.
+- [khodaei2020cooperative] Kalman-filter and radio-signal-based tracking.
+- [khodaei2020cooperative] Compare privacy metrics.
+- [khodaei2020cooperative] Evaluate decoy-traffic impact on safety applications.
+- [heijden2017blackchain] Many open questions before practical feasibility.
+- [heijden2017blackchain] Whether vehicle clusters are stable enough for consensus.
+- [heijden2017blackchain] Guarantees of hierarchical versus full consensus.
+- [almuhaideb2022efficient] Protocol for selling energy to the grid; blockchain and hybrid models with ECQV.
+- [chulerttiyawong2021blockchain] Small-scale simulation only.
+- [samara2012efficient] Simulate the proposed protocol and methods.
+- [khodaei2016evaluating] Investigate pseudonym utilisation with various refill intervals and lifetimes versus server workload and privacy.
+- [khodaei2016evaluating] Analyse unlinkability based on pseudonym timing.
+- [samara2010design] Simulate the proposed methods.
+- [amro2018protecting] Generalise model to other location-based services.
+- [adigun2013protocol] Evaluate bit error rate and highway scenario; design a dissemination routing protocol.
+- [didouh2022novel] Add unsupervised ML to propose pseudonym change strategies.
+- [didouh2022novel] More real-life data; adapt to all strategies; decentralised collaboration with the CA.
+- [deng2022pcp] Efficient signature mechanism for anonymous communication.
+- [deng2022pcp] How many pseudonyms a vehicle should store to balance security and performance.
+- [kanumalli2020secure] Reduce computational delay; real-world testing.
+- [almarshoud2021improved] Provide performance evaluation results.
+- [almarshoud2021improved] Investigate tunnels and confined areas.
+- [ullah2021distributed] More experiments at high speed and low density.
+- [petho2024investigating] Increased processing time is unsafe only if QoS drops below acceptable levels.
+- [wang2016tracking] Study pseudonym changing strategy and time interval.
+- [abdulhussain2013enhanced] Requires a vehicle movement simulator for results; cooperation protocol needs development and testing.
+- [caballerogil2014tree] Analyse optimal parameters and compare with previous proposals.
+- [boualouache2020software] ETSI technical report highlights absence of standardised and efficient PCS.
+
+## 2. Papers with strong overlap
+
+- [wehmer2023fast] causal evaluation of MBD impact on road safety matches directions 1 and 3 (safety effect of detection, counterfactual evaluation).
+- [franceschini2024neural] closed-loop detection inside a simulation with safety outcome (accidents), matching direction 1 (without PKI revocation).
+- [willecke2024primire] MA report aggregation and revocation evidence is our MA/direction 1.
+- [anon2024v2x] our engine's MA reports should follow J3287; defines the reporting path we simulate.
+- [anon2024v2xb] directly implementable in our MA reporting.
+- [anon2024v2xc] duplicate of the J3287 standard entries.
+- [noori2025detection] reuses SCMS misbehaviour-reporting path for spectrum misbehaviour; our engine has DSRC/C-V2X MAC and SCMS MA.
+- [tine2025real] measures safety-application (FCW) degradation from a security-compliant DoS, i.e. attack to safety outcome with real hardware; overlaps direction 2 (verification/receiver load).
+- [yuce2025state] a public synthetic V2X MBD benchmark overlaps direction 3 (benchmark), though without counterfactual ground truth or PKI.
+- [wellensmiles2026assessing] city-scale attacks inside the simulation with traffic-flow outcome (part of direction 1/2), though without PKI or revocation.
+- [wu2026bsmattacker] safety-application-directed MBD evaluation (FCW/IMA) and benchmarking overlaps directions 1 and 3.
+- [muzammil2026code] audits the benchmark our direction 3 would replace; shows existing MBD benchmarks have structural artefacts.
+- [carie2026hierarchical] insider MBD to conviction (revocation-like) decision with an LLM in the loop, in NR C-V2X simulation; overlaps direction 1 (MA decision design) and the LLM runner-up.
+- [hasan2026vehicle] detection plus mitigation measured with safety surrogate metrics (TET/TIT), i.e. attack to safety outcome; direction 1 at vehicle level.
+- [jerbi2026poster] reproducible in-simulation misbehaviour injection with message-level labels resembles our engine's attack injection and ground truth.
+- [novo2026spade] simulation-generated, seeded, labelled V2X attack benchmark with runtime injection (direction 3 benchmark side); no PKI or counterfactuals.
+- [imran2026secure] explicitly targets revocation latency of centralised MA, i.e. time-to-neutralise (direction 1), with a decentralised alternative.
+- [anonndintelligent] defines EU misbehaviour reporting/MA concepts our MA models.
+- [doindquantifying] uses a learned generative traffic model as a scenario surrogate for MBD evaluation (direction 3 world-model side).
+- [allennddepartment] describes the US SCMS our engine implements (policy context).
+- [whyte2013security] the system our engine implements.
+- [haas2011efficient] CRL distribution speed and partial deployment directly relate to our CRL broadcast and time-to-neutralise.
+- [anon2013vespa] pseudonym provisioning policy and VPKI load evaluation overlaps our SCMS provisioning and top-ups.
+- [heijden2017blackchain] directly addresses SCMS MA revocation decision design (direction 1).
+- [khodaei2016evaluating] VPKI load under pseudonym acquisition policies at city scale overlaps our provisioning/top-up evaluation.
+- [weil2017vpki] background on the US SCMS we implement.
+- [noroozi2018vpkiaas] VPKI backend performance under load and pseudonym lifetime overlaps our SCMS backend and provisioning.
+- [jemaa2017study] quantifies a safety cost of a security/privacy mechanism (direction 2).
+- [petho2024investigating] directly measures the safety cost of security processing (direction 2).
+- [abdo2024vehicular] co-simulation that integrates an SCMS with traffic and V2X network, overlapping our engine's core claim.
+- [ganan2012rar] ikely) — risk-based prioritisation of revocation relates to MA decision design and time-to-neutralise.
+- [xia2026esga] linkage-value-based revocation and multi-domain CRL synchronisation overlap our linkage-based revocation and multi-provider CRLs.
+- [wasef2011managing] explicitly targets the revocation vulnerability window (time-to-neutralise, direction 1).
+- [bittl2017mutual] cross-mechanism interaction of 1609.2 certificate attachment and pseudonym change is the type of cross-layer effect our engine models.
+- [henry2020pseudonym] compares issuance strategies of SCMS and CCMS, overlapping our provisioning settings and multi-provider runner-up.

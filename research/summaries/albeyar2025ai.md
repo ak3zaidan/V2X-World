@@ -1,0 +1,11 @@
+# AI-Driven Secure Emergency Message Dissemination in 5G-Enabled VANETs Using LSTM-Based Intrusion Detection and CP-ABE Encryption
+Maath A. Albeyar, Ikram Smaoui, Hassène Mnif et al. · Journal of Soft Computing and Data Mining 2025 · https://doi.org/10.30880/jscdm.2025.06.03.023 · relevance: medium · basis: abstract
+
+**Problem:** The number of vehicles has expanded rapidly due to advances in automobile technology and global population growth, resulting in an increase in the frequency of traffic accidents.
+**Approach:** To overcome this limitation in this research, we designed an AI-driven emergency message dissemination framework for “Vehicular Ad hoc Networks (VANETs)” with 5G, for the efficient, secure, and privacy-preserving communication of messages at critical times. To ensure secure emergency message dissemination in the VANET environment, this research proposes a Multi-Authority Ciphertext-Policy Attribute-Based Encryption (CP-ABE).
+**Tools and scale:** To overcome this limitation in this research, we designed an AI-driven emergency message dissemination framework for “Vehicular Ad hoc Networks (VANETs)” with 5G, for the efficient, secure, and privacy-preserving communication of messages at critical times.
+**Results:** The proposed approach ensures secure, scalable, and privacy-preserving emergency communication, improving overall VANET performance by dynamically adapting to traffic conditions and vehicle mobility.
+**Limitations and future work (as stated by the authors):**
+- "To overcome this limitation in this research, we designed an AI-driven emergency message dissemination framework for “Vehicular Ad hoc Networks (VANETs)” with 5G, for the efficient, secure, and privacy-preserving communication of messages at critical times."
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection (direction 1 area); pseudonym privacy/linkability (runner-up area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

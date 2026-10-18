@@ -1,0 +1,11 @@
+# FL-BC-IDS: Evidence-Native Privacy-Aware Hierarchical Federated Intrusion Detection for the Internet of Vehicles
+Wisam Makki Alwash, Weam Husham Aljabbari, Muhammed Ali Aydın et al. · Sensors 2026 · https://doi.org/10.3390/s26175400 · relevance: medium · basis: abstract
+
+**Problem:** Internet of Vehicles (IoV) intrusion detection systems (IDSs) require collaborative learning that preserves raw-data locality while producing independently checkable post-run evidence.
+**Approach:** This paper presents FL-BC-IDS, an evidence-native, privacy-aware hierarchical federated IDS in which vehicles train Differentially Private XGBoost models, roadside units perform deterministic admission and tree-bagging aggregation, and the GLOBAL stage forms an equal-weight ensemble over validated RSU models. With thresholds fixed exclusively from development data, the strict held-out-attack macro recall was 0.8031 and 0.9090 on CSE-CIC-IDS2018 and CICIoV2024, respectively, indicating residual attack-specific generalization limitations; supervised rolling-origin temporal refresh on CSE-CIC-IDS
+**Tools and scale:** Not stated in the abstract.
+**Results:** Across 10 seed-controlled runs, the mean ± SD accuracy/F1 values were 0.998021±0.000246/0.983597±0.002053 on CSE-CIC-IDS2018 and 0.999867±0.000152/0.999495±0.000579 on CICIoV2024. A controlled 20-vehicle, eight-round heterogeneity and participation stress test retained 0.998151 accuracy and 0.984782 F1-score.
+**Limitations and future work (as stated by the authors):**
+- "With thresholds fixed exclusively from development data, the strict held-out-attack macro recall was 0.8031 and 0.9090 on CSE-CIC-IDS2018 and CICIoV2024, respectively, indicating residual attack-specific generalization limitations; supervised rolling-origin temporal refresh on CSE-CIC-IDS2018 achiev"
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection (direction 1 area); pseudonym privacy/linkability (runner-up area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

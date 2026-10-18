@@ -1,0 +1,11 @@
+# Enhancing VANET Security: Efficient Communication and Wormhole Attack Detection using VDTN Protocol and TD3 Algorithm
+Vamshi Krishna. K, Ganesh Reddy K · KSII Transactions on Internet and Information Systems 2024 · https://doi.org/10.3837/tiis.2024.01.013 · relevance: low · basis: abstract
+
+**Problem:** Due to the rapid evolution of vehicular ad hoc networks (VANETs), effective communication and security are now essential components in providing secure and reliable vehicle-to-vehicle (V2V) and vehicle-to-infrastructure (V2I) communication.However, due to their dynamic nature and potential threats, VANETs need to have strong security mechanisms.This paper presents a novel ...
+**Approach:** Due to the rapid evolution of vehicular ad hoc networks (VANETs), effective communication and security are now essential components in providing secure and reliable vehicle-to-vehicle (V2V) and vehicle-to-infrastructure (V2I) communication.However, due to their dynamic nature and potential threats, VANETs need to have strong security mechanisms.This paper presents a novel approach to improve VANET security by ...
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** Due to the rapid evolution of vehicular ad hoc networks (VANETs), effective communication and security are now essential components in providing secure and reliable vehicle-to-vehicle (V2V) and vehicle-to-infrastructure (V2I) communication.However, due to their dynamic nature and potential threats, VANETs need to have strong security mechanisms.This paper presents a novel approach to improve VANET security by ...
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial: vehicular security topic, but no simulation of traffic, radio, SCMS backend or safety outcomes is described.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

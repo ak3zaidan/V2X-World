@@ -1,0 +1,11 @@
+# Enhancing Cybersecurity in Connected and Autonomous Vehicles: A CatBoost-Based Ensemble Framework for Multi-Class Threat Detection
+Basant Kumar Verma, Ashish Runthala, Pankaj Sharma, Shekhar Singh et al. · 2025 IEEE DELCON - International Conference on Recent Smart Technologies in Engineering for Sustainable Development 2025 · https://doi.org/10.1109/delcon68055.2025.11400171 · relevance: low · basis: abstract
+
+**Problem:** The deployment of Connected and Autonomous Vehicles [CAVs] in intelligent transportation systems has increased the demand for real-time, robust cybersecurity solutions. Here, we present a CatBoost-based threat detection framework specifically designed for multi-class classification of vehicular cyberattacks without an accompanying dataset, such as the VEREMI Extension Simple.
+**Approach:** Here, we present a CatBoost-based threat detection framework specifically designed for multi-class classification of vehicular cyberattacks without an accompanying dataset, such as the VEREMI Extension Simple. The developed model of CatBoost Classifier using the multi-class loss function (averaged over all observations) that uses ordered boosting is utilized to efficiently deal with categorical features and minimize ...
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** From experimental evaluation, we find the proposed method provides high accuracy, macro averaged F1-score and balanced recall on all attack categories compared to the baseline ensemble learning technique such as Random Forest.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial: vehicular security topic, but no simulation of traffic, radio, SCMS backend or safety outcomes is described.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

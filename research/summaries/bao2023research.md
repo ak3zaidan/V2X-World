@@ -1,0 +1,11 @@
+# Research on Vehicle Reputation Management Scheme Based on Blockchain Application
+Weijie Bao, Jie Han, Qian Liu · 2023 International Conference on Information Processing and Network Provisioning (ICIPNP) 2023 · https://doi.org/10.1109/icipnp62754.2023.00083 · relevance: medium · basis: abstract
+
+**Problem:** Vehicular edge computing networks are a promising Internet of Vehicles (IoV) paradigm to provide abundant computing and storage resources by mobile edge computing technology which enables the calculation, storage, and sharing of massive amounts of data among vehicles.
+**Approach:** Therefore, this paper proposes a blockchain-enabled reputation management scheme for Vehicular edge computing networks. Then, a multi-source three-weight subjective logic algorithm is proposed to ensure the quality of information exchange is safe and efficient for shared data sources.
+**Tools and scale:** Finally, the simulation and analysis based on the real vehicle trajectory data set verify that the proposed blockchain-enabled reputation management scheme can effectively improve the discrimination and detection rate of abnormal nodes. Finally, the simulation shows that the proposed blockchain-based reputation management scheme can effectively improve the recognition and detection rates of abnorm
+**Results:** Finally, the simulation and analysis based on the real vehicle trajectory data set verify that the proposed blockchain-enabled reputation management scheme can effectively improve the discrimination and detection rate of abnormal nodes. Finally, the simulation shows that the proposed blockchain-based reputation management scheme can effectively improve the recognition and detection rates of abnormal nodes.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection (direction 1 area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

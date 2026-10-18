@@ -1,0 +1,137 @@
+# Batch 02 notes
+
+Source: summaries/<id>.md for the 378 ids in batches/batch-02.txt. Most papers here are bespoke PQ/lattice or blockchain authentication schemes with no overlap; limitations below are only those the authors state (abstract or conclusion).
+
+## 1. Stated limitations and future work
+
+- [gong2024quantum] Security against attacks analysed only informally
+- [twardokus2024cryptography] First alpha messages in each certificate cycle are only ECDSA-protected (transition-period trade-off)
+- [twardokus2024cryptography] embedding PQ certificate and signature in one frame is too large
+- [twardokus2024cryptography] fully PQ V2V left for future after transition
+- [zhu2022research] None stated beyond expectation of TLS adoption
+- [akwirry2022multi] RSU-based federated model fails where RSUs are sparse
+- [akwirry2022multi] suggest cloud-based integration
+- [akwirry2022multi] evaluated only with stationary or low-speed vehicles
+- [akwirry2022multi] future work at high speeds
+- [cultice2022puf] SIDH broken by recent attacks
+- [cultice2022puf] replace with e.g. CRYSTALS-Kyber
+- [cultice2022puf] hardware implementation still to be done
+- [forster2018evaluation] Privacy protection in uniform traffic conditions remains a challenge
+- [zeydan2022post] Standardisation and coexistence of PQ with mobile networks discussed as open directions
+- [jiao2021anti] Existing lattice ring signatures have large parameters
+- [jiao2021anti] reconstructing PKC on PQ problems is the main future direction
+- [balan2018rssi] To be implemented and simulated in future
+- [balan2018rssi] compare with existing solutions
+- [lonc2023feasibility] Standards need modification and some assumptions relaxed
+- [lonc2023feasibility] KEM integration in PKI protocols needs more study
+- [lonc2023feasibility] plan to focus on hybrid Falcon+ECDSA
+- [lonc2023feasibility] awaiting optimised algorithms and hardware accelerators
+- [weerasinghe2023threshold] Use GPUs/parallel processing to reduce overhead
+- [weerasinghe2023threshold] SoC hardware
+- [weerasinghe2023threshold] apply to other scenarios like V2C
+- [mamun2024enhancing] Practical deployment requires balancing security, performance and resource constraints
+- [escher2021well] Results suggest C-ITS pseudonym scheme alone does not guarantee location privacy
+- [chaubey2022detection] Detecting the attacker vehicle left for future work
+- [lee2023simulation] Need method to evaluate application-level security (misbehaviour processing) beyond conformity testing
+- [lee2023simulation] real-world tests have time/cost/safety issues
+- [yuan2023analysis] Further work required on LOS for safety-critical V2X
+- [j2025post] Optimise for scalability and low-resource deployment
+- [j2025post] integrate with V2V, V2X, 5G
+- [j2025post] hybrid quantum-classical encryption
+- [baccari2021secure] Extend to other attacks, in particular packet transfer delay attacks
+- [fowler2023practical] Results limited by project scope and size
+- [mushrall2018emulab] Open challenges: efficient CRL distribution
+- [mushrall2018emulab] butterfly key expansion not post-quantum
+- [pott2021firmware] Generic security analysis infeasible as isolation is platform dependent
+- [pott2021firmware] must ensure no side-channel vulnerabilities
+- [bindel2022need] No successful lattice implicit certificate construction
+- [bindel2022need] hopes to spark more successful constructions
+- [bianchi2023dynamiqs] Improvements depend on advances in RLWE and signature operations
+- [alrashdi2025enhanced] Lattice-based PQC imposes overhead limitations (stated as a limitation for future research)
+- [jha2018pseudonym] Proposes extending SCMS with cross-certification for validation across individualised trust roots
+- [twardokus2021targeted] Mitigation is challenging
+- [twardokus2021targeted] discussed testbed extensibility
+- [thomas2024trust] Integrate more vehicle-level data
+- [thomas2024trust] share trust observations between vehicles
+- [thomas2024trust] integrate with identity management for reporting malicious actors
+- [dai2025lightweight] Improve scalability via multithreading, batch authentication, cooperative edge computing
+- [dai2025lightweight] extend to FrodoKEM and NTRU
+- [dai2025lightweight] extend beyond single OBU-RSU to multi-node large-scale Veins/SUMO or NS-3 simulations
+- [yoshizawa2022handling] Proposes restricting P2PCD to traffic environments where it brings benefit
+- [tao2024zero] Implementation and evaluation in a realistic city-scale simulation environment left for future work
+- [byun2025blockchain] Develop framework for various advanced multi-authority PKI designs emphasising privacy and compromise resilience
+- [tsai2025lattice] Increased storage overhead
+- [tsai2025lattice] potential limitations for low-power OBUs
+- [tsai2025lattice] future parameter optimisation and lightweight lattice variants
+- [chen2024pqcmc] Reconstruction value is long for V2X
+- [chen2024pqcmc] suggest preloading implicit certificate and embedding digest in SPDU
+- [mamun2026post] Non-PQC-ready standards
+- [mamun2026post] embedded implementation and hybrid cryptography constraints
+- [mamun2026post] interoperability and certificate-management barriers
+- [mamun2026post] lack of real-world PQC deployment data in ITS
+- [mamun2026post] physical-attack vulnerabilities in PQC-enabled vehicular communication
+- [maranur2021arpvp] Research other attack types
+- [maranur2021arpvp] apply other AI methods for route formation
+- [figlarz2022applied] Message length and algorithm parameters can slow communication
+- [yang2023discussion] Only a new attempt, far from wide deployment
+- [yang2023discussion] research needs enrichment
+- [mutalik2023trust] Future novel optimisation for secure, energy-aware routing
+- [liu2024flexible] Many extensions and applications remain to be explored
+- [boldyreva2024provable] Achieving post-quantum security of the protocol is future work
+- [alkhalaf2025hmac] Include post-quantum ciphers in future
+- [zhang2025forensics] RSU nodes have low security level
+- [zhang2025forensics] TA verification not done before on-chain
+- [phil2025revolutionizing] Real-time adaptation to new threats
+- [phil2025revolutionizing] edge computing integration
+- [phil2025revolutionizing] multi-objective optimisation
+- [phil2025revolutionizing] validation of scalability in large-scale networks (as stated in conclusion, which partly concerns resource allocation)
+- [wantoro2022efficient] Determine optimal management and settings via simulations
+- [mamun2025experimental] None of the tested schemes is suitable for real-time safety (as implied
+- [mamun2025experimental] conclusion truncated)
+- [mamun2025experimental] optimisation via algorithm tuning, network adaptation, hardware acceleration
+- [n2025quantum] Existing evaluations focus on limited metrics without comprehensive security analysis under diverse attacks (stated about prior work)
+
+## 2. Strong overlap (42 papers)
+
+- [twardokus2024cryptography] Already integrates PQ/hybrid signatures into 1609.2-style V2V and measures channel impact with traffic and V2V simulation; overlaps direction 2 (safety cost of PQ security) directly.
+- [chen2024hybrid] PQC/ECC hybrid certificates applied to the SCMS, which our engine implements with hybrid signatures.
+- [simplicio2018privacy] Directly analyses SCMS linkage values and revocation that our engine implements.
+- [tesei2023transparent] Explicitly targets the revocation vulnerability window (our "time to neutralise"), quantified.
+- [barreto2018qscms] Proposes PQ (lattice) butterfly key provisioning for SCMS, overlapping PQ migration of the SCMS backend.
+- [yoshizawa2023post] Same question as direction 2: channel/range impact of PQ certificates in 1609.2.
+- [barreto2021schnorr] Directly analyses the SCMS butterfly key and implicit certificate machinery our engine implements.
+- [bindel2022drive] PQ for V2V authentication (precursor to Twardokus et al.).
+- [bittl2015security] Quantifies channel impact of security overhead (certificates/signatures) on VANET performance, the classical baseline for direction 2.
+- [haidar2021experimentation] Combines pseudonym (re)provisioning while driving, linkability and MBD against executed attacks, similar scope to our engine though in the field, not simulated.
+- [pollicino2021hardware] Verification load versus latency under real traffic and selective verification heuristics, directly overlapping verification-policy part of direction 2.
+- [khodaei2023secmace] Full VPKI backend implementation with pseudonym issuance at scale, overlapping our SCMS backend (though C-ITS/SECMACE design, not US SCMS, and no traffic/radio coupling).
+- [abdelhakeem2025pq] A V2X security benchmark dataset with PQ signatures and mobility, overlapping direction 3's benchmark idea and direction 2.
+- [mushrall2018emulab] A functional SCMS emulation framework for research, directly overlapping our SCMS backend.
+- [simplicio2021revocation] Directly compares SCMS revocation/provisioning strategies our engine implements or could implement.
+- [chen2023performance] Standards-conformant SCMS plus end-entity implementation with timing of provisioning actions, like our backend.
+- [kim2023signature] PQ signatures in 1609.2 BSMs with packet-size constraints (direction 2).
+- [jha2018pseudonym] Verification-load prioritisation under heavy traffic in SCMS (direction 2) and multi-root SCMS interoperability (runner-up).
+- [twardokus2021targeted] Cross-layer attack (radio jamming) against 1609.2 misbehaviour detection, i.e. MBD-to-revocation false positives; relevant to direction 1 and NR attacks runner-up.
+- [anonndieee] The standard our SCMS end-entity interfaces implement.
+- [hammi2017butterfly] Measures butterfly key request performance, part of our SCMS provisioning.
+- [haidar2019c] Pseudonym top-up over the network while driving, which our engine simulates (cellular TCP/TLS and RSU relay).
+- [ko2021avod] Verification policy under load for SCMS (direction 2).
+- [chen2024performance] Implements both US SCMS and EU CCMS certificate provisioning and compares, overlapping our backend and the multi-provider interoperability runner-up.
+- [bittl2016efficient] Certificate chain distribution (P2PCD-like) and its channel cost/DoS, as in our P2PCD over-the-air implementation.
+- [petho2022considering] Directly links PKI overhead to application safety, the core of direction 2.
+- [yoshizawa2022handling] Evaluates P2PCD, which our engine implements over the air.
+- [bittl2015efficient] Adaptive certificate-vs-digest inclusion to reduce channel load, related to our certificate/P2PCD handling and Twardokus-style scheduling.
+- [posielek2017security] Crypto-agility/migration of the V2X PKI over its lifetime, precursor of direction 2's PQ migration framing.
+- [oliveira2019qscms] PQ SCMS butterfly key provisioning (qSCMS), overlapping PQ migration of SCMS backend.
+- [chen2024pqcmc] PQ implicit certificates with key expansion for SCMS pseudonyms.
+- [jin2025accountable] Verification-load DoS and prioritisation policy, a core part of direction 2 and NR attacks with verification load.
+- [simplicio2018privacyb] Alternative to SCMS LA1/LA2 linkage revocation that our engine implements.
+- [cunha2020uacpc] SCMS activation-code revocation alternative (ACPC family) relevant to MA/revocation design.
+- [wan2023escort] Directly modifies SCMS linkage-based revocation and CRL checking our engine implements.
+- [liu2024flexible] Alternative to SCMS pseudonym provisioning/top-up which our engine models.
+- [boldyreva2024provable] Analyses the butterfly key mechanism our SCMS implements.
+- [lonc2025hybrid] Hybrid PQ PKI certificates and key establishment for C-ITS, overlapping our hybrid signatures in the SCMS.
+- [liu2018cross] Cross-layer (MAC + pseudonym) linkability attack, the cross-layer linkability runner-up.
+- [simplicio2018privacyc] SCMS linkage/revocation enhancement (same work as simplicio2018privacy).
+- [wantoro2022efficient] SCMS activation-code revocation and vulnerability window, relevant to direction 1 design.
+- [ajibuwa2023resilient] Threshold signing of certificates by multiple CAs, overlapping our threshold authorities (FROST-like Schnorr).

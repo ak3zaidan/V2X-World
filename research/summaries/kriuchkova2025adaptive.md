@@ -1,0 +1,11 @@
+# ADAPTIVE METHODS TO COUNTER ACTIVE NOISE JAMMING
+L. Kriuchkova, Nikita Vorokhob · Cybersecurity: Education, Science, Technique 2025 · https://doi.org/10.28925/2663-4023.2025.30.987 · relevance: medium · basis: abstract
+
+**Problem:** The effectiveness of performing a flight mission by an unmanned aerial vehicle at a given distance crucially depends on the quality of control, telemetry control and data transmission by the unmanned aerial vehicle, which, in turn, are determined by the quality of radio communication between the ground control station and the unmanned aerial vehicle.
+**Approach:** At the same time, modern military radio-electronic systems operate, as a rule, in a complex radio-electronic environment, caused by the influence of both internal and external interference, as well as enemy electronic suppression means. Active interference of various types and purposes is used, aimed at disabling control channels, navigation channels, telemetry channels and data transmission channels of unmanned aerial vehicles, in particular FPV drones, which necessitates the search and implementation of new countermeasure methods capable of ensuring the stable functioning of unmanned aerial vehicles and FPV drones in conditions of active information confrontation.
+**Tools and scale:** Not stated in the abstract.
+**Results:** The results of the study of adaptive LMS and RLS filters, spatial signal selection methods (MVDR, LCMV), as well as the use of machine learning algorithms for detecting and neutralizing jamming signals are presented. It is shown that the combination of adaptive and intelligent methods provides increased stability of communication channels and reduces the risk of loss of drone control.
+**Limitations and future work (as stated by the authors):**
+- Traditional protection methods are analyzed and their limitations in dynamic conditions of information warfare are identified.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

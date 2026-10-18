@@ -1,0 +1,11 @@
+# Post-Quantum Cryptography (PQC) Network Instrument: Measuring PQC Adoption Rates and Identifying Migration Pathways
+Jakub Sowa, B. Hoang, Advaith Yeluru, Steven Qie et al. · International Conference on Quantum Computing and Engineering 2024 · https://doi.org/10.1109/qce60285.2024.00213 · relevance: low · basis: abstract
+
+**Problem:** The problem of adopting quantum-resistant crypto-graphic network protocols or post-quantum cryptography (PQC) is critically important to democratizing quantum computing.
+**Approach:** This paper describes: i) the design of a novel Post-Quantum Cryptography (PQC) network instrument placed at the National Center for Supercomputing Applications (NCSA) at the University of Illinois at Urbana-Champaign and a part of the FABRIC testbed; ii) the latest results on PQC adoption rate across a wide spectrum of network protocols (Secure Shell - SSH, Transport Layer Security - TLS, etc.); iii) the current state of PQC implementation in key scientific applications (e.g., OpenSSH or SciTokens); iv) the challenges of being quantum-resistant; and v) discussion of potential novel attacks.
+**Tools and scale:** Not stated in the abstract beyond the above; no traffic simulator, radio stack or SCMS-scale deployment is described.
+**Results:** Our results show that only OpenSSH and Google Chrome have successfully implemented PQC and achieved an initial adoption rate of 0.029 % (6,044 out of 20,556,816) for OpenSSH connections at NCSA coming from major Internet Service Providers or Autonomous Systems (ASes) such as OARNET, GTT, Google Fiber Webpass (U.S.) and Uppsala Lans Landsting (Sweden), with an overall increasing adoption rate year-over-year for 2023–2024.
+**Limitations and future work (as stated by the authors):**
+- "The grand question of how existing cyberinfrastructure will support post-quantum cryptography remains unanswered."
+**Overlap with our engine:** partial — post-quantum/hybrid authentication scheme; the engine implements PQ and hybrid signatures, but the abstract states no SCMS-scale or traffic-coupled evaluation.
+**Novelty implications:** We cannot claim PQ authentication for vehicles is new; the end-to-end safety cost of PQ in a full SCMS remains open as far as this abstract shows.

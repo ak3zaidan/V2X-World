@@ -1,0 +1,11 @@
+# Design of intrusion detection systems for vehicular networks
+Liang, Junwei · venue unknown 2020 · https://doi.org/10.32657/10356/146089 · relevance: medium · basis: abstract
+
+**Problem:** With the explosive growth of traffic on road and the rapid evolution of autonomous vehicles, the vulnerability of Vehicular Ad Hoc Networks (VANETs) has become a critical issue as the networks handle the crucial information directly related to human safety.
+**Approach:** In this dissertation, a many-objective optimization algorithm (FS-MOEA) is firstly proposed to select the optimal feature subset for IDSs in VANETs, in which Adaptive Non-dominant Sorting Genetic Algorithm-III (A-NSGA-III) severs as the feature selection algorithm. In addition, two improvements, i.e., Bias and Weighted (B&W) niche-preservation and Information Gain (IG)-Analytic Hierarchy Process (AHP) prioritizing, are further proposed in FS-MOEA.
+**Tools and scale:** B&W niche-preservation is presented to counterbalance the bias among the different classes of AWID dataset, where rare classes are assigned with higher priorities during niching selection process. Simulation experiments prove the usefulness and effectiveness of the proposed FS-MOEA, as it can achieve better performance than other feature selection algorithms in terms of accuracy and efficiency.
+**Results:** As one of the most commonly-use approaches to prevent network threats, Intrusion Detection Systems (IDSs) are capable of detecting both insider and external attacks with high accuracy. A tradeoff between the accuracy and efficiency has to be further considered, due to the highly dynamic nature of VANETs.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection (direction 1 area); datasets/twins/surrogates (direction 3 area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

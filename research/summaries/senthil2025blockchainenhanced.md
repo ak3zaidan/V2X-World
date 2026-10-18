@@ -1,0 +1,12 @@
+# A Blockchain–Enhanced Decentralized Machine Learning Framework for Secure and Scalable Federated IoT Networks
+M. Senthil, G. N. Krishnan, P. Anitha, S. Heena et al. · CompSci &amp; AI Advances 2025 · https://doi.org/10.69626/cai.2025.0073 · relevance: medium · basis: abstract
+
+**Problem:** The rapid proliferation of Internet of Things (IoT) networks has created an urgent demand for scalable, secure, and privacy-preserving machine learning (ML) solutions that can operate efficiently across distributed and resource-constrained environments. Traditional centralized ML approaches suffer from significant limitations, including high communication overhead, vulnerability to cyber threats, and privacy ...
+**Approach:** To address these challenges, this research introduces a Decentralized Machine Learning (DML) framework for Federated IoT Networks, integrating blockchain-based security, differential privacy, and edge-optimized model aggregation to ensure trustworthy, scalable, and privacy-preserving ML training.
+**Tools and scale:** Experimental validation on real-world IoT datasets—including CIFAR-10 and MNIST—demonstrates that the proposed framework achieves a 50% reduction in model convergence time, a 40% improvement in privacy preservation, and a 30% enhancement in computational efficiency compared to conventional ...
+**Results:** Experimental validation on real-world IoT datasets—including CIFAR-10 and MNIST—demonstrates that the proposed framework achieves a 50% reduction in model convergence time, a 40% improvement in privacy preservation, and a 30% enhancement in computational efficiency compared to conventional federated learning models.
+**Limitations and future work (as stated by the authors):**
+- Traditional centralized ML approaches suffer from significant limitations, including high communication overhead, vulnerability to cyber threats, and privacy concerns due to raw data aggregation.
+- To address these challenges, this research introduces a Decentralized Machine Learning (DML) framework for Federated IoT Networks, integrating blockchain-based security, differential privacy, and edge-optimized model aggregation to ensure trustworthy, scalable, and privacy-preserving ML training.
+**Overlap with our engine:** none — cryptographic/authentication scheme or analysis without the closed-loop simulation, SCMS backend or counterfactual machinery of our engine.
+**Novelty implications:** No effect on our novelty claims. 

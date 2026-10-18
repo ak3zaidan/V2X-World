@@ -1,0 +1,11 @@
+# Comprehensive Host-Based Malicious Behaviour Detection in VANETs
+Hamideh Baharlouei, A. Makanju, Nur Zincir-Heywood · Journal of Network and Systems Management 2026 · https://doi.org/10.1007/s10922-026-10067-0 · relevance: low · basis: abstract
+
+**Problem:** Given the safety-critical nature of Vehicular Ad Hoc Networks (VANETs), ensuring real-time security requires both prompt detection of attacks and accurate identification of the malicious nodes involved. In this context, we introduce ADVENT (Attack/Anomaly Detection in VANETs), a comprehensive system that addresses both tasks simultaneously, bridging a critical gap in prior ...
+**Approach:** In this context, we introduce ADVENT (Attack/Anomaly Detection in VANETs), a comprehensive system that addresses both tasks simultaneously, bridging a critical gap in prior work, which often treats these components in isolation. In addition, the federated design of ADVENT minimizes communication overhead and protects sensitive data, improving its applicability in real-world VANET environments.
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** A key strength of ADVENT lies in its lightweight feature engineering module, which reduces computational complexity to \documentclass[12pt]{minimal} \usepackage{amsmath} \usepackage{wasysym} \usepackage{amsfonts} \usepackage{amssymb} \usepackage{amsbsy} \usepackage{mathrsfs} \usepackage{upgreek} \setlength{\oddsidemargin}{-69pt} \begin{document}$$\mathcal {O}(n)$$\end{document} using a single operation strategy, ...
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial: a V2X authentication/privacy scheme; our engine implements the standard SCMS/IEEE 1609.2 path rather than this protocol, and the paper reports no closed-loop traffic, radio or revocation simulation.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

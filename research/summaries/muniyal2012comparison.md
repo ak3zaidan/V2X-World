@@ -1,0 +1,11 @@
+# Comparison of Certificate Policies Formerging Public Key Infrastructuresduring Merger and Acquisition of Companies
+Balachandra Muniyal · International Journal of Network Security & Its Applications 2012 · https://doi.org/10.5121/ijnsa.2012.4507 · relevance: low · basis: abstract
+
+**Problem:** The Public Key Infrastructure(PKI) provides facilities for data encryption, digital signature and time stamping.It is a system where different authorities verify and authenticate the validity of each participant with the use of digital certificates.A Certificate Policy (CP) is a named set of rules and it indicates the applicability of a certificate in a Public Key Infrastructure.Sometimes two companies or organizations with different PKIs merge.Therefore it would be necessary that their PKIs are also able to merge.Sometimes, the unification of different PKIs is not possible because of the different certificate policies.This paper presents a method to compare and assess certificate policies during merger and acquisition of companies.
+**Approach:** The Public Key Infrastructure(PKI) provides facilities for data encryption, digital signature and time stamping.It is a system where different authorities verify and authenticate the validity of each participant with the use of digital certificates.A Certificate Policy (CP) is a named set of rules and it indicates the applicability of a certificate in a Public Key Infrastructure.Sometimes two companies or organizations with different PKIs merge.Therefore it would be necessary that their PKIs are also able to merge.Sometimes, the unification of different PKIs is not possible because of the different certificate policies.This paper presents a method to compare and assess certificate policies during merger and acquisition of companies.
+**Tools and scale:** Not stated in the abstract.
+**Results:** No quantitative results stated in the abstract.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** none — low-relevance adjacent work (general PKI/revocation background); no SCMS/1609.2 PKI backend, closed-loop revocation, joint ground truth or counterfactual reruns indicated.
+**Novelty implications:** Does not rule out any candidate direction; background only.

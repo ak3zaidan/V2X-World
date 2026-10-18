@@ -1,0 +1,11 @@
+# Hyperparameter Tuning of XGBoost for Flooding Attack Detection in SDN-based Vehicular Ad Hoc Networks (VANETs) under Limited Resources
+Chairunisa Rahma Putri, Galura Muhammad Suranegara, Ichwan Nul Ichsan · Aviation Electronics Information Technology Telecommunications Electricals Controls (AVITEC) 2025 · https://doi.org/10.28989/avitec.v8i1.3510 · relevance: medium · basis: abstract
+
+**Problem:** Software-Defined Network (SDN) based Vehicular Ad Hoc Network (VANET) infrastructure network enables centralized vehicle control.
+**Approach:** However, due to its centralized nature, SDN-based VANET is vulnerable to flooding attacks such as Distributed-Denial of Services (DDoS) or Denial of Service (DoS) attacks that can disrupt network availability and endanger traffic safety. This study aims to detect flooding attacks using the Extreme Gradient Boosting (XGBoost) algorithm with a focus on hyperparameter tuning in a limited computing environment to find optimal hyperparameter values for the model.
+**Tools and scale:** Not stated in the abstract.
+**Results:** The results obtained from this study conclude that hyperparameter tuning achieves optimal performance at n_estimators = 150 and max_depth = 15, resulting in 99.97% accuracy, 99.99% precision, 99.97% recall, and 99.98% F1 score, which proves the effectiveness of the model in detecting flooding attacks. The novelty of this study lies in the application and evaluation of hyperparameter tuning on the XGBoost algorithm in a resource-constrained environment to improve attack detection in SDN-VANET.
+**Limitations and future work (as stated by the authors):**
+- However, due to its centralized nature, SDN-based VANET is vulnerable to flooding attacks such as Distributed-Denial of Services (DDoS) or Denial of Service (DoS) attacks that can disrupt network availability and endanger traffic safety.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

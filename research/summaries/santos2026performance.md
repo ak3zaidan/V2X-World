@@ -1,0 +1,11 @@
+# Performance Evaluation of Post-Quantum Cryptography in IoT: A Case Study on MQTT Over TLS Under Network Constraints
+Emerson Costa Santos, Tiago Augusto Orcajo Demay Cordeiro, Hebert de Oliveira Silva · 2026 14th International Symposium on Digital Forensics and Security (ISDFS) 2026 · https://doi.org/10.1109/isdfs69419.2026.11458974 · relevance: low · basis: abstract
+
+**Problem:** The imminent advent of quantum computing poses a significant threat to current asymmetric cryptographic standards, such as RSA and Elliptic Curve Cryptography (ECC), widely used in Internet of Things (IoT) protocols. This paper evaluates the performance impact of migrating to Post-Quantum Cryptography (PQC) in an MQTT (Message Queuing Telemetry Transport) environment secured ...
+**Approach:** This paper evaluates the performance impact of migrating to Post-Quantum Cryptography (PQC) in an MQTT (Message Queuing Telemetry Transport) environment secured by TLS. We propose a reproducible benchmark framework based on containerization (Docker) and hardware emulation (QEMU/ARM64) to simulate resource-constrained IoT devices.
+**Tools and scale:** Non-vehicular setting. Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** We compared the handshake latency of standard TLS against a hybrid implementation utilizing NIST-standardized PQC algorithms: ML-KEM-768 (Key Encapsulation) and ML-DSA-65 (Digital Signature). Experiments conducted under controlled network impairments (latency, jitter, and packet loss) revealed that PQC introduces an approximate 4.7x increase in connection establishment time compared to classical TLS, primarily due ...
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** none: post-quantum/hybrid cryptography outside V2X. It gives background for direction 2 (PQ migration of the SCMS) but does not model V2X channels, SCMS issuance, or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the vehicular case (SCMS scale, broadcast channel load, safety cost) is not addressed.

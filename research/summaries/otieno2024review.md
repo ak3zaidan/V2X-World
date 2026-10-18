@@ -1,0 +1,11 @@
+# A review on security enhancements in vehicular sensor networks
+Isaiah Awende Otieno · GSC Advanced Research and Reviews 2024 · https://doi.org/10.30574/gscarr.2024.21.3.0457 · relevance: low · basis: abstract
+
+**Problem:** Vehicular Sensor Networks (VSNs) have emerged as a cornerstone in advancing intelligent transportation systems, enabling seamless communication between vehicles and infrastructure to enhance road safety, traffic management, and driving efficiency. However, the dynamic topology, high mobility, and stringent latency requirements of VSNs introduce unique challenges in ensuring ...
+**Approach:** However, the dynamic topology, high mobility, and stringent latency requirements of VSNs introduce unique challenges in ensuring robust security and optimal performance. A critical evaluation of trade-offs between security and performance is also presented, highlighting the need for integrated solutions that balance these aspects in resource-constrained VSN environments.
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** By synthesizing recent research findings and identifying current limitations, this review aims to guide future research toward developing resilient, efficient, and scalable vehicular sensor networks.
+**Limitations and future work (as stated by the authors):**
+- "By synthesizing recent research findings and identifying current limitations, this review aims to guide future research toward developing resilient, efficient, and scalable vehicular sensor networks."
+**Overlap with our engine:** partial: a V2X authentication/privacy scheme; our engine implements the standard SCMS/IEEE 1609.2 path rather than this protocol, and the paper reports no closed-loop traffic, radio or revocation simulation.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

@@ -1,0 +1,11 @@
+# Development of a Surrogate Safety Assessment Framework Incorporating Traffic Simulator, Vehicle Dynamics, Driver Warning, GPS/INU, and V2V/V2I
+Jaehyun So · unknown venue  · https://doi.org/10.18130/v3z513 · relevance: low · basis: abstract
+
+**Problem:** No abstract available; title only: "Development of a Surrogate Safety Assessment Framework Incorporating Traffic Simulator, Vehicle Dynamics, Driver Warning, GPS/INU, and V2V/V2I".
+**Approach:** Not determinable without abstract.
+**Tools and scale:** Not stated (no abstract).
+**Results:** No quantitative results stated in the abstract.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — Vehicular simulation/dataset work; overlaps the engine's simulation scope in part, without the integrated SCMS/PKI and per-message ground truth.
+**Novelty implications:** Low-relevance background; does not rule out any candidate direction (no SCMS linkage-based revocation, closed-loop MA, PQ SCMS migration, or counterfactual ground truth).

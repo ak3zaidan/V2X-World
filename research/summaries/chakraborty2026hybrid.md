@@ -1,0 +1,11 @@
+# Hybrid Post-Quantum Cryptography and Quantum Key Distribution Co-Design for Quantum-Safe 6G, O-RAN, and IoT Infrastructure
+Aagnik Chakraborty · International Journal of Applied Smart Interdisciplinary Technologies 2026 · https://doi.org/10.68104/ijasit.v1.i3.26 · relevance: low · basis: abstract
+
+**Problem:** Cryptographically relevant quantum computers do not yet exist, but the transition away from classical public-key cryptography is already underway: adversaries can record encrypted traffic today and decrypt it once a sufficiently capable quantum computer becomes available, a threat known as harvest-now, decrypt-later. This paper examines the engineering case for combining ...
+**Approach:** This paper examines the engineering case for combining post-quantum cryptography (PQC) with quantum key distribution (QKD) as a strategy for securing next-generation communication infrastructure, focusing on 6G core and radio-access networks, Open RAN (O-RAN), and constrained Internet of Things (IoT) deployments. The paper is explicit about which figures are measured results and which remain illustrative proposals, ...
+**Tools and scale:** Non-vehicular setting. Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** The architecture is grounded in the finalized National Institute of Standards and Technology (NIST) PQC standards and its 2025 hybrid key-establishment guidance, drawing on empirical Open RAN latency and energy measurements published during 2025 and 2026, embedded-hardware benchmarks for constrained devices, and the small number of quantum key distribution deployments operating at metropolitan or national backbone ...
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** none: post-quantum/hybrid cryptography outside V2X. It gives background for direction 2 (PQ migration of the SCMS) but does not model V2X channels, SCMS issuance, or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the vehicular case (SCMS scale, broadcast channel load, safety cost) is not addressed.

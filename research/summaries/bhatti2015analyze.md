@@ -1,0 +1,11 @@
+# Analyze the VANET performance in presence of timing attack and sinkhole attack using OMNeT
+F. N. Bhatti, R. Badlishah Ahmad, Muhamad Shahbani Abu Bakar, Shuhaizar Daud, Shamsul Jamel Elias, Mohd Nazri Mohd Warip · Universiti Utara Malaysia Institutional Repository (Universiti Utara Malaysia) 2015 · https://repo.uum.edu.my/id/eprint/20615/1/JARCA%201%201%202015%2016%2032.pdf · relevance: medium · basis: abstract
+
+**Problem:** The growth in research advancement of vehicular Adhoc Network (VANET) has seen a significant rise in the security attack.In this paper, we give the simulation for quantitative investigate of VANET in the presence of Timing attack and Sinkhole attack.We described the performance metrics and discover the effect and harm caused by Timing attack and Sinkhole attack, which directly affect the network Quality of Service (QoS).Our assessment results show that the impact on VANET under Timing attack and Sinkhole attack varies potentially depending on a number of vehicles, the number of attacker vehicl
+**Approach:** The growth in research advancement of vehicular Adhoc Network (VANET) has seen a significant rise in the security attack.In this paper, we give the simulation for quantitative investigate of VANET in the presence of Timing attack and Sinkhole attack.We described the performance metrics and discover the effect and harm caused by Timing attack and Sinkhole attack, which directly affect the network Quality of Service (QoS).Our assessment results show that the impact on VANET under Timing attack and Sinkhole attack varies potentially depending on a number of vehicles, the number of attacker vehicles.The impact of a Timing attack and Sinkhole attack increased significantly by increasing the numbe
+**Tools and scale:** Mentioned in abstract: OMNeT++
+**Results:** No quantitative results stated in the abstract.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

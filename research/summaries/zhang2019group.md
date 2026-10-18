@@ -1,0 +1,11 @@
+# Group-Signature and Group Session Key Combined Safety Message Authentication Protocol for VANETs
+Chunhua Zhang, Xiaoping Xue, Lijuan Feng, Xin Zeng et al. · IEEE Access 2019 · https://doi.org/10.1109/access.2019.2958356 · relevance: medium · basis: abstract
+
+**Problem:** Anonymous authentication has significant contribution to privacy protection in safety message dissemination for Vehicular Ad Hoc Networks (VANETs); however, it suffers from heavy workload of vehicle revocation check and message signature verification, which leads to unsatisfactory timeliness and high message loss rate in heavy traffic situations. To manage ...
+**Approach:** To manage these challenging problems, this paper proposes an efficient safety message authentication protocol for VANETs by combining batch group signature verification and our proposed Group Session Key (GSK).
+**Tools and scale:** Performance analysis and simulations demonstrate that our protocol can provide promising security against various common types of attackers and is more efficient than traditional group-signature-based authentication protocols, in terms of computation time cost, authentication delay and message loss ...
+**Results:** Specifically, our signature verification method for safety message can both achieve computation efficiency by reducing the number of computation operations of bilinear pairing and resist impersonation attack by using tracking key implement. Performance analysis and simulations demonstrate that our protocol can provide promising security against various common types of attackers and is more efficient than traditional group-signature-based authentication protocols, in terms of computation time cost, authentication ...
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** none — Bespoke VANET/IoV authentication or privacy scheme (CPPA/certificateless/batch/blockchain style), evaluated by analysis or small simulation; not IEEE 1609.2/SCMS and no closed-loop safety evaluation.
+**Novelty implications:** Adds to the large body of standalone authentication schemes; does not touch end-to-end SCMS simulation or safety impact of security.

@@ -1,0 +1,11 @@
+# Red-AODV: A Prevention Model of Black Hole Attack for VANET Protocols and Identification of Malicious Nodes in VANET
+Md. Tofael Ahmed, Amina Aktar Rubi, Md. Saifur Rahman, Maqsudur Rahman · International Journal of Computer Networks And Applications 2021 · https://doi.org/10.22247/ijcna/2021/209985 · relevance: low · basis: abstract
+
+**Problem:** VANET is a type of MANET in which the Vehicle nodes communicate between each other using wireless medium without any fixed infrastructure.The major goal of VANET is to create a safer and more efficient Intelligent Transportation System (ITS) and Traffic Information System (TIS) where highmobility drivers may communicate with one another.Routing protocols, we know, accomplish ...
+**Approach:** VANET is a type of MANET in which the Vehicle nodes communicate between each other using wireless medium without any fixed infrastructure.The major goal of VANET is to create a safer and more efficient Intelligent Transportation System (ITS) and Traffic Information System (TIS) where highmobility drivers may communicate with one another.Routing protocols, we know, accomplish the shortest possible connection time ...
+**Tools and scale:** Vehicular setting (VANET/IoV/V2X). Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** VANET is a type of MANET in which the Vehicle nodes communicate between each other using wireless medium without any fixed infrastructure.The major goal of VANET is to create a safer and more efficient Intelligent Transportation System (ITS) and Traffic Information System (TIS) where highmobility drivers may communicate with one another.Routing protocols, we know, accomplish the shortest possible connection time ...
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial: vehicular security topic, but no simulation of traffic, radio, SCMS backend or safety outcomes is described.
+**Novelty implications:** Rules out nothing specific in our candidate directions. It shows that lightweight V2X authentication protocols are widely proposed; we should not claim a new authentication scheme. Open: evaluation of such schemes in a closed-loop city-scale simulation with radio and safety ground truth.

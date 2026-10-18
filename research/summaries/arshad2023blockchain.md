@@ -1,0 +1,11 @@
+# Blockchain-based decentralized trust management in IoT: systems, requirements and challenges
+Qurat-ul-Ain Arshad, Wazir Zada Khan, Faisal Azam, Muhammad Khurram Khan, Heejung Yu, Yousaf Bin Zikria · Complex &amp; Intelligent Systems 2023 · https://doi.org/10.1007/s40747-023-01058-8 · relevance: medium · basis: abstract
+
+**Problem:** Internet of Things (IoT) vision has astoundingly transcended environmental sensing with integrated computing systems and smart devices, providing seamless connectivity among humans, machines, and their environment to cooperate for convenience and economical benefits. Apart from all the tremendous benefits of IoT, this paradigm still suffers from challenges of security and privacy vulnerabilities a
+**Approach:** This paper provides a comprehensive survey that aims at analyzing and assessing Blockchain-based decentralized trust management systems (BCDTMS) for IoT. The contributions of this study are threefold; first, we provide the comprehensive and comparative analysis of state-of-the-art BCDTMS devised for different IoT classes such as Internet of Medical of Things (IoMT), Internet of Vehicles (IoV), Industrial IoT (IIoT), and Social IoT (SIoT). Second, we present requirements for developing Blockchain-based TM systems for IoT, and third we have highlighted the challenges in the context of using Blockchain for TM in various IoT applications.
+**Tools and scale:** Not stated in the abstract.
+**Results:** No quantitative results stated in the abstract.
+**Limitations and future work (as stated by the authors):**
+- Apart from all the tremendous benefits of IoT, this paradigm still suffers from challenges of security and privacy vulnerabilities and demands a secure system for effective utilization of services in real-world IoT scenarios relying on which the IoT consumers expect secure and trustworthy communicat
+**Overlap with our engine:** partial — Trust/reputation management for detecting malicious senders; an alternative to the SCMS misbehaviour-report -> MA -> CRL pipeline our engine models, with no linkage-based revocation or time-to-neutralise analysis.
+**Novelty implications:** Does not rule out any candidate direction; it does not model SCMS certificates, linkage-based revocation, per-message joint ground truth or counterfactual reruns.

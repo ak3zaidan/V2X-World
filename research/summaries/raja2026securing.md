@@ -1,0 +1,11 @@
+# Securing East-West Traffic in 5G Core with Hybrid Post-Quantum Cryptography over TLS 1.3
+Gunasekaran Raja, Pooja Vetriselvan, Suganthi Mani, Janani Alagar Ramanujam et al. · 2026 4th International Conference on Advanced Network Technologies and Applications (APAN) 2026 · https://doi.org/10.1109/apan70967.2026.11709595 · relevance: low · basis: abstract
+
+**Problem:** The fifth-generation (5G) core network adopts a Service-Based Architecture (SBA), in which Network Functions (NFs) communicate over Service-Based Interfaces (SBIs) using HTTP/2 secured with TLS 1.3. Current deployments rely on classical cryptography, which is vulnerable to quantum attacks, particularly under the Harvest-Now, Decrypt-Later (HNDL) threat model.
+**Approach:** To address this, we propose Quantum-Safe Service-Based Architecture (Q-SBA), a hybrid post-quantum TLS framework that secures SBI communication by integrating Module Lattice-based Key Encapsulation Mechanism (ML-KEM-768) and Module Lattice-based Digital Signature Algorithm (ML-DSA-65) with classical primitives within a TLS 1.3 handshake with mutual authentication. Results show that hybrid PQC introduces a controlled ...
+**Tools and scale:** Non-vehicular setting. Not detailed in the catalogued abstract (no integrated traffic, radio and SCMS simulation identified); see the paper for setup and scale.
+**Results:** Results show that hybrid PQC introduces a controlled performance trade-off: handshake latency reaches 14–15 ms (≈2× classical TLS), while throughput sustains 273–289 connections per second, both within 5G control-plane requirements. Packet-level analysis confirms successful negotiation of hybrid cryptographic groups across all interfaces, demonstrating that quantum-resilient security can be integrated into 5G core ...
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** none: post-quantum/hybrid cryptography outside V2X. It gives background for direction 2 (PQ migration of the SCMS) but does not model V2X channels, SCMS issuance, or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the vehicular case (SCMS scale, broadcast channel load, safety cost) is not addressed.

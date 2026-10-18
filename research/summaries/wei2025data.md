@@ -1,0 +1,11 @@
+# Data-driven-based spatio-temporal detection model against cyber attacks in Intelligent transportation
+Runxian Wei, Mingyue Zhang, Xinyu Wang · Measurement and Control 2025 · https://doi.org/10.1177/00202940251400036 · relevance: medium · basis: abstract
+
+**Problem:** The escalating sophistication of cyber attacks in intelligent transportation systems necessitates the development of advanced intrusion detection systems capable of processing multi-modal data efficiently while maintaining real-time performance.
+**Approach:** To address these critical cybersecurity challenges, this paper presents a novel spatio-temporal hybrid model for robust attack detection. Our framework, designed to overcome the limitations of existing methods in handling complex hybrid threats, integrates three key components: convolutional neural networks (CNN) for spatial feature extraction; bidirectional long short-term memory (BiLSTM) networks to capture long-range temporal dependencies, and an attention mechanism for adaptive feature weighting.
+**Tools and scale:** Not stated in the abstract.
+**Results:** Extensive experimental results demonstrate that our model significantly outperforms existing AI-based detection methods, such as Korea New Network-KNN and Multilayer Perceptron-MLP, achieving superior detection accuracy and enhanced robustness against sophisticated attacks.
+**Limitations and future work (as stated by the authors):**
+- Our framework, designed to overcome the limitations of existing methods in handling complex hybrid threats, integrates three key components: convolutional neural networks (CNN) for spatial feature extraction; bidirectional long short-term memory (BiLSTM) networks to capture long-range temporal dependencies, and an attention mechanism for adaptive feature weighting.
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection or trust (direction 1 area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

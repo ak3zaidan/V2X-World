@@ -1,0 +1,11 @@
+# Intelligent Cooperative Perception Technology for Vehicles and Experiments Based on V2V/V2I Semantic Communication
+Cheng Li, Huiping Liu, Qiqi Jia et al. · Electronics 2025 · https://doi.org/10.3390/electronics14244969 · relevance: medium · basis: abstract
+
+**Problem:** Cooperative perception.
+**Approach:** V2V/V2I semantic communication experiments.
+**Tools and scale:** Not stated in the abstract.
+**Results:** Not quantified in the abstract.
+**Limitations and future work (as stated by the authors):**
+- Not stated in the abstract; full text not reviewed (medium relevance).
+**Overlap with our engine:** none — No security.
+**Novelty implications:** Nothing we intend to claim is pre-empted by this paper.

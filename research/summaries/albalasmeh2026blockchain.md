@@ -1,0 +1,11 @@
+# Blockchain-Powered Privacy Preservation and Attack Mitigation for 6g-Connected Vehicular Clouds
+Hani Al‐Balasmeh · International Journal of Basic and Applied Sciences 2026 · https://doi.org/10.14419/k630rb63 · relevance: medium · basis: abstract
+
+**Problem:** The transition toward sixth-generation (6G) wireless communication is expected to significantly expand the scale, intelligence, and connec-‎tivity of vehicular cloud networks, while simultaneously intensifying their exposure to sophisticated cyber threats and privacy risks.
+**Approach:** This paper presents a decentralized, privacy-aware security methodology for 6G-‎enabled vehicular cloud environments that integrates dynamic trust evaluation, federated anomaly detection, and blockchain-based enforce-‎ment.‎ The proposed approach employs adaptive trust modeling to continuously assess vehicular behavior, federated learning to enable collabora-‎tive anomaly detection without disclosing raw data, and a lightweight Proof-of-Trust consensus mechanism to ensure low-latency, verifiable ‎decision-making. A comparative analysis reveals that the proposed approach outperforms traditional
+**Tools and scale:** Not stated in the abstract.
+**Results:** The methodology is evaluated using three widely adopted benchmark datasets—CIC-IDS2017, TON_IoT, and N-BaIoT—that ‎cover volumetric attacks, stealthy intrusions, and coordinated botnet behavior.‎ Experimental results demonstrate detection rates exceeding 95% across all datasets, with false-positive rates of nearly 1%.
+**Limitations and future work (as stated by the authors):**
+- "End-to-end detec-‎tion-to-mitigation latency remains below 20 ms under high vehicular density, satisfying 6G ultra-reliable low-latency communication re-‎quirements."
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection (direction 1 area); security overhead or cryptography (direction 2 area); datasets/twins/surrogates (direction 3 area); pseudonym privacy/linkability (runner-up area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

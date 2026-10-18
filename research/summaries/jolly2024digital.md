@@ -1,0 +1,11 @@
+# Digital Twin Powered Next Generation Wireless Networks: Construction, Validation, and Applications
+Aditya Jolly, B. Akgun, Balwinder Sachdev, Divya Ravichandran et al. · 2024 IEEE 100th Vehicular Technology Conference (VTC2024-Fall) 2024 · https://doi.org/10.1109/vtc2024-fall63153.2024.10757667 · relevance: medium · basis: abstract
+
+**Problem:** Digital Twin (DT) technology has recently emerged as a powerful tool with the potential to revolutionize wireless systems as it enables accurate simulations, better decision-making, and tangible operational improvements. Prior studies on DT within the context of next generation wireless technologies has primarily focused on identifying potential use cases, application scenarios, and standardization challenges.
+**Approach:** Our research, in this paper, contributes to the practical realization of DT technology in the context of 6G wireless networks, demonstrating its potential impact on network planning, performance, and user experience. In particular, we explore the construction, validation, and applications of DTs utilizing an indoor over-the-air (OTA) testbed powered by an in-house developed Next Generation Radio Access Network (NGRAN) that is fully compliant with 3rd Generation Partnership Project (3GPP) and Open RAN standards.
+**Tools and scale:** Mentioned in abstract: 6G, Open RAN, digital twin, real-world, testbed. (From the abstract only.)
+**Results:** Then, we demonstrate two pre-deployment use cases by explaining our extensive coverage estimation and network capacity planning OTA tests. Lastly, we also explore how DT enables practical machine learning solutions for post-deployment use cases and share our comprehensive OTA performance results, highlighting that our proposed mobility technique outperforms the classical approaches in terms of throughput and number of undesired handovers.
+**Limitations and future work (as stated by the authors):**
+- Not stated in the abstract.
+**Overlap with our engine:** none — Adjacent background (network digital twin (learned or data-driven)); no direct overlap with the engine's traffic+radio+SCMS joint simulation.
+**Novelty implications:** Does not restrict any candidate claim.

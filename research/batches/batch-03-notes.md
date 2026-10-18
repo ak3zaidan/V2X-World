@@ -1,0 +1,159 @@
+# Batch 03 notes
+
+378 papers summarised (all catalogued as high relevance; many are clearly lower in practice). Items come from abstracts unless the summary basis says full text.
+
+## 1. Stated limitations and future work
+
+- priyanka2025v: The related-work gaps table notes other approaches' limited adaptability; the paper's own limitations were not found in the extracted text.
+- agustina2026lightweight: Future work: standardisation for 5G NR-V2X.
+- agustina2026lightweight: Future work: NS-3/SUMO-coupled realistic traffic scenarios (current evaluation lacks them).
+- agustina2026lightweight: Future work: side-channel countermeasures for production.
+- agustina2026lightweight: Scales only to about 50 vehicles.
+- sengupta2026adaptive: Relies on clock synchronisation and prediction accuracy.
+- sengupta2026adaptive: No live deployment validation; trace-based modelling only.
+- sengupta2026adaptive: Future work: formal verification of RL-assisted adaptation, hardware-in-the-loop testbeds.
+- sengupta2026adaptive: Future work: jointly optimise encryption and signature schemes.
+- bean2026falcon: False-positive flows need deeper study of their communication patterns.
+- bean2026falcon: Future work: more features, other autoencoder architectures and an ensemble.
+- t2026quantum: Identifies gaps between benchmark performance and large-scale vehicular deployment requirements.
+- t2026quantum: Seven research gaps listed (details in full text).
+- wang2026secure: Examines practical implementation challenges (details truncated).
+- ganan2013certificate: Not clearly stated in extracted sections.
+- cmtkarthigeyan2021privacy: Notes prior method low detection accuracy as attacks grow; own limitations not stated.
+- li2024optimization: Quantum computing maturity, stability and cost challenges.
+- m2025lightweight: All metrics from modelling and datasheets; physical hardware validation planned for future work.
+- saleh2025agent: Future work: ML-based prediction, RSU-edge collaboration.
+- saleh2025agent: Future work: real-world trace validation.
+- saleh2025agent: Future work: dynamic trust and cryptographic adaptation under evolving attacks.
+- ahmad2025end: Motivated by limitations of existing platforms in capturing full ITS complexity; own limitations not detailed in extracted text.
+- trabucco2025network: Higher computational cost for key management operations (stated).
+- mohamed2025post: Notes PQC is still under research and standardisation; further integration recommendations in conclusion.
+- jena2025privacy: Requires experimental evaluation; future work: implement in SUMO with Veins or NS-3 and compare quantitatively.
+- jena2025privacy: Future work: formal verification against impersonation, replay, MITM, Sybil.
+- jena2025privacy: Future work: post-quantum lattice extensions and optional blockchain audit/revocation.
+- ahmed2025qsafe: Future work: adaptive quantum resource management, QML threat detection.
+- ahmed2025qsafe: Future work: validation on real vehicular edge testbeds with quantum simulators and QKD hardware.
+- makkar2025quantum: Resource constraints make QKD hardware hard to deploy on IoT devices.
+- gurung2025quantum: Assumes secure client/server laboratories.
+- gurung2025quantum: Future work: extend beyond object detection to route planning, lane detection, segmentation.
+- alluhaibi2025quantum: Computational cost.
+- alluhaibi2025quantum: Reliance on synthetic data; needs large-scale real-world validation.
+- alluhaibi2025quantum: Future work: efficiency, real vehicular data, integration with legacy ITS.
+- eldalahmeh2025secure: Open challenges: adaptive security management, blockchain integration, compatibility with emerging communication standards.
+- abdelhakeem2026pq: Mostly synthetic data (stated composition).
+- kumari2026carla: Very small logical simulation; QKD not physically modelled (implied by design).
+- bankole2026hybrid: Future work: implement the framework in a Python Streamlit simulation and evaluate against advanced attacks.
+- shkhagor2026post: No protection against Sybil attacks; open DID registration.
+- shkhagor2026post: Majority-controlled validators can record false data.
+- shkhagor2026post: Larger fleets, diverse network conditions and repeated trials needed.
+- mekala2026secured: Scalability and caching costs in highly dynamic settings.
+- mekala2026secured: Future work: large-scale real-world urban/highway tests; integration with 5G/6G edge; multi-cloud.
+- yoshizawa2026zero: Experiments on a single vendor's development platform; cannot generalise to other OBUs.
+- yoshizawa2026zero: Hybrid mode (ECDSA + PQC in certificate and message) has significant size implications.
+- oli2026deep: Behavioural trust is reactive: a node honest then defecting succeeds for one trust-update interval.
+- oli2026deep: Guarantees hold only within the Byzantine bound.
+- oli2026deep: Observation poisoning by colluders is bounded, not eliminated.
+- vinita2026hierarchical: Real-world 5G/6G V2X field deployment remains the ultimate test.
+- vinita2026hierarchical: Future work: personalised FL, asynchronous aggregation, digital-twin-assisted mobility, RL client scheduling.
+- chen2026comparison: Future work: implement implicit certificates in CCMS and C-SCMS to compare all three standards with implicit certificates.
+- elghouchma2026critical: Secrecy-reliability tension is an open design challenge.
+- elghouchma2026critical: Documents implementation corrections of the original work.
+- elomda2026crypto: Only AES-128 synthesised; ASCON and Keccak validated in RTL simulation only.
+- abrar2026deployment: Future work: Falcon-512 on NR-V2X Rel-16/17.
+- abrar2026deployment: Future work: hybrid certificate schemes switching Falcon/ECDSA by congestion (would need 1609.2 and J3161 changes).
+- abrar2026deployment: Future work: extend J3161 MCS range; multi-intersection corridors; hardware profiling on automotive platforms.
+- lee2026design: Deterministic frame timing, no errors or retransmissions (underestimates tails).
+- lee2026design: Fixed ISO-TP parameters; single bus segment; ideal arbitration.
+- lee2026design: Future work: real-vehicle CAN-FD traces, HIL validation, multi-bus and CAN-FD/Ethernet topologies.
+- diazgorrin2026enhancing: Future work: other PQC algorithms; continual reassessment.
+- yoganand2026enhancing: PQC component is only 'inspired' / simulation-level.
+- yoganand2026enhancing: Future work: graph/identity-aware Sybil detection; full lattice PQC; DNN-based FL.
+- liu2026lsans: Targets deployments where identifiers are not privacy-sensitive (fleets, transit, emergency).
+- karinsalo2026migrating: No new measurements; synthesis only.
+- karinsalo2026migrating: Future work: system-level validation of PQC-enabled PKIs under realistic traffic conditions.
+- karinsalo2026migrating: Future work: standards for multi-algorithm operation and crypto agility.
+- goncalves2026post: Example scenarios only.
+- shagor2026post: Ledger tamper evidence only within permissioned governance; malicious coalition can rewrite policy.
+- shagor2026post: Trust biased by colluding observations or poor thresholds.
+- shagor2026post: Future work: automotive hardware, broadcast and cross-domain roaming, hardware-backed key state, validation with real traces and safety-specific misbehaviour models.
+- alsaadi2026privacy: High computational overhead (stated).
+- kumar2026q: Simulation only; acquisition/switching latencies are architectural assumptions; asymptotic SKR.
+- kumar2026q: A hardware-in-the-loop study would need to replace stated assumptions.
+- ahmed2026quantum: Future work: ProVerif/Tamarin, tighter QROM reductions, adaptive DP budgets.
+- wang2026reproducibility: Does not claim complete Bellman-trajectory equality or continuous maximal-kernel equality (stated).
+- liu2026tetherless: Low-frequency CV-QKD requires stringent conditions.
+- sharma2026transitioning: Conservative parameters (n=1024, q about 2^32) may need change; future: adaptive parameter selection.
+- sharma2026transitioning: Accumulator revocation needs periodic witness updates; scaling to millions of EVs is a challenge.
+- xiao2006detection: Basic scheme is inaccurate and vulnerable to spoofing (stated).
+- heijden2019survey: Multi-antenna attackers remain an open issue for most physical-layer schemes.
+- heijden2019survey: Future work: exploit orthogonality of the four detection classes; generalise to CPS.
+- heijden2018veremi: Metrics need more study from a security perspective; PR curves do not give the full picture.
+- heijden2018veremi: A dataset has an inherent limitation: attacker and benign deviations are unknowable in advance (e.g. urban GPS errors, adaptive attackers).
+- petrillo2021secure: Single-lane platoon (stated scope).
+- giannaros2023autonomous: Blockchain scalability and privacy issues for AVs.
+- giannaros2023autonomous: Future research directions listed broadly.
+- ruj2011data: Authors discuss limitations and future work at the end (not captured in extraction).
+- sharma2021machine: Identifies limitations of the learning algorithms (details truncated).
+- siddiqui2021survey: Manually set weights and thresholds (highlighted gap).
+- kamel2020simulation: Future work: more pseudonym change strategies (silent periods), attacks and detectors.
+- kamel2020simulation: Future work: an intelligent Misbehavior Authority to evaluate global investigation, reporting policies and report format.
+- kamel2020simulation: Future work: colluding attackers and false report injection.
+- kamel2020simulation: Future work: add a PKI module.
+- park2009defense: Targets initial deployment stage.
+- ercan2022misbehavior: Future work: add a reaction mechanism (notifications, passive or active revocation).
+- ercan2022misbehavior: Future work: other attack types (DoS, DDoS, Sybil, black hole).
+- ercan2022misbehavior: Future work: multi-class detection of attack type.
+- haddadou2015job: Nodes have limited reputation information beyond direct neighbours (noted).
+- rahbari2011efficient: Future work: improve the method to detect Sybil attacks properly and completely.
+- heijden2017analyzing: Detection alone is likely insufficient given the volume of crashes; need prevention via resilient controllers and effective detection and revocation.
+- heijden2017analyzing: Future work: other controllers; falsifying multiple beacon fields simultaneously (evades typical MBD).
+- heijden2017analyzing: Metrics bound to the leader's behaviour.
+- heijden2017analyzing: Open: how to use detection beyond invalidating the vehicle in the SCMS; combine graceful degradation with effective revocation.
+- ghaleb2020misbehavior: Evaluated on a generic IT dataset (NSL-KDD), not V2X data.
+- sharma2022machine: Future work directions in Section VI (not captured in extraction).
+- feng2016method: Strong assumption of a trusted RSU issuing certificates; future work to loosen it.
+- feng2016method: Future work: automatic trust establishment among vehicles.
+- sharma2019briot: Difficulty of verifying specifications are correct and complete (general limitation of specification-based approaches).
+- bimeyer2012central: Assumes a majority of benign reporters.
+- ibrahum2024deep: Notes challenges requiring hybrid approaches (details truncated).
+- khan2021security: Many surveyed schemes lack comparisons or rely on many assumptions (noted).
+- azam2022collaborative: Future directions mentioned (details truncated).
+- luo2021threat: Discusses future development directions for automotive TARA.
+- ghaleb2019ensemble: Static thresholds are a recognised limitation of prior work (addressed here).
+- jagielski2018threat: Detection methods have limitations (discussed by authors).
+- ghaleb2019hybrid: Extension with AI-based classifiers on top of statistical outputs (future work).
+- ghaleb2019hybrid: Learning attack patterns from classifier outputs (ongoing).
+- qi2020privacy: Future work: pseudonym generation not dependent on RSU/TA (certificateless).
+- qi2020privacy: Future work: replace CRL with non-interactive zero-knowledge for revocation performance.
+- park2013defense: Targets early deployment only.
+- hamdan2019detecting: Speed threshold not fixed; depends on street nature, nodes and lanes.
+- hamdan2019detecting: Implemented as a TCL script; future work to reimplement in an object-oriented language.
+- he2021distributed: Future work: detection on actuators; more general vehicle/sensor models; topologies beyond strings with multiple leaders.
+
+## 2. Strong overlap with our engine or candidate directions
+
+- twardokus2025quantum: hybrid PQ signatures on C-V2X BSMs with certificate fragmentation is part of our PQ/hybrid signature support and candidate direction 2 (safety cost of PQ migration).
+- anon20162016ieeestandardforwirelessaccessinvehicularenvironmentssecurityservicesforapplications: our engine implements IEEE 1609.2 security.
+- anon2016ieee: implemented by our engine.
+- anon2023ieee: our engine implements 1609.2.
+- twardokus2024demo: PQC integrated into 1609.2 V2V and evaluated in safety use cases against attacks, which our PQ signature support and direction 2 also do (we in simulation at scale, they over the air).
+- lopes2025novel: addresses the window between detection and pseudonym expiry, the core of our direction 1 'time to neutralise' and our linkage-based CRL revocation.
+- ahmad2025end: end-to-end traffic + V2X co-simulation for cybersecurity with a PQ C-V2X safety case study, which overlaps our integrated engine and direction 2.
+- samara2025post: compares a PQ alternative against pseudonym PKI on PDR, CBR, revocation overhead and Sybil capacity in SUMO-coupled simulation, close to direction 2's safety/channel cost of PQ and our pseudonym/revocation model.
+- huang2025privacy: cross-layer/issuer linkability in a multi-PCA VPKI, which is both our runner-up direction (cross-layer linkability) and multi-provider SCMS setting.
+- fikry2026post: PQ migration of an SCMS with a full CA hierarchy and channel-capacity cost, which is our PQ SCMS and direction 2.
+- yoshizawa2026zero: PQ/hybrid message authentication size cost and mixed-fleet migration for CAMs, which is direction 2.
+- chen2026comparison: implements the US SCMS credential formats and request processes on devices and interoperates with the real SCMS Manager trust lists, as our engine does.
+- abrar2026deployment: PQ signatures in 1609.2 over C-V2X Mode 4 with full-stack simulation, PDR and latency vs traffic density, exactly the core of direction 2 and our LTE-V2X stack.
+- chen2026pseudonym: PQ/hybrid certificates inside the SCMS, a PQ-compatible replacement for butterfly key expansion and KEM-encrypted 1609.2 SPDUs, which our PQ/hybrid SCMS implements.
+- wang2026reproducibility: links PQ signature profiles to control safety (required vehicle spacing), the core question of direction 2 (safety cost of security).
+- yu2026v: directly targets the SCMS pseudonym provisioning and top-up backend load that our engine simulates (RA/PCA batch issuance over cellular).
+- anonndquantum: same as twardokus2025quantum: hybrid PQ BSM authentication with fragmentation over C-V2X.
+- anonndproposing: hybrid PQ certificates across the SCMS hierarchy under the V2V packet limit, as our PQ/hybrid SCMS does.
+- raya2007eviction: detection, local containment and revocation-based eviction of misbehaving vehicles, the loop our direction 1 closes.
+- heijden2018veremi: a simulation-generated MBD benchmark with attack ground truth, which our engine and direction 3's benchmark also provide.
+- kamel2020veremi: simulation-generated misbehaviour dataset with attack ground truth, overlapping our in-simulation attacks and direction 3 benchmark.
+- kamel2020simulation: in-simulation attacks, detection and misbehaviour reporting to an MA, overlapping our closed-loop MBD; their stated future work (MA, PKI) is what our engine has.
+- heijden2017analyzing: quantifies attack impact on safety (crashes) in V2X simulation and explicitly calls for coupling detection with SCMS revocation, which is direction 1.
+- bimeyer2012central: central MA-style evaluation of misbehaviour reports leading to exclusion, the MA decision component of direction 1.
+- kamel2019misbehavior: global MA-side analysis of misbehaviour reports, the MA decision component of direction 1.

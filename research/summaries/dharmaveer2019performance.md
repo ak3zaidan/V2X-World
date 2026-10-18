@@ -1,0 +1,11 @@
+# Performance Analysis of Spatial Distribution and Channel Quality Adaptive Protocol with DDOS Attacks In VANET
+P. Dharmaveer, S. S. · International Journal of Computer Applications 2019 · https://doi.org/10.5120/ijca2019918376 · relevance: medium · basis: abstract
+
+**Problem:** VANET Security is gradually becoming a important aspect in as large numbers of servers are being deployed 1D and 2D scenario to provide seamless traffic flow in highway and urban areas.One of the most important and prominent attack in the VANET is Distributed Denial of Service(DDoS) attack and is being considered as one of the major threats to the security of diver.The proposed method helps in faster detection of DDoS attacks and its removal hence significantly decreasing malicious nodes in the 
+**Approach:** Not described beyond the problem statement.
+**Tools and scale:** VANET Security is gradually becoming a important aspect in as large numbers of servers are being deployed 1D and 2D scenario to provide seamless traffic flow in highway and urban areas.One of the most important and prominent attack in the VANET is Distributed Denial of Service(DDoS) attack and is being considered as one of the major threats to the security of diver.The proposed method helps in fas
+**Results:** VANET Security is gradually becoming a important aspect in as large numbers of servers are being deployed 1D and 2D scenario to provide seamless traffic flow in highway and urban areas.One of the most important and prominent attack in the VANET is Distributed Denial of Service(DDoS) attack and is being considered as one of the major threats to the security of diver.The proposed method helps in faster detection of DDoS attacks and its removal hence significantly decreasing malicious nodes in the 
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection (direction 1 area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

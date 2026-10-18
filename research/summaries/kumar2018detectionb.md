@@ -1,0 +1,11 @@
+# Detection and Mitigation of Denial of Service Attacks in VANETs using Packet Detection Algorithm
+Sushil Kumar · International Journal for Research in Applied Science and Engineering Technology 2018 · https://doi.org/10.22214/ijraset.2018.3241 · relevance: medium · basis: abstract
+
+**Problem:** Network connects systems with each other to share information.The computer systems when tied together to share some information makes a network.VANET are special class of MANET.Firstly various types of network have been discussed in the paper then main focus is pervasive network that contains Wireless Mesh Network (WMN), Mobile ad-Hoc Network (MANET) and Vehicular Ad hoc Network (VANET).The main focus in the paper is on various attacks and mainly to Denial of Service (DoS) attack.The literature survey on VANET is given in detail that gives brief idea about VANETs.In this paper different algori
+**Approach:** Network connects systems with each other to share information.The computer systems when tied together to share some information makes a network.VANET are special class of MANET.Firstly various types of network have been discussed in the paper then main focus is pervasive network that contains Wireless Mesh Network (WMN), Mobile ad-Hoc Network (MANET) and Vehicular Ad hoc Network (VANET).The main focus in the paper is on various attacks and mainly to Denial of Service (DoS) attack.The literature survey on VANET is given in detail that gives brief idea about VANETs.In this paper different algorithms are used to perform the required task and MATLAB software is introduced to get the required res
+**Tools and scale:** Mentioned in abstract: MATLAB
+**Results:** No quantitative results stated in the abstract.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

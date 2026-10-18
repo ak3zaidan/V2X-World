@@ -1,0 +1,11 @@
+# CANGuard: A Spatio-Temporal CNN-GRU-Attention Hybrid Architecture for Intrusion Detection in In-Vehicle CAN Networks
+Rakib Hossain Sajib, Md. Rokon Mia, Prodip Kumar Sarker et al. · arXiv 2026 · https://arxiv.org/abs/2603.25763 · relevance: medium · basis: abstract
+
+**Problem:** The Internet of Vehicles (IoV) has become an essential component of smart transportation systems, enabling seamless interaction among vehicles and infrastructure.
+**Approach:** However, this connectivity introduces severe security vulnerabilities, particularly Denial-of-Service (DoS) and spoofing attacks targeting the Controller Area Network (CAN) bus, which could severely inhibit communication between the critical components of a vehicle, leading to system malfunctions, loss of control, or even endangering passengers' safety. To address this problem, this paper presents CANGuard, a novel spatio-temporal deep learning architecture that combines Convolutional Neural Networks (CNN), Gated Recurrent Units (GRU), and an attention mechanism to effectively identify such at
+**Tools and scale:** The model is trained and evaluated on the CICIoV2024 dataset, achieving competitive performance across accuracy, precision, recall, and F1-score and outperforming existing state-of-the-art methods.
+**Results:** The model is trained and evaluated on the CICIoV2024 dataset, achieving competitive performance across accuracy, precision, recall, and F1-score and outperforming existing state-of-the-art methods. The proposed approach demonstrates strong potential for practical and scalable security enhancements in modern IoV environments, thereby ensuring safer and more secure CAN bus communications.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection (direction 1 area); datasets/twins/surrogates (direction 3 area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

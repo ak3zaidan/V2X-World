@@ -1,0 +1,12 @@
+# An Explainable Deep Learning-based Intrusion Detection Framework for Smart Mobility
+Otuekong Ekpo, Valentina Casola, Philip Asuquo et al. · IEEE International Conference on Mobility, Operations, Services and Technologies (MOST) 2026 · https://doi.org/10.1109/most69733.2026.00025 · relevance: medium · basis: abstract
+
+**Problem:** Smart mobility systems pose unique security challenges due to their heterogeneous components, real-time communication requirements, and spatiotemporal characteristics.
+**Approach:** To address the lack of trust, transparency, and explainability in DL-based IDS, this study presents an explainable intrusion detection framework for enhancing the trust, transparency, and resiliency of DL-based IDS in smart mobility. The proposed model is comprehensively validated on multiple benchmark datasets characteristic of the heterogeneous nature of smart mobility, including VeReMi Extension, 5G-NIDD, UNSW-NB15, CICIoV2024, and Edge-IIoTset.
+**Tools and scale:** The proposed model is comprehensively validated on multiple benchmark datasets characteristic of the heterogeneous nature of smart mobility, including VeReMi Extension, 5G-NIDD, UNSW-NB15, CICIoV2024, and Edge-IIoTset.
+**Results:** Despite their limitations, they have demonstrated superior performance over traditional machine learning (ML) techniques by automatically learning complex, non-linear patterns from large-scale and heterogeneous network data. Experimental results show consistently high detection performance, achieving a precision-recall area under the curve (PR-AUC) exceeding 98% across all datasets.
+**Limitations and future work (as stated by the authors):**
+- "Smart mobility systems pose unique security challenges due to their heterogeneous components, real-time communication requirements, and spatiotemporal characteristics."
+- "Despite their limitations, they have demonstrated superior performance over traditional machine learning (ML) techniques by automatically learning complex, non-linear patterns from large-scale and heterogeneous network data."
+**Overlap with our engine:** partial — addresses misbehaviour/attack detection (direction 1 area); datasets/twins/surrogates (direction 3 area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

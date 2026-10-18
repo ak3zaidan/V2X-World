@@ -1,0 +1,164 @@
+# Batch 09 notes
+
+Source: 378 summaries in `summaries/` (batch-09). Most papers are V2X simulators, testbeds, channel models and digital twins; 122 had no abstract and were summarised from title and metadata only.
+
+## 1. Stated limitations and future-work items
+
+- garlichs2018realizing: Open questions on CPM generation rules and standardisation are discussed (abstract).
+- hui2023digital: Future research directions discussed (not itemised in abstract).
+- mundhenk2016open: Integration into an OMNeT++ library left to future work.
+- meyer2021simulator: A detailed study of saved effort and pros/cons of DCP versus alternative/proprietary couplings should be conducted.
+- tassi2019dataset: Dataset not intended for signal propagation modelling.
+- sliwa2020simulating: Integrating reinforcement-learning mobility control and networking.
+- sliwa2020simulating: combining with Data-driven Network Simulation (DDNS).
+- sliwa2020simulating: online visualisation of communication.
+- wang2022hardware: Discusses HIL challenges and solutions.
+- nardini2018modeling: Mode switching risks data loss due to PDCP/RLC interplay (noted).
+- nardini2018modeling: further extensions discussed as future work.
+- boukenadil2014importance: Plan to compare other mobility models in future work.
+- urquizaaguiar2015impact: Test other 802.11p channel capacities.
+- urquizaaguiar2015impact: empirically obtain model-difference curves across scenario types.
+- urquizaaguiar2015impact: test time discretisation of offline attenuation files and its step size (110 MB file for 300 s, 250 nodes).
+- lee2020integrating: Add partially and fully automated driving functions in future simulator.
+- nguyen2020simulation: These are fundamental first steps towards a full simulation framework.
+- shah2021rve: OBU memory/processor limits forced running the emulator on a PC.
+- boucetta2021review: Need to develop generators into intelligent tools reflecting human driving behaviour.
+- almekhlafi2024integrating: Veins constraints: simulation-to-reality gap, computational complexity, integration with emerging technologies.
+- almekhlafi2024integrating: future: Beyond-5G, AI, blockchain security, semi-virtual/hybrid simulation, wider V2X.
+- arfvidsson2024small: Implement full 5G shared-situational-awareness and intelligent intersection applications.
+- arfvidsson2024small: investigate features limiting handovers.
+- zemouri2012hints: Embedded platforms (NCTUns, MoVES) have simplified network or traffic capabilities (as noted).
+- zemouri2012hints: future: improve HINTS and evaluate protocols.
+- nardini2017simulating: Previous VeinsLTE prevented independent upgrades.
+- eldowek2021survey: Challenges and future directions for 5G channel measurements listed (not itemised in abstract).
+- bajpai2022efficient: Adapt model to different incidents.
+- bajpai2022efficient: add different beacons.
+- jiang2022svea: Future development plans discussed.
+- geller2024carlos: Potential for orchestrating distributed large-scale simulations to be explored.
+- tian2024icat: Optimise localisation accuracy.
+- tian2024icat: localisation-error-aware MPC.
+- tian2024icat: learned spatio-temporal dynamics model.
+- vandenberghe2011suitability: Urban experiments are labour-intensive and limited in topology size.
+- vandenberghe2011suitability: highway density capped at 25% of real maximum.
+- dias2012performance: Add more routing protocols.
+- dias2012performance: implement fragmentation/aggregation.
+- allig2019extending: Apply to cooperative perception investigation.
+- allig2019extending: test sensor fusion methods and message formats.
+- allig2019extending: source code not public.
+- wang2019methodologies: Without computation limits a single tool could do both.
+- wang2019methodologies: realistically they are separate.
+- qadir2025digital: Open issues and future directions using AI and robust communications.
+- babaei2025datadriven: Research directions suggested (not itemised).
+- vieira2019realistic: Further validation of simulator-introduced delay, other network parameters and other platooning control models.
+- adarbah2023digital: Open issues discussed (not itemised in abstract).
+- saghir2024comparative: Results differ across simulators with identical parameters (noted).
+- botelho2025simulator: Review recognises some limitations (truncated in abstract).
+- paula2015performance: Requires technologies for interference and QoS support.
+- blazek2018millimeter: Optimal number of clusters may change by scenario.
+- zhang2020sdr: Extend to more advanced collaborative driving applications.
+- aoki2020co: Summary and future work section (not extracted in detail).
+- brummer2023methodology: Strongly increased execution times without optimisation.
+- abenza2020simulation: Planned: FEC error-protection module.
+- abenza2020simulation: adaptive video protection.
+- abenza2020simulation: platform-specific optimisation.
+- abenza2020simulation: further platform support.
+- mafakheri2021optimizations: MAC protocols assumed ideal without collision losses.
+- mafakheri2021optimizations: models for density, MCS and message size to be derived.
+- ha2023energy: Apply detailed real-time road information.
+- ha2023energy: trajectory-based SOC reference.
+- ha2023energy: evaluate other EMS methods in real V2X environments.
+- zia2024priority: Future guidelines mentioned.
+- kidmose2025sleuth: Only pre-labelled datasets used.
+- kidmose2025sleuth: labelling unlabelled datasets left to future work.
+- kidmose2025sleuth: UNIMORE datasets too large in raw form.
+- tang2012integrated: Presented as an initial attempt.
+- danquah2014hybrist: Implement more efficient routing protocols and evaluate AODV, DSDV, DSR in the hybrid model.
+- bloessl2019case: Argues for reasonable defaults as much as functional correctness.
+- kovacs2023implementation: Parameters chosen as proof of concept, not real implementation.
+- kovacs2023implementation: CPM object count capped at 25.
+- kovacs2023implementation: refine dynamic processing-time model with real data.
+- altmemi2025software: Gaps: scalability, computational overhead, limited 5G/blockchain/AI integration.
+- altmemi2025software: future: Veins scalability, real-world validation frameworks, AI-enabled optimisation.
+- mavromatis2017agile: Future research avenues discussed for calibration (further full-stack optimisation).
+- ming2018general: Challenges of combining packet simulators into one framework and other limitations reported.
+- sharma2026modeling: Multi-speed experiments not included.
+- sharma2026modeling: future work to evaluate across speed ranges.
+- bemani2020cyber: Future: more intelligent cooperative scenarios with new wireless technology.
+- petrov2021framework: Future: impact of imperfect communication on signal control and mitigations.
+- mukhtaruzzaman2021cloud: Integrate more VANET protocols.
+- mukhtaruzzaman2021cloud: Android version.
+- landolfi2022delay: Real-road tests are next.
+- elkadi2023open: SCI1 hardcoded.
+- elkadi2023open: PSFCH/PSCCH and higher layers future work.
+- elkadi2023open: lab conditions vary results.
+- zhao2025communication: PCM slows simulation four- to fivefold.
+- zhao2025communication: future: event-triggered updates, efficient interfaces, HPC deployment, OpenSCENARIO critical scenarios, V2I cooperative perception.
+- zhong2018simulation: Future: network-level deployment strategies.
+- hapanchak2022emulation: Limited by host hardware.
+- arafat2022hardware: Optimal AGP setting balancing mobility and safety needs further investigation.
+- oliveira2024maneuver: Preliminary work.
+- palash2024benchmarking: mmWave requires additional infrastructure.
+- roongpraiwan2024digital: Reduce vehicle-DT latency.
+- roongpraiwan2024digital: more accurate prediction.
+- roongpraiwan2024digital: more sophisticated routing.
+- jat2024current: Lists questions future simulators must answer (not itemised in abstract).
+- sharmin2025digital: Testbeds lack ECU interaction fidelity.
+- sharmin2025digital: future work stated.
+- schellenberg2014evaluating: Incorporate wireless communication (charging station coordination, GLOSA) in future work.
+- ricard2019autobot: NetEm delay variation limits.
+- ricard2019autobot: extend to infotainment and OTA updates.
+- ricard2019autobot: fluctuating bandwidth from dataset.
+- saadoon2021review: Several difficulties identified that must be solved to raise VANET simulation quality.
+- bharathi2023intensive: Unresolved research issues for current and future simulators (not itemised).
+- tao2023flowsim: PyPy C-extension calls hurt performance.
+- tao2023flowsim: GIL limits.
+- tao2023flowsim: future: advanced perception, detailed communication protocols, planning and control.
+- papadakis2024smart: Need mechanisms to dynamically prioritise safety-critical traffic.
+- almutairi2024systematic: Gaps: renewable energy, recharging, encryption-effect simulation.
+- nampally2017simulators: Interlinking latency between simulators.
+- nampally2017simulators: cost of commercial tools.
+- chaves2020emucd: Lacks finer details such as varying hardware loads.
+- lee2024autonomous: Future: 5GAA TR scenarios, resource allocation, decentralised congestion control.
+- barroso2024real: Initial model.
+- ilic2026fto: Relative visibility not comparable across scenarios.
+- ilic2026fto: LoV metric needs demand-dependent calibration and observer velocity.
+- ilic2026fto: efficiency and motion-planning applications not included.
+- ilic2026fto: dependence on incomplete OSM and simplified SUMO representations.
+- yang2026near: Incorporate MEC.
+- yang2026near: cooperative multi-RSU sensing.
+- yang2026near: multi-modal semantic communication.
+- yang2026near: DT computing latency modelling.
+- hager2015literature: Open: when accurate channel emulation is needed versus simpler models.
+- hager2015literature: mobility model degrees of freedom.
+- uler2022efficient: Validate calibration with larger database.
+- uler2022efficient: module-specific calibration.
+- uler2022efficient: consider ray tracing, beam steering, leaky cables.
+- schrapel2024highway: Future research outlook.
+- wang2025application: Needs better simulation of highly complex scenarios.
+- wang2025application: add diverse scenarios, more authenticity, AI integration.
+- ahmad2025opencams: Future: 5G NR sidelink, ROS2 stacks, real-time GNSS spoofing models, MEC, real-world data streaming for DT validation.
+- plotnikov2025v2x: Requires LOS for relays.
+- anon2018simits2: Next: effect of level of detail in VCC simulation.
+- anon2018simits2: static movement configurations.
+- morra2020building: GSR measures arousal not valence.
+- morra2020building: add HR sensors.
+- morra2020building: extend to whole-experience features.
+- morra2020building: may not apply to performance phase.
+- hagiya2021acceptability: Limited scenarios.
+- hagiya2021acceptability: different participants across experiments.
+- hagiya2021acceptability: real roads differ.
+- gerhards2022digital: First approach.
+- patil2024exploring: Gaps and future directions highlighted (not itemised in abstract).
+- gao2025distributed: Future: lateral distance impact analysis.
+- hernandez2025software: 9-week implementation limited timing optimisation.
+- hernandez2025software: future: networking layer/timing sync, MAC for LiDAR volumes, RSU/edge architectures, storage optimisation.
+- sedjelmaci2025applied: Only two simulators, one protocol, mainly V2V, one real city.
+- ylmaz2025simulated: Simulation sometimes falls outside field confidence bars at 100 ms TTI.
+
+## 2. Papers with strong overlap
+
+- riebl2016improved: simulates standard-compliant signed V2X messages and their overhead inside a VANET simulator, as our 1609.2 layer does.
+- bimeyer2011simulation: attacks executed inside a coupled traffic/V2X simulation with driver reaction (closed loop), as our engine does.
+- ming2018general: attacks executed inside a coupled traffic/V2X simulation with measured traffic-level impact, as our closed-loop attack engine does.
+
+Note: several partial-overlap papers are worth a full-text check before novelty claims: silva2022security, patil2024exploring, almutairi2024systematic (reports a gap in simulating encryption effects), ahmad2025opencams (closed-loop cyber co-simulation), hazarika2025llm (LLM for V2X fault analysis), cirne2018loop (deterministic replay of security variants), song2024c (NIST 1609.2 interoperability datasets), ylmaz2025simulated (USDOT LTE-V2X field validation), shaaban2024enhancing, kishore2025secure.

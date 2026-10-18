@@ -1,0 +1,11 @@
+# Survivability Analysis of MANET Routing Protocols under DOS Attacks
+Sohail Abbas, Muhammad Haqdad, Muhammad Zahid Khan, Haseeb Ur Rehman, Ajab Khan, Atta Ur · KSII Transactions on Internet and Information Systems 2020 · https://doi.org/10.3837/tiis.2020.09.004 · relevance: medium · basis: abstract
+
+**Problem:** The network capability to accomplish its functions in a timely fashion under failures and attacks is known as survivability.Ad hoc routing protocols have been studied and extended to various domains, such as Intelligent Transport Systems (ITSs), Unmanned Aerial Vehicles (UAVs), underwater acoustic networks, and Internet of Things (IoT) focusing on different aspects, such as security, QoS, energy.The existing solutions proposed in this domain incur substantial overhead and eventually become burden on the network, especially when there are fewer attacks or no attack at all.There is a need that t
+**Approach:** The network capability to accomplish its functions in a timely fashion under failures and attacks is known as survivability.Ad hoc routing protocols have been studied and extended to various domains, such as Intelligent Transport Systems (ITSs), Unmanned Aerial Vehicles (UAVs), underwater acoustic networks, and Internet of Things (IoT) focusing on different aspects, such as security, QoS, energy.The existing solutions proposed in this domain incur substantial overhead and eventually become burden on the network, especially when there are fewer attacks or no attack at all.There is a need that the effectiveness of these routing protocols be analyzed in the presence of Denial of Service (DoS) a
+**Tools and scale:** Mentioned in abstract: NS-2, ns-2
+**Results:** No quantitative results stated in the abstract.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

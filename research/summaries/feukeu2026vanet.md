@@ -1,0 +1,11 @@
+# VANET-LA: A High-Resolution Dataset for Machine Learning-Based Link Adaptation in Urban NLOS Vehicular Networks
+Etienne Alain Feukeu · IEEE Access 2026 · https://doi.org/10.1109/access.2026.3688605 · relevance: high · basis: abstract
+
+**Problem:** The advancement of machine learning (ML)-driven link adaptation (LA) in Vehicular Ad Hoc Networks (VANETs) is fundamentally constrained by the absence of high-fidelity, publicly available datasets containing synchronized physical-layer (PHY) and mobility measurements. While existing VANET datasets predominantly capture application-layer or macroscopic traffic metrics, they critically lack the per-packet channel state information (CSI), signal-to-noise ratio (SNR), Doppler dynamics, and interference characteristics essential for training robust, real-time LA models.
+**Approach:** To bridge this gap, we present VANET-LA, a novel high-resolution dataset explicitly engineered for ML-based link adaptation research in urban non-line-of-sight (NLOS) scenarios.
+**Tools and scale:** Mentioned in abstract: IEEE 802.11p, real-world. (From the abstract only.)
+**Results:** The dataset is generated using a physics-informed methodology aligned with IEEE 802.11p standards, accurately capturing dominant impairments, including time-varying Doppler shift (0–1500 Hz), corresponding to relative speeds of up to approximately 275 km/h at a carrier frequency of 5.9 GHz; multipath delay dispersion (0– $1~\mu $ s); inter-carrier interference (ICI); and outage-constrained fading. The resulting dataset comprises 2,000 balanced samples spanning nine critical features: bandwidth, SNR, Doppler shift, delay spread, MCS index, modulation order, code rate, packet error rate (PER), and throughput. Additionally, a benchmark evaluation using a Random Forest classifier achieved 85.3% accuracy in MCS prediction, demonstrating the dataset’s readiness for machine learning applications.
+**Limitations and future work (as stated by the authors):**
+- Not stated in the abstract.
+**Overlap with our engine:** partial — Physics-informed per-packet 802.11p PHY dataset (Doppler, SNR, CSI) for ML link adaptation.
+**Novelty implications:** PHY-level ML datasets exist; cross-layer security labels do not.

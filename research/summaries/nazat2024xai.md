@@ -1,0 +1,11 @@
+# XAI-ADS: An Explainable Artificial Intelligence Framework for Enhancing Anomaly Detection in Autonomous Driving Systems
+Sazid Nazat, Lingxi Li, Mustafa Abdallah · IEEE Access 2024 · https://doi.org/10.1109/access.2024.3383431 · relevance: medium · basis: abstract
+
+**Problem:** The advent of autonomous driving systems has given rise to pressing cybersecurity issues regarding the vulnerability of vehicular ad hoc networks (VANETs) to potential attacks. This critical security problem necessitates the application of artificial intelligence (AI) models for anomaly detection in VANETs of autonomous vehicles (AVs).
+**Approach:** In this work, we propose an end-to-end XAI framework to interpret and visualize the anomaly detection classifications made by AI models securing VANETs. Moreover, we introduce two novel feature selection techniques to identify the salient features contributing to anomaly detection, derived from the popular SHAP XAI method and the accuracy of six different black-box AI models. We compare our proposed feature selection approaches with six state-of-the-art feature selection techniques (including two wrapper-based feature selection methods), demonstrating superior performance on various evaluation metrics.
+**Tools and scale:** We evaluate the framework on two real-world autonomous driving datasets. Finally, we assess the efficiency (how quickly the XAI models can yield explanatory findings) for each of the six black-box AI models we employed on our two datasets, identifying the most efficient model.
+**Results:** No quantitative results stated in the abstract.
+**Limitations and future work (as stated by the authors):**
+- However, the lack of explainability of such AI-based anomaly detection models presents challenges.
+**Overlap with our engine:** partial — Trust/reputation management for detecting malicious senders; an alternative to the SCMS misbehaviour-report -> MA -> CRL pipeline our engine models, with no linkage-based revocation or time-to-neutralise analysis.
+**Novelty implications:** Does not rule out any candidate direction; it does not model SCMS certificates, linkage-based revocation, per-message joint ground truth or counterfactual reruns.

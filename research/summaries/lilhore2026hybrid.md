@@ -1,0 +1,12 @@
+# Hybrid deep learning and graph-based intrusion detection for vehicular fog computing networks: leveraging transformers, GNNs, and GANs for enhanced security
+U. Lilhore, Sarita Simaiya, K. P., Monish Khan, Mehedi Masud, Alharbi Khalid et al. · Journal of Cloud Computing 2026 · https://doi.org/10.1186/s13677-026-00953-y · relevance: medium · basis: abstract
+
+**Problem:** Vehicular Fog Computing Networks (VFCNs) have emerged as a critical component of intelligent transportation systems, enabling latency-sensitive and safety-critical applications such as autonomous driving, real-time traffic management, and vehicle-to-everything communication.
+**Approach:** However, the highly dynamic topology, distributed architecture, and rapid mobility of VFCNs expose them to sophisticated cyber threats, including Distributed Denial-of-Service (DDoS) attacks, location spoofing, and zero-day attacks. Existing intrusion detection systems (IDS) often struggle to meet the scalability, accuracy, and low-latency requirements of such environments.
+**Tools and scale:** Mentioned in abstract: VEREMI, VeReMi
+**Results:** Extensive experiments conducted on multiple benchmark datasets, including CICIDS 2017, ToN-IoT, and VeReMi, demonstrate that the proposed HDL-IDS consistently outperforms conventional machine learning, deep learning, and existing hybrid IDS approaches. The proposed model achieves a detection accuracy of 98.5%, a false positive rate of 1.2%, and a low-latency intrusion detection system (~ 45 ms), suitable for latency-sensitive vehicular environments, while improving detection accuracy by about 5% and reducing false positives by more than 30% compared to baseline models.
+**Limitations and future work (as stated by the authors):**
+- However, the highly dynamic topology, distributed architecture, and rapid mobility of VFCNs expose them to sophisticated cyber threats, including Distributed Denial-of-Service (DDoS) attacks, location spoofing, and zero-day attacks.
+- To address these challenges, this paper proposes a Hybrid Deep Learning Intrusion Detection System (HDL-IDS) tailored for Vehicular Fog Computing Networks.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

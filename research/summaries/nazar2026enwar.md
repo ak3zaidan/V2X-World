@@ -1,0 +1,11 @@
+# ENWAR 2.0: An Agentic Multimodal Wireless LLM Framework With Reasoning, Situation-Aware Explainability and Beam Tracking
+Ahmad M. Nazar, A. Celik, Mohamed Y. Selim, Asmaa R. Abdallah et al. · IEEE Transactions on Mobile Computing 2026 · https://doi.org/10.1109/tmc.2025.3629736 · relevance: medium · basis: abstract
+
+**Problem:** The evolution of next-generation wireless networks demands intelligent, adaptive, and explainable decision-making for robust communication in dynamic environments. This paper presents <sc>Enwar 2.0</sc>, the first agentic large language model (LLM) framework integrating adaptive retrieval-augmented generation (RAG) and chain-of-thought (CoT) reasoning into situation-aware and explainable wireless network management.
+**Approach:** <sc>Enwar 2.0</sc> introduces two specialized agents: a transformer-fusion (TransFusion)-based beam prediction agent and an environment perception agent, both of which fuse multi-modal sensory inputs—including camera, LiDAR, radar, and GPS—from the DeepSense6G dataset.
+**Tools and scale:** Mentioned in abstract: 6G, LLM. (From the abstract only.)
+**Results:** The beam prediction agent enables infrastructure-to-vehicle (I2V) target-in-the-loop beam tracking and real-time adaptation based on dynamic environmental conditions. Unlike its predecessor, <sc>Enwar 1.0</sc>, which relied on static knowledge bases (KBs) and text-only LLMs, <sc>Enwar 2.0</sc> is designed for CoT reasoning, leverages LLaMa3.2-3B/LLaMa3.1-8B/LLaMa3.3-70B for text-generation, the multi-modal capabilities of LLaMa 3.2, and employs LlamaIndex for fine-grained, dynamic context retrieval, eliminating retrieval ambiguities and enhancing response relevance. Numerical results show that the beam prediction agent achieves up to 90.0% Top-3 accuracy at <inline-formula><tex-math notation="LaTeX">$t+3$</tex-math><alternatives><mml:math><mml:mrow><mml:mi>t</mml:mi><mml:mo>+</mml:mo><mml:mn>3</mml:mn></mml:mrow></mml:math><inline-graphic xlink:href="nazar-ieq1-3629736.gif"/></alternatives></inline-formula>, effectively predicting optimal beam selections three time steps ahead.
+**Limitations and future work (as stated by the authors):**
+- Not stated in the abstract.
+**Overlap with our engine:** partial — Agentic multimodal wireless LLM with explainability.
+**Novelty implications:** No security.

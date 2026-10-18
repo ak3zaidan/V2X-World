@@ -1,0 +1,11 @@
+# Reputation Value-Based Converged Dual-Channel Digital Forensics for Blockchain-Enabled Smart Vehicles
+Jingying Liang, Chen Miao, Jing Chen, Rui Zhu, Kaixian Lu, Liyang Jiao · IEEE Transactions on Intelligent Vehicles 2025 · https://doi.org/10.1109/tiv.2024.3386775 · relevance: medium · basis: abstract
+
+**Problem:** Due to the mobility of intelligent vehicles, limited performance of communication devices, and distributed deployment, the integrity and authenticity of accessible information cannot be ensured during traditional digital vehicle forensics in the event of a vehicle collision.
+**Approach:** For this reason, we propose a new attribute-based access control model. Meanwhile, to reduce insurance disputes after a vehicle collision and complicate the investigation of criminal activities by law enforcement, we classify different user behaviors according to the definition of accident rights and responsibilities in real situations based on traditional insurance methods, and provide different renewal discounts for different categories of users respectively based on the incentive mechanism of reputational value creation, to encourage users' participation and reduce insurance disputes.
+**Tools and scale:** Mentioned in abstract: blockchain
+**Results:** Meanwhile, to reduce insurance disputes after a vehicle collision and complicate the investigation of criminal activities by law enforcement, we classify different user behaviors according to the definition of accident rights and responsibilities in real situations based on traditional insurance methods, and provide different renewal discounts for different categories of users respectively based on the incentive mechanism of reputational value creation, to encourage users' participation and reduce insurance disputes. Comprehensive evaluation and analysis results show that the framework promote
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

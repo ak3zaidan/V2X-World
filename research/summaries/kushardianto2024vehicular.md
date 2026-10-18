@@ -1,0 +1,11 @@
+# Vehicular network anomaly detection based on 2-step deep learning framework
+Nur Cahyono Kushardianto, Soheyb Ribouh, Yassin El Hillali, Charles Tatkeu · Vehicular Communications 2024 · https://doi.org/10.1016/j.vehcom.2024.100802 · relevance: medium · basis: title only
+
+**Problem:** Not available (no abstract in catalog); topic inferred from title: Vehicular network anomaly detection based on 2-step deep learning framework.
+**Approach:** Not stated (title only).
+**Tools and scale:** Not stated.
+**Results:** Not stated.
+**Limitations and future work (as stated by the authors):**
+- None available from title; retrieve the paper before relying on it.
+**Overlap with our engine:** none — Generic VANET/IoV trust, reputation or intrusion-detection scheme evaluated in isolation; no SCMS, revocation pipeline, or counterfactual cross-layer evaluation.
+**Novelty implications:** No effect on our novelty claims; background only.

@@ -1,0 +1,11 @@
+# Revealing resilience: AI anomaly detection driven design considerations for Cyber Physical Systems supporting critical infrastructures in Small Island Developing States
+A. M. Si Mohammed, Daniel Goitia, Sharique Ahmad, Craig J. Ramlal · Insights into Regional Development 2025 · https://doi.org/10.70132/p6489444663 · relevance: medium · basis: abstract
+
+**Problem:** Ensuring the resilience of Cyber Physical Systems (CPSs) has emerged as a critical priority, particularly for small island developing states (SIDS) and low-resource regions such as the Caribbean.These systems, which tightly couple sensing, computation, and control, are increasingly vulnerable to operational disruptions such as cyber-attacks and sensor faults.In this context, resilience must go beyond disturbance tolerance to encompass real-time anomaly detection (AD), system adaptation, and recovery, ensuring sustained operational safety, reliability, and continuity.This paper uses a machine l
+**Approach:** Ensuring the resilience of Cyber Physical Systems (CPSs) has emerged as a critical priority, particularly for small island developing states (SIDS) and low-resource regions such as the Caribbean.These systems, which tightly couple sensing, computation, and control, are increasingly vulnerable to operational disruptions such as cyber-attacks and sensor faults.In this context, resilience must go beyond disturbance tolerance to encompass real-time anomaly detection (AD), system adaptation, and recovery, ensuring sustained operational safety, reliability, and continuity.This paper uses a machine learning based AD case study to examine the resilience of a Vehicular Cyber-Physical System (VCPS) co
+**Tools and scale:** Not stated in the abstract.
+**Results:** No quantitative results stated in the abstract.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

@@ -1,0 +1,12 @@
+# Lane Changing Detection in Multi-Lane Traffic Using Sumo Simulation with V2V Communication
+Dilsha V.V, Harshitha V, Manohar N, Suresha R, Ajay Kumar · 2025 International Conference on Vehicular Technology and Transportation Systems (ICVTTS) 2025 · https://doi.org/10.1109/icvtts67119.2025.11296404 · relevance: low · basis: abstract
+
+**Problem:** Lane-Changing behavior is complex and extremely important to ensure safe and efficient traffic flow.
+**Approach:** Existing models are not able to accurately determine whether a vehicle can safely fit into an available gap in the target lane which results in collision. Furthermore, challenges arise from varying steering wheel rotation speeds among drivers and insufficient consideration of various vehicle types and traffic conditions.
+**Tools and scale:** Vehicular setting. The available text does not describe a V2X simulator, radio stack, traffic model or SCMS-style PKI in enough detail to report; scale not stated.
+**Results:** This model facilitates adaptive decision-making and incorporates a diverse set of 41 vehicles, including low, moderate, and heavy. We used Simulation of Urban MObility (SUMO) framework by creating a three-lane traffic scenario which yield promising results with average travel time of 158.73 seconds, average speed of 9.17 m/s, speed variance of 28.57, traffic throughput of 41 vehicles, deceleration rate of 0.63 m/s2, lane change utility of 96.00 ...
+**Limitations and future work (as stated by the authors):**
+- Furthermore, challenges arise from varying steering wheel rotation speeds among drivers and insufficient consideration of various vehicle types and traffic conditions.
+- To resolve these challenges, this study presents an optimal lane-changing model with a gap utility calculation algorithm which evaluates gaps of current and target lanes combined with vehicle-to-vehicle (V2V) communication by continuously sharing real-time data—such as position and speed.
+**Overlap with our engine:** none: misbehaviour/intrusion detection in a vehicular context. Low relevance background for direction 1 (closed-loop misbehaviour to revocation); it does not model the joint traffic/radio/SCMS loop, closed-loop revocation or safety impact.
+**Novelty implications:** Rules out nothing specific in our candidate directions. Open: the integrated V2X case (SCMS scale, channel load, closed-loop safety impact) is not addressed.

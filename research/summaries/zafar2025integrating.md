@@ -1,0 +1,11 @@
+# Integrating code-based post-quantum cryptography into SSL TLS protocols through an interoperable hybrid framework
+Aasim Zafar, Syed Shamikh Iqbal · Discover Computing 2025 · https://doi.org/10.1007/s10791-025-09735-7 · relevance: low · basis: abstract
+
+**Problem:** By advancing cryptographic diversity and aligning with emerging NIST and IETF standardization efforts, the proposed framework provides a practical pathway toward quantum-resilient secure communication.It shows that code-based post-quantum cryptography can be added to current TLS systems without any problems, keeping security, performance, and compatibility in mind as we get ready for the quantum age.
+**Approach:** This paper proposes a novel hybrid TLS framework that explicitly incorporates code-based post-quantum cryptography—specifically McEliece—alongside classical key exchange mechanisms. The framework introduces a dual-handshake mechanism, adaptive parameter selection, and seamless fallback negotiation, enabling flexible deployment across heterogeneous networks while ensuring backward compatibility.
+**Tools and scale:** Not stated in the abstract beyond the above; no traffic simulator, radio stack or SCMS-scale deployment is described.
+**Results:** While recent industry and academic efforts have focused on integrating lattice-based post-quantum key encapsulation mechanisms (KEMs) such as Kyber+X25519 into hybrid TLS handshakes, these approaches often prioritize performance at the cost of cryptanalytic diversity. Results show that the proposed hybrid approach achieves up to 30% lower latency and significantly reduced resource overhead compared to pure post-quantum TLS variants, while maintaining near-classical efficiency levels.
+**Limitations and future work (as stated by the authors):**
+- "Code-based KEMs, despite their proven security measure they remain underexplored in hybrid frameworks due to some limitations like large key sizes and integration complexity."
+**Overlap with our engine:** partial — post-quantum/hybrid authentication scheme; the engine implements PQ and hybrid signatures, but the abstract states no SCMS-scale or traffic-coupled evaluation.
+**Novelty implications:** We cannot claim PQ authentication for vehicles is new; the end-to-end safety cost of PQ in a full SCMS remains open as far as this abstract shows.

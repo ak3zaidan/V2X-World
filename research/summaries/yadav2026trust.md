@@ -1,0 +1,11 @@
+# A Trust-Based Charging System for Electric Vehicles Using Blockchain-Based Energy Trading
+A. Yadav, Ashwini Kumar Meena, V. Pawar et al. · IEEE Transactions on Intelligent Vehicles 2026 · https://doi.org/10.1109/tiv.2026.3734671 · relevance: medium · basis: abstract
+
+**Problem:** The Internet of Vehicles (IoV) provides an advancement in smart transportation, enabling seamless communication between vehicles, sensors, pedestrians, and roadside units.
+**Approach:** This work proposes a blockchain-based decentralized system that integrates a Vehicle-to-Grid (V2G)-inspired mutual authentication mechanism to ensure identity privacy and security. The CBPoW (Cluster-Based Proof of Weight) consensus protocol is introduced for energy-efficient block validation and decentralized trust management.
+**Tools and scale:** Experimental analysis using a dataset of 100 EVs reveals significant performance gains, the throughput increases by 16.05% in clustered environments, while latency reduces by 63.75% compared to traditional Proof of Work (PoW), and profits for energy sellers improve by 10.91%, alongside reduced costs for buyers.
+**Results:** To enhance scalability, it employs clustering, which reduces computational load while maintaining high transaction throughput. Experimental analysis using a dataset of 100 EVs reveals significant performance gains, the throughput increases by 16.05% in clustered environments, while latency reduces by 63.75% compared to traditional Proof of Work (PoW), and profits for energy sellers improve by 10.91%, alongside reduced costs for buyers.
+**Limitations and future work (as stated by the authors):**
+- "However, the dynamic and untrusted nature of IoV possesses significant challenges such as security, privacy risks, scalability limitations, and single points of failure."
+**Overlap with our engine:** partial — addresses security overhead or cryptography (direction 2 area); datasets/twins/surrogates (direction 3 area); pseudonym privacy/linkability (runner-up area), but per the abstract without an integrated SCMS backend, closed-loop revocation, per-message joint ground truth or counterfactual reruns.
+**Novelty implications:** Does not rule out any candidate direction on the evidence of the abstract. Leaves open quantifying this in a closed loop with real SCMS revocation and traffic safety outcomes.

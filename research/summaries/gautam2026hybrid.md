@@ -1,0 +1,11 @@
+# The Hybrid Security Framework to Mitigate DDoS and Other Attacks in Vehicular Ad-Hoc Networks (VANETs): Vulnerability Assessment, Model Design as Well as Performance Evaluation -A Review
+Pooja Gautam, Hari Mohan Singh · 2026 International Conference on Signal, Systems, and Computing for Next-Gen Automation (ICSSCNA) 2026 · https://doi.org/10.1109/icsscna68616.2026.11546811 · relevance: medium · basis: abstract
+
+**Problem:** Vehicular Ad-hoc Networks (VANETs) are also the building blocks of intelligent transportation systems because they allow safety-critical applications such as real-time communication between vehicles and roadside infrastructure.
+**Approach:** Nevertheless, VANET environment is very susceptible to cyber-attacks like Distributed Denial of Service (DDoS), Sybil, replay and routing attacks because it is decentralized and has an open wireless communications media. The review will provide an in-depth discussion of the algorithmic paradigms of new hybrid security frameworks that combine machine learning-based intrusion detection, trust management schemes, and cryptographic authentication strategies to improve the security of VANET.
+**Tools and scale:** Not stated in the abstract.
+**Results:** The review will provide an in-depth discussion of the algorithmic paradigms of new hybrid security frameworks that combine machine learning-based intrusion detection, trust management schemes, and cryptographic authentication strategies to improve the security of VANET. The recent studies (2022-2026) comparative analysis has shown that the intrusion detection systems are characterized by a detection accuracy of 85-90, whereas machine learning-based methods have the capability to detect intrusion with an average of 93-96.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

@@ -1,0 +1,12 @@
+# B-bKM & LDP: a secure, cost-effective and efficient key management system for social internet of vehicles
+Maham Iftikhar, Munam Ali Shah, Hasan Shojaa Alkahtani et al. · PeerJ Computer Science 2026 · https://doi.org/10.7717/peerj-cs.4086 · relevance: low · basis: abstract
+
+**Problem:** The Social Internet of Vehicles (SIoV) combines vehicular networks with social networking principles to support advanced services such as entertainment, personalized recommendations, and smarter route planning.
+**Approach:** The proposed approach redesigns the traditional blockchain architecture by incorporating three key features: (i) a lightweight miner election mechanism to reduce overhead, (ii) personalized transaction chains that allow vehicles to securely manage and migrate cryptographic keys, and (iii) LDP-based location perturbation to safeguard users’ privacy.
+**Tools and scale:** Extensive simulations using real vehicular mobility data show that B-bKM significantly lowers communication latency and transmission costs while improving throughput and achieving stronger k-anonymity compared to existing baseline schemes.
+**Results:** The proposed approach redesigns the traditional blockchain architecture by incorporating three key features: (i) a lightweight miner election mechanism to reduce overhead, (ii) personalized transaction chains that allow vehicles to securely manage and migrate cryptographic keys, and (iii) LDP-based location perturbation to safeguard users’ privacy. Extensive simulations using real vehicular mobility data show that B-bKM significantly lowers communication latency and transmission costs while improving throughput and achieving stronger k-anonymity compared to existing baseline schemes.
+**Limitations and future work (as stated by the authors):**
+- Despite its potential, SIoV faces major challenges due to its highly dynamic environment, including secure key management, protection of location privacy, scalability, and communication latency.
+- Additionally, adaptability, scalability, and efficient resource discovery remain major challenges in SIoV environments.
+**Overlap with our engine:** none — low-relevance adjacent work (vehicular security, related: key management); no SCMS/1609.2 PKI backend, closed-loop revocation, joint ground truth or counterfactual reruns indicated.
+**Novelty implications:** Does not rule out any candidate direction; background only.

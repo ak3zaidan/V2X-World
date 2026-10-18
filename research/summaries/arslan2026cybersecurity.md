@@ -1,0 +1,11 @@
+# Cybersecurity in Intelligent Transportation Systems: A Comparative Study on AI-Based Anomaly Detection and Threat Analysis
+Recep Arslan, Turgut Özseven, Metin Mutlu Aydın, Yasin Çelik · Mechatronics and intelligent transportation systems 2026 · https://doi.org/10.56578/mits050102 · relevance: medium · basis: abstract
+
+**Problem:** The rapid integration of technology, with increasing speeds, has transformed vehicles into cyberphysical systems by connecting them to each other Vehicle-to-Everything (V2X), significantly expanding the attack surface and leaving them vulnerable to network-based threats.Current cyber intrusion detection systems (CIDS) exhibit performance degradation due to significant class imbalance, limited resilience against adversarial attacks, and insufficient interpretability for security-critical environments.To overcome the identified issues in this study, we propose Hierarchical Classifier-Agnostic Bo
+**Approach:** The rapid integration of technology, with increasing speeds, has transformed vehicles into cyberphysical systems by connecting them to each other Vehicle-to-Everything (V2X), significantly expanding the attack surface and leaving them vulnerable to network-based threats.Current cyber intrusion detection systems (CIDS) exhibit performance degradation due to significant class imbalance, limited resilience against adversarial attacks, and insufficient interpretability for security-critical environments.To overcome the identified issues in this study, we propose Hierarchical Classifier-Agnostic Boosted Stacking for Network Intrusion Detection (HCABS-NID), a hierarchical classifier-agnostic boost
+**Tools and scale:** Not stated in the abstract.
+**Results:** No quantitative results stated in the abstract.
+**Limitations and future work (as stated by the authors):**
+- None stated in the abstract.
+**Overlap with our engine:** partial — same area (V2X/vehicular security or networking) with a narrower, mechanism-level focus.
+**Novelty implications:** Does not remove any of our claims beyond its specific mechanism; we cannot claim to be first on that mechanism. The joint closed-loop traffic/radio/PKI evaluation with counterfactual ground truth remains open as far as this abstract shows.

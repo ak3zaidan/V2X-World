@@ -1,0 +1,161 @@
+# Batch 07 notes
+
+378 papers summarised (all catalogued high relevance). Summaries were built from the abstract text (or full-text conclusion/future-work excerpts where a PDF existed); papers without abstracts are marked basis "title and metadata only". Topics: CRL/revocation and certificate management, pseudonym/mix-zone location privacy, platoon/CACC attack control, traffic-signal attacks, ISO/SAE 21434 TARA, physical-layer security.
+
+## 1. Stated limitations and future work
+
+- rabiah2024token: "in the future."
+- rabiah2024token: Connected and Autonomous vehicles stand to drastically improve the safety and efficiency of the transportation system in the near future while also reducing pollution.
+- garcia2012organizational: "in the future will also need to rely on certificates for trusted communications between vehicles. • The certificate lifespan of the RSE could range from one year to the lifetime of the system as it does not have to be the same lifespan as the certificates or the OBE."
+- caballerogil2014revocation: "in the future, if it reconnects with any of these vehicles, it can use such information to decide how to proceed. If there is no RSU nearby, it uses these data to decide whether to establish the communication or not."
+- mohan2014speedup: "future work will focus on the certificate and message signature authentication acceleration. REFERENCES [1] wikipedia.org/wiki/Vehicular Ad Hoc Networks. [2] M. Kihl and M. L. Sichitiu, Inter-vehicle communication systems: A survey , IEEE Communications Surveys &Tutorials, Vol. 10, Issue 2 , pp."
+- emara2016context: "future work, we will compare CADS with advanced privacy schemes such as mix-zones. Also, we will investigate allowing vehicles measure the safety level in real-time to stop silence in critical situations, for example."
+- emara2016context: In this paper, we propose a context-adaptive pseudonym changing scheme which lets a vehicle decide autonomously when to change its pseudonym and how long it should remain silent to ensure unlinkability.
+- han2017overcoming: However, there are hidden complexities and costs that are incurred by the solution for non-safety, IP-based communications.
+- ferraz2019methods: Vehicular communication technologies, also called Vehicle-to-everything (V2X) systems, are expected to become common in the future, providing better effciency and safety in transportation.
+- ferraz2019metodos: Vehicular communication technologies, also called Vehicle-to-everything (V2X) systems, are expected to become common in the future, providing better effciency and safety in transportation.
+- christian2020improved: However, the security of these infrastructures remains a critical and significant challenge to meet.
+- khodaei2020key: We point out the remaining challenges to be addressed in order to build a central building block of secure and privacy-preserving VC systems, a Vehicular Public-Key Infrastructure (VPKI).
+- kaiser2021white: The focus of the survey conducted in this paper was Day1 C-ITS applications.The paper also lists existing standards that specify misbehaviour framework architectures and identifies future work to be done on Day2+ C-ITS applications to propose further
+- silva2022acpc: "Future Work and Open Problems In this thesis, we presented the ACPC scheme, which improves SCMS’s revoca- tion procedure by using activation codes, resulting in a more flexible way to revoke pseudonym certificates without much overhead when verifying CRLs."
+- martinfernandez2022poster: "in the future. This is possible because the hash tree allows authentication for access con- trol but network communication is assumed to be encrypted with session keys."
+- caballerogil2022query: "in the future, if it reconnects with any of these vehicles, it can use such information to decide how to proceed. If there is no RSU nearby, it uses these data to decide whether to establish the communication or not."
+- chang2023survey: "In the future, more detailed sequential prompts could be designed to write deeper reviews. ACKNOWLEDGMENT The study was major written by ChatGPT. Thank OpenAI Inc. for the ChatGPT platform (i.e. https://chat.openai.com/). REFERENCES [1] M. Hasan, S. Mohan, T. Shimizu, H."
+- chang2023survey: Due to the importance of security for Vehicular Ad-hoc NETwork (VANET), Security Credential Management System (SCMS) and Secure Vehicle-to-Everything (V2X) communication are surveyed in this study for SCMS researchers.This study designs sequential pr
+- asaju2024addressing: "future research paths.' IEEE Open Journal of the Communications Society (2023). Huang, Jiaqi, et al. 'Recent advances and challenges in security and privacy for V2X communications.' IEEE Open Journal of Vehicular Technology 1 (2020): 244-266. Yoshizawa, Takahito, et al."
+- kim2024verifying: "In the future, we plan to use the results of this study to conduct additional research to increase the security, safety, and efficiency of automobile communication systems. Data Availability No data was used to support this study."
+- lashari2025lightweight: "future work A lightweight novel privacy-enhanced authentication scheme for V2I communication was proposed in this paper."
+- li2025two: However, the communication between continuously expanding IoT devices (network connected vehicles, traffic signals and charging stations etc.) in edge has led to blurred network boundaries and need strict communication protection.
+- alzamili2026afog: We verify that FD-LRP is an efficient, privacy-preserving and viable revocation mechanism for the future 5G vehicular networks based on our results.
+- iandolo2026camasa: "Future work will extend the dataset to include additional ITS message types and to enrich communication-centric anal- yses, including inter-arrival variability, multi-RSU reception overlap, and reliability indicators, to further characterize real- world C-ITS deployments. REFERENCES [1] J. Cheng, X."
+- twardokus2026cross: Connected vehicle (CV) technologies are emerging as a crucial technology for improving safety on future roadways.
+- twardokus2026cross: We further develop formal bounds on variational cryptanalysis that establish the limitations of known techniques more generally, concluding that such attacks currently pose no credible threat to widely used cryptographic primitives such as the Advanc
+- twardokus2026cross: We begin by laying out the fundamental problem: the high overhead of standardized algorithms for quantum-resistant cryptography (QRC), including NIST’s preferred Module Lattice-based Digital Signature Algorithm (ML-DSA), is incompatible with the phys
+- robertndsegmented: However, the CRL distribution method has not been defined yet.This research focuses on efficient CRL distribution.
+- robertndsegmented: Future work includes experiments in V2V test sites beforeintroducing to the standard.
+- ge2023resilient: Connected automated vehicles (CAVs) serve as a promising enabler for future intelligent transportation systems because of their capabilities in improving traffic efficiency and driving safety, and reducing fuel consumption and vehicle emissions.
+- ge2023resilient: Furthermore, a numerically efficient offline design algorithm for determining the desired platoon control law is developed, under which the platoon resilience against DoS attacks can be maximized but the anticipated stability, safety and scalability 
+- chen2018exposing: "future work. X. R ELATED WORK Data spooﬁng attack in the CV environment. Similar to our work, previous work also identiﬁes data spooﬁng as a realistic attack vector in the CV environment. Amoozadeh et al."
+- ju2020deception: However, the position measurement of vehicles is usually vulnerable to deception attacks as it relies on external information, such as GPS and environment information from cameras.
+- au2014payment: Our system can further support the future vehicle-to-grid (V2G) paradigm.
+- li2021unlinkable: However, the existing blockchain-based authentication schemes cannot effectively achieve anonymity because colluded RSUs or vehicles can achieve linkability via the same retrieved record to destroy anonymity.
+- guo2018independent: However, it depends on the number of collaborative ones in spatiotemporal context.
+- farivar2021security: "limitations in V ANETs in practice [27–29]. They include network volatility, dela y- sensitive applications, network scale, heterogeneity, wi reless link usage, multi-hop connection, anonymity, etc. Some typ es of attacks affect the operation performance of V ANETs [27, 30]."
+- kang2016location: As one of the promising branches of the Internet of Things, the cloud-enabled Internet of Vehicles (CE-IoV) is envisioned to serve as an essential data sensing, exchanging, and processing platform with powerful computing and storage capabilities for 
+- kang2016location: However, the live VM migration may lead to unprecedented location privacy challenges.
+- suganyadevi2022data: However, the researchers continue to face significant difficulties due to security issues.
+- eckhoff2010strong: Here, we support the exchange of both the currently used pseudonym and those of future time-slots, further enhancing users' privacy.
+- dong2020impact: "Future research could investigate the scenarios that both positions and speeds are attacked. (3) Lane-changings are a common phenomenon in the realistic world, and further research is required to explore impacts of lane-changings on the cyber-attacked trafﬁc system. REFERENCES [1] C. Dong, H."
+- dong2020impact: However, there are potential cyber threats to the communication systems via on-board unit equipped in CAVs and road-side unit.
+- dong2020impact: The findings of this study provide useful information for the prediction of future cyber-attacked traffic, comprehensive evaluation of transportation systems, as well as management of automated highway systems from the perspective of network security
+- eckhoff2011slotswap: We support the exchange of both current and future pseudonyms, further enhancing users' privacy.
+- ucar2016security: It is envisioned that with the increased demand for autonomous vehicles, platoons would be the part of our lives in near future.
+- li2016assessing: However, they also open a new frontier of cybersecurity.
+- wang2020physical: "limitation. Substituting (68), (69) and (70) into (67 ), a lower bound on the secrecy probability can be obtained. REFERENCES [1] H. Seo, K. Lee, S. Y asukawa, Y . Peng, and P . Sartori, “LTE e volution for vehicle-to-everything services,” IEEE Communications Magazine , vol. 54, no. 6, pp."
+- wang2020physical: Simulation results show that a larger array antenna can provide a better robustness of the secure transmission strategy, and the optimal power allocation ratio between confidential information and AN remains almost unchanged for different numbers of 
+- feng2022cybersecurity: However, there still lacks a systematic investigation that provides a comprehensive analysis framework.
+- raja2022blockchain: Connected and Autonomous Vehicles (CAVs) are an emerging solution to the issues of safe and sustainable transportation systems in the future.
+- ding2022fully: "In the future, co-existence of multiple cyber attacks and communication channels with limited capacities will be considered."
+- farivar2021covert: We argue that future smart vehicles are vulnerable to viruses which can use adversarial learning methods to adapt themselves to hosts and remain stealth for a long period.
+- farivar2021covert: The virus/attacker interactively learns the host vehicle behaviors in terms of lateral deviation and maneuverability and tries to increase the errors to the extent that remains unnoticeable to the driver.
+- basiri2019security: "FUTURE WORK In this research, we have focused on security and robust- ness analysis of vehicle platoons based on a graph-theoretic approach."
+- khattak2024cybersecurity: The research findings would foster the development of algorithms to continuously monitor the state of cooperative automated driving environment for anomalous behavior and promote resilient and environmentally sustainable cities in the future.
+- jia2020survey: "future research directions related to location privacy protection technology are dis- cussed in combination with existing researches. The location privacy protection technology of the SIoV is the product of the era of big data, and there are still many key issues that need to be investigated."
+- jia2020survey: We further present some potential future research directions for location privacy protection technology through the analysis and summary of existing work.
+- ying2014protecting: However, these algorithms cannot be used in vehicular networks due to constrained vehicular mobility.
+- talat2019survey: However, these highly-connected vehicles have also introduced several novel security and safety threats both to the hosts and associated assets, inducing serious even life-threatening consequences.
+- jameel2022secure: The results provided here will provide a strong basis for future research efforts in the domain of vehicular communications.
+- huang2019formal: "limitations in terms of assessing the reliability of hybrid systems due to both stochastic and non-linear dynamical features. To ensure the reliability of safety c© The Author(s) 2019 R. H¨ahnle and W. van der Aalst (Eds.): F ASE 2019, LNCS 11424, pp. 210–227, 2019. https://doi.org/10."
+- li2022improving: However, the artificial noise scheme by an additional noise source to improve the physical layer security (PLS) is not suitable due to the dynamic vehicles.
+- shakir2024systematic: The survey explores the strengths, weaknesses, specific scenarios, methods, topologies, and potential future improvements of RSUs.
+- wang2019spreading: This article is expected to contribute to a better understanding of the impacts of cyberattacks on traffic and lays a foundation for future development of control strategies on mitigating the disastrous effects of cyberattacks.
+- zhou2022robust: However, the V2V communication technology also provides opportunities for cyber-attacks, where falsified information can be injected into vehicle controllers to disrupt the platoon operation and even induce vehicle collisions.
+- ghafouri2016vulnerability: "limitations, we discuss some preprocessing steps carried out in order to be able to use known algorithms for solving bilevel programs."
+- kong2017achieve: However, the wide application of vehicular sensing has its own challenges, among which location-privacy preservation and data query accuracy are two critical problems.
+- babaghayou2021whisper: However, they all suffer inherent limitations.
+- babaghayou2021whisper: In this paper, we review these limitations and propose WHISPER, a safety-aware location privacy-preserving scheme that adjusts the transmission range of vehicles in order to prevent continuous location monitoring.
+- qiu2020optimal: "future work, we will extend the current work to investigate the secrecy provisioning issues by incorporating secrecy guard zone and computation resource management for C-V2X computation-ofﬂoading network."
+- tang2021fooling: "future work. Besides, since the attack parameters are highly dependent on factors such as victim’s speed and road shape, more diverse driving scenarios are needed to evaluate the applicability of our attack. In addition, currently the best attack parameters are found via exhaustive search."
+- tang2021fooling: AD Systems and TL DetectionBaidu Apollo overview.Baidu Apollo [3] is a productiongrade open-source AD system for Level-4 AVs [7], which has already been deployed for RoboTaxi services in China [8].It follows a typical Level-4 AD system design, which 
+- zheng2020service: "In the future, on the one hand, we will introduce edge nodes and propose the architecture of the Internet of vehicles based on edge computing, optimize the communication model of the V ANET to reduce service request and response delay; on the other hand, we will further study the location privacy me"
+- huang2021impact: "future work will focus on the proactive defense strategy to safeguard CV-TSC systems from falsiﬁed data attacks. The goal of the defense strategy is to detect anomaly in BSMs and ﬁlter out falsiﬁed trajectories before applying them in the CV-based applications."
+- eckhoff2016marrying: Existing privacy measures often conflict with the requirements of future vehicular networks.
+- ren2024stealthy: However, the vulnerability of MARL algorithms to adversarial attacks has raised concerns about the security of TSCS.
+- wang2022impact: Connected and automated vehicles (CAVs) present significant potential for improving road safety and mitigating traffic congestion for the future mobility system.
+- li2023exploring: The emergence of automated vehicles (AVs) with driver-assist features, such as adaptive cruise control (ACC) and other automated driving capabilities, promises a bright future for transportation systems.
+- li2023exploring: However, these emerging features also introduce the possibility of cyberattacks.
+- ahmed2025detection: However, the reliance on interconnected communication technology in platooning necessitates robust cybersecurity measures.
+- filho2023cooperative: "Future Research. Journal of Advanced Transportation. 2020 Jan; 2020:1–10. Available from: https://www.hindawi.com/journals/jat/2020/2604012/. [24] Soni A, Hu H. Formation Control for a Fleet of Autonomous Ground Vehicles: A Su rvey. Robotics. 2018 Nov;7(4):67. Available from: http://www.mdpi."
+- guo2024adaptive: However, the independent location privacy protection mechanisms cannot consistently meet the rigorous security requirements of various IoV scenarios, which will pose a significant threat to the location privacy of IoV users.
+- anon2018blockchain: "in the future. REFERENCES 1. A. Dorri, S. A. Kanhere, R. Jurdak, and P. Gauravaram. BlockChain: A Distributed Solution to Automotive Security and Privacy , IEEE Communications Magazine, Vol. 55, No. 12, pp. 119 -125, IEEE press, 2017. 2. J. Han, M. Harishankar, X. Wang, A. J. Chung, and P. Tague."
+- zhang2023cooperative: "limitation of relay attack, this fake obstacle can only be seen by Agent A. Therefore with the observation provided by Agent B, there is no occupied area identiﬁed with the points contained, i.e., UB =∅."
+- grimm2023gap: "limitation of vulnerability handling and incident handling is addressed by our proposal depicted in fig. 3. The rationale and procedure will be explained in sec. V-B. A. Terminology: events, incidents and indicators To address B1 (cf. sec. III-B.1), some term definitions need to be discussed."
+- grimm2023gap: However, the increasing threat landscape makes these processes increasingly important, posing another industry challenge.
+- corser2013endpoint: Users in the same EPZ would share login credentials, and remain transmission-silent until outside of the EPZ, thus preventing an LBS administrator from knowing which particular user from the EPZ is active - even if the LBS administrator colludes with
+- farokhi2017private: "future work will focus on devel- oping a centralized coordination mechanism for reducing the computational complexity or outsourcing burden to cloud computing services as well as the application of the framework to other services. REFERENCES Besselink, B., Turri, V., van de Hoef, S.H., Liang, K.Y."
+- lin2021heterogeneous: However, the open network cooperation environment makes CVs vulnerable to cyberattacks, which leads to changes in driving behavior.
+- sun2010mix: However, the deployment problem of mix-zones has not been well addressed in previously reported works.
+- emara2013location: However, the sensitive information the vehicles send periodically in beacon messages make them vulnerable to tracking even if beacons are totally anonymous.
+- zhou2019double: However, the mix-zone is generally distributed at traffic junctions such as intersections.
+- wang2024analytical: While automated vehicles (AVs) are expected to revolutionize future transportation systems, emerging AV technologies also open the door for malicious actors to compromise intelligent vehicles.
+- wang2024analytical: Numerical results illustrate the attack mechanism, offering useful insights into understanding the vulnerability of future transportation systems.
+- liu2018achieving: In this paper, we first identify the limitations of current standardization and literature on addressing this issue.
+- li2019multi: However, these methods are vulnerable to attackers with background knowledge.
+- xia2022data: However, it is challenging to meet the ultrareliable and low-latency requirements of data transmission among vehicular networks due to the intrinsic movement characteristic of vehicles.
+- holland2024testing: "FUTURE WORK Using our proposed testing and verification framework, fur- ther controller tuning will be performed in a ViL environ- ment. In a ViL environment, the testing and tuning process should be completed as quickly and efficiently as possible."
+- holland2024testing: In terms of FDI estimation, however, the more conservative configuration with the minimum optimal parameter values performed the best.
+- yang2010location: However, it requires every vehicle to broadcast its location information to its neighboring nodes, and this process will compromise user's location privacy.
+- arabi2021reinforcement: However, it can be used by attackers to exploit the dynamics of the ITS and learn the optimal attack policy under the lack of deterministic information about system behavior.
+- li2024cyberattacks: This research accentuates the urgent need for more sophisticated detection and defense strategies to protect ACC vehicles against evolving cyber threats, ensuring the reliability and safety of future transportation systems.
+- ullah2025location: Finally, we discuss the future trends for the implementation of location privacy in a vehicular network.
+- vielberth2024elevating: "future research and next steps towards practical applica- tion. To ensure a high level of comprehensibility and reproducibility, we followed a methodical approach to both model development and expert interviews."
+- vielberth2024elevating: However, there is a lack of guidance on determining the appropriate level of effort.
+- khan2025decentralized: Since the limitation of zk-SNARK is it takes time to generate a proof and this has been also the focus of this study.
+- yang2025dynamic: Traditional mobile edge computing (MEC) solutions face significant limitations in these environments due to frequent link disruptions and the dynamic nature of vehicle movements.
+- eckhoff2014open: We hope that our framework lowers the complexity of privacy evaluation and thereby makes certain protection measures more likely to be considered in future vehicular networks.
+- lautenbach2019preliminary: "in the future release 16, and several researchers h ave proposed security enhancements that might be of interest. A. 5G New Radio (NR) and Physical Layer Security NR is being developed for various communication needs and is expected to provide faster and more reliable commu- nication."
+- xiang2021congestion: However, the current signal control algorithm is highly vulnerable to CV data spoofing attacks.
+- xin2019balance: However, it may compromise safety owing to the missing messages, when silent, defeating the primary goal of connected vehicles enhancing road safety.
+- meuser2020hide: "limitations, i. e., if the side condition of the game is fulﬁlled. C. Plots We use box-plots and line-plots to visualize our results. In the box-plots, the boxes show the differences between vehicles 0.1 1 10 Assigned Bandwidth 0.50 0.75 1.00 u umax NC CL GTP GK (a) Achieved relative utility. 0."
+- dasgupta2022innovative: However, the CV-based ATSC increases the size of the surface vulnerable to potential cyber-attack, allowing an attacker to generate disastrous traffic congestion in a roadway network.
+- ying2023gps: "future research directions. II. L ITERATURE REVIEW In this section, we reviewed literature related to GPS spoofing attacks and related detection models. A. GPS Spoofing Attack GPS spoofing attack has been a long-existing problem."
+
+## 2. Strong-overlap papers
+
+- rabiah2024token: proposes a full VPKI design with formal unforgeability/anonymity/unlinkability definitions and a clone attack; overlaps our SCMS backend and pseudonym provisioning
+- delgrossi2012comparison: compares privacy-preserving certificate management schemes (CAMP-era); overlaps SCMS design
+- haas2012global: evaluates global revocation for the intersection collision warning application; overlaps direction 1 (revocation to safety)
+- garcia2012organizational: USDOT analysis of SCMS/CME organisational and operational models, CRL sizing and RA/CA roles; overlaps our US SCMS backend and multi-provider direction
+- ferraz2019methods: improves SCMS linkage values and revocation procedures; overlaps our LA1/LA2 linkage-based revocation
+- ferraz2019metodos: Portuguese version of the SCMS linkage/revocation improvements; overlaps our LA/linkage revocation
+- hong2019security: describes US SCMS and pilot policy; overlaps our US SCMS model
+- oliveira2019qscmsb: post-quantum SCMS (qSCMS) with PQ butterfly key expansion; overlaps direction 2 PQ migration of the SCMS
+- khodaei2020key: thesis on VPKI identity/credential management, pseudonym provisioning and revocation at scale; overlaps our SCMS backend
+- anon2021lte: technical requirement of LTE-V2X security certificate management system; overlaps our SCMS + LTE-V2X
+- kaiser2021white: C-ITS white paper on misbehaviour detection and reporting to a Misbehaviour Authority; overlaps our MA and direction 1
+- silva2022acpc: activation-code based pseudonym revocation for SCMS; overlaps our revocation pipeline and CRL verification cost
+- chang2023survey: SCMS survey (LLM-generated); overlaps SCMS scope
+- kim2024verifying: ticket-based OCSP revocation checking under BSM timing; overlaps verification-policy cost in direction 2
+- huang2025interleaved: pseudonym distribution across multiple PCAs to reduce linkability; overlaps multi-provider SCMS and cross-layer linkability
+- twardokus2026cross: cross-layer evaluation architecture for quantum-resistant V2X security; overlaps direction 2 (PQ cost across layers)
+- anonndieeeb: IEEE 1609.2.1 standard for certificate management; our engine implements it
+- furtadondidentifying: threat identification for the SCMS; overlaps our SCMS attack modelling and 21434 runner-up
+- robertndsegmented: segmented viral CRL distribution for the SCMS; overlaps our CRL broadcast/RSU relay
+- amoozadeh2015security: simulated attacks on V2V cooperative driving (VENTOS) with collision/instability impact; overlaps closed-loop attacks inside simulation
+- chen2018exposing: congestion attack on the USDOT I-SIG signal control using spoofed BSMs in simulation; overlaps in-simulation attacks on signals
+- xiao2022secureb: multi-platoon control under data falsification; overlaps attack-to-safety impact
+- emara2015evaluation: evaluates location privacy schemes for safety applications; overlaps safety cost of privacy
+- emara2016poster: privacy extension (PREXT) for Veins with seven pseudonym-change schemes; overlaps our pseudonym simulation and cross-layer linkability runner-up
+- emara2017safety: evaluates location-privacy schemes against safety-application performance; overlaps safety cost of security
+- oruganti2019hardware: HIL testbed integrating vehicle, mobility and network simulators for cyber-attack evaluation; overlaps our integrated simulator
+- zhu2020security: LTE-V2X security analysis with platooning case study; overlaps LTE-V2X attack evaluation
+- huang2021impact: impact of falsified BSM data on CV-based signal control; overlaps attack-to-traffic impact evaluation
+- eckhoff2016marrying: holistic privacy solution evaluated against safety; overlaps safety cost of security
+- petho2024quantifying: simulation framework linking vehicle dynamics, communication and DoS attacks to safety metrics; overlaps direction 2 safety cost and closed loop
+- boeira2017impact: Sybil attacks in platooning simulated with Plexe/Veins; overlaps closed-loop attacks in simulation
+- dunn2017regular: attacker-induced traffic instability in automated vehicle streams; overlaps attack-to-traffic impact
+- ching2020enabling: VENTOS-H simulation of performance and security of intelligent traffic signal control; overlaps our co-simulated attack platform
+- eckhoff2014open: open-source location-privacy evaluation framework on Veins/SUMO; overlaps cross-layer linkability evaluation
+- lautenbach2019preliminary: security assessment of 5G V2X; overlaps NR-V2X security runner-up
+- djaidja2022adaptive: NR-V2X SPS resource-selection jamming and adaptive reservation; overlaps NR sidelink attack runner-up
+- xin2019balance: microsimulation framework measuring privacy vs safety of silence-based pseudonym change; overlaps the safety-cost-of-security direction
