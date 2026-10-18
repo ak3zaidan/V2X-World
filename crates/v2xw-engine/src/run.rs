@@ -2021,7 +2021,11 @@ impl Engine {
 
     /// Hands roadside unit `rsu` the application certificates the SCMS installed since
     /// the last call (`replace`: the first call, which drops the factory certificate).
-    fn install_rsu_app_certs(&mut self, rsu: NodeId, replace: bool) -> Vec<crate::phase2::RsuAppCred> {
+    fn install_rsu_app_certs(
+        &mut self,
+        rsu: NodeId,
+        replace: bool,
+    ) -> Vec<crate::phase2::RsuAppCred> {
         let Some(phase2) = self.phase2.as_mut() else {
             return Vec::new();
         };
@@ -2034,13 +2038,8 @@ impl Engine {
             .flat_map(|(_, c)| c)
             .collect();
         if let Some(runtime) = self.nodes.get_mut(&rsu) {
-            let ok = crate::wiring::install_rsu_app_certs(
-                runtime,
-                &self.scenario,
-                rsu,
-                &creds,
-                replace,
-            );
+            let ok =
+                crate::wiring::install_rsu_app_certs(runtime, &self.scenario, rsu, &creds, replace);
             if let Some(p) = self.phase2.as_mut() {
                 p.note_rsu_app_refused((creds.len() - ok) as u64);
             }

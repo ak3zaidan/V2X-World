@@ -581,7 +581,10 @@ fn write_corpus(run: &ScmsRun, dir: &std::path::Path) {
 }
 
 fn periods(run: &ScmsRun, node: NodeId) -> Vec<u32> {
-    run.app_installed(node).iter().map(|c| c.cred.period).collect()
+    run.app_installed(node)
+        .iter()
+        .map(|c| c.cred.period)
+        .collect()
 }
 
 /// The engine's pre-run issuance: a unit whose backhaul was up before the run joins it

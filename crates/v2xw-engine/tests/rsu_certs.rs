@@ -109,7 +109,10 @@ fn every_unit_joins_with_its_providers_certificates_and_renews_over_its_backhaul
             assert!(gaps.is_empty(), "a connected unit never starves: {gaps:?}");
             assert_eq!(*certs, 3, "weeks 614, 615 and 616, nothing else");
         } else {
-            assert_eq!(*certs, 1, "this week's only; the factory certificate is gone");
+            assert_eq!(
+                *certs, 1,
+                "this week's only; the factory certificate is gone"
+            );
         }
     }
 }
@@ -120,7 +123,10 @@ fn a_unit_without_backhaul_starves_when_its_week_lapses_and_signs_nothing() {
     let p = &o.report.phase2;
     for (connected, gaps, _, withheld) in &o.units {
         if *connected {
-            assert_eq!(*withheld, 0, "a unit with a valid certificate withholds nothing");
+            assert_eq!(
+                *withheld, 0,
+                "a unit with a valid certificate withholds nothing"
+            );
         } else {
             assert_eq!(gaps, &vec![(LAPSE_S, HORIZON_S as u64)], "the SCMS record");
             assert!(*withheld > 500, "{withheld}");
@@ -129,11 +135,7 @@ fn a_unit_without_backhaul_starves_when_its_week_lapses_and_signs_nothing() {
     assert_eq!(p.rsus_starved, 2, "{p:?}");
     // Stepped from the lapse to the end: 60 s of mobility steps at 10 a second, per unit,
     // at least (a unit also steps at its own timed wakes).
-    assert!(
-        p.rsu_starved_steps >= 1_150,
-        "{}",
-        p.rsu_starved_steps
-    );
+    assert!(p.rsu_starved_steps >= 1_150, "{}", p.rsu_starved_steps);
     assert!(
         (115 * S..=121 * S).contains(&p.rsu_starved_ns),
         "{}",

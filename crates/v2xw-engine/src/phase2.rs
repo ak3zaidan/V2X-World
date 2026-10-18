@@ -2440,7 +2440,12 @@ impl Phase2 {
     /// The intervals in `[from, to)` in which roadside unit `node` held no valid
     /// application certificate, from the SCMS's own record (ground truth).
     #[must_use]
-    pub fn rsu_starvation(&self, node: NodeId, from: SimTime, to: SimTime) -> Vec<(SimTime, SimTime)> {
+    pub fn rsu_starvation(
+        &self,
+        node: NodeId,
+        from: SimTime,
+        to: SimTime,
+    ) -> Vec<(SimTime, SimTime)> {
         let device = device_of(node);
         self.run_of(device).app_starvation(device, from, to)
     }
@@ -4441,7 +4446,10 @@ impl Phase2 {
             rsu.set("app_certs_renewed", r.rsu_app_certs_renewed);
             rsu.set(
                 "starving",
-                self.rsu_cycle.values().filter(|c| c.starved_since.is_some()).count() as u64,
+                self.rsu_cycle
+                    .values()
+                    .filter(|c| c.starved_since.is_some())
+                    .count() as u64,
             );
             rsu.set("ever_starved", r.rsus_starved);
             rsu.set("messages_withheld", r.rsu_messages_withheld);

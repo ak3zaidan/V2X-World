@@ -294,7 +294,10 @@ fn without_either_distribution_path_the_revocation_never_reaches_a_vehicle() {
         p.revoked_receptions, p.rsu_revoked_receptions,
         "a vehicle refused a revoked sender with no list installed"
     );
-    assert!(p.rsu_crls_installed > 0, "no unit installed the list over its backhaul");
+    assert!(
+        p.rsu_crls_installed > 0,
+        "no unit installed the list over its backhaul"
+    );
     assert!(
         p.rsu_revoked_receptions > 0,
         "no unit refused the revoked sender after its backhaul install"

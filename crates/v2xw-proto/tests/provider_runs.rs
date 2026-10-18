@@ -119,8 +119,15 @@ fn a_home_root_rollover_reaches_the_peers_chain_file() {
     assert!(peer.state.gov.sync_peer_from(&home.state.gov));
     assert_eq!(peer.state.gov.peer_cert(&label, "ica"), Some(&new_ica));
     assert!(peer.state.gov.lccf.certs.contains(&new_ica));
-    assert!(!peer.state.gov.sync_peer_from(&home.state.gov), "idempotent");
-    let at = home.state.gov.remove_root(old, publish + 1).expect("decided");
+    assert!(
+        !peer.state.gov.sync_peer_from(&home.state.gov),
+        "idempotent"
+    );
+    let at = home
+        .state
+        .gov
+        .remove_root(old, publish + 1)
+        .expect("decided");
     home.state.gov.publish_due(at);
     peer.state.gov.sync_trust_from(&home.state.gov);
     peer.state.gov.sync_peer_from(&home.state.gov);

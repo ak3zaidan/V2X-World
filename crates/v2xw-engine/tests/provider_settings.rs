@@ -83,19 +83,34 @@ fn each_provider_runs_its_own_ma_mode_and_crl_publication_rule() {
     let e = Engine::build(s, "").expect("builds");
     let r = rules(&e);
     assert_eq!(r[0].0, MaMode::Automatic);
-    assert!(!r[0].1 && !r[0].2, "provider-a publishes on decision: {r:?}");
+    assert!(
+        !r[0].1 && !r[0].2,
+        "provider-a publishes on decision: {r:?}"
+    );
     assert_eq!(
         r[1].0,
         MaMode::ManualReview {
             review: Duration::from_secs(3_600)
         }
     );
-    assert!(!r[1].1, "provider-b publishes on the cadence, not the SLA: {r:?}");
-    assert_eq!(r[1].2, base.phase2().unwrap().scms_runs()[1].state.params.publish_on_cadence);
+    assert!(
+        !r[1].1,
+        "provider-b publishes on the cadence, not the SLA: {r:?}"
+    );
+    assert_eq!(
+        r[1].2,
+        base.phase2().unwrap().scms_runs()[1]
+            .state
+            .params
+            .publish_on_cadence
+    );
 
     // Only provider-b named: provider-a keeps the run-wide rule.
     let mut s = grid(5.0, 100.0);
-    with_providers(&mut s, json!([{"name": "provider-b", "ma_mode": "automatic"}]));
+    with_providers(
+        &mut s,
+        json!([{"name": "provider-b", "ma_mode": "automatic"}]),
+    );
     let r = rules(&Engine::build(s, "").expect("builds"));
     assert_eq!((r[0].0, r[1].0), (eight_h, MaMode::Automatic));
 }
@@ -103,12 +118,18 @@ fn each_provider_runs_its_own_ma_mode_and_crl_publication_rule() {
 #[test]
 fn a_bad_per_provider_setting_is_refused_by_name() {
     for (providers, field) in [
-        (json!([{"name": "provider-b", "ma_mode": "lenient"}]), "ma_mode"),
+        (
+            json!([{"name": "provider-b", "ma_mode": "lenient"}]),
+            "ma_mode",
+        ),
         (
             json!([{"name": "provider-b", "ma_mode": "automatic", "ma_review_s": 60}]),
             "ma_review_s",
         ),
-        (json!([{"name": "provider-b", "ma_review_s": 60}]), "ma_review_s"),
+        (
+            json!([{"name": "provider-b", "ma_review_s": 60}]),
+            "ma_review_s",
+        ),
         (
             json!([{"name": "provider-a", "crl_publication": "weekly"}]),
             "crl_publication",
@@ -149,7 +170,15 @@ fn the_backend_view_shows_every_providers_backend() {
         .iter()
         .filter_map(|e| e["id"].as_str())
         .collect();
-    for id in ["ra", "pca", "ma", "crlg", "provider-b/ra", "provider-b/ma", "provider-b/crlg"] {
+    for id in [
+        "ra",
+        "pca",
+        "ma",
+        "crlg",
+        "provider-b/ra",
+        "provider-b/ma",
+        "provider-b/crlg",
+    ] {
         assert!(ids.contains(&id), "no {id}: {ids:?}");
     }
     let b_ra = last["entities"]
@@ -204,9 +233,18 @@ fn the_mbms_bearer_carries_every_providers_signed_crl() {
     let p = &report.phase2;
     assert_eq!(p.backend_errors, 0, "{}", p.first_backend_error);
     let runs = engine.phase2().unwrap().scms_runs();
-    assert!(runs[0].state.crlg.entries.is_empty(), "provider-a revoked nothing");
+    assert!(
+        runs[0].state.crlg.entries.is_empty(),
+        "provider-a revoked nothing"
+    );
     assert!(!runs[1].state.crlg.entries.is_empty(), "provider-b revoked");
     assert!(p.access.mbms_broadcasts > 0, "no eMBMS broadcast went out");
-    assert!(p.crls_installed > 0, "no vehicle installed provider-b's list");
-    assert_eq!(p.crl_frames_rejected, 0, "a vehicle refused the bearer's CRL");
+    assert!(
+        p.crls_installed > 0,
+        "no vehicle installed provider-b's list"
+    );
+    assert_eq!(
+        p.crl_frames_rejected, 0,
+        "a vehicle refused the bearer's CRL"
+    );
 }
