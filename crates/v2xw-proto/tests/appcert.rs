@@ -631,3 +631,21 @@ fn a_preloaded_rsu_joins_with_this_and_next_week_and_renews_in_the_run() {
         write_corpus(&run, std::path::Path::new(&dir));
     }
 }
+
+/// A compressed calendar (a 60 s i-period): the unit still asks at most one period ahead,
+/// so it holds this period's and the next, not a week of them (`ra-maxGenDelay` would
+/// otherwise admit 10,080 periods).
+#[test]
+fn on_a_compressed_calendar_a_unit_stays_one_period_ahead() {
+    let mut p = ScmsParams::default().quick();
+    p.i_period = v2xw_core::time::Duration::from_secs(60);
+    let mut run = ScmsRun::new(p).expect("certificates encode");
+    run.add_rsu(DEVICE_A);
+    run.preload_app_cert(DEVICE_A, AppCertKind::RsuApplication, 0, true)
+        .expect("pre-run flows");
+    assert_eq!(periods(&run, DEVICE_A), vec![0, 1]);
+    run.run_until(3 * 60_000_000_000 + 30_000_000_000).unwrap();
+    // Period 3 was asked at the start of period 2 and is in by 3.5 periods; period 4,
+    // asked at the start of period 3, still waits for the ACA's 60 s turnaround.
+    assert_eq!(periods(&run, DEVICE_A), vec![0, 1, 2, 3]);
+}

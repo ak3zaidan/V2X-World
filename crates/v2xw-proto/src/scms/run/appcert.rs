@@ -711,10 +711,15 @@ impl ScmsState {
     /// When the EE asks for `p`: `start(p) − lead`, never earlier than the RA allows.
     fn app_request_time(&self, kind: AppCertKind, p: u32) -> SimTime {
         let a = self.apps.params;
+        // Never more than one period ahead: on the real calendar `ra-maxGenDelay` is the
+        // RSU's one-week period, so this changes nothing; on a compressed calendar a
+        // week's lead would have the unit stockpile thousands of short periods (a unit
+        // holds at most the current and the next certificate, 03 §7).
         let lead = a
             .request_lead
             .unwrap_or(a.max_gen_ahead)
-            .min(a.max_gen_ahead);
+            .min(a.max_gen_ahead)
+            .min(self.app_period_len(kind));
         self.app_period_start(kind, p)
             .saturating_sub(lead.as_nanos())
     }
