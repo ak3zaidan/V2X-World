@@ -143,7 +143,7 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
       <table className="pkir-table compact" data-testid="pki-case-steps">
         <tbody>
           {c.steps.map((s) => (
-            <tr key={s.id} className={s.kind}>
+            <tr key={s.id} className={`step-${s.kind}`}>
               <td className="mono">{secondsText(s.t)}</td>
               <td>{s.kind === "msg" ? `${entityLabel(s.from ?? "")} → ${entityLabel(s.to ?? "")}` : `${entityLabel(s.from ?? "")} stamps`}</td>
               <td className="mono">{s.name}</td>

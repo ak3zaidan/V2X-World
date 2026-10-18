@@ -537,6 +537,19 @@ export function mapTags(
   return out;
 }
 
+/**
+ * The rings re-keyed from engine node id (what the PKI records name) to the viewer's `actor_id`
+ * (what the pose stream carries; the two differ). A node with no actor on the map is dropped.
+ */
+export function byActor(tags: ReadonlyMap<number, MapTag>, actorOf: (node: number) => number | null | undefined): Map<number, MapTag> {
+  const out = new Map<number, MapTag>();
+  for (const [node, tag] of tags) {
+    const a = actorOf(node);
+    if (typeof a === "number") out.set(a, tag);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Small readers
 // ---------------------------------------------------------------------------------------------

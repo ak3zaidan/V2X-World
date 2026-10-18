@@ -20,6 +20,7 @@ import {
   asCases,
   asCrls,
   asVehicles,
+  byActor,
   mapTags,
   providerColor,
   type CredentialState,
@@ -31,6 +32,7 @@ import { hex } from "./VehiclesTab.js";
 export function PkiMapOverlay(): React.JSX.Element | null {
   const mode = usePkiView((s) => s.mapMode);
   const caseId = usePkiView((s) => s.caseId);
+  const tagged = usePkiView((s) => s.tagged);
   const set = usePkiView((s) => s.set);
   const view = useEffectiveView();
   const on = mode !== "off";
@@ -53,15 +55,18 @@ export function PkiMapOverlay(): React.JSX.Element | null {
   );
   useEffect(() => {
     const overlays = engine.viewer?.overlays;
-    overlays?.setActorTags(on ? tags : null);
-    set({ tagged: on ? tags.size : 0 });
+    // The records name engine nodes; the viewer draws actors, and the two ids differ.
+    const onMap = byActor(tags, (n) => engine.nodes.get(n)?.actorId);
+    overlays?.setActorTags(on ? onMap : null);
+    set({ tagged: on ? onMap.size : 0 });
   }, [on, tags, set]);
   useEffect(() => () => engine.viewer?.overlays.setActorTags(null), []);
   if (!on) return null;
   const labels = (vehicles?.vehicles ?? []).map((v) => v.provider);
+  const onMap = tagged;
   return (
-    <div className="pkir-map-legend" data-testid="pki-map-legend" data-mode={mode} data-tagged={tags.size}>
-      <b>{MAP_MODE_LABEL[mode]}</b> <span className="faint">{tags.size} vehicles</span>
+    <div className="pkir-map-legend" data-testid="pki-map-legend" data-mode={mode} data-tagged={tags.size} data-on-map={onMap}>
+      <b>{MAP_MODE_LABEL[mode]}</b> <span className="faint">{tags.size} vehicles{onMap < tags.size ? ` (${onMap} on the map)` : ""}</span>
       {mode === "provider"
         ? [...new Set(labels)].sort().map((p) => <span key={p}><i style={{ borderColor: hex(providerColor(p, labels)) }} />{p}</span>)
         : null}

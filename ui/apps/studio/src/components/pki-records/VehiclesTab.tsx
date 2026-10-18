@@ -22,6 +22,7 @@ import {
   overdueProviders,
   providerColor,
   secondsText,
+  slaText,
   type CellState,
   type CredCell,
   type CredentialContext,
@@ -31,7 +32,9 @@ import {
 import { engine } from "../../state/engine.js";
 import { usePki, usePkiView } from "./state.js";
 
-const CELL_PX = 6;
+const CELL_PX = 11;
+/** Weeks shown past the last one the vehicle holds a certificate for. */
+const WEEKS_PAST_HELD = 3;
 
 export function VehiclesTab({ view }: { readonly view: string | null }): React.JSX.Element {
   const node = usePkiView((s) => s.node);
@@ -105,7 +108,7 @@ function nextTopup(r: VehicleRow, now: number): string {
   const n = r.security?.next_topup;
   if (n === undefined) return "–";
   if (n === null) return "none";
-  return n <= now ? "due" : `in ${secondsText(n - now)}`;
+  return n <= now ? "due" : `in ${slaText((n - now) / 1e9)}`;
 }
 
 function VehicleCard({ device, view }: { readonly device: string; readonly view: string }): React.JSX.Element {
@@ -134,8 +137,14 @@ function VehicleCard({ device, view }: { readonly device: string; readonly view:
 
 /** The i × j grid: one column per week, one row per j, coloured by the cell's state. */
 export function CredentialGrid({ d }: { readonly d: Pick<VehicleDetail, "grid" | "current_i" | "truth"> }): React.JSX.Element {
-  const g = useMemo(() => fullGrid(d), [d]);
+  const full = useMemo(() => fullGrid(d), [d]);
   const [hover, setHover] = useState<CredCell | null>(null);
+  // The pool horizon is years of weeks, almost all not yet available: show the weeks it holds and
+  // a few past them, and say how many more there are.
+  const lastHeld = Math.max(full.iMin, ...d.grid.held.filter((c) => c.state !== "not-yet-available").map((c) => c.i));
+  const shown = Math.min(full.columns.length, Math.max(lastHeld - full.iMin + 1 + WEEKS_PAST_HELD, 12));
+  const g = { ...full, columns: full.columns.slice(0, shown), iMax: full.iMin + shown - 1 };
+  const hidden = full.columns.length - shown;
   const w = g.columns.length * CELL_PX;
   const h = g.jmax * CELL_PX;
   const revoked = d.truth?.revoked_by ?? {};
@@ -169,7 +178,7 @@ export function CredentialGrid({ d }: { readonly d: Pick<VehicleDetail, "grid" |
         {Object.keys(revoked).length > 0 ? <span><i className="cell gt-revoked" />revoked by a published CRL (ground truth)</span> : null}
       </div>
       <div className="faint mono pkir-hover">
-        {hover ? `i ${hover.i} · j ${hover.j} · ${hover.state}${hover.id8 ? ` · ${hover.id8}` : ""}${hover.used ? " · signed with" : ""}` : `${g.columns.length} weeks × ${g.jmax}`}
+        {hover ? `i ${hover.i} · j ${hover.j} · ${hover.state}${hover.id8 ? ` · ${hover.id8}` : ""}${hover.used ? " · signed with" : ""}` : `weeks ${g.iMin}–${g.iMax} × j 0–${g.jmax - 1}${hidden > 0 ? ` · ${hidden} later weeks, not yet available, not drawn` : ""}`}
       </div>
     </div>
   );

@@ -7,6 +7,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import {
@@ -49,6 +50,16 @@ import { MANHATTAN_BBOX, generateManhattan, type GeneratedWorld } from "./manhat
 import { MOCK_CATALOGUE, MockMetricHistory, catalogueAnswer } from "./metrics.js";
 import { ACTOR_CLASSES, ACTOR_NODE_BASE, MockRun, type Profile } from "./sim.js";
 import type { GeoBbox } from "./geo.js";
+
+let pkiTabsCache: Record<string, unknown> | null | undefined;
+/** The recorded PKI view's `inspect.pki` answers (`VWP_PKI_TABS`), read once; null without it. */
+function pkiTabs(): Record<string, unknown> | null {
+  if (pkiTabsCache === undefined) {
+    const path = process.env.VWP_PKI_TABS;
+    pkiTabsCache = path ? (JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>) : null;
+  }
+  return pkiTabsCache;
+}
 
 const sha256 = (bytes: Uint8Array): Uint8Array => new Uint8Array(createHash("sha256").update(bytes).digest());
 
@@ -1176,6 +1187,23 @@ export class MockEngineServer {
           queue: { depth: 3, servers: 4, utilisation: 0.42 },
           storage_bytes: 1_048_576, open_cases: 2, decisions: 7,
         });
+      }
+      case "inspect.pki": {
+        // WP-E3: the real engine's answers on its recorded run (`pki-tabs.json`, written by
+        // `crates/v2xw-server/tests/pki.rs`), when `VWP_PKI_TABS` names that file. The mock has
+        // no SCMS of its own, so without it the query is refused as the engine refuses it.
+        const tabs = pkiTabs();
+        if (!tabs) return err(RpcErrorCode.NOT_SUPPORTED_HERE, "this run publishes no PKI view (set VWP_PKI_TABS for the recorded one)");
+        const view = String(params.view ?? "ground-truth");
+        const gt = view === "ground-truth";
+        const topic = String(params.topic ?? "");
+        const pick = (v: unknown) => (v === undefined ? err(RpcErrorCode.UNKNOWN_ID, "not in the recorded PKI view", { kind: topic, id: String(params.device ?? params.hashedid8 ?? view) }) : ok(v));
+        if (topic === "vehicles") return pick(gt ? tabs.vehicles : { ...(tabs.vehicles as object), view, vehicles: [] });
+        if (topic === "vehicle") return pick(gt ? (tabs.vehicle as Record<string, unknown>)[String(params.device ?? "")] : undefined);
+        if (topic === "cases") return pick((tabs.cases as Record<string, unknown>)[view]);
+        if (topic === "crls") return pick(tabs.crls);
+        if (topic === "crl") return pick(((tabs.crl as Record<string, Record<string, unknown>>)[String(params.hashedid8 ?? "")] ?? {})[gt ? "ground-truth" : "other"]);
+        return err(RpcErrorCode.INVALID_PARAMS, "topic must be vehicles, vehicle, cases, crls or crl");
       }
       case "explain": {
         const subject = params.subject as { kind?: string; id?: string } | undefined;
