@@ -24,6 +24,13 @@ four constant-position attackers, real cryptography, report shuffle 5 s, CRL cad
   `inspect.knowledge` (ground truth and the entity's own view) answer on the full run.
   `crates/v2xw-server/tests/pki.rs` checks the server answers the same from the slice.
 
+- `pki-studio.json` (WP-E2): what `v2xw-server` answers the Studio's PKI view on the two
+  fixtures above: `inspect.trust`, `inspect.flows` and `inspect.flow` on both, and
+  `inspect.pdu` and `inspect.knowledge` in six views on the sequence. `test/pki.test.ts` and
+  `e2e/pki.spec.ts` serve it in place of an engine. `crates/v2xw-server/tests/pki.rs`
+  writes it (`V2XW_PKI_STUDIO=1 cargo test -p v2xw-server --test pki studio_bundle`) and
+  fails when it is stale.
+
 Record shapes: `crates/v2xw-proto/src/scms/pki_view.rs`. Stable ids: a component is
 `provider/role/instance`, the SCMS Manager and electors are under `scms-manager`, a
 device is `ee/<backend device id>` (`node.credentials` carries both its engine `node` and
