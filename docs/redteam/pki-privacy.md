@@ -147,12 +147,12 @@ Each fault was applied with a restore-and-touch wrapper (same contract as `tools
 
 | Fault | Test that must go red | Result |
 |---|---|---|
-| F1: ACA handle per device request instead of per certificate | coalitions | FAULT_F1 |
-| F2: linkage value = plv1 (LA2 contribution dropped) | coalitions | FAULT_F2 |
-| F3: device refuses a CRL shorter than the one held (the R2 fix) | crl replay | FAULT_F3 |
-| F4: device skips both CRL signature checks | edited CRL | FAULT_F4 |
-| F5: RA refuses every second request, even after a policy change (the B4 fix) | second chain | FAULT_F5 |
-| F6: weekends count as business days | calendar window | FAULT_F6 |
+| F1: ACA handle per device request instead of per certificate | coalitions | RED (coalitions failed; 4 others passed) |
+| F2: linkage value = plv1 (LA2 contribution dropped) | coalitions | RED (coalitions failed; 4 others passed) |
+| F3: device refuses a CRL shorter than the one held (the R2 fix) | crl replay | RED (crl replay failed; 4 others passed) |
+| F4: device skips both CRL signature checks | edited CRL | RED (edited CRL failed; 4 others passed) |
+| F5: RA refuses every second request, even after a policy change (the B4 fix) | second chain | RED (second chain failed; 4 others passed) |
+| F6: weekends count as business days | calendar window | RED (calendar window failed; 4 others passed) |
 
 ## 7. Owed
 
