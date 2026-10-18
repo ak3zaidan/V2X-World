@@ -579,3 +579,50 @@ fn write_corpus(run: &ScmsRun, dir: &std::path::Path) {
     )
     .unwrap();
 }
+
+fn periods(run: &ScmsRun, node: NodeId) -> Vec<u32> {
+    run.app_installed(node).iter().map(|c| c.cred.period).collect()
+}
+
+/// The engine's pre-run issuance: a unit whose backhaul was up before the run joins it
+/// holding this week's certificate and next week's (requested `ra-maxGenDelay` ahead),
+/// both through the real SPDUs, marked pre-run and installed at 0; the cycle then goes on
+/// in the run and renews over the backhaul. A unit with no backhaul since installation
+/// holds this week's only and starves an hour after the next period starts.
+#[test]
+fn a_preloaded_rsu_joins_with_this_and_next_week_and_renews_in_the_run() {
+    let mut run = deployment();
+    let p = run.state.params;
+    let at = p.period_start(1) + DAY;
+    run.add_rsu(DEVICE_A);
+    run.add_rsu(DEVICE_B);
+    run.set_backhaul_outage(DEVICE_B, 0, SimTime::MAX);
+    run.preload_app_cert(DEVICE_A, AppCertKind::RsuApplication, at, true)
+        .expect("pre-run flows");
+    run.preload_app_cert(DEVICE_B, AppCertKind::RsuApplication, at, false)
+        .expect("pre-run flows");
+    assert_eq!(periods(&run, DEVICE_A), vec![1, 2]);
+    assert_eq!(periods(&run, DEVICE_B), vec![1]);
+    assert!(run.app_installed(DEVICE_A).iter().all(|c| c.at == 0));
+    assert!(run.app_installed(DEVICE_B).iter().all(|c| c.at == 0));
+    assert!(!run.state.pdus.is_empty());
+    assert!(run.state.pdus.iter().all(|r| r.preload && r.step.is_none()));
+    assert!(run.app_credential_at(DEVICE_A, at).is_some());
+    assert!(run.app_credential_at(DEVICE_B, at).is_some());
+    let horizon = p.period_start(3) - HOUR;
+    run.run_until(horizon).unwrap();
+    // Week 3 was asked for at the start of week 2, in the run.
+    assert_eq!(periods(&run, DEVICE_A), vec![1, 2, 3]);
+    let third = &run.app_installed(DEVICE_A)[2];
+    assert!(third.at >= p.period_start(2) && third.at < p.period_start(2) + HOUR);
+    assert!(run.app_starvation(DEVICE_A, at, horizon).is_empty());
+    assert!(run.state.pdus.iter().any(|r| !r.preload));
+    // B never reaches the RA again: week 1 lapses at start(2) + 1 h.
+    assert_eq!(periods(&run, DEVICE_B), vec![1]);
+    assert_eq!(
+        run.app_starvation(DEVICE_B, at, horizon),
+        vec![(p.period_start(2) + HOUR, horizon)]
+    );
+    assert!(run.state.pdu_rejections.is_empty());
+    signs_verifiably(&run, DEVICE_A);
+}

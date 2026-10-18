@@ -146,6 +146,11 @@ fn code_values() -> Vec<(&'static str, f64, &'static str)> {
             ms(app.backhaul_latency),
             "ASSUMPTION",
         ),
+        (
+            "appcert_backhaul_capacity_mbps",
+            app.backhaul_bandwidth_bps as f64 / 1e6,
+            "ASSUMPTION",
+        ),
         ("appcert_id_period_s", s(app.id_period), "ASSUMPTION"),
         ("appcert_max_gen_ahead_s", s(app.max_gen_ahead), "CITED"),
         ("appcert_retry_wait_s", s(app.retry_wait), "CITED"),
@@ -223,4 +228,19 @@ fn the_scms_carrier_uses_the_measured_handshake() {
         backend::SCMS_TLS12_FLIGHTS
     );
     assert_eq!(c12.tls, TlsVersion::Tls12);
+}
+
+/// constants.md open item 3: the library's RSU certificate cycle and the engine's
+/// roadside backhaul use one pair of figures, not two invented ones.
+#[test]
+fn the_library_rsu_backhaul_default_is_the_engines() {
+    let app = v2xw_proto::scms::run::appcert::AppCertParams::default();
+    assert_eq!(
+        app.backhaul_latency.as_nanos() as f64 / 1e6,
+        backend::BACKHAUL_LATENCY_MS
+    );
+    assert_eq!(
+        app.backhaul_bandwidth_bps as f64 / 1e6,
+        backend::BACKHAUL_CAPACITY_MBPS
+    );
 }
