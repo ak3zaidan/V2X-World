@@ -90,6 +90,10 @@ class Red(Exception):
     pass
 
 
+class Skip(Exception):
+    """Sample mode (--sample): this PDU is outside the sampled devices."""
+
+
 def need(cond, what):
     if not cond:
         raise Red(what)
@@ -438,7 +442,8 @@ def open_signed_cert_request(trust, data, self_key_of=None, want_signer_role=Non
 
 
 class Run:
-    def __init__(self, cap):
+    def __init__(self, cap, sample=None):
+        self.sample = sample        # None: every PDU; N: the first N devices of each provider
         self.cap = cap
         self.trust = Trust()
         self.keys = {k['provider']: k for k in json.load(open(os.path.join(cap, 'keys.json')))}
@@ -547,6 +552,8 @@ class Run:
         try:
             fn(data)
             self.ok[kind] += 1
+        except Skip:
+            self.notes['skipped (sample)'] += 1
         except Red as e:
             self.disagree(where, f'{kind}: {e}')
         except Exception as e:  # noqa: BLE001 - a crash on a PDU is a disagreement too
@@ -562,6 +569,17 @@ class Run:
             return
         need(o.get('hex') is not None, f'the engine failed to open it: {o.get("error")}')
         need(bytes.fromhex(o['hex']) == plain, 'the engine opened different plaintext')
+
+    def in_sample(self, p):
+        if self.sampled is None:
+            return True
+        if p['type'] in ('RaAcaCertRequestSpdu', 'AcaRaCertResponseSpdu', 'AcaEeCertResponsePrivateSpdu',
+                         'SecuredCrl'):
+            return True   # bound to a sampled device's request, or skipped inside the rule
+        self.sample_seen[p['type']] += 1
+        if self.sample_seen[p['type']] <= 3 * self.sample:
+            return True
+        return bool(self.ends.get(hid8(bytes.fromhex(p['hex'])), set()) & self.sampled)
 
     def run_pdus(self):
         for p in self.pdus:
@@ -598,6 +616,8 @@ class Run:
         for kind in order + sorted(set(p['type'] for p in self.pdus) - set(order)):
             for p in self.pdus:
                 if p['type'] != kind:
+                    continue
+                if not self.in_sample(p):
                     continue
                 h = handlers.get(kind)
                 if h is None:
@@ -799,7 +819,7 @@ class Run:
         if key not in self.bf_index:
             idx = {}
             for node, (prov, cat) in self.devices.items():
-                if prov != provider:
+                if prov != provider or (self.sampled is not None and node not in self.sampled):
                     continue
                 a, pp = int(cat['a'], 16), int(cat['p'], 16)
                 ck, ek = bytes.fromhex(cat['ck']), bytes.fromhex(cat['ek'])
@@ -812,6 +832,15 @@ class Run:
         return self.bf_index[key]
 
     def ra_aca_request(self, p, b):
+        if self.sampled is not None:
+            # Sample mode: find the device by its cocoon key before any signature work.
+            d = canon('Ieee1609Dot2Data', b)
+            t = canon('SignedCertificateRequest', d['content'][1])['tbsRequest']['content'][1][1]
+            vki = t['tbsCert']['verifyKeyIndicator']
+            if 'linkageInfo' in t and vki[0] == 'reconstructionValue':
+                idx = self.bf(self.provider_of(p), t['tbsCert']['id'][1]['iCert'])
+                if idx.get(('B', certs.point_from(P256, vki[1]))) is None:
+                    raise Skip()
         tbs_request, signer = open_signed_cert_request(self.trust, b, want_signer_role='ra')
         need(tbs_request['content'][0] == 'aca-ra' and tbs_request['content'][1][0] == 'raAcaCertRequest',
              'not a raAcaCertRequest')
@@ -843,15 +872,24 @@ class Run:
             # [02 section 9.2] the RA expanded the device's caterpillar: B and J for one (i, j).
             idx = self.bf(self.provider_of(p), i)
             hb, hj = idx.get(('B', B)), idx.get(('J', enc))
+            if hb is None and self.sampled is not None:
+                raise Skip()
             need(hb is not None, 'the cocoon signing key is no device\'s butterfly expansion')
             need(hj is not None and hj[:2] == hb[:2], 'the cocoon encryption key is not the same (device, i, j)')
             rec['device'], rec['j'], rec['b'], rec['h'] = hb[0], hb[1], hb[2], hj[2]
         self.ra_aca_req[hid8(b)] = rec
 
     def aca_ra_response(self, p, b):
+        if self.sampled is not None:
+            d = SPEC.decode('Ieee1609Dot2Data', b)
+            inner = d['content'][1]['tbsData']['payload']['data']['content'][1]
+            if SPEC.decode('ScmsPdu', inner)['content'][1][1]['requestHash'] not in self.ra_aca_req:
+                raise Skip()
         inner, signer, _ = open_signed(self.trust, b, SECURITY_MGMT_PSID, want_role='aca')
         r = scms_pdu(inner, 'aca-ra', 'acaRaCertResponse')
         need(r['version'] == 2, 'version 2')
+        if self.sampled is not None and r['requestHash'] not in self.ra_aca_req:
+            raise Skip()
         need(r['requestHash'] in self.ra_aca_req, 'requestHash names no RaAcaCertRequestSpdu')
         kind, body = r['acaResponse']
         need(kind == 'private', f'acaResponse {kind}')
@@ -860,7 +898,11 @@ class Run:
 
     def private_response(self, p, b):
         """The copy the RA handed the device: must be an ACA's response to a request in the capture."""
+        if self.sampled is not None and hid8(b) not in self.private_seen:
+            raise Skip()
         inner, signer, _ = open_signed(self.trust, b, SECURITY_MGMT_PSID, want_role='aca')
+        if self.sampled is not None and hid8(b) not in self.private_seen:
+            raise Skip()
         need(any(self.private_seen.get(hid8(b), [])), 'the device got a response no ACA sent the RA')
 
     def open_private(self, raw, req, aca, p):
@@ -1006,11 +1048,21 @@ class Run:
                 if device not in revoked and ochain.linkage_crl_revokes(c, cert):
                     revoked.add(device)
         liars = set(self.truth['liars'])
-        decided = set(self.truth['revoked'])
+        decided = {d: t for d, t in self.truth.get('decided', [])}
         try:
             need(revoked, 'no published CRL revokes any certificate')
             need(not (revoked - liars), f'honest devices revoked: {sorted(revoked - liars)}')
-            need(revoked == decided, f'the CRLs revoke {sorted(revoked)}, the MA decided {sorted(decided)}')
+            need(not (revoked - set(decided)), f'revoked without an MA decision: {sorted(revoked - set(decided))}')
+            # [SM-PROV] section 3.4.9 (03 section 10): a provider publishes within one business
+            # day of any change, so every CRL its CRACA issues after a decision carries it.
+            for d, t in sorted(decided.items()):
+                own = {bytes(c['toBeSigned']['cracaId']) for dev, _i, _j, c in self.issued if dev == d}
+                later = [c for c in getattr(self, 'crl_seen', [])
+                         if bytes(c['crlCraca'][-3:]) in own and c['crlSeries'] == 1 and c['issueDate'] > t]
+                if later:
+                    need(d in revoked, f'device {d} decided at {t}, absent from a CRL issued at {later[0]["issueDate"]}')
+                else:
+                    self.notes['decided after the last CRL of its provider (pending)'] += 1
             provs = {self.devices[d][0] for d in revoked if d in self.devices}
             self.ok['enforcement'] += 1
             self.revoked_devices = sorted(revoked)
@@ -1021,7 +1073,7 @@ class Run:
     # -- the air -------------------------------------------------------------------------------
 
     def run_air(self):
-        for f in self.air:
+        for f in (self.air if self.sampled is None else self.air[:10 * self.sample]):
             self.check(f'air/{f["node"]}/{f["msg"]}', 'air', lambda b: self.bsm(b), bytes.fromhex(f['hex']))
 
     def completeness(self):
@@ -1040,11 +1092,20 @@ class Run:
         self.jmax = 20
         self.private_seen = {}
         self.ends = {}
+        self.sampled = None
+        self.sample_seen = collections.Counter()
         self.load_trust()
+        if self.sample is not None:
+            by = collections.defaultdict(list)
+            for d, (prov, _) in sorted(self.devices.items()):
+                by[prov].append(d)
+            self.sampled = {d for v in by.values() for d in v[:self.sample]}
+            self.sampled |= set(self.truth.get('rsus', []))
         self.completeness()
         self.run_pdus()
         self.check_crl_heads()
-        self.enforcement()
+        if self.sampled is None:
+            self.enforcement()
         self.run_air()
         return self
 
@@ -1080,35 +1141,57 @@ def _flip(h, at):
 
 
 def _first(run, kind):
+    """The first PDU of `kind` (always in a sample)."""
     return next(p for p in run.pdus if p['type'] == kind)
 
 
+def _flip_pdu(run, kind, at):
+    p = _first(run, kind)
+    p['hex'] = _flip(p['hex'], at)
+
+
+def _decide(run, device, t):
+    run.truth['decided'] = run.truth.get('decided', []) + [[device, t]]
+
+
 MUTATIONS = {
-    'flip-last-byte-of-an-eca-response': lambda r: _first(r, 'EcaEeCertResponseSpdu').update(
-        hex=_flip(_first(r, 'EcaEeCertResponseSpdu')['hex'], -1)),
-    'flip-a-ciphertext-byte-of-a-ra-request': lambda r: _first(r, 'EeRaCertRequestSpdu').update(
-        hex=_flip(_first(r, 'EeRaCertRequestSpdu')['hex'], -5)),
-    'wrong-ra-private-key': lambda r: next(iter(r.keys.values()))['ra'].update(
-        enc_private='%064x' % (int(next(iter(r.keys.values()))['ra']['enc_private'], 16) ^ 1)),
+    # Bytes on the wire.
+    'flip-last-byte-of-an-eca-response': lambda r: _flip_pdu(r, 'EcaEeCertResponseSpdu', -1),
+    'flip-a-ciphertext-byte-of-a-ra-request': lambda r: _flip_pdu(r, 'EeRaCertRequestSpdu', -5),
+    'flip-a-download-request-tag': lambda r: _flip_pdu(r, 'EeRaDownloadRequestSpdu', -1),
+    'flip-an-enrolment-request-signature': lambda r: _flip_pdu(r, 'EeEcaCertRequestSpdu', -3),
+    'flip-a-sealed-plv': lambda r: _flip_pdu(r, 'EncryptedIndividualPLV', -2),
+    'flip-an-aca-response': lambda r: _flip_pdu(r, 'AcaRaCertResponseSpdu', -40),
+    'flip-a-crl-signature': lambda r: _flip_pdu(r, 'SecuredCrl', -2),
+    'flip-an-mbr-ciphertext': lambda r: _flip_pdu(r, 'SecuredMisbehaviorReport', -7),
+    'flip-a-ctl-signature': lambda r: r.gov[0]['ctls'][-1].update(hex=_flip(r.gov[0]['ctls'][-1]['hex'], -3)),
+    'flip-an-air-frame-signature': lambda r: r.air[0].update(hex=_flip(r.air[0]['hex'], -1)),
+    # Keys the recipients hold.
+    'wrong-ra-private-key': lambda r: [k['ra'].update(enc_private='%064x' % (int(k['ra']['enc_private'], 16) ^ 1))
+                                       for k in r.keys.values()],
+    'wrong-ma-private-key': lambda r: [k['ma'].update(enc_private='%064x' % (int(k['ma']['enc_private'], 16) ^ 1))
+                                       for k in r.keys.values()],
     'wrong-la-aca-key': lambda r: [e.update(key='00' * 16) for k in r.keys.values() for e in k['la_aca']],
     'wrong-device-caterpillar': lambda r: [v.update(ek='11' * 16) for k in r.keys.values()
                                            for v in k['devices'].values()],
-    'engine-opened-other-plaintext': lambda r: next(p for p in r.pdus if (p.get('opened') or {}).get('hex'))
-    ['opened'].update(hex='00'),
+    # What the engine reported.
+    'engine-opened-other-plaintext': lambda r: _first(r, 'EeRaCertRequestSpdu')['opened'].update(hex='00'),
     'drop-a-captured-pdu': lambda r: r.pdus.remove(_first(r, 'RaEeCertAckSpdu')),
-    'flip-a-crl-signature': lambda r: _first(r, 'SecuredCrl').update(hex=_flip(_first(r, 'SecuredCrl')['hex'], -2)),
-    'flip-a-ctl-signature': lambda r: r.gov[0]['ctls'][-1].update(hex=_flip(r.gov[0]['ctls'][-1]['hex'], -3)),
-    'an-honest-device-called-a-liar': lambda r: r.truth.update(revoked=r.truth['revoked'] + [-1]),
-    'flip-an-air-frame-signature': lambda r: r.air[0].update(hex=_flip(r.air[0]['hex'], -1)),
-    'flip-an-mbr-ciphertext': lambda r: _first(r, 'SecuredMisbehaviorReport').update(
-        hex=_flip(_first(r, 'SecuredMisbehaviorReport')['hex'], -7)),
+    'a-revoked-device-was-honest': lambda r: r.truth.update(liars=r.truth['liars'][1:]),
+    'a-decided-liar-missing-from-the-crls': lambda r: _decide(r, r.truth['liars'][-1], 0),
 }
 
 
-def run_mutations(cap):
+# Faults whose check needs every PDU (enforcement is computed over the whole capture).
+FULL_ONLY = {'a-revoked-device-was-honest', 'a-decided-liar-missing-from-the-crls'}
+
+
+def run_mutations(cap, sample, only=None):
     rows = []
     for name, f in MUTATIONS.items():
-        r = Run(cap)
+        if only and name not in only:
+            continue
+        r = Run(cap, None if name in FULL_ONLY else sample)
         try:
             f(r)
         except StopIteration:
@@ -1124,15 +1207,17 @@ def main():
     ap.add_argument('capture')
     ap.add_argument('--json')
     ap.add_argument('--mutate', action='store_true')
+    ap.add_argument('--only', nargs='*', help='with --mutate: these faults only')
+    ap.add_argument('--sample', type=int, help='check only the first N devices of each provider')
     a = ap.parse_args()
     if a.mutate:
-        rows = run_mutations(a.capture)
+        rows = run_mutations(a.capture, a.sample or 2, a.only)
         bad = [r for r in rows if not r[1]]
         for name, n, first in rows:
             print(f'  {"RED " if n else "MISS"} {name}: {n} disagreements; first: {first[:110]}')
         print(f'mutate: {"PASS" if not bad else "FAIL"} ({len(rows) - len(bad)}/{len(rows)} faults red)')
         return 0 if not bad else 1
-    r = Run(a.capture).main()
+    r = Run(a.capture, a.sample).main()
     total = sum(r.ok.values()) + len(r.red)
     if a.json:
         json.dump({'ok': r.ok, 'disagreements': r.red, 'ctls': r.trust.ctl_log,

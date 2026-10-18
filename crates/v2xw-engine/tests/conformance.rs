@@ -360,6 +360,10 @@ fn write_capture(o: &Outcome, engine: &Engine, dir: &Path) {
         "providers": o.providers,
         "liars": o.liars.iter().map(|n| n + SCMS_DEVICE_BASE).collect::<Vec<_>>(),
         "revoked": o.revoked.iter().map(|n| n + SCMS_DEVICE_BASE).collect::<Vec<_>>(),
+        // When the MA decided on each liar, as Time32 on the run's clock.
+        "decided": o.report.phase2.attacker_outcomes.iter()
+            .filter_map(|a| a.decided_ns.map(|t| (a.node + SCMS_DEVICE_BASE, p2.scms().state.time32(t))))
+            .collect::<Vec<_>>(),
         "rsus": p2.rsu_nodes().iter().map(|n| n.index() + SCMS_DEVICE_BASE).collect::<Vec<_>>(),
         "runs": o.runs.iter().map(|(l, kinds, rej)| {
             let mut by: BTreeMap<&str, u64> = BTreeMap::new();
