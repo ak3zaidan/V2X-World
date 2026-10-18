@@ -1188,10 +1188,24 @@ FULL_ONLY = {'a-revoked-device-was-honest', 'a-decided-liar-missing-from-the-crl
 
 def run_mutations(cap, sample, only=None):
     rows = []
+    full = None
     for name, f in MUTATIONS.items():
         if only and name not in only:
             continue
-        r = Run(cap, None if name in FULL_ONLY else sample)
+        if name in FULL_ONLY:
+            # Enforcement is computed over the whole capture: check it once, then re-run
+            # only the enforcement rule on each mutated truth.
+            if full is None:
+                full = Run(cap).main()
+                base = json.dumps(full.truth)
+                rows.append(('(unmutated full capture)', -len(full.red), full.red[0]['rule'] if full.red else 'PASS'))
+            full.truth = json.loads(base)
+            full.red = []
+            f(full)
+            full.enforcement()
+            rows.append((name, len(full.red), full.red[0]['rule'] if full.red else ''))
+            continue
+        r = Run(cap, sample)
         try:
             f(r)
         except StopIteration:
@@ -1212,10 +1226,12 @@ def main():
     a = ap.parse_args()
     if a.mutate:
         rows = run_mutations(a.capture, a.sample or 2, a.only)
-        bad = [r for r in rows if not r[1]]
+        faults = [r for r in rows if not r[0].startswith('(')]
+        bad = [r for r in faults if not r[1]] + [r for r in rows if r[0].startswith('(') and r[1] != 0]
         for name, n, first in rows:
-            print(f'  {"RED " if n else "MISS"} {name}: {n} disagreements; first: {first[:110]}')
-        print(f'mutate: {"PASS" if not bad else "FAIL"} ({len(rows) - len(bad)}/{len(rows)} faults red)')
+            tag = 'BASE' if name.startswith('(') else ('RED ' if n else 'MISS')
+            print(f'  {tag} {name}: {abs(n or 0)} disagreements; first: {first[:110]}')
+        print(f'mutate: {"PASS" if not bad else "FAIL"} ({sum(1 for r in faults if r[1])}/{len(faults)} faults red)')
         return 0 if not bad else 1
     r = Run(a.capture, a.sample).main()
     total = sum(r.ok.values()) + len(r.red)
