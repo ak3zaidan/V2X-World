@@ -1,0 +1,36 @@
+# The Midtown SCMS benchmark at a quarter of its fleet: the run docs/benchmark/scms-real-
+# benchmark.md quotes, because the full-scale file did not fit the owner's shared laptop.
+#
+# Everything is midtown-scms-benchmark.yaml (the day, the map, the radio, the US
+# deployment on the real calendar, the fast-forward timeline, the observer, the detectors,
+# 30 roadside units) except the number of road users: a quarter of the offered vehicles
+# (2,250 veh/h after the same 4x fill) and of the pedestrian and cyclist sample.
+#
+# Why the full file did not fit: every vehicle that enters the map is enrolled and given
+# its pool (two weeks of 20 pseudonym certificates) by the real 1609.2.1 flows, with real
+# P-256 arithmetic for each certificate (butterfly expansion, ECQV issuance, ECIES and
+# CCM, every SPDU signed and verified, the device's import check). On the release build
+# that costs about 0.4 CPU-s per device; the full file's first 10 simulated seconds
+# (701 nodes, 550 of them pedestrian handsets) took 1,449 s of wall time at about 20 % of
+# one core. See the benchmark document, "Run cost".
+#
+# The radio density is therefore a quarter of a real rush hour's: read the channel load,
+# the PDR and the verification load as a lower bound for Midtown, and the SCMS-per-device
+# numbers (provisioning, top-up, CRL, certificate availability) as unaffected by scale.
+schema: v2xw/scenario/1
+
+meta:
+  base: midtown-scms-benchmark.yaml
+  name: Midtown SCMS benchmark (DSRC, quarter fleet)
+  description: >-
+    The Midtown SCMS benchmark with a quarter of the road users (2,250 veh/h, 500
+    pedestrians, 50 cyclists): the laptop-scale run of the realistic baseline.
+  tags: [benchmark, real-world, manhattan, rush-hour, scms, dsrc, j2945, calendar, laptop]
+
+actors:
+  vru:
+    pedestrians: 500
+    cyclists: 50
+  vehicles:
+    demand:
+      rate_veh_per_h: 2250.0
