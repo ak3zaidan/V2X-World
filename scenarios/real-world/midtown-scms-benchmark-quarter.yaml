@@ -17,6 +17,11 @@
 # The radio density is therefore a quarter of a real rush hour's: read the channel load,
 # the PDR and the verification load as a lower bound for Midtown, and the SCMS-per-device
 # numbers (provisioning, top-up, CRL, certificate availability) as unaffected by scale.
+#
+# The live windows are shorter too (the laptop ran the quarter fleet at about 25 s of wall
+# time per simulated second): 0-60 s of rush hour (30 s warm-up, measured inside the 4x
+# fill) and 30 s across the week rollover (43,185-43,215 s). The fast-forward windows,
+# and so every backend event of the two days, are the full file's.
 schema: v2xw/scenario/1
 
 meta:
@@ -34,3 +39,9 @@ actors:
   vehicles:
     demand:
       rate_veh_per_h: 2250.0
+
+time:
+  warmup_s: 30.0
+  fast_forward:
+    - {from_s: 60.0, to_s: 43185.0}
+    - {from_s: 43215.0, to_s: 172800.0}
