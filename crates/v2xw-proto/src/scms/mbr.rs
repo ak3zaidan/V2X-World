@@ -84,6 +84,18 @@ pub const MBR_VERSION: u8 = 1;
 /// The `filename` of the `Download-Req` authenticating an upload ([SM-MBR] §4).
 pub const UPLOAD_FILENAME: &str = "misbehavior-report";
 
+/// The COER `EndEntityMaInterfacePDU` of the reference US report, bytes: a
+/// `1VInconsistent`/`ConstantPosition` report carrying two signed BSMs (the engine's
+/// evidence depth) and the accused's implicit pseudonym certificate. **Derived** from this
+/// module's encoder, not chosen: `tests/mbr.rs` builds the report on real credentials and
+/// asserts this length. The size a run charges when it has no real report to send.
+pub const REFERENCE_REPORT_COER_BYTES: u32 = 524;
+/// The upload of the reference report, bytes: the signed-then-encrypted report (804 B)
+/// plus its enrolment-signed `Download-Req` header (315 B), as [`crate::scms::run`]'s
+/// `secure_mbr` produces them ([SM-MBR] §3–4). Derived and pinned as
+/// [`REFERENCE_REPORT_COER_BYTES`].
+pub const REFERENCE_UPLOAD_BYTES: u32 = 1_119;
+
 // ---------------------------------------------------------------------------------------
 // Wire types (CvpdMbdModule v1.1, open types as OCTET STRING)
 // ---------------------------------------------------------------------------------------

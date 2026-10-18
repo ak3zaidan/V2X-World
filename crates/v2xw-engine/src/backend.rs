@@ -129,25 +129,31 @@ pub const BACKEND_NET_MODELS: [&str; 1] = ["backend-net/fixed"];
 
 /// The default one-way backhaul latency of a wired roadside unit, milliseconds.
 ///
-/// **Uncited.** It is the SCMS deployment's own backend-link figure
-/// (`v2xw_proto::ScmsParams::backend_link_latency`, a `todo-calibrate` parameter on that
-/// card), reused so a relayed message and a backend hop are not given two invented
-/// numbers. A deployment's measured RSU backhaul latency replaces it through
-/// `net.backhaul.params.latency_ms`.
+/// **ASSUMPTION** (constants.md): no document gives an RSU's field-network latency to the
+/// internet. It is the SCMS's own library backend-link figure
+/// (`v2xw_proto::ScmsParams::backend_link_latency`), reused so a relayed message and a
+/// backend hop are not given two invented numbers; the deployment's city-to-region leg
+/// is added on top (WP-D1). `net.backhaul` (`backhaul/fibre`, `dsl`, `microwave`, with a
+/// distance) or `params.latency_ms` replaces it.
 pub const BACKHAUL_LATENCY_MS: f64 = 10.0;
 
-/// The default wired backhaul capacity, Mbit/s. Uncited, as above.
+/// The default wired backhaul capacity, Mbit/s. **ASSUMPTION**: a gigabit Ethernet
+/// port. The USDOT RSU Specification v4.1 (2016) §2.1 requires a PoE (IEEE 802.3at)
+/// Ethernet interface with IPv4 and IPv6 but no rate, and the field network behind it
+/// is the deployment's.
 pub const BACKHAUL_CAPACITY_MBPS: f64 = 1000.0;
 
 /// How far a vehicle can be from a relaying roadside unit and still use its IP service,
 /// metres.
 ///
-/// **Uncited, `todo-calibrate`.** 300 m is the order of the DSRC roadside coverage radius
-/// the US deployment guidance plans around; the value that matters for a run is the
-/// sidelink's own reach, which the radio decides for a relayed *report* (it is a real
-/// frame on the air). This radius gates only the exchanges the engine does not put on the
-/// air frame by frame — a certificate top-up's batch download — and is on the model card
-/// with that caveat.
+/// **ASSUMPTION** (constants.md). The USDOT RSU Specification v4.1 §2.2 has vehicles
+/// request certificates through the RSU's IPv6 service ("request … within range of one
+/// RSU and receive them when in range of another") but prints no range; 300 m is the
+/// nominal 5.9 GHz DSRC range ("300 m nominal, up to 1000 m", Roebuck, ISART 2005 slides
+/// p.8; a vendor figure, secondary). The value that matters for a run is the sidelink's
+/// own reach, which the radio decides for a relayed *report* (it is a real frame on the
+/// air). This radius gates only the exchanges the engine does not put on the air frame
+/// by frame — a certificate top-up's batch download.
 pub const RELAY_RANGE_M: f64 = 300.0;
 
 /// The internet leg between a mobile operator's core and a backend in the same region,
@@ -256,6 +262,40 @@ pub const RECONNECT_S: f64 = 1.0;
 /// on a session older than this opens a new TCP connection and a full TLS handshake.
 pub const TLS_SESSION_MAX: Duration = Duration::from_secs(5 * 60);
 
+/// The EE↔SCMS handshake flights, bytes of TLS records: `(ClientHello, server flight,
+/// client closing flight)` for TLS 1.3 and TLS 1.2.
+///
+/// **Measured** (constants.md, "TLS"): `tools/scms_constants/tls_handshake_sizes.py`
+/// runs a real OpenSSL 3.0.15 handshake restricted to the US profile — server-only X.509
+/// authentication, ECDHE-ECDSA suites, no session tickets ([SMP] §2.1.18, §3.2;
+/// [SM-EESEC] §5.2.3; 03 §2) — and counts each flight. **ASSUMPTIONS** the measurement
+/// rests on: a two-certificate ECDSA P-256 chain (leaf 367 B + issuing CA 323 B DER; no
+/// provider publishes its TLS chain) and OpenSSL's ClientHello (an OBU's stack is not
+/// published). TLS 1.3's 80 B client Finished rides with the first request and is not
+/// charged separately; TLS 1.2's closing flight is `client_finish + 50` (the
+/// ChangeCipherSpec and record headers, 93 B measured) and the server's 51 B.
+pub const SCMS_TLS13_FLIGHTS: (u32, u32, u32) = (256, 1_066, 80);
+/// As [`SCMS_TLS13_FLIGHTS`], TLS 1.2 (`ECDHE-ECDSA-AES128-GCM-SHA256`).
+pub const SCMS_TLS12_FLIGHTS: (u32, u32, u32) = (173, 934, 43);
+
+/// The TCP/TLS figures of an EE↔SCMS connection: the transport defaults with the
+/// measured US-profile handshake flights of `tls`.
+#[must_use]
+pub fn scms_tcp_config(tls: v2xw_radio::ip_transport::TlsVersion) -> TcpConfig {
+    use v2xw_radio::ip_transport::TlsVersion;
+    let (hello, server, finish) = match tls {
+        TlsVersion::Tls12 => SCMS_TLS12_FLIGHTS,
+        _ => SCMS_TLS13_FLIGHTS,
+    };
+    TcpConfig {
+        tls,
+        client_hello: hello,
+        server_flight: server,
+        client_finish: finish,
+        ..TcpConfig::default()
+    }
+}
+
 /// Every message of a backend exchange, carried by the access model the run selected.
 ///
 /// Shared between [`BackendAccess`] (the engine's own sends: a misbehaviour report, a CRL
@@ -317,7 +357,7 @@ impl Carrier {
         let p = v2xw_proto::ScmsParams::default();
         Carrier {
             packet,
-            tcp: TcpConfig::default(),
+            tcp: scms_tcp_config(v2xw_radio::ip_transport::TlsVersion::Tls13),
             conns: BTreeMap::new(),
             sessions: BTreeMap::new(),
             session_max: TLS_SESSION_MAX,
@@ -397,7 +437,7 @@ impl Carrier {
     /// Sets the TLS version of every new session: `session-scmsAuth` is TLS 1.2 or 1.3
     /// ([SMP] §2.1.18; CAMP's EE suites are TLS 1.2, [CAMP122] §6.3.3.5).
     pub fn set_tls(&mut self, tls: v2xw_radio::ip_transport::TlsVersion) {
-        self.tcp.tls = tls;
+        self.tcp = scms_tcp_config(tls);
     }
 
     /// One message over roadside unit `rsu`'s backhaul, from `at`: its FIFO line (lost
@@ -1419,22 +1459,27 @@ mod carrier_tests {
         // server flight; TLS 1.2 (RFC 5246 §7.3): ClientHello, server flight, client key
         // exchange + Finished (+50 B ChangeCipherSpec and record headers), server
         // ChangeCipherSpec + Finished (51 B). Each segment adds its 52 B of IP/TCP headers.
+        // The flight sizes are the measured US-profile handshake (WP-D3,
+        // tools/scms_constants/tls_handshake_sizes.py): TLS 1.3 256 / 1,066 B, TLS 1.2
+        // 173 / 934 / 93 / 51 B, written out here so a changed constant fails.
         let cfg = TcpConfig::default();
         let seg = |b: u32| u64::from(b + cfg.header * b.div_ceil(cfg.mss));
         let ue = NodeId::new(5);
         let mut c13 = lte();
         let t13 = c13.tcp_carry(ue, Direction::Uplink, 1, 0).unwrap();
-        let hs13 = 120 + seg(cfg.client_hello) + seg(cfg.server_flight);
+        let hs13 = 120 + seg(256) + seg(1_066);
         let mut c12 = lte();
         c12.set_tls(TlsVersion::Tls12);
         let t12 = c12.tcp_carry(ue, Direction::Uplink, 1, 0).unwrap();
-        let hs12 = hs13 + seg(cfg.client_finish + 50) + seg(51);
+        let hs12 = 120 + seg(173) + seg(934) + seg(93) + seg(51);
         let got13 = c13.stats.tls_handshake_bytes;
         let got12 = c12.stats.tls_handshake_bytes;
-        // The flights' payload bytes are exact; ACK segments ride on top.
-        assert!(got13 >= hs13 && got13 < hs13 + 400, "{got13} vs {hs13}");
-        assert!(got12 >= hs12 && got12 < hs12 + 400, "{got12} vs {hs12}");
-        assert!(got12 - got13 >= u64::from(cfg.client_finish + 50 + 51));
+        // The flights' bytes are exact (pure ACKs are not counted as handshake bytes).
+        assert_eq!(got13, hs13);
+        assert_eq!(got12, hs12);
+        // Switching versions switches every flight, not only the round-trip count.
+        assert_eq!(scms_tcp_config(TlsVersion::Tls12).client_hello, 173);
+        assert_eq!(scms_tcp_config(TlsVersion::Tls13).server_flight, 1_066);
         assert!(
             t12 > t13,
             "TLS 1.2 takes one more round trip: {t12} vs {t13}"

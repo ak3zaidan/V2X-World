@@ -416,3 +416,41 @@ fn corpus_for_the_oracle() {
     )
     .unwrap();
 }
+
+/// The reference report of `mbr::REFERENCE_REPORT_COER_BYTES`: two of B's signed BSMs.
+fn reference_report(w: &World) -> MisbehaviorReport {
+    let (b_cert, b_key) = pseudonym(&w.run, DEVICE_B, 0);
+    MisbehaviorReport {
+        generation_time: 600_001,
+        location: LOC,
+        mbr_type: MbrType::OneVInconsistent,
+        subtypes: vec![Subtype::ConstantPosition],
+        evidence: Evidence::Suspect(SignedBsms {
+            bsms: signed_bsms(2, 20.0, &b_cert, &b_key),
+            cert: b_cert,
+        }),
+    }
+}
+
+#[test]
+fn the_reference_report_sizes_are_the_real_encoders() {
+    // WP-D3: the size a run charges for a report it did not build is not a guess; it is
+    // this report's real COER and upload length (constants.md, "Reports").
+    let mut w = world();
+    let r = reference_report(&w);
+    let coer = mbr::encode_report(&r).expect("encodes");
+    assert_eq!(coer.len(), mbr::REFERENCE_REPORT_COER_BYTES as usize);
+    let (_, _, s) = w
+        .run
+        .secure_mbr(DEVICE_A, &r, 600_000_000_000)
+        .expect("secures");
+    let header = s.header.as_ref().map_or(0, |h| h.len());
+    assert_eq!(s.report.len(), 804, "signed, then encrypted to the MA");
+    assert_eq!(header, 315, "the enrolment-signed Download-Req");
+    assert_eq!(s.report.len() + header, mbr::REFERENCE_UPLOAD_BYTES);
+    // The modelled path's payload parameter is the same derived length.
+    assert_eq!(
+        v2xw_proto::sizes::SizeParams::default().report_payload_bytes,
+        mbr::REFERENCE_REPORT_COER_BYTES
+    );
+}

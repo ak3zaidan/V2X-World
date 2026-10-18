@@ -174,7 +174,10 @@ pub struct SizeParams {
     /// Framing added by the batch container (`X_Y.zip`) around one i-period of
     /// certificates.
     pub batch_container_bytes: u32,
-    /// The TS 103 759 misbehaviour-report payload, before the envelope.
+    /// The US misbehaviour-report payload before the envelope: the COER
+    /// `EndEntityMaInterfacePDU` of [SM-MBR] v1.0. **Derived**, not chosen: the default is
+    /// the real encoder's length for the reference report
+    /// ([`crate::scms::mbr::REFERENCE_REPORT_COER_BYTES`], pinned by `tests/mbr.rs`).
     pub report_payload_bytes: u32,
     /// A linkage-chain identifier as it crosses RA → LA and MA → LA.
     pub linkage_chain_identifier_bytes: u32,
@@ -185,23 +188,23 @@ pub struct SizeParams {
 impl SizeParams {
     /// The names, in card order. Used by the conformance test, and by the cards
     /// themselves, so a new parameter cannot be added in one place only.
-    pub const NAMES: [&'static str; 5] = [
+    pub const NAMES: [&'static str; 4] = [
         "repo_url_bytes",
         "batch_container_bytes",
-        "report_payload_bytes",
         "linkage_chain_identifier_bytes",
         "etsi_subject_attributes_bytes",
     ];
 }
 
 impl Default for SizeParams {
-    /// The shipped defaults. **None of these five numbers is cited**; each is a starting
-    /// value with a plan on the card. They are grouped here so that is impossible to miss.
+    /// The shipped defaults. **None of the four [`SizeParams::NAMES`] is cited**; each is a
+    /// starting value with a plan on the card. They are grouped here so that is impossible
+    /// to miss. `report_payload_bytes` is the derived exception (WP-D3).
     fn default() -> SizeParams {
         SizeParams {
             repo_url_bytes: 64,
             batch_container_bytes: 76,
-            report_payload_bytes: 1_200,
+            report_payload_bytes: crate::scms::mbr::REFERENCE_REPORT_COER_BYTES,
             linkage_chain_identifier_bytes: 16,
             etsi_subject_attributes_bytes: 64,
         }
