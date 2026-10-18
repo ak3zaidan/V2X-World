@@ -490,3 +490,48 @@ fn each_entity_knows_only_its_share() {
         );
     }
 }
+
+/// The `node.credentials` change digest is SHA-256 over its documented encoding, truncated
+/// to 8 bytes, so it is the same on every toolchain. The pinned value was computed
+/// independently from the encoding in the function's doc comment, in Python with
+/// `hashlib` (not from this code). std's `DefaultHasher`, used before, gives another
+/// value and may change between Rust releases.
+#[test]
+fn the_credentials_change_digest_is_a_stable_sha256() {
+    use pki_view::{CredCell, credentials_digest};
+    let cell = |i: u32, j: u32, state: &str, id8: Option<&str>, used: bool| CredCell {
+        i,
+        j,
+        state: state.to_string(),
+        id8: id8.map(str::to_string),
+        used,
+    };
+    let cells = vec![
+        cell(614, 0, "active", Some("0102030405060708"), true),
+        cell(614, 1, "valid", None, false),
+        cell(615, 0, "not-yet-available", None, false),
+    ];
+    let e = Some("a1b2c3d4e5f60708");
+    let base = credentials_digest(&cells, 614, e, Some((true, false)), Some(3), false);
+    assert_eq!(
+        base, 0x6928_3c68_20a4_f4c5,
+        "SHA-256 of the encoding, first 8 bytes"
+    );
+    // Every input the record shows moves the digest.
+    let mut used = cells.clone();
+    used[1].used = true;
+    let others = [
+        credentials_digest(&used, 614, e, Some((true, false)), Some(3), false),
+        credentials_digest(&cells[..2], 614, e, Some((true, false)), Some(3), false),
+        credentials_digest(&cells, 615, e, Some((true, false)), Some(3), false),
+        credentials_digest(&cells, 614, None, Some((true, false)), Some(3), false),
+        credentials_digest(&cells, 614, e, Some((true, true)), Some(3), false),
+        credentials_digest(&cells, 614, e, None, Some(3), false),
+        credentials_digest(&cells, 614, e, Some((true, false)), Some(4), false),
+        credentials_digest(&cells, 614, e, Some((true, false)), None, false),
+        credentials_digest(&cells, 614, e, Some((true, false)), Some(3), true),
+    ];
+    for (k, d) in others.iter().enumerate() {
+        assert_ne!(*d, base, "variant {k} must change the digest");
+    }
+}

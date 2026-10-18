@@ -1172,6 +1172,71 @@ pub struct HeldCert {
     pub state: &'static str,
 }
 
+/// The change digest of a `node.credentials` record: SHA-256 over a fixed, tagged and
+/// length-prefixed encoding of everything the record shows, truncated to its first 8 bytes
+/// (big-endian). It decides whether a record repeats the last one, so it must not move with
+/// the toolchain: std's `DefaultHasher` (used before) has an unspecified algorithm that may
+/// change between Rust releases, which would change which records a pinned run emits.
+///
+/// Encoding, in order: `"v2xw/node.credentials/1"`; the cell count (u32 BE); per cell `i`,
+/// `j` (u32 BE), `state` (u32 BE length + UTF-8), `id8` (0x00, or 0x01 + u32 BE length +
+/// UTF-8), `used` (one byte); `current_i` (u32 BE); `enrolment` (as `id8`); the device
+/// flags (0x00, or 0x01 + `enrolled` byte + `silenced` byte); `ctl_sequence` (0x00, or
+/// 0x01 + u32 BE); `revoked` (one byte).
+#[must_use]
+pub fn credentials_digest(
+    cells: &[CredCell],
+    current_i: u32,
+    enrolment: Option<&str>,
+    device_flags: Option<(bool, bool)>,
+    ctl_sequence: Option<u32>,
+    revoked: bool,
+) -> u64 {
+    fn text(b: &mut Vec<u8>, s: &str) {
+        let n = u32::try_from(s.len()).unwrap_or(u32::MAX);
+        b.extend_from_slice(&n.to_be_bytes());
+        b.extend_from_slice(s.as_bytes());
+    }
+    fn opt_text(b: &mut Vec<u8>, s: Option<&str>) {
+        match s {
+            None => b.push(0),
+            Some(s) => {
+                b.push(1);
+                text(b, s);
+            }
+        }
+    }
+    let mut b = Vec::with_capacity(32 + cells.len() * 40);
+    b.extend_from_slice(b"v2xw/node.credentials/1");
+    let n = u32::try_from(cells.len()).unwrap_or(u32::MAX);
+    b.extend_from_slice(&n.to_be_bytes());
+    for c in cells {
+        b.extend_from_slice(&c.i.to_be_bytes());
+        b.extend_from_slice(&c.j.to_be_bytes());
+        text(&mut b, &c.state);
+        opt_text(&mut b, c.id8.as_deref());
+        b.push(u8::from(c.used));
+    }
+    b.extend_from_slice(&current_i.to_be_bytes());
+    opt_text(&mut b, enrolment);
+    match device_flags {
+        None => b.push(0),
+        Some((enrolled, silenced)) => {
+            b.extend_from_slice(&[1, u8::from(enrolled), u8::from(silenced)]);
+        }
+    }
+    match ctl_sequence {
+        None => b.push(0),
+        Some(s) => {
+            b.push(1);
+            b.extend_from_slice(&s.to_be_bytes());
+        }
+    }
+    b.push(u8::from(revoked));
+    let d = v2xw_core::hash::sha256(&b);
+    u64::from_be_bytes([d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]])
+}
+
 /// The pool of `device` (in `run`) from what its node holds, or `None` when the record
 /// would repeat the last one. `active` is the certificate it signs with now; `revoked`
 /// whether the vehicle knows itself revoked (it found itself on a CRL).
@@ -1228,17 +1293,14 @@ pub fn node_credentials(
     let enrolment = dev
         .and_then(|d| d.enrolment_credential.as_ref())
         .map(|e| hex(&cert_id8(&e.cert)));
-    let digest = {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        for c in &cells {
-            (c.i, c.j, &c.state, &c.id8, c.used).hash(&mut h);
-        }
-        (current_i, &enrolment, dev.map(|d| (d.enrolled, d.silenced))).hash(&mut h);
-        dev.and_then(|d| d.trust.ctl_sequence).hash(&mut h);
-        revoked.hash(&mut h);
-        h.finish()
-    };
+    let digest = credentials_digest(
+        &cells,
+        current_i,
+        enrolment.as_deref(),
+        dev.map(|d| (d.enrolled, d.silenced)),
+        dev.and_then(|d| d.trust.ctl_sequence),
+        revoked,
+    );
     if entry.0 == digest && digest != 0 {
         return None;
     }
