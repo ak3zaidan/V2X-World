@@ -18,6 +18,8 @@ import {
   NODE_FEED_VERSION,
   VWP_NOTIFICATIONS,
   parseNodeFeed,
+  type FeedCrypto,
+  type FeedCryptoOp,
   type FeedQueue,
   type FeedQueues,
   type FeedWaiting,
@@ -35,6 +37,10 @@ const raw: unknown = JSON.parse(readFileSync(VECTOR, "utf8"));
  */
 const TOP = [
   "v", "node", "t_ns", "since_ns", "reset", "sent", "received", "omitted", "shed", "undetected", "history_ns", "queues",
+  // `crypto` is optional in the interface (an engine that predates it omits it), but the
+  // vector is captured from the current server, so it must be present; the bless in 5c492dfe
+  // added it to the vector without adding it here, which is what this test caught.
+  "crypto",
 ] as const satisfies readonly (keyof NodeFeedNotification)[];
 const SENT = ["msg", "t_ns", "type", "bytes", "radio", "signer", "pseudonym", "timing", "decoded"] as const satisfies readonly (keyof FeedSent)[];
 const RECEIVED_DELIVERED = [
@@ -46,6 +52,10 @@ const QUEUE = [
   "waiting_omitted", "reported_depth",
 ] as const satisfies readonly (keyof FeedQueue)[];
 const QUEUES = ["t_ns", "step_ms", "kernel_lead_ms", "window_ms", "drop_window_ms", "source", "list"] as const satisfies readonly (keyof FeedQueues)[];
+const CRYPTO = ["profile", "sign", "verify", "explanation"] as const satisfies readonly (keyof FeedCrypto)[];
+const CRYPTO_OP = [
+  "op", "service_us", "range_us", "runs_on", "basis", "source", "label", "where_text", "basis_text", "modelled_ms",
+] as const satisfies readonly (keyof FeedCryptoOp)[];
 const WAITING = ["msg", "type", "from", "enqueued_ns", "left_ns", "waited_ms", "stage"] as const satisfies readonly (keyof FeedWaiting)[];
 
 const keys = (o: unknown): string[] => Object.keys(o as Record<string, unknown>).sort();
@@ -75,6 +85,12 @@ describe("node.feed v1 — the shared vector", () => {
     const tx = v.queues.list.find((q) => q.id === "tx");
     expect(tx?.waiting.length, "the vector's transmit queue lists the frame that waited in the step").toBeGreaterThan(0);
     expect(keys(tx?.waiting[0])).toEqual([...WAITING].sort());
+    expect(v.crypto, "the vector carries the node's crypto placement").toBeTruthy();
+    expect(keys(v.crypto)).toEqual([...CRYPTO].sort());
+    for (const op of [v.crypto?.sign, v.crypto?.verify]) {
+      expect(op, "the vector's node both signs and verifies").toBeTruthy();
+      expect(keys(op)).toEqual([...CRYPTO_OP].sort());
+    }
   });
 
   it("decodes a BSM whose spans tile its SPDU and whose signer is the frame's pseudonym", () => {
