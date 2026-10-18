@@ -2,6 +2,8 @@
 
 Date: 2026-10-17. Inputs: `eval-A-counterfactual.md`, `eval-B-revocation.md`, `eval-C-robustness-and-threshold.md`, `eval-traction.md`, `novelty-check.md`, `open-questions.md`, `claims-we-cannot-make.md`, plus a fresh round of kill searches made for this file (listed in §5). Ids resolve to `summaries/<id>.md`. Papers marked NEW are not in `catalog.jsonl`.
 
+> **Superseded (corrected after critique).** Five critiques (`critique-framed.md`, `critique-f1.md`, `critique-disagree.md`, `critique-methods.md`, `critique-blind-proposals.md`) found errors in this file, marked inline below. The current recommendation is `final-three-approaches.md`.
+
 Criteria, in order: (1) novel after the full-text checks; (2) useful, meaning a standards body, an operator or other researchers would change what they do because of the result; (3) traction and venue fit; (4) the engine is unusually well placed to do it. Time and effort are ignored.
 
 ## 0. The decision in one table
@@ -29,15 +31,15 @@ Measure what it costs an attacker to get an honest vehicle revoked through the r
 - **RQ1.1 Attacker cost.** What is the minimum attacker resource that gets an honest vehicle onto the CRL, under each MA policy? The resources compared are: credentialed insiders; one insider's concurrently valid pseudonyms used as Sybil reporters; reactive jamming minutes that cause signature failures with no insider at all (the attack of twardokus2021targeted carried through to revocation); and reports filed through a different provider's RA or MA.
 - **RQ1.2 Victim cost.** What does a wrongful revocation cost? The parts are the credential outage until re-enrolment, the lost awareness for the victim's neighbours, the safety cost of both (from paired same-seed counterfactuals), and a privacy cost. A CRL entry publishes linkage seeds, so the victim's remaining pseudonyms become linkable by any listener. Framing therefore doubles as a targeted tracking attack.
 - **RQ1.3 Reporter privacy.** Stopping Sybil reports needs the MA to establish that reports come from different devices. In the SCMS that requires LA or PCA cooperation. How much reporter linkage must the MA buy to raise the framing cost by a given factor?
-- **RQ1.4 Policy frontier.** Over the policy families in use or proposed (witness count, witness diversity in space and time, report-rate limits, the 5GAA graded options ST0 issuance pause, ST1 partial and ST2 full revocation, and reinstatement), what is the Pareto frontier of time to neutralise a real attacker against framing cost against safety harm? Which stage dominates time to neutralise?
+- **RQ1.4 Policy frontier.** Over the policy families in use or proposed (witness count, witness diversity in space and time, report-rate limits, the 5GAA graded options, and reinstatement; (corrected after critique): the 5GAA ladder is R0 evaluation, R1 update, R2 suspension with ST0–ST3, plus reinstatement classes RC1–RC4), what is the Pareto frontier of time to neutralise a real attacker against framing cost against safety harm? Which stage dominates time to neutralise?
 
 ### Contribution claims
 **Defensible:**
 1. The first execution of framing attacks through a US-SCMS-faithful revocation pipeline, measured to the CRL and to enforcement by receivers, rather than stopping at a reputation score (DRAMBR, IPEK) or a detector false positive (VehiGAN, twardokus2021targeted).
-2. Attacker-cost curves per SCMS parameter: concurrent pseudonyms per device, report-rate limits, provider count. Includes a policy-independent bound, stated as a hypothesis until proved: a witness-count rule of w distinct certificates is defeated by one insider whenever w is at most the number of pseudonyms it holds concurrently, unless the MA pays for reporter linkage.
+2. Attacker-cost curves per SCMS parameter: concurrent pseudonyms per device, report-rate limits, provider count. Includes a policy-independent bound, stated as a hypothesis until proved: a witness-count rule of w distinct certificates is defeated by one insider whenever w is at most the number of pseudonyms it holds concurrently, unless the MA pays for reporter linkage. **(corrected after critique)** This bound is a tautology already in print (brecht2018security p7; 5GAA MBD white paper 2022 p12; Intel patent US12489779B2), and F2MD already ships Sybil fake reporting (kamel2020detection p56). It is not a contribution.
 3. Wrongful revocation as a privacy attack: linkage seeds on the CRL make the victim trackable. The linkability of revoked devices is a known design property (brecht2018security). Its use as the payload of a framing attack was not found in any search (§5).
-4. The first quantitative evaluation of the 5GAA remediation options, scored jointly on false revocation, time to neutralise, safety and fairness. The 5GAA operational white paper (2024) says the conditions for choosing among them are not specified.
-5. A stage-by-stage decomposition of time to neutralise in the US SCMS, including the business-day service level for CRL issuance.
+4. The first quantitative evaluation of the 5GAA remediation options, scored jointly on false revocation, time to neutralise, safety and fairness. ~~The 5GAA operational white paper (2024) says the conditions for choosing among them are not specified.~~ **(corrected after critique)** The 2024 paper says deployed systems have not specified them, then proposes a severity-to-remediation mapping itself (§6–7). It never mentions false reports. The defensible claim is an evaluation of that §7 mapping under adversarial reports.
+5. A stage-by-stage decomposition of time to neutralise in the US SCMS, including the business-day service level for CRL issuance. **(corrected after critique)** The 5GAA 2025 certificate policy fixes these stages (revocation processed within 5 days, CRL published within 24 hours), so the decomposition is mostly arithmetic and is not a contribution.
 
 **Not defensible:**
 - "First framing or false-accusation attack": ruled out by bimeyer2014misbehavior, Moore et al. SECON 2008 (NEW), Clulow and Moore 2006 (NEW), the 5GAA 2022 white paper (NEW), asavisanu2025cats, turgut2026ipek and park2024enhancingb.
@@ -59,12 +61,13 @@ Measure what it costs an attacker to get an honest vehicle revoked through the r
 
 ### Key experiments and hypotheses
 1. **Cost of framing per attack resource and MA policy.** City-scale runs with honest victims chosen at random, framed by k insiders, by one insider with p concurrent pseudonyms, by jamming, or across providers.
+   - **(corrected after critique)** H1a and H1b measure a witness-counting MA that no standard describes. ETSI TS 103 759 §4 requires evidence the MA can "verify independently", including the original message, and twardokus2021targeted attacks only a naive signature-failure counter. See `critique-framed.md` §2.1–2.3.
    - H1a: under any witness-count rule without reporter linkage, one insider suffices. *Decision-changing if true:* the MA must link reporters, which is a privacy cost the SCMS was designed to avoid. This would inform the SCMS Manager and the J3287 editors.
    - H1b: jamming alone (no credentials) gets an honest vehicle revoked within one CRL cycle under the simplest plausible MA rule. *Surprising if true:* revocation of an honest vehicle would need no credentials at all.
 2. **Victim cost.** Paired counterfactuals: framed versus not framed, with all else equal. Report the outage length, conflicts and hard braking near the victim, and the fraction of the victim's subsequent trajectory linkable from the CRL.
    - H2: the privacy loss (tracking) outlasts the safety loss. *Surprising:* a revocation designed as a safety measure becomes mainly a privacy weapon.
 3. **Policy frontier.** Sweep the policy families, and report results as ranges over them rather than point estimates.
-   - H3: the ST0 issuance pause with reinstatement gets most of ST2's safety benefit against persistent insiders at a small fraction of ST2's framing harm, because time to neutralise is dominated by the MA and CRL stages and not by the remediation type. *Decision-changing:* it would give 5GAA and SCMS operators a condition for choosing a rung, which their white paper says is missing.
+   - H3: the ST0 issuance pause with reinstatement gets most of ST2's safety benefit against persistent insiders at a small fraction of ST2's framing harm, because time to neutralise is dominated by the MA and CRL stages and not by the remediation type. *Decision-changing:* it would give 5GAA and SCMS operators a condition for choosing a rung. **(corrected after critique)** The white paper does propose conditions (§6–7); the experiment tests them rather than supplying missing ones.
    - H3′ (null that is still useful): if the business-day CRL service level dominates time to neutralise, revocation contributes almost nothing to safety against transient attacks, and its value lies only in removing persistent insiders. That would tell operators to invest in local reaction rather than in a faster MA.
 4. **Optional sub-experiments.**
    - Cross-provider framing: a report filed through provider A's RA against a vehicle enrolled with provider B.
@@ -72,7 +75,7 @@ Measure what it costs an attacker to get an honest vehicle revoked through the r
 
 ### Who uses the result
 - **SCMS Manager and MA operators:** an evidence-based condition for revoking.
-- **5GAA MBD work items:** the remediation conditions their 2024 paper asks for.
+- **5GAA MBD work items:** an adversarial test of the remediation mapping their 2024 paper proposes (corrected after critique).
 - **SAE J3287 and ETSI TS 103 759 editors:** whether reports need reporter-linkage evidence or rate limits.
 - **OEMs:** the warranty and liability cost of a framed customer vehicle.
 - **Researchers:** the first SCMS-faithful baseline for any MA design.
@@ -125,7 +128,7 @@ With exact paired counterfactuals across traffic, radio and the SCMS, rank misbe
 
 ### Contribution claims
 **Defensible:**
-1. Net-harm decomposition per unit (message, vehicle, incident) that includes the cost of false positives and of wrongful linkage-CRL revocation, from exact paired reruns. wehmer2021practical measures only the attacker's aggregate gain, for one detector, with no false-positive harm and no PKI. zhang2024enhancing and zhang2024simulation use safety metrics with local filtering only.
+1. Net-harm decomposition per unit (message, vehicle, incident) that includes the cost of false positives and of wrongful linkage-CRL revocation, from exact paired reruns. **(corrected after critique)** Per-unit exactness holds only for open-loop replay and the near field of a discard (`critique-methods.md` §2). zhang2024enhancing already measures false-positive safety cost in closed loop. Revocation acts on a timescale of days (5GAA 2024 §5.2.1), so its harm can be accounted open loop (`critique-f1.md` §2.1). wehmer2021practical measures only the attacker's aggregate gain, for one detector, with no false-positive harm and no PKI. zhang2024enhancing and zhang2024simulation use safety metrics with local filtering only.
 2. A test of whether open-loop metrics predict closed-loop safety. This is a falsifiable question with a useful answer either way.
 3. A released benchmark with credentialed insiders and counterfactual pairs.
 4. A validity check of pairing under event-order changes, a methods point every same-seed V2X study inherits.
@@ -208,7 +211,7 @@ A many-factor global sensitivity analysis (Morris screening, then Sobol indices)
 
 ### Research questions
 - **RQ3.1** Which of the roughly 300 settings move, and which flip, four families of conclusions?
-  - (a) The safety cost of PKI, PQ and hybrid signatures: small (petho2024investigating) or prohibitive (abrar2026deployment, yoshizawa2023post)?
+  - (a) The safety cost of PKI, PQ and hybrid signatures: small (petho2024investigating) or prohibitive (abrar2026deployment, yoshizawa2023post)? **(corrected after critique)** Not a contradiction: petho2024investigating studies classical ECDSA processing delay with PDR as an exogenous input; the PQ papers study payload size, which is what lowers PDR. The results compose.
   - (b) Detector rankings (Direction 2).
   - (c) Revocation and CRL dissemination latency (khodaei2020scalable reports 95% within 15 s).
   - (d) Attack visibility (bello2026ns3learn: the reception model decides whether a flood shows up at all).
@@ -238,7 +241,7 @@ A many-factor global sensitivity analysis (Morris screening, then Sobol indices)
 | baharlouei2022exploring | A few settings change DDoS-detection results | Variance decomposition; ranking flips; field-bounded ranges |
 | Arp et al., USENIX Security 2022 (NEW) | Pitfalls of ML in security, with re-evaluation of published work | The V2X simulation analogue, with measured rather than argued pitfalls |
 | Borg et al. ICST 2021 (NEW); Stocco et al. TSE (NEW) | ADAS test verdicts differ across simulators | Security conclusions; factors inside one deterministic engine, so differences are attributable |
-| petho2024investigating versus abrar2026deployment | Contradictory conclusions on PKI and PQ cost | Explains the contradiction by factor |
+| petho2024investigating versus abrar2026deployment | ~~Contradictory conclusions on PKI and PQ cost~~ **(corrected after critique)** Not contradictory (different mechanism; PDR exogenous in petho) | Candidate pairs still to verify: abrar2026deployment vs Bazzi 2021 vs Teixeira and Henriques SBSeg 2026; twardokus2024cryptography vs agustina2026lightweight |
 | T-ITS 2024 traffic GSA (NEW) | Sobol analysis of traffic-microsimulation outputs | Radio, PKI and security outcomes |
 
 ### Key experiments and hypotheses
@@ -254,7 +257,7 @@ A many-factor global sensitivity analysis (Morris screening, then Sobol indices)
    - H8: fewer than about ten factors account for most of the variance in every conclusion, and those factors are mostly radio and density factors, not security factors.
    - *Decision-changing:* reviewers and authors would get a short list of factors to report.
 4. **PQ regime map.**
-   - H9: the safety cost of PQ is negligible below a density threshold on DSRC and LTE-V2X, and stops being negligible on NR Mode 2 under high load with Dilithium-sized chains and P2PCD. The boundary moves more with the verification policy than with the signature scheme.
+   - H9: the safety cost of PQ is negligible below a density threshold on DSRC and LTE-V2X, and stops being negligible on NR Mode 2 under high load with Dilithium-sized chains and P2PCD. The boundary moves more with the verification policy than with the signature scheme. **(corrected after critique)** Contradicted: the engine's own `sensitivity-security.md` shows ML-DSA-44 dropping PDR from 0.96 to 0.62 on 20–60 vehicles over 802.11p; Dilithium-2 does not fit the LTE transport block at all (abrar2026deployment); and verification policy changes compute, not airtime. The airtime lever is certificate inclusion (twardokus2024cryptography).
    - *Decision-changing:* it would tell the IEEE 1609.2 editors and OEMs that the verification policy, not the scheme choice, is the migration lever.
 5. **Contradiction reconciliation.** For each pair of contradicting papers, show the one-factor path between their configurations.
    - H10: at least one well-known pair flips on a factor neither paper reports. *Surprising*, and the main traction driver.
@@ -300,7 +303,7 @@ Confirm each item; written without reading the code.
 
 **Working title:** *Judging V2X security by its consequences: framing, detection and the validity of simulated evidence.*
 
-- **The common instrument.** Exact paired counterfactual reruns across traffic, radio and the SCMS, with event-keyed random numbers. Direction 2 builds and validates the instrument (RQ2.4), and Directions 1 and 3 use it.
+- **The common instrument.** Exact paired counterfactual reruns across traffic, radio and the SCMS, with event-keyed random numbers. **(corrected after critique)** The engine is entity-keyed, not event-keyed, and ids follow realised insertion order, so pairs are exact only for open-loop and backend-only interventions and the near field of closed-loop ones (`critique-methods.md` §0, §5). Direction 2 builds and validates the instrument (RQ2.4), and Directions 1 and 3 use it.
 - **The common question.** What a security mechanism does to safety and privacy once it acts, rather than how accurately it classifies.
   - Direction 2 asks this of detectors.
   - Direction 1 asks it of the MA and revocation, including how the mechanism can be turned against honest vehicles.
@@ -317,7 +320,7 @@ Confirm each item; written without reading the code.
 
 ## 5. Kill searches run for this file (2026-10-17)
 
-The arXiv API returned empty for every query in this session, so it gave no data, which is not a negative result. OpenAlex, web search and the VehicleSec 2026 technical-sessions page did run.
+The arXiv API returned empty for every query in this session, so it gave no data, which is not a negative result. **(corrected after critique)** The empties were transport failures: plain `http://` redirects to HTTPS and the sandbox failed certificate verification. curl over HTTPS works (`critique-disagree.md` §1). OpenAlex, web search and the VehicleSec 2026 technical-sessions page did run.
 
 | Query (paraphrased) | Source | Result |
 |---|---|---|

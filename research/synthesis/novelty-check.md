@@ -130,6 +130,8 @@ Search hits: counterfactual or causal with network or simulation, 185; world mod
 3. A learned world model or surrogate of a V2X system that includes **security state** (credentials, revocation status, detector outputs), evaluated on counterfactual accuracy rather than factual fit.
 4. Paired same-seed designs (common random numbers) for V2X security studies. The catalog search for "common random numbers / same seed / paired design" in V2X returned **0** papers.
 
+> **(corrected after critique)** "Exact" paired counterfactuals are overstated. The engine keys each random stream by entity, not by event (`crates/v2xw-core/src/rng.rs:1-58`). Actor and node ids follow realised insertion order (`v2xw-mobility/src/engine.rs:3147-3150`, `v2xw-engine/src/run.rs:3168`), and several draw counts depend on simulated state. Pairs are exact per unit only for open-loop replay, backend-only changes (once report streams are re-keyed) and the near field of a closed-loop discard. Everywhere else they are coupled, distribution-level comparisons over seeds. FCW/EEBL/IMA warnings also do not change driving yet (`run.rs:4324-4333`). See `critique-methods.md` and `final-three-approaches.md` §5.
+
 **Verdict: novel** as a V2X, cross-layer, exact-counterfactual benchmark. Partly novel for the world-model half, because network and driving world models exist. The thesis must cite zhang2026driving, laudy2026digital and ma2026twin as conceptual precedents and avoid claiming "the first counterfactual benchmark" in general.
 
 ---
@@ -202,11 +204,11 @@ Open: SCMS-specific TARA ratings in which impact is computed from paired-counter
 ### Engine capability: threshold SCMS authorities (FROST, CGGMP21, Umbrella)
 Closest: ajibuwa2023resilient (threshold Schnorr signing across VPKI CAs), stinson2001provably (threshold Schnorr implicit certificates, 2001), wasef2011managing (threshold revocation), zhang2025decentralized, kong2024efficient, wei2026post, adarbah2024framework.
 
-The search found **no** V2X paper using FROST or CGGMP21; the "frost" hits were all noise.
+**(corrected after critique)** The original line said no V2X paper uses FROST or CGGMP21. That is false: ajibuwa2023resilient (arXiv 2308.02711, read in full in `eval-C-robustness-and-threshold.md`) uses FROST to threshold-sign certificates across clustered CAs in a multi-regional VPKI, positioned against the SCMS. No V2X use of CGGMP21 was found.
 
 Open: threshold RA/PCA/LA/MA signing inside a running SCMS, with the availability, latency and compromise-tolerance trade-off under outages and its knock-on effect on provisioning and revocation.
 
-**Verdict: novel, but narrow.** This is a strong systems-security contribution, with lower safety impact.
+**Verdict: partly novel and narrow (corrected after critique).** Threshold signing in a VPKI exists (ajibuwa2023resilient; stinson2001provably for threshold implicit certificates). What survives is threshold authorities that are wire-compatible with IEEE 1609.2/1609.2.1 inside a running SCMS, evaluated for outage and compromise tolerance.
 
 ---
 
@@ -252,7 +254,7 @@ The open problem is a **systematic** global sensitivity analysis: which of the r
 | 1 | **Direction 3 + N1 + N4**: counterfactual V2X benchmark with exact per-unit cross-layer ground truth; flagship tasks are interventional detector evaluation and validation of causal estimators and twins | novel | high | No V2X counterfactual-pair benchmark exists; it fixes acknowledged metric and benchmark flaws; it reaches both the V2X and networking-ML communities |
 | 2 | **N2 + Direction 1**: MA decision design under framing attacks and time to neutralise in the US SCMS, with counterfactual safety attribution | N2 novel; D1 partly novel | high | Weaponised revocation is unstudied; time-to-neutralise decomposition with linkage CRLs is open; it is policy-relevant (J3287, SCMS) |
 | 3 | **N3**: robustness of V2X security conclusions to modelling choices | partly novel (systematic form novel) | medium-high | Strengthens every other result; field anchors are available |
-| 4 | **Threshold SCMS authorities** (FROST/CGGMP21) in a running system | novel (narrow) | medium | No V2X FROST/CGGMP21 work; systems-security venue |
+| 4 | **Threshold SCMS authorities** (FROST/CGGMP21) in a running system | partly novel (narrow) (corrected after critique) | medium | FROST in a VPKI already exists (ajibuwa2023resilient); only the 1609.2-compatible, SCMS-integrated evaluation remains |
 | 5 | **Direction 2 (narrowed)**: whole-system PQ SCMS migration with closed-loop safety on three radio stacks | partly novel | high but crowded | Must engage Twardokus, abrar2026deployment, fikry2026post and Petho's small-effect result |
 | 6 | **R3**: combined NR Mode 2 resource and verification exhaustion with PQ sizes | partly novel | medium | Each attack alone is published |
 | 7 | **R4**: LLM cross-layer root-cause analysis scored by counterfactual ground truth | partly novel | medium | Configuration agents are done; novelty depends on rank 1 |

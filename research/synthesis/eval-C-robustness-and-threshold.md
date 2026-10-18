@@ -1,6 +1,6 @@
 # Evaluation: candidate C (robustness of V2X security conclusions) and candidate D (threshold SCMS authorities)
 
-Date: 2026-10-17. Method: re-read of the corpus summaries; full-text extracts of bello2026ns3learn, solida2026demystifying, xu2026cost and ajibuwa2023resilient (the last fetched from arXiv 2308.02711, because the catalog summary was abstract-only); catalog regex searches (sensitivity / Sobol / Morris / factorial / credibility / threshold / FROST / MPC); fresh searches on OpenAlex, arXiv API, Semantic Scholar (throttled after one query) and web search. baharlouei2022exploring has no open-access full text, so it is still judged from its abstract.
+Date: 2026-10-17. Method: re-read of the corpus summaries; full-text extracts of bello2026ns3learn, solida2026demystifying, xu2026cost and ajibuwa2023resilient (the last fetched from arXiv 2308.02711, because the catalog summary was abstract-only); catalog regex searches (sensitivity / Sobol / Morris / factorial / credibility / threshold / FROST / MPC); fresh searches on OpenAlex, arXiv API, Semantic Scholar (throttled after one query) and web search. **(corrected after critique)** The arXiv API calls in this period most likely failed in transport (plain http:// redirects to HTTPS and the sandbox failed certificate verification; `critique-disagree.md` §1), so empty arXiv results here are not negative evidence. baharlouei2022exploring has no open-access full text, so it is still judged from its abstract.
 
 ---
 

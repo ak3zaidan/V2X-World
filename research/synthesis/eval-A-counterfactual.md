@@ -74,6 +74,8 @@ Sources searched: arXiv API, OpenAlex, web search. Semantic Scholar returned HTT
 
 ## The exact claim that survives
 
+> **(corrected after critique)** "Exact" paired counterfactuals are overstated. The engine keys each random stream by entity, not by event (`crates/v2xw-core/src/rng.rs:1-58`). Actor and node ids follow realised insertion order (`v2xw-mobility/src/engine.rs:3147-3150`, `v2xw-engine/src/run.rs:3168`), and several draw counts depend on simulated state. Pairs are exact per unit only for open-loop replay, backend-only changes (once report streams are re-keyed) and the near field of a closed-loop discard. Everywhere else they are coupled, distribution-level comparisons over seeds. FCW/EEBL/IMA warnings also do not change driving yet (`run.rs:4324-4333`). See `critique-methods.md` and `final-three-approaches.md` §5.
+
 > A V2X benchmark with credentialed insiders, in which every message, vehicle and incident carries its exact paired outcome under single interventions on detector, threshold and MA/revocation policy. Pairing uses event-keyed common random numbers, and outcomes propagate jointly through traffic, radio and the SCMS. With it, detectors and thresholds are ranked by net safety effect: harm prevented by true detections minus harm from false positives and wrongful linkage-CRL revocations. The benchmark shows when and how much that ranking departs from the F1 ranking.
 
 The new elements:

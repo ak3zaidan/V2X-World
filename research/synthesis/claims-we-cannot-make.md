@@ -37,7 +37,7 @@ Each line names a claim the thesis or a paper must **not** make and the prior wo
 | First SCMS threat model | furtado2018threat (a) | A quantified one |
 | First SCMS cross-certification / multi-root proposal | jha2018pseudonym (a) | Simulated multi-provider operation |
 | First multi-PCA issuer-linkability analysis | huang2025privacy (a), huang2025interleaved (a) | n/a |
-| First threshold-signing VPKI | ajibuwa2023resilient (a); stinson2001provably (threshold Schnorr implicit certificates, 2001) | FROST / CGGMP21 / Umbrella authorities inside a running SCMS (none found) |
+| First threshold-signing VPKI; first V2X use of FROST (corrected after critique) | ajibuwa2023resilient (full text via arXiv 2308.02711: FROST t-of-n signing across clustered VPKI CAs); stinson2001provably (threshold Schnorr implicit certificates, 2001) | Threshold authorities wire-compatible with IEEE 1609.2/1609.2.1 (threshold ECQV, CGGMP21) inside a running SCMS. Do not say "no V2X paper uses FROST" |
 | SCMS provisioning load as an unrecognised problem | yu2026v (V-PASS) (a) | Measured provisioning load and failure modes |
 
 ## Revocation and misbehaviour
@@ -56,7 +56,7 @@ Each line names a claim the thesis or a paper must **not** make and the prior wo
 | First misbehaviour report format | kamel2018misbehavior (a); anon2024v2x (SAE J3287) | n/a |
 | First LLM / game-theoretic conviction gate for insiders in NR C-V2X | carie2026hierarchical | n/a |
 | First credentialed-insider attack + MBD in co-simulation | kalogiannis2022attack (a) | Insider attacks with valid SCMS credentials at city scale |
-| First discreditation / framing attack on V2X trust | twardokus2021targeted (a) | Framing followed through the MA to actual revocation (N2) |
+| First discreditation / framing attack on V2X trust | twardokus2021targeted (a); kamel2020detection (F2MD "MA Stress" fake-report attack with rotating pseudonyms, thesis p56); 5GAA MBD white paper 2022 p12 (slander combined with Sybil); Intel US12489779B2 and Qualcomm US12260747B2 (MA-side slander defences) (corrected after critique) | Which standard detector evidence can frame an honest vehicle under a proof-based MA, and the corroboration rule that closes it. twardokus2021targeted attacks a naive reputation counter, so "jamming alone gets an honest vehicle revoked" is not claimable against a proof-based MA |
 | First spectrum-misbehaviour reporting via the SCMS | noori2020reporting, noori2021reference, noori2025detection (a) | n/a |
 | First simulation-generated MBD dataset / benchmark | heijden2018veremi, kamel2020veremi (a), hermann2026veremi, yuce2025state (a), novo2026spade, guven2025creating, jerbi2026poster (a) | Counterfactual-paired, cross-layer labelled benchmark |
 | Existing MBD benchmarks are sound | muzammil2026code (structural artefacts in VeReMi) | Must cite and avoid those artefacts |
@@ -116,6 +116,10 @@ Each line names a claim the thesis or a paper must **not** make and the prior wo
 | First location-privacy evaluation framework in a VANET simulator | eckhoff2014open (a), emara2016poster (a) |
 
 ## Counterfactuals, world models and surrogates
+
+> **(corrected after critique)** "Exact" paired counterfactuals are overstated. The engine keys each random stream by entity, not by event (`crates/v2xw-core/src/rng.rs:1-58`). Actor and node ids follow realised insertion order (`v2xw-mobility/src/engine.rs:3147-3150`, `v2xw-engine/src/run.rs:3168`), and several draw counts depend on simulated state. Pairs are exact per unit only for open-loop replay, backend-only changes (once report streams are re-keyed) and the near field of a closed-loop discard. Everywhere else they are coupled, distribution-level comparisons over seeds. FCW/EEBL/IMA warnings also do not change driving yet (`run.rs:4324-4333`). See `critique-methods.md` and `final-three-approaches.md` §5.
+
+Every "exact" in the right-hand column of this file is subject to that note.
 
 | Claim we cannot make | Ruled out by | What can still be claimed |
 |---|---|---|
