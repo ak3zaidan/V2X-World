@@ -354,7 +354,10 @@ fn enforcement_is_stamped_per_vehicle_and_cases_name_their_evidence() {
     let cases = of("pki.case");
     let mut by_case: BTreeMap<&str, Vec<&Value>> = BTreeMap::new();
     for c in &cases {
-        by_case.entry(c["case"].as_str().expect("case")).or_default().push(c);
+        by_case
+            .entry(c["case"].as_str().expect("case"))
+            .or_default()
+            .push(c);
     }
     let mut most = 0;
     let (mut real, mut modelled, mut shared) = (0, 0, 0);
@@ -367,11 +370,17 @@ fn enforcement_is_stamped_per_vehicle_and_cases_name_their_evidence() {
             .as_array()
             .unwrap_or_else(|| panic!("{id}: no evidence list"));
         let direct = reports_in["detail"]["direct"].as_bool().expect("direct");
-        assert_eq!(evidence.len(), if direct { 1 } else { 2 }, "{id}: one entry per report");
+        assert_eq!(
+            evidence.len(),
+            if direct { 1 } else { 2 },
+            "{id}: one entry per report"
+        );
         for e in evidence {
             // A report on the modelled path says why, and which detector checks fired.
             let Some(t) = e["type"].as_u64() else {
-                let why = e["modelled"].as_str().unwrap_or_else(|| panic!("{id}: unexplained {e}"));
+                let why = e["modelled"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{id}: unexplained {e}"));
                 assert!(!why.is_empty(), "{id}: {e}");
                 assert!(
                     e["checks"].as_array().is_some_and(|c| !c.is_empty()),
@@ -394,18 +403,30 @@ fn enforcement_is_stamped_per_vehicle_and_cases_name_their_evidence() {
                 },
             );
             let subtypes = e["subtypes"].as_array().expect("subtypes");
-            assert!(!subtypes.is_empty(), "{id}: a report has at least one subtype");
+            assert!(
+                !subtypes.is_empty(),
+                "{id}: a report has at least one subtype"
+            );
             assert!(e["verified"].is_boolean(), "{id}: {e}");
         }
         let enforced: Vec<&&Value> = stages.iter().filter(|c| c["stage"] == "enforced").collect();
         for (k, c) in enforced.iter().enumerate() {
             let d = &c["detail"];
-            assert_eq!(d["installed"].as_u64(), Some(k as u64 + 1), "{id}: running count");
+            assert_eq!(
+                d["installed"].as_u64(),
+                Some(k as u64 + 1),
+                "{id}: running count"
+            );
             assert!(d["installed"].as_u64() <= d["of"].as_u64(), "{id}: {d}");
-            assert!(!d.to_string().contains("ee/"), "{id}: the MA's table names a vehicle");
+            assert!(
+                !d.to_string().contains("ee/"),
+                "{id}: the MA's table names a vehicle"
+            );
         }
         assert!(
-            enforced.windows(2).all(|w| w[0]["t"].as_u64() <= w[1]["t"].as_u64()),
+            enforced
+                .windows(2)
+                .all(|w| w[0]["t"].as_u64() <= w[1]["t"].as_u64()),
             "{id}: install instants go forward"
         );
         most = most.max(enforced.len());
@@ -416,7 +437,10 @@ fn enforcement_is_stamped_per_vehicle_and_cases_name_their_evidence() {
     );
     // Real cryptography: real SM-MBR reports reach the MA, some of them shared by the
     // other provider's MA (two providers on one CTL).
-    assert!(real > 0, "no case names a real report's evidence ({modelled} modelled)");
+    assert!(
+        real > 0,
+        "no case names a real report's evidence ({modelled} modelled)"
+    );
     println!("case evidence: {real} real ({shared} shared), {modelled} modelled");
 }
 

@@ -150,11 +150,20 @@ fn revoked() -> ScmsRun {
     }
     run.run().expect("the reports run");
     // The RA's shuffle may deliver them in either order.
-    let mut held: Vec<[u8; 9]> = run.state.ma.reports.iter().map(|r| *r.subject_lv.as_bytes()).collect();
+    let mut held: Vec<[u8; 9]> = run
+        .state
+        .ma
+        .reports
+        .iter()
+        .map(|r| *r.subject_lv.as_bytes())
+        .collect();
     held.sort_unstable();
     let mut want = vec![*lv0.as_bytes(), *lv1.as_bytes()];
     want.sort_unstable();
-    assert_eq!(held, want, "the MA holds both reports, accusing A's two pseudonyms");
+    assert_eq!(
+        held, want,
+        "the MA holds both reports, accusing A's two pseudonyms"
+    );
     run.investigate(0, 1, 0, JMAX).expect("two reports");
     run.run().expect("the investigation runs");
     run
@@ -561,7 +570,11 @@ fn a_case_walks_the_board_in_order() {
     assert_eq!(enforced.detail["installed"], 1);
     assert_eq!(enforced.detail["of"], 5);
     // The MA's case table names no vehicle (it does not learn who installed its CRL).
-    assert!(!enforced.detail.to_string().contains("ee/"), "{}", enforced.detail);
+    assert!(
+        !enforced.detail.to_string().contains("ee/"),
+        "{}",
+        enforced.detail
+    );
     // Two more vehicles install the entry: each is stamped at its own instant, with the
     // running count, so "n of N" keeps counting (it froze at the first install before).
     let three = vec![t, t + 7, t + 9];
@@ -573,7 +586,8 @@ fn a_case_walks_the_board_in_order() {
         vec![("enforced", t + 7, Some(2)), ("enforced", t + 9, Some(3))]
     );
     assert!(
-        pki_view::drain_cases(runs, &mut tracker, t + 20, &|_, _| Some((three.clone(), 5))).is_empty()
+        pki_view::drain_cases(runs, &mut tracker, t + 20, &|_, _| Some((three.clone(), 5)))
+            .is_empty()
     );
 }
 

@@ -995,22 +995,24 @@ fn stage_at(run: &ScmsRun, r: crate::stage::FlowRun, s: crate::stage::StageId) -
 fn case_evidence(ma: &crate::scms::run::MaState, c: &crate::scms::run::Case) -> Vec<Value> {
     c.reports
         .iter()
-        .map(|&i| match ma.report_evidence.get(i).and_then(Option::as_ref) {
-            Some(e) => json!({
-                "report": i,
-                "type": e.mbr_type,
-                "type_name": e.type_name,
-                "subtypes": e.subtypes.iter()
-                    .map(|(n, name)| json!({"subtype": n, "name": name}))
-                    .collect::<Vec<_>>(),
-                "verified": e.verified,
-                "shared": e.shared,
-                "modelled": e.modelled,
-                "checks": e.checks,
-            }),
-            None => json!({"report": i, "type": null, "type_name": null, "subtypes": [],
+        .map(
+            |&i| match ma.report_evidence.get(i).and_then(Option::as_ref) {
+                Some(e) => json!({
+                    "report": i,
+                    "type": e.mbr_type,
+                    "type_name": e.type_name,
+                    "subtypes": e.subtypes.iter()
+                        .map(|(n, name)| json!({"subtype": n, "name": name}))
+                        .collect::<Vec<_>>(),
+                    "verified": e.verified,
+                    "shared": e.shared,
+                    "modelled": e.modelled,
+                    "checks": e.checks,
+                }),
+                None => json!({"report": i, "type": null, "type_name": null, "subtypes": [],
                            "verified": null, "shared": null, "modelled": null, "checks": []}),
-        })
+            },
+        )
         .collect()
 }
 

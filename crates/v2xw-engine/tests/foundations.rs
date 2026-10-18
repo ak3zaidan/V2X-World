@@ -644,12 +644,22 @@ fn the_load_metrics_scale_with_the_fleet_as_theory_says() {
         let rssi: BTreeMap<(u64, u32), (f64, f64)> = phy
             .iter()
             .filter_map(|p| {
-                Some(((p.msg?, p.rx.index()), (p.rssi_dbm?, p.dist_m.unwrap_or(f64::NAN))))
+                Some((
+                    (p.msg?, p.rx.index()),
+                    (p.rssi_dbm?, p.dist_m.unwrap_or(f64::NAN)),
+                ))
             })
             .collect();
         let mut frames_on_air: Vec<(u64, u64, u32, Option<u64>)> = txs
             .iter()
-            .map(|t| (t.t, t.t + t.airtime_us.unwrap() * 1000, t.node.index(), t.msg))
+            .map(|t| {
+                (
+                    t.t,
+                    t.t + t.airtime_us.unwrap() * 1000,
+                    t.node.index(),
+                    t.msg,
+                )
+            })
             .collect();
         frames_on_air.sort_unstable();
         let mut deaf_pairs = Vec::new();
@@ -658,16 +668,19 @@ fn the_load_metrics_scale_with_the_fleet_as_theory_says() {
                 if b.0 == a.0 {
                     continue; // same instant: neither could have sensed the other
                 }
-                let heard = a
-                    .3
-                    .and_then(|m| rssi.get(&(m, b.2)))
-                    .is_some_and(|&(p, _)| p >= CCA_DBM);
+                let heard =
+                    a.3.and_then(|m| rssi.get(&(m, b.2)))
+                        .is_some_and(|&(p, _)| p >= CCA_DBM);
                 if !heard {
                     deaf_pairs.push((a.2, b.2, a.3.and_then(|m| rssi.get(&(m, b.2))).copied()));
                 }
             }
         }
-        let hidden = report.rx_losses.get("hidden-terminal").copied().unwrap_or(0);
+        let hidden = report
+            .rx_losses
+            .get("hidden-terminal")
+            .copied()
+            .unwrap_or(0);
         println!("  pairs whose later sender heard the earlier frame below CCA: {deaf_pairs:?}");
         assert_eq!(
             hidden > 0,
@@ -678,7 +691,10 @@ fn the_load_metrics_scale_with_the_fleet_as_theory_says() {
             // Each such pair is far apart and still within decoding range: the 3 dB band.
             let (p, d) = link.expect("every vehicle hears every frame at these ranges");
             assert!((-88.0..CCA_DBM).contains(&p), "{p} dBm at {d} m");
-            assert!(d > 760.0, "a pair below CCA only 760 m or less apart: {d} m");
+            assert!(
+                d > 760.0,
+                "a pair below CCA only 760 m or less apart: {d} m"
+            );
         }
         // Outside that band a collision needs two frames on the air at once, and an
         // overlapping pair costs at most both frames at every other receiver.

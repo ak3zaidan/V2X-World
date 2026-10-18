@@ -4244,9 +4244,7 @@ impl Phase2 {
             }
         }
         let vehicles = u32::try_from(self.nodes.len()).unwrap_or(u32::MAX);
-        let enforced = |k: usize,
-                        c: &v2xw_proto::scms::run::Case|
-         -> Option<(Vec<SimTime>, u32)> {
+        let enforced = |k: usize, c: &v2xw_proto::scms::run::Case| -> Option<(Vec<SimTime>, u32)> {
             let ours = self
                 .cases
                 .iter()
