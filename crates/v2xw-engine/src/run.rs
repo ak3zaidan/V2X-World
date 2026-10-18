@@ -4600,11 +4600,12 @@ impl Engine {
                     .iter()
                     .filter(|m| m.verification == v2xw_node::stores::VerificationState::Revoked)
                     .count() as u64;
+                let roadside = self.rsus.contains_key(id);
                 if revoked > 0
                     && let Some(phase2) = self.phase2.as_mut()
                 {
                     for _ in 0..revoked {
-                        phase2.note_revoked_reception();
+                        phase2.note_revoked_reception(roadside);
                     }
                 }
                 if let Some(phase2) = self.phase2.as_mut() {

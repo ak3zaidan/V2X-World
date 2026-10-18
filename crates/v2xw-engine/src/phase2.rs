@@ -1183,8 +1183,13 @@ pub struct Phase2Report {
     pub crl_past_horizon: u64,
     /// How many node installations of a CRL entry.
     pub crls_installed: u64,
-    /// How many receptions the installed CRL caused to be classified revoked.
+    /// How many receptions the installed CRL caused to be classified revoked, on every
+    /// node (vehicles and roadside units).
     pub revoked_receptions: u64,
+    /// The part of `revoked_receptions` on roadside units: under the SCMS a unit installs
+    /// its RA's composite CRL over its own backhaul (WP-B3b cycle), a path that reaches no
+    /// vehicle.
+    pub rsu_revoked_receptions: u64,
     /// Detection to the first vehicle enforcing, ns, for the first revocation.
     pub revocation_latency_ns: u64,
     /// That revocation's stages, `(stage, ns since detection)`.
@@ -4441,6 +4446,7 @@ impl Phase2 {
             rsu.set("ever_starved", r.rsus_starved);
             rsu.set("messages_withheld", r.rsu_messages_withheld);
             rsu.set("crls_installed", r.rsu_crls_installed);
+            rsu.set("revoked_receptions", r.rsu_revoked_receptions);
             view.entities.push(rsu);
         }
         // What the engine carried outside the credential kernel, as edges.
@@ -5548,9 +5554,13 @@ impl Phase2 {
         self.report.crls_installed += 1;
     }
 
-    /// Notes a reception the installed CRL caused to be classified revoked.
-    pub fn note_revoked_reception(&mut self) {
+    /// Notes a reception the installed CRL caused to be classified revoked (`roadside`:
+    /// on a roadside unit).
+    pub fn note_revoked_reception(&mut self, roadside: bool) {
         self.report.revoked_receptions += 1;
+        if roadside {
+            self.report.rsu_revoked_receptions += 1;
+        }
     }
 
     /// Counts what receiver `node` verified and refused as revoked, by the provider that

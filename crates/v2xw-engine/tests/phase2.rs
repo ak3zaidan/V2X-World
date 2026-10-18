@@ -268,7 +268,9 @@ fn with_no_attacker_nothing_is_revoked() {
 }
 
 /// Without the `crl` role, and with the cellular poll pushed past the horizon, the list is
-/// published and reaches nobody: the two distribution paths are the only ways in.
+/// published and reaches no vehicle: the two distribution paths are the only ways into a
+/// vehicle. Roadside units still install it over their own backhaul (WP-B3b cycle) and
+/// refuse the revoked sender themselves.
 #[test]
 fn without_either_distribution_path_the_revocation_never_reaches_a_vehicle() {
     let mut scenario = phase2();
@@ -288,7 +290,15 @@ fn without_either_distribution_path_the_revocation_never_reaches_a_vehicle() {
     );
     assert_eq!(p.crl_downloads, 0, "a vehicle polled past its interval");
     assert_eq!(p.crls_installed, 0);
-    assert_eq!(p.revoked_receptions, 0);
+    assert_eq!(
+        p.revoked_receptions, p.rsu_revoked_receptions,
+        "a vehicle refused a revoked sender with no list installed"
+    );
+    assert!(p.rsu_crls_installed > 0, "no unit installed the list over its backhaul");
+    assert!(
+        p.rsu_revoked_receptions > 0,
+        "no unit refused the revoked sender after its backhaul install"
+    );
 }
 
 /// A fleet with no modem reaches the backend only through a unit that relays reports; with
