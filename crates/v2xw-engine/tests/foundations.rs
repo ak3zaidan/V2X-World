@@ -633,9 +633,55 @@ fn the_load_metrics_scale_with_the_fleet_as_theory_says() {
             report.rx_losses,
             cbr.len()
         );
-        // With everyone in carrier-sense range there are no hidden terminals, so a
-        // collision needs two frames on the air at once, and an overlapping pair costs at
-        // most both frames at every other receiver.
+        // Hidden terminals, from the records alone: of two frames on the air at once, the
+        // later one's sender could not have deferred if the earlier frame reached it below
+        // the CCA threshold (−85 dBm, `CcaConfig::ETSI`, EN 302 571 §4.2.10.1). In free
+        // space that is a separation beyond about 767 m at this EIRP, while frames still
+        // decode out to about 1,083 m (6 Mbit/s static sensitivity −88 dBm): the 3 dB band
+        // between the two is where a vehicle hears a frame it does not defer to. The grid's
+        // diagonal is 995 m, so the outermost lanes of the 100-vehicle fleet are in it.
+        const CCA_DBM: f64 = -85.0;
+        let rssi: BTreeMap<(u64, u32), (f64, f64)> = phy
+            .iter()
+            .filter_map(|p| {
+                Some(((p.msg?, p.rx.index()), (p.rssi_dbm?, p.dist_m.unwrap_or(f64::NAN))))
+            })
+            .collect();
+        let mut frames_on_air: Vec<(u64, u64, u32, Option<u64>)> = txs
+            .iter()
+            .map(|t| (t.t, t.t + t.airtime_us.unwrap() * 1000, t.node.index(), t.msg))
+            .collect();
+        frames_on_air.sort_unstable();
+        let mut deaf_pairs = Vec::new();
+        for (k, a) in frames_on_air.iter().enumerate() {
+            for b in frames_on_air[k + 1..].iter().take_while(|b| b.0 < a.1) {
+                if b.0 == a.0 {
+                    continue; // same instant: neither could have sensed the other
+                }
+                let heard = a
+                    .3
+                    .and_then(|m| rssi.get(&(m, b.2)))
+                    .is_some_and(|&(p, _)| p >= CCA_DBM);
+                if !heard {
+                    deaf_pairs.push((a.2, b.2, a.3.and_then(|m| rssi.get(&(m, b.2))).copied()));
+                }
+            }
+        }
+        let hidden = report.rx_losses.get("hidden-terminal").copied().unwrap_or(0);
+        println!("  pairs whose later sender heard the earlier frame below CCA: {deaf_pairs:?}");
+        assert_eq!(
+            hidden > 0,
+            !deaf_pairs.is_empty(),
+            "hidden-terminal losses {hidden} vs pairs below CCA {deaf_pairs:?} at {n}"
+        );
+        for &(_, _, link) in &deaf_pairs {
+            // Each such pair is far apart and still within decoding range: the 3 dB band.
+            let (p, d) = link.expect("every vehicle hears every frame at these ranges");
+            assert!((-88.0..CCA_DBM).contains(&p), "{p} dBm at {d} m");
+            assert!(d > 760.0, "a pair below CCA only 760 m or less apart: {d} m");
+        }
+        // Outside that band a collision needs two frames on the air at once, and an
+        // overlapping pair costs at most both frames at every other receiver.
         assert_eq!(
             collisions == 0,
             overlaps == 0,
