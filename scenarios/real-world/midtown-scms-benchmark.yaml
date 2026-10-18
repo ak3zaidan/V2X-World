@@ -1,0 +1,221 @@
+# The realistic SCMS benchmark: Midtown Manhattan on a weekday evening rush hour, the US
+# security credential management system as deployed in 2025, honest traffic only.
+#
+# It is the baseline every SCMS attack study is measured against: everything here is the
+# real-world default, so a number it produces can be compared with a published one, and a
+# number an attack moves can be read against it. docs/benchmark/scms-real-benchmark.md holds
+# every measurement it produced and the comparison with the literature.
+#
+# What is real and where it comes from:
+#
+#  * The day. Monday 19 October 2026, 17:00 Eastern (21:00 UTC, daylight time): a weekday
+#    evening peak hour. The run starts inside it and the first 90 s fill the streets (see
+#    `events`).
+#  * The map. The D7 Midtown box every Manhattan scenario uses (34th to 57th Street, Eighth
+#    to Third Avenue; OpenStreetMap, 2026-09-18 extract), with buildings, so the radio sees
+#    the street canyons.
+#  * The traffic. 9,000 veh/h offered network-wide, the peak-load volume of
+#    midtown-peak-load.yaml (NYC DOT PM-peak avenue counts, 1,356 veh/h on Eighth Avenue;
+#    about eight avenues cross the box), with its vehicle mix (80 % cars and taxis, 8 %
+#    delivery vans, 3 % trucks, 2 % buses, 3 % motorcycles, 4 % delivery mopeds) and its
+#    sample of 2,000 pedestrians and 200 cyclists who behave as observed (jaywalking,
+#    groups). A quarter of the vulnerable road users carry a V2X handset (ASSUMPTION: no
+#    deployment publishes a share). Every motor vehicle is equipped: this is the
+#    full-deployment benchmark; the penetration is a sweep variable, not a realism one.
+#  * The radio. DSRC (IEEE 802.11p) on channel 172 of the 2016 US band plan, the BSM at
+#    10 Hz with SAE J2945/1 congestion control (rate and power) and continuous channel
+#    access: the deployed US profile, which is the engine's default for `dsrc-80211p`.
+#    midtown-scms-benchmark-lte.yaml is the LTE-V2X (PC5 mode 4, SAE J3161/1) variant.
+#  * Security. IEEE 1609.2 with ECDSA P-256 and implicit (ECQV) pseudonym certificates,
+#    the full certificate attached once a second and a digest otherwise (J2945/1), and a
+#    new pseudonym every five minutes (J2945/1 CERTCHG, the USDOT default). Verification
+#    is `prioritized` (nearest and most relevant first).
+#  * The SCMS. `us-production-2025` (the default): two providers on one CTL signed by five
+#    electors with a three-of-five quorum, each provider with its own root, ICA, ECA, RA,
+#    ACA, LA1/LA2, MA and CRL Generator in an assumed cloud region, on the REAL calendar:
+#    one-week i-periods from 2015-01-06 04:00 Eastern (i = 614 on this day), 20
+#    certificates a week, the CAMP 1.2.2 request shuffle (1,000 requests or two days),
+#    6-year enrolment, the CV-pilot manual MA review and a CRL within one business day.
+#    No `security.protocol.params` override: every value is the deployment's.
+#  * Roadside units. 30 at the box's busiest signalised intersections, at least 150 m
+#    apart. NYC's CV pilot planned about 450 RSUs on Manhattan's avenues (01 §8,
+#    UNCONFIRMED as-built count); 30 in this box is that density (ASSUMPTION). Each one
+#    forwards reports, repeats the CRL and proxies provisioning on metro fibre backhaul
+#    (the NYC pilot's RSUs reach a TMC proxy over IPv4 backhaul, RSU LL p.4; the medium is
+#    an ASSUMPTION).
+#  * Vehicles' own uplink: 80 % carry a cellular modem (ASSUMPTION: the embedded-telematics
+#    share of the 2025 US fleet); the rest top up only through a roadside unit, as the NYC
+#    pilot's retrofit devices did.
+#  * Misbehaviour detection: the twelve VeReMi/F2MD plausibility checks on every vehicle
+#    and RSU, judged against the accuracy each BSM states, and the corroborating MA.
+#    With honest traffic only, every report is a false positive.
+#  * Privacy: a passive observer with sniffers at 10 % of the signalised intersections,
+#    each hearing 200 m (ASSUMPTION: a resourced but city-scale adversary; 100 % is the
+#    global eavesdropper of the literature). It only listens.
+#
+# The timeline (real calendar, fast-forward for the backend in between):
+#
+#    0 s -  480 s   live: the rush hour (180 s warm-up, then 300 s measured)
+#  480 s - 43,140 s fast-forward: traffic frozen, the backend runs (polls, shuffles, CRL)
+#  43,140 - 43,260  live across the week rollover (Tuesday 09:00 UTC = 43,200 s; the grid
+#                   is 2015-01-06 04:00 EST in fixed weeks of TAI seconds, so 05:00 EDT):
+#                   every vehicle switches to i = 615's certificates on the air
+#  43,260 - 172,800 fast-forward through Tuesday's business day and on to Wednesday
+#                   17:00 Eastern (MA review, the one-business-day CRL SLA, CRL fetches)
+#
+# Inside a fast-forward window the traffic stands still where it was, so the rollover
+# window is the evening rush's vehicles at 05:00: the radio numbers are only quoted from
+# the first window. The live windows are as long as the owner's laptop affords (the first
+# one costs about an hour of CPU on the release build); lengthen them on a bigger machine.
+#
+# What it does not measure: OD-matrix turning volumes, double parking, real pedestrian
+# volumes (the 2,200 are a sample), the tunnels' spill-back, real provider locations.
+schema: v2xw/scenario/1
+
+meta:
+  name: Midtown SCMS benchmark (DSRC)
+  description: >-
+    Midtown Manhattan at the Monday evening rush with the US SCMS as deployed in 2025 (two
+    providers, real weekly calendar, manual MA review), DSRC under J2945/1, 30 roadside
+    units on fibre, pedestrians and cyclists, honest traffic only: the realistic baseline.
+  authors: [v2xw]
+  tags: [benchmark, real-world, manhattan, rush-hour, scms, dsrc, j2945, calendar, privacy]
+  created: "2026-10-18"
+
+seed: "0xBE7C_0001"
+
+time:
+  t0: "2026-10-19T21:00:00Z"
+  calendar: real
+  duration_s: 172800.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+  warmup_s: 180.0
+  metric_period_s: 10.0
+  fast_forward:
+    - {from_s: 480.0, to_s: 43140.0}
+    - {from_s: 43260.0, to_s: 172800.0}
+
+world:
+  source:
+    kind: osm-xml
+    path: worlds/cache/manhattan.osm.xml
+    bbox:
+      min_lat_deg: 40.7440
+      min_lon_deg: -73.9900
+      max_lat_deg: 40.7620
+      max_lon_deg: -73.9680
+  highway_preset: urban-us-nyc
+  imported_at: "2026-09-18T00:00:00Z"
+  buildings:
+    enabled: true
+    keep_holes: true
+  terrain:
+    dem: null
+
+actors:
+  rsu_placement:
+    count: 30
+    roles: [report-forward, crl, provisioning-proxy]
+    profile: rsu/commsignia-its-rs4
+    backhaul: backhaul/fibre
+    min_spacing_m: 150.0
+  backend:
+    protocol: protocol/scms/camp
+  vru:
+    pedestrians: 2000
+    cyclists: 200
+    device_fraction: 0.25
+    behaviour: observed
+    ebike_share: 0.4
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 9000.0
+    classes:
+      passenger:
+        fraction: 0.80
+      delivery:
+        fraction: 0.08
+      truck:
+        fraction: 0.03
+      bus:
+        fraction: 0.02
+      motorcycle:
+        fraction: 0.03
+      moped:
+        fraction: 0.04
+
+weather:
+  initial: clear
+  intensity: 0.0
+
+radio:
+  rat: dsrc-80211p
+  range:
+    # As midtown-peak-load.yaml: decoded receptions are followed to 500 m (the street
+    # canyon's NLOS law puts a 20 dBm frame 10 dB under the noise floor at ~450 m); past
+    # that, line-of-sight energy still counts as interference.
+    max_m: 500.0
+  tiers:
+    propagation: medium
+    phy: medium
+    mac: medium
+
+net:
+  layer: wsmp
+  uu:
+    id: cellular/uu/cell-capacity-mm1
+    params:
+      isd_m: 500
+      penetration: 0.8
+
+messages:
+  sets: [bsm]
+  codec_tier: uper
+
+security:
+  envelope: ieee1609.2
+  signature: ecdsa-p256
+  crypto_mode: modeled
+  verification_policy: prioritized
+  signer_id_policy:
+    full_cert_every_ms: 1000
+    digest_otherwise: true
+  pseudonym_change:
+    strategy: time
+    period_s: 300.0
+  protocol:
+    id: protocol/scms/camp
+  scms:
+    deployment:
+      preset: us-production-2025
+    # A run of two days: the PKI view's per-SPDU records would dominate the recording.
+    pki_view: false
+
+nodes:
+  default_obu: obu/unex-obu-301-craton2
+  compute_tier: medium
+  backend_tier: medium
+
+detection:
+  local:
+    - id: detect/legacy-12
+  ma:
+    id: threat/ma/corroborated
+
+threats:
+  eavesdropper:
+    id: threat/observer/passive-privacy
+    params:
+      sniffer_fraction: 0.1
+      range_m: 200
+
+metrics: [all]
+exporters: []
+
+events:
+  # The streets fill first (as midtown-peak-load.yaml): for 90 s the offered demand is four
+  # times the steady rate, so the box holds a rush hour's vehicles when measurement starts.
+  - {t: 0.0, until: 90.0, type: demand.multiplier, value: 4.0}
