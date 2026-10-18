@@ -298,13 +298,19 @@ pub fn answer<E: Introspect + ?Sized>(engine: &mut E, query: &Query) -> Result<V
                     crate::pki::PkiQuery::Pdu { .. } => "pdu",
                     crate::pki::PkiQuery::Cert { .. } => "certificate",
                     crate::pki::PkiQuery::Knowledge { .. } => "entity",
+                    crate::pki::PkiQuery::Vehicle { .. } => "device",
+                    crate::pki::PkiQuery::Crl { .. } => "crl",
+                    _ => "pki topic",
                 },
                 id: format!(
                     "{}: not in this run's PKI records ({})",
                     match q {
                         crate::pki::PkiQuery::Pdu { id, .. } => id.as_str(),
-                        crate::pki::PkiQuery::Cert { id8, .. } => id8.as_str(),
+                        crate::pki::PkiQuery::Cert { id8, .. }
+                        | crate::pki::PkiQuery::Crl { id8, .. } => id8.as_str(),
                         crate::pki::PkiQuery::Knowledge { entity, .. } => entity.as_str(),
+                        crate::pki::PkiQuery::Vehicle { device, .. } => device.as_str(),
+                        _ => "",
                     },
                     store.known(q)
                 ),

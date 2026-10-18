@@ -23,7 +23,7 @@ use crate::run::Run;
 use crate::session::{CameraState, OVERLAYS, Session, overlay_is_gt};
 
 /// Every method name of §6.15, in the order the inventory lists them.
-pub const METHODS: [&str; 40] = [
+pub const METHODS: [&str; 41] = [
     "run.start",
     "run.pause",
     "run.resume",
@@ -41,6 +41,7 @@ pub const METHODS: [&str; 40] = [
     "inspect.pdu",
     "inspect.cert",
     "inspect.knowledge",
+    "inspect.pki",
     "explain",
     "scenario.get",
     "scenario.schema",
@@ -303,7 +304,9 @@ pub fn dispatch(ctx: &mut Context<'_>, request: &Request) -> Result<Outcome> {
         "inspect.node" => inspect_node(ctx, p),
         "inspect.link" => inspect_link(ctx, p),
         "inspect.entity" => inspect_entity(ctx, p),
-        "inspect.pdu" | "inspect.cert" | "inspect.knowledge" => inspect_pki(ctx, method, p),
+        "inspect.pdu" | "inspect.cert" | "inspect.knowledge" | "inspect.pki" => {
+            inspect_pki(ctx, method, p)
+        }
         "explain" => explain(ctx, p),
         "scenario.get" => scenario_get(ctx, p),
         "scenario.schema" => scenario_schema(ctx, p),
@@ -1103,7 +1106,9 @@ fn inspect_pki(ctx: &mut Context<'_>, method: &str, p: &Map<String, Value>) -> R
         .session
         .as_ref()
         .is_some_and(|s| s.profile().is_node_only());
-    if node_only && view == "ground-truth" && method != "inspect.cert" {
+    // A CRL list and the CTL are published to every device: no view to refuse.
+    let public = method == "inspect.cert" || (method == "inspect.pki" && text(p, "topic") == Some("crls"));
+    if node_only && view == "ground-truth" && !public {
         return Err(ServerError::VisibilityDenied {
             field: "view".to_string(),
             visibility: "GT",
@@ -1136,6 +1141,29 @@ fn inspect_pki(ctx: &mut Context<'_>, method: &str, p: &Map<String, Value>) -> R
                 t_ns: uint(p, "t_ns"),
             }
         }
+        "inspect.pki" => match text(p, "topic") {
+            Some("vehicles") => PkiQuery::Vehicles { view },
+            Some("vehicle") => PkiQuery::Vehicle {
+                device: required("device", "pass a device id such as \"ee/1000019\" or a node id")?,
+                view,
+            },
+            Some("cases") => PkiQuery::Cases { view },
+            Some("crls") => PkiQuery::Crls,
+            Some("crl") => {
+                let id8 = required("hashedid8", "pass a CRL's HashedId8 from topic crls")?;
+                PkiQuery::Crl {
+                    id8: id8.to_ascii_lowercase(),
+                    view,
+                }
+            }
+            _ => {
+                return Err(ServerError::param(
+                    "/topic",
+                    "must be vehicles, vehicle, cases, crls or crl",
+                    "pass {\"topic\": \"vehicles\"}",
+                ));
+            }
+        },
         _ => PkiQuery::Knowledge {
             entity: required(
                 "entity",

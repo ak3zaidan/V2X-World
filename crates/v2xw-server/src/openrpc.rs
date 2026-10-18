@@ -503,6 +503,28 @@ fn all_methods() -> Vec<Value> {
             &[-32006, -32009, -32040],
         ),
         method(
+            "inspect.pki",
+            "The PKI view's Vehicles, Cases and Revocation-lists tabs (WP-E3): `vehicles` \
+             (every vehicle's pool, enrolment and provisioning state), `vehicle` (one \
+             vehicle's i × j grid and pseudonym history), `cases` (every misbehaviour case \
+             with its stages, investigation steps and, in ground truth, its reporters and \
+             accused), `crls` (every CRL version with its SLA clock, and the CTL) and `crl` \
+             (one CRL's entries from the real decoder and, in ground truth, the run's \
+             certificates each revokes).",
+            object(
+                &["topic"],
+                json!({"topic": {"type": "string",
+                                 "enum": ["vehicles", "vehicle", "cases", "crls", "crl"]},
+                       "device": {"type": "string",
+                                  "description": "vehicle: ee/<n> or the node id"},
+                       "hashedid8": {"type": "string", "pattern": "^[0-9a-fA-F]{16}$"},
+                       "view": {"type": "string", "default": "ground-truth",
+                                "description": "ground-truth, a vehicle (ee/<n>) or a component id"}}),
+            ),
+            json!({"type": "object"}),
+            &[-32006, -32009, -32040],
+        ),
+        method(
             "explain",
             "Resolve a displayed value back to the model that produced it.",
             object(

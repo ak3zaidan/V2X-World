@@ -1843,6 +1843,7 @@ impl Projector {
                             .entry(node)
                             .or_insert_with(|| (Value::Null, std::collections::VecDeque::new()));
                         if record.channel == "node.security" {
+                            self.pki.absorb_security(&value);
                             entry.0 = value;
                         } else {
                             if entry.1.len() >= MESSAGE_LOG {
@@ -1879,12 +1880,11 @@ impl Projector {
                 },
                 // The security path's own records, which the page does not draw.
                 "privacy.link" | "ma.report" | "ma.decision" => {}
-                // The PKI view (WP-E1): kept for its inspect queries. The case board's
-                // transitions are a recording and UI channel the queries do not need.
-                "pki.state" | "pki.flow" | "pki.knowledge" | "node.credentials" => {
+                // The PKI view (WP-E1): kept for its inspect queries; the case board's
+                // transitions feed `inspect.pki {topic: cases}` (WP-E3).
+                "pki.state" | "pki.flow" | "pki.knowledge" | "node.credentials" | "pki.case" => {
                     self.pki.absorb(record.channel, &record.json);
                 }
-                "pki.case" => {}
                 // A scenario timeline item firing: kept for `run.status` (`timeline`), which
                 // is how the page marks an event as having happened and says what it did.
                 "scenario.event" => match serde_json::from_slice::<Value>(&record.json) {
