@@ -4524,10 +4524,7 @@ impl Engine {
             // back-off expires (IEEE 1609.2a-2017 §8.2.1, `p2pcd_maxResponseBackoff`),
             // not at its next periodic step: the back-off is a quarter of a second at the
             // Annex C values, shorter than a 100 ms step's quantisation can resolve.
-            let p2pcd_due = self
-                .nodes
-                .get(id)
-                .and_then(|n| n.next_p2pcd_due_after(now));
+            let p2pcd_due = self.nodes.get(id).and_then(|n| n.next_p2pcd_due_after(now));
             if let Some(at) = p2pcd_due {
                 self.request_wake(*id, at.max(now + 1), horizon);
             }
@@ -4854,7 +4851,8 @@ impl Engine {
         // node rewrote it when it issued the certificate it is about to sign with. A
         // subject a report names is a subject that was on the air, so registering here
         // registers exactly the digests that can be reported — and nothing else.
-        if let (Some(cred), Some(phase2), false) = (credential.as_ref(), self.phase2.as_mut(), p2pcd)
+        if let (Some(cred), Some(phase2), false) =
+            (credential.as_ref(), self.phase2.as_mut(), p2pcd)
             && phase2.note_digest(node, &cred.digest, cred.i_period, cred.j_index)
             && let Some(actor) = self.node_actor.get(&node).copied()
         {

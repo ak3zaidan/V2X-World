@@ -173,7 +173,11 @@ fn an_unknown_provider_ca_is_learned_from_a_response_on_the_air() {
         assert!(spdu.is_some_and(|b| b > 150), "frame {spdu:?}");
     }
     let heard = r.rx.get("delivered/unsecured").copied().unwrap_or(0);
-    assert!(heard > 0, "no receiver took a response off the air: {:?}", r.rx);
+    assert!(
+        heard > 0,
+        "no receiver took a response off the air: {:?}",
+        r.rx
+    );
     assert!(
         r.p2pcd.get("learned").copied().unwrap_or(0) > 0,
         "nothing was learned from the responses heard"

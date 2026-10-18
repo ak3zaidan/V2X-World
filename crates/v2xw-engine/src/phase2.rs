@@ -2583,7 +2583,9 @@ impl Phase2 {
     /// for a provider whose root is not on the CTL. What a device's chain file holds under
     /// `security.scms.chain_file: home-provider`.
     #[must_use]
-    pub fn provider_chain_files(&self) -> Vec<Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>> {
+    pub fn provider_chain_files(
+        &self,
+    ) -> Vec<Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>> {
         let st = &self.home().state;
         let Some(home) = st.pki.as_ref() else {
             return Vec::new();

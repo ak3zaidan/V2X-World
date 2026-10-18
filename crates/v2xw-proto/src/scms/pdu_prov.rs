@@ -220,42 +220,46 @@ pub struct RaAcaInput {
 /// `cracaId 000000`, `crlSeries 0` (the ACA replaces both), one week plus an hour from
 /// `valid_from`, and the requested PSIDs (BSM when none). Its `verifyKeyIndicator` is set
 /// by [`aca_ra_request`].
-fn pseudonym_tbs(x: &RaAcaInput) -> Result<v2xw_msg::sec_types::ieee1609_dot2::ToBeSignedCertificate> {
-    Ok(v2xw_msg::sec_types::ieee1609_dot2::ToBeSignedCertificate::new(
-        CertificateId::linkageData(v2xw_msg::sec_types::ieee1609_dot2::LinkageData::new(
-            IValue(Uint16(x.i)),
-            AsnLinkageValue(FixedOctetString::from(x.dummy_lv)),
-            None,
-        )),
-        HashedId3(FixedOctetString::from([0u8; 3])),
-        CrlSeries(Uint16(0)),
-        ValidityPeriod::new(
-            Time32(Uint32(x.valid_from)),
-            Ieee1609Duration::minutes(Uint16(PSEUDONYM_LIFETIME_MIN)),
-        ),
-        None,
-        None,
-        Some(SequenceOfPsidSsp(if x.psids.is_empty() {
-            vec![PsidSsp::new(
-                Psid(rasn::types::Integer::from(BSM_PSID)),
+fn pseudonym_tbs(
+    x: &RaAcaInput,
+) -> Result<v2xw_msg::sec_types::ieee1609_dot2::ToBeSignedCertificate> {
+    Ok(
+        v2xw_msg::sec_types::ieee1609_dot2::ToBeSignedCertificate::new(
+            CertificateId::linkageData(v2xw_msg::sec_types::ieee1609_dot2::LinkageData::new(
+                IValue(Uint16(x.i)),
+                AsnLinkageValue(FixedOctetString::from(x.dummy_lv)),
                 None,
-            )]
-        } else {
-            x.psids
-                .iter()
-                .map(|p| PsidSsp::new(Psid(rasn::types::Integer::from(*p)), None))
-                .collect()
-        })),
-        None,
-        None,
-        None,
-        None,
-        VerificationKeyIndicator::verificationKey(pdu::sig1609_key_of(&x.cocoon_signing)?),
-        None,
-        None,
-        None,
-        None,
-    ))
+            )),
+            HashedId3(FixedOctetString::from([0u8; 3])),
+            CrlSeries(Uint16(0)),
+            ValidityPeriod::new(
+                Time32(Uint32(x.valid_from)),
+                Ieee1609Duration::minutes(Uint16(PSEUDONYM_LIFETIME_MIN)),
+            ),
+            None,
+            None,
+            Some(SequenceOfPsidSsp(if x.psids.is_empty() {
+                vec![PsidSsp::new(
+                    Psid(rasn::types::Integer::from(BSM_PSID)),
+                    None,
+                )]
+            } else {
+                x.psids
+                    .iter()
+                    .map(|p| PsidSsp::new(Psid(rasn::types::Integer::from(*p)), None))
+                    .collect()
+            })),
+            None,
+            None,
+            None,
+            None,
+            VerificationKeyIndicator::verificationKey(pdu::sig1609_key_of(&x.cocoon_signing)?),
+            None,
+            None,
+            None,
+            None,
+        ),
+    )
 }
 
 /// THE `aca-ra.raAcaCertRequest` builder, for every certificate the ACA issues: a
@@ -499,13 +503,12 @@ pub fn aca_issue_request(
             }
             let lv = linkage::linkage_value(plv1, plv2);
             let i = ld.i_cert.0.0;
-            t.id = CertificateId::linkageData(
-                v2xw_msg::sec_types::ieee1609_dot2::LinkageData::new(
+            t.id =
+                CertificateId::linkageData(v2xw_msg::sec_types::ieee1609_dot2::LinkageData::new(
                     IValue(Uint16(i)),
                     lv.to_asn1(),
                     None,
-                ),
-            );
+                ));
             t.crl_series = CrlSeries(Uint16(PSEUDONYM_CRL_SERIES));
             (Some(lv), Some(i))
         }

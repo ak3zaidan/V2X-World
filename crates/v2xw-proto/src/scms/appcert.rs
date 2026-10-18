@@ -52,12 +52,8 @@ use v2xw_msg::sec_types::ieee1609_dot2_base_types::{
     PublicEncryptionKey, PublicVerificationKey, SequenceOfPsidSsp, SymmAlgorithm, Time32, Uint8,
     Uint16, Uint32, ValidityPeriod,
 };
-use v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ee_interface::{
-    AcaEeInterfacePdu,
-};
-use v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ra_interface::{
-    AcaRaInterfacePdu, AcaResponse,
-};
+use v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ee_interface::AcaEeInterfacePdu;
+use v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ra_interface::{AcaRaInterfacePdu, AcaResponse};
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::{
     AdditionalParams, ButterflyExpansion, ButterflyParamsOriginal, EeRaCertRequest,
     EeRaInterfacePdu,
@@ -71,8 +67,7 @@ use v2xw_sec::hashedid;
 use v2xw_sec::sig1609::Signer1609;
 
 use crate::scms::pdu::{
-    self, ButterflyOriginal, Drbg, PduError, RequestSigner, RequestSignerFound, Result,
-    ScmsPki,
+    self, ButterflyOriginal, Drbg, PduError, RequestSigner, RequestSignerFound, Result, ScmsPki,
 };
 
 /// SPaT and MAP, `0x82` (130): the intersection-safety-and-awareness PSID
