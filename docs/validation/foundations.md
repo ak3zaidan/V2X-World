@@ -22,15 +22,15 @@ follows Friis exactly and every number can be computed by hand.
 |---|---|---|
 | BSMs | 10 Hz × 3 s × 2 = 60, generated exactly 100 ms apart, msgCnt +1 each | 60, exact |
 | Signer | full certificate once a second (J2945/1), digest otherwise | 3 per vehicle |
-| Frame octets | 56 BSM + 231 / 93 envelope (with cert 144) + 5 WSMP + 38 LLC/MAC/FCS = 330 / 192 | equal, and layers sum for every frame |
-| Airtime | 802.11p 10 MHz, 6 Mb/s: 40 µs + ⌈(22 + 8·L)/48⌉ × 8 µs = 488 / 304 µs | equal for every frame |
+| Frame octets | 56 BSM + 164 / 93 envelope (with the 77-octet implicit pseudonym) + 5 WSMP + 38 LLC/MAC/FCS = 263 / 192 | equal, and layers sum for every frame |
+| Airtime | 802.11p 10 MHz, 6 Mb/s: 40 µs + ⌈(22 + 8·L)/48⌉ × 8 µs = 400 / 304 µs | equal for every frame |
 | Received power | P_tx + 2 × (5 dBi − 2 dB cable) − FSPL(d, 5.860 GHz) | within 0.02 dB for all 60 |
 | Receptions | one link each way: 60 attempts, 60 decoded, delivered, verified | 60 / 60 / 60 / 60 |
 | Propagation | d / c | within 1 ns |
-| Sign / verify | 9 ms (eHSM "<9 ms") / 400 µs (1/2500 s) | exact for every message |
+| Sign / verify | 9 ms (eHSM "<9 ms") / 400 µs (1/2500 s); the first SPDU under a new pseudonym also pays its validation, SHA-256 over the 77-octet certificate + one ECQV reconstruction priced on the profile (≈ 1.95 ms, 2,349 µs in all); every later one 400 µs | exact for every message |
 | Position in BSM | within GNSS error of the true position | mean < 5.3 m, ≥ 80 % under 9.38 m (Reid 2019 p99), max < 30 m |
 | Heading | J2735 clockwise from north = 90° − ENU heading | within 10° when moving |
-| Window at 2 s | bytes_air 4,116; offered = carried 32,928 b/s; channel_load 0.0064; occupancy 0.0032; envelope/payload 2,136/1,120; security 2,136/4,116; cert share 288/2,136; PDR 20/20; NAR(300 m) 1; verify_rate 20; AoI = latency + 50 ms | all equal |
+| Window at 2 s | bytes_air 3,982; offered = carried 31,856 b/s; channel_load 0.0063; occupancy 0.0031; envelope/payload 2,002/1,120; security 2,002/3,982; cert share 154/2,002; PDR 20/20; NAR(300 m) 1; verify_rate 20; AoI = latency + 50 ms | all equal |
 | Zero metrics | collisions, PER, half-duplex, loss, unverified | 0 |
 
 ## A roadside unit (2 s)
@@ -53,14 +53,18 @@ Attempts are 2 × (40 + 22) = 124, and all 124 decode.
 
 ## More vehicles (1 s each): 2, 5, 10, 25, 50, 100
 
-| n | frames | offered b/s per vehicle | attempts = frames × (n−1) | channel_load (≈ n × 0.003224) | frames overlapping on air | collision losses |
+| n | frames | offered b/s per vehicle | attempts = frames × (n−1) | channel_load (≈ n × 0.003136) | frames overlapping on air | collision losses |
 |---|---|---|---|---|---|---|
-| 2 | 20 | 16,464 | 20 | 0.0064 | 0 | 0 |
-| 5 | 50 | 16,464 | 200 | 0.0161 | 0 | 0 |
-| 10 | 100 | 16,464 | 900 | 0.0322 | 0 | 0 |
-| 25 | 248 | 16,341 | 5,952 | 0.080 | 0 | 0 |
-| 50 | 495 | 16,310 | 24,255 | 0.159 | 0 | 0 |
-| 100 | 988 | 16,280 | 97,812 | 0.317 | 2 | 299 (+4 half-duplex) |
+| 2 | 20 | 15,928 | 20 | 0.0063 | 0 | 0 |
+| 5 | 50 | 15,928 | 200 | 0.0157 | 0 | 0 |
+| 10 | 100 | 15,928 | 900 | 0.0314 | 0 | 0 |
+| 25 | 248 | 15,805 | 5,952 | 0.078 | 0 | 0 |
+| 50 | 495 | 15,774 | 24,255 | 0.155 | 1 | 94 (+2 half-duplex) |
+| 100 | 988 | 15,744 | 97,812 | 0.309 | 30 | 4,693 (+60 half-duplex, +65 hidden-terminal) |
+
+Measured 2026-10-18 with the 77-octet implicit pseudonym (WP-C1); the 100-vehicle row
+already read this way before the validated-certificate cache landed, and its
+hidden-terminal losses are not yet explained by the free-space argument below.
 
 Offered load, attempts and the channel busy ratio are linear in n, as theory says.
 Everyone is in carrier-sense range in free space, so there are no hidden terminals, and a

@@ -549,3 +549,169 @@ fn a_crl_signer_whose_certificate_the_ica_did_not_sign_is_refused() {
         Err(RxReject::CrlSignerUntrusted)
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// The validated-certificate cache (rxval module documentation): first sight pays the
+// chain and the reconstruction, a repeat pays the signature only; capacity, peer-cache
+// eviction and CRL installation send a signer back to first sight.
+// ---------------------------------------------------------------------------------------
+
+use v2xw_sec::primitive::{PrimitiveId, PrimitiveOpKind};
+
+/// The validation work a new implicit pseudonym costs a receiver whose CA path is already
+/// validated: SHA-256 over the certificate's COER (its HashedId8) and one ECQV
+/// reconstruction (IEEE 1609.2 §5.3.1 hashing, 02 §6).
+fn first_sight(key: &ImplicitKey) -> Vec<(PrimitiveId, PrimitiveOpKind, u32)> {
+    let coer = cert::encode(key.certificate()).expect("encodes").len();
+    vec![
+        (PrimitiveId::SHA_256, PrimitiveOpKind::Verify, coer as u32),
+        (PrimitiveId::ECQV_P256, PrimitiveOpKind::Verify, 0),
+    ]
+}
+
+fn id8_of(key: &ImplicitKey) -> [u8; 8] {
+    hashedid::id8_bytes(&cert::cert_id8(key.certificate()).expect("id8"))
+}
+
+/// Receives one BSM under `key` and returns the validation work it cost.
+fn work(
+    rx: &mut NodeSecurity,
+    mode: CryptoMode,
+    key: &ImplicitKey,
+    at: u64,
+) -> Vec<(PrimitiveId, PrimitiveOpKind, u32)> {
+    assert_eq!(
+        receive(rx, &bsm(mode, key, at, None), at),
+        SpduVerdict::Valid
+    );
+    rx.take_validation_ops()
+}
+
+#[test]
+fn first_sight_pays_the_ee_link_and_reconstruction_and_a_repeat_only_the_signature() {
+    let pki = pki();
+    let a = pseudonym(&pki, &pki.aca, 1, |_| {});
+    let b = pseudonym(&pki, &pki.aca, 2, |_| {});
+    for mode in MODES {
+        let mut rx = trusted(mode, &pki);
+        // Installing the chain file validated every CA path once.
+        assert!(!rx.take_validation_ops().is_empty());
+        let ca = rx.trust().stats.ca_validations;
+        assert_eq!(work(&mut rx, mode, &a, 10), first_sight(&a), "{mode:?}");
+        for t in 11..16 {
+            assert!(
+                work(&mut rx, mode, &a, t).is_empty(),
+                "{mode:?} repeat at {t}"
+            );
+        }
+        // A new certificate is a new first sight; the CA path is not validated again.
+        assert_eq!(work(&mut rx, mode, &b, 16), first_sight(&b));
+        let s = &rx.trust().stats;
+        assert_eq!((s.ee_validations, s.ee_hits, s.ca_validations), (2, 5, ca));
+        // The first sight costs time on a real profile.
+        let d =
+            v2xw_node::rxval::price(&first_sight(&a), "obu/unex-obu-301-craton2").expect("priced");
+        assert!(d.as_nanos() > 0);
+    }
+}
+
+#[test]
+fn the_validated_cache_evicts_the_least_recently_used_signer() {
+    let pki = pki();
+    let [a, b, c] = [1u8, 2, 3].map(|s| pseudonym(&pki, &pki.aca, s, |_| {}));
+    let mode = CryptoMode::Modeled;
+    let mut rx = trusted(mode, &pki);
+    rx.trust_mut().set_ee_capacity(2);
+    let _ = rx.take_validation_ops();
+    let miss = |rx: &mut NodeSecurity, k: &ImplicitKey, t| work(rx, mode, k, t) == first_sight(k);
+    let hit = |rx: &mut NodeSecurity, k: &ImplicitKey, t| work(rx, mode, k, t).is_empty();
+    assert!(miss(&mut rx, &a, 10));
+    assert!(miss(&mut rx, &b, 11));
+    assert!(hit(&mut rx, &a, 12)); // a is now the most recent; b the least
+    assert!(miss(&mut rx, &c, 13)); // evicts b
+    assert!(hit(&mut rx, &a, 14));
+    assert!(miss(&mut rx, &b, 15)); // evicts c
+    assert!(miss(&mut rx, &c, 16)); // evicts a
+    assert!(hit(&mut rx, &b, 17));
+    assert_eq!(rx.trust().ee_cache().len(), 2);
+    assert_eq!(rx.trust().stats.ee_evictions, 3);
+}
+
+#[test]
+fn a_certificate_the_peer_cache_forgets_is_validated_again() {
+    let pki = pki();
+    let a = pseudonym(&pki, &pki.aca, 4, |_| {});
+    let mode = CryptoMode::Real;
+    let mut rx = trusted(mode, &pki);
+    let _ = rx.take_validation_ops();
+    assert_eq!(work(&mut rx, mode, &a, 10), first_sight(&a));
+    assert!(work(&mut rx, mode, &a, 11).is_empty());
+    rx.trust_mut().forget(id8_of(&a));
+    assert!(!rx.trust().ee_cache().contains(&id8_of(&a)));
+    assert_eq!(work(&mut rx, mode, &a, 12), first_sight(&a));
+    assert_eq!(rx.trust().stats.ee_evictions, 1);
+    // Forgetting a certificate the node never validated changes nothing.
+    rx.trust_mut().forget([0xAB; 8]);
+    assert_eq!(rx.trust().stats.ee_evictions, 1);
+}
+
+#[test]
+fn a_fresh_crl_sends_the_signers_it_governs_back_to_first_sight() {
+    let pki = pki();
+    let a = pseudonym(&pki, &pki.aca, 5, |_| {});
+    // Another device's entry: this CRL revokes nobody the receiver hears.
+    let other = DeviceLinkageContext::new(
+        LaId(3),
+        LaId(4),
+        LinkageSeed::new([0x33; 16]),
+        LinkageSeed::new([0x44; 16]),
+    );
+    let linkage = linkage_crl(&pki, &[CrlLinkageEntry::from_device(&other, 0, 20)], t0());
+    let ca_hash = signed_crl(
+        &pki,
+        2,
+        CrlBody::Hash {
+            serial: 1,
+            entries: vec![HashRevocation {
+                id: [0xEE; 10],
+                expiry: t0() + 2 * WEEK,
+            }],
+        },
+        t0(),
+    );
+    for mode in MODES {
+        let mut rx = trusted(mode, &pki);
+        let _ = rx.take_validation_ops();
+        assert_eq!(work(&mut rx, mode, &a, 10), first_sight(&a));
+        assert!(work(&mut rx, mode, &a, 11).is_empty());
+        // A series-1 CRL of the pseudonym's CRACA governs it: validated again.
+        let v = rx
+            .verify_secured_crl(&linkage, 12 * NS_PER_S)
+            .expect("accepted");
+        assert!(v.fresh);
+        let _ = rx.take_validation_ops(); // the CRL's own verification
+        assert_eq!(rx.trust().stats.invalidated, 1, "{mode:?}");
+        assert_eq!(work(&mut rx, mode, &a, 13), first_sight(&a), "{mode:?}");
+        assert!(work(&mut rx, mode, &a, 14).is_empty());
+        // The same CRL again is no change and invalidates nothing.
+        let v = rx
+            .verify_secured_crl(&linkage, 15 * NS_PER_S)
+            .expect("accepted");
+        assert!(!v.fresh);
+        assert!(rx.take_validation_ops().is_empty());
+        assert!(work(&mut rx, mode, &a, 16).is_empty());
+        assert_eq!(rx.trust().stats.invalidated, 1);
+        // A series-2 hash CRL governs the ACA, not the pseudonym: the CA path above it is
+        // validated again (explicit links, no reconstruction), the EE verdict is kept.
+        rx.verify_secured_crl(&ca_hash, 17 * NS_PER_S)
+            .expect("accepted");
+        let _ = rx.take_validation_ops();
+        assert!(rx.trust().stats.invalidated > 1);
+        let ca = rx.trust().stats.ca_validations;
+        let ops = work(&mut rx, mode, &a, 18);
+        assert!(!ops.is_empty(), "{mode:?}");
+        assert!(ops.iter().all(|o| o.0 != PrimitiveId::ECQV_P256), "{ops:?}");
+        assert_eq!(rx.trust().stats.ca_validations, ca + 1);
+        assert!(work(&mut rx, mode, &a, 19).is_empty());
+    }
+}

@@ -361,10 +361,34 @@ fn every_frame_reaches_the_other_vehicle_at_the_friis_power_and_is_verified() {
         );
     }
     // Verification is the profile's line-rate engine, 1/2500 s = 400 µs, never queued with
-    // one sender; signing is the eHSM's published "<9 ms" (R7 §A4).
-    for v in &ver {
-        assert_eq!(v.cost_us, Some(400));
-        assert_eq!(v.t_done.unwrap() - v.t_start.unwrap(), 400_000);
+    // one sender; signing is the eHSM's published "<9 ms" (R7 §A4). The first SPDU a
+    // receiver gets under a pseudonym also validates it (WP-C2): the EE link's SHA-256
+    // over the 77-octet certificate and its ECQV reconstruction, priced on the profile.
+    // The CA path was validated when the chain file was installed, and every later SPDU
+    // under the same certificate costs the signature only (crate rxval, the EE cache).
+    let first = first_sight_ns(77);
+    let mut seen = BTreeSet::new();
+    let mut by_node: Vec<&NodeVerifyView> = ver.iter().collect();
+    by_node.sort_by_key(|v| (v.node, v.t_enqueue));
+    for v in by_node {
+        let want = if seen.insert(v.node) {
+            400_000 + first
+        } else {
+            400_000
+        };
+        assert_eq!(v.t_done.unwrap() - v.t_start.unwrap(), want, "{v:?}");
+        assert_eq!(v.cost_us, Some(want / 1_000));
+    }
+    assert_eq!(seen.len(), 2);
+    assert_eq!(report.receiver_validation.ee_validations, 2);
+    assert_eq!(report.receiver_validation.ee_hits, 58);
+    let mut first_verify: BTreeMap<_, u64> = BTreeMap::new();
+    for r in &rxs {
+        let t = r.t_verify_start.unwrap();
+        first_verify
+            .entry(r.rx)
+            .and_modify(|m: &mut u64| *m = (*m).min(t))
+            .or_insert(t);
     }
     for t in &txs {
         assert_eq!(t.t_signed.unwrap() - t.t_sign_start.unwrap(), 9_000_000);
@@ -383,12 +407,47 @@ fn every_frame_reaches_the_other_vehicle_at_the_friis_power_and_is_verified() {
             tx.airtime_us.unwrap() * 1000
         );
         assert_eq!(r.t_tx_start.unwrap(), tx.t);
+        let first_seen = first_verify[&r.rx] == r.t_verify_start.unwrap();
         assert_eq!(
             r.t_verify_done.unwrap() - r.t_verify_start.unwrap(),
-            400_000
+            if first_seen { 400_000 + first } else { 400_000 }
         );
         assert_eq!(r.t_delivered, r.t_verify_done);
     }
+}
+
+/// A peer certificate cache too small for the neighbourhood evicts certificates, and an
+/// evicted certificate takes its validated state with it: when it comes back attached to
+/// a later BSM it is validated, and charged, as on first sight.
+#[test]
+fn a_certificate_the_peer_cache_evicts_is_validated_again_when_it_returns() {
+    let (base, _) = run(deterministic_radio(fleet(3, 3.0)));
+    let b = &base.receiver_validation;
+    // Three vehicles that all hear each other: each validates the other two once.
+    assert_eq!((b.ee_validations, b.ee_evictions), (6, 0), "{b:?}");
+    let mut s = deterministic_radio(fleet(3, 3.0));
+    // One slot for two neighbours: each attached certificate evicts the other's.
+    s.nodes.peer_cert_cache = Some(1);
+    let (small, _) = run(s);
+    let r = &small.receiver_validation;
+    assert!(r.ee_evictions > 0, "{r:?}");
+    assert!(r.ee_validations > b.ee_validations, "{r:?}");
+}
+
+/// What validating a new implicit pseudonym of `cert_octets` costs the OBU-301 on top of
+/// the signature: one SHA-256 over the certificate (its HashedId8) and one ECQV
+/// reconstruction, priced by the WP-C4 catalogue on the profile's anchors.
+fn first_sight_ns(cert_octets: u32) -> u64 {
+    use v2xw_sec::primitive::{PrimitiveId, PrimitiveOpKind::Verify};
+    v2xw_node::rxval::price(
+        &[
+            (PrimitiveId::SHA_256, Verify, cert_octets),
+            (PrimitiveId::ECQV_P256, Verify, 0),
+        ],
+        "obu/unex-obu-301-craton2",
+    )
+    .expect("the OBU-301 prices both")
+    .as_nanos()
 }
 
 #[test]
@@ -401,25 +460,27 @@ fn every_metric_of_the_two_vehicle_run_is_its_hand_computed_value() {
         !window(&rec, 3 * S).is_empty(),
         "the window that closes at the end of the run is missing"
     );
-    // Per vehicle and second: one 330-octet frame with a certificate, nine 192-octet ones
-    // with a digest (56-octet BSM, 1609.2 envelope 231 / 93, WSMP 5, LLC + MAC + FCS 38).
-    let per_vehicle_bytes = 330.0 + 9.0 * 192.0;
+    // Per vehicle and second: one 263-octet frame with a certificate, nine 192-octet ones
+    // with a digest (56-octet BSM, 1609.2 envelope 164 / 93, WSMP 5, LLC + MAC + FCS 38).
+    // The certificate is the ACA's 77-octet implicit pseudonym (WP-C1; it was a 144-octet
+    // explicit stand-in before), so the envelope that carries it is 67 octets shorter.
+    let per_vehicle_bytes = 263.0 + 9.0 * 192.0;
     assert_eq!(
         point(&w, "bytes_air{\"bucket\":\"air\"}"),
         2.0 * per_vehicle_bytes
     );
     assert_eq!(point(&w, "offered_load"), 2.0 * per_vehicle_bytes * 8.0);
     assert_eq!(point(&w, "carried_load"), 2.0 * per_vehicle_bytes * 8.0);
-    // Airtime: 488 µs + 9 × 304 µs = 3,224 µs per vehicle per second.
-    let per_vehicle_air = (airtime_us(330, 48) + 9 * airtime_us(192, 48)) as f64 * 1e-6;
+    // Airtime: 400 µs + 9 × 304 µs = 3,136 µs per vehicle per second.
+    let per_vehicle_air = (airtime_us(263, 48) + 9 * airtime_us(192, 48)) as f64 * 1e-6;
     assert!((point(&w, "channel_load") - 2.0 * per_vehicle_air).abs() < 1e-4);
     assert!((point(&w, "channel_occupancy") - per_vehicle_air).abs() < 1e-4);
     // Security overhead: envelope octets over payload, and over the air.
-    let env = 2.0 * (231.0 + 9.0 * 93.0);
+    let env = 2.0 * (164.0 + 9.0 * 93.0);
     let payload = 2.0 * 10.0 * 56.0;
     assert!((point(&w, "envelope_overhead") - env / payload).abs() < 1e-3);
     assert!((point(&w, "security_overhead") - env / (2.0 * per_vehicle_bytes)).abs() < 1e-3);
-    assert!((point(&w, "cert_bytes_share") - 2.0 * 144.0 / env).abs() < 1e-3);
+    assert!((point(&w, "cert_bytes_share") - 2.0 * 77.0 / env).abs() < 1e-3);
     // Every frame delivered, every neighbour within 300 m known.
     let pdr = serde_json::to_value(&w["pdr"]).unwrap();
     assert_eq!(pdr["trials"], 20, "{pdr}");
@@ -594,13 +655,13 @@ fn the_load_metrics_scale_with_the_fleet_as_theory_says() {
         );
         let per = offered / n as f64;
         assert!(
-            (per - 16_464.0).abs() < 200.0,
+            (per - 15_928.0).abs() < 200.0,
             "offered per vehicle at {n}: {per} b/s"
         );
         // Everyone hears everyone in free space at these ranges: n(n-1) links × 10 frames.
         assert_eq!(attempts, frames * (n as u64 - 1), "attempts at {n}");
-        // Channel busy ratio: n × 3.2 ms of airtime per second.
-        let want = n as f64 * 0.003_224;
+        // Channel busy ratio: n × 3.1 ms of airtime per second (400 + 9 × 304 µs).
+        let want = n as f64 * 0.003_136;
         assert!(
             (load - want).abs() < 0.1 * want + 1e-4,
             "load at {n}: {load} vs {want}"

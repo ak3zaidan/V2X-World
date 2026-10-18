@@ -23,7 +23,32 @@
 //! # What is cached, and what it costs
 //!
 //! A device validates a CA certificate once and remembers it; it validates a pseudonym
-//! certificate the first time it sees it. Each operation that runs is recorded as a
+//! certificate the first time it sees it, and every later SPDU under that certificate
+//! costs only its own signature verification (the frame's base verify operation).
+//! IEEE 1609.2 §5.2 makes an SPDU valid when its signer's chain is (§5.1.2.1–§5.1.2.4a)
+//! and the SPDU itself is consistent and verifies; the chain part depends only on the
+//! certificates and on revocation, so it is the same for every SPDU under one
+//! certificate until a CRL changes (§5.1.2.4a: "nothing revoked"). Deployed stacks
+//! therefore validate once per certificate: Vanetza's receiver skips the chain check for
+//! a signer found in its certificate cache ("certificates from cache are already
+//! verified as trusted", `vanetza/security/straight_verify_service.cpp`, master at
+//! `453fd973`, 2026-10-08), and its `v2/certificate_cache.cpp` keeps an authorization
+//! ticket for 2 s after it was last heard and a CA certificate for an hour.
+//!
+//! The end-entity cache ([`EeCache`]) is keyed by the certificate's HashedId8, holds at
+//! most [`EE_CACHE`] entries and evicts the least recently used one when full. An entry
+//! leaves it three ways, and the next SPDU from that signer then pays the whole
+//! first-sight cost again (the EE link, its hash and the ECQV reconstruction):
+//! - **capacity**: the least recently used entry is evicted ([`RxStats::ee_evictions`]);
+//! - **the peer certificate cache dropped the certificate** ([`RxTrust::forget`]): a
+//!   node keeps no validated state for a certificate it no longer holds;
+//! - **a CRL changed**: a freshly installed CRL invalidates every cached entry, CA paths
+//!   included, whose `cracaId` and `crlSeries` it governs ([`RxStats::invalidated`]). A
+//!   repeat of an already installed CRL changes nothing. Dropping the whole entry, rather
+//!   than only re-reading revocation, is the upper bound a device that re-runs chain
+//!   validation on a CRL change pays (the reconstruction is charged again too).
+//!
+//! Each operation that runs is recorded as a
 //! `(primitive, op, bytes)` triple and priced by the node's own hardware profile through
 //! [`v2xw_sec::primitive::PrimitiveCatalogue::price_all`] (see [`RxTrust::take_ops`]):
 //! a CA link is IEEE 1609.2 §5.3.1's three hashes and one verification with the issuer's
@@ -66,8 +91,9 @@ pub const OVERDUE_CRL_TOLERANCE_S: u32 = 14 * 86_400;
 /// The pseudonym CRL series (linkage based).
 pub const SERIES_PSEUDONYM: u16 = 1;
 
-/// How many end-entity verdicts a node remembers before it starts over (a bounded cache,
-/// like the peer certificate cache).
+/// How many validated end-entity certificates a node remembers (a bounded cache with
+/// least-recently-used eviction, like the peer certificate cache, which in practice
+/// bounds it first: see [`RxTrust::forget`]).
 pub const EE_CACHE: usize = 4_096;
 
 /// Why a receiver refused an SPDU or a CRL.
@@ -156,6 +182,13 @@ pub struct RxStats {
     pub ca_validations: u64,
     /// End-entity certificates validated (cache misses).
     pub ee_validations: u64,
+    /// SPDUs whose signer was already validated (cache hits: signature only).
+    pub ee_hits: u64,
+    /// Validated end-entity certificates evicted for capacity or because the peer
+    /// certificate cache dropped them.
+    pub ee_evictions: u64,
+    /// Cached entries (end-entity and CA path) a freshly installed CRL invalidated.
+    pub invalidated: u64,
     /// Chain findings tolerated as the published RA profile.
     pub tolerated: u64,
     /// SPDUs whose signer has an identified region the node cannot place a location in.
@@ -192,6 +225,123 @@ struct CaPath {
     certs: Vec<Arc<Certificate>>,
     /// The verification key of `certs[0]` (the EE's issuer).
     issuer_key: CertKey,
+}
+
+/// One validated end-entity certificate, with what a CRL is matched against.
+#[derive(Debug, Clone, Copy)]
+struct EeEntry {
+    verdict: Result<(), RxReject>,
+    craca: [u8; 3],
+    series: u16,
+    /// Recency stamp: the key of this entry in [`EeCache::order`].
+    used: u64,
+}
+
+/// The validated end-entity certificate cache: HashedId8 → verdict, at most `capacity`
+/// entries, least recently used evicted first (see the module documentation).
+#[derive(Debug, Clone)]
+pub struct EeCache {
+    capacity: usize,
+    entries: BTreeMap<[u8; 8], EeEntry>,
+    /// Recency stamp → HashedId8; the first key is the least recently used.
+    order: BTreeMap<u64, [u8; 8]>,
+    tick: u64,
+}
+
+impl Default for EeCache {
+    fn default() -> Self {
+        Self::new(EE_CACHE)
+    }
+}
+
+impl EeCache {
+    /// An empty cache holding at most `capacity` (at least one) certificates.
+    pub fn new(capacity: usize) -> Self {
+        EeCache {
+            capacity: capacity.max(1),
+            entries: BTreeMap::new(),
+            order: BTreeMap::new(),
+            tick: 0,
+        }
+    }
+
+    /// How many certificates it holds.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether it holds none.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Whether it holds `id`, without refreshing it.
+    pub fn contains(&self, id: &[u8; 8]) -> bool {
+        self.entries.contains_key(id)
+    }
+
+    fn get(&mut self, id: &[u8; 8]) -> Option<Result<(), RxReject>> {
+        let e = self.entries.get_mut(id)?;
+        self.order.remove(&e.used);
+        self.tick += 1;
+        e.used = self.tick;
+        self.order.insert(self.tick, *id);
+        Some(e.verdict)
+    }
+
+    /// Inserts `id`; returns how many entries were evicted to make room (0 or 1).
+    fn insert(&mut self, id: [u8; 8], verdict: Result<(), RxReject>, c: &Certificate) -> u64 {
+        self.remove(&id);
+        let mut evicted = 0;
+        while self.entries.len() >= self.capacity {
+            let Some((_, lru)) = self.order.pop_first() else {
+                break;
+            };
+            self.entries.remove(&lru);
+            evicted += 1;
+        }
+        self.tick += 1;
+        self.order.insert(self.tick, id);
+        self.entries.insert(
+            id,
+            EeEntry {
+                verdict,
+                craca: craca3(c),
+                series: series(c),
+                used: self.tick,
+            },
+        );
+        evicted
+    }
+
+    fn remove(&mut self, id: &[u8; 8]) -> bool {
+        match self.entries.remove(id) {
+            Some(e) => {
+                self.order.remove(&e.used);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Drops every entry whose `(cracaId, crlSeries)` is `(craca, series)`.
+    fn invalidate(&mut self, craca: [u8; 3], series: u16) -> u64 {
+        let gone: Vec<[u8; 8]> = self
+            .entries
+            .iter()
+            .filter(|(_, e)| e.craca == craca && e.series == series)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &gone {
+            self.remove(id);
+        }
+        gone.len() as u64
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+    }
 }
 
 /// What one installed CRL said, for the overdue rule and freshness.
@@ -350,8 +500,8 @@ pub struct RxTrust {
     anchors: BTreeSet<[u8; 32]>,
     /// Validated CA paths, by the HashedId8 of their bottom certificate.
     paths: BTreeMap<[u8; 8], Result<CaPath, RxReject>>,
-    /// End-entity verdicts, by HashedId8.
-    ees: BTreeMap<[u8; 8], Result<(), RxReject>>,
+    /// Validated end-entity certificates, by HashedId8.
+    ees: EeCache,
     /// Hash revocations: `(cracaId, crlSeries) → HashedId10`.
     hash_revoked: BTreeMap<([u8; 3], u16), BTreeSet<[u8; 10]>>,
     /// The installed CRL of each `(crlCraca, crlSeries)`.
@@ -413,6 +563,27 @@ impl RxTrust {
             self.anchors.insert(h);
             self.paths.clear();
             self.ees.clear();
+        }
+    }
+
+    /// Sets how many validated end-entity certificates the node remembers, emptying the
+    /// cache (a device configured with a different capacity starts with none).
+    pub fn set_ee_capacity(&mut self, capacity: usize) {
+        self.ees = EeCache::new(capacity);
+    }
+
+    /// The validated end-entity certificate cache.
+    pub fn ee_cache(&self) -> &EeCache {
+        &self.ees
+    }
+
+    /// Forgets the validated state of the certificate `id` (its HashedId8), when the
+    /// node's peer certificate cache evicts it: a device keeps no verdict for a
+    /// certificate it no longer holds, so its next SPDU pays first sight again. Counted in
+    /// [`RxStats::ee_evictions`] when there was something to forget.
+    pub fn forget(&mut self, id: [u8; 8]) {
+        if self.ees.remove(&id) {
+            self.stats.ee_evictions += 1;
         }
     }
 
@@ -634,7 +805,10 @@ impl RxTrust {
         }
         let ee_id = id8(ee).ok_or(RxReject::Chain(ChainErrorKind::Malformed))?;
         let verdict = match self.ees.get(&ee_id) {
-            Some(v) => *v,
+            Some(v) => {
+                self.stats.ee_hits += 1;
+                v
+            }
             None => {
                 self.stats.ee_validations += 1;
                 let coer = cert::encode(ee).map_or(0, |b| b.len());
@@ -644,10 +818,7 @@ impl RxTrust {
                     u32::try_from(coer).unwrap_or(u32::MAX),
                 ));
                 let v = self.check_ee_link(ee, &path);
-                if self.ees.len() >= EE_CACHE {
-                    self.ees.clear();
-                }
-                self.ees.insert(ee_id, v);
+                self.stats.ee_evictions += self.ees.insert(ee_id, v, ee);
                 v
             }
         };
@@ -812,10 +983,19 @@ impl RxTrust {
         c3.copy_from_slice(&craca[5..]);
         let set = self.hash_revoked.entry((c3, series_no)).or_default();
         set.extend(v.hashes.iter().copied());
-        // A revoked CA revokes what chains to it: drop cached verdicts.
-        if !v.hashes.is_empty() {
-            self.ees.clear();
-        }
+        // The CRL changed: every cached validation it governs is run again on the next
+        // SPDU (see the module documentation). A revoked CA is still refused at once by
+        // the per-SPDU check of every path certificate against the hash revocations.
+        self.stats.invalidated += self.ees.invalidate(c3, series_no);
+        let before = self.paths.len();
+        self.paths.retain(|_, p| match p {
+            Ok(p) => !p
+                .certs
+                .iter()
+                .any(|c| craca3(c) == c3 && series(c) == series_no),
+            Err(_) => true,
+        });
+        self.stats.invalidated += (before - self.paths.len()) as u64;
         Ok(v)
     }
 }
