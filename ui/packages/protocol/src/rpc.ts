@@ -505,6 +505,50 @@ export interface InspectEntityResult {
   provenance?: ProvenanceInfo[];
   [key: string]: unknown;
 }
+/**
+ * The PKI view's queries (WP-E1, WP-E2; `docs/design/scms-real/00-gap-analysis-and-plan.md` §3.3).
+ * Answered from the `pki.state`, `pki.flow`, `node.credentials` and `pki.knowledge` records, none
+ * of which is on the event stream. The answers are `v2xw_proto::scms::pki_view`'s; the Studio reads
+ * them through `apps/studio/src/lib/pki.ts`, so they are typed loosely here.
+ */
+export interface InspectPduParams {
+  /** `provider/pdu/<n>`. */
+  id: string;
+  /** `ground-truth` (default) or an entity id such as `provider-a/ra/0`. */
+  view?: string;
+}
+/** `inspect.cert` params. */
+export interface InspectCertParams {
+  /** HashedId8, 16 hex digits. */
+  hashedid8: string;
+  t_ns?: SimTimeNs;
+}
+/** `inspect.knowledge` params. */
+export interface InspectKnowledgeParams {
+  entity: string;
+  view?: string;
+}
+/** `inspect.trust` params: the newest `pki.state` at or before `t_ns`. */
+export interface InspectTrustParams {
+  t_ns?: SimTimeNs;
+}
+/** `inspect.flows` params. */
+export interface InspectFlowsParams {
+  flow?: string;
+  /** `ee/<device>` or `<device>`. */
+  device?: string;
+  provider?: string;
+  limit?: number;
+  t_ns?: SimTimeNs;
+}
+/** `inspect.flow` params. */
+export interface InspectFlowParams {
+  /** `provider/flow/run`. */
+  instance: string;
+  t_ns?: SimTimeNs;
+}
+/** Any of the PKI view's answers: a JSON object the Studio validates field by field. */
+export type PkiAnswer = Record<string, unknown>;
 /** §6.9 `explain` params. */
 export interface ExplainParams {
   subject: ValueRef;
@@ -1054,6 +1098,12 @@ export interface VwpMethods {
   "inspect.node": { params: InspectNodeParams; result: InspectNodeResult };
   "inspect.link": { params: InspectLinkParams; result: InspectLinkResult };
   "inspect.entity": { params: InspectEntityParams; result: InspectEntityResult };
+  "inspect.pdu": { params: InspectPduParams; result: PkiAnswer };
+  "inspect.cert": { params: InspectCertParams; result: PkiAnswer };
+  "inspect.knowledge": { params: InspectKnowledgeParams; result: PkiAnswer };
+  "inspect.trust": { params: InspectTrustParams; result: PkiAnswer };
+  "inspect.flows": { params: InspectFlowsParams; result: PkiAnswer };
+  "inspect.flow": { params: InspectFlowParams; result: PkiAnswer };
   explain: { params: ExplainParams; result: ExplainResult };
   "scenario.get": { params: ScenarioGetParams; result: ScenarioGetResult };
   "scenario.set": { params: ScenarioSetParams; result: ScenarioSetResult };
@@ -1081,11 +1131,13 @@ export interface VwpMethods {
 /** Every method name of §6.15. */
 export type VwpMethodName = keyof VwpMethods;
 
-/** §6.15 — the method names as a runtime array (36 entries), in the order the table lists them; the three `runs.*` methods are the run history and comparison. */
+/** §6.15 — the method names as a runtime array (42 entries), in the order the table lists them; the three `runs.*` methods are the run history and comparison, and the six `inspect.*` after `inspect.entity` are the PKI view's (WP-E1, WP-E2). */
 export const VWP_METHODS: readonly VwpMethodName[] = [
   "run.start", "run.pause", "run.resume", "run.step", "run.seek", "run.speed", "run.stop", "run.status",
   "view.follow", "view.camera", "overlay.set",
-  "inspect.node", "inspect.link", "inspect.entity", "explain",
+  "inspect.node", "inspect.link", "inspect.entity",
+  "inspect.pdu", "inspect.cert", "inspect.knowledge", "inspect.trust", "inspect.flows", "inspect.flow",
+  "explain",
   "scenario.get", "scenario.set", "scenario.validate", "scenario.save", "scenario.load", "scenario.list",
   "cities.list",
   "world.import_osm", "world.generate",

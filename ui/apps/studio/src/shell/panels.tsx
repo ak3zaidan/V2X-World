@@ -16,7 +16,7 @@
  * drawn in (`FullPanel`, `Sheet`) are in `shell/PanelFrame.tsx`.
  */
 
-import { BackendPanel } from "../components/BackendView.js";
+import { PkiPanel } from "../components/pki/PkiPanel.js";
 import { AgentPanel } from "../components/AgentPanel.js";
 import { ComparisonView } from "../components/ComparisonView.js";
 import { CopilotPanel } from "../components/CopilotPanel.js";
@@ -39,7 +39,7 @@ export const PANELS: Readonly<Record<PanelId, PanelSpec>> = {
   // open in a window of its own), so its entry here only names it.
   settings: { id: "settings", title: "Settings", kind: "fullscreen", render: () => null },
   metrics: { id: "metrics", title: "Metrics", kind: "fullscreen", keepMounted: true, render: ({ close }) => <MetricsDashboard close={close} /> },
-  backend: { id: "backend", title: "Certificate system", kind: "fullscreen", render: ({ close }) => <BackendPanel close={close} /> },
+  backend: { id: "backend", title: "Certificate system", kind: "fullscreen", render: ({ close }) => <PkiPanel close={close} /> },
   // The agent keeps its conversation in its own store (state/agent.ts), so the sheet can unmount.
   agent: { id: "agent", title: "Agent", kind: "sheet", render: () => <AgentPanel /> },
   runs: { id: "runs", title: "Runs and recordings", kind: "sheet", render: () => <RunBrowser /> },

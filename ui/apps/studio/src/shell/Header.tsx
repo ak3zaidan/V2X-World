@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AgentBadge } from "../components/AgentBadge.js";
-import { BackendButton } from "../components/BackendView.js";
+import { PkiButton } from "../components/pki/PkiPanel.js";
 import { ScenarioPicker } from "../components/ScenarioPicker.js";
 import { QuickSettings } from "../settings/QuickSettings.js";
 import { cityById, cityLabel, cityShortLabel, refreshCities, useCities } from "../state/cities.js";
@@ -277,7 +277,7 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
         <span>Agent</span>
         <AgentBadge />
       </button>
-      <BackendButton />
+      <PkiButton />
       <button
         type="button"
         className={inspectorOpen ? "icon-button on" : "icon-button"}
