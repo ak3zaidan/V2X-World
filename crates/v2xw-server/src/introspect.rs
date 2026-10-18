@@ -147,6 +147,12 @@ pub trait Introspect: Engine {
     fn entity_facts(&self, _entity: &str, _t_ns: u64, _limit: usize) -> Option<Value> {
         None
     }
+
+    /// The PKI view's record store (WP-E1), or `None` if the run keeps none (the
+    /// fixture, a run with no SCMS).
+    fn pki(&self) -> Option<&crate::pki::PkiStore> {
+        None
+    }
 }
 
 /// Answers one [`Query`].
@@ -278,6 +284,31 @@ pub fn answer<E: Introspect + ?Sized>(engine: &mut E, query: &Query) -> Result<V
                      SCMS has no EA, the CCMS no RA)."
                 ))),
             }
+        }
+        Query::Pki(q) => {
+            let Some(store) = engine.pki().filter(|s| !s.is_empty()) else {
+                return Err(ServerError::NotSupportedHere(
+                    "this run publishes no PKI view: it has no SCMS \
+                     (security.protocol protocol/scms/camp), or security.scms.pki_view is false"
+                        .to_string(),
+                ));
+            };
+            store.answer(q).ok_or_else(|| ServerError::UnknownId {
+                kind: match q {
+                    crate::pki::PkiQuery::Pdu { .. } => "pdu",
+                    crate::pki::PkiQuery::Cert { .. } => "certificate",
+                    crate::pki::PkiQuery::Knowledge { .. } => "entity",
+                },
+                id: format!(
+                    "{}: not in this run's PKI records ({})",
+                    match q {
+                        crate::pki::PkiQuery::Pdu { id, .. } => id.as_str(),
+                        crate::pki::PkiQuery::Cert { id8, .. } => id8.as_str(),
+                        crate::pki::PkiQuery::Knowledge { entity, .. } => entity.as_str(),
+                    },
+                    store.known(q)
+                ),
+            })
         }
         Query::Explain {
             subject,

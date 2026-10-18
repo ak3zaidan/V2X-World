@@ -219,3 +219,72 @@ impl Record for BackendState {
     const CHANNEL: &'static str = "backend.state";
     const VISIBILITY: Visibility = Visibility::Public;
 }
+
+/// `pki.state` — every provider, its components with their roles, regions and state,
+/// the CTL and every CRL head (WP-E1, `v2xw_proto::scms::pki_view::PkiState`). Once a
+/// view interval while an SCMS runs.
+///
+/// PUBLIC: what the trust domain publishes (certificates, the CTL, CRL heads) and each
+/// component's own counts; no device identity.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct PkiStateRecord(pub v2xw_proto::scms::pki_view::PkiState);
+
+impl Record for PkiStateRecord {
+    const CHANNEL: &'static str = "pki.state";
+    const VISIBILITY: Visibility = Visibility::Public;
+}
+
+/// `pki.flow` — one backend message with the real SPDUs it carried (bytes, and the
+/// plaintext its recipient opened), one stage stamp, or one PDU no message carried.
+///
+/// NODE: what the sender and the receiver of each message saw; the opened plaintext is
+/// the recipient's own knowledge and an inspector shows it only as that recipient or in
+/// ground truth.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct PkiFlowRecord(pub v2xw_proto::scms::pki_view::PkiFlow);
+
+impl Record for PkiFlowRecord {
+    const CHANNEL: &'static str = "pki.flow";
+    const VISIBILITY: Visibility = Visibility::Node;
+}
+
+/// `pki.case` — one misbehaviour case entering one stage of the case board.
+///
+/// NODE: the MA's own case table.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct PkiCaseRecord(pub v2xw_proto::scms::pki_view::PkiCase);
+
+impl Record for PkiCaseRecord {
+    const CHANNEL: &'static str = "pki.case";
+    const VISIBILITY: Visibility = Visibility::Node;
+}
+
+/// `pki.knowledge` — what one SCMS entity holds, with the ground-truth join of its rows
+/// onto devices beside it.
+///
+/// NODE_AND_GT: the `truth` section names the devices behind the entity's identifiers,
+/// which no entity knows; an inspector strips it outside ground truth.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct PkiKnowledgeRecord(pub v2xw_proto::scms::pki_view::Knowledge);
+
+impl Record for PkiKnowledgeRecord {
+    const CHANNEL: &'static str = "pki.knowledge";
+    const VISIBILITY: Visibility = Visibility::NodeAndGt;
+}
+
+/// `node.credentials` — one vehicle's i × j certificate pool, its pseudonym history and
+/// the certificates it newly holds; written when it changes.
+///
+/// NODE: the vehicle's own store.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct NodeCredentialsRecord(pub v2xw_proto::scms::pki_view::NodeCredentials);
+
+impl Record for NodeCredentialsRecord {
+    const CHANNEL: &'static str = "node.credentials";
+    const VISIBILITY: Visibility = Visibility::Node;
+}

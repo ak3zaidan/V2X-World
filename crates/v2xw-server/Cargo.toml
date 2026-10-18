@@ -31,6 +31,8 @@ v2xw-record = { workspace = true }
 # message codecs (`src/feed/decode.rs`).
 v2xw-sec = { workspace = true }
 v2xw-msg = { workspace = true }
+# The PKI view's inspect answers (`src/pki.rs`): one implementation, the proto crate's.
+v2xw-proto = { workspace = true }
 # The hardware profiles, for where a node signs and verifies and how each figure was
 # arrived at (the message panel's crypto placement).
 v2xw-node = { workspace = true }

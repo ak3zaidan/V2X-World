@@ -722,6 +722,9 @@ impl LifecycleParams {
         if let Ok(wall) = v2xw_core::time::WallClock::parse_rfc3339(&scenario.time.t0) {
             p.scms.pdu.t0_unix_s = wall.t0_unix_s();
         }
+        // WP-E1: the PKI view publishes every SPDU's bytes; the publisher drops them
+        // again once a `pki.flow` record carries them (`Phase2::publish_pki`).
+        p.scms.pdu.keep_bytes = pki_view_of(scenario);
         if scenario.time.calendar.is_real()
             && p.scms.i_period == v2xw_core::time::Duration::from_secs(US_I_PERIOD_S)
         {
@@ -1293,6 +1296,26 @@ pub struct AttackerOutcome {
     pub decided_ns: Option<u64>,
 }
 
+/// The PKI view's records one backend tick produced (WP-E1).
+#[derive(Debug, Default)]
+pub struct PkiTick {
+    /// `pki.state`.
+    pub state: Option<v2xw_proto::scms::pki_view::PkiState>,
+    /// `pki.flow`.
+    pub flows: Vec<v2xw_proto::scms::pki_view::PkiFlow>,
+    /// `pki.case`.
+    pub cases: Vec<v2xw_proto::scms::pki_view::PkiCase>,
+    /// `pki.knowledge`.
+    pub knowledge: Vec<v2xw_proto::scms::pki_view::Knowledge>,
+}
+
+/// `pki.knowledge` is published every this many backend views: what an entity holds
+/// changes slowly and each record lists rows.
+pub const KNOWLEDGE_EVERY: u32 = 10;
+
+/// Rows per list in a `pki.knowledge` record (totals are uncapped).
+pub const KNOWLEDGE_ROWS: usize = 64;
+
 /// What the engine does after a backend step: records to write and changes to apply.
 #[derive(Debug, Default)]
 pub struct BackendTick {
@@ -1311,6 +1334,10 @@ pub struct BackendTick {
     pub events: Vec<(NodeId, &'static str)>,
     /// The backend's state, when it is due for publication.
     pub view: Option<BackendView>,
+    /// The PKI view's records (WP-E1), when it is on: the trust domain's state on the
+    /// view's cadence, the messages, stage stamps and SPDUs since the last tick, the case
+    /// board's transitions and, every [`KNOWLEDGE_EVERY`] views, what each entity holds.
+    pub pki: PkiTick,
     /// Backend-network and backhaul bytes moved since the last tick:
     /// `(t, bucket, bytes, node)`. The sidelink's own bytes are not here: a relayed
     /// report's air hop is a frame on `node.tx` like any other.
@@ -1408,6 +1435,11 @@ pub struct Phase2 {
     compromised_nodes: BTreeMap<NodeId, usize>,
     /// When the backend's state is next published.
     next_view: SimTime,
+    /// The PKI view's publisher (WP-E1), when `security.scms.pki_view` is on and an SCMS
+    /// runs: what each record has already carried.
+    pki: Option<v2xw_proto::scms::pki_view::PkiTracker>,
+    /// Views published, for the knowledge cadence.
+    views: u32,
     /// Ground truth for the run report only, never read by a decision: each attacker's
     /// first falsified claim, each subject's first report, each subject's decision.
     first_falsified: BTreeMap<NodeId, SimTime>,
@@ -2016,6 +2048,8 @@ impl Phase2 {
             link_claims: Vec::new(),
             tracker: EdgeTracker::default(),
             next_view: 0,
+            pki: pki_view_of(scenario).then(v2xw_proto::scms::pki_view::PkiTracker::default),
+            views: 0,
             compromised_specs,
             compromised: BTreeMap::new(),
             compromised_nodes: BTreeMap::new(),
@@ -3851,6 +3885,122 @@ impl Phase2 {
         }
         self.next_view = self.params.view_interval.after(now);
         tick.view = Some(self.backend_view(now));
+        self.publish_pki(now, tick);
+        self.views = self.views.wrapping_add(1);
+    }
+
+    /// The PKI view's records at `now` (WP-E1): the trust domain's state, every message,
+    /// stage stamp and SPDU since the last view, the case board's transitions and, every
+    /// [`KNOWLEDGE_EVERY`] views, what each entity holds. Published SPDUs' bytes are
+    /// dropped from the run's log once a record carries them, so a long run keeps none.
+    fn publish_pki(&mut self, now: SimTime, tick: &mut BackendTick) {
+        use v2xw_proto::scms::pki_view;
+        if self.etsi.is_some() {
+            return;
+        }
+        let Some(mut tracker) = self.pki.take() else {
+            return;
+        };
+        tick.pki.state = pki_view::pki_state(&self.runs, now, &mut tracker);
+        tick.pki.flows = pki_view::drain_flows(&self.runs, &mut tracker);
+        for run in &mut self.runs {
+            for p in &mut run.state.pdus {
+                p.bytes = None;
+            }
+        }
+        let vehicles = u32::try_from(self.nodes.len()).unwrap_or(u32::MAX);
+        let enforced = |k: usize, c: &v2xw_proto::scms::run::Case| -> Option<(u32, u32)> {
+            let ours = self
+                .cases
+                .iter()
+                .find(|e| e.provider == k && e.runs.is_some_and(|(r, _)| r == c.run))?;
+            let (entry, _) = ours.entry.as_ref()?;
+            let n = self
+                .nodes
+                .values()
+                .filter(|n| n.crl_installed.contains(entry))
+                .count();
+            Some((u32::try_from(n).unwrap_or(u32::MAX), vehicles))
+        };
+        tick.pki.cases = pki_view::drain_cases(&self.runs, &mut tracker, now, &enforced);
+        if self.views % KNOWLEDGE_EVERY == 0 {
+            for run in &self.runs {
+                for role in pki_view::KNOWLEDGE_ROLES {
+                    if let Some(k) = pki_view::knowledge(run, role, now, KNOWLEDGE_ROWS) {
+                        tick.pki.knowledge.push(k);
+                    }
+                }
+            }
+        }
+        self.pki = Some(tracker);
+    }
+
+    /// `node.credentials` for one vehicle (WP-E1), or `None` when the PKI view is off,
+    /// the node is not an SCMS device, or its pool has not changed since the last record.
+    pub fn node_credentials(
+        &mut self,
+        node: NodeId,
+        now: SimTime,
+        certs: &v2xw_node::CertStore,
+    ) -> Option<v2xw_proto::scms::pki_view::NodeCredentials> {
+        use v2xw_proto::scms::pki_view::HeldCert;
+        if self.etsi.is_some() || !self.nodes.contains_key(&node) {
+            return None;
+        }
+        let active = certs
+            .active()
+            .map(|c| v2xw_sec::hashedid::id8_bytes(&c.digest));
+        let held: Vec<HeldCert> = certs
+            .credentials()
+            .iter()
+            .map(|c| HeldCert {
+                i: c.i_period,
+                j: c.j_index,
+                id8: v2xw_sec::hashedid::id8_bytes(&c.digest),
+                coer: c.cert_coer.clone(),
+                state: match c.state {
+                    v2xw_node::CredState::Active if c.is_valid_at(now) => "valid",
+                    v2xw_node::CredState::Active | v2xw_node::CredState::Expired => {
+                        if now >= c.valid_until {
+                            "expired"
+                        } else {
+                            "downloaded"
+                        }
+                    }
+                    v2xw_node::CredState::Preloaded => "downloaded",
+                    v2xw_node::CredState::Revoked => "revoked",
+                },
+            })
+            .collect();
+        let k = self
+            .device_provider
+            .get(&device_of(node))
+            .copied()
+            .unwrap_or(0);
+        // Revoked as the vehicle itself knows it: it found itself on a CRL (an engine
+        // run's vehicles install lists on the node, not in the backend's device record).
+        let self_revoked = self.nodes.get(&node).is_some_and(|n| n.self_revoked);
+        let mut tracker = self.pki.take()?;
+        let rec = self.runs.get(k).and_then(|run| {
+            v2xw_proto::scms::pki_view::node_credentials(
+                run,
+                device_of(node),
+                now,
+                &held,
+                active,
+                self_revoked,
+                &mut tracker,
+            )
+        });
+        self.pki = Some(tracker);
+        // The engine's node id, not the backend's device id, so a reader joins the
+        // record to the node's other channels.
+        // Revoked as the vehicle itself knows it: it found itself on a CRL (the backend's
+        // device record is not where an engine run's vehicles install lists).
+        rec.map(|mut r| {
+            r.node = node.index();
+            r
+        })
     }
 
     /// Every backend entity, the roadside units and the vehicles, and the traffic between
@@ -5376,6 +5526,18 @@ pub fn home_chain_file_of(scenario: &Scenario) -> Result<bool> {
             format!("'{other}' is not a chain file scope; allowed: all-providers, home-provider"),
         )),
     }
+}
+
+/// Whether the scenario publishes the PKI view (`security.scms.pki_view`, WP-E1):
+/// on unless set to `false`.
+#[must_use]
+pub fn pki_view_of(scenario: &Scenario) -> bool {
+    scenario
+        .security
+        .scms
+        .as_ref()
+        .and_then(|s| s.pki_view)
+        .unwrap_or(true)
 }
 
 /// The SCMS deployment a scenario runs on (`security.scms.deployment`, WP-D1).

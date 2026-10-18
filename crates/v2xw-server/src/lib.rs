@@ -57,6 +57,7 @@ pub mod http;
 pub mod introspect;
 pub mod live;
 pub mod openrpc;
+pub mod pki;
 pub mod replay;
 pub mod resume;
 pub mod ring;

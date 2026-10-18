@@ -1780,6 +1780,16 @@ pub struct EmittedPdu {
     pub bytes: Option<Pdu>,
     /// Encoded length.
     pub len: u32,
+    /// The kernel wire step (index into `Kernel::steps_since(0)`) that carried it, set
+    /// when the handler that emitted it dispatched its sends: the PDU's sender and
+    /// receiver match the step's (or, for a PDU relayed under another sender's name, its
+    /// receiver does). `None` for a PDU no step carried (held, dropped, or emitted
+    /// outside a handler). WP-E1: what links a `pki.flow` message to its bytes.
+    pub step: Option<u32>,
+    /// Emitted by a pre-run flow ([`crate::scms::run::ScmsRun::preload`]: enrolment and
+    /// the first batches at the factory or dealer, on a scratch kernel whose clock and
+    /// log are discarded), so `at` is not on the run's clock and no step carried it.
+    pub preload: bool,
 }
 
 /// A PDU a receiver refused, and why.

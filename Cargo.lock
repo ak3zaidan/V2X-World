@@ -2952,6 +2952,7 @@ dependencies = [
  "v2xw-mobility",
  "v2xw-msg",
  "v2xw-node",
+ "v2xw-proto",
  "v2xw-record",
  "v2xw-sec",
  "v2xw-world",

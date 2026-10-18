@@ -22,6 +22,7 @@ pub mod msg;
 pub mod params;
 pub mod pdu;
 pub mod pdu_prov;
+pub mod pki_view;
 pub mod run;
 
 use v2xw_core::card::{

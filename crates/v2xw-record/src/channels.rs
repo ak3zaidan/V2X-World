@@ -213,6 +213,15 @@ pub const CHANNELS: &[ChannelSpec] = &[
         visibility: Visibility::Gt,
         payload_bytes: None,
     },
+    // One vehicle's i x j certificate pool, its pseudonym history and newly held
+    // certificates, when it changes (WP-E1, v2xw_proto::scms::pki_view). What the vehicle
+    // holds. Never an Event payload.
+    ChannelSpec {
+        name: "node.credentials",
+        wire_id: None,
+        visibility: Visibility::Node,
+        payload_bytes: None,
+    },
     // What a node discarded in one step with no frame to carry it: transmit-side drops and
     // a CRL backlog shed, one row per node, step and cause. The receive-side drops are on
     // `node.rx`. A recording and inspector channel, not an `Event` payload.
@@ -287,6 +296,35 @@ pub const CHANNELS: &[ChannelSpec] = &[
         wire_id: Some(11),
         visibility: Visibility::NodeAndGt,
         payload_bytes: Some(48),
+    },
+    // The PKI view (WP-E1, v2xw_proto::scms::pki_view): case-board transitions (the MA's
+    // own table), every backend message with its real SPDUs and stage stamps (what its
+    // sender and receiver saw; opened plaintext is the recipient's), what each entity
+    // holds (with the ground-truth join, so NODE_AND_GT), and the trust domain's state
+    // (public: certificates, CTL, CRL heads, counts). Recording and inspector channels.
+    ChannelSpec {
+        name: "pki.case",
+        wire_id: None,
+        visibility: Visibility::Node,
+        payload_bytes: None,
+    },
+    ChannelSpec {
+        name: "pki.flow",
+        wire_id: None,
+        visibility: Visibility::Node,
+        payload_bytes: None,
+    },
+    ChannelSpec {
+        name: "pki.knowledge",
+        wire_id: None,
+        visibility: Visibility::NodeAndGt,
+        payload_bytes: None,
+    },
+    ChannelSpec {
+        name: "pki.state",
+        wire_id: None,
+        visibility: Visibility::Public,
+        payload_bytes: None,
     },
     // A passive observer's claim that two pseudonyms are one vehicle. Whether it was right
     // is a join a metric provider makes against the vehicles' own `sec.pseudonym` rows.
