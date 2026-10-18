@@ -17,8 +17,16 @@ four constant-position attackers, real cryptography, report shuffle 5 s, CRL cad
   `pdu` and flow `preload`, with no message or stage and times not on the run's clock.
 - `pki-sequence.jsonl`: the same record shapes from `crates/v2xw-proto/tests/pki_view.rs`
   (one provider, two devices): a whole in-run sequence with every message and stage
-  stamp: enrolment, provisioning, two reports, the linkage resolution through both LAs
-  and the CRL issuance. Use it for the Flows tab's sequence diagram.
+  stamp: enrolment, provisioning, two real SM-MBR reports (1VInconsistent/ConstantPosition
+  and Implausible/MaxSpeed, BSM evidence signed under the accused's pseudonyms), the
+  linkage resolution through both LAs and the CRL issuance. Use it for the Flows tab's
+  sequence diagram. Regenerated 2026-10-18 (cleanup package) after E3's record changes.
+- `pki.case` (both files): `reports-in` carries `evidence`, one entry per report the case
+  was opened on: the SM-MBR `type`/`type_name`, `subtypes`, `verified` and `shared` (it
+  crossed the MA-to-MA link), or, for a report on the modelled path, `modelled` (why) and
+  the detector `checks`. `enforced` is recorded once per vehicle that installs the case's
+  entry, at its install instant, with the running `installed` count and `of`; it names no
+  vehicle (the MA does not learn who installed its CRL).
 - `pki-answers.json`: what `inspect.pdu` (ground truth, as the opener, as a third
   party), `inspect.cert` (every certificate of the chosen vehicles) and
   `inspect.knowledge` (ground truth and the entity's own view) answer on the full run.

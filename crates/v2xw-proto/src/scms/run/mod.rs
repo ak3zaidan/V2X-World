@@ -557,6 +557,38 @@ pub struct MaState {
     pub awaiting_review: BTreeMap<FlowRun, (usize, u32, u32, Option<usize>)>,
     /// Real misbehaviour reports it opened (WP-B4), with what it learned.
     pub opened_reports: Vec<crate::scms::mbr::OpenedReport>,
+    /// Per entry of [`MaState::reports`] (same index): the evidence type and subtypes the
+    /// MA read from the opened report, or `None` for a report on the modelled path (no
+    /// secured report, so no evidence to read).
+    pub report_evidence: Vec<Option<ReportEvidence>>,
+    /// The evidence of reports still on their way that carry no secured report to read it
+    /// from (shared over the MA-to-MA link, or modelled), by their run.
+    pub pending_evidence: BTreeMap<FlowRun, ReportEvidence>,
+}
+
+/// What one received report's evidence was, as the MA decoded it ([SM-MBR] §2.3: the
+/// `Psid20MbrType` and its subtype list), or, for a report on the modelled path, why no
+/// SM-MBR report carried it and which detector checks fired.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReportEvidence {
+    /// The report type number (1 `1VInconsistent`, 2 `Implausible`, 3 `ObsImplausible`);
+    /// `None` for a modelled report.
+    pub mbr_type: Option<u8>,
+    /// Its name in the module, without the `psid20MbrType` prefix.
+    pub type_name: Option<&'static str>,
+    /// Each subtype's number inside the type and its name, in report order.
+    pub subtypes: Vec<(u8, &'static str)>,
+    /// Whether every suspect BSM verified under the evidence's signing certificate (for a
+    /// shared report, as the forwarding MA verified it: this MA does not re-verify);
+    /// `None` for a modelled report (there was no evidence to verify).
+    pub verified: Option<bool>,
+    /// Whether it arrived with a report another provider's MA shared (WP-D1).
+    pub shared: bool,
+    /// Why the device sent no real SM-MBR report (the engine's reason), for a modelled one.
+    pub modelled: Option<String>,
+    /// The reporter's detector checks that fired, highest score first (engine-side; the
+    /// MA reads them only from a modelled report, a real one carries its subtypes).
+    pub checks: Vec<String>,
 }
 
 impl MaState {
@@ -608,6 +640,9 @@ pub struct Case {
     /// somewhere on the path (an unknown linkage value, an unknown request, an LA that
     /// said "different devices"). A driver serialising cases waits on this.
     pub done: bool,
+    /// The indices in [`MaState::reports`] the case was opened on (one for a direct
+    /// revocation, two for a link); [`MaState::report_evidence`] has their evidence.
+    pub reports: Vec<usize>,
 }
 
 /// The CRL Generator's and the CRL Store's state.
@@ -1221,6 +1256,34 @@ impl ScmsRun {
         })
     }
 
+    /// The evidence reading (type, subtypes, verification) the forwarding MA had for the
+    /// report it shared as `run` ([`ScmsRun::shared_report_at_ma`]'s return): this MA
+    /// records it with the report on arrival, marked `shared`. **Modelled**, like the
+    /// shared report itself: no published MA-to-MA format says how it travels.
+    pub fn shared_report_evidence(&mut self, run: FlowRun, evidence: ReportEvidence) {
+        self.state.ma.pending_evidence.insert(
+            run,
+            ReportEvidence {
+                shared: true,
+                ..evidence
+            },
+        );
+    }
+
+    /// What is known of the evidence of a report on the modelled path (no secured report
+    /// for the MA to open), sent as `run`: why the device sent no real SM-MBR report, and
+    /// the detector checks that fired. The MA records it with the report on arrival.
+    pub fn modelled_report_evidence(&mut self, run: FlowRun, why: &str, checks: &[String]) {
+        self.state.ma.pending_evidence.insert(
+            run,
+            ReportEvidence {
+                modelled: Some(why.to_string()),
+                checks: checks.to_vec(),
+                ..ReportEvidence::default()
+            },
+        );
+    }
+
     /// A report another provider's MA (`from`, its node) shares with this provider's MA
     /// because the accused certificate is this provider's (WP-D1; Provider Req. §2.2:
     /// only the issuing provider's ACA and LAs can resolve its pseudonyms).
@@ -1232,6 +1295,7 @@ impl ScmsRun {
     /// so the shared report carries the accused `(iCert, linkage value)` and its length,
     /// not new bytes, and this MA does not re-verify evidence the forwarding MA verified.
     /// Returns the flow run whose `ReportReceived` stage marks its arrival here.
+    /// [`ScmsRun::shared_report_evidence`] attaches the forwarding MA's evidence reading.
     pub fn shared_report_at_ma(
         &mut self,
         from: NodeId,

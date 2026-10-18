@@ -14,6 +14,7 @@ import {
   MovedFlags,
   PoseBuffer,
   SENTINEL_U32,
+  VWP_METHODS,
   VwpClient,
   bytesToHex,
   computeWorldContentHash,
@@ -166,10 +167,12 @@ describe("HTTP companions (§1.1)", () => {
     expect(body.error.code).toBe(-32600);
   });
 
-  it("§6.3 — /rpc/schema is an OpenRPC 1.3.2 document naming all 32 methods", async () => {
+  it("§6.3 — /rpc/schema is an OpenRPC 1.3.2 document naming every method of VWP_METHODS", async () => {
     const doc = (await (await fetch(`${base.httpUrl}/rpc/schema`)).json()) as { openrpc: string; methods: { name: string }[] };
     expect(doc.openrpc).toBe("1.3.2");
-    expect(doc.methods).toHaveLength(33);
+    // Counted from the protocol's own list, not hard-coded, so it cannot go stale again (it said
+    // 33 while the list had grown to 43).
+    expect(doc.methods.map((m) => m.name)).toEqual([...VWP_METHODS]);
     expect(doc.methods.map((m) => m.name)).toContain("rpc.discover");
   });
 });

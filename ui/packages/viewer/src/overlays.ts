@@ -947,11 +947,16 @@ export class ActorTagOverlay {
     this.capacity = Math.max(16, capacity);
     this.group.name = "overlay/actor-tags";
     const make = (inner: number, name: string): InstancedMesh<BufferGeometry, MeshBasicMaterial> => {
+      // Per-instance colours need `vertexColors` and a unit colour attribute, or three never reads
+      // them (or reads black): see `withUnitVertexColors` and the aerial-mark colour test, which
+      // caught these rings without either.
       const m = new MeshBasicMaterial({
-        name, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false,
+        name, vertexColors: true, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false,
         side: DoubleSide, toneMapped: false,
       });
-      const mesh = new InstancedMesh<BufferGeometry, MeshBasicMaterial>(ringGeometry(inner, 40), m, this.capacity);
+      const mesh = new InstancedMesh<BufferGeometry, MeshBasicMaterial>(
+        withUnitVertexColors(ringGeometry(inner, 40)), m, this.capacity,
+      );
       mesh.name = `overlay/${name}`;
       mesh.frustumCulled = false;
       mesh.renderOrder = 12;

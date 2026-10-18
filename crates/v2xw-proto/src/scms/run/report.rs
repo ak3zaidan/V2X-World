@@ -493,6 +493,7 @@ impl ScmsState {
             ScmsMsg::Report(r) => {
                 Self::verify(out, 1);
                 Self::scalar_mults(out, 1);
+                let mut evidence = None;
                 if let (Some(s), Some(pki)) = (r.secured.as_ref(), self.ma_trust.clone()) {
                     // The MA decrypts, checks the reporter's pseudonym signature and the
                     // evidence ([SM-MBR] §3; [5GAA] (263)). A report that fails is
@@ -515,9 +516,28 @@ impl ScmsState {
                             return Ok(());
                         }
                     };
+                    evidence = Some(super::ReportEvidence {
+                        mbr_type: Some(opened.report.mbr_type.number()),
+                        type_name: Some(opened.report.mbr_type.name()),
+                        subtypes: opened
+                            .report
+                            .subtypes
+                            .iter()
+                            .map(|s| (s.number(), s.name()))
+                            .collect(),
+                        verified: Some(opened.evidence_verified),
+                        ..super::ReportEvidence::default()
+                    });
                     self.ma.opened_reports.push(opened);
                 }
+                if evidence.is_none() {
+                    // A report another provider's MA shared, or a modelled one: what is
+                    // known of its evidence travels with it (`ScmsRun::shared_report_evidence`,
+                    // `ScmsRun::modelled_report_evidence`).
+                    evidence = self.ma.pending_evidence.remove(&run);
+                }
                 self.ma.reports.push(*r);
+                self.ma.report_evidence.push(evidence);
                 out.stage_at(StageId::ReportReceived, to, None, flow, run);
             }
             ScmsMsg::ReportShuffleTimer { generation } => {

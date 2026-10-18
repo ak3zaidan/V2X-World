@@ -352,10 +352,11 @@ describe("§6 — the JSON-RPC client", () => {
     await expect(p2).rejects.toThrow(/socket closed/);
   });
 
-  it("§6.15 — exactly 32 methods and §6.14 — exactly 9 notifications (node.feed since v1.1)", () => {
-    // 36 plus the PKI view's seven inspect queries (WP-E1, WP-E2, WP-E3).
-    expect(VWP_METHODS).toHaveLength(43);
-    expect(new Set(VWP_METHODS).size).toBe(43);
+  it("§6.15 — the method list has no duplicates and §6.14 — exactly 9 notifications (node.feed since v1.1)", () => {
+    // The list itself is held to the server's `v2xw_server::rpc::METHODS` by name (server
+    // `tests/rpc.rs` and the conformance sweep), so no count is hard-coded here to go stale.
+    expect(new Set(VWP_METHODS).size).toBe(VWP_METHODS.length);
+    expect(VWP_METHODS).toContain("scenario.schema");
     for (const m of ["inspect.pdu", "inspect.cert", "inspect.knowledge", "inspect.trust", "inspect.flows", "inspect.flow", "inspect.pki"]) {
       expect(VWP_METHODS).toContain(m);
     }

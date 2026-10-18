@@ -402,19 +402,44 @@ export function boardColumn(c: Pick<CaseView, "stages">): BoardStage | "refused"
   return best < 0 ? null : BOARD_COLUMNS[best].stage;
 }
 
-/** Each stage the case entered, in board order, with the time to the next stage it entered. */
+/**
+ * Each stage the case entered, in board order, with the time to the next stage it entered. A stage
+ * recorded more than once (`enforced`, once per enforcing vehicle) counts from its first record:
+ * when the case entered it.
+ */
 export function stageTimes(c: Pick<CaseView, "stages">): { stage: string; t: number; dwellNs: number | null }[] {
   const order = (s: string): number => {
     const i = BOARD_COLUMNS.findIndex((b) => b.stage === s);
     return i < 0 ? BOARD_COLUMNS.length : i;
   };
-  const list = [...c.stages].sort((a, b) => order(a.stage) - order(b.stage) || a.t - b.t);
+  const sorted = [...c.stages].sort((a, b) => order(a.stage) - order(b.stage) || a.t - b.t);
+  const list = sorted.filter((s, k) => k === 0 || sorted[k - 1].stage !== s.stage);
   return list.map((s, k) => ({ stage: s.stage, t: s.t, dwellNs: k + 1 < list.length ? list[k + 1].t - s.t : null }));
 }
 
-/** "Enforced 7 of 13 vehicles", from the stage's detail. */
+/** One report's evidence: `1VInconsistent/ConstantPosition, verified`, or why it was modelled. */
+export function evidenceText(e: unknown): string {
+  const r = (e ?? {}) as Record<string, unknown>;
+  if (typeof r.type_name === "string") {
+    const subs = Array.isArray(r.subtypes) ? r.subtypes.map((s) => String((s as Record<string, unknown>).name)).join("+") : "";
+    const verified = r.verified === true ? "verified" : r.verified === false ? "NOT verified" : "unverified";
+    return `${r.type_name}/${subs}, ${verified}${r.shared === true ? ", shared by the other MA" : ""}`;
+  }
+  if (typeof r.modelled === "string") {
+    const checks = Array.isArray(r.checks) ? r.checks.join("+") : "";
+    return `modelled (${r.modelled})${checks ? `: ${checks}` : ""}`;
+  }
+  return "unknown";
+}
+
+/**
+ * "Enforced 7 of 13 vehicles": the engine stamps `enforced` once per vehicle that installs the
+ * entry, with the running count, so the newest record (the highest count) is the current one.
+ */
 export function enforcement(c: Pick<CaseView, "stages">): { installed: number; of: number } | null {
-  const s = c.stages.find((x) => x.stage === "enforced");
+  const s = c.stages
+    .filter((x) => x.stage === "enforced")
+    .reduce<CaseStage | undefined>((best, x) => (best === undefined || Number(x.detail.installed) > Number(best.detail.installed) ? x : best), undefined);
   const installed = Number(s?.detail.installed);
   const of = Number(s?.detail.of);
   return s && Number.isFinite(installed) && Number.isFinite(of) ? { installed, of } : null;

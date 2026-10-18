@@ -31,6 +31,7 @@ impl ScmsRun {
             i_rev,
             jmax,
             Duration::ZERO,
+            vec![a, b],
         )
     }
 
@@ -57,6 +58,7 @@ impl ScmsRun {
             i_rev,
             jmax,
             Duration::ZERO,
+            vec![index],
         )
     }
 
@@ -78,6 +80,7 @@ impl ScmsRun {
             i_rev,
             jmax,
             delay,
+            vec![index],
         )
     }
 
@@ -100,6 +103,7 @@ impl ScmsRun {
             i_rev,
             jmax,
             delay,
+            vec![a, b],
         )
     }
 
@@ -117,6 +121,7 @@ impl ScmsRun {
         i_rev: u32,
         jmax: u32,
         delay: Duration,
+        reports: Vec<usize>,
     ) -> Option<(FlowRun, FlowRun)> {
         let cap = self.state.params.ma.max_open_cases as usize;
         if self.state.ma.open_cases() >= cap {
@@ -138,6 +143,7 @@ impl ScmsRun {
                 resolved: false,
                 direct,
                 done: false,
+                reports,
             },
         );
         self.state.ma.last_case = Some(run);

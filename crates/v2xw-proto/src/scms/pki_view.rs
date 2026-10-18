@@ -267,6 +267,8 @@ pub struct PkiTracker {
     crls: BTreeSet<String>,
     /// Case stages already published: `(provider, case run, stage)`.
     case_stages: BTreeSet<(usize, u32, &'static str)>,
+    /// Per case `(provider, case run)`: how many enforcing vehicles are already stamped.
+    case_enforcers: BTreeMap<(usize, u32), usize>,
     /// Per device: the digest of its last `node.credentials`, and every pseudonym it has
     /// used (the history).
     creds: BTreeMap<u32, (u64, BTreeSet<[u8; 8]>)>,
@@ -978,16 +980,47 @@ fn stage_at(run: &ScmsRun, r: crate::stage::FlowRun, s: crate::stage::StageId) -
     run.kernel.stages.at(r, s)
 }
 
+/// A case's evidence for the `reports-in` stage: per report the case was opened on, its
+/// index at the MA and the type, subtypes and verification the MA read from it ([SM-MBR]
+/// §2.3), `shared` when it came from another provider's MA (which verified it). A report
+/// on the modelled path (no secured report) has a null type, with `modelled` saying why
+/// and `checks` the detector checks that fired; one the MA knows nothing of has all null.
+fn case_evidence(ma: &crate::scms::run::MaState, c: &crate::scms::run::Case) -> Vec<Value> {
+    c.reports
+        .iter()
+        .map(|&i| match ma.report_evidence.get(i).and_then(Option::as_ref) {
+            Some(e) => json!({
+                "report": i,
+                "type": e.mbr_type,
+                "type_name": e.type_name,
+                "subtypes": e.subtypes.iter()
+                    .map(|(n, name)| json!({"subtype": n, "name": name}))
+                    .collect::<Vec<_>>(),
+                "verified": e.verified,
+                "shared": e.shared,
+                "modelled": e.modelled,
+                "checks": e.checks,
+            }),
+            None => json!({"report": i, "type": null, "type_name": null, "subtypes": [],
+                           "verified": null, "shared": null, "modelled": null, "checks": []}),
+        })
+        .collect()
+}
+
 /// Every case stage each run reached since the last call. `enforced` comes from the
-/// caller (`enforced(provider, case_run)` → `(installed, of)`), because enforcement is a
-/// vehicle-side fact the backend run does not hold.
+/// caller (`enforced(provider, case)` → the instant each vehicle that has installed the
+/// case's entry installed it, in install order, and how many vehicles there are), because
+/// enforcement is a vehicle-side fact the backend run does not hold. `enforced` is stamped
+/// once per enforcing vehicle, at its install instant, with the running count, so "n of
+/// N" keeps counting after the first install. The record names no vehicle: it is the MA's
+/// case table, and the MA does not learn who installed its CRL.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn drain_cases(
     runs: &[ScmsRun],
     tracker: &mut PkiTracker,
     now: SimTime,
-    enforced: &dyn Fn(usize, &crate::scms::run::Case) -> Option<(u32, u32)>,
+    enforced: &dyn Fn(usize, &crate::scms::run::Case) -> Option<(Vec<SimTime>, u32)>,
 ) -> Vec<PkiCase> {
     use crate::stage::StageId as S;
     let mut out = Vec::new();
@@ -1027,7 +1060,7 @@ pub fn drain_cases(
                 tracker,
                 "reports-in",
                 received.or(decision),
-                json!({"subjects": subjects, "direct": c.direct}),
+                json!({"subjects": subjects, "direct": c.direct, "evidence": case_evidence(ma, c)}),
             );
             push(
                 tracker,
@@ -1081,15 +1114,24 @@ pub fn drain_cases(
             }
             if c.resolved
                 && published.is_some()
-                && let Some((n, of)) = enforced(k, c)
-                && n > 0
+                && let Some((nodes, of)) = enforced(k, c)
             {
-                push(
-                    tracker,
-                    "enforced",
-                    Some(now),
-                    json!({"installed": n, "of": of}),
-                );
+                let stamped = tracker.case_enforcers.entry((k, r.0)).or_insert(0);
+                for (m, at) in nodes.iter().enumerate().skip(*stamped) {
+                    out.push(PkiCase {
+                        schema: PKI_VIEW_SCHEMA,
+                        case: case.clone(),
+                        provider: label.clone(),
+                        stage: "enforced".to_string(),
+                        t: *at,
+                        instance: instance.clone(),
+                        detail: json!({
+                            "installed": m + 1,
+                            "of": of,
+                        }),
+                    });
+                }
+                *stamped = (*stamped).max(nodes.len());
             }
         }
     }
@@ -1172,6 +1214,71 @@ pub struct HeldCert {
     pub state: &'static str,
 }
 
+/// The change digest of a `node.credentials` record: SHA-256 over a fixed, tagged and
+/// length-prefixed encoding of everything the record shows, truncated to its first 8 bytes
+/// (big-endian). It decides whether a record repeats the last one, so it must not move with
+/// the toolchain: std's `DefaultHasher` (used before) has an unspecified algorithm that may
+/// change between Rust releases, which would change which records a pinned run emits.
+///
+/// Encoding, in order: `"v2xw/node.credentials/1"`; the cell count (u32 BE); per cell `i`,
+/// `j` (u32 BE), `state` (u32 BE length + UTF-8), `id8` (0x00, or 0x01 + u32 BE length +
+/// UTF-8), `used` (one byte); `current_i` (u32 BE); `enrolment` (as `id8`); the device
+/// flags (0x00, or 0x01 + `enrolled` byte + `silenced` byte); `ctl_sequence` (0x00, or
+/// 0x01 + u32 BE); `revoked` (one byte).
+#[must_use]
+pub fn credentials_digest(
+    cells: &[CredCell],
+    current_i: u32,
+    enrolment: Option<&str>,
+    device_flags: Option<(bool, bool)>,
+    ctl_sequence: Option<u32>,
+    revoked: bool,
+) -> u64 {
+    fn text(b: &mut Vec<u8>, s: &str) {
+        let n = u32::try_from(s.len()).unwrap_or(u32::MAX);
+        b.extend_from_slice(&n.to_be_bytes());
+        b.extend_from_slice(s.as_bytes());
+    }
+    fn opt_text(b: &mut Vec<u8>, s: Option<&str>) {
+        match s {
+            None => b.push(0),
+            Some(s) => {
+                b.push(1);
+                text(b, s);
+            }
+        }
+    }
+    let mut b = Vec::with_capacity(32 + cells.len() * 40);
+    b.extend_from_slice(b"v2xw/node.credentials/1");
+    let n = u32::try_from(cells.len()).unwrap_or(u32::MAX);
+    b.extend_from_slice(&n.to_be_bytes());
+    for c in cells {
+        b.extend_from_slice(&c.i.to_be_bytes());
+        b.extend_from_slice(&c.j.to_be_bytes());
+        text(&mut b, &c.state);
+        opt_text(&mut b, c.id8.as_deref());
+        b.push(u8::from(c.used));
+    }
+    b.extend_from_slice(&current_i.to_be_bytes());
+    opt_text(&mut b, enrolment);
+    match device_flags {
+        None => b.push(0),
+        Some((enrolled, silenced)) => {
+            b.extend_from_slice(&[1, u8::from(enrolled), u8::from(silenced)]);
+        }
+    }
+    match ctl_sequence {
+        None => b.push(0),
+        Some(s) => {
+            b.push(1);
+            b.extend_from_slice(&s.to_be_bytes());
+        }
+    }
+    b.push(u8::from(revoked));
+    let d = v2xw_core::hash::sha256(&b);
+    u64::from_be_bytes([d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]])
+}
+
 /// The pool of `device` (in `run`) from what its node holds, or `None` when the record
 /// would repeat the last one. `active` is the certificate it signs with now; `revoked`
 /// whether the vehicle knows itself revoked (it found itself on a CRL).
@@ -1228,17 +1335,14 @@ pub fn node_credentials(
     let enrolment = dev
         .and_then(|d| d.enrolment_credential.as_ref())
         .map(|e| hex(&cert_id8(&e.cert)));
-    let digest = {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        for c in &cells {
-            (c.i, c.j, &c.state, &c.id8, c.used).hash(&mut h);
-        }
-        (current_i, &enrolment, dev.map(|d| (d.enrolled, d.silenced))).hash(&mut h);
-        dev.and_then(|d| d.trust.ctl_sequence).hash(&mut h);
-        revoked.hash(&mut h);
-        h.finish()
-    };
+    let digest = credentials_digest(
+        &cells,
+        current_i,
+        enrolment.as_deref(),
+        dev.map(|d| (d.enrolled, d.silenced)),
+        dev.and_then(|d| d.trust.ctl_sequence),
+        revoked,
+    );
     if entry.0 == digest && digest != 0 {
         return None;
     }

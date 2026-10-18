@@ -73,6 +73,46 @@ fn the_inventory_is_the_thirty_two_methods_of_section_6_15() {
     }
 }
 
+/// The client's `VWP_METHODS` (`ui/packages/protocol/src/rpc.ts`) names exactly the server's
+/// methods, in the same order. The TS conformance sweep (`tests/ts/conformance.mjs`) and the mock
+/// server's interop test count from that array; this test ties the array to [`METHODS`] without
+/// needing Node, so a method added on one side only fails here, by name. (Before it, both TS
+/// tests hard-coded counts, 34 and 33, that went stale while the list grew to 44, and the client
+/// was missing `scenario.schema`.)
+#[test]
+fn the_client_method_list_is_the_server_inventory() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../ui/packages/protocol/src/rpc.ts");
+    let src = std::fs::read_to_string(&path).expect("the protocol package's rpc.ts");
+    let start = src
+        .find("export const VWP_METHODS")
+        .expect("rpc.ts declares VWP_METHODS");
+    let body = &src[start..];
+    let open = body.find("= [").expect("VWP_METHODS is an array literal") + 3;
+    let close = body[open..].find("] as const").expect("the array ends") + open;
+    let client: Vec<&str> = body[open..close]
+        .split('"')
+        .enumerate()
+        .filter(|(i, _)| i % 2 == 1)
+        .map(|(_, s)| s)
+        .collect();
+    let only_server: Vec<&str> = METHODS
+        .iter()
+        .copied()
+        .filter(|m| !client.contains(m))
+        .collect();
+    let only_client: Vec<&str> = client
+        .iter()
+        .copied()
+        .filter(|m| !METHODS.contains(m))
+        .collect();
+    assert!(
+        only_server.is_empty() && only_client.is_empty(),
+        "server only {only_server:?}, client only {only_client:?}"
+    );
+    assert_eq!(client, METHODS.to_vec(), "same order as the server's list");
+}
+
 /// Eight in v1.0; v1.1 added `node.feed`, the followed node's messages and queues (§6.14,
 /// additive under §8.4).
 #[test]

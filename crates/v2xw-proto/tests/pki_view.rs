@@ -46,7 +46,87 @@ fn kind_of(step: &str) -> Option<&'static [SpduKind]> {
     })
 }
 
-/// The revoked run: DEVICE_A provisioned, reported twice by DEVICE_B, resolved, revoked.
+#[derive(Clone, Copy)]
+enum Report {
+    /// 1VInconsistent / ConstantPosition: two BSMs, one place.
+    Frozen,
+    /// Implausible / MaxSpeed (90 m/s): one BSM at 120 m/s.
+    Speeding,
+}
+
+/// A device's pseudonym certificate `(0, j)` and its derived signing key.
+fn pseudonym(
+    run: &ScmsRun,
+    dev: v2xw_core::ids::NodeId,
+    j: u32,
+) -> (
+    v2xw_msg::sec_types::ieee1609_dot2::Certificate,
+    v2xw_sec::sig1609::Signer1609,
+) {
+    let c = run.state.devices[&dev].credentials[&(0, j)]
+        .implicit
+        .as_ref()
+        .expect("a real implicit credential");
+    let key = v2xw_sec::sig1609::Signer1609::p256(&v2xw_sec::ec::scalar_to_be32(&c.private))
+        .expect("key");
+    (c.certificate.clone(), key)
+}
+
+/// A real US misbehaviour report with `kind`'s evidence, BSMs from the J2735 builder signed
+/// under `cert`.
+fn mbr_report(
+    kind: Report,
+    cert: v2xw_msg::sec_types::ieee1609_dot2::Certificate,
+    key: &v2xw_sec::sig1609::Signer1609,
+) -> v2xw_proto::scms::mbr::MisbehaviorReport {
+    use v2xw_core::belief::{FixQuality, PositionEstimate};
+    use v2xw_core::geom::{Dims, Vec3};
+    use v2xw_msg::j2735::bsm::{BsmInput, build_bsm, encode_bsm};
+    use v2xw_proto::scms::mbr::{self, Evidence, MbrType, SignedBsms, Subtype};
+    let bsm = |cnt: u8, speed: f64| {
+        let mut belief = PositionEstimate::no_fix(0);
+        belief.pos = Vec3::new(0.0, 0.0, 0.0);
+        belief.vel = Vec3::new(speed, 0.0, 0.0);
+        belief.semi_major_m = 1.8;
+        belief.semi_minor_m = 1.1;
+        belief.fix = FixQuality::ThreeD;
+        let origin = v2xw_core::geo::GeoOrigin::new(40.7440, -73.9900, 0.0);
+        let input = BsmInput::new(cnt, [0xb0, 0, 0, cnt], belief, origin, Dims::CAR, 1_000);
+        let uper = encode_bsm(&build_bsm(&input).expect("builds"))
+            .expect("encodes")
+            .bytes;
+        mbr::sign_bsm(&uper, 1_000_000 + u64::from(cnt) * 100_000, &cert, key).expect("signs")
+    };
+    let (mbr_type, subtypes, bsms) = match kind {
+        Report::Frozen => (
+            MbrType::OneVInconsistent,
+            vec![Subtype::ConstantPosition],
+            vec![bsm(0, 10.0), bsm(1, 10.0)],
+        ),
+        Report::Speeding => (
+            MbrType::Implausible,
+            vec![Subtype::MaxSpeed { threshold_mps: 90 }],
+            vec![bsm(0, 120.0)],
+        ),
+    };
+    mbr::MisbehaviorReport {
+        generation_time: 1,
+        location: v2xw_sec::envelope::GenerationLocation {
+            lat_tenth_microdeg: 407_440_000,
+            lon_tenth_microdeg: -739_900_000,
+            elevation: 4_096,
+        },
+        mbr_type,
+        subtypes,
+        evidence: Evidence::Suspect(SignedBsms {
+            bsms,
+            cert: cert.clone(),
+        }),
+    }
+}
+
+/// The revoked run: DEVICE_A provisioned, reported twice by DEVICE_B (real SM-MBR
+/// reports), resolved, revoked.
 fn revoked() -> ScmsRun {
     let mut p = ScmsParams::default().quick();
     p.pdu.keep_bytes = true;
@@ -60,9 +140,21 @@ fn revoked() -> ScmsRun {
         let d = &run.state.devices[&DEVICE_A];
         (d.credentials[&(0, 0)].lv, d.credentials[&(0, 1)].lv)
     };
-    run.submit_report(DEVICE_B, 0, lv0);
-    run.submit_report(DEVICE_B, 0, lv1);
+    // Two real SM-MBR reports (SM-MBR v1.0 / ASN v1.1) from DEVICE_B, each with DEVICE_A's
+    // BSMs signed under one of its pseudonyms: a frozen position under (0, 0) and a
+    // speed beyond MaxSpeed under (0, 1). The MA opens both and reads their type.
+    for (j, report) in [(0, Report::Frozen), (1, Report::Speeding)] {
+        let (cert, key) = pseudonym(&run, DEVICE_A, j);
+        let r = mbr_report(report, cert, &key);
+        run.submit_mbr(DEVICE_B, &r).expect("a real report secures");
+    }
     run.run().expect("the reports run");
+    // The RA's shuffle may deliver them in either order.
+    let mut held: Vec<[u8; 9]> = run.state.ma.reports.iter().map(|r| *r.subject_lv.as_bytes()).collect();
+    held.sort_unstable();
+    let mut want = vec![*lv0.as_bytes(), *lv1.as_bytes()];
+    want.sort_unstable();
+    assert_eq!(held, want, "the MA holds both reports, accusing A's two pseudonyms");
     run.investigate(0, 1, 0, JMAX).expect("two reports");
     run.run().expect("the investigation runs");
     run
@@ -212,8 +304,8 @@ fn the_flow_records_carry_each_spdu_once_and_only_its_recipient_reads_it() {
         .expect("a private response");
     assert_eq!(private.sealed_to.as_deref(), Some("ee"));
     assert!(private.opened.is_none());
-    // (A real SM-MBR, opened by the MA, is checked on the engine run:
-    // `v2xw-engine/tests/pki_view.rs`; `submit_report` here carries no secured report.)
+    // (The two reports are real SM-MBRs the MA opens; the engine run checks them too:
+    // `v2xw-engine/tests/pki_view.rs`.)
 
     // The UI fixture of a whole in-run sequence (enrolment, provisioning, two reports, the
     // resolution, the CRL): every record this run publishes, in the engine's JSONL shape.
@@ -416,7 +508,9 @@ fn a_case_walks_the_board_in_order() {
     let run = revoked();
     let runs = std::slice::from_ref(&run);
     let mut tracker = PkiTracker::default();
-    let cases = pki_view::drain_cases(runs, &mut tracker, now(&run), &|_, _| Some((1, 2)));
+    let t = now(&run);
+    let one = vec![t];
+    let cases = pki_view::drain_cases(runs, &mut tracker, t, &|_, _| Some((one.clone(), 5)));
     let stages: Vec<&str> = cases.iter().map(|c| c.stage.as_str()).collect();
     assert_eq!(stages, pki_view::CASE_STAGES.to_vec(), "{stages:?}");
     assert!(
@@ -432,7 +526,55 @@ fn a_case_walks_the_board_in_order() {
     for i in [cases[0].instance.as_str(), crl] {
         assert!(flows.iter().any(|f| f.instance == i), "no flow is {i}");
     }
-    assert!(pki_view::drain_cases(runs, &mut tracker, now(&run), &|_, _| Some((1, 2))).is_empty());
+    // The reports the case was opened on are named with the evidence the MA decoded from
+    // each: SM-MBR type and subtypes, and whether the suspect BSMs verified.
+    let evidence = cases[0].detail["evidence"].as_array().expect("evidence");
+    let mut read: Vec<(u64, u64, &str, &str, bool, bool)> = evidence
+        .iter()
+        .map(|e| {
+            (
+                e["report"].as_u64().expect("report"),
+                e["type"].as_u64().expect("a real report's type"),
+                e["type_name"].as_str().expect("name"),
+                e["subtypes"][0]["name"].as_str().expect("subtype"),
+                e["verified"].as_bool().expect("verified"),
+                e["shared"].as_bool().expect("shared"),
+            )
+        })
+        .collect();
+    // The case names reports 0 and 1; the RA's shuffle decides which arrived first.
+    let mut ids: Vec<u64> = read.iter().map(|r| r.0).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![0, 1]);
+    read.sort_by_key(|r| r.1);
+    for r in &mut read {
+        r.0 = 0;
+    }
+    assert_eq!(
+        read,
+        vec![
+            (0, 1, "1VInconsistent", "ConstantPosition", true, false),
+            (0, 2, "Implausible", "MaxSpeed", true, false),
+        ]
+    );
+    let enforced = cases.last().expect("enforced");
+    assert_eq!(enforced.detail["installed"], 1);
+    assert_eq!(enforced.detail["of"], 5);
+    // The MA's case table names no vehicle (it does not learn who installed its CRL).
+    assert!(!enforced.detail.to_string().contains("ee/"), "{}", enforced.detail);
+    // Two more vehicles install the entry: each is stamped at its own instant, with the
+    // running count, so "n of N" keeps counting (it froze at the first install before).
+    let three = vec![t, t + 7, t + 9];
+    let more = pki_view::drain_cases(runs, &mut tracker, t + 10, &|_, _| Some((three.clone(), 5)));
+    assert_eq!(
+        more.iter()
+            .map(|c| (c.stage.as_str(), c.t, c.detail["installed"].as_u64()))
+            .collect::<Vec<_>>(),
+        vec![("enforced", t + 7, Some(2)), ("enforced", t + 9, Some(3))]
+    );
+    assert!(
+        pki_view::drain_cases(runs, &mut tracker, t + 20, &|_, _| Some((three.clone(), 5))).is_empty()
+    );
 }
 
 #[test]
@@ -488,5 +630,50 @@ fn each_entity_knows_only_its_share() {
             !k.holds.to_string().contains("ee/"),
             "{role} holds no device id"
         );
+    }
+}
+
+/// The `node.credentials` change digest is SHA-256 over its documented encoding, truncated
+/// to 8 bytes, so it is the same on every toolchain. The pinned value was computed
+/// independently from the encoding in the function's doc comment, in Python with
+/// `hashlib` (not from this code). std's `DefaultHasher`, used before, gives another
+/// value and may change between Rust releases.
+#[test]
+fn the_credentials_change_digest_is_a_stable_sha256() {
+    use pki_view::{CredCell, credentials_digest};
+    let cell = |i: u32, j: u32, state: &str, id8: Option<&str>, used: bool| CredCell {
+        i,
+        j,
+        state: state.to_string(),
+        id8: id8.map(str::to_string),
+        used,
+    };
+    let cells = vec![
+        cell(614, 0, "active", Some("0102030405060708"), true),
+        cell(614, 1, "valid", None, false),
+        cell(615, 0, "not-yet-available", None, false),
+    ];
+    let e = Some("a1b2c3d4e5f60708");
+    let base = credentials_digest(&cells, 614, e, Some((true, false)), Some(3), false);
+    assert_eq!(
+        base, 0x6928_3c68_20a4_f4c5,
+        "SHA-256 of the encoding, first 8 bytes"
+    );
+    // Every input the record shows moves the digest.
+    let mut used = cells.clone();
+    used[1].used = true;
+    let others = [
+        credentials_digest(&used, 614, e, Some((true, false)), Some(3), false),
+        credentials_digest(&cells[..2], 614, e, Some((true, false)), Some(3), false),
+        credentials_digest(&cells, 615, e, Some((true, false)), Some(3), false),
+        credentials_digest(&cells, 614, None, Some((true, false)), Some(3), false),
+        credentials_digest(&cells, 614, e, Some((true, true)), Some(3), false),
+        credentials_digest(&cells, 614, e, None, Some(3), false),
+        credentials_digest(&cells, 614, e, Some((true, false)), Some(4), false),
+        credentials_digest(&cells, 614, e, Some((true, false)), None, false),
+        credentials_digest(&cells, 614, e, Some((true, false)), Some(3), true),
+    ];
+    for (k, d) in others.iter().enumerate() {
+        assert_ne!(*d, base, "variant {k} must change the digest");
     }
 }

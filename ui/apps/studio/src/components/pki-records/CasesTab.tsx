@@ -17,6 +17,7 @@ import {
   asCases,
   boardColumn,
   enforcement,
+  evidenceText,
   entityLabel,
   secondsText,
   stageTimes,
@@ -112,7 +113,11 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
                   <td>{BOARD_COLUMNS.find((b) => b.stage === s.stage)?.label ?? s.stage}</td>
                   <td className="mono">{secondsText(s.t)}</td>
                   <td className="mono faint">{s.dwellNs === null ? "" : `+${secondsText(s.dwellNs)}`}</td>
-                  <td className="mono faint">{detailText(c.stages.find((x) => x.stage === s.stage)?.detail)}</td>
+                  <td className="mono faint">
+                    {s.stage === "enforced"
+                      ? enforcedText(c)
+                      : detailText(c.stages.find((x) => x.stage === s.stage)?.detail)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -164,11 +169,21 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
   );
 }
 
+/** The enforced row: how many vehicles hold the entry now, and when the first did. */
+function enforcedText(c: CaseView): string {
+  const enf = enforcement(c);
+  return enf ? `installed ${enf.installed} of ${enf.of}` : "";
+}
+
 function detailText(d: Readonly<Record<string, unknown>> | undefined): string {
   if (!d) return "";
   const parts: string[] = [];
   for (const [k, v] of Object.entries(d)) {
     if (k === "subjects") continue;
+    if (k === "evidence" && Array.isArray(v)) {
+      parts.push(`evidence ${v.map(evidenceText).join("; ")}`);
+      continue;
+    }
     parts.push(`${k} ${typeof v === "object" ? JSON.stringify(v) : String(v)}`);
   }
   return parts.join(" · ");

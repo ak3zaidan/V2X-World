@@ -117,6 +117,12 @@ const CHASE_YAW_OMEGA = 3.6;
 
 /** The chase distance for a car, metres, that `distanceM` (the zoom) is relative to. */
 const CHASE_REFERENCE_M = 9;
+/**
+ * The least distance, metres, past the subject's half-length that a chase camera stands at, however
+ * far in it is zoomed: outside the viewer's in-body test (half-length + 0.35 m) with the near plane's
+ * ~0.45 m on top, so the subject is drawn and in the frame.
+ */
+const CHASE_MIN_CLEAR_M = 1.0;
 /** Where in a street flight's progress `u` its final descent onto the subject begins. */
 const FLY_DESCENT_AT = 0.6;
 
@@ -649,6 +655,11 @@ export class CameraController {
    * The chase framing for the current subject: distance from its centre, look height and camera
    * elevation. The subject fills about a quarter of the frame's height whatever its size: the
    * distance is half its length plus a stand-off that grows with its height and length.
+   *
+   * Zooming in never takes the camera into the subject: below {@link CHASE_MIN_CLEAR_M} past its
+   * half-length the viewer hid the body it stood in (`hiddenActorId`), so a chase camera at the 2 m
+   * zoom minimum (1.5 m from a car's centre) followed nothing and looked at the asphalt at its feet,
+   * a flat frame the camera fuzz caught after any earlier zoom-in.
    */
   chaseFraming(): { distanceM: number; lookHeightM: number; pitchRad: number } {
     const L = this.#subjectL;
@@ -656,7 +667,7 @@ export class CameraController {
     const standOff = Math.max(this.#subjectVru ? 3.6 : 4.5, 1.5 * H + 0.35 * L);
     const zoom = this.#chaseDistance / CHASE_REFERENCE_M;
     return {
-      distanceM: (L / 2 + standOff) * zoom,
+      distanceM: Math.max(L / 2 + CHASE_MIN_CLEAR_M, (L / 2 + standOff) * zoom),
       lookHeightM: Math.max(0.9, 0.72 * H),
       pitchRad: this.#orbitPitch - (this.#subjectVru ? 3 * DEG : 0),
     };

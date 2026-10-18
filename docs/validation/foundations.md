@@ -63,12 +63,40 @@ Attempts are 2 × (40 + 22) = 124, and all 124 decode.
 | 100 | 988 | 15,744 | 97,812 | 0.309 | 30 | 4,693 (+60 half-duplex, +65 hidden-terminal) |
 
 Measured 2026-10-18 with the 77-octet implicit pseudonym (WP-C1); the 100-vehicle row
-already read this way before the validated-certificate cache landed, and its
-hidden-terminal losses are not yet explained by the free-space argument below.
+already read this way before the validated-certificate cache landed.
 
 Offered load, attempts and the channel busy ratio are linear in n, as theory says.
-Everyone is in carrier-sense range in free space, so there are no hidden terminals, and a
-collision needs two frames on the air at once. The test asserts that collisions happen
+
+**The 65 hidden-terminal losses at 100 vehicles are geometry, not a defect.** Everyone
+*decodes* everyone in free space here, but not everyone *defers* to everyone. CCA is
+−85 dBm (`CcaConfig::ETSI`, the EN 302 571 §4.2.10.1 busy threshold), while a 6 Mbit/s
+BSM still decodes down to −88 dBm (the static sensitivity). At this EIRP (20.5 dBm
+including both antennas) Friis at 5.860 GHz puts −85 dBm at 767 m and −88 dBm at
+1,083 m. The grid's diagonal is 995 m, and the 100-vehicle fleet fills lanes out to its
+edges, so some pairs are 767–995 m apart: each hears the other's frames but senses the
+channel idle during them. In the 1 s run this happens once. Vehicle 51's frame starts at
+68.003 ms and lasts 400 µs. It reaches vehicle 82, 858.1 m away, at −85.98 dBm, below CCA.
+Vehicle 82 starts a frame 382.5 µs later, and the two overlap for 17.5 µs. Both frames are
+lost at the receivers the overlap ruins (65 hidden-terminal losses), and so is 51's frame
+at 82, which was transmitting by then (part of the 60 half-duplex losses). The 50-vehicle
+fleet's lanes sit nearer the centre, so no overlapping pair lies in that band. Everything
+else needs two frames on the air at once.
+
+`the_load_metrics_scale_with_the_fleet_as_theory_says` now derives this from the records
+alone. For every pair of overlapping frames with different start times, it takes the
+earlier frame's RSSI at the later sender (`phy.rx`). It then asserts that hidden-terminal
+losses occur exactly when some pair is below −85 dBm, and that every such pair lies in the
+−88 to −85 dBm band and more than 760 m apart. A fault that moves the engine's classifier
+threshold by 3 dB turns it red.
+
+**A realism gap this exposes (not changed here):** a real 802.11 receiver that detects a
+preamble is busy for as long as it receives the frame, whatever its CCA level. IEEE
+802.11-2016 §17.3.10.6 sets −85 dBm only as the *minimum* level that must read busy in a
+10 MHz channel, and ns-3 keeps a PHY in RX (CCA busy) once it has locked on a frame
+above its sensitivity. The engine takes CCA from received power against the single
+threshold, so in the 3 dB band a vehicle transmits over a frame it is decoding. Making
+preamble-detected frames hold CCA busy would remove these losses, and would change every
+radio digest. It belongs in a radio work package, not in this cleanup. The test asserts that collisions happen
 exactly when frames overlap, and that one overlapping pair costs at most both frames at
 every other receiver. At most one frame per vehicle is still in the MAC when the run ends,
 which is why some rows show slightly fewer than 10n frames.
@@ -161,6 +189,10 @@ and public-key checks go to a fast accelerator. A unit that does both on one CPU
 "signed in the HSM (≤ 9 ms, vendor bound)" and "verified on the accelerator (1/2500 s)".
 
 ## Open items (not fixed here)
+
+- **CCA does not follow preamble detection.** In the 3 dB band between the −85 dBm CCA
+  threshold and the −88 dBm 6 Mbit/s sensitivity, a vehicle decodes a frame it does not
+  defer to (above, "More vehicles").
 
 - **The Poisson demand cap counts trips, not vehicles.** A trip the router cannot route is
   dropped but still counted. On the 4 × 8 grid, a cap of 2 gave 0 vehicles. On a 3 × 3

@@ -54,6 +54,26 @@ describe("camera robustness", () => {
     v.dispose();
   });
 
+  it("keeps a fully zoomed-in chase camera outside the car it follows, so the car is drawn", () => {
+    // The camera fuzz's flat frames: after a zoom-in to the 2 m minimum, following a car put the
+    // chase camera 1.5 m from its centre, inside its body. The viewer hid the body, and the frame
+    // was the asphalt at the camera's feet.
+    const v = viewer();
+    const { x, y } = street();
+    v.capture(placedPoses([{ actorId: 4, x, y, headingRad: Math.PI / 2, speedMps: 0 }], 0n), 0);
+    v.step(1 / 60);
+    v.flyTo(4, "chase", true);
+    const target = new EventTarget();
+    v.cameras.attachInput(target);
+    for (let i = 0; i < 40; i++) target.dispatchEvent(Object.assign(new Event("wheel"), { deltaY: -400 }));
+    for (let i = 0; i < 240; i++) v.step(1 / 60);
+    expect(v.cameras.distanceM, "the zoom did reach its minimum").toBeLessThanOrEqual(2);
+    const off = Math.hypot(v.camera.position.x - x, v.camera.position.y - y);
+    expect(off, "metres from the car's centre (half its length is 2.25)").toBeGreaterThan(2.25 + 0.6);
+    expect(v.actors.hiddenActorId, "the followed car is not hidden").toBe(-1);
+    v.dispose();
+  });
+
   it("refuses a non-finite pose rather than drawing a NaN camera", () => {
     const v = viewer();
     v.cameras.follow(5);
