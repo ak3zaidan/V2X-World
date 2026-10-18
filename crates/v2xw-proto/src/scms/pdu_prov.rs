@@ -31,8 +31,8 @@ use v2xw_msg::sec_types::ieee1609_dot2::{
 };
 use v2xw_msg::sec_types::ieee1609_dot2_base_types::{
     CrlSeries, Duration as Ieee1609Duration, HashedId3, IValue, LaId as AsnLaId,
-    LinkageValue as AsnLinkageValue, Psid, PsidSsp, SequenceOfPsidSsp, ServiceSpecificPermissions,
-    Time32, Uint8, Uint16, Uint32, ValidityPeriod,
+    LinkageValue as AsnLinkageValue, Opaque, Psid, PsidSsp, SequenceOfPsidSsp,
+    ServiceSpecificPermissions, Time32, Uint8, Uint16, Uint32, ValidityPeriod,
 };
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ee_interface::{
     AcaEeCertResponse, AcaEeInterfacePdu,
@@ -128,8 +128,11 @@ impl LaAcaKeys {
 // ---------------------------------------------------------------------------------------
 
 /// LA side: `EncryptedIndividualPLV {version 2, laId, encPlv}`; `encPlv` is
-/// `SymmEncryptedSingleRecipient{PreLinkageValue}` under `shared`, whose ciphertext
-/// "decrypts to a PreLinkageValue" (the 9 bytes, [ASN-2.1] AcaRaInterface).
+/// `SymmEncryptedSingleRecipient{PreLinkageValue}` under `shared`. The plaintext is the
+/// 9 bytes encapsulated as `Ieee1609Dot2Data-Unsecured`: 1609.2 encrypts an
+/// `Ieee1609Dot2Data` ("encapsulating Tbe in an Ieee1609Dot2Data of type unsecured if Tbe
+/// is not already an Ieee1609Dot2Data", [ASN-2.1] Protocol `Ieee1609Dot2Data-Encrypted`;
+/// 02 §8.3). WP-F1: the conformance oracle found the bare 9 bytes encrypted before.
 ///
 /// # Errors
 /// Encoding fails.
@@ -139,7 +142,11 @@ pub fn encrypted_individual_plv(
     shared: &[u8; 16],
     g: &mut Drbg,
 ) -> Result<EncryptedIndividualPLV> {
-    let bytes = pdu::symm_encrypt_single(plv.as_bytes(), shared, g)?;
+    let inner = pdu::coer(&Ieee1609Dot2Data::new(
+        Uint8(pdu::PROTOCOL_VERSION),
+        Ieee1609Dot2Content::unsecuredData(Opaque(plv.as_bytes().to_vec().into())),
+    ))?;
+    let bytes = pdu::symm_encrypt_single(&inner, shared, g)?;
     let d: Ieee1609Dot2Data = pdu::decode(&bytes)?;
     Ok(EncryptedIndividualPLV::new(
         Uint8(STRUCT_VERSION),
@@ -183,6 +190,11 @@ pub fn aca_open_plv(
         e.enc_plv.content.clone(),
     );
     let plain = pdu::decrypt_symm(&pdu::coer(&data)?, &key)?;
+    let Ieee1609Dot2Content::unsecuredData(Opaque(plain)) =
+        pdu::decode::<Ieee1609Dot2Data>(&plain)?.content
+    else {
+        return Err(PduError::Shape("a sealed PLV decrypts to unsecuredData"));
+    };
     let b: [u8; PLV_BYTES] = plain[..]
         .try_into()
         .map_err(|_| PduError::Shape("a PreLinkageValue is 9 bytes"))?;

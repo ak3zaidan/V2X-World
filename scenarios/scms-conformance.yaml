@@ -1,0 +1,93 @@
+# ============================================================================
+# The SCMS conformance run (WP-F1, docs/design/scms-real/00 §4.2): one scenario on the
+# real calendar that drives every SCMS flow the engine models, so that every PDU it puts
+# on a link can be captured and checked by the independent oracle.
+# ============================================================================
+#
+# Every lifecycle number is the deployment's (the base's compressed values are removed):
+# one-week i-periods from the 2015-01-06 04:00 Eastern epoch, the CAMP 1.2.2 certificate
+# shuffle, the RA's report shuffle, the CV-pilot manual MA review, the provider's
+# business-day CRL publication, the hourly CRL fetch, the six-year enrolment, and the
+# real 1609.2 / 1609.2.1-2022 SPDUs. The quiet stretches are fast-forwarded.
+#
+#  * Before t0 (the factory and the dealer): every vehicle and roadside unit is enrolled
+#    by its provider's ECA and given its first pseudonym batches or application
+#    certificates (`ScmsRun::preload`).
+#  * 0–660 s, radio on (Tuesday 2026-10-20 08:50 UTC): the liars from 60 s, the
+#    detectors and their reports; at 120 s the SCMS Manager decides a root rollover (a
+#    CTL change, published at its SLA); at 600 s the i-period rolls from 614 to 615, the
+#    vehicles top up and the roadside units renew their application certificates.
+#  * fast-forward to Thursday 15:20 UTC: the report shuffle releases, the MA operator
+#    reviews, the CRL Generator publishes and the vehicles fetch the list.
+#  * 300 s of radio: the revoked liars are refused on the air by vehicles of both
+#    providers.
+#  * fast-forward past the new CTL's publication, then 300 s of radio to the end.
+#
+# `crates/v2xw-engine/tests/conformance.rs` runs it and, with `V2XW_CONFORMANCE_OUT`,
+# writes the capture `tools/conformance/check_run.py` checks.
+schema: v2xw/scenario/1
+meta:
+  name: scms-conformance
+  description: >-
+    The SCMS conformance run: factory enrolment, provisioning and a week rollover, RSU
+    application-certificate renewal, a misbehaviour report through case, CRL and
+    enforcement on both providers' vehicles, and a CTL change, on the real calendar with
+    fast-forward and real cryptography, every PDU captured for the oracle.
+  authors: [v2xw]
+  tags: [scms, conformance, calendar, fast-forward, revocation, ctl, procedural]
+  created: "2026-10-18"
+  base: credential-lifecycle.yaml
+time:
+  # Ten minutes before the Tuesday 09:00 UTC i-period boundary.
+  t0: "2026-10-20T08:50:00Z"
+  calendar: real
+  duration_s: 433200.0
+  fast_forward:
+    - {from_s: 660.0, to_s: 196200.0}
+    - {from_s: 196500.0, to_s: 432900.0}
+world:
+  source:
+    params:
+      # Slow streets, so the vehicles on the road when the radio stops are still on it
+      # when it starts again.
+      speed_limit_mps: 5.0
+actors:
+  vehicles:
+    demand:
+      rate_veh_per_h: 200.0
+  rsus:
+    - position_m: [548.0, 280.0, 0.0]
+      roles: [report-forward, crl, provisioning-proxy]
+      profile: rsu/commsignia-its-rs4
+    - position_m: [274.0, 160.0, 0.0]
+      roles: [report-forward, crl, provisioning-proxy]
+      profile: rsu/commsignia-its-rs4
+security:
+  crypto_mode: real
+  protocol:
+    id: protocol/scms/camp
+    params:
+      i_period_s: null
+      cert_lifetime_s: null
+      certs_per_period: null
+      pool_periods: null
+      topup_below_periods: null
+      cert_shuffle_window_s: null
+      first_batch_delay_s: null
+      download_poll_interval_s: null
+      enrolment_lifetime_s: null
+      reenrol_lead_s: null
+      reenrol_download_delay_s: null
+      report_shuffle_window_s: null
+      ma_review_s: null
+      crl_cadence_s: null
+      crl_fetch_interval_s: null
+      # The CTL change: the SCMS Manager decides the home provider's root rollover.
+      root_rollover_at_s: 120
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.1
+      schedule:
+        from_s: 60.0
+        to_s: 433200.0

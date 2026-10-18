@@ -279,6 +279,13 @@ impl PkiTracker {
     pub fn note_active(&mut self, device: NodeId, id8: [u8; 8]) {
         self.creds.entry(device.index()).or_default().1.insert(id8);
     }
+
+    /// How many of the `k`-th run's SPDUs a `pki.flow` record has carried (WP-F1: what
+    /// the run's end still owes the recording).
+    #[must_use]
+    pub fn pdus_published(&self, k: usize) -> usize {
+        self.cursors.get(&k).map_or(0, |c| c.2)
+    }
 }
 
 /// The label of the provider a run serves.
