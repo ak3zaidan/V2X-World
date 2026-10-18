@@ -2,7 +2,7 @@
  * The JSON-RPC 2.0 control surface — docs/protocol/vwp-v1.md §6.
  *
  * Text frames on the same WebSocket carry JSON-RPC 2.0, single objects only (§6.1: batch arrays are
- * rejected with −32600). This file hand-transcribes the 31 methods plus `rpc.discover` of §6.15 and
+ * rejected with −32600). This file hand-transcribes the methods of §6.15 (listed in `VWP_METHODS`) and
  * the 8 server→client notifications of §6.14 into a typed method map, so a caller gets its params
  * and result checked at compile time. Nothing here is invented: every method, param and result
  * property comes from a schema in §6.
@@ -576,6 +576,17 @@ export interface ScenarioGetParams {
   resolved?: boolean;
   with_schema?: boolean;
 }
+/**
+ * §6.10 `scenario.schema` params: the generated settings surface, a property of the build rather
+ * than of a run. `sections` picks parts of it (`version`, `engine`, `generated_from`, `validator`,
+ * `groups`, `statuses`, `schema`, `fields`, `slots`, `models`, `quick`, `studies`); empty or absent
+ * returns the whole surface. An unknown section is −32602.
+ */
+export interface ScenarioSchemaParams {
+  sections?: string[];
+}
+/** §6.10 `scenario.schema` result: the surface, or the asked-for sections plus `version` and `engine`. */
+export type ScenarioSchemaResult = Record<string, unknown>;
 /** §6.10 `scenario.get` result. */
 export interface ScenarioGetResult {
   scenario: unknown;
@@ -1079,7 +1090,7 @@ export interface RpcDiscoverResult {
 }
 
 // ---------------------------------------------------------------------------
-// §6.15 — the method inventory: 31 methods + rpc.discover = 32
+// §6.15 — the method inventory (VWP_METHODS below is the list; count from it)
 // ---------------------------------------------------------------------------
 
 /**
@@ -1123,6 +1134,7 @@ export interface VwpMethods {
   "inspect.pki": { params: InspectPkiParams; result: InspectPkiResult };
   explain: { params: ExplainParams; result: ExplainResult };
   "scenario.get": { params: ScenarioGetParams; result: ScenarioGetResult };
+  "scenario.schema": { params: ScenarioSchemaParams; result: ScenarioSchemaResult };
   "scenario.set": { params: ScenarioSetParams; result: ScenarioSetResult };
   "scenario.validate": { params: ScenarioValidateParams; result: ScenarioValidateResult };
   "scenario.save": { params: ScenarioSaveParams; result: ScenarioSaveResult };
@@ -1148,14 +1160,14 @@ export interface VwpMethods {
 /** Every method name of §6.15. */
 export type VwpMethodName = keyof VwpMethods;
 
-/** §6.15 — the method names as a runtime array (43 entries), in the order the table lists them; the three `runs.*` methods are the run history and comparison, and the seven `inspect.*` after `inspect.entity` are the PKI view's (WP-E1, WP-E2, WP-E3). */
+/** §6.15 — the method names as a runtime array: the same names, in the same order, as the server's `v2xw_server::rpc::METHODS` (the server conformance sweep and `crates/v2xw-server/tests/rpc.rs` compare them by name; count from this array, never hard-code its length); the three `runs.*` methods are the run history and comparison, and the seven `inspect.*` after `inspect.entity` are the PKI view's (WP-E1, WP-E2, WP-E3). */
 export const VWP_METHODS: readonly VwpMethodName[] = [
   "run.start", "run.pause", "run.resume", "run.step", "run.seek", "run.speed", "run.stop", "run.status",
   "view.follow", "view.camera", "overlay.set",
   "inspect.node", "inspect.link", "inspect.entity",
   "inspect.pdu", "inspect.cert", "inspect.knowledge", "inspect.trust", "inspect.flows", "inspect.flow", "inspect.pki",
   "explain",
-  "scenario.get", "scenario.set", "scenario.validate", "scenario.save", "scenario.load", "scenario.list",
+  "scenario.get", "scenario.schema", "scenario.set", "scenario.validate", "scenario.save", "scenario.load", "scenario.list",
   "cities.list",
   "world.import_osm", "world.generate",
   "events.set",

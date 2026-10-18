@@ -2717,21 +2717,28 @@ The server sends these as JSON-RPC notifications (no `id`, no reply expected).
 
 ### 6.15 Method inventory
 
-32 methods plus `rpc.discover` = **33**. (`scenario.schema` was added on 2026-09-23 with the
-generated settings surface, 13-product-direction §2: every scenario field with its unit, default,
-range, description and implementation status. It is a property of the build, not of a run.)
+**44** methods. The server's list is `v2xw_server::rpc::METHODS` and the client's is `VWP_METHODS`
+(`ui/packages/protocol/src/rpc.ts`); `crates/v2xw-server/tests/rpc.rs` holds the two equal by name
+and order, and the conformance tests count from them rather than from a number in this table.
+(`scenario.schema` was added on 2026-09-23 with the generated settings surface,
+13-product-direction §2: every scenario field with its unit, default, range, description and
+implementation status. It is a property of the build, not of a run. `cities.list` is the city
+library, `runs.*` the run history and comparison, and the seven `inspect.*` after
+`inspect.entity` the PKI view's, WP-E1 to WP-E3.)
 
 | Group | Methods |
 |---|---|
 | run (8) | `run.start`, `run.pause`, `run.resume`, `run.step`, `run.seek`, `run.speed`, `run.stop`, `run.status` |
 | view (3) | `view.follow`, `view.camera`, `overlay.set` |
-| inspect (4) | `inspect.node`, `inspect.link`, `inspect.entity`, `explain` |
+| inspect (11) | `inspect.node`, `inspect.link`, `inspect.entity`, `inspect.pdu`, `inspect.cert`, `inspect.knowledge`, `inspect.trust`, `inspect.flows`, `inspect.flow`, `inspect.pki`, `explain` |
 | scenario (7) | `scenario.get`, `scenario.set`, `scenario.validate`, `scenario.save`, `scenario.load`, `scenario.list`, `scenario.schema` |
+| cities (1) | `cities.list` |
 | world (2) | `world.import_osm`, `world.generate` |
 | stream (1) | `events.set` |
 | metrics (2) | `metrics.query`, `metrics.plot` |
 | export (2) | `export.dataset`, `export.recording` |
 | experiment (3) | `experiment.define`, `experiment.run`, `experiment.status` |
+| runs (3) | `runs.list`, `runs.compare`, `runs.digest` |
 | meta (1) | `rpc.discover` |
 
 Reserved for later minor versions, listed in 09-ui §8 but out of scope for v1:

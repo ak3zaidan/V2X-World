@@ -204,10 +204,18 @@ await check("§6.1 / R10 — a JSON-RPC batch array is rejected with −32600", 
   eq(body.error.code, -32600, "code");
 });
 
-await check("§6.3 / R1 — /rpc/schema is an OpenRPC 1.3.2 document naming all 34 methods", async () => {
+await check("§6.3 / R1 — /rpc/schema is an OpenRPC 1.3.2 document naming exactly the client's methods", async () => {
   const doc = await (await fetch(`${base}/rpc/schema`)).json();
   eq(doc.openrpc, "1.3.2", "openrpc version");
-  eq(doc.methods.length, 34, "method count: the 32 of §6.15 plus scenario.schema (the generated settings surface) and cities.list (the city library)");
+  // Counted from the client's own list (`VWP_METHODS`), never hard-coded: the count here said 34
+  // while the server had grown to 44. A method on one side only is named in the failure.
+  const served = doc.methods.map((m) => m.name);
+  const client = [...P.VWP_METHODS];
+  const onlyServer = served.filter((m) => !client.includes(m));
+  const onlyClient = client.filter((m) => !served.includes(m));
+  assert(onlyServer.length === 0 && onlyClient.length === 0,
+         `method lists differ: server only [${onlyServer}], client only [${onlyClient}]`);
+  eq(served.length, client.length, "method count (no duplicates)");
   assert(doc.methods.map((m) => m.name).includes("cities.list"), "cities.list present");
   assert(doc.methods.map((m) => m.name).includes("scenario.schema"), "scenario.schema present");
   assert(doc.methods.map((m) => m.name).includes("rpc.discover"), "rpc.discover present");
@@ -646,7 +654,7 @@ await check("R9 — an unknown method is −32601", async () => {
   c.close();
 });
 
-await check("every one of the 34 methods answers (a result or a documented error code)", async () => {
+await check("every method of /rpc/schema answers (a result or a documented error code)", async () => {
   const doc = await (await fetch(`${base}/rpc/schema`)).json();
   const c = client();
   const hello = await c.connect();
@@ -657,7 +665,11 @@ await check("every one of the 34 methods answers (a result or a documented error
     "run.status": {},
     "view.follow": { node }, "view.camera": { mode: "map" }, "overlay.set": { list: true },
     "inspect.node": { node }, "inspect.link": { tx: node, rx: hello.nodes.nodeId[1] },
-    "inspect.entity": { entity: "ma" }, "explain": { subject: { kind: "metric", id: "pdr" } },
+    "inspect.entity": { entity: "ma" },
+    "inspect.pdu": { id: "flow/0/0" }, "inspect.cert": { hashedid8: "0000000000000000" },
+    "inspect.knowledge": { entity: "ma" }, "inspect.trust": {}, "inspect.flows": { limit: 1 },
+    "inspect.flow": { instance: "none" }, "inspect.pki": { topic: "cases" },
+    "explain": { subject: { kind: "metric", id: "pdr" } },
     "scenario.get": {}, "scenario.schema": { sections: ["statuses"] }, "scenario.set": { scenario: { schema: "v2xw/scenario/1", seed: 0, time: { duration_s: 60 } } },
     "scenario.validate": {}, "scenario.save": { path: "/tmp/x.yaml" },
     "scenario.load": { path: "stub/grid" }, "scenario.list": {},
@@ -667,6 +679,7 @@ await check("every one of the 34 methods answers (a result or a documented error
     "experiment.define": { name: "x", sweep: { "traffic.actors": [1, 2] } },
     "experiment.run": { experiment_id: "nope" }, "experiment.status": { experiment_id: "nope" },
     "rpc.discover": {}, "cities.list": {},
+    "runs.list": {}, "runs.digest": {}, "runs.compare": {},
   };
   const known = new Set(doc.methods.flatMap((m) => (m.errors ?? []).map((e) => e.code)));
   known.add(-32602); known.add(-32603);
@@ -682,7 +695,9 @@ await check("every one of the 34 methods answers (a result or a documented error
       answered.push(m);
     }
   }
-  eq(answered.length, 34, `answered ${answered.length} of 34`);
+  eq(answered.length, doc.methods.length, `answered ${answered.length} of ${doc.methods.length}`);
+  const unparamed = doc.methods.map((x) => x.name).filter((m) => !(m in params));
+  assert(unparamed.length === 0, `the sweep has no params for [${unparamed}]: add them so each is exercised as intended`);
   // The sweep called `run.seek`, which §6.6 says pauses a live run, and `run.pause`.
   // §1.3 rule 4 then says the server sends nothing until `run.resume`, so later checks
   // that expect a moving stream have to put it back.
