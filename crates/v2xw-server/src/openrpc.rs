@@ -451,6 +451,58 @@ fn all_methods() -> Vec<Value> {
             &[-32006, -32040],
         ),
         method(
+            "inspect.pdu",
+            "One recorded SCMS SPDU (pki.flow): its bytes, the ASN.1 value tree the real \
+             decoder reads (JER), and the plaintext its recipient opened, shown in ground \
+             truth and to that recipient only (WP-E1).",
+            object(
+                &["id"],
+                json!({"id": {"type": "string"},
+                       "view": {"type": "string", "default": "ground-truth",
+                                "description": "ground-truth, or an entity id or role"}}),
+            ),
+            json!({"type": "object", "required": ["id", "type", "len", "from", "to", "t"],
+                   "properties": {"id": {"type": "string"}, "type": {"type": "string"},
+                                  "len": {"type": "integer"}, "hex": {"type": ["string", "null"]},
+                                  "tree": {"type": ["object", "null"]},
+                                  "sealed_to": {"type": ["string", "null"]},
+                                  "opened": {"type": ["object", "null"]}}}),
+            &[-32006, -32009, -32040],
+        ),
+        method(
+            "inspect.cert",
+            "One certificate by HashedId8: its decode and the validation trace a US device \
+             runs (chain to a CTL root, signatures, issuer permissions, chain length, \
+             validity, region, CRL) at t_ns (WP-E1).",
+            object(
+                &["hashedid8"],
+                json!({"hashedid8": {"type": "string", "pattern": "^[0-9a-fA-F]{16}$"},
+                       "t_ns": sim_time}),
+            ),
+            json!({"type": "object", "required": ["id8", "chain", "valid", "trace"],
+                   "properties": {"id8": {"type": "string"}, "tree": {"type": "object"},
+                                  "chain": {"type": "array", "items": {"type": "string"}},
+                                  "valid": {"type": "boolean"},
+                                  "trace": {"type": "array"}}}),
+            &[-32006, -32009],
+        ),
+        method(
+            "inspect.knowledge",
+            "What one SCMS entity holds and what it handles but cannot read; the \
+             ground-truth join onto devices only in the ground-truth view (WP-E1).",
+            object(
+                &["entity"],
+                json!({"entity": {"type": "string"},
+                       "view": {"type": "string", "default": "ground-truth"}}),
+            ),
+            json!({"type": "object", "required": ["entity", "role", "holds", "cannot_see"],
+                   "properties": {"entity": {"type": "string"}, "role": {"type": "string"},
+                                  "holds": {"type": "object"},
+                                  "cannot_see": {"type": "array"},
+                                  "truth": {"type": "object"}}}),
+            &[-32006, -32009, -32040],
+        ),
+        method(
             "explain",
             "Resolve a displayed value back to the model that produced it.",
             object(

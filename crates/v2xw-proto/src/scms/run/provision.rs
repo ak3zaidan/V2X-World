@@ -173,6 +173,9 @@ impl ScmsRun {
             p.device_profile,
         );
         let mut real = core::mem::replace(&mut self.kernel, scratch);
+        // The PDUs the scratch flows emit name scratch-kernel steps, which are thrown
+        // away with it: they are marked as pre-run and carry no step (WP-E1).
+        let pdu0 = self.state.pdus.len();
         // The request shuffle happened long before the run and its length is not what a
         // pre-run pool is for; with the cited one-day window the device's download polls
         // would give up before the batch was ready. The window is restored below.
@@ -202,6 +205,10 @@ impl ScmsRun {
             outcome = Self::drain_into(&mut self.state, &mut self.kernel);
         }
         core::mem::swap(&mut self.kernel, &mut real);
+        for p in &mut self.state.pdus[pdu0..] {
+            p.step = None;
+            p.preload = true;
+        }
         self.state.params = saved;
         let leftover = core::mem::replace(&mut self.state.ra.jobs, run_jobs);
         self.state.ra.jobs.extend(leftover);

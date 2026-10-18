@@ -863,25 +863,30 @@ pub fn drain_flows(runs: &[ScmsRun], tracker: &mut PkiTracker) -> Vec<PkiFlow> {
         let (stamps, g_end) = run.kernel.stages_since(gc);
         let pdus = &run.state.pdus[pc.min(run.state.pdus.len())..];
         let mut by_step: BTreeMap<u32, Vec<PduRef>> = BTreeMap::new();
+        let lone = |r: PduRef, flow: &str| PkiFlow {
+            schema: PKI_VIEW_SCHEMA,
+            kind: "pdu".to_string(),
+            id: r.id.clone(),
+            t: r.t,
+            provider: label.clone(),
+            flow: flow.to_string(),
+            instance: format!("{label}/{flow}/0"),
+            name: r.kind.clone(),
+            from: Some(r.from.clone()),
+            to: Some(r.to.clone()),
+            bytes: Some(r.len),
+            transport: None,
+            pdus: vec![r],
+        };
         for (off, p) in pdus.iter().enumerate() {
             let r = pdu_ref(run, &ids, &label, pc + off, p);
             match p.step {
-                Some(s) if (s as usize) >= sc => by_step.entry(s).or_default().push(r),
-                _ => out.push(PkiFlow {
-                    schema: PKI_VIEW_SCHEMA,
-                    kind: "pdu".to_string(),
-                    id: r.id.clone(),
-                    t: r.t,
-                    provider: label.clone(),
-                    flow: "unattributed".to_string(),
-                    instance: format!("{label}/unattributed/0"),
-                    name: r.kind.clone(),
-                    from: Some(r.from.clone()),
-                    to: Some(r.to.clone()),
-                    bytes: Some(r.len),
-                    transport: None,
-                    pdus: vec![r],
-                }),
+                Some(s) if (sc..s_end).contains(&(s as usize)) => {
+                    by_step.entry(s).or_default().push(r);
+                }
+                // A pre-run flow (enrolment and the first batches before the drive).
+                _ if p.preload => out.push(lone(r, "preload")),
+                _ => out.push(lone(r, "unattributed")),
             }
         }
         for (off, s) in steps.iter().enumerate() {
@@ -905,6 +910,10 @@ pub fn drain_flows(runs: &[ScmsRun], tracker: &mut PkiTracker) -> Vec<PkiFlow> {
                     .and_then(|n| by_step.remove(&n))
                     .unwrap_or_default(),
             });
+        }
+        // Every PDU is published: one whose step was not in this drain stays visible.
+        for r in std::mem::take(&mut by_step).into_values().flatten() {
+            out.push(lone(r, "unattributed"));
         }
         for (off, st) in stamps.iter().enumerate() {
             let flow = st.flow.as_str();
@@ -986,7 +995,7 @@ pub fn drain_cases(
         let label = provider_label(run);
         let ma = &run.state.ma;
         for (r, c) in &ma.cases {
-            let instance = format!("{label}/revocation/{}", r.0);
+            let instance = format!("{label}/linkage-resolution/{}", r.0);
             let case = format!("{label}/case/{}", r.0);
             let mut push = |tracker: &mut PkiTracker,
                             stage: &'static str,
@@ -1060,7 +1069,7 @@ pub fn drain_cases(
                     tracker,
                     "crl-published",
                     published,
-                    json!({"crl_instance": format!("{label}/revocation/{}", c.crl_run.0)}),
+                    json!({"crl_instance": format!("{label}/crl-issuance/{}", c.crl_run.0)}),
                 );
             } else if c.done {
                 push(
@@ -1118,6 +1127,8 @@ pub struct NodeCredentials {
     pub t: SimTime,
     /// The vehicle's node id.
     pub node: u32,
+    /// Its backend device id, `ee/<n>`: what `pki.flow` names it as sender or receiver.
+    pub device: String,
     /// Its provider.
     pub provider: String,
     /// Enrolled.
@@ -1162,7 +1173,8 @@ pub struct HeldCert {
 }
 
 /// The pool of `device` (in `run`) from what its node holds, or `None` when the record
-/// would repeat the last one. `active` is the certificate it signs with now.
+/// would repeat the last one. `active` is the certificate it signs with now; `revoked`
+/// whether the vehicle knows itself revoked (it found itself on a CRL).
 #[must_use]
 pub fn node_credentials(
     run: &ScmsRun,
@@ -1170,6 +1182,7 @@ pub fn node_credentials(
     now: SimTime,
     held: &[HeldCert],
     active: Option<[u8; 8]>,
+    revoked: bool,
     tracker: &mut PkiTracker,
 ) -> Option<NodeCredentials> {
     let st = &run.state;
@@ -1211,6 +1224,7 @@ pub fn node_credentials(
         }
     }
     let cells: Vec<CredCell> = cells.into_values().collect();
+    let cells_revoked = cells.iter().any(|c| c.state == "revoked");
     let enrolment = dev
         .and_then(|d| d.enrolment_credential.as_ref())
         .map(|e| hex(&cert_id8(&e.cert)));
@@ -1222,6 +1236,7 @@ pub fn node_credentials(
         }
         (current_i, &enrolment, dev.map(|d| (d.enrolled, d.silenced))).hash(&mut h);
         dev.and_then(|d| d.trust.ctl_sequence).hash(&mut h);
+        revoked.hash(&mut h);
         h.finish()
     };
     if entry.0 == digest && digest != 0 {
@@ -1248,6 +1263,7 @@ pub fn node_credentials(
         schema: PKI_VIEW_SCHEMA,
         t: now,
         node: device.index(),
+        device: format!("ee/{}", device.index()),
         provider: provider_label(run),
         enrolled: dev.is_some_and(|d| d.enrolled),
         enrolment,
@@ -1257,7 +1273,7 @@ pub fn node_credentials(
         cells,
         history,
         ctl_sequence: dev.and_then(|d| d.trust.ctl_sequence),
-        revoked: dev.is_some_and(|d| d.silenced),
+        revoked: revoked || dev.is_some_and(|d| d.silenced) || cells_revoked,
         certificates,
     })
 }

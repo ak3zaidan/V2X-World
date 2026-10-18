@@ -96,6 +96,26 @@ fn every_spdu_rides_the_step_that_carried_it() {
         }
     }
     assert!(checked >= 8, "only {checked} PDUs were on named steps");
+
+    // A device provisioned before the run (on a scratch kernel whose log is discarded):
+    // its PDUs name no step of the run's kernel and are published as pre-run.
+    let mut run = revoked();
+    let before = run.state.pdus.len();
+    run.preload(common::DEVICE_C, 0, 1, JMAX).expect("preload");
+    let pre = &run.state.pdus[before..];
+    assert!(!pre.is_empty(), "the preload emits PDUs");
+    assert!(
+        pre.iter().all(|p| p.preload && p.step.is_none()),
+        "pre-run PDUs carry no step"
+    );
+    let flows = pki_view::drain_flows(std::slice::from_ref(&run), &mut PkiTracker::default());
+    let lone: Vec<&pki_view::PkiFlow> = flows.iter().filter(|f| f.kind == "pdu").collect();
+    assert_eq!(
+        lone.len(),
+        pre.len(),
+        "only the pre-run PDUs ride no message"
+    );
+    assert!(lone.iter().all(|f| f.flow == "preload"));
 }
 
 #[test]
@@ -194,6 +214,31 @@ fn the_flow_records_carry_each_spdu_once_and_only_its_recipient_reads_it() {
     assert!(private.opened.is_none());
     // (A real SM-MBR, opened by the MA, is checked on the engine run:
     // `v2xw-engine/tests/pki_view.rs`; `submit_report` here carries no secured report.)
+
+    // The UI fixture of a whole in-run sequence (enrolment, provisioning, two reports, the
+    // resolution, the CRL): every record this run publishes, in the engine's JSONL shape.
+    if let Ok(dir) = std::env::var("V2XW_PKI_FIXTURES") {
+        let t = now(&run);
+        let mut tr = PkiTracker::default();
+        let mut lines = Vec::new();
+        let mut put = |channel: &str, t: u64, v: Value| {
+            lines.push(serde_json::json!({"channel": channel, "t": t, "record": v}).to_string());
+        };
+        let state = pki_view::pki_state(runs, t, &mut tr).expect("state");
+        put("pki.state", t, serde_json::to_value(&state).expect("json"));
+        for f in pki_view::drain_flows(runs, &mut tr) {
+            put("pki.flow", f.t, serde_json::to_value(&f).expect("json"));
+        }
+        for c in pki_view::drain_cases(runs, &mut tr, t, &|_, _| None) {
+            put("pki.case", c.t, serde_json::to_value(&c).expect("json"));
+        }
+        for role in pki_view::KNOWLEDGE_ROLES {
+            let k = pki_view::knowledge(&run, role, t, 64).expect("knowledge");
+            put("pki.knowledge", t, serde_json::to_value(&k).expect("json"));
+        }
+        std::fs::write(format!("{dir}/pki-sequence.jsonl"), lines.join("\n") + "\n")
+            .expect("write");
+    }
 
     if let Ok(dir) = std::env::var("V2XW_PKI_OUT") {
         std::fs::create_dir_all(&dir).expect("out dir");
@@ -378,6 +423,15 @@ fn a_case_walks_the_board_in_order() {
         cases.windows(2).all(|w| w[0].t <= w[1].t),
         "stages go forward in time: {cases:?}"
     );
+    // The case names flow instances the kernel ran: its resolution and its CRL issuance.
+    let flows = pki_view::drain_flows(runs, &mut PkiTracker::default());
+    let crl = cases
+        .iter()
+        .find_map(|c| c.detail["crl_instance"].as_str())
+        .expect("a CRL instance");
+    for i in [cases[0].instance.as_str(), crl] {
+        assert!(flows.iter().any(|f| f.instance == i), "no flow is {i}");
+    }
     assert!(pki_view::drain_cases(runs, &mut tracker, now(&run), &|_, _| Some((1, 2))).is_empty());
 }
 

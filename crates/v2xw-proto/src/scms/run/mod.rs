@@ -1556,6 +1556,7 @@ impl ScmsState {
             bytes: self.params.pdu.keep_bytes.then(|| pdu.clone()),
             len: pdu.len(),
             step: None,
+            preload: false,
         });
         WireSize::real(pdu.len(), kind.name())
     }

@@ -2460,6 +2460,12 @@ pub struct ScmsSpec {
     /// provider's certificates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chain_file: Option<String>,
+    /// Publish the PKI view (WP-E1): `pki.state`, `pki.flow` with every SPDU's bytes and
+    /// its recipient-opened plaintext, `pki.case`, `pki.knowledge` and
+    /// `node.credentials`. Absent: on. `false` keeps a long run's recording lean; the
+    /// Backend view's `backend.state` is published either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pki_view: Option<bool>,
 }
 
 /// `security.scms.deployment`: the providers on the CTL and what each runs.

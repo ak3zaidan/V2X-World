@@ -1482,6 +1482,9 @@ struct Projector {
     backend: std::collections::VecDeque<(u64, Box<[u8]>)>,
     /// The bytes `backend` holds.
     backend_bytes: usize,
+    /// The PKI view's records, for `inspect.pdu`, `inspect.cert` and
+    /// `inspect.knowledge` (WP-E1).
+    pki: crate::pki::PkiStore,
     /// Every node's recent traffic, for the followed node's message feed and queues and for
     /// `inspect.node`'s `messages` section (`crate::feed`).
     feed: crate::feed::FeedStore,
@@ -1575,6 +1578,7 @@ impl Projector {
             security: BTreeMap::new(),
             backend: std::collections::VecDeque::new(),
             backend_bytes: 0,
+            pki: crate::pki::PkiStore::default(),
             feed: crate::feed::FeedStore::new(step_ns),
             unprojected_channels: BTreeSet::new(),
             undecodable_channels: BTreeMap::new(),
@@ -1875,6 +1879,12 @@ impl Projector {
                 },
                 // The security path's own records, which the page does not draw.
                 "privacy.link" | "ma.report" | "ma.decision" => {}
+                // The PKI view (WP-E1): kept for its inspect queries. The case board's
+                // transitions are a recording and UI channel the queries do not need.
+                "pki.state" | "pki.flow" | "pki.knowledge" | "node.credentials" => {
+                    self.pki.absorb(record.channel, &record.json);
+                }
+                "pki.case" => {}
                 // A scenario timeline item firing: kept for `run.status` (`timeline`), which
                 // is how the page marks an event as having happened and says what it did.
                 "scenario.event" => match serde_json::from_slice::<Value>(&record.json) {
@@ -4838,6 +4848,10 @@ impl Engine for LiveEngine {
 impl Introspect for LiveEngine {
     fn node_list(&self) -> Vec<crate::engine::NodeFacts> {
         self.node_rows()
+    }
+
+    fn pki(&self) -> Option<&crate::pki::PkiStore> {
+        Some(&self.projector.pki)
     }
 
     fn entity_facts(&self, entity: &str, t_ns: u64, limit: usize) -> Option<Value> {

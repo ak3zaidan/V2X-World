@@ -7606,6 +7606,19 @@ impl Engine {
         if let Some(view) = tick.view {
             self.emit(recorder, &crate::sec_records::BackendState(view));
         }
+        // The PKI view (WP-E1).
+        if let Some(state) = tick.pki.state {
+            self.emit(recorder, &crate::sec_records::PkiStateRecord(state));
+        }
+        for f in tick.pki.flows {
+            self.emit(recorder, &crate::sec_records::PkiFlowRecord(f));
+        }
+        for c in tick.pki.cases {
+            self.emit(recorder, &crate::sec_records::PkiCaseRecord(c));
+        }
+        for k in tick.pki.knowledge {
+            self.emit(recorder, &crate::sec_records::PkiKnowledgeRecord(k));
+        }
 
         // 4. A newly published list starts the roadside broadcast.
         if tick.published.is_some() && !self.crl_timer_armed {
@@ -8320,6 +8333,15 @@ impl Engine {
             ..view
         });
         self.emit(recorder, &rec);
+        // Its i × j pool, when it changed (WP-E1).
+        let creds = match (self.phase2.as_mut(), self.nodes.get(&node)) {
+            (Some(p), Some(runtime)) => p.node_credentials(node, believed, &runtime.stores().certs),
+            _ => None,
+        };
+        if let Some(mut c) = creds {
+            c.t = now;
+            self.emit(recorder, &crate::sec_records::NodeCredentialsRecord(c));
+        }
     }
 
     /// One link's received power and distance.

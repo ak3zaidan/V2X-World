@@ -83,6 +83,7 @@ const CHANNEL_VISIBILITY: &[(&str, &[Visibility])] = &[
     // One fragmented SDU's fate at one receiver, with the loss its fragments' PHY success
     // probabilities predicted: the sender's identity and those probabilities are ground truth.
     ("net.reassembly", &[Visibility::Gt]),
+    ("node.credentials", &[Visibility::Node]),
     ("node.drop", &[Visibility::Node]), // as `v2xw_record::channels` declares it
     ("node.neighbor", &[Visibility::Node]),
     // Like `phy.rx`: the sender's identity and the distance are ground truth.
@@ -94,6 +95,10 @@ const CHANNEL_VISIBILITY: &[(&str, &[Visibility])] = &[
     // The reception census: who was within range of a frame, which no node can know.
     ("phy.prr", &[Visibility::Gt]),
     ("phy.rx", &[Visibility::Node, Visibility::NodeAndGt]),
+    ("pki.case", &[Visibility::Node]),
+    ("pki.flow", &[Visibility::Node]),
+    ("pki.knowledge", &[Visibility::NodeAndGt]),
+    ("pki.state", &[Visibility::Public]),
     ("privacy.link", &[Visibility::Node]), // as `v2xw_record::channels` declares it
     ("privacy.track", &[Visibility::Node]), // as `v2xw_record::channels` declares it
     ("proto.msg", &[Visibility::Node]),

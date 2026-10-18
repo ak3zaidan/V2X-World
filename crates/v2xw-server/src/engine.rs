@@ -434,6 +434,8 @@ pub enum Query {
         /// Row cap.
         limit: usize,
     },
+    /// `inspect.pdu`, `inspect.cert` and `inspect.knowledge` (WP-E1).
+    Pki(crate::pki::PkiQuery),
     /// `explain` (§6.9).
     Explain {
         /// The `ValueRef` as the caller sent it.

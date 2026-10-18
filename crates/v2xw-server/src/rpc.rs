@@ -23,7 +23,7 @@ use crate::run::Run;
 use crate::session::{CameraState, OVERLAYS, Session, overlay_is_gt};
 
 /// Every method name of §6.15, in the order the inventory lists them.
-pub const METHODS: [&str; 37] = [
+pub const METHODS: [&str; 40] = [
     "run.start",
     "run.pause",
     "run.resume",
@@ -38,6 +38,9 @@ pub const METHODS: [&str; 37] = [
     "inspect.node",
     "inspect.link",
     "inspect.entity",
+    "inspect.pdu",
+    "inspect.cert",
+    "inspect.knowledge",
     "explain",
     "scenario.get",
     "scenario.schema",
@@ -300,6 +303,7 @@ pub fn dispatch(ctx: &mut Context<'_>, request: &Request) -> Result<Outcome> {
         "inspect.node" => inspect_node(ctx, p),
         "inspect.link" => inspect_link(ctx, p),
         "inspect.entity" => inspect_entity(ctx, p),
+        "inspect.pdu" | "inspect.cert" | "inspect.knowledge" => inspect_pki(ctx, method, p),
         "explain" => explain(ctx, p),
         "scenario.get" => scenario_get(ctx, p),
         "scenario.schema" => scenario_schema(ctx, p),
@@ -1085,6 +1089,62 @@ fn inspect_entity(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outco
         t_ns: uint(p, "t_ns"),
         limit,
     })?))
+}
+
+/// `inspect.pdu {id, view}`, `inspect.cert {hashedid8, t_ns}` and
+/// `inspect.knowledge {entity, view}` (WP-E1). `view` is `ground-truth` (the default) or
+/// an entity: a PDU's plaintext is shown only to the entity that opened it, and an
+/// entity's knowledge without the ground-truth join. A NODE-only session cannot ask for
+/// ground truth.
+fn inspect_pki(ctx: &mut Context<'_>, method: &str, p: &Map<String, Value>) -> Result<Outcome> {
+    use crate::pki::PkiQuery;
+    let view = text(p, "view").unwrap_or("ground-truth").to_string();
+    let node_only = ctx
+        .session
+        .as_ref()
+        .is_some_and(|s| s.profile().is_node_only());
+    if node_only && view == "ground-truth" && method != "inspect.cert" {
+        return Err(ServerError::VisibilityDenied {
+            field: "view".to_string(),
+            visibility: "GT",
+        });
+    }
+    let required = |key: &'static str, hint: &'static str| {
+        text(p, key)
+            .map(str::to_string)
+            .ok_or_else(|| ServerError::param(&format!("/{key}"), "required", hint))
+    };
+    let q = match method {
+        "inspect.pdu" => PkiQuery::Pdu {
+            id: required(
+                "id",
+                "pass a PDU id from pki.flow, e.g. \"provider-a/pdu/12\"",
+            )?,
+            view,
+        },
+        "inspect.cert" => {
+            let id8 = required("hashedid8", "pass a HashedId8 in hex, 16 digits")?;
+            if id8.len() != 16 || !id8.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(ServerError::param(
+                    "/hashedid8",
+                    "must be 16 hex digits",
+                    "a HashedId8 is 8 bytes",
+                ));
+            }
+            PkiQuery::Cert {
+                id8: id8.to_ascii_lowercase(),
+                t_ns: uint(p, "t_ns"),
+            }
+        }
+        _ => PkiQuery::Knowledge {
+            entity: required(
+                "entity",
+                "pass an entity id such as \"provider-a/aca/0\" or a role",
+            )?,
+            view,
+        },
+    };
+    Ok(Outcome::of(ctx.run.query(&Query::Pki(q))?))
 }
 
 fn explain(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outcome> {
