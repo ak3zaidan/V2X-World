@@ -329,12 +329,29 @@ fn a_malicious_member_is_caught_by_its_share_excluded_and_the_session_restarts()
     run.set_faults(vec![forever(liar, FaultKind::Malicious)]);
     provisioned(&mut run, DEVICE_A, 0, PERIODS, JMAX);
     assert_eq!(held(&run), (PERIODS * JMAX) as usize);
-    let s = stats(&run, "pca");
-    // Caught once: identifiable abort names the cheater, and the committee leaves it out of
-    // every later session rather than letting it spoil each one.
-    assert_eq!(s.invalid_shares, 1, "{s:?}");
-    assert!(s.restarts >= 1);
-    assert_eq!(s.failed, 0);
+    let first = stats(&run, "pca");
+    // One PCA session per i-period, and the RA releases a device's periods together from
+    // its shuffle, so both sessions open at the same instant and both ask the liar before
+    // either has seen its share. Each catches it once (identifiable abort names the
+    // cheater), excludes it and restarts: one invalid share and one restart per session,
+    // never two in one session.
+    assert_eq!(first.sessions, u64::from(PERIODS), "{first:?}");
+    assert_eq!(first.invalid_shares, first.sessions, "{first:?}");
+    assert_eq!(first.restarts, first.sessions, "{first:?}");
+    assert_eq!(first.failed, 0);
+    // A session opened after the catch never asks the liar: the committee leaves it out
+    // of every later session rather than letting it spoil each one.
+    provisioned(&mut run, DEVICE_B, 0, 1, JMAX);
+    assert_eq!(
+        run.state.devices[&DEVICE_B].credentials.len(),
+        JMAX as usize
+    );
+    let later = stats(&run, "pca");
+    assert!(later.sessions > first.sessions, "{later:?}");
+    assert_eq!(later.invalid_shares, first.invalid_shares, "{later:?}");
+    assert_eq!(later.restarts, first.restarts, "{later:?}");
+    assert_eq!(later.failed, 0);
+    // Caught once, as one member of one committee.
     assert_eq!(
         run.state
             .committees
