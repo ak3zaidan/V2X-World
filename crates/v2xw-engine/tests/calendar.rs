@@ -19,6 +19,14 @@
 //! * `Engine::fast_forward_tick` stopping one step after the due instant — the same test
 //!   fails. (Rounding the stop *down* is not a fault: the backend has nothing due yet at
 //!   that stop, and the next one lands on the same step a full run uses.)
+//! * `Phase2::topups_due` returning its vehicles in a `RandomState` hash order (a
+//!   `HashMap` iteration in the backend path) —
+//!   `the_lifecycle_run_is_byte_identical_at_one_and_four_threads` fails (WP-DET).
+//!
+//! Inject faults with `tools/mutate/mutate.py`: a revert that restores the file with an
+//! older mtime leaves cargo's faulted build in place, and the "restored" tree then fails
+//! as if the test were intermittent (WP-DET found this behind the D2 report of a top-up
+//! 100 ms late in 2 of 5 runs).
 
 use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -87,8 +95,24 @@ fn crawling_fleet(n: usize, seconds: f64, speed_mps: f64) -> Scenario {
         "source": {"test": "calendar"},
         "trips": trips,
     });
-    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("calendar-{n}.json"));
-    std::fs::write(&path, set.to_string()).expect("writes the trip file");
+    // Named by content: `CARGO_TARGET_TMPDIR` is shared by every test of this binary (two
+    // of them want two vehicles on worlds with different speed limits, so different world
+    // hashes) and by every worktree building into the same target directory, so a name
+    // keyed on `n` alone lets one writer replace the file another run is about to read.
+    let body = set.to_string();
+    let name = format!(
+        "calendar-{n}-{}.json",
+        &v2xw_core::hash::sha256_hex(body.as_bytes())[..16]
+    );
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    if std::fs::read(&path).ok().as_deref() != Some(body.as_bytes()) {
+        // One temporary per writer (tests of this binary run on several threads).
+        static WRITER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let k = WRITER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = path.with_extension(format!("{}-{k}.tmp", std::process::id()));
+        std::fs::write(&tmp, &body).expect("writes the trip file");
+        std::fs::rename(&tmp, &path).expect("publishes the trip file");
+    }
     s.actors.vehicles.demand.kind = "mobility/demand/trips".into();
     s.actors.vehicles.demand.rate_veh_per_h = None;
     s.actors.vehicles.demand.params = json!({ "path": path });
@@ -291,12 +315,18 @@ fn lifecycle_run(window: (f64, f64), horizon: f64, fast_forward: bool) -> (RunRe
         // backend's.
         .filter(|l| !l.contains("\"event\":\"change\""))
         .collect();
+    let records = rec
+        .records()
+        .iter()
+        .map(|(t, r)| (*t, r.channel, v2xw_core::hash::sha256(&r.json)))
+        .collect();
     (
         report,
         Trace {
             steps,
             creds,
             certs,
+            records,
         },
     )
 }
@@ -306,6 +336,8 @@ struct Trace {
     steps: Vec<String>,
     creds: Vec<String>,
     certs: Vec<String>,
+    /// Every record of the run, `(t, channel, SHA-256 of its JSON)`, in emission order.
+    records: Vec<(u64, &'static str, [u8; 32])>,
 }
 
 /// Gap row 44's equivalence: the backend after a fast-forward window is the backend after
@@ -384,6 +416,63 @@ fn fast_forward_lands_every_backend_event_on_the_step_a_full_run_does() {
     }
     assert_eq!(full_trace.creds, ff_trace.creds, "certificate pools differ");
     assert_eq!(full_trace.certs, ff_trace.certs, "credential events differ");
+}
+
+/// The engine's contract is byte-identical runs: the lifecycle run, stepped in full and
+/// fast-forwarded, gives the same record stream (every record's instant, channel and
+/// bytes, in emission order) and the same report whether the parallel phases run on one
+/// thread or four, and when it is repeated in the same process (a `HashMap` would seed
+/// its hasher differently each time; a process-wide cache would be warm the second time).
+#[test]
+fn the_lifecycle_run_is_byte_identical_at_one_and_four_threads() {
+    let (window, horizon) = ((20.0, 1_500.0), 1_520.0);
+    let run = |threads: usize, fast_forward: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("a thread pool")
+            .install(|| {
+                let (report, trace) = lifecycle_run(window, horizon, fast_forward);
+                (format!("{report:?}"), trace)
+            })
+    };
+    let same = |what: &str, a: &(String, Trace), b: &(String, Trace)| {
+        if let Some(k) = (0..a.1.records.len().max(b.1.records.len()))
+            .find(|&k| a.1.records.get(k) != b.1.records.get(k))
+        {
+            panic!(
+                "{what}: record {k} differs: {:?} vs {:?}",
+                a.1.records.get(k),
+                b.1.records.get(k)
+            );
+        }
+        assert_eq!(a.1, b.1, "{what}: traces differ");
+        assert_eq!(a.0, b.0, "{what}: reports differ");
+    };
+    for fast_forward in [true, false] {
+        let one = run(1, fast_forward);
+        let four = run(4, fast_forward);
+        assert!(
+            one.1.records.len() > 1_000,
+            "{} records",
+            one.1.records.len()
+        );
+        same(
+            &format!("fast_forward {fast_forward}, 1 vs 4 threads"),
+            &one,
+            &four,
+        );
+        if fast_forward {
+            let again = run(4, fast_forward);
+            same("fast-forward, repeated in one process", &four, &again);
+        }
+        let digest = v2xw_core::hash::sha256_hex(format!("{:?}", one.1.records).as_bytes());
+        println!(
+            "fast_forward {fast_forward}: {} records, digest {}",
+            one.1.records.len(),
+            &digest[..16]
+        );
+    }
 }
 
 /// Multi-week PKI behaviour on the real calendar in a short run: three weeks fast-

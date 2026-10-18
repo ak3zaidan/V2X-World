@@ -119,8 +119,23 @@ fn fleet(n: usize, seconds: f64) -> Scenario {
         "source": {"test": "foundations"},
         "trips": trips,
     });
-    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("foundations-{n}.json"));
-    std::fs::write(&path, set.to_string()).expect("writes the trip file");
+    // Named by content and published by rename: `CARGO_TARGET_TMPDIR` is shared by the
+    // tests of this binary (several want the same `n` at once, and `fs::write` truncates
+    // before it writes, so a reader can see an empty file) and by every worktree that
+    // builds into the same target directory.
+    let body = set.to_string();
+    let name = format!(
+        "foundations-{n}-{}.json",
+        &v2xw_core::hash::sha256_hex(body.as_bytes())[..16]
+    );
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    if std::fs::read(&path).ok().as_deref() != Some(body.as_bytes()) {
+        static WRITER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let k = WRITER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = path.with_extension(format!("{}-{k}.tmp", std::process::id()));
+        std::fs::write(&tmp, &body).expect("writes the trip file");
+        std::fs::rename(&tmp, &path).expect("publishes the trip file");
+    }
     s.actors.vehicles.demand.kind = "mobility/demand/trips".into();
     s.actors.vehicles.demand.rate_veh_per_h = None;
     s.actors.vehicles.demand.params = serde_json::json!({ "path": path });
