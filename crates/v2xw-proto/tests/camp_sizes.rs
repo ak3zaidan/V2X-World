@@ -58,7 +58,9 @@ fn corpus() -> Corpus {
         run.state.pdu_rejections
     );
 
-    let enc = |c: &v2xw_msg::sec_types::ieee1609_dot2::Certificate| v2xw_sec::cert::encode(c).expect("encodes");
+    let enc = |c: &v2xw_msg::sec_types::ieee1609_dot2::Certificate| {
+        v2xw_sec::cert::encode(c).expect("encodes")
+    };
     let mut certs = BTreeMap::new();
     let st = &run.state;
     for (role, node) in [("obe-enrolment", DEVICE_A), ("rse-enrolment", DEVICE_B)] {
@@ -198,7 +200,11 @@ fn certificate_sizes_against_camp_table_3() {
     // CAMP leaves the pseudonym response size UNCONFIRMED (03 §12): the engine's real
     // AcaEeCertResponsePrivateSpdu is 454-470 B per certificate.
     let r = &c.spdus["AcaEeCertResponsePrivateSpdu"];
-    assert_eq!(r.len(), 24, "20 pseudonyms and 4 identification or application certificates");
+    assert_eq!(
+        r.len(),
+        24,
+        "20 pseudonyms and 4 identification or application certificates"
+    );
     assert!(r.iter().all(|&l| (454..=470).contains(&l)), "{r:?}");
 }
 
