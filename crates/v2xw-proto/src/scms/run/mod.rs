@@ -45,7 +45,7 @@ mod report;
 mod revoke;
 
 use crate::threshold::session::{CommitteeMsg, Committees, Outcome, RoleSpec};
-pub use crl::{crl_bytes, crl_digest, linkage_revocations};
+pub use crl::{IssuedCrl, crl_bytes, crl_digest, linkage_revocations};
 
 const ECDSA: PrimitiveId = PrimitiveId::ECDSA_P256_SHA256;
 const ECQV: PrimitiveId = PrimitiveId::ECQV_P256;
@@ -1492,8 +1492,11 @@ impl ScmsRun {
         let profile = kernel.profile_of(d.to);
         let mut out = state.outbox(profile, d.to, d.at);
         let (at, to) = (d.at, d.to);
+        let (pdu0, step0) = (state.pdus.len(), kernel.steps_since(usize::MAX).1);
         state.handle(d, &mut out)?;
         kernel.dispatch(at, to, out)?;
+        let (steps, _) = kernel.steps_since(step0);
+        attribute_pdus(&mut state.pdus[pdu0..], steps, step0);
         Ok(())
     }
 
@@ -1552,6 +1555,7 @@ impl ScmsState {
             at,
             bytes: self.params.pdu.keep_bytes.then(|| pdu.clone()),
             len: pdu.len(),
+            step: None,
         });
         WireSize::real(pdu.len(), kind.name())
     }
@@ -1963,4 +1967,27 @@ fn host_governance(kernel: &mut Kernel<ScmsMsg>, gov: &Governance, p: &ScmsParam
     let spec = crate::service::ServiceModelSpec::new(1, p.backend_overhead);
     kernel.host(gov.nodes.manager, &spec, p.backend_profile);
     kernel.host(gov.nodes.pg, &spec, p.backend_profile);
+}
+
+/// Links each PDU one handler emitted to the wire step that carried it (WP-E1).
+///
+/// `pdus` are the PDUs the handler emitted, in emission order; `steps` the steps its
+/// dispatch logged, the first being step number `first`. A PDU belongs to the first step
+/// with its own sender and receiver; failing that (a PDU built in the name of the device
+/// a relay forwards for), to the first step with its receiver. Exact, because both lists
+/// come from one handler invocation: no other handler's PDU or step is in either.
+fn attribute_pdus(
+    pdus: &mut [crate::scms::pdu::EmittedPdu],
+    steps: &[crate::stage::WireStep],
+    first: usize,
+) {
+    for p in pdus.iter_mut().filter(|p| p.step.is_none()) {
+        let exact = steps
+            .iter()
+            .position(|s| s.from.index() == p.from && s.to.index() == p.to);
+        let by_receiver = || steps.iter().position(|s| s.to.index() == p.to);
+        p.step = exact
+            .or_else(by_receiver)
+            .and_then(|k| u32::try_from(first + k).ok());
+    }
 }

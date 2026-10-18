@@ -1780,6 +1780,12 @@ pub struct EmittedPdu {
     pub bytes: Option<Pdu>,
     /// Encoded length.
     pub len: u32,
+    /// The kernel wire step (index into `Kernel::steps_since(0)`) that carried it, set
+    /// when the handler that emitted it dispatched its sends: the PDU's sender and
+    /// receiver match the step's (or, for a PDU relayed under another sender's name, its
+    /// receiver does). `None` for a PDU no step carried (held, dropped, or emitted
+    /// outside a handler). WP-E1: what links a `pki.flow` message to its bytes.
+    pub step: Option<u32>,
 }
 
 /// A PDU a receiver refused, and why.

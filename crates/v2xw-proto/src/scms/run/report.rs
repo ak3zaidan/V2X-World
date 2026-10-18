@@ -258,6 +258,7 @@ impl ScmsRun {
             });
         }
         let lop = self.state.nodes.lop;
+        let pdu0 = self.state.pdus.len();
         if let Some(s) = secured.as_ref() {
             // The real octets of the device's upload, as the kernel's own device hop
             // records them (`ScmsState::report_size`).
@@ -283,6 +284,11 @@ impl ScmsRun {
             bytes,
             transport,
         });
+        // Both PDUs ride this one upload step (WP-E1).
+        let step = u32::try_from(self.kernel.steps_since(usize::MAX).1 - 1).ok();
+        for p in &mut self.state.pdus[pdu0..] {
+            p.step = step;
+        }
         self.kernel.inject_at(
             arrive_at,
             Delivery {
