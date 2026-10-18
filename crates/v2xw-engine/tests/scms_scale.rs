@@ -120,12 +120,18 @@ fn real_and_modelled_crypto_give_the_same_run_on_the_two_provider_deployment() {
         p.verified_by_provider
     );
     assert_eq!(p.backend_errors, 0, "{}", p.first_backend_error);
-    assert!(p.reports_sent > 0, "the attacker must be reported within the window");
+    assert!(
+        p.reports_sent > 0,
+        "the attacker must be reported within the window"
+    );
     assert!(modelled.report.receptions_ok > 0);
     assert_eq!(real.report.credentials_refused, 0);
 
     // I-S1: the same counts, the same records, the same frames.
-    assert_eq!(real.report, modelled.report, "the run reports differ between modes");
+    assert_eq!(
+        real.report, modelled.report,
+        "the run reports differ between modes"
+    );
     assert_eq!(
         real.pinned, modelled.pinned,
         "the record or frame streams differ between modes"
@@ -155,11 +161,11 @@ fn env_f64(key: &str, default: f64) -> f64 {
 /// **Fleet scale, modelled cryptography.** The revocation-latency scenario's Manhattan
 /// fleet at its three study rates, printing what each run costs. `V2XW_SCALE_RATE` picks
 /// one rate (so a run can be measured alone under `/usr/bin/time -l`), `V2XW_SCALE_S` its
-/// simulated seconds (default 120).
+/// simulated seconds (default 90: the scenario's attack starts at 60 s).
 #[test]
 #[ignore = "long: fleet-scale measurement; the merge step runs `--ignored long_`"]
 fn long_fleet_scale_run_cost() {
-    let duration_s = env_f64("V2XW_SCALE_S", 120.0);
+    let duration_s = env_f64("V2XW_SCALE_S", 90.0);
     let rates: Vec<f64> = match std::env::var("V2XW_SCALE_RATE") {
         Ok(v) => vec![v.parse().expect("V2XW_SCALE_RATE is a number")],
         Err(_) => vec![1500.0, 6000.0, 24000.0],
@@ -192,7 +198,10 @@ fn long_fleet_scale_run_cost() {
         );
         // What must hold at any fleet size.
         assert_eq!(p.backend_errors, 0, "{}", p.first_backend_error);
-        assert_eq!(p.revoked_honest, 0, "an honest device was revoked at {rate} veh/h");
+        assert_eq!(
+            p.revoked_honest, 0,
+            "an honest device was revoked at {rate} veh/h"
+        );
         assert!(
             p.devices_by_provider.len() >= 2,
             "both providers must certify devices at {rate} veh/h"

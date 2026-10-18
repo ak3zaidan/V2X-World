@@ -75,11 +75,22 @@ pub fn check(case: &str, got: &Pinned) {
     let want: Value = serde_json::from_str(&text).expect("the regression record is JSON");
     let field = |k: &str| want[k].clone();
     let pinned = Pinned {
-        record_digest: field("record_digest").as_str().unwrap_or_default().to_string(),
-        frame_digest: field("frame_digest").as_str().unwrap_or_default().to_string(),
+        record_digest: field("record_digest")
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        frame_digest: field("frame_digest")
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
         records: field("records").as_u64().unwrap_or_default(),
     };
-    assert_eq!(pinned.record_digest.len(), 64, "{}: no record digest", file.display());
+    assert_eq!(
+        pinned.record_digest.len(),
+        64,
+        "{}: no record digest",
+        file.display()
+    );
     assert!(
         pinned == *got,
         "`{case}` no longer reproduces its committed regression digest ({}):\n  \

@@ -376,13 +376,25 @@ fn the_honest_revocation_path_holds_on_the_old_and_the_new_topology() {
         new.frames_transmitted,
     );
     assert_eq!(o.devices_by_provider.len(), 1, "camp-reference is one SCMS");
-    assert!(n.devices_by_provider.len() >= 2, "the default is two providers");
+    assert!(
+        n.devices_by_provider.len() >= 2,
+        "the default is two providers"
+    );
     for (name, p) in [("camp-reference", o), ("us-production-2025", n)] {
         assert_eq!(p.backend_errors, 0, "{name}: {}", p.first_backend_error);
-        assert!(p.revoked_attackers >= 1, "{name}: the attacker was not revoked");
+        assert!(
+            p.revoked_attackers >= 1,
+            "{name}: the attacker was not revoked"
+        );
         assert_eq!(p.revoked_honest, 0, "{name}: an honest device was revoked");
-        assert!(p.crls_installed > 0, "{name}: no vehicle installed the entry");
-        assert!(p.revoked_receptions > 0, "{name}: the entry never refused a frame");
+        assert!(
+            p.crls_installed > 0,
+            "{name}: no vehicle installed the entry"
+        );
+        assert!(
+            p.revoked_receptions > 0,
+            "{name}: the entry never refused a frame"
+        );
     }
     assert_eq!(
         old.frames_transmitted, new.frames_transmitted,
