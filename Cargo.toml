@@ -107,6 +107,41 @@ v2xw-energy = { path = "crates/v2xw-energy", version = "0.1.0" }
 v2xw-record = { path = "crates/v2xw-record", version = "0.1.0" }
 v2xw-server = { path = "crates/v2xw-server", version = "0.1.0" }
 
+# Third-party dependencies are optimised in dev and test builds. The engine's suites run the
+# real cryptography of the SCMS (P-256/P-384 arithmetic, ChaCha, SHA-2, COER) and an unoptimised
+# RustCrypto field multiply is tens of times slower; the Phase 2 suite took about 25 minutes.
+# opt-level changes no result: Rust never contracts or reorders floating point, and overflow
+# checks and debug assertions follow `debug-assertions`, which stays on. The workspace's own
+# crates stay at opt-level 0 so an edit rebuilds as fast as before.
+[profile.dev.package."*"]
+opt-level = 2
+
+# In test builds the workspace crates on a run's hot path are optimised too: RustCrypto's
+# field arithmetic is `#[inline]`, so it is compiled into `v2xw-sec` at `v2xw-sec`'s level, and
+# the per-reception work (obstacle ray tests, RNG streams, metric views) is the workspace's own.
+# `cargo build`/`check` keep opt-level 0 for them, and the engine crate (whose many test
+# binaries would each pay the optimiser) stays at 0 in tests.
+[profile.test.package.v2xw-core]
+opt-level = 1
+[profile.test.package.v2xw-msg]
+opt-level = 1
+[profile.test.package.v2xw-sec]
+opt-level = 1
+[profile.test.package.v2xw-world]
+opt-level = 1
+[profile.test.package.v2xw-radio]
+opt-level = 1
+[profile.test.package.v2xw-metrics]
+opt-level = 1
+[profile.test.package.v2xw-mobility]
+opt-level = 1
+[profile.test.package.v2xw-node]
+opt-level = 1
+[profile.test.package.v2xw-proto]
+opt-level = 1
+[profile.test.package.v2xw-record]
+opt-level = 1
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
