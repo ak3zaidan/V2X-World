@@ -16,6 +16,8 @@
 //! [`the_shipped_scenario_builds_with_its_whole_deployment`] builds the shipped file as it
 //! is, so the thinning cannot hide a scenario that does not load.
 
+mod regression;
+
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -68,16 +70,21 @@ fn rooted(mut scenario: Scenario) -> Scenario {
     scenario
 }
 
-fn run(scenario: Scenario) -> (RunReport, String) {
+fn run(scenario: Scenario) -> (RunReport, regression::Pinned) {
     let mut engine = Engine::build(scenario, "").expect("builds");
     let mut recorder = DigestRecorder::new();
     let report = engine.run(&mut recorder).expect("runs");
-    (report, recorder.digest_hex())
+    let pinned = regression::Pinned {
+        record_digest: recorder.digest_hex(),
+        frame_digest: recorder.frame_digest_hex(),
+        records: recorder.written(),
+    };
+    (report, pinned)
 }
 
 /// The path run, once for every test in this binary that reads it.
-fn path_run() -> &'static (RunReport, String) {
-    static RUN: OnceLock<(RunReport, String)> = OnceLock::new();
+fn path_run() -> &'static (RunReport, regression::Pinned) {
+    static RUN: OnceLock<(RunReport, regression::Pinned)> = OnceLock::new();
     RUN.get_or_init(|| run(phase2()))
 }
 
@@ -325,6 +332,61 @@ fn the_phase_2_run_is_deterministic() {
     assert!(
         first_report.phase2.crls_issued > 0,
         "nothing happened to be deterministic about"
+    );
+}
+
+/// **Regression (WP-F3).** The path run on the default topology (`us-production-2025`, two
+/// providers on one CTL) reproduces its committed digest: any change to what the run
+/// records, on any channel, is seen here and has to be re-blessed deliberately.
+#[test]
+fn the_phase_2_path_reproduces_its_regression_digest() {
+    let (report, pinned) = path_run();
+    assert!(report.phase2.crls_issued > 0, "the path must reach a CRL");
+    assert!(pinned.records > 0);
+    regression::check("phase2-path", pinned);
+}
+
+/// **Honest revocation on the new topology (WP-F3).** The same Phase 2 path on the earlier
+/// single-SCMS `camp-reference` topology and on the default two-provider one: in both the
+/// attacker, and only the attacker, is revoked, the list reaches the fleet and refuses its
+/// frames, and the vehicles' air traffic is the same. The topology moves backend latency
+/// and which provider certifies whom, not what the honest fleet sends.
+#[test]
+fn the_honest_revocation_path_holds_on_the_old_and_the_new_topology() {
+    let (new, _) = path_run();
+    let mut s = phase2();
+    s.security.scms = Some(
+        serde_json::from_value(json!({"deployment": {"preset": "camp-reference"}}))
+            .expect("a deployment"),
+    );
+    let (old, _) = run(s);
+    let (n, o) = (&new.phase2, &old.phase2);
+    println!(
+        "camp-reference: devices {:?} revoked {}+{} latency {:.1} s frames {}\n\
+         us-production : devices {:?} revoked {}+{} latency {:.1} s frames {}",
+        o.devices_by_provider,
+        o.revoked_attackers,
+        o.revoked_honest,
+        o.revocation_latency_ns as f64 / 1e9,
+        old.frames_transmitted,
+        n.devices_by_provider,
+        n.revoked_attackers,
+        n.revoked_honest,
+        n.revocation_latency_ns as f64 / 1e9,
+        new.frames_transmitted,
+    );
+    assert_eq!(o.devices_by_provider.len(), 1, "camp-reference is one SCMS");
+    assert!(n.devices_by_provider.len() >= 2, "the default is two providers");
+    for (name, p) in [("camp-reference", o), ("us-production-2025", n)] {
+        assert_eq!(p.backend_errors, 0, "{name}: {}", p.first_backend_error);
+        assert!(p.revoked_attackers >= 1, "{name}: the attacker was not revoked");
+        assert_eq!(p.revoked_honest, 0, "{name}: an honest device was revoked");
+        assert!(p.crls_installed > 0, "{name}: no vehicle installed the entry");
+        assert!(p.revoked_receptions > 0, "{name}: the entry never refused a frame");
+    }
+    assert_eq!(
+        old.frames_transmitted, new.frames_transmitted,
+        "the topology changed what the fleet transmits"
     );
 }
 
