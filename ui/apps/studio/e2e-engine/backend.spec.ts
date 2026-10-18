@@ -17,7 +17,7 @@ import { join } from "node:path";
 
 import { expect, test } from "@playwright/test";
 
-import { EngineProcess, REPO, open } from "./support.js";
+import { EngineProcess, REPO, streaming } from "./support.js";
 
 let engine: EngineProcess;
 
@@ -28,8 +28,9 @@ test.beforeAll(async () => {
   const path = join(dir, "e2e-backend.yaml");
   const text = source
     .replace("name: phase1-grid", "name: e2e-backend")
-    // A 20 s i-period is a compressed calendar, which the scenario must declare (WP-D2).
-    .replace("duration_s: 60.0", "duration_s: 40.0\n  calendar: compressed")
+    // A 20 s i-period is a compressed calendar, which the scenario must declare (WP-D2). Long
+    // enough at real-time speed that the run summary does not cover the page mid-test.
+    .replace("duration_s: 60.0", "duration_s: 180.0\n  calendar: compressed")
     .replace("rate_veh_per_h: 30.0", "rate_veh_per_h: 900.0")
     .replace("actors:\n", "actors:\n  backend:\n    protocol: protocol/scms/camp\n")
     // Cellular access, so vehicles top up through the LOP during the run.
@@ -58,10 +59,13 @@ test.afterAll(async () => {
 
 test("the PKI view draws every SCMS component, its flows and an SPDU with the engine's data", async ({ page }) => {
   const shots = process.env.VWP_SHOT_DIR ?? tmpdir();
-  await open(page);
+  // Straight to the stream: the settings-window round trip of `open` is not this test's subject.
+  await page.goto("/");
+  await streaming(page);
   await page.getByTestId("speed").selectOption("1");
   await page.getByTestId("play").click();
 
+  await page.screenshot({ path: join(shots, "pki-before-open.png") });
   await page.getByTestId("backend-button").click();
   const panel = page.getByTestId("pki-panel");
   await expect(panel).toBeVisible();

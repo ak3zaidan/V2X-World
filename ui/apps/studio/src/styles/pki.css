@@ -90,6 +90,10 @@
 .pki-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .pki-offline, .pki-online { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .pki-chain-step { display: inline-flex; align-items: center; gap: 6px; }
+.pki-chain { flex-wrap: nowrap; align-items: flex-start; }
+.pki-chain > .pki-arrow { padding-top: 5px; }
+.pki-online { flex: 1 1 0; min-width: 0; }
+.pki-offline { flex: none; flex-wrap: nowrap; }
 .pki-arrow { color: var(--text-faint); }
 .pki-provider footer { font-size: 11px; margin-top: 8px; }
 .pki-devices { font-size: 12px; color: var(--text); margin: 0; }
@@ -163,7 +167,8 @@
 .pki-flow-row .pill { align-self: flex-start; }
 .pki-flow-main { overflow: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; }
 .pki-flow-title { margin: 0; font-size: 13px; font-weight: 500; }
-.pki-seq-wrap { overflow: auto; }
+.pki-seq-wrap { overflow-x: auto; flex: none; }
+.pki-flow-main > * { flex: none; }
 .pki-seq { display: block; font-family: var(--mono); }
 .pki-lane-label { fill: var(--text); font-size: 11.5px; font-weight: 600; }
 .pki-lane-label.viewing { fill: var(--accent); }

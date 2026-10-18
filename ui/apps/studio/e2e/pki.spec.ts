@@ -15,6 +15,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 type Bundle = Record<string, Record<string, unknown>>;
 const studio = JSON.parse(readFileSync(join(here, "../test/fixtures/pki/pki-studio.json"), "utf8")) as { run: Bundle; sequence: Bundle };
 
+/** What `inspect.knowledge` answers on the full run (WP-E1's own answers file), for the run bundle. */
+const runKnowledge =
+  (JSON.parse(readFileSync(join(here, "../test/fixtures/pki/pki-answers.json"), "utf8")) as Record<string, Record<string, Record<string, unknown>>>)["inspect.knowledge"] ?? {};
+const runBundle: Bundle = {
+  ...studio.run,
+  "inspect.knowledge": Object.fromEntries(Object.entries(runKnowledge).map(([e, v]) => [e, { "ground-truth": v["ground-truth"], [e]: v.entity }])),
+};
+
 const PKI = new Set(["inspect.trust", "inspect.flows", "inspect.flow", "inspect.pdu", "inspect.knowledge", "inspect.cert"]);
 
 /** Answer one PKI request from the bundle, as the engine would (or as it would refuse). */
@@ -71,7 +79,7 @@ async function openPki(page: Page): Promise<void> {
 
 test("Trust domain: providers, offline chain, CTL, activity, component card and the view switch", async ({ page }) => {
   const log: string[] = [];
-  await servePki(page, studio.run, log);
+  await servePki(page, runBundle, log);
   await openPki(page);
   const panel = page.getByTestId("pki-panel");
   await expect(panel.getByTestId("pki-trust")).toBeVisible({ timeout: 30_000 });

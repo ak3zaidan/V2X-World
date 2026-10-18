@@ -38,6 +38,8 @@ const LANE_W = 128;
 const ROW_H = 30;
 const GAP_H = 26;
 const HEAD_H = 34;
+/** Room on each side for the labels of arrows that start or end at an outer lane. */
+const PAD = 96;
 
 function rowHeight(r: SeqRow): number {
   return r.kind === "gap" ? GAP_H : ROW_H;
@@ -63,9 +65,9 @@ function Sequence({
   readonly onPick: (r: FlowRecord) => void;
 }): React.JSX.Element {
   const { lanes, rows, t0 } = useMemo(() => sequenceOf(detail, view), [detail, view]);
-  const width = Math.max(lanes.length, 2) * LANE_W;
+  const width = Math.max(lanes.length, 2) * LANE_W + 2 * PAD;
   const height = HEAD_H + rows.reduce((h, r) => h + rowHeight(r), 0) + 12;
-  const x = (i: number): number => LANE_W / 2 + i * LANE_W;
+  const x = (i: number): number => PAD + LANE_W / 2 + i * LANE_W;
   let y = HEAD_H;
   return (
     <svg className="pki-seq" width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`Sequence diagram of ${detail.instance}`} data-testid="pki-seq">
@@ -149,6 +151,7 @@ function Sequence({
               {arrowLabel(r.record)}
               <tspan className="pki-msg-meta">
                 {" "}
+                {(r.record.pdus?.length ?? 0) > 0 ? `${r.record.name} · ` : ""}
                 {r.record.bytes ?? 0} B · +{formatSpan(r.record.t - t0)}
               </tspan>
             </text>
