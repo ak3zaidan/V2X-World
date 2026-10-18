@@ -526,6 +526,33 @@ pub struct ProvisionedCred {
     pub key: Option<std::sync::Arc<v2xw_sec::credential::ImplicitKey>>,
 }
 
+/// One RSU application certificate the SCMS issued, as the engine installs it.
+#[derive(Debug, Clone)]
+pub struct RsuAppCred {
+    /// Its local period (the i-period on the real calendar).
+    pub period: u32,
+    /// The start of its validity, run time.
+    pub valid_from: SimTime,
+    /// Its end (exclusive): the period's start plus 169 h.
+    pub valid_until: SimTime,
+    /// The certificate, its issuing ACA and `d`, from the unit's own download.
+    pub key: std::sync::Arc<v2xw_sec::credential::ImplicitKey>,
+    /// Issued before the run.
+    pub preloaded: bool,
+}
+
+/// A roadside unit's place in the application-certificate cycle.
+#[derive(Debug, Clone, Default)]
+struct RsuCycle {
+    handed: usize,
+    /// The composite CRL version the unit last installed.
+    crl_version: u32,
+    withheld_seen: u64,
+    starved: bool,
+    starved_since: Option<SimTime>,
+    starved_last: SimTime,
+}
+
 /// One roadside unit the scenario declared.
 #[derive(Debug, Clone)]
 pub struct RsuSpec {
@@ -784,6 +811,17 @@ fn apply_crl_publication(
     deployment: &v2xw_proto::scms::deployment::Deployment,
     p: &mut ScmsParams,
 ) {
+    apply_crl_publication_of(scenario, deployment, 0, p);
+}
+
+/// Provider `k`'s CRL publication rule on its run's parameters `p` (WP-D1: each
+/// provider's CRL Generator follows its own rule).
+fn apply_crl_publication_of(
+    scenario: &Scenario,
+    deployment: &v2xw_proto::scms::deployment::Deployment,
+    k: usize,
+    p: &mut ScmsParams,
+) {
     use v2xw_proto::scms::deployment::CrlPublication;
     let explicit = scenario
         .security
@@ -794,7 +832,7 @@ fn apply_crl_publication(
     if explicit || p.calendar_epoch_unix_s.is_none() {
         return;
     }
-    match deployment.providers.first().map(|h| h.crl_publication) {
+    match deployment.providers.get(k).map(|h| h.crl_publication) {
         Some(CrlPublication::SlaOneBusinessDay) => p.crl.business_day_sla = true,
         Some(CrlPublication::OnDecision) => p.publish_on_cadence = false,
         Some(CrlPublication::Cadence) | None => {}
@@ -1027,6 +1065,34 @@ struct NodeSec {
 pub struct Phase2Report {
     /// How many roadside units were created.
     pub rsus: u64,
+    /// Roadside units in the SCMS application-certificate cycle (WP-B3b): each holds
+    /// only weekly certificates its provider's ACA issued and renews them over its own
+    /// backhaul.
+    pub rsus_in_cert_cycle: u64,
+    /// RSU application certificates installed before the run (this week's, and next
+    /// week's for a unit whose backhaul was up).
+    pub rsu_app_certs_preloaded: u64,
+    /// RSU application certificates renewed during the run, over the unit's backhaul.
+    pub rsu_app_certs_renewed: u64,
+    /// RSU application certificates the node refused to install.
+    pub rsu_app_certs_refused: u64,
+    /// Roadside units that held no valid application certificate at some step: they
+    /// sign no SPaT, MAP or CRL frame then (00 gap row 24, the Wyoming starvation).
+    pub rsus_starved: u64,
+    /// Roadside-unit steps spent without a valid application certificate.
+    pub rsu_starved_steps: u64,
+    /// Time the starving units spent without one, summed over units, ns.
+    pub rsu_starved_ns: u64,
+    /// Messages roadside units had due and did not send for want of a valid
+    /// certificate (SPaT and MAP; [CAMP-EE §2.2.10.2]: no unsigned transmission).
+    pub rsu_messages_withheld: u64,
+    /// CRL frames a starving unit could not sign and so did not broadcast.
+    pub rsu_crl_frames_withheld: u64,
+    /// Composite CRLs roadside units fetched from their RA over the backhaul and
+    /// installed after verifying every signed CRL themselves (WP-C2 rules).
+    pub rsu_crls_installed: u64,
+    /// Composite CRLs a roadside unit refused (a CRL that did not verify).
+    pub rsu_crls_refused: u64,
     /// Received envelopes that would not parse at all.
     pub spdu_parse_failures: u64,
     /// Received envelopes that parsed but whose signature did not verify.
@@ -1380,6 +1446,12 @@ pub struct Phase2 {
     by_digest: BTreeMap<[u8; 8], (NodeId, u32, u32)>,
     rsus: Vec<RsuSpec>,
     rsu_nodes: Vec<NodeId>,
+    /// The SCMS (`protocol/scms/camp`) runs this backend: roadside units then join the
+    /// application-certificate cycle.
+    camp: bool,
+    /// Per roadside unit in that cycle: how many of its installed certificates the
+    /// engine has handed to the node, and its starvation spell.
+    rsu_cycle: BTreeMap<NodeId, RsuCycle>,
     /// `crl_delivery: mbms`: when the eMBMS carousel next repeats the current list.
     mbms_next: SimTime,
     specs: Vec<AttackerSpec>,
@@ -1426,6 +1498,8 @@ pub struct Phase2 {
     link_claims: Vec<v2xw_threat::records::PrivacyLinkClaim>,
     /// The fold of the backend's wire log into edges, for the Backend view.
     tracker: EdgeTracker,
+    /// The same for every other provider's run, in deployment order from provider 1.
+    peer_trackers: Vec<EdgeTracker>,
     /// `threats.compromised_rsus`: the attack each compromised unit runs, by the unit's
     /// index in `actors.rsus`, with its active window.
     compromised_specs: BTreeMap<usize, (v2xw_threat::RsuAttackParams, SimTime, SimTime)>,
@@ -1907,6 +1981,8 @@ impl Phase2 {
         scms_params.kem = kem;
         scms_params.threshold = crate::crypto_config::threshold_deployment(scenario)?;
         let deployment = deployment_of(scenario, protocol.as_deref() == Some(CAMP_SCMS))?;
+        // The rules every provider starts from, before its own CRL publication rule.
+        let base_params = scms_params;
         apply_crl_publication(scenario, &deployment, &mut scms_params);
         let mut scms = ScmsRun::new_deployed(scms_params, 0, deployment).map_err(|e| {
             conflict(
@@ -1929,6 +2005,34 @@ impl Phase2 {
             })?);
         }
         runs.insert(0, scms);
+        // Per provider (WP-D1): its own CRL publication rule, and its own MA mode when
+        // the scenario names one for it (`providers[].ma_mode`; otherwise the run-wide
+        // `ma_review_s` rule applies to every provider).
+        let explicit_ma: BTreeSet<String> = scenario
+            .security
+            .scms
+            .as_ref()
+            .and_then(|s| s.deployment.as_ref())
+            .map(|d| {
+                d.providers
+                    .iter()
+                    .filter(|p| p.ma_mode.is_some())
+                    .map(|p| p.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (k, run) in runs.iter_mut().enumerate() {
+            let p = &mut run.state.params;
+            p.crl.business_day_sla = base_params.crl.business_day_sla;
+            p.publish_on_cadence = base_params.publish_on_cadence;
+            let deployment = run.state.deployment.clone();
+            apply_crl_publication_of(scenario, &deployment, k, &mut run.state.params);
+            if let Some(prov) = deployment.providers.get(k)
+                && explicit_ma.contains(&prov.name)
+            {
+                run.state.params.ma.mode = prov.ma_mode;
+            }
+        }
         // The deployment sets the elector count and quorum and, under the region model,
         // the intra-region backend latency (WP-D1).
         let params = LifecycleParams {
@@ -2004,6 +2108,8 @@ impl Phase2 {
             by_digest: BTreeMap::new(),
             rsus,
             rsu_nodes: Vec::new(),
+            camp: protocol.as_deref() == Some(CAMP_SCMS),
+            rsu_cycle: BTreeMap::new(),
             mbms_next: 0,
             specs,
             attackers: BTreeMap::new(),
@@ -2047,6 +2153,7 @@ impl Phase2 {
             observer: v2xw_threat::PrivacyObserver::cited_defaults(NodeId::new(u32::MAX)),
             link_claims: Vec::new(),
             tracker: EdgeTracker::default(),
+            peer_trackers: Vec::new(),
             next_view: 0,
             pki: pki_view_of(scenario).then(v2xw_proto::scms::pki_view::PkiTracker::default),
             views: 0,
@@ -2075,9 +2182,10 @@ impl Phase2 {
         &self.params
     }
 
-    /// The SCMS deployment the run drives (read-only): its components' state, every
-    /// emitted SPDU and refusal, the governance entities and the stage log, for the
-    /// tests and for an attack study that inspects what the backend saw.
+    /// The home provider's SCMS run (read-only): its components' state, every emitted
+    /// SPDU and refusal, the governance entities and the stage log, for the tests and
+    /// for an attack study that inspects what the backend saw. Every provider's run is
+    /// [`Phase2::scms_runs`], a node's own [`Phase2::scms_of_node`].
     #[must_use]
     pub fn scms(&self) -> &ScmsRun {
         self.home()
@@ -2087,6 +2195,13 @@ impl Phase2 {
     #[must_use]
     pub fn scms_runs(&self) -> &[ScmsRun] {
         &self.runs
+    }
+
+    /// The run of the provider that serves `node` (a vehicle once provisioned, or a
+    /// roadside unit in the certificate cycle); `None` before.
+    #[must_use]
+    pub fn scms_of_node(&self, node: NodeId) -> Option<&ScmsRun> {
+        self.provider_of_node(node).map(|k| &self.runs[k])
     }
 
     /// The provider (index in the deployment) that serves `node`'s vehicle, once it is
@@ -2135,6 +2250,194 @@ impl Phase2 {
             self.compromised_nodes.insert(node, index);
             self.report.compromised_rsus += 1;
         }
+        self.join_rsu_cycle(node, index);
+    }
+
+    /// Puts roadside unit `node` into its provider's application-certificate cycle
+    /// (WP-B3b): enrolled and issued this week's certificate before the run (and next
+    /// week's when its backhaul is up), then renewing weekly over its own backhaul line.
+    /// Only under the SCMS with its PDU layer; otherwise the unit keeps the factory
+    /// certificate (`wiring::bootstrap_credentials`).
+    fn join_rsu_cycle(&mut self, node: NodeId, index: usize) {
+        if !self.camp || self.etsi.is_some() || self.home().state.pki.is_none() {
+            return;
+        }
+        let Some(spec) = self.rsus.get(index) else {
+            return;
+        };
+        let bh = spec.backhaul;
+        let device = device_of(node);
+        // The seeded fleet split, the same draw the factory used for this unit.
+        let k = self
+            .home()
+            .state
+            .deployment
+            .provider_of(self.fleet_seed, u64::from(node.index()));
+        self.device_provider.insert(device, k);
+        let now = self.backend_now;
+        let run = &mut self.runs[k];
+        run.add_rsu_with(
+            device,
+            v2xw_proto::Link {
+                latency: bh.latency,
+                bandwidth_bps: bh.bandwidth_bps,
+                transport: Transport::RsuBackhaul,
+            },
+        );
+        if !bh.connected {
+            run.set_backhaul_outage(device, now, SimTime::MAX);
+        }
+        if let Err(e) = run.preload_app_cert(
+            device,
+            v2xw_proto::scms::appcert::AppCertKind::RsuApplication,
+            now,
+            bh.connected,
+        ) {
+            self.report.backend_errors += 1;
+            if self.report.first_backend_error.is_empty() {
+                self.report.first_backend_error =
+                    format!("roadside unit {node:?}'s pre-run certificate: {e}");
+            }
+        }
+        self.rsu_cycle.insert(node, RsuCycle::default());
+        self.report.rsus_in_cert_cycle += 1;
+    }
+
+    /// Whether roadside unit `node` signs only with certificates from the cycle.
+    #[must_use]
+    pub fn rsu_in_cert_cycle(&self, node: NodeId) -> bool {
+        self.rsu_cycle.contains_key(&node)
+    }
+
+    /// The application certificates the SCMS installed since the engine last asked, per
+    /// roadside unit (or for `only`), for the engine to put into each node.
+    pub fn rsu_app_installs(&mut self, only: Option<NodeId>) -> Vec<(NodeId, Vec<RsuAppCred>)> {
+        let mut out = Vec::new();
+        let nodes: Vec<NodeId> = self
+            .rsu_cycle
+            .keys()
+            .copied()
+            .filter(|n| only.is_none_or(|o| o == *n))
+            .collect();
+        for node in nodes {
+            let device = device_of(node);
+            let handed = self.rsu_cycle[&node].handed;
+            let run = self.run_of(device);
+            let Some(pki) = run.state.pki.as_ref() else {
+                continue;
+            };
+            let all = run.app_installed(device);
+            if all.len() <= handed {
+                continue;
+            }
+            let creds: Vec<RsuAppCred> = all[handed..]
+                .iter()
+                .filter_map(|c| {
+                    Some(RsuAppCred {
+                        period: c.cred.period,
+                        valid_from: c.from,
+                        valid_until: c.until,
+                        key: std::sync::Arc::new(c.cred.implicit_key(&pki.aca.cert)?),
+                        preloaded: c.at == 0,
+                    })
+                })
+                .collect();
+            let n = all.len();
+            if let Some(c) = self.rsu_cycle.get_mut(&node) {
+                c.handed = n;
+            }
+            for c in &creds {
+                if c.preloaded {
+                    self.report.rsu_app_certs_preloaded += 1;
+                } else {
+                    self.report.rsu_app_certs_renewed += 1;
+                }
+            }
+            out.push((node, creds));
+        }
+        out
+    }
+
+    /// Counts certificates a roadside unit refused to install.
+    pub fn note_rsu_app_refused(&mut self, n: u64) {
+        self.report.rsu_app_certs_refused += n;
+    }
+
+    /// One roadside-unit step at `now`: whether the unit held a valid application
+    /// certificate. Opens or closes a starvation spell.
+    /// `withheld` is the node's running count of messages it had due and could not sign.
+    pub fn note_rsu_cert(&mut self, node: NodeId, now: SimTime, valid: bool, withheld: u64) {
+        let Some(c) = self.rsu_cycle.get_mut(&node) else {
+            return;
+        };
+        self.report.rsu_messages_withheld += withheld.saturating_sub(c.withheld_seen);
+        c.withheld_seen = c.withheld_seen.max(withheld);
+        if valid {
+            if c.starved_since.take().is_some() {
+                self.report.rsu_starved_ns += now.saturating_sub(c.starved_last);
+            }
+            return;
+        }
+        self.report.rsu_starved_steps += 1;
+        if !c.starved {
+            c.starved = true;
+            self.report.rsus_starved += 1;
+        }
+        if c.starved_since.is_some() {
+            self.report.rsu_starved_ns += now.saturating_sub(c.starved_last);
+        } else {
+            c.starved_since = Some(now);
+        }
+        c.starved_last = now;
+    }
+
+    /// The roadside units in the cycle whose RA now serves a newer composite CRL than
+    /// they installed, and whose backhaul is up: each fetches it (1609.2.1 §6.3.5.7,
+    /// as any end entity) and installs what it verifies.
+    #[must_use]
+    pub fn rsu_crls_due(&self) -> Vec<NodeId> {
+        self.rsu_cycle
+            .iter()
+            .filter(|(n, c)| {
+                self.rsu_spec_of(**n).is_some_and(|s| s.backhaul.connected)
+                    && self.crl_version_for(**n) > c.crl_version
+            })
+            .map(|(n, _)| *n)
+            .collect()
+    }
+
+    /// The version of the composite CRL `node`'s RA serves now.
+    #[must_use]
+    pub fn crl_version_for(&self, node: NodeId) -> u32 {
+        let h = self.provider_of_device(device_of(node));
+        self.visible_versions(h)
+            .iter()
+            .fold(0u32, |a, (_, v)| a.saturating_add(v.version))
+    }
+
+    /// Roadside unit `node` installed (or refused) composite CRL `version`.
+    pub fn note_rsu_crl(&mut self, node: NodeId, version: u32, installed: bool) {
+        if let Some(c) = self.rsu_cycle.get_mut(&node) {
+            c.crl_version = c.crl_version.max(version);
+        }
+        if installed {
+            self.report.rsu_crls_installed += 1;
+        } else {
+            self.report.rsu_crls_refused += 1;
+        }
+    }
+
+    /// Counts CRL frames a roadside unit could not sign.
+    pub fn note_rsu_withheld(&mut self, crl_frames: u64) {
+        self.report.rsu_crl_frames_withheld += crl_frames;
+    }
+
+    /// The intervals in `[from, to)` in which roadside unit `node` held no valid
+    /// application certificate, from the SCMS's own record (ground truth).
+    #[must_use]
+    pub fn rsu_starvation(&self, node: NodeId, from: SimTime, to: SimTime) -> Vec<(SimTime, SimTime)> {
+        let device = device_of(node);
+        self.run_of(device).app_starvation(device, from, to)
     }
 
     /// Whether `node` is a roadside unit under an attacker's control.
@@ -3170,6 +3473,9 @@ impl Phase2 {
         if let Some((home, peers)) = self.runs.split_first_mut() {
             for run in peers {
                 run.state.gov.sync_trust_from(&home.state.gov);
+                // A home rollover re-certified the home hierarchy: every peer's copy of
+                // it (and so its chain file) follows.
+                run.state.gov.sync_peer_from(&home.state.gov);
             }
         }
     }
@@ -4125,6 +4431,16 @@ impl Phase2 {
             rsu.set("backhaul_line_bytes", a.carrier.backhaul_line_bytes);
             rsu.set("backhaul_retransmissions", a.carrier.backhaul_retx);
             rsu.set("compromised", self.compromised_count() as u64);
+            rsu.set("in_cert_cycle", r.rsus_in_cert_cycle);
+            rsu.set("app_certs_preloaded", r.rsu_app_certs_preloaded);
+            rsu.set("app_certs_renewed", r.rsu_app_certs_renewed);
+            rsu.set(
+                "starving",
+                self.rsu_cycle.values().filter(|c| c.starved_since.is_some()).count() as u64,
+            );
+            rsu.set("ever_starved", r.rsus_starved);
+            rsu.set("messages_withheld", r.rsu_messages_withheld);
+            rsu.set("crls_installed", r.rsu_crls_installed);
             view.entities.push(rsu);
         }
         // What the engine carried outside the credential kernel, as edges.
@@ -4171,6 +4487,44 @@ impl Phase2 {
             "report-relay",
             "v2x-air",
         );
+        // Every other provider's backend (WP-D1), its entities and edges named
+        // `<provider>/<role>`: the home provider's keep their bare ids.
+        if self.etsi.is_none() {
+            self.peer_trackers
+                .resize_with(self.runs.len().saturating_sub(1), EdgeTracker::default);
+            for k in 1..self.runs.len() {
+                let name = self.runs[0]
+                    .state
+                    .deployment
+                    .providers
+                    .get(k)
+                    .map_or_else(|| format!("provider-{k}"), |p| p.name.clone());
+                let peer = self.runs[k].backend_view(now, &mut self.peer_trackers[k - 1]);
+                let id = |s: &str| format!("{name}/{s}");
+                for mut e in peer.entities {
+                    e.id = id(&e.id);
+                    e.name = format!("{} ({name})", e.name);
+                    e.set("provider", name.clone());
+                    view.entities.push(e);
+                }
+                for mut e in peer.edges {
+                    e.from = id(&e.from);
+                    e.to = id(&e.to);
+                    view.edges.push(e);
+                }
+                for mut s in peer.recent {
+                    s.from = id(&s.from);
+                    s.to = id(&s.to);
+                    view.recent.push(s);
+                }
+                for (f, n) in peer.flows {
+                    *view.flows.entry(f).or_default() += n;
+                }
+            }
+            view.recent.sort_by_key(|s| s.t);
+            let excess = view.recent.len().saturating_sub(v2xw_proto::view::RECENT);
+            view.recent.drain(..excess);
+        }
         view
     }
 
@@ -4662,6 +5016,27 @@ impl Phase2 {
         (version, entries, secured)
     }
 
+    /// What the eMBMS carousel carries (`crl_delivery: mbms`): every provider's latest
+    /// published CRL as its own CRL Generator signed it — the version (their sum), their
+    /// entries, home provider's first, and the signed CRLs. **ASSUMPTION**: the mobile
+    /// operator's broadcast centre is fed by every provider's CRL store directly, with no
+    /// inter-provider lag; MBMS CRL distribution is specified but not deployed (00 §2.3),
+    /// so no document says who feeds it.
+    #[must_use]
+    pub fn mbms_crl(&self) -> (u32, Vec<CrlLinkageEntry>, Vec<std::sync::Arc<[u8]>>) {
+        let mut version = 0u32;
+        let mut entries = Vec::new();
+        let mut secured = Vec::new();
+        for feed in &self.crl_feeds {
+            if let Some(v) = feed.iter().rev().find(|v| v.at <= self.backend_now) {
+                version = version.saturating_add(v.version);
+                entries.extend(v.entries.iter().copied());
+                secured.extend(v.secured.clone());
+            }
+        }
+        (version, entries, secured)
+    }
+
     /// The list the CRL Store has published: its version (entry count) and entries.
     #[must_use]
     pub fn published_crl(&self) -> (u32, Vec<CrlLinkageEntry>) {
@@ -4778,7 +5153,7 @@ impl Phase2 {
         if self.access.crl_delivery() != crate::backend::CrlDelivery::Mbms {
             return None;
         }
-        let version = self.published_crl_for_provider(0).0;
+        let version = self.mbms_crl().0;
         if version == 0 || (!published && now < self.mbms_next) {
             return None;
         }
@@ -5648,6 +6023,54 @@ pub fn deployment_of(
         }
         if let Some(on) = p.on_ctl {
             q.on_ctl = on;
+        }
+        if let Some(r) = p.ma_review_s
+            && !(r.is_finite() && r > 0.0)
+        {
+            return Err(conflict(
+                &format!("{at}.ma_review_s"),
+                format!("{r} must be > 0 (use ma_mode: automatic for no review)"),
+            ));
+        }
+        match p.ma_mode.as_deref() {
+            None if p.ma_review_s.is_some() => {
+                return Err(conflict(
+                    &format!("{at}.ma_review_s"),
+                    "is set without ma_mode: manual-review".to_string(),
+                ));
+            }
+            None => {}
+            Some("automatic") if p.ma_review_s.is_some() => {
+                return Err(conflict(
+                    &format!("{at}.ma_review_s"),
+                    "is set with ma_mode: automatic, which has no review".to_string(),
+                ));
+            }
+            Some("automatic") => q.ma_mode = v2xw_proto::scms::params::MaMode::Automatic,
+            Some("manual-review") => {
+                let review = p.ma_review_s.unwrap_or(8.0 * 3_600.0);
+                q.ma_mode = v2xw_proto::scms::params::MaMode::ManualReview {
+                    review: Duration::from_nanos((review * 1e9).round() as u64),
+                };
+            }
+            Some(other) => {
+                return Err(conflict(
+                    &format!("{at}.ma_mode"),
+                    format!("'{other}' is not an MA mode; allowed: manual-review, automatic"),
+                ));
+            }
+        }
+        if let Some(c) = &p.crl_publication {
+            q.crl_publication =
+                v2xw_proto::scms::deployment::CrlPublication::parse(c).ok_or_else(|| {
+                    conflict(
+                        &format!("{at}.crl_publication"),
+                        format!(
+                            "'{c}' is not a CRL publication rule; allowed: {}",
+                            v2xw_proto::scms::deployment::CrlPublication::IDS.join(", ")
+                        ),
+                    )
+                })?;
         }
     }
     if let Some(n) = s.electors {

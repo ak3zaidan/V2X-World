@@ -100,3 +100,33 @@ fn a_shared_report_crosses_the_inter_provider_link_and_is_decided_there() {
     );
     assert!(home.state.crlg.entries.is_empty());
 }
+
+/// A home root rollover re-certifies the home provider's ICA and components under the new
+/// root; each peer's copy of that hierarchy follows (`sync_peer_from`), so the peer's
+/// local chain file lists the re-certified ICA, and still lists the home provider once
+/// the old root leaves the CTL.
+#[test]
+fn a_home_root_rollover_reaches_the_peers_chain_file() {
+    let (mut home, mut peer) = runs();
+    let label = home.state.gov.config.provider.clone();
+    let old_ica = home.state.gov.cert("ica").unwrap().clone();
+    let st = &mut home.state;
+    let (old, _new, publish) = st.gov.rollover_root(&st.rng, &st.nodes, 1_000);
+    st.gov.publish_due(publish);
+    let new_ica = home.state.gov.cert("ica").unwrap().clone();
+    assert_ne!(old_ica, new_ica);
+    peer.state.gov.sync_trust_from(&home.state.gov);
+    assert!(peer.state.gov.sync_peer_from(&home.state.gov));
+    assert_eq!(peer.state.gov.peer_cert(&label, "ica"), Some(&new_ica));
+    assert!(peer.state.gov.lccf.certs.contains(&new_ica));
+    assert!(!peer.state.gov.sync_peer_from(&home.state.gov), "idempotent");
+    let at = home.state.gov.remove_root(old, publish + 1).expect("decided");
+    home.state.gov.publish_due(at);
+    peer.state.gov.sync_trust_from(&home.state.gov);
+    peer.state.gov.sync_peer_from(&home.state.gov);
+    assert!(
+        peer.state.gov.lccf.certs.contains(&new_ica),
+        "the home provider stays in the peer's chain file under its new root"
+    );
+    assert!(!peer.state.gov.lccf.certs.contains(&old_ica));
+}

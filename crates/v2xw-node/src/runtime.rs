@@ -471,6 +471,11 @@ pub struct ObuRuntime {
     /// clock — the receive queue's occupancy, when parsing has a cost.
     parse_starts: VecDeque<SimTime>,
     drops: DropLedger,
+    /// Messages due that the node did not send because it held no usable credential
+    /// ([CAMP-EE §2.2.10.2]: it stops transmitting rather than sending unsigned). Also in
+    /// `drops` as `tx_overflow`; kept apart so a starving unit can be told from a full
+    /// queue.
+    tx_uncredentialed: u64,
     clock: ClockModel,
     belief: PositionEstimate,
     stores: Stores,
@@ -573,6 +578,7 @@ impl ObuRuntime {
             verify_seq: 0,
             parse_starts: VecDeque::new(),
             drops: DropLedger::new(),
+            tx_uncredentialed: 0,
             clock: ClockModel::new(0.0),
             belief: PositionEstimate::no_fix(at),
             stores,
@@ -713,6 +719,11 @@ impl ObuRuntime {
         handle.cert_coer = signer.cert_coer().to_vec();
         self.stores.certs.insert(handle);
         Ok(())
+    }
+
+    /// Messages the node had due and did not send for want of a usable credential.
+    pub fn tx_uncredentialed(&self) -> u64 {
+        self.tx_uncredentialed
     }
 
     /// The node's stores, mutably, for the engine's provisioning and CRL paths.
@@ -1846,6 +1857,7 @@ impl ObuRuntime {
             // No usable credential: a node on the CRL, or one whose pool has run out.
             // [CAMP-EE §2.2.10.2] — it stops transmitting rather than sending unsigned.
             self.drops.record_n(DropCause::TxOverflow, wanted);
+            self.tx_uncredentialed += u64::from(wanted);
             return;
         };
         // Only a credential the SCMS issued and the security stack installed can sign
@@ -1856,10 +1868,12 @@ impl ObuRuntime {
         // [CAMP-EE §2.2.10.2].
         if !self.security.set_active(cred.i_period, cred.j_index) {
             self.drops.record_n(DropCause::TxOverflow, wanted);
+            self.tx_uncredentialed += u64::from(wanted);
             return;
         }
         let Some(cred) = self.stores.certs.active().cloned() else {
             self.drops.record_n(DropCause::TxOverflow, wanted);
+            self.tx_uncredentialed += u64::from(wanted);
             return;
         };
         // A new pseudonym starts a new path history.

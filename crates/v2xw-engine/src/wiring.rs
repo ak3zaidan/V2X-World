@@ -4038,6 +4038,48 @@ pub fn install_provisioned<R: CredentialSink + ?Sized>(
     add_provisioned(runtime, factory, node, creds)
 }
 
+/// Installs RSU application certificates the SCMS issued (WP-B3b) into a roadside unit:
+/// with `replace`, the factory certificate the unit was built with is dropped first, so a
+/// unit in the cycle signs only with what its provider's ACA issued and starves when that
+/// lapses. Each certificate is held for its own validity window (`Preloaded` until it
+/// opens). Returns how many the node accepted (the import check `d·G = e·P_U + Q_ACA`).
+pub fn install_rsu_app_certs<R: CredentialSink + ?Sized>(
+    runtime: &mut R,
+    scenario: &Scenario,
+    node: NodeId,
+    creds: &[crate::phase2::RsuAppCred],
+    replace: bool,
+) -> usize {
+    if replace {
+        let policy = rotation_policy(scenario);
+        runtime.sink_forget();
+        *runtime.sink_stores() = v2xw_node::Stores {
+            certs: v2xw_node::CertStore::new().with_policy(policy),
+            ..core::mem::take(runtime.sink_stores())
+        };
+    }
+    creds
+        .iter()
+        .filter(|c| {
+            let handle = CredentialHandle {
+                digest: pseudo_signer(node, c.period),
+                cert_coer: Vec::new(),
+                key: v2xw_sec::KeyId(u64::from(node.index()) << 32 | u64::from(c.period)),
+                i_period: c.period,
+                j_index: 0,
+                valid_from: c.valid_from,
+                valid_until: c.valid_until,
+                state: if c.valid_from > 0 {
+                    CredState::Preloaded
+                } else {
+                    CredState::Active
+                },
+            };
+            runtime.sink_install(handle, &c.key).is_ok()
+        })
+        .count()
+}
+
 /// Adds provisioned certificates to a node's store (a completed top-up), each with its key
 /// as [`install_provisioned`] does. Returns how many were installed.
 pub fn add_provisioned<R: CredentialSink + ?Sized>(

@@ -146,6 +146,15 @@ impl HostedNode {
         both!(self, n => n.clock())
     }
 
+    /// Messages the device had due and did not send for want of a usable credential
+    /// (an on-board or roadside unit; a VRU device counts none here).
+    pub fn tx_uncredentialed(&self) -> u64 {
+        match self {
+            HostedNode::Obu(n) => n.tx_uncredentialed(),
+            HostedNode::Vru(_) => 0,
+        }
+    }
+
     /// The device's stores.
     pub fn stores(&self) -> &Stores {
         both!(self, n => n.stores())
