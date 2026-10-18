@@ -2488,6 +2488,23 @@ impl Engine {
         {
             phase2.note_policy_totals(policy.silenced_frames, policy.requested_changes);
         }
+        // WP-F1: the PKI view's last interval (the view publishes on its cadence), so the
+        // recording carries every SPDU the run put on a link.
+        let now = self.now();
+        if let Some(pki) = self.phase2.as_mut().and_then(|p| p.final_pki(now)) {
+            if let Some(state) = pki.state {
+                self.emit(recorder, &crate::sec_records::PkiStateRecord(state));
+            }
+            for f in pki.flows {
+                self.emit(recorder, &crate::sec_records::PkiFlowRecord(f));
+            }
+            for c in pki.cases {
+                self.emit(recorder, &crate::sec_records::PkiCaseRecord(c));
+            }
+            for k in pki.knowledge {
+                self.emit(recorder, &crate::sec_records::PkiKnowledgeRecord(k));
+            }
+        }
         if let Some(phase2) = self.phase2.as_mut() {
             phase2.finish();
             self.report.phase2 = phase2.report();

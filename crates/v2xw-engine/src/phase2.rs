@@ -4251,6 +4251,26 @@ impl Phase2 {
         self.pki = Some(tracker);
     }
 
+    /// The PKI view's last records at the run's end (WP-F1): the SPDUs, stage stamps and
+    /// case transitions logged since the last view, so a recording carries every SPDU the
+    /// run put on a link (the view publishes on its cadence, and without this the last
+    /// interval's were never recorded). `None` when nothing is pending, so a run whose
+    /// last view drained everything records exactly what it did before.
+    pub fn final_pki(&mut self, now: SimTime) -> Option<PkiTick> {
+        let pending = self.pki.as_ref().is_some_and(|t| {
+            self.runs
+                .iter()
+                .enumerate()
+                .any(|(k, r)| r.state.pdus.len() > t.pdus_published(k))
+        });
+        if !pending {
+            return None;
+        }
+        let mut tick = BackendTick::default();
+        self.publish_pki(now, &mut tick);
+        Some(tick.pki)
+    }
+
     /// `node.credentials` for one vehicle (WP-E1), or `None` when the PKI view is off,
     /// the node is not an SCMS device, or its pool has not changed since the last record.
     pub fn node_credentials(
