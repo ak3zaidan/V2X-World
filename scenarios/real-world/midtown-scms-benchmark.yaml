@@ -55,18 +55,19 @@
 #
 # The timeline (real calendar, fast-forward for the backend in between):
 #
-#    0 s -  480 s   live: the rush hour (180 s warm-up, then 300 s measured)
-#  480 s - 43,140 s fast-forward: traffic frozen, the backend runs (polls, shuffles, CRL)
-#  43,140 - 43,260  live across the week rollover (Tuesday 09:00 UTC = 43,200 s; the grid
+#    0 s -  240 s   live: the rush hour (120 s warm-up, then 120 s measured)
+#  240 s - 43,170 s fast-forward: traffic frozen, the backend runs (polls, shuffles, CRL)
+#  43,170 - 43,230  live across the week rollover (Tuesday 09:00 UTC = 43,200 s; the grid
 #                   is 2015-01-06 04:00 EST in fixed weeks of TAI seconds, so 05:00 EDT):
 #                   every vehicle switches to i = 615's certificates on the air
-#  43,260 - 172,800 fast-forward through Tuesday's business day and on to Wednesday
+#  43,230 - 172,800 fast-forward through Tuesday's business day and on to Wednesday
 #                   17:00 Eastern (MA review, the one-business-day CRL SLA, CRL fetches)
 #
 # Inside a fast-forward window the traffic stands still where it was, so the rollover
 # window is the evening rush's vehicles at 05:00: the radio numbers are only quoted from
 # the first window. The live windows are as long as the owner's laptop affords (the first
-# one costs about an hour of CPU on the release build); lengthen them on a bigger machine.
+# one costs about 20 CPU-minutes on the release build, and the laptop was shared with
+# other builds); lengthen them on a bigger machine.
 #
 # What it does not measure: OD-matrix turning volumes, double parking, real pedestrian
 # volumes (the 2,200 are a sample), the tunnels' spill-back, real provider locations.
@@ -90,11 +91,11 @@ time:
   duration_s: 172800.0
   mobility_step_ms: 100
   des_resolution: 1us
-  warmup_s: 180.0
+  warmup_s: 120.0
   metric_period_s: 10.0
   fast_forward:
-    - {from_s: 480.0, to_s: 43140.0}
-    - {from_s: 43260.0, to_s: 172800.0}
+    - {from_s: 240.0, to_s: 43170.0}
+    - {from_s: 43230.0, to_s: 172800.0}
 
 world:
   source:
