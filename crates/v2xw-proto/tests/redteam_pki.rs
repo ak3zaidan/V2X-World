@@ -146,7 +146,11 @@ fn la_pair_links(run: &ScmsRun, air: &BTreeSet<AirCert>) -> Vec<BTreeSet<AirCert
 fn coalitions_learn_what_the_separation_rules_predict() {
     let (run, truth) = fleet();
     let air: BTreeSet<AirCert> = truth.keys().copied().collect();
-    assert_eq!(air.len(), 12, "every certificate's linkage value is distinct on the air");
+    assert_eq!(
+        air.len(),
+        12,
+        "every certificate's linkage value is distinct on the air"
+    );
     let st = &run.state;
     let device_of_handle = |h: &[u8; 32]| {
         st.ra
@@ -233,12 +237,32 @@ fn coalitions_learn_what_the_separation_rules_predict() {
         st.ra.requests.len()
     );
 
-    assert_eq!(got["eavesdropper"], (0.0, 0.0, 0), "linkage values unlinkable on the air");
-    assert_eq!(got["ACA"], (0.0, 0.0, 0), "the ACA alone cannot group a device's certificates");
+    assert_eq!(
+        got["eavesdropper"],
+        (0.0, 0.0, 0),
+        "linkage values unlinkable on the air"
+    );
+    assert_eq!(
+        got["ACA"],
+        (0.0, 0.0, 0),
+        "the ACA alone cannot group a device's certificates"
+    );
     assert_eq!(la1_hits, 0, "one LA alone recognises no certificate");
-    assert_eq!(got["LA1+LA2"], (1.0, 0.0, 0), "two LAs link everything and name nobody");
-    assert_eq!(got["RA+LA1+LA2"], (1.0, 1.0, 0), "with the RA they name every device");
-    assert_eq!(got["ACA+RA"], (1.0, 1.0, 0), "the ACA and the RA name every device");
+    assert_eq!(
+        got["LA1+LA2"],
+        (1.0, 0.0, 0),
+        "two LAs link everything and name nobody"
+    );
+    assert_eq!(
+        got["RA+LA1+LA2"],
+        (1.0, 1.0, 0),
+        "with the RA they name every device"
+    );
+    assert_eq!(
+        got["ACA+RA"],
+        (1.0, 1.0, 0),
+        "the ACA and the RA name every device"
+    );
 }
 
 /// The device the RA's chain-pair record names for each certificate LA1+LA2 can place.
@@ -300,7 +324,12 @@ fn two_revocations() -> (
     run.revoke(0, 0, JMAX).expect("held");
     run.run().expect("revocation of X");
     let b = &run.state.crl_broadcast;
-    let v1 = (b.entries.clone(), b.signature, b.secured.clone(), b.delta.clone());
+    let v1 = (
+        b.entries.clone(),
+        b.signature,
+        b.secured.clone(),
+        b.delta.clone(),
+    );
     let lva = run.state.devices[&DEVICE_A].credentials[&(0, 0)].lv;
     run.submit_report(DEVICE_B, 0, lva);
     run.run().expect("report");
@@ -373,7 +402,10 @@ fn an_rsu_edited_crl_is_refused_whole() {
         crl_contains(&c.crl, 0, 0, lvb)
     );
     assert_eq!(c.crls_rejected, 1, "the edited list is refused");
-    assert!(crl_contains(&c.crl, 0, 0, lva), "the device keeps the list it had");
+    assert!(
+        crl_contains(&c.crl, 0, 0, lva),
+        "the device keeps the list it had"
+    );
 }
 
 // -----------------------------------------------------------------------------------------
@@ -421,7 +453,10 @@ fn a_second_provisioning_chain_survives_the_revocation_of_the_first() {
             .and_then(|h| st.ra.requests.get(h))
             .map(|r| r.device);
         if owner == Some(DEVICE_A) {
-            if crl.iter().any(|e| e.matches_any_index(i, LinkageValue::new(lv))) {
+            if crl
+                .iter()
+                .any(|e| e.matches_any_index(i, LinkageValue::new(lv)))
+            {
                 covered += 1;
             } else {
                 escaped += 1;
@@ -489,7 +524,9 @@ fn the_revocation_window_on_the_real_calendar() {
         ("auto/flush-0", 0, |t| t),
         ("auto/flush-24h", 24 * H, |t| t),
         ("manual-8h-flat/flush-24h", 24 * H, |t| t + 8 * H),
-        ("manual-8h-business/flush-24h", 24 * H, |t| business_hours_done(t, 8 * H)),
+        ("manual-8h-business/flush-24h", 24 * H, |t| {
+            business_hours_done(t, 8 * H)
+        }),
     ];
     let mut pinned = Vec::new();
     for (name, flush, ma) in pipelines {
@@ -519,7 +556,11 @@ fn the_revocation_window_on_the_real_calendar() {
         pinned.push((p50.round() as i64, p95.round() as i64, max.round() as i64));
     }
     // Regression pins (whole hours), from the run that the document quotes.
-    assert_eq!(pinned, PINNED_WINDOWS, "the calendar results moved: re-derive docs/redteam");
+    assert_eq!(
+        pinned, PINNED_WINDOWS,
+        "the calendar results moved: re-derive docs/redteam"
+    );
 }
 
-const PINNED_WINDOWS: [(i64, i64, i64); 4] = [(18, 68, 96), (42, 92, 120), (50, 100, 128), (71, 121, 144)];
+const PINNED_WINDOWS: [(i64, i64, i64); 4] =
+    [(18, 68, 96), (42, 92, 120), (50, 100, 128), (71, 121, 144)];
