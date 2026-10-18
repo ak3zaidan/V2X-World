@@ -1168,7 +1168,10 @@ fn inspect_pki(ctx: &mut Context<'_>, method: &str, p: &Map<String, Value>) -> R
         "inspect.pki" => match text(p, "topic") {
             Some("vehicles") => PkiQuery::Vehicles { view },
             Some("vehicle") => PkiQuery::Vehicle {
-                device: required("device", "pass a device id such as \"ee/1000019\" or a node id")?,
+                device: required(
+                    "device",
+                    "pass a device id such as \"ee/1000019\" or a node id",
+                )?,
                 view,
             },
             Some("cases") => PkiQuery::Cases { view },

@@ -504,7 +504,9 @@ fn studio_bundle_is_what_the_server_answers() {
 // ---------------------------------------------------------------------------------------
 
 fn pki(store: &PkiStore, q: PkiQuery) -> Value {
-    store.answer(&q).unwrap_or_else(|| panic!("{q:?} unanswered"))
+    store
+        .answer(&q)
+        .unwrap_or_else(|| panic!("{q:?} unanswered"))
 }
 
 fn gt() -> String {
@@ -531,8 +533,14 @@ fn accused_of_published_cases(rows: &[Value]) -> BTreeSet<String> {
         .filter_map(|r| r["record"]["case"].as_str())
         .collect();
     let mut out = BTreeSet::new();
-    for r in rows.iter().filter(|r| r["channel"] == "pki.knowledge" && r["record"]["role"] == "ma") {
-        for c in r["record"]["truth"]["cases"].as_array().expect("truth.cases") {
+    for r in rows
+        .iter()
+        .filter(|r| r["channel"] == "pki.knowledge" && r["record"]["role"] == "ma")
+    {
+        for c in r["record"]["truth"]["cases"]
+            .as_array()
+            .expect("truth.cases")
+        {
             if published.contains(c["case"].as_str().expect("case")) {
                 for a in c["accused"].as_array().expect("accused") {
                     out.insert(a.as_str().expect("device").to_string());
@@ -570,7 +578,12 @@ fn the_vehicle_grid_is_the_recorded_node_credentials_cell_for_cell() {
             .as_array()
             .expect("held")
             .iter()
-            .map(|c| ((c["i"].as_u64().expect("i"), c["j"].as_u64().expect("j")), c))
+            .map(|c| {
+                (
+                    (c["i"].as_u64().expect("i"), c["j"].as_u64().expect("j")),
+                    c,
+                )
+            })
             .collect();
         let cells = rec["cells"].as_array().expect("cells");
         assert_eq!(grid["cells"].as_u64(), Some(cells.len() as u64), "{device}");
@@ -583,11 +596,18 @@ fn the_vehicle_grid_is_the_recorded_node_credentials_cell_for_cell() {
                 ));
             }
         }
-        assert_eq!(&rebuilt, cells, "{device}: the grid differs from node.credentials");
+        assert_eq!(
+            &rebuilt, cells,
+            "{device}: the grid differs from node.credentials"
+        );
         // Counts by state, the active certificate and its history.
         for state in ["active", "valid", "downloaded", "expired", "revoked"] {
             let n = cells.iter().filter(|c| c["state"] == state).count() as u64;
-            assert_eq!(v["pool"][state].as_u64().unwrap_or(0), n, "{device} {state}");
+            assert_eq!(
+                v["pool"][state].as_u64().unwrap_or(0),
+                n,
+                "{device} {state}"
+            );
         }
         assert_eq!(v["active"], rec["active"], "{device}");
         assert_eq!(v["history"], rec["history"], "{device}");
@@ -605,7 +625,10 @@ fn the_vehicle_grid_is_the_recorded_node_credentials_cell_for_cell() {
             },
         );
         assert_eq!(own["grid"], v["grid"]);
-        assert!(own.get("truth").is_none(), "{device}: truth outside ground truth");
+        assert!(
+            own.get("truth").is_none(),
+            "{device}: truth outside ground truth"
+        );
         assert!(
             store
                 .answer(&PkiQuery::Vehicle {
@@ -659,7 +682,8 @@ fn every_crl_entry_decodes_and_revokes_exactly_the_accused() {
             entries += 1;
             // Each entry is one case's seeds: its LA ids and iRev are a case's.
             assert!(
-                la_seeds.iter().any(|d| d["la_ids"] == serde_json::json!([e["la1_id"], e["la2_id"]])
+                la_seeds.iter().any(|d| d["la_ids"]
+                    == serde_json::json!([e["la1_id"], e["la2_id"]])
                     && d["i_rev"] == e["i_rev"]),
                 "{id8}: entry {e} is no case's"
             );
@@ -679,7 +703,10 @@ fn every_crl_entry_decodes_and_revokes_exactly_the_accused() {
         );
         assert!(public.get("owners").is_none(), "{id8}");
         assert!(!public.to_string().contains("matches"), "{id8}");
-        assert_eq!(public["linkage"].as_array().map(Vec::len), Some(linkage.len()));
+        assert_eq!(
+            public["linkage"].as_array().map(Vec::len),
+            Some(linkage.len())
+        );
     }
     assert!(entries > 0, "no linkage entry");
     let accused = accused_of_published_cases(&rows);
@@ -712,19 +739,36 @@ fn the_case_board_is_pki_case_and_each_view_sees_only_its_part() {
     assert_eq!(cases.len(), recorded.len());
     for c in cases {
         let id = c["case"].as_str().expect("case");
-        assert_eq!(c["stages"].as_array().expect("stages"), &recorded[id], "{id}");
+        assert_eq!(
+            c["stages"].as_array().expect("stages"),
+            &recorded[id],
+            "{id}"
+        );
         let steps = c["steps"].as_array().expect("steps");
         let names: BTreeSet<&str> = steps.iter().filter_map(|s| s["name"].as_str()).collect();
-        for n in ["pca-lookup-request", "seed-request", "seed-response", "crl-append"] {
+        for n in [
+            "pca-lookup-request",
+            "seed-request",
+            "seed-response",
+            "crl-append",
+        ] {
             assert!(names.contains(n), "{id}: no {n} step in {names:?}");
         }
         assert!(
-            steps.windows(2).all(|w| w[0]["t"].as_u64() <= w[1]["t"].as_u64()),
+            steps
+                .windows(2)
+                .all(|w| w[0]["t"].as_u64() <= w[1]["t"].as_u64()),
             "{id}: steps out of order"
         );
         let truth = &c["truth"];
-        assert!(!truth["accused"].as_array().expect("accused").is_empty(), "{id}");
-        assert!(!truth["reporters"].as_array().expect("reporters").is_empty(), "{id}");
+        assert!(
+            !truth["accused"].as_array().expect("accused").is_empty(),
+            "{id}"
+        );
+        assert!(
+            !truth["reporters"].as_array().expect("reporters").is_empty(),
+            "{id}"
+        );
         // As LA1 of the case's provider: its own steps only, no stage table, no identity.
         let p = c["provider"].as_str().expect("provider");
         let la1 = format!("{p}/la1/0");
@@ -740,7 +784,10 @@ fn the_case_board_is_pki_case_and_each_view_sees_only_its_part() {
         for s in mine["steps"].as_array().expect("steps") {
             assert!(s["from"] == la1.as_str() || s["to"] == la1.as_str(), "{s}");
         }
-        assert!(!mine.to_string().contains("\"ee/"), "{la1} sees a device: {mine}");
+        assert!(
+            !mine.to_string().contains("\"ee/"),
+            "{la1} sees a device: {mine}"
+        );
         // As the case's MA: its table, still no identity.
         let ma = format!("{p}/ma/0");
         let as_ma = pki(&store, PkiQuery::Cases { view: ma.clone() });
@@ -752,7 +799,10 @@ fn the_case_board_is_pki_case_and_each_view_sees_only_its_part() {
             .expect("the MA's own case");
         assert_eq!(mine["stages"].as_array(), Some(&recorded[id]));
         assert!(mine.get("truth").is_none());
-        assert!(!mine.to_string().contains("\"ee/"), "{ma} sees a device: {mine}");
+        assert!(
+            !mine.to_string().contains("\"ee/"),
+            "{ma} sees a device: {mine}"
+        );
     }
 }
 
@@ -790,11 +840,17 @@ fn the_tabs_fixture_is_what_the_server_answers() {
                     view: "provider-a/ra/0".into(),
                 },
             );
-            crl.insert(id8, serde_json::json!({"ground-truth": gtv, "other": other}));
+            crl.insert(
+                id8,
+                serde_json::json!({"ground-truth": gtv, "other": other}),
+            );
         }
     }
     let mut cases = serde_json::Map::new();
-    cases.insert("ground-truth".into(), pki(&store, PkiQuery::Cases { view: gt() }));
+    cases.insert(
+        "ground-truth".into(),
+        pki(&store, PkiQuery::Cases { view: gt() }),
+    );
     for v in ["provider-a/ma/0", "provider-a/la1/0", "provider-b/ma/0"] {
         cases.insert(v.into(), pki(&store, PkiQuery::Cases { view: v.into() }));
     }

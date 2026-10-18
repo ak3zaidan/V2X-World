@@ -410,7 +410,10 @@ fn the_cases_ground_truth_accuses_exactly_the_vehicles_the_crls_revoke() {
         .collect();
     let mut accused = BTreeSet::new();
     let mut last: BTreeMap<String, &Value> = BTreeMap::new();
-    for k in of("pki.knowledge").into_iter().filter(|k| k["role"] == "ma") {
+    for k in of("pki.knowledge")
+        .into_iter()
+        .filter(|k| k["role"] == "ma")
+    {
         last.insert(k["entity"].as_str().expect("e").to_string(), k);
     }
     let mut seen = 0;
@@ -429,8 +432,15 @@ fn the_cases_ground_truth_accuses_exactly_the_vehicles_the_crls_revoke() {
             }
         }
     }
-    assert!(seen >= published.len(), "{seen} cases in truth, {} published", published.len());
-    assert_eq!(accused, revoked, "accused by the MA's truth vs revoked by the CRLs");
+    assert!(
+        seen >= published.len(),
+        "{seen} cases in truth, {} published",
+        published.len()
+    );
+    assert_eq!(
+        accused, revoked,
+        "accused by the MA's truth vs revoked by the CRLs"
+    );
 }
 
 /// Writes the UI fixtures (E2/E3): a trimmed slice of the recording and inspect answers.

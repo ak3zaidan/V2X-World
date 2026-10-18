@@ -582,12 +582,16 @@ impl PkiStore {
             .keys()
             .filter_map(|c| self.certs.get(c).map(|h| (c.as_str(), h.as_str())));
         for c in pki_view::crl_matches(crl_hex, held) {
-            self.revoked_by.entry(c).or_default().insert(id8.to_string());
+            self.revoked_by
+                .entry(c)
+                .or_default()
+                .insert(id8.to_string());
         }
     }
 
     fn absorb_credentials(&mut self, mut c: pki_view::NodeCredentials) {
-        let fresh: Vec<(String, String)> = std::mem::take(&mut c.certificates).into_iter().collect();
+        let fresh: Vec<(String, String)> =
+            std::mem::take(&mut c.certificates).into_iter().collect();
         for (id, hex) in &fresh {
             self.put_cert(id.clone(), hex.clone());
         }
@@ -613,7 +617,8 @@ impl PkiStore {
         let i_min = c.cells.iter().map(|x| x.i).min().unwrap_or(c.current_i);
         let i_max = c.cells.iter().map(|x| x.i).max().unwrap_or(c.current_i);
         let cells = c.cells.len();
-        c.cells.retain(|x| x.state != "not-yet-available" || x.id8.is_some());
+        c.cells
+            .retain(|x| x.state != "not-yet-available" || x.id8.is_some());
         let v = self
             .vehicles
             .entry(c.device.clone())
@@ -680,8 +685,10 @@ impl PkiStore {
         let pdus: Vec<Value> = f
             .pdus
             .iter()
-            .map(|p| json!({"id": p.id, "type": p.kind, "len": p.len, "sealed_to": p.sealed_to,
-                            "opened_by": p.opened.as_ref().map(|o| o.by.clone())}))
+            .map(|p| {
+                json!({"id": p.id, "type": p.kind, "len": p.len, "sealed_to": p.sealed_to,
+                            "opened_by": p.opened.as_ref().map(|o| o.by.clone())})
+            })
             .collect();
         self.steps.entry(f.instance.clone()).or_default().push(json!({
             "kind": f.kind, "id": f.id, "t": f.t, "flow": f.flow, "name": f.name,
@@ -765,9 +772,10 @@ impl PkiStore {
                 }))
             }
             PkiQuery::Vehicle { device, view } => {
-                let v = self.vehicles.values().find(|v| {
-                    v.last.device == *device || v.last.node.to_string() == *device
-                })?;
+                let v = self
+                    .vehicles
+                    .values()
+                    .find(|v| v.last.device == *device || v.last.node.to_string() == *device)?;
                 let gt = view == GROUND_TRUTH;
                 if !gt && v.last.device != *view {
                     return None;
@@ -819,10 +827,8 @@ impl PkiStore {
                 v["head"] = head;
                 v["view"] = json!(view);
                 if gt {
-                    let owners: BTreeMap<&str, Value> = cand
-                        .iter()
-                        .map(|(c, _)| (*c, self.owner_of(c)))
-                        .collect();
+                    let owners: BTreeMap<&str, Value> =
+                        cand.iter().map(|(c, _)| (*c, self.owner_of(c))).collect();
                     v["owners"] = json!(owners);
                 } else {
                     for e in v["linkage"].as_array_mut().into_iter().flatten() {
@@ -848,12 +854,7 @@ impl PkiStore {
             return Value::Null;
         };
         let v = self.vehicles.get(dev);
-        let cell = v.and_then(|v| {
-            v.last
-                .cells
-                .iter()
-                .find(|c| c.id8.as_deref() == Some(id8))
-        });
+        let cell = v.and_then(|v| v.last.cells.iter().find(|c| c.id8.as_deref() == Some(id8)));
         json!({
             "device": dev,
             "node": v.map(|v| v.last.node),
@@ -1002,8 +1003,12 @@ impl PkiStore {
                         json!({"device": dev, "node": veh.map(|x| x.last.node),
                                "provider": veh.map(|x| x.last.provider.clone())})
                     };
-                    let accused: Vec<Value> =
-                        t["accused"].as_array().into_iter().flatten().map(party).collect();
+                    let accused: Vec<Value> = t["accused"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(party)
+                        .collect();
                     let reporters: Vec<Value> = t["reporters"]
                         .as_array()
                         .into_iter()
