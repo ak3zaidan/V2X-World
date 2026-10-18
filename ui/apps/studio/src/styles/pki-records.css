@@ -1,0 +1,84 @@
+/* The PKI view's tabs, Vehicles, Cases and Revocation lists, and the map legend
+   (components/pki-records/). Page tokens only, so both themes work. */
+
+.pkir-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.pkir-tabs {
+  display: flex; align-items: center; gap: 4px; padding: 6px 12px;
+  border-bottom: 1px solid var(--border); background: var(--bg-panel);
+}
+.pkir-tabs [role="tab"] {
+  border: 1px solid transparent; background: none; color: var(--text-dim);
+  padding: 5px 12px; border-radius: var(--radius); cursor: pointer; font: inherit;
+}
+.pkir-tabs [role="tab"].on { color: var(--text); border-color: var(--border-strong); background: var(--bg); }
+.pkir-tabs .grow { flex: 1; }
+.pkir-picker { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; font-size: 12px; }
+.pkir-picker select { background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 6px; font: inherit; }
+.pkir-body { display: flex; flex-direction: column; gap: 12px; }
+.pkir-pad { padding: 4px 2px; margin: 0; }
+.pkir-split { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(360px, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 1100px) { .pkir-split { grid-template-columns: 1fr; } }
+.pkir-table-wrap { overflow: auto; min-width: 0; }
+.pkir-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.pkir-table th { text-align: left; font-weight: 500; color: var(--text-dim); border-bottom: 1px solid var(--border); padding: 4px 6px; white-space: nowrap; }
+.pkir-table td { border-bottom: 1px solid var(--border); padding: 4px 6px; white-space: nowrap; }
+.pkir-table tbody tr { cursor: pointer; }
+.pkir-table tbody tr:hover { background: var(--bg-raised); }
+.pkir-table tr.sel { background: var(--accent-dim); }
+.pkir-table tr.sub td { color: var(--text-dim); }
+.pkir-table.compact td { padding: 2px 6px; }
+.pkir-table .bad, .pkir-card .bad { color: var(--err); }
+.pkir-card .ok { color: var(--ok); }
+.mono { font-family: var(--mono); }
+.pkir-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.pkir-state { padding: 1px 6px; border-radius: 9px; border: 1px solid var(--border); font-size: 11px; }
+.pkir-state.healthy { color: var(--ok); border-color: var(--ok); }
+.pkir-state.topup-due, .pkir-state.crl-overdue { color: var(--warn); border-color: var(--warn); }
+.pkir-state.starving, .pkir-state.revoked, .pkir-state.untrusted { color: var(--err); border-color: var(--err); }
+.pkir-card {
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel);
+  padding: 10px 12px; min-width: 0; overflow: auto;
+}
+.pkir-card h3 { margin: 0 0 6px; font-size: 13px; }
+.pkir-card h4 { margin: 12px 0 4px; font-size: 12px; font-weight: 600; }
+.pkir-facts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+.pkir-facts b { color: var(--text); font-weight: 500; }
+.pkir-grid svg { display: block; max-width: 100%; overflow: visible; }
+.pkir-grid .cell { fill: var(--bg-raised); }
+.pkir-grid .cell.active { fill: var(--accent); }
+.pkir-grid .cell.valid { fill: var(--ok); }
+.pkir-grid .cell.downloaded { fill: var(--ok); opacity: 0.45; }
+.pkir-grid .cell.expired { fill: var(--text-faint); }
+.pkir-grid .cell.revoked { fill: var(--err); }
+.pkir-grid .cell.used { stroke: var(--text); stroke-width: 0.6; }
+.pkir-grid .cell.gt-revoked { stroke: var(--err); stroke-width: 1.2; }
+.pkir-grid .now { stroke: var(--warn); stroke-width: 1; }
+.pkir-grid .axis { font-size: 9px; fill: var(--text-faint); font-family: var(--mono); }
+.pkir-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+.pkir-legend i { display: inline-block; width: 9px; height: 9px; margin-right: 4px; vertical-align: -1px; background: var(--bg-raised); }
+.pkir-legend i.active { background: var(--accent); }
+.pkir-legend i.valid { background: var(--ok); }
+.pkir-legend i.downloaded { background: var(--ok); opacity: 0.45; }
+.pkir-legend i.expired { background: var(--text-faint); }
+.pkir-legend i.revoked { background: var(--err); }
+.pkir-legend i.gt-revoked { outline: 1.5px solid var(--err); }
+.pkir-hover { font-size: 11px; min-height: 15px; margin-top: 2px; }
+.pkir-history { margin: 0; padding-left: 20px; font-size: 12px; }
+.pkir-trace { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.pkir-trace li.pass b { color: var(--ok); }
+.pkir-trace li.fail b { color: var(--err); }
+.pkir-pre { font-family: var(--mono); font-size: 11px; max-height: 260px; overflow: auto; background: var(--bg); padding: 6px; border-radius: var(--radius); }
+.pkir-link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }
+.pkir-board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(150px, 1fr); gap: 8px; overflow-x: auto; }
+.pkir-col { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); padding: 6px; min-height: 120px; display: flex; flex-direction: column; gap: 6px; }
+.pkir-col-head { font-size: 12px; font-weight: 600; color: var(--text-dim); }
+.pkir-case { text-align: left; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); padding: 6px; font: inherit; font-size: 11px; cursor: pointer; }
+.pkir-case.sel { border-color: var(--accent); }
+.pkir-learned { margin: 0; padding-left: 18px; font-size: 12px; }
+.pkir-map-legend {
+  position: absolute; left: 12px; bottom: 64px; z-index: 5; display: flex; flex-wrap: wrap; align-items: center;
+  gap: 4px 12px; max-width: 560px; padding: 6px 10px; font-size: 11px; color: var(--text);
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop);
+}
+.pkir-map-legend i { display: inline-block; width: 9px; height: 9px; border: 2px solid; border-radius: 50%; margin-right: 4px; vertical-align: -2px; }
+.pkir-map-legend i.double { outline: 2px solid; outline-offset: 1px; outline-color: inherit; }

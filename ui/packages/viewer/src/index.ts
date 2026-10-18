@@ -43,10 +43,10 @@ export type { CameraControllerOptions, CameraState, CameraMode, InputTarget } fr
 
 export {
   OverlayManager, TxPulseOverlay, LinkOverlay, HeatmapOverlay, CoverageOverlay, StateMarkerOverlay,
-  ActorLocatorOverlay, GROUND_TRUTH_OVERLAYS, isGroundTruthOverlay, overlayLabel, VRU_MARK_SCALE,
+  ActorLocatorOverlay, ActorTagOverlay, GROUND_TRUTH_OVERLAYS, isGroundTruthOverlay, overlayLabel, VRU_MARK_SCALE,
 } from "./overlays.js";
 export type {
-  OverlayManagerOptions, OverlayEntry, OverlayUpdateContext, MarkerChannel,
+  OverlayManagerOptions, OverlayEntry, OverlayUpdateContext, MarkerChannel, ActorTag,
 } from "./overlays.js";
 
 export { Picker } from "./picking.js";

@@ -37,6 +37,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ComparePane } from "./components/ComparePane.js";
 import { Inspector } from "./components/Inspector.js";
+import { PkiMapOverlay } from "./components/pki-records/PkiMapOverlay.js";
 import { SourceNote } from "./components/SourceNote.js";
 import { StatusBanner } from "./components/Status.js";
 import { TimeControls } from "./components/TimeControls.js";
@@ -208,6 +209,7 @@ export function App(): React.JSX.Element {
             </div>
             {inspectorOpen ? <Inspector onClose={() => setInspectorOpen(false)} /> : null}
             <SourceNote />
+            <PkiMapOverlay />
             {sheet !== null ? <Sheet key={sheet.id} spec={sheet} close={closePanel} retarget={reconnect} /> : null}
             {picking !== null ? (
               <div className="pick-banner" role="status" data-testid="map-pick-banner">

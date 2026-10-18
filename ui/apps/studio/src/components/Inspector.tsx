@@ -34,7 +34,9 @@ import { engine } from "../state/engine.js";
 import { useStudio, type InspectorTab } from "../state/store.js";
 import { int, radioBreakdown, radioSentence, shortDigest, simClock } from "../lib/format.js";
 import { SPARKLINE_SERIES, hasData, hudGroups, queueRows, type HudField } from "../lib/telemetry.js";
-import { linkText, pseudonymLine, untilText } from "../lib/security.js";
+import { hasPkiPool, linkText, pseudonymLine, untilText } from "../lib/security.js";
+import { openVehicle } from "./pki-records/state.js";
+import { openPanel } from "../shell/route.js";
 import { vehicleHealth } from "../lib/vehicleHealth.js";
 
 import "../styles/vehicle.css";
@@ -279,6 +281,21 @@ function Overview(): React.JSX.Element {
           security === null ? field("cert_active") : null,
           security === null ? field("cert_stored") : null,
           security === null ? field("crl_entries") : null,
+          hasPkiPool(security) ? (
+            <button
+              key="pki"
+              type="button"
+              className="pkir-link"
+              onClick={() => {
+                openVehicle(node);
+                openPanel("backend");
+              }}
+              data-testid="inspector-pki-pool"
+              title="Its i × j certificate pool, pseudonym history and the active certificate's validation, in the PKI view"
+            >
+              Certificate pool in the PKI view ›
+            </button>
+          ) : null,
         ]}
       </Section>
 

@@ -909,6 +909,135 @@ export class StateMarkerOverlay {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Actor tags — a coloured ring per actor the host names (the PKI view's map overlays)
+// ---------------------------------------------------------------------------------------------
+
+/** One tagged actor: the ring's colour (0xRRGGBB) and whether it is drawn as a double ring. */
+export interface ActorTag {
+  readonly color: number;
+  /** A second, outer ring: a party that matters more (the accused of a case). */
+  readonly emphasis?: boolean;
+}
+
+/**
+ * A flat ring on the ground around every actor the host tags, coloured per actor.
+ *
+ * The engine's state bits (attacker, reported, revoked) are what {@link StateMarkerOverlay} draws;
+ * this is for what only the host knows: the Studio's PKI view colours vehicles by provider, by
+ * credential state, or marks a case's reporters and accused. The ring is the same angular size
+ * rule as {@link ActorLocatorOverlay}, just wider, so it surrounds the locator dot at map altitude
+ * and the car at street level, and it is flat so a top-down map reads it as a halo.
+ */
+export class ActorTagOverlay {
+  readonly group = new Group();
+  readonly capacity: number;
+  /** Ring radius as a multiple of the locator's angular radius. */
+  angularScale = 2.1;
+  /** Smallest ring radius, metres. */
+  minRadiusM = 3.2;
+
+  #inner: InstancedMesh<BufferGeometry, MeshBasicMaterial>;
+  #outer: InstancedMesh<BufferGeometry, MeshBasicMaterial>;
+  #tags: ReadonlyMap<number, ActorTag> | null = null;
+  #matrix = new Matrix4();
+  #color = new Color();
+  #ranges = makeRanges(4);
+
+  constructor(capacity = 4096) {
+    this.capacity = Math.max(16, capacity);
+    this.group.name = "overlay/actor-tags";
+    const make = (inner: number, name: string): InstancedMesh<BufferGeometry, MeshBasicMaterial> => {
+      const m = new MeshBasicMaterial({
+        name, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false,
+        side: DoubleSide, toneMapped: false,
+      });
+      const mesh = new InstancedMesh<BufferGeometry, MeshBasicMaterial>(ringGeometry(inner, 40), m, this.capacity);
+      mesh.name = `overlay/${name}`;
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 12;
+      mesh.count = 0;
+      mesh.visible = false;
+      mesh.setColorAt(0, this.#color.setHex(0xffffff));
+      this.group.add(mesh);
+      return mesh;
+    };
+    this.#inner = make(0.72, "tag-ring");
+    this.#outer = make(0.86, "tag-ring-outer");
+  }
+
+  /** The tagged actors by `actor_id`; `null` or empty hides the overlay. */
+  setTags(tags: ReadonlyMap<number, ActorTag> | null): void {
+    this.#tags = tags && tags.size > 0 ? tags : null;
+    if (!this.#tags) {
+      this.#inner.count = 0;
+      this.#outer.count = 0;
+      this.#inner.visible = false;
+      this.#outer.visible = false;
+    }
+  }
+
+  /** How many actors carry a tag (not how many are on screen). */
+  get tagCount(): number {
+    return this.#tags?.size ?? 0;
+  }
+
+  /** How many rings the last frame drew. */
+  get drawnCount(): number {
+    return this.#inner.count;
+  }
+
+  update(ctx: OverlayUpdateContext): void {
+    const tags = this.#tags;
+    const ids = ctx.actorId;
+    if (!tags || !ids) return;
+    const e = ctx.camera.matrixWorld.elements;
+    const camX = e[12], camY = e[13], camZ = e[14];
+    const me = this.#matrix.elements;
+    let n = 0;
+    let k = 0;
+    for (let v = 0; v < ctx.visibleCount; v++) {
+      const slot = ctx.visibleSlots[v];
+      const tag = tags.get(ids[slot]);
+      if (!tag || n >= this.capacity) continue;
+      const p = slot * 3;
+      const x = ctx.position[p], y = ctx.position[p + 1], z = ctx.position[p + 2];
+      const dx = x - camX, dy = y - camY, dz = z - camZ;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const r = Math.max(this.minRadiusM, dist * VEHICLE_MARK_ANGULAR_RADIUS * this.angularScale);
+      this.#matrix.identity();
+      me[0] = r; me[5] = r; me[10] = 1;
+      me[12] = x; me[13] = y; me[14] = z + 0.35;
+      this.#inner.setMatrixAt(n, this.#matrix);
+      this.#inner.setColorAt(n, this.#color.setHex(tag.color));
+      n++;
+      if (tag.emphasis) {
+        me[0] = r * 1.45; me[5] = r * 1.45;
+        this.#outer.setMatrixAt(k, this.#matrix);
+        this.#outer.setColorAt(k, this.#color.setHex(tag.color));
+        k++;
+      }
+    }
+    for (const [mesh, count, ri] of [[this.#inner, n, 0], [this.#outer, k, 2]] as const) {
+      mesh.count = count;
+      mesh.visible = count > 0;
+      if (count > 0) {
+        publishRange(mesh.instanceMatrix, count * 16, this.#ranges[ri]);
+        if (mesh.instanceColor) publishRange(mesh.instanceColor, count * 3, this.#ranges[ri + 1]);
+      }
+    }
+  }
+
+  dispose(): void {
+    for (const mesh of [this.#inner, this.#outer]) {
+      mesh.geometry.dispose();
+      mesh.material.dispose();
+      mesh.dispose();
+    }
+    this.group.removeFromParent();
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Actor locators — the aerial vehicle mark
 // ---------------------------------------------------------------------------------------------
 
@@ -1464,6 +1593,8 @@ export class OverlayManager {
   readonly markers: StateMarkerOverlay;
   /** Locator beacons; see {@link ActorLocatorOverlay}. Not a catalogue entry — it is always on. */
   readonly locators: ActorLocatorOverlay;
+  /** Host-tagged rings; see {@link ActorTagOverlay}. Not a catalogue entry: on while tags are set. */
+  readonly tags: ActorTagOverlay;
 
   #theme: ViewerTheme;
   #world: WorldRenderer | null;
@@ -1485,9 +1616,10 @@ export class OverlayManager {
     this.markers = new StateMarkerOverlay(this.#theme, options.markerCapacity ?? 4096);
     this.locators = new ActorLocatorOverlay(
       this.#theme, options.locatorCapacity ?? 256, options.locatorMaxCapacity ?? 20_000);
+    this.tags = new ActorTagOverlay(options.markerCapacity ?? 4096);
 
     this.group.add(this.heatmap.object, this.coverage.object, this.links.object,
-      this.pulses.object, this.markers.group, this.locators.group);
+      this.pulses.object, this.markers.group, this.locators.group, this.tags.group);
 
     for (const name of OVERLAY_NAMES) {
       this.#enabled.set(name, false);
@@ -1640,6 +1772,12 @@ export class OverlayManager {
     this.pulses.update(ctx.timeSeconds);
     if (this.markers.group.visible) this.markers.update(ctx, defaultMarkerPredicate);
     this.locators.update(ctx);
+    this.tags.update(ctx);
+  }
+
+  /** Tag actors by `actor_id` with a coloured ring (the Studio's PKI overlays); `null` clears. */
+  setActorTags(tags: ReadonlyMap<number, ActorTag> | null): void {
+    this.tags.setTags(tags);
   }
 
   dispose(): void {
@@ -1649,6 +1787,7 @@ export class OverlayManager {
     this.coverage.dispose();
     this.markers.dispose();
     this.locators.dispose();
+    this.tags.dispose();
     this.group.removeFromParent();
   }
 }

@@ -1038,6 +1038,29 @@ export interface RpcDiscoverResult {
 // §6.15 — the method inventory: 31 methods + rpc.discover = 32
 // ---------------------------------------------------------------------------
 
+/**
+ * `inspect.pki` params (WP-E3): the PKI view's Vehicles, Cases and Revocation-lists tabs.
+ * `view` is `ground-truth` (the default), a vehicle (`ee/<n>`) or a component
+ * (`provider/role/n`); outside ground truth no answer names a device it cannot know.
+ */
+export interface InspectPkiParams {
+  topic: "vehicles" | "vehicle" | "cases" | "crls" | "crl";
+  /** `vehicle`: `ee/<n>` or the node id. */
+  device?: string;
+  /** `crl`: the CRL's HashedId8, hex. */
+  hashedid8?: string;
+  view?: string;
+}
+/** `inspect.pki` result: the topic's answer (`v2xw_server::pki`); the Studio narrows it. */
+export type InspectPkiResult = Record<string, unknown>;
+/** `inspect.cert` params (WP-E1): one certificate by HashedId8, validated at `t_ns`. */
+export interface InspectCertParams {
+  hashedid8: string;
+  t_ns?: SimTimeNs;
+}
+/** `inspect.cert` result: the decode, the chain and the device's validation trace. */
+export type InspectCertResult = Record<string, unknown>;
+
 /** §6.15 — every method, with its params and result type. */
 export interface VwpMethods {
   "run.start": { params: RunStartParams; result: RunStartResult };
@@ -1054,7 +1077,9 @@ export interface VwpMethods {
   "inspect.node": { params: InspectNodeParams; result: InspectNodeResult };
   "inspect.link": { params: InspectLinkParams; result: InspectLinkResult };
   "inspect.entity": { params: InspectEntityParams; result: InspectEntityResult };
-  explain: { params: ExplainParams; result: ExplainResult };
+  "inspect.cert": { params: InspectCertParams; result: InspectCertResult };
+  "inspect.pki": { params: InspectPkiParams; result: InspectPkiResult };
+  explain:{ params: ExplainParams; result: ExplainResult };
   "scenario.get": { params: ScenarioGetParams; result: ScenarioGetResult };
   "scenario.set": { params: ScenarioSetParams; result: ScenarioSetResult };
   "scenario.validate": { params: ScenarioValidateParams; result: ScenarioValidateResult };
