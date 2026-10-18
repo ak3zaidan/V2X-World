@@ -1440,7 +1440,10 @@ impl ObuRuntime {
             return;
         };
         if frame.full_certificate {
-            self.stores.peers.learn(&signer);
+            // An evicted certificate takes its validated state with it (crate::rxval).
+            if let Some(gone) = self.stores.peers.learn(&signer) {
+                self.security.trust_mut().forget(gone);
+            }
         } else if !self.stores.peers.touch(&signer) {
             self.stores.peers.record_p2pcd_request();
         }
@@ -1691,7 +1694,11 @@ impl ObuRuntime {
         };
         let certificate = match NodeSecurity::attached_certificate(&parsed) {
             Some(c) => {
-                self.stores.peers.learn_certificate(c.clone());
+                // The certificate the peer cache evicts takes its validated state
+                // with it (crate::rxval, the end-entity cache).
+                if let Some(gone) = self.stores.peers.learn_certificate(c.clone()) {
+                    self.security.trust_mut().forget(gone);
+                }
                 Some(c)
             }
             None => NodeSecurity::parsed_signer_digest(&parsed)

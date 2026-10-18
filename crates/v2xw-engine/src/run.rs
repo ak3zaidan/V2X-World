@@ -405,6 +405,13 @@ pub struct ReceiverValidationReport {
     pub ca_validations: u64,
     /// End-entity certificates validated.
     pub ee_validations: u64,
+    /// SPDUs whose signer was already validated (signature only).
+    pub ee_hits: u64,
+    /// Validated end-entity certificates evicted (capacity, or the peer cache dropped
+    /// the certificate).
+    pub ee_evictions: u64,
+    /// Cached validations a freshly installed CRL invalidated.
+    pub invalidated: u64,
     /// Chain findings tolerated as the published US RA profile.
     pub tolerated: u64,
     /// Signers with an identified region no location could be placed in.
@@ -433,6 +440,9 @@ impl ReceiverValidationReport {
         }
         self.ca_validations += s.ca_validations;
         self.ee_validations += s.ee_validations;
+        self.ee_hits += s.ee_hits;
+        self.ee_evictions += s.ee_evictions;
+        self.invalidated += s.invalidated;
         self.tolerated += s.tolerated;
         self.region_unchecked += s.region_unchecked;
         self.crls_accepted += s.crls_accepted;
