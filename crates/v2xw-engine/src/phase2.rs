@@ -969,6 +969,9 @@ struct Case {
     entry: Option<(CrlLinkageEntry, u32)>,
     stamps_emitted: BTreeSet<(u8, SimTime)>,
     enforced_first: Option<SimTime>,
+    /// Every vehicle that has installed the entry, in install order, with the instant
+    /// (the PKI view's per-vehicle `enforced` stamps).
+    enforcers: Vec<(NodeId, SimTime)>,
 }
 
 /// An ETSI decision carried out as the EA's blocklist.
@@ -3616,6 +3619,9 @@ impl Phase2 {
         // leg from the city to that provider's region.
         let kr = self.provider_of_device(device_of(reporter));
         let arrive_at = arrive_at.saturating_add(self.internet_legs[kr].as_nanos());
+        // Why the report travels on the modelled path, when it does (the PKI view's case
+        // evidence names it with the detector's checks).
+        let mut modelled: Option<String> = None;
         let run = match self.real_mbr(&report, location) {
             MbrBuild::Real(mbr) => {
                 match self.runs[kr].secure_mbr(device_of(reporter), &mbr, sent_at) {
@@ -3634,32 +3640,44 @@ impl Phase2 {
                     }
                     Err(e) => {
                         self.note_unsecured(&e.to_string());
+                        modelled = Some(format!("the report could not be secured: {e}"));
                         None
                     }
                 }
             }
             MbrBuild::Unmapped => {
                 self.report.reports_mbr_unmapped += 1;
+                modelled = Some("no SM-MBR v1.1 subtype maps the detector checks".to_string());
                 None
             }
             MbrBuild::Unsecured(why) => {
                 self.note_unsecured(why);
+                modelled = Some(why.to_string());
                 None
             }
-            MbrBuild::Off => None,
+            MbrBuild::Off => {
+                modelled = Some("real reports are off (no SCMS PDU layer)".to_string());
+                None
+            }
         };
-        let run = run.unwrap_or_else(|| {
-            self.runs[kr].report_at_proxy(
-                device_of(reporter),
-                i,
-                lv,
-                detected_at,
-                sent_at,
-                arrive_at,
-                transport,
-                report_bytes(),
-            )
-        });
+        let run = match run {
+            Some(run) => run,
+            None => {
+                let run = self.runs[kr].report_at_proxy(
+                    device_of(reporter),
+                    i,
+                    lv,
+                    detected_at,
+                    sent_at,
+                    arrive_at,
+                    transport,
+                    report_bytes(),
+                );
+                let why = modelled.as_deref().unwrap_or("modelled");
+                self.runs[kr].modelled_report_evidence(run, why, &report.reason_codes);
+                run
+            }
+        };
         self.in_flight
             .insert((kr, run), InFlightReport { report, subject });
     }
@@ -3781,6 +3799,7 @@ impl Phase2 {
                         entry: None,
                         stamps_emitted: BTreeSet::new(),
                         enforced_first: None,
+                        enforcers: Vec::new(),
                     });
                 }
             }
@@ -4225,18 +4244,24 @@ impl Phase2 {
             }
         }
         let vehicles = u32::try_from(self.nodes.len()).unwrap_or(u32::MAX);
-        let enforced = |k: usize, c: &v2xw_proto::scms::run::Case| -> Option<(u32, u32)> {
+        let enforced = |k: usize,
+                        c: &v2xw_proto::scms::run::Case|
+         -> Option<(Vec<pki_view::Enforcer>, u32)> {
             let ours = self
                 .cases
                 .iter()
                 .find(|e| e.provider == k && e.runs.is_some_and(|(r, _)| r == c.run))?;
-            let (entry, _) = ours.entry.as_ref()?;
-            let n = self
-                .nodes
-                .values()
-                .filter(|n| n.crl_installed.contains(entry))
-                .count();
-            Some((u32::try_from(n).unwrap_or(u32::MAX), vehicles))
+            ours.entry.as_ref()?;
+            let list = ours
+                .enforcers
+                .iter()
+                .map(|&(node, at)| pki_view::Enforcer {
+                    node,
+                    device: device_of(node),
+                    at,
+                })
+                .collect();
+            Some((list, vehicles))
         };
         tick.pki.cases = pki_view::drain_cases(&self.runs, &mut tracker, now, &enforced);
         if self.views % KNOWLEDGE_EVERY == 0 {
@@ -4586,18 +4611,25 @@ impl Phase2 {
                 }
                 // The report as this MA holds it: its real length when it was a real
                 // report, re-encrypted to the accused's provider's MA.
-                let bytes = self.runs[k]
+                let held = self.runs[k]
                     .state
                     .ma
                     .reports
                     .iter()
-                    .rev()
-                    .find(|r| r.subject_lv == lv)
-                    .and_then(|r| r.secured.as_ref().map(|x| x.report.len()))
+                    .rposition(|r| r.subject_lv == lv);
+                let ma_k = &self.runs[k].state.ma;
+                let bytes = held
+                    .and_then(|x| ma_k.reports[x].secured.as_ref().map(|s| s.report.len()))
                     .map_or(report_bytes(), |n| u32::try_from(n).unwrap_or(u32::MAX));
+                // What this MA read from the report travels with it (the PKI view's case
+                // evidence on the deciding provider's side).
+                let evidence = held.and_then(|x| ma_k.report_evidence.get(x).cloned().flatten());
                 let from = self.runs[k].state.nodes.ma;
                 let observed = f.report.detection_time;
                 let run = self.runs[ks].shared_report_at_ma(from, i, lv, observed, s.t, bytes);
+                if let Some(e) = evidence {
+                    self.runs[ks].shared_report_evidence(run, e);
+                }
                 self.runs[k].state.shared.forwarded += 1;
                 // The report's history before the sharing leg (detection, upload, the
                 // RA's shuffle) carries over to the deciding provider's log, so its
@@ -5276,6 +5308,7 @@ impl Phase2 {
             if case.enforced_first.is_none() {
                 case.enforced_first = Some(now);
             }
+            case.enforcers.push((node, now));
         }
         self.finish_first_revocation(now);
         (fresh, records)

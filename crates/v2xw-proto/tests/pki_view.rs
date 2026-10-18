@@ -416,7 +416,14 @@ fn a_case_walks_the_board_in_order() {
     let run = revoked();
     let runs = std::slice::from_ref(&run);
     let mut tracker = PkiTracker::default();
-    let cases = pki_view::drain_cases(runs, &mut tracker, now(&run), &|_, _| Some((1, 2)));
+    let t = now(&run);
+    let vehicle = |n: u32, dt: u64| pki_view::Enforcer {
+        node: v2xw_core::ids::NodeId::new(n),
+        device: v2xw_core::ids::NodeId::new(100 + n),
+        at: t + dt,
+    };
+    let one = vec![vehicle(1, 0)];
+    let cases = pki_view::drain_cases(runs, &mut tracker, t, &|_, _| Some((one.clone(), 5)));
     let stages: Vec<&str> = cases.iter().map(|c| c.stage.as_str()).collect();
     assert_eq!(stages, pki_view::CASE_STAGES.to_vec(), "{stages:?}");
     assert!(
@@ -432,7 +439,31 @@ fn a_case_walks_the_board_in_order() {
     for i in [cases[0].instance.as_str(), crl] {
         assert!(flows.iter().any(|f| f.instance == i), "no flow is {i}");
     }
-    assert!(pki_view::drain_cases(runs, &mut tracker, now(&run), &|_, _| Some((1, 2))).is_empty());
+    // The reports the case was opened on are named with their evidence; these two came
+    // on the modelled path (no secured report), so their type is null.
+    let evidence = cases[0].detail["evidence"].as_array().expect("evidence");
+    assert_eq!(
+        evidence.iter().map(|e| e["report"].as_u64()).collect::<Vec<_>>(),
+        vec![Some(0), Some(1)]
+    );
+    assert!(evidence.iter().all(|e| e["type"].is_null()));
+    let enforced = cases.last().expect("enforced");
+    assert_eq!(enforced.detail["installed"], 1);
+    assert_eq!(enforced.detail["of"], 5);
+    assert_eq!(enforced.detail["device"], "ee/101");
+    // Two more vehicles install the entry: each is stamped at its own instant, with the
+    // running count, so "n of N" keeps counting (it froze at the first install before).
+    let three = vec![vehicle(1, 0), vehicle(2, 7), vehicle(3, 9)];
+    let more = pki_view::drain_cases(runs, &mut tracker, t + 10, &|_, _| Some((three.clone(), 5)));
+    assert_eq!(
+        more.iter()
+            .map(|c| (c.stage.as_str(), c.t, c.detail["installed"].as_u64(), c.detail["node"].as_u64()))
+            .collect::<Vec<_>>(),
+        vec![("enforced", t + 7, Some(2), Some(2)), ("enforced", t + 9, Some(3), Some(3))]
+    );
+    assert!(
+        pki_view::drain_cases(runs, &mut tracker, t + 20, &|_, _| Some((three.clone(), 5))).is_empty()
+    );
 }
 
 #[test]

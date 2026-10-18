@@ -229,6 +229,22 @@ pub enum MbrType {
 }
 
 impl MbrType {
+    /// The type number (`Psid20MbrType`).
+    #[must_use]
+    pub fn number(self) -> u8 {
+        self as u8
+    }
+
+    /// The module's name for the type, without the `psid20MbrType` prefix.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            MbrType::OneVInconsistent => "1VInconsistent",
+            MbrType::Implausible => "Implausible",
+            MbrType::ObsImplausible => "ObsImplausible",
+        }
+    }
+
     fn from_u8(v: u8) -> Option<MbrType> {
         match v {
             1 => Some(MbrType::OneVInconsistent),
@@ -291,6 +307,19 @@ impl Subtype {
             Subtype::ConstantPosition | Subtype::MaxSpeed { .. } | Subtype::ObsDistance { .. } => 1,
             Subtype::RandomPosition { .. } | Subtype::MaxAcceleration { .. } => 2,
             Subtype::BrakeAcceleration => 3,
+        }
+    }
+
+    /// The subtype's name, as the module's table names it (this file's header).
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Subtype::ConstantPosition => "ConstantPosition",
+            Subtype::RandomPosition { .. } => "RandomPosition",
+            Subtype::MaxSpeed { .. } => "MaxSpeed",
+            Subtype::MaxAcceleration { .. } => "MaxAcceleration",
+            Subtype::BrakeAcceleration => "BrakeAcceleration",
+            Subtype::ObsDistance { .. } => "Distance",
         }
     }
 

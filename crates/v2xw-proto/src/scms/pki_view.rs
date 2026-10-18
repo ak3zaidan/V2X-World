@@ -267,6 +267,8 @@ pub struct PkiTracker {
     crls: BTreeSet<String>,
     /// Case stages already published: `(provider, case run, stage)`.
     case_stages: BTreeSet<(usize, u32, &'static str)>,
+    /// Per case `(provider, case run)`: how many enforcing vehicles are already stamped.
+    case_enforcers: BTreeMap<(usize, u32), usize>,
     /// Per device: the digest of its last `node.credentials`, and every pseudonym it has
     /// used (the history).
     creds: BTreeMap<u32, (u64, BTreeSet<[u8; 8]>)>,
@@ -978,16 +980,57 @@ fn stage_at(run: &ScmsRun, r: crate::stage::FlowRun, s: crate::stage::StageId) -
     run.kernel.stages.at(r, s)
 }
 
+/// One vehicle enforcing a case's CRL entry: it installed a list carrying the entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Enforcer {
+    /// The engine node.
+    pub node: NodeId,
+    /// Its SCMS device (`ee/<index>`).
+    pub device: NodeId,
+    /// When it installed the entry.
+    pub at: SimTime,
+}
+
+/// A case's evidence for the `reports-in` stage: per report the case was opened on, its
+/// index at the MA and the type, subtypes and verification the MA read from it ([SM-MBR]
+/// §2.3), `shared` when it came from another provider's MA (which verified it). A report
+/// on the modelled path (no secured report) has a null type, with `modelled` saying why
+/// and `checks` the detector checks that fired; one the MA knows nothing of has all null.
+fn case_evidence(ma: &crate::scms::run::MaState, c: &crate::scms::run::Case) -> Vec<Value> {
+    c.reports
+        .iter()
+        .map(|&i| match ma.report_evidence.get(i).and_then(Option::as_ref) {
+            Some(e) => json!({
+                "report": i,
+                "type": e.mbr_type,
+                "type_name": e.type_name,
+                "subtypes": e.subtypes.iter()
+                    .map(|(n, name)| json!({"subtype": n, "name": name}))
+                    .collect::<Vec<_>>(),
+                "verified": e.verified,
+                "shared": e.shared,
+                "modelled": e.modelled,
+                "checks": e.checks,
+            }),
+            None => json!({"report": i, "type": null, "type_name": null, "subtypes": [],
+                           "verified": null, "shared": null, "modelled": null, "checks": []}),
+        })
+        .collect()
+}
+
 /// Every case stage each run reached since the last call. `enforced` comes from the
-/// caller (`enforced(provider, case_run)` → `(installed, of)`), because enforcement is a
-/// vehicle-side fact the backend run does not hold.
+/// caller (`enforced(provider, case)` → every vehicle that has installed the case's entry,
+/// in install order, and how many vehicles there are), because enforcement is a
+/// vehicle-side fact the backend run does not hold. `enforced` is stamped once per
+/// enforcing vehicle, at its install instant, with the running count, so "n of N" keeps
+/// counting after the first install.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn drain_cases(
     runs: &[ScmsRun],
     tracker: &mut PkiTracker,
     now: SimTime,
-    enforced: &dyn Fn(usize, &crate::scms::run::Case) -> Option<(u32, u32)>,
+    enforced: &dyn Fn(usize, &crate::scms::run::Case) -> Option<(Vec<Enforcer>, u32)>,
 ) -> Vec<PkiCase> {
     use crate::stage::StageId as S;
     let mut out = Vec::new();
@@ -1027,7 +1070,7 @@ pub fn drain_cases(
                 tracker,
                 "reports-in",
                 received.or(decision),
-                json!({"subjects": subjects, "direct": c.direct}),
+                json!({"subjects": subjects, "direct": c.direct, "evidence": case_evidence(ma, c)}),
             );
             push(
                 tracker,
@@ -1081,15 +1124,26 @@ pub fn drain_cases(
             }
             if c.resolved
                 && published.is_some()
-                && let Some((n, of)) = enforced(k, c)
-                && n > 0
+                && let Some((nodes, of)) = enforced(k, c)
             {
-                push(
-                    tracker,
-                    "enforced",
-                    Some(now),
-                    json!({"installed": n, "of": of}),
-                );
+                let stamped = tracker.case_enforcers.entry((k, r.0)).or_insert(0);
+                for (m, e) in nodes.iter().enumerate().skip(*stamped) {
+                    out.push(PkiCase {
+                        schema: PKI_VIEW_SCHEMA,
+                        case: case.clone(),
+                        provider: label.clone(),
+                        stage: "enforced".to_string(),
+                        t: e.at,
+                        instance: instance.clone(),
+                        detail: json!({
+                            "node": e.node.index(),
+                            "device": format!("ee/{}", e.device.index()),
+                            "installed": m + 1,
+                            "of": of,
+                        }),
+                    });
+                }
+                *stamped = (*stamped).max(nodes.len());
             }
         }
     }

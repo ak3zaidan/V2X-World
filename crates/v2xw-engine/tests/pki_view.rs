@@ -312,8 +312,11 @@ fn cases_walk_the_board_and_a_published_crl_revokes_the_accused() {
             .iter()
             .filter_map(|c| order(c["stage"].as_str().expect("stage")))
             .collect();
+        // Strictly forward, except `enforced`, which repeats once per enforcing vehicle.
+        let enforced = order("enforced");
         assert!(
-            pos.windows(2).all(|w| w[0] < w[1]),
+            pos.windows(2)
+                .all(|w| w[0] < w[1] || (w[0] == w[1] && Some(w[0]) == enforced)),
             "{id} out of order: {stages:?}"
         );
         published += usize::from(stages.iter().any(|c| c["stage"] == "crl-published"));
@@ -340,6 +343,85 @@ fn cases_walk_the_board_and_a_published_crl_revokes_the_accused() {
         accused.len(),
         vehicles.len()
     );
+}
+
+/// E3 follow-ups. `enforced` is stamped once per vehicle that installs the case's entry, at
+/// its install instant, with the running count, so "n of N" keeps counting (it was stamped
+/// once and froze at the first count). And `reports-in` names the evidence type and
+/// subtypes the MA decoded from each report the case was opened on ([SM-MBR] §2.3).
+#[test]
+fn enforcement_is_stamped_per_vehicle_and_cases_name_their_evidence() {
+    let cases = of("pki.case");
+    let mut by_case: BTreeMap<&str, Vec<&Value>> = BTreeMap::new();
+    for c in &cases {
+        by_case.entry(c["case"].as_str().expect("case")).or_default().push(c);
+    }
+    let mut most = 0;
+    let (mut real, mut modelled, mut shared) = (0, 0, 0);
+    for (id, stages) in &by_case {
+        let reports_in = stages
+            .iter()
+            .find(|c| c["stage"] == "reports-in")
+            .unwrap_or_else(|| panic!("{id} has no reports-in"));
+        let evidence = reports_in["detail"]["evidence"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{id}: no evidence list"));
+        let direct = reports_in["detail"]["direct"].as_bool().expect("direct");
+        assert_eq!(evidence.len(), if direct { 1 } else { 2 }, "{id}: one entry per report");
+        for e in evidence {
+            // A report on the modelled path says why, and which detector checks fired.
+            let Some(t) = e["type"].as_u64() else {
+                let why = e["modelled"].as_str().unwrap_or_else(|| panic!("{id}: unexplained {e}"));
+                assert!(!why.is_empty(), "{id}: {e}");
+                assert!(
+                    e["checks"].as_array().is_some_and(|c| !c.is_empty()),
+                    "{id}: a modelled report names its checks: {e}"
+                );
+                modelled += 1;
+                continue;
+            };
+            real += 1;
+            shared += usize::from(e["shared"] == true);
+            // A real report: the type is the module's number and name.
+            let name = e["type_name"].as_str().expect("type name");
+            assert_eq!(
+                (t, name),
+                match t {
+                    1 => (1, "1VInconsistent"),
+                    2 => (2, "Implausible"),
+                    3 => (3, "ObsImplausible"),
+                    _ => panic!("{id}: type {t} is not in Psid20MbrType"),
+                },
+            );
+            let subtypes = e["subtypes"].as_array().expect("subtypes");
+            assert!(!subtypes.is_empty(), "{id}: a report has at least one subtype");
+            assert!(e["verified"].is_boolean(), "{id}: {e}");
+        }
+        let enforced: Vec<&&Value> = stages.iter().filter(|c| c["stage"] == "enforced").collect();
+        let mut devices = BTreeSet::new();
+        for (k, c) in enforced.iter().enumerate() {
+            let d = &c["detail"];
+            assert_eq!(d["installed"].as_u64(), Some(k as u64 + 1), "{id}: running count");
+            assert!(
+                devices.insert(d["device"].as_str().expect("device").to_string()),
+                "{id}: a vehicle is stamped twice"
+            );
+            assert!(d["installed"].as_u64() <= d["of"].as_u64(), "{id}: {d}");
+        }
+        assert!(
+            enforced.windows(2).all(|w| w[0]["t"].as_u64() <= w[1]["t"].as_u64()),
+            "{id}: install instants go forward"
+        );
+        most = most.max(enforced.len());
+    }
+    assert!(
+        most > 1,
+        "no case counted past its first enforcing vehicle (the frozen 'n of N'): {most}"
+    );
+    // Real cryptography: real SM-MBR reports reach the MA, some of them shared by the
+    // other provider's MA (two providers on one CTL).
+    assert!(real > 0, "no case names a real report's evidence ({modelled} modelled)");
+    println!("case evidence: {real} real ({shared} shared), {modelled} modelled");
 }
 
 /// Vehicles a recorded CRL revokes: some pseudonym they used fails the CRL rule.
