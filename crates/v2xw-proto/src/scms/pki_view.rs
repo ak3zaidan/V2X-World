@@ -1470,7 +1470,7 @@ pub fn knowledge(run: &ScmsRun, role: &str, now: SimTime, limit: usize) -> Optio
                     "the identity of a reporter or of the accused before the PCA and LAs answer"
                         .to_string(),
                 ],
-                json!({"reports": truth_rows}),
+                json!({"reports": truth_rows, "cases": ma_case_truth(run, limit)}),
             )
         }
         "eca" => {
@@ -1516,6 +1516,57 @@ pub fn knowledge(run: &ScmsRun, role: &str, now: SimTime, limit: usize) -> Optio
 // ---------------------------------------------------------------------------------------
 // Inspection: from records alone
 // ---------------------------------------------------------------------------------------
+
+/// The MA's cases as ground truth knows them (WP-E3, the Cases tab), newest `limit`: who
+/// the accused is (each PCA lookup's handle followed through the RA's request table, the
+/// join the ACA's own truth makes) and every reporter whose report names one of the
+/// case's linkage values, with how many reports it sent. The MA itself holds neither: it
+/// sees linkage values and pseudonym certificates only.
+fn ma_case_truth(run: &ScmsRun, limit: usize) -> Vec<Value> {
+    let st = &run.state;
+    let label = provider_label(run);
+    st.ma
+        .cases
+        .iter()
+        .rev()
+        .take(limit)
+        .map(|(r, c)| {
+            let subjects: Vec<[u8; 9]> = c
+                .subjects
+                .iter()
+                .take(if c.direct { 1 } else { 2 })
+                .map(|(_, lv)| *lv.as_bytes())
+                .collect();
+            let accused: BTreeSet<String> = c
+                .lookups
+                .iter()
+                .filter_map(|l| {
+                    st.ra
+                        .handles
+                        .get(&l.handle)
+                        .and_then(|req| st.ra.requests.get(req))
+                        .map(|q| format!("ee/{}", q.device.index()))
+                })
+                .collect();
+            let mut reporters: BTreeMap<String, u32> = BTreeMap::new();
+            for rep in &st.ma.reports {
+                if subjects.contains(rep.subject_lv.as_bytes()) {
+                    *reporters
+                        .entry(format!("ee/{}", rep.reporter.index()))
+                        .or_insert(0) += 1;
+                }
+            }
+            json!({
+                "case": format!("{label}/case/{}", r.0),
+                "accused": accused,
+                "reporters": reporters
+                    .iter()
+                    .map(|(d, n)| json!({"device": d, "reports": n}))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect()
+}
 
 /// The ASN.1 value tree of `bytes` (COER) as the real decoder reads it: the outer
 /// `Ieee1609Dot2Data` in JER (ITU-T X.697) and every layer below it that is not
@@ -1810,4 +1861,102 @@ pub fn inspect_knowledge(k: &Knowledge, view: &str) -> Value {
         v["truth"] = k.truth.clone();
     }
     v
+}
+
+// ---------------------------------------------------------------------------------------
+// The Revocation-lists tab (WP-E3)
+// ---------------------------------------------------------------------------------------
+
+/// One CRL's contents as the real decoder reads them (`v2xw_sec::crl::decode_crl`): the
+/// `CrlContents` in JER, and every entry as a device installs it. A linkage entry is
+/// `(la1Id, la2Id, iRev, iMax, jMax)` with its two seeds at `iRev`; a hash entry is the
+/// revoked certificate's HashedId10 with its expiry. `None` for bytes that do not decode
+/// as a `SecuredCrl`.
+///
+/// `certs` (HashedId8 → COER hex) are candidates: each one the CRL revokes
+/// (`v2xw_sec::crl::revokes`, the device's walk) is listed under `matches` of the entry
+/// that names it. Pass none for a view that may not join the CRL to the run's devices.
+#[must_use]
+pub fn crl_entries(crl_hex: &str, certs: &[(&str, &str)]) -> Option<Value> {
+    use v2xw_msg::sec_types::ieee1609_dot2::CertificateId;
+    let bytes = unhex(crl_hex)?;
+    let opened = v2xw_sec::crl::decode_crl(&bytes).ok()?;
+    let revoked: Vec<(String, Certificate)> = certs
+        .iter()
+        .filter_map(|(id, h)| {
+            let c = unhex(h).and_then(|b| exact::<Certificate>(&b))?;
+            v2xw_sec::crl::revokes(&opened.contents, &c).then(|| (id.to_ascii_lowercase(), c))
+        })
+        .collect();
+    let linkage: Vec<Value> = v2xw_sec::crl::linkage_entries(&opened.contents)
+        .iter()
+        .map(|e| {
+            let matches: Vec<&str> = revoked
+                .iter()
+                .filter(|(_, c)| match &c.0.to_be_signed.id {
+                    CertificateId::linkageData(ld) => {
+                        let mut lv = [0u8; 9];
+                        lv.copy_from_slice(&ld.linkage_value.0[..]);
+                        e.matches_any_index(
+                            u32::from(ld.i_cert.0.0),
+                            v2xw_sec::linkage::LinkageValue::new(lv),
+                        )
+                    }
+                    _ => false,
+                })
+                .map(|(id, _)| id.as_str())
+                .collect();
+            json!({
+                "la1_id": e.la_id1.0,
+                "la2_id": e.la_id2.0,
+                "i_rev": e.i,
+                "i_max": e.i.saturating_add(e.max_forward),
+                "jmax": e.jmax,
+                "ls1": hex(e.ls1_i.as_bytes()),
+                "ls2": hex(e.ls2_i.as_bytes()),
+                "matches": matches,
+            })
+        })
+        .collect();
+    let hashes: Vec<Value> = v2xw_sec::crl::hash_entries(&opened.contents)
+        .iter()
+        .map(|(id, expiry)| {
+            let matches: Vec<&str> = revoked
+                .iter()
+                .filter(|(_, c)| {
+                    v2xw_sec::sig1609::cert_hashed_id10(c).is_ok_and(|h| h[..] == id[..])
+                })
+                .map(|(i, _)| i.as_str())
+                .collect();
+            json!({"id10": hex(id), "expiry": expiry, "matches": matches})
+        })
+        .collect();
+    Some(json!({
+        "len": bytes.len(),
+        "contents": jer(&opened.contents),
+        "linkage": linkage,
+        "hash": hashes,
+    }))
+}
+
+/// The HashedId8s, among `certs` (HashedId8 → COER hex), of the certificates the CRL
+/// revokes, by the walk a device makes (`v2xw_sec::crl::revokes`). Empty for bytes that
+/// do not decode as a `SecuredCrl`.
+#[must_use]
+pub fn crl_matches<'a, I>(crl_hex: &str, certs: I) -> Vec<String>
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
+    let Some(opened) = unhex(crl_hex).and_then(|b| v2xw_sec::crl::decode_crl(&b).ok()) else {
+        return Vec::new();
+    };
+    certs
+        .into_iter()
+        .filter(|(_, h)| {
+            unhex(h)
+                .and_then(|b| exact::<Certificate>(&b))
+                .is_some_and(|c| v2xw_sec::crl::revokes(&opened.contents, &c))
+        })
+        .map(|(id, _)| id.to_ascii_lowercase())
+        .collect()
 }

@@ -9,6 +9,11 @@
  * ... — is what the tabs show *as*: an entity sees only the messages it sent or received and only
  * the plaintext it opened itself, and its own knowledge record instead of the ground-truth join.
  *
+ * Vehicles, Cases and Revocation lists (WP-E3) are `../pki-records/`'s; they ask `inspect.pki`
+ * themselves. The tab, the view and the map overlay's mode live in `usePkiView`, so the inspector
+ * can open the panel on a vehicle and the map keeps its rings after the panel closes. While ground
+ * truth is locked off for a blind evaluation, the record tabs ask for nothing in ground truth.
+ *
  * A run with no PKI view (the European CCMS, or `security.scms.pki_view: false`) answers
  * `inspect.trust` with "not supported here", and the panel falls back to the single-provider
  * Backend diagram (`BackendView.tsx`), which the CCMS keeps (00 §3.3).
@@ -18,11 +23,14 @@ import { useCallback, useEffect, useState } from "react";
 import { JsonRpcError, RpcErrorCode } from "@vwp/protocol";
 
 import { GROUND_TRUTH, trustOf, viewOptions, type TrustAnswer } from "../../lib/pki.js";
+import { asCrls, entityLabel, viewChoices } from "../../lib/pkiRecords.js";
 import { engine } from "../../state/engine.js";
 import { useStudio } from "../../state/store.js";
 import { CloseIcon, NetworkIcon } from "../../shell/Icons.js";
 import { togglePanel } from "../../shell/route.js";
 import { BackendPanel } from "../BackendView.js";
+import { MapModePicker, RecordsBody } from "../pki-records/RecordsTabs.js";
+import { RECORDS_TABS, chooseTab, usePki, usePkiView, type PkiTab, type RecordsTab } from "../pki-records/state.js";
 import { FlowsTab } from "./FlowsTab.js";
 import { TrustDomain } from "./TrustDomain.js";
 import "../../styles/pki.css";
@@ -31,26 +39,16 @@ import "../../styles/pki.css";
 const POLL_MS = 1000;
 
 /** The tabs of 00 §3.2, in its order. */
-export const PKI_TABS = [
+export const PKI_TABS: readonly { readonly id: PkiTab; readonly label: string; readonly built: boolean }[] = [
   { id: "trust", label: "Trust domain", built: true },
   { id: "flows", label: "Flows", built: true },
-  { id: "vehicles", label: "Vehicles", built: false },
-  { id: "cases", label: "Cases", built: false },
-  { id: "crls", label: "Revocation lists", built: false },
-] as const;
-export type PkiTab = (typeof PKI_TABS)[number]["id"];
+  { id: "vehicles", label: "Vehicles", built: true },
+  { id: "cases", label: "Cases", built: true },
+  { id: "crls", label: "Revocation lists", built: true },
+];
+export type { PkiTab };
 
-const TAB_KEY = "vwp.pki.tab";
-
-function rememberedTab(): PkiTab {
-  try {
-    const v = window.localStorage.getItem(TAB_KEY);
-    if (v === "trust" || v === "flows") return v;
-  } catch {
-    // Storage blocked: the default tab.
-  }
-  return "trust";
-}
+const isRecords = (t: PkiTab): t is RecordsTab => (RECORDS_TABS as readonly string[]).includes(t);
 
 /** The header's door to the panel. */
 export function PkiButton(): React.JSX.Element {
@@ -76,18 +74,16 @@ export function PkiPanel({ close }: { readonly close: () => void }): React.JSX.E
   const [trust, setTrust] = useState<TrustAnswer | null>(null);
   const [unsupported, setUnsupported] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTabState] = useState<PkiTab>(rememberedTab);
-  const [view, setView] = useState<string>(GROUND_TRUTH);
+  const tab = usePkiView((s) => s.tab);
+  const view = usePkiView((s) => s.view);
+  const set = usePkiView((s) => s.set);
+  const setView = useCallback((v: string) => set({ view: v }), [set]);
+  const setTab = chooseTab;
   const connection = useStudio((s) => s.connection);
-
-  const setTab = useCallback((t: PkiTab) => {
-    setTabState(t);
-    try {
-      window.localStorage.setItem(TAB_KEY, t);
-    } catch {
-      // Storage blocked: the tab is not remembered.
-    }
-  }, []);
+  const locked = useStudio((s) => s.groundTruthLocked);
+  const records = isRecords(tab);
+  // The record tabs also offer each provider's CRL generator and any vehicle they were opened as.
+  const crls = asCrls(usePki(records ? { topic: "crls" } : null, 5000).data);
 
   const poll = useCallback(async (): Promise<void> => {
     try {
@@ -112,7 +108,14 @@ export function PkiPanel({ close }: { readonly close: () => void }): React.JSX.E
   // A run with no PKI view: the CCMS keeps the single-provider Backend diagram.
   if (unsupported) return <BackendPanel close={close} />;
 
-  const options = viewOptions(trust?.state ?? null);
+  const options: { id: string; label: string }[] = [...viewOptions(trust?.state ?? null)];
+  if (records) {
+    for (const c of viewChoices((crls?.providers ?? []).map((p) => p.label))) {
+      if (!options.some((o) => o.id === c)) options.push({ id: c, label: `as ${entityLabel(c)}` });
+    }
+    if (!options.some((o) => o.id === view)) options.push({ id: view, label: `as ${entityLabel(view)}` });
+  }
+  if (locked) options[0] = { id: GROUND_TRUTH, label: "ground truth (locked)" };
   const viewKnown = options.some((o) => o.id === view);
   const activeView = viewKnown ? view : GROUND_TRUTH;
 
@@ -138,6 +141,7 @@ export function PkiPanel({ close }: { readonly close: () => void }): React.JSX.E
           ))}
         </div>
         <span className="grow" />
+        <MapModePicker />
         <label className="pki-view" title="Show the system as ground truth, or as one entity knows it: only the messages it sent or received, only the plaintext it opened">
           <span className="dim">view</span>
           <select value={activeView} onChange={(e) => setView(e.target.value)} data-testid="pki-view">
@@ -157,7 +161,9 @@ export function PkiPanel({ close }: { readonly close: () => void }): React.JSX.E
           <CloseIcon />
         </button>
       </div>
-      {trust === null ? (
+      {records ? (
+        <RecordsBody tab={tab} />
+      ) : trust === null ? (
         <div className="fullpanel-body pki-empty" data-testid="pki-empty">
           <p>No trust domain to show yet.</p>
           <p className="dim">

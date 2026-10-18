@@ -46,6 +46,8 @@ export default defineConfig({
       stdout: "ignore",
       stderr: "pipe",
       timeout: 120_000,
+      // The PKI view's tabs answer from the real engine's recorded run (WP-E3, e2e/pki-records.spec.ts).
+      env: { VWP_PKI_TABS: "test/fixtures/pki/pki-tabs.json" },
     },
     {
       command: `pnpm exec vite --port ${studioPort} --strictPort`,

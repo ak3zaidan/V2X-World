@@ -23,6 +23,13 @@ four constant-position attackers, real cryptography, report shuffle 5 s, CRL cad
   party), `inspect.cert` (every certificate of the chosen vehicles) and
   `inspect.knowledge` (ground truth and the entity's own view) answer on the full run.
   `crates/v2xw-server/tests/pki.rs` checks the server answers the same from the slice.
+- `pki-tabs.json` (WP-E3): what `inspect.pki` answers on the slice: `vehicles` and every
+  `vehicle` in ground truth, `crls`, every decodable `crl` (ground truth and as the RA) and
+  `cases` (ground truth, as provider-a's MA and LA1, as provider-b's MA). Written by
+  `crates/v2xw-server/tests/pki.rs` under `V2XW_PKI_FIXTURES`, checked by it otherwise; the
+  Studio's unit tests read it, and the mock engine serves it for Playwright (`VWP_PKI_TABS`).
+  The MA's `pki.knowledge` carries `truth.cases` (accused and reporters per case), the
+  ground truth the Cases tab shows.
 
 - `pki-studio.json` (WP-E2): what `v2xw-server` answers the Studio's PKI view on the two
   fixtures above: `inspect.trust`, `inspect.flows` and `inspect.flow` on both, and
@@ -42,4 +49,5 @@ Regenerate after a change to the record shapes:
 ```
 V2XW_PKI_FIXTURES=$PWD/ui/apps/studio/test/fixtures/pki \
   cargo test -p v2xw-engine --test pki_view -- --nocapture
+V2XW_PKI_FIXTURES=1 cargo test -p v2xw-server --test pki    # then pki-tabs.json
 ```

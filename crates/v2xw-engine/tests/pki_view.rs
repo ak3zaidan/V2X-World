@@ -383,6 +383,56 @@ fn no_entity_view_names_a_device() {
     assert!(ks.iter().any(|k| k.truth.to_string().contains("\"ee/")));
 }
 
+/// WP-E3: the MA's ground truth names, per case, the accused it reached through the PCA's
+/// handle and the RA's request table, and its reporters. Every vehicle a recorded CRL
+/// revokes (the linkage-seed walk through the real decoder, a separate path) is the
+/// accused of a published case, and the cases accuse no vehicle that is not revoked.
+#[test]
+fn the_cases_ground_truth_accuses_exactly_the_vehicles_the_crls_revoke() {
+    let device: BTreeMap<u64, String> = of("node.credentials")
+        .iter()
+        .map(|v| {
+            (
+                v["node"].as_u64().expect("node"),
+                v["device"].as_str().expect("device").to_string(),
+            )
+        })
+        .collect();
+    let revoked: BTreeSet<String> = revoked_vehicles()
+        .into_iter()
+        .map(|n| device[&u64::from(n)].clone())
+        .collect();
+    assert!(!revoked.is_empty(), "no vehicle revoked");
+    let published: BTreeSet<String> = of("pki.case")
+        .iter()
+        .filter(|c| c["stage"] == "crl-published")
+        .map(|c| c["case"].as_str().expect("case").to_string())
+        .collect();
+    let mut accused = BTreeSet::new();
+    let mut last: BTreeMap<String, &Value> = BTreeMap::new();
+    for k in of("pki.knowledge").into_iter().filter(|k| k["role"] == "ma") {
+        last.insert(k["entity"].as_str().expect("e").to_string(), k);
+    }
+    let mut seen = 0;
+    for k in last.values() {
+        for c in k["truth"]["cases"].as_array().expect("truth.cases") {
+            seen += 1;
+            let reporters = c["reporters"].as_array().expect("reporters");
+            assert!(!reporters.is_empty(), "a case with no reporter: {c}");
+            for r in reporters {
+                assert!(r["reports"].as_u64().unwrap_or(0) > 0, "{c}");
+            }
+            if published.contains(c["case"].as_str().expect("case")) {
+                for a in c["accused"].as_array().expect("accused") {
+                    accused.insert(a.as_str().expect("device").to_string());
+                }
+            }
+        }
+    }
+    assert!(seen >= published.len(), "{seen} cases in truth, {} published", published.len());
+    assert_eq!(accused, revoked, "accused by the MA's truth vs revoked by the CRLs");
+}
+
 /// Writes the UI fixtures (E2/E3): a trimmed slice of the recording and inspect answers.
 #[test]
 fn fixtures() {

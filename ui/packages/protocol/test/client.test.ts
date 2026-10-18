@@ -353,10 +353,10 @@ describe("§6 — the JSON-RPC client", () => {
   });
 
   it("§6.15 — exactly 32 methods and §6.14 — exactly 9 notifications (node.feed since v1.1)", () => {
-    // 36 plus the PKI view's six inspect queries (WP-E1, WP-E2).
-    expect(VWP_METHODS).toHaveLength(42);
-    expect(new Set(VWP_METHODS).size).toBe(42);
-    for (const m of ["inspect.pdu", "inspect.cert", "inspect.knowledge", "inspect.trust", "inspect.flows", "inspect.flow"]) {
+    // 36 plus the PKI view's seven inspect queries (WP-E1, WP-E2, WP-E3).
+    expect(VWP_METHODS).toHaveLength(43);
+    expect(new Set(VWP_METHODS).size).toBe(43);
+    for (const m of ["inspect.pdu", "inspect.cert", "inspect.knowledge", "inspect.trust", "inspect.flows", "inspect.flow", "inspect.pki"]) {
       expect(VWP_METHODS).toContain(m);
     }
     expect(VWP_METHODS).toContain("rpc.discover");

@@ -1082,6 +1082,22 @@ export interface RpcDiscoverResult {
 // §6.15 — the method inventory: 31 methods + rpc.discover = 32
 // ---------------------------------------------------------------------------
 
+/**
+ * `inspect.pki` params (WP-E3): the PKI view's Vehicles, Cases and Revocation-lists tabs.
+ * `view` is `ground-truth` (the default), a vehicle (`ee/<n>`) or a component
+ * (`provider/role/n`); outside ground truth no answer names a device it cannot know.
+ */
+export interface InspectPkiParams {
+  topic: "vehicles" | "vehicle" | "cases" | "crls" | "crl";
+  /** `vehicle`: `ee/<n>` or the node id. */
+  device?: string;
+  /** `crl`: the CRL's HashedId8, hex. */
+  hashedid8?: string;
+  view?: string;
+}
+/** `inspect.pki` result: the topic's answer (`v2xw_server::pki`); the Studio narrows it. */
+export type InspectPkiResult = Record<string, unknown>;
+
 /** §6.15 — every method, with its params and result type. */
 export interface VwpMethods {
   "run.start": { params: RunStartParams; result: RunStartResult };
@@ -1104,6 +1120,7 @@ export interface VwpMethods {
   "inspect.trust": { params: InspectTrustParams; result: PkiAnswer };
   "inspect.flows": { params: InspectFlowsParams; result: PkiAnswer };
   "inspect.flow": { params: InspectFlowParams; result: PkiAnswer };
+  "inspect.pki": { params: InspectPkiParams; result: InspectPkiResult };
   explain: { params: ExplainParams; result: ExplainResult };
   "scenario.get": { params: ScenarioGetParams; result: ScenarioGetResult };
   "scenario.set": { params: ScenarioSetParams; result: ScenarioSetResult };
@@ -1131,12 +1148,12 @@ export interface VwpMethods {
 /** Every method name of §6.15. */
 export type VwpMethodName = keyof VwpMethods;
 
-/** §6.15 — the method names as a runtime array (42 entries), in the order the table lists them; the three `runs.*` methods are the run history and comparison, and the six `inspect.*` after `inspect.entity` are the PKI view's (WP-E1, WP-E2). */
+/** §6.15 — the method names as a runtime array (43 entries), in the order the table lists them; the three `runs.*` methods are the run history and comparison, and the seven `inspect.*` after `inspect.entity` are the PKI view's (WP-E1, WP-E2, WP-E3). */
 export const VWP_METHODS: readonly VwpMethodName[] = [
   "run.start", "run.pause", "run.resume", "run.step", "run.seek", "run.speed", "run.stop", "run.status",
   "view.follow", "view.camera", "overlay.set",
   "inspect.node", "inspect.link", "inspect.entity",
-  "inspect.pdu", "inspect.cert", "inspect.knowledge", "inspect.trust", "inspect.flows", "inspect.flow",
+  "inspect.pdu", "inspect.cert", "inspect.knowledge", "inspect.trust", "inspect.flows", "inspect.flow", "inspect.pki",
   "explain",
   "scenario.get", "scenario.set", "scenario.validate", "scenario.save", "scenario.load", "scenario.list",
   "cities.list",

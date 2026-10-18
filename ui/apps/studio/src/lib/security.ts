@@ -148,3 +148,11 @@ export function untilText(atNs: number | null | undefined, nowNs: number): strin
   if (s < 7200) return `in ${(s / 60).toFixed(1)} min`;
   return `in ${(s / 3600).toFixed(1)} h`;
 }
+
+/**
+ * Whether the PKI view has this node's certificate pool (WP-E3): the US SCMS publishes
+ * `node.credentials` per vehicle; the European CCMS and a run with no credential system do not.
+ */
+export function hasPkiPool(row: Pick<NodeSecurityRow, "protocol"> | null | undefined): boolean {
+  return typeof row?.protocol === "string" && row.protocol.includes("scms");
+}

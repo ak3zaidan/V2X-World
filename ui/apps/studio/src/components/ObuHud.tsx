@@ -29,7 +29,9 @@ import { int, shortDigest } from "../lib/format.js";
 import { hasData, hudGroups, type HudField } from "../lib/telemetry.js";
 import { bearingDeg } from "../lib/feed.js";
 import { toGeodetic } from "../lib/geo.js";
-import { linkText, pseudonymLine } from "../lib/security.js";
+import { hasPkiPool, linkText, pseudonymLine } from "../lib/security.js";
+import { openVehicle } from "./pki-records/state.js";
+import { openPanel } from "../shell/route.js";
 import { vehicleHealth } from "../lib/vehicleHealth.js";
 import { actorNoun } from "../lib/actorNoun.js";
 
@@ -200,6 +202,21 @@ export function ObuHud(): React.JSX.Element | null {
             link === null ? null : (
               <Plain key="link" k="backend" v={link} testId="hud-sec-link" tone={security?.link_up === false ? "warn" : undefined} />
             ),
+            hasPkiPool(security) && selectedNode !== null ? (
+              <button
+                key="pki"
+                type="button"
+                className="hud-field plain pkir-link"
+                onClick={() => {
+                  openVehicle(selectedNode);
+                  openPanel("backend");
+                }}
+                data-testid="hud-sec-pki"
+                title="Open its certificate pool in the PKI view"
+              >
+                <span className="v">pool ›</span>
+              </button>
+            ) : null,
             cryptoText ? (
               <span key="crypto" className="hud-field plain" data-testid="hud-sec-crypto" title={crypto ? `${crypto.sign ? `sign: ${crypto.sign.basis_text}. ` : ""}${crypto.verify ? `verify: ${crypto.verify.basis_text}. ` : ""}${crypto.explanation}` : undefined}>
                 <span className="v">{cryptoText}</span>
