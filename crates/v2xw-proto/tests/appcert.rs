@@ -625,4 +625,9 @@ fn a_preloaded_rsu_joins_with_this_and_next_week_and_renews_in_the_run() {
     );
     assert!(run.state.pdu_rejections.is_empty());
     signs_verifiably(&run, DEVICE_A);
+    // `V2XW_APPCERT_PRELOAD_OUT=<dir>`: the pre-run and in-run SPDUs for
+    // `tools/pdu_check/check_appcerts.py`.
+    if let Ok(dir) = std::env::var("V2XW_APPCERT_PRELOAD_OUT") {
+        write_corpus(&run, std::path::Path::new(&dir));
+    }
 }
