@@ -3692,7 +3692,7 @@ pub fn bootstrap_credentials(
         ..core::mem::take(store)
     };
     // The roots and the chain file every receiver validates against (WP-C2).
-    factory.install_trust_for(node, rsu, runtime.security_mut());
+    factory.install_trust_for(node, runtime.security_mut());
     let perms = runtime.security().cert_permissions();
     let count = if rsu { 1 } else { BOOTSTRAP_PSEUDONYMS };
     for j in 0..count {

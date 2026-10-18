@@ -214,14 +214,22 @@ fn detectors_file_real_us_reports_that_the_ma_opens_and_verifies() {
         p.cases_opened
     );
     assert!(p.reports_mbr_real > 0, "no real US report was filed");
-    let st = &engine.phase2().expect("phase 2").scms().state;
-    assert!(
-        st.pdu_rejections.is_empty(),
-        "the backend refused: {:?}",
-        st.pdu_rejections
-    );
-    assert!(!st.ma.opened_reports.is_empty(), "the MA opened no report");
-    for o in &st.ma.opened_reports {
+    // Every provider's backend (WP-D1): a report goes to the reporter's provider's MA,
+    // and the fleet is split between the providers.
+    let runs = engine.phase2().expect("phase 2").scms_runs();
+    for (k, run) in runs.iter().enumerate() {
+        assert!(
+            run.state.pdu_rejections.is_empty(),
+            "provider {k}'s backend refused: {:?}",
+            run.state.pdu_rejections
+        );
+    }
+    let opened: Vec<_> = runs
+        .iter()
+        .flat_map(|r| r.state.ma.opened_reports.iter())
+        .collect();
+    assert!(!opened.is_empty(), "no MA opened a report");
+    for o in opened {
         assert!(
             o.evidence_verified,
             "evidence does not verify: {:?}",

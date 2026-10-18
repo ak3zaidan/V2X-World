@@ -3544,8 +3544,13 @@ impl Phase2 {
                 }
             }
         }
-        self.broadcast_version =
-            u32::try_from(self.home().state.crl_broadcast.entries.len()).unwrap_or(u32::MAX);
+        // Every provider's roadside list (WP-D1): a unit relays each provider's CRL, as
+        // every RA serves each one, so a vehicle of either provider hears both.
+        self.broadcast_version = self.runs.iter().fold(0u32, |acc, r| {
+            acc.saturating_add(
+                u32::try_from(r.state.crl_broadcast.entries.len()).unwrap_or(u32::MAX),
+            )
+        });
         // Top-ups whose batch has been installed, on each vehicle's provider's log.
         let mut finished = Vec::new();
         for (node, n) in &self.nodes {
@@ -4525,13 +4530,32 @@ impl Phase2 {
         (version, entries, secured)
     }
 
-    /// The list the roadside broadcast path holds.
+    /// The list the roadside broadcast path holds: its version (the sum of every
+    /// provider's entry count) and every provider's entries, the home provider's first.
+    ///
+    /// ASSUMPTION (WP-D1): a roadside unit relays every provider's CRL, each as its own
+    /// provider's CRL Broadcast published it, the way every RA serves each provider's
+    /// list; no published text assigns roadside CRL relay to one provider.
     #[must_use]
-    pub fn broadcast_crl(&self) -> (u32, &[CrlLinkageEntry]) {
-        (
-            self.broadcast_version,
-            &self.home().state.crl_broadcast.entries,
-        )
+    pub fn broadcast_crl(&self) -> (u32, Vec<CrlLinkageEntry>) {
+        let entries = self
+            .runs
+            .iter()
+            .flat_map(|r| r.state.crl_broadcast.entries.iter().copied())
+            .collect();
+        (self.broadcast_version, entries)
+    }
+
+    /// The signed CRLs the roadside broadcast path relays unchanged: one per provider
+    /// whose CRL Broadcast has published, in [`Phase2::broadcast_crl`]'s order. Empty with
+    /// the PDU layer off.
+    #[must_use]
+    pub fn broadcast_secured_crls(&self) -> Vec<std::sync::Arc<[u8]>> {
+        self.runs
+            .iter()
+            .filter_map(|r| r.state.crl_broadcast.secured.as_ref())
+            .map(|p| std::sync::Arc::<[u8]>::from(p.bytes()))
+            .collect()
     }
 
     /// The CRL's size on the wire for `entries` entries.

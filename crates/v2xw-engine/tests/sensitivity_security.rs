@@ -676,6 +676,17 @@ fn the_crl_fetch_interval_moves_downloads_and_revocation_latency() {
     let with = |cadence: u64, fetch: u64| {
         let mut s = backend(30, 60.0);
         attacked(&mut s, 0.2);
+        // One provider serves the whole fleet (WP-D1): with the fleet split, each
+        // provider's CRL Generator publishes on its own clock, and the first revocation
+        // the report times is then whichever provider's vehicle polls first, so the fetch
+        // interval would pick a different case rather than move this case's last leg.
+        s.security.scms = Some(
+            serde_json::from_value(json!({"deployment": {"providers": [
+                {"name": "provider-a", "fleet_share": 1.0},
+                {"name": "provider-b", "fleet_share": 0.0}
+            ]}}))
+            .expect("an scms section"),
+        );
         if let Some(p) = s.security.protocol.as_mut() {
             p.params["report_shuffle_window_s"] = json!(5);
             p.params["crl_cadence_s"] = json!(cadence);

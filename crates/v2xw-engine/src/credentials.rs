@@ -162,14 +162,14 @@ impl CredentialFactory {
     }
 
     /// Installs this run's trust on `node`'s security stack: every CTL root, and the
-    /// chain file of the provider that certifies it under `home-provider` (a roadside
-    /// unit's is [`CredentialFactory::provider_of`], a vehicle's and a handset's the home
-    /// provider's), otherwise the whole chain file.
-    pub fn install_trust_for(&self, node: NodeId, rsu: bool, sec: &mut v2xw_node::NodeSecurity) {
+    /// chain file of the provider that certifies it under `home-provider`
+    /// ([`CredentialFactory::provider_of`]: since WP-D1 one seeded draw assigns roadside
+    /// units, vehicles and handsets alike), otherwise the whole chain file.
+    pub fn install_trust_for(&self, node: NodeId, sec: &mut v2xw_node::NodeSecurity) {
         if self.roots.is_empty() {
             return;
         }
-        let provider = if rsu { self.provider_of(node) } else { 0 };
+        let provider = self.provider_of(node);
         let Some(file) = self.home_chain_files.get(provider) else {
             self.install_trust(sec);
             return;

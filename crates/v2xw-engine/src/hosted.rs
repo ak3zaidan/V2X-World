@@ -431,7 +431,7 @@ pub fn install_credentials<R: crate::wiring::CredentialSink + ?Sized>(
 ) -> usize {
     let policy = crate::wiring::rotation_policy(scenario);
     device.sink_forget();
-    factory.install_trust_for(node, false, device.sink_security());
+    factory.install_trust_for(node, device.sink_security());
     let stores = device.sink_stores();
     *stores = Stores {
         certs: v2xw_node::CertStore::new().with_policy(policy),

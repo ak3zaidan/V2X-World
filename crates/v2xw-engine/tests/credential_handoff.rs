@@ -60,6 +60,8 @@ struct Tapped {
     report: v2xw_engine::RunReport,
     taps: BTreeMap<u64, (NodeId, Vec<u8>)>,
     aca: std::sync::Arc<v2xw_msg::sec_types::Certificate>,
+    /// Every provider's ACA (WP-D1: each provider certifies its share of the fleet).
+    acas: Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
     scms_aca: bool,
     wall: v2xw_core::time::WallClock,
 }
@@ -67,6 +69,7 @@ struct Tapped {
 fn tapped(s: Scenario) -> Tapped {
     let mut engine = Engine::build(s, "").expect("builds");
     let (aca, scms_aca) = engine.credential_issuer();
+    let acas = engine.credential_issuers();
     let wall = engine.wall_clock();
     let mut rec = Tapping {
         inner: MemoryRecorder::new(),
@@ -77,6 +80,7 @@ fn tapped(s: Scenario) -> Tapped {
         report,
         taps: rec.taps,
         aca,
+        acas,
         scms_aca,
         wall,
     }
@@ -119,7 +123,7 @@ fn no_stand_in_issuer_or_side_channel_remains() {
     );
 }
 
-/// Every vehicle frame of an SCMS run is signed under an implicit certificate the run's
+/// Every vehicle frame of an SCMS run is signed under an implicit certificate its provider's
 /// ACA issued, with a linkage value, and its signature verifies under the key an
 /// *independent* verifier reconstructs from that certificate and the ACA certificate
 /// alone. Every roadside unit signs under an RSU application certificate (no linkage
@@ -135,8 +139,15 @@ fn vehicles_sign_under_the_runs_aca() {
     assert_eq!(t.report.credentials_refused, 0);
     assert!(!t.taps.is_empty(), "the run transmitted nothing");
     let env = Envelope::ieee1609(t.wall);
-    let aca_coer = v2xw_sec::cert::encode(&t.aca).expect("encodes");
-    let aca_id8 = v2xw_sec::hashed_id8(&aca_coer);
+    // Each provider's ACA, by its HashedId8 (WP-D1: the fleet is split between the
+    // deployment's providers, and each vehicle signs under its own provider's ACA).
+    let acas: Vec<_> = std::iter::once(&t.aca)
+        .chain(t.acas.iter())
+        .map(|a| {
+            let coer = v2xw_sec::cert::encode(a).expect("encodes");
+            (v2xw_sec::hashed_id8(&coer), coer, std::sync::Arc::clone(a))
+        })
+        .collect();
     let mut certs: BTreeMap<[u8; 8], v2xw_msg::sec_types::Certificate> = BTreeMap::new();
     let mut verifier = v2xw_sec::Real::new();
     let mut ctx = v2xw_sec::testctx::TestCtx::new(1);
@@ -160,10 +171,14 @@ fn vehicles_sign_under_the_runs_aca() {
             ParsedSigner::SelfSigned => panic!("node {node:?} signed self"),
         };
         assert_eq!(cert.0.r_type, CertificateType::implicit, "node {node:?}");
-        match &cert.0.issuer {
-            IssuerIdentifier::sha256AndDigest(d) => assert_eq!(*d, aca_id8, "issuer"),
+        let (aca_coer, aca) = match &cert.0.issuer {
+            IssuerIdentifier::sha256AndDigest(d) => acas
+                .iter()
+                .find(|(id, ..)| id == d)
+                .map(|(_, coer, aca)| (coer, aca))
+                .unwrap_or_else(|| panic!("issuer {d:?} is none of the run's ACAs")),
             other => panic!("issuer {other:?}"),
-        }
+        };
         match &cert.0.to_be_signed.id {
             CertificateId::linkageData(_) => {
                 assert_eq!(cert.0.to_be_signed.crl_series.0.0, 1);
@@ -173,7 +188,7 @@ fn vehicles_sign_under_the_runs_aca() {
                 // (Every vehicle of this run is provisioned before it drives.)
                 assert_ne!(
                     cert.0.to_be_signed.craca_id,
-                    v2xw_sec::hashed_id3(&aca_coer),
+                    v2xw_sec::hashed_id3(aca_coer),
                     "node {node:?} signs under a factory certificate, not its SCMS batch"
                 );
                 pseudonyms.insert(digest);
@@ -192,7 +207,7 @@ fn vehicles_sign_under_the_runs_aca() {
                         v2xw_sec::PrimitiveId::ECDSA_P256_SHA256,
                         NodeId::new(0),
                         &cert,
-                        &t.aca,
+                        aca,
                     )
                     .expect("reconstructs")
             });

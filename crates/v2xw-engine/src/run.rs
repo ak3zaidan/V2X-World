@@ -852,12 +852,13 @@ enum AppPayload {
     /// A misbehaviour report on its way to a roadside unit that forwards it.
     Report(Box<v2xw_threat::MisbehaviourReport>),
     /// A certificate revocation list broadcast by the roadside: the list's version (its
-    /// entry count) and the entries this frame carries.
+    /// entry count) and the entries this frame carries, with every provider's signed CRL
+    /// it relays unchanged (WP-D1).
     Crl(
         Box<(
             u32,
             Vec<v2xw_sec::linkage::CrlLinkageEntry>,
-            Option<std::sync::Arc<[u8]>>,
+            Vec<std::sync::Arc<[u8]>>,
         )>,
     ),
 }
@@ -7404,17 +7405,14 @@ impl Engine {
         let Some(phase2) = self.phase2.as_ref() else {
             return;
         };
-        let (version, entries) = {
-            let (v, e) = phase2.broadcast_crl();
-            (v, e.to_vec())
-        };
+        let (version, entries) = phase2.broadcast_crl();
         if version == 0 {
             return;
         }
         let interval = phase2.params().crl_broadcast_interval;
         // The signed CRL the unit relays unchanged (pass-through, [PRIMER] p.5): the
         // receiver verifies it, so a unit that alters it is refused by the vehicle.
-        let secured = phase2.secured_crl();
+        let secured = phase2.broadcast_secured_crls();
         // Each unit asked about itself, and only a unit whose backhaul brought it the
         // list broadcasts it.
         let broadcasters: Vec<NodeId> = phase2

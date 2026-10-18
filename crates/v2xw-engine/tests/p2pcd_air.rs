@@ -1,15 +1,16 @@
 //! P2PCD over the engine's radio (00 §1 row 38, WP-C3 follow-up).
 //!
-//! Four roadside units on `connected-intersections`, every one certified by the second
-//! provider (`fleet_share` 1.0), and vehicles certified by the first. Under
-//! `security.scms.chain_file: home-provider` a vehicle's chain file holds only its own
-//! provider's CA certificates, so the units' application certificates name an issuer no
-//! vehicle holds: a vehicle asks for it in its BSMs (`p2pcdLearningRequest`), a unit's
-//! P2PCD Entity answers with an unsecured `Ieee1609dot2Peer2PeerPDU` under PSID 136 once
-//! its random back-off expires, and that answer is a radio frame of its own — through the
-//! MAC and the PHY, heard or lost like any frame — from which every vehicle that decodes
-//! it learns the CA certificates (each validated to the CTL root) and then verifies the
-//! unit's SPaT and MAP.
+//! Four roadside units on `connected-intersections` and its vehicles, split half and half
+//! between the two providers by the seeded fleet split (`fleet_share` 0.5 each; since
+//! WP-D1 one draw assigns vehicles and units alike). Under
+//! `security.scms.chain_file: home-provider` a device's chain file holds only its own
+//! provider's CA certificates, so the other provider's units and vehicles name an issuer
+//! it does not hold: a vehicle asks for it in its BSMs (`p2pcdLearningRequest`), a
+//! P2PCD Entity that holds it answers with an unsecured `Ieee1609dot2Peer2PeerPDU` under
+//! PSID 136 once its random back-off expires, and that answer is a radio frame of its own
+//! — through the MAC and the PHY, heard or lost like any frame — from which every vehicle
+//! that decodes it learns the CA certificates (each validated to the CTL root) and then
+//! verifies the other provider's units' SPaT and MAP.
 //!
 //! What each test proves, and the fault it was shown to fail under (each injected and
 //! reverted, see the WP report):
@@ -42,8 +43,8 @@ fn scenario(chain_file: &str) -> Scenario {
             "deployment": {
                 "preset": "us-production-2025",
                 "providers": [
-                    {"name": "provider-a", "fleet_share": 0.0},
-                    {"name": "provider-b", "fleet_share": 1.0}
+                    {"name": "provider-a", "fleet_share": 0.5},
+                    {"name": "provider-b", "fleet_share": 0.5}
                 ]
             },
             "chain_file": chain_file,
