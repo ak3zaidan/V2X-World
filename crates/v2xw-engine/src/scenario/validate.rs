@@ -2459,7 +2459,7 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "net.backhaul",
         status: Status::Wired,
         note: "The roadside units' default backhaul: 'backhaul/fixed' with latency_ms \
-               (default 10, uncited), capacity_mbps (default 1000) and down_mbps; \
+               (default 10, an ASSUMPTION), capacity_mbps (default 1000, an ASSUMPTION) and down_mbps; \
                'backhaul/fibre' (1 Gbit/s metro fibre, about 0.3 ms), 'backhaul/dsl' \
                (VDSL2 20/80 Mbit/s with 8 ms interleaving) or 'backhaul/microwave' \
                (400 Mbit/s radio hop, 1e-5 outage), each with rate_mbps, down_mbps, \
@@ -2558,12 +2558,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "'protocol/scms/camp' runs the credential lifecycle; its params set \
                i_period_s (default one week), cert_lifetime_s (the period plus an hour), \
                certs_per_period (20), pool_periods (2 held at the start), \
-               topup_below_periods (1), cert_shuffle_window_s and report_shuffle_window_s \
-               (one day, CAMP) with cert_shuffle_threshold and report_shuffle_threshold \
-               (10,000: a batch closes at the count or the window, whichever comes first, \
-               CAMP-EE §2.2.7 and SCMS-765), crl_cadence_s (one day; 0 publishes on decision), \
-               crl_fetch_interval_s (3600, uncited) and crl_broadcast_interval_s (5, \
-               uncited). Vehicles top up over their backend link when the pool runs low \
+               topup_below_periods (1), cert_shuffle_threshold (1,000) and \
+               cert_shuffle_window_s (2 days, CAMP 1.2.2 Table 67; Brecht's 10,000 or one \
+               day as a setting), report_shuffle_threshold (10,000) and \
+               report_shuffle_window_s (one day, SCMS-765): a batch closes at the count or \
+               the window, whichever comes first; crl_cadence_s (one day; 0 publishes on \
+               decision), crl_fetch_interval_s (3600, an ASSUMPTION inside CAMP's weekly \
+               bound) and crl_broadcast_interval_s (5, the longest USDOT RSU v4.1 Store \
+               and Repeat interval). Every default's source: \
+               docs/design/scms-real/constants.md. Vehicles top up over their backend link when the pool runs low \
                and cannot sign once it is empty. 'protocol/etsi/ts102941' runs the ETSI \
                ITS PKI: authorization tickets (certs_per_period a period, no linkage), \
                TS 103 759 reports straight to the MA, and passive revocation only — the \

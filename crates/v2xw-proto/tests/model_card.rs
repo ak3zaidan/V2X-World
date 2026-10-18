@@ -214,3 +214,105 @@ fn the_etsi_plug_in_describes_all_nine_of_its_flows() {
         );
     }
 }
+
+/// `docs/design/scms-real/constants.md`'s rows: name → (default cell, status).
+fn constants_md() -> std::collections::BTreeMap<String, (String, String)> {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/design/scms-real/constants.md"
+    );
+    let text = std::fs::read_to_string(path).expect("constants.md is readable");
+    let mut rows = std::collections::BTreeMap::new();
+    for line in text.lines().filter(|l| l.starts_with("| `")) {
+        let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+        // ["", name, default, unit, status, where, source, ""]
+        if cells.len() < 8 {
+            continue;
+        }
+        let name = cells[1].trim_matches('`').to_string();
+        let status = cells[4].to_string();
+        assert!(
+            ["CITED", "DERIVED", "MEASURED", "ASSUMPTION"].contains(&status.as_str()),
+            "constants.md `{name}`: status `{status}` is not one of the four"
+        );
+        assert!(
+            cells[6].len() > 10,
+            "constants.md `{name}` gives no source or reason"
+        );
+        assert!(
+            rows.insert(name.clone(), (cells[2].to_string(), status))
+                .is_none(),
+            "constants.md lists `{name}` twice"
+        );
+    }
+    rows
+}
+
+/// Whether a constants.md default cell states the card's JSON default.
+fn same_default(cell: &str, card: &serde_json::Value) -> bool {
+    match card {
+        serde_json::Value::String(s) => cell.trim_matches('`') == s,
+        serde_json::Value::Number(n) => cell
+            .parse::<f64>()
+            .is_ok_and(|v| n.as_f64().is_some_and(|c| (v - c).abs() < 1e-9)),
+        _ => false,
+    }
+}
+
+#[test]
+fn constants_md_matches_the_scms_card() {
+    // WP-D3: every card parameter has a row with the card's own default, and a row is an
+    // ASSUMPTION exactly when the card says todo-calibrate (with a plan, checked above).
+    let rows = constants_md();
+    let card = CampScms::default().card().clone();
+    let mut problems = Vec::new();
+    for p in &card.parameters {
+        let Some((cell, status)) = rows.get(&p.name) else {
+            problems.push(format!(
+                "`{}` is on the card but not in constants.md",
+                p.name
+            ));
+            continue;
+        };
+        if !same_default(cell, &p.default) {
+            problems.push(format!(
+                "`{}`: constants.md says {cell}, the card {}",
+                p.name, p.default
+            ));
+        }
+        let todo = p.source.kind == SourceKind::TodoCalibrate;
+        if todo != (status == "ASSUMPTION") {
+            problems.push(format!(
+                "`{}`: constants.md says {status}, the card {:?}",
+                p.name, p.source.kind
+            ));
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+#[test]
+fn the_constants_md_check_can_fail() {
+    // The injected faults: a changed default and a mislabelled status must both be found.
+    let card = CampScms::default().card().clone();
+    let p = card
+        .parameters
+        .iter()
+        .find(|p| p.name == "enrolment_lifetime_s")
+        .expect("on the card");
+    assert!(same_default("189216000", &p.default));
+    assert!(!same_default("94608000", &p.default), "3 y is not 6 y");
+    let backend = card
+        .parameters
+        .iter()
+        .find(|p| p.name == "backend_hw_profile")
+        .expect("on the card");
+    assert!(same_default(
+        "`hw-profile/i9-11950h-wolfssl`",
+        &backend.default
+    ));
+    assert!(!same_default("`hw-profile/other`", &backend.default));
+    let rows = constants_md();
+    assert_eq!(rows["enrolment_lifetime_s"].1, "CITED");
+    assert_eq!(rows["first_batch_delay_s"].1, "ASSUMPTION");
+}

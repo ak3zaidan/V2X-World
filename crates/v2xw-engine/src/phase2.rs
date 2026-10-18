@@ -340,18 +340,21 @@ pub const REPORT_INTERVAL_S: f64 = 1.0;
 
 /// How often a cellular vehicle asks the CRL Store for the current list, by default.
 ///
-/// **Uncited, `todo-calibrate`.** The SCMS design has the device fetch "on every RA
-/// connection" [PRIMER p.7] and prints no interval; an OEM configures it. An hour is a
-/// conservative polling interval chosen so a scenario states its own when revocation
-/// latency is what it measures.
+/// **ASSUMPTION inside a cited bound** (constants.md). CAMP has the device fetch "as often
+/// as possible but no later than once a week" [CAMP122 §3 item 10] and "on every RA
+/// connection" [PRIMER pp.5, 8]; neither prints an interval, which an OEM configures. One
+/// hour is well inside the weekly bound and is the profile's own polling granularity for
+/// the RA (`ra-minWait` 1 h, [SMP] §2.1.21 Table 3); a scenario that measures revocation
+/// latency states its own.
 pub const CRL_FETCH_INTERVAL_S: f64 = 3_600.0;
 
 /// How often a roadside unit with the `crl` role repeats the list it holds, by default.
 ///
-/// **Uncited, `todo-calibrate`.** TS 102 941 Annex D.3 specifies the RSU broadcast of the
-/// delta CTL but no repetition rate, and the SCMS design names the CRL broadcast path
-/// without one. Five seconds keeps the broadcast a small share of the channel (one frame
-/// per unit per five seconds) while reaching a vehicle that drives past.
+/// **Cited bound, ASSUMED mechanism** (constants.md). No document specifies a roadside
+/// CRL broadcast (the Primer names the path, p.5; TS 102 941 Annex D.3 gives the delta
+/// CTL no rate). A US RSU repeats a back-office message as Store and Repeat, whose
+/// `TxInterval` allows 1 to 5 seconds [USDOT RSU Specification v4.1, 2016, Appendix C,
+/// p.117]; 5 s is the longest the RSU allows, the smallest share of the channel.
 pub const CRL_BROADCAST_INTERVAL_S: f64 = 5.0;
 
 /// Whether the engine puts an attack kind on the air; a scenario naming one it does not
@@ -625,7 +628,7 @@ impl LifecycleParams {
         let mut p = LifecycleParams {
             scms,
             jmax: scms.certs_per_period,
-            pool_periods: 2,
+            pool_periods: v2xw_proto::scms::DEVICE_POOL_PERIODS,
             topup_below_periods: 1,
             crl_fetch_interval: secs(CRL_FETCH_INTERVAL_S),
             crl_broadcast_interval: secs(CRL_BROADCAST_INTERVAL_S),
@@ -953,7 +956,8 @@ struct InFlightReport {
 struct ReportStore(MbrQueue<(MisbehaviourReport, SimTime)>);
 
 /// The device's report-storage quota, bytes. [SM-MBR] §2.2 leaves it device-specific;
-/// **assumption**: 64 KiB, about 30 real reports with their evidence.
+/// **assumption**: 64 KiB, 58 reports at the reference report's 1,119 B
+/// ([`report_bytes`]).
 pub const REPORT_STORE_QUOTA_BYTES: u64 = 64 * 1024;
 
 impl Default for ReportStore {
@@ -5950,11 +5954,15 @@ pub fn digest_bytes(digest: &v2xw_msg::sec_types::HashedId8) -> [u8; 8] {
 
 /// How many bytes a misbehaviour report takes on the wire.
 ///
-/// [`v2xw_proto`]'s own size model for a report submission, with its provenance:
-/// 05-protocols marks the report's wire size as one of the five with no published value.
+/// The size charged where the engine carries a report it did not build as real bytes (an
+/// unmapped reason, a roadside unit's forward, the ETSI path): the upload of the reference
+/// US report, 1,119 B, the real encoder's signed-and-encrypted report plus its
+/// `Download-Req` header ([`v2xw_proto::scms::mbr::REFERENCE_UPLOAD_BYTES`], derived and
+/// pinned by `v2xw-proto/tests/mbr.rs`; constants.md). A real report is charged its own
+/// length.
 #[must_use]
-pub fn report_bytes() -> u32 {
-    ScmsParams::default().sizes.report_payload_bytes
+pub const fn report_bytes() -> u32 {
+    v2xw_proto::scms::mbr::REFERENCE_UPLOAD_BYTES
 }
 
 /// `threats.compromised_rsus` and `threats.compromised_rsu_attack`: which roadside units

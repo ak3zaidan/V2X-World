@@ -311,10 +311,10 @@ impl CampScms {
                 default_profile: p.backend_profile,
                 default_service: svc,
                 storage_growth: vec![StorageCounter {
-                    what: "misbehaviour report [TS 103 759 §5.1]",
-                    bytes_each: WireSize::parameter(
+                    what: "misbehaviour report [SM-MBR v1.0 §1]",
+                    bytes_each: WireSize::real(
                         p.sizes.report_payload_bytes,
-                        "report_payload_bytes",
+                        "the reference report's COER (mbr::REFERENCE_REPORT_COER_BYTES)",
                     ),
                 }],
                 offline: false,
@@ -616,20 +616,49 @@ fn card(p: &ScmsParams) -> ModelCard {
                  batches, 3,120 = 20 × 156; the RA clips a request beyond it",
             ),
         ),
-        todo(
+        Parameter::new(
             "enrolment_lifetime_s",
             "s",
             serde_json::json!(p.enrolment_lifetime.as_nanos() / 1_000_000_000),
-            "No document this build can read prints the SCMS enrolment certificate's \
-             lifetime; the ETSI equivalent is three years [EUCP Table 11]. Take it from the \
-             deployment's Global Policy File.",
+            std_src(
+                "CAMP SCMS 1.2.2 Table 3 and SCMS-1307: 6 years (owner decision 10; 03 §5, \
+                 §14 item 2). Alternatives: 7 y (CAMP R1.1), 3 y (5GAA draft CP (419))",
+            ),
         ),
-        todo(
+        Parameter::new(
             "reenrol_lead_s",
             "s",
             serde_json::json!(p.reenrol_lead.as_nanos() / 1_000_000_000),
-            "How early a device requests its successor enrolment certificate. An OEM \
-             setting; measure from a deployed OBU's configuration.",
+            std_src(
+                "SCMS Manager EE Re-Enrollment Technical Specification v1.0 §1-3: request \
+                 12-24 months before expiry; 548 d (18 months) is the range's midpoint",
+            ),
+        ),
+        Parameter::new(
+            "reenrol_download_delay_s",
+            "s",
+            serde_json::json!(p.reenrol_download_delay.as_nanos() / 1_000_000_000),
+            std_src(
+                "SCMS Manager 1609.2.1 Profile v1.0.3 §2.1.21 Table 3 download-minWait 5 min \
+                 (the RA's nextDlTime); two-phase re-enrolment [SM-REENR §1-3]",
+            ),
+        ),
+        Parameter::new(
+            "ra_min_preload_periods",
+            "-",
+            serde_json::json!(crate::scms::params::RA_MIN_PRELOAD_PERIODS),
+            std_src(
+                "SCMS Manager 1609.2.1 Profile v1.0.3 §2.1.21 Table 3 ra-maxPreloadTime ≥ 2 weeks",
+            ),
+        ),
+        Parameter::new(
+            "ra_max_preload_periods",
+            "-",
+            serde_json::json!(crate::scms::params::RA_MAX_PRELOAD_PERIODS),
+            std_src(
+                "SCMS Manager 1609.2.1 Profile v1.0.3 §2.1.21 Table 3 ra-maxPreloadTime ≤ 3 \
+                 years; USDOT SCMS Technical Primer p.7 (3,120 = 156 × 20)",
+            ),
         ),
         Parameter::new(
             "electors",
@@ -653,7 +682,7 @@ fn card(p: &ScmsParams) -> ModelCard {
         Parameter::new(
             "shuffle_threshold_requests",
             "-",
-            serde_json::json!(1_000),
+            serde_json::json!(p.shuffle_threshold),
             std_src(
                 "CAMP SCMS 1.2.2 §5.2.15.5 Table 67 shuffle_threshold (SCMS-631); preset \
                  'brecht': 10,000 [Brecht et al. 2018 §V-B]",
@@ -662,7 +691,7 @@ fn card(p: &ScmsParams) -> ModelCard {
         Parameter::new(
             "shuffle_window_s",
             "s",
-            serde_json::json!(2 * 86_400),
+            serde_json::json!(p.shuffle_window.as_nanos() / 1_000_000_000),
             std_src(
                 "CAMP SCMS 1.2.2 Table 67 max_cert_request_age 2 days; preset 'brecht': one \
                  day",
@@ -671,14 +700,75 @@ fn card(p: &ScmsParams) -> ModelCard {
         Parameter::new(
             "report_shuffle_threshold",
             "-",
-            serde_json::json!(10_000),
-            std_src("CAMP SCMS PoC EE Requirements R1.1 SCMS-765"),
+            serde_json::json!(p.report_shuffle_threshold),
+            std_src("CAMP SCMS 1.2.2 §5.2.8.4 SCMS-765: 10,000 reports or one day"),
+        ),
+        Parameter::new(
+            "report_shuffle_window_s",
+            "s",
+            serde_json::json!(p.report_shuffle_window.as_nanos() / 1_000_000_000),
+            std_src("CAMP SCMS 1.2.2 §5.2.8.4 SCMS-765: 10,000 reports or one day"),
         ),
         Parameter::new(
             "crl_cadence_s",
             "s",
-            serde_json::json!(86_400),
-            paper("Brecht 2018 §VI-G; USDOT 2013 daily working assumption"),
+            serde_json::json!(p.crl_cadence.as_nanos() / 1_000_000_000),
+            std_src(
+                "SCMS Manager Provider Requirements v1.1 §3.4.10: publish within 1 business \
+                 day of a change (the US presets run that rule, crl.business_day_sla); 5GAA \
+                 draft CP (255): within 24 h; Brecht 2018 §VI-G: daily",
+            ),
+        ),
+        Parameter::new(
+            "next_crl_s",
+            "s",
+            serde_json::json!(p.crl.next_crl.as_nanos() / 1_000_000_000),
+            std_src(
+                "CAMP SCMS 1.2.2 §3 item 10: devices fetch no later than once a week, so \
+                 nextCrl is one week; 5GAA draft CP (254): at least monthly",
+            ),
+        ),
+        todo(
+            "crl_slot_et_hour",
+            "h",
+            serde_json::json!(p.crl.slot_et.0),
+            "ASSUMPTION: the Eastern hour of the business-day CRL publication slot (10:00). \
+             SM-PROV §3.4.10 fixes the deadline, not the hour; replace with a provider's \
+             published CRL schedule.",
+        ),
+        todo(
+            "ma_max_open_cases",
+            "-",
+            serde_json::json!(p.ma.max_open_cases),
+            "ASSUMPTION: the MA's open-investigation table (1,000). No MA capacity is \
+             published (03 §12); sweep it in an MA-saturation study.",
+        ),
+        todo(
+            "ma_review_s",
+            "s",
+            serde_json::json!(match p.ma.mode {
+                crate::scms::params::MaMode::ManualReview { review } =>
+                    review.as_nanos() / 1_000_000_000,
+                crate::scms::params::MaMode::Automatic => 0,
+            }),
+            "ASSUMPTION: the pilots' manual MA (CAMP 1.2.2 §4.2-4.3; Primer pp.6, 8; owner \
+             decision 7) prints no review time; 8 h is one working shift. Replace with an \
+             operator's measured case time.",
+        ),
+        todo(
+            "la_aca_key_rotation_s",
+            "s",
+            serde_json::json!(p.pdu.la_aca_key_rotation_s),
+            "ASSUMPTION: CAMP 1.2.2 Table 68 shared_key_update_interval is a local option \
+             with no published value; one week (the i-period). Take it from an LA's local \
+             policy.",
+        ),
+        todo(
+            "seed_retry_s",
+            "s",
+            serde_json::json!(p.seed_retry.as_nanos() / 1_000_000_000),
+            "ASSUMPTION: CAMP describes no MA-to-LA retry; 30 s lets a two-of-two LA \
+             deployment with an LA down retry as a committee session does.",
         ),
         Parameter::new(
             "crl_entry_bytes",
@@ -781,9 +871,10 @@ fn card(p: &ScmsParams) -> ModelCard {
             "backend_link_latency_ms",
             "ms",
             serde_json::json!(p.backend_link_latency.as_nanos() / 1_000_000),
-            "One-way latency between backend entities. 04-models.md §10 has no SCMS backend \
-             topology; take it from the deployment being modelled, or from a WAN RTT \
-             measurement between the regions the entities sit in.",
+            "ASSUMPTION for a library run without a deployment: one-way latency between \
+             backend entities. Under security.scms.deployment (every engine run, WP-D1) the \
+             deployment's intra-region figure replaces it (great-circle at 2/3 c plus 1 ms \
+             per link, itself an ASSUMPTION: no provider publishes where it runs, 01 §2.3).",
         ),
         todo(
             "backend_link_bandwidth_bps",
@@ -828,10 +919,19 @@ fn card(p: &ScmsParams) -> ModelCard {
             "epoch_ns",
             "ns",
             serde_json::json!(p.epoch),
-            "The SimTime at which i-period 0 begins, which aligns the protocol's week \
-             numbering with the scenario's time.t0. IEEE 1609.2.1 numbers periods from a \
-             fixed calendar epoch; set this from the scenario's t0 and that epoch, or leave \
-             it at 0 to number periods from the run's own origin.",
+            "Library runs and a compressed calendar only: the SimTime at which i-period 0 \
+             begins. On the real calendar (every engine run on the US week, WP-D2) it is \
+             ignored and calendar_epoch_unix_s numbers the periods.",
+        ),
+        Parameter::new(
+            "calendar_epoch_unix_s",
+            "s",
+            serde_json::json!(crate::scms::governance::US_IPERIOD_EPOCH_UNIX_S),
+            std_src(
+                "SCMS Manager 1609.2.1 Profile v1.0.3 §2.1.17 Table 2 iPeriodEpoch: 4 am \
+                 Eastern, Tuesday 2015-01-06 (09:00 UTC); 03 §6.1. Set by the engine on the \
+                 real calendar",
+            ),
         ),
         todo(
             "first_batch_delay_s",
@@ -862,11 +962,13 @@ fn card(p: &ScmsParams) -> ModelCard {
             std_src("CAMP SCMS 1.2.2 SCMS-1203 (ra.client-signature-ttl-sec): 5 s"),
         ),
         todo(
-            "download_horizon_weeks",
+            "device_pool_periods",
             "week",
-            serde_json::json!(4),
-            "How far ahead a device keeps its pool topped up. 05-protocols.md §3.2 marks this \
-             OEM-configured; take it from the deployment or sweep it.",
+            serde_json::json!(DEVICE_POOL_PERIODS),
+            "ASSUMPTION: the i-periods a device holds (the engine's pool_periods, 2: this \
+             week and the next). It is a device download strategy, OEM-configured: the \
+             pilots bracket it, NYC one week ahead topped up weekly [CVP-P2 items 21, 24], \
+             THEA 156 weeks at once [CVP-LOG p.16] (params::PreloadPolicy). Sweep it.",
         ),
         todo(
             "repo_url_bytes",
@@ -882,13 +984,16 @@ fn card(p: &ScmsParams) -> ModelCard {
             "Framing the X_Y.zip container adds around one i-period of certificates. Measure \
              against a real batch file.",
         ),
-        todo(
+        Parameter::new(
             "report_payload_bytes",
             "B",
             serde_json::json!(p.sizes.report_payload_bytes),
-            "The TS 103 759 EtsiTs103759Data payload. Build decision D5 defers the ETSI PKI \
-             ASN.1, so no encoder can size it yet; once the inner-subtyping defect is resolved \
-             this becomes a real-encoder size like every certificate here.",
+            std_src(
+                "SCMS Manager Misbehavior Report Specification v1.0 §1-3 and ASN.1 v1.1, \
+                 encoded by mbr::encode_report: the reference report (1VInconsistent, two \
+                 signed BSMs and the accused's certificate) is 524 B COER, pinned by \
+                 tests/mbr.rs. A real report is charged its own bytes",
+            ),
         ),
         todo(
             "linkage_chain_identifier_bytes",
@@ -952,6 +1057,18 @@ fn card(p: &ScmsParams) -> ModelCard {
             "CAMP VSC5, SCMS PoC Implementation EE Requirements and Specifications, Release 1.1, 2016-05-04",
         ),
         paper("USDOT ITS-JPO, SCMS Technical Primer, FHWA-JPO-19-775, 2019"),
+        std_src(
+            "CAMP VSC5, SCMS PoC Implementation EE Requirements and Specifications \
+             Supporting SCMS Software Release 1.2.2, 2016-11-15",
+        ),
+        std_src("SCMS Manager, IEEE 1609.2.1 Profile v1.0.3, 2023-03-15"),
+        std_src("SCMS Manager, Provider Requirements v1.1, 2024-08-09"),
+        std_src("SCMS Manager, EE Certificate Rollover (Re-Enrollment) Technical Standard v1.0"),
+        std_src("SCMS Manager, Misbehavior Report and Application Specification v1.0"),
+        std_src(
+            "Every default with its status and source: docs/design/scms-real/constants.md \
+             (WP-D3)",
+        ),
         std_src("IEEE 1609.2-2016 and 1609.2a-2017"),
         std_src("ETSI TS 103 759 V2.1.1 (misbehaviour report payload)"),
         paper("Simplicio et al., ACPC, ePrint 2018/324 §2 (CRL expansion cost)"),
@@ -977,5 +1094,9 @@ pub fn register(
     ])
 }
 
-/// The five uncited wire sizes, re-exported so a card reader can find them.
-pub const UNCITED_SIZE_PARAMETERS: [&str; 5] = SizeParams::NAMES;
+/// The i-periods a device holds by default (`security.protocol.params.pool_periods`):
+/// **assumption**, see the card's `device_pool_periods`.
+pub const DEVICE_POOL_PERIODS: u32 = 2;
+
+/// The four uncited wire sizes, re-exported so a card reader can find them.
+pub const UNCITED_SIZE_PARAMETERS: [&str; 4] = SizeParams::NAMES;

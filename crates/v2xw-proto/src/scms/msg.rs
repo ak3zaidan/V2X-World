@@ -973,15 +973,18 @@ impl ScmsSizes {
         )
     }
 
-    /// A misbehaviour report: TS 103 759 payload, signed with a pseudonym certificate and
-    /// encrypted to the MA.
+    /// A misbehaviour report: the [SM-MBR] payload, signed with a pseudonym certificate and
+    /// encrypted to the MA. Only when no real report is built (the PDU layer off); a real
+    /// one is charged its own bytes.
     pub const fn report(&self) -> WireSize {
-        WireSize::parameter(
+        WireSize::derived(
             self.env_cert()
                 + self.certs.pseudonym.bytes()
                 + self.params.report_payload_bytes
                 + self.enc_key_bytes,
-            "report_payload_bytes",
+            "envelope(cert) + pseudonym + report_payload_bytes (the reference report's real \
+             COER, mbr::REFERENCE_REPORT_COER_BYTES) + encryption key",
+            DERIVATION,
         )
     }
 
