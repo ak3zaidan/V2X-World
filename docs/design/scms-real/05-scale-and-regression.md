@@ -147,3 +147,8 @@ Each fault was injected, the named test went red, and the fault was reverted
   binary (`docs/validation/test-run-cost.md` holds the earlier release ladder).
 - Cross-platform digest equality: the conformance gate's CI comparison has never run, so
   the pinned records are for macOS/aarch64 until it does.
+- Under the new profile `v2xw-sec` and `v2xw-proto` pass, with one exception:
+  `v2xw-proto/tests/threshold.rs::a_malicious_member_is_caught_by_its_share_excluded_and_the_session_restarts`
+  (`invalid_shares` 2, expected 1; 2 sessions). It fails identically at 95c9b30 with the
+  old opt-level-0 profile, so it predates this package. It most likely follows from the
+  per-provider runs of the D1 MULTI merge. Not fixed here.
