@@ -13,12 +13,19 @@ fn the_inventory_is_the_thirty_two_methods_of_section_6_15() {
     // added them did not update this count.
     assert_eq!(
         METHODS.len(),
-        40,
+        43,
         "§6.15: 31 methods plus rpc.discover, plus scenario.schema, cities.list, the \
-         three runs.* methods (run history and comparison) and the PKI view's three \
-         inspect queries (WP-E1)"
+         three runs.* methods (run history and comparison), the PKI view's three \
+         inspect queries (WP-E1) and its three reads of pki.state and pki.flow (WP-E2)"
     );
-    for pki in ["inspect.pdu", "inspect.cert", "inspect.knowledge"] {
+    for pki in [
+        "inspect.pdu",
+        "inspect.cert",
+        "inspect.knowledge",
+        "inspect.trust",
+        "inspect.flows",
+        "inspect.flow",
+    ] {
         assert!(METHODS.contains(&pki), "{pki}");
     }
     let mut sorted = METHODS.to_vec();
