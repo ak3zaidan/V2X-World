@@ -187,6 +187,14 @@ class Trust:
 # of 0 for this field is invalid." The engine clones the deployment, so this is counted as a
 # KNOWN deviation of the real artefact, not a disagreement, and only in exactly that form.
 KNOWN_RA_GROUP = [(0, 0, 'all', (b'\x80', 8))]
+# The 2025-07-17 test chain (SCMS Manager test_cert_chain.oer: the RAs of all three test
+# providers) carries the 1609.2.1-2022 form instead: no certIssuePermissions and one
+# certRequestPermissions group {all, minChainLength 0, chainLengthRange 0, app}. Read
+# literally, the chain-length text ("the number of certificates below this certificate down
+# to and including the end-entity certificate", [ASN-2] PsidGroupPermissions) puts that
+# group at length 1 under the ICA's {all, 2, 0} group, which it does not allow; the
+# 1609.2.1 text requires the RA's certRequestPermissions to cover what it requests (03
+# section 3.2) and says nothing more. Counted as KNOWN, only in exactly that form.
 
 
 def _group_key(g):
@@ -199,6 +207,12 @@ def _known_zero_min(c):
     return (ssp_role(c) == 'ra' and [_group_key(g) for g in t.get('certIssuePermissions', [])] == KNOWN_RA_GROUP)
 
 
+def _known_ra_request(c):
+    t = c['toBeSigned']
+    return (ssp_role(c) == 'ra' and 'certIssuePermissions' not in t
+            and [_group_key(g) for g in t.get('certRequestPermissions', [])] == KNOWN_RA_GROUP)
+
+
 def _covering(issuer_t, psid):
     """The issuer certIssuePermissions group that covers `psid` (explicit first, else all)."""
     groups = issuer_t.get('certIssuePermissions', [])
@@ -209,7 +223,7 @@ def _covering(issuer_t, psid):
     return next((g for g in groups if g['subjectPermissions'][0] == 'all'), None)
 
 
-def chain_length_errors(sub, iss):
+def chain_length_errors(sub, iss, known):
     """[ASN-2] PsidGroupPermissions; 02 section 12: per permission, against the issuer group
     that covers it, mcr_i <= mcr_s + 1 and mcr_i + clr_i >= mcr_s + clr_s + 1 (clr -1 is
     unbounded), with mcr_s = clr_s = 0 for appPermissions and certRequestPermissions entries."""
@@ -220,6 +234,9 @@ def chain_length_errors(sub, iss):
     for p in st.get('appPermissions', []):
         items.append((p['psid'], 0, 0, 0x80))
     for g in st.get('certRequestPermissions', []):
+        if _known_ra_request(sub):
+            known['RA certRequestPermissions {all, 0, 0} under the ICA, as published (test 2025)'] += 1
+            continue
         kind, body = g['subjectPermissions']
         for p in (body if kind == 'explicit' else [{'psid': 'all'}]):
             items.append((p['psid'], 0, 0, 0x40))
@@ -271,7 +288,7 @@ def validate_chain(chain, roots, known):
                 errs.append(f'cert {n}: signature does not verify')
             errs += [f'cert {n}: {e}' for e in ochain.check_pair(c, iss, n)
                      if not e.startswith('chain length') and e != 'issuer minChainLength 0']
-            errs += [f'cert {n}: {e}' for e in chain_length_errors(c, iss)]
+            errs += [f'cert {n}: {e}' for e in chain_length_errors(c, iss, known)]
         else:
             if c['issuer'][0] != 'self':
                 errs.append('chain does not end at a self-signed root')
@@ -610,7 +627,11 @@ class Run:
         req = tbs_request['content'][1][1]
         need(req['version'] == 2, 'EeEcaCertRequest version 2')
         t = req['tbsCert']
-        need(t['cracaId'] == b'\x00\x00\x00' and t['crlSeries'] == 0, 'cracaId/crlSeries not zero')
+        # [ASN-2.1] EeEcaCertRequest constrains cracaId '000000'H and crlSeries (0); the US
+        # profile requires crlSeries = 4 in the enrolment request ([SMP] section 6.3.1, 03
+        # section 5). The deployed profile governs (owner: identical to the deployment).
+        need(t['cracaId'] == b'\x00\x00\x00', 'cracaId not 000000')
+        need(t['crlSeries'] == 4, f'crlSeries {t["crlSeries"]}, not the US profile\'s 4')
         need('appPermissions' not in t and 'certIssuePermissions' not in t and 'certRequestPermissions' in t,
              'permissions of an enrolment request')
         need(t['id'][0] != 'linkageData', 'linkageData id')
