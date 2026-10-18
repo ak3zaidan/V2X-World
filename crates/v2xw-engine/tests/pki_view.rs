@@ -398,15 +398,11 @@ fn enforcement_is_stamped_per_vehicle_and_cases_name_their_evidence() {
             assert!(e["verified"].is_boolean(), "{id}: {e}");
         }
         let enforced: Vec<&&Value> = stages.iter().filter(|c| c["stage"] == "enforced").collect();
-        let mut devices = BTreeSet::new();
         for (k, c) in enforced.iter().enumerate() {
             let d = &c["detail"];
             assert_eq!(d["installed"].as_u64(), Some(k as u64 + 1), "{id}: running count");
-            assert!(
-                devices.insert(d["device"].as_str().expect("device").to_string()),
-                "{id}: a vehicle is stamped twice"
-            );
             assert!(d["installed"].as_u64() <= d["of"].as_u64(), "{id}: {d}");
+            assert!(!d.to_string().contains("ee/"), "{id}: the MA's table names a vehicle");
         }
         assert!(
             enforced.windows(2).all(|w| w[0]["t"].as_u64() <= w[1]["t"].as_u64()),

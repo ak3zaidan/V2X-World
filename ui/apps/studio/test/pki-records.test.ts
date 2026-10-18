@@ -25,6 +25,8 @@ import {
   boardColumn,
   credentialState,
   crlRows,
+  enforcement,
+  evidenceText,
   flatCells,
   fullGrid,
   mapTags,
@@ -102,8 +104,35 @@ describe("the Cases tab", () => {
       const furthest = Math.max(...rec.map((s) => BOARD_COLUMNS.findIndex((b) => b.stage === s.stage)));
       expect(boardColumn(c)).toBe(BOARD_COLUMNS[furthest].stage);
       const times = stageTimes(c);
-      expect(times.map((s) => [s.stage, s.t])).toEqual(rec.map((s) => [s.stage, s.t]));
+      // One row per stage, at its first record: `enforced` repeats once per enforcing vehicle.
+      const firsts = rec.filter((s, k) => rec.findIndex((x) => x.stage === s.stage) === k);
+      expect(times.map((s) => [s.stage, s.t])).toEqual(firsts.map((s) => [s.stage, s.t]));
     }
+  });
+
+  it("counts enforcement up to the newest vehicle, not the first (the frozen 'n of N')", () => {
+    let counted = 0;
+    for (const c of board.cases) {
+      const rec = recorded.get(c.case)!.filter((s) => s.stage === "enforced");
+      if (rec.length === 0) continue;
+      const newest = rec[rec.length - 1].detail as { installed: number; of: number };
+      expect(enforcement(c)).toEqual({ installed: newest.installed, of: newest.of });
+      expect(newest.installed).toBe(rec.length);
+      counted = Math.max(counted, rec.length);
+    }
+    expect(counted, "some case is enforced by more than one vehicle in the fixture").toBeGreaterThan(1);
+  });
+
+  it("puts each report's SM-MBR evidence in words, or why it was modelled", () => {
+    const texts = board.cases.flatMap((c) => {
+      const ev = c.stages.find((s) => s.stage === "reports-in")?.detail.evidence;
+      return Array.isArray(ev) ? ev.map(evidenceText) : [];
+    });
+    expect(texts.length).toBe(board.cases.length);
+    expect(texts).toContain("1VInconsistent/ConstantPosition, verified");
+    expect(texts).toContain("1VInconsistent/ConstantPosition, verified, shared by the other MA");
+    expect(texts.some((t) => t.startsWith("modelled (") && t.includes("constantPositionFrozen"))).toBe(true);
+    expect(texts).not.toContain("unknown");
   });
 
   it("names who learned what from each step", () => {

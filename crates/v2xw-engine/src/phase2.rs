@@ -4246,21 +4246,13 @@ impl Phase2 {
         let vehicles = u32::try_from(self.nodes.len()).unwrap_or(u32::MAX);
         let enforced = |k: usize,
                         c: &v2xw_proto::scms::run::Case|
-         -> Option<(Vec<pki_view::Enforcer>, u32)> {
+         -> Option<(Vec<SimTime>, u32)> {
             let ours = self
                 .cases
                 .iter()
                 .find(|e| e.provider == k && e.runs.is_some_and(|(r, _)| r == c.run))?;
             ours.entry.as_ref()?;
-            let list = ours
-                .enforcers
-                .iter()
-                .map(|&(node, at)| pki_view::Enforcer {
-                    node,
-                    device: device_of(node),
-                    at,
-                })
-                .collect();
+            let list = ours.enforcers.iter().map(|&(_, at)| at).collect();
             Some((list, vehicles))
         };
         tick.pki.cases = pki_view::drain_cases(&self.runs, &mut tracker, now, &enforced);

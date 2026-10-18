@@ -980,17 +980,6 @@ fn stage_at(run: &ScmsRun, r: crate::stage::FlowRun, s: crate::stage::StageId) -
     run.kernel.stages.at(r, s)
 }
 
-/// One vehicle enforcing a case's CRL entry: it installed a list carrying the entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Enforcer {
-    /// The engine node.
-    pub node: NodeId,
-    /// Its SCMS device (`ee/<index>`).
-    pub device: NodeId,
-    /// When it installed the entry.
-    pub at: SimTime,
-}
-
 /// A case's evidence for the `reports-in` stage: per report the case was opened on, its
 /// index at the MA and the type, subtypes and verification the MA read from it ([SM-MBR]
 /// §2.3), `shared` when it came from another provider's MA (which verified it). A report
@@ -1019,18 +1008,19 @@ fn case_evidence(ma: &crate::scms::run::MaState, c: &crate::scms::run::Case) -> 
 }
 
 /// Every case stage each run reached since the last call. `enforced` comes from the
-/// caller (`enforced(provider, case)` → every vehicle that has installed the case's entry,
-/// in install order, and how many vehicles there are), because enforcement is a
-/// vehicle-side fact the backend run does not hold. `enforced` is stamped once per
-/// enforcing vehicle, at its install instant, with the running count, so "n of N" keeps
-/// counting after the first install.
+/// caller (`enforced(provider, case)` → the instant each vehicle that has installed the
+/// case's entry installed it, in install order, and how many vehicles there are), because
+/// enforcement is a vehicle-side fact the backend run does not hold. `enforced` is stamped
+/// once per enforcing vehicle, at its install instant, with the running count, so "n of
+/// N" keeps counting after the first install. The record names no vehicle: it is the MA's
+/// case table, and the MA does not learn who installed its CRL.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn drain_cases(
     runs: &[ScmsRun],
     tracker: &mut PkiTracker,
     now: SimTime,
-    enforced: &dyn Fn(usize, &crate::scms::run::Case) -> Option<(Vec<Enforcer>, u32)>,
+    enforced: &dyn Fn(usize, &crate::scms::run::Case) -> Option<(Vec<SimTime>, u32)>,
 ) -> Vec<PkiCase> {
     use crate::stage::StageId as S;
     let mut out = Vec::new();
@@ -1127,17 +1117,15 @@ pub fn drain_cases(
                 && let Some((nodes, of)) = enforced(k, c)
             {
                 let stamped = tracker.case_enforcers.entry((k, r.0)).or_insert(0);
-                for (m, e) in nodes.iter().enumerate().skip(*stamped) {
+                for (m, at) in nodes.iter().enumerate().skip(*stamped) {
                     out.push(PkiCase {
                         schema: PKI_VIEW_SCHEMA,
                         case: case.clone(),
                         provider: label.clone(),
                         stage: "enforced".to_string(),
-                        t: e.at,
+                        t: *at,
                         instance: instance.clone(),
                         detail: json!({
-                            "node": e.node.index(),
-                            "device": format!("ee/{}", e.device.index()),
                             "installed": m + 1,
                             "of": of,
                         }),
