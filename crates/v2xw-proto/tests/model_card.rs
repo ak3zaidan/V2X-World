@@ -268,7 +268,10 @@ fn constants_md_matches_the_scms_card() {
     let mut problems = Vec::new();
     for p in &card.parameters {
         let Some((cell, status)) = rows.get(&p.name) else {
-            problems.push(format!("`{}` is on the card but not in constants.md", p.name));
+            problems.push(format!(
+                "`{}` is on the card but not in constants.md",
+                p.name
+            ));
             continue;
         };
         if !same_default(cell, &p.default) {
@@ -304,7 +307,10 @@ fn the_constants_md_check_can_fail() {
         .iter()
         .find(|p| p.name == "backend_hw_profile")
         .expect("on the card");
-    assert!(same_default("`hw-profile/i9-11950h-wolfssl`", &backend.default));
+    assert!(same_default(
+        "`hw-profile/i9-11950h-wolfssl`",
+        &backend.default
+    ));
     assert!(!same_default("`hw-profile/other`", &backend.default));
     let rows = constants_md();
     assert_eq!(rows["enrolment_lifetime_s"].1, "CITED");

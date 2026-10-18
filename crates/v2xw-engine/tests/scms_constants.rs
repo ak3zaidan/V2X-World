@@ -55,9 +55,21 @@ fn code_values() -> Vec<(&'static str, f64, &'static str)> {
     let ms = |d: v2xw_core::time::Duration| d.as_nanos() as f64 / 1e6;
     vec![
         ("relay_range_m", backend::RELAY_RANGE_M, "ASSUMPTION"),
-        ("backhaul_latency_ms", backend::BACKHAUL_LATENCY_MS, "ASSUMPTION"),
-        ("backhaul_capacity_mbps", backend::BACKHAUL_CAPACITY_MBPS, "ASSUMPTION"),
-        ("internet_one_way_ms", backend::INTERNET_ONE_WAY_MS, "DERIVED"),
+        (
+            "backhaul_latency_ms",
+            backend::BACKHAUL_LATENCY_MS,
+            "ASSUMPTION",
+        ),
+        (
+            "backhaul_capacity_mbps",
+            backend::BACKHAUL_CAPACITY_MBPS,
+            "ASSUMPTION",
+        ),
+        (
+            "internet_one_way_ms",
+            backend::INTERNET_ONE_WAY_MS,
+            "DERIVED",
+        ),
         ("wired_rto_ms", backend::WIRED_RTO_MS, "CITED"),
         ("reconnect_s", backend::RECONNECT_S, "CITED"),
         ("mbms_carousel_s", backend::MBMS_CAROUSEL_S, "ASSUMPTION"),
@@ -68,8 +80,16 @@ fn code_values() -> Vec<(&'static str, f64, &'static str)> {
         ("tls12_client_hello_bytes", f64::from(h12), "MEASURED"),
         ("tls12_server_flight_bytes", f64::from(s12), "MEASURED"),
         ("tls12_client_finish_bytes", f64::from(f12), "MEASURED"),
-        ("crl_fetch_interval_s", phase2::CRL_FETCH_INTERVAL_S, "ASSUMPTION"),
-        ("crl_broadcast_interval_s", phase2::CRL_BROADCAST_INTERVAL_S, "CITED"),
+        (
+            "crl_fetch_interval_s",
+            phase2::CRL_FETCH_INTERVAL_S,
+            "ASSUMPTION",
+        ),
+        (
+            "crl_broadcast_interval_s",
+            phase2::CRL_BROADCAST_INTERVAL_S,
+            "CITED",
+        ),
         ("report_bytes", f64::from(phase2::report_bytes()), "DERIVED"),
         (
             "report_store_quota_bytes",
@@ -82,7 +102,11 @@ fn code_values() -> Vec<(&'static str, f64, &'static str)> {
             f64::from(v2xw_node::rxval::OVERDUE_CRL_TOLERANCE_S),
             "CITED",
         ),
-        ("p2pcd_max_response_backoff_ms", ms(p2pcd.max_response_backoff), "CITED"),
+        (
+            "p2pcd_max_response_backoff_ms",
+            ms(p2pcd.max_response_backoff),
+            "CITED",
+        ),
         (
             "p2pcd_response_count_threshold",
             f64::from(p2pcd.response_count_threshold),
@@ -93,7 +117,11 @@ fn code_values() -> Vec<(&'static str, f64, &'static str)> {
             p2pcd.max_active_responses as f64,
             "ASSUMPTION",
         ),
-        ("rxval_ee_cache", v2xw_node::rxval::EE_CACHE as f64, "ASSUMPTION"),
+        (
+            "rxval_ee_cache",
+            v2xw_node::rxval::EE_CACHE as f64,
+            "ASSUMPTION",
+        ),
         ("us_electors", f64::from(deployment::US_ELECTORS), "CITED"),
         ("us_quorum", f64::from(deployment::US_QUORUM), "CITED"),
         (
@@ -113,11 +141,19 @@ fn code_values() -> Vec<(&'static str, f64, &'static str)> {
         ),
         ("fibre_fraction", fibre_fraction, "ASSUMPTION"),
         ("per_link_overhead_ms", ms(per_link_overhead), "ASSUMPTION"),
-        ("appcert_backhaul_latency_ms", ms(app.backhaul_latency), "ASSUMPTION"),
+        (
+            "appcert_backhaul_latency_ms",
+            ms(app.backhaul_latency),
+            "ASSUMPTION",
+        ),
         ("appcert_id_period_s", s(app.id_period), "ASSUMPTION"),
         ("appcert_max_gen_ahead_s", s(app.max_gen_ahead), "CITED"),
         ("appcert_retry_wait_s", s(app.retry_wait), "CITED"),
-        ("threshold_round_timeout_ms", ms(th.round_timeout), "ASSUMPTION"),
+        (
+            "threshold_round_timeout_ms",
+            ms(th.round_timeout),
+            "ASSUMPTION",
+        ),
         (
             "threshold_member_link_latency_ms",
             ms(th.member_link_latency),
@@ -142,10 +178,14 @@ fn mismatches(
         let tol = 0.5 * 10f64.powi(-i32::try_from(decimals).unwrap_or(0)) + 1e-9;
         match cell.parse::<f64>() {
             Ok(v) if (v - value).abs() <= tol => {}
-            _ => out.push(format!("`{name}`: constants.md says {cell}, the code {value}")),
+            _ => out.push(format!(
+                "`{name}`: constants.md says {cell}, the code {value}"
+            )),
         }
         if st != status {
-            out.push(format!("`{name}`: constants.md says {st}, expected {status}"));
+            out.push(format!(
+                "`{name}`: constants.md says {st}, expected {status}"
+            ));
         }
     }
     out

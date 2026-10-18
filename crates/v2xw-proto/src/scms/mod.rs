@@ -647,7 +647,9 @@ fn card(p: &ScmsParams) -> ModelCard {
             "ra_min_preload_periods",
             "-",
             serde_json::json!(crate::scms::params::RA_MIN_PRELOAD_PERIODS),
-            std_src("SCMS Manager 1609.2.1 Profile v1.0.3 §2.1.21 Table 3 ra-maxPreloadTime ≥ 2 weeks"),
+            std_src(
+                "SCMS Manager 1609.2.1 Profile v1.0.3 §2.1.21 Table 3 ra-maxPreloadTime ≥ 2 weeks",
+            ),
         ),
         Parameter::new(
             "ra_max_preload_periods",
