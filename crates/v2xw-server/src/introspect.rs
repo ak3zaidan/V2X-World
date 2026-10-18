@@ -294,18 +294,10 @@ pub fn answer<E: Introspect + ?Sized>(engine: &mut E, query: &Query) -> Result<V
                 ));
             };
             store.answer(q).ok_or_else(|| ServerError::UnknownId {
-                kind: match q {
-                    crate::pki::PkiQuery::Pdu { .. } => "pdu",
-                    crate::pki::PkiQuery::Cert { .. } => "certificate",
-                    crate::pki::PkiQuery::Knowledge { .. } => "entity",
-                },
+                kind: q.kind(),
                 id: format!(
                     "{}: not in this run's PKI records ({})",
-                    match q {
-                        crate::pki::PkiQuery::Pdu { id, .. } => id.as_str(),
-                        crate::pki::PkiQuery::Cert { id8, .. } => id8.as_str(),
-                        crate::pki::PkiQuery::Knowledge { entity, .. } => entity.as_str(),
-                    },
+                    q.subject(),
                     store.known(q)
                 ),
             })

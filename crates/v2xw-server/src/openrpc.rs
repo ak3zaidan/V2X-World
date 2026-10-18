@@ -487,6 +487,50 @@ fn all_methods() -> Vec<Value> {
             &[-32006, -32009],
         ),
         method(
+            "inspect.trust",
+            "The PKI trust domain at t_ns (the newest pki.state at or before it): every \
+             provider and its components with role, assumed region and status, the CTL \
+             with its history and electors, the CRL heads, and the components that carried \
+             traffic in the 2 s before it (WP-E2).",
+            object(&[], json!({"t_ns": sim_time})),
+            json!({"type": "object", "required": ["t_ns", "state", "activity"],
+                   "properties": {"t_ns": {"type": "integer"}, "state": {"type": "object"},
+                                  "window_ns": {"type": ["integer", "null"]},
+                                  "activity": {"type": "object"},
+                                  "certificates_known": {"type": "integer"},
+                                  "history": {"type": "integer"}}}),
+            &[-32006, -32009],
+        ),
+        method(
+            "inspect.flows",
+            "The SCMS flow instances recorded (pki.flow), newest first, filtered by flow, \
+             device or provider, with per-flow counts (WP-E2).",
+            object(
+                &[],
+                json!({"flow": {"type": "string"}, "device": {"type": "string"},
+                       "provider": {"type": "string"},
+                       "limit": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 200},
+                       "t_ns": sim_time}),
+            ),
+            json!({"type": "object", "required": ["instances", "total", "flows"],
+                   "properties": {"instances": {"type": "array"}, "total": {"type": "integer"},
+                                  "flows": {"type": "object"}}}),
+            &[-32006, -32009],
+        ),
+        method(
+            "inspect.flow",
+            "One SCMS flow instance: every message (sender, receiver, bytes, transport, the \
+             SPDUs it carried, without their bytes) and stage stamp in time order (WP-E2).",
+            object(
+                &["instance"],
+                json!({"instance": {"type": "string"}, "t_ns": sim_time}),
+            ),
+            json!({"type": "object", "required": ["instance", "flow", "records"],
+                   "properties": {"instance": {"type": "string"}, "flow": {"type": "string"},
+                                  "records": {"type": "array"}, "dropped": {"type": "integer"}}}),
+            &[-32006, -32009],
+        ),
+        method(
             "inspect.knowledge",
             "What one SCMS entity holds and what it handles but cannot read; the \
              ground-truth join onto devices only in the ground-truth view (WP-E1).",

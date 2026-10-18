@@ -1,6 +1,11 @@
 /**
- * The Backend view: every entity of the credential system the run is using — the US SCMS or the
- * European CCMS — as a diagram with live counts, and the traffic between them and the vehicles.
+ * The Backend view: every entity of the credential system the run is using as a diagram with live
+ * counts, and the traffic between them and the vehicles.
+ *
+ * Since WP-E2 the US SCMS is drawn by the PKI view (`components/pki/PkiPanel.tsx`: providers, the
+ * CTL, flows, the PDU decoder). This diagram remains the single-provider rendering the European
+ * CCMS keeps (00-gap-analysis §3.3), and what the PKI view falls back to whenever a run publishes
+ * no PKI view (`security.scms.pki_view: false`).
  *
  * A full-screen shell panel (`shell/panels.tsx`), like Metrics: it opens under the header, which
  * stays, so the run's state, its clock and Pause are never hidden behind it. (It used to be an
@@ -42,8 +47,8 @@ import {
   type BackendSnapshot,
 } from "../lib/backend.js";
 import { engine } from "../state/engine.js";
-import { CloseIcon, NetworkIcon } from "../shell/Icons.js";
-import { openPanel, togglePanel } from "../shell/route.js";
+import { CloseIcon } from "../shell/Icons.js";
+import { openPanel } from "../shell/route.js";
 import { useStudio } from "../state/store.js";
 import "../styles/backend.css";
 
@@ -51,25 +56,6 @@ import "../styles/backend.css";
 const POLL_MS = 1000;
 
 type Selection = { readonly kind: "entity"; readonly id: string } | { readonly kind: "edge"; readonly from: string; readonly to: string } | null;
-
-/** The header's door to the panel. */
-export function BackendButton(): React.JSX.Element {
-  const open = useStudio((s) => s.panel === "backend");
-  return (
-    <button
-      type="button"
-      className={open ? "icon-button labelled on" : "icon-button labelled"}
-      aria-pressed={open}
-      aria-label="Certificate system"
-      onClick={() => togglePanel("backend")}
-      data-testid="backend-button"
-      title="The certificate system (SCMS): the authorities that issue and revoke certificates, the roadside units, and the messages between them and the vehicles"
-    >
-      <NetworkIcon />
-      <span>Certificates</span>
-    </button>
-  );
-}
 
 /**
  * Ask the metrics panel to show `metrics`, titled `title`, and open it. Only metrics this run

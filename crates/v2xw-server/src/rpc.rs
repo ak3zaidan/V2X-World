@@ -23,7 +23,7 @@ use crate::run::Run;
 use crate::session::{CameraState, OVERLAYS, Session, overlay_is_gt};
 
 /// Every method name of §6.15, in the order the inventory lists them.
-pub const METHODS: [&str; 40] = [
+pub const METHODS: [&str; 43] = [
     "run.start",
     "run.pause",
     "run.resume",
@@ -41,6 +41,9 @@ pub const METHODS: [&str; 40] = [
     "inspect.pdu",
     "inspect.cert",
     "inspect.knowledge",
+    "inspect.trust",
+    "inspect.flows",
+    "inspect.flow",
     "explain",
     "scenario.get",
     "scenario.schema",
@@ -303,7 +306,8 @@ pub fn dispatch(ctx: &mut Context<'_>, request: &Request) -> Result<Outcome> {
         "inspect.node" => inspect_node(ctx, p),
         "inspect.link" => inspect_link(ctx, p),
         "inspect.entity" => inspect_entity(ctx, p),
-        "inspect.pdu" | "inspect.cert" | "inspect.knowledge" => inspect_pki(ctx, method, p),
+        "inspect.pdu" | "inspect.cert" | "inspect.knowledge" | "inspect.trust"
+        | "inspect.flows" | "inspect.flow" => inspect_pki(ctx, method, p),
         "explain" => explain(ctx, p),
         "scenario.get" => scenario_get(ctx, p),
         "scenario.schema" => scenario_schema(ctx, p),
@@ -1095,7 +1099,9 @@ fn inspect_entity(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outco
 /// `inspect.knowledge {entity, view}` (WP-E1). `view` is `ground-truth` (the default) or
 /// an entity: a PDU's plaintext is shown only to the entity that opened it, and an
 /// entity's knowledge without the ground-truth join. A NODE-only session cannot ask for
-/// ground truth.
+/// ground truth. `inspect.trust {t_ns}`, `inspect.flows {flow, device, provider, limit,
+/// t_ns}` and `inspect.flow {instance, t_ns}` (WP-E2) are the Studio PKI view's reads of
+/// `pki.state` and `pki.flow`, which are not on the event stream; they carry no plaintext.
 fn inspect_pki(ctx: &mut Context<'_>, method: &str, p: &Map<String, Value>) -> Result<Outcome> {
     use crate::pki::PkiQuery;
     let view = text(p, "view").unwrap_or("ground-truth").to_string();
@@ -1103,7 +1109,11 @@ fn inspect_pki(ctx: &mut Context<'_>, method: &str, p: &Map<String, Value>) -> R
         .session
         .as_ref()
         .is_some_and(|s| s.profile().is_node_only());
-    if node_only && view == "ground-truth" && method != "inspect.cert" {
+    let viewless = matches!(
+        method,
+        "inspect.cert" | "inspect.trust" | "inspect.flows" | "inspect.flow"
+    );
+    if node_only && view == "ground-truth" && !viewless {
         return Err(ServerError::VisibilityDenied {
             field: "view".to_string(),
             visibility: "GT",
@@ -1136,6 +1146,23 @@ fn inspect_pki(ctx: &mut Context<'_>, method: &str, p: &Map<String, Value>) -> R
                 t_ns: uint(p, "t_ns"),
             }
         }
+        "inspect.trust" => PkiQuery::Trust {
+            t_ns: uint(p, "t_ns"),
+        },
+        "inspect.flows" => PkiQuery::Flows {
+            flow: text(p, "flow").map(str::to_string),
+            device: text(p, "device").map(str::to_string),
+            provider: text(p, "provider").map(str::to_string),
+            limit: bounded(p, "limit", 1.0, 5_000.0, 200.0)? as usize,
+            t_ns: uint(p, "t_ns"),
+        },
+        "inspect.flow" => PkiQuery::Flow {
+            instance: required(
+                "instance",
+                "pass a flow instance from inspect.flows, e.g. \"provider-a/provisioning/2\"",
+            )?,
+            t_ns: uint(p, "t_ns"),
+        },
         _ => PkiQuery::Knowledge {
             entity: required(
                 "entity",
