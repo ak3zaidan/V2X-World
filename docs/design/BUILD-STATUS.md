@@ -4036,6 +4036,32 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-18: SCMS realism Phase E UI integration (WP-E2, E3)
+
+Merged `--no-ff` onto `aeb18bb` in order E2 (`acff967`, merge `8fc115a`), then E3 (`b62ac29`, merge `c464bdd`). Both agents had committed their work, so no wip snapshot was needed. E2 merged cleanly. E3 conflicted in seven files, and every conflict was resolved by keeping both packages:
+
+- **Server:** `pki.rs` keeps both stores: E2's `pki.state` history and flow logs, and E3's vehicles, cases and investigation steps. All eight `PkiQuery` variants are kept, and E2's `kind()`/`subject()` cover E3's too. `METHODS` is now 44 (`inspect.trust`, `inspect.flows`, `inspect.flow`, `inspect.pki`). The CRL list stays viewless for node-only sessions. Both test sections of `tests/pki.rs` are kept, and `loaded()` now reads `pki.case` (E3).
+- **Studio:** E2's `components/pki/PkiPanel.tsx` is the panel. E3's Vehicles, Cases and Revocation-lists tabs moved into it (`pki-records/RecordsTabs.tsx`, `built: true`), along with E3's map-mode picker. The tab and the view live in E3's `usePkiView` store, so the Inspector/HUD "open vehicle" still works; Flows was added to `PkiTab`, and the chosen tab is remembered for each browser. For the record tabs, the view list adds the CRLG and any vehicle view.
+- **Protocol and mock server:** `inspect.pki` is in `VwpMethods` and in `VWP_METHODS` (43; client test updated), and E3's duplicate `InspectCertParams` was dropped. The mock server now answers `inspect.trust` from `pki-studio.json`, which sits beside `VWP_PKI_TABS`. Without that, the merged panel fell back to the CCMS diagram and hid E3's tabs.
+- **Fixtures and re-bless (`c14ec7d`):** `pki-studio.json` was regenerated (`V2XW_PKI_STUDIO=1`) because E3 had re-recorded `pki-run.jsonl`. `phase2-path` and I-S1 60 s were re-blessed. Their frame digests and record counts did not change (6,403,029 and 259,446); only record content moved, from the MA's `pki.knowledge` now carrying `truth.cases`.
+- **Checks:**
+  - `cargo check --workspace --tests` passes with only the known warnings.
+  - v2xw-sec, -msg and -node pass (674), and so does v2xw-proto.
+  - v2xw-server passes lib (26), `pki` (11) and `rpc`.
+  - v2xw-engine passes lib (91) plus `phase2`, `pki_view`, `scms_scale`, `scms_providers`, `scms_wiring`, `scms_deployment`, `scms_constants`, `rsu_certs`, `provider_settings`, `credential_handoff` and `unknown_signer`.
+  - Studio typecheck and eslint report no errors, and vitest passes (309/309).
+  - Playwright passes 30 of 31, including `pki.spec.ts` (2) and `pki-records.spec.ts` (3).
+- **Oracle:** `oracle.py selftest` passes (412/412). `check_jer.py` passes on the proto `pki_view` corpus (102/102 layers).
+- **Release:** `cargo build --release -j 2 -p v2xw-cli --bins` succeeds and `V2XW_PORT=8758 ./run-sim.sh` boots: `/rpc/schema` (listing all ten `inspect.*` methods) and `/agent/status` both return 200.
+- **Still open:**
+  - `camera-fuzz.spec.ts` fails, with flat frames in chase mode. It still fails with E3's viewer and App changes reverted, so it is not from the PKI panels. It was not run at the base commit.
+  - The server `interop` conformance test (`conformance.mjs`) still expects 34 methods, along with Hello/resume checks. It was already wrong at the base (40 methods there), and `mock-server` `interop.test.ts` has the same problem (expects 33).
+  - The protocol test `feed.test.ts` ("crypto") is not attributed (E2 report).
+  - `inspect.trust` is asked without `t_ns`.
+  - E3's gaps: `enforced` is stamped once, evidence type/subtype are not recorded, `pki-sequence.jsonl` was not regenerated, RSU reporters show no provider, and the "who learned what" text is a fixed table.
+  - The e2e-engine PKI spec was not re-run on the merge.
+- **Cleanup:** the worktrees and branches `worktree-wf_7b01294e-591-{5,6}` were removed, and so was `target/agents`.
+
 ## 2026-10-18: SCMS realism follow-ups integration (WP-DET, VCOST, RSUC)
 
 Merged `--no-ff` onto `738be47` in order DET (`a0c75f4`, merge `5097db3`), VCOST (`2f716a9`, merge `72678b1`), then RSUC (`e2606d0`, merge `f8e51a8`). All three agents had committed, so no wip snapshot was needed. Git reported no conflicts. Two fix commits followed (`ef23a0b`, `8450752`), then `cargo fmt --all` as its own commit (`27bb9cd`).
