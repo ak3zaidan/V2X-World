@@ -4036,6 +4036,36 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-18: SCMS realism Phase F integration (WP-F1, F2) and the cleanup package
+
+Merged `--no-ff` onto `fd9c444` in order CLEAN (`88d2e6e`, merge `dc6ec05`), F1 (`b23a45c`, merge `2907e26`), F2 (`f24d9f3`, merge `832d81a`). All three agents had committed their work, so no wip snapshot was needed. Git reported no conflicts.
+
+- **CLEAN (delivered):** method counts come from the real lists (`VWP_METHODS`, server `METHODS`; the client gained `scenario.schema`; 44 methods). `feed.test` names the `crypto` block. The chase camera stays outside its subject at minimum zoom (the `camera-fuzz` failure), and the E3 tag rings read their colours. The `pki_view` change digest is a truncated SHA-256. `pki.case` stamps `enforced` once per installing vehicle, naming none, and records each report's evidence (real, shared or modelled). `pki-sequence` uses real SM-MBR reports. The 65 hidden-terminal losses are explained in `foundations.md`.
+- **WP-F1 (delivered):** `scenarios/scms-conformance.yaml` on the real calendar with two fast-forward windows; `tests/conformance.rs` captures it for `tools/conformance/check_run.py`; `06-conformance-run.md`. Engine fixes: the last PKI-view interval is flushed (`Phase2::final_pki`), and the PLV is sealed as Ieee1609Dot2Data-Unsecured.
+- **WP-F2 (delivered):** `04-validation-report.md` and the owner artifact. New tests: proto `camp_sizes` and sec `crl_size_brecht`, plus `tools/realworld/{sizes,crl_sizes}.py`.
+- **Fixes after the merges (`8861c17`):** `phase2-path` and I-S1 60 s re-blessed. Frame digests and record counts did not change (6,403,074 and 259,446), only record content: F1's PLV bytes, plus CLEAN's `pki.case` changes for I-S1, which CLEAN had not re-blessed. The UI PKI fixtures were re-recorded with the README steps. `cargo fmt --all` is its own commit (`3a30f2c`).
+- **Checks:**
+  - `cargo check --workspace --tests` passes with only the known warnings.
+  - v2xw-sec, -msg, -proto and -node pass: 950 tests, 8 ignored, no failures.
+  - v2xw-engine passes lib (91), `backend_entities` (9), `calendar` (7), `conformance` (2, 445 s), `credential_handoff` (3), `p2pcd_air` (3), `phase2` (12), `pki_view` (8), `provider_settings` (4), `rsu_certs` (2, which F2 had not seen pass), `scms_constants` (4), `scms_deployment` (2), `scms_providers` (2), `scms_scale` (1), `scms_wiring` (4) and `unknown_signer` (1). The two digest tests passed after the re-bless.
+  - v2xw-server passes lib (26), `pki` (11) and `rpc` (12).
+  - Studio typecheck passes and vitest passes 311/311.
+  - Playwright passed 30 of 31. `scene-validation` "aerial view draws one mark per live vehicle" saw 2 of 200 vehicles culled, then passed on a rerun alongside `pki` and `pki-records` (20/20), so it looks timing-dependent.
+- **Oracle:** `oracle.py selftest` passes (412/412). `check_run.py` over the merged main's capture passes 19,183/19,183 checks with 0 disagreements (2,480 pseudonyms, 6 RSU application certificates, revoked 1000018/27/28). It counts two known deviations: the RA `certRequestPermissions {all,0,0}` in the test 2025 chain, and the production RA's `minChainLength 0`.
+- **Release:** `cargo build --release -j 2 -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots, and `/agent/status` and `/rpc/schema` both return 200.
+- **Behaviour change:** SCMS runs record the trailing `pki.*` records of their last interval. PLV and RaAcaCertRequest bytes change. `Case` has a new `reports` field, `MaState` has `report_evidence`/`pending_evidence`, and `drain_cases` takes `Vec<SimTime>`. `camp_sizes` pins certificate sizes, so a profile change must update its table and report §3 together.
+- **Still open:**
+  - The owner must decide on the two real-artefact chain-length deviations (F1) and on F2 §9's five findings: the RA permission forms differ, the US pseudonym region is UNCONFIRMED, application and identification certificates carry no SSPs, `RA_MAX_PRELOAD_PERIODS` duplicates `max_periods_ahead: 156`, and the real-artefact tests are still `#[ignore]`.
+  - EeEcaCertRequest crlSeries is checked as 4 against the ASN.1's 0.
+  - CRL-broadcast and P2PCD frames are not tapped.
+  - The `check_pdus.py` B3a corpus was not re-run. `scms-conformance` is not in `ready-made.txt`.
+  - The viewer render-perf allocation test is flaky under load.
+  - In one run a report was modelled for lack of an active pseudonym.
+  - CCA ignores preamble detection.
+  - `sensitivity`'s `DefaultHasher` remains.
+  - The full engine suite and the e2e-engine PKI spec were not run.
+- **Cleanup:** the worktrees and branches `worktree-wf_78ac7a82-3d5-{1,2,3}` were removed, and so was `target/agents`.
+
 ## 2026-10-18: SCMS realism Phase E UI integration (WP-E2, E3)
 
 Merged `--no-ff` onto `aeb18bb` in order E2 (`acff967`, merge `8fc115a`), then E3 (`b62ac29`, merge `c464bdd`). Both agents had committed their work, so no wip snapshot was needed. E2 merged cleanly. E3 conflicted in seven files, and every conflict was resolved by keeping both packages:
