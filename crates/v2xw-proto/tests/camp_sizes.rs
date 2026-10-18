@@ -201,3 +201,92 @@ fn certificate_sizes_against_camp_table_3() {
     assert_eq!(r.len(), 24, "20 pseudonyms and 4 identification or application certificates");
     assert!(r.iter().all(|&l| (454..=470).contains(&l)), "{r:?}");
 }
+
+/// CAMP's design sizing for 17 M new vehicles a year ([CAMP122] §6.3.3.4, §6.3.4.4,
+/// §6.3.6.4; 03 §12) assumes, per vehicle: one provisioning request in its life, 156
+/// batch files (3 years of weeks) at first download, then one `.info` poll and one new
+/// file a week. This test measures those per-device counts in the engine (a THEA-style
+/// 3-year preload and a weekly top-off on the default profile), then scales them to the
+/// fleet and compares each rate with CAMP's figure.
+#[test]
+fn camp_sizing_rates_follow_from_the_engines_per_device_counts() {
+    use v2xw_proto::scms::pdu::SpduKind;
+    const WEEKS: u32 = 4;
+    // One run per device, so every SPDU the RA receives is that device's.
+    let one = |preload: u32, jmax: u32, weeks: u32| {
+        let mut p = ScmsParams::default().quick();
+        p.pdu.keep_bytes = true;
+        let mut run = ScmsRun::new(p).expect("certificates encode");
+        run.add_device(DEVICE_A);
+        run.enrol(DEVICE_A);
+        run.run().expect("enrolment runs");
+        run.provision(DEVICE_A, 614, preload, jmax);
+        run.run().expect("runs");
+        for w in 1..=weeks {
+            run.topup(DEVICE_A, 614 + preload - 1 + w, jmax);
+            run.run().expect("runs");
+        }
+        let ra = run.state.nodes.ra.index();
+        let to_ra = |k: SpduKind| {
+            run.state
+                .pdus
+                .iter()
+                .filter(|p| p.kind == k && p.to == ra)
+                .count() as f64
+        };
+        (
+            to_ra(SpduKind::EeRaCertRequest),
+            to_ra(SpduKind::EeRaDownloadRequest),
+            f64::from(run.state.devices[&DEVICE_A].info_requests),
+        )
+    };
+    // A: THEA, 3 years at once (jmax 1 keeps it fast; the file count is the point).
+    let (requests, first_files, _) = one(156, 1, 0);
+    // B: the default 20 a week, topped off weekly.
+    let (b_requests, b_downloads, b_info) = one(1, 20, WEEKS);
+    assert_eq!(b_requests, 1.0);
+    let b_files = b_downloads - b_info; // a Download-Req is either `.info` or a batch file
+    eprintln!(
+        "per device: {requests} request, {first_files} first files; per week {} .info, {} files",
+        b_info / f64::from(WEEKS),
+        (b_files - 1.0) / f64::from(WEEKS)
+    );
+    assert_eq!(requests, 1.0, "ra-maxReqs = 1");
+    assert_eq!(first_files, 156.0, "3 years of weekly batch files");
+    assert_eq!(b_info, f64::from(WEEKS), "one .info a week");
+    assert_eq!(
+        b_files,
+        1.0 + f64::from(WEEKS),
+        "the first week, then one file a week"
+    );
+
+    // Scale: 17 M new vehicles a year; the polling fleet is 17 M x (year - 1) plus half
+    // the year's new cars (CAMP's "half of new cars plus all existing cars").
+    const NEW: f64 = 17.0e6;
+    const YEAR_S: f64 = 31_557_600.0;
+    const WEEK_S: f64 = 604_800.0;
+    let rel = |a: f64, b: f64| (a - b).abs() / b;
+    let provisioning = NEW * requests / YEAR_S;
+    assert!(
+        rel(provisioning, 0.5) < 0.1,
+        "{provisioning} req/s vs CAMP 0.5"
+    );
+    for (year, camp) in [(1.0, 14.0), (3.0, 70.0), (5.0, 126.0), (10.0, 267.0)] {
+        let fleet = NEW * (year - 1.0) + NEW / 2.0;
+        let polls = fleet * (b_info / f64::from(WEEKS)) / WEEK_S;
+        eprintln!("year {year}: {polls:.1} .info polls/s (CAMP {camp})");
+        assert!(
+            rel(polls, camp) < 0.05,
+            "year {year}: {polls} polls/s vs CAMP {camp}"
+        );
+    }
+    let files_y1 = NEW * first_files / YEAR_S;
+    let weekly = (b_files - 1.0) / f64::from(WEEKS);
+    let files_y10 = files_y1 + NEW * 9.0 * weekly / WEEK_S;
+    eprintln!("batch files/s: year 1 {files_y1:.1} (CAMP 85), year 10 {files_y10:.1} (CAMP ~337)");
+    assert!(rel(files_y1, 85.0) < 0.05, "{files_y1} files/s vs CAMP 85");
+    assert!(
+        rel(files_y10, 337.0) < 0.05,
+        "{files_y10} files/s vs CAMP ~337"
+    );
+}
