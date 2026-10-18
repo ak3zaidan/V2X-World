@@ -4036,6 +4036,33 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-17: SCMS realism wave 8 integration (WP-F3, D3, E1)
+
+Merged `--no-ff` onto `95c9b30` in order F3 (`2f8e196`, merge `bf6c218`), D3 (`9977868`, merge `cf06907`), then E1 (`b0d3210`, merge `5f8cb0a`). All three agents had committed their work, so no wip snapshot was needed. Git reported no conflicts. One fix commit followed (`bfb9e23`, the digest re-bless). `cargo fmt --all` made no changes, so there is no fmt commit.
+
+- **F3, scale and regression:** `tests/scms_scale.rs` checks I-S1: real and modelled crypto give the same report, record and frame digests on the two-provider Phase 2 path. Regression digests are pinned in `tests/regression/` (bless with `V2XW_BLESS_SCMS_DIGESTS=1`). A phase2 test compares honest revocation on `camp-reference` and `us-production-2025`, and there is a `long_` fleet-scale test. See `docs/design/scms-real/05-scale-and-regression.md`. `Cargo.toml` builds dependencies at opt-level 2 in dev/test and ten hot workspace crates at opt-level 1 in test, with debug assertions and overflow checks unchanged.
+- **D3, constant and citation audit:** `docs/design/scms-real/constants.md` lists every SCMS default as CITED, DERIVED, MEASURED or ASSUMPTION, and proto `model_card` and engine `scms_constants` check it against the code. Real report size is 524 B and the upload 1,119 B. TLS flights are measured by `tools/scms_constants/tls_handshake_sizes.py` and charged on SCMS connections by `scms_tcp_config`.
+- **E1, PKI view:** `v2xw-proto/src/scms/pki_view.rs` builds `pki.state`, `pki.flow`, `pki.case`, `node.credentials` and `pki.knowledge`. The engine publishes all five by default (`security.scms.pki_view: false` turns them off). The server answers `inspect.pdu`, `inspect.cert` and `inspect.knowledge` (40 RPC methods), and `v2xw-server` now depends on `v2xw-proto`. UI fixtures are in `ui/apps/studio/test/fixtures/pki`.
+- **Fix after the merge (`bfb9e23`):** F3's two pinned digests went red: `phase2::the_phase_2_path_reproduces_its_regression_digest` and `scms_scale::real_and_modelled_crypto_…`. Frame digests stayed the same in both, and only the record stream moved. At the F3+D3 merge alone (checked in a temporary worktree), phase2-path's record digest changes with the record count unchanged at 6,383,782: D3's TLS and report bytes change backend record contents. E1's five channels add records: phase2-path goes from 6,383,782 to 6,402,848, and I-S1 60 s from 256,250 to 259,161. Both cases were re-blessed. No assertion was changed.
+- **Checks:** `cargo check --workspace --tests` passes, with only the known warnings.
+  - v2xw-sec, -msg, -proto and -node pass, except the known proto `threshold::a_malicious_member_…` (invalid_shares 2 vs 1), which also fails at `95c9b30`.
+  - v2xw-engine passes: lib (91), `backend_entities` (9, 77 s), `packet_cellular`, `phase2` (12 + 1 ignored, 390 s), `pki_view` (6), `scms_constants` (3), `scms_deployment` (2), `scms_providers` (2), `scms_scale` (I-S1) and `scms_wiring` (4).
+  - The `--ignored long_fleet_scale_run_cost` test passes in 2,211 s over 90 s of simulated time. At 1,500 veh/h: 36 vehicles, 19 s. At 6,000 veh/h: 146 vehicles, 144 s. At 24,000 veh/h: 620 vehicles, 2,047 s, with 6 attackers revoked and 0 honest.
+  - v2xw-server lib (26), `pki` (3), `rpc` (11) and `stub` (10) pass, and so do v2xw-record (95) and v2xw-metrics (245).
+- **Oracle:** `oracle.py` passes selftest (412/412), mutate (24 faults, 0 silent) and verify-emitted (10/10). `tools/pki_view/check_jer.py` passes 102/102 layers on a corpus regenerated after the merge (`V2XW_PKI_OUT`). `tls_handshake_sizes.py` prints `VERDICT ok`.
+- **Release:** `cargo build --release -j 2 -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots, and `/agent/status` and `/rpc/schema` both return 200.
+- **Behaviour change:**
+  - Every SCMS run's records change. Reports not built as real bytes are now charged 1,119 B instead of 1,200 B, and SCMS TLS handshakes are about 3 KB smaller. SCMS runs also record the five PKI-view channels unless `pki_view: false`.
+  - Air frames are unchanged on the pinned paths.
+  - The card parameter `download_horizon_weeks` is now `device_pool_periods`.
+  - The first build in a fresh target dir rebuilds every dependency at the new opt-level.
+- **Still open:**
+  - The proto `threshold` failure.
+  - E1: pre-drive provisioning SPDUs are flow `preload`, off the run clock. Devices cannot open `AcaEeCertResponsePrivate`. Knowledge rows are capped at 64. The 2025 edition is not distinguished. The engine fault "PDU bytes off" was never run.
+  - D3: several ASSUMPTION constants (relay range, backhaul, MA review, four wire sizes). The RSU certificate cycle's backhaul (20 ms / 10 Mbit/s) differs from the engine's (10 ms / 1 Gbit/s). The TLS 1.3 client Finished is not charged.
+  - F3: release-build fleet costs, cross-platform digest equality, and the 600 s 24,000 veh/h horizon.
+- **Cleanup:** the worktrees and branches `worktree-wf_ee21888a-ee9-{5,6,7}` were removed, and so was `target/agents`.
+
 ## 2026-10-17: SCMS realism wave 7 follow-ups integration (WP-D2, AIR, D1 MULTI)
 
 Merged `--no-ff` onto `6d2a240` in order D2 (`deec727`, merge `b280dfd`), AIR (`50c6406`, merge `90b7101`), then MULTI (`081a7e9`, merge `e6c0911`). All three agents had committed their work, so no wip snapshot was needed. Git reported no textual conflicts. Two fix commits followed, then `cargo fmt --all` as its own commit (`de5b60c`). Two `research:` commits by someone else (`1e2218b`, `fe25078`) landed on `main` during the integration; they are not part of this wave.
