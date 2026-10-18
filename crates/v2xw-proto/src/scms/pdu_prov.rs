@@ -31,8 +31,8 @@ use v2xw_msg::sec_types::ieee1609_dot2::{
 };
 use v2xw_msg::sec_types::ieee1609_dot2_base_types::{
     CrlSeries, Duration as Ieee1609Duration, HashedId3, IValue, LaId as AsnLaId,
-    LinkageValue as AsnLinkageValue, Opaque, Psid, PsidSsp, SequenceOfPsidSsp, ServiceSpecificPermissions,
-    Time32, Uint8, Uint16, Uint32, ValidityPeriod,
+    LinkageValue as AsnLinkageValue, Opaque, Psid, PsidSsp, SequenceOfPsidSsp,
+    ServiceSpecificPermissions, Time32, Uint8, Uint16, Uint32, ValidityPeriod,
 };
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ee_interface::{
     AcaEeCertResponse, AcaEeInterfacePdu,
@@ -190,7 +190,8 @@ pub fn aca_open_plv(
         e.enc_plv.content.clone(),
     );
     let plain = pdu::decrypt_symm(&pdu::coer(&data)?, &key)?;
-    let Ieee1609Dot2Content::unsecuredData(Opaque(plain)) = pdu::decode::<Ieee1609Dot2Data>(&plain)?.content
+    let Ieee1609Dot2Content::unsecuredData(Opaque(plain)) =
+        pdu::decode::<Ieee1609Dot2Data>(&plain)?.content
     else {
         return Err(PduError::Shape("a sealed PLV decrypts to unsecuredData"));
     };

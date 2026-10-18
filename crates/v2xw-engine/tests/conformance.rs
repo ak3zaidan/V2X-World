@@ -214,7 +214,11 @@ fn outcome() -> &'static Outcome {
                     .devices
                     .iter()
                     .filter_map(|(n, d)| {
-                        d.credentials.keys().map(|(i, _)| *i).max().map(|i| (n.index(), i))
+                        d.credentials
+                            .keys()
+                            .map(|(i, _)| *i)
+                            .max()
+                            .map(|i| (n.index(), i))
                     })
                     .collect()
             })
@@ -250,20 +254,25 @@ fn outcome() -> &'static Outcome {
 fn write_capture(o: &Outcome, engine: &Engine, dir: &Path) {
     std::fs::create_dir_all(dir).expect("creates the capture directory");
     let p2 = engine.phase2().expect("an SCMS run");
-    let lines = |rows: Vec<Value>| -> String {
-        rows.iter().map(|r| format!("{r}\n")).collect::<String>()
-    };
+    let lines =
+        |rows: Vec<Value>| -> String { rows.iter().map(|r| format!("{r}\n")).collect::<String>() };
     std::fs::write(
         dir.join("pdus.jsonl"),
         lines(o.pdus.iter().map(|p| json!(p)).collect()),
     )
     .expect("writes pdus.jsonl");
     let write = |name: &str, v: &Value| {
-        std::fs::write(dir.join(name), serde_json::to_string_pretty(v).expect("json"))
-            .expect("writes the capture");
+        std::fs::write(
+            dir.join(name),
+            serde_json::to_string_pretty(v).expect("json"),
+        )
+        .expect("writes the capture");
     };
     write("certs.json", &json!(o.capture.certs));
-    write("crls.json", &json!(o.capture.crls.values().collect::<Vec<_>>()));
+    write(
+        "crls.json",
+        &json!(o.capture.crls.values().collect::<Vec<_>>()),
+    );
     std::fs::write(
         dir.join("air.jsonl"),
         lines(
@@ -424,7 +433,12 @@ fn the_run_walks_every_lifecycle_step() {
     );
     // 3. RSU application-certificate renewal: week 616, asked at the 615 rollover.
     assert!(p.rsu_app_certs_renewed >= 2, "{}", p.rsu_app_certs_renewed);
-    assert!(o.app_certs.iter().flatten().any(|(_, period)| *period == 616));
+    assert!(
+        o.app_certs
+            .iter()
+            .flatten()
+            .any(|(_, period)| *period == 616)
+    );
     // 4. Report, case, CRL, enforcement by both providers' receivers.
     assert!(p.reports_mbr_real > 0, "no real SM-MBR");
     assert!(p.cases_opened > 0 && p.crls_issued > 0, "{p:?}");
@@ -446,7 +460,10 @@ fn the_run_walks_every_lifecycle_step() {
     assert!(p.ctls_published >= 1, "no CTL was published");
     assert!(o.ctls[0].0.iter().any(|s| *s >= 1) && o.ctls[0].1 >= 1);
     for (k, (seqs, _)) in o.ctls.iter().enumerate() {
-        assert!(seqs.iter().any(|s| *s >= 1), "provider {k} holds no new CTL");
+        assert!(
+            seqs.iter().any(|s| *s >= 1),
+            "provider {k} holds no new CTL"
+        );
     }
     let _ = get;
 }
@@ -462,7 +479,11 @@ fn every_spdu_the_runs_emitted_is_captured_once_with_its_bytes() {
             *emitted.entry(k).or_default() += 1;
         }
         let mut captured: BTreeMap<&str, usize> = BTreeMap::new();
-        for p in o.pdus.iter().filter(|p| p.id.starts_with(&format!("{label}/"))) {
+        for p in o
+            .pdus
+            .iter()
+            .filter(|p| p.id.starts_with(&format!("{label}/")))
+        {
             assert!(p.hex.is_some(), "{} has no bytes", p.id);
             *captured.entry(p.kind.as_str()).or_default() += 1;
         }
