@@ -120,6 +120,8 @@ describe("the Cases tab", () => {
     expect(board.cases.every((c) => (c.truth?.accused.length ?? 0) > 0 && (c.truth?.reporters.length ?? 0) > 0)).toBe(true);
     const gtRings = mapTags("case", { vehicles: [], cases: board.cases, view: GROUND_TRUTH, nowNs: 0 });
     expect(gtRings.size).toBeGreaterThan(0);
+    // Even handed ground-truth cases, a view that is not ground truth draws no party.
+    expect(mapTags("case", { vehicles: [], cases: board.cases, view: "provider-a/ma/0", nowNs: 0 }).size).toBe(0);
     for (const view of Object.keys(tabs.cases).filter((v) => v !== GROUND_TRUTH)) {
       const as = asCases(tabs.cases[view])!;
       expect(JSON.stringify(as)).not.toContain('"ee/');
