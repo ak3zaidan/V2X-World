@@ -310,6 +310,17 @@ pub struct ScmsPki {
     pub extra: Vec<Authority>,
 }
 
+/// CRL series of the root-issued system certificates ([SMP] Table 1).
+const SERIES_ROOT_SIGNED: u16 = 256;
+
+/// A component's validity: the published US certificate's, from the one role table
+/// ([`crate::scms::governance::ROLE_SPECS`]), so the device-facing PKI and the governance
+/// hierarchy cannot drift apart (validation finding CF-LIFE: the device-facing
+/// components were 3 years, a value no published certificate has).
+fn published_life(role: &str) -> Ieee1609Duration {
+    crate::scms::governance::published_lifetime(role)
+}
+
 pub(crate) fn opaque_ssp(ssp: &SecurityMgmtSsp) -> Result<ServiceSpecificPermissions> {
     Ok(ServiceSpecificPermissions::opaque(coer(ssp)?.into()))
 }
@@ -328,7 +339,7 @@ pub(crate) fn public_encryption_key(p: &Point) -> Result<PublicEncryptionKey> {
 fn component_tbs(
     name: &str,
     start: u32,
-    years: u16,
+    life: Ieee1609Duration,
     ssp: &SecurityMgmtSsp,
     issues: bool,
     enc: Option<&Point>,
@@ -370,10 +381,7 @@ fn component_tbs(
         CertificateId::name(Hostname(name.into())),
         HashedId3(FixedOctetString::from([0u8; 3])),
         CrlSeries(Uint16(0)),
-        ValidityPeriod::new(
-            Time32(Uint32(start)),
-            Ieee1609Duration::years(Uint16(years)),
-        ),
+        ValidityPeriod::new(Time32(Uint32(start)), life),
         None,
         None,
         Some(SequenceOfPsidSsp(app)),
@@ -410,7 +418,7 @@ impl ScmsPki {
             // enrolment certificates it issues and their successors ([SMP] §6.3.1: the
             // requested validity lies inside the ECA's), so the earlier 12/6/3 years made
             // a successor unissuable (WP-B2).
-            30,
+            Ieee1609Duration::years(Uint16(30)),
             &SecurityMgmtSsp::root(RootCaSsp::new(Uint8(2))),
             true,
             None,
@@ -432,7 +440,7 @@ impl ScmsPki {
             &root,
             &mut g,
             "ica.provider-a",
-            25,
+            published_life("ica"),
             &SecurityMgmtSsp::ica(IcaSsp::new(Uint8(2))),
             true,
             false,
@@ -507,7 +515,7 @@ impl ScmsPki {
             &ica,
             g,
             &format!("eca.{label}"),
-            15,
+            published_life("eca"),
             &SecurityMgmtSsp::eca(EcaSsp::new(Uint8(2))),
             false,
             false,
@@ -517,7 +525,7 @@ impl ScmsPki {
             &ica,
             g,
             &format!("ra.{label}"),
-            3,
+            published_life("ra"),
             &SecurityMgmtSsp::ra(RaSsp::new(Uint8(2))),
             false,
             true,
@@ -527,17 +535,21 @@ impl ScmsPki {
             &ica,
             g,
             &format!("aca.{label}"),
-            3,
+            published_life("pca"),
             &SecurityMgmtSsp::aca(AcaSsp::new(Uint8(2))),
             false,
             false,
             start,
         )?;
-        let ma = Self::issue(
-            &ica,
+        // The MA is root-issued on CRL series 256 ([SMP] Table 1; both published US MA
+        // certificates, ISS pre-production and SAESOL test, are root-signed, series 256,
+        // 10-12 years, with an encryption key). Validation finding CF-MA.
+        let ma = Self::issue_on(
+            &root,
             g,
             &format!("ma.{label}"),
-            3,
+            published_life("ma"),
+            SERIES_ROOT_SIGNED,
             &SecurityMgmtSsp::ma(MaSsp::new(
                 Uint8(2),
                 v2xw_msg::sec_types::ieee1609_dot2_base_types::SequenceOfPsid(vec![Psid(
@@ -552,7 +564,7 @@ impl ScmsPki {
             &ica,
             g,
             &format!("la1.{label}"),
-            3,
+            published_life("la1"),
             &SecurityMgmtSsp::la(LaSsp::new(Uint8(2), Uint16(1))),
             false,
             false,
@@ -562,7 +574,7 @@ impl ScmsPki {
             &ica,
             g,
             &format!("la2.{label}"),
-            3,
+            published_life("la2"),
             &SecurityMgmtSsp::la(LaSsp::new(Uint8(2), Uint16(2))),
             false,
             false,
@@ -572,7 +584,7 @@ impl ScmsPki {
             &ica,
             g,
             &format!("dcm.{label}"),
-            3,
+            published_life("dcm"),
             &SecurityMgmtSsp::dcm(DcmSsp::new(Uint8(2))),
             false,
             false,
@@ -594,7 +606,7 @@ impl ScmsPki {
             &ica,
             g,
             &format!("crlg.{label}"),
-            3,
+            published_life("crlg"),
             &SecurityMgmtSsp::crl(CrlSignerSsp::new(Uint8(2))),
             false,
             false,
@@ -621,13 +633,40 @@ impl ScmsPki {
         issuer: &Authority,
         g: &mut Drbg,
         name: &str,
-        years: u16,
+        life: Ieee1609Duration,
         ssp: &SecurityMgmtSsp,
         issues: bool,
         with_enc: bool,
         start: u32,
     ) -> Result<Authority> {
-        Self::issue_with(issuer, g, name, years, ssp, issues, with_enc, start, &[])
+        Self::issue_with(issuer, g, name, life, ssp, issues, with_enc, start, &[])
+    }
+
+    /// [`ScmsPki::issue`] on CRL series `series` rather than the component series 2.
+    #[allow(clippy::too_many_arguments)]
+    fn issue_on(
+        issuer: &Authority,
+        g: &mut Drbg,
+        name: &str,
+        life: Ieee1609Duration,
+        series: u16,
+        ssp: &SecurityMgmtSsp,
+        issues: bool,
+        with_enc: bool,
+        start: u32,
+    ) -> Result<Authority> {
+        Self::issue_full(
+            issuer,
+            g,
+            name,
+            life,
+            series,
+            ssp,
+            issues,
+            with_enc,
+            start,
+            &[],
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -635,7 +674,25 @@ impl ScmsPki {
         issuer: &Authority,
         g: &mut Drbg,
         name: &str,
-        years: u16,
+        life: Ieee1609Duration,
+        ssp: &SecurityMgmtSsp,
+        issues: bool,
+        with_enc: bool,
+        start: u32,
+        extra_app: &[PsidSsp],
+    ) -> Result<Authority> {
+        Self::issue_full(
+            issuer, g, name, life, 2, ssp, issues, with_enc, start, extra_app,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn issue_full(
+        issuer: &Authority,
+        g: &mut Drbg,
+        name: &str,
+        life: Ieee1609Duration,
+        series: u16,
         ssp: &SecurityMgmtSsp,
         issues: bool,
         with_enc: bool,
@@ -649,7 +706,7 @@ impl ScmsPki {
         let mut tbs = component_tbs(
             name,
             start,
-            years,
+            life,
             ssp,
             issues,
             enc_public.as_ref(),
@@ -658,10 +715,12 @@ impl ScmsPki {
         )?;
         // A component is revoked by hash on series 2 ([SMP] Table 1: ICA, ACA, ECA, RA,
         // LA), under its issuer as CRACA, so a receiver can match a series-2 CRL entry to
-        // it (WP-C2: a revoked CA revokes everything that chains to it).
+        // it (WP-C2: a revoked CA revokes everything that chains to it). A root-issued
+        // system certificate (MA) is on series 256 under the root, whose CrlSsp is
+        // `isCraca` for 256.
         let iid = issuer.id8();
         tbs.craca_id = HashedId3(FixedOctetString::from([iid[5], iid[6], iid[7]]));
-        tbs.crl_series = CrlSeries(Uint16(2));
+        tbs.crl_series = CrlSeries(Uint16(series));
         let issuer_key = match &issuer.key {
             Signer1609::P256(_) => CertKey::P256(Point::mul_base(
                 issuer
@@ -734,7 +793,16 @@ impl ScmsPki {
         let mut label = b"pki-extra:".to_vec();
         label.extend_from_slice(name.as_bytes());
         let mut g = Drbg::new(seed, &label);
-        let a = Self::issue(&self.ica, &mut g, name, 3, ssp, false, with_enc, start)?;
+        let a = Self::issue(
+            &self.ica,
+            &mut g,
+            name,
+            Ieee1609Duration::years(Uint16(3)),
+            ssp,
+            false,
+            with_enc,
+            start,
+        )?;
         self.extra.push(a);
         Ok(self.extra.len() - 1)
     }
