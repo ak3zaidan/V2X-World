@@ -364,6 +364,45 @@ fn a_forged_signature_is_on_the_air_and_reported() {
     assert!(p.reports_about_attackers > 0, "nobody reported the forger");
 }
 
+/// A report whose only evidence is a bad signature proves nothing about the certificate
+/// it names (anyone can put a digest on a forged frame), so the MA sets it aside rather
+/// than counting it against the certificate's holder. The forger's frames are still
+/// refused by every receiver and still reported; what changes is that one transmitter
+/// can no longer frame an honest certificate by forging frames in its name.
+///
+/// Fault injected: `Phase2::ingest_arrivals` without the unverifiable-evidence check —
+/// `reports_evidence_unverifiable` stays 0 and this test fails.
+#[test]
+fn the_ma_sets_aside_a_report_whose_only_evidence_is_a_bad_signature() {
+    let mut s = grid(40.0, 900.0);
+    s.security.verification_policy = "verify-all".to_string();
+    s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
+    s.threats.attackers = vec![v2xw_engine::scenario::schema::Attacker {
+        id: "threat/attacker/legacy/InvalidSignature".to_string(),
+        count: Some(1),
+        schedule: Some(v2xw_engine::scenario::schema::DilationWindow {
+            from_s: 5.0,
+            to_s: 40.0,
+        }),
+        ..Default::default()
+    }];
+    // The RA's report shuffle closes after 5 s, so reports reach the MA inside the run.
+    lifecycle(&mut s, json!({"report_shuffle_window_s": 5.0}));
+    cellular(&mut s);
+    let (report, _) = run(s);
+    let p = &report.phase2;
+    println!(
+        "{} reports, {} at the MA, {} set aside, verdicts {:?}",
+        p.reports_sent, p.reports_at_ma, p.reports_evidence_unverifiable, p.verdicts_by_detector
+    );
+    assert!(p.reports_about_attackers > 0, "nobody reported the forger");
+    assert!(p.reports_at_ma > 0, "no report reached the MA");
+    assert!(
+        p.reports_evidence_unverifiable > 0,
+        "the MA counted a bad signature as evidence against the certificate it names"
+    );
+}
+
 /// A Sybil attacker's ghosts are on the air: extra frames, each a genuine SPDU signed under
 /// one of the attacker's concurrent pseudonyms with its certificate attached, so receivers
 /// verify them and the co-location detector sees several certificates at one point. Before
@@ -634,6 +673,52 @@ fn an_mbms_broadcast_delivers_the_crl() {
     assert_eq!(
         u.access.mbms_broadcasts, 0,
         "unicast delivery broadcast a list"
+    );
+}
+
+/// A report relayed over the air is heard by the uploader's neighbours, and their detectors
+/// do not check it as a beacon: it states nothing about its sender's motion, and checking
+/// it (with no stated accuracy, as a vehicle) drew verdicts against the uploader.
+///
+/// Fault injected: `Phase2::detect` without the non-station skip — `messages_not_checked`
+/// stays 0 and this test fails.
+#[test]
+fn a_relayed_report_is_not_checked_as_a_beacon() {
+    let mut s = grid(40.0, 900.0);
+    s.security.verification_policy = "verify-all".to_string();
+    s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
+    s.threats.attackers = vec![v2xw_engine::scenario::schema::Attacker {
+        id: "threat/attacker/legacy/ConstPos".to_string(),
+        count: Some(1),
+        schedule: Some(v2xw_engine::scenario::schema::DilationWindow {
+            from_s: 5.0,
+            to_s: 40.0,
+        }),
+        ..Default::default()
+    }];
+    lifecycle(&mut s, json!({"report_shuffle_window_s": 1}));
+    for x in [150.0, 450.0, 750.0, 1050.0] {
+        for y in [150.0, 450.0] {
+            s.actors.rsus.push(v2xw_engine::scenario::Rsu {
+                site: None,
+                position_m: Some([x, y, 0.0]),
+                roles: vec!["report-forward".to_string()],
+                profile: None,
+                backhaul: None,
+                backhaul_params: None,
+            });
+        }
+    }
+    let (report, _) = run(s);
+    let p = &report.phase2;
+    println!(
+        "{} relayed, {} not checked, {} checked, verdicts {:?}",
+        p.reports_uploaded_relay, p.messages_not_checked, p.messages_checked, p.verdicts_by_detector
+    );
+    assert!(p.reports_uploaded_relay > 0, "no report went on the air");
+    assert!(
+        p.messages_not_checked > 0,
+        "a relayed report reached the detectors as a beacon"
     );
 }
 

@@ -763,6 +763,12 @@ impl PsmTimer {
         self.msg_count
     }
 
+    /// Restarts `msgCnt` at `value` (taken mod 128): what a change of identity does, as
+    /// J2735 allows a `MsgCount` to restart "if the sender has changed identity".
+    pub fn restart_count(&mut self, value: u8) {
+        self.msg_count = value % 128;
+    }
+
     /// When the last PSM was asked for, on the device's own clock.
     #[must_use]
     pub const fn last_tx(&self) -> Option<SimTime> {
@@ -842,6 +848,11 @@ impl VruSchedule {
     #[must_use]
     pub fn psm(&self) -> &PsmTimer {
         &self.psm
+    }
+
+    /// Restarts the PSM's `msgCnt` at `value` (a change of identity).
+    pub fn restart_psm_count(&mut self, value: u8) {
+        self.psm.restart_count(value);
     }
 
     /// How many messages this schedule has asked for in the window.
@@ -1466,7 +1477,22 @@ impl VruDeviceRuntime {
         self.stores.neighbors.age(believed);
         self.stores.certs.travelled(distance_travelled_m);
         self.stores.certs.sweep(believed, &self.stores.crl);
+        let changes_before = self.stores.certs.changes();
         let _ = self.stores.certs.rotate(believed);
+        if self.stores.certs.changes() > changes_before {
+            // Every identifier on the air changes together, as on a vehicle (the
+            // certificate carries the PSM `id` with it): `msgCnt` restarts at a random
+            // value rather than counting on, which would name the old pseudonym to anyone
+            // listening (J2735 lets a `MsgCount` restart when the sender changes identity).
+            let restart = ctx
+                .rng(
+                    v2xw_core::rng::RngDomain::plugin(crate::runtime::IDENTITY_CHANGE_STREAM),
+                    v2xw_core::rng::EntityRef::Node(self.node),
+                )
+                .below(128);
+            self.schedule
+                .restart_psm_count(u8::try_from(restart).unwrap_or(0));
+        }
 
         if self.state.transmits() && !self.power.is_exhausted() {
             self.generate(ctx, believed, &mut out);

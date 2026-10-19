@@ -28,7 +28,7 @@
 #    midtown-scms-benchmark-lte.yaml is the LTE-V2X (PC5 mode 4, SAE J3161/1) variant.
 #  * Security. IEEE 1609.2 with ECDSA P-256 and implicit (ECQV) pseudonym certificates,
 #    the full certificate attached once a second and a digest otherwise (J2945/1), and a
-#    new pseudonym every five minutes (J2945/1 CERTCHG, the USDOT default). Verification
+#    new pseudonym once five minutes and 2 km have passed (J2945/1 CERTCHG). Verification
 #    is `prioritized` (nearest and most relevant first).
 #  * The SCMS. `us-production-2025` (the default): two providers on one CTL signed by five
 #    electors with a three-of-five quorum, each provider with its own root, ICA, ECA, RA,
@@ -185,8 +185,9 @@ security:
     full_cert_every_ms: 1000
     digest_otherwise: true
   pseudonym_change:
-    strategy: time
-    period_s: 300.0
+    # SAE J2945/1 CERTCHG with both of its conditions: 5 minutes and 2 km since the last
+    # change (03 §11). `nyc-pilot` (2 km or 5 min) is the NYC CV pilot's own rule.
+    strategy: j2945-1
   protocol:
     id: protocol/scms/camp
   scms:

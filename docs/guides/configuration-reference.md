@@ -197,7 +197,7 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `security.signature` | `ecdsa-p256` | schemes in `v2xw_sec::scheme` (ECDSA, ML-DSA, Falcon, ...) | See `signature-schemes.md`. |
 | `security.crypto_mode` | `modeled` | `modeled`, `real` | Priced or real mathematics. |
 | `security.verification_policy` | `verify-all` | `verify-all`, `on-demand`, `prioritized` | Verify all, verify on demand, or verify the safety-relevant first (verify-before-act). |
-| `security.pseudonym_change.strategy` | `time` | `time`, `distance`, `c2c-cc`, `mix-zone`, `silent` | Pseudonym strategy, with `period_s` (1 s to 1 day), `distance_m`, `silent_period_s`, `mix_zone_radius_m`. |
+| `security.pseudonym_change.strategy` | `time` | `time`, `distance`, `j2945-1` (5 min and 2 km), `nyc-pilot` (2 km or 5 min), `c2c-cc`, `mix-zone`, `silent` | Pseudonym strategy, with `period_s` (1 s to 1 day), `distance_m`, `silent_period_s`, `mix_zone_radius_m`. |
 | `nodes.default_obu`, `nodes.per_class` | profile | shipped `obu/*` profiles | Crypto hardware profile: signing and verification service times. |
 | `nodes.compute_tier` | `medium` | tiers | Queueing of crypto work. |
 | `nodes.verify_queue_depth` **new** | 64 | 1 to 4096 | Verification queue. A full queue drops (`verify_overflow`). |

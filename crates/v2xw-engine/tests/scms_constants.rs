@@ -244,3 +244,32 @@ fn the_library_rsu_backhaul_default_is_the_engines() {
         backend::BACKHAUL_CAPACITY_MBPS
     );
 }
+
+/// The two published US pseudonym-change rules are selectable with both of their
+/// conditions (03 §11): `j2945-1` is SAE J2945/1 CERTCHG (5 min *and* 2 km), `nyc-pilot`
+/// the NYC CV pilot's (2 km *or* 5 min); `time` stays the one condition alone.
+///
+/// Fault injected: `wiring::rotation_policy` without its `j2945-1` / `nyc-pilot` arms —
+/// both fall back to the 5-minute rule alone and this test fails.
+#[test]
+fn the_us_pseudonym_change_rules_are_selectable_with_both_conditions() {
+    use v2xw_node::stores::RotationPolicy;
+    let policy = |strategy: &str| {
+        let mut s = v2xw_engine::Scenario::minimal();
+        s.security.pseudonym_change.strategy = strategy.to_string();
+        let errors: Vec<String> = v2xw_engine::scenario::validate::validate(&s)
+            .iter()
+            .map(|e| format!("{e:?}"))
+            .filter(|e| e.contains("pseudonym_change"))
+            .collect();
+        assert!(errors.is_empty(), "{strategy}: {errors:?}");
+        v2xw_engine::wiring::rotation_policy(&s)
+    };
+    assert_eq!(policy("j2945-1"), RotationPolicy::J2945_1);
+    assert_eq!(policy("nyc-pilot"), RotationPolicy::NYC_PILOT);
+    let five_min = v2xw_core::time::Duration::from_secs(300);
+    let time = policy("time");
+    assert_eq!(time.min_age, five_min);
+    assert!(time.is_due(five_min, 0.0), "time alone ignores distance");
+    assert!(!RotationPolicy::J2945_1.is_due(five_min, 1_999.0));
+}

@@ -3326,7 +3326,7 @@ impl Engine {
         // digest → pseudonym map is still filled in `hand_down_app`, at the instant
         // a frame carries one, so it holds exactly the digests that were on the air.
         if let Some(phase2) = self.phase2.as_mut() {
-            let creds = phase2.provision(id, now, &self.rng);
+            let creds = phase2.provision(id, now, &self.rng, crate::wiring::is_vru_class(class));
             phase2.phase_crl_poll(id, &self.rng, now);
             if !creds.is_empty() {
                 let factory = std::sync::Arc::clone(&self.credential_factory);
@@ -5165,8 +5165,15 @@ impl Engine {
         }
         // The positional accuracy the safety message states on the air, for the receivers'
         // detectors: they judge a claim against the sender's own stated accuracy (a BSM's
-        // PositionalAccuracy, a CAM's confidence ellipse), not against a constant.
-        if matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
+        // PositionalAccuracy, a CAM's confidence ellipse), not against a constant. A PSM
+        // states its accuracy as a BSM does (J2735 PositionalAccuracy) and a VAM as a CAM.
+        if matches!(
+            tx.msg_type,
+            v2xw_msg::MsgType::Bsm
+                | v2xw_msg::MsgType::Cam
+                | v2xw_msg::MsgType::Psm
+                | v2xw_msg::MsgType::Vam
+        )
             && let Some(p) = self.phase2.as_mut()
             && p.detection_on()
             && let (Some(cred), Some(b)) = (credential.as_ref(), belief)

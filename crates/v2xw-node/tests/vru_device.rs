@@ -494,3 +494,52 @@ fn the_device_is_deterministic() {
     assert!(!a.is_empty());
     assert_eq!(a, run());
 }
+
+/// At a pseudonym change every identifier on the air changes together: the PSM's `msgCnt`
+/// restarts at a random value instead of counting on from the old pseudonym's last one,
+/// which would link the two to any listener (the vehicle's BSM does the same).
+///
+/// Fault injected: `VruDeviceRuntime::step_timed` without the restart — the count after
+/// the change is the old one plus one and this test fails.
+#[test]
+fn a_pseudonym_change_restarts_the_psm_msg_count() {
+    let mut d = device(VruServices::SAE);
+    {
+        let c = credential(DEVICE, 1);
+        let k = test_key(DEVICE, c.i_period, c.j_index);
+        d.install_credential(c, &k).expect("installs");
+    }
+    let policy = v2xw_node::stores::RotationPolicy {
+        min_age: Duration::from_secs(2),
+        min_distance_m: 0.0,
+        require_both: true,
+    };
+    let certs = core::mem::take(&mut d.stores_mut().certs).with_policy(policy);
+    d.stores_mut().certs = certs;
+    let rng = RngRegistry::new(41);
+    let mut before: Option<u8> = None;
+    let mut counted_on: Option<(u8, u8)> = None;
+    for k in 0..60u64 {
+        let now = k * 100 * NS_PER_MS;
+        let changes = d.stores().certs.changes();
+        let ahead = d.schedule().psm().msg_count();
+        let mut ctx = NodeRuntimeCtx::new(now, &rng);
+        let sent = d.step(&mut ctx, Vec::new(), 0.0).transmissions.len();
+        if d.stores().certs.changes() > changes {
+            // `msg_count` is the count the next PSM carries; counting on would make it
+            // the pre-step value plus the PSMs this step sent.
+            let on = (u32::from(ahead) + sent as u32) % 128;
+            counted_on = Some((u8::try_from(on).unwrap_or(0), d.schedule().psm().msg_count()));
+            break;
+        }
+        if sent > 0 {
+            before = Some(d.schedule().psm().msg_count());
+        }
+    }
+    assert!(before.is_some(), "no PSM went out before the change");
+    let (on, after) = counted_on.expect("the pseudonym changed");
+    assert_ne!(
+        after, on,
+        "msgCnt counted on across the pseudonym change (it is {after})"
+    );
+}
