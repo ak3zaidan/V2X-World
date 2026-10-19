@@ -4188,8 +4188,12 @@ impl Phase2 {
         for (k, feed) in self.crl_feeds.iter().enumerate() {
             for h in (0..self.crl_feeds.len()).filter(|&h| h != k) {
                 let lag = d.inter_provider_latency(k, h).unwrap_or(Duration::ZERO);
+                // Only a version still on its way is a wake: one that has crossed is
+                // already served (`visible_versions`). Held to `now + 1`, every version
+                // ever published woke the fast-forward at every mobility step from its
+                // publication on (realism.md R-FF: 255,658 backend ticks in two days).
                 for v in feed {
-                    offer(held(v.at.saturating_add(lag.as_nanos())));
+                    offer(v.at.saturating_add(lag.as_nanos()));
                 }
             }
         }

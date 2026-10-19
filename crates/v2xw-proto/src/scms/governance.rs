@@ -1579,11 +1579,16 @@ impl Governance {
     }
 
     fn home_root(&self) -> &RootSlot {
+        let mine = |r: &&RootSlot| r.label == self.config.provider;
         self.roots
             .iter()
             .rev()
-            .find(|r| r.label == self.config.provider && r.approved)
-            .expect("the home provider has an approved root")
+            .find(|r| mine(r) && r.approved)
+            // A provider the electors have not approved (`on_ctl: false`: a rogue SCMS, a
+            // test-CTL root on the production system) still runs under its own root;
+            // nobody else trusts it. It panicked here (realism.md R-OFFCTL).
+            .or_else(|| self.roots.iter().rev().find(mine))
+            .expect("the home provider has a root")
     }
 
     fn approved_signers(&self) -> Vec<u32> {
