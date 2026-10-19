@@ -1996,9 +1996,15 @@ impl Engine {
             let size = p.crl_download_size(rsu);
             p.access_mut()
                 .rsu_send(rsu, v2xw_radio::cellular::Direction::Downlink, size, now);
+            let ctl = p.take_ctl_install(rsu, true);
             let Some(rt) = self.nodes.get_mut(&rsu) else {
                 continue;
             };
+            // The CTL rides the same composite file (edge-case package, item 8).
+            if let Some((roots, cas)) = ctl {
+                let (_, removed) = rt.security_mut().apply_ctl(&roots, &cas);
+                p.note_anchors_removed(removed);
+            }
             let mut crls = Vec::with_capacity(secured.len());
             let mut ok = !secured.is_empty() && rt.security().trust().is_installed();
             for bytes in &secured {
@@ -3336,6 +3342,15 @@ impl Engine {
         if let Some(phase2) = self.phase2.as_mut() {
             let creds = phase2.provision(id, now, &self.rng, crate::wiring::is_vru_class(class));
             phase2.phase_crl_poll(id, &self.rng, now);
+            // A vehicle whose clock stands off the truth (`clock_skew_s`; edge-case
+            // package, item 2): it signs, rotates and judges on its own clock.
+            if let Some(skew) = phase2.clock_skew_for(id)
+                && let Some(obu) = runtime.as_obu_mut()
+            {
+                obu.clock_mut().step_offset(skew);
+                let offset = obu.clock().offset_ns();
+                obu.security_mut().set_clock_offset(offset);
+            }
             if !creds.is_empty() {
                 let factory = std::sync::Arc::clone(&self.credential_factory);
                 let installed = match runtime.as_obu_mut() {
@@ -7339,6 +7354,16 @@ impl Engine {
         if let Some(None) = verified {
             phase2.crl_frame_refused(node, cellular);
             return;
+        }
+        // The composite CRL file carries the home CTL (edge-case package, item 8): a
+        // newer one is installed with it, and a root it no longer approves stops being a
+        // trust anchor.
+        if cellular
+            && let Some((roots, cas)) = phase2.take_ctl_install(node, false)
+            && let Some(rt) = self.nodes.get_mut(&node)
+        {
+            let (_, removed) = rt.security_mut().apply_ctl(&roots, &cas);
+            phase2.note_anchors_removed(removed);
         }
         let node_verified = matches!(verified, Some(Some(_)));
         let (fresh, records) =

@@ -110,6 +110,10 @@ pub const SIGN_PRIMITIVE: PrimitiveId = PrimitiveId::ECDSA_P256_SHA256;
 /// which is precisely the class of defect this crate keeps finding.
 pub struct SecCtx<'a> {
     inner: &'a mut dyn NodeCtx,
+    /// The node's believed-minus-true clock offset, ns: what `now()` adds to the
+    /// simulation's time, so a `generationTime` is stamped on the node's own clock
+    /// (edge-case package, item 2; IEEE 1609.2 §6.3.9 `generationTime`).
+    offset_ns: i64,
     params: ParamSet,
     /// The unit value `world()` and `actors()` return. See the type documentation.
     nothing: (),
@@ -126,11 +130,27 @@ impl core::fmt::Debug for SecCtx<'_> {
 impl<'a> SecCtx<'a> {
     /// Wraps a node context for the length of one security operation.
     pub fn new(inner: &'a mut dyn NodeCtx) -> SecCtx<'a> {
+        SecCtx::skewed(inner, 0)
+    }
+
+    /// The same bridge on a node whose clock stands `offset_ns` from the truth.
+    pub fn skewed(inner: &'a mut dyn NodeCtx, offset_ns: i64) -> SecCtx<'a> {
         SecCtx {
             inner,
+            offset_ns,
             params: ParamSet::new(),
             nothing: (),
         }
+    }
+}
+
+/// `now` as a clock `offset_ns` from the truth reads it.
+#[must_use]
+pub fn skew(now: SimTime, offset_ns: i64) -> SimTime {
+    if offset_ns >= 0 {
+        now.saturating_add(offset_ns.unsigned_abs())
+    } else {
+        now.saturating_sub(offset_ns.unsigned_abs())
     }
 }
 
@@ -140,7 +160,7 @@ impl Ctx for SecCtx<'_> {
     type Payload = ();
 
     fn now(&self) -> SimTime {
-        self.inner.now()
+        skew(self.inner.now(), self.offset_ns)
     }
 
     fn rng(&self, domain: RngDomain, entity: EntityRef) -> RngGuard<'_> {
@@ -327,7 +347,23 @@ impl NodeCrypto {
         hdr: &HeaderInfoSpec,
         sid: SignerIdChoice,
     ) -> Result<SecuredPdu, SecError> {
-        let mut c = SecCtx::new(ctx);
+        self.sign_envelope_skewed(envelope, ctx, signer, payload, hdr, sid, 0)
+    }
+
+    /// [`NodeCrypto::sign_envelope`] on a node whose clock stands `offset_ns` from the
+    /// truth: the `generationTime` (and any expiry) is the node's believed time.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_envelope_skewed(
+        &mut self,
+        envelope: &Envelope,
+        ctx: &mut dyn NodeCtx,
+        signer: &SignerHandle,
+        payload: &[u8],
+        hdr: &HeaderInfoSpec,
+        sid: SignerIdChoice,
+        offset_ns: i64,
+    ) -> Result<SecuredPdu, SecError> {
+        let mut c = SecCtx::skewed(ctx, offset_ns);
         match self {
             NodeCrypto::Modeled(b) => envelope.sign(&mut c, b.as_mut(), signer, payload, hdr, sid),
             NodeCrypto::Real(b) => envelope.sign(&mut c, b.as_mut(), signer, payload, hdr, sid),
@@ -446,6 +482,10 @@ pub struct NodeSecurity {
     /// The CA chain (issuer first, root excluded) of each signing certificate, by its
     /// `HashedId8`, as `HashedId3`s: what this node may answer for out-of-band.
     own_chains: BTreeMap<[u8; 8], Vec<crate::p2pcd::Id3>>,
+    /// The node's believed-minus-true clock offset, ns ([`crate::clock::ClockModel`]),
+    /// which the runtime copies here on every step: what it signs is stamped, and what it
+    /// receives is judged, on its own clock (edge-case package, item 2).
+    clock_offset_ns: i64,
 }
 
 /// The RNG stream the P2PCD response back-off draws from.
@@ -510,7 +550,52 @@ impl NodeSecurity {
                 default_p2pcd_flavor(EnvelopeProfile::Ieee1609Dot2),
             )),
             own_chains: BTreeMap::new(),
+            clock_offset_ns: 0,
         }
+    }
+
+    /// Sets the node's believed-minus-true clock offset, ns: every later signature is
+    /// stamped, and every later receiver check made, at `now` shifted by it (IEEE 1609.2
+    /// §5.2: a receiver checks validity against its own current time).
+    pub fn set_clock_offset(&mut self, offset_ns: i64) {
+        self.clock_offset_ns = offset_ns;
+    }
+
+    /// The offset set by [`NodeSecurity::set_clock_offset`].
+    #[must_use]
+    pub fn clock_offset_ns(&self) -> i64 {
+        self.clock_offset_ns
+    }
+
+    /// Applies a newer CTL (edge-case package, item 8): `roots` are the roots it approves
+    /// that this node can hold and `cas` their chain files. A root it no longer approves
+    /// stops being a trust anchor, so whatever chains to it is refused from now on; a newly
+    /// approved one becomes one. Returns `(added, removed)`; nothing the node validated is
+    /// forgotten when neither changes.
+    pub fn apply_ctl(
+        &mut self,
+        roots: &[Arc<Certificate>],
+        cas: &[Arc<Certificate>],
+    ) -> (usize, usize) {
+        let keep: std::collections::BTreeSet<[u8; 32]> = roots
+            .iter()
+            .filter_map(|r| cert::hashed_id32(r).ok())
+            .collect();
+        let removed = self.trust.retain_anchors(&keep);
+        let mut added = 0;
+        for r in roots {
+            if self.trust.install_root_if_new(r) {
+                added += 1;
+                self.learn_issuer(Arc::clone(r));
+            }
+        }
+        for c in cas {
+            self.learn_issuer(Arc::clone(c));
+        }
+        if added > 0 {
+            self.trust.validate_chain_file(&self.issuers);
+        }
+        (added, removed)
     }
 
     /// The same stack running P2PCD with `params` (flavour and the §8.2.3 parameters).
@@ -750,7 +835,10 @@ impl NodeSecurity {
         bytes: &[u8],
         now: SimTime,
     ) -> Result<crate::rxval::VerifiedCrl, crate::rxval::RxReject> {
-        let now32 = self.wall.time32(now).unwrap_or(0);
+        let now32 = self
+            .wall
+            .time32(skew(now, self.clock_offset_ns))
+            .unwrap_or(0);
         self.trust.verify_secured_crl(&self.issuers, bytes, now32)
     }
 
@@ -830,9 +918,15 @@ impl NodeSecurity {
                 sid = SignerIdChoice::Certificate;
             }
         }
-        let pdu = self
-            .crypto
-            .sign_envelope(&self.envelope, ctx, &signer, payload, &hdr, sid)?;
+        let pdu = self.crypto.sign_envelope_skewed(
+            &self.envelope,
+            ctx,
+            &signer,
+            payload,
+            &hdr,
+            sid,
+            self.clock_offset_ns,
+        )?;
         let cert_bytes = if pdu.signer_id == v2xw_sec::SignerIdChoice::Certificate {
             u32::try_from(signer.cert_coer().len()).unwrap_or(u32::MAX)
         } else {
@@ -869,13 +963,14 @@ impl NodeSecurity {
         };
         let pdu = self
             .crypto
-            .sign_envelope(
+            .sign_envelope_skewed(
                 &self.envelope,
                 ctx,
                 &signer,
                 payload,
                 &hdr,
                 SignerIdChoice::Certificate,
+                self.clock_offset_ns,
             )
             .ok()?;
         let cert_bytes = u32::try_from(signer.cert_coer().len()).unwrap_or(u32::MAX);
@@ -1192,7 +1287,11 @@ impl NodeSecurity {
         // The receiver rules of 1609.2 §5.2 (WP-C2): the chain to an installed root,
         // validity, region, PSID and hash revocation, before any signature work.
         if self.trust.is_installed() {
-            let now32 = self.wall.time32(ctx.now()).unwrap_or(0);
+            // The receiver's own current time (§5.2), not the simulation's.
+            let now32 = self
+                .wall
+                .time32(skew(ctx.now(), self.clock_offset_ns))
+                .unwrap_or(0);
             match self
                 .trust
                 .validate_signer(&self.issuers, certificate, parsed, now32)

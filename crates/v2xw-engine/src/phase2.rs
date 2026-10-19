@@ -554,6 +554,8 @@ struct RsuCycle {
     /// `nextCrl` with no new entry is fetched too (edge-case package, item 5).
     crl_serial: u64,
     crl_version: u32,
+    /// The CTL sequence the unit installed (0: the factory one), as `NodeSec::ctl_seq`.
+    ctl_seq: u32,
     withheld_seen: u64,
     starved: bool,
     starved_since: Option<SimTime>,
@@ -618,6 +620,16 @@ pub struct LifecycleParams {
     /// When the EAC removes the superseded root (`root_removal_at_s`): a CTL without it,
     /// published within 48 h (Elector Policy v1.0 §2.2.4).
     pub root_removal_at: Option<SimTime>,
+    /// When the EAC removes the first peer provider's root (`peer_root_removal_at_s`;
+    /// edge-case package, item 8): a CTL without it, published within 48 h. Devices that
+    /// install it refuse whatever that provider certified, and RAs stop serving its CRL.
+    pub peer_root_removal_at: Option<SimTime>,
+    /// A vehicle clock's believed-minus-true offset, ns (`clock_skew_s`; item 2): a GNSS
+    /// time error or a free-running clock held at that error. 0 is a true clock.
+    pub clock_skew_ns: i64,
+    /// The share of vehicles whose clock carries `clock_skew_s` (`clock_skew_share`,
+    /// default 1), chosen by a fixed hash of the node index.
+    pub clock_skew_share: f64,
 }
 
 impl LifecycleParams {
@@ -708,6 +720,9 @@ impl LifecycleParams {
             view_interval: secs(BACKEND_VIEW_INTERVAL_S),
             root_rollover_at: None,
             root_removal_at: None,
+            peer_root_removal_at: None,
+            clock_skew_ns: 0,
+            clock_skew_share: 1.0,
         };
         let empty = serde_json::Map::new();
         let map = scenario
@@ -767,6 +782,11 @@ impl LifecycleParams {
                 "etsi_butterfly" => p.etsi_butterfly = v >= 0.5,
                 "root_rollover_at_s" => p.root_rollover_at = Some(secs(v).as_nanos()),
                 "root_removal_at_s" => p.root_removal_at = Some(secs(v).as_nanos()),
+                "peer_root_removal_at_s" => {
+                    p.peer_root_removal_at = Some(secs(v).as_nanos());
+                }
+                "clock_skew_s" => p.clock_skew_ns = (v * 1e9).round() as i64,
+                "clock_skew_share" => p.clock_skew_share = v.clamp(0.0, 1.0),
                 // The revocations already on the home provider's CRL when the run
                 // starts (read by `Phase2::new`, `ScmsRun::seed_standing_crl`).
                 "crl_background_entries" => {}
@@ -896,7 +916,7 @@ fn apply_crl_publication_of(
 }
 
 /// The lifecycle keys `security.protocol.params` accepts.
-pub const LIFECYCLE_KEYS: [&str; 25] = [
+pub const LIFECYCLE_KEYS: [&str; 28] = [
     "i_period_s",
     "cert_lifetime_s",
     "certs_per_period",
@@ -922,6 +942,9 @@ pub const LIFECYCLE_KEYS: [&str; 25] = [
     "root_rollover_at_s",
     "root_removal_at_s",
     "crl_background_entries",
+    "peer_root_removal_at_s",
+    "clock_skew_s",
+    "clock_skew_share",
 ];
 
 /// How often, in simulated seconds, the backend's state is published on `backend.state`
@@ -1092,6 +1115,10 @@ struct NodeSec {
     /// ones its poll in flight asked for: a re-issue with no new entry is fetched too.
     crl_serial: u64,
     crl_serial_asked: u64,
+    /// The CTL sequence this vehicle installed (0: the factory one). The composite CRL
+    /// file carries the home CTL (IEEE 1609.2.1 `CompositeCrlSpdu`), so a newer CTL is
+    /// fetched, and installed, with the next download (edge-case package, item 8).
+    ctl_seq: u32,
     topup: Option<FlowRun>,
     /// ETSI: the ticket count at which the requested top-up is complete.
     etsi_target: Option<u32>,
@@ -1292,8 +1319,13 @@ pub struct Phase2Report {
     /// ETSI: fetches of the ECTL and the CA-CRL from the Distribution Centre that
     /// completed, and of those, how many installed a newer list.
     pub trust_fetches: u64,
-    /// See [`Phase2Report::trust_fetches`].
+    /// See [`Phase2Report::trust_fetches`]. US: the newer CTLs vehicles and roadside
+    /// units installed with a composite CRL download (edge-case package, item 8).
     pub trust_lists_installed: u64,
+    /// Trust anchors devices dropped on installing a CTL that no longer approves them.
+    pub trust_anchors_removed: u64,
+    /// Vehicles whose clock carries `clock_skew_s` (edge-case package, item 2).
+    pub clock_skewed_nodes: u64,
     /// Roadside units under an attacker's control (`threats.compromised_rsus`).
     pub compromised_rsus: u64,
     /// Relayed reports a compromised unit dropped instead of forwarding.
@@ -1573,6 +1605,11 @@ pub struct Phase2 {
     in_flight: BTreeMap<(usize, FlowRun), InFlightReport>,
     /// The home root a scheduled rollover superseded (`root_removal_at_s` removes it).
     superseded_root: Option<[u8; 32]>,
+    /// The CTL sequence every device holds from the factory (the one in force when the
+    /// governance first ran); a device installs a newer one with its next composite CRL.
+    factory_ctl_seq: Option<u32>,
+    /// The peer provider whose root `peer_root_removal_at_s` removed.
+    removed_peer: Option<usize>,
     /// The last signed BSMs on the air per signer digest: a report's evidence.
     evidence: BTreeMap<[u8; 8], VecDeque<Vec<u8>>>,
     stage_cursor: Vec<usize>,
@@ -2240,6 +2277,8 @@ impl Phase2 {
             in_flight: BTreeMap::new(),
             evidence: BTreeMap::new(),
             superseded_root: None,
+            factory_ctl_seq: None,
+            removed_peer: None,
             stage_cursor: vec![0; providers],
             step_cursor: vec![0; providers],
             queue: vec![VecDeque::new(); providers],
@@ -2508,7 +2547,8 @@ impl Phase2 {
             .filter(|(n, c)| {
                 self.rsu_spec_of(**n).is_some_and(|s| s.backhaul.connected)
                     && (self.crl_version_for(**n) > c.crl_version
-                        || self.crl_serial_for(**n) > c.crl_serial)
+                        || self.crl_serial_for(**n) > c.crl_serial
+                        || self.ctl_newer_than(c.ctl_seq))
             })
             .map(|(n, _)| *n)
             .collect()
@@ -3610,6 +3650,20 @@ impl Phase2 {
     /// [`Governance::publish_due`]: v2xw_proto::scms::governance::Governance::publish_due
     fn governance_due(&mut self, now: SimTime) {
         let st = &mut self.runs[0].state;
+        self.factory_ctl_seq.get_or_insert(st.gov.ctl.sequence);
+        if let Some(at) = self.params.peer_root_removal_at.filter(|t| *t <= now) {
+            self.params.peer_root_removal_at = None;
+            let peer = st
+                .peer_pki
+                .first()
+                .and_then(|(label, _)| st.gov.root_of(label));
+            if let Some(root) = peer
+                && st.gov.remove_root(root, at).is_some()
+            {
+                self.removed_peer = Some(1);
+                self.report.gov_decisions += 1;
+            }
+        }
         if let Some(at) = self.params.root_rollover_at.filter(|t| *t <= now) {
             self.params.root_rollover_at = None;
             let (old, _new, _publish) = st.gov.rollover_root(&st.rng, &st.nodes, at);
@@ -4191,6 +4245,9 @@ impl Phase2 {
         if let Some(t) = self.params.root_removal_at {
             offer(held(t));
         }
+        if let Some(t) = self.params.peer_root_removal_at {
+            offer(held(t));
+        }
         if self.access.crl_delivery() == crate::backend::CrlDelivery::Mbms
             && self.published_crl_for_provider(0).0 > 0
         {
@@ -4593,6 +4650,10 @@ impl Phase2 {
                     if self.etsi.is_some() {
                         e.set("trust_fetches", r.trust_fetches);
                         e.set("trust_lists_installed", r.trust_lists_installed);
+                    } else if r.trust_lists_installed > 0 || r.clock_skewed_nodes > 0 {
+                        e.set("trust_lists_installed", r.trust_lists_installed);
+                        e.set("trust_anchors_removed", r.trust_anchors_removed);
+                        e.set("clock_skewed_nodes", r.clock_skewed_nodes);
                     }
                     e.set("vehicles_starved", r.vehicles_starved);
                     e.set("crl_installs", r.crls_installed);
@@ -5222,6 +5283,7 @@ impl Phase2 {
         self.crl_feeds
             .iter()
             .enumerate()
+            .filter(|(k, _)| !self.provider_off_ctl(*k))
             .filter_map(|(k, feed)| {
                 let lag = if k == h {
                     Duration::ZERO
@@ -5335,6 +5397,83 @@ impl Phase2 {
         crl_bytes(&self.home().state.sizes, entries).bytes()
     }
 
+    /// Whether the published CTL is newer than `held` (0: the factory CTL).
+    fn ctl_newer_than(&self, held: u32) -> bool {
+        let now = self.home().state.gov.ctl.sequence;
+        held.max(self.factory_ctl_seq.unwrap_or(now)) < now
+    }
+
+    /// Whether provider `k`'s root was removed (`peer_root_removal_at_s`) and the CTL
+    /// without it is published: its RA's CRL is no longer served (no device could verify
+    /// it) and nothing it certifies validates.
+    fn provider_off_ctl(&self, k: usize) -> bool {
+        if self.removed_peer != Some(k) {
+            return false;
+        }
+        let gov = &self.home().state.gov;
+        self.runs
+            .get(k)
+            .and_then(|r| gov.root_of(&r.state.gov.config.provider))
+            .is_none_or(|r| !gov.ctl.roots.contains(&r))
+    }
+
+    /// The trust a device installs from the published CTL, when it is newer than the one
+    /// `node` (a vehicle, or a roadside unit when `rsu`) holds: the roots of every
+    /// provider on it and their chain files ([`Phase2::trust_bundle`]). Marks it held and
+    /// counts it in `trust_lists_installed`. The device applies the CTL's root set; the
+    /// CTL's own elector signatures are the governance's to check (`DeviceTrust`), not
+    /// re-checked here (an open item of the edge-case report).
+    #[allow(clippy::type_complexity)]
+    pub fn take_ctl_install(
+        &mut self,
+        node: NodeId,
+        rsu: bool,
+    ) -> Option<(
+        Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
+        Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
+    )> {
+        let now = self.home().state.gov.ctl.sequence;
+        let held = if rsu {
+            self.rsu_cycle.get(&node).map(|c| c.ctl_seq)
+        } else {
+            self.nodes.get(&node).map(|n| n.ctl_seq)
+        }?;
+        if !self.ctl_newer_than(held) {
+            return None;
+        }
+        if rsu {
+            if let Some(c) = self.rsu_cycle.get_mut(&node) {
+                c.ctl_seq = now;
+            }
+        } else if let Some(n) = self.nodes.get_mut(&node) {
+            n.ctl_seq = now;
+        }
+        self.report.trust_lists_installed += 1;
+        Some(self.trust_bundle())
+    }
+
+    /// Counts the trust anchors a device dropped on installing a CTL.
+    pub fn note_anchors_removed(&mut self, n: usize) {
+        self.report.trust_anchors_removed += n as u64;
+    }
+
+    /// The clock offset vehicle `node` carries (`clock_skew_s`, `clock_skew_share`), ns:
+    /// `None` for a true clock. The share is taken by a fixed hash of the node index, so
+    /// a base and a variant skew the same vehicles.
+    pub fn clock_skew_for(&mut self, node: NodeId) -> Option<i64> {
+        let skew = self.params.clock_skew_ns;
+        if skew == 0 {
+            return None;
+        }
+        let h = u64::from(node.index()).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 11;
+        let u = h as f64 / (1u64 << 53) as f64;
+        if u >= self.params.clock_skew_share {
+            return None;
+        }
+        self.report.clock_skewed_nodes += 1;
+        Some(skew)
+    }
+
     /// The bytes vehicle or unit `node` downloads from its RA as its CRL: the real
     /// `CompositeCrlSpdu` (1609.2.1 §6.3.5.x; 03 §10), which is every provider's
     /// `SecuredCrl` its RA serves plus the RA provider's home CTL, encoded. The size
@@ -5399,6 +5538,8 @@ impl Phase2 {
                     .sum()
             })
             .collect();
+        let ctl_now = self.home().state.gov.ctl.sequence;
+        let factory = self.factory_ctl_seq.unwrap_or(ctl_now);
         let providers = &self.device_provider;
         let mut out = Vec::new();
         for (node, n) in &mut self.nodes {
@@ -5408,7 +5549,10 @@ impl Phase2 {
             if n.next_crl_fetch <= now {
                 n.next_crl_fetch = interval.after(now);
                 let h = providers.get(&device_of(*node)).copied().unwrap_or(0);
-                if n.crl_version < published[h] || n.crl_serial < serials[h] {
+                if n.crl_version < published[h]
+                    || n.crl_serial < serials[h]
+                    || n.ctl_seq.max(factory) < ctl_now
+                {
                     n.crl_serial_asked = serials[h];
                     n.crl_fetch_in_flight = true;
                     out.push((*node, n.crl_version));

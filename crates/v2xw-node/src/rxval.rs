@@ -587,6 +587,31 @@ impl RxTrust {
         }
     }
 
+    /// Installs `root` as a trust anchor unless it already is one; `true` when it was new.
+    pub fn install_root_if_new(&mut self, root: &Certificate) -> bool {
+        match cert::hashed_id32(root) {
+            Ok(h) if !self.anchors.contains(&h) => {
+                self.install_root(root);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Keeps only the anchors in `keep` (a newer CTL's approved roots): returns how many
+    /// were dropped, and when any was, forgets every validated path and signer, since a
+    /// path that ended at a dropped root no longer validates (edge-case package, item 8).
+    pub fn retain_anchors(&mut self, keep: &BTreeSet<[u8; 32]>) -> usize {
+        let before = self.anchors.len();
+        self.anchors.retain(|a| keep.contains(a));
+        let removed = before - self.anchors.len();
+        if removed > 0 {
+            self.paths.clear();
+            self.ees.clear();
+        }
+        removed
+    }
+
     /// Sets how many validated end-entity certificates the node remembers, emptying the
     /// cache (a device configured with a different capacity starts with none).
     pub fn set_ee_capacity(&mut self, capacity: usize) {
