@@ -676,6 +676,52 @@ fn an_mbms_broadcast_delivers_the_crl() {
     );
 }
 
+/// A report relayed over the air is heard by the uploader's neighbours, and their detectors
+/// do not check it as a beacon: it states nothing about its sender's motion, and checking
+/// it (with no stated accuracy, as a vehicle) drew verdicts against the uploader.
+///
+/// Fault injected: `Phase2::detect` without the non-station skip — `messages_not_checked`
+/// stays 0 and this test fails.
+#[test]
+fn a_relayed_report_is_not_checked_as_a_beacon() {
+    let mut s = grid(40.0, 900.0);
+    s.security.verification_policy = "verify-all".to_string();
+    s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
+    s.threats.attackers = vec![v2xw_engine::scenario::schema::Attacker {
+        id: "threat/attacker/legacy/ConstPos".to_string(),
+        count: Some(1),
+        schedule: Some(v2xw_engine::scenario::schema::DilationWindow {
+            from_s: 5.0,
+            to_s: 40.0,
+        }),
+        ..Default::default()
+    }];
+    lifecycle(&mut s, json!({"report_shuffle_window_s": 1}));
+    for x in [150.0, 450.0, 750.0, 1050.0] {
+        for y in [150.0, 450.0] {
+            s.actors.rsus.push(v2xw_engine::scenario::Rsu {
+                site: None,
+                position_m: Some([x, y, 0.0]),
+                roles: vec!["report-forward".to_string()],
+                profile: None,
+                backhaul: None,
+                backhaul_params: None,
+            });
+        }
+    }
+    let (report, _) = run(s);
+    let p = &report.phase2;
+    println!(
+        "{} relayed, {} not checked, {} checked, verdicts {:?}",
+        p.reports_uploaded_relay, p.messages_not_checked, p.messages_checked, p.verdicts_by_detector
+    );
+    assert!(p.reports_uploaded_relay > 0, "no report went on the air");
+    assert!(
+        p.messages_not_checked > 0,
+        "a relayed report reached the detectors as a beacon"
+    );
+}
+
 /// A vehicle with no modem reaches the backend through a roadside unit: the report goes on
 /// the air to the unit, crosses its backhaul, and the bytes land in the backhaul bucket and
 /// not in a cellular one. The same fleet with the unit's backhaul cut reaches nothing.

@@ -1140,6 +1140,9 @@ pub struct Phase2Report {
     /// Sybil ghost frames put on the air: each a genuine SPDU signed under one of the
     /// attacker's concurrent pseudonyms, with its certificate attached.
     pub ghost_frames: u64,
+    /// Delivered messages the local detectors did not check because they state nothing
+    /// about their sender's motion: relayed reports, CRLs, P2PCD responses, WSAs.
+    pub messages_not_checked: u64,
     /// How many messages the local detectors checked.
     pub messages_checked: u64,
     /// How many detector verdicts fired.
@@ -3261,6 +3264,23 @@ impl Phase2 {
             if self.map_check { &map } else { &NoMap };
         for m in delivered {
             let Some(signer) = &m.signer else { continue };
+            // Misbehaviour detection reads safety messages: the US checks are defined on
+            // the BSM ([SM-MBR] §2.3, application PSID 0x20) and the suite's on a station's
+            // own claims. A relayed misbehaviour report, a CRL, a P2PCD response or a WSA
+            // states no position, speed or heading of its sender, so it is not checked.
+            // Checked as a vehicle's beacon with no stated accuracy, an uploaded report
+            // drew verdicts against its own uploader (a handset's upload was judged by the
+            // vehicle map check), so reports bred reports.
+            if matches!(
+                m.msg_type,
+                v2xw_msg::MsgType::Mbr
+                    | v2xw_msg::MsgType::Crl
+                    | v2xw_msg::MsgType::P2pcd
+                    | v2xw_msg::MsgType::Wsa
+            ) {
+                self.report.messages_not_checked += 1;
+                continue;
+            }
             let key = digest_key(signer);
             // The suite checks one message per sender per `generation_interval_s` (1 s,
             // `PipelineConfig.dt`), the rate every one of its thresholds was calibrated at:
