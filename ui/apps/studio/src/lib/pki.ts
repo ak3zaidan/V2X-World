@@ -150,6 +150,12 @@ export interface TrustAnswer {
   readonly activity: Readonly<Record<string, PkiActivity>>;
   readonly certificates_known: number;
   readonly history: number;
+  /** The messages that crossed a link in the window (raw; `pkiTopology.messagesOf` reads them). */
+  readonly messages: readonly unknown[];
+  /** Messages of the window beyond the answer's cap, not listed. */
+  readonly messages_omitted: number;
+  /** False when the server's log no longer reaches back to the window's start. */
+  readonly messages_complete: boolean;
 }
 
 /** One SPDU a flow message carried, without its bytes. */
@@ -387,6 +393,9 @@ export function trustOf(answer: unknown): TrustAnswer | null {
     activity,
     certificates_known: num(answer.certificates_known),
     history: num(answer.history),
+    messages: Array.isArray(answer.messages) ? answer.messages : [],
+    messages_omitted: num(answer.messages_omitted),
+    messages_complete: answer.messages_complete !== false,
   };
 }
 

@@ -191,3 +191,41 @@ test("Flows: a provisioning run as a sequence diagram, the shuffle wait, the dec
   await expect(dec.getByTestId("pdu-plaintext-hidden")).toContainText("provider-a/aca/0");
   await expect(dec.getByTestId("pdu-plaintext")).toHaveCount(0);
 });
+
+test("Overview: messages travel their links, the cards list them, keyboard works and the layout fits 1024 px", async ({ page }) => {
+  // The 141 s snapshot: its window carries the investigation's messages.
+  const at = (studio.run["inspect.trust"] as Record<string, { messages: { id: string; from: string; to: string }[] }>)["141000000000"];
+  expect(at.messages.length).toBeGreaterThan(5);
+  const bundle: Bundle = { ...runBundle, "inspect.trust": { newest: at } };
+  await page.setViewportSize({ width: 1024, height: 800 });
+  await servePki(page, bundle, []);
+  await openPki(page);
+  const panel = page.getByTestId("pki-panel");
+  await expect(panel.getByTestId("pki-topology")).toBeVisible({ timeout: 30_000 });
+  // Narrow: the regions stack, and nothing makes the page scroll sideways.
+  await expect(panel.locator(".pki-topo")).toHaveAttribute("data-layout", "stacked");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1024);
+  // Every link a message crossed is lit, and only those (a device end is its provider's client group).
+  const end = (e: string, other: string): string => (e.startsWith("ee/") ? `devices/${other.split("/")[0]}` : e);
+  const lit = new Set(at.messages.map((m) => [end(m.from, m.to), end(m.to, m.from)].sort().join("|")));
+  await expect(panel.locator("path.pki-link.busy")).toHaveCount(lit.size);
+  for (const k of lit) await expect(panel.locator(`path.pki-link[data-link="${k}"]`)).toHaveClass(/busy/);
+  // The health strip answers from the snapshot.
+  await expect(panel.getByTestId("pki-health-pending")).toBeVisible();
+  // Keyboard: focus the MA, Enter opens its card with what it does and its recent messages; Escape closes it.
+  const ma = panel.getByTestId("pki-comp-provider-a/ma/0");
+  await ma.focus();
+  await page.keyboard.press("Enter");
+  const card = panel.getByTestId("pki-card");
+  await expect(card.getByTestId("pki-card-does")).toContainText("misbehaviour reports");
+  const mine = at.messages.filter((m) => m.from === "provider-a/ma/0" || m.to === "provider-a/ma/0");
+  expect(mine.length).toBeGreaterThan(0);
+  await expect(card.getByTestId("pki-card-messages").locator("li")).toHaveCount(Math.min(14, mine.length));
+  await page.keyboard.press("Escape");
+  await expect(card).toHaveCount(0);
+  // Tabs: arrow keys move along them.
+  await panel.getByTestId("pki-tab-trust").focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(panel.getByTestId("pki-tab-vehicles")).toHaveAttribute("aria-selected", "true");
+  await page.screenshot({ path: process.env.VWP_SHOT_DIR ? join(process.env.VWP_SHOT_DIR, "pki-overview-1024.png") : join(here, "../test-results/pki-overview-1024.png") });
+});

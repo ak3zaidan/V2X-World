@@ -4,7 +4,7 @@
  * pki-tabs.json`, which the mock engine serves for `inspect.pki` under `VWP_PKI_TABS`).
  *
  * The acceptance of 00-gap-analysis WP-E3, as a user sees it: the i × j grid draws the cells of
- * `node.credentials`, the case board's columns hold the cases at their `pki.case` stage, and the
+ * `node.credentials`, each case row and step diagram shows its `pki.case` stages, and the
  * view selector hides what only ground truth knows.
  */
 
@@ -55,13 +55,18 @@ test("the Cases board holds each case in its pki.case column, and an entity's vi
     if (!prev || order.indexOf(r.record.stage) > order.indexOf(prev)) furthest.set(r.record.case, r.record.stage);
   }
   expect(furthest.size).toBeGreaterThan(0);
+  // Each case's row says the furthest stage pki.case recorded for it.
   for (const [id, stage] of furthest) {
-    await expect(page.locator(`[data-testid="pki-board-col"][data-stage="${stage}"] [data-case="${id}"]`)).toBeVisible();
+    await expect(page.locator(`[data-testid="pki-case-card"][data-case="${id}"]`)).toHaveAttribute("data-stage", stage);
   }
   const first = [...furthest.keys()][0];
   await page.locator(`[data-case="${first}"]`).click();
   await expect(page.getByTestId("pki-case-truth")).toContainText("ee/");
-  await expect(page.getByTestId("pki-case-learned")).toContainText("LA1");
+  await expect(page.getByTestId("pki-case-learned").filter({ hasText: "LA1" })).not.toHaveCount(0);
+  // The step diagram marks reached exactly the stages pki.case recorded for the case.
+  const recorded = [...new Set(rows.filter((r) => r.channel === "pki.case" && r.record.case === first).map((r) => String(r.record.stage)))].sort();
+  const reached = await page.locator('[data-testid="pki-case-stages"] > li.reached').evaluateAll((els) => els.map((e) => e.getAttribute("data-stage") ?? ""));
+  expect(reached.sort()).toEqual(recorded);
   // Seen as LA1: its steps only, no reporter or accused, no ground-truth block.
   await page.getByTestId("pki-view").selectOption("provider-a/la1/0");
   await expect(page.getByTestId("pki-cases-as")).toBeVisible();
