@@ -84,6 +84,7 @@ fresh mtime. The script is `scratchpad/edge/mut.sh`, and every fault went RED:
 | No CRL re-issue | `ee_retry::an_idle_crl_generator_renews_its_list_every_next_crl` | reissued 0, expected 1 |
 | MBR signer ignores the validity window | `mbr::a_report_after_the_rollover_is_signed_with_a_pseudonym_valid_then` | picked (1, 0) at 600 s, expected (0, 0) |
 | Composite CRL built from the first CRL only | `crl_ctl_vectors::the_composite_crl_from_held_bytes_is_the_committed_vector` | the bytes differ from `composite_crl.oer` |
+| Standing entries under a random LA pair | `ee_retry::a_standing_crl_costs_thirty_three_bytes_an_entry` | "every entry under the provider's LA1 and LA2" |
 
 The retry-off tests (`without_the_retry_*`, `a_slow_ra_without_the_retry_*`,
 `without_renewal_*`) also run the old behaviour through the setting and assert its
