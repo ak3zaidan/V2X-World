@@ -147,7 +147,7 @@ impl ScmsRun {
                 direct,
                 done: false,
                 reports,
-                opened_at,
+                opened: opened_at,
             },
         );
         self.state.ma.last_case = Some(run);

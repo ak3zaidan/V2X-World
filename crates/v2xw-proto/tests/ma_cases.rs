@@ -282,3 +282,80 @@ fn the_ra_and_the_ma_refuse_unauthenticated_misattributed_and_tampered_uploads()
     assert_eq!(st.ma.opened_reports.len(), 1);
     assert_eq!(st.ma.reports.len(), 1);
 }
+
+/// Realism R-CASE (docs/design/scms-real/testing/realism.md): under manual review the case
+/// board dates "reports in" from the report's arrival at the MA, the operator's review time
+/// before the decision. It was stamped at the decision, so the board never showed a case
+/// waiting for review.
+#[test]
+fn the_case_board_dates_reports_in_from_the_arrival_not_the_decision() {
+    use v2xw_proto::scms::pki_view::{self, PkiTracker};
+    let review = 8 * 3600;
+    let mut run = deployment(2);
+    run.state.params.ma.mode = MaMode::ManualReview {
+        review: Duration::from_secs(review),
+    };
+    provisioned(&mut run, DEVICE_A, 0, 1, 2);
+    let lv = run.state.devices[&DEVICE_A].credentials[&(0, 0)].lv;
+    run.submit_report(DEVICE_B, 0, lv);
+    run.run().expect("runs");
+    let arrived = *run
+        .state
+        .ma
+        .report_arrived
+        .last()
+        .expect("the arrival is kept");
+    let (res, _) = run.request_revocation(0, 0, 2).expect("held");
+    run.run().expect("runs");
+    let decided = run
+        .kernel
+        .stages
+        .at(res, StageId::Decision)
+        .expect("decided");
+    let mut tracker = PkiTracker::default();
+    let now = run.kernel.now();
+    let cases = pki_view::drain_cases(std::slice::from_ref(&run), &mut tracker, now, &|_, _| None);
+    let at = |s: &str| cases.iter().find(|c| c.stage == s).map(|c| c.t);
+    assert_eq!(at("reports-in"), Some(arrived), "{cases:?}");
+    assert_eq!(at("decision"), Some(decided));
+    assert!(
+        decided >= arrived + review * NS_PER_S,
+        "{arrived} -> {decided}"
+    );
+}
+
+/// Realism R-CORR (docs/design/scms-real/testing/realism.md): the case board's
+/// `corroborated` is the instant the MA's pipeline opened the case, and the operator's
+/// decision follows the 8 h review later. Fault (the first form, `corroborated` stamped
+/// at the decision): the stage lands 8 h late, on the decision itself.
+#[test]
+fn the_case_board_dates_corroboration_from_the_case_opening_not_the_decision() {
+    use v2xw_proto::scms::pki_view::{self, PkiTracker};
+    let review = 8 * 3600;
+    let mut run = deployment(2);
+    run.state.params.ma.mode = MaMode::ManualReview {
+        review: Duration::from_secs(review),
+    };
+    provisioned(&mut run, DEVICE_A, 0, 1, 2);
+    let lv = run.state.devices[&DEVICE_A].credentials[&(0, 0)].lv;
+    run.submit_report(DEVICE_B, 0, lv);
+    run.run().expect("runs");
+    let opened = run.kernel.now();
+    let (res, _) = run.request_revocation(0, 0, 2).expect("held");
+    run.run().expect("runs");
+    let decided = run
+        .kernel
+        .stages
+        .at(res, StageId::Decision)
+        .expect("decided");
+    let mut tracker = PkiTracker::default();
+    let now = run.kernel.now();
+    let cases = pki_view::drain_cases(std::slice::from_ref(&run), &mut tracker, now, &|_, _| None);
+    let at = |s: &str| cases.iter().find(|c| c.stage == s).map(|c| c.t);
+    assert_eq!(at("corroborated"), Some(opened), "{cases:?}");
+    assert_eq!(at("decision"), Some(decided));
+    assert!(
+        decided >= opened + review * NS_PER_S,
+        "{opened} -> {decided}"
+    );
+}

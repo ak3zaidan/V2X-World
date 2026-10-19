@@ -1,0 +1,11 @@
+# Both MAs decide automatically instead of after the 8 h operator review (00 §5 decision 7).
+# A variant of ../midtown-scms-realism.yaml (docs/design/scms-real/testing/realism.md).
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS realism ma-auto}
+security:
+  scms:
+    deployment:
+      preset: us-production-2025
+      providers:
+        - {name: provider-a, components: {}, ma_mode: automatic}
+        - {name: provider-b, components: {}, ma_mode: automatic}

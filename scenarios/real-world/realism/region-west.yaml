@@ -1,0 +1,11 @@
+# Both providers' cloud regions on the US west coast instead of us-east (placement is an ASSUMPTION).
+# A variant of ../midtown-scms-realism.yaml (docs/design/scms-real/testing/realism.md).
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS realism region-west}
+security:
+  scms:
+    deployment:
+      preset: us-production-2025
+      providers:
+        - {name: provider-a, components: {}, region: us-west}
+        - {name: provider-b, components: {}, region: us-west}

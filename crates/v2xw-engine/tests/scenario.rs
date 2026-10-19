@@ -662,4 +662,28 @@ fn world_and_detector_inputs_the_builder_would_refuse_are_refused_at_check() {
             "{key} is listed as a detector parameter and refused"
         );
     }
+    // The strict US profile ([SM-MBR] v1.0 §2.3): its own keys only, and alone.
+    let us = |params: serde_json::Value| {
+        edited(&[(
+            "/detection/local",
+            serde_json::json!([{"id": "detect/us-sm-mbr", "params": params}]),
+        )])
+    };
+    assert!(validate(&us(serde_json::Value::Null)).is_empty());
+    for key in v2xw_threat::us_mbr::PARAM_KEYS {
+        assert!(
+            validate(&us(serde_json::json!({key: 1.0}))).is_empty(),
+            "{key} is a US-profile parameter and refused"
+        );
+    }
+    assert_eq!(
+        refused_fields(&us(serde_json::json!({"z_threshold": 2.0}))),
+        ["detection.local[0].params.z_threshold"],
+        "a research-suite key is not a US-profile one"
+    );
+    let both = edited(&[(
+        "/detection/local",
+        serde_json::json!([{"id": "detect/legacy-12"}, {"id": "detect/us-sm-mbr"}]),
+    )]);
+    assert_eq!(refused_fields(&both), ["detection.local[1]"]);
 }

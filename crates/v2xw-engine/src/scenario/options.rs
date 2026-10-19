@@ -516,6 +516,10 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Standard 12-check suite",
             "Plausibility and consistency checks on every message (the VeReMi detector set).",
         ),
+        (_, "detect/us-sm-mbr") => w(
+            "Strict US profile (SM-MBR)",
+            "Only the SCMS Manager BSM report subtypes at their published thresholds (1 m drift, 90 m/s, 10 m/s²), every BSM checked, no streak gate.",
+        ),
         (_, "threat/ma/corroborated") => w(
             "Corroborating authority",
             "Revokes only on independent, corroborated evidence sustained over time.",
@@ -945,7 +949,10 @@ pub fn slot_values(path: &str, registry: &Registry) -> Option<(Vec<Value>, bool)
         // The ids the security path builds by name (`phase2`, `backend`,
         // `pseudonym_policy`); the catalogue registers few of these as cards, so the
         // registry alone offered an empty or wrong list for them.
-        "detection.local[]" => Some(vec![crate::phase2::LEGACY_12.to_string()]),
+        "detection.local[]" => Some(vec![
+            crate::phase2::LEGACY_12.to_string(),
+            crate::phase2::US_SM_MBR.to_string(),
+        ]),
         "detection.ma" => Some(vec![
             crate::phase2::MA_CORROBORATED.to_string(),
             crate::phase2::MA_LEGACY_WINDOW.to_string(),

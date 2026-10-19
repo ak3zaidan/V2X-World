@@ -341,6 +341,22 @@ pub fn component_ids(run: &ScmsRun) -> BTreeMap<u32, (String, String, u32)> {
             };
             put(node, &label, &role, inst);
         }
+        // The other providers' components, under their own labels: a report another
+        // provider's MA shares arrives from that MA, which is not a device (realism.md
+        // R-SHARE: it was labelled `ee/<node>`).
+        for (k, other) in st.deployment.providers.iter().enumerate() {
+            if k == st.provider {
+                continue;
+            }
+            for (role, inst, node) in st.deployment.nodes(k).instances {
+                let role = if role == "crl_store" {
+                    "crl-store".to_string()
+                } else {
+                    role
+                };
+                put(node, &other.name, &role, inst);
+            }
+        }
     }
     out
 }
@@ -1179,13 +1195,14 @@ pub fn drain_cases(
                 received.or(decision),
                 json!({"subjects": subjects, "direct": c.direct, "evidence": case_evidence(ma, c)}),
             );
+            // Corroborated when the pipeline opened the case, which under manual review
+            // is the operator's review time before the decision (realism.md R-CORR).
             push(
                 tracker,
                 "corroborated",
-                // When the MA opened the case, and never before its evidence was in: the
-                // case is opened at the driver's instant, which can fall inside the MA's
-                // processing of the last report.
-                received.or(decision).map(|r| r.max(c.opened_at)),
+                // Never before its evidence was in: the case opens at the driver's
+                // instant, which can fall inside the MA's processing of the last report.
+                Some(received.map_or(c.opened, |r| r.max(c.opened))),
                 json!({"reports": if c.direct { 1 } else { 2 }}),
             );
             push(

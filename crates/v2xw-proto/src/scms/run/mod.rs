@@ -604,6 +604,10 @@ impl LaState {
 pub struct MaState {
     /// Reports it has received, in arrival order.
     pub reports: Vec<ReportSubmission>,
+    /// When each entry of [`MaState::reports`] arrived here (same index): the case
+    /// board's "reports in" instant, which under manual review precedes the decision by
+    /// the operator's review time.
+    pub report_arrived: Vec<SimTime>,
     /// Its case table, by resolution run: every investigation it has opened, open or
     /// closed (gap row 27: cases run concurrently, each message names its case by run).
     pub cases: BTreeMap<FlowRun, Case>,
@@ -710,9 +714,10 @@ pub struct Case {
     /// The indices in [`MaState::reports`] the case was opened on (one for a direct
     /// revocation, two for a link); [`MaState::report_evidence`] has their evidence.
     pub reports: Vec<usize>,
-    /// When the MA opened it: its pipeline had the evidence it acts on (the operator's
-    /// review, under manual review, starts here).
-    pub opened_at: SimTime,
+    /// When the MA's pipeline corroborated the evidence and opened the case: under
+    /// manual review the operator's decision follows the review time later (realism.md
+    /// R-CORR: the case board stamped `corroborated` at the decision).
+    pub opened: SimTime,
 }
 
 /// The CRL Generator's and the CRL Store's state.

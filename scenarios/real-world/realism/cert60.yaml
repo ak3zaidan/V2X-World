@@ -1,0 +1,8 @@
+# NYC taxi profile: 60 pseudonym certificates a week instead of 20 (03 §11; [CVP-P2] item 21).
+# A variant of ../midtown-scms-realism.yaml (docs/design/scms-real/testing/realism.md).
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS realism cert60}
+security:
+  protocol:
+    id: protocol/scms/camp
+    params: {certs_per_period: 60}

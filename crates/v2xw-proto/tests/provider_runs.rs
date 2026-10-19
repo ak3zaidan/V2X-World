@@ -198,3 +198,48 @@ fn the_records_name_the_sharing_ma_as_the_other_providers() {
         "a device talks to the MA: {into_ma:?}"
     );
 }
+
+/// Realism R-SHARE (docs/design/scms-real/testing/realism.md): the PKI view records a
+/// shared report as sent by the forwarding provider's MA. It was labelled as a device
+/// (`ee/<node>` of provider-a's MA node), so the recorded topology showed devices talking
+/// to the other provider's MA.
+#[test]
+fn a_shared_report_is_recorded_as_sent_by_the_other_providers_ma() {
+    use v2xw_proto::scms::pki_view::{self, PkiTracker};
+    let (home, mut peer) = runs();
+    let device = NodeId::new(5_000_125);
+    peer.preload(device, 0, 1, 2).expect("provisions");
+    let (&(i, _), c) = peer.state.devices[&device]
+        .credentials
+        .iter()
+        .next()
+        .expect("a pseudonym");
+    let lv = c.lv;
+    let sent = 1_000_000_000;
+    peer.shared_report_at_ma(home.state.nodes.ma, i, lv, sent, sent, 200);
+    peer.run_until(sent + 2_000_000_000).expect("runs");
+    let mut tracker = PkiTracker::default();
+    let flows = pki_view::drain_flows(std::slice::from_ref(&peer), &mut tracker);
+    let shared: Vec<_> = flows.iter().filter(|f| f.name == "report-shared").collect();
+    assert_eq!(shared.len(), 1, "{flows:?}");
+    assert_eq!(shared[0].from.as_deref(), Some("provider-a/ma/0"));
+    assert_eq!(shared[0].to.as_deref(), Some("provider-b/ma/0"));
+}
+
+/// Realism R-OFFCTL (docs/design/scms-real/testing/realism.md): a provider whose root the
+/// electors have not approved (`on_ctl: false`, a rogue SCMS or a test-CTL root) still
+/// runs under its own root: it answers for its root and provisions its devices, whose
+/// certificates nobody else trusts. The first use of its root panicked ("the home
+/// provider has an approved root"), so a run with such a provider crashed in seconds.
+#[test]
+fn a_provider_off_the_ctl_still_runs_under_its_own_root() {
+    let mut d = Deployment::preset(Preset::UsProduction2025);
+    d.providers[1].on_ctl = false;
+    let home = ScmsRun::new_deployed(ScmsParams::default().quick(), 0, d).expect("builds");
+    let mut peer = ScmsRun::new_peer(&home, 1).expect("provider-b's run builds");
+    assert!(peer.state.gov.cert("root").is_some(), "its own root");
+    assert!(peer.state.gov.signing_key("root").is_some());
+    let device = NodeId::new(5_000_126);
+    peer.preload(device, 0, 1, 2).expect("provisions");
+    assert!(!peer.state.devices[&device].credentials.is_empty());
+}

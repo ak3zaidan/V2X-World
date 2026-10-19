@@ -131,6 +131,32 @@ pub const ETSI_PKI: &str = "protocol/etsi/ts102941";
 /// The detector suite's id, as `detection.local` names it.
 pub const LEGACY_12: &str = "detect/legacy-12";
 
+/// The strict US misbehaviour profile's id ([SM-MBR] v1.0 §2.3 PSID-0x20 subtypes and
+/// default thresholds, `v2xw_threat::us_mbr`), as `detection.local` names it.
+pub const US_SM_MBR: &str = "detect/us-sm-mbr";
+
+/// One receiver's local misbehaviour detector: the research suite or the US profile.
+#[derive(Debug, Clone)]
+enum LocalSuite {
+    Research(Box<Legacy12>),
+    Us(Box<v2xw_threat::us_mbr::UsSmMbr>),
+}
+
+impl LocalSuite {
+    fn on_message(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
+        me: &SelfBelief,
+        m: &ObservedMessage,
+        env: &dyn v2xw_threat::obs::LocalEnvironment,
+    ) -> v2xw_threat::Verdict {
+        match self {
+            LocalSuite::Research(d) => v2xw_threat::Detector::on_message(&mut **d, ctx, me, m, env),
+            LocalSuite::Us(d) => v2xw_threat::Detector::on_message(&mut **d, ctx, me, m, env),
+        }
+    }
+}
+
 /// The check id of a failed signature verification (`DetectorId::SignatureVerification`).
 const SIGNATURE_VERIFICATION: &str =
     v2xw_threat::detect::DetectorId::SignatureVerification.as_str();
@@ -1650,8 +1676,11 @@ pub struct Phase2 {
     composite_sizes: BTreeMap<(usize, u32, usize, usize), u32>,
     specs: Vec<AttackerSpec>,
     attackers: BTreeMap<NodeId, AttackerSlot>,
-    detectors: BTreeMap<NodeId, Legacy12>,
+    detectors: BTreeMap<NodeId, LocalSuite>,
     detector_params: DetectorParams,
+    /// The strict US profile's thresholds when `detection.local` names it, else the
+    /// research suite runs.
+    us_profile: Option<v2xw_threat::us_mbr::UsMbrParams>,
     detection_on: bool,
     /// Whether the detectors read each message's stated accuracy (`true`, the default) or
     /// the legacy constant 5 m (`detection.local[].params.use_stated_accuracy: 0`, kept to
@@ -1820,15 +1849,64 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
     let mut report_interval = secs(REPORT_INTERVAL_S);
     let mut stated_accuracy = true;
     let mut map_check = true;
+    let mut us_profile: Option<v2xw_threat::us_mbr::UsMbrParams> = None;
     for (i, choice) in scenario.detection.local.iter().enumerate() {
-        if choice.id != LEGACY_12 {
+        let us = choice.id == US_SM_MBR;
+        if choice.id != LEGACY_12 && !us {
             return Err(conflict(
                 &format!("detection.local[{i}]"),
                 format!(
-                    "this build ships one local detector suite, {LEGACY_12}; got {}",
+                    "this build ships two local detector suites, {LEGACY_12} (the research \
+                     suite) and {US_SM_MBR} (the strict US profile); got {}",
                     choice.id
                 ),
             ));
+        }
+        if us {
+            if scenario.detection.local.len() > 1 {
+                return Err(conflict(
+                    &format!("detection.local[{i}]"),
+                    format!("{US_SM_MBR} is a whole profile: list it alone"),
+                ));
+            }
+            let mut p = v2xw_threat::us_mbr::UsMbrParams::default();
+            if let Some(map) = choice.params.as_object() {
+                for (key, value) in map {
+                    let field = format!("detection.local[{i}].params.{key}");
+                    let v = value
+                        .as_f64()
+                        .or_else(|| value.as_bool().map(|b| if b { 1.0 } else { 0.0 }))
+                        .filter(|v| v.is_finite() && *v >= 0.0)
+                        .ok_or_else(|| {
+                            conflict(
+                                &field,
+                                format!("is {value}; it must be a finite number, 0 or more"),
+                            )
+                        })?;
+                    if key == "report_interval_s" {
+                        report_interval = secs(v);
+                    } else if !p.apply(key, v) {
+                        return Err(conflict(
+                            &field,
+                            format!(
+                                "'{key}' is not a parameter of {US_SM_MBR}; it takes \
+                                 report_interval_s, {}",
+                                v2xw_threat::us_mbr::PARAM_KEYS.join(", ")
+                            ),
+                        ));
+                    }
+                }
+            } else if !choice.params.is_null() {
+                return Err(conflict(
+                    &format!("detection.local[{i}].params"),
+                    format!(
+                        "is {}; it must be an object of parameter names and values",
+                        choice.params
+                    ),
+                ));
+            }
+            us_profile = Some(p);
+            continue;
         }
         if let Some(map) = choice.params.as_object() {
             for (key, value) in map {
@@ -1885,6 +1963,7 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
         report_interval,
         stated_accuracy,
         map_check,
+        us_profile,
     })
 }
 
@@ -1896,6 +1975,8 @@ pub(crate) struct DetectionParams {
     pub stated_accuracy: bool,
     /// Whether the map-bound check runs (`use_map`).
     pub map_check: bool,
+    /// The strict US profile's thresholds, when `detection.local` names it.
+    pub us_profile: Option<v2xw_threat::us_mbr::UsMbrParams>,
 }
 
 /// The keys `detection.local[].params` accepts that the host reads rather than the suite.
@@ -2065,6 +2146,7 @@ impl Phase2 {
             report_interval,
             stated_accuracy,
             map_check,
+            us_profile,
         } = detection_params(scenario)?;
         let ma = MaHost::from_scenario(scenario)?;
 
@@ -2330,6 +2412,7 @@ impl Phase2 {
             attackers: BTreeMap::new(),
             detectors: BTreeMap::new(),
             detector_params,
+            us_profile,
             detection_on: wants_detection,
             stated_accuracy,
             // A world with no motor-vehicle lane (a fixture, an empty extract) gives the
@@ -3322,8 +3405,8 @@ impl Phase2 {
             return true;
         }
         if self.detection_on {
-            self.detectors
-                .insert(node, Legacy12::new(self.detector_params.clone()));
+            let suite = self.local_suite();
+            self.detectors.insert(node, suite);
         }
         false
     }
@@ -3336,8 +3419,17 @@ impl Phase2 {
     /// is a reporter like a vehicle, whose reports go straight onto its backhaul.
     pub fn arm_rsu_detector(&mut self, node: NodeId) {
         if self.detection_on {
-            self.detectors
-                .insert(node, Legacy12::new(self.detector_params.clone()));
+            let suite = self.local_suite();
+            self.detectors.insert(node, suite);
+        }
+    }
+
+    /// A new receiver's detector: the US profile when the scenario names it, else the
+    /// research suite.
+    fn local_suite(&self) -> LocalSuite {
+        match &self.us_profile {
+            Some(p) => LocalSuite::Us(Box::new(v2xw_threat::us_mbr::UsSmMbr::new(p.clone()))),
+            None => LocalSuite::Research(Box::new(Legacy12::new(self.detector_params.clone()))),
         }
     }
 
@@ -3487,7 +3579,11 @@ impl Phase2 {
             // heading check runs only when noise moves a claim 5 m in 100 ms — which is how
             // honest vehicles were reported. A frozen or falsified claim is as visible at
             // one check a second as at ten.
-            if let Some(last) = self.checked_at.get(&(node, key))
+            // The US profile compares every BSM with the one before it from the same
+            // certificate ("two consecutive BSMs", [SM-MBR] §2.3.1.2.2), so it checks
+            // every message.
+            if self.us_profile.is_none()
+                && let Some(last) = self.checked_at.get(&(node, key))
                 && m.received_at
                     < interval
                         .after(*last)
@@ -3551,7 +3647,7 @@ impl Phase2 {
             if compromised {
                 heard.push(observed.clone());
             }
-            let verdict = v2xw_threat::Detector::on_message(detector, ctx, me, &observed, env);
+            let verdict = detector.on_message(ctx, me, &observed, env);
             self.report.messages_checked += 1;
             *self
                 .report
@@ -3979,7 +4075,8 @@ impl Phase2 {
         if self.etsi.is_some() || self.home().state.pki.is_none() {
             return MbrBuild::Off;
         }
-        let Some(subtype) = r.reason_codes.iter().find_map(|c| us_subtype(c)) else {
+        let us = self.us_profile.as_ref();
+        let Some(subtype) = r.reason_codes.iter().find_map(|c| us_subtype(c, us)) else {
             return MbrBuild::Unmapped;
         };
         if !r.reporter.is_some_and(|n| {
@@ -4322,8 +4419,12 @@ impl Phase2 {
         for (k, feed) in self.crl_feeds.iter().enumerate() {
             for h in (0..self.crl_feeds.len()).filter(|&h| h != k) {
                 let lag = d.inter_provider_latency(k, h).unwrap_or(Duration::ZERO);
+                // Only a version still on its way is a wake: one that has crossed is
+                // already served (`visible_versions`). Held to `now + 1`, every version
+                // ever published woke the fast-forward at every mobility step from its
+                // publication on (realism.md R-FF: 255,658 backend ticks in two days).
                 for v in feed {
-                    offer(held(v.at.saturating_add(lag.as_nanos())));
+                    offer(v.at.saturating_add(lag.as_nanos()));
                 }
             }
         }
@@ -7049,16 +7150,27 @@ enum MbrBuild {
 
 /// The [SM-MBR] v1.1 PSID-0x20 subtype for a detector check, with the §2.3.1 default
 /// parameters; `None` when the object set has none (see [`Phase2::real_mbr`]).
-fn us_subtype(check: &str) -> Option<mbr::Subtype> {
+/// The SM-MBR v1.1 subtype a fired check reports as, with the thresholds the reporting
+/// device implemented: the US profile's own (`us`), else the [SM-MBR] defaults the
+/// research suite's reports have always carried.
+fn us_subtype(check: &str, us: Option<&v2xw_threat::us_mbr::UsMbrParams>) -> Option<mbr::Subtype> {
     use v2xw_threat::detect::DetectorId as D;
+    let d = v2xw_threat::us_mbr::UsMbrParams::default();
+    let p = us.unwrap_or(&d);
+    let u16_of = |v: f64| v.round().clamp(0.0, f64::from(u16::MAX)) as u16;
     match check {
         c if c == D::ConstantPositionFrozen.as_str() => Some(mbr::Subtype::ConstantPosition),
         c if c == D::PositionJump.as_str() => Some(mbr::Subtype::RandomPosition {
-            gps_drift_mm: 1_000,
+            gps_drift_mm: u16_of(p.gps_drift_m * 1000.0),
         }),
         c if c == D::ImplausibleAcceleration.as_str() => Some(mbr::Subtype::MaxAcceleration {
-            threshold_cmps2: 1_000,
+            threshold_cmps2: u16_of(p.max_accel_mps2 * 100.0),
         }),
+        c if c == D::ImplausibleSpeed.as_str() => Some(mbr::Subtype::MaxSpeed {
+            threshold_mps: u16_of(p.max_speed_mps),
+        }),
+        // ObsImplausible/Distance needs a suspect and a reporter BSM as evidence, which
+        // this host does not collect: the (default-off) distance check stays unmapped.
         _ => None,
     }
 }
@@ -7214,4 +7326,53 @@ fn compromised_rsu_specs(
         out.insert(index, (params.clone(), from, to));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod fast_forward_wake_tests {
+    use super::*;
+
+    /// Realism R-FF (docs/design/scms-real/testing/realism.md): a CRL version one provider
+    /// published is a fast-forward wake only until it has crossed the inter-provider link
+    /// to the other provider's RA. Fault (the version held to `now + 1` for ever, the
+    /// first form): an hour after the crossing it still wakes the very next instant, and
+    /// a two-day fast-forward stopped at every 100 ms step (255,658 backend ticks).
+    #[test]
+    fn a_crl_version_wakes_the_fast_forward_only_until_it_has_crossed() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let mut p = Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend");
+        assert_eq!(p.crl_feeds.len(), 2, "us-production-2025: two providers");
+        let lag = p
+            .home()
+            .state
+            .deployment
+            .inter_provider_latency(0, 1)
+            .expect("a link")
+            .as_nanos();
+        assert!(lag > 0, "the providers are apart");
+        let at: SimTime = 1_000_000_000;
+        let crossed = at + lag;
+        let before = at + lag / 2;
+        let after = crossed + 3_600_000_000_000;
+        let (w_before, w_after) = (p.next_wake(before), p.next_wake(after));
+        assert_ne!(w_after, Some(after + 1), "nothing else is due at once");
+        p.crl_feeds[0].push(CrlVersion {
+            at,
+            version: 1,
+            entries: Vec::new(),
+            secured: None,
+        });
+        let in_transit = p.next_wake(before).expect("a wake");
+        assert_eq!(in_transit, w_before.map_or(crossed, |w| w.min(crossed)));
+        assert_eq!(p.next_wake(after), w_after, "a crossed version is no wake");
+    }
 }

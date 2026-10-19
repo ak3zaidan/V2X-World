@@ -595,6 +595,7 @@ impl ScmsState {
                     evidence = self.ma.pending_evidence.remove(&run);
                 }
                 self.ma.reports.push(*r);
+                self.ma.report_arrived.push(at);
                 self.ma.report_evidence.push(evidence);
                 self.ma.report_runs.push(run);
                 out.stage_at(StageId::ReportReceived, to, None, flow, run);

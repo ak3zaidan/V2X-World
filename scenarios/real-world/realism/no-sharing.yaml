@@ -1,0 +1,7 @@
+# The MAs do not forward reports about the other provider's certificates.
+# A variant of ../midtown-scms-realism.yaml (docs/design/scms-real/testing/realism.md).
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS realism no-sharing}
+security:
+  scms:
+    deployment: {preset: us-production-2025, ma_report_sharing: false}

@@ -1,0 +1,7 @@
+# The strict US misbehaviour profile ([SM-MBR] v1.0 §2.3) instead of the research suite.
+# A variant of ../midtown-scms-realism.yaml (docs/design/scms-real/testing/realism.md).
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS realism us-profile}
+detection:
+  local:
+    - id: detect/us-sm-mbr

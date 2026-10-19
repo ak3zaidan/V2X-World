@@ -1,0 +1,105 @@
+# SCMS runtime realism: what each run must show, written before the runs (2026-10-18).
+# Read by `tools/realworld/runtime_realism.py check`; every metric is a key of
+# `runtime_realism.py extract`. Runs: scenarios/real-world/midtown-scms-realism.yaml
+# ("base") and its variants in scenarios/real-world/realism/ (same seed 0xBE7C0001).
+# `status: open` marks a row whose failure is a documented open item
+# (docs/design/scms-real/testing/realism.md §4), not a pass.
+#
+# ---- Topology: who talks to whom (01 §2.1-2.3; 00 §2.1 Links) ------------------------
+- {id: T1-ee-talks-to-ra, run: base, metric: topology.ee_peers, expect: subset, value: [ra, dcm],
+   source: "01 §2.3: the RA is the only server EEs talk to routinely; the DCM at the factory (01 §5). [SM-MBR] §4: reports are POSTed to the RA", status: open}
+- {id: T2-no-ee-aca, run: base, metric: edge.ee->aca, expect: eq, value: 0, source: "CAMP 1.2.2 §5.2: the ACA is behind the RA; it never learns the device's address"}
+- {id: T3-no-ee-la, run: base, metric: edge.ee->la1, expect: eq, value: 0, source: "the LAs are internal (01 §2.2)"}
+- {id: T4-shared-from-ma, run: base-new, metric: topology.shared_report_senders, expect: subset, value: [ma],
+   source: "WP-D1 / Provider Req. §2.2: a report about another provider's certificate goes MA to MA"}
+- {id: T5-components-us, run: base, metric: topology.components, expect: subset,
+   value: [root, ica, eca, ra, aca, la1, la2, ma, crlg, pg, dcm],
+   source: "00 §2.1, deployment.rs US_REQUIRED_ROLES; LOP, CRL store and CRL broadcast are CAMP-reference only (00 §2.3)", status: open}
+- {id: T6-ma-resolution-path, run: base, metric: edge.ma->aca, expect: ge, value: 1, source: "BRECHT §VI-C: the MA asks the ACA for the request hash, then the RA and the LAs"}
+- {id: T7-ma-la, run: base, metric: edge.ma->la1, expect: ge, value: 1, source: "BRECHT §VI-C: LA seeds for the CRL"}
+# ---- Separation of duties from the recorded knowledge (BRECHT §X; 02 §9.5) -----------
+- {id: S1-no-identity-with-linkage, run: base, metric: separation.violations, expect: empty,
+   source: "RA: identities, no linkage; ACA: linkage values, no identity; LA: chain ids only; MA: accused linkage value only"}
+- {id: S2-roles-recorded, run: base, metric: separation.roles, expect: subset, value: [ra, aca, la1, la2, ma, eca], source: "pki_view KNOWLEDGE_ROLES"}
+- {id: S3-no-gt-device-in-holds, run: base, metric: separation.holds_device, expect: empty, source: "the ground-truth device join is `truth`, never `holds` (E1)"}
+- {id: S4-sealed-opened-by-recipient, run: base, metric: sealed.mismatch, expect: eq, value: 0,
+   source: "02 §8: an SPDU encrypted to X is opened by X only; the RA cannot open AcaEeCertResponsePrivate"}
+# ---- Provisioning against CAMP sizing (CAMP122 §6.3.3.4; 04 §4.1) ---------------------
+- {id: P1-one-request-per-obu, run: base, metric: perdev.EeRaCertRequestSpdu.median, expect: eq, value: 1,
+   source: "ra-maxReqs 1: one butterfly request in the device's life; scaled to 17 M/yr that is 0.54 req/s (CAMP ~0.5)"}
+- {id: P2-rsu-app-certs, run: base, metric: perdev.EeRaCertRequestSpdu.max, expect: eq, value: 3,
+   source: "an RSU requests one application certificate per week: 2 preloaded (614, 615) and the 616 renewal (CAMP122 §6.3.5; 01 §4)"}
+- {id: P3-certs-per-topup, run: base, metric: p2.certs_topped_up, expect: eq, value: 1100,
+   source: "20 certificates per device per week (CAMP122 Table 67) x the 55 devices present at the rollover"}
+- {id: P4-topups-complete, run: base, metric: p2.topups_completed, expect: eq, value: 55, source: "one .info + one file a week per device (04 §4.1, NYC top-off)"}
+- {id: P5-topup-within-overlap, run: base, metric: topup.latency_max_s, expect: le, value: 3600,
+   source: "the next week's certificates arrive inside the 1 h overlap (CAMP122 §6.3.3; 03 §11)"}
+- {id: P6-no-starvation, run: base, metric: p2.vehicles_starved, expect: eq, value: 0, source: "pool of 2 weeks + weekly top-off"}
+# ---- Sizes (CAMP122 Table 3 via 04 §3; BRECHT §VI-F via 04 §5) -----------------------
+- {id: Z1-cert-response, run: base, metric: pdu.AcaEeCertResponsePrivateSpdu.max, expect: band, band: [454, 470], source: "04 §3: 454-470 B on the real encoder"}
+- {id: Z2-cert-request, run: base, metric: pdu.EeRaCertRequestSpdu.max, expect: band, band: [385, 424], source: "04 §3"}
+- {id: Z3-ack, run: base, metric: pdu.RaEeCertAckSpdu.max, expect: band, band: [292, 294], source: "04 §3"}
+- {id: Z4-enrolment-response, run: base, metric: pdu.EcaEeCertResponseSpdu.max, expect: eq, value: 958, source: "04 §3"}
+- {id: Z5-crl-small, run: base, metric: pdu.SecuredCrl.max, expect: band, band: [300, 420],
+   source: "a SecuredCrl with one entry is 328 B (04 §5); each added linkage entry ~33 B (BRECHT ~40 B)"}
+- {id: Z6-mbr-size, run: base, metric: pdu.SecuredMisbehaviorReport.max, expect: band, band: [600, 1200],
+   source: "SM-MBR §1-3: 2 signed BSMs (~200 B) + the full pseudonym certificate, signed and encrypted (~60 + ~100 B)"}
+# ---- Airtime and availability ----------------------------------------------------------
+- {id: A1-mbr-airtime, run: base, metric: air.mbr.share, expect: le, value: 0.01,
+   source: "after the false-report fix (validation/vehicle-and-roadside.md §0.6) MBR uploads are rare; 29.3 % before"}
+- {id: A2-honest-not-revoked, run: base, metric: p2.revoked_honest, expect: eq, value: 0, source: "no honest device revoked in an honest-majority run"}
+- {id: A3-attackers-revoked, run: base, metric: p2.revoked_attackers, expect: eq, value: 3, source: "3 constant-position attackers, each reported by several neighbours"}
+# ---- Revocation latency on the real calendar -------------------------------------------
+- {id: L1-report-shuffle-1-day, run: base, metric: stage.shuffled_s, expect: band, band: [86000, 86500],
+   source: "CAMP122 §5.2.8.4: the RA holds reports until 10,000 or 1 day; ~310 reports here"}
+- {id: L2-manual-review-8h, run: base, metric: stage.decision_s, expect: band, band: [115100, 115300],
+   source: "1 day shuffle + 8 h operator review (00 §5 decision 7, D3 ASSUMPTION)"}
+- {id: L3-crl-next-business-day, run: base, metric: stage.published_s, expect: band, band: [140000, 150000],
+   source: "[SM-PROV] one-business-day CRL SLA: decided Wed 01:00 EDT, published at Wed's slot"}
+- {id: L4-case-board-reports-in, run: base-new, metric: case.decision_s, expect: ge, value: 28000,
+   source: "the case board's reports-in precedes the decision by the 8 h review (00 §3.2 Cases tab)"}
+- {id: L6-cases-concurrent, run: base-new, metric: case.open_wait_max_s, expect: le, value: 3600,
+   source: "gap row 27: a case table with concurrent cases; a case opens when its evidence is corroborated, not when the case before it is decided. R-SERIAL: Phase2::start_cases_of opens one case per provider at a time", status: open}
+- {id: L6-cases-concurrent-us, run: us-profile, metric: case.open_wait_max_s, expect: le, value: 3600,
+   source: "as L6; with the US profile's 6 cases the attacker's case waited 57,597 s behind two honest ones and was never decided (R-SERIAL)", status: open}
+- {id: L5-case-board-review, run: base-new, metric: case.review_s, expect: band, band: [28800, 28801],
+   source: "corroborated (the case opens) to decision is the operator's 8 h review (CV-pilot manual MA, 00 §5 decision 7); R-CORR: main stamped both at the decision (0 s)"}
+# ---- Run cost ---------------------------------------------------------------------------
+- {id: C1-ff-ticks-before-fix, run: base, metric: cost.backend_ticks, expect: le, value: 10000,
+   source: "D2 design: at most one backend stop a minute when nothing is due (~2,900 in 2 days). Main d3039b53: FAILS, every published CRL version woke every step (R-FF)", status: open}
+- {id: C1-ff-ticks, run: base-new, metric: cost.backend_ticks, expect: le, value: 10000,
+   source: "D2 design, after the R-FF fix"}
+- {id: C1-ff-same-scms, run: base-new, vs: base, metric: p2.certs_topped_up, expect: ratio, band: [1, 1], source: "the R-FF fix removes wakes, not SCMS work"}
+- {id: C1-ff-same-enforcement, run: base-new, vs: base, metric: stage.enforced_s, expect: delta, band: [-60, 60], source: "enforcement still follows the CRL fetch"}
+- {id: C2-memory, run: base, metric: cost.peak_mb, expect: le, value: 2500, source: "run lock cap"}
+# ---- Variants: a change and what theory says it does ------------------------------------
+- {id: V1-cert60-topup-x3, run: cert60, vs: base, metric: p2.certs_topped_up, expect: ratio, band: [2.95, 3.05], source: "60 instead of 20 per week ([CVP-P2] item 21)"}
+- {id: V1-cert60-requests-same, run: cert60, vs: base, metric: perdev.EeRaCertRequestSpdu.median, expect: ratio, band: [1, 1], source: "still one butterfly request"}
+- {id: V1-cert60-responses-x3, run: cert60, vs: base, metric: pdu.AcaEeCertResponsePrivateSpdu.n, expect: ratio, band: [2.5, 3.1], source: "one response per certificate; RSU application certificates (60 of 3790) do not scale"}
+- {id: V1-cert60-size-same, run: cert60, vs: base, metric: pdu.AcaEeCertResponsePrivateSpdu.max, expect: ratio, band: [1, 1], source: "each certificate is the same size (04 §6)"}
+- {id: V1-cert60-dl-bytes, run: cert60, vs: base, metric: access.uu_dl_bytes, expect: ratio, band: [1.5, 3.2], source: "batch files carry 3x the certificates"}
+- {id: V1-cert60-bsm-same, run: cert60, vs: base, metric: air.bsm.frames, expect: ratio, band: [0.99, 1.01], source: "pool size does not change what is on the air"}
+- {id: V2-auto-decides-at-shuffle, run: ma-auto, vs: base, metric: stage.decision_s, expect: delta, band: [-29000, -28600], source: "no 8 h review"}
+- {id: V2-auto-same-publication, run: ma-auto, vs: base, metric: stage.published_s, expect: delta, band: [-100, 100],
+   source: "decided Tue 17:00 EDT (after the slot) instead of Wed 01:00 EDT: both publish at Wednesday's business-day slot"}
+- {id: V2-auto-same-cases, run: ma-auto, vs: base, metric: p2.cases_opened, expect: ratio, band: [1, 1], source: "the mode changes when, not whether"}
+- {id: V3-on-decision-publishes-now, run: crl-on-decision, metric: stage.published_s, expect: band, band: [115183, 115300], source: "publish on the decision"}
+- {id: V3-on-decision-enforced-earlier, run: crl-on-decision, vs: base, metric: stage.enforced_s, expect: delta, band: [-33000, -30000], source: "the ~9 h business-day wait is gone"}
+- {id: V4-west-report-leg, run: region-west, vs: base, metric: stage.report_received_s, expect: delta, band: [0.012, 0.05],
+   source: "haversine NYC-us-east 354.5 km (2.77 ms), NYC-us-west 3,691.7 km (19.47 ms) at 2/3 c + 1 ms per link: +16.7 ms per leg"}
+- {id: V4-west-counts-same, run: region-west, vs: base, metric: p2.certs_topped_up, expect: ratio, band: [1, 1], source: "placement changes latency, not counts"}
+- {id: V5-no-sharing-zero, run: no-sharing, metric: p2.reports_shared, expect: eq, value: 0, source: "ma_report_sharing off"}
+- {id: V5-no-sharing-revocations, run: no-sharing, vs: base, metric: p2.revoked_attackers, expect: ratio, band: [0.3, 1.0],
+   source: "reports about another provider's attacker never reach its issuer: same or fewer revocations"}
+- {id: V6-offctl-nothing-from-b, run: off-ctl, metric: verified.from_b, expect: eq, value: 0, source: "a root not on the CTL: nothing it certifies verifies (1609.2.1 §6.3.5). Measured 7 of provider-b's messages verified at provider-a receivers (P2PCD learning was refused: learn_unanchored 13); R-TRUSTLEAK, not root-caused", status: open}
+- {id: V6-offctl-honest-safe, run: off-ctl, metric: p2.revoked_honest, expect: eq, value: 0,
+   source: "the MA sets aside signature-only evidence (validation/vehicle-and-roadside.md): unverifiable provider-b traffic must not revoke anyone"}
+- {id: V7-fleet2x-per-device-same, run: fleet2x, vs: base, metric: perdev.EeRaCertRequestSpdu.median, expect: ratio, band: [1, 1], source: "per-device SCMS load is scale-free"}
+- {id: V7-fleet2x-devices, run: fleet2x, vs: base, metric: p2.messages_checked, expect: ratio, band: [1.5, 5], source: "more senders and more receivers: checks grow between n and n^2"}
+- {id: V7-fleet2x-cost, run: fleet2x, vs: base, metric: cost.cpu_s, expect: ratio, band: [1.2, 5], source: "provisioning linear in devices, receptions ~n^2 (05 §5)"}
+- {id: V8-us-checks-every-bsm, run: us-profile, vs: base, metric: p2.messages_checked, expect: ratio, band: [5, 12],
+   source: "[SM-MBR] compares consecutive BSMs (10 Hz) where the research suite checks 1 a second per sender"}
+- {id: V8-us-all-mapped, run: us-profile, metric: p2.reports_mbr_unmapped, expect: eq, value: 0, source: "every US check is an SM-MBR subtype"}
+- {id: V8-us-catches-constpos, run: us-profile, metric: p2.revoked_attackers, expect: eq, value: 3, source: "ConstantPosition (SM-MBR §2.3.1.2.3) catches a frozen position at speed. Measured 0: the one decided attacker's case queued behind 4 honest RandomPosition cases (R-SERIAL) and its decision fell after the horizon; 4 honest revoked (R-USFP)", status: open}
+- {id: V8-us-honest-fp, run: us-profile, vs: base, metric: p2.honest_reported, expect: ratio, band: [1, 100],
+   source: "a 1 m gpsDrift and no streak gate: a 12 m GNSS outlier (0.01/s, Reid 2019) on an honest sender is a RandomPosition report"}

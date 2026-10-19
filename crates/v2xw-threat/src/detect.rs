@@ -140,6 +140,10 @@ pub enum DetectorId {
     DenmPlausibility,
     /// Residual against a constant-velocity tracker. **Soft**: never fires on its own.
     KalmanConsistency,
+    /// The claimed speed is above the US MaxSpeed threshold ([SM-MBR] §2.3.1.3.2, 90 m/s).
+    /// Raised only by the strict US profile ([`crate::us_mbr`]); not in [`Self::ALL`], so
+    /// it has no fingerprint column and the `detnorm_*` contract is unchanged.
+    ImplausibleSpeed,
 }
 
 impl DetectorId {
@@ -207,6 +211,7 @@ impl DetectorId {
             DetectorId::VruImpersonation => "vruImpersonation",
             DetectorId::DenmPlausibility => "denmPlausibility",
             DetectorId::KalmanConsistency => "kalmanConsistency",
+            DetectorId::ImplausibleSpeed => "implausibleSpeed",
         }
     }
 
@@ -239,7 +244,8 @@ impl DetectorId {
             | DetectorId::ImplausibleAcceleration
             | DetectorId::BeaconFrequency
             | DetectorId::DenmPlausibility
-            | DetectorId::VruImpersonation => 1,
+            | DetectorId::VruImpersonation
+            | DetectorId::ImplausibleSpeed => 1,
             DetectorId::PositionSpeedInconsistency
             | DetectorId::PositionJump
             | DetectorId::HeadingInconsistency
@@ -274,18 +280,22 @@ impl Fingerprint {
     /// One check's score.
     #[must_use]
     pub fn get(&self, id: DetectorId) -> f64 {
-        self.0[id.index()]
+        // A check outside `DetectorId::ALL` (the US-only one) has no column: 0.
+        self.0.get(id.index()).copied().unwrap_or(0.0)
     }
 
     /// Sets one check's score.
     pub fn set(&mut self, id: DetectorId, v: f64) {
-        self.0[id.index()] = v;
+        if let Some(slot) = self.0.get_mut(id.index()) {
+            *slot = v;
+        }
     }
 
     /// Raises one check's score to `v` if `v` is larger.
     pub fn raise(&mut self, id: DetectorId, v: f64) {
-        let slot = &mut self.0[id.index()];
-        if v > *slot {
+        if let Some(slot) = self.0.get_mut(id.index())
+            && v > *slot
+        {
             *slot = v;
         }
     }

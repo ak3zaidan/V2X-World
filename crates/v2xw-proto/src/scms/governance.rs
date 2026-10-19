@@ -1588,8 +1588,10 @@ impl Governance {
         self.roots
             .iter()
             .rev()
-            .filter(mine)
-            .find(|r| r.approved)
+            .find(|r| mine(r) && r.approved)
+            // A provider the electors have not approved (`on_ctl: false`: a rogue SCMS, a
+            // test-CTL root on the production system) still runs under its own root;
+            // nobody else trusts it. It panicked here (realism.md R-OFFCTL).
             .or_else(|| self.roots.iter().rev().find(mine))
             .expect("the home provider has a root")
     }
