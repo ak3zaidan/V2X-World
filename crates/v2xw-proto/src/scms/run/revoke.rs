@@ -146,6 +146,7 @@ impl ScmsRun {
                 direct,
                 done: false,
                 reports,
+                opened: self.kernel.now(),
             },
         );
         self.state.ma.last_case = Some(run);

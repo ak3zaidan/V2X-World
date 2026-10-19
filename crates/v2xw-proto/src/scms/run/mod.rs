@@ -673,6 +673,10 @@ pub struct Case {
     /// The indices in [`MaState::reports`] the case was opened on (one for a direct
     /// revocation, two for a link); [`MaState::report_evidence`] has their evidence.
     pub reports: Vec<usize>,
+    /// When the MA's pipeline corroborated the evidence and opened the case: under
+    /// manual review the operator's decision follows the review time later (realism.md
+    /// R-CORR: the case board stamped `corroborated` at the decision).
+    pub opened: SimTime,
 }
 
 /// The CRL Generator's and the CRL Store's state.

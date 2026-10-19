@@ -58,6 +58,8 @@
    source: "[SM-PROV] one-business-day CRL SLA: decided Wed 01:00 EDT, published at Wed's slot"}
 - {id: L4-case-board-reports-in, run: base-new, metric: case.decision_s, expect: ge, value: 28000,
    source: "the case board's reports-in precedes the decision by the 8 h review (00 §3.2 Cases tab)"}
+- {id: L5-case-board-review, run: base-new, metric: case.review_s, expect: band, band: [28800, 28801],
+   source: "corroborated (the case opens) to decision is the operator's 8 h review (CV-pilot manual MA, 00 §5 decision 7); R-CORR: main stamped both at the decision (0 s)"}
 # ---- Run cost ---------------------------------------------------------------------------
 - {id: C1-ff-ticks-before-fix, run: base, metric: cost.backend_ticks, expect: le, value: 10000,
    source: "D2 design: at most one backend stop a minute when nothing is due (~2,900 in 2 days). Main d3039b53: FAILS, every published CRL version woke every step (R-FF)", status: open}

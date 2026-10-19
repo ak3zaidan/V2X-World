@@ -215,6 +215,10 @@ def extract(run_dir):
                 stg[k].append((v - base) / NS)
         for k, v in s.items():
             stg['abs.' + k].append(v / NS)
+    # The operator's review: corroboration to decision, per case (R-CORR).
+    for s in case_t.values():
+        if 'corroborated' in s and 'decision' in s:
+            stg['review'].append((s['decision'] - s['corroborated']) / NS)
     for k, v in stg.items():
         out[f'case.{k}_s'] = statistics.median(v)
     out['case.n'] = len(case_t)

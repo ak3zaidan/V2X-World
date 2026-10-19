@@ -6739,10 +6739,7 @@ enum MbrBuild {
 /// The SM-MBR v1.1 subtype a fired check reports as, with the thresholds the reporting
 /// device implemented: the US profile's own (`us`), else the [SM-MBR] defaults the
 /// research suite's reports have always carried.
-fn us_subtype(
-    check: &str,
-    us: Option<&v2xw_threat::us_mbr::UsMbrParams>,
-) -> Option<mbr::Subtype> {
+fn us_subtype(check: &str, us: Option<&v2xw_threat::us_mbr::UsMbrParams>) -> Option<mbr::Subtype> {
     use v2xw_threat::detect::DetectorId as D;
     let d = v2xw_threat::us_mbr::UsMbrParams::default();
     let p = us.unwrap_or(&d);
@@ -6915,4 +6912,53 @@ fn compromised_rsu_specs(
         out.insert(index, (params.clone(), from, to));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod fast_forward_wake_tests {
+    use super::*;
+
+    /// Realism R-FF (docs/design/scms-real/testing/realism.md): a CRL version one provider
+    /// published is a fast-forward wake only until it has crossed the inter-provider link
+    /// to the other provider's RA. Fault (the version held to `now + 1` for ever, the
+    /// first form): an hour after the crossing it still wakes the very next instant, and
+    /// a two-day fast-forward stopped at every 100 ms step (255,658 backend ticks).
+    #[test]
+    fn a_crl_version_wakes_the_fast_forward_only_until_it_has_crossed() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let mut p = Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend");
+        assert_eq!(p.crl_feeds.len(), 2, "us-production-2025: two providers");
+        let lag = p
+            .home()
+            .state
+            .deployment
+            .inter_provider_latency(0, 1)
+            .expect("a link")
+            .as_nanos();
+        assert!(lag > 0, "the providers are apart");
+        let at: SimTime = 1_000_000_000;
+        let crossed = at + lag;
+        let before = at + lag / 2;
+        let after = crossed + 3_600_000_000_000;
+        let (w_before, w_after) = (p.next_wake(before), p.next_wake(after));
+        assert_ne!(w_after, Some(after + 1), "nothing else is due at once");
+        p.crl_feeds[0].push(CrlVersion {
+            at,
+            version: 1,
+            entries: Vec::new(),
+            secured: None,
+        });
+        let in_transit = p.next_wake(before).expect("a wake");
+        assert_eq!(in_transit, w_before.map_or(crossed, |w| w.min(crossed)));
+        assert_eq!(p.next_wake(after), w_after, "a crossed version is no wake");
+    }
 }

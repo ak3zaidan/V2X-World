@@ -1095,10 +1095,12 @@ pub fn drain_cases(
                 received.or(decision),
                 json!({"subjects": subjects, "direct": c.direct, "evidence": case_evidence(ma, c)}),
             );
+            // Corroborated when the pipeline opened the case, which under manual review
+            // is the operator's review time before the decision (realism.md R-CORR).
             push(
                 tracker,
                 "corroborated",
-                decision,
+                Some(c.opened),
                 json!({"reports": if c.direct { 1 } else { 2 }}),
             );
             push(
