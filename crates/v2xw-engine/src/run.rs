@@ -953,6 +953,10 @@ pub struct Engine {
     /// The last `node.credentials` of vehicles that left in this step, recorded once the
     /// step's recorder is at hand.
     departed_credentials: Vec<v2xw_proto::scms::pki_view::NodeCredentials>,
+    /// The receiver validation of every node that left the run (edge-case package):
+    /// summed into the report with the nodes still present. Until 2026-10-19 a departed
+    /// node's refusals were dropped from `receiver_validation` with it.
+    departed_rx: ReceiverValidationReport,
     /// The actors' bodies at the last published state, for the vehicles-on-the-path
     /// test; rebuilt with the snapshot, and only when vehicle blockage is composed.
     bodies: link::BodyIndex,
@@ -1529,6 +1533,7 @@ impl Engine {
                 .then(crate::perception::Perception::new),
             retired: Vec::new(),
             departed_credentials: Vec::new(),
+            departed_rx: ReceiverValidationReport::default(),
             bodies: link::BodyIndex::default(),
             radios: radios::RadioIndex::default(),
             nodes: BTreeMap::new(),
@@ -2004,6 +2009,11 @@ impl Engine {
             if let Some((roots, cas)) = ctl {
                 let (_, removed) = rt.security_mut().apply_ctl(&roots, &cas);
                 p.note_anchors_removed(removed);
+            }
+            // A fetch for a newer CTL while no CRL is published carries no CRL to verify:
+            // nothing installed, nothing refused.
+            if secured.is_empty() {
+                continue;
             }
             let mut crls = Vec::with_capacity(secured.len());
             let mut ok = !secured.is_empty() && rt.security().trust().is_installed();
@@ -2490,7 +2500,7 @@ impl Engine {
         if let Some(phase2) = self.phase2.as_mut() {
             phase2.report_mut().crl_period_refusals = refusals;
         }
-        let mut rx = ReceiverValidationReport::default();
+        let mut rx = self.departed_rx.clone();
         for n in self.nodes.values() {
             rx.add(&n.security().trust().stats);
         }
@@ -3473,7 +3483,9 @@ impl Engine {
                     policy.on_retire(node);
                 }
                 self.policy_odometer.remove(&node);
-                self.nodes.remove(&node);
+                if let Some(rt) = self.nodes.remove(&node) {
+                    self.departed_rx.add(&rt.security().trust().stats);
+                }
                 self.inboxes.remove(&node);
                 self.node_phase.remove(&node);
                 self.node_first_step.remove(&node);
