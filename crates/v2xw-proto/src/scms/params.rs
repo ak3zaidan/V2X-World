@@ -131,6 +131,16 @@ impl ScmsNodes {
     }
 }
 
+/// SCMS-522: the EE retries a request the RA has not answered within 10 s ([CAMP122]
+/// §5.2.8.3 requirement table; 03 §3 row "RA timing").
+pub const EE_RETRY_TIMEOUT_S: u64 = 10;
+
+/// SCMS-523: at most 10 EE retries per 60 minutes ([CAMP122] §5.2.8.3).
+pub const EE_RETRY_MAX_PER_HOUR: u32 = 10;
+
+/// The window SCMS-523 counts retries over.
+pub const EE_RETRY_WINDOW_S: u64 = 3_600;
+
 /// The CAMP SCMS plug-in's parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScmsParams {
@@ -217,6 +227,15 @@ pub struct ScmsParams {
     pub download_poll_interval: Duration,
     /// How many polls before the device gives up: `download-maxReqs`, 100 ([SMP] Table 3).
     pub max_download_polls: u32,
+    /// How long a device waits for the RA's answer before it sends the same request
+    /// again: 10 s ([CAMP122] §5.2.8.3 SCMS-522, "the EE shall retry if no response is
+    /// received within 10 seconds"). Applies to the provisioning request, the `.info`
+    /// top-off and each batch download (every EE → RA request through the LOP). Zero turns
+    /// the retry off (the pre-2026-10-18 behaviour: a request lost to an outage is lost).
+    pub ee_retry_timeout: Duration,
+    /// How many retries a device may make in any 60 minutes: 10 ([CAMP122] SCMS-523). A
+    /// device that has used them waits until the oldest leaves the window.
+    pub ee_retry_max_per_hour: u32,
     /// How far a download request's `generationTime` may be from the RA's clock: 5 s
     /// ([CAMP122] SCMS-1203, `ra.client-signature-ttl-sec`).
     pub download_request_tolerance: Duration,
@@ -295,6 +314,12 @@ pub struct CrlIssuance {
     /// week" device fetch ([CAMP122] §3 item 10) always finds a current CRL; the draft
     /// CP's ceiling is monthly ([5GAA] (254)).
     pub next_crl: Duration,
+    /// Whether the CRL Generator issues a fresh CRL when `next_crl` has passed with no
+    /// new entry ([1609.2] `nextCrl`: "the time when the next CRL is expected"; a device
+    /// stops trusting the CRACA's certificates 2 weeks past it, [CAMP122] Table 67
+    /// `overdue_CRL_tolerance`). Off in the library (a run drained with `ScmsRun::run`
+    /// would never end); the engine turns it on.
+    pub reissue: bool,
     /// Also issue a delta linkage CRL with the entries added since the previous
     /// publication.
     pub deltas: bool,
@@ -306,6 +331,7 @@ impl Default for CrlIssuance {
             business_day_sla: false,
             slot_et: (10, 0),
             next_crl: Duration::from_secs(7 * 86_400),
+            reissue: false,
             deltas: true,
         }
     }
@@ -547,6 +573,8 @@ impl Default for ScmsParams {
             first_batch_delay: Duration::from_secs(60),
             download_poll_interval: Duration::from_secs(5 * 60),
             max_download_polls: 100,
+            ee_retry_timeout: Duration::from_secs(EE_RETRY_TIMEOUT_S),
+            ee_retry_max_per_hour: EE_RETRY_MAX_PER_HOUR,
             download_request_tolerance: Duration::from_secs(5),
             backend_servers: 4,
             backend_overhead: Duration::from_millis(1),

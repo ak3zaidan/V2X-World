@@ -1,0 +1,36 @@
+# Edge case 4: the home provider's RA is unreachable for eight days, from 590 s (just
+# before the week-615 top-ups) to 700,000 s, so its vehicles cannot top up and run
+# through their two-week pool.
+#
+# Timeline (t0 Tuesday 2026-10-20 08:50 UTC): 614 ends at 4,200 s and 615, the last
+# period every vehicle was provisioned with, at 609,000 s (Tuesday 27 10:00 UTC).
+#   0-660 s        radio: the base run's first window; the top-ups at 600 s meet the outage.
+#   611,700-612,000 s radio, after 615's end: the home provider's vehicles hold no valid
+#                  pseudonym. A device with no valid certificate stops transmitting
+#                  rather than sending unsigned [CAMP-EE §2.2.10.2]: they are starved and
+#                  silent; the peer provider's vehicles topped up and carry on under 616.
+#   700,000 s      the RA is back. Each device keeps retrying (SCMS-522/523: 10 retries,
+#                  then at most 10 an hour), so the next retry within the hour reaches it.
+#   705,000-705,300 s radio: the catch-up top-up has installed the current week (616)
+#                  first, and the home provider's vehicles transmit again.
+schema: v2xw/scenario/1
+meta:
+  name: edge-offline-weeks
+  description: >-
+    The conformance run with the home RA unreachable for eight days: pool exhaustion,
+    starvation, and the catch-up top-up once it is back.
+  authors: [v2xw]
+  tags: [scms, edge-case, outage, starvation, retry]
+  created: "2026-10-19"
+  base: ../scms-conformance.yaml
+time:
+  t0: "2026-10-20T08:50:00Z"
+  calendar: real
+  duration_s: 705300.0
+  fast_forward:
+    - {from_s: 660.0, to_s: 611700.0}
+    - {from_s: 612000.0, to_s: 705000.0}
+actors:
+  backend:
+    failures:
+      - {node: ra, mode: offline, from_s: 590.0, to_s: 700000.0}

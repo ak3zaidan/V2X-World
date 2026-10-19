@@ -774,3 +774,120 @@ fn an_older_crl_full_or_delta_is_stale_even_in_the_same_second() {
         Some(2)
     );
 }
+
+// -----------------------------------------------------------------------------------
+// Edge-case package, item 2: a node's clock. A receiver checks the signer's validity
+// against its own current time (IEEE 1609.2 §5.2), and a sender stamps `generationTime`
+// on its own clock (§6.3.9), so a skewed clock moves both edges.
+// -----------------------------------------------------------------------------------
+
+/// One BSM signed under `key` at true time `at` (s) by a sender whose clock stands
+/// `offset_s` off the truth.
+fn skewed_bsm(mode: CryptoMode, key: &ImplicitKey, at: u64, offset_s: i64) -> Vec<u8> {
+    let reg = RngRegistry::new(3);
+    let mut ctx = NodeRuntimeCtx::new(at * NS_PER_S, &reg);
+    let mut tx = NodeSecurity::new(wall(), mode, PSID_SAFETY);
+    tx.set_clock_offset(offset_s * NS_PER_S as i64);
+    tx.install(v2xw_core::ids::NodeId::new(1), 0, 0, key)
+        .expect("installs");
+    assert!(tx.set_active(0, 0));
+    tx.sign(
+        &mut ctx,
+        MsgType::Bsm,
+        b"bsm-payload",
+        SignerIdChoice::Certificate,
+        None,
+    )
+    .expect("signs")
+    .0
+    .spdu
+}
+
+#[test]
+fn a_receiver_whose_clock_runs_ahead_refuses_a_certificate_still_valid() {
+    let pki = pki();
+    let key = pseudonym(&pki, &pki.aca, 13, |_| {});
+    for mode in MODES {
+        let spdu = bsm(mode, &key, 10, None);
+        // True time 100 s: well inside the 169 h validity. An accurate receiver accepts.
+        let mut rx = trusted(mode, &pki);
+        assert_eq!(receive(&mut rx, &spdu, 100), SpduVerdict::Valid, "{mode:?}");
+        // A receiver whose clock is 170 h ahead believes the certificate has expired.
+        let mut rx = trusted(mode, &pki);
+        rx.set_clock_offset(170 * 3_600 * NS_PER_S as i64);
+        assert_eq!(
+            receive(&mut rx, &spdu, 100),
+            SpduVerdict::Refused,
+            "{mode:?}"
+        );
+        assert_eq!(refused(&rx, "chain-expired"), 1, "{mode:?}");
+    }
+}
+
+#[test]
+fn a_sender_whose_clock_lags_stamps_its_own_time_and_keeps_an_expired_certificate() {
+    let pki = pki();
+    let key = pseudonym(&pki, &pki.aca, 14, |_| {});
+    let late = u64::from(8 * 86_400u32);
+    for mode in MODES {
+        // True time: eight days in, after the validity. The sender's clock is two days
+        // behind, so it believes the certificate is current and stamps its own time.
+        let spdu = skewed_bsm(mode, &key, late, -2 * 86_400);
+        let mut rx = trusted(mode, &pki);
+        let parsed = rx.parse(&spdu).expect("parses");
+        let believed = (late - 2 * 86_400) * NS_PER_S;
+        assert_eq!(
+            parsed.generation_time.map(|g| g / 1_000_000),
+            Some(u64::from(wall().time32(believed).unwrap())),
+            "generationTime is the sender's believed time ({mode:?})"
+        );
+        // An accurate receiver: the generation time is inside the validity, the
+        // certificate is not current at the receiver's time.
+        assert_eq!(receive(&mut rx, &spdu, late), SpduVerdict::Refused);
+        assert_eq!(
+            refused(&rx, "generation-time-outside-validity"),
+            0,
+            "{mode:?}"
+        );
+        assert_eq!(refused(&rx, "chain-expired"), 1, "{mode:?}");
+        // A receiver whose clock lags by the same two days accepts it.
+        let mut rx = trusted(mode, &pki);
+        rx.set_clock_offset(-2 * 86_400 * NS_PER_S as i64);
+        assert_eq!(
+            receive(&mut rx, &spdu, late),
+            SpduVerdict::Valid,
+            "{mode:?}"
+        );
+    }
+}
+
+// Edge-case package, item 8: a provider's root removed from the CTL mid-run.
+#[test]
+fn a_root_a_newer_ctl_drops_is_refused_from_then_on_and_an_unchanged_ctl_forgets_nothing() {
+    let pki = pki();
+    let other = ScmsPki::new(8, t0() - 31_556_952).unwrap();
+    let key = pseudonym(&pki, &pki.aca, 15, |_| {});
+    let roots = |p: &ScmsPki| vec![Arc::new(p.root.cert.clone())];
+    for mode in MODES {
+        let mut rx = trusted(mode, &pki);
+        let spdu = bsm(mode, &key, 10, None);
+        assert_eq!(receive(&mut rx, &spdu, 11), SpduVerdict::Valid);
+        // The same CTL again: nothing added or removed, the signer stays validated.
+        assert_eq!(rx.apply_ctl(&roots(&pki), &[]), (0, 0));
+        let hits = rx.trust().stats.ee_hits;
+        assert_eq!(receive(&mut rx, &spdu, 12), SpduVerdict::Valid);
+        assert_eq!(rx.trust().stats.ee_hits, hits + 1, "{mode:?}");
+        // A CTL adding the other provider's root, then one removing this one: the
+        // removal alone (nothing added) must forget what chained to the dropped root.
+        let both = [roots(&pki), roots(&other)].concat();
+        assert_eq!(rx.apply_ctl(&both, &[]), (1, 0));
+        assert_eq!(receive(&mut rx, &spdu, 13), SpduVerdict::Valid);
+        assert_eq!(rx.apply_ctl(&roots(&other), &[]), (0, 1));
+        assert_eq!(
+            receive(&mut rx, &spdu, 14),
+            SpduVerdict::Refused,
+            "{mode:?}"
+        );
+        assert_eq!(refused(&rx, "chain-untrusted-root"), 1, "{mode:?}");
+    }
+}

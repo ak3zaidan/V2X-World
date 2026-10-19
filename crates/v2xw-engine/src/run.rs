@@ -950,6 +950,13 @@ pub struct Engine {
     /// Nodes that have despawned and whose links' radio state has not been swept yet, in
     /// despawn order ([`Engine::sweep_retired_links`]).
     retired: Vec<(SimTime, NodeId)>,
+    /// The last `node.credentials` of vehicles that left in this step, recorded once the
+    /// step's recorder is at hand.
+    departed_credentials: Vec<v2xw_proto::scms::pki_view::NodeCredentials>,
+    /// The receiver validation of every node that left the run (edge-case package):
+    /// summed into the report with the nodes still present. Until 2026-10-19 a departed
+    /// node's refusals were dropped from `receiver_validation` with it.
+    departed_rx: ReceiverValidationReport,
     /// The actors' bodies at the last published state, for the vehicles-on-the-path
     /// test; rebuilt with the snapshot, and only when vehicle blockage is composed.
     bodies: link::BodyIndex,
@@ -1525,6 +1532,8 @@ impl Engine {
                 .any(|s| s == "cpm")
                 .then(crate::perception::Perception::new),
             retired: Vec::new(),
+            departed_credentials: Vec::new(),
+            departed_rx: ReceiverValidationReport::default(),
             bodies: link::BodyIndex::default(),
             radios: radios::RadioIndex::default(),
             nodes: BTreeMap::new(),
@@ -1988,12 +1997,24 @@ impl Engine {
                 return;
             };
             let (version, entries, secured) = p.published_crl_for(rsu);
-            let size = p.crl_size(entries.len() as u32);
+            // The real composite CRL's bytes (edge-case package, item 6).
+            let size = p.crl_download_size(rsu);
             p.access_mut()
                 .rsu_send(rsu, v2xw_radio::cellular::Direction::Downlink, size, now);
+            let ctl = p.take_ctl_install(rsu, true);
             let Some(rt) = self.nodes.get_mut(&rsu) else {
                 continue;
             };
+            // The CTL rides the same composite file (edge-case package, item 8).
+            if let Some((roots, cas)) = ctl {
+                let (_, removed) = rt.security_mut().apply_ctl(&roots, &cas);
+                p.note_anchors_removed(removed);
+            }
+            // A fetch for a newer CTL while no CRL is published carries no CRL to verify:
+            // nothing installed, nothing refused.
+            if secured.is_empty() {
+                continue;
+            }
             let mut crls = Vec::with_capacity(secured.len());
             let mut ok = !secured.is_empty() && rt.security().trust().is_installed();
             for bytes in &secured {
@@ -2479,7 +2500,7 @@ impl Engine {
         if let Some(phase2) = self.phase2.as_mut() {
             phase2.report_mut().crl_period_refusals = refusals;
         }
-        let mut rx = ReceiverValidationReport::default();
+        let mut rx = self.departed_rx.clone();
         for n in self.nodes.values() {
             rx.add(&n.security().trust().stats);
         }
@@ -3066,6 +3087,9 @@ impl Engine {
         let (update, lamps) = update;
 
         self.absorb(&update, now);
+        for c in core::mem::take(&mut self.departed_credentials) {
+            self.emit(recorder, &crate::sec_records::NodeCredentialsRecord(c));
+        }
         self.update_radio_gate(now);
         self.log_traffic_control(recorder, now);
         self.set_lamps(lamps, step.after(now));
@@ -3328,6 +3352,15 @@ impl Engine {
         if let Some(phase2) = self.phase2.as_mut() {
             let creds = phase2.provision(id, now, &self.rng, crate::wiring::is_vru_class(class));
             phase2.phase_crl_poll(id, &self.rng, now);
+            // A vehicle whose clock stands off the truth (`clock_skew_s`; edge-case
+            // package, item 2): it signs, rotates and judges on its own clock.
+            if let Some(skew) = phase2.clock_skew_for(id)
+                && let Some(obu) = runtime.as_obu_mut()
+            {
+                obu.clock_mut().step_offset(skew);
+                let offset = obu.clock().offset_ns();
+                obu.security_mut().set_clock_offset(offset);
+            }
             if !creds.is_empty() {
                 let factory = std::sync::Arc::clone(&self.credential_factory);
                 let installed = match runtime.as_obu_mut() {
@@ -3434,13 +3467,25 @@ impl Engine {
                 self.node_actor.remove(&node);
                 self.retired.push((now, node));
                 if let Some(phase2) = self.phase2.as_mut() {
+                    // Its last pool record, marked departed (edge-case package, item 1).
+                    if let Some(rt) = self.nodes.get(&node) {
+                        let believed = rt.clock().believed_time(now);
+                        if let Some(mut c) =
+                            phase2.node_credentials_departed(node, believed, &rt.stores().certs)
+                        {
+                            c.t = now;
+                            self.departed_credentials.push(c);
+                        }
+                    }
                     phase2.retire(node);
                 }
                 if let Some(policy) = self.pseudonym_policy.as_mut() {
                     policy.on_retire(node);
                 }
                 self.policy_odometer.remove(&node);
-                self.nodes.remove(&node);
+                if let Some(rt) = self.nodes.remove(&node) {
+                    self.departed_rx.add(&rt.security().trust().stats);
+                }
                 self.inboxes.remove(&node);
                 self.node_phase.remove(&node);
                 self.node_first_step.remove(&node);
@@ -7322,6 +7367,16 @@ impl Engine {
             phase2.crl_frame_refused(node, cellular);
             return;
         }
+        // The composite CRL file carries the home CTL (edge-case package, item 8): a
+        // newer one is installed with it, and a root it no longer approves stops being a
+        // trust anchor.
+        if cellular
+            && let Some((roots, cas)) = phase2.take_ctl_install(node, false)
+            && let Some(rt) = self.nodes.get_mut(&node)
+        {
+            let (_, removed) = rt.security_mut().apply_ctl(&roots, &cas);
+            phase2.note_anchors_removed(removed);
+        }
         let node_verified = matches!(verified, Some(Some(_)));
         let (fresh, records) =
             phase2.install_crl(node, version, entries, now, cellular, node_verified);
@@ -7830,8 +7885,10 @@ impl Engine {
                 };
                 // Every provider's signed CRL rides the bearer (WP-D1).
                 let (v, e, secured) = p.mbms_crl();
+                // The carousel carries every provider's signed CRL; charged as their
+                // composite under the home CTL (edge-case package, item 6).
+                let size = p.composite_size(0, v, &secured);
                 mbms_secured = secured;
-                let size = p.crl_size(v);
                 let a = p.access_mut();
                 let at = a.mbms().delivered(now, a.mbms_core(), size);
                 for node in mbms {
@@ -7903,9 +7960,11 @@ impl Engine {
         for (node, _have) in polls {
             let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
             let (version, entries, req, size) = {
-                let Some(p) = self.phase2.as_ref() else { break };
+                let Some(p) = self.phase2.as_mut() else { break };
                 let (v, e, _) = p.published_crl_for(node);
-                (v, e, p.crl_request_size(), p.crl_size(v))
+                // What the RA really serves: the encoded composite CRL, not 40 B an
+                // entry (edge-case package, item 6).
+                (v, e, p.crl_request_size(), p.crl_download_size(node))
             };
             let (ul, dl) = {
                 let Engine {

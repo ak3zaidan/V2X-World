@@ -1206,6 +1206,12 @@ pub struct NodeCredentials {
     /// Certificates not carried by this device's earlier records (HashedId8 → COER hex).
     #[serde(default)]
     pub certificates: BTreeMap<String, String>,
+    /// The vehicle left the run at `t`: this is its last record, it signs nothing from
+    /// now on and `active` is empty. Without it a vehicle's last record (say, a week-614
+    /// pseudonym in the overlap hour) stood for the rest of the run, and a reader at a
+    /// later instant saw an expired certificate in use (edge-case package, item 1).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub departed: bool,
 }
 
 /// One held certificate, as the node's store has it.
@@ -1388,6 +1394,7 @@ pub fn node_credentials(
         ctl_sequence: dev.and_then(|d| d.trust.ctl_sequence),
         revoked: revoked || dev.is_some_and(|d| d.silenced) || cells_revoked,
         certificates,
+        departed: false,
     })
 }
 

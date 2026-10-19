@@ -630,6 +630,20 @@ pub enum ScmsMsg {
         /// The i-period now due.
         i: u32,
     },
+    /// The device's own SCMS-522 timer: `seq` names the request it was started for, and
+    /// it does nothing when that request has been answered since ([CAMP122] SCMS-522/523).
+    EeRetryTimer {
+        /// The device.
+        device: NodeId,
+        /// The request's sequence number on the device.
+        seq: u32,
+    },
+    /// The CRL Generator's own timer at its last CRL's `nextCrl`: `issued` is its
+    /// publication count then, and it re-issues only if nothing was published since.
+    CrlReissueTimer {
+        /// `crlg.versions` when it was armed.
+        issued: u32,
+    },
     /// RA → LOP → device: the provisioning request was refused.
     ProvisioningRefused {
         /// The device.

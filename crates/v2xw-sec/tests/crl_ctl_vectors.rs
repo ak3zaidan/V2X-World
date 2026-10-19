@@ -325,3 +325,30 @@ fn emitted_vectors_are_reproduced_and_verify() {
     let v = ctl::verify_ctl(&home, &ctl::CtlTrust::us_bootstrap(ids));
     assert!(v.accepted() && v.valid_signatures == 3, "{v:?}");
 }
+
+/// The composite CRL a device is charged for (edge-case package, item 6) is built from
+/// the bytes the RA holds, each `SecuredCrl` and the home `MultiSignedCtlSpdu` as encoded,
+/// and is the committed `composite_crl.oer` byte for byte: the vector the A0 oracle
+/// checks with asn1tools (`tools/scms-artefacts/xcheck_crl.py`: compositeCrl, both CRLs,
+/// the home CTL is the CTL file).
+#[test]
+fn the_composite_crl_from_held_bytes_is_the_committed_vector() {
+    let read = |n: &str| std::fs::read(dir().join(n)).unwrap();
+    let (c1, c2) = (
+        read("crl_series1_linkage.oer"),
+        read("crl_series2_hash_delta.oer"),
+    );
+    let home = read("ctl_3of5.oer");
+    let built = ctl::encode_composite_crl_coer(&[&c1, &c2], &home).unwrap();
+    assert_eq!(built, read("composite_crl.oer"));
+    // One CRL fewer is at least that CRL's bytes shorter.
+    let one = ctl::encode_composite_crl_coer(&[&c1], &home).unwrap();
+    assert!(
+        built.len() - one.len() >= c2.len(),
+        "{} {} {}",
+        built.len(),
+        one.len(),
+        c2.len()
+    );
+    assert!(ctl::encode_composite_crl_coer(&[&c1[1..]], &home).is_err());
+}

@@ -137,3 +137,30 @@ fn a_home_root_rollover_reaches_the_peers_chain_file() {
     );
     assert!(!peer.state.gov.lccf.certs.contains(&old_ica));
 }
+
+/// Edge-case package, item 8: the EAC removes provider-b's root from the shared CTL.
+/// Provider-b's own view of that CTL (it keeps operating under the removed root) must
+/// take the CTL, re-sign its local chain file and report its root off the CTL; before
+/// 2026-10-19 it panicked ("the home provider has an approved root").
+#[test]
+fn a_provider_whose_root_the_eac_removed_takes_the_ctl_and_keeps_running() {
+    let (mut home, mut peer) = runs();
+    let peer_label = peer.state.gov.config.provider.clone();
+    let root = home
+        .state
+        .gov
+        .root_of(&peer_label)
+        .expect("provider-b on the CTL");
+    assert!(home.state.gov.ctl.roots.contains(&root));
+    let at = home.state.gov.remove_root(root, 1_000).expect("decided");
+    assert_eq!(home.state.gov.publish_due(at), 1);
+    assert!(!home.state.gov.ctl.roots.contains(&root));
+    assert!(home.state.gov.root_of(&peer_label).is_none());
+    assert!(peer.state.gov.sync_trust_from(&home.state.gov));
+    assert_eq!(peer.state.gov.ctl.sequence, home.state.gov.ctl.sequence);
+    assert!(!peer.state.gov.ctl.roots.contains(&root));
+    // Provider-b's own components keep running under the removed root: its view still
+    // names that root as its own, by certificate and by key.
+    assert!(peer.state.gov.cert("root").is_some());
+    assert!(peer.state.gov.signing_key("root").is_some());
+}

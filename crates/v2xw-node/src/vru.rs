@@ -1419,6 +1419,8 @@ impl VruDeviceRuntime {
     ) -> VruStepOutcome {
         let now = ctx.now();
         self.clock.advance(now, self.belief.fix.has_position());
+        // What it signs and what it judges, on its own clock (edge-case package, item 2).
+        self.security.set_clock_offset(self.clock.offset_ns());
         let believed = self.clock.believed_time(now);
 
         let mut out = VruStepOutcome::default();

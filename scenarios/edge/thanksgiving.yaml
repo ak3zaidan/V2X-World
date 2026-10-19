@@ -1,0 +1,23 @@
+# Edge case 9: the conformance week moved to Thanksgiving 2026 (Thursday 26 November,
+# a federal holiday, 5 U.S.C. 6103). t0 is Tuesday 24 November 08:50 UTC, ten minutes
+# before the 09:00 UTC i-period boundary (i 619 -> 620), so the two runs have the same
+# shape; Thanksgiving is three weeks after the end of DST (1 November), so the whole
+# week is EST.
+#
+# Expected: the report shuffle releases Thursday, the 8 h MA review ends Thursday, and the
+# provider's one-business-day CRL publication skips the holiday: the CRL is published on
+# Friday 27 November instead of Thursday or Friday of an ordinary week, so the second
+# radio window (Thursday 15:20 UTC) sees no refusal of a revoked liar that the base
+# run's window does.
+schema: v2xw/scenario/1
+meta:
+  name: edge-thanksgiving
+  description: >-
+    The conformance run in Thanksgiving week: the CRL SLA counts business days and skips
+    the federal holiday.
+  authors: [v2xw]
+  tags: [scms, edge-case, calendar, holiday]
+  created: "2026-10-18"
+  base: ../scms-conformance.yaml
+time:
+  t0: "2026-11-24T08:50:00Z"

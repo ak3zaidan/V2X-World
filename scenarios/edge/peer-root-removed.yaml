@@ -1,0 +1,26 @@
+# Edge case 8: the EAC removes the second provider's root from the CTL at 300 s.
+#
+# Elector Policy v1.0 §2.2.4: a CTL removing a root is published within 48 h, so at
+# 173,100 s (Thursday 04:55 UTC), before the Thursday radio window. The composite CRL
+# file carries the home CTL (IEEE 1609.2.1 CompositeCrlSpdu), so every vehicle and
+# roadside unit installs it with its next download and drops that root as a trust anchor.
+#
+# Expected, Thursday and Saturday windows: every BSM signed under the removed provider is
+# refused (chain-untrusted-root) by every device that installed the CTL, of both
+# providers; RAs stop serving that provider's CRL (no device could verify it); the home
+# provider's devices are unaffected. The 0-660 s window matches the base.
+schema: v2xw/scenario/1
+meta:
+  name: edge-peer-root-removed
+  description: >-
+    The conformance run with the second provider's root removed from the CTL at 300 s:
+    once the CTL installs, that provider's devices are refused.
+  authors: [v2xw]
+  tags: [scms, edge-case, ctl, governance]
+  created: "2026-10-19"
+  base: ../scms-conformance.yaml
+security:
+  protocol:
+    id: protocol/scms/camp
+    params:
+      peer_root_removal_at_s: 300

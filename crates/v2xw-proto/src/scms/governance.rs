@@ -1578,12 +1578,20 @@ impl Governance {
         true
     }
 
+    /// This provider's current root: the newest approved one, or, once the EAC removed
+    /// every root it had (edge-case package, item 8), the newest it still runs under. A
+    /// removed provider keeps operating; every device that installs the CTL refuses what
+    /// it certifies. Until 2026-10-19 this panicked ("the home provider has an approved
+    /// root") on the removed provider's own view of the shared CTL.
     fn home_root(&self) -> &RootSlot {
+        let mine = |r: &&RootSlot| r.label == self.config.provider;
         self.roots
             .iter()
             .rev()
-            .find(|r| r.label == self.config.provider && r.approved)
-            .expect("the home provider has an approved root")
+            .filter(mine)
+            .find(|r| r.approved)
+            .or_else(|| self.roots.iter().rev().find(mine))
+            .expect("the home provider has a root")
     }
 
     fn approved_signers(&self) -> Vec<u32> {
