@@ -137,3 +137,30 @@ fn a_home_root_rollover_reaches_the_peers_chain_file() {
     );
     assert!(!peer.state.gov.lccf.certs.contains(&old_ica));
 }
+
+/// Realism R-SHARE (docs/design/scms-real/testing/realism.md): the PKI view records a
+/// shared report as sent by the forwarding provider's MA. It was labelled as a device
+/// (`ee/<node>` of provider-a's MA node), so the recorded topology showed devices talking
+/// to the other provider's MA.
+#[test]
+fn a_shared_report_is_recorded_as_sent_by_the_other_providers_ma() {
+    use v2xw_proto::scms::pki_view::{self, PkiTracker};
+    let (home, mut peer) = runs();
+    let device = NodeId::new(5_000_125);
+    peer.preload(device, 0, 1, 2).expect("provisions");
+    let (&(i, _), c) = peer.state.devices[&device]
+        .credentials
+        .iter()
+        .next()
+        .expect("a pseudonym");
+    let lv = c.lv;
+    let sent = 1_000_000_000;
+    peer.shared_report_at_ma(home.state.nodes.ma, i, lv, sent, sent, 200);
+    peer.run_until(sent + 2_000_000_000).expect("runs");
+    let mut tracker = PkiTracker::default();
+    let flows = pki_view::drain_flows(std::slice::from_ref(&peer), &mut tracker);
+    let shared: Vec<_> = flows.iter().filter(|f| f.name == "report-shared").collect();
+    assert_eq!(shared.len(), 1, "{flows:?}");
+    assert_eq!(shared[0].from.as_deref(), Some("provider-a/ma/0"));
+    assert_eq!(shared[0].to.as_deref(), Some("provider-b/ma/0"));
+}

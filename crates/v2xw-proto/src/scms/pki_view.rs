@@ -341,6 +341,22 @@ pub fn component_ids(run: &ScmsRun) -> BTreeMap<u32, (String, String, u32)> {
             };
             put(node, &label, &role, inst);
         }
+        // The other providers' components, under their own labels: a report another
+        // provider's MA shares arrives from that MA, which is not a device (realism.md
+        // R-SHARE: it was labelled `ee/<node>`).
+        for (k, other) in st.deployment.providers.iter().enumerate() {
+            if k == st.provider {
+                continue;
+            }
+            for (role, inst, node) in st.deployment.nodes(k).instances {
+                let role = if role == "crl_store" {
+                    "crl-store".to_string()
+                } else {
+                    role
+                };
+                put(node, &other.name, &role, inst);
+            }
+        }
     }
     out
 }
@@ -1063,7 +1079,15 @@ pub fn drain_cases(
                 .take(if c.direct { 1 } else { 2 })
                 .map(|(i, lv)| json!({"i": i, "lv": hex(lv.as_bytes())}))
                 .collect();
-            let received = stage_at(run, *r, S::ReportReceived);
+            // The case's reports came in when the first of them reached this MA, not
+            // when the case opened: under manual review the case opens at the operator's
+            // decision, hours later (realism.md R-CASE).
+            let received = c
+                .reports
+                .iter()
+                .filter_map(|&i| ma.report_arrived.get(i).copied())
+                .min()
+                .or_else(|| stage_at(run, *r, S::ReportReceived));
             let decision = stage_at(run, *r, S::Decision);
             push(
                 tracker,

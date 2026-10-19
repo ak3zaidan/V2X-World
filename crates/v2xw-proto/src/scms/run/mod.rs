@@ -566,6 +566,10 @@ impl LaState {
 pub struct MaState {
     /// Reports it has received, in arrival order.
     pub reports: Vec<ReportSubmission>,
+    /// When each entry of [`MaState::reports`] arrived here (same index): the case
+    /// board's "reports in" instant, which under manual review precedes the decision by
+    /// the operator's review time.
+    pub report_arrived: Vec<SimTime>,
     /// Its case table, by resolution run: every investigation it has opened, open or
     /// closed (gap row 27: cases run concurrently, each message names its case by run).
     pub cases: BTreeMap<FlowRun, Case>,
