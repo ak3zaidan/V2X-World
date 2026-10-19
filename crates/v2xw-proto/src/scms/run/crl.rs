@@ -185,14 +185,17 @@ pub fn device_check_crl(
 impl ScmsRun {
     /// Puts `n` revocations from before the run on this provider's CRL and publishes it
     /// at the run's start: the standing list of a deployment that has been revoking for
-    /// years. Each entry is one revoked device's seed pair at the current i-period, with
-    /// random LA ids and seeds from the backend's keyed stream, so it matches no device
-    /// of the run (they were revoked before it). The list is signed as a real
-    /// `SecuredCrl` when the PDU layer is on.
+    /// years. Each entry is one revoked device's seed pair at the current i-period, under
+    /// this provider's own two LAs (a US provider runs one LA1 and one LA2, so every entry
+    /// shares one `LAGroup` of the series-1 CRL, as the run's own revocations do), with
+    /// random seeds from the backend's keyed stream, so it matches no device of the run
+    /// (they were revoked before it). The list is signed as a real `SecuredCrl` when the
+    /// PDU layer is on.
     pub fn seed_standing_crl(&mut self, n: u32) {
         let st = &mut self.state;
         let i = st.params.period_at(0);
         let jmax = st.params.certs_per_period;
+        let (la1, la2) = (st.la[0].la_id, st.la[1].la_id);
         let mut draws = vec![0u8; 36 * n as usize];
         st.rng
             .checkout(RngDomain::Backend, EntityRef::custom("scms/standing-crl", 0))
@@ -204,8 +207,8 @@ impl ScmsRun {
             ls2.copy_from_slice(&b[20..36]);
             st.crlg.entries.push(CrlLinkageEntry {
                 i,
-                la_id1: LaId(u16::from_be_bytes([b[0], b[1]])),
-                la_id2: LaId(u16::from_be_bytes([b[2], b[3]])),
+                la_id1: la1,
+                la_id2: la2,
                 ls1_i: LinkageSeed::new(ls1),
                 ls2_i: LinkageSeed::new(ls2),
                 jmax,

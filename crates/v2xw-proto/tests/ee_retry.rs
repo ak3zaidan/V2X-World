@@ -248,3 +248,29 @@ fn without_renewal_the_list_goes_past_its_overdue_tolerance() {
 fn v2xw_node_overdue_tolerance() -> u32 {
     14 * 86_400
 }
+
+// ---------------------------------------------------------------------------------------
+// Edge-case item 6: a standing CRL under the provider's own LA pair costs what F2 measured
+// for a real series-1 linkage CRL, 33.08 B an entry (04-validation-report.md; Brecht ~40).
+// ---------------------------------------------------------------------------------------
+
+fn standing_len(n: u32) -> usize {
+    let mut run = run_with(params(true));
+    run.seed_standing_crl(n);
+    let la: Vec<_> = run.state.la.iter().map(|l| l.la_id).collect();
+    assert!(
+        run.state
+            .crl_store
+            .entries
+            .iter()
+            .all(|e| e.la_id1 == la[0] && e.la_id2 == la[1]),
+        "every entry under the provider's LA1 and LA2"
+    );
+    run.state.crl_store.secured.as_ref().expect("signed").len() as usize
+}
+
+#[test]
+fn a_standing_crl_costs_thirty_three_bytes_an_entry() {
+    let per = (standing_len(2_000) - standing_len(1_000)) as f64 / 1_000.0;
+    assert!((32.5..33.5).contains(&per), "{per} B an entry");
+}
