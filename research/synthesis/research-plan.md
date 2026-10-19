@@ -6,6 +6,15 @@ Written 2026-10-18. Merges `big-three.md` with `refine-pqc.md`, `refine-bench.md
 
 ## 1. Direction 1: Quantum-safe migration order for the US SCMS
 
+> **Update 2026-10-18: superseded by `pqc-direction-final.md`** (verdict: refine, do not replace). Corrections to the text below:
+> - The migration order is already published (twardokus2024, **fikry2026post** (IEEE ASSIC 2026, missing here before), chen2026pseudonym), so it is no longer the headline. The headline becomes **harvest now, link later**: pseudonym unlinkability rests on the confidentiality of the certificate download (TLS ECDHE and ECIES to the cocoon keys). Two standards studies say harvest-now does not apply to V2X (ETSI TR 103 949 Table 3; 5GAA/GSMA p. 10).
+> - Infrastructure certificates and BSM signatures carry no harvest-now *privacy* risk. "Infrastructure first" is a forgery and lead-time argument.
+> - "Provisioning KEM" splits into two arms. T (hybrid TLS) closes only the outsider recorder, and only if TLS ends at the RA. R (PQ ACA response encryption, a 1609.2.1 change) also closes the RA-archive insider.
+> - chen2026pseudonym is not P0. It already uses a PQ KEM to the RA and PCA.
+> - "Closes the exposure N years earlier" becomes "the year accumulation stops" and "linkable pseudonym-years avoided". Archives made before migration stay exposed.
+> - The exposure result comes from a fleet and calendar model, not the radio channel. E2 shrinks to a secondary 96-run grid; E4 moves to future work.
+> - Build order is now: harvest-now ledger, fleet mix, hybrid TLS, then P0/P2/P3. PoPETs is added as the best-fit venue (*inferred*).
+
 **Thesis.** For the US SCMS, the order of migration matters more than which algorithm is chosen. Recordings of the pseudonym-provisioning channel made today let a future quantum adversary link archived pseudonyms to enrolments. So the provisioning KEM and the infrastructure certificates must migrate first. BSM pseudonym signatures can stay classical, under a crypto-agile hybrid certificate cycle, until close to 2035. (NIST IR 8547 is still a draft, and it disallows P-256 only after 2035.)
 
 **Headline result wanted.** On a J3161-compliant LTE Mode 4 and NR Mode 2 channel at USDOT Plan densities:
