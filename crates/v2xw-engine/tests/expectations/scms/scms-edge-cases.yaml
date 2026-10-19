@@ -114,29 +114,29 @@
   run: scms-conformance, new3 vs new2 (same seed)
   expect: "only the CTL install moves: the rollover CTL (AddRoot, decided at 120 s, published Friday 08:52 UTC after 3 business days) is installed by every vehicle polling in the Saturday window and by both RSUs, with 0 anchors removed; extra composite downloads in that window; refusals, cases, top-ups unchanged"
   source: "IEEE 1609.2.1 CompositeCrlSpdu carries homeCtl; Provider Req. v1.1 §3.4.11 (3 business days)"
-  measured: TBD
-  verdict: TBD
+  measured: "trust_lists_installed 16 (14 vehicles + 2 RSUs), anchors removed 0; CRL downloads 41 vs 27, RSU CRL installs 6 vs 4, Uu downlink 295,933 vs 245,631 B; refusals 29,704/4,311, 4 cases, 12/12 top-ups, BSMs and verifications per window identical"
+  verdict: "pass"
 - id: E2.clock-ahead-5000s
   run: edge/clock-skew-ahead (new3) vs scms-conformance (new3)
   expect: "about half the vehicles skewed. Window 0-660 s: a skewed sender believes 614 expired (its end is 4,200 s) and signs under 615 from its first BSM; accurate receivers refuse those as chain-expired until 600 s (615 not yet valid), then accept; skewed receivers refuse every 614 BSM as chain-expired. Later windows cross no edge and match the base. Top-ups, cases and CRLs unchanged (the backend runs on true time). Wall time about the base's (refused receptions skip the signature check)"
   source: "IEEE 1609.2 §6.3.9 (generationTime on the sender's clock), §5.2 (validity at the receiver's current time); CAMP-EE §2.1.5.3.2 (169 h validity)"
-  measured: TBD
-  verdict: TBD
+  measured: "28 skewed; window 0 signing under 615 by provider-a 1,899 vs 70; accurate receivers 0-600 s: 33,362 refused / 35,358 valid, 600-700 s: 0 refused / 7,137 valid; skewed receivers (own clock 5,000-5,700 s) 23,055 refused; top-ups 12/12. Cases 20 vs 4, 15 honest vehicles revoked (MBD positionJump 16,485, acceptanceRange 17,351, mapOffRoad 18,566 vs 6/0/0), 2 starved after revocation; wall 615 s vs 637 s, RSS 212 vs 71 MB"
+  verdict: "validity edges pass; 'cases unchanged' corrected: kinematic detectors extrapolate from generationTime, so an honest vehicle 83 min off is reported and revoked (a GNSS-time attack surface)"
 - id: E4.offline-weeks
   run: edge/offline-weeks (new3) vs edge/offline-weeks (main)
   expect: "window 611,700-612,000 s (after 615 ends at 609,000 s): every home-provider vehicle is starved and silent (0 BSMs), the peer provider's vehicles sign under 616. The device keeps retrying at most 10 an hour (SCMS-523), so within an hour of the RA's return at 700,000 s the request gets through; window 705,000-705,300 s: home vehicles sign under 616 again, all 12 top-ups complete. Main (no retry): the home vehicles stay silent and 6 of 12 top-ups complete"
   source: "[CAMP122] SCMS-522/523; CAMP-EE §2.2.10.2 (no valid certificate: stop transmitting)"
-  measured: TBD
-  verdict: TBD
+  measured: "new3: 6 home vehicles starved, 0 BSMs from them at 611,700-612,000 s; 11,977 retries, 1,197 capped; the 7 requests acknowledged at 702,610 s and installed by 702,671 s (2,610 s after the RA returned). Main: 0 of 7 acknowledged after 590 s. The 6 vehicles left the map before the last window"
+  verdict: "pass (backend; the last window cannot show the departed vehicles transmitting)"
 - id: E8.peer-root-removed
   run: edge/peer-root-removed (new3) vs scms-conformance (new3)
   expect: "the removal is decided at 300 s and published at 173,100 s (48 h). Thursday and Saturday windows: every device that installed it (each vehicle on its next download, both RSUs) refuses every provider-b BSM as chain-untrusted-root; verified receptions of provider-b senders fall to about 0 there; provider-a unaffected; the RAs no longer serve provider-b's CRL. Window 0-660 s matches the base"
   source: "Elector Policy v1.0 §2.2.4 (48 h); IEEE 1609.2 §5.1.2 (chain to a CTL-approved root); 1609.2.1 CompositeCrlSpdu"
-  measured: TBD
-  verdict: TBD
+  measured: "new3 panicked in Governance::home_root (fixed, provider_runs test). new5: window 0 identical; Thursday unchanged (the CTL due at 173,100 s was published at the next backend tick, after that tick's polls); Saturday 16 installs, 16 anchors removed, 42,132 chain-untrusted-root = verified provider-b drop 34,476 + revoked refusals turned untrusted 7,656; 21 CRL frames refused whole"
+  verdict: "pass on the mechanism; open: CTL publication timing inside a fast-forward, whole-frame CRL refusal"
 - id: E6.composite-crl-10k-rerun
   run: edge/standing-crl-10k (new3) vs scms-conformance (new3)
   expect: "about 0.33 MB per composite download (33 B an entry with the provider's own LA pair), not 0.45 MB (first binary) or 0.40 MB (estimate)"
   source: "F2 33.08 B/entry; proto test a_standing_crl_costs_thirty_three_bytes_an_entry"
-  measured: TBD
-  verdict: TBD
+  measured: "57 downloads, Uu downlink 19,153,594 B: 336 kB a download (33.1 B an entry incl. signature, signer, CTL); wall 1,092 s vs 637 s, RSS 194 vs 71 MB"
+  verdict: "pass"

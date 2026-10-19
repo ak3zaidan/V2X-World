@@ -18,16 +18,16 @@ it would fail on rows that no sweep plans.
 | 1a | Base: the week rollover 614 → 615 at 600 s | No node signs with a certificate outside its validity window (CAMP-EE §2.1.5.3.2; 1609.2 §5.2) | 0 of 13,749 `node.security` records; a change inside the overlap hour always moves to 615 (4 of 4); 11 changes with reason "expired", all to 615, after the fast-forward | pass |
 | 1b | Base: the PKI view after the rollover | A vehicle's last record shows nothing in use after the vehicle leaves | 15 of 56 vehicles left before 614 expired. Their last `node.credentials` record (614 active) stood for the rest of the run. **This was the reported "expired certificate in use"** | **fixed**: a departing vehicle records a final pool with `departed: true` and nothing active |
 | 1c | Base: who signs an SM-MBR | Each report is signed with a pseudonym valid at its generationTime (SM-MBR v1.0; 1609.2 §5.2) | On main, checked with the A0 oracle's COER: **6 of 1,983 reports were signed by an expired 614 pseudonym**, the worst 2.2 days late. Also, **34 of 36 reporters signed every report of the run with one pseudonym**, so their reports were linkable to each other | **fixed**: `ScmsRun::mbr_signer` uses the vehicle's current BSM pseudonym if it is valid, else the newest valid one |
-| 2 | Clock skew and GNSS time error at the validity edges | A sender whose clock lags by *d* keeps an expiring certificate *d* longer, and accurate receivers refuse it as expired for *d* (1609.2 §5.2.3.2.2) | Not run. No scenario setting gives a node a clock error: `ClockModel::new(0.0)` for every node, and `clock_mut` is never called | **open** |
+| 2 | Clock skew and GNSS time error at the validity edges | A sender whose clock lags by *d* keeps an expiring certificate *d* longer, and accurate receivers refuse it as expired for *d* (1609.2 §5.2.3.2.2) | Batch 3, §6. Before it, a node's clock offset never reached its security: it rotated on its own clock but stamped `generationTime` and judged validity on the simulation's | **fixed**; the run's outcome in §6 |
 | 3a | RA offline from 590 to 900 s, across the top-ups at 600 s (main) | With no retry the requests are lost: the deviation recorded as validation/protocols.md B6 | 12 top-ups started, **6 completed**: all 6 vehicles of the home provider were lost; 144 deliveries dropped | confirmed, then fixed (3b) |
 | 3b | Same run (new) | Every top-up completes. Ten retries 10 s apart meet the outage; the eleventh waits for the SCMS-523 window, then succeeds ([CAMP122] SCMS-522/523) | see §3 | see §3 |
 | 3c | RA 15 s slow on the first request | The device retries after 10 s. The RA sees the same request twice, accepts it once and acknowledges both; 6 of 6 certificates are issued once | 1 accepted, at least 1 re-acknowledged, 0 `RequestLimit` refusals, 6 certificates, one request byte string | pass (proto test) |
 | 3d | The RA itself down after the ack | The batch arrives once the RA is back | The LAs' and ACA's answers to the down RA are dropped and never resent, so the batch is never made | **open**: no specification says the LA or ACA retries; the test uses a cut between device and RA (at the LOP) instead |
-| 4 | A device offline for weeks | The pool runs out after `pool_periods` weeks and the device goes silent. On reconnecting it tops up the current week first | Partly covered by 10: two weeks of pool outlast the 5-day run | **open** (needs a run longer than 2 weeks; see 5) |
+| 4 | A device offline for weeks | The pool runs out after `pool_periods` weeks and the device goes silent. On reconnecting it tops up the current week first | Batch 3, §6 (`edge/offline-weeks`, 8 days without the home RA) | pass (backend); see §6 |
 | 5 | No new revocation for 3 weeks | A healthy CRL Generator re-issues by `nextCrl` (issue + 7 d), so no receiver ever reaches nextCrl + 14 d (1609.2 `nextCrl`; [CAMP122] Table 67) | On main the Generator signed **only when an entry was appended**. A list idle for 21 days would leave every receiver refusing the CRACA's certificates. Vehicles also fetched only when the entry count grew, so a re-issue could never reach them | **fixed**: re-issued on days 7, 14 and 21; vehicles and RSUs fetch a re-issue (publication serial). Proto tests `an_idle_crl_generator_*` and `without_renewal_*` |
 | 6 | A standing 10,000-entry CRL (`crl_background_entries: 10000`) | A download is charged the encoded `CompositeCrlSpdu`: about 33 B per entry (F2: 33.08 B) plus the signature, the CRL signer's certificate and the home CTL, about 0.33 MB rather than 0.40 MB | see §3 | see §3 |
 | 7 | Revoked liars keep transmitting | Refused by vehicles of both providers and by RSUs (CAMP-EE §2.2.10.2) | Outage run: 7,298 refusals by vehicles and 1,188 by RSUs. Many-cases run: 29,050 and 5,012, across all four receiver ← sender provider pairs | pass |
-| 8 | A provider's root removed from the CTL mid-run | That provider's devices are refused once the CTL installs | `root_removal_at_s` only removes the home root that a rollover superseded; no setting removes a peer provider's root. In the base run the rollover CTL is published at its 3-business-day deadline, after the last top-up, so 0 vehicles install it (`trust_lists_installed` 0) | **open** |
+| 8 | A provider's root removed from the CTL mid-run | That provider's devices are refused once the CTL installs | Batch 3, §6. Before it, no device installed any CTL after the factory (US path), and no setting removed a peer's root | **fixed**; two items stay open (§6) |
 | 9 | Thanksgiving week (t0 2026-11-24) | A case decided on Wednesday is published the next business day at 10:00 local time; Thursday 26 Nov is a federal holiday (5 U.S.C. 6103) | Decided Wed 25 16:52 UTC, **published Fri 27 15:00 UTC (10:00 EST)**. Ordinary week: decided Wed 21 16:51, published Thu 22 14:00 UTC (10:00 EDT) | pass |
 | 10 | No RSU and no cellular | Signing and verification continue from the factory pool. No top-up, report, case, CRL or download | 0 top-ups, 0 reports at the MA, 0 cases, 0 CRLs; 39,446 verified; 1,405 reports left with departing vehicles and 14 were still queued at the end. Wall time 138 s against about 400 s (no backend work) | pass |
 | 11 | Post-quantum and hybrid certificates with fragmentation at density | ML-DSA frames are fragmented and latency rises (`security-track.yaml` rows) | Not run in this package | **open** |
@@ -91,6 +91,80 @@ fresh mtime. The script is `scratchpad/edge/mut.sh`, and every fault went RED:
 The retry-off tests (`without_the_retry_*`, `a_slow_ra_without_the_retry_*`,
 `without_renewal_*`) also run the old behaviour through the setting and assert its
 failure: the top-off is lost, and the list goes past its tolerance.
+
+## 6. Batch 3 (2026-10-19): clock skew, CTL install, weeks offline, the 10,000-entry rerun
+
+Rows written before the runs are at the end of the expectations file (`regression.base-new3`,
+`E2.clock-ahead-5000s`, `E4.offline-weeks`, `E8.peer-root-removed`,
+`E6.composite-crl-10k-rerun`). "new3" is commit `b688bf40`, "new5" is `21c8ae81`. Same seed
+throughout. Wall times are shared-machine times.
+
+### 6.1 What changed in the engine
+
+- **The node's clock reaches its security** (`v2xw-node` `secure.rs`). `NodeSecurity` holds
+  the clock's believed-minus-true offset, which the runtime copies on every step. A
+  signature is stamped with the node's own time (`SecCtx::skewed`, 1609.2 §6.3.9), and a
+  receiver checks validity and CRL currency at its own time (§5.2). New settings:
+  `clock_skew_s` and `clock_skew_share`. The share is picked by a fixed hash of the node
+  index, so a base and a variant skew the same vehicles.
+- **Devices install a newer CTL.** The composite CRL file carries the home CTL (1609.2.1
+  `CompositeCrlSpdu`). A vehicle polls when the CTL is newer than the one it holds, as well
+  as when the CRL is newer. On the download it applies the CTL's root set
+  (`NodeSecurity::apply_ctl`): it adds new roots, and drops the roots the CTL no longer
+  approves, together with every path and signer validated under them. RSUs do the same on
+  their backhaul fetch. New setting: `peer_root_removal_at_s`. Once the CTL that removes a
+  provider is published, RAs stop serving that provider's CRL.
+- **A removed provider keeps running.** `Governance::home_root` panicked on the removed
+  provider's own view ("the home provider has an approved root"). It now falls back to the
+  newest root that provider still runs under.
+- **Refusals of departed nodes stay in the report.** `receiver_validation` summed only the
+  nodes present at the end of the run. In the clock-skew run it reported 12,325 refusals
+  for 56,417 refused SPDUs.
+- A fetch that only brings a newer CTL, with no CRL published yet, is no longer counted as a
+  refused CRL at an RSU.
+
+### 6.2 Results
+
+| Run | Expected (written before) | Measured | Verdict |
+|---|---|---|---|
+| `scms-conformance`, new3 against new2 | Only the CTL install moves. The rollover CTL (decided at 120 s, published Friday 08:52 UTC) is installed in the Saturday window with 0 anchors removed | `trust_lists_installed` 16 (14 vehicles and 2 RSUs), `trust_anchors_removed` 0. CRL downloads 41 against 27, RSU CRL installs 6 against 4, Uu downlink 295,933 against 245,631 B (16 × 3.1 kB composites). Refusals (29,704 / 4,311), cases (4), top-ups (12/12), BSMs and verifications per window are identical | pass |
+| `edge/clock-skew-ahead` (28 of 56 vehicles 5,000 s ahead), new3 | Skewed senders sign under 615 from their first BSM. Accurate receivers refuse them as chain-expired until 600 s and accept them after. Skewed receivers refuse 614 BSMs. Later windows match the base. Top-ups, cases and CRLs unchanged | Window 0 signing records: 1,899 under 615 for provider-a, against 70 in the base. Accurate receivers (own clock 0–600 s): 33,362 refused, 35,358 valid; from 600 to 700 s: **0 refused**, 7,137 valid. Skewed receivers (own clock 5,000–5,700 s): 23,055 refused. Top-ups 12/12. **But 20 cases against 4, and 15 honest vehicles revoked** (base 0): reports at the MA rose from 2,545 to 16,238. Misbehaviour detectors flagged the skewed honest senders (positionJump 16,485, acceptanceRangeThreshold 17,351, mapOffRoad 18,566; base 6 / 0 / 0). Two of them were revoked and starved in the Thursday window | validity edges: pass. Expectation on cases **corrected**: a kinematic detector extrapolates a sender's position from its `generationTime`, so an honest vehicle 83 minutes off cannot be told from a time-spoofing attacker. That is the real system's behaviour, and a finding: a GNSS time attack gets honest vehicles revoked through the MA |
+| same, new5 (refusal report) | `receiver_validation` counts every refused SPDU, including those of vehicles that left | 56,417 chain-expired, equal to the 33,362 + 23,055 refused `node.verify` records (new3 reported 12,325). Cases (20) and revocations (15 honest) unchanged | fixed |
+| same, wall and memory | About the base | 615 s against 637 s. Peak RSS 212 MB against 71 MB: 16,238 reports held at the MA, against 2,545 | as expected for the work done |
+| `edge/offline-weeks`, new3 | Window 611,700–612,000 s: the home vehicles are starved and silent. Retries at most 10 an hour reach the RA within an hour of its return at 700,000 s. All home top-ups complete | 6 vehicles starved, **0 BSMs** from them in that window (provider-b and newly provisioned vehicles sign under 616). 11,977 retries, 1,197 capped (10 an hour for 8 days). After the RA came back, the 7 requests were acknowledged at 702,610 s, certified, downloaded and installed by 702,671 s (2,610 s after the return, inside the SCMS-523 hour). Wall 398 s | pass (backend). The 6 vehicles had left the map before the last window, so it does not show them transmitting again. Their device records keep retrying after they leave, as a real device elsewhere would |
+| same, main (no retry) | The home top-ups are lost and never complete | 7 requested, **0 acknowledged** after 590 s; 6 starved. The report's `topups_completed` is 14 in both runs, because it counts installs on vehicles still on the map | confirmed |
+| `edge/peer-root-removed`, new3 | Removal decided at 300 s and published at 173,100 s. Every device refuses provider-b's BSMs once it installs the CTL | **Panicked** at 19 s: `home_root` on provider-b's own view | fixed (6.1) |
+| same, new5 | Thursday and Saturday windows: provider-b refused everywhere; provider-a unaffected; window 0 as the base | Window 0 identical to the base. **Thursday: no change**. The CTL due at 173,100 s was published only at the next backend tick, at the window's start, after every vehicle had already polled; the next poll is an hour later (open, below). Saturday: 16 installs, **16 anchors removed**, 42,132 refused as chain-untrusted-root. That equals the fall in verified provider-b receptions (−19,906 by provider-a, −14,570 by provider-b) plus the revoked-sender refusals that became untrusted-root refusals (−7,656) | pass on the mechanism, **open** on the timing |
+| `edge/standing-crl-10k`, new3 | About 0.33 MB a download | 57 downloads, Uu downlink 19,153,594 B, **336 kB a download** (33.1 B an entry with the signature, the signer and the CTL). Wall 1,092 s against 637 s; RSS 194 MB against 71 MB | pass |
+| same, refusals | Random entries revoke no device of the run, so refusals match the base | Identical BSM counts per window and provider, but 23,289 revoked refusals against 29,704, and 498k valid verifications against 424k | **open** (as in §3): the receivers verify about 17 % more of the same frames. Not isolated |
+
+### 6.3 Fault injections (batch 3)
+
+| Fault | Test | Red result |
+|---|---|---|
+| The receiver checks validity at the simulation's time | `rx_validation::a_receiver_whose_clock_runs_ahead_refuses_a_certificate_still_valid` | accepted (left: Valid) |
+| The sender stamps the true time | `rx_validation::a_sender_whose_clock_lags_stamps_its_own_time_and_keeps_an_expired_certificate` | "generationTime is the sender's believed time" |
+| A dropped root keeps its validated paths | `rx_validation::a_root_a_newer_ctl_drops_is_refused_from_then_on_and_an_unchanged_ctl_forgets_nothing` | still Valid after the removal. The first version of this test went **GREEN** under the fault, because adding a root also cleared the cache. It now removes without adding |
+| `home_root` requires an approved root | `provider_runs::a_provider_whose_root_the_eac_removed_takes_the_ctl_and_keeps_running` | the panic. The first version went **GREEN**, because it never looked up `cert("root")`. It does now |
+
+### 6.4 Open from batch 3
+
+- **A CTL publication waits for the next backend tick.** `Governance::publish_due` runs in
+  `governance_due` only when the backend steps. A deadline that falls inside a fast-forward
+  (removal at 173,100 s) is published at the next window's first tick, after that tick's
+  polls. Fix: offer each pending publication time to the backend's next-event set, as
+  `root_removal_at` is. The same applies to the rollover CTL.
+- **One unverifiable CRL refuses the whole frame.** After the removal, 21 CRL frames
+  carrying provider-b's CRL (RSU broadcasts held from before) were refused whole
+  (`crl_frames_rejected` 21) by vehicles that had dropped the root. A device should
+  discard only the CRL it cannot verify.
+- **The CTL's signatures are not re-checked on the device.** `apply_ctl` applies the
+  published root set. `DeviceTrust::install_ctl` (elector quorum) is not run on that path.
+- **Clock skew is applied to vehicles only.** RSUs and VRUs carry the offset plumbing but
+  no setting. The skew is a constant offset; drift while unlocked (`ClockModel`'s ppm)
+  is not set by any scenario.
+- Items 11 (post-quantum at density) and 3d (the LA and ACA answers to a down RA) are
+  still open.
 
 ## 5. Found on the way, not fixed
 
