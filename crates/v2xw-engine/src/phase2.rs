@@ -5139,9 +5139,13 @@ impl Phase2 {
         }
     }
 
-    /// Provider `k`'s MA takes its queued decisions, one open case at a time.
+    /// Provider `k`'s MA takes its queued decisions while it has room for another open
+    /// investigation (`ma_max_open_cases`, `MaPolicy::max_open_cases`): the run refuses a
+    /// case beyond the cap, which then waits at the head of the queue. (SCMS settings
+    /// audit: this loop used to stop at the first open case, so the MA ran one case at a
+    /// time whatever its capacity, and the knob did nothing.)
     fn start_cases_of(&mut self, k: usize, now: SimTime) {
-        while !self.runs[k].case_open() {
+        loop {
             let Some(mut case) = self.queue[k].pop_front() else {
                 return;
             };
