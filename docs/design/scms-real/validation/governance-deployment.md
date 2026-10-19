@@ -127,7 +127,7 @@ Verdicts:
 | F-2 | Pseudonym region | Decided: **no region**. [SMP] §6.3.3 (read in full) sets no region condition on authorization certificates, while §6.3.1 fixes the enrolment region at USA, Canada and Mexico. Under 1609.2 an absent region inherits the issuer's, and the production chain carries none. CAMP's 86 B example equals the engine plus `countryOnly 840`, but that is the 2016 pilot rule ("The CSR only contains Region USA", CAMP122 §5.2.6.3.2.1), which the 2023 profile replaced with three countries. A USA-only region would exclude Canada and Mexico, which the profile includes. Impact: an on-air pseudonym is 6 B smaller than a CAMP-pilot one | `camp_sizes` (80 B) unchanged | MATCHES (the US profile) |
 | F-3 | Application and identification certificates carry no SSP | CAMP Table 1 publishes none for the engine's applications (E-8); the one published SSP is transcribed and pinned | E-8 | MATCHES (no fix needed; the premise that Table 1 prints SPaT/MAP/TIM SSPs is wrong) |
 | F-4 | `max_periods_ahead: 156` duplicated `RA_MAX_PRELOAD_PERIODS` | `params.rs` default reads the constant; `initial_batch` is `20 × RA_MAX_PRELOAD_PERIODS`; `electors`/`elector_quorum` read `US_ELECTORS`/`US_QUORUM` | Fault: `RA_MAX_PRELOAD_PERIODS` 156 → 104 now turns `camp_sizes` rates RED (it was GREEN in 04 §10) | **FIXED** |
-| F-5 | The real-artefact tests were `#[ignore]` | They run whenever `third_party/scms-artefacts/files` exists; `V2XW_SCMS_ARTEFACTS=1` makes a missing cache fail; otherwise each prints `SKIPPED` | With the cache: 7/7 run. Faults: a corrupted cached CTL → RED; no cache with the variable set → RED | **FIXED** |
+| F-5 | The real-artefact tests were `#[ignore]` | They run whenever `third_party/scms-artefacts/files` exists; `V2XW_SCMS_ARTEFACTS=1` makes a missing cache fail; otherwise each passes after an `eprintln!` `SKIPPED` line (visible with `--nocapture`) | With the cache: 7/7 run. Faults: a corrupted cached CTL → RED; no cache with the variable set → RED | **FIXED** |
 
 ### 1.8 `constants.md` audit
 
@@ -148,7 +148,7 @@ None of the newly read documents (Provider Req., EAC Req., Elector Policy, Tech 
 
 ## 2. Summary
 
-There are 66 rows: 41 MATCHES, 8 FIXED, 12 DOCUMENTED DEVIATION and 5 UNVERIFIABLE. Two rows carry two verdicts and are counted under their first.
+There are 70 rows: 45 MATCHES, 8 FIXED, 11 DOCUMENTED DEVIATION and 6 UNVERIFIABLE. A row with two verdicts (D-5, K-5) is counted under its first.
 
 The 8 fixes:
 - CTL business days now skip federal holidays and are counted on the Eastern date.
@@ -167,4 +167,42 @@ The decisions that change no code:
 
 ## 3. Faults injected
 
-See §3 of the report fields; filled in after the mutation run below.
+Every new or changed test was run green on the fixed tree first: proto 136 passed, sec `real_artefacts` 7/7, engine `scms_constants` and `scms_wiring` 8/8.
+
+The proto faults were then injected together with `tools/mutate/mutate.py`, one fault per new test, all in one build. Each was restored with a fresh mtime, and `git status` was clean afterwards. The panic messages show that each test failed on its own fault.
+
+| Fault | Test(s) that went RED |
+|---|---|
+| Business days counted Monday–Friday only (no holidays) | `ctl_deadlines_count_eastern_business_days_without_federal_holidays` |
+| `CTL_ADD_ELECTOR_BUSINESS_DAYS` 5 → 3 | `an_elector_replacement_ctl_has_the_five_business_days_of_an_addition` (3 days against 7) |
+| `ELECTOR_DEFAULT_YEARS` 15 → 24 | `a_replacement_elector_is_valid_for_the_default_fifteen_years` (757 366 848 s against 473 354 280) |
+| `rootCaRemove` filled with the approved roots | `a_removed_root_leaves_the_approve_list_and_is_not_listed_as_removed` |
+| Governance RA back to `certRequestPermissions` | `both_engine_pkis_give_the_ra_the_same_permission_form`, `permissions_are_the_published_bytes` |
+| Test-CTL `provider-f` back on the CTL | `the_test_ctl_preset_has_six_roots_of_which_five_are_approved` |
+| Wyoming SSP last byte 0x40 → 0x41 | `the_published_wyoming_distress_ssp_encodes_as_camp_prints_it` |
+| `RA_MAX_PRELOAD_PERIODS` 156 → 104 (GREEN in 04 §10, before the fix) | `camp_sizing_rates_follow_from_the_engines_per_device_counts`, `the_preload_horizon_is_held_between_two_weeks_and_three_years`, `the_ra_keeps_three_years_generated_and_adds_a_week_at_each_boundary`, `on_the_real_calendar_the_next_week_is_generated_at_the_real_boundary` |
+
+The artefact-cache faults (data, not code):
+
+| Fault | Result |
+|---|---|
+| One byte of the cached production CTL flipped | 3 of 7 RED |
+| Cache moved away, `V2XW_SCMS_ARTEFACTS=1` | 7 of 7 RED |
+| Cache moved away, no variable | 7 pass (skipped) |
+| Restored | 7 of 7 pass; `fetch.py` PASS, 16 of 16 published SHA-384 |
+
+The oracle cross-checks of the fixed tree:
+- `oracle.py real` on the governance dump (genesis CTL, GCCF, LCCF, replacement-plus-rollover CTL, rollover LCCF): 120/120.
+- `tools/realworld/sizes.py` with the published files: PASS. Both engine RAs (governance and PDU PKI) now have the same field set and encoding as `ra.prod.s2x.io`, name aside.
+
+## 4. For the merge
+
+- **Digests.**
+  - Frame digests: no change is expected; no on-air byte changes.
+  - Record digests (`phase2-path`, `i-s1`) may move, because the governance RA certificate's bytes changed (issue form), and with them the LCCF/GCCF chain files. Re-bless with `V2XW_BLESS_SCMS_DIGESTS=1` if they move.
+- **Engine tests.** The engine tests that read the Manhattan map need `worlds/cache/manhattan.osm.xml` in the worktree (a symlink here, git-ignored).
+- **Open.**
+  - Scenario keys for `replace_elector`, `add_root` and `test_ballot` (G-10). Only rollover and removal are schedulable in a run.
+  - Per-provider certificate profiles: an ISS pattern (70 y root, regions on sub-CAs, request-form RA) beside the SAESOL production one (L-1, L-5, F-1).
+  - CTL `effectiveDate` at the ballot rather than at publication (C-9).
+  - Genesis at the real production sequence 1 (C-10).

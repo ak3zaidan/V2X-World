@@ -277,6 +277,12 @@ Statuses:
 4. **Duplicated constant.** `params.rs` has `RA_MAX_PRELOAD_PERIODS = 156`, and also `max_periods_ahead: 156` as a literal in the default. Changing the constant alone has no effect on the default; it is only a validation bound and the THEA preset. The first fault injection (§4.1) found this.
 5. **Real-artefact tests are still `#[ignore]`.** The owner decided they should run whenever the cache is present. Making them skip silently when the cache is absent would be a check that cannot fail. The safer form is a required `V2XW_SCMS_ARTEFACTS=1` (or a present cache) that turns a missing file into a failure. This is left to the merge agent, so the 7 tests are not weakened here.
 
+**Resolved 2026-10-18** by the governance validation (`validation/governance-deployment.md` §1.7):
+- Item 1 is fixed: both PKIs use the production `certIssuePermissions` form.
+- Item 2 is decided: no region, per [SMP] §6.3.3.
+- Item 3 is resolved: CAMP Table 1 prints no SPaT, MAP or TIM SSP, and the one printed SSP (Wyoming) is pinned.
+- Items 4 and 5 are fixed.
+
 Also notable from the week run (§4.2): 4 of the 19 revocations in one week were honest vehicles under the default manual-review MA. The count is recorded (`revoked_honest`). It is a benchmark target, not a defect of this package.
 
 ## 10. Faults injected by this package
