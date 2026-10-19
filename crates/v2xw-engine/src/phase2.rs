@@ -7370,6 +7370,7 @@ mod fast_forward_wake_tests {
             version: 1,
             entries: Vec::new(),
             secured: None,
+            serial: 1,
         });
         let in_transit = p.next_wake(before).expect("a wake");
         assert_eq!(in_transit, w_before.map_or(crossed, |w| w.min(crossed)));
