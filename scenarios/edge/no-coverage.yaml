@@ -1,0 +1,23 @@
+# Edge case 10: no roadside unit and no cellular coverage. The vehicles are enrolled and
+# provisioned at the factory (two weeks of pseudonyms), then cut off from the SCMS.
+#
+# Expected (CAMP-EE §2.2.10; [CAMP122] §3): every V2V message is still signed and
+# verified (the pool is on board); no top-up, no misbehaviour report and no CRL download
+# can leave or reach a vehicle, so the MA opens no case, no CRL is published and the
+# liars are never revoked; reports queue in the vehicles' outboxes.
+schema: v2xw/scenario/1
+meta:
+  name: edge-no-coverage
+  description: >-
+    The conformance run with no roadside unit and no cellular penetration: the vehicles
+    keep signing from their pools, and nothing reaches the SCMS.
+  authors: [v2xw]
+  tags: [scms, edge-case, coverage]
+  created: "2026-10-18"
+  base: ../scms-conformance.yaml
+actors:
+  rsus: []
+net:
+  uu:
+    id: cellular/uu/fixed-latency
+    params: {preset: 4g-east-coast, penetration: 0.0}

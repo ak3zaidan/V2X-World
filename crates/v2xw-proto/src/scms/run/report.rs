@@ -66,6 +66,69 @@ impl ScmsRun {
         report: &crate::scms::mbr::MisbehaviorReport,
         at: SimTime,
     ) -> core::result::Result<(u32, LinkageValue, SecuredReport), crate::scms::pdu::PduError> {
+        self.secure_mbr_as(reporter, report, at, None)
+    }
+
+    /// The pseudonym `(i, j)` the reporter signs a report generated at `at` with: the one
+    /// whose certificate is `prefer` (the HashedId8 the vehicle signs its BSMs with now),
+    /// else the device's active one, else its newest i-period's lowest index; in every
+    /// case one whose validity window holds `at` and that no CRL it holds revokes. `None`
+    /// when it holds none: a device whose pool has run out cannot sign a report.
+    ///
+    /// Until the edge-case package the first usable certificate in `(i, j)` order signed
+    /// every report, valid or not: after the week rollover every report went out under
+    /// last week's `(i, 0)`, an expired certificate, and every report of a week under one
+    /// pseudonym (so they were linkable to each other).
+    pub fn mbr_signer(&self, reporter: NodeId, at: SimTime, prefer: Option<[u8; 8]>) -> Option<(u32, u32)> {
+        let dev = self.state.devices.get(&reporter)?;
+        let p = &self.state.params;
+        let fits = |i: u32, j: u32| {
+            let (from, until) = p.validity(i);
+            at >= from
+                && at < until
+                && !dev.is_revoked(i, j)
+                && dev
+                    .credentials
+                    .get(&(i, j))
+                    .is_some_and(|c| c.implicit.is_some())
+                && dev.credential_is_usable(i, j)
+        };
+        if let Some(want) = prefer {
+            let hit = dev.credentials.iter().find(|(_, c)| {
+                c.implicit
+                    .as_ref()
+                    .is_some_and(|imp| crate::scms::pdu::cert_id8(&imp.certificate) == want)
+            });
+            if let Some((&(i, j), _)) = hit
+                && fits(i, j)
+            {
+                return Some((i, j));
+            }
+        }
+        if let Some((i, j)) = dev.store.active()
+            && fits(i, j)
+        {
+            return Some((i, j));
+        }
+        dev.credentials
+            .keys()
+            .copied()
+            .filter(|&(i, j)| fits(i, j))
+            .min_by_key(|&(i, j)| (core::cmp::Reverse(i), j))
+    }
+
+    /// [`ScmsRun::secure_mbr`], signed with the pseudonym [`ScmsRun::mbr_signer`] picks
+    /// for `prefer`.
+    ///
+    /// # Errors
+    /// As [`ScmsRun::submit_mbr`].
+    pub fn secure_mbr_as(
+        &mut self,
+        reporter: NodeId,
+        report: &crate::scms::mbr::MisbehaviorReport,
+        at: SimTime,
+        prefer: Option<[u8; 8]>,
+    ) -> core::result::Result<(u32, LinkageValue, SecuredReport), crate::scms::pdu::PduError> {
         use crate::scms::mbr;
         use crate::scms::pdu::{Pdu, PduError};
         let pki = self
@@ -78,18 +141,13 @@ impl ScmsRun {
             .devices
             .get(&reporter)
             .ok_or(PduError::Shape("no such device"))?;
-        // The pseudonym in use, or (before the first rotation picks one) the first
-        // installed certificate the device may use.
-        let cred = dev
-            .active_credential()
-            .or_else(|| {
-                dev.credentials
-                    .iter()
-                    .find(|((i, j), c)| c.implicit.is_some() && dev.credential_is_usable(*i, *j))
-                    .map(|(_, c)| c)
-            })
+        // The pseudonym in use, valid when the report is generated (edge-case package,
+        // item 1).
+        let cred = self
+            .mbr_signer(reporter, at, prefer)
+            .and_then(|k| dev.credentials.get(&k))
             .and_then(|c| c.implicit.as_deref())
-            .ok_or(PduError::Key("no active pseudonym certificate"))?
+            .ok_or(PduError::Key("no pseudonym certificate valid at the report's time"))?
             .clone();
         let enrol = dev
             .enrolment_credential

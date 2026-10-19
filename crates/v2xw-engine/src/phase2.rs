@@ -550,6 +550,9 @@ pub struct RsuAppCred {
 struct RsuCycle {
     handed: usize,
     /// The composite CRL version the unit last installed.
+    /// The sum of the publication counts of the lists it installed: a re-issue at
+    /// `nextCrl` with no new entry is fetched too (edge-case package, item 5).
+    crl_serial: u64,
     crl_version: u32,
     withheld_seen: u64,
     starved: bool,
@@ -2504,10 +2507,21 @@ impl Phase2 {
             .iter()
             .filter(|(n, c)| {
                 self.rsu_spec_of(**n).is_some_and(|s| s.backhaul.connected)
-                    && self.crl_version_for(**n) > c.crl_version
+                    && (self.crl_version_for(**n) > c.crl_version
+                        || self.crl_serial_for(**n) > c.crl_serial)
             })
             .map(|(n, _)| *n)
             .collect()
+    }
+
+    /// The sum of the publication counts of the lists `node`'s RA serves now.
+    #[must_use]
+    pub fn crl_serial_for(&self, node: NodeId) -> u64 {
+        let h = self.provider_of_device(device_of(node));
+        self.visible_versions(h)
+            .iter()
+            .map(|(_, v)| u64::from(v.serial))
+            .sum()
     }
 
     /// The version of the composite CRL `node`'s RA serves now.
@@ -2521,8 +2535,10 @@ impl Phase2 {
 
     /// Roadside unit `node` installed (or refused) composite CRL `version`.
     pub fn note_rsu_crl(&mut self, node: NodeId, version: u32, installed: bool) {
+        let serial = self.crl_serial_for(node);
         if let Some(c) = self.rsu_cycle.get_mut(&node) {
             c.crl_version = c.crl_version.max(version);
+            c.crl_serial = c.crl_serial.max(serial);
         }
         if installed {
             self.report.rsu_crls_installed += 1;
@@ -3752,7 +3768,10 @@ impl Phase2 {
         let mut modelled: Option<String> = None;
         let run = match self.real_mbr(&report, location) {
             MbrBuild::Real(mbr) => {
-                match self.runs[kr].secure_mbr(device_of(reporter), &mbr, sent_at) {
+                // Signed with the pseudonym the vehicle signs its BSMs with now, if it is
+                // still valid when the report is generated.
+                let prefer = self.nodes.get(&reporter).and_then(|n| n.active_digest);
+                match self.runs[kr].secure_mbr_as(device_of(reporter), &mbr, sent_at, prefer) {
                     Ok((si, slv, secured)) => {
                         self.report.reports_mbr_real += 1;
                         Some(self.runs[kr].secured_at_proxy(
