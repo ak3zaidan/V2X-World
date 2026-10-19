@@ -72,18 +72,25 @@ pub fn hashed_id3_of_id8(id8: &HashedId8) -> HashedId3 {
     HashedId3(rasn::types::FixedOctetString::from([b[5], b[6], b[7]]))
 }
 
-/// The whole-certificate `HashedId8`: SHA-256 over the certificate's COER encoding.
+/// The whole-certificate `HashedId8`: the low 8 bytes of the whole-certificate hash
+/// (the issuer field's algorithm, 1609.2 §6.4.3) over the certificate's *canonical*
+/// COER encoding ([`crate::cert::canonical_coer`]).
 ///
 /// 1609.2 calls this the *whole-certificate hash* and uses it as the certificate's
 /// identity everywhere — in a `digest` signer identifier, in an `IssuerIdentifier`, in a
-/// peer certificate cache, in a CRL.
+/// peer certificate cache, in a CRL. A received certificate may carry an uncompressed
+/// point or an R-form `rSig` at its sender's discretion; hashing the bytes as received
+/// would give that certificate a second identity (validation finding CF-CANON).
 pub fn certificate_digest(cert: &Certificate) -> Result<HashedId8> {
-    Ok(hashed_id8(&coer::encode(MsgType::Crl, cert)?))
+    crate::cert::cert_id8(cert)
 }
 
-/// The whole-certificate `HashedId10`, for a hash-based CRL entry.
+/// The whole-certificate `HashedId10`, for a hash-based CRL entry (canonical, as
+/// [`certificate_digest`]).
 pub fn certificate_hashed_id10(cert: &Certificate) -> Result<HashedId10> {
-    Ok(hashed_id10(&coer::encode(MsgType::Crl, cert)?))
+    Ok(HashedId10(rasn::types::FixedOctetString::from(
+        crate::cert::cert_id10(cert)?,
+    )))
 }
 
 /// The `HashedId8` of any COER-encodable value.

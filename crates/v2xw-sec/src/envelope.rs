@@ -80,6 +80,12 @@ use crate::primitive::{PrimitiveCatalogue, PrimitiveId, PrimitiveOpKind};
 pub const P2PCD_EXCLUSIVE_RULE: &str =
     "headerInfo: p2pcdLearningRequest and inlineP2pcdRequest are mutually exclusive";
 
+/// IEEE 1609.2-2022 §6.3.9 (`HeaderInfo.expiryTime`): "If both generationTime and
+/// expiryTime are present, the signed SPDU is invalid if generationTime is not strictly
+/// earlier than expiryTime" (validation finding CF-EXPIRY).
+pub const EXPIRY_AFTER_GENERATION_RULE: &str =
+    "headerInfo: generationTime must be strictly earlier than expiryTime";
+
 /// The model id of the IEEE 1609.2 envelope.
 pub const IEEE_1609_2_ID: &str = "envelope/ieee-1609-2";
 
@@ -217,8 +223,10 @@ impl SignerHandle {
         key: crate::crypto::KeyHandle,
         certificate: Arc<Certificate>,
     ) -> Result<SignerHandle> {
-        let cert_coer = coer::encode(MsgType::Crl, certificate.as_ref())?;
-        let digest = crate::hashedid::hashed_id8(&cert_coer);
+        // The canonical encoding (1609.2 §6.1.2): what §5.3.1 hashes as the signer
+        // identifier input and what the certificate's HashedId8 is over (CF-CANON).
+        let cert_coer = crate::cert::canonical_coer(certificate.as_ref())?;
+        let digest = crate::cert::cert_id8(certificate.as_ref())?;
         Ok(SignerHandle {
             node,
             key,
@@ -1014,11 +1022,19 @@ impl Envelope {
         // `HeaderInfo` is `#[non_exhaustive]` (an extensible ASN.1 SEQUENCE), so it is
         // built through the generated constructor. The argument order is the ASN.1 field
         // order.
+        let expiry = spec
+            .expiry
+            .map(|d| generation_time.saturating_add(d.as_nanos() / 1_000));
+        if expiry.is_some_and(|x| x <= generation_time) {
+            return Err(SecError::ProfileViolation {
+                profile: self.profile.model_id(),
+                rule: EXPIRY_AFTER_GENERATION_RULE,
+            });
+        }
         Ok(HeaderInfo::new(
             Psid(rasn::types::Integer::from(spec.psid)),
             Some(Time64(Uint64(generation_time))),
-            spec.expiry
-                .map(|d| Time64(Uint64(generation_time.saturating_add(d.as_nanos() / 1_000)))),
+            expiry.map(|x| Time64(Uint64(x))),
             spec.generation_location.map(|l| l.to_asn1()),
             spec.p2pcd_learning_request.clone(),
             None, // missingCrlIdentifier: out-of-band CRL requests are not modelled
@@ -1157,6 +1173,14 @@ impl SecurityEnvelopeInfo for Envelope {
             return Err(SecError::ProfileViolation {
                 profile: self.profile.model_id(),
                 rule: P2PCD_EXCLUSIVE_RULE,
+            });
+        }
+        if let (Some(g), Some(x)) = (hi.generation_time.as_ref(), hi.expiry_time.as_ref())
+            && g.0.0 >= x.0.0
+        {
+            return Err(SecError::ProfileViolation {
+                profile: self.profile.model_id(),
+                rule: EXPIRY_AFTER_GENERATION_RULE,
             });
         }
         // TS 103 097 §5.2 forbids the out-of-band request in an ETSI SPDU; a receiver on

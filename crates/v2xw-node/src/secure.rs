@@ -1184,7 +1184,9 @@ impl NodeSecurity {
         certificate: &Certificate,
         owner: NodeId,
     ) -> SpduVerdict {
-        let Ok(cert_coer) = cert::encode(certificate) else {
+        // The signer-identifier input of 1609.2 §5.3.1 is the *canonical* certificate
+        // (§6.1.2): a peer may send its points uncompressed (validation CF-CANON).
+        let Ok(cert_coer) = cert::canonical_coer(certificate) else {
             return SpduVerdict::Invalid;
         };
         // The receiver rules of 1609.2 §5.2 (WP-C2): the chain to an installed root,
@@ -1417,6 +1419,66 @@ mod tests {
                 Some((0, LinkageValue::new([3; 9])))
             );
         }
+    }
+
+    /// Crypto-formats validation CF-CANON: a peer may transmit its certificate with the
+    /// reconstruction value uncompressed ("at the sender's discretion", 1609.2
+    /// `EccP256CurvePoint`); the signer-identifier input of §5.3.1 is still the canonical
+    /// certificate (6.1.2), so the SPDU verifies, and a different key does not.
+    #[test]
+    fn a_peer_certificate_sent_uncompressed_verifies_over_its_canonical_form() {
+        use v2xw_msg::sec_types::ieee1609_dot2::VerificationKeyIndicator;
+        use v2xw_msg::sec_types::ieee1609_dot2_base_types::{
+            EccP256CurvePoint, EccP256CurvePointUncompressedP256,
+        };
+        let reg = RngRegistry::new(5);
+        let iss = issuer();
+        let k = key(&iss, 4, 0, 0);
+        let mut ctx = NodeRuntimeCtx::new(0, &reg);
+        let mut tx = stack(CryptoMode::Real);
+        tx.install(NodeId::new(4), 0, 0, &k).expect("installs");
+        assert!(tx.set_active(0, 0));
+        let (frame, _) = tx
+            .sign(
+                &mut ctx,
+                MsgType::Bsm,
+                b"bsm",
+                SignerIdChoice::Certificate,
+                None,
+            )
+            .expect("signs");
+        let mut rx = stack(CryptoMode::Real);
+        let parsed = rx.parse(&frame.spdu).expect("parses");
+        let c = NodeSecurity::attached_certificate(&parsed).expect("attached");
+        rx.learn_issuer(Arc::clone(iss.certificate()));
+        let mut t = (*c).clone();
+        let VerificationKeyIndicator::reconstructionValue(p) =
+            &t.0.to_be_signed.verify_key_indicator
+        else {
+            panic!("an implicit certificate");
+        };
+        let sec1: Vec<u8> = match p {
+            EccP256CurvePoint::compressed_y_0(x) => [&[0x02u8][..], x].concat(),
+            EccP256CurvePoint::compressed_y_1(x) => [&[0x03u8][..], x].concat(),
+            other => panic!("canonical is compressed, not {other:?}"),
+        };
+        let (x, y) = v2xw_sec::ec::Point::from_sec1(&sec1).unwrap().xy().unwrap();
+        t.0.to_be_signed.verify_key_indicator =
+            VerificationKeyIndicator::reconstructionValue(EccP256CurvePoint::uncompressedP256(
+                EccP256CurvePointUncompressedP256::new(x.to_vec().into(), y.to_vec().into()),
+            ));
+        assert_ne!(cert::encode(&t).unwrap(), cert::encode(&c).unwrap());
+        assert_eq!(
+            rx.verify_parsed(&mut ctx, &parsed, &t, NodeId::new(9)),
+            SpduVerdict::Valid,
+            "the transmitted form is the same certificate"
+        );
+        let other = key(&iss, 5, 0, 0);
+        assert_eq!(
+            rx.verify_parsed(&mut ctx, &parsed, other.certificate(), NodeId::new(9)),
+            SpduVerdict::Invalid,
+            "another certificate's key does not verify it"
+        );
     }
 
     /// Both backends produce certificates and SPDUs of identical size — half of I-S1, and

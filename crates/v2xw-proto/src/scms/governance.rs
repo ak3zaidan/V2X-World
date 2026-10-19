@@ -229,6 +229,11 @@ pub enum Lifetime {
     SixtyHours(u16),
 }
 
+/// The published lifetime of `role` (one of [`ROLE_SPECS`]) as a 1609.2 `Duration`.
+pub(crate) fn published_lifetime(role: &str) -> Duration1609 {
+    spec_of(role).lifetime.to_asn1()
+}
+
 impl Lifetime {
     fn to_asn1(self) -> Duration1609 {
         match self {
