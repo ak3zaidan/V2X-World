@@ -1,0 +1,677 @@
+# SCMS effects table: what an SCMS or environment change does to (a) the metrics, (b) the
+# run's cost and (c) the PKI architecture the run records, measured in real same-seed runs
+# of the release binary (docs/design/scms-real/testing/effects.md has the method and the
+# table in prose). Not a sweep table: `v2xw sensitivity` passes over it by its `schema`
+# (sweep::SCMS_RUN_EXPECTATIONS_SCHEMA); tests/scms_effects.rs checks it is whole.
+#
+# Every expectation was written down before its run. `measured` is base -> variant (or
+# the one run's value, for a row whose base and variant are the same run: an invariant).
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (a documented
+#          deviation or a row not yet measured).
+schema: v2xw/scms-run-expectations/1
+
+runs:
+  L0:
+    scenario: scenarios/credential-weeks.yaml
+    set: {actors.vehicles.demand.rate_veh_per_h: 300.0, time.duration_s: 196500.0,
+          time.fast_forward: [{from_s: 900.0, to_s: 196200.0}],
+          threats.attackers.0.schedule.to_s: 196500.0}
+    note: >-
+      Real calendar from Tue 2026-10-20 08:50Z (i = 614 -> 615 rollover at 600 s), two
+      providers 50/50, manual MA (8 h), business-day CRL at 10:00 ET, 5 % ConstPos, seed
+      0xC0FFEE5EED; radio on 0-900 s and 196200-196500 s (Thu 15:20Z), backend only between.
+  L0b: {base: L0, set: {}, note: "L0 again, rerun for its metric samples (the first pass kept only run-report.json)"}
+  ATT20: {base: L0, set: {threats.attackers.0.fraction: 0.2}}
+  MAAUTO: {base: L0, set: {security.protocol.params: {ma_review_s: 0}}}
+  C40: {base: L0, set: {security.protocol.params: {certs_per_period: 40}}}
+  AALL: {base: L0, set: {security.signer_id_policy.digest_otherwise: false}}
+  F2X: {base: L0, set: {actors.vehicles.demand.rate_veh_per_h: 600.0}}
+  P90: {base: L0, set: {security.scms.deployment: {preset: us-production-2025, providers: [
+          {name: provider-a, fleet_share: 0.9}, {name: provider-b, fleet_share: 0.1}]}}}
+  CAMP: {base: L0, set: {security.scms.deployment: {preset: camp-reference}}}
+  PEN0R0: {base: L0, set: {net.uu.params.penetration: 0.0, actors.rsus: []}}
+  SLOW: {base: L0, set: {nodes.default_obu: obu/generic-automotive-soc-no-hsm}}
+  PQH: {base: L0, set: {nodes.default_obu: obu/generic-automotive-soc-no-hsm,
+          net.fragmenter: {id: fragmenter/generic-sdu},
+          security.signature: hybrid-falcon512-ecdsa-p256}}
+  P60: {base: L0, set: {security.pseudonym_change.period_s: 60.0}}
+  PEN0: {base: L0, set: {net.uu.params.penetration: 0.0}}
+  ONDEC: {base: L0, set: {security.scms.deployment: {preset: us-production-2025, providers: [
+          {name: provider-a, crl_publication: on-decision}, {name: provider-b, crl_publication: on-decision}]}}}
+  A450: {base: L0, set: {security.signer_id_policy.full_cert_every_ms: 450}}
+
+rows:
+- id: base-batch
+  base: L0
+  variant: L0
+  area: architecture
+  measure: certs_per_topup
+  expect: eq
+  source: one top-up batch is one week of certs_per_i_period = 20 ([CAMP122] Table 67; constants.md certs_per_period)
+  value: 20
+  measured: '20'
+  verdict: pass
+- id: base-shuffle
+  base: L0
+  variant: L0
+  area: architecture
+  measure: stage_shuffled_h
+  expect: value-band
+  source: the RA holds reports until 10,000 or at most one day ([CAMP122] SCMS-765; constants.md report_shuffle_window_s
+    86400)
+  band:
+  - 23.0
+  - 24.01
+  measured: '23.89'
+  verdict: pass
+- id: base-review
+  base: L0
+  variant: L0
+  area: architecture
+  measure: review_h
+  expect: value-band
+  source: manual MA review of 8 h after the shuffle releases the reports (owner decision 7; constants.md
+    ma_review_s, ASSUMPTION)
+  band:
+  - 7.99
+  - 8.01
+  measured: '8'
+  verdict: pass
+- id: base-sla
+  base: L0
+  variant: L0
+  area: architecture
+  measure: stage_published_h
+  expect: value-band
+  source: decided Wed 12:53 ET; published at the next business-day 10:00 ET slot, Thu 14:00Z = 191,400
+    s ([SM-PROV] §3.4.9; slot hour ASSUMPTION)
+  band:
+  - 52.9
+  - 53.1
+  measured: '52.99'
+  verdict: pass
+- id: base-board-published
+  base: L0
+  variant: L0
+  area: architecture
+  measure: first_case_crl_published_s
+  expect: value-band
+  source: the case board's crl-published is when the CRL Store had the list (pki_view drain_cases)
+  band:
+  - 191399
+  - 191401
+  measured: '1.154e+05'
+  verdict: fixed
+  test: crates/v2xw-proto/tests/pki_view.rs::the_board_stamps_publication_when_the_store_has_the_list_and_reports_when_they_arrived
+  note: 'release binary stamped 115,423 s (the issue instant, 21 h early): the issued fallback was taken
+    on the first drain and never revisited'
+- id: base-board-reports
+  base: L0
+  variant: L0
+  area: architecture
+  measure: first_case_reports_in_s
+  expect: value-band
+  source: reports-in is when the MA received the case's reports, after the RA's one-day shuffle (86,623
+    s), not the decision
+  band:
+  - 86000
+  - 86700
+  measured: '1.154e+05'
+  verdict: fixed
+  test: crates/v2xw-proto/tests/pki_view.rs::the_board_stamps_publication_when_the_store_has_the_list_and_reports_when_they_arrived
+  note: 'release binary stamped it at the decision (115,423 s): the stage was read from the case''s own
+    run, which receives no report'
+- id: base-concurrent-cases
+  base: L0
+  variant: L0
+  area: architecture
+  measure: decision_spread_h
+  expect: value-band
+  source: 'two attackers whose reports reach the MA in one shuffle release are reviewed side by side:
+    cases run concurrently (gap row 27; MaPolicy max_open_cases 1000)'
+  band:
+  - 0.0
+  - 0.5
+  measured: '8'
+  verdict: open
+  note: the engine opens one case per provider at a time (phase2 start_cases_of), so the second decision
+    came 8.0 h after the first; the n-th attacker waits n x 8 h
+- id: base-no-honest
+  base: L0
+  variant: L0
+  area: metrics
+  measure: revoked_honest
+  expect: zero
+  source: 68 reports about honest vehicles, but the MA acts only on corroborated evidence; no honest revocation
+    (F3 regression)
+  measured: '0'
+  verdict: pass
+- id: base-seeds
+  base: L0
+  variant: L0
+  area: architecture
+  measure: seed_requests
+  expect: eq
+  source: 'each revocation needs both LAs'' seeds: 2 seed requests per case, 2 cases ([BRECHT] §VI-D;
+    1609.2.1 §6.3.3)'
+  value: 4
+  measured: '4'
+  verdict: pass
+- id: base-one-publication
+  base: L0
+  variant: L0
+  area: architecture
+  measure: crl_publications
+  expect: eq
+  source: 'the second entry (decided Thu 00:53Z) rides along on the pending Thu 10:00 ET publication:
+    one CRL version, not two'
+  value: 1
+  measured: '1'
+  verdict: pass
+- id: base-split
+  base: L0
+  variant: L0
+  area: metrics
+  measure: share_a
+  expect: value-band
+  source: 'seeded 50/50 fleet split (us-production-2025): 107 devices, binomial sd 0.048'
+  band:
+  - 0.4
+  - 0.6
+  measured: '0.5327'
+  verdict: pass
+- id: base-cross-verify
+  base: L0
+  variant: L0
+  area: architecture
+  measure: cross_share
+  expect: value-band
+  source: with a 50/50 split, half of all verifications are of the other provider's certificates (2p(1-p)
+    = 0.5)
+  band:
+  - 0.35
+  - 0.65
+  measured: '0.4841'
+  verdict: pass
+- id: base-shared
+  base: L0
+  variant: L0
+  area: architecture
+  measure: reports_shared
+  expect: positive
+  source: an MA forwards a report about the other provider's certificate to that provider's MA (D1 ma_report_sharing
+    on)
+  measured: '426'
+  verdict: pass
+- id: base-cost
+  base: L0
+  variant: L0
+  area: performance
+  measure: cpu_s
+  expect: value-band
+  source: 2.27 simulated days with 1,200 s of radio at 300 veh/h; fast-forward makes the backend days
+    cheap (D2)
+  band:
+  - 30
+  - 900
+  measured: '130.6'
+  verdict: pass
+- id: base-rerun
+  base: L0
+  variant: L0b
+  area: architecture
+  measure: reports_at_ma
+  expect: same
+  source: 'the same scenario and seed replay the same run (D2/DET determinism): L0b is L0 again, rerun
+    for its metric samples'
+  measured: 897 -> 897
+  verdict: pass
+- id: base-rerun-flows
+  base: L0
+  variant: L0b
+  area: architecture
+  measure: seed_requests
+  expect: same
+  source: the same seed issues the same certificates through the same flows
+  measured: 4 -> 4
+  verdict: pass
+- id: att-attackers
+  base: L0
+  variant: ATT20
+  area: metrics
+  measure: attackers
+  expect: band
+  source: fraction 0.05 -> 0.20 of the vehicles seen
+  band:
+  - 2.5
+  - 6.0
+  measured: 5 -> 20
+  verdict: pass
+- id: att-reports
+  base: L0
+  variant: ATT20
+  area: metrics
+  measure: reports_at_ma
+  expect: up
+  source: more liars, more detector verdicts, more reports (CAMP MBR)
+  measured: 897 -> 3140
+  verdict: pass
+- id: att-cases
+  base: L0
+  variant: ATT20
+  area: architecture
+  measure: cases_opened
+  expect: up
+  source: more reported devices, more MA cases
+  measured: 2 -> 7
+  verdict: pass
+- id: att-seeds
+  base: L0
+  variant: ATT20
+  area: architecture
+  measure: seed_requests
+  expect: up
+  source: every case releases two LA seeds
+  measured: 4 -> 12
+  verdict: pass
+- id: att-honest
+  base: ATT20
+  variant: ATT20
+  area: metrics
+  measure: revoked_honest
+  expect: zero
+  source: more attackers must not make the MA revoke honest vehicles
+  measured: '0'
+  verdict: pass
+- id: att-aca-blind
+  base: ATT20
+  variant: ATT20
+  area: architecture
+  measure: aca_leaks
+  expect: zero
+  source: 'the RA strips the enrolment identity before the ACA (1609.2.1 §4.1.3; RAPRE ACA blindness):
+    no ACA-bound PDU carries an enrolment HashedId8'
+  measured: '0'
+  verdict: open
+  note: '0 of 4,603 ACA-bound PDUs carry an enrolment HashedId8, but the positive control (att-aca-control)
+    found none in RA-bound PDUs either: the requests carry the whole enrolment certificate, not its digest,
+    so this byte search cannot fail as written. Needs a search for the enrolment certificates'' bytes
+    (from the EcaEeCertResponse flows); RAPRE''s type-level ACA-blindness test stands meanwhile'
+- id: att-aca-control
+  base: ATT20
+  variant: ATT20
+  area: architecture
+  measure: aca_control
+  expect: positive
+  source: 'positive control for att-aca-blind: RA-bound PDUs do carry the enrolment id, so the search
+    can find one'
+  measured: '0'
+  verdict: open
+  note: '0: see att-aca-blind'
+- id: att-spread
+  base: ATT20
+  variant: ATT20
+  area: architecture
+  measure: decision_spread_h
+  expect: value-band
+  source: with concurrent review, every attacker corroborated in one shuffle release is decided within
+    one review period
+  band:
+  - 0.0
+  - 8.5
+  measured: '16'
+  verdict: open
+  note: 'serial cases: see base-concurrent-cases'
+- id: ma-auto-decision
+  base: L0
+  variant: MAAUTO
+  area: metrics
+  measure: stage_decision_h
+  expect: band
+  source: 'automatic MA: decision at the shuffle release (23.9 h) instead of +8 h (31.9 h): ratio 0.75'
+  band:
+  - 0.7
+  - 0.78
+  measured: 31.89 -> 23.89
+  verdict: pass
+- id: ma-auto-latency
+  base: L0
+  variant: MAAUTO
+  area: metrics
+  measure: revocation_latency_h
+  expect: band
+  source: 'the shuffle releases the reports Wed 04:43 ET; decided at once the entry makes the Wed 10:00
+    ET slot, decided 8 h later it waits for Thu 10:00 ET: 53 h -> ~29 h, so the 8 h review costs a full
+    day'
+  band:
+  - 0.5
+  - 0.6
+  measured: 53.02 -> 29.02
+  verdict: pass
+- id: ma-auto-honest
+  base: MAAUTO
+  variant: MAAUTO
+  area: metrics
+  measure: revoked_honest
+  expect: zero
+  source: the automatic MA acts on the same corroboration rule
+  measured: '0'
+  verdict: pass
+- id: c40-certs
+  base: L0
+  variant: C40
+  area: metrics
+  measure: certs_topped_up
+  expect: band
+  source: 'a batch is certs_per_period x weeks: 40 instead of 20 doubles the certificates issued per top-up
+    ([CAMP122] Table 67)'
+  band:
+  - 1.9
+  - 2.1
+  measured: 280 -> 560
+  verdict: pass
+- id: c40-aca
+  base: L0b
+  variant: C40
+  area: architecture
+  measure: ra_aca_requests
+  expect: band
+  source: one RaAcaCertRequest per certificate (B3a), preload and top-ups alike
+  band:
+  - 1.8
+  - 2.2
+  measured: 4603 -> 9203
+  verdict: pass
+- id: c40-topups
+  base: L0
+  variant: C40
+  area: architecture
+  measure: topups_completed
+  expect: same
+  source: the number of top-ups is set by the rollover and who is on the road, not by the batch size
+  measured: 14 -> 14
+  verdict: pass
+- id: c40-changes
+  base: L0
+  variant: C40
+  area: metrics
+  measure: pseudonym_changes
+  expect: same
+  source: the time strategy changes every 300 s whatever the pool holds
+  measured: 111 -> 111
+  verdict: pass
+- id: c40-cost
+  base: L0
+  variant: C40
+  area: performance
+  measure: cpu_s
+  expect: band
+  source: issuance is modelled crypto; twice the certificates add backend work, not radio work
+  band:
+  - 0.7
+  - 1.6
+  measured: 130.6 -> 148.8
+  verdict: pass
+- id: aall-share
+  base: L0b
+  variant: AALL
+  area: metrics
+  measure: full_cert_share
+  expect: band
+  source: a certificate every 1,000 ms at 10 Hz is 1 frame in 10; every frame is 10x (IEEE 1609.2 6.3.24,
+    SAE J2945/1 6.1.2)
+  band:
+  - 5.0
+  - 12.0
+  measured: not run (run-lock contention)
+  verdict: open
+- id: aall-p2pcd
+  base: L0b
+  variant: AALL
+  area: metrics
+  measure: p2pcd_requests
+  expect: down
+  source: no digest-signed frame from an unknown signer, so nothing to ask for (IEEE 1609.2 8.4)
+  measured: not run (run-lock contention)
+  verdict: open
+- id: aall-air
+  base: L0
+  variant: AALL
+  area: metrics
+  measure: air_bytes_security
+  expect: up
+  source: an 80 B certificate instead of an 8 B digest on 9 frames in 10 (CAMP Table 3 sizes, F2)
+  measured: not run (run-lock contention)
+  verdict: open
+- id: aall-cbr
+  base: L0b
+  variant: AALL
+  area: metrics
+  measure: cbr
+  expect: up
+  source: more octets per frame at the same rate is more airtime (ETSI TS 102 687)
+  measured: not run (run-lock contention)
+  verdict: open
+- id: aall-backend
+  base: L0
+  variant: AALL
+  area: architecture
+  measure: topups_completed
+  expect: same
+  source: 'the attach policy is a radio choice: no backend flow changes'
+  measured: not run (run-lock contention)
+  verdict: open
+- id: f2x-devices
+  base: L0
+  variant: F2X
+  area: metrics
+  measure: devices_a
+  expect: band
+  source: 300 -> 600 veh/h doubles the devices the providers certify
+  band:
+  - 1.6
+  - 2.4
+  measured: not run (run-lock contention)
+  verdict: open
+- id: f2x-topups
+  base: L0
+  variant: F2X
+  area: architecture
+  measure: topups_completed
+  expect: band
+  source: 'CAMP sizing is linear in the fleet: top-up requests per RA scale with the devices on the road
+    at the rollover (F2: 0.5 req/s per 17 M vehicles a year)'
+  band:
+  - 1.4
+  - 2.8
+  measured: not run (run-lock contention)
+  verdict: open
+- id: f2x-crl
+  base: L0
+  variant: F2X
+  area: architecture
+  measure: crls_installed
+  expect: up
+  source: more vehicles install the CRL (broadcast and fetch)
+  measured: not run (run-lock contention)
+  verdict: open
+- id: f2x-cost
+  base: L0
+  variant: F2X
+  area: performance
+  measure: cpu_s
+  expect: band
+  source: 'radio reception attempts grow with the square of the vehicles in range (05-scale §3: 4x vehicles,
+    9x wall); the backend days grow linearly'
+  band:
+  - 1.2
+  - 5.0
+  measured: not run (run-lock contention)
+  verdict: open
+- id: p90-split
+  base: P90
+  variant: P90
+  area: metrics
+  measure: share_a
+  expect: value-band
+  source: fleet_share 0.9 / 0.1
+  band:
+  - 0.82
+  - 0.97
+  measured: not run (run-lock contention)
+  verdict: open
+- id: p90-cross
+  base: L0
+  variant: P90
+  area: architecture
+  measure: cross_share
+  expect: down
+  source: cross-provider verifications fall from 2p(1-p) = 0.5 to 0.18
+  measured: not run (run-lock contention)
+  verdict: open
+- id: p90-shared
+  base: L0
+  variant: P90
+  area: architecture
+  measure: reports_shared
+  expect: down
+  source: fewer reports name the other provider's certificates
+  measured: not run (run-lock contention)
+  verdict: open
+- id: camp-shared
+  base: CAMP
+  variant: CAMP
+  area: architecture
+  measure: reports_shared
+  expect: zero
+  source: 'camp-reference is one SCMS with a central MA: no MA-to-MA sharing (D1)'
+  measured: not run (run-lock contention)
+  verdict: open
+- id: camp-split
+  base: CAMP
+  variant: CAMP
+  area: metrics
+  measure: share_a
+  expect: eq
+  source: every device on provider-a
+  value: 1.0
+  measured: not run (run-lock contention)
+  verdict: open
+- id: pen0r0-uploads
+  base: PEN0R0
+  variant: PEN0R0
+  area: metrics
+  measure: reports_uploaded_cellular
+  expect: zero
+  source: 'penetration 0: no vehicle has a Uu link (backend.rs assign)'
+  measured: not run (run-lock contention)
+  verdict: open
+- id: pen0r0-relay
+  base: PEN0R0
+  variant: PEN0R0
+  area: metrics
+  measure: reports_uploaded_relay
+  expect: zero
+  source: no roadside unit to relay through
+  measured: not run (run-lock contention)
+  verdict: open
+- id: pen0r0-revocations
+  base: L0
+  variant: PEN0R0
+  area: architecture
+  measure: cases_opened
+  expect: down
+  source: 'no report reaches an MA, so no case opens: the SCMS is blind without a backhaul path (CAMP:
+    reports go up over the RA connection)'
+  measured: not run (run-lock contention)
+  verdict: open
+- id: pen0r0-topups
+  base: L0
+  variant: PEN0R0
+  area: architecture
+  measure: topups_completed
+  expect: down
+  source: 'no path to the RA at the rollover: no top-up (the Wyoming starvation case, F2)'
+  measured: not run (run-lock contention)
+  verdict: open
+- id: slow-verify
+  base: L0b
+  variant: SLOW
+  area: metrics
+  measure: verify_cost
+  expect: up
+  source: a software verify on an automotive SoC is milliseconds against about 0.2 ms on a V2X HSM (06-node-models;
+    Hsu et al., VNC 2013)
+  measured: not run (run-lock contention)
+  verdict: open
+- id: pqh-cert
+  base: SLOW
+  variant: PQH
+  area: metrics
+  measure: air_bytes_security
+  expect: up
+  source: a hybrid carries both signatures, 64 + 666 octets, and the Falcon key in the certificate (Bindel
+    et al. 2017; Falcon spec 1.2 Table 3.3)
+  measured: not run (run-lock contention)
+  verdict: open
+- id: pqh-cbr
+  base: SLOW
+  variant: PQH
+  area: metrics
+  measure: cbr
+  expect: up
+  source: more octets per frame at the same rate is more airtime
+  measured: not run (run-lock contention)
+  verdict: open
+- id: p60-changes
+  base: L0
+  variant: P60
+  area: metrics
+  measure: pseudonym_changes
+  expect: band
+  source: a 60 s period changes five times as often as 300 s (ETSI TR 103 415 4.2)
+  band:
+  - 2.5
+  - 6.0
+  measured: not run (run-lock contention)
+  verdict: open
+- id: p60-p2pcd
+  base: L0b
+  variant: P60
+  area: metrics
+  measure: p2pcd_requests
+  expect: up
+  source: each change makes the sender unknown to its neighbours (IEEE 1609.2 8.4)
+  measured: not run (run-lock contention)
+  verdict: open
+- id: pen0-relay
+  base: L0
+  variant: PEN0
+  area: metrics
+  measure: reports_uploaded_relay
+  expect: up
+  source: without cellular, reports go up through the roadside unit (RSU relay, B4)
+  measured: not run (run-lock contention)
+  verdict: open
+- id: ondec-latency
+  base: L0
+  variant: ONDEC
+  area: metrics
+  measure: revocation_latency_h
+  expect: down
+  source: on-decision publication removes the 21 h wait for the next business-day slot
+  measured: not run (run-lock contention)
+  verdict: open
+- id: a450-share
+  base: L0b
+  variant: A450
+  area: metrics
+  measure: full_cert_share
+  expect: band
+  source: 450 ms instead of 1,000 ms at 10 Hz is every 5th frame instead of every 10th (SAE J2945/1 6.1.2)
+  band:
+  - 1.6
+  - 2.6
+  measured: not run (run-lock contention)
+  verdict: open
