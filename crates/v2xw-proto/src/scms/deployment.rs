@@ -464,8 +464,7 @@ impl Deployment {
             Preset::UsTestCtl2025 => us(["a", "b", "c", "d", "e", "f"]
                 .iter()
                 .map(|s| {
-                    let mut p =
-                        Provider::standard(&format!("provider-{s}"), 1, manual, 1.0 / 6.0);
+                    let mut p = Provider::standard(&format!("provider-{s}"), 1, manual, 1.0 / 6.0);
                     p.on_ctl = *s != "f";
                     p
                 })

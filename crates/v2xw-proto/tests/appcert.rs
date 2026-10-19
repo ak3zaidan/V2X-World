@@ -665,5 +665,8 @@ fn the_published_wyoming_distress_ssp_encodes_as_camp_prints_it() {
     assert_eq!(got, camp);
     // The default application profile carries no SSP: the CV-pilot column prints none
     // for SPaT/MAP (nor for BSM or SRM).
-    assert_eq!(AppCertKind::RsuApplication.psids(), &[appcert::SPAT_MAP_PSID]);
+    assert_eq!(
+        AppCertKind::RsuApplication.psids(),
+        &[appcert::SPAT_MAP_PSID]
+    );
 }

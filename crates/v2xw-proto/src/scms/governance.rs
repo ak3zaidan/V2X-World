@@ -1948,13 +1948,7 @@ impl Governance {
         let label = slot.label.clone();
         self.counters.roots_removed += 1;
         let signers = self.approved_signers();
-        Some(self.decide(
-            CtlChangeKind::RemoveRoot,
-            decided_at,
-            &signers,
-            None,
-            label,
-        ))
+        Some(self.decide(CtlChangeKind::RemoveRoot, decided_at, &signers, None, label))
     }
 
     /// Home-provider root rollover (key changeover, Provider Req. §3.5.4): a new root key

@@ -713,7 +713,10 @@ fn a_relayed_report_is_not_checked_as_a_beacon() {
     let p = &report.phase2;
     println!(
         "{} relayed, {} not checked, {} checked, verdicts {:?}",
-        p.reports_uploaded_relay, p.messages_not_checked, p.messages_checked, p.verdicts_by_detector
+        p.reports_uploaded_relay,
+        p.messages_not_checked,
+        p.messages_checked,
+        p.verdicts_by_detector
     );
     assert!(p.reports_uploaded_relay > 0, "no report went on the air");
     assert!(

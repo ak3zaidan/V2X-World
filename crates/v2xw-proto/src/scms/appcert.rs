@@ -103,9 +103,11 @@ pub const DISTRESS_NOTIFICATION_SSP: [u8; 5] = [0x00, 0x80, 0x01, 0xF0, 0x40];
 pub fn distress_notification_psid_ssp() -> PsidSsp {
     PsidSsp::new(
         Psid(Integer::from(DISTRESS_NOTIFICATION_PSID)),
-        Some(v2xw_msg::sec_types::ieee1609_dot2_base_types::ServiceSpecificPermissions::opaque(
-            DISTRESS_NOTIFICATION_SSP.to_vec().into(),
-        )),
+        Some(
+            v2xw_msg::sec_types::ieee1609_dot2_base_types::ServiceSpecificPermissions::opaque(
+                DISTRESS_NOTIFICATION_SSP.to_vec().into(),
+            ),
+        ),
     )
 }
 

@@ -69,7 +69,13 @@ const MESSAGE_SETS: [&str; 10] = [
 const REAL_SIGNATURES: [&str; 1] = ["ecdsa-p256"];
 /// The pseudonym-change strategies 05-protocols.md §2.6 names.
 const STRATEGIES: [&str; 7] = [
-    "time", "distance", "j2945-1", "nyc-pilot", "c2c-cc", "mix-zone", "silent",
+    "time",
+    "distance",
+    "j2945-1",
+    "nyc-pilot",
+    "c2c-cc",
+    "mix-zone",
+    "silent",
 ];
 
 /// The on-board-unit hardware profiles that ship with `v2xw-node`.

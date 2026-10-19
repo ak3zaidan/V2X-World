@@ -5173,8 +5173,7 @@ impl Engine {
                 | v2xw_msg::MsgType::Cam
                 | v2xw_msg::MsgType::Psm
                 | v2xw_msg::MsgType::Vam
-        )
-            && let Some(p) = self.phase2.as_mut()
+        ) && let Some(p) = self.phase2.as_mut()
             && p.detection_on()
             && let (Some(cred), Some(b)) = (credential.as_ref(), belief)
         {

@@ -529,7 +529,10 @@ fn a_pseudonym_change_restarts_the_psm_msg_count() {
             // `msg_count` is the count the next PSM carries; counting on would make it
             // the pre-step value plus the PSMs this step sent.
             let on = (u32::from(ahead) + sent as u32) % 128;
-            counted_on = Some((u8::try_from(on).unwrap_or(0), d.schedule().psm().msg_count()));
+            counted_on = Some((
+                u8::try_from(on).unwrap_or(0),
+                d.schedule().psm().msg_count(),
+            ));
             break;
         }
         if sent > 0 {

@@ -463,7 +463,10 @@ fn under_the_scms_a_handset_signs_psms_that_every_receiver_accepts() {
                     assert_eq!(perms, ["38", "39"], "a handset's certificate");
                 } else {
                     vehicles += 1;
-                    assert!(!perms.contains(&psid_vru), "a vehicle may sign PSMs: {perms:?}");
+                    assert!(
+                        !perms.contains(&psid_vru),
+                        "a vehicle may sign PSMs: {perms:?}"
+                    );
                 }
             }
         }
