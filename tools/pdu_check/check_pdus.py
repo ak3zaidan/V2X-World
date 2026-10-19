@@ -42,6 +42,14 @@ re-derived from 03 §3.2–§5 and [SMP] §6.3.1, not from the Rust):
   names `<requestHash, 16 upper-case hex>.zip` of a successor request.
 """
 
+# Validation re-derivation (docs/design/scms-real/validation/crypto-formats.md, 2026-10-18):
+# every rule above was re-derived from the ASN.1 constraints and comments
+# (tools/oracle/asn1/ieee1609.2*-2022) and 02/03 without reading the Rust, and confirmed;
+# the rules tagged "CF-RULE" below were missing and are added: the declared hash
+# algorithms (SignedData.hashId, SignedCertificateRequest.hashAlgorithmId), every
+# Uint8(2) version field, the EeRaCertRequest / RaAcaCertRequest tbsCert permission
+# constraints, the EcaEeCertResponse ecaCertChain, and AcaEeCertResponse.privateKeyInfo.
+
 import hashlib
 import json
 import os
@@ -107,6 +115,24 @@ class Pki:
         return certs.verification_key(c, self.by_id8[c['issuer'][1]])
 
 
+HASH_ID = {'P-256': 'sha256', 'P-384': 'sha384'}
+
+
+def v2(pdu, what):
+    """CF-RULE: every 1609.2.1 structure here is `version Uint8 (2)` ([ASN-2.1]). The oracle
+    decodes with check_constraints=True, which also enforces it; the rule is kept explicit so
+    that a codec change cannot silently drop it."""
+    need(pdu.get('version') == 2, f'{what} version 2')
+
+
+def tbs_request_permissions(t, what):
+    """CF-RULE: EeRaCertRequest / RaAcaCertRequest tbsCert (WITH COMPONENTS {appPermissions
+    PRESENT, certIssuePermissions ABSENT, certRequestPermissions ABSENT}) ([ASN-2.1])."""
+    need('appPermissions' in t, f'{what}: appPermissions present')
+    need('certIssuePermissions' not in t and 'certRequestPermissions' not in t,
+         f'{what}: certIssuePermissions and certRequestPermissions absent')
+
+
 def verify_sig(C, Q, tbs_bytes, signer_input, sig):
     h = certs.HASH_OF_CURVE[C.name]
     r, s = certs.sig_rs(sig)
@@ -124,6 +150,7 @@ def open_signed(data, pki):
     need(sd['signer'][0] == 'certificate' and len(sd['signer'][1]) == 1, 'SignerSingleCert')
     signer = sd['signer'][1][0]
     C, Q = pki.key(signer)
+    need(sd['hashId'] == HASH_ID[C.name], "CF-RULE: SignedData.hashId is the signer key's hash")
     verify_sig(C, Q, coer.encode('ToBeSignedData', sd['tbsData']), certs.encode_canonical(signer), sd['signature'])
     inner = sd['tbsData']['payload']['data']
     need(inner['content'][0] == 'unsecuredData', 'payload is unsecuredData')
@@ -183,11 +210,13 @@ def open_cert_request(data, pki, canonical=None):
             need(vki[0] == 'verificationKey', 'self-signed request carries a verificationKey')
             C = certs.CURVE_OF_KEY[vki[1][0]]
             Q = certs.point_from(C, vki[1][1])
+        need(scr['hashAlgorithmId'] == HASH_ID[C.name], "CF-RULE: hashAlgorithmId is the key's hash")
         verify_sig(C, Q, tbs, b'', scr['signature'])
         return scr['tbsRequest']['content'], None, cid
     need(scr['signer'][0] == 'certificate' and len(scr['signer'][1]) == 1, 'SignerSingleCert')
     signer = scr['signer'][1][0]
     C, Q = pki.key(signer)
+    need(scr['hashAlgorithmId'] == HASH_ID[C.name], "CF-RULE: hashAlgorithmId is the signer key's hash")
     verify_sig(C, Q, tbs, certs.encode_canonical(signer), scr['signature'])
     return scr['tbsRequest']['content'], signer, None
 
@@ -269,6 +298,7 @@ def check(kind, data, pki, m, state):
     if kind == 'EeEcaCertRequestSpdu':
         (iface, (c, req)), signer, cid = open_cert_request(data, pki, canonical)
         need((iface, c) == ('eca-ee', 'eeEcaCertRequest') and signer is None, 'self-signed eeEcaCertRequest')
+        v2(req, 'EeEcaCertRequest')
         need(req['type'] == 'implicit', 'implicit enrolment requested')
         check_us_enrolment_tbs(req['tbsCert'])
         requests[hash8(data)] = (req['tbsCert'], cid)
@@ -278,7 +308,19 @@ def check(kind, data, pki, m, state):
         need(certs.hashed_id8(signer) == certs.hashed_id8(pki.by_name['eca.provider-a']), 'signed by the ECA')
         iface, (c, resp) = scms_pdu(payload)
         need((iface, c) == ('eca-ee', 'ecaEeCertResponse'), 'ecaEeCertResponse')
+        v2(resp, 'EcaEeCertResponse')
         need(resp['requestHash'] in requests, 'requestHash of a request the ECA received')
+        # CF-RULE [ASN-2.1] EcaEeCertResponse: "ecaCertChain contains the ECA's currently
+        # valid certificate and the certificate chain, up to and including the root CA".
+        chain = resp['ecaCertChain']
+        need(len(chain) >= 2 and certs.hashed_id8(chain[0]) == certs.hashed_id8(signer),
+             'ecaCertChain starts with the ECA certificate that signed the response')
+        for sub, iss in zip(chain, chain[1:]):
+            need(sub['issuer'] in (('sha256AndDigest', certs.hashed_id8(iss)),
+                                   ('sha384AndDigest', certs.hashed_id8(iss))),
+                 'ecaCertChain: each certificate is issued by the next')
+        need(chain[-1]['issuer'][0] == 'self' and certs.hashed_id8(chain[-1]) in pki.by_id8,
+             'ecaCertChain ends with the emitted root')
         need(len(resp.get('privateKeyInfo', b'')) == 32, 'privateKeyInfo')
         enrol = resp['certificate']
         need(enrol['type'] == 'implicit', 'implicit enrolment certificate')
@@ -297,6 +339,9 @@ def check(kind, data, pki, m, state):
         need((iface, c) == ('ee-ra', 'eeRaCertRequest'), 'eeRaCertRequest')
         need(signer is not None and certs.hashed_id8(signer) in issued,
              'signed by an enrolment certificate the ECA issued')
+        v2(req, 'EeRaCertRequest')
+        tbs_request_permissions(req['tbsCert'], 'EeRaCertRequest')
+        need(req['tbsCert']['verifyKeyIndicator'][0] == 'verificationKey', 'EeRaCertRequest: verificationKey')
         need(req['additionalParams'][0] == 'original', 'original butterfly')
         need(req['tbsCert']['cracaId'] == b'\x00\x00\x00' and req['tbsCert']['crlSeries'] == 0, 'cracaId/crlSeries')
         state.setdefault('requests', []).append(data)
@@ -305,6 +350,7 @@ def check(kind, data, pki, m, state):
         need(certs.hashed_id8(signer) == certs.hashed_id8(pki.by_name['ra.provider-a']), 'signed by the RA')
         iface, (c, ack) = scms_pdu(payload)
         need((iface, c) == ('ee-ra', 'raEeCertAck'), 'raEeCertAck')
+        v2(ack, 'RaEeCertAck')
         need(ack['requestHash'] in [hash8(r) for r in state['requests']], 'requestHash of a request as sent')
         need('firstI' in ack, 'firstI present for butterfly')
     elif kind == 'EeRaSuccessorEnrollmentCertRequestSpdu':
@@ -318,6 +364,7 @@ def check(kind, data, pki, m, state):
         (i2, (c2, req)), s2, cid = open_cert_request(inner_bytes, pki, canonical)
         need((i2, c2) == ('eca-ee', 'eeEcaCertRequest') and s2 is None and cid is None,
              'inner request self-signed by the new key')
+        v2(req, 'inner EeEcaCertRequest')
         t, cur = req['tbsCert'], signer['toBeSigned']
         check_us_enrolment_tbs(t)
         need(validity(t)[0] == validity(cur)[1], 'successor starts when the current certificate ends')
@@ -330,6 +377,7 @@ def check(kind, data, pki, m, state):
         need(certs.hashed_id8(signer) == certs.hashed_id8(pki.by_name['ra.provider-a']), 'signed by the RA')
         iface, (c, info) = scms_pdu(payload)
         need((iface, c) == ('ee-ra', 'raEeCertInfo') and 'acpcTreeId' not in info, 'raEeCertInfo, no ACPC')
+        v2(info, 'RaEeCertInfo')
         need(info['requestHash'] in [hash8(r) for r in state.get('successors', [])],
              'requestHash of a successor request as sent')
         need(info['nextDlTime'] > info['generationTime'], 'nextDlTime after generation')
@@ -340,11 +388,13 @@ def check(kind, data, pki, m, state):
         need((iface, c) == ('aca-ra', 'raAcaCertRequest'), 'raAcaCertRequest')
         need(signer is not None and certs.hashed_id8(signer) == certs.hashed_id8(pki.by_name['ra.provider-a']),
              'signed by the RA')
+        v2(req, 'RaAcaCertRequest')
         need(req['type'] == 'implicit', 'implicit')
         need(req['flags'][0] == b'\x00', 'flags clear (original butterfly, not cubk)')
         need('certEncKey' in req and 'linkageInfo' in req, 'private response requested with linkageInfo')
         tbs = req['tbsCert']
         need(tbs['cracaId'] == b'\x00\x00\x00' and tbs['crlSeries'] == 0, 'cracaId 000000 / crlSeries 0')
+        tbs_request_permissions(tbs, 'RaAcaCertRequest')
         need(tbs['id'][0] == 'linkageData', 'id is linkageData')
         # 1609.2.1-2022 Ieee1609Dot2Dot1AcaRaInterface, RaAcaCertRequest @param tbsCert:
         # "If type is implicit, the request is valid only if tbsCert.verifyKeyIndicator is
@@ -361,6 +411,7 @@ def check(kind, data, pki, m, state):
         need(certs.hashed_id8(signer) == certs.hashed_id8(pki.by_name['aca.provider-a']), 'signed by the ACA')
         iface, (c, resp) = scms_pdu(payload)
         need((iface, c) == ('aca-ra', 'acaRaCertResponse'), 'acaRaCertResponse')
+        v2(resp, 'AcaRaCertResponse')
         req = state.get('aca_req', {}).get(resp['requestHash'])
         need(req is not None, 'requestHash names a RaAcaCertRequestSpdu as sent')
         alt, inner = resp['acaResponse']
@@ -401,6 +452,9 @@ def check(kind, data, pki, m, state):
         need((iface, c) == ('aca-ee', 'acaEeCertResponse') and resp['version'] == 2, 'acaEeCertResponse v2')
         cert = resp['certificate']
         need(cert['type'] == 'implicit', 'implicit pseudonym certificate')
+        # CF-RULE [ASN-2.1] AcaEeCertResponse: privateKeyInfo "Present and contain the private
+        # key reconstruction value, if the field certificate.type is implicit".
+        need(len(resp.get('privateKeyInfo', b'')) == 32, 'privateKeyInfo present (implicit)')
         need(cert['issuer'] == ('sha256AndDigest', certs.hashed_id8(signer)),
              'same-ACA rule: the outer signer issued the certificate')
         tbs = cert['toBeSigned']

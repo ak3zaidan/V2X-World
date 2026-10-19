@@ -65,6 +65,7 @@ def open_signed_any(data, pki):
     need(sd['signer'][0] == 'certificate' and len(sd['signer'][1]) == 1, 'SignerSingleCert')
     signer = sd['signer'][1][0]
     Cs, Q = pki.key(signer)
+    need(sd['hashId'] == cp.HASH_ID[Cs.name], "CF-RULE: SignedData.hashId is the signer key's hash")
     cp.verify_sig(Cs, Q, coer.encode('ToBeSignedData', sd['tbsData']), certs.encode_canonical(signer),
                   sd['signature'])
     data_ = sd['tbsData']['payload']['data']
@@ -111,7 +112,9 @@ def check(kind, data, pki, m, st):
         need(signer is not None and signer['type'] == 'implicit', 'signed by an implicit enrolment certificate')
         need(signer['issuer'] == ('sha256AndDigest', certs.hashed_id8(pki.by_name['eca.provider-a'])), 'issued by the ECA')
         need(req['type'] == 'implicit', 'implicit requested')
+        cp.v2(req, 'EeRaCertRequest')
         t = req['tbsCert']
+        cp.tbs_request_permissions(t, 'EeRaCertRequest')
         need(t['cracaId'] == b'\x00\x00\x00' and t['crlSeries'] == 0, 'cracaId 000000, crlSeries 0')
         need(t['id'][0] != 'linkageData', 'id is not linkageData')
         vk = t['verifyKeyIndicator']
@@ -124,6 +127,7 @@ def check(kind, data, pki, m, st):
         need(certs.hashed_id8(signer) == certs.hashed_id8(ra), 'signed by the RA')
         iface, (c, ack) = cp.scms_pdu(payload)
         need((iface, c) == ('ee-ra', 'raEeCertAck'), 'raEeCertAck')
+        cp.v2(ack, 'RaEeCertAck')
         r = st['requests'].get(ack['requestHash'])
         need(r is not None, 'requestHash of a request sent')
         need(('firstI' in ack) == (r['req']['additionalParams'][0] == 'original'), 'firstI iff butterfly')
@@ -132,10 +136,12 @@ def check(kind, data, pki, m, st):
         need((iface, c) == ('aca-ra', 'raAcaCertRequest'), 'raAcaCertRequest')
         need(signer is not None and certs.hashed_id8(signer) == certs.hashed_id8(ra), 'SignerSingleCert = RA')
         need(req['type'] == 'implicit', 'implicit')
+        cp.v2(req, 'RaAcaCertRequest')
         need(req['flags'][0] == b'\x00' and req['flags'][1] == 8, 'flags clear')
         need('linkageInfo' not in req and 'certEncKey' in req, 'no linkageInfo, certEncKey present')
         t = req['tbsCert']
         need(t['cracaId'] == b'\x00\x00\x00' and t['crlSeries'] == 0, 'cracaId/crlSeries 0')
+        cp.tbs_request_permissions(t, 'RaAcaCertRequest')
         need(t['verifyKeyIndicator'][0] == 'reconstructionValue', 'reconstructionValue')
         R = certs.point_from(C, t['verifyKeyIndicator'][1])
         J = pek_point(req['certEncKey'])
@@ -159,6 +165,7 @@ def check(kind, data, pki, m, st):
         need(certs.hashed_id8(signer) == certs.hashed_id8(aca), 'signed by the ACA')
         iface, (c, resp) = cp.scms_pdu(payload)
         need((iface, c) == ('aca-ra', 'acaRaCertResponse'), 'acaRaCertResponse')
+        cp.v2(resp, 'AcaRaCertResponse')
         need(resp['requestHash'] in st['aca_requests'], 'requestHash of an RaAcaCertRequestSpdu')
         need(resp['acaResponse'][0] == 'private', 'private response')
         st['private_inner'].append(coer.encode('Ieee1609Dot2Data', resp['acaResponse'][1]))
@@ -180,6 +187,8 @@ def check(kind, data, pki, m, st):
         need(u['content'][0] == 'unsecuredData', 'inner unsecuredData')
         iface, (c, r) = cp.scms_pdu(u['content'][1])
         need((iface, c) == ('aca-ee', 'acaEeCertResponse'), 'acaEeCertResponse')
+        cp.v2(r, 'AcaEeCertResponse')
+        need(len(r.get('privateKeyInfo', b'')) == 32, 'CF-RULE: privateKeyInfo present (implicit)')
         cert = r['certificate']
         tb = cert['toBeSigned']
         need(cert['type'] == 'implicit', 'implicit')
