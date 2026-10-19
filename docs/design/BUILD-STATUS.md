@@ -4167,6 +4167,15 @@ Merged `--no-ff` onto `6d2a240` in order D2 (`deec727`, merge `b280dfd`), AIR (`
   - MULTI: per-provider `ma_mode`/`crl_publication`; MBMS carries only the home CRL; the Backend view and `scms()` show the home run only; peer re-certification on a root rollover; MA-to-MA format modelled.
 - **Cleanup:** the worktrees and branches `worktree-wf_ee21888a-ee9-{1,2,3}` were removed, and so was `target/agents`.
 
+## 2026-10-18: BENCH and REDPKI merge (benchmark scenarios, PKI red-team)
+
+Merged `--no-ff` onto main: BENCH (merge `e3fb7b8c`), then REDPKI (merge `a0f716a4`). The merge agent was stopped before its final steps, which were finished afterwards. Neither branch touches engine or library code. They add `crates/v2xw-proto/tests/redteam_pki.rs`, `docs/benchmark/scms-real-benchmark.md`, `docs/redteam/pki-privacy.md` and four `scenarios/real-world/*-scms-benchmark*.yaml` files. `cargo fmt --all` reformatted `redteam_pki.rs` (`0975e879`).
+
+- **Checks:** `cargo check --workspace --tests` passes, with only the known unused-import warnings. All 11 v2xw-engine SCMS suites pass, 47 tests in all: `calendar` (7), `conformance` (2, 458 s), `credential_handoff` (3), `phase2` (12, 1 ignored, 422 s), `pki_view` (8), `rsu_certs` (2), `scms_constants` (4), `scms_deployment` (2), `scms_providers` (2), `scms_scale` (1, 1 ignored) and `scms_wiring` (4). v2xw-sec, -msg, -proto and -node pass with `--no-fail-fast` (955 tests, 0 failed), and that includes `redteam_pki` (5).
+- **Digests:** none were re-blessed. No pinned digest moved, which is what the merged changes predict, since they change no engine code.
+- **Release:** `cargo build --release -j 2 -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots, `/agent/status` and `/rpc/schema` both return 200, and the server was then stopped.
+- **Still open:** the PSM PSID defect that BENCH found is documented but not fixed. `wip/redteam-v2x` is left unmerged.
+
 ## 2026-10-17: SCMS realism wave 7 integration (WP-D1, C3)
 
 Merged `--no-ff` onto `0ef491e` in order D1 (`504741b`, merge `bbab5a5`), then C3 (`1879679`, merge `bade343`). Both agents had committed their work, so no wip snapshot was needed. Git reported no conflicts, and nothing broke in the merge, so no fix commits were needed. `cargo fmt --all` made no changes.
