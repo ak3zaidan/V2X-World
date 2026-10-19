@@ -59,8 +59,12 @@
 - {id: L4-case-board-reports-in, run: base-new, metric: case.decision_s, expect: ge, value: 28000,
    source: "the case board's reports-in precedes the decision by the 8 h review (00 §3.2 Cases tab)"}
 # ---- Run cost ---------------------------------------------------------------------------
-- {id: C1-ff-ticks, run: base, metric: cost.backend_ticks, expect: le, value: 10000,
-   source: "D2 design: at most one backend stop a minute when nothing is due (~2,900 in 2 days)", status: open}
+- {id: C1-ff-ticks-before-fix, run: base, metric: cost.backend_ticks, expect: le, value: 10000,
+   source: "D2 design: at most one backend stop a minute when nothing is due (~2,900 in 2 days). Main d3039b53: FAILS, every published CRL version woke every step (R-FF)", status: open}
+- {id: C1-ff-ticks, run: base-new, metric: cost.backend_ticks, expect: le, value: 10000,
+   source: "D2 design, after the R-FF fix"}
+- {id: C1-ff-same-scms, run: base-new, vs: base, metric: p2.certs_topped_up, expect: ratio, band: [1, 1], source: "the R-FF fix removes wakes, not SCMS work"}
+- {id: C1-ff-same-enforcement, run: base-new, vs: base, metric: stage.enforced_s, expect: delta, band: [-60, 60], source: "enforcement still follows the CRL fetch"}
 - {id: C2-memory, run: base, metric: cost.peak_mb, expect: le, value: 2500, source: "run lock cap"}
 # ---- Variants: a change and what theory says it does ------------------------------------
 - {id: V1-cert60-topup-x3, run: cert60, vs: base, metric: p2.certs_topped_up, expect: ratio, band: [2.95, 3.05], source: "60 instead of 20 per week ([CVP-P2] item 21)"}
