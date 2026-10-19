@@ -1,6 +1,7 @@
 # SCMS runtime realism: what an operator would see
 
-Written 2026-10-18 on `wf_1faba59c-7f5-4`, based on main `d3039b53`. This package runs real
+Written 2026-10-18 on `wf_1faba59c-7f5-4`, based on main `d3039b53`; resumed 2026-10-19 (the
+owed runs, §6, and the new findings R-SERIAL, R-USFP, R-TRUSTLEAK, R-EVID). This package runs real
 simulations and compares each runtime number with the real US deployment:
 - request and download rates
 - sizes
@@ -72,8 +73,10 @@ python -I tools/realworld/runtime_realism.py check tools/realworld/runtime_expec
 | MA decision | shuffle + 8 h review (D3) | 115,183.7 s | PASS |
 | CRL publication | next business-day slot ([SM-PROV]) | 147,560.8 s (Wed 10:00 EDT) | PASS |
 | Enforcement | after the first fetch | 147,573.8 s | PASS |
-| Case board "reports in" | report arrival, 8 h before the decision | at the decision (base); fix proved by its unit test, base-new NOT RUN: the build lock was held by another agent's 35-min test at the 3 h stop (§6) | FIXED (R-CASE) |
-| Fast-forward backend stops | ≤ 1 a minute when idle (D2): ~2,900 in 2 days | **255,658** (base); fix committed UNVERIFIED, base-new NOT RUN: the build lock was held by another agent's 35-min test at the 3 h stop (§6) | OPEN (R-FF fix unverified) |
+| Case board "reports in" | report arrival, 8 h before the decision | at the decision (base); 28,800 s before the decision (base-new, L4) | FIXED (R-CASE) |
+| Case board "corroborated" | the case opening, 8 h before the decision (CV-pilot manual MA) | at the decision, review 0 s (base); review 28,800.001 s (base-new, L5) | FIXED (R-CORR) |
+| Cases run concurrently (gap row 27) | a case opens when its evidence is corroborated | the 3rd case waited 28,800 s behind the 2nd (base-new, L6) | OPEN (R-SERIAL) |
+| Fast-forward backend stops | ≤ 1 a minute when idle (D2): ~2,900 in 2 days | **255,658** (base); **4,290** (base-new), same top-ups (1,100) and enforcement instant (147,573.8 s); events 513,447 → 262,079 | FIXED (R-FF) |
 | Peak memory | < 2.5 GB cap | 154 MB | PASS |
 
 ## 3. Results: configuration changes (same seed, against `base`)
@@ -85,12 +88,14 @@ python -I tools/realworld/runtime_realism.py check tools/realworld/runtime_expec
 | `crl_publication: on-decision` | published at the decision; enforced ≈ 9 h earlier | 115,183.75 s; enforced −32,334 s; 3 CRL versions instead of 2; downloads 49→98 | PASS |
 | Both regions `us-west` | +16.7 ms per device–RA leg: haversine NYC–Ashburn 354.5 km is 2.77 ms, NYC–Boardman OR 3,691.7 km is 19.47 ms (2/3 c + 1 ms); counts unchanged | report arrival +16.70 ms; counts identical | PASS |
 | `ma_report_sharing: false` | 0 shared; revocations same or fewer | 0 shared; 3 attackers still revoked: every attacker was reported by its own provider's devices too | PASS |
-| provider-b `on_ctl: false` (rogue or test-CTL provider) | nothing B certifies verifies; nobody honest revoked | main: **panic in 5.7 s** ("the home provider has an approved root"); fix committed UNVERIFIED | OPEN (R-OFFCTL fix unverified) |
+| provider-b `on_ctl: false` (rogue or test-CTL provider) | nothing B certifies verifies; nobody honest revoked | main: **panic in 5.7 s** ("the home provider has an approved root"); branch: runs (66 s), 0 honest revoked, 2 attackers revoked, but **7** provider-b messages verified at provider-a receivers (V6) | FIXED (R-OFFCTL); OPEN (R-TRUSTLEAK) |
 | 2× vehicle demand | per-device requests 1; checks ×(n…n²); cost up | median 1; checks ×2.21; CPU ×1.52; 50 honest devices reported, 0 revoked | PASS |
-| `detect/us-sm-mbr` | checks every BSM (×5–12); 0 unmapped reports; ConstantPosition catches the 3 attackers; more honest false positives (1 m drift, no streak gate, 12 m GNSS outliers) | NOT RUN: the build lock was held by another agent's 35-min test at the 3 h stop (§6) (profile and its unit tests are in; the run is owed) | OPEN |
+| `detect/us-sm-mbr` | checks every BSM (×5–12); 0 unmapped reports; ConstantPosition catches the 3 attackers; more honest false positives (1 m drift, no streak gate, 12 m GNSS outliers) | checks ×5.72 (77,336); 0 unmapped; reports 7,885 (×25; 3,620 from RSUs); honest reported ×2 (36); **0 attackers and 4 honest revoked**; wall 180 s, 229 MB | V8 checks/mapped/FP PASS; catch FAIL → OPEN (R-SERIAL, R-USFP) |
 
 Run cost (wall / CPU s; backend ticks):
 - base: 61.6 / 64.3; 255,658
+- base-new (branch, opt-2 debug binary): 52.7 / 53.8; 4,290; peak 127 MB
+- us-profile: 179.7 / 101.9; 4,312; off-ctl: 66.2 / 52.6; 4,286
 - cert60: 87.1 / 90.5
 - ma-auto: 277.8 / 135.5; ticks and events identical to base. The doubled CPU is not
   explained by the run's own counts. The machine was shared with other agents' runs.
@@ -103,7 +108,7 @@ Run cost (wall / CPU s; backend ticks):
 
 ## 4. What was fixed, and what is open
 
-**Fixed** (R-SHARE and R-CASE: built, tested and fault-proved; R-OFFCTL and R-FF: committed in `UNVERIFIED` commit, not yet compiled or run, §6):
+**Fixed** (all built, tested, fault-proved and measured; R-OFFCTL and R-FF verified on the resume, R-CORR added then):
 - **R-SHARE.** `pki_view::component_ids` named only the run's own provider's components.
   - A report the other provider's MA shares was therefore recorded as sent by `ee/5` (that
     MA's node id).
@@ -124,7 +129,13 @@ Run cost (wall / CPU s; backend ticks):
     ~2,900.
   - Only versions still crossing the inter-provider link are wakes now. `visible_versions`
     already serves the ones that have arrived.
-  - **Not yet built or run.** Proof owed: base-new against base, and an engine fast test (§6).
+  - Measured: 255,658 → 4,290 backend stops (base-new), the same 1,100 top-up certificates
+    and the same enforcement instant. Engine test
+    `phase2::fast_forward_wake_tests::a_crl_version_wakes_the_fast_forward_only_until_it_has_crossed`.
+- **R-CORR.** The case board stamped `corroborated` at the decision. Under manual review
+  that hid the 8 h review between the case opening and the operator's go-ahead.
+  - `Case::opened` is stamped when the MA's pipeline opens the case; `corroborated` uses it.
+  - Measured: review 0 s (base) → 28,800.001 s (base-new, row L5).
 
 **Added: the strict US profile `detect/us-sm-mbr`** (`v2xw_threat::us_mbr`):
 - Subtypes and defaults are transcribed from the SCMS Manager PDF (fetched 2026-10-18, not
@@ -159,10 +170,48 @@ Run cost (wall / CPU s; backend ticks):
     to its own package.
 - **R-CRLFETCH.** Device CRL downloads (49 here) do not appear in `pki.flow`. The recorded
   topology lacks the EE→MA/CRL-store `download-crl` edge (03 §1 item 6).
-- **R-CORR.** `corroborated` is still stamped at the decision. Under manual review,
-  corroboration happens when the request enters `awaiting_review`, which is not timestamped.
-- **R-UNSEC.** 83 of 320 reports went the modelled path: "no active pseudonym certificate"
-  for the reporter. Not investigated. A candidate is reporters at the rollover instant.
+- **R-SERIAL (new, engine).** `Phase2::start_cases_of` opens one case per provider at a
+  time (`while !case_open()`), though the proto MA runs up to `max_open_cases` (1,000)
+  concurrently (gap row 27). Under the 8 h review each queued case waits 8 h per case
+  ahead of it.
+  - base-new: the 3rd case opened 28,800 s after its reports (row L6).
+  - us-profile: provider-a's attacker case opened 57,598 s late, behind two honest cases.
+    Its decision would fall at 172,805 s, after the 172,800 s horizon, so it never
+    revoked (V8).
+  - The fix is to loop until `request_revocation` refuses at the cap. A case's CRL entry
+    must then be the one matching its own `(i, lv)` (`matches_any_index`), not
+    `crlg.entries.last()`. Not done here: it changes case timing in every SCMS run, so the
+    regression digests (`phase2-path`, `scms_scale`) must be re-blessed with heavy runs.
+- **R-USFP (new).** Under `detect/us-sm-mbr` the MA revoked 4 honest vehicles, each on
+  RandomPosition evidence (1 m gpsDrift, no streak gate).
+  - The cause is GNSS outliers on honest senders (the Gauss-Markov model with 12 m jumps).
+  - This is the expected cost of the strict thresholds, not a code defect. An attack study
+    can use it directly: the profile alone lets an urban-canyon fleet be revoked.
+  - It is undecided whether a real OBU's fused position ever jumps > 1 m between BSMs
+    100 ms apart. A filtered-position model is owed before the rate is trusted.
+- **R-EVID (new).** Every recorded case evidence says `verified: false`, base included.
+  - The independent oracle agrees: `tools/pdu_check` decoded the 158 recorded opened
+    reports of base-new. Every certificate chains, every signer names the evidence
+    certificate, and all 158 fail on the BSM signature.
+  - The cause: the benchmark runs `crypto_mode: modeled`, so on-air BSM signatures are
+    not real ECDSA. The engine MA decides on the modelled reason codes, not this verdict,
+    so no decision is wrong.
+  - But the record reads as "the MA acted on unverified evidence". The verdict should be
+    labelled modelled in that mode, or the realism base should run `crypto_mode: real`.
+- **R-TRUSTLEAK (new, security).** With provider-b off the CTL, provider-a receivers
+  verified 7 provider-b messages (`verified_by_provider` `provider-a<-provider-b`).
+  - P2PCD did not cause it: learning was refused, with `learn_unanchored` 13 at
+    provider-a and 0 learned.
+  - Provider attribution is consistent: 0 devices whose flows and credentials disagree.
+  - Not root-caused. The next suspect is the modelled-crypto receive path accepting a
+    known issuer before its chain is anchored.
+- **R-UNSEC (cause found).** All the "no active pseudonym certificate" reports come from
+  RSUs.
+  - us-profile: 3,620 unsecured = 3,620 RSU-filed; base: 83 of the 137 RSU reports.
+  - A roadside unit is an SCMS device holding application certificates only. It passes
+    `real_mbr`'s enrolment check and fails in `secure_mbr`.
+  - The reason should say so. Whether a US RSU may sign an SM-MBR report with its
+    application certificate is not settled by [SM-MBR] (signer = "the EE certificate").
 - **Unmapped reports.** 148 of 320 research-suite reports name checks with no SM-MBR subtype
   (staleOrReplay, positionSpeedInconsistency), so they travel the modelled path. A real US
   device could not send them. The US profile removes this (§3).
@@ -175,7 +224,10 @@ Rust faults were injected with `tools/mutate/mutate.py`.
 |---|---|---|
 | `ma_cases::the_case_board_dates_reports_in_from_the_arrival_not_the_decision` | arrivals ignored | RED |
 | `provider_runs::a_shared_report_is_recorded_as_sent_by_the_other_providers_ma` | foreign components skipped | RED |
-| `provider_runs::a_provider_off_the_ctl_still_runs_under_its_own_root` | home root must be approved | NOT RUN (§6) |
+| `provider_runs::a_provider_off_the_ctl_still_runs_under_its_own_root` | home root must be approved | RED |
+| `phase2::fast_forward_wake_tests::a_crl_version_wakes_the_fast_forward_only_until_it_has_crossed` | crossed version held to `now + 1` | RED |
+| `ma_cases::the_case_board_dates_corroboration_from_the_case_opening_not_the_decision` | `corroborated` at the decision | RED |
+| `runtime_realism.py check` L5 / edge default | L5 against main's base (review 0 s) / `edge.ee->ra` = 0 | 2 × RED |
 | `us_mbr::tests` | MaxSpeed 120 m/s | RED |
 | `us_mbr::tests` | gpsDrift 2 m | RED |
 | `scenario::world_and_detector_inputs…` | US profile accepts any key | RED |
@@ -183,10 +235,13 @@ Rust faults were injected with `tools/mutate/mutate.py`.
 
 ## 6. Owed
 
-- **First:** build and test the UNVERIFIED commit (R-OFFCTL, R-FF). Run `cargo test -p v2xw-proto --test provider_runs`, then F6 (in `scratchpad/realism/step2.sh`). Build the binary. Run `us-profile`, `off-ctl` and `base-new` and check the TBD rows of `runtime_expectations.yaml` (V6, V8, C1, L4, T4).
-
-- An engine fast test for R-FF: a short calendar run with a CRL published early in a long
-  fast-forward, asserting the backend stops stay near one a minute.
-- R-LOP, R-CRLFETCH, R-CORR and R-UNSEC above.
+- R-SERIAL: concurrent cases in the engine driver, with per-case CRL entry matching, then
+  re-bless the regression digests. It is the cause of V8's missed attacker.
+- R-TRUSTLEAK: root-cause the 7 verified off-CTL messages. A security fix comes first.
+- R-EVID: label the evidence verdict under modelled crypto, or a `crypto_mode: real`
+  realism base.
+- R-UNSEC: label RSU-filed reports, and decide whether RSUs sign SM-MBR reports.
+- R-USFP: a filtered-position GNSS option, so US-profile false positives can be trusted.
+- R-LOP and R-CRLFETCH, above.
 - The full quarter benchmark re-run on this branch. Every per-device number above is
   scale-free; the radio numbers are a fifteenth of rush-hour density.

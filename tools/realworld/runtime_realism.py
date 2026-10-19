@@ -219,6 +219,13 @@ def extract(run_dir):
     for s in case_t.values():
         if 'corroborated' in s and 'decision' in s:
             stg['review'].append((s['decision'] - s['corroborated']) / NS)
+    # How long a case waited from its reports to its opening (R-SERIAL: the engine opens
+    # one case per provider at a time, so under the 8 h review a case queues 8 h per case
+    # ahead of it).
+    waits = [(s['corroborated'] - s['reports-in']) / NS for s in case_t.values()
+             if 'corroborated' in s and 'reports-in' in s]
+    if waits:
+        out['case.open_wait_max_s'] = max(waits)
     for k, v in stg.items():
         out[f'case.{k}_s'] = statistics.median(v)
     out['case.n'] = len(case_t)
@@ -254,7 +261,8 @@ def check(table, runs_dir):
         d = cache[run]
         if d is None:
             return 'NO-RUN'
-        return d.get(metric, 'ABSENT')
+        # An edge with no recorded message is zero messages, not a missing measurement.
+        return d.get(metric, 0 if metric.startswith('edge.') else 'ABSENT')
 
     fails = 0
     opens = 0
