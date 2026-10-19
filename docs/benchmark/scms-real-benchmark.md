@@ -161,6 +161,12 @@ or larger machine.
 
 ### 9.1 Engine defect: PSMs are signed under certificates that do not permit their PSID (cause confirmed in code)
 
+> **Fixed** (branch `wf_fcf1da54-4cd-5`, docs/design/scms-real/validation/vehicle-and-roadside.md):
+> handsets now request `{0x26, 0x27}`; the MA sets aside signature-only evidence; the detectors
+> read PSM accuracy and skip relayed reports. On the first 60 s of the quarter file, MBR airtime
+> fell from 29.3 % to 0 % and `psid-not-permitted` refusals from 32,052 to 0. The numbers below
+> are the pre-fix run.
+
 - **Observed:**
   - 48,123 receptions refused `psid-not-permitted` and 45,875 `Invalid` verification states.
   - 41,624 of 42,968 detector verdicts (96.9 %) came from `signatureVerification`.
