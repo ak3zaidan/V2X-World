@@ -166,6 +166,7 @@ pub mod records;
 pub mod report;
 pub mod resolve;
 pub mod ts103759;
+pub mod us_mbr;
 
 pub use attack::{
     AttackAction, AttackFamily, AttackKind, Attacker, AttackerView, Emission, EventClaim,
