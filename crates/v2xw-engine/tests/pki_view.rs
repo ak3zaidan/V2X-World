@@ -423,6 +423,20 @@ fn enforcement_is_stamped_per_vehicle_and_cases_name_their_evidence() {
                 "{id}: the MA's table names a vehicle"
             );
         }
+        // N is every device present at some instant since the CRL was published: a
+        // vehicle that leaves stays counted, so N never falls. Counting only the devices
+        // present at the view read "88 of 74" once vehicles drove off (SCMS settings
+        // audit, docs/design/scms-real/testing/scms-knobs.md).
+        assert!(
+            enforced
+                .windows(2)
+                .all(|w| w[0]["detail"]["of"].as_u64() <= w[1]["detail"]["of"].as_u64()),
+            "{id}: the enforcing population N fell: {:?}",
+            enforced
+                .iter()
+                .map(|c| (c["detail"]["installed"].as_u64(), c["detail"]["of"].as_u64()))
+                .collect::<Vec<_>>()
+        );
         assert!(
             enforced
                 .windows(2)

@@ -53,6 +53,9 @@ const DCC_CBR: [&str; 2] = ["local", "global"];
 const DCC_REACTIVE_TABLES: [&str; 2] = ["a1", "a2"];
 /// The envelope profiles `v2xw-sec` implements.
 const ENVELOPES: [&str; 2] = ["ieee1609.2", "etsi103097"];
+/// `security.scms.tls`: the TLS versions the US profile admits for `session-scmsAuth`
+/// (SCMS Manager EE profile §2.1.18).
+const SCMS_TLS: [&str; 2] = ["1.3", "1.2"];
 /// The verification policies `v2xw-node` registers.
 const POLICIES: [&str; 3] = ["verify-all", "on-demand", "prioritized"];
 /// The codec tiers build decision D2 settled.
@@ -1104,6 +1107,177 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the verification queue depth",
     },
+    // --- SCMS settings audit (docs/guides/config-inventory-scms.md) ----------
+    Bound {
+        path: "security.scms.lifecycle.i_period_s",
+        lo: 1.0,
+        hi: 31_536_000.0,
+        exclusive_lo: false,
+        what: "the i-period",
+    },
+    Bound {
+        path: "security.scms.lifecycle.cert_lifetime_s",
+        lo: 1.0,
+        hi: 31_536_000.0,
+        exclusive_lo: false,
+        what: "the pseudonym certificate lifetime",
+    },
+    Bound {
+        path: "security.scms.lifecycle.certs_per_period",
+        lo: 1.0,
+        hi: 60.0,
+        exclusive_lo: false,
+        what: "the certificates per i-period",
+    },
+    Bound {
+        path: "security.scms.lifecycle.pool_periods",
+        lo: 1.0,
+        hi: 64.0,
+        exclusive_lo: false,
+        what: "the i-periods held at the start",
+    },
+    Bound {
+        path: "security.scms.lifecycle.topup_below_periods",
+        lo: 0.0,
+        hi: 64.0,
+        exclusive_lo: false,
+        what: "the top-up threshold",
+    },
+    Bound {
+        path: "security.scms.lifecycle.max_periods_ahead",
+        lo: 1.0,
+        hi: 520.0,
+        exclusive_lo: false,
+        what: "the RA's provisioning horizon",
+    },
+    Bound {
+        path: "security.scms.lifecycle.cert_shuffle_threshold",
+        lo: 1.0,
+        hi: 1_000_000.0,
+        exclusive_lo: false,
+        what: "the certificate-request shuffle threshold",
+    },
+    Bound {
+        path: "security.scms.lifecycle.cert_shuffle_window_s",
+        lo: 0.0,
+        hi: 604_800.0,
+        exclusive_lo: false,
+        what: "the certificate-request shuffle window",
+    },
+    Bound {
+        path: "security.scms.lifecycle.report_shuffle_threshold",
+        lo: 1.0,
+        hi: 1_000_000.0,
+        exclusive_lo: false,
+        what: "the report shuffle threshold",
+    },
+    Bound {
+        path: "security.scms.lifecycle.report_shuffle_window_s",
+        lo: 0.0,
+        hi: 604_800.0,
+        exclusive_lo: false,
+        what: "the report shuffle window",
+    },
+    Bound {
+        path: "security.scms.lifecycle.first_batch_delay_s",
+        lo: 0.0,
+        hi: 86_400.0,
+        exclusive_lo: false,
+        what: "the first download delay",
+    },
+    Bound {
+        path: "security.scms.lifecycle.download_poll_interval_s",
+        lo: 0.1,
+        hi: 86_400.0,
+        exclusive_lo: false,
+        what: "download-minWait",
+    },
+    Bound {
+        path: "security.scms.lifecycle.max_download_polls",
+        lo: 1.0,
+        hi: 10_000.0,
+        exclusive_lo: false,
+        what: "download-maxReqs",
+    },
+    Bound {
+        path: "security.scms.lifecycle.download_request_tolerance_s",
+        lo: 0.0,
+        hi: 3_600.0,
+        exclusive_lo: false,
+        what: "the download request's clock tolerance",
+    },
+    Bound {
+        path: "security.scms.lifecycle.enrolment_lifetime_s",
+        lo: 1.0,
+        hi: 315_360_000.0,
+        exclusive_lo: false,
+        what: "the enrolment certificate lifetime",
+    },
+    Bound {
+        path: "security.scms.lifecycle.reenrol_lead_s",
+        lo: 0.0,
+        hi: 315_360_000.0,
+        exclusive_lo: false,
+        what: "the re-enrolment lead",
+    },
+    Bound {
+        path: "security.scms.lifecycle.reenrol_download_delay_s",
+        lo: 0.0,
+        hi: 86_400.0,
+        exclusive_lo: false,
+        what: "the re-enrolment download delay",
+    },
+    Bound {
+        path: "security.scms.lifecycle.crl_cadence_s",
+        lo: 0.0,
+        hi: 2_592_000.0,
+        exclusive_lo: false,
+        what: "the CRL publication cadence",
+    },
+    Bound {
+        path: "security.scms.lifecycle.crl_fetch_interval_s",
+        lo: 0.1,
+        hi: 1_209_600.0,
+        exclusive_lo: false,
+        what: "the cellular CRL poll interval",
+    },
+    Bound {
+        path: "security.scms.lifecycle.crl_broadcast_interval_s",
+        lo: 0.1,
+        hi: 3_600.0,
+        exclusive_lo: false,
+        what: "the roadside CRL repeat interval",
+    },
+    Bound {
+        path: "security.scms.lifecycle.ma_review_s",
+        lo: 0.0,
+        hi: 2_592_000.0,
+        exclusive_lo: false,
+        what: "the MA operator's review",
+    },
+    Bound {
+        path: "security.scms.lifecycle.ma_max_open_cases",
+        lo: 1.0,
+        hi: 1_000_000.0,
+        exclusive_lo: false,
+        what: "the MA's open-case capacity",
+    },
+    // Zero is the strictest device (refuse the moment `nextCrl` passes); a year is far
+    // past any profile (CAMP 1.2.2 Table 67: two weeks).
+    Bound {
+        path: "security.scms.crl_overdue_tolerance_s",
+        lo: 0.0,
+        hi: 31_536_000.0,
+        exclusive_lo: false,
+        what: "the overdue-CRL tolerance",
+    },
+    Bound {
+        path: "nodes.validated_cert_cache",
+        lo: 1.0,
+        hi: 1_048_576.0,
+        exclusive_lo: false,
+        what: "the validated-certificate cache size",
+    },
     // --- security engine fixes (2026-10-12) ---------------------------------
     // A relevance score is a ratio in [0, 1] (v2xw-node `relevance_from_ttc`); 0 would
     // verify everything and be `verify-all`, so it is excluded.
@@ -1561,6 +1735,7 @@ pub static CHOICES: &[Choices] = &[
     choices("messages.codec_tier", &CODEC_TIERS),
     choices("messages.sets[]", &MESSAGE_SETS),
     choices("security.envelope", &ENVELOPES),
+    choices("security.scms.tls", &SCMS_TLS),
     choices("security.verification_policy", &POLICIES),
     choices("security.pseudonym_change.strategy", &STRATEGIES),
     choices("scale.traffic.model", &crate::scale::TRAFFIC_MODELS),
@@ -2601,6 +2776,59 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                (TS 102 941 §6.3.3); nothing re-issues either list during a run.",
     },
     KeyStatus {
+        path: "security.scms.crl_overdue_tolerance_s",
+        status: Status::Wired,
+        note: "How long past a CRL's nextCrl every device keeps trusting the certificates it \
+               governs (CAMP 1.2.2 Table 67 overdue_CRL_tolerance, two weeks unless set); \
+               after it the device refuses them (rxval `crl-overdue`).",
+    },
+    KeyStatus {
+        path: "nodes.validated_cert_cache",
+        status: Status::Wired,
+        note: "Validated end-entity certificates each device remembers (4,096 unless set; \
+               least recently used evicted, counted in ee_evictions); a forgotten signer's \
+               next message pays first-sight validation again.",
+    },
+    KeyStatus {
+        path: "security.scms.tls",
+        status: Status::Wired,
+        note: "The TLS version of every device-to-RA session over a packet-level cellular \
+               link: 1.3 (default) or 1.2, the two the US profile admits; 1.2's handshake \
+               flights are the measured US-profile sizes (constants.md, TLS) and cost one \
+               more round trip before the first request.",
+    },
+    KeyStatus {
+        path: "security.scms.lifecycle.cert_shuffle_threshold",
+        status: Status::Partial,
+        note: "The RA's request shuffle acts on a device's first certificate request \
+               (CAMP 1.2.2 Table 67). Every vehicle in a run is provisioned before it \
+               joins (Phase2::provision, ScmsRun::preload), and its weekly top-ups are the \
+               RA's pre-generation, which goes to the ACA at the period boundary without \
+               waiting in this shuffle (CAMP Primer p.6), so a same-seed run is identical \
+               (docs/design/scms-real/testing/scms-knobs.md). Kept as the RA's policy.",
+    },
+    KeyStatus {
+        path: "security.scms.lifecycle.cert_shuffle_window_s",
+        status: Status::Partial,
+        note: "As cert_shuffle_threshold: the request shuffle's longest wait, on a device's \
+               first certificate request, which a run makes before the vehicle joins (the \
+               pre-run provisioning collapses the window); in-run top-ups do not wait in \
+               it.",
+    },
+    KeyStatus {
+        path: "security.scms.lifecycle",
+        status: Status::Wired,
+        note: "The credential lifecycle's knobs as fields of their own, read by the same \
+               model as security.protocol.params (a field set here wins over the same \
+               key there). Every field left out keeps the US deployment's cited default \
+               (docs/design/scms-real/constants.md; the inventory and the same-seed proof \
+               of each: docs/guides/config-inventory-scms.md). An i_period_s other than \
+               one week needs time.calendar: compressed; cert_lifetime_s must not be \
+               shorter than the i-period; crl_cadence_s replaces each provider's \
+               business-day publication rule with a fixed cadence (0 publishes on \
+               decision).",
+    },
+    KeyStatus {
         path: "security.scms",
         status: Status::Partial,
         note: "The SCMS deployment (protocol/scms/camp only; refused otherwise). \
@@ -3323,6 +3551,7 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     security_backend(s, &mut e);
     e.extend(crate::driving::validate(s));
     network_audit(s, &mut e);
+    scms_lifecycle(s, &mut e);
     unreachable_keys(s, &mut e);
     absent_radio_holders(s, &mut e);
     e
@@ -4384,16 +4613,23 @@ const REAL_I_PERIOD_S: f64 = 604_800.0;
 /// a compressed run can be read as the deployment's; and a run that says compressed must
 /// be.
 fn calendar(s: &Scenario, e: &mut Vec<ScenarioError>) {
-    let i_period = s
-        .security
-        .protocol
-        .as_ref()
-        .and_then(|p| p.params.get("i_period_s"))
-        .and_then(serde_json::Value::as_f64);
+    let i_period = crate::phase2::lifecycle_param(s, "i_period_s");
     let compressed = i_period.is_some_and(|v| (v - REAL_I_PERIOD_S).abs() > 1e-9);
+    // The field the author wrote: the typed one wins over the protocol param.
+    let typed = s
+        .security
+        .scms
+        .as_ref()
+        .and_then(|x| x.lifecycle.as_ref())
+        .is_some_and(|l| l.i_period_s.is_some());
+    let field = if typed {
+        "security.scms.lifecycle.i_period_s"
+    } else {
+        "security.protocol.params.i_period_s"
+    };
     match (s.time.calendar, compressed) {
         (crate::scenario::Calendar::Real, true) => e.push(conflict(
-            "security.protocol.params.i_period_s",
+            field,
             format!(
                 "is {} s, and the deployment's i-period is one week (604800 s, CAMP-EE \
                  §2.1.5.3.2): a shorter grid is a compressed calendar whose i-period \
@@ -6885,6 +7121,62 @@ fn split_indices(segment: &str) -> Option<(&str, Vec<usize>)> {
 
 /// The fields the network-parameter audit exposed: ranges, and the refusal of a value the
 /// run would not read (docs/guides/config-inventory-network.md).
+/// The ranges and cross-field rules of `security.scms.lifecycle` (SCMS settings audit,
+/// docs/guides/config-inventory-scms.md).
+fn scms_lifecycle(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    if let Some(t) = s.security.scms.as_ref().and_then(|x| x.tls.as_deref())
+        && !SCMS_TLS.contains(&t)
+    {
+        e.push(conflict(
+            "security.scms.tls",
+            format!(
+                "is '{t}'; the US profile's session-scmsAuth is TLS 1.2 or 1.3: one of {}",
+                SCMS_TLS.join(", ")
+            ),
+        ));
+    }
+    if let Some(t) = s.security.scms.as_ref().and_then(|x| x.crl_overdue_tolerance_s) {
+        bounded_at(
+            "security.scms.crl_overdue_tolerance_s",
+            "security.scms.crl_overdue_tolerance_s",
+            f64::from(t),
+            e,
+        );
+    }
+    let Some(l) = s.security.scms.as_ref().and_then(|x| x.lifecycle.as_ref()) else {
+        return;
+    };
+    for (key, v) in l.entries() {
+        let path = format!("security.scms.lifecycle.{key}");
+        bounded_at(&path, &path, v, e);
+    }
+    // The model refuses this at build time too; said here so the page marks the field.
+    let i = crate::phase2::lifecycle_param(s, "i_period_s").unwrap_or(REAL_I_PERIOD_S);
+    if let Some(life) = l.cert_lifetime_s
+        && life < i
+    {
+        e.push(conflict(
+            "security.scms.lifecycle.cert_lifetime_s",
+            format!(
+                "is {life} s, shorter than the {i} s i-period: between two periods' \
+                 certificates a vehicle would hold nothing valid to sign with (CAMP-EE \
+                 §2.1.5.3.2 makes the lifetime an hour longer than the period)"
+            ),
+        ));
+    }
+    if let (Some(lead), Some(life)) = (l.reenrol_lead_s, l.enrolment_lifetime_s)
+        && lead >= life
+    {
+        e.push(conflict(
+            "security.scms.lifecycle.reenrol_lead_s",
+            format!(
+                "is {lead} s, not shorter than the {life} s enrolment lifetime: the device \
+                 would re-enrol the moment it enrols"
+            ),
+        ));
+    }
+}
+
 fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
     let sl = &s.radio.sidelink;
     let d = &s.radio.dcc;
@@ -6928,6 +7220,10 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
             n.verify_queue_depth.map(f64::from),
         ),
         ("nodes.peer_cert_cache", n.peer_cert_cache.map(f64::from)),
+        (
+            "nodes.validated_cert_cache",
+            n.validated_cert_cache.map(f64::from),
+        ),
         ("nodes.hsm_sign_lower_us", n.hsm_sign_lower_us),
         (
             "security.on_demand_threshold",

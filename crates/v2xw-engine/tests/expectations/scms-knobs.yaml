@@ -1,0 +1,55 @@
+# Expectation rows, SCMS settings audit (docs/design/scms-real/testing/scms-knobs.md).
+# Format: catalogue.yaml. security.scms.* runs on the `scms` family: credential-lifecycle
+# whole (300 s, i-period 60 s, 5 certificates a period, 2 periods preloaded, 5 s
+# certificate shuffle, 2 s download poll, 30 s report shuffle, automatic MA, CRL every
+# 30 s, cellular CRL fetch every 30 s, 5 % ConstPos attackers from 60 s). The same checks,
+# with the PKI records, the run's cost and the variants that need a slow ACA or a busy MA,
+# are tests/scms_knobs_runs.rs. Measured values are in the testing document.
+
+# ---- Certificates and top-ups ----
+- {setting: security.scms.lifecycle.certs_per_period, change: 10, metric: report.phase2.certs_topped_up, expect: up, band: [1.99, 2.01],
+   source: "a top-up installs one i-period's j = 0..certs_per_period-1 (CAMP-EE 2.1.5.3.2); measured 950 -> 1,900"}
+- {setting: security.scms.lifecycle.certs_per_period, change: 10, metric: report.phase2.topups_completed, expect: same, min_change: 0.0,
+   source: "one request and one download per top-up whatever the batch size (IEEE 1609.2.1 6.3.3); measured 190 -> 190"}
+- {setting: security.scms.lifecycle.topup_below_periods, change: 0, metric: report.phase2.vehicles_starved, expect: up,
+   source: "no top-up: after the two preloaded 60 s periods a vehicle holds nothing valid and cannot sign; measured 2 -> 62"}
+- {setting: security.scms.lifecycle.topup_below_periods, change: 0, metric: report.phase2.topups_started, expect: down,
+   source: "0 turns top-ups off; measured 274 -> 0"}
+
+# ---- RA shuffle and downloads: no effect on an on-time backend, by the deployment's design ----
+# First expected: a threshold of 1 shortens the top-up. Measured: the run is identical. A
+# device's one butterfly request is made before it joins; weekly top-ups are the RA's
+# pre-generation, which skips the request shuffle (CAMP Primer p.6).
+- {setting: security.scms.lifecycle.cert_shuffle_threshold, change: 1, metric: report.phase2.access.exchange_latency.topup.sum_ns, expect: same, min_change: 0.0,
+   source: "the request shuffle acts on a first request only, which a run makes before the vehicle joins (CAMP 1.2.2 Table 67; CAMP Primer p.6)"}
+# First expected: a 20 s minWait lengthens the top-up. Measured: identical. nextDlTime is
+# exact, so the first poll succeeds; minWait and maxReqs act on a late batch
+# (tests/scms_knobs_runs.rs, ACA 4 s slow: 10.2 -> 15.6 s and 188 -> 104 top-ups).
+- {setting: security.scms.lifecycle.download_poll_interval_s, change: 20, metric: report.phase2.access.exchange_latency.topup.sum_ns, expect: same, min_change: 0.0,
+   source: "download-minWait is the wait before polling again for a batch not ready (EE profile Table 3); with the backend on time no poll is repeated"}
+- {setting: security.scms.lifecycle.max_download_polls, change: 1, metric: report.phase2.topups_completed, expect: same, min_change: 0.0,
+   source: "download-maxReqs bounds repeated polls (EE profile Table 3); with the backend on time the first poll succeeds"}
+
+# ---- Enrolment ----
+- {setting: security.scms.lifecycle.enrolment_lifetime_s, change: 200, metric: report.phase2.reenrolments_started, expect: up,
+   source: "the device re-enrols reenrol_lead_s (120 s) before its enrolment certificate ends (SM-REENR); measured 26 -> 66"}
+
+# ---- Misbehaviour Authority and revocation ----
+- {setting: security.scms.lifecycle.ma_review_s, change: 60, metric: report.phase2.revocation_latency_ns, expect: up,
+   source: "the operator's review sits between the decision and the CRL entry (CAMP 1.2.2 4.2-4.3); measured 15.6 -> 75.6 s"}
+- {setting: security.scms.lifecycle.crl_cadence_s, change: 0, metric: report.phase2.revocation_latency_ns, expect: down,
+   source: "publishing on decision removes the wait for the next 30 s slot; measured 15.6 -> 6.6 s"}
+- {setting: security.scms.lifecycle.crl_fetch_interval_s, change: 120, metric: report.phase2.crl_downloads, expect: down,
+   source: "a cellular vehicle asks for a newer CRL once per interval; measured 116 -> 40"}
+
+# ---- Settings whose effect this family cannot show, by design ----
+- {setting: security.scms.tls, change: "1.2", metric: report.phase2.access.carrier.tls_handshake_bytes, expect: same, min_change: 0.0,
+   source: "the family's Uu is cellular/uu/fixed-latency, which carries no TCP or TLS; on cellular/uu/packet-pf 1.2 is 6,184 -> 6,316 handshake bytes and one more round trip (tests/scms_knobs_runs.rs)"}
+
+# ---- Receiver limits (resumed audit, 2026-10-19) ----
+# Measured on the scms base by tests/scms_knobs_runs.rs (one run each); the sweep routes
+# nodes.* to the dsrc and security families, where these rows have not been swept yet.
+- {setting: nodes.validated_cert_cache, change: low, metric: report.receiver_validation.ee_evictions, expect: up,
+   source: "a vehicle hears far more than 16 pseudonyms; an evicted signer is validated again (v2xw-node rxval EeCache, LRU)"}
+- {setting: security.scms.crl_overdue_tolerance_s, change: low, metric: report.phase2.crl_downloads, expect: same, min_change: 0.0,
+   source: "nextCrl is a week after issue (CAMP 1.2.2 sec. 3 item 10): even a zero tolerance finds no CRL overdue in 300 s; the rule is proven at the node (v2xw-node tests/rx_validation.rs)"}

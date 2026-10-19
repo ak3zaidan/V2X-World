@@ -266,6 +266,11 @@ impl EeCache {
         }
     }
 
+    /// The most certificates it holds.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     /// How many certificates it holds.
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -533,6 +538,9 @@ pub struct RxTrust {
     ops: Vec<(PrimitiveId, PrimitiveOpKind, u32)>,
     /// What validation did.
     pub stats: RxStats,
+    /// `overdue_CRL_tolerance` for this device, seconds; `None` is the profile's
+    /// [`OVERDUE_CRL_TOLERANCE_S`] (`security.scms.crl_overdue_tolerance_s`).
+    overdue_tolerance_s: Option<u32>,
 }
 
 impl VerifiedCrl {
@@ -616,6 +624,17 @@ impl RxTrust {
     /// cache (a device configured with a different capacity starts with none).
     pub fn set_ee_capacity(&mut self, capacity: usize) {
         self.ees = EeCache::new(capacity);
+    }
+
+    /// Sets how long past a CRL's `nextCrl` the device keeps trusting the certificates
+    /// that CRL governs ([CAMP122] Table 67 `overdue_CRL_tolerance`; two weeks unless set).
+    pub fn set_overdue_crl_tolerance(&mut self, seconds: u32) {
+        self.overdue_tolerance_s = Some(seconds);
+    }
+
+    /// The device's `overdue_CRL_tolerance`, seconds.
+    pub fn overdue_crl_tolerance_s(&self) -> u32 {
+        self.overdue_tolerance_s.unwrap_or(OVERDUE_CRL_TOLERANCE_S)
     }
 
     /// The validated end-entity certificate cache.
@@ -764,7 +783,7 @@ impl RxTrust {
         self.crls.iter().any(|((c, s), m)| {
             *s == SERIES_PSEUDONYM
                 && c[5..] == craca
-                && now32 > m.next_crl.saturating_add(OVERDUE_CRL_TOLERANCE_S)
+                && now32 > m.next_crl.saturating_add(self.overdue_crl_tolerance_s())
         })
     }
 

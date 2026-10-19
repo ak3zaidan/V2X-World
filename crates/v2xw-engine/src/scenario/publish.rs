@@ -301,8 +301,19 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     // network audit
     ("nodes.verify_queue_depth", "messages"),
     ("nodes.peer_cert_cache", "certificates"),
+    ("nodes.validated_cert_cache", "certificates"),
+    ("security.scms.crl_overdue_tolerance_s", "s"),
     ("nodes.hsm_sign_lower_us", "us"),
     ("messages.path_history_points", "points"),
+    // SCMS settings audit (docs/guides/config-inventory-scms.md)
+    ("security.scms.lifecycle.certs_per_period", "certificates"),
+    ("security.scms.lifecycle.pool_periods", "i-periods"),
+    ("security.scms.lifecycle.topup_below_periods", "i-periods"),
+    ("security.scms.lifecycle.max_periods_ahead", "i-periods"),
+    ("security.scms.lifecycle.cert_shuffle_threshold", "requests"),
+    ("security.scms.lifecycle.report_shuffle_threshold", "reports"),
+    ("security.scms.lifecycle.max_download_polls", "polls"),
+    ("security.scms.lifecycle.ma_max_open_cases", "cases"),
 ];
 
 /// The numeric leaves that genuinely have no unit, declared rather than left blank.
@@ -1039,10 +1050,14 @@ impl Walk<'_> {
     ///
     /// A path through a list or a map has no default — there is no element to read — and
     /// nor has a field the minimal scenario omits, which is the honest answer for an
-    /// optional field with no default.
+    /// optional field with no default. The exception is an optional field whose absence
+    /// stands for a number the model states ([`model_default`]).
     fn default_at(&self, path: &str) -> Option<Value> {
         if path.contains('[') || path.contains(".*") {
             return None;
+        }
+        if let Some(v) = model_default(path) {
+            return Some(v);
         }
         let mut cur = self.defaults;
         for segment in path.split('.') {
@@ -1060,6 +1075,27 @@ impl Walk<'_> {
         row.insert("kind".into(), json!(widget));
         self.leaves.push(Value::Object(row));
     }
+}
+
+/// The default an absent optional field stands for, where the model states one: the
+/// credential lifecycle's (`security.scms.lifecycle.*`, the US deployment on the real
+/// calendar, `phase2::lifecycle_defaults`). A field whose absence means a rule rather than
+/// a number (`crl_cadence_s`: each provider's publication rule) publishes none.
+fn model_default(path: &str) -> Option<Value> {
+    if path == "security.scms.tls" {
+        return Some(json!("1.3"));
+    }
+    if path == "security.scms.crl_overdue_tolerance_s" {
+        return Some(json!(v2xw_node::rxval::OVERDUE_CRL_TOLERANCE_S));
+    }
+    if path == "nodes.validated_cert_cache" {
+        return Some(json!(v2xw_node::rxval::EE_CACHE));
+    }
+    let key = path.strip_prefix("security.scms.lifecycle.")?;
+    crate::phase2::lifecycle_defaults()
+        .into_iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| v)
 }
 
 /// Model parameters published as their own fields (see [`walk`]), with their defaults.
@@ -1600,6 +1636,12 @@ mod tests {
             set > 30,
             "only {set} defaults were replayed into the document"
         );
+        // `security.scms.*` describes an SCMS deployment and is refused on any other
+        // credential protocol; its published defaults (the lifecycle's) are replayed with
+        // the protocol they belong to.
+        if doc.pointer("/security/scms").is_some() {
+            doc["security"]["protocol"] = json!({"id": crate::phase2::CAMP_SCMS});
+        }
         let scenario = crate::Scenario::from_document(doc)
             .expect("a document of the published defaults must deserialise");
         scenario

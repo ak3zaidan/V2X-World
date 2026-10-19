@@ -461,13 +461,7 @@ mod tests {
 pub fn calendar_warnings(scenario: &Scenario) -> Vec<String> {
     let mut out = Vec::new();
     if scenario.time.calendar == crate::scenario::Calendar::Compressed {
-        let i = scenario
-            .security
-            .protocol
-            .as_ref()
-            .and_then(|p| p.params.get("i_period_s"))
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(0.0);
+        let i = crate::phase2::lifecycle_param(scenario, "i_period_s").unwrap_or(0.0);
         out.push(format!(
             "calendar: compressed — the credential system's i-period is {i} s (the \
              deployment's is one week from 2015-01-06 04:00 Eastern, CAMP-EE §2.1.5.3.2): \

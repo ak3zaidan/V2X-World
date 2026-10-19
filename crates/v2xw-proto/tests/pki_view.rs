@@ -691,3 +691,65 @@ fn the_credentials_change_digest_is_a_stable_sha256() {
         assert_ne!(*d, base, "variant {k} must change the digest");
     }
 }
+
+/// The US deployment runs no LOP (01 §2.2: not in 1609.2.1 or the Profile). The run still
+/// carries each device-to-RA message across the LOP node over a transparent link (zero
+/// latency, no queue), which is right for timing; the records fold that hop, so they show
+/// the deployment's architecture: a device talks to the RA, there is no LOP leg, no LOP
+/// stamp, no LOP component and no LOP `-proxied` name, and every PDU the deployment sends
+/// appears once. (Before the fold the records showed ee -> lop -> ra, CAMP's design.)
+#[test]
+fn without_a_deployed_lop_the_records_show_a_device_talking_to_the_ra() {
+    use v2xw_proto::scms::deployment::{Deployment, Preset};
+    let mut p = ScmsParams::default().quick();
+    p.pdu.keep_bytes = true;
+    let d = Deployment::preset(Preset::UsProduction2025);
+    assert!(!d.options.lop, "the US deployment runs no LOP");
+    let mut run = ScmsRun::new_deployed(p, 0, d).expect("builds");
+    run.add_device(DEVICE_A);
+    provisioned(&mut run, DEVICE_A, 0, 1, JMAX);
+    let (lop, ra) = (run.state.nodes.lop.index(), run.state.nodes.ra.index());
+    let legs = run
+        .state
+        .pdus
+        .iter()
+        .filter(|q| (q.from == lop && q.to == ra) || (q.from == ra && q.to == lop))
+        .count();
+    assert!(legs > 0, "the run crosses the transparent LOP node (what the view folds)");
+    let runs = std::slice::from_ref(&run);
+    let mut tracker = PkiTracker::default();
+    let flows = pki_view::drain_flows(runs, &mut tracker);
+    let lopish = |s: &str| s.contains("/lop/");
+    for f in &flows {
+        let (from, to) = (f.from.as_deref().unwrap_or(""), f.to.as_deref().unwrap_or(""));
+        assert!(!lopish(from) && !lopish(to), "{} {from} -> {to}", f.name);
+        // The DCM's relay of the enrolment response is deployed and keeps its name.
+        if !from.contains("/dcm/") {
+            assert!(!f.name.ends_with("-proxied"), "{} {from} -> {to}", f.name);
+        }
+        assert_ne!(f.name, "proxy-forwarded", "a LOP stamp");
+        for q in &f.pdus {
+            assert!(!lopish(&q.from) && !lopish(&q.to), "{} {} -> {}", q.kind, q.from, q.to);
+        }
+    }
+    let published: usize = flows.iter().map(|f| f.pdus.len()).sum();
+    assert_eq!(published, run.state.pdus.len() - legs, "every deployment PDU once");
+    let ra_id = "provider-a/ra/0";
+    let req = flows
+        .iter()
+        .find(|f| f.kind == "msg" && f.name == "provisioning-request")
+        .expect("a provisioning request");
+    assert!(req.from.as_deref().is_some_and(|f| f.starts_with("ee/")), "{:?}", req.from);
+    assert_eq!(req.to.as_deref(), Some(ra_id));
+    let ack = flows
+        .iter()
+        .find(|f| f.kind == "msg" && f.name == "provisioning-ack")
+        .expect("a provisioning ack");
+    assert_eq!(ack.from.as_deref(), Some(ra_id));
+    assert!(ack.to.as_deref().is_some_and(|t| t.starts_with("ee/")), "{:?}", ack.to);
+    let s = pki_view::pki_state(runs, now(&run), &mut tracker).expect("a state");
+    assert!(
+        s.providers[0].components.iter().all(|c| c.role != "lop"),
+        "an undeployed LOP is not a component"
+    );
+}

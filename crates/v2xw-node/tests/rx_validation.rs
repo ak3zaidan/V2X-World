@@ -891,3 +891,32 @@ fn a_root_a_newer_ctl_drops_is_refused_from_then_on_and_an_unchanged_ctl_forgets
         assert_eq!(refused(&rx, "chain-untrusted-root"), 1, "{mode:?}");
     }
 }
+
+/// `security.scms.crl_overdue_tolerance_s` (SCMS settings audit): a device configured with
+/// a one-day tolerance refuses, a day and a minute past `nextCrl`, the message the
+/// profile's two weeks still accept; and the default is the profile's.
+#[test]
+fn a_configured_overdue_tolerance_moves_the_refusal() {
+    let pki = pki();
+    let bytes = linkage_crl(&pki, &[], t0());
+    let at = u64::from(WEEK + 86_400 + 60);
+    let renewed = pseudonym(&pki, &pki.aca, 13, |s| {
+        s.valid_from = t0() + WEEK + 86_400;
+    });
+    let mut profile = trusted(CryptoMode::Real, &pki);
+    assert_eq!(profile.trust().overdue_crl_tolerance_s(), 14 * 86_400);
+    profile.verify_secured_crl(&bytes, 5 * NS_PER_S).unwrap();
+    assert_eq!(
+        receive(&mut profile, &bsm(CryptoMode::Real, &renewed, at, None), at),
+        SpduVerdict::Valid
+    );
+    let mut strict = trusted(CryptoMode::Real, &pki);
+    strict.trust_mut().set_overdue_crl_tolerance(86_400);
+    assert_eq!(strict.trust().overdue_crl_tolerance_s(), 86_400);
+    strict.verify_secured_crl(&bytes, 5 * NS_PER_S).unwrap();
+    assert_eq!(
+        receive(&mut strict, &bsm(CryptoMode::Real, &renewed, at, None), at),
+        SpduVerdict::Refused
+    );
+    assert_eq!(refused(&strict, "crl-overdue"), 1);
+}

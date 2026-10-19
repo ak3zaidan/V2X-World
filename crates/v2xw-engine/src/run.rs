@@ -1665,6 +1665,7 @@ impl Engine {
                     .and_then(crate::phase2::Phase2::aca_issuer),
             )
             .with_trust(roots, chain_file)
+            .with_receiver_limits(crate::credentials::ReceiverLimits::of(&engine.scenario))
             .with_home_chain_files(if crate::phase2::home_chain_file_of(&engine.scenario)? {
                 engine
                     .phase2
@@ -3477,7 +3478,7 @@ impl Engine {
                             self.departed_credentials.push(c);
                         }
                     }
-                    phase2.retire(node);
+                    phase2.retire(node, now);
                 }
                 if let Some(policy) = self.pseudonym_policy.as_mut() {
                     policy.on_retire(node);

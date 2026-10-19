@@ -272,6 +272,32 @@ const BASIC: &[Basic] = &[
         recommended: "Off for today's fleet; on to study what precise positioning buys.",
     },
     // end traffic audit
+    // SCMS settings audit (docs/guides/config-inventory-scms.md)
+    Basic {
+        path: "security.scms.lifecycle.certs_per_period",
+        explain: "How many pseudonym certificates a vehicle may use in one week, all valid at once. More lets it change identity more often without reusing one, at the cost of bigger downloads, and one revocation then covers more certificates. The US profile issues 20 a week (CAMP-EE Table 2.1.2.6.2).",
+        recommended: "20 (the US profile); 5 to 60 (60 for vehicles that change often, such as taxis).",
+    },
+    Basic {
+        path: "security.scms.lifecycle.crl_cadence_s",
+        explain: "A fixed schedule for publishing the revocation list. Left unset, each provider follows its own rule: the US providers publish within one business day of a revocation decision (SCMS Manager Provider Requirements 3.4.9). 0 publishes the moment a decision is made.",
+        recommended: "Unset (the business-day rule); 0 to 86,400 s (a daily list, the USDOT 2013 working assumption).",
+    },
+    Basic {
+        path: "security.scms.lifecycle.crl_fetch_interval_s",
+        explain: "How often a vehicle with a cellular link asks for a newer revocation list. Shorter means revoked senders are refused sooner, for more cellular traffic; CAMP requires at least one fetch a week.",
+        recommended: "3,600 s (one hour, an engine assumption inside CAMP's weekly bound); 60 to 86,400 s.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.ma_review_s",
+        explain: "How long the Misbehaviour Authority's operator takes over a case before the revocation is carried out; 0 is a fully automatic authority. The US pilots reviewed every case by hand and published no review time.",
+        recommended: "28,800 s (one 8-hour shift, an assumption) on the real calendar; 0 (automatic) to 259,200 s (three days).",
+    },
+    Basic {
+        path: "security.scms.lifecycle.download_poll_interval_s",
+        explain: "download-minWait: how long a vehicle waits before asking again for a certificate batch that is not ready yet. Shorter gets certificates sooner once the mix releases them, for more requests to the Registration Authority (SCMS Manager EE profile, Table 3).",
+        recommended: "300 s (the US profile); 1 to 3,600 s.",
+    },
 ];
 
 /// The explanation and recommended range of advanced fields that have them: the
@@ -893,6 +919,107 @@ const ADVANCED: &[Basic] = &[
         recommended: "0 (default) to 0.05.",
     },
     // end traffic audit
+    // SCMS settings audit (docs/guides/config-inventory-scms.md)
+    Basic {
+        path: "security.scms.lifecycle.i_period_s",
+        explain: "How long one set of pseudonym certificates is current. The US system uses one week from its 2015-01-06 epoch; a shorter period compresses the calendar so a short run sees weekly events, and the run is then labelled compressed.",
+        recommended: "604,800 s (one week, CAMP-EE) on the real calendar; 60 to 3,600 s only with time.calendar compressed.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.cert_lifetime_s",
+        explain: "How long each pseudonym certificate is valid: the period plus an overlap, so a vehicle always holds a valid one across the change of week.",
+        recommended: "608,400 s (the week plus one hour, CAMP-EE); at least the i-period.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.pool_periods",
+        explain: "How many weeks of certificates a vehicle holds when the run starts.",
+        recommended: "2 (engine default); 1 to 8 (a THEA device is pre-loaded with three years, more than any run uses).",
+    },
+    Basic {
+        path: "security.scms.lifecycle.topup_below_periods",
+        explain: "A vehicle asks for its next week of certificates when fewer than this many weeks, the current one counted, remain; 0 turns top-ups off, so the pool only drains.",
+        recommended: "1 (engine default); 0 to 4.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.max_periods_ahead",
+        explain: "The most weeks ahead the Registration Authority provisions a device; a request for more is cut to this.",
+        recommended: "156 weeks (three years, CAMP Primer); 1 to 156.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.report_shuffle_threshold",
+        explain: "How many misbehaviour reports the Registration Authority mixes before passing them to the Misbehaviour Authority, so the authority cannot tell which vehicle reported when (CAMP-EE SCMS-765).",
+        recommended: "10,000 (CAMP); 10 to 10,000.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.report_shuffle_window_s",
+        explain: "The longest a misbehaviour report waits in the Registration Authority's mix; it delays every revocation by up to this long.",
+        recommended: "86,400 s (one day, CAMP-EE SCMS-765); 5 to 86,400 s.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.first_batch_delay_s",
+        explain: "How long after the Registration Authority acknowledges a request the vehicle first asks for its batch.",
+        recommended: "60 s (engine default); 1 to 3,600 s.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.max_download_polls",
+        explain: "download-maxReqs: how many times a vehicle asks for a batch that is not ready before it gives up on it (SCMS Manager EE profile, Table 3).",
+        recommended: "100 (the US profile); 1 to 1,000.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.download_request_tolerance_s",
+        explain: "How far a download request's time stamp may be from the Registration Authority's clock before the request is refused as stale or replayed (CAMP release 1.2.2, SCMS-1203).",
+        recommended: "5 s (CAMP); 1 to 60 s.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.enrolment_lifetime_s",
+        explain: "How long a vehicle's enrolment certificate, its long-term identity with the system, stays valid. It must be renewed before it ends or the vehicle can get no more pseudonyms.",
+        recommended: "189,216,000 s (six years, CAMP release 1.2.2); 600 s to 220,752,000 s (seven years, CAMP release 1.1).",
+    },
+    Basic {
+        path: "security.scms.lifecycle.reenrol_lead_s",
+        explain: "How long before the enrolment certificate expires the vehicle asks for its successor; the successor starts when the current one ends, so an early request costs no validity.",
+        recommended: "47,347,200 s (548 days, SCMS Manager's 12 to 24 months); 60 s to 63,072,000 s.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.reenrol_download_delay_s",
+        explain: "How long after a re-enrolment request the vehicle downloads its new enrolment certificate.",
+        recommended: "300 s (the profile's download-minWait); 1 to 3,600 s.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.crl_broadcast_interval_s",
+        explain: "How often a roadside unit carrying the revocation list repeats it over the air to vehicles in range; only roadside units with the crl role do this, and the US deployment does not use it.",
+        recommended: "5 s (the longest USDOT RSU v4.1 store-and-repeat interval); 1 to 60 s.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.ma_max_open_cases",
+        explain: "The most investigations the Misbehaviour Authority keeps open at once; a case beyond it waits for one to close. No authority publishes its capacity.",
+        recommended: "1,000 (an assumption); 1 to 10,000 to study an overloaded authority.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.cert_shuffle_threshold",
+        explain: "How many certificate requests the Registration Authority collects and mixes before passing them on, so the authority that signs the certificates cannot tell which vehicle asked when; a batch also leaves when its oldest request reaches the shuffle window. CAMP SCMS release 1.2.2, Table 67.",
+        recommended: "1,000 (CAMP's production value); 10 to 10,000 (Brecht et al. 2018 used 10,000). It acts on a device's first request only: every vehicle in a run is provisioned before it joins, and its weekly top-ups are the RA's pre-generation, which does not wait in this mix, so a run's results do not change.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.cert_shuffle_window_s",
+        explain: "The longest a certificate request may wait in the Registration Authority's mix before it is passed on, full batch or not. A longer wait hides each request among more others and delays a vehicle's certificates.",
+        recommended: "172,800 s (two days, CAMP release 1.2.2); 3,600 to 172,800 s. Like the batch size, it acts on a device's first request, which a run makes before the vehicle joins.",
+    },
+    Basic {
+        path: "security.scms.crl_overdue_tolerance_s",
+        explain: "How long after a revocation list said the next one would be out a vehicle keeps trusting the certificates that list covers. Past it, the vehicle refuses every message those certificates sign, so a vehicle cut off from new lists (by an attacker or a dead link) stops trusting its neighbours. CAMP SCMS release 1.2.2, Table 67, overdue_CRL_tolerance.",
+        recommended: "1,209,600 s (two weeks, CAMP's value); 0 to 2,419,200 s to study a delayed or blocked revocation list. The next list is due a week after each one (nextCrl), so the rule acts only in runs that span weeks of calendar time.",
+    },
+    Basic {
+        path: "nodes.validated_cert_cache",
+        explain: "How many already-checked certificates of other vehicles each device remembers, so a known sender costs only its signature check; a forgotten one is checked from scratch the next time it is heard. A small cache is what a certificate-flooding attack exhausts.",
+        recommended: "4,096 (engine default; no device publishes one); 16 to 65,536. The peer certificate cache (128) usually forgets first.",
+    },
+    Basic {
+        path: "security.scms.tls",
+        explain: "The TLS version a vehicle uses for its secure session with the Registration Authority over a cellular link. TLS 1.2 needs one more round trip to set up each session than TLS 1.3, so certificate requests and downloads start later. The US profile admits both (SCMS Manager EE profile 2.1.18).",
+        recommended: "1.3 (default); 1.2 to compare with older devices.",
+    },
 ];
 
 /// `basic` or `advanced`.

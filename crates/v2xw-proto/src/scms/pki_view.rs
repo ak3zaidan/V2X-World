@@ -345,6 +345,77 @@ pub fn component_ids(run: &ScmsRun) -> BTreeMap<u32, (String, String, u32)> {
     out
 }
 
+/// [`component_ids`] plus every other provider's components under that provider's label,
+/// for the message records: the other provider's MA shares reports with this one
+/// (`shared_report_at_ma`), and without its ids the view named it `ee/<n>`, a device.
+fn flow_ids(run: &ScmsRun) -> BTreeMap<u32, (String, String, u32)> {
+    let mut out = component_ids(run);
+    let d = &run.state.deployment;
+    for (k, p) in d.providers.iter().enumerate() {
+        if k == run.state.provider {
+            continue;
+        }
+        let pn = d.nodes(k);
+        let o = pn.online;
+        let mut put = |node: NodeId, role: &str, inst: u32| {
+            out.entry(node.index())
+                .or_insert_with(|| (format!("{}/{role}/{inst}", p.name), role.to_string(), inst));
+        };
+        for (node, role) in [
+            (o.eca, "eca"),
+            (o.ra, "ra"),
+            (o.pca, "aca"),
+            (o.la1, "la1"),
+            (o.la2, "la2"),
+            (o.ma, "ma"),
+            (o.crlg, "crlg"),
+            (o.lop, "lop"),
+            (o.crl_store, "crl-store"),
+            (o.crl_broadcast, "crl-broadcast"),
+            (o.dcm, "dcm"),
+        ] {
+            put(node, role, 0);
+        }
+        put(pn.root, "root", 0);
+        put(pn.ica, "ica", 0);
+        put(pn.pg, "pg", 0);
+        for (role, inst, node) in pn.instances {
+            let role = if role == "crl_store" { "crl-store".to_string() } else { role };
+            put(node, &role, inst);
+        }
+    }
+    out
+}
+
+/// A deployment without a LOP (the US one, 01 §2.2: not in 1609.2.1 or the Profile)
+/// still routes each device-to-RA message through the run's LOP node over a transparent
+/// link (zero latency, no queue: [`ScmsRun::new_deployed`]), which is right for timing
+/// but not for the records. The view folds that hop: a device talks to the RA.
+#[derive(Clone, Copy)]
+struct LopFold {
+    lop: u32,
+    ra: u32,
+}
+
+impl LopFold {
+    fn of(run: &ScmsRun) -> Option<LopFold> {
+        (!run.state.deployment.options.lop).then(|| LopFold {
+            lop: run.state.nodes.lop.index(),
+            ra: run.state.nodes.ra.index(),
+        })
+    }
+
+    /// The LOP-to-RA leg of a folded hop (either direction): not a message of the
+    /// deployment, so it is not published.
+    fn hidden(self, from: u32, to: u32) -> bool {
+        (from == self.lop && to == self.ra) || (from == self.ra && to == self.lop)
+    }
+
+    fn node(self, n: u32) -> u32 {
+        if n == self.lop { self.ra } else { n }
+    }
+}
+
 /// The stable id of `node` in `run`: a component's, or `ee/<node>`.
 #[must_use]
 pub fn node_id(ids: &BTreeMap<u32, (String, String, u32)>, node: NodeId) -> String {
@@ -489,6 +560,10 @@ pub fn pki_state(runs: &[ScmsRun], now: SimTime, tracker: &mut PkiTracker) -> Op
             let Some(role) = role_of_entity(&e.id) else {
                 continue;
             };
+            // Not deployed (the US system): its node only carries the folded hop.
+            if role == "lop" && !run.state.deployment.options.lop {
+                continue;
+            }
             match role {
                 "manager" | "elector" if k == 0 => {
                     if role == "manager" {
@@ -866,7 +941,10 @@ pub fn drain_flows(runs: &[ScmsRun], tracker: &mut PkiTracker) -> Vec<PkiFlow> {
     let mut out = Vec::new();
     for (k, run) in runs.iter().enumerate() {
         let label = provider_label(run);
-        let ids = component_ids(run);
+        let ids = flow_ids(run);
+        let fold = LopFold::of(run);
+        let hidden = |from: u32, to: u32| fold.is_some_and(|f| f.hidden(from, to));
+        let via = |n: NodeId| NodeId::new(fold.map_or(n.index(), |f| f.node(n.index())));
         let (sc, gc, pc) = tracker.cursors.get(&k).copied().unwrap_or_default();
         let (steps, s_end) = run.kernel.steps_since(sc);
         let (stamps, g_end) = run.kernel.stages_since(gc);
@@ -888,7 +966,14 @@ pub fn drain_flows(runs: &[ScmsRun], tracker: &mut PkiTracker) -> Vec<PkiFlow> {
             pdus: vec![r],
         };
         for (off, p) in pdus.iter().enumerate() {
-            let r = pdu_ref(run, &ids, &label, pc + off, p);
+            if hidden(p.from, p.to) {
+                continue;
+            }
+            let mut r = pdu_ref(run, &ids, &label, pc + off, p);
+            if fold.is_some() {
+                r.from = node_id(&ids, via(NodeId::new(p.from)));
+                r.to = node_id(&ids, via(NodeId::new(p.to)));
+            }
             match p.step {
                 Some(s) if (sc..s_end).contains(&(s as usize)) => {
                     by_step.entry(s).or_default().push(r);
@@ -901,6 +986,17 @@ pub fn drain_flows(runs: &[ScmsRun], tracker: &mut PkiTracker) -> Vec<PkiFlow> {
         for (off, s) in steps.iter().enumerate() {
             let n = sc + off;
             let flow = s.flow.as_str();
+            if hidden(s.from.index(), s.to.index()) {
+                continue;
+            }
+            let mut name = s.step.to_string();
+            if fold.is_some_and(|f| s.from.index() == f.lop || s.to.index() == f.lop) {
+                // The device-side leg of a folded hop: `provisioning-ack-proxied` is
+                // the RA's `provisioning-ack`.
+                if let Some(base) = name.strip_suffix("-proxied") {
+                    name = base.to_string();
+                }
+            }
             out.push(PkiFlow {
                 schema: PKI_VIEW_SCHEMA,
                 kind: "msg".to_string(),
@@ -909,9 +1005,9 @@ pub fn drain_flows(runs: &[ScmsRun], tracker: &mut PkiTracker) -> Vec<PkiFlow> {
                 provider: label.clone(),
                 flow: flow.to_string(),
                 instance: format!("{label}/{flow}/{}", s.run.0),
-                name: s.step.to_string(),
-                from: Some(node_id(&ids, s.from)),
-                to: Some(node_id(&ids, s.to)),
+                name,
+                from: Some(node_id(&ids, via(s.from))),
+                to: Some(node_id(&ids, via(s.to))),
                 bytes: Some(s.bytes),
                 transport: Some(s.transport.as_str().to_string()),
                 pdus: u32::try_from(n)
@@ -926,6 +1022,10 @@ pub fn drain_flows(runs: &[ScmsRun], tracker: &mut PkiTracker) -> Vec<PkiFlow> {
         }
         for (off, st) in stamps.iter().enumerate() {
             let flow = st.flow.as_str();
+            // A folded LOP stamps nothing (`proxy-forwarded`): it is not deployed.
+            if fold.is_some_and(|f| st.node.is_some_and(|n| n.index() == f.lop)) {
+                continue;
+            }
             out.push(PkiFlow {
                 schema: PKI_VIEW_SCHEMA,
                 kind: "stage".to_string(),

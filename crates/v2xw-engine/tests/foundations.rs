@@ -434,6 +434,23 @@ fn a_certificate_the_peer_cache_evicts_is_validated_again_when_it_returns() {
     assert!(r.ee_validations > b.ee_validations, "{r:?}");
 }
 
+/// `nodes.validated_cert_cache` (SCMS settings audit) reaches every vehicle: with the
+/// peer certificate cache at its default, a validated cache of one makes each vehicle
+/// forget one neighbour's verdict for the other's, so a returning certificate is
+/// validated, and charged, again (`v2xw_node::rxval::EE_CACHE` is 4,096 unless set).
+#[test]
+fn a_validated_certificate_cache_of_one_revalidates_returning_signers() {
+    let (base, _) = run(deterministic_radio(fleet(3, 3.0)));
+    let b = &base.receiver_validation;
+    assert_eq!((b.ee_validations, b.ee_evictions), (6, 0), "{b:?}");
+    let mut s = deterministic_radio(fleet(3, 3.0));
+    s.nodes.validated_cert_cache = Some(1);
+    let (small, _) = run(s);
+    let r = &small.receiver_validation;
+    assert!(r.ee_evictions > 0, "{r:?}");
+    assert!(r.ee_validations > b.ee_validations, "{r:?}");
+}
+
 /// What validating a new implicit pseudonym of `cert_octets` costs the OBU-301 on top of
 /// the signature: one SHA-256 over the certificate (its HashedId8) and one ECQV
 /// reconstruction, priced by the WP-C4 catalogue on the profile's anchors.

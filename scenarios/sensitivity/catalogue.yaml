@@ -24,6 +24,11 @@ families:
   - name: security
     base: ../credential-lifecycle.yaml
     set: {time.duration_s: 30.0, threats.attackers: []}
+  # The same lifecycle whole (300 s, i-period 60 s, 5 % ConstPos attackers from 60 s):
+  # the base of tests/scms_knobs_runs.rs and tests/expectations/scms-knobs.yaml.
+  - name: scms
+    base: ../credential-lifecycle.yaml
+    set: {}
   # A signalised Midtown-shaped grid (4 x 6 blocks, two lanes each way, 60 s cycle) with
   # Poisson demand, traffic and network: the base of tests/sensitivity_traffic.rs.
   - name: traffic
@@ -78,6 +83,9 @@ routes:
   - {prefix: radio.sidelink, families: [cv2x, nr]}
   - {prefix: net.geonet, families: [gn]}
   - {prefix: net, families: [gn, dsrc, security]}
+  # The certificate system's knobs need the whole lifecycle: top-ups at the 60 s period
+  # starts, the attackers' reports, the MA's decisions and the CRL's enforcement.
+  - {prefix: security.scms, families: [scms]}
   - {prefix: security, families: [security, dsrc]}
   - {prefix: actors.backend, families: [security]}
   - {prefix: actors.rsus, families: [security]}
