@@ -45,7 +45,7 @@ mod report;
 mod revoke;
 
 use crate::threshold::session::{CommitteeMsg, Committees, Outcome, RoleSpec};
-pub use crl::{IssuedCrl, crl_bytes, crl_digest, linkage_revocations};
+pub use crl::{CrlOrder, IssuedCrl, crl_bytes, crl_digest, linkage_revocations};
 
 const ECDSA: PrimitiveId = PrimitiveId::ECDSA_P256_SHA256;
 const ECQV: PrimitiveId = PrimitiveId::ECQV_P256;
@@ -89,6 +89,14 @@ pub struct DeviceState {
     pub reenrolments: u32,
     /// CRL versions it refused because the signature did not verify.
     pub crls_rejected: u32,
+    /// Genuine CRLs it refused because they are not newer than the one it holds for
+    /// that `(crlCraca, crlSeries)` (R2: a replayed older list).
+    pub crls_stale: u32,
+    /// Per `(crlCraca, crlSeries)`: where the CRL it acts on stands in that sequence and
+    /// its SHA-256. A CRL is installed only if it is the same one or a newer one
+    /// ([`CrlOrder`]), so a replay of an earlier, validly signed
+    /// list cannot roll a revocation back.
+    pub crl_held: BTreeMap<([u8; 8], u16), (CrlOrder, [u8; 32])>,
     /// Its real enrolment credential (WP-B1 PDU layer): the implicit certificate the ECA
     /// issued and the key reconstructed from `privateKeyInfo`. `None` when the layer is
     /// off or the device was enrolled out of band ([`ScmsRun::set_enrolment`]).
@@ -162,6 +170,8 @@ impl DeviceState {
             refusals: 0,
             reenrolments: 0,
             crls_rejected: 0,
+            crls_stale: 0,
+            crl_held: BTreeMap::new(),
             enrolment_credential: None,
             request_hash8: None,
             name: None,
@@ -342,6 +352,9 @@ pub struct RaState {
     pub pregen_periods: u32,
     /// `.info` answers naming a period the weekly job has not reached yet.
     pub pregen_deferred: u32,
+    /// Weekly jobs not run because the enrolment was blocklisted after the job was armed:
+    /// "generation stops for blacklisted devices" ([CAMP122] SCMS-509).
+    pub pregen_blocked: u32,
     /// Weekly-job timers armed, as `(device, i)`.
     pregen_timers: BTreeSet<(NodeId, u32)>,
     /// RA→ACA request hash → the device request it came from: what the RA keeps so a
@@ -623,8 +636,13 @@ pub struct Case {
     pub lookups: Vec<PcaLookup>,
     /// What the two LAs answered.
     pub same: [Option<bool>; 2],
-    /// The seeds the LAs released.
+    /// The seeds the LAs released for the reported chain (the first of [`Self::chains`]).
     pub seeds: [Option<(LaId, LinkageSeed)>; 2],
+    /// Every `[LA1, LA2]` chain pair the RA returned for the device's enrolment (B4):
+    /// the reported request's first, then any other request the RA accepted from it.
+    pub chains: Vec<[Lci; 2]>,
+    /// The seeds released per entry of [`Self::chains`].
+    pub chain_seeds: Vec<[Option<(LaId, LinkageSeed)>; 2]>,
     /// The first revoked period.
     pub i_rev: u32,
     /// Certificates per period, for the CRL entry.
@@ -853,14 +871,12 @@ pub enum Pending {
         /// Its run.
         run: FlowRun,
     },
-    /// The Misbehaviour Authority has reconstructed both chains' seeds.
+    /// The Misbehaviour Authority has reconstructed the seeds of every chain pair.
     SeedsReleased {
         /// The case (its resolution run).
         case: FlowRun,
-        /// LA 1's chain.
-        lci1: Lci,
-        /// LA 2's chain.
-        lci2: Lci,
+        /// Every `[LA1, LA2]` chain pair of the device.
+        chains: Vec<[Lci; 2]>,
         /// The revocation period.
         i: u32,
     },
@@ -1676,39 +1692,45 @@ impl ScmsState {
             }
             Pending::SeedsReleased {
                 case: case_run,
-                lci1,
-                lci2,
+                chains,
                 i,
             } => {
                 // The MA holds a quorum of verified shares of each chain's `ls(i)` and
                 // interpolates them. The value it obtains is the one the dealer shared:
                 // the LA's own `ls(i)`, computed here from the chain it dealt.
-                let mut seeds = [None, None];
-                for (k, (la, lci)) in [(LaIndex::One, lci1), (LaIndex::Two, lci2)]
-                    .into_iter()
-                    .enumerate()
-                {
-                    let st = &self.la[la.idx()];
-                    if let Some(ls0) = st.chains.get(&lci).copied() {
-                        seeds[k] = Some((st.la_id, linkage::linkage_seed_at(st.la_id, ls0, i)));
+                let mut pairs = Vec::with_capacity(chains.len());
+                for pair in &chains {
+                    let mut seeds = [None, None];
+                    for (k, la) in [LaIndex::One, LaIndex::Two].into_iter().enumerate() {
+                        let st = &self.la[la.idx()];
+                        if let Some(ls0) = st.chains.get(&pair[k]).copied() {
+                            seeds[k] = Some((st.la_id, linkage::linkage_seed_at(st.la_id, ls0, i)));
+                        }
                     }
+                    let (Some(la1), Some(la2)) = (seeds[0], seeds[1]) else {
+                        if let Some(case) = self.ma.cases.get_mut(&case_run) {
+                            case.done = true;
+                        }
+                        return Ok(());
+                    };
+                    pairs.push((la1, la2));
                 }
-                let (Some(la1), Some(la2)) = (seeds[0], seeds[1]) else {
-                    if let Some(case) = self.ma.cases.get_mut(&case_run) {
-                        case.done = true;
-                    }
-                    return Ok(());
-                };
                 let Some(case) = self.ma.cases.get_mut(&case_run) else {
                     return Ok(());
                 };
+                let Some(&(la1, la2)) = pairs.first() else {
+                    case.done = true;
+                    return Ok(());
+                };
                 case.seeds = [Some(la1), Some(la2)];
+                case.chain_seeds = pairs.iter().map(|&(a, b)| [Some(a), Some(b)]).collect();
                 let (jmax, crl_run) = (case.jmax, case.crl_run);
+                let entries = u32::try_from(pairs.len()).unwrap_or(u32::MAX);
                 out.send(
                     n.crlg,
-                    ScmsMsg::CrlAppend { i, la1, la2, jmax },
+                    ScmsMsg::CrlAppend { i, pairs, jmax },
                     "crl-append",
-                    self.sizes.crl_append(),
+                    self.sizes.crl_append_for(entries),
                     Transport::BackendNet,
                     FlowId::CrlIssuance,
                     crl_run,

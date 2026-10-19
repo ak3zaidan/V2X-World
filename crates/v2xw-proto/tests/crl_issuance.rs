@@ -163,6 +163,16 @@ fn a_second_revocation_issues_a_full_and_a_delta_crl() {
         panic!("full linkage CRL");
     };
     assert_eq!(t.index_within_i.0, 1);
+    // The delta is a CRL of its own: indexWithinI "increments by 1 every time a new full
+    // or delta CRL is issued" (Ieee1609Dot2CrlBaseTypes), so it takes the next value.
+    let v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents::deltaLinkedCrl(
+        d,
+    ) = &delta.contents.type_specific
+    else {
+        panic!("delta linkage CRL");
+    };
+    assert_eq!(d.i_rev.0.0, t.i_rev.0.0);
+    assert_eq!(d.index_within_i.0, 2, "full 1, then its delta 2");
     assert!(crl::revokes(&delta.contents, &implicit(&run, DEVICE_B, 0)));
     assert!(!crl::revokes(&delta.contents, &implicit(&run, DEVICE_A, 0)));
 }

@@ -122,7 +122,8 @@ pub enum RxReject {
     /// A CRL that [`v2xw_sec::crl::verify_crl`] does not accept (signature, PSID 256
     /// header, `CrlSsp` series or CRACA, contents).
     CrlRejected,
-    /// A CRL older than the one installed for the same CRACA and series.
+    /// A CRL, full or delta, that is not newer than the one installed for the same CRACA
+    /// and series (its `crlSerial`, or `iRev` and `indexWithinI`, then `issueDate`).
     CrlStale,
 }
 
@@ -347,8 +348,28 @@ impl EeCache {
 /// What one installed CRL said, for the overdue rule and freshness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CrlMeta {
-    issue_date: u32,
     next_crl: u32,
+    /// [`crl_order`] of the CRL (its `issueDate` last): a later one of the same CRACA and
+    /// series must be higher.
+    order: (u32, u32),
+}
+
+/// Where a CRL stands in its `(crlCraca, crlSeries)` sequence (R2): `crlSerial` in a hash
+/// CRL, `iRev · 256 + indexWithinI` in a linkage CRL (both count every full and delta
+/// CRL the CRACA issues for the series, `Ieee1609Dot2CrlBaseTypes`), then `issueDate`,
+/// which keeps a Generator whose Uint8 `indexWithinI` has saturated in order. A CRL whose
+/// order is not above the installed one's is stale: a replay of an earlier list, full or
+/// delta, cannot move the node's `nextCrl` (the overdue clock) backwards.
+fn crl_order(c: &v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::CrlContents) -> (u32, u32) {
+    use v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents as T;
+    let counter = match &c.type_specific {
+        T::fullHashCrl(h) | T::deltaHashCrl(h) => h.crl_serial.0,
+        T::fullLinkedCrl(l) | T::deltaLinkedCrl(l) => {
+            u32::from(l.i_rev.0.0) * 256 + u32::from(l.index_within_i.0)
+        }
+        _ => 0,
+    };
+    (counter, c.issue_date.0.0)
 }
 
 /// What a verified CRL hands the node to install.
@@ -959,22 +980,17 @@ impl RxTrust {
             return Err(RxReject::CrlRejected);
         }
         let key = (craca, series_no);
-        let full = matches!(
-            c.type_specific,
-            v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents::fullHashCrl(_)
-                | v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents::fullLinkedCrl(_)
-        );
+        let order = crl_order(c);
         if let Some(m) = self.crls.get(&key)
-            && full
-            && c.issue_date.0.0 < m.issue_date
+            && order <= m.order
         {
             return Err(RxReject::CrlStale);
         }
         self.crls.insert(
             key,
             CrlMeta {
-                issue_date: c.issue_date.0.0,
                 next_crl: c.next_crl.0.0,
+                order,
             },
         );
         self.seen_crls.insert(digest);

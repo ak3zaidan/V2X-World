@@ -404,3 +404,32 @@ fn a_device_with_an_account_is_still_refused_a_top_off_once_blocklisted() {
         "generation stops (SCMS-509)"
     );
 }
+
+/// "Generation stops for blacklisted devices" ([CAMP122] SCMS-509) also for a weekly job
+/// the RA armed before the MA's decision: the timer fires, and the RA checks its blocklist
+/// before it expands a single key.
+#[test]
+fn a_weekly_job_armed_before_the_blocklist_generates_nothing() {
+    let mut run = bytes_run(&[DEVICE_A]);
+    provisioned(&mut run, DEVICE_A, 614, 1, 1);
+    // A top-off for the first week past the 3-year horizon arms the job for its boundary.
+    let _ = run.topup(DEVICE_A, 614 + 156, 1);
+    run.run_until(WEEK_NS / 2).expect("runs");
+    assert_eq!(run.state.ra.pregen_deferred, 1, "armed for the boundary");
+    let before = run.state.ra.pregen_periods;
+    run.state.ra.blocklist.insert(DEVICE_A);
+    run.run().expect("runs");
+    assert_eq!(
+        run.state.ra.pregen_blocked, 1,
+        "the job ran into the blocklist"
+    );
+    assert_eq!(
+        run.state.ra.pregen_periods, before,
+        "and generated nothing (SCMS-509)"
+    );
+    assert!(
+        !run.state.devices[&DEVICE_A]
+            .credentials
+            .contains_key(&(614 + 156, 0))
+    );
+}

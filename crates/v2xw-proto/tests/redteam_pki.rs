@@ -4,10 +4,10 @@
 //!
 //!     cargo test -p v2xw-proto --test redteam_pki -- --nocapture --test-threads=1
 //!
-//! Two of these tests pin weaknesses as they stand (a replayed older CRL, a second
-//! provisioning chain that outlives the revocation of the first). They assert the
-//! vulnerable outcome on purpose, so that a fix turns them red and the document is updated
-//! with it; each says so in its failure message.
+//! Two of these tests pinned weaknesses (R2: a replayed older CRL; B4: a second
+//! provisioning chain that outlived the revocation of the first). Both are fixed and the
+//! tests are now regressions for the fixes (docs/design/scms-real/validation/protocols.md).
+//! Each was shown to fail with its fix removed.
 
 mod common;
 
@@ -341,12 +341,14 @@ fn two_revocations() -> (
     (run, v1)
 }
 
-/// FINDING (pinned): the device model replaces its CRL with any list that verifies, so an
-/// RSU that replays the CRL Generator's own earlier, validly signed list erases a later
-/// revocation at every vehicle that hears it, and a revoked device that checks itself
-/// against it resumes transmitting. Nothing is forged: no signature check can catch it.
+/// R2 (fixed): an RSU that replays the CRL Generator's own earlier, validly signed list
+/// once erased a later revocation at every vehicle that heard it, and a revoked device
+/// that checked itself against it resumed transmitting. Nothing is forged, so no signature
+/// check can catch it; the device now refuses a CRL whose 1609.2 counter (`iRev`,
+/// `indexWithinI`, then `issueDate`) is not above the one it holds for that CRACA and
+/// series, and the same list heard again is still installed.
 #[test]
-fn a_replayed_older_crl_erases_a_newer_revocation() {
+fn a_replayed_older_crl_is_refused_and_the_newer_revocation_holds() {
     let (mut run, v1) = two_revocations();
     let lva = run.state.devices[&DEVICE_A].credentials[&(0, 0)].lv;
     let lvx = run.state.devices[&DEVICE_X].credentials[&(0, 0)].lv;
@@ -363,18 +365,29 @@ fn a_replayed_older_crl_erases_a_newer_revocation() {
     let c = &run.state.devices[&DEVICE_C];
     let rolled_back = !crl_contains(&c.crl, 0, 0, lva);
     println!(
-        "RT crl-replay accepted={} A_revoked_at_C={} X_revoked_at_C={} A_silenced={}",
-        c.crls_rejected == 0,
+        "RT crl-replay stale_refusals_at_C={} A_revoked_at_C={} X_revoked_at_C={} A_silenced={}",
+        c.crls_stale,
         !rolled_back,
         crl_contains(&c.crl, 0, 0, lvx),
         run.state.devices[&DEVICE_A].silenced
     );
-    assert_eq!(c.crls_rejected, 0, "v1 is genuine: it verifies");
-    assert!(
-        rolled_back && !run.state.devices[&DEVICE_A].silenced,
-        "the CRL rollback is no longer possible: update docs/redteam/pki-privacy.md (R3) \
-         and turn this into a regression test for the fix"
-    );
+    assert_eq!(c.crls_rejected, 0, "v1 is genuine: its signature verifies");
+    assert_eq!(c.crls_stale, 1, "v1 is refused as older than v2");
+    assert_eq!(run.state.devices[&DEVICE_A].crls_stale, 1);
+    assert!(!rolled_back, "A stays revoked at C");
+    assert!(crl_contains(&c.crl, 0, 0, lvx), "and X too");
+    assert!(run.state.devices[&DEVICE_A].silenced, "A stays silent");
+    assert!(run.state.pdu_rejections.iter().any(|r| {
+        r.kind == v2xw_proto::scms::pdu::SpduKind::SecuredCrl
+            && r.reason.to_string().contains("stale CRL")
+    }));
+    // The current list heard again (an RSU repeating v2) is not a replay: it is installed
+    // again, which changes nothing and refuses nothing.
+    run.distribute_crl(DEVICE_C);
+    run.run().expect("v2 again");
+    let c = &run.state.devices[&DEVICE_C];
+    assert_eq!((c.crls_stale, c.crls_rejected), (1, 0));
+    assert!(crl_contains(&c.crl, 0, 0, lva));
 }
 
 /// A compromised RSU that edits the list it carries (adds an honest vehicle, or drops a
@@ -412,15 +425,16 @@ fn an_rsu_edited_crl_is_refused_whole() {
 // 3. A second provisioning chain (a stolen enrolment key, or a device hoarding)
 // -----------------------------------------------------------------------------------------
 
-/// FINDING (pinned): after any policy change the RA accepts a second butterfly request
-/// from the same enrolment certificate ([CAMP122] SCMS-520). That request gets its own LA
-/// chain pair. Revoking the device publishes the seeds of the chain the reported
-/// certificate came from; the RA blocklists the enrolment, but every certificate of the
-/// other chain stays valid on every receiver's CRL check for as long as it was issued for.
-/// A thief holding the enrolment key gets its own unlinked batch this way; a misbehaving
-/// device keeps one batch through its own revocation.
+/// B4 (fixed): after any policy change the RA accepts a second butterfly request from the
+/// same enrolment certificate ([CAMP122] SCMS-520), and that request gets its own LA chain
+/// pair. Revocation once published only the reported chain's seeds, so every certificate
+/// of the other chain stayed valid for as long as it was issued for (a thief holding the
+/// enrolment key kept an unlinked batch; a misbehaving device kept one through its own
+/// revocation). The RA blocklists the enrolment, so it now returns the chain identifiers
+/// of every request it accepted from it ([BRECHT §VI-D] per request), and the MA has the
+/// seeds of each released: one CRL entry per chain, every certificate covered.
 #[test]
-fn a_second_provisioning_chain_survives_the_revocation_of_the_first() {
+fn every_chain_of_a_revoked_enrolment_is_revoked() {
     let mut run = deployment(2);
     provisioned(&mut run, DEVICE_A, 0, 1, JMAX);
     provisioned(&mut run, DEVICE_B, 0, 1, JMAX);
@@ -470,11 +484,28 @@ fn a_second_provisioning_chain_survives_the_revocation_of_the_first() {
     );
     assert_eq!(chains, 2, "the RA accepted the second request");
     assert!(st.ra.blocklist.contains(&DEVICE_A));
-    assert!(
-        covered > 0 && escaped > 0,
-        "every chain of the device is now revoked: update docs/redteam/pki-privacy.md (B4) \
-         and turn this into a regression test for the fix"
-    );
+    assert_eq!(crl.len(), 2, "one entry per chain pair");
+    assert!(covered > 0, "{covered}");
+    assert_eq!(escaped, 0, "no certificate of the device escapes");
+    // Device B, never reported, stays valid: the second entry is A's own chain.
+    for (&(i, lv), l) in &st.pca.issued {
+        let owner = st
+            .ra
+            .handles
+            .get(&l.handle)
+            .and_then(|h| st.ra.requests.get(h))
+            .map(|r| r.device);
+        if owner == Some(DEVICE_B) {
+            assert!(
+                !crl.iter()
+                    .any(|e| e.matches_any_index(i, LinkageValue::new(lv))),
+                "B is not revoked"
+            );
+        }
+    }
+    let case = st.ma.cases.values().find(|c| c.done).expect("a case");
+    assert_eq!(case.chains.len(), 2);
+    assert!(case.chain_seeds.iter().flatten().all(Option::is_some));
 }
 
 // -----------------------------------------------------------------------------------------
