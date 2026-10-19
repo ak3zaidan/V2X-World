@@ -2473,7 +2473,8 @@ pub struct ScmsSpec {
 #[serde(deny_unknown_fields)]
 pub struct DeploymentSpec {
     /// `us-production-2025` (two providers on one CTL, the US system), `us-test-ctl-2025`
-    /// (six roots), `camp-reference` (one SCMS with LOP and a central MA, the earlier
+    /// (the 2025-07-17 test CTL: six roots, five approved), `camp-reference` (one SCMS with
+    /// LOP and a central MA, the earlier
     /// topology) or `custom` (the providers listed below).
     #[serde(default = "DeploymentSpec::default_preset")]
     pub preset: String,

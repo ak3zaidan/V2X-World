@@ -26,7 +26,7 @@
 //!   ISS/SAESOL/Autocrypt): which issuer, `crlSeries` (2 for ICA-issued, 256 for
 //!   root-issued; Profile Table 1), `cracaId` = the issuer's `HashedId3`, the
 //!   `SecurityMgmtSsp` per component (`81 00 02` root, `83 00 02` ICA, …), the
-//!   `certIssuePermissions` groups, the RA's `certRequestPermissions`, encryption keys on
+//!   `certIssuePermissions` groups (the RA's in the production form), encryption keys on
 //!   the RA and MA only (production). Lifetimes are the published ones (see
 //!   [`ROLE_SPECS`]). A device validates each with the full 1609.2 chain rules of
 //!   [`v2xw_sec::chain::validate`], so a certificate whose SSP or permissions its issuer
@@ -59,8 +59,9 @@
 //!
 //! # What it does not do
 //!
-//! Business days skip weekends only; US federal holidays are not modelled here
-//! (UNCONFIRMED which calendar SCMS Manager uses). The provider's own CRL of revoked
+//! Business days are Eastern-time business days with the observed US federal holidays
+//! skipped ([`crate::scms::calendar`]); which holiday calendar SCMS Manager LLC observes is
+//! not published, so the federal one is an assumption. The provider's own CRL of revoked
 //! components (series 2/256) is the CRL work package's.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -114,6 +115,20 @@ pub const ELECTOR_START_TIME32: u32 = 503_136_005;
 pub const GENESIS_BACKDATE_S: u32 = 31_556_952;
 /// The published electors' lifetimes, years: staggered so they expire one at a time.
 pub const ELECTOR_YEARS: [u16; 5] = [12, 15, 18, 21, 24];
+/// The lifetime of every elector added after the first five, years: "By default, an
+/// Elector certificate shall be valid for 15 years" (Elector Policy v1.0 §2.3.1; the
+/// staggered 12–24 years apply to the first five only).
+pub const ELECTOR_DEFAULT_YEARS: u16 = 15;
+/// CTL publication deadlines, in Eastern business days (weekends and the observed US
+/// federal holidays skipped, [`crate::scms::calendar::is_business_day`]): a root addition
+/// within 3 (Provider Req. v1.1 §3.4.11), an elector addition within 5 (Elector Policy
+/// v1.0 §2.2.5, §2.4.2). A removal is within 48 h of the task order (Elector Policy
+/// §2.2.4).
+pub const CTL_ADD_ROOT_BUSINESS_DAYS: u32 = 3;
+/// See [`CTL_ADD_ROOT_BUSINESS_DAYS`].
+pub const CTL_ADD_ELECTOR_BUSINESS_DAYS: u32 = 5;
+/// See [`CTL_ADD_ROOT_BUSINESS_DAYS`].
+pub const CTL_REMOVAL_HOURS: u64 = 48;
 /// The US i-period epoch, 2015-01-06 04:00 EST = 09:00 UTC (03 §1 fact 4).
 pub const US_IPERIOD_EPOCH_UNIX_S: i64 = 1_420_534_800;
 /// The default wall-clock instant of scenario `t0`: 2026-01-06 09:00 UTC, the start of US
@@ -560,17 +575,17 @@ pub(crate) fn cert_issue_permissions(role: &str) -> Option<SequenceOfPsidGroupPe
             ]
         }
         "pca" => vec![group(all(), 1, 0, true, false)],
+        // The RA's one group `{all, minChainLength 0, chainLengthRange 0, eeType app}` in
+        // `certIssuePermissions`, as the only published production RA carries it
+        // (`ra.prod.s2x.io`, production chain file 2025-08-13). Every test-CTL RA (ISS
+        // pre-production, SAESOL test, Autocrypt) puts the same group in
+        // `certRequestPermissions` instead. One provider uses one form, so both engine
+        // PKIs (this hierarchy and `pdu::ScmsPki`) take the production one from here
+        // (WP-F2 finding 1; docs/design/scms-real/validation/governance-deployment.md).
+        "ra" => vec![group(all(), 0, 0, true, false)],
         _ => return None,
     };
     Some(SequenceOfPsidGroupPermissions(groups))
-}
-
-/// The RA's `certRequestPermissions`: it may request any application certificate
-/// (published RA certificates, 1609.2.1-2022 form).
-fn cert_request_permissions(role: &str) -> Option<SequenceOfPsidGroupPermissions> {
-    (role == "ra").then(|| {
-        SequenceOfPsidGroupPermissions(vec![group(SubjectPermissions::all(()), 0, 0, true, false)])
-    })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -927,32 +942,37 @@ pub struct GovernanceEvent {
     pub detail: String,
 }
 
-/// The SLA deadline by which a CTL change must be published (01 §3.1): additions within
-/// 3 business days (Provider Req. v1.1 §3.4.11; the Elector Policy allows 5), removals
-/// within 48 h (Elector Policy v1.0 §2.2.4). Business days skip Saturday and Sunday in UTC.
+/// The SLA deadline by which a CTL change must be published (01 §3.1): a root addition
+/// within 3 business days (Provider Req. v1.1 §3.4.11), an elector replacement within the
+/// 5 business days an elector has for an addition ballot (Elector Policy v1.0 §2.2.5,
+/// §2.4.2; the removal half of the same CTL is faster), a removal within 48 h (Elector
+/// Policy §2.2.4). Business days are counted on the Eastern civil date and skip weekends
+/// and the observed US federal holidays ([`crate::scms::calendar::is_business_day`]).
 #[must_use]
 pub fn ctl_publication_deadline(
     kind: CtlChangeKind,
     decided_at: SimTime,
     clock: WallClock,
 ) -> SimTime {
+    use crate::scms::calendar::{days_from_civil, eastern_date, is_business_day};
     const DAY: u64 = 86_400 * NS_PER_S;
+    let business_days = |n: u32| {
+        let mut t = decided_at;
+        let mut left = n;
+        while left > 0 {
+            t += DAY;
+            let (y, m, d) = eastern_date(clock.unix_seconds_at(t));
+            if is_business_day(days_from_civil(y, m, d)) {
+                left -= 1;
+            }
+        }
+        t
+    };
     match kind {
         CtlChangeKind::Genesis => decided_at,
-        CtlChangeKind::RemoveRoot => decided_at + 2 * DAY,
-        CtlChangeKind::AddRoot | CtlChangeKind::ReplaceElector => {
-            let mut t = decided_at;
-            let mut left = 3;
-            while left > 0 {
-                t += DAY;
-                let days = clock.unix_seconds_at(t).div_euclid(86_400);
-                let weekday = (days + 4).rem_euclid(7); // 0 = Sunday
-                if (1..=5).contains(&weekday) {
-                    left -= 1;
-                }
-            }
-            t
-        }
+        CtlChangeKind::RemoveRoot => decided_at + CTL_REMOVAL_HOURS * 3_600 * NS_PER_S,
+        CtlChangeKind::AddRoot => business_days(CTL_ADD_ROOT_BUSINESS_DAYS),
+        CtlChangeKind::ReplaceElector => business_days(CTL_ADD_ELECTOR_BUSINESS_DAYS),
     }
 }
 
@@ -1224,7 +1244,7 @@ impl Governance {
         for peer in gov.config.peers.clone() {
             gov.certify_peer(rng, &peer, issued);
         }
-        let ctl = gov.build_ctl(0, now32, None, None, &gov.approved_signers());
+        let ctl = gov.build_ctl(0, now32, None, &gov.approved_signers());
         gov.ctl = ctl.clone();
         gov.ctl_history.push(ctl);
         gov.counters.ctls_published += 1;
@@ -1290,7 +1310,7 @@ impl Governance {
             None,
             Some(SequenceOfPsidSsp(app_permissions(role))),
             cert_issue_permissions(role),
-            cert_request_permissions(role),
+            None,
             None,
             enc_field,
             VerificationKeyIndicator::verificationKey(key.public_key()),
@@ -1571,11 +1591,18 @@ impl Governance {
     }
 
     /// Builds and signs a CTL listing the approved electors and roots.
+    ///
+    /// A removed root is left out of `rootCaApprove` and **not** listed in `rootCaRemove`:
+    /// 1609.2.1 makes that list informational ("a certificate that is not included in
+    /// rootCaApprove is not valid even if it does not appear in rootCaRemove",
+    /// `Ieee1609Dot2Dot1CertManagement`), and SCMS Manager's only published root removal
+    /// (the 2025-07-17 test CTL, sequence 3, drops a root that sequence 2 approved and that
+    /// is valid until 2031) leaves `rootCaRemove` empty. A removed elector is listed in
+    /// `electorRemove` (no published US example either way).
     fn build_ctl(
         &self,
         sequence: u32,
         effective: u32,
-        removed_root: Option<[u8; 32]>,
         removed_elector: Option<[u8; 48]>,
         signers: &[u32],
     ) -> SignedCtl {
@@ -1598,15 +1625,6 @@ impl Governance {
             &roots,
             self.quorum,
         );
-        if let Some(r) = removed_root {
-            tbs.root_ca_remove = vec![
-                v2xw_msg::sec_types::ieee1609_dot2_dot1_cert_management::CtlRootCaEntry(
-                    v2xw_msg::sec_types::ieee1609_dot2_base_types::HashedId32(
-                        FixedOctetString::from(r),
-                    ),
-                ),
-            ];
-        }
         if let Some(e) = removed_elector {
             tbs.elector_remove = vec![
                 v2xw_msg::sec_types::ieee1609_dot2_dot1_cert_management::CtlElectorEntry(
@@ -1808,7 +1826,7 @@ impl Governance {
     /// tests a device must pass.
     #[must_use]
     pub fn ctl_endorsed_by(&self, electors: &[u32]) -> SignedCtl {
-        self.build_ctl(self.ctl.sequence, self.ctl.effective, None, None, electors)
+        self.build_ctl(self.ctl.sequence, self.ctl.effective, None, electors)
     }
 
     /// A CTL with the next sequence number, the current approvals, `quorum` for the CTL
@@ -1818,13 +1836,7 @@ impl Governance {
     pub fn forge_next_ctl(&self, quorum: u32, electors: &[u32]) -> SignedCtl {
         let mut g = self.shadow();
         g.quorum = quorum;
-        g.build_ctl(
-            self.ctl.sequence + 1,
-            self.ctl.effective,
-            None,
-            None,
-            electors,
-        )
+        g.build_ctl(self.ctl.sequence + 1, self.ctl.effective, None, electors)
     }
 
     fn shadow(&self) -> Governance {
@@ -1863,7 +1875,6 @@ impl Governance {
         kind: CtlChangeKind,
         decided_at: SimTime,
         signers: &[u32],
-        removed_root: Option<[u8; 32]>,
         removed_elector: Option<[u8; 48]>,
         detail: String,
     ) -> SimTime {
@@ -1871,7 +1882,7 @@ impl Governance {
         let at = ctl_publication_deadline(kind, decided_at, self.config.clock);
         let effective = self.config.clock.time32(at).unwrap_or(0);
         let seq = self.next_sequence();
-        let ctl = self.build_ctl(seq, effective, removed_root, removed_elector, signers);
+        let ctl = self.build_ctl(seq, effective, removed_elector, signers);
         self.counters.elector_endorsements += u32::try_from(signers.len()).unwrap_or(0);
         self.log.push(GovernanceEvent {
             decided_at,
@@ -1916,7 +1927,6 @@ impl Governance {
             decided_at,
             &signers,
             None,
-            None,
             label.to_string(),
         );
         (id, at)
@@ -1937,7 +1947,6 @@ impl Governance {
             CtlChangeKind::RemoveRoot,
             decided_at,
             &signers,
-            Some(root),
             None,
             label,
         ))
@@ -1985,7 +1994,6 @@ impl Governance {
             CtlChangeKind::AddRoot,
             decided_at,
             &signers,
-            None,
             None,
             format!("{label} rollover"),
         );
@@ -2044,7 +2052,7 @@ impl Governance {
             .collect();
         let new_slot = u32::try_from(self.electors.len()).unwrap_or(u32::MAX);
         let now32 = self.config.clock.time32(decided_at).unwrap_or(0);
-        let years = ELECTOR_YEARS[ELECTOR_YEARS.len() - 1];
+        let years = ELECTOR_DEFAULT_YEARS;
         let e = ctl::elector(
             &format!("v2xelector{}.manager.sim", new_slot + 1),
             now32,
@@ -2069,7 +2077,6 @@ impl Governance {
             CtlChangeKind::ReplaceElector,
             decided_at,
             &signers,
-            None,
             Some(removed),
             format!("slot {slot} -> slot {new_slot}"),
         );

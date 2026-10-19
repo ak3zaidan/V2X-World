@@ -47,8 +47,8 @@ Source tags are those of 01 §Sources and 03 §0. Two sources are new in this fi
 | `enrolment_lifetime_s` | 189216000 | s | CITED | `params.rs` | 6 years. [CAMP122] Table 3, SCMS-1307; owner decision 10. Other values in the sources: 7 y (CAMP R1.1) and 3 y (5GAA draft CP (419)). 03 §5, §14 item 2. It was listed as uncited until WP-D3 |
 | `reenrol_lead_s` | 47347200 | s | DERIVED | `params.rs` | 548 days, the midpoint of the "12–24 months before expiry" that [SM-REENR] §1–3 recommends |
 | `reenrol_download_delay_s` | 300 | s | CITED | `params.rs` | The RA's nextDlTime. download-minWait 5 min, [SMP] Table 3. The flow is two-phase per [SM-REENR] |
-| `electors` | 5 | - | CITED | `params.rs` | Elector Tech Spec §2.1; [SMP] §2.1.15 |
-| `elector_quorum` | 3 | - | CITED | `params.rs` | Any 3 of 5. Elector Tech Spec §2.2; the published CTLs carry quorum 3 (01 §3.1) |
+| `electors` | 5 | - | CITED | `params.rs` (= `deployment::US_ELECTORS`) | Elector Tech Spec v1.1 §2.1; [SMP] §2.1.15; every published CTL lists five |
+| `elector_quorum` | 3 | - | CITED | `params.rs` (= `deployment::US_QUORUM`) | Any 3 of 5. Elector Tech Spec v1.1 §2.4 ("any three (3) are necessary and sufficient"); the published CTLs since sequence 1 carry quorum 3 (decoded, validation/governance-deployment.md) |
 
 ### 1.3 Shuffles (privacy)
 
@@ -177,10 +177,15 @@ The engine's earlier defaults were a 512 B ClientHello and a 4,000 B server flig
 | Name | Default | Unit | Status | Where | Source or reason |
 |---|---|---|---|---|---|
 | `us_electors` | 5 | - | CITED | `deployment.rs` `US_ELECTORS` | Elector Tech Spec §2.1 |
-| `us_quorum` | 3 | - | CITED | `deployment.rs` `US_QUORUM` | Elector Tech Spec §2.2 |
-| `elector_years` | `12,15,18,21,24` | y | CITED | `governance.rs` `ELECTOR_YEARS` | Published test electors (01 §3.1) |
+| `us_quorum` | 3 | - | CITED | `deployment.rs` `US_QUORUM` | Elector Tech Spec v1.1 §2.4 |
+| `elector_years` | `12,15,18,21,24` | y | CITED | `governance.rs` `ELECTOR_YEARS` | Elector Policy v1.0 §2.3.1 ("the first 5 Electors' validity shall be staggered … 12, 15, 18, 21 and 24 years"); the published production and test elector certificates decode to exactly these |
+| `elector_default_years` | 15 | y | CITED | `governance.rs` `ELECTOR_DEFAULT_YEARS` | Elector Policy v1.0 §2.3.1: "By default, an Elector certificate shall be valid for 15 years". Every replacement elector takes it. It took the fifth elector's 24 y until the governance validation |
+| `ctl_add_root_business_days` | 3 | business day | CITED | `governance.rs` `CTL_ADD_ROOT_BUSINESS_DAYS` | Provider Req. v1.1 §3.4.11 ("published by the Provider within three (3) business days"). Counted on the Eastern date, weekends and federal holidays skipped (`calendar.rs`) |
+| `ctl_add_elector_business_days` | 5 | business day | CITED | `governance.rs` `CTL_ADD_ELECTOR_BUSINESS_DAYS` | Elector Policy v1.0 §2.2.5, §2.4.2: an elector has up to 5 business days for an addition ballot. An elector replacement adds one. It used the root rule's 3 days until the governance validation |
+| `ctl_removal_hours` | 48 | h | CITED | `governance.rs` `CTL_REMOVAL_HOURS` | Elector Policy v1.0 §2.2.4 ("executed within as little as 48 hours of receipt of the task order"; §2.4.4 for a root) |
+| `business_day_holidays` | `5 USC 6103` | - | ASSUMPTION | `calendar.rs` `federal_holidays` | SCMS Manager LLC and the providers do not publish their business-day calendar. The engine uses the US federal holidays with the E.O. 11582 observed-date rule, on the Eastern civil date |
 | `elector_start_time32` | 503136005 | s | CITED | `governance.rs` | Published elector certificates (2019-12-11) |
-| `component_lifetimes` | `ROLE_SPECS` | y | CITED | `governance.rs` `ROLE_SPECS` | Each comes from a published production or test certificate named in its `source`. DCM, LOP and DC take the RA's 6 y as an ASSUMPTION, because none of them has a published certificate |
+| `component_lifetimes` | `ROLE_SPECS` | y | CITED | `governance.rs` `ROLE_SPECS` | Each comes from a published production or test certificate named in its `source`. DCM, LOP and DC take the RA's 6 y as an ASSUMPTION, because none of them has a published certificate. The root's 30 y is the SAESOL production root's; Provider Req. v1.1 §3.6.4 requires 70 y (20 y key), which the other production root (`v2xrootca.ghsiss.com`, 2016-03-22, 70 y) has. One profile serves every provider (validation/governance-deployment.md G-14) |
 | `genesis_backdate_s` | 31556952 | s | ASSUMPTION | `governance.rs` | One 1609.2 year. A deployed hierarchy predates any run, so the current week's pseudonyms must fall inside their issuers' validity |
 | `default_t0_unix_s` | 1767690000 | s | DERIVED | `governance.rs` `DEFAULT_T0_UNIX_S` | The start of US i-period 574, used only when a scenario gives no `time.t0` |
 | `provider_regions` | `REGIONS` | - | ASSUMPTION | `deployment.rs` | No provider publishes where it runs (01 §2.3). Each provider is placed in a representative public-cloud metro (owner decision 6) |

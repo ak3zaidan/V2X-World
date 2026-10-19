@@ -8,9 +8,9 @@ certificates, each with a SHA-384 fingerprint.
 licence or terms of use, so per the project rule (store reference files only when their
 licence allows) the files live in the git-ignored `files/` directory and are fetched by
 `tools/scms-artefacts/fetch.py`, which checks each one against the published SHA-384 and
-the sha256 below. Owner decision: if SCMS Manager's terms allow redistribution (the
-files are trust anchors meant to be installed on every device), commit `files/` and drop
-the `#[ignore]` from `crates/v2xw-sec/tests/real_artefacts.rs`.
+the sha256 below. Owner decision: the files stay uncommitted (All Rights Reserved), and
+`crates/v2xw-sec/tests/real_artefacts.rs` runs whenever `files/` is present;
+`V2XW_SCMS_ARTEFACTS=1` makes a missing cache fail instead of skip (WP-F2 finding 5).
 
 | Local path (`files/…`) | Download (under `wp-content/uploads/`) | Published SHA-384 (of the file) | sha256 |
 |---|---|---|---|

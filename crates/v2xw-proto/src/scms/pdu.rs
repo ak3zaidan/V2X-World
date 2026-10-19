@@ -345,23 +345,13 @@ fn component_tbs(
     // `{all, 3, -1}` and three explicit groups, ICA `{all, 2, 0}` and `{35, 256}`, the
     // ACA (`pca`) `{all, 1, 0, app}`, and the RA the SAESOL production RA's
     // `{all, 0, 0, app}`, the published profile `chain::ChainPolicy::
-    // accept_published_ra_profile` tolerates (governance.rs `cert_issue_permissions`).
+    // accept_published_ra_profile` tolerates. Every group comes from governance.rs
+    // `cert_issue_permissions`, the one per-provider profile both engine PKIs use, so the
+    // RA devices see and the RA the governance hierarchy certifies agree (WP-F2 finding 1).
     let role = name.split('.').next().unwrap_or("");
     let published = match role {
-        "root" | "ica" | "eca" => crate::scms::governance::cert_issue_permissions(role),
+        "root" | "ica" | "eca" | "ra" => crate::scms::governance::cert_issue_permissions(role),
         "aca" => crate::scms::governance::cert_issue_permissions("pca"),
-        "ra" => Some(SequenceOfPsidGroupPermissions(vec![
-            v2xw_msg::sec_types::PsidGroupPermissions::new(
-                v2xw_msg::sec_types::ieee1609_dot2::SubjectPermissions::all(()),
-                Integer::from(0),
-                Integer::from(0),
-                {
-                    let mut b = rasn::types::FixedBitString::<8>::ZERO;
-                    b.set(0, true);
-                    v2xw_msg::sec_types::EndEntityType(b)
-                },
-            ),
-        ])),
         _ => None,
     };
     let issue = published
