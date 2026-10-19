@@ -321,3 +321,7 @@
   .pki-time { display: none; }
 }
 .pki-node .r { font-size: 11.5px; }
+/* Status marks sit in the corner, so a narrow node keeps its whole name. */
+.pki-node .pki-dot { position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; }
+.pki-node .pki-lock { position: absolute; top: 3px; left: 3px; width: 8px; height: 8px; }
+.pki-node { padding: 0 4px; }
