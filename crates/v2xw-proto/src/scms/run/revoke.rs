@@ -138,6 +138,8 @@ impl ScmsRun {
                 lookups: Vec::new(),
                 same: [None, None],
                 seeds: [None, None],
+                chains: Vec::new(),
+                chain_seeds: Vec::new(),
                 i_rev,
                 jmax,
                 resolved: false,
@@ -322,6 +324,25 @@ impl ScmsState {
                     .get(&handle)
                     .and_then(|h| self.ra.requests.get(h))
                     .copied();
+                // B4: the RA blocklists the enrolment, not the request, so it answers
+                // with the chains of every request it accepted from that enrolment,
+                // the reported one first. Revoking only the reported chain would leave a
+                // second request's batch ([CAMP122] SCMS-520) valid on every receiver
+                // for as long as it was issued for; [BRECHT §VI-D] describes the return
+                // for one request because a device has one. The MA still learns only
+                // opaque identifiers ([BRECHT §VI-C]).
+                let chains: Vec<(Lci, Lci)> = rec.map_or_else(Vec::new, |r| {
+                    let mut v: Vec<(Lci, Lci)> = Vec::new();
+                    let mine = self.ra.requests.values().filter(|o| o.device == r.device);
+                    for o in core::iter::once(&r).chain(mine) {
+                        if let (Some(a), Some(b)) = (o.lci1, o.lci2) {
+                            if !v.contains(&(a, b)) {
+                                v.push((a, b));
+                            }
+                        }
+                    }
+                    v
+                });
                 if let Some(r) = rec {
                     self.ra.blocklist.insert(r.device);
                     // The ECA must not issue the blocklisted device a successor either,
@@ -337,41 +358,44 @@ impl ScmsState {
                     );
                 }
                 out.stage_at(StageId::Blocklisted, to, None, flow, run);
+                let pairs = u32::try_from(chains.len().max(1)).unwrap_or(u32::MAX);
                 out.send(
                     n.ma,
                     ScmsMsg::BlocklistResponse {
-                        known: rec.is_some(),
-                        lci1: rec.and_then(|r| r.lci1).unwrap_or(Lci(0)),
-                        lci2: rec.and_then(|r| r.lci2).unwrap_or(Lci(0)),
+                        known: rec.is_some() && !chains.is_empty(),
+                        chains,
                     },
                     "blocklist-response",
-                    self.sizes.blocklist_response(),
+                    self.sizes.blocklist_response_for(pairs),
                     Transport::BackendNet,
                     flow,
                     run,
                 );
             }
-            ScmsMsg::BlocklistResponse { known, lci1, lci2 } => {
+            ScmsMsg::BlocklistResponse { known, chains } => {
                 if !known {
                     if let Some(case) = self.ma.cases.get_mut(&run) {
                         case.done = true;
                     }
                     return Ok(());
                 }
-                let Some(case) = self.ma.cases.get(&run) else {
+                let Some(case) = self.ma.cases.get_mut(&run) else {
                     return Ok(());
                 };
                 let i_rev = case.i_rev;
+                let chains: Vec<[Lci; 2]> = chains.into_iter().map(|(a, b)| [a, b]).collect();
+                case.chain_seeds = vec![[None, None]; chains.len()];
+                case.chains = chains.clone();
                 if let Some(role) = self.committees.role("linkage") {
                     // t-of-n linkage: the seeds are released by any quorum of the
                     // committee, two secrets per revocation (`threshold::linkage`).
+                    let secrets = u32::try_from(2 * chains.len()).unwrap_or(u32::MAX);
                     self.committees.start(
                         role,
-                        2,
+                        secrets,
                         Pending::SeedsReleased {
                             case: run,
-                            lci1,
-                            lci2,
+                            chains,
                             i: i_rev,
                         },
                         at,
@@ -386,25 +410,22 @@ impl ScmsState {
                 // if one has not (a down LA blocks the revocation until it returns).
                 out.start_timer(
                     self.params.seed_retry,
-                    ScmsMsg::SeedRetry {
-                        lci1,
-                        lci2,
-                        i: i_rev,
-                        tries: 0,
-                    },
+                    ScmsMsg::SeedRetry { i: i_rev, tries: 0 },
                     flow,
                     run,
                 );
-                for (la, lci) in [(LaIndex::One, lci1), (LaIndex::Two, lci2)] {
-                    out.send(
-                        self.nodes.la(la),
-                        ScmsMsg::SeedRequest { la, lci, i: i_rev },
-                        "seed-request",
-                        self.sizes.seed_request(),
-                        Transport::BackendNet,
-                        flow,
-                        run,
-                    );
+                for pair in &chains {
+                    for (la, lci) in [(LaIndex::One, pair[0]), (LaIndex::Two, pair[1])] {
+                        out.send(
+                            self.nodes.la(la),
+                            ScmsMsg::SeedRequest { la, lci, i: i_rev },
+                            "seed-request",
+                            self.sizes.seed_request(),
+                            Transport::BackendNet,
+                            flow,
+                            run,
+                        );
+                    }
                 }
             }
             ScmsMsg::SeedRequest { la, lci, i } => {
@@ -422,7 +443,13 @@ impl ScmsState {
                 self.la[la.idx()].seeds_released += 1;
                 out.send(
                     n.ma,
-                    ScmsMsg::SeedResponse { la, la_id, seed, i },
+                    ScmsMsg::SeedResponse {
+                        la,
+                        lci,
+                        la_id,
+                        seed,
+                        i,
+                    },
                     "seed-response",
                     self.sizes.seed_response(),
                     Transport::BackendNet,
@@ -430,62 +457,77 @@ impl ScmsState {
                     run,
                 );
             }
-            ScmsMsg::SeedResponse { la, la_id, seed, i } => {
-                let (ready, jmax, crl_run) = {
+            ScmsMsg::SeedResponse {
+                la,
+                lci,
+                la_id,
+                seed,
+                i,
+            } => {
+                let (pairs, jmax, crl_run) = {
                     let Some(case) = self.ma.cases.get_mut(&run) else {
                         return Ok(());
                     };
-                    case.seeds[la.idx()] = Some((la_id, seed));
-                    (
-                        case.seeds[0].is_some() && case.seeds[1].is_some(),
-                        case.jmax,
-                        case.crl_run,
-                    )
+                    let k = la.idx();
+                    let Some(c) = case.chains.iter().position(|p| p[k] == lci) else {
+                        return Ok(());
+                    };
+                    let complete = |s: &[[Option<(LaId, LinkageSeed)>; 2]]| {
+                        s.iter().all(|x| x[0].is_some() && x[1].is_some())
+                    };
+                    // A retry's duplicate answer, after every chain is in, adds nothing.
+                    let was_ready = complete(&case.chain_seeds[..]);
+                    case.chain_seeds[c][k] = Some((la_id, seed));
+                    if c == 0 {
+                        case.seeds[k] = Some((la_id, seed));
+                    }
+                    let pairs: Vec<_> = if complete(&case.chain_seeds[..]) && !was_ready {
+                        case.chain_seeds
+                            .iter()
+                            .filter_map(|s| Some((s[0]?, s[1]?)))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    (pairs, case.jmax, case.crl_run)
                 };
-                if ready {
-                    let case = self.ma.cases.get(&run).expect("checked");
-                    let (la1, la2) = (
-                        case.seeds[0].expect("both present"),
-                        case.seeds[1].expect("both present"),
-                    );
+                if !pairs.is_empty() {
+                    let entries = u32::try_from(pairs.len()).unwrap_or(u32::MAX);
                     out.send(
                         n.crlg,
-                        ScmsMsg::CrlAppend { i, la1, la2, jmax },
+                        ScmsMsg::CrlAppend { i, pairs, jmax },
                         "crl-append",
-                        self.sizes.crl_append(),
+                        self.sizes.crl_append_for(entries),
                         Transport::BackendNet,
                         FlowId::CrlIssuance,
                         crl_run,
                     );
                 }
             }
-            ScmsMsg::SeedRetry {
-                lci1,
-                lci2,
-                i,
-                tries,
-            } => {
+            ScmsMsg::SeedRetry { i, tries } => {
                 let Some(case) = self.ma.cases.get(&run) else {
                     return Ok(());
                 };
                 // A timer from an earlier case, a case already complete, or one that has
                 // asked enough: nothing to do.
-                if case.run != run
-                    || case.done
-                    || (case.seeds[0].is_some() && case.seeds[1].is_some())
-                    || tries >= SEED_RETRY_MAX
-                {
+                let complete = case
+                    .chain_seeds
+                    .iter()
+                    .all(|s| s[0].is_some() && s[1].is_some());
+                if case.run != run || case.done || complete || tries >= SEED_RETRY_MAX {
                     return Ok(());
                 }
-                let missing: Vec<(LaIndex, Lci)> = [(LaIndex::One, lci1), (LaIndex::Two, lci2)]
-                    .into_iter()
-                    .filter(|(la, _)| case.seeds[la.idx()].is_none())
+                let missing: Vec<(LaIndex, Lci)> = case
+                    .chains
+                    .iter()
+                    .zip(&case.chain_seeds)
+                    .flat_map(|(p, s)| [(LaIndex::One, p[0], s[0]), (LaIndex::Two, p[1], s[1])])
+                    .filter(|(_, _, s)| s.is_none())
+                    .map(|(la, lci, _)| (la, lci))
                     .collect();
                 out.start_timer(
                     self.params.seed_retry,
                     ScmsMsg::SeedRetry {
-                        lci1,
-                        lci2,
                         i,
                         tries: tries + 1,
                     },

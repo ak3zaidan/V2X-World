@@ -71,8 +71,58 @@ pub struct IssuedCrl {
     pub pdu: crate::scms::pdu::Pdu,
 }
 
+/// Where a CRL stands in the sequence its CRL Generator issues for one
+/// `(crlCraca, crlSeries)` (R2).
+///
+/// IEEE 1609.2 gives every CRL of a series a counter: `crlSerial` in a hash CRL
+/// ("increments by 1 every time a new full or delta CRL is issued for the indicated
+/// crlCraca and crlSeries values"), and `(iRev, indexWithinI)` in a linkage CRL
+/// (`indexWithinI` "is set to 0 for the first CRL issued for the indicated combination of
+/// crlCraca, crlSeries, and iRev, and increments by 1 every time a new full or delta CRL
+/// is issued … without changing iRev"; `Ieee1609Dot2CrlBaseTypes`). A device that holds
+/// a CRL refuses another of the same series whose counter is not higher: a replay of the
+/// Generator's own earlier, validly signed list would otherwise roll a revocation back.
+/// `issueDate` breaks a tie, so a Generator whose `indexWithinI` has reached its Uint8
+/// ceiling within one i-period is still followed. What a real device does with a stale
+/// CRL is not published; refusing it is the reading of the counters' purpose (recorded
+/// in docs/design/scms-real/validation/protocols.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CrlOrder {
+    /// `crlSerial`, or `iRev · 256 + indexWithinI`.
+    pub counter: u32,
+    /// `issueDate` (Time32).
+    pub issue_date: u32,
+}
+
+impl CrlOrder {
+    /// The `(crlCraca, crlSeries)` a CRL belongs to and where it stands in that sequence.
+    #[must_use]
+    pub fn of(
+        c: &v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::CrlContents,
+    ) -> (([u8; 8], u16), CrlOrder) {
+        use v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents as T;
+        let mut craca = [0u8; 8];
+        craca.copy_from_slice(&c.crl_craca.0[..]);
+        let counter = match &c.type_specific {
+            T::fullHashCrl(h) | T::deltaHashCrl(h) => h.crl_serial.0,
+            T::fullLinkedCrl(l) | T::deltaLinkedCrl(l) => {
+                u32::from(l.i_rev.0.0) * 256 + u32::from(l.index_within_i.0)
+            }
+            _ => 0,
+        };
+        (
+            (craca, c.crl_series.0.0),
+            CrlOrder {
+                counter,
+                issue_date: c.issue_date.0.0,
+            },
+        )
+    }
+}
+
 /// The device's check of a received `SecuredCrl` against the CRL list it is about to act
-/// on (see the `CrlDownload` handler).
+/// on (see the `CrlDownload` handler). Returns the CRL's series and [`CrlOrder`], which
+/// the caller compares with the CRL it holds.
 ///
 /// # Errors
 /// The CRL does not decode, the signer is not one attached certificate that chains to
@@ -82,7 +132,7 @@ pub fn device_check_crl(
     pki: &crate::scms::pdu::ScmsPki,
     bytes: &[u8],
     list: &[CrlLinkageEntry],
-) -> core::result::Result<(), crate::scms::pdu::PduError> {
+) -> core::result::Result<(([u8; 8], u16), CrlOrder), crate::scms::pdu::PduError> {
     use crate::scms::pdu::PduError;
     use v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents as T;
     let opened = v2xw_sec::crl::decode_crl(bytes).map_err(|e| PduError::Coer(e.to_string()))?;
@@ -129,7 +179,7 @@ pub fn device_check_crl(
     if v2xw_sec::crl::crl_contents(&spec) != *c {
         return Err(PduError::Shape("the CRL list differs from the signed CRL"));
     }
-    Ok(())
+    Ok(CrlOrder::of(c))
 }
 
 impl ScmsState {
@@ -194,12 +244,17 @@ impl ScmsState {
             u32::try_from(self.params.crl.next_crl.as_nanos() / v2xw_core::time::NS_PER_S)
                 .unwrap_or(u32::MAX),
         );
-        let index_within_i = {
-            let n = self.crlg.crls_at_i.entry(i_rev16).or_insert(0);
+        // `indexWithinI` counts every full *and* delta CRL issued at this `iRev`
+        // (`Ieee1609Dot2CrlBaseTypes`): the full takes the next value and a delta issued
+        // with it the one after. It is a Uint8; past 255 it stays at 255 and `issueDate`
+        // orders the lists ([`CrlOrder`]).
+        let next_index = |crls_at_i: &mut BTreeMap<u16, u8>| {
+            let n = crls_at_i.entry(i_rev16).or_insert(0);
             let k = *n;
             *n = n.saturating_add(1);
             k
         };
+        let index_within_i = next_index(&mut self.crlg.crls_at_i);
         let craca = pki.craca_id8();
         let sign = |spec: &CrlSpec| -> Option<crate::scms::pdu::Pdu> {
             let contents = v2xw_sec::crl::crl_contents(spec);
@@ -230,11 +285,12 @@ impl ScmsState {
         let since = self.crlg.published_entries.min(self.crlg.entries.len());
         if self.params.crl.deltas && self.crlg.secured.is_some() {
             let added = linkage_revocations(&self.crlg.entries[since..], i_rev);
+            let delta_index = next_index(&mut self.crlg.crls_at_i);
             let spec = CrlSpec {
                 delta: true,
                 body: CrlBody::Linkage {
                     i_rev: i_rev16,
-                    index_within_i,
+                    index_within_i: delta_index,
                     individual: added.clone(),
                 },
                 ..full_spec.clone()
@@ -336,17 +392,19 @@ impl ScmsState {
         let n = self.nodes;
         let (flow, run, to, at, from) = (d.flow, d.run, d.to, d.at, d.from);
         match d.msg {
-            ScmsMsg::CrlAppend { i, la1, la2, jmax } => {
-                let entry = CrlLinkageEntry {
-                    i,
-                    la_id1: la1.0,
-                    la_id2: la2.0,
-                    ls1_i: la1.1,
-                    ls2_i: la2.1,
-                    jmax,
-                    max_forward: linkage::DEFAULT_MAX_FORWARD_PERIODS,
-                };
-                self.crlg.entries.push(entry);
+            ScmsMsg::CrlAppend { i, pairs, jmax } => {
+                // One entry per chain pair of the device (B4), in one issuance.
+                for (la1, la2) in pairs {
+                    self.crlg.entries.push(CrlLinkageEntry {
+                        i,
+                        la_id1: la1.0,
+                        la_id2: la2.0,
+                        ls1_i: la1.1,
+                        ls2_i: la2.1,
+                        jmax,
+                        max_forward: linkage::DEFAULT_MAX_FORWARD_PERIODS,
+                    });
+                }
                 if let Some(case) = self.ma.case_by_crl_run(run) {
                     case.done = true;
                 }
@@ -540,13 +598,43 @@ impl ScmsState {
                 // `issuerIsCraca` names that ICA as `crlCraca`, the signature, the
                 // contents rules — and acts only on the entries those signed bytes
                 // carry: a list that differs from them is refused whole.
+                // R2: a genuine list is still refused if it is not newer than the one
+                // the device holds for that CRACA and series ([`CrlOrder`]); the same
+                // list heard again is installed again, which changes nothing.
+                let mut held = None;
                 if let (Some(p), Some(pki)) = (secured.as_ref(), self.pki.clone()) {
-                    if let Err(e) = device_check_crl(&pki, p.bytes(), &list) {
-                        if let Some(dev) = self.devices.get_mut(&device) {
-                            dev.crls_rejected += 1;
+                    match device_check_crl(&pki, p.bytes(), &list) {
+                        Err(e) => {
+                            if let Some(dev) = self.devices.get_mut(&device) {
+                                dev.crls_rejected += 1;
+                            }
+                            self.reject_pdu(SpduKind::SecuredCrl, device, at, e);
+                            return Ok(());
                         }
-                        self.reject_pdu(SpduKind::SecuredCrl, device, at, e);
-                        return Ok(());
+                        Ok((key, order)) => {
+                            let digest = v2xw_core::hash::sha256(p.bytes());
+                            let stale = self
+                                .devices
+                                .get(&device)
+                                .and_then(|d| d.crl_held.get(&key))
+                                .is_some_and(|&(o, h)| h != digest && order <= o);
+                            if stale {
+                                if let Some(dev) = self.devices.get_mut(&device) {
+                                    dev.crls_stale += 1;
+                                }
+                                self.reject_pdu(
+                                    SpduKind::SecuredCrl,
+                                    device,
+                                    at,
+                                    crate::scms::pdu::PduError::Policy(
+                                        "stale CRL: not newer than the one held for its \
+                                         CRACA and series",
+                                    ),
+                                );
+                                return Ok(());
+                            }
+                            held = Some((key, (order, digest)));
+                        }
                     }
                 }
                 let Some(dev) = self.devices.get_mut(&device) else {
@@ -581,6 +669,9 @@ impl ScmsState {
                         .saturating_add(2u32.saturating_mul(e.jmax).saturating_mul(walked.max(1)));
                 }
                 dev.crl = list;
+                if let Some((key, v)) = held {
+                    dev.crl_held.insert(key, v);
+                }
                 let silenced = !dev.revoked_credentials().is_empty();
                 dev.silenced = silenced;
                 Self::hashes(out, hashes);

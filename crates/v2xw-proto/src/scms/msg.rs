@@ -500,13 +500,16 @@ pub enum ScmsMsg {
         handle: [u8; 32],
     },
     /// RA → MA: the LA hosts and chain identifiers ([BRECHT §VI-D]).
+    ///
+    /// One `(LA1, LA2)` pair for every provisioning request the RA accepted from the
+    /// blocklisted enrolment, the reported request's first: a second request ([CAMP122]
+    /// SCMS-520, "or again when parameters change") has its own chains, and revoking
+    /// only the reported one would leave the other batch valid (B4).
     BlocklistResponse {
         /// Whether the RA knew the hash.
         known: bool,
-        /// LA1's chain.
-        lci1: Lci,
-        /// LA2's chain.
-        lci2: Lci,
+        /// Each chain pair: LA1's, LA2's.
+        chains: Vec<(Lci, Lci)>,
     },
     /// MA → LA: the seed for the revocation period.
     SeedRequest {
@@ -521,6 +524,9 @@ pub enum ScmsMsg {
     SeedResponse {
         /// Which LA.
         la: LaIndex,
+        /// The chain asked about: the answer to that request (an HTTPS response pairs
+        /// with its request, so it costs no bytes of its own).
+        lci: Lci,
         /// The LA's identifier, which the CRL entry carries.
         la_id: LaId,
         /// The seed at period `i`.
@@ -528,14 +534,12 @@ pub enum ScmsMsg {
         /// The period.
         i: u32,
     },
-    /// MA → CRL Generator: add an entry and issue.
+    /// MA → CRL Generator: add one entry per chain pair of the device, and issue.
     CrlAppend {
-        /// The entry's first revoked period.
+        /// The entries' first revoked period.
         i: u32,
-        /// LA1's identifier and seed.
-        la1: (LaId, LinkageSeed),
-        /// LA2's identifier and seed.
-        la2: (LaId, LinkageSeed),
+        /// Per chain pair: LA1's identifier and seed, LA2's identifier and seed.
+        pairs: Vec<((LaId, LinkageSeed), (LaId, LinkageSeed))>,
         /// Certificates per period.
         jmax: u32,
     },
@@ -709,12 +713,9 @@ pub enum ScmsMsg {
     /// A committee round between a coordinator and a member (`crate::threshold::session`):
     /// sized by the protocol, not by [`ScmsSizes`].
     Committee(crate::threshold::session::CommitteeMsg),
-    /// The MA's timer: ask again any Linkage Authority whose seed has not arrived.
+    /// The MA's timer: ask again any Linkage Authority whose seed has not arrived, for
+    /// every chain of the case.
     SeedRetry {
-        /// LA 1's chain.
-        lci1: Lci,
-        /// LA 2's chain.
-        lci2: Lci,
         /// The revocation period.
         i: u32,
         /// How many times it has asked again.
@@ -1031,10 +1032,15 @@ impl ScmsSizes {
         )
     }
 
-    /// RA → MA: the LA hosts and chains.
+    /// RA → MA: the LA hosts and chains, one pair.
     pub const fn blocklist_response(&self) -> WireSize {
+        self.blocklist_response_for(1)
+    }
+
+    /// RA → MA: `pairs` chain pairs (B4: every request of the enrolment).
+    pub const fn blocklist_response_for(&self, pairs: u32) -> WireSize {
         WireSize::parameter(
-            self.env_digest() + 2 * self.params.linkage_chain_identifier_bytes,
+            self.env_digest() + 2 * pairs * self.params.linkage_chain_identifier_bytes,
             "linkage_chain_identifier_bytes",
         )
     }
@@ -1058,8 +1064,13 @@ impl ScmsSizes {
 
     /// MA → CRL Generator: one entry's worth of material.
     pub const fn crl_append(&self) -> WireSize {
+        self.crl_append_for(1)
+    }
+
+    /// MA → CRL Generator: `entries` entries' worth of material (one per chain pair).
+    pub const fn crl_append_for(&self, entries: u32) -> WireSize {
         WireSize::derived(
-            self.env_digest() + CRL_LINKAGE_ENTRY_BYTES,
+            self.env_digest() + entries * CRL_LINKAGE_ENTRY_BYTES,
             "envelope(digest) + one linkage entry",
             DERIVATION,
         )

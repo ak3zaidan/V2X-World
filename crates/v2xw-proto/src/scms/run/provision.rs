@@ -422,6 +422,12 @@ impl ScmsState {
         run: FlowRun,
     ) {
         let n = self.nodes;
+        // A timer armed before the MA's decision still fires: the RA checks its
+        // blocklist when the job runs, not only when the device asks ([CAMP122] SCMS-509).
+        if self.ra.blocklist.contains(&device) {
+            self.ra.pregen_blocked += 1;
+            return;
+        }
         let Some(account) = self.ra.accounts.get_mut(&device) else {
             return;
         };

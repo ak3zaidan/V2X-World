@@ -715,3 +715,62 @@ fn a_fresh_crl_sends_the_signers_it_governs_back_to_first_sight() {
         assert!(work(&mut rx, mode, &a, 19).is_empty());
     }
 }
+
+/// A series-1 CRL with an explicit `indexWithinI`, full or delta.
+fn indexed_crl(
+    pki: &ScmsPki,
+    index: u8,
+    delta: bool,
+    entries: &[CrlLinkageEntry],
+    issue: u32,
+) -> Vec<u8> {
+    let spec = CrlSpec {
+        series: 1,
+        craca: pki.craca_id8(),
+        issue_date: issue,
+        next_crl: issue + WEEK,
+        priority: None,
+        delta,
+        body: CrlBody::Linkage {
+            i_rev: 0,
+            index_within_i: index,
+            individual: v2xw_proto::scms::run::linkage_revocations(entries, 0),
+        },
+    };
+    let contents = crl::crl_contents(&spec);
+    crl::encode_crl(&crl::sign_crl(&contents, &pki.crlg.cert, &pki.crlg.key).unwrap()).unwrap()
+}
+
+/// R2 at the node: a genuine CRL, full or delta, whose 1609.2 counter is not above the
+/// installed one's for that CRACA and series is stale. Before the fix only an older
+/// `issueDate` on a *full* CRL was refused, so an earlier list issued in the same second
+/// was accepted, and any old delta was accepted and moved the node's `nextCrl` (its
+/// overdue clock) back to the old list's.
+#[test]
+fn an_older_crl_full_or_delta_is_stale_even_in_the_same_second() {
+    let pki = pki();
+    let entry = CrlLinkageEntry::from_device(&device(), 0, 20);
+    let v0 = indexed_crl(&pki, 0, false, &[], t0());
+    let v1 = indexed_crl(&pki, 1, false, &[entry], t0());
+    let old_delta = indexed_crl(&pki, 0, true, &[], t0() - 3_600);
+    let d2 = indexed_crl(&pki, 2, true, &[entry], t0() + 60);
+    let mut rx = trusted(CryptoMode::Real, &pki);
+    assert!(rx.verify_secured_crl(&v1, 5 * NS_PER_S).unwrap().fresh);
+    assert_eq!(
+        rx.verify_secured_crl(&v0, 6 * NS_PER_S),
+        Err(RxReject::CrlStale),
+        "an earlier list of the same second"
+    );
+    assert_eq!(
+        rx.verify_secured_crl(&old_delta, 7 * NS_PER_S),
+        Err(RxReject::CrlStale),
+        "an earlier delta"
+    );
+    // The installed list again is a repeat, not a refusal; a later delta is installed.
+    assert!(!rx.verify_secured_crl(&v1, 8 * NS_PER_S).unwrap().fresh);
+    assert!(rx.verify_secured_crl(&d2, 9 * NS_PER_S).unwrap().fresh);
+    assert_eq!(
+        rx.trust().stats.crls_refused.get("crl-stale").copied(),
+        Some(2)
+    );
+}

@@ -17,8 +17,8 @@ Severity is what the attacker gains. Likelihood is how hard the precondition is.
 | # | Weakness | Severity | Likelihood | Evidence | Status in the engine |
 |---|---|---|---|---|---|
 | R1 | **Revocation is slow by design:** 18 h median and 96 h worst from detection to a published CRL, even with an automatic MA. Up to 264–312 h before a vehicle that fetches weekly enforces it | 3 | 3 | §4, `the_revocation_window_on_the_real_calendar` | Modelled faithfully (the real SLA and calendar) |
-| R2 | **A replayed older CRL erases a newer revocation.** A compromised RSU replays the CRL Generator's own earlier, validly signed list. The proto device model replaces its list with it, and a revoked device that checks itself resumes transmitting | 3 | 2 | §3.1, `a_replayed_older_crl_erases_a_newer_revocation` | **Defect in the proto device model** (pinned finding) |
-| B4 | **A second provisioning chain survives revocation.** After any policy change the RA accepts a second butterfly request from the same enrolment ([CAMP122] SCMS-520). Revocation publishes only the reported chain's seeds, so 2 of the device's 4 certificates stay valid | 3 | 2 | §2.3, `a_second_provisioning_chain_survives_the_revocation_of_the_first` | Pinned finding: the real behaviour is unspecified (the RA→MA LCI return is described per request in [BRECHT] §VI-D) |
+| R2 | **A replayed older CRL erased a newer revocation.** A compromised RSU replays the CRL Generator's own earlier, validly signed list. The proto device model replaced its list with it, and a revoked device that checked itself resumed transmitting | 3 | 2 | §3.1, `a_replayed_older_crl_is_refused_and_the_newer_revocation_holds` | **Fixed** (validation/protocols.md I3, I4): devices refuse a CRL whose 1609.2 counter is not newer |
+| B4 | **A second provisioning chain survived revocation.** After any policy change the RA accepts a second butterfly request from the same enrolment ([CAMP122] SCMS-520). Revocation published only the reported chain's seeds, so 2 of the device's 4 certificates stayed valid | 3 | 2 | §2.3, `every_chain_of_a_revoked_enrolment_is_revoked` | **Fixed** (validation/protocols.md G6): the RA returns every chain pair of the blocklisted enrolment |
 | B1 | **Insider collusion:** LA1+LA2 can link every certificate of every device forward *and backward* from their seeds. RA+ACA or RA+LA1+LA2 can name every device | 3 | 1 | §2.1, `coalitions_learn_what_the_separation_rules_predict` | Modelled faithfully. The separation is organisational only ([BRECHT] §X) |
 | R4 | Revoked device's remaining lifetime: up to 3 years of pre-downloaded certificates ([CAMP122] Table 67, THEA [CVP-LOG] p.16). Only receivers with a fresh CRL refuse them | 2 | 3 | §4.3 | Modelled (CRL entries persist; receivers enforce the overdue tolerance in `v2xw-node::rxval`) |
 | R5 | CRL growth: 33.08 B per linkage entry (measured), retained until the revoked batch expires. About 1 MB at 30,000 entries, which is a large RSU broadcast | 2 | 2 | §4.4 | Modelled (real encoder) |
@@ -59,8 +59,8 @@ The table does not include ACA+one LA, which links a chain without naming it (02
 ### 2.3 A stolen enrolment key, and hoarding (B4, B5)
 
 - **Key alone (B5).** A second initial request from the same enrolment is refused with `RequestLimit` (ra-maxReqs = 1, [SMP] Table 3). The thief can download the victim's batch files, but they are encrypted to the victim's butterfly keys.
-- **Key plus a policy change (B4).** The RA accepts a new request "when parameters change" ([CAMP122] SCMS-520). Measured: 2 accepted requests and 1 CRL entry after the device is revoked. 2 certificates are revoked and **2 escape**, and the enrolment is blocklisted. The escaping chain is the thief's own batch, or a misbehaving device's spare, and it stays valid for its whole issued lifetime (up to 3 years). A thief who strikes before the victim's first request takes the only batch, and the victim is refused.
-- **Mitigation.** The RA should return every LCI pair recorded for the enrolment (`RaState::requests` filtered by device), so the CRL Generator publishes one entry per chain. A request after a policy change should retire the previous account's chains. Hardware key storage ([SM-EESEC]) is the primary control.
+- **Key plus a policy change (B4, fixed).** The RA accepts a new request "when parameters change" ([CAMP122] SCMS-520). Measured before the fix: 2 accepted requests and 1 CRL entry after the device is revoked. 2 certificates were revoked and **2 escaped**, and the enrolment was blocklisted. After the fix: 2 CRL entries, 0 escape. The escaping chain is the thief's own batch, or a misbehaving device's spare, and it stays valid for its whole issued lifetime (up to 3 years). A thief who strikes before the victim's first request takes the only batch, and the victim is refused.
+- **Mitigation (done).** The RA returns every LCI pair recorded for the enrolment (`RaState::requests` filtered by device), and the CRL Generator publishes one entry per chain. Still open: a request after a policy change could retire the previous account's chains. Hardware key storage ([SM-EESEC]) is the primary control.
 
 ### 2.4 A compromised root or ICA (B2)
 
@@ -77,8 +77,9 @@ There is no timed test yet. The bounds come from the documents:
 
 X is revoked (CRL v1 = [X]), then A (v2 = [X, A]). Vehicle C and device A fetch v2 over cellular. The RSU then broadcasts v1 again, byte for byte as the CRL Generator signed it.
 
-- **Measured.** v1 is accepted, with 0 rejections. A is **no longer revoked** at C, X still is, and A (revoked) **un-silences**.
-- **Cause.** The proto device model (`scms/run/crl.rs`, `dev.crl = list;`) replaces its list with any list that verifies. It does not compare `crlSerial` or `issueDate` with the list it holds.
+- **Measured before the fix.** v1 was accepted, with 0 rejections. A was **no longer revoked** at C, X still was, and A (revoked) **un-silenced**.
+- **Cause.** The proto device model (`scms/run/crl.rs`, `dev.crl = list;`) replaced its list with any list that verified. It did not compare `crlSerial` or `issueDate` with the list it held.
+- **Fixed.** Devices now refuse a CRL whose counter (`crlSerial`, or `iRev` and `indexWithinI`, then `issueDate`) is not above the one held for that CRACA and series (`run::crl::CrlOrder`). After the fix: 1 stale refusal at C and 1 at A, A still revoked and silent. The engine node's rule (below) now also covers deltas and same-second lists (validation/protocols.md I3, I4).
 - **Engine receivers.** By reading the code, the receivers that enforce the CRL in the engine (`v2xw-node::stores::CrlGate::add_verified_linkage`) only add entries, so a replay there cannot remove one. It can still hide a revocation from a vehicle that has not yet heard v2, until v1's `nextCrl` plus the 2-week overdue tolerance (`rxval::OVERDUE_CRL_TOLERANCE_S`). With the 7-day `next_crl` assumption that is up to **21 days**.
 - **Mitigation.** Refuse a CRL whose `crlSerial` or `issueDate` is older than the one held, for the same series and CRACA. Keep CRL processing additive per series. The fault test F3 applies this fix and turns the pinned test red.
 
@@ -157,6 +158,6 @@ Each fault was applied with a restore-and-touch wrapper (same contract as `tools
 ## 7. Owed
 
 - A compromised root/ICA timed through the CTL and CRL (B2).
-- The R2 and B4 fixes, each a decision for the owner, since real devices' `crlSerial` handling and the RA's LCI return are not published.
+- ~~The R2 and B4 fixes~~: done (validation/protocols.md §J records the choices, since real devices' `crlSerial` handling and the RA's LCI return are not published).
 - A business-hours `MaMode`.
 - The privacy study of §5.
