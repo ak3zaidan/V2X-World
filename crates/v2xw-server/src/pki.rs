@@ -18,6 +18,14 @@
 //! filtered by flow, device or provider) and `inspect.flow` (one instance's messages and
 //! stage stamps in time order). Flow records are kept without SPDU bytes or plaintext:
 //! those are `inspect.pdu`'s, which applies the per-entity view.
+//!
+//! `inspect.trust` also lists the messages themselves that crossed a link in its activity
+//! window (`messages`: sender, receiver, name, flow, instance, bytes, time), so the
+//! Studio's topology can draw each one along its link as it happens. They come from a
+//! bounded log of the newest [`RECENT_CAP`] messages; an answer lists at most
+//! [`RECENT_PER_ANSWER`] of them (the newest) and counts the rest in `messages_omitted`,
+//! and `messages_complete` is false when the log no longer reaches back to the window's
+//! start (an instant long past after a backward seek).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -38,6 +46,10 @@ pub const FLOW_RECORDS_CAP: usize = 4_000;
 /// How far back `inspect.trust` looks for a component's traffic: two simulated seconds
 /// (00 §3.2: a component lights while it has traffic in the last 2 s).
 pub const ACTIVITY_WINDOW_NS: u64 = 2_000_000_000;
+/// Messages kept for `inspect.trust`'s `messages`, newest last.
+pub const RECENT_CAP: usize = 8_192;
+/// Messages one `inspect.trust` answer lists at most (the newest in its window).
+pub const RECENT_PER_ANSWER: usize = 400;
 
 /// One flow instance, as `pki.flow` delivered it.
 #[derive(Debug, Default)]
@@ -76,6 +88,11 @@ pub struct PkiStore {
     flows: BTreeMap<String, FlowLog>,
     /// Flow instance ids in the order they first appeared.
     flow_order: VecDeque<String>,
+    /// The newest [`RECENT_CAP`] messages (`kind: "msg"` flow records, lean), in arrival
+    /// order, for `inspect.trust`'s `messages`.
+    recent: VecDeque<Value>,
+    /// Whether a message was ever evicted from `recent`.
+    recent_evicted: bool,
     /// The newest `pki.state`, without its certificates (WP-E3).
     state: Option<Value>,
     /// Per vehicle, its newest `node.credentials` and pseudonym history (WP-E3).
@@ -373,6 +390,21 @@ impl PkiStore {
             "msg" => {
                 log.messages += 1;
                 log.bytes += u64::from(f.bytes.unwrap_or(0));
+                self.recent.push_back(json!({
+                    "id": f.id,
+                    "t": f.t,
+                    "from": f.from,
+                    "to": f.to,
+                    "name": f.name,
+                    "flow": f.flow,
+                    "instance": f.instance,
+                    "provider": f.provider,
+                    "bytes": f.bytes,
+                }));
+                while self.recent.len() > RECENT_CAP {
+                    self.recent.pop_front();
+                    self.recent_evicted = true;
+                }
             }
             "stage" => {
                 log.stages += 1;
@@ -496,11 +528,33 @@ impl PkiStore {
                 }
             }
         }
+        // The messages of the same window: after the base snapshot (or, for the first, in
+        // the ACTIVITY_WINDOW_NS before it) and at or before this one, in time order.
+        let lo = base.map_or_else(|| t.saturating_sub(ACTIVITY_WINDOW_NS), |(s, _)| *s);
+        let mut messages: Vec<&Value> = self
+            .recent
+            .iter()
+            .filter(|m| {
+                let mt = m["t"].as_u64().unwrap_or(0);
+                mt > lo && mt <= *t
+            })
+            .collect();
+        messages.sort_by_key(|m| m["t"].as_u64().unwrap_or(0));
+        let omitted = messages.len().saturating_sub(RECENT_PER_ANSWER);
+        let messages = &messages[omitted..];
+        let complete = !self.recent_evicted
+            || self
+                .recent
+                .front()
+                .is_some_and(|m| m["t"].as_u64().unwrap_or(0) <= lo);
         Some(json!({
             "t_ns": t,
             "state": state,
             "window_ns": base.map(|(s, _)| t - s),
             "activity": activity,
+            "messages": messages,
+            "messages_omitted": omitted,
+            "messages_complete": complete,
             "certificates_known": self.certs.len(),
             "history": self.states.len(),
         }))

@@ -193,3 +193,135 @@
 .pki-hatch-line { stroke: color-mix(in srgb, var(--warn) 45%, transparent); }
 .pki-gap-label { fill: var(--text); font-size: 10.5px; }
 .pki-pdus { list-style: none; padding: 0; margin: 0; font-size: 12px; display: flex; flex-direction: column; gap: 3px; }
+
+/* The SCMS workspace (redesign): health strip, live topology, cards. */
+.pki-health {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.pki-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.pki-stat b { color: var(--text); font-size: 14px; font-weight: 600; }
+.pki-stat:hover, .pki-stat:focus-visible { border-color: var(--accent-dim); }
+.pki-stat.warn b { color: var(--warn); }
+.pki-stat.bad b { color: var(--err); }
+.pki-tab:focus-visible, .pki-node:focus-visible, .pki-stat:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.pki-topo-wrap { overflow-x: auto; overflow-y: hidden; flex: none; }
+.pki-topo { position: relative; }
+.pki-topo-gov {
+  position: absolute;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+.pki-region {
+  position: absolute;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+.pki-region.off-ctl { border-color: var(--warn); border-style: dashed; }
+.pki-region header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 7px 12px 0; font-size: 12px; }
+.pki-links { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+.pki-link { fill: none; stroke: var(--border-strong); stroke-width: 1.2; transition: stroke 0.4s, stroke-width 0.4s; }
+.pki-link.off { stroke-dasharray: 3 4; opacity: 0.6; }
+.pki-link.undeclared { stroke-dasharray: 6 3; }
+.pki-link.busy { stroke: var(--accent); }
+.pki-node {
+  position: absolute;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--sans);
+  white-space: nowrap;
+  overflow: hidden;
+  min-width: 0;
+  z-index: 1;
+}
+.pki-node .r { overflow: hidden; text-overflow: ellipsis; }
+.pki-node.ghost {
+  border-style: dashed;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: help;
+}
+.pki-node.devices {
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 0 12px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
+  border-color: var(--border);
+  cursor: pointer;
+}
+.pki-node.devices .r { font-weight: 600; }
+.pki-node.devices.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.pki-node.unsigned { opacity: 0.55; }
+.pki-node.role-elector { font-size: 11px; }
+.pki-dots { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.pki-msg-dot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  offset-rotate: 0deg;
+  offset-distance: 0%;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg) 70%, transparent);
+  animation-name: pki-travel;
+  animation-timing-function: ease-in-out;
+  animation-fill-mode: both;
+}
+@keyframes pki-travel {
+  from { offset-distance: 0%; opacity: 0.2; }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  to { offset-distance: 100%; opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pki-msg-dot { display: none; }
+  .pki-link { transition: none; }
+}
+.pki-topo-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; margin: 6px 0 0; }
+.pki-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.pki-swatch.ghost { border: 1px dashed var(--text-faint); background: transparent; border-radius: 2px; }
+.pki-ctl-strip { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); padding: 8px 10px; font-size: 12px; }
+.pki-does { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--text); }
+.pki-recent { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; }
+.pki-recent li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+@media (max-width: 1200px) {
+  .pki-body.with-drawer { grid-template-columns: minmax(0, 1fr) 360px; }
+}
+@media (max-width: 1200px) {
+  .pki-time { display: none; }
+}
+.pki-node .r { font-size: 11.5px; }
+/* Status marks sit in the corner, so a narrow node keeps its whole name. */
+.pki-node .pki-dot { position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; }
+.pki-node .pki-lock { position: absolute; top: 3px; left: 3px; width: 8px; height: 8px; }
+.pki-node { padding: 0 4px; }

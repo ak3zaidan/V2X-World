@@ -491,12 +491,16 @@ fn all_methods() -> Vec<Value> {
             "The PKI trust domain at t_ns (the newest pki.state at or before it): every \
              provider and its components with role, assumed region and status, the CTL \
              with its history and electors, the CRL heads, and the components that carried \
-             traffic in the 2 s before it (WP-E2).",
+             traffic in the 2 s before it (WP-E2), with the messages that crossed a link \
+             in that window: sender, receiver, name, flow and bytes, no payload.",
             object(&[], json!({"t_ns": sim_time})),
             json!({"type": "object", "required": ["t_ns", "state", "activity"],
                    "properties": {"t_ns": {"type": "integer"}, "state": {"type": "object"},
                                   "window_ns": {"type": ["integer", "null"]},
                                   "activity": {"type": "object"},
+                                  "messages": {"type": "array", "items": {"type": "object"}},
+                                  "messages_omitted": {"type": "integer"},
+                                  "messages_complete": {"type": "boolean"},
                                   "certificates_known": {"type": "integer"},
                                   "history": {"type": "integer"}}}),
             &[-32006, -32009],

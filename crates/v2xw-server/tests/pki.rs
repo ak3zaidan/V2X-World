@@ -196,6 +196,70 @@ fn trust_answers_each_snapshot_at_its_instant_with_its_activity() {
     assert_eq!(newest["t_ns"], states.last().unwrap()["t"]);
 }
 
+/// `inspect.trust`'s `messages` (the Studio's topology draws each along its link): at each
+/// snapshot, exactly the recorded `pki.flow` messages after the previous snapshot (the
+/// first: in the 2 s before it) and at or before it, in time order, each with its sender,
+/// receiver, name, flow, instance and bytes, and nothing else (no SPDU, no plaintext).
+#[test]
+fn trust_lists_each_window_messages_exactly_as_recorded() {
+    let (store, rows) = loaded();
+    let states: Vec<u64> = rows
+        .iter()
+        .filter(|r| r["channel"] == "pki.state")
+        .map(|r| r["record"]["t"].as_u64().unwrap())
+        .collect();
+    let msgs: Vec<&Value> = rows
+        .iter()
+        .filter(|r| r["channel"] == "pki.flow" && r["record"]["kind"] == "msg")
+        .map(|r| &r["record"])
+        .collect();
+    let mut listed = 0;
+    for (i, &t) in states.iter().enumerate() {
+        let lo = if i == 0 {
+            t.saturating_sub(2_000_000_000)
+        } else {
+            states[i - 1]
+        };
+        let mut want: Vec<&Value> = msgs
+            .iter()
+            .copied()
+            .filter(|m| {
+                let mt = m["t"].as_u64().unwrap();
+                mt > lo && mt <= t
+            })
+            .collect();
+        want.sort_by_key(|m| m["t"].as_u64().unwrap());
+        let omitted = want
+            .len()
+            .saturating_sub(v2xw_server::pki::RECENT_PER_ANSWER);
+        let want = &want[omitted..];
+        let got = store.answer(&PkiQuery::Trust { t_ns: Some(t) }).unwrap();
+        assert_eq!(got["messages_omitted"], omitted, "omitted at {t}");
+        assert_eq!(
+            got["messages_complete"], true,
+            "the log reaches back at {t}"
+        );
+        let list = got["messages"].as_array().expect("messages");
+        assert_eq!(list.len(), want.len(), "messages at {t}");
+        for (g, w) in list.iter().zip(want) {
+            for key in [
+                "id", "t", "from", "to", "name", "flow", "instance", "provider", "bytes",
+            ] {
+                assert_eq!(g[key], w[key], "{key} of {} at {t}", w["id"]);
+            }
+            assert!(
+                g.get("pdus").is_none() && g.get("hex").is_none(),
+                "no SPDU in {g}"
+            );
+        }
+        listed += list.len();
+    }
+    assert!(
+        listed > 20,
+        "only {listed} messages listed: the check would pass on nothing"
+    );
+}
+
 fn sequence_store() -> (PkiStore, Vec<Value>) {
     let text = std::fs::read_to_string(fixtures().join("pki-sequence.jsonl")).expect("the fixture");
     let mut store = PkiStore::default();

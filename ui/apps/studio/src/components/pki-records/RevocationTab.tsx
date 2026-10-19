@@ -37,23 +37,44 @@ export function RevocationTab({ view }: { readonly view: string | null }): React
         <table className="pkir-table" data-testid="pki-crl-table">
           <thead>
             <tr>
-              <th>Provider</th><th>Series</th><th>Kind</th><th>Version</th><th>issueDate</th><th>nextCrl</th>
-              <th>Entries</th><th>Size</th><th>SLA clock</th>
+              <th>Provider</th><th title="crlSeries (IEEE 1609.2 §7.3)">Series</th><th title="Linkage-based entries (pseudonym certificates) or hash-based entries (other certificates)">Kind</th>
+              <th>Version</th><th title="issueDate">Issued</th><th title="nextCrl: the latest instant the next list is due">Next due</th>
+              <th>Entries</th><th>Size</th><th title="The publication SLA clock: time left until nextCrl; negative is overdue">Due in</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <Fragment key={r.key}>
-                <tr onClick={() => setOpen(open === r.key ? null : r.key)} data-testid="pki-crl-row" data-key={r.key}>
+                <tr
+                  onClick={() => {
+                    setOpen(open === r.key ? null : r.key);
+                    if (open !== r.key) set({ crl: r.newest.id8 });
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setOpen(open === r.key ? null : r.key);
+                      if (open !== r.key) set({ crl: r.newest.id8 });
+                    }
+                  }}
+                  tabIndex={0}
+                  aria-expanded={open === r.key}
+                  className={open === r.key ? "sel" : undefined}
+                  data-testid="pki-crl-row"
+                  data-key={r.key}
+                >
                   <td>{r.provider}</td>
                   <td className="mono">{r.series}</td>
-                  <td>{r.kind}</td>
+                  <td>{r.kind === "linkage" ? "pseudonyms (linkage)" : r.kind === "hash" ? "certificates (hash)" : r.kind}</td>
                   <td className="mono">v{r.newest.version}{r.newest.delta ? " Δ" : ""} <span className="faint">({r.versions.length} lists)</span></td>
-                  <td className="mono">{time32Text(r.newest.issue_date)}</td>
-                  <td className="mono">{time32Text(r.newest.next_crl)}</td>
+                  <td className="mono" title={time32Text(r.newest.issue_date)}>{shortDate(r.newest.issue_date)}</td>
+                  <td className="mono" title={time32Text(r.newest.next_crl)}>{shortDate(r.newest.next_crl)}</td>
                   <td className="mono">{r.newest.entries}</td>
                   <td className="mono">{r.newest.bytes} B</td>
-                  <td className={`mono ${r.newest.sla_now_s < 0 ? "bad" : ""}`} data-testid="pki-crl-sla">{slaText(r.newest.sla_now_s)}</td>
+                  <td className={`mono ${r.newest.sla_now_s < 0 ? "bad" : ""}`} data-testid="pki-crl-sla">
+                    <SlaBar head={r.newest} />
+                    {slaText(r.newest.sla_now_s)}
+                  </td>
                 </tr>
                 {open === r.key
                   ? r.versions.map((v) => (
@@ -78,12 +99,28 @@ export function RevocationTab({ view }: { readonly view: string | null }): React
             ))}
           </tbody>
         </table>
-        {rows.length === 0 ? <p className="dim pkir-pad">No CRL has been published yet.</p> : null}
+        {rows.length === 0 ? <p className="dim pkir-pad">No revocation list (CRL) has been published yet.</p> : null}
         {crls ? <Providers providers={crls.providers} /> : null}
         {crls?.ctl ? <Ctl ctl={crls.ctl} /> : null}
       </div>
-      {chosen ? <CrlCard id8={chosen} view={view} head={crls?.crls.find((c) => c.id8 === chosen) ?? null} /> : <div className="pkir-card dim">Open a row and choose a list to decode it.</div>}
+      {chosen ? <CrlCard id8={chosen} view={view} head={crls?.crls.find((c) => c.id8 === chosen) ?? null} /> : <div className="pkir-card dim">Choose a list to see its entries.</div>}
     </div>
+  );
+}
+
+/** A Time32 as month-day and time (`03-04 08:02`); the full UTC date is the cell's tooltip. */
+function shortDate(t: number): string {
+  return time32Text(t).slice(5, 16);
+}
+
+/** How much of the list's validity window (issueDate to nextCrl) has gone, as a bar. */
+function SlaBar({ head }: { readonly head: CrlHead }): React.JSX.Element {
+  const window = Math.max(1, head.next_crl - head.issue_date);
+  const gone = Math.min(1, Math.max(0, 1 - head.sla_now_s / window));
+  return (
+    <span className={`pkir-sla${head.sla_now_s < 0 ? " over" : gone > 0.8 ? " near" : ""}`} aria-hidden="true">
+      <i style={{ width: `${(gone * 100).toFixed(1)}%` }} />
+    </span>
   );
 }
 

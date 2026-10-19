@@ -32,23 +32,36 @@ import { BackendPanel } from "../BackendView.js";
 import { MapModePicker, RecordsBody } from "../pki-records/RecordsTabs.js";
 import { RECORDS_TABS, chooseTab, usePki, usePkiView, type PkiTab, type RecordsTab } from "../pki-records/state.js";
 import { FlowsTab } from "./FlowsTab.js";
+import { HealthStrip } from "./HealthStrip.js";
 import { TrustDomain } from "./TrustDomain.js";
 import "../../styles/pki.css";
 
 /** How often the open panel asks for a new trust-domain snapshot, wall-clock ms. */
 const POLL_MS = 1000;
 
-/** The tabs of 00 §3.2, in its order. */
-export const PKI_TABS: readonly { readonly id: PkiTab; readonly label: string; readonly built: boolean }[] = [
-  { id: "trust", label: "Trust domain", built: true },
-  { id: "flows", label: "Flows", built: true },
-  { id: "vehicles", label: "Vehicles", built: true },
-  { id: "cases", label: "Cases", built: true },
-  { id: "crls", label: "Revocation lists", built: true },
+/** The workspace's sections (00 §3.2's tabs, in plain names; the standard term is the tooltip). */
+export const PKI_TABS: readonly { readonly id: PkiTab; readonly label: string; readonly built: boolean; readonly term: string }[] = [
+  { id: "trust", label: "Overview", built: true, term: "The trust domain: providers, authorities, the trust list and live traffic" },
+  { id: "vehicles", label: "Vehicles", built: true, term: "End entities: enrolment, pseudonym certificate pools and their lifecycle" },
+  { id: "cases", label: "Misbehaviour", built: true, term: "Misbehaviour cases: from report to revocation and enforcement" },
+  { id: "crls", label: "Revocation", built: true, term: "Certificate revocation lists (CRLs) and the certificate trust list (CTL)" },
+  { id: "flows", label: "Messages", built: true, term: "Flows: every request as a sequence diagram, every SPDU decoded" },
 ];
 export type { PkiTab };
 
 const isRecords = (t: PkiTab): t is RecordsTab => (RECORDS_TABS as readonly string[]).includes(t);
+
+/** Arrow keys move along the tab bar (the WAI-ARIA tabs pattern), Home and End to its ends. */
+function tabKeys(e: React.KeyboardEvent<HTMLDivElement>): void {
+  const ids = PKI_TABS.map((t) => t.id);
+  const at = ids.indexOf(usePkiView.getState().tab);
+  const to = e.key === "ArrowRight" ? at + 1 : e.key === "ArrowLeft" ? at - 1 : e.key === "Home" ? 0 : e.key === "End" ? ids.length - 1 : null;
+  if (to === null) return;
+  e.preventDefault();
+  const next = ids[(to + ids.length) % ids.length];
+  chooseTab(next);
+  e.currentTarget.querySelector<HTMLButtonElement>(`[data-testid="pki-tab-${next}"]`)?.focus();
+}
 
 /** The header's door to the panel. */
 export function PkiButton(): React.JSX.Element {
@@ -122,8 +135,8 @@ export function PkiPanel({ close }: { readonly close: () => void }): React.JSX.E
   return (
     <div className="fullpanel-inner pki-panel" data-testid="pki-panel">
       <div className="fullpanel-head pki-head">
-        <h2>PKI</h2>
-        <div className="pki-tabs" role="tablist" aria-label="PKI view">
+        <h2 title="Security Credential Management System (SCMS): the US V2X public-key infrastructure">Certificate system</h2>
+        <div className="pki-tabs" role="tablist" aria-label="Certificate system sections" onKeyDown={tabKeys}>
           {PKI_TABS.map((t) => (
             <button
               key={t.id}
@@ -132,7 +145,8 @@ export function PkiPanel({ close }: { readonly close: () => void }): React.JSX.E
               aria-selected={tab === t.id}
               className={tab === t.id ? "pki-tab on" : "pki-tab"}
               disabled={!t.built}
-              title={t.built ? undefined : "Not built yet (WP-E3)"}
+              title={t.term}
+              tabIndex={tab === t.id ? 0 : -1}
               onClick={() => t.built && setTab(t.id)}
               data-testid={`pki-tab-${t.id}`}
             >
@@ -153,7 +167,7 @@ export function PkiPanel({ close }: { readonly close: () => void }): React.JSX.E
           </select>
         </label>
         {trust ? (
-          <span className="dim mono" data-testid="pki-time" title="The snapshot's instant: simulated time and Time32">
+          <span className="dim mono pki-time" data-testid="pki-time" title="The snapshot's instant: simulated time and Time32">
             {trust.state.edition} · {trust.state.preset} · t {(trust.t_ns / 1e9).toFixed(0)} s
           </span>
         ) : null}
@@ -161,6 +175,7 @@ export function PkiPanel({ close }: { readonly close: () => void }): React.JSX.E
           <CloseIcon />
         </button>
       </div>
+      {trust ? <HealthStrip trust={trust} view={locked && activeView === GROUND_TRUTH ? null : activeView} /> : null}
       {records ? (
         <RecordsBody tab={tab} />
       ) : trust === null ? (

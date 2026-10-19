@@ -1,30 +1,28 @@
 /**
- * The Trust domain tab (00 §3.2): who exists. The SCMS Manager and the electors, the CTL that binds
- * the providers (its sequence, roots, quorum, signers and history), and each provider as a band of
- * its components — the offline chain (root, ICA) hatched with a lock, then the online authorities
- * in the order a request meets them — each with its status, a dot while it carried traffic in the
- * last two simulated seconds and a pill with its queue depth. Under the providers, the devices.
+ * The workspace's Overview (00 §3.2 "who exists" and "what is happening now"): the deployment as a
+ * live topology — the SCMS Manager and the electors, each provider as a region with its
+ * authorities (offline ones hatched with a lock, ones it does not run as ghosts), its vehicles and
+ * roadside units as a client group, the links between them and every message travelling its link
+ * as it happens (`Topology.tsx`). Under it, the certificate trust list (CTL) that binds the
+ * providers.
  *
- * Selecting a component opens its card on the right: what the engine publishes about it, and its
- * certificate decoded with the validation trace a device runs (`inspect.cert`). In an entity's view
- * the tab also shows that entity's own knowledge record (`inspect.knowledge`), which carries no
- * ground-truth join.
+ * Selecting a node opens its card on the right: what the role does in one sentence, its status
+ * and traffic, its certificate decoded with the validation trace a device runs (`inspect.cert`),
+ * what it knows (`inspect.knowledge`; in an entity's view only that entity's own record, with no
+ * ground-truth join) and the messages it sent or received recently.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   certOf,
-  componentClasses,
   componentIndex,
   ctlSummary,
-  devicesLine,
   formatBytes,
+  formatSimT,
   formatSpan,
   GROUND_TRUTH,
   knowledgeOf,
-  providerLayout,
-  roleLabel,
   time32Date,
   type CertAnswer,
   type KnowledgeAnswer,
@@ -33,144 +31,45 @@ import {
   type PkiProvider,
   type TrustAnswer,
 } from "../../lib/pki.js";
+import { flowInfo, isDevice, messagesOf, messageText, observedBy, roleInfo, type TrustMessage } from "../../lib/pkiTopology.js";
 import { engine } from "../../state/engine.js";
 import { CloseIcon } from "../../shell/Icons.js";
+import { chooseTab } from "../pki-records/state.js";
 import { JerTree } from "./PduDecoder.js";
+import { Topology } from "./Topology.js";
 
-function LockIcon(): React.JSX.Element {
-  return (
-    <svg className="pki-lock" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
-      <rect x="2" y="5.5" width="8" height="5.5" rx="1" fill="currentColor" />
-      <path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
-    </svg>
-  );
-}
+/** Messages the Overview remembers for the cards' "recent messages", newest last. */
+const LOG_CAP = 600;
+/** Messages a card lists. */
+const CARD_MESSAGES = 14;
 
-/** One component box. */
-function Box({
-  c,
-  activity,
-  selected,
-  viewing,
-  onSelect,
-}: {
-  readonly c: PkiComponent;
-  readonly activity: Readonly<Record<string, PkiActivity>>;
-  readonly selected: boolean;
-  readonly viewing: boolean;
-  readonly onSelect: (id: string) => void;
-}): React.JSX.Element {
-  const cls = componentClasses(c, activity);
-  if (selected) cls.push("selected");
-  if (viewing) cls.push("viewing");
-  const a = activity[c.id];
-  const title = `${c.name} (${c.id}) — ${c.status}${a ? ` · ${a.messages} messages in the last 2 s` : ""}${c.queue && c.queue.depth > 0 ? ` · queue ${c.queue.depth}` : ""}`;
-  return (
-    <button type="button" className={cls.join(" ")} onClick={() => onSelect(c.id)} title={title} data-testid={`pki-comp-${c.id}`} data-status={c.status}>
-      {c.status === "offline" ? <LockIcon /> : <i className="pki-dot" aria-hidden="true" />}
-      <span className="r">
-        {roleLabel(c.role)}
-        {c.instance > 0 ? <sub>{c.instance}</sub> : null}
-      </span>
-      {c.queue && c.queue.depth > 0 ? <span className="pki-q">q{c.queue.depth}</span> : null}
-    </button>
-  );
-}
-
-function ProviderBand({
-  p,
-  activity,
-  selected,
-  view,
-  onSelect,
-}: {
-  readonly p: PkiProvider;
-  readonly activity: Readonly<Record<string, PkiActivity>>;
-  readonly selected: string | null;
-  readonly view: string;
-  readonly onSelect: (id: string) => void;
-}): React.JSX.Element {
-  const { offline, online } = providerLayout(p);
-  const box = (c: PkiComponent): React.JSX.Element => <Box key={c.id} c={c} activity={activity} selected={selected === c.id} viewing={view === c.id} onSelect={onSelect} />;
-  return (
-    <section className="pki-provider" data-testid={`pki-provider-${p.label}`}>
-      <header>
-        <b className="mono">{p.label}</b>
-        {p.home ? <span className="pill">home</span> : null}
-        <span className={p.on_ctl ? "pill ok" : "pill warn"} title={p.on_ctl ? "Its root is on the CTL: devices trust its certificates" : "Its root is not on the CTL: devices reject its certificates"}>
-          {p.on_ctl ? "on CTL" : "not on CTL"}
-        </span>
-        <span className="dim" title={p.region.assumption ? "No provider publishes where it runs: this region is an assumption (01 §2.3)" : undefined} data-testid={`pki-region-${p.label}`}>
-          region {p.region.name} ({p.region.metro}){p.region.assumption ? <em className="assume"> assumed</em> : null}
-        </span>
-        <span className="dim">
-          MA {p.ma_mode}
-          {p.ma_review_s !== null ? ` (${formatSpan(p.ma_review_s * 1e9)} review)` : ""}
-        </span>
-        <span className="dim">CRL {p.crl_publication}</span>
-        <span className="dim">fleet {(p.fleet_share * 100).toFixed(0)}%<em className="assume"> assumed</em></span>
-      </header>
-      <div className="pki-chain">
-        <div className="pki-offline" title="Offline by design: air-gapped, brought online only to sign">
-          {offline.map((c, i) => (
-            <span key={c.id} className="pki-chain-step">
-              {i > 0 ? <span className="pki-arrow">→</span> : null}
-              {box(c)}
-            </span>
-          ))}
-        </div>
-        {offline.length > 0 ? <span className="pki-arrow">→</span> : null}
-        <div className="pki-online">{online.map(box)}</div>
-      </div>
-      <footer className="dim">
-        devices {p.devices.devices} · enrolled {p.devices.enrolled} · provisioned {p.devices.provisioned} · revoked {p.devices.revoked} · blocklisted {p.devices.blocklisted}
-      </footer>
-    </section>
-  );
-}
-
-function Governance({
-  trust,
-  selected,
-  onSelect,
-}: {
-  readonly trust: TrustAnswer;
-  readonly selected: string | null;
-  readonly onSelect: (id: string) => void;
-}): React.JSX.Element {
+/** The CTL line under the topology: sequence, roots, quorum, signers, history. */
+function TrustList({ trust }: { readonly trust: TrustAnswer }): React.JSX.Element {
   const s = trust.state;
   const ctl = ctlSummary(s);
-  const manager = s.governance.filter((c) => c.role === "manager");
-  const electors = s.governance.filter((c) => c.role === "elector");
-  const signers = new Set(s.ctl.signers);
   const [history, setHistory] = useState(false);
   return (
-    <section className="pki-governance" data-testid="pki-governance">
+    <section className="pki-ctl-strip">
       <div className="pki-gov-row">
-        {manager.map((c) => (
-          <Box key={c.id} c={c} activity={trust.activity} selected={selected === c.id} viewing={false} onSelect={onSelect} />
-        ))}
-        <span className="pki-electors" title="The electors endorse each CTL; offline, they sign ballots only when a CTL changes">
-          <span className="dim">electors</span>
-          {electors.map((c) => (
-            <span key={c.id} className={signers.has(c.instance) ? "signed" : "unsigned"} title={signers.has(c.instance) ? "endorsed the current CTL" : "did not endorse the current CTL"}>
-              <Box c={c} activity={trust.activity} selected={selected === c.id} viewing={false} onSelect={onSelect} />
-            </span>
-          ))}
-          <span className="dim mono">{ctl.quorum}</span>
-        </span>
-        <span className="grow" />
-        <span className="pki-ctl mono" data-testid="pki-ctl">
+        <span className="pki-ctl mono" data-testid="pki-ctl" title="The certificate trust list (CTL): the roots every device trusts, signed by a quorum of electors">
           CTL seq {ctl.sequence} · {ctl.roots} root{ctl.roots === 1 ? "" : "s"} · {s.ctl.bytes} B · effective {time32Date(s.ctl.effective)}
-          {s.ctl.pending > 0 ? <span className="pill warn"> {s.ctl.pending} pending</span> : null}
         </span>
+        <span className="dim" title="Elector endorsements a trust-list change needs, of the electors there are">
+          quorum {ctl.quorum} · endorsed by {s.ctl.signers.length}
+        </span>
+        {s.ctl.pending > 0 ? (
+          <span className="pill warn" title="A trust-list change the SCMS Manager decided, not yet in force">
+            {s.ctl.pending} pending
+          </span>
+        ) : null}
+        <span className="grow" />
         <button type="button" className="linklike" onClick={() => setHistory((h) => !h)} data-testid="pki-ctl-history-toggle" aria-expanded={history}>
           history ({s.ctl.history.length})
         </button>
       </div>
       {ctl.offCtl.length > 0 ? (
         <p className="warn" data-testid="pki-off-ctl">
-          Not on the CTL: {ctl.offCtl.join(", ")} — devices reject its certificates.
+          Not on the trust list: {ctl.offCtl.join(", ")} — devices reject its certificates.
         </p>
       ) : null}
       {history ? (
@@ -189,7 +88,7 @@ function Governance({
                 <td className="mono">{h.sequence}</td>
                 <td className="mono">{time32Date(h.effective)}</td>
                 <td className="mono">{h.roots}</td>
-                <td className="mono">{h.signers.join(", ")}</td>
+                <td className="mono">{h.signers.map((x) => x + 1).join(", ")}</td>
               </tr>
             ))}
           </tbody>
@@ -201,6 +100,89 @@ function Governance({
         ))}
       </div>
     </section>
+  );
+}
+
+/** The other end of a message, in plain words. */
+function endText(end: string | null, home: string): string {
+  if (end === null) return "?";
+  if (isDevice(end)) return end;
+  const [provider, role] = end.split("/");
+  return `${roleInfo(role ?? end).name}${provider !== home ? ` (${provider})` : ""}`;
+}
+
+/** The messages one node sent or received, newest first, as the view may see them. */
+function RecentMessages({ id, log, view }: { readonly id: string; readonly log: readonly TrustMessage[]; readonly view: string }): React.JSX.Element {
+  const devices = id.startsWith("devices/") ? id.slice("devices/".length) : null;
+  const home = devices ?? id.split("/")[0];
+  const touches = (m: TrustMessage): boolean =>
+    devices !== null ? (isDevice(m.from) || isDevice(m.to)) && [m.from, m.to].some((e) => e !== null && e.startsWith(`${devices}/`)) : m.from === id || m.to === id;
+  const mine = log.filter((m) => observedBy(m, view) && touches(m)).slice(-CARD_MESSAGES).reverse();
+  return (
+    <section className="pki-card-section" data-testid="pki-card-messages">
+      <h4>Recent messages</h4>
+      {mine.length === 0 ? (
+        <p className="faint">None since the view opened{view === GROUND_TRUTH ? "" : " that this view observed"}.</p>
+      ) : (
+        <ul className="pki-recent">
+          {mine.map((m) => {
+            const out = devices !== null ? isDevice(m.from) : m.from === id;
+            return (
+              <li key={m.id} title={`${m.instance} · ${m.from ?? "?"} → ${m.to ?? "?"}`}>
+                <i className="pki-swatch" style={{ background: flowInfo(m.flow).color }} />
+                <span className="mono faint">{formatSimT(m.t)}</span>
+                <span aria-label={out ? "sent to" : "received from"}>{out ? "→" : "←"}</span>
+                <span>{endText(out ? m.to : m.from, home)}</span>
+                <span className="mono">{messageText(m.name)}</span>
+                {m.bytes !== null ? <span className="faint mono">{formatBytes(m.bytes)}</span> : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** The card of a provider's client group. */
+function DevicesCard({ provider, log, view, onClose }: { readonly provider: PkiProvider; readonly log: readonly TrustMessage[]; readonly view: string; readonly onClose: () => void }): React.JSX.Element {
+  const info = roleInfo("devices");
+  const d = provider.devices;
+  return (
+    <aside className="pki-drawer" data-testid="pki-card">
+      <div className="pki-drawer-head">
+        <h3 title={info.term}>
+          {info.name} <span className="dim mono">{provider.label}</span>
+        </h3>
+        <span className="grow" />
+        <button type="button" className="icon-button" onClick={onClose} aria-label="Close the card" data-testid="pki-card-close">
+          <CloseIcon />
+        </button>
+      </div>
+      <div className="pki-drawer-body">
+        <p className="pki-does">{info.does}</p>
+        <dl className="pki-pairs">
+          <dt>devices</dt>
+          <dd className="mono">{d.devices}</dd>
+          <dt>enrolled</dt>
+          <dd className="mono">{d.enrolled}</dd>
+          <dt>provisioned</dt>
+          <dd className="mono">{d.provisioned}</dd>
+          <dt>revoked</dt>
+          <dd className="mono">{d.revoked}</dd>
+          <dt title="Enrolment certificates the RA refuses after a revocation">blocklisted</dt>
+          <dd className="mono">{d.blocklisted}</dd>
+          <dt>fleet share</dt>
+          <dd className="mono">
+            {(provider.fleet_share * 100).toFixed(0)}% <em className="assume">assumed</em>
+          </dd>
+        </dl>
+        <button type="button" className="linklike" onClick={() => chooseTab("vehicles")} data-testid="pki-open-vehicles">
+          Open the vehicles
+        </button>
+        <RecentMessages id={`devices/${provider.label}`} log={log} view={view} />
+      </div>
+    </aside>
   );
 }
 
@@ -317,6 +299,7 @@ function ComponentCard({
   activity,
   view,
   crls,
+  log,
   onClose,
 }: {
   readonly c: PkiComponent;
@@ -324,17 +307,20 @@ function ComponentCard({
   readonly activity: PkiActivity | undefined;
   readonly view: string;
   readonly crls: TrustAnswer["state"]["crls"];
+  readonly log: readonly TrustMessage[];
   readonly onClose: () => void;
 }): React.JSX.Element {
   const ops = Object.entries(c.ops);
   const counters = Object.entries(c.counters);
   const mine = c.role === "crlg" ? crls.filter((h) => h.provider === c.provider) : [];
   const knows = view === GROUND_TRUTH || view === c.id;
+  const info = roleInfo(c.role);
   return (
     <aside className="pki-drawer" data-testid="pki-card">
       <div className="pki-drawer-head">
-        <h3>
-          {c.name} <span className="dim mono">{c.id}</span>
+        <h3 title={info.term}>
+          {info.name}
+          {c.instance > 0 ? ` ${c.instance + 1}` : ""} <span className="dim mono">{c.id}</span>
         </h3>
         <span className="grow" />
         <button type="button" className="icon-button" onClick={onClose} aria-label="Close the card" data-testid="pki-card-close">
@@ -342,9 +328,14 @@ function ComponentCard({
         </button>
       </div>
       <div className="pki-drawer-body">
+        <p className="pki-does" data-testid="pki-card-does">
+          {info.does}
+        </p>
         <dl className="pki-pairs">
           <dt>role</dt>
-          <dd className="mono">{c.role}</dd>
+          <dd>
+            {info.term} <span className="faint mono">{c.role}</span>
+          </dd>
           <dt>status</dt>
           <dd className={`mono status-${c.status}`} data-testid="pki-card-status">
             {c.status}
@@ -437,6 +428,7 @@ function ComponentCard({
             </table>
           </section>
         ) : null}
+        <RecentMessages id={c.id} log={log} view={view} />
         {c.cert ? <CertCard id8={c.cert} /> : <p className="faint">It holds no certificate of its own.</p>}
         {["ra", "aca", "la1", "la2", "ma", "eca"].includes(c.role) ? (
           knows ? (
@@ -455,31 +447,50 @@ function ComponentCard({
 /** The tab. */
 export function TrustDomain({ trust, view }: { readonly trust: TrustAnswer; readonly view: string }): React.JSX.Element {
   const [selected, setSelected] = useState<string | null>(null);
+  const [fresh, setFresh] = useState<TrustMessage[]>([]);
+  const [log, setLog] = useState<TrustMessage[]>([]);
+  const seen = useRef<Set<string>>(new Set());
   const s = trust.state;
   const index = useMemo(() => componentIndex(s), [s]);
-  const devices = devicesLine(s);
+
+  // Each answer's messages not seen before: the topology animates them, the cards list them.
+  useEffect(() => {
+    const novel = messagesOf(trust).filter((m) => !seen.current.has(m.id));
+    if (novel.length === 0) return;
+    for (const m of novel) seen.current.add(m.id);
+    if (seen.current.size > 4 * LOG_CAP) seen.current = new Set([...seen.current].slice(-2 * LOG_CAP));
+    setFresh(novel);
+    setLog((old) => [...old, ...novel].slice(-LOG_CAP));
+  }, [trust]);
+
+  // Escape closes the card.
+  useEffect(() => {
+    if (selected === null) return undefined;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape" && !e.defaultPrevented) {
+        // Marked handled, so the shell's Escape (close the panel) leaves the panel open.
+        e.preventDefault();
+        setSelected(null);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [selected]);
+
   const chosen = selected !== null ? (index.get(selected) ?? null) : null;
   const provider = chosen ? (s.providers.find((p) => p.label === chosen.provider) ?? null) : null;
+  const devicesOf = selected?.startsWith("devices/") ? (s.providers.find((p) => `devices/${p.label}` === selected) ?? null) : null;
+  const drawer = chosen !== null || devicesOf !== null;
+  const total = s.providers.reduce((n, p) => n + p.devices.devices, 0);
   return (
-    <div className={chosen ? "pki-body with-drawer" : "pki-body"} data-testid="pki-trust">
+    <div className={drawer ? "pki-body with-drawer" : "pki-body"} data-testid="pki-trust">
       <div className="pki-main">
-        <Governance trust={trust} selected={selected} onSelect={setSelected} />
-        {s.providers.map((p) => (
-          <ProviderBand key={p.label} p={p} activity={trust.activity} selected={selected} view={view} onSelect={setSelected} />
-        ))}
-        <p className="pki-devices" data-testid="pki-devices">
-          devices: {devices.total.devices} ({devices.perProvider.map((d) => `${d.label.replace(/^provider-/, "")} ${d.devices}`).join(" / ")}) · enrolled {devices.total.enrolled} · provisioned{" "}
-          {devices.total.provisioned} · revoked {devices.total.revoked} · blocklisted {devices.total.blocklisted}
-        </p>
-        <p className="pki-legend dim">
-          <span className="pki-key offline">
-            <LockIcon /> offline (hatched)
-          </span>
-          <span className="pki-key busy">
-            <i className="pki-dot" /> traffic in the last {trust.window_ns !== null ? formatSpan(trust.window_ns) : "2 s"}
-          </span>
-          <span className="pki-key faulted">faulted (outage)</span>
-          <span>q = queue depth</span>
+        <Topology trust={trust} messages={fresh} view={view} selected={selected} onSelect={setSelected} />
+        <TrustList trust={trust} />
+        <p className="pki-devices dim" data-testid="pki-devices">
+          devices: {total} ({s.providers.map((p) => `${p.label.replace(/^provider-/, "")} ${p.devices.devices}`).join(" / ")}) · enrolled{" "}
+          {s.providers.reduce((n, p) => n + p.devices.enrolled, 0)} · provisioned {s.providers.reduce((n, p) => n + p.devices.provisioned, 0)} · revoked{" "}
+          {s.providers.reduce((n, p) => n + p.devices.revoked, 0)} · blocklisted {s.providers.reduce((n, p) => n + p.devices.blocklisted, 0)}
         </p>
         {view !== GROUND_TRUTH ? <KnowledgeCard entity={view} view={view} /> : null}
         <details className="pki-assumptions">
@@ -493,7 +504,11 @@ export function TrustDomain({ trust, view }: { readonly trust: TrustAnswer; read
           </ul>
         </details>
       </div>
-      {chosen ? <ComponentCard c={chosen} provider={provider} activity={trust.activity[chosen.id]} view={view} crls={s.crls} onClose={() => setSelected(null)} /> : null}
+      {chosen ? (
+        <ComponentCard c={chosen} provider={provider} activity={trust.activity[chosen.id]} view={view} crls={s.crls} log={log} onClose={() => setSelected(null)} />
+      ) : devicesOf ? (
+        <DevicesCard provider={devicesOf} log={log} view={view} onClose={() => setSelected(null)} />
+      ) : null}
     </div>
   );
 }

@@ -82,3 +82,52 @@
 }
 .pkir-map-legend i { display: inline-block; width: 9px; height: 9px; border: 2px solid; border-radius: 50%; margin-right: 4px; vertical-align: -2px; }
 .pkir-map-legend i.double { outline: 2px solid; outline-offset: 1px; outline-color: inherit; }
+
+/* Misbehaviour: case list with progress, and the step diagram. */
+.pkir-caselist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.pkir-caselist .pkir-case { width: 100%; display: flex; flex-direction: column; gap: 4px; font-size: 12px; padding: 7px 9px; }
+.pkir-case:hover { border-color: var(--accent-dim); }
+.pkir-case:focus-visible, .pkir-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.pkir-case-head { display: flex; align-items: center; gap: 8px; }
+.pkir-case-head .grow, .pkir-cases .grow { flex: 1; }
+.pkir-stage-pill { font-size: 11px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--border-strong); color: var(--text-dim); }
+.pkir-stage-pill.enforced { color: var(--ok); border-color: var(--ok); }
+.pkir-stage-pill.refused { color: var(--text-faint); }
+.pkir-progress { display: flex; gap: 3px; }
+.pkir-progress i { flex: 1; height: 4px; border-radius: 2px; background: var(--border); }
+.pkir-progress i.on { background: var(--accent); }
+.pkir-progress i.refused { background: var(--text-faint); opacity: 0.4; }
+.pkir-truth { display: flex; flex-direction: column; gap: 2px; font-size: 12px; margin: 6px 0; padding: 6px 8px; border: 1px dashed var(--border-strong); border-radius: var(--radius); }
+.pkir-steps { list-style: none; margin: 8px 0; padding: 0; }
+.pkir-steps > li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; position: relative; padding-bottom: 10px; }
+.pkir-steps > li::before { content: ""; position: absolute; left: 7px; top: 14px; bottom: 0; width: 2px; background: var(--border); }
+.pkir-steps > li:last-child::before { display: none; }
+.pkir-steps > li.reached::before { background: var(--accent-dim); }
+.pkir-step-marker { width: 12px; height: 12px; margin-top: 2px; border-radius: 50%; border: 2px solid var(--border-strong); background: var(--bg); box-sizing: border-box; z-index: 1; }
+.pkir-steps > li.reached .pkir-step-marker { border-color: var(--accent); background: var(--accent); }
+.pkir-steps > li.pending { color: var(--text-faint); }
+.pkir-step-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 12.5px; }
+.pkir-step-detail { font-size: 11px; margin-top: 1px; overflow-wrap: anywhere; white-space: normal; }
+.pkir-step-body .pkir-learned { margin-top: 3px; }
+.pkir-step-msgs { list-style: none; margin: 3px 0 0; padding: 0; font-size: 11px; color: var(--text-dim); }
+
+/* Vehicles: the lifecycle timeline. */
+.pkir-life svg { display: block; overflow: visible; }
+.pkir-life .lane { stroke: var(--border); }
+.pkir-life .lane-label { font-size: 10.5px; fill: var(--text-dim); }
+.pkir-life .axis { font-size: 9.5px; fill: var(--text-faint); font-family: var(--mono); }
+.pkir-life .ev { cursor: default; }
+.pkir-life .ev:focus { outline: none; }
+.pkir-life .ev:focus circle, .pkir-life .ev:focus rect, .pkir-life rect.ev:focus { stroke: var(--text); stroke-width: 1.5; }
+.pkir-life .ev.enrolment circle, .pkir-life .ev.enrolment rect { fill: var(--ok); }
+.pkir-life .ev.download circle, .pkir-life .ev.download rect { fill: var(--accent); }
+.pkir-life .ev.report circle, .pkir-life .ev.report rect { fill: var(--warn); }
+.pkir-life .ev.revocation circle { fill: var(--err); }
+.pkir-life rect.pseudo.p0 { fill: color-mix(in srgb, var(--accent) 55%, transparent); }
+.pkir-life rect.pseudo.p1 { fill: color-mix(in srgb, var(--accent) 30%, transparent); }
+
+/* Revocation: the SLA clock bar. */
+.pkir-sla { display: inline-block; width: 46px; height: 5px; margin-right: 6px; border-radius: 3px; background: var(--border); vertical-align: 1px; overflow: hidden; }
+.pkir-sla i { display: block; height: 100%; background: var(--ok); }
+.pkir-sla.near i { background: var(--warn); }
+.pkir-sla.over i { background: var(--err); }

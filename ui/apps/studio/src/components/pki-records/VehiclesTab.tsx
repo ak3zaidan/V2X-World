@@ -31,6 +31,7 @@ import {
 } from "../../lib/pkiRecords.js";
 import { engine } from "../../state/engine.js";
 import { usePki, usePkiView } from "./state.js";
+import { VehicleTimeline } from "./VehicleTimeline.js";
 
 const CELL_PX = 11;
 /** Weeks shown past the last one the vehicle holds a certificate for. */
@@ -61,8 +62,13 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
         <table className="pkir-table" data-testid="pki-vehicles-table">
           <thead>
             <tr>
-              <th>Vehicle</th><th>Provider</th><th>Enrolled</th><th>Usable pool</th><th>Weeks ahead</th>
-              <th>Next top-up</th><th>CRL installed</th><th>CTL</th><th>Pseudonyms</th><th>State</th>
+              <th>Vehicle</th><th>Provider</th><th title="Holds an enrolment certificate from its provider's ECA">Enrolled</th>
+              <th title="Pseudonym (authorization) certificates it can sign with, this week and later">Usable</th>
+              <th title="Weeks (i-periods) of certificates it holds past this one">Weeks ahead</th>
+              <th title="When it next asks the RA for a batch">Next top-up</th>
+              <th title="The certificate revocation list (CRL) it installed">Revocation list</th>
+              <th title="The certificate trust list (CTL) sequence it holds">Trust list</th>
+              <th title="Pseudonyms it has signed with">Pseudonyms</th><th>State</th>
             </tr>
           </thead>
           <tbody>
@@ -118,11 +124,13 @@ function VehicleCard({ device, view }: { readonly device: string; readonly view:
     <div className="pkir-card" data-testid="pki-vehicle-card">
       <h3 className="mono">{d.device} <span className="dim">· {d.provider}</span></h3>
       <div className="pkir-facts">
-        <span>enrolment <b className="mono">{d.enrolment ?? "none"}</b></span>
-        <span>week i = <b className="mono">{d.current_i}</b></span>
-        <span>active <b className="mono">{d.active ?? "none"}</b></span>
-        <span>records <b className="mono">{d.records}</b></span>
+        <span title="Its enrolment certificate (HashedId8)">enrolment <b className="mono">{d.enrolment ?? "none"}</b></span>
+        <span title="The current i-period: one week from the 2015-01-06 04:00 ET epoch">week i = <b className="mono">{d.current_i}</b></span>
+        <span title="The pseudonym certificate it signs with now (HashedId8)">signing with <b className="mono">{d.active ?? "none"}</b></span>
+        <span>{d.usable} usable · {d.jmax} a week</span>
       </div>
+      <VehicleTimeline d={d} />
+      <h4>Certificates by week</h4>
       <CredentialGrid d={d} />
       <h4>Pseudonym history</h4>
       <ol className="pkir-history mono" data-testid="pki-pseudonyms">
