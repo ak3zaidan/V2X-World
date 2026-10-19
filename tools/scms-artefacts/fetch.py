@@ -5,11 +5,11 @@ fingerprint (https://www.scmsmanager.org/publications/, read 2026-10-16) and aga
 sha256 recorded in third_party/scms-artefacts/PROVENANCE.md.
 
 The files are not committed: the publications page carries "(c) SCMS Manager LLC All
-Rights Reserved" and no licence (owner decision pending, see PROVENANCE.md). Run this once,
-then the ignored tests in crates/v2xw-sec/tests/real_artefacts.rs:
+Rights Reserved" and no licence (see PROVENANCE.md). Run this once; the tests in
+crates/v2xw-sec/tests/real_artefacts.rs then run whenever the cache is present:
 
     python3 -I tools/scms-artefacts/fetch.py
-    cargo test -p v2xw-sec --test real_artefacts -- --ignored
+    cargo test -p v2xw-sec --test real_artefacts
 
 Prints one verdict line. Standard library plus the curl command. Re-running is a no-op when every file is
 present and matches.

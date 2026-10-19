@@ -2600,7 +2600,8 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                labels on one CTL signed by the five shared electors, quorum 3; each with \
                its own offline root and ICA and its own ECA, RA, ACA (provider-b two), LA1, \
                LA2, MA, CRL Generator and PG; no LOP, no CRL broadcast), us-test-ctl-2025 \
-               (six roots), camp-reference (the single SCMS with LOP and a central MA) or \
+               (the 2025-07-17 test CTL: six roots, five approved), camp-reference (the \
+               single SCMS with LOP and a central MA) or \
                custom. providers[]: components, region (an ASSUMPTION; no provider \
                publishes one), fleet_share (roadside units are split by it), on_ctl (off: a \
                provider nobody trusts), ma_mode (manual-review with ma_review_s, or \

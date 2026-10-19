@@ -233,7 +233,7 @@ fn an_elector_replacement_is_installed_in_sequence() {
     assert_eq!(dec.elector_approve().len(), 5);
     assert_eq!(early.install_ctl(&c1), Ok(4));
     // CTL 2 signed by the new elector and two old ones.
-    let c2 = g.build_ctl(2, c1.effective, None, None, &[5, 1, 2]);
+    let c2 = g.build_ctl(2, c1.effective, None, &[5, 1, 2]);
     assert_eq!(early.install_ctl(&c2), Ok(3));
     assert_eq!(
         late.install_ctl(&c2),
@@ -247,7 +247,7 @@ fn an_elector_replacement_is_installed_in_sequence() {
     }
     assert_eq!(late.install_ctl(&c2), Ok(3));
     // The removed elector no longer counts.
-    let c3 = g.build_ctl(3, c1.effective, None, None, &[0, 1, 2]);
+    let c3 = g.build_ctl(3, c1.effective, None, &[0, 1, 2]);
     assert_eq!(
         early.install_ctl(&c3),
         Err(TrustError::CtlQuorum {
@@ -337,9 +337,12 @@ fn permissions_are_the_published_bytes() {
     // aca.prod.s2x.io
     assert_eq!(app("pca"), "01018001238003850002");
     assert_eq!(enc(&tbs("pca").cert_issue_permissions), "01010081");
-    // ra.v2x-scms.saesoltech.io (test): crp; ma.v2x-scms.saesoltech.io (test).
+    // ra.prod.s2x.io: the group in certIssuePermissions, the production form (the test
+    // RAs carry the same bytes in certRequestPermissions); 010180810100 is the oracle's
+    // encoding of the published production RA's field. ma.v2x-scms.saesoltech.io (test).
     assert_eq!(app("ra"), "010180012380038b0002");
-    assert_eq!(enc(&tbs("ra").cert_request_permissions), "010180810100");
+    assert_eq!(enc(&tbs("ra").cert_issue_permissions), "010180810100");
+    assert!(tbs("ra").cert_request_permissions.is_none());
     assert_eq!(app("ma"), "010180012380078a000201010120");
     // crlg.preprod.v2x.isscms.com carries CrlSignerSsp version 1 (`86 00 01`); the
     // 2022 module fixes version 2, so the one octet differs and nothing else.
@@ -484,6 +487,84 @@ fn ctl_publication_follows_the_eac_deadlines() {
         ctl_publication_deadline(CtlChangeKind::RemoveRoot, 3 * DAY, clock),
         5 * DAY
     );
+}
+
+fn clock_at(clock: WallClock, rfc3339: &str) -> SimTime {
+    let want = WallClock::parse_rfc3339(rfc3339).unwrap().t0_unix_s();
+    u64::try_from(want - clock.t0_unix_s()).unwrap() * NS_PER_S
+}
+
+/// The business days are Eastern and skip the observed federal holidays (5 U.S.C.
+/// § 6103(a)). An addition decided on Friday 2026-01-16 04:00 EST skips Monday 19 January
+/// (Birthday of Martin Luther King, Jr.) and is due Thursday 22 January. One decided on
+/// Wednesday 2026-11-25 skips Thanksgiving (Thursday 26) and the weekend: Friday 27,
+/// Monday 30, Tuesday 1 December. An elector replacement adds an elector, which the
+/// electors have 5 business days for (Elector Policy v1.0 §2.2.5, §2.4.2): decided
+/// Tuesday 2026-01-06, due Tuesday 13 January.
+#[test]
+fn ctl_deadlines_count_eastern_business_days_without_federal_holidays() {
+    let clock = GovernanceConfig::default().clock;
+    assert_eq!(clock.to_rfc3339_at(10 * DAY), "2026-01-16T09:00:00Z");
+    assert_eq!(
+        ctl_publication_deadline(CtlChangeKind::AddRoot, 10 * DAY, clock),
+        16 * DAY,
+        "Martin Luther King Jr. Day is not a business day"
+    );
+    let wed = clock_at(clock, "2026-11-25T09:00:00Z");
+    assert_eq!(
+        clock.to_rfc3339_at(ctl_publication_deadline(CtlChangeKind::AddRoot, wed, clock)),
+        "2026-12-01T09:00:00Z",
+        "Thanksgiving is not a business day"
+    );
+}
+
+/// An elector replacement adds an elector: 5 business days (Elector Policy §2.2.5).
+#[test]
+fn an_elector_replacement_ctl_has_the_five_business_days_of_an_addition() {
+    let clock = GovernanceConfig::default().clock;
+    assert_eq!(
+        ctl_publication_deadline(CtlChangeKind::ReplaceElector, 0, clock),
+        7 * DAY,
+        "an elector addition has 5 business days"
+    );
+}
+
+/// A replacement elector gets the default 15-year certificate (Elector Policy v1.0
+/// §2.3.1), not the 24 years of the fifth genesis elector.
+#[test]
+fn a_replacement_elector_is_valid_for_the_default_fifteen_years() {
+    let mut g = gov();
+    let (slot, _) = g.replace_elector(&rng(), 0, DAY).expect("slot 0 approved");
+    let (start, end) = ctl::validity(&g.electors[slot as usize].elector.cert);
+    assert_eq!(end - start, 15 * YEAR_S);
+}
+
+/// A root removal drops the root from `rootCaApprove` and, as SCMS Manager's published
+/// removal (test CTL sequence 3, 2025-07-17), lists nothing in `rootCaRemove`.
+#[test]
+fn a_removed_root_leaves_the_approve_list_and_is_not_listed_as_removed() {
+    let mut g = gov();
+    let (peer, at) = g.add_root(&rng(), "provider-b", 0);
+    g.publish_due(at);
+    let at = g.remove_root(peer, at + DAY).expect("approved");
+    g.publish_due(at);
+    let dec = ctl::decode_ctl_spdu(&g.ctl.spdu).expect("decodes");
+    assert!(!dec.root_ca_approve().contains(&peer));
+    assert_eq!(dec.root_ca_approve().len(), 1);
+    assert!(dec.root_ca_remove().is_empty(), "rootCaRemove stays empty");
+}
+
+/// WP-F2 finding 1: the device-facing PDU PKI and the governance hierarchy give their RA
+/// the same permission fields (one provider uses one form).
+#[test]
+fn both_engine_pkis_give_the_ra_the_same_permission_form() {
+    let g = gov();
+    let pki = crate::scms::pdu::ScmsPki::new(7, 600_000_000).expect("pki");
+    let a = &g.cert("ra").unwrap().0.to_be_signed;
+    let b = &pki.ra.cert.0.to_be_signed;
+    assert_eq!(a.cert_issue_permissions, b.cert_issue_permissions);
+    assert_eq!(a.cert_request_permissions, b.cert_request_permissions);
+    assert!(a.cert_issue_permissions.is_some() && a.cert_request_permissions.is_none());
 }
 
 #[test]

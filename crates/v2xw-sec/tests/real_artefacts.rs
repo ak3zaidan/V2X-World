@@ -3,12 +3,18 @@
 //! 01 §2.2, §3.1; gap row 14; WP-A5).
 //!
 //! The files are fetched, not committed (no licence on the page; see
-//! `third_party/scms-artefacts/PROVENANCE.md`), so these tests are `#[ignore]`d:
+//! `third_party/scms-artefacts/PROVENANCE.md`). Owner decision: the tests run whenever
+//! the git-ignored cache is present, and `V2XW_SCMS_ARTEFACTS=1` makes them demand it
+//! (a missing file then fails instead of skipping):
 //!
 //! ```text
 //! python3 -I tools/scms-artefacts/fetch.py      # verifies every file's published SHA-384
-//! cargo test -p v2xw-sec --test real_artefacts -- --ignored
+//! cargo test -p v2xw-sec --test real_artefacts
+//! V2XW_SCMS_ARTEFACTS=1 cargo test -p v2xw-sec --test real_artefacts   # CI: must run
 //! ```
+//!
+//! Without the cache and without the variable each test prints `SKIPPED` and passes; a
+//! cache directory that exists but lacks a file, or holds a changed one, fails.
 //!
 //! The independent anchors are SCMS Manager's own published SHA-384 fingerprints of the
 //! ten elector certificates (transcribed below) and the separately published root
@@ -26,8 +32,6 @@ use v2xw_sec::ctl::{
     decode_ctl_spdu, verify_ctl,
 };
 use v2xw_sec::sig1609::{cert_hashed_id32, cert_hashed_id48, verify_explicit_cert};
-
-const IGNORE: &str = "needs tools/scms-artefacts/fetch.py";
 
 /// Published SHA-384 fingerprints of the production elector certificates
 /// (scmsmanager.org/publications, "Elector certificates (SHA 384 fingerprint)").
@@ -48,10 +52,27 @@ const TEST_ELECTORS: [&str; 5] = [
     "76d5b5e5105d0d9878fbd2b674fa93d25221060a9ce20e0de1df9df0b8baef6b655e9f77a7ccf4195965d66d0b46049c",
 ];
 
+fn cache_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../third_party/scms-artefacts/files")
+}
+
+/// Whether to check the published artefacts: the cache directory exists (owner decision:
+/// run whenever the cache is present), or `V2XW_SCMS_ARTEFACTS=1` demands it, so a
+/// missing file fails in [`file`]. Otherwise the test says it skipped.
+fn artefacts(test: &str) -> bool {
+    let forced = std::env::var("V2XW_SCMS_ARTEFACTS").is_ok_and(|v| v == "1");
+    if forced || cache_dir().is_dir() {
+        return true;
+    }
+    eprintln!(
+        "SKIPPED {test}: no third_party/scms-artefacts/files (run python3 -I \
+         tools/scms-artefacts/fetch.py; V2XW_SCMS_ARTEFACTS=1 makes a missing cache fail)"
+    );
+    false
+}
+
 fn file(rel: &str) -> Vec<u8> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../third_party/scms-artefacts/files")
-        .join(rel);
+    let p = cache_dir().join(rel);
     std::fs::read(&p).unwrap_or_else(|e| {
         panic!(
             "{}: {e}; run python3 -I tools/scms-artefacts/fetch.py",
@@ -83,9 +104,10 @@ fn sha256(b: &[u8]) -> [u8; 32] {
 /// Each published elector certificate decodes, is a self-signed P-384 elector
 /// certificate, and our HashedId48 of it equals SCMS Manager's published fingerprint.
 #[test]
-#[ignore = "needs tools/scms-artefacts/fetch.py"]
 fn published_elector_certificates_hash_to_their_fingerprints() {
-    let _ = IGNORE;
+    if !artefacts("published_elector_certificates_hash_to_their_fingerprints") {
+        return;
+    }
     for (kind, fps) in [("", &PROD_ELECTORS), (".test", &TEST_ELECTORS)] {
         for (i, fp) in fps.iter().enumerate() {
             let b = file(&format!(
@@ -131,8 +153,10 @@ fn check_ctl(ctl: &Ctl, fps: &[&str; 5]) -> ctl::CtlVerdict {
 /// against the published elector fingerprints, and both embedded roots are approved by
 /// their HashedId32 and self-signed.
 #[test]
-#[ignore = "needs tools/scms-artefacts/fetch.py"]
 fn production_ctl_2025_08_13_verifies() {
+    if !artefacts("production_ctl_2025_08_13_verifies") {
+        return;
+    }
     let b = file("production-2025-08-13/production_ctl.oer");
     let ctl = decode_ctl_spdu(&b).unwrap();
     assert_eq!(
@@ -161,8 +185,10 @@ fn production_ctl_2025_08_13_verifies() {
 /// five of the six carried roots are approved, and each approved HashedId32 is the
 /// SHA-256 of the separately published root file.
 #[test]
-#[ignore = "needs tools/scms-artefacts/fetch.py"]
 fn test_ctl_2025_07_17_verifies_and_its_roots_match_the_published_root_files() {
+    if !artefacts("test_ctl_2025_07_17_verifies_and_its_roots_match_the_published_root_files") {
+        return;
+    }
     let b = file("test-2025-07-17/test_ctl.oer");
     let ctl = decode_ctl_spdu(&b).unwrap();
     assert_eq!(ctl::encode_ctl_spdu(&ctl.raw).unwrap(), b);
@@ -209,8 +235,10 @@ fn test_ctl_2025_07_17_verifies_and_its_roots_match_the_published_root_files() {
 /// each next CTL under the trust the previous one left (`quorum` is absent in sequence
 /// 0, so 3 carries over). Replaying an older CTL after a newer one is refused.
 #[test]
-#[ignore = "needs tools/scms-artefacts/fetch.py"]
 fn published_ctl_series_install_in_order() {
+    if !artefacts("published_ctl_series_install_in_order") {
+        return;
+    }
     // (file, sequence, effectiveDate, quorum, roots carried, roots approved)
     type Row = (&'static str, u16, u32, Option<u32>, usize, usize);
     let prod: [Row; 2] = [
@@ -332,8 +360,10 @@ fn check_chain_file(rel: &str, anchor: &Ctl) -> (usize, [u8; 8]) {
 /// electors. It verifies only against itself, so a device must anchor on the SCMS
 /// Manager CTL (`production_ctl.oer`), not on a chain file's home CTL.
 #[test]
-#[ignore = "needs tools/scms-artefacts/fetch.py"]
 fn published_chain_files_verify_to_their_roots() {
+    if !artefacts("published_chain_files_verify_to_their_roots") {
+        return;
+    }
     let prod = decode_ctl_spdu(&file("production-2025-08-13/production_ctl.oer")).unwrap();
     let test = decode_ctl_spdu(&file("test-2025-07-17/test_ctl.oer")).unwrap();
     let (n, ps) = check_chain_file("production-2025-08-13/cert-chain_0.oer", &prod);
@@ -363,8 +393,10 @@ fn published_chain_files_verify_to_their_roots() {
 /// (Quorum 3 still accepts a CTL with one broken signature; that is correct, and is why
 /// the assertion counts signatures rather than asking for rejection.)
 #[test]
-#[ignore = "needs tools/scms-artefacts/fetch.py"]
 fn flipping_any_byte_of_the_production_ctl_breaks_it() {
+    if !artefacts("flipping_any_byte_of_the_production_ctl_breaks_it") {
+        return;
+    }
     let b = file("production-2025-08-13/production_ctl.oer");
     let t = trust(&PROD_ELECTORS);
     let intact = |bytes: &[u8]| -> bool {
@@ -395,8 +427,10 @@ fn flipping_any_byte_of_the_production_ctl_breaks_it() {
 
 /// One flipped byte in a chain-file certificate's signature is caught.
 #[test]
-#[ignore = "needs tools/scms-artefacts/fetch.py"]
 fn a_flipped_signature_byte_in_a_chain_file_fails() {
+    if !artefacts("a_flipped_signature_byte_in_a_chain_file_fails") {
+        return;
+    }
     let b = file("production-2025-08-13/cert-chain_0.oer");
     let (ctl, mut others) = decode_certificate_chain(&b).unwrap();
     let last = others.len() - 1;

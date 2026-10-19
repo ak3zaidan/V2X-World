@@ -652,3 +652,18 @@ fn on_a_compressed_calendar_a_unit_stays_one_period_ahead() {
     // asked at the start of period 3, still waits for the ACA's 60 s turnaround.
     assert_eq!(periods(&run, DEVICE_A), vec![0, 1, 2, 3]);
 }
+
+/// The one end-entity SSP CAMP 1.2.2 publishes for the CV pilots (Table 1 row 44, Wyoming
+/// distress notification on an identification certificate): the engine's `PsidSsp`
+/// encodes to the COER the table prints, byte for byte.
+#[test]
+fn the_published_wyoming_distress_ssp_encodes_as_camp_prints_it() {
+    let got = rasn::coer::encode(&appcert::distress_notification_psid_ssp()).unwrap();
+    let camp: [u8; 11] = [
+        0x80, 0x02, 0x40, 0x82, 0x80, 0x05, 0x00, 0x80, 0x01, 0xF0, 0x40,
+    ];
+    assert_eq!(got, camp);
+    // The default application profile carries no SSP: the CV-pilot column prints none
+    // for SPaT/MAP (nor for BSM or SRM).
+    assert_eq!(AppCertKind::RsuApplication.psids(), &[appcert::SPAT_MAP_PSID]);
+}

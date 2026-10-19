@@ -88,7 +88,10 @@ pub const EXTRA_INSTANCE_OFFSET: u32 = 40;
 pub enum Preset {
     /// The US production system of 2025: two providers on one CTL (01 §2.1 [A]).
     UsProduction2025,
-    /// The 17 July 2025 test CTL: six roots (01 §2.1 [A]), neutral labels a–f.
+    /// The 17 July 2025 test CTL (sequence 3, the latest published): six providers, of
+    /// which five roots are approved; the sixth root ships in the CTL package but is no
+    /// longer approved (sequence 2 of 2025-03-18 approved all six). Neutral labels a–f;
+    /// `provider-f` is off the CTL ([`Provider::on_ctl`]).
     UsTestCtl2025,
     /// The CAMP reference design: one SCMS with LOP, CRL Store and broadcast and a central
     /// MA, no providers. Today's topology.
@@ -454,9 +457,18 @@ impl Deployment {
                 Provider::standard("provider-a", 1, manual, 0.5),
                 Provider::standard("provider-b", 2, manual, 0.5),
             ]),
+            // The 2025-07-17 test CTL (decoded from the published file, 01 §3.1): its
+            // package carries six root certificates and `rootCaApprove` lists five; the
+            // sixth (approved in the 2025-03-18 CTL) is dropped without a `rootCaRemove`
+            // entry. Every plugfest provider still has devices, so the shares stay equal.
             Preset::UsTestCtl2025 => us(["a", "b", "c", "d", "e", "f"]
                 .iter()
-                .map(|s| Provider::standard(&format!("provider-{s}"), 1, manual, 1.0 / 6.0))
+                .map(|s| {
+                    let mut p =
+                        Provider::standard(&format!("provider-{s}"), 1, manual, 1.0 / 6.0);
+                    p.on_ctl = *s != "f";
+                    p
+                })
                 .collect()),
             Preset::CampReference => {
                 // Labelled like the home provider so today's certificates (named
@@ -834,12 +846,16 @@ mod tests {
         assert_eq!(n, 10 + 11);
     }
 
+    /// The latest published test CTL (2025-07-17, sequence 3) approves five of the six
+    /// roots its package carries.
     #[test]
-    fn the_test_ctl_preset_has_six_roots() {
+    fn the_test_ctl_preset_has_six_roots_of_which_five_are_approved() {
         let d = Deployment::preset(Preset::UsTestCtl2025);
         d.validate().unwrap();
         assert_eq!(d.providers.len(), 6);
         assert_eq!(d.providers.iter().map(|p| p.count("root")).sum::<u32>(), 6);
+        assert_eq!(d.providers.iter().filter(|p| p.on_ctl).count(), 5);
+        assert!(!d.providers[5].on_ctl);
     }
 
     #[test]

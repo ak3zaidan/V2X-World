@@ -78,6 +78,37 @@ pub const BSM_PSID: u64 = 0x20;
 /// SRM, traffic-signal-request (0x204096): signal preemption by an emergency vehicle.
 pub const SRM_PSID: u64 = 0x20_4096;
 
+// The SSPs of the CV-pilot certificates, as [CAMP122] Table 1 "Supported V2X
+// Applications" prints them (PDF pp. 19–37, column "SSP Value to Appear in End Entity
+// Certificates for CV Pilots"): BSM (0x20) "SSP: absent"; SPaT/MAP (0x82), TIM (0x83)
+// and the SRM row print no value ("SAE subgroup has been tasked with developing SSP
+// specification … draft available"; "No SSP definition currently known"), so the
+// engine's application and identification certificates carry none. The one SSP the
+// table publishes for an end-entity certificate is Wyoming's, below.
+
+/// Vehicle-initiated distress notification, PSID `0pC0-00-02` = 0x4082 (16 514), Wyoming
+/// DOT, on an OBU identification certificate ([CAMP122] Table 1 row 44).
+pub const DISTRESS_NOTIFICATION_PSID: u64 = 0x4082;
+/// Its SSP: a UPER J2945/2 DSRC-SSP, version 1, one `SSPentry {index
+/// msg-travelerInformation (31), constraint SSPconstraintAll}`, "UPER encoded in hex:
+/// 00 80 01 F0 40" ([CAMP122] Table 1 row 44).
+pub const DISTRESS_NOTIFICATION_SSP: [u8; 5] = [0x00, 0x80, 0x01, 0xF0, 0x40];
+
+/// The Wyoming distress-notification `PsidSsp`, whose COER [CAMP122] Table 1 row 44
+/// prints as "80 02 40 82 80 05 00 80 01 F0 40" (opaque SSP). The engine's default
+/// identification profile ([`AppCertKind::psids`]) does not include it: no published
+/// source puts it on emergency vehicles. It is here for scenarios and attack studies that
+/// model the Wyoming application.
+#[must_use]
+pub fn distress_notification_psid_ssp() -> PsidSsp {
+    PsidSsp::new(
+        Psid(Integer::from(DISTRESS_NOTIFICATION_PSID)),
+        Some(v2xw_msg::sec_types::ieee1609_dot2_base_types::ServiceSpecificPermissions::opaque(
+            DISTRESS_NOTIFICATION_SSP.to_vec().into(),
+        )),
+    )
+}
+
 /// Which non-pseudonym certificate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub enum AppCertKind {
