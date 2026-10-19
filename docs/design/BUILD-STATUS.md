@@ -4036,6 +4036,35 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-18: SCMS realism validation integration (VAL-CRYPTO, PROTO, GOV, VEH, UI)
+
+Five validators each checked one part of the SCMS against its published sources and wrote a cited checklist in `docs/design/scms-real/validation/` (crypto-formats 80 rows, protocols 109, governance-deployment 70, vehicle-and-roadside 67). They fixed what did not match, and each new test was shown to go red with its fault put back. Merged `--no-ff` onto `0f7ababf` in order crypto (`0f18380f`), protocol (`843f73f0`), governance (`aee0f110`), vehicle (`3c1f5736`), ui (`0c8a5e34`). Every agent had committed its work, so no wip snapshot was needed. There were no conflicts: `pdu.rs`, `governance.rs`, `run/mod.rs`, `provision.rs` and `validate.rs` auto-merged. `cargo fmt --all` is its own commit (`3ae90bcb`).
+
+- **Checks:** `cargo check --workspace --tests` passes, with only the known warnings in v2xw-msg and v2xw-threat. The v2xw-sec, -msg, -proto, -node and -server suites pass 1,116 tests, with 1 failure. That failure, `v2xw-server --test live` `a_grouped_metrics_query_…`, was already there before the merge: `scenarios/phase1-grid.yaml` now says `metrics: [all]` (since `e4fd0c0a`), and the test still edits `metrics: [pdr]`. The engine lib passes, and so do `backend_entities`, `calendar`, `conformance`, `credential_handoff`, `p2pcd_air`, `phase2`, `pki_view`, `rsu_certs`, `scms_constants`, `scms_deployment`, `scms_providers`, `scms_scale`, `scms_wiring`, `security_lifecycle`, `unknown_signer` and `vru` (171 passed). The only two failures were the pinned digests.
+- **Digests:** both were re-blessed in `6bfc2b23`. The record digests of `phase2-path` and `i-s1-phase2-60s` moved. Their frame digests and record counts did not change, and I-S1 still holds. They moved because of changes to backend PKI and CRL bytes: the MA and component lifetimes, indexWithinI on each delta, the governance RA permissions form, and the per-device PSID profiles.
+- **Oracle:** `oracle.py` passes selftest (412/412), mutate (24 faults, 0 silent) and verify-emitted (10/10). On corpora regenerated after the merge:
+  - `check_pdus.py` passes 24/24 and 25/25, `check_appcerts.py` 18/18 (3/3 keys), `check_run_crl.py` 19/19 and `check_mbr.py` 4/4.
+  - `profiles.py` passes 24/24, and `mutate_rules.py` passes (every checker fault goes red).
+  - `real_artefacts` passes 7/7 with the cache present.
+  - `check_run.py` passes the conformance capture: 19,183/19,183 checks with 0 disagreements.
+- **UI:** `tsc -b` for protocol and viewer passes, and the Studio typecheck is clean. `pnpm --filter @vwp/studio test` passes: vitest, plus Playwright 32/32.
+- **Release:** `cargo build --release -j 2 -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots, and `/rpc/schema` and `/agent/status` both return 200.
+- **Owner decisions** (crypto report §1–2):
+  - CF-CRACA: the device-facing CRL signer is issued by the ICA, but ISS and the profile put it under the root.
+  - CF-IPERIOD: validity starts are aligned to UTC, so each is 2 s off the uniform Time32 grid. The fix is one line plus a re-pin of `scms_wiring`.
+- **Still open:**
+  - CF-UNCOMP: peers with uncompressed keys are refused.
+  - The enrolment cracaId 000000 makes series-4 CRLs ineffective.
+  - RSU certificates carry no SSPs.
+  - `issue_component` still issues for 3 years.
+  - EE request retry (SCMS-522/523), infoStatus/If-Modified-Since and Range resume are not modelled.
+  - Vehicle CRL downloads are charged by the 40 B/entry model.
+  - The engine's "enforced n of N" uses the current node count.
+  - Messages are missed in the UI diagram at high speed.
+  - The full 172,800 s benchmark has not been re-run on release.
+  - The e2e-engine `backend.spec` was not run.
+- **Cleanup:** the worktrees and branches `worktree-wf_fcf1da54-4cd-{2..6}` were removed, and so was `target/agents`. The SCMS artefact cache (gitignored) was copied into `third_party/scms-artefacts/files`.
+
 ## 2026-10-18: SCMS realism Phase F integration (WP-F1, F2) and the cleanup package
 
 Merged `--no-ff` onto `fd9c444` in order CLEAN (`88d2e6e`, merge `dc6ec05`), F1 (`b23a45c`, merge `2907e26`), F2 (`f24d9f3`, merge `832d81a`). All three agents had committed their work, so no wip snapshot was needed. Git reported no conflicts.
