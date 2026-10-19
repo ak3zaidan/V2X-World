@@ -456,6 +456,7 @@ impl<S: Source> Reader<S> {
         };
         let mut state = VerifyState {
             cadence,
+            skipped: skipped_windows(self.manifest_json()),
             ..Default::default()
         };
         // A cell, because both closures need it: the frame walk increments it and the
@@ -569,7 +570,10 @@ impl<S: Source> Reader<S> {
                         }
                         if let Some(prev_kf) = state.last_keyframe_time {
                             let gap = kf.sim_time_ns.saturating_sub(prev_kf);
-                            if gap > cadence.keyframe_period.as_nanos() {
+                            let period = cadence.keyframe_period.as_nanos();
+                            if gap > period
+                                && !state.declared_skip(prev_kf, kf.sim_time_ns, period)
+                            {
                                 return Err(bad(format!(
                                     "{gap} ns between keyframes exceeds the {} ns cadence",
                                     cadence.keyframe_period.as_nanos()
@@ -915,14 +919,30 @@ struct VerifyState {
     last_step: u32,
     last_keyframe_time: Option<SimTime>,
     last_snapshot_time: Option<SimTime>,
+    /// The manifest's `time_dilation_windows` (which include every `time.fast_forward`
+    /// window), `[start, end)` ns: spans in which the engine may legitimately write no
+    /// snapshot, because the world is frozen and only the backend runs.
+    skipped: Vec<(SimTime, SimTime)>,
 }
 
 impl VerifyState {
+    /// Whether the gap from `prev` to `now` is a declared skip: a window starts no later
+    /// than the next frame was due (`prev + due`), ends after `prev`, and the stream
+    /// resumes no later than one cadence after it ends. A fast-forward freezes the world,
+    /// so the snapshot stream legitimately pauses across it (WP-D2); a hole anywhere else
+    /// is still a defect.
+    fn declared_skip(&self, prev: SimTime, now: SimTime, due: u64) -> bool {
+        self.skipped.iter().any(|&(start, end)| {
+            start <= prev.saturating_add(due) && end > prev && now <= end.saturating_add(due)
+        })
+    }
+
     fn snapshot_gap(&mut self, max_gap: &mut u64, now: SimTime) -> Result<()> {
         if let Some(prev) = self.last_snapshot_time {
             let gap = now.saturating_sub(prev);
             *max_gap = (*max_gap).max(gap);
-            if gap > self.cadence.mobility_step.as_nanos() {
+            let step = self.cadence.mobility_step.as_nanos();
+            if gap > step && !self.declared_skip(prev, now, step) {
                 return Err(RecordError::Inconsistent {
                     at: now,
                     frames: 0,
@@ -963,6 +983,23 @@ fn check_version(manifest: &BTreeMap<String, String>) -> Result<()> {
         });
     }
     Ok(())
+}
+
+/// The `time_dilation_windows` of a run manifest JSON, as `(start_ns, end_ns)`; none when
+/// the recording carries no manifest or the field is absent.
+fn skipped_windows(manifest_json: Option<&str>) -> Vec<(SimTime, SimTime)> {
+    let Some(v) = manifest_json.and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok())
+    else {
+        return Vec::new();
+    };
+    v.get("time_dilation_windows")
+        .and_then(serde_json::Value::as_array)
+        .map(|ws| {
+            ws.iter()
+                .filter_map(|w| Some((w.get("start_ns")?.as_u64()?, w.get("end_ns")?.as_u64()?)))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn cadence_from(manifest: &BTreeMap<String, String>) -> Result<Cadence> {
