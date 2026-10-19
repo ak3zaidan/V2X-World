@@ -299,12 +299,23 @@ fn the_case_board_dates_reports_in_from_the_arrival_not_the_decision() {
     let lv = run.state.devices[&DEVICE_A].credentials[&(0, 0)].lv;
     run.submit_report(DEVICE_B, 0, lv);
     run.run().expect("runs");
-    let arrived = *run
+    // The MA had the report when it finished taking it in: the `report-received` stamp
+    // of the run it arrived on (its queueing and decryption after the delivery included).
+    let delivered = *run
         .state
         .ma
         .report_arrived
         .last()
         .expect("the arrival is kept");
+    let arrived = run
+        .kernel
+        .stages
+        .at(
+            *run.state.ma.report_runs.last().expect("its run is kept"),
+            StageId::ReportReceived,
+        )
+        .expect("received");
+    assert!(arrived >= delivered, "{delivered} -> {arrived}");
     let (res, _) = run.request_revocation(0, 0, 2).expect("held");
     run.run().expect("runs");
     let decided = run
@@ -318,9 +329,11 @@ fn the_case_board_dates_reports_in_from_the_arrival_not_the_decision() {
     let at = |s: &str| cases.iter().find(|c| c.stage == s).map(|c| c.t);
     assert_eq!(at("reports-in"), Some(arrived), "{cases:?}");
     assert_eq!(at("decision"), Some(decided));
+    // The review runs from the delivery (the case can open inside the MA's processing of
+    // the report, here driven at the delivery instant).
     assert!(
-        decided >= arrived + review * NS_PER_S,
-        "{arrived} -> {decided}"
+        decided >= delivered + review * NS_PER_S,
+        "{delivered} -> {decided}"
     );
 }
 
@@ -340,7 +353,18 @@ fn the_case_board_dates_corroboration_from_the_case_opening_not_the_decision() {
     let lv = run.state.devices[&DEVICE_A].credentials[&(0, 0)].lv;
     run.submit_report(DEVICE_B, 0, lv);
     run.run().expect("runs");
-    let opened = run.kernel.now();
+    // The case opens at the driver's instant, but the board never shows it corroborated
+    // before its report was taken in.
+    let received = run
+        .kernel
+        .stages
+        .at(
+            *run.state.ma.report_runs.last().expect("its run is kept"),
+            StageId::ReportReceived,
+        )
+        .expect("received");
+    let driven = run.kernel.now();
+    let opened = driven.max(received);
     let (res, _) = run.request_revocation(0, 0, 2).expect("held");
     run.run().expect("runs");
     let decided = run
@@ -355,7 +379,7 @@ fn the_case_board_dates_corroboration_from_the_case_opening_not_the_decision() {
     assert_eq!(at("corroborated"), Some(opened), "{cases:?}");
     assert_eq!(at("decision"), Some(decided));
     assert!(
-        decided >= opened + review * NS_PER_S,
-        "{opened} -> {decided}"
+        decided >= driven + review * NS_PER_S,
+        "{driven} -> {decided}"
     );
 }

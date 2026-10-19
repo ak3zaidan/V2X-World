@@ -716,6 +716,34 @@ impl ScmsState {
 
     /// Handles every message of this flow; [`ScmsState::handle`] routes here.
     #[allow(unused_variables)]
+    /// The RA's answer to a request it could not open, whose signer it does not trust or
+    /// that names another device's file: a refusal, as an HTTP service answers a bad
+    /// request. Without one the device's SCMS-522 retry would send the request again for
+    /// ever. ASSUMPTION: [CAMP122] gives no error code for this case; `UnknownEnrolment`
+    /// is the nearest of the modelled refusals.
+    fn refuse_unopened(
+        &mut self,
+        out: &mut Outbox<ScmsMsg>,
+        device: NodeId,
+        flow: FlowId,
+        run: FlowRun,
+    ) {
+        self.ra.refused_enrolment += 1;
+        Self::sign(out, 1);
+        out.send(
+            self.nodes.lop,
+            ScmsMsg::ProvisioningRefused {
+                device,
+                reason: Refusal::UnknownEnrolment,
+            },
+            "provisioning-refused",
+            self.sizes.refusal(),
+            Transport::BackendNet,
+            flow,
+            run,
+        );
+    }
+
     /// SCMS-522: the device has sent `msg`'s request to the RA and now waits for the
     /// answer `kind`; if none comes within `ee_retry_timeout` it sends the request again.
     /// Recorded even with the retry off, so a late duplicate answer is recognised.
@@ -933,7 +961,13 @@ impl ScmsState {
                             Some(p.hashed_id8())
                         }
                         Err(e) => {
+                            // A request the RA cannot open or whose signer it does not
+                            // trust is refused with an answer, as an HTTP service answers
+                            // a bad POST: without one the device's SCMS-522 retry would
+                            // send it again for ever. ASSUMPTION: [CAMP122] gives no error
+                            // code for this case; `UnknownEnrolment` is the nearest.
                             self.reject_pdu(SpduKind::EeRaCertRequest, to, at, e);
+                            self.refuse_unopened(out, req.device, flow, run);
                             return Ok(());
                         }
                     },
@@ -1769,11 +1803,13 @@ impl ScmsState {
                                     at,
                                     PduError::Shape("filename names another device's batch"),
                                 );
+                                self.refuse_unopened(out, device, flow, run);
                                 return Ok(());
                             }
                         }
                         Err(e) => {
                             self.reject_pdu(SpduKind::EeRaDownloadRequest, to, at, e);
+                            self.refuse_unopened(out, device, flow, run);
                             return Ok(());
                         }
                     }
@@ -2034,12 +2070,14 @@ impl ScmsState {
                                     at,
                                     PduError::Shape("the .info file names another request"),
                                 );
+                                self.refuse_unopened(out, device, flow, run);
                                 return Ok(());
                             }
                             signer_id8 = Some(pdu::cert_id8(&o.enrolment));
                         }
                         Err(e) => {
                             self.reject_pdu(SpduKind::EeRaDownloadRequest, to, at, e);
+                            self.refuse_unopened(out, device, flow, run);
                             return Ok(());
                         }
                     }
