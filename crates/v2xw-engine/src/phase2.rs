@@ -131,6 +131,10 @@ pub const ETSI_PKI: &str = "protocol/etsi/ts102941";
 /// The detector suite's id, as `detection.local` names it.
 pub const LEGACY_12: &str = "detect/legacy-12";
 
+/// The check id of a failed signature verification (`DetectorId::SignatureVerification`).
+const SIGNATURE_VERIFICATION: &str =
+    v2xw_threat::detect::DetectorId::SignatureVerification.as_str();
+
 /// The authority pipeline's id, as `detection.ma` names it.
 pub const MA_LEGACY_WINDOW: &str = v2xw_threat::ma::MODEL_ID;
 
@@ -579,6 +583,15 @@ impl RsuSpec {
 pub struct LifecycleParams {
     /// The backend deployment's parameters.
     pub scms: ScmsParams,
+    /// The PSIDs a vulnerable road user's personal device requests its pseudonym
+    /// certificates for: the VRU message it signs (the J2735 PSM, PSID 0x27
+    /// `psid-vulnerable-road-users-safety-applications`, SAE J2945/9; the VAM's ITS-AID on
+    /// the ETSI stack) and the misbehaviour report (0x26, [SM-MBR] §1), which its reports
+    /// are signed under. A vehicle's profile (`scms.pdu.pseudonym_psids`) does not list
+    /// the PSM, so a vehicle OBU cannot sign one that verifies. **Assumption**: no SCMS
+    /// Manager document publishes the PSM device's permission profile; EE Requirements
+    /// v2.04 p.12 names "PSM devices" as device group 1, which this models.
+    pub vru_psids: v2xw_proto::scms::params::PsidList,
     /// Certificates per i-period (`certs_per_period`, 20 [CAMP-EE Table 2.1.2.6.2]).
     pub jmax: u32,
     /// i-periods a vehicle holds at the start (`pool_periods`).
@@ -652,8 +665,24 @@ impl LifecycleParams {
             }
             scms.pdu.pseudonym_psids = v2xw_proto::scms::params::PsidList::of(&psids);
         }
+        // A personal device signs its VRU message and its reports, and nothing a vehicle
+        // signs (docs/benchmark/scms-real-benchmark.md §9.1: handsets provisioned from the
+        // vehicles' profile had every PSM refused `psid-not-permitted`).
+        let vru_psids = {
+            let etsi = crate::wiring::etsi_facilities(scenario);
+            let vru_msg = if etsi {
+                v2xw_msg::MsgType::Vam
+            } else {
+                v2xw_msg::MsgType::Psm
+            };
+            v2xw_proto::scms::params::PsidList::of(&[
+                v2xw_msg::registry::psid(vru_msg, etsi),
+                v2xw_msg::registry::psid(v2xw_msg::MsgType::Mbr, etsi),
+            ])
+        };
         let mut p = LifecycleParams {
             scms,
+            vru_psids,
             jmax: scms.certs_per_period,
             pool_periods: v2xw_proto::scms::DEVICE_POOL_PERIODS,
             topup_below_periods: 1,
@@ -1136,6 +1165,10 @@ pub struct Phase2Report {
     /// Reports whose detection has no PSID-0x20 type and subtype in the v1.1 object
     /// set (or ObsImplausible, off by default), sent on the modelled path.
     pub reports_mbr_unmapped: u64,
+    /// Reports the MA set aside because their evidence does not verify: the only reason
+    /// given was the accused's bad signature, which proves nothing about the certificate
+    /// holder (anyone can attach a digest to a forged frame).
+    pub reports_evidence_unverifiable: u64,
     /// Reports a device could not secure (no evidence heard, no certificate or key),
     /// sent on the modelled path; see `scms.state.pdu_rejections` for the backend's.
     pub reports_mbr_unsecured: u64,
@@ -1581,7 +1614,8 @@ pub fn broadcast_accuracy_95_m(
 ) -> Option<f64> {
     use v2xw_msg::j2735::bsm;
     match msg_type {
-        v2xw_msg::MsgType::Cam => {
+        // A VAM states its position confidence as a CAM does (the ETSI ReferencePosition).
+        v2xw_msg::MsgType::Cam | v2xw_msg::MsgType::Vam => {
             let cm = v2xw_msg::units::semi_axis_length(belief.semi_major_m);
             (cm < 4095).then(|| f64::from(cm) / 100.0)
         }
@@ -2707,11 +2741,15 @@ impl Phase2 {
     /// The pool is `pool_periods` i-periods of `certs_per_period` certificates starting
     /// at the period `now` falls in — what a vehicle on the road holds — provisioned by
     /// the real flows on a scratch kernel ([`ScmsRun::preload`], joint 3).
+    ///
+    /// `vru`: the device is a vulnerable road user's personal device, which requests its
+    /// certificates under its own permission profile ([`LifecycleParams::vru_psids`]).
     pub fn provision(
         &mut self,
         node: NodeId,
         now: SimTime,
         rng: &v2xw_core::rng::RngRegistry,
+        vru: bool,
     ) -> Vec<ProvisionedCred> {
         let relay = self.rsus.iter().any(|s| {
             s.backhaul.connected
@@ -2766,6 +2804,9 @@ impl Phase2 {
             .deployment
             .provider_of(self.fleet_seed, u64::from(node.index()));
         self.device_provider.insert(device, k);
+        if vru {
+            self.runs[k].set_device_psids(device, self.params.vru_psids);
+        }
         let preloaded =
             self.runs[k].preload(device, start, self.params.pool_periods, self.params.jmax);
         if preloaded.is_err() {
@@ -4686,6 +4727,17 @@ impl Phase2 {
                 subject: r.subject_cert_digest.clone(),
                 detector: r.leading_reason().map(str::to_string),
             });
+            // Evidence the authority cannot verify is not evidence against anyone. A report
+            // whose only reason is that the accused's signature failed carries messages
+            // the accused's key never signed: anyone can put a certificate's digest on a
+            // frame with a bad signature, so acting on it lets one transmitter frame any
+            // honest certificate on the air. The MA opens the evidence and verifies it
+            // first ([SM-MBR] §1: the evidence is the accused's signed BSMs with their
+            // certificate; 03 §8.2: a valid signature is a precondition of processing).
+            if r.reason_codes.iter().all(|c| c == SIGNATURE_VERIFICATION) {
+                self.report.reports_evidence_unverifiable += 1;
+                continue;
+            }
             let action = self.ma[k].ingest_evidence(&r, r.detection_time);
             if self.attackers.contains_key(&f.subject) {
                 *self.attacker_at_ma.entry(f.subject).or_insert(0) += 1;

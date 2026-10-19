@@ -3544,6 +3544,16 @@ pub fn rotation_policy(scenario: &Scenario) -> RotationPolicy {
     if p.strategy == "c2c-cc" {
         return never;
     }
+    // The two published US rules, each with both of its conditions (03 §11): SAE J2945/1
+    // CERTCHG changes once 5 minutes have passed *and* the vehicle is 2 km on from the
+    // last change ([CVP-P2] item 25; [PRIMER] pp.8-9); the NYC CV pilot changes every 2 km
+    // *or* 5 minutes, whichever is first ([PRIMER] pp.8-9). `time` and `distance` are
+    // each one condition alone.
+    match p.strategy.as_str() {
+        "j2945-1" => return RotationPolicy::J2945_1,
+        "nyc-pilot" => return RotationPolicy::NYC_PILOT,
+        _ => {}
+    }
     match PseudonymStrategy::from_scenario(&p.strategy, p.period_s, p.distance_m) {
         Some(PseudonymStrategy::Time { period }) => RotationPolicy {
             min_age: period,

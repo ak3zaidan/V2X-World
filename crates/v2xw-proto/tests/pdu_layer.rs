@@ -343,3 +343,44 @@ fn write_corpus(run: &ScmsRun, dir: &std::path::Path) {
     )
     .unwrap();
 }
+
+/// The PSIDs of the `appPermissions` on each of `device`'s installed implicit certificates.
+fn issued_psids(run: &ScmsRun, device: v2xw_core::ids::NodeId) -> Vec<Vec<String>> {
+    run.state.devices[&device]
+        .credentials
+        .values()
+        .map(|c| {
+            let cert = &c.implicit.as_ref().expect("implicit").certificate;
+            let perms = cert.0.to_be_signed.app_permissions.as_ref().expect("perms");
+            perms.0.iter().map(|p| p.psid.0.to_string()).collect()
+        })
+        .collect()
+}
+
+/// A device with its own permission profile (a J2945/9 personal device: PSM, PSID 0x27,
+/// and the misbehaviour-report PSID 0x26) asks for exactly those PSIDs in its
+/// `EeRaCertRequest`, the RA forwards them to the ACA, and every pseudonym certificate
+/// it installs lists them; a vehicle in the same run keeps the fleet's profile.
+///
+/// Fault injected: `ScmsState::pseudonym_psids_of` returning the fleet list for every
+/// device (the defect of docs/benchmark/scms-real-benchmark.md §9.1) — the handset's
+/// certificates list 32 and 38 and this test fails.
+#[test]
+fn a_device_profile_reaches_the_aca_and_every_certificate_it_installs() {
+    use common::DEVICE_B;
+    use v2xw_proto::scms::params::PsidList;
+    let mut run = run_with_bytes();
+    run.set_device_psids(DEVICE_B, PsidList::of(&[39, 38]));
+    provisioned(&mut run, DEVICE_A, 0, 1, 2);
+    provisioned(&mut run, DEVICE_B, 0, 1, 2);
+    let vehicle = issued_psids(&run, DEVICE_A);
+    let handset = issued_psids(&run, DEVICE_B);
+    assert_eq!(vehicle.len(), 2, "{vehicle:?}");
+    assert_eq!(handset.len(), 2, "{handset:?}");
+    for p in &vehicle {
+        assert_eq!(p, &["32", "38"], "the fleet profile");
+    }
+    for p in &handset {
+        assert_eq!(p, &["38", "39"], "the handset's own profile");
+    }
+}

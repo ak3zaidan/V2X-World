@@ -240,7 +240,7 @@ impl ScmsState {
             &req.ck,
             &req.ek,
             first,
-            self.params.pdu.pseudonym_psids.as_slice(),
+            self.pseudonym_psids_of(req.device).as_slice(),
         )
         .ok()?;
         let bytes = pdu::signed_encrypted_cert_request(
@@ -632,7 +632,9 @@ impl ScmsState {
                                 plv: [e1.clone(), e2.clone()],
                                 valid_from: self.params.period_start_time32(i),
                                 dummy_lv: dummy,
-                                psids: self.params.pdu.pseudonym_psids.as_slice().to_vec(),
+                                // What the device's request asked for (its own
+                                // profile: a PSM device's differs from a vehicle's).
+                                psids: self.pseudonym_psids_of(job.device).as_slice().to_vec(),
                             };
                             pdu_prov::ra_aca_cert_request_spdu(pki, &x).ok()
                         }

@@ -364,6 +364,45 @@ fn a_forged_signature_is_on_the_air_and_reported() {
     assert!(p.reports_about_attackers > 0, "nobody reported the forger");
 }
 
+/// A report whose only evidence is a bad signature proves nothing about the certificate
+/// it names (anyone can put a digest on a forged frame), so the MA sets it aside rather
+/// than counting it against the certificate's holder. The forger's frames are still
+/// refused by every receiver and still reported; what changes is that one transmitter
+/// can no longer frame an honest certificate by forging frames in its name.
+///
+/// Fault injected: `Phase2::ingest_arrivals` without the unverifiable-evidence check —
+/// `reports_evidence_unverifiable` stays 0 and this test fails.
+#[test]
+fn the_ma_sets_aside_a_report_whose_only_evidence_is_a_bad_signature() {
+    let mut s = grid(40.0, 900.0);
+    s.security.verification_policy = "verify-all".to_string();
+    s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
+    s.threats.attackers = vec![v2xw_engine::scenario::schema::Attacker {
+        id: "threat/attacker/legacy/InvalidSignature".to_string(),
+        count: Some(1),
+        schedule: Some(v2xw_engine::scenario::schema::DilationWindow {
+            from_s: 5.0,
+            to_s: 40.0,
+        }),
+        ..Default::default()
+    }];
+    // The RA's report shuffle closes after 5 s, so reports reach the MA inside the run.
+    lifecycle(&mut s, json!({"report_shuffle_window_s": 5.0}));
+    cellular(&mut s);
+    let (report, _) = run(s);
+    let p = &report.phase2;
+    println!(
+        "{} reports, {} at the MA, {} set aside, verdicts {:?}",
+        p.reports_sent, p.reports_at_ma, p.reports_evidence_unverifiable, p.verdicts_by_detector
+    );
+    assert!(p.reports_about_attackers > 0, "nobody reported the forger");
+    assert!(p.reports_at_ma > 0, "no report reached the MA");
+    assert!(
+        p.reports_evidence_unverifiable > 0,
+        "the MA counted a bad signature as evidence against the certificate it names"
+    );
+}
+
 /// A Sybil attacker's ghosts are on the air: extra frames, each a genuine SPDU signed under
 /// one of the attacker's concurrent pseudonyms with its certificate attached, so receivers
 /// verify them and the co-location detector sees several certificates at one point. Before

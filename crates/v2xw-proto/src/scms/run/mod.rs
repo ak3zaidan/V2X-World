@@ -132,6 +132,13 @@ pub struct DeviceState {
     pub info_requests: u32,
     /// Top-offs the RA answered "never" (a period before the request's `firstI`).
     pub topoffs_unavailable: u32,
+    /// The PSIDs this device's pseudonym certificates are requested for (the
+    /// `appPermissions` of its `EeRaCertRequest`, which the RA forwards to the ACA), when
+    /// its device class differs from the fleet's: a J2945/9 personal device signs PSMs
+    /// (PSID 0x27), a vehicle OBU does not. `None` takes
+    /// [`crate::scms::params::PduLayer::pseudonym_psids`]. Set with
+    /// [`ScmsRun::set_device_psids`].
+    pub psids: Option<crate::scms::params::PsidList>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -179,6 +186,7 @@ impl DeviceState {
             ra_account: None,
             info_requests: 0,
             topoffs_unavailable: 0,
+            psids: None,
         }
     }
 
@@ -1360,6 +1368,18 @@ impl ScmsRun {
             .unwrap_or_default()
     }
 
+    /// Gives `device` its own pseudonym permission profile (adding the device if it is
+    /// new): the PSIDs its next `EeRaCertRequest` asks for and the RA forwards to the ACA
+    /// ([`DeviceState::psids`]). Set before the device's provisioning request.
+    pub fn set_device_psids(&mut self, device: NodeId, psids: crate::scms::params::PsidList) {
+        if !self.state.devices.contains_key(&device) {
+            self.add_device(device);
+        }
+        if let Some(d) = self.state.devices.get_mut(&device) {
+            d.psids = Some(psids);
+        }
+    }
+
     /// Adds a device, with its uplink to the privacy proxy and to the CRL store.
     pub fn add_device(&mut self, node: NodeId) {
         let p = &self.state.params;
@@ -1596,6 +1616,15 @@ impl ScmsRun {
 }
 
 impl ScmsState {
+    /// The PSIDs `device` requests its pseudonym certificates for: its own permission
+    /// profile ([`DeviceState::psids`]) or the fleet's.
+    pub fn pseudonym_psids_of(&self, device: NodeId) -> crate::scms::params::PsidList {
+        self.devices
+            .get(&device)
+            .and_then(|d| d.psids)
+            .unwrap_or(self.params.pdu.pseudonym_psids)
+    }
+
     /// `Time32` (TAI seconds since the 1609.2 epoch) at simulated time `at`.
     /// The `Time32` of simulated instant `at` (the run's wall clock).
     pub fn time32(&self, at: SimTime) -> u32 {

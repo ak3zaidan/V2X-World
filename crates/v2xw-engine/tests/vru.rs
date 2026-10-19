@@ -358,3 +358,115 @@ fn a_vru_device_runs_the_scenarios_verification_policy() {
         "no VRU check carried a priority: the policy did not reach the device"
     );
 }
+
+/// Under the US SCMS a pedestrian's handset holds pseudonym certificates that permit the
+/// PSM it signs (PSID 0x27, SAE J2945/9) and the misbehaviour report (0x26), and a
+/// vehicle's do not permit the PSM. Every receiver checks the SPDU's PSID against the
+/// signer's `appPermissions` (1609.2 §5.2), so an honest run refuses no PSM, no detector
+/// accuses a pedestrian of a bad signature, and nobody honest is revoked.
+///
+/// Fault injected: `Phase2::provision` without its `set_device_psids` call for a VRU
+/// device (the defect of docs/benchmark/scms-real-benchmark.md §9.1: handsets requested
+/// the vehicles' profile, 0x20 and 0x26) — every PSM is refused `psid-not-permitted` and
+/// this test fails.
+#[test]
+fn under_the_scms_a_handset_signs_psms_that_every_receiver_accepts() {
+    let mut s = Scenario::minimal();
+    s.world.source = WorldSourceSpec::procedural(
+        "world/source/procedural-grid",
+        serde_json::json!({
+            "cols": 4, "rows": 4, "block_x_m": 120.0, "block_y_m": 90.0,
+            "lanes_per_direction": 1, "sidewalk_m": 2.0, "crossings": true,
+            "signalised": true, "corner_radius_m": 4.5, "bicycles_on_roads": true
+        }),
+    );
+    s.actors.vru.pedestrians = 10;
+    s.actors.vru.device_fraction = 1.0;
+    s.actors.vehicles.equipped_fraction = 1.0;
+    s.actors.vehicles.demand.kind = "mobility/demand/poisson".to_string();
+    s.actors.vehicles.demand.rate_veh_per_h = Some(2400.0);
+    s.messages.sets = vec!["bsm".to_string()];
+    s.time.duration_s = 20.0;
+    s.security.verification_policy = "verify-all".to_string();
+    s.security.protocol = Some(v2xw_engine::scenario::ModelChoice::new(
+        v2xw_engine::phase2::CAMP_SCMS,
+    ));
+    s.actors.backend.protocol = Some(v2xw_engine::phase2::CAMP_SCMS.to_string());
+    s.detection.local = vec![v2xw_engine::scenario::ModelChoice::new(
+        v2xw_engine::phase2::LEGACY_12,
+    )];
+    s.net.uu = Some(v2xw_engine::scenario::ModelChoice {
+        id: "cellular/uu/fixed-latency".to_string(),
+        params: serde_json::json!({"preset": "4g-east-coast"}),
+    });
+    assert!(
+        v2xw_engine::scenario::validate::validate(&s).is_empty(),
+        "{:?}",
+        v2xw_engine::scenario::validate::validate(&s)
+    );
+    let mut engine = v2xw_engine::Engine::build(s, "").expect("builds");
+    let mut recorder = v2xw_engine::MemoryRecorder::new();
+    let report = engine.run(&mut recorder).expect("runs");
+    let rv = &report.receiver_validation;
+    let p = &report.phase2;
+    let psm_valid = by_type(&recorder, "node.verify")
+        .iter()
+        .filter(|r| r["msg_type"] == "psm" && r["outcome"] == "valid")
+        .count();
+    println!(
+        "MEAS scms vru: {} handsets, refused {:?}, {} PSM verifications valid, verdicts {:?}, \
+         {} reports, {} honest revoked",
+        report.vru_devices_created,
+        rv.refused,
+        psm_valid,
+        p.verdicts_by_detector,
+        p.reports_sent,
+        p.revoked_honest
+    );
+    assert!(report.vru_devices_created >= 10, "{report:?}");
+    assert!(rv.checked > 0, "no SPDU was validated to a root");
+    assert_eq!(
+        rv.refused.get("psid-not-permitted").copied().unwrap_or(0),
+        0,
+        "an honest message was signed under a PSID its certificate does not permit"
+    );
+    assert!(psm_valid > 0, "no receiver verified a PSM");
+    assert_eq!(
+        p.verdicts_by_detector
+            .get("signatureVerification")
+            .copied()
+            .unwrap_or(0),
+        0,
+        "an honest sender was accused of a bad signature"
+    );
+    assert_eq!(p.revoked_honest, 0);
+    // What the backend issued: the handsets' certificates permit the PSM and the report,
+    // the vehicles' never the PSM.
+    let psid_vru = v2xw_msg::registry::PSID_VRU.to_string();
+    let (mut handsets, mut vehicles) = (0, 0);
+    for run in engine.phase2().expect("phase 2").scms_runs() {
+        for d in run.state.devices.values() {
+            for c in d.credentials.values() {
+                let Some(imp) = c.implicit.as_ref() else {
+                    continue;
+                };
+                let perms: Vec<String> = imp
+                    .certificate
+                    .0
+                    .to_be_signed
+                    .app_permissions
+                    .as_ref()
+                    .map(|p| p.0.iter().map(|x| x.psid.0.to_string()).collect())
+                    .unwrap_or_default();
+                if d.psids.is_some() {
+                    handsets += 1;
+                    assert_eq!(perms, ["38", "39"], "a handset's certificate");
+                } else {
+                    vehicles += 1;
+                    assert!(!perms.contains(&psid_vru), "a vehicle may sign PSMs: {perms:?}");
+                }
+            }
+        }
+    }
+    assert!(handsets > 0 && vehicles > 0, "{handsets} {vehicles}");
+}
