@@ -3885,9 +3885,23 @@ impl Phase2 {
             };
             let run = &self.runs[case.provider];
             let log = &run.kernel.stages;
+            // The case's own entries: cases run concurrently (gap row 27), so the list's
+            // last entry may be another case's appended on the same step. A case appends
+            // one entry per chain pair in one issuance, its reported chain's first; the
+            // version that carries them is the list length after its last one.
+            let own = || {
+                let c = run.state.ma.cases.values().find(|c| c.crl_run == issuance)?;
+                let (la, ls) = c.seeds[0]?;
+                let entries = &run.state.crlg.entries;
+                let at = entries
+                    .iter()
+                    .rposition(|e| e.la_id1 == la && e.ls1_i == ls)?;
+                let version = (at + c.chain_seeds.len().max(1)).min(entries.len());
+                Some((entries[at], version as u32))
+            };
             if case.entry.is_none()
                 && log.at(issuance, StageId::Issued).is_some()
-                && let Some(entry) = run.state.crlg.entries.last()
+                && let Some((entry, version)) = own()
             {
                 self.report.crls_issued += 1;
                 *self
@@ -3904,7 +3918,7 @@ impl Phase2 {
                 } else {
                     self.report.revoked_honest += 1;
                 }
-                case.entry = Some((*entry, run.state.crlg.entries.len() as u32));
+                case.entry = Some((entry, version));
             }
             for (stage, run) in [
                 (StageId::Detect, case.report_run),
@@ -5052,9 +5066,13 @@ impl Phase2 {
         }
     }
 
-    /// Provider `k`'s MA takes its queued decisions, one open case at a time.
+    /// Provider `k`'s MA takes its queued decisions: every one opens a case at once, up to
+    /// the MA's case table ([`v2xw_proto::scms::params::MaPolicy::max_open_cases`]), so
+    /// cases run side by side (gap row 27) and the n-th attacker decided in one shuffle
+    /// release is not reviewed n review periods late. A decision the table has no room
+    /// for waits at the front of the queue.
     fn start_cases_of(&mut self, k: usize, now: SimTime) {
-        while !self.runs[k].case_open() {
+        loop {
             let Some(mut case) = self.queue[k].pop_front() else {
                 return;
             };

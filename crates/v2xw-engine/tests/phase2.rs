@@ -175,6 +175,34 @@ fn a_report_becomes_a_vehicle_that_cannot_sign() {
     assert!(p.revocation_latency_ns > 0);
 }
 
+/// Found by the SCMS effects round (docs/design/scms-real/testing/effects.md, rows
+/// base-concurrent-cases and att-spread): the backend opened one case per provider at a
+/// time, so under the pilots' manual review the n-th attacker decided in one shuffle
+/// release waited n review periods (in the real-calendar run the second decision came 8 h
+/// after the first, and with 20 % attackers three of ten decisions never opened a case).
+/// The MA's case table holds cases side by side (gap row 27, `MaPolicy::max_open_cases`).
+/// Fault that turns it red: the `while !case_open()` gate restored in `start_cases_of`.
+#[test]
+fn every_decision_opens_its_case_at_once_under_manual_review() {
+    let mut s = phase2();
+    s.threats.attackers[0].count = Some(4);
+    // A review longer than the run: no case finishes, so a serial MA opens one.
+    lifecycle(&mut s, "ma_review_s", 3_600.0);
+    let (report, _) = run(s);
+    let p = &report.phase2;
+    assert_eq!(p.backend_errors, 0, "the backend refused: {}", p.first_backend_error);
+    assert!(
+        p.ma_revoke_decisions >= 2,
+        "the run needs two decisions to say anything: {}",
+        p.ma_revoke_decisions
+    );
+    assert_eq!(
+        p.cases_opened, p.ma_revoke_decisions,
+        "a decision waited for another case to finish"
+    );
+    assert_eq!(p.revoked_honest, 0);
+}
+
 /// The decomposition is the revocation's own: every stage of 05-protocols §8 the path
 /// passes through is present and in order, the RA's report shuffle is on it, and the CRL
 /// was published on the Generator's cadence.
