@@ -1,0 +1,1023 @@
+# SCMS effects table: what an SCMS or environment change does to (a) the metrics, (b) the
+# run's cost and (c) the PKI architecture the run records, measured in real same-seed runs
+# of the release binary (docs/design/scms-real/testing/effects.md has the method and the
+# table in prose). Not a sweep table: `v2xw sensitivity` passes over it by its `schema`
+# (sweep::SCMS_RUN_EXPECTATIONS_SCHEMA); tests/scms_effects.rs checks it is whole.
+#
+# Every expectation was written down before its run. `measured` is base -> variant (or
+# the one run's value, for a row whose base and variant are the same run: an invariant).
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (a documented
+#          deviation or a row not yet measured).
+schema: v2xw/scms-run-expectations/1
+
+runs:
+  L0:
+    scenario: scenarios/credential-weeks.yaml
+    set: {actors.vehicles.demand.rate_veh_per_h: 300.0, time.duration_s: 196500.0,
+          time.fast_forward: [{from_s: 900.0, to_s: 196200.0}],
+          threats.attackers.0.schedule.to_s: 196500.0}
+    note: >-
+      Real calendar from Tue 2026-10-20 08:50Z (i = 614 -> 615 rollover at 600 s), two
+      providers 50/50, manual MA (8 h), business-day CRL at 10:00 ET, 5 % ConstPos, seed
+      0xC0FFEE5EED; radio on 0-900 s and 196200-196500 s (Thu 15:20Z), backend only between.
+  L0b: {base: L0, set: {}, note: "L0 again, rerun for its metric samples (the first pass kept only run-report.json)"}
+  ATT20: {base: L0, set: {threats.attackers.0.fraction: 0.2}}
+  MAAUTO: {base: L0, set: {security.protocol.params: {ma_review_s: 0}}}
+  C40: {base: L0, set: {security.protocol.params: {certs_per_period: 40}}}
+  AALL: {base: L0, set: {security.signer_id_policy.digest_otherwise: false}}
+  F2X: {base: L0, set: {actors.vehicles.demand.rate_veh_per_h: 600.0}}
+  P90: {base: L0, set: {security.scms.deployment: {preset: us-production-2025, providers: [
+          {name: provider-a, fleet_share: 0.9}, {name: provider-b, fleet_share: 0.1}]}}}
+  CAMP: {base: L0, set: {security.scms.deployment: {preset: camp-reference}}}
+  PEN0R0: {base: L0, set: {net.uu.params.penetration: 0.0, actors.rsus: []}}
+  SLOW: {base: L0, set: {nodes.default_obu: obu/generic-automotive-soc-no-hsm}}
+  PQH: {base: L0, set: {nodes.default_obu: obu/generic-automotive-soc-no-hsm,
+          net.fragmenter: {id: fragmenter/generic-sdu},
+          security.signature: hybrid-falcon512-ecdsa-p256}}
+  P60: {base: L0, set: {security.pseudonym_change.period_s: 60.0}}
+  PEN0: {base: L0, set: {net.uu.params.penetration: 0.0}}
+  ONDEC: {base: L0, set: {security.scms.deployment: {preset: us-production-2025, providers: [
+          {name: provider-a, crl_publication: on-decision}, {name: provider-b, crl_publication: on-decision}]}}}
+  A450: {base: L0, set: {security.signer_id_policy.full_cert_every_ms: 450}}
+  # Round 2: a v2xw built from this branch at opt-level 2 (the concurrent case table, the
+  # board fix and the fast-forward read-back fix; no --no-verify). Compare its runs with
+  # each other; their wall and CPU time are not comparable with the release runs above.
+  L0N: {base: L0, set: {}, binary: branch, note: "L0 on this branch's binary"}
+  ATT20N: {base: L0N, set: {threats.attackers.0.fraction: 0.2}, binary: branch}
+  OND: {base: L0N, set: {security.verification_policy: on-demand}, binary: branch}
+  REPLAY: {base: L0N, set: {threats.attackers.0.id: threat/attacker/legacy/DataReplay}, binary: branch}
+  RSU5: {base: L0N, set: {actors.rsus: "five units with the base unit's roles and profile, at (548,280), (274,280), (822,280), (548,40), (548,520) m"}, binary: branch}
+
+rows:
+- id: base-batch
+  base: L0
+  variant: L0
+  area: architecture
+  measure: certs_per_topup
+  expect: eq
+  source: one top-up batch is one week of certs_per_i_period = 20 ([CAMP122] Table 67; constants.md certs_per_period)
+  value: 20
+  measured: '20'
+  verdict: pass
+- id: base-shuffle
+  base: L0
+  variant: L0
+  area: architecture
+  measure: stage_shuffled_h
+  expect: value-band
+  source: the RA holds reports until 10,000 or at most one day ([CAMP122] SCMS-765; constants.md report_shuffle_window_s
+    86400)
+  band:
+  - 23.0
+  - 24.01
+  measured: '23.89'
+  verdict: pass
+- id: base-review
+  base: L0
+  variant: L0
+  area: architecture
+  measure: review_h
+  expect: value-band
+  source: manual MA review of 8 h after the shuffle releases the reports (owner decision 7; constants.md
+    ma_review_s, ASSUMPTION)
+  band:
+  - 7.99
+  - 8.01
+  measured: '8'
+  verdict: pass
+- id: base-sla
+  base: L0
+  variant: L0
+  area: architecture
+  measure: stage_published_h
+  expect: value-band
+  source: decided Wed 12:53 ET; published at the next business-day 10:00 ET slot, Thu 14:00Z = 191,400
+    s ([SM-PROV] §3.4.9; slot hour ASSUMPTION)
+  band:
+  - 52.9
+  - 53.1
+  measured: '52.99'
+  verdict: pass
+- id: base-board-published
+  base: L0
+  variant: L0
+  area: architecture
+  measure: first_case_crl_published_s
+  expect: value-band
+  source: the case board's crl-published is when the CRL Store had the list (pki_view drain_cases)
+  band:
+  - 191399
+  - 191401
+  measured: '1.154e+05'
+  verdict: fixed
+  test: crates/v2xw-proto/tests/pki_view.rs::the_board_stamps_publication_when_the_store_has_the_list_and_reports_when_they_arrived
+  note: 'release binary stamped 115,423 s (the issue instant, 21 h early): the issued fallback was taken
+    on the first drain and never revisited'
+- id: base-board-reports
+  base: L0
+  variant: L0
+  area: architecture
+  measure: first_case_reports_in_s
+  expect: value-band
+  source: reports-in is when the MA received the case's reports, after the RA's one-day shuffle (86,623
+    s), not the decision
+  band:
+  - 86000
+  - 86700
+  measured: '1.154e+05'
+  verdict: fixed
+  test: crates/v2xw-proto/tests/pki_view.rs::the_board_stamps_publication_when_the_store_has_the_list_and_reports_when_they_arrived
+  note: 'release binary stamped it at the decision (115,423 s): the stage was read from the case''s own
+    run, which receives no report'
+- id: base-concurrent-cases
+  base: L0
+  variant: L0
+  area: architecture
+  measure: decision_spread_h
+  expect: value-band
+  source: 'two attackers whose reports reach the MA in one shuffle release are reviewed side by side:
+    cases run concurrently (gap row 27; MaPolicy max_open_cases 1000)'
+  band:
+  - 0.0
+  - 0.5
+  measured: '8'
+  verdict: fixed
+  test: crates/v2xw-engine/tests/phase2.rs::every_decision_opens_its_case_at_once_under_manual_review
+  note: 'release binary: the engine opened one case per provider at a time (phase2 start_cases_of), so
+    the second decision came 8.0 h after the first and the n-th attacker waited n x 8 h; fixed (cases
+    open side by side), measured on this branch in conc-spread'
+- id: base-no-honest
+  base: L0
+  variant: L0
+  area: metrics
+  measure: revoked_honest
+  expect: zero
+  source: 68 reports about honest vehicles, but the MA acts only on corroborated evidence; no honest revocation
+    (F3 regression)
+  measured: '0'
+  verdict: pass
+- id: base-seeds
+  base: L0
+  variant: L0
+  area: architecture
+  measure: seed_requests
+  expect: eq
+  source: 'each revocation needs both LAs'' seeds: 2 seed requests per case, 2 cases ([BRECHT] §VI-D;
+    1609.2.1 §6.3.3)'
+  value: 4
+  measured: '4'
+  verdict: pass
+- id: base-one-publication
+  base: L0
+  variant: L0
+  area: architecture
+  measure: crl_publications
+  expect: eq
+  source: 'the second entry (decided Thu 00:53Z) rides along on the pending Thu 10:00 ET publication:
+    one CRL version, not two'
+  value: 1
+  measured: '1'
+  verdict: pass
+- id: base-split
+  base: L0
+  variant: L0
+  area: metrics
+  measure: share_a
+  expect: value-band
+  source: 'seeded 50/50 fleet split (us-production-2025): 107 devices, binomial sd 0.048'
+  band:
+  - 0.4
+  - 0.6
+  measured: '0.5327'
+  verdict: pass
+- id: base-cross-verify
+  base: L0
+  variant: L0
+  area: architecture
+  measure: cross_share
+  expect: value-band
+  source: with a 50/50 split, half of all verifications are of the other provider's certificates (2p(1-p)
+    = 0.5)
+  band:
+  - 0.35
+  - 0.65
+  measured: '0.4841'
+  verdict: pass
+- id: base-shared
+  base: L0
+  variant: L0
+  area: architecture
+  measure: reports_shared
+  expect: positive
+  source: an MA forwards a report about the other provider's certificate to that provider's MA (D1 ma_report_sharing
+    on)
+  measured: '426'
+  verdict: pass
+- id: base-cost
+  base: L0
+  variant: L0
+  area: performance
+  measure: cpu_s
+  expect: value-band
+  source: 2.27 simulated days with 1,200 s of radio at 300 veh/h; fast-forward makes the backend days
+    cheap (D2)
+  band:
+  - 30
+  - 900
+  measured: '130.6'
+  verdict: pass
+- id: base-rerun
+  base: L0
+  variant: L0b
+  area: architecture
+  measure: reports_at_ma
+  expect: same
+  source: 'the same scenario and seed replay the same run (D2/DET determinism): L0b is L0 again, rerun
+    for its metric samples'
+  measured: 897 -> 897
+  verdict: pass
+- id: base-rerun-flows
+  base: L0
+  variant: L0b
+  area: architecture
+  measure: seed_requests
+  expect: same
+  source: the same seed issues the same certificates through the same flows
+  measured: 4 -> 4
+  verdict: pass
+- id: att-attackers
+  base: L0
+  variant: ATT20
+  area: metrics
+  measure: attackers
+  expect: band
+  source: fraction 0.05 -> 0.20 of the vehicles seen
+  band:
+  - 2.5
+  - 6.0
+  measured: 5 -> 20
+  verdict: pass
+- id: att-reports
+  base: L0
+  variant: ATT20
+  area: metrics
+  measure: reports_at_ma
+  expect: up
+  source: more liars, more detector verdicts, more reports (CAMP MBR)
+  measured: 897 -> 3140
+  verdict: pass
+- id: att-cases
+  base: L0
+  variant: ATT20
+  area: architecture
+  measure: cases_opened
+  expect: up
+  source: more reported devices, more MA cases
+  measured: 2 -> 7
+  verdict: pass
+- id: att-seeds
+  base: L0
+  variant: ATT20
+  area: architecture
+  measure: seed_requests
+  expect: up
+  source: every case releases two LA seeds
+  measured: 4 -> 12
+  verdict: pass
+- id: att-honest
+  base: ATT20
+  variant: ATT20
+  area: metrics
+  measure: revoked_honest
+  expect: zero
+  source: more attackers must not make the MA revoke honest vehicles
+  measured: '0'
+  verdict: pass
+- id: att-aca-blind
+  base: ATT20
+  variant: ATT20
+  area: architecture
+  measure: aca_leaks
+  expect: zero
+  source: 'the RA strips the enrolment identity before the ACA (1609.2.1 §4.1.3; RAPRE ACA blindness):
+    no ACA-bound PDU carries an enrolment HashedId8'
+  measured: '0'
+  verdict: wrong-expectation
+  note: '0 of 4,603 ACA-bound PDUs carry an enrolment HashedId8, but the positive control (att-aca-control)
+    found none in RA-bound PDUs either: the requests carry the whole enrolment certificate, not its digest,
+    so this byte search cannot fail as written. Replaced by aca-control / aca-control-search / aca-blind
+    / aca-inject (oracle-decoded signers, a search for the enrolment certificates'' bytes, and an injected
+    leak that turns it red)'
+- id: att-aca-control
+  base: ATT20
+  variant: ATT20
+  area: architecture
+  measure: aca_control
+  expect: positive
+  source: 'positive control for att-aca-blind: RA-bound PDUs do carry the enrolment id, so the search
+    can find one'
+  measured: '0'
+  verdict: wrong-expectation
+  note: '0: an EeRaCertRequest carries the whole enrolment certificate, not its HashedId8, so a HashedId8
+    search finds nothing even where the identity is; superseded by aca-control'
+- id: att-spread
+  base: ATT20
+  variant: ATT20
+  area: architecture
+  measure: decision_spread_h
+  expect: value-band
+  source: with concurrent review, every attacker corroborated in one shuffle release is decided within
+    one review period
+  band:
+  - 0.0
+  - 8.5
+  measured: '16'
+  verdict: fixed
+  test: crates/v2xw-engine/tests/phase2.rs::every_decision_opens_its_case_at_once_under_manual_review
+  note: release binary, serial cases (see base-concurrent-cases); fixed, measured in conc-att-spread
+- id: ma-auto-decision
+  base: L0
+  variant: MAAUTO
+  area: metrics
+  measure: stage_decision_h
+  expect: band
+  source: 'automatic MA: decision at the shuffle release (23.9 h) instead of +8 h (31.9 h): ratio 0.75'
+  band:
+  - 0.7
+  - 0.78
+  measured: 31.89 -> 23.89
+  verdict: pass
+- id: ma-auto-latency
+  base: L0
+  variant: MAAUTO
+  area: metrics
+  measure: revocation_latency_h
+  expect: band
+  source: 'the shuffle releases the reports Wed 04:43 ET; decided at once the entry makes the Wed 10:00
+    ET slot, decided 8 h later it waits for Thu 10:00 ET: 53 h -> ~29 h, so the 8 h review costs a full
+    day'
+  band:
+  - 0.5
+  - 0.6
+  measured: 53.02 -> 29.02
+  verdict: pass
+- id: ma-auto-honest
+  base: MAAUTO
+  variant: MAAUTO
+  area: metrics
+  measure: revoked_honest
+  expect: zero
+  source: the automatic MA acts on the same corroboration rule
+  measured: '0'
+  verdict: pass
+- id: c40-certs
+  base: L0
+  variant: C40
+  area: metrics
+  measure: certs_topped_up
+  expect: band
+  source: 'a batch is certs_per_period x weeks: 40 instead of 20 doubles the certificates issued per top-up
+    ([CAMP122] Table 67)'
+  band:
+  - 1.9
+  - 2.1
+  measured: 280 -> 560
+  verdict: pass
+- id: c40-aca
+  base: L0b
+  variant: C40
+  area: architecture
+  measure: ra_aca_requests
+  expect: band
+  source: one RaAcaCertRequest per certificate (B3a), preload and top-ups alike
+  band:
+  - 1.8
+  - 2.2
+  measured: 4603 -> 9203
+  verdict: pass
+- id: c40-topups
+  base: L0
+  variant: C40
+  area: architecture
+  measure: topups_completed
+  expect: same
+  source: the number of top-ups is set by the rollover and who is on the road, not by the batch size
+  measured: 14 -> 14
+  verdict: pass
+- id: c40-changes
+  base: L0
+  variant: C40
+  area: metrics
+  measure: pseudonym_changes
+  expect: same
+  source: the time strategy changes every 300 s whatever the pool holds
+  measured: 111 -> 111
+  verdict: pass
+- id: c40-cost
+  base: L0
+  variant: C40
+  area: performance
+  measure: cpu_s
+  expect: band
+  source: issuance is modelled crypto; twice the certificates add backend work, not radio work
+  band:
+  - 0.7
+  - 1.6
+  measured: 130.6 -> 148.8
+  verdict: pass
+- id: aall-share
+  base: L0b
+  variant: AALL
+  area: metrics
+  measure: full_cert_share
+  expect: band
+  source: a certificate every 1,000 ms at 10 Hz is 1 frame in 10; every frame is 10x (IEEE 1609.2 6.3.24,
+    SAE J2945/1 6.1.2)
+  band:
+  - 5.0
+  - 12.0
+  measured: 0.1006 -> 1
+  verdict: pass
+- id: aall-p2pcd
+  base: L0b
+  variant: AALL
+  area: metrics
+  measure: p2pcd_requests
+  expect: down
+  source: no digest-signed frame from an unknown signer, so nothing to ask for (IEEE 1609.2 8.4)
+  measured: 26.44 -> 0
+  verdict: pass
+- id: aall-air
+  base: L0
+  variant: AALL
+  area: metrics
+  measure: air_bytes_security
+  expect: up
+  source: an 80 B certificate instead of an 8 B digest on 9 frames in 10 (CAMP Table 3 sizes, F2)
+  measured: 1.637e+07 -> 2.722e+07
+  verdict: pass
+- id: aall-cbr
+  base: L0b
+  variant: AALL
+  area: metrics
+  measure: cbr
+  expect: up
+  source: more octets per frame at the same rate is more airtime (ETSI TS 102 687)
+  measured: 0.01171 -> 0.01472
+  verdict: pass
+  note: 'measure: metric channel_load (the busy-channel ratio)'
+- id: aall-backend
+  base: L0
+  variant: AALL
+  area: architecture
+  measure: topups_completed
+  expect: same
+  source: 'the attach policy is a radio choice: no backend flow changes'
+  measured: 14 -> 14
+  verdict: pass
+- id: f2x-devices
+  base: L0
+  variant: F2X
+  area: metrics
+  measure: devices_a
+  expect: band
+  source: 300 -> 600 veh/h doubles the devices the providers certify
+  band:
+  - 1.6
+  - 2.4
+  measured: 57 -> 101
+  verdict: pass
+- id: f2x-topups
+  base: L0
+  variant: F2X
+  area: architecture
+  measure: topups_completed
+  expect: band
+  source: 'CAMP sizing is linear in the fleet: top-up requests per RA scale with the devices on the road
+    at the rollover (F2: 0.5 req/s per 17 M vehicles a year)'
+  band:
+  - 1.4
+  - 2.8
+  measured: 14 -> 24
+  verdict: pass
+- id: f2x-crl
+  base: L0
+  variant: F2X
+  area: architecture
+  measure: crls_installed
+  expect: up
+  source: more vehicles install the CRL (broadcast and fetch)
+  measured: 84 -> 365
+  verdict: pass
+- id: f2x-cost
+  base: L0
+  variant: F2X
+  area: performance
+  measure: cpu_s
+  expect: band
+  source: 'radio reception attempts grow with the square of the vehicles in range (05-scale §3: 4x vehicles,
+    9x wall); the backend days grow linearly'
+  band:
+  - 1.2
+  - 5.0
+  measured: 130.6 -> 313.9
+  verdict: pass
+- id: p90-split
+  base: P90
+  variant: P90
+  area: metrics
+  measure: share_a
+  expect: value-band
+  source: fleet_share 0.9 / 0.1
+  band:
+  - 0.82
+  - 0.97
+  measured: '0.9065'
+  verdict: pass
+- id: p90-cross
+  base: L0
+  variant: P90
+  area: architecture
+  measure: cross_share
+  expect: down
+  source: cross-provider verifications fall from 2p(1-p) = 0.5 to 0.18
+  measured: 0.4841 -> 0.1644
+  verdict: pass
+- id: p90-shared
+  base: L0
+  variant: P90
+  area: architecture
+  measure: reports_shared
+  expect: down
+  source: fewer reports name the other provider's certificates
+  measured: 426 -> 98
+  verdict: pass
+- id: camp-shared
+  base: CAMP
+  variant: CAMP
+  area: architecture
+  measure: reports_shared
+  expect: zero
+  source: 'camp-reference is one SCMS with a central MA: no MA-to-MA sharing (D1)'
+  measured: '0'
+  verdict: pass
+- id: camp-split
+  base: CAMP
+  variant: CAMP
+  area: metrics
+  measure: share_a
+  expect: eq
+  source: every device on provider-a
+  value: 1.0
+  measured: '1'
+  verdict: pass
+- id: pen0r0-uploads
+  base: PEN0R0
+  variant: PEN0R0
+  area: metrics
+  measure: reports_uploaded_cellular
+  expect: zero
+  source: 'penetration 0: no vehicle has a Uu link (backend.rs assign)'
+  measured: '0'
+  verdict: pass
+- id: pen0r0-relay
+  base: PEN0R0
+  variant: PEN0R0
+  area: metrics
+  measure: reports_uploaded_relay
+  expect: zero
+  source: no roadside unit to relay through
+  measured: '0'
+  verdict: pass
+- id: pen0r0-revocations
+  base: L0
+  variant: PEN0R0
+  area: architecture
+  measure: cases_opened
+  expect: down
+  source: 'no report reaches an MA, so no case opens: the SCMS is blind without a backhaul path (CAMP:
+    reports go up over the RA connection)'
+  measured: 2 -> 0
+  verdict: pass
+- id: pen0r0-topups
+  base: L0
+  variant: PEN0R0
+  area: architecture
+  measure: topups_completed
+  expect: down
+  source: 'no path to the RA at the rollover: no top-up (the Wyoming starvation case, F2)'
+  measured: 14 -> 0
+  verdict: pass
+- id: slow-verify
+  base: L0b
+  variant: SLOW
+  area: metrics
+  measure: verify_cost
+  expect: up
+  source: a software verify on an automotive SoC is milliseconds against about 0.2 ms on a V2X HSM (06-node-models;
+    Hsu et al., VNC 2013)
+  measured: 0.03376 -> 0.1689
+  verdict: pass
+  note: 'measure: the verify stage''s share of message latency (metric latency_stage_share[stage=verify])'
+- id: pqh-cert
+  base: SLOW
+  variant: PQH
+  area: metrics
+  measure: air_bytes_security
+  expect: up
+  source: a hybrid carries both signatures, 64 + 666 octets, and the Falcon key in the certificate (Bindel
+    et al. 2017; Falcon spec 1.2 Table 3.3)
+  measured: 1.637e+07 -> 1.505e+08
+  verdict: pass
+- id: pqh-cbr
+  base: SLOW
+  variant: PQH
+  area: metrics
+  measure: cbr
+  expect: up
+  source: more octets per frame at the same rate is more airtime
+  measured: 0.01171 -> 0.0493
+  verdict: pass
+- id: p60-changes
+  base: L0
+  variant: P60
+  area: metrics
+  measure: pseudonym_changes
+  expect: band
+  source: a 60 s period changes five times as often as 300 s (ETSI TR 103 415 4.2)
+  band:
+  - 2.5
+  - 6.0
+  measured: 111 -> 330
+  verdict: pass
+- id: p60-p2pcd
+  base: L0b
+  variant: P60
+  area: metrics
+  measure: p2pcd_requests
+  expect: up
+  source: each change makes the sender unknown to its neighbours (IEEE 1609.2 8.4)
+  measured: 26.44 -> 31.95
+  verdict: pass
+- id: pen0-relay
+  base: L0
+  variant: PEN0
+  area: metrics
+  measure: reports_uploaded_relay
+  expect: up
+  source: without cellular, reports go up through the roadside unit (RSU relay, B4)
+  measured: 0 -> 1523
+  verdict: pass
+- id: ondec-latency
+  base: L0
+  variant: ONDEC
+  area: metrics
+  measure: revocation_latency_h
+  expect: down
+  source: on-decision publication removes the 21 h wait for the next business-day slot
+  measured: 53.02 -> 31.98
+  verdict: pass
+- id: a450-share
+  base: L0b
+  variant: A450
+  area: metrics
+  measure: full_cert_share
+  expect: band
+  source: 450 ms instead of 1,000 ms at 10 Hz is every 5th frame instead of every 10th (SAE J2945/1 6.1.2)
+  band:
+  - 1.6
+  - 2.6
+  measured: 0.1006 -> 0.2005
+  verdict: pass
+- id: conc-spread
+  base: L0N
+  variant: L0N
+  area: architecture
+  measure: decision_spread_h
+  expect: value-band
+  source: 'fixed engine: the two decisions of one shuffle release are reviewed side by side (gap row 27;
+    MaPolicy max_open_cases 1000)'
+  band:
+  - 0.0
+  - 0.5
+  measured: '2.614e-05'
+  verdict: fixed
+  test: crates/v2xw-engine/tests/phase2.rs::every_decision_opens_its_case_at_once_under_manual_review
+- id: conc-board-published
+  base: L0N
+  variant: L0N
+  area: architecture
+  measure: first_case_crl_published_s
+  expect: value-band
+  source: 'fixed board: crl-published is the CRL Store''s Thu 10:00 ET publication (191,400 s), not the
+    issue instant'
+  band:
+  - 191399
+  - 191401
+  measured: '1.914e+05'
+  verdict: fixed
+  test: crates/v2xw-proto/tests/pki_view.rs::the_board_stamps_publication_when_the_store_has_the_list_and_reports_when_they_arrived
+- id: conc-board-reports
+  base: L0N
+  variant: L0N
+  area: architecture
+  measure: first_case_reports_in_s
+  expect: value-band
+  source: 'fixed board: reports-in is the MA''s receipt after the one-day shuffle'
+  band:
+  - 86000
+  - 86700
+  measured: '8.662e+04'
+  verdict: fixed
+  test: crates/v2xw-proto/tests/pki_view.rs::the_board_stamps_publication_when_the_store_has_the_list_and_reports_when_they_arrived
+- id: conc-same-base
+  base: L0
+  variant: L0N
+  area: metrics
+  measure: reports_at_ma
+  expect: same
+  source: 'the fixes change only when a queued case opens and what the board records: the radio and report
+    path are identical on the same seed'
+  measured: 897 -> 897
+  verdict: pass
+- id: conc-first-latency
+  base: L0
+  variant: L0N
+  area: metrics
+  measure: revocation_latency_h
+  expect: same
+  source: L0's first case never waited, so its latency is unchanged; the second, now decided at the same
+    time, rides the same Thu 10:00 ET publication
+  measured: 53.02 -> 53.02
+  verdict: pass
+- id: conc-one-publication
+  base: L0N
+  variant: L0N
+  area: architecture
+  measure: crl_publications
+  expect: eq
+  source: 'both entries are issued before the Thu 10:00 ET slot: one CRL version carries both'
+  value: 1
+  measured: '1'
+  verdict: pass
+- id: conc-att-waiting
+  base: ATT20N
+  variant: ATT20N
+  area: architecture
+  measure: decisions_waiting
+  expect: zero
+  source: every MA decision opens its case at once (10 decisions, 1000-case table); the serial engine
+    left 3 of 10 waiting at the end
+  measured: '0'
+  verdict: pass
+- id: conc-att-spread
+  base: ATT20N
+  variant: ATT20N
+  area: architecture
+  measure: decision_spread_h
+  expect: value-band
+  source: every attacker corroborated in one shuffle release is decided within one review period
+  band:
+  - 0.0
+  - 8.5
+  measured: '3.397e-05'
+  verdict: pass
+- id: conc-att-revoked
+  base: ATT20
+  variant: ATT20N
+  area: metrics
+  measure: revoked_attackers
+  expect: up
+  source: with no queue behind the 8 h review, all 10 decided attackers reach the Thu 10:00 ET CRL instead
+    of 6
+  measured: 6 -> 10
+  verdict: pass
+- id: conc-att-seeds
+  base: ATT20N
+  variant: ATT20N
+  area: architecture
+  measure: seeds_per_case
+  expect: value-band
+  source: 'each case asks both LAs for the seed of each chain of the device (B4): 2 per case for one chain;
+    L0 has 4 for 2 cases'
+  band:
+  - 2.0
+  - 4.0
+  measured: '2'
+  verdict: pass
+- id: conc-att-honest
+  base: ATT20N
+  variant: ATT20N
+  area: metrics
+  measure: revoked_honest
+  expect: zero
+  source: concurrency changes no decision rule
+  measured: '0'
+  verdict: pass
+- id: conc-att-cost
+  base: ATT20
+  variant: ATT20N
+  area: performance
+  measure: records
+  expect: band
+  source: 'a few more cases add a few hundred PKI records to ~6.7 M: run size unchanged within 5 %'
+  band:
+  - 0.98
+  - 1.05
+  measured: 6738586 -> 6739404
+  verdict: pass
+- id: aca-control
+  base: ATT20N
+  variant: ATT20N
+  area: architecture
+  measure: aca2_control
+  expect: positive
+  source: 'positive control: RA-bound EeRaCertRequests decode (oracle COER) to a SignerSingleCert whose
+    HashedId8 is a registered enrolment'
+  measured: '3'
+  verdict: pass
+- id: aca-control-search
+  base: ATT20N
+  variant: ATT20N
+  area: architecture
+  measure: aca2_found_ratio
+  expect: value-band
+  source: the byte search finds the signer's enrolment certificate in every RA-bound request it decoded,
+    so the same search on ACA-bound PDUs can fail
+  band:
+  - 1.0
+  - 1.0
+  measured: '1'
+  verdict: pass
+- id: aca-blind
+  base: ATT20N
+  variant: ATT20N
+  area: architecture
+  measure: aca2_leaks
+  expect: zero
+  source: 'the RA strips the enrolment identity before the ACA (1609.2.1 §4.1.3): no ACA-bound PDU carries
+    an enrolment certificate or its HashedId8'
+  measured: '0'
+  verdict: pass
+  note: 'coverage: the recording keeps the plaintext of 6 EE-to-RA PDUs (3 certificate requests, one device),
+    so the search covers that enrolment certificate''s bytes and all 128 registered enrolment HashedId8s
+    over all 4,603 ACA-bound PDUs; every one of the 4,603 decodes as RA-signed (aca-signers)'
+- id: aca-inject
+  base: ATT20N
+  variant: ATT20N
+  area: architecture
+  measure: aca2_injected_leaks
+  expect: positive
+  source: 'fault injected: one enrolment certificate appended to one ACA-bound PDU turns aca-blind red'
+  measured: '1'
+  verdict: pass
+- id: aca-signers
+  base: ATT20N
+  variant: ATT20N
+  area: architecture
+  measure: aca2_enrolment_signed
+  expect: zero
+  source: every RaAcaCertRequestSpdu is signed by the RA, none by an enrolment certificate
+  measured: '0'
+  verdict: pass
+- id: ond-verify
+  base: L0N
+  variant: OND
+  area: performance
+  measure: verify_rate
+  expect: down
+  source: 'on-demand verification verifies only what a receiver acts on, not every BSM (1609.2: verification
+    is the receiver''s policy): verify work falls by more than half'
+  measured: 756.2 -> 46.3
+  verdict: pass
+- id: ond-reports
+  base: L0N
+  variant: OND
+  area: metrics
+  measure: reports_at_ma
+  expect: same
+  source: the reporter verifies the evidence it files (filing is acting), so reports reach the MA about
+    as before
+  measured: 897 -> 79
+  verdict: wrong-expectation
+  note: 'wrong: the detector suite runs on verified messages only, as a report must carry authentic evidence.
+    On-demand verification left 89.5 % of receptions unverified (unverified_ratio 0.027 -> 0.895), so
+    detector verdicts fell 2,704 -> 187 and reports 897 -> 79. No decision, case or revocation was made
+    in 54 h (cases 2 -> 0). Security finding: verify-on-demand blinds misbehaviour detection, and a fleet
+    running it never revokes these attackers'
+- id: ond-topups
+  base: L0N
+  variant: OND
+  area: architecture
+  measure: topups_completed
+  expect: same
+  source: a receiver's verification policy does not touch provisioning
+  measured: 14 -> 14
+  verdict: pass
+- id: replay-reports
+  base: L0N
+  variant: REPLAY
+  area: metrics
+  measure: reports_at_ma
+  expect: down
+  source: 'DataReplay replays its own claim 5 samples (0.5 s) back: a few metres and 0.5 s stale, mostly
+    inside the plausibility bounds, so far fewer reports than ConstPos'
+  measured: 897 -> 1101
+  verdict: wrong-expectation
+  note: 'wrong: the replayed claim also carries a generation time 0.5 s stale, and the suite''s freshness
+    check fires on every such message (verdicts_by_detector.staleOrReplay 2,628 -> 3,434; positionSpeedInconsistency
+    1,008 -> 59). Reports went up (897 -> 1,101), and the same 2 attackers were decided and revoked. A
+    replay that kept a fresh timestamp would test the plausibility bounds instead'
+- id: replay-honest
+  base: REPLAY
+  variant: REPLAY
+  area: metrics
+  measure: revoked_honest
+  expect: zero
+  source: 'the replayed message is signed by the attacker''s own pseudonym: no report can implicate an
+    honest signer'
+  measured: '0'
+  verdict: pass
+- id: replay-topups
+  base: L0N
+  variant: REPLAY
+  area: architecture
+  measure: topups_completed
+  expect: same
+  source: attacker type does not touch provisioning
+  measured: 14 -> 14
+  verdict: pass
+- id: rsu5-broadcasts
+  base: L0N
+  variant: RSU5
+  area: architecture
+  measure: crl_broadcasts
+  expect: band
+  source: 'five roadside units with the crl role instead of one each broadcast the CRL: up to 5x the broadcasts'
+  band:
+  - 2.0
+  - 6.0
+  measured: 60 -> 300
+  verdict: pass
+- id: rsu5-cellular
+  base: L0N
+  variant: RSU5
+  area: metrics
+  measure: reports_uploaded_cellular
+  expect: same
+  source: with full cellular penetration reports keep going up over Uu; RSUs add only a relay path
+  measured: 1564 -> 1707
+  verdict: pass
+- id: rsu5-topups
+  base: L0N
+  variant: RSU5
+  area: architecture
+  measure: topups_completed
+  expect: same
+  source: top-ups go over cellular at full penetration; the provisioning-proxy role adds a path, not a
+    demand
+  measured: 14 -> 14
+  verdict: pass
+- id: rsu5-cost
+  base: L0N
+  variant: RSU5
+  area: performance
+  measure: cpu_s
+  expect: band
+  source: 'four more radio nodes beside ~300 veh/h: a few per cent more radio work'
+  band:
+  - 0.95
+  - 1.3
+  measured: 144.5 -> 163
+  verdict: pass
+- id: aall-unknown
+  base: L0b
+  variant: AALL
+  area: metrics
+  measure: unknown_signer_loss
+  expect: down
+  source: a digest signer is unverifiable until the receiver has learned the certificate (1609.2 SignerIdentifier);
+    with the certificate on every message no reception waits on one
+  measured: 0.006811 -> 0
+  verdict: pass
+- id: a450-unknown
+  base: L0b
+  variant: A450
+  area: metrics
+  measure: unknown_signer_loss
+  expect: down
+  source: a certificate every 450 ms instead of 1 s halves the wait after a new neighbour or a pseudonym
+    change before its digests verify (J2945/1 6.1.2)
+  measured: 0.006811 -> 0.00364
+  verdict: pass
+- id: p60-unknown
+  base: L0b
+  variant: P60
+  area: metrics
+  measure: unknown_signer_loss
+  expect: up
+  source: a pseudonym change every 60 s instead of 300 s gives five times the new digests no neighbour
+    knows yet
+  measured: 0.006811 -> 0.008619
+  verdict: pass

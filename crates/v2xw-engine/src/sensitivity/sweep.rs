@@ -286,14 +286,31 @@ impl Families {
     }
 }
 
-/// Reads every expectation file given (each a YAML list).
+/// The `schema` of an SCMS run-expectation file (`tests/expectations/scms-*.yaml`): a
+/// mapping of whole-scenario runs and the rows judged between them, checked by the SCMS
+/// realism tests rather than the one-setting sweep, so [`load_expectations`] passes over
+/// it.
+pub const SCMS_RUN_EXPECTATIONS_SCHEMA: &str = "v2xw/scms-run-expectations/1";
+
+/// Reads every expectation file given (each a YAML list). A file whose top level is a
+/// mapping with `schema: v2xw/scms-run-expectations/1` is not a sweep table and is
+/// skipped.
 ///
 /// # Errors
 /// A file cannot be read or parsed.
 pub fn load_expectations(paths: &[PathBuf]) -> Result<Vec<Expectation>> {
     let mut out = Vec::new();
     for p in yaml_files(paths)? {
-        let mut rows: Vec<Expectation> = read_yaml(&p)?;
+        let doc: Value = read_yaml(&p)?;
+        if doc.get("schema").and_then(Value::as_str) == Some(SCMS_RUN_EXPECTATIONS_SCHEMA) {
+            continue;
+        }
+        let mut rows: Vec<Expectation> = serde_json::from_value(doc).map_err(|e| {
+            EngineError::Scenario(ScenarioError::Parse {
+                path: p.display().to_string(),
+                message: e.to_string(),
+            })
+        })?;
         out.append(&mut rows);
     }
     Ok(out)

@@ -596,6 +596,7 @@ impl ScmsState {
                 }
                 self.ma.reports.push(*r);
                 self.ma.report_evidence.push(evidence);
+                self.ma.report_runs.push(run);
                 out.stage_at(StageId::ReportReceived, to, None, flow, run);
             }
             ScmsMsg::ReportShuffleTimer { generation } => {

@@ -591,6 +591,99 @@ fn a_case_walks_the_board_in_order() {
     );
 }
 
+/// Found by the SCMS effects round (docs/design/scms-real/testing/effects.md): under a
+/// pending publication (the business-day SLA or a cadence), the case board stamped
+/// `crl-published` at the entry's issue instant, because the engine drains the board every
+/// backend step and the stage fell back to `issued` before the CRL Store had the list; in
+/// the real-calendar run the board said "published" 21 h before the CRL was. It also
+/// stamped `reports-in` and `corroborated` at the decision, 8 h after the reports arrived.
+/// Faults that turn it red: the `issued` fallback restored; `reports-in` read from the
+/// case's own run (which never receives a report).
+#[test]
+fn the_board_stamps_publication_when_the_store_has_the_list_and_reports_when_they_arrived() {
+    let mut p = ScmsParams::default().quick();
+    p.pdu.keep_bytes = true;
+    p.crl_cadence = v2xw_core::time::Duration::from_secs(3_600);
+    p.publish_on_cadence = true;
+    // The pilots' manual MA, so the decision comes ten minutes after the case opens.
+    p.ma.mode = v2xw_proto::scms::params::MaMode::ManualReview {
+        review: v2xw_core::time::Duration::from_secs(600),
+    };
+    let mut run = ScmsRun::new(p).expect("certificates encode");
+    for d in [DEVICE_A, DEVICE_B] {
+        run.add_device(d);
+    }
+    provisioned(&mut run, DEVICE_A, 0, 1, JMAX);
+    provisioned(&mut run, DEVICE_B, 0, 1, JMAX);
+    for (j, report) in [(0, Report::Frozen), (1, Report::Speeding)] {
+        let (cert, key) = pseudonym(&run, DEVICE_A, j);
+        let r = mbr_report(report, cert, &key);
+        run.submit_mbr(DEVICE_B, &r).expect("a real report secures");
+    }
+    run.run().expect("the reports run");
+    let arrived = now(&run);
+    run.request_link(0, 1, 0, JMAX).expect("two reports");
+    // Drained every 10 s, as the engine drains it every backend step.
+    let mut tracker = PkiTracker::default();
+    let mut board = Vec::new();
+    let start = now(&run);
+    let mut t = start;
+    while t < start + 7_200_000_000_000 {
+        t += 10_000_000_000;
+        run.run_until(t).expect("runs");
+        board.extend(pki_view::drain_cases(
+            std::slice::from_ref(&run),
+            &mut tracker,
+            t,
+            &|_, _| None,
+        ));
+    }
+    let at = |stage: &str| {
+        board
+            .iter()
+            .find(|c| c.stage == stage)
+            .map(|c| c.t)
+            .unwrap_or_else(|| panic!("no {stage} on the board: {board:?}"))
+    };
+    let store: Vec<u64> = run
+        .state
+        .crl_store
+        .published_runs
+        .iter()
+        .filter_map(|&p| run.kernel.stages.at(p, v2xw_proto::stage::StageId::Published))
+        .collect();
+    assert_eq!(store.len(), 1, "one cadence publication: {store:?}");
+    let case = run.state.ma.cases.values().next().expect("a case");
+    let issued = run
+        .kernel
+        .stages
+        .at(case.crl_run, v2xw_proto::stage::StageId::Issued)
+        .expect("issued");
+    assert!(store[0] > issued, "the cadence holds the list: {issued} -> {}", store[0]);
+    assert_eq!(at("crl-published"), store[0], "published when the store had it");
+    // reports-in is the MA's own report-received stamp on the reports' runs.
+    let received = case
+        .reports
+        .iter()
+        .filter_map(|&i| run.state.ma.report_runs.get(i))
+        .filter_map(|&r| run.kernel.stages.at(r, v2xw_proto::stage::StageId::ReportReceived))
+        .min()
+        .expect("the reports' stamps");
+    assert_eq!(at("reports-in"), received, "reports-in when the MA had them");
+    assert!(received <= arrived + 1_000_000_000, "the reports were in before the case opened");
+    assert_eq!(
+        at("corroborated"),
+        start.max(received),
+        "corroborated when the MA opened the case"
+    );
+    // The operator's go-ahead: the ten-minute review, then the MA's own processing.
+    let decision = at("decision");
+    assert!(
+        (start + 600_000_000_000..start + 601_000_000_000).contains(&decision),
+        "the operator's go-ahead: {decision} after the case opened at {start}"
+    );
+}
+
 #[test]
 fn each_entity_knows_only_its_share() {
     let run = revoked();
