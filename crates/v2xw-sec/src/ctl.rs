@@ -410,6 +410,24 @@ pub fn encode_composite_crl(
     Ok(coer(&unsecured(CertManagementPdu::compositeCrl(c))?)?)
 }
 
+/// Encodes a `CompositeCrlSpdu` from the COER of each `SecuredCrl` and of the home
+/// `MultiSignedCtlSpdu`, exactly as the RA holds them: what a device downloads on each
+/// connection (03 §10), and so the bytes its download is charged.
+pub fn encode_composite_crl_coer(
+    crls: &[&[u8]],
+    home_ctl_spdu: &[u8],
+) -> Result<Vec<u8>, CtlError> {
+    let crls = crls
+        .iter()
+        .map(|b| decode::<SecuredCrl>("SecuredCrl", b))
+        .collect::<Result<Vec<_>, _>>()?;
+    let home = match unsecured_cert_pdu(home_ctl_spdu)? {
+        CertManagementPdu::multiSignedCtl(m) => m,
+        _ => return Err(CtlError::Shape("multiSignedCtl")),
+    };
+    encode_composite_crl(crls, &home)
+}
+
 // ---------------------------------------------------------------------------------------
 // Verification
 // ---------------------------------------------------------------------------------------

@@ -38,6 +38,8 @@ Source tags are those of 01 §Sources and 03 §0. Two sources are new in this fi
 | `first_batch_delay_s` | 60 | s | ASSUMPTION | `params.rs` | [CAMP122] §5.2.7.6.7.1 allows "some delay" for shuffling and generation but prints no number (03 §6.4, §12). Take the value from the RA being modelled |
 | `download_poll_interval_s` | 300 | s | CITED | `params.rs` | download-minWait 5 min. [SMP] Table 3, §4.3.1 |
 | `max_download_polls` | 100 | - | CITED | `params.rs` | download-maxReqs 100. [SMP] Table 3 |
+| `ee_retry_timeout_s` | 10 | s | CITED | `params.rs` `EE_RETRY_TIMEOUT_S` | The EE retries a request with no response in 10 s. [CAMP122] §5.2.8.3 SCMS-522 (03 §3). Applies to the butterfly request (sent again byte for byte), the `.info` top-off and each batch download. Scenario key `ee_retry_timeout_s`; 0 turns it off |
+| `ee_retry_max_per_hour` | 10 | - | CITED | `params.rs` `EE_RETRY_MAX_PER_HOUR` | At most 10 retries per 60 min. [CAMP122] §5.2.8.3 SCMS-523. The RA re-acks a byte-identical retransmission (ASSUMPTION: CAMP states the retry, not the answer) |
 | `download_request_tolerance_s` | 5 | s | CITED | `params.rs` | ra.client-signature-ttl-sec. [CAMP122] SCMS-1203 |
 
 ### 1.2 Enrolment and re-enrolment
@@ -69,7 +71,7 @@ Source tags are those of 01 §Sources and 03 §0. Two sources are new in this fi
 | `crl_cadence_s` | 86400 | s | CITED | `params.rs` | Publish within 1 business day of a change, [SM-PROV] §3.4.10. The US presets run that rule exactly (`crl.business_day_sla`, WP-D2). The 5GAA draft CP (255) says within 24 h |
 | `next_crl_s` | 604800 | s | CITED | `params.rs` `CrlIssuance::next_crl` | Devices fetch "no later than once a week", [CAMP122] §3 item 10. The draft CP's ceiling is monthly ([5GAA] (254)) |
 | `crl_slot_et_hour` | 10 | h | ASSUMPTION | `params.rs` `CrlIssuance::slot_et` | [SM-PROV] §3.4.10 fixes the deadline, not the hour |
-| `crl_entry_bytes` | 40 | B | CITED | `sizes.rs` `CRL_LINKAGE_ENTRY_BYTES` | [BRECHT] §VI-F: 32 B of seeds plus group overhead. A real CRL is charged its encoded bytes |
+| `crl_entry_bytes` | 40 | B | CITED | `sizes.rs` `CRL_LINKAGE_ENTRY_BYTES` | [BRECHT] §VI-F: 32 B of seeds plus group overhead. Used only on the modelled path: since the edge-case package a device's CRL download (cellular, RSU backhaul, MBMS) is charged the encoded `CompositeCrlSpdu` |
 | `crl_max_forward_periods` | 156 | - | CITED | `v2xw-sec` `linkage::DEFAULT_MAX_FORWARD_PERIODS` | The CAMP end-entity lifetime of 156 weekly periods |
 
 ### 1.5 Misbehaviour Authority and Linkage Authorities
@@ -153,6 +155,7 @@ The engine's earlier defaults were a 512 B ClientHello and a 4,000 B server flig
 | Name | Default | Unit | Status | Where | Source or reason |
 |---|---|---|---|---|---|
 | `crl_fetch_interval_s` | 3600 | s | ASSUMPTION | `CRL_FETCH_INTERVAL_S` | Sits inside a cited bound. Devices fetch "as often as possible but no later than once a week" ([CAMP122] §3 item 10) and "on every RA connection" ([PRIMER] pp.5, 8), but no interval is printed. One hour is far inside the weekly bound and matches the profile's RA polling granularity (ra-minWait 1 h, [SMP] Table 3) |
+| `crl_background_entries` | 0 | - | ASSUMPTION | engine `phase2.rs` `LifecycleParams::background_entries`; `run/crl.rs` `ScmsRun::seed_standing_crl` | The revocations already on the home provider's CRL at t0 (a standing list of earlier years). No deployment publishes its CRL length; 0 keeps the clean-slate run. Set it to size the list a vehicle downloads: every download (cellular, RSU backhaul, MBMS) is charged the encoded `CompositeCrlSpdu` (`ctl::encode_composite_crl_coer`), 33.08 B per linkage entry at 10,000 (`edge_cases.rs`) |
 | `crl_broadcast_interval_s` | 5 | s | CITED | `CRL_BROADCAST_INTERVAL_S` | The interval is cited; the mechanism is an assumption. No document specifies a roadside CRL broadcast: [PRIMER] p.5 names the path, and TS 102 941 Annex D.3 gives no rate. A US RSU repeats back-office content as Store and Repeat, whose TxInterval "1 to 5" seconds ([RSU41] Appendix C, p.117) bounds this. 5 s is the longest allowed and costs the least channel time |
 | `report_bytes` | 1119 | B | DERIVED | `report_bytes()`; `mbr.rs` `REFERENCE_UPLOAD_BYTES` | The upload of the reference report: 804 B signed and encrypted plus a 315 B Download-Req header, from the real encoder (`tests/mbr.rs`). It is charged only where a run has no real report to send; a real report is charged its own length. It was 1,200 B, uncited, until WP-D3 |
 | `report_store_quota_bytes` | 65536 | B | ASSUMPTION | `REPORT_STORE_QUOTA_BYTES` | [SM-MBR] §2.2 leaves the quota to the device. 64 KiB holds 58 reference reports |

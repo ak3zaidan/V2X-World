@@ -957,6 +957,21 @@ fn card(p: &ScmsParams) -> ModelCard {
             std_src("SCMS Manager 1609.2.1 Profile §2.1.21 Table 3 download-maxReqs 100"),
         ),
         Parameter::new(
+            "ee_retry_timeout_s",
+            "s",
+            serde_json::json!(p.ee_retry_timeout.as_nanos() / 1_000_000_000),
+            std_src(
+                "CAMP SCMS 1.2.2 §5.2.8.3 SCMS-522: the EE retries if no response is \
+                 received in 10 s (every EE -> RA request: butterfly request, .info, batch)",
+            ),
+        ),
+        Parameter::new(
+            "ee_retry_max_per_hour",
+            "-",
+            serde_json::json!(p.ee_retry_max_per_hour),
+            std_src("CAMP SCMS 1.2.2 §5.2.8.3 SCMS-523: at most 10 retries per 60 minutes"),
+        ),
+        Parameter::new(
             "download_request_tolerance_s",
             "s",
             serde_json::json!(p.download_request_tolerance.as_nanos() / 1_000_000_000),

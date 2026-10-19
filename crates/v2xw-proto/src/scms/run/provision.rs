@@ -716,6 +716,47 @@ impl ScmsState {
 
     /// Handles every message of this flow; [`ScmsState::handle`] routes here.
     #[allow(unused_variables)]
+    /// SCMS-522: the device has sent `msg`'s request to the RA and now waits for the
+    /// answer `kind`; if none comes within `ee_retry_timeout` it sends the request again.
+    /// Recorded even with the retry off, so a late duplicate answer is recognised.
+    fn await_answer(
+        &mut self,
+        out: &mut Outbox<ScmsMsg>,
+        device: NodeId,
+        kind: Awaited,
+        msg: ScmsMsg,
+        flow: FlowId,
+        run: FlowRun,
+    ) {
+        let timeout = self.params.ee_retry_timeout;
+        let retries = self.params.ee_retry_max_per_hour;
+        let Some(dev) = self.devices.get_mut(&device) else {
+            return;
+        };
+        dev.request_seq = dev.request_seq.wrapping_add(1);
+        let seq = dev.request_seq;
+        dev.awaiting = Some((seq, kind, msg, flow, run));
+        if timeout > Duration::ZERO && retries > 0 {
+            out.start_timer(timeout, ScmsMsg::EeRetryTimer { device, seq }, flow, run);
+        }
+    }
+
+    /// Whether `device` is waiting for `kind`, clearing the wait when it is. An answer it
+    /// is not waiting for (the second answer to a request it sent twice) is dropped by the
+    /// device and counted.
+    fn take_answer(&mut self, device: NodeId, kind: Awaited) -> bool {
+        let Some(dev) = self.devices.get_mut(&device) else {
+            return false;
+        };
+        if dev.awaiting.as_ref().is_some_and(|a| a.1 == kind) {
+            dev.awaiting = None;
+            true
+        } else {
+            dev.duplicate_answers += 1;
+            false
+        }
+    }
+
     pub(super) fn handle_provision(
         &mut self,
         d: Delivery<ScmsMsg>,
@@ -782,12 +823,23 @@ impl ScmsState {
                         }
                         None => self.sizes.batch_download_request(),
                     };
+                    let (device, i, enrolment) = (req.device, req.start_i, req.enrolment);
+                    // A retry repeats the whole session: the file check and the `.info`
+                    // request, signed afresh.
+                    self.await_answer(
+                        out,
+                        device,
+                        Awaited::Info,
+                        ScmsMsg::ProvisioningRequest(req),
+                        flow,
+                        run,
+                    );
                     out.send(
                         n.lop,
                         ScmsMsg::InfoRequest {
-                            device: req.device,
-                            i: req.start_i,
-                            enrolment: req.enrolment,
+                            device,
+                            i,
+                            enrolment,
                             pdu,
                         },
                         "info-request",
@@ -817,11 +869,24 @@ impl ScmsState {
                     out.charge_kem(PrimitiveOpKind::Sign, certs);
                 }
                 out.stage_at(StageId::Requested, req.device, None, flow, run);
-                req.spdu = self.ee_ra_request_pdu(&req, at);
+                // A retry (SCMS-522) sends the same request again, byte for byte, as an
+                // HTTP client repeats a POST: its `requestHash`, which names the batch
+                // files, must not change.
+                if req.spdu.is_none() {
+                    req.spdu = self.ee_ra_request_pdu(&req, at);
+                }
                 let size = match req.spdu.clone() {
                     Some(p) => self.emit_pdu(SpduKind::EeRaCertRequest, req.device, n.lop, at, &p),
                     None => self.sizes.provisioning_request_for(certs),
                 };
+                self.await_answer(
+                    out,
+                    req.device,
+                    Awaited::Ack,
+                    ScmsMsg::ProvisioningRequest(req.clone()),
+                    flow,
+                    run,
+                );
                 out.send(
                     n.lop,
                     ScmsMsg::ProvisioningRequest(req),
@@ -911,6 +976,56 @@ impl ScmsState {
                         "provisioning-refused",
                         self.sizes.refusal(),
                         Transport::BackendNet,
+                        flow,
+                        run,
+                    );
+                    return Ok(());
+                }
+                // An SCMS-522 retry of a request the RA already accepted (the same bytes,
+                // or on the modelled path the same request): the device never saw the
+                // ack, so the RA acknowledges it again instead of refusing it as a second
+                // request or expanding it twice. ASSUMPTION: [CAMP122] states the retry,
+                // not the RA's answer to it; an idempotent answer is what an HTTP service
+                // gives a repeated POST.
+                let retransmitted = self.ra.accounts.get(&req.device).and_then(|a| {
+                    let same = match (request_hash8, a.request_hash8) {
+                        (Some(x), Some(y)) => x == y,
+                        (None, None) => {
+                            let mut probe = (*req).clone();
+                            probe.spdu = None;
+                            probe.jmax = a.request.jmax;
+                            probe.periods = a.request.periods;
+                            request_hash(&probe) == a.request_hash
+                        }
+                        _ => false,
+                    };
+                    same.then_some((
+                        a.request_hash,
+                        a.request.start_i,
+                        a.request.periods,
+                        a.request.jmax,
+                    ))
+                });
+                if let Some((request_hash, start_i, periods, jmax)) = retransmitted {
+                    self.ra.retransmissions_reacked += 1;
+                    Self::sign(out, 1);
+                    let ack = request_hash8.and_then(|h| self.ra_ack_pdu(h, start_i, at));
+                    let size = match &ack {
+                        Some(p) => self.emit_pdu(SpduKind::RaEeCertAck, to, n.lop, at, p),
+                        None => self.sizes.provisioning_ack(),
+                    };
+                    out.send(
+                        n.lop,
+                        ScmsMsg::ProvisioningAck {
+                            device: req.device,
+                            request_hash,
+                            periods,
+                            pdu: ack,
+                            jmax,
+                        },
+                        "provisioning-ack",
+                        size,
+                        Transport::CellularUu,
                         flow,
                         run,
                     );
@@ -1107,12 +1222,18 @@ impl ScmsState {
                 ..
             } => {
                 // The device verifies the RA's signature and that the ack answers the
-                // request it sent; an ack that does not is ignored, and recorded.
+                // request it sent; an ack that does not is ignored, and recorded (and the
+                // device keeps waiting for the real one).
                 if let Some(p) = &pdu {
                     if let Err(e) = self.ee_check_ack(device, p) {
                         self.reject_pdu(SpduKind::RaEeCertAck, device, at, e);
                         return Ok(());
                     }
+                }
+                // A second ack, to a request the device sent twice, is not acted on: the
+                // first already started the download.
+                if !self.take_answer(device, Awaited::Ack) {
+                    return Ok(());
                 }
                 // No account under a hybrid scheme (no post-quantum butterfly to
                 // pre-generate from): the device's next top-up is a new request.
@@ -1577,6 +1698,18 @@ impl ScmsState {
                     Some(p) => self.emit_pdu(SpduKind::EeRaDownloadRequest, device, n.lop, at, p),
                     None => self.sizes.batch_download_request(),
                 };
+                self.await_answer(
+                    out,
+                    device,
+                    Awaited::Download(i),
+                    ScmsMsg::BatchDownloadRequest {
+                        device,
+                        i,
+                        pdu: None,
+                    },
+                    flow,
+                    run,
+                );
                 out.send(
                     n.lop,
                     ScmsMsg::BatchDownloadRequest { device, i, pdu },
@@ -1721,6 +1854,9 @@ impl ScmsState {
                 credentials,
                 files,
             } => {
+                if !self.take_answer(device, Awaited::Download(i)) {
+                    return Ok(());
+                }
                 let poll = self.params.download_poll_interval;
                 let cap = self.params.max_download_polls;
                 // The real path: open every `i_j` with h_ij, check the issuing ACA signed
@@ -2017,6 +2153,9 @@ impl ScmsState {
                 next_dl,
                 body,
             } => {
+                if !self.take_answer(device, Awaited::Info) {
+                    return Ok(());
+                }
                 // The device reads the Time32 it was sent (the real path) and comes back
                 // for the batch then.
                 let at_dl = match &body {
@@ -2055,9 +2194,43 @@ impl ScmsState {
                     run,
                 );
             }
+            ScmsMsg::EeRetryTimer { device, seq } => {
+                // SCMS-522: no answer within the timeout. SCMS-523: at most
+                // `ee_retry_max_per_hour` retries in any 60 minutes; past that the device
+                // waits for the oldest to leave the window. (`ScmsRun::step` has already
+                // dropped a timer whose request was answered.)
+                let window = Duration::from_secs(crate::scms::params::EE_RETRY_WINDOW_S);
+                let cap = self.params.ee_retry_max_per_hour as usize;
+                let Some(dev) = self.devices.get_mut(&device) else {
+                    return Ok(());
+                };
+                let Some((s, _, msg, f, r)) = dev.awaiting.clone() else {
+                    return Ok(());
+                };
+                if s != seq || cap == 0 {
+                    return Ok(());
+                }
+                dev.retry_log.retain(|t| window.after(*t) > at);
+                if dev.retry_log.len() >= cap {
+                    dev.ee_retries_capped += 1;
+                    let wait = window.after(dev.retry_log[0]).saturating_sub(at);
+                    out.start_timer(
+                        Duration::from_nanos(wait),
+                        ScmsMsg::EeRetryTimer { device, seq },
+                        f,
+                        r,
+                    );
+                    return Ok(());
+                }
+                dev.retry_log.push(at);
+                dev.ee_retries += 1;
+                dev.awaiting = None;
+                out.start_timer(Duration::ZERO, msg, f, r);
+            }
             ScmsMsg::ProvisioningRefused { device, reason } => {
                 Self::verify(out, 1);
                 if let Some(dev) = self.devices.get_mut(&device) {
+                    dev.awaiting = None;
                     dev.refused = Some(reason);
                     dev.topup_refused = Some(reason);
                     dev.refusals += 1;

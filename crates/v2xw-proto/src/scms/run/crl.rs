@@ -182,6 +182,63 @@ pub fn device_check_crl(
     Ok(CrlOrder::of(c))
 }
 
+impl ScmsRun {
+    /// Puts `n` revocations from before the run on this provider's CRL and publishes it
+    /// at the run's start: the standing list of a deployment that has been revoking for
+    /// years. Each entry is one revoked device's seed pair at the current i-period, with
+    /// random LA ids and seeds from the backend's keyed stream, so it matches no device
+    /// of the run (they were revoked before it). The list is signed as a real
+    /// `SecuredCrl` when the PDU layer is on.
+    pub fn seed_standing_crl(&mut self, n: u32) {
+        let st = &mut self.state;
+        let i = st.params.period_at(0);
+        let jmax = st.params.certs_per_period;
+        let mut draws = vec![0u8; 36 * n as usize];
+        st.rng
+            .checkout(RngDomain::Backend, EntityRef::custom("scms/standing-crl", 0))
+            .fill_bytes(&mut draws);
+        for b in draws.chunks_exact(36) {
+            let mut ls1 = [0u8; 16];
+            let mut ls2 = [0u8; 16];
+            ls1.copy_from_slice(&b[4..20]);
+            ls2.copy_from_slice(&b[20..36]);
+            st.crlg.entries.push(CrlLinkageEntry {
+                i,
+                la_id1: LaId(u16::from_be_bytes([b[0], b[1]])),
+                la_id2: LaId(u16::from_be_bytes([b[2], b[3]])),
+                ls1_i: LinkageSeed::new(ls1),
+                ls2_i: LinkageSeed::new(ls2),
+                jmax,
+                max_forward: linkage::DEFAULT_MAX_FORWARD_PERIODS,
+            });
+        }
+        st.crlg.signature = st.gov.sign_as("crlg", &crl_digest(&st.crlg.entries));
+        st.crlg.versions += 1;
+        let _ = st.issue_secured_crls(0);
+        st.crlg.standing = n;
+        for store in [&mut st.crl_store, &mut st.crl_broadcast] {
+            store.entries = st.crlg.entries.clone();
+            store.secured = st.crlg.secured.clone();
+            store.signature = st.crlg.signature;
+            store.versions += 1;
+        }
+        // Renewed by its nextCrl like any list the Generator signs.
+        if st.params.crl.reissue && st.params.crl.next_crl > Duration::ZERO {
+            let issued = st.crlg.versions;
+            let at = st.params.crl.next_crl.after(0);
+            let crlg = st.nodes.crlg;
+            let run = self.new_run();
+            self.inject_at(
+                at,
+                crlg,
+                ScmsMsg::CrlReissueTimer { issued },
+                FlowId::CrlIssuance,
+                run,
+            );
+        }
+    }
+}
+
 impl ScmsState {
     /// Signs the CRL the Generator holds and sends it to the store and the broadcast path.
     /// With the PDU layer on, the artefact is a real `SecuredCrl` and every hop is charged
@@ -198,6 +255,20 @@ impl ScmsState {
         self.crlg.versions += 1;
         let entries = u32::try_from(self.crlg.entries.len()).unwrap_or(u32::MAX);
         let secured = self.issue_secured_crls(at);
+        // The list must be renewed by its `nextCrl` even when nothing new is revoked, or
+        // every device stops trusting the CRACA's certificates two weeks later
+        // (`overdue_CRL_tolerance`). Armed at every publication; a timer that finds a
+        // newer publication does nothing.
+        if self.params.crl.reissue && self.params.crl.next_crl > Duration::ZERO {
+            out.start_timer(
+                self.params.crl.next_crl,
+                ScmsMsg::CrlReissueTimer {
+                    issued: self.crlg.versions,
+                },
+                flow,
+                run,
+            );
+        }
         // The store first, then the broadcast path, so that two links with the same
         // parameters stamp `published` before `first_rsu_broadcast`.
         for (to, step) in [
@@ -478,6 +549,15 @@ impl ScmsState {
                     return Ok(());
                 }
                 self.publish_crl(at, out, flow, run);
+            }
+            ScmsMsg::CrlReissueTimer { issued } => {
+                // `nextCrl` has come with no publication since: the same entries, a new
+                // issueDate and nextCrl, signed again.
+                if self.crlg.versions == issued {
+                    self.crlg.reissued += 1;
+                    Self::sign(out, 1);
+                    self.publish_crl(at, out, flow, run);
+                }
             }
             ScmsMsg::CrlPublishTimer => {
                 self.crlg.publish_armed = false;
