@@ -279,16 +279,6 @@ const BASIC: &[Basic] = &[
         recommended: "20 (the US profile); 5 to 60 (60 for vehicles that change often, such as taxis).",
     },
     Basic {
-        path: "security.scms.lifecycle.cert_shuffle_threshold",
-        explain: "How many certificate requests the Registration Authority collects and mixes before passing them on, so the authority that signs the certificates cannot tell which vehicle asked when; a batch also leaves when its oldest request reaches the shuffle window. CAMP SCMS release 1.2.2, Table 67.",
-        recommended: "1,000 (CAMP's production value); 10 to 10,000 (Brecht et al. 2018 used 10,000).",
-    },
-    Basic {
-        path: "security.scms.lifecycle.cert_shuffle_window_s",
-        explain: "The longest a certificate request may wait in the Registration Authority's mix before it is passed on, full batch or not. A longer wait hides each request among more others and delays a vehicle's certificates.",
-        recommended: "172,800 s (two days, CAMP release 1.2.2); 3,600 to 172,800 s.",
-    },
-    Basic {
         path: "security.scms.lifecycle.crl_cadence_s",
         explain: "A fixed schedule for publishing the revocation list. Left unset, each provider follows its own rule: the US providers publish within one business day of a revocation decision (SCMS Manager Provider Requirements 3.4.9). 0 publishes the moment a decision is made.",
         recommended: "Unset (the business-day rule); 0 to 86,400 s (a daily list, the USDOT 2013 working assumption).",
@@ -1004,6 +994,16 @@ const ADVANCED: &[Basic] = &[
         path: "security.scms.lifecycle.ma_max_open_cases",
         explain: "The most investigations the Misbehaviour Authority keeps open at once; a case beyond it waits for one to close. No authority publishes its capacity.",
         recommended: "1,000 (an assumption); 1 to 10,000 to study an overloaded authority.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.cert_shuffle_threshold",
+        explain: "How many certificate requests the Registration Authority collects and mixes before passing them on, so the authority that signs the certificates cannot tell which vehicle asked when; a batch also leaves when its oldest request reaches the shuffle window. CAMP SCMS release 1.2.2, Table 67.",
+        recommended: "1,000 (CAMP's production value); 10 to 10,000 (Brecht et al. 2018 used 10,000). It acts on a device's first request only: every vehicle in a run is provisioned before it joins, and its weekly top-ups are the RA's pre-generation, which does not wait in this mix, so a run's results do not change.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.cert_shuffle_window_s",
+        explain: "The longest a certificate request may wait in the Registration Authority's mix before it is passed on, full batch or not. A longer wait hides each request among more others and delays a vehicle's certificates.",
+        recommended: "172,800 s (two days, CAMP release 1.2.2); 3,600 to 172,800 s. Like the batch size, it acts on a device's first request, which a run makes before the vehicle joins.",
     },
     Basic {
         path: "security.scms.tls",

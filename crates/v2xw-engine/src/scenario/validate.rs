@@ -2768,6 +2768,24 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                more round trip before the first request.",
     },
     KeyStatus {
+        path: "security.scms.lifecycle.cert_shuffle_threshold",
+        status: Status::Partial,
+        note: "The RA's request shuffle acts on a device's first certificate request \
+               (CAMP 1.2.2 Table 67). Every vehicle in a run is provisioned before it \
+               joins (Phase2::provision, ScmsRun::preload), and its weekly top-ups are the \
+               RA's pre-generation, which goes to the ACA at the period boundary without \
+               waiting in this shuffle (CAMP Primer p.6), so a same-seed run is identical \
+               (docs/design/scms-real/testing/scms-knobs.md). Kept as the RA's policy.",
+    },
+    KeyStatus {
+        path: "security.scms.lifecycle.cert_shuffle_window_s",
+        status: Status::Partial,
+        note: "As cert_shuffle_threshold: the request shuffle's longest wait, on a device's \
+               first certificate request, which a run makes before the vehicle joins (the \
+               pre-run provisioning collapses the window); in-run top-ups do not wait in \
+               it.",
+    },
+    KeyStatus {
         path: "security.scms.lifecycle",
         status: Status::Wired,
         note: "The credential lifecycle's knobs as fields of their own, read by the same \

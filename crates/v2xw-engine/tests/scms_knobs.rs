@@ -156,7 +156,10 @@ fn every_lifecycle_field_is_published_with_words_a_default_and_a_level() {
         for k in ["x-explain", "x-recommended", "x-level", "title", "x-range"] {
             assert!(f[k].as_str().is_some_and(|s| !s.is_empty()), "{path}: no {k}");
         }
-        assert_eq!(f["x-status"], "wired", "{path}");
+        // The request shuffle acts only on a first request, which a run makes before the
+        // vehicle joins (tests/scms_knobs_runs.rs): published as partial, with the reason.
+        let expected = if key.starts_with("cert_shuffle_") { "partial" } else { "wired" };
+        assert_eq!(f["x-status"], expected, "{path}");
         assert!(f["unit"].as_str().is_some_and(|u| !u.is_empty()), "{path}: no unit");
         // Absent, the CRL follows each provider's rule, which is not a number.
         if key == "crl_cadence_s" {
