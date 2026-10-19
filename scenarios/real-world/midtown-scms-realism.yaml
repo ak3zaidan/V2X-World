@@ -1,0 +1,46 @@
+# The Midtown SCMS benchmark cut to what an operator-side realism check needs: every SCMS
+# flow of the two-day benchmark (enrolment, provisioning at entry, the 614 -> 615 week
+# rollover and its top-ups, misbehaviour reports, the MA's manual review, the one-business-
+# day CRL and its enforcement) with the PKI view on, on a fleet small enough to run each
+# configuration change against the same seed (docs/design/scms-real/testing/realism.md).
+#
+# Everything is midtown-scms-benchmark-quarter.yaml (the real calendar from Monday
+# 2026-10-19 21:00 UTC, the two-provider us-production-2025 deployment, 30 RSUs on fibre,
+# DSRC under J2945/1, the 4x fill) except:
+#   - 600 veh/h and 100 pedestrians, 10 cyclists (a fifteenth of the full fleet);
+#   - 3 % of vehicles run the constant-position attack from 20 s, so the misbehaviour
+#     flow (report -> case -> decision -> CRL -> enforcement) has something real to do;
+#   - pki_view on, so every backend message and what each entity holds is recorded.
+# The live windows are the quarter file's: 0-60 s and 43,185-43,215 s (the rollover at
+# 43,200 s); fast-forward otherwise, to 172,800 s.
+schema: v2xw/scenario/1
+
+meta:
+  base: midtown-scms-benchmark-quarter.yaml
+  name: Midtown SCMS realism
+  description: >-
+    The Midtown SCMS benchmark at a fifteenth of its fleet with 3 % constant-position
+    attackers and the PKI view on: the base of the SCMS runtime realism checks.
+  tags: [benchmark, real-world, manhattan, scms, calendar, realism]
+
+actors:
+  vru:
+    pedestrians: 100
+    cyclists: 10
+  vehicles:
+    demand:
+      rate_veh_per_h: 600.0
+
+security:
+  scms:
+    deployment:
+      preset: us-production-2025
+    pki_view: true
+
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.03
+      schedule:
+        from_s: 20.0
+        to_s: 172800.0

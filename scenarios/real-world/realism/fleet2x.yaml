@@ -1,0 +1,7 @@
+# Twice the vehicle demand: per-device SCMS numbers unchanged, totals and run cost up.
+# A variant of ../midtown-scms-realism.yaml (docs/design/scms-real/testing/realism.md).
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS realism fleet2x}
+actors:
+  vehicles:
+    demand: {rate_veh_per_h: 1200.0}

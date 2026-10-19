@@ -1,0 +1,10 @@
+# A rogue or test-CTL provider: provider-b's root is not on the CTL, so nothing it certifies verifies.
+# A variant of ../midtown-scms-realism.yaml (docs/design/scms-real/testing/realism.md).
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS realism off-ctl}
+security:
+  scms:
+    deployment:
+      preset: us-production-2025
+      providers:
+        - {name: provider-b, components: {}, on_ctl: false}

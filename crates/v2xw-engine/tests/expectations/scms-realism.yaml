@@ -1,0 +1,14 @@
+# Expectation rows, SCMS runtime realism (docs/design/scms-real/testing/realism.md).
+#
+# This directory is the catalogue sweep's table (catalogue.yaml's format, read by
+# `v2xw sensitivity --expect` and tests/sensitivity_expectations.rs, which requires every
+# row to be plannable on a sweep family). The sweep publishes only four SCMS settings
+# (`v2xw sensitivity --catalogue --plan --only security.scms,security.protocol,detection`),
+# so the rows below are the realism checks that fit that form. The rest of the realism
+# table (topology, separation of duties, CAMP sizing, sizes, calendar latencies, run cost
+# and the variant runs on the Midtown realism scenario) is
+# tools/realworld/runtime_expectations.yaml, checked by tools/realworld/runtime_realism.py
+# against real runs, because its rows compare a run with the real deployment rather than a
+# setting's two ends.
+- {setting: detection.ma.id, change: threat/ma/legacy-window, metric: report.phase2.cases_opened, expect: changes, min_change: 0.0,
+   source: "the legacy window revokes on three trusted reporters within a window, the corroborating MA only on independent evidence sustained over time (v2xw-threat ma.rs, ma_corroborate.rs): the case count is a function of the policy. Realism row R-MA: measured on the security family"}
