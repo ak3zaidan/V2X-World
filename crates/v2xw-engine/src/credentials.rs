@@ -49,6 +49,49 @@ pub struct CredentialFactory {
     /// deployment order: a device installs its certifying provider's alone. Empty: every
     /// device installs `chain_file`.
     home_chain_files: Vec<Vec<Arc<v2xw_msg::sec_types::Certificate>>>,
+    /// The receiver limits every device's trust store is configured with.
+    limits: ReceiverLimits,
+}
+
+/// What a scenario sets of every receiver's trust store (SCMS settings audit,
+/// docs/guides/config-inventory-scms.md): `None` keeps the node's own default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReceiverLimits {
+    /// `nodes.validated_cert_cache`: validated end-entity certificates remembered
+    /// (`v2xw_node::rxval::EE_CACHE` unless set).
+    pub validated_cert_cache: Option<usize>,
+    /// `security.scms.crl_overdue_tolerance_s`: `overdue_CRL_tolerance`
+    /// (`v2xw_node::rxval::OVERDUE_CRL_TOLERANCE_S` unless set).
+    pub crl_overdue_tolerance_s: Option<u32>,
+}
+
+impl ReceiverLimits {
+    /// The limits `scenario` sets.
+    #[must_use]
+    pub fn of(scenario: &crate::Scenario) -> ReceiverLimits {
+        ReceiverLimits {
+            validated_cert_cache: scenario.nodes.validated_cert_cache.map(|n| n as usize),
+            crl_overdue_tolerance_s: scenario
+                .security
+                .scms
+                .as_ref()
+                .and_then(|s| s.crl_overdue_tolerance_s),
+        }
+    }
+
+    /// Applies the limits to `sec`'s trust store. The validated cache is replaced only
+    /// when its capacity changes, so a re-installed device keeps what it validated.
+    pub fn apply(self, sec: &mut v2xw_node::NodeSecurity) {
+        let t = sec.trust_mut();
+        if let Some(n) = self.validated_cert_cache
+            && t.ee_cache().capacity() != n.max(1)
+        {
+            t.set_ee_capacity(n);
+        }
+        if let Some(s) = self.crl_overdue_tolerance_s {
+            t.set_overdue_crl_tolerance(s);
+        }
+    }
 }
 
 impl CredentialFactory {
@@ -88,6 +131,7 @@ impl CredentialFactory {
             chain_file: Vec::new(),
             providers: Vec::new(),
             home_chain_files: Vec::new(),
+            limits: ReceiverLimits::default(),
             assignment: None,
         }
     }
@@ -149,6 +193,13 @@ impl CredentialFactory {
         self
     }
 
+    /// The same factory with every receiver's trust store configured with `limits`.
+    #[must_use]
+    pub fn with_receiver_limits(mut self, limits: ReceiverLimits) -> CredentialFactory {
+        self.limits = limits;
+        self
+    }
+
     /// The same factory with one chain file per provider (`security.scms.chain_file:
     /// home-provider`, in deployment order): a device then installs only its certifying
     /// provider's, and learns the others' CA certificates by P2PCD.
@@ -166,6 +217,7 @@ impl CredentialFactory {
     /// ([`CredentialFactory::provider_of`]: since WP-D1 one seeded draw assigns roadside
     /// units, vehicles and handsets alike), otherwise the whole chain file.
     pub fn install_trust_for(&self, node: NodeId, sec: &mut v2xw_node::NodeSecurity) {
+        self.limits.apply(sec);
         if self.roots.is_empty() {
             return;
         }
@@ -182,6 +234,7 @@ impl CredentialFactory {
     /// file. The chain file's validation is done at install, before the node is deployed,
     /// so its operations are not charged to the node's first received frame.
     pub fn install_trust(&self, sec: &mut v2xw_node::NodeSecurity) {
+        self.limits.apply(sec);
         if self.roots.is_empty() {
             return;
         }

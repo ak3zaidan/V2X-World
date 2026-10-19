@@ -1006,6 +1006,16 @@ const ADVANCED: &[Basic] = &[
         recommended: "172,800 s (two days, CAMP release 1.2.2); 3,600 to 172,800 s. Like the batch size, it acts on a device's first request, which a run makes before the vehicle joins.",
     },
     Basic {
+        path: "security.scms.crl_overdue_tolerance_s",
+        explain: "How long after a revocation list said the next one would be out a vehicle keeps trusting the certificates that list covers. Past it, the vehicle refuses every message those certificates sign, so a vehicle cut off from new lists (by an attacker or a dead link) stops trusting its neighbours. CAMP SCMS release 1.2.2, Table 67, overdue_CRL_tolerance.",
+        recommended: "1,209,600 s (two weeks, CAMP's value); 0 to 2,419,200 s to study a delayed or blocked revocation list. The next list is due a week after each one (nextCrl), so the rule acts only in runs that span weeks of calendar time.",
+    },
+    Basic {
+        path: "nodes.validated_cert_cache",
+        explain: "How many already-checked certificates of other vehicles each device remembers, so a known sender costs only its signature check; a forgotten one is checked from scratch the next time it is heard. A small cache is what a certificate-flooding attack exhausts.",
+        recommended: "4,096 (engine default; no device publishes one); 16 to 65,536. The peer certificate cache (128) usually forgets first.",
+    },
+    Basic {
         path: "security.scms.tls",
         explain: "The TLS version a vehicle uses for its secure session with the Registration Authority over a cellular link. TLS 1.2 needs one more round trip to set up each session than TLS 1.3, so certificate requests and downloads start later. The US profile admits both (SCMS Manager EE profile 2.1.18).",
         recommended: "1.3 (default); 1.2 to compare with older devices.",

@@ -2477,6 +2477,11 @@ pub struct ScmsSpec {
     /// one more round trip before the first request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls: Option<String>,
+    /// `overdue_CRL_tolerance` (CAMP SCMS 1.2.2 Table 67), seconds: how long past a CRL's
+    /// `nextCrl` a device keeps trusting the certificates that CRL governs before it
+    /// refuses every message they sign. Two weeks (1,209,600 s) unless set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crl_overdue_tolerance_s: Option<u32>,
 }
 
 /// `security.scms.lifecycle`: the credential lifecycle's knobs as typed, published fields.
@@ -2960,6 +2965,12 @@ pub struct Nodes {
     /// recently used one. 128 unless set (no profile publishes one).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer_cert_cache: Option<u32>,
+    /// How many validated end-entity certificates each device remembers, so a repeat
+    /// signer costs only its signature check (least recently used evicted first).
+    /// 4,096 unless set (`v2xw_node::rxval::EE_CACHE`; no device publishes one). The peer
+    /// certificate cache usually bounds it first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validated_cert_cache: Option<u32>,
     /// The lower edge of the HSM signing time, microseconds, for a profile that publishes
     /// only an upper bound (the CRATON2's "<9 ms"). Set, each signature takes a time drawn
     /// uniformly between this edge and the bound from the node's own random stream; unset,
@@ -2994,6 +3005,7 @@ impl Default for Nodes {
             backend_tier: Tier::Medium,
             verify_queue_depth: None,
             peer_cert_cache: None,
+            validated_cert_cache: None,
             hsm_sign_lower_us: None,
         }
     }

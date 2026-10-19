@@ -195,3 +195,79 @@ fn the_published_defaults_are_the_models() {
     doc["security"]["scms"] = json!({"lifecycle": lifecycle});
     assert_eq!(params(&doc), default, "a published default is not the model's");
 }
+
+/// The two receiver constants the audit left fixed, now settings: the overdue-CRL
+/// tolerance (CAMP 1.2.2 Table 67, two weeks) and the validated-certificate cache (4,096).
+/// Each is published with words, a range, a unit and the node's own default, is refused
+/// out of range, and reaches every device's trust store through the credential factory
+/// (the in-run proof for the cache is `foundations.rs`, a cache of one re-validating).
+#[test]
+fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_store() {
+    use v2xw_engine::credentials::{CredentialFactory, ReceiverLimits};
+    let fields = v2xw_engine::scenario::publish::fields();
+    for (path, default) in [
+        (
+            "security.scms.crl_overdue_tolerance_s",
+            f64::from(v2xw_node::rxval::OVERDUE_CRL_TOLERANCE_S),
+        ),
+        ("nodes.validated_cert_cache", v2xw_node::rxval::EE_CACHE as f64),
+    ] {
+        let f = fields
+            .iter()
+            .find(|f| f["x-path"] == path)
+            .unwrap_or_else(|| panic!("{path} is not published"));
+        for k in ["x-explain", "x-recommended", "x-level", "title", "x-range", "unit"] {
+            assert!(f[k].as_str().is_some_and(|s| !s.is_empty()), "{path}: no {k}");
+        }
+        assert_eq!(f["x-status"], "wired", "{path}");
+        assert_eq!(f["default"].as_f64(), Some(default), "{path}");
+    }
+    assert_eq!(v2xw_node::rxval::OVERDUE_CRL_TOLERANCE_S, 14 * 86_400);
+
+    let mut doc = base_doc();
+    doc["security"]["scms"] = json!({"crl_overdue_tolerance_s": 3_600});
+    doc["nodes"]["validated_cert_cache"] = json!(7);
+    assert_eq!(errors(doc.clone()), Vec::<String>::new());
+    let s = Scenario::from_document(doc).expect("deserialises");
+    let limits = ReceiverLimits::of(&s);
+    assert_eq!(
+        limits,
+        ReceiverLimits {
+            validated_cert_cache: Some(7),
+            crl_overdue_tolerance_s: Some(3_600),
+        }
+    );
+    let mut sec = v2xw_node::NodeSecurity::new(
+        v2xw_core::time::WallClock::new(0),
+        v2xw_node::CryptoMode::Modeled,
+        0x20,
+    );
+    CredentialFactory::for_run(1, v2xw_core::time::WallClock::new(0), None)
+        .with_receiver_limits(limits)
+        .install_trust(&mut sec);
+    assert_eq!(sec.trust().overdue_crl_tolerance_s(), 3_600);
+    assert_eq!(sec.trust().ee_cache().capacity(), 7);
+    assert_eq!(
+        ReceiverLimits::of(&Scenario::from_document(base_doc()).expect("base")),
+        ReceiverLimits::default(),
+        "unset, every device keeps the node's defaults"
+    );
+
+    for (set, field) in [
+        (
+            json!({"security": {"scms": {"crl_overdue_tolerance_s": 40_000_000}}}),
+            "security.scms.crl_overdue_tolerance_s",
+        ),
+        (json!({"nodes": {"validated_cert_cache": 0}}), "nodes.validated_cert_cache"),
+    ] {
+        let mut doc = base_doc();
+        if let Some(t) = set["security"]["scms"].as_object() {
+            doc["security"]["scms"] = Value::Object(t.clone());
+        }
+        if let Some(n) = set["nodes"]["validated_cert_cache"].as_u64() {
+            doc["nodes"]["validated_cert_cache"] = json!(n);
+        }
+        let e = errors(doc);
+        assert!(e.iter().any(|m| m.contains(field)), "{set} was not refused: {e:?}");
+    }
+}

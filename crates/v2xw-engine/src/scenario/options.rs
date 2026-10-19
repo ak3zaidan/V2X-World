@@ -1486,6 +1486,8 @@ pub fn title(path: &str) -> Option<&'static str> {
         "security.protocol.id" => "Credential system",
         // SCMS settings audit (docs/guides/config-inventory-scms.md)
         "security.scms.tls" => "Vehicle-to-RA TLS version",
+        "security.scms.crl_overdue_tolerance_s" => "Overdue revocation list tolerance",
+        "nodes.validated_cert_cache" => "Validated certificates remembered",
         "security.scms.lifecycle.i_period_s" => "Certificate period (i-period)",
         "security.scms.lifecycle.cert_lifetime_s" => "Pseudonym certificate lifetime",
         "security.scms.lifecycle.certs_per_period" => "Pseudonym certificates per week",

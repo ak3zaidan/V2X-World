@@ -137,3 +137,37 @@ fn a_home_root_rollover_reaches_the_peers_chain_file() {
     );
     assert!(!peer.state.gov.lccf.certs.contains(&old_ica));
 }
+
+/// The PKI view names the sharing MA by its own provider (SCMS settings audit). Before,
+/// the peer run's id map held only its own components, so the record read
+/// `ee/<n> -> provider-b/ma/0`: a device talking to the MA, which no device does.
+#[test]
+fn the_records_name_the_sharing_ma_as_the_other_providers() {
+    use v2xw_proto::scms::pki_view::{self, PkiTracker};
+    let (home, mut peer) = runs();
+    let device = NodeId::new(5_000_124);
+    peer.preload(device, 0, 1, 2).expect("provisions");
+    let (&(i, _), c) = peer.state.devices[&device]
+        .credentials
+        .iter()
+        .next()
+        .expect("a pseudonym");
+    let lv = c.lv;
+    let sent = 1_000_000_000;
+    peer.shared_report_at_ma(home.state.nodes.ma, i, lv, sent, sent, 200);
+    peer.run_until(sent + 2_000_000_000).expect("runs");
+    let flows = pki_view::drain_flows(std::slice::from_ref(&peer), &mut PkiTracker::default());
+    let into_ma: Vec<(Option<&str>, &str)> = flows
+        .iter()
+        .filter(|f| f.kind == "msg" && f.to.as_deref() == Some("provider-b/ma/0"))
+        .map(|f| (f.from.as_deref(), f.name.as_str()))
+        .collect();
+    assert!(
+        into_ma.iter().any(|(f, _)| *f == Some("provider-a/ma/0")),
+        "{into_ma:?}"
+    );
+    assert!(
+        into_ma.iter().all(|(f, _)| !f.unwrap_or("").starts_with("ee/")),
+        "a device talks to the MA: {into_ma:?}"
+    );
+}

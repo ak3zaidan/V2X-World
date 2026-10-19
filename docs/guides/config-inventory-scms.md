@@ -22,6 +22,11 @@ All of these settings sit under **Certificates & SCMS** in the settings window:
 Signature schemes, verification policy, crypto hardware and caches stay under
 **Security & Crypto**.
 
+The resumed audit (2026-10-19) exposed the last two receiver constants the first pass
+left fixed: `security.scms.crl_overdue_tolerance_s` and `nodes.validated_cert_cache`.
+Both reach every device's trust store through the credential factory
+(`credentials::ReceiverLimits`), which installs each node's roots and chain file.
+
 ## Exposed by this audit: `security.scms.lifecycle` and `security.scms.tls`
 
 Before this audit the credential lifecycle's numbers could only be written as untyped
@@ -57,7 +62,9 @@ scenario could reach are new: `max_download_polls`, `download_request_tolerance_
 | `crl_broadcast_interval_s` | Advanced | 5 s (USDOT RSU v4.1 Store and Repeat) | 0.1 to 3,600 s | roadside CRL repeat |
 | `ma_review_s` | Basic | 8 h on the real calendar (pilots' manual MA; an ASSUMPTION: no time is published); automatic on a compressed one | 0 to 30 d | 60 s delays the revocation |
 | `ma_max_open_cases` | Advanced | 1,000 (an ASSUMPTION) | 1 to 10⁶ | the MA's concurrent cases (before this audit the engine ran one at a time whatever the cap; fixed) |
-| `security.scms.tls` | Advanced | `1.3` (SCMS Manager EE profile §2.1.18 admits 1.2 and 1.3) | `1.3`, `1.2` | 1.2 means fewer handshake bytes and a slower top-up |
+| `security.scms.tls` | Advanced | `1.3` (SCMS Manager EE profile §2.1.18 admits 1.2 and 1.3) | `1.3`, `1.2` | 1.2: 2 % more handshake bytes (two more flights, each with its own headers) and one more round trip in every top-up |
+| `security.scms.crl_overdue_tolerance_s` | Advanced | 1,209,600 s, two weeks (CAMP 1.2.2 Table 67 `overdue_CRL_tolerance`) | 0 to 1 y | the moment a device refuses every certificate a stale CRL governs; nextCrl is a week after issue, so it acts only in runs that span weeks |
+| `nodes.validated_cert_cache` | Advanced | 4,096 (engine; no device publishes one) | 1 to 1,048,576 | evictions and first-sight validations; shown under Security & Crypto with the peer cache |
 
 The defaults the settings window shows come from the model's own code
 (`phase2::lifecycle_defaults`), so they cannot drift from what a run uses.
@@ -111,10 +118,8 @@ The loader refuses:
 
 | Constant | Where | Value | Why it stays fixed |
 |---|---|---|---|
-| CRL overdue tolerance | `v2xw-node/src/rxval.rs` `OVERDUE_CRL_TOLERANCE_S` | 2 weeks | CAMP 1.2.2 Table 67 `overdue_CRL_tolerance`: a profile constant every device applies. OPEN: worth exposing for attack studies that delay CRLs; it needs a path through the node runtime. |
 | `nextCrl` | `params.rs` `CrlIssuance::next_crl` | 1 week | CAMP 1.2.2 §3 item 10 |
 | Business-day CRL slot | `CrlIssuance::slot_et` | 10:00 ET | ASSUMPTION: the SLA fixes the deadline, not the hour |
-| Validated-certificate cache | `rxval.rs` `EE_CACHE` | 4,096 | an implementation choice with no protocol effect (constants.md). OPEN: expose it with `nodes.peer_cert_cache` if a cache-exhaustion attack needs it |
 | Report store quota | `phase2.rs` `REPORT_STORE_QUOTA_BYTES` | 64 KiB | SM-MBR §2.2 leaves it device-specific; ASSUMPTION. OPEN |
 | Report maximum age | `v2xw-node/src/stores.rs` `REPORT_MAX_AGE` | 1 week | SM-MBR |
 | LA-ACA key rotation | `PduLayer::la_aca_key_rotation_s` | 1 week | ASSUMPTION; key event only, with no per-request traffic |

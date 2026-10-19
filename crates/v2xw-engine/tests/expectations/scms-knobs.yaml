@@ -45,3 +45,11 @@
 # ---- Settings whose effect this family cannot show, by design ----
 - {setting: security.scms.tls, change: "1.2", metric: report.phase2.access.carrier.tls_handshake_bytes, expect: same, min_change: 0.0,
    source: "the family's Uu is cellular/uu/fixed-latency, which carries no TCP or TLS; on cellular/uu/packet-pf 1.2 is 6,184 -> 6,316 handshake bytes and one more round trip (tests/scms_knobs_runs.rs)"}
+
+# ---- Receiver limits (resumed audit, 2026-10-19) ----
+# Measured on the scms base by tests/scms_knobs_runs.rs (one run each); the sweep routes
+# nodes.* to the dsrc and security families, where these rows have not been swept yet.
+- {setting: nodes.validated_cert_cache, change: low, metric: report.receiver_validation.ee_evictions, expect: up,
+   source: "a vehicle hears far more than 16 pseudonyms; an evicted signer is validated again (v2xw-node rxval EeCache, LRU)"}
+- {setting: security.scms.crl_overdue_tolerance_s, change: low, metric: report.phase2.crl_downloads, expect: same, min_change: 0.0,
+   source: "nextCrl is a week after issue (CAMP 1.2.2 sec. 3 item 10): even a zero tolerance finds no CRL overdue in 300 s; the rule is proven at the node (v2xw-node tests/rx_validation.rs)"}

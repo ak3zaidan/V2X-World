@@ -371,14 +371,17 @@ fn the_camp_reference_preset_is_one_scms_with_a_lop() {
     );
     assert_eq!(b.report.phase2.devices_by_provider.len(), 2, "{:?}", b.report.phase2.devices_by_provider);
     assert!(v.report.phase2.devices_by_provider.len() <= 1, "{:?}", v.report.phase2.devices_by_provider);
-    // One SCMS: no MA-to-MA sharing, so no shared report reaches an MA from outside.
-    assert!(b.pairs().contains(&("ee".into(), "ma".into())));
-    assert!(!v.pairs().contains(&("ee".into(), "ma".into())), "{:?}", v.pairs());
-    // OPEN (testing/scms-knobs.md): both runs record ee -> lop -> ra. Under the US preset
-    // the LOP is not deployed and its hop is transparent (zero latency, no queue,
-    // ScmsRun::new_deployed), but the PKI view still names it; and the "ee -> ma" pair
-    // above is the other provider's MA sharing a report, which the view names by a
-    // device id because that MA is not in this run's id map.
+    // Two providers share reports MA to MA (01 §2.3); one SCMS has no peer MA. Before
+    // the view named the peer providers' components, the shared report read "ee -> ma".
+    let (bp, vp) = (b.pairs(), v.pairs());
+    let pair = |f: &str, t: &str| (f.to_string(), t.to_string());
+    assert!(bp.contains(&pair("ma", "ma")), "{bp:?}");
+    assert!(!bp.contains(&pair("ee", "ma")), "a device reaches the MA directly: {bp:?}");
+    assert!(!vp.contains(&pair("ma", "ma")), "{vp:?}");
+    // The CAMP design runs a LOP between the devices and the RA; the US deployment runs
+    // none (01 §2.2), and its records fold the transparent hop the run still carries.
+    assert!(vp.contains(&pair("ee", "lop")) && vp.contains(&pair("lop", "ra")), "{vp:?}");
+    assert!(!bp.iter().any(|(f, t)| f == "lop" || t == "lop"), "{bp:?}");
 }
 
 #[test]
@@ -389,12 +392,10 @@ fn the_architecture_is_the_deployments() {
     let b = base();
     let pairs = b.pairs();
     println!("PAIRS {pairs:?}");
-    // "ee -> ma" is excluded: it is the other provider's MA sharing a report, which the
-    // PKI view names by a device id (an OPEN record defect, testing/scms-knobs.md).
     for (from, to) in &pairs {
         if from == "ee" {
             assert!(
-                !matches!(to.as_str(), "aca" | "pca" | "la1" | "la2" | "crlg" | "eca"),
+                !matches!(to.as_str(), "aca" | "pca" | "la1" | "la2" | "crlg" | "eca" | "ma"),
                 "a device reaches {to} directly"
             );
         }
@@ -406,6 +407,9 @@ fn the_architecture_is_the_deployments() {
     // authorities, CAMP-EE §2.1.7).
     assert!(!pairs.iter().any(|(f, t)| (f.starts_with("la") && (t.starts_with("la") || t == "ee"))));
     assert!(pairs.iter().any(|(f, t)| f == "ee" && t == "ra"), "{pairs:?}");
+    assert!(pairs.iter().any(|(f, t)| f == "ra" && t == "ee"), "{pairs:?}");
+    // No LOP in the US deployment (01 §2.2), so none in its records.
+    assert!(!pairs.iter().any(|(f, t)| f == "lop" || t == "lop"), "{pairs:?}");
     // Every case that reached a CRL was enforced by no more vehicles than were present.
     assert!(b.cases("enforced") > 0, "the base enforces a revocation");
 }
@@ -497,4 +501,46 @@ fn every_enforcement_count_is_out_of_the_devices_it_could_have_reached() {
             assert!(n <= of, "{case}: {n} of {of}");
         }
     }
+}
+
+#[test]
+fn a_small_validated_certificate_cache_revalidates_and_costs_more_crypto() {
+    // nodes.validated_cert_cache 4,096 -> 16 (v2xw-node rxval EE_CACHE; no device
+    // publishes one). Expected before the run: (a) a vehicle hears far more than 16
+    // pseudonyms in 300 s (125 vehicles, a new pseudonym every 60 s), so the cache
+    // evicts, a returning signer pays first sight again: more evictions, more EE
+    // validations, fewer hits, more validation time charged; (b) the same events within
+    // a few per cent (validation is service time, not events); (c) the backend is not
+    // involved: the same top-ups and CRL downloads.
+    let mut doc = base_doc();
+    doc["nodes"]["validated_cert_cache"] = json!(16);
+    let (b, v) = (base(), run(doc));
+    knob("nodes.validated_cert_cache 4096 -> 16", b, &v);
+    let (rb, rv) = (&b.report.receiver_validation, &v.report.receiver_validation);
+    println!(
+        "CACHE base ee_validations {} hits {} evictions {} charged_ns {}\n      variant ee_validations {} hits {} evictions {} charged_ns {}",
+        rb.ee_validations, rb.ee_hits, rb.ee_evictions, rb.charged_ns,
+        rv.ee_validations, rv.ee_hits, rv.ee_evictions, rv.charged_ns
+    );
+    assert!(rv.ee_evictions > rb.ee_evictions, "{rv:?} vs {rb:?}");
+    assert!(rv.ee_validations > rb.ee_validations, "{rv:?} vs {rb:?}");
+    assert!(rv.ee_hits < rb.ee_hits, "{rv:?} vs {rb:?}");
+    assert!(rv.charged_ns > rb.charged_ns, "{rv:?} vs {rb:?}");
+}
+
+#[test]
+fn the_overdue_crl_tolerance_cannot_act_inside_a_week() {
+    // security.scms.crl_overdue_tolerance_s 2 weeks -> 0 (CAMP 1.2.2 Table 67). Expected
+    // before the run: nothing changes. A CRL's nextCrl is a week after its issue (CAMP
+    // 1.2.2 §3 item 10), so even the strictest device (tolerance 0) finds no CRL overdue in
+    // a 300 s run: no `crl-overdue` refusal and the run identical event for event. The
+    // rule's effect is proven at the node (v2xw-node tests/rx_validation.rs) and its reach
+    // by tests/scms_knobs.rs; an in-run study needs weeks of calendar.
+    let mut doc = base_doc();
+    doc["security"]["scms"] = json!({"crl_overdue_tolerance_s": 0});
+    let (b, v) = (base(), run(doc));
+    knob("security.scms.crl_overdue_tolerance_s 1209600 -> 0", b, &v);
+    let rv = &v.report.receiver_validation;
+    assert_eq!(rv.refused.get("crl-overdue"), None, "{rv:?}");
+    assert_eq!(v.events(), b.events(), "the run is identical");
 }

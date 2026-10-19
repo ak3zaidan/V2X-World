@@ -1262,6 +1262,22 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the MA's open-case capacity",
     },
+    // Zero is the strictest device (refuse the moment `nextCrl` passes); a year is far
+    // past any profile (CAMP 1.2.2 Table 67: two weeks).
+    Bound {
+        path: "security.scms.crl_overdue_tolerance_s",
+        lo: 0.0,
+        hi: 31_536_000.0,
+        exclusive_lo: false,
+        what: "the overdue-CRL tolerance",
+    },
+    Bound {
+        path: "nodes.validated_cert_cache",
+        lo: 1.0,
+        hi: 1_048_576.0,
+        exclusive_lo: false,
+        what: "the validated-certificate cache size",
+    },
     // --- security engine fixes (2026-10-12) ---------------------------------
     // A relevance score is a ratio in [0, 1] (v2xw-node `relevance_from_ttc`); 0 would
     // verify everything and be `verify-all`, so it is excluded.
@@ -2758,6 +2774,20 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                Distribution Centre (the CPOC) when it joins and then every \
                crl_fetch_interval_s, over its own access, receiving only what is newer \
                (TS 102 941 §6.3.3); nothing re-issues either list during a run.",
+    },
+    KeyStatus {
+        path: "security.scms.crl_overdue_tolerance_s",
+        status: Status::Wired,
+        note: "How long past a CRL's nextCrl every device keeps trusting the certificates it \
+               governs (CAMP 1.2.2 Table 67 overdue_CRL_tolerance, two weeks unless set); \
+               after it the device refuses them (rxval `crl-overdue`).",
+    },
+    KeyStatus {
+        path: "nodes.validated_cert_cache",
+        status: Status::Wired,
+        note: "Validated end-entity certificates each device remembers (4,096 unless set; \
+               least recently used evicted, counted in ee_evictions); a forgotten signer's \
+               next message pays first-sight validation again.",
     },
     KeyStatus {
         path: "security.scms.tls",
@@ -7105,6 +7135,14 @@ fn scms_lifecycle(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ),
         ));
     }
+    if let Some(t) = s.security.scms.as_ref().and_then(|x| x.crl_overdue_tolerance_s) {
+        bounded_at(
+            "security.scms.crl_overdue_tolerance_s",
+            "security.scms.crl_overdue_tolerance_s",
+            f64::from(t),
+            e,
+        );
+    }
     let Some(l) = s.security.scms.as_ref().and_then(|x| x.lifecycle.as_ref()) else {
         return;
     };
@@ -7182,6 +7220,10 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
             n.verify_queue_depth.map(f64::from),
         ),
         ("nodes.peer_cert_cache", n.peer_cert_cache.map(f64::from)),
+        (
+            "nodes.validated_cert_cache",
+            n.validated_cert_cache.map(f64::from),
+        ),
         ("nodes.hsm_sign_lower_us", n.hsm_sign_lower_us),
         (
             "security.on_demand_threshold",

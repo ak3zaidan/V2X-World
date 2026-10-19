@@ -301,6 +301,8 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     // network audit
     ("nodes.verify_queue_depth", "messages"),
     ("nodes.peer_cert_cache", "certificates"),
+    ("nodes.validated_cert_cache", "certificates"),
+    ("security.scms.crl_overdue_tolerance_s", "s"),
     ("nodes.hsm_sign_lower_us", "us"),
     ("messages.path_history_points", "points"),
     // SCMS settings audit (docs/guides/config-inventory-scms.md)
@@ -1082,6 +1084,12 @@ impl Walk<'_> {
 fn model_default(path: &str) -> Option<Value> {
     if path == "security.scms.tls" {
         return Some(json!("1.3"));
+    }
+    if path == "security.scms.crl_overdue_tolerance_s" {
+        return Some(json!(v2xw_node::rxval::OVERDUE_CRL_TOLERANCE_S));
+    }
+    if path == "nodes.validated_cert_cache" {
+        return Some(json!(v2xw_node::rxval::EE_CACHE));
     }
     let key = path.strip_prefix("security.scms.lifecycle.")?;
     crate::phase2::lifecycle_defaults()
