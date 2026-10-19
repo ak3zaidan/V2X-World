@@ -72,8 +72,8 @@ python -I tools/realworld/runtime_realism.py check tools/realworld/runtime_expec
 | MA decision | shuffle + 8 h review (D3) | 115,183.7 s | PASS |
 | CRL publication | next business-day slot ([SM-PROV]) | 147,560.8 s (Wed 10:00 EDT) | PASS |
 | Enforcement | after the first fetch | 147,573.8 s | PASS |
-| Case board "reports in" | report arrival, 8 h before the decision | at the decision (base) → TBD-L4 (base-new) | FIXED (R-CASE) |
-| Fast-forward backend stops | ≤ 1 a minute when idle (D2): ~2,900 in 2 days | **255,658** (base) → TBD-C1 (base-new) | FIXED (R-FF) |
+| Case board "reports in" | report arrival, 8 h before the decision | at the decision (base); fix proved by its unit test, base-new NOT RUN: the build lock was held by another agent's 35-min test at the 3 h stop (§6) | FIXED (R-CASE) |
+| Fast-forward backend stops | ≤ 1 a minute when idle (D2): ~2,900 in 2 days | **255,658** (base); fix committed UNVERIFIED, base-new NOT RUN: the build lock was held by another agent's 35-min test at the 3 h stop (§6) | OPEN (R-FF fix unverified) |
 | Peak memory | < 2.5 GB cap | 154 MB | PASS |
 
 ## 3. Results: configuration changes (same seed, against `base`)
@@ -85,9 +85,9 @@ python -I tools/realworld/runtime_realism.py check tools/realworld/runtime_expec
 | `crl_publication: on-decision` | published at the decision; enforced ≈ 9 h earlier | 115,183.75 s; enforced −32,334 s; 3 CRL versions instead of 2; downloads 49→98 | PASS |
 | Both regions `us-west` | +16.7 ms per device–RA leg: haversine NYC–Ashburn 354.5 km is 2.77 ms, NYC–Boardman OR 3,691.7 km is 19.47 ms (2/3 c + 1 ms); counts unchanged | report arrival +16.70 ms; counts identical | PASS |
 | `ma_report_sharing: false` | 0 shared; revocations same or fewer | 0 shared; 3 attackers still revoked: every attacker was reported by its own provider's devices too | PASS |
-| provider-b `on_ctl: false` (rogue or test-CTL provider) | nothing B certifies verifies; nobody honest revoked | main: **panic in 5.7 s** ("the home provider has an approved root"); new: TBD-V6 | FIXED (R-OFFCTL) |
+| provider-b `on_ctl: false` (rogue or test-CTL provider) | nothing B certifies verifies; nobody honest revoked | main: **panic in 5.7 s** ("the home provider has an approved root"); fix committed UNVERIFIED | OPEN (R-OFFCTL fix unverified) |
 | 2× vehicle demand | per-device requests 1; checks ×(n…n²); cost up | median 1; checks ×2.21; CPU ×1.52; 50 honest devices reported, 0 revoked | PASS |
-| `detect/us-sm-mbr` | checks every BSM (×5–12); 0 unmapped reports; ConstantPosition catches the 3 attackers; more honest false positives (1 m drift, no streak gate, 12 m GNSS outliers) | TBD-V8 | TBD |
+| `detect/us-sm-mbr` | checks every BSM (×5–12); 0 unmapped reports; ConstantPosition catches the 3 attackers; more honest false positives (1 m drift, no streak gate, 12 m GNSS outliers) | NOT RUN: the build lock was held by another agent's 35-min test at the 3 h stop (§6) (profile and its unit tests are in; the run is owed) | OPEN |
 
 Run cost (wall / CPU s; backend ticks):
 - base: 61.6 / 64.3; 255,658
@@ -103,7 +103,7 @@ Run cost (wall / CPU s; backend ticks):
 
 ## 4. What was fixed, and what is open
 
-**Fixed**, each with a test that fails without the fix (§5):
+**Fixed** (R-SHARE and R-CASE: built, tested and fault-proved; R-OFFCTL and R-FF: committed in `UNVERIFIED` commit, not yet compiled or run, §6):
 - **R-SHARE.** `pki_view::component_ids` named only the run's own provider's components.
   - A report the other provider's MA shares was therefore recorded as sent by `ee/5` (that
     MA's node id).
@@ -124,7 +124,7 @@ Run cost (wall / CPU s; backend ticks):
     ~2,900.
   - Only versions still crossing the inter-provider link are wakes now. `visible_versions`
     already serves the ones that have arrived.
-  - Proof: base-new against base (TBD-C1). An engine fast test is owed (§6).
+  - **Not yet built or run.** Proof owed: base-new against base, and an engine fast test (§6).
 
 **Added: the strict US profile `detect/us-sm-mbr`** (`v2xw_threat::us_mbr`):
 - Subtypes and defaults are transcribed from the SCMS Manager PDF (fetched 2026-10-18, not
@@ -175,13 +175,15 @@ Rust faults were injected with `tools/mutate/mutate.py`.
 |---|---|---|
 | `ma_cases::the_case_board_dates_reports_in_from_the_arrival_not_the_decision` | arrivals ignored | RED |
 | `provider_runs::a_shared_report_is_recorded_as_sent_by_the_other_providers_ma` | foreign components skipped | RED |
-| `provider_runs::a_provider_off_the_ctl_still_runs_under_its_own_root` | home root must be approved | TBD-F6 |
+| `provider_runs::a_provider_off_the_ctl_still_runs_under_its_own_root` | home root must be approved | NOT RUN (§6) |
 | `us_mbr::tests` | MaxSpeed 120 m/s | RED |
 | `us_mbr::tests` | gpsDrift 2 m | RED |
 | `scenario::world_and_detector_inputs…` | US profile accepts any key | RED |
 | `runtime_realism.py check` (input faults) | sealed SPDU opened by the RA / RA holds a linkage value / 2 requests per OBU / cert60 tops up ×2 / west leg not slower | 5 × RED |
 
 ## 6. Owed
+
+- **First:** build and test the UNVERIFIED commit (R-OFFCTL, R-FF). Run `cargo test -p v2xw-proto --test provider_runs`, then F6 (in `scratchpad/realism/step2.sh`). Build the binary. Run `us-profile`, `off-ctl` and `base-new` and check the TBD rows of `runtime_expectations.yaml` (V6, V8, C1, L4, T4).
 
 - An engine fast test for R-FF: a short calendar run with a CRL published early in a long
   fast-forward, asserting the backend stops stay near one a minute.
