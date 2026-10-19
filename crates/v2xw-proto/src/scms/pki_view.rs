@@ -1063,7 +1063,15 @@ pub fn drain_cases(
                 .take(if c.direct { 1 } else { 2 })
                 .map(|(i, lv)| json!({"i": i, "lv": hex(lv.as_bytes())}))
                 .collect();
-            let received = stage_at(run, *r, S::ReportReceived);
+            // The reports arrive on their own runs, not the case's: the stage is the
+            // earliest arrival among the reports the case was opened on.
+            let received = c
+                .reports
+                .iter()
+                .filter_map(|&i| ma.report_runs.get(i))
+                .filter_map(|&rr| stage_at(run, rr, S::ReportReceived))
+                .min()
+                .or_else(|| stage_at(run, *r, S::ReportReceived));
             let decision = stage_at(run, *r, S::Decision);
             push(
                 tracker,
@@ -1074,7 +1082,10 @@ pub fn drain_cases(
             push(
                 tracker,
                 "corroborated",
-                decision,
+                // When the MA opened the case, and never before its evidence was in: the
+                // case is opened at the driver's instant, which can fall inside the MA's
+                // processing of the last report.
+                received.or(decision).map(|r| r.max(c.opened_at)),
                 json!({"reports": if c.direct { 1 } else { 2 }}),
             );
             push(
@@ -1104,8 +1115,20 @@ pub fn drain_cases(
                            "i_rev": c.i_rev, "jmax": c.jmax, "same_device": c.same}),
                 );
             }
-            let published = stage_at(run, c.crl_run, S::Published)
-                .or_else(|| stage_at(run, c.crl_run, S::Issued));
+            // The CRL Store's first publication at or after the entry was issued: an
+            // entry that rode along on a pending business-day or cadence publication has
+            // no `published` stage of its own, and the issue instant is not when the
+            // entry became public (the SLA can hold it for a business day).
+            let published = stage_at(run, c.crl_run, S::Published).or_else(|| {
+                let issued = stage_at(run, c.crl_run, S::Issued)?;
+                let store = run.state.nodes.crl_store;
+                run.state
+                    .crl_store
+                    .published_runs
+                    .iter()
+                    .filter_map(|&p| run.kernel.stages.at_node(p, S::Published, store))
+                    .find(|&t| t >= issued)
+            });
             if c.resolved {
                 push(
                     tracker,

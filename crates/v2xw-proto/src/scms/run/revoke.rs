@@ -129,6 +129,7 @@ impl ScmsRun {
         }
         let run = self.new_run();
         let crl_run = self.new_run();
+        let opened_at = self.kernel.now();
         self.state.ma.cases.insert(
             run,
             Case {
@@ -146,6 +147,7 @@ impl ScmsRun {
                 direct,
                 done: false,
                 reports,
+                opened_at,
             },
         );
         self.state.ma.last_case = Some(run);

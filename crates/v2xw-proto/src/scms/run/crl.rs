@@ -510,6 +510,7 @@ impl ScmsState {
                     self.crl_store.secured = secured;
                     self.crl_store.signature = signature;
                     self.crl_store.versions += 1;
+                    self.crl_store.published_runs.push(run);
                     out.stage_at(StageId::Published, to, Some(size), flow, run);
                 } else {
                     self.crl_broadcast.entries = list;

@@ -585,6 +585,9 @@ pub struct MaState {
     /// The evidence of reports still on their way that carry no secured report to read it
     /// from (shared over the MA-to-MA link, or modelled), by their run.
     pub pending_evidence: BTreeMap<FlowRun, ReportEvidence>,
+    /// Per entry of [`MaState::reports`] (same index): the run it reached the MA on, whose
+    /// `report-received` stamp is when the MA had it (a case runs on a run of its own).
+    pub report_runs: Vec<FlowRun>,
 }
 
 /// What one received report's evidence was, as the MA decoded it ([SM-MBR] §2.3: the
@@ -669,6 +672,9 @@ pub struct Case {
     /// The indices in [`MaState::reports`] the case was opened on (one for a direct
     /// revocation, two for a link); [`MaState::report_evidence`] has their evidence.
     pub reports: Vec<usize>,
+    /// When the MA opened it: its pipeline had the evidence it acts on (the operator's
+    /// review, under manual review, starts here).
+    pub opened_at: SimTime,
 }
 
 /// The CRL Generator's and the CRL Store's state.
@@ -700,6 +706,11 @@ pub struct CrlState {
     pub hash_serial: BTreeMap<u16, u32>,
     /// The latest full hash CRL per series.
     pub hash_crls: BTreeMap<u16, crate::scms::pdu::Pdu>,
+    /// The run of each CRL version that reached this entity, in order (CRL Store only):
+    /// the instant a case's entry became public is the first of their `published` stamps
+    /// at or after its issue, since entries appended while a business-day or cadence
+    /// publication is pending ride along on it without a stage of their own.
+    pub published_runs: Vec<FlowRun>,
 }
 
 /// The Enrolment CA's state.
