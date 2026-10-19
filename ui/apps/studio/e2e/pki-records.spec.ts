@@ -70,6 +70,10 @@ test("the Cases board holds each case in its pki.case column, and an entity's vi
   // Seen as LA1: its steps only, no reporter or accused, no ground-truth block.
   await page.getByTestId("pki-view").selectOption("provider-a/la1/0");
   await expect(page.getByTestId("pki-cases-as")).toBeVisible();
+  // An LA does not hold the MA's case table: its diagram shows the steps it took part in, no stage reached.
+  await expect(page.getByTestId("pki-case-stages")).toBeVisible();
+  await expect(page.locator('[data-testid="pki-case-stages"] > li.reached')).toHaveCount(0);
+  await expect(page.locator('[data-testid="pki-case-stages"] .pkir-step-msgs li')).not.toHaveCount(0);
   await expect(page.getByTestId("pki-case-truth")).toHaveCount(0);
   await expect(page.getByTestId("pki-cases")).not.toContainText("ee/");
 });

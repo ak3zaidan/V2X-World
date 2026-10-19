@@ -67,8 +67,8 @@ export function RevocationTab({ view }: { readonly view: string | null }): React
                   <td className="mono">{r.series}</td>
                   <td>{r.kind === "linkage" ? "pseudonyms (linkage)" : r.kind === "hash" ? "certificates (hash)" : r.kind}</td>
                   <td className="mono">v{r.newest.version}{r.newest.delta ? " Δ" : ""} <span className="faint">({r.versions.length} lists)</span></td>
-                  <td className="mono">{time32Text(r.newest.issue_date)}</td>
-                  <td className="mono">{time32Text(r.newest.next_crl)}</td>
+                  <td className="mono" title={time32Text(r.newest.issue_date)}>{shortDate(r.newest.issue_date)}</td>
+                  <td className="mono" title={time32Text(r.newest.next_crl)}>{shortDate(r.newest.next_crl)}</td>
                   <td className="mono">{r.newest.entries}</td>
                   <td className="mono">{r.newest.bytes} B</td>
                   <td className={`mono ${r.newest.sla_now_s < 0 ? "bad" : ""}`} data-testid="pki-crl-sla">
@@ -106,6 +106,11 @@ export function RevocationTab({ view }: { readonly view: string | null }): React
       {chosen ? <CrlCard id8={chosen} view={view} head={crls?.crls.find((c) => c.id8 === chosen) ?? null} /> : <div className="pkir-card dim">Choose a list to see its entries.</div>}
     </div>
   );
+}
+
+/** A Time32 as month-day and time (`03-04 08:02`); the full UTC date is the cell's tooltip. */
+function shortDate(t: number): string {
+  return time32Text(t).slice(5, 16);
 }
 
 /** How much of the list's validity window (issueDate to nextCrl) has gone, as a bar. */

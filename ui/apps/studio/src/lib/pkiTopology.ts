@@ -88,7 +88,7 @@ export const ROLE_INFO: Readonly<Record<string, RoleInfo>> = {
     does: "Serves the published revocation list to devices over the network.",
   },
   "crl-broadcast": {
-    name: "List broadcast",
+    name: "List relay",
     term: "CRL Broadcast",
     does: "Hands the revocation list to roadside units, which rebroadcast it over the air.",
   },
@@ -381,8 +381,6 @@ export function layoutTopology(state: PkiState, width: number, messages: readonl
       role === "devices" ? [`devices/${p.label}`] : nodes.filter((nd) => nd.provider === p.label && nd.role === role && nd.kind === "component").map((nd) => nd.id);
     for (const [ra, rb] of DEFINED_LINKS) for (const a of idOf(ra)) for (const b of idOf(rb)) add(a, b, true);
   }
-  const mgr = managers.find((c) => c.role === "manager");
-  if (mgr) for (const e of electors) add(e.id, mgr.id, true);
   for (const m of messages) {
     const a = nodeOf(m.from, m.to, m.provider);
     const b = nodeOf(m.to, m.from, m.provider);
@@ -454,6 +452,8 @@ export { linkKey };
 
 /** The header strip's numbers; null where the data to say it is not available in this view. */
 export interface Health {
+  /** Whether `revoked` counts the devices a published list names (ground truth) or the providers' own revocations. */
+  readonly revokedByList: boolean;
   /** Usable pseudonym certificates across the vehicles (ground truth: their own pools). */
   readonly certificates: number | null;
   /** Requests queued at the authorities, plus top-ups in flight at the vehicles. */
@@ -471,7 +471,14 @@ export interface Health {
 /** The strip from the newest trust snapshot and, when the view allows, the vehicles and cases. */
 export function healthOf(
   trust: TrustAnswer,
-  vehicles: readonly { readonly usable: number; readonly security?: { readonly topup_in_flight?: boolean } | null }[] | null,
+  vehicles:
+    | readonly {
+        readonly usable: number;
+        readonly revoked?: boolean;
+        readonly security?: { readonly topup_in_flight?: boolean } | null;
+        readonly truth?: { readonly revoked_certs: number } | null;
+      }[]
+    | null,
   cases: readonly { readonly stages: readonly { readonly stage: string }[] }[] | null,
 ): Health {
   const s = trust.state;
@@ -496,7 +503,11 @@ export function healthOf(
     devices += p.devices.devices;
     revoked += p.devices.revoked;
   }
+  // With the vehicles (ground truth), a device is revoked when a published list names it,
+  // installed or not; without them, the providers' own count.
+  if (vehicles) revoked = vehicles.filter((v) => v.revoked === true || (v.truth?.revoked_certs ?? 0) > 0).length;
   return {
+    revokedByList: vehicles !== null,
     certificates: vehicles ? vehicles.reduce((n, v) => n + v.usable, 0) : null,
     pending,
     openCases: open,

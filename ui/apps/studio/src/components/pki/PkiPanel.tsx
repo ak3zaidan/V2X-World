@@ -167,7 +167,7 @@ export function PkiPanel({ close }: { readonly close: () => void }): React.JSX.E
           </select>
         </label>
         {trust ? (
-          <span className="dim mono" data-testid="pki-time" title="The snapshot's instant: simulated time and Time32">
+          <span className="dim mono pki-time" data-testid="pki-time" title="The snapshot's instant: simulated time and Time32">
             {trust.state.edition} · {trust.state.preset} · t {(trust.t_ns / 1e9).toFixed(0)} s
           </span>
         ) : null}

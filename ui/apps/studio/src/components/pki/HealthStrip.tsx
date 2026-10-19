@@ -59,7 +59,7 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
         tab="vehicles"
         label="revoked devices"
         value={`${h.revoked} of ${h.devices}`}
-        tip="Devices whose enrolment the provider has revoked, of all its devices"
+        tip={h.revokedByList ? "Devices a published revocation list names (ground truth: installed or not), of all devices" : "Devices the providers count as revoked, of all devices"}
         tone={h.revoked > 0 ? "bad" : undefined}
         testId="pki-health-revoked"
       />

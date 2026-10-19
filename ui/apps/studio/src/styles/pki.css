@@ -317,3 +317,7 @@
 @media (max-width: 1200px) {
   .pki-body.with-drawer { grid-template-columns: minmax(0, 1fr) 360px; }
 }
+@media (max-width: 1200px) {
+  .pki-time { display: none; }
+}
+.pki-node .r { font-size: 11.5px; }

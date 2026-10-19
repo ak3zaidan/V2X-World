@@ -137,6 +137,11 @@ describe("the health strip", () => {
     expect(h.crlAgeS).not.toBeNull();
     expect(h.crlAgeS!).toBeGreaterThanOrEqual((newest.t_ns - Math.max(...issued)) / 1e9 - 1e-9);
     expect(healthOf(newest, null, null).certificates).toBeNull();
+    // Revoked: in ground truth, the vehicles a published list names, installed or not.
+    const named = (tabs.vehicles.vehicles as { revoked: boolean; truth?: { revoked_certs: number } }[]).filter((v) => v.revoked || (v.truth?.revoked_certs ?? 0) > 0).length;
+    expect(named).toBeGreaterThan(0);
+    expect(h.revoked).toBe(named);
+    expect(healthOf(newest, null, null).revoked).toBe(newest.state.providers.reduce((n, p) => n + p.devices.revoked, 0));
   });
 });
 
