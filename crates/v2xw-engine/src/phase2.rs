@@ -693,14 +693,8 @@ impl LifecycleParams {
             root_rollover_at: None,
             root_removal_at: None,
         };
-        let empty = serde_json::Map::new();
-        let map = scenario
-            .security
-            .protocol
-            .as_ref()
-            .and_then(|c| c.params.as_object())
-            .unwrap_or(&empty);
-        for (key, value) in map {
+        let map = lifecycle_map(scenario);
+        for (key, value) in &map {
             let v = value.as_f64().ok_or_else(|| {
                 conflict(
                     &format!("security.protocol.params.{key}"),
@@ -738,6 +732,9 @@ impl LifecycleParams {
                 "crl_broadcast_interval_s" => p.crl_broadcast_interval = secs(v.max(0.1)),
                 "first_batch_delay_s" => p.scms.first_batch_delay = secs(v),
                 "download_poll_interval_s" => p.scms.download_poll_interval = secs(v.max(0.1)),
+                "max_download_polls" => p.scms.max_download_polls = (v.round() as u32).max(1),
+                "download_request_tolerance_s" => p.scms.download_request_tolerance = secs(v),
+                "ma_max_open_cases" => p.scms.ma.max_open_cases = (v.round() as u32).max(1),
                 "enrolment_lifetime_s" => p.scms.enrolment_lifetime = secs(v.max(1.0)),
                 "reenrol_lead_s" => p.scms.reenrol_lead = secs(v),
                 "reenrol_download_delay_s" => p.scms.reenrol_download_delay = secs(v),
@@ -852,12 +849,7 @@ fn apply_crl_publication_of(
     p: &mut ScmsParams,
 ) {
     use v2xw_proto::scms::deployment::CrlPublication;
-    let explicit = scenario
-        .security
-        .protocol
-        .as_ref()
-        .and_then(|c| c.params.get("crl_cadence_s"))
-        .is_some();
+    let explicit = lifecycle_param(scenario, "crl_cadence_s").is_some();
     if explicit || p.calendar_epoch_unix_s.is_none() {
         return;
     }
@@ -868,8 +860,81 @@ fn apply_crl_publication_of(
     }
 }
 
-/// The lifecycle keys `security.protocol.params` accepts.
-pub const LIFECYCLE_KEYS: [&str; 22] = [
+/// The lifecycle keys a scenario states: `security.protocol.params`, with every field of
+/// `security.scms.lifecycle` written over it (the typed, published field wins).
+#[must_use]
+pub fn lifecycle_map(scenario: &Scenario) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = scenario
+        .security
+        .protocol
+        .as_ref()
+        .and_then(|c| c.params.as_object())
+        .cloned()
+        .unwrap_or_default();
+    if let Some(l) = scenario
+        .security
+        .scms
+        .as_ref()
+        .and_then(|s| s.lifecycle.as_ref())
+    {
+        for (k, v) in l.entries() {
+            map.insert(k.to_string(), serde_json::json!(v));
+        }
+    }
+    map
+}
+
+/// One lifecycle key's stated value ([`lifecycle_map`]), `None` when the scenario leaves
+/// it at the model's default.
+#[must_use]
+pub fn lifecycle_param(scenario: &Scenario, key: &str) -> Option<f64> {
+    lifecycle_map(scenario)
+        .get(key)
+        .and_then(serde_json::Value::as_f64)
+}
+
+/// What every `security.scms.lifecycle` field stands for when it is left out, on the
+/// real calendar: the model's own defaults ([`ScmsParams::default`] and the engine's
+/// fleet constants), read from the code so the published number cannot drift from the
+/// one a run uses. `crl_cadence_s` has none: absent, each provider follows its own
+/// publication rule (the US presets' one-business-day SLA).
+#[must_use]
+pub fn lifecycle_defaults() -> Vec<(&'static str, serde_json::Value)> {
+    use serde_json::json;
+    let p = ScmsParams::default();
+    let s = |d: Duration| json!(d.as_nanos() as f64 / 1e9);
+    let review = match p.ma.mode {
+        v2xw_proto::scms::params::MaMode::ManualReview { review } => s(review),
+        v2xw_proto::scms::params::MaMode::Automatic => json!(0.0),
+    };
+    vec![
+        ("i_period_s", s(p.i_period)),
+        ("cert_lifetime_s", s(p.cert_lifetime)),
+        ("certs_per_period", json!(p.certs_per_period)),
+        ("pool_periods", json!(v2xw_proto::scms::DEVICE_POOL_PERIODS)),
+        ("topup_below_periods", json!(1)),
+        ("max_periods_ahead", json!(p.max_periods_ahead)),
+        ("cert_shuffle_threshold", json!(p.shuffle_threshold)),
+        ("cert_shuffle_window_s", s(p.shuffle_window)),
+        ("report_shuffle_threshold", json!(p.report_shuffle_threshold)),
+        ("report_shuffle_window_s", s(p.report_shuffle_window)),
+        ("first_batch_delay_s", s(p.first_batch_delay)),
+        ("download_poll_interval_s", s(p.download_poll_interval)),
+        ("max_download_polls", json!(p.max_download_polls)),
+        ("download_request_tolerance_s", s(p.download_request_tolerance)),
+        ("enrolment_lifetime_s", s(p.enrolment_lifetime)),
+        ("reenrol_lead_s", s(p.reenrol_lead)),
+        ("reenrol_download_delay_s", s(p.reenrol_download_delay)),
+        ("crl_fetch_interval_s", json!(CRL_FETCH_INTERVAL_S)),
+        ("crl_broadcast_interval_s", json!(CRL_BROADCAST_INTERVAL_S)),
+        ("ma_review_s", review),
+        ("ma_max_open_cases", json!(p.ma.max_open_cases)),
+    ]
+}
+
+/// The lifecycle keys `security.protocol.params` accepts (and `security.scms.lifecycle`
+/// publishes, except the ETSI and governance-event keys).
+pub const LIFECYCLE_KEYS: [&str; 25] = [
     "i_period_s",
     "cert_lifetime_s",
     "certs_per_period",
@@ -884,6 +949,9 @@ pub const LIFECYCLE_KEYS: [&str; 22] = [
     "crl_broadcast_interval_s",
     "first_batch_delay_s",
     "download_poll_interval_s",
+    "max_download_polls",
+    "download_request_tolerance_s",
+    "ma_max_open_cases",
     "enrolment_lifetime_s",
     "reenrol_lead_s",
     "reenrol_download_delay_s",
@@ -1573,6 +1641,10 @@ pub struct Phase2 {
     /// The devices a revocation has been issued or decided for (ground truth, run report
     /// only), so a device two of whose pseudonyms were decided is counted once.
     revoked_devices: BTreeSet<NodeId>,
+    /// When each device that left the run left, in leaving order: with the devices still
+    /// present, the population a published CRL had to reach (the PKI view's "enforced by
+    /// n of N", whose N is every device present at any instant since publication).
+    retired_at: Vec<SimTime>,
     /// The devices the authority has decided to revoke, as the PCA and linkage
     /// authorities resolve a reported pseudonym (joint 2): one decision per device.
     ma_decided_devices: BTreeSet<NodeId>,
@@ -2213,6 +2285,7 @@ impl Phase2 {
             attacker_at_ma: BTreeMap::new(),
             attacker_peak_events: BTreeMap::new(),
             revoked_devices: BTreeSet::new(),
+            retired_at: Vec::new(),
             ma_decided_devices: BTreeSet::new(),
             broadcast_accuracy: BTreeMap::new(),
             privacy_chains: BTreeMap::new(),
@@ -3044,10 +3117,11 @@ impl Phase2 {
             .map(|p| std::sync::Arc::<[u8]>::from(p.bytes()))
     }
 
-    /// Forgets a retired vehicle.
-    pub fn retire(&mut self, node: NodeId) {
+    /// Forgets a vehicle that left the run at `now`.
+    pub fn retire(&mut self, node: NodeId, now: SimTime) {
         self.access.retire(node);
         if let Some(n) = self.nodes.remove(&node) {
+            self.retired_at.push(now);
             // Its unsent reports leave with it; they are counted as unsent here because
             // the vehicle took them out of the run.
             self.report.reports_lost += n.outbox.0.len() as u64;
@@ -4285,6 +4359,16 @@ impl Phase2 {
         self.views = self.views.wrapping_add(1);
     }
 
+    /// How many devices were present at some instant from `since` on: every device still
+    /// present (joined before or after `since`) and every one that left at or after it.
+    /// The denominator of "enforced by n of N": a vehicle that installed the CRL and then
+    /// drove away is still one of the N it reached, and one that left before the CRL was
+    /// published is not.
+    fn devices_since(&self, since: SimTime) -> u32 {
+        let left_after = self.retired_at.len() - self.retired_at.partition_point(|&t| t < since);
+        u32::try_from(self.nodes.len() + left_after).unwrap_or(u32::MAX)
+    }
+
     /// The PKI view's records at `now` (WP-E1): the trust domain's state, every message,
     /// stage stamp and SPDU since the last view, the case board's transitions and, every
     /// [`KNOWLEDGE_EVERY`] views, what each entity holds. Published SPDUs' bytes are
@@ -4304,15 +4388,18 @@ impl Phase2 {
                 p.bytes = None;
             }
         }
-        let vehicles = u32::try_from(self.nodes.len()).unwrap_or(u32::MAX);
         let enforced = |k: usize, c: &v2xw_proto::scms::run::Case| -> Option<(Vec<SimTime>, u32)> {
             let ours = self
                 .cases
                 .iter()
                 .find(|e| e.provider == k && e.runs.is_some_and(|(r, _)| r == c.run))?;
             ours.entry.as_ref()?;
+            let since = self.runs[k]
+                .kernel
+                .stages
+                .at(c.crl_run, StageId::Published)?;
             let list = ours.enforcers.iter().map(|&(_, at)| at).collect();
-            Some((list, vehicles))
+            Some((list, self.devices_since(since)))
         };
         tick.pki.cases = pki_view::drain_cases(&self.runs, &mut tracker, now, &enforced);
         if self.views % KNOWLEDGE_EVERY == 0 {

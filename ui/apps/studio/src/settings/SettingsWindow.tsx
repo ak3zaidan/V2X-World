@@ -2,7 +2,7 @@
  * The settings window: every setting a run is started from, in a window of its own.
  *
  * A left navigation of sections in the order a researcher works (Run, Traffic, Radio & Channel,
- * Medium Access, Congestion Control, Messages, Networking, Security & Certificates, Backend &
+ * Medium Access, Congestion Control, Messages, Networking, Security & Crypto, Certificates & SCMS, Backend &
  * Cellular, Attackers, Output; `model.ts` `RESEARCH_SECTIONS`), one section on the page at a time,
  * its Basic settings first and its Advanced ones behind one toggle. The search box looks across
  * every section. "Changes" lists what differs from the scenario the engine holds, each with an undo.

@@ -135,6 +135,14 @@ const SECTION_LABELS: Record<string, string> = {
   tiers: "Fidelity",
   gnss: "Positioning",
   crypto_mode: "Cryptography",
+  // Certificates & SCMS sub-headings.
+  lifecycle: "Certificates, shuffle, downloads, revocation and MA",
+  deployment: "Deployment and providers",
+  protocol: "Credential system",
+  pseudonym_change: "Pseudonym change",
+  signer_id_policy: "Certificate or digest in each message",
+  threshold: "Threshold committees",
+  misbehaviour_authority: "Misbehaviour Authority decision",
 };
 
 export function humanise(key: string): string {
@@ -320,7 +328,13 @@ export const RESEARCH_SECTIONS: readonly ResearchSection[] = [
   { id: "dcc", name: "Congestion Control", blurb: "How radios back off when the channel is busy." },
   { id: "messages", name: "Messages", blurb: "Which messages are sent, how often, and the applications using them.", home: "messages" },
   { id: "net", name: "Networking", blurb: "WSMP or GeoNetworking/BTP, forwarding and fragmentation.", home: "net" },
-  { id: "security", name: "Security & Certificates", blurb: "Signatures, certificates, pseudonyms and on-board hardware.", home: "security" },
+  { id: "security", name: "Security & Crypto", blurb: "Signature schemes, verification policy, crypto hardware and certificate caches.", home: "security" },
+  {
+    id: "scms",
+    name: "Certificates & SCMS",
+    blurb:
+      "The certificate system: providers and authorities, pseudonym certificates per week and when they change, the RA shuffle, downloads, enrolment, revocation lists and the Misbehaviour Authority.",
+  },
   { id: "backend", name: "Backend & Cellular", blurb: "The SCMS backend and the cellular and IP links that reach it." },
   { id: "attackers", name: "Attackers", blurb: "Attackers, jammers, eavesdroppers and misbehaviour detection.", home: "threats" },
   { id: "output", name: "Output", blurb: "What is measured and which files the run writes.", home: "metrics" },
@@ -348,6 +362,19 @@ export function researchSectionOf(f: Field): string | null {
     path.includes("access_categories")
   )
     return "mac";
+  // The certificate system, wherever the engine files its parts: the deployment and the
+  // lifecycle knobs, the credential protocol, when a vehicle changes pseudonym and attaches
+  // its certificate, threshold committees, the SCMS backend entities and the MA's decision.
+  if (
+    path.startsWith("security.scms") ||
+    path.startsWith("security.protocol") ||
+    path.startsWith("security.pseudonym_change") ||
+    path.startsWith("security.signer_id_policy") ||
+    path.startsWith("security.threshold") ||
+    path.startsWith("actors.backend") ||
+    path.startsWith("detection.ma")
+  )
+    return "scms";
   if (has("uu", "cellular", "backhaul", "tcp", "gnb", "enb") || path.startsWith("net.backend") || path.startsWith("actors.backend") || path.startsWith("nodes.backend"))
     return "backend";
   if (top === "meta" || top === "schema" || top === "seed" || top === "time" || top === "events" || top === "experiment") return "run";
@@ -382,6 +409,14 @@ export interface ResearchGroup {
 /** The sub-heading a field sits under inside its section: the scenario key below the top one. */
 export function subKeyOf(f: Field, section: ResearchSection | undefined): string {
   const parts = fieldPath(f).split(".").map((p) => p.replace(/\[\]$/, ""));
+  if (section?.id === "scms") {
+    // `security.scms.lifecycle.*` under "lifecycle", `security.scms.pki_view` under General,
+    // `security.pseudonym_change.*` under its own key, the backend under "backend".
+    if (parts[0] === "security" && parts[1] === "scms") return parts.length >= 4 ? parts[2] : "";
+    if (parts[0] === "security") return parts[1] ?? "";
+    if (parts[0] === "detection") return "misbehaviour_authority";
+    return parts[1] ?? parts[0];
+  }
   if (parts.length >= 3 && section?.home === parts[0]) return parts[1];
   const top = parts[0] ?? f.group;
   return section?.home === top ? "" : top;

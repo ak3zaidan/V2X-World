@@ -874,6 +874,17 @@ impl BackendAccess {
             None => backhaul_from("backhaul/fixed", &serde_json::Value::Null, nominal_uu)?,
             Some(choice) => backhaul_from(&choice.id, &choice.params, nominal_uu)?,
         };
+        // `security.scms.tls` (SCMS settings audit): TLS 1.3 unless the scenario states 1.2.
+        let mut carrier = Carrier::new(packet, internet);
+        if scenario
+            .security
+            .scms
+            .as_ref()
+            .and_then(|s| s.tls.as_deref())
+            == Some("1.2")
+        {
+            carrier.set_tls(v2xw_radio::ip_transport::TlsVersion::Tls12);
+        }
         Ok(BackendAccess {
             uu,
             uu_id,
@@ -890,7 +901,7 @@ impl BackendAccess {
                 .as_ref()
                 .map_or(serde_json::Value::Null, |c| c.params.clone()),
             kinds: BTreeMap::new(),
-            carrier: Arc::new(Mutex::new(Carrier::new(packet, internet))),
+            carrier: Arc::new(Mutex::new(carrier)),
             crl_delivery,
             mbms,
             report: AccessReport::default(),

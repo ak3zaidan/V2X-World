@@ -3434,7 +3434,7 @@ impl Engine {
                 self.node_actor.remove(&node);
                 self.retired.push((now, node));
                 if let Some(phase2) = self.phase2.as_mut() {
-                    phase2.retire(node);
+                    phase2.retire(node, now);
                 }
                 if let Some(policy) = self.pseudonym_policy.as_mut() {
                     policy.on_retire(node);

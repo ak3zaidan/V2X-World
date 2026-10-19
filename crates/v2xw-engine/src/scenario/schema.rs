@@ -2466,6 +2466,147 @@ pub struct ScmsSpec {
     /// Backend view's `backend.state` is published either way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pki_view: Option<bool>,
+    /// The credential lifecycle's timing and capacity knobs (certificates per week, the
+    /// RA shuffle, downloads, enrolment, CRL cadence and distribution, the MA's review),
+    /// each a field of its own. Every field left out keeps the cited default, and a field
+    /// set here wins over the same key in `security.protocol.params`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<LifecycleSpec>,
+    /// The TLS version of every device-to-RA session (`session-scmsAuth`, SCMS Manager EE
+    /// profile §2.1.18: TLS 1.2 or 1.3): `1.3` (default) or `1.2`, whose handshake costs
+    /// one more round trip before the first request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<String>,
+}
+
+/// `security.scms.lifecycle`: the credential lifecycle's knobs as typed, published fields.
+///
+/// The same model reads them as `security.protocol.params` (`phase2::LIFECYCLE_KEYS`); this
+/// block is what the settings window shows. Defaults are the US deployment's, cited on each
+/// field's guide row.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleSpec {
+    /// The i-period, s: how long one set of pseudonym certificates is current (one week,
+    /// 604,800 s, CAMP-EE §2.1.5.3.2). Anything shorter needs `time.calendar: compressed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub i_period_s: Option<f64>,
+    /// A pseudonym certificate's lifetime, s: the i-period plus the overlap (10,140 min,
+    /// one hour longer than the week, CAMP-EE §2.1.5.3.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert_lifetime_s: Option<f64>,
+    /// Pseudonym certificates per i-period, all valid at once (20, CAMP-EE Table
+    /// 2.1.2.6.2; at most 60).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certs_per_period: Option<u32>,
+    /// i-periods a vehicle holds when the run starts (2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool_periods: Option<u32>,
+    /// A vehicle asks for its next period when fewer than this many periods, the current
+    /// one counted, remain (1; 0 turns top-ups off).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topup_below_periods: Option<u32>,
+    /// The most i-periods ahead the RA provisions a device (156, three years, CAMP Primer
+    /// p.7: 3,120 = 156 × 20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_periods_ahead: Option<u32>,
+    /// Certificate requests that release the RA's shuffle before its window closes
+    /// (1,000, CAMP 1.2.2 Table 67 `shuffle_threshold`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert_shuffle_threshold: Option<u32>,
+    /// The longest a certificate request waits in the RA's shuffle, s (2 days, CAMP 1.2.2
+    /// Table 67 `max_cert_request_age`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert_shuffle_window_s: Option<f64>,
+    /// Misbehaviour reports that release the RA's report shuffle (10,000, CAMP-EE
+    /// SCMS-765).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_shuffle_threshold: Option<u32>,
+    /// The longest a misbehaviour report waits in the RA's shuffle, s (one day, CAMP-EE
+    /// SCMS-765).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_shuffle_window_s: Option<f64>,
+    /// How long after the RA's acknowledgement a device first polls for its batch, s (60).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_batch_delay_s: Option<f64>,
+    /// `download-minWait`, s: the wait between polls of a batch that is not ready (300,
+    /// SCMS Manager EE profile Table 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_poll_interval_s: Option<f64>,
+    /// `download-maxReqs`: how many polls a device makes before it gives up on a batch
+    /// (100, SCMS Manager EE profile Table 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_download_polls: Option<u32>,
+    /// How far a download request's generation time may be from the RA's clock, s (5,
+    /// CAMP 1.2.2 SCMS-1203 `ra.client-signature-ttl-sec`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_request_tolerance_s: Option<f64>,
+    /// The enrolment certificate's lifetime, s (six years, CAMP 1.2.2 Table 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enrolment_lifetime_s: Option<f64>,
+    /// How long before the enrolment certificate expires the device re-enrols, s (548
+    /// days, SCMS Manager re-enrolment standard: 12 to 24 months).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reenrol_lead_s: Option<f64>,
+    /// The wait between a re-enrolment request and its download, s (300, the profile's
+    /// `download-minWait`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reenrol_download_delay_s: Option<f64>,
+    /// A fixed CRL publication cadence, s. Absent: each provider's own rule (the US
+    /// presets publish within one business day of a decision, SCMS Manager Provider
+    /// Requirements §3.4.9). 0 publishes on decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crl_cadence_s: Option<f64>,
+    /// How often a cellular vehicle polls for a new CRL, s (3,600).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crl_fetch_interval_s: Option<f64>,
+    /// How often a roadside unit with the `crl` role repeats the CRL over the air, s (5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crl_broadcast_interval_s: Option<f64>,
+    /// The Misbehaviour Authority operator's review before a revocation is carried out,
+    /// s. 0 is the automatic MA. Absent: 8 h on the real calendar (the pilots' manual
+    /// review), automatic on a compressed one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ma_review_s: Option<f64>,
+    /// The most investigations the Misbehaviour Authority keeps open at once (1,000, an
+    /// assumption: no MA capacity is published); a case beyond it waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ma_max_open_cases: Option<u32>,
+}
+
+impl LifecycleSpec {
+    /// Every field that is set, as `(key, value)` in `security.protocol.params` spelling.
+    #[must_use]
+    pub fn entries(&self) -> Vec<(&'static str, f64)> {
+        let u = |v: Option<u32>| v.map(f64::from);
+        [
+            ("i_period_s", self.i_period_s),
+            ("cert_lifetime_s", self.cert_lifetime_s),
+            ("certs_per_period", u(self.certs_per_period)),
+            ("pool_periods", u(self.pool_periods)),
+            ("topup_below_periods", u(self.topup_below_periods)),
+            ("max_periods_ahead", u(self.max_periods_ahead)),
+            ("cert_shuffle_threshold", u(self.cert_shuffle_threshold)),
+            ("cert_shuffle_window_s", self.cert_shuffle_window_s),
+            ("report_shuffle_threshold", u(self.report_shuffle_threshold)),
+            ("report_shuffle_window_s", self.report_shuffle_window_s),
+            ("first_batch_delay_s", self.first_batch_delay_s),
+            ("download_poll_interval_s", self.download_poll_interval_s),
+            ("max_download_polls", u(self.max_download_polls)),
+            ("download_request_tolerance_s", self.download_request_tolerance_s),
+            ("enrolment_lifetime_s", self.enrolment_lifetime_s),
+            ("reenrol_lead_s", self.reenrol_lead_s),
+            ("reenrol_download_delay_s", self.reenrol_download_delay_s),
+            ("crl_cadence_s", self.crl_cadence_s),
+            ("crl_fetch_interval_s", self.crl_fetch_interval_s),
+            ("crl_broadcast_interval_s", self.crl_broadcast_interval_s),
+            ("ma_review_s", self.ma_review_s),
+            ("ma_max_open_cases", u(self.ma_max_open_cases)),
+        ]
+        .into_iter()
+        .filter_map(|(k, v)| v.map(|v| (k, v)))
+        .collect()
+    }
 }
 
 /// `security.scms.deployment`: the providers on the CTL and what each runs.

@@ -22,8 +22,39 @@ describe("research sections", () => {
 
   it("orders sections as a researcher works and keeps unclaimed groups after them", () => {
     const tree = buildResearchTree([f("wholly.new_key", "Novel"), f("security.signature"), f("radio.rat"), f("radio.devices.obu.tx_power_dbm"), f("time.duration_s")]);
-    expect(tree.map((g) => g.name)).toEqual(["Run", "Radio & Channel", "Security & Certificates", "Novel"]);
+    expect(tree.map((g) => g.name)).toEqual(["Run", "Radio & Channel", "Security & Crypto", "Novel"]);
     expect(tree[1].subs.map((s) => s.label)).toEqual(["General", "Devices"]);
+  });
+
+  it("gathers the certificate system under Certificates & SCMS, after Security", () => {
+    for (const p of [
+      "security.scms.lifecycle.certs_per_period",
+      "security.scms.deployment.preset",
+      "security.protocol.id",
+      "security.pseudonym_change.period_s",
+      "security.signer_id_policy.full_cert_every_ms",
+      "security.threshold.members",
+      "actors.backend.entities",
+      "detection.ma",
+    ])
+      expect(researchSectionOf(f(p)), p).toBe("scms");
+    expect(researchSectionOf(f("security.signature"))).toBe("security");
+    expect(researchSectionOf(f("nodes.peer_cert_cache"))).toBe("security");
+    expect(researchSectionOf(f("net.uu.latency_ms"))).toBe("backend");
+    const tree = buildResearchTree([
+      f("security.scms.lifecycle.crl_fetch_interval_s"),
+      f("security.scms.pki_view"),
+      f("security.scms.deployment.preset"),
+      f("security.signature"),
+      f("security.pseudonym_change.strategy"),
+    ]);
+    expect(tree.map((g) => g.name)).toEqual(["Security & Crypto", "Certificates & SCMS"]);
+    expect(tree[1].subs.map((s) => s.label)).toEqual([
+      "General",
+      "Certificates, shuffle, downloads, revocation and MA",
+      "Deployment and providers",
+      "Pseudonym change",
+    ]);
   });
 
   it("files the traffic, sidelink and queue settings, and never repeats a section id", () => {
