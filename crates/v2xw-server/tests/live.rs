@@ -423,7 +423,9 @@ fn a_grouped_metrics_query_answers_the_breakdowns_the_stream_does_not_carry() {
         &[
             ("duration_s: 60.0", "duration_s: 20.0"),
             ("rate_veh_per_h: 30.0", "rate_veh_per_h: 6000.0"),
-            ("metrics: [pdr]", "metrics: [all]"),
+            // The scenario publishes the standard metric set itself (`metrics: [all]`); the
+            // no-op edit pins that, so the grouped breakdowns below stay available.
+            ("metrics: [all]", "metrics: [all]"),
         ],
     );
     let mut engine = LiveEngine::open(&path, options()).expect("build");
