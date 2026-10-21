@@ -117,7 +117,9 @@ struct Outcome {
     report: RunReport,
     capture: Capture,
     /// Per provider run: its label, the SPDUs it emitted (kind names), its refusals.
-    runs: Vec<(String, Vec<&'static str>, usize)>,
+    /// Per provider: its label, the kind of every SPDU emitted on a leg the deployment
+    /// runs, its rejections, and the kinds emitted on a folded LOP-RA leg (none deployed).
+    runs: Vec<(String, Vec<&'static str>, usize, Vec<&'static str>)>,
     /// The flow records' SPDUs.
     pdus: Vec<PduRef>,
     /// Device node → provider index.
@@ -165,10 +167,18 @@ fn outcome() -> &'static Outcome {
             .scms_runs()
             .iter()
             .map(|r| {
+                // Without a deployed LOP the transparent LOP-RA hop is not a message of
+                // the deployment; its SPDUs are twins of the device leg's.
+                let (lop, ra) = (r.state.nodes.lop.index(), r.state.nodes.ra.index());
+                let folded = |p: &v2xw_proto::scms::pdu::EmittedPdu| {
+                    !r.state.deployment.options.lop
+                        && ((p.from == lop && p.to == ra) || (p.from == ra && p.to == lop))
+                };
                 (
                     v2xw_proto::scms::pki_view::provider_label(r),
-                    r.state.pdus.iter().map(|p| p.kind.name()).collect(),
+                    r.state.pdus.iter().filter(|p| !folded(p)).map(|p| p.kind.name()).collect(),
                     r.state.pdu_rejections.len(),
+                    r.state.pdus.iter().filter(|p| folded(p)).map(|p| p.kind.name()).collect(),
                 )
             })
             .collect();
@@ -374,7 +384,7 @@ fn write_capture(o: &Outcome, engine: &Engine, dir: &Path) {
             .filter_map(|a| a.decided_ns.map(|t| (a.node + SCMS_DEVICE_BASE, p2.scms().state.time32(t))))
             .collect::<Vec<_>>(),
         "rsus": p2.rsu_nodes().iter().map(|n| n.index() + SCMS_DEVICE_BASE).collect::<Vec<_>>(),
-        "runs": o.runs.iter().map(|(l, kinds, rej)| {
+        "runs": o.runs.iter().map(|(l, kinds, rej, _)| {
             let mut by: BTreeMap<&str, u64> = BTreeMap::new();
             for k in kinds {
                 *by.entry(k).or_default() += 1;
@@ -415,7 +425,7 @@ fn the_run_walks_every_lifecycle_step() {
     assert_eq!(o.report.fast_forward.windows, 2);
     // 1. Factory enrolment, by both providers.
     for k in 0..2 {
-        let (label, kinds, _) = &o.runs[k];
+        let (label, kinds, _, _) = &o.runs[k];
         let n = |name: &str| kinds.iter().filter(|x| **x == name).count();
         let devices = o.providers.values().filter(|v| **v == k).count();
         assert!(devices > 0, "{label} has no device");
@@ -473,7 +483,18 @@ fn every_spdu_the_runs_emitted_is_captured_once_with_its_bytes() {
     let o = outcome();
     let ids: BTreeSet<&str> = o.pdus.iter().map(|p| p.id.as_str()).collect();
     assert_eq!(ids.len(), o.pdus.len(), "an SPDU was recorded twice");
-    for (label, kinds, _) in &o.runs {
+    for (label, kinds, _, folded) in &o.runs {
+        // Each SPDU on a folded leg has its twin on the device leg; one without would
+        // be missing from the records.
+        for k in folded.iter().copied().collect::<BTreeSet<&str>>() {
+            let on = |v: &[&str]| v.iter().filter(|x| **x == k).count();
+            assert!(
+                on(folded) <= on(kinds),
+                "{label}: {} {k} on the folded LOP-RA leg, {} on the device leg",
+                on(folded),
+                on(kinds)
+            );
+        }
         let mut emitted: BTreeMap<&str, usize> = BTreeMap::new();
         for k in kinds {
             *emitted.entry(k).or_default() += 1;

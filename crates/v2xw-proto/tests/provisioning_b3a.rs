@@ -124,7 +124,8 @@ fn a_thea_style_three_year_preload_is_one_request_for_156_periods() {
             .keys()
             .all(|&(i, j)| dev.credential_is_usable(i, j))
     );
-    assert_eq!(count(&run, SpduKind::AcaEeCertResponsePrivate), 156);
+    // One file a period, on both legs of the proxied hop (RA-LOP, LOP-device).
+    assert_eq!(count(&run, SpduKind::AcaEeCertResponsePrivate), 2 * 156);
     assert_eq!(
         count(&run, SpduKind::EeRaDownloadRequest),
         2 * 156,

@@ -202,8 +202,9 @@ fn certificate_sizes_against_camp_table_3() {
     let r = &c.spdus["AcaEeCertResponsePrivateSpdu"];
     assert_eq!(
         r.len(),
-        24,
-        "20 pseudonyms and 4 identification or application certificates"
+        44,
+        "20 pseudonyms, each on both legs of the proxied hop (RA-LOP, LOP-device), and 4 \
+         identification or application certificates"
     );
     assert!(r.iter().all(|&l| (454..=470).contains(&l)), "{r:?}");
 }

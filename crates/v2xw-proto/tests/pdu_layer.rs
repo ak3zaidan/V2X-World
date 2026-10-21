@@ -71,7 +71,8 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
             (SpduKind::EncryptedIndividualPlv, 6),
             (SpduKind::RaAcaCertRequest, 3),
             (SpduKind::AcaRaCertResponse, 3),
-            (SpduKind::AcaEeCertResponsePrivate, 3),
+            // Three files, on the RA-LOP leg and again on the LOP-device leg, as the ack.
+            (SpduKind::AcaEeCertResponsePrivate, 6),
             (SpduKind::EeRaDownloadRequest, 2),
         ])
     );
@@ -117,7 +118,8 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
     let entries: Vec<(String, u32)> = st
         .pdus
         .iter()
-        .filter(|p| p.kind == SpduKind::AcaEeCertResponsePrivate)
+        // The RA's copies: the batch it serves (the device leg carries the same files).
+        .filter(|p| p.kind == SpduKind::AcaEeCertResponsePrivate && p.from == st.nodes.ra.index())
         .enumerate()
         .map(|(j, p)| {
             (

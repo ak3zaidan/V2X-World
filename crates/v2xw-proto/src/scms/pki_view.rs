@@ -341,22 +341,9 @@ pub fn component_ids(run: &ScmsRun) -> BTreeMap<u32, (String, String, u32)> {
             };
             put(node, &label, &role, inst);
         }
-        // The other providers' components, under their own labels: a report another
-        // provider's MA shares arrives from that MA, which is not a device (realism.md
-        // R-SHARE: it was labelled `ee/<node>`).
-        for (k, other) in st.deployment.providers.iter().enumerate() {
-            if k == st.provider {
-                continue;
-            }
-            for (role, inst, node) in st.deployment.nodes(k).instances {
-                let role = if role == "crl_store" {
-                    "crl-store".to_string()
-                } else {
-                    role
-                };
-                put(node, &other.name, &role, inst);
-            }
-        }
+        // The other providers' components are named for the message records by
+        // [`flow_ids`] (realism.md R-SHARE), not here: `pki.state` lists each
+        // provider's own components once.
     }
     out
 }

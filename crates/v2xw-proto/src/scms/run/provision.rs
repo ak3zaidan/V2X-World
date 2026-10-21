@@ -1863,10 +1863,14 @@ impl ScmsState {
                 let size = if files.is_empty() {
                     self.sizes.batch_download(count)
                 } else {
-                    let entries: Vec<(String, u32)> = files
-                        .iter()
-                        .map(|(j, p)| (pdu_prov::batch_entry_name(i, *j), p.len()))
-                        .collect();
+                    // The device leg carries the same files, as the ack's does: with no
+                    // LOP deployed the view folds the RA-LOP leg away, and this copy is
+                    // the one the records keep.
+                    let mut entries = Vec::with_capacity(files.len());
+                    for (j, p) in files.iter() {
+                        self.emit_pdu(SpduKind::AcaEeCertResponsePrivate, to, device, at, p);
+                        entries.push((pdu_prov::batch_entry_name(i, *j), p.len()));
+                    }
                     WireSize::real(pdu_prov::stored_zip_len(&entries), "batch zip (stored)")
                 };
                 out.send(
