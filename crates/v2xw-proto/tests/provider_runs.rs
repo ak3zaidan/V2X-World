@@ -194,7 +194,9 @@ fn the_records_name_the_sharing_ma_as_the_other_providers() {
         "{into_ma:?}"
     );
     assert!(
-        into_ma.iter().all(|(f, _)| !f.unwrap_or("").starts_with("ee/")),
+        into_ma
+            .iter()
+            .all(|(f, _)| !f.unwrap_or("").starts_with("ee/")),
         "a device talks to the MA: {into_ma:?}"
     );
 }

@@ -434,7 +434,10 @@ fn enforcement_is_stamped_per_vehicle_and_cases_name_their_evidence() {
             "{id}: the enforcing population N fell: {:?}",
             enforced
                 .iter()
-                .map(|c| (c["detail"]["installed"].as_u64(), c["detail"]["of"].as_u64()))
+                .map(|c| (
+                    c["detail"]["installed"].as_u64(),
+                    c["detail"]["of"].as_u64()
+                ))
                 .collect::<Vec<_>>()
         );
         assert!(

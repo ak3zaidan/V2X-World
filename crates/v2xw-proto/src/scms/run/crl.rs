@@ -198,7 +198,10 @@ impl ScmsRun {
         let (la1, la2) = (st.la[0].la_id, st.la[1].la_id);
         let mut draws = vec![0u8; 36 * n as usize];
         st.rng
-            .checkout(RngDomain::Backend, EntityRef::custom("scms/standing-crl", 0))
+            .checkout(
+                RngDomain::Backend,
+                EntityRef::custom("scms/standing-crl", 0),
+            )
             .fill_bytes(&mut draws);
         for b in draws.chunks_exact(36) {
             let mut ls1 = [0u8; 16];

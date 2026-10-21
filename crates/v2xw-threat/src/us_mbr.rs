@@ -325,7 +325,10 @@ pub fn card(p: &UsMbrParams) -> ModelCard {
     card.tier = vec![Tier::Abstract, Tier::Medium, Tier::High];
     card.equations = vec![
         Equation::new("ConstantPosition", "|p₂ − p₁| < 1 LSB and v₁, v₂ ≥ 1 LSB"),
-        Equation::new("RandomPosition", "|p₁ + v₁·(cos ψ₁, sin ψ₁)·Δt − p₂| > gpsDrift"),
+        Equation::new(
+            "RandomPosition",
+            "|p₁ + v₁·(cos ψ₁, sin ψ₁)·Δt − p₂| > gpsDrift",
+        ),
         Equation::new("MaxSpeed", "v > v_max"),
         Equation::new("MaxAcceleration", "|v₂ − v₁| / Δt > a_max"),
         Equation::new("ObsImplausible Distance", "|p − p_self| > d_max + gpsDrift"),
@@ -333,10 +336,20 @@ pub fn card(p: &UsMbrParams) -> ModelCard {
     card.parameters = vec![
         param("gps_drift_m", "m", json!(p.gps_drift_m), "§2.3.1.2.2"),
         param("max_speed_mps", "m/s", json!(p.max_speed_mps), "§2.3.1.3.2"),
-        param("max_accel_mps2", "m/s²", json!(p.max_accel_mps2), "§2.3.1.3.3"),
+        param(
+            "max_accel_mps2",
+            "m/s²",
+            json!(p.max_accel_mps2),
+            "§2.3.1.3.3",
+        ),
         param("obs_distance", "-", json!(p.obs_distance), "§2.3.1.4.2"),
         param("obs_distance_m", "m", json!(p.obs_distance_m), "§2.3.1.4.2"),
-        param("obs_gps_drift_m", "m", json!(p.obs_gps_drift_m), "§2.3.1.4.2"),
+        param(
+            "obs_gps_drift_m",
+            "m",
+            json!(p.obs_gps_drift_m),
+            "§2.3.1.4.2",
+        ),
     ];
     card.sources = vec![
         standard(
@@ -428,25 +441,39 @@ mod tests {
     #[test]
     fn an_honest_constant_speed_track_raises_nothing() {
         // 20 m/s east at 10 Hz: each BSM 2 m on, exactly where the last one's velocity put it.
-        let msgs: Vec<_> = (0..20).map(|k| bsm(k * 100, 2.0 * k as f64, 20.0)).collect();
+        let msgs: Vec<_> = (0..20)
+            .map(|k| bsm(k * 100, 2.0 * k as f64, 20.0))
+            .collect();
         assert!(run(&msgs, UsMbrParams::default()).iter().all(Vec::is_empty));
     }
 
     #[test]
     fn random_position_fires_just_past_the_one_metre_drift() {
         // 0.95 m off the prediction stays quiet, 1.05 m fires: the [SM-MBR] 1 m gpsDrift.
-        let ok = run(&[bsm(0, 0.0, 10.0), bsm(100, 1.0 + 0.95, 10.0)], UsMbrParams::default());
+        let ok = run(
+            &[bsm(0, 0.0, 10.0), bsm(100, 1.0 + 0.95, 10.0)],
+            UsMbrParams::default(),
+        );
         assert!(ok[1].is_empty(), "{ok:?}");
-        let bad = run(&[bsm(0, 0.0, 10.0), bsm(100, 1.0 + 1.05, 10.0)], UsMbrParams::default());
+        let bad = run(
+            &[bsm(0, 0.0, 10.0), bsm(100, 1.0 + 1.05, 10.0)],
+            UsMbrParams::default(),
+        );
         assert_eq!(bad[1], vec!["positionJump"]);
     }
 
     #[test]
     fn a_frozen_position_with_speed_is_constant_position() {
-        let v = run(&[bsm(0, 5.0, 3.0), bsm(100, 5.0, 3.0)], UsMbrParams::default());
+        let v = run(
+            &[bsm(0, 5.0, 3.0), bsm(100, 5.0, 3.0)],
+            UsMbrParams::default(),
+        );
         assert!(v[1].contains(&"constantPositionFrozen"), "{v:?}");
         // Stopped: the same position at zero speed is honest.
-        let s = run(&[bsm(0, 5.0, 0.0), bsm(100, 5.0, 0.0)], UsMbrParams::default());
+        let s = run(
+            &[bsm(0, 5.0, 0.0), bsm(100, 5.0, 0.0)],
+            UsMbrParams::default(),
+        );
         assert!(s[1].is_empty(), "{s:?}");
     }
 
@@ -458,9 +485,15 @@ mod tests {
         assert!(limit[0].is_empty());
         // 1.1 m/s in 0.1 s is 11 m/s² (> 10); 0.9 m/s is 9 m/s². Positions follow the
         // first BSM's velocity, so RandomPosition stays quiet.
-        let hard = run(&[bsm(0, 0.0, 10.0), bsm(100, 1.0, 11.1)], UsMbrParams::default());
+        let hard = run(
+            &[bsm(0, 0.0, 10.0), bsm(100, 1.0, 11.1)],
+            UsMbrParams::default(),
+        );
         assert_eq!(hard[1], vec!["implausibleAcceleration"]);
-        let soft = run(&[bsm(0, 0.0, 10.0), bsm(100, 1.0, 10.9)], UsMbrParams::default());
+        let soft = run(
+            &[bsm(0, 0.0, 10.0), bsm(100, 1.0, 10.9)],
+            UsMbrParams::default(),
+        );
         assert!(soft[1].is_empty(), "{soft:?}");
     }
 
@@ -472,9 +505,15 @@ mod tests {
             obs_distance: true,
             ..UsMbrParams::default()
         };
-        assert_eq!(run(&[bsm(0, 5000.0, 0.0)], on)[0], vec!["acceptanceRangeThreshold"]);
+        assert_eq!(
+            run(&[bsm(0, 5000.0, 0.0)], on)[0],
+            vec!["acceptanceRangeThreshold"]
+        );
         // 0.6 s apart is not consecutive: a 30 m jump is not compared.
-        let gap = run(&[bsm(0, 0.0, 10.0), bsm(600, 36.0, 10.0)], UsMbrParams::default());
+        let gap = run(
+            &[bsm(0, 0.0, 10.0), bsm(600, 36.0, 10.0)],
+            UsMbrParams::default(),
+        );
         assert!(gap[1].is_empty(), "{gap:?}");
     }
 }

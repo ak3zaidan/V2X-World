@@ -34,7 +34,9 @@ fn the_effects_table_is_whole() {
     assert!(rows.len() >= 30, "{} rows", rows.len());
     let mut bad = Vec::new();
     for (n, r) in rows.iter().enumerate() {
-        for f in ["id", "base", "variant", "area", "measure", "expect", "source", "measured", "verdict"] {
+        for f in [
+            "id", "base", "variant", "area", "measure", "expect", "source", "measured", "verdict",
+        ] {
             if r[f].is_null() || r[f].as_str() == Some("") {
                 bad.push(format!("row {n}: no {f}"));
             }
@@ -55,7 +57,10 @@ fn the_effects_table_is_whole() {
             }
             v => bad.push(format!("row {n}: verdict {v:?}")),
         }
-        if !matches!(r["area"].as_str(), Some("metrics" | "performance" | "architecture")) {
+        if !matches!(
+            r["area"].as_str(),
+            Some("metrics" | "performance" | "architecture")
+        ) {
             bad.push(format!("row {n}: area {:?}", r["area"]));
         }
     }
@@ -66,5 +71,9 @@ fn the_effects_table_is_whole() {
 fn the_sweep_loader_passes_over_the_effects_table() {
     let rows = v2xw_engine::sensitivity::sweep::load_expectations(&[table()])
         .expect("the loader reads the file without failing on it");
-    assert!(rows.is_empty(), "it is not a sweep table: {} rows", rows.len());
+    assert!(
+        rows.is_empty(),
+        "it is not a sweep table: {} rows",
+        rows.len()
+    );
 }

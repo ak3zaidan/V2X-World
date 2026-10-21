@@ -311,7 +311,10 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("security.scms.lifecycle.topup_below_periods", "i-periods"),
     ("security.scms.lifecycle.max_periods_ahead", "i-periods"),
     ("security.scms.lifecycle.cert_shuffle_threshold", "requests"),
-    ("security.scms.lifecycle.report_shuffle_threshold", "reports"),
+    (
+        "security.scms.lifecycle.report_shuffle_threshold",
+        "reports",
+    ),
     ("security.scms.lifecycle.max_download_polls", "polls"),
     ("security.scms.lifecycle.ma_max_open_cases", "cases"),
 ];

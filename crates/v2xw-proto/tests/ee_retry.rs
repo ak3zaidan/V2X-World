@@ -82,7 +82,11 @@ fn a_top_off_retries_through_an_ra_outage_and_completes_at_the_cap() {
     assert!(dev.credentials.contains_key(&(1, 0)) && dev.credentials.contains_key(&(1, 1)));
     // Every retry was dropped at the RA: 10 retries plus the first request, each a
     // FileRequest and an InfoRequest.
-    assert!(run.state.faults.dropped >= 22, "{}", run.state.faults.dropped);
+    assert!(
+        run.state.faults.dropped >= 22,
+        "{}",
+        run.state.faults.dropped
+    );
 }
 
 #[test]
@@ -124,7 +128,10 @@ fn a_retried_request_is_acknowledged_again_and_issued_once() {
     assert!(dev.ee_retries >= 1, "{:?}", counters(&run));
     assert_eq!(ra.accepted, 1, "one request, one account");
     assert!(ra.retransmissions_reacked >= 1);
-    assert_eq!(ra.max_reqs_refused, 0, "a retransmission is not a second request");
+    assert_eq!(
+        ra.max_reqs_refused, 0,
+        "a retransmission is not a second request"
+    );
     assert_eq!(run.refusal_of(DEVICE_A), None);
     assert!(dev.duplicate_answers >= 1, "the second ack is dropped");
     // Exactly the six certificates asked for, each issued once.
@@ -138,7 +145,11 @@ fn a_retried_request_is_acknowledged_again_and_issued_once() {
         .filter(|p| p.kind == SpduKind::EeRaCertRequest && p.from == DEVICE_A.index())
         .filter_map(|p| p.bytes.as_ref().map(|b| b.bytes().to_vec()))
         .collect();
-    assert_eq!(sent.len(), 1, "one request, sent more than once, byte for byte");
+    assert_eq!(
+        sent.len(),
+        1,
+        "one request, sent more than once, byte for byte"
+    );
 }
 
 #[test]
@@ -224,7 +235,11 @@ fn an_idle_crl_generator_renews_its_list_every_next_crl() {
     assert_eq!(run.state.crlg.reissued, 1);
     assert_eq!(run.state.crl_store.versions, 2);
     let second = next_crl_of(&run);
-    assert_eq!(second, first + 7 * 86_400, "issued at the old nextCrl, a week on");
+    assert_eq!(
+        second,
+        first + 7 * 86_400,
+        "issued at the old nextCrl, a week on"
+    );
     assert_eq!(run.state.crl_store.entries.len(), 5, "the same entries");
     run.run_until(22 * DAY).expect("runs");
     assert_eq!(run.state.crlg.reissued, 3, "days 7, 14 and 21");

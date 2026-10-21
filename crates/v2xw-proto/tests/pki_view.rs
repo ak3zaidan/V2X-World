@@ -650,7 +650,11 @@ fn the_board_stamps_publication_when_the_store_has_the_list_and_reports_when_the
         .crl_store
         .published_runs
         .iter()
-        .filter_map(|&p| run.kernel.stages.at(p, v2xw_proto::stage::StageId::Published))
+        .filter_map(|&p| {
+            run.kernel
+                .stages
+                .at(p, v2xw_proto::stage::StageId::Published)
+        })
         .collect();
     assert_eq!(store.len(), 1, "one cadence publication: {store:?}");
     let case = run.state.ma.cases.values().next().expect("a case");
@@ -659,18 +663,37 @@ fn the_board_stamps_publication_when_the_store_has_the_list_and_reports_when_the
         .stages
         .at(case.crl_run, v2xw_proto::stage::StageId::Issued)
         .expect("issued");
-    assert!(store[0] > issued, "the cadence holds the list: {issued} -> {}", store[0]);
-    assert_eq!(at("crl-published"), store[0], "published when the store had it");
+    assert!(
+        store[0] > issued,
+        "the cadence holds the list: {issued} -> {}",
+        store[0]
+    );
+    assert_eq!(
+        at("crl-published"),
+        store[0],
+        "published when the store had it"
+    );
     // reports-in is the MA's own report-received stamp on the reports' runs.
     let received = case
         .reports
         .iter()
         .filter_map(|&i| run.state.ma.report_runs.get(i))
-        .filter_map(|&r| run.kernel.stages.at(r, v2xw_proto::stage::StageId::ReportReceived))
+        .filter_map(|&r| {
+            run.kernel
+                .stages
+                .at(r, v2xw_proto::stage::StageId::ReportReceived)
+        })
         .min()
         .expect("the reports' stamps");
-    assert_eq!(at("reports-in"), received, "reports-in when the MA had them");
-    assert!(received <= arrived + 1_000_000_000, "the reports were in before the case opened");
+    assert_eq!(
+        at("reports-in"),
+        received,
+        "reports-in when the MA had them"
+    );
+    assert!(
+        received <= arrived + 1_000_000_000,
+        "the reports were in before the case opened"
+    );
     assert_eq!(
         at("corroborated"),
         start.max(received),
@@ -808,13 +831,19 @@ fn without_a_deployed_lop_the_records_show_a_device_talking_to_the_ra() {
         .iter()
         .filter(|q| (q.from == lop && q.to == ra) || (q.from == ra && q.to == lop))
         .count();
-    assert!(legs > 0, "the run crosses the transparent LOP node (what the view folds)");
+    assert!(
+        legs > 0,
+        "the run crosses the transparent LOP node (what the view folds)"
+    );
     let runs = std::slice::from_ref(&run);
     let mut tracker = PkiTracker::default();
     let flows = pki_view::drain_flows(runs, &mut tracker);
     let lopish = |s: &str| s.contains("/lop/");
     for f in &flows {
-        let (from, to) = (f.from.as_deref().unwrap_or(""), f.to.as_deref().unwrap_or(""));
+        let (from, to) = (
+            f.from.as_deref().unwrap_or(""),
+            f.to.as_deref().unwrap_or(""),
+        );
         assert!(!lopish(from) && !lopish(to), "{} {from} -> {to}", f.name);
         // The DCM's relay of the enrolment response is deployed and keeps its name.
         if !from.contains("/dcm/") {
@@ -822,24 +851,42 @@ fn without_a_deployed_lop_the_records_show_a_device_talking_to_the_ra() {
         }
         assert_ne!(f.name, "proxy-forwarded", "a LOP stamp");
         for q in &f.pdus {
-            assert!(!lopish(&q.from) && !lopish(&q.to), "{} {} -> {}", q.kind, q.from, q.to);
+            assert!(
+                !lopish(&q.from) && !lopish(&q.to),
+                "{} {} -> {}",
+                q.kind,
+                q.from,
+                q.to
+            );
         }
     }
     let published: usize = flows.iter().map(|f| f.pdus.len()).sum();
-    assert_eq!(published, run.state.pdus.len() - legs, "every deployment PDU once");
+    assert_eq!(
+        published,
+        run.state.pdus.len() - legs,
+        "every deployment PDU once"
+    );
     let ra_id = "provider-a/ra/0";
     let req = flows
         .iter()
         .find(|f| f.kind == "msg" && f.name == "provisioning-request")
         .expect("a provisioning request");
-    assert!(req.from.as_deref().is_some_and(|f| f.starts_with("ee/")), "{:?}", req.from);
+    assert!(
+        req.from.as_deref().is_some_and(|f| f.starts_with("ee/")),
+        "{:?}",
+        req.from
+    );
     assert_eq!(req.to.as_deref(), Some(ra_id));
     let ack = flows
         .iter()
         .find(|f| f.kind == "msg" && f.name == "provisioning-ack")
         .expect("a provisioning ack");
     assert_eq!(ack.from.as_deref(), Some(ra_id));
-    assert!(ack.to.as_deref().is_some_and(|t| t.starts_with("ee/")), "{:?}", ack.to);
+    assert!(
+        ack.to.as_deref().is_some_and(|t| t.starts_with("ee/")),
+        "{:?}",
+        ack.to
+    );
     let s = pki_view::pki_state(runs, now(&run), &mut tracker).expect("a state");
     assert!(
         s.providers[0].components.iter().all(|c| c.role != "lop"),

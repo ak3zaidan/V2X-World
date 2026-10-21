@@ -45,7 +45,9 @@ fn options(scenario: PathBuf, out: PathBuf) -> RunOptions {
 
 #[test]
 fn a_fast_forward_run_writes_a_recording_that_verifies() {
-    let dir = std::env::temp_dir().join("v2xw-cli-tests").join("fast-forward-recording");
+    let dir = std::env::temp_dir()
+        .join("v2xw-cli-tests")
+        .join("fast-forward-recording");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("dir");
     let base = repo_root().join("scenarios/credential-weeks.yaml");

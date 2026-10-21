@@ -989,12 +989,18 @@ pub fn lifecycle_defaults() -> Vec<(&'static str, serde_json::Value)> {
         ("max_periods_ahead", json!(p.max_periods_ahead)),
         ("cert_shuffle_threshold", json!(p.shuffle_threshold)),
         ("cert_shuffle_window_s", s(p.shuffle_window)),
-        ("report_shuffle_threshold", json!(p.report_shuffle_threshold)),
+        (
+            "report_shuffle_threshold",
+            json!(p.report_shuffle_threshold),
+        ),
         ("report_shuffle_window_s", s(p.report_shuffle_window)),
         ("first_batch_delay_s", s(p.first_batch_delay)),
         ("download_poll_interval_s", s(p.download_poll_interval)),
         ("max_download_polls", json!(p.max_download_polls)),
-        ("download_request_tolerance_s", s(p.download_request_tolerance)),
+        (
+            "download_request_tolerance_s",
+            s(p.download_request_tolerance),
+        ),
         ("enrolment_lifetime_s", s(p.enrolment_lifetime)),
         ("reenrol_lead_s", s(p.reenrol_lead)),
         ("reenrol_download_delay_s", s(p.reenrol_download_delay)),
@@ -4201,7 +4207,12 @@ impl Phase2 {
             // one entry per chain pair in one issuance, its reported chain's first; the
             // version that carries them is the list length after its last one.
             let own = || {
-                let c = run.state.ma.cases.values().find(|c| c.crl_run == issuance)?;
+                let c = run
+                    .state
+                    .ma
+                    .cases
+                    .values()
+                    .find(|c| c.crl_run == issuance)?;
                 let (la, ls) = c.seeds[0]?;
                 let entries = &run.state.crlg.entries;
                 let at = entries

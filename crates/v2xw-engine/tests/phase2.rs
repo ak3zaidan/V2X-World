@@ -190,7 +190,11 @@ fn every_decision_opens_its_case_at_once_under_manual_review() {
     lifecycle(&mut s, "ma_review_s", 3_600.0);
     let (report, _) = run(s);
     let p = &report.phase2;
-    assert_eq!(p.backend_errors, 0, "the backend refused: {}", p.first_backend_error);
+    assert_eq!(
+        p.backend_errors, 0,
+        "the backend refused: {}",
+        p.first_backend_error
+    );
     assert!(
         p.ma_revoke_decisions >= 2,
         "the run needs two decisions to say anything: {}",

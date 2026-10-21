@@ -383,7 +383,11 @@ fn flow_ids(run: &ScmsRun) -> BTreeMap<u32, (String, String, u32)> {
         put(pn.ica, "ica", 0);
         put(pn.pg, "pg", 0);
         for (role, inst, node) in pn.instances {
-            let role = if role == "crl_store" { "crl-store".to_string() } else { role };
+            let role = if role == "crl_store" {
+                "crl-store".to_string()
+            } else {
+                role
+            };
             put(node, &role, inst);
         }
     }

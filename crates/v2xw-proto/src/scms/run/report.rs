@@ -79,7 +79,12 @@ impl ScmsRun {
     /// every report, valid or not: after the week rollover every report went out under
     /// last week's `(i, 0)`, an expired certificate, and every report of a week under one
     /// pseudonym (so they were linkable to each other).
-    pub fn mbr_signer(&self, reporter: NodeId, at: SimTime, prefer: Option<[u8; 8]>) -> Option<(u32, u32)> {
+    pub fn mbr_signer(
+        &self,
+        reporter: NodeId,
+        at: SimTime,
+        prefer: Option<[u8; 8]>,
+    ) -> Option<(u32, u32)> {
         let dev = self.state.devices.get(&reporter)?;
         let p = &self.state.params;
         let fits = |i: u32, j: u32| {
@@ -147,7 +152,9 @@ impl ScmsRun {
             .mbr_signer(reporter, at, prefer)
             .and_then(|k| dev.credentials.get(&k))
             .and_then(|c| c.implicit.as_deref())
-            .ok_or(PduError::Key("no pseudonym certificate valid at the report's time"))?
+            .ok_or(PduError::Key(
+                "no pseudonym certificate valid at the report's time",
+            ))?
             .clone();
         let enrol = dev
             .enrolment_credential

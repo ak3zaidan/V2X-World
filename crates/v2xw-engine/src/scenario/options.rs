@@ -1507,14 +1507,22 @@ pub fn title(path: &str) -> Option<&'static str> {
         "security.scms.lifecycle.report_shuffle_window_s" => "RA report shuffle: longest wait",
         "security.scms.lifecycle.first_batch_delay_s" => "First download after the request",
         "security.scms.lifecycle.download_poll_interval_s" => "Download retry wait (minWait)",
-        "security.scms.lifecycle.max_download_polls" => "Download retries before giving up (maxReqs)",
-        "security.scms.lifecycle.download_request_tolerance_s" => "Download request clock tolerance",
+        "security.scms.lifecycle.max_download_polls" => {
+            "Download retries before giving up (maxReqs)"
+        }
+        "security.scms.lifecycle.download_request_tolerance_s" => {
+            "Download request clock tolerance"
+        }
         "security.scms.lifecycle.enrolment_lifetime_s" => "Enrolment certificate lifetime",
         "security.scms.lifecycle.reenrol_lead_s" => "Re-enrol this long before expiry",
         "security.scms.lifecycle.reenrol_download_delay_s" => "Re-enrolment download wait",
         "security.scms.lifecycle.crl_cadence_s" => "Revocation list: fixed publication cadence",
-        "security.scms.lifecycle.crl_fetch_interval_s" => "Revocation list: cellular fetch interval",
-        "security.scms.lifecycle.crl_broadcast_interval_s" => "Revocation list: roadside repeat interval",
+        "security.scms.lifecycle.crl_fetch_interval_s" => {
+            "Revocation list: cellular fetch interval"
+        }
+        "security.scms.lifecycle.crl_broadcast_interval_s" => {
+            "Revocation list: roadside repeat interval"
+        }
         "security.scms.lifecycle.ma_review_s" => "Misbehaviour Authority review time",
         "security.scms.lifecycle.ma_max_open_cases" => "Misbehaviour Authority open-case capacity",
         "actors.backend.protocol" => "Credential system (backend)",

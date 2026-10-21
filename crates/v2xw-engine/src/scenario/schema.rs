@@ -2598,7 +2598,10 @@ impl LifecycleSpec {
             ("first_batch_delay_s", self.first_batch_delay_s),
             ("download_poll_interval_s", self.download_poll_interval_s),
             ("max_download_polls", u(self.max_download_polls)),
-            ("download_request_tolerance_s", self.download_request_tolerance_s),
+            (
+                "download_request_tolerance_s",
+                self.download_request_tolerance_s,
+            ),
             ("enrolment_lifetime_s", self.enrolment_lifetime_s),
             ("reenrol_lead_s", self.reenrol_lead_s),
             ("reenrol_download_delay_s", self.reenrol_download_delay_s),

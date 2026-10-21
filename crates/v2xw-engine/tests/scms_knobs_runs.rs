@@ -68,12 +68,16 @@ impl Out {
     /// Which roles exchange messages: `(from, to)` with the provider and the instance
     /// number taken off (`provider-a/ra/0` is `ra`, `ee/1000123` is `ee`).
     fn pairs(&self) -> BTreeSet<(String, String)> {
-        self.msgs().map(|v| (role(&v["from"]), role(&v["to"]))).collect()
+        self.msgs()
+            .map(|v| (role(&v["from"]), role(&v["to"])))
+            .collect()
     }
     /// Messages of `flow` from role `from` to a role starting with `to`.
     fn between(&self, flow: &str, from: &str, to: &str) -> usize {
         self.msgs()
-            .filter(|v| v["flow"] == flow && role(&v["from"]) == from && role(&v["to"]).starts_with(to))
+            .filter(|v| {
+                v["flow"] == flow && role(&v["from"]) == from && role(&v["to"]).starts_with(to)
+            })
             .count()
     }
     /// The earliest instant a case reached `stage`, s.
@@ -166,7 +170,11 @@ fn with(lifecycle: Value) -> Out {
 }
 
 fn knob(name: &str, b: &Out, v: &Out) {
-    println!("KNOB {name}\n  base    {}\n  variant {}", b.line(), v.line());
+    println!(
+        "KNOB {name}\n  base    {}\n  variant {}",
+        b.line(),
+        v.line()
+    );
 }
 
 #[test]
@@ -179,7 +187,11 @@ fn certs_per_period_scales_every_batch() {
     let (pb, pv) = (&b.report.phase2, &v.report.phase2);
     assert!(pb.certs_topped_up > 0, "the base tops up");
     assert_eq!(pv.topups_completed, pb.topups_completed, "same top-ups");
-    assert_eq!(pv.certs_topped_up, 2 * pb.certs_topped_up, "twice the certificates");
+    assert_eq!(
+        pv.certs_topped_up,
+        2 * pb.certs_topped_up,
+        "twice the certificates"
+    );
     assert!(
         pv.access.backend_bytes > pb.access.backend_bytes,
         "bigger downloads cross the backend"
@@ -194,8 +206,17 @@ fn no_topups_starve_the_fleet_after_its_preload() {
     knob("topup_below_periods 1 -> 0", b, &v);
     let (pb, pv) = (&b.report.phase2, &v.report.phase2);
     assert_eq!(pv.topups_started, 0);
-    assert_eq!(v.count("provisioning"), 0, "no provisioning message is sent");
-    assert!(pv.vehicles_starved > pb.vehicles_starved, "{} vs {}", pv.vehicles_starved, pb.vehicles_starved);
+    assert_eq!(
+        v.count("provisioning"),
+        0,
+        "no provisioning message is sent"
+    );
+    assert!(
+        pv.vehicles_starved > pb.vehicles_starved,
+        "{} vs {}",
+        pv.vehicles_starved,
+        pb.vehicles_starved
+    );
     assert!(pv.cert_unavailable_ns > pb.cert_unavailable_ns);
 }
 
@@ -210,11 +231,21 @@ fn the_request_shuffle_does_not_touch_in_run_topups() {
     // boundary without waiting in the request shuffle (CAMP Primer p.6, provision.rs
     // `ready && pregen`). So the shuffle settings are published as partial; this test
     // pins it, and goes red the day a run makes a first request in-run.
-    let (b, v) = (base(), with(json!({"cert_shuffle_threshold": 1, "cert_shuffle_window_s": 600})));
+    let (b, v) = (
+        base(),
+        with(json!({"cert_shuffle_threshold": 1, "cert_shuffle_window_s": 600})),
+    );
     knob("cert_shuffle_threshold 1000 -> 1, window 5 -> 600 s", b, &v);
-    assert!(b.between("topup", "ra", "aca") + b.between("topup", "ra", "pca") > 0, "{:?}", b.pairs());
+    assert!(
+        b.between("topup", "ra", "aca") + b.between("topup", "ra", "pca") > 0,
+        "{:?}",
+        b.pairs()
+    );
     assert_eq!(v.events(), b.events(), "the shuffle moved an in-run event");
-    assert_eq!(v.report.phase2.certs_topped_up, b.report.phase2.certs_topped_up);
+    assert_eq!(
+        v.report.phase2.certs_topped_up,
+        b.report.phase2.certs_topped_up
+    );
     assert_eq!(v.topup_ms(), b.topup_ms());
 }
 
@@ -241,9 +272,17 @@ fn a_longer_download_wait_lengthens_a_late_topup() {
     // finds it at the second or third poll, a 20 s wait at the next one 20 s on. First run
     // (ACA on time): no change at all, as the model's nextDlTime is exact; the knob only
     // acts on a late batch.
-    let (b, v) = (slow_base(), slow_aca(json!({"download_poll_interval_s": 20})));
+    let (b, v) = (
+        slow_base(),
+        slow_aca(json!({"download_poll_interval_s": 20})),
+    );
     knob("download_poll_interval_s 2 -> 20 (ACA 4 s slow)", b, &v);
-    assert!(v.topup_ms() > b.topup_ms() + 5_000.0, "{} vs {}", v.topup_ms(), b.topup_ms());
+    assert!(
+        v.topup_ms() > b.topup_ms() + 5_000.0,
+        "{} vs {}",
+        v.topup_ms(),
+        b.topup_ms()
+    );
 }
 
 #[test]
@@ -273,7 +312,12 @@ fn a_short_enrolment_is_renewed_in_the_run() {
     let (b, v) = (base(), with(json!({"enrolment_lifetime_s": 200})));
     knob("enrolment_lifetime_s 600 -> 200", b, &v);
     let (pb, pv) = (&b.report.phase2, &v.report.phase2);
-    assert!(pv.reenrolments_started > 2 * pb.reenrolments_started, "{} vs {}", pv.reenrolments_started, pb.reenrolments_started);
+    assert!(
+        pv.reenrolments_started > 2 * pb.reenrolments_started,
+        "{} vs {}",
+        pv.reenrolments_started,
+        pb.reenrolments_started
+    );
     assert!(v.count("reenrolment") > b.count("reenrolment"));
 }
 
@@ -290,7 +334,12 @@ fn the_ma_review_delays_every_revocation() {
     let (b, v) = (base(), with(json!({"ma_review_s": 60})));
     knob("ma_review_s 0 -> 60", b, &v);
     assert!(revocation_s(b) > 0.0, "the base revokes");
-    assert!(revocation_s(&v) > revocation_s(b), "{} vs {}", revocation_s(&v), revocation_s(b));
+    assert!(
+        revocation_s(&v) > revocation_s(b),
+        "{} vs {}",
+        revocation_s(&v),
+        revocation_s(b)
+    );
     assert!(v.report.phase2.crls_issued <= b.report.phase2.crls_issued);
 }
 
@@ -301,7 +350,12 @@ fn publishing_on_decision_is_faster_than_a_cadence() {
     let (b, v) = (base(), with(json!({"crl_cadence_s": 0})));
     knob("crl_cadence_s 30 -> 0", b, &v);
     assert!(revocation_s(&v) > 0.0);
-    assert!(revocation_s(&v) <= revocation_s(b), "{} vs {}", revocation_s(&v), revocation_s(b));
+    assert!(
+        revocation_s(&v) <= revocation_s(b),
+        "{} vs {}",
+        revocation_s(&v),
+        revocation_s(b)
+    );
     assert!(v.report.phase2.crl_versions_published >= b.report.phase2.crl_versions_published);
 }
 
@@ -313,8 +367,18 @@ fn a_slower_crl_fetch_downloads_less_and_enforces_later() {
     let (b, v) = (base(), with(json!({"crl_fetch_interval_s": 120})));
     knob("crl_fetch_interval_s 30 -> 120", b, &v);
     let (pb, pv) = (&b.report.phase2, &v.report.phase2);
-    assert!(pv.crl_downloads < pb.crl_downloads, "{} vs {}", pv.crl_downloads, pb.crl_downloads);
-    assert!(revocation_s(&v) >= revocation_s(b), "{} vs {}", revocation_s(&v), revocation_s(b));
+    assert!(
+        pv.crl_downloads < pb.crl_downloads,
+        "{} vs {}",
+        pv.crl_downloads,
+        pb.crl_downloads
+    );
+    assert!(
+        revocation_s(&v) >= revocation_s(b),
+        "{} vs {}",
+        revocation_s(&v),
+        revocation_s(b)
+    );
 }
 
 #[test]
@@ -326,7 +390,10 @@ fn a_shorter_report_shuffle_decides_sooner() {
     // decision's instant is what the window moves.
     let (b, v) = (base(), with(json!({"report_shuffle_window_s": 5})));
     knob("report_shuffle_window_s 30 -> 5", b, &v);
-    let (fb, fv) = (b.first("decision").expect("base decides"), v.first("decision").expect("variant decides"));
+    let (fb, fv) = (
+        b.first("decision").expect("base decides"),
+        v.first("decision").expect("variant decides"),
+    );
     assert!(fv < fb, "{fv} vs {fb}");
 }
 
@@ -350,10 +417,23 @@ fn an_ma_with_one_open_case_revokes_fewer_in_the_run() {
     // a fifth of the fleet attacking and each case held 60 s for review, the cap leaves
     // cases waiting and fewer CRL entries are issued by the end.
     let (b, v) = (busy_ma(json!({})), busy_ma(json!({"ma_max_open_cases": 1})));
-    knob("ma_max_open_cases 1000 -> 1 (20 % attackers, 60 s review)", &b, &v);
+    knob(
+        "ma_max_open_cases 1000 -> 1 (20 % attackers, 60 s review)",
+        &b,
+        &v,
+    );
     let (pb, pv) = (&b.report.phase2, &v.report.phase2);
-    assert!(pb.crls_issued > 1, "the busy base revokes several: {}", pb.crls_issued);
-    assert!(pv.crls_issued < pb.crls_issued, "{} vs {}", pv.crls_issued, pb.crls_issued);
+    assert!(
+        pb.crls_issued > 1,
+        "the busy base revokes several: {}",
+        pb.crls_issued
+    );
+    assert!(
+        pv.crls_issued < pb.crls_issued,
+        "{} vs {}",
+        pv.crls_issued,
+        pb.crls_issued
+    );
 }
 
 #[test]
@@ -363,24 +443,43 @@ fn the_camp_reference_preset_is_one_scms_with_a_lop() {
     let mut doc = base_doc();
     doc["security"]["scms"] = json!({"deployment": {"preset": "camp-reference"}});
     let (b, v) = (base(), run(doc));
-    knob("deployment.preset us-production-2025 -> camp-reference", b, &v);
+    knob(
+        "deployment.preset us-production-2025 -> camp-reference",
+        b,
+        &v,
+    );
     println!("PAIRS base {:?}\nPAIRS camp {:?}", b.pairs(), v.pairs());
     println!(
         "PROVIDERS base {:?} camp {:?}",
         b.report.phase2.devices_by_provider, v.report.phase2.devices_by_provider
     );
-    assert_eq!(b.report.phase2.devices_by_provider.len(), 2, "{:?}", b.report.phase2.devices_by_provider);
-    assert!(v.report.phase2.devices_by_provider.len() <= 1, "{:?}", v.report.phase2.devices_by_provider);
+    assert_eq!(
+        b.report.phase2.devices_by_provider.len(),
+        2,
+        "{:?}",
+        b.report.phase2.devices_by_provider
+    );
+    assert!(
+        v.report.phase2.devices_by_provider.len() <= 1,
+        "{:?}",
+        v.report.phase2.devices_by_provider
+    );
     // Two providers share reports MA to MA (01 §2.3); one SCMS has no peer MA. Before
     // the view named the peer providers' components, the shared report read "ee -> ma".
     let (bp, vp) = (b.pairs(), v.pairs());
     let pair = |f: &str, t: &str| (f.to_string(), t.to_string());
     assert!(bp.contains(&pair("ma", "ma")), "{bp:?}");
-    assert!(!bp.contains(&pair("ee", "ma")), "a device reaches the MA directly: {bp:?}");
+    assert!(
+        !bp.contains(&pair("ee", "ma")),
+        "a device reaches the MA directly: {bp:?}"
+    );
     assert!(!vp.contains(&pair("ma", "ma")), "{vp:?}");
     // The CAMP design runs a LOP between the devices and the RA; the US deployment runs
     // none (01 §2.2), and its records fold the transparent hop the run still carries.
-    assert!(vp.contains(&pair("ee", "lop")) && vp.contains(&pair("lop", "ra")), "{vp:?}");
+    assert!(
+        vp.contains(&pair("ee", "lop")) && vp.contains(&pair("lop", "ra")),
+        "{vp:?}"
+    );
     assert!(!bp.iter().any(|(f, t)| f == "lop" || t == "lop"), "{bp:?}");
 }
 
@@ -395,21 +494,48 @@ fn the_architecture_is_the_deployments() {
     for (from, to) in &pairs {
         if from == "ee" {
             assert!(
-                !matches!(to.as_str(), "aca" | "pca" | "la1" | "la2" | "crlg" | "eca" | "ma"),
+                !matches!(
+                    to.as_str(),
+                    "aca" | "pca" | "la1" | "la2" | "crlg" | "eca" | "ma"
+                ),
                 "a device reaches {to} directly"
             );
         }
     }
-    for p in [("ra", "aca"), ("ra", "la1"), ("ra", "la2"), ("ma", "aca"), ("ma", "la1"), ("ma", "la2"), ("ma", "crlg")] {
-        assert!(pairs.contains(&(p.0.to_string(), p.1.to_string())), "no {p:?}: {pairs:?}");
+    for p in [
+        ("ra", "aca"),
+        ("ra", "la1"),
+        ("ra", "la2"),
+        ("ma", "aca"),
+        ("ma", "la1"),
+        ("ma", "la2"),
+        ("ma", "crlg"),
+    ] {
+        assert!(
+            pairs.contains(&(p.0.to_string(), p.1.to_string())),
+            "no {p:?}: {pairs:?}"
+        );
     }
     // The LAs never talk to each other or to a device (separation of the linkage
     // authorities, CAMP-EE §2.1.7).
-    assert!(!pairs.iter().any(|(f, t)| (f.starts_with("la") && (t.starts_with("la") || t == "ee"))));
-    assert!(pairs.iter().any(|(f, t)| f == "ee" && t == "ra"), "{pairs:?}");
-    assert!(pairs.iter().any(|(f, t)| f == "ra" && t == "ee"), "{pairs:?}");
+    assert!(
+        !pairs
+            .iter()
+            .any(|(f, t)| (f.starts_with("la") && (t.starts_with("la") || t == "ee")))
+    );
+    assert!(
+        pairs.iter().any(|(f, t)| f == "ee" && t == "ra"),
+        "{pairs:?}"
+    );
+    assert!(
+        pairs.iter().any(|(f, t)| f == "ra" && t == "ee"),
+        "{pairs:?}"
+    );
     // No LOP in the US deployment (01 §2.2), so none in its records.
-    assert!(!pairs.iter().any(|(f, t)| f == "lop" || t == "lop"), "{pairs:?}");
+    assert!(
+        !pairs.iter().any(|(f, t)| f == "lop" || t == "lop"),
+        "{pairs:?}"
+    );
     // Every case that reached a CRL was enforced by no more vehicles than were present.
     assert!(b.cases("enforced") > 0, "the base enforces a revocation");
 }
@@ -452,11 +578,24 @@ fn tls_1_2_costs_more_handshake_and_a_slower_topup() {
     // round trip in every top-up.
     let (b, v) = (run(packet_doc(None)), run(packet_doc(Some("1.2"))));
     knob("tls 1.3 -> 1.2 (packet-level LTE Uu)", &b, &v);
-    let (cb, cv) = (&b.report.phase2.access.carrier, &v.report.phase2.access.carrier);
+    let (cb, cv) = (
+        &b.report.phase2.access.carrier,
+        &v.report.phase2.access.carrier,
+    );
     assert!(cb.tls_handshakes > 0, "the base opens TLS sessions");
     assert_eq!(cv.tls_handshakes, cb.tls_handshakes, "the same sessions");
-    assert!(cv.tls_handshake_bytes > cb.tls_handshake_bytes, "{} vs {}", cv.tls_handshake_bytes, cb.tls_handshake_bytes);
-    assert!(v.topup_ms() > b.topup_ms(), "{} vs {}", v.topup_ms(), b.topup_ms());
+    assert!(
+        cv.tls_handshake_bytes > cb.tls_handshake_bytes,
+        "{} vs {}",
+        cv.tls_handshake_bytes,
+        cb.tls_handshake_bytes
+    );
+    assert!(
+        v.topup_ms() > b.topup_ms(),
+        "{} vs {}",
+        v.topup_ms(),
+        b.topup_ms()
+    );
 }
 
 #[test]
@@ -483,17 +622,28 @@ fn every_enforcement_count_is_out_of_the_devices_it_could_have_reached() {
     let mut by_case: BTreeMap<String, Vec<(u64, u64, u64)>> = BTreeMap::new();
     for (c, v) in &o.pki {
         if c == "pki.case" && v["stage"] == "enforced" {
-            by_case.entry(v["case"].as_str().unwrap_or("").to_string()).or_default().push((
-                v["t"].as_u64().unwrap_or(0),
-                v["detail"]["installed"].as_u64().unwrap_or(0),
-                v["detail"]["of"].as_u64().unwrap_or(0),
-            ));
+            by_case
+                .entry(v["case"].as_str().unwrap_or("").to_string())
+                .or_default()
+                .push((
+                    v["t"].as_u64().unwrap_or(0),
+                    v["detail"]["installed"].as_u64().unwrap_or(0),
+                    v["detail"]["of"].as_u64().unwrap_or(0),
+                ));
         }
     }
-    assert!(!by_case.is_empty(), "the conformance run enforces a revocation");
+    assert!(
+        !by_case.is_empty(),
+        "the conformance run enforces a revocation"
+    );
     for (case, stamps) in &by_case {
         let last = stamps.last().expect("stamps");
-        println!("ENFORCED {case}: {} of {} ({} stamps)", last.1, last.2, stamps.len());
+        println!(
+            "ENFORCED {case}: {} of {} ({} stamps)",
+            last.1,
+            last.2,
+            stamps.len()
+        );
         for w in stamps.windows(2) {
             assert!(w[0].2 <= w[1].2, "{case}: N fell {w:?}");
         }
@@ -519,8 +669,14 @@ fn a_small_validated_certificate_cache_revalidates_and_costs_more_crypto() {
     let (rb, rv) = (&b.report.receiver_validation, &v.report.receiver_validation);
     println!(
         "CACHE base ee_validations {} hits {} evictions {} charged_ns {}\n      variant ee_validations {} hits {} evictions {} charged_ns {}",
-        rb.ee_validations, rb.ee_hits, rb.ee_evictions, rb.charged_ns,
-        rv.ee_validations, rv.ee_hits, rv.ee_evictions, rv.charged_ns
+        rb.ee_validations,
+        rb.ee_hits,
+        rb.ee_evictions,
+        rb.charged_ns,
+        rv.ee_validations,
+        rv.ee_hits,
+        rv.ee_evictions,
+        rv.charged_ns
     );
     assert!(rv.ee_evictions > rb.ee_evictions, "{rv:?} vs {rb:?}");
     assert!(rv.ee_validations > rb.ee_validations, "{rv:?} vs {rb:?}");

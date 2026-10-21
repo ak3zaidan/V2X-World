@@ -7135,7 +7135,12 @@ fn scms_lifecycle(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ),
         ));
     }
-    if let Some(t) = s.security.scms.as_ref().and_then(|x| x.crl_overdue_tolerance_s) {
+    if let Some(t) = s
+        .security
+        .scms
+        .as_ref()
+        .and_then(|x| x.crl_overdue_tolerance_s)
+    {
         bounded_at(
             "security.scms.crl_overdue_tolerance_s",
             "security.scms.crl_overdue_tolerance_s",

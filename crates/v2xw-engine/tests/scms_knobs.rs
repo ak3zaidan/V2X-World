@@ -26,7 +26,10 @@ fn base_doc() -> Value {
 
 fn params(doc: &Value) -> String {
     let s = Scenario::from_document(doc.clone()).expect("deserialises");
-    format!("{:?}", LifecycleParams::from_scenario(&s).expect("lifecycle params"))
+    format!(
+        "{:?}",
+        LifecycleParams::from_scenario(&s).expect("lifecycle params")
+    )
 }
 
 /// One legal value per field, different from the model's default on the real calendar.
@@ -73,13 +76,20 @@ fn every_lifecycle_field_moves_the_model_exactly_as_its_protocol_param_does() {
     for (key, v) in MOVES {
         assert!(published.contains(key), "{key} is not published");
         // A count is written as a whole number, as a person (and the form) writes it.
-        let v = if v.fract() == 0.0 { json!(*v as u64) } else { json!(v) };
+        let v = if v.fract() == 0.0 {
+            json!(*v as u64)
+        } else {
+            json!(v)
+        };
         let mut typed = base.clone();
         typed["security"]["scms"] = json!({"lifecycle": {*key: v}});
         let mut param = base.clone();
         param["security"]["protocol"]["params"] = json!({*key: v});
         let (t, p) = (params(&typed), params(&param));
-        assert_ne!(t, default, "security.scms.lifecycle.{key} = {v} changed nothing");
+        assert_ne!(
+            t, default,
+            "security.scms.lifecycle.{key} = {v} changed nothing"
+        );
         assert_eq!(
             t, p,
             "security.scms.lifecycle.{key} and security.protocol.params.{key} disagree"
@@ -119,18 +129,39 @@ fn the_loader_refuses_what_the_model_cannot_run() {
         "TLS 1.1 was not refused"
     );
     for (lifecycle, field) in [
-        (json!({"certs_per_period": 61}), "security.scms.lifecycle.certs_per_period"),
-        (json!({"certs_per_period": 0}), "security.scms.lifecycle.certs_per_period"),
-        (json!({"max_download_polls": 0}), "security.scms.lifecycle.max_download_polls"),
-        (json!({"ma_max_open_cases": 0}), "security.scms.lifecycle.ma_max_open_cases"),
-        (json!({"crl_fetch_interval_s": 0.0}), "security.scms.lifecycle.crl_fetch_interval_s"),
-        (json!({"cert_lifetime_s": 600_000.0}), "security.scms.lifecycle.cert_lifetime_s"),
+        (
+            json!({"certs_per_period": 61}),
+            "security.scms.lifecycle.certs_per_period",
+        ),
+        (
+            json!({"certs_per_period": 0}),
+            "security.scms.lifecycle.certs_per_period",
+        ),
+        (
+            json!({"max_download_polls": 0}),
+            "security.scms.lifecycle.max_download_polls",
+        ),
+        (
+            json!({"ma_max_open_cases": 0}),
+            "security.scms.lifecycle.ma_max_open_cases",
+        ),
+        (
+            json!({"crl_fetch_interval_s": 0.0}),
+            "security.scms.lifecycle.crl_fetch_interval_s",
+        ),
+        (
+            json!({"cert_lifetime_s": 600_000.0}),
+            "security.scms.lifecycle.cert_lifetime_s",
+        ),
         (
             json!({"enrolment_lifetime_s": 1000.0, "reenrol_lead_s": 1000.0}),
             "security.scms.lifecycle.reenrol_lead_s",
         ),
         // A compressed i-period on the real calendar.
-        (json!({"i_period_s": 60.0}), "security.scms.lifecycle.i_period_s"),
+        (
+            json!({"i_period_s": 60.0}),
+            "security.scms.lifecycle.i_period_s",
+        ),
     ] {
         let mut doc = base_doc();
         doc["security"]["scms"] = json!({"lifecycle": lifecycle.clone()});
@@ -154,13 +185,23 @@ fn every_lifecycle_field_is_published_with_words_a_default_and_a_level() {
             continue;
         };
         for k in ["x-explain", "x-recommended", "x-level", "title", "x-range"] {
-            assert!(f[k].as_str().is_some_and(|s| !s.is_empty()), "{path}: no {k}");
+            assert!(
+                f[k].as_str().is_some_and(|s| !s.is_empty()),
+                "{path}: no {k}"
+            );
         }
         // The request shuffle acts only on a first request, which a run makes before the
         // vehicle joins (tests/scms_knobs_runs.rs): published as partial, with the reason.
-        let expected = if key.starts_with("cert_shuffle_") { "partial" } else { "wired" };
+        let expected = if key.starts_with("cert_shuffle_") {
+            "partial"
+        } else {
+            "wired"
+        };
         assert_eq!(f["x-status"], expected, "{path}");
-        assert!(f["unit"].as_str().is_some_and(|u| !u.is_empty()), "{path}: no unit");
+        assert!(
+            f["unit"].as_str().is_some_and(|u| !u.is_empty()),
+            "{path}: no unit"
+        );
         // Absent, the CRL follows each provider's rule, which is not a number.
         if key == "crl_cadence_s" {
             assert!(f.get("default").is_none_or(Value::is_null), "{path}");
@@ -193,7 +234,11 @@ fn the_published_defaults_are_the_models() {
     }
     let mut doc = base.clone();
     doc["security"]["scms"] = json!({"lifecycle": lifecycle});
-    assert_eq!(params(&doc), default, "a published default is not the model's");
+    assert_eq!(
+        params(&doc),
+        default,
+        "a published default is not the model's"
+    );
 }
 
 /// The two receiver constants the audit left fixed, now settings: the overdue-CRL
@@ -210,14 +255,27 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
             "security.scms.crl_overdue_tolerance_s",
             f64::from(v2xw_node::rxval::OVERDUE_CRL_TOLERANCE_S),
         ),
-        ("nodes.validated_cert_cache", v2xw_node::rxval::EE_CACHE as f64),
+        (
+            "nodes.validated_cert_cache",
+            v2xw_node::rxval::EE_CACHE as f64,
+        ),
     ] {
         let f = fields
             .iter()
             .find(|f| f["x-path"] == path)
             .unwrap_or_else(|| panic!("{path} is not published"));
-        for k in ["x-explain", "x-recommended", "x-level", "title", "x-range", "unit"] {
-            assert!(f[k].as_str().is_some_and(|s| !s.is_empty()), "{path}: no {k}");
+        for k in [
+            "x-explain",
+            "x-recommended",
+            "x-level",
+            "title",
+            "x-range",
+            "unit",
+        ] {
+            assert!(
+                f[k].as_str().is_some_and(|s| !s.is_empty()),
+                "{path}: no {k}"
+            );
         }
         assert_eq!(f["x-status"], "wired", "{path}");
         assert_eq!(f["default"].as_f64(), Some(default), "{path}");
@@ -258,7 +316,10 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
             json!({"security": {"scms": {"crl_overdue_tolerance_s": 40_000_000}}}),
             "security.scms.crl_overdue_tolerance_s",
         ),
-        (json!({"nodes": {"validated_cert_cache": 0}}), "nodes.validated_cert_cache"),
+        (
+            json!({"nodes": {"validated_cert_cache": 0}}),
+            "nodes.validated_cert_cache",
+        ),
     ] {
         let mut doc = base_doc();
         if let Some(t) = set["security"]["scms"].as_object() {
@@ -268,6 +329,9 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
             doc["nodes"]["validated_cert_cache"] = json!(n);
         }
         let e = errors(doc);
-        assert!(e.iter().any(|m| m.contains(field)), "{set} was not refused: {e:?}");
+        assert!(
+            e.iter().any(|m| m.contains(field)),
+            "{set} was not refused: {e:?}"
+        );
     }
 }

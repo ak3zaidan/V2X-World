@@ -176,9 +176,19 @@ fn outcome() -> &'static Outcome {
                 };
                 (
                     v2xw_proto::scms::pki_view::provider_label(r),
-                    r.state.pdus.iter().filter(|p| !folded(p)).map(|p| p.kind.name()).collect(),
+                    r.state
+                        .pdus
+                        .iter()
+                        .filter(|p| !folded(p))
+                        .map(|p| p.kind.name())
+                        .collect(),
                     r.state.pdu_rejections.len(),
-                    r.state.pdus.iter().filter(|p| folded(p)).map(|p| p.kind.name()).collect(),
+                    r.state
+                        .pdus
+                        .iter()
+                        .filter(|p| folded(p))
+                        .map(|p| p.kind.name())
+                        .collect(),
                 )
             })
             .collect();

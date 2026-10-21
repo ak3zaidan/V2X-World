@@ -464,10 +464,21 @@ fn a_report_after_the_rollover_is_signed_with_a_pseudonym_valid_then() {
     provisioned(&mut run, DEVICE_A, 0, 2, 2);
     const H: u64 = 3_600_000_000_000;
     // Week 0 is valid [0, 169 h), week 1 [168 h, 337 h).
-    assert_eq!(run.mbr_signer(DEVICE_A, 600_000_000_000, None), Some((0, 0)));
-    assert_eq!(run.mbr_signer(DEVICE_A, 168 * H + 1, None), Some((1, 0)), "the overlap hour prefers the new week");
+    assert_eq!(
+        run.mbr_signer(DEVICE_A, 600_000_000_000, None),
+        Some((0, 0))
+    );
+    assert_eq!(
+        run.mbr_signer(DEVICE_A, 168 * H + 1, None),
+        Some((1, 0)),
+        "the overlap hour prefers the new week"
+    );
     assert_eq!(run.mbr_signer(DEVICE_A, 170 * H, None), Some((1, 0)));
-    assert_eq!(run.mbr_signer(DEVICE_A, 338 * H, None), None, "nothing valid is left");
+    assert_eq!(
+        run.mbr_signer(DEVICE_A, 338 * H, None),
+        None,
+        "nothing valid is left"
+    );
     // The vehicle's own pseudonym is used when it is valid.
     let id8 = |i: u32, j: u32| {
         let c = &run.state.devices[&DEVICE_A].credentials[&(i, j)];
@@ -475,7 +486,11 @@ fn a_report_after_the_rollover_is_signed_with_a_pseudonym_valid_then() {
     };
     let (w0j1, w1j1) = (id8(0, 1), id8(1, 1));
     assert_eq!(run.mbr_signer(DEVICE_A, 170 * H, Some(w1j1)), Some((1, 1)));
-    assert_eq!(run.mbr_signer(DEVICE_A, 170 * H, Some(w0j1)), Some((1, 0)), "an expired preference is not used");
+    assert_eq!(
+        run.mbr_signer(DEVICE_A, 170 * H, Some(w0j1)),
+        Some((1, 0)),
+        "an expired preference is not used"
+    );
     let r = speeding_report(&world());
     assert!(run.secure_mbr(DEVICE_A, &r, 338 * H).is_err());
 }
