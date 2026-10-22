@@ -130,10 +130,12 @@ noise (R-USFP). That is the cost of the strict thresholds, not a code defect.
 - A trust-list publication due during fast-forward waits for the next backend tick.
 - One CRL a device cannot verify makes it refuse the whole frame.
 - A device does not re-check the trust list's elector signatures.
-- Clock skew applies to vehicles only, as a fixed offset.
+- Clock skew applies to vehicles only, as a fixed offset. (The 15 honest revocations it
+  caused are fixed: §7.)
 - Post-quantum certificates at density were not run (edge 11).
 - A small validated-certificate cache adds 12 % events; the cause is not shown.
-- Verify-on-demand blinds misbehaviour detection: a policy question for the owner.
+- Verify-on-demand blinds misbehaviour detection. Kept, because the sources make it so,
+  and now warned about: §7.
 - The corroboration rule decided only about half the reported attackers within 54 h.
 - Case evidence reads `verified: false` under modelled crypto (R-EVID); RSU-filed reports
   have no pseudonym to sign with (R-UNSEC); device CRL downloads are missing from the PKI
@@ -163,3 +165,94 @@ noise (R-USFP). That is the cost of the strict thresholds, not a code defect.
 - Cleanup: the four `wf_1faba59c-7f5-*` worktrees and their branches, `resp-squash` and
   `wip/scms-knobs` removed, and `target/agents` deleted. `wip/scms-response` is kept: it is
   an older uncompiled snapshot that resp-squash replaced, and it is not part of main.
+
+## 7. Policy-level safeguards (2026-10-21)
+
+Three changes, each measured before and after on the same seed. "Before" is the release
+binary of main `4924a5d2`; "after" is an opt-2 build of this branch. Run-report fields.
+
+### 7.1 Receiver `generationTime` window and the MA's evidence-time rule
+
+- **Receiver.** Every vehicle, RSU and handset now discards an SPDU whose `generationTime`
+  is too old or too far ahead on its own clock, before the verification policy (IEEE
+  1609.2 §5.2 relevance checks, `rxval::GenerationTimeWindow`). Beacons (BSM, CAM, PSM,
+  VAM) may be 2 s old, other application messages 600 s, and nothing may be more than
+  40 ms ahead. These are the C2C-CC Basic System Profile values (RS_BSP_168, as Vanetza's
+  `check_generation_time` transcribes them). The US J2945/1 values are not public, so they
+  are an ASSUMPTION. Settings: `security.scms.rx_beacon_max_age_s`, `rx_max_age_s`,
+  `rx_max_future_s`. A dropped frame is `node.rx` cause `generation-time-window`; it is
+  verified by no one and reaches no detector, so it is dropped, not reported.
+- **MA.** A report whose evidence was generated more than 40 ms after the report, or more
+  than 600 s before it, is set aside (`reports_evidence_time_implausible`).
+- **Root cause found on the way.** `Engine::dead_reckon_belief` mixed two timelines. It
+  extrapolated a skewed vehicle's position by its clock offset: 5,000 s along its
+  velocity, kilometres off the road. It then wrote the believed instant back, so the
+  offset was stamped twice. Most of the false reports came from this (mapOffRoad,
+  acceptanceRange, positionJump).
+
+| `edge/clock-skew-ahead` | before | window, no dead-reckon fix | after (all three) | dead-reckon fix + MA rule, window off |
+|---|---|---|---|---|
+| honest vehicles revoked | 19 | 15 | **0** | 0 |
+| attackers revoked | 4 | 3 | 4 | 4 |
+| reports at the MA | 16,236 | 5,308 | 1,345 | 9,373 |
+| receiver refusals (window) | 0 | 209,031 | 209,464 | 0 |
+| MA evidence-time refusals | 0 | 0 | 0 | 2,996 |
+
+The window alone is not enough: skewed senders heard by skewed receivers pass it, and
+their dead-reckoned positions were wrong. With the fix, either layer alone keeps every
+honest vehicle unrevoked.
+
+Side effects:
+
+- **Honest runs.** Realism base, research suite: identical before and after (320 reports,
+  3 of 3 attackers revoked, 0 honest), and 0 window refusals.
+- **Replay** (`attack-replay.yaml`). The receivers drop 256,858 stale replays. As a result,
+  0 attackers are reported or revoked, against 11 of 11 before. A replay older than 2 s is
+  now harmless, but it is also never punished. Record this as a finding for the red team.
+- **Open.** In the realism base under the US profile, 10 of 7,488 reports were set aside
+  as implausible: their evidence was up to 43,125 s older than the report, yet no receiver
+  refused anything. Not root-caused. It could be a message whose stamped time passes the
+  window on one clock and fails on another.
+
+### 7.2 Verify-on-demand with detection
+
+- **Sources.** SM-MBR v1.0 §2.3.1.2.1 and §2.3.1.3.1 define a report's evidence as the
+  accused's *signed* BSMs. A message whose signature was never checked is not evidence
+  about anyone. Verify-on-demand (Krishnan and Weimerskirch 2011) checks only what an
+  application is about to act on.
+- **What the engine does.** Detection therefore runs only on verified messages. The
+  research suite already did this; `detect/us-sm-mbr` now does too. Before, it judged
+  1,389 unverified BSMs in the realism base, and it judged failed ones as well.
+- **Warning.** The loader now warns (manifest, `v2xw validate`, and the settings window's
+  Check through `scenario.validate`) when `security.verification_policy` is not
+  `verify-all` and `detection.local` is set. The settings-window text for the field says
+  the same.
+
+| realism base, on-demand | before (research suite) | after (research suite) | after (US profile) |
+|---|---|---|---|
+| verified / unverified receptions | 6,623 / 6,894 | 6,623 / 6,894 | 37,562 / 39,880 |
+| reports at the MA | 142 | 142 | 3,632 |
+| attackers revoked | 1 of 3 | 1 of 3 | 1 |
+| honest vehicles revoked | 0 | 0 | 22 (R-USFP, §7.3) |
+
+### 7.3 The US profile is the default of the US real-world presets
+
+`real-world/midtown-scms-benchmark.yaml` now runs `detect/us-sm-mbr`, and every preset
+based on it inherits it (quarter, LTE, Portland, realism and its variants). The research
+suite stays selectable as `realism/research-suite.yaml`.
+
+| realism base | before (research suite) | after (US profile) |
+|---|---|---|
+| reports at the MA | 310 | 7,488 |
+| attackers revoked | 3 of 3 | 1 |
+| **honest vehicles revoked** | 0 | **26** |
+
+This is R-USFP at full strength. Two causes combine:
+
+- The SM-MBR 1 m RandomPosition drift has no streak gate.
+- The engine puts raw GNSS positions, with 12 m Gauss-Markov jumps, into the BSM.
+
+A deployed OBU sends a filtered position. A filtered-position model (owed since R-USFP)
+is needed before this preset's revocation numbers are trusted. The default follows the
+deployment as asked. Revert the one line if the owner prefers the research suite until
+then.

@@ -131,6 +131,22 @@ pub const ETSI_PKI: &str = "protocol/etsi/ts102941";
 /// The detector suite's id, as `detection.local` names it.
 pub const LEGACY_12: &str = "detect/legacy-12";
 
+/// Whether a report's evidence time (`st_tend`, the accused message's `generationTime`
+/// on its sender's clock) is plausible against the report's own generation time (the
+/// reporter's clock): not after it by more than the relevance window's future tolerance,
+/// and not older than the longest maximum age of the window
+/// ([`v2xw_node::rxval::GenerationTimeWindow::default`]). A report with no evidence
+/// time (`st_tend == 0` from a source that sets none) is not judged here.
+#[must_use]
+pub fn evidence_time_plausible(r: &MisbehaviourReport) -> bool {
+    let w = v2xw_node::rxval::GenerationTimeWindow::default();
+    let (ev, made) = (r.st_tend, r.generation_time);
+    if ev == 0 {
+        return true;
+    }
+    ev <= made.saturating_add(w.max_future_ns) && made.saturating_sub(ev) <= w.max_age_ns
+}
+
 /// The strict US misbehaviour profile's id ([SM-MBR] v1.0 §2.3 PSID-0x20 subtypes and
 /// default thresholds, `v2xw_threat::us_mbr`), as `detection.local` names it.
 pub const US_SM_MBR: &str = "detect/us-sm-mbr";
@@ -1336,6 +1352,19 @@ pub struct Phase2Report {
     /// given was the accused's bad signature, which proves nothing about the certificate
     /// holder (anyone can attach a digest to a forged frame).
     pub reports_evidence_unverifiable: u64,
+    /// Reports the MA set aside because their evidence's own `generationTime` is
+    /// implausible against the report's: evidence stamped after the report that carries
+    /// it (beyond the 40 ms future tolerance), or older than any receiver accepts
+    /// ([`v2xw_node::rxval::MAX_AGE_S`]). Such evidence is what a sender with a wrong
+    /// clock produces, and judging its kinematics would revoke an honest device.
+    pub reports_evidence_time_implausible: u64,
+    /// Of those, the evidence stamped after the report (the accused's clock ahead, or the
+    /// reporter's behind); the rest are evidence older than any receiver accepts.
+    pub reports_evidence_after_report: u64,
+    /// The largest lead of an evidence time over its report's, ns, among the refused.
+    pub evidence_lead_max_ns: u64,
+    /// The largest lag of an evidence time behind its report's, ns, among the refused.
+    pub evidence_lag_max_ns: u64,
     /// Reports a device could not secure (no evidence heard, no certificate or key),
     /// sent on the modelled path; see `scms.state.pdu_rejections` for the backend's.
     pub reports_mbr_unsecured: u64,
@@ -3689,9 +3718,15 @@ impl Phase2 {
                     ma.trust_infrastructure(reporter.clone());
                 }
             }
-            if let Some(report) =
+            if let Some(mut report) =
                 MisbehaviourReport::from_verdict(id, node, reporter, &verdict, &evidence)
             {
+                // The evidence window is the accused message's own `generationTime`, on
+                // the sender's clock, as the signed BSM in the report carries it
+                // ([SM-MBR] §2.3.1.2.1); the report's own generation time is the
+                // reporter's (`detection_time`). The MA compares the two.
+                report.st_tstart = m.claimed_generation_time;
+                report.st_tend = m.claimed_generation_time;
                 self.report.reports_sent += 1;
                 truths.push((verdict.subject.clone(), m.received_at));
                 out.push(report);
@@ -5142,6 +5177,29 @@ impl Phase2 {
             // certificate; 03 §8.2: a valid signature is a precondition of processing).
             if r.reason_codes.iter().all(|c| c == SIGNATURE_VERIFICATION) {
                 self.report.reports_evidence_unverifiable += 1;
+                continue;
+            }
+            // The evidence's own time stamps against the report's. A BSM cannot have been
+            // generated after the report that quotes it, and one older than any receiver
+            // accepts could not have been judged by a receiver bound by the relevance
+            // window: either way the kinematics in it were judged on a clock that was
+            // wrong, which is how an honest device with a bad clock got revoked (15 of
+            // them for one 5,000 s skew, docs/design/scms-real/testing/edge-cases.md §6).
+            // The rule uses the deployment profile's window (RS_BSP_168), not a device's.
+            if !evidence_time_plausible(&r) {
+                self.report.reports_evidence_time_implausible += 1;
+                if r.st_tend > r.generation_time {
+                    self.report.reports_evidence_after_report += 1;
+                    self.report.evidence_lead_max_ns = self
+                        .report
+                        .evidence_lead_max_ns
+                        .max(r.st_tend - r.generation_time);
+                } else {
+                    self.report.evidence_lag_max_ns = self
+                        .report
+                        .evidence_lag_max_ns
+                        .max(r.generation_time - r.st_tend);
+                }
                 continue;
             }
             let action = self.ma[k].ingest_evidence(&r, r.detection_time);
@@ -7386,5 +7444,47 @@ mod fast_forward_wake_tests {
         let in_transit = p.next_wake(before).expect("a wake");
         assert_eq!(in_transit, w_before.map_or(crossed, |w| w.min(crossed)));
         assert_eq!(p.next_wake(after), w_after, "a crossed version is no wake");
+    }
+}
+
+#[cfg(test)]
+mod evidence_time_tests {
+    use super::*;
+    use v2xw_core::time::NS_PER_S;
+    use v2xw_threat::detect::{DetectorId, Fingerprint, Observation, Verdict};
+
+    fn report(generated: SimTime, evidence: SimTime) -> MisbehaviourReport {
+        let verdict = Verdict {
+            subject: "0102030405060708".to_string(),
+            fingerprint: Fingerprint::default(),
+            fired: vec![Observation {
+                detector: DetectorId::PositionJump,
+                score: 1.5,
+                subject: "0102030405060708".to_string(),
+                at: generated,
+            }],
+        };
+        let ev = v2xw_threat::Evidence::at(generated, generated, 1.0);
+        let mut r = MisbehaviourReport::from_verdict("r", NodeId::new(1), "aa", &verdict, &ev)
+            .expect("a fired check is a report");
+        r.st_tstart = evidence;
+        r.st_tend = evidence;
+        r
+    }
+
+    /// The MA's evidence-time rule (the edge-case finding of a 5,000 s skew revoking 15
+    /// honest vehicles): evidence stamped after its report beyond 40 ms, or older than
+    /// 10 minutes, is implausible; evidence a few seconds before the report is not.
+    /// Faults injected (and reverted): the rule returning `true` always fails the first
+    /// assertion; dropping the age bound fails the second.
+    #[test]
+    fn evidence_from_a_wrong_clock_is_implausible() {
+        let t = 10_000 * NS_PER_S;
+        assert!(!evidence_time_plausible(&report(t, t + 5_000 * NS_PER_S)));
+        assert!(!evidence_time_plausible(&report(t + 5_000 * NS_PER_S, t)));
+        assert!(evidence_time_plausible(&report(t, t - NS_PER_S)));
+        assert!(evidence_time_plausible(&report(t, t + 39_000_000)));
+        assert!(!evidence_time_plausible(&report(t, t + 41_000_000)));
+        assert!(evidence_time_plausible(&report(t, t - 599 * NS_PER_S)));
     }
 }

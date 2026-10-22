@@ -1271,6 +1271,30 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the overdue-CRL tolerance",
     },
+    // The generationTime relevance window (IEEE 1609.2 §5.2; C2C-CC BSP RS_BSP_168:
+    // 2 s, 10 min, 40 ms). Zero is the strictest receiver; a year turns a bound off in
+    // effect, for a study of the system without it.
+    Bound {
+        path: "security.scms.rx_beacon_max_age_s",
+        lo: 0.0,
+        hi: 31_536_000.0,
+        exclusive_lo: false,
+        what: "the oldest safety beacon a receiver accepts",
+    },
+    Bound {
+        path: "security.scms.rx_max_age_s",
+        lo: 0.0,
+        hi: 31_536_000.0,
+        exclusive_lo: false,
+        what: "the oldest application message a receiver accepts",
+    },
+    Bound {
+        path: "security.scms.rx_max_future_s",
+        lo: 0.0,
+        hi: 31_536_000.0,
+        exclusive_lo: false,
+        what: "how far in the future a receiver accepts a generation time",
+    },
     Bound {
         path: "nodes.validated_cert_cache",
         lo: 1.0,
@@ -2774,6 +2798,30 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                Distribution Centre (the CPOC) when it joins and then every \
                crl_fetch_interval_s, over its own access, receiving only what is newer \
                (TS 102 941 §6.3.3); nothing re-issues either list during a run.",
+    },
+    KeyStatus {
+        path: "security.scms.rx_beacon_max_age_s",
+        status: Status::Wired,
+        note: "The oldest a received BSM, CAM, PSM or VAM may be on the receiver's own \
+               clock (IEEE 1609.2 §5.2 relevance check; 2 s unless set, C2C-CC BSP \
+               RS_BSP_168). An older one is discarded unverified (node.rx \
+               generation-time-window, rxval generation-time-too-old) and reaches no \
+               detector.",
+    },
+    KeyStatus {
+        path: "security.scms.rx_max_age_s",
+        status: Status::Wired,
+        note: "The oldest any other application message (SPaT, MAP, DENM, CPM, SRM, SSM) \
+               may be on the receiver's clock (600 s unless set, RS_BSP_168). Reports, \
+               CRLs, P2PCD and WSAs are not checked.",
+    },
+    KeyStatus {
+        path: "security.scms.rx_max_future_s",
+        status: Status::Wired,
+        note: "How far ahead of the receiver's clock a generation time may be (0.04 s \
+               unless set, RS_BSP_168); later ones are discarded unverified (rxval \
+               generation-time-in-future). The misbehaviour authority's evidence rule \
+               uses the RS_BSP_168 values whatever a scenario sets here.",
     },
     KeyStatus {
         path: "security.scms.crl_overdue_tolerance_s",
@@ -5019,6 +5067,39 @@ pub fn pq_rsu_proxy_warnings(s: &Scenario) -> Vec<String> {
         .collect()
 }
 
+/// A warning when a verification policy other than `verify-all` runs with local
+/// misbehaviour detection.
+///
+/// Both detector suites judge only messages the receiver verified: a report's evidence is
+/// the accused's *signed* BSMs ([SM-MBR] v1.0 §2.3.1.2.1, §2.3.1.3.1), and a message whose
+/// signature was never checked is not evidence about anyone (`detect::Legacy12` zeroes
+/// it, `us_mbr::UsSmMbr` skips it). Verify-on-demand checks only what a safety application
+/// is about to act on (Krishnan & Weimerskirch, SAE Int. J. Passenger Cars 4:536-546,
+/// 2011), so detection sees a sliver of the traffic: in the effects study (row
+/// `ond-reports`, docs/design/scms-real/testing/effects.md) reports fell from 897 to 79 and
+/// no attacker was revoked in 54 h. Not a refusal: that blindness is a weakness worth
+/// studying, and the run still says so in its manifest.
+pub fn detection_policy_warnings(s: &Scenario) -> Vec<String> {
+    let policy = s.security.verification_policy.as_str();
+    if policy == "verify-all" || s.detection.local.is_empty() {
+        return Vec::new();
+    }
+    let what = match policy {
+        "on-demand" => "verifies only the messages a safety application is about to act on",
+        "prioritized" => "sheds the oldest and least relevant messages unverified when the \
+                          verifier falls behind",
+        _ => "leaves some messages unverified",
+    };
+    vec![format!(
+        "security.verification_policy: '{policy}' {what}, and misbehaviour detection \
+         (detection.local) judges only verified messages, because a report's evidence must \
+         be the accused's signed messages (SCMS Manager SM-MBR v1.0 §2.3.1.2.1). Detection \
+         is then nearly blind: with on-demand, reports fell from 897 to 79 and no attacker \
+         was revoked in 54 h (docs/design/scms-real/testing/effects.md, ond-reports). Use \
+         verify-all to measure detection, or keep this to study the blindness."
+    )]
+}
+
 /// A warning when `security.signature` makes every signed message larger than the network
 /// layer's MTU and no fragmenter splits it: each SPDU is then refused before the MAC
 /// (`net_mtu_refusals`), so the run sends no frames and costs nothing, which reads as a
@@ -7147,6 +7228,17 @@ fn scms_lifecycle(s: &Scenario, e: &mut Vec<ScenarioError>) {
             f64::from(t),
             e,
         );
+    }
+    if let Some(x) = s.security.scms.as_ref() {
+        for (path, v) in [
+            ("security.scms.rx_beacon_max_age_s", x.rx_beacon_max_age_s),
+            ("security.scms.rx_max_age_s", x.rx_max_age_s),
+            ("security.scms.rx_max_future_s", x.rx_max_future_s),
+        ] {
+            if let Some(v) = v {
+                bounded_at(path, path, v, e);
+            }
+        }
     }
     let Some(l) = s.security.scms.as_ref().and_then(|x| x.lifecycle.as_ref()) else {
         return;

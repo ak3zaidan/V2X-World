@@ -259,6 +259,12 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
             "nodes.validated_cert_cache",
             v2xw_node::rxval::EE_CACHE as f64,
         ),
+        (
+            "security.scms.rx_beacon_max_age_s",
+            v2xw_node::rxval::BEACON_MAX_AGE_S,
+        ),
+        ("security.scms.rx_max_age_s", v2xw_node::rxval::MAX_AGE_S),
+        ("security.scms.rx_max_future_s", v2xw_node::rxval::MAX_FUTURE_S),
     ] {
         let f = fields
             .iter()
@@ -281,9 +287,13 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
         assert_eq!(f["default"].as_f64(), Some(default), "{path}");
     }
     assert_eq!(v2xw_node::rxval::OVERDUE_CRL_TOLERANCE_S, 14 * 86_400);
+    // C2C-CC BSP RS_BSP_168 (via Vanetza's check_generation_time): 2 s, 10 min, 40 ms.
+    assert_eq!(v2xw_node::rxval::BEACON_MAX_AGE_S, 2.0);
+    assert_eq!(v2xw_node::rxval::MAX_AGE_S, 600.0);
+    assert_eq!(v2xw_node::rxval::MAX_FUTURE_S, 0.040);
 
     let mut doc = base_doc();
-    doc["security"]["scms"] = json!({"crl_overdue_tolerance_s": 3_600});
+    doc["security"]["scms"] = json!({"crl_overdue_tolerance_s": 3_600, "rx_max_future_s": 0.5});
     doc["nodes"]["validated_cert_cache"] = json!(7);
     assert_eq!(errors(doc.clone()), Vec::<String>::new());
     let s = Scenario::from_document(doc).expect("deserialises");
@@ -293,6 +303,9 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
         ReceiverLimits {
             validated_cert_cache: Some(7),
             crl_overdue_tolerance_s: Some(3_600),
+            generation_window: Some(v2xw_node::rxval::GenerationTimeWindow::from_secs(
+                2.0, 600.0, 0.5
+            )),
         }
     );
     let mut sec = v2xw_node::NodeSecurity::new(
@@ -305,6 +318,11 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
         .install_trust(&mut sec);
     assert_eq!(sec.trust().overdue_crl_tolerance_s(), 3_600);
     assert_eq!(sec.trust().ee_cache().capacity(), 7);
+    assert_eq!(
+        sec.trust().generation_time_window().max_future_ns,
+        500_000_000,
+        "the future tolerance reaches the trust store"
+    );
     assert_eq!(
         ReceiverLimits::of(&Scenario::from_document(base_doc()).expect("base")),
         ReceiverLimits::default(),
@@ -320,6 +338,18 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
             json!({"nodes": {"validated_cert_cache": 0}}),
             "nodes.validated_cert_cache",
         ),
+        (
+            json!({"security": {"scms": {"rx_beacon_max_age_s": -1.0}}}),
+            "security.scms.rx_beacon_max_age_s",
+        ),
+        (
+            json!({"security": {"scms": {"rx_max_age_s": 40_000_000.0}}}),
+            "security.scms.rx_max_age_s",
+        ),
+        (
+            json!({"security": {"scms": {"rx_max_future_s": -0.1}}}),
+            "security.scms.rx_max_future_s",
+        ),
     ] {
         let mut doc = base_doc();
         if let Some(t) = set["security"]["scms"].as_object() {
@@ -334,4 +364,37 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
             "{set} was not refused: {e:?}"
         );
     }
+}
+
+/// Verify-on-demand with misbehaviour detection warns, in the loader's warnings (the
+/// manifest, `v2xw validate` and the settings window's Check all read this list): both
+/// suites judge only verified messages (SM-MBR v1.0 §2.3.1.2.1), so detection goes nearly
+/// blind (effects study, `ond-reports`: 897 reports to 79). `verify-all`, or no
+/// detection, does not warn.
+///
+/// Fault injected (and reverted): `detection_policy_warnings` returning nothing fails the
+/// first assertion.
+#[test]
+fn verify_on_demand_with_detection_warns() {
+    let warn = |policy: &str, detection: bool| {
+        let mut doc = base_doc();
+        doc["security"]["verification_policy"] = json!(policy);
+        if policy == "on-demand" {
+            doc["security"]["on_demand_threshold"] = json!(0.5);
+        }
+        doc["detection"]["local"] = if detection {
+            json!([{"id": "detect/us-sm-mbr"}])
+        } else {
+            json!([])
+        };
+        let s = Scenario::from_document(doc).expect("deserialises");
+        assert_eq!(v2xw_engine::scenario::validate(&s), Vec::new(), "{policy}");
+        v2xw_engine::scenario::detection_policy_warnings(&s)
+    };
+    let w = warn("on-demand", true);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].contains("security.verification_policy") && w[0].contains("897"), "{w:?}");
+    assert_eq!(warn("prioritized", true).len(), 1);
+    assert!(warn("verify-all", true).is_empty());
+    assert!(warn("on-demand", false).is_empty());
 }

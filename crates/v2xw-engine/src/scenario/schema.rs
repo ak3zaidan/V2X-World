@@ -2482,6 +2482,20 @@ pub struct ScmsSpec {
     /// refuses every message they sign. Two weeks (1,209,600 s) unless set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crl_overdue_tolerance_s: Option<u32>,
+    /// The receiver's `generationTime` relevance window (IEEE 1609.2 §5.2,
+    /// `v2xw_node::rxval::GenerationTimeWindow`): the oldest a received BSM, CAM, PSM or
+    /// VAM may be on the receiver's own clock, seconds (2 unless set, C2C-CC BSP
+    /// RS_BSP_168). Older ones are discarded unverified and never reach a detector.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rx_beacon_max_age_s: Option<f64>,
+    /// The same for every other application message (SPaT, MAP, DENM, CPM, SRM, SSM),
+    /// seconds (600 unless set, RS_BSP_168).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rx_max_age_s: Option<f64>,
+    /// How far ahead of the receiver's own clock a `generationTime` may be, seconds
+    /// (0.04 unless set, RS_BSP_168).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rx_max_future_s: Option<f64>,
 }
 
 /// `security.scms.lifecycle`: the credential lifecycle's knobs as typed, published fields.

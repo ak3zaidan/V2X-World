@@ -4719,7 +4719,9 @@ impl Engine for LiveEngine {
 
     fn validate_document(&self, doc: &Value) -> Option<(Vec<ParamError>, Vec<ParamError>)> {
         Some(match self.scenario_from_document(doc) {
-            Ok(_) => (Vec::new(), Vec::new()),
+            // The loader's warnings for a document it accepts, so the settings window's
+            // Check shows them beside the field they are about (`severity: warning`).
+            Ok(s) => (Vec::new(), scenario_warnings(&s)),
             Err(errors) => (errors, Vec::new()),
         })
     }
@@ -5688,4 +5690,27 @@ mod breakdown_total_cap_tests {
         let groups = stores["a"].groups("node", &BTreeMap::new(), 0, u64::MAX);
         assert_eq!(groups.len(), 7, "every node still groups");
     }
+}
+
+/// The loader's warnings about a scenario it accepts, as `severity: warning` rows: the
+/// same lists the run's manifest carries (`v2xw_engine::manifest`), each on the field it
+/// is about.
+fn scenario_warnings(s: &Scenario) -> Vec<ParamError> {
+    let row = |path: &str, message: String| ParamError {
+        path: path.to_string(),
+        message,
+        hint: None,
+        severity: Some("warning".to_string()),
+    };
+    let mut out: Vec<ParamError> = v2xw_engine::scenario::detection_policy_warnings(s)
+        .into_iter()
+        .map(|m| row("/security/verification_policy", m))
+        .collect();
+    out.extend(
+        v2xw_engine::scenario::signature_mtu_warnings(s)
+            .into_iter()
+            .chain(v2xw_engine::scenario::pq_rsu_proxy_warnings(s))
+            .map(|m| row("/security/signature", m)),
+    );
+    out
 }

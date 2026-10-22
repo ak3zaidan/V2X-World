@@ -46,9 +46,12 @@
 #  * Vehicles' own uplink: 80 % carry a cellular modem (ASSUMPTION: the embedded-telematics
 #    share of the 2025 US fleet); the rest top up only through a roadside unit, as the NYC
 #    pilot's retrofit devices did.
-#  * Misbehaviour detection: the twelve VeReMi/F2MD plausibility checks on every vehicle
-#    and RSU, judged against the accuracy each BSM states, and the corroborating MA.
-#    With honest traffic only, every report is a false positive.
+#  * Misbehaviour detection: the strict US profile, detect/us-sm-mbr (the SCMS Manager's
+#    PSID-0x20 report subtypes at their published thresholds, SM-MBR v1.0 §2.3, the
+#    reporting the US deployment specifies), on every verified BSM of every vehicle and
+#    RSU, and the corroborating MA. The research suite (the twelve VeReMi/F2MD checks,
+#    detect/legacy-12) stays selectable: realism/research-suite.yaml. With honest traffic
+#    only, every report is a false positive.
 #  * Privacy: a passive observer with sniffers at 10 % of the signalised intersections,
 #    each hearing 200 m (ASSUMPTION: a resourced but city-scale adversary; 100 % is the
 #    global eavesdropper of the literature). It only listens.
@@ -203,7 +206,7 @@ nodes:
 
 detection:
   local:
-    - id: detect/legacy-12
+    - id: detect/us-sm-mbr
   ma:
     id: threat/ma/corroborated
 
