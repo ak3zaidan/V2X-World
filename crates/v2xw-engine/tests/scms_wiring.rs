@@ -166,9 +166,11 @@ fn the_pdu_pki_is_anchored_at_the_governance_root() {
         gov.ctl.roots.iter().copied().collect(),
         engine.wall_clock().time32(0).expect("time32"),
     );
-    // ISS's RA carries its group in `certRequestPermissions`, so nothing is tolerated in
-    // this provider's chain (the SAESOL production RA's `certIssuePermissions` group is
-    // what `ChainPolicy::us_device` tolerates).
+    // ISS's RA carries the same `{all, 0, 0}` group in `certRequestPermissions`; it
+    // raises the same tolerated findings as the production RA's `certIssuePermissions`
+    // form (every published US RA does, `ChainPolicy::us_device`).
+    assert!(pki.ra.cert.0.to_be_signed.cert_request_permissions.is_some());
+    assert!(pki.ra.cert.0.to_be_signed.cert_issue_permissions.is_none());
     for (name, c) in [("aca", &pki.aca), ("ra", &pki.ra), ("crlg", &pki.crlg)] {
         let chain: Vec<_> = if name == "crlg" {
             vec![c.cert.clone(), pki.root.cert.clone()]
@@ -176,7 +178,11 @@ fn the_pdu_pki_is_anchored_at_the_governance_root() {
             vec![c.cert.clone(), pki.ica.cert.clone(), pki.root.cert.clone()]
         };
         match v2xw_sec::chain::validate(&chain, &policy) {
-            Ok(v) => assert!(v.tolerated.is_empty(), "{name}: nothing tolerated"),
+            Ok(v) => assert_eq!(
+                v.tolerated.is_empty(),
+                name != "ra",
+                "{name}: only the RA uses the tolerated profile"
+            ),
             Err(e) => panic!("{name} does not validate up to the CTL root: {e:?}"),
         }
     }

@@ -99,6 +99,37 @@ The largest remaining gap from a CV-pilot OBU is misbehaviour detection. The ben
 
 ## 4. Every documented deviation and what it changes
 
+> **Update, PKI/trust fix wave (2026-10-21, branch of 4924a5d2).** CF-CRACA, CF-UNCOMP,
+> gov L-1/L-5/F-1, crypto #29 and three edge-case items are fixed; the rows below are
+> kept as they were recorded.
+>
+> - **Per-provider certificate profiles** (`governance::CertProfile`,
+>   `deployment::Provider::cert_profile`). `us-production-2025`: provider-a certifies in
+>   ISS's published form (70 y root `v2xrootca.ghsiss.com`; ICA and sub-CAs 30 y with
+>   identifiedRegion {124, 484, 840} as `*.preprod.v2x.isscms.com`; MA/PG/CRLG
+>   1473 × 60 h; the RA's group in `certRequestPermissions`; encryption keys on ECA, PCA,
+>   RA, MA). provider-b keeps the SAESOL production form (`*.prod.s2x.io`). The test-CTL
+>   preset uses the ISS form (every published test chain names the root as CRACA);
+>   `camp-reference` keeps S2X.
+> - **CF-CRACA.** ISS form: the CRL signer is root-issued on series 256 ([SMP] Table 1,
+>   `crlg.preprod.v2x.isscms.com`) and every certificate below the root, pseudonyms
+>   included, names the root as CRACA. S2X form: the (unpublished) CRL signer is
+>   ICA-issued, the CRACA SAESOL's production sub-CAs name. Both the device-facing PKI and
+>   the governance hierarchy follow the profile, so a governance CRL now revokes the
+>   governance sub-CAs (test `pki_profile::per_provider`). Still true and recorded: the S2X
+>   CRL signer cannot revoke its own ICA (its CRACA is the ICA).
+> - **crypto #29.** The ECA names the provider's CRACA in the enrolment certificate (the
+>   request keeps `000000`), so a series-4 hash CRL revokes it.
+> - **CF-UNCOMP.** An explicit certificate's uncompressed key is accepted after an on-curve
+>   check and canonicalised to the compressed form.
+> - **Devices check a CTL's elector quorum** (`Phase2::take_ctl_install` through
+>   `DeviceTrust::install_ctl`): `trust_lists_refused`, `trust_list_verifications`.
+> - **A composite CRL with one unverifiable CRL** is kept: that CRL is skipped and only
+>   the entries it alone carries are dropped (`crls_skipped_unverifiable`,
+>   `crl_entries_unverifiable`); an entry no CRL carries still refuses the download.
+> - **A CTL due inside a fast-forward** was already a backend wake (`next_wake` offers
+>   `gov.pending`); a test now pins it. The edge run's "Thursday: no change" is not this.
+
 ### Cryptography and data formats (6)
 
 | Row | Difference from the real system | Impact |
