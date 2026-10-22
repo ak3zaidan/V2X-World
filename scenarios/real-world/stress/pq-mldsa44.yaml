@@ -1,0 +1,12 @@
+# pq-base.yaml with pure ML-DSA-44 (FIPS 204) signatures (stress.md §3).
+schema: v2xw/scenario/1
+meta:
+  name: stress-pq-mldsa44
+  description: >-
+    The post-quantum density base with pure ML-DSA-44 (FIPS 204) signatures.
+  authors: [v2xw]
+  tags: [stress, post-quantum, fragmentation]
+  created: "2026-10-21"
+  base: pq-base.yaml
+security:
+  signature: ml-dsa-44

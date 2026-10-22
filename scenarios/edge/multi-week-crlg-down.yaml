@@ -1,0 +1,21 @@
+# multi-week.yaml with the home provider's CRL Generator down from 700 s to 2,600,000 s
+# (day 30). No CRL is reissued at nextCrl (issue + 7 days), so from three weeks after the
+# last issue every receiver holding that CRL refuses every message under its CRACA
+# (CAMP 1.2.2 Table 67 overdue_CRL_tolerance = 2 weeks; IEEE 1609.2 nextCrl). The other
+# provider keeps reissuing. When the Generator returns its timers run (FLOWS), it reissues,
+# and devices recover at their next hourly poll. stress.md §2.
+schema: v2xw/scenario/1
+meta:
+  name: edge-multi-week-crlg-down
+  description: >-
+    Five weeks with the home CRL Generator down for 30 days: the overdue-CRL rule takes
+    effect in the run and every device refuses that provider's messages until a fresh
+    CRL arrives.
+  authors: [v2xw]
+  tags: [scms, edge-case, calendar, multi-week, crl, overdue, stress]
+  created: "2026-10-21"
+  base: multi-week.yaml
+actors:
+  backend:
+    failures:
+      - {node: crlg, mode: offline, from_s: 700.0, to_s: 2600000.0}

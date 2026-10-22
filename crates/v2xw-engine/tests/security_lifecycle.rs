@@ -921,3 +921,91 @@ fn a_late_vehicle_signs_in_the_current_period_and_honest_traffic_verifies() {
         "an honest vehicle was revoked"
     );
 }
+
+/// A device switched off by a timeline `outage` (a parked car with its OBU powered down)
+/// reaches no part of the SCMS until it is back on: no top-up and no CRL download while it
+/// is off, and it catches up once power returns (stress package). Before the fix the
+/// outage silenced only the radio, so the switched-off car kept its pool and its CRL
+/// current over the cellular link, and a car "offline for weeks" came back as if it had
+/// never left.
+#[test]
+fn a_switched_off_device_reaches_no_scms_until_it_is_back_on() {
+    use v2xw_engine::scenario::schema::{TimelineItem, TimelineKind};
+    let item = |t: f64, until: f64, kind: TimelineKind, target: u64| TimelineItem {
+        t,
+        until: Some(until),
+        kind,
+        params: [("target".to_string(), json!(target))]
+            .into_iter()
+            .collect(),
+    };
+    let build = || {
+        let mut s = grid(110.0, 400.0);
+        lifecycle(&mut s, compressed());
+        cellular(&mut s);
+        s
+    };
+    let topups = |r: &MemoryRecorder, node: u64, from: f64, to: f64| {
+        records(r, "sec.cert")
+            .iter()
+            .filter(|c| c["event"] == "top-up" && c["node"].as_u64() == Some(node))
+            .filter_map(|c| c["t"].as_u64())
+            .map(|t| t as f64 / 1e9)
+            .filter(|t| *t > from && *t <= to)
+            .count()
+    };
+    let crl = |r: &MemoryRecorder, node: u64, from: f64, to: f64| {
+        records(r, "msg.latency")
+            .iter()
+            .filter(|c| c["flow"] == "crl-download" && c["dest"].as_u64() == Some(node))
+            .filter_map(|c| c["t_origin"].as_u64())
+            .map(|t| t as f64 / 1e9)
+            .filter(|t| *t > from && *t <= to)
+            .count()
+    };
+    // A vehicle that topped up both early and late in the plain run: on the map throughout.
+    let (_, base) = run(build());
+    let node = records(&base, "sec.cert")
+        .iter()
+        .filter(|c| c["event"] == "top-up")
+        .filter_map(|c| c["node"].as_u64())
+        .find(|n| topups(&base, *n, 15.0, 30.0) > 0 && topups(&base, *n, 85.0, 110.0) > 0)
+        .expect("a vehicle topped up before 30 s and after 85 s");
+    // The same vehicle broken down from 30 s (so it stays on the map), with and without its
+    // OBU switched off from 31 s to 80 s.
+    let mut parked = build();
+    parked
+        .events
+        .push(item(30.0, 110.0, TimelineKind::Breakdown, node));
+    let mut off = parked.clone();
+    off.events
+        .push(item(31.0, 80.0, TimelineKind::Outage, node));
+    let (_, on_rec) = run(parked);
+    let (_, off_rec) = run(off);
+    let on_win = topups(&on_rec, node, 31.0, 80.0);
+    let off_win = topups(&off_rec, node, 31.0, 80.0);
+    let after = topups(&off_rec, node, 80.0, 110.0);
+    println!(
+        "node {node}: top-ups 31-80 s parked {on_win}, switched off {off_win}; after power \
+         returns {after}; CRL downloads 31-80 s parked {}, switched off {}",
+        crl(&on_rec, node, 31.0, 80.0),
+        crl(&off_rec, node, 31.0, 80.0)
+    );
+    assert!(
+        on_win >= 2,
+        "the parked vehicle with power on must keep topping up ({on_win})"
+    );
+    assert_eq!(
+        off_win, 0,
+        "a switched-off device topped up over the cellular link"
+    );
+    assert_eq!(
+        crl(&off_rec, node, 31.0, 80.0),
+        0,
+        "a switched-off device downloaded a CRL"
+    );
+    assert!(
+        after >= 1,
+        "the device did not catch up once power returned"
+    );
+}

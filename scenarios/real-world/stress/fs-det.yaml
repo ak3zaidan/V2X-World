@@ -1,0 +1,13 @@
+# The full-fleet first window cut to 5 s (2 s warm-up) for the 1-vs-4-thread determinism
+# check of the full benchmark (stress.md §1): provisioning burst and first radio seconds.
+schema: v2xw/scenario/1
+meta:
+  name: stress-fs-det
+  description: The full-fleet Midtown benchmark's first 5 s, for the thread-count determinism check.
+  authors: [v2xw]
+  tags: [stress, benchmark, full-fleet, determinism]
+  created: "2026-10-22"
+  base: fs-first-window.yaml
+time:
+  duration_s: 5.0
+  warmup_s: 2.0

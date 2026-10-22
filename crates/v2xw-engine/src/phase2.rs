@@ -1285,6 +1285,11 @@ struct NodeSec {
     starved_since: Option<SimTime>,
     /// See [`NodeSec::starved_since`].
     starved_last: SimTime,
+    /// The device is switched off (a timeline `outage`): it polls no CRL, asks for no
+    /// top-up or successor enrolment and receives no broadcast list until it is back on,
+    /// as a parked car with its OBU powered down. Its timers keep their due times, so it
+    /// catches up at its first backend step after power returns.
+    powered_off: bool,
 }
 
 /// Counters the run report carries for this path.
@@ -4019,7 +4024,7 @@ impl Phase2 {
     pub fn nodes_with_outbox(&self) -> Vec<NodeId> {
         self.nodes
             .iter()
-            .filter(|(_, n)| !n.outbox.0.is_empty())
+            .filter(|(_, n)| !n.outbox.0.is_empty() && !n.powered_off)
             .map(|(k, _)| *k)
             .collect()
     }
@@ -4577,6 +4582,9 @@ impl Phase2 {
         let us = self.etsi.is_none();
         let lead = self.params.scms.reenrol_lead.as_nanos();
         for n in self.nodes.values() {
+            if n.powered_off {
+                continue;
+            }
             if n.access == Some(AccessKind::Cellular) && !n.crl_fetch_in_flight {
                 offer(n.next_crl_fetch);
             }
@@ -4722,6 +4730,7 @@ impl Phase2 {
                 n.reenrol.is_none()
                     && !n.blocked
                     && !n.self_revoked
+                    && !n.powered_off
                     && lead.after(now) >= n.enrolment_until
             })
             .map(|(node, n)| (*node, n.access.unwrap_or(AccessKind::Offline)))
@@ -5985,7 +5994,7 @@ impl Phase2 {
         let providers = &self.device_provider;
         let mut out = Vec::new();
         for (node, n) in &mut self.nodes {
-            if n.access != Some(AccessKind::Cellular) || n.crl_fetch_in_flight {
+            if n.access != Some(AccessKind::Cellular) || n.crl_fetch_in_flight || n.powered_off {
                 continue;
             }
             if n.next_crl_fetch <= now {
@@ -6042,6 +6051,7 @@ impl Phase2 {
         for (node, n) in &mut self.nodes {
             if n.access == Some(AccessKind::Cellular)
                 && !n.crl_fetch_in_flight
+                && !n.powered_off
                 && n.crl_version < version
             {
                 n.crl_fetch_in_flight = true;
@@ -6068,6 +6078,25 @@ impl Phase2 {
         {
             n.crl_fetch_in_flight = false;
         }
+    }
+
+    /// Switches a device off or back on (a timeline `outage` on a vehicle or handset).
+    /// While off it reaches no part of the SCMS ([`NodeSec::powered_off`]). `false` when
+    /// the node has no device record here.
+    pub fn set_powered(&mut self, node: NodeId, on: bool) -> bool {
+        match self.nodes.get_mut(&node) {
+            Some(n) => {
+                n.powered_off = !on;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether the device is switched off ([`Phase2::set_powered`]).
+    #[must_use]
+    pub fn powered_off(&self, node: NodeId) -> bool {
+        self.nodes.get(&node).is_some_and(|n| n.powered_off)
     }
 
     /// A conditional CRL poll answered 412: the vehicle's copy is current.
@@ -6243,7 +6272,12 @@ impl Phase2 {
         let below = self.params.topup_below_periods;
         let mut out = Vec::new();
         for (node, n) in &self.nodes {
-            if n.topup.is_some() || n.self_revoked || n.blocked || n.etsi_batch.is_some() {
+            if n.topup.is_some()
+                || n.self_revoked
+                || n.blocked
+                || n.etsi_batch.is_some()
+                || n.powered_off
+            {
                 continue;
             }
             let remaining = n.last_period.saturating_add(1).saturating_sub(current);
