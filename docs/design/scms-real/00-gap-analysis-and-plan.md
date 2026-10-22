@@ -516,6 +516,7 @@ Links (all TLS 1.2/1.3 between online components; application-layer encryption w
 | 8 | [x] E1, [x] F3 (merged 2026-10-17) | E1 is publication; F3 is scale testing on the new topology | 12 |
 | 9 | E2, E3 | Both UI, on E1's fixtures; separate component folders | 20 |
 | 10 | F1, F2 | Final validation | 16 |
+| 11 | [x] PKI, [x] FLOWS, [x] POLICY (merged 2026-10-21) | Fix wave for the config-testing deviations 1–7: PKI profiles and trust, backend flows, receiver and MA policy. Different modules | ≈ 24 |
 | | | **Total** | **≈ 201 agent-hours** over 10 waves, plus one merge agent per wave (≈ 2 h each) |
 
 Wave 1 status (2026-10-16, merged into `main`; details in BUILD-STATUS.md):
@@ -580,6 +581,11 @@ Validation status (2026-10-18, five validators merged into `main`; checklists in
 - [x] **VAL-GOV** (merge `aee0f110`): 70 rows (45/8/11/6). CTL business days skip federal holidays, the elector deadline is 5 days, a replacement elector is valid 15 y, a removed root is no longer listed, and the test CTL approves 5 of 6 roots. F2 §9 is resolved.
 - [x] **VAL-VEH** (merge `3c1f5736`): 67 requirements (41/7/8/11). Each device has its own PSID profile (handsets 0x26/0x27), the MA sets aside signature-only evidence, detectors skip relayed frames, a pseudonym change resets PSM msgCnt, and the `j2945-1`/`nyc-pilot` strategies are added. MBR airtime in the first 60 s fell from 29.3 % to 0 %.
 - [x] **VAL-UI** (merge `0c8a5e34`): one "Certificate system" workspace (Overview diagram, health strip, Vehicles timeline, Misbehaviour steps, Revocation), and `inspect.trust` lists the window's messages. Open: the enforced n/N count, and messages missed at high speed.
+
+Fix wave status (2026-10-21, merged into `main`; details in BUILD-STATUS.md and 07-config-testing-report.md §7–§8):
+- [x] **PKI** (merge `a8c411da`): `governance::CertProfile` with the ISS form (70 y root, root-issued CRL signer, root as CRACA) and the SAESOL form (ICA-issued CRL signer); us-production-2025 provider-a is ISS. Devices check a new CTL's 3-of-5 quorum, a composite CRL skips only an unverifiable CRL, uncompressed keys are accepted after an on-curve check, enrolment certificates carry the CRACA. Open: Studio PKI fixtures, an oracle check of the ISS profile.
+- [x] **FLOWS** (merge `8250023b`): backend messages to a down component are held and retried every 10 s, and its timers run on restart; RSU-filed unsigned reports carry their own label; CRL polls are conditional (412 when current) and interrupted downloads resume with Range/206. Single-channel MAC documented. Open: per-channel MAC queues and WSA bytes, the infoStatus body.
+- [x] **POLICY** (merge `e2c77632`): US SM-MBR judges only verified BSMs; verify-on-demand with detection warns in validate and settings; a 1609.2 generationTime window on every receiver and an MA evidence-time rule; the dead-reckoning clock mix fixed (clock-skew edge: 19 honest revoked → 0). Open: the US default revokes 26 honest vehicles in the realism base (R-USFP, raw-GNSS drift).
 
 Critical path: A1 → A3 → A5 → B4 → C2 → D1 → E1 → E2/E3 → F1. Two things could stretch it:
 - `rasn-compiler` cannot handle the 1609.2.1 modules (WP-A1 fallback adds about 8 h).
