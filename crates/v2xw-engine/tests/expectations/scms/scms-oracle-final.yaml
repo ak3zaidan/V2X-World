@@ -5,7 +5,8 @@
 # the engine is fixed, then flips to pass). Rows with `compare` are measured against the base
 # run on the same seed and checked by hand in the report (section 3).
 #
-# Runs (release binary of main 4924a5d2, `--record-level events`):
+# Runs (first: release binary of main 4924a5d2; re-checked on HEAD 88e24b09, optimised debug
+# build, see the report's section 8; `--record-level events`):
 #   conf = scenarios/scms-conformance.yaml   (base)
 #   mbr  = scenarios/scms-oracle-mbr.yaml    (variant: automatic MA at both providers, 20 %
 #          liars, four radio windows over 15 days, same seed)
@@ -29,6 +30,13 @@
 - {run: mbr, rule: CRL-ENV, expect: pass, source: "as above, every CRL"}
 - {run: conf, rule: CRL-SSP, expect: pass, source: "CrlSsp lists the series; crlCraca per associatedCraca (Ieee1609Dot2CrlSsp)"}
 - {run: mbr, rule: CRL-SSP, expect: pass, source: "as above"}
+- {run: conf, rule: CRL-NEXT, expect: pass, source: "HEAD row (written before the HEAD run): R-NOCRL makes every CRACA publish at t0, so conf has two CRLs per revoking series; nextCrl strictly after issueDate (CrlBaseTypes)"}
+- {run: conf, rule: CRL-TIME, expect: pass, source: "HEAD row: issueDate not after the first send"}
+- {run: conf, rule: CRL-SEQ, expect: pass, source: "HEAD row: the t0 CRL then the revocation CRL; full CRLs only (O-1 fixed), so indexWithinI 0, 1 with no gap (CrlBaseTypes comments)"}
+- {run: conf, rule: CRL-IREV, expect: pass, source: "HEAD row: iRev <= the i-period at issueDate (1609.2 5.1.3.4)"}
+- {run: conf, rule: CRL-KEEP, expect: pass, source: "HEAD row: a later full CRL keeps the earlier one's unexpired entries (the t0 CRL has none) ([SM-PROV] 3.4.9)"}
+- {run: conf, rule: CRL-SLA, expect: pass, source: "HEAD row: the revocation CRL comes before the t0 CRL's nextCrl ([SM-PROV] 3.4.10)"}
+- {run: conf, rule: CRL-STATE, expect: pass, source: "HEAD row: the engine's CRL rows agree with the bytes"}
 - {run: mbr, rule: CRL-NEXT, expect: pass, source: "nextCrl strictly after issueDate (CrlBaseTypes)"}
 - {run: mbr, rule: CRL-TIME, expect: pass, source: "issueDate not after the first send"}
 - {run: mbr, rule: CRL-SEQ, expect: pass, source: "issueDate increases; indexWithinI 0 for a new iRev, +1 otherwise; crlSerial +1 (CrlBaseTypes comments)"}
@@ -45,6 +53,10 @@
 
 # ---- Provisioning downloads ----
 - {run: conf, rule: ENR-MAP, expect: pass, source: "EcaEeCertResponse.requestHash names the device's request; ECA signature ([ASN-2.1] EcaEeInterface)"}
+- {run: mbr, rule: ENR-MAP, expect: pass, source: "HEAD row (mbr had no row for the four OF-1/OF-2 rules): as above"}
+- {run: mbr, rule: ENR-LIFE, expect: pass, source: "HEAD row: 6-year enrolment ([CAMP122] Table 3); OF-1 fixed on main"}
+- {run: mbr, rule: DL-SIGN, expect: pass, source: "HEAD row: signed by the device's one enrolment certificate ([CAMP122] 6.3; [SM-MBR] 4); was 5,245 red on 4924a5d2 (OF-1)"}
+- {run: mbr, rule: MBR-UP, expect: pass, source: "HEAD row: every upload carries the SPDU and a Download-Req ([SM-MBR] 4); was 49 red on 4924a5d2 (OF-2)"}
 - {run: conf, rule: DL-ACK, expect: pass, source: "RaEeCertAck Signed psid 35 by an RA; requestHash; firstI for butterfly ([ASN-2.1] EeRaInterface)"}
 - {run: mbr, rule: DL-ACK, expect: pass, source: "as above"}
 - {run: conf, rule: DL-ENC, expect: pass, source: "Encrypted{Signed} to one RA certRecipInfo, psid 35, SignerSingleCert (03 3.1-3.2)"}
@@ -69,6 +81,8 @@
 # ---- CTL ----
 - {run: conf, rule: CTL-SUM, expect: pass, source: "sequence +1, >= quorum signers, in force from effectiveDate ([ASN-2.1] CertManagement)"}
 - {run: conf, rule: CTL-DEV, expect: pass, source: "a device never holds a CTL that is not yet published or an older one after a newer"}
+- {run: mbr, rule: CTL-SUM, expect: pass, source: "HEAD row: the same CTL change as conf (base scenario)"}
+- {run: mbr, rule: CTL-DEV, expect: pass, source: "HEAD row: as conf, over 15 days"}
 
 # ---- Base vs variant on the same seed (checked in the report, section 3) ----
 - {compare: [conf, mbr], measure: "distinct CRLs per provider", expect: "conf 1, mbr >= 3", source: "automatic decisions on several days, a weekly reissue before nextCrl ([SM-PROV] 3.4.10)"}
@@ -78,3 +92,12 @@
 - {compare: [conf, mbr], measure: "MA decision delay", expect: "mbr << conf's 8 h manual review", source: "automatic vs manual-review mode (CV pilots)"}
 - {compare: [conf, mbr], measure: "wall time / peak memory / records", expect: "wall ~1.7-2.5x, memory < 2x, records ~2-3.5x", source: "cost follows radio time and fleet; fast-forward is cheap"}
 - {compare: [conf, mbr], measure: "message types and entity pairs", expect: "the same set", source: "same deployment; only MA mode and liar share change"}
+
+# ---- HEAD 88e24b09 vs main 4924a5d2 (written before the HEAD runs; report section 8) ----
+- {compare: [conf@4924a5d2, conf@HEAD], measure: "CRLs", expect: "every CRACA publishes an empty full CRL at t0 (R-NOCRL); revocations then add one full CRL per revoking series; no delta CRL (O-1)", source: "BUILD-STATUS 2026-10-22 fix wave 2 (TRUST)"}
+- {compare: [conf@4924a5d2, conf@HEAD], measure: "report uploads", expect: "no upload without bytes (was 1,695 of 2,991); the uploads with bytes stay about 1,296", source: "OF-2 fix: unmappable detections not filed"}
+- {compare: [conf@4924a5d2, conf@HEAD], measure: "revocations", expect: "4 decided (a 1, b 3), 3 on CRLs, honest 0, unless the GNSS smoothing (R-USFP) changes the detections", source: "same seed; the MA path is unchanged"}
+- {compare: [conf@4924a5d2, conf@HEAD], measure: "enrolment certificates", expect: "one per device: the ECA exchange's own, registered at the RA, 6 years, back-dated for an aged device; it signs every Download-Req", source: "OF-1 fix"}
+- {compare: [conf@4924a5d2, conf@HEAD], measure: "records / CPU", expect: "records fall by about the 1,695 empty uploads and their RA/MA hops; CPU 1-2x the release run (optimised debug build)", source: "fewer messages; opt-level 2 vs release"}
+- {compare: [mbr@4924a5d2, mbr@HEAD], measure: "CRLs", expect: "full CRLs only; per provider the t0 CRL plus one per decision day; indexWithinI without gaps; iRev 615 then 616", source: "R-NOCRL, O-1"}
+- {compare: [mbr@4924a5d2, mbr@HEAD], measure: "revocations", expect: "about 12, honest 0; every decision on a CRL by the end of the next business day", source: "same seed"}
