@@ -219,9 +219,19 @@ fn a_hybrid_device_requests_afresh_for_each_top_up() {
 /// period, and the device downloads and installs `JMAX` certificates of it. Below the
 /// shuffle's count the batch waits the whole window, so a run shorter than the window after
 /// the top-up (the matrix's two-day run against the two-day age bound) ends before it lands.
+///
+/// The shuffle is set to an hour, far above `quick()`'s first-batch and poll delays (a
+/// minute each), so a top-up that skipped the shuffle would land well inside it.
 #[test]
 fn a_hybrid_top_up_is_installed_after_the_request_shuffle() {
-    let mut hybrid = scms("hybrid-falcon512-ecdsa-p256");
+    let params = ScmsParams {
+        hybrid: HybridScheme::from_signature("hybrid-falcon512-ecdsa-p256"),
+        shuffle_window: v2xw_core::time::Duration::from_secs(3_600),
+        ..ScmsParams::default().quick()
+    };
+    let mut hybrid = ScmsRun::new(params).expect("certificates encode");
+    hybrid.add_device(DEVICE_A);
+    provisioned(&mut hybrid, DEVICE_A, 0, PERIODS, JMAX);
     let window = hybrid.state.params.shuffle_window.as_nanos();
     let held = |r: &ScmsRun, i: u32| {
         r.state.devices[&DEVICE_A]
