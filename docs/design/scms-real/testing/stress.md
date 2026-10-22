@@ -34,16 +34,19 @@ times, so CPU time is the figure to compare.
 
 ## 1. Full-scale benchmark
 
-**Not run to the end. Its cost rules it out on this machine.**
-- The quarter-fleet density run `pq-base` cost 1,175 CPU-s for 60 simulated seconds
-  (19.6 CPU-s per simulated second). User time equalled wall time: `RAYON_NUM_THREADS=4`
-  did not parallelise the run.
+**Not run to the end. Its cost does not fit this package.**
+- On a quiet machine, a quarter-fleet density run (`pq-hybrid-falcon512`, 60 s live) cost
+  145 CPU-s, or 2.4 CPU-s per simulated second.
+- The ECDSA and ML-DSA quarter runs each took about 1,100 CPU-s. They ran while the
+  68-minute test suite shared the machine, so their run cost is not comparable.
+- `RAYON_NUM_THREADS=4` shortened no run: MW took 414 s at 4 threads and 343 s at 1.
 - The full file has 300 live seconds at four times the fleet. Pairs grow roughly with the
-  square of the fleet (F3: 15× for 4× vehicles). That is about 200–300 CPU-s per live
-  second, so 60,000–94,000 CPU-s (17–26 CPU-hours), plus about 0.4 CPU-s per device of
+  square of the fleet (F3: 15× for 4× vehicles). That gives about 24–39 CPU-s per live
+  second: 7,200–11,700 CPU-s (2–3.3 CPU-hours), plus about 0.4 CPU-s per device for the
   real-P-256 provisioning.
-- Neither the full file nor the 150 s first window (`stress/fs-first-window.yaml`) fits a
-  three-hour package on a shared laptop. Both scenarios are committed for a larger machine.
+- Neither the full file nor its 150 s first window (`stress/fs-first-window.yaml`, about
+  1–1.6 h) fit the time left after 75 minutes of waiting for the run lock. Both scenarios
+  are committed.
 
 **What was measured at full fleet:**
 - The 1-vs-4-thread determinism cut (`stress/fs-det.yaml`, 5 s). Result: FSDET (below).
@@ -97,10 +100,10 @@ today: R-USFP at rush-hour density** (open; 07 §8.3).
 | MWC.overdue-onset | from issue + 21 d, every message under the home CRACA refused | **0 refusals in every window**. The home provider published **no CRL before its first revocation** (190,769 s), so with the Generator down from 700 s no device ever held a home CRL, and a list one does not hold cannot become overdue. Versions published 10 → 6 | **open (R-NOCRL)**, see below |
 | MWC.revocation-blocked | home revocations unpublished until the return | the home attacker's entry (CRL of 1 entry, 252 B) published only after 2,600,000 s; downloads of the 3-entry composite only in W5 | pass |
 | MWC.recovery | 0 overdue refusals in W5 | 0 (vacuous: there were none to recover from) | open (R-NOCRL) |
-| MWC2.overdue-onset | home CRL issued 190,769 s → nextCrl 795,569 → overdue from 2,005,169 s: W3 none, W4 every home-CRACA message refused, W5 recovered | MWC2 | MWC2V |
-| MWP.off-no-backend | the parked car polls and tops up nothing while off | MWP1 | MWP1V |
-| MWP.overdue-on-return | refuses everything until its first poll (if it holds a CRL); empty pool until a top-up | MWP2 | MWP2V |
-| MW.determinism | identical record digest at 1 and 4 threads | MW1 | MW1V |
+| MWC2.overdue-onset | home CRL issued 190,769 s → nextCrl 795,569 → overdue from 2,005,169 s: W0–W3 none, W4 every home-CRACA message refused by every receiver, W5 recovered | crl-overdue refusals 0 / 0 / 0 / 0 / **87,823** / 0. In W4 the base's 203,395 valid became 115,572 valid plus 87,823 refused. Verified a←a fell 150,320 → 104,912 and b←a 124,661 → 82,246; the falls sum to 87,823. Provider-b-signed messages are unchanged. **Reports sent 1,930 → 7,869**: the legacy-12 detectors report the refused honest senders. Cases (3) and honest revocations (0) are unchanged, because the MA sets aside signature-only evidence | **pass**. Security finding: keeping one provider's CRL Generator down for 3 weeks after its last CRL silences everything that provider's fleet signs, at every receiver of both providers, and quadruples the reports at the MAs |
+| MWP.off-no-backend | the parked car polls and tops up nothing while off | node 20: no security record, top-up or CRL download from 645 s to 2,419,510 s. Its first CRL download is at 2,419,510 s, the power-on instant | **fixed** (F-OFF; before the fix it kept polling and topping up) |
+| MWP.overdue-on-return | refuses everything until its first poll; empty pool until a top-up | Pool: empty for about 60 s after power-on (121 records), then 4 catch-up top-ups (at 2,419,570, 631, 691 and 860 s), signing under 618 and then 619. CRL: no overdue refusal, because the car was switched off before any CRL existed (R-NOCRL) | pool: pass; CRL: **open (R-NOCRL)** |
+| MW.determinism | identical record digest at 1 and 4 threads | `0e97a8ac…5e08bee` at both (343 s at 1 thread, 414 s at 4) | pass |
 
 **R-NOCRL (open, engine realism defect).**
 - A provider's CRL Generator publishes nothing until its first revocation in the run
@@ -131,7 +134,8 @@ today: R-USFP at rush-hour density** (open; 07 §8.3).
 | PQ.verify-load | pure PQ cheaper to verify than software ECDSA | verify cost mean 0.628 → **0.430 ms**; charged verify time 2.78 → 1.71 s; e2e BSM latency 3.7 → 11.3 ms (airtime and queueing) | pass |
 | PQ.backend-bytes | credential bytes grow with certificate size | backend bytes 56.3 → 222.9 MB (×3.96). This includes reports, which fell, so the per-certificate factor is not isolated | open (not isolated) |
 | PQ.mbr-mtu | (found) | under ML-DSA-44 **every over-the-air report is refused at the WSMP MTU** (`net_mtu_refusals` 4,001 = `reports_uploaded_relay` 4,001; MBR airtime 9.1 s → 0). Engine application frames keep `fragmenter/none`'s rule (`run.rs` hand_down_app), so relay-only vehicles cannot report at all under PQ, **and each refused report is still counted as uploaded** | **open (R-PQMBR)**: the count is wrong; the loss itself is a real PQ finding (1609.3 WSMP has no fragmentation) |
-| PQ.hybrid-sizes, PQ.certcycle | — | `pq-hybrid-falcon512` and `-certcycle` and `pq-hybrid-mldsa44` were not run (about 20 min each; the run lock was the bottleneck) | open (owed) |
+| PQ.hybrid (Falcon) | hybrid Falcon-512: digest frame ~0.8 kB, 1 fragment; full ~2.4 kB, 2 fragments; airtime ×3–5; verify hybrid > ECDSA > pure PQ | 46,156 BSM frames (**1.10 per BSM**), PSDU mean 941 B; BSM airtime 60.2 s (**×4.4**); CBR mean 0.057; verified BSMs −11 %; verify cost mean **0.751 ms** (ECDSA 0.628, ML-DSA-44 0.430); e2e 6.7 ms; 5,064 over-the-air reports refused at the MTU (R-PQMBR) | pass |
+| PQ.hybrid ML-DSA, PQ.certcycle | — | `pq-hybrid-mldsa44` and `-certcycle` not run (the run lock was the bottleneck) | open (owed) |
 | PQ.determinism | identical at 1 and 4 threads | not run (20 min a run) | open (owed) |
 
 **PQ cost.** 1,143 s wall, 1,090 CPU-s and 379 MB, against 1,210 s, 1,175 CPU-s and 431 MB

@@ -28,6 +28,8 @@ runs:
       each), real cryptography, 10 % ConstPos attackers, manual MA, business-day CRL.
   MWC: {scenario: scenarios/edge/multi-week-crlg-down.yaml, base: MW,
         note: "the home CRL Generator offline from 700 s to 2,600,000 s"}
+  MWC2: {scenario: scenarios/edge/multi-week-crlg-down-late.yaml, base: MW,
+         note: "the home CRL Generator offline from 200,000 s (after its first CRL at 190,769 s) to 2,600,000 s; defined after MWC's result, its expectation written before its run"}
   MWP: {scenario: scenarios/edge/multi-week-parked.yaml, base: MW,
         note: "one cellular car broken down at 640 s with its OBU off from 645 s to 2,419,510 s"}
   MW1: {base: MW, set: {}, note: "MW at 1 thread (determinism)"}
@@ -248,6 +250,16 @@ rows:
   source: 03 §9 (CRL Generator is the only publisher)
   measured: "the home attacker's entry was published only after the Generator returned at 2,600,000 s; 3-entry composite downloads only in W5"
   verdict: pass
+- id: MWC2.overdue-onset
+  base: MW
+  variant: MWC2
+  area: metrics
+  measure: crl-overdue refusals per window, by signer's provider
+  expect: "home CRL issued 190,769 s, nextCrl 795,569 s, overdue from 2,005,169 s: W0-W3 none; W4 every message under the home CRACA refused by every receiver, the other provider's accepted; W5 (after the return at 2,600,000 s) none"
+  source: "[CAMP122] Table 67 overdue_CRL_tolerance = 2 weeks; nextCrl = issue + 7 d (params.rs)"
+  measured: "crl-overdue 0/0/0/0 in W0-W3, 87,823 in W4, 0 in W5; W4 valid 203,395 -> 115,572 + 87,823 refused (the base's W4 total exactly); verified a<-a 150,320 -> 104,912 and b<-a 124,661 -> 82,246 (sum of the falls 87,823), provider-b-signed unchanged (157,360 and 114,192); reports sent 1,930 -> 7,869 (legacy-12 detectors report the refused honest senders), cases 3 and honest revocations 0 unchanged (the MA sets aside signature-only evidence)"
+  verdict: pass
+  note: "security finding: keeping one provider's CRL Generator down for three weeks after its last CRL silences every message that provider's fleet signs, at every receiver of both providers, and quadruples the reports at the MAs"
 - id: MWP.off-no-backend
   base: MW
   variant: MWP
