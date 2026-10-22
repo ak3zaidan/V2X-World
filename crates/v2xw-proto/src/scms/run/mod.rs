@@ -1056,6 +1056,7 @@ impl ScmsRun {
                 clock: v2xw_core::time::WallClock::new(params.pdu.t0_unix_s),
                 provider: deployment.providers[0].name.clone(),
                 peers: crate::scms::governance::PeerProvider::of_deployment(&deployment),
+                profile: deployment.providers[0].cert_profile,
             },
         );
         for (a, b) in governance_links(&nodes, &gov) {
@@ -1103,8 +1104,15 @@ impl ScmsRun {
             let (root, ica) = (anchor("root")?, anchor("ica")?);
             let start = ica.0.0.to_be_signed.validity_period.start.0.0;
             Some(std::sync::Arc::new(
-                crate::scms::pdu::ScmsPki::under_anchors(params.master_seed, start, root, ica)
-                    .map_err(|e| refuse(e.to_string()))?,
+                crate::scms::pdu::ScmsPki::under_anchors_profiled(
+                    &deployment.providers[0].name,
+                    deployment.providers[0].cert_profile,
+                    params.master_seed,
+                    start,
+                    root,
+                    ica,
+                )
+                .map_err(|e| refuse(e.to_string()))?,
             ))
         } else {
             None
@@ -1126,9 +1134,15 @@ impl ScmsRun {
                 let (root, ica) = (anchor("root")?, anchor("ica")?);
                 let start = ica.0.0.to_be_signed.validity_period.start.0.0;
                 let seed = provider_seed(params.master_seed, &p.name);
-                let peer =
-                    crate::scms::pdu::ScmsPki::under_anchors_of(&p.name, seed, start, root, ica)
-                        .map_err(|e| refuse(e.to_string()))?;
+                let peer = crate::scms::pdu::ScmsPki::under_anchors_profiled(
+                    &p.name,
+                    p.cert_profile,
+                    seed,
+                    start,
+                    root,
+                    ica,
+                )
+                .map_err(|e| refuse(e.to_string()))?;
                 peer_pki.push((p.name.clone(), std::sync::Arc::new(peer)));
             }
         }

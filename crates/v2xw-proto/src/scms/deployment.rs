@@ -309,6 +309,9 @@ pub struct Provider {
     /// root nobody trusts (a test-CTL root on the production system, a rogue SCMS): it
     /// still certifies, and nothing it certifies verifies. The home provider must be on.
     pub on_ctl: bool,
+    /// Whose published certificate chain its certificates follow: lifetimes, regions,
+    /// the RA's permission form and the CRACA (gov L-1, L-5, F-1; crypto CF-CRACA).
+    pub cert_profile: crate::scms::governance::CertProfile,
 }
 
 impl Provider {
@@ -331,6 +334,7 @@ impl Provider {
             crl_publication: CrlPublication::SlaOneBusinessDay,
             fleet_share: share,
             on_ctl: true,
+            cert_profile: crate::scms::governance::CertProfile::default(),
         }
     }
 }
@@ -452,9 +456,14 @@ impl Deployment {
         };
         match p {
             // 01 §2.1–2.2 [A]: provider-a has the ISS/OmniTrust component pattern (one
-            // `pca`), provider-b the SAESOL S2X pattern (`aca` × 2).
+            // `pca`), provider-b the SAESOL S2X pattern (`aca` × 2). Each certifies in its
+            // own published form: provider-a ISS's (70 y root, root-issued CRL signer,
+            // regions on sub-CAs), provider-b SAESOL's production chain.
             Preset::UsProduction2025 | Preset::Custom => us(vec![
-                Provider::standard("provider-a", 1, manual, 0.5),
+                Provider {
+                    cert_profile: crate::scms::governance::CertProfile::Iss,
+                    ..Provider::standard("provider-a", 1, manual, 0.5)
+                },
                 Provider::standard("provider-b", 2, manual, 0.5),
             ]),
             // The 2025-07-17 test CTL (decoded from the published file, 01 §3.1): its
@@ -466,6 +475,9 @@ impl Deployment {
                 .map(|s| {
                     let mut p = Provider::standard(&format!("provider-{s}"), 1, manual, 1.0 / 6.0);
                     p.on_ctl = *s != "f";
+                    // Every published test chain (ISS, SAESOL, Autocrypt) names the root as
+                    // the CRACA of its sub-CAs: the root-issued CRL signer form.
+                    p.cert_profile = crate::scms::governance::CertProfile::Iss;
                     p
                 })
                 .collect()),

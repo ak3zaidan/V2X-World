@@ -431,13 +431,21 @@ pub fn public_key_material(cert: &Certificate) -> Result<Vec<u8>> {
     let (prefix, x) = match point {
         EccP256CurvePoint::compressed_y_0(x) => (0x02u8, x),
         EccP256CurvePoint::compressed_y_1(x) => (0x03, x),
-        EccP256CurvePoint::x_only(_)
-        | EccP256CurvePoint::fill(())
-        | EccP256CurvePoint::uncompressedP256(_) => {
+        // An uncompressed key is legal on the wire ("at the sender's discretion",
+        // 1609.2 `EccP256CurvePoint`); the receiver canonicalises it to the compressed
+        // form (§6.1.2) after checking the point is on the curve, so the key it imports is
+        // the one the certificate's canonical encoding (its identity and signer input)
+        // carries. Validation finding CF-UNCOMP: this path refused such a peer.
+        EccP256CurvePoint::uncompressedP256(u) => {
+            let sec1 = [&[0x04u8][..], &u.x[..], &u.y[..]].concat();
+            crate::ec::Point::from_sec1(&sec1)?;
+            let odd = u.y.last().is_some_and(|b| b & 1 == 1);
+            (if odd { 0x03 } else { 0x02 }, &u.x)
+        }
+        EccP256CurvePoint::x_only(_) | EccP256CurvePoint::fill(()) => {
             return Err(SecError::MissingField {
                 profile: "certificate",
-                field: "toBeSigned.verifyKeyIndicator: the key is not in the canonical \
-                        compressed form 1609.2 §6.1.2 requires",
+                field: "toBeSigned.verifyKeyIndicator: an x-only or fill point is not a key",
             });
         }
     };
@@ -1305,6 +1313,43 @@ mod tests {
         odd[0] = 0x03;
         let c = explicit(&spec(), &odd, zero_signature()).expect("builds");
         assert_eq!(public_key_material(&c).expect("extracts")[0], 0x03);
+    }
+
+    /// CF-UNCOMP: an explicit certificate whose key a peer sent uncompressed (legal on the
+    /// wire) yields the canonical compressed key, for both parities; a point off the curve
+    /// is refused.
+    #[test]
+    fn an_uncompressed_explicit_key_is_accepted_in_its_canonical_form() {
+        use v2xw_msg::sec_types::ieee1609_dot2_base_types::{
+            EccP256CurvePointUncompressedP256, PublicVerificationKey,
+        };
+        let uncompressed = |x: &[u8; 32], y: &[u8; 32]| {
+            VerificationKeyIndicator::verificationKey(PublicVerificationKey::ecdsaNistP256(
+                EccP256CurvePoint::uncompressedP256(EccP256CurvePointUncompressedP256::new(
+                    x.to_vec().into(),
+                    y.to_vec().into(),
+                )),
+            ))
+        };
+        let mut parities = [false, false];
+        for n in [12_345u64, 12_346, 99, 100, 7, 8] {
+            let p = Point::mul_base(&Scalar::from(n));
+            let (x, y) = p.xy().expect("affine");
+            let canonical = compressed_key(&p).expect("a real point");
+            parities[usize::from(canonical[0] == 0x03)] = true;
+            let mut c = explicit(&spec(), &canonical, zero_signature()).expect("builds");
+            c.0.to_be_signed.verify_key_indicator = uncompressed(&x, &y);
+            assert_eq!(
+                public_key_material(&c).expect("an uncompressed key is accepted"),
+                canonical.to_vec(),
+                "canonicalised to the compressed form"
+            );
+            let mut bad_y = y;
+            bad_y[31] ^= 0x01;
+            c.0.to_be_signed.verify_key_indicator = uncompressed(&x, &bad_y);
+            assert!(public_key_material(&c).is_err(), "a point off the curve is refused");
+        }
+        assert_eq!(parities, [true, true], "both parities exercised");
     }
 
     /// Where the measured certificate size differs from 04-models.md §9.2's derivation,

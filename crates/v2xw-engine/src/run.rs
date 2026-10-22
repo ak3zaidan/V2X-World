@@ -2016,14 +2016,26 @@ impl Engine {
             if secured.is_empty() {
                 continue;
             }
+            // Each signed CRL in the composite file is verified on its own: one the unit
+            // cannot verify is skipped (counted), and the rest installs.
             let mut crls = Vec::with_capacity(secured.len());
-            let mut ok = !secured.is_empty() && rt.security().trust().is_installed();
+            let mut skipped = 0usize;
+            let trusted = rt.security().trust().is_installed();
             for bytes in &secured {
                 match rt.install_secured_crl(bytes, now) {
                     Ok(v) => crls.push(v),
-                    Err(_) => ok = false,
+                    Err(_) => skipped += 1,
                 }
             }
+            let ok = trusted && !crls.is_empty();
+            if skipped > 0
+                && let Some(p) = self.phase2.as_mut()
+            {
+                p.crls_skipped(skipped, 0);
+            }
+            let Some(rt) = self.nodes.get_mut(&rsu) else {
+                continue;
+            };
             if ok {
                 for v in &crls {
                     let signed: Vec<v2xw_sec::linkage::CrlLinkageEntry> = entries
@@ -7335,28 +7347,41 @@ impl Engine {
         // The node's own verdict on the signed CRLs, when it can form one: every CRL
         // verifies, and every entry the frame carries is one some CRL signs (in that
         // CRL's form: seeds at iRev) or one already exhausted before iRev.
+        //
+        // A composite CRL carries one signed CRL per provider its RA serves. One the node
+        // cannot verify (its provider's root left the CTL, a bad signature) is skipped,
+        // not the whole download (1609.2.1 §6.3.5: each `SecuredCrl` is verified on its
+        // own): the entries only that CRL carries are dropped, never installed, and the
+        // rest installs. An entry no CRL in the download carries still refuses it.
+        let mut skipped: Option<(usize, usize)> = None;
+        let mut kept_entries: Option<Vec<v2xw_sec::linkage::CrlLinkageEntry>> = None;
         let verified = match self.nodes.get_mut(&node) {
             Some(rt) if !secured.is_empty() && rt.security().trust().is_installed() => {
                 let mut crls = Vec::with_capacity(secured.len());
+                let mut unverified = Vec::new();
+                let mut undecodable = 0usize;
                 for bytes in secured {
                     match rt.install_secured_crl(bytes, now) {
                         Ok(v) => crls.push(v),
-                        Err(_) => {
-                            crls.clear();
-                            break;
-                        }
+                        Err(_) => match v2xw_node::rxval::VerifiedCrl::claimed(bytes) {
+                            Some(c) => unverified.push(c),
+                            None => undecodable += 1,
+                        },
                     }
                 }
-                let signed = |e: &v2xw_sec::linkage::CrlLinkageEntry| {
-                    crls.iter()
-                        .any(|v| !matches!(v.signed_form(e), Some(Err(()))))
-                };
-                if !crls.is_empty() && entries.iter().all(signed) {
-                    Some(Some(crls))
-                } else {
-                    // A frame carrying an entry no signed CRL does, or a CRL that does
-                    // not verify: refused by the node.
-                    Some(None)
+                let sorted = sort_composite_entries(&crls, &unverified, entries);
+                let n_skipped = unverified.len() + undecodable;
+                if n_skipped > 0 {
+                    skipped = Some((n_skipped, sorted.as_ref().map_or(0, |(_, d)| *d)));
+                }
+                match sorted {
+                    Some((kept, _)) if !crls.is_empty() => {
+                        kept_entries = Some(kept);
+                        Some(Some(crls))
+                    }
+                    // Nothing in the download verifies, or it carries an entry no CRL
+                    // in it does: refused by the node.
+                    _ => Some(None),
                 }
             }
             _ => None,
@@ -7364,10 +7389,15 @@ impl Engine {
         let Some(phase2) = self.phase2.as_mut() else {
             return;
         };
+        if let Some((crls, dropped)) = skipped {
+            phase2.crls_skipped(crls, dropped);
+        }
         if let Some(None) = verified {
             phase2.crl_frame_refused(node, cellular);
             return;
         }
+        let entries: &[v2xw_sec::linkage::CrlLinkageEntry] =
+            kept_entries.as_deref().unwrap_or(entries);
         // The composite CRL file carries the home CTL (edge-case package, item 8): a
         // newer one is installed with it, and a root it no longer approves stops being a
         // trust anchor.
@@ -9676,4 +9706,98 @@ fn resolve_closures(
         out.insert(i, lanes);
     }
     Ok(out)
+}
+
+/// How a node sorts the linkage entries of a composite CRL download (1609.2.1 §6.3.5:
+/// each `SecuredCrl` in it is verified on its own). `verified` are the CRLs it verified,
+/// `unverified` what the CRLs it could not verify claim ([`VerifiedCrl::claimed`]).
+/// Returns the entries to install and how many it dropped because only an unverified CRL
+/// carries them, or `None` (refuse the download) when an entry is carried by no CRL in it
+/// at all: a forgery appended to genuine lists.
+///
+/// [`VerifiedCrl::claimed`]: v2xw_node::rxval::VerifiedCrl::claimed
+pub(crate) fn sort_composite_entries(
+    verified: &[v2xw_node::rxval::VerifiedCrl],
+    unverified: &[v2xw_node::rxval::VerifiedCrl],
+    entries: &[v2xw_sec::linkage::CrlLinkageEntry],
+) -> Option<(Vec<v2xw_sec::linkage::CrlLinkageEntry>, usize)> {
+    let mut kept = Vec::with_capacity(entries.len());
+    let mut dropped = 0usize;
+    for e in entries {
+        if verified
+            .iter()
+            .any(|v| !matches!(v.signed_form(e), Some(Err(()))))
+        {
+            kept.push(*e);
+        } else if unverified
+            .iter()
+            .any(|v| matches!(v.signed_form(e), Some(Ok(_))))
+        {
+            dropped += 1;
+        } else {
+            return None;
+        }
+    }
+    Some((kept, dropped))
+}
+
+#[cfg(test)]
+mod composite_crl_tests {
+    use super::sort_composite_entries;
+    use v2xw_node::rxval::VerifiedCrl;
+    use v2xw_sec::linkage::CrlLinkageEntry;
+
+    fn entry(k: u8) -> CrlLinkageEntry {
+        CrlLinkageEntry {
+            i: 5,
+            la_id1: v2xw_sec::linkage::LaId(1),
+            la_id2: v2xw_sec::linkage::LaId(2),
+            ls1_i: v2xw_sec::linkage::LinkageSeed::new([k; 16]),
+            ls2_i: v2xw_sec::linkage::LinkageSeed::new([k ^ 0x5a; 16]),
+            jmax: 20,
+            max_forward: 10,
+        }
+    }
+
+    fn crl(craca: u8, entries: &[CrlLinkageEntry]) -> VerifiedCrl {
+        VerifiedCrl {
+            craca: [craca; 8],
+            series: 1,
+            issue_date: 0,
+            next_crl: 1,
+            i_rev: Some(5),
+            linkage: entries.to_vec(),
+            hashes: Vec::new(),
+            fresh: true,
+        }
+    }
+
+    /// Edge-case report §6.4: one signed CRL a device cannot verify in a composite
+    /// download (the other provider's, its root off the CTL) is skipped with only its own
+    /// entries; the verified provider's entries still install. An entry no CRL in the
+    /// download carries still refuses it. Fault (the first form: any unverifiable CRL
+    /// refuses the download, `crls.clear()`): nothing installs.
+    #[test]
+    fn an_unverifiable_crl_is_skipped_and_the_rest_of_the_download_installs() {
+        let (a, b) = (entry(1), entry(2));
+        let ok = [crl(0xaa, &[a])];
+        let bad = [crl(0xbb, &[b])];
+        let (kept, dropped) =
+            sort_composite_entries(&ok, &bad, &[a, b]).expect("the download is kept");
+        assert_eq!(kept, vec![a], "the verified provider's entry installs");
+        assert_eq!(dropped, 1, "the unverified provider's entry is dropped, not installed");
+        assert!(
+            sort_composite_entries(&ok, &bad, &[a, b, entry(3)]).is_none(),
+            "an entry no CRL in the download carries refuses it"
+        );
+        assert!(
+            sort_composite_entries(&ok, &[], &[a, b]).is_none(),
+            "an entry only a missing CRL would carry is a forgery"
+        );
+        assert_eq!(
+            sort_composite_entries(&ok, &[], &[a]).map(|(k, d)| (k.len(), d)),
+            Some((1, 0)),
+            "with every CRL verified nothing changes"
+        );
+    }
 }

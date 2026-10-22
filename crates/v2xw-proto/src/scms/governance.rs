@@ -244,9 +244,9 @@ pub enum Lifetime {
     SixtyHours(u16),
 }
 
-/// The published lifetime of `role` (one of [`ROLE_SPECS`]) as a 1609.2 `Duration`.
-pub(crate) fn published_lifetime(role: &str) -> Duration1609 {
-    spec_of(role).lifetime.to_asn1()
+/// The published lifetime of `role` under `profile` as a 1609.2 `Duration`.
+pub(crate) fn published_lifetime(profile: CertProfile, role: &str) -> Duration1609 {
+    profile.spec(role).lifetime.to_asn1()
 }
 
 impl Lifetime {
@@ -323,13 +323,16 @@ pub const ROLE_SPECS: [RoleSpec; 13] = [
         encryption: true,
         source: "ma.v2x-scms.saesoltech.io (test)",
     },
+    // SAESOL's CRL signer is not published. Every certificate its production ICA issues
+    // names that ICA as CRACA (`*.prod.s2x.io`), and a CRL signer's `issuerIsCraca` can
+    // only reach them if the ICA issued it (CF-CRACA): so ICA-issued, series 2.
     RoleSpec {
         role: "crlg",
         host: "crlg",
-        issuer: IssuedBy::Root,
+        issuer: IssuedBy::Ica,
         lifetime: Lifetime::SixtyHours(1473),
         encryption: false,
-        source: "crlg.preprod.v2x.isscms.com (test)",
+        source: "none published (inferred from the production cracaIds; lifetime ISS's)",
     },
     RoleSpec {
         role: "eca",
@@ -397,19 +400,232 @@ pub const ROLE_SPECS: [RoleSpec; 13] = [
     },
 ];
 
+/// The ISS/OmniTrust pattern, from ISS's published certificates: the production root
+/// `v2xrootca.ghsiss.com` (production CTL 2025-08-13: 70 y, the [SM-PROV] §3.6.4 rule),
+/// and the pre-production chain under `v2xrootca-test.ghsiss.com` (test CTL 2025-07-17,
+/// `test_cert_chain.oer`): ICA and every ICA-issued component 30 y, the MA, PG and CRL
+/// signer root-issued for 1473 × 60 h, encryption keys on the ECA, PCA, RA and MA. ISS's
+/// production ICA and components are not published; the pre-production ones are the
+/// only ISS sub-CAs on record. DCM, LOP and DC have none (assumption: the RA's 30 y).
+pub const ISS_ROLE_SPECS: [RoleSpec; 13] = [
+    RoleSpec {
+        role: "root",
+        host: "rootca",
+        issuer: IssuedBy::SelfSigned,
+        lifetime: Lifetime::Years(70),
+        encryption: false,
+        source: "v2xrootca.ghsiss.com (production CTL)",
+    },
+    RoleSpec {
+        role: "ica",
+        host: "ica",
+        issuer: IssuedBy::Root,
+        lifetime: Lifetime::Years(30),
+        encryption: false,
+        source: "ica.preprod.v2x.isscms.com (test)",
+    },
+    RoleSpec {
+        role: "pg",
+        host: "pg",
+        issuer: IssuedBy::Root,
+        lifetime: Lifetime::SixtyHours(1473),
+        encryption: false,
+        source: "v2xpg-test.ghsiss.com (test)",
+    },
+    RoleSpec {
+        role: "ma",
+        host: "ma",
+        issuer: IssuedBy::Root,
+        lifetime: Lifetime::SixtyHours(1473),
+        encryption: true,
+        source: "ma.preprod.v2x.isscms.com (test)",
+    },
+    RoleSpec {
+        role: "crlg",
+        host: "crlg",
+        issuer: IssuedBy::Root,
+        lifetime: Lifetime::SixtyHours(1473),
+        encryption: false,
+        source: "crlg.preprod.v2x.isscms.com (test)",
+    },
+    RoleSpec {
+        role: "eca",
+        host: "eca",
+        issuer: IssuedBy::Ica,
+        lifetime: Lifetime::Years(30),
+        encryption: true,
+        source: "dot1.eca.preprod.v2x.isscms.com (test)",
+    },
+    RoleSpec {
+        role: "pca",
+        // ISS names it `pca`; the engine keeps one host label per role across profiles
+        // (the PKI view and the records key components by it).
+        host: "aca",
+        issuer: IssuedBy::Ica,
+        lifetime: Lifetime::Years(30),
+        encryption: true,
+        source: "pca.preprod.v2x.isscms.com (test)",
+    },
+    RoleSpec {
+        role: "ra",
+        host: "ra",
+        issuer: IssuedBy::Ica,
+        lifetime: Lifetime::Years(30),
+        encryption: true,
+        source: "ra.preprod.v2x.isscms.com (test)",
+    },
+    RoleSpec {
+        role: "la1",
+        host: "la1",
+        issuer: IssuedBy::Ica,
+        lifetime: Lifetime::Years(30),
+        encryption: false,
+        source: "la1.preprod.v2x.isscms.com (test)",
+    },
+    RoleSpec {
+        role: "la2",
+        host: "la2",
+        issuer: IssuedBy::Ica,
+        lifetime: Lifetime::Years(30),
+        encryption: false,
+        source: "la2.preprod.v2x.isscms.com (test)",
+    },
+    RoleSpec {
+        role: "lop",
+        host: "lop",
+        issuer: IssuedBy::Ica,
+        lifetime: Lifetime::Years(30),
+        encryption: false,
+        source: "none published (assumption: RA lifetime)",
+    },
+    RoleSpec {
+        role: "dcm",
+        host: "dcm",
+        issuer: IssuedBy::Ica,
+        lifetime: Lifetime::Years(30),
+        encryption: false,
+        source: "none published (assumption: RA lifetime)",
+    },
+    RoleSpec {
+        role: "crl-store",
+        host: "dc",
+        issuer: IssuedBy::Ica,
+        lifetime: Lifetime::Years(30),
+        encryption: false,
+        source: "none published (assumption: RA lifetime)",
+    },
+];
+
+/// The identified region every ISS sub-CA carries: countries 124, 484, 840 in the
+/// published order (`ica.preprod.v2x.isscms.com` and the components under it).
+pub const ISS_SUBCA_REGION: [u16; 3] = [124, 484, 840];
+
+/// Which provider's published certificate chain a provider's certificates follow (gov
+/// L-1, L-5, F-1; crypto CF-CRACA). Each provider in a deployment has one
+/// ([`crate::scms::deployment::Provider::cert_profile`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CertProfile {
+    /// The SAESOL S2X production form ([`ROLE_SPECS`]): 30 y root, 25 y ICA, no region on
+    /// sub-CAs, the RA's group in `certIssuePermissions`, every ICA-issued certificate
+    /// naming the ICA as CRACA, so the CRL signer is ICA-issued.
+    #[default]
+    S2xProduction,
+    /// The ISS/OmniTrust form ([`ISS_ROLE_SPECS`]): 70 y root, identifiedRegion
+    /// {124, 484, 840} on the ICA and every ICA-issued component, the RA's group in
+    /// `certRequestPermissions`, and the CRL signer root-issued on series 256 ([SMP]
+    /// Table 1 "CRL signer: signed by root"), so the root is the CRACA every certificate
+    /// below it names, as every ISS pre-production sub-CA does.
+    Iss,
+}
+
+impl CertProfile {
+    /// Every role's profile.
+    #[must_use]
+    pub fn specs(self) -> &'static [RoleSpec; 13] {
+        match self {
+            CertProfile::S2xProduction => &ROLE_SPECS,
+            CertProfile::Iss => &ISS_ROLE_SPECS,
+        }
+    }
+
+    /// `role`'s profile.
+    #[must_use]
+    pub fn spec(self, role: &str) -> &'static RoleSpec {
+        self.specs()
+            .iter()
+            .find(|s| s.role == role)
+            .expect("every role has a spec")
+    }
+
+    /// Whether the root is the CRACA of every certificate below it (the CRL signer is
+    /// root-issued with `issuerIsCraca`); otherwise an ICA-issued certificate names the
+    /// ICA.
+    #[must_use]
+    pub fn root_is_craca(self) -> bool {
+        self == CertProfile::Iss
+    }
+
+    /// The identified countries the ICA and the components it issues carry.
+    #[must_use]
+    pub fn subca_region(self) -> Option<&'static [u16]> {
+        (self == CertProfile::Iss).then_some(&ISS_SUBCA_REGION[..])
+    }
+
+    /// Whether the RA's permission group is in `certRequestPermissions` (every test-CTL
+    /// RA, ISS's among them) rather than `certIssuePermissions` (`ra.prod.s2x.io`).
+    #[must_use]
+    pub fn ra_request_form(self) -> bool {
+        self == CertProfile::Iss
+    }
+
+    /// Its name in a manifest or a deployment file.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            CertProfile::S2xProduction => "s2x-production",
+            CertProfile::Iss => "iss",
+        }
+    }
+
+    /// The `cracaId` of a certificate `issuer` issues under root `root`.
+    fn craca_for(self, issuer: &Certificate, root: &Certificate) -> [u8; 3] {
+        if self.root_is_craca() {
+            hashed_id3(root)
+        } else {
+            hashed_id3(issuer)
+        }
+    }
+
+    /// The roles the root issues besides the ICA, in issuance order.
+    #[must_use]
+    pub fn root_issued(self) -> Vec<&'static str> {
+        ROOT_ISSUED
+            .iter()
+            .chain(ICA_ISSUED.iter())
+            .copied()
+            .filter(|r| self.spec(r).issuer == IssuedBy::Root)
+            .collect()
+    }
+
+    /// The roles the ICA issues, in issuance order.
+    #[must_use]
+    pub fn ica_issued(self) -> Vec<&'static str> {
+        ICA_ISSUED
+            .iter()
+            .chain(ROOT_ISSUED.iter())
+            .copied()
+            .filter(|r| self.spec(r).issuer == IssuedBy::Ica)
+            .collect()
+    }
+}
+
 /// The roles the Intermediate CA certifies, in issuance order.
 pub const ICA_ISSUED: [&str; 8] = ["eca", "pca", "ra", "la1", "la2", "lop", "dcm", "crl-store"];
 
 /// The roles the Root CA certifies directly, besides the ICA (ISS CP §2.7.1; Profile
-/// Table 1).
+/// Table 1). The CRL signer is among them in the ISS profile only
+/// ([`CertProfile::root_issued`]).
 pub const ROOT_ISSUED: [&str; 3] = ["pg", "ma", "crlg"];
-
-fn spec_of(role: &str) -> &'static RoleSpec {
-    ROLE_SPECS
-        .iter()
-        .find(|s| s.role == role)
-        .expect("every role has a spec")
-}
 
 /// The `SecurityMgmtSsp` a role's certificate carries for PSID 35 (1609.2.1-2022
 /// `Ieee1609Dot2Dot1Protocol`; version 2 throughout, as the 2022 module fixes).
@@ -991,6 +1207,8 @@ pub struct GovernanceConfig {
     /// The other providers on the same CTL (WP-D1): each gets its own Root CA, ICA and
     /// components at the ceremony, its root on the genesis CTL beside the home one.
     pub peers: Vec<PeerProvider>,
+    /// The home provider's certificate profile.
+    pub profile: CertProfile,
 }
 
 impl Default for GovernanceConfig {
@@ -999,6 +1217,7 @@ impl Default for GovernanceConfig {
             clock: WallClock::new(DEFAULT_T0_UNIX_S),
             provider: "provider-a".into(),
             peers: Vec::new(),
+            profile: CertProfile::default(),
         }
     }
 }
@@ -1019,6 +1238,8 @@ pub struct PeerProvider {
     /// Whether the genesis CTL approves its root
     /// ([`crate::scms::deployment::Provider::on_ctl`]).
     pub on_ctl: bool,
+    /// Its certificate profile.
+    pub profile: CertProfile,
 }
 
 impl PeerProvider {
@@ -1035,6 +1256,7 @@ impl PeerProvider {
                     ica: n.ica,
                     pg: n.pg,
                     on_ctl: d.providers[k].on_ctl,
+                    profile: d.providers[k].cert_profile,
                 }
             })
             .collect()
@@ -1277,7 +1499,8 @@ impl Governance {
         label: &str,
         start: u32,
     ) -> Authority {
-        let spec = spec_of(role);
+        let profile = self.profile_of(label);
+        let spec = profile.spec(role);
         let key = p256_key(rng, "protocol/scms/governance/keys", node, generation);
         let (enc_scalar, enc_field) = if spec.encryption {
             let s = p256_key(rng, "protocol/scms/governance/enc-keys", node, generation);
@@ -1294,10 +1517,16 @@ impl Governance {
         } else {
             (None, None)
         };
+        // `cracaId` names the CRACA of the profile's CRL signer (CF-CRACA): the root when
+        // the CRL signer is root-issued with `issuerIsCraca` (ISS; [SMP] Table 1), else
+        // the issuer (an ICA-issued CRL signer, SAESOL production).
         let (craca, series) = match issuer {
             None => ([0u8; 3], 0u16),
             Some(i) => (
-                hashed_id3(&i.cert),
+                match self.root_above(&i.cert) {
+                    Some(root) => profile.craca_for(&i.cert, &root),
+                    None => hashed_id3(&i.cert),
+                },
                 if spec.issuer == IssuedBy::Root && role != "ica" {
                     v2xw_sec::crl::SERIES_ROOT_SIGNED
                 } else {
@@ -1305,17 +1534,29 @@ impl Governance {
                 },
             ),
         };
+        // ISS's ICA and every component it issues carry identifiedRegion {124, 484, 840}.
+        let region = (spec.issuer == IssuedBy::Ica || role == "ica")
+            .then(|| profile.subca_region())
+            .flatten()
+            .map(crate::scms::enrolment::us_region);
+        // The RA's group: `certRequestPermissions` (ISS and every test RA) or
+        // `certIssuePermissions` (SAESOL production).
+        let (cip, crp) = if role == "ra" && profile.ra_request_form() {
+            (None, cert_issue_permissions(role))
+        } else {
+            (cert_issue_permissions(role), None)
+        };
         let name = format!("{}.{}.sim", spec.host, label);
         let tbs = ToBeSignedCertificate::new(
             CertificateId::name(Hostname(name)),
             HashedId3(FixedOctetString::from(craca)),
             CrlSeries(Uint16(series)),
             ValidityPeriod::new(Time32(Uint32(start)), spec.lifetime.to_asn1()),
-            None,
+            region,
             None,
             Some(SequenceOfPsidSsp(app_permissions(role))),
-            cert_issue_permissions(role),
-            None,
+            cip,
+            crp,
             None,
             enc_field,
             VerificationKeyIndicator::verificationKey(key.public_key()),
@@ -1361,7 +1602,7 @@ impl Governance {
         if let Some(old) = self.authorities.insert("ica", ica.clone()) {
             self.retired.push(old.cert);
         }
-        for role in ROOT_ISSUED {
+        for role in self.config.profile.root_issued() {
             let node = role_node(role, &self.nodes, online);
             let a = self.make_authority(role, rng, node, generation, Some(&root), &label, now32);
             if let Some(old) = self.authorities.insert(role, a) {
@@ -1380,7 +1621,7 @@ impl Governance {
     ) {
         let label = self.config.provider.clone();
         let ica = self.authorities["ica"].clone();
-        for role in ICA_ISSUED {
+        for role in self.config.profile.ica_issued() {
             let node = role_node(role, &self.nodes, online);
             let a = self.make_authority(role, rng, node, generation, Some(&ica), &label, now32);
             if let Some(old) = self.authorities.insert(role, a) {
@@ -1395,9 +1636,16 @@ impl Governance {
     fn certify_peer(&mut self, rng: &RngRegistry, peer: &PeerProvider, now32: u32) {
         let label = peer.label.as_str();
         let root = self.make_authority("root", rng, peer.root, 0, None, label, now32);
+        // Listed before its components are certified, so their CRACA can name it.
+        self.roots.push(RootSlot {
+            label: label.to_string(),
+            authority: root.clone(),
+            approved: peer.on_ctl,
+        });
         let ica = self.make_authority("ica", rng, peer.ica, 0, Some(&root), label, now32);
         let mut set = BTreeMap::new();
-        for role in PEER_ROOT_ISSUED {
+        let peer_role = |r: &&str| PEER_ROOT_ISSUED.contains(r) || PEER_ICA_ISSUED.contains(r);
+        for role in peer.profile.root_issued().into_iter().filter(peer_role) {
             let node = match role {
                 "pg" => peer.pg,
                 other => role_node(other, &self.nodes, &peer.online),
@@ -1405,18 +1653,13 @@ impl Governance {
             let a = self.make_authority(role, rng, node, 0, Some(&root), label, now32);
             set.insert(role, a);
         }
-        for role in PEER_ICA_ISSUED {
+        for role in peer.profile.ica_issued().into_iter().filter(peer_role) {
             let node = role_node(role, &self.nodes, &peer.online);
             let a = self.make_authority(role, rng, node, 0, Some(&ica), label, now32);
             set.insert(role, a);
         }
         set.insert("ica", ica);
-        set.insert("root", root.clone());
-        self.roots.push(RootSlot {
-            label: label.to_string(),
-            authority: root,
-            approved: peer.on_ctl,
-        });
+        set.insert("root", root);
         self.peer_authorities.insert(label.to_string(), set);
     }
 
@@ -1498,6 +1741,7 @@ impl Governance {
         peer_authorities.insert(old_label.clone(), old_set);
         let mut config = self.config.clone();
         config.provider = label.to_string();
+        config.profile = peer.profile;
         config.peers[idx] = PeerProvider {
             label: old_label,
             online: ScmsNodes::default(),
@@ -1505,6 +1749,7 @@ impl Governance {
             ica: self.nodes.ica,
             pg: self.nodes.pg,
             on_ctl: true,
+            profile: self.config.profile,
         };
         let mut nodes = self.nodes.clone();
         nodes.root = peer.root;
@@ -1583,6 +1828,32 @@ impl Governance {
     /// removed provider keeps operating; every device that installs the CTL refuses what
     /// it certifies. Until 2026-10-19 this panicked ("the home provider has an approved
     /// root") on the removed provider's own view of the shared CTL.
+    /// The certificate profile of provider `label` (home or peer).
+    #[must_use]
+    pub fn profile_of(&self, label: &str) -> CertProfile {
+        if label == self.config.provider {
+            return self.config.profile;
+        }
+        self.config
+            .peers
+            .iter()
+            .find(|p| p.label == label)
+            .map_or(self.config.profile, |p| p.profile)
+    }
+
+    /// The root `issuer` chains to: itself when self-signed, else the listed root that
+    /// issued it.
+    fn root_above(&self, issuer: &Certificate) -> Option<Certificate> {
+        let Some(up) = issuer_id8(issuer) else {
+            return Some(issuer.clone());
+        };
+        self.roots
+            .iter()
+            .map(|r| &r.authority.cert)
+            .find(|c| cert_hashed_id8(c).is_ok_and(|h| h == up))
+            .cloned()
+    }
+
     fn home_root(&self) -> &RootSlot {
         let mine = |r: &&RootSlot| r.label == self.config.provider;
         self.roots

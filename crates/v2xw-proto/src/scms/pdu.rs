@@ -72,6 +72,8 @@ use v2xw_sec::ec::{self, Point};
 use v2xw_sec::sig1609::{self, Hash1609, Signer1609};
 use v2xw_sec::{ccm, ecies, hashedid};
 
+pub use crate::scms::governance::CertProfile;
+
 /// `SecurityMgmtPsid ::= Psid (35)` [ASN-2.1] Protocol.
 pub const SECURITY_MGMT_PSID: u64 = 35;
 /// The BSM PSID (0x20) a pseudonym certificate is requested for.
@@ -308,6 +310,46 @@ pub struct ScmsPki {
     /// [`ScmsPki::by_id8`] like the core ones: the deployment topology (WP-D1) and the
     /// attack studies add them with [`ScmsPki::issue_component`].
     pub extra: Vec<Authority>,
+    /// The provider's certificate form: which certificate is the CRACA, its lifetimes,
+    /// regions and RA permission form ([`CertProfile`]).
+    pub profile: CertProfile,
+}
+
+/// How a component certificate is shaped beyond its role: the `cracaId` it names, the
+/// region it carries and whether an RA's group goes in `certRequestPermissions`.
+#[derive(Debug, Clone)]
+struct Form {
+    craca: [u8; 3],
+    region: Option<v2xw_msg::sec_types::ieee1609_dot2_base_types::GeographicRegion>,
+    ra_request_form: bool,
+}
+
+impl Form {
+    /// The CRACA is the issuer itself; no region; the production RA form.
+    fn of_issuer(issuer: &Authority) -> Form {
+        let i = issuer.id8();
+        Form {
+            craca: [i[5], i[6], i[7]],
+            region: None,
+            ra_request_form: false,
+        }
+    }
+
+    /// What `ica` issues under `profile`: the CRACA is the root (ISS) or the ICA (S2X).
+    fn sub_ca(profile: CertProfile, root: &Authority, ica: &Authority) -> Form {
+        let c = if profile.root_is_craca() {
+            root.id8()
+        } else {
+            ica.id8()
+        };
+        Form {
+            craca: [c[5], c[6], c[7]],
+            region: profile
+                .subca_region()
+                .map(crate::scms::enrolment::us_region),
+            ra_request_form: profile.ra_request_form(),
+        }
+    }
 }
 
 /// CRL series of the root-issued system certificates ([SMP] Table 1).
@@ -318,7 +360,7 @@ const SERIES_ROOT_SIGNED: u16 = 256;
 /// hierarchy cannot drift apart (validation finding CF-LIFE: the device-facing
 /// components were 3 years, a value no published certificate has).
 fn published_life(role: &str) -> Ieee1609Duration {
-    crate::scms::governance::published_lifetime(role)
+    crate::scms::governance::published_lifetime(CertProfile::S2xProduction, role)
 }
 
 pub(crate) fn opaque_ssp(ssp: &SecurityMgmtSsp) -> Result<ServiceSpecificPermissions> {
@@ -436,7 +478,14 @@ impl ScmsPki {
             false,
             start,
         )?;
-        Self::components(root, ica, &mut g, start, "provider-a")
+        Self::components(
+            root,
+            ica,
+            &mut g,
+            start,
+            "provider-a",
+            CertProfile::S2xProduction,
+        )
     }
 
     /// The provider's components under the governance entities' own Root CA and ICA
@@ -470,6 +519,24 @@ impl ScmsPki {
         root: (&Certificate, &Signer1609),
         ica: (&Certificate, &Signer1609),
     ) -> Result<ScmsPki> {
+        Self::under_anchors_profiled(label, CertProfile::default(), seed, start, root, ica)
+    }
+
+    /// [`ScmsPki::under_anchors_of`] in the certificate form of `profile`: its published
+    /// lifetimes, sub-CA region, RA permission form and CRACA (gov L-1, L-5, F-1; crypto
+    /// CF-CRACA). Under [`CertProfile::Iss`] the CRL signer is root-issued on series 256
+    /// and every certificate below the root names the root as CRACA.
+    ///
+    /// # Errors
+    /// As [`ScmsPki::under_anchors`].
+    pub fn under_anchors_profiled(
+        label: &str,
+        profile: CertProfile,
+        seed: u64,
+        start: u32,
+        root: (&Certificate, &Signer1609),
+        ica: (&Certificate, &Signer1609),
+    ) -> Result<ScmsPki> {
         let mut g = Drbg::new(seed, b"pki/under-governance-anchors");
         let anchor = |name: &str, (cert, key): (&Certificate, &Signer1609)| -> Result<Authority> {
             let private = match key {
@@ -490,55 +557,89 @@ impl ScmsPki {
         };
         let root = anchor("root.governance", root)?;
         let ica = anchor("ica.governance", ica)?;
-        Self::components(root, ica, &mut g, start, label)
+        Self::components(root, ica, &mut g, start, label, profile)
     }
 
-    /// Every component under `ica`, in a fixed draw order.
+    /// Every component under `ica`, in a fixed draw order, in the certificate form of
+    /// `profile` ([`CertProfile`]): its published lifetimes and encryption keys, the
+    /// identified region its ICA-issued components carry, the RA's permission form, and
+    /// the CRACA every certificate names. Under [`CertProfile::Iss`] the CRL signer is
+    /// root-issued on series 256 ([SMP] Table 1, `crlg.preprod.v2x.isscms.com`) and the
+    /// root is the CRACA; under [`CertProfile::S2xProduction`] it is ICA-issued and every
+    /// ICA-issued certificate names the ICA (`*.prod.s2x.io`).
     fn components(
         root: Authority,
         ica: Authority,
         g: &mut Drbg,
         start: u32,
         label: &str,
+        profile: CertProfile,
     ) -> Result<ScmsPki> {
-        let eca = Self::issue(
-            &ica,
+        let sub = Form::sub_ca(profile, &root, &ica);
+        let top = Form::of_issuer(&root);
+        let life = |role: &str| crate::scms::governance::published_lifetime(profile, role);
+        let enc = |role: &str| profile.spec(role).encryption;
+        let mk = |g: &mut Drbg,
+                  issuer: &Authority,
+                  form: &Form,
+                  name: &str,
+                  role: &str,
+                  series: u16,
+                  ssp: &SecurityMgmtSsp,
+                  extra: &[PsidSsp]| {
+            Self::issue_full(
+                issuer,
+                g,
+                &format!("{name}.{label}"),
+                life(role),
+                series,
+                ssp,
+                false,
+                enc(role),
+                start,
+                extra,
+                form,
+            )
+        };
+        let eca = mk(
             g,
-            &format!("eca.{label}"),
-            published_life("eca"),
+            &ica,
+            &sub,
+            "eca",
+            "eca",
+            2,
             &SecurityMgmtSsp::eca(EcaSsp::new(Uint8(2))),
-            false,
-            false,
-            start,
+            &[],
         )?;
-        let ra = Self::issue(
-            &ica,
+        let ra = mk(
             g,
-            &format!("ra.{label}"),
-            published_life("ra"),
+            &ica,
+            &sub,
+            "ra",
+            "ra",
+            2,
             &SecurityMgmtSsp::ra(RaSsp::new(Uint8(2))),
-            false,
-            true,
-            start,
+            &[],
         )?;
-        let aca = Self::issue(
-            &ica,
+        let aca = mk(
             g,
-            &format!("aca.{label}"),
-            published_life("pca"),
+            &ica,
+            &sub,
+            "aca",
+            "pca",
+            2,
             &SecurityMgmtSsp::aca(AcaSsp::new(Uint8(2))),
-            false,
-            false,
-            start,
+            &[],
         )?;
         // The MA is root-issued on CRL series 256 ([SMP] Table 1; both published US MA
         // certificates, ISS pre-production and SAESOL test, are root-signed, series 256,
         // 10-12 years, with an encryption key). Validation finding CF-MA.
-        let ma = Self::issue_on(
-            &root,
+        let ma = mk(
             g,
-            &format!("ma.{label}"),
-            published_life("ma"),
+            &root,
+            &top,
+            "ma",
+            "ma",
             SERIES_ROOT_SIGNED,
             &SecurityMgmtSsp::ma(MaSsp::new(
                 Uint8(2),
@@ -546,44 +647,43 @@ impl ScmsPki {
                     Integer::from(BSM_PSID),
                 )]),
             )),
-            false,
-            true,
-            start,
+            &[],
         )?;
-        let la1 = Self::issue(
-            &ica,
+        let la1 = mk(
             g,
-            &format!("la1.{label}"),
-            published_life("la1"),
+            &ica,
+            &sub,
+            "la1",
+            "la1",
+            2,
             &SecurityMgmtSsp::la(LaSsp::new(Uint8(2), Uint16(1))),
-            false,
-            false,
-            start,
+            &[],
         )?;
-        let la2 = Self::issue(
-            &ica,
+        let la2 = mk(
             g,
-            &format!("la2.{label}"),
-            published_life("la2"),
+            &ica,
+            &sub,
+            "la2",
+            "la2",
+            2,
             &SecurityMgmtSsp::la(LaSsp::new(Uint8(2), Uint16(2))),
-            false,
-            false,
-            start,
+            &[],
         )?;
-        let dcm = Self::issue(
-            &ica,
+        let dcm = mk(
             g,
-            &format!("dcm.{label}"),
-            published_life("dcm"),
+            &ica,
+            &sub,
+            "dcm",
+            "dcm",
+            2,
             &SecurityMgmtSsp::dcm(DcmSsp::new(Uint8(2))),
-            false,
-            false,
-            start,
+            &[],
         )?;
         // Drawn after every other component, so adding it moved no earlier key. The
         // published US CRL signer (ISS chain file, `governance.rs`) holds PSID 256 with
-        // `CrlSsp{version 1, issuerIsCraca, crls 4, 3, 1, 2}`: the ICA that issued it is
-        // the CRACA (WP-B4, gap row 13).
+        // `CrlSsp{version 1, issuerIsCraca, crls 4, 3, 1, 2}`: the certificate that issued
+        // it is the CRACA (WP-B4, gap row 13). ISS's is root-issued on series 256; the
+        // S2X form puts it under the ICA, the CRACA its production sub-CAs name.
         let crl_ssp = PsidSsp::new(
             Psid(Integer::from(v2xw_sec::crl::CRL_PSID)),
             Some(ServiceSpecificPermissions::opaque(
@@ -592,17 +692,21 @@ impl ScmsPki {
                     .into(),
             )),
         );
-        let crlg = Self::issue_with(
-            &ica,
-            g,
-            &format!("crlg.{label}"),
-            published_life("crlg"),
-            &SecurityMgmtSsp::crl(CrlSignerSsp::new(Uint8(2))),
-            false,
-            false,
-            start,
-            &[crl_ssp],
-        )?;
+        let crlg_ssp = SecurityMgmtSsp::crl(CrlSignerSsp::new(Uint8(2)));
+        let crlg = if profile.spec("crlg").issuer == crate::scms::governance::IssuedBy::Root {
+            mk(
+                g,
+                &root,
+                &top,
+                "crlg",
+                "crlg",
+                SERIES_ROOT_SIGNED,
+                &crlg_ssp,
+                &[crl_ssp],
+            )?
+        } else {
+            mk(g, &ica, &sub, "crlg", "crlg", 2, &crlg_ssp, &[crl_ssp])?
+        };
         Ok(ScmsPki {
             root,
             ica,
@@ -615,6 +719,7 @@ impl ScmsPki {
             dcm,
             crlg,
             extra: Vec::new(),
+            profile,
         })
     }
 
@@ -632,33 +737,6 @@ impl ScmsPki {
         Self::issue_with(issuer, g, name, life, ssp, issues, with_enc, start, &[])
     }
 
-    /// [`ScmsPki::issue`] on CRL series `series` rather than the component series 2.
-    #[allow(clippy::too_many_arguments)]
-    fn issue_on(
-        issuer: &Authority,
-        g: &mut Drbg,
-        name: &str,
-        life: Ieee1609Duration,
-        series: u16,
-        ssp: &SecurityMgmtSsp,
-        issues: bool,
-        with_enc: bool,
-        start: u32,
-    ) -> Result<Authority> {
-        Self::issue_full(
-            issuer,
-            g,
-            name,
-            life,
-            series,
-            ssp,
-            issues,
-            with_enc,
-            start,
-            &[],
-        )
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn issue_with(
         issuer: &Authority,
@@ -672,7 +750,17 @@ impl ScmsPki {
         extra_app: &[PsidSsp],
     ) -> Result<Authority> {
         Self::issue_full(
-            issuer, g, name, life, 2, ssp, issues, with_enc, start, extra_app,
+            issuer,
+            g,
+            name,
+            life,
+            2,
+            ssp,
+            issues,
+            with_enc,
+            start,
+            extra_app,
+            &Form::of_issuer(issuer),
         )
     }
 
@@ -688,6 +776,7 @@ impl ScmsPki {
         with_enc: bool,
         start: u32,
         extra_app: &[PsidSsp],
+        form: &Form,
     ) -> Result<Authority> {
         let d = g.scalar();
         let key = Signer1609::p256(&ec::scalar_to_be32(&d)).ok_or(PduError::Key("P-256"))?;
@@ -707,10 +796,13 @@ impl ScmsPki {
         // LA), under its issuer as CRACA, so a receiver can match a series-2 CRL entry to
         // it (WP-C2: a revoked CA revokes everything that chains to it). A root-issued
         // system certificate (MA) is on series 256 under the root, whose CrlSsp is
-        // `isCraca` for 256.
-        let iid = issuer.id8();
-        tbs.craca_id = HashedId3(FixedOctetString::from([iid[5], iid[6], iid[7]]));
+        // `isCraca` for 256. Which certificate is the CRACA is the profile's ([`Form`]).
+        tbs.craca_id = HashedId3(FixedOctetString::from(form.craca));
         tbs.crl_series = CrlSeries(Uint16(series));
+        tbs.region.clone_from(&form.region);
+        if form.ra_request_form && name.starts_with("ra.") {
+            tbs.cert_request_permissions = tbs.cert_issue_permissions.take();
+        }
         let issuer_key = match &issuer.key {
             Signer1609::P256(_) => CertKey::P256(Point::mul_base(
                 issuer
@@ -752,19 +844,35 @@ impl ScmsPki {
             .find(|a| &a.id8() == id8)
     }
 
-    /// The `cracaId` a pseudonym certificate carries: the low 3 bytes of the CRACA's
-    /// whole-certificate HashedId8. The CRACA is the ICA, because the CRL signer's
-    /// `CrlSsp` says `issuerIsCraca` (WP-B4; the B3b application certificates already
-    /// use the ICA). A device matches a CRL to a certificate only when this equals the
-    /// low 3 bytes of the CRL's `crlCraca` ([`ScmsPki::craca_id8`]).
+    /// The `cracaId` every pseudonym, identification, application and enrolment
+    /// certificate carries: the low 3 bytes of the CRACA's whole-certificate HashedId8.
+    /// The CRL signer's `CrlSsp` says `issuerIsCraca`, so the CRACA is the CRL signer's
+    /// issuer: the root under [`CertProfile::Iss`], the ICA under
+    /// [`CertProfile::S2xProduction`] (CF-CRACA). A device matches a CRL to a certificate
+    /// only when this equals the low 3 bytes of the CRL's `crlCraca`
+    /// ([`ScmsPki::craca_id8`]).
     pub fn craca_id(&self) -> [u8; 3] {
         let h = self.craca_id8();
         [h[5], h[6], h[7]]
     }
 
-    /// The CRL's `crlCraca`: the whole-certificate HashedId8 of the CRACA (the ICA).
+    /// The CRL's `crlCraca`: the whole-certificate HashedId8 of the CRACA, the
+    /// certificate that issued the CRL signer.
     pub fn craca_id8(&self) -> [u8; 8] {
-        self.ica.id8()
+        self.crl_signer_issuer().id8()
+    }
+
+    /// The certificate that issued the CRL signer (the CRACA, by its `issuerIsCraca`):
+    /// the authority whose HashedId8 the CRL signer's `issuer` names.
+    pub fn crl_signer_issuer(&self) -> &Authority {
+        match &self.crlg.cert.0.issuer {
+            IssuerIdentifier::sha256AndDigest(h) | IssuerIdentifier::sha384AndDigest(h)
+                if hashedid::id8_bytes(h) == self.root.id8() =>
+            {
+                &self.root
+            }
+            _ => &self.ica,
+        }
     }
 
     /// Issues one more P-256 component under the ICA, keys from `seed` and `name`, and
@@ -783,15 +891,22 @@ impl ScmsPki {
         let mut label = b"pki-extra:".to_vec();
         label.extend_from_slice(name.as_bytes());
         let mut g = Drbg::new(seed, &label);
-        let a = Self::issue(
+        // Named, regioned and CRACA'd as this provider's other ICA-issued components; the
+        // 3 y lifetime stays (a test helper: a later `start` must still end inside the
+        // ICA's validity).
+        let form = Form::sub_ca(self.profile, &self.root, &self.ica);
+        let a = Self::issue_full(
             &self.ica,
             &mut g,
             name,
             Ieee1609Duration::years(Uint16(3)),
+            2,
             ssp,
             false,
             with_enc,
             start,
+            &[],
+            &form,
         )?;
         self.extra.push(a);
         Ok(self.extra.len() - 1)
@@ -904,6 +1019,14 @@ pub fn issue_enrolment(
         .private
         .as_ref()
         .ok_or(PduError::Key("ECA scalar"))?;
+    // The request's `cracaId` is `000000` by the ASN.1 constraint; the issued
+    // certificate's "may have different values, set by the ECA" ([ASN-2.1]
+    // `EeEcaCertRequest`). The ECA names the provider's CRACA, so the series-4 hash CRL
+    // the CRL signer is permitted to issue (`CrlSsp` 4, 3, 1, 2) can revoke it; with
+    // `000000` no CRL could ever match an enrolment certificate (crypto #29).
+    let mut tbs = tbs.clone();
+    tbs.craca_id = HashedId3(FixedOctetString::from(pki.craca_id()));
+    let tbs = &tbs;
     let issued = cert::issue_implicit(
         tbs,
         &pki.eca.cert,

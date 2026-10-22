@@ -582,6 +582,8 @@ struct RsuCycle {
     crl_version: u32,
     /// The CTL sequence the unit installed (0: the factory one), as `NodeSec::ctl_seq`.
     ctl_seq: u32,
+    /// As `NodeSec::ctl_trust`.
+    ctl_trust: Option<Box<v2xw_proto::scms::governance::DeviceTrust>>,
     withheld_seen: u64,
     starved: bool,
     starved_since: Option<SimTime>,
@@ -1219,6 +1221,9 @@ struct NodeSec {
     /// file carries the home CTL (IEEE 1609.2.1 `CompositeCrlSpdu`), so a newer CTL is
     /// fetched, and installed, with the next download (edge-case package, item 8).
     ctl_seq: u32,
+    /// The device's own trust store once it has installed a CTL after the factory one
+    /// (`None`: still the factory trust, [`Phase2::factory_trust`]).
+    ctl_trust: Option<Box<v2xw_proto::scms::governance::DeviceTrust>>,
     topup: Option<FlowRun>,
     /// ETSI: the ticket count at which the requested top-up is complete.
     etsi_target: Option<u32>,
@@ -1424,6 +1429,17 @@ pub struct Phase2Report {
     pub trust_lists_installed: u64,
     /// Trust anchors devices dropped on installing a CTL that no longer approves them.
     pub trust_anchors_removed: u64,
+    /// CTLs a device refused: fewer than `quorum` valid elector signatures from the
+    /// electors its installed CTL trusts, or another series or an older sequence.
+    pub trust_lists_refused: u64,
+    /// Signature checks devices made on the CTLs they were offered (elector P-384
+    /// signatures and the self-signatures of the roots they carry).
+    pub trust_list_verifications: u64,
+    /// Signed CRLs inside a composite CRL download that a device could not verify and
+    /// skipped, keeping the rest of the download; their entries are not installed.
+    pub crls_skipped_unverifiable: u64,
+    /// Entries a device dropped because only a CRL it could not verify carried them.
+    pub crl_entries_unverifiable: u64,
     /// Vehicles whose clock carries `clock_skew_s` (edge-case package, item 2).
     pub clock_skewed_nodes: u64,
     /// Roadside units under an attacker's control (`threats.compromised_rsus`).
@@ -1711,6 +1727,10 @@ pub struct Phase2 {
     /// The CTL sequence every device holds from the factory (the one in force when the
     /// governance first ran); a device installs a newer one with its next composite CRL.
     factory_ctl_seq: Option<u32>,
+    /// The trust every device leaves the factory with: the bootstrap elector
+    /// certificates and quorum (Profile §2.1.15) and the CTLs in force then, each
+    /// installed by its predecessor's quorum. A device checks a newer CTL against it.
+    factory_trust: Option<v2xw_proto::scms::governance::DeviceTrust>,
     /// The peer provider whose root `peer_root_removal_at_s` removed.
     removed_peer: Option<usize>,
     /// The last signed BSMs on the air per signer digest: a report's evidence.
@@ -2439,6 +2459,7 @@ impl Phase2 {
             evidence: BTreeMap::new(),
             superseded_root: None,
             factory_ctl_seq: None,
+            factory_trust: None,
             removed_peer: None,
             stage_cursor: vec![0; providers],
             step_cursor: vec![0; providers],
@@ -3825,8 +3846,8 @@ impl Phase2 {
     ///
     /// [`Governance::publish_due`]: v2xw_proto::scms::governance::Governance::publish_due
     fn governance_due(&mut self, now: SimTime) {
+        self.ensure_factory_trust();
         let st = &mut self.runs[0].state;
-        self.factory_ctl_seq.get_or_insert(st.gov.ctl.sequence);
         if let Some(at) = self.params.peer_root_removal_at.filter(|t| *t <= now) {
             self.params.peer_root_removal_at = None;
             let peer = st
@@ -4863,10 +4884,19 @@ impl Phase2 {
                     if self.etsi.is_some() {
                         e.set("trust_fetches", r.trust_fetches);
                         e.set("trust_lists_installed", r.trust_lists_installed);
-                    } else if r.trust_lists_installed > 0 || r.clock_skewed_nodes > 0 {
+                    } else if r.trust_lists_installed > 0
+                        || r.trust_lists_refused > 0
+                        || r.clock_skewed_nodes > 0
+                    {
                         e.set("trust_lists_installed", r.trust_lists_installed);
                         e.set("trust_anchors_removed", r.trust_anchors_removed);
                         e.set("clock_skewed_nodes", r.clock_skewed_nodes);
+                        e.set("trust_lists_refused", r.trust_lists_refused);
+                        e.set("trust_list_verifications", r.trust_list_verifications);
+                    }
+                    if r.crls_skipped_unverifiable > 0 {
+                        e.set("crls_skipped_unverifiable", r.crls_skipped_unverifiable);
+                        e.set("crl_entries_unverifiable", r.crl_entries_unverifiable);
                     }
                     e.set("vehicles_starved", r.vehicles_starved);
                     e.set("crl_installs", r.crls_installed);
@@ -5634,12 +5664,40 @@ impl Phase2 {
             .is_none_or(|r| !gov.ctl.roots.contains(&r))
     }
 
+    /// The factory trust ([`Phase2::factory_trust`]), made once, when the governance
+    /// first runs: the electors SCMS Manager published then, and every CTL in force,
+    /// each installed through [`DeviceTrust::install_ctl`] (its predecessor's quorum).
+    ///
+    /// [`DeviceTrust::install_ctl`]: v2xw_proto::scms::governance::DeviceTrust::install_ctl
+    fn ensure_factory_trust(&mut self) {
+        let gov = &self.runs[0].state.gov;
+        self.factory_ctl_seq.get_or_insert(gov.ctl.sequence);
+        if self.factory_trust.is_none() {
+            let mut t = v2xw_proto::scms::governance::DeviceTrust {
+                anchors: gov.anchors(),
+                ..Default::default()
+            };
+            for c in &gov.ctl_history {
+                let _ = t.install_ctl(c);
+            }
+            self.factory_trust = Some(t);
+        }
+    }
+
     /// The trust a device installs from the published CTL, when it is newer than the one
     /// `node` (a vehicle, or a roadside unit when `rsu`) holds: the roots of every
-    /// provider on it and their chain files ([`Phase2::trust_bundle`]). Marks it held and
-    /// counts it in `trust_lists_installed`. The device applies the CTL's root set; the
-    /// CTL's own elector signatures are the governance's to check (`DeviceTrust`), not
-    /// re-checked here (an open item of the edge-case report).
+    /// provider on it and their chain files ([`Phase2::trust_bundle`]).
+    ///
+    /// The device checks every CTL published since the one it holds, in sequence, as
+    /// 1609.2.1 has it: at least `quorum` valid ECDSA P-384 signatures from the electors
+    /// its installed CTL trusts, each bound to this CTL's `tbsCtlHash`
+    /// ([`DeviceTrust::install_ctl`], `v2xw_sec::ctl::verify_ctl`). A CTL that fails is
+    /// refused (`trust_lists_refused`) and skipped; a later one its trust can verify
+    /// still installs. The work is counted in `trust_list_verifications`. Only the roots
+    /// the device's own installed CTL approves become anchors. `None` when the device
+    /// installed nothing new.
+    ///
+    /// [`DeviceTrust::install_ctl`]: v2xw_proto::scms::governance::DeviceTrust::install_ctl
     #[allow(clippy::type_complexity)]
     pub fn take_ctl_install(
         &mut self,
@@ -5649,7 +5707,6 @@ impl Phase2 {
         Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
         Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
     )> {
-        let now = self.home().state.gov.ctl.sequence;
         let held = if rsu {
             self.rsu_cycle.get(&node).map(|c| c.ctl_seq)
         } else {
@@ -5658,15 +5715,52 @@ impl Phase2 {
         if !self.ctl_newer_than(held) {
             return None;
         }
+        self.ensure_factory_trust();
+        let own = if rsu {
+            self.rsu_cycle.get_mut(&node).and_then(|c| c.ctl_trust.take())
+        } else {
+            self.nodes.get_mut(&node).and_then(|n| n.ctl_trust.take())
+        };
+        let mut trust = own
+            .map(|b| *b)
+            .or_else(|| self.factory_trust.clone())
+            .unwrap_or_default();
+        let from = trust.ctl_sequence;
+        let before = trust.verifications;
+        let gov = &self.home().state.gov;
+        let mut refused = 0u64;
+        for c in gov.ctls_after(from) {
+            if trust.install_ctl(&c).is_err() {
+                refused += 1;
+            }
+        }
+        self.report.trust_lists_refused += refused;
+        self.report.trust_list_verifications += u64::from(trust.verifications - before);
+        let installed = trust.ctl_sequence;
+        let approved: BTreeSet<[u8; 32]> = trust
+            .ctl_trust
+            .as_ref()
+            .map(|t| t.roots.clone())
+            .unwrap_or_default();
+        let seq = installed.unwrap_or(held);
         if rsu {
             if let Some(c) = self.rsu_cycle.get_mut(&node) {
-                c.ctl_seq = now;
+                c.ctl_seq = c.ctl_seq.max(seq);
+                c.ctl_trust = Some(Box::new(trust));
             }
         } else if let Some(n) = self.nodes.get_mut(&node) {
-            n.ctl_seq = now;
+            n.ctl_seq = n.ctl_seq.max(seq);
+            n.ctl_trust = Some(Box::new(trust));
+        }
+        if installed == from {
+            return None;
         }
         self.report.trust_lists_installed += 1;
-        Some(self.trust_bundle())
+        let (mut roots, cas) = self.trust_bundle();
+        roots.retain(|r| {
+            v2xw_sec::sig1609::cert_hashed_id32(r).is_ok_and(|h| approved.contains(&h))
+        });
+        Some((roots, cas))
     }
 
     /// Counts the trust anchors a device dropped on installing a CTL.
@@ -5822,6 +5916,14 @@ impl Phase2 {
             }
         }
         Some(out)
+    }
+
+    /// A device kept a composite CRL download but skipped `crls` signed CRLs in it that it
+    /// could not verify (a provider whose root its CTL no longer approves, a bad
+    /// signature), and dropped the `entries` only those CRLs carried.
+    pub fn crls_skipped(&mut self, crls: usize, entries: usize) {
+        self.report.crls_skipped_unverifiable += crls as u64;
+        self.report.crl_entries_unverifiable += entries as u64;
     }
 
     /// A vehicle refused a CRL frame or download (its signature, its signer, or an entry
@@ -7386,5 +7488,91 @@ mod fast_forward_wake_tests {
         let in_transit = p.next_wake(before).expect("a wake");
         assert_eq!(in_transit, w_before.map_or(crossed, |w| w.min(crossed)));
         assert_eq!(p.next_wake(after), w_after, "a crossed version is no wake");
+    }
+}
+
+#[cfg(test)]
+mod ctl_device_tests {
+    use super::*;
+
+    fn phase2() -> Phase2 {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        let engine = crate::Engine::build(s, "").expect("builds");
+        Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend")
+    }
+
+    /// Edge-case report §6.4: a device checks a newer CTL's elector signatures itself
+    /// (1609.2.1: at least `quorum` valid P-384 signatures from the electors its installed
+    /// CTL trusts) before it applies the CTL's roots. A CTL signed by 2 of the 5 electors
+    /// is refused and counted; a later one signed by all five still installs. Fault (the
+    /// first form: the published root set applied unchecked): the forgery installs.
+    #[test]
+    fn a_device_refuses_a_ctl_below_its_elector_quorum_and_installs_a_genuine_one() {
+        let mut p = phase2();
+        let node = NodeId::new(9_000);
+        p.nodes.insert(node, NodeSec::default());
+        p.ensure_factory_trust();
+        let factory = p.home().state.gov.ctl.sequence;
+        let forged = p.runs[0].state.gov.forge_next_ctl(3, &[0, 1]);
+        assert_eq!(forged.signers.len(), 2);
+        p.runs[0].state.gov.ctl = forged.clone();
+        p.runs[0].state.gov.ctl_history.push(forged);
+        assert!(p.take_ctl_install(node, false).is_none(), "2 of 5: refused");
+        assert_eq!(p.report.trust_lists_refused, 1);
+        assert_eq!(p.report.trust_lists_installed, 0);
+        assert!(p.report.trust_list_verifications >= 2, "the signatures were checked");
+        assert_eq!(p.nodes[&node].ctl_seq, factory, "still the factory CTL");
+        let genuine = p.runs[0].state.gov.forge_next_ctl(3, &[0, 1, 2, 3, 4]);
+        p.runs[0].state.gov.ctl = genuine.clone();
+        p.runs[0].state.gov.ctl_history.push(genuine.clone());
+        let (roots, _) = p.take_ctl_install(node, false).expect("5 of 5: installed");
+        assert!(!roots.is_empty(), "its approved roots become anchors");
+        assert_eq!(p.report.trust_lists_installed, 1);
+        assert_eq!(p.report.trust_lists_refused, 2, "the forgery was refused again");
+        assert_eq!(p.nodes[&node].ctl_seq, genuine.sequence);
+        assert!(p.take_ctl_install(node, false).is_none(), "nothing newer");
+    }
+
+    /// Edge-case report §6.4: a CTL whose publication deadline falls inside a
+    /// fast-forward is a backend wake of its own, at the deadline, and publishes then
+    /// (not at the window's next tick). Fault (decided CTLs not offered to `next_wake`):
+    /// no wake lands on the deadline.
+    #[test]
+    fn a_ctl_due_inside_a_fast_forward_wakes_the_backend_at_its_deadline() {
+        let mut p = phase2();
+        let t0: SimTime = 300 * 1_000_000_000;
+        p.governance_due(t0);
+        let peer = p.runs[0].state.peer_pki[0].0.clone();
+        let root = p.runs[0].state.gov.root_of(&peer).expect("the peer's root");
+        let at = p.runs[0].state.gov.remove_root(root, t0).expect("decided");
+        assert_eq!(at, t0 + 48 * 3_600 * 1_000_000_000, "48 h (Elector Policy §2.2.4)");
+        let mut now = t0;
+        let mut hit = false;
+        for _ in 0..200_000 {
+            match p.next_wake(now) {
+                Some(w) if w <= at => {
+                    if w == at {
+                        hit = true;
+                        break;
+                    }
+                    now = w;
+                }
+                _ => break,
+            }
+        }
+        assert!(hit, "a wake at the deadline (last stop {now})");
+        let seq = p.home().state.gov.ctl.sequence;
+        p.governance_due(at - 1);
+        assert_eq!(p.home().state.gov.ctl.sequence, seq, "not before its deadline");
+        p.governance_due(at);
+        assert_eq!(p.home().state.gov.ctl.sequence, seq + 1, "published at it");
     }
 }

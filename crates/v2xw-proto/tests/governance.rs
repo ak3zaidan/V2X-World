@@ -369,7 +369,10 @@ fn the_backend_view_shows_every_entity_and_the_flows_between_them() {
             .unwrap_or(0)
             > 0
     );
-    assert!(!get("root").online && get("root").state["certs_issued"].as_u64() >= Some(5));
+    // The root itself, the ICA, the PG and the MA: in the SAESOL production form of this
+    // run the CRL signer is ICA-issued (CF-CRACA), so the ICA counts it.
+    assert!(!get("root").online && get("root").state["certs_issued"].as_u64() >= Some(4));
+    assert!(get("ica").state["certs_issued"].as_u64() >= Some(9));
     // Edges: devices talk to the LOP, the LOP to the RA, the RA to both LAs and the PCA.
     let edge = |a: &str, b: &str| view.edges.iter().any(|e| e.from == a && e.to == b);
     for (a, b) in [

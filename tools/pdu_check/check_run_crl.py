@@ -7,10 +7,11 @@
 Checks (re-derived from 1609.2 Ieee1609Dot2Crl / Ieee1609Dot2CrlSsp and 02 §11 by the
 WP-B4 agent; the primitives and the linkage rule are the oracle's): canonical COER
 SecuredCrl; signedData sha256; headerInfo exactly {psid 256}; signer one attached
-explicit certificate issued by the ICA, which the root issued, and whose PSID-256 SSP is
-CrlSsp{version 1, issuerIsCraca, crls [4, 3, 1, 2]}; the signature; CrlContents version
-1, nextCrl > issueDate, crlSeries 1 is a fullLinkedCrl and is permitted, crlCraca =
-HashedId8(ICA) (the issuerIsCraca rule); and the oracle's linkage-CRL matching revokes
+explicit certificate issued by the root or by the ICA (which the root issued), and whose
+PSID-256 SSP is CrlSsp{version 1, issuerIsCraca, crls [4, 3, 1, 2]}; the signature;
+CrlContents version 1, nextCrl > issueDate, crlSeries 1 is a fullLinkedCrl and is
+permitted, crlCraca = HashedId8(the signer's issuer) (the issuerIsCraca rule); and the
+oracle's linkage-CRL matching revokes
 every certificate listed as revoked and none listed as not revoked. Prints one verdict.
 """
 
@@ -46,9 +47,12 @@ def main(d):
         skind, sval = sd['signer']
         ok(f'{n} one attached signer certificate', skind == 'certificate' and len(sval) == 1)
         signer = sval[0]
-        ok(f'{n} signer explicit, issued by the ICA',
-           signer['type'] == 'explicit' and signer['issuer'] == ('sha256AndDigest', certs.hashed_id8(ica))
-           and certs.verify_explicit(signer, ica))
+        # The CRL signer is issued by the root ([SMP] Table 1, ISS) or by the ICA (the
+        # SAESOL production form); under issuerIsCraca its issuer is the CRACA (CF-CRACA).
+        up = next((a for a in (root, ica) if signer['issuer'] == ('sha256AndDigest', certs.hashed_id8(a))), None)
+        ok(f'{n} signer explicit, issued by the root or the ICA',
+           signer['type'] == 'explicit' and up is not None and certs.verify_explicit(signer, up))
+        up = up or ica
         ssp = None
         for p in signer['toBeSigned'].get('appPermissions', []):
             if p['psid'] == 256 and 'ssp' in p:
@@ -65,7 +69,7 @@ def main(d):
         ok(f'{n} CrlContents canonical', coer.encode('CrlContents', c) == inner['content'][1])
         ok(f'{n} version 1, nextCrl > issueDate', c['version'] == 1 and c['nextCrl'] > c['issueDate'])
         ok(f'{n} series {e["series"]} permitted', c['crlSeries'] == e['series'] and ssp and c['crlSeries'] in ssp['crls'])
-        ok(f'{n} crlCraca = HashedId8(ICA)', c['crlCraca'] == certs.hashed_id8(ica))
+        ok(f'{n} crlCraca = HashedId8(the signer\'s issuer)', c['crlCraca'] == certs.hashed_id8(up))
         want = 'deltaLinkedCrl' if e['delta'] else 'fullLinkedCrl'
         ok(f'{n} is {want}', c['typeSpecific'][0] == want)
         for k, h in enumerate(m['revoked']):
