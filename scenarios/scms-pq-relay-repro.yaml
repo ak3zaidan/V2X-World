@@ -1,0 +1,31 @@
+# ============================================================================
+# The matrix's hybrid post-quantum run (Falcon-512 + P-256, `fragmenter/generic-sdu`) cut to
+# its first two live minutes, with the backend compressed so a revocation reaches the
+# roadside inside them: the RA's report shuffle closes after 5 s, the MA decides
+# automatically, and each CRL Generator publishes every 10 s. Relay-only vehicles upload
+# their reports through the roadside units and the units broadcast the CRL, both as
+# signed SDUs larger than the 1,400-octet WSMP MTU.
+# `crates/v2xw-engine/tests/pq_relay.rs` runs it to check R-PQMBR
+# (docs/design/scms-real/testing/stress.md §3): such an SDU is fragmented and acted on once
+# reassembled, and with `fragmenter/none` it is refused and never counted as sent.
+# ============================================================================
+schema: v2xw/scenario/1
+meta:
+  name: scms-pq-relay-repro
+  description: >-
+    Hybrid Falcon-512 + P-256 Midtown, 120 s live: relayed reports and roadside CRL frames
+    above the WSMP MTU, for the R-PQMBR tests.
+  authors: [v2xw]
+  tags: [scms, post-quantum, fragmentation, reproduction]
+  created: "2026-10-22"
+  base: real-world/matrix/pq-hybrid.yaml
+time:
+  duration_s: 120.0
+  fast_forward: []
+security:
+  protocol:
+    id: protocol/scms/camp
+    params:
+      report_shuffle_window_s: 5.0
+      ma_review_s: 0.0
+      crl_cadence_s: 10.0

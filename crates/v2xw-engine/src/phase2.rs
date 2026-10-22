@@ -684,6 +684,14 @@ pub struct LifecycleParams {
     /// The share of vehicles whose clock carries `clock_skew_s` (`clock_skew_share`,
     /// default 1), chosen by a fixed hash of the node index.
     pub clock_skew_share: f64,
+    /// `modelled_reports` (default 0): a vehicle detection that cannot be filed as a real
+    /// SM-MBR v1.1 report (no subtype maps its checks, no evidence heard, nothing to sign
+    /// it with) still goes to the MA as a sized-only report on the modelled path, for
+    /// studies of the research detectors. **Not the US deployment**: there, a report that
+    /// cannot be encoded, signed and encrypted has no bytes and so no upload (OF-2,
+    /// `docs/design/scms-real/testing/oracle-final.md`); by default such a detection is
+    /// counted in [`Phase2Report::reports_not_filed`] and never leaves the device.
+    pub modelled_reports: bool,
 }
 
 impl LifecycleParams {
@@ -777,6 +785,7 @@ impl LifecycleParams {
             peer_root_removal_at: None,
             clock_skew_ns: 0,
             clock_skew_share: 1.0,
+            modelled_reports: false,
         };
         let map = lifecycle_map(scenario);
         for (key, value) in &map {
@@ -838,6 +847,7 @@ impl LifecycleParams {
                 }
                 "clock_skew_s" => p.clock_skew_ns = (v * 1e9).round() as i64,
                 "clock_skew_share" => p.clock_skew_share = v.clamp(0.0, 1.0),
+                "modelled_reports" => p.modelled_reports = v >= 0.5,
                 // The revocations already on the home provider's CRL when the run
                 // starts (read by `Phase2::new`, `ScmsRun::seed_standing_crl`).
                 "crl_background_entries" => {}
@@ -1041,7 +1051,7 @@ pub fn lifecycle_defaults() -> Vec<(&'static str, serde_json::Value)> {
 
 /// The lifecycle keys `security.protocol.params` accepts (and `security.scms.lifecycle`
 /// publishes, except the ETSI and governance-event keys).
-pub const LIFECYCLE_KEYS: [&str; 31] = [
+pub const LIFECYCLE_KEYS: [&str; 32] = [
     "i_period_s",
     "cert_lifetime_s",
     "certs_per_period",
@@ -1073,6 +1083,7 @@ pub const LIFECYCLE_KEYS: [&str; 31] = [
     "peer_root_removal_at_s",
     "clock_skew_s",
     "clock_skew_share",
+    "modelled_reports",
 ];
 
 /// How often, in simulated seconds, the backend's state is published on `backend.state`
@@ -1391,6 +1402,17 @@ pub struct Phase2Report {
     /// Times a vehicle kept a report in its store because no pseudonym certificate of
     /// its was valid when it would have signed it ([`Phase2::report_waits_for_signer`]).
     pub reports_held_for_signer: u64,
+    /// Vehicle reports that never left the device (OF-2): with the SCMS PDU layer on and
+    /// `modelled_reports` off, a detection the device cannot encode, sign and encrypt as
+    /// an SM-MBR v1.1 report has no upload. A subset of [`Phase2Report::reports_sent`].
+    pub reports_not_filed: u64,
+    /// [`Phase2Report::reports_not_filed`] by reason.
+    pub reports_not_filed_by: BTreeMap<String, u64>,
+    /// Relayed reports the device's stack could not put on the air because the signed
+    /// SDU exceeds the network layer's MTU and the scenario's fragmenter does not split
+    /// whole SDUs (R-PQMBR: under post-quantum signatures with `fragmenter/none`, WSMP
+    /// has no fragmentation). Not counted as uploaded; the report is lost.
+    pub reports_refused_mtu: u64,
     /// EAC decisions the run scheduled and took (root rollover, root removal).
     pub gov_decisions: u64,
     /// CTLs the governance entities published during the run (after the genesis CTL).
@@ -1432,6 +1454,9 @@ pub struct Phase2Report {
     pub crl_versions_published: u64,
     /// How many CRL frames roadside units put on the air.
     pub crl_broadcasts: u64,
+    /// Roadside CRL frames refused at the network layer's MTU (a post-quantum signature
+    /// and certificate with no SDU fragmenter): not broadcast, not counted above.
+    pub crl_frames_refused_mtu: u64,
     /// How many CRL downloads cellular vehicles completed.
     pub crl_downloads: u64,
     /// Conditional CRL polls the RA answered with HTTP 412 (the copy is current; [SMP]
@@ -4079,6 +4104,58 @@ impl Phase2 {
         }
     }
 
+    /// Counts a relayed report the network layer refused at its MTU (R-PQMBR): it never
+    /// went on the air, so it is not an upload.
+    pub fn note_report_refused_mtu(&mut self) {
+        self.report.reports_refused_mtu += 1;
+    }
+
+    /// Counts a roadside CRL frame the network layer refused at its MTU.
+    pub fn note_crl_frame_refused_mtu(&mut self) {
+        self.report.crl_frames_refused_mtu += 1;
+    }
+
+    fn note_not_filed(&mut self, why: &str) {
+        self.report.reports_not_filed += 1;
+        *self
+            .report
+            .reports_not_filed_by
+            .entry(why.to_string())
+            .or_insert(0) += 1;
+    }
+
+    /// Whether a vehicle's report can leave the device (OF-2).
+    ///
+    /// Under the US SCMS with the PDU layer on, an upload *is* its bytes: a
+    /// SecuredMisbehaviorReport signed under PSID 0x26 and encrypted to the MA, POSTed with
+    /// an enrolment-signed `Download-Req` ([SM-MBR] §3–4). A detection the device cannot
+    /// build that report for — no v1.1 subtype maps its checks, too few of the accused's
+    /// signed BSMs heard, an accused certificate it cannot name — has nothing to upload, so
+    /// it is counted here by reason ([`Phase2Report::reports_not_filed_by`]) and dropped.
+    /// Always `true` without the PDU layer (every report is modelled there), on the ETSI
+    /// path, for a roadside unit (R-UNSEC, labelled apart), and with `modelled_reports`.
+    pub fn files_report(&mut self, report: &MisbehaviourReport) -> bool {
+        if self.params.modelled_reports
+            || report
+                .reporter
+                .is_some_and(|n| self.rsu_spec_of(n).is_some())
+        {
+            return true;
+        }
+        let nowhere = v2xw_sec::envelope::GenerationLocation {
+            lat_tenth_microdeg: 0,
+            lon_tenth_microdeg: 0,
+            elevation: 0,
+        };
+        let why = match self.real_mbr(report, nowhere) {
+            MbrBuild::Real(_) | MbrBuild::Off => return true,
+            MbrBuild::Unmapped => "no SM-MBR v1.1 subtype maps the detector checks",
+            MbrBuild::Unsecured(why) => why,
+        };
+        self.note_not_filed(why);
+        false
+    }
+
     /// Counts a report a roadside unit put on its backhaul.
     pub fn note_rsu_report(&mut self) {
         self.report.reports_from_rsus += 1;
@@ -4151,6 +4228,10 @@ impl Phase2 {
         // Why the report travels on the modelled path, when it does (the PKI view's case
         // evidence names it with the detector's checks).
         let mut modelled: Option<String> = None;
+        // A vehicle's report that cannot be built as real bytes has no upload (OF-2,
+        // [`Phase2::files_report`]): [`Engine`]'s route checks before the access leg, and
+        // this catches what changed on the way (the securing itself failing).
+        let strict = !self.params.modelled_reports && self.rsu_spec_of(reporter).is_none();
         let run = match self.real_mbr(&report, location) {
             MbrBuild::Real(mbr) => {
                 // Signed with the pseudonym the vehicle signs its BSMs with now, if it is
@@ -4170,12 +4251,24 @@ impl Phase2 {
                             transport,
                         ))
                     }
+                    Err(e) if strict => {
+                        self.note_not_filed(&format!("the report could not be secured: {e}"));
+                        return;
+                    }
                     Err(e) => {
                         self.note_unsecured(&e.to_string());
                         modelled = Some(format!("the report could not be secured: {e}"));
                         None
                     }
                 }
+            }
+            MbrBuild::Unmapped if strict => {
+                self.note_not_filed("no SM-MBR v1.1 subtype maps the detector checks");
+                return;
+            }
+            MbrBuild::Unsecured(why) if strict => {
+                self.note_not_filed(why);
+                return;
             }
             MbrBuild::Unmapped => {
                 self.report.reports_mbr_unmapped += 1;
