@@ -9814,7 +9814,10 @@ mod composite_crl_tests {
         let (kept, dropped) =
             sort_composite_entries(&ok, &bad, &[a, b]).expect("the download is kept");
         assert_eq!(kept, vec![a], "the verified provider's entry installs");
-        assert_eq!(dropped, 1, "the unverified provider's entry is dropped, not installed");
+        assert_eq!(
+            dropped, 1,
+            "the unverified provider's entry is dropped, not installed"
+        );
         assert!(
             sort_composite_entries(&ok, &bad, &[a, b, entry(3)]).is_none(),
             "an entry no CRL in the download carries refuses it"

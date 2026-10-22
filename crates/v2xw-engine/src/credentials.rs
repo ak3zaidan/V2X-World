@@ -111,8 +111,7 @@ pub fn generation_window(
 ) -> Option<v2xw_node::rxval::GenerationTimeWindow> {
     use v2xw_node::rxval::{BEACON_MAX_AGE_S, GenerationTimeWindow, MAX_AGE_S, MAX_FUTURE_S};
     let s = scenario.security.scms.as_ref()?;
-    if s.rx_beacon_max_age_s.is_none() && s.rx_max_age_s.is_none() && s.rx_max_future_s.is_none()
-    {
+    if s.rx_beacon_max_age_s.is_none() && s.rx_max_age_s.is_none() && s.rx_max_future_s.is_none() {
         return None;
     }
     Some(GenerationTimeWindow::from_secs(

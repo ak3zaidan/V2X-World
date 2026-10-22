@@ -1092,7 +1092,9 @@ fn a_message_outside_the_generation_time_window_is_discarded_unverified() {
     let (d, refused) = run(false);
     assert_eq!(
         d.get(&1),
-        Some(&RxDisposition::NotRelevant(RxReject::GenerationTimeInFuture)),
+        Some(&RxDisposition::NotRelevant(
+            RxReject::GenerationTimeInFuture
+        )),
         "{d:?}"
     );
     assert_eq!(

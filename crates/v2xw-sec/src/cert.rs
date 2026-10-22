@@ -1347,7 +1347,10 @@ mod tests {
             let mut bad_y = y;
             bad_y[31] ^= 0x01;
             c.0.to_be_signed.verify_key_indicator = uncompressed(&x, &bad_y);
-            assert!(public_key_material(&c).is_err(), "a point off the curve is refused");
+            assert!(
+                public_key_material(&c).is_err(),
+                "a point off the curve is refused"
+            );
         }
         assert_eq!(parities, [true, true], "both parities exercised");
     }

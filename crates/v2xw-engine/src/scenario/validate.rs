@@ -5086,8 +5086,10 @@ pub fn detection_policy_warnings(s: &Scenario) -> Vec<String> {
     }
     let what = match policy {
         "on-demand" => "verifies only the messages a safety application is about to act on",
-        "prioritized" => "sheds the oldest and least relevant messages unverified when the \
-                          verifier falls behind",
+        "prioritized" => {
+            "sheds the oldest and least relevant messages unverified when the \
+                          verifier falls behind"
+        }
         _ => "leaves some messages unverified",
     };
     vec![format!(

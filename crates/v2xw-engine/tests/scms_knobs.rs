@@ -264,7 +264,10 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
             v2xw_node::rxval::BEACON_MAX_AGE_S,
         ),
         ("security.scms.rx_max_age_s", v2xw_node::rxval::MAX_AGE_S),
-        ("security.scms.rx_max_future_s", v2xw_node::rxval::MAX_FUTURE_S),
+        (
+            "security.scms.rx_max_future_s",
+            v2xw_node::rxval::MAX_FUTURE_S,
+        ),
     ] {
         let f = fields
             .iter()
@@ -393,7 +396,10 @@ fn verify_on_demand_with_detection_warns() {
     };
     let w = warn("on-demand", true);
     assert_eq!(w.len(), 1, "{w:?}");
-    assert!(w[0].contains("security.verification_policy") && w[0].contains("897"), "{w:?}");
+    assert!(
+        w[0].contains("security.verification_policy") && w[0].contains("897"),
+        "{w:?}"
+    );
     assert_eq!(warn("prioritized", true).len(), 1);
     assert!(warn("verify-all", true).is_empty());
     assert!(warn("on-demand", false).is_empty());

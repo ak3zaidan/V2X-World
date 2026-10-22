@@ -5840,7 +5840,9 @@ impl Phase2 {
         }
         self.ensure_factory_trust();
         let own = if rsu {
-            self.rsu_cycle.get_mut(&node).and_then(|c| c.ctl_trust.take())
+            self.rsu_cycle
+                .get_mut(&node)
+                .and_then(|c| c.ctl_trust.take())
         } else {
             self.nodes.get_mut(&node).and_then(|n| n.ctl_trust.take())
         };
@@ -7664,7 +7666,10 @@ mod ctl_device_tests {
         assert!(p.take_ctl_install(node, false).is_none(), "2 of 5: refused");
         assert_eq!(p.report.trust_lists_refused, 1);
         assert_eq!(p.report.trust_lists_installed, 0);
-        assert!(p.report.trust_list_verifications >= 2, "the signatures were checked");
+        assert!(
+            p.report.trust_list_verifications >= 2,
+            "the signatures were checked"
+        );
         assert_eq!(p.nodes[&node].ctl_seq, factory, "still the factory CTL");
         let genuine = p.runs[0].state.gov.forge_next_ctl(3, &[0, 1, 2, 3, 4]);
         p.runs[0].state.gov.ctl = genuine.clone();
@@ -7672,7 +7677,10 @@ mod ctl_device_tests {
         let (roots, _) = p.take_ctl_install(node, false).expect("5 of 5: installed");
         assert!(!roots.is_empty(), "its approved roots become anchors");
         assert_eq!(p.report.trust_lists_installed, 1);
-        assert_eq!(p.report.trust_lists_refused, 2, "the forgery was refused again");
+        assert_eq!(
+            p.report.trust_lists_refused, 2,
+            "the forgery was refused again"
+        );
         assert_eq!(p.nodes[&node].ctl_seq, genuine.sequence);
         assert!(p.take_ctl_install(node, false).is_none(), "nothing newer");
     }
@@ -7689,7 +7697,11 @@ mod ctl_device_tests {
         let peer = p.runs[0].state.peer_pki[0].0.clone();
         let root = p.runs[0].state.gov.root_of(&peer).expect("the peer's root");
         let at = p.runs[0].state.gov.remove_root(root, t0).expect("decided");
-        assert_eq!(at, t0 + 48 * 3_600 * 1_000_000_000, "48 h (Elector Policy §2.2.4)");
+        assert_eq!(
+            at,
+            t0 + 48 * 3_600 * 1_000_000_000,
+            "48 h (Elector Policy §2.2.4)"
+        );
         let mut now = t0;
         let mut hit = false;
         for _ in 0..200_000 {
@@ -7707,7 +7719,11 @@ mod ctl_device_tests {
         assert!(hit, "a wake at the deadline (last stop {now})");
         let seq = p.home().state.gov.ctl.sequence;
         p.governance_due(at - 1);
-        assert_eq!(p.home().state.gov.ctl.sequence, seq, "not before its deadline");
+        assert_eq!(
+            p.home().state.gov.ctl.sequence,
+            seq,
+            "not before its deadline"
+        );
         p.governance_due(at);
         assert_eq!(p.home().state.gov.ctl.sequence, seq + 1, "published at it");
     }

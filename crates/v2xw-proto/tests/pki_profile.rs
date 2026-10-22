@@ -135,8 +135,7 @@ mod per_provider {
         };
         let contents = crl::crl_contents(&spec);
         let signed = crl::sign_crl(&contents, signer.0, signer.1).expect("signs");
-        let opened =
-            crl::decode_crl(&crl::encode_crl(&signed).expect("encodes")).expect("decodes");
+        let opened = crl::decode_crl(&crl::encode_crl(&signed).expect("encodes")).expect("decodes");
         let accepted =
             crl::verify_crl(&opened, signer.0, Some(issuer), WireEdition::Ieee2022).accepted();
         (accepted, crl::revokes(&opened.contents, target))
@@ -163,8 +162,7 @@ mod per_provider {
     /// the ISS form (the documented deviation, `Form::sub_ca` / `craca_for` returning
     /// the issuer), or one profile for every provider.
     #[test]
-    fn each_provider_certifies_in_its_own_published_form_and_its_crls_reach_every_component()
-    {
+    fn each_provider_certifies_in_its_own_published_form_and_its_crls_reach_every_component() {
         let run = production();
         let home = run.state.pki.as_ref().expect("the PDU PKI");
         let (label, peer) = &run.state.peer_pki[0];
@@ -172,9 +170,17 @@ mod per_provider {
         assert_eq!(home.profile, CertProfile::Iss);
         assert_eq!(peer.profile, CertProfile::S2xProduction);
         // Who issues the CRL signer, and on which series.
-        assert_eq!(issuer8(&home.crlg), home.root.id8(), "ISS: root-issued CRL signer");
+        assert_eq!(
+            issuer8(&home.crlg),
+            home.root.id8(),
+            "ISS: root-issued CRL signer"
+        );
         assert_eq!(home.crlg.cert.0.to_be_signed.crl_series.0.0, 256);
-        assert_eq!(issuer8(&peer.crlg), peer.ica.id8(), "S2X: ICA-issued CRL signer");
+        assert_eq!(
+            issuer8(&peer.crlg),
+            peer.ica.id8(),
+            "S2X: ICA-issued CRL signer"
+        );
         assert_eq!(peer.crlg.cert.0.to_be_signed.crl_series.0.0, 2);
         // The root lifetimes of the two published production roots.
         let years = |c: &Certificate| match &c.0.to_be_signed.validity_period.duration {
@@ -187,15 +193,29 @@ mod per_provider {
         assert_eq!(years(&peer.ica.cert), 25, "ica.prod.s2x.io");
         // Regions and the RA's permission form.
         for a in [&home.ica, &home.eca, &home.aca, &home.ra, &home.la1] {
-            assert!(a.cert.0.to_be_signed.region.is_some(), "{}: ISS region", a.name);
+            assert!(
+                a.cert.0.to_be_signed.region.is_some(),
+                "{}: ISS region",
+                a.name
+            );
         }
-        assert!(home.ma.cert.0.to_be_signed.region.is_none(), "root-issued: none");
+        assert!(
+            home.ma.cert.0.to_be_signed.region.is_none(),
+            "root-issued: none"
+        );
         for a in [&peer.ica, &peer.eca, &peer.aca, &peer.ra] {
-            assert!(a.cert.0.to_be_signed.region.is_none(), "{}: no region", a.name);
+            assert!(
+                a.cert.0.to_be_signed.region.is_none(),
+                "{}: no region",
+                a.name
+            );
         }
         let ra = |p: &ScmsPki| {
             let t = &p.ra.cert.0.to_be_signed;
-            (t.cert_issue_permissions.is_some(), t.cert_request_permissions.is_some())
+            (
+                t.cert_issue_permissions.is_some(),
+                t.cert_request_permissions.is_some(),
+            )
         };
         assert_eq!(ra(home), (false, true), "ISS RA: certRequestPermissions");
         assert_eq!(ra(peer), (true, false), "S2X RA: certIssuePermissions");
@@ -206,14 +226,22 @@ mod per_provider {
                 let (ok, revoked) =
                     crl_revokes((&pki.crlg.cert, &pki.crlg.key), &craca.cert, 2, &a.cert);
                 assert!(ok, "{}: the series-2 CRL verifies", a.name);
-                assert!(revoked, "{}: a series-2 CRL of its CRACA revokes it", a.name);
+                assert!(
+                    revoked,
+                    "{}: a series-2 CRL of its CRACA revokes it",
+                    a.name
+                );
             }
             assert_eq!(pki.craca_id8(), craca.id8(), "{}", pki.crlg.name);
         }
         // The ICA itself: ISS's root-issued CRL signer can revoke it; SAESOL's cannot
         // (its CRACA is the ICA): recorded, not hidden.
-        let (_, ica_revoked) =
-            crl_revokes((&home.crlg.cert, &home.crlg.key), &home.root.cert, 2, &home.ica.cert);
+        let (_, ica_revoked) = crl_revokes(
+            (&home.crlg.cert, &home.crlg.key),
+            &home.root.cert,
+            2,
+            &home.ica.cert,
+        );
         assert!(ica_revoked, "ISS: a series-2 CRL revokes the ICA");
         // The governance hierarchy of each provider: its CRL signer's CRL reaches its
         // ICA-issued components (it could not, before: CF-CRACA).
@@ -234,7 +262,10 @@ mod per_provider {
         for role in ["eca", "pca", "ra", "la1", "la2", "ica"] {
             let target = gov.cert(role).expect("certified");
             let (ok, revoked) = crl_revokes(signer, root, 2, target);
-            assert!(ok && revoked, "governance {role}: a root-CRACA CRL revokes it");
+            assert!(
+                ok && revoked,
+                "governance {role}: a root-CRACA CRL revokes it"
+            );
         }
         let b_signer = (
             gov.peer_cert("provider-b", "crlg").expect("crlg"),
@@ -244,7 +275,10 @@ mod per_provider {
         for role in ["eca", "pca", "ra", "la1", "la2"] {
             let target = gov.peer_cert("provider-b", role).expect("certified");
             let (ok, revoked) = crl_revokes(b_signer, b_ica, 2, target);
-            assert!(ok && revoked, "provider-b governance {role}: an ICA-CRACA CRL revokes it");
+            assert!(
+                ok && revoked,
+                "provider-b governance {role}: an ICA-CRACA CRL revokes it"
+            );
         }
     }
 
@@ -276,11 +310,19 @@ mod per_provider {
             let t = &cert.0.to_be_signed;
             assert_eq!(t.crl_series.0.0, 4);
             let craca = crlg_issuer(pki);
-            assert_eq!(&t.craca_id.0[..], &craca.id8()[5..], "{}: the CRACA", pki.eca.name);
-            let (ok, revoked) =
-                crl_revokes((&pki.crlg.cert, &pki.crlg.key), &craca.cert, 4, &cert);
+            assert_eq!(
+                &t.craca_id.0[..],
+                &craca.id8()[5..],
+                "{}: the CRACA",
+                pki.eca.name
+            );
+            let (ok, revoked) = crl_revokes((&pki.crlg.cert, &pki.crlg.key), &craca.cert, 4, &cert);
             assert!(ok, "the series-4 CRL verifies");
-            assert!(revoked, "{}: a series-4 CRL revokes the enrolment cert", pki.eca.name);
+            assert!(
+                revoked,
+                "{}: a series-4 CRL revokes the enrolment cert",
+                pki.eca.name
+            );
         }
     }
 }

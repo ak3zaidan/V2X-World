@@ -491,11 +491,15 @@ mod tests {
             // it is compared with the last verified one (200 ms before, 0.6 m on at 3 m/s:
             // where it should be), and raises nothing.
             let v = run(
-                &[bsm(0, 5.0, 3.0), {
-                    let mut f = bsm(100, 50.0, 3.0);
-                    f.verification = state;
-                    f
-                }, bsm(200, 5.6, 3.0)],
+                &[
+                    bsm(0, 5.0, 3.0),
+                    {
+                        let mut f = bsm(100, 50.0, 3.0);
+                        f.verification = state;
+                        f
+                    },
+                    bsm(200, 5.6, 3.0),
+                ],
                 UsMbrParams::default(),
             );
             assert!(v.iter().all(Vec::is_empty), "{state:?}: {v:?}");

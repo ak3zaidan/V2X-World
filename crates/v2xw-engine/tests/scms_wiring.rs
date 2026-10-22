@@ -158,7 +158,10 @@ fn the_pdu_pki_is_anchored_at_the_governance_root() {
     // provider-a certifies in ISS's published form: its CRL signer is root-issued, so
     // the root is the CRACA every certificate below it names (CF-CRACA, [SMP] Table 1).
     assert_eq!(issuer(&pki.crlg.cert), id8(&pki.root.cert).to_vec());
-    assert_eq!(&pki.aca.cert.0.to_be_signed.craca_id.0[..], &id8(&pki.root.cert)[5..]);
+    assert_eq!(
+        &pki.aca.cert.0.to_be_signed.craca_id.0[..],
+        &id8(&pki.root.cert)[5..]
+    );
     // The full 1609.2 chain rules, anchored at the CTL's roots, at the run's start, under
     // the US device policy (WP-C2): only the RA's published `{all, 0, 0}` group is
     // tolerated, and reported.
@@ -169,7 +172,14 @@ fn the_pdu_pki_is_anchored_at_the_governance_root() {
     // ISS's RA carries the same `{all, 0, 0}` group in `certRequestPermissions`; it
     // raises the same tolerated findings as the production RA's `certIssuePermissions`
     // form (every published US RA does, `ChainPolicy::us_device`).
-    assert!(pki.ra.cert.0.to_be_signed.cert_request_permissions.is_some());
+    assert!(
+        pki.ra
+            .cert
+            .0
+            .to_be_signed
+            .cert_request_permissions
+            .is_some()
+    );
     assert!(pki.ra.cert.0.to_be_signed.cert_issue_permissions.is_none());
     for (name, c) in [("aca", &pki.aca), ("ra", &pki.ra), ("crlg", &pki.crlg)] {
         let chain: Vec<_> = if name == "crlg" {
