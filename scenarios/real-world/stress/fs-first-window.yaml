@@ -1,0 +1,18 @@
+# The full-fleet Midtown benchmark's first live window only (stress package, stress.md §1):
+# 9,000 veh/h with the 4x fill for 90 s, 2,000 pedestrians and 200 cyclists (25 % with a
+# handset), 30 RSUs, the US SCMS on the real calendar, and 150 s live (120 s warm-up, then
+# 30 s measured), with no fast-forward. It is the radio, verification, misbehaviour and
+# provisioning load at full density; the two-day backend side runs in the full file.
+schema: v2xw/scenario/1
+meta:
+  name: stress-fs-first-window
+  description: >-
+    The full-fleet Midtown SCMS benchmark's first 150 s, live: full-density radio,
+    verification, misbehaviour and provisioning load.
+  authors: [v2xw]
+  tags: [stress, benchmark, full-fleet, manhattan, scms]
+  created: "2026-10-22"
+  base: ../midtown-scms-benchmark.yaml
+time:
+  duration_s: 150.0
+  fast_forward: []

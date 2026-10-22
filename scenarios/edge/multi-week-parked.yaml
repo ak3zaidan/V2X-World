@@ -1,0 +1,21 @@
+# multi-week.yaml with one car parked for four weeks with its OBU switched off (stress
+# package, stress.md §2). Node 20 is a cellular, honest vehicle on the map at 640 s in the
+# base run (same seed). It breaks down at 640 s and stands for the rest of the run; its
+# OBU is off from 645 s to 2,419,510 s (inside W4, just before the 618 -> 619 rollover at
+# 2,419,800 s). While off it reaches no part of the SCMS. When it comes back its newest CRL
+# is about four weeks old, past nextCrl + 2 weeks ([CAMP122] Table 67), so it refuses
+# every signed message until its first poll installs a fresh CRL, and its pool, which ended
+# with week 616, is empty until a top-up arrives.
+schema: v2xw/scenario/1
+meta:
+  name: edge-multi-week-parked
+  description: >-
+    Five weeks of the conformance run with one car parked and switched off for four weeks:
+    it comes back with an overdue CRL and an exhausted pool.
+  authors: [v2xw]
+  tags: [scms, edge-case, calendar, multi-week, offline, overdue, stress]
+  created: "2026-10-22"
+  base: multi-week.yaml
+events:
+  - {t: 640.0, until: 2851320.0, type: safety.breakdown, target: 20}
+  - {t: 645.0, until: 2419510.0, type: outage, target: 20}
