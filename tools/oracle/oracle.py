@@ -136,6 +136,85 @@ def cmd_real(a):
     return 0 if not bad else 1
 
 
+def cmd_records(a):
+    import json
+    from scms_oracle import records
+    rc = 0
+    for d in a.runs:
+        R = records.load(d)
+        X = records.run_rules(R)
+        bad = 0
+        for rule, n_ok, fails in X.rows():
+            bad += len(fails)
+            print(f'  {"ok " if not fails else "RED"} {rule}: {n_ok} ok, {len(fails)} red')
+            for f in fails[:a.show]:
+                print(f'        {f}')
+        for n in sorted(X.na):
+            print(f'  n/a {n}')
+        if X.info:
+            print(f'  info {json.dumps(X.info)}')
+        total = sum(n for _, n, _ in X.rows()) + bad
+        print(f'records {R.name}: {"PASS" if not bad else "FAIL"} ({total - bad}/{total} checks, {len(R.pdus)} PDUs)')
+        if a.json:
+            json.dump({'run': R.name, 'rows': [{'rule': r, 'ok': n, 'red': f} for r, n, f in X.rows()],
+                       'na': sorted(X.na), 'info': X.info}, open(a.json if len(a.runs) == 1 else f'{a.json}.{R.name}', 'w'),
+                      indent=1, default=str)
+        if a.expect:
+            import yaml
+            red = {r for r, _, f in X.rows() if f}
+            have = {r for r, _, _ in X.rows()}
+            rows = [r for r in yaml.safe_load(open(a.expect)) if r.get('run') == R.name and 'rule' in r]
+            miss = []
+            for r in rows:
+                got = 'red' if r['rule'] in red else ('pass' if r['rule'] in have else 'absent')
+                if got != r['expect']:
+                    miss.append(f'{r["rule"]}: expected {r["expect"]}, got {got}')
+            for m in miss:
+                print(f'  EXPECT {m}')
+            print(f'expect {R.name}: {"PASS" if not miss else "FAIL"} ({len(rows) - len(miss)}/{len(rows)} rows)')
+            rc = rc or (1 if miss else 0)
+        elif bad:
+            rc = 1
+        if a.mutate:
+            res = records.mutate(R, a.only)
+            for name, rule, st in res:
+                print(f'  fault {name} -> {rule}: {st}')
+            silent = [n for n, _, st in res if st == 'SILENT']
+            print(f'records-mutate {R.name}: {"PASS" if not silent else "FAIL"} '
+                  f'({sum(st == "red" for _, _, st in res)} red, {len(silent)} silent, '
+                  f'{sum(st == "n/a" for _, _, st in res)} n/a)')
+            if silent:
+                rc = 1
+    return rc
+
+
+def cmd_ctl_files(a):
+    import json
+    from scms_oracle import ctlfiles
+    gov = json.load(open(a.gov))
+    X = ctlfiles.check(gov)
+    bad = 0
+    for rule, n_ok, fails in X.rows():
+        bad += len(fails)
+        print(f'  {"ok " if not fails else "RED"} {rule}: {n_ok} ok, {len(fails)} red')
+        for f in fails[:3]:
+            print(f'        {f}')
+    for k, v in X.info.items():
+        print(f'  info {k}: {v}')
+    print(f'ctl-files: {"PASS" if not bad else "FAIL"} ({sum(len(g["ctls"]) for g in gov)} CTL copies, '
+          f'{len(gov)} providers)')
+    rc = 1 if bad else 0
+    if a.mutate:
+        res = ctlfiles.mutate(gov)
+        for name, rule, st in res:
+            print(f'  fault {name} -> {rule}: {st}')
+        silent = [n for n, _, st in res if st == 'SILENT']
+        print(f'ctl-files-mutate: {"PASS" if not silent else "FAIL"} ({sum(st == "red" for _, _, st in res)} red, '
+              f'{len(silent)} silent)')
+        rc = rc or (1 if silent else 0)
+    return rc
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -161,6 +240,18 @@ def main():
     r.add_argument('files', nargs='+')
     r.add_argument('-v', '--verbose', action='store_true')
     r.set_defaults(fn=cmd_real)
+    rr = sub.add_parser('records')
+    rr.add_argument('runs', nargs='+', help='run directories (recording.mcap + scenario.resolved.yaml)')
+    rr.add_argument('--mutate', action='store_true', help='also inject every record fault and require red')
+    rr.add_argument('--only', nargs='*')
+    rr.add_argument('--show', type=int, default=3, help='failures printed per rule')
+    rr.add_argument('--json')
+    rr.add_argument('--expect', help='expectation YAML: rows {run, rule, expect: pass|red}')
+    rr.set_defaults(fn=cmd_records)
+    cf = sub.add_parser('ctl-files')
+    cf.add_argument('gov', help="an F1 capture's gov.json")
+    cf.add_argument('--mutate', action='store_true')
+    cf.set_defaults(fn=cmd_ctl_files)
     a = ap.parse_args()
     sys.exit(a.fn(a))
 

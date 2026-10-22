@@ -1,0 +1,39 @@
+# ============================================================================
+# Two-provider misbehaviour run for the final oracle check (docs/design/scms-real/testing/
+# oracle-final.md): the conformance run's deployment and calendar, with automatic MA
+# decisions at both providers, twice the liars and four radio windows spread over two
+# weeks, so that each provider issues several CRLs: more than one on the same iRev
+# (indexWithinI counts up), one after the 615 -> 616 i-period rollover (iRev moves and
+# indexWithinI restarts) and reissues before nextCrl. Every PDU lands in the pki.flow
+# recording for `tools/oracle/oracle.py records`.
+# ============================================================================
+schema: v2xw/scenario/1
+meta:
+  name: scms-oracle-mbr
+  description: >-
+    Two providers, automatic MA, 20 % constant-position liars, four radio windows over two
+    weeks on the real calendar: several CRLs per provider across an i-period rollover.
+  authors: [v2xw]
+  tags: [scms, oracle, revocation, crl, fast-forward]
+  created: "2026-10-22"
+  base: scms-conformance.yaml
+time:
+  duration_s: 1300300.0
+  fast_forward:
+    - {from_s: 660.0, to_s: 90000.0}
+    - {from_s: 90600.0, to_s: 260000.0}
+    - {from_s: 260600.0, to_s: 1300000.0}
+security:
+  scms:
+    deployment:
+      preset: us-production-2025
+      providers:
+        - {name: provider-a, components: {}, ma_mode: automatic}
+        - {name: provider-b, components: {}, ma_mode: automatic}
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.2
+      schedule:
+        from_s: 60.0
+        to_s: 1300300.0

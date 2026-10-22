@@ -1,0 +1,19 @@
+# ============================================================================
+# The first ten minutes of the conformance run, radio on throughout: factory enrolment and
+# first batches before t0, the liars' reports from 60 s, the 614 -> 615 rollover and top-ups
+# at 600 s. `crates/v2xw-engine/tests/oracle_final.rs` runs it to reproduce the
+# disagreements of docs/design/scms-real/testing/oracle-final.md from the public records.
+# ============================================================================
+schema: v2xw/scenario/1
+meta:
+  name: scms-oracle-repro
+  description: >-
+    The conformance run's first 640 s (enrolment, provisioning, reports, the 614 -> 615
+    top-up), for the oracle-final reproduction tests.
+  authors: [v2xw]
+  tags: [scms, oracle, reproduction]
+  created: "2026-10-22"
+  base: scms-conformance.yaml
+time:
+  duration_s: 640.0
+  fast_forward: []
