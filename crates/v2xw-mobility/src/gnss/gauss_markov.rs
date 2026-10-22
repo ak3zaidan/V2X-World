@@ -40,6 +40,38 @@
 //! frozen engine's values with `code (legacy)` and the shared `TODO: calibrate` plan of
 //! §2.10.
 //!
+//! # Receiver output: raw fixes or the receiver's smoothed solution
+//!
+//! By default every estimate is a **raw fix**: the white term is drawn afresh at every
+//! estimate. At the 10 Hz mobility step that puts an independent 1.6 m per-axis error on
+//! every consecutive BSM, so two BSMs 100 ms apart disagree with their own speed and
+//! heading by 2.6 m at the median (realism base, R-USFP in
+//! `docs/design/scms-real/testing/usfp.md`), and the SCMS Manager's 1 m RandomPosition
+//! check ([SM-MBR] v1.0 §2.3) fires on 87 % of an honest vehicle's BSMs. A deployed
+//! receiver does not output that: its navigation filter propagates the solution with its
+//! own Doppler velocity and blends the code fix in slowly, which is the carrier/Doppler
+//! smoothing of code (Hatch 1982; RTCA DO-229 fixes its time constant at 100 s), so
+//! consecutive outputs agree with the reported velocity to centimetres.
+//!
+//! `smoothing_tau_s > 0` models that output:
+//!
+//! ```text
+//! p̂_k = p̂_{k−1} + v_k·Δt + β·(z_k − (p̂_{k−1} + v_k·Δt)),   β = 1 − exp(−Δt/τ_s)
+//! ```
+//!
+//! where `z_k` is the raw fix above and `v_k` the receiver's measured velocity. Reid 2019
+//! measured production receivers' **outputs**, so the measured scale is kept for the
+//! output: the whole fitted σ goes to the slow (bias) process, and the white term is only
+//! the filter's input noise, of which `σ_w·√(β/(2−β))` reaches the output. The reported
+//! confidence is built from those two output terms.
+//!
+//! `static_hold_mps > 0` adds the receivers' static hold (u-blox M8 Receiver Description,
+//! "Static hold"): below that measured ground speed the receiver holds its position and
+//! reports zero velocity, so a stopped vehicle neither drifts with its velocity noise nor
+//! claims a speed with an unchanged position (SM-MBR ConstantPosition).
+//!
+//! Both are off by default, so a scenario that does not ask for them keeps its runs.
+//!
 //! # Quality classes
 //!
 //! `rtk` uses the OxTS RT3000 rows (0.26 / 1.05 / 3.91 m horizontal) and a 60 s outage 95th
@@ -74,7 +106,7 @@ use crate::views::{GnssEnv, SkyView};
 pub const MODEL_ID: &str = "gnss/error/gauss-markov";
 
 /// The model version.
-pub const MODEL_VERSION: &str = "1.0.0";
+pub const MODEL_VERSION: &str = "1.1.0";
 
 /// Reid 2019 horizontal error percentiles for a production automotive single-frequency
 /// receiver under open sky, metres: 68 %, 95 %, 99 %.
@@ -231,6 +263,12 @@ pub struct GaussMarkovParams {
     pub sigma_velocity_mps: f64,
     /// Heading noise standard deviation, radians.
     pub sigma_heading_rad: f64,
+    /// The receiver's position-smoothing time constant, seconds (module docs, "Receiver
+    /// output"). `0` outputs every raw fix as drawn.
+    pub smoothing_tau_s: f64,
+    /// The static-hold threshold, m/s: below it the receiver holds its position and
+    /// reports zero velocity. `0` is off. Read only when `smoothing_tau_s > 0`.
+    pub static_hold_mps: f64,
 }
 
 impl Default for GaussMarkovParams {
@@ -253,6 +291,8 @@ impl Default for GaussMarkovParams {
             // `TODO: calibrate` — §3.8 has no heading figure at all. Zero, so the model adds
             // no heading error rather than an invented one.
             sigma_heading_rad: 0.0,
+            smoothing_tau_s: 0.0,
+            static_hold_mps: 0.0,
         }
     }
 }
@@ -260,6 +300,8 @@ impl Default for GaussMarkovParams {
 /// One node's error state.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 struct NodeState {
+    /// The receiver's smoothed solution, when `smoothing_tau_s > 0` and it has one.
+    smoothed: Option<Vec3>,
     bias: Vec3,
     /// When the state was last advanced.
     last: Option<SimTime>,
@@ -323,15 +365,25 @@ impl GaussMarkovGnss {
         let lateral = QuantileFit::axis("lateral", &REID_LATERAL_M);
         let longitudinal = QuantileFit::axis("longitudinal", &REID_LONGITUDINAL_M);
         // The correlated part is what the white part does not explain.
-        let sigma_bias_h_m = math::sqrt(
-            (horizontal.sigma_m * horizontal.sigma_m
-                - params.sigma_white_h_m * params.sigma_white_h_m)
-                .max(0.0),
-        );
-        let sigma_bias_v_m = math::sqrt(
-            (vertical.sigma_m * vertical.sigma_m - params.sigma_white_v_m * params.sigma_white_v_m)
-                .max(0.0),
-        );
+        // A smoothing receiver's output carries the measured scale in its slow part: the
+        // white term is the filter's input noise, of which `σ_w·√(β/(2−β))` (4 cm at
+        // τ_s = 100 s and a 0.1 s step) reaches the output, so the whole fit goes to the
+        // bias (module docs, "Receiver output").
+        let smoothing = params.smoothing_tau_s > 0.0;
+        let white_h = if smoothing {
+            0.0
+        } else {
+            params.sigma_white_h_m
+        };
+        let white_v = if smoothing {
+            0.0
+        } else {
+            params.sigma_white_v_m
+        };
+        let sigma_bias_h_m =
+            math::sqrt((horizontal.sigma_m * horizontal.sigma_m - white_h * white_h).max(0.0));
+        let sigma_bias_v_m =
+            math::sqrt((vertical.sigma_m * vertical.sigma_m - white_v * white_v).max(0.0));
         Self {
             card: card(
                 &params,
@@ -461,6 +513,54 @@ impl GaussMarkovGnss {
         );
         state.bias
     }
+
+    /// What the receiver outputs for the raw fix `z` and measured velocity `v`, `dt_s`
+    /// after its previous estimate: `(position, velocity, the share of the white σ that
+    /// reaches the output)` (module docs, "Receiver output"). With `smoothing_tau_s` at 0
+    /// the raw fix itself, unchanged.
+    ///
+    /// `white` is the white part of `z`. A solution that starts (a cold start, or the first
+    /// fix after a lost one) starts without it, as a receiver that has been running for a
+    /// while would hold it: the same reason [`GaussMarkovGnss::advance_bias`] starts the
+    /// bias at its stationary variance. Started from the raw fix, the first τ_s of every
+    /// run would carry the full white error while the receiver reported the smoothed one.
+    fn receiver_output(
+        &mut self,
+        node: NodeId,
+        z: Vec3,
+        white: Vec3,
+        v: Vec3,
+        dt_s: f64,
+    ) -> (Vec3, Vec3, f64) {
+        let tau = self.params.smoothing_tau_s;
+        if tau <= 0.0 {
+            return (z, v, 1.0);
+        }
+        let beta = 1.0 - math::exp(-dt_s.max(0.0) / tau);
+        let hold = self.params.static_hold_mps;
+        let held = hold > 0.0 && v.norm_2d() < hold;
+        let out_v = if held { Vec3::ZERO } else { v };
+        let state = self.state.entry(node).or_default();
+        let p = match state.smoothed {
+            None => Vec3::new(z.x - white.x, z.y - white.y, z.z - white.z),
+            Some(prev) if held => prev,
+            Some(prev) => {
+                let pred = Vec3::new(
+                    prev.x + v.x * dt_s,
+                    prev.y + v.y * dt_s,
+                    prev.z + v.z * dt_s,
+                );
+                Vec3::new(
+                    pred.x + beta * (z.x - pred.x),
+                    pred.y + beta * (z.y - pred.y),
+                    pred.z + beta * (z.z - pred.z),
+                )
+            }
+        };
+        let white_out = math::sqrt(beta / (2.0 - beta));
+        state.smoothed = Some(p);
+        (p, out_v, white_out)
+    }
 }
 
 /// The GNSS error multiplier of the legacy weather table (§2.6, `WEATHER_MULT`):
@@ -509,6 +609,10 @@ impl GnssModel for GaussMarkovGnss {
         // receiver inside an outage.
         let outage_until = self.state.get(&node).map_or(0, |s| s.outage_until);
         if env.jammed || env.sky == SkyView::Obstructed || now < outage_until {
+            // A receiver that lost its fix starts its solution again from the next one.
+            if let Some(s) = self.state.get_mut(&node) {
+                s.smoothed = None;
+            }
             return PositionEstimate::no_fix(now);
         }
         // Does an outage start now?
@@ -523,6 +627,7 @@ impl GnssModel for GaussMarkovGnss {
             if coin < self.params.outage_rate {
                 let state = self.state.entry(node).or_default();
                 state.outage_until = now.saturating_add(v2xw_core::time::secs_to_ns(duration));
+                state.smoothed = None;
                 return PositionEstimate::no_fix(now);
             }
         }
@@ -580,12 +685,15 @@ impl GnssModel for GaussMarkovGnss {
         // number. `faulty_bias_multiplier` is deliberately *not* applied to either half: a
         // receiver does not know it is faulty, and the whole point of the faulty class is
         // that its reported confidence stays honest-looking while its error grows.
-        let sigma_nominal = self.sigma_white_h(env, false);
+        let vel = Vec3::new(gt.vel.x + dvx, gt.vel.y + dvy, gt.vel.z);
+        let (pos, vel, white_out) =
+            self.receiver_output(node, pos, Vec3::new(nx, ny, nz), vel, dt_s);
+        let sigma_nominal = self.sigma_white_h(env, false) * white_out;
         let bias_nominal = self.sigma_bias_h_m * env_scale(env.sky).unwrap_or(1.0);
         let radius = confidence_95_m(sigma_nominal, bias_nominal, RAYLEIGH_95);
         PositionEstimate {
             pos,
-            vel: Vec3::new(gt.vel.x + dvx, gt.vel.y + dvy, gt.vel.z),
+            vel,
             heading_rad: gt.heading_rad + dh,
             semi_major_m: radius,
             semi_minor_m: radius,
@@ -865,6 +973,38 @@ pub fn card(
             serde_json::json!({"clear": 1.0, "rain": 1.5, "fog": 2.0, "snow": 2.5}),
             legacy,
         ),
+        Parameter::new(
+            "smoothing_tau_s",
+            "s",
+            serde_json::json!(params.smoothing_tau_s),
+            Source {
+                kind: SourceKind::Standard,
+                reference: "Hatch 1982, carrier smoothing of code; RTCA DO-229 100 s \
+                            smoothing time constant (0: raw fixes)"
+                    .to_string(),
+                accessed: Some("2026-10-22".to_string()),
+                note: Some(
+                    "ASSUMPTION: a position-domain, Doppler-aided form of the code \
+                     smoothing stands in for an automotive receiver's navigation filter"
+                        .to_string(),
+                ),
+            },
+        ),
+        Parameter::new(
+            "static_hold_mps",
+            "m/s",
+            serde_json::json!(params.static_hold_mps),
+            Source {
+                kind: SourceKind::Datasheet,
+                reference: "u-blox 8 / M8 Receiver Description, Static hold (0: off)".to_string(),
+                accessed: Some("2026-10-22".to_string()),
+                note: Some(
+                    "ASSUMPTION: the threshold a preset sets is its own choice; the \
+                     mechanism is the receiver's"
+                        .to_string(),
+                ),
+            },
+        ),
     ];
     // The fits themselves, so a reader can see how well one scale stands in for three
     // measured percentiles.
@@ -899,11 +1039,15 @@ pub fn card(
         "No satellite geometry, no multipath as a function of the real building geometry — \
          only an environment class (§3.8 ignores)."
             .to_string(),
-        "Receiver filtering dynamics are not modelled.".to_string(),
+        "Receiver filtering is modelled only as the first-order Doppler-aided smoothing \
+         and static hold of `smoothing_tau_s` and `static_hold_mps`, both off by default: \
+         raw fixes then disagree with their own velocity by metres between 10 Hz \
+         estimates (R-USFP)."
+            .to_string(),
     ];
     card.ignores = vec![
-        "Satellite geometry, true-geometry multipath and receiver filtering dynamics \
-         (04-models.md §3.8)."
+        "Satellite geometry, true-geometry multipath and any receiver filter beyond the \
+         first-order smoothing (04-models.md §3.8)."
             .to_string(),
     ];
     card.sources = vec![reid, mathworks];
@@ -1365,5 +1509,169 @@ mod tests {
                 assert!(p.calibration.as_ref().is_some_and(|c| !c.trim().is_empty()));
             }
         }
+    }
+
+    /// The smoothing receiver of the US real-world presets: τ_s = 100 s, hold below
+    /// 0.3 m/s, outliers and bursts at their defaults.
+    fn smoothing() -> GaussMarkovParams {
+        GaussMarkovParams {
+            smoothing_tau_s: 100.0,
+            static_hold_mps: 0.3,
+            ..GaussMarkovParams::default()
+        }
+    }
+
+    /// Ten-hertz estimates of `nodes` receivers for `steps` steps, each receiver moving
+    /// along its own heading at `speed` m/s: per node, every `(estimate, truth)` in order.
+    fn track(
+        params: GaussMarkovParams,
+        speed: f64,
+        nodes: u32,
+        steps: u64,
+    ) -> Vec<Vec<(PositionEstimate, Vec3)>> {
+        let w = world();
+        let rng = RngRegistry::new(77);
+        let mut m = GaussMarkovGnss::new(params);
+        let mut out = vec![Vec::new(); nodes as usize];
+        for k in 0..steps {
+            let t = k * NS_PER_S / 10;
+            for id in 0..nodes {
+                let h = f64::from(id) * 0.37;
+                let (sin, cos) = math::sin_cos(h);
+                let s = speed * (t as f64) * 1e-9;
+                let mut gt =
+                    Kinematics::at_rest(t, Vec3::new(100.0 + s * cos, 100.0 + s * sin, 0.0));
+                gt.vel = Vec3::new(speed * cos, speed * sin, 0.0);
+                gt.heading_rad = h;
+                let mut ctx = MobilityCtx::new(t, &w, &rng);
+                let e = m.estimate(&mut ctx, NodeId::new(id), &gt, &GnssEnv::OPEN_SKY);
+                out[id as usize].push((e, gt.pos));
+            }
+        }
+        out
+    }
+
+    /// SM-MBR v1.0 §2.3 RandomPosition over consecutive estimates, as
+    /// `v2xw_threat::us_mbr` computes it: `|p₁ + v₁·Δt − p₂|` with the speed and heading
+    /// the first one reports. Every residual, metres.
+    fn random_position_residuals(tracks: &[Vec<(PositionEstimate, Vec3)>]) -> Vec<f64> {
+        let mut r = Vec::new();
+        for t in tracks {
+            for w in t.windows(2) {
+                let (a, b) = (&w[0].0, &w[1].0);
+                let dt = (b.time_ns - a.time_ns) as f64 * 1e-9;
+                let v = a.ground_speed_mps();
+                let px = a.pos.x + v * math::cos(a.heading_rad) * dt;
+                let py = a.pos.y + v * math::sin(a.heading_rad) * dt;
+                r.push(math::hypot(b.pos.x - px, b.pos.y - py));
+            }
+        }
+        r
+    }
+
+    /// R-USFP: raw fixes drawn afresh every 100 ms disagree with their own velocity by
+    /// metres, which is what made the 1 m SM-MBR RandomPosition check report honest
+    /// vehicles; the smoothing receiver's consecutive outputs agree to centimetres, with
+    /// the default outliers and bursts on.
+    #[test]
+    fn a_smoothing_receiver_agrees_with_its_own_velocity_between_ten_hertz_fixes() {
+        let raw = random_position_residuals(&track(GaussMarkovParams::default(), 15.0, 50, 600));
+        let raw_over = raw.iter().filter(|&&r| r > 1.0).count() as f64 / raw.len() as f64;
+        assert!(
+            raw_over > 0.5,
+            "raw fixes: {raw_over} of residuals over 1 m"
+        );
+        let smooth = random_position_residuals(&track(smoothing(), 15.0, 50, 600));
+        let worst = smooth.iter().copied().fold(0.0, f64::max);
+        assert!(
+            worst < 0.5,
+            "smoothed: worst consecutive residual {worst} m"
+        );
+    }
+
+    /// The smoothing keeps the measured error scale (Reid 2019 measured receivers'
+    /// outputs): the horizontal error of 4,000 receivers after a minute is within 10 % of
+    /// the fit's own 68th and 95th percentiles.
+    #[test]
+    fn a_smoothing_receiver_keeps_the_measured_error_scale() {
+        let p = GaussMarkovParams {
+            outlier_rate: 0.0,
+            burst_rate: 0.0,
+            ..smoothing()
+        };
+        let tracks = track(p, 10.0, 4000, 600);
+        let mut errors: Vec<f64> = tracks
+            .iter()
+            .map(|t| {
+                let (e, truth) = t.last().expect("estimates");
+                e.pos.distance_2d(*truth)
+            })
+            .collect();
+        v2xw_core::math::sort_total_order(&mut errors);
+        let fit = GaussMarkovGnss::new(p).fits()[0].clone();
+        for q in [0.68, 0.95] {
+            let predicted = fit.sigma_m * crate::gnss::common::rayleigh_factor(q);
+            let sampled = v2xw_core::math::quantile_sorted(&errors, q);
+            // 4,000 draws put the sampling error near 2 %; the bias split a raw receiver
+            // uses gives the output about 20 % less (σ_b = √(σ² − σ_w²)).
+            assert!(
+                (sampled - predicted).abs() < 0.10 * predicted,
+                "p={q}: sampled {sampled} m against the fit's {predicted} m"
+            );
+        }
+    }
+
+    /// Static hold: a stopped receiver reports zero speed and an unchanged position, so
+    /// SM-MBR ConstantPosition ("speed non-zero, position unchanged", 1 cm and 0.02 m/s
+    /// resolutions as `us_mbr`) never holds; without the hold its velocity noise trips it.
+    #[test]
+    fn a_stopped_smoothing_receiver_holds_still() {
+        let frozen = |tracks: &[Vec<(PositionEstimate, Vec3)>]| {
+            tracks
+                .iter()
+                .flat_map(|t| t.windows(2))
+                .filter(|w| {
+                    let (a, b) = (&w[0].0, &w[1].0);
+                    a.pos.distance_2d(b.pos) < 0.01
+                        && a.ground_speed_mps() >= 0.02
+                        && b.ground_speed_mps() >= 0.02
+                })
+                .count()
+        };
+        let held = track(smoothing(), 0.0, 50, 300);
+        assert_eq!(
+            frozen(&held),
+            0,
+            "a held receiver claimed a speed it did not move by"
+        );
+        let unheld = track(
+            GaussMarkovParams {
+                static_hold_mps: 0.0,
+                ..smoothing()
+            },
+            0.0,
+            50,
+            300,
+        );
+        assert!(
+            frozen(&unheld) > 1000,
+            "{} without the hold",
+            frozen(&unheld)
+        );
+        let moved = random_position_residuals(&held);
+        assert!(moved.iter().all(|&r| r < 0.1), "a held receiver jumped");
+    }
+
+    /// The smoothing and the hold are off by default: the raw model is the one every
+    /// existing scenario ran.
+    #[test]
+    fn the_receiver_smoothing_is_off_by_default() {
+        let d = GaussMarkovParams::default();
+        assert_eq!(d.smoothing_tau_s, 0.0);
+        assert_eq!(d.static_hold_mps, 0.0);
+        GaussMarkovGnss::new(smoothing())
+            .card()
+            .validate()
+            .expect("validates");
     }
 }

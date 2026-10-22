@@ -1031,6 +1031,18 @@ pub struct GnssSettings {
     /// The chance each fix is lost entirely. Unset is 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outage_probability: Option<f64>,
+    /// The receiver's position-smoothing time constant, seconds: the receiver propagates
+    /// its solution with its own Doppler velocity and blends each raw fix in at this time
+    /// constant, as deployed receivers do (`gnss/error/gauss-markov` module docs). Unset
+    /// or 0 outputs every raw fix, whose white noise makes consecutive 10 Hz BSMs
+    /// disagree by metres (R-USFP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing_tau_s: Option<f64>,
+    /// The receiver's static-hold threshold, m/s: below this measured speed it holds its
+    /// position and reports zero velocity. Unset or 0 is off; read only with
+    /// `smoothing_tau_s`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub static_hold_mps: Option<f64>,
 }
 
 impl GnssSettings {
@@ -1051,6 +1063,12 @@ impl GnssSettings {
         }
         if let Some(v) = self.outage_probability {
             p.outage_rate = v;
+        }
+        if let Some(v) = self.smoothing_tau_s {
+            p.smoothing_tau_s = v;
+        }
+        if let Some(v) = self.static_hold_mps {
+            p.static_hold_mps = v;
         }
         p
     }

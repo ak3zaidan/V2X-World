@@ -250,6 +250,72 @@ fn the_gnss_settings_reach_the_error_model() {
     );
 }
 
+/// GNSS receiver smoothing (R-USFP): the settings reach the model the run builds. On the
+/// same seed and receivers, consecutive 10 Hz fixes of a moving receiver disagree with
+/// their own velocity (the SM-MBR v1.0 §2.3 RandomPosition residual) by metres from a
+/// raw receiver and by centimetres from a smoothing one; a static hold without the
+/// smoothing is refused, because raw fixes ignore it.
+#[test]
+fn the_gnss_receiver_smoothing_reaches_the_error_model() {
+    use v2xw_core::geom::Vec3;
+    use v2xw_core::rng::RngRegistry;
+    let mut s = grid(10.0);
+    s.actors.vehicles.equipped_fraction = 1.0;
+    let world = v2xw_engine::wiring::build_world(&s).expect("the grid builds");
+    let worst_residual = |s: &Scenario| {
+        let mut m = v2xw_engine::wiring::build_gnss(s);
+        let rng = RngRegistry::new(s.seed);
+        let mut worst: f64 = 0.0;
+        for id in 0..20u32 {
+            let mut prev: Option<v2xw_core::PositionEstimate> = None;
+            for k in 0..100u64 {
+                let t = k * 100_000_000;
+                let x = 100.0 + 12.0 * (t as f64) * 1e-9;
+                let mut gt = v2xw_core::Kinematics::at_rest(t, Vec3::new(x, 100.0, 0.0));
+                gt.vel = Vec3::new(12.0, 0.0, 0.0);
+                let mut ctx = v2xw_mobility::MobilityCtx::new(t, &world, &rng);
+                let e = m.estimate(
+                    &mut ctx,
+                    v2xw_core::NodeId::new(id),
+                    &gt,
+                    &v2xw_mobility::GnssEnv::OPEN_SKY,
+                );
+                if let Some(p) = prev {
+                    let v = p.ground_speed_mps();
+                    let px = p.pos.x + v * p.heading_rad.cos() * 0.1;
+                    let py = p.pos.y + v * p.heading_rad.sin() * 0.1;
+                    worst = worst.max((e.pos.x - px).hypot(e.pos.y - py));
+                }
+                prev = Some(e);
+            }
+        }
+        worst
+    };
+    let raw = worst_residual(&s);
+    let mut smooth = s.clone();
+    smooth.actors.vehicles.gnss = Some(GnssSettings {
+        smoothing_tau_s: Some(100.0),
+        static_hold_mps: Some(0.3),
+        ..GnssSettings::default()
+    });
+    assert!(
+        !refused(&smooth, "actors.vehicles.gnss"),
+        "the smoothing settings validate"
+    );
+    let smoothed = worst_residual(&smooth);
+    assert!(raw > 1.0, "raw fixes: worst residual {raw:.2} m");
+    assert!(
+        smoothed < 0.5,
+        "smoothed fixes: worst residual {smoothed:.3} m"
+    );
+    let mut hold_only = s;
+    hold_only.actors.vehicles.gnss = Some(GnssSettings {
+        static_hold_mps: Some(0.3),
+        ..GnssSettings::default()
+    });
+    assert!(refused(&hold_only, "actors.vehicles.gnss.static_hold_mps"));
+}
+
 /// World signals: the cycle length reaches the plans an imported world is given. Needs
 /// the Manhattan extract (`ln -sf …/worlds/cache/manhattan.osm.xml worlds/cache/`); the
 /// test says so and passes vacuously only when the extract is absent.

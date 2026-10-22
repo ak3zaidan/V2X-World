@@ -28,6 +28,10 @@ runs:
   gnss-clean:
     base: M0
     scenario: scenarios/real-world/matrix/gnss-clean.yaml
+  gnss-raw:
+    base: M0
+    scenario: scenarios/real-world/matrix/gnss-raw.yaml
+    note: the receivers' raw fixes, as every US preset ran before the R-USFP fix
   on-demand:
     base: M0
     scenario: scenarios/real-world/matrix/on-demand.yaml
@@ -272,15 +276,14 @@ rows:
   area: metrics
   measure: p2.revoked_attackers
   expect: eq
-  value: 3
-  source: 3 % constant-position attackers are caught by the SM-MBR ConstantPosition check and revoked
-    after shuffle + review (SM-MBR §2.3; realism.md)
-  measured: '1'
-  verdict: open
-  note: 'only 2 of 3 attackers reported, 1 revoked, among 27 decisions; the research suite revokes 3 of
-    3 (research-attackers). R-USFP: 7,200 of the 7,488 reports at the MA are RandomPosition (positionJump),
-    7,375 of them about honest vehicles; 36 honest reported, 26 revoked. gnss-rtk still revokes 26, so
-    the raw GNSS error is not the cause (07 section 8.3 said it was); see matrix.md ''Open'''
+  value: 2
+  source: 'the 2 vehicle constant-position attackers are caught by the SM-MBR ConstantPosition check
+    and revoked after shuffle + review (SM-MBR §2.3; realism.md); the third (actor 103) is a handset
+    sending PSMs, and SM-MBR v1.0 defines reports for application PSID 0x20 (the BSM) only (§1, §2.3)'
+  measured: '2'
+  verdict: wrong-expectation
+  note: 'was 3 of 3; the US profile cannot report a PSM, a real detection gap (usfp.md §3). Before the
+    R-USFP fix: 1 revoked among 27 decisions'
 - id: M0-honest-revoked
   base: M0
   variant: M0
@@ -290,11 +293,9 @@ rows:
   value: 0
   source: the pilots revoked no honest device (CV pilot evaluations); an honest OBU's filtered position
     does not jump 1 m between consecutive BSMs
-  measured: '26'
-  verdict: open
-  note: 'R-USFP: 7,200 of the 7,488 reports at the MA are RandomPosition (positionJump), 7,375 of them
-    about honest vehicles; 36 honest reported, 26 revoked. gnss-rtk still revokes 26, so the raw GNSS
-    error is not the cause (07 section 8.3 said it was); see matrix.md ''Open'''
+  measured: '0'
+  verdict: fixed
+  note: 'R-USFP fixed at its cause (docs/design/scms-real/testing/usfp.md): the receivers output a smoothed solution, not raw 10 Hz fixes. Before: 26 (7,200 of 7,488 reports RandomPosition); gnss-raw still gives 26'
 - id: M0-false-accusation
   base: M0
   variant: M0
@@ -303,11 +304,9 @@ rows:
   expect: eq
   value: 0
   source: as M0-honest-revoked, the metric's view
-  measured: '26'
-  verdict: open
-  note: 'R-USFP: 7,200 of the 7,488 reports at the MA are RandomPosition (positionJump), 7,375 of them
-    about honest vehicles; 36 honest reported, 26 revoked. gnss-rtk still revokes 26, so the raw GNSS
-    error is not the cause (07 section 8.3 said it was); see matrix.md ''Open'''
+  measured: '0'
+  verdict: fixed
+  note: 'R-USFP fixed at its cause (docs/design/scms-real/testing/usfp.md): the receivers output a smoothed solution, not raw 10 Hz fixes. Before: 26 (7,200 of 7,488 reports RandomPosition); gnss-raw still gives 26'
 - id: M0-enforced
   base: M0
   variant: M0
@@ -486,12 +485,9 @@ rows:
   value: 0
   source: 'with 0.26 m errors consecutive BSMs agree to well inside the 1 m gpsDrift (SM-MBR RandomPosition):
     no honest report reaches the MA'
-  measured: '26'
-  verdict: open
-  note: 'RTK leaves 26 honest revoked: the false positives are not GNSS error. R-USFP: 7,200 of the 7,488
-    reports at the MA are RandomPosition (positionJump), 7,375 of them about honest vehicles; 36 honest
-    reported, 26 revoked. gnss-rtk still revokes 26, so the raw GNSS error is not the cause (07 section
-    8.3 said it was); see matrix.md ''Open'''
+  measured: '0'
+  verdict: fixed
+  note: 'R-USFP fixed at its cause (docs/design/scms-real/testing/usfp.md): the receivers output a smoothed solution, not raw 10 Hz fixes. Before: 26, because RTK still drew about 0.5 m of white noise per axis at every fix'
 - id: rtk-honest-reports
   base: M0
   variant: gnss-rtk
@@ -500,22 +496,31 @@ rows:
   expect: down
   min_change: 0.5
   source: as rtk-honest
-  measured: 7375 -> 6248
-  verdict: open
-  note: '-15 % only. R-USFP: 7,200 of the 7,488 reports at the MA are RandomPosition (positionJump), 7,375
-    of them about honest vehicles; 36 honest reported, 26 revoked. gnss-rtk still revokes 26, so the raw
-    GNSS error is not the cause (07 section 8.3 said it was); see matrix.md ''Open'''
+  measured: 5 -> 5
+  verdict: wrong-expectation
+  note: 'written for raw fixes (7375 -> 6248 then). With the smoothed receiver the base has 5 honest
+    reports, from one vehicle below 1 m/s (usfp.md §6), none from GNSS error, so RTK has nothing to remove'
 - id: rtk-attackers
   base: M0
   variant: gnss-rtk
   area: metrics
   measure: p2.revoked_attackers
   expect: eq
-  value: 3
-  source: ConstantPosition does not depend on the honest GNSS error
-  measured: '1'
-  verdict: open
+  value: 2
+  source: ConstantPosition does not depend on the honest GNSS error; 2 as M0-attackers-revoked
+  measured: '2'
+  verdict: wrong-expectation
   note: as M0-attackers-revoked
+- id: raw-honest
+  base: M0
+  variant: gnss-raw
+  area: metrics
+  measure: p2.revoked_honest
+  expect: up
+  source: 'R-USFP (usfp.md): raw 10 Hz fixes carry fresh 1.6 m white noise, so consecutive honest BSMs
+    disagree with their own velocity by 2.65 m at the median and the 1 m RandomPosition check reports them'
+  measured: 0 -> 26
+  verdict: pass
 - id: clean-honest-reports
   base: M0
   variant: gnss-clean
@@ -971,10 +976,10 @@ rows:
   value: 0
   source: 'the SM-MBR PSID-0x20 profile has no Sybil check (us_mbr.rs: no heading, staleness, Sybil, map
     or frequency check): a known detection gap'
-  measured: '1'
+  measured: '2'
   verdict: wrong-expectation
   note: the Sybil ghosts are signed under the attacker's own pseudonyms and their positions jump, so RandomPosition
-    catches it (2,050 reports about attackers against 308 in M0); 1 of 3 revoked
+    catches it (1,578 reports about attackers against 235 in M0 after R-USFP); 2 of 3 revoked, the third a handset
 - id: malegacy-cases
   base: M0
   variant: ma-legacy
@@ -1121,10 +1126,10 @@ rows:
   expect: le
   value: 0
   source: a provider off the trust list cannot get anyone honest revoked
-  measured: '7'
-  verdict: open
-  note: '7 honest revoked: the US-profile false positives (R-USFP), not the trust change. R-TRUSTLEAK
-    grew: 280 provider-b messages verified at provider-a receivers (was 7)'
+  measured: '0'
+  verdict: fixed
+  note: 'the 7 were the US-profile false positives (R-USFP), not the trust change; R-USFP fixed at its cause (docs/design/scms-real/testing/usfp.md): the receivers output a smoothed solution, not raw 10 Hz fixes. R-TRUSTLEAK
+    is separate (280 provider-b messages verified at provider-a receivers before)'
 - id: west-counts
   base: M0
   variant: region-west

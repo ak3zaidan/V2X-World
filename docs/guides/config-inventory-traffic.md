@@ -44,6 +44,8 @@ group tests fail.
 | `actors.vehicles.gnss.outlier_magnitude_m` | 12 m | 1-200 m | Outlier size |
 | `actors.vehicles.gnss.burst_rate_hz` | 0.006/s | 0-0.5 | Degraded-burst rate |
 | `actors.vehicles.gnss.outage_probability` | 0 | 0-1 | Probability each fix is lost |
+| `actors.vehicles.gnss.smoothing_tau_s` | 0 (raw fixes) | 0-600 s | Receiver's Doppler-aided position smoothing (Hatch 1982; RTCA DO-229 100 s); the US real-world presets set 100 s (R-USFP) |
+| `actors.vehicles.gnss.static_hold_mps` | 0 (off) | 0-1.5 m/s | Receiver static hold: below it, position held and speed 0 (u-blox M8 Receiver Description); presets 0.3 m/s; needs the smoothing |
 
 Limits:
 

@@ -1,0 +1,10 @@
+# Raw GNSS fixes (no receiver smoothing, no static hold) instead of the receiver's
+# smoothed solution: the positioning every US preset ran before the R-USFP fix
+# (docs/design/scms-real/testing/usfp.md), kept to measure what the smoothing is worth.
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix gnss-raw}
+actors:
+  vehicles:
+    gnss: {smoothing_tau_s: 0.0, static_hold_mps: 0.0}

@@ -345,7 +345,12 @@ L-11.
 In order of impact. Each one has its evidence in the named report.
 
 1. **R-USFP: the US misbehaviour profile revokes honest vehicles** (matrix Open 1; stress §1;
-   07 §8.3). **The most important open item.**
+   07 §8.3). **FIXED after this summary** (`testing/usfp.md`). The cause was the raw 10 Hz
+   GNSS fixes' fresh white noise. The US presets' receivers now output a smoothed
+   solution with a static hold. Realism base, same seed: 0 honest revoked (was 26), 2 of 3
+   attackers (was 1), 235 reports at the MA (was 7,488). The third attacker is a handset:
+   SM-MBR defines reports for the BSM (PSID 0x20) only, a real gap of the US profile. The
+   finding as it stood:
    - On the realism base, the US SM-MBR default revokes 26 honest vehicles and only 1 of 3
      attackers. 7,200 of its 7,488 reports are RandomPosition. The research suite revokes 0
      honest and 3 of 3.
@@ -382,9 +387,12 @@ In order of impact. Each one has its evidence in the named report.
      profile exists yet.
 8. **Unexplained, not yet shown to be defects:**
    - **27 MA decisions in every variant.** M0, att10 and sybil all make 27, although att10 has
-     9 attackers.
+     9 attackers. Explained: the same 27 actors, the R-USFP false positives (`testing/usfp.md`
+     §4).
    - **Implausibly old evidence.** 10 reports in the realism base were set aside because their
      evidence was up to 43,125 s older than the report, yet no receiver refused anything.
+     They are among the raw-fix false positives and are gone with the R-USFP fix
+     (`testing/usfp.md` §5). The path that produced them is not root-caused.
    - **Fast-forward ticks.** 865,653 fast-forward ticks in the edge peer-root-removed run.
    - **Case-board review time.** The case board shows the review as 28,799.2 s, against the
      expected ≥ 28,800 s (matrix L5).

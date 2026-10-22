@@ -117,7 +117,15 @@ All 32 runs completed through the run lock: wall 25–410 s, peak 127–447 MB.
 
 ## Open (not fixed, with evidence)
 
-1. **R-USFP is not GNSS noise (security, first).**
+1. **R-USFP — FIXED after this round** (`usfp.md`). The cause *was* the GNSS input, but not
+   its scale. The raw 10 Hz fixes each carried fresh 1.6 m white noise (RTK: about 0.5 m), so
+   consecutive honest BSMs disagreed with their own velocity by 2.65 m at the median. The
+   US presets' receivers now output a smoothed solution with a static hold. Same seed,
+   after: 0 honest revoked, 2 of 3 attackers (the third is a handset, and SM-MBR defines
+   PSID 0x20 only), 235 reports at the MA. Rows re-stated: M0-attackers-revoked,
+   M0-honest-revoked, M0-false-accusation, rtk-*, sybil-not-revoked and offctl-honest,
+   plus a new raw-honest row. Rows whose variant was not re-run keep their pre-fix
+   numbers. The original finding:
    - Under the US SM-MBR default, the base revokes 26 honest vehicles and 1 of 3 attackers.
      7,200 of the 7,488 reports are RandomPosition (`positionJump`).
    - RTK (0.26 m) still revokes 26, with 15 % fewer reports. GNSS with no outliers and no
@@ -129,7 +137,9 @@ All 32 runs completed through the run lock: wall 25–410 s, peak 127–447 MB.
 2. **R-TRUSTLEAK grew** from 7 to 280 provider-b messages verified at provider-a receivers,
    with provider-b off the CTL.
 3. **A constant 27 MA decisions** in M0, att10 (9 attackers, 5 reported, 3 revoked) and
-   sybil. Unexplained.
+   sybil. **Explained** (`usfp.md` §4): M0 and att10 decide the same 27 actors, the R-USFP
+   false positives (same seed, traffic, GNSS streams and always-trusted RSU reporters).
+   After the fix: 2, 4 and 2.
 4. **LTE-V2X BSM latency p95 is 112 ms**, over the 100 ms budget. The BSM is not generated
    aligned with its SPS reservation.
 5. **Realism rows Z1/Z3/Z4 (sizes).**

@@ -286,7 +286,9 @@ Side effects:
   now harmless, but it is also never punished. Record this as a finding for the red team.
 - **Open.** In the realism base under the US profile, 10 of 7,488 reports were set aside
   as implausible: their evidence was up to 43,125 s older than the report, yet no receiver
-  refused anything. Not root-caused. It could be a message whose stamped time passes the
+  refused anything. Not root-caused. They belong to the raw-fix false positives:
+  `matrix/gnss-raw.yaml` reproduces all 10, and the smoothed receivers give 0
+  (`testing/usfp.md` §5). It could be a message whose stamped time passes the
   window on one clock and fails on another.
 
 ### 8.2 Verify-on-demand with detection
@@ -322,7 +324,11 @@ suite stays selectable as `realism/research-suite.yaml`.
 | attackers revoked | 3 of 3 | 1 |
 | **honest vehicles revoked** | 0 | **26** |
 
-This is R-USFP at full strength. Two causes combine:
+This is R-USFP at full strength. **Fixed after this report** (`testing/usfp.md`): the cause
+was the raw fixes' per-estimate white noise (2.65 m median residual between consecutive
+BSMs, still 0.88 m with RTK), not the drift scale. The US presets' receivers now output a
+smoothed solution with a static hold, and the base revokes 0 honest vehicles and 2 of 3
+attackers (the third is a handset, outside SM-MBR's PSID 0x20). The analysis at the time:
 
 - The SM-MBR 1 m RandomPosition drift has no streak gate.
 - The engine puts raw GNSS positions, with 12 m Gauss-Markov jumps, into the BSM.

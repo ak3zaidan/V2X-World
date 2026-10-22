@@ -52,6 +52,15 @@
 #    RSU, and the corroborating MA. The research suite (the twelve VeReMi/F2MD checks,
 #    detect/legacy-12) stays selectable: realism/research-suite.yaml. With honest traffic
 #    only, every report is a false positive.
+#  * Positioning: each OBU's GNSS receiver outputs its smoothed solution, as deployed
+#    receivers do: propagated with its own Doppler velocity, each raw fix blended in at a
+#    100 s time constant (Hatch 1982 carrier smoothing; RTCA DO-229's 100 s constant;
+#    the position-domain form is an ASSUMPTION), with a static hold below 0.3 m/s
+#    (u-blox M8 Receiver Description, "Static hold"; the threshold is an ASSUMPTION).
+#    Raw 10 Hz fixes, each with fresh 1.6 m white noise, disagree with their own speed
+#    and heading by 2.6 m at the median, so the SM-MBR 1 m RandomPosition check reported
+#    honest vehicles on 87 % of their BSMs and revoked 26 of them (R-USFP,
+#    docs/design/scms-real/testing/usfp.md). matrix/gnss-raw.yaml keeps the raw fixes.
 #  * Privacy: a passive observer with sniffers at 10 % of the signalised intersections,
 #    each hearing 200 m (ASSUMPTION: a resourced but city-scale adversary; 100 % is the
 #    global eavesdropper of the literature). It only listens.
@@ -134,6 +143,9 @@ actors:
     ebike_share: 0.4
   vehicles:
     equipped_fraction: 1.0
+    gnss:
+      smoothing_tau_s: 100.0
+      static_hold_mps: 0.3
     demand:
       kind: mobility/demand/poisson
       rate_veh_per_h: 9000.0

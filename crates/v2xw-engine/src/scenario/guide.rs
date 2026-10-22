@@ -918,6 +918,16 @@ const ADVANCED: &[Basic] = &[
         explain: "The chance each position fix is lost altogether, as in a tunnel.",
         recommended: "0 (default) to 0.05.",
     },
+    Basic {
+        path: "actors.vehicles.gnss.smoothing_tau_s",
+        explain: "How slowly the GPS receiver blends new fixes into the position it reports, steering by its own measured speed in between, as real receivers do. 0 reports every raw fix, which jumps by metres between messages.",
+        recommended: "100 s (the US real-world presets, RTCA DO-229's smoothing constant); 0 for raw fixes.",
+    },
+    Basic {
+        path: "actors.vehicles.gnss.static_hold_mps",
+        explain: "Below this speed the GPS receiver treats the vehicle as stopped: it holds the position and reports zero speed. Needs the smoothing.",
+        recommended: "0.3 m/s (the US real-world presets); 0 for off.",
+    },
     // end traffic audit
     // SCMS settings audit (docs/guides/config-inventory-scms.md)
     Basic {
