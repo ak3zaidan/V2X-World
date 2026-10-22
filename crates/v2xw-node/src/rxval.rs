@@ -544,6 +544,35 @@ pub struct RxTrust {
 }
 
 impl VerifiedCrl {
+    /// What a `SecuredCrl` the node could **not** verify claims, decoded without any
+    /// trust (`fresh` false): only to recognise the entries of a composite CRL download
+    /// that this CRL alone carries, which the node then drops instead of installing (or
+    /// refusing the whole download for). `None` when it does not decode.
+    #[must_use]
+    pub fn claimed(bytes: &[u8]) -> Option<VerifiedCrl> {
+        use v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents as T;
+        let opened = v2xw_sec::crl::decode_crl(bytes).ok()?;
+        let c = &opened.contents;
+        let mut craca = [0u8; 8];
+        craca.copy_from_slice(&c.crl_craca.0[..]);
+        Some(VerifiedCrl {
+            craca,
+            series: c.crl_series.0.0,
+            issue_date: c.issue_date.0.0,
+            next_crl: c.next_crl.0.0,
+            i_rev: match &c.type_specific {
+                T::fullLinkedCrl(l) | T::deltaLinkedCrl(l) => Some(u32::from(l.i_rev.0.0)),
+                _ => None,
+            },
+            linkage: v2xw_sec::crl::linkage_entries(c),
+            hashes: v2xw_sec::crl::hash_entries(c)
+                .into_iter()
+                .map(|(h, _)| h)
+                .collect(),
+            fresh: false,
+        })
+    }
+
     /// `e` (an entry at its own i-period, as the CRL Generator records it) as this CRL
     /// carries it: seeds walked forward to `iRev` and `iMax` kept, or `None` when the
     /// entry is exhausted before `iRev` (pruned, [CAMP122] §5.2.10.2.3) or this is not a

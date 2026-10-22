@@ -143,7 +143,7 @@ pub fn device_check_crl(
     let verdict = v2xw_sec::crl::verify_crl(
         &opened,
         &signer,
-        Some(&pki.ica.cert),
+        Some(&pki.crl_signer_issuer().cert),
         v2xw_msg::scms_types::WireEdition::default(),
     );
     if !verdict.accepted() {

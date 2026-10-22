@@ -117,7 +117,7 @@ pub fn wildcard_request_permissions() -> SequenceOfPsidGroupPermissions {
     )])
 }
 
-fn us_region(regions: &[u16]) -> GeographicRegion {
+pub(crate) fn us_region(regions: &[u16]) -> GeographicRegion {
     GeographicRegion::identifiedRegion(SequenceOfIdentifiedRegion(
         regions
             .iter()

@@ -508,10 +508,12 @@ pub struct AcaIssued {
     pub aca_ra_spdu: Vec<u8>,
 }
 
-/// The `cracaId` the ACA puts in the certificates it issues: HashedId3 of the ICA, the
-/// CRACA of the US CRL signer (`issuerIsCraca` under the ICA).
+/// The `cracaId` the ACA puts in the certificates it issues: HashedId3 of the CRACA, the
+/// certificate that issued the provider's CRL signer (`issuerIsCraca`): the root in the
+/// ISS form, the ICA in the S2X form ([`ScmsPki::craca_id`], CF-CRACA).
 pub fn craca_id(pki: &ScmsPki) -> Result<[u8; 3]> {
-    let h = cert::cert_id3(&pki.ica.cert).map_err(|_| PduError::Shape("ICA HashedId3"))?;
+    let h = cert::cert_id3(&pki.crl_signer_issuer().cert)
+        .map_err(|_| PduError::Shape("CRACA HashedId3"))?;
     Ok(h.0[..].try_into().unwrap_or([0; 3]))
 }
 
