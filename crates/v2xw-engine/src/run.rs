@@ -2622,10 +2622,19 @@ impl Engine {
                         } else {
                             v2xw_node::NodeState::Off
                         });
+                        // A device switched off reaches the SCMS no more than the air: no
+                        // CRL poll, top-up or re-enrolment until it is back on (stress
+                        // package: a car parked for weeks comes back with an overdue CRL
+                        // and an empty pool).
+                        let scms = self
+                            .phase2
+                            .as_mut()
+                            .is_some_and(|p| p.set_powered(node, end));
                         note.effect = format!(
-                            "node {} is {}",
+                            "node {} is {}{}",
                             node.index(),
-                            if end { "back on" } else { "off" }
+                            if end { "back on" } else { "off" },
+                            if scms { ", and so is its SCMS client" } else { "" }
                         );
                     }
                     None => {
