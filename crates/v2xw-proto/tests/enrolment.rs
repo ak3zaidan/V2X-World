@@ -123,8 +123,16 @@ fn an_aged_enrolment_is_the_one_certificate_its_eca_exchange_issued() {
         let d = &st.devices[&dev];
         let cred = d.enrolment_credential.as_ref().expect("a real credential");
         let (s, e) = ctl::validity(&cred.cert);
-        assert_eq!((s, e - s), (start, life / NS), "{dev:?}: back-dated, whole lifetime");
-        assert_eq!(d.enrolment, Some(model), "{dev:?}: the model is the certificate");
+        assert_eq!(
+            (s, e - s),
+            (start, life / NS),
+            "{dev:?}: back-dated, whole lifetime"
+        );
+        assert_eq!(
+            d.enrolment,
+            Some(model),
+            "{dev:?}: the model is the certificate"
+        );
         assert_eq!((e - t0) * NS, model.valid_until);
         let id8 = pdu::cert_id8(&cred.cert);
         assert_eq!(

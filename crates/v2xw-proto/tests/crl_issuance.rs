@@ -208,9 +208,15 @@ fn the_us_profile_signs_only_the_full_crls_it_distributes() {
     assert!(st.crlg.delta.is_none());
     let index: Vec<u8> = series1
         .iter()
-        .map(|c| match crl::decode_crl(c.pdu.bytes()).unwrap().contents.type_specific {
-            T::fullLinkedCrl(t) => t.index_within_i.0,
-            other => panic!("a full linkage CRL, not {other:?}"),
+        .map(|c| {
+            match crl::decode_crl(c.pdu.bytes())
+                .unwrap()
+                .contents
+                .type_specific
+            {
+                T::fullLinkedCrl(t) => t.index_within_i.0,
+                other => panic!("a full linkage CRL, not {other:?}"),
+            }
         })
         .collect();
     assert_eq!(index, vec![0, 1], "no gap a device could see");
