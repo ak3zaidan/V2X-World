@@ -18,6 +18,15 @@
 //! map; and it checks nothing else (no heading, staleness, Sybil, map or frequency check).
 //! A check fires the moment its rule holds, as a deployed OBU would generate the report.
 //!
+//! It judges only BSMs this receiver **verified**. The evidence of every PSID-0x20 report
+//! is "a sequence of BSMs signed with the same certificate" ([SM-MBR] §2.3.1.2.1 and §2.3.1.3.1;
+//! [SM-MBR-ASN] `SignedBsmsWithCertificate`), so a BSM whose signature was not checked (a
+//! verify-on-demand policy deferred it) or failed is not evidence about that certificate:
+//! anyone can put a certificate on a frame with a forged signature and invented
+//! kinematics. Such a BSM is neither checked nor kept as the "previous" BSM of its
+//! certificate. Under `on-demand` verification that leaves the profile nearly blind, which
+//! the loader says in a warning (`scenario::detection_policy_warnings`).
+//!
 //! Deviations, each named in `docs/design/scms-real/testing/realism.md`:
 //! * **MaxAcceleration** reads the acceleration implied by two consecutive speeds,
 //!   `|v₂ − v₁| / Δt`: the receiver's observation does not carry the BSM's `accelSet`.
@@ -241,7 +250,10 @@ impl Detector for UsSmMbr {
         let mut fingerprint = Fingerprint::default();
         // [SM-MBR] defines reports for PSID 0x20 only: a vehicle's BSM. A PSM (a handset's
         // own declaration) and an event message are not checked.
-        if !matches!(m.kind, ObservedKind::Beacon) || m.station_type != StationType::Vehicle {
+        if !matches!(m.kind, ObservedKind::Beacon)
+            || m.station_type != StationType::Vehicle
+            || !m.verification.is_valid()
+        {
             return Verdict {
                 subject,
                 fingerprint,
@@ -460,6 +472,34 @@ mod tests {
             UsMbrParams::default(),
         );
         assert_eq!(bad[1], vec!["positionJump"]);
+    }
+
+    #[test]
+    fn only_verified_bsms_are_judged_or_remembered() {
+        // A frozen position with speed fires only when both BSMs verified: a deferred
+        // (on-demand) or failed signature is not evidence about the certificate.
+        for state in [
+            VerificationState::Unverified,
+            VerificationState::BadSignature,
+            VerificationState::UnknownCertificate,
+        ] {
+            let mut second = bsm(100, 5.0, 3.0);
+            second.verification = state;
+            let v = run(&[bsm(0, 5.0, 3.0), second], UsMbrParams::default());
+            assert!(v[1].is_empty(), "{state:?} judged: {v:?}");
+            // Nor does an unverified BSM become the "previous" one: a verified BSM after
+            // it is compared with the last verified one (200 ms before, 0.6 m on at 3 m/s:
+            // where it should be), and raises nothing.
+            let v = run(
+                &[bsm(0, 5.0, 3.0), {
+                    let mut f = bsm(100, 50.0, 3.0);
+                    f.verification = state;
+                    f
+                }, bsm(200, 5.6, 3.0)],
+                UsMbrParams::default(),
+            );
+            assert!(v.iter().all(Vec::is_empty), "{state:?}: {v:?}");
+        }
     }
 
     #[test]

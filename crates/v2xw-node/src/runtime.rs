@@ -183,6 +183,11 @@ pub enum RxDisposition {
     /// verifier: it carries no signature, and each certificate in it is validated to an
     /// installed root before it is learned (IEEE 1609.2a-2017 §8.2.4.1.1).
     P2pcdResponse,
+    /// Discarded by the IEEE 1609.2 §5.2 relevance check of its `generationTime`
+    /// ([`crate::rxval::GenerationTimeWindow`]) before the verification policy: too old
+    /// or too far in the future on this node's clock. Nothing was verified, and nothing
+    /// reached an application or a misbehaviour detector.
+    NotRelevant(crate::rxval::RxReject),
 }
 
 /// One received frame's journey through this node, reported so the engine can record it on
@@ -1251,7 +1256,26 @@ impl ObuRuntime {
                 continue;
             }
 
-            // 3. The policy, over the queue as it is at this instant.
+            // 3. The SDS's relevance check of `generationTime` on this node's own clock
+            //    (IEEE 1609.2 §5.2; `rxval::GenerationTimeWindow`): a stale or
+            //    future-dated SPDU is discarded before anything else is spent on it.
+            if let Err(why) = self.security.trust_mut().check_generation_time(
+                frame.msg_type,
+                frame.claimed_generation_time,
+                arrived,
+            ) {
+                out.rx_reports.push(RxReport {
+                    token: stamp.token,
+                    disposition: RxDisposition::NotRelevant(why),
+                    arrived,
+                    parsed,
+                    verify_start: None,
+                    verify_done: None,
+                });
+                continue;
+            }
+
+            // 4. The policy, over the queue as it is at this instant.
             self.learn_or_request(&frame);
             self.p2pcd_rx(ctx, &frame);
             let summary = RxSummary {

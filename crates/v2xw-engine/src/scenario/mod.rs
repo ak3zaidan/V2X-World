@@ -54,7 +54,8 @@ pub use schema::{
     Threats, Time, TimelineItem, TimelineKind, VehicleClassSpec, Vehicles, Vru, Weather, WorldSpec,
 };
 pub use validate::{
-    pq_rsu_proxy_warnings, preflight, resolve_path, signature_mtu_warnings, validate,
+    detection_policy_warnings, pq_rsu_proxy_warnings, preflight, resolve_path,
+    signature_mtu_warnings, validate,
 };
 
 /// How many `meta.base` references may chain before the loader gives up.

@@ -12,6 +12,7 @@
 //! | `generationLocation` lies inside the signer's region, when it has one | §5.2, SDEE profile | `OutsideRegion` |
 //! | no certificate of the chain is on a hash CRL (series 2, 3, 4, 256) whose `crlCraca` and `crlSeries` match it | §5.1.3; 03 §10 | `RevokedByHash`, `IssuerRevoked` |
 //! | the CRL of the signer's CRACA is not more than `overdue_CRL_tolerance` (2 weeks) past its `nextCrl` | [CAMP122] Table 67 | `CrlOverdue` |
+//! | `generationTime` is not older than the message type's maximum age, nor later than the receiver's own time by more than the future tolerance (checked on every received SPDU, before the verification policy) | §5.2 relevance checks; values: C2C-CC BSP RS_BSP_168 (ASSUMPTION for the US) | `GenerationTimeTooOld`, `GenerationTimeInFuture` |
 //!
 //! Series-1 (linkage) revocation stays on the node's [`crate::stores::CrlGate`], which
 //! now matches the certificate's `cracaId` and `crlSeries` against the CRL it came from.
@@ -91,6 +92,101 @@ pub const OVERDUE_CRL_TOLERANCE_S: u32 = 14 * 86_400;
 /// The pseudonym CRL series (linkage based).
 pub const SERIES_PSEUDONYM: u16 = 1;
 
+/// The oldest a safety beacon (BSM, CAM, PSM, VAM) may be on arrival, seconds.
+///
+/// IEEE 1609.2 (§5.2, the SDEE's relevance checks) lets a receiving entity refuse an SPDU
+/// whose `generationTime` is too far in the past or in the future, and leaves the values
+/// to the application's security profile. The US BSM profile is SAE J2945/1's, whose text
+/// is not openly published; the one deployed profile whose values are public is the
+/// CAR 2 CAR Communication Consortium Basic System Profile, RS_BSP_168: a CAM older than
+/// 2 s, any other message older than 10 minutes, or anything more than 40 ms in the future
+/// is discarded (transcribed in Vanetza, `vanetza/security/v2/verification.cpp`,
+/// `check_generation_time`: "Values are picked from C2C-CC Basic System Profile v1.1.0,
+/// see RS_BSP_168", read 2026-10-21). ASSUMPTION: the US receiver uses the same window
+/// for the BSM. Settable: `security.scms.rx_beacon_max_age_s`.
+pub const BEACON_MAX_AGE_S: f64 = 2.0;
+
+/// The oldest any other application SPDU (SPaT, MAP, DENM, CPM, SRM, SSM) may be on
+/// arrival, seconds (RS_BSP_168: 10 minutes; see [`BEACON_MAX_AGE_S`]).
+/// Settable: `security.scms.rx_max_age_s`.
+pub const MAX_AGE_S: f64 = 600.0;
+
+/// How far after the receiver's own time a `generationTime` may lie, seconds
+/// (RS_BSP_168: 40 ms; see [`BEACON_MAX_AGE_S`]). Settable: `security.scms.rx_max_future_s`.
+pub const MAX_FUTURE_S: f64 = 0.040;
+
+/// The receiver's `generationTime` relevance window (IEEE 1609.2 §5.2), in nanoseconds.
+///
+/// A message outside it is discarded before the verification policy, so it costs no
+/// verification and reaches no application and no misbehaviour detector: a stale or
+/// future-dated message is *dropped, not reported*. That is what keeps an honest sender
+/// whose clock is wrong from being reported for the kinematics its wrong clock implies,
+/// and what makes a replay older than the window harmless.
+///
+/// Misbehaviour reports, CRLs, P2PCD PDUs and WSAs are not checked here: a report may
+/// wait a week on its device before upload ([SM-MBR] §2.2), and a CRL's currency has
+/// its own rule (`CrlOverdue`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GenerationTimeWindow {
+    /// Maximum age of a safety beacon (BSM, CAM, PSM, VAM), ns.
+    pub beacon_max_age_ns: u64,
+    /// Maximum age of any other application SPDU, ns.
+    pub max_age_ns: u64,
+    /// Maximum lead of `generationTime` over the receiver's own time, ns.
+    pub max_future_ns: u64,
+}
+
+impl Default for GenerationTimeWindow {
+    fn default() -> Self {
+        GenerationTimeWindow::from_secs(BEACON_MAX_AGE_S, MAX_AGE_S, MAX_FUTURE_S)
+    }
+}
+
+impl GenerationTimeWindow {
+    /// The window from seconds (negative values are taken as zero).
+    pub fn from_secs(beacon_max_age_s: f64, max_age_s: f64, max_future_s: f64) -> Self {
+        let ns = |s: f64| v2xw_core::time::secs_to_ns(s.max(0.0));
+        GenerationTimeWindow {
+            beacon_max_age_ns: ns(beacon_max_age_s),
+            max_age_ns: ns(max_age_s),
+            max_future_ns: ns(max_future_s),
+        }
+    }
+
+    /// The maximum age for `ty`, or `None` when the type is not checked here.
+    pub fn max_age_ns(&self, ty: v2xw_msg::MsgType) -> Option<u64> {
+        use v2xw_msg::MsgType as T;
+        match ty {
+            T::Bsm | T::Cam | T::Psm | T::Vam => Some(self.beacon_max_age_ns),
+            T::Denm | T::Spat | T::Map | T::Cpm | T::Srm | T::Ssm => Some(self.max_age_ns),
+            T::Wsa | T::Crl | T::Mbr | T::P2pcd => None,
+        }
+    }
+
+    /// Whether an SPDU of type `ty` stamped `generated` (on its sender's clock) is
+    /// relevant at the receiver's own time `now`.
+    ///
+    /// # Errors
+    /// [`RxReject::GenerationTimeTooOld`] or [`RxReject::GenerationTimeInFuture`].
+    pub fn admits(
+        &self,
+        ty: v2xw_msg::MsgType,
+        generated: v2xw_core::time::SimTime,
+        now: v2xw_core::time::SimTime,
+    ) -> Result<(), RxReject> {
+        let Some(max_age) = self.max_age_ns(ty) else {
+            return Ok(());
+        };
+        if generated > now.saturating_add(self.max_future_ns) {
+            return Err(RxReject::GenerationTimeInFuture);
+        }
+        if now.saturating_sub(generated) > max_age {
+            return Err(RxReject::GenerationTimeTooOld);
+        }
+        Ok(())
+    }
+}
+
 /// How many validated end-entity certificates a node remembers (a bounded cache with
 /// least-recently-used eviction, like the peer certificate cache, which in practice
 /// bounds it first: see [`RxTrust::forget`]).
@@ -115,6 +211,13 @@ pub enum RxReject {
     IssuerRevoked,
     /// The signer's CRACA's CRL is more than two weeks overdue.
     CrlOverdue,
+    /// `generationTime` is older than the message type's maximum age
+    /// ([`GenerationTimeWindow`]): a stale or replayed message, or a sender whose clock
+    /// is behind.
+    GenerationTimeTooOld,
+    /// `generationTime` is later than the receiver's own time by more than the future
+    /// tolerance ([`GenerationTimeWindow`]): a sender whose clock is ahead.
+    GenerationTimeInFuture,
     /// A CRL that does not decode.
     CrlMalformed,
     /// A CRL whose signer cannot be resolved or does not chain to the installed root.
@@ -157,6 +260,8 @@ impl RxReject {
             RxReject::RevokedByHash => "revoked-by-hash",
             RxReject::IssuerRevoked => "issuer-revoked",
             RxReject::CrlOverdue => "crl-overdue",
+            RxReject::GenerationTimeTooOld => "generation-time-too-old",
+            RxReject::GenerationTimeInFuture => "generation-time-in-future",
             RxReject::CrlMalformed => "crl-malformed",
             RxReject::CrlSignerUntrusted => "crl-signer-untrusted",
             RxReject::CrlRejected => "crl-rejected",
@@ -541,6 +646,8 @@ pub struct RxTrust {
     /// `overdue_CRL_tolerance` for this device, seconds; `None` is the profile's
     /// [`OVERDUE_CRL_TOLERANCE_S`] (`security.scms.crl_overdue_tolerance_s`).
     overdue_tolerance_s: Option<u32>,
+    /// The `generationTime` relevance window; `None` is [`GenerationTimeWindow::default`].
+    generation_window: Option<GenerationTimeWindow>,
 }
 
 impl VerifiedCrl {
@@ -664,6 +771,34 @@ impl RxTrust {
     /// The device's `overdue_CRL_tolerance`, seconds.
     pub fn overdue_crl_tolerance_s(&self) -> u32 {
         self.overdue_tolerance_s.unwrap_or(OVERDUE_CRL_TOLERANCE_S)
+    }
+
+    /// Sets the device's `generationTime` relevance window (`security.scms.rx_*`).
+    pub fn set_generation_time_window(&mut self, w: GenerationTimeWindow) {
+        self.generation_window = Some(w);
+    }
+
+    /// The device's `generationTime` relevance window.
+    pub fn generation_time_window(&self) -> GenerationTimeWindow {
+        self.generation_window.unwrap_or_default()
+    }
+
+    /// The IEEE 1609.2 §5.2 relevance check of a received SPDU's `generationTime`
+    /// against this device's own time `now` ([`GenerationTimeWindow`]). Runs whether or
+    /// not a trust store is installed, before the verification policy. A refusal is
+    /// counted in [`RxStats::refused`] by name.
+    ///
+    /// # Errors
+    /// [`RxReject::GenerationTimeTooOld`] or [`RxReject::GenerationTimeInFuture`].
+    pub fn check_generation_time(
+        &mut self,
+        ty: v2xw_msg::MsgType,
+        generated: v2xw_core::time::SimTime,
+        now: v2xw_core::time::SimTime,
+    ) -> Result<(), RxReject> {
+        self.generation_time_window()
+            .admits(ty, generated, now)
+            .map_err(|r| self.refuse(r))
     }
 
     /// The validated end-entity certificate cache.

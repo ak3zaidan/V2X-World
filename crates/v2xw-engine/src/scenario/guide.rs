@@ -163,8 +163,8 @@ const BASIC: &[Basic] = &[
     },
     Basic {
         path: "security.verification_policy",
-        explain: "Which received messages a vehicle checks the signature of. Checking everything is safest but can overload the security chip in dense traffic.",
-        recommended: "Verify every message, unless you study verification load.",
+        explain: "Which received messages a vehicle checks the signature of. Checking everything is safest but can overload the security chip in dense traffic. Misbehaviour detection only judges messages whose signature was checked (a report's evidence is the accused's signed messages, SCMS Manager SM-MBR v1.0 §2.3.1.2.1), so verifying on demand or nearest first also blinds detection: in testing, on-demand cut reports from 897 to 79 and no attacker was revoked.",
+        recommended: "Verify every message, unless you study verification load. With detection on, expect a warning for any other choice.",
     },
     Basic {
         path: "security.pseudonym_change.strategy",
@@ -1004,6 +1004,21 @@ const ADVANCED: &[Basic] = &[
         path: "security.scms.lifecycle.cert_shuffle_window_s",
         explain: "The longest a certificate request may wait in the Registration Authority's mix before it is passed on, full batch or not. A longer wait hides each request among more others and delays a vehicle's certificates.",
         recommended: "172,800 s (two days, CAMP release 1.2.2); 3,600 to 172,800 s. Like the batch size, it acts on a device's first request, which a run makes before the vehicle joins.",
+    },
+    Basic {
+        path: "security.scms.rx_beacon_max_age_s",
+        explain: "How old a received safety beacon (BSM, CAM, PSM, VAM) may be, by the receiver's own clock, before it is thrown away unchecked (IEEE 1609.2 relevance check). It makes a replayed message harmless, and it is why a vehicle whose clock is badly wrong is ignored rather than reported for misbehaviour.",
+        recommended: "2 s (CAR 2 CAR Communication Consortium Basic System Profile RS_BSP_168; the US J2945/1 value is not public, so this is an assumption); a year turns the check off for a study.",
+    },
+    Basic {
+        path: "security.scms.rx_max_age_s",
+        explain: "The same age limit for every other application message: signal phase, intersection maps, hazard warnings, collective perception.",
+        recommended: "600 s (RS_BSP_168).",
+    },
+    Basic {
+        path: "security.scms.rx_max_future_s",
+        explain: "How far ahead of the receiver's own clock a message's time stamp may be. A sender whose clock runs ahead is ignored past it; the misbehaviour authority applies the same rule to report evidence.",
+        recommended: "0.04 s (RS_BSP_168); a year turns the check off for a study.",
     },
     Basic {
         path: "security.scms.crl_overdue_tolerance_s",

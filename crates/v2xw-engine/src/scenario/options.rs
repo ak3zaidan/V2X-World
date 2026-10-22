@@ -345,7 +345,7 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
         ),
         ("security.verification_policy", "on-demand") => w(
             "Verify on demand",
-            "Only messages an application is about to act on are verified.",
+            "Only messages an application is about to act on are verified. Misbehaviour detection runs only on verified messages, so detection goes nearly blind (897 reports fell to 79 in testing).",
         ),
         ("security.verification_policy", "prioritized") => w(
             "Verify nearest first",
@@ -1494,6 +1494,9 @@ pub fn title(path: &str) -> Option<&'static str> {
         // SCMS settings audit (docs/guides/config-inventory-scms.md)
         "security.scms.tls" => "Vehicle-to-RA TLS version",
         "security.scms.crl_overdue_tolerance_s" => "Overdue revocation list tolerance",
+        "security.scms.rx_beacon_max_age_s" => "Oldest safety beacon accepted",
+        "security.scms.rx_max_age_s" => "Oldest other message accepted",
+        "security.scms.rx_max_future_s" => "Future time stamp accepted",
         "nodes.validated_cert_cache" => "Validated certificates remembered",
         "security.scms.lifecycle.i_period_s" => "Certificate period (i-period)",
         "security.scms.lifecycle.cert_lifetime_s" => "Pseudonym certificate lifetime",

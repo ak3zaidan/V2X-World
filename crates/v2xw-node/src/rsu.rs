@@ -1300,6 +1300,16 @@ impl RsuRuntime {
                 }
                 continue;
             }
+            // The relevance check of `generationTime` (IEEE 1609.2 §5.2), as on a vehicle;
+            // counted in the trust store's refusals (a unit reports no per-frame fate).
+            if self
+                .security
+                .trust_mut()
+                .check_generation_time(frame.msg_type, frame.claimed_generation_time, believed)
+                .is_err()
+            {
+                continue;
+            }
             self.learn_or_request(&frame);
             self.p2pcd_rx(ctx, &frame);
             let summary = RxSummary {

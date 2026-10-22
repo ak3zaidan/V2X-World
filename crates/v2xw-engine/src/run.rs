@@ -4757,25 +4757,34 @@ impl Engine {
 
     /// Advances one node's position belief to `now` along its own believed velocity.
     ///
-    /// Only the node's own estimate is read: position, velocity and the believed instant
-    /// the estimate is valid at. A belief with no fix, or one already at or past the
-    /// node's believed `now`, is left alone.
+    /// Only the node's own estimate is read: position, velocity and the instant the
+    /// estimate is valid at. A belief with no fix, or one already at or past `now`, is
+    /// left alone.
+    ///
+    /// The interval is the time the node's own oscillator counted since the fix, and a
+    /// clock *offset* cancels out of it: `belief.time_ns` is on the simulation's timeline
+    /// (the node converts it with `clock.believed_time`, `NodeView::believed_time`), so
+    /// the interval is `now - time_ns`. Taking `clock.believed_time(now) - time_ns`
+    /// mixed the two timelines: a vehicle whose clock was 5,000 s ahead dead-reckoned its
+    /// position 5,000 s along its velocity, kilometres off the road, and then wrote the
+    /// believed instant back into `time_ns`, so its next stamp carried the offset twice.
+    /// Detectors then reported the honest vehicle (acceptance range, map, position jump)
+    /// and the MA revoked it (docs/design/scms-real/testing/edge-cases.md §6).
     fn dead_reckon_belief(&mut self, node: NodeId, now: SimTime) {
         let Some(runtime) = self.nodes.get_mut(&node) else {
             return;
         };
-        let believed_now = runtime.clock().believed_time(now);
         let mut belief = *v2xw_core::NodeView::position(runtime);
-        if !belief.fix.has_position() || believed_now <= belief.time_ns {
+        if !belief.fix.has_position() || now <= belief.time_ns {
             return;
         }
-        let dt = (believed_now - belief.time_ns) as f64 * 1e-9;
+        let dt = (now - belief.time_ns) as f64 * 1e-9;
         belief.pos = Vec3::new(
             belief.pos.x + belief.vel.x * dt,
             belief.pos.y + belief.vel.y * dt,
             belief.pos.z + belief.vel.z * dt,
         );
-        belief.time_ns = believed_now;
+        belief.time_ns = now;
         runtime.set_belief(belief.quantized());
     }
 
@@ -9395,6 +9404,7 @@ fn resolve_rx(attempt: NodeRx, report: &RxReport, now: SimTime) -> NodeRx {
         RxDisposition::UnknownSigner => a.lost(now, rx_cause::UNKNOWN_SIGNER),
         // Unsecured by design (IEEE 1609.2 clause 8): handed to the P2PCD Entity.
         RxDisposition::P2pcdResponse => a.delivered(now, "unsecured", delivered_at),
+        RxDisposition::NotRelevant(_) => a.lost(now, rx_cause::GENERATION_TIME),
     }
 }
 

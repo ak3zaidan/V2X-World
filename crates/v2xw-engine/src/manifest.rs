@@ -229,6 +229,8 @@ pub fn assemble(
     m.warnings
         .extend(crate::scenario::signature_mtu_warnings(scenario));
     m.warnings
+        .extend(crate::scenario::detection_policy_warnings(scenario));
+    m.warnings
         .extend(crate::phase2::deployment_warnings(scenario));
     m.warnings.extend(calendar_warnings(scenario));
 

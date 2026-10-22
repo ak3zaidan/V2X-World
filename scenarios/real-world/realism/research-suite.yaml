@@ -1,0 +1,8 @@
+# The research detector suite (detect/legacy-12: the twelve VeReMi/F2MD plausibility checks,
+# judged against the accuracy each BSM states) instead of the strict US profile the base
+# runs. A variant of ../midtown-scms-realism.yaml (docs/design/scms-real/testing/realism.md).
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS realism research-suite}
+detection:
+  local:
+    - id: detect/legacy-12

@@ -1,4 +1,6 @@
-# The strict US misbehaviour profile ([SM-MBR] v1.0 §2.3) instead of the research suite.
+# The strict US misbehaviour profile ([SM-MBR] v1.0 §2.3). Since 2026-10-21 the base
+# (../midtown-scms-benchmark.yaml) runs it too, so this variant equals its base; it is kept
+# so earlier comparisons still name a file. The research suite is research-suite.yaml.
 # A variant of ../midtown-scms-realism.yaml (docs/design/scms-real/testing/realism.md).
 schema: v2xw/scenario/1
 meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS realism us-profile}

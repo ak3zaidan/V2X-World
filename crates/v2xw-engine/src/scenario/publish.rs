@@ -303,6 +303,9 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("nodes.peer_cert_cache", "certificates"),
     ("nodes.validated_cert_cache", "certificates"),
     ("security.scms.crl_overdue_tolerance_s", "s"),
+    ("security.scms.rx_beacon_max_age_s", "s"),
+    ("security.scms.rx_max_age_s", "s"),
+    ("security.scms.rx_max_future_s", "s"),
     ("nodes.hsm_sign_lower_us", "us"),
     ("messages.path_history_points", "points"),
     // SCMS settings audit (docs/guides/config-inventory-scms.md)
@@ -1090,6 +1093,15 @@ fn model_default(path: &str) -> Option<Value> {
     }
     if path == "security.scms.crl_overdue_tolerance_s" {
         return Some(json!(v2xw_node::rxval::OVERDUE_CRL_TOLERANCE_S));
+    }
+    if path == "security.scms.rx_beacon_max_age_s" {
+        return Some(json!(v2xw_node::rxval::BEACON_MAX_AGE_S));
+    }
+    if path == "security.scms.rx_max_age_s" {
+        return Some(json!(v2xw_node::rxval::MAX_AGE_S));
+    }
+    if path == "security.scms.rx_max_future_s" {
+        return Some(json!(v2xw_node::rxval::MAX_FUTURE_S));
     }
     if path == "nodes.validated_cert_cache" {
         return Some(json!(v2xw_node::rxval::EE_CACHE));

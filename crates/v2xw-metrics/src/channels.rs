@@ -671,9 +671,13 @@ pub mod rx_cause {
     pub const REVOKED: &str = "revoked";
     /// The receiver was switched off (an outage) or retired before it processed the frame.
     pub const RECEIVER_OFF: &str = "receiver-off";
+    /// The message's `generationTime` was outside the receiver's relevance window (too old
+    /// or too far in the future on the receiver's clock, IEEE 1609.2 §5.2): discarded
+    /// before verification.
+    pub const GENERATION_TIME: &str = "generation-time-window";
 
     /// The causes above the PHY, in a fixed order.
-    pub const ABOVE_PHY: [&str; 8] = [
+    pub const ABOVE_PHY: [&str; 9] = [
         REASSEMBLY_FAILED,
         RX_OVERFLOW,
         VERIFY_POLICY_DROP,
@@ -682,6 +686,7 @@ pub mod rx_cause {
         SIGNATURE_INVALID,
         REVOKED,
         RECEIVER_OFF,
+        GENERATION_TIME,
     ];
 
     /// True for a cause the PHY decided.
