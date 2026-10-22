@@ -11,256 +11,1146 @@
 # verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
 #          wrong-expectation (corrected with the evidence in `note`) | open (documented).
 schema: v2xw/scms-run-expectations/1
-
 runs:
-  M0: {scenario: scenarios/real-world/midtown-scms-realism.yaml, set: {}, note: "the matrix base"}
-  no-hsm: {base: M0, scenario: scenarios/real-world/matrix/no-hsm.yaml}
-  pq-hybrid: {base: no-hsm, scenario: scenarios/real-world/matrix/pq-hybrid.yaml}
-  gnss-rtk: {base: M0, scenario: scenarios/real-world/matrix/gnss-rtk.yaml}
-  gnss-clean: {base: M0, scenario: scenarios/real-world/matrix/gnss-clean.yaml}
-  on-demand: {base: M0, scenario: scenarios/real-world/matrix/on-demand.yaml}
-  camp: {base: M0, scenario: scenarios/real-world/matrix/camp.yaml}
-  test-ctl: {base: M0, scenario: scenarios/real-world/matrix/test-ctl.yaml}
-  split-90-10: {base: M0, scenario: scenarios/real-world/matrix/split-90-10.yaml}
-  lte: {base: M0, scenario: scenarios/real-world/matrix/lte.yaml}
-  nr: {base: M0, scenario: scenarios/real-world/matrix/nr.yaml}
-  nyc-pilot: {base: M0, scenario: scenarios/real-world/matrix/nyc-pilot.yaml}
-  silent: {base: M0, scenario: scenarios/real-world/matrix/silent.yaml}
-  full-cert: {base: M0, scenario: scenarios/real-world/matrix/full-cert.yaml}
-  rsu5: {base: M0, scenario: scenarios/real-world/matrix/rsu5.yaml}
-  rsu0: {base: M0, scenario: scenarios/real-world/matrix/rsu0.yaml}
-  pen0: {base: M0, scenario: scenarios/real-world/matrix/pen0.yaml}
-  backhaul-cellular: {base: M0, scenario: scenarios/real-world/matrix/backhaul-cellular.yaml}
-  fleet-half: {base: M0, scenario: scenarios/real-world/matrix/fleet-half.yaml}
-  att10: {base: M0, scenario: scenarios/real-world/matrix/att10.yaml}
-  sybil: {base: M0, scenario: scenarios/real-world/matrix/sybil.yaml}
-  ma-legacy: {base: M0, scenario: scenarios/real-world/matrix/ma-legacy.yaml}
-  tls12: {base: M0, scenario: scenarios/real-world/matrix/tls12.yaml}
-  real-crypto: {base: M0, scenario: scenarios/real-world/matrix/real-crypto.yaml}
-  cert60: {base: M0, scenario: scenarios/real-world/realism/cert60.yaml}
-  crl-on-decision: {base: M0, scenario: scenarios/real-world/realism/crl-on-decision.yaml}
-  fleet2x: {base: M0, scenario: scenarios/real-world/realism/fleet2x.yaml}
-  ma-auto: {base: M0, scenario: scenarios/real-world/realism/ma-auto.yaml}
-  no-sharing: {base: M0, scenario: scenarios/real-world/realism/no-sharing.yaml}
-  off-ctl: {base: M0, scenario: scenarios/real-world/realism/off-ctl.yaml}
-  region-west: {base: M0, scenario: scenarios/real-world/realism/region-west.yaml}
-  research-suite: {base: M0, scenario: scenarios/real-world/realism/research-suite.yaml}
-
+  M0:
+    scenario: scenarios/real-world/midtown-scms-realism.yaml
+    set: {}
+    note: the matrix base
+  no-hsm:
+    base: M0
+    scenario: scenarios/real-world/matrix/no-hsm.yaml
+  pq-hybrid:
+    base: no-hsm
+    scenario: scenarios/real-world/matrix/pq-hybrid.yaml
+  gnss-rtk:
+    base: M0
+    scenario: scenarios/real-world/matrix/gnss-rtk.yaml
+  gnss-clean:
+    base: M0
+    scenario: scenarios/real-world/matrix/gnss-clean.yaml
+  on-demand:
+    base: M0
+    scenario: scenarios/real-world/matrix/on-demand.yaml
+  camp:
+    base: M0
+    scenario: scenarios/real-world/matrix/camp.yaml
+  test-ctl:
+    base: M0
+    scenario: scenarios/real-world/matrix/test-ctl.yaml
+  split-90-10:
+    base: M0
+    scenario: scenarios/real-world/matrix/split-90-10.yaml
+  lte:
+    base: M0
+    scenario: scenarios/real-world/matrix/lte.yaml
+  nr:
+    base: M0
+    scenario: scenarios/real-world/matrix/nr.yaml
+  nyc-pilot:
+    base: M0
+    scenario: scenarios/real-world/matrix/nyc-pilot.yaml
+  silent:
+    base: M0
+    scenario: scenarios/real-world/matrix/silent.yaml
+  full-cert:
+    base: M0
+    scenario: scenarios/real-world/matrix/full-cert.yaml
+  rsu5:
+    base: M0
+    scenario: scenarios/real-world/matrix/rsu5.yaml
+  rsu0:
+    base: M0
+    scenario: scenarios/real-world/matrix/rsu0.yaml
+  pen0:
+    base: M0
+    scenario: scenarios/real-world/matrix/pen0.yaml
+  backhaul-cellular:
+    base: M0
+    scenario: scenarios/real-world/matrix/backhaul-cellular.yaml
+  fleet-half:
+    base: M0
+    scenario: scenarios/real-world/matrix/fleet-half.yaml
+  att10:
+    base: M0
+    scenario: scenarios/real-world/matrix/att10.yaml
+  sybil:
+    base: M0
+    scenario: scenarios/real-world/matrix/sybil.yaml
+  ma-legacy:
+    base: M0
+    scenario: scenarios/real-world/matrix/ma-legacy.yaml
+  tls12:
+    base: M0
+    scenario: scenarios/real-world/matrix/tls12.yaml
+  real-crypto:
+    base: M0
+    scenario: scenarios/real-world/matrix/real-crypto.yaml
+  cert60:
+    base: M0
+    scenario: scenarios/real-world/realism/cert60.yaml
+  crl-on-decision:
+    base: M0
+    scenario: scenarios/real-world/realism/crl-on-decision.yaml
+  fleet2x:
+    base: M0
+    scenario: scenarios/real-world/realism/fleet2x.yaml
+  ma-auto:
+    base: M0
+    scenario: scenarios/real-world/realism/ma-auto.yaml
+  no-sharing:
+    base: M0
+    scenario: scenarios/real-world/realism/no-sharing.yaml
+  off-ctl:
+    base: M0
+    scenario: scenarios/real-world/realism/off-ctl.yaml
+  region-west:
+    base: M0
+    scenario: scenarios/real-world/realism/region-west.yaml
+  research-suite:
+    base: M0
+    scenario: scenarios/real-world/realism/research-suite.yaml
+  M0-b1:
+    base: M0
+    scenario: scenarios/real-world/midtown-scms-realism.yaml
+    binary: b1
+    note: 'M0 on this branch before the two fixes: 2,074 s wall, aoi 1,693,079 ms; every other measurement
+      identical'
 rows:
-# ---- The base: metric plausibility ----
-- {id: M0-pdr, base: M0, variant: M0, area: metrics, measure: m.pdr, expect: band, band: [0.2, 0.9],
-   source: "urban DSRC to 500 m among Midtown buildings: most pairs past ~150 m are NLOS and below sensitivity (Mangel et al. 2011 NLOS; 04-models PHY); never 1, never near 0"}
-- {id: M0-bsm-latency, base: M0, variant: M0, area: metrics, measure: m.e2e_latency.bsm.p95, expect: le, value: 100.0,
-   source: "SAE J2945/1 §6.3: BSM latency budget 100 ms; DSRC channel access is sub-ms at low CBR"}
-- {id: M0-cbr, base: M0, variant: M0, area: metrics, measure: m.cbr.172.p95, expect: le, value: 0.6,
-   source: "a fifteenth of rush hour stays far below the J2945/1 congestion-control range (CBR 50-80 %)"}
-- {id: M0-aoi-peak, base: M0, variant: M0, area: metrics, measure: m.aoi_peak.mean, expect: band, band: [100.0, 1000.0],
-   source: "10 Hz BSMs: a neighbour's peak age is at least one interval (100 ms), a few intervals with loss"}
-- {id: M0-aoi-mean, base: M0, variant: M0, area: metrics, measure: m.aoi, expect: band, band: [50.0, 5000.0],
-   source: "time-average age of a 10 Hz stream with ~36 % PDR is a few hundred ms (Kaul et al. 2011); the fast-forward days carry no radio and must not count"}
-- {id: M0-unverified, base: M0, variant: M0, area: metrics, measure: m.unverified_ratio, expect: le, value: 0.1,
-   source: "prioritised verification sheds only when the verifier falls behind; at CBR < 5 % the OBU's verifier keeps up (verify_wait ~0)"}
-- {id: M0-sec-overhead, base: M0, variant: M0, area: metrics, measure: m.security_overhead.bsm, expect: band, band: [0.3, 0.7],
-   source: "1609.2 BSM: ~40 B payload against ~100 B security (digest) and ~170 B (certificate once a second): security is about half the frame"}
-- {id: M0-full-cert-share, base: M0, variant: M0, area: metrics, measure: m.full_cert_share, expect: band, band: [0.05, 0.3],
-   source: "J2945/1 §6.1.2.2: certificate once a second, digest otherwise (1 in 10 at 10 Hz), plus the new-neighbour rule"}
-- {id: M0-pool, base: M0, variant: M0, area: metrics, measure: m.cert_pool_valid.mean, expect: band, band: [15.0, 60.0],
-   source: "20 pseudonyms a week, 2 weeks preloaded, weekly top-off (CAMP 1.2.2 Table 67; NYC/THEA pilots)"}
-- {id: M0-no-sig-fail, base: M0, variant: M0, area: metrics, measure: p2.spdu_signature_failures, expect: eq, value: 0,
-   source: "honest SCMS PDUs all verify (IEEE 1609.2.1)"}
-- {id: M0-no-parse-fail, base: M0, variant: M0, area: metrics, measure: p2.spdu_parse_failures, expect: eq, value: 0,
-   source: "every SPDU decodes (1609.2.1-2022 COER)"}
-- {id: M0-no-backend-error, base: M0, variant: M0, area: architecture, measure: p2.backend_errors, expect: eq, value: 0,
-   source: "an on-time backend answers every request"}
-- {id: M0-no-starve, base: M0, variant: M0, area: metrics, measure: p2.vehicles_starved, expect: eq, value: 0,
-   source: "two weeks preloaded plus weekly top-off: no device runs out in two days"}
-- {id: M0-attackers-revoked, base: M0, variant: M0, area: metrics, measure: p2.revoked_attackers, expect: eq, value: 3,
-   source: "3 % constant-position attackers are caught by the SM-MBR ConstantPosition check and revoked after shuffle + review (SM-MBR §2.3; realism.md)"}
-- {id: M0-honest-revoked, base: M0, variant: M0, area: metrics, measure: p2.revoked_honest, expect: eq, value: 0,
-   source: "the pilots revoked no honest device (CV pilot evaluations); an honest OBU's filtered position does not jump 1 m between consecutive BSMs"}
-- {id: M0-false-accusation, base: M0, variant: M0, area: metrics, measure: m.false_accusations.vehicle, expect: eq, value: 0,
-   source: "as M0-honest-revoked, the metric's view"}
-- {id: M0-enforced, base: M0, variant: M0, area: architecture, measure: stage.enforced_s, expect: band, band: [147500.0, 147800.0],
-   source: "reports shuffled one day, 8 h review, next business-day 10:00 ET slot (Wed 2026-10-21 10:00 EDT = 147,600 s), then the first fetch (realism.md: 147,573.8 s)"}
-- {id: M0-req-per-obu, base: M0, variant: M0, area: architecture, measure: perdev.EeRaCertRequestSpdu.median, expect: eq, value: 1,
-   source: "ra-maxReqs = 1: one provisioning request per device over its life (CAMP 1.2.2 §6.3.3.4)"}
-- {id: M0-topups, base: M0, variant: M0, area: architecture, measure: p2.certs_topped_up, expect: eq, value: 1100,
-   source: "55 devices present at the 614 -> 615 rollover, 20 certificates each (realism P3)"}
-- {id: M0-separation, base: M0, variant: M0, area: architecture, measure: separation.violations, expect: empty,
-   source: "no component pairs a device identity with a linkage value (CAMP 1.2.2 §5.2)"}
-- {id: M0-sealed, base: M0, variant: M0, area: architecture, measure: sealed.mismatch, expect: eq, value: 0,
-   source: "sealed SPDUs are opened only by their recipient (02 §8)"}
-- {id: M0-ee-peers, base: M0, variant: M0, area: architecture, measure: topology.ee_peers, expect: subset, value: [ra, dcm],
-   source: "a device talks only to its RA, and to the DCM at the factory (01 §2.3)"}
-- {id: M0-memory, base: M0, variant: M0, area: cost, measure: cost.peak_mb, expect: le, value: 2500.0,
-   source: "the owner's 8 GB machine; realism base 127-229 MB"}
-
-# ---- Crypto hardware and post-quantum at density ----
-- {id: nohsm-verify-slower, base: M0, variant: no-hsm, area: metrics, measure: m.latency_stage.verify.mean, expect: up, min_change: 0.2,
-   source: "software ECDSA-P256 verify on an automotive application SoC is slower than the Craton2's verify engine (anchors::DEVICES; C4 primitive pricing)"}
-- {id: nohsm-backend-same, base: M0, variant: no-hsm, area: architecture, measure: p2.certs_topped_up, expect: same,
-   source: "receiver hardware does not change what the RA issues"}
-- {id: nohsm-pdr, base: M0, variant: no-hsm, area: metrics, measure: m.pdr, expect: same, tol: 0.05,
-   source: "crypto time is not on the air: the PHY outcome is unchanged within a few % (only transmit instants shift)"}
-- {id: pq-security-bytes, base: no-hsm, variant: pq-hybrid, area: metrics, measure: air.security, expect: ratio, band: [4.0, 20.0],
-   source: "a Falcon-512 signature is ~666 B and its key 897 B, against 64 B + 33 B for P-256: hybrid security bytes several times ECDSA's (effects PQH: x9.2)"}
-- {id: pq-fragments, base: no-hsm, variant: pq-hybrid, area: metrics, measure: r.fragments_sent, expect: ge, value: 1,
-   source: "a hybrid certificate frame exceeds the 1,400-octet WSMP MTU and is fragmented (post-quantum.yaml)"}
-- {id: pq-channel-load, base: no-hsm, variant: pq-hybrid, area: metrics, measure: m.channel_load.mean, expect: up, min_change: 1.0,
-   source: "airtime grows with the frame: channel load at least doubles (effects PQH: x4.2)"}
-- {id: pq-pdr-down, base: no-hsm, variant: pq-hybrid, area: metrics, measure: m.pdr, expect: down,
-   source: "longer frames: more collisions, more fragments to lose (a fragmented SDU needs every fragment)"}
-- {id: pq-provisioned, base: no-hsm, variant: pq-hybrid, area: metrics, measure: p2.vehicles_starved, expect: eq, value: 0,
-   source: "hybrid credentials are issued (CredentialFactory PQ path); nobody starves in two days"}
-- {id: pq-verify-load, base: no-hsm, variant: pq-hybrid, area: metrics, measure: m.latency_stage.verify.mean, expect: up,
-   source: "hybrid verify = ECDSA verify + Falcon verify (the two published costs together)"}
-
-# ---- GNSS: the cause of the US profile's honest revocations (R-USFP) ----
-- {id: rtk-honest, base: M0, variant: gnss-rtk, area: metrics, measure: p2.revoked_honest, expect: eq, value: 0,
-   source: "with 0.26 m errors consecutive BSMs agree to well inside the 1 m gpsDrift (SM-MBR RandomPosition): no honest report reaches the MA"}
-- {id: rtk-honest-reports, base: M0, variant: gnss-rtk, area: metrics, measure: p2.reports_about_honest, expect: down, min_change: 0.5,
-   source: "as rtk-honest"}
-- {id: rtk-attackers, base: M0, variant: gnss-rtk, area: metrics, measure: p2.revoked_attackers, expect: eq, value: 3,
-   source: "ConstantPosition does not depend on the honest GNSS error"}
-- {id: clean-honest-reports, base: M0, variant: gnss-clean, area: metrics, measure: p2.reports_about_honest, expect: down,
-   source: "removing the 12 m outliers and the bursts removes the biggest jumps; the 1.6 m white noise remains"}
-
-# ---- Verification policy ----
-- {id: ond-verifications, base: M0, variant: on-demand, area: metrics, measure: rv.checked, expect: down, min_change: 0.5,
-   source: "on-demand verifies only what an application acts on (Krishnan & Weimerskirch 2011; 07 §2: 756/s -> 46/s)"}
-- {id: ond-reports, base: M0, variant: on-demand, area: metrics, measure: p2.reports_at_ma, expect: down, min_change: 0.3,
-   source: "SM-MBR judges only verified BSMs (07 §8.2): detection is nearly blind"}
-- {id: ond-backend-same, base: M0, variant: on-demand, area: architecture, measure: p2.certs_topped_up, expect: same,
-   source: "the receiver policy does not change provisioning"}
-
-# ---- Deployment presets and provider splits ----
-- {id: camp-lop, base: M0, variant: camp, area: architecture, measure: edge.ee->lop, expect: ge, value: 1,
-   source: "the CAMP reference design puts the LOP between the device and the RA (CAMP 1.2.2 §5.2)"}
-- {id: camp-one-provider, base: M0, variant: camp, area: architecture, measure: verified.from_b, expect: eq, value: 0,
-   source: "one SCMS: no second provider's pseudonyms on the air"}
-- {id: camp-no-sharing, base: M0, variant: camp, area: architecture, measure: p2.reports_shared, expect: eq, value: 0,
-   source: "a central MA has no peer to share with"}
-- {id: camp-topups, base: M0, variant: camp, area: architecture, measure: p2.certs_topped_up, expect: same,
-   source: "the topology does not change the batch (20 a week) or who is present at the rollover"}
-- {id: camp-separation, base: M0, variant: camp, area: architecture, measure: separation.violations, expect: empty,
-   source: "separation of duties holds in the CAMP design too (the LOP sees addresses, not linkage)"}
-- {id: testctl-same-topups, base: M0, variant: test-ctl, area: architecture, measure: p2.certs_topped_up, expect: same,
-   source: "the test trust list approves both providers' roots: issuance is unchanged"}
-- {id: testctl-attackers, base: M0, variant: test-ctl, area: metrics, measure: p2.revoked_attackers, expect: same,
-   source: "as testctl-same-topups: detection and revocation are unchanged"}
-- {id: split-b-down, base: M0, variant: split-90-10, area: metrics, measure: verified.from_b, expect: ratio, band: [0.05, 0.45],
-   source: "provider-b's fleet share 50 % -> 10 %: its signed BSMs fall to about a fifth"}
-- {id: split-a-up, base: M0, variant: split-90-10, area: metrics, measure: verified.from_a, expect: ratio, band: [1.4, 2.4],
-   source: "provider-a's share 50 % -> 90 %: about x1.8"}
-- {id: split-topups, base: M0, variant: split-90-10, area: architecture, measure: p2.certs_topped_up, expect: ratio, band: [0.9, 1.1],
-   source: "the split moves devices between providers; the total top-off is the same 20 per device"}
-- {id: split-req, base: M0, variant: split-90-10, area: architecture, measure: perdev.EeRaCertRequestSpdu.median, expect: eq, value: 1,
-   source: "ra-maxReqs = 1 at either provider"}
-
-# ---- Radio: DSRC vs LTE-V2X and NR-V2X ----
-- {id: lte-latency, base: M0, variant: lte, area: metrics, measure: m.e2e_latency.bsm.mean, expect: up,
-   source: "LTE-V2X mode 4 SPS waits for its reserved subframe (selection window up to 100 ms, mean ~half the RRI) where DSRC contends sub-ms (3GPP TS 36.213 §14; Molina-Masegosa 2017)"}
-- {id: lte-latency-budget, base: M0, variant: lte, area: metrics, measure: m.e2e_latency.bsm.p95, expect: le, value: 100.0,
-   source: "SAE J3161/1: the BSM latency budget is still 100 ms"}
-- {id: lte-backend-same, base: M0, variant: lte, area: architecture, measure: p2.certs_topped_up, expect: same,
-   source: "the access radio does not change the backend flows (cellular Uu and RSU backhaul unchanged)"}
-- {id: lte-sizes, base: M0, variant: lte, area: architecture, measure: pdu.AcaEeCertResponsePrivateSpdu.max, expect: same,
-   source: "the SCMS PDUs are radio-independent"}
-- {id: nr-backend-same, base: M0, variant: nr, area: architecture, measure: p2.certs_topped_up, expect: same,
-   source: "as lte-backend-same"}
-- {id: nr-pdr, base: M0, variant: nr, area: metrics, measure: m.pdr, expect: band, band: [0.1, 0.95],
-   source: "NR-V2X PC5 is plausible in the same urban geometry"}
-
-# ---- Pseudonym strategies and certificate attachment ----
-- {id: nyc-changes, base: M0, variant: nyc-pilot, area: metrics, measure: p2.pseudonym_changes, expect: up,
-   source: "NYC pilot: 5 min OR 2 km ([PRIMER] pp.8-9); a vehicle alive across the fast-forward is 43,000 s old at the second window and changes; J2945/1 also needs 2 km, which nobody drives in 240 s of Midtown traffic"}
-- {id: nyc-backend-same, base: M0, variant: nyc-pilot, area: architecture, measure: p2.certs_topped_up, expect: same,
-   source: "the change strategy uses the pool the RA issued; the top-off is weekly whatever the strategy"}
-- {id: silent-frames, base: M0, variant: silent, area: metrics, measure: p2.pseudonym_silenced_frames, expect: up,
-   source: "a silent period suppresses transmissions around each change (Huang et al. 2005); the base's J2945/1 rule silences nothing"}
-- {id: fullcert-bytes, base: M0, variant: full-cert, area: metrics, measure: air.security, expect: ratio, band: [1.2, 2.5],
-   source: "a 77 B implicit certificate replaces the 8 B digest on 9 of 10 BSMs: ~+69 B on ~100 B of security"}
-- {id: fullcert-share, base: M0, variant: full-cert, area: metrics, measure: m.full_cert_share, expect: ge, value: 0.95,
-   source: "digest_otherwise false: every signed frame carries the certificate"}
-- {id: fullcert-p2pcd, base: M0, variant: full-cert, area: metrics, measure: m.p2pcd_requests, expect: le, value: 0.0,
-   source: "with a certificate on every frame no receiver needs to ask for one (1609.2a §8.2.4)"}
-- {id: fullcert-backend-same, base: M0, variant: full-cert, area: architecture, measure: p2.certs_topped_up, expect: same,
-   source: "attachment is a transmit choice"}
-
-# ---- Roadside units, cellular, backhaul ----
-- {id: rsu5-app-certs, base: M0, variant: rsu5, area: architecture, measure: p2.rsu_app_certs_renewed, expect: eq, value: 5,
-   source: "one weekly application-certificate renewal per RSU (B3b, 169 h)"}
-- {id: rsu5-reports, base: M0, variant: rsu5, area: metrics, measure: p2.reports_from_rsus, expect: down,
-   source: "fewer RSUs hear and file fewer reports"}
-- {id: rsu0-no-rsu-reports, base: M0, variant: rsu0, area: metrics, measure: p2.reports_from_rsus, expect: eq, value: 0,
-   source: "no RSU, nothing filed by one"}
-- {id: rsu0-topups, base: M0, variant: rsu0, area: architecture, measure: p2.topups_completed, expect: le, value: 55,
-   source: "the 20 % with no cellular reach the RA only through an RSU (relay); with none they cannot top off"}
-- {id: rsu0-no-app-certs, base: M0, variant: rsu0, area: architecture, measure: p2.rsu_app_certs_renewed, expect: eq, value: 0,
-   source: "no RSU"}
-- {id: pen0-no-cellular, base: M0, variant: pen0, area: architecture, measure: access.cellular_vehicles, expect: eq, value: 0,
-   source: "penetration 0: no device has a cellular link"}
-- {id: pen0-no-cell-uploads, base: M0, variant: pen0, area: architecture, measure: p2.reports_uploaded_cellular, expect: eq, value: 0,
-   source: "reports go up through the RSUs only"}
-- {id: pen0-topups, base: M0, variant: pen0, area: architecture, measure: p2.topups_completed, expect: le, value: 55,
-   source: "top-off only within an RSU's reach (provisioning-proxy role)"}
-- {id: bhcell-rsu-cert, base: M0, variant: backhaul-cellular, area: architecture, measure: flow.rsu-application-cert.median_s, expect: up,
-   source: "cellular backhaul has more delay than fibre: the RSU's renewal round trips take longer"}
-- {id: bhcell-counts, base: M0, variant: backhaul-cellular, area: architecture, measure: p2.rsu_app_certs_renewed, expect: same,
-   source: "the backhaul changes delay, not the number of renewals"}
-
-# ---- Fleet size and attackers ----
-- {id: half-topups, base: M0, variant: fleet-half, area: architecture, measure: p2.certs_topped_up, expect: down, min_change: 0.2,
-   source: "fewer vehicles present at the rollover; still 20 each"}
-- {id: half-req, base: M0, variant: fleet-half, area: architecture, measure: perdev.EeRaCertRequestSpdu.median, expect: eq, value: 1,
-   source: "per-device behaviour is fleet-independent"}
-- {id: half-verify, base: M0, variant: fleet-half, area: metrics, measure: rv.checked, expect: down,
-   source: "fewer neighbours, fewer verifications"}
-- {id: att10-revoked, base: M0, variant: att10, area: metrics, measure: p2.revoked_attackers, expect: up,
-   source: "about 7 attackers instead of 3, all ConstantPosition"}
-- {id: att10-crl, base: M0, variant: att10, area: architecture, measure: m.crl_entries, expect: up,
-   source: "one CRL entry per revoked device: the CRL grows (~33 B an entry, Brecht)"}
-- {id: att10-cases, base: M0, variant: att10, area: architecture, measure: p2.cases_opened, expect: up,
-   source: "one case per accused device (gap row 27: cases run side by side)"}
-- {id: sybil-not-revoked, base: M0, variant: sybil, area: metrics, measure: p2.revoked_attackers, expect: eq, value: 0,
-   source: "the SM-MBR PSID-0x20 profile has no Sybil check (us_mbr.rs: no heading, staleness, Sybil, map or frequency check): a known detection gap"}
-- {id: malegacy-cases, base: M0, variant: ma-legacy, area: architecture, measure: p2.cases_opened, expect: changes,
-   source: "the legacy window revokes on three trusted reporters within a window; the case count is the policy's (scms-realism.yaml R-MA)"}
-
-# ---- Backend links and crypto mode ----
-- {id: tls12-same, base: M0, variant: tls12, area: architecture, measure: p2.certs_topped_up, expect: same,
-   source: "TLS 1.2 adds a round trip, not a message; the top-off is unchanged"}
-- {id: tls12-bytes, base: M0, variant: tls12, area: architecture, measure: access.backend_bytes, expect: same,
-   source: "cell-capacity-mm1 carries no TCP or TLS (base tcp_connections 0; scms-knobs: only packet-pf does), so the TLS version cannot show"}
-- {id: real-same-topups, base: M0, variant: real-crypto, area: architecture, measure: p2.certs_topped_up, expect: same,
-   source: "I-S1: real and modelled crypto give the same records (scms_scale.rs)"}
-- {id: real-same-revocations, base: M0, variant: real-crypto, area: metrics, measure: p2.revocations, expect: same,
-   source: "I-S1"}
-- {id: real-same-frames, base: M0, variant: real-crypto, area: metrics, measure: r.frames_transmitted, expect: same,
-   source: "I-S1: identical frames"}
-- {id: real-same-sizes, base: M0, variant: real-crypto, area: architecture, measure: pdu.EeRaCertRequestSpdu.max, expect: same,
-   source: "I-S1: the real encoder sizes do not depend on the crypto mode"}
-- {id: real-cost, base: M0, variant: real-crypto, area: cost, measure: cost.cpu_s, expect: up,
-   source: "real P-256 arithmetic for every certificate (~0.4 CPU-s a device on release)"}
-
-# ---- The realism variants, re-run on the fix-wave main (their rows: tools/realworld/runtime_expectations.yaml) ----
-- {id: cert60-x3, base: M0, variant: cert60, area: architecture, measure: p2.certs_topped_up, expect: ratio, band: [2.99, 3.01],
-   source: "60 a week instead of 20 (NYC taxis, CVP-P2 item 21)"}
-- {id: ond-crl-earlier, base: M0, variant: crl-on-decision, area: architecture, measure: stage.enforced_s, expect: down, min_change: 0.1,
-   source: "publishing at the decision skips the wait for Wednesday's 10:00 slot (realism: -32,334 s)"}
-- {id: fleet2x-req, base: M0, variant: fleet2x, area: architecture, measure: perdev.EeRaCertRequestSpdu.median, expect: eq, value: 1,
-   source: "per-device behaviour is fleet-independent"}
-- {id: maauto-decision, base: M0, variant: ma-auto, area: architecture, measure: stage.decision_s, expect: delta, band: [-28900.0, -28700.0],
-   source: "no 8 h review (D3; realism: -28,800 s)"}
-- {id: maauto-published, base: M0, variant: ma-auto, area: architecture, measure: stage.published_s, expect: same, tol: 0.001,
-   source: "decided Tue 17:00 EDT, after that day's slot: still Wednesday's slot"}
-- {id: nosharing-shared, base: M0, variant: no-sharing, area: architecture, measure: p2.reports_shared, expect: eq, value: 0,
-   source: "sharing off"}
-- {id: offctl-honest, base: M0, variant: off-ctl, area: metrics, measure: p2.revoked_honest, expect: le, value: 0,
-   source: "a provider off the trust list cannot get anyone honest revoked"}
-- {id: west-counts, base: M0, variant: region-west, area: architecture, measure: p2.certs_topped_up, expect: same,
-   source: "a farther region changes latency, not counts"}
-- {id: research-honest, base: M0, variant: research-suite, area: metrics, measure: p2.revoked_honest, expect: eq, value: 0,
-   source: "the research suite's streak gate and stated-accuracy tolerance (realism: 0 honest)"}
-- {id: research-attackers, base: M0, variant: research-suite, area: metrics, measure: p2.revoked_attackers, expect: eq, value: 3,
-   source: "realism: 3 of 3"}
+- id: M0-pdr
+  base: M0
+  variant: M0
+  area: metrics
+  measure: m.pdr
+  expect: band
+  band:
+  - 0.2
+  - 0.9
+  source: 'urban DSRC to 500 m among Midtown buildings: most pairs past ~150 m are NLOS and below sensitivity
+    (Mangel et al. 2011 NLOS; 04-models PHY); never 1, never near 0'
+  measured: '0.363836'
+  verdict: pass
+- id: M0-bsm-latency
+  base: M0
+  variant: M0
+  area: metrics
+  measure: m.e2e_latency.bsm.p95
+  expect: le
+  value: 100.0
+  source: 'SAE J2945/1 §6.3: BSM latency budget 100 ms; DSRC channel access is sub-ms at low CBR'
+  measured: '14.639'
+  verdict: pass
+- id: M0-cbr
+  base: M0
+  variant: M0
+  area: metrics
+  measure: m.cbr.172.p95
+  expect: le
+  value: 0.6
+  source: a fifteenth of rush hour stays far below the J2945/1 congestion-control range (CBR 50-80 %)
+  measured: '0.0143'
+  verdict: pass
+- id: M0-aoi-peak
+  base: M0
+  variant: M0
+  area: metrics
+  measure: m.aoi_peak.mean
+  expect: band
+  band:
+  - 100.0
+  - 1000.0
+  source: '10 Hz BSMs: a neighbour''s peak age is at least one interval (100 ms), a few intervals with
+    loss'
+  measured: '114.487'
+  verdict: pass
+- id: M0-aoi-mean
+  base: M0
+  variant: M0
+  area: metrics
+  measure: m.aoi
+  expect: band
+  band:
+  - 50.0
+  - 5000.0
+  source: time-average age of a 10 Hz stream with ~36 % PDR is a few hundred ms (Kaul et al. 2011); the
+    fast-forward days carry no radio and must not count
+  measured: '81.6119'
+  verdict: fixed
+  note: 'pre-fix M0-b1: 1,693,079 ms, the fast-forward silence charged as age; after: 81.6 ms'
+  test: v2xw-metrics awareness::tests::neighbourhood_aoi_restarts_after_a_silence_rather_than_charging_it
+- id: M0-unverified
+  base: M0
+  variant: M0
+  area: metrics
+  measure: m.unverified_ratio
+  expect: le
+  value: 0.1
+  source: prioritised verification sheds only when the verifier falls behind; at CBR < 5 % the OBU's verifier
+    keeps up (verify_wait ~0)
+  measured: '0.025131'
+  verdict: pass
+- id: M0-sec-overhead
+  base: M0
+  variant: M0
+  area: metrics
+  measure: m.security_overhead.bsm
+  expect: band
+  band:
+  - 0.3
+  - 0.7
+  source: '1609.2 BSM: ~40 B payload against ~100 B security (digest) and ~170 B (certificate once a second):
+    security is about half the frame'
+  measured: '0.458282'
+  verdict: pass
+- id: M0-full-cert-share
+  base: M0
+  variant: M0
+  area: metrics
+  measure: m.full_cert_share
+  expect: band
+  band:
+  - 0.05
+  - 0.3
+  source: 'J2945/1 §6.1.2.2: certificate once a second, digest otherwise (1 in 10 at 10 Hz), plus the
+    new-neighbour rule'
+  measured: '0.173771'
+  verdict: pass
+- id: M0-pool
+  base: M0
+  variant: M0
+  area: metrics
+  measure: m.cert_pool_valid.mean
+  expect: band
+  band:
+  - 15.0
+  - 60.0
+  source: 20 pseudonyms a week, 2 weeks preloaded, weekly top-off (CAMP 1.2.2 Table 67; NYC/THEA pilots)
+  measured: '25.6987'
+  verdict: pass
+- id: M0-no-sig-fail
+  base: M0
+  variant: M0
+  area: metrics
+  measure: p2.spdu_signature_failures
+  expect: eq
+  value: 0
+  source: honest SCMS PDUs all verify (IEEE 1609.2.1)
+  measured: '0'
+  verdict: pass
+- id: M0-no-parse-fail
+  base: M0
+  variant: M0
+  area: metrics
+  measure: p2.spdu_parse_failures
+  expect: eq
+  value: 0
+  source: every SPDU decodes (1609.2.1-2022 COER)
+  measured: '0'
+  verdict: pass
+- id: M0-no-backend-error
+  base: M0
+  variant: M0
+  area: architecture
+  measure: p2.backend_errors
+  expect: eq
+  value: 0
+  source: an on-time backend answers every request
+  measured: '0'
+  verdict: pass
+- id: M0-no-starve
+  base: M0
+  variant: M0
+  area: metrics
+  measure: p2.vehicles_starved
+  expect: eq
+  value: 0
+  source: 'two weeks preloaded plus weekly top-off: no device runs out in two days'
+  measured: '0'
+  verdict: pass
+- id: M0-attackers-revoked
+  base: M0
+  variant: M0
+  area: metrics
+  measure: p2.revoked_attackers
+  expect: eq
+  value: 3
+  source: 3 % constant-position attackers are caught by the SM-MBR ConstantPosition check and revoked
+    after shuffle + review (SM-MBR §2.3; realism.md)
+  measured: '1'
+  verdict: open
+  note: 'only 2 of 3 attackers reported, 1 revoked, among 27 decisions; the research suite revokes 3 of
+    3 (research-attackers). R-USFP: 7,200 of the 7,488 reports at the MA are RandomPosition (positionJump),
+    7,375 of them about honest vehicles; 36 honest reported, 26 revoked. gnss-rtk still revokes 26, so
+    the raw GNSS error is not the cause (07 section 8.3 said it was); see matrix.md ''Open'''
+- id: M0-honest-revoked
+  base: M0
+  variant: M0
+  area: metrics
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: the pilots revoked no honest device (CV pilot evaluations); an honest OBU's filtered position
+    does not jump 1 m between consecutive BSMs
+  measured: '26'
+  verdict: open
+  note: 'R-USFP: 7,200 of the 7,488 reports at the MA are RandomPosition (positionJump), 7,375 of them
+    about honest vehicles; 36 honest reported, 26 revoked. gnss-rtk still revokes 26, so the raw GNSS
+    error is not the cause (07 section 8.3 said it was); see matrix.md ''Open'''
+- id: M0-false-accusation
+  base: M0
+  variant: M0
+  area: metrics
+  measure: m.false_accusations.vehicle
+  expect: eq
+  value: 0
+  source: as M0-honest-revoked, the metric's view
+  measured: '26'
+  verdict: open
+  note: 'R-USFP: 7,200 of the 7,488 reports at the MA are RandomPosition (positionJump), 7,375 of them
+    about honest vehicles; 36 honest reported, 26 revoked. gnss-rtk still revokes 26, so the raw GNSS
+    error is not the cause (07 section 8.3 said it was); see matrix.md ''Open'''
+- id: M0-enforced
+  base: M0
+  variant: M0
+  area: architecture
+  measure: stage.enforced_s
+  expect: band
+  band:
+  - 147500.0
+  - 147800.0
+  source: 'reports shuffled one day, 8 h review, next business-day 10:00 ET slot (Wed 2026-10-21 10:00
+    EDT = 147,600 s), then the first fetch (realism.md: 147,573.8 s)'
+  measured: '147595'
+  verdict: pass
+- id: M0-req-per-obu
+  base: M0
+  variant: M0
+  area: architecture
+  measure: perdev.EeRaCertRequestSpdu.median
+  expect: eq
+  value: 1
+  source: 'ra-maxReqs = 1: one provisioning request per device over its life (CAMP 1.2.2 §6.3.3.4)'
+  measured: '1'
+  verdict: pass
+- id: M0-topups
+  base: M0
+  variant: M0
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: eq
+  value: 1100
+  source: 55 devices present at the 614 -> 615 rollover, 20 certificates each (realism P3)
+  measured: '1100'
+  verdict: pass
+- id: M0-separation
+  base: M0
+  variant: M0
+  area: architecture
+  measure: separation.violations
+  expect: empty
+  source: no component pairs a device identity with a linkage value (CAMP 1.2.2 §5.2)
+  measured: '[]'
+  verdict: pass
+- id: M0-sealed
+  base: M0
+  variant: M0
+  area: architecture
+  measure: sealed.mismatch
+  expect: eq
+  value: 0
+  source: sealed SPDUs are opened only by their recipient (02 §8)
+  measured: '0'
+  verdict: pass
+- id: M0-ee-peers
+  base: M0
+  variant: M0
+  area: architecture
+  measure: topology.ee_peers
+  expect: subset
+  value:
+  - ra
+  - dcm
+  source: a device talks only to its RA, and to the DCM at the factory (01 §2.3)
+  measured: dcm,ra
+  verdict: pass
+- id: M0-memory
+  base: M0
+  variant: M0
+  area: cost
+  measure: cost.peak_mb
+  expect: le
+  value: 2500.0
+  source: the owner's 8 GB machine; realism base 127-229 MB
+  measured: '222.758'
+  verdict: pass
+- id: nohsm-verify-slower
+  base: M0
+  variant: no-hsm
+  area: metrics
+  measure: m.latency_stage.verify.mean
+  expect: up
+  min_change: 0.2
+  source: software ECDSA-P256 verify on an automotive application SoC is slower than the Craton2's verify
+    engine (anchors::DEVICES; C4 primitive pricing)
+  measured: 0.50653 -> 0.584345
+  verdict: wrong-expectation
+  note: direction holds (+15 %); the pooled verify stage also counts the 30 RSUs and 26 handsets, whose
+    hardware this setting does not change, and a vehicle's repeat costs 400 us (Craton2) against 645 us
+    (SoC)
+- id: nohsm-backend-same
+  base: M0
+  variant: no-hsm
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: same
+  source: receiver hardware does not change what the RA issues
+  measured: 1100 -> 1100
+  verdict: pass
+- id: nohsm-pdr
+  base: M0
+  variant: no-hsm
+  area: metrics
+  measure: m.pdr
+  expect: same
+  tol: 0.05
+  source: 'crypto time is not on the air: the PHY outcome is unchanged within a few % (only transmit instants
+    shift)'
+  measured: 0.363836 -> 0.362838
+  verdict: pass
+- id: pq-security-bytes
+  base: no-hsm
+  variant: pq-hybrid
+  area: metrics
+  measure: air.security
+  expect: ratio
+  band:
+  - 4.0
+  - 20.0
+  source: 'a Falcon-512 signature is ~666 B and its key 897 B, against 64 B + 33 B for P-256: hybrid security
+    bytes several times ECDSA''s (effects PQH: x9.2)'
+  measured: 2446825 -> 24072007 (ratio 9.838)
+  verdict: pass
+- id: pq-fragments
+  base: no-hsm
+  variant: pq-hybrid
+  area: metrics
+  measure: r.fragments_sent
+  expect: ge
+  value: 1
+  source: a hybrid certificate frame exceeds the 1,400-octet WSMP MTU and is fragmented (post-quantum.yaml)
+  measured: '7968'
+  verdict: pass
+- id: pq-channel-load
+  base: no-hsm
+  variant: pq-hybrid
+  area: metrics
+  measure: m.channel_load.mean
+  expect: up
+  min_change: 1.0
+  source: 'airtime grows with the frame: channel load at least doubles (effects PQH: x4.2)'
+  measured: 0.00361934 -> 0.0147291
+  verdict: pass
+- id: pq-pdr-down
+  base: no-hsm
+  variant: pq-hybrid
+  area: metrics
+  measure: m.pdr
+  expect: down
+  source: 'longer frames: more collisions, more fragments to lose (a fragmented SDU needs every fragment)'
+  measured: 0.362838 -> 0.343057
+  verdict: pass
+- id: pq-provisioned
+  base: no-hsm
+  variant: pq-hybrid
+  area: metrics
+  measure: p2.vehicles_starved
+  expect: eq
+  value: 0
+  source: hybrid credentials are issued (CredentialFactory PQ path); nobody starves in two days
+  measured: '0'
+  verdict: pass
+- id: pq-verify-load
+  base: no-hsm
+  variant: pq-hybrid
+  area: metrics
+  measure: m.latency_stage.verify.mean
+  expect: up
+  source: hybrid verify = ECDSA verify + Falcon verify (the two published costs together)
+  measured: 0.584345 -> 0.827119
+  verdict: pass
+- id: rtk-honest
+  base: M0
+  variant: gnss-rtk
+  area: metrics
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: 'with 0.26 m errors consecutive BSMs agree to well inside the 1 m gpsDrift (SM-MBR RandomPosition):
+    no honest report reaches the MA'
+  measured: '26'
+  verdict: open
+  note: 'RTK leaves 26 honest revoked: the false positives are not GNSS error. R-USFP: 7,200 of the 7,488
+    reports at the MA are RandomPosition (positionJump), 7,375 of them about honest vehicles; 36 honest
+    reported, 26 revoked. gnss-rtk still revokes 26, so the raw GNSS error is not the cause (07 section
+    8.3 said it was); see matrix.md ''Open'''
+- id: rtk-honest-reports
+  base: M0
+  variant: gnss-rtk
+  area: metrics
+  measure: p2.reports_about_honest
+  expect: down
+  min_change: 0.5
+  source: as rtk-honest
+  measured: 7375 -> 6248
+  verdict: open
+  note: '-15 % only. R-USFP: 7,200 of the 7,488 reports at the MA are RandomPosition (positionJump), 7,375
+    of them about honest vehicles; 36 honest reported, 26 revoked. gnss-rtk still revokes 26, so the raw
+    GNSS error is not the cause (07 section 8.3 said it was); see matrix.md ''Open'''
+- id: rtk-attackers
+  base: M0
+  variant: gnss-rtk
+  area: metrics
+  measure: p2.revoked_attackers
+  expect: eq
+  value: 3
+  source: ConstantPosition does not depend on the honest GNSS error
+  measured: '1'
+  verdict: open
+  note: as M0-attackers-revoked
+- id: clean-honest-reports
+  base: M0
+  variant: gnss-clean
+  area: metrics
+  measure: p2.reports_about_honest
+  expect: down
+  source: removing the 12 m outliers and the bursts removes the biggest jumps; the 1.6 m white noise remains
+  measured: 7375 -> 7360
+  verdict: pass
+- id: ond-verifications
+  base: M0
+  variant: on-demand
+  area: metrics
+  measure: rv.checked
+  expect: down
+  min_change: 0.5
+  source: 'on-demand verifies only what an application acts on (Krishnan & Weimerskirch 2011; 07 §2: 756/s
+    -> 46/s)'
+  measured: 77283 -> 37580
+  verdict: pass
+- id: ond-reports
+  base: M0
+  variant: on-demand
+  area: metrics
+  measure: p2.reports_at_ma
+  expect: down
+  min_change: 0.3
+  source: 'SM-MBR judges only verified BSMs (07 §8.2): detection is nearly blind'
+  measured: 7488 -> 3632
+  verdict: pass
+- id: ond-backend-same
+  base: M0
+  variant: on-demand
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: same
+  source: the receiver policy does not change provisioning
+  measured: 1100 -> 1100
+  verdict: pass
+- id: camp-lop
+  base: M0
+  variant: camp
+  area: architecture
+  measure: edge.ee->lop
+  expect: ge
+  value: 1
+  source: the CAMP reference design puts the LOP between the device and the RA (CAMP 1.2.2 §5.2)
+  measured: '7848'
+  verdict: pass
+- id: camp-one-provider
+  base: M0
+  variant: camp
+  area: architecture
+  measure: verified.from_b
+  expect: eq
+  value: 0
+  source: 'one SCMS: no second provider''s pseudonyms on the air'
+  measured: '0'
+  verdict: pass
+- id: camp-no-sharing
+  base: M0
+  variant: camp
+  area: architecture
+  measure: p2.reports_shared
+  expect: eq
+  value: 0
+  source: a central MA has no peer to share with
+  measured: '0'
+  verdict: pass
+- id: camp-topups
+  base: M0
+  variant: camp
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: same
+  source: the topology does not change the batch (20 a week) or who is present at the rollover
+  measured: 1100 -> 1100
+  verdict: pass
+- id: camp-separation
+  base: M0
+  variant: camp
+  area: architecture
+  measure: separation.violations
+  expect: empty
+  source: separation of duties holds in the CAMP design too (the LOP sees addresses, not linkage)
+  measured: '[]'
+  verdict: pass
+- id: testctl-same-topups
+  base: M0
+  variant: test-ctl
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: same
+  source: 'the test trust list approves both providers'' roots: issuance is unchanged'
+  measured: 1100 -> 1100
+  verdict: pass
+- id: testctl-attackers
+  base: M0
+  variant: test-ctl
+  area: metrics
+  measure: p2.revoked_attackers
+  expect: same
+  source: 'as testctl-same-topups: detection and revocation are unchanged'
+  measured: 1 -> 2
+  verdict: wrong-expectation
+  note: us-test-ctl-2025 deploys six providers at 1/6 each (devices 10/21/18/11/14/...), so the fleet
+    split and MA routing change, not only the trust list
+- id: split-b-down
+  base: M0
+  variant: split-90-10
+  area: metrics
+  measure: verified.from_b
+  expect: ratio
+  band:
+  - 0.05
+  - 0.45
+  source: 'provider-b''s fleet share 50 % -> 10 %: its signed BSMs fall to about a fifth'
+  measured: 56582 -> 12393 (ratio 0.219)
+  verdict: pass
+- id: split-a-up
+  base: M0
+  variant: split-90-10
+  area: metrics
+  measure: verified.from_a
+  expect: ratio
+  band:
+  - 1.4
+  - 2.4
+  source: 'provider-a''s share 50 % -> 90 %: about x1.8'
+  measured: 22692 -> 66881 (ratio 2.947)
+  verdict: wrong-expectation
+  note: 'the base''s verified traffic is not split like its devices (49/46 devices, 29 %/71 % of verified
+    BSMs from a/b); 90/10 gives a 84 %: x2.95 is that shift'
+- id: split-topups
+  base: M0
+  variant: split-90-10
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: ratio
+  band:
+  - 0.9
+  - 1.1
+  source: the split moves devices between providers; the total top-off is the same 20 per device
+  measured: 1100 -> 1100 (ratio 1)
+  verdict: pass
+- id: split-req
+  base: M0
+  variant: split-90-10
+  area: architecture
+  measure: perdev.EeRaCertRequestSpdu.median
+  expect: eq
+  value: 1
+  source: ra-maxReqs = 1 at either provider
+  measured: '1'
+  verdict: pass
+- id: lte-latency
+  base: M0
+  variant: lte
+  area: metrics
+  measure: m.e2e_latency.bsm.mean
+  expect: up
+  source: LTE-V2X mode 4 SPS waits for its reserved subframe (selection window up to 100 ms, mean ~half
+    the RRI) where DSRC contends sub-ms (3GPP TS 36.213 §14; Molina-Masegosa 2017)
+  measured: 12.3571 -> 68.0006
+  verdict: pass
+- id: lte-latency-budget
+  base: M0
+  variant: lte
+  area: metrics
+  measure: m.e2e_latency.bsm.p95
+  expect: le
+  value: 100.0
+  source: 'SAE J3161/1: the BSM latency budget is still 100 ms'
+  measured: '112.184'
+  verdict: open
+  note: 'LTE-V2X BSM p95 112 ms (mean 68 ms) exceeds the 100 ms budget: the BSM is generated without regard
+    to the SPS reservation, which J3161/1 has the application align with; DSRC p95 14.6 ms'
+- id: lte-backend-same
+  base: M0
+  variant: lte
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: same
+  source: the access radio does not change the backend flows (cellular Uu and RSU backhaul unchanged)
+  measured: 1100 -> 1100
+  verdict: pass
+- id: lte-sizes
+  base: M0
+  variant: lte
+  area: architecture
+  measure: pdu.AcaEeCertResponsePrivateSpdu.max
+  expect: same
+  source: the SCMS PDUs are radio-independent
+  measured: 517 -> 517
+  verdict: pass
+- id: nr-backend-same
+  base: M0
+  variant: nr
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: same
+  source: as lte-backend-same
+  measured: 1100 -> 1100
+  verdict: pass
+- id: nr-pdr
+  base: M0
+  variant: nr
+  area: metrics
+  measure: m.pdr
+  expect: band
+  band:
+  - 0.1
+  - 0.95
+  source: NR-V2X PC5 is plausible in the same urban geometry
+  measured: '0.604931'
+  verdict: pass
+- id: nyc-changes
+  base: M0
+  variant: nyc-pilot
+  area: metrics
+  measure: p2.pseudonym_changes
+  expect: up
+  source: 'NYC pilot: 5 min OR 2 km ([PRIMER] pp.8-9); a vehicle alive across the fast-forward is 43,000
+    s old at the second window and changes; J2945/1 also needs 2 km, which nobody drives in 240 s of Midtown
+    traffic'
+  measured: 0 -> 65
+  verdict: pass
+- id: nyc-backend-same
+  base: M0
+  variant: nyc-pilot
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: same
+  source: the change strategy uses the pool the RA issued; the top-off is weekly whatever the strategy
+  measured: 1100 -> 1100
+  verdict: pass
+- id: silent-frames
+  base: M0
+  variant: silent
+  area: metrics
+  measure: p2.pseudonym_silenced_frames
+  expect: up
+  source: a silent period suppresses transmissions around each change (Huang et al. 2005); the base's
+    J2945/1 rule silences nothing
+  measured: 0 -> 0
+  verdict: wrong-expectation
+  note: '`silent` means no scheduled change (wiring.rs rotation_policy), not a silent period: the run
+    is the base''s (23,549 frames, 0 changes)'
+- id: fullcert-bytes
+  base: M0
+  variant: full-cert
+  area: metrics
+  measure: air.security
+  expect: ratio
+  band:
+  - 1.2
+  - 2.5
+  source: 'a 77 B implicit certificate replaces the 8 B digest on 9 of 10 BSMs: ~+69 B on ~100 B of security'
+  measured: 2446453 -> 3863553 (ratio 1.579)
+  verdict: pass
+- id: fullcert-share
+  base: M0
+  variant: full-cert
+  area: metrics
+  measure: m.full_cert_share
+  expect: ge
+  value: 0.95
+  source: 'digest_otherwise false: every signed frame carries the certificate'
+  measured: '1'
+  verdict: pass
+- id: fullcert-p2pcd
+  base: M0
+  variant: full-cert
+  area: metrics
+  measure: m.p2pcd_requests
+  expect: le
+  value: 0.0
+  source: with a certificate on every frame no receiver needs to ask for one (1609.2a §8.2.4)
+  measured: '0'
+  verdict: pass
+- id: fullcert-backend-same
+  base: M0
+  variant: full-cert
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: same
+  source: attachment is a transmit choice
+  measured: 1100 -> 1100
+  verdict: pass
+- id: rsu5-app-certs
+  base: M0
+  variant: rsu5
+  area: architecture
+  measure: p2.rsu_app_certs_renewed
+  expect: eq
+  value: 5
+  source: one weekly application-certificate renewal per RSU (B3b, 169 h)
+  measured: '5'
+  verdict: pass
+- id: rsu5-reports
+  base: M0
+  variant: rsu5
+  area: metrics
+  measure: p2.reports_from_rsus
+  expect: down
+  source: fewer RSUs hear and file fewer reports
+  measured: 3616 -> 503
+  verdict: pass
+- id: rsu0-no-rsu-reports
+  base: M0
+  variant: rsu0
+  area: metrics
+  measure: p2.reports_from_rsus
+  expect: eq
+  value: 0
+  source: no RSU, nothing filed by one
+  measured: '0'
+  verdict: pass
+- id: rsu0-topups
+  base: M0
+  variant: rsu0
+  area: architecture
+  measure: p2.topups_completed
+  expect: le
+  value: 55
+  source: the 20 % with no cellular reach the RA only through an RSU (relay); with none they cannot top
+    off
+  measured: '51'
+  verdict: pass
+- id: rsu0-no-app-certs
+  base: M0
+  variant: rsu0
+  area: architecture
+  measure: p2.rsu_app_certs_renewed
+  expect: eq
+  value: 0
+  source: no RSU
+  measured: '0'
+  verdict: pass
+- id: pen0-no-cellular
+  base: M0
+  variant: pen0
+  area: architecture
+  measure: access.cellular_vehicles
+  expect: eq
+  value: 0
+  source: 'penetration 0: no device has a cellular link'
+  measured: '0'
+  verdict: pass
+- id: pen0-no-cell-uploads
+  base: M0
+  variant: pen0
+  area: architecture
+  measure: p2.reports_uploaded_cellular
+  expect: eq
+  value: 0
+  source: reports go up through the RSUs only
+  measured: '0'
+  verdict: pass
+- id: pen0-topups
+  base: M0
+  variant: pen0
+  area: architecture
+  measure: p2.topups_completed
+  expect: le
+  value: 55
+  source: top-off only within an RSU's reach (provisioning-proxy role)
+  measured: '47'
+  verdict: pass
+- id: bhcell-rsu-cert
+  base: M0
+  variant: backhaul-cellular
+  area: architecture
+  measure: flow.rsu-application-cert.median_s
+  expect: up
+  source: 'cellular backhaul has more delay than fibre: the RSU''s renewal round trips take longer'
+  measured: 60.0268 -> 60.0984
+  verdict: pass
+- id: bhcell-counts
+  base: M0
+  variant: backhaul-cellular
+  area: architecture
+  measure: p2.rsu_app_certs_renewed
+  expect: same
+  source: the backhaul changes delay, not the number of renewals
+  measured: 30 -> 30
+  verdict: pass
+- id: half-topups
+  base: M0
+  variant: fleet-half
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: down
+  min_change: 0.2
+  source: fewer vehicles present at the rollover; still 20 each
+  measured: 1100 -> 780
+  verdict: pass
+- id: half-req
+  base: M0
+  variant: fleet-half
+  area: architecture
+  measure: perdev.EeRaCertRequestSpdu.median
+  expect: eq
+  value: 1
+  source: per-device behaviour is fleet-independent
+  measured: '1'
+  verdict: pass
+- id: half-verify
+  base: M0
+  variant: fleet-half
+  area: metrics
+  measure: rv.checked
+  expect: down
+  source: fewer neighbours, fewer verifications
+  measured: 77283 -> 36486
+  verdict: pass
+- id: att10-revoked
+  base: M0
+  variant: att10
+  area: metrics
+  measure: p2.revoked_attackers
+  expect: up
+  source: about 7 attackers instead of 3, all ConstantPosition
+  measured: 1 -> 3
+  verdict: pass
+- id: att10-crl
+  base: M0
+  variant: att10
+  area: architecture
+  measure: m.crl_entries
+  expect: up
+  source: 'one CRL entry per revoked device: the CRL grows (~33 B an entry, Brecht)'
+  measured: 27 -> 27
+  verdict: open
+  note: '27 CRL entries in M0, att10 and sybil alike: att10 revokes 3 of 9 attackers (5 reported) and
+    24 honest. A constant 27 decisions across three detection settings is unexplained'
+- id: att10-cases
+  base: M0
+  variant: att10
+  area: architecture
+  measure: p2.cases_opened
+  expect: up
+  source: 'one case per accused device (gap row 27: cases run side by side)'
+  measured: 27 -> 27
+  verdict: open
+  note: 'as att10-crl: 27 cases in M0, att10, sybil'
+- id: sybil-not-revoked
+  base: M0
+  variant: sybil
+  area: metrics
+  measure: p2.revoked_attackers
+  expect: eq
+  value: 0
+  source: 'the SM-MBR PSID-0x20 profile has no Sybil check (us_mbr.rs: no heading, staleness, Sybil, map
+    or frequency check): a known detection gap'
+  measured: '1'
+  verdict: wrong-expectation
+  note: the Sybil ghosts are signed under the attacker's own pseudonyms and their positions jump, so RandomPosition
+    catches it (2,050 reports about attackers against 308 in M0); 1 of 3 revoked
+- id: malegacy-cases
+  base: M0
+  variant: ma-legacy
+  area: architecture
+  measure: p2.cases_opened
+  expect: changes
+  source: the legacy window revokes on three trusted reporters within a window; the case count is the
+    policy's (scms-realism.yaml R-MA)
+  measured: 27 -> 29
+  verdict: pass
+- id: tls12-same
+  base: M0
+  variant: tls12
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: same
+  source: TLS 1.2 adds a round trip, not a message; the top-off is unchanged
+  measured: 1100 -> 1100
+  verdict: pass
+- id: tls12-bytes
+  base: M0
+  variant: tls12
+  area: architecture
+  measure: access.backend_bytes
+  expect: same
+  source: 'cell-capacity-mm1 carries no TCP or TLS (base tcp_connections 0; scms-knobs: only packet-pf
+    does), so the TLS version cannot show'
+  measured: 17478789 -> 17478789
+  verdict: pass
+- id: real-same-topups
+  base: M0
+  variant: real-crypto
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: same
+  source: 'I-S1: real and modelled crypto give the same records (scms_scale.rs)'
+  measured: 1100 -> 1100
+  verdict: pass
+- id: real-same-revocations
+  base: M0
+  variant: real-crypto
+  area: metrics
+  measure: p2.revocations
+  expect: same
+  source: I-S1
+  measured: 27 -> 27
+  verdict: pass
+- id: real-same-frames
+  base: M0
+  variant: real-crypto
+  area: metrics
+  measure: r.frames_transmitted
+  expect: same
+  source: 'I-S1: identical frames'
+  measured: 23549 -> 23549
+  verdict: pass
+- id: real-same-sizes
+  base: M0
+  variant: real-crypto
+  area: architecture
+  measure: pdu.EeRaCertRequestSpdu.max
+  expect: same
+  source: 'I-S1: the real encoder sizes do not depend on the crypto mode'
+  measured: 422 -> 422
+  verdict: pass
+- id: real-cost
+  base: M0
+  variant: real-crypto
+  area: cost
+  measure: cost.cpu_s
+  expect: up
+  source: real P-256 arithmetic for every certificate (~0.4 CPU-s a device on release)
+  measured: 165.79 -> 190.48
+  verdict: pass
+- id: cert60-x3
+  base: M0
+  variant: cert60
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: ratio
+  band:
+  - 2.99
+  - 3.01
+  source: 60 a week instead of 20 (NYC taxis, CVP-P2 item 21)
+  measured: 1100 -> 3300 (ratio 3)
+  verdict: pass
+- id: ond-crl-earlier
+  base: M0
+  variant: crl-on-decision
+  area: architecture
+  measure: stage.enforced_s
+  expect: down
+  min_change: 0.1
+  source: 'publishing at the decision skips the wait for Wednesday''s 10:00 slot (realism: -32,334 s)'
+  measured: 147595 -> 115195
+  verdict: pass
+- id: fleet2x-req
+  base: M0
+  variant: fleet2x
+  area: architecture
+  measure: perdev.EeRaCertRequestSpdu.median
+  expect: eq
+  value: 1
+  source: per-device behaviour is fleet-independent
+  measured: '1'
+  verdict: pass
+- id: maauto-decision
+  base: M0
+  variant: ma-auto
+  area: architecture
+  measure: stage.decision_s
+  expect: delta
+  band:
+  - -28900.0
+  - -28700.0
+  source: 'no 8 h review (D3; realism: -28,800 s)'
+  measured: 115187 -> 86387.9 (delta -2.88e+04)
+  verdict: pass
+- id: maauto-published
+  base: M0
+  variant: ma-auto
+  area: architecture
+  measure: stage.published_s
+  expect: same
+  tol: 0.001
+  source: 'decided Tue 17:00 EDT, after that day''s slot: still Wednesday''s slot'
+  measured: 147582 -> 147582
+  verdict: pass
+- id: nosharing-shared
+  base: M0
+  variant: no-sharing
+  area: architecture
+  measure: p2.reports_shared
+  expect: eq
+  value: 0
+  source: sharing off
+  measured: '0'
+  verdict: pass
+- id: offctl-honest
+  base: M0
+  variant: off-ctl
+  area: metrics
+  measure: p2.revoked_honest
+  expect: le
+  value: 0
+  source: a provider off the trust list cannot get anyone honest revoked
+  measured: '7'
+  verdict: open
+  note: '7 honest revoked: the US-profile false positives (R-USFP), not the trust change. R-TRUSTLEAK
+    grew: 280 provider-b messages verified at provider-a receivers (was 7)'
+- id: west-counts
+  base: M0
+  variant: region-west
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: same
+  source: a farther region changes latency, not counts
+  measured: 1100 -> 1100
+  verdict: pass
+- id: research-honest
+  base: M0
+  variant: research-suite
+  area: metrics
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: 'the research suite''s streak gate and stated-accuracy tolerance (realism: 0 honest)'
+  measured: '0'
+  verdict: pass
+- id: research-attackers
+  base: M0
+  variant: research-suite
+  area: metrics
+  measure: p2.revoked_attackers
+  expect: eq
+  value: 3
+  source: 'realism: 3 of 3'
+  measured: '3'
+  verdict: pass
