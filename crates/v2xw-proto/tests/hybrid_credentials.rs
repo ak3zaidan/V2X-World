@@ -212,3 +212,41 @@ fn a_hybrid_device_requests_afresh_for_each_top_up() {
     let classic = scms("ecdsa-p256");
     assert!(classic.state.ra.accounts.contains_key(&DEVICE_A));
 }
+
+/// The hybrid top-up is a complete flow, not a missing one (matrix.md, "no top-off under
+/// the hybrid scheme"): the fresh request goes through the RA's request shuffle like any
+/// first request (CAMP 1.2.2: 1,000 requests or the maximum age), the PCA certifies the
+/// period, and the device downloads and installs `JMAX` certificates of it. Below the
+/// shuffle's count the batch waits the whole window, so a run shorter than the window after
+/// the top-up (the matrix's two-day run against the two-day age bound) ends before it lands.
+#[test]
+fn a_hybrid_top_up_is_installed_after_the_request_shuffle() {
+    let mut hybrid = scms("hybrid-falcon512-ecdsa-p256");
+    let window = hybrid.state.params.shuffle_window.as_nanos();
+    let held = |r: &ScmsRun, i: u32| {
+        r.state.devices[&DEVICE_A]
+            .credentials
+            .keys()
+            .filter(|(ci, _)| *ci == i)
+            .count() as u32
+    };
+    assert_eq!(
+        held(&hybrid, PERIODS),
+        0,
+        "the top-up period is not held yet"
+    );
+    let asked = hybrid.kernel.now();
+    let run = hybrid.topup(DEVICE_A, PERIODS, JMAX);
+    hybrid.run().expect("runs");
+    let installed = hybrid
+        .kernel
+        .stages
+        .at(run, v2xw_proto::StageId::Installed)
+        .expect("the hybrid top-up is installed");
+    assert_eq!(held(&hybrid, PERIODS), JMAX, "one period of certificates");
+    let waited = installed.saturating_sub(asked);
+    assert!(
+        waited >= window,
+        "installed {waited} ns after the request, inside the {window} ns request shuffle"
+    );
+}

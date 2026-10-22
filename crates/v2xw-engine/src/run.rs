@@ -854,6 +854,17 @@ struct FrameState {
     gn: Option<gn_air::GnFrame>,
 }
 
+/// What became of a transmission [`Engine::hand_down_app`] was given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HandDown {
+    /// It went down to the MAC (whole, or in the fragmenter's pieces).
+    Sent,
+    /// The network layer refused it at its MTU (counted in `net_mtu_refusals`).
+    MtuRefused,
+    /// Not sent for another reason: past the horizon, or a dilated instant.
+    NotSent,
+}
+
 /// What a Phase 2 application message carries, beyond its length.
 ///
 /// 06-node-models.md §2.1's application layer is what would hold these, and `v2xw-node`
@@ -4912,7 +4923,8 @@ impl Engine {
         self.pending_handoff = 0;
     }
 
-    /// [`Engine::hand_down`] with an application payload attached.
+    /// [`Engine::hand_down`] with an application payload attached, saying what became
+    /// of it.
     fn hand_down_app(
         &mut self,
         node: NodeId,
@@ -4920,7 +4932,7 @@ impl Engine {
         now: SimTime,
         horizon: SimTime,
         app: Option<AppPayload>,
-    ) {
+    ) -> HandDown {
         // Which node signs under which pseudonym, for the application labeller: the
         // engine's own knowledge, never handed to a node.
         if matches!(
@@ -4958,11 +4970,11 @@ impl Engine {
         // The signature's end, before the hand-off [`Engine::hand_down`] added.
         let t_signed = ready.saturating_sub(self.pending_handoff).max(t_sign_start);
         if ready > horizon {
-            return;
+            return HandDown::NotSent;
         }
         if self.is_dilated(ready) {
             self.report.suppressed_frames += 1;
-            return;
+            return HandDown::NotSent;
         }
         // `security.signature`: a scheme other than P-256 changes the octets on the air
         // (`crate::signature`); the SPDU the node built is the P-256 one. Everything below
@@ -5003,7 +5015,18 @@ impl Engine {
         // Named by the frame index its first frame will take, so an SDU's id and its first
         // frame's are the same number, as they always were for a whole frame.
         let sdu = v2xw_core::ids::SduId::new(self.next_frame);
-        let split_plan = if node_message {
+        // An engine application frame too large for one frame (a relayed report or a
+        // roadside CRL under a post-quantum signature, R-PQMBR) goes through the scenario's
+        // fragmenter as any SDU does, when that fragmenter carries whole SDUs in pieces
+        // (`fragmenter/generic-sdu`): the receiver acts on it once it is reassembled
+        // ([`Engine::resolve_group`]). One that fits is never split, so a P-256 run's
+        // application frames are unchanged. Facilities segmentation (CAM/CPM containers)
+        // and the certificate cycle cannot carry one, and `fragmenter/none` is WSMP's own
+        // rule (IEEE 1609.3 has no fragmentation): there it is refused below and counted.
+        let app_split = app.is_some()
+            && sdu_bytes > mtu
+            && self.frag_plan.kind() == Some(crate::frag::GroupKind::Message);
+        let split_plan = if node_message || app_split {
             self.frag_plan.split(sdu, sdu_bytes, mtu)
         } else {
             None
@@ -5013,7 +5036,7 @@ impl Engine {
             Some(Ok(_)) => None,
             Some(Err(_)) => {
                 self.report.net_mtu_refusals += 1;
-                return;
+                return HandDown::MtuRefused;
             }
             None => None,
         };
@@ -5042,7 +5065,7 @@ impl Engine {
         // PHY's MSDU cap with its headers already counted as offered load.
         if pieces.is_none() && whole_bytes > mtu {
             self.report.net_mtu_refusals += 1;
-            return;
+            return HandDown::MtuRefused;
         }
         let belief = self.nodes.get(&node).map(v2xw_core::NodeView::position);
         let frame = FrameSeq::new(self.next_frame);
@@ -5542,7 +5565,7 @@ impl Engine {
                 let at = AIFS.after(on_air_until);
                 if at > horizon {
                     self.frames.remove(&seq);
-                    return;
+                    return HandDown::NotSent;
                 }
                 if let Some(state) = self.frames.get_mut(&seq) {
                     state.start = at;
@@ -5559,6 +5582,7 @@ impl Engine {
                 );
             }
         }
+        HandDown::Sent
     }
 
     /// A Sybil attacker's ghost frames, one per ghost claim (07-threats §2.2).
@@ -7732,7 +7756,7 @@ impl Engine {
                     ready_at,
                     believed,
                 );
-                self.hand_down_app(
+                let handed = self.hand_down_app(
                     rsu,
                     &tx,
                     now,
@@ -7740,7 +7764,11 @@ impl Engine {
                     Some(AppPayload::Crl(Box::new((version, frame, secured.clone())))),
                 );
                 if let Some(phase2) = self.phase2.as_mut() {
-                    phase2.note_crl_broadcast();
+                    match handed {
+                        HandDown::Sent => phase2.note_crl_broadcast(),
+                        HandDown::MtuRefused => phase2.note_crl_frame_refused_mtu(),
+                        HandDown::NotSent => {}
+                    }
                 }
             }
         }
@@ -8347,6 +8375,15 @@ impl Engine {
         let Some(kind) = self.phase2.as_ref().map(|p| p.access_kind(node)) else {
             return;
         };
+        // A report the device cannot build as a real SM-MBR upload has no bytes to send
+        // (OF-2): it never reaches the access link (`Phase2::files_report`).
+        if !self
+            .phase2
+            .as_mut()
+            .is_some_and(|p| p.files_report(&report))
+        {
+            return;
+        }
         let pos = self.actor_of(node).map_or(Vec3::ZERO, |a| a.last.pos);
         let bytes = crate::phase2::report_bytes();
         let sign = self.signing_cost(node);
@@ -8490,16 +8527,24 @@ impl Engine {
             self.signing_cost(node).after(believed),
             believed,
         );
-        if let Some(p) = self.phase2.as_mut() {
-            p.note_upload(node, crate::backend::AccessKind::RsuRelay);
-        }
-        self.hand_down_app(
+        // Counted as an upload only once it is on the air (R-PQMBR): a signed report the
+        // network layer cannot carry (a post-quantum signature over WSMP with no SDU
+        // fragmenter) never left the device. The stack refuses that SDU every time, so
+        // the report is not kept for another try; it is counted and lost.
+        let handed = self.hand_down_app(
             node,
             &tx,
             now,
             horizon,
             Some(AppPayload::Report(Box::new(report))),
         );
+        if let Some(p) = self.phase2.as_mut() {
+            match handed {
+                HandDown::Sent => p.note_upload(node, crate::backend::AccessKind::RsuRelay),
+                HandDown::MtuRefused => p.note_report_refused_mtu(),
+                HandDown::NotSent => {}
+            }
+        }
         None
     }
 
@@ -9179,6 +9224,22 @@ impl Engine {
                 } else {
                     // Reassembled by a radio whose node no longer exists.
                     self.emit(recorder, &attempt.lost(now, rx_cause::RECEIVER_OFF));
+                }
+                // An application frame the fragmenter carried in pieces (R-PQMBR): the
+                // receiver acts on it now that it is whole, as on a whole frame. Its
+                // journey's air leg is the last fragment's.
+                if let Some(app) = state.app.clone() {
+                    let journey = ReportJourney {
+                        msg: state.frag.map_or(0, |m| m.sdu_msg),
+                        t_generated: state.t_generated,
+                        t_sign_start: state.t_sign_start,
+                        t_signed: state.t_signed,
+                        t_tx_start: state.start,
+                        t_tx_end: state.end,
+                        t_arrival: arrival,
+                    };
+                    let horizon = self.scenario.time.horizon_ns();
+                    self.on_app_message(recorder, rx, state.tx, &app, now, horizon, journey);
                 }
             }
             (cause, _) => {

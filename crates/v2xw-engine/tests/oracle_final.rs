@@ -4,7 +4,8 @@
 //! Written from the engine's public outputs only: the `pki.flow`, `pki.knowledge` and
 //! `node.credentials` records of `scenarios/scms-oracle-repro.yaml` (the conformance run's
 //! first 640 s). No engine source was read to write them. Both fail on the engine of
-//! 2004bb87, so they are ignored until the engine is fixed:
+//! 2004bb87. OF-2 is fixed (a report the device cannot build as an SM-MBR upload is never
+//! uploaded, `Phase2::files_report`) and runs; OF-1 stays ignored until the engine is fixed:
 //! `cargo test -p v2xw-engine --test oracle_final -- --ignored`.
 //!
 //! * OF-1: a device has one enrolment certificate (IEEE 1609.2.1 6.3.4.2 issues it; the DCM
@@ -142,7 +143,6 @@ fn one_enrolment_certificate_is_issued_registered_and_signs_every_download_reque
 }
 
 #[test]
-#[ignore = "OF-2 (oracle-final.md): fails on 2004bb87, most cellular report uploads carry no SPDU"]
 fn every_cellular_report_upload_carries_its_spdus() {
     let r = run();
     let (mut with, mut without) = (0u64, 0u64);
