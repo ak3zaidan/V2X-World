@@ -121,6 +121,10 @@ pub struct DeviceState {
     pub successor_credential: Option<crate::scms::pdu::EnrolmentCredential>,
     /// Download polls the RA answered "not ready" for the successor in flight.
     pub successor_polls: u32,
+    /// The age of the enrolment certificate its first ECA exchange is to issue
+    /// ([`ScmsRun::age_enrolment`]): the model certificate and the Time32 start the
+    /// request asks for, back-dated with the full lifetime. Taken when the ECA issues.
+    pub enrolment_age: Option<(EnrolmentCert, u32)>,
     /// The canonical private key, made in the secure environment at manufacture
     /// (direct authorisation, [SMP] §2.1.7); it signs the first enrolment request.
     canonical: Option<p256::Scalar>,
@@ -282,6 +286,7 @@ impl DeviceState {
             successor: None,
             successor_credential: None,
             successor_polls: 0,
+            enrolment_age: None,
             canonical: None,
             enrol_request: None,
             successor_request: None,

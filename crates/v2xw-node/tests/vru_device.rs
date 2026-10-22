@@ -427,6 +427,7 @@ fn rx_frame(j: u32) -> RxFrame {
         full_certificate: true,
         signature_valid: true,
         spdu: None,
+        signer_certificate: None,
     }
 }
 

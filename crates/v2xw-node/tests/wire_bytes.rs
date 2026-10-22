@@ -698,6 +698,7 @@ fn a_receiver_revokes_on_the_certificates_own_linkage_data() {
             // has the bytes.
             signature_valid: false,
             spdu: Some(signed.spdu.clone()),
+            signer_certificate: None,
         };
         let reg = RngRegistry::new(29);
         let mut out = Vec::new();

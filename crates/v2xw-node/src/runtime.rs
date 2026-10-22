@@ -104,6 +104,12 @@ pub struct RxFrame {
     /// legacy path, where the engine decided validity on the node's behalf and the node
     /// only pays for the check. See [`ObuRuntime::classify`].
     pub spdu: Option<Vec<u8>>,
+    /// On the legacy path (`spdu` `None`): the signer certificate the frame attaches,
+    /// which the receiver validates to its installed roots before
+    /// [`RxFrame::signature_valid`] counts ([`NodeSecurity::verify_sized`]). `None` when
+    /// the frame carries its SPDU (the certificate is in the bytes) or when the engine
+    /// has none to attach.
+    pub signer_certificate: Option<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
 }
 
 /// A message this node received and has an opinion about — the
@@ -1668,7 +1674,17 @@ impl ObuRuntime {
                 (SpduVerdict::Refused, _) => return VerificationState::Invalid,
                 (SpduVerdict::Revoked, _) => return VerificationState::Revoked,
             },
-            None => (frame.signature_valid, None),
+            None => match self.security.verify_sized(
+                ctx,
+                frame.signer_certificate.as_deref(),
+                frame.signature_valid,
+            ) {
+                (SpduVerdict::Valid, linkage) => (true, linkage),
+                (SpduVerdict::Invalid, _) => (false, None),
+                (SpduVerdict::Unverifiable, _) => return VerificationState::Unverified,
+                (SpduVerdict::Refused, _) => return VerificationState::Invalid,
+                (SpduVerdict::Revoked, _) => return VerificationState::Revoked,
+            },
         };
         if !authentic {
             return VerificationState::Invalid;
@@ -1991,6 +2007,7 @@ impl ObuRuntime {
                     full_certificate,
                     signature_valid: true,
                     spdu: None,
+                    signer_certificate: None,
                 },
                 enqueued_at: believed,
             }) {

@@ -861,6 +861,120 @@ fn a_sender_whose_clock_lags_stamps_its_own_time_and_keeps_an_expired_certificat
     }
 }
 
+/// R-TRUSTLEAK (testing/matrix.md): a frame the engine sizes rather than encodes (a
+/// roadside unit's CRL frame, a report relayed over the air) reaches the receiver with its
+/// signer's certificate and no SPDU. It used to verify on the engine's word alone, so a
+/// provider's frames still verified after the CTL dropped its root. The receiver now holds
+/// the certificate to its installed roots before the modelled signature counts, and hands
+/// its linkage data to the CRL check.
+#[test]
+fn a_sized_frame_is_held_to_the_installed_roots() {
+    let pki = pki();
+    let other = ScmsPki::new(8, t0() - 31_556_952).unwrap();
+    let key = pseudonym(&pki, &pki.aca, 16, |_| {});
+    let cert: Certificate = key.certificate().as_ref().clone();
+    let roots = |p: &ScmsPki| vec![Arc::new(p.root.cert.clone())];
+    let reg = RngRegistry::new(4);
+    for mode in MODES {
+        let mut ctx = NodeRuntimeCtx::new(11 * NS_PER_S, &reg);
+        let mut rx = trusted(mode, &pki);
+        let (v, linkage) = rx.verify_sized(&mut ctx, Some(&cert), true);
+        assert_eq!(v, SpduVerdict::Valid, "{mode:?}");
+        assert!(linkage.is_some(), "its linkage data reaches the CRL check");
+        assert_eq!(
+            rx.verify_sized(&mut ctx, Some(&cert), false).0,
+            SpduVerdict::Invalid,
+            "a bad modelled signature still fails"
+        );
+        // The CTL drops the root: refused from then on, whatever the engine says.
+        assert_eq!(rx.apply_ctl(&roots(&other), &[]), (1, 1));
+        assert_eq!(
+            rx.verify_sized(&mut ctx, Some(&cert), true).0,
+            SpduVerdict::Refused,
+            "{mode:?}"
+        );
+        assert_eq!(refused(&rx, "chain-untrusted-root"), 1, "{mode:?}");
+        // A receiver that never held this provider's chain file has concluded nothing.
+        let mut stranger = trusted(mode, &other);
+        assert_eq!(
+            stranger.verify_sized(&mut ctx, Some(&cert), true).0,
+            SpduVerdict::Unverifiable
+        );
+        // No certificate to check: the engine's word, and counted as unchecked.
+        let before = stranger.trust().stats.chain_unchecked;
+        assert_eq!(
+            stranger.verify_sized(&mut ctx, None, true),
+            (SpduVerdict::Valid, None)
+        );
+        assert_eq!(stranger.trust().stats.chain_unchecked, before + 1);
+    }
+}
+
+/// R-TRUSTLEAK at a roadside unit: a misbehaviour report relayed over the air is a sized
+/// frame. The unit forwarded any whose modelled signature was good, so a provider off the
+/// CTL could use the infrastructure of the other provider as a relay. It now forwards one
+/// only when the attached certificate chains to a root it trusts.
+#[test]
+fn a_unit_forwards_a_sized_report_only_under_a_trusted_root() {
+    use v2xw_core::geom::Vec3;
+    use v2xw_node::rsu::{Backhaul, RsuConfig, RsuRole, RsuRoles, RsuRuntime};
+    use v2xw_node::runtime::RxFrame;
+    use v2xw_node::stores::VerificationState;
+    let pki = pki();
+    let other = ScmsPki::new(8, t0() - 31_556_952).unwrap();
+    let trusted_key = pseudonym(&pki, &pki.aca, 17, |_| {});
+    let rogue_key = pseudonym(&other, &other.aca, 18, |_| {});
+    let cas: Vec<Arc<Certificate>> = pki.all().iter().map(|a| Arc::new(a.cert.clone())).collect();
+    let relay = |key: &ImplicitKey| {
+        let profile = v2xw_node::profiles::get(v2xw_node::profiles::DEFAULT_RSU)
+            .expect("the default roadside profile")
+            .clone();
+        let mut cfg = RsuConfig::with_roles(RsuRoles::NONE.with(RsuRole::ReportForwarding));
+        cfg.wall = wall();
+        let mut u = RsuRuntime::new(
+            v2xw_core::ids::NodeId::new(50),
+            profile,
+            cfg,
+            Backhaul::fibre(),
+            0,
+        );
+        u.stores_mut().crl.set_period(0);
+        u.security_mut()
+            .install_trust(&[Arc::new(pki.root.cert.clone())], &cas);
+        let cert = Arc::clone(key.certificate());
+        let frame = RxFrame {
+            signer: Some(cert::cert_id8(&cert).expect("digest")),
+            msg_type: MsgType::Mbr,
+            bytes: 1_200,
+            claimed_pos: Some(Vec3::new(120.0, 100.0, 1.5)),
+            claimed_speed_mps: 12.0,
+            claimed_heading_rad: 0.0,
+            claimed_generation_time: 10 * NS_PER_S,
+            full_certificate: true,
+            signature_valid: true,
+            spdu: None,
+            signer_certificate: Some(cert),
+        };
+        let reg = RngRegistry::new(55);
+        let mut ctx = NodeRuntimeCtx::new(11 * NS_PER_S, &reg);
+        let out = u.step(&mut ctx, vec![frame]);
+        (
+            out.forwarded.len(),
+            out.delivered.first().map(|m| m.verification),
+            u.security().trust().stats.chain_unchecked,
+        )
+    };
+    let (n, v, unchecked) = relay(&trusted_key);
+    assert_eq!(
+        (n, v, unchecked),
+        (1, Some(VerificationState::Verified), 0),
+        "under the unit's root: checked, verified, forwarded"
+    );
+    let (n, v, _) = relay(&rogue_key);
+    assert_eq!(n, 0, "under a root the unit does not trust: not forwarded");
+    assert_ne!(v, Some(VerificationState::Verified));
+}
+
 // Edge-case package, item 8: a provider's root removed from the CTL mid-run.
 #[test]
 fn a_root_a_newer_ctl_drops_is_refused_from_then_on_and_an_unchanged_ctl_forgets_nothing() {

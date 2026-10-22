@@ -126,6 +126,7 @@ fn frame(from: u32, pos: Vec3, at: SimTime, valid: bool) -> RxFrame {
         full_certificate: false,
         signature_valid: valid,
         spdu: None,
+        signer_certificate: None,
     }
 }
 

@@ -722,6 +722,11 @@ impl RxTrust {
         !self.anchors.is_empty()
     }
 
+    /// How many signed CRLs are installed, one per `(crlCraca, crlSeries)`.
+    pub fn crls_held(&self) -> usize {
+        self.crls.len()
+    }
+
     /// Installs a CTL-approved root as a trust anchor.
     pub fn install_root(&mut self, root: &Certificate) {
         if let Ok(h) = cert::hashed_id32(root) {
@@ -985,6 +990,39 @@ impl RxTrust {
         }
     }
 
+    /// Validates a signer certificate that reached the node without the SPDU it signed:
+    /// a frame the engine sizes rather than encodes carries the certificate it would have
+    /// attached ([`crate::runtime::RxFrame::signer_certificate`]). Every rule of
+    /// [`RxTrust::validate_signer`] that reads the certificate alone applies (the overdue
+    /// CRL, validity at the receiver's `now32`, the chain to an installed root, hash
+    /// revocation); the SPDU-level ones (PSID, `generationTime`, `generationLocation`)
+    /// need bytes the frame does not carry. Before this check such a frame verified under
+    /// any root, one the CTL had dropped included (R-TRUSTLEAK).
+    ///
+    /// # Errors
+    /// As [`RxTrust::validate_signer`].
+    pub fn validate_certificate(
+        &mut self,
+        cas: &BTreeMap<[u8; 8], Arc<Certificate>>,
+        ee: &Certificate,
+        now32: u32,
+    ) -> Result<(), RxReject> {
+        if !self.is_installed() {
+            self.stats.chain_unchecked += 1;
+            return Ok(());
+        }
+        self.stats.checked += 1;
+        let r = if self.overdue(craca3(ee), now32) {
+            Err(RxReject::CrlOverdue)
+        } else {
+            self.validate_certificate_inner(cas, ee, now32)
+        };
+        match r {
+            Err(RxReject::UnknownIssuer) | Ok(()) => r,
+            Err(e) => Err(self.refuse(e)),
+        }
+    }
+
     fn validate_inner(
         &mut self,
         cas: &BTreeMap<[u8; 8], Arc<Certificate>>,
@@ -1016,6 +1054,18 @@ impl RxTrust {
                 None => self.stats.region_unchecked += 1,
             }
         }
+        self.validate_certificate_inner(cas, ee, now32)
+    }
+
+    /// The certificate rules of [`RxTrust::validate_inner`], after the SPDU-level ones:
+    /// validity at `now32`, the chain, the end-entity link and hash revocation.
+    fn validate_certificate_inner(
+        &mut self,
+        cas: &BTreeMap<[u8; 8], Arc<Certificate>>,
+        ee: &Certificate,
+        now32: u32,
+    ) -> Result<(), RxReject> {
+        let (start, end) = v2xw_sec::ctl::validity(ee);
         let now = u64::from(now32);
         if now < start || now >= end {
             return Err(RxReject::Chain(ChainErrorKind::Expired));

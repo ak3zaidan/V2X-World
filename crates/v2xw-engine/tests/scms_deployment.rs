@@ -163,3 +163,97 @@ fn the_deployment_settings_are_refused_where_they_cannot_apply() {
         .to_string();
     assert!(e.contains("security.scms"), "{e}");
 }
+
+/// R-NOCRL (testing/stress.md): every provider's CRL Generator publishes at `t0`, an
+/// empty list when nothing stands on it, and renews it a week later, as a CRACA of a
+/// deployment that has run for years does. Before, a Generator published nothing until
+/// its first revocation, so the two-week overdue rule could never act on a CRACA that
+/// had not revoked in the run.
+#[test]
+fn every_provider_publishes_its_crl_at_the_start() {
+    let mut s = load(None);
+    s.time.duration_s = 10.0;
+    let mut engine = Engine::build(s, "").expect("builds");
+    let runs = engine.phase2().expect("an SCMS run").scms_runs();
+    assert_eq!(runs.len(), 2, "two providers");
+    for (k, r) in runs.iter().enumerate() {
+        let st = &r.state;
+        assert!(st.crlg.entries.is_empty(), "provider {k}: nothing stands");
+        let first = st
+            .crlg
+            .issued
+            .iter()
+            .find(|c| c.series == 1)
+            .unwrap_or_else(|| panic!("provider {k} published no CRL at t0"));
+        assert_eq!((first.at, first.entries, first.delta), (0, 0, false));
+        assert_eq!(first.next_crl - first.issue_date, 7 * 86_400);
+        assert!(
+            st.crl_store.secured.as_ref().map(|p| p.bytes()) == Some(first.pdu.bytes()),
+            "provider {k}: the store serves it from t0"
+        );
+    }
+    let report = engine
+        .run(&mut v2xw_engine::DigestRecorder::new())
+        .expect("runs");
+    // Every device joins holding both providers' lists, verified by its own trust (it
+    // was on the road before the run), so the overdue rule has a list to act on.
+    let devices = engine.phase2().unwrap().device_nodes();
+    assert!(!devices.is_empty(), "devices joined");
+    for d in devices {
+        assert_eq!(engine.node_crls_held(d), 2, "{d:?} holds both t0 lists");
+    }
+    assert_eq!(report.phase2.crl_frames_rejected, 0);
+}
+
+/// R-TRUSTLEAK (testing/realism.md, matrix.md): with provider-b off the CTL, nothing it
+/// certifies verifies at provider-a's receivers. Its roadside units' CRL frames (and the
+/// reports relayed over the air) are sized, not encoded, and verified on the engine's
+/// word alone: 7, then 280, provider-b messages verified at provider-a in the realism
+/// runs. The engine now attaches the signer's certificate to every sized frame and each
+/// receiver holds it to its own installed roots: here, no CRL frame is accepted
+/// unchecked. The refusal under a dropped root is proven at the node
+/// (`v2xw-node` tests/rx_validation.rs, the sized-frame tests).
+#[test]
+fn nothing_a_provider_off_the_ctl_certifies_verifies() {
+    let mut s = load(Some(serde_json::json!({
+        "providers": [{"name": "provider-b", "on_ctl": false}]
+    })));
+    s.time.duration_s = 30.0;
+    // A standing list from t0 and every unit broadcasting it, so units of both providers
+    // put sized CRL frames on the air from the start.
+    s.security.protocol = Some(
+        serde_json::from_value(serde_json::json!({
+            "id": "protocol/scms/camp",
+            "params": {"crl_background_entries": 3}
+        }))
+        .expect("choice"),
+    );
+    for r in &mut s.actors.rsus {
+        r.roles.push("crl".into());
+    }
+    let mut engine = Engine::build(s, "").expect("builds");
+    let report = engine
+        .run(&mut v2xw_engine::DigestRecorder::new())
+        .expect("runs");
+    let p = &report.phase2;
+    let get = |k: &str| p.verified_by_provider.get(k).copied().unwrap_or(0);
+    assert!(p.crl_broadcasts > 0, "the units broadcast the list");
+    // Every sized CRL frame a vehicle took off the air carried its signer's certificate
+    // and was held to the vehicle's roots: none was accepted on the engine's word.
+    assert_eq!(
+        report.receiver_validation.chain_unchecked, 0,
+        "{:?}",
+        report.receiver_validation
+    );
+    assert!(
+        get("provider-a<-provider-a") > 0,
+        "{:?}",
+        p.verified_by_provider
+    );
+    assert_eq!(
+        get("provider-a<-provider-b"),
+        0,
+        "{:?}",
+        p.verified_by_provider
+    );
+}

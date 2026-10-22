@@ -135,6 +135,8 @@ fn a_revocation_publishes_a_real_secured_crl_that_revokes_exactly_the_device() {
 #[test]
 fn a_second_revocation_issues_a_full_and_a_delta_crl() {
     let mut run = deployment(3);
+    // Deltas are off under the US profile (O-1); selected here for their encoding.
+    run.state.params.crl.deltas = true;
     for d in [DEVICE_A, DEVICE_B] {
         provisioned(&mut run, d, 0, 1, JMAX);
     }
@@ -175,6 +177,51 @@ fn a_second_revocation_issues_a_full_and_a_delta_crl() {
     assert_eq!(d.index_within_i.0, 2, "full 1, then its delta 2");
     assert!(crl::revokes(&delta.contents, &implicit(&run, DEVICE_B, 0)));
     assert!(!crl::revokes(&delta.contents, &implicit(&run, DEVICE_A, 0)));
+}
+
+/// O-1 (oracle-final.md): the Generator signed a delta with every full CRL from the
+/// second on, and nothing ever sent it, so a device saw `indexWithinI` jump 1 -> 3.
+/// Under the US profile (full lists only, `CrlIssuance::deltas`) every series-1 CRL it
+/// signs is a full one, the last is what both distribution paths hold, and the index
+/// counts up with no gap.
+#[test]
+fn the_us_profile_signs_only_the_full_crls_it_distributes() {
+    use v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents as T;
+    let mut run = deployment(3);
+    assert!(!run.state.params.crl.deltas, "full lists only by default");
+    for d in [DEVICE_A, DEVICE_B] {
+        provisioned(&mut run, d, 0, 1, JMAX);
+    }
+    revoke_a(&mut run);
+    let lv = run.state.devices[&DEVICE_B].credentials[&(0, 0)].lv;
+    run.submit_report(DEVICE_A, 0, lv);
+    run.run().expect("runs");
+    run.revoke(1, 0, JMAX).expect("held");
+    run.run().expect("runs");
+    let st = &run.state;
+    let series1: Vec<_> = st.crlg.issued.iter().filter(|c| c.series == 1).collect();
+    assert_eq!(
+        series1.iter().map(|c| c.delta).collect::<Vec<_>>(),
+        vec![false, false],
+        "two publications, two full CRLs and no delta"
+    );
+    assert!(st.crlg.delta.is_none());
+    let index: Vec<u8> = series1
+        .iter()
+        .map(|c| match crl::decode_crl(c.pdu.bytes()).unwrap().contents.type_specific {
+            T::fullLinkedCrl(t) => t.index_within_i.0,
+            other => panic!("a full linkage CRL, not {other:?}"),
+        })
+        .collect();
+    assert_eq!(index, vec![0, 1], "no gap a device could see");
+    let last = series1.last().unwrap().pdu.bytes();
+    for (path, store) in [("store", &st.crl_store), ("roadside", &st.crl_broadcast)] {
+        assert_eq!(
+            store.secured.as_ref().map(|p| p.bytes()),
+            Some(last),
+            "the {path} path distributes the last CRL signed"
+        );
+    }
 }
 
 #[test]

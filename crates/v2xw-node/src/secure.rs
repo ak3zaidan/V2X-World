@@ -1329,6 +1329,53 @@ impl NodeSecurity {
         }
     }
 
+    /// What a receiver concludes about a frame that carries no SPDU (a frame the engine
+    /// sizes rather than encodes: a roadside unit's CRL frame, a report relayed over the
+    /// air): `signature_valid` is the engine's modelled verdict on the signature, and
+    /// `certificate` the signer certificate the frame attaches. With a trust store
+    /// installed the certificate is held to every receiver rule that reads it alone
+    /// ([`crate::rxval::RxTrust::validate_certificate`]) before the modelled signature
+    /// counts, and its linkage data is returned for the CRL check, so a frame under a
+    /// root the CTL does not approve, or from a revoked signer, is not accepted because
+    /// it was sized (R-TRUSTLEAK). Without a certificate nothing can be checked and the
+    /// frame is counted in [`crate::rxval::RxStats::chain_unchecked`].
+    pub fn verify_sized(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        certificate: Option<&Certificate>,
+        signature_valid: bool,
+    ) -> (SpduVerdict, Option<crate::rxval::LinkageKey>) {
+        let modelled = if signature_valid {
+            SpduVerdict::Valid
+        } else {
+            SpduVerdict::Invalid
+        };
+        let Some(certificate) = certificate else {
+            self.trust.stats.chain_unchecked += 1;
+            return (modelled, None);
+        };
+        let now32 = self
+            .wall
+            .time32(skew(ctx.now(), self.clock_offset_ns))
+            .unwrap_or(0);
+        match self
+            .trust
+            .validate_certificate(&self.issuers, certificate, now32)
+        {
+            Ok(()) => {}
+            Err(crate::rxval::RxReject::UnknownIssuer) => return (SpduVerdict::Unverifiable, None),
+            Err(r) if r.is_revocation() => return (SpduVerdict::Revoked, None),
+            Err(_) => return (SpduVerdict::Refused, None),
+        }
+        (modelled, crate::rxval::linkage_key(certificate))
+    }
+
+    /// The provisioned signer whose certificate has digest `digest`, if any: the
+    /// certificate a sized frame signed under it attaches.
+    pub fn signer_by_digest(&self, digest: &HashedId8) -> Option<&SignerHandle> {
+        self.signers.values().find(|s| s.digest() == digest)
+    }
+
     /// The certificate a parsed SPDU attached, if it attached one.
     pub fn attached_certificate(parsed: &ParsedSecured) -> Option<Arc<Certificate>> {
         match &parsed.signer {

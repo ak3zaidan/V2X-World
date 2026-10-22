@@ -796,6 +796,11 @@ struct FrameState {
     /// table and never build one; the receiver then falls back to the engine's own
     /// validity decision, which is what [`v2xw_node::RxFrame::spdu`] documents.
     spdu: Option<Vec<u8>>,
+    /// For those two frames: the certificate of the credential that signed them (both
+    /// attach it), which every receiver validates to its own installed roots before the
+    /// engine's validity decision counts (R-TRUSTLEAK: without it a provider's frames
+    /// verified after the CTL dropped its root). `None` when `spdu` carries the bytes.
+    signer_certificate: Option<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
     /// The facilities-layer payload's length in octets, when the node encoded one.
     ///
     /// This and [`FrameState::envelope_bytes`] are what make `node.tx`'s `payload_bytes`
@@ -1901,6 +1906,15 @@ impl Engine {
         self.nodes
             .get(&node)
             .map_or(0, |n| n.stores().certs.credentials().len())
+    }
+
+    /// How many signed CRLs (one per `(crlCraca, crlSeries)`) a node's own receiver trust
+    /// has verified and installed (0 for an unknown node): what the overdue rule acts on.
+    #[must_use]
+    pub fn node_crls_held(&self, node: NodeId) -> usize {
+        self.nodes
+            .get(&node)
+            .map_or(0, |n| n.security().trust().crls_held())
     }
 
     /// How many messages a node had due and did not send for want of a usable
@@ -3413,6 +3427,15 @@ impl Engine {
         self.note_node_created(id);
         self.node_class.insert(id, radio_class(class));
         self.report.nodes_created += 1;
+        // A device joins holding every provider's `t0` CRL (R-NOCRL): it was on the road
+        // before the run and fetched them within the week. Installed as a download would
+        // be, verified by the node itself; pre-run, so nothing is recorded.
+        if let Some((version, entries, secured)) =
+            self.phase2.as_mut().and_then(|p| p.prerun_crl(id))
+        {
+            let mut null = crate::ctx::NullRecorder::new();
+            self.install_crl_at(&mut null, id, version, &entries, &secured, now, false);
+        }
         if self.phase2.is_some() {
             let Engine {
                 scheduler,
@@ -5378,7 +5401,18 @@ impl Engine {
             psdu_total: psdu,
             air_total_us: air.as_nanos() / 1_000,
         });
+        // A sized frame (no SPDU) attaches its signer's certificate, which the receiver
+        // validates to its own roots (R-TRUSTLEAK). A P2PCD response carries its bytes.
+        let signer_certificate = if tx.signed.is_none() {
+            self.nodes
+                .get(&node)
+                .and_then(|n| n.security().signer_by_digest(&tx.signer))
+                .map(|s| std::sync::Arc::clone(&s.certificate))
+        } else {
+            None
+        };
         let base = FrameState {
+            signer_certificate,
             tx: node,
             // Filled in when the grant fixes the transmit instant; a frame that is
             // still queued has no position on the air yet.
@@ -9387,6 +9421,7 @@ fn rx_frame(state: &FrameState, bytes: u32) -> RxFrame {
         // verification time, which `ObuRuntime::step` charges against its servers.
         signature_valid: state.signature_valid,
         spdu: state.spdu.clone(),
+        signer_certificate: state.signer_certificate.clone(),
     }
 }
 

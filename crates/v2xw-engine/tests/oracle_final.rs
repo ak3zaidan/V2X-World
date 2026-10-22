@@ -4,8 +4,8 @@
 //! Written from the engine's public outputs only: the `pki.flow`, `pki.knowledge` and
 //! `node.credentials` records of `scenarios/scms-oracle-repro.yaml` (the conformance run's
 //! first 640 s). No engine source was read to write them. Both fail on the engine of
-//! 2004bb87, so they are ignored until the engine is fixed:
-//! `cargo test -p v2xw-engine --test oracle_final -- --ignored`.
+//! 2004bb87, so they were ignored until the engine is fixed; OF-1 is fixed and runs, OF-2
+//! is still ignored: `cargo test -p v2xw-engine --test oracle_final -- --ignored`.
 //!
 //! * OF-1: a device has one enrolment certificate (IEEE 1609.2.1 6.3.4.2 issues it; the DCM
 //!   registers it with the RA, [CAMP122] 5.2; every Download-Req is signed by it, [CAMP122]
@@ -93,8 +93,9 @@ fn pdus(flow: &[Value]) -> impl Iterator<Item = (&Value, &Value)> {
     })
 }
 
+// OF-1 is fixed (`ScmsRun::age_enrolment`): the device's one ECA exchange issues the aged,
+// back-dated certificate, so this runs by default.
 #[test]
-#[ignore = "OF-1 (oracle-final.md): fails on 2004bb87, two enrolment certificates per vehicle"]
 fn one_enrolment_certificate_is_issued_registered_and_signs_every_download_request() {
     let r = run();
     assert!(

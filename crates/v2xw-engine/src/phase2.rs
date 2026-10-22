@@ -1724,6 +1724,10 @@ pub struct Phase2 {
     /// once the inter-provider link has carried it (WP-D1; the composite CRL of
     /// 1609.2.1 §6.3.5.7).
     crl_feeds: Vec<Vec<CrlVersion>>,
+    /// The lists every provider published at `t0` (R-NOCRL), which a device holds when it
+    /// joins: it was on the road before the run and fetched them within the week. Their
+    /// entry count, the sum of the stores' serials, the entries and the signed CRLs.
+    prerun_crl: (u32, u64, Vec<CrlLinkageEntry>, Vec<std::sync::Arc<[u8]>>),
     /// The backend's clock at its last step.
     backend_now: SimTime,
     /// Per provider, the internet leg from the scenario's city to its region that a
@@ -2374,14 +2378,6 @@ impl Phase2 {
             })?);
         }
         runs.insert(0, scms);
-        // A deployment's CRL is never empty: the revocations of earlier years stand on
-        // it (`crl_background_entries`, default 0). They are signed into the home
-        // provider's first real CRL, so every download is charged their encoded bytes and
-        // every receiver checks against them.
-        let standing = LifecycleParams::background_entries(scenario);
-        if standing > 0 {
-            runs[0].seed_standing_crl(standing);
-        }
         // Per provider (WP-D1): its own CRL publication rule, and its own MA mode when
         // the scenario names one for it (`providers[].ma_mode`; otherwise the run-wide
         // `ma_review_s` rule applies to every provider).
@@ -2410,6 +2406,38 @@ impl Phase2 {
                 run.state.params.ma.mode = prov.ma_mode;
             }
         }
+        // Every CRACA's CRL exists before the run (R-NOCRL): the real deployment has
+        // published weekly since long before `t0` ([1609.2] `nextCrl`; a device stops
+        // trusting a CRACA two weeks past it, [CAMP122] Table 67 `overdue_CRL_tolerance`),
+        // so each provider's CRL Generator signs its list at `t0`, empty when nothing
+        // stands on it, and renews it on its `nextCrl` from then on. Before this a
+        // Generator published nothing until its first revocation, so the overdue rule
+        // could never act on a CRACA that had not revoked in the run. The home
+        // provider's list also carries the revocations of earlier years
+        // (`crl_background_entries`, default 0), so every download is charged their
+        // encoded bytes and every receiver checks against them. Seeded after each
+        // provider's publication rule is set, so the renewal follows that rule.
+        let standing = LifecycleParams::background_entries(scenario);
+        for (k, run) in runs.iter_mut().enumerate() {
+            run.seed_standing_crl(if k == 0 { standing } else { 0 });
+        }
+        let prerun_crl = {
+            let entries: Vec<CrlLinkageEntry> = runs
+                .iter()
+                .flat_map(|r| r.state.crl_store.entries.iter().copied())
+                .collect();
+            (
+                u32::try_from(entries.len()).unwrap_or(u32::MAX),
+                runs.iter()
+                    .map(|r| u64::from(r.state.crl_store.versions))
+                    .sum(),
+                entries,
+                runs.iter()
+                    .filter_map(|r| r.state.crl_store.secured.as_ref())
+                    .map(|p| std::sync::Arc::<[u8]>::from(p.bytes()))
+                    .collect(),
+            )
+        };
         // The deployment sets the elector count and quorum and, under the region model,
         // the intra-region backend latency (WP-D1).
         let params = LifecycleParams {
@@ -2475,6 +2503,7 @@ impl Phase2 {
             device_provider: BTreeMap::new(),
             fleet_seed: scenario.seed,
             crl_feeds: vec![Vec::new(); providers],
+            prerun_crl,
             backend_now: 0,
             internet_legs,
             etsi,
@@ -3177,6 +3206,26 @@ impl Phase2 {
         if vru {
             self.runs[k].set_device_psids(device, self.params.vru_psids);
         }
+        // A vehicle on the road holds an enrolment certificate issued some time before the
+        // run — at the factory or at its last renewal — so its remaining validity is
+        // uniform over the lifetime, drawn from the vehicle's own keyed stream. With the
+        // default six years almost no run sees a renewal; a compressed lifetime does.
+        // The age is stated before the pre-run enrolment, so the one certificate the
+        // device's ECA exchange issues, the DCM registers and every Download-Req is signed
+        // by carries it as a back-dated start with the whole lifetime (OF-1). The start
+        // cannot precede the ECA's own, which can leave the certificate younger than drawn.
+        let lifetime = self.params.scms.enrolment_lifetime.as_nanos().max(1);
+        let u = rng
+            .checkout(
+                v2xw_core::rng::RngDomain::Backend,
+                v2xw_core::rng::EntityRef::custom("phase2/enrolment-age", u64::from(node.index())),
+            )
+            .f64();
+        let remaining = ((u * lifetime as f64) as u64).clamp(1, lifetime);
+        let until = self.runs[k]
+            .age_enrolment(device, now.saturating_add(remaining))
+            .valid_until;
+        let remaining = until.saturating_sub(now);
         let preloaded =
             self.runs[k].preload(device, start, self.params.pool_periods, self.params.jmax);
         if preloaded.is_err() {
@@ -3199,27 +3248,6 @@ impl Phase2 {
             self.report.vehicles_unprovisioned += 1;
         }
         let last = start + self.params.pool_periods.saturating_sub(1);
-        // A vehicle on the road holds an enrolment certificate issued some time before the
-        // run — at the factory or at its last renewal — so its remaining validity is
-        // uniform over the lifetime, drawn from the vehicle's own keyed stream. With the
-        // default six years almost no run sees a renewal; a compressed lifetime does.
-        let lifetime = self.params.scms.enrolment_lifetime.as_nanos().max(1);
-        let u = rng
-            .checkout(
-                v2xw_core::rng::RngDomain::Backend,
-                v2xw_core::rng::EntityRef::custom("phase2/enrolment-age", u64::from(node.index())),
-            )
-            .f64();
-        let remaining = ((u * lifetime as f64) as u64).clamp(1, lifetime);
-        let until = now.saturating_add(remaining);
-        self.run_of_mut(device).set_enrolment(
-            device,
-            v2xw_proto::scms::msg::EnrolmentCert {
-                generation: 0,
-                valid_from: until.saturating_sub(lifetime),
-                valid_until: until,
-            },
-        );
         // A vehicle already inside its renewal lead re-enrolled before the run (WP-B2:
         // the request goes out `reenrol_lead` before expiry): it holds the successor,
         // which starts when the current certificate ends, with no overlap.
@@ -4016,6 +4044,16 @@ impl Phase2 {
                 n.access == Some(AccessKind::Cellular) && (n.topup.is_some() || n.reenrol.is_some())
             })
             .map(|(k, _)| *k)
+            .collect()
+    }
+
+    /// Every device (vehicle or handset) the backend knows, roadside units excluded.
+    #[must_use]
+    pub fn device_nodes(&self) -> Vec<NodeId> {
+        self.nodes
+            .keys()
+            .filter(|k| !self.rsu_nodes().contains(k))
+            .copied()
             .collect()
     }
 
@@ -6013,6 +6051,24 @@ impl Phase2 {
             }
         }
         out
+    }
+
+    /// The lists `node` holds when it joins (R-NOCRL): every provider's `t0` CRL, which a
+    /// device on the road before the run fetched within the week. Marks its copy as of
+    /// those lists, so its first conditional poll is answered 412 unless a provider has
+    /// published since; the caller installs them on the node. `None` for a node with no
+    /// device record or a run whose stores published nothing.
+    pub fn prerun_crl(
+        &mut self,
+        node: NodeId,
+    ) -> Option<(u32, Vec<CrlLinkageEntry>, Vec<std::sync::Arc<[u8]>>)> {
+        let (version, serial, entries, secured) = &self.prerun_crl;
+        if *serial == 0 {
+            return None;
+        }
+        let n = self.nodes.get_mut(&node)?;
+        n.crl_serial = n.crl_serial.max(*serial);
+        Some((*version, entries.clone(), secured.clone()))
     }
 
     /// Gives each vehicle's first poll a phase inside the interval, from a keyed draw, so

@@ -190,7 +190,9 @@ impl ScmsRun {
     /// shares one `LAGroup` of the series-1 CRL, as the run's own revocations do), with
     /// random seeds from the backend's keyed stream, so it matches no device of the run
     /// (they were revoked before it). The list is signed as a real `SecuredCrl` when the
-    /// PDU layer is on.
+    /// PDU layer is on. With `n` 0 it is the empty list every CRACA publishes before its
+    /// first revocation (R-NOCRL): the engine seeds every provider's Generator so, and the
+    /// list is renewed on its `nextCrl` like any other.
     pub fn seed_standing_crl(&mut self, n: u32) {
         let st = &mut self.state;
         let i = st.params.period_at(0);

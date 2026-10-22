@@ -397,6 +397,7 @@ fn report_frame(valid: bool) -> RxFrame {
         full_certificate: true,
         signature_valid: valid,
         spdu: None,
+        signer_certificate: None,
     }
 }
 
