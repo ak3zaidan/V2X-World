@@ -1,0 +1,9 @@
+# Attach the full certificate to every BSM (no digest).
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix full-cert}
+security:
+  signer_id_policy:
+    full_cert_every_ms: 1000
+    digest_otherwise: false

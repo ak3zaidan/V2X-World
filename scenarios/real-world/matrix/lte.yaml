@@ -1,0 +1,7 @@
+# LTE-V2X PC5 mode 4 (SAE J3161/1) instead of DSRC.
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix lte}
+radio:
+  rat: lte-v2x-pc5

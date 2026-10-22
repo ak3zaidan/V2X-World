@@ -1,0 +1,7 @@
+# A generic automotive SoC with no HSM (software crypto) instead of the Craton2 OBU.
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix no-hsm}
+nodes:
+  default_obu: obu/generic-automotive-soc-no-hsm

@@ -1,0 +1,8 @@
+# The legacy-window MA (three trusted reporters in a window) instead of the corroborating MA.
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix ma-legacy}
+detection:
+  ma:
+    id: threat/ma/legacy-window

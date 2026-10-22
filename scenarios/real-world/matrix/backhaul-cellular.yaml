@@ -1,0 +1,8 @@
+# Roadside units on cellular backhaul instead of fibre.
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix backhaul-cellular}
+actors:
+  rsu_placement:
+    backhaul: backhaul/cellular

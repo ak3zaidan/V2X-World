@@ -1,0 +1,7 @@
+# Real P-256 arithmetic for every signature, certificate and key instead of modelled cost.
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix real-crypto}
+security:
+  crypto_mode: real

@@ -1,0 +1,7 @@
+# NR-V2X PC5 instead of DSRC.
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix nr}
+radio:
+  rat: nr-v2x-pc5
