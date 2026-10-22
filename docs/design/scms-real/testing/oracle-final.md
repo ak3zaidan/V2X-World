@@ -24,7 +24,7 @@ Both ran on the release binary of main `4924a5d2` with `--record-level events`, 
 
 ```
 <venv>/bin/python -I tools/oracle/oracle.py records RUN_DIR... \
-    --expect crates/v2xw-engine/tests/expectations/scms-oracle-final.yaml [--mutate]
+    --expect crates/v2xw-engine/tests/expectations/scms/scms-oracle-final.yaml [--mutate]
 ```
 
 The new modules are `tools/oracle/scms_oracle/records.py` and `ctlfiles.py`.
@@ -234,7 +234,7 @@ which are built.
 
 * the rules in §4;
 * two faults that missed their rule;
-* `oracle.py records`, `oracle.py ctl-files` and the expectations file `crates/v2xw-engine/tests/expectations/scms-oracle-final.yaml`.
+* `oracle.py records`, `oracle.py ctl-files` and the expectations file `crates/v2xw-engine/tests/expectations/scms/scms-oracle-final.yaml`.
 
 **Not fixed in the engine**, by design: this package does not read the engine. OF-1 and OF-2
 are engine defects with reproductions:
