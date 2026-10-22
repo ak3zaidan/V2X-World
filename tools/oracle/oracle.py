@@ -199,6 +199,8 @@ def cmd_ctl_files(a):
         print(f'  {"ok " if not fails else "RED"} {rule}: {n_ok} ok, {len(fails)} red')
         for f in fails[:3]:
             print(f'        {f}')
+    for k, v in X.info.items():
+        print(f'  info {k}: {v}')
     print(f'ctl-files: {"PASS" if not bad else "FAIL"} ({sum(len(g["ctls"]) for g in gov)} CTL copies, '
           f'{len(gov)} providers)')
     rc = 1 if bad else 0

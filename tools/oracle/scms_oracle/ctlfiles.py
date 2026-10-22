@@ -43,7 +43,10 @@ def check(gov):
             X.check('CTL-FILE', tbs['sequenceNumber'] == seq, w + ': sequenceNumber')
             X.check('CTL-FILE', tbs['ctlSeriesId'] == US_CTL_SERIES, w + f': series {tbs["ctlSeriesId"].hex()}')
             approve = tbs['electorApprove'] if prev is None else prev[1]['electorApprove']
-            quorum = tbs['quorum'] if prev is None else prev[1].get('quorum', prev[2])
+            # the genesis CTL is installed out of band; the published US genesis CTLs (sequence
+            # 0, 2023) carry no quorum, so the quorum for CTL 1 is then not stated (None: at
+            # least one valid approved signature is required, and the count is reported)
+            quorum = tbs.get('quorum') if prev is None else prev[1].get('quorum', prev[2])
             X.check('CTL-FILE', len(m['signatures']) <= len(approve), w + ': more signatures than electors')
             good = set()
             for n, sig in enumerate(m['signatures']):
@@ -72,7 +75,12 @@ def check(gov):
                 if ok and trusted:
                     X.check('CTL-SIG', eh not in good, w + f' sig {n}: elector signed twice')
                     good.add(eh)
-            X.check('CTL-QUORUM', len(good) >= quorum, w + f': {len(good)} valid approved signatures < quorum {quorum}')
+            X.check('CTL-QUORUM', len(good) >= (quorum if quorum is not None else 1),
+                    w + f': {len(good)} valid approved signatures < quorum {quorum}')
+            X.info[w] = f'{len(good)}/{len(m["signatures"])} valid approved signatures, quorum {quorum}'
+            if prev is None:
+                # the genesis CTL also has to approve its own signers' quorum
+                X.check('CTL-QUORUM', len(good) >= (tbs.get('quorum') or 1), w + ': genesis below its own quorum')
             if prev is not None:
                 X.check('CTL-ORDER', seq == prev[0] + 1, w + f': sequence {prev[0]} -> {seq}')
                 X.check('CTL-ORDER', tbs['effectiveDate'] >= prev[1]['effectiveDate'], w + ': effectiveDate decreases')
