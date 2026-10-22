@@ -1,0 +1,8 @@
+# TLS 1.2 on the backend links instead of 1.3.
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix tls12}
+security:
+  scms:
+    tls: "1.2"

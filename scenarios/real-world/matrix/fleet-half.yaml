@@ -1,0 +1,9 @@
+# Half the vehicle demand (300 veh/h).
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix fleet-half}
+actors:
+  vehicles:
+    demand:
+      rate_veh_per_h: 300.0

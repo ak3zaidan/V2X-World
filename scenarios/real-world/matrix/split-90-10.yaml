@@ -1,0 +1,12 @@
+# Provider fleet split 90/10 instead of 50/50 (an ASSUMPTION either way).
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix split-90-10}
+security:
+  scms:
+    deployment:
+      preset: us-production-2025
+      providers:
+        - {name: provider-a, fleet_share: 0.9}
+        - {name: provider-b, fleet_share: 0.1}

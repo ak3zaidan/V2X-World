@@ -1,0 +1,10 @@
+# 3 % Sybil attackers instead of constant-position.
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix sybil}
+threats:
+  attackers:
+    - id: threat/attacker/legacy/Sybil
+      fraction: 0.03
+      schedule: {from_s: 20.0, to_s: 172800.0}

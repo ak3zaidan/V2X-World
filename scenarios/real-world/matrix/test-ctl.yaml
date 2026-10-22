@@ -1,0 +1,8 @@
+# The SCMS Manager's test trust list (5 of 6 roots approved) instead of the production one.
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix test-ctl}
+security:
+  scms:
+    deployment: {preset: us-test-ctl-2025}

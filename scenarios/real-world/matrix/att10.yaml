@@ -1,0 +1,10 @@
+# 10 % constant-position attackers instead of 3 %.
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix att10}
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.1
+      schedule: {from_s: 20.0, to_s: 172800.0}

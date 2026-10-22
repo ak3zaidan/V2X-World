@@ -170,6 +170,66 @@ pub struct DeviceState {
     /// Answers it dropped because it was not waiting for them: the second answer to a
     /// request it sent twice.
     pub duplicate_answers: u32,
+    /// [`DeviceState::credential_is_usable`]'s answers, by `(i, j)`, with the private key
+    /// and certified key each was computed from.
+    pub usable_memo: UsableMemo,
+}
+
+/// A memo of `d·G == P` per credential: the check is a P-256 base-point multiplication,
+/// and the misbehaviour-report path asks it for every pseudonym of every device holding a
+/// report at every backend step (`Phase2::report_waits_for_signer`). Before the memo that
+/// was 97 % of the realism base's CPU, about 35 minutes of wall time where the run had
+/// taken under a minute (docs/design/scms-real/testing/matrix.md, "Run cost"). An answer
+/// is reused only for the same private key and the same certified key, so a credential
+/// whose secret or certificate changes is checked again: the memo cannot change a result.
+#[derive(Default)]
+pub struct UsableMemo(std::sync::Mutex<BTreeMap<(u32, u32), (p256::Scalar, Point, bool)>>);
+
+impl UsableMemo {
+    /// The memo's answer for this credential's key pair, if it has one.
+    pub fn get(&self, key: (u32, u32), private: &p256::Scalar, public: &Point) -> Option<bool> {
+        let m = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        m.get(&key)
+            .filter(|(d, p, _)| d == private && p == public)
+            .map(|x| x.2)
+    }
+
+    /// The entry held for `(i, j)`: the private key, the certified key, the answer.
+    pub fn entry(&self, key: (u32, u32)) -> Option<(p256::Scalar, Point, bool)> {
+        let m = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        m.get(&key).copied()
+    }
+
+    /// Records an answer.
+    pub fn put(&self, key: (u32, u32), private: p256::Scalar, public: Point, ok: bool) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(key, (private, public, ok));
+    }
+}
+
+impl Clone for UsableMemo {
+    fn clone(&self) -> Self {
+        let m = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        UsableMemo(std::sync::Mutex::new(m.clone()))
+    }
+}
+
+impl core::fmt::Debug for UsableMemo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let n = self.0.lock().map_or(0, |m| m.len());
+        write!(f, "UsableMemo({n})")
+    }
 }
 
 /// Which answer a device is waiting for from the RA (SCMS-522).
@@ -239,6 +299,7 @@ impl DeviceState {
             ee_retries: 0,
             ee_retries_capped: 0,
             duplicate_answers: 0,
+            usable_memo: UsableMemo::default(),
         }
     }
 
@@ -328,7 +389,16 @@ impl DeviceState {
             Some(imp) => cat.signing_private_implicit(i, j, &imp.e, &imp.r),
             None => cat.signing_private(i, j, &cred.c),
         };
-        butterfly::derived_key_matches(&private, &cred.certified_public)
+        if let Some(ok) = self
+            .usable_memo
+            .get((i, j), &private, &cred.certified_public)
+        {
+            return ok;
+        }
+        let ok = butterfly::derived_key_matches(&private, &cred.certified_public);
+        self.usable_memo
+            .put((i, j), private, cred.certified_public, ok);
+        ok
     }
 }
 

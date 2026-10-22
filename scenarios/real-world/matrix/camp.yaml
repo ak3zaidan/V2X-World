@@ -1,0 +1,8 @@
+# The CAMP reference topology (one SCMS, LOP, CRL Store and broadcast, central MA) instead of the two-provider US deployment.
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix camp}
+security:
+  scms:
+    deployment: {preset: camp-reference}
