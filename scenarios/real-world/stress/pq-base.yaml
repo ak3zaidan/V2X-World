@@ -1,0 +1,25 @@
+# Post-quantum at realistic density (stress package, docs/design/scms-real/testing/stress.md §3):
+# the Midtown quarter-fleet benchmark (2,250 veh/h, 500 pedestrians, 50 cyclists, 30 RSUs,
+# the US SCMS on the real calendar) for its first 60 s, live, with SDU fragmentation on and
+# a software-crypto OBU that has published post-quantum costs. This file is the classical
+# ECDSA P-256 base on that OBU; the pq-*.yaml files change only the signature scheme (and,
+# for the cert-cycle file, the fragmenter). Same seed throughout.
+schema: v2xw/scenario/1
+meta:
+  name: stress-pq-base
+  description: >-
+    The Midtown quarter-fleet benchmark for 60 s live with SDU fragmentation and a
+    software-crypto OBU: the classical base of the post-quantum density runs.
+  authors: [v2xw]
+  tags: [stress, post-quantum, fragmentation, benchmark, manhattan]
+  created: "2026-10-21"
+  base: ../midtown-scms-benchmark-quarter.yaml
+time:
+  duration_s: 60.0
+  warmup_s: 30.0
+  fast_forward: []
+net:
+  fragmenter:
+    id: fragmenter/generic-sdu
+nodes:
+  default_obu: obu/generic-automotive-soc-no-hsm

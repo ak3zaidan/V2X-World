@@ -1,0 +1,12 @@
+# pq-base.yaml with hybrid Falcon-512 + ECDSA P-256 signatures (stress.md §3).
+schema: v2xw/scenario/1
+meta:
+  name: stress-pq-hybrid-falcon512
+  description: >-
+    The post-quantum density base with hybrid Falcon-512 + ECDSA P-256 signatures.
+  authors: [v2xw]
+  tags: [stress, post-quantum, fragmentation]
+  created: "2026-10-21"
+  base: pq-base.yaml
+security:
+  signature: hybrid-falcon512-ecdsa-p256
