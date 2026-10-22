@@ -48,8 +48,13 @@ times, so CPU time is the figure to compare.
   1–1.6 h) fit the time left after 75 minutes of waiting for the run lock. Both scenarios
   are committed.
 
-**What was measured at full fleet:**
-- The 1-vs-4-thread determinism cut (`stress/fs-det.yaml`, 5 s). Result: FSDET (below).
+**What was measured at full fleet:** the first 5 s (`stress/fs-det.yaml`, `--no-recording
+--digest`).
+- 646 devices (321 / 325 by provider), 574 of them handsets: 4.0× the quarter's 142.
+- 539,245 reception attempts; 2,223 misbehaviour reports in 5 s (R-USFP, below).
+- 155 CPU-s and 415 MB.
+- **Determinism: the stream digest `2a238e72…57a4a5a0` is identical at 4 threads and at 1
+  thread. Pass.**
 
 **The quarter-fleet density run on this branch** (`pq-base`: the quarter benchmark, 60 s
 live, software OBU, fragmenter on):
@@ -150,7 +155,16 @@ for ECDSA. Fewer messages were verified and detected, so the run was cheaper eve
 - The 1-thread re-run for determinism was not made: it is another 68 minutes of build
   lock.
 
-## 5. Owed
+## 5. Other tests run
+
+- `security_lifecycle`: 16 of 16 pass, including the new test.
+- `timeline`: 8 of 9 pass. `a_param_change_of_the_arrival_rate_takes_effect_at_its_instant`
+  fails ("90 against 17: 5.29x for a fourfold rate", band 2.5–5.0). It is a traffic-only
+  test on an unequipped fleet, with no outage, no radio and no SCMS. My change acts only on
+  an outage's device, so it cannot reach this test: the failure was already on the
+  branch's base (found on the way, not fixed).
+
+## 6. Owed
 
 - **Full-scale runs.** The full benchmark and its 150 s first window need about a CPU-day
   (§1). The engine does not use more than one core here; that is worth profiling first.

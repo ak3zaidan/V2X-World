@@ -53,8 +53,9 @@ rows:
   measure: devices_by_provider (sum), vru_devices_created
   expect: about 4x the quarter's 349 devices and 161 handsets (four times the demand and the VRU sample); split near 50/50 by provider
   source: the scenario files (9,000 vs 2,250 veh/h; 2,200 vs 550 VRUs at 25 %); D1 fleet split ASSUMPTION
-  measured: "not run at full fleet (cost, stress.md §1); quarter density on this branch: 313 devices (162/151), 142 handsets in 60 s"
-  verdict: open
+  measured: "full fleet, first 5 s: 646 devices (321 / 325 by provider), 574 handsets = 4.0x the quarter's 142; vehicles still filling"
+  verdict: pass
+  note: "handsets and split checked at 5 s; the vehicle count needs the 90 s fill"
 - id: FS.provisioning-per-device
   base: FS
   variant: FS
@@ -116,8 +117,9 @@ rows:
   measure: MBR share of airtime
   expect: under 1 % (reports go over Uu or to an RSU; the 29.3 % storm was fixed by VAL-VEH)
   source: validation/vehicle-and-roadside.md §4; realism.md MBR airtime 0.33 %
-  measured: "quarter density (pq-base, us-sm-mbr): 5,710 MBR frames, 9.1 s of airtime against 13.6 s of BSMs (34 %); positionJump fired on 306,151 of 391,345 checked BSMs; 37,769 reports about 141 honest devices in 60 s"
+  measured: "quarter density (pq-base, us-sm-mbr): 5,710 MBR frames, 9.1 s of airtime against 13.6 s of BSMs (34 %); positionJump fired on 306,151 of 391,345 checked BSMs; 37,769 reports about 141 honest devices in 60 s. Full fleet: 2,223 reports in the first 5 s"
   verdict: open
+  note: "R-USFP (07 §8.3): the 1 m RandomPosition gpsDrift with no streak gate on raw, uncorrelated GNSS fixes; needs a filtered-position model"
   note: "R-USFP (07 §8.3): the 1 m RandomPosition gpsDrift with no streak gate on raw, uncorrelated GNSS fixes; needs a filtered-position model"
 - id: FS.honest-revocations
   base: Q
@@ -172,8 +174,8 @@ rows:
   measure: stream_digest
   expect: identical at 1 and 4 threads
   source: WP-DET (calendar.rs byte-identical at 1 and 4 threads)
-  measured: "FSDET"
-  verdict: open
+  measured: "stream digest 2a238e72...57a4a5a0 at 4 threads and at 1 thread (fs-det.yaml, full fleet, first 5 s: 646 devices, 539,245 reception attempts); 155 / 156 CPU-s, 415 MB"
+  verdict: pass
 # ---------------------------------------------------------------- (2) multi-week runs
 - id: MW.rollovers
   base: MW
