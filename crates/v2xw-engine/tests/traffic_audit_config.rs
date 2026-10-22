@@ -304,7 +304,10 @@ fn the_gnss_receiver_smoothing_reaches_the_error_model() {
     );
     let smoothed = worst_residual(&smooth);
     assert!(raw > 1.0, "raw fixes: worst residual {raw:.2} m");
-    assert!(smoothed < 0.5, "smoothed fixes: worst residual {smoothed:.3} m");
+    assert!(
+        smoothed < 0.5,
+        "smoothed fixes: worst residual {smoothed:.3} m"
+    );
     let mut hold_only = s;
     hold_only.actors.vehicles.gnss = Some(GnssSettings {
         static_hold_mps: Some(0.3),

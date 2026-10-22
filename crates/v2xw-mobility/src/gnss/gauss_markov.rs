@@ -370,8 +370,16 @@ impl GaussMarkovGnss {
         // τ_s = 100 s and a 0.1 s step) reaches the output, so the whole fit goes to the
         // bias (module docs, "Receiver output").
         let smoothing = params.smoothing_tau_s > 0.0;
-        let white_h = if smoothing { 0.0 } else { params.sigma_white_h_m };
-        let white_v = if smoothing { 0.0 } else { params.sigma_white_v_m };
+        let white_h = if smoothing {
+            0.0
+        } else {
+            params.sigma_white_h_m
+        };
+        let white_v = if smoothing {
+            0.0
+        } else {
+            params.sigma_white_v_m
+        };
         let sigma_bias_h_m =
             math::sqrt((horizontal.sigma_m * horizontal.sigma_m - white_h * white_h).max(0.0));
         let sigma_bias_v_m =
@@ -988,8 +996,7 @@ pub fn card(
             serde_json::json!(params.static_hold_mps),
             Source {
                 kind: SourceKind::Datasheet,
-                reference: "u-blox 8 / M8 Receiver Description, Static hold (0: off)"
-                    .to_string(),
+                reference: "u-blox 8 / M8 Receiver Description, Static hold (0: off)".to_string(),
                 accessed: Some("2026-10-22".to_string()),
                 note: Some(
                     "ASSUMPTION: the threshold a preset sets is its own choice; the \
@@ -1570,15 +1577,21 @@ mod tests {
     fn a_smoothing_receiver_agrees_with_its_own_velocity_between_ten_hertz_fixes() {
         let raw = random_position_residuals(&track(GaussMarkovParams::default(), 15.0, 50, 600));
         let raw_over = raw.iter().filter(|&&r| r > 1.0).count() as f64 / raw.len() as f64;
-        assert!(raw_over > 0.5, "raw fixes: {raw_over} of residuals over 1 m");
+        assert!(
+            raw_over > 0.5,
+            "raw fixes: {raw_over} of residuals over 1 m"
+        );
         let smooth = random_position_residuals(&track(smoothing(), 15.0, 50, 600));
         let worst = smooth.iter().copied().fold(0.0, f64::max);
-        assert!(worst < 0.5, "smoothed: worst consecutive residual {worst} m");
+        assert!(
+            worst < 0.5,
+            "smoothed: worst consecutive residual {worst} m"
+        );
     }
 
     /// The smoothing keeps the measured error scale (Reid 2019 measured receivers'
-    /// outputs): the horizontal error of 4,000 receivers after a minute is within the
-    /// sampling error of the fit's own 68th and 95th percentiles.
+    /// outputs): the horizontal error of 4,000 receivers after a minute is within 10 % of
+    /// the fit's own 68th and 95th percentiles.
     #[test]
     fn a_smoothing_receiver_keeps_the_measured_error_scale() {
         let p = GaussMarkovParams {
@@ -1599,8 +1612,10 @@ mod tests {
         for q in [0.68, 0.95] {
             let predicted = fit.sigma_m * crate::gnss::common::rayleigh_factor(q);
             let sampled = v2xw_core::math::quantile_sorted(&errors, q);
+            // 4,000 draws put the sampling error near 2 %; the bias split a raw receiver
+            // uses gives the output about 20 % less (σ_b = √(σ² − σ_w²)).
             assert!(
-                (sampled - predicted).abs() < 0.25 * predicted,
+                (sampled - predicted).abs() < 0.10 * predicted,
                 "p={q}: sampled {sampled} m against the fit's {predicted} m"
             );
         }
@@ -1624,7 +1639,11 @@ mod tests {
                 .count()
         };
         let held = track(smoothing(), 0.0, 50, 300);
-        assert_eq!(frozen(&held), 0, "a held receiver claimed a speed it did not move by");
+        assert_eq!(
+            frozen(&held),
+            0,
+            "a held receiver claimed a speed it did not move by"
+        );
         let unheld = track(
             GaussMarkovParams {
                 static_hold_mps: 0.0,
@@ -1634,7 +1653,11 @@ mod tests {
             50,
             300,
         );
-        assert!(frozen(&unheld) > 1000, "{} without the hold", frozen(&unheld));
+        assert!(
+            frozen(&unheld) > 1000,
+            "{} without the hold",
+            frozen(&unheld)
+        );
         let moved = random_position_residuals(&held);
         assert!(moved.iter().all(|&r| r < 0.1), "a held receiver jumped");
     }

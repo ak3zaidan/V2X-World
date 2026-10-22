@@ -4399,8 +4399,7 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 bounded_at(path, path, v, e);
             }
         }
-        if g.static_hold_mps.is_some_and(|v| v > 0.0)
-            && !g.smoothing_tau_s.is_some_and(|v| v > 0.0)
+        if g.static_hold_mps.is_some_and(|v| v > 0.0) && !g.smoothing_tau_s.is_some_and(|v| v > 0.0)
         {
             e.push(conflict(
                 "actors.vehicles.gnss.static_hold_mps",

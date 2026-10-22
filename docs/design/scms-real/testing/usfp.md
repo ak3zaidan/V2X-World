@@ -123,3 +123,16 @@ built. It is not the BSMs the reporter judged.
   then move less than 1 cm. Not investigated further.
 - Pre-fix numbers in the expectation tables are kept as measured. The rows whose verdict
   this changes are re-stated in `scms-matrix.yaml` and matrix.md.
+
+## 7. Tests, each shown to fail with its fault injected
+
+| test | fault injected | failed |
+|---|---|---|
+| `gnss::gauss_markov::tests::a_smoothing_receiver_agrees_with_its_own_velocity_between_ten_hertz_fixes` | receiver output forced to the raw fix | yes |
+| `…::a_stopped_smoothing_receiver_holds_still` | raw output; separately, the hold disabled | yes, both |
+| `…::a_smoothing_receiver_keeps_the_measured_error_scale` | the raw receiver's bias split kept under smoothing (p68 3.13 m against 3.98 m) | yes |
+| `traffic_audit_config::the_gnss_receiver_smoothing_reaches_the_error_model` | raw output | yes |
+| `scms-matrix.yaml` row `raw-honest` (gnss-raw against M0) | it is the fault: raw fixes give 26 honest revoked | judges up |
+
+All pass with the faults restored. The 13 existing `gauss_markov` tests and
+`the_gnss_settings_reach_the_error_model` pass unchanged.
