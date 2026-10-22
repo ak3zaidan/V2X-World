@@ -20,6 +20,34 @@ fn every_provisioned_credential_is_usable_by_the_device() {
     }
 }
 
+/// The usability check is a P-256 base-point multiplication that the report path asks
+/// for every pseudonym of every holding device at every backend step; it answers a repeat
+/// from its memo (matrix.md, "Run cost": 35 min against under one), and only for the same
+/// key pair. Faults: the memo lookup removed (the planted answer is ignored); the memo keyed
+/// by (i, j) alone (the next test's swapped randomiser still reads usable).
+#[test]
+fn the_usability_check_answers_a_repeat_from_its_memo() {
+    let mut run = deployment(1);
+    provisioned(&mut run, DEVICE_A, 0, 1, 2);
+    let dev = &run.state.devices[&DEVICE_A];
+    assert!(dev.credential_is_usable(0, 0));
+    let (d, p, ok) = dev
+        .usable_memo
+        .entry((0, 0))
+        .expect("the first answer is kept");
+    assert!(ok);
+    // Plant the opposite answer for the same key pair: a repeat must read the memo.
+    dev.usable_memo.put((0, 0), d, p, false);
+    assert!(
+        !dev.credential_is_usable(0, 0),
+        "a repeat for the same key pair is answered from the memo"
+    );
+    assert!(
+        dev.credential_is_usable(0, 1),
+        "another index is checked on its own"
+    );
+}
+
 #[test]
 fn a_credential_from_another_index_is_not_usable_for_this_one() {
     // The negative half: the identity is checked, not assumed. Swapping two credentials'

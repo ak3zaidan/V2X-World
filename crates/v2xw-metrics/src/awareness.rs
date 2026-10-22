@@ -119,20 +119,31 @@ impl Link {
     /// The receiver's age about this sender integrated exactly over (a, b]: (Σ age × time,
     /// ns²; time, ns; the age at b). Only the part after the first delivery counts; `None`
     /// when nothing was held by b.
+    ///
+    /// A piece more than [`AOI_RESTART`] after the delivery it holds is a new encounter,
+    /// not a continuation, and is left out, as the every-link pool leaves it out: otherwise
+    /// the first update after a silence (a sender back in range, or the end of a
+    /// fast-forward window, where nothing is on the air for hours) charges the whole silence
+    /// as age to the piece before it.
     fn age_over(&self, a: SimTime, b: SimTime) -> Option<(u128, u128, SimTime)> {
-        let mut held = self.hist.iter().rev().find(|(d, _)| *d <= a).map(|x| x.1);
+        let restart = AOI_RESTART.as_nanos();
+        let mut held = self.hist.iter().rev().find(|(d, _)| *d <= a).copied();
         let (mut area, mut time, mut u) = (0u128, 0u128, a);
         for &(d, g) in self.hist.iter().filter(|(d, _)| *d > a && *d <= b) {
-            if let Some(h) = held {
+            if let Some((hd, h)) = held
+                && d.saturating_sub(hd) <= restart
+            {
                 area += age_area(u, d, h);
                 time += u128::from(d - u);
             }
-            held = Some(g);
+            held = Some((d, g));
             u = d;
         }
-        let h = held?;
-        area += age_area(u, b, h);
-        time += u128::from(b - u);
+        let (hd, h) = held?;
+        if b.saturating_sub(hd) <= restart {
+            area += age_area(u, b, h);
+            time += u128::from(b - u);
+        }
         Some((area, time, b.saturating_sub(h)))
     }
 
@@ -1052,6 +1063,30 @@ mod tests {
             all > 150.0,
             "every-link pool is pulled up by the far link: {all}"
         );
+    }
+
+    /// A silence (a fast-forward window: no frame and no step for hours) is not age: the
+    /// link restarts after it. Before the fix the first update after the silence charged
+    /// the step before it with the whole silence (998 s of age), and the realism base's
+    /// headline `aoi` read 1,693,080 ms (docs/design/scms-real/testing/matrix.md, M0-aoi-mean).
+    #[test]
+    fn neighbourhood_aoi_restarts_after_a_silence_rather_than_charging_it() {
+        let mut p = AwarenessProvider::new(0).with_min_samples(1);
+        for start in [0u64, 1_000_000] {
+            for k in 0..=20u64 {
+                let t = start * NS_PER_MS + k * 100 * NS_PER_MS;
+                p.on_event(&kin(1, t, 0.0));
+                p.on_event(&kin(2, t, 30.0));
+                p.on_event(&delivered(1, 2, t, t + 2 * NS_PER_MS, 30.0));
+            }
+        }
+        let end = 1_002_100 * NS_PER_MS;
+        p.on_event(&kin(1, end, 0.0));
+        let s = p.flush(end);
+        let hood = point(&s, "aoi", &[]).unwrap();
+        assert!((hood - 52.0).abs() < 1.0, "headline {hood}");
+        let all = point(&s, "aoi", &[(Dim::Radius, AOI_ALL_LINKS)]).unwrap();
+        assert!((all - 52.0).abs() < 1.0, "every link {all}");
     }
 
     #[test]
