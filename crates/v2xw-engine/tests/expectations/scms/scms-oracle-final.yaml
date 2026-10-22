@@ -22,7 +22,7 @@
 - {run: mbr, rule: CERT-ID, expect: pass, source: "as above"}
 - {run: conf, rule: CRACA-CERT, expect: pass, source: "cracaId = HashedId3 of a CRACA whose CRL signer lists the series; pseudonym 1, app 3, enrolment 4 ([SMP] Table 1)"}
 - {run: mbr, rule: CRACA-CERT, expect: pass, source: "as above"}
-- {run: conf, rule: ENR-LIFE, expect: red, source: "6-year enrolment ([CAMP122] Table 3). Measured: 56 vehicle enrolment certificates start at t0 with 0.9-5.5 y lifetimes (OF-1)"}
+- {run: conf, rule: ENR-LIFE, expect: pass, source: "6-year enrolment ([CAMP122] Table 3). Was red (OF-1: 56 vehicle enrolment certificates started at t0 with 0.9-5.5 y lifetimes); fixed by age_enrolment, passes on main 25483af3"}
 
 # ---- CRLs: envelope, freshness, matching ----
 - {run: conf, rule: CRL-ENV, expect: pass, source: "Signed CrlContents, psid 256, headerInfo psid only, version 1 (1609.2 7.4; 03 3.1)"}
@@ -49,7 +49,7 @@
 - {run: mbr, rule: DL-ACK, expect: pass, source: "as above"}
 - {run: conf, rule: DL-ENC, expect: pass, source: "Encrypted{Signed} to one RA certRecipInfo, psid 35, SignerSingleCert (03 3.1-3.2)"}
 - {run: mbr, rule: DL-ENC, expect: pass, source: "as above"}
-- {run: conf, rule: DL-SIGN, expect: red, source: "signed by the device's enrolment certificate ([CAMP122] 6.3; [SM-MBR] 4). Measured: signed by a second enrolment certificate no recorded exchange issued (OF-1)"}
+- {run: conf, rule: DL-SIGN, expect: pass, source: "signed by the device's enrolment certificate ([CAMP122] 6.3; [SM-MBR] 4). Was red (OF-1: a second enrolment certificate no recorded exchange issued); passes on main 25483af3"}
 - {run: conf, rule: DL-TIME, expect: pass, source: "5 s clock tolerance ([CAMP122] 5.1.7)"}
 - {run: mbr, rule: DL-TIME, expect: pass, source: "as above"}
 - {run: conf, rule: DL-NAME, expect: pass, source: "<requestHash HEX>_<i HEX>.zip, i >= firstI; <requestHash>.info; misbehavior-report ([CAMP122] 6.3.6, Table 79)"}
@@ -64,7 +64,7 @@
 - {run: mbr, rule: MBR-ENC, expect: pass, source: "as above"}
 - {run: conf, rule: MBR-SIG, expect: pass, source: "psid 0x26, {psid, generationTime}, full pseudonym signer permitting 0x26, inside its validity ([SM-MBR] 1, 3; 1609.2 5.2)"}
 - {run: mbr, rule: MBR-SIG, expect: pass, source: "as above"}
-- {run: conf, rule: MBR-UP, expect: red, source: "every upload is the SPDU plus a Download-Req; RA forwards byte for byte ([SM-MBR] 4). Measured: 1,695 of 2,991 cellular uploads carry no bytes (OF-2)"}
+- {run: conf, rule: MBR-UP, expect: pass, source: "every upload is the SPDU plus a Download-Req; RA forwards byte for byte ([SM-MBR] 4). Was red (OF-2: 1,695 of 2,991 cellular uploads carried no bytes); passes on main 25483af3"}
 
 # ---- CTL ----
 - {run: conf, rule: CTL-SUM, expect: pass, source: "sequence +1, >= quorum signers, in force from effectiveDate ([ASN-2.1] CertManagement)"}
