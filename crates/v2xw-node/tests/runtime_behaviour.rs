@@ -1035,3 +1035,85 @@ fn hard_braking_raises_a_dangerous_situation_denm() {
             .all(|t| t.msg_type != MsgType::Denm)
     );
 }
+
+/// IEEE 1609.2 §5.2 relevance check of `generationTime` (`rxval::GenerationTimeWindow`,
+/// C2C-CC BSP RS_BSP_168 values): on the node's own clock, a beacon more than 2 s old or
+/// any message more than 40 ms in the future is discarded before the policy, verified by
+/// no one and delivered to nothing; a DENM 3 s old is inside its 10-minute window. Widen
+/// the window and nothing is discarded.
+///
+/// Fault injected (and reverted): `GenerationTimeWindow::admits` returning `Ok(())`
+/// always fails the first assertion; dropping the future bound fails the `InFuture` one.
+#[test]
+fn a_message_outside_the_generation_time_window_is_discarded_unverified() {
+    use v2xw_node::rxval::{GenerationTimeWindow, RxReject};
+    let run = |widen: bool| {
+        let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+        if widen {
+            rt.security_mut()
+                .trust_mut()
+                .set_generation_time_window(GenerationTimeWindow::from_secs(1e9, 1e9, 1e9));
+        }
+        let reg = RngRegistry::new(7);
+        let now = 10 * NS_PER_S;
+        let at = now - 100 * NS_PER_MS;
+        let mut denm = frame(5, Vec3::new(5.0, 0.0, 0.0), at - 3 * NS_PER_S, true);
+        denm.msg_type = MsgType::Denm;
+        let frames = [
+            frame(2, Vec3::new(2.0, 0.0, 0.0), at, true),
+            frame(3, Vec3::new(3.0, 0.0, 0.0), at + 5_000 * NS_PER_S, true),
+            frame(4, Vec3::new(4.0, 0.0, 0.0), at - 3 * NS_PER_S, true),
+            denm,
+            // 39 ms ahead: inside the 40 ms tolerance.
+            frame(6, Vec3::new(6.0, 0.0, 0.0), at + 39 * NS_PER_MS, true),
+        ];
+        let inbox: Vec<(RxFrame, RxStamp)> = frames
+            .into_iter()
+            .enumerate()
+            .map(|(n, f)| {
+                (
+                    f,
+                    RxStamp {
+                        token: n as u64,
+                        arrived_at: Some(at),
+                    },
+                )
+            })
+            .collect();
+        let mut ctx = NodeRuntimeCtx::new(now, &reg);
+        let out = rt.step_timed(&mut ctx, inbox, 0.0);
+        let mut by_token = std::collections::BTreeMap::new();
+        for r in &out.rx_reports {
+            by_token.insert(r.token, r.disposition);
+        }
+        let refused = rt.security().trust().stats.refused.clone();
+        (by_token, refused)
+    };
+    let (d, refused) = run(false);
+    assert_eq!(
+        d.get(&1),
+        Some(&RxDisposition::NotRelevant(RxReject::GenerationTimeInFuture)),
+        "{d:?}"
+    );
+    assert_eq!(
+        d.get(&2),
+        Some(&RxDisposition::NotRelevant(RxReject::GenerationTimeTooOld)),
+        "{d:?}"
+    );
+    for fresh in [0u64, 3, 4] {
+        assert!(
+            !matches!(d.get(&fresh), Some(RxDisposition::NotRelevant(_))),
+            "token {fresh}: {d:?}"
+        );
+    }
+    assert_eq!(refused.get("generation-time-in-future"), Some(&1));
+    assert_eq!(refused.get("generation-time-too-old"), Some(&1));
+
+    let (wide, refused) = run(true);
+    assert!(
+        wide.values()
+            .all(|x| !matches!(x, RxDisposition::NotRelevant(_))),
+        "{wide:?}"
+    );
+    assert!(!refused.contains_key("generation-time-in-future"));
+}

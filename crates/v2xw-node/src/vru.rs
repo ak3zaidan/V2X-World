@@ -1548,6 +1548,22 @@ impl VruDeviceRuntime {
                 });
                 continue;
             }
+            // The relevance check of `generationTime` (IEEE 1609.2 §5.2), as on a vehicle.
+            if let Err(why) = self.security.trust_mut().check_generation_time(
+                frame.msg_type,
+                frame.claimed_generation_time,
+                item.arrived,
+            ) {
+                out.rx_reports.push(RxReport {
+                    token: item.token,
+                    disposition: RxDisposition::NotRelevant(why),
+                    arrived: item.arrived,
+                    parsed: item.arrived,
+                    verify_start: None,
+                    verify_done: None,
+                });
+                continue;
+            }
             self.learn_or_request(&frame);
             self.p2pcd_rx(ctx, &frame);
             let relevance = frame
