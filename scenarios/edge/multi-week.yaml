@@ -4,13 +4,13 @@
 # The conformance run (two vehicle providers, real cryptography, 10 % ConstPos attackers,
 # manual MA, business-day CRL) from Tuesday 2026-10-20 08:50 UTC for 33 days, mostly in
 # fast-forward. Five i-period rollovers fall inside it (614 -> 615 at 600 s, then every
-# 604,800 s at Tuesday 09:00 UTC), and a live window straddles each one so the switch to
-# the new period's pseudonyms is seen on the air:
+# 604,800 s at Tuesday 09:00 UTC: 605,400, 1,210,200, 1,815,000 and 2,419,800 s). W0 and W4
+# straddle a rollover on the air; W1-W3 sit 540-660 s before a boundary and show that week's pool:
 #
 #   W0          0 -     660 s   enrolment, provisioning, the 614 -> 615 rollover, attackers
-#   W1    604,740 -  604,860    615 -> 616
-#   W2  1,209,540 - 1,209,660   616 -> 617
-#   W3  1,814,340 - 1,814,460   617 -> 618: three weeks after the first CRL's issue date
+#   W1    604,740 -  604,860    week 615, its last minutes
+#   W2  1,209,540 - 1,209,660   week 616, its last minutes
+#   W3  1,814,340 - 1,814,460   week 617, its last minutes: three weeks after t0
 #   W4  2,419,500 - 2,419,920   618 -> 619 (variants: the parked car is switched back on)
 #   W5  2,851,200 - 2,851,320   day 33 (variants: after the CRL Generator's return)
 #
