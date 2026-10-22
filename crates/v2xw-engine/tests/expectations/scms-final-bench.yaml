@@ -263,3 +263,23 @@ rows:
   expect: "ECDSA verification per BSM (~0.63 ms) plus one ML-DSA-44 verify per new certificate; verified BSMs near the classical base (within 10 %)"
   source: NDSS 2024 §III
   measured: pending
+- id: PQHMC.reports
+  base: PQHM
+  variant: PQHMC
+  area: architecture
+  measure: relay report uploads, reports_refused_mtu, CRL broadcasts
+  expect: >-
+    the certificate cycle splits only the certificate, so a relay-only vehicle's hybrid
+    report SPDU (over 1,400 B) is refused at the WSMP MTU and counted as refused, never as
+    uploaded: reports_uploaded_relay 0, reports_refused_mtu > 0, and the RSU CRL frames
+    likewise refused (crl_broadcasts 0)
+  source: testing/pq-profile.md §2 (pq_relay.rs certificate-cycle case); IEEE 1609.3 WSMP has no fragmentation
+  measured: pending
+- id: PQ.topups
+  base: PQ0
+  variant: PQHM
+  area: architecture
+  measure: topups started / completed in the 60 s live run
+  expect: none started under either scheme (no i-period boundary inside 0-60 s on the real calendar; pools hold 2 weeks)
+  source: scenario t0 2026-10-19 21:00 UTC; the boundary is at 09:00 UTC (benchmark §1.1)
+  measured: pending
