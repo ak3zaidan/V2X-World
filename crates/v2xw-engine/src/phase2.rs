@@ -3247,12 +3247,19 @@ impl Phase2 {
             )
             .f64();
         let remaining = ((u * lifetime as f64) as u64).clamp(1, lifetime);
-        let until = self.runs[k]
-            .age_enrolment(device, now.saturating_add(remaining))
-            .valid_until;
+        let aged = self.runs[k].age_enrolment(device, now.saturating_add(remaining));
+        let until = aged.valid_until;
         let remaining = until.saturating_sub(now);
-        let preloaded =
-            self.runs[k].preload(device, start, self.params.pool_periods, self.params.jmax);
+        // The pre-run exchanges run when that certificate began (never before 0): a vehicle
+        // joining mid-run whose certificate started after 0 was enrolled and asked for its
+        // pool then, so the RA sees a certificate inside its validity.
+        let preloaded = self.runs[k].preload_at(
+            device,
+            aged.valid_from.min(now),
+            start,
+            self.params.pool_periods,
+            self.params.jmax,
+        );
         if preloaded.is_err() {
             self.nodes.insert(
                 node,

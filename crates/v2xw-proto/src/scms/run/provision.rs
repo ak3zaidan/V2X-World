@@ -155,10 +155,32 @@ impl ScmsRun {
     /// # Errors
     /// Whatever the flows return on the scratch kernel.
     pub fn preload(&mut self, device: NodeId, start_i: u32, periods: u32, jmax: u32) -> Result<()> {
+        self.preload_at(device, 0, start_i, periods, jmax)
+    }
+
+    /// [`ScmsRun::preload`] with the pre-run exchanges at `at` on the scratch kernel's
+    /// clock rather than at 0: the instant the device was enrolled and asked for its pool.
+    /// A vehicle that joins mid-run holding an enrolment certificate whose back-dated start
+    /// ([`ScmsRun::age_enrolment`]) lies after 0 was enrolled at that start, so its RA
+    /// checks the request against a certificate already valid; at 0 the RA would refuse it
+    /// as not yet valid, the device would join with no RA account, and its first top-up
+    /// would be a fresh in-run request (`scms_knobs_runs`
+    /// `the_request_shuffle_does_not_touch_in_run_topups`).
+    ///
+    /// # Errors
+    /// Whatever the flows return on the scratch kernel.
+    pub fn preload_at(
+        &mut self,
+        device: NodeId,
+        at: SimTime,
+        start_i: u32,
+        periods: u32,
+        jmax: u32,
+    ) -> Result<()> {
         if !self.state.devices.contains_key(&device) {
             self.add_device(device);
         }
-        let mut scratch: Kernel<ScmsMsg> = Kernel::new_at(self.kernel.net().clone(), 0);
+        let mut scratch: Kernel<ScmsMsg> = Kernel::new_at(self.kernel.net().clone(), at);
         let p = self.state.params;
         for (node, spec) in self.state.nodes.backend_service_models(&p) {
             scratch.host(node, &spec, p.backend_profile);
@@ -197,7 +219,7 @@ impl ScmsRun {
         // The run's armed timer names the run's batch generation; the scratch release bumps
         // the counter, so it is put back with the timer or that batch would never close.
         let run_generation = self.state.ra.shuffle_generation;
-        self.enrol_at(device, 0);
+        self.enrol_at(device, at);
         let mut outcome = Self::drain_into(&mut self.state, &mut self.kernel);
         if outcome.is_ok() {
             let at = self.kernel.now();

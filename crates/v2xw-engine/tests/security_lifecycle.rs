@@ -268,11 +268,14 @@ fn honest_traffic_is_not_revoked_and_the_gate_is_why() {
         cellular(&mut s);
         // The MA decides as soon as its gate opens (`ma_review_s: 0`): on the real weekly
         // calendar its default is an 8-hour manual review (WIRE), longer than this run, and
-        // what this test measures is the detection gate, not the operator.
+        // what this test measures is the detection gate, not the operator. The legacy
+        // detector's reports map to no SM-MBR v1.1 subtype, so a US device files none
+        // (OF-2); `modelled_reports: 1` is the research setting that still carries them to
+        // the MA, which is the gate under test.
         lifecycle(
             &mut s,
             json!({"report_shuffle_window_s": 1, "crl_cadence_s": 0, "crl_fetch_interval_s": 5,
-                   "ma_review_s": 0}),
+                   "ma_review_s": 0, "modelled_reports": 1}),
         );
         s
     };
@@ -387,7 +390,13 @@ fn the_ma_sets_aside_a_report_whose_only_evidence_is_a_bad_signature() {
         ..Default::default()
     }];
     // The RA's report shuffle closes after 5 s, so reports reach the MA inside the run.
-    lifecycle(&mut s, json!({"report_shuffle_window_s": 5.0}));
+    // A bad-signature report maps to no SM-MBR v1.1 subtype, so a US device files none
+    // (OF-2); `modelled_reports: 1` is the research setting that still carries it to the
+    // MA, whose set-aside rule is under test.
+    lifecycle(
+        &mut s,
+        json!({"report_shuffle_window_s": 5.0, "modelled_reports": 1}),
+    );
     cellular(&mut s);
     let (report, _) = run(s);
     let p = &report.phase2;
