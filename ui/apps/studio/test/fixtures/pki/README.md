@@ -21,6 +21,11 @@ four constant-position attackers, real cryptography, report shuffle 5 s, CRL cad
   and Implausible/MaxSpeed, BSM evidence signed under the accused's pseudonyms), the
   linkage resolution through both LAs and the CRL issuance. Use it for the Flows tab's
   sequence diagram. Regenerated 2026-10-18 (cleanup package) after E3's record changes.
+
+All five files were re-recorded on 2026-10-22 from 176d6f6b plus the report and PQ fix
+(certificate bytes had changed since the LOP fold; vehicle reports that cannot be built as
+SM-MBR uploads are no longer filed, OF-2).
+
 - `pki.case` (both files): `reports-in` carries `evidence`, one entry per report the case
   was opened on: the SM-MBR `type`/`type_name`, `subtypes`, `verified` and `shared` (it
   crossed the MA-to-MA link), or, for a report on the modelled path, `modelled` (why) and

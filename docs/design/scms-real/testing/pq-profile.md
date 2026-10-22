@@ -63,10 +63,13 @@ counted 1,251 relay uploads and 14,280 CRL broadcasts, against 15,531 MTU refusa
 
 **Tests (`pq_relay.rs`, 120 s live of the hybrid matrix run).**
 
-- With generic-sdu, relayed reports are reassembled at RSUs and reach the proxy, CRL
-  frames are reassembled at vehicles, and 0 frames are refused.
-- With `none`, 0 relay uploads and 0 CRL broadcasts are counted, and the refusals are
-  > 0.
+- With generic-sdu: 616 relay uploads, 391 vehicle reports at the proxy through an RSU,
+  2,148 report and 16,595 CRL-frame reassemblies, 14,700 CRL broadcasts, and 0 frames
+  refused at the MTU.
+- With the certificate cycle, which splits only the certificate: 0 relay uploads and 0
+  CRL broadcasts are counted, and the refusals are > 0. This variant is the one that
+  shows the refusal. Under `fragmenter/none` the hybrid BSM with its certificate is
+  itself refused, so nothing is detected, and no report or revocation exists to test.
 
 ## 3. What the PQ profile cannot do (documented, not fixed)
 
