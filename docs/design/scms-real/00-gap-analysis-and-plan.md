@@ -517,6 +517,7 @@ Links (all TLS 1.2/1.3 between online components; application-layer encryption w
 | 9 | E2, E3 | Both UI, on E1's fixtures; separate component folders | 20 |
 | 10 | F1, F2 | Final validation | 16 |
 | 11 | [x] PKI, [x] FLOWS, [x] POLICY (merged 2026-10-21) | Fix wave for the config-testing deviations 1–7: PKI profiles and trust, backend flows, receiver and MA policy. Different modules | ≈ 24 |
+| 12 | [x] ORACLE, [x] STRESS, [x] MATRIX (merged 2026-10-22) | Testing wave: independent record oracle, multi-week and PQ stress, the same-seed configuration matrix. New files, two small engine fixes | ≈ 24 |
 | | | **Total** | **≈ 201 agent-hours** over 10 waves, plus one merge agent per wave (≈ 2 h each) |
 
 Wave 1 status (2026-10-16, merged into `main`; details in BUILD-STATUS.md):
@@ -586,6 +587,11 @@ Fix wave status (2026-10-21, merged into `main`; details in BUILD-STATUS.md and 
 - [x] **PKI** (merge `a8c411da`): `governance::CertProfile` with the ISS form (70 y root, root-issued CRL signer, root as CRACA) and the SAESOL form (ICA-issued CRL signer); us-production-2025 provider-a is ISS. Devices check a new CTL's 3-of-5 quorum, a composite CRL skips only an unverifiable CRL, uncompressed keys are accepted after an on-curve check, enrolment certificates carry the CRACA. Open: Studio PKI fixtures, an oracle check of the ISS profile.
 - [x] **FLOWS** (merge `8250023b`): backend messages to a down component are held and retried every 10 s, and its timers run on restart; RSU-filed unsigned reports carry their own label; CRL polls are conditional (412 when current) and interrupted downloads resume with Range/206. Single-channel MAC documented. Open: per-channel MAC queues and WSA bytes, the infoStatus body.
 - [x] **POLICY** (merge `e2c77632`): US SM-MBR judges only verified BSMs; verify-on-demand with detection warns in validate and settings; a 1609.2 generationTime window on every receiver and an MA evidence-time rule; the dead-reckoning clock mix fixed (clock-skew edge: 19 honest revoked → 0). Open: the US default revokes 26 honest vehicles in the realism base (R-USFP, raw-GNSS drift).
+
+Testing wave status (2026-10-22, merged into `main`; details in BUILD-STATUS.md and `testing/oracle-final.md`, `testing/stress.md`, `testing/matrix.md`):
+- [x] **ORACLE** (merge `2dab66bf`): `oracle.py records` (30 rules over pki.flow/pki.state/credential records: CRL freshness, downloads, report signing, cracaId, CTL order, RA blacklist) and `oracle.py ctl-files`. Base 65,980/69,051 and two-provider variant 206,798/212,189 checks pass; every red check is OF-1 (a second, unissued enrolment certificate signs later requests) or OF-2 (1,695 of 2,991 cellular report uploads carry no SPDU). Both reproduced in `tests/oracle_final.rs` (#[ignore] until the engine is fixed). Expectations moved to `tests/expectations/scms/`.
+- [x] **STRESS** (merge `02926e03`): F-OFF fixed (a switched-off device reaches no SCMS). Multi-week (33 d) runs prove the 2-week overdue-CRL rule in-run; PQ at quarter-fleet density (ML-DSA-44 ×12.6 airtime). Open: R-NOCRL (no CRL before a provider's first revocation), R-PQMBR, the full-scale benchmark.
+- [x] **MATRIX** (merge `0301425a`): 32 same-seed runs, 98 rows (82 pass, 10 open). Fixed the `credential_is_usable` cost (2,074 s → 164 s, same output) and the AoI fast-forward silence (1,693,079 ms → 81.6 ms; phase2-path digest re-blessed). Open: R-USFP is not GNSS noise, R-TRUSTLEAK (280 off-trust-list messages verify), LTE-V2X BSM p95 112 ms.
 
 Critical path: A1 → A3 → A5 → B4 → C2 → D1 → E1 → E2/E3 → F1. Two things could stretch it:
 - `rasn-compiler` cannot handle the 1609.2.1 modules (WP-A1 fallback adds about 8 h).
