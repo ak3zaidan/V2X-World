@@ -1,0 +1,14 @@
+schema: v2xw/scenario/1
+meta:
+  name: stress-pq-hybrid-mldsa44-certcycle
+  description: >-
+    Hybrid ML-DSA-44 at the post-quantum density with the certificate-cycle fragmenter
+    (NDSS 2024 Partially-Hybrid): BSMs keep ECDSA, the hybrid certificate travels in the
+    first alpha SPDUs of each 5-SPDU cycle.
+  authors: [v2xw]
+  tags: [stress, post-quantum, fragmentation, ndss2024]
+  created: "2026-10-22"
+  base: pq-hybrid-mldsa44.yaml
+net:
+  fragmenter:
+    id: fragmenter/cert-cycle-partial-hybrid
