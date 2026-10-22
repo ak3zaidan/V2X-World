@@ -2634,7 +2634,11 @@ impl Engine {
                             "node {} is {}{}",
                             node.index(),
                             if end { "back on" } else { "off" },
-                            if scms { ", and so is its SCMS client" } else { "" }
+                            if scms {
+                                ", and so is its SCMS client"
+                            } else {
+                                ""
+                            }
                         );
                     }
                     None => {

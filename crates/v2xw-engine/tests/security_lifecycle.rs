@@ -935,7 +935,9 @@ fn a_switched_off_device_reaches_no_scms_until_it_is_back_on() {
         t,
         until: Some(until),
         kind,
-        params: [("target".to_string(), json!(target))].into_iter().collect(),
+        params: [("target".to_string(), json!(target))]
+            .into_iter()
+            .collect(),
     };
     let build = || {
         let mut s = grid(110.0, 400.0);
@@ -976,7 +978,8 @@ fn a_switched_off_device_reaches_no_scms_until_it_is_back_on() {
         .events
         .push(item(30.0, 110.0, TimelineKind::Breakdown, node));
     let mut off = parked.clone();
-    off.events.push(item(31.0, 80.0, TimelineKind::Outage, node));
+    off.events
+        .push(item(31.0, 80.0, TimelineKind::Outage, node));
     let (_, on_rec) = run(parked);
     let (_, off_rec) = run(off);
     let on_win = topups(&on_rec, node, 31.0, 80.0);
@@ -1001,5 +1004,8 @@ fn a_switched_off_device_reaches_no_scms_until_it_is_back_on() {
         0,
         "a switched-off device downloaded a CRL"
     );
-    assert!(after >= 1, "the device did not catch up once power returned");
+    assert!(
+        after >= 1,
+        "the device did not catch up once power returned"
+    );
 }
