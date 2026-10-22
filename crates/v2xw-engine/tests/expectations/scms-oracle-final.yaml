@@ -38,6 +38,9 @@
 - {run: mbr, rule: CRL-STATE, expect: pass, source: "the engine's CRL rows agree with the bytes"}
 - {run: conf, rule: CRL-MATCH, expect: pass, source: "each entry revokes exactly one recorded device, one the MA decided on (1609.2 5.1.3.2/5.1.3.4)"}
 - {run: mbr, rule: CRL-MATCH, expect: pass, source: "as above"}
+- {run: conf, rule: CRL-PUB, expect: pass, source: "on a CRL within 1 business day of the decision ([SM-PROV] 3.4.10); end of the next business day (ET)"}
+- {run: mbr, rule: CRL-PUB, expect: pass, source: "as above; first written with the strict 24-business-hour reading, which fails the four Saturday decisions published Monday 10:00 ET (report 2.3)"}
+- {run: conf, rule: RA-BLOCK, expect: pass, source: "blacklisted: login refused, pre-generation stops ([CAMP122] SCMS-1204, SCMS-509)"}
 - {run: mbr, rule: RA-BLOCK, expect: pass, source: "blacklisted: login refused, pre-generation stops ([CAMP122] SCMS-1204, SCMS-509)"}
 
 # ---- Provisioning downloads ----

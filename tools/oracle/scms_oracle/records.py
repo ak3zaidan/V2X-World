@@ -30,6 +30,8 @@ Rule ids (and sources):
               ([SM-PROV] 3.4.9 "revoked certificates stay until expiry")
   CRL-SLA     each CRL is followed by the next one of its (crlCraca, crlSeries) no later than its
               nextCrl ([SM-PROV] 3.4.10), when the run lasts past that nextCrl
+  CRL-PUB     a revoked device is on a CRL within one business day of the MA's decision, and on
+              none before it ([SM-PROV] 3.4.10)
   CRL-STATE   the engine's CRL rows (pki.state crls) agree with the decoded bytes
   CRL-MATCH   every revoked device is matched by its provider's linkage CRL through cracaId and
               crlSeries agreement and the seed algorithm; no device the MA did not decide on is
@@ -122,6 +124,7 @@ def load(run_dir):
     R.creds = collections.defaultdict(list)    # device -> [(t, ctl_sequence)]
     R.decisions = []
     R.reports = []         # EE report messages: (id, from, transport, carries PDUs, instance, t)
+    R.revstages = {}       # proto.revocation: subject -> {stage: first t}
     R.end_t = 0
     with open(os.path.join(run_dir, 'recording.mcap'), 'rb') as f:
         for _, ch, m in make_reader(f).iter_messages():
@@ -163,6 +166,9 @@ def load(run_dir):
                                              sorted((q.get('certificates') or {}).keys())))
             elif topic == 'record/ma.decision':
                 R.decisions.append(json.loads(m.data))
+            elif topic == 'record/proto.revocation':
+                q = json.loads(m.data)
+                R.revstages.setdefault(q.get('id'), {}).setdefault(q.get('stage'), q['t'])
     return R
 
 
@@ -225,7 +231,7 @@ class Store:
         self.by = {}
 
     def add(self, cert):
-        h = certs.hashed_id8(cert)
+        h = h8(cert)
         self.by.setdefault(h, cert)
         return h
 
@@ -240,7 +246,7 @@ class Store:
         return None if iss[0] == 'self' else self.by.get(iss[1])
 
     def key(self, cert):
-        h = certs.hashed_id8(cert)
+        h = h8(cert)
         return _key(self, h, cert)
 
 
@@ -264,14 +270,33 @@ def _verify(curve_name, qx, qy, digest, r, s):
     return prims.ecdsa_verify(C, (qx, qy), digest, r, s)
 
 
+_BY_ID = {}
+
+
+def _memo(tag, obj, fn):
+    """Memoise fn(obj) by object identity; the entry keeps obj alive so its id is never reused.
+    Decoded values come from the cached `dec`, so equal bytes give the same object."""
+    k = (tag, id(obj))
+    hit = _BY_ID.get(k)
+    if hit is not None and hit[0] is obj:
+        return hit[1]
+    v = fn(obj)
+    _BY_ID[k] = (obj, v)
+    return v
+
+
+def h8(cert):
+    return _memo('h8', cert, certs.hashed_id8)
+
+
 def verify_sd(store, sd, signer_cert):
     k = store.key(signer_cert)
     if k is None:
         return False, 'signer key unresolved (issuer not in the store)'
     C, Q = k
     hname = certs.HASH_OF_CURVE[C.name]
-    tbs = coer.encode('ToBeSignedData', sd['tbsData'])
-    digest = prims.digest_1609(hname, tbs, certs.encode_canonical(signer_cert))
+    tbs = _memo('tbs', sd['tbsData'], lambda t: coer.encode('ToBeSignedData', t))
+    digest = prims.digest_1609(hname, tbs, _memo('canon', signer_cert, certs.encode_canonical))
     r, s = certs.sig_rs(sd['signature'])
     ok = _verify(C.name, Q[0], Q[1], digest, r, s)
     return ok, '' if ok else 'signature does not verify'
@@ -293,6 +318,7 @@ class Rules:
         self.bad = collections.defaultdict(list)
         self.na = set()
         self.info = {}
+        self.first_crl = {}
 
     def check(self, rule, cond, where=''):
         if cond:
@@ -356,6 +382,51 @@ def run_rules(R):
 
 
 BLOCK_GRACE_NS = 24 * 3600 * NS
+PUB_GRACE_NS = 600 * NS
+
+
+def one_business_day(R, t_ns, strict=False):
+    """Deadline of "within 1 business day" ([SM-PROV] 3.4.10) on the provider's Eastern
+    calendar; no US federal holiday falls in the runs checked here (2026-10-20 .. 11-04).
+    The text does not say how a change outside business hours counts (UNCONFIRMED): the rule
+    uses the end of the next business day after the change's day; `strict` gives the same wall
+    time one business day later (a Saturday change: Monday at that time)."""
+    from zoneinfo import ZoneInfo
+    et = ZoneInfo('America/New_York')
+    u = (R.t0 + dt.timedelta(microseconds=t_ns // 1000)).astimezone(et)
+    d = u + dt.timedelta(days=1)
+    while d.weekday() >= 5:
+        d += dt.timedelta(days=1)
+    if not strict:
+        d = d.replace(hour=23, minute=59, second=59, microsecond=0)
+    return int((d.astimezone(dt.timezone.utc) - R.t0).total_seconds() * NS)
+
+
+def rule_publication(X, R, subj_dev):
+    """CRL-PUB: a revoked device is on its provider's CRL within one business day of the MA's
+    decision ([SM-PROV] 3.4.10), and on no CRL before that decision.  The decision time is the
+    engine's proto.revocation `decision` stage; which CRL holds the device is the oracle's own
+    match (CRL-MATCH)."""
+    judged = late_strict = 0
+    for subj, st in R.revstages.items():
+        if 'decision' not in st:
+            continue
+        dev = subj_dev.get(subj)
+        if dev is None:
+            continue
+        td = st['decision']
+        first = X.first_crl.get(dev)
+        if first is not None:
+            X.check('CRL-PUB', first >= td, f'{dev}: on a CRL at {first / NS:.0f} s, before the decision at {td / NS:.0f} s')
+        deadline = one_business_day(R, td)
+        strict = one_business_day(R, td, strict=True)
+        if first is not None and first > strict + PUB_GRACE_NS:
+            late_strict += 1
+        if deadline + PUB_GRACE_NS <= R.end_t:
+            judged += 1
+            X.check('CRL-PUB', first is not None and first <= deadline + PUB_GRACE_NS,
+                    f'{dev}: decided {td / NS:.0f} s, first on a CRL {first and first / NS}, deadline {deadline / NS:.0f} s')
+    X.info['crl-pub'] = {'judged': judged, 'late_under_the_strict_reading': late_strict}
 
 
 def rule_block(X, R):
@@ -377,7 +448,11 @@ def rule_block(X, R):
         if dev is None:
             unmapped += 1
             continue
-        dec_t[dev] = min(dec_t.get(dev, d['t']), d['t'])
+        # the RA's blacklisting instant when the records give it (proto.revocation
+        # `blocklisted`), else the MA's decision record plus a day
+        st = R.revstages.get(d['subject'], {})
+        tb = st['blocklisted'] - BLOCK_GRACE_NS + 60 * NS if 'blocklisted' in st else d['t']
+        dec_t[dev] = min(dec_t.get(dev, tb), tb)
     late = collections.defaultdict(list)
     for p in R.pdus:
         if p['msg'] == 'batch-download' and p['to'] in dec_t and p['t'] > dec_t[p['to']] + BLOCK_GRACE_NS:
@@ -386,7 +461,10 @@ def rule_block(X, R):
         v = late.get(dev, [])
         X.check('RA-BLOCK', not v, f'{dev}: {len(v)} certificates delivered from {min(v) / NS if v else 0:.0f} s, '
                                    f'decision at {t / NS:.0f} s')
-    X.info['ra-block'] = {'revoked_devices': len(dec_t), 'unmapped_decisions': unmapped}
+    tried = sum(1 for p in R.pdus if p['type'] == 'EeRaDownloadRequestSpdu' and p['msg'] != 'report'
+                and p['from'] in dec_t and p['t'] > dec_t[p['from']] + BLOCK_GRACE_NS)
+    X.info['ra-block'] = {'revoked_devices': len(dec_t), 'unmapped_decisions': unmapped,
+                          'download_requests_after_block': tried}
 
 
 def rule_enrolment(X, store, by_type):
@@ -408,7 +486,7 @@ def rule_enrolment(X, store, by_type):
         cert = resp['certificate']
         store.add(cert)
         if dev:
-            out.setdefault(dev, []).append(certs.hashed_id8(cert))
+            out.setdefault(dev, []).append(h8(cert))
     return out
 
 
@@ -484,8 +562,8 @@ def rule_downloads(X, R, store, by_type, enrol, acks):
         w = f'{p["id"]} from {p["from"]} ({p["msg"]})'
         dev = p['from']
         mine = enrol.get(dev, [])
-        X.check('DL-SIGN', sc is not None and certs.hashed_id8(sc) in mine,
-                w + f': signer {sc and certs.hashed_id8(sc).hex()} is not {dev}\'s enrolment certificate {[m.hex() for m in mine]}')
+        X.check('DL-SIGN', sc is not None and h8(sc) in mine,
+                w + f': signer {sc and h8(sc).hex()} is not {dev}\'s enrolment certificate {[m.hex() for m in mine]}')
         if sc:
             ok, why = verify_sd(store, sd, sc)
             X.check('DL-SIGN', ok, w + ': ' + why)
@@ -581,6 +659,18 @@ def rule_crl(X, R, store, by_type):
     for p, outer, _ in by_type['SecuredCrl']:
         if p['hex'] not in first or p['t'] < first[p['hex']][0]['t']:
             first[p['hex']] = (p, outer)
+    # CRLs the engine records as issued (pki.state crls[].hex) but never sends on a pki.flow
+    # message: they still count in the (crlCraca, crlSeries) sequence (indexWithinI counts
+    # every full or delta CRL issued)
+    unsent = 0
+    for (prov, id8), row in R.crl_rows.items():
+        hx = row.get('hex')
+        if hx and hx not in first:
+            unsent += 1
+            p = {'id': f'{prov}/state-crl/{id8}', 'provider': prov, 't': row.get('issued_at', row['seen_t']),
+                 'type': 'SecuredCrl', 'msg': None, 'unsent': True}
+            first[hx] = (p, dec('Ieee1609Dot2Data', bytes.fromhex(hx)))
+    X.info['crls'] = {'issued': len(first), 'never_sent': unsent}
     crls = []
     for hx, (p, outer) in first.items():
         w = f'{p["id"]} ({p["provider"]})'
@@ -606,9 +696,9 @@ def rule_crl(X, R, store, by_type):
         if X.check('CRL-SSP', ssp is not None, w + ': signer has no CrlSsp for psid 256'):
             X.check('CRL-SSP', cc['crlSeries'] in ssp['crls'], w + f': series {cc["crlSeries"]} not in {ssp["crls"]}')
             craca = sc if ssp['associatedCraca'] == 'isCraca' else store.issuer(sc)
-            X.check('CRL-SSP', craca is not None and cc['crlCraca'] == certs.hashed_id8(craca),
+            X.check('CRL-SSP', craca is not None and cc['crlCraca'] == h8(craca),
                     w + f': crlCraca {cc["crlCraca"].hex()} vs {ssp["associatedCraca"]} '
-                        f'{craca and certs.hashed_id8(craca).hex()}')
+                        f'{craca and h8(craca).hex()}')
             c['craca'] = craca
         X.check('CRL-NEXT', cc['nextCrl'] > cc['issueDate'], w + ': nextCrl not after issueDate')
         X.check('CRL-TIME', cc['issueDate'] <= t32(R, c['p']['t']) + 1, w + ': issueDate after the CRL was sent')
@@ -618,11 +708,16 @@ def rule_crl(X, R, store, by_type):
                     w + f': iRev {body["iRev"]} > i {i_at_time32(cc["issueDate"])} at issueDate')
         by_key[(cc['crlCraca'], cc['crlSeries'])].append(c)
     for key, lst in by_key.items():
-        lst.sort(key=lambda c: (c['cc']['issueDate'], c['p']['t']))
+        def order(c):
+            k, b = c['cc']['typeSpecific']
+            return (c['cc']['issueDate'], b.get('iRev', 0), b.get('indexWithinI', b.get('crlSerial', 0)), c['p']['t'])
+        lst.sort(key=order)
+        prev_full = None
         for a, b in zip(lst, lst[1:]):
             ca, cb = a['cc'], b['cc']
             w = f'{key[0].hex()}/{key[1]}: {a["p"]["id"]} -> {b["p"]["id"]}'
-            X.check('CRL-SEQ', cb['issueDate'] > ca['issueDate'], w + ': issueDate does not increase')
+            # "the time when the CRL was issued": a full and a delta CRL issued together share it
+            X.check('CRL-SEQ', cb['issueDate'] >= ca['issueDate'], w + ': issueDate decreases')
             ka, ba = ca['typeSpecific']
             kb, bb = cb['typeSpecific']
             if 'Hash' in ka and 'Hash' in kb:
@@ -631,9 +726,13 @@ def rule_crl(X, R, store, by_type):
                 X.check('CRL-SEQ', bb['iRev'] >= ba['iRev'], w + ': iRev decreases')
                 want = ba['indexWithinI'] + 1 if bb['iRev'] == ba['iRev'] else 0
                 X.check('CRL-SEQ', bb['indexWithinI'] == want, w + f': indexWithinI {bb["indexWithinI"]}, want {want}')
-            if kb.startswith('full'):
-                X.check('CRL-KEEP', _kept(ca, cb), w + ': an unexpired entry of the earlier CRL is missing')
-            X.check('CRL-SLA', cb['issueDate'] <= ca['nextCrl'], w + f': issued {cb["issueDate"] - ca["nextCrl"]} s after nextCrl')
+            if ka.startswith('full'):
+                prev_full = a
+            if kb.startswith('full') and prev_full is not None:
+                X.check('CRL-KEEP', _kept(prev_full['cc'], cb),
+                        f'{key[0].hex()}/{key[1]}: {prev_full["p"]["id"]} -> {b["p"]["id"]}: an unexpired entry is missing')
+            if cb['issueDate'] > ca['issueDate']:
+                X.check('CRL-SLA', cb['issueDate'] <= ca['nextCrl'], w + f': issued {cb["issueDate"] - ca["nextCrl"]} s after nextCrl')
         last = lst[-1]['cc']
         if t32(R, R.end_t) > last['nextCrl']:
             X.check('CRL-SLA', False, f'{key[0].hex()}/{key[1]}: no CRL after nextCrl {last["nextCrl"]} (run ends {t32(R, R.end_t)})')
@@ -715,7 +814,7 @@ def rule_craca(X, R, store, crls):
         if craca is None:
             continue
         for series in ssp['crls']:
-            covered.add((certs.hashed_id8(craca)[-3:], series))
+            covered.add((h8(craca)[-3:], series))
     for h, c in store.by.items():
         tb = c['toBeSigned']
         if c['issuer'][0] == 'self':
@@ -764,22 +863,45 @@ def rule_craca(X, R, store, crls):
         dev_certs[dev] = cs
     subj_dev = {k8: dev for dev, cs in dev_certs.items() for k8, _ in cs}
     decided = {subj_dev.get(d['subject'], d['subject']) for d in R.decisions if d.get('decision') == 'revoke'}
+    # An entry is followed through every full linkage CRL of its (crlCraca, series): its seeds,
+    # advanced to the newest CRL's iRev, identify it.  A device can only be matched by a CRL
+    # whose iRev is not after the device's recorded i-periods (seeds only advance), so an entry
+    # passes when some appearance revokes exactly one recorded device; it fails when an
+    # appearance revokes two or more, or when no appearance can be tied to any device.
+    from . import linkage
     matched = collections.defaultdict(set)
-    for key, c in last.items():
-        cc = c['cc']
-        _, body = cc['typeSpecific']
-        for jg in body.get('individual', []):
-            for lg in jg['contents']:
-                for ig in lg['contents']:
-                    for rev in ig['contents']:
-                        one = dict(cc, typeSpecific=('fullLinkedCrl', dict(body, individual=[
-                            {'jmax': jg['jmax'], 'contents': [dict(lg, contents=[dict(ig, contents=[rev])])]}])))
-                        hit = {dev for dev, cs in dev_certs.items()
-                               if any(chain.linkage_crl_revokes(one, x) for _, x in cs)}
-                        tag = f'{c["p"]["id"]} entry {rev["linkageSeed1"].hex()[:8]}'
-                        X.check('CRL-MATCH', len(hit) == 1, f'{tag}: revokes {len(hit)} recorded devices {sorted(hit)[:4]}')
-                        for dev in hit:
-                            matched[dev].add(tag)
+    for key, newest in last.items():
+        i_ref = newest['cc']['typeSpecific'][1]['iRev']
+        hits = collections.defaultdict(list)
+        for c in crls:
+            cc = c['cc']
+            if (cc['crlCraca'], cc['crlSeries']) != key or cc['typeSpecific'][0] != 'fullLinkedCrl':
+                continue
+            body = cc['typeSpecific'][1]
+            for jg in body.get('individual', []):
+                for lg in jg['contents']:
+                    la1, la2 = int.from_bytes(lg['la1Id'], 'big'), int.from_bytes(lg['la2Id'], 'big')
+                    for ig in lg['contents']:
+                        for rev in ig['contents']:
+                            steps = i_ref - body['iRev']
+                            ident = (lg['la1Id'], lg['la2Id'], linkage.seed_at(la1, rev['linkageSeed1'], steps),
+                                     linkage.seed_at(la2, rev['linkageSeed2'], steps))
+                            one = dict(cc, typeSpecific=('fullLinkedCrl', dict(body, individual=[
+                                {'jmax': jg['jmax'], 'contents': [dict(lg, contents=[dict(ig, contents=[rev])])]}])))
+                            hit = {dev for dev, cs in dev_certs.items()
+                                   if any(chain.linkage_crl_revokes(one, x) for _, x in cs)}
+                            hits[ident].append((c['p']['id'], hit, c['p']['t']))
+        for ident, apps in hits.items():
+            tag = f'{key[0].hex()}/{key[1]} entry {ident[2].hex()[:8]} ({len(apps)} CRLs)'
+            many = [(cid, h) for cid, h, _ in apps if len(h) > 1]
+            X.check('CRL-MATCH', not many, f'{tag}: {many[:1]} revokes several devices')
+            devs = set().union(*(h for _, h, _ in apps))
+            X.check('CRL-MATCH', len(devs) == 1, f'{tag}: tied to {len(devs)} recorded devices {sorted(devs)[:4]}')
+            first_t = min(t for _, _, t in apps)
+            for dev in devs:
+                matched[dev].add(tag)
+                X.first_crl[dev] = min(X.first_crl.get(dev, first_t), first_t)
+    rule_publication(X, R, subj_dev)
     for dev in matched:
         X.check('CRL-MATCH', dev in decided, f'{dev}: revoked by a CRL but the MA made no revoke decision on it')
     X.info['crl-match'] = {'decided': len(decided), 'matched': len(matched),
@@ -1114,9 +1236,14 @@ def _mut_ack_next(R):
         pdu = coer.decode('ScmsPdu', payload_bytes(sd))
         pdu['content'][1][1]['nextDlTime'] += 30 * 24 * 3600
         sd['tbsData']['payload']['data']['content'] = ('unsecuredData', coer.encode('ScmsPdu', pdu))
-    devs = {p['from'] for p in R.pdus if p['type'] == 'EeRaDownloadRequestSpdu' and p['flow'] not in ('preload',)
-            and p['msg'] != 'report'}
-    return _mut_pdu_inner(R, 'RaEeCertAckSpdu', fn, lambda p: p['to'] in devs, 'hex')
+    n = 0
+    for p in R.pdus:          # every acknowledgement: the downloads now all come too early
+        if p['type'] == 'RaEeCertAckSpdu':
+            d = coer.decode('Ieee1609Dot2Data', bytes.fromhex(p['hex']))
+            fn(d, p)
+            p['hex'] = coer.encode('Ieee1609Dot2Data', d).hex()
+            n += 1
+    return n > 0
 
 
 def _mut_enrol_life(R):
@@ -1148,7 +1275,18 @@ def _mut_noncanonical(R):
     return True
 
 
+def _mut_pub_late(R):
+    """The MA's decision moved five days earlier: the CRL now comes after the SLA."""
+    R.revstages = {k: dict(v) for k, v in R.revstages.items()}
+    for k, st in R.revstages.items():
+        if 'decision' in st:
+            st['decision'] -= 5 * 86400 * NS
+            return True
+    return False
+
+
 FAULTS = {
+    'crl-after-sla': ('a decision published more than a business day later', 'CRL-PUB', _mut_pub_late),
     'pdu-trailing-byte': ('a PDU with a trailing byte (not canonical COER)', 'DECODE', _mut_noncanonical),
     'ack-nextdl-late': ('RaEeCertAck nextDlTime a month later than the downloads', 'DL-AFTER', _mut_ack_next),
     'enrol-7y': ('an enrolment certificate valid 7 years', 'ENR-LIFE', _mut_enrol_life),
