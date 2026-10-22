@@ -63,7 +63,7 @@ because the base already changes at every 60 s period rollover.
 | Clock skew at the validity edges | Yes, after the clock was wired into security |
 | RA offline across the top-ups | Fixed: 6 of 12 top-ups were lost; with the new retry 12 of 12 complete |
 | RA slow on the first request | Yes: the request is accepted once and acknowledged twice |
-| RA down after its acknowledgement | **Open**: the LA and ACA answers are never resent |
+| RA down after its acknowledgement | Fixed (§7): the LA and ACA answers are retried and the RA's timers run on restart |
 | Device offline for weeks | Yes: silent once its pool runs out, tops up when back |
 | Three weeks with no new revocation | Fixed: the CRL Generator now re-issues by `nextCrl` |
 | A standing 10,000-entry CRL | Yes after a fix: about 33 B an entry, 336 kB a download |
@@ -126,13 +126,13 @@ noise (R-USFP). That is the cost of the strict thresholds, not a code defect.
 
 - **R-TRUSTLEAK (security).** With provider-b off the trust list, provider-a receivers still
   verified 7 of its messages. Not root-caused. This should come first.
-- The LA and ACA do not resend their answers to an RA that was down (edge 3d).
+- ~~The LA and ACA do not resend their answers to an RA that was down (edge 3d).~~ Fixed in §7.
 - A trust-list publication due during fast-forward waits for the next backend tick.
 - One CRL a device cannot verify makes it refuse the whole frame.
 - A device does not re-check the trust list's elector signatures.
 - Clock skew applies to vehicles only, as a fixed offset.
 - Post-quantum certificates at density were not run (edge 11).
-- A small validated-certificate cache adds 12 % events; the cause is not shown.
+- ~~A small validated-certificate cache adds 12 % events; the cause is not shown.~~ Explained in §7 (event-loop wakes, not traffic).
 - Verify-on-demand blinds misbehaviour detection: a policy question for the owner.
 - The corroboration rule decided only about half the reported attackers within 54 h.
 - Case evidence reads `verified: false` under modelled crypto (R-EVID); RSU-filed reports
@@ -143,6 +143,81 @@ noise (R-USFP). That is the cost of the strict thresholds, not a code defect.
 - The Studio's PKI fixtures (`ui/apps/studio/test/fixtures/pki/`) were recorded before the
   LOP fold; they still pass, but they no longer match what a run records now.
 - The full `scms_knobs_runs` suite (36 minutes) ran before the two merge fixes, not after.
+
+## 7. Protocol and flow gaps package (2026-10-21)
+
+1. **RA outage after its acknowledgement (edge 3d): fixed.** A message one SCMS component
+   sends another that is down (an LA's PLVs, the ACA's certificates) waits in the sender's
+   queue and is retried every 10 s (`v2xw_proto::fault::BACKEND_RETRY`, ASSUMPTION: no
+   document specifies inter-component retry, so SCMS-522's EE value is reused). A down
+   component's own timers (the RA's shuffle release, its pre-generation) run when it
+   restarts. A device's request is still lost (the device times out, SCMS-522), and an
+   outage that never ends still loses everything. The LOP and the CRL broadcast path are
+   not stateful services and keep the old behaviour. Run report: `backend_deliveries_held`,
+   `backend_timers_deferred`.
+2. **Reports with no valid pseudonym across the rollover: cause found and fixed.** On
+   main, 30 reports in the conformance run's first 660 s went out unsigned with the label
+   "no pseudonym certificate valid at the report's time". Measured, all 30 were filed by
+   roadside units (31 RSU reports; R-UNSEC). An RSU holds application certificates only,
+   so it has nothing to sign an SM-MBR with. The vehicle cases (the "~90" of round 1) had
+   already gone with the edge 1b/1c rollover fix: no vehicle report falls into the gap in
+   this window (`reports_held_for_signer` 0).
+   - RSU-filed reports now carry their own label, "a roadside unit holds no pseudonym
+     certificate to sign an SM-MBR with". Whether a US RSU may sign an SM-MBR with its
+     application certificate is still the owner's question.
+   - As a defensive rule, a vehicle with no pseudonym valid at signing now keeps the
+     report in its store (SM-MBR §2.2) until one is valid
+     (`Phase2::report_waits_for_signer`). Before, it sent the report unsigned. This
+     happens to a vehicle whose pool has run dry. The rule has no in-run test yet: a
+     starved-vehicle run (`edge/offline-weeks`) is the place for one.
+3. **Downloads.** Every due CRL poll is now a conditional GET (`If-Modified-Since`,
+   [SMP] §4.3.2) on the composite CRL. It is answered with HTTP 412 (92 B, ASSUMPTION) when
+   the device's copy is current (`crl_polls_not_modified`). Before, a poll that would find
+   nothing new put nothing on the air, so the device learned "nothing new" for free. The
+   infoStatus SPDU body itself is not encoded (validation A16, narrowed). An interrupted
+   batch download now resumes with `Range` ([SMP] §4.3.2): the device keeps the bytes that
+   arrived before the cut, and its retry is answered 206 with the remainder
+   (`batch_resume`, `range_resumes`).
+4. **Report uploads relayed by an RSU: documented, not changed.** The radio stack cannot
+   yet carry them on a service channel:
+   - Every 802.11p frame of a run goes on one channel, `Engine::dsrc_channel` (172 in the
+     2016 US plan, `radio/regulation.rs`). The PHY filters interference by channel
+     (`phy.rs`), but no frame is ever put on a second channel.
+   - `net.channel_access: alternating` models only the 1609.4 CCH/SCH timing: a frame
+     waits for the CCH interval. There is no SCH queue and no channel switch.
+   - The 1609.3 WSA schedule exists (`v2xw-net/src/stack/wave.rs`), but there is no WSA
+     encoder, and `RsuConfig::wsa_payload_bytes` is `None`.
+
+   A real US RSU offers its SCMS IPv6 service in a WSA on the CCH or the safety channel,
+   and the vehicle joins the advertised SCH (RSU v4.1 §2.2; IEEE 1609.3 §8.2, 1609.4
+   §6.2.5). Modelling that needs per-channel MAC queues, a channel switch per radio (or a
+   second radio), and WSA bytes. Until then, relayed reports and their acknowledgements
+   compete with BSMs on channel 172, which over-states their channel load.
+5. **The two unexplained effects: explained.** Both pairs were re-run on the main release
+   binary with `events_by_class`:
+   - **16-entry validated-certificate cache, +12 % events.** All of the extra events are
+     `NodeTask`: 3,774,561 → 4,268,034. Every other class is identical (MacTimer 152,311,
+     PhyEnd 142,226, NetDeliver 3,097, MobilityStep 3,001, FlowTimer 30, Observe 302).
+     A receiver is woken at the instant each signature check finishes
+     (`Engine::schedule_wake`). A cache hit (400 µs) usually finishes inside a wake that is
+     already pending. A first-sight validation (priced SHA-256 and ECQV) finishes later and
+     needs a wake of its own. The cost is event-loop work, not simulated traffic, so it is
+     not a defect. It is pinned in `scms_knobs_runs.rs::a_small_validated_certificate_cache_revalidates_and_costs_more_crypto`.
+   - **10,000-entry standing CRL, +17 % verifications and −21 % revoked refusals.** In the
+     first live window (0–660 s), verifications rise from 130,512 to 162,927 (+25 %), with
+     FlowTimer 0 → 132 and PhyEnd 56,004 → 72,735 (+16,731 frames).
+     - The base has no list at t0, so the RSUs' 5 s CRL broadcast starts only after the
+       first revocation. With a standing list, the broadcast runs from t0.
+     - 132 turns in 660 s, each turn the 336 kB composite in about 127 frames: 132 × 127 ≈
+       16,764, against 16,731 measured.
+     - Receivers verify those frames, and the frames load channel 172 (MacTimer +19,497),
+       which costs BSM receptions. That is the drop in revoked-sender refusals, with the
+       same BSMs sent.
+
+     This is the configured behaviour, not a code defect. It is a realism finding for the
+     owner: re-broadcasting a 336 kB list every 5 s on the safety channel is about 0.54
+     Mbit/s per RSU. A deployment would broadcast deltas, use a longer interval, or move the
+     list to a service channel (item 4).
 
 ## BUILD-STATUS (2026-10-21, main 3c64d514 plus this report)
 

@@ -7958,14 +7958,19 @@ impl Engine {
             .filter(|p| p.access().crl_delivery() == crate::backend::CrlDelivery::Unicast)
             .map(|p| p.crl_polls_due(now))
             .unwrap_or_default();
-        for (node, _have) in polls {
+        for (node, _have, changed) in polls {
             let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
             let (version, entries, req, size) = {
                 let Some(p) = self.phase2.as_mut() else { break };
                 let (v, e, _) = p.published_crl_for(node);
                 // What the RA really serves: the encoded composite CRL, not 40 B an
-                // entry (edge-case package, item 6).
-                (v, e, p.crl_request_size(), p.crl_download_size(node))
+                // entry (edge-case package, item 6); or 412 when the copy is current.
+                let size = if changed {
+                    p.crl_download_size(node)
+                } else {
+                    crate::phase2::CRL_NOT_MODIFIED_BYTES
+                };
+                (v, e, p.crl_request_size(), size)
             };
             let (ul, dl) = {
                 let Engine {
@@ -8028,7 +8033,12 @@ impl Engine {
                     ] {
                         self.emit_backend_bytes(recorder, now, bucket, bytes, Some(node));
                     }
-                    if at <= horizon {
+                    if !changed {
+                        // 412: nothing to install.
+                        if let Some(p) = self.phase2.as_mut() {
+                            p.note_crl_not_modified();
+                        }
+                    } else if at <= horizon {
                         let sdu = v2xw_core::ids::SduId::new(self.next_sdu);
                         self.next_sdu += 1;
                         self.transfers.insert(
@@ -8288,6 +8298,15 @@ impl Engine {
         let pos = self.actor_of(node).map_or(Vec3::ZERO, |a| a.last.pos);
         let bytes = crate::phase2::report_bytes();
         let sign = self.signing_cost(node);
+        // A report is signed with a pseudonym certificate valid when it is signed: with
+        // none (the week rollover before the top-up lands, an exhausted pool) it stays in
+        // the store until one is, instead of going out unsigned.
+        if let Some(p) = self.phase2.as_mut()
+            && p.report_waits_for_signer(node, sign.after(now))
+        {
+            p.hold_report(node, report, detected_at);
+            return;
+        }
         match kind {
             crate::backend::AccessKind::Cellular => {
                 let outcome = {

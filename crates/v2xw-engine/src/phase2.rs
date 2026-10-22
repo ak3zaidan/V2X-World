@@ -378,6 +378,16 @@ pub const REPORT_INTERVAL_S: f64 = 1.0;
 /// latency states its own.
 pub const CRL_FETCH_INTERVAL_S: f64 = 3_600.0;
 
+/// The bytes of the RA's answer to a conditional CRL poll when the device's copy is
+/// current: HTTP 412 with no body.
+///
+/// [SMP] §4.3.2 and §4.3.1: the composite CRL (6.3.5.8) and the information status
+/// (6.3.5.14) are fetched with `If-Modified-Since`, and 412 means "already current".
+/// **ASSUMPTION** (constants.md): a minimal HTTP/1.1 response, `HTTP/1.1 412 Precondition
+/// Failed` (34 B with CRLF), a `Date:` header (37 B), `Content-Length: 0` (19 B) and the
+/// blank line (2 B): 92 B. Like the 200 answer, its TLS record framing is not charged here.
+pub const CRL_NOT_MODIFIED_BYTES: u32 = 92;
+
 /// How often a roadside unit with the `crl` role repeats the list it holds, by default.
 ///
 /// **Cited bound, ASSUMED mechanism** (constants.md). No document specifies a roadside
@@ -1339,6 +1349,9 @@ pub struct Phase2Report {
     /// Reports a device could not secure (no evidence heard, no certificate or key),
     /// sent on the modelled path; see `scms.state.pdu_rejections` for the backend's.
     pub reports_mbr_unsecured: u64,
+    /// Times a vehicle kept a report in its store because no pseudonym certificate of
+    /// its was valid when it would have signed it ([`Phase2::report_waits_for_signer`]).
+    pub reports_held_for_signer: u64,
     /// EAC decisions the run scheduled and took (root rollover, root removal).
     pub gov_decisions: u64,
     /// CTLs the governance entities published during the run (after the genesis CTL).
@@ -1382,6 +1395,9 @@ pub struct Phase2Report {
     pub crl_broadcasts: u64,
     /// How many CRL downloads cellular vehicles completed.
     pub crl_downloads: u64,
+    /// Conditional CRL polls the RA answered with HTTP 412 (the copy is current; [SMP]
+    /// §4.3.2): each a request and a 92 B answer on the cellular link.
+    pub crl_polls_not_modified: u64,
     /// Issued revocations whose publication the run horizon cut off.
     pub crl_past_horizon: u64,
     /// How many node installations of a CRL entry.
@@ -1541,6 +1557,11 @@ pub struct Phase2Report {
     /// Backend deliveries dropped because their receiver was offline
     /// (`actors.backend.failures`).
     pub backend_deliveries_dropped: u64,
+    /// Messages one SCMS component sent another while that one was down, held in the
+    /// sender's queue and delivered on a retry once it was back (`v2xw_proto::fault`).
+    pub backend_deliveries_held: u64,
+    /// A down component's own scheduled jobs, run when it restarted.
+    pub backend_timers_deferred: u64,
     /// EE requests to the RA sent again because no answer came within
     /// `ee_retry_timeout_s` ([CAMP122] SCMS-522), summed over every provider's devices.
     pub ee_retries: u64,
@@ -2963,6 +2984,12 @@ impl Phase2 {
             .map(|(k, v)| ((*k).to_string(), *v))
             .collect();
         r.backend_deliveries_dropped = self.runs.iter().map(|x| x.state.faults.dropped).sum();
+        r.backend_deliveries_held = self.runs.iter().map(|x| x.state.faults.held).sum();
+        r.backend_timers_deferred = self
+            .runs
+            .iter()
+            .map(|x| x.state.faults.deferred_timers)
+            .sum();
         for run in &self.runs {
             for d in run.state.devices.values() {
                 r.ee_retries += u64::from(d.ee_retries);
@@ -3785,6 +3812,35 @@ impl Phase2 {
         }
     }
 
+    /// Whether a vehicle must keep a report it would sign at `at` in its store: it is a
+    /// device of this SCMS (the PDU layer on) and holds no pseudonym certificate valid at
+    /// `at` (`ScmsRun::mbr_signer`), as across the week rollover before its top-up lands.
+    /// The report waits until one is valid ([SM-MBR] §2.2: reports are stored and
+    /// uploaded later), rather than going out unsigned. Counted on
+    /// [`Phase2Report::reports_held_for_signer`].
+    pub fn report_waits_for_signer(&mut self, node: NodeId, at: SimTime) -> bool {
+        if self.etsi.is_some()
+            || self.home().state.pki.is_none()
+            || self.rsu_spec_of(node).is_some()
+        {
+            return false;
+        }
+        let dev = device_of(node);
+        let run = self.run_of(dev);
+        // Only a device on the real-certificate path (it holds implicit pseudonyms, if
+        // none valid now): one that never had any would wait for ever.
+        let on_real_path = run
+            .state
+            .devices
+            .get(&dev)
+            .is_some_and(|d| d.credentials.values().any(|c| c.implicit.is_some()));
+        let waits = on_real_path && run.mbr_signer(dev, at, None).is_none();
+        if waits {
+            self.report.reports_held_for_signer += 1;
+        }
+        waits
+    }
+
     /// Takes a vehicle's held reports at `now`, to try again, in the store's upload
     /// order (highest weight first, newer first on ties) after the 05:00-Eastern decays
     /// since the last look and the deletion of reports older than a week.
@@ -4085,6 +4141,15 @@ impl Phase2 {
         let Some(subtype) = r.reason_codes.iter().find_map(|c| us_subtype(c, us)) else {
             return MbrBuild::Unmapped;
         };
+        if r.reporter.is_some_and(|n| self.rsu_spec_of(n).is_some()) {
+            // R-UNSEC: a roadside unit holds application certificates only, and [SM-MBR]
+            // has "the EE certificate" (a pseudonym certificate in CAMP's design) sign the
+            // report, so an RSU-filed report has nothing to be signed with. Labelled apart
+            // from a vehicle's (which waits for a valid pseudonym instead).
+            return MbrBuild::Unsecured(
+                "a roadside unit holds no pseudonym certificate to sign an SM-MBR with",
+            );
+        }
         if !r.reporter.is_some_and(|n| {
             self.run_of(device_of(n))
                 .state
@@ -5740,9 +5805,15 @@ impl Phase2 {
         self.home().state.sizes.crl_request().bytes()
     }
 
-    /// Vehicles whose CRL poll is due at `now`, with the version they hold. Advances each
-    /// one's next poll.
-    pub fn crl_polls_due(&mut self, now: SimTime) -> Vec<(NodeId, u32)> {
+    /// Vehicles whose CRL poll is due at `now`, with the version they hold and whether the
+    /// RA has anything newer for them. Advances each one's next poll.
+    ///
+    /// Every due poll is a request on the air: a device cannot know that nothing changed
+    /// without asking. It is a conditional GET (`If-Modified-Since` its copy's time,
+    /// [SMP] §4.3.2), answered with the composite CRL when something changed and with
+    /// HTTP 412 ([`CRL_NOT_MODIFIED_BYTES`]) when its copy is current. Before this, a poll
+    /// that would have found nothing new put nothing on the air.
+    pub fn crl_polls_due(&mut self, now: SimTime) -> Vec<(NodeId, u32, bool)> {
         let interval = self.params.crl_fetch_interval;
         let published: Vec<u32> = (0..self.runs.len())
             .map(|h| self.published_crl_for_provider(h).0)
@@ -5772,7 +5843,9 @@ impl Phase2 {
                 {
                     n.crl_serial_asked = serials[h];
                     n.crl_fetch_in_flight = true;
-                    out.push((*node, n.crl_version));
+                    out.push((*node, n.crl_version, true));
+                } else {
+                    out.push((*node, n.crl_version, false));
                 }
             }
         }
@@ -5833,6 +5906,11 @@ impl Phase2 {
         {
             n.crl_fetch_in_flight = false;
         }
+    }
+
+    /// A conditional CRL poll answered 412: the vehicle's copy is current.
+    pub fn note_crl_not_modified(&mut self) {
+        self.report.crl_polls_not_modified += 1;
     }
 
     /// A CRL poll that ended without a download (lost, no coverage).
