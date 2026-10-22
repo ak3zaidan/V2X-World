@@ -89,6 +89,13 @@ impl ScmsNodes {
         ]
     }
 
+    /// Whether `node` is one of the deployment's stateful components: a service with a
+    /// job queue that survives a restart. The Location Obscurer Proxy and the CRL
+    /// broadcast path are not: a proxy that goes down loses the connections it relays.
+    pub fn is_component(&self, node: NodeId) -> bool {
+        node != self.lop && node != self.crl_broadcast && self.all().contains(&node)
+    }
+
     /// The links the reference deployment needs, as unordered pairs.
     pub fn backend_links(&self) -> Vec<(NodeId, NodeId)> {
         vec![
