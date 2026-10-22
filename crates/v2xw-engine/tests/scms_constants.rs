@@ -86,6 +86,16 @@ fn code_values() -> Vec<(&'static str, f64, &'static str)> {
             "ASSUMPTION",
         ),
         (
+            "crl_not_modified_bytes",
+            f64::from(phase2::CRL_NOT_MODIFIED_BYTES),
+            "ASSUMPTION",
+        ),
+        (
+            "backend_retry_s",
+            v2xw_proto::fault::BACKEND_RETRY.as_nanos() as f64 / 1e9,
+            "ASSUMPTION",
+        ),
+        (
             "crl_broadcast_interval_s",
             phase2::CRL_BROADCAST_INTERVAL_S,
             "CITED",

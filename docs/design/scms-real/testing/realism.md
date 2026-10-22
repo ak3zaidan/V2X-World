@@ -240,7 +240,7 @@ Rust faults were injected with `tools/mutate/mutate.py`.
 - R-TRUSTLEAK: root-cause the 7 verified off-CTL messages. A security fix comes first.
 - R-EVID: label the evidence verdict under modelled crypto, or a `crypto_mode: real`
   realism base.
-- R-UNSEC: label RSU-filed reports, and decide whether RSUs sign SM-MBR reports.
+- R-UNSEC: RSU-filed reports are now labelled "a roadside unit holds no pseudonym certificate to sign an SM-MBR with" (07 §7 item 2); whether RSUs sign SM-MBR reports is still the owner's decision.
 - R-USFP: a filtered-position GNSS option, so US-profile false positives can be trusted.
 - R-LOP and R-CRLFETCH, above.
 - The full quarter benchmark re-run on this branch. Every per-device number above is

@@ -541,6 +541,11 @@ impl<M> Kernel<M> {
         self.next_delivery()
     }
 
+    /// The link from `from` to `to`, if the topology has one.
+    pub fn link(&self, from: NodeId, to: NodeId) -> Option<crate::net::Link> {
+        self.net.link(from, to)
+    }
+
     /// When the next scheduled delivery is due, if anything is scheduled.
     pub fn next_due(&self) -> Option<SimTime> {
         self.heap.peek().map(|Reverse(q)| q.at)

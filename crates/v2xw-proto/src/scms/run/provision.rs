@@ -769,6 +769,23 @@ impl ScmsState {
         }
     }
 
+    /// The batch file's size on the wire for `device`'s download of period `i`: the whole
+    /// file, or under a resumed download (`Range: bytes=<n>-`, the bytes it already holds,
+    /// [SMP] §4.3.2) the 206 answer's remainder. The value is the one the device's Range
+    /// header carries; read from its state rather than modelled as a request field.
+    fn range_remainder(&self, device: NodeId, i: u32, size: WireSize) -> WireSize {
+        let held = self
+            .devices
+            .get(&device)
+            .and_then(|d| d.batch_resume.get(&i))
+            .copied()
+            .unwrap_or(0);
+        if held == 0 || held >= size.bytes() {
+            return size;
+        }
+        WireSize::real(size.bytes() - held, "batch zip remainder (Range, HTTP 206)")
+    }
+
     /// Whether `device` is waiting for `kind`, clearing the wait when it is. An answer it
     /// is not waiting for (the second answer to a request it sent twice) is dropped by the
     /// device and counted.
@@ -1834,6 +1851,7 @@ impl ScmsState {
                     }
                     WireSize::real(pdu_prov::stored_zip_len(&entries), "batch zip (stored)")
                 };
+                let size = self.range_remainder(device, i, size);
                 // The batch file travels back through the proxy, encrypted end to end: each
                 // certificate to the device's butterfly encryption key, which neither the
                 // RA nor the LOP holds.
@@ -1873,6 +1891,7 @@ impl ScmsState {
                     }
                     WireSize::real(pdu_prov::stored_zip_len(&entries), "batch zip (stored)")
                 };
+                let size = self.range_remainder(device, i, size);
                 out.send(
                     device,
                     ScmsMsg::BatchDownload {
@@ -1896,6 +1915,11 @@ impl ScmsState {
             } => {
                 if !self.take_answer(device, Awaited::Download(i)) {
                     return Ok(());
+                }
+                if let Some(dev) = self.devices.get_mut(&device)
+                    && dev.batch_resume.remove(&i).is_some()
+                {
+                    dev.range_resumes += 1;
                 }
                 let poll = self.params.download_poll_interval;
                 let cap = self.params.max_download_polls;

@@ -682,6 +682,25 @@ fn a_small_validated_certificate_cache_revalidates_and_costs_more_crypto() {
     assert!(rv.ee_validations > rb.ee_validations, "{rv:?} vs {rb:?}");
     assert!(rv.ee_hits < rb.ee_hits, "{rv:?} vs {rb:?}");
     assert!(rv.charged_ns > rb.charged_ns, "{rv:?} vs {rb:?}");
+    // (b) explained (protocol/flow gaps package, item 5): the +12 % events are all
+    // NodeTask, measured 3,774,561 -> 4,268,034 with every other class identical. A
+    // receiver is woken at the instant each signature check finishes
+    // (`Engine::schedule_wake`); a cache hit costs 400 µs and its finish usually falls
+    // inside a wake already pending, while a first-sight validation (priced SHA-256 and
+    // ECQV) finishes later, at an instant of its own, and needs a wake of its own. The
+    // radio, mobility and backend schedules are untouched: the cost is event-loop work,
+    // not more simulated traffic.
+    let (eb, ev) = (&b.report.events_by_class, &v.report.events_by_class);
+    for (class, n) in eb {
+        if class != "NodeTask" {
+            assert_eq!(ev.get(class), Some(n), "{class}: {eb:?} vs {ev:?}");
+        }
+    }
+    assert!(ev["NodeTask"] > eb["NodeTask"], "{eb:?} vs {ev:?}");
+    assert!(
+        ev["NodeTask"] - eb["NodeTask"] <= rv.ee_validations - rb.ee_validations,
+        "at most one extra wake per extra first-sight validation"
+    );
 }
 
 #[test]

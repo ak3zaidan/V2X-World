@@ -69,6 +69,12 @@ pub struct DeviceState {
     pub silenced: bool,
     /// How many times it has polled for a batch that was not ready.
     pub download_retries: u32,
+    /// Bytes of each i-period's batch file that reached it before its link went down:
+    /// the next download asks for the rest with `Range: bytes=<n>-` and the RA answers
+    /// 206 with the remainder ([SMP] §4.3.2, [RFC 7233]). Cleared when the batch lands.
+    pub batch_resume: BTreeMap<u32, u32>,
+    /// Batch downloads it resumed with `Range` instead of starting over.
+    pub range_resumes: u32,
     /// Which of its pseudonyms is active, and the rule that changes it.
     pub store: PseudonymStore,
     /// Its enrolment certificate, once the ECA has issued one.
@@ -196,6 +202,8 @@ impl DeviceState {
             crl: Vec::new(),
             silenced: false,
             download_retries: 0,
+            batch_resume: BTreeMap::new(),
+            range_resumes: 0,
             store: PseudonymStore::default(),
             enrolment: None,
             trust: DeviceTrust::default(),
@@ -1658,7 +1666,42 @@ impl ScmsRun {
         d: Delivery<ScmsMsg>,
     ) -> Result<()> {
         if state.faults.offline(d.to, d.at) {
-            state.faults.dropped += 1;
+            let component = |n: NodeId| state.nodes.is_component(n);
+            // A down component's own scheduled job is persisted and runs when it
+            // restarts; a message from another component waits in that sender's queue,
+            // retried until the receiver is back (`crate::fault`, edge case 3d). A device's
+            // request is lost: the device finds out by timing out (SCMS-522).
+            let later = if d.from == d.to && component(d.to) {
+                state.faults.back_online(d.to, d.at).map(|t| (t, true))
+            } else if d.from != d.to && component(d.from) && component(d.to) {
+                state.faults.retry_reaches(d.to, d.at).map(|t| (t, false))
+            } else {
+                None
+            };
+            // Range resume: a batch file cut off on the device's link leaves the device
+            // with the bytes that arrived before the cut.
+            if let ScmsMsg::BatchDownload { device, i, .. } = &d.msg
+                && d.to == *device
+            {
+                let got = Self::bytes_before_cut(state, kernel, &d);
+                if got > 0
+                    && let Some(dev) = state.devices.get_mut(device)
+                {
+                    let e = dev.batch_resume.entry(*i).or_insert(0);
+                    *e = e.saturating_add(got);
+                }
+            }
+            match later {
+                Some((at, timer)) => {
+                    if timer {
+                        state.faults.deferred_timers += 1;
+                    } else {
+                        state.faults.held += 1;
+                    }
+                    kernel.inject_at(at, d);
+                }
+                None => state.faults.dropped += 1,
+            }
             return Ok(());
         }
         // An SCMS-522 timer whose request has been answered since does nothing, and costs
@@ -1682,6 +1725,36 @@ impl ScmsRun {
         let (steps, _) = kernel.steps_since(step0);
         attribute_pdus(&mut state.pdus[pdu0..], steps, step0);
         Ok(())
+    }
+
+    /// How many bytes of `d` reached its receiver before the outage that lost it began:
+    /// its link's bandwidth over the time from the first bit's arrival (sent plus the
+    /// latency) to the cut. Zero on a link with no bandwidth model (the whole message
+    /// arrives at once) or a cut before the first bit.
+    fn bytes_before_cut(state: &ScmsState, kernel: &Kernel<ScmsMsg>, d: &Delivery<ScmsMsg>) -> u32 {
+        let Some(cut) = state.faults.outage_start(d.to, d.at) else {
+            return 0;
+        };
+        let Some(step) = kernel
+            .steps
+            .iter()
+            .rev()
+            .find(|s| s.from == d.from && s.to == d.to && s.flow == d.flow && s.run == d.run)
+        else {
+            return 0;
+        };
+        let Some(link) = kernel.link(d.from, d.to) else {
+            return 0;
+        };
+        if link.bandwidth_bps == 0 {
+            return 0;
+        }
+        let first_bit = link.latency.after(step.t);
+        let ns = u128::from(cut.saturating_sub(first_bit));
+        let got = ns * u128::from(link.bandwidth_bps) / 8 / 1_000_000_000;
+        u32::try_from(got)
+            .unwrap_or(u32::MAX)
+            .min(step.bytes.saturating_sub(1))
     }
 
     /// Runs every delivery due at or before `horizon`, then stops.
