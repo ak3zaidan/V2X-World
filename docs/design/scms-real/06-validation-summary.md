@@ -1,334 +1,537 @@
 # 06 — How close the engine's SCMS is to the real US deployment: validation summary
 
-Written 2026-10-18 at `8245ef81` (main, after the five validation merges). This is for the owner and for a reviewer from outside the project. It sums up the four validation checklists, and nothing here goes beyond them. Every claim names the checklist row it comes from, so it can be traced back to the source text, the code location and the test.
+First written 2026-10-18 at `8245ef81`. **Rewritten 2026-10-22 at `0f7eda5c`** (main), after
+the PKI, flows and policy fix wave (merged at `2004bb87`) and the oracle, stress and matrix
+testing wave (merged at `0f7eda5c`). This page states the final state of the realism round:
+the verdict on every real-world rule, the test totals across every configuration that ran,
+what is confirmed working, and what still deviates or cannot be checked.
+
+It is for the owner and for a reviewer from outside the project. It goes no further than its
+sources. The sources are the four validation checklists, the testing reports and the merge
+notes. Every claim names its row or report.
 
 **How to read the row references:**
 - **crypto #n**: `validation/crypto-formats.md` §1, row n.
 - **proto Xn**: `validation/protocols.md`, item Xn.
 - **gov X-n**: `validation/governance-deployment.md` §1, row X-n.
 - **veh Xn**: `validation/vehicle-and-roadside.md` §1, row Xn.
-- **04 §n**, **bench §n** and **RT Rn**: `04-validation-report.md`, `docs/benchmark/scms-real-benchmark.md` and `docs/redteam/pki-privacy.md`.
+- **07 §n**: `07-config-testing-report.md`.
+- **matrix**, **stress**, **oracle-final**, **knobs**, **effects**, **edge**, **realism**: the
+  reports of the same names in `testing/`.
+- **04 §n**, **bench §n**, **RT Rn**: `04-validation-report.md`,
+  `docs/benchmark/scms-real-benchmark.md` and `docs/redteam/pki-privacy.md`.
+
+The checklist files keep the verdicts their validators recorded on 2026-10-18. The only
+exceptions are proto A16, D18 and I10, which were updated in `898c077a`. **Where a verdict
+here differs from its checklist, this page is the later one.** §4 lists every such change
+with its evidence.
 
 ## 1. What was checked, and how
 
-Four validators each took one part of the SCMS. Each one wrote down every rule that the real US system follows in that part, using primary sources:
+Four validators each took one part of the SCMS. Each one listed every rule that the real US
+system follows in that part, from primary sources:
 - the IEEE 1609.2 / 1609.2.1 ASN.1 modules;
-- the SCMS Manager documents (the 1609.2.1 Profile, Provider Requirements, the Elector Policy and Technical Specification, the EAC Requirements, the re-enrolment specification, and the misbehaviour report specification);
+- the SCMS Manager documents (1609.2.1 Profile, Provider Requirements, Elector Policy and
+  Technical Specification, EAC Requirements, re-enrolment specification, misbehaviour report
+  specification);
 - CAMP's EE Requirements 1.2.2;
 - the USDOT primer and the CV-pilot reports;
 - the CTLs and certificate chains that SCMS Manager actually publishes.
 
-Code comments were never used as a source. For each rule, the validator then found the code that implements it and the evidence that it does what the rule says. Evidence is one of four kinds:
+Code comments were never used as a source. Each rule's evidence is one of four kinds:
 - an official test vector;
 - the independent Python oracle, which was written without reading the Rust;
 - a byte-for-byte comparison with a published real artefact;
 - a Rust test.
 
-Each rule then got one of four verdicts:
+This round added a fifth kind: **runtime evidence**. The oracle checked the PDUs that real runs
+recorded, and the configuration tables compared same-seed runs. Each expectation was committed
+before the run it judges. Where runtime evidence contradicts a row that a static check had
+passed, the row is reopened (§4.3).
 
+Verdicts:
 - **Matches.** The engine does what the source says, and the evidence is named.
-- **Fixed.** The engine did not match. It was corrected in this round, and the new test was shown to fail when the old code was put back.
-- **Documented deviation.** The engine does not match yet. The row gives the reason and what the difference changes.
-- **Unverifiable.** No public source fixes the behaviour or value. The row says how the engine models it. Each such value is labelled ASSUMPTION in `constants.md`.
+- **Fixed.** The engine did not match. It was corrected in one of the two rounds, and the new
+  test was shown to fail when the old code was put back.
+- **Documented deviation.** The engine does not match. The row gives the reason and what the
+  difference changes.
+- **Unverifiable.** No public source fixes the behaviour or value. The row says how the engine
+  models it. Each such value is labelled ASSUMPTION in `constants.md`.
 
 A row with two verdicts is counted under its first.
 
-## 2. Totals
+## 2. Final totals
+
+### 2.1 Rules
 
 | Area | Rules | Matches | Fixed | Documented deviation | Unverifiable |
 |---|---|---|---|---|---|
-| Cryptography and data formats (`crypto-formats.md`) | 80 | 61 | 7 | 6 | 6 |
-| Protocols and backend flows (`protocols.md`) | 109 | 90 | 5 | 7 | 7 |
-| Governance, deployment and calendar (`governance-deployment.md`) | 70 | 45 | 8 | 11 | 6 |
-| On-vehicle and roadside behaviour (`vehicle-and-roadside.md`) | 67 | 41 | 7 | 8 | 11 |
-| **All** | **326** | **237 (73 %)** | **27 (8 %)** | **32 (10 %)** | **30 (9 %)** |
+| Cryptography and data formats | 80 | 61 | 10 | 4 | 5 |
+| Protocols and backend flows | 109 | 87 | 9 | 6 | 7 |
+| Governance, deployment and calendar | 70 | 44 | 9 | 11 | 6 |
+| On-vehicle and roadside behaviour | 67 | 40 | 10 | 6 | 11 |
+| **All** | **326** | **232 (71 %)** | **38 (12 %)** | **27 (8 %)** | **29 (9 %)** |
 
-After this round, 264 of 326 rules (81 %) match the real system. Of the other 62:
-- 30 cannot be checked against any public source.
-- 32 are known differences. Many of them, mostly in governance, change nothing a device trusts or does (§4).
+**Final match: 270 of 326 rules (82.8 %) do what the real system does** (matches plus fixed).
+On 2026-10-18 it was 264 (81.0 %).
 
-After the merge, the independent checks all pass on main (BUILD-STATUS 2026-10-18):
-- Oracle self-test: 412/412 vectors. Mutation run: 24 faults, none silent.
-- Published artefacts: 164/164 checks, and `real_artefacts` 7/7.
-- PDU checkers: `check_pdus.py` 24/24 and 25/25, `check_appcerts.py` 18/18, `check_run_crl.py` 19/19 and `check_mbr.py` 4/4.
-- `profiles.py`: 24/24 certificates match their published role.
-- Conformance run: 19,183/19,183 checks with 0 disagreements.
+Since then, 11 rules were fixed and 5 were reopened:
+- **11 rules fixed.** Ten were documented deviations: crypto #4 and #36; proto B6, D18, I7
+  and I10; gov L-1; veh M2, M3 and M6. One was unverifiable: crypto #29.
+- **5 rules reopened.** These are matches that runtime testing contradicted: proto C6, C8 and
+  F6, gov E-1 and veh R1.
 
-## 3. Area by area
+Without the reopenings, the figure would be 275 (84.4 %).
 
-### 3.1 Cryptography and data formats: as close as public material allows
+Of the 56 rules that do not match:
+- 29 cannot be checked against any public source;
+- 27 are known differences. Of these, 14 change nothing a device trusts or does (§5).
 
-Wherever a public test vector or real artefact exists, the engine reproduces it:
-- the COER encoding, re-encoding every published file byte for byte (crypto #1);
-- HashedIds (#5–7) and Time32 with leap seconds (#8);
-- ECDSA P-256 and P-384 (#52–53);
-- ECIES with the corrected P1 (#54–55), AES-CCM (#58), KDF2 and MAC1 (#60–61);
-- butterfly key expansion (#63–66) and linkage values (#68–70);
-- CTL verification over the six published CTLs (#78).
+Six runtime defects found by testing have no checklist row. They are listed in §6. The
+largest of them, R-USFP, affects every misbehaviour and revocation number of the US presets.
 
-The engine's component certificates now have the same fields, issuer, CRL series and lifetime as the published certificate of their role (#17–25). Two cases have no public reference:
-- ECQV implicit certificates, for which no 1609.2-profile vector exists. The engine and the oracle are two independent implementations that agree (#16).
-- The DCM, for which no certificate is published (#26).
+### 2.2 Tests across all configurations
 
-### 3.2 Protocols and backend flows: the deployed flows, with a few omitted message types
+**Configuration tables.** In each table the expectations were written before the runs, and
+each run was compared with its base on the same seed.
 
-Every 1609.2.1 message the US flows use is built with the right signing and encryption layers, and the oracle decrypts and verifies it (proto A1–A15). This covers enrolment and re-enrolment (C1–C12), butterfly provisioning with the shuffle, `.info` and batch download (D1–D16), RSU and identification certificates (E1–E6), and SM-MBR reports (F1–F8). It also covers MA investigation through the LAs and the PCA (G1–G11), CRL issuance on the business-day SLA (H1–H9), and device-side CRL handling (I1–I12). What is missing:
-- the EE retry timer (B6);
-- the cheap "has anything changed?" poll (A16, I10);
-- resuming a partial download (D18);
-- charging the encoded size of the composite CRL instead of a per-entry estimate (I7).
+| Table | Rows | Pass | Fixed (bug, then pass) | Expectation wrong, corrected | Open |
+|---|---|---|---|---|---|
+| Matrix: 32 runs, 31 one-change variants of the Midtown realism base (matrix) | 98 | 82 | 1 | 5 | 10 |
+| Realism rows re-run on the matrix runs (matrix) | 62 | 49 | 0 | 1 | 12 |
+| Settings knobs, same-seed pairs (knobs) | 21 | 15 | 3 | 2 | 1 |
+| Effects table (effects) | 88 | 77 | 7 | 4 | 0 |
+| Edge cases (edge; 3d fixed in 07 §7; 11 measured by matrix and stress) | 12 | 7 | 5 | 0 | 0 |
+| Runtime realism, base (realism; R-LOP since fixed) | 27 | 22 | 5 | 0 | 0 |
+| Runtime realism, changes (realism) | 8 | 6 | 1 | 0 | 1 |
+| Stress: multi-week, post-quantum, full fleet (stress) | 24 | 14 | 1 | 1 | 8 |
+| Oracle-final: expectation rows on two recorded runs (oracle-final) | 47 | 47 | 0 | 0 | 0 |
+| Oracle-final: base against variant (oracle-final §5) | 7 | 6 | 0 | 1 | 0 |
+| **All** | **394** | **325** | **23** | **14** | **32** |
 
-### 3.3 Governance and deployment: faithful in the rules that affect trust, simplified in the paperwork
+**Two notes on the table:**
+- **The knobs row** counts its 21 rows one by one. The 07 §2 summary gives 13 pass and 4 fixed
+  for the same rows; the difference is only which column a row is counted in.
+- **The policy package's before/after runs** (07 §8) are not rows, so they are not in the
+  table. On `edge/clock-skew-ahead`, the honest vehicles revoked fell from 19 to 0. On the
+  realism base and the replay attack, every effect was measured.
 
-What matches:
-- Electors, quorum and CTL format agree with SCMS Manager's texts and the decoded CTLs (gov G-3 to G-7, C-1, C-2, C-12).
-- The production and test deployments have the published roots and components (D-1, D-2).
-- The calendar is the real Eastern-time, federal-holiday calendar (K-1 to K-4, K-6 to K-8).
-- RSU and enrolment lifetimes are cited (E-1, E-3 to E-8).
+**Independent checks**
 
-Most deviations here are things outside the network: the EAC's review delays (G-2), couriered artefacts (C-14) and the root termination notice (L-8). Others are bytes of a CTL that devices do not act on (C-9 to C-11).
+| Check | Result |
+|---|---|
+| Oracle self-test (official vectors) | 412/412 |
+| Oracle mutation run | 24 faults, all red |
+| Oracle `verify-emitted` | 10/10 |
+| Oracle `records` on two recorded runs (conf and mbr, release binary of `4924a5d2`) | 272,778 of 281,240 checks pass. All 8,462 failures are OF-1 or OF-2 (§6) |
+| Record faults injected into those runs | 67 of 67 applicable faults red (conf 32 + 3 not applicable; mbr 35) |
+| `ctl-files` on the six CTLs SCMS Manager publishes | 30/30 elector signatures valid; 5/5 faults red |
+| `check_run_crl.py` on a newly generated CRL corpus (`2004bb87`) | 19/19 |
+| Published artefacts; `real_artefacts`; `profiles.py`; PDU checkers; conformance run (`8245ef81`, not re-run since) | 164/164; 7/7; 24/24; 24/24, 25/25, 18/18, 4/4; 19,183/19,183 |
 
-### 3.4 On-vehicle and roadside behaviour: correct receiver rules; the misbehaviour side is a research model
+**Rust test suites**
 
-What matches:
-- Receiver validation follows 1609.2 rule for rule (veh R1–R9, R12–R18).
-- P2PCD uses the Annex C timers (P1–P6).
-- The pseudonym pool and rotation follow CAMP and J2945/1 (C1–C3, C8).
+| Suite | Result |
+|---|---|
+| HEAD `0f7eda5c`: v2xw-sec, msg, proto, node, metrics | 964 pass, 0 fail |
+| HEAD `0f7eda5c`: engine lib plus 19 SCMS test binaries | 187 pass, 0 fail, 5 ignored (the ignored tests include the two oracle-final reproductions) |
+| `2004bb87`: sec, msg, proto, node, threat, metrics | 1,501 pass, 0 fail |
+| `2004bb87`: engine lib plus 18 SCMS binaries, including the 37-minute `scms_knobs_runs` | 195 pass, 0 fail |
+| Stress branch (from `2004bb87`, with F-OFF): `scms_knobs_runs` | 18/18 pass |
+| Stress branch: `security_lifecycle` | 16/16 pass |
+| v2xw-server and v2xw-cli | Pass except `longrun_budget`: 24.9 MB against a 24 MB budget. It already failed before the merges (24.8 MB) |
+| `timeline::a_param_change_of_the_arrival_rate_takes_effect_at_its_instant` | Fails (5.29×, band 2.5–5.0). It is traffic-only, has no SCMS, and fails on the stress branch's base too |
+| Release build and boot | Release build OK; the simulator boots on port 8758, and `/agent/status` and `/rpc/schema` both answer 200 |
 
-The largest remaining gap from a CV-pilot OBU is misbehaviour detection. The benchmark runs a research detector suite, and most of its detections have no SM-MBR v1.1 subtype (M2, M3, M6). Report uploads use the safety channel, because the radio has no service channel (M11).
+## 3. What is confirmed working
 
-## 4. Every documented deviation and what it changes
+Each item below was confirmed by an independent check or by every configuration that tested it.
 
-> **Update, PKI/trust fix wave (2026-10-21, branch of 4924a5d2).** CF-CRACA, CF-UNCOMP,
-> gov L-1/L-5/F-1, crypto #29 and three edge-case items are fixed; the rows below are
-> kept as they were recorded.
->
-> - **Per-provider certificate profiles** (`governance::CertProfile`,
->   `deployment::Provider::cert_profile`). `us-production-2025`: provider-a certifies in
->   ISS's published form (70 y root `v2xrootca.ghsiss.com`; ICA and sub-CAs 30 y with
->   identifiedRegion {124, 484, 840} as `*.preprod.v2x.isscms.com`; MA/PG/CRLG
->   1473 × 60 h; the RA's group in `certRequestPermissions`; encryption keys on ECA, PCA,
->   RA, MA). provider-b keeps the SAESOL production form (`*.prod.s2x.io`). The test-CTL
->   preset uses the ISS form (every published test chain names the root as CRACA);
->   `camp-reference` keeps S2X.
-> - **CF-CRACA.** ISS form: the CRL signer is root-issued on series 256 ([SMP] Table 1,
->   `crlg.preprod.v2x.isscms.com`) and every certificate below the root, pseudonyms
->   included, names the root as CRACA. S2X form: the (unpublished) CRL signer is
->   ICA-issued, the CRACA SAESOL's production sub-CAs name. Both the device-facing PKI and
->   the governance hierarchy follow the profile, so a governance CRL now revokes the
->   governance sub-CAs (test `pki_profile::per_provider`). Still true and recorded: the S2X
->   CRL signer cannot revoke its own ICA (its CRACA is the ICA).
-> - **crypto #29.** The ECA names the provider's CRACA in the enrolment certificate (the
->   request keeps `000000`), so a series-4 hash CRL revokes it.
-> - **CF-UNCOMP.** An explicit certificate's uncompressed key is accepted after an on-curve
->   check and canonicalised to the compressed form.
-> - **Devices check a CTL's elector quorum** (`Phase2::take_ctl_install` through
->   `DeviceTrust::install_ctl`): `trust_lists_refused`, `trust_list_verifications`.
-> - **A composite CRL with one unverifiable CRL** is kept: that CRL is skipped and only
->   the entries it alone carries are dropped (`crls_skipped_unverifiable`,
->   `crl_entries_unverifiable`); an entry no CRL carries still refuses the download.
-> - **A CTL due inside a fast-forward** was already a backend wake (`next_wake` offers
->   `gov.pending`); a test now pins it. The edge run's "Thursday: no change" is not this.
+**1. Formats and cryptography.** Wherever a public test vector or real artefact exists, the
+engine reproduces it byte for byte:
+- the COER encoding, re-encoding every published file (crypto #1);
+- HashedIds and Time32 with leap seconds (#5–8);
+- ECDSA P-256/P-384, ECIES, AES-CCM, KDF2 and MAC1 (#52–61);
+- butterfly expansion and linkage values (#63–70);
+- the six published CTLs (#78).
 
-### Cryptography and data formats (6)
+Oracle-final re-encoded all 54,422 recorded PDUs canonically (DECODE).
+
+**2. Certificate profiles per provider (this round).**
+- provider-a takes ISS's published form: a 70-year root, the root as CRACA, the CRL signer
+  root-issued on series 256, and the region on sub-CAs.
+- provider-b takes SAESOL's production form.
+- The oracle's CRACA-CERT and CRL-SSP rules pass on both forms: 14,780 and 48 checks.
+- A governance CRL can now revoke a governance sub-CA.
+
+**3. SCMS architecture, in all 32 matrix runs.**
+- No separation-of-duties violation, including under the CAMP topology with its LOP.
+- Sealed messages are opened only by their recipient.
+- A device talks only to its RA and the DCM.
+- One provisioning request per OBU over its life (0.54 requests/s scaled to 17 M vehicles,
+  against CAMP's 0.5).
+- 20 certificates per device at the weekly top-off, and exactly ×3 under the NYC 60-a-week
+  profile.
+- I-S1: real and modelled cryptography give identical records.
+
+**4. Message sizes.** provider-b matches CAMP Table 3 exactly: response 454/470, ack 292/294,
+ECA response 958. CRL sizes are 328 B with one entry and about 33 B for each further entry.
+provider-a sizes are under §6 item 7.
+
+**5. Revocation path on the real calendar.** Every case went through the steps the deployment
+prescribes:
+- the shuffle (at most one day);
+- the 8 h review;
+- the next business-day 10:00 ET slot, with federal holidays skipped (the Thanksgiving week
+  passes);
+- the first fetch after publication.
+
+The oracle confirmed the CRL rules independently: CRL-SEQ, CRL-KEEP, CRL-SLA, CRL-PUB,
+CRL-MATCH and RA-BLOCK. Under the research suite and in the oracle runs, every revoked device
+is an attacker in the ground truth (3/3 and 12/12).
+
+**6. CRL freshness over five weeks** (stress multi-week).
+- Five i-period rollovers, each signing under the right period.
+- 10 CRL versions in 33 days, reissued by `nextCrl`.
+- 12,592 conditional polls answered 412, and 0 refusals.
+- The 2-week overdue rule acts in a run. With the CRL Generator down after its first CRL, every
+  message under that CRACA was refused once the list became overdue (87,823 refusals), and
+  traffic recovered after the Generator came back.
+- Re-enrolment: 1 of 75 devices, the expected 1.1.
+
+**7. Downloads.** Every rule on download requests passes the oracle on both runs, except
+DL-SIGN (see OF-1). The passing rules are DL-ACK, DL-ENC, DL-TIME, DL-NAME, DL-AFTER and
+DL-WAIT. Conditional GET with 412 is in force, and so is `Range` resume.
+
+**8. Retries and outages.**
+- The EE retries after 10 s, at most 10 times an hour. With an RA outage across the top-ups,
+  12 of 12 complete.
+- A message between components waits for a component that is down, and the component's timers
+  run when it restarts.
+- A device that is switched off reaches no part of the SCMS. This is F-OFF, fixed this round:
+  before the fix, a parked car kept polling and topping up.
+
+**9. Receiver rules.**
+- 1609.2 receiver validation rule by rule (veh R2–R9, R12–R18).
+- The device checks the CTL's elector quorum.
+- A composite CRL is kept when one of its CRLs is unverifiable.
+- Uncompressed explicit keys are accepted.
+- The `generationTime` relevance window is enforced.
+- With the MA's evidence-time rule and the dead-reckoning fix, one car with a 5,000 s clock
+  error no longer gets anyone honest revoked (19 → 0).
+
+**10. Metrics on the realism base.** All are inside their sourced bands:
+- PDR 0.364;
+- BSM latency p95 14.6 ms (budget 100 ms);
+- CBR p95 1.4 %;
+- AoI 82 ms, after this round's fast-forward fix (it was 28 minutes);
+- security at 46 % of BSM bytes;
+- full-certificate share 17 %. This re-measures veh S6, which had 25 % during the fill.
+- certificate pool mean 25.7.
+- no signature, parse or backend failures, and no starvation.
+
+**11. Determinism.** Record digests are identical at 1 and 4 threads, on the 33-day run and on
+the first 5 s of the full fleet (646 devices).
+
+**12. Post-quantum at density** (owed until this round), on the quarter fleet:
+- ML-DSA-44: 2.30 frames per BSM and BSM airtime ×12.6; CBR p95 rose from 0.061 to 0.338, and
+  verified BSMs fell by 33 %.
+- Hybrid Falcon-512: airtime ×4.4.
+- Nobody starves.
+
+## 4. Verdicts changed in this round
+
+### 4.1 Fixed (11 rules)
+
+| Row | Before | Now | Evidence |
+|---|---|---|---|
+| crypto #4 (CF-UNCOMP) | Explicit certificate with an uncompressed key refused on the node path | Accepted after an on-curve check, then stored in compressed form | `22f7cf13` |
+| crypto #36 (CF-CRACA; also #24's issuer) | ICA as CRACA for every provider; the governance CRL could not revoke a sub-CA | Per-provider profile: ISS uses the root as CRACA and a root-issued CRL signer on series 256; S2X uses the ICA. Governance follows the profile | `pki_profile::per_provider`; oracle CRL-SSP and CRACA-CERT on both forms |
+| crypto #29 (was unverifiable) | Enrolment `cracaId` 000000: a series-4 CRL could never match | The ECA names the provider's CRACA, so a series-4 hash CRL revokes the certificate ([SMP] Table 1) | `22f7cf13`; oracle CRACA-CERT series 4 |
+| proto B6 | No EE retry | 10 s, at most 10 an hour (SCMS-522/523); the RA re-acknowledges a byte-identical retry | `5d44674b`; edge 3c; RA outage 12/12 |
+| proto D18 | No `Range` resume | A cut batch download resumes; the retry is answered 206 with the rest | `ee_retry.rs::an_interrupted_batch_download_resumes_with_range_for_the_rest` (proved red) |
+| proto I7 | 40 B per CRL entry; CTL left out | The encoded `CompositeCrlSpdu`, home CTL included | `5d44674b`; edge: about 33 B an entry, 336 kB at 10,000 entries |
+| proto I10 | No `If-Modified-Since` | Every due poll is a conditional GET, answered 412 (92 B, ASSUMPTION) when the copy is current | `report_signing.rs::every_due_crl_poll_asks_and_a_current_copy_is_answered_412` |
+| gov L-1 | 30-year root for every provider | ISS form: a 70-year root `v2xrootca.ghsiss.com`. The 20-year key cryptoperiod is still not enforced; no run reaches it | `22f7cf13` |
+| veh M2 | Detections with no SM-MBR v1.1 subtype filed | `detect/us-sm-mbr` files v1.1 subtypes only, and it is the default of every US real-world preset | `c5d5c5b7`, `7aa31661` |
+| veh M3 | Research thresholds (12 m/s²; no MaxSpeed) | US profile: MaxSpeed 90 m/s, MaxAcceleration 10 m/s², RandomPosition 1 m | `c5d5c5b7` |
+| veh M6 | Reports about messages that failed verification | The US profile judges only BSMs this receiver verified (SM-MBR §2.3.1) | `us_mbr.rs::only_verified_bsms_are_judged_or_remembered` |
+
+Rules narrowed but not fixed:
+- **proto A16.** The poll is now on the air. The `infoStatus` SPDU body is still not encoded.
+- **R-TRUSTLEAK, OF-1, OF-2 and R-NOCRL** were found by this round's runs (§6).
+
+### 4.2 Fixes that change runtime behaviour but no checklist row
+
+These were each fixed and proved red, as their reports describe:
+- **The MA ran one case at a time.** Its cases now run side by side (R-SERIAL, gap row 27).
+- **The CRL Generator reissues by `nextCrl`** when no entry has been added.
+- **Devices install a newer CTL.**
+- **The node clock reaches security.**
+- **No signing with an expired pseudonym across the rollover** (edge 1b/1c).
+- **F-OFF.**
+- **The AoI fast-forward charge** (matrix fix 2).
+- **The pseudonym usability memo.** It removes a 13× slowdown, and its results are unchanged
+  (matrix fix 1).
+- **Skewed dead-reckoning** (07 §8.1).
+- **Fast-forward stops**: 255,658 → 4,290 (R-FF).
+- **The PKI-record defects** R-LOP, R-SHARE, R-CASE, R-CORR and R-OFFCTL, and the two merge
+  fixes listed in 07 §5.
+
+### 4.3 Reopened by runtime evidence (5 rules: Matches → Documented deviation)
+
+| Row | Static verdict | Runtime evidence | Impact |
+|---|---|---|---|
+| proto C6 (the RA serves only registered enrolment certificates) | Matches (Rust test) | OF-1: the RA answers pre-drive Download-Reqs signed by an enrolment certificate it never registered. That is 112 on conf | Any defence keyed on the enrolment certificate is affected: RA blocklisting, and linking a report to a device |
+| proto C8 and gov E-1 (enrolment certificate valid 6 years) | Matches (`model_card`) | OF-1: a second enrolment certificate, which no recorded exchange issued, lasts 0.9–5.5 years. Device age is modelled as a shorter lifetime, not as a back-dated start. ENR-LIFE fails on 56 of 114 certificates on conf and 97 of 196 on mbr | Wrong certificate bytes and expiry dates. Re-enrolment timing is per device, not per CAMP |
+| proto F6 (each report is POSTed through the RA with its Download-Req) | Matches | OF-2: 1,695 of 2,991 cellular uploads on conf carry no SPDU. They are 1,119-byte placeholders, but they still go through the shuffle to the MA | Report counts at the MA are inflated. 1,536 of the 1,695 fall in the window after revocation |
+| veh R1 (the signer chains to a root on the installed CTL) | Matches (Rust test) | R-TRUSTLEAK: with provider-b off the CTL, provider-a receivers verified 280 of its messages. Before the fix wave the figure was 7. Not root-caused | Security: a provider removed from the trust list is still partly trusted |
+
+## 5. Every documented deviation and what it changes (27)
+
+### Cryptography and data formats (4)
 
 | Row | Difference from the real system | Impact |
 |---|---|---|
-| crypto #4 (CF-UNCOMP) | On the node path, a peer's *explicit* certificate with an uncompressed key is refused, although the wire format allows it | None for US traffic: every US end-entity certificate is implicit, and the implicit path accepts both forms |
-| crypto #10 (CF-IPERIOD); also gov K-5 | i-periods start on the UTC 09:00 grid. A uniform Time32 grid from the epoch would put every start since 2017 2 s earlier | 2 s on every pseudonym `validityPeriod.start` and `startOfNextIPeriod`. The two validators read the sources differently: crypto cites the 1609.2-2025 `IPeriodInfo` text for a uniform grid, while gov cites CAMP's production table for UTC alignment. **Owner decision**; the fix is one line plus a re-pinned test |
-| crypto #30 (CF-ENR-REQ) | The enrolment request carries `crlSeries` 4, which breaks the ASN.1 constraint `(0)` | Follows [SMP] §6.3.1, which overrides the ASN.1. Same 2 encoded bytes |
-| crypto #35 (CF-RSU-SSP); also proto E7 | RSU application certificates carry no SSP | See §7 item 1: governance row E-8 found that CAMP Table 1 prints no SPaT/MAP/TIM SSP, so this is probably not a deviation |
-| crypto #36 (CF-CRACA); also #24 | The device-facing CRL signer is issued by the ICA, so the ICA is the CRACA (SAESOL's production form). ISS and [SMP] Table 1 put the CRL signer under the root. The governance hierarchy mixes the two forms | In the device-facing PKI: none (consistent). In the governance hierarchy, a governance CRL can never revoke a governance sub-CA, so component revocation cannot be expressed. **Owner decision** (crypto §2 gives the options) |
-| crypto #38; also veh R11 | The published RA permission group breaks the strict chain-length rule. Like a deployed device, the engine accepts it, and it counts each acceptance | A real-world quirk the engine reproduces: 1,780 tolerated findings in 60 s of the benchmark |
+| crypto #10 (CF-IPERIOD); also gov K-5 | i-periods start on the UTC 09:00 grid, not on a uniform Time32 grid from the epoch | 2 s on every pseudonym `validityPeriod.start`. The two validators read the sources in opposite directions. **Owner decision** |
+| crypto #30 (CF-ENR-REQ) | The enrolment request carries `crlSeries` 4, which breaks the ASN.1 `(0)` | Follows [SMP] §6.3.1, which overrides the ASN.1. Same bytes on the wire. No trust effect |
+| crypto #35 (CF-RSU-SSP); also proto E7 | RSU application certificates carry no SSP | Probably not a deviation: gov E-8 finds no SPaT, MAP or TIM SSP in CAMP Table 1 (§7 item 1) |
+| crypto #38; also veh R11 | The published RA permission group breaks the strict chain-length rule. The engine accepts it, as deployed devices do, and counts each acceptance | A real-world quirk the engine reproduces on purpose |
 
-There are also two smaller choices inside fixed rows:
-- **crypto #22.** The LAs are valid for 25 y where ISS's are 30 y. The validity of a certificate must fit inside its issuer's, and the engine's ICA has 25 y.
-- **crypto #24.** The CRL signer stays ICA-issued (CF-CRACA, above).
-
-### Protocols and backend flows (7)
+### Protocols and backend flows (6)
 
 | Row | Difference | Impact |
 |---|---|---|
-| proto A16 | The `infoStatus` poll is not built; devices fetch the CRL on a timer | Over-counts bytes when nothing has changed |
-| proto B6 | No EE retry (10 s, at most 10 per hour, SCMS-522/523). A request to an offline RA is dropped | An RA-outage or DoS study under-counts retry load (up to 10 per device-hour) and over-counts lost requests. **The most important protocol gap for attack studies** |
-| proto D18 | No HTTP `Range` resume of a batch download | An interrupted download costs a full retransfer. Matters only on lossy links |
-| proto E7 | The same item as crypto #35 | See §7 item 1 |
-| proto H10 | `indexWithinI` saturates at 255; a real CRL generator would have to stop issuing | Only reached with more than 127 publications in one week |
-| proto I7 | Engine vehicles are charged 40 B per CRL entry plus the envelope, not the encoded composite CRL (real encoding: 33.1 B per entry) | About 20 % over-charge at 10,000 entries, and the CTL and hash CRLs are left out of the composite. Airtime and Uu bytes of CRL delivery are approximate by that much |
-| proto I10 | No `If-Modified-Since` / 412 on CRL, CTL and CCF downloads | Poll bytes are over-counted when nothing has changed |
+| proto A16 (narrowed) | The `infoStatus` SPDU body (crl/ctl/caCcf/ma/ra dates) and its RA signature are not encoded. The device polls the composite CRL conditionally instead | A change costs one exchange instead of two. Poll bytes are close to real |
+| proto E7 | Same as crypto #35 | §7 item 1 |
+| proto H10 | `indexWithinI` saturates at 255; a real CRL Generator would have to stop issuing | Only reached with more than 127 publications in one week |
+| proto C6 (reopened) | OF-1: the RA accepts unregistered enrolment certificates | §4.3 |
+| proto C8 (reopened) | OF-1: lifetime of the second enrolment certificate | §4.3 |
+| proto F6 (reopened) | OF-2: uploads with no SPDU | §4.3 |
 
 ### Governance, deployment and calendar (11)
 
 | Row | Difference | Impact |
 |---|---|---|
-| gov G-2 | The board's review and investigation delays before a vote are not modelled | None on the CTL rules, which start at the vote. A scenario can schedule its decision later |
-| gov G-10 | The yearly Test Ballot exists in the library, but no scenario key schedules it | A run longer than a year has no test-ballot record |
-| gov G-11 | Post-quantum elector key replacement is not modelled | None today. No quantum-safe method has been chosen |
-| gov C-9 | CTL `effectiveDate` is set to the publication deadline, not the ballot date | 0–28 days later than SCMS Manager's practice. No effect on trust, because devices do not check it |
-| gov C-10 | A run's first CTL is sequence 0; the live production CTL is sequence 1 | Sequence numbers run one lower than the real series. No trust effect |
-| gov C-11 | A CTL that drops a root does not also carry the dropped root's certificate | Bytes only. No trust effect |
-| gov C-14 | The couriered flash drive and video-call key confirmation are not modelled | Not on the network |
-| gov L-1 | Roots are valid 30 y, as in SAESOL production. ISS-pattern roots are 70 y, and the 20-year key cryptoperiod is not enforced | Only the validity end changes, and the encoded size stays the same. No run reaches either end |
-| gov L-8 | Root termination (365 days' notice) is not modelled. Removal is | Matters only for a run of a year or more |
-| gov L-11 | The LA SSP is version 2 with `laId` 1 and 2. ISS's LAs carry version 1 with ids 4 and 5 | `laId` is a provider's own choice. Version 2 is the 2022 module's fixed value |
-| gov K-5 | The same item as crypto #10 | 2 s on validity starts |
+| gov G-2 | The board's review and investigation delays before a vote are not modelled | None on CTL rules, which start at the vote |
+| gov G-10 | No scenario key schedules the yearly Test Ballot | A run longer than a year has no test-ballot record |
+| gov G-11 | Post-quantum elector key replacement is not modelled | None today. No method has been chosen |
+| gov C-9 | CTL `effectiveDate` is the publication deadline, not the ballot date | 0–28 days late. No trust effect: devices do not check it |
+| gov C-10 | A run's first CTL is sequence 0; the live production CTL is sequence 1 | Sequence numbers run one lower. No trust effect |
+| gov C-11 | A CTL that drops a root does not also carry the dropped root's certificate | Bytes only |
+| gov C-14 | The couriered flash drive and the video-call key confirmation are not modelled | Not on the network |
+| gov L-8 | Root termination (365 days' notice) is not modelled; removal is | Only a run of a year or more |
+| gov L-11 | The LA SSP is version 2 with `laId` 1 and 2; ISS's LAs carry version 1 with ids 4 and 5 | `laId` is the provider's own choice |
+| gov K-5 | Same as crypto #10 | 2 s on validity starts |
+| gov E-1 (reopened) | OF-1: enrolment lifetime | §4.3 |
 
-### On-vehicle and roadside behaviour (8)
+### On-vehicle and roadside behaviour (6)
 
 | Row | Difference | Impact |
 |---|---|---|
-| veh R10 | Country regions are not checked against a location; the cases are only counted | None on US pseudonyms, which carry no region (`region_unchecked` = 0 on the benchmark) |
-| veh R11 | The same item as crypto #38 | Counted |
-| veh C6 | The "2 km since the last change" is measured as distance travelled, not straight-line displacement | On a winding route a change can come slightly early |
-| veh M2 | Detections with no SM-MBR v1.1 subtype are still filed on a "modelled" path and counted | Unrealistic US report volume: 20,421 of 23,112 reports in the pre-fix baseline were unmapped. It is kept so that attack studies of the research detectors still reach the MA. A strict-US mode is still owed |
-| veh M3 | The research suite's acceleration check fires at 12 m/s². SM-MBR's default is 10 m/s², and its MaxSpeed 90 m/s check is absent | Detection rates are those of the research suite, not of a CV-pilot OBU |
-| veh M6 | A report is filed about a message that failed verification; a CV-pilot OBU has no subtype for that | The MA now sets such reports aside (fixed row M5), so they can no longer get an honest certificate revoked |
-| veh M11 | Over-the-air report uploads go on safety channel 172, not a WSA-advertised service channel | MBR airtime on channel 172 is an upper bound. It was 29.3 % before the fixes and 0 % after them in the 60 s re-run |
+| veh R10 | Country regions are not checked against a location; they are only counted | None for US pseudonyms, which carry no region (`region_unchecked` = 0) |
+| veh R11 | Same as crypto #38 | Counted |
+| veh C6 | "2 km since the last change" is measured as distance travelled, not straight-line distance | On a winding route a change can come slightly early |
+| veh M11 | Relayed report uploads go on safety channel 172, not on a service channel advertised by WSA | Report airtime on 172 is an upper bound. The radio has no per-channel MAC queues and no channel switch (07 §7 item 4) |
 | veh U5 | No WSA encoder | The SCMS service cannot be advertised, so M11 cannot be fixed yet |
+| veh R1 (reopened) | R-TRUSTLEAK | §4.3. **Security; fix first** |
 
-## 5. Every unverifiable item and how it is modelled
+Fourteen of these change nothing a device trusts or does: crypto #30, #35 and proto E7, crypto
+#38 and veh R11, crypto #10 and gov K-5 (2 s), and gov G-2, G-11, C-9, C-10, C-11, C-14 and
+L-11.
 
-### Cryptography and data formats (6)
+## 6. Runtime defects found by testing (no checklist row)
+
+In order of impact. Each one has its evidence in the named report.
+
+1. **R-USFP: the US misbehaviour profile revokes honest vehicles** (matrix Open 1; stress §1;
+   07 §8.3). **The most important open item.**
+   - On the realism base, the US SM-MBR default revokes 26 honest vehicles and only 1 of 3
+     attackers. 7,200 of its 7,488 reports are RandomPosition. The research suite revokes 0
+     honest and 3 of 3.
+   - RTK positions (0.26 m) still revoke 26, so raw GNSS error is not the cause, as 07 §8.3
+     had assumed. The next suspect is the pairing of claimed position and `generationTime`.
+   - At quarter-fleet rush hour, 78 % of honest BSMs trip the check. Report uploads then take
+     34 % of the channel.
+   - **Impact:** until it is root-caused, no misbehaviour, MBR-airtime or revocation number
+     from a US preset is a real-world number. The owner may revert the one line of the
+     default (07 §8.3).
+2. **R-TRUSTLEAK.** See veh R1 in §4.3.
+3. **OF-1 and OF-2.** See §4.3. Both have reproduction tests in `tests/oracle_final.rs`, which
+   are ignored until the defects are fixed.
+4. **R-NOCRL: no CRL before a provider's first revocation** (stress §2).
+   - The real deployment has run since 2015, so every CRACA's CRL exists at t0.
+   - In the engine, the 2-week overdue rule therefore cannot act on a CRACA that has not
+     revoked in the run.
+   - A CRL outage from the start is invisible, and a car that was offline for weeks never sees
+     the refusal.
+   - Fix: publish each provider's CRL at t0, then re-bless.
+5. **O-1: delta CRLs are signed but never sent** (oracle-final §3).
+   - 1609.2 allows this.
+   - Devices that see only full CRLs find gaps in `indexWithinI` (1 → 3).
+6. **Post-quantum path** (matrix; stress §3).
+   - **R-PQMBR.** Under ML-DSA-44 every over-the-air report is refused at the WSMP MTU and is
+     still counted as uploaded. The refusal itself is a real post-quantum finding; the count is
+     a defect.
+   - Under the hybrid scheme there is no top-off and no RSU CRL install, and receivers check no
+     CRL chain. The post-quantum path is labelled as modelled.
+7. **provider-a sizes** (matrix Open 5).
+   - The ISS form gives response 501/517, ack 304/306 and ECA response 1,064, against CAMP
+     Table 3's 454/470, 292/294 and 958.
+   - Most likely its published component certificates are longer. No oracle check of the ISS
+     profile exists yet.
+8. **Unexplained, not yet shown to be defects:**
+   - **27 MA decisions in every variant.** M0, att10 and sybil all make 27, although att10 has
+     9 attackers.
+   - **Implausibly old evidence.** 10 reports in the realism base were set aside because their
+     evidence was up to 43,125 s older than the report, yet no receiver refused anything.
+   - **Fast-forward ticks.** 865,653 fast-forward ticks in the edge peer-root-removed run.
+   - **Case-board review time.** The case board shows the review as 28,799.2 s, against the
+     expected ≥ 28,800 s (matrix L5).
+9. **Outside the SCMS:**
+   - LTE-V2X BSM p95 latency is 112 ms, over the 100 ms budget, because the BSM is not aligned
+     with its SPS reservation.
+   - Rebroadcasting a 336 kB standing CRL every 5 s on channel 172 costs about 0.54 Mbit/s per
+     RSU (07 §7 item 5). This is a configured behaviour, not a defect.
+10. **Red-team finding.** The `generationTime` window makes a replay older than 2 s harmless,
+    but the replayer is never reported or punished: 11 of 11 replayers were revoked before the
+    window, and 0 after it (07 §8.1).
+
+## 7. Every unverifiable item and how it is modelled (29)
+
+### Cryptography and data formats (5)
 
 | Row | Unknown | How the engine models it |
 |---|---|---|
 | crypto #26 | The DCM certificate (none published) | The RA's lifetime and the 1609.2.1 `DcmSsp` |
-| crypto #29 | The enrolment certificate's `cracaId` (set by the ECA; none published) | `000000`. The consequence: a series-4 hash CRL can never match an enrolment certificate, so enrolment revocation is the RA's blocklist only. That is what 01 §4 reports as real practice |
-| crypto #32 | Whether pseudonyms carry a region | None. Governance F-2 later decided this from [SMP] §6.3.3 (see §7 item 2) |
-| crypto #59 | The CCM nonce rule (body text paywalled) | A fresh random 12 bytes each time, never reused under one key |
-| crypto #71 | The group linkage `jValue` and its relation to CAMP's ei(j, k) | Group linkage is off by default (US practice). The CAMP `glv` vectors pass |
-| crypto #73 | The LCI, PLV-request and LA key formats (NULL interfaces in 1609.2.1) | Modelled formats. The LCI is a 16 B ASSUMPTION |
-
-### Governance, deployment and calendar (6)
-
-| Row | Unknown | How the engine models it |
-|---|---|---|
-| gov G-1 | EAC votes and membership | A decision is an instant given by the scenario, logged as `eac-*` |
-| gov C-4 | How an elector removal looks (none published) | Listed in `electorRemove`, the standard's informational form |
-| gov D-9 | Data-centre regions | Assumed public-cloud metros, labelled |
-| gov D-10 | Backend latency | Distance over fibre at about 2/3 c, plus a per-link overhead, labelled |
-| gov D-11 | How the fleet is split between providers | Seeded and stable shares, labelled |
-| gov E-2 | How "6 years" of enrolment is encoded | `hours(52560)`, 1.46 days shorter than `years(6)`, same size |
+| crypto #32 | Whether pseudonyms carry a region | None. Gov F-2 decided this from [SMP] §6.3.3 (§8 item 2) |
+| crypto #59 | The CCM nonce rule (the body text is paywalled) | A fresh random 12 bytes each time, never reused under one key |
+| crypto #71 | The group linkage `jValue` | Group linkage is off (US practice). CAMP's `glv` vectors pass |
+| crypto #73 | The LCI, PLV-request and LA key formats (NULL interfaces) | Modelled formats. The LCI is a 16 B ASSUMPTION |
 
 ### Protocols and backend flows (7)
 
 | Row | Unknown | How the engine models it |
 |---|---|---|
-| proto B5 | The RA's 1 s TCP ACK as a bound | An M/M/c queue; the delay is measured, not bounded |
-| proto B9 | The 1609.2.1 URL paths and HTTP headers | CAMP REST paths and ports. HTTP request lines are not counted (tens of bytes per request) |
-| proto C13 | The pilots' manual re-enrolment in a secure environment | The SCMS Manager online process through the RA |
-| proto D11 | The meaning of `download-maxAge`, `ra-maxAge` and `eca-*` (paywalled tables) | Not enforced. Read as maximum request age, the engine never violates them |
-| proto D17 | The first-batch delay (no published bound) | 60 s after the shuffle releases. The shuffle's own wait of up to 2 days dominates |
+| proto B5 | The RA's 1 s TCP ACK as a bound | An M/M/c queue whose delay is measured |
+| proto B9 | 1609.2.1 URL paths and HTTP headers | CAMP REST paths and ports. Request lines are not counted |
+| proto C13 | The pilots' manual re-enrolment | SCMS Manager's online process through the RA |
+| proto D11 | `download-maxAge`, `ra-maxAge`, `eca-*` (paywalled tables) | Not enforced. The engine never breaks them on the maximum-age reading |
+| proto D17 | The first-batch delay | 60 s after the shuffle releases |
 | proto F9 | J3287 / ETSI TS 103 759 report content | The deployed SM-MBR format |
-| proto H8 | `nextCrl − issueDate` | 7 days, which keeps the "at least weekly" fetch current |
+| proto H8 | `nextCrl − issueDate` | 7 days |
 
-These MATCHES rows also contain one unpublished number each:
+Each of these MATCHES rows also contains one unpublished number:
 - proto D4: the LA–ACA key rotation, 7 d.
-- proto E6: "1 month" read as 30 days.
+- proto E6: "1 month" read as 30 d.
 - proto G7: the MA case cap, 1,000.
 - proto G8: the manual review, 8 h.
 - proto H7: the CRL slot, 10:00 ET.
+
+This round added more labelled ASSUMPTIONs:
+- the 412 answer's size, 92 B;
+- the retry between components, 10 s;
+- the `generationTime` window. Its values are C2C-CC's (2 s, 600 s, 40 ms), because the US
+  J2945/1 values are not public.
+
+### Governance, deployment and calendar (6)
+
+| Row | Unknown | How the engine models it |
+|---|---|---|
+| gov G-1 | EAC votes and membership | A decision is an instant the scenario gives |
+| gov C-4 | What an elector removal looks like | `electorRemove`, the standard's form |
+| gov D-9 | Data-centre regions | Assumed public-cloud metros |
+| gov D-10 | Backend latency | Distance over fibre at about 2/3 c, plus an overhead per link |
+| gov D-11 | The fleet split between providers | Seeded, stable shares |
+| gov E-2 | How "6 years" of enrolment is encoded | `hours(52560)` |
 
 ### On-vehicle and roadside behaviour (11)
 
 | Row | Unknown | How the engine models it |
 |---|---|---|
-| veh S1 | Deployed OBUs' verification policy | Verify-all, on-demand and prioritised are all modelled and labelled |
-| veh S6 | The full-certificate share (25 % against 10 %) | Plausible while the run is filling; to be re-measured in steady state |
+| veh S1 | Deployed OBUs' verification policy | Verify-all, on-demand and prioritised. On-demand with detection now warns (07 §8.2): reports fall from 897 to 79 |
+| veh S6 | The full-certificate share | Re-measured in steady state at 17 % (matrix), inside the sourced band of 5–30 % |
 | veh P7 | P2PCD concurrency limits | 8 responses, 8 inline entries |
-| veh P8 | Which P2PCD flavour US devices run | Out-of-band by default |
-| veh C10 | Whether J2945/1 clears the path history at a change | The checklist says "not cleared", but the code does clear it (see §7 item 4). The open question is only what J2945/1 requires |
-| veh C11 | The pseudonym-change rule for J2945/9 handsets | The scenario's rule, shared with vehicles |
+| veh P8 | Which P2PCD flavour US devices run | Out-of-band |
+| veh C10 | Whether J2945/1 clears the path history at a change | The code clears it (§8 item 4) |
+| veh C11 | The pseudonym-change rule for J2945/9 handsets | The scenario's rule |
 | veh M9 | The device report store quota | 64 KiB |
 | veh M10 | The report rate limit | At most one per second per (reporter, accused) |
-| veh M13 | Whether RSUs run misbehaviour detection | They do, as reporters |
+| veh M13 | Whether RSUs run misbehaviour detection | They do, as reporters. Whether an RSU may sign an SM-MBR with its application certificate is an owner question (07 §7 item 2) |
 | veh V3 | The PSM rate | 1 Hz with a 100 ms floor |
 | veh U3 | RSU verification policy | Verify-all |
 
-## 6. What was fixed in this round (27 rules)
+## 8. Disagreements between the checklists
 
-Each fix has a test that went red with the old code put back (crypto §4, gov §3, proto K, veh §3).
+The totals count each row as its own checklist records it, with the changes in §4 applied.
 
-**Cryptography and data formats (7 rows, 5 findings)**
-- **crypto #3, CF-CANON.** Received certificates are now hashed and used as signer input in their canonical form. Before, the same certificate could have two identities, and a peer that sent an uncompressed certificate failed to verify.
-- **crypto #43, CF-EXPIRY.** `generationTime < expiryTime` is now enforced when sending and when receiving.
-- **crypto #23, CF-MA.** The device-facing MA is root-issued on series 256 for 12 y, as in [SMP] Table 1 and both published MAs. Before, it was ICA-issued on series 2 for 3 y.
-- **crypto #20–22, #24, CF-LIFE.** The RA (6 y), ACA (4 y), LAs (25 y) and CRL signer (1473 × 60 h) now have their published lifetimes. All of them were 3 y before.
-- **CF-RULE.** The oracle's PDU checkers gained five missing rules. This is a tool fix, not a checklist row.
+1. **RSU SSPs: open.** crypto #35 and proto E7 record a deviation. Gov E-8 and F-3 read CAMP
+   Table 1 in full and found no SPaT, MAP or TIM SSP in it. On that reading both rows match,
+   and the deviations would be 25.
+2. **Pseudonym region: open.** crypto #32 says unverifiable. Gov F-2 says "no region", from
+   [SMP] §6.3.3.
+3. **i-period time base: owner decision** (crypto #10 against gov K-5).
+4. **Path history at a change: the checklist text is out of date.** veh C10 says the engine
+   does not clear it. `vehicle.rs` `set_identity` does clear it.
+5. **MA concurrency: settled.** The MA ran one case at a time; it now runs cases side by side
+   (R-SERIAL, 07 §5 bug 1). §6 item 8 is a new, separate question.
 
-**Protocols and backend flows (5)**
-- **proto I3.** A replayed older CRL can no longer erase a newer revocation in the device model (red-team R2).
-- **proto I4.** A stale full or delta CRL can no longer move the node's overdue clock back.
-- **proto G6.** Every chain of a blocklisted enrolment is revoked, not only the reported one. Before, 2 of a device's 4 certificates escaped (red-team B4).
-- **proto H4.** `indexWithinI` counts the delta CRL as its own CRL.
-- **proto D14.** A weekly pre-generation job that was armed before the blocklist now generates nothing (SCMS-509).
+## 9. What remains
 
-**Governance and deployment (8)**
-- **gov C-6.** CTL deadlines now count business days on the Eastern date and skip federal holidays.
-- **gov C-7.** An elector addition gets 5 business days, not 3.
-- **gov G-8.** A replacement elector is valid for 15 y, not 24 y.
-- **gov C-3.** A removed root is no longer listed in `rootCaRemove`, as in SCMS Manager's one published removal.
-- **gov D-3.** The test-CTL preset approves 5 of its 6 roots.
-- **gov F-1.** Both engine PKIs give the RA the production permission form.
-- **gov F-4.** The duplicated preload constant is gone.
-- **gov F-5.** The real-artefact tests run whenever the cache is present.
+**Fix first (engine defects, in order of impact)**
+1. **R-USFP**: root-cause the false positives, then add a filtered-position model.
+2. **R-TRUSTLEAK.**
+3. **OF-1**: one enrolment certificate, registered, with a back-dated start.
+4. **OF-2**: no upload without an SPDU.
+5. **R-NOCRL**: a CRL at t0.
+6. **R-PQMBR.**
 
-**On-vehicle and roadside (7)**
-- **veh V1.** Pedestrian handsets now get their own permission profile, `{0x26, 0x27}`. Before, every receiver refused every PSM. That defect was behind the benchmark's report flood and its 10 honest revocations (bench §9.1).
-- **veh M5.** The MA sets aside a report whose only evidence is a bad signature. Such a report could get any honest certificate revoked.
-- **veh M4.** PSM and VAM stated accuracy is read by the detectors.
-- **veh M14.** Detectors check safety messages only, not relayed reports, CRLs or P2PCD frames.
-- **veh C7.** A handset's `msgCnt` restarts at a pseudonym change.
-- **veh C4, C5.** The J2945/1 rule (5 min **and** 2 km) and the NYC pilot rule (2 km **or** 5 min) can now be selected, and the benchmark uses J2945/1.
+Items 3–6 change the digests and need a re-bless.
 
-The vehicle fixes were re-measured on the first 60 s of the quarter-fleet benchmark (veh §2):
-- `psid-not-permitted` refusals fell from 32,052 to 0.
-- Reports fell from 23,112 to 15.
-- MBR airtime fell from 29.3 % to 0 %.
-- Revoke decisions against honest devices fell from 73 to 0.
+**Owner decisions**
+- CF-IPERIOD (2 s).
+- Keep or revert the US profile as the preset default while R-USFP is open.
+- Whether RSUs may sign reports with their application certificate.
+- The US J2945/1 window values.
+- Whether SCMS Manager's artefacts may be vendored.
 
-The BSM and PSM frame counts did not change.
+**Engine work for the remaining deviations**
+- The `infoStatus` body (A16).
+- Per-channel MAC queues, a service channel and WSA bytes (M11, U5).
+- Country polygons (R10).
+- Governance scenario keys (G-10, C-9, C-10).
+- Root termination (L-8).
+- Stop issuing at 255 CRLs a week (H10).
+- Send the delta CRLs (O-1).
+- Post-quantum top-off and RSU CRL.
+- SPS-aligned BSM generation for LTE-V2X.
 
-## 7. Disagreements between the checklists (to settle)
+**Testing still owed**
+- **The full-scale benchmark.** It needs 2–3.3 CPU-hours; only its first 5 s were run.
+- **Oracle on HEAD.** `records` and `ctl-files` against a HEAD recording and the F1 `gov.json`.
+  The oracle rules hold on `4924a5d2`.
+- **An independent check of the ISS profile** (§6 item 7).
+- **Long runs on HEAD.** `scms_knobs_runs` (it ran on the stress branch, not on HEAD), the
+  conformance run, and the three threat simulation binaries in release.
+- **Post-quantum runs.** The hybrid ML-DSA run, the certificate cycle, and post-quantum
+  determinism.
+- **F6/F7 fault proofs** (`inject2.py`), one test at a time.
+- **The Studio PKI fixtures.** Re-record them; the certificate bytes changed.
+- **Realism row V8.** Re-base it on `research-suite`.
+- **Two non-SCMS failures**, `longrun_budget` and `timeline`, both already present before the
+  merges.
 
-The four validators worked in parallel, and a few rows disagree. The totals above count each row as its own checklist records it.
+**Paywalled standards: buying them would turn unverifiable rows into checked ones.** IEEE
+1609.2.1 body text (crypto #10, proto D11, B9), IEEE 1609.2 §5.3.8 (crypto #59), SAE J2945/1
+(veh S2, C10, the window values), SAE J2945/9 (V3, C11, V1) and SAE J3287 (proto F9).
 
-1. **RSU SSPs.** crypto #35 and proto E7 record a deviation, citing CAMP Table 1. Governance E-8 and F-3 read Table 1 in full and found no SPaT, MAP or TIM SSP in it. The one SSP it prints, Wyoming's distress notification, is transcribed and pinned byte for byte. On that reading, both rows are matches, and the deviations count would be 30.
-2. **Pseudonym region.** crypto #32 says unverifiable. Gov F-2 decided "no region" from [SMP] §6.3.3, which sets no region on authorisation certificates, and recorded a match. Without a region, a pseudonym is 6 B smaller than CAMP's 2016-pilot example (80 B against 86 B, 04 §3).
-3. **The i-period time base** (crypto #10 against gov K-5). Both rows call it a deviation but read the sources in opposite directions. The 1609.2.1 body text is paywalled, so this needs an owner decision.
-4. **Path history at a pseudonym change.** veh C10 says the engine does not clear it. The code does clear it: `crates/v2xw-node/src/vehicle.rs:207` `set_identity` clears `history` when the identity changes, and RT §5 says the same. The row's description of the engine is out of date. Whether J2945/1 requires the clearing is still unverifiable.
-5. **MA concurrency.** proto G7 and its test show concurrent cases. bench §9.3 saw one decision per provider every 8 h under the report flood. This is open: either the benchmark's queue is serial, or the reading is wrong.
+**Values that no purchase can supply.** None of these is published anywhere, so the engine
+will always model them, each labelled as a setting:
+- data-centre placement and fleet shares;
+- EAC vote records;
+- the deployed OBU and RSU verification policies;
+- live CRL sizes.
 
-## 8. What remains to make it identical
-
-These are grouped by what they need, most important first.
-
-**Owner decisions (no research needed)**
-1. **CF-CRACA** (crypto §2): give the governance sub-CAs the root as CRACA, or move the governance CRL signer under the ICA, so that component revocation can be expressed.
-2. **CF-IPERIOD / K-5**: choose UTC-aligned or uniform-Time32 i-period starts (2 s).
-3. Whether SCMS Manager's "All Rights Reserved" artefacts may be vendored. Today they are fetched by `tools/scms-artefacts/fetch.py`.
-
-**Engine work that would turn a deviation into a match**
-4. EE request retry, SCMS-522/523 (proto B6). It changes every flow's event stream, so it needs a digest re-bless.
-5. Charge the encoded composite CRL, with the CTL and hash CRLs, instead of 40 B per entry (proto I7). Add the `infoStatus` poll and 412 (A16, I10), and `Range` resume (D18).
-6. A strict-US misbehaviour profile: SM-MBR v1.1 subtypes only, with the §2.3 thresholds (MaxSpeed 90 m/s, MaxAcceleration 10 m/s², RandomPosition 1 m), as the US default (veh M2, M3, M6).
-7. A service channel and WSA in the radio, so report uploads leave channel 172 (veh M11, U5).
-8. Country polygons for identified-region checks (veh R10). Accept uncompressed explicit keys on the node path (crypto #4, CF-UNCOMP).
-9. Per-provider certificate profiles: ISS's 70 y root, regions on sub-CAs and request-form RA, beside SAESOL's production form (gov L-1, L-5, F-1).
-10. Governance in scenarios: keys for `replace_elector`, `add_root` and `test_ballot` (G-10); CTL `effectiveDate` at the ballot (C-9); genesis at the real production sequence 1 (C-10).
-11. A business-hours MA mode. The flat 8 h review is about 21 h optimistic at the median (RT §4.1). Also stop issuing CRLs at 255 per week (proto H10).
-12. The test helper `pdu.rs` `issue_component` still issues for 3 y. It is used only in tests (BUILD-STATUS).
-
-**Re-measurement and independent checks**
-13. Re-run the full 172,800 s benchmark on a release build. Its §3–§6 numbers predate the vehicle fixes. Re-measure the full-certificate share in steady state (veh S6) and investigate the fast-forward stalls (bench §9.2) and the MA queue (§7 item 5).
-14. Add independent oracle rules for `indexWithinI` and CRL freshness (proto L). Today only Rust tests check them.
-15. Correct the checklist rows in §7 items 1, 2 and 4.
-
-**Paywalled standards: buying them would turn unverifiable rows into checked ones**
-16. IEEE 1609.2.1 body text: the time base, the `*-maxAge` meanings and the URL paths (crypto #10, proto D11, B9).
-17. IEEE 1609.2 §5.3.8: the CCM nonce rule (crypto #59).
-18. SAE J2945/1: CertAttachInt (450 ms or 1 s; veh S2) and path history at a change (C10).
-19. SAE J2945/9: the PSM rate, handset permissions and pseudonym change (V3, C11, V1).
-20. SAE J3287: misbehaviour content (proto F9).
-
-**Values that no purchase can supply.** Data-centre placement, fleet shares, EAC vote records, the deployed OBU and RSU verification policies, and live CRL sizes are not published anywhere (gov D-9, D-11, G-1; veh S1, U3; 04 §7 U13). The engine will always model these, with each one labelled as a setting. "Identical" can therefore only ever mean identical wherever the real system is observable. On that measure, the remaining work is items 1–15.
+"Identical" can therefore only ever mean identical wherever the real system is observable. On
+that measure, 270 of 326 rules match. The remaining work is the 22 non-reopened deviations
+(14 of which have no trust effect), the five reopened rows, and the six runtime defects of §6.
