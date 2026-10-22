@@ -50,11 +50,17 @@ fn run_once() -> Recs {
     };
     for (_, r) in rec.records() {
         match r.channel {
-            "pki.flow" => out.flow.push(serde_json::from_slice(&r.json).expect("json")),
+            "pki.flow" => out
+                .flow
+                .push(serde_json::from_slice(&r.json).expect("json")),
             "pki.knowledge" => {
                 let v: Value = serde_json::from_slice(&r.json).expect("json");
                 if v["role"] == "ra" {
-                    for row in v["holds"]["enrolment_rows"].as_array().into_iter().flatten() {
+                    for row in v["holds"]["enrolment_rows"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                    {
                         if let Some(e) = row["enrolment"].as_str() {
                             out.ra_enrolments.insert(e.to_string());
                         }
@@ -67,7 +73,8 @@ fn run_once() -> Recs {
                     continue;
                 };
                 if let Some(hex) = v["certificates"][e].as_str() {
-                    out.enrolment.insert(dev.to_string(), (e.to_string(), hex.to_string()));
+                    out.enrolment
+                        .insert(dev.to_string(), (e.to_string(), hex.to_string()));
                 }
             }
             _ => {}
@@ -90,7 +97,10 @@ fn pdus(flow: &[Value]) -> impl Iterator<Item = (&Value, &Value)> {
 #[ignore = "OF-1 (oracle-final.md): fails on 2004bb87, two enrolment certificates per vehicle"]
 fn one_enrolment_certificate_is_issued_registered_and_signs_every_download_request() {
     let r = run();
-    assert!(!r.enrolment.is_empty(), "no node.credentials enrolment recorded");
+    assert!(
+        !r.enrolment.is_empty(),
+        "no node.credentials enrolment recorded"
+    );
     let mut issued_elsewhere = BTreeSet::new();
     let mut unregistered = BTreeSet::new();
     let mut signed_by_other = BTreeMap::<String, u64>::new();
@@ -151,7 +161,8 @@ fn every_cellular_report_upload_carries_its_spdus() {
     }
     assert!(with + without > 0, "no report upload in the run");
     assert_eq!(
-        without, 0,
+        without,
+        0,
         "{without} of {} cellular report uploads carry no SecuredMisbehaviorReport / Download-Req",
         with + without
     );
