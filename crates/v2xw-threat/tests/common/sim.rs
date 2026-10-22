@@ -1243,6 +1243,7 @@ pub fn run(opts: &SimOptions) -> SimOut {
                             // attacker does not have, which is a `crypto_mode: real`
                             // question and not this comparison's.
                             spdu: None,
+                            signer_certificate: None,
                         },
                         OnAirClaim {
                             arrival: end,

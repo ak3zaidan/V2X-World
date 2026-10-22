@@ -1852,7 +1852,19 @@ impl VruDeviceRuntime {
                 (SpduVerdict::Refused, _) => return VerificationState::Invalid,
                 (SpduVerdict::Revoked, _) => return VerificationState::Revoked,
             },
-            None => (frame.signature_valid, None),
+            // A sized frame: its attached certificate is held to the installed roots
+            // before the modelled signature counts (R-TRUSTLEAK).
+            None => match self.security.verify_sized(
+                ctx,
+                frame.signer_certificate.as_deref(),
+                frame.signature_valid,
+            ) {
+                (SpduVerdict::Valid, linkage) => (true, linkage),
+                (SpduVerdict::Invalid, _) => (false, None),
+                (SpduVerdict::Unverifiable, _) => return VerificationState::Unverified,
+                (SpduVerdict::Refused, _) => return VerificationState::Invalid,
+                (SpduVerdict::Revoked, _) => return VerificationState::Revoked,
+            },
         };
         if !authentic {
             return VerificationState::Invalid;

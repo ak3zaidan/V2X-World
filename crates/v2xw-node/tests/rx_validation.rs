@@ -861,6 +861,55 @@ fn a_sender_whose_clock_lags_stamps_its_own_time_and_keeps_an_expired_certificat
     }
 }
 
+/// R-TRUSTLEAK (testing/matrix.md): a frame the engine sizes rather than encodes (a
+/// roadside unit's CRL frame, a report relayed over the air) reaches the receiver with its
+/// signer's certificate and no SPDU. It used to verify on the engine's word alone, so a
+/// provider's frames still verified after the CTL dropped its root. The receiver now holds
+/// the certificate to its installed roots before the modelled signature counts, and hands
+/// its linkage data to the CRL check.
+#[test]
+fn a_sized_frame_is_held_to_the_installed_roots() {
+    let pki = pki();
+    let other = ScmsPki::new(8, t0() - 31_556_952).unwrap();
+    let key = pseudonym(&pki, &pki.aca, 16, |_| {});
+    let cert: Certificate = key.certificate().as_ref().clone();
+    let roots = |p: &ScmsPki| vec![Arc::new(p.root.cert.clone())];
+    let reg = RngRegistry::new(4);
+    for mode in MODES {
+        let mut ctx = NodeRuntimeCtx::new(11 * NS_PER_S, &reg);
+        let mut rx = trusted(mode, &pki);
+        let (v, linkage) = rx.verify_sized(&mut ctx, Some(&cert), true);
+        assert_eq!(v, SpduVerdict::Valid, "{mode:?}");
+        assert!(linkage.is_some(), "its linkage data reaches the CRL check");
+        assert_eq!(
+            rx.verify_sized(&mut ctx, Some(&cert), false).0,
+            SpduVerdict::Invalid,
+            "a bad modelled signature still fails"
+        );
+        // The CTL drops the root: refused from then on, whatever the engine says.
+        assert_eq!(rx.apply_ctl(&roots(&other), &[]), (1, 1));
+        assert_eq!(
+            rx.verify_sized(&mut ctx, Some(&cert), true).0,
+            SpduVerdict::Refused,
+            "{mode:?}"
+        );
+        assert_eq!(refused(&rx, "chain-untrusted-root"), 1, "{mode:?}");
+        // A receiver that never held this provider's chain file has concluded nothing.
+        let mut stranger = trusted(mode, &other);
+        assert_eq!(
+            stranger.verify_sized(&mut ctx, Some(&cert), true).0,
+            SpduVerdict::Unverifiable
+        );
+        // No certificate to check: the engine's word, and counted as unchecked.
+        let before = stranger.trust().stats.chain_unchecked;
+        assert_eq!(
+            stranger.verify_sized(&mut ctx, None, true),
+            (SpduVerdict::Valid, None)
+        );
+        assert_eq!(stranger.trust().stats.chain_unchecked, before + 1);
+    }
+}
+
 // Edge-case package, item 8: a provider's root removed from the CTL mid-run.
 #[test]
 fn a_root_a_newer_ctl_drops_is_refused_from_then_on_and_an_unchanged_ctl_forgets_nothing() {
