@@ -1,0 +1,77 @@
+# Expectation rows of the final independent oracle check (docs/design/scms-real/testing/
+# oracle-final.md). Checked by `tools/oracle/oracle.py records RUN... --expect THIS_FILE`:
+# a row {run, rule, expect: pass} holds when that rule has no red check on that run's
+# recording; {expect: red} records a disagreement the report documents (it must stay red until
+# the engine is fixed, then flips to pass). Rows with `compare` are measured against the base
+# run on the same seed and checked by hand in the report (section 3).
+#
+# Runs (release binary of main 4924a5d2, `--record-level events`):
+#   conf = scenarios/scms-conformance.yaml   (base)
+#   mbr  = scenarios/scms-oracle-mbr.yaml    (variant: automatic MA at both providers, 20 %
+#          liars, four radio windows over 15 days, same seed)
+# Every row was first written as the standard predicts (pass) before the results were read;
+# the `expect: red` rows were changed afterwards, each to a documented engine disagreement
+# (OF-n in the report) with its evidence, never to fit a wrong rule.
+
+# ---- Encoding, time, certificates ----
+- {run: conf, rule: DECODE, expect: pass, source: "every PDU decodes and re-encodes byte for byte (1609.2 6.2 canonical COER)"}
+- {run: mbr, rule: DECODE, expect: pass, source: "as above"}
+- {run: conf, rule: TIME, expect: pass, source: "Time32 = TAI s since 2004-01-01, 5 leap seconds by 2026 (1609.2 6.3.11)"}
+- {run: mbr, rule: TIME, expect: pass, source: "as above, across 15 days"}
+- {run: conf, rule: CERT-ID, expect: pass, source: "HashedId8 = low 8 bytes of SHA-256 of the canonical certificate (1609.2 6.4.3)"}
+- {run: mbr, rule: CERT-ID, expect: pass, source: "as above"}
+- {run: conf, rule: CRACA-CERT, expect: pass, source: "cracaId = HashedId3 of a CRACA whose CRL signer lists the series; pseudonym 1, app 3, enrolment 4 ([SMP] Table 1)"}
+- {run: mbr, rule: CRACA-CERT, expect: pass, source: "as above"}
+- {run: conf, rule: ENR-LIFE, expect: red, source: "6-year enrolment ([CAMP122] Table 3). Measured: 56 vehicle enrolment certificates start at t0 with 0.9-5.5 y lifetimes (OF-1)"}
+
+# ---- CRLs: envelope, freshness, matching ----
+- {run: conf, rule: CRL-ENV, expect: pass, source: "Signed CrlContents, psid 256, headerInfo psid only, version 1 (1609.2 7.4; 03 3.1)"}
+- {run: mbr, rule: CRL-ENV, expect: pass, source: "as above, every CRL"}
+- {run: conf, rule: CRL-SSP, expect: pass, source: "CrlSsp lists the series; crlCraca per associatedCraca (Ieee1609Dot2CrlSsp)"}
+- {run: mbr, rule: CRL-SSP, expect: pass, source: "as above"}
+- {run: mbr, rule: CRL-NEXT, expect: pass, source: "nextCrl strictly after issueDate (CrlBaseTypes)"}
+- {run: mbr, rule: CRL-TIME, expect: pass, source: "issueDate not after the first send"}
+- {run: mbr, rule: CRL-SEQ, expect: pass, source: "issueDate increases; indexWithinI 0 for a new iRev, +1 otherwise; crlSerial +1 (CrlBaseTypes comments)"}
+- {run: mbr, rule: CRL-IREV, expect: pass, source: "iRev <= the i-period at issueDate (1609.2 5.1.3.4)"}
+- {run: mbr, rule: CRL-KEEP, expect: pass, source: "revoked certificates stay until expiry ([SM-PROV] 3.4.9)"}
+- {run: mbr, rule: CRL-SLA, expect: pass, source: "a new CRL by nextCrl ([SM-PROV] 3.4.10)"}
+- {run: mbr, rule: CRL-STATE, expect: pass, source: "the engine's CRL rows agree with the bytes"}
+- {run: conf, rule: CRL-MATCH, expect: pass, source: "each entry revokes exactly one recorded device, one the MA decided on (1609.2 5.1.3.2/5.1.3.4)"}
+- {run: mbr, rule: CRL-MATCH, expect: pass, source: "as above"}
+- {run: mbr, rule: RA-BLOCK, expect: pass, source: "blacklisted: login refused, pre-generation stops ([CAMP122] SCMS-1204, SCMS-509)"}
+
+# ---- Provisioning downloads ----
+- {run: conf, rule: ENR-MAP, expect: pass, source: "EcaEeCertResponse.requestHash names the device's request; ECA signature ([ASN-2.1] EcaEeInterface)"}
+- {run: conf, rule: DL-ACK, expect: pass, source: "RaEeCertAck Signed psid 35 by an RA; requestHash; firstI for butterfly ([ASN-2.1] EeRaInterface)"}
+- {run: mbr, rule: DL-ACK, expect: pass, source: "as above"}
+- {run: conf, rule: DL-ENC, expect: pass, source: "Encrypted{Signed} to one RA certRecipInfo, psid 35, SignerSingleCert (03 3.1-3.2)"}
+- {run: mbr, rule: DL-ENC, expect: pass, source: "as above"}
+- {run: conf, rule: DL-SIGN, expect: red, source: "signed by the device's enrolment certificate ([CAMP122] 6.3; [SM-MBR] 4). Measured: signed by a second enrolment certificate no recorded exchange issued (OF-1)"}
+- {run: conf, rule: DL-TIME, expect: pass, source: "5 s clock tolerance ([CAMP122] 5.1.7)"}
+- {run: mbr, rule: DL-TIME, expect: pass, source: "as above"}
+- {run: conf, rule: DL-NAME, expect: pass, source: "<requestHash HEX>_<i HEX>.zip, i >= firstI; <requestHash>.info; misbehavior-report ([CAMP122] 6.3.6, Table 79)"}
+- {run: mbr, rule: DL-NAME, expect: pass, source: "as above, after two rollovers"}
+- {run: conf, rule: DL-AFTER, expect: pass, source: "not before nextDlTime (EeRaInterface RaEeCertAck)"}
+- {run: mbr, rule: DL-AFTER, expect: pass, source: "as above"}
+- {run: conf, rule: DL-WAIT, expect: pass, source: "download-minWait 5 min, maxReqs 100 ([SMP] Table 3)"}
+- {run: mbr, rule: DL-WAIT, expect: pass, source: "as above"}
+
+# ---- Misbehaviour reports ----
+- {run: conf, rule: MBR-ENC, expect: pass, source: "encrypted to the MA certificate whose MaSsp relevantPsids holds 0x20 ([SM-MBR] 3)"}
+- {run: mbr, rule: MBR-ENC, expect: pass, source: "as above"}
+- {run: conf, rule: MBR-SIG, expect: pass, source: "psid 0x26, {psid, generationTime}, full pseudonym signer permitting 0x26, inside its validity ([SM-MBR] 1, 3; 1609.2 5.2)"}
+- {run: mbr, rule: MBR-SIG, expect: pass, source: "as above"}
+- {run: conf, rule: MBR-UP, expect: red, source: "every upload is the SPDU plus a Download-Req; RA forwards byte for byte ([SM-MBR] 4). Measured: 1,695 of 2,991 cellular uploads carry no bytes (OF-2)"}
+
+# ---- CTL ----
+- {run: conf, rule: CTL-SUM, expect: pass, source: "sequence +1, >= quorum signers, in force from effectiveDate ([ASN-2.1] CertManagement)"}
+- {run: conf, rule: CTL-DEV, expect: pass, source: "a device never holds a CTL that is not yet published or an older one after a newer"}
+
+# ---- Base vs variant on the same seed (checked in the report, section 3) ----
+- {compare: [conf, mbr], measure: "distinct CRLs per provider", expect: "conf 1, mbr >= 3", source: "automatic decisions on several days, a weekly reissue before nextCrl ([SM-PROV] 3.4.10)"}
+- {compare: [conf, mbr], measure: "indexWithinI / iRev sequence", expect: "mbr: 0,1,.. within an iRev, 0 again on 616 and 617", source: "CrlBaseTypes indexWithinI comment"}
+- {compare: [conf, mbr], measure: "revoked devices", expect: "mbr ~2x conf (2x liars), honest revocations 0", source: "MA decides on liars only"}
+- {compare: [conf, mbr], measure: "report uploads", expect: "mbr ~3x conf (1.7x radio time, 2x liars)", source: "reports scale with detections"}
+- {compare: [conf, mbr], measure: "MA decision delay", expect: "mbr << conf's 8 h manual review", source: "automatic vs manual-review mode (CV pilots)"}
+- {compare: [conf, mbr], measure: "wall time / peak memory / records", expect: "wall ~1.7-2.5x, memory < 2x, records ~2-3.5x", source: "cost follows radio time and fleet; fast-forward is cheap"}
+- {compare: [conf, mbr], measure: "message types and entity pairs", expect: "the same set", source: "same deployment; only MA mode and liar share change"}
