@@ -328,7 +328,15 @@ pub struct CrlIssuance {
     /// would never end); the engine turns it on.
     pub reissue: bool,
     /// Also issue a delta linkage CRL with the entries added since the previous
-    /// publication.
+    /// publication. **Off** (O-1): the US profile distributes full lists only. Its device
+    /// endpoints serve the current list of each CRACA and series: the composite CRL
+    /// ("preferred over individual CRLs") or the individual CRL, unauthenticated, from the
+    /// CRL store ([SMP] §4.4, 1609.2.1 6.3.5.8 and 6.3.5.10; [CAMP122] §6.2.3
+    /// `download-crl`), and `CertificateManagementInfoStatus` names one `issueDate` per
+    /// `(cracaId, series)`, so a device has no way to ask for a delta. No US source
+    /// describes delta distribution (inference, labelled). On, the Generator also signs
+    /// a delta for the encoding studies, which nothing distributes: a device then sees
+    /// gaps in `indexWithinI` (oracle-final O-1).
     pub deltas: bool,
 }
 
@@ -339,7 +347,7 @@ impl Default for CrlIssuance {
             slot_et: (10, 0),
             next_crl: Duration::from_secs(7 * 86_400),
             reissue: false,
-            deltas: true,
+            deltas: false,
         }
     }
 }

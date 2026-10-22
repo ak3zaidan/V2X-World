@@ -96,6 +96,64 @@ fn the_bootstrap_issues_the_us_enrolment_certificate_and_registers_it_with_the_r
     }
 }
 
+/// OF-1 (oracle-final.md): a vehicle that joins with an aged enrolment certificate holds
+/// one, the certificate its own ECA exchange issued: the start back-dated by the age, the
+/// whole six years ([CAMP122] Table 3), the only one the RA registered for it, and the
+/// signer of every Download-Req it makes. The age used to be a second certificate issued
+/// out of band with a shortened lifetime. One older than the issuing ECA starts at the
+/// ECA's own start, which the ECA's profile check requires.
+#[test]
+fn an_aged_enrolment_is_the_one_certificate_its_eca_exchange_issued() {
+    let mut run = run_with_bytes();
+    let life = run.state.params.enrolment_lifetime.as_nanos();
+    let t0 = u64::from(run.state.time32(0));
+    let eca_start = ctl::validity(&run.state.pki.as_ref().unwrap().eca.cert).0;
+    assert!(eca_start < t0, "the hierarchy predates the run");
+    // A is 100 days old; B would be older than the ECA.
+    let a = run.age_enrolment(DEVICE_A, life - 100 * DAY_S * NS);
+    assert_eq!((a.valid_from, a.valid_until), (0, life - 100 * DAY_S * NS));
+    let b = run.age_enrolment(DEVICE_B, DAY_S * NS);
+    assert_eq!(b.valid_until, (eca_start + life / NS - t0) * NS);
+    run.preload(DEVICE_A, 0, 1, 2).expect("A joins");
+    run.preload(DEVICE_B, 0, 1, 2).expect("B joins");
+    let st = &run.state;
+    assert!(st.pdu_rejections.is_empty(), "{:?}", st.pdu_rejections);
+    let mut mine = std::collections::BTreeSet::new();
+    for (dev, model, start) in [(DEVICE_A, a, t0 - 100 * DAY_S), (DEVICE_B, b, eca_start)] {
+        let d = &st.devices[&dev];
+        let cred = d.enrolment_credential.as_ref().expect("a real credential");
+        let (s, e) = ctl::validity(&cred.cert);
+        assert_eq!((s, e - s), (start, life / NS), "{dev:?}: back-dated, whole lifetime");
+        assert_eq!(d.enrolment, Some(model), "{dev:?}: the model is the certificate");
+        assert_eq!((e - t0) * NS, model.valid_until);
+        let id8 = pdu::cert_id8(&cred.cert);
+        assert_eq!(
+            st.ra.registered.get(&dev),
+            Some(&std::collections::BTreeSet::from([id8])),
+            "{dev:?}: the one certificate registered"
+        );
+        mine.insert(id8);
+    }
+    assert_eq!(st.eca.issued, 2, "one ECA issuance per device");
+    let pki = st.pki.as_ref().unwrap();
+    let enc = pki.ra.enc_private.unwrap();
+    let signers: Vec<[u8; 8]> = st
+        .pdus
+        .iter()
+        .filter(|p| p.kind == SpduKind::EeRaDownloadRequest)
+        .filter_map(|p| p.bytes.clone())
+        .map(|b| {
+            let plain = pdu::decrypt_cert(b.bytes(), &pki.ra.cert, &enc).expect("decrypts");
+            pdu::cert_id8(&pdu::open_signed_pdu(&plain, pki).expect("opens").1)
+        })
+        .collect();
+    assert!(!signers.is_empty(), "the pre-run downloads were captured");
+    assert!(
+        signers.iter().all(|s| mine.contains(s)),
+        "every Download-Req is signed by its device's one enrolment certificate"
+    );
+}
+
 #[test]
 fn the_ra_serves_only_registered_enrolment_certificates() {
     let mut run = run_with_bytes();

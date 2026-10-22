@@ -63,6 +63,42 @@ impl ScmsRun {
         }
     }
 
+    /// States the age of the enrolment certificate `device` holds when it joins, before
+    /// its pre-run enrolment ([`ScmsRun::preload`]): the certificate ends at `until` and
+    /// was issued one full lifetime earlier. The device's one ECA exchange then asks for,
+    /// and the ECA issues, a certificate with that back-dated start and the profile's
+    /// whole lifetime ([CAMP122] Table 3, six years); the DCM registers it and it signs
+    /// every Download-Req (OF-1: the age used to be a second certificate, issued out of
+    /// band with a shortened lifetime, which replaced the one the exchange issued). A
+    /// start before the issuing ECA's own is moved up to it (the ECA issues only inside
+    /// its validity, [SMP] §6.3.1), which moves the end later by as much. Returns the
+    /// model certificate, whose `valid_until` is the end in force.
+    pub fn age_enrolment(&mut self, device: NodeId, until: SimTime) -> EnrolmentCert {
+        const NS: u64 = 1_000_000_000;
+        if !self.state.devices.contains_key(&device) {
+            self.add_device(device);
+        }
+        let st = &mut self.state;
+        let life_ns = st.params.enrolment_lifetime.as_nanos();
+        let life_s = life_ns / NS;
+        let eca_start = st
+            .pki
+            .as_ref()
+            .map_or(0, |p| v2xw_sec::ctl::validity(&p.eca.cert).0);
+        let end = u64::from(st.time32(until));
+        let start = end.saturating_sub(life_s).max(eca_start);
+        let until = until.saturating_add((start + life_s).saturating_sub(end) * NS);
+        let cert = EnrolmentCert {
+            generation: 0,
+            valid_from: until.saturating_sub(life_ns),
+            valid_until: until,
+        };
+        if let Some(d) = st.devices.get_mut(&device) {
+            d.enrolment_age = Some((cert, u32::try_from(start).unwrap_or(u32::MAX)));
+        }
+        cert
+    }
+
     /// Starts IEEE 1609.2.1's successor enrolment at `at`: the device asks the RA for a
     /// new enrolment certificate, signing with the one it holds.
     pub fn reenrol_at(&mut self, device: NodeId, at: SimTime) -> FlowRun {
@@ -186,10 +222,17 @@ impl ScmsState {
         let k_u = self.pdu_rng.scalar();
         let t = self.time32(at);
         let name = device_name(device);
+        // A device that joins with an aged certificate asks for its back-dated start
+        // ([`ScmsRun::age_enrolment`]); a new one for a certificate valid from now.
+        let start = self
+            .devices
+            .get(&device)
+            .and_then(|d| d.enrolment_age)
+            .map_or(t, |(_, s)| s);
         let req = EnrolmentRequest {
             name: &name,
             regions: &US_ENROLMENT_REGIONS,
-            valid_from: t,
+            valid_from: start,
             lifetime_s: self.lifetime_s(),
         };
         let p = us::ee_eca_cert_request_us(t, &Point::mul_base(&k_u), &req, Some(&cid)).ok()?;
@@ -561,11 +604,20 @@ impl ScmsState {
                 };
                 self.issued_enrolment.insert(device);
                 self.eca.issued += 1;
-                let cert = EnrolmentCert {
-                    generation: 0,
-                    valid_from: at,
-                    valid_until: self.params.enrolment_lifetime.after(at),
-                };
+                // The certificate the request asked for: an aged one's back-dated
+                // validity ([`ScmsRun::age_enrolment`]), otherwise from now.
+                let aged = self
+                    .devices
+                    .get_mut(&device)
+                    .and_then(|d| d.enrolment_age.take());
+                let cert = aged.map_or(
+                    EnrolmentCert {
+                        generation: 0,
+                        valid_from: at,
+                        valid_until: self.params.enrolment_lifetime.after(at),
+                    },
+                    |(c, _)| c,
+                );
                 out.stage_at(StageId::Certified, to, None, flow, run);
                 let size = match &response {
                     Some(p) => self.emit_pdu(SpduKind::EcaEeCertResponse, to, n.dcm, at, p),
