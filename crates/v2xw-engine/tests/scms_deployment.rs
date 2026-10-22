@@ -209,7 +209,10 @@ fn every_provider_publishes_its_crl_at_the_start() {
 /// certifies verifies at provider-a's receivers. Its roadside units' CRL frames (and the
 /// reports relayed over the air) are sized, not encoded, and verified on the engine's
 /// word alone: 7, then 280, provider-b messages verified at provider-a in the realism
-/// runs. Each receiver now holds the attached certificate to its own installed roots.
+/// runs. The engine now attaches the signer's certificate to every sized frame and each
+/// receiver holds it to its own installed roots: here, no CRL frame is accepted
+/// unchecked. The refusal under a dropped root is proven at the node
+/// (`v2xw-node` tests/rx_validation.rs, the sized-frame tests).
 #[test]
 fn nothing_a_provider_off_the_ctl_certifies_verifies() {
     let mut s = load(Some(serde_json::json!({
@@ -235,6 +238,13 @@ fn nothing_a_provider_off_the_ctl_certifies_verifies() {
     let p = &report.phase2;
     let get = |k: &str| p.verified_by_provider.get(k).copied().unwrap_or(0);
     assert!(p.crl_broadcasts > 0, "the units broadcast the list");
+    // Every sized CRL frame a vehicle took off the air carried its signer's certificate
+    // and was held to the vehicle's roots: none was accepted on the engine's word.
+    assert_eq!(
+        report.receiver_validation.chain_unchecked, 0,
+        "{:?}",
+        report.receiver_validation
+    );
     assert!(
         get("provider-a<-provider-a") > 0,
         "{:?}",

@@ -910,6 +910,71 @@ fn a_sized_frame_is_held_to_the_installed_roots() {
     }
 }
 
+/// R-TRUSTLEAK at a roadside unit: a misbehaviour report relayed over the air is a sized
+/// frame. The unit forwarded any whose modelled signature was good, so a provider off the
+/// CTL could use the infrastructure of the other provider as a relay. It now forwards one
+/// only when the attached certificate chains to a root it trusts.
+#[test]
+fn a_unit_forwards_a_sized_report_only_under_a_trusted_root() {
+    use v2xw_core::geom::Vec3;
+    use v2xw_node::rsu::{Backhaul, RsuConfig, RsuRole, RsuRoles, RsuRuntime};
+    use v2xw_node::runtime::RxFrame;
+    use v2xw_node::stores::VerificationState;
+    let pki = pki();
+    let other = ScmsPki::new(8, t0() - 31_556_952).unwrap();
+    let trusted_key = pseudonym(&pki, &pki.aca, 17, |_| {});
+    let rogue_key = pseudonym(&other, &other.aca, 18, |_| {});
+    let cas: Vec<Arc<Certificate>> = pki.all().iter().map(|a| Arc::new(a.cert.clone())).collect();
+    let relay = |key: &ImplicitKey| {
+        let profile = v2xw_node::profiles::get(v2xw_node::profiles::DEFAULT_RSU)
+            .expect("the default roadside profile")
+            .clone();
+        let mut cfg = RsuConfig::with_roles(RsuRoles::NONE.with(RsuRole::ReportForwarding));
+        cfg.wall = wall();
+        let mut u = RsuRuntime::new(
+            v2xw_core::ids::NodeId::new(50),
+            profile,
+            cfg,
+            Backhaul::fibre(),
+            0,
+        );
+        u.stores_mut().crl.set_period(0);
+        u.security_mut()
+            .install_trust(&[Arc::new(pki.root.cert.clone())], &cas);
+        let cert = Arc::clone(key.certificate());
+        let frame = RxFrame {
+            signer: Some(cert::cert_id8(&cert).expect("digest")),
+            msg_type: MsgType::Mbr,
+            bytes: 1_200,
+            claimed_pos: Some(Vec3::new(120.0, 100.0, 1.5)),
+            claimed_speed_mps: 12.0,
+            claimed_heading_rad: 0.0,
+            claimed_generation_time: 10 * NS_PER_S,
+            full_certificate: true,
+            signature_valid: true,
+            spdu: None,
+            signer_certificate: Some(cert),
+        };
+        let reg = RngRegistry::new(55);
+        let mut ctx = NodeRuntimeCtx::new(11 * NS_PER_S, &reg);
+        let out = u.step(&mut ctx, vec![frame]);
+        (
+            out.forwarded.len(),
+            out.delivered.first().map(|m| m.verification),
+            u.security().trust().stats.chain_unchecked,
+        )
+    };
+    let (n, v, unchecked) = relay(&trusted_key);
+    assert_eq!(
+        (n, v, unchecked),
+        (1, Some(VerificationState::Verified), 0),
+        "under the unit's root: checked, verified, forwarded"
+    );
+    let (n, v, _) = relay(&rogue_key);
+    assert_eq!(n, 0, "under a root the unit does not trust: not forwarded");
+    assert_ne!(v, Some(VerificationState::Verified));
+}
+
 // Edge-case package, item 8: a provider's root removed from the CTL mid-run.
 #[test]
 fn a_root_a_newer_ctl_drops_is_refused_from_then_on_and_an_unchanged_ctl_forgets_nothing() {
