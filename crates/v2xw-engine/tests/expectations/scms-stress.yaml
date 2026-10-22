@@ -1,0 +1,355 @@
+# SCMS stress package: scale, long runs and post-quantum (docs/design/scms-real/testing/stress.md).
+# Every `expect` was written down before its run (commit history: this file was committed
+# with `measured: pending` before the first run). `measured` is base -> variant, or the one
+# run's value for an invariant row. Not a sweep table: `v2xw sensitivity` passes over it by
+# its `schema` (sweep::SCMS_RUN_EXPECTATIONS_SCHEMA).
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+schema: v2xw/scms-run-expectations/1
+
+runs:
+  Q:
+    scenario: scenarios/real-world/midtown-scms-benchmark-quarter.yaml
+    note: >-
+      The quarter-fleet benchmark as reported in docs/benchmark/scms-real-benchmark.md (R-Q,
+      release binary of 3a30f2c, before the PSM/MBR fixes): the comparison point for FS.
+  FS:
+    scenario: scenarios/real-world/midtown-scms-benchmark.yaml
+    note: >-
+      The full-fleet benchmark (9,000 veh/h with the 4x fill, 2,000 pedestrians, 200 cyclists,
+      25 % handsets, 30 RSUs), opt-level-2 build of this branch, --record-level metrics.
+  FS1: {base: FS, set: {}, note: "FS for its first 15 s with --no-recording --digest at 1 thread"}
+  FS4: {base: FS, set: {}, note: "FS for its first 15 s with --no-recording --digest at 4 threads"}
+  MW:
+    scenario: scenarios/edge/multi-week.yaml
+    note: >-
+      The conformance run for 33 days of the real calendar (five rollovers, live windows at
+      each), real cryptography, 10 % ConstPos attackers, manual MA, business-day CRL.
+  MWC: {scenario: scenarios/edge/multi-week-crlg-down.yaml, base: MW,
+        note: "the home CRL Generator offline from 700 s to 2,600,000 s"}
+  MWP: {scenario: scenarios/edge/multi-week-parked.yaml, base: MW,
+        note: "one cellular car broken down at 640 s with its OBU off from 645 s to 2,419,510 s"}
+  MW1: {base: MW, set: {}, note: "MW at 1 thread (determinism)"}
+  PQ0: {scenario: scenarios/real-world/stress/pq-base.yaml,
+        note: "quarter fleet, 60 s live, generic-sdu fragmenter, software-crypto OBU, ECDSA P-256"}
+  PQM: {scenario: scenarios/real-world/stress/pq-mldsa44.yaml, base: PQ0}
+  PQHM: {scenario: scenarios/real-world/stress/pq-hybrid-mldsa44.yaml, base: PQ0}
+  PQHF: {scenario: scenarios/real-world/stress/pq-hybrid-falcon512.yaml, base: PQ0}
+  PQHFC: {scenario: scenarios/real-world/stress/pq-hybrid-falcon512-certcycle.yaml, base: PQHF}
+  PQ0-1: {base: PQ0, set: {}, note: "PQ0 at 1 thread (determinism)"}
+  KN:
+    scenario: crates/v2xw-engine/tests/scms_knobs_runs.rs
+    note: the 36-minute SCMS-settings suite, test profile, on this branch
+
+rows:
+# ---------------------------------------------------------------- (1) full-scale benchmark
+- id: FS.devices
+  base: Q
+  variant: FS
+  area: architecture
+  measure: devices_by_provider (sum), vru_devices_created
+  expect: about 4x the quarter's 349 devices and 161 handsets (four times the demand and the VRU sample); split near 50/50 by provider
+  source: the scenario files (9,000 vs 2,250 veh/h; 2,200 vs 550 VRUs at 25 %); D1 fleet split ASSUMPTION
+  measured: pending
+  verdict: open
+- id: FS.provisioning-per-device
+  base: FS
+  variant: FS
+  area: architecture
+  measure: provisioning requests per device; certificates at entry
+  expect: 1 request per device ([CAMP122] ra-maxReqs = 1); 40 certificates (2 weeks x certs_per_i_period 20)
+  source: "[CAMP122] Table 67; 04-validation-report §4.1"
+  measured: pending
+  verdict: open
+- id: FS.topups-at-rollover
+  base: FS
+  variant: FS
+  area: architecture
+  measure: topups_started/completed, certs_topped_up, latency, starved
+  expect: one top-up per reachable device at the 614 -> 615 boundary, 20 certificates each, completed inside the 1 h overlap; 0 vehicles starved
+  source: "CAMP-EE R1.1 §2.1.5.3.2 (1 h overlap); NYC weekly top-off; 04 §4.1"
+  measured: pending
+  verdict: open
+- id: FS.receptions-scale
+  base: Q
+  variant: FS
+  area: performance
+  measure: reception_attempts per live second
+  expect: between 8x and 16x the quarter's per live second (pairs grow with the square of the fleet; the 500 m range cap and the box's size hold it under 16x)
+  source: F3 measured 15x for 4x vehicles (05 §5); range.max_m 500 m in a ~1.9 x 2.0 km box
+  measured: pending
+  verdict: open
+- id: FS.cbr
+  base: Q
+  variant: FS
+  area: metrics
+  measure: mac.cbr mean / p95 on ch 172 in the measured window
+  expect: about 4x the quarter's BSM+PSM load (quarter 0.011 mean included 24.5 % MBR airtime, since fixed), still far below J2945/1 vMinCU 0.5, so no power adaptation; J2945/1 rate control (ITT above 100 ms) only where more than 25 vehicles are within 100 m
+  source: SAE J2945/1 congestion control (CAMP, IEEE TVT 68(3) 2019, Table I)
+  measured: pending
+  verdict: open
+- id: FS.pdr-100m
+  base: Q
+  variant: FS
+  area: metrics
+  measure: PDR within 100 m
+  expect: at or below the quarter's 0.838 (more collisions and hidden terminals), above 0.6
+  source: docs/benchmark/scms-real-benchmark.md §3; radio-fidelity B1 NLOS 0.67 at 0-100 m
+  measured: pending
+  verdict: open
+- id: FS.verify-load
+  base: Q
+  variant: FS
+  area: performance
+  measure: verifications per node per second; verify queue p99
+  expect: about 4x the quarter's ~30 per node per second, two orders under CRATON2's >2,500/s; queue p99 under 1 ms; 0 dropped
+  source: Unex OBU-301E sheet (obu-unex-obu-301-craton2.yaml)
+  measured: pending
+  verdict: open
+- id: FS.mbr-airtime
+  base: Q
+  variant: FS
+  area: metrics
+  measure: MBR share of airtime
+  expect: under 1 % (reports go over Uu or to an RSU; the 29.3 % storm was fixed by VAL-VEH)
+  source: validation/vehicle-and-roadside.md §4; realism.md MBR airtime 0.33 %
+  measured: pending
+  verdict: open
+- id: FS.honest-revocations
+  base: Q
+  variant: FS
+  area: metrics
+  measure: revoked_honest, cases
+  expect: greater than 0 and growing with the fleet (open R-USFP: the strict US profile's 1 m RandomPosition threshold flags honest raw-GNSS drift); every case decided 8 h after the shuffle releases
+  source: 07-config-testing-report §8 (R-USFP, 26 honest in the realism base)
+  measured: pending
+  verdict: open
+- id: FS.crl-polls
+  base: FS
+  variant: FS
+  area: architecture
+  measure: crl polls per cellular device; 412 share
+  expect: one conditional poll per cellular device per crl_fetch_interval; most answered 412 (not modified)
+  source: "[SMP] §4.3.2 (If-Modified-Since); FLOWS fix"
+  measured: pending
+  verdict: open
+- id: FS.backend-vs-camp
+  base: FS
+  variant: FS
+  area: architecture
+  measure: per-entity backend messages (RA, ACA, LA1/LA2, MA, CRL store)
+  expect: RA requests = devices (1 each) + top-ups (1 a week each); ACA signs 20 a week per device; LA pairs served once per request; scaled to 17 M vehicles a year the request rate stays at CAMP's 0.5 req/s; the start-of-run provisioning burst is a scenario artefact, not a real RA load
+  source: "[CAMP122] §6.3.3.4; 04 §4.1"
+  measured: pending
+  verdict: open
+- id: FS.ff-ticks
+  base: FS
+  variant: FS
+  area: performance
+  measure: fast_forward.backend_ticks
+  expect: at most about one a minute when idle plus one per due event (R-FF fix): order 10^3 to 10^4 over 2 days, not 10^5 to 10^6
+  source: realism.md R-FF (255,658 -> 4,290)
+  measured: pending
+  verdict: open
+- id: FS.run-cost
+  base: Q
+  variant: FS
+  area: performance
+  measure: wall, CPU, peak memory
+  expect: provisioning about 0.4 CPU-s per device (real P-256 preload); live radio cost about 10-16x the quarter per live second; peak memory under the 2.5 GB cap (quarter 428 MB)
+  source: scms-real-benchmark.md §7
+  measured: pending
+  verdict: open
+- id: FS.determinism
+  base: FS1
+  variant: FS4
+  area: performance
+  measure: stream_digest
+  expect: identical at 1 and 4 threads
+  source: WP-DET (calendar.rs byte-identical at 1 and 4 threads)
+  measured: pending
+  verdict: open
+# ---------------------------------------------------------------- (2) multi-week runs
+- id: MW.rollovers
+  base: MW
+  variant: MW
+  area: architecture
+  measure: top-ups per rollover; i-period of signing certificates per window
+  expect: five rollovers (614 -> 619); each device present tops up once a week, 20 certificates each; vehicles in window k sign under 615+k after its boundary; 0 starved
+  source: "[CAMP122] Table 67; 03 §1 fact 4 (epoch 2015-01-06 04:00 ET)"
+  measured: pending
+  verdict: open
+- id: MW.crl-reissue
+  base: MW
+  variant: MW
+  area: architecture
+  measure: crl_versions_published, crl-overdue refusals
+  expect: each provider's CRL Generator reissues at least once a week (nextCrl = issue + 7 d) even with no new entry, so no device ever holds an overdue CRL; crl-overdue refusals 0
+  source: "IEEE 1609.2 nextCrl; [CAMP122] Table 67 overdue_CRL_tolerance; params.rs CrlIssuance::reissue"
+  measured: pending
+  verdict: open
+- id: MW.crl-growth
+  base: MW
+  variant: MW
+  area: metrics
+  measure: CRL entries and size per week
+  expect: entries non-decreasing; grows as attackers in each live window are revoked (manual review 8 h, next business-day slot); about +33 B per entry
+  source: 04 §5 (33.08 B per entry); Brecht T-ITS 2018 (~40 B)
+  measured: pending
+  verdict: open
+- id: MW.reenrolment
+  base: MW
+  variant: MW
+  area: architecture
+  measure: reenrolments_started/completed
+  expect: about N x 33 d / 6 y = 1.5 % of devices start a renewal (remaining validity uniform over the lifetime, 18-month lead); each started one completes
+  source: "CAMP 1.2.2 (6-year enrolment, 18-month lead); phase2.rs enrolment-age draw"
+  measured: pending
+  verdict: open
+- id: MW.cost
+  base: MW
+  variant: MW
+  area: performance
+  measure: backend ticks, wall, memory
+  expect: backend ticks of order one a minute while idle over 33 days (about 5 x 10^4 at most); wall under 20 min; memory under 500 MB
+  source: R-FF fix; offline-weeks 398 s for 8 days
+  measured: pending
+  verdict: open
+- id: MWC.overdue-onset
+  base: MW
+  variant: MWC
+  area: metrics
+  measure: crl-overdue refusals per window
+  expect: none in W0-W2; from issue + 21 d of the home provider's last CRL every receiver holding that CRL refuses every message under the home CRACA (if that CRL was issued at t0, the onset is 1,814,400 s, inside W3); W4 all home-provider messages refused, the other provider's accepted
+  source: "[CAMP122] Table 67 overdue_CRL_tolerance = 2 weeks; nextCrl = issue + 7 d (params.rs)"
+  measured: pending
+  verdict: open
+- id: MWC.recovery
+  base: MW
+  variant: MWC
+  area: metrics
+  measure: crl-overdue refusals in W5; CRL versions after the return
+  expect: the Generator's timers run on its return at 2,600,000 s (FLOWS), it reissues at once, devices fetch at their next hourly poll, and W5 (day 33) has 0 overdue refusals
+  source: FLOWS fix (held messages and timers on restart); crl_fetch_interval
+  measured: pending
+  verdict: open
+- id: MWC.revocation-blocked
+  base: MW
+  variant: MWC
+  area: architecture
+  measure: home-provider revocations published during the outage
+  expect: MA decisions continue but nothing the home provider revokes is published until 2,600,000 s; attackers stay trusted that long (a DoS on the CRL Generator delays every revocation)
+  source: 03 §9 (CRL Generator is the only publisher)
+  measured: pending
+  verdict: open
+- id: MWP.off-no-backend
+  base: MW
+  variant: MWP
+  area: architecture
+  measure: CRL downloads and top-ups of the parked car while off
+  expect: none (a switched-off OBU reaches nothing)
+  source: physical; the outage switches the OBU off
+  measured: pending
+  verdict: open
+- id: MWP.overdue-on-return
+  base: MW
+  variant: MWP
+  area: metrics
+  measure: the parked car's crl-overdue refusals after power returns; its pool
+  expect: its newest CRL is about 4 weeks old (past nextCrl + 2 weeks), so it refuses every signed message until its first poll (due at once) installs a fresh CRL; its pool ended at its last period, so it cannot sign until a top-up arrives (download poll about 60 s)
+  source: "[CAMP122] Table 67; 03 §8 (download after the batch is ready)"
+  measured: pending
+  verdict: open
+- id: MW.determinism
+  base: MW
+  variant: MW1
+  area: performance
+  measure: record_digest
+  expect: identical at 1 and 4 threads
+  source: WP-DET
+  measured: pending
+  verdict: open
+# ---------------------------------------------------------------- (3) post-quantum at density
+- id: PQ.sizes
+  base: PQ0
+  variant: PQM
+  area: metrics
+  measure: BSM PSDU and SDU size, fragments per message
+  expect: "ECDSA ~210-230 B, 1 fragment. ML-DSA-44: signature 2,420 B, public key 1,312 B, so a digest-signed BSM is about 2.5 kB and a certificate-carrying one about 6.3 kB: 2 and 5 fragments of a ~1.4 kB SDU limit; mean about 2.3-2.8 at 10-25 % full-certificate share"
+  source: FIPS 204 Table 2 (ML-DSA-44 sizes); CAMP Table 3 (80 B implicit certificate)
+  measured: pending
+  verdict: open
+- id: PQ.hybrid-sizes
+  base: PQM
+  variant: PQHM
+  area: metrics
+  measure: SDU size
+  expect: hybrid ML-DSA-44 = ML-DSA-44 + 64 B ECDSA signature (+ ECDSA key and issuer signature in a certificate); hybrid Falcon-512 digest frame ~0.8 kB (1 fragment), full ~2.4 kB (2 fragments)
+  source: Falcon spec (666 B signature, 897 B public key); FIPS 204
+  measured: pending
+  verdict: open
+- id: PQ.airtime
+  base: PQ0
+  variant: PQM
+  area: metrics
+  measure: BSM airtime, CBR
+  expect: ML-DSA x10-14 the ECDSA airtime; Falcon hybrid x3-5; CBR rises by the same factor (from ~0.01-0.03 to ~0.15-0.4 for ML-DSA)
+  source: 6 Mb/s OFDM airtime proportional to bytes plus fixed preamble
+  measured: pending
+  verdict: open
+- id: PQ.loss
+  base: PQ0
+  variant: PQM
+  area: metrics
+  measure: reassembly_lost, PDR within 100 m (messages)
+  expect: reassembly loss > 0; message PDR within 100 m about PDR_frag^k (0.84^2.5 ~ 0.65) and lower still from the extra channel load
+  source: NDSS 2024 (Twardokus et al.): fragmentation multiplies loss
+  measured: pending
+  verdict: open
+- id: PQ.verify-load
+  base: PQ0
+  variant: PQHM
+  area: performance
+  measure: verifier utilisation and latency
+  expect: "on the software OBU: pure ML-DSA-44 (123 us) and Falcon-512 (50 us) verify cheaper than software ECDSA; hybrid pays both, so hybrid > ECDSA > pure PQ"
+  source: obu-pq-capable-hypothetical profile rows (liboqs on Cortex-A76)
+  measured: pending
+  verdict: open
+- id: PQ.certcycle
+  base: PQHF
+  variant: PQHFC
+  area: metrics
+  measure: airtime, reassembly loss, fragments per message
+  expect: the certificate cycle spreads the hybrid certificate over 5 messages, so fewer fragmented SDUs and less reassembly loss than generic-sdu at about equal airtime
+  source: Twardokus et al., NDSS 2024 (partial-hybrid certificate cycle)
+  measured: pending
+  verdict: open
+- id: PQ.backend-bytes
+  base: PQ0
+  variant: PQM
+  area: architecture
+  measure: credential bytes to devices (top-up/provisioning)
+  expect: grow with the certificate size (80 B -> ~3.8 kB for ML-DSA-44), about x40 per certificate
+  source: FIPS 204; CAMP Table 3
+  measured: pending
+  verdict: open
+- id: PQ.determinism
+  base: PQ0
+  variant: PQ0-1
+  area: performance
+  measure: record_digest
+  expect: identical at 1 and 4 threads
+  source: WP-DET
+  measured: pending
+  verdict: open
+# ---------------------------------------------------------------- (4) the knobs suite
+- id: KN.suite
+  base: KN
+  variant: KN
+  area: metrics
+  measure: tests passed
+  expect: all 21 pass on this branch (they passed on the code before the fix wave)
+  source: testing/scms-knobs.md
+  measured: pending
+  verdict: open
