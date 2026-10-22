@@ -1702,6 +1702,23 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the GNSS outage probability",
     },
+    // Receiver smoothing (R-USFP): RTCA DO-229's carrier-smoothing constant is 100 s; the
+    // bounds are guards around it. The static hold is a receiver setting, at most a
+    // walking pace.
+    Bound {
+        path: "actors.vehicles.gnss.smoothing_tau_s",
+        lo: 0.0,
+        hi: 600.0,
+        exclusive_lo: false,
+        what: "the GNSS receiver smoothing time constant",
+    },
+    Bound {
+        path: "actors.vehicles.gnss.static_hold_mps",
+        lo: 0.0,
+        hi: 1.5,
+        exclusive_lo: false,
+        what: "the GNSS receiver static-hold threshold",
+    },
     // --- end traffic audit ----------------------------------------------------
 ];
 
@@ -4375,10 +4392,22 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 "actors.vehicles.gnss.outage_probability",
                 g.outage_probability,
             ),
+            ("actors.vehicles.gnss.smoothing_tau_s", g.smoothing_tau_s),
+            ("actors.vehicles.gnss.static_hold_mps", g.static_hold_mps),
         ] {
             if let Some(v) = v {
                 bounded_at(path, path, v, e);
             }
+        }
+        if g.static_hold_mps.is_some_and(|v| v > 0.0)
+            && !g.smoothing_tau_s.is_some_and(|v| v > 0.0)
+        {
+            e.push(conflict(
+                "actors.vehicles.gnss.static_hold_mps",
+                "is set, and actors.vehicles.gnss.smoothing_tau_s is not: the hold is a \
+                 smoothing receiver's, and raw fixes ignore it"
+                    .to_string(),
+            ));
         }
         if g.outlier_rate_hz == Some(0.0) && g.outlier_magnitude_m.is_some() {
             e.push(conflict(
