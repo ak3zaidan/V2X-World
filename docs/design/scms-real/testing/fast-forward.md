@@ -42,8 +42,8 @@ not judged against its pre-window BSM.
   tells every provider about the pause; the VRU provider moves each standing pedestrian's
   start on by it. Test: `vru.rs` `a_fast_forward_pause_is_not_a_wait`.
 - `pseudonym_change_rate` divided by vehicle-hours that included the frozen hours. After a
-  12 h window that made the rate of every later metric window hundreds of times too small,
-  under the metric's 0.001 quantum. The privacy provider now leaves the pause out. Test:
+  12 h window that made the rate of every later metric window hundreds of times too
+  small. The privacy provider now leaves the pause out. Test:
   `privacy_metrics.rs` `a_fast_forward_window_is_not_observed_vehicle_time`.
 
 ## 3. "The rollover counts no pseudonym change" (not an engine defect)
@@ -57,8 +57,9 @@ the cited sources requires that.
 - A gridlocked vehicle in a 60 s live window meets neither condition. It is not forced to
   change before its certificate expires at 46,800 s, which is inside the second window.
 
-The counter itself is correct (`CertStore::rotate`, `Phase2::note_change`). The rate was
-the part that read 0, and that is fixed above (§2). FB2.privacy's expectation should be
+The counter (`CertStore::rotate`, `Phase2::note_change`) counts a change whenever the
+store rotates, including the rotation at expiry. This was checked by reading the code, not
+by a run, because FB2 has no run report. The rate's denominator is fixed above (§2). FB2.privacy's expectation should be
 corrected: no change is due at the boundary under CERTCHG with a 1 h overlap. The NYC
 pilot rule (`nyc-pilot`) or a live window that reaches 46,800 s shows the expiry change.
 
@@ -83,6 +84,47 @@ wake. A study of MA timing should do one of two things:
 
 `p2.in_flight` in the census shows the held count.
 
-## 5. R-FFSLOW: the second window stops at every mobility step
+## 5. R-FFSLOW: the second window stops at every mobility step (open; instrumented)
 
-(See §5 below — filled in from the wake-cause count.)
+The problem reproduces at 15 actors. The `edge-cases` run `new3-base` (scms-conformance,
+windows 660–196,200 s and 196,500–432,900 s) made 2,415,612 backend ticks.
+- That is one tick per 0.1 s step from about 191,000 s to the end.
+- Before that, there was one tick a minute.
+- The census shows when the stepping became dense:
+  - it starts with the business-day CRL publication (Thursday about 09:50 ET):
+    `scms.kernel_steps` 680 → 682 and the first `scms.crl_store_entries`;
+  - the engine scheduler gains one event at the same time (the roadside CRL carousel's
+    `FlowTimer`);
+  - after that, no kernel step runs for 5,000 s, yet a stop falls on every step.
+
+So something offered to `Phase2::next_wake` after a CRL publication is due at `now` or
+`now + 1` on every stop. Reading the code ruled out these candidates:
+- the CRL-feed crossing wake (offered only while a version is still crossing);
+- RSU CRL installs (synchronous);
+- the per-vehicle offers (all strictly after `now` and at least an hour apart);
+- top-up loops (12 top-ups in the whole run).
+
+What remains is a kernel delivery or a governance CTL held at `now + 1`. The cost per
+stop scales with the fleet: `next_wake` and `on_backend_step` each scan every node. That is
+why the rate is 6.7 simulated s per wall s at 1,833 nodes.
+
+Instrumented here: `FastForwardReport::stops_by_cause` counts the cause of every stop
+(`Phase2::next_wake_cause`). A kernel stop is labelled by the earliest delivery's message
+variant and its node (`kernel:ReportShuffleTimer@ra`). Rerun `new3-base` (about 10 min on
+a release build) and read the run report's `fast_forward.stops_by_cause`; it names the
+wake source. The run was queued here but did not get the run lock within this package's
+time.
+
+The fix then has two parts:
+1. Make that source wake only when its work is due.
+2. Make the per-stop scans event-indexed (a wake index per node keyed by instant), so a
+   stop costs O(events), not O(fleet).
+
+## 6. Fault proofs (all RED, then restored)
+
+| Test | Fault | Failure |
+|---|---|---|
+| `a_receiver_resumed_after_a_pause_continues_its_error_as_if_no_time_had_passed` | `GaussMarkovGnss::resume_after_pause` returns at once | error changed by up to 31.5 m |
+| `a_fast_forward_pause_is_not_a_wait` | `VruSafetyProvider::on_pause` a no-op | the pause charged as a 1,001 s wait |
+| `a_fast_forward_window_is_not_observed_vehicle_time` | `PrivacyProvider::on_pause` a no-op | 3.56 per vehicle-hour instead of 180 |
+| `the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed` | `Engine::resume_after_fast_forward` does not pause the mobility model | the gridlock resolution acted after the window (1 against 0) |
