@@ -60,7 +60,7 @@ The comparison with the quarter fleet, row by row, is in `docs/benchmark/scms-re
 | PQ.topups | none in 60 s | 0 / 0 | pass |
 | PQHMC.sizes / verify / reports | ECDSA BSMs, α = 2, ~1 frame per BSM, airtime ×3–5 | **0 frames transmitted; 50,180 SDUs refused at the MTU** | **open: engine defect R-CCSIG** |
 
-**R-CCSIG (open, engine defect).**
+**R-CCSIG (engine defect; fixed in fix wave 3, `testing/ccsig-memory.md` §1).**
 - Under `fragmenter/cert-cycle-partial-hybrid` the engine still signs every SPDU with the
   scenario's hybrid scheme. `run.rs` `hand_down_app` calls `signature::resize` with
   `security.signature`, and commit `45f0942f` sized the cycle's fragment to fit beside the

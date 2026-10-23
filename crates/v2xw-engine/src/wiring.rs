@@ -3024,6 +3024,16 @@ pub fn signing_facts(scenario: &Scenario) -> v2xw_metrics::signing::SchemeFacts 
     };
     facts.scheme = scheme.id.to_string();
     facts.mode = scheme.mode.as_str().to_string();
+    // In the Partially-Hybrid mode (R-CCSIG) each message carries the classical half's
+    // signature and is signed and verified with its operations; only the certificate is
+    // hybrid, and it travels in the certificate cycle's fragments.
+    let scheme = if crate::signature::partially_hybrid(scenario) {
+        facts.mode = "partially-hybrid".to_string();
+        v2xw_sec::scheme::signature(crate::signature::message_signature(scenario))
+            .unwrap_or(scheme)
+    } else {
+        scheme
+    };
     facts.sig_octets = u64::from(scheme.sig_octets());
     if let Some(profile) = v2xw_node::profiles::get(&scenario.nodes.default_obu) {
         let engine = |op: &str| {
@@ -3182,7 +3192,8 @@ pub(crate) fn with_sign_lower_edge(
     mut profile: v2xw_node::profile::HardwareProfile,
 ) -> v2xw_node::profile::HardwareProfile {
     if let Some(lo) = scenario.nodes.hsm_sign_lower_us {
-        let (sign_op, _) = v2xw_node::profile::signature_ops(&scenario.security.signature);
+        let (sign_op, _) =
+            v2xw_node::profile::signature_ops(crate::signature::message_signature(scenario));
         if let Some(op) = profile.hsm.ops.get_mut(sign_op) {
             op.latency_lower_us.value = Some(lo);
             op.latency_lower_us.source = Some("scenario nodes.hsm_sign_lower_us".to_string());
@@ -3204,6 +3215,9 @@ fn node_capacities(scenario: &Scenario) -> NodeConfig {
     if let Some(n) = scenario.messages.path_history_points {
         c.path_history_points = n as usize;
     }
+    // Partially-Hybrid (R-CCSIG): a receiver checks the issuer's post-quantum signature on
+    // each certificate it learns, once, on top of the classical message verification.
+    c.cert_verify_op = crate::signature::certificate_pq_verify_op(scenario);
     c
 }
 
@@ -3311,7 +3325,8 @@ pub fn build_node(
             v2xw_radio::ActorClass::Car
         },
     );
-    let (sign_op, verify_op) = v2xw_node::profile::signature_ops(&scenario.security.signature);
+    let (sign_op, verify_op) =
+        v2xw_node::profile::signature_ops(crate::signature::message_signature(scenario));
     let config = NodeConfig {
         tx_power_dbm: device.tx_power_dbm,
         sign_op,
@@ -3980,7 +3995,8 @@ pub fn build_rsu(
                 .clone()
         });
     let profile = with_sign_lower_edge(scenario, profile);
-    let (sign_op, verify_op) = v2xw_node::profile::signature_ops(&scenario.security.signature);
+    let (sign_op, verify_op) =
+        v2xw_node::profile::signature_ops(crate::signature::message_signature(scenario));
     let config = NodeConfig {
         tx_power_dbm: device_for(scenario, v2xw_radio::ActorClass::Rsu).tx_power_dbm,
         sign_op,

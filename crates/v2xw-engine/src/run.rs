@@ -395,6 +395,11 @@ impl GlosaDrivers {
 /// The model id GLOSA compliance draws under ([`v2xw_core::rng::RngDomain::plugin`]).
 pub const GLOSA_COMPLIANCE_ID: &str = "app/glosa/compliance";
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
 /// The vehicles' receiver validation, summed over the run (WP-C2).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct ReceiverValidationReport {
@@ -408,6 +413,10 @@ pub struct ReceiverValidationReport {
     pub ca_validations: u64,
     /// End-entity certificates validated.
     pub ee_validations: u64,
+    /// Post-quantum issuer signatures checked on newly learned certificates (the NDSS 2024
+    /// Partially-Hybrid mode, R-CCSIG); 0 in every other mode, and then not serialised.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub cert_pq_verifications: u64,
     /// SPDUs whose signer was already validated (signature only).
     pub ee_hits: u64,
     /// Validated end-entity certificates evicted (capacity, or the peer cache dropped
@@ -443,6 +452,7 @@ impl ReceiverValidationReport {
         }
         self.ca_validations += s.ca_validations;
         self.ee_validations += s.ee_validations;
+        self.cert_pq_verifications += s.cert_pq_verifications;
         self.ee_hits += s.ee_hits;
         self.ee_evictions += s.ee_evictions;
         self.invalidated += s.invalidated;
@@ -2036,6 +2046,16 @@ impl Engine {
                 let (_, removed) = rt.security_mut().apply_ctl(&roots, &cas);
                 p.note_anchors_removed(removed);
             }
+            // The post-quantum profile's unit (no signed CRL bytes exist, R-PQRSUCRL): the
+            // entries the RA serves go into its gate as a vehicle's modelled CRL does, each
+            // under its own CRACA, and it refuses a revoked sender from now on.
+            if secured.is_empty() && p.rsu_crl_is_modelled(rsu) {
+                for e in &entries {
+                    rt.stores_mut().crl.add_linkage_entry(*e);
+                }
+                p.note_rsu_crl(rsu, version, true);
+                continue;
+            }
             // A fetch for a newer CTL while no CRL is published carries no CRL to verify:
             // nothing installed, nothing refused.
             if secured.is_empty() {
@@ -2144,7 +2164,12 @@ impl Engine {
             // Refused here by name rather than left to broadcast silence.
             let signs = self.nodes.get(&node).is_some_and(|n| {
                 n.profile()
-                    .op_cost(v2xw_node::profile::signature_ops(&self.scenario.security.signature).0)
+                    .op_cost(
+                        v2xw_node::profile::signature_ops(crate::signature::message_signature(
+                            &self.scenario,
+                        ))
+                        .0,
+                    )
                     .is_some()
             });
             if !signs {
@@ -5006,9 +5031,21 @@ impl Engine {
         // cycle's fragments (`cert_cycle_piece` below), so an SPDU that attaches the
         // classical certificate does not attach the post-quantum growth as well: counting
         // it twice made every once-a-second certificate SPDU exceed the MTU.
+        //
+        // In the Partially-Hybrid mode (R-CCSIG) a node's own message is signed with the
+        // hybrid's classical half (`crate::signature::message_signature`), as NDSS 2024
+        // designs it: frames 2-5 of the cycle are 204 B ECDSA BSMs. The engine's own
+        // application frames keep the full scheme: a CRL is the CRL Generator's signed
+        // object and a relayed misbehaviour report is bound for the MA, and the credential
+        // system's messages carry the post-quantum signature in every mode.
         let pq_cert_attached = tx.full_certificate && self.frag_plan.cert_cycle().is_none();
+        let scheme = if app.is_none() && tx.msg_type != v2xw_msg::MsgType::P2pcd {
+            crate::signature::message_signature(&self.scenario)
+        } else {
+            &self.scenario.security.signature
+        };
         let (tx_bytes, tx_envelope, tx_cert) = crate::signature::resize(
-            &self.scenario.security.signature,
+            scheme,
             tx.bytes,
             tx.envelope_bytes(),
             tx.cert_bytes(),
@@ -5064,20 +5101,13 @@ impl Engine {
             None => None,
         };
         // The certificate cycle's fragment, if this SPDU carries one: credential octets
-        // inside the envelope, in addition to the signer field the node chose.
-        // The fragment fills what *this* SDU leaves under the MTU. The model's own budget
-        // is the MTU less its fixed base frame (204 B, an ECDSA-signed BSM), but a hybrid
-        // SPDU carries its post-quantum signature too (Falcon-512: 666 B), so a fragment
-        // sized for 204 B pushed the frame past the MTU and it was refused: 391 of the
-        // pq-certificate-cycle run's frames in 30 s. The cap handed down is shifted so the
-        // model's budget comes out as `mtu - sdu_bytes`.
+        // inside the envelope, in addition to the signer field the node chose. The model's
+        // budget is the MTU less its fixed base frame (204 B, an ECDSA-signed BSM), which
+        // is what a message in the Partially-Hybrid mode is (R-CCSIG). Commit 45f0942f had
+        // shifted that budget to fit beside a hybrid signature on every message; that
+        // signature is gone, and the cycle's fragments are again equal for a whole cycle.
         let cert_piece = if node_message {
-            let base = self
-                .frag_plan
-                .cert_cycle()
-                .map_or(0, |c| c.params().base_frame_bytes);
-            let cap = mtu.saturating_sub(sdu_bytes).saturating_add(base);
-            self.cert_cycle_piece(node, sdu, cap)
+            self.cert_cycle_piece(node, sdu, mtu)
         } else {
             None
         };
@@ -5696,7 +5726,7 @@ impl Engine {
                 continue;
             };
             let (spdu_bytes, envelope, cert) = crate::signature::resize(
-                &self.scenario.security.signature,
+                crate::signature::message_signature(&self.scenario),
                 signed.bytes_on_wire(),
                 Some(signed.envelope_bytes()),
                 Some(signed.cert_bytes),

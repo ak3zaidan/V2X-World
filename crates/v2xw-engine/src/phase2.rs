@@ -1774,6 +1774,12 @@ pub struct Phase2 {
     /// Per roadside unit in that cycle: how many of its installed certificates the
     /// engine has handed to the node, and its starvation spell.
     rsu_cycle: BTreeMap<NodeId, RsuCycle>,
+    /// Roadside units outside the application-certificate cycle that still fetch the
+    /// composite CRL over their backhaul: the post-quantum profile's units, which have no
+    /// 1609.2.1 PDU layer to join the cycle with. Each holds the composite CRL version and
+    /// publication serial it last installed. The CRL is modelled there as it is for the
+    /// vehicles (no signed bytes exist to verify), and the entries go into the unit's gate.
+    rsu_crl_modelled: BTreeMap<NodeId, (u32, u64)>,
     /// `crl_delivery: mbms`: when the eMBMS carousel next repeats the current list.
     mbms_next: SimTime,
     /// The encoded size of each composite CRL a device has been served, by (provider,
@@ -2152,6 +2158,7 @@ impl Phase2 {
             ("p2.detectors", n(self.detectors.len())),
             ("p2.filed", n(self.filed.len())),
             ("p2.checked_at", n(self.checked_at.len())),
+            ("p2.rsu_crl_modelled", n(self.rsu_crl_modelled.len())),
             ("p2.forwarded", n(self.forwarded.len())),
             ("p2.in_flight", n(self.in_flight.len())),
             ("p2.queue", n(self.queue.len())),
@@ -2541,6 +2548,7 @@ impl Phase2 {
             rsu_nodes: Vec::new(),
             camp: protocol.as_deref() == Some(CAMP_SCMS),
             rsu_cycle: BTreeMap::new(),
+            rsu_crl_modelled: BTreeMap::new(),
             mbms_next: 0,
             composite_sizes: BTreeMap::new(),
             specs,
@@ -2697,7 +2705,15 @@ impl Phase2 {
     /// Only under the SCMS with its PDU layer; otherwise the unit keeps the factory
     /// certificate (`wiring::bootstrap_credentials`).
     fn join_rsu_cycle(&mut self, node: NodeId, index: usize) {
-        if !self.camp || self.etsi.is_some() || self.home().state.pki.is_none() {
+        if !self.camp || self.etsi.is_some() {
+            return;
+        }
+        // The post-quantum profile has no PDU layer (no PQ encoding is standardised), so
+        // the unit cannot join the cycle; it still fetches the CRL as every end entity
+        // does (1609.2.1 §6.3.5.7), modelled as the vehicles' is, so that a unit refuses
+        // a revoked sender under PQ as it does under P-256.
+        if self.home().state.pki.is_none() {
+            self.rsu_crl_modelled.insert(node, (0, 0));
             return;
         }
         let Some(spec) = self.rsus.get(index) else {
@@ -2834,16 +2850,37 @@ impl Phase2 {
     /// as any end entity) and installs what it verifies.
     #[must_use]
     pub fn rsu_crls_due(&self) -> Vec<NodeId> {
-        self.rsu_cycle
+        let connected = |n: NodeId| self.rsu_spec_of(n).is_some_and(|s| s.backhaul.connected);
+        let mut due: Vec<NodeId> = self
+            .rsu_cycle
             .iter()
             .filter(|(n, c)| {
-                self.rsu_spec_of(**n).is_some_and(|s| s.backhaul.connected)
+                connected(**n)
                     && (self.crl_version_for(**n) > c.crl_version
                         || self.crl_serial_for(**n) > c.crl_serial
                         || self.ctl_newer_than(c.ctl_seq))
             })
             .map(|(n, _)| *n)
-            .collect()
+            .collect();
+        due.extend(
+            self.rsu_crl_modelled
+                .iter()
+                .filter(|(n, (version, serial))| {
+                    connected(**n)
+                        && (self.crl_version_for(**n) > *version
+                            || self.crl_serial_for(**n) > *serial)
+                })
+                .map(|(n, _)| *n),
+        );
+        due.sort_unstable();
+        due
+    }
+
+    /// Whether roadside unit `node` fetches a modelled CRL (the post-quantum profile:
+    /// outside the certificate cycle, no signed CRL bytes to verify).
+    #[must_use]
+    pub fn rsu_crl_is_modelled(&self, node: NodeId) -> bool {
+        self.rsu_crl_modelled.contains_key(&node)
     }
 
     /// The sum of the publication counts of the lists `node`'s RA serves now.
@@ -2871,6 +2908,10 @@ impl Phase2 {
         if let Some(c) = self.rsu_cycle.get_mut(&node) {
             c.crl_version = c.crl_version.max(version);
             c.crl_serial = c.crl_serial.max(serial);
+        }
+        if let Some((v, s)) = self.rsu_crl_modelled.get_mut(&node) {
+            *v = (*v).max(version);
+            *s = (*s).max(serial);
         }
         if installed {
             self.report.rsu_crls_installed += 1;
@@ -3321,6 +3362,11 @@ impl Phase2 {
             return Vec::new();
         };
         let pki = run.state.pki.as_ref();
+        // One copy of each issuing ACA's certificate for the device's whole batch, not
+        // one per pseudonym certificate: it was deep-cloned 40 times a device (11 MB of
+        // a 400-node run's 258 MB live heap). The same certificate, shared.
+        let mut issuers: Vec<([u8; 8], std::sync::Arc<v2xw_msg::sec_types::Certificate>)> =
+            Vec::new();
         dev.credentials
             .iter()
             .filter(|((i, _), _)| *i >= from_i)
@@ -3328,9 +3374,18 @@ impl Phase2 {
                 let (from, until) = self.params.scms.validity(i);
                 let key = match (c.implicit.as_ref(), dev.caterpillar.as_ref(), pki) {
                     (Some(imp), Some(cat), Some(pki)) => pki.by_id8(&imp.aca_id8).map(|aca| {
+                        let id = imp.aca_id8;
+                        let issuer = match issuers.iter().find(|(k, _)| *k == id) {
+                            Some((_, a)) => std::sync::Arc::clone(a),
+                            None => {
+                                let a = std::sync::Arc::new(aca.cert.clone());
+                                issuers.push((id, std::sync::Arc::clone(&a)));
+                                a
+                            }
+                        };
                         std::sync::Arc::new(v2xw_sec::credential::ImplicitKey::new(
-                            std::sync::Arc::new(imp.certificate.clone()),
-                            std::sync::Arc::new(aca.cert.clone()),
+                            std::sync::Arc::clone(&imp.certificate),
+                            issuer,
                             cat.signing_private_implicit(i, j, &imp.e, &imp.r),
                         ))
                     }),
@@ -3739,7 +3794,11 @@ impl Phase2 {
             {
                 continue;
             }
-            self.checked_at.insert((node, key), m.received_at);
+            // The rate-limit stamp is read only by the research suite's 1 s rate (above);
+            // the US profile checks every message and never reads it, so it is not kept.
+            if self.us_profile.is_none() {
+                self.checked_at.insert((node, key), m.received_at);
+            }
             let claimed = m.claimed_pos.unwrap_or(Vec3::ZERO);
             // The sender's own statement of its accuracy, as the message carried it. A
             // message that says "unavailable" (or one the join never saw) earns no
@@ -4372,7 +4431,7 @@ impl Phase2 {
             .get(&device_of(node))
             .and_then(|d| d.credentials.get(&(i, j)))
             .and_then(|c| c.implicit.as_deref())
-            .map(|c| c.certificate.clone())
+            .map(|c| (*c.certificate).clone())
         else {
             return MbrBuild::Unsecured("the accused certificate is not an implicit one");
         };

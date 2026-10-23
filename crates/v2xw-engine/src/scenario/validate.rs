@@ -3908,6 +3908,9 @@ fn unreachable_keys(s: &Scenario, e: &mut Vec<ScenarioError>) {
                             .to_string(),
                     ));
                 }
+                if f.id == v2xw_net::FRAGMENTER_CERT_CYCLE_ID {
+                    cert_cycle_conflicts(s, f, plan, e);
+                }
             }
             Ok(plan) if plan.padding > 0 => e.push(conflict(
                 "net.fragmenter.params.sdu_padding_bytes",
@@ -5128,6 +5131,67 @@ pub fn detection_policy_warnings(s: &Scenario) -> Vec<String> {
          was revoked in 54 h (docs/design/scms-real/testing/effects.md, ond-reports). Use \
          verify-all to measure detection, or keep this to study the blindness."
     )]
+}
+
+/// The NDSS 2024 certificate cycle (`fragmenter/cert-cycle-partial-hybrid`) against the
+/// signature scheme (R-CCSIG). The Partially-Hybrid design signs every message with the
+/// classical half of a hybrid and carries the hybrid certificate in the first α SPDUs of
+/// each τ-SPDU cycle, so two combinations cannot run as it specifies, and each would send
+/// nothing useful while looking like a cheap scheme:
+///
+/// * a pure post-quantum scheme has no classical half to sign a message with: every
+///   message would carry the post-quantum signature (ML-DSA-44's 2,420 B is over the
+///   1,400 B WSMP MTU, so nothing is sent at all);
+/// * a certificate the cycle cannot carry in τ fragments under the MTU: every SPDU would
+///   carry only its digest and no receiver could ever learn a signer.
+fn cert_cycle_conflicts(
+    s: &Scenario,
+    f: &crate::scenario::ModelChoice,
+    plan: crate::frag::FragPlan,
+    e: &mut Vec<ScenarioError>,
+) {
+    if let Some(scheme) = v2xw_sec::scheme::signature(&s.security.signature)
+        && scheme.mode == v2xw_sec::scheme::SchemeMode::PostQuantum
+    {
+        e.push(conflict(
+            "net.fragmenter",
+            format!(
+                "is the NDSS 2024 Partially-Hybrid certificate cycle, which signs each message \
+                 with the classical half of a hybrid scheme and carries only the hybrid \
+                 certificate in fragments; security.signature '{}' is purely post-quantum, so \
+                 every message would carry its {}-octet signature. Choose a hybrid \
+                 (hybrid-falcon512-ecdsa-p256, hybrid-mldsa44-ecdsa-p256) or \
+                 fragmenter/generic-sdu",
+                s.security.signature,
+                scheme.sig_octets()
+            ),
+        ));
+        return;
+    }
+    let plan = plan.for_signature(
+        &s.security.signature,
+        f.params.get("hybrid_cert_bytes").is_some(),
+    );
+    let Some(cycle) = plan.cert_cycle() else {
+        return;
+    };
+    let mtu = if s.net.layer == "gn-btp" {
+        v2xw_net::gn::ITS_GN_MAX_SDU_SIZE
+    } else {
+        v2xw_net::wsmp::WSM_MAX_PAYLOAD_MIB_DEFAULT
+    };
+    if let Err(why) = cycle.alpha(mtu) {
+        e.push(conflict(
+            "net.fragmenter",
+            format!(
+                "is the certificate cycle, and its {}-octet hybrid certificate cannot travel \
+                 in the {} SPDUs of a cycle under the {mtu}-octet MTU ({why:?}): every SPDU \
+                 would carry only a digest no receiver could resolve",
+                cycle.params().hybrid_cert_bytes,
+                cycle.params().tau_spdus,
+            ),
+        ));
+    }
 }
 
 /// A warning when `security.signature` makes every signed message larger than the network
@@ -7368,7 +7432,8 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
     // A signing lower edge only acts on a profile whose signing time is a published upper
     // bound (wiring::with_sign_lower_edge, v2xw_node HsmOp::range_us), and only below it.
     if let Some(lo) = n.hsm_sign_lower_us {
-        let (sign_op, _) = v2xw_node::profile::signature_ops(&s.security.signature);
+        let (sign_op, _) =
+            v2xw_node::profile::signature_ops(crate::signature::message_signature(s));
         let bound = v2xw_node::profiles::get(&n.default_obu)
             .and_then(|p| p.hsm.ops.get(sign_op))
             .filter(|op| {

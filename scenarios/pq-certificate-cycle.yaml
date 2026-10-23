@@ -5,18 +5,22 @@
 #
 #     v2xw experiment run scenarios/pq-certificate-cycle.yaml --out runs/pq-cert-cycle
 #
-# Twardokus, Bindel, Rahbari and McCarthy (NDSS 2024) keep the hybrid's *signature* in
-# every message — Falcon-512's 666 B fits a frame — and spread the 858-byte hybrid
-# certificate across the first α SPDUs of each five-SPDU, 500 ms cycle
-# (`fragmenter/cert-cycle-partial-hybrid`, v2xw-net). The alternative is to attach the
-# certificate whole and fragment the message (`fragmenter/generic-sdu`). The cycle trades
-# fragment loss for a certificate a receiver learns only when it has heard all α pieces.
+# Twardokus, Bindel, Rahbari and McCarthy (NDSS 2024, Partially-Hybrid) keep ECDSA on
+# every message — frames 2-5 of a cycle are 204 B ECDSA BSMs (Fig. 4) — and spread the
+# 858-byte hybrid certificate across the first α SPDUs of each five-SPDU, 500 ms cycle
+# (`fragmenter/cert-cycle-partial-hybrid`, v2xw-net). The engine signs, sizes and prices
+# each message with the hybrid's classical half in this mode and charges a receiver the
+# certificate's post-quantum signature once per certificate it learns (R-CCSIG; before
+# 2026-10-22 every message also carried the hybrid signature). The alternative is to
+# attach the certificate whole and fragment the message (`fragmenter/generic-sdu`). The
+# cycle trades fragment loss for a certificate a receiver learns only when it has heard
+# all α pieces.
 #
-# When `security.signature` is another post-quantum scheme the cycle carries that
-# scheme's certificate (858 B plus the difference in certificate growth, derived from the
-# cited sizes; `v2xw_engine::frag::FragPlan::for_signature`) — but an ML-DSA message does
-# not fit a frame even without its certificate, which is why NDSS chose Falcon and why
-# this file does too.
+# When `security.signature` is another hybrid the cycle carries that scheme's certificate
+# (858 B plus the difference in certificate growth, derived from the cited sizes;
+# `v2xw_engine::frag::FragPlan::for_signature`): hybrid ML-DSA-44's 3,027 B travels in
+# α = 3 fragments. A purely post-quantum scheme has no classical half to sign messages
+# with, and the validator refuses it with this fragmenter.
 schema: v2xw/scenario/1
 
 meta:

@@ -38,6 +38,65 @@ pub const SIGNATURES: [&str; v2xw_sec::scheme::SIGNATURE_IDS.len()] =
 /// The schemes `security.kem` accepts (`v2xw_sec::scheme::KEM_IDS`).
 pub const KEMS: [&str; v2xw_sec::scheme::KEM_IDS.len()] = v2xw_sec::scheme::KEM_IDS;
 
+/// Whether the run is in the NDSS 2024 **Partially-Hybrid** mode: `net.fragmenter` is the
+/// certificate cycle and `security.signature` a hybrid. Only the certificates are hybrid
+/// then; every V2X message is signed with the hybrid's classical half (R-CCSIG).
+///
+/// [Twardokus, Bindel, Rahbari and McCarthy, NDSS 2024, §III: "BSMs keep their ECDSA
+/// signatures"; Fig. 4: the cycle's frames 2–5 are 204 B, an ECDSA-signed BSM. The
+/// fragmenter's own header, `v2xw_net::frag::cert_cycle`, says the same.]
+#[must_use]
+pub fn partially_hybrid(scenario: &crate::scenario::Scenario) -> bool {
+    let cycle = scenario
+        .net
+        .fragmenter
+        .as_ref()
+        .is_some_and(|f| f.id == v2xw_net::FRAGMENTER_CERT_CYCLE_ID);
+    cycle
+        && v2xw_sec::scheme::signature(&scenario.security.signature)
+            .is_some_and(|s| s.mode == v2xw_sec::scheme::SchemeMode::Hybrid)
+}
+
+/// The scheme a node's own V2X messages (BSM, PSM, SPaT, MAP, CAM, …) are signed, sized
+/// and priced with: `security.signature`, except in the Partially-Hybrid mode
+/// ([`partially_hybrid`]), where it is the hybrid's classical half (`ecdsa-p256` for every
+/// registered hybrid). The credential system, its signed backend messages, the CRL a
+/// roadside unit relays and a misbehaviour report bound for the MA keep the full scheme.
+#[must_use]
+pub fn message_signature(scenario: &crate::scenario::Scenario) -> &str {
+    if !partially_hybrid(scenario) {
+        return &scenario.security.signature;
+    }
+    let classical = v2xw_sec::scheme::signature(&scenario.security.signature)
+        .and_then(v2xw_sec::scheme::SignatureScheme::classical_part);
+    classical
+        .and_then(|part| {
+            v2xw_sec::scheme::SIGNATURE_SCHEMES.iter().find(|s| {
+                s.mode == v2xw_sec::scheme::SchemeMode::Classical
+                    && s.parts.len() == 1
+                    && s.parts[0].primitive == part.primitive
+            })
+        })
+        .map_or(&scenario.security.signature, |s| s.id)
+}
+
+/// The hardware-profile operation a receiver charges **once per new certificate** in the
+/// Partially-Hybrid mode: the post-quantum half of the hybrid's verification (e.g.
+/// `falcon-512-verify`), which checks the issuer's post-quantum signature on the hybrid
+/// certificate. `None` in every other mode, where the message's own verification
+/// operation already carries whatever the scheme costs.
+#[must_use]
+pub fn certificate_pq_verify_op(scenario: &crate::scenario::Scenario) -> Option<&'static str> {
+    if !partially_hybrid(scenario) {
+        return None;
+    }
+    let scheme = v2xw_sec::scheme::signature(&scenario.security.signature)?;
+    let (_, classical_verify) = v2xw_node::profile::signature_ops(message_signature(scenario));
+    v2xw_sec::scheme::op_components(scheme.verify_op())?
+        .into_iter()
+        .find(|op| *op != classical_verify)
+}
+
 /// Octets a scheme adds over the P-256 SPDU: `(per signature, per attached certificate)`,
 /// derived by the registry from the scheme's parts.
 #[must_use]

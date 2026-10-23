@@ -96,6 +96,35 @@ fn an_oversized_relayed_report_or_crl_frame_is_fragmented_and_acted_on_whole() {
     assert!(crl > 0, "no CRL frame was reassembled at a vehicle");
 }
 
+/// R-PQRSUCRL (`testing/pq-profile.md` §3): under the post-quantum profile a roadside unit
+/// cannot join the application-certificate cycle (no PQ PDU layer), and it used to fetch
+/// no CRL at all, so it never refused a revoked sender (`rsu_crls_installed` 0 and
+/// `rsu_revoked_receptions` 0 under PQ). It now fetches the composite CRL over its backhaul
+/// as every end entity does, modelled as the vehicles' is, and its gate refuses what the
+/// CRL revokes.
+#[test]
+fn under_the_post_quantum_profile_a_roadside_unit_fetches_the_crl_and_refuses_the_revoked() {
+    let (r, _) = run(scenario());
+    let p = &r.phase2;
+    println!(
+        "revoke decisions {}, revoked attackers {}, RSU CRL installs {}, refused {}, \
+         RSU revoked receptions {}, revoked receptions {}",
+        p.ma_revoke_decisions,
+        p.revoked_attackers,
+        p.rsu_crls_installed,
+        p.rsu_crls_refused,
+        p.rsu_revoked_receptions,
+        p.revoked_receptions
+    );
+    assert!(p.ma_revoke_decisions > 0, "the scenario revoked no one");
+    assert!(p.rsu_crls_installed > 0, "no roadside unit installed a CRL");
+    assert_eq!(p.rsu_crls_refused, 0, "a roadside unit refused a CRL");
+    assert!(
+        p.rsu_revoked_receptions > 0,
+        "no roadside unit refused a revoked sender"
+    );
+}
+
 #[test]
 fn without_an_sdu_fragmenter_an_oversized_frame_is_refused_and_not_counted_as_sent() {
     let mut s = scenario();

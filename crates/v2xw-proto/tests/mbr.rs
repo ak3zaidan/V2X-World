@@ -36,7 +36,7 @@ fn pseudonym(run: &ScmsRun, dev: v2xw_core::ids::NodeId, j: u32) -> (Certificate
         .as_ref()
         .expect("real implicit credential");
     let key = Signer1609::p256(&v2xw_sec::ec::scalar_to_be32(&c.private)).expect("key");
-    (c.certificate.clone(), key)
+    ((*c.certificate).clone(), key)
 }
 
 /// A real UPER BSM at `speed` m/s east, from the J2735 builder.

@@ -363,6 +363,12 @@ pub struct NodeConfig {
     pub sign_op: &'static str,
     /// The verification primitive.
     pub verify_op: &'static str,
+    /// An operation charged once for each certificate the node learns, on top of the
+    /// message verification: in the NDSS 2024 Partially-Hybrid mode (messages signed with
+    /// ECDSA, certificates hybrid) the post-quantum half of the hybrid's verification, the
+    /// issuer's post-quantum signature on the certificate. `None` (the default) charges
+    /// nothing extra.
+    pub cert_verify_op: Option<&'static str>,
     /// The scenario's wall clock, for `generationTime`, `secMark` and certificate
     /// validity. Real messages carry real timestamps, so the node needs one.
     pub wall: WallClock,
@@ -421,6 +427,7 @@ impl Default for NodeConfig {
             tx_power_dbm: 20.0,
             sign_op: "ecdsa-p256-sign",
             verify_op: "ecdsa-p256-verify",
+            cert_verify_op: None,
             wall: WallClock::default(),
             origin: GeoOrigin::new(0.0, 0.0, 0.0),
             dims: Dims::CAR,
@@ -444,6 +451,9 @@ pub struct ObuRuntime {
     spdu_parse_failures: u64,
     /// Received envelopes that parsed but whose signature did not verify.
     spdu_signature_failures: u64,
+    /// Certificates learned since the last verification was booked, whose post-quantum
+    /// issuer signature (`NodeConfig::cert_verify_op`) the next booking pays for.
+    cert_checks_due: u32,
     /// Out-of-band P2PCD learning responses this node's P2P entity broadcast, with the
     /// instant (node clock) each became due, waiting for the host to take them
     /// ([`ObuRuntime::take_p2pcd_responses`]).
@@ -571,6 +581,7 @@ impl ObuRuntime {
         ObuRuntime {
             spdu_parse_failures: 0,
             spdu_signature_failures: 0,
+            cert_checks_due: 0,
             p2pcd_outbox: Vec::new(),
             p2pcd_seen: crate::p2pcd::P2pcdStats::default(),
             node,
@@ -1485,6 +1496,11 @@ impl ObuRuntime {
             return;
         };
         if frame.full_certificate {
+            // A certificate the node did not hold: in the Partially-Hybrid mode its
+            // post-quantum issuer signature is checked once, now that it is learned.
+            if self.config.cert_verify_op.is_some() && !self.stores.peers.holds(&signer) {
+                self.cert_checks_due = self.cert_checks_due.saturating_add(1);
+            }
             // An evicted certificate takes its validated state with it (crate::rxval).
             if let Some(gone) = self.stores.peers.learn(&signer) {
                 self.security.trust_mut().forget(gone);
@@ -1585,7 +1601,9 @@ impl ObuRuntime {
             // Receiver validation runs before the server is booked, so the time it charges
             // (chain links, reconstructions, CRL work) is in this frame's service time (WP-C2).
             let verdict = self.classify(ctx, &frame);
-            let cost = cost + crate::rxval::charge(&mut self.security, &self.service.profile().id);
+            let cost = cost
+                + crate::rxval::charge(&mut self.security, &self.service.profile().id)
+                + self.certificate_checks(ctx, frame.bytes);
             let sched = match where_ {
                 RunsOn::Hsm => self.hsm.submit(q.enqueued_at, cost),
                 RunsOn::Accelerator => self.accel.submit(q.enqueued_at, cost),
@@ -1769,6 +1787,30 @@ impl ObuRuntime {
             self.spdu_signature_failures += 1;
         }
         (v, crate::rxval::linkage_key(&certificate))
+    }
+
+    /// The post-quantum certificate checks owed since the last booking
+    /// (`NodeConfig::cert_verify_op`, once per certificate learned), priced on this node's
+    /// hardware profile as its message verification is, and counted in
+    /// [`crate::rxval::RxStats::cert_pq_verifications`]. Zero when the mode has none.
+    fn certificate_checks(&mut self, ctx: &mut dyn NodeCtx, bytes: u32) -> Duration {
+        let n = core::mem::take(&mut self.cert_checks_due);
+        let Some(op) = self.config.cert_verify_op.filter(|_| n > 0) else {
+            return Duration::from_nanos(0);
+        };
+        self.security.trust_mut().stats.cert_pq_verifications += u64::from(n);
+        match self.service.service_time(ctx, &OpDescriptor::verify(op, bytes)) {
+            Some(d) => {
+                let total = Duration::from_nanos(d.as_nanos().saturating_mul(u64::from(n)));
+                let stats = &mut self.security.trust_mut().stats;
+                stats.charged_ns = stats.charged_ns.saturating_add(total.as_nanos());
+                total
+            }
+            None => {
+                self.security.trust_mut().stats.unpriced += u64::from(n);
+                Duration::from_nanos(0)
+            }
+        }
     }
 
     /// How many received SPDUs failed to parse at all.

@@ -106,6 +106,7 @@ having no PQ butterfly.
 **Still owed:**
 
 - a PQ RSU certificate cycle;
-- a modelled CRL fetch for RSUs under PQ, so that RSUs learn revocations (today
+- (done in fix wave 3, `ccsig-memory.md` §3) a modelled CRL fetch for RSUs under PQ, so
+  that RSUs learn revocations (until then
   `rsu_revoked_receptions` stays 0 under PQ);
 - the hybrid ML-DSA and certificate-cycle runs (`stress.md` §6).

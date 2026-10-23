@@ -288,6 +288,9 @@ pub struct RxStats {
     pub ca_validations: u64,
     /// End-entity certificates validated (cache misses).
     pub ee_validations: u64,
+    /// Post-quantum issuer signatures checked on newly learned certificates (the NDSS 2024
+    /// Partially-Hybrid mode: `NodeConfig::cert_verify_op`).
+    pub cert_pq_verifications: u64,
     /// SPDUs whose signer was already validated (cache hits: signature only).
     pub ee_hits: u64,
     /// Validated end-entity certificates evicted for capacity or because the peer

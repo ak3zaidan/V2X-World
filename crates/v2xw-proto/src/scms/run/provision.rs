@@ -1971,7 +1971,7 @@ impl ScmsState {
                                     implicit: Some(Box::new(
                                         crate::scms::msg::ImplicitCredential {
                                             aca_id8: pdu::cert_id8(&o.aca),
-                                            certificate: o.certificate,
+                                            certificate: std::sync::Arc::new(o.certificate),
                                             e: o.e,
                                             r: o.r,
                                             private: o.private,
