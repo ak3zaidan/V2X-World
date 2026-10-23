@@ -325,3 +325,16 @@ rows:
   source: scenario t0 2026-10-19 21:00 UTC; the boundary is at 09:00 UTC (benchmark §1.1)
   measured: "topups 0/0 in PQ0 and in PQHM"
   verdict: pass
+- id: PQHFC.ccsig
+  base: PQ0
+  variant: PQHFC
+  area: metrics
+  measure: BSM frames per BSM; BSM PSDU mean
+  expect: >-
+    written after PQHMC, before this run, to test R-CCSIG on Falcon-512. NDSS Partially-
+    Hybrid (ECDSA on every BSM, the 858 B hybrid certificate in 1 of every 5 SPDUs): about
+    1 frame per BSM and a PSDU mean of about 204 + 858/5 = 380 B. If R-CCSIG holds (the
+    hybrid signature on every SPDU, +666 B): about 1 frame per BSM and a mean near
+    1,000-1,100 B
+  source: NDSS 2024 Fig. 4 (cert_cycle.rs anchors); run.rs hand_down_app
+  measured: pending
