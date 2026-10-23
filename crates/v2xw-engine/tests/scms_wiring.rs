@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use v2xw_core::ctx::OwnedRecord;
 use v2xw_core::ids::NodeId;
 use v2xw_core::time::SimTime;
-use v2xw_engine::{Engine, MemoryRecorder, RunRecorder, Scenario};
+use v2xw_engine::{Engine, MemoryRecorder, NullRecorder, RunRecorder, Scenario};
 use v2xw_msg::sec_types::ieee1609_dot2::CertificateId;
 use v2xw_sec::envelope::{Envelope, ParsedSigner, SecurityEnvelopeInfo};
 
@@ -202,6 +202,15 @@ fn the_pdu_pki_is_anchored_at_the_governance_root() {
 /// whose evidence is the accused's own signed BSMs, the RA accepts its enrolment-signed
 /// upload, the MA decrypts it and verifies the evidence, and the revocation goes through
 /// the MA's decision mode (`request_revocation`; automatic here, `ma_review_s: 0`).
+///
+/// The run is the scenario's own 300 s. Under the US profile a roadside unit files no
+/// report (R-UNSEC: it holds no pseudonym to sign an SM-MBR with), so the corroborated
+/// MA's case rests on vehicle reports alone, and the 600 veh/h fleet reaches the attacker
+/// late: the first vehicle report is filed at 108 s, by one car, and in 120 s no event
+/// has the second reporter it needs. In 300 s 105 real reports from 12 cars reach the MA
+/// (104 about the attacker, one a `positionJump` about another pseudonym at 283.9 s), and
+/// it decides to revoke the attacker at 186.8 s. The recorder is a [`NullRecorder`]: nothing here reads the
+/// records, and keeping 300 s of them took the run past the 2.5 GB test-memory cap.
 #[test]
 fn detectors_file_real_us_reports_that_the_ma_opens_and_verifies() {
     let mut s =
@@ -211,7 +220,7 @@ fn detectors_file_real_us_reports_that_the_ma_opens_and_verifies() {
     {
         *path = root().join(&*path).to_string_lossy().into_owned();
     }
-    s.time.duration_s = 120.0;
+    assert_eq!(s.time.duration_s, 300.0, "the scenario's own five minutes");
     // The RA's report shuffle closes after 5 s, so the late vehicle reports reach the MA
     // inside the run (the shipped 60 s is itself a compression of one day).
     if let Some(p) = s.security.protocol.as_mut() {
@@ -219,8 +228,7 @@ fn detectors_file_real_us_reports_that_the_ma_opens_and_verifies() {
     }
     s.security.crypto_mode = serde_json::from_value(serde_json::json!("real")).expect("mode");
     let mut engine = Engine::build(s, "").expect("builds");
-    let mut rec = MemoryRecorder::new();
-    let report = engine.run(&mut rec).expect("runs");
+    let report = engine.run(&mut NullRecorder::new()).expect("runs");
     let p = &report.phase2;
     println!(
         "{:?} cell {} relay {} rsu {} real {} unmapped {} unsecured {} sent {} at_ma {} cases {}",
