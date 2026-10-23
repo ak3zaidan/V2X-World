@@ -608,6 +608,9 @@ Fix wave 3 status (2026-10-23, merged into `main`; details in BUILD-STATUS.md, `
 - [x] **DETPRIV** (merge `f812677e`): R-FS40 (GNSS mean-speed propagation), privacy link counting, OF-3 (CRLs held and pre-run downloads recorded), R-UNSEC (an RSU's own reports are not filed), old evidence re-checked when judged. Open: `scms_wiring` MA-case test and `pq_relay` relayed-report test fail (owner decision), full-density R-FS40 and gnss-raw re-runs owed.
 - [x] **RERUNS** (merge `4a62ed5b`): the 6 failing tests re-stated on measured causes, M-RX1 fragment fix, 34 matrix/realism runs, `component_certs.py` 10/10 roles. Open: R-JOINCRL, MWP.off-no-backend, node.rx refusal label, enrolment name label, L5, LTE BSM p95.
 
+Final runs part 2 status (2026-10-23, merged into `main`; details in BUILD-STATUS.md and `testing/final-run.md`):
+- [x] **BENCH** (merge `430f40ee`): 27 expectation rows written before the runs (16 pass, 2 fixed, 2 corrected, 7 open). R-CCSIG confirmed at density: Falcon cycle BSMs 380 B (was 1,045 B), ML-DSA-44 cycle transmits (814 B), RSUs install the CRL under PQ. Full-scale benchmark: both live windows completed, peak 3,109 MB, stopped by hand in the second fast-forward (47,340 of 172,800 s), so no end-of-run report. Open: slow second fast-forward, R-FFHOLD, R-FFBURST, full-scale memory, rollover pseudonym count, `ped_wait`, R-PQUNSEC (owner decision), 47 Invalid states.
+
 Critical path: A1 → A3 → A5 → B4 → C2 → D1 → E1 → E2/E3 → F1. Two things could stretch it:
 - `rasn-compiler` cannot handle the 1609.2.1 modules (WP-A1 fallback adds about 8 h).
 - The published artefacts reveal format details the research did not see (WP-A5 may add a fix-up package).

@@ -4,7 +4,7 @@ Living record of what is built and what has actually been *measured*, as against
 the plan in `10-roadmap.md` and the decisions in `12-build-decisions.md`. Claims
 here carry their evidence; anything unmeasured says so.
 
-Last updated 2026-10-22 (the SCMS realism sections are at the end of the file, newest first; the scale track section first, then the round-5 merge section, then the round-4 merge section; the stabilise track section; then the six-track merge section, then the road network and traffic behaviour sections of 2026-09-29; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
+Last updated 2026-10-23 (the SCMS realism sections are at the end of the file, newest first; the scale track section first, then the round-5 merge section, then the round-4 merge section; the stabilise track section; then the six-track merge section, then the road network and traffic behaviour sections of 2026-09-29; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
 
 Last updated 2026-10-08 (the 3D scene track section first, then the round-5 merge section, then the round-4 merge section; the stabilise track section; then the six-track merge section, then the road network and traffic behaviour sections of 2026-09-29; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
 `v2xw-metrics`, `v2xw-node` and `v2xw-engine` are no longer stubs, and the line counts
@@ -4035,6 +4035,21 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Behaviour change:** the sec test PKI and the netval sec.rs roots and PCAs now carry certIssuePermissions, which changes those CA certificates' bytes and digests. `CertSpec::authority` is unchanged, so proto sizes and the node do not move. `RejectReason` gains PsidNotPermitted, ChainInconsistent and ChainTooLong. The v2xw-msg `FullIeeeTbsCtl.quorum` is now `Option<Integer>` (patches 0006/0007).
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
+
+## 2026-10-23: SCMS realism final runs part 2 integration (BENCH)
+
+One testing agent, committed, so no wip snapshot was needed. Merged `--no-ff` onto `721c7d51` (the research commit on main kept as it is): bench (`333241e2`, merge `430f40ee`). No conflicts. Docs and expectations yaml only (`testing/final-run.md`, benchmark §00, `crates/v2xw-engine/tests/expectations/scms-final-run.yaml`), no Rust or `ui/` changes, so `cargo fmt --all` changed nothing and there is no fmt commit.
+
+- **BENCH** (`testing/final-run.md`, `docs/benchmark/scms-real-benchmark.md` §00): 27 expectation rows written before the runs (`0874e146`): 16 pass, 2 fixed, 2 expectations corrected with evidence, 7 open. After R-CCSIG, the Falcon cycle sends 380 B BSMs (was 1,045 B), airtime 1.7x ECDSA, delivery -2.1 %; the ML-DSA-44 cycle now transmits (814 B, -5.7 % verified); RSUs install the CRL under PQ. Full-scale benchmark: both live windows completed, peak 3,109 MB; stopped by hand at 47,340 of 172,800 s in the second fast-forward (about 5.4 h more needed), so it has no end-of-run report.
+- **Checks:** `cargo check --workspace --tests` passes with the known warnings. sec, msg, proto, node: 1,015 pass, 0 fail, 1 ignored. Engine lib plus 17 SCMS/phase2/PQ/sensitivity binaries (`scms_knobs_runs` 2,188 s included; `sensitivity_expectations` loads the new yaml directory): 230 pass, 2 fail, 7 ignored. The two failures are the known ones from the wave 3 integration, awaiting an owner decision: `scms_wiring::detectors_file_real_us_reports_that_the_ma_opens_and_verifies` and `pq_relay::an_oversized_relayed_report_or_crl_frame_is_fragmented_and_acted_on_whole`. No code changed, so the merge cannot have caused them.
+- **Oracle:** `selftest` 412/412, `mutate` 24 faults red with 0 silent, `verify-emitted` 10/10.
+- **UI:** no `ui/` changes, not rebuilt.
+- **Release:** `cargo build --release -j 2 -p v2xw-cli --bins` succeeds (6 m 57 s). `V2XW_PORT=8758 ./run-sim.sh` boots; `/agent/status` and `/rpc/schema` return 200; stopped.
+- **Still open:**
+  - To finish the benchmark: the slow second fast-forward (6.7 sim s per wall s at full scale, benchmark §9.2); R-FFHOLD (reports held in flight across a fast-forward); R-FFBURST (4,876 honest reports in the 10 s after the resume, 71 honest MA cases; cause unconfirmed); then re-run with `--checkpoint-every`.
+  - Full-scale memory (allocator retention); no pseudonym change counted at the rollover; `ped_wait` counts the fast-forward; 47 Invalid verification states under the cycle.
+  - R-PQUNSEC: under PQ, `phase2.rs` `real_mbr` returns Off before the R-UNSEC roadside check, so RSUs file their own reports. Fixing it may break the `pq_relay` R-PQRSUCRL test (needs an MA revocation): owner decision.
+- **Cleanup:** the worktree and branch `worktree-wf_df0140fb-b3b-5` were removed, and so was `target/agents`.
 
 ## 2026-10-23: SCMS realism fix wave 3 integration (PQMEM, DETPRIV, RERUNS)
 
