@@ -482,6 +482,22 @@ fn crl_order(c: &v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::CrlContents)
     (counter, c.issue_date.0.0)
 }
 
+/// One signed CRL a node holds ([`RxTrust::held_crls`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeldCrl {
+    /// `crlCraca`.
+    pub craca: [u8; 8],
+    /// `crlSeries`.
+    pub series: u16,
+    /// Its place in the series: `crlSerial` (a hash CRL) or `iRev · 256 + indexWithinI`
+    /// (a linkage CRL), as [`crl_order`] reads it.
+    pub counter: u32,
+    /// `issueDate`, Time32.
+    pub issue_date: u32,
+    /// `nextCrl`, Time32.
+    pub next_crl: u32,
+}
+
 /// What a verified CRL hands the node to install.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedCrl {
@@ -725,6 +741,21 @@ impl RxTrust {
     /// How many signed CRLs are installed, one per `(crlCraca, crlSeries)`.
     pub fn crls_held(&self) -> usize {
         self.crls.len()
+    }
+
+    /// The signed CRL this node holds for each `(crlCraca, crlSeries)`, in that order:
+    /// what a record can show to prove a device holds a CRACA's current list (OF-3).
+    pub fn held_crls(&self) -> Vec<HeldCrl> {
+        self.crls
+            .iter()
+            .map(|((craca, series), m)| HeldCrl {
+                craca: *craca,
+                series: *series,
+                counter: m.order.0,
+                issue_date: m.order.1,
+                next_crl: m.next_crl,
+            })
+            .collect()
     }
 
     /// Installs a CTL-approved root as a trust anchor.

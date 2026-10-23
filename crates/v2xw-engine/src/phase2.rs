@@ -171,6 +171,19 @@ impl LocalSuite {
             LocalSuite::Us(d) => v2xw_threat::Detector::on_message(&mut **d, ctx, me, m, env),
         }
     }
+
+    /// The generation times of the BSMs a report on `m` is about, oldest first, as this
+    /// suite judged them: the US profile's consecutive pair (its previous BSM from that
+    /// certificate, when consecutive, and `m`), read before `m` is judged. The research
+    /// suite keeps no per-certificate predecessor, so only `m` is named and the evidence
+    /// adds the BSM the certificate put on the air just before it.
+    fn judged_times(&self, m: &ObservedMessage) -> (Option<SimTime>, SimTime) {
+        let prev = match self {
+            LocalSuite::Research(_) => None,
+            LocalSuite::Us(d) => d.consecutive_before(&m.signer, m.claimed_generation_time),
+        };
+        (prev, m.claimed_generation_time)
+    }
 }
 
 /// The check id of a failed signature verification (`DetectorId::SignatureVerification`).
@@ -1234,8 +1247,33 @@ impl Default for ReportStore {
     }
 }
 
-/// The evidence a reporter attaches: the last signed BSMs heard from each certificate.
-const EVIDENCE_BSMS: usize = 2;
+/// How many of each certificate's latest signed BSMs on the air are kept, with their
+/// `generationTime`, so a report can attach the very BSMs its reporter judged
+/// ([`judged_bsms`]). Four: a receiver judges a BSM within its verification time of the
+/// frame's arrival (milliseconds), so at 10 Hz the judged pair is among the last four.
+const EVIDENCE_BSMS: usize = 4;
+
+/// The signed BSMs a report attaches, from `ring` (one certificate's latest BSMs on the
+/// air, oldest first, each with the `generationTime` it claims): the BSM generated at `at`
+/// that the reporter judged, preceded by the one generated at `prev` it was compared
+/// with. With `prev` unnamed (a suite that keeps no predecessor) the BSM on the air just
+/// before the judged one stands for it. Empty when the judged BSM is no longer on hand,
+/// and only the judged one when its predecessor is not: a report then has no evidence of
+/// its own to attach, rather than someone else's.
+fn judged_bsms(ring: &VecDeque<(SimTime, Vec<u8>)>, prev: Option<SimTime>, at: SimTime) -> Vec<Vec<u8>> {
+    let Some(i) = ring.iter().rposition(|(t, _)| *t == at) else {
+        return Vec::new();
+    };
+    let before = match prev {
+        Some(p) => ring.iter().take(i).rposition(|(t, _)| *t == p),
+        None => i.checked_sub(1),
+    };
+    before
+        .into_iter()
+        .chain(std::iter::once(i))
+        .map(|k| ring[k].1.clone())
+        .collect()
+}
 
 /// One vehicle's security and backend state.
 #[derive(Debug, Clone, Default)]
@@ -1376,6 +1414,10 @@ pub struct Phase2Report {
     /// 0x26 with the reporter's pseudonym, encrypted to the MA, uploaded with an
     /// enrolment-signed `Download-Req`), their evidence the accused's own signed BSMs.
     pub reports_mbr_real: u64,
+    /// Of those, the reports whose judged BSM was no longer the accused certificate's
+    /// latest on the air when the report was built: the ones the old evidence rule (the
+    /// certificate's last BSMs on the air) would have attached the wrong BSMs to.
+    pub reports_evidence_moved_on: u64,
     /// Reports whose detection has no PSID-0x20 type and subtype in the v1.1 object
     /// set (or ObsImplausible, off by default), sent on the modelled path.
     pub reports_mbr_unmapped: u64,
@@ -1527,8 +1569,16 @@ pub struct Phase2Report {
     pub rsu_crl_frames_forged: u64,
     /// Pseudonym changes, all vehicles.
     pub pseudonym_changes: u64,
-    /// Links the passive observer claimed across a pseudonym change.
+    /// Links the passive observer claimed across a pseudonym change: at a decision whose
+    /// new pseudonym belongs to a vehicle it had heard under another one (ground truth).
     pub privacy_links_claimed: u64,
+    /// The observer's decisions made across a pseudonym change (the changes it could have
+    /// bridged: it heard the vehicle before and after), the denominator of linkability.
+    pub privacy_changes_heard: u64,
+    /// Links it claimed where no pseudonym had changed: the new pseudonym is the first it
+    /// heard from that vehicle (one entering its coverage), linked to someone else's
+    /// track. Always wrong; the observer cannot tell the two cases apart.
+    pub privacy_links_spurious: u64,
     /// Of those, links between two pseudonyms of one vehicle (the ground-truth join).
     pub privacy_links_correct: u64,
     /// Safety frames the eavesdropper read (all of them without `threats.eavesdropper`).
@@ -1817,8 +1867,12 @@ pub struct Phase2 {
     factory_trust: Option<v2xw_proto::scms::governance::DeviceTrust>,
     /// The peer provider whose root `peer_root_removal_at_s` removed.
     removed_peer: Option<usize>,
-    /// The last signed BSMs on the air per signer digest: a report's evidence.
-    evidence: BTreeMap<[u8; 8], VecDeque<Vec<u8>>>,
+    /// The last signed BSMs on the air per signer digest, with their `generationTime`,
+    /// from which a report takes the ones its reporter judged ([`judged_bsms`]).
+    evidence: BTreeMap<[u8; 8], VecDeque<(SimTime, Vec<u8>)>>,
+    /// Per report id, the signed BSMs its reporter judged, taken when it was generated:
+    /// the evidence its SM-MBR attaches whenever it is built ([`Phase2::real_mbr`]).
+    judged_evidence: BTreeMap<String, Vec<Vec<u8>>>,
     stage_cursor: Vec<usize>,
     step_cursor: Vec<usize>,
     queue: Vec<VecDeque<Case>>,
@@ -1888,6 +1942,9 @@ pub struct Phase2 {
     privacy_tracked: BTreeMap<NodeId, u64>,
     /// The vehicles followed correctly across at least one change.
     privacy_across: BTreeSet<NodeId>,
+    /// Ground truth, for the run report only: per vehicle, the pseudonym the observer last
+    /// made a decision on, so a decision is known to follow a change or not.
+    privacy_heard: BTreeMap<NodeId, [u8; 8]>,
 }
 
 /// The position confidence the detector host used for every message before it read each
@@ -2158,9 +2215,11 @@ impl Phase2 {
             ("p2.cases", n(self.cases.len())),
             ("p2.nodes", n(self.nodes.len())),
             ("p2.link_claims", n(self.link_claims.len())),
+            ("p2.judged_evidence", n(self.judged_evidence.len())),
             ("p2.broadcast_accuracy", n(self.broadcast_accuracy.len())),
             ("p2.privacy_chains", n(self.privacy_chains.len())),
             ("p2.privacy_tracked", n(self.privacy_tracked.len())),
+            ("p2.privacy_heard", n(self.privacy_heard.len())),
             ("p2.blocks", n(self.blocks.len())),
             ("scms.devices", n(st.devices.len())),
             (
@@ -2566,6 +2625,7 @@ impl Phase2 {
             forwarded: BTreeSet::new(),
             in_flight: BTreeMap::new(),
             evidence: BTreeMap::new(),
+            judged_evidence: BTreeMap::new(),
             superseded_root: None,
             factory_ctl_seq: None,
             factory_trust: None,
@@ -2611,6 +2671,7 @@ impl Phase2 {
             privacy_chains: BTreeMap::new(),
             privacy_tracked: BTreeMap::new(),
             privacy_across: BTreeSet::new(),
+            privacy_heard: BTreeMap::new(),
         }))
     }
 
@@ -3795,6 +3856,8 @@ impl Phase2 {
             if compromised {
                 heard.push(observed.clone());
             }
+            // The BSMs this judgement is about, named before the suite moves on to `m`.
+            let judged = detector.judged_times(&observed);
             let verdict = detector.on_message(ctx, me, &observed, env);
             self.report.messages_checked += 1;
             *self
@@ -3840,6 +3903,19 @@ impl Phase2 {
                 // reporter's (`detection_time`). The MA compares the two.
                 report.st_tstart = m.claimed_generation_time;
                 report.st_tend = m.claimed_generation_time;
+                // The evidence is the signed BSMs this receiver judged ([SM-MBR] §2.3.1.2.1
+                // and §2.3.1.3.1), taken now, when the report is generated: the
+                // certificate's frames on the air with exactly those generation times. A
+                // report stored for days attaches what was judged, not whatever that
+                // certificate sent last (item 5 of the measurement package).
+                if self.etsi.is_none()
+                    && let Some(ring) = self.evidence.get(&key)
+                {
+                    let bsms = judged_bsms(ring, judged.0, judged.1);
+                    if !bsms.is_empty() {
+                        self.judged_evidence.insert(report.report_id.clone(), bsms);
+                    }
+                }
                 self.report.reports_sent += 1;
                 truths.push((verdict.subject.clone(), m.received_at));
                 out.push(report);
@@ -4053,9 +4129,10 @@ impl Phase2 {
             .or_insert(0) += 1;
     }
 
-    /// A signed BSM `signer` put on the air: kept (the last [`EVIDENCE_BSMS`]) as the
-    /// evidence a real misbehaviour report about that certificate attaches.
-    pub fn note_signed_bsm(&mut self, signer: [u8; 8], spdu: &[u8]) {
+    /// A signed BSM `signer` put on the air, claiming `generated` as its generation time:
+    /// kept (the last [`EVIDENCE_BSMS`]) so a report about that certificate can attach the
+    /// BSMs its reporter judged.
+    pub fn note_signed_bsm(&mut self, signer: [u8; 8], generated: SimTime, spdu: &[u8]) {
         if self.etsi.is_some() || self.home().state.pki.is_none() {
             return;
         }
@@ -4063,7 +4140,7 @@ impl Phase2 {
         if q.len() == EVIDENCE_BSMS {
             q.pop_front();
         }
-        q.push_back(spdu.to_vec());
+        q.push_back((generated, spdu.to_vec()));
     }
 
     /// Cellular vehicles with a multi-message backend flow (a top-up or a re-enrolment)
@@ -4140,13 +4217,11 @@ impl Phase2 {
     /// signed BSMs heard, an accused certificate it cannot name — has nothing to upload, so
     /// it is counted here by reason ([`Phase2Report::reports_not_filed_by`]) and dropped.
     /// Always `true` without the PDU layer (every report is modelled there), on the ETSI
-    /// path, for a roadside unit (R-UNSEC, labelled apart), and with `modelled_reports`.
+    /// path, and with `modelled_reports`. A roadside unit's own detection is not filed
+    /// (R-UNSEC: the US profile has no roadside reporter, [`Phase2::real_mbr`]); it is
+    /// counted under its own reason.
     pub fn files_report(&mut self, report: &MisbehaviourReport) -> bool {
-        if self.params.modelled_reports
-            || report
-                .reporter
-                .is_some_and(|n| self.rsu_spec_of(n).is_some())
-        {
+        if self.params.modelled_reports {
             return true;
         }
         let nowhere = v2xw_sec::envelope::GenerationLocation {
@@ -4160,6 +4235,7 @@ impl Phase2 {
             MbrBuild::Unsecured(why) => why,
         };
         self.note_not_filed(why);
+        self.judged_evidence.remove(&report.report_id);
         false
     }
 
@@ -4238,9 +4314,20 @@ impl Phase2 {
         // A vehicle's report that cannot be built as real bytes has no upload (OF-2,
         // [`Phase2::files_report`]): [`Engine`]'s route checks before the access leg, and
         // this catches what changed on the way (the securing itself failing).
-        let strict = !self.params.modelled_reports && self.rsu_spec_of(reporter).is_none();
-        let run = match self.real_mbr(&report, location) {
+        let strict = !self.params.modelled_reports;
+        let built = self.real_mbr(&report, location);
+        // The report is built now: its evidence is in it, or it never will be.
+        let judged = self.judged_evidence.remove(&report.report_id);
+        let latest = decode_hex8(&report.subject_cert_digest)
+            .and_then(|d| self.evidence.get(&d))
+            .and_then(|q| q.back())
+            .map(|(_, b)| b);
+        let moved_on = judged.as_ref().and_then(|j| j.last()) != latest;
+        let run = match built {
             MbrBuild::Real(mbr) => {
+                if moved_on {
+                    self.report.reports_evidence_moved_on += 1;
+                }
                 // Signed with the pseudonym the vehicle signs its BSMs with now, if it is
                 // still valid when the report is generated.
                 let prefer = self.nodes.get(&reporter).and_then(|n| n.active_digest);
@@ -4324,10 +4411,13 @@ impl Phase2 {
     /// (a relay makes an innocent sender look far away, §2.3.1.4.2), and no other check
     /// has a subtype, so those reports stay on the modelled path and are counted.
     ///
-    /// The evidence is the accused certificate's last signed BSMs on the air, byte for
-    /// byte, with that certificate as `signingCertificate`. **Approximation:** the node
-    /// layer does not keep the frames a receiver decoded, so these are the sender's last
-    /// transmitted SPDUs, which the reporter heard if it detected on them.
+    /// The evidence is the signed BSMs the reporter judged, byte for byte, with the
+    /// accused certificate as `signingCertificate` ([SM-MBR] §2.3.1.2.1, §2.3.1.3.1): the
+    /// frames that certificate put on the air with the generation times of the judged
+    /// BSMs, taken when the report was generated ([`Phase2::detect`]). The node layer does
+    /// not keep the frames a receiver decoded; the frame on the air is the same octets.
+    /// Before, it was the certificate's last BSMs on the air when the report was built,
+    /// which for a report stored across a fast-forward was a BSM from before it.
     fn real_mbr(
         &self,
         r: &MisbehaviourReport,
@@ -4336,19 +4426,26 @@ impl Phase2 {
         if self.etsi.is_some() || self.home().state.pki.is_none() {
             return MbrBuild::Off;
         }
-        let us = self.us_profile.as_ref();
-        let Some(subtype) = r.reason_codes.iter().find_map(|c| us_subtype(c, us)) else {
-            return MbrBuild::Unmapped;
-        };
         if r.reporter.is_some_and(|n| self.rsu_spec_of(n).is_some()) {
-            // R-UNSEC: a roadside unit holds application certificates only, and [SM-MBR]
-            // has "the EE certificate" (a pseudonym certificate in CAMP's design) sign the
-            // report, so an RSU-filed report has nothing to be signed with. Labelled apart
-            // from a vehicle's (which waits for a valid pseudonym instead).
+            // R-UNSEC: the US profile has no roadside reporter, so a unit's own detection
+            // is not filed (`Phase2::files_report`; sized-only on the modelled path only
+            // under `modelled_reports`). [SM-MBR] §3 signs the report with "the end-entity
+            // certificate", a pseudonym certificate in CAMP's design ([CAMP122] §5.2.8.4),
+            // and §2.3.1.4.1's ObsImplausible evidence is "a BSM from the sender and a BSM
+            // from the receiver": the reporter is a BSM sender, an OBE. The USDOT RSU
+            // Specification v4.1 (2016, p. 15) gives a unit certificates "to support"
+            // store-and-repeat and immediate-forward transmission, and forwarding of
+            // received messages by PSID; it has no detection or reporting function. A
+            // unit holds application certificates only. Labelled apart from a vehicle's
+            // gap (which waits for a valid pseudonym instead).
             return MbrBuild::Unsecured(
                 "a roadside unit holds no pseudonym certificate to sign an SM-MBR with",
             );
         }
+        let us = self.us_profile.as_ref();
+        let Some(subtype) = r.reason_codes.iter().find_map(|c| us_subtype(c, us)) else {
+            return MbrBuild::Unmapped;
+        };
         if !r.reporter.is_some_and(|n| {
             self.run_of(device_of(n))
                 .state
@@ -4376,9 +4473,10 @@ impl Phase2 {
         else {
             return MbrBuild::Unsecured("the accused certificate is not an implicit one");
         };
+        // The BSMs the reporter judged, taken when the report was generated.
         let bsms: Vec<_> = self
-            .evidence
-            .get(&digest)
+            .judged_evidence
+            .get(&r.report_id)
             .into_iter()
             .flatten()
             .filter_map(|b| mbr::decode_signed_bsm(b).ok())
@@ -4387,7 +4485,7 @@ impl Phase2 {
         let bsms = match mbr_type {
             mbr::MbrType::OneVInconsistent if bsms.len() >= 2 => bsms,
             mbr::MbrType::Implausible if !bsms.is_empty() => bsms[bsms.len() - 1..].to_vec(),
-            _ => return MbrBuild::Unsecured("too few of the accused's signed BSMs heard"),
+            _ => return MbrBuild::Unsecured("too few of the BSMs the reporter judged on hand"),
         };
         let generation_time = self.home().state.time32(r.generation_time);
         MbrBuild::Real(mbr::MisbehaviorReport {
@@ -6158,9 +6256,14 @@ impl Phase2 {
     /// those lists, so its first conditional poll is answered 412 unless a provider has
     /// published since; the caller installs them on the node. `None` for a node with no
     /// device record or a run whose stores published nothing.
+    ///
+    /// The fetch is logged on the device's provider's run as one pre-run `SecuredCrl` PDU
+    /// per list, from that provider's CRL Store at `now` (OF-3), so the PKI view shows
+    /// where the lists the device holds came from, as it shows its pre-run enrolment.
     pub fn prerun_crl(
         &mut self,
         node: NodeId,
+        now: SimTime,
     ) -> Option<(u32, Vec<CrlLinkageEntry>, Vec<std::sync::Arc<[u8]>>)> {
         let (version, serial, entries, secured) = &self.prerun_crl;
         if *serial == 0 {
@@ -6168,7 +6271,16 @@ impl Phase2 {
         }
         let n = self.nodes.get_mut(&node)?;
         n.crl_serial = n.crl_serial.max(*serial);
-        Some((*version, entries.clone(), secured.clone()))
+        let out = (*version, entries.clone(), secured.clone());
+        let device = device_of(node);
+        let k = self.provider_of_device(device);
+        if let Some(run) = self.runs.get_mut(k) {
+            for crl in &out.2 {
+                let pdu = v2xw_proto::scms::pdu::Pdu::new(crl.to_vec());
+                run.note_prerun_crl(device, now, &pdu);
+            }
+        }
+        Some(out)
     }
 
     /// Gives each vehicle's first poll a phase inside the interval, from a keyed draw, so
@@ -6615,6 +6727,8 @@ impl Phase2 {
             crl_entries,
             crl_version: n.crl_version,
             self_revoked: n.self_revoked,
+            // The node's own store holds them (`Engine::emit_node_security`).
+            crls: Vec::new(),
         })
     }
 
@@ -6822,15 +6936,34 @@ impl Phase2 {
                         v2xw_threat::privacy::METHOD_UNLINKED.to_string()
                     },
                 });
+            // Ground truth: did a pseudonym change happen behind this decision? It did when
+            // the new pseudonym's vehicle was heard before under another one. Otherwise the
+            // vehicle has just come into the observer's hearing, and a claimed link is
+            // spurious: there was no change to link across (R-FS40: 2,873 claims with no
+            // pseudonym change at all were counted as link claims).
+            let owner = |hex: &str| {
+                decode_hex8(hex).and_then(|d| self.by_digest.get(&d).map(|(n, ..)| *n))
+            };
+            let succ_owner = owner(&o.successor);
+            let changed = succ_owner.is_some_and(|v| {
+                self.privacy_heard
+                    .get(&v)
+                    .is_some_and(|before| *before != signer)
+            });
+            if let Some(v) = succ_owner {
+                self.privacy_heard.insert(v, signer);
+            }
+            if changed {
+                self.report.privacy_changes_heard += 1;
+            }
             if o.predecessor.is_some() {
-                self.report.privacy_links_claimed += 1;
-                let owner = |hex: &str| {
-                    decode_hex8(hex).and_then(|d| self.by_digest.get(&d).map(|(n, ..)| *n))
-                };
-                if let (Some(a), Some(b)) = (
-                    o.predecessor.as_deref().and_then(owner),
-                    owner(&o.successor),
-                ) && a == b
+                if changed {
+                    self.report.privacy_links_claimed += 1;
+                } else {
+                    self.report.privacy_links_spurious += 1;
+                }
+                if let (Some(a), Some(b)) = (o.predecessor.as_deref().and_then(owner), succ_owner)
+                    && a == b
                 {
                     self.report.privacy_links_correct += 1;
                 }
@@ -7958,5 +8091,40 @@ mod evidence_time_tests {
         assert!(evidence_time_plausible(&report(t, t + 39_000_000)));
         assert!(!evidence_time_plausible(&report(t, t + 41_000_000)));
         assert!(evidence_time_plausible(&report(t, t - 599 * NS_PER_S)));
+    }
+}
+
+#[cfg(test)]
+mod judged_evidence_tests {
+    use super::*;
+
+    /// One certificate's BSMs on the air at 10 Hz, each tagged with its generation time.
+    fn ring(times: &[SimTime]) -> VecDeque<(SimTime, Vec<u8>)> {
+        times.iter().map(|t| (*t, t.to_be_bytes().to_vec())).collect()
+    }
+
+    fn tags(bsms: &[Vec<u8>]) -> Vec<SimTime> {
+        bsms.iter()
+            .map(|b| SimTime::from_be_bytes(b[..8].try_into().expect("8 bytes")))
+            .collect()
+    }
+
+    /// A report's evidence is the pair of BSMs its reporter judged ([SM-MBR] §2.3.1.2.1),
+    /// not the certificate's latest frames: the sender kept transmitting after the BSM the
+    /// reporter judged. Fault: take the ring's last entries (the old `Phase2::evidence`
+    /// behaviour) and the pair is (300, 400), not (100, 200).
+    #[test]
+    fn the_evidence_is_the_judged_pair_not_the_latest_on_the_air() {
+        let r = ring(&[100, 200, 300, 400]);
+        assert_eq!(tags(&judged_bsms(&r, Some(100), 200)), vec![100, 200]);
+        // A suite that names no predecessor: the BSM on the air just before the judged one.
+        assert_eq!(tags(&judged_bsms(&r, None, 300)), vec![200, 300]);
+        // The judged BSM no longer on hand: nothing, never a later BSM in its place.
+        assert!(judged_bsms(&r, Some(0), 50).is_empty());
+        // Its predecessor gone: the judged BSM alone, which a 1VInconsistent report
+        // cannot be filed with (`Phase2::real_mbr`).
+        assert_eq!(tags(&judged_bsms(&r, Some(50), 100)), vec![100]);
+        // A predecessor is one generated before the judged BSM, never after it.
+        assert_eq!(tags(&judged_bsms(&r, Some(400), 200)), vec![200]);
     }
 }

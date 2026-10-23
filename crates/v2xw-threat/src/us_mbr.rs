@@ -187,6 +187,18 @@ impl UsSmMbr {
         &self.params
     }
 
+    /// The `generationTime` of the BSM the next check of `signer`'s message `generated`
+    /// would compare against, when it is consecutive to it (within `max_gap_s`): the
+    /// first of the two BSMs a 1VInconsistent report on that message is about, which its
+    /// evidence carries ([SM-MBR] §2.3.1.2.1, "a sequence of BSMs signed with the same
+    /// certificate"). Read **before** [`Detector::on_message`] judges the message.
+    #[must_use]
+    pub fn consecutive_before(&self, signer: &[u8; 8], generated: SimTime) -> Option<SimTime> {
+        let r = self.last.get(signer)?;
+        let dt = ns_to_secs(generated.saturating_sub(r.t));
+        (dt > 0.0 && dt <= self.params.max_gap_s).then_some(r.t)
+    }
+
     /// The checks `m` fails against the previous BSM `prev` of its sender (if consecutive)
     /// and on its own.
     fn checks(&self, prev: Option<Last>, m: &ObservedMessage, me: &SelfBelief) -> Vec<DetectorId> {

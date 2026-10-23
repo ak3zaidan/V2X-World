@@ -1548,12 +1548,25 @@ impl VruDeviceRuntime {
                 });
                 continue;
             }
-            // The relevance check of `generationTime` (IEEE 1609.2 §5.2), as on a vehicle.
-            if let Err(why) = self.security.trust_mut().check_generation_time(
-                frame.msg_type,
-                frame.claimed_generation_time,
-                item.arrived,
-            ) {
+            // The relevance check of `generationTime` (IEEE 1609.2 §5.2), as on a vehicle:
+            // at the frame's arrival, and again at `believed`, when this device takes it
+            // from its inbox and judges it. A handset takes its frames at its own step,
+            // not as each arrives, so a frame can wait: across a fast-forward the first
+            // step after it handed over frames 43,125 s old, the relevance check passed on
+            // their arrival times, and the detector judged them, stamped with the new
+            // window's time, so their reports quoted a BSM from before the fast-forward
+            // (docs/design/scms-real/testing/usfp.md §5).
+            let trust = self.security.trust_mut();
+            let relevant = trust
+                .check_generation_time(frame.msg_type, frame.claimed_generation_time, item.arrived)
+                .and_then(|()| {
+                    trust.check_generation_time(
+                        frame.msg_type,
+                        frame.claimed_generation_time,
+                        believed,
+                    )
+                });
+            if let Err(why) = relevant {
                 out.rx_reports.push(RxReport {
                     token: item.token,
                     disposition: RxDisposition::NotRelevant(why),

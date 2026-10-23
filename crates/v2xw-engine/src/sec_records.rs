@@ -192,6 +192,42 @@ pub struct NodeSecurityView {
     pub crl_version: u32,
     /// Whether this node found itself on the CRL and stopped transmitting.
     pub self_revoked: bool,
+    /// The signed CRLs this node holds, one per `(crlCraca, crlSeries)`, as its own
+    /// receiver verified and installed them (OF-3: an empty list still has a CRACA, a
+    /// series and a `nextCrl`, which the overdue rule reads). Empty and omitted for a node
+    /// that holds none (the PDU layer off).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub crls: Vec<HeldCrlView>,
+}
+
+/// One signed CRL a node holds (`node.security.crls`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HeldCrlView {
+    /// `crlCraca`, HashedId8, hex.
+    pub craca: String,
+    /// `crlSeries`.
+    pub series: u16,
+    /// Its place in the series: `crlSerial` (a hash CRL) or `iRev · 256 + indexWithinI`
+    /// (a linkage CRL).
+    pub counter: u32,
+    /// `issueDate`, Time32 (seconds since 2004-01-01 TAI).
+    pub issue_date: u32,
+    /// `nextCrl`, Time32.
+    pub next_crl: u32,
+}
+
+impl HeldCrlView {
+    /// The record's view of a held CRL.
+    #[must_use]
+    pub fn of(c: &v2xw_node::rxval::HeldCrl) -> Self {
+        Self {
+            craca: v2xw_core::hash::hex_encode(&c.craca),
+            series: c.series,
+            counter: c.counter,
+            issue_date: c.issue_date,
+            next_crl: c.next_crl,
+        }
+    }
 }
 
 /// The `node.security` record.
