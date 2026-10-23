@@ -163,6 +163,16 @@ actors:
       moped:
         fraction: 0.04
 
+# Junction turns are judged by their tightest 6 m of arc, not by the connector's average
+# radius, so the apex of a turn is driven at the 5.5 m/s² lateral acceleration netconvert's
+# `--junctions.limit-turn-speed` intends rather than at about 7.7 m/s² (85th percentile,
+# `calibration/turning`). With the average rule, cars took Midtown's tight connectors at
+# 8-45 m/s² of lateral acceleration, and a receiver that missed three or four of their
+# BSMs judged them across a 0.4-0.5 s gap: honest SM-MBR RandomPosition reports
+# (docs/design/scms-real/testing/memory-density.md §2).
+traffic:
+  turn_curve_window_m: 6.0
+
 weather:
   initial: clear
   intensity: 0.0
