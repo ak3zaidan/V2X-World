@@ -603,6 +603,11 @@ Final test wave status (2026-10-22, merged into `main`; details in BUILD-STATUS.
 - [x] **ORACLE-FINAL** (merge `e6033e12`): HEAD `88e24b09` passes every rule on conf (67,451/67,451) and mbr (211,785/211,785); OF-1, OF-2, O-1 confirmed fixed; two oracle fixes so the ctl-files and CRL faults can go red. Open: OF-3 (no record of a device holding a t0 CRL), O-3 (RSU backhaul reports carry no bytes), O-2.
 - [x] **BENCH** (merge `887520b6`): full-scale run stopped by the 2.5 GB cap at ~155 s (windows reported); hybrid ML-DSA-44 airtime ×13.0; determinism byte-identical at 4 vs 1 threads. Open: R-CCSIG (cert cycle keeps the hybrid signature on every message), memory ~1.4–2 MB per node, the privacy observer's 2,873 link claims with 0 pseudonym changes.
 
+Fix wave 3 status (2026-10-23, merged into `main`; details in BUILD-STATUS.md, `testing/ccsig-memory.md`, `testing/measure.md` and `testing/rerun-2026-10-22.md`):
+- [x] **PQMEM** (merge `0a125a98`): R-CCSIG fixed (Partially-Hybrid cycle messages are ECDSA, PQ check once per learned certificate; reverts `45f0942f`), RSUs fetch a CRL under PQ, per-node credential de-duplication. Its tests and 5 faults were run on main, all faults red. Open: the full-scale benchmark still exceeds 2.5 GB (allocator retention), PQHFC/PQHMC not re-run, VRU handsets price ECDSA.
+- [x] **DETPRIV** (merge `f812677e`): R-FS40 (GNSS mean-speed propagation), privacy link counting, OF-3 (CRLs held and pre-run downloads recorded), R-UNSEC (an RSU's own reports are not filed), old evidence re-checked when judged. Open: `scms_wiring` MA-case test and `pq_relay` relayed-report test fail (owner decision), full-density R-FS40 and gnss-raw re-runs owed.
+- [x] **RERUNS** (merge `4a62ed5b`): the 6 failing tests re-stated on measured causes, M-RX1 fragment fix, 34 matrix/realism runs, `component_certs.py` 10/10 roles. Open: R-JOINCRL, MWP.off-no-backend, node.rx refusal label, enrolment name label, L5, LTE BSM p95.
+
 Critical path: A1 → A3 → A5 → B4 → C2 → D1 → E1 → E2/E3 → F1. Two things could stretch it:
 - `rasn-compiler` cannot handle the 1609.2.1 modules (WP-A1 fallback adds about 8 h).
 - The published artefacts reveal format details the research did not see (WP-A5 may add a fix-up package).
