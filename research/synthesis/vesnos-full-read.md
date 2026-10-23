@@ -428,6 +428,7 @@ This is one 2017 test certificate, so it is not proof of production practice. It
 ## 10. Owed
 
 - **Read the paper.** Its full text is blocked by ACM's Cloudflare (403). Get it through a library or interlibrary loan, or ask the authors. Then check §3.13 and whether the paper claims more than the code.
+  - **Second attempt, 2026-10-23 (`check-realdata-and-vesnos.md` §5).** Still blocked: ACM pdf/epdf/fullHtml/`?download=true` 403; Semantic Scholar PDF cache empty; no eScholarship, NSF PAR or arXiv copy; Wayback and scholar.archive.org unavailable. Search-engine excerpts (unverified) say the paper models SCMS "bootstrapping, certificate provisioning, misbehavior reporting, and CRL retrieval" and measures "detection performance against the man-in-the-middle attack". Commit `997913b5` implements none of those four flows (§3.7). So the paper likely **claims more than the code**: cite the paper with the commit, and do not claim "first misbehaviour reporting in a co-simulator".
 - **Correct three other files.** They should be corrected in their own commit; this commit changes only this file and the summary:
   - `claims-we-cannot-make.md`, row "First simulator integrating an SCMS…": replace "(pending a full read of VESNOS)" with the narrowed backend-in-the-loop claim in §7.1, citing this file. Add "first butterfly keys or implicit certificates in a network simulator" as a claim we cannot make.
   - `landscape.md` §5, row abdo2024vehicular: PKI backend "none (one shared test certificate; signing only)"; revocation in loop "no"; determinism "OMNeT++ seeded".
