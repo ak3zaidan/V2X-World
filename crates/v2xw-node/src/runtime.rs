@@ -1799,7 +1799,10 @@ impl ObuRuntime {
             return Duration::from_nanos(0);
         };
         self.security.trust_mut().stats.cert_pq_verifications += u64::from(n);
-        match self.service.service_time(ctx, &OpDescriptor::verify(op, bytes)) {
+        match self
+            .service
+            .service_time(ctx, &OpDescriptor::verify(op, bytes))
+        {
             Some(d) => {
                 let total = Duration::from_nanos(d.as_nanos().saturating_mul(u64::from(n)));
                 let stats = &mut self.security.trust_mut().stats;

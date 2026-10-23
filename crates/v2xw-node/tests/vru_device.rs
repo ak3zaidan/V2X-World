@@ -571,10 +571,21 @@ fn a_frame_that_waited_past_its_relevance_window_is_not_judged() {
         handset.step_timed(&mut ctx, vec![(rx_frame(0), stamp)], 0.0)
     };
     let prompt = step_at(100 * NS_PER_MS);
-    assert_eq!(prompt.delivered.len(), 1, "a frame taken 0.1 s after it was sent");
+    assert_eq!(
+        prompt.delivered.len(),
+        1,
+        "a frame taken 0.1 s after it was sent"
+    );
     let stale = step_at(43_125 * NS_PER_S);
-    assert!(stale.delivered.is_empty(), "a 43,125 s old frame was judged");
-    let fate = stale.rx_reports.iter().find(|r| r.token == 1).map(|r| r.disposition);
+    assert!(
+        stale.delivered.is_empty(),
+        "a 43,125 s old frame was judged"
+    );
+    let fate = stale
+        .rx_reports
+        .iter()
+        .find(|r| r.token == 1)
+        .map(|r| r.disposition);
     assert_eq!(
         fate,
         Some(v2xw_node::RxDisposition::NotRelevant(

@@ -3029,8 +3029,7 @@ pub fn signing_facts(scenario: &Scenario) -> v2xw_metrics::signing::SchemeFacts 
     // hybrid, and it travels in the certificate cycle's fragments.
     let scheme = if crate::signature::partially_hybrid(scenario) {
         facts.mode = "partially-hybrid".to_string();
-        v2xw_sec::scheme::signature(crate::signature::message_signature(scenario))
-            .unwrap_or(scheme)
+        v2xw_sec::scheme::signature(crate::signature::message_signature(scenario)).unwrap_or(scheme)
     } else {
         scheme
     };

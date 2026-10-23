@@ -84,11 +84,10 @@ const MLDSA44_HYBRID_CERT: u64 = 858 + (1_312 + 2_420) - (897 + 666);
 fn hybrid_mldsa44_messages_are_ecdsa_and_only_the_certificate_is_hybrid() {
     let (report, recorder) = run(grid("hybrid-mldsa44-ecdsa-p256"));
     let l = ledger(&recorder);
-    let bsm: Vec<&NodeTxView> = l
-        .tx
-        .iter()
-        .filter(|t| t.msg_type.as_deref() == Some("bsm"))
-        .collect();
+    let bsm: Vec<&NodeTxView> =
+        l.tx.iter()
+            .filter(|t| t.msg_type.as_deref() == Some("bsm"))
+            .collect();
     println!(
         "BSMs {}, MTU refusals {}, certificate groups {}, PQ certificate checks {}",
         bsm.len(),
@@ -98,7 +97,10 @@ fn hybrid_mldsa44_messages_are_ecdsa_and_only_the_certificate_is_hybrid() {
     );
     // The PQHMC failure: every message refused at the MTU, nothing on the air.
     assert!(bsm.len() > 100, "no BSM was transmitted");
-    assert_eq!(report.net_mtu_refusals, 0, "a message was refused at the MTU");
+    assert_eq!(
+        report.net_mtu_refusals, 0,
+        "a message was refused at the MTU"
+    );
 
     // Per sender, five SPDUs a cycle: α = 3 carry a ~1,009 B certificate fragment, the
     // last two carry none and are plain ECDSA BSMs. A hybrid ML-DSA-44 signature alone
@@ -128,7 +130,10 @@ fn hybrid_mldsa44_messages_are_ecdsa_and_only_the_certificate_is_hybrid() {
     assert!(cycles > 10, "too few whole cycles: {cycles}");
 
     // The certificate is the hybrid ML-DSA-44 one, in three fragments.
-    assert!(!l.reassembly.is_empty(), "no certificate group was followed");
+    assert!(
+        !l.reassembly.is_empty(),
+        "no certificate group was followed"
+    );
     for g in &l.reassembly {
         assert_eq!(g.kind, "certificate");
         assert_eq!(g.fragments, 3);

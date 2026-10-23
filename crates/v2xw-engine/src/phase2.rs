@@ -1260,7 +1260,11 @@ const EVIDENCE_BSMS: usize = 4;
 /// before the judged one stands for it. Empty when the judged BSM is no longer on hand,
 /// and only the judged one when its predecessor is not: a report then has no evidence of
 /// its own to attach, rather than someone else's.
-fn judged_bsms(ring: &VecDeque<(SimTime, Vec<u8>)>, prev: Option<SimTime>, at: SimTime) -> Vec<Vec<u8>> {
+fn judged_bsms(
+    ring: &VecDeque<(SimTime, Vec<u8>)>,
+    prev: Option<SimTime>,
+    at: SimTime,
+) -> Vec<Vec<u8>> {
     let Some(i) = ring.iter().rposition(|(t, _)| *t == at) else {
         return Vec::new();
     };
@@ -7000,9 +7004,8 @@ impl Phase2 {
             // vehicle has just come into the observer's hearing, and a claimed link is
             // spurious: there was no change to link across (R-FS40: 2,873 claims with no
             // pseudonym change at all were counted as link claims).
-            let owner = |hex: &str| {
-                decode_hex8(hex).and_then(|d| self.by_digest.get(&d).map(|(n, ..)| *n))
-            };
+            let owner =
+                |hex: &str| decode_hex8(hex).and_then(|d| self.by_digest.get(&d).map(|(n, ..)| *n));
             let succ_owner = owner(&o.successor);
             let changed = succ_owner.is_some_and(|v| {
                 self.privacy_heard
@@ -8159,7 +8162,10 @@ mod judged_evidence_tests {
 
     /// One certificate's BSMs on the air at 10 Hz, each tagged with its generation time.
     fn ring(times: &[SimTime]) -> VecDeque<(SimTime, Vec<u8>)> {
-        times.iter().map(|t| (*t, t.to_be_bytes().to_vec())).collect()
+        times
+            .iter()
+            .map(|t| (*t, t.to_be_bytes().to_vec()))
+            .collect()
     }
 
     fn tags(bsms: &[Vec<u8>]) -> Vec<SimTime> {

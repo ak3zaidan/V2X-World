@@ -623,8 +623,14 @@ mod tests {
             id[..4].copy_from_slice(&k.to_be_bytes());
             feed(&mut d, id, 40_000, 0.0);
         }
-        assert!(!d.last.contains_key(&[1; 8]), "a 40 s-stale sender was kept");
-        assert!(d.last.contains_key(&[2; 8]), "a sender heard 1 s ago was evicted");
+        assert!(
+            !d.last.contains_key(&[1; 8]),
+            "a 40 s-stale sender was kept"
+        );
+        assert!(
+            d.last.contains_key(&[2; 8]),
+            "a sender heard 1 s ago was evicted"
+        );
         assert!(d.last.len() <= 2_001, "{}", d.last.len());
         // The kept sender, frozen at x = 0 while claiming 20 m/s: still caught.
         let fired = feed(&mut d, [2; 8], 39_100, 0.0);

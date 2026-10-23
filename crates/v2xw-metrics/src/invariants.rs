@@ -2737,7 +2737,10 @@ mod tests {
         ]);
         assert!(!check_m_rx1(&l).held());
         // A whole frame's loss is its fate's cause whenever the fate is stamped.
-        let l = ledger(&[at(10, None, 6, Some("collision")), fate_at(2, "reassembly-failed")]);
+        let l = ledger(&[
+            at(10, None, 6, Some("collision")),
+            fate_at(2, "reassembly-failed"),
+        ]);
         assert!(!check_m_rx1(&l).held());
     }
 
