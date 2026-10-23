@@ -83,7 +83,9 @@ rows:
   measure: reception attempts per live second
   expect: 8x-16x the quarter-density figure (pairs grow with the square of the fleet; the 500 m cap holds it under 16x)
   source: F3 15x for 4x vehicles (05 §5)
-  measured: pending
+  measured: "same phase (the 30-40 s window, inside the 4x fill): PQ0 459,183 attempts at 264 nodes -> R-FS40 7,062,128 at 992 nodes = 15.4x for 3.8x the nodes. After the fill (R-FS 130-150 s, 1,581-1,632 nodes): 2.96-3.14 M per simulated second"
+  verdict: pass
+  note: "the comparison is same-phase. PQ0 at 50-60 s (89 k/s, 308 nodes) against R-FS at 130 s gives 33x, but those windows sit in different phases of the fill"
 - id: FB.cbr
   base: PQ0
   variant: FB
@@ -93,7 +95,9 @@ rows:
     3x-5x the quarter density's (BSM+PSM load scales with the fleet), mean 0.05-0.12,
     still under J2945/1 vMinCU 0.5, so no power adaptation
   source: SAE J2945/1 (CAMP, IEEE TVT 68(3) 2019, Table I)
-  measured: pending
+  measured: "same phase (30-40 s): PQ0 mean 0.0079, p95 0.019 -> R-FS40 mean 0.0282, p95 0.062 (3.6x); after the fill R-FS mean 0.074-0.078, p95 0.14-0.16, max 0.24"
+  verdict: pass
+  note: "below J2945/1 vMinCU 0.5 everywhere, so no power adaptation"
 - id: FB.pdr-100m
   base: PQ0
   variant: FB
@@ -222,7 +226,8 @@ rows:
     ECDSA + payload), a full-certificate one ~4.1 kB (+1,312 B key): 2.3-2.7 frames per
     BSM, at or slightly above pure ML-DSA-44's 2.30
   source: FIPS 204 Table 2 (pk 1,312 B, sig 2,420 B); stress.md PQ.sizes
-  measured: pending
+  measured: "PQ0 -> PQHM: BSM frames 41,903 -> 96,561 (2.30 per BSM, the same as pure ML-DSA-44's 96,562 in stress.md); PSDU mean 207 -> 1,332 B per fragment; 50,186 SDUs fragmented into 138,004 fragments; 0 MTU refusals"
+  verdict: pass
 - id: PQHM.airtime
   base: PQ0
   variant: PQHM
@@ -230,7 +235,9 @@ rows:
   measure: BSM airtime; CBR mean / p95
   expect: BSM airtime x12-15; CBR mean 0.13-0.17 (pure ML-DSA-44 gave x12.6 and 0.142)
   source: stress.md PQ.airtime
-  measured: pending
+  measured: "BSM airtime 13.6 -> 176.2 s (x13.0); PSM 3.0 -> 74.5 s (x25); CBR mean 0.0100 -> 0.125, p95 max 0.027 -> 0.337, max 1.0"
+  verdict: wrong-expectation
+  note: "the airtime ratio is in the band. The CBR band 0.13-0.17 was anchored on stress.md's pure-ML-DSA 0.142, which sat on a base of 0.019 that still carried the R-USFP report storm. On today's 0.010 base, x12.5 gives 0.125"
 - id: PQHM.loss
   base: PQ0
   variant: PQHM
@@ -238,7 +245,8 @@ rows:
   measure: verified BSMs; reassembly completed vs lost
   expect: verified BSMs down 30-40 % (message PDR is about the per-fragment PDR to the power k)
   source: stress.md PQ.loss (-33 % for pure ML-DSA-44)
-  measured: pending
+  measured: "verified 380,617 -> 251,882 (-33.8 %); frame PDR 40-60 m 0.929 -> 0.792, 80-100 m 0.725 -> 0.519; 275,092 reassemblies complete against 2,385,392 lost; unverified ratio 3.6 % -> 8.5 %"
+  verdict: pass
 - id: PQHM.verify-load
   base: PQ0
   variant: PQHM
@@ -246,7 +254,9 @@ rows:
   measure: verify cost mean per message
   expect: "both signatures verified: about ECDSA + ML-DSA-44 (0.63 + 0.43 ms), 0.9-1.2 ms, above ECDSA and above hybrid Falcon's 0.751"
   source: stress.md PQ.verify-load, PQ.hybrid
-  measured: pending
+  measured: "verify cost mean 0.628 -> 0.787 ms (hybrid Falcon 0.751 in stress.md); charged verify time 3.82 -> 1.72 s (fewer messages); BSM e2e 3.7 -> 12.1 ms, p95 6.0 -> 17.5 ms; 2 SPDUs refused generation-time-too-old"
+  verdict: wrong-expectation
+  note: "the ordering holds (hybrid ML-DSA > hybrid Falcon > ECDSA). The band 0.9-1.2 ms assumed every receiver pays the vehicle OBU's 645 + 311 us sum. The fleet mean also includes handsets and RSUs, whose profiles price ML-DSA-44 differently (the RSU's from a post-quantum software proxy, per the validator's note)"
 - id: PQHM.reports
   base: PQ0
   variant: PQHM
@@ -256,7 +266,9 @@ rows:
     under generic-sdu the over-MTU report SPDUs are fragmented, so 0 net_mtu_refusals for
     reports; no refused report counted as uploaded (R-PQMBR fix)
   source: BUILD-STATUS 2026-10-22 REPORTS; stress.md PQ.mbr-mtu
-  measured: pending
+  measured: "39 reports sent: 25 over cellular, 6 relayed over the air to an RSU, 8 from RSUs; reports_refused_mtu 0, crl_frames_refused_mtu 0, net_mtu_refusals 0"
+  verdict: pass
+  note: "R-PQMBR holds: under generic-sdu the over-MTU relay reports are fragmented and delivered. Under PQ, RSUs install no CRL (rsu_crls_installed 60 -> 0; rsus_in_cert_cycle 30 -> 0), the known open item in pq-profile.md §3"
 - id: PQHM.determinism
   base: PQHM
   variant: PQHM1
@@ -264,7 +276,9 @@ rows:
   measure: recording content digest at 4 vs 1 rayon threads
   expect: identical
   source: engine determinism contract; stress.md MW.determinism
-  measured: pending
+  measured: "record digest 47fe89fb95c7b8c4... at 4 and at 1 thread; metrics.json and run-report.json byte-identical (sha256 4e761a1a..., 8b7cf6cc...); 137,996 frames and 14,368,747 records in both. 4 threads: 583 s wall, 726 CPU-s; 1 thread: 624 s wall, 613 CPU-s"
+  verdict: pass
+  note: "the digest can fail: PQ0, PQHM and PQHMC (one setting apart) give 8701b92c..., 47fe89fb... and f2afcf0b.... Four threads saved 7 % of wall time"
 - id: PQHMC.sizes
   base: PQHM
   variant: PQHMC
@@ -276,7 +290,9 @@ rows:
     extra; mean PSDU ~0.7 kB; about 1 frame per BSM (fragments ride in the SPDU); BSM
     airtime x3-5 the classical base, far below PQHM; CBR 0.04-0.08
   source: NDSS 2024 (Twardokus et al.) §IV, §V-D; cert_cycle.rs alpha rule
-  measured: pending
+  measured: "PQHMC: frames_transmitted 0, net_mtu_refusals 50,180 (every BSM and PSM SDU); reception attempts 0; 30 s wall"
+  verdict: open
+  note: "ENGINE DEFECT R-CCSIG: under the certificate cycle the engine still adds the hybrid signature (ECDSA + ML-DSA-44, 2,484 B) to every SPDU (run.rs hand_down_app: signature::resize with the scenario's scheme; commit 45f0942f made the cycle's fragment fit beside it). The NDSS 2024 Partially-Hybrid design that cert_cycle.rs cites keeps ECDSA on every BSM (204 B frames, Fig. 4). With Falcon-512 the SPDU still fits under the 1,400 B WSMP MTU but is 666 B too large. With ML-DSA-44 every SPDU is refused, so the run is silent, and the validator accepts it with notes only"
 - id: PQHMC.verify-load
   base: PQHM
   variant: PQHMC
@@ -284,7 +300,8 @@ rows:
   measure: verify cost mean; verified BSMs
   expect: "ECDSA verification per BSM (~0.63 ms) plus one ML-DSA-44 verify per new certificate; verified BSMs near the classical base (within 10 %)"
   source: NDSS 2024 §III
-  measured: pending
+  measured: "not measurable: nothing was transmitted (R-CCSIG)"
+  verdict: open
 - id: PQHMC.reports
   base: PQHM
   variant: PQHMC
@@ -296,7 +313,9 @@ rows:
     uploaded: reports_uploaded_relay 0, reports_refused_mtu > 0, and the RSU CRL frames
     likewise refused (crl_broadcasts 0)
   source: testing/pq-profile.md §2 (pq_relay.rs certificate-cycle case); IEEE 1609.3 WSMP has no fragmentation
-  measured: pending
+  measured: "0 reports (nothing was received, so nothing was detected); reports_refused_mtu 0"
+  verdict: open
+  note: "vacuous under R-CCSIG"
 - id: PQ.topups
   base: PQ0
   variant: PQHM
@@ -304,4 +323,5 @@ rows:
   measure: topups started / completed in the 60 s live run
   expect: none started under either scheme (no i-period boundary inside 0-60 s on the real calendar; pools hold 2 weeks)
   source: scenario t0 2026-10-19 21:00 UTC; the boundary is at 09:00 UTC (benchmark §1.1)
-  measured: pending
+  measured: "topups 0/0 in PQ0 and in PQHM"
+  verdict: pass
