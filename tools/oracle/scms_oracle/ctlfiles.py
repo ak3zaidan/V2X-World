@@ -35,11 +35,20 @@ def _parts(hx):
 def check(gov):
     X = Rules(None)
     for g in gov:
-        uniq = {c['sequence']: c['hex'] for c in g['ctls']}
+        # a provider may hold one CTL several times (history, current, pending): every
+        # distinct encoding is checked, and the copies of one sequence number must agree
+        copies = {}
+        for c in g['ctls']:
+            hs = copies.setdefault(c['sequence'], [])
+            if c['hex'] not in hs:
+                hs.append(c['hex'])
+        for seq, hs in copies.items():
+            X.check('CTL-FILE', len(hs) == 1,
+                    f'{g["provider"]}/ctl/{seq}: {len(hs)} different encodings of one sequence number')
         prev = None
-        for seq in sorted(uniq):
-            w = f'{g["provider"]}/ctl/{seq}'
-            m, tbs = _parts(uniq[seq])
+        for seq, k, hx in [(q, k, hx) for q in sorted(copies) for k, hx in enumerate(copies[q])]:
+            w = f'{g["provider"]}/ctl/{seq}' + (f' copy {k}' if len(copies[seq]) > 1 else '')
+            m, tbs = _parts(hx)
             X.check('CTL-FILE', tbs['sequenceNumber'] == seq, w + ': sequenceNumber')
             X.check('CTL-FILE', tbs['ctlSeriesId'] == US_CTL_SERIES, w + f': series {tbs["ctlSeriesId"].hex()}')
             approve = tbs['electorApprove'] if prev is None else prev[1]['electorApprove']
@@ -84,7 +93,10 @@ def check(gov):
             if prev is not None:
                 X.check('CTL-ORDER', seq == prev[0] + 1, w + f': sequence {prev[0]} -> {seq}')
                 X.check('CTL-ORDER', tbs['effectiveDate'] >= prev[1]['effectiveDate'], w + ': effectiveDate decreases')
-            prev = (seq, tbs, quorum)
+            if k == len(copies[seq]) - 1:
+                # the next sequence number is checked against this one (its first copy when
+                # the copies disagree, which CTL-FILE reports)
+                prev = (seq, _parts(copies[seq][0])[1] if k else tbs, quorum)
     return X
 
 
@@ -131,12 +143,20 @@ FAULTS = {
     'ctl-tbs-edited': ('tbsCtl changed after signing (root list edited)', 'CTL-SIG',
                        lambda gov: _mut(gov, _tbs(lambda t: t.update(rootCaApprove=t['rootCaApprove'][:-1])))),
     'ctl-skip-seq': ('the newest CTL numbered two past the previous', 'CTL-ORDER', lambda gov: _skip(gov)),
+    'ctl-copy-differs': ('one copy of a CTL the provider holds twice differs', 'CTL-FILE', lambda gov: _one_copy(gov)),
 }
+
+
+def _same(g, c):
+    """Every copy of c in g (a provider holds one CTL both in its history and as current)."""
+    return [x for x in g['ctls'] if x['sequence'] == c['sequence'] and x['hex'] == c['hex']]
 
 
 def _mut(gov, fn):
     g, c = _newest(gov)
-    c['hex'] = _reenc(c['hex'], fn)
+    new = _reenc(c['hex'], fn)
+    for x in _same(g, c):
+        x['hex'] = new
     return True
 
 
@@ -144,8 +164,19 @@ def _skip(gov):
     g, c = _newest(gov)
     if len({x['sequence'] for x in g['ctls']}) < 2:
         return False
-    c['sequence'] += 1
-    c['hex'] = _reenc(c['hex'], _tbs(lambda t: t.update(sequenceNumber=t['sequenceNumber'] + 1)))
+    new = _reenc(c['hex'], _tbs(lambda t: t.update(sequenceNumber=t['sequenceNumber'] + 1)))
+    for x in _same(g, c):
+        x['sequence'] += 1
+        x['hex'] = new
+    return True
+
+
+def _one_copy(gov):
+    """Only one of several copies of the newest CTL is altered (a signature bit)."""
+    g, c = _newest(gov)
+    if len(_same(g, c)) < 2:
+        return False
+    c['hex'] = _reenc(c['hex'], _flip_sig)
     return True
 
 
