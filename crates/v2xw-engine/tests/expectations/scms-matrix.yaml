@@ -964,9 +964,9 @@ rows:
   expect: up
   source: 'one CRL entry per revoked device: the CRL grows (~33 B an entry, Brecht)'
   measured: 2 -> 4
-  verdict: open
-  note: '27 CRL entries in M0, att10 and sybil alike: att10 revokes 3 of 9 attackers (5 reported) and
-    24 honest. A constant 27 decisions across three detection settings is unexplained'
+  verdict: fixed
+  note: 'was open: 27 CRL entries in M0, att10 and sybil alike, the R-USFP false positives (usfp.md
+    §4). Fixed by the smoothed GNSS receiver (DETECT); re-run on 77cffb5b: 2 -> 4, 0 honest'
 - id: att10-cases
   base: M0
   variant: att10
@@ -975,8 +975,8 @@ rows:
   expect: up
   source: 'one case per accused device (gap row 27: cases run side by side)'
   measured: 2 -> 4
-  verdict: open
-  note: 'as att10-crl: 27 cases in M0, att10, sybil'
+  verdict: fixed
+  note: 'as att10-crl: was 27 cases in M0, att10 and sybil; 2 -> 4 on 77cffb5b'
 - id: sybil-not-revoked
   base: M0
   variant: sybil
