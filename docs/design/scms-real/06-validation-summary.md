@@ -1,9 +1,13 @@
 # 06 — How close the engine's SCMS is to the real US deployment: validation summary
 
-First written 2026-10-18 at `8245ef81`. Rewritten 2026-10-22 at `0f7eda5c`. **Rewritten again
-2026-10-22 at `bc3bca1b`** (main), after:
-- fix wave 2 (TRUST, REPORTS and DETECT, merged at `88e24b09` with merge fix `3471f2fc`);
-- the final test wave (ORACLE-FINAL and BENCH, merged at `bc3bca1b`).
+First written 2026-10-18 at `8245ef81`. Rewritten 2026-10-22 at `0f7eda5c` and at
+`bc3bca1b`. **Rewritten again 2026-10-23 at `a4982f9f`** (main), after:
+- fix wave 3 (PQMEM, DETPRIV and RERUNS, merged at `0a125a98`, `f812677e` and `4a62ed5b`;
+  `cargo fmt` `09e55393`; docs `e4004b4c`);
+- final runs part 2 (BENCH, merged at `430f40ee`; docs `a4982f9f`).
+
+No Rust code changed after `09e55393`, so every test result of the wave 3 integration is a
+result for HEAD's code.
 
 This page states the final state of the realism round: the verdict on every real-world rule,
 the test totals across every configuration that ran, what is confirmed working, and what
@@ -19,20 +23,20 @@ and the merge notes in `docs/design/BUILD-STATUS.md`. Every claim names its row 
 - **gov X-n**: `validation/governance-deployment.md` §1, row X-n.
 - **veh Xn**: `validation/vehicle-and-roadside.md` §1, row Xn.
 - **07 §n**: `07-config-testing-report.md`.
-- **matrix**, **stress**, **oracle-final**, **final-bench**, **usfp**, **pq-profile**,
-  **knobs**, **effects**, **edge**, **realism**: the reports of the same names in `testing/`.
+- **matrix**, **stress**, **oracle-final**, **final-bench**, **final-run**, **usfp**,
+  **pq-profile**, **knobs**, **effects**, **edge**, **realism**, **ccsig-memory**,
+  **measure**, **rerun**: the reports in `testing/` (`rerun` is `rerun-2026-10-22.md`).
 - **bench §n**: `docs/benchmark/scms-real-benchmark.md`.
-- **BS wave 2** and **BS final**: the BUILD-STATUS sections "SCMS realism fix wave 2
-  integration" and "SCMS realism final test wave integration" (both 2026-10-22).
+- **BS wave 2**, **BS final**, **BS wave 3** and **BS final 2**: the BUILD-STATUS sections
+  "SCMS realism fix wave 2 integration", "SCMS realism final test wave integration" (both
+  2026-10-22), "SCMS realism fix wave 3 integration" and "SCMS realism final runs part 2
+  integration" (both 2026-10-23).
 - **04 §n** and **RT Rn**: `04-validation-report.md` and `docs/redteam/pki-privacy.md`.
 
 The checklist files keep the verdicts their validators recorded on 2026-10-18. The only
 exceptions are proto A16, D18 and I10, which were updated in `898c077a`. **Where a verdict
 here differs from its checklist, this page is the later one.** §4 lists every such change
 with its evidence.
-
-The test reports `matrix.md` and `stress.md` were written before fix wave 2. Some of their
-"open" items are now fixed; §2.2 and §6 give the current state of each.
 
 ## 1. What was checked, and how
 
@@ -43,7 +47,7 @@ system follows in that part, from primary sources:
   Technical Specification, EAC Requirements, re-enrolment specification, misbehaviour report
   specification);
 - CAMP's EE Requirements 1.2.2;
-- the USDOT primer and the CV-pilot reports;
+- the USDOT primer, the USDOT DSRC RSU Specification v4.1 and the CV-pilot reports;
 - the CTLs and certificate chains that SCMS Manager actually publishes.
 
 Code comments were never used as a source. Each rule's evidence is one of five kinds:
@@ -80,21 +84,22 @@ A row with two verdicts is counted under its first.
 | **All** | **326** | **232 (71.2 %)** | **43 (13.2 %)** | **22 (6.7 %)** | **29 (8.9 %)** |
 
 **Final match: 275 of 326 rules (84.4 %) do what the real system does** (matches plus fixed).
-It was 264 (81.0 %) on 2026-10-18 and 270 (82.8 %) at `0f7eda5c`.
+It was 264 (81.0 %) on 2026-10-18, 270 (82.8 %) at `0f7eda5c` and 275 at `bc3bca1b`.
 
-What moved since `0f7eda5c`: the five rules that runtime testing had reopened are now fixed
-(§4.1). They are proto C6, C8 and F6, gov E-1 and veh R1. No rule was reopened by the final
-test wave.
+**What moved since `bc3bca1b`: no rule verdict.** Fix wave 3 fixed runtime defects that have
+no checklist row (§4.2). No rule was reopened by it or by final runs part 2. One row could
+move on an owner reading: veh M13 (do RSUs report misbehaviour?) is still counted
+unverifiable, although the engine now follows the reading that the US profile has no roadside
+reporter (§8 item 6). If the owner accepts that reading, the match is 276 (84.7 %).
 
 Of the 51 rules that do not match:
 - 29 cannot be checked against any public source (§7);
 - 22 are known differences (§5). 14 of them change nothing a device trusts or does.
 
-The runtime defects that testing found and that have no checklist row are in §6. The
-largest one in the earlier version of this page, R-USFP (the US misbehaviour profile
-revoking honest vehicles), is fixed. The largest still open are R-CCSIG, which affects only
-the post-quantum certificate-cycle study, and the full-fleet false positives and memory
-growth found by the benchmark.
+The runtime defects that testing found and that have no checklist row are in §6. R-CCSIG,
+the largest open item in the previous version of this page, is fixed. The largest still open
+are the two fast-forward defects that the full-scale benchmark found (R-FFHOLD and
+R-FFBURST), the honest reports at full density, and the full-scale memory.
 
 ### 2.2 Tests across all configurations
 
@@ -104,43 +109,51 @@ in each table's expectations file.
 
 | Table | Rows | Pass | Fixed (bug, then pass) | Expectation wrong, corrected | Open |
 |---|---|---|---|---|---|
-| Matrix: 32 runs, one-change variants of the Midtown realism base; 7 re-run after the R-USFP fix (`scms-matrix.yaml`) | 99 | 83 | 5 | 8 | 3 |
-| Realism rows re-run on the matrix runs (`runtime_expectations.yaml`; before the R-USFP fix) | 62 | 49 | 0 | 1 | 12 |
+| Matrix: 34 runs (32 one-change variants of the Midtown realism base, plus `gnss-raw` and `us-profile`), re-run on `77cffb5b` (`scms-matrix.yaml`) | 99 | 81 | 7 | 10 | 1 |
+| Realism rows on the matrix runs (`runtime_expectations.yaml`; re-run on `77cffb5b`) | 62 | 54 | 0 | 6 | 2 |
 | Settings knobs, same-seed pairs (knobs) | 21 | 15 | 3 | 2 | 1 |
 | Effects table (effects) | 88 | 77 | 7 | 4 | 0 |
 | Edge cases (edge; 3d fixed in 07 §7; 11 measured by matrix and stress) | 12 | 7 | 5 | 0 | 0 |
 | Runtime realism, base (realism) | 27 | 22 | 5 | 0 | 0 |
-| Runtime realism, changes (realism; R-TRUSTLEAK now fixed) | 8 | 6 | 2 | 0 | 0 |
-| Stress: multi-week, post-quantum, first full-fleet seconds (`scms-stress.yaml`) | 35 | 16 | 1 | 2 | 16 |
+| Runtime realism, changes (realism) | 8 | 6 | 2 | 0 | 0 |
+| Stress: multi-week, post-quantum, first full-fleet seconds; R-NOCRL rows re-run on `77cffb5b` (`scms-stress.yaml`) | 35 | 17 | 1 | 2 | 15 |
 | Final bench: full fleet, hybrid ML-DSA-44, certificate cycle, determinism (`scms-final-bench.yaml`) | 28 | 15 | 0 | 3 | 10 |
-| Oracle-final on HEAD `88e24b09`: expectation rows, conf and mbr runs (oracle-final §8.1) | 60 | 60 | 0 | 0 | 0 |
-| Oracle-final: HEAD against `4924a5d2` and base against variant (oracle-final §8.2) | 10 | 9 | 0 | 1 | 0 |
-| **All** | **450** | **359** | **28** | **21** | **42** |
+| Final run: certificate cycle after R-CCSIG, full-scale benchmark (`scms-final-run.yaml`) | 27 | 16 | 2 | 2 | 7 |
+| Oracle-final on `88e24b09`: expectation rows, conf and mbr runs (oracle-final §8.1) | 60 | 60 | 0 | 0 | 0 |
+| Oracle-final: `88e24b09` against `4924a5d2` and base against variant (oracle-final §8.2) | 10 | 9 | 0 | 1 | 0 |
+| **All** | **477** | **379** | **32** | **30** | **36** |
 
-**What the 42 open rows are.** Only part of them is an engine problem:
-- **15 are superseded or wait for a re-run.**
-  - Stress: 10 full-fleet rows (`FS.*`) were never run; the final bench measured them as
-    `FB.*`.
-  - Stress: `PQ.certcycle` and `PQ.determinism` were measured by the final bench. The first
-    found R-CCSIG; the second passes.
-  - Stress: 3 rows (`MWC.overdue-onset`, `MWC.recovery`, `MWP.overdue-on-return`) were open
-    on R-NOCRL. It is fixed (§6), but the multi-week runs were not re-run.
-- **12 are the realism rows**, judged on runs from before the R-USFP fix and not re-run.
-  Some of them carry `status: open` by design.
-- **10 are final-bench rows.**
-  - 4 were not reached, because the full-scale run hit the memory cap (`FB.devices`,
-    `FB.topups-at-rollover`, `FB.ff-ticks`, `FB.cost`).
-  - 2 are findings: honest false positives and privacy link claims (§6 items 3 and 5).
-  - 4 are R-CCSIG (`PQHMC.*` ×3, `PQHFC.ccsig`).
-- **Matrix, 3 rows.** `lte-latency-budget` is a real open item (§6 item 11). `att10-crl` and
-  `att10-cases` are explained: after the R-USFP fix the decisions are 2 in M0 and 4 in
-  att10, which is the "up" the rows expect (usfp §4). The rows themselves were not re-judged.
-- **Knobs, 1 row:** the request shuffle, published as partial (knobs).
-- **Stress, 1 row:** `PQ.backend-bytes`. The per-certificate factor was not isolated.
+The realism file records no per-row "fixed" verdict. The rows that the R-USFP fix turned
+green are counted as pass, and the 6 rows corrected in the re-run (Z1, Z3, Z4, A3,
+V8-us-catches-constpos and V8-us-checks-every-bsm, rerun §6) as corrected. Each corrected
+row was shown to fail with a value outside its new band injected.
+
+**What the 36 open rows are.** Most are not engine problems:
+- **22 are superseded by a later table, or carried into one.**
+  - Stress, 12: the 10 full-fleet rows (`FS.*`) were never run, and the final bench and final
+    run measured them as `FB.*` and `FB2.*`. `PQ.certcycle` found R-CCSIG, which is now fixed
+    (`PQHFC.sizes` and `PQHMC.sizes`, final-run). `PQ.determinism` passes in the final bench.
+  - Final bench, 10. Six are closed by the final run: `FB.devices` and
+    `FB.topups-at-rollover` pass as `FB2.*`, and `PQHMC.*` ×3 and `PQHFC.ccsig` are fixed
+    (R-CCSIG). Four are carried into final-run rows that are still open: `FB.ff-ticks`,
+    `FB.cost`, the honest false positives and the privacy link claims.
+- **1 is open by design:** the knobs row for the request shuffle, published as partial,
+  because the shuffle has no in-run effect (knobs). Its test passes (`scms_knobs_runs` 18/18).
+- **13 are open items.**
+  - Final run, 7: the full-scale benchmark did not finish (`FB2.completes`, `FB2.cost`,
+    `FB2.ff-ticks`, `FB2.crl`, `FB2.backend-load`), and two of its findings
+    (`FB2.honest-reports`, `FB2.privacy`). §6 items 1–5.
+  - Stress, 3: `MWC.recovery` (R-JOINCRL, §6 item 7), `MWP.off-no-backend` (reopened, §6
+    item 8) and `PQ.backend-bytes` (the per-certificate factor was not isolated; final-run
+    §2 shows the bytes are reports, not provisioning).
+  - Matrix, 1: `lte-latency-budget`, outside the SCMS (§6 item 16).
+  - Realism, 2: L5, the case-board review time (§6 item 15), and T5, the US component set,
+    which carries `status: open` in its file.
 
 **Two notes on the table:**
-- **The knobs row** counts its 21 rows one by one. The 07 §2 summary gives 13 pass and 4 fixed
-  for the same rows; the difference is only which column a row is counted in.
+- **The matrix and realism re-runs used the release binary of `77cffb5b`**, before fix wave
+  3. Wave 3 changed the GNSS propagation, stopped RSUs filing their own reports and recorded
+  the pre-run CRL fetch, so their report counts are owed again (§9).
 - **Not in the table:** the policy package's before/after runs (07 §8), and usfp's same-seed
   before/after table (§3). Neither is a row. On `edge/clock-skew-ahead`, honest vehicles
   revoked fell from 19 to 0. On the realism base under the US profile, honest vehicles
@@ -150,33 +163,34 @@ in each table's expectations file.
 
 | Check | Result |
 |---|---|
-| Oracle self-test (official vectors) | 412/412 |
-| Oracle mutation run | 24 faults, all red |
-| Oracle `verify-emitted` | 10/10 |
-| Oracle `records` on two recorded runs of HEAD `88e24b09` (conf and mbr) | **279,236 of 279,236 checks pass** (conf 67,451, mbr 211,785). On `4924a5d2` it was 272,778 of 281,240, every failure OF-1 or OF-2 |
+| Oracle self-test (official vectors), HEAD | 412/412 |
+| Oracle mutation run, HEAD | 24 faults, all red, 0 silent |
+| Oracle `verify-emitted`, HEAD | 10/10 |
+| Oracle `records` on two recorded runs of `88e24b09` (conf and mbr) | **279,236 of 279,236 checks pass** (conf 67,451, mbr 211,785). On `4924a5d2` it was 272,778 of 281,240, every failure OF-1 or OF-2. **Not re-run on wave 3 code**, which adds the pre-run CRL PDUs and `node.security.crls` to the records |
 | Record faults injected into those runs | 69 of 69 applicable faults red (conf 34, 1 not applicable; mbr 35), 0 silent, after oracle fix 2 (oracle-final §8.5) |
-| `ctl-files` on the engine's own CTLs (F1 `gov.json`, HEAD) | PASS: CTL-FILE 16, CTL-ORDER 4, CTL-QUORUM 6, CTL-SIG 140; 6/6 faults red after oracle fix 1 |
+| `component_certs.py`: every component certificate of the M0 run against the published chain of its form (rerun §8) | **10/10 roles** match field for field (ISS pre-production chain for provider-a, SAESOL production chain for provider-b); every SPDU re-encodes byte for byte; `--mutate` 2 of 2 roles red |
+| `ctl-files` on the engine's own CTLs (F1 `gov.json`) | PASS: CTL-FILE 16, CTL-ORDER 4, CTL-QUORUM 6, CTL-SIG 140; 6/6 faults red after oracle fix 1 |
 | `ctl-files` on the six CTLs SCMS Manager publishes | 30/30 elector signatures valid; 5/5 faults red |
-| `check_run.py` on HEAD's F1 conformance capture | 18,910/18,910, 0 disagreements; `--mutate` 18/18 faults red |
-| `oracle_final.rs` reproductions (OF-1, OF-2) and `conformance.rs` on HEAD | 2/2 and 2/2 |
+| `check_run.py` on the F1 conformance capture of `bc3bca1b`'s code | 18,910/18,910, 0 disagreements; `--mutate` 18/18 faults red |
+| `oracle_final.rs` reproductions (OF-1, OF-2) and `conformance.rs` | 2/2 and 2/2 |
 | `check_run_crl.py` on a newly generated CRL corpus (`2004bb87`) | 19/19 |
 | Published artefacts; `real_artefacts`; `profiles.py`; PDU checkers; conformance run (`8245ef81`, not re-run since) | 164/164; 7/7; 24/24; 24/24, 25/25, 18/18, 4/4; 19,183/19,183 |
+| Fault proofs of fix wave 3 | PQMEM F1–F5 red on main (BS wave 3); DETPRIV 6 of 6 injected faults red (measure §6); RERUNS: 3 sensitivity faults, the M-RX1 filter, the 5 s CRL poll and 4 realism size/count injections red (rerun §1–§3, §6) |
 
 **Rust, UI and build checks**
 
 | Suite | Result |
 |---|---|
-| HEAD `bc3bca1b`: v2xw-sec, msg, proto, node | 1,014 pass, 0 fail, 1 ignored |
-| HEAD `bc3bca1b`: engine, 24 SCMS, phase2 and sensitivity test binaries | 167 pass, **6 fail**, 7 ignored. The 6 are `sensitivity_radio` ×5 and `sensitivity_security::the_revocations_move_the_crl_size`. None of their inputs changed in the final merge, so they were on `88e24b09` too; not root-caused. The wave 2 run reported `sensitivity_*` as passing, so when they began failing is not established |
-| `88e24b09`: sec, msg, proto, node, mobility | 1,322 pass, 5 fail. All 5 are known mobility traffic tests (calibration ×2, `pedestrian_invariants` ×2, kerbside), and none uses GNSS. Proto after merge fix `3471f2fc`: 316/316 |
-| `88e24b09`: engine, 26 SCMS test binaries | 137 pass, 0 fail, 5 ignored |
-| `88e24b09`: `scms_knobs_runs` | 17/18, then the shuffle test 1/1 after merge fix `3471f2fc`. The full suite was not re-run after the fix |
-| `fragmentation::a_padded_message_…` (M-RX1) | Fails. It also fails on the detect branch's tip, so it predates fix wave 2 |
-| `2004bb87`: sec, msg, proto, node, threat, metrics; engine lib plus 18 SCMS binaries | 1,501 pass, 0 fail; 195 pass, 0 fail |
-| v2xw-server and v2xw-cli (`2004bb87`) | Pass except `longrun_budget`: 24.9 MB against a 24 MB budget. It already failed before (24.8 MB) |
+| HEAD's code (`09e55393`, run at the wave 3 integration): v2xw-sec, msg, proto, node, threat (`calibrate`, `in_the_loop`, `legacy_engine_compare` included), metrics, mobility | 1,830 pass, 5 fail, 3 ignored. The 5 are the known mobility traffic tests (calibration ×2, `pedestrian_invariants` ×2, kerbside `realism`). None uses GNSS, and their values are unchanged |
+| HEAD's code: engine lib plus 29 SCMS, phase2 and sensitivity binaries, `scms_knobs_runs` 18/18 included | 284 pass, **2 fail**, 7 ignored. The 2 failures need an owner decision (§6 item 9) |
+| HEAD `a4982f9f` (BS final 2): sec, msg, proto, node; engine lib plus 17 SCMS, phase2, PQ and sensitivity binaries | 1,015 pass, 0 fail, 1 ignored; 230 pass, the same 2 fail, 7 ignored |
+| The 6 sensitivity failures of `bc3bca1b` | Root-caused and re-stated (rerun §1–§2): `sensitivity_radio` 27/27 (the real 80 B certificate changed frame sizes), `sensitivity_security` 20/20 (a 5 s CRL poll refuses the next pseudonym before it is reported, so nothing is left to link). CLI rows 28/28, 13/13, 3/3, 24/24 |
+| `fragmentation::a_padded_message_…` (M-RX1) | Passes. M-RX1 blamed an SDU's fate on a fragment the PHY lost after it; the engine was right (rerun §3) |
+| Regression digests | `phase2-path` and `i-s1-phase2-60s` re-blessed for wave 3's record changes; the phase2/scms_scale digests are unchanged after the merge |
+| v2xw-server and v2xw-cli (`2004bb87`, not re-run since) | Pass except `longrun_budget`: 24.9 MB against a 24 MB budget. It already failed before (24.8 MB) |
 | `timeline::a_param_change_of_the_arrival_rate_takes_effect_at_its_instant` | Fails (5.29×, band 2.5–5.0). It is traffic-only, has no SCMS, and predates this round |
-| UI (`88e24b09`) | protocol and viewer `tsc -b` pass; Studio typecheck passes; Studio 326/326 unit and 32/32 e2e. The Studio PKI fixtures were re-recorded (`06fe6a72`) |
-| Release build and boot (`bc3bca1b`) | Release build OK (7 m 18 s); the simulator boots on port 8758, and `/agent/status` and `/rpc/schema` both answer 200 |
+| UI (`88e24b09`) | protocol and viewer `tsc -b` pass; Studio typecheck passes; Studio 326/326 unit and 32/32 e2e. No `ui/` change since, but the Studio fixtures that contain `node.security` or the new report fields may need re-recording |
+| Release build and boot (`a4982f9f`) | Release build OK (6 m 57 s); the simulator boots on port 8758, and `/agent/status` and `/rpc/schema` both answer 200 |
 
 ## 3. What is confirmed working
 
@@ -190,43 +204,55 @@ engine reproduces it byte for byte:
 - butterfly expansion and linkage values (#63–70);
 - the six published CTLs (#78).
 
-On HEAD the oracle re-encoded all 54,446 recorded PDUs canonically (DECODE: 16,131 on conf,
-38,315 on mbr) and verified every signature with its own ECDSA.
+On `88e24b09` the oracle re-encoded all 54,446 recorded PDUs canonically (DECODE: 16,131 on
+conf, 38,315 on mbr) and verified every signature with its own ECDSA.
 
-**2. Certificate profiles per provider.**
+**2. Certificate profiles per provider, now checked against the published chains.**
 - provider-a takes ISS's published form: a 70-year root, the root as CRACA, the CRL signer
   root-issued on series 256, and the region on sub-CAs.
 - provider-b takes SAESOL's production form.
+- `component_certs.py` decodes every component certificate from a run's provisioning SPDUs
+  with the oracle's codec and compares it with the published certificate of its role: 10 of
+  10 roles have the same fields and the same encoded size of every field but the name (rerun
+  §8).
 - The oracle's CRACA-CERT and CRL-SSP rules pass on both forms.
 - A governance CRL can revoke a governance sub-CA.
 
 **3. Enrolment (fixed in wave 2, OF-1).** Each device has one enrolment certificate. Its own
 ECA exchange issues it, with a back-dated start and the full 6-year lifetime; the DCM
-registers it; and it signs every Download-Req. On HEAD: DL-SIGN 2,892 and 10,898 checks
+registers it; and it signs every Download-Req. On `88e24b09`: DL-SIGN 2,892 and 10,898 checks
 pass, ENR-LIFE 58 and 99 pass, and 0 devices hold a foreign certificate (oracle-final §8.1,
-§8.2). The F1 capture now has 62 EeRaCertRequests, against 118 when each device had two.
+§8.2). The F1 capture has 62 EeRaCertRequests, against 118 when each device had two.
 
-**4. SCMS architecture, in all 32 matrix runs.**
+**4. SCMS architecture, in all 34 matrix runs.**
 - No separation-of-duties violation, including under the CAMP topology with its LOP.
 - Sealed messages are opened only by their recipient.
 - A device talks only to its RA and the DCM.
 - One provisioning request per OBU over its life (0.54 requests/s scaled to 17 M vehicles,
-  against CAMP's 0.5). At full fleet: 40 certificates for each device's request, about 10
-  requests/s during the fill (final-bench §2).
+  against CAMP's 0.5). At full fleet: 40.0 certificates for each device's request, and 1,933
+  devices provisioned in 240 s, 48.8 % by the home provider (final-run FB2.devices,
+  FB2.provisioning).
 - 20 certificates per device at the weekly top-off, and exactly ×3 under the NYC 60-a-week
   profile.
+- **The rollover top-up at full fleet:** the pseudonym pool goes from 20 to 39.8 within 10 s
+  of the 43,200 s i-period boundary; the home provider issued 12,580 certificates (629
+  devices × 20) in those 10 s (FB2.topups-at-rollover).
 - I-S1: real and modelled cryptography give identical records.
 
 **5. Message sizes.** provider-b matches CAMP Table 3 exactly: response 454/470, ack 292/294,
-ECA response 958. CRL sizes are 328 B with one entry and about 33 B for each further entry.
-provider-a sizes are under §6 item 9.
+ECA response 958. provider-a's sizes (501/517, 304/306, 1,064) are now explained to the byte
+by the published ISS certificates: a 12 B `identifiedRegion` on the ICA and every component,
+and a 35 B `encryptionKey` on the PCA and the ECA (rerun §8). CRL sizes are 328 B with one
+entry and about 33 B for each further entry.
 
 **6. Trust list (fixed in wave 2, R-TRUSTLEAK).** The two kinds of frame the engine sizes
-instead of encoding (the RSU's CRL broadcast and a report relayed over the air) now carry
-their signer's certificate. Every receiver holds them to its installed CTL roots. With
-provider-b off the trust list, provider-a receivers verify 0 of its messages (280 before).
-At full fleet, 2,019,081 SPDUs were checked with 0 refused (final-bench FB.trust). The engine's
-own CTL bytes pass the oracle's `ctl-files`, with a 3-of-5 quorum (oracle-final §8.4).
+instead of encoding (the RSU's CRL broadcast and a report relayed over the air) carry their
+signer's certificate. Every receiver holds them to its installed CTL roots. With provider-b
+off the trust list, provider-a receivers verify 0 of its messages (280 before; 0 again in the
+`77cffb5b` re-run, realism V6). At full fleet, 2,019,081 SPDUs were checked with 0 refused
+(final-bench FB.trust), and the second full-scale run shows no signature, PSID, CTL or CRL
+loss cause (FB2.trust). The engine's own CTL bytes pass the oracle's `ctl-files`, with a
+3-of-5 quorum (oracle-final §8.4).
 
 **7. Revocation path on the real calendar.** Every case went through the steps the deployment
 prescribes:
@@ -236,61 +262,92 @@ prescribes:
   passes);
 - the first fetch after publication.
 
-The oracle confirms the CRL rules independently on HEAD: CRL-SEQ, CRL-KEEP, CRL-SLA, CRL-PUB,
-CRL-MATCH and RA-BLOCK. Every device the oracle finds on a CRL is an attacker in the ground
-truth: 4 of 4 decided on conf, 12 of 12 on mbr.
+The oracle confirms the CRL rules independently on `88e24b09`: CRL-SEQ, CRL-KEEP, CRL-SLA,
+CRL-PUB, CRL-MATCH and RA-BLOCK. Every device the oracle finds on a CRL is an attacker in the
+ground truth: 4 of 4 decided on conf, 12 of 12 on mbr.
 
-**8. CRLs from t0, full lists only (fixed in wave 2, R-NOCRL and O-1).**
+**8. CRLs from t0, full lists only (fixed in wave 2, R-NOCRL and O-1), and now on the
+record (OF-3, fixed in wave 3).**
 - Every CRACA signs an empty full CRL at t0 and renews it by `nextCrl`, as a deployment
   running since 2015 does. On conf: `F614/0` at t0, then `F615/0` with the revocations.
 - Full CRLs only, with no gap in `indexWithinI`: on mbr 614/0, 615/0, 615/1, 615/2, 616/0,
   each `nextCrl` exactly 7 days on.
+- **The records now show what a device holds** (measure §3): each `node.security` row lists
+  the signed CRLs the node's receiver verified and holds (craca, series, counter, issue date,
+  `nextCrl`), and `pki.flow` carries each device's pre-run CRL download, marked `preload`.
+  The engine was right before; `crl_version` counted entries, which is 0 for an empty list.
+- **The 2-week overdue rule acts from t0 at runtime.** In the multi-week run with the CRL
+  Generator down, the home list issued at t0 goes overdue at exactly t0 + 21 d = 1,814,400 s:
+  0 refusals before it, then 45 % of W3's last minute and 48 % of W4 refused, the home
+  provider's share (stress `MWC.overdue-onset`, fixed; rerun §7).
 - At full fleet, 2,000 receiver installs of the t0 CRLs (2 per device) and 60 RSU installs
-  (FB.crl). See OF-3 (§6 item 2) for what the records do not show.
+  (FB.crl).
 
 **9. CRL freshness over five weeks** (stress multi-week, on `2004bb87`).
 - Five i-period rollovers, each signing under the right period.
 - 10 CRL versions in 33 days, reissued by `nextCrl`.
 - 12,592 conditional polls answered 412, and 0 refusals.
-- The 2-week overdue rule acts in a run. With the CRL Generator down after its first CRL, every
-  message under that CRACA was refused once the list became overdue (87,823 refusals), and
-  traffic recovered after the Generator came back.
+- With the CRL Generator down after its first CRL, every message under that CRACA was
+  refused once the list became overdue (87,823 refusals), and traffic recovered after the
+  Generator came back. A parked car that returns after four weeks refuses one message at
+  power-on and then none (`MWP.overdue-on-return`, pass on `77cffb5b`).
 - Re-enrolment: 1 of 75 devices, the expected 1.1.
 
-**10. Downloads and report uploads (OF-2 fixed in wave 2).**
-- Every download rule passes the oracle on both HEAD runs: DL-ACK, DL-ENC, DL-SIGN, DL-TIME,
-  DL-NAME, DL-AFTER and DL-WAIT. Conditional GET with 412 is in force, and so is `Range`
-  resume.
+**10. Downloads and report uploads (OF-2 fixed in wave 2; R-UNSEC fixed in wave 3).**
+- Every download rule passes the oracle on both `88e24b09` runs: DL-ACK, DL-ENC, DL-SIGN,
+  DL-TIME, DL-NAME, DL-AFTER and DL-WAIT. Conditional GET with 412 is in force, and so is
+  `Range` resume.
 - Every cellular report upload carries its SPDU. MBR-UP passes 3,930 and 18,618 checks; the
   1,695 uploads with no bytes are gone. A detection that cannot be built as an SM-MBR v1.1
   upload is not filed (`reports_not_filed`).
+- **A roadside unit's own detection is not filed under the US profile** (measure §4):
+  [SM-MBR] §3 signs a report with the end-entity's pseudonym certificate, its evidence is
+  "a BSM from the sender and a BSM from the receiver", and the USDOT RSU Specification v4.1
+  gives a unit no detection or reporting function. `reports_from_rsus` is 0 on P-256, and
+  the sized-only backhaul reports (583 on conf, 1,114 on mbr) are gone. A unit still relays
+  vehicles' reports. `modelled_reports: 1` keeps the old path for research. Under PQ this
+  is still wrong (§6 item 10).
+- **A report carries the BSMs its reporter judged** ([SM-MBR] §2.3.1.2.1, §2.3.1.3.1): the
+  US profile's consecutive pair, matched by generation time. Before, it attached the
+  accused's last two BSMs on the air when the report was built.
 
 **11. Retries and outages.**
 - The EE retries after 10 s, at most 10 times an hour. With an RA outage across the top-ups,
   12 of 12 complete.
 - A message between components waits for a component that is down, and the component's timers
   run when it restarts.
-- A device that is switched off reaches no part of the SCMS (F-OFF).
+- A device that is switched off reaches no part of the SCMS (F-OFF), with one exception at a
+  fast-forward boundary that is not root-caused (§6 item 8).
 
 **12. Receiver rules.**
 - 1609.2 receiver validation rule by rule (veh R2–R9, R12–R18), and the CTL chain (R1).
 - The device checks the CTL's elector quorum.
 - A composite CRL is kept when one of its CRLs is unverifiable.
 - Uncompressed explicit keys are accepted.
-- The `generationTime` relevance window is enforced.
+- The `generationTime` relevance window is enforced, and a handset now applies it when it
+  takes a frame, not when the frame arrived (measure §5). That was the cause of the 43,125 s
+  old evidence: frames that waited in a handset's inbox across a fast-forward were judged
+  12 h later.
 - One car with a 5,000 s clock error no longer gets anyone honest revoked (19 → 0).
 
-**13. The US misbehaviour profile (fixed in wave 2, R-USFP).** The cause was the GNSS input,
-not the detector: the raw 10 Hz fixes carried fresh 1.6 m white noise each, so consecutive
-honest BSMs disagreed by 2.65 m at the median. The US presets' receivers now output a
-smoothed navigation solution (τ 100 s) with a 0.3 m/s static hold. On the realism base, same
-seed (usfp §3):
-- honest vehicles revoked 26 → 0; attackers revoked 1 → 2 of 3; reports at the MA
-  7,488 → 235;
-- att10: 0 honest, 4 revoked. sybil: 0 honest, 2 revoked;
-- every vehicle attacker heard by at least 3 reporters is revoked;
-- `gnss-raw` reproduces the old run to the report, so the receiver output accounts for all
-  of R-USFP. Four tests were proved red with their fault injected.
+**13. The US misbehaviour profile at quarter density (R-USFP fixed in wave 2, R-FS40 in
+wave 3).**
+- **R-USFP.** The raw 10 Hz GNSS fixes carried fresh 1.6 m white noise each. The US presets'
+  receivers now output a smoothed navigation solution (τ 100 s) with a 0.3 m/s static hold.
+  On the realism base, same seed (usfp §3): honest vehicles revoked 26 → 0; attackers revoked
+  1 → 2 of 3; reports at the MA 7,488 → 235. `gnss-raw` reproduces the old run to the report.
+- **R-FS40** (measure §1). The receiver carried its solution across an epoch by the later
+  velocity alone, while the OBU dead-reckons each BSM to its own phase; near a stop two
+  consecutive BSMs could then coincide, which ConstantPosition rightly flags. The solution
+  now moves by the mean of the two measured velocities (Hatch 1982's carrier-phase delta,
+  `gnss/error/gauss-markov` 1.2.0). Monte Carlo of stop-and-go creep: 509 frozen pairs in
+  396,000 before, 4 after. At quarter density `constantPositionFrozen` fell 28 → 0 and
+  reports 54 → 15 (final-run §2).
+- In all 34 matrix runs on `77cffb5b` no honest device is revoked, except `gnss-raw` (26, the
+  fault by construction). att10 revokes 4 of 9 attackers and sybil 2; every vehicle attacker
+  heard by at least 3 reporters is revoked.
+- The ConstantPosition check is as SM-MBR v1.0 §2.3.1.2.3 specifies, and the static hold
+  cannot trigger it (measure §1).
 
 **14. Metrics on the realism base.** All are inside their sourced bands:
 - PDR 0.364;
@@ -302,44 +359,61 @@ seed (usfp §3):
 - certificate pool mean 25.7;
 - no signature, parse or backend failures, and no starvation.
 
-**15. Full fleet, first 155 s** (bench §0, final-bench §2). Within 100 m the PDR is 0.84,
-the same as the quarter fleet. The other numbers:
-- BSM latency mean 12.39 ms, p99 14.94 ms;
-- CBR mean 0.074–0.078 and p95 0.14–0.16 after the fill, below J2945/1's 0.5;
-- MBR airtime 0.21 % (it was 34 % at quarter fleet under R-USFP);
-- 20 valid pseudonyms at every census, and 0 starved.
+**15. Full fleet, both live windows** (bench §00, final-run §4). The 0–240 s window and the
+43,170–43,230 s rollover window ran in full:
+- PDR within 100 m 0.833–0.843, and 0.846–0.853 in the rollover window; the quarter fleet
+  gives 0.838. The 130–150 s windows are identical to the first full-scale run's;
+- BSM latency mean 12.39–12.46 ms, p99 14.94–15.07 ms;
+- CBR mean 0.073–0.087 and p95 0.13–0.20, below J2945/1's 0.5;
+- 240–268 verifications per node per second, verification queue p99 0;
+- 20 valid pseudonyms at every census until the boundary, 39.8 after it, and 0 starved.
 
 **16. Determinism.** Record digests are identical at 1 and 4 threads. That holds on the 33-day
 run, on the first 5 s of the full fleet, and on the hybrid ML-DSA-44 run, where
 `metrics.json` and `run-report.json` are byte-identical too. The check can fail: three runs
-that differ in one setting each give three digests.
+that differ in one setting each give three digests, and so do PQ0, PQHFC and PQHMC
+(`099bed7a…`, `a73101dd…`, `b33458e9…`, final-run PQ.digests).
 
-**17. Post-quantum at density**, quarter fleet. These are modelled sizes and costs, since no
-standard defines PQ encodings (pq-profile):
-- ML-DSA-44: 2.30 frames per BSM and BSM airtime ×12.6; verified BSMs −33 %.
-- Hybrid ML-DSA-44: 2.30 frames per BSM, airtime ×13.0, CBR 0.125, verified −33.8 %.
-- Hybrid Falcon-512: airtime ×4.4.
+**17. Post-quantum at density** (quarter fleet). These are modelled sizes and costs, since no
+standard defines PQ encodings (pq-profile).
+- **The Partially-Hybrid certificate cycle (R-CCSIG fixed in wave 3).** A node's own
+  messages are signed, sized and priced with ECDSA, as Twardokus et al. (NDSS 2024) design
+  it. A receiver pays the PQ check once for each certificate it learns
+  (`cert_pq_verifications`). The validator refuses the cycle with a purely PQ scheme
+  (ccsig-memory §1). Measured on current code (final-run §2):
+
+  | | ECDSA | Falcon-512 cycle | ML-DSA-44 cycle | ML-DSA-44 on every SPDU |
+  |---|---|---|---|---|
+  | BSM PSDU mean | 207 B | 380 B (was 1,045) | 814 B (was nothing sent) | 1,332 B, 2.30 frames per BSM |
+  | BSM airtime, 60 s | 13.6 s | 23.2 s | 47.5 s | 176.2 s |
+  | Verified messages | 380,664 | −2.1 % | −5.7 % | −33.8 % |
+  | BSM e2e mean | 3.72 ms | 3.96 ms | 4.57 ms | 12.06 ms |
+
+- Hybrid ML-DSA-44 on every SPDU: CBR 0.125. Hybrid Falcon-512 on every SPDU: airtime ×4.4.
+- **RSUs learn the CRL under PQ** (R-PQRSUCRL, fixed in wave 3): 60 RSU installs in both
+  cycle runs (0 before).
 - R-PQMBR is fixed. An over-MTU frame is refused and counted as refused, not as uploaded.
-  Under `generic-sdu` it is fragmented: 6 relayed reports were delivered this way, and 0
-  were miscounted.
+  Under `generic-sdu` it is fragmented.
 - Hybrid top-ups complete after the RA's request shuffle. Nobody starves.
 
 **18. Speed.** One check redid a P-256 multiplication for every pseudonym at every backend
-step. With a memo, the realism base went from 2,074 s to 164 s with identical results.
-`pq-base` went from 1,175 to 125 CPU-s.
+step. With a memo, the realism base went from 2,074 s to 164 s with identical results
+(31–41 s on `77cffb5b`). `pq-base` went from 1,175 to 125 CPU-s.
 
 ## 4. Verdicts changed in this round
 
 ### 4.1 Fixed (16 rules since 2026-10-18)
 
+No rule verdict changed in fix wave 3 or final runs part 2.
+
 **Fixed in fix wave 2.** These are the five rules reopened at `0f7eda5c`.
 
 | Row | Before | Now | Evidence |
 |---|---|---|---|
-| proto C6 (the RA serves only registered enrolment certificates) | OF-1: the RA answered Download-Reqs signed by an enrolment certificate it never registered (112 on conf) | One certificate: the ECA exchange's own, registered by the DCM, signs every Download-Req | `d7b64fae`, `89f54fe4`, `3471f2fc`; oracle DL-SIGN on HEAD 2,892 / 10,898 pass (was 1,320 / 5,245 red); `oracle_final.rs::one_enrolment_certificate_…` passes on HEAD, and its logic is red on the `4924a5d2` recording |
-| proto C8 and gov E-1 (enrolment certificate valid 6 years) | OF-1: a second certificate lasting 0.9–5.5 years; age modelled as a short lifetime | Back-dated start, full 6-year duration, clamped to the ECA's start. A late joiner's pre-run exchange runs at that start (merge fix `3471f2fc`) | ENR-LIFE 58 / 99 pass on HEAD (was 56 / 97 red); `enrolment::an_aged_enrolment_is_the_one_certificate_its_eca_exchange_issued` |
+| proto C6 (the RA serves only registered enrolment certificates) | OF-1: the RA answered Download-Reqs signed by an enrolment certificate it never registered (112 on conf) | One certificate: the ECA exchange's own, registered by the DCM, signs every Download-Req | `d7b64fae`, `89f54fe4`, `3471f2fc`; oracle DL-SIGN on `88e24b09` 2,892 / 10,898 pass (was 1,320 / 5,245 red); `oracle_final.rs::one_enrolment_certificate_…` passes, and its logic is red on the `4924a5d2` recording |
+| proto C8 and gov E-1 (enrolment certificate valid 6 years) | OF-1: a second certificate lasting 0.9–5.5 years; age modelled as a short lifetime | Back-dated start, full 6-year duration, clamped to the ECA's start. A late joiner's pre-run exchange runs at that start (merge fix `3471f2fc`) | ENR-LIFE 58 / 99 pass on `88e24b09` (was 56 / 97 red); `enrolment::an_aged_enrolment_is_the_one_certificate_its_eca_exchange_issued` |
 | proto F6 (each report is POSTed through the RA with its Download-Req) | OF-2: 1,695 of 2,991 cellular uploads on conf carried no SPDU | A detection that cannot be built as an SM-MBR v1.1 upload is not filed. Every upload carries its SPDU | `e8475281`; MBR-UP 3,930 / 18,618 pass (was 1,695 / 49 red); `oracle_final.rs::every_cellular_report_upload_carries_its_spdus`, red in Python on the `4924a5d2` recording |
-| veh R1 (the signer chains to a root on the installed CTL) | R-TRUSTLEAK: 280 provider-b messages verified with provider-b off the CTL | Sized frames carry the signer certificate, and OBU, RSU and VRU receivers validate it to the installed roots | `89f54fe4`; off-ctl 280 → 0 (BS wave 2); `d18a1e80` proved red at the engine (45 unchecked) and at the RSU. No fault was injected into the OBU or VRU fallback |
+| veh R1 (the signer chains to a root on the installed CTL) | R-TRUSTLEAK: 280 provider-b messages verified with provider-b off the CTL | Sized frames carry the signer certificate, and OBU, RSU and VRU receivers validate it to the installed roots | `89f54fe4`; off-ctl 280 → 0 (BS wave 2; 0 again on `77cffb5b`); `d18a1e80` proved red at the engine (45 unchecked) and at the RSU. No fault was injected into the OBU or VRU fallback |
 
 **Fixed at `2004bb87`** (the PKI, flows and policy wave):
 
@@ -363,6 +437,28 @@ still not encoded.
 ### 4.2 Fixes that change runtime behaviour but no checklist row
 
 Each was fixed and proved red, as its report describes.
+
+**In fix wave 3** (BS wave 3):
+- **R-CCSIG** (ccsig-memory §1): the Partially-Hybrid cycle signs a node's messages with
+  ECDSA and checks the PQ signature once per certificate. It reverses `45f0942f` (owner
+  decision applied). Faults F1 and F2 red.
+- **R-PQRSUCRL** (ccsig-memory §3): RSUs fetch and install the CRL under PQ. Fault F3 red.
+- **Per-node memory de-duplication** (ccsig-memory §2): shared ACA and pseudonym certificate
+  `Arc`s, `checked_at` not stored under the US profile, and UsSmMbr evicts senders after
+  30 s (ASSUMPTION). About 10–15 % of the live heap; results unchanged. Faults F4 and F5 red.
+- **R-FS40** (measure §1): the smoothing receiver propagates by the mean velocity (§3
+  item 13).
+- **The privacy run report** (measure §2): `privacy_links_claimed` counts only claims across
+  a pseudonym change; new `privacy_changes_heard` and `privacy_links_spurious`. The
+  `linkability` metric was already right.
+- **OF-3** (measure §3): held CRLs and the pre-run CRL fetch are recorded (§3 item 8).
+- **R-UNSEC** (measure §4): an RSU's own reports are not filed under the US profile (§3
+  item 10).
+- **The old evidence** (measure §5): a handset applies the relevance window at processing
+  time, and a report carries the BSMs its reporter judged.
+- **M-RX1** (rerun §3): the metric no longer blames an SDU's fate on a fragment lost after
+  it. The engine was right; the check was wrong.
+- **Six sensitivity rows re-stated** on their measured causes (rerun §1–§2).
 
 **In fix wave 2** (BS wave 2):
 - **R-USFP**: the smoothed GNSS receiver in every US preset (§3 item 13).
@@ -432,7 +528,7 @@ could never fail on the engine's capture, and the CRL faults could not reach the
 | veh R10 | Country regions are not checked against a location; they are only counted | None for US pseudonyms, which carry no region (`region_unchecked` = 0) |
 | veh R11 | Same as crypto #38 | Counted |
 | veh C6 | "2 km since the last change" is measured as distance travelled, not straight-line distance | On a winding route a change can come slightly early |
-| veh M11 | Relayed report uploads go on safety channel 172, not on a service channel advertised by WSA | Report airtime on 172 is an upper bound (0.21 % at full fleet). The radio has no per-channel MAC queues and no channel switch (07 §7 item 4) |
+| veh M11 | Relayed report uploads go on safety channel 172, not on a service channel advertised by WSA | Report airtime on 172 is an upper bound (0.21 % at full fleet in the first run). The radio has no per-channel MAC queues and no channel switch (07 §7 item 4) |
 | veh U5 | No WSA encoder | The SCMS service cannot be advertised, so M11 cannot be fixed yet |
 
 Fourteen of these change nothing a device trusts or does: crypto #30, #35 and proto E7, crypto
@@ -443,80 +539,118 @@ counted.
 
 ## 6. Runtime defects and findings with no checklist row
 
-In order of impact. Each has its evidence in the named report. Items fixed in wave 2 are in
-§4.2.
+In order of impact. Each has its evidence in the named report. Items fixed in this round are
+in §4.2. None of the open items below changes a rule verdict, but items 1–3 decide whether
+any two-day misbehaviour number is a real-world number.
 
-1. **R-CCSIG: the post-quantum certificate cycle signs every message with the hybrid
-   scheme** (final-bench §3). Open, engine defect.
-   - The design the fragmenter cites (Twardokus et al., NDSS 2024, Partially-Hybrid) keeps
-     ECDSA on every BSM.
-   - Under ML-DSA-44 every BSM and PSM is over the MTU, so the run transmits nothing (50,180
-     refused).
-   - Under Falcon-512, BSMs are 1,045 B, where the design gives about 380 B.
-   - The validator accepts both configurations.
-   - **Impact:** every certificate-cycle number so far is wrong. The real US P-256
-     deployment is not affected. The fix reverses `45f0942f` and moves the cert-cycle
-     digests (owner decision, §9).
-2. **OF-3: no record shows a device holding the t0 CRL** (oracle-final §8.6, PLAUSIBLE).
-   - The t0 CRLs are in `pki.state`, but no `pki.flow` message carries them.
-   - `node.security` reads `crl_version 0` until the first revocation CRL.
-   - Against that, the run report counts 2,000 receiver installs of the t0 CRLs at full fleet
-     (FB.crl). So a recording gap is the likelier cause, but the oracle cannot tell.
-   - **Impact:** the 2-week overdue rule from t0 cannot be verified independently. Owed:
-     record the pre-run CRL fetch as a flow, and report the held CRL's (craca, series,
-     version).
-3. **Honest false positives at full density** (bench §0.1 item 3; FB.honest-revoked).
-   - In 40 s at full fleet, the US profile filed 229 reports about 32 honest devices. Most
-     verdicts were `constantPositionFrozen` (165 of 236), with a median speed of 0.18 m/s in
-     queues.
-   - The two-day consequence (cases, decisions, revocations) is unmeasured, because the run
-     did not finish.
-   - On the realism base the residue is 5 reports about one honest vehicle, with none
-     revoked (usfp §6).
-   - The 0.3 m/s hold and the 100 s smoothing constant are ASSUMPTIONS on cited mechanisms.
-4. **Memory grows by about 1.4–2 MB per node on the map, plus transient peaks** (bench §0.1
-   item 1).
-   - The full-scale benchmark hit the 2.5 GB cap at about 155 of 172,800 simulated seconds.
-   - Finishing it needs 3–4 GB and 4–5 CPU-hours.
-   - **Impact:** there is no full-fleet two-day result: no rollover window and no
-     fast-forward.
-5. **The privacy observer claims links with no pseudonym change** (bench §0.1 item 2).
-   2,873 link claims, 0 correct, 0 pseudonym changes in 40 s. Any linkability number from the
-   observer is unreliable until it is explained.
-6. **The US profile cannot report a handset** (usfp §3). SM-MBR v1.0 defines reports for
-   the BSM (PSID 0x20) only, so a PSM-sending attacker goes unreported. This is a gap of
-   the real profile, which the engine reproduces faithfully. The research suite catches the
-   attacker through its stale/replay check.
-7. **R-UNSEC and O-3: an RSU's own reports have no bytes** (07 §7 item 2; oracle-final §8.6).
-   On conf 583 and on mbr 1,114 `rsu-backhaul` reports are sized only. MBR-UP exempts this
-   path, so no checker verifies them. Whether an RSU may sign an SM-MBR with its application
-   certificate is an owner question.
-8. **Post-quantum path, modelled only** (pq-profile §3; stress §7). Under PQ:
-   - RSUs install no CRL (60 → 0), and have no application-certificate cycle;
-   - receivers check CRL entries against the Generator's list, not a signed CRL;
-   - every top-up is a fresh request (there is no PQ butterfly).
-   No standard defines PQ encodings, so no PQ number is a real-world number.
-9. **provider-a sizes** (matrix Open 5).
-   - The ISS form gives response 501/517, ack 304/306 and ECA response 1,064. CAMP Table 3
-     gives 454/470, 292/294 and 958.
-   - Most likely its published component certificates are longer. No oracle check of the
-     ISS profile exists yet.
-10. **Unexplained, not yet shown to be defects:**
-    - **The 43,125 s-old evidence.** 10 reports quoted a certificate's BSM from before the
-      fast-forward. They are gone with the R-USFP fix (0 in every run after it), and the MA
-      had set them aside correctly. The receiver path that produced them is not root-caused
-      (usfp §5).
-    - **Fast-forward ticks.** 865,653 in the edge peer-root-removed run.
-    - **Case-board review time.** The board shows 28,799.2 s, against the expected
-      ≥ 28,800 s (matrix L5).
+1. **R-FFHOLD: reports are held in flight across a fast-forward** (final-run §4 item 1).
+   Open, engine defect.
+   - At full fleet the census `p2.in_flight` stayed at 1,258 from 240 s to 43,170 s, and the
+     MAs had 0 reports. They received the first window's reports only at the 43,200 s
+     i-period boundary.
+   - The fast-forward's next wake apparently does not include in-flight report deliveries.
+   - **Impact:** report → case → decision timing is 12 h late for anything reported before a
+     fast-forward. Whether the quarter-fleet runs, which also cross a fast-forward, carry
+     the same delay has not been checked.
+2. **R-FFBURST: an honest-report burst on resuming after a fast-forward** (final-run §4
+   item 2). Open, cause unconfirmed.
+   - 4,876 reports in the 10 s after the 43,170 s resume, against about 80 per 10 s live.
+   - The hypothesis is that the GNSS model or the vehicles' kinematics step across the gap as
+     one epoch. The node count also fell from 1,833 to 1,281 at the resume.
+   - With item 1 this gave 15,062 reports at the MAs in 20 s and **71 cases about honest
+     vehicles** (3.3 % of vehicles). None was decided before the run was stopped.
+3. **Honest reports at full density** (FB2.honest-reports). Open.
+   - The first live window filed 1,935 reports in 240 s (8.1 a second), all about honest
+     vehicles. The first full-scale run filed 229 in 40 s (5.7 a second), mostly
+     `constantPositionFrozen`.
+   - The R-FS40 fix removes that cause at quarter density (28 → 0) and in Monte Carlo, but
+     it is not shown to hold at full density. The detector breakdown is only in the run
+     report, which the stopped run did not write. The 71 `positionJump` verdicts of the
+     40 s window were not investigated, and density rises into gridlock (median speed 0 from
+     160 s).
+   - The 0.3 m/s hold, the 100 s smoothing constant and the velocity σ are ASSUMPTIONS on
+     cited mechanisms.
+   - **Impact:** no full-fleet false-positive rate is a real-world number until items 1–3
+     are settled.
+4. **The full-scale benchmark has not finished** (bench §00, final-run §4).
+   - Both live windows ran in full, under a 3.5 GB cap, with a peak of 3,109 MB.
+   - The second fast-forward runs at about 6.7 simulated seconds per wall second, one SCMS
+     kernel step per simulated second (bench §9.2). The run was stopped at 47,340 of
+     172,800 s, about 5.4 hours short, so it has no end-of-run report.
+   - **Memory:** the wave 3 de-duplication removed 10–15 % of the live heap but does not show
+     at full scale (2,690 MB at 150 s, as before). Allocator retention after transient peaks
+     dominates; the 2.5 GB target is not met (ccsig-memory §2).
+   - **Impact:** there is no two-day full-fleet result: no CRL, case or decision outcome
+     (FB2.crl, FB2.backend-load), and no fast-forward tick count (FB2.ff-ticks).
+5. **The rollover registers no pseudonym change** (FB2.privacy). `pseudonym_change_rate` is 0
+   in every window, the 43,200 s boundary included, and linkability is 0 of 0, although the
+   pool doubles there; the quarter fleet counted 314 changes at its rollover. The privacy
+   observer's 2,873 link claims are explained and fixed (measure §2), but no privacy number
+   at full fleet can be read until this is.
+6. **Pedestrian wait counts the fast-forward** (final-run §4 item 3). `ped_wait` has a mean
+   of 3,465 s in the window after the resume, the same class of defect as the AoI charge
+   fixed in the matrix round.
+7. **R-JOINCRL: a car that joins mid-run holds only the t0 CRLs** (rerun §7, §9 item 1).
+   Late in a long run those lists are overdue, so the joiner refuses its home provider's
+   messages until its first download (2–49 s): 755 refusals at 4 joiners in MWC's W5, and
+   18,617 at 27 joiners in MWP. It should hold the newest list each CRACA published before
+   it joined, as `preload_at` does for certificates.
+8. **A switched-off car records CRL downloads** (`MWP.off-no-backend`, reopened; rerun §7).
+   Node 20 is off from 645 s to 2,419,510 s, but `proto.revocation` records it downloading,
+   processing and enforcing three CRLs at 604,740.2 s, the first live step after a
+   fast-forward. Not root-caused.
+9. **Two engine tests fail and need an owner decision** (BS wave 3). Neither was weakened.
+   - `scms_wiring::detectors_file_real_us_reports_that_the_ma_opens_and_verifies`: "the MA
+     opened no case". Its 9 real reports are filed, opened and verified, but once RSUs no
+     longer file reports (R-UNSEC), vehicle reports alone do not reach the MA's quorum of 3
+     independent reporters within 120 s. The test needs a longer run or a vehicle-only
+     quorum.
+   - `pq_relay::an_oversized_relayed_report_or_crl_frame_is_fragmented_and_acted_on_whole`:
+     "no vehicle report reached the proxy through a unit". The GNSS fix moved which
+     relay-only vehicle detects and where, so no forwarding RSU hears the 4 relayed reports.
+     It fails on the detpriv tip alone, so the merge did not cause it. It needs a scenario
+     change.
+10. **R-PQUNSEC: under PQ an RSU's own reports are still filed** (final-run §3). PQHFC files
+    7 and PQHMC 9. `Phase2::real_mbr` returns `Off` when `pki` is `None`, before the R-UNSEC
+    roadside check. The fix is one line, but it may leave the `pq_relay` R-PQRSUCRL test's MA
+    without a case, the same decision as item 9.
+11. **Post-quantum path, modelled only** (pq-profile §3; final-run §3).
+    - RSUs have no application-certificate cycle under PQ.
+    - Receivers check CRL entries against the Generator's list, not a signed CRL.
+    - Every top-up is a fresh request (there is no PQ butterfly).
+    - VRU handsets always price ECDSA.
+    - Both cycle runs show 47 `Invalid` verification states that P-256 does not, with no
+      refusal counted; not root-caused (perhaps item 13's label).
+    - No standard defines PQ encodings, so no PQ number is a real-world number.
+12. **The enrolment certificate name** (rerun §8). Every enrolment certificate is named
+    `ee-<device>.provider-a`, including the 46 that provider-b's ECA issues. The name is
+    still unique per device, so crypto #28, proto C3 and gov E-3 hold, and the size is
+    unchanged. Fixing it moves certificate bytes and the regression digests.
+13. **An overdue-CRL refusal is labelled `signature-invalid` on `node.rx`** (rerun §9 item
+    3). In MWC's W4 the run report counts 97,679 `crl-overdue` refusals and `node.rx` has
+    exactly 97,679 `signature-invalid` fates. An analyst reading `node.rx` would see forgery
+    where there is a stale list.
+14. **The US profile cannot report a handset** (usfp §3). SM-MBR v1.0 defines reports for
+    the BSM (PSID 0x20) only, so a PSM-sending attacker goes unreported. This is a gap of
+    the real profile, which the engine reproduces faithfully. The research suite, with
+    `modelled_reports: 1`, catches it: 3 of 3 revoked.
+15. **Unexplained, not yet shown to be defects:**
+    - **Fast-forward ticks.** 865,653 in the edge peer-root-removed run; related to item 4's
+      slow second fast-forward.
+    - **Case-board review time** (realism L5). The board shows 28,799.95 s on `77cffb5b`,
+      against the expected ≥ 28,800 s. The review clock starts at report receipt and the
+      case's corroborated stamp comes up to a second later.
     - **O-2.** Four Saturday decisions on mbr are late under the strict reading of [SM-PROV]
       3.4.10, which does not say which reading applies.
-11. **Outside the SCMS:**
-    - LTE-V2X BSM p95 latency is 112 ms, over the 100 ms budget, because the BSM is not aligned
-      with its SPS reservation.
+    - **The generic reassembler's 64-set buffer** fills in the dense padded fragmentation
+      run and refuses new sets (11,607). This is a real effect of the fragmenter's default,
+      not a defect (rerun §3).
+16. **Outside the SCMS:**
+    - LTE-V2X BSM p95 latency is 112 ms, over the 100 ms budget, because the BSM is not
+      aligned with its SPS reservation (matrix `lte-latency-budget`).
     - Rebroadcasting a 336 kB standing CRL every 5 s on channel 172 costs about 0.54 Mbit/s per
       RSU (07 §7 item 5). This is a configured behaviour, not a defect.
-12. **Red-team finding.** The `generationTime` window makes a replay older than 2 s harmless,
+17. **Red-team finding.** The `generationTime` window makes a replay older than 2 s harmless,
     but the replayer is never reported or punished: 11 of 11 replayers were revoked before the
     window, and 0 after it (07 §8.1).
 
@@ -556,8 +690,9 @@ This round added more labelled ASSUMPTIONs:
 - the retry between components, 10 s;
 - the `generationTime` window. Its values are C2C-CC's (2 s, 600 s, 40 ms), because the US
   J2945/1 values are not public;
-- the GNSS receiver's smoothing constant (100 s, after DO-229's carrier smoothing) and static
-  hold (0.3 m/s, after u-blox).
+- the GNSS receiver's smoothing constant (100 s, after DO-229's carrier smoothing), static
+  hold (0.3 m/s, after u-blox) and velocity σ;
+- the US profile's sender eviction after 30 s without a message (at least 10× `max_gap_s`).
 
 ### Governance, deployment and calendar (6)
 
@@ -575,14 +710,14 @@ This round added more labelled ASSUMPTIONs:
 | Row | Unknown | How the engine models it |
 |---|---|---|
 | veh S1 | Deployed OBUs' verification policy | Verify-all, on-demand and prioritised. On-demand with detection now warns (07 §8.2): reports fall from 897 to 79 |
-| veh S6 | The full-certificate share | Re-measured in steady state at 17 % (matrix) and 16.1 % at full fleet, inside the sourced band of 5–30 % |
+| veh S6 | The full-certificate share | Re-measured in steady state at 17 % (matrix) and 16.1–19.8 % at full fleet, inside the sourced band of 5–30 % |
 | veh P7 | P2PCD concurrency limits | 8 responses, 8 inline entries |
 | veh P8 | Which P2PCD flavour US devices run | Out-of-band |
 | veh C10 | Whether J2945/1 clears the path history at a change | The code clears it (§8 item 4) |
 | veh C11 | The pseudonym-change rule for J2945/9 handsets | The scenario's rule |
 | veh M9 | The device report store quota | 64 KiB |
 | veh M10 | The report rate limit | At most one per second per (reporter, accused) |
-| veh M13 | Whether RSUs run misbehaviour detection | They do, as reporters. Their reports are sized only (§6 item 7) |
+| veh M13 | Whether RSUs run misbehaviour detection | Under the US profile a unit's own detection is not filed, on the reading of [SM-MBR] §3 and the USDOT RSU Specification v4.1 (measure §4; §8 item 6). `modelled_reports: 1` files them sized-only for research. Under PQ they are still filed (§6 item 10) |
 | veh V3 | The PSM rate | 1 Hz with a 100 ms floor |
 | veh U3 | RSU verification policy | Verify-all |
 
@@ -594,39 +729,53 @@ The totals count each row as its own checklist records it, with the changes in �
    Table 1 in full and found no SPaT, MAP or TIM SSP in it. On that reading both rows match,
    and the deviations would be 20.
 2. **Pseudonym region: open.** crypto #32 says unverifiable. Gov F-2 says "no region", from
-   [SMP] §6.3.3.
+   [SMP] §6.3.3. The published ISS and SAESOL component certificates carry regions; the
+   pseudonym profile's does not (rerun §8).
 3. **i-period time base: owner decision** (crypto #10 against gov K-5).
 4. **Path history at a change: the checklist text is out of date.** veh C10 says the engine
    does not clear it. `vehicle.rs` `set_identity` does clear it.
 5. **MA concurrency: settled.** The MA ran one case at a time; it now runs cases side by side
    (R-SERIAL, 07 §5 bug 1). The "27 decisions in every variant" were the R-USFP false
-   positives, and are gone (usfp §4).
+   positives, and are gone (usfp §4; att10 now 4 decisions).
+6. **RSU reporting: open.** veh M13 says unverifiable: no source states whether deployed RSUs
+   run detection. The DETPRIV package read [SM-MBR] §3 (a report is signed with the
+   end-entity certificate, a pseudonym in CAMP's design), §2.3.1.4.1 (the reporter is itself
+   a BSM sender) and the USDOT RSU Specification v4.1 (no detection or reporting function)
+   as "the US profile has no roadside reporter". If the owner accepts that reading, M13
+   becomes a match and the total 276 of 326 (84.7 %).
 
 ## 9. What remains
 
 **Fix first (engine defects, in order of impact)**
-1. **R-CCSIG**: under the certificate cycle, size and price each SPDU as ECDSA P-256, and
-   verify the PQ signature once per new certificate. Have the validator refuse a
-   configuration whose every SDU exceeds the MTU. The test is PQHMC (`frames_transmitted > 0`).
-2. **Memory per node**: take a heap profile, then cut the per-node state so that the
-   full-scale file fits.
-3. **OF-3**: record the pre-run CRL fetch and the held CRL version, then add an oracle rule.
-4. **Full-density false positives**: check the `constantPositionFrozen` reports against the
-   recording. The 2-day consequence comes with the full-scale run.
-5. **The privacy observer's link claims** with no pseudonym change.
-6. **The 6 failing sensitivity tests**: root-cause them, and establish when they began.
+1. **R-FFHOLD**: include in-flight report deliveries in the fast-forward's next wake. Then
+   check whether the quarter-fleet MA timings carry the same delay.
+2. **R-FFBURST**: take the detector breakdown of the 10 s after a resume, and check how the
+   GNSS model and the kinematics cross the gap.
+3. **The slow second fast-forward** (bench §9.2), then run the full-scale file again with
+   `--checkpoint-every 1h`.
+4. **Full-scale memory**: reuse per-step buffers, keep latency windows as a sketch, drop RA
+   batch files after a confirmed download, and share `Arc<HardwareProfile>` (ccsig-memory
+   §2).
+5. **The honest reports at full density**: the detector breakdown, and the 71 `positionJump`
+   verdicts.
+6. **The rollover's pseudonym change count** and **`ped_wait` across a fast-forward**.
+7. **R-JOINCRL**: a joiner holds the newest list each CRACA published before it joined.
+8. **MWP.off-no-backend**, the `node.rx` `crl-overdue` label, the 47 `Invalid` states under
+   the cycle, and VRU handsets' PQ pricing.
+9. **The enrolment certificate name** (moves the digests).
 
 **Owner decisions**
+- The two failing tests (`scms_wiring`, `pq_relay`) and R-PQUNSEC, which depend on each other
+  (§6 items 9–10).
+- The RSU-reporting reading (§8 item 6).
 - CF-IPERIOD (2 s).
-- R-CCSIG reverses the deliberate earlier decision `45f0942f`, and it changes the
-  certificate-cycle digests.
-- Whether RSUs may sign reports with their application certificate (R-UNSEC).
 - The US J2945/1 window values.
 - Whether SCMS Manager's artefacts may be vendored.
-- The US profile stays the default of the US presets. With R-USFP fixed it revokes no
-  honest vehicle on the realism base. It misses handset attackers, as the real profile does
-  (§6 item 6).
-- Delete `target/agents`. A permission check blocked its removal, and the disk is at 94 %.
+- The US profile stays the default of the US presets. It revokes no honest vehicle on any
+  quarter-fleet run. It misses handset attackers, as the real profile does (§6 item 14).
+
+Decided in this round: R-CCSIG's reversal of `45f0942f` was applied, and `target/agents` was
+deleted.
 
 **Engine work for the remaining deviations**
 - The `infoStatus` body (A16).
@@ -635,28 +784,31 @@ The totals count each row as its own checklist records it, with the changes in �
 - Governance scenario keys (G-10, C-9, C-10).
 - Root termination (L-8).
 - Stop issuing at 255 CRLs a week (H10).
-- The post-quantum RSU certificate cycle and an RSU CRL fetch under PQ.
+- The post-quantum RSU certificate cycle.
 - SPS-aligned BSM generation for LTE-V2X.
 
 **Testing still owed**
-- **The full-scale benchmark to the end.** It needs 3–4 GB and 4–5 CPU-hours (bench §0).
-- **Re-runs after fix wave 2.** These have not been re-run:
-  - the full `scms_knobs_runs` after merge fix `3471f2fc`;
-  - the three threat simulation binaries in release;
-  - the 26 matrix runs not re-run for R-USFP (M0, gnss-rtk, att10, sybil, off-ctl and
-    research-suite were re-run, and gnss-raw is new);
-  - `runtime_expectations.yaml` on the smoothed-GNSS presets;
-  - the stress multi-week rows that were open on R-NOCRL;
-  - the conformance run of `8245ef81`.
+- **The full-scale benchmark to the end**, after fix-first items 1–4.
+- **Re-runs on wave 3 code.** The matrix and realism re-runs used `77cffb5b`; wave 3 changed
+  the GNSS propagation, the RSU filing and the records. Also owed: the R-FS40 window (expected
+  `constantPositionFrozen` near 0 and 2,873 spurious claims) and `gnss-raw` (expected 0
+  implausible evidence).
+- **The oracle on current records**: a fresh conf and mbr capture through `oracle.py
+  records`, and a new rule that every device holds each CRACA's current list from t0 (OF-3).
+  The fault "skip `note_prerun_crl`" was not injected.
+- **The conformance run of `8245ef81`.**
+- **UI**: re-record the Studio fixtures if they contain `node.security` or the new report
+  fields, and re-run the Studio suites.
 - **A fault proof for the OBU and VRU receiver fallback** (R-TRUSTLEAK). Only the engine and
   RSU paths were proved red.
-- **An independent check of the ISS profile** (§6 item 9).
 - **F6/F7 fault proofs** (`inject2.py`), one test at a time.
-- **Realism row V8.** Re-base it on `research-suite`.
-- **The test reports.** Bring `matrix.md` and `stress.md` up to date: they still list fixed
-  defects (R-USFP, R-TRUSTLEAK, R-NOCRL, R-PQMBR) as open.
-- **Failing tests that predate this round:** `longrun_budget`, `timeline`, fragmentation
-  M-RX1, and the 5 mobility traffic tests.
+- **Failing tests that predate this round:** `longrun_budget`, `timeline` and the 5 mobility
+  traffic tests. v2xw-server and v2xw-cli were last run at `2004bb87`.
+
+Done since the last version of this page: the ISS-profile check (10/10), the 6 sensitivity
+failures and M-RX1, the full `scms_knobs_runs` (18/18), the three threat suites (1/1, 8/8,
+2/2), all 34 matrix runs and the 62 realism rows, the stress R-NOCRL rows, realism V8, the
+PQHFC/PQHMC re-runs, and `matrix.md` and `stress.md` brought up to date.
 
 **Paywalled standards: buying them would turn unverifiable rows into checked ones.** These
 are the IEEE 1609.2.1 body text (crypto #10, proto D11, B9), IEEE 1609.2 §5.3.8 (crypto
@@ -671,9 +823,11 @@ will always model them, each labelled as a setting:
 - live CRL sizes.
 
 "Identical" can therefore only ever mean identical wherever the real system is observable. On
-that measure, 275 of 326 rules (84.4 %) match. Every rule the runtime oracle checks passes on
-HEAD: 279,236 of 279,236 checks.
+that measure, 275 of 326 rules (84.4 %) match. Every rule the runtime oracle checks passed on
+the last recorded runs (`88e24b09`): 279,236 of 279,236 checks.
 - **What is left on the checklists:** 22 known deviations, 14 of which have no trust effect,
   and 29 rules no public source can settle.
-- **What is left at runtime:** R-CCSIG (post-quantum study only), the full-fleet memory,
-  false-positive and observer findings, and OF-3.
+- **What is left at runtime:** the two fast-forward defects (R-FFHOLD, R-FFBURST), the
+  honest reports at full density, the full-scale memory and the unfinished two-day run, the
+  rollover's pseudonym count, R-JOINCRL, and two failing tests that wait on an owner
+  decision. The post-quantum certificate cycle (R-CCSIG) is fixed.
