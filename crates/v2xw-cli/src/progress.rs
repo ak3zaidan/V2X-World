@@ -51,6 +51,39 @@ pub fn phys_footprint_bytes() -> Option<u64> {
     }
 }
 
+/// Hands the system allocator's free pages back to the system, so memory a transient peak
+/// freed stops counting in the footprint. Returns the bytes released where the platform
+/// says (macOS), `0` otherwise. A pure memory operation: no allocation moves and nothing
+/// the run computes can see it.
+#[allow(unsafe_code)]
+pub fn release_free_memory() -> usize {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe extern "C" {
+            // <malloc/malloc.h>: "Make a best effort to relieve memory pressure in the
+            // zone (all zones if `zone` is NULL) by returning `goal` bytes (as many as it
+            // can if 0) to the system."
+            fn malloc_zone_pressure_relief(zone: *mut core::ffi::c_void, goal: usize) -> usize;
+        }
+        // SAFETY: a null zone and a goal of 0 are the documented "every zone, as much as
+        // possible" call; it touches only the allocator's own free lists.
+        unsafe { malloc_zone_pressure_relief(core::ptr::null_mut(), 0) }
+    }
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        // SAFETY: glibc's `malloc_trim(0)` releases free memory at the heap top and in
+        // whole free pages; it takes no pointers.
+        unsafe {
+            libc::malloc_trim(0);
+        }
+        0
+    }
+    #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
+    {
+        0
+    }
+}
+
 /// Writes the progress lines of one run.
 pub struct Progress {
     file: Option<std::io::BufWriter<std::fs::File>>,

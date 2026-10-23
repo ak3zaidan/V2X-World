@@ -925,14 +925,15 @@ impl RsuRuntime {
     #[must_use]
     pub fn new(
         node: NodeId,
-        profile: HardwareProfile,
+        profile: impl Into<std::sync::Arc<HardwareProfile>>,
         config: RsuConfig,
         backhaul: Backhaul,
         at: SimTime,
     ) -> RsuRuntime {
+        let profile: std::sync::Arc<HardwareProfile> = profile.into();
         let cpu_servers = profile.cpu.cores.or(1).max(1);
         let hsm_servers = profile.hsm.servers.or(1).max(1);
-        let service = ProfileServiceModel::new(profile.clone()).for_node(node);
+        let service = ProfileServiceModel::new(std::sync::Arc::clone(&profile)).for_node(node);
         let stores = Stores {
             peers: PeerCertCache::new(config.peer_cache_capacity),
             neighbors: NeighborTable::new(config.neighbor_capacity),

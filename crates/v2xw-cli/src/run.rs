@@ -609,6 +609,16 @@ fn execute(
     if checkpoint_every_ns.is_some() {
         crate::signal::install();
     }
+    // The allocator's free pages go back to the system at boundaries of their own (once
+    // every `RELIEF_NS` of simulated time, at most once every `RELIEF_WALL_S` of wall
+    // time), like the polls above a stop between two events that changes nothing the run
+    // computes. At full Midtown density a 10 s metric window and the per-step reception
+    // fan-out free hundreds of megabytes at once, and without this the system allocator
+    // kept them as the process's footprint (`docs/design/scms-real/testing/memory-density.md`).
+    const RELIEF_NS: u64 = 10_000_000_000;
+    const RELIEF_WALL_S: f64 = 5.0;
+    let mut next_relief = Some(next_multiple_after(start_ns, RELIEF_NS));
+    let mut last_relief_wall_s = f64::NEG_INFINITY;
     let stop_at_ns = opts.long.stop_at_s.map(|s| (s * 1e9).round() as u64);
     let every_s = checkpoint_every_ns.map_or(0.0, |e| e as f64 / 1e9);
     let cwd = std::env::current_dir()
@@ -653,7 +663,7 @@ fn execute(
     };
     let run_watch = Stopwatch::start();
     loop {
-        let target = [next_progress, next_checkpoint, next_poll]
+        let target = [next_progress, next_checkpoint, next_poll, next_relief]
             .into_iter()
             .flatten()
             .min()
@@ -703,6 +713,14 @@ fn execute(
         }
         if !done && next_poll == Some(target) {
             next_poll = Some(target.saturating_add(POLL_NS));
+        }
+        if !done && next_relief == Some(target) {
+            next_relief = Some(target.saturating_add(RELIEF_NS));
+            let wall = run_watch.elapsed_s();
+            if wall - last_relief_wall_s >= RELIEF_WALL_S {
+                crate::progress::release_free_memory();
+                last_relief_wall_s = wall;
+            }
         }
         // `--stop-at`: stop here as a crash would, after the outputs have moved on past the
         // last checkpoint — the metrics written so far are on disk, the progress line is

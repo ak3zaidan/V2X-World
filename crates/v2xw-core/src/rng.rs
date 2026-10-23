@@ -684,10 +684,12 @@ type Shard = BTreeMap<Key, Slot>;
 /// keys are directed radio links, one per pair of nodes that ever heard each other — up to
 /// n(n − 1) of them, 1.56 million on the 1,250-vehicle TR 36.885 drop — each drawn a few
 /// words at a time. Once a shard holds more than [`LIVE_SLOTS_PER_SHARD`] entries, a link's
-/// stream is therefore **parked** between checkouts as its key and word position (a 64-byte
-/// slot) and resumed with [`RngStream::set_word_pos`]. The keystream is a pure function of
-/// the key and the position, so a parked stream continues with exactly the words the live
-/// one would have produced (`a_parked_stream_continues_word_for_word`); only the memory and
+/// stream is therefore **parked** between checkouts as its word position alone (a 16-byte
+/// slot: the key is the registry's own derivation from the master seed and the cache key, so
+/// it is derived again on resume rather than kept) and resumed with
+/// [`RngStream::set_word_pos`]. The keystream is a pure function of the key and the
+/// position, so a parked stream continues with exactly the words the live one would have
+/// produced (`a_parked_stream_continues_word_for_word`); only the memory and
 /// the cost of a checkout differ — a resume regenerates the four-block buffer, which a run
 /// with a few thousand links should not pay for. Every other key — an actor's, a node's —
 /// is checked out many times a second by one owner and stays live.
@@ -698,8 +700,11 @@ enum Slot {
     Out,
     /// A live stream, boxed so a parked slot stays small.
     Live(Box<RngStream>),
-    /// A stream kept as its key and the word position it had reached.
-    Parked { key: [u8; 32], word_pos: u128 },
+    /// A link's stream kept as the word position it had reached. At full Midtown density
+    /// a run accumulates millions of directed links, so the slot holds the position only:
+    /// the stream's key is [`RngStream::derive`] of the registry's seed and the cache key,
+    /// derived again on resume (`testing/memory-density.md`).
+    Parked { word_pos: u64 },
 }
 
 impl Slot {
@@ -708,22 +713,24 @@ impl Slot {
     fn keep(entity: EntityRef, stream: RngStream, park_links: bool) -> Self {
         if park_links && matches!(entity, EntityRef::Link(_)) {
             Slot::Parked {
-                key: stream.inner.get_seed(),
-                word_pos: stream.word_pos(),
+                // 2^64 words is 2^67 bytes of keystream: no link draws that many.
+                word_pos: u64::try_from(stream.word_pos())
+                    .expect("a link's stream has drawn fewer than 2^64 words"),
             }
         } else {
             Slot::Live(Box::new(stream))
         }
     }
 
-    /// Takes the stream out, leaving [`Slot::Out`]; `None` if it is already out.
-    fn take(&mut self) -> Option<RngStream> {
+    /// Takes the stream out, leaving [`Slot::Out`]; `None` if it is already out. A parked
+    /// stream is derived again from `master_seed` and its cache `key`, as it was created.
+    fn take(&mut self, master_seed: u64, key: Key) -> Option<RngStream> {
         match core::mem::replace(self, Slot::Out) {
             Slot::Out => None,
             Slot::Live(stream) => Some(*stream),
-            Slot::Parked { key, word_pos } => {
-                let mut stream = RngStream::from_key(key);
-                stream.set_word_pos(word_pos);
+            Slot::Parked { word_pos } => {
+                let mut stream = RngStream::derive(master_seed, key.0, key.1);
+                stream.set_word_pos(u128::from(word_pos));
                 Some(stream)
             }
         }
@@ -856,7 +863,7 @@ impl RngRegistry {
         let key = (domain, entity);
         let mut shard = lock(&self.shards[shard_of(domain, entity)]);
         let stream = match shard.get_mut(&key) {
-            Some(slot) => slot.take().unwrap_or_else(|| {
+            Some(slot) => slot.take(self.master_seed, key).unwrap_or_else(|| {
                 panic!(
                     "RNG stream ({domain}, {entity:?}) is already checked out: exactly one \
                      task may draw from a key at a time"
@@ -901,7 +908,9 @@ impl RngRegistry {
             .or_insert_with(|| Slot::Live(Box::new(RngStream::derive(seed, domain, entity))));
         // A parked stream is resumed in place: this accessor hands out a reference.
         if let Slot::Parked { .. } = slot {
-            let stream = slot.take().expect("a parked slot holds a stream");
+            let stream = slot
+                .take(seed, (domain, entity))
+                .expect("a parked slot holds a stream");
             *slot = Slot::Live(Box::new(stream));
         }
         match slot {

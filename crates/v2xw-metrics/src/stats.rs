@@ -35,7 +35,7 @@
 //! numbers sort by id instead; see [`crate::comms`].
 
 use serde::{Deserialize, Serialize};
-use v2xw_core::math::{quantile_sorted, sort_total_order, sum_ordered};
+use v2xw_core::math::sort_total_order;
 
 use crate::quant::Quantum;
 
@@ -754,7 +754,12 @@ impl Percentile {
 /// It keeps the whole sample rather than streaming moments, because a p95 and a p99 cannot
 /// be computed from moments and because an exact, reproducible percentile is worth more here
 /// than the memory a sketch would save. A window's worth of one node's receptions is
-/// thousands of values, not millions.
+/// thousands of values, but a fleet-wide per-verification metric at full Midtown density
+/// is millions, so the sample is stored compacted rather than as it came: every
+/// [`COMPACT_AT`] values are sorted, and stored as `(value, count)` pairs when they repeat
+/// (queue depths, modelled costs, zero waits) or as one sorted chunk when they do not.
+/// It is the same multiset, read in the same total order, so every figure is the same bits
+/// as sorting the whole sample at once; nothing is approximated.
 ///
 /// # Non-finite samples are refused, not filtered silently
 ///
@@ -763,10 +768,99 @@ impl Percentile {
 /// rather than after". [`Distribution::observe`] does exactly that, and counts what it
 /// refused into [`DistributionSummary::Summary::rejected`] so the defect upstream stays
 /// visible.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct Distribution {
-    values: Vec<f64>,
+    /// Values not yet compacted, in arrival order; fewer than [`COMPACT_AT`].
+    pending: Vec<f64>,
+    /// Compacted values that repeat: distinct values in total order, each with its count.
+    runs: Vec<(f64, u64)>,
+    /// Compacted values that do not repeat enough to be worth a count: each chunk sorted
+    /// into total order, kept at exactly its length.
+    chunks: Vec<Box<[f64]>>,
+    /// The finite samples, in all three.
+    n: u64,
     rejected: u64,
+}
+
+/// How many values a [`Distribution`] buffers before it compacts them.
+///
+/// The memory note of the full-scale benchmark (`docs/design/scms-real/testing/memory-density.md`)
+/// is why this exists: a 10 s window of a per-verification metric at full Midtown density
+/// is about 4.8 million values, and the dozen such metrics held every one in a doubling
+/// `Vec`, then cloned it to sort it at the window's close. A chunk of 2¹⁶ values (512 KiB)
+/// bounds the unsorted buffer, and its slack, whatever the window holds.
+pub const COMPACT_AT: usize = 1 << 16;
+
+/// A compacted chunk is stored as counts when it has at most this share of distinct values
+/// (a count costs 16 bytes against a value's 8).
+const RUNS_AT_MOST: usize = COMPACT_AT / 4;
+
+/// Visits a sorted multiset in total order as `(value, count)` pieces, merging the sources
+/// of a [`Distribution`] without copying them. Equal values from different sources come as
+/// separate pieces, which nothing downstream can tell apart: they are bit-identical.
+fn merge_sorted(runs: &[(f64, u64)], chunks: &[&[f64]], mut f: impl FnMut(f64, u64)) {
+    use core::cmp::{Ordering, Reverse};
+    use std::collections::BinaryHeap;
+    #[derive(PartialEq)]
+    struct Head(f64, usize);
+    impl Eq for Head {}
+    impl PartialOrd for Head {
+        fn partial_cmp(&self, o: &Self) -> Option<Ordering> {
+            Some(self.cmp(o))
+        }
+    }
+    impl Ord for Head {
+        fn cmp(&self, o: &Self) -> Ordering {
+            self.0.total_cmp(&o.0).then(self.1.cmp(&o.1))
+        }
+    }
+    // Source 0 is the runs; source i + 1 is chunk i.
+    let mut at = vec![0_usize; chunks.len() + 1];
+    let mut heap = BinaryHeap::with_capacity(chunks.len() + 1);
+    if let Some(&(v, _)) = runs.first() {
+        heap.push(Reverse(Head(v, 0)));
+    }
+    for (i, c) in chunks.iter().enumerate() {
+        if let Some(&v) = c.first() {
+            heap.push(Reverse(Head(v, i + 1)));
+        }
+    }
+    while let Some(Reverse(Head(v, s))) = heap.pop() {
+        let i = at[s];
+        at[s] += 1;
+        let next = if s == 0 {
+            f(v, runs[i].1);
+            runs.get(i + 1).map(|r| r.0)
+        } else {
+            // A chunk's run of equal values goes as one piece.
+            let c = chunks[s - 1];
+            let mut j = i + 1;
+            while j < c.len() && c[j].to_bits() == v.to_bits() {
+                j += 1;
+            }
+            f(v, (j - i) as u64);
+            at[s] = j;
+            c.get(j).copied()
+        };
+        if let Some(n) = next {
+            heap.push(Reverse(Head(n, s)));
+        }
+    }
+}
+
+/// `quantile_sorted` of a sorted sample read through `at(rank)`: the same rule, the same
+/// arithmetic, so the result is the same bits.
+fn quantile_ranks(n: usize, q: f64) -> (usize, Option<(usize, f64)>) {
+    if n == 1 {
+        return (0, None);
+    }
+    let h = ((n - 1) as f64) * q.clamp(0.0, 1.0);
+    let lo = h.floor();
+    let idx = lo as usize;
+    if idx + 1 >= n {
+        return (n - 1, None);
+    }
+    (idx, Some((idx + 1, h - lo)))
 }
 
 impl Distribution {
@@ -774,29 +868,99 @@ impl Distribution {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            values: Vec::new(),
+            pending: Vec::new(),
+            runs: Vec::new(),
+            chunks: Vec::new(),
+            n: 0,
             rejected: 0,
         }
     }
 
-    /// An empty sample with room for `capacity` values.
+    /// An empty sample with room for `capacity` values (at most [`COMPACT_AT`] are
+    /// reserved: the rest are compacted as they come).
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            values: Vec::with_capacity(capacity),
-            rejected: 0,
+            pending: Vec::with_capacity(capacity.min(COMPACT_AT)),
+            ..Self::new()
         }
     }
 
     /// Records one value. Returns `false` and counts it as rejected if it is not finite.
     pub fn observe(&mut self, x: f64) -> bool {
         if x.is_finite() {
-            self.values.push(x);
+            self.push(x, 1);
             true
         } else {
             self.rejected += 1;
             false
         }
+    }
+
+    fn push(&mut self, x: f64, count: u64) {
+        for _ in 0..count {
+            self.pending.push(x);
+            if self.pending.len() >= COMPACT_AT {
+                self.compact();
+            }
+        }
+        self.n += count;
+    }
+
+    /// Sorts the pending buffer into the compacted store: as counts merged into `runs`
+    /// when its values repeat, as one sorted chunk otherwise. Exact either way: the store
+    /// is the same multiset, and every figure is computed from the multiset in total order.
+    fn compact(&mut self) {
+        let mut chunk = core::mem::replace(&mut self.pending, Vec::with_capacity(COMPACT_AT));
+        sort_total_order(&mut chunk);
+        let distinct = 1 + chunk
+            .windows(2)
+            .filter(|w| w[0].to_bits() != w[1].to_bits())
+            .count();
+        if distinct > RUNS_AT_MOST {
+            // Too many distinct values to be worth counting.
+            self.chunks.push(chunk.into_boxed_slice());
+            return;
+        }
+        let mut counted: Vec<(f64, u64)> = Vec::with_capacity(distinct);
+        for &v in &chunk {
+            match counted.last_mut() {
+                Some((last, c)) if last.to_bits() == v.to_bits() => *c += 1,
+                _ => counted.push((v, 1)),
+            }
+        }
+        if self.runs.is_empty() {
+            self.runs = counted;
+            return;
+        }
+        let old = core::mem::take(&mut self.runs);
+        let mut merged = Vec::with_capacity(old.len() + counted.len());
+        let (mut i, mut j) = (0, 0);
+        while i < old.len() || j < counted.len() {
+            let take_old = j >= counted.len()
+                || (i < old.len() && old[i].0.total_cmp(&counted[j].0).is_le());
+            let (v, c) = if take_old {
+                i += 1;
+                old[i - 1]
+            } else {
+                j += 1;
+                counted[j - 1]
+            };
+            match merged.last_mut() {
+                Some((last, n)) if f64::to_bits(*last) == v.to_bits() => *n += c,
+                _ => merged.push((v, c)),
+            }
+        }
+        self.runs = merged;
+    }
+
+    /// Visits the whole sample in total order as `(value, count)` pieces.
+    fn for_each_sorted(&self, f: impl FnMut(f64, u64)) {
+        let mut pending = self.pending.clone();
+        sort_total_order(&mut pending);
+        let mut chunks: Vec<&[f64]> = self.chunks.iter().map(|c| &c[..]).collect();
+        chunks.push(&pending);
+        merge_sorted(&self.runs, &chunks, f);
     }
 
     /// Records every value of an iterator.
@@ -807,22 +971,22 @@ impl Distribution {
     }
 
     /// Merges another sample into this one. The result's summary is unchanged by the order
-    /// of merges, because the summary sorts before it reduces.
+    /// of merges, because the summary reduces the multiset in total order.
     pub fn merge(&mut self, other: &Distribution) {
-        self.values.extend_from_slice(&other.values);
+        other.for_each_sorted(|v, c| self.push(v, c));
         self.rejected += other.rejected;
     }
 
     /// The number of finite samples.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.values.len()
+        self.n as usize
     }
 
     /// True if no finite sample was recorded.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.n == 0
     }
 
     /// How many non-finite values were refused.
@@ -835,36 +999,98 @@ impl Distribution {
     /// else is computed from.
     #[must_use]
     pub fn sorted(&self) -> Vec<f64> {
-        let mut v = self.values.clone();
-        sort_total_order(&mut v);
+        let mut v = Vec::with_capacity(self.len());
+        self.for_each_sorted(|x, c| v.extend(core::iter::repeat_n(x, c as usize)));
         v
+    }
+
+    /// The Neumaier sum of the sample in total order (`sum_ordered` over the sorted
+    /// sample, without materialising it).
+    fn ordered_sum(&self) -> f64 {
+        let mut sum = 0.0_f64;
+        let mut comp = 0.0_f64;
+        self.for_each_sorted(|x, c| {
+            for _ in 0..c {
+                let t = sum + x;
+                if sum.abs() >= x.abs() {
+                    comp += (sum - t) + x;
+                } else {
+                    comp += (x - t) + sum;
+                }
+                sum = t;
+            }
+        });
+        if !sum.is_finite() {
+            return sum;
+        }
+        sum + comp
     }
 
     /// The summary, or [`DistributionSummary::Insufficient`] below `min_samples`.
     ///
-    /// The whole computation is a function of the multiset of samples: the sample is sorted
-    /// into total order first, the percentiles come from `quantile_sorted` on that slice,
-    /// and the mean is `sum_ordered` over the same slice. Two runs that observed the same
-    /// values in different orders, on different thread counts, produce bit-identical
-    /// figures.
+    /// The whole computation is a function of the multiset of samples: the sample is read
+    /// in total order, the percentiles follow `quantile_sorted`'s rule on that order, and
+    /// the mean is `sum_ordered` over it. Two runs that observed the same values in
+    /// different orders, on different thread counts, produce bit-identical figures, and so
+    /// does the compacted store against the whole sample sorted at once
+    /// (`a_compacted_sample_summarises_to_the_same_bits`).
     #[must_use]
     pub fn summary(&self, min_samples: u64) -> DistributionSummary {
         let required = min_samples.max(1);
-        let n = self.values.len() as u64;
+        let n = self.n;
         if n < required {
-            let sum = (n > 0).then(|| sum_ordered(self.sorted().iter().copied()));
+            let sum = (n > 0).then(|| self.ordered_sum());
             return DistributionSummary::Insufficient { n, required, sum };
         }
-        let sorted = self.sorted();
-        let sum = sum_ordered(sorted.iter().copied());
+        let len = n as usize;
+        let qs = [Percentile::P50.q(), Percentile::P95.q(), Percentile::P99.q()];
+        let plan: Vec<(usize, Option<(usize, f64)>)> =
+            qs.iter().map(|&q| quantile_ranks(len, q)).collect();
+        let mut wanted: Vec<usize> = vec![0, len - 1];
+        for &(a, b) in &plan {
+            wanted.push(a);
+            if let Some((b, _)) = b {
+                wanted.push(b);
+            }
+        }
+        wanted.sort_unstable();
+        wanted.dedup();
+        let mut got = vec![0.0_f64; wanted.len()];
+        let mut sum = 0.0_f64;
+        let mut comp = 0.0_f64;
+        let mut rank = 0_usize;
+        let mut w = 0_usize;
+        self.for_each_sorted(|x, c| {
+            let end = rank + c as usize;
+            while w < wanted.len() && wanted[w] < end {
+                got[w] = x;
+                w += 1;
+            }
+            rank = end;
+            for _ in 0..c {
+                let t = sum + x;
+                if sum.abs() >= x.abs() {
+                    comp += (sum - t) + x;
+                } else {
+                    comp += (x - t) + sum;
+                }
+                sum = t;
+            }
+        });
+        let sum = if sum.is_finite() { sum + comp } else { sum };
+        let at = |r: usize| got[wanted.binary_search(&r).expect("a planned rank")];
+        let quantile = |(a, b): (usize, Option<(usize, f64)>)| match b {
+            None => at(a),
+            Some((b, frac)) => at(a) + frac * (at(b) - at(a)),
+        };
         DistributionSummary::Summary {
             n,
-            min: sorted[0],
-            max: sorted[sorted.len() - 1],
+            min: at(0),
+            max: at(len - 1),
             mean: sum / (n as f64),
-            p50: quantile_sorted(&sorted, Percentile::P50.q()),
-            p95: quantile_sorted(&sorted, Percentile::P95.q()),
-            p99: quantile_sorted(&sorted, Percentile::P99.q()),
+            p50: quantile(plan[0]),
+            p95: quantile(plan[1]),
+            p99: quantile(plan[2]),
             interpolation: Interpolation::Type7Linear,
             rejected: self.rejected,
         }
@@ -874,13 +1100,12 @@ impl Distribution {
     #[must_use]
     pub fn mean(&self, min_samples: u64) -> Estimate {
         let required = min_samples.max(1);
-        let n = self.values.len() as u64;
+        let n = self.n;
         if n < required {
             return Estimate::Insufficient { n, required };
         }
-        let sorted = self.sorted();
         Estimate::Value {
-            point: sum_ordered(sorted.iter().copied()) / (n as f64),
+            point: self.ordered_sum() / (n as f64),
             n,
         }
     }
@@ -889,20 +1114,35 @@ impl Distribution {
     #[must_use]
     pub fn sum(&self, min_samples: u64) -> Estimate {
         let required = min_samples.max(1);
-        let n = self.values.len() as u64;
+        let n = self.n;
         if n < required {
             return Estimate::Insufficient { n, required };
         }
         Estimate::Value {
-            point: sum_ordered(self.sorted()),
+            point: self.ordered_sum(),
             n,
         }
+    }
+}
+
+/// Two samples are equal when they hold the same multiset (bit for bit) and refused as many
+/// values: the order they arrived in is not part of a sample.
+impl PartialEq for Distribution {
+    fn eq(&self, other: &Self) -> bool {
+        self.n == other.n
+            && self.rejected == other.rejected
+            && self
+                .sorted()
+                .iter()
+                .zip(other.sorted().iter())
+                .all(|(a, b)| a.to_bits() == b.to_bits())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use v2xw_core::math::{quantile_sorted, sum_ordered};
 
     /// The real-valued form is the integer form when the sample is not clustered, to the
     /// last bit: one formula, not two.
@@ -1174,23 +1414,26 @@ mod tests {
     #[test]
     fn the_summary_is_order_independent_bit_for_bit() {
         let base = [1e16, 1.0, -1e16, 0.5, 3.25, -7.125, 1e-9, 42.0, 0.0, -0.5];
-        let forward = Distribution {
-            values: base.to_vec(),
-            rejected: 0,
+        let forward = {
+            let mut d = Distribution::new();
+            d.observe_all(base.to_vec());
+            d
         }
         .summary(1);
         let mut reversed = base.to_vec();
         reversed.reverse();
-        let backward = Distribution {
-            values: reversed,
-            rejected: 0,
+        let backward = {
+            let mut d = Distribution::new();
+            d.observe_all(reversed);
+            d
         }
         .summary(1);
         let mut rotated = base.to_vec();
         rotated.rotate_left(3);
-        let rotated = Distribution {
-            values: rotated,
-            rejected: 0,
+        let rotated = {
+            let mut d = Distribution::new();
+            d.observe_all(rotated);
+            d
         }
         .summary(1);
         let bits = |s: DistributionSummary| match s {
@@ -1242,6 +1485,103 @@ mod tests {
         let mut ba = b.clone();
         ba.merge(&a);
         assert_eq!(ab.summary(1), ba.summary(1));
+    }
+
+    /// The summary of the whole sample sorted at once: what `Distribution` computed before
+    /// it compacted, kept here as the reference the compacted store must reproduce.
+    fn reference(values: &[f64]) -> (f64, f64, f64, f64, f64, f64, f64) {
+        let mut v = values.to_vec();
+        sort_total_order(&mut v);
+        let sum = sum_ordered(v.iter().copied());
+        (
+            v[0],
+            v[v.len() - 1],
+            sum / (v.len() as f64),
+            quantile_sorted(&v, 0.5),
+            quantile_sorted(&v, 0.95),
+            quantile_sorted(&v, 0.99),
+            sum,
+        )
+    }
+
+    /// The compacted store (counted repeats, sorted chunks, the unsorted remainder) gives
+    /// the same bits as sorting the whole sample: low- and high-cardinality samples, a mix
+    /// that switches between the two forms, signed zeros, sizes either side of a
+    /// compaction, and a merge.
+    #[test]
+    fn a_compacted_sample_summarises_to_the_same_bits() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let samples: Vec<(&str, Vec<f64>)> = vec![
+            ("one", vec![2.5]),
+            ("depths", (0..3 * COMPACT_AT + 17).map(|_| (next() % 9) as f64).collect()),
+            ("waits", (0..2 * COMPACT_AT + 3).map(|_| {
+                let r = next();
+                if r % 10 < 8 { 0.0 } else { (r >> 20) as f64 / 1e6 }
+            }).collect()),
+            ("e2e", (0..5 * COMPACT_AT + 1).map(|_| (next() >> 11) as f64 * 1e-13).collect()),
+            ("mixed", (0..4 * COMPACT_AT).map(|i| {
+                let r = next();
+                if (i / COMPACT_AT) % 2 == 0 { (r % 5) as f64 * 0.1 } else { (r >> 12) as f64 * 1e-9 }
+            }).collect()),
+            ("zeros", (0..COMPACT_AT + 9).map(|i| match i % 3 { 0 => -0.0, 1 => 0.0, _ => -1.5 }).collect()),
+        ];
+        for (name, values) in &samples {
+            let mut d = Distribution::new();
+            d.observe_all(values.iter().copied());
+            let (min, max, mean, p50, p95, p99, sum) = reference(values);
+            let DistributionSummary::Summary { n, min: a, max: b, mean: m, p50: q50, p95: q95, p99: q99, .. } =
+                d.summary(1)
+            else {
+                panic!("{name}: expected a summary");
+            };
+            assert_eq!(n as usize, values.len(), "{name}");
+            for (what, got, want) in [("min", a, min), ("max", b, max), ("mean", m, mean),
+                ("p50", q50, p50), ("p95", q95, p95), ("p99", q99, p99)] {
+                assert_eq!(got.to_bits(), want.to_bits(), "{name} {what}: {got} against {want}");
+            }
+            let Estimate::Value { point, .. } = d.sum(1) else { panic!("{name}: sum") };
+            assert_eq!(point.to_bits(), sum.to_bits(), "{name} sum");
+            let Estimate::Value { point, .. } = d.mean(1) else { panic!("{name}: mean") };
+            assert_eq!(point.to_bits(), mean.to_bits(), "{name} mean()");
+            let mut sorted = values.clone();
+            sort_total_order(&mut sorted);
+            assert!(d.sorted().iter().zip(&sorted).all(|(x, y)| x.to_bits() == y.to_bits()), "{name} sorted");
+            assert_eq!(d.sorted().len(), sorted.len(), "{name} sorted length");
+        }
+        // A merge of two compacted samples is the sample of both.
+        let (a, b) = (&samples[1].1, &samples[3].1);
+        let mut da = Distribution::new();
+        da.observe_all(a.iter().copied());
+        let mut db = Distribution::new();
+        db.observe_all(b.iter().copied());
+        da.merge(&db);
+        let both: Vec<f64> = a.iter().chain(b.iter()).copied().collect();
+        let mut whole = Distribution::new();
+        whole.observe_all(both.iter().copied());
+        assert_eq!(da, whole);
+        let DistributionSummary::Summary { p95, mean, .. } = da.summary(1) else { panic!("merged") };
+        let r = reference(&both);
+        assert_eq!((p95.to_bits(), mean.to_bits()), (r.4.to_bits(), r.2.to_bits()));
+    }
+
+    /// A per-verification metric's window at full density is millions of mostly repeated
+    /// values; compacted, it holds a few thousand counts and one bounded buffer.
+    #[test]
+    fn a_repetitive_sample_is_held_as_counts() {
+        let mut d = Distribution::new();
+        for i in 0..(40 * COMPACT_AT) {
+            d.observe((i % 7) as f64);
+        }
+        assert_eq!(d.len(), 40 * COMPACT_AT);
+        assert!(d.chunks.is_empty(), "repeats are counted, not kept");
+        assert_eq!(d.runs.len(), 7);
+        assert!(d.pending.capacity() <= COMPACT_AT);
     }
 
     #[test]
