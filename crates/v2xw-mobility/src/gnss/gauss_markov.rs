@@ -599,6 +599,24 @@ impl v2xw_core::model::Model for GaussMarkovGnss {
 }
 
 impl GnssModel for GaussMarkovGnss {
+    fn resume_after_pause(&mut self, paused: v2xw_core::time::Duration) {
+        let by = paused.as_nanos();
+        if by == 0 {
+            return;
+        }
+        for s in self.state.values_mut() {
+            if let Some(t) = s.last.as_mut() {
+                *t = t.saturating_add(by);
+            }
+            // Zero is "none yet": a later instant would start one at the resume.
+            for t in [&mut s.burst_until, &mut s.outage_until] {
+                if *t > 0 {
+                    *t = t.saturating_add(by);
+                }
+            }
+        }
+    }
+
     fn estimate(
         &mut self,
         ctx: &mut dyn MobCtx,
@@ -1723,6 +1741,52 @@ mod tests {
         assert!(
             frozen <= 5,
             "{frozen} of {pairs} consecutive BSMs at one position with a speed"
+        );
+    }
+
+    /// R-FFBURST: a receiver resumed after a fast-forward window
+    /// ([`GnssModel::resume_after_pause`]) continues its error process as if no time had
+    /// passed: 50 receivers estimated at 10 Hz for 2 s give, error for error, the same
+    /// positions when 12 h are cut in after the first second. Fault: the method a no-op —
+    /// the first epoch after the gap reads 43,200 s of outlier and burst hazard, so every
+    /// receiver's error jumps (by the 12 m outlier, among others) and the next BSM is an
+    /// honest RandomPosition report.
+    #[test]
+    fn a_receiver_resumed_after_a_pause_continues_its_error_as_if_no_time_had_passed() {
+        let w = world();
+        let paused: u64 = 43_200 * NS_PER_S;
+        let errors = |pause: bool| {
+            let rng = RngRegistry::new(17);
+            let mut m = GaussMarkovGnss::default();
+            let mut out = Vec::new();
+            for k in 0..20u64 {
+                if pause && k == 10 {
+                    m.resume_after_pause(v2xw_core::time::Duration::from_nanos(paused));
+                }
+                let t = k * NS_PER_S / 10 + if pause && k >= 10 { paused } else { 0 };
+                for id in 0..50u32 {
+                    let mut gt = Kinematics::at_rest(
+                        t,
+                        Vec3::new(100.0 + f64::from(id) * 7.0 + k as f64, 100.0, 0.0),
+                    );
+                    gt.vel = Vec3::new(10.0, 0.0, 0.0);
+                    let mut ctx = MobilityCtx::new(t, &w, &rng);
+                    let e = m.estimate(&mut ctx, NodeId::new(id), &gt, &GnssEnv::OPEN_SKY);
+                    out.push((e.pos.x - gt.pos.x, e.pos.y - gt.pos.y, e.semi_major_m));
+                }
+            }
+            out
+        };
+        let (a, b) = (errors(false), errors(true));
+        assert_eq!(a.len(), b.len());
+        let worst = a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| (x.0 - y.0).hypot(x.1 - y.1).max((x.2 - y.2).abs()))
+            .fold(0.0_f64, f64::max);
+        assert!(
+            worst < 1e-9,
+            "the pause changed a receiver's error by up to {worst:.3} m"
         );
     }
 

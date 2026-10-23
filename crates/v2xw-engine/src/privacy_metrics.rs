@@ -2,7 +2,7 @@
 //!
 //! | Metric | Formula | Unit | What it does **not** account for |
 //! |---|---|---|---|
-//! | `pseudonym_change_rate` | Σ pseudonym changes / Σ vehicle-hours observed | 1/(veh·h) | a vehicle's changes before its first `node.security` row |
+//! | `pseudonym_change_rate` | Σ pseudonym changes / Σ vehicle-hours observed (a fast-forward window's frozen hours are not observed time) | 1/(veh·h) | a vehicle's changes before its first `node.security` row |
 //! | `cert_pool_valid` | distribution, over the window's `node.security` rows, of the certificates each vehicle holds valid now | count | certificates held for later periods (`pool_preloaded` on the row) |
 //! | `linkability` | correct links / pseudonym changes, cumulative | ratio | links an observer with less coverage would miss: the observer hears every frame on the air (a global passive eavesdropper, the worst case) |
 //! | `backend_link_up` | rows whose vehicle's backend access was usable / rows | ratio | how long a link was down between two rows |
@@ -41,6 +41,9 @@ pub struct PrivacyProvider {
     changes: u64,
     /// Seconds each vehicle has been observed for, and when it was last seen.
     seen: BTreeMap<NodeId, (SimTime, SimTime)>,
+    /// The pauses ([`MetricProvider::on_pause`]): fast-forward windows in which the road
+    /// stood still, so no vehicle was observed driving and none could change pseudonym.
+    paused: Vec<(SimTime, SimTime)>,
     pool: Distribution,
     link_up: Proportion,
     /// Link claims waiting for their ground-truth join: `(predecessor, successor)`.
@@ -109,6 +112,7 @@ impl PrivacyProvider {
             owner: BTreeMap::new(),
             changes: 0,
             seen: BTreeMap::new(),
+            paused: Vec::new(),
             pool: Distribution::new(),
             link_up: Proportion::new(),
             claims: Vec::new(),
@@ -263,10 +267,20 @@ impl MetricProvider for PrivacyProvider {
         self.join();
         let mut out = Vec::new();
         let dims = Dims::new;
+        // A vehicle seen before and after a fast-forward window was not observed through it:
+        // counting the frozen hours made the rate of a window after a 12 h fast-forward
+        // hundreds of times too small (benchmark final-run §4 item 6).
+        let paused = &self.paused;
         let vehicle_s: f64 = self
             .seen
             .values()
-            .map(|(a, b)| (b.saturating_sub(*a)) as f64 * 1e-9)
+            .map(|(a, b)| {
+                let frozen: u64 = paused
+                    .iter()
+                    .map(|(f, t)| (*t).min(*b).saturating_sub((*f).max(*a)))
+                    .sum();
+                (b.saturating_sub(*a)).saturating_sub(frozen) as f64 * 1e-9
+            })
             .sum();
         let rate = if vehicle_s > 0.0 {
             Estimate::Value {
@@ -305,6 +319,12 @@ impl MetricProvider for PrivacyProvider {
             SampleValue::Ratio(up.estimate(1, DEFAULT_LEVEL)),
         ));
         out
+    }
+
+    fn on_pause(&mut self, from: SimTime, to: SimTime) {
+        if to > from {
+            self.paused.push((from, to));
+        }
     }
 
     fn rejected(&self) -> u64 {
@@ -368,5 +388,41 @@ mod tests {
         let out = q.flush(10);
         let l = out.iter().find(|s| s.metric == "linkability").unwrap();
         assert_eq!(l.value.point(), Some(1.0));
+    }
+
+    /// One vehicle observed 0-10 s, frozen by a fast-forward window to 1,000 s, observed
+    /// again to 1,010 s, with one pseudonym change: 20 s observed, so 180 changes per
+    /// vehicle-hour. Fault: `on_pause` a no-op (1,010 s counted: 3.56 per vehicle-hour,
+    /// final-run §4 item 6).
+    #[test]
+    fn a_fast_forward_window_is_not_observed_vehicle_time() {
+        let row = |t_s: u64| {
+            rec(
+                "node.security",
+                format!(
+                    r#"{{"t":{},"node":3,"protocol":"p","pseudonym":"aa","temp_id":null,"cert_i":null,"cert_j":null,"cert_valid_until":null,"pool_valid":20,"pool_preloaded":0,"pool_stored":20,"pool_last_period":null,"changes":0,"topup_in_flight":false,"link":"cellular","link_up":true,"outbox_reports":0,"reports_uploaded":0,"crl_entries":0,"crl_version":0,"self_revoked":false}}"#,
+                    t_s * 1_000_000_000
+                ),
+            )
+        };
+        let change = rec(
+            "sec.pseudonym",
+            r#"{"t":1005000000000,"node":3,"reason":"age","old_digest":"aa","new_digest":"bb","old_temp_id":null,"new_temp_id":null,"old_l2":null,"new_l2":null,"i":0,"j":1,"pool_valid":19,"changes":1}"#.to_string(),
+        );
+        let mut p = PrivacyProvider::new();
+        p.on_event(&row(0));
+        p.on_event(&row(10));
+        p.on_pause(10_000_000_000, 1_000_000_000_000);
+        p.on_event(&row(1_000));
+        p.on_event(&change);
+        p.on_event(&row(1_010));
+        assert_eq!(p.rejected, 0);
+        let out = p.flush(1_010_000_000_000);
+        let r = out
+            .iter()
+            .find(|s| s.metric == "pseudonym_change_rate")
+            .unwrap();
+        let rate = r.value.point().expect("a rate");
+        assert!((rate - 180.0).abs() < 1e-6, "rate {rate} per vehicle-hour");
     }
 }

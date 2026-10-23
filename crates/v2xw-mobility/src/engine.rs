@@ -6564,6 +6564,52 @@ impl Mobility for NativeMobility {
         self.pending.push(cmd);
     }
 
+    fn resume_after_pause(&mut self, paused: Duration) {
+        let by = paused.as_nanos();
+        if by == 0 {
+            return;
+        }
+        let later = |t: &mut SimTime| *t = t.saturating_add(by);
+        for a in self.actors.values_mut() {
+            later(&mut a.spawned);
+            later(&mut a.planned_at);
+            later(&mut a.cooldown_until);
+            if let Some(tr) = a.transition.as_mut() {
+                later(&mut tr.started);
+            }
+            if let Some(t) = a.stopped_until.as_mut() {
+                later(t);
+            }
+            if let Some(t) = a.release_at.as_mut() {
+                later(t);
+            }
+            if let Some((_, Some(t))) = a.forced_brake.as_mut() {
+                later(t);
+            }
+            if let Some((_, t)) = a.forced_cut_in.as_mut() {
+                later(t);
+            }
+            if let Some(t) = a.kerb.stop.as_mut().and_then(|s| s.since.as_mut()) {
+                later(t);
+            }
+            if let Some(t) = a.stuck_since.as_mut() {
+                later(t);
+            }
+        }
+        for (_, since, _) in &mut self.waiting {
+            later(since);
+        }
+        if let Some(t) = self.speed_sampled_at.as_mut() {
+            later(t);
+        }
+        if let Some(d) = self.demand.as_mut() {
+            d.resume_after_pause(paused);
+        }
+        if let Some(vru) = self.vru.as_mut() {
+            vru.resume_after_pause(paused);
+        }
+    }
+
     fn kinematics(&self, a: ActorId) -> Option<&Kinematics> {
         self.published.get(&a)
     }

@@ -583,6 +583,19 @@ impl Mobility for TieredMobility {
         self.pending.push(cmd);
     }
 
+    fn resume_after_pause(&mut self, paused: Duration) {
+        self.micro.resume_after_pause(paused);
+        if let Some(core) = self.meso.as_mut() {
+            core.resume_after_pause(paused);
+        }
+        for (_, _, since) in self.micro_waiting.iter_mut().chain(self.meso_waiting.iter_mut()) {
+            *since = since.saturating_add(paused.as_nanos());
+        }
+        if let Some(d) = self.demand.as_mut() {
+            d.resume_after_pause(paused);
+        }
+    }
+
     fn kinematics(&self, a: ActorId) -> Option<&Kinematics> {
         self.published.get(&a)
     }

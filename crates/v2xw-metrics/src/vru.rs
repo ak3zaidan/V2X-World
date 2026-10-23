@@ -253,6 +253,19 @@ impl VruSafetyProvider {
             .unwrap_or_else(|| panic!("metric {name} is not one of this provider's definitions"))
     }
 
+    /// A pause (a fast-forward window) is not a wait: each pedestrian standing when it
+    /// began has stood for the time before it and will stand for the time after it, and
+    /// the frame that closes after the pause would otherwise charge the whole window.
+    fn pause(&mut self, from: SimTime, to: SimTime) {
+        // The last frame before the pause is complete: close it first, so a pedestrian who
+        // came to a stand in it is shifted with the rest.
+        self.close_frame();
+        let by = to.saturating_sub(from);
+        for since in self.standing_since.values_mut() {
+            *since = since.saturating_add(by);
+        }
+    }
+
     fn on_kinematics(&mut self, v: GtKinematicsView) {
         if self.frame_t != Some(v.t) {
             self.close_frame();
@@ -406,6 +419,10 @@ impl MetricProvider for VruSafetyProvider {
         }
     }
 
+    fn on_pause(&mut self, from: SimTime, to: SimTime) {
+        self.pause(from, to);
+    }
+
     fn flush(&mut self, at: SimTime) -> Vec<MetricSample> {
         self.close_frame();
         let mut out = Vec::new();
@@ -553,6 +570,32 @@ mod tests {
         match p.wait.summary(1) {
             crate::stats::DistributionSummary::Summary { max, .. } => {
                 assert!((max - 2.0).abs() < 1e-9, "{max}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A fast-forward window is a pause, not a wait (benchmark final-run §4 item 3:
+    /// `ped_wait` mean 3,465 s in the window after the resume). A pedestrian standing from
+    /// 0.5 s, frozen from 1.0 s to 1,000.9 s and walking on at 1,001.5 s has waited
+    /// 0.5 + 0.6 s. Fault: `on_pause` a no-op (the window is charged: 1,001 s).
+    #[test]
+    fn a_fast_forward_pause_is_not_a_wait() {
+        let mut p = VruSafetyProvider::new();
+        for k in 0..10u64 {
+            let v = if k >= 5 { 0.0 } else { 1.3 };
+            p.on_kinematics(sample(k * 100, 7, "pedestrian", 0.0, 0.0, v, 0.0));
+        }
+        p.on_pause(1_000_000_000, 1_000_900_000_000);
+        for k in 0..10u64 {
+            let v = if k < 6 { 0.0 } else { 1.3 };
+            p.on_kinematics(sample(1_000_900 + k * 100, 7, "pedestrian", 0.0, 0.0, v, 0.0));
+        }
+        p.close_frame();
+        assert_eq!(p.wait.len(), 1);
+        match p.wait.summary(1) {
+            crate::stats::DistributionSummary::Summary { max, .. } => {
+                assert!((max - 1.1).abs() < 1e-9, "the pause was charged as waiting: {max} s");
             }
             other => panic!("{other:?}"),
         }

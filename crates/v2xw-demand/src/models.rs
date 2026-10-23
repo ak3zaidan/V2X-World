@@ -259,6 +259,12 @@ impl Demand for CompositeDemand {
         any
     }
 
+    fn resume_after_pause(&mut self, paused: v2xw_core::time::Duration) {
+        for p in &mut self.parts {
+            p.resume_after_pause(paused);
+        }
+    }
+
     fn planned_route(&self, world: &World, trip: &TripRequest) -> Option<Vec<LaneId>> {
         let (part, seq) = *self.origin.get(&trip.seq)?;
         let mut own = trip.clone();

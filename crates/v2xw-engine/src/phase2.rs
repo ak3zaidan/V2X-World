@@ -4829,10 +4829,41 @@ impl Phase2 {
     /// deliberately not a wake: it observes, and changes nothing.
     #[must_use]
     pub fn next_wake(&self, now: SimTime) -> Option<SimTime> {
-        let mut best: Option<SimTime> = None;
-        let mut offer = |t: SimTime| {
-            if t > now && best.is_none_or(|b| t < b) {
-                best = Some(t);
+        self.next_wake_cause(now).map(|(t, _)| t)
+    }
+
+    /// The message the earliest delivery any provider's kernel holds is, by its variant
+    /// name, with the node it is for (`ReportShuffleTimer@ra`): which kernel event keeps a
+    /// fast-forward stopping when [`Phase2::next_wake_cause`] says `kernel`.
+    #[must_use]
+    pub fn next_kernel_delivery_label(&self) -> String {
+        let next = self
+            .runs
+            .iter()
+            .filter_map(|r| r.kernel.peek_next().map(|d| (d, r)))
+            .min_by_key(|(d, _)| d.at);
+        let Some((d, run)) = next else {
+            return "none".to_string();
+        };
+        let debug = format!("{:?}", d.msg);
+        let variant: String = debug
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        format!("{variant}@{}", run.role_of(d.to))
+    }
+
+    /// [`Phase2::next_wake`] with what it is: the source of the earliest wake (`kernel`,
+    /// `governance`, `crl-feed`, `root-rollover`, `root-removal`, `peer-root-removal`,
+    /// `mbms`, `crl-poll`, `topup`, `reenrol` or `trust-fetch`), which the fast-forward
+    /// counts per stop ([`crate::FastForwardReport::stops_by_cause`]) so a window that
+    /// stops more often than its backend has work shows what keeps waking it.
+    #[must_use]
+    pub fn next_wake_cause(&self, now: SimTime) -> Option<(SimTime, &'static str)> {
+        let mut best: Option<(SimTime, &'static str)> = None;
+        let mut offer = |t: SimTime, cause: &'static str| {
+            if t > now && best.is_none_or(|(b, _)| t < b) {
+                best = Some((t, cause));
             }
         };
         let held = |t: SimTime| t.max(now.saturating_add(1));
@@ -4840,14 +4871,14 @@ impl Phase2 {
         // a delivery in the receiving provider's kernel, so it is covered here.
         for run in &self.runs {
             if let Some(t) = run.kernel.next_due() {
-                offer(held(t));
+                offer(held(t), "kernel");
             }
             for (t, _) in &run.state.gov.pending {
-                offer(held(*t));
+                offer(held(*t), "governance");
             }
         }
         if let Some(t) = self.etsi.as_ref().and_then(|e| e.kernel.next_due()) {
-            offer(held(t));
+            offer(held(t), "kernel");
         }
         // A provider's signed CRL reaching another provider's RA once it has crossed the
         // inter-provider link (WP-D1): the instant that RA starts serving it.
@@ -4860,23 +4891,23 @@ impl Phase2 {
                 // ever published woke the fast-forward at every mobility step from its
                 // publication on (realism.md R-FF: 255,658 backend ticks in two days).
                 for v in feed {
-                    offer(v.at.saturating_add(lag.as_nanos()));
+                    offer(v.at.saturating_add(lag.as_nanos()), "crl-feed");
                 }
             }
         }
         if let Some(t) = self.params.root_rollover_at {
-            offer(held(t));
+            offer(held(t), "root-rollover");
         }
         if let Some(t) = self.params.root_removal_at {
-            offer(held(t));
+            offer(held(t), "root-removal");
         }
         if let Some(t) = self.params.peer_root_removal_at {
-            offer(held(t));
+            offer(held(t), "peer-root-removal");
         }
         if self.access.crl_delivery() == crate::backend::CrlDelivery::Mbms
             && self.published_crl_for_provider(0).0 > 0
         {
-            offer(self.mbms_next);
+            offer(self.mbms_next, "mbms");
         }
         let us = self.etsi.is_none();
         let lead = self.params.scms.reenrol_lead.as_nanos();
@@ -4885,7 +4916,7 @@ impl Phase2 {
                 continue;
             }
             if n.access == Some(AccessKind::Cellular) && !n.crl_fetch_in_flight {
-                offer(n.next_crl_fetch);
+                offer(n.next_crl_fetch, "crl-poll");
             }
             if n.topup.is_none()
                 && !n.self_revoked
@@ -4893,13 +4924,13 @@ impl Phase2 {
                 && n.etsi_batch.is_none()
                 && let Some(t) = self.params.topup_at(n.last_period)
             {
-                offer(t);
+                offer(t, "topup");
             }
             if us && n.reenrol.is_none() && !n.blocked && !n.self_revoked {
-                offer(n.enrolment_until.saturating_sub(lead));
+                offer(n.enrolment_until.saturating_sub(lead), "reenrol");
             }
             if !us && n.trust_fetch.is_none() {
-                offer(n.next_trust_fetch);
+                offer(n.next_trust_fetch, "trust-fetch");
             }
         }
         best

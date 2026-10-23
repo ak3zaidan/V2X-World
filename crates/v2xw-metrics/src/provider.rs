@@ -207,6 +207,13 @@ pub trait MetricProvider: Model {
     /// metrics are windowed and which are cumulative.
     fn flush(&mut self, at: SimTime) -> Vec<MetricSample>;
 
+    /// The traffic stood still from `from` to `to` (a `time.fast_forward` window: the
+    /// calendar ran on, the road did not, and no frame was recorded in between). A
+    /// provider that measures the length of something on the road — a wait, a span of
+    /// observed vehicle-time — leaves the pause out; one that measures the calendar keeps
+    /// it. A provided no-op.
+    fn on_pause(&mut self, _from: SimTime, _to: SimTime) {}
+
     /// How many records this provider could not decode. Defaults to zero for a provider
     /// that does not count.
     fn rejected(&self) -> u64 {
@@ -405,6 +412,14 @@ impl ProviderSet {
             .collect();
         out.sort_by(|a, b| a.key().cmp(&b.key()).then(a.t.cmp(&b.t)));
         out
+    }
+
+    /// Tells every provider that the traffic stood still from `from` to `to`
+    /// ([`MetricProvider::on_pause`]), in registration order.
+    pub fn pause(&mut self, from: SimTime, to: SimTime) {
+        for p in &mut self.providers {
+            p.on_pause(from, to);
+        }
     }
 
     /// The total number of records the set's providers could not decode.

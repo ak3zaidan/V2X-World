@@ -484,6 +484,22 @@ pub struct FastForwardReport {
     pub skipped_steps: u64,
     /// Simulated nanoseconds spent inside the windows.
     pub skipped_ns: u64,
+    /// Nanoseconds the traffic stood still across the windows, from the instant each froze
+    /// it to the live step that resumed it ([`Engine::resume_after_fast_forward`]): the
+    /// time the road's own clocks did not count.
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub traffic_paused_ns: u64,
+    /// Why each stop inside the windows was scheduled when it was: the credential-system
+    /// source of the earliest wake ([`crate::phase2::Phase2::next_wake_cause`]), or
+    /// `max-jump` (nothing due within [`FAST_FORWARD_MAX_JUMP`]) or `window-end`. A
+    /// window that stops far more often than its backend has work shows here what keeps
+    /// waking it (R-FFSLOW).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub stops_by_cause: BTreeMap<String, u64>,
+}
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
 }
 
 /// What one run produced.
@@ -1172,6 +1188,9 @@ pub struct Engine {
     report: RunReport,
     /// Whether the last mobility step was a fast-forward stop (`time.fast_forward`).
     in_fast_forward: bool,
+    /// The instant the current fast-forward window froze the traffic: the state every
+    /// actor holds is the state of this instant until the window ends.
+    ff_frozen_at: SimTime,
     /// Whether [`Engine::advance`] has reached the end of the run.
     ended: bool,
 }
@@ -1646,6 +1665,7 @@ impl Engine {
             deferred_nodes: BTreeSet::new(),
             report: RunReport::default(),
             in_fast_forward: false,
+            ff_frozen_at: 0,
             ended: false,
         };
         engine.radio_gate = crate::scale::RadioGate::for_scenario(
@@ -3093,6 +3113,9 @@ impl Engine {
             self.fast_forward_tick(recorder, now, end, step, horizon);
             return Ok(());
         }
+        if self.in_fast_forward {
+            self.resume_after_fast_forward(now);
+        }
         self.in_fast_forward = false;
 
         // The published state of *this* instant goes out before the world advances past
@@ -3246,20 +3269,36 @@ impl Engine {
     ) {
         if !self.in_fast_forward {
             self.in_fast_forward = true;
+            self.ff_frozen_at = now;
             self.report.fast_forward.windows += 1;
         }
         self.report.fast_forward.backend_ticks += 1;
         self.transmitted_since_step.clear();
         self.on_backend_step(recorder, now, horizon);
         let step_ns = step.as_nanos().max(1);
-        let wake = self
+        let (wake, cause) = self
             .phase2
             .as_ref()
-            .and_then(|p| p.next_wake(now))
-            .unwrap_or(SimTime::MAX);
-        let target = wake
-            .min(end)
-            .min(now.saturating_add(FAST_FORWARD_MAX_JUMP.as_nanos()));
+            .and_then(|p| p.next_wake_cause(now))
+            .unwrap_or((SimTime::MAX, "none"));
+        let jump = now.saturating_add(FAST_FORWARD_MAX_JUMP.as_nanos());
+        let target = wake.min(end).min(jump);
+        let cause = if target == wake {
+            if cause == "kernel" {
+                let label = self
+                    .phase2
+                    .as_ref()
+                    .map_or_else(String::new, crate::phase2::Phase2::next_kernel_delivery_label);
+                format!("kernel:{label}")
+            } else {
+                cause.to_string()
+            }
+        } else if target == end {
+            "window-end".to_string()
+        } else {
+            "max-jump".to_string()
+        };
+        *self.report.fast_forward.stops_by_cause.entry(cause).or_insert(0) += 1;
         // Up to the mobility grid (`k · step` from zero), and at least one step on.
         let next = target
             .div_ceil(step_ns)
@@ -3272,6 +3311,32 @@ impl Engine {
             self.scheduler
                 .schedule(next, EventClass::MobilityStep, Event::MobilityStep);
         }
+    }
+
+    /// The first live step after a `time.fast_forward` window (R-FFBURST): the traffic
+    /// stood still from [`Engine::ff_frozen_at`] to `now`, so it resumes as if no time had
+    /// passed on the road. The mobility model's own clocks of elapsed traffic time move on
+    /// by the window ([`v2xw_mobility::Mobility::resume_after_pause`]), every actor's state
+    /// is the frozen one re-dated to `now` (the world held it all along), and the metric
+    /// providers are told the window was a pause and not time spent (`ped_wait`,
+    /// pseudonym changes per vehicle-hour).
+    ///
+    /// Before this, the first step after a window read the hours as traffic time: every
+    /// vehicle standing when the window began had stood for hours, the gridlock resolution
+    /// teleported or removed it, and each teleport was a position jump honest receivers
+    /// reported (the full-scale benchmark: 1,833 → 1,281 nodes and 4,876 honest reports in
+    /// the 10 s after the resume). The calendar itself is not paused: signal plans, the
+    /// credential backend, certificates and clocks keep the real time.
+    fn resume_after_fast_forward(&mut self, now: SimTime) {
+        let from = self.ff_frozen_at.min(now);
+        let paused = Duration::from_nanos(now - from);
+        self.report.fast_forward.traffic_paused_ns += paused.as_nanos();
+        self.mobility.resume_after_pause(paused);
+        self.gnss.resume_after_pause(paused);
+        for rec in self.actors.values_mut() {
+            rec.last.t = now;
+        }
+        self.providers.pause(from, now);
     }
 
     /// Recomputes which nodes are dormant ([`crate::scale::RadioGate`]).

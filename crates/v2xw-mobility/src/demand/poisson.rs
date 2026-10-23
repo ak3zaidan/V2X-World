@@ -287,6 +287,12 @@ impl Demand for PoissonDemand {
         out
     }
 
+    fn resume_after_pause(&mut self, paused: Duration) {
+        if let Some(t) = self.next.as_mut() {
+            *t = t.saturating_add(paused.as_nanos());
+        }
+    }
+
     fn set_multiplier(&mut self, m: f64) -> bool {
         self.event_multiplier = if m.is_finite() { m.max(0.0) } else { 1.0 };
         true
