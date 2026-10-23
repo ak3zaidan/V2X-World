@@ -1,0 +1,161 @@
+# SCMS full-scale benchmark to the end (after finalize 4: TESTS, FF, MEM merged at fe3757b9)
+# (docs/design/scms-real/testing/full-bench.md). Every `expect` was written down before its
+# run; the FB3 rows were committed with `measured: pending` before FB3 reported. `measured`
+# is base -> variant, or the one run's value for an invariant row. Not a sweep table:
+# `v2xw sensitivity` passes over it by its `schema` (sweep::SCMS_RUN_EXPECTATIONS_SCHEMA).
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+#
+# Binary: an opt-level-2 debug build of fe3757b9 (`cargo build -p v2xw-cli --bins` with
+# CARGO_PROFILE_DEV_OPT_LEVEL=2), copied to the scratchpad, seed 0xBE7C_0001,
+# --record-level metrics --no-verify, 4 rayon threads, one run per run-lock call.
+schema: v2xw/scms-run-expectations/1
+
+runs:
+  D1old:
+    scenario: scenarios/scms-conformance.yaml
+    note: "fast-forward.md §5: edge-cases new3-base (b688bf40), 2,415,612 backend ticks, one per 0.1 s step from ~191,000 s"
+  D1:
+    scenario: scenarios/scms-conformance.yaml
+    note: "the same file on fe3757b9 with FastForwardReport::stops_by_cause"
+  RQ:
+    scenario: scenarios/real-world/midtown-scms-benchmark-quarter.yaml
+    note: "scms-real-benchmark.md R-Q (18f9291): second fast-forward 3,850 s wall, 1,119,908 backend ticks"
+  QD:
+    scenario: scenarios/real-world/midtown-scms-benchmark-quarter.yaml
+    note: "the quarter fleet end to end on fe3757b9"
+  FB2:
+    scenario: scenarios/real-world/midtown-scms-benchmark.yaml
+    note: "final-run.md FB2 on e4004b4c (release, 4 threads): stopped by hand at 47,340 s"
+  FB3:
+    scenario: scenarios/real-world/midtown-scms-benchmark.yaml
+    note: >-
+      the full-fleet benchmark end to end (172,800 s: 240 s live, fast-forward, 60 s live
+      across the 614 -> 615 rollover, fast-forward), fe3757b9 opt-level 2, 4 threads, run
+      lock with a 3,500 MB cap, --checkpoint-every 1h
+
+rows:
+# ---------------------------------------------------------------- (1) R-FFSLOW
+- id: FF.conformance-stops
+  base: D1old
+  variant: D1
+  area: performance
+  measure: fast_forward.backend_ticks and stops_by_cause
+  expect: >-
+    fast-forward.md §5: one stop per 0.1 s mobility step from the Thursday CRL publication
+    (~191,000 s) to the end, about 2.4 M backend ticks, one cause dominating (by code
+    reading, a kernel delivery or a governance CTL held at now + 1)
+  source: "testing/fast-forward.md §5 (R-FFSLOW)"
+  measured: "2,415,612 -> 8,310 ticks: crl-poll 2,259, max-jump (60 s) 6,024, kernel 23, governance 1, crl-feed 1, window-end 2. 245 s wall, 56 MB peak. Cases 5, 5 attackers and 0 honest revoked, top-ups 12/12"
+  verdict: wrong-expectation
+  note: >-
+    R-FFSLOW does not reproduce on fe3757b9: no cause is held at now + 1, every stop is
+    either an hourly cellular CRL poll (a real request), a kernel event or the 60 s jump
+    cap. The 2.4 M figure came from new3 (b688bf40); which later commit removed it was
+    not bisected here. No engine change was needed for the benchmark's fast-forward.
+- id: QD.ff-stops
+  base: RQ
+  variant: QD
+  area: performance
+  measure: second fast-forward stops and wall time
+  expect: >-
+    at least one stop per simulated second in the second window (FB2: scms.kernel_steps
+    rose 2,560 over 2,600 s), mostly per-vehicle work; per stop O(fleet), 0.03-0.05 s at
+    about 330 nodes
+  source: "final-run.md §4 item 5; fast-forward.md §5"
+  measured: "1,119,908 -> 11,393 backend ticks for the whole run (crl-poll 11,239, max-jump 144, kernel 8, window-end 2): 0.087 stops per simulated second; the second window costs about 0.035 wall-s per 600 simulated s; the whole file 189 s wall, 227 MB peak"
+  verdict: wrong-expectation
+  note: >-
+    One stop per hourly CRL poll of each cellular vehicle (80 % of 303 devices x 48 h =
+    11,600, measured 11,291 polls answered 412). Per stop about 3.5 ms at 327 nodes, so
+    the fast-forward is no longer the full file's long pole: its first live window is.
+- id: QD.honest
+  base: QD
+  variant: QD
+  area: scms
+  measure: reports, cases, revocations
+  expect: "honest traffic only: 0-5 cases, 0 honest revoked; no resume burst (R-FFBURST fixed)"
+  source: "testing/fast-forward.md §1; testing/usfp.md"
+  measured: "verdicts 114 (implausibleAcceleration 110, positionJump 3, constantPositionFrozen 1); 50 reports filed decisions, 37 uploaded (35 cellular, 2 relay), 13 not filed (10 RSU without a pseudonym certificate, 3 too few BSMs); 37 at the MAs (24 shared); 0 cases, 0 revoked; teleports/removed/jammed 0 in the rollover window"
+  verdict: pass
+- id: QD.crl-topups
+  base: QD
+  variant: QD
+  area: pki
+  measure: CRL polls and installs; top-ups at the 615 boundary; pool
+  expect: >-
+    hourly conditional CRL polls by every cellular device answered 412 (no revocation, so
+    the stores keep their t0 CRLs); each RSU installs both providers' t0 CRLs; one top-up
+    of 20 certificates per vehicle on the map at the 43,200 s boundary; pool 20 before
+    the boundary, 40 after it (the old week valid one more hour, CAMP-EE §2.1.5.3.2, and
+    the next one downloaded)
+  source: "phase2.rs CRL_FETCH_INTERVAL_S (1 h, SMP Table 3 ra-minWait); [CAMP-EE] §2.1.5.3.2; scenario comment (80 % cellular)"
+  measured: "crl_polls_not_modified 11,291, crl_downloads 0; rsu_crls_installed 60 (30 units x 2 providers); crl_versions_published 2, crls_issued 0; top-ups 278/278, 5,560 certificates (20 each); cert_pool_valid 20.0 at 50 s, 39.7 at 43,210 s, 39.4 at the end"
+  verdict: pass
+# ---------------------------------------------------------------- (2) the full-scale file to the end
+- id: FB3.completes
+  base: FB3
+  variant: FB3
+  area: performance
+  measure: rc, wall, CPU, peak footprint, per-window cost
+  expect: >-
+    rc 0 under 3.5 GB. First live window 2-3 h wall (FB2 7,113 s on release; opt-level 2
+    may be slower), first fast-forward minutes, rollover window 20-40 min, second
+    fast-forward 10-30 min (about 4x QD's polls, ~74,000, at ~15 ms a stop). Peak 1.5-2.5 GB
+    (MEM: 1,027 MB at 100 s)
+  source: "final-run.md FB2; memory-density.md §1.4; QD.ff-stops"
+  measured: pending
+  verdict: open
+- id: FB3.traffic-radio
+  base: FB2
+  variant: FB3
+  area: metrics
+  measure: nodes, speed, CBR, PDR, BSM latency, verification load in the first window
+  expect: >-
+    as FB2 within run-to-run noise (the apex turn rule changes routes slightly): nodes
+    1,632 at 150 s to about 1,833 at 240 s; CBR mean 0.07-0.09, p95 0.13-0.17; PDR 100 m
+    0.83-0.85, 300 m 0.28-0.29; BSM e2e mean about 12.4 ms; 240-270 verifications per node
+    per second; pool 20; 40 certificates per device
+  source: "final-run.md FB2 rows; J2945/1 vMinCU 0.5 (no power adaptation below it)"
+  measured: pending
+  verdict: open
+- id: FB3.honest-reports
+  base: FB2
+  variant: FB3
+  area: scms
+  measure: verdicts, reports filed, reports at the MAs, cases, revocations
+  expect: >-
+    first window 500-1,500 honest reports (FB2 1,935; the apex turn rule cut positionJump
+    123 -> 35 at 100 s); rollover window 80-150 per 10 s with no resume burst (FB2 4,876 in
+    the 10 s after the resume); fleet kept at the resume (not 1,833 -> 1,281); 0-15 cases
+    and 0-10 honest vehicles revoked by the end, decided under manual review in Tuesday's
+    business day
+  source: "testing/fast-forward.md §1 (R-FFBURST); memory-density.md (apex rule); final-run.md FB2.honest-reports"
+  measured: pending
+  verdict: open
+- id: FB3.pki
+  base: FB2
+  variant: FB3
+  area: pki
+  measure: provisioning per provider, top-ups at the boundary, CRL polls, CRL publications
+  expect: >-
+    home RA about 944 provisioning requests in 240 s (CAMP sizing about 0.5/s for a
+    region); about one top-up of 20 certificates per vehicle on the map at 43,200 s (FB2:
+    629 home top-ups in 10 s); hourly conditional CRL polls by ~1,550 cellular devices
+    (~74,000, 412 unless a provider published); a CRL issued only for a decided case
+  source: "final-run.md FB2; CAMP RA sizing (scms-real-benchmark.md §5); QD.crl-topups"
+  measured: pending
+  verdict: open
+- id: FB3.privacy
+  base: FB2
+  variant: FB3
+  area: privacy
+  measure: pseudonym changes, observer link claims, linkability
+  expect: >-
+    no change counted in the 60 s rollover window is correct (fast-forward.md §3: the old
+    certificate is valid to 46,800 s and CERTCHG needs 5 min and 2 km); linkability
+    insufficient or 0 of few changes
+  source: "testing/fast-forward.md §3; J2945/1 CERTCHG"
+  measured: pending
+  verdict: open
