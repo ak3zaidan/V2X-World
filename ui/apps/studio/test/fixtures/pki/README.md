@@ -24,7 +24,12 @@ four constant-position attackers, real cryptography, report shuffle 5 s, CRL cad
 
 All five files were re-recorded on 2026-10-22 from 176d6f6b plus the report and PQ fix
 (certificate bytes had changed since the LOP fold; vehicle reports that cannot be built as
-SM-MBR uploads are no longer filed, OF-2).
+SM-MBR uploads are no longer filed, OF-2). `pki-run.jsonl`, `pki-answers.json`,
+`pki-tabs.json` and `pki-studio.json` were re-recorded again on 2026-10-23 from d0e6530b
+(`pki-sequence.jsonl` came out unchanged). A roadside unit no longer files a report
+(R-UNSEC) and the GNSS fix moved the detections, so the run has 2 cases (both provider-a's,
+each opened on a real report shared by provider-b's MA) against 4 before, and no modelled
+evidence.
 
 - `pki.case` (both files): `reports-in` carries `evidence`, one entry per report the case
   was opened on: the SM-MBR `type`/`type_name`, `subtypes`, `verified` and `shared` (it

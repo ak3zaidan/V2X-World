@@ -129,10 +129,30 @@ describe("the Cases tab", () => {
       return Array.isArray(ev) ? ev.map(evidenceText) : [];
     });
     expect(texts.length).toBe(board.cases.length);
-    expect(texts).toContain("1VInconsistent/ConstantPosition, verified");
+    // Re-recorded 2026-10-23: the run's two cases are provider-a's, each opened on a real
+    // report provider-b's MA shared. A roadside unit no longer files a report (R-UNSEC), so
+    // the run has no modelled evidence and no case of the reporter's own MA any more.
     expect(texts).toContain("1VInconsistent/ConstantPosition, verified, shared by the other MA");
-    expect(texts.some((t) => t.startsWith("modelled (") && t.includes("constantPositionFrozen"))).toBe(true);
+    expect(texts.every((t) => t === "1VInconsistent/ConstantPosition, verified, shared by the other MA")).toBe(true);
     expect(texts).not.toContain("unknown");
+    // The two forms the run no longer produces, as the 2026-10-22 recording carried them
+    // (`pki.case` `reports-in` of provider-b/linkage-resolution/61 and
+    // provider-a/linkage-resolution/500).
+    expect(
+      evidenceText({ modelled: null, report: 34, shared: false, subtypes: [{ name: "ConstantPosition", subtype: 1 }], type: 1, type_name: "1VInconsistent", verified: true }),
+    ).toBe("1VInconsistent/ConstantPosition, verified");
+    expect(
+      evidenceText({
+        checks: ["positionSpeedInconsistency", "constantPositionFrozen", "staleOrReplay"],
+        modelled: "a roadside unit holds no pseudonym certificate to sign an SM-MBR with",
+        report: 437,
+        shared: false,
+        subtypes: [],
+        type: null,
+        type_name: null,
+        verified: null,
+      }),
+    ).toBe("modelled (a roadside unit holds no pseudonym certificate to sign an SM-MBR with): positionSpeedInconsistency+constantPositionFrozen+staleOrReplay");
   });
 
   it("names who learned what from each step", () => {
