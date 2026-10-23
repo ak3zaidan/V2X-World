@@ -1029,11 +1029,13 @@ fn a_switched_off_device_reaches_no_scms_until_it_is_back_on() {
 #[test]
 fn linkability_counts_only_links_across_a_pseudonym_change() {
     let run_with = |period: f64| {
-        let mut s = grid(45.0, 600.0);
+        // A busy grid with a sniffer at every signal, each hearing 120 m: cars keep coming
+        // into some sniffer's hearing for the first time while others fall silent nearby.
+        let mut s = grid(60.0, 3_000.0);
         s.security.pseudonym_change.period_s = Some(period);
         s.threats.eavesdropper = Some(ModelChoice {
             id: "threat/observer/passive-privacy".to_string(),
-            params: json!({"sniffer_fraction": 0.3, "range_m": 150.0}),
+            params: json!({"sniffer_fraction": 1.0, "range_m": 120.0}),
         });
         let (report, rec) = run(s);
         let linked = records(&rec, "privacy.link")
