@@ -69,7 +69,7 @@ fn pseudonym(
         .expect("a real implicit credential");
     let key = v2xw_sec::sig1609::Signer1609::p256(&v2xw_sec::ec::scalar_to_be32(&c.private))
         .expect("key");
-    (c.certificate.clone(), key)
+    ((*c.certificate).clone(), key)
 }
 
 /// A real US misbehaviour report with `kind`'s evidence, BSMs from the J2735 builder signed
@@ -440,7 +440,8 @@ fn store(
         .implicit
         .as_ref()
         .expect("an implicit certificate")
-        .certificate;
+        .certificate
+        .as_ref();
     let id8 = v2xw_core::hash::hex_encode(&v2xw_proto::scms::pdu::cert_id8(c));
     certs.insert(
         id8.clone(),

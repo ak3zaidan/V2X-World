@@ -35,6 +35,7 @@ fn implicit(run: &ScmsRun, dev: NodeId, j: u32) -> v2xw_msg::sec_types::ieee1609
         .as_ref()
         .expect("real implicit certificate")
         .certificate
+        .as_ref()
         .clone()
 }
 

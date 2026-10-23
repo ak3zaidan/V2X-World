@@ -160,7 +160,20 @@ struct Last {
     speed: f64,
     heading: f64,
     t: SimTime,
+    /// When the receiver heard it, on the receiver's own timeline: what eviction reads.
+    heard: SimTime,
 }
+
+/// How long a receiver keeps the previous BSM of a sender it no longer hears: 30 s,
+/// ten times the default `max_gap_s` (3 s), after which no consecutive check can use it
+/// (an honest sender's claimed generation time tracks the instant it is heard).
+/// **ASSUMPTION**, a device limit: a real OBU's per-sender table holds the senders around
+/// it, not every pseudonym it has ever heard. Without it a receiver's table grew by every
+/// certificate it heard for the rest of the run.
+const STALE_SENDER: SimTime = 30_000_000_000;
+
+/// How many inserts between two sweeps of stale senders.
+const SWEEP_EVERY: u32 = 1_024;
 
 /// The strict US profile, one per receiver.
 #[derive(Debug, Clone)]
@@ -168,6 +181,8 @@ pub struct UsSmMbr {
     card: ModelCard,
     params: UsMbrParams,
     last: BTreeMap<[u8; 8], Last>,
+    /// Inserts since the last sweep of `last`.
+    since_sweep: u32,
 }
 
 impl UsSmMbr {
@@ -178,6 +193,7 @@ impl UsSmMbr {
             card: card(&params),
             params,
             last: BTreeMap::new(),
+            since_sweep: 0,
         }
     }
 
@@ -270,8 +286,18 @@ impl Detector for UsSmMbr {
                 speed: m.claimed_speed_mps,
                 heading: m.claimed_heading_rad,
                 t: m.claimed_generation_time,
+                heard: m.received_at,
             },
         );
+        self.since_sweep += 1;
+        if self.since_sweep >= SWEEP_EVERY {
+            self.since_sweep = 0;
+            let horizon = m.received_at.saturating_sub(STALE_SENDER.max(
+                // Never shorter than the configured consecutive gap.
+                (self.params.max_gap_s.max(0.0) * 1e9) as SimTime,
+            ));
+            self.last.retain(|_, l| l.heard >= horizon);
+        }
         let mut fired = Vec::with_capacity(fired_ids.len());
         for d in fired_ids {
             // The fingerprint keeps the research suite's frozen columns
@@ -559,5 +585,37 @@ mod tests {
             UsMbrParams::default(),
         );
         assert!(gap[1].is_empty(), "{gap:?}");
+    }
+
+    /// The per-sender table is bounded by the senders a receiver still hears: a sender
+    /// not heard for 30 s is evicted at the next sweep, one heard recently is kept, and
+    /// the consecutive check on a kept sender still fires.
+    #[test]
+    fn a_sender_not_heard_for_thirty_seconds_leaves_the_table() {
+        let mut d = UsSmMbr::new(UsMbrParams::default());
+        let mut ctx = CollectingCtx::new(1);
+        let mut feed = |d: &mut UsSmMbr, signer: [u8; 8], t_ms: u64, x: f64| {
+            let mut m = bsm(t_ms, x, 20.0);
+            m.signer = signer;
+            d.on_message(&mut ctx, &me(), &m, &NoMap)
+                .fired
+                .iter()
+                .map(|o| o.detector.as_str())
+                .collect::<Vec<_>>()
+        };
+        feed(&mut d, [1; 8], 0, 0.0);
+        // 2,000 other senders, each heard once, 40 s later; sender 2 heard at 39 s.
+        feed(&mut d, [2; 8], 39_000, 0.0);
+        for k in 0..2_000u32 {
+            let mut id = [9u8; 8];
+            id[..4].copy_from_slice(&k.to_be_bytes());
+            feed(&mut d, id, 40_000, 0.0);
+        }
+        assert!(!d.last.contains_key(&[1; 8]), "a 40 s-stale sender was kept");
+        assert!(d.last.contains_key(&[2; 8]), "a sender heard 1 s ago was evicted");
+        assert!(d.last.len() <= 2_001, "{}", d.last.len());
+        // The kept sender, frozen at x = 0 while claiming 20 m/s: still caught.
+        let fired = feed(&mut d, [2; 8], 39_100, 0.0);
+        assert!(fired.contains(&"constantPositionFrozen"), "{fired:?}");
     }
 }

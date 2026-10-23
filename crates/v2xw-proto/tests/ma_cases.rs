@@ -132,7 +132,7 @@ fn implicit(
         .as_ref()
         .unwrap();
     (
-        c.certificate.clone(),
+        (*c.certificate).clone(),
         Signer1609::p256(&v2xw_sec::ec::scalar_to_be32(&c.private)).unwrap(),
     )
 }

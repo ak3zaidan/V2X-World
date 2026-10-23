@@ -243,8 +243,9 @@ pub struct IssuedCredential {
 /// An implicit pseudonym certificate as the device derived it (WP-B3a).
 #[derive(Debug, Clone)]
 pub struct ImplicitCredential {
-    /// The certificate (COER-encodable `Certificate`).
-    pub certificate: v2xw_msg::sec_types::ieee1609_dot2::Certificate,
+    /// The certificate (COER-encodable `Certificate`). Shared: the engine's ground-truth
+    /// copy of the device's credential holds the same allocation rather than a deep clone.
+    pub certificate: std::sync::Arc<v2xw_msg::sec_types::ieee1609_dot2::Certificate>,
     /// The issuing ACA's whole-certificate HashedId8.
     pub aca_id8: [u8; 8],
     /// `e`, the ECQV-1609 certificate hash.

@@ -872,6 +872,11 @@ impl PeerCertCache {
         self.note_insert(&digest)
     }
 
+    /// Whether the cache holds `digest`, without refreshing its recency.
+    pub fn holds(&self, digest: &HashedId8) -> bool {
+        self.lru.contains(&key(digest))
+    }
+
     /// The certificate held for `digest`, if this cache holds one.
     pub fn certificate(
         &self,
