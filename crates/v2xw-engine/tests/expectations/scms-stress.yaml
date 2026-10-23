@@ -230,9 +230,9 @@ rows:
   measure: crl-overdue refusals per window
   expect: none in W0-W2; from issue + 21 d of the home provider's last CRL every receiver holding that CRL refuses every message under the home CRACA (if that CRL was issued at t0, the onset is 1,814,400 s, inside W3); W4 all home-provider messages refused, the other provider's accepted
   source: "[CAMP122] Table 67 overdue_CRL_tolerance = 2 weeks; nextCrl = issue + 7 d (params.rs)"
-  measured: "0 crl-overdue refusals in every window; CRL versions published 10 -> 6"
-  verdict: open
-  note: "R-NOCRL: a CRL Generator publishes nothing before its first revocation (v2xw-proto scms/run/crl.rs arms the reissue timer only on a publication), so a CRACA the run has not revoked from has no CRL, no device holds one, and the overdue rule cannot act. The real deployment's CRLs exist at t0. See MWC2 for the rule acting after a first CRL"
+  measured: "re-run on 77cffb5b (rerun-2026-10-22.md §7): crl-overdue 0 in W0, W1, W2 and in W3 up to 1,814,400 s; 15,995 of 35,589 checked frames in W3's last 60 s (45 %); 97,679 of 202,775 in W4 (48 %, the home provider's share). Before the R-NOCRL fix: 0 in every window"
+  verdict: fixed
+  note: "R-NOCRL fixed in fix wave 2 (TRUST): every CRACA signs a CRL at t0, so the home list issued at t0 goes overdue at t0 + 21 d = 1,814,400 s exactly. Counts from runs truncated at each window's end (receiver_validation.refused); node.rx labels these refusals signature-invalid (rerun-2026-10-22.md §9)"
 - id: MWC.recovery
   base: MW
   variant: MWC
@@ -240,9 +240,9 @@ rows:
   measure: crl-overdue refusals in W5; CRL versions after the return
   expect: the Generator's timers run on its return at 2,600,000 s (FLOWS), it reissues at once, devices fetch at their next hourly poll, and W5 (day 33) has 0 overdue refusals
   source: FLOWS fix (held messages and timers on restart); crl_fetch_interval
-  measured: "0 overdue refusals in W5 (nothing to recover from)"
+  measured: "re-run on 77cffb5b: 755 crl-overdue refusals in W5, all at four devices that join during W5 (nodes 71-74, from 2,851,241 to 2,851,271 s), each from its first reception until its first CRL download (2-49 s); the devices on the road since before the outage refuse nothing"
   verdict: open
-  note: "R-NOCRL"
+  note: "R-JOINCRL (new): a mid-run joiner is given every provider's t0 CRL (phase2.rs, the lists a node holds when it joins), which on day 33 is long overdue, instead of the newest list published before it joined. MWP shows the same at every joiner in W3-W5"
 - id: MWC.revocation-blocked
   base: MW
   variant: MWC
@@ -269,9 +269,10 @@ rows:
   measure: CRL downloads and top-ups of the parked car while off
   expect: none (a switched-off OBU reaches nothing)
   source: physical; the outage switches the OBU off
-  measured: "node 20 has no node.security record, no top-up and no CRL download from 645 s to 2,419,510 s; its first CRL download at 2,419,510 s (the power-on instant)"
-  verdict: fixed
+  measured: "re-run on 77cffb5b: node 20 has no node.security record and transmits nothing from 645 s to 2,419,510 s, but proto.revocation records it downloading, processing and enforcing three CRLs at 604,740.2 s (the first live step of W1) while off, and no download after power-on. Before (stress round): first download at 2,419,510 s"
+  verdict: open
   test: "security_lifecycle::a_switched_off_device_reaches_no_scms_until_it_is_back_on (F-OFF)"
+  note: "reopened: an F-OFF hole at the fast-forward boundary, or a CRL install path that skips the power check (rerun-2026-10-22.md §7); not root-caused"
 - id: MWP.overdue-on-return
   base: MW
   variant: MWP
@@ -280,8 +281,8 @@ rows:
   expect: its newest CRL is about 4 weeks old (past nextCrl + 2 weeks), so it refuses every signed message until its first poll (due at once) installs a fresh CRL; its pool ended at its last period, so it cannot sign until a top-up arrives (download poll about 60 s)
   source: "[CAMP122] Table 67; 03 §8 (download after the batch is ready)"
   measured: "pool: 121 node.security records with an empty pool (about 60 s) after power-on, then 4 catch-up top-ups at 2,419,570 / 631 / 691 / 860 s and signing under 618; CRL: no crl-overdue refusal, because the car was switched off before any CRL existed (R-NOCRL)"
-  verdict: open
-  note: "the pool half passes; the CRL half needs R-NOCRL fixed"
+  verdict: pass
+  note: "the pool half passed in the stress round. CRL half, re-run on 77cffb5b (receptions recorded): node 20 refuses one message, at the power-on instant 2,419,510.0 s, as crl-overdue, then none (27,211 delivered): its first poll at power-on installs a current list. That install has no proto.revocation record, and its only recorded download is the one at 604,740 s while off (MWP.off-no-backend). The other 18,617 crl-overdue refusals in MWP are mid-run joiners (nodes 45-74, R-JOINCRL)"
 - id: MW.determinism
   base: MW
   variant: MW1

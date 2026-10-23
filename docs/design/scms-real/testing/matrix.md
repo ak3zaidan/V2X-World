@@ -142,7 +142,7 @@ in `scms-matrix.yaml` are this re-run's; the table below is too.
      honest and 3 of 3 attackers.
    - Next suspect: the claimed position and `generationTime` pair that the 1 m check
      extrapolates over, which is not GNSS. It needs a receptions-level run.
-2. **R-TRUSTLEAK grew** from 7 to 280 provider-b messages verified at provider-a receivers,
+2. **R-TRUSTLEAK — FIXED in fix wave 2 (TRUST; off-ctl re-run on 77cffb5b: 0 provider-b messages verified, realism V6).** It grew from 7 to 280 provider-b messages verified at provider-a receivers,
    with provider-b off the CTL.
 3. **A constant 27 MA decisions** in M0, att10 (9 attackers, 5 reported, 3 revoked) and
    sybil. **Explained** (`usfp.md` §4): M0 and att10 decide the same 27 actors, the R-USFP
@@ -154,8 +154,11 @@ in `scms-matrix.yaml` are this re-run's; the table below is too.
    - provider-b (SAESOL form) matches CAMP Table 3 exactly: response 454/470, ack 292/294,
      ECA response 958.
    - provider-a (the ISS form from the fix wave) is 501/517, 304/306 and 1,064.
-   - Most likely its published component certificates are longer. That is not yet checked
-     against the published ISS chain by the oracle.
+   - Most likely its published component certificates are longer. **Checked 2026-10-22**
+     (`tools/realworld/component_certs.py`, `rerun-2026-10-22.md` §8): all 10 component
+     certificates match the published chain of their form field for field; the ISS extra
+     bytes are the published certificates' region (12 B) and encryption key (35 B). Z1/Z3/Z4
+     now take the ISS sizes.
    - Z5 (CRL 924 B) and A1 (MBR airtime 7.8 %) are consequences of R-USFP's 27 revocations
      and 7,744 reports.
 6. **L5:** the case board shows the review as 28,799.2 s, not ≥ 28,800 s. The review clock

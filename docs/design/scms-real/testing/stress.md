@@ -110,7 +110,15 @@ today: R-USFP at rush-hour density** (open; 07 §8.3).
 | MWP.overdue-on-return | refuses everything until its first poll; empty pool until a top-up | Pool: empty for about 60 s after power-on (121 records), then 4 catch-up top-ups (at 2,419,570, 631, 691 and 860 s), signing under 618 and then 619. CRL: no overdue refusal, because the car was switched off before any CRL existed (R-NOCRL) | pool: pass; CRL: **open (R-NOCRL)** |
 | MW.determinism | identical record digest at 1 and 4 threads | `0e97a8ac…5e08bee` at both (343 s at 1 thread, 414 s at 4) | pass |
 
-**R-NOCRL (open, engine realism defect).**
+**Re-run on main `77cffb5b` (2026-10-22, `rerun-2026-10-22.md` §7).** R-NOCRL is fixed
+(fix wave 2): `MWC.overdue-onset` now acts at t0 + 21 d = 1,814,400 s exactly (0 refusals in
+W0–W2 and W3 before it; 45 % of W3's last minute and 48 % of W4 refused, the home share).
+`MWP.overdue-on-return` passes (the parked car refuses one message at power-on, then polls).
+`MWC.recovery` is open on a new defect, R-JOINCRL: the 755 W5 refusals are four devices that
+join on day 33 holding the t0 lists. `MWP.off-no-backend` is reopened: the switched-off car
+records three CRL downloads at 604,740.2 s. The paragraph below is the original finding.
+
+**R-NOCRL (fixed in fix wave 2; was open, engine realism defect).**
 - A provider's CRL Generator publishes nothing until its first revocation in the run
   (`v2xw-proto/src/scms/run/crl.rs`: the reissue timer is armed only by a publication).
   The only exception is `seed_standing_crl`, which is set only when standing entries are
