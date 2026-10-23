@@ -749,7 +749,15 @@ fn the_revocations_move_the_crl_size() {
         if let Some(p) = s.security.protocol.as_mut() {
             p.params["report_shuffle_window_s"] = json!(5);
             p.params["crl_cadence_s"] = json!(10);
-            p.params["crl_fetch_interval_s"] = json!(5);
+            // A 30 s poll, not 5 s: the linkage check below needs a revoked device to be
+            // reported under its next pseudonym before the receivers hold the CRL that
+            // revokes it. With a 5 s poll every receiver holds it first, so the next
+            // pseudonym is refused, not reported (0.3: 35,094 revoked receptions and 0
+            // linked verdicts at 5 s; 16,086 and 7 at 30 s; 2,876 and 7 at 120 s;
+            // docs/design/scms-real/testing/rerun-2026-10-22.md §2). The poll moves how
+            // soon receivers enforce, not what one revocation adds to the list, which is
+            // what this test sizes.
+            p.params["crl_fetch_interval_s"] = json!(30);
         }
         run(s)
     };

@@ -48,6 +48,14 @@ python -I tools/realworld/matrix.py check crates/v2xw-engine/tests/expectations/
 
 All 32 runs completed through the run lock: wall 25–410 s, peak 127–447 MB.
 
+**Re-run on main `77cffb5b` (2026-10-22, `rerun-2026-10-22.md` §6).** Every run (32, plus
+`gnss-raw` and `us-profile`) with the release binary of `77cffb5b`, same seed; all 34
+completed, wall 20–250 s, peak 103–180 MB. `matrix.py check`: 90 rows hold and 9 carry a
+recorded verdict (99 rows: 81 pass, 7 fixed, 10 wrong expectation, 1 open: LTE-V2X BSM p95
+112 ms). `runtime_realism.py check`: 60 pass, 2 open (T5, L5), 0 fail. No run revokes an
+honest device except `gnss-raw` (26, the R-USFP fault by construction). The measured values
+in `scms-matrix.yaml` are this re-run's; the table below is too.
+
 ## What I fixed
 
 1. **The SCMS runs had become 13 times slower** (`7a8e7ef0`).
@@ -134,7 +142,7 @@ All 32 runs completed through the run lock: wall 25–410 s, peak 127–447 MB.
      honest and 3 of 3 attackers.
    - Next suspect: the claimed position and `generationTime` pair that the 1 m check
      extrapolates over, which is not GNSS. It needs a receptions-level run.
-2. **R-TRUSTLEAK grew** from 7 to 280 provider-b messages verified at provider-a receivers,
+2. **R-TRUSTLEAK — FIXED in fix wave 2 (TRUST; off-ctl re-run on 77cffb5b: 0 provider-b messages verified, realism V6).** It grew from 7 to 280 provider-b messages verified at provider-a receivers,
    with provider-b off the CTL.
 3. **A constant 27 MA decisions** in M0, att10 (9 attackers, 5 reported, 3 revoked) and
    sybil. **Explained** (`usfp.md` §4): M0 and att10 decide the same 27 actors, the R-USFP
@@ -146,8 +154,11 @@ All 32 runs completed through the run lock: wall 25–410 s, peak 127–447 MB.
    - provider-b (SAESOL form) matches CAMP Table 3 exactly: response 454/470, ack 292/294,
      ECA response 958.
    - provider-a (the ISS form from the fix wave) is 501/517, 304/306 and 1,064.
-   - Most likely its published component certificates are longer. That is not yet checked
-     against the published ISS chain by the oracle.
+   - Most likely its published component certificates are longer. **Checked 2026-10-22**
+     (`tools/realworld/component_certs.py`, `rerun-2026-10-22.md` §8): all 10 component
+     certificates match the published chain of their form field for field; the ISS extra
+     bytes are the published certificates' region (12 B) and encryption key (35 B). Z1/Z3/Z4
+     now take the ISS sizes.
    - Z5 (CRL 924 B) and A1 (MBR airtime 7.8 %) are consequences of R-USFP's 27 revocations
      and 7,744 reports.
 6. **L5:** the case board shows the review as 28,799.2 s, not ≥ 28,800 s. The review clock
@@ -163,41 +174,46 @@ All 32 runs completed through the run lock: wall 25–410 s, peak 127–447 MB.
 
 ## Per-run headline measurements
 
+Re-run on `77cffb5b` (release binary; wall times are a shared machine's). `M0-b1` is the
+first round's pre-fix base, kept for the before/after.
+
 | run | wall s | MB | PDR | BSM ms | CBR p95 | AoI ms | verified | sec B | top-off certs | reports | attackers rev. | honest rev. | enforced s |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | M0-b1 | 2074 | 221 | 0.364 | 12.4 | 0.014 | 1693079 | 77283 | 2446453 | 1100 | 7488 | 1 | 26 | 147595 |
-| M0 | 164 | 223 | 0.364 | 12.4 | 0.014 | 82 | 77283 | 2446453 | 1100 | 7488 | 1 | 26 | 147595 |
-| no-hsm | 159 | 226 | 0.363 | 3.7 | 0.014 | 70 | 77445 | 2446825 | 1100 | 7498 | 2 | 28 | 147590 |
-| pq-hybrid | 25 | 161 | 0.343 | 6.7 | 0.059 | 81 | 72398 | 24072007 | 0 | 6706 | 2 | 27 | 147590 |
-| gnss-rtk | 147 | 196 | 0.364 | 12.4 | 0.014 | 81 | 77344 | 2446127 | 1100 | 6395 | 1 | 26 | 147594 |
-| gnss-clean | 160 | 223 | 0.364 | 12.4 | 0.014 | 82 | 77270 | 2446111 | 1100 | 7475 | 1 | 25 | 147595 |
-| on-demand | 36 | 149 | 0.364 | 12.1 | 0.014 | 82 | 37580 | 2446453 | 1100 | 3632 | 1 | 22 | 147595 |
-| camp | 158 | 234 | 0.364 | 12.4 | 0.014 | 82 | 77283 | 2446453 | 1100 | 7488 | 1 | 27 | - |
-| test-ctl | 122 | 182 | 0.364 | 12.4 | 0.014 | 81 | 77292 | 2447860 | 1100 | 6038 | 2 | 20 | 104415 |
-| split-90-10 | 161 | 232 | 0.364 | 12.4 | 0.014 | 82 | 77283 | 2446453 | 1100 | 7488 | 1 | 27 | 147597 |
-| lte | 381 | 447 | 0.880 | 68.0 | - | 113 | 257141 | 4722994 | 1100 | 26077 | 2 | 35 | 147602 |
-| nr | 234 | 334 | 0.605 | 35.9 | - | 88 | 124927 | 2355248 | 1100 | 13020 | 2 | 32 | 147594 |
-| nyc-pilot | 156 | 223 | 0.364 | 12.3 | 0.013 | 81 | 76888 | 2446111 | 1100 | 7432 | 1 | 29 | 147595 |
-| silent | 162 | 223 | 0.364 | 12.4 | 0.014 | 82 | 77283 | 2446453 | 1100 | 7488 | 1 | 26 | 147595 |
-| full-cert | 169 | 233 | 0.362 | 12.4 | 0.018 | 83 | 79085 | 3863553 | 1100 | 7770 | 1 | 29 | 147595 |
-| rsu5 | 263 | 181 | 0.334 | 12.3 | 0.016 | 72 | 45972 | 2446291 | 1060 | 4016 | 1 | 23 | 147707 |
-| rsu0 | 233 | 180 | 0.323 | 12.3 | 0.014 | 81 | 40520 | 2445854 | 1020 | 3883 | 1 | 24 | 147717 |
-| pen0 | 250 | 200 | 0.359 | 12.4 | 0.041 | 82 | 76849 | 2446453 | 940 | 6803 | 1 | 26 | - |
-| backhaul-cellular | 160 | 221 | 0.364 | 12.4 | 0.014 | 82 | 77283 | 2446453 | 1100 | 7488 | 1 | 26 | 147595 |
-| fleet-half | 82 | 134 | 0.366 | 12.4 | 0.022 | 89 | 36486 | 1404446 | 780 | 3383 | 2 | 12 | 147726 |
-| att10 | 160 | 210 | 0.364 | 12.4 | 0.014 | 81 | 77301 | 2446453 | 1100 | 7154 | 3 | 24 | 147595 |
-| sybil | 167 | 245 | 0.361 | 12.7 | 0.023 | 81 | 92543 | 3842239 | 1100 | 9192 | 1 | 26 | 147595 |
-| ma-legacy | 160 | 220 | 0.364 | 12.4 | 0.014 | 82 | 77283 | 2446453 | 1100 | 7488 | 1 | 28 | 147601 |
-| tls12 | 160 | 220 | 0.364 | 12.4 | 0.014 | 82 | 77283 | 2446453 | 1100 | 7488 | 1 | 26 | 147595 |
-| real-crypto | 186 | 211 | 0.364 | 12.4 | 0.014 | 82 | 77283 | 2446453 | 1100 | 7488 | 1 | 26 | 147595 |
-| cert60 | 410 | 278 | 0.364 | 12.4 | 0.014 | 82 | 77283 | 2446453 | 3300 | 7488 | 1 | 26 | 147595 |
-| crl-on-decision | 161 | 226 | 0.364 | 12.4 | 0.014 | 82 | 77283 | 2446453 | 1100 | 7488 | 1 | 26 | 115195 |
-| fleet2x | 333 | 438 | 0.347 | 12.3 | 0.045 | 79 | 190342 | 4875824 | 1960 | 18736 | 2 | 72 | 147637 |
-| ma-auto | 160 | 215 | 0.364 | 12.4 | 0.014 | 82 | 77283 | 2446453 | 1100 | 7488 | 1 | 26 | 147595 |
-| no-sharing | 160 | 212 | 0.364 | 12.4 | 0.014 | 82 | 77283 | 2446453 | 1100 | 4568 | 1 | 22 | 147595 |
-| off-ctl | 100 | 127 | 0.362 | 12.3 | 0.014 | 79 | 77420 | 2447575 | 1100 | 2074 | 1 | 7 | 147595 |
-| region-west | 161 | 214 | 0.364 | 12.4 | 0.014 | 82 | 77283 | 2446453 | 1100 | 7488 | 1 | 26 | 147595 |
-| research-suite | 41 | 148 | 0.364 | 12.4 | 0.014 | 82 | 77430 | 2446453 | 1100 | 310 | 3 | 0 | 147574 |
+| M0 | 31 | 141 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 1100 | 235 | 2 | 0 | 147613 |
+| no-hsm | 31 | 160 | 0.364 | 3.7 | 0.014 | 70 | 77627 | 2446483 | 1100 | 226 | 2 | 0 | 147613 |
+| pq-hybrid | 20 | 126 | 0.343 | 6.7 | 0.059 | 81 | 72364 | 24071670 | 0 | 227 | 2 | 0 | 147613 |
+| gnss-rtk | 33 | 146 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 1100 | 235 | 2 | 0 | 147613 |
+| gnss-clean | 36 | 144 | 0.364 | 12.4 | 0.014 | 82 | 77515 | 2446111 | 1100 | 235 | 2 | 0 | 147613 |
+| gnss-raw | 250 | 224 | 0.364 | 12.4 | 0.014 | 82 | 79274 | 2446453 | 1100 | 7488 | 1 | 26 | 147613 |
+| on-demand | 39 | 140 | 0.364 | 12.1 | 0.014 | 82 | 37572 | 2446111 | 1100 | 105 | 1 | 0 | 147613 |
+| camp | 40 | 139 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 1100 | 235 | 2 | 0 | - |
+| test-ctl | 51 | 136 | 0.366 | 12.4 | 0.014 | 81 | 77569 | 2447530 | 1100 | 235 | 1 | 0 | 147613 |
+| split-90-10 | 41 | 138 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 1100 | 235 | 2 | 0 | 147613 |
+| lte | 56 | 169 | 0.921 | 69.4 | - | 118 | 272001 | 4857752 | 1100 | 1315 | 2 | 0 | 147613 |
+| nr | 47 | 137 | 0.628 | 32.2 | - | 91 | 127756 | 2368930 | 1100 | 477 | 2 | 0 | 147613 |
+| nyc-pilot | 40 | 138 | 0.364 | 12.3 | 0.013 | 82 | 77208 | 2446111 | 1100 | 234 | 2 | 0 | 147613 |
+| silent | 39 | 140 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 1100 | 235 | 2 | 0 | 147613 |
+| full-cert | 38 | 142 | 0.362 | 12.4 | 0.018 | 82 | 79237 | 3863211 | 1100 | 238 | 2 | 0 | 147613 |
+| rsu5 | 41 | 134 | 0.331 | 12.3 | 0.014 | 72 | 46048 | 2446111 | 1060 | 83 | 1 | 0 | 147739 |
+| rsu0 | 36 | 134 | 0.323 | 12.3 | 0.014 | 81 | 40522 | 2445851 | 1020 | 156 | 1 | 0 | 147739 |
+| pen0 | 40 | 136 | 0.364 | 12.4 | 0.014 | 80 | 77834 | 2446111 | 940 | 199 | 2 | 0 | - |
+| backhaul-cellular | 39 | 140 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 1100 | 235 | 2 | 0 | 147613 |
+| fleet-half | 26 | 130 | 0.364 | 12.4 | 0.007 | 81 | 36509 | 1404121 | 780 | 157 | 1 | 0 | 147751 |
+| att10 | 47 | 143 | 0.364 | 12.4 | 0.017 | 82 | 77642 | 2446111 | 1100 | 621 | 4 | 0 | 147613 |
+| sybil | 45 | 135 | 0.361 | 12.7 | 0.029 | 81 | 93718 | 3841897 | 1100 | 1570 | 2 | 0 | 147613 |
+| ma-legacy | 39 | 138 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 1100 | 235 | 2 | 0 | 147613 |
+| tls12 | 39 | 142 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 1100 | 235 | 2 | 0 | 147613 |
+| real-crypto | 61 | 128 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 1100 | 235 | 2 | 0 | 147613 |
+| cert60 | 67 | 193 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 3300 | 235 | 2 | 0 | 147613 |
+| crl-on-decision | 41 | 139 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 1100 | 235 | 2 | 0 | 115279 |
+| fleet2x | 68 | 160 | 0.350 | 12.3 | 0.021 | 81 | 191246 | 4875349 | 1960 | 360 | 2 | 0 | 147653 |
+| ma-auto | 36 | 142 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 1100 | 235 | 2 | 0 | 147613 |
+| no-sharing | 37 | 142 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 1100 | 190 | 2 | 0 | 147613 |
+| off-ctl | 36 | 137 | 0.362 | 12.3 | 0.014 | 77 | 77496 | 2447251 | 1100 | 230 | 2 | 0 | 147613 |
+| region-west | 37 | 133 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 1100 | 235 | 2 | 0 | 147613 |
+| research-suite | 39 | 145 | 0.364 | 12.4 | 0.014 | 82 | 77460 | 2446111 | 1100 | 243 | 3 | 0 | 147613 |
+| us-profile | 38 | 142 | 0.364 | 12.4 | 0.014 | 82 | 77517 | 2446111 | 1100 | 235 | 2 | 0 | 147613 |
 
 ## Every row
 

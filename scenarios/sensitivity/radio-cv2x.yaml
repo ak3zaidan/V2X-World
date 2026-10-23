@@ -26,21 +26,34 @@ rows:
     metric: prr_600_1000
     expect: down
     source: a higher MCS needs a higher SINR for the same BLER (TS 36.213 Table 8.6.1-1)
-  - name: LTE MCS 7->11
-    set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {mcs: 11}}}
+  - name: LTE MCS 5->7
+    base_set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {mcs: 5}}}
+    set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {mcs: 7}}}
     metric: cbr_mean
     expect: down
-    source: a higher MCS carries the same transport block on fewer sub-channels (TS 36.213 Table 7.1.7.2.1-1), and CBR counts busy sub-channels
+    source: >-
+      a higher MCS carries the same transport block on fewer sub-channels (TS 36.213 Table
+      7.1.7.2.1-1), and CBR counts busy sub-channels. Measured on MCS 5 -> 7 since the real
+      80 B pseudonym certificate (WP-C1; CAMP Table 3): a signed BSM is 161 B with a digest
+      and 225 B with the certificate, and J3161/1's two-sub-channel minimum carries 288 B at
+      MCS 7 and 462 B at MCS 11, so 7 -> 11 moves nothing (0.1784 -> 0.1783). At MCS 5 two
+      sub-channels carry 210 B, so a certificate frame takes three, and MCS 7 takes it in two
+      (docs/design/scms-real/testing/rerun-2026-10-22.md §1)
   - name: LTE MCS 7->11
     set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {mcs: 11}}}
     metric: airtime_us
     expect: same
     source: a sidelink transmission is one subframe (1 ms) whatever the MCS; the MCS moves frequency, not time
   - name: LTE certificate on every message
+    base_set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {mcs: 5}}}
     set: {security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
     metric: cbr_mean
     expect: up
-    source: the larger transport block needs more sub-channels at the same MCS
+    source: >-
+      the larger transport block needs more sub-channels at the same MCS. At MCS 5: the
+      225 B certificate frame needs three sub-channels where the 161 B digest frame needs two;
+      at MCS 7 both fit the two-sub-channel minimum (288 B) since the real 80 B certificate
+      (rerun-2026-10-22.md §1)
   # Load.
   - name: LTE vehicles 40->120
     set: {actors.vehicles.demand.params.max_total_vehicles: 120}
@@ -58,7 +71,14 @@ rows:
   - name: LTE vehicles 40->120
     set: {actors.vehicles.demand.params.max_total_vehicles: 120}
     metric: e2e_ms_mean
-    expect: up
+    expect: same
+    min_change: 0.1
+    source: >-
+      SPS e2e is the reservation's offset after generation, uniform over the selection window
+      whatever the load (TS 36.213 14.1.1.6): about 50 ms, and its mean over 40 vehicles
+      carries about +-4.6 ms of sampling spread. Load adds the verify wait (+3.4 ms at 115
+      vehicles). Measured 67.66 -> 65.12 ms: access 52.0 -> 46.1, verify wait 0.09 -> 3.51
+      (rerun-2026-10-22.md §1). It was `up` (59.5 -> 63.6 ms before), inside the same spread
   - name: LTE rate 10->20 Hz (RRI 50)
     base_set: {time.mobility_step_ms: 50, radio.sidelink.reservation_interval_ms: 50}
     set: {messages.rate_hz: 20.0}
@@ -73,10 +93,15 @@ rows:
     band: [0.4, 0.65]
     source: each blind retransmission occupies another sub-channel set (TS 36.213 14.1.1.4C)
   - name: LTE transmissions 2->1
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
     set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {max_transmissions: 1}}}
     metric: prr
     expect: down
-    source: HARQ combining of the blind copy recovers marginal links
+    source: >-
+      HARQ combining of the blind copy recovers marginal links, so the row runs where links
+      are marginal (5 dBm, as the MCS and noise-figure rows): 0.886 -> 0.783. At 20 dBm the
+      links inside 1 km are not marginal and the copy only adds collisions (collision rate
+      0.0116 -> 0.0010 without it): PRR 0.985 -> 0.990 (rerun-2026-10-22.md §1)
   # SPS.
   - name: LTE RRI 100->50 ms
     set: {radio.sidelink.reservation_interval_ms: 50}

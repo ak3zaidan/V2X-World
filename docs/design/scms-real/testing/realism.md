@@ -233,6 +233,17 @@ Rust faults were injected with `tools/mutate/mutate.py`.
 | `scenario::world_and_detector_inputs…` | US profile accepts any key | RED |
 | `runtime_realism.py check` (input faults) | sealed SPDU opened by the RA / RA holds a linkage value / 2 requests per OBU / cert60 tops up ×2 / west leg not slower | 5 × RED |
 
+## 5a. Re-run on main `77cffb5b` (2026-10-22)
+
+All 62 rows of `runtime_expectations.yaml` on fresh runs (release binary of `77cffb5b`;
+`base` and `base-new` are the matrix base M0): 60 pass, 2 open (T5, L5), 0 fail. Rows
+corrected with evidence: Z1/Z3/Z4 take the ISS form's sizes (the published ISS certificates
+carry a region and an encryption key, `tools/realworld/component_certs.py`); A3 and
+V8-us-catches-constpos expect 2 of 3 (SM-MBR cannot report the handset attacker);
+V8-us-checks-every-bsm is judged against `research-suite`, which now files on the modelled
+path (`modelled_reports: 1`) and revokes 3 of 3. Details: `rerun-2026-10-22.md` §6, §8.
+R-USFP and R-TRUSTLEAK below are fixed (fix wave 2).
+
 ## 6. Owed
 
 - R-SERIAL: concurrent cases in the engine driver, with per-case CRL entry matching, then
