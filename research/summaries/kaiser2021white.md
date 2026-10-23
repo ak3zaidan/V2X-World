@@ -1,11 +1,17 @@
 # White Paper on Misbehaviour Detection and Reporting to Misbehaviour Authority
-Arnaud Kaiser · HAL (Le Centre pour la Communication Scientifique Directe) 2021 · https://openalex.org/W4391670308 · relevance: high · basis: abstract
+CAR 2 CAR Communication Consortium (A. Kaiser et al.) · C2C-CC WP 2091/2092 v1.0, 2021-12-17 · https://www.car-2-car.org/fileadmin/documents/General_Documents/C2CCC_WP_2092_MisbehaviourDetection_and_Reporting_V1.0.pdf · relevance: high · basis: full text (detection, fusion and implementation-results sections read)
 
-**Problem:** This white paper presents the results of projects, in their Research and Development phase, and Testbeds on security architectures, on-board misbehaviour detection mechanisms, and reporting to a Misbehaviour Authority.
-**Approach:** The focus of the survey conducted in this paper was Day1 C-ITS applications.The paper also lists existing standards that specify misbehaviour framework architectures and identifies future work to be done on Day2+ C-ITS applications to propose further privacy-friendly local misbehaviour detection mechanisms and reporting protocol.
-**Tools and scale:** Not stated in the available text unless given above (topic: adjacent V2X security).
-**Results:** No quantitative results in the available text.
+**Problem:** Survey R&D projects and test beds on on-board MBD and reporting to an MA for Day-1 C-ITS. Propose fixed plausibility thresholds for CAMs and DENM checks.
+**Approach:**
+- Legacy and CaTch-style (confidence-range) checks.
+- Fusion apps: threshold, aggregation and node-trust.
+- C2C-CC-agreed fixed thresholds for passenger-car CAM fields, e.g. yaw rate > 1.5 rad/s and curvature radius < 3.9 m (Table 4).
+- DENM checks from draft ETSI TS 103 759.
+**Tools and scale:** A literature and project survey. Reuses F2MD-based comparisons. No new measurements.
+**Results:** Threshold fusion is comparable to the ML fusion apps.
 **Limitations and future work (as stated by the authors):**
-- The focus of the survey conducted in this paper was Day1 C-ITS applications.The paper also lists existing standards that specify misbehaviour framework architectures and identifies future work to be done on Day2+ C-ITS applications to propose further
-**Overlap with our engine:** strong — C-ITS white paper on misbehaviour detection and reporting to a Misbehaviour Authority; overlaps our MA and direction 1
-**Novelty implications:** Prior work on this exact mechanism; we cannot claim it as new. Open: integration with full radio/traffic stack, per-message ground truth, and safety outcomes in closed loop.
+- "the global MA should be designed to withstand a number of False Positive reports".
+- "testing of advanced misbehaviour detection applications in large-scale deployment projects or field-tests (FOTs) has started, but currently there is no sufficient evaluation results" (p.23).
+- RSU CAMs are excluded.
+**Overlap with our engine:** partial. The EU counterpart of the US MBR rule set.
+**Novelty implications:** Confirms that, as of 2021, no field evaluation of standard check sets at the MA level had been published. EU-side context for Paper 1, not pre-emption.
