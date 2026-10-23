@@ -6,6 +6,10 @@ only. It is the baseline an attack study is compared against. Every number below
 run it came from (§1.3), and each one is compared with a published or literature value
 where one exists. A value that looks implausible is flagged and was investigated (§9).
 
+**Status (2026-10-22).** §0 has the full-scale run on current code. It was stopped by the
+memory cap at about 155 simulated seconds; its complete metric windows and a complete 40 s
+run are reported there. §1–§10 are the 2026-10-18 report, unchanged.
+
 **Status (2026-10-18).** The full-scale file could not be run to completion on the owner's
 laptop while it was shared with other builds (§8). The numbers below come from:
 - the full-scale file's first 10 simulated seconds (run cost, provisioning load, report
@@ -21,6 +25,85 @@ their commands and the cost model that bounds them).
 pedestrians, the reports fill a quarter of the channel's airtime, and the MAs revoked 10
 honest devices in two days. Until it is fixed, no misbehaviour, airtime or revocation
 number from a scenario with VRU handsets is a real-world number.
+
+## 0. The full-scale run on main `88e24b09` (2026-10-22)
+
+**Status.** The full-scale file was run again, on current code, and again did not finish. It
+was stopped by the machine's 2.5 GB memory cap, not by time: the engine's footprint grows
+by about 1.4–2 MB for each road user on the map, and the transient peaks on top of that
+reached 2,582 MB at about 155 simulated seconds, with 1,580 nodes on the map. So the full
+fleet's live window, the rollover window and the two fast-forwards have no end-of-run
+report. What exists at full scale (expectation rows and verdicts:
+`crates/v2xw-engine/tests/expectations/scms-final-bench.yaml`; method and analysis:
+`docs/design/scms-real/testing/final-bench.md`):
+
+| Id | What | Result |
+|---|---|---|
+| R-FS | `midtown-scms-benchmark.yaml` as committed, opt-level-2 debug build of `88e24b09` (sha256 prefix `9bdf0275318dcbf8`), `--record-level metrics`, 2 rayon threads, seed `0xBE7C_0001` | stopped at about 155 of 172,800 s (79 min wall, about 6,300 CPU-s). The metric windows ending at 130, 140 and 150 s were already written and are complete. They are the first full-fleet radio, latency and traffic numbers after the fill |
+| R-FS40 | the same file, 0–40 s, 10 s warm-up, census every 10 s | complete: 535 s wall, 623 CPU-s, 910 MB peak. The full-fleet run report for provisioning, reports and trust |
+
+**Full fleet against the quarter fleet.** "Quarter" is §2–§6 below (R-Q, older build, before
+the PSM, R-USFP, R-NOCRL and trust fixes). Rows that those fixes change are marked.
+
+| Quantity | Quarter (R-Q, live 1) | Full (R-FS, 130–150 s) | Reading |
+|---|---|---|---|
+| Nodes on the map | about 350 | 1,580–1,632 (R-FS40 at 40 s: 1,000 = 389 vehicles, 581 handsets, 30 RSUs; provider split 496 / 504) | Vehicles pile up: the 4× fill puts 900 vehicles into a congested box |
+| Mean speed | 4.12 m/s | 2.75 → 2.60 → 2.33 m/s; p50 0.82 → 0.18 m/s | Now in the band of Midtown's measured ~5 mph (2.2 m/s), and still falling at 150 s |
+| Time headway | p50 2.67 s, mean 3.20 s | p50 2.94 s, mean 3.11 s | — |
+| Pedestrian wait | mean 0.63 s, p99 8.2 s | mean 0.70–0.82 s, p99 14–19 s, max 119 s | Longer waits under the heavier traffic |
+| CBR, ch 172 | mean 0.011, p95 0.027 | mean 0.074–0.078, p95 0.14–0.16, max 0.24 | 7× the quarter. Still below J2945/1 `vMinCU` 0.5, so no power adaptation |
+| PDR within 100 m / 300 m | 0.838 / 0.290 | 0.84 / 0.28 | Unchanged. 80–100 m 0.66, 0–20 m 0.998 |
+| Loss causes (of all attempts) | below-sensitivity 98.8 % of losses | below-sensitivity 83.8 %, hidden terminal 2.0 %, half-duplex 0.39 %, rx overflow 0.27 %, collision 0.04 % | Hidden terminals and receiver overflow appear at full density |
+| Reception attempts | — | 2.96–3.06 M per simulated second | — |
+| BSM end-to-end latency | mean 12.2 ms, p95 14.6 | mean 12.39 ms, p95 14.62, p99 14.94, max 214 ms | The fixed 9 ms CRATON2 sign plus a 2.5 ms handoff dominate (§9.4). MAC defer mean 0.05 ms |
+| Verifications | 10,163/s fleet-wide, about 30 per node per second | 376–390 k/s fleet-wide, **about 240 per node per second**; queue p99 0, max 31; wait p99 0.28 ms | 8× per node. Still a tenth of CRATON2's > 2,500/s |
+| Unverified share | — | 5.3 % (R-FS40: 89,536 of 2.1 M) | `prioritized` sheds under load (the scenario's own validator note) |
+| Full-certificate share / P2PCD | 25.1 % / 387 per s | 16.1 % / 21,450 per s | Nearer J2945/1's 10 % once the fill is over |
+| AoI / peak AoI | 79.3 ms / p50 112, p99 215 ms | 119–130 ms / p50 113, p99 414–510 ms | The tail doubles |
+| Backend reachability | 0.963 | 0.961 | — |
+| Valid pseudonyms in the pool | 20 | 20 at every census (0 starved) | — |
+| MBR on the air | 24.5 % of airtime (PSM defect, fixed) | R-FS40: 43 MBR frames, 68.8 ms of 32.6 s airtime (**0.21 %**) | Fixed |
+| Honest reports | 36,024 (PSM defect) | R-FS40: 229 reports about 32 honest devices in 40 s; verdicts `constantPositionFrozen` 165, `positionJump` 71; 0 cases, 0 revocations in the window | The residual false-positive rate (§0.1) |
+| Receiver refusals | 48,123 `psid-not-permitted` | R-FS40: 0 refusals of any cause; 2,000 CRLs accepted; 60 RSU CRL installs | Trust and CRL fixes hold at scale |
+| Privacy observer | 183 claims, 0 correct | R-FS40: **2,873 link claims, 0 correct, with 0 pseudonym changes** | Open (§0.1) |
+
+**Run cost at full fleet.**
+- R-FS: 6,300 CPU-s and 79 min wall for about 155 simulated seconds (2 rayon threads, on a
+  machine mostly idle after the first 10 minutes). That is 40 CPU-s per simulated second
+  on average, rising with the fleet.
+- R-FS40: 0–10 s took 182 s of wall time (provisioning 701 devices at entry), 10–20 s took
+  70 s, 20–30 s 129 s and 30–40 s 150 s.
+- Footprint by census: 450 MB at 701 nodes, 609 MB at 783, 817 MB at 888 and 868 MB at 992.
+  R-FS: 795 MB at 13 min, 1,079 MB at 23 min, 1,457 MB at 43 min (peak 1,998), 1,418 MB at
+  63 min (peak 2,225), then the cap at 2,582 MB.
+- Where the time goes (a `sample` at 23 min): radio obstacle geometry (`segment_blocked`,
+  `ring_crossing`, the building index) and the reception fan-out (`finish_rx_only`,
+  `dsrc_outcomes`), then P-256 field arithmetic. A few per cent goes to `serde_json`
+  serialising and parsing `NodeRxView` and `PhyRxView` records, even at record level
+  `metrics`.
+- To finish the file, the remaining 145 live s at about 60 CPU-s each, plus the 60 s
+  rollover window, add roughly 3 CPU-hours. In all it is 4–5 CPU-hours, more than the
+  2–3.3 the stress package estimated. Memory is the binding limit, though: at 2 MB a node,
+  1,600 nodes plus the transient peaks need 3–4 GB.
+
+### 0.1 Open items found at full scale
+
+1. **Memory grows by about 2 MB per node on the map**, and transient peaks of up to
+   +0.8 GB come on top. The engine's census shows no collection growing out of proportion
+   (`p2.checked_at` 44,260 entries at 40 s; credentials 40 per device), so the bytes are
+   inside per-node state the census does not size: detector suites, verification caches
+   and the per-step reception fan-out. The next step is a heap profile.
+2. **The passive observer claims links when no pseudonym changed.** In R-FS40: 3,120 link
+   decisions, 2,873 claims, 0 correct, and `pseudonym_changes` 0 in 40 s. A link claim
+   needs a change to link across, so the linker is either counting something else or
+   acting on vehicles entering and leaving its coverage. §9.6 saw the same 0-correct
+   pattern at the quarter fleet.
+3. **Honest false positives at full density.** In 40 s the US SM-MBR suite reported 32
+   honest devices (229 reports). Most verdicts were `constantPositionFrozen` (165 of 236). The likely
+   cause is vehicles standing in queues, but that is not yet checked against the recording. The end-to-end consequence under manual review over the
+   two days (cases, decisions, honest revocations) is unmeasured because R-FS did not
+   finish. With a median speed of 0.18 m/s, this is the kind of false positive the benchmark is
+   meant to expose.
 
 ## 1. What was run
 
@@ -153,9 +236,10 @@ Windows: "live 1" is the R-Q sample ending at 50 s (the 40–50 s metric window,
 
 R-FULL reached 10 simulated seconds in 24 minutes of wall time. At that rate its 300 live
 seconds need many hours on the shared 8 GB laptop, so the quarter-fleet file replaced it. The
-full file is unchanged and validated; run it with
-`v2xw run scenarios/real-world/midtown-scms-benchmark.yaml --record-level metrics` on an idle
-or larger machine.
+full file is unchanged and validated. On 2026-10-22 it was run on current code and stopped
+at the 2.5 GB memory cap at about 155 s (§0). Run it with
+`v2xw run scenarios/real-world/midtown-scms-benchmark.yaml --record-level metrics` on a
+machine with 4 GB or more to spare (§0 has the memory model).
 
 ## 9. Implausible results and what they are
 

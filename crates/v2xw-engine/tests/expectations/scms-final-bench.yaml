@@ -1,0 +1,342 @@
+# SCMS final runs, part 1: the full-scale benchmark and the hybrid post-quantum runs
+# (docs/design/scms-real/testing/final-bench.md). Every `expect` was written down and
+# committed with `measured: pending` before its run. `measured` is base -> variant, or the
+# one run's value for an invariant row. Not a sweep table: `v2xw sensitivity` passes over it
+# by its `schema` (sweep::SCMS_RUN_EXPECTATIONS_SCHEMA).
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+schema: v2xw/scms-run-expectations/1
+
+runs:
+  QD:
+    scenario: docs/benchmark/scms-real-benchmark.md
+    note: >-
+      The quarter-fleet benchmark numbers already published (R-Q, release binary of 3a30f2c,
+      before the PSM/MBR, R-USFP, R-NOCRL and R-TRUSTLEAK fixes). Used only where nothing
+      in between changes the quantity (traffic, provisioning, CAMP per-device counts).
+  FB:
+    scenario: scenarios/real-world/midtown-scms-benchmark.yaml
+    note: >-
+      The full-fleet benchmark end to end (172,800 s: 240 s live, fast-forward, 60 s live
+      across the 614 -> 615 rollover, fast-forward), opt-level-2 debug build of main
+      88e24b09, --record-level metrics, seed 0xBE7C_0001, run lock, 2 rayon threads.
+  PQ0:
+    scenario: scenarios/real-world/stress/pq-base.yaml
+    note: "quarter fleet, 60 s live, generic-sdu fragmenter, software-crypto OBU, ECDSA P-256; on 88e24b09 it is also the current-code quarter-density comparison point for FB"
+  PQHM: {scenario: scenarios/real-world/stress/pq-hybrid-mldsa44.yaml, base: PQ0, note: "4 rayon threads"}
+  PQHM1: {base: PQHM, set: {}, note: "PQHM at 1 rayon thread (determinism)"}
+  PQHMC: {scenario: scenarios/real-world/stress/pq-hybrid-mldsa44-certcycle.yaml, base: PQHM}
+
+rows:
+# ---------------------------------------------------------------- (1) full-scale benchmark
+- id: FB.devices
+  base: QD
+  variant: FB
+  area: architecture
+  measure: devices_by_provider (sum and split), handsets
+  expect: >-
+    about 550 handsets (2,200 VRUs x 0.25) and 1,250-1,450 vehicles (900 in the 4x fill,
+    2.5/s for the other 150 live s, plus the rollover window's arrivals): 1,800-2,100
+    devices, 4x-6x the quarter's 349 (the quarter publication had 60 s live); provider
+    split within 45/55
+  source: scenario file; D1 fleet split ASSUMPTION
+  measured: "R-FS40 at 40 s: 1,000 nodes (496 / 504 by provider), 581 handsets, 389 vehicles, 30 RSUs; R-FS at 130 / 140 / 150 s: 1,581 / 1,604 / 1,632 nodes"
+  verdict: open
+  note: "handsets (581 vs ~550) and the split pass; the end-of-run total is unmeasured because R-FS stopped at about 155 s. Arrivals so far (900 in the fill + 2.5/s) match with almost no vehicle leaving the congested box"
+- id: FB.provisioning
+  base: FB
+  variant: FB
+  area: architecture
+  measure: provisioning requests per device; certificates at entry
+  expect: 1 request per device; 40 certificates each (2 weeks x 20); total about 40 x devices
+  source: "[CAMP122] Table 67 certs_per_i_period 20; ra-maxReqs 1 (04 §4.1)"
+  measured: "R-FS40 census, provider-a at 10 s: 331 RA requests for 331 enrolled devices, 13,240 PCA certificates = 40 x 331; at 40 s 16,960 = 40 x 424"
+  verdict: pass
+- id: FB.provisioning-burst
+  base: FB
+  variant: FB
+  area: architecture
+  measure: provisioning requests per second at the RAs in the first 90 s
+  expect: >-
+    10-25 requests/s (devices entering during the 4x fill), 20-50x CAMP's 0.5 requests/s
+    design rate for 17 M vehicles a year: a scenario start is a burst no real RA sees
+  source: "04 §4.1 (CAMP122 §6.3.3.4)"
+  measured: "701 devices at 10 s (581 handsets at t0), then 701 -> 992 nodes in 30 s: about 10 provisioning requests/s across both RAs, 20x CAMP's 0.5/s"
+  verdict: pass
+- id: FB.topups-at-rollover
+  base: FB
+  variant: FB
+  area: architecture
+  measure: topups started/completed, certificates topped up, refusals, starved
+  expect: >-
+    one top-up per powered, reachable device at the 614 -> 615 boundary (43,200 s), 20
+    certificates each, completed inside the 1 h overlap; 0 refused (no honest revocation);
+    0 starved
+  source: "CAMP-EE R1.1 §2.1.5.3.2 (1 h overlap); NYC weekly top-off; 04 §4.1"
+  measured: "not reached (R-FS stopped at about 155 s by the memory cap)"
+  verdict: open
+- id: FB.receptions-scale
+  base: PQ0
+  variant: FB
+  area: performance
+  measure: reception attempts per live second
+  expect: 8x-16x the quarter-density figure (pairs grow with the square of the fleet; the 500 m cap holds it under 16x)
+  source: F3 15x for 4x vehicles (05 §5)
+  measured: "same phase (the 30-40 s window, inside the 4x fill): PQ0 459,183 attempts at 264 nodes -> R-FS40 7,062,128 at 992 nodes = 15.4x for 3.8x the nodes. After the fill (R-FS 130-150 s, 1,581-1,632 nodes): 2.96-3.14 M per simulated second"
+  verdict: pass
+  note: "the comparison is same-phase. PQ0 at 50-60 s (89 k/s, 308 nodes) against R-FS at 130 s gives 33x, but those windows sit in different phases of the fill"
+- id: FB.cbr
+  base: PQ0
+  variant: FB
+  area: metrics
+  measure: CBR mean / p95, ch 172
+  expect: >-
+    3x-5x the quarter density's (BSM+PSM load scales with the fleet), mean 0.05-0.12,
+    still under J2945/1 vMinCU 0.5, so no power adaptation
+  source: SAE J2945/1 (CAMP, IEEE TVT 68(3) 2019, Table I)
+  measured: "same phase (30-40 s): PQ0 mean 0.0079, p95 0.019 -> R-FS40 mean 0.0282, p95 0.062 (3.6x); after the fill R-FS mean 0.074-0.078, p95 0.14-0.16, max 0.24"
+  verdict: pass
+  note: "below J2945/1 vMinCU 0.5 everywhere, so no power adaptation"
+- id: FB.pdr-100m
+  base: PQ0
+  variant: FB
+  area: metrics
+  measure: PDR within 100 m (or the 80-100 m bin)
+  expect: at or below the quarter density's (more collisions and hidden terminals); within 100 m above 0.6
+  source: radio-fidelity B1 NLOS 0.67 at 0-100 m; benchmark §3
+  measured: "QD 0.838 -> R-FS 0.844 / 0.839 (130 / 140 s); 80-100 m 0.657; within 300 m 0.290 -> 0.282"
+  verdict: pass
+  note: "unchanged rather than lower: losses at full density are 83.8 % below sensitivity, 2.0 % hidden terminal, 0.39 % half-duplex, 0.27 % receiver overflow"
+- id: FB.latency
+  base: QD
+  variant: FB
+  area: metrics
+  measure: BSM end-to-end latency mean / p95
+  expect: "mean 12-15 ms: the fixed 9 ms CRATON2 sign plus ~3 ms; MAC access rises a little with load; p95 far under the 100 ms budget"
+  source: J2945/1 / FMVSS 150 NPRM 100 ms budget; benchmark §3 (12.2 ms)
+  measured: "BSM e2e mean 12.39 ms, p95 14.62, p99 14.94, max 214 ms (sign 9.0, handoff 2.5, verify 0.48, airtime 0.35, MAC defer 0.05)"
+  verdict: pass
+- id: FB.verify-load
+  base: QD
+  variant: FB
+  area: performance
+  measure: verifications per node per second; verify queue p99; first-sight share
+  expect: 3x-5x the quarter's ~30 per node per second (100-150), well under CRATON2's >2,500/s; queue p99 under 1 ms; first-sight share near 1 %
+  source: Unex OBU-301E sheet
+  measured: "376-390 k verifies/s over 1,581-1,604 nodes = about 240 per node per second (QD ~30); queue p99 0, max 31; wait p99 0.28 ms; first-sight R-FS40 43,076 EE + 31,620 CA validations against 1,976,005 cache hits (3.7 %)"
+  verdict: wrong-expectation
+  note: "the expectation scaled neighbours with the fleet (4x). On the map there are 4.5x the nodes, packed into a queueing box, so each node hears about 8x; it is still a tenth of CRATON2's capacity. First-sight share is 3.7 % in the first 40 s (the fill), not 1 %"
+- id: FB.mbr-airtime
+  base: QD
+  variant: FB
+  area: metrics
+  measure: MBR share of airtime
+  expect: under 1 % (honest traffic; R-USFP fixed; reports go over Uu or to an RSU)
+  source: testing/usfp.md; validation/vehicle-and-roadside.md §4
+  measured: "R-FS40: 43 MBR frames, 68.8 ms of 32.6 s airtime = 0.21 %"
+  verdict: pass
+- id: FB.honest-revoked
+  base: FB
+  variant: FB
+  area: architecture
+  measure: reports sent, MA cases, revoke decisions, honest devices revoked
+  expect: >-
+    honest traffic only: a few reports at most (residual GNSS outliers), 0 revoke
+    decisions, 0 devices revoked; the false-positive rate per device-hour is the benchmark
+    headline an attack study compares against
+  source: testing/usfp.md (realism base 26 -> 0 honest revoked)
+  measured: "R-FS40 (40 s): 236 verdicts (constantPositionFrozen 165, positionJump 71), 229 reports about 32 honest devices, 203 received, 0 cases, 0 decisions, 0 revoked; the 2-day outcome is unmeasured"
+  verdict: open
+  note: "a residual false-positive rate of about 0.8 honest devices reported per second at full density; whether manual review over 2 days revokes any is the open question"
+- id: FB.crl
+  base: FB
+  variant: FB
+  area: architecture
+  measure: CRLs published, entries, downloads, overdue refusals
+  expect: >-
+    each provider's CRACA publishes at t0 (R-NOCRL fix) with 0 entries; devices join
+    holding it; at least one weekly reissue in the 2 days only if a reissue falls inside;
+    downloads on 1-business-day polls; 0 crl-overdue refusals
+  source: testing/stress.md R-NOCRL; 03 §9 (SCMS Manager CRL SLA)
+  measured: "R-FS40: 2 CRL versions published at t0 (one per CRACA), 0 entries; 2,000 CRLs accepted by receivers (2 per device), 60 RSU installs (2 x 30); 8 polls not modified, 0 downloads in 40 s; 0 crl-period refusals"
+  verdict: pass
+  note: "the t0 part only; the weekly reissue and the business-day polls are not reached"
+- id: FB.trust
+  base: FB
+  variant: FB
+  area: architecture
+  measure: receiver refusals by cause
+  expect: 0 psid-not-permitted, 0 off-ctl, 0 crl-overdue; refusals only for real reasons (none expected on honest traffic)
+  source: testing/stress.md; BUILD-STATUS 2026-10-22 TRUST
+  measured: "R-FS40: 2,019,081 SPDUs checked, 0 refused of any cause, 6,324 tolerated RA-profile findings, 0 SPDU signature failures"
+  verdict: pass
+- id: FB.privacy
+  base: QD
+  variant: FB
+  area: metrics
+  measure: observer link claims / correct; linkability
+  expect: >-
+    4x the frames read; pseudonym changes concentrated at the rollover; linkability at or
+    below the quarter's (a larger anonymity set at a simultaneous change); correct links
+    near 0
+  source: Wiedersheim et al. 2010; benchmark §6
+  measured: "R-FS40: 48,705 frames read, 3,120 link decisions, 2,873 claims, 0 correct, with pseudonym_changes 0; 277 vehicles tracked"
+  verdict: open
+  note: "a link claim with no pseudonym change to link across: the linker counts something else (coverage entry/exit?). Same 0-correct pattern as benchmark §9.6"
+- id: FB.traffic-speed
+  base: QD
+  variant: FB
+  area: metrics
+  measure: mean vehicle speed, live window
+  expect: below the quarter's 4.12 m/s and nearer Midtown's ~5 mph (2.2 m/s); 2-4 m/s
+  source: NYC DOT Mobility Report 2018/2019
+  measured: "mean 2.75 / 2.60 / 2.33 m/s at 130 / 140 / 150 s; p50 0.82 -> 0.18 m/s"
+  verdict: pass
+- id: FB.ff-ticks
+  base: FB
+  variant: FB
+  area: performance
+  measure: backend ticks over the fast-forward windows
+  expect: "D2: at most one stop a minute when nothing is due: about 2 x 1,440 idle stops plus due events; under 5 x 10^4 (the 1.1 M ticks of benchmark §9.2 are gone: MW measured 54,511 for 33 days)"
+  source: D2 design; testing/stress.md MW.cost
+  measured: "not reached"
+  verdict: open
+- id: FB.cost
+  base: FB
+  variant: FB
+  area: performance
+  measure: wall time, CPU time, peak footprint, events
+  expect: >-
+    1.5-4 CPU-hours (stress §1 model: 24-39 CPU-s per live second for 300 live s, plus
+    ~0.4 CPU-s per device for real-P-256 provisioning; the later cache fix may cut it);
+    peak footprint 0.8-2.0 GB, under the 2.5 GB cap; the fast-forward part a small share
+  source: testing/stress.md §1; benchmark §7
+  measured: "R-FS: stopped by the 2.5 GB cap at 2,582 MB after 79 min wall and about 6,300 CPU-s at about 155 simulated s (40 CPU-s per simulated s, rising); footprint 795 / 1,079 / 1,457 / 1,418 MB at 13 / 23 / 43 / 63 min, peaks 1,998 / 2,225. R-FS40: 535 s wall, 623 CPU-s, 910 MB peak; census footprint 450 / 609 / 817 / 868 MB at 701 / 783 / 888 / 992 nodes"
+  verdict: open
+  note: "the memory band was wrong: about 1.4-2 MB per node on the map, plus transient peaks of up to +0.8 GB. The full file needs 3-4 GB and 4-5 CPU-hours (benchmark §0)"
+# ---------------------------------------------------------------- (2) post-quantum, quarter density
+- id: PQHM.sizes
+  base: PQ0
+  variant: PQHM
+  area: metrics
+  measure: frames per BSM; PSDU mean
+  expect: >-
+    hybrid ML-DSA-44 + ECDSA: a digest-signed BSM is ~2.7 kB (2,420 B ML-DSA sig + 64 B
+    ECDSA + payload), a full-certificate one ~4.1 kB (+1,312 B key): 2.3-2.7 frames per
+    BSM, at or slightly above pure ML-DSA-44's 2.30
+  source: FIPS 204 Table 2 (pk 1,312 B, sig 2,420 B); stress.md PQ.sizes
+  measured: "PQ0 -> PQHM: BSM frames 41,903 -> 96,561 (2.30 per BSM, the same as pure ML-DSA-44's 96,562 in stress.md); PSDU mean 207 -> 1,332 B per fragment; 50,186 SDUs fragmented into 138,004 fragments; 0 MTU refusals"
+  verdict: pass
+- id: PQHM.airtime
+  base: PQ0
+  variant: PQHM
+  area: metrics
+  measure: BSM airtime; CBR mean / p95
+  expect: BSM airtime x12-15; CBR mean 0.13-0.17 (pure ML-DSA-44 gave x12.6 and 0.142)
+  source: stress.md PQ.airtime
+  measured: "BSM airtime 13.6 -> 176.2 s (x13.0); PSM 3.0 -> 74.5 s (x25); CBR mean 0.0100 -> 0.125, p95 max 0.027 -> 0.337, max 1.0"
+  verdict: wrong-expectation
+  note: "the airtime ratio is in the band. The CBR band 0.13-0.17 was anchored on stress.md's pure-ML-DSA 0.142, which sat on a base of 0.019 that still carried the R-USFP report storm. On today's 0.010 base, x12.5 gives 0.125"
+- id: PQHM.loss
+  base: PQ0
+  variant: PQHM
+  area: metrics
+  measure: verified BSMs; reassembly completed vs lost
+  expect: verified BSMs down 30-40 % (message PDR is about the per-fragment PDR to the power k)
+  source: stress.md PQ.loss (-33 % for pure ML-DSA-44)
+  measured: "verified 380,617 -> 251,882 (-33.8 %); frame PDR 40-60 m 0.929 -> 0.792, 80-100 m 0.725 -> 0.519; 275,092 reassemblies complete against 2,385,392 lost; unverified ratio 3.6 % -> 8.5 %"
+  verdict: pass
+- id: PQHM.verify-load
+  base: PQ0
+  variant: PQHM
+  area: performance
+  measure: verify cost mean per message
+  expect: "both signatures verified: about ECDSA + ML-DSA-44 (0.63 + 0.43 ms), 0.9-1.2 ms, above ECDSA and above hybrid Falcon's 0.751"
+  source: stress.md PQ.verify-load, PQ.hybrid
+  measured: "verify cost mean 0.628 -> 0.787 ms (hybrid Falcon 0.751 in stress.md); charged verify time 3.82 -> 1.72 s (fewer messages); BSM e2e 3.7 -> 12.1 ms, p95 6.0 -> 17.5 ms; 2 SPDUs refused generation-time-too-old"
+  verdict: wrong-expectation
+  note: "the ordering holds (hybrid ML-DSA > hybrid Falcon > ECDSA). The band 0.9-1.2 ms assumed every receiver pays the vehicle OBU's 645 + 311 us sum. The fleet mean also includes handsets and RSUs, whose profiles price ML-DSA-44 differently (the RSU's from a post-quantum software proxy, per the validator's note)"
+- id: PQHM.reports
+  base: PQ0
+  variant: PQHM
+  area: architecture
+  measure: over-the-air reports refused at the MTU vs counted uploaded
+  expect: >-
+    under generic-sdu the over-MTU report SPDUs are fragmented, so 0 net_mtu_refusals for
+    reports; no refused report counted as uploaded (R-PQMBR fix)
+  source: BUILD-STATUS 2026-10-22 REPORTS; stress.md PQ.mbr-mtu
+  measured: "39 reports sent: 25 over cellular, 6 relayed over the air to an RSU, 8 from RSUs; reports_refused_mtu 0, crl_frames_refused_mtu 0, net_mtu_refusals 0"
+  verdict: pass
+  note: "R-PQMBR holds: under generic-sdu the over-MTU relay reports are fragmented and delivered. Under PQ, RSUs install no CRL (rsu_crls_installed 60 -> 0; rsus_in_cert_cycle 30 -> 0), the known open item in pq-profile.md §3"
+- id: PQHM.determinism
+  base: PQHM
+  variant: PQHM1
+  area: performance
+  measure: recording content digest at 4 vs 1 rayon threads
+  expect: identical
+  source: engine determinism contract; stress.md MW.determinism
+  measured: "record digest 47fe89fb95c7b8c4... at 4 and at 1 thread; metrics.json and run-report.json byte-identical (sha256 4e761a1a..., 8b7cf6cc...); 137,996 frames and 14,368,747 records in both. 4 threads: 583 s wall, 726 CPU-s; 1 thread: 624 s wall, 613 CPU-s"
+  verdict: pass
+  note: "the digest can fail: PQ0, PQHM and PQHMC (one setting apart) give 8701b92c..., 47fe89fb... and f2afcf0b.... Four threads saved 7 % of wall time"
+- id: PQHMC.sizes
+  base: PQHM
+  variant: PQHMC
+  area: metrics
+  measure: frames per BSM; PSDU; BSM airtime; CBR
+  expect: >-
+    BSMs keep ECDSA: the hybrid certificate 30 + 162 + 2,420 = 2,612 B does not fit the
+    2,304 B DSRC cap beside a 204 B frame, so alpha = 2 of each 5-SPDU cycle carry ~1.3 kB
+    extra; mean PSDU ~0.7 kB; about 1 frame per BSM (fragments ride in the SPDU); BSM
+    airtime x3-5 the classical base, far below PQHM; CBR 0.04-0.08
+  source: NDSS 2024 (Twardokus et al.) §IV, §V-D; cert_cycle.rs alpha rule
+  measured: "PQHMC: frames_transmitted 0, net_mtu_refusals 50,180 (every BSM and PSM SDU); reception attempts 0; 30 s wall"
+  verdict: open
+  note: "ENGINE DEFECT R-CCSIG: under the certificate cycle the engine still adds the hybrid signature (ECDSA + ML-DSA-44, 2,484 B) to every SPDU (run.rs hand_down_app: signature::resize with the scenario's scheme; commit 45f0942f made the cycle's fragment fit beside it). The NDSS 2024 Partially-Hybrid design that cert_cycle.rs cites keeps ECDSA on every BSM (204 B frames, Fig. 4). With Falcon-512 the SPDU still fits under the 1,400 B WSMP MTU but is 666 B too large. With ML-DSA-44 every SPDU is refused, so the run is silent, and the validator accepts it with notes only"
+- id: PQHMC.verify-load
+  base: PQHM
+  variant: PQHMC
+  area: performance
+  measure: verify cost mean; verified BSMs
+  expect: "ECDSA verification per BSM (~0.63 ms) plus one ML-DSA-44 verify per new certificate; verified BSMs near the classical base (within 10 %)"
+  source: NDSS 2024 §III
+  measured: "not measurable: nothing was transmitted (R-CCSIG)"
+  verdict: open
+- id: PQHMC.reports
+  base: PQHM
+  variant: PQHMC
+  area: architecture
+  measure: relay report uploads, reports_refused_mtu, CRL broadcasts
+  expect: >-
+    the certificate cycle splits only the certificate, so a relay-only vehicle's hybrid
+    report SPDU (over 1,400 B) is refused at the WSMP MTU and counted as refused, never as
+    uploaded: reports_uploaded_relay 0, reports_refused_mtu > 0, and the RSU CRL frames
+    likewise refused (crl_broadcasts 0)
+  source: testing/pq-profile.md §2 (pq_relay.rs certificate-cycle case); IEEE 1609.3 WSMP has no fragmentation
+  measured: "0 reports (nothing was received, so nothing was detected); reports_refused_mtu 0"
+  verdict: open
+  note: "vacuous under R-CCSIG"
+- id: PQ.topups
+  base: PQ0
+  variant: PQHM
+  area: architecture
+  measure: topups started / completed in the 60 s live run
+  expect: none started under either scheme (no i-period boundary inside 0-60 s on the real calendar; pools hold 2 weeks)
+  source: scenario t0 2026-10-19 21:00 UTC; the boundary is at 09:00 UTC (benchmark §1.1)
+  measured: "topups 0/0 in PQ0 and in PQHM"
+  verdict: pass
+- id: PQHFC.ccsig
+  base: PQ0
+  variant: PQHFC
+  area: metrics
+  measure: BSM frames per BSM; BSM PSDU mean
+  expect: >-
+    written after PQHMC, before this run, to test R-CCSIG on Falcon-512. NDSS Partially-
+    Hybrid (ECDSA on every BSM, the 858 B hybrid certificate in 1 of every 5 SPDUs): about
+    1 frame per BSM and a PSDU mean of about 204 + 858/5 = 380 B. If R-CCSIG holds (the
+    hybrid signature on every SPDU, +666 B): about 1 frame per BSM and a mean near
+    1,000-1,100 B
+  source: NDSS 2024 Fig. 4 (cert_cycle.rs anchors); run.rs hand_down_app
+  measured: "PQ0 -> PQHFC: BSM frames 41,903 -> 41,900 (1.00 per BSM), PSDU mean 207 -> 1,045 B; BSM airtime 13.6 -> 60.4 s (x4.4); CBR 0.010 -> 0.044; verify cost 0.628 -> 0.751 ms (the hybrid sum, not ECDSA); relay reports 0 with reports_refused_mtu 5; 83 s wall, 104 CPU-s"
+  verdict: open
+  note: "confirms R-CCSIG: the 1,045 B mean is the R-CCSIG prediction, not the NDSS ~380 B, and every message pays the hybrid verification. The relay-report refusals are the documented certificate-cycle behaviour (pq-profile.md §2)"

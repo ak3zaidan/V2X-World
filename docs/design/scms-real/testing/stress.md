@@ -140,8 +140,8 @@ today: R-USFP at rush-hour density** (open; 07 §8.3).
 | PQ.backend-bytes | credential bytes grow with certificate size | backend bytes 56.3 → 222.9 MB (×3.96). This includes reports, which fell, so the per-certificate factor is not isolated | open (not isolated) |
 | PQ.mbr-mtu | (found) | under ML-DSA-44 **every over-the-air report is refused at the WSMP MTU** (`net_mtu_refusals` 4,001 = `reports_uploaded_relay` 4,001; MBR airtime 9.1 s → 0). Engine application frames keep `fragmenter/none`'s rule (`run.rs` hand_down_app), so relay-only vehicles cannot report at all under PQ, **and each refused report is still counted as uploaded** | **open (R-PQMBR)**: the count is wrong; the loss itself is a real PQ finding (1609.3 WSMP has no fragmentation) |
 | PQ.hybrid (Falcon) | hybrid Falcon-512: digest frame ~0.8 kB, 1 fragment; full ~2.4 kB, 2 fragments; airtime ×3–5; verify hybrid > ECDSA > pure PQ | 46,156 BSM frames (**1.10 per BSM**), PSDU mean 941 B; BSM airtime 60.2 s (**×4.4**); CBR mean 0.057; verified BSMs −11 %; verify cost mean **0.751 ms** (ECDSA 0.628, ML-DSA-44 0.430); e2e 6.7 ms; 5,064 over-the-air reports refused at the MTU (R-PQMBR) | pass |
-| PQ.hybrid ML-DSA, PQ.certcycle | — | `pq-hybrid-mldsa44` and `-certcycle` not run (the run lock was the bottleneck) | open (owed) |
-| PQ.determinism | identical at 1 and 4 threads | not run (20 min a run) | open (owed) |
+| PQ.hybrid ML-DSA, PQ.certcycle | — | run 2026-10-22 on `88e24b09` (§7): hybrid ML-DSA-44 at 2.30 frames per BSM, BSM airtime ×13.0, CBR 0.125, verified −33.8 %; ML-DSA-44 certificate cycle **transmits nothing** (R-CCSIG) | see §7 |
+| PQ.determinism | identical at 1 and 4 threads | `pq-hybrid-mldsa44`: record digest, metrics and report byte-identical at 4 and 1 threads (§7) | pass (2026-10-22) |
 
 **PQ cost.** 1,143 s wall, 1,090 CPU-s and 379 MB, against 1,210 s, 1,175 CPU-s and 431 MB
 for ECDSA. Fewer messages were verified and detected, so the run was cheaper even with
@@ -173,3 +173,39 @@ for ECDSA. Fewer messages were verified and detected, so the run was cheaper eve
 - **R-NOCRL** (§2) and **R-PQMBR** (§3), with a re-bless of the SCMS digests.
 - **Not run:** the hybrid PQ runs, the certificate cycle, PQ determinism, and the
   1-thread knobs suite.
+
+## 7. Final runs (2026-10-22, on main `88e24b09`)
+
+Expectations: `crates/v2xw-engine/tests/expectations/scms-final-bench.yaml`. Analysis:
+`final-bench.md`. One opt-level-2 debug build of `88e24b09`, run lock, seed `0xBE7C_0001`,
+quarter fleet, 60 s live, generic-sdu, software OBU.
+
+| Run | BSM frames (per BSM) | BSM airtime | CBR mean / p95 max | Verified | Verify cost | BSM e2e | Wall / CPU / peak |
+|---|---|---|---|---|---|---|---|
+| `pq-base` (ECDSA) | 41,903 | 13.6 s | 0.010 / 0.027 | 380,617 | 0.628 ms | 3.7 ms | 105 s / 125 s / 249 MB |
+| `pq-hybrid-mldsa44`, 4 threads | 96,561 (2.30) | 176.2 s (×13.0) | 0.125 / 0.337 | 251,882 (−33.8 %) | 0.787 ms | 12.1 ms | 583 s / 726 s / 367 MB |
+| the same, 1 thread | identical (digest `47fe89fb95c7b8c4…`) | | | | | | 624 s / 613 s / 373 MB |
+| `pq-hybrid-falcon512-certcycle` | 41,900 (1.00), PSDU mean 1,045 B (NDSS: ≈ 380 B) | 60.4 s (×4.4) | 0.044 / 0.121 | 352,258 | 0.751 ms | 6.7 ms | 83 s / 104 s / 235 MB |
+| `pq-hybrid-mldsa44-certcycle` (new) | **0 frames**: 50,180 SDUs refused at the MTU | — | — | — | — | — | 30 s / 30 s / 172 MB |
+
+- **Cost.** `pq-base` took 125 CPU-s, against 1,175 in §3. That is the verification-cache
+  fix of fix wave 2, and the radio numbers are unchanged.
+- **Determinism: pass.** The record digest, `metrics.json` and `run-report.json` are
+  byte-identical at 4 and 1 threads. The check can fail: the three runs above differ by
+  one setting each and give three digests. Four threads saved 7 % of wall time.
+- **R-PQMBR holds.** 6 relayed reports were delivered as fragments, `reports_refused_mtu`
+  was 0, and no refused report was counted as uploaded.
+- **Under PQ, RSUs still install no CRL.** `rsu_crls_installed` went 60 → 0 and
+  `rsus_in_cert_cycle` 30 → 0. This is the known item in `pq-profile.md` §3.
+- **R-CCSIG (open, engine defect).** The certificate cycle still puts the hybrid signature
+  on every SPDU, where its cited design (NDSS 2024 Partially-Hybrid) keeps ECDSA on every
+  BSM.
+  - Under ML-DSA-44, every BSM and PSM is over the WSMP MTU and refused, so the run is
+    silent.
+  - Under Falcon-512, every SPDU carries an extra 666 B and the hybrid verification
+    cost.
+  - The validator accepts both. Fix and test: `final-bench.md` §3.
+- **Full-scale benchmark.** It was stopped by the 2.5 GB memory cap at about 155 simulated
+  seconds (`docs/benchmark/scms-real-benchmark.md` §0). The engine grows by about
+  1.4–2 MB per node on the map, plus transient peaks.
+
