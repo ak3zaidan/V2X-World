@@ -3201,6 +3201,39 @@ pub(crate) fn with_sign_lower_edge(
     profile
 }
 
+/// The profile `id` names (the reference OBU when no shipped profile has that id) with
+/// [`with_sign_lower_edge`] applied, shared by every node built on it: one copy per
+/// distinct (profile, lower edge, signing operation) in the process rather than one per
+/// node (about 10 kB each, 17 MB at full Midtown scale; `testing/memory-density.md`).
+/// The value is a pure function of the key, so sharing it changes nothing a node computes.
+pub(crate) fn shared_profile(
+    scenario: &Scenario,
+    id: &str,
+) -> std::sync::Arc<v2xw_node::profile::HardwareProfile> {
+    type Key = (String, Option<u64>, &'static str);
+    type Shared = std::collections::BTreeMap<Key, std::sync::Arc<v2xw_node::profile::HardwareProfile>>;
+    static SHARED: std::sync::OnceLock<std::sync::Mutex<Shared>> = std::sync::OnceLock::new();
+    let (sign_op, _) =
+        v2xw_node::profile::signature_ops(crate::signature::message_signature(scenario));
+    let key: Key = (
+        id.to_string(),
+        scenario.nodes.hsm_sign_lower_us.map(f64::to_bits),
+        sign_op,
+    );
+    let mut shared = SHARED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    std::sync::Arc::clone(shared.entry(key).or_insert_with(|| {
+        let profile = v2xw_node::profiles::get(id).cloned().unwrap_or_else(|| {
+            v2xw_node::profiles::get(v2xw_node::profiles::REFERENCE_OBU)
+                .expect("the reference profile ships with v2xw-node")
+                .clone()
+        });
+        std::sync::Arc::new(with_sign_lower_edge(scenario, profile))
+    }))
+}
+
 /// `NodeConfig`'s defaults with `nodes.verify_queue_depth` applied (network audit).
 fn node_capacities(scenario: &Scenario) -> NodeConfig {
     let mut c = NodeConfig::default();
@@ -3304,14 +3337,7 @@ pub fn build_node(
     dims: Dims,
 ) -> ObuRuntime {
     let wanted = obu_profile_id(scenario, class);
-    let profile = v2xw_node::profiles::get(wanted)
-        .cloned()
-        .unwrap_or_else(|| {
-            v2xw_node::profiles::get(v2xw_node::profiles::REFERENCE_OBU)
-                .expect("the reference profile ships with v2xw-node")
-                .clone()
-        });
-    let profile = with_sign_lower_edge(scenario, profile);
+    let profile = shared_profile(scenario, wanted);
     let policy = verification_policy(scenario);
     let (bsm_params, cam_params) = generator_params(scenario);
     // The node's own record of its transmit power is its class's `radio.devices` power;
@@ -3986,14 +4012,7 @@ pub fn build_rsu(
     node: NodeId,
     at: SimTime,
 ) -> ObuRuntime {
-    let profile = v2xw_node::profiles::get(&spec.profile)
-        .cloned()
-        .unwrap_or_else(|| {
-            v2xw_node::profiles::get(v2xw_node::profiles::REFERENCE_OBU)
-                .expect("the reference profile ships with v2xw-node")
-                .clone()
-        });
-    let profile = with_sign_lower_edge(scenario, profile);
+    let profile = shared_profile(scenario, &spec.profile);
     let (sign_op, verify_op) =
         v2xw_node::profile::signature_ops(crate::signature::message_signature(scenario));
     let config = NodeConfig {

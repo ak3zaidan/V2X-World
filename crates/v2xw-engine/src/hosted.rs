@@ -370,9 +370,17 @@ pub fn build_vru_device(
     class: VehicleClass,
     dims: Dims,
 ) -> VruDeviceRuntime {
-    let profile = v2xw_node::profiles::get(v2xw_node::profiles::GENERIC_VRU_DEVICE)
-        .expect("the generic VRU-device profile ships with v2xw-node")
-        .clone();
+    let profile = {
+        static SHARED: std::sync::OnceLock<std::sync::Arc<v2xw_node::HardwareProfile>> =
+            std::sync::OnceLock::new();
+        std::sync::Arc::clone(SHARED.get_or_init(|| {
+            std::sync::Arc::new(
+                v2xw_node::profiles::get(v2xw_node::profiles::GENERIC_VRU_DEVICE)
+                    .expect("the generic VRU-device profile ships with v2xw-node")
+                    .clone(),
+            )
+        }))
+    };
     let config = VruConfig {
         kind: VruDeviceKind::Handset,
         services: vru_services(scenario),

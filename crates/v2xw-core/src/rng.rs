@@ -675,57 +675,89 @@ impl RngStream {
 /// A stream key: what a draw is for, and who it is for.
 type Key = (RngDomain, EntityRef);
 
-/// One shard of the stream cache.
-type Shard = BTreeMap<Key, Slot>;
+/// A parked link's key in [`Shard::links`]: the domain and the directed link packed into one
+/// word ([`link_word`]). 16 bytes against the 32 of a [`Key`].
+type LinkSlot = (RngDomain, u64);
 
-/// One cached stream, as the cache keeps it.
+/// The parked key of `(domain, entity)`, when the entity is a directed link.
+fn link_slot(domain: RngDomain, entity: EntityRef) -> Option<LinkSlot> {
+    match entity {
+        EntityRef::Link(l) => Some((domain, link_word(l))),
+        _ => None,
+    }
+}
+
+/// The directed link a [`link_word`] packed.
+fn unpack_link(w: u64) -> EntityRef {
+    EntityRef::Link(LinkKey::new(
+        NodeId::new((w >> 32) as u32),
+        NodeId::new(w as u32),
+    ))
+}
+
+/// One shard of the stream cache: the streams that are live or checked out, by key, and
+/// the parked links, by their packed key.
 ///
 /// A ChaCha12 stream in use carries a four-block keystream buffer and is 312 bytes. Most
 /// keys are directed radio links, one per pair of nodes that ever heard each other — up to
 /// n(n − 1) of them, 1.56 million on the 1,250-vehicle TR 36.885 drop — each drawn a few
 /// words at a time. Once a shard holds more than [`LIVE_SLOTS_PER_SHARD`] entries, a link's
-/// stream is therefore **parked** between checkouts as its key and word position (a 64-byte
-/// slot) and resumed with [`RngStream::set_word_pos`]. The keystream is a pure function of
-/// the key and the position, so a parked stream continues with exactly the words the live
-/// one would have produced (`a_parked_stream_continues_word_for_word`); only the memory and
-/// the cost of a checkout differ — a resume regenerates the four-block buffer, which a run
-/// with a few thousand links should not pay for. Every other key — an actor's, a node's —
-/// is checked out many times a second by one owner and stays live.
+/// stream is therefore **parked** between checkouts as its word position alone, in
+/// [`Shard::links`] (24 bytes an entry: the stream's key is the registry's own derivation
+/// from the master seed and the cache key, so it is derived again on resume rather than
+/// kept, and the link's key is packed), and resumed with [`RngStream::set_word_pos`]. The
+/// keystream is a pure function of the key and the position, so a parked stream continues
+/// with exactly the words the live one would have produced
+/// (`a_parked_stream_continues_word_for_word`); only the memory and the cost of a checkout
+/// differ — a resume regenerates the four-block buffer, which a run with a few thousand
+/// links should not pay for. Every other key — an actor's, a node's — is checked out many
+/// times a second by one owner and stays live.
+///
+/// A key is in at most one of the two maps. At full Midtown density a run holds millions
+/// of parked links, and in `slots` each took a 32-byte key and a 16-byte slot
+/// (`testing/memory-density.md` §1).
+#[derive(Debug, Clone, Default)]
+struct Shard {
+    slots: BTreeMap<Key, Slot>,
+    links: BTreeMap<LinkSlot, u64>,
+}
+
+impl Shard {
+    fn len(&self) -> usize {
+        self.slots.len() + self.links.len()
+    }
+
+    fn contains(&self, key: Key) -> bool {
+        self.slots.contains_key(&key)
+            || link_slot(key.0, key.1).is_some_and(|l| self.links.contains_key(&l))
+    }
+
+    /// The parked stream of `key`, taken out of [`Shard::links`] and derived again from
+    /// `master_seed` and its key, as it was created.
+    fn unpark(&mut self, master_seed: u64, key: Key) -> Option<RngStream> {
+        let word_pos = self.links.remove(&link_slot(key.0, key.1)?)?;
+        let mut stream = RngStream::derive(master_seed, key.0, key.1);
+        stream.set_word_pos(u128::from(word_pos));
+        Some(stream)
+    }
+}
+
+/// One cached stream in [`Shard::slots`].
 #[derive(Debug, Clone)]
 enum Slot {
     /// Checked out by an [`RngGuard`]: how a second, concurrent checkout of the same key is
     /// caught instead of being served a stream restarted at word 0.
     Out,
-    /// A live stream, boxed so a parked slot stays small.
+    /// A live stream, boxed so the slot stays small.
     Live(Box<RngStream>),
-    /// A stream kept as its key and the word position it had reached.
-    Parked { key: [u8; 32], word_pos: u128 },
 }
 
 impl Slot {
-    /// The slot a stream returning from a checkout goes back into: parked when it is a
-    /// link's and `park_links` says the cache is past its live budget.
-    fn keep(entity: EntityRef, stream: RngStream, park_links: bool) -> Self {
-        if park_links && matches!(entity, EntityRef::Link(_)) {
-            Slot::Parked {
-                key: stream.inner.get_seed(),
-                word_pos: stream.word_pos(),
-            }
-        } else {
-            Slot::Live(Box::new(stream))
-        }
-    }
-
     /// Takes the stream out, leaving [`Slot::Out`]; `None` if it is already out.
     fn take(&mut self) -> Option<RngStream> {
         match core::mem::replace(self, Slot::Out) {
             Slot::Out => None,
             Slot::Live(stream) => Some(*stream),
-            Slot::Parked { key, word_pos } => {
-                let mut stream = RngStream::from_key(key);
-                stream.set_word_pos(word_pos);
-                Some(stream)
-            }
         }
     }
 }
@@ -809,7 +841,7 @@ impl RngRegistry {
         Self {
             master_seed,
             shards: (0..SHARD_COUNT)
-                .map(|_| Mutex::new(Shard::new()))
+                .map(|_| Mutex::new(Shard::default()))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             live_per_shard: LIVE_SLOTS_PER_SHARD,
@@ -855,7 +887,7 @@ impl RngRegistry {
         }
         let key = (domain, entity);
         let mut shard = lock(&self.shards[shard_of(domain, entity)]);
-        let stream = match shard.get_mut(&key) {
+        let stream = match shard.slots.get_mut(&key) {
             Some(slot) => slot.take().unwrap_or_else(|| {
                 panic!(
                     "RNG stream ({domain}, {entity:?}) is already checked out: exactly one \
@@ -863,8 +895,11 @@ impl RngRegistry {
                 )
             }),
             None => {
-                shard.insert(key, Slot::Out);
-                RngStream::derive(self.master_seed, domain, entity)
+                let stream = shard
+                    .unpark(self.master_seed, key)
+                    .unwrap_or_else(|| RngStream::derive(self.master_seed, domain, entity));
+                shard.slots.insert(key, Slot::Out);
+                stream
             }
         };
         drop(shard);
@@ -896,15 +931,20 @@ impl RngRegistry {
         let shard = self.shards[index]
             .get_mut()
             .unwrap_or_else(|e| e.into_inner());
-        let slot = shard
-            .entry((domain, entity))
-            .or_insert_with(|| Slot::Live(Box::new(RngStream::derive(seed, domain, entity))));
-        // A parked stream is resumed in place: this accessor hands out a reference.
-        if let Slot::Parked { .. } = slot {
-            let stream = slot.take().expect("a parked slot holds a stream");
-            *slot = Slot::Live(Box::new(stream));
+        // A parked stream is resumed live: this accessor hands out a reference.
+        if !shard.slots.contains_key(&(domain, entity)) {
+            let stream = shard
+                .unpark(seed, (domain, entity))
+                .unwrap_or_else(|| RngStream::derive(seed, domain, entity));
+            shard
+                .slots
+                .insert((domain, entity), Slot::Live(Box::new(stream)));
         }
-        match slot {
+        match shard
+            .slots
+            .get_mut(&(domain, entity))
+            .expect("inserted above")
+        {
             Slot::Live(stream) => stream,
             _ => panic!("RNG stream ({domain}, {entity:?}) is checked out by a live RngGuard"),
         }
@@ -925,7 +965,7 @@ impl RngRegistry {
     ///
     /// Always false for a single-use scope, which is never cached.
     pub fn contains(&self, domain: RngDomain, entity: EntityRef) -> bool {
-        lock(&self.shards[shard_of(domain, entity)]).contains_key(&(domain, entity))
+        lock(&self.shards[shard_of(domain, entity)]).contains((domain, entity))
     }
 
     /// Number of cached streams, including those currently checked out.
@@ -935,7 +975,7 @@ impl RngRegistry {
 
     /// True if no stream has been used yet.
     pub fn is_empty(&self) -> bool {
-        self.shards.iter().all(|s| lock(s).is_empty())
+        self.shards.iter().all(|s| lock(s).len() == 0)
     }
 
     /// Drops every cached stream, so the next use of a key restarts it from its key.
@@ -946,7 +986,7 @@ impl RngRegistry {
     /// ids are not reused within a run (03-interfaces.md §1).
     pub fn clear(&mut self) {
         for shard in self.shards.iter_mut() {
-            shard.get_mut().unwrap_or_else(|e| e.into_inner()).clear();
+            *shard.get_mut().unwrap_or_else(|e| e.into_inner()) = Shard::default();
         }
     }
 
@@ -956,11 +996,11 @@ impl RngRegistry {
     /// entity's streams cannot rewind anything that still draws.
     pub fn forget(&mut self, domain: RngDomain, entity: EntityRef) -> bool {
         let index = shard_of(domain, entity);
-        self.shards[index]
+        let shard = self.shards[index]
             .get_mut()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&(domain, entity))
-            .is_some()
+            .unwrap_or_else(|e| e.into_inner());
+        shard.slots.remove(&(domain, entity)).is_some()
+            || link_slot(domain, entity).is_some_and(|l| shard.links.remove(&l).is_some())
     }
 
     /// Drops every cached stream `gone` selects, in one pass over the cache; returns how
@@ -976,7 +1016,12 @@ impl RngRegistry {
         for shard in self.shards.iter_mut() {
             let shard = shard.get_mut().unwrap_or_else(|e| e.into_inner());
             let before = shard.len();
-            shard.retain(|(domain, entity), _| !gone(*domain, entity));
+            shard
+                .slots
+                .retain(|(domain, entity), _| !gone(*domain, entity));
+            shard
+                .links
+                .retain(|&(domain, w), _| !gone(domain, &unpack_link(w)));
             dropped += before - shard.len();
         }
         dropped
@@ -986,15 +1031,35 @@ impl RngRegistry {
     pub fn count_where(&self, mut select: impl FnMut(RngDomain, &EntityRef) -> bool) -> usize {
         self.shards
             .iter()
-            .map(|s| lock(s).keys().filter(|(d, e)| select(*d, e)).count())
+            .map(|s| {
+                let s = lock(s);
+                s.slots.keys().filter(|(d, e)| select(*d, e)).count()
+                    + s.links
+                        .keys()
+                        .filter(|&&(d, w)| select(d, &unpack_link(w)))
+                        .count()
+            })
             .sum()
     }
 
     /// Puts a checked-out stream back into its shard.
     fn restore(&self, key: Key, stream: RngStream) {
         let mut shard = lock(&self.shards[shard_of(key.0, key.1)]);
+        // The same budget as before the parked links had a map of their own: every entry
+        // of the shard counts.
         let park = shard.len() > self.live_per_shard;
-        shard.insert(key, Slot::keep(key.1, stream, park));
+        match link_slot(key.0, key.1).filter(|_| park) {
+            Some(l) => {
+                shard.slots.remove(&key);
+                // 2^64 words is 2^67 bytes of keystream: no link draws that many.
+                let word_pos = u64::try_from(stream.word_pos())
+                    .expect("a link's stream has drawn fewer than 2^64 words");
+                shard.links.insert(l, word_pos);
+            }
+            None => {
+                shard.slots.insert(key, Slot::Live(Box::new(stream)));
+            }
+        }
     }
 }
 
@@ -1279,30 +1344,34 @@ mod tests {
                 }
             }
             drop(guard);
-            let parked = matches!(
-                lock(&reg.shards[shard_of(d, link)]).get(&(d, link)),
-                Some(Slot::Parked { .. })
-            );
+            let parked = {
+                let s = lock(&reg.shards[shard_of(d, link)]);
+                !s.slots.contains_key(&(d, link))
+                    && s.links.contains_key(&link_slot(d, link).unwrap())
+            };
             assert!(parked, "a link's stream is parked between checkouts");
         }
         let mut reg = reg;
         assert_eq!(reg.stream(d, link).u64(), open.u64());
         assert_eq!(reg.checkout(d, link).u64(), open.u64());
         // What the cache holds per key, against the stream it replaces.
-        let (slot, live) = (
-            core::mem::size_of::<Slot>(),
+        let (parked, keyed, live) = (
+            core::mem::size_of::<(LinkSlot, u64)>(),
+            core::mem::size_of::<(Key, Slot)>(),
             core::mem::size_of::<RngStream>(),
         );
-        eprintln!("cache value {slot} bytes; a live stream {live} bytes");
+        eprintln!(
+            "parked entry {parked} bytes; a keyed slot {keyed} bytes; a live stream {live} bytes"
+        );
         assert!(
-            slot * 4 < live,
-            "a parked slot ({slot} B) is not much smaller than a stream ({live} B)"
+            parked <= 24 && parked * 12 < live,
+            "a parked link ({parked} B) is not much smaller than a stream ({live} B)"
         );
         // A node's stream is not a link's, and stays live.
         let node = EntityRef::Node(NodeId::new(3));
         let _ = reg.checkout(d, node).u64();
         assert!(matches!(
-            lock(&reg.shards[shard_of(d, node)]).get(&(d, node)),
+            lock(&reg.shards[shard_of(d, node)]).slots.get(&(d, node)),
             Some(Slot::Live(_))
         ));
         // Under the live budget a link's stream stays live too: a run with a few thousand
@@ -1310,7 +1379,7 @@ mod tests {
         let small = RngRegistry::new(21);
         let _ = small.checkout(d, link).u64();
         assert!(matches!(
-            lock(&small.shards[shard_of(d, link)]).get(&(d, link)),
+            lock(&small.shards[shard_of(d, link)]).slots.get(&(d, link)),
             Some(Slot::Live(_))
         ));
     }

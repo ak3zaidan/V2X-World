@@ -64,7 +64,8 @@
 //! not published, so the federal one is an assumption. The provider's own CRL of revoked
 //! components (series 2/256) is the CRL work package's.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use p256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};
 use p256::ecdsa::{Signature as EcdsaSig, VerifyingKey};
@@ -2432,6 +2433,46 @@ impl Governance {
 // The device
 // ---------------------------------------------------------------------------------------
 
+/// The one shared copy of a governance certificate (a root, an SCMS component's
+/// certificate) that a device's trust store holds.
+///
+/// Every device of a provider installs the same CTL and certificate chain file, and each
+/// held its own decoded copy of every certificate in them, inside the 58 MB the enrolment
+/// path held for 970 devices at full Midtown density
+/// (`docs/design/scms-real/testing/memory-density.md` §1). A certificate is immutable once decoded, so the stores share one copy, keyed by
+/// the SHA-256 of its encoding (the whole hash, not the 8-byte `HashedId8`, which a
+/// 2^32 search can collide). What a device holds and does is unchanged: only where the
+/// bytes live.
+fn shared_cert(c: &Certificate) -> Arc<Certificate> {
+    struct Pool {
+        by_hash: HashMap<[u8; 32], Weak<Certificate>>,
+        prune_at: usize,
+    }
+    static POOL: OnceLock<Mutex<Pool>> = OnceLock::new();
+    let Ok(h) = cert_hashed_id32(c) else {
+        return Arc::new(c.clone());
+    };
+    let mut pool = POOL
+        .get_or_init(|| {
+            Mutex::new(Pool {
+                by_hash: HashMap::new(),
+                prune_at: 1024,
+            })
+        })
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(a) = pool.by_hash.get(&h).and_then(Weak::upgrade) {
+        return a;
+    }
+    if pool.by_hash.len() >= pool.prune_at {
+        pool.by_hash.retain(|_, w| w.strong_count() > 0);
+        pool.prune_at = (2 * pool.by_hash.len()).max(1024);
+    }
+    let a = Arc::new(c.clone());
+    pool.by_hash.insert(h, Arc::downgrade(&a));
+    a
+}
+
 /// A device's trust store: its anchors, the trust list, the chain and the policy it holds.
 #[derive(Debug, Clone, Default)]
 pub struct DeviceTrust {
@@ -2442,9 +2483,9 @@ pub struct DeviceTrust {
     /// The sequence number of the trust list installed.
     pub ctl_sequence: Option<u32>,
     /// Approved root certificates, by `HashedId32` (from the CTL's `unsigned` material).
-    pub roots: BTreeMap<[u8; 32], Certificate>,
+    pub roots: BTreeMap<[u8; 32], Arc<Certificate>>,
     /// Authority certificates whose chain verified, by `HashedId8`.
-    pub chain: BTreeMap<[u8; 8], Certificate>,
+    pub chain: BTreeMap<[u8; 8], Arc<Certificate>>,
     /// The root each chain certificate is anchored at.
     pub anchored_at: BTreeMap<[u8; 8], [u8; 32]>,
     /// The installed Local Certificate Chain File's version.
@@ -2563,14 +2604,14 @@ impl DeviceTrust {
                 && next.roots.contains(&h)
                 && sig1609::verify_explicit_cert(c, None)
             {
-                roots.insert(h, c.clone());
+                roots.insert(h, shared_cert(c));
             }
         }
         // Keep a still-approved root the device already holds even if this CTL omits its
         // certificate from `unsigned`.
         for (h, c) in &self.roots {
             if next.roots.contains(h) {
-                roots.entry(*h).or_insert_with(|| c.clone());
+                roots.entry(*h).or_insert_with(|| Arc::clone(c));
             }
         }
         self.roots = roots;
@@ -2613,8 +2654,12 @@ impl DeviceTrust {
         let Ok(now32) = self.anchors.clock.time32(now) else {
             return Err(self.reject(TrustError::Expired));
         };
-        let mut pool: BTreeMap<[u8; 8], Certificate> = self.chain.clone();
-        for c in self.roots.values().chain(others.iter()) {
+        let mut pool: BTreeMap<[u8; 8], Certificate> = self
+            .chain
+            .iter()
+            .map(|(d, c)| (*d, Certificate::clone(c)))
+            .collect();
+        for c in self.roots.values().map(|c| &**c).chain(others.iter()) {
             if let Ok(d) = cert_hashed_id8(c) {
                 pool.insert(d, c.clone());
             }
@@ -2653,7 +2698,7 @@ impl DeviceTrust {
         }
         self.verifications += checks;
         for (d, root, c) in accepted {
-            self.chain.insert(d, c);
+            self.chain.insert(d, shared_cert(&c));
             self.anchored_at.insert(d, root);
         }
         self.lccf_version = Some(file.version);

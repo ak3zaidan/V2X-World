@@ -555,17 +555,18 @@ impl ObuRuntime {
     /// A node on `profile`, with `policy` and `config`, starting at `at`.
     pub fn new(
         node: NodeId,
-        profile: HardwareProfile,
+        profile: impl Into<std::sync::Arc<HardwareProfile>>,
         policy: Box<dyn VerificationPolicy>,
         config: NodeConfig,
         at: SimTime,
     ) -> Self {
+        let profile: std::sync::Arc<HardwareProfile> = profile.into();
         let cpu_servers = profile.cpu.cores.or(1).max(1);
         // Every profile carries `hsm.servers` as uncalibrated except obu/cohda-mk5, where
         // §7.1 states the single-server assumption; the fallback is therefore one, and it
         // is the pessimistic reading rather than a guess at parallelism nobody published.
         let hsm_servers = profile.hsm.servers.or(1).max(1);
-        let service = ProfileServiceModel::new(profile.clone()).for_node(node);
+        let service = ProfileServiceModel::new(std::sync::Arc::clone(&profile)).for_node(node);
         let verify_priced = profile.op_cost(config.verify_op).is_some()
             || profile
                 .hsm

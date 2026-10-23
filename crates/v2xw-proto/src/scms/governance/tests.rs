@@ -604,3 +604,32 @@ fn dump_artefacts_for_the_oracle() {
     w("ctl2.oer", &g.ctl.spdu);
     w("lccf-rollover.oer", &g.lccf.spdu);
 }
+
+/// Two devices that install the same CTL and chain file hold one copy of each governance
+/// certificate between them (`shared_cert`), and each still trusts exactly what it
+/// installed: the store is per device, the decoded certificate is not.
+#[test]
+fn devices_share_one_copy_of_each_governance_certificate() {
+    let g = gov();
+    let (a, b) = (bootstrapped(&g), bootstrapped(&g));
+    assert!(!a.chain.is_empty() && !a.roots.is_empty());
+    assert_eq!(
+        a.chain.keys().collect::<Vec<_>>(),
+        b.chain.keys().collect::<Vec<_>>()
+    );
+    for (d, c) in &a.chain {
+        assert!(
+            Arc::ptr_eq(c, &b.chain[d]),
+            "chain certificate {d:02x?} is copied"
+        );
+    }
+    for (h, c) in &a.roots {
+        assert!(Arc::ptr_eq(c, &b.roots[h]), "root {h:02x?} is copied");
+    }
+    // A store dropped leaves the other's certificates whole.
+    let held: Vec<[u8; 8]> = b.chain.keys().copied().collect();
+    drop(a);
+    for d in held {
+        assert!(cert_hashed_id8(&b.chain[&d]).is_ok_and(|x| x == d));
+    }
+}

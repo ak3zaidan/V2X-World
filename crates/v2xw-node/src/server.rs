@@ -107,7 +107,9 @@ pub const PROFILE_SERVICE_MODEL_ID: &str = "service-model/hardware-profile";
 /// A [`ServiceModel`] that reads its costs out of a [`HardwareProfile`].
 #[derive(Debug, Clone)]
 pub struct ProfileServiceModel {
-    profile: HardwareProfile,
+    /// Shared: every node built on one profile reads the same one (a full-scale run has
+    /// thousands of nodes on a handful of profiles).
+    profile: std::sync::Arc<HardwareProfile>,
     /// Cost of the non-cryptographic classes, when a scenario supplies one.
     app_task: Option<Duration>,
     /// The abstract compute tier: every operation the profile costs takes
@@ -127,7 +129,8 @@ impl ProfileServiceModel {
     /// on the reference laptop and scaled by DMIPS ratio"), and none of the ten profiles
     /// carries a DMIPS rating for the reference laptop to scale against, so the default is
     /// "not modelled" rather than a made-up microsecond count.
-    pub fn new(profile: HardwareProfile) -> Self {
+    pub fn new(profile: impl Into<std::sync::Arc<HardwareProfile>>) -> Self {
+        let profile = profile.into();
         let card = service_card(&profile);
         ProfileServiceModel {
             profile,
