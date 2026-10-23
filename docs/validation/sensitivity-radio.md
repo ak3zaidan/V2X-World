@@ -13,6 +13,29 @@ the ratio changed / base falls in a band. A change that moves nothing fails its 
 - Command line: `v2xw sensitivity scenarios/sensitivity/radio-dsrc.yaml [--markdown out.md]`;
   `--base-only` prints every metric of the base and its PRR curve per 20 m bin.
 
+## Re-run on main `77cffb5b` (2026-10-22)
+
+The tables below were measured on 2026-10-12, when the node signed under a stand-in
+certificate (a certified BSM 330 B). Since WP-C1 it signs under the real 80 B implicit
+pseudonym certificate (263 B on 802.11p, 225 B on the sidelink), and six rows failed on
+`77cffb5b`. Each was root-caused and re-stated
+(`docs/design/scms-real/testing/rerun-2026-10-22.md` §1); all specs now pass from the
+command line (`radio-dsrc` 28/28, `radio-dsrc-dense` 13/13, `radio-gn` 3/3, `radio-cv2x`
+24/24) and the 27 tests pass. The re-stated rows, measured on `77cffb5b`:
+
+| Row | Change | Metric | Expected | Base | Changed | Ratio | Pass |
+|---|---|---|---|---|---|---|---|
+| LTE MCS 5->7 (was 7->11; base MCS 5) | sidelink `mcs: 7` | `cbr_mean` | down | 0.2415 | 0.1784 | 0.739 | yes |
+| LTE certificate on every message (base MCS 5) | certificate on every message | `cbr_mean` | up | 0.2415 | 0.2496 | 1.033 | yes |
+| LTE vehicles 40->120 | 120 vehicles | `e2e_ms_mean` | same within 10 % (was up) | 67.6567 | 65.1232 | 0.963 | yes |
+| LTE transmissions 2->1 (base 5 dBm) | `max_transmissions: 1` | `prr` | down | 0.8857 | 0.7828 | 0.884 | yes |
+| vehicles 40->120 | 120 vehicles | `e2e_ms_mean` | up, ratio in [1.005, 1.2] (was 1.1) | 12.4531 | 14.1631 | 1.137 | yes |
+| queue 64->1, saturated | `radio.mac.queue_length=1` | `mac_drops` | same (was up) | 0.0000 | 0.0000 | - | yes |
+
+The other rows' numbers moved with the smaller frames (for example the DSRC base PSDU
+205.9 → 199.2 B, the dense base CBR 0.616 → 0.543, the LTE base CBR 0.2398 → 0.1784) and
+still hold.
+
 ## The bases
 
 | Base | What | Used by |
