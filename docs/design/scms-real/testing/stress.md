@@ -185,6 +185,7 @@ quarter fleet, 60 s live, generic-sdu, software OBU.
 | `pq-base` (ECDSA) | 41,903 | 13.6 s | 0.010 / 0.027 | 380,617 | 0.628 ms | 3.7 ms | 105 s / 125 s / 249 MB |
 | `pq-hybrid-mldsa44`, 4 threads | 96,561 (2.30) | 176.2 s (×13.0) | 0.125 / 0.337 | 251,882 (−33.8 %) | 0.787 ms | 12.1 ms | 583 s / 726 s / 367 MB |
 | the same, 1 thread | identical (digest `47fe89fb95c7b8c4…`) | | | | | | 624 s / 613 s / 373 MB |
+| `pq-hybrid-falcon512-certcycle` | 41,900 (1.00), PSDU mean 1,045 B (NDSS: ≈ 380 B) | 60.4 s (×4.4) | 0.044 / 0.121 | 352,258 | 0.751 ms | 6.7 ms | 83 s / 104 s / 235 MB |
 | `pq-hybrid-mldsa44-certcycle` (new) | **0 frames**: 50,180 SDUs refused at the MTU | — | — | — | — | — | 30 s / 30 s / 172 MB |
 
 - **Cost.** `pq-base` took 125 CPU-s, against 1,175 in §3. That is the verification-cache

@@ -18,6 +18,7 @@ changed, and the only build was that one.
 | PQ0 | `stress/pq-base.yaml` (quarter fleet, 60 s live, generic-sdu, software OBU, ECDSA) | 2 | complete | 105 s / 125 s / 249 MB |
 | PQHM | `stress/pq-hybrid-mldsa44.yaml` | 4 | complete | 583 s / 726 s / 367 MB |
 | PQHM1 | the same | 1 | complete, identical to PQHM | 624 s / 613 s / 373 MB |
+| PQHFC | `stress/pq-hybrid-falcon512-certcycle.yaml` (run to test R-CCSIG; row written before it) | 2 | complete | 83 s / 104 s / 235 MB |
 | PQHMC | `stress/pq-hybrid-mldsa44-certcycle.yaml` (new: hybrid ML-DSA-44 under the NDSS certificate cycle) | 2 | complete, **but silent**: 0 frames | 30 s / 30 s / 172 MB |
 
 PQ0 took 125 CPU-s where stress.md's identical scenario took 1,175 CPU-s. That is the effect
@@ -67,9 +68,13 @@ The comparison with the quarter fleet, row by row, is in `docs/benchmark/scms-re
 - The design this fragmenter cites (Twardokus et al., NDSS 2024, Partially-Hybrid;
   `v2xw-net/src/frag/cert_cycle.rs` header) keeps ECDSA on every BSM: "verification cost
   and message size are unchanged", and frames 2–5 of the cycle are 204 B (Fig. 4).
-- With Falcon-512, each SPDU is 666 B too large but still fits the 1,400 B WSMP MTU. Every
-  cert-cycle Falcon number so far carries that extra size and the hybrid verification
-  cost.
+- With Falcon-512, each SPDU is 666 B too large but still fits the 1,400 B WSMP MTU.
+  PQHFC measured it, with its expectation written before the run:
+  - 1.00 frame per BSM and a BSM PSDU mean of **1,045 B**, the R-CCSIG prediction, where the
+    NDSS design gives about 204 + 858/5 ≈ 380 B;
+  - BSM airtime ×4.4 and CBR 0.044;
+  - verify cost 0.751 ms, the hybrid sum rather than ECDSA's 0.628.
+  Every certificate-cycle number so far carries these.
 - With ML-DSA-44 (2,484 B of signature), every BSM and PSM is refused. The run transmits
   nothing, and the validator accepts the scenario with notes only.
 - Fix (next wave):

@@ -337,4 +337,6 @@ rows:
     hybrid signature on every SPDU, +666 B): about 1 frame per BSM and a mean near
     1,000-1,100 B
   source: NDSS 2024 Fig. 4 (cert_cycle.rs anchors); run.rs hand_down_app
-  measured: pending
+  measured: "PQ0 -> PQHFC: BSM frames 41,903 -> 41,900 (1.00 per BSM), PSDU mean 207 -> 1,045 B; BSM airtime 13.6 -> 60.4 s (x4.4); CBR 0.010 -> 0.044; verify cost 0.628 -> 0.751 ms (the hybrid sum, not ECDSA); relay reports 0 with reports_refused_mtu 5; 83 s wall, 104 CPU-s"
+  verdict: open
+  note: "confirms R-CCSIG: the 1,045 B mean is the R-CCSIG prediction, not the NDSS ~380 B, and every message pays the hybrid verification. The relay-report refusals are the documented certificate-cycle behaviour (pq-profile.md §2)"
