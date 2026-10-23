@@ -600,8 +600,7 @@ fn the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed() {
         let mut engine = Engine::build(s, "").expect("builds");
         let mut rec = MemoryRecorder::new();
         let report = engine.run(&mut rec).expect("runs");
-        let mut states: BTreeMap<(u64, v2xw_core::ids::ActorId), (f64, f64, f64)> =
-            BTreeMap::new();
+        let mut states: BTreeMap<(u64, v2xw_core::ids::ActorId), (f64, f64, f64)> = BTreeMap::new();
         let mut jammed: Vec<(u64, u64)> = Vec::new();
         for (at, r) in rec.records() {
             match r.channel {
@@ -633,7 +632,11 @@ fn the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed() {
     // The gridlock counters, over the same live span of each run.
     let live_end = from_ns + (LIVE * 1e9) as u64;
     let peak = |j: &[(u64, u64)], until: u64| {
-        j.iter().filter(|(t, _)| *t <= until).map(|(_, v)| *v).max().unwrap_or(0)
+        j.iter()
+            .filter(|(t, _)| *t <= until)
+            .map(|(_, v)| *v)
+            .max()
+            .unwrap_or(0)
     };
     let full_jammed = peak(&full_jams, live_end);
     let ff_jammed = peak(&ff_jams, u64::MAX);
@@ -647,11 +650,20 @@ fn the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed() {
          fast-forward {ff_jammed}",
         ff.fast_forward.traffic_paused_ns
     );
-    assert!(at_from >= 6, "{at_from} vehicles on the road when the window began");
-    assert!(standing > 0, "no vehicle was standing when the window began");
+    assert!(
+        at_from >= 6,
+        "{at_from} vehicles on the road when the window began"
+    );
+    assert!(
+        standing > 0,
+        "no vehicle was standing when the window began"
+    );
     assert_eq!(ff.fast_forward.windows, 1);
     assert_eq!(ff.fast_forward.traffic_paused_ns, shift);
-    assert_eq!(ff_jammed, full_jammed, "the gridlock resolution acted after the window");
+    assert_eq!(
+        ff_jammed, full_jammed,
+        "the gridlock resolution acted after the window"
+    );
     let after: Vec<_> = resumed
         .iter()
         .filter(|((t, _), _)| *t >= from_ns + shift)

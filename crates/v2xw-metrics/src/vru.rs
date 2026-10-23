@@ -589,13 +589,24 @@ mod tests {
         p.on_pause(1_000_000_000, 1_000_900_000_000);
         for k in 0..10u64 {
             let v = if k < 6 { 0.0 } else { 1.3 };
-            p.on_kinematics(sample(1_000_900 + k * 100, 7, "pedestrian", 0.0, 0.0, v, 0.0));
+            p.on_kinematics(sample(
+                1_000_900 + k * 100,
+                7,
+                "pedestrian",
+                0.0,
+                0.0,
+                v,
+                0.0,
+            ));
         }
         p.close_frame();
         assert_eq!(p.wait.len(), 1);
         match p.wait.summary(1) {
             crate::stats::DistributionSummary::Summary { max, .. } => {
-                assert!((max - 1.1).abs() < 1e-9, "the pause was charged as waiting: {max} s");
+                assert!(
+                    (max - 1.1).abs() < 1e-9,
+                    "the pause was charged as waiting: {max} s"
+                );
             }
             other => panic!("{other:?}"),
         }

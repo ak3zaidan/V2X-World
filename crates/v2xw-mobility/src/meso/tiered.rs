@@ -588,7 +588,11 @@ impl Mobility for TieredMobility {
         if let Some(core) = self.meso.as_mut() {
             core.resume_after_pause(paused);
         }
-        for (_, _, since) in self.micro_waiting.iter_mut().chain(self.meso_waiting.iter_mut()) {
+        for (_, _, since) in self
+            .micro_waiting
+            .iter_mut()
+            .chain(self.meso_waiting.iter_mut())
+        {
             *since = since.saturating_add(paused.as_nanos());
         }
         if let Some(d) = self.demand.as_mut() {

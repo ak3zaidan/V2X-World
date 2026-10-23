@@ -3211,7 +3211,8 @@ pub(crate) fn shared_profile(
     id: &str,
 ) -> std::sync::Arc<v2xw_node::profile::HardwareProfile> {
     type Key = (String, Option<u64>, &'static str);
-    type Shared = std::collections::BTreeMap<Key, std::sync::Arc<v2xw_node::profile::HardwareProfile>>;
+    type Shared =
+        std::collections::BTreeMap<Key, std::sync::Arc<v2xw_node::profile::HardwareProfile>>;
     static SHARED: std::sync::OnceLock<std::sync::Mutex<Shared>> = std::sync::OnceLock::new();
     let (sign_op, _) =
         v2xw_node::profile::signature_ops(crate::signature::message_signature(scenario));

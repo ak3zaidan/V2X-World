@@ -3285,10 +3285,10 @@ impl Engine {
         let target = wake.min(end).min(jump);
         let cause = if target == wake {
             if cause == "kernel" {
-                let label = self
-                    .phase2
-                    .as_ref()
-                    .map_or_else(String::new, crate::phase2::Phase2::next_kernel_delivery_label);
+                let label = self.phase2.as_ref().map_or_else(
+                    String::new,
+                    crate::phase2::Phase2::next_kernel_delivery_label,
+                );
                 format!("kernel:{label}")
             } else {
                 cause.to_string()
@@ -3298,7 +3298,12 @@ impl Engine {
         } else {
             "max-jump".to_string()
         };
-        *self.report.fast_forward.stops_by_cause.entry(cause).or_insert(0) += 1;
+        *self
+            .report
+            .fast_forward
+            .stops_by_cause
+            .entry(cause)
+            .or_insert(0) += 1;
         // Up to the mobility grid (`k · step` from zero), and at least one step on.
         let next = target
             .div_ceil(step_ns)

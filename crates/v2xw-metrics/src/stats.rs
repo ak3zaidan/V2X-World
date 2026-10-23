@@ -937,8 +937,8 @@ impl Distribution {
         let mut merged = Vec::with_capacity(old.len() + counted.len());
         let (mut i, mut j) = (0, 0);
         while i < old.len() || j < counted.len() {
-            let take_old = j >= counted.len()
-                || (i < old.len() && old[i].0.total_cmp(&counted[j].0).is_le());
+            let take_old =
+                j >= counted.len() || (i < old.len() && old[i].0.total_cmp(&counted[j].0).is_le());
             let (v, c) = if take_old {
                 i += 1;
                 old[i - 1]
@@ -1043,7 +1043,11 @@ impl Distribution {
             return DistributionSummary::Insufficient { n, required, sum };
         }
         let len = n as usize;
-        let qs = [Percentile::P50.q(), Percentile::P95.q(), Percentile::P99.q()];
+        let qs = [
+            Percentile::P50.q(),
+            Percentile::P95.q(),
+            Percentile::P99.q(),
+        ];
         let plan: Vec<(usize, Option<(usize, f64)>)> =
             qs.iter().map(|&q| quantile_ranks(len, q)).collect();
         let mut wanted: Vec<usize> = vec![0, len - 1];
@@ -1519,39 +1523,104 @@ mod tests {
         };
         let samples: Vec<(&str, Vec<f64>)> = vec![
             ("one", vec![2.5]),
-            ("depths", (0..3 * COMPACT_AT + 17).map(|_| (next() % 9) as f64).collect()),
-            ("waits", (0..2 * COMPACT_AT + 3).map(|_| {
-                let r = next();
-                if r % 10 < 8 { 0.0 } else { (r >> 20) as f64 / 1e6 }
-            }).collect()),
-            ("e2e", (0..5 * COMPACT_AT + 1).map(|_| (next() >> 11) as f64 * 1e-13).collect()),
-            ("mixed", (0..4 * COMPACT_AT).map(|i| {
-                let r = next();
-                if (i / COMPACT_AT) % 2 == 0 { (r % 5) as f64 * 0.1 } else { (r >> 12) as f64 * 1e-9 }
-            }).collect()),
-            ("zeros", (0..COMPACT_AT + 9).map(|i| match i % 3 { 0 => -0.0, 1 => 0.0, _ => -1.5 }).collect()),
+            (
+                "depths",
+                (0..3 * COMPACT_AT + 17)
+                    .map(|_| (next() % 9) as f64)
+                    .collect(),
+            ),
+            (
+                "waits",
+                (0..2 * COMPACT_AT + 3)
+                    .map(|_| {
+                        let r = next();
+                        if r % 10 < 8 {
+                            0.0
+                        } else {
+                            (r >> 20) as f64 / 1e6
+                        }
+                    })
+                    .collect(),
+            ),
+            (
+                "e2e",
+                (0..5 * COMPACT_AT + 1)
+                    .map(|_| (next() >> 11) as f64 * 1e-13)
+                    .collect(),
+            ),
+            (
+                "mixed",
+                (0..4 * COMPACT_AT)
+                    .map(|i| {
+                        let r = next();
+                        if (i / COMPACT_AT) % 2 == 0 {
+                            (r % 5) as f64 * 0.1
+                        } else {
+                            (r >> 12) as f64 * 1e-9
+                        }
+                    })
+                    .collect(),
+            ),
+            (
+                "zeros",
+                (0..COMPACT_AT + 9)
+                    .map(|i| match i % 3 {
+                        0 => -0.0,
+                        1 => 0.0,
+                        _ => -1.5,
+                    })
+                    .collect(),
+            ),
         ];
         for (name, values) in &samples {
             let mut d = Distribution::new();
             d.observe_all(values.iter().copied());
             let (min, max, mean, p50, p95, p99, sum) = reference(values);
-            let DistributionSummary::Summary { n, min: a, max: b, mean: m, p50: q50, p95: q95, p99: q99, .. } =
-                d.summary(1)
+            let DistributionSummary::Summary {
+                n,
+                min: a,
+                max: b,
+                mean: m,
+                p50: q50,
+                p95: q95,
+                p99: q99,
+                ..
+            } = d.summary(1)
             else {
                 panic!("{name}: expected a summary");
             };
             assert_eq!(n as usize, values.len(), "{name}");
-            for (what, got, want) in [("min", a, min), ("max", b, max), ("mean", m, mean),
-                ("p50", q50, p50), ("p95", q95, p95), ("p99", q99, p99)] {
-                assert_eq!(got.to_bits(), want.to_bits(), "{name} {what}: {got} against {want}");
+            for (what, got, want) in [
+                ("min", a, min),
+                ("max", b, max),
+                ("mean", m, mean),
+                ("p50", q50, p50),
+                ("p95", q95, p95),
+                ("p99", q99, p99),
+            ] {
+                assert_eq!(
+                    got.to_bits(),
+                    want.to_bits(),
+                    "{name} {what}: {got} against {want}"
+                );
             }
-            let Estimate::Value { point, .. } = d.sum(1) else { panic!("{name}: sum") };
+            let Estimate::Value { point, .. } = d.sum(1) else {
+                panic!("{name}: sum")
+            };
             assert_eq!(point.to_bits(), sum.to_bits(), "{name} sum");
-            let Estimate::Value { point, .. } = d.mean(1) else { panic!("{name}: mean") };
+            let Estimate::Value { point, .. } = d.mean(1) else {
+                panic!("{name}: mean")
+            };
             assert_eq!(point.to_bits(), mean.to_bits(), "{name} mean()");
             let mut sorted = values.clone();
             sort_total_order(&mut sorted);
-            assert!(d.sorted().iter().zip(&sorted).all(|(x, y)| x.to_bits() == y.to_bits()), "{name} sorted");
+            assert!(
+                d.sorted()
+                    .iter()
+                    .zip(&sorted)
+                    .all(|(x, y)| x.to_bits() == y.to_bits()),
+                "{name} sorted"
+            );
             assert_eq!(d.sorted().len(), sorted.len(), "{name} sorted length");
         }
         // A merge of two compacted samples is the sample of both.
@@ -1565,9 +1634,14 @@ mod tests {
         let mut whole = Distribution::new();
         whole.observe_all(both.iter().copied());
         assert_eq!(da, whole);
-        let DistributionSummary::Summary { p95, mean, .. } = da.summary(1) else { panic!("merged") };
+        let DistributionSummary::Summary { p95, mean, .. } = da.summary(1) else {
+            panic!("merged")
+        };
         let r = reference(&both);
-        assert_eq!((p95.to_bits(), mean.to_bits()), (r.4.to_bits(), r.2.to_bits()));
+        assert_eq!(
+            (p95.to_bits(), mean.to_bits()),
+            (r.4.to_bits(), r.2.to_bits())
+        );
     }
 
     /// A per-verification metric's window at full density is millions of mostly repeated
