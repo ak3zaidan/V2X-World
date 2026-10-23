@@ -41,7 +41,9 @@ rows:
     devices, 4x-6x the quarter's 349 (the quarter publication had 60 s live); provider
     split within 45/55
   source: scenario file; D1 fleet split ASSUMPTION
-  measured: pending
+  measured: "R-FS40 at 40 s: 1,000 nodes (496 / 504 by provider), 581 handsets, 389 vehicles, 30 RSUs; R-FS at 130 / 140 / 150 s: 1,581 / 1,604 / 1,632 nodes"
+  verdict: open
+  note: "handsets (581 vs ~550) and the split pass; the end-of-run total is unmeasured because R-FS stopped at about 155 s. Arrivals so far (900 in the fill + 2.5/s) match with almost no vehicle leaving the congested box"
 - id: FB.provisioning
   base: FB
   variant: FB
@@ -49,7 +51,8 @@ rows:
   measure: provisioning requests per device; certificates at entry
   expect: 1 request per device; 40 certificates each (2 weeks x 20); total about 40 x devices
   source: "[CAMP122] Table 67 certs_per_i_period 20; ra-maxReqs 1 (04 §4.1)"
-  measured: pending
+  measured: "R-FS40 census, provider-a at 10 s: 331 RA requests for 331 enrolled devices, 13,240 PCA certificates = 40 x 331; at 40 s 16,960 = 40 x 424"
+  verdict: pass
 - id: FB.provisioning-burst
   base: FB
   variant: FB
@@ -59,7 +62,8 @@ rows:
     10-25 requests/s (devices entering during the 4x fill), 20-50x CAMP's 0.5 requests/s
     design rate for 17 M vehicles a year: a scenario start is a burst no real RA sees
   source: "04 §4.1 (CAMP122 §6.3.3.4)"
-  measured: pending
+  measured: "701 devices at 10 s (581 handsets at t0), then 701 -> 992 nodes in 30 s: about 10 provisioning requests/s across both RAs, 20x CAMP's 0.5/s"
+  verdict: pass
 - id: FB.topups-at-rollover
   base: FB
   variant: FB
@@ -70,7 +74,8 @@ rows:
     certificates each, completed inside the 1 h overlap; 0 refused (no honest revocation);
     0 starved
   source: "CAMP-EE R1.1 §2.1.5.3.2 (1 h overlap); NYC weekly top-off; 04 §4.1"
-  measured: pending
+  measured: "not reached (R-FS stopped at about 155 s by the memory cap)"
+  verdict: open
 - id: FB.receptions-scale
   base: PQ0
   variant: FB
@@ -96,7 +101,9 @@ rows:
   measure: PDR within 100 m (or the 80-100 m bin)
   expect: at or below the quarter density's (more collisions and hidden terminals); within 100 m above 0.6
   source: radio-fidelity B1 NLOS 0.67 at 0-100 m; benchmark §3
-  measured: pending
+  measured: "QD 0.838 -> R-FS 0.844 / 0.839 (130 / 140 s); 80-100 m 0.657; within 300 m 0.290 -> 0.282"
+  verdict: pass
+  note: "unchanged rather than lower: losses at full density are 83.8 % below sensitivity, 2.0 % hidden terminal, 0.39 % half-duplex, 0.27 % receiver overflow"
 - id: FB.latency
   base: QD
   variant: FB
@@ -104,7 +111,8 @@ rows:
   measure: BSM end-to-end latency mean / p95
   expect: "mean 12-15 ms: the fixed 9 ms CRATON2 sign plus ~3 ms; MAC access rises a little with load; p95 far under the 100 ms budget"
   source: J2945/1 / FMVSS 150 NPRM 100 ms budget; benchmark §3 (12.2 ms)
-  measured: pending
+  measured: "BSM e2e mean 12.39 ms, p95 14.62, p99 14.94, max 214 ms (sign 9.0, handoff 2.5, verify 0.48, airtime 0.35, MAC defer 0.05)"
+  verdict: pass
 - id: FB.verify-load
   base: QD
   variant: FB
@@ -112,7 +120,9 @@ rows:
   measure: verifications per node per second; verify queue p99; first-sight share
   expect: 3x-5x the quarter's ~30 per node per second (100-150), well under CRATON2's >2,500/s; queue p99 under 1 ms; first-sight share near 1 %
   source: Unex OBU-301E sheet
-  measured: pending
+  measured: "376-390 k verifies/s over 1,581-1,604 nodes = about 240 per node per second (QD ~30); queue p99 0, max 31; wait p99 0.28 ms; first-sight R-FS40 43,076 EE + 31,620 CA validations against 1,976,005 cache hits (3.7 %)"
+  verdict: wrong-expectation
+  note: "the expectation scaled neighbours with the fleet (4x). On the map there are 4.5x the nodes, packed into a queueing box, so each node hears about 8x; it is still a tenth of CRATON2's capacity. First-sight share is 3.7 % in the first 40 s (the fill), not 1 %"
 - id: FB.mbr-airtime
   base: QD
   variant: FB
@@ -120,7 +130,8 @@ rows:
   measure: MBR share of airtime
   expect: under 1 % (honest traffic; R-USFP fixed; reports go over Uu or to an RSU)
   source: testing/usfp.md; validation/vehicle-and-roadside.md §4
-  measured: pending
+  measured: "R-FS40: 43 MBR frames, 68.8 ms of 32.6 s airtime = 0.21 %"
+  verdict: pass
 - id: FB.honest-revoked
   base: FB
   variant: FB
@@ -131,7 +142,9 @@ rows:
     decisions, 0 devices revoked; the false-positive rate per device-hour is the benchmark
     headline an attack study compares against
   source: testing/usfp.md (realism base 26 -> 0 honest revoked)
-  measured: pending
+  measured: "R-FS40 (40 s): 236 verdicts (constantPositionFrozen 165, positionJump 71), 229 reports about 32 honest devices, 203 received, 0 cases, 0 decisions, 0 revoked; the 2-day outcome is unmeasured"
+  verdict: open
+  note: "a residual false-positive rate of about 0.8 honest devices reported per second at full density; whether manual review over 2 days revokes any is the open question"
 - id: FB.crl
   base: FB
   variant: FB
@@ -142,7 +155,9 @@ rows:
     holding it; at least one weekly reissue in the 2 days only if a reissue falls inside;
     downloads on 1-business-day polls; 0 crl-overdue refusals
   source: testing/stress.md R-NOCRL; 03 §9 (SCMS Manager CRL SLA)
-  measured: pending
+  measured: "R-FS40: 2 CRL versions published at t0 (one per CRACA), 0 entries; 2,000 CRLs accepted by receivers (2 per device), 60 RSU installs (2 x 30); 8 polls not modified, 0 downloads in 40 s; 0 crl-period refusals"
+  verdict: pass
+  note: "the t0 part only; the weekly reissue and the business-day polls are not reached"
 - id: FB.trust
   base: FB
   variant: FB
@@ -150,7 +165,8 @@ rows:
   measure: receiver refusals by cause
   expect: 0 psid-not-permitted, 0 off-ctl, 0 crl-overdue; refusals only for real reasons (none expected on honest traffic)
   source: testing/stress.md; BUILD-STATUS 2026-10-22 TRUST
-  measured: pending
+  measured: "R-FS40: 2,019,081 SPDUs checked, 0 refused of any cause, 6,324 tolerated RA-profile findings, 0 SPDU signature failures"
+  verdict: pass
 - id: FB.privacy
   base: QD
   variant: FB
@@ -161,7 +177,9 @@ rows:
     below the quarter's (a larger anonymity set at a simultaneous change); correct links
     near 0
   source: Wiedersheim et al. 2010; benchmark §6
-  measured: pending
+  measured: "R-FS40: 48,705 frames read, 3,120 link decisions, 2,873 claims, 0 correct, with pseudonym_changes 0; 277 vehicles tracked"
+  verdict: open
+  note: "a link claim with no pseudonym change to link across: the linker counts something else (coverage entry/exit?). Same 0-correct pattern as benchmark §9.6"
 - id: FB.traffic-speed
   base: QD
   variant: FB
@@ -169,7 +187,8 @@ rows:
   measure: mean vehicle speed, live window
   expect: below the quarter's 4.12 m/s and nearer Midtown's ~5 mph (2.2 m/s); 2-4 m/s
   source: NYC DOT Mobility Report 2018/2019
-  measured: pending
+  measured: "mean 2.75 / 2.60 / 2.33 m/s at 130 / 140 / 150 s; p50 0.82 -> 0.18 m/s"
+  verdict: pass
 - id: FB.ff-ticks
   base: FB
   variant: FB
@@ -177,7 +196,8 @@ rows:
   measure: backend ticks over the fast-forward windows
   expect: "D2: at most one stop a minute when nothing is due: about 2 x 1,440 idle stops plus due events; under 5 x 10^4 (the 1.1 M ticks of benchmark §9.2 are gone: MW measured 54,511 for 33 days)"
   source: D2 design; testing/stress.md MW.cost
-  measured: pending
+  measured: "not reached"
+  verdict: open
 - id: FB.cost
   base: FB
   variant: FB
@@ -188,7 +208,9 @@ rows:
     ~0.4 CPU-s per device for real-P-256 provisioning; the later cache fix may cut it);
     peak footprint 0.8-2.0 GB, under the 2.5 GB cap; the fast-forward part a small share
   source: testing/stress.md §1; benchmark §7
-  measured: pending
+  measured: "R-FS: stopped by the 2.5 GB cap at 2,582 MB after 79 min wall and about 6,300 CPU-s at about 155 simulated s (40 CPU-s per simulated s, rising); footprint 795 / 1,079 / 1,457 / 1,418 MB at 13 / 23 / 43 / 63 min, peaks 1,998 / 2,225. R-FS40: 535 s wall, 623 CPU-s, 910 MB peak; census footprint 450 / 609 / 817 / 868 MB at 701 / 783 / 888 / 992 nodes"
+  verdict: open
+  note: "the memory band was wrong: about 1.4-2 MB per node on the map, plus transient peaks of up to +0.8 GB. The full file needs 3-4 GB and 4-5 CPU-hours (benchmark §0)"
 # ---------------------------------------------------------------- (2) post-quantum, quarter density
 - id: PQHM.sizes
   base: PQ0
