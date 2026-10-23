@@ -551,6 +551,11 @@ impl<M> Kernel<M> {
         self.heap.peek().map(|Reverse(q)| q.at)
     }
 
+    /// The next scheduled delivery, without taking it: what the next step will handle.
+    pub fn peek_next(&self) -> Option<&Delivery<M>> {
+        self.heap.peek().map(|Reverse(q)| &q.delivery)
+    }
+
     /// How many deliveries are still scheduled.
     pub fn pending(&self) -> usize {
         self.heap.len()

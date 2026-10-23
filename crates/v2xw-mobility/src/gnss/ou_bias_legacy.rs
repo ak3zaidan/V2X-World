@@ -167,6 +167,23 @@ impl v2xw_core::model::Model for LegacyGnss {
 }
 
 impl GnssModel for LegacyGnss {
+    fn resume_after_pause(&mut self, paused: v2xw_core::time::Duration) {
+        let by = paused.as_nanos();
+        if by == 0 {
+            return;
+        }
+        for s in self.state.values_mut() {
+            if let Some(t) = s.last.as_mut() {
+                *t = t.saturating_add(by);
+            }
+            for t in [&mut s.degrade_until, &mut s.jam_until] {
+                if *t > 0 {
+                    *t = t.saturating_add(by);
+                }
+            }
+        }
+    }
+
     fn estimate(
         &mut self,
         ctx: &mut dyn MobCtx,

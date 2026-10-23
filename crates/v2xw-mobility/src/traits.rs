@@ -367,6 +367,19 @@ pub trait GnssModel: Model {
         gt: &Kinematics,
         env: &GnssEnv,
     ) -> PositionEstimate;
+
+    /// The road was frozen for `paused` ([`Mobility::resume_after_pause`], a
+    /// `time.fast_forward` window): every node's receiver resumes as if no time had passed,
+    /// so the instant of its last epoch and the ends of its current outage, burst or
+    /// jamming move on by `paused`.
+    ///
+    /// Without it the first epoch after a 12 h window read the window as elapsed receiver
+    /// time: the per-second hazards of an outlier and of a multipath burst over 43,000 s
+    /// are 1, so every vehicle's first position after the resume carried an outlier and
+    /// entered a burst, and its next BSM, 0.1 s later and without the outlier, was a
+    /// [SM-MBR] RandomPosition jump that every honest receiver reported (R-FFBURST). A
+    /// provided no-op, for a model with no clock.
+    fn resume_after_pause(&mut self, _paused: Duration) {}
 }
 
 /// A node's clock (03-interfaces.md §3, 04-models.md §3.8).
