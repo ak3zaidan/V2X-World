@@ -599,17 +599,30 @@ any two-day misbehaviour number is a real-world number.
    Node 20 is off from 645 s to 2,419,510 s, but `proto.revocation` records it downloading,
    processing and enforcing three CRLs at 604,740.2 s, the first live step after a
    fast-forward. Not root-caused.
-9. **Two engine tests fail and need an owner decision** (BS wave 3). Neither was weakened.
-   - `scms_wiring::detectors_file_real_us_reports_that_the_ma_opens_and_verifies`: "the MA
-     opened no case". Its 9 real reports are filed, opened and verified, but once RSUs no
-     longer file reports (R-UNSEC), vehicle reports alone do not reach the MA's quorum of 3
-     independent reporters within 120 s. The test needs a longer run or a vehicle-only
-     quorum.
+9. **The two engine tests that failed after BS wave 3 pass again** (fix wave 4, owner
+   decisions applied; no assertion changed, no rule changed).
+   - `scms_wiring::detectors_file_real_us_reports_that_the_ma_opens_and_verifies` runs the
+     scenario's own 300 s instead of 120 s. With RSUs filing no report (R-UNSEC), the first
+     vehicle report is filed at 108 s by one car; in 300 s 105 real reports from 12 cars
+     reach the MA, every one opens and verifies, and the MA revokes at 186.8 s. The test
+     uses a `NullRecorder` (300 s in memory passed the 2.5 GB cap).
    - `pq_relay::an_oversized_relayed_report_or_crl_frame_is_fragmented_and_acted_on_whole`:
-     "no vehicle report reached the proxy through a unit". The GNSS fix moved which
-     relay-only vehicle detects and where, so no forwarding RSU hears the 4 relayed reports.
-     It fails on the detpriv tip alone, so the merge did not cause it. It needs a scenario
-     change.
+     `scms-pq-relay-repro.yaml` adds one ConstPos attacker (actor 112, after the base's 3 %,
+     whose draws are unchanged) on the road of relay-only node 56, 24 m from a unit: 36
+     relay uploads, 30 vehicle reports at the proxy through a unit. Moving a unit next to
+     the old reporter (node 82) did not work: the unit's CRL broadcast reached the car
+     first, and it stopped reporting the revoked attacker.
+   - Both proved red (one build): the unit dropping every reassembled report fails the
+     relay test ("no vehicle report reached the proxy through a unit"), and the judged
+     evidence taken from another signer fails the wiring test ("no real US report was
+     filed"). pq_relay 3/3 and scms_wiring 4/4 pass with the faults removed.
+   - Finding, not fixed: a relay-only vehicle counts a report as uploaded once it is on the
+     air to a unit within the geometric 300 m `relay_range_m`, whether or not any unit
+     hears it. Node 82's 4 "uploads" (12 fragments) all fell below sensitivity at units 212
+     and 218 m away behind buildings. The same car, out of the units' radio range, got its
+     first CRL at 95.2 s, 60 s after the MA revoked its target (35.6 s), and reported the
+     revoked attacker from 65.9 s to 72.8 s. `reports_uploaded_relay` is "put on the air",
+     not "delivered".
 10. **R-PQUNSEC: under PQ an RSU's own reports are still filed** (final-run §3). PQHFC files
     7 and PQHMC 9. `Phase2::real_mbr` returns `Off` when `pki` is `None`, before the R-UNSEC
     roadside check. The fix is one line, but it may leave the `pq_relay` R-PQRSUCRL test's MA
@@ -650,6 +663,32 @@ any two-day misbehaviour number is a real-world number.
       aligned with its SPS reservation (matrix `lte-latency-budget`).
     - Rebroadcasting a 336 kB standing CRL every 5 s on channel 172 costs about 0.54 Mbit/s per
       RSU (07 §7 item 5). This is a configured behaviour, not a defect.
+    - **The 5 failing mobility traffic tests** (re-run on `d0e6530b`, fix wave 4; none uses
+      GNSS or the SCMS, and none is weakened). Two are calibration bands, three are real
+      mobility defects.
+      - `calibration::a_saturated_stop_line_discharges_at_the_published_rate`: start-up lost
+        time 3.011 s over 49 queues against the HCM band 1.0–3.0 s. A model gap, not a
+        bug: the green-onset reaction (1.08 s median) and launch give about 1 s more than
+        HCM's 2 s default; a measured re-fit is owed and moves every digest.
+      - `calibration::drivers_and_pedestrians_on_a_midtown_grid_move_as_published`:
+        pedestrian speed p15 0.925 m/s against Knoblauch's 0.97–1.40 (mean 1.246, in band).
+        The metric samples every walking step (pavements, crowding, starts and stops)
+        against crossing speeds measured on crosswalks, and the default desired speed is
+        Helbing's 1.34 ± 0.26 m/s (p15 about 1.07). A measurement-population mismatch to
+        settle (sample crosswalk steps only, or take Knoblauch's population), not shown to
+        be a model defect.
+      - `pedestrian_invariants::pedestrians_and_cyclists_in_signalised_traffic_hold_every_invariant`:
+        overlap 42 (two actors on adjacent lanes 207/208 closing from 4.8 to 2.65 m
+        centre to centre) and in-building 4 (a walker inside building 12's corner). Real
+        defects.
+      - `pedestrian_invariants::observed_pedestrians_and_two_wheelers_hold_every_invariant`:
+        overlap 14 (lanes 398/399, the same closing pattern), one speed jump (4.68 to
+        3.77 m/s in 0.1 s) and one acceleration bound (−9.15 m/s²). Real defects.
+      - `realism::buses_taxis_and_deliveries_stop_at_the_kerb_and_the_traffic_goes_round`:
+        standstill 1 with kerbside stops against 0 without (actor 79 on lane 39 stands
+        180 s). Overlaps now pass. A real defect; the cause recorded on 2026-10-11 (a car
+        held part-way through a lane change beside a standing delivery van blocks the lane
+        behind it) was not re-checked for actor 79.
 17. **Red-team finding.** The `generationTime` window makes a replay older than 2 s harmless,
     but the replayer is never reported or punished: 11 of 11 replayers were revoked before the
     window, and 0 after it (07 §8.1).

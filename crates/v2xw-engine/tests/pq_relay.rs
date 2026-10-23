@@ -18,6 +18,12 @@
 //!   frame (1,119 or ~1,330 octets plus the 666-octet Falcon signature) cannot fit. With
 //!   `fragmenter/none` the hybrid BSM with its certificate is itself refused, nothing is
 //!   detected, and no report or revocation exists to test.
+//!
+//! The scenario adds one attacker on a relay-only vehicle's road (its header says why):
+//! without it no vehicle report reached the proxy through a unit after the GNSS fix.
+//! Fault injected (2026-10-23): a `report-forward` unit that drops every reassembled report
+//! in `Engine::on_app_message` — 36 relay uploads, 133 reassemblies, and the first test
+//! fails on "no vehicle report reached the proxy through a unit".
 
 use std::path::Path;
 
