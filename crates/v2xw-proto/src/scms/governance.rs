@@ -2437,9 +2437,9 @@ impl Governance {
 /// certificate) that a device's trust store holds.
 ///
 /// Every device of a provider installs the same CTL and certificate chain file, and each
-/// held its own decoded copy of every certificate in them: about 60 KB a device, 58 MB
-/// for 970 devices at full Midtown density (`docs/design/scms-real/testing/memory-density.md`
-/// §1). A certificate is immutable once decoded, so the stores share one copy, keyed by
+/// held its own decoded copy of every certificate in them, inside the 58 MB the enrolment
+/// path held for 970 devices at full Midtown density
+/// (`docs/design/scms-real/testing/memory-density.md` §1). A certificate is immutable once decoded, so the stores share one copy, keyed by
 /// the SHA-256 of its encoding (the whole hash, not the 8-byte `HashedId8`, which a
 /// 2^32 search can collide). What a device holds and does is unchanged: only where the
 /// bytes live.

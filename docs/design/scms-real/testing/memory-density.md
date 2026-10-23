@@ -33,9 +33,10 @@ logging it ran at 26 wall seconds per simulated second).
 - **The largest live structure is the SCMS backend's per-device state,** under
   `Phase2 → ScmsRun::preload_at`: 113 MB in `handle_provision` (RA request records, the
   butterfly cocoons, provisioning jobs, PCA issued records, RA batch files) and 58 MB in
-  `handle_enrol` for 970 devices at 40 s. About 60 KB of the enrolment share is each
-  device's own copy of the governance certificates (`DeviceTrust::roots` and `chain`,
-  cloned from the CTL and LCCF per device). It grows with the devices provisioned (1,933
+  `handle_enrol` for 970 devices at 40 s (60 KB a device). The enrolment share includes
+  each device's own decoded copy of the governance certificates (`DeviceTrust::roots` and
+  `chain`, from the CTL and LCCF it installs); how much of the 58 MB those copies are was
+  not measured separately. It grows with the devices provisioned (1,933
   at 240 s), not with time.
 - **The per-link radio state** (the "per-frame arrival and faint maps, 53 MB" of
   `ccsig-memory.md` §2) is not the arrival maps. The 53 MB under `Engine::start_frame` were
