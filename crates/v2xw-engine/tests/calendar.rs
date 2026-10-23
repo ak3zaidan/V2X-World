@@ -22,6 +22,10 @@
 //! * `Phase2::topups_due` returning its vehicles in a `RandomState` hash order (a
 //!   `HashMap` iteration in the backend path) —
 //!   `the_lifecycle_run_is_byte_identical_at_one_and_four_threads` fails (WP-DET).
+//! * `NativeMobility::resume_after_pause` a no-op, or `Engine::resume_after_fast_forward`
+//!   not called — the vehicles standing when the window began are teleported by the
+//!   gridlock resolution on the first step after it, and
+//!   `the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed` fails (R-FFBURST).
 //!
 //! Inject faults with `tools/mutate/mutate.py`: a revert that restores the file with an
 //! older mtime leaves cargo's faulted build in place, and the "restored" tree then fails
@@ -553,4 +557,107 @@ fn the_shipped_scenarios_declare_their_calendar() {
         params.as_object().is_none_or(serde_json::Map::is_empty),
         "a compressed value survived: {params}"
     );
+}
+
+/// R-FFBURST (docs/design/scms-real/testing/final-run.md §4 item 2): after a fast-forward
+/// window the traffic continues exactly where it froze, as if no time had passed on the
+/// road. The run with the window [20, 980] s, from 980 s on, is the run with no window from
+/// 20 s on, state for state: every vehicle where it was, at its speed, none teleported by
+/// the gridlock resolution and none removed. 960 s is 16 cycles of the grid's 60 s fixed-
+/// time plan, so the lamps resume in the phase they froze in and the two runs can be
+/// compared step for step.
+///
+/// Before the fix the first step after the window read it as traffic time: a vehicle
+/// standing at a red lamp when the window began had "stood" 960 s, past the 300 s gridlock
+/// timeout, and was teleported along its route or removed — each teleport a position jump
+/// that every honest receiver around it reported (the full-scale benchmark: 1,833 → 1,281
+/// nodes at the resume and 4,876 honest reports in the next 10 s).
+///
+/// Faults that turn it red: `NativeMobility::resume_after_pause` a no-op (vehicles
+/// teleported, positions diverge); `Engine::resume_after_fast_forward` not called; its
+/// re-dating of the frozen state left out (the first state after the window is filed at
+/// the instant the window began).
+#[test]
+fn the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed() {
+    use std::collections::BTreeMap;
+    use v2xw_metrics::channels::{GtKinematicsView, decode};
+    const FROM: f64 = 20.0;
+    const TO: f64 = 980.0;
+    const LIVE: f64 = 30.0;
+    let shift: u64 = 960_000_000_000;
+    let from_ns: u64 = 20_000_000_000;
+    let run = |fast_forward: bool| {
+        let horizon = if fast_forward { TO + LIVE } else { FROM + LIVE };
+        let mut s = with_scms(crawling_fleet(8, horizon, 8.0), json!({}));
+        s.time.t0 = "2026-10-20T07:30:00Z".into();
+        if fast_forward {
+            s.time.fast_forward = vec![DilationWindow {
+                from_s: FROM,
+                to_s: TO,
+            }];
+        }
+        assert!(errors_at(&s).is_empty(), "{:?}", errors_at(&s));
+        let mut engine = Engine::build(s, "").expect("builds");
+        let mut rec = MemoryRecorder::new();
+        let report = engine.run(&mut rec).expect("runs");
+        let mut states: BTreeMap<(u64, v2xw_core::ids::ActorId), (f64, f64, f64)> =
+            BTreeMap::new();
+        let mut jammed = 0u64;
+        for (_, r) in rec.records() {
+            match r.channel {
+                "gt.kinematics" => {
+                    let k: GtKinematicsView = decode(r).expect("decodes");
+                    states.insert((k.t, k.actor), (k.x_m, k.y_m, k.speed_mps));
+                }
+                "traffic.control" => {
+                    let v: serde_json::Value =
+                        serde_json::from_slice(&r.json).expect("a traffic.control record");
+                    for key in ["jammed", "teleported", "removed"] {
+                        jammed = jammed.max(v[key].as_u64().unwrap_or(0));
+                    }
+                }
+                _ => {}
+            }
+        }
+        (report, states, jammed)
+    };
+    let (_, full, full_jammed) = run(false);
+    let (ff, resumed, ff_jammed) = run(true);
+    // The window began with a vehicle standing (at a red lamp): the state the defect needs.
+    let standing = full
+        .iter()
+        .filter(|((t, _), (_, _, v))| *t == from_ns && *v < 0.1)
+        .count();
+    let at_from = full.keys().filter(|(t, _)| *t == from_ns).count();
+    println!(
+        "{at_from} vehicles at {FROM} s, {standing} standing; paused {} ns; jammed full {full_jammed}, \
+         fast-forward {ff_jammed}",
+        ff.fast_forward.traffic_paused_ns
+    );
+    assert!(at_from >= 6, "{at_from} vehicles on the road when the window began");
+    assert!(standing > 0, "no vehicle was standing when the window began");
+    assert_eq!(ff.fast_forward.windows, 1);
+    assert_eq!(ff.fast_forward.traffic_paused_ns, shift);
+    assert_eq!(ff_jammed, full_jammed, "the gridlock resolution acted after the window");
+    let after: Vec<_> = resumed
+        .iter()
+        .filter(|((t, _), _)| *t >= from_ns + shift)
+        .collect();
+    let expected: Vec<_> = full.iter().filter(|((t, _), _)| *t >= from_ns).collect();
+    assert_eq!(
+        after.len(),
+        expected.len(),
+        "states after the window: {} against {} in the run without one",
+        after.len(),
+        expected.len()
+    );
+    for (((t, a), (x, y, v)), ((t2, a2), (x2, y2, v2))) in expected.iter().zip(&after) {
+        assert_eq!((t + shift, a), (*t2, a2), "the state stream diverges");
+        let d = (x - x2).hypot(y - y2);
+        assert!(
+            d < 1e-6 && (v - v2).abs() < 1e-6,
+            "{a:?} at {t} ns: ({x:.3}, {y:.3}) at {v:.3} m/s without the window, \
+             ({x2:.3}, {y2:.3}) at {v2:.3} m/s after it ({d:.3} m apart)"
+        );
+    }
 }

@@ -626,6 +626,33 @@ impl Default for SocialForce {
 }
 
 impl SocialForce {
+    /// The traffic was frozen for `paused` ([`crate::Mobility::resume_after_pause`]): when
+    /// each pedestrian began waiting at a kerb or mid-block and when they started to walk
+    /// off move on by it, so a wait does not include the frozen hours (a pedestrian at a
+    /// kerb would otherwise give up on the signal at once, and the run's `ped_wait`
+    /// counted the window as waiting).
+    pub fn resume_after_pause(&mut self, paused: Duration) {
+        let by = paused.as_nanos();
+        if by == 0 {
+            return;
+        }
+        for p in self.people.values_mut() {
+            for t in [p.waiting_since.as_mut(), p.walk_onset.as_mut()]
+                .into_iter()
+                .flatten()
+            {
+                *t = t.saturating_add(by);
+            }
+            if let Some(Midblock {
+                stage: MidblockStage::Waiting(t),
+                ..
+            }) = p.midblock.as_mut()
+            {
+                *t = t.saturating_add(by);
+            }
+        }
+    }
+
     /// The model with the given parameters.
     pub fn new(params: SocialForceParams) -> Self {
         Self {

@@ -71,6 +71,22 @@ pub trait Mobility: Model {
     /// Applies an external control at the next step.
     fn command(&mut self, ctx: &mut dyn MobCtx, cmd: MobilityCommand);
 
+    /// The traffic was frozen for `paused` (a `time.fast_forward` window: the calendar ran
+    /// on for the credential backend, the road did not), and the next [`Mobility::step`]
+    /// continues it. Every instant the model keeps that measures elapsed *traffic* time —
+    /// when a vehicle came to a standstill, when a lane change began, when a trip started
+    /// waiting to enter, when a stop ends, the demand's next arrival — moves on by
+    /// `paused`, so the step after the window continues the traffic exactly as a run with
+    /// no window would have from the instant the window began.
+    ///
+    /// Without it every such clock read the window as time spent: each vehicle standing
+    /// when the window began had "stood" for hours and the gridlock resolution teleported
+    /// or removed it on the first step (the full-scale benchmark's 1,833 → 1,281 nodes and
+    /// its burst of honest position-jump reports, R-FFBURST), every lane change finished
+    /// in one step, and every trip queued to enter was dropped. A provided no-op, for a
+    /// tier with no such clock.
+    fn resume_after_pause(&mut self, _paused: Duration) {}
+
     /// The last published state of one actor, for perception and safety metrics.
     fn kinematics(&self, a: ActorId) -> Option<&Kinematics>;
 
@@ -252,6 +268,12 @@ pub trait Demand: Model + Send + Sync {
     fn set_multiplier(&mut self, _m: f64) -> bool {
         false
     }
+
+    /// The traffic was frozen for `paused` ([`Mobility::resume_after_pause`]): an arrival
+    /// process keeps its cursor in traffic time, so its next arrival moves on by `paused`
+    /// and the window neither spawns the trips of the frozen hours nor burns through
+    /// their draws. A provided no-op for a model with no cursor.
+    fn resume_after_pause(&mut self, _paused: Duration) {}
 
     /// The route this model planned for `trip`, when it plans routes itself — an
     /// assignment's saved route, a bus line through its stops ([`crate::demand::hooks`]).

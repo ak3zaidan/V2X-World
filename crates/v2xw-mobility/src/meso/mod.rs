@@ -296,6 +296,22 @@ pub struct MesoCore {
 }
 
 impl MesoCore {
+    /// The traffic was frozen for `paused` ([`Mobility::resume_after_pause`]): when each
+    /// vehicle entered its segment, the earliest instant it may leave, when it spawned and
+    /// when each segment's exit is next free all move on by it, so the frozen hours do not
+    /// let every queued vehicle leave at once on the first step after them.
+    pub fn resume_after_pause(&mut self, paused: Duration) {
+        let by = paused.as_nanos();
+        for v in self.vehicles.values_mut() {
+            v.entered = v.entered.saturating_add(by);
+            v.earliest_exit = v.earliest_exit.saturating_add(by);
+            v.spawned = v.spawned.saturating_add(by);
+        }
+        for seg in &mut self.segments {
+            seg.free_at = seg.free_at.saturating_add(by);
+        }
+    }
+
     /// The network for `world`: every edge with a lane `classes` may drive becomes one or
     /// more segments.
     #[must_use]
@@ -1067,6 +1083,18 @@ impl Mobility for MesoMobility {
 
     fn command(&mut self, _ctx: &mut dyn MobCtx, cmd: MobilityCommand) {
         self.pending.push(cmd);
+    }
+
+    fn resume_after_pause(&mut self, paused: Duration) {
+        if let Some(core) = self.core.as_mut() {
+            core.resume_after_pause(paused);
+        }
+        for (_, _, since) in &mut self.waiting {
+            *since = since.saturating_add(paused.as_nanos());
+        }
+        if let Some(d) = self.demand.as_mut() {
+            d.resume_after_pause(paused);
+        }
     }
 
     fn kinematics(&self, a: ActorId) -> Option<&Kinematics> {
