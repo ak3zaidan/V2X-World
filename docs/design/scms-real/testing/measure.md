@@ -133,3 +133,30 @@ is `NotRelevant(generation-time-too-old)` and is never judged.
   attached different BSMs.
 
 ## 6. Tests and faults
+
+| Item | Test | Fault injected (then restored) |
+|---|---|---|
+| 1 | `v2xw-mobility` `a_creeping_receiver_never_sends_two_bsms_at_one_position_while_moving` | propagate by the later velocity alone: RED |
+| 2 | `security_lifecycle::linkability_counts_only_links_across_a_pseudonym_change` (busy grid, a sniffer at every signal: no-change run 7 claims, all spurious; 10 s period: 100 changes heard, 93 claims across, 88 correct, 10 spurious) | count every claim as across a change: RED |
+| 3 | `scms_deployment::a_device_records_the_t0_lists_it_holds_and_their_fetch` | `node.security` emitted without the node's lists: RED. Not injected: skipping `note_prerun_crl` |
+| 4 | `report_signing::no_vehicle_report_goes_out_unsigned_across_the_week_rollover` (now asserts the units' detections are not filed, by reason, and `reports_from_rsus` 0) | the old roadside exemption in `files_report`: RED |
+| 5 | `v2xw-node` `vru_device::a_frame_that_waited_past_its_relevance_window_is_not_judged`; `phase2::judged_evidence_tests` | the processing-time relevance check reverted to the arrival time: RED; take the ring's last entry: RED |
+
+The regression digests `phase2-path` and `i-s1-phase2-60s` were re-blessed (the new
+`node.security.crls`, the pre-run PDUs, and the units' reports no longer filed).
+
+## 7. Open
+
+- **`scms_wiring::detectors_file_real_us_reports_that_the_ma_opens_and_verifies` fails at its
+  last assertion: "the MA opened no case".** Its 9 real reports are filed and opened, and
+  their evidence verifies (every assertion before the last passes). In 120 s no case opens
+  from vehicle reports alone: the corroborated MA needs 3 independent reporters, and the
+  roadside units' sized-only reports, which it trusted as infrastructure, no longer reach it
+  (R-UNSEC). Whether that test should run longer or assert on a vehicle-only quorum is for
+  the next wave. It was not weakened here.
+- **Full-density re-run owed.** The R-FS40 window (and the gnss-raw run for the old-evidence
+  count) has not been re-run on this branch. Expected: `constantPositionFrozen` near 0,
+  `privacy_links_claimed` 0 with 2,873 spurious, `reports_evidence_time_implausible` 0 on
+  gnss-raw. The 71 `positionJump` verdicts at full density are not explained by item 1, and
+  their cause was not looked for.
+- The τ, hold and velocity-σ constants of the smoothing receiver remain assumptions.
