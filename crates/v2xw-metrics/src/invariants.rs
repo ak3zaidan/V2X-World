@@ -1135,7 +1135,9 @@ pub const M_RX1: &str = "every reception attempt on phy.rx is followed to exactl
                          node.rx fate — delivered, lost with exactly one known cause, or in \
                          flight at the end of the run — so delivered + lost + in flight = \
                          attempts, and a PHY loss is the same loss on both channels; the \
-                         fragments of an SDU the node reassembles are one attempt at it";
+                         fragments of an SDU the node reassembles are one attempt at it, \
+                         lost for the reason of a fragment the PHY lost before its fate \
+                         was decided";
 
 /// M-RX1: `node.rx` accounts for every `phy.rx` attempt exactly once.
 ///
@@ -1154,7 +1156,11 @@ pub fn check_m_rx1(ledger: &EventLedger) -> InvariantOutcome {
     // reassembles carries the SDU's message id in `sdu`, and every fragment attempt at one
     // receiver is one attempt at that message: the key is the SDU's, and the causes are
     // every fragment the PHY lost.
-    let mut phy: BTreeMap<(u64, u32), Vec<String>> = BTreeMap::new();
+    // Each loss carries its frame's end and whether it was a fragment of a reassembled
+    // SDU: a fragment the PHY lost after the receiver had already resolved the SDU (its
+    // reassembler refused the set at an earlier fragment, a full buffer or a malformed
+    // set) cannot have caused that fate, which was decided before the fragment ended.
+    let mut phy: BTreeMap<(u64, u32), Vec<(String, u64, bool)>> = BTreeMap::new();
     let mut frames: std::collections::BTreeSet<(u64, u32)> = std::collections::BTreeSet::new();
     let mut phy_unkeyed = 0_u64;
     for r in &ledger.rx {
@@ -1171,11 +1177,13 @@ pub fn check_m_rx1(ledger: &EventLedger) -> InvariantOutcome {
                 }
                 let causes = phy.entry((r.sdu.unwrap_or(m), r.rx.index())).or_default();
                 if r.outcome == RxOutcome::Lost {
-                    causes.push(
+                    causes.push((
                         r.all_causes()
                             .first()
                             .map_or_else(String::new, |c| (*c).to_string()),
-                    );
+                        r.t_end,
+                        r.sdu.is_some(),
+                    ));
                 }
             }
             None => phy_unkeyed += 1,
@@ -1234,7 +1242,15 @@ pub fn check_m_rx1(ledger: &EventLedger) -> InvariantOutcome {
             continue;
         };
         *seen.entry((m, v.rx.index())).or_insert(0) += 1;
-        match phy.get(&(m, v.rx.index())) {
+        // The losses that could have decided this fate: every whole-frame loss, and every
+        // fragment loss that ended no later than the fate was recorded.
+        let causes: Option<Vec<&str>> = phy.get(&(m, v.rx.index())).map(|cs| {
+            cs.iter()
+                .filter(|(_, end, piece)| !*piece || *end <= v.t)
+                .map(|(c, _, _)| c.as_str())
+                .collect()
+        });
+        match causes.as_ref() {
             None => violations.push(violation(
                 "M-RX1",
                 subject(),
@@ -1246,9 +1262,7 @@ pub fn check_m_rx1(ledger: &EventLedger) -> InvariantOutcome {
                 // nothing retransmits a broadcast fragment — so node.rx must say lost, for
                 // the PHY's reason.
                 if v.outcome != RxFate::Lost
-                    || !phy_causes
-                        .iter()
-                        .any(|c| v.cause.as_deref() == Some(c.as_str()))
+                    || !phy_causes.iter().any(|c| v.cause.as_deref() == Some(*c))
                 {
                     violations.push(violation(
                         "M-RX1",
@@ -2681,6 +2695,49 @@ mod tests {
             piece(11, 10, 3, None),
             fate(10, 3, "lost", Some("collision")),
         ]);
+        assert!(!check_m_rx1(&l).held());
+    }
+
+    /// A fragment the PHY lost after the receiver's reassembler had already refused its
+    /// SDU (a full buffer: tests/fragmentation.rs's dense padded run) did not cause that
+    /// fate; a loss that ended before the fate did, and a whole frame's loss always does.
+    #[test]
+    fn m_rx1_does_not_blame_a_fate_on_a_fragment_lost_after_it() {
+        let at = |msg: u64, sdu: Option<u64>, end: u64, cause: Option<&str>| {
+            let mut v = json!({"t_start":end - 1,"t_end":end,"tx":1,"rx":3,"msg":msg,
+                               "outcome": if cause.is_some() { "lost" } else { "ok" }});
+            if let Some(s) = sdu {
+                v["sdu"] = json!(s);
+            }
+            if let Some(c) = cause {
+                v["cause"] = json!(c);
+            }
+            rec("phy.rx", Visibility::NodeAndGt, v)
+        };
+        let fate_at = |t: u64, cause: &str| {
+            rec(
+                "node.rx",
+                Visibility::NodeAndGt,
+                json!({"t":t,"rx":3,"tx":1,"msg":10,"outcome":"lost","cause":cause}),
+            )
+        };
+        // Refused at the first fragment (t = 2), the second lost to a collision at t = 6.
+        let l = ledger(&[
+            at(10, Some(10), 2, None),
+            at(11, Some(10), 6, Some("collision")),
+            fate_at(2, "reassembly-failed"),
+        ]);
+        let o = check_m_rx1(&l);
+        assert!(o.held(), "{:?}", o.violations);
+        // The same fate recorded after the loss: the loss came first, so it is the cause.
+        let l = ledger(&[
+            at(10, Some(10), 2, None),
+            at(11, Some(10), 6, Some("collision")),
+            fate_at(7, "reassembly-failed"),
+        ]);
+        assert!(!check_m_rx1(&l).held());
+        // A whole frame's loss is its fate's cause whenever the fate is stamped.
+        let l = ledger(&[at(10, None, 6, Some("collision")), fate_at(2, "reassembly-failed")]);
         assert!(!check_m_rx1(&l).held());
     }
 
