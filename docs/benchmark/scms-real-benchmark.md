@@ -6,7 +6,7 @@ only. It is the baseline an attack study is compared against. Every number below
 run it came from (§1.3), and each one is compared with a published or literature value
 where one exists. A value that looks implausible is flagged and was investigated (§9).
 
-**Status (2026-10-22).** §0 has the full-scale run on current code. It was stopped by the
+**Status (2026-10-23).** §00 has the full-scale run after fix wave 3: both live windows complete, stopped in the second fast-forward. **Status (2026-10-22).** §0 has the full-scale run on current code. It was stopped by the
 memory cap at about 155 simulated seconds; its complete metric windows and a complete 40 s
 run are reported there. §1–§10 are the 2026-10-18 report, unchanged.
 
@@ -25,6 +25,62 @@ their commands and the cost model that bounds them).
 pedestrians, the reports fill a quarter of the channel's airtime, and the MAs revoked 10
 honest devices in two days. Until it is fixed, no misbehaviour, airtime or revocation
 number from a scenario with VRU handsets is a real-world number.
+
+## 00. The full-scale run on main `e4004b4c` (2026-10-23, after fix wave 3)
+
+**Status.** The full-scale file was run again on the release build of current code. It
+used 4 rayon threads, a 3,500 MB cap and seed `0xBE7C_0001`; expectations and method are in
+`docs/design/scms-real/testing/final-run.md` and
+`crates/v2xw-engine/tests/expectations/scms-final-run.yaml`.
+- Both live windows ran in full: 0–240 s and the 43,170–43,230 s rollover.
+- The run stayed under the cap: peak 3,109 MB.
+- It was stopped by hand at 47,340 s. The second fast-forward was running at about 7
+  simulated seconds per wall second (§9.2, still open), about 5.4 more hours.
+- So there is no end-of-run report. The numbers come from the 10 s metric windows and the
+  10 s census.
+
+| Quantity | Quarter (R-Q, live 1) | Full, first window (FB2, 130–240 s) | Full, rollover window (43,170–43,230 s) |
+|---|---|---|---|
+| Nodes on the map | about 350 | 1,632 at 150 s → 1,833 at 240 s; 1,933 devices provisioned (home provider 48.8 %) | 1,281 at the resume → 1,395 |
+| Mean speed / p50 | 4.12 m/s | 2.75 → 1.82 m/s; **p50 0 from 160 s** (gridlock) | 4.1 → 2.8 m/s after the fleet thinned |
+| CBR ch 172 mean / p95 | 0.011 / 0.027 | 0.073–0.087 / 0.13–0.17 | 0.066–0.081 / 0.17–0.20 |
+| PDR within 100 m / 300 m | 0.838 / 0.290 | 0.833–0.843 / 0.280–0.290 | 0.846–0.853 / 0.297–0.308 |
+| Loss causes (share of attempts) | below sensitivity 98.8 % of losses | below sensitivity 82.9 %, hidden terminal 2.4 %, rx overflow 0.35 %, half-duplex 0.36 % | similar; unknown-signer 1e-4 |
+| Reception attempts | — | 3.1 M/s (150 s) → 3.7 M/s (230 s) | 2.0–2.3 M/s |
+| BSM e2e mean / p99 | 12.2 ms / — | 12.39–12.42 ms / 14.94–14.96 | 12.42–12.46 / 14.96–15.07 |
+| Verifications per node per second | ~30 | 240 (150 s) → 268 (230 s); queue p99 0; wait p99 0.28–0.31 ms | 2.7–3.2 × 10⁵ /s fleet-wide |
+| Unverified share | — | 5.2 → 6.2 % | 5.4–7.1 % |
+| Full-certificate share | 25.1 % | 16.1 → 17.7 % | 17.9–19.8 % |
+| AoI | 79.3 ms | 119 → 173 ms | 104–114 ms |
+| Pseudonym pool (`cert_pool_valid`) | 20 | 20 at every census | **20 → 39.8 within 10 s of 43,200 s** (top-ups) |
+| Provisioning | 40 per device | 40.0 per device; home RA 944 requests in 240 s (3.9/s; CAMP design ≈ 0.5/s) | 629 top-ups (12,580 certificates) by the home provider within 10 s of the boundary |
+| Misbehaviour reports | 36,024 (PSM defect) | **1,935 in 240 s, all honest; none reached an MA before the fast-forward** | **10,357 more in 60 s; MAs received 15,062; 71 cases; 71 honest vehicles falsely accused** |
+| CRL Generator entries | 10 | 0 | 0 (through 47,340 s) |
+| Pseudonym changes / linkability | 314 at the rollover / 0 | 0 / 0 of 0 | **0 counted at the rollover** / 0 of 0 |
+| Footprint | 428 MB peak | 2,690 MB at 150 s (R-FS: 2,582 MB), 3,057 MB at 230 s | 3,109 MB at the resume, then 2.5–2.9 GB |
+
+**Run cost.**
+- The first live window took 7,113 s of wall time, about 30 wall-s per simulated second,
+  rising to 45. It used about 2 of the 4 threads.
+- The first fast-forward took 207 s; the rollover window took 1,855 s.
+- When the run was stopped it had used 17,900 CPU-s (4.97 CPU-h).
+- The wave-3 memory de-duplication does not show at full scale: the footprint at 150 s is
+  the same as R-FS's.
+
+**What the full scale shows that the quarter fleet did not** (each is open; details in
+`testing/final-run.md` §4):
+1. **R-FFHOLD.** Every report filed before the fast-forward stayed in flight for its 12 h.
+   The MAs received them only at the 43,200 s i-period boundary.
+2. **R-FFBURST.** In the 10 s after the resume, 4,876 honest reports were filed, against
+   about 80 per 10 s live. Together with item 1 this gives 71 MA cases about honest
+   vehicles. Under manual review these would be decided during the second fast-forward,
+   which this run did not reach.
+3. The rollover registers no pseudonym change (`pseudonym_change_rate` 0), and `ped_wait`
+   counts the fast-forward as waiting (mean 3,465 s in one window).
+4. The second fast-forward is slow: 6.7 simulated s per wall s, about 5.4 h at full scale.
+
+None of these honest-report numbers is a real-world false-positive rate until items 1 and
+2 are fixed.
 
 ## 0. The full-scale run on main `88e24b09` (2026-10-22)
 
