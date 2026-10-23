@@ -55,7 +55,9 @@ rows:
     1,045 B; PSM PSDU mean likewise PQ0's + about 172 B (handsets sign with the cycle's
     classical half too, run.rs hand_down_app)
   source: "NDSS 2024 (Twardokus et al.) §III, Fig. 4 (204 B frames, 858 B certificate, alpha 1); cert_cycle.rs anchors; testing/ccsig-memory.md §1"
-  measured: pending
+  measured: "PQ0 -> PQHFC: BSM frames 41,903 -> 41,903 (1.00 per BSM); BSM PSDU mean 207 -> 380 B (PQHFCold 1,045 B); PSM PSDU 241 -> 409 B (+168); net_mtu_refusals 2 (both relayed reports, below)"
+  verdict: fixed
+  note: "R-CCSIG, fixed in fix wave 3 (testing/ccsig-memory.md §1, tests/cert_cycle_signature.rs) and confirmed here at density: +173 B per BSM is 858/5 to the byte, the NDSS Fig. 4 figure of about 380 B"
 - id: PQHFC.airtime
   base: PQ0
   variant: PQHFC
@@ -67,7 +69,8 @@ rows:
     (band 20-27 s, x1.5-2.0 of PQ0's 13.6 s, against R-CCSIG's 60.4 s); PSM 4-6.5 s
     (against 12.3 s); CBR mean 0.014-0.022 (PQ0 0.010, PQHFCold 0.044)
   source: "IEEE 802.11-2020 §17 OFDM timing at 6 Mb/s; final-bench.md PQ0/PQHFC"
-  measured: pending
+  measured: "BSM airtime 13.6 -> 23.2 s (x1.71; PQHFCold 60.4 s); PSM 3.0 -> 4.9 s (PQHFCold 12.3 s); CBR mean 0.0100 -> 0.0159, p95 max 0.027 -> 0.058"
+  verdict: pass
 - id: PQHFC.delivery
   base: PQ0
   variant: PQHFC
@@ -79,7 +82,9 @@ rows:
     of PQ0 (the certificate arrives every 500 ms against J2945/1's every 1,000 ms); BSM
     e2e latency PQ0's + 0.1-0.5 ms (airtime), under PQHFCold's 6.7 ms
   source: "NDSS 2024 §V-D (0.25-0.39 ms added per BSM); final-bench.md"
-  measured: pending
+  measured: "verified 380,664 -> 372,587 (-2.1 %; PQHFCold -7.5 %); frame PDR 80-100 m 0.725 -> 0.710 (PQHFCold 0.660); BSM e2e 3.72 -> 3.96 ms (+0.24; PQHFCold 6.67); unverified ratio 0.036 -> 0.042"
+  verdict: pass
+  note: "the +0.24 ms is inside NDSS §V-D's 0.25-0.39 ms per BSM"
 - id: PQHFC.verify
   base: PQ0
   variant: PQHFC
@@ -92,7 +97,8 @@ rows:
     PQ0 5,038 / PQHFCold 4,687 EE validations: band 2,000-12,000) and under 5 % of the
     messages checked
   source: "NDSS 2024 §III (PQ verify once per certificate); testing/ccsig-memory.md §1 (cert_verify_op)"
-  measured: pending
+  measured: "verify cost mean 0.6278 -> 0.6288 ms (+0.2 %; PQHFCold 0.751); cert_pq_verifications 2,813 against 4,838 first-sight EE validations and 372,639 checked (0.75 %)"
+  verdict: pass
 - id: PQHFC.architecture
   base: PQ0
   variant: PQHFC
@@ -107,7 +113,9 @@ rows:
     when any relay-only vehicle reports; topups 0; rsus_in_cert_cycle 0 (no PKI view under
     PQ)
   source: "testing/ccsig-memory.md §1 and §3; pq-profile.md §2 (R-PQMBR); IEEE 1609.3 WSMP"
-  measured: pending
+  measured: "backend bytes 5,364 -> 38,766 B (PQHFCold 146,118); rsu_crls_installed 0 -> 60 (PQHFCold 0); reports_uploaded_relay 0, reports_refused_mtu 2; topups 0; rsus_in_cert_cycle 0; reports_from_rsus 7 (PQ0 0)"
+  verdict: wrong-expectation
+  note: "backend bytes are carried reports, not provisioning (preloaded): PQ0 itself fell 49,346 -> 5,364 B as reports fell 54 -> 15 with the GNSS fix (constantPositionFrozen 28 -> 0). Per report the hybrid bytes are unchanged: 146,118/54 = 2,706 B on 88e24b09, 38,766/15 = 2,584 B now. The CRL, relay-refusal, topup and cycle parts pass. Found: under PQ the RSUs' own reports are filed (7), against R-UNSEC: R-PQUNSEC (final-run.md §3)"
 - id: PQHFC.cost
   base: PQ0
   variant: PQHFC
@@ -118,7 +126,8 @@ rows:
     1.2-1.6 M (PQHFCold 1.42 M: the cycle's fragment and P2PCD timers remain; PQ0 0.86 M);
     wall 60-130 s; peak 200-320 MB
   source: final-bench.md §1
-  measured: pending
+  measured: "reception attempts 2,640,941 -> 2,640,820 (-0.005 %); events 862,352 -> 1,447,808 (PQHFCold 1,419,990); wall 85 -> 69 s, CPU 104 -> 87 s; peak 223 -> 231 MB"
+  verdict: pass
 - id: PQHMC.sizes
   base: PQ0
   variant: PQHMC
@@ -131,7 +140,9 @@ rows:
     BSM PSDU mean is PQ0's + 520-610 B = 700-850 B, with fragment-carrying SPDUs about 1.0 kB
     and the others PQ0-sized
   source: "NDSS 2024 §III-IV; tests/cert_cycle_signature.rs (3 fragments, 3,027 B; plain BSMs < 450 B)"
-  measured: pending
+  measured: "frames transmitted 50,183 (PQHMCold 0); net_mtu_refusals 2 (the relayed reports; PQHMCold 50,180); BSM frames 41,902 (1.00 per BSM); BSM PSDU mean 814 B (+607 = 3,035/5, the 3,027 B 3-fragment group); PSM 843 B"
+  verdict: fixed
+  note: "the R-CCSIG red row of final-bench.md now transmits"
 - id: PQHMC.airtime
   base: PQ0
   variant: PQHMC
@@ -142,7 +153,8 @@ rows:
     x0.22-0.30 PQHMold's 176 s); PSM 8-12 s (PQHMold 74.5 s); CBR mean 0.025-0.042
     (PQHMold 0.125)
   source: "802.11 OFDM timing; final-bench.md PQHM"
-  measured: pending
+  measured: "BSM airtime 13.6 -> 47.5 s (x3.49; x0.27 PQHMold's 176.2 s); PSM 3.0 -> 9.7 s (PQHMold 74.5); CBR mean 0.0100 -> 0.0366, p95 max 0.099"
+  verdict: pass
 - id: PQHMC.delivery
   base: PQ0
   variant: PQHMC
@@ -153,7 +165,8 @@ rows:
     5 frames are ~1 kB, so verified falls below PQ0's by 2-24 % but stays above PQHMold's
     -33.8 %; BSM e2e PQ0's + 0.3-1.5 ms (PQHMold 12.1 ms)
   source: "NDSS 2024 §V-D; 04-models.md §7.4; final-bench.md PQHM.loss"
-  measured: pending
+  measured: "verified 380,664 -> 359,146 (-5.7 %; PQHMold -33.8 %); unverified ratio 0.036 -> 0.040; frame PDR 80-100 m 0.725 -> 0.677; BSM e2e 3.72 -> 4.57 ms (+0.85; PQHMold 12.06)"
+  verdict: pass
 - id: PQHMC.verify
   base: PQ0
   variant: PQHMC
@@ -164,7 +177,8 @@ rows:
     cert_pq_verifications > 0 and below 5 % of messages checked, at most PQHFC's (a
     3-fragment certificate is learned no more often than a 1-fragment one)
   source: "NDSS 2024 §III; testing/ccsig-memory.md §1"
-  measured: pending
+  measured: "verify cost mean 0.6297 ms (PQ0 0.6278, PQHMold 0.787); cert_pq_verifications 2,743 (PQHFC 2,813) of 359,203 checked (0.76 %)"
+  verdict: pass
 - id: PQHMC.architecture
   base: PQ0
   variant: PQHMC
@@ -176,7 +190,9 @@ rows:
     reports_uploaded_relay 0 and reports_refused_mtu > 0 when a relay-only vehicle reports
     (the R-PQMBR rule under the cycle)
   source: "testing/ccsig-memory.md §1, §3; pq-profile.md §2"
-  measured: pending
+  measured: "backend bytes 103,575 B (PQHMold 227,865); rsu_crls_installed 60; reports_uploaded_relay 0, reports_refused_mtu 2; reports_from_rsus 9"
+  verdict: wrong-expectation
+  note: "as PQHFC.architecture: per report 227,865/39 = 5,843 B on 88e24b09, 103,575/17 = 6,093 B now; the number of reports fell with the GNSS fix. The relay rule (R-PQMBR) holds under the cycle. RSU reports filed under PQ: R-PQUNSEC"
 - id: PQHMC.cost
   base: PQ0
   variant: PQHMC
@@ -186,7 +202,8 @@ rows:
     reception attempts within 5 % of PQ0's; events 1.3-2.0 M (3 fragments per cycle);
     wall 60-180 s, far below PQHMold's 583 s (no 2.3 frames per BSM); peak 200-350 MB
   source: final-bench.md §1
-  measured: pending
+  measured: "reception attempts 2,640,763 (-0.007 %); events 1,525,546; wall 71 s, CPU 90 s (PQHMold 583 s wall); peak 225 MB"
+  verdict: pass
 - id: PQ.digests
   base: PQ0old
   variant: PQ0
@@ -196,7 +213,8 @@ rows:
     all three move: PQ0 by the GNSS mean-speed fix (gauss-markov 1.2.0, positions in every
     BSM), the cycle runs by R-CCSIG as well; the three new digests differ from each other
   source: "BUILD-STATUS 2026-10-23 (DETPRIV, PQMEM)"
-  measured: pending
+  measured: "PQ0 8701b92c453a0b67 -> 099bed7a326f0b7f; PQHFC bcf558c227d15956 -> a73101ddc8e8754f; PQHMC (silent f2afcf0b...) -> b33458e93af0078c; all three distinct"
+  verdict: pass
 # ---------------------------------------------------------------- (2) full-scale benchmark to completion
 - id: FB2.completes
   base: RFS
