@@ -547,3 +547,40 @@ fn a_pseudonym_change_restarts_the_psm_msg_count() {
         "msgCnt counted on across the pseudonym change (it is {after})"
     );
 }
+
+/// A handset takes its frames at its own step, so a frame can wait in its inbox: across
+/// a fast-forward the first step after it handed over frames 43,125 s old. The relevance
+/// check of `generationTime` (IEEE 1609.2 §5.2) passed on their arrival times and the
+/// detector judged them, stamped with the new window's time, so their reports quoted a
+/// BSM from before the fast-forward (docs/design/scms-real/testing/usfp.md §5). The check
+/// now also runs when the device takes the frame. Fault: drop the processing-time check in
+/// `VruDeviceRuntime::receive`, and the stale frame is delivered at the later step.
+#[test]
+fn a_frame_that_waited_past_its_relevance_window_is_not_judged() {
+    use v2xw_node::RxStamp;
+    use v2xw_node::rxval::RxReject;
+    let step_at = |now: SimTime| {
+        let rng = RngRegistry::new(39);
+        let mut handset = device(VruServices::SAE);
+        let mut ctx = NodeRuntimeCtx::new(now, &rng);
+        // Generated at 0 and arrived at 1 ms: relevant on arrival.
+        let stamp = RxStamp {
+            token: 1,
+            arrived_at: Some(NS_PER_MS),
+        };
+        handset.step_timed(&mut ctx, vec![(rx_frame(0), stamp)], 0.0)
+    };
+    let prompt = step_at(100 * NS_PER_MS);
+    assert_eq!(prompt.delivered.len(), 1, "a frame taken 0.1 s after it was sent");
+    let stale = step_at(43_125 * NS_PER_S);
+    assert!(stale.delivered.is_empty(), "a 43,125 s old frame was judged");
+    let fate = stale.rx_reports.iter().find(|r| r.token == 1).map(|r| r.disposition);
+    assert_eq!(
+        fate,
+        Some(v2xw_node::RxDisposition::NotRelevant(
+            RxReject::GenerationTimeTooOld
+        )),
+        "{:?}",
+        stale.rx_reports
+    );
+}

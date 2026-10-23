@@ -9,9 +9,9 @@
 //! sign an SM-MBR with. The vehicle-side rollover fix (edge 1b/1c) had already removed
 //! the vehicle cases, and no vehicle report falls into the gap in this window
 //! (`reports_held_for_signer` 0). The vehicle hold (`Phase2::report_waits_for_signer`)
-//! is the defensive rule for a vehicle whose pool has run dry. Fault for the first test:
-//! remove the RSU label in `Phase2::real_mbr`, and the RSU reports carry the vehicle-gap
-//! label again.
+//! is the defensive rule for a vehicle whose pool has run dry. Since R-UNSEC a unit's own
+//! detections are not filed at all (the US profile has no roadside reporter): the first
+//! test checks they are counted under their own reason and never leave sized-only.
 //!
 //! The same window checks the conditional CRL poll (item 3): every due poll is a request,
 //! answered 412 when the copy is current ([SMP] §4.3.2). Fault: skip a poll that would
@@ -61,15 +61,27 @@ fn no_vehicle_report_goes_out_unsigned_across_the_week_rollover() {
         p.reports_mbr_unsecured_by
     );
     assert!(p.reports_mbr_real > 0, "real SM-MBRs still flow");
-    // Roadside units hold application certificates only: their reports are labelled as
-    // theirs (R-UNSEC), not as a vehicle's gap.
-    if p.reports_from_rsus > 0 {
-        assert!(
-            p.reports_mbr_unsecured_by.get(RSU).copied().unwrap_or(0) > 0,
-            "{:?}",
-            p.reports_mbr_unsecured_by
-        );
-    }
+    // R-UNSEC: the US profile has no roadside reporter ([SM-MBR] §3 and §2.3.1.4.1; USDOT
+    // RSU Specification v4.1), so a unit's own detections are not filed: counted under
+    // their own reason, never sent sized-only on the backhaul, never a vehicle's gap.
+    // Fault: put back the roadside exemption in `Phase2::files_report`, and the units'
+    // reports leave on the backhaul with no bytes again.
+    assert_eq!(
+        p.reports_from_rsus, 0,
+        "a roadside unit filed {} sized-only reports",
+        p.reports_from_rsus
+    );
+    assert!(
+        p.reports_not_filed_by.get(RSU).copied().unwrap_or(0) > 0,
+        "no roadside detection was counted as not filed: {:?}",
+        p.reports_not_filed_by
+    );
+    assert_eq!(
+        p.reports_mbr_unsecured_by.get(RSU).copied().unwrap_or(0),
+        0,
+        "{:?}",
+        p.reports_mbr_unsecured_by
+    );
 }
 
 #[test]

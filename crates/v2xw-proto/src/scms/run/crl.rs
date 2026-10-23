@@ -426,6 +426,26 @@ impl ScmsState {
 }
 
 impl ScmsRun {
+    /// Logs the signed CRL `crl` that `device` fetched from this provider's CRL Store
+    /// **before the run** (R-NOCRL, OF-3): a device on the road holds every CRACA's
+    /// current list. Marked pre-run like the device's enrolment and first batches
+    /// ([`ScmsRun::preload_at`]): no step carried it, and `at` is the instant the device
+    /// joins holding it, so the PKI view shows the fetch as a `preload` PDU.
+    pub fn note_prerun_crl(&mut self, device: NodeId, at: SimTime, crl: &crate::scms::pdu::Pdu) {
+        let keep = self.state.params.pdu.keep_bytes;
+        let from = self.state.nodes.crl_store.index();
+        self.state.pdus.push(crate::scms::pdu::EmittedPdu {
+            kind: SpduKind::SecuredCrl,
+            from,
+            to: device.index(),
+            at,
+            bytes: keep.then(|| crl.clone()),
+            len: crl.len(),
+            step: None,
+            preload: true,
+        });
+    }
+
     /// Has a device fetch, expand and enforce the current CRL.
     pub fn distribute_crl(&mut self, device: NodeId) -> FlowRun {
         let run = self.new_run();

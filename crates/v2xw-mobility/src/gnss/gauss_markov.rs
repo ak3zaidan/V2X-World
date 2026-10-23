@@ -106,7 +106,7 @@ use crate::views::{GnssEnv, SkyView};
 pub const MODEL_ID: &str = "gnss/error/gauss-markov";
 
 /// The model version.
-pub const MODEL_VERSION: &str = "1.1.0";
+pub const MODEL_VERSION: &str = "1.2.0";
 
 /// Reid 2019 horizontal error percentiles for a production automotive single-frequency
 /// receiver under open sky, metres: 68 %, 95 %, 99 %.
@@ -302,6 +302,9 @@ impl Default for GaussMarkovParams {
 struct NodeState {
     /// The receiver's smoothed solution, when `smoothing_tau_s > 0` and it has one.
     smoothed: Option<Vec3>,
+    /// The velocity the receiver measured at its previous epoch: with this epoch's, what
+    /// the solution is carried across the epoch by (the carrier-phase delta).
+    last_vel: Option<Vec3>,
     bias: Vec3,
     /// When the state was last advanced.
     last: Option<SimTime>,
@@ -541,14 +544,24 @@ impl GaussMarkovGnss {
         let held = hold > 0.0 && v.norm_2d() < hold;
         let out_v = if held { Vec3::ZERO } else { v };
         let state = self.state.entry(node).or_default();
+        // The carrier-phase delta between two epochs is the range change over the whole
+        // interval, the integral of the range rate: to first order the mean of the
+        // velocities measured at its two ends, not the later one alone (Hatch 1982's
+        // propagation term). Carried by the later velocity alone, a solution decelerating
+        // through creeping speeds was propagated too short, and an OBU that latency-
+        // compensates its BSM by its velocity (`Engine::dead_reckon_belief`) then sent two
+        // consecutive BSMs less than 1 cm apart with speeds of 0.3-0.7 m/s: SM-MBR
+        // ConstantPosition on honest cars in queues (R-FS40, 165 verdicts in 40 s).
+        let v_prev = state.last_vel.unwrap_or(v);
+        state.last_vel = Some(v);
         let p = match state.smoothed {
             None => Vec3::new(z.x - white.x, z.y - white.y, z.z - white.z),
             Some(prev) if held => prev,
             Some(prev) => {
                 let pred = Vec3::new(
-                    prev.x + v.x * dt_s,
-                    prev.y + v.y * dt_s,
-                    prev.z + v.z * dt_s,
+                    prev.x + 0.5 * (v_prev.x + v.x) * dt_s,
+                    prev.y + 0.5 * (v_prev.y + v.y) * dt_s,
+                    prev.z + 0.5 * (v_prev.z + v.z) * dt_s,
                 );
                 Vec3::new(
                     pred.x + beta * (z.x - pred.x),
@@ -1660,6 +1673,57 @@ mod tests {
         );
         let moved = random_position_residuals(&held);
         assert!(moved.iter().all(|&r| r < 0.1), "a held receiver jumped");
+    }
+
+    /// R-FS40: honest cars creeping in a queue were reported for SM-MBR ConstantPosition.
+    /// An OBU latency-compensates each BSM to its generation instant by its velocity, a
+    /// phase phi after the 10 Hz fix (`Engine::dead_reckon_belief`). Carried across an
+    /// epoch by the later velocity alone, a solution slowing from 0.7 to 0.34 m/s put two
+    /// consecutive BSMs 0.7 mm apart: `v2 (dt + phi) - v1 phi = 0`. Carried by the mean of
+    /// the two measured velocities (the carrier-phase delta), they move apart by about the
+    /// slower speed times the interval. Fault: propagate by the later velocity alone, and
+    /// this counts about a hundred such pairs.
+    #[test]
+    fn a_creeping_receiver_never_sends_two_bsms_at_one_position_while_moving() {
+        let w = world();
+        let rng = RngRegistry::new(91);
+        let mut m = GaussMarkovGnss::new(smoothing());
+        let (nodes, steps) = (100u32, 1000u64);
+        let mut frozen = 0;
+        let mut pairs = 0;
+        for id in 0..nodes {
+            // Stop-and-go in a queue: 0 to 1.5 m/s and back at 1 m/s^2, each car at its
+            // own point of the cycle, and its own BSM phase.
+            let phi = f64::from(id % 10) * 0.01 + 0.005;
+            let (mut s, mut v, mut a) = (0.0, f64::from(id % 15) * 0.1, 1.0);
+            let mut last: Option<(Vec3, f64)> = None;
+            for k in 0..steps {
+                let t = k * NS_PER_S / 10;
+                v = (v + a * 0.1_f64).clamp(0.0, 1.5);
+                if v <= 0.0 || v >= 1.5 {
+                    a = -a;
+                }
+                s += v * 0.1;
+                let mut gt = Kinematics::at_rest(t, Vec3::new(100.0 + s, 100.0, 0.0));
+                gt.vel = Vec3::new(v, 0.0, 0.0);
+                let mut ctx = MobilityCtx::new(t, &w, &rng);
+                let e = m.estimate(&mut ctx, NodeId::new(id), &gt, &GnssEnv::OPEN_SKY);
+                let bsm = Vec3::new(e.pos.x + e.vel.x * phi, e.pos.y + e.vel.y * phi, 0.0);
+                let speed = e.ground_speed_mps();
+                if let Some((p, sp)) = last {
+                    pairs += 1;
+                    if p.distance_2d(bsm) < 0.01 && sp >= 0.02 && speed >= 0.02 {
+                        frozen += 1;
+                    }
+                }
+                last = Some((bsm, speed));
+            }
+        }
+        assert!(pairs > 90_000);
+        assert!(
+            frozen <= 5,
+            "{frozen} of {pairs} consecutive BSMs at one position with a speed"
+        );
     }
 
     /// The smoothing and the hold are off by default: the raw model is the one every

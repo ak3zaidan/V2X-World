@@ -1018,3 +1018,65 @@ fn a_switched_off_device_reaches_no_scms_until_it_is_back_on() {
         "the device did not catch up once power returned"
     );
 }
+
+/// Linkability counts only links across a pseudonym change (R-FS40: the observer's 2,873
+/// link claims in 40 s with no pseudonym change at all were counted as link claims). A
+/// vehicle coming into a sniffer's hearing is a new pseudonym to the observer, which links
+/// it to some silent track; with no change behind it that claim is spurious and counted as
+/// such. The observer cannot tell the two cases apart; the ground truth can. Fault: count
+/// every claim in `privacy_links_claimed` again (`Phase2::observe_frame`), and the
+/// no-change run claims links across changes that never happened.
+#[test]
+fn linkability_counts_only_links_across_a_pseudonym_change() {
+    let run_with = |period: f64| {
+        // A busy grid with a sniffer at every signal, each hearing 120 m: cars keep coming
+        // into some sniffer's hearing for the first time while others fall silent nearby.
+        let mut s = grid(60.0, 3_000.0);
+        s.security.pseudonym_change.period_s = Some(period);
+        s.threats.eavesdropper = Some(ModelChoice {
+            id: "threat/observer/passive-privacy".to_string(),
+            params: json!({"sniffer_fraction": 1.0, "range_m": 120.0}),
+        });
+        let (report, rec) = run(s);
+        let linked = records(&rec, "privacy.link")
+            .iter()
+            .filter(|r| r["predecessor"].as_str().is_some_and(|p| !p.is_empty()))
+            .count() as u64;
+        let p = report.phase2;
+        println!(
+            "period {period} s: changes {} heard {} decisions {} link records {linked} \
+             across {} spurious {} correct {}",
+            p.pseudonym_changes,
+            p.privacy_changes_heard,
+            p.privacy_link_decisions,
+            p.privacy_links_claimed,
+            p.privacy_links_spurious,
+            p.privacy_links_correct
+        );
+        (p, linked)
+    };
+    let (none, linked) = run_with(3_600.0);
+    assert_eq!(none.pseudonym_changes, 0, "no change inside the run");
+    assert!(
+        linked > 0,
+        "the observer claimed no link at all, so this cannot tell the two counts apart"
+    );
+    assert_eq!(none.privacy_changes_heard, 0);
+    assert_eq!(
+        none.privacy_links_claimed, 0,
+        "links claimed across changes that never happened"
+    );
+    assert_eq!(none.privacy_links_spurious, linked);
+    assert_eq!(none.privacy_links_correct, 0);
+
+    let (fast, linked) = run_with(10.0);
+    assert!(fast.pseudonym_changes > 0 && fast.privacy_changes_heard > 0);
+    assert!(fast.privacy_changes_heard <= fast.privacy_link_decisions);
+    assert!(fast.privacy_links_claimed <= fast.privacy_changes_heard);
+    assert!(fast.privacy_links_correct <= fast.privacy_links_claimed);
+    assert_eq!(
+        fast.privacy_links_claimed + fast.privacy_links_spurious,
+        linked,
+        "every claim is either across a change or spurious"
+    );
+}

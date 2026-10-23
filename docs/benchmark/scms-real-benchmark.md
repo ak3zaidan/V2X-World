@@ -105,6 +105,15 @@ the PSM, R-USFP, R-NOCRL and trust fixes). Rows that those fixes change are mark
    finish. With a median speed of 0.18 m/s, this is the kind of false positive the benchmark is
    meant to expose.
 
+Update (fix wave 3, `docs/design/scms-real/testing/measure.md`): items 2 and 3 are
+root-caused and fixed in the engine, and neither benchmark number has been re-measured yet.
+
+- Item 2 was a run-report defect. The 2,873 claims are links to cars newly heard, now
+  `privacy_links_spurious`. `privacy_links_claimed` counts only claims across a change.
+- Item 3 was 8 decelerating cars whose consecutive latency-compensated BSMs coincided,
+  each heard by about 20 receivers. The smoothing receiver now propagates by the mean
+  velocity over the epoch (`gnss/error/gauss-markov` 1.2.0).
+
 ## 1. What was run
 
 ### 1.1 The scenarios (`scenarios/real-world/`)

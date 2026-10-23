@@ -257,3 +257,87 @@ fn nothing_a_provider_off_the_ctl_certifies_verifies() {
         p.verified_by_provider
     );
 }
+
+/// OF-3 (testing/oracle-final.md §8): a device joins holding every provider's `t0` CRL,
+/// and the records now show it. Each `node.security` row lists the signed CRLs the node's
+/// own receiver holds by (crlCraca, crlSeries, nextCrl), and `pki.flow` carries the
+/// pre-run fetch, one `SecuredCrl` PDU from the CRL Store per list per device, marked
+/// `preload` like its pre-run enrolment. Faults: emit `node.security` without the node's
+/// lists (`Engine::emit_node_security`), or skip `ScmsRun::note_prerun_crl`, and this
+/// fails.
+#[test]
+fn a_device_records_the_t0_lists_it_holds_and_their_fetch() {
+    let mut s = load(None);
+    s.time.duration_s = 10.0;
+    let mut engine = Engine::build(s, "").expect("builds");
+    // Each provider's t0 list: its CRACA and nextCrl, out of the signed CRL itself.
+    let lists: BTreeSet<(String, u64)> = engine
+        .phase2()
+        .expect("an SCMS run")
+        .scms_runs()
+        .iter()
+        .map(|r| {
+            let first = r
+                .state
+                .crlg
+                .issued
+                .iter()
+                .find(|c| c.series == 1)
+                .expect("a t0 CRL");
+            let opened = v2xw_sec::crl::decode_crl(first.pdu.bytes()).expect("decodes");
+            (
+                v2xw_core::hash::hex_encode(&opened.contents.crl_craca.0[..]),
+                u64::from(first.next_crl),
+            )
+        })
+        .collect();
+    assert_eq!(lists.len(), 2, "two providers, two CRACAs");
+    let mut rec = v2xw_engine::MemoryRecorder::new();
+    engine.run(&mut rec).expect("runs");
+    let rows = |channel: &str| -> Vec<serde_json::Value> {
+        rec.records()
+            .iter()
+            .filter(|(_, r)| r.channel == channel)
+            .map(|(_, r)| serde_json::from_slice(&r.json).expect("json"))
+            .collect()
+    };
+    let security = rows("node.security");
+    assert!(!security.is_empty(), "no node.security rows");
+    let mut missing = Vec::new();
+    for row in &security {
+        let held: BTreeSet<(String, u64)> = row["crls"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|c| c["series"] == 1)
+            .map(|c| {
+                (
+                    c["craca"].as_str().unwrap_or_default().to_string(),
+                    c["next_crl"].as_u64().unwrap_or(0),
+                )
+            })
+            .collect();
+        if !lists.is_subset(&held) {
+            missing.push(format!("node {} at {}: {:?}", row["node"], row["t"], held));
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "{} of {} rows do not show both t0 lists {:?}: {:?}",
+        missing.len(),
+        security.len(),
+        lists,
+        &missing[..missing.len().min(3)]
+    );
+    let fetched = rows("pki.flow")
+        .iter()
+        .filter(|v| v["kind"] == "pdu" && v["flow"] == "preload" && v["name"] == "SecuredCrl")
+        .count();
+    let devices = engine.phase2().expect("phase 2").device_nodes().len();
+    assert!(devices > 0, "devices joined");
+    assert_eq!(
+        fetched,
+        2 * devices,
+        "pre-run CRL fetches on pki.flow: one per list per device"
+    );
+}

@@ -3465,9 +3465,9 @@ impl Engine {
         self.report.nodes_created += 1;
         // A device joins holding every provider's `t0` CRL (R-NOCRL): it was on the road
         // before the run and fetched them within the week. Installed as a download would
-        // be, verified by the node itself; pre-run, so nothing is recorded.
+        // be, verified by the node itself; the fetch is logged as a pre-run PDU (OF-3).
         if let Some((version, entries, secured)) =
-            self.phase2.as_mut().and_then(|p| p.prerun_crl(id))
+            self.phase2.as_mut().and_then(|p| p.prerun_crl(id, now))
         {
             let mut null = crate::ctx::NullRecorder::new();
             self.install_crl_at(&mut null, id, version, &entries, &secured, now, false);
@@ -7308,7 +7308,7 @@ impl Engine {
                 && let Some(p) = self.phase2.as_mut()
                 && let Ok(signer) = <[u8; 8]>::try_from(&state.signer.0[..])
             {
-                p.note_signed_bsm(signer, spdu);
+                p.note_signed_bsm(signer, state.generation_time, spdu);
             }
         }
         self.emit(recorder, &tx_record);
@@ -8395,6 +8395,15 @@ impl Engine {
             if !backhaul.connected {
                 return;
             }
+            // R-UNSEC: under the US SCMS a unit's own detection has no report to file
+            // (`Phase2::files_report`); it is counted, by reason, and not sent.
+            if !self
+                .phase2
+                .as_mut()
+                .is_some_and(|p| p.files_report(&report))
+            {
+                return;
+            }
             let sent_at = self.signing_cost(node).after(now);
             let bytes = crate::phase2::report_bytes();
             let at = self
@@ -8739,8 +8748,17 @@ impl Engine {
         ) else {
             return;
         };
+        // The CRLs the node's own receiver verified and holds (OF-3).
+        let crls = runtime
+            .security()
+            .trust()
+            .held_crls()
+            .iter()
+            .map(crate::sec_records::HeldCrlView::of)
+            .collect();
         let rec = crate::sec_records::NodeSecurity(crate::sec_records::NodeSecurityView {
             t: now,
+            crls,
             ..view
         });
         self.emit(recorder, &rec);
