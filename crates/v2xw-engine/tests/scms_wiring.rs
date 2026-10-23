@@ -13,7 +13,9 @@
 //!   `the_pdu_pki_is_anchored_at_the_governance_root` fails on the root.
 //! * `Phase2::real_mbr` taking the evidence BSMs of another signer (the first in the
 //!   evidence map) — the MA's evidence check fails and
-//!   `detectors_file_real_us_reports_that_the_ma_opens_and_verifies` fails.
+//!   `detectors_file_real_us_reports_that_the_ma_opens_and_verifies` fails. Re-run on the
+//!   300 s test (2026-10-23), the judged-evidence ring taken from another signer: no report
+//!   is built as a real SM-MBR and the test fails on "no real US report was filed".
 //! * `Phase2::advance` without its `governance_due` call — the rollover is never
 //!   decided and `a_scheduled_root_rollover_is_decided_and_waits_for_its_sla` fails.
 //! * The report store drained in insertion order (lowest `seq` first) — the lib test
