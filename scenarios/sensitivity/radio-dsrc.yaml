@@ -103,8 +103,15 @@ rows:
     metric: e2e_ms_mean
     expect: up
     min_change: 0.005
-    band: [1.005, 1.1]
-    source: e2e = sign (9 ms on the Craton2 HSM) + handoff + access + air + verify; only access and the verify wait depend on load, so e2e rises by the access-delay increase (about +0.17 ms)
+    band: [1.005, 1.2]
+    source: >-
+      e2e = sign (9 ms on the Craton2 HSM) + handoff + access + air + verify; only access and
+      the verify wait depend on load. Since the priced receiver validation (VCOST: 400 us a
+      repeat frame, SHA-256 and ECQV on a first sight) the verify wait is the larger term:
+      12.45 -> 14.16 ms is access +0.07 ms and verify wait 0.07 -> 1.73 ms (each receiver
+      verifies 349 -> 899 frames/s, rho 0.17 -> 0.44, and every first sight of 115 senders
+      falls inside the 3 s run). Band [1.005, 1.1] widened to 1.2 on that decomposition
+      (rerun-2026-10-22.md §1)
   - name: vehicles 40->80, software verify
     base_set: {nodes.default_obu: obu/unex-obu-301-craton2-software}
     set: {actors.vehicles.demand.params.max_total_vehicles: 80}

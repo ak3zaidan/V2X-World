@@ -31,11 +31,16 @@ rows:
     base_set: {time.duration_s: 1.0, actors.vehicles.demand.params.max_total_vehicles: 60, radio.dcc.enabled: false, messages.rate_hz: 40.0, time.mobility_step_ms: 25, security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
     set: {radio.mac.queue_length: 1}
     metric: mac_drops
-    expect: up
+    expect: same
     source: >-
-      offered load above one (about 40 vehicles in range x 40 Hz x 0.45 ms with a certificate)
-      means frames wait behind each other; a one-frame queue drops each arrival while one waits
-      (M/D/1/K blocking), a 64-frame queue absorbs a second of backlog
+      A node's queue fills only when its channel access takes longer than its own message
+      interval (25 ms at 40 Hz). This row was `up` (0 -> 68 drops) when the stand-in
+      certificate made a certified BSM 330 B (0.45 ms). With the real 80 B pseudonym
+      certificate (WP-C1; CAMP Table 3) it is 263 B (0.40 ms): 49 vehicles reach CBR 0.66, mean
+      access 0.38 ms, and a one-frame queue never holds a second arrival (0 -> 0 drops; 3 s
+      runs: 0 -> 0, and with 500 B of padding, CBR 0.93, 0 -> 1). So the row now pins that the
+      queue length does not bind at this load; the drop itself is v2xw-radio's
+      `a_full_queue_drops_and_says_which_queue` (rerun-2026-10-22.md §1)
   - name: reactive DCC off->on
     base_set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687}, radio.dcc.enabled: false, messages.rate_hz: 20.0, time.mobility_step_ms: 50}
     set: {radio.dcc.enabled: true}

@@ -187,7 +187,7 @@ fn dsrc_a_longer_aifs_lengthens_access() {
 }
 
 #[test]
-fn dsrc_a_short_queue_drops_under_saturation() {
+fn dsrc_a_one_frame_queue_does_not_bind_below_saturation() {
     dense("queue 64->1, saturated", "mac_drops");
 }
 
@@ -242,7 +242,7 @@ fn cv2x_a_higher_mcs_lowers_prr_at_range() {
 
 #[test]
 fn cv2x_mcs_and_payload_move_the_frequency_footprint_not_the_airtime() {
-    cv2x("LTE MCS 7->11", "cbr_mean");
+    cv2x("LTE MCS 5->7", "cbr_mean");
     cv2x("LTE MCS 7->11", "airtime_us");
     cv2x("LTE certificate on every message", "cbr_mean");
 }
