@@ -10,3 +10,4 @@ Abdullah Anjum, Abdolazim Rezaei, Mehdi Sookhak · arXiv 2026 · https://arxiv.o
 - Simulation-only data (no field validation stated).
 **Overlap with our engine:** partial — Synchronized per-vehicle mobility + PHY metrics with ground-truth RSU association from a coupled simulator, released for reproduction; no security/PKI or misbehaviour labels, no counterfactual pairs.
 **Novelty implications:** Cannot claim the first joint trajectory–network V2X dataset; joint traffic+radio+PKI per-message ground truth and counterfactual labels remain open.
+**Reviewer note (check-datasets-2026):** The validation is largely tautological. CQI–SINR r = 0.993 is the configured MCS mapping (§II-C); the path-loss exponent 1.991 returns the configured log-distance model; mean PDR 0.286 is marked PASS against a range of 0.08–0.99 (Table II). It mixes Simu5G LTE metrics with 802.11p PHY-rate rows, and its RSU network is Uu. This is an example of validation that cannot fail.

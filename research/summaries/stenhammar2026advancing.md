@@ -1,5 +1,5 @@
 # Advancing Network Digital Twin Framework for Generating Realistic Datasets
-Oscar Stenhammar, Sundeep Rangan, Gábor Fodor, Carlo Fischione · arXiv 2026 · https://arxiv.org/abs/2604.12888 · relevance: high · basis: full text (extracted sections)
+Oscar Stenhammar, Sundeep Rangan, Gábor Fodor, Carlo Fischione · arXiv 2026 · https://arxiv.org/abs/2604.12888 · relevance: high · basis: full text
 
 **Problem:** Measurement campaigns are costly; reproducible data generation is needed.
 **Approach:** Open NDT framework integrating controllable vehicular mobility, Sionna ray tracing and ns-3, extracting cross-layer metrics; dataset released.
@@ -10,3 +10,4 @@ Oscar Stenhammar, Sundeep Rangan, Gábor Fodor, Carlo Fischione · arXiv 2026 ·
 - Ray tracing increases computational load; GPU recommended.
 **Overlap with our engine:** partial - open cross-layer vehicular dataset generator for ML benchmarking (direction 3 benchmark idea), without security or counterfactual pairing.
 **Novelty implications:** Simulator-generated vehicular ML datasets exist; per-unit counterfactual ground truth with PKI does not.
+**Reviewer note (check-datasets-2026):** This is a cellular Uu network at 3.5 GHz with 12 base stations in a 500×500 m Sionna Munich scene, not sidelink V2X. The QoS example uses a random 80/20 split of 1 s time-series samples, which risks temporal leakage. There is no security content and no real-world comparison (§IV).
