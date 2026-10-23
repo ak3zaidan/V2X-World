@@ -67,11 +67,12 @@ fn crawling_fleet(n: usize, seconds: f64, speed_mps: f64) -> Scenario {
     let dist = |a: &v2xw_world::model::Lane, b: &v2xw_world::model::Lane| {
         (mid(a).x - mid(b).x).hypot(mid(a).y - mid(b).y)
     };
+    // Origins with no reachable destination (a lane into a dead end of the grid) are
+    // skipped, so a larger fleet still gets `n` trips; the first origins, and so every
+    // smaller fleet, are as before.
     let trips: Vec<_> = driving
         .iter()
-        .take(n)
-        .enumerate()
-        .map(|(i, o)| {
+        .filter_map(|o| {
             let mut seen = BTreeSet::from([o.id]);
             let mut queue = VecDeque::from([o.id]);
             while let Some(l) = queue.pop_front() {
@@ -88,11 +89,14 @@ fn crawling_fleet(n: usize, seconds: f64, speed_mps: f64) -> Scenario {
                 .filter(|l| {
                     l.id != o.id && seen.contains(&l.id) && !roads.successors(l.id).is_empty()
                 })
-                .max_by(|a, b| dist(a, o).total_cmp(&dist(b, o)).then(b.id.cmp(&a.id)))
-                .expect("a reachable destination");
-            json!({"id": i, "depart_s": 0.0, "origin": o.id, "destination": dest.id})
+                .max_by(|a, b| dist(a, o).total_cmp(&dist(b, o)).then(b.id.cmp(&a.id)))?;
+            Some((o.id, dest.id))
         })
+        .take(n)
+        .enumerate()
+        .map(|(i, (o, d))| json!({"id": i, "depart_s": 0.0, "origin": o, "destination": d}))
         .collect();
+    assert_eq!(trips.len(), n, "{n} origins with a reachable destination");
     let set = json!({
         "schema": "v2xw/trips/1",
         "world_hash": v2xw_world::hash::content_hash_hex(&world),
@@ -581,20 +585,16 @@ fn the_shipped_scenarios_declare_their_calendar() {
 fn the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed() {
     use std::collections::BTreeMap;
     use v2xw_metrics::channels::{GtKinematicsView, decode};
-    const FROM: f64 = 20.0;
-    const TO: f64 = 980.0;
     const LIVE: f64 = 30.0;
+    const FULL: f64 = 90.0;
+    const PAUSE: f64 = 960.0;
     let shift: u64 = 960_000_000_000;
-    let from_ns: u64 = 20_000_000_000;
-    let run = |fast_forward: bool| {
-        let horizon = if fast_forward { TO + LIVE } else { FROM + LIVE };
+    let run = |window: Option<(f64, f64)>| {
+        let horizon = window.map_or(FULL, |(_, to)| to + LIVE);
         let mut s = with_scms(crawling_fleet(8, horizon, 8.0), json!({}));
         s.time.t0 = "2026-10-20T07:30:00Z".into();
-        if fast_forward {
-            s.time.fast_forward = vec![DilationWindow {
-                from_s: FROM,
-                to_s: TO,
-            }];
+        if let Some((from_s, to_s)) = window {
+            s.time.fast_forward = vec![DilationWindow { from_s, to_s }];
         }
         assert!(errors_at(&s).is_empty(), "{:?}", errors_at(&s));
         let mut engine = Engine::build(s, "").expect("builds");
@@ -602,8 +602,8 @@ fn the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed() {
         let report = engine.run(&mut rec).expect("runs");
         let mut states: BTreeMap<(u64, v2xw_core::ids::ActorId), (f64, f64, f64)> =
             BTreeMap::new();
-        let mut jammed = 0u64;
-        for (_, r) in rec.records() {
+        let mut jammed: Vec<(u64, u64)> = Vec::new();
+        for (at, r) in rec.records() {
             match r.channel {
                 "gt.kinematics" => {
                     let k: GtKinematicsView = decode(r).expect("decodes");
@@ -613,7 +613,7 @@ fn the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed() {
                     let v: serde_json::Value =
                         serde_json::from_slice(&r.json).expect("a traffic.control record");
                     for key in ["jammed", "teleported", "removed"] {
-                        jammed = jammed.max(v[key].as_u64().unwrap_or(0));
+                        jammed.push((*at, v[key].as_u64().unwrap_or(0)));
                     }
                 }
                 _ => {}
@@ -621,16 +621,29 @@ fn the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed() {
         }
         (report, states, jammed)
     };
-    let (_, full, full_jammed) = run(false);
-    let (ff, resumed, ff_jammed) = run(true);
-    // The window began with a vehicle standing (at a red lamp): the state the defect needs.
+    let (_, full, full_jams) = run(None);
+    // The window begins on the first whole second from 10 s on at which a vehicle stands
+    // (at a red lamp): the state the defect needs.
+    let from_ns = (10..=(FULL - LIVE) as u64)
+        .map(|s| s * 1_000_000_000)
+        .find(|t| full.iter().any(|((t2, _), (_, _, v))| t2 == t && *v < 0.1))
+        .expect("a vehicle stands at some whole second of the first minute");
+    let from_s = from_ns as f64 * 1e-9;
+    let (ff, resumed, ff_jams) = run(Some((from_s, from_s + PAUSE)));
+    // The gridlock counters, over the same live span of each run.
+    let live_end = from_ns + (LIVE * 1e9) as u64;
+    let peak = |j: &[(u64, u64)], until: u64| {
+        j.iter().filter(|(t, _)| *t <= until).map(|(_, v)| *v).max().unwrap_or(0)
+    };
+    let full_jammed = peak(&full_jams, live_end);
+    let ff_jammed = peak(&ff_jams, u64::MAX);
     let standing = full
         .iter()
         .filter(|((t, _), (_, _, v))| *t == from_ns && *v < 0.1)
         .count();
     let at_from = full.keys().filter(|(t, _)| *t == from_ns).count();
     println!(
-        "{at_from} vehicles at {FROM} s, {standing} standing; paused {} ns; jammed full {full_jammed}, \
+        "{at_from} vehicles at {from_s} s, {standing} standing; paused {} ns; jammed full {full_jammed}, \
          fast-forward {ff_jammed}",
         ff.fast_forward.traffic_paused_ns
     );
@@ -643,7 +656,10 @@ fn the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed() {
         .iter()
         .filter(|((t, _), _)| *t >= from_ns + shift)
         .collect();
-    let expected: Vec<_> = full.iter().filter(|((t, _), _)| *t >= from_ns).collect();
+    let expected: Vec<_> = full
+        .iter()
+        .filter(|((t, _), _)| *t >= from_ns && *t <= live_end)
+        .collect();
     assert_eq!(
         after.len(),
         expected.len(),
