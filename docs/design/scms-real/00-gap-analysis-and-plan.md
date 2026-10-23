@@ -611,6 +611,11 @@ Fix wave 3 status (2026-10-23, merged into `main`; details in BUILD-STATUS.md, `
 Final runs part 2 status (2026-10-23, merged into `main`; details in BUILD-STATUS.md and `testing/final-run.md`):
 - [x] **BENCH** (merge `430f40ee`): 27 expectation rows written before the runs (16 pass, 2 fixed, 2 corrected, 7 open). R-CCSIG confirmed at density: Falcon cycle BSMs 380 B (was 1,045 B), ML-DSA-44 cycle transmits (814 B), RSUs install the CRL under PQ. Full-scale benchmark: both live windows completed, peak 3,109 MB, stopped by hand in the second fast-forward (47,340 of 172,800 s), so no end-of-run report. Open: slow second fast-forward, R-FFHOLD, R-FFBURST, full-scale memory, rollover pseudonym count, `ped_wait`, R-PQUNSEC (owner decision), 47 Invalid states.
 
+Finalize 4 status (2026-10-23, merged into `main`; details in BUILD-STATUS.md, `testing/fast-forward.md` and `testing/memory-density.md`):
+- [x] **TESTS** (merge `2f6c664d`): `scms_wiring` runs its scenario's 300 s (105 verified MA reports, revoke at 186.8 s); `pq_relay` gets a relay-only attacker so the relay path runs (3 revocations); PKI Studio fixtures re-recorded. Both tests pass. Open: 5 mobility defects classified, `reports_uploaded_relay` counts on-air reports.
+- [x] **FF** (merge `66d65542`): lost edits replayed; R-FFBURST fixed (gridlock after the gap, first GNSS fix with a 43,000 s dt); `ped_wait` and pseudonym rate skip the frozen window; `stops_by_cause` added. R-FFHOLD is not a defect. Open: R-FFSLOW, FB2 re-run.
+- [x] **MEM** (merge `58e0b270`, includes `wip/finalize4-mem`): peak 2,074 MB to 1,027 MB at full fleet, 100 s; shared governance certificates; apex turn rule in the benchmark (positionJump 123 to 35). Open: the 2.5 GB target at the resume peak is projected, not measured; per-device backend state needs owner decisions.
+
 Critical path: A1 → A3 → A5 → B4 → C2 → D1 → E1 → E2/E3 → F1. Two things could stretch it:
 - `rasn-compiler` cannot handle the 1609.2.1 modules (WP-A1 fallback adds about 8 h).
 - The published artefacts reveal format details the research did not see (WP-A5 may add a fix-up package).
