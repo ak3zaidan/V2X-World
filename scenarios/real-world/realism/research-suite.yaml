@@ -6,3 +6,13 @@ meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS realism research-s
 detection:
   local:
     - id: detect/legacy-12
+# The research detectors' verdicts reach the MA on the modelled report path. A US device
+# files only what SM-MBR v1.1 can encode (OF-2), and none of its subtypes maps the stale and
+# replay checks that catch the handset attacker, so without this the suite's own detections
+# never leave the device (69 not filed; 2 of 3 attackers revoked, as the US profile).
+# docs/design/scms-real/testing/rerun-2026-10-22.md §6.
+security:
+  protocol:
+    id: protocol/scms/camp
+    params:
+      modelled_reports: 1

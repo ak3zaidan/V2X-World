@@ -131,7 +131,7 @@ rows:
   - 0.9
   source: 'urban DSRC to 500 m among Midtown buildings: most pairs past ~150 m are NLOS and below sensitivity
     (Mangel et al. 2011 NLOS; 04-models PHY); never 1, never near 0'
-  measured: '0.363836'
+  measured: '0.363933'
   verdict: pass
 - id: M0-bsm-latency
   base: M0
@@ -141,7 +141,7 @@ rows:
   expect: le
   value: 100.0
   source: 'SAE J2945/1 §6.3: BSM latency budget 100 ms; DSRC channel access is sub-ms at low CBR'
-  measured: '14.639'
+  measured: '14.638'
   verdict: pass
 - id: M0-cbr
   base: M0
@@ -151,7 +151,7 @@ rows:
   expect: le
   value: 0.6
   source: a fifteenth of rush hour stays far below the J2945/1 congestion-control range (CBR 50-80 %)
-  measured: '0.0143'
+  measured: '0.0142'
   verdict: pass
 - id: M0-aoi-peak
   base: M0
@@ -164,7 +164,7 @@ rows:
   - 1000.0
   source: '10 Hz BSMs: a neighbour''s peak age is at least one interval (100 ms), a few intervals with
     loss'
-  measured: '114.487'
+  measured: '116.186'
   verdict: pass
 - id: M0-aoi-mean
   base: M0
@@ -177,7 +177,7 @@ rows:
   - 5000.0
   source: time-average age of a 10 Hz stream with ~36 % PDR is a few hundred ms (Kaul et al. 2011); the
     fast-forward days carry no radio and must not count
-  measured: '81.6119'
+  measured: '82.2341'
   verdict: fixed
   note: 'pre-fix M0-b1: 1,693,079 ms, the fast-forward silence charged as age; after: 81.6 ms'
   test: v2xw-metrics awareness::tests::neighbourhood_aoi_restarts_after_a_silence_rather_than_charging_it
@@ -190,7 +190,7 @@ rows:
   value: 0.1
   source: prioritised verification sheds only when the verifier falls behind; at CBR < 5 % the OBU's verifier
     keeps up (verify_wait ~0)
-  measured: '0.025131'
+  measured: '0.0244777'
   verdict: pass
 - id: M0-sec-overhead
   base: M0
@@ -203,7 +203,7 @@ rows:
   - 0.7
   source: '1609.2 BSM: ~40 B payload against ~100 B security (digest) and ~170 B (certificate once a second):
     security is about half the frame'
-  measured: '0.458282'
+  measured: '0.461177'
   verdict: pass
 - id: M0-full-cert-share
   base: M0
@@ -216,7 +216,7 @@ rows:
   - 0.3
   source: 'J2945/1 §6.1.2.2: certificate once a second, digest otherwise (1 in 10 at 10 Hz), plus the
     new-neighbour rule'
-  measured: '0.173771'
+  measured: '0.158432'
   verdict: pass
 - id: M0-pool
   base: M0
@@ -277,9 +277,9 @@ rows:
   measure: p2.revoked_attackers
   expect: eq
   value: 2
-  source: 'the 2 vehicle constant-position attackers are caught by the SM-MBR ConstantPosition check
-    and revoked after shuffle + review (SM-MBR §2.3; realism.md); the third (actor 103) is a handset
-    sending PSMs, and SM-MBR v1.0 defines reports for application PSID 0x20 (the BSM) only (§1, §2.3)'
+  source: the 2 vehicle constant-position attackers are caught by the SM-MBR ConstantPosition check and
+    revoked after shuffle + review (SM-MBR §2.3; realism.md); the third (actor 103) is a handset sending
+    PSMs, and SM-MBR v1.0 defines reports for application PSID 0x20 (the BSM) only (§1, §2.3)
   measured: '2'
   verdict: wrong-expectation
   note: 'was 3 of 3; the US profile cannot report a PSM, a real detection gap (usfp.md §3). Before the
@@ -295,7 +295,9 @@ rows:
     does not jump 1 m between consecutive BSMs
   measured: '0'
   verdict: fixed
-  note: 'R-USFP fixed at its cause (docs/design/scms-real/testing/usfp.md): the receivers output a smoothed solution, not raw 10 Hz fixes. Before: 26 (7,200 of 7,488 reports RandomPosition); gnss-raw still gives 26'
+  note: 'R-USFP fixed at its cause (docs/design/scms-real/testing/usfp.md): the receivers output a smoothed
+    solution, not raw 10 Hz fixes. Before: 26 (7,200 of 7,488 reports RandomPosition); gnss-raw still
+    gives 26'
 - id: M0-false-accusation
   base: M0
   variant: M0
@@ -306,7 +308,9 @@ rows:
   source: as M0-honest-revoked, the metric's view
   measured: '0'
   verdict: fixed
-  note: 'R-USFP fixed at its cause (docs/design/scms-real/testing/usfp.md): the receivers output a smoothed solution, not raw 10 Hz fixes. Before: 26 (7,200 of 7,488 reports RandomPosition); gnss-raw still gives 26'
+  note: 'R-USFP fixed at its cause (docs/design/scms-real/testing/usfp.md): the receivers output a smoothed
+    solution, not raw 10 Hz fixes. Before: 26 (7,200 of 7,488 reports RandomPosition); gnss-raw still
+    gives 26'
 - id: M0-enforced
   base: M0
   variant: M0
@@ -318,7 +322,7 @@ rows:
   - 147800.0
   source: 'reports shuffled one day, 8 h review, next business-day 10:00 ET slot (Wed 2026-10-21 10:00
     EDT = 147,600 s), then the first fetch (realism.md: 147,573.8 s)'
-  measured: '147595'
+  measured: '147582'
   verdict: pass
 - id: M0-req-per-obu
   base: M0
@@ -379,7 +383,7 @@ rows:
   expect: le
   value: 2500.0
   source: the owner's 8 GB machine; realism base 127-229 MB
-  measured: '222.758'
+  measured: '140.641'
   verdict: pass
 - id: nohsm-verify-slower
   base: M0
@@ -390,7 +394,7 @@ rows:
   min_change: 0.2
   source: software ECDSA-P256 verify on an automotive application SoC is slower than the Craton2's verify
     engine (anchors::DEVICES; C4 primitive pricing)
-  measured: 0.50653 -> 0.584345
+  measured: 0.506652 -> 0.584318
   verdict: wrong-expectation
   note: direction holds (+15 %); the pooled verify stage also counts the 30 RSUs and 26 handsets, whose
     hardware this setting does not change, and a vehicle's repeat costs 400 us (Craton2) against 645 us
@@ -413,7 +417,7 @@ rows:
   tol: 0.05
   source: 'crypto time is not on the air: the PHY outcome is unchanged within a few % (only transmit instants
     shift)'
-  measured: 0.363836 -> 0.362838
+  measured: 0.363933 -> 0.36357
   verdict: pass
 - id: pq-security-bytes
   base: no-hsm
@@ -426,7 +430,7 @@ rows:
   - 20.0
   source: 'a Falcon-512 signature is ~666 B and its key 897 B, against 64 B + 33 B for P-256: hybrid security
     bytes several times ECDSA''s (effects PQH: x9.2)'
-  measured: 2446825 -> 24072007 (ratio 9.838)
+  measured: 2446483 -> 24071670 (ratio 9.839)
   verdict: pass
 - id: pq-fragments
   base: no-hsm
@@ -436,7 +440,7 @@ rows:
   expect: ge
   value: 1
   source: a hybrid certificate frame exceeds the 1,400-octet WSMP MTU and is fragmented (post-quantum.yaml)
-  measured: '7968'
+  measured: '8001'
   verdict: pass
 - id: pq-channel-load
   base: no-hsm
@@ -446,7 +450,7 @@ rows:
   expect: up
   min_change: 1.0
   source: 'airtime grows with the frame: channel load at least doubles (effects PQH: x4.2)'
-  measured: 0.00361934 -> 0.0147291
+  measured: 0.00326777 -> 0.0147646
   verdict: pass
 - id: pq-pdr-down
   base: no-hsm
@@ -455,7 +459,7 @@ rows:
   measure: m.pdr
   expect: down
   source: 'longer frames: more collisions, more fragments to lose (a fragmented SDU needs every fragment)'
-  measured: 0.362838 -> 0.343057
+  measured: 0.36357 -> 0.343257
   verdict: pass
 - id: pq-provisioned
   base: no-hsm
@@ -474,7 +478,7 @@ rows:
   measure: m.latency_stage.verify.mean
   expect: up
   source: hybrid verify = ECDSA verify + Falcon verify (the two published costs together)
-  measured: 0.584345 -> 0.827119
+  measured: 0.584318 -> 0.827118
   verdict: pass
 - id: rtk-honest
   base: M0
@@ -487,7 +491,9 @@ rows:
     no honest report reaches the MA'
   measured: '0'
   verdict: fixed
-  note: 'R-USFP fixed at its cause (docs/design/scms-real/testing/usfp.md): the receivers output a smoothed solution, not raw 10 Hz fixes. Before: 26, because RTK still drew about 0.5 m of white noise per axis at every fix'
+  note: 'R-USFP fixed at its cause (docs/design/scms-real/testing/usfp.md): the receivers output a smoothed
+    solution, not raw 10 Hz fixes. Before: 26, because RTK still drew about 0.5 m of white noise per axis
+    at every fix'
 - id: rtk-honest-reports
   base: M0
   variant: gnss-rtk
@@ -498,8 +504,8 @@ rows:
   source: as rtk-honest
   measured: 5 -> 5
   verdict: wrong-expectation
-  note: 'written for raw fixes (7375 -> 6248 then). With the smoothed receiver the base has 5 honest
-    reports, from one vehicle below 1 m/s (usfp.md §6), none from GNSS error, so RTK has nothing to remove'
+  note: written for raw fixes (7375 -> 6248 then). With the smoothed receiver the base has 5 honest reports,
+    from one vehicle below 1 m/s (usfp.md §6), none from GNSS error, so RTK has nothing to remove
 - id: rtk-attackers
   base: M0
   variant: gnss-rtk
@@ -518,7 +524,8 @@ rows:
   measure: p2.revoked_honest
   expect: up
   source: 'R-USFP (usfp.md): raw 10 Hz fixes carry fresh 1.6 m white noise, so consecutive honest BSMs
-    disagree with their own velocity by 2.65 m at the median and the 1 m RandomPosition check reports them'
+    disagree with their own velocity by 2.65 m at the median and the 1 m RandomPosition check reports
+    them'
   measured: 0 -> 26
   verdict: pass
 - id: clean-honest-reports
@@ -528,8 +535,11 @@ rows:
   measure: p2.reports_about_honest
   expect: down
   source: removing the 12 m outliers and the bursts removes the biggest jumps; the 1.6 m white noise remains
-  measured: 7375 -> 7360
-  verdict: pass
+  measured: 5 -> 5
+  verdict: wrong-expectation
+  note: 'written for raw fixes (7375 -> 7360 then). Re-run on 77cffb5b (rerun-2026-10-22.md §6): with
+    the smoothed receiver the base has 5 honest reports, from one vehicle below 1 m/s, none from GNSS
+    error, so a cleaner GNSS has nothing to remove (as rtk-honest-reports)'
 - id: ond-verifications
   base: M0
   variant: on-demand
@@ -539,7 +549,7 @@ rows:
   min_change: 0.5
   source: 'on-demand verifies only what an application acts on (Krishnan & Weimerskirch 2011; 07 §2: 756/s
     -> 46/s)'
-  measured: 77283 -> 37580
+  measured: 77517 -> 37572
   verdict: pass
 - id: ond-reports
   base: M0
@@ -549,7 +559,7 @@ rows:
   expect: down
   min_change: 0.3
   source: 'SM-MBR judges only verified BSMs (07 §8.2): detection is nearly blind'
-  measured: 7488 -> 3632
+  measured: 235 -> 105
   verdict: pass
 - id: ond-backend-same
   base: M0
@@ -568,7 +578,7 @@ rows:
   expect: ge
   value: 1
   source: the CAMP reference design puts the LOP between the device and the RA (CAMP 1.2.2 §5.2)
-  measured: '7848'
+  measured: '595'
   verdict: pass
 - id: camp-one-provider
   base: M0
@@ -624,7 +634,7 @@ rows:
   measure: p2.revoked_attackers
   expect: same
   source: 'as testctl-same-topups: detection and revocation are unchanged'
-  measured: 1 -> 2
+  measured: 2 -> 1
   verdict: wrong-expectation
   note: us-test-ctl-2025 deploys six providers at 1/6 each (devices 10/21/18/11/14/...), so the fleet
     split and MA routing change, not only the trust list
@@ -638,7 +648,7 @@ rows:
   - 0.05
   - 0.45
   source: 'provider-b''s fleet share 50 % -> 10 %: its signed BSMs fall to about a fifth'
-  measured: 56582 -> 12393 (ratio 0.219)
+  measured: 55698 -> 12179 (ratio 0.2187)
   verdict: pass
 - id: split-a-up
   base: M0
@@ -650,7 +660,7 @@ rows:
   - 1.4
   - 2.4
   source: 'provider-a''s share 50 % -> 90 %: about x1.8'
-  measured: 22692 -> 66881 (ratio 2.947)
+  measured: 21819 -> 65338 (ratio 2.995)
   verdict: wrong-expectation
   note: 'the base''s verified traffic is not split like its devices (49/46 devices, 29 %/71 % of verified
     BSMs from a/b); 90/10 gives a 84 %: x2.95 is that shift'
@@ -684,7 +694,7 @@ rows:
   expect: up
   source: LTE-V2X mode 4 SPS waits for its reserved subframe (selection window up to 100 ms, mean ~half
     the RRI) where DSRC contends sub-ms (3GPP TS 36.213 §14; Molina-Masegosa 2017)
-  measured: 12.3571 -> 68.0006
+  measured: 12.3563 -> 69.4155
   verdict: pass
 - id: lte-latency-budget
   base: M0
@@ -694,7 +704,7 @@ rows:
   expect: le
   value: 100.0
   source: 'SAE J3161/1: the BSM latency budget is still 100 ms'
-  measured: '112.184'
+  measured: '112.123'
   verdict: open
   note: 'LTE-V2X BSM p95 112 ms (mean 68 ms) exceeds the 100 ms budget: the BSM is generated without regard
     to the SPS reservation, which J3161/1 has the application align with; DSRC p95 14.6 ms'
@@ -735,7 +745,7 @@ rows:
   - 0.1
   - 0.95
   source: NR-V2X PC5 is plausible in the same urban geometry
-  measured: '0.604931'
+  measured: '0.627642'
   verdict: pass
 - id: nyc-changes
   base: M0
@@ -779,7 +789,7 @@ rows:
   - 1.2
   - 2.5
   source: 'a 77 B implicit certificate replaces the 8 B digest on 9 of 10 BSMs: ~+69 B on ~100 B of security'
-  measured: 2446453 -> 3863553 (ratio 1.579)
+  measured: 2446111 -> 3863211 (ratio 1.579)
   verdict: pass
 - id: fullcert-share
   base: M0
@@ -827,7 +837,7 @@ rows:
   measure: p2.reports_from_rsus
   expect: down
   source: fewer RSUs hear and file fewer reports
-  measured: 3616 -> 503
+  measured: 105 -> 8
   verdict: pass
 - id: rsu0-no-rsu-reports
   base: M0
@@ -935,7 +945,7 @@ rows:
   measure: rv.checked
   expect: down
   source: fewer neighbours, fewer verifications
-  measured: 77283 -> 36486
+  measured: 77517 -> 36509
   verdict: pass
 - id: att10-revoked
   base: M0
@@ -944,7 +954,7 @@ rows:
   measure: p2.revoked_attackers
   expect: up
   source: about 7 attackers instead of 3, all ConstantPosition
-  measured: 1 -> 3
+  measured: 2 -> 4
   verdict: pass
 - id: att10-crl
   base: M0
@@ -953,7 +963,7 @@ rows:
   measure: m.crl_entries
   expect: up
   source: 'one CRL entry per revoked device: the CRL grows (~33 B an entry, Brecht)'
-  measured: 27 -> 27
+  measured: 2 -> 4
   verdict: open
   note: '27 CRL entries in M0, att10 and sybil alike: att10 revokes 3 of 9 attackers (5 reported) and
     24 honest. A constant 27 decisions across three detection settings is unexplained'
@@ -964,7 +974,7 @@ rows:
   measure: p2.cases_opened
   expect: up
   source: 'one case per accused device (gap row 27: cases run side by side)'
-  measured: 27 -> 27
+  measured: 2 -> 4
   verdict: open
   note: 'as att10-crl: 27 cases in M0, att10, sybil'
 - id: sybil-not-revoked
@@ -979,7 +989,8 @@ rows:
   measured: '2'
   verdict: wrong-expectation
   note: the Sybil ghosts are signed under the attacker's own pseudonyms and their positions jump, so RandomPosition
-    catches it (1,578 reports about attackers against 235 in M0 after R-USFP); 2 of 3 revoked, the third a handset
+    catches it (1,578 reports about attackers against 235 in M0 after R-USFP); 2 of 3 revoked, the third
+    a handset
 - id: malegacy-cases
   base: M0
   variant: ma-legacy
@@ -988,8 +999,11 @@ rows:
   expect: changes
   source: the legacy window revokes on three trusted reporters within a window; the case count is the
     policy's (scms-realism.yaml R-MA)
-  measured: 27 -> 29
-  verdict: pass
+  measured: 2 -> 2
+  verdict: wrong-expectation
+  note: 'measured 27 -> 29 before R-USFP, when 25 honest vehicles were reported. Re-run on 77cffb5b (rerun-2026-10-22.md
+    §6): only the two vehicle attackers are reported, each by many neighbours, so both MA policies open
+    the same two cases; the policies differ only on marginal evidence'
 - id: tls12-same
   base: M0
   variant: tls12
@@ -1007,7 +1021,7 @@ rows:
   expect: same
   source: 'cell-capacity-mm1 carries no TCP or TLS (base tcp_connections 0; scms-knobs: only packet-pf
     does), so the TLS version cannot show'
-  measured: 17478789 -> 17478789
+  measured: 2895577 -> 2895577
   verdict: pass
 - id: real-same-topups
   base: M0
@@ -1025,7 +1039,7 @@ rows:
   measure: p2.revocations
   expect: same
   source: I-S1
-  measured: 27 -> 27
+  measured: 2 -> 2
   verdict: pass
 - id: real-same-frames
   base: M0
@@ -1034,7 +1048,7 @@ rows:
   measure: r.frames_transmitted
   expect: same
   source: 'I-S1: identical frames'
-  measured: 23549 -> 23549
+  measured: 23148 -> 23148
   verdict: pass
 - id: real-same-sizes
   base: M0
@@ -1052,7 +1066,7 @@ rows:
   measure: cost.cpu_s
   expect: up
   source: real P-256 arithmetic for every certificate (~0.4 CPU-s a device on release)
-  measured: 165.79 -> 190.48
+  measured: 34.54 -> 66.25
   verdict: pass
 - id: cert60-x3
   base: M0
@@ -1074,7 +1088,7 @@ rows:
   expect: down
   min_change: 0.1
   source: 'publishing at the decision skips the wait for Wednesday''s 10:00 slot (realism: -32,334 s)'
-  measured: 147595 -> 115195
+  measured: 147582 -> 115248
   verdict: pass
 - id: fleet2x-req
   base: M0
@@ -1096,7 +1110,7 @@ rows:
   - -28900.0
   - -28700.0
   source: 'no 8 h review (D3; realism: -28,800 s)'
-  measured: 115187 -> 86387.9 (delta -2.88e+04)
+  measured: 115189 -> 86389.3 (delta -2.88e+04)
   verdict: pass
 - id: maauto-published
   base: M0
@@ -1106,7 +1120,7 @@ rows:
   expect: same
   tol: 0.001
   source: 'decided Tue 17:00 EDT, after that day''s slot: still Wednesday''s slot'
-  measured: 147582 -> 147582
+  measured: 147569 -> 147569
   verdict: pass
 - id: nosharing-shared
   base: M0
@@ -1128,8 +1142,9 @@ rows:
   source: a provider off the trust list cannot get anyone honest revoked
   measured: '0'
   verdict: fixed
-  note: 'the 7 were the US-profile false positives (R-USFP), not the trust change; R-USFP fixed at its cause (docs/design/scms-real/testing/usfp.md): the receivers output a smoothed solution, not raw 10 Hz fixes. R-TRUSTLEAK
-    is separate (280 provider-b messages verified at provider-a receivers before)'
+  note: 'the 7 were the US-profile false positives (R-USFP), not the trust change; R-USFP fixed at its
+    cause (docs/design/scms-real/testing/usfp.md): the receivers output a smoothed solution, not raw 10
+    Hz fixes. R-TRUSTLEAK is separate (280 provider-b messages verified at provider-a receivers before)'
 - id: west-counts
   base: M0
   variant: region-west
