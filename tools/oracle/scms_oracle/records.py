@@ -962,24 +962,36 @@ def _reencode_crl(p, fn):
     return old, new
 
 
-def _mut_crl(R, fn, nth=1):
-    """Rewrite the nth distinct CRL of the first (craca, series) that has nth+1 CRLs."""
+def _mut_crl(R, fn, nth=1, prev_entries=False):
+    """Rewrite the nth distinct CRL of the first (craca, series) that has nth+1 CRLs.
+    CRLs the engine issued but never sent (pki.state rows only, such as the t0 CRLs every
+    CRACA publishes) are in the sequence too, as rule_crl counts them. With prev_entries the
+    earlier CRL must hold an entry (a dropped entry needs one to drop)."""
     seen = collections.OrderedDict()
     for p in R.pdus:
         if p['type'] == 'SecuredCrl':
             seen.setdefault(p['hex'], p)
+    for row in R.crl_rows.values():
+        hx = row.get('hex')
+        if hx and hx not in seen:
+            seen[hx] = {'hex': hx, 't': row.get('issued_at', row['seen_t'])}
     groups = collections.defaultdict(list)
     for hx, p in seen.items():
         cc = coer.decode('CrlContents', payload_bytes(coer.decode('Ieee1609Dot2Data', bytes.fromhex(hx))['content'][1]))
         groups[(cc['crlCraca'], cc['crlSeries'])].append((cc['issueDate'], p['t'], hx, cc))
     for g in groups.values():
         g.sort(key=lambda x: (x[0], x[1]))
-        if len(g) > nth:
-            prev = g[nth - 1][3] if nth else None
-            old, new = _reencode_crl(seen[g[nth][2]], lambda cc: fn(cc, prev))
+        # with prev_entries, the first later CRL whose predecessor holds an entry
+        at = next((k for k in range(nth, len(g)) if not prev_entries or _entries(g[k - 1][3])), None)
+        if at is not None:
+            prev = g[at - 1][3] if at else None
+            old, new = _reencode_crl(seen[g[at][2]], lambda cc: fn(cc, prev))
             for p in R.pdus:
                 if p['hex'] == old:
                     p['hex'] = new
+            for row in R.crl_rows.values():
+                if row.get('hex') == old:
+                    row['hex'] = new
             return True
     return False
 
@@ -1300,7 +1312,7 @@ FAULTS = {
     'crl-irev-future': ('iRev one past the i-period at issueDate', 'CRL-IREV', lambda R: _mut_crl(R, _crl_irev, 0)),
     'crl-index': ('indexWithinI / crlSerial jumps', 'CRL-SEQ', lambda R: _mut_crl(R, _crl_index, 1)),
     'crl-backdated': ('a later CRL dated before the earlier one', 'CRL-SEQ', lambda R: _mut_crl(R, _crl_back, 1)),
-    'crl-drop-entry': ('a later full CRL drops an unexpired entry', 'CRL-KEEP', lambda R: _mut_crl(R, _crl_drop, 1)),
+    'crl-drop-entry': ('a later full CRL drops an unexpired entry', 'CRL-KEEP', lambda R: _mut_crl(R, _crl_drop, 1, prev_entries=True)),
     'crl-overdue': ('the run outlives the last nextCrl with no new CRL', 'CRL-SLA', _mut_crl_late),
     'crl-row': ('the engine\'s CRL row issue_date off by one', 'CRL-STATE', _mut_crl_row),
     'cert-craca': ('a pseudonym\'s cracaId changed', 'CRACA-CERT', _mut_cert(lambda t: t.update(cracaId=b'\x00\x00\x01'))),

@@ -3,6 +3,11 @@
 Part 3 of "test everything": rules that had no independent check are now checked by the
 Python oracle against the engine's own recorded PDUs, on two real runs of the release binary.
 
+> **HEAD verdicts (88e24b09, re-checked 2026-10-22): see §8.** Sections 1–7 describe the first
+> check, on main `4924a5d2`. On HEAD every rule passes on both runs, OF-1, OF-2 and O-1 are
+> fixed, and the reproduction tests and the F1 capture have run. One new disagreement (OF-3)
+> and two oracle defects (fixed) are in §8.
+
 **Independence.** The agent did not read the engine's Rust. Every rule was written from one
 of two sources: the 1609.2-2022 and 1609.2.1-2022 text, which is the comments of the ASN.1
 modules committed under `tools/oracle/asn1`, or the cited profiles in the research notes
@@ -125,11 +130,12 @@ Likely cause, inferred from outputs only: the engine still uploads a sized-only 
 sender it has started refusing. Under [SM-MBR], with verified evidence only, that report would
 not exist at all. Reproduction: `tests/oracle_final.rs::every_cellular_report_upload_carries_its_spdus`.
 
-Both reproductions are compiled on this branch. Their run result is in §6.
+Both reproductions are compiled on this branch. On HEAD both run and pass, and OF-1 and OF-2
+are fixed (§8.3).
 
 **Observations (not disagreements)**
 
-* **O-1: delta CRLs are never sent.** On mbr, each full CRL from the second onwards is issued
+* **O-1: delta CRLs are never sent.** (Fixed on HEAD: full CRLs only, §8.2.) On mbr, each full CRL from the second onwards is issued
   together with a delta CRL at the same issueDate: 615/1 full with 615/2 delta, 615/3 with
   615/4, 616/0 with 616/1. The 6 deltas are signed and recorded in `pki.state`, but never sent
   on any link. indexWithinI counts them, which is correct per the CrlBaseTypes text, so a
@@ -237,16 +243,123 @@ which are built.
 * `oracle.py records`, `oracle.py ctl-files` and the expectations file `crates/v2xw-engine/tests/expectations/scms/scms-oracle-final.yaml`.
 
 **Not fixed in the engine**, by design: this package does not read the engine. OF-1 and OF-2
-are engine defects with reproductions:
+are engine defects with reproductions (both fixed by the fix wave 2 merges; verified on HEAD in §8):
 
 * **OF-1:** issue the device's own ECA-exchange certificate, register it, and use it for every Download-Req, with a back-dated start for older devices.
 * **OF-2:** produce no upload for a report that has no SPDU, or encode it.
 
 **Open:**
 
-* The rules hold on 4924a5d2, not yet on HEAD. Run `records` on a HEAD recording, and `ctl-files` on a HEAD `gov.json`.
+* ~~The rules hold on 4924a5d2, not yet on HEAD.~~ Done: `records` and `ctl-files` on HEAD, §8.
 * `.info` contents cannot be checked: `info-response` is a 4-byte message with no PDU.
-* A CTL's bytes are not in the CLI recording, only its summary, so elector verification needs the F1 capture.
+* A CTL's bytes are not in the CLI recording, only its summary, so elector verification needs the F1 capture (run on HEAD, §8.4).
 * The RSU application-certificate request is not an EeRaCertRequestSpdu on the capture, but its ack and filename are checked.
 * The download decryption is not re-done (the CLI records no recipient keys); DL-SIGN proves the opened bytes are the device's own signed request.
 * Federal holidays are not modelled in CRL-PUB (none falls in these runs).
+
+## 8. HEAD verdicts (88e24b09, 2026-10-22)
+
+The same independent check, repeated on HEAD after fix wave 2 (TRUST, REPORTS, DETECT). The
+agent again did not read the engine's Rust. It read only the recordings, the F1 capture, the
+Python checkers and the two test files it runs.
+
+**Build and runs.** One optimised debug build of HEAD (`CARGO_PROFILE_DEV_OPT_LEVEL=2`): the
+CLI plus the `oracle_final` and `conformance` test binaries, copied out under the build lock.
+Each run was one `heavy.sh` call under the run lock, with `--record-level events`, on the
+same seed as §1. The HEAD expectation rows were committed (`43a98a81`) before any HEAD result
+was read: 7 conf CRL rows, which now apply because every CRACA publishes at t0; the 6 mbr
+rows the first check lacked (ENR-MAP, ENR-LIFE, DL-SIGN, MBR-UP, CTL-SUM, CTL-DEV); and the
+HEAD-vs-4924a5d2 compare rows.
+
+### 8.1 Rule verdicts on HEAD
+
+| Check | conf | mbr | Verdict |
+|---|---|---|---|
+| `oracle.py records` | PASS, 67,451 / 67,451 checks, 16,131 PDUs | PASS, 211,785 / 211,785 checks, 38,315 PDUs | pass |
+| Expectation rows | 30 / 30 | 30 / 30 | pass |
+| DL-SIGN (was OF-1) | 2,892 ok (was 1,320 red) | 10,898 ok (was 5,245 red) | **fixed** |
+| ENR-LIFE (was OF-1) | 58 ok: one certificate per device (was 56 red of 114) | 99 ok (was 97 red of 196) | **fixed** |
+| MBR-UP (was OF-2) | 3,930 ok (was 1,695 red) | 18,618 ok (was 49 red) | **fixed** |
+| CRL-SEQ / KEEP / SLA on conf | 6 / 2 / 2 ok (no data before) | 24 / 8 / 8 ok | pass |
+| Faults (`--mutate`) | 34 red, 0 silent, 1 n/a (crl-drop-entry: the earlier CRL is the empty t0 CRL) | 35 red, 0 silent | pass, after oracle fix 2 (§8.5) |
+| `oracle.py selftest` | 412 / 412 vectors | | pass |
+
+### 8.2 Base vs variant and HEAD vs 4924a5d2 (expected before, measured after)
+
+| Change | Expected (written before) | Measured | Verdict |
+|---|---|---|---|
+| CRLs on conf | An empty full CRL from each CRACA at t0 (R-NOCRL), then one revocation CRL per series. No deltas | Per provider, `F614/0` (0 entries, t0) then `F615/0` (a: 1, b: 2 entries, 191,400 s). No delta | pass |
+| CRLs on mbr | Full only. t0 CRL plus one per decision day. indexWithinI with no gap. iRev 615, then 616 | Per provider: 614/0 at t0, then 615/0 at 105,000 s, 615/1 at 191,400 s, 615/2 at 537,000 s, 616/0 at 1,141,800 s. Was 615/1, 615/3 with deltas at 2 and 4. Every nextCrl is +7 d, and 537,000 → 1,141,800 s is exactly 7 d | pass. O-1 fixed |
+| Report uploads | No upload without bytes. Uploads with bytes about 1,296 | conf: 1,304 with bytes, 0 without (was 1,296 + 1,695). mbr: 5,171 with bytes, 0 without (was 5,171 + 49) | pass |
+| Revocations | conf 4 decided (a 1, b 3), 3 on CRLs. mbr about 12. Honest 0 | conf 4 / 3, mbr 12 / 12. Every decided subject maps (`gt.subject`) to an actor with `gt.attack.action` records: 4 / 4 and 12 / 12. Engine `revoked_honest` 0 | pass. Unchanged from 4924a5d2 |
+| Enrolment | One certificate per device: the ECA exchange's own, RA-registered, 6 y. It signs every Download-Req | Dry run of the `oracle_final` logic: 0 devices with a foreign certificate, 0 of 1,440 Download-Reqs signed by another (4924a5d2: 56 devices, 112) | pass |
+| F1 capture (conformance) | Fewer EeRaCertRequests, since the second enrolment is gone. Revoked 1000018, 1000027, 1000028 | EeRaCertRequest and RaEeCertAck 62 each (06 §6: 118). Download-Req 1,446 (1,591). Same three revoked. 4 SecuredCrl, 4 CRL heads (the t0 CRLs) | pass |
+| Message types / entity pairs | The same set as 4924a5d2 | conf 38 / 24, mbr 39 / 24, identical | pass |
+| MA decision delay | conf 8 h manual, mbr automatic | conf 28,800 s. mbr 0.001–0.236 s | pass |
+| Cost | Records fall by the empty uploads and their hops. CPU 1–2× the release run (optimised debug build) | conf: 212.9 s CPU (release 4924a5d2: 310.3), 84.9 MB (97.6), 771,012 records (794,838, −3 %), 1,327,951 events. mbr: 447.9 s (693.7), 111.2 MB (107.2), 1,454,724 records (1,455,350) | **CPU expectation wrong**: HEAD at opt-level 2 is 0.65–0.69× the old release binary. Evidence: the same scenario hash and the same counts on lower CPU. This matches the earlier speed fix ("one check redid real cryptography thousands of times"). Records: pass |
+| mbr / conf on HEAD | wall 1.7–2.5×, memory < 2×, records 2–3.5× | CPU 2.10×, memory 1.31×, records 1.89× | pass (records just under the band, as in §5) |
+
+### 8.3 Reproduction and capture tests, run on HEAD
+
+| Test | Result |
+|---|---|
+| `oracle_final.rs::one_enrolment_certificate_is_issued_registered_and_signs_every_download_request` | ok |
+| `oracle_final.rs::every_cellular_report_upload_carries_its_spdus` | ok. Both together: 66 s, peak 832 MB (MemoryRecorder) |
+| `conformance.rs` (both tests, `V2XW_CONFORMANCE_OUT` capture) | 2 / 2 ok, 203 s, 150 MB |
+| `check_run.py` on that capture | `conformance: PASS (18910/18910 checks; 0 disagreements)` |
+| `check_run.py --mutate --sample 1` | 18 / 18 faults red |
+
+Can these tests go red? Both reproductions ran their logic in Python (`dryrun`) on the
+4924a5d2 recording and came out red: 56 devices, and 1,695 uploads with no bytes. On HEAD the
+same logic finds 0 and 0. The engine was not modified to inject the fault, because this
+package does not read or change the engine.
+
+### 8.4 CTL files from the engine (F1 `gov.json`)
+
+`ctl-files` on HEAD's capture gives PASS: CTL-FILE 16, CTL-ORDER 4, CTL-QUORUM 6, CTL-SIG 140.
+Each provider holds CTL 0 and CTL 1, and holds CTL 1 twice (history and current). Every CTL
+carries 5 of 5 valid approved elector signatures, quorum 3. The engine's CTL bytes are now
+verified independently. Faults: 6 / 6 red after oracle fix 1. On the published CTLs: 5 / 5 red,
+and `ctl-copy-differs` is n/a there (one copy each).
+
+### 8.5 Oracle defects found and fixed (`1637acb3`)
+
+1. **The ctl-files faults could not fail on the engine's capture.** On HEAD's `gov.json`, all 5
+   faults were SILENT. `check()` kept one copy per sequence number, the last. The faults
+   changed `max(...)`, the first copy. So the changed copy was never checked. This also hid a
+   real gap: two different encodings under one sequence number would pass. Fix: every
+   distinct copy is checked; copies of one sequence must agree (CTL-FILE, new fault
+   `ctl-copy-differs`); and the faults alter every copy.
+2. **CRL sequence faults were n/a on conf.** `_mut_crl` looked only at CRLs sent on `pki.flow`.
+   Each series has one sent CRL, because the t0 CRLs exist only in `pki.state`. Fix: the
+   faults also reach CRLs that were issued but never sent, as `rule_crl` already counts them.
+   crl-index and crl-backdated are now red on conf. crl-drop-entry now picks a CRL whose
+   predecessor holds an entry: red on mbr, n/a on conf.
+
+### 8.6 Disagreements on HEAD
+
+**OF-3 (PLAUSIBLE): no record shows a device holding a CRL before the first revocation.**
+R-NOCRL (BUILD-STATUS 2026-10-22: "every CRACA publishes at t0, and devices join holding
+those lists") makes each provider issue an empty full CRL at t0. It is `version 1`,
+issueDate 719,571,005, nextCrl +7 d, and it is recorded in `pki.state` and the capture's
+`crls.json`. But:
+
+* No `pki.flow` message carries it. The CRLG's `crl-publish` and `crl-broadcast` messages exist only for the 191,400 s CRL. In real operation a device gets a CRL by download from the CRL store, and the device's other pre-drive exchanges (enrolment, Download-Reqs) are recorded.
+* The devices' `node.security` rows match 4924a5d2, which had no t0 CRL: `crl_entries 0, crl_version 0` on every row before 196,200 s (6,475 rows on HEAD), then `3 / 3`.
+
+So the records cannot tell whether a device holds the t0 CRL, and therefore its nextCrl. That
+is the precondition for the 2-week overdue rule that R-NOCRL was meant to enable. Two causes
+are possible. Either the devices do not hold it (an engine defect), or they hold it and
+neither the fetch nor `crl_version` records it (an observability defect). Which one cannot be
+told without reading the engine. Owed: record the pre-run CRL fetch as a flow, and make
+`node.security` report the held CRL's (craca, series, version). Then a rule can check that
+every device holds each provider's current CRL from t0.
+
+**Observations (not disagreements)**
+
+* **O-3: RSU-filed backhaul reports have no bytes.** conf 583, mbr 1,114 (`rsu-backhaul`, unchanged from 4924a5d2). MBR-UP exempts this labelled path, so no checker verifies these reports. [SM-MBR] defines only the vehicle upload.
+* **O-2 still applies:** 4 Saturday decisions on mbr are late under the strict reading of [SM-PROV] 3.4.10.
+* **RA-BLOCK:** 2 requests after blacklisting were refused on mbr, as on 4924a5d2.
+
+**Open:** OF-3. The full-scale benchmark and the PQ runs are outside this package. The
+`.info`, RSU-request and download-decryption limits in §7 still apply.
