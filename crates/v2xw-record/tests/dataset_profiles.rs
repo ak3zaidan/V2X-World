@@ -181,6 +181,27 @@ fn an_all_benign_run_produces_no_attack_label_at_all() {
     );
 }
 
+/// A recording without `gt.kinematics` (`v2xw run --record-level receptions`, `events` or
+/// `metrics`) cannot give the ground truth: the true positions would all be (0, 0) and,
+/// because the node-to-actor map comes from the same channel, every attacker's message
+/// would be labelled genuine. Found on a real run (paper1-validation.md: 9,035 of 9,035
+/// truth rows at (0, 0) and no attacker coded among 3 % ConstPos attackers). The export
+/// refuses rather than writing that file.
+#[test]
+fn a_recording_without_kinematics_is_refused_rather_than_labelled_genuine() {
+    let recs = records(&DatasetShape::default());
+    let full = veremi::from_records(&recs).expect("build");
+    assert!(full.truth.iter().any(|t| t.attacker_type != 0), "the shape has an attacker");
+    let thin: Vec<_> = recs
+        .iter()
+        .filter(|r| r.channel != "gt.kinematics")
+        .cloned()
+        .collect();
+    assert!(thin.iter().any(|r| r.channel == "phy.rx"));
+    let err = veremi::from_records(&thin).expect_err("no kinematics, no ground truth");
+    assert!(err.to_string().contains("gt.kinematics"), "{err}");
+}
+
 /// A lost frame is not a trace line: VeReMi logs what a receiver received, and a loss
 /// belongs in the net trace.
 #[test]
