@@ -181,11 +181,17 @@ fn the_free_class_fires_at_a_rate_that_rises_with_speed() {
     // At speed the free class sits in the CV-pilot band (Tampa 20.3 ... Orem 195 per
     // ID-minute at v >= 10 m/s, check-realdata-and-vesnos.md §2.3).
     let at_speed = rate(&free, 30, 20.0, &sm);
-    assert!((20.0..=195.0).contains(&at_speed), "{at_speed} per ID-minute");
+    assert!(
+        (20.0..=195.0).contains(&at_speed),
+        "{at_speed} per ID-minute"
+    );
     // The class contrast is the fault: the locked class at the same speed is near 0.
     let l = rate(&locked, 30, 20.0, &sm);
     println!("locked, secMark, v1.0: {l} per ID-minute at 20 m/s; free {at_speed}");
-    assert!(l < 1.0 && l < at_speed / 10.0, "locked {l} vs free {at_speed}");
+    assert!(
+        l < 1.0 && l < at_speed / 10.0,
+        "locked {l} vs free {at_speed}"
+    );
     // On the header clock the 27 ms generationTime jitter adds a residual that grows
     // with speed, so the rate rises strictly (check-realdata-and-vesnos.md §2.4).
     let gt = params(RandomPositionReading::V1_0, TimeBase::GenerationTime);

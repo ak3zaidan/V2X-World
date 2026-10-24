@@ -127,9 +127,9 @@ impl PhaseDist {
     fn check(&self, at: &str) -> Result<(), String> {
         let finite = |v: f64| v.is_finite();
         match self {
-            Self::Normal { mean, sd } if !finite(*mean) || !finite(*sd) || *sd < 0.0 => {
-                Err(format!("{at}: a normal phase needs a finite mean and an sd of 0 or more"))
-            }
+            Self::Normal { mean, sd } if !finite(*mean) || !finite(*sd) || *sd < 0.0 => Err(
+                format!("{at}: a normal phase needs a finite mean and an sd of 0 or more"),
+            ),
             Self::Uniform { lo, hi } if !finite(*lo) || !finite(*hi) || lo > hi => {
                 Err(format!("{at}: a uniform phase needs finite lo <= hi"))
             }
@@ -139,7 +139,9 @@ impl PhaseDist {
                     || p.iter().any(|v| !v.is_finite() || *v < 0.0)
                     || (sum - 1.0).abs() > 1e-6
                 {
-                    return Err(format!("{at}: empirical p must be non-negative and sum to 1"));
+                    return Err(format!(
+                        "{at}: empirical p must be non-negative and sum to 1"
+                    ));
                 }
                 if bins_ms.len() != p.len() && bins_ms.len() != p.len() + 1 {
                     return Err(format!(
@@ -149,7 +151,9 @@ impl PhaseDist {
                 }
                 if bins_ms.iter().any(|v| !v.is_finite()) || bins_ms.windows(2).any(|w| w[0] > w[1])
                 {
-                    return Err(format!("{at}: empirical bins_ms must be finite and ascending"));
+                    return Err(format!(
+                        "{at}: empirical bins_ms must be finite and ascending"
+                    ));
                 }
                 Ok(())
             }
@@ -223,7 +227,11 @@ fn slip_map<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<i32, f64>, D::Er
     let m = match serde_yml::Value::deserialize(d)? {
         serde_yml::Value::Mapping(m) => m,
         serde_yml::Value::Null => return Ok(BTreeMap::new()),
-        _ => return Err(D::Error::custom("slip_epochs must be a map of slip size to probability")),
+        _ => {
+            return Err(D::Error::custom(
+                "slip_epochs must be a map of slip size to probability",
+            ));
+        }
     };
     let mut out = BTreeMap::new();
     for (k, v) in m {
@@ -274,7 +282,10 @@ impl BsmTimingCalibration {
     /// The first problem, as a sentence.
     pub fn check(&self) -> Result<(), String> {
         if self.schema != SCHEMA {
-            return Err(format!("schema is {:?}; this build reads {SCHEMA}", self.schema));
+            return Err(format!(
+                "schema is {:?}; this build reads {SCHEMA}",
+                self.schema
+            ));
         }
         if !(self.fix_interval_ms.is_finite() && self.fix_interval_ms >= 1.0) {
             return Err("fix_interval_ms must be at least 1".to_string());
@@ -297,13 +308,18 @@ impl BsmTimingCalibration {
                 return Err(format!("{at}: header_jitter_ms.sd must be 0 or more"));
             }
             let slip_sum: f64 = c.slip_epochs.values().sum();
-            if c.slip_epochs.iter().any(|(k, p)| *k == 0 || k.abs() > 10 || !prob(*p)) {
+            if c.slip_epochs
+                .iter()
+                .any(|(k, p)| *k == 0 || k.abs() > 10 || !prob(*p))
+            {
                 return Err(format!(
                     "{at}: slip_epochs keys are non-zero fix counts within ±10, values in 0..1"
                 ));
             }
             if c.epoch_slip_prob > 0.0 && (slip_sum - 1.0).abs() > 1e-6 {
-                return Err(format!("{at}: slip_epochs must sum to 1 (it sums to {slip_sum})"));
+                return Err(format!(
+                    "{at}: slip_epochs must sum to 1 (it sums to {slip_sum})"
+                ));
             }
         }
         if (total - 1.0).abs() > 1e-6 {
@@ -583,7 +599,10 @@ pub fn card(cal: &BsmTimingCalibration) -> ModelCard {
             "USDOT ITS JPO CV Pilot BSMs (THEA Tampa, Wyoming, Utah Orem), \
              research/synthesis/check-realdata-and-vesnos.md",
         ),
-        Source::new(SourceKind::Code, "research/synthesis/paper-plan-2026-10.md §1.4 item B"),
+        Source::new(
+            SourceKind::Code,
+            "research/synthesis/paper-plan-2026-10.md §1.4 item B",
+        ),
     ];
     card.assumptions = vec![
         "Fix epochs are on the simulation (GPS) timeline; an earlier epoch's position is the \
@@ -626,7 +645,11 @@ mod tests {
     }
 
     fn rng(n: u32) -> RngStream {
-        RngStream::derive(7, rng_domain(), EntityRef::Node(v2xw_core::ids::NodeId::new(n)))
+        RngStream::derive(
+            7,
+            rng_domain(),
+            EntityRef::Node(v2xw_core::ids::NodeId::new(n)),
+        )
     }
 
     #[test]
@@ -685,7 +708,9 @@ classes:
 
     #[test]
     fn a_forced_slip_moves_the_position_by_whole_fixes() {
-        let mut cal = BsmTimingCalibration::provisional().with_locked_share(1.0).unwrap();
+        let mut cal = BsmTimingCalibration::provisional()
+            .with_locked_share(1.0)
+            .unwrap();
         cal.classes[0].epoch_slip_prob = 1.0;
         cal.classes[0].slip_epochs = BTreeMap::from([(-1, 1.0)]);
         let mut r = rng(1);
@@ -699,7 +724,9 @@ classes:
 
     #[test]
     fn a_frozen_repeat_sends_the_previous_position() {
-        let mut cal = BsmTimingCalibration::provisional().with_locked_share(1.0).unwrap();
+        let mut cal = BsmTimingCalibration::provisional()
+            .with_locked_share(1.0)
+            .unwrap();
         cal.classes[0].frozen_repeat_prob = 1.0;
         let mut r = rng(2);
         let mut d = BsmTimingDevice::assign(&cal, &mut r);
@@ -716,7 +743,10 @@ classes:
             let mut r = rng(seed_node);
             let mut d = BsmTimingDevice::assign(&cal, &mut r);
             (0..200)
-                .map(|i| d.report(&cal, &mut r, &belief(1_000 + 100 * i, 15.0)).unwrap())
+                .map(|i| {
+                    d.report(&cal, &mut r, &belief(1_000 + 100 * i, 15.0))
+                        .unwrap()
+                })
                 .map(|x| (x.pos.x.to_bits(), x.sec_mark_at, x.header_jitter_ns))
                 .collect::<Vec<_>>()
         };

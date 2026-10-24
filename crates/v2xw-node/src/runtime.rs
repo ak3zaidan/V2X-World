@@ -2014,8 +2014,10 @@ impl ObuRuntime {
             Vec::with_capacity(wanted as usize);
         // Per message: the timing model's report (a BSM under `crate::bsm_timing`) and the
         // BSM fields a receiver's SM-MBR checks read.
-        let mut extras: Vec<(Option<crate::bsm_timing::BsmReport>, crate::bsm_timing::BsmExtras)> =
-            Vec::with_capacity(wanted as usize);
+        let mut extras: Vec<(
+            Option<crate::bsm_timing::BsmReport>,
+            crate::bsm_timing::BsmExtras,
+        )> = Vec::with_capacity(wanted as usize);
         for r in requests {
             let report = if r.msg_type == MsgType::Bsm {
                 self.bsm_timing_report(ctx)
@@ -2029,7 +2031,10 @@ impl ObuRuntime {
                 r.include_low_frequency,
                 report.as_ref(),
             );
-            extras.push((report, self.bsm_extras(r.msg_type, believed, report.as_ref())));
+            extras.push((
+                report,
+                self.bsm_extras(r.msg_type, believed, report.as_ref()),
+            ));
             built.push((r.msg_type, r.at, payload));
         }
         if let Some(content) = cpm_content {
@@ -2272,10 +2277,7 @@ impl ObuRuntime {
                     reported,
                     self.config.origin,
                     self.config.dims,
-                    bsm::sec_mark(
-                        self.config.wall,
-                        timing.map_or(believed, |t| t.sec_mark_at),
-                    ),
+                    bsm::sec_mark(self.config.wall, timing.map_or(believed, |t| t.sec_mark_at)),
                 );
                 // Part I's dynamics from the vehicle's own sensors, which J2945/1 requires
                 // an OBU to fill (`accelSet`, `brakes`); `transmission` is forward gears

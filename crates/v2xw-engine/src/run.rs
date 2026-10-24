@@ -5406,8 +5406,7 @@ impl Engine {
                 {
                     let shift_ms = (i128::from(e.generation_time) - i128::from(believed))
                         .div_euclid(1_000_000);
-                    bsm.sec_mark_ms =
-                        Some((i128::from(sm) + shift_ms).rem_euclid(60_000) as u16);
+                    bsm.sec_mark_ms = Some((i128::from(sm) + shift_ms).rem_euclid(60_000) as u16);
                 }
             }
         }

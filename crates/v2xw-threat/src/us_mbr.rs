@@ -259,8 +259,8 @@ impl UsMbrParams {
             (TimeBase::SecMark, Some(a), Some(b)) => {
                 // secMark counts milliseconds within the minute: the difference is taken
                 // in the minute the generation times put the pair in.
-                let gen_ms = (i128::from(m.claimed_generation_time) - i128::from(r.t))
-                    .div_euclid(1_000_000);
+                let gen_ms =
+                    (i128::from(m.claimed_generation_time) - i128::from(r.t)).div_euclid(1_000_000);
                 let d = i128::from(b) - i128::from(a);
                 let k = (gen_ms - d + 30_000).div_euclid(60_000);
                 (d + k * 60_000) as f64 * 1e-3

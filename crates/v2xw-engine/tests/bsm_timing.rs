@@ -73,13 +73,19 @@ fn the_model_off_reproduces_the_pinned_run_and_on_moves_it() {
     let mut disabled = phase2(60.0);
     timing(&mut disabled, false, Some(0.5));
     let disabled = run(disabled);
-    assert_eq!(disabled.record_digest, off.record_digest, "enabled: false is off");
+    assert_eq!(
+        disabled.record_digest, off.record_digest,
+        "enabled: false is off"
+    );
     assert_eq!(disabled.frame_digest, off.frame_digest);
     // The fault: the model on must change the run, or the pin above proves nothing about it.
     let mut on = phase2(60.0);
     timing(&mut on, true, None);
     let on = run(on);
-    assert_ne!(on.record_digest, off.record_digest, "the model on left every record alone");
+    assert_ne!(
+        on.record_digest, off.record_digest,
+        "the model on left every record alone"
+    );
 }
 
 #[test]
@@ -92,8 +98,14 @@ fn the_same_seed_gives_the_same_run_with_the_model_on() {
     };
     let a = on(0, None);
     let b = on(0, None);
-    assert_eq!(a.record_digest, b.record_digest, "same seed, model on: records differ");
-    assert_eq!(a.frame_digest, b.frame_digest, "same seed, model on: frames differ");
+    assert_eq!(
+        a.record_digest, b.record_digest,
+        "same seed, model on: records differ"
+    );
+    assert_eq!(
+        a.frame_digest, b.frame_digest,
+        "same seed, model on: frames differ"
+    );
     assert_eq!(a.records, b.records);
     // Shown red: another seed, or every device locked, is another run.
     assert_ne!(on(1, None).record_digest, a.record_digest);
@@ -112,7 +124,10 @@ fn the_settings_load_and_out_of_range_ones_are_refused() {
         calibration: Some("/nonexistent/bsm-timing.yaml".to_string()),
         locked_share: None,
     });
-    assert!(!validate(&s).is_empty(), "an unreadable calibration was accepted");
+    assert!(
+        !validate(&s).is_empty(),
+        "an unreadable calibration was accepted"
+    );
     // The US profile's RandomPosition choices, by name.
     let mut us = phase2(10.0);
     us.detection.local = vec![ModelChoice {
