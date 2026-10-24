@@ -1,0 +1,12 @@
+# P1-E7 decomposition: p1-ma-l1.yaml with the BSM timing model off, so honest accusations
+# that remain come from sources other than the device timing classes.
+schema: v2xw/scenario/1
+meta:
+  base: p1-ma-l1.yaml
+  name: Paper 1 MA replay timing off
+  description: The MA-replay quarter-fleet minute with the BSM timing model off.
+  tags: [paper1, validation, ma-replay]
+actors:
+  vehicles:
+    bsm_timing:
+      enabled: false

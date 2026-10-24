@@ -111,6 +111,16 @@ runs:
   E4RWN:
     scenario: scenarios/real-world/paper1/p1-e4-80-wn.yaml
     base: E4R
+  S100R:
+    scenario: scenarios/real-world/paper1/p1-share100.yaml
+    base: 'OFF'
+    note: S100 on the refitted calibration (after a77aab7c)
+  MAL1R:
+    scenario: scenarios/real-world/paper1/p1-ma-l1.yaml
+    note: MAL1 on the refitted calibration (after a77aab7c)
+  MALOFF:
+    scenario: scenarios/real-world/paper1/p1-ma-off.yaml
+    base: MAL1
   MAL1:
     scenario: scenarios/real-world/paper1/p1-ma-l1.yaml
     note: quarter fleet 60 s live, 3 % ConstPos from 30 s, every OBU locked; then v2xw ma-replay
@@ -638,6 +648,38 @@ rows:
   expect: ge
   value: 1
   source: 'the rules are not ''revoke nothing'': some sound rule revokes an injected attacker'
+  measured: pending
+- id: P1.MA.l1r-sound-zero
+  base: MAL1R
+  variant: MAL1R
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: eq
+  value: 0
+  source: 'P1-E7 null on the refitted calibration (locked slips fitted at v >= 10 m/s: 0 of 1,152 Tampa pairs):
+    every sound rule revokes zero honest devices'
+  measured: pending
+- id: P1.MA.off-sound-zero
+  base: MALOFF
+  variant: MALOFF
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: eq
+  value: 0
+  source: 'with no timing model and the smoothed receiver, honest devices give no RandomPosition triggers (usfp.md
+    §3: 0 honest revocations with a realistic receiver), so no sound rule revokes one'
+  measured: pending
+- id: P1.TS.cp-share100-refit
+  base: 'OFF'
+  variant: S100R
+  area: metrics
+  measure: p2.verdicts.constantPositionFrozen
+  expect: ratio
+  band:
+  - 0.8
+  - 1.25
+  source: 'the refitted locked class has no slip at speed and no frozen repeat: its ConstantPosition verdicts are
+    the no-timing run''s'
   measured: pending
 - id: P1.VR.lint
   base: VR
