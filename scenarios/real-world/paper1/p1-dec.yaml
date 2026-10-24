@@ -1,0 +1,16 @@
+# p1-attack from 17:59 EDT with the decay at 18:00 ET (inside the window), multiplier 0.5, quota 4,500 B.
+# A one-change variant (docs/design/scms-real/testing/paper1-validation.md).
+schema: v2xw/scenario/1
+meta:
+  base: p1-attack.yaml
+  name: Paper 1 p1-dec
+  description: p1-attack from 17:59 EDT with the decay at 18:00 ET (inside the window), multiplier 0.5, quota 4,500 B.
+  tags: [paper1, validation]
+time:
+  t0: "2026-10-19T21:59:00Z"
+security:
+  scms:
+    lifecycle:
+      report_store_quota_bytes: 4500
+      report_daily_multiplier: 0.5
+      report_decay_hour_et: 18

@@ -1,0 +1,717 @@
+# Paper 1 features validated with real runs, and experiment P1-E4
+# (docs/design/scms-real/testing/paper1-validation.md). Every `expect` was written and
+# committed with `measured: pending` before the run it judges. Checker:
+#   python3 tools/realworld/matrix.py check <this file> <runs>
+# after scratch summariser p1val/scripts/summ.py has written each run's realism.json (the
+# x.* measures: report fates, ma-replay, VeReMi round trip and leakage, BeaconFrequency
+# replay, E4 residual KS). `measured` is base -> variant, or the variant's value.
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+#
+# Binary: the release build of e15bfec1 (the integrator's), copied to the scratchpad; the
+# scenario's seed; --no-verify; one run per run-lock call (2,500 MB cap); 2 rayon threads.
+schema: v2xw/scms-run-expectations/1
+runs:
+  B:
+    scenario: scenarios/real-world/paper1/p1-base.yaml
+    note: honest Midtown 120 s, cvpilot timing at locked 0.25, US profile on secMark (--record-level events)
+  B2:
+    scenario: scenarios/real-world/paper1/p1-base.yaml
+    note: B again (determinism)
+  B1T:
+    scenario: scenarios/real-world/paper1/p1-base.yaml
+    note: B at 1 rayon thread (determinism)
+  'OFF':
+    scenario: scenarios/real-world/paper1/p1-off.yaml
+    base: B
+  S0:
+    scenario: scenarios/real-world/paper1/p1-share0.yaml
+    base: B
+  S50:
+    scenario: scenarios/real-world/paper1/p1-share50.yaml
+    base: B
+  S100:
+    scenario: scenarios/real-world/paper1/p1-share100.yaml
+    base: B
+  RP-v10-sm-01:
+    scenario: scenarios/real-world/paper1/p1-rp-v10-sm-01.yaml
+    base: B
+  RP-v10-sm-02:
+    scenario: scenarios/real-world/paper1/p1-rp-v10-sm-02.yaml
+    base: B
+  RP-v10-gt-01:
+    scenario: scenarios/real-world/paper1/p1-rp-v10-gt-01.yaml
+    base: B
+  RP-v10-gt-02:
+    scenario: scenarios/real-world/paper1/p1-rp-v10-gt-02.yaml
+    base: B
+  RP-v10-gt-05:
+    scenario: scenarios/real-world/paper1/p1-rp-v10-gt-05.yaml
+    base: B
+  RP-v11-sm-01:
+    scenario: scenarios/real-world/paper1/p1-rp-v11-sm-01.yaml
+    base: B
+  RP-v11-sm-02:
+    scenario: scenarios/real-world/paper1/p1-rp-v11-sm-02.yaml
+    base: B
+  RP-v11-sm-05:
+    scenario: scenarios/real-world/paper1/p1-rp-v11-sm-05.yaml
+    base: B
+  RP-v11-gt-01:
+    scenario: scenarios/real-world/paper1/p1-rp-v11-gt-01.yaml
+    base: B
+  RP-v11-gt-02:
+    scenario: scenarios/real-world/paper1/p1-rp-v11-gt-02.yaml
+    base: B
+  RP-v11-gt-05:
+    scenario: scenarios/real-world/paper1/p1-rp-v11-gt-05.yaml
+    base: B
+  A:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+  Q0:
+    scenario: scenarios/real-world/paper1/p1-q0.yaml
+    base: A
+  Q2:
+    scenario: scenarios/real-world/paper1/p1-q2.yaml
+    base: A
+  Q4:
+    scenario: scenarios/real-world/paper1/p1-q4.yaml
+    base: A
+  M05:
+    scenario: scenarios/real-world/paper1/p1-m05.yaml
+    base: A
+  DEC:
+    scenario: scenarios/real-world/paper1/p1-dec.yaml
+    base: A
+  DECM1:
+    scenario: scenarios/real-world/paper1/p1-dec-m1.yaml
+    base: DEC
+  DECH5:
+    scenario: scenarios/real-world/paper1/p1-dec-h5.yaml
+    base: DEC
+  VR:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+    note: p1-attack cut to 60 s, --veremi veremi-ext, --record-level receptions
+  E4:
+    scenario: scenarios/real-world/paper1/p1-e4.yaml
+    note: free-flow highway 60 s, cvpilot timing at locked 1, smoothed receiver
+  E4WN:
+    scenario: scenarios/real-world/paper1/p1-e4-wn.yaml
+    base: E4
+  E4F:
+    scenario: scenarios/real-world/paper1/p1-e4-free.yaml
+    base: E4
+  MAL1:
+    scenario: scenarios/real-world/paper1/p1-ma-l1.yaml
+    note: quarter fleet 60 s live, 3 % ConstPos from 30 s, every OBU locked; then v2xw ma-replay
+  MAL0:
+    scenario: scenarios/real-world/paper1/p1-ma-l0.yaml
+    base: MAL1
+rows:
+- id: P1.TS.rp-share0
+  base: B
+  variant: S0
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 1.1
+  - 1.8
+  source: 'free-class triggers scale with the free share: (1-0)/(1-0.25) = 1.33; free 24.1 vs locked 0.17 per ID-minute
+    (us_mbr_timing), research/synthesis/p1-realdata-baseline.md T2/T3 (Tampa free 20.4, locked 0.2 per ID-minute;
+    Wyoming locked 0.0)'
+  measured: pending
+- id: P1.TS.rp-share50
+  base: B
+  variant: S50
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.45
+  - 0.9
+  source: (1-0.5)/(1-0.25) = 0.67, research/synthesis/p1-realdata-baseline.md T2/T3 (Tampa free 20.4, locked 0.2
+    per ID-minute; Wyoming locked 0.0)
+  measured: pending
+- id: P1.TS.rp-share100
+  base: B
+  variant: S100
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.0
+  - 0.1
+  source: 'an all-locked fleet trips RandomPosition at about 0 (Tampa locked 0.2 vs free 20.4; Wyoming 0.0): under
+    10 % of the 25 %-locked count'
+  measured: pending
+- id: P1.TS.cp-share0
+  base: B
+  variant: S0
+  area: metrics
+  measure: p2.verdicts.constantPositionFrozen
+  expect: up
+  min_change: 0.1
+  source: 'the free class repeats a frozen position while moving (frozen_repeat_prob 0.156 in the fit, Orem''s frozen
+    repeats): ConstantPosition rises with the free share'
+  measured: pending
+- id: P1.TS.cp-share100
+  base: 'OFF'
+  variant: S100
+  area: metrics
+  measure: p2.verdicts.constantPositionFrozen
+  expect: ratio
+  band:
+  - 0.8
+  - 1.25
+  source: 'the locked class has frozen_repeat_prob 0: its ConstantPosition verdicts are the no-timing run''s (OFF)'
+  measured: pending
+- id: P1.TS.reports-share0
+  base: B
+  variant: S0
+  area: architecture
+  measure: p2.reports_sent
+  expect: up
+  min_change: 0.05
+  source: 'more honest triggers file more reports (SM-MBR §2.2: every trigger is a report candidate)'
+  measured: pending
+- id: P1.TS.reports-share100
+  base: B
+  variant: S100
+  area: architecture
+  measure: p2.reports_sent
+  expect: down
+  min_change: 0.05
+  source: fewer triggers, fewer reports
+  measured: pending
+- id: P1.TS.no-attack-reports
+  variant: S0
+  area: architecture
+  measure: p2.reports_about_attackers
+  expect: eq
+  value: 0
+  source: an attack-free run accuses no attacker
+  measured: pending
+- id: P1.TS.no-revocation
+  variant: S0
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: 'the US presets'' MA review is 8 h on the real calendar (the pilots'' human review, FHWA-JPO-19-775 p.8):
+    no revocation can complete inside 120 s, whatever the trigger rate'
+  measured: pending
+- id: P1.TS.crl-same
+  base: B
+  variant: S0
+  area: architecture
+  measure: p2.crls_issued
+  expect: same
+  source: 'no decision in the window, so no new CRL: the CRL count is the preload''s'
+  measured: pending
+- id: P1.TS.separation
+  variant: S0
+  area: architecture
+  measure: separation.violations
+  expect: eq
+  value: 0
+  source: the timing model changes BSM contents only; no entity learns more (PKI view separation)
+  measured: pending
+- id: P1.TS.frames
+  base: B
+  variant: S0
+  area: performance
+  measure: r.frames_transmitted
+  expect: same
+  tol: 0.02
+  source: the model changes what a BSM says, not when it is sent; reports go over IP, not DSRC frames
+  measured: pending
+- id: P1.TS.events
+  base: B
+  variant: S0
+  area: performance
+  measure: cost.events
+  expect: ratio
+  band:
+  - 0.9
+  - 1.15
+  source: the same frames and receptions; only detection and report handling grow
+  measured: pending
+- id: P1.TS.memory
+  base: B
+  variant: S0
+  area: performance
+  measure: cost.peak_mb
+  expect: ratio
+  band:
+  - 0.8
+  - 1.25
+  source: per-device state is two numbers (class, phase); reports are a few KB
+  measured: pending
+- id: P1.TS.wall
+  base: B
+  variant: S0
+  area: performance
+  measure: cost.wall_s
+  expect: ratio
+  band:
+  - 0.6
+  - 1.6
+  source: a few arithmetic operations per BSM
+  measured: pending
+- id: P1.DET.rerun
+  base: B
+  variant: B2
+  area: determinism
+  measure: digest.record
+  expect: identical
+  source: 'same seed, same build: byte-identical record stream'
+  measured: pending
+- id: P1.DET.threads
+  base: B
+  variant: B1T
+  area: determinism
+  measure: digest.record
+  expect: identical
+  source: the class draw is keyed per device (its own RNG domain), not per thread
+  measured: pending
+- id: P1.RP.v10-sm.gap01-vs-02
+  base: RP-v10-sm-02
+  variant: RP-v10-sm-01
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.5
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions), so the
+    count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 / 0.2 / 0.5 s (T3):
+    the single-interval pairs carry most triggers'
+  measured: pending
+- id: P1.RP.v10-sm.gap02-vs-05
+  base: B
+  variant: RP-v10-sm-02
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.7
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions), so the
+    count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 / 0.2 / 0.5 s (T3):
+    the single-interval pairs carry most triggers'
+  measured: pending
+- id: P1.RP.v10-gt.gap01-vs-02
+  base: RP-v10-gt-02
+  variant: RP-v10-gt-01
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.5
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions), so the
+    count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 / 0.2 / 0.5 s (T3):
+    the single-interval pairs carry most triggers'
+  measured: pending
+- id: P1.RP.v10-gt.gap02-vs-05
+  base: RP-v10-gt-05
+  variant: RP-v10-gt-02
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.7
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions), so the
+    count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 / 0.2 / 0.5 s (T3):
+    the single-interval pairs carry most triggers'
+  measured: pending
+- id: P1.RP.v11-sm.gap01-vs-02
+  base: RP-v11-sm-02
+  variant: RP-v11-sm-01
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.5
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions), so the
+    count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 / 0.2 / 0.5 s (T3):
+    the single-interval pairs carry most triggers'
+  measured: pending
+- id: P1.RP.v11-sm.gap02-vs-05
+  base: RP-v11-sm-05
+  variant: RP-v11-sm-02
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.7
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions), so the
+    count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 / 0.2 / 0.5 s (T3):
+    the single-interval pairs carry most triggers'
+  measured: pending
+- id: P1.RP.v11-gt.gap01-vs-02
+  base: RP-v11-gt-02
+  variant: RP-v11-gt-01
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.5
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions), so the
+    count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 / 0.2 / 0.5 s (T3):
+    the single-interval pairs carry most triggers'
+  measured: pending
+- id: P1.RP.v11-gt.gap02-vs-05
+  base: RP-v11-gt-05
+  variant: RP-v11-gt-02
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.7
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions), so the
+    count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 / 0.2 / 0.5 s (T3):
+    the single-interval pairs carry most triggers'
+  measured: pending
+- id: P1.RP.gt-vs-sm.v10.gap01
+  base: RP-v10-sm-01
+  variant: RP-v10-gt-01
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: up
+  min_change: 0.1
+  source: 'generationTime jitters against secMark (header_jitter_ms sd 28.3, the Wyoming fit): Δt error ~40 ms adds
+    v·|e| to every pair, firing locked devices too; Wyoming 0.0 on secMark vs 214 per ID-minute on the header time,
+    Tampa 2-3x on rx (T3)'
+  measured: pending
+- id: P1.RP.v11-vs-v10.sm.gap01
+  base: RP-v10-sm-01
+  variant: RP-v11-sm-01
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.3
+  - 1.02
+  source: 'ASN.1 v1.1 judges only pairs 0.1 s apart and adds a·Δt²/2 (1 cm at 2 m/s²): a subset of v1.0''s pairs
+    with nearly the same residual; T3 v1.1 = v1.0 within 1 %'
+  measured: pending
+- id: P1.RP.gt-vs-sm.v10.gap02
+  base: RP-v10-sm-02
+  variant: RP-v10-gt-02
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: up
+  min_change: 0.1
+  source: 'generationTime jitters against secMark (header_jitter_ms sd 28.3, the Wyoming fit): Δt error ~40 ms adds
+    v·|e| to every pair, firing locked devices too; Wyoming 0.0 on secMark vs 214 per ID-minute on the header time,
+    Tampa 2-3x on rx (T3)'
+  measured: pending
+- id: P1.RP.v11-vs-v10.sm.gap02
+  base: RP-v10-sm-02
+  variant: RP-v11-sm-02
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.3
+  - 1.02
+  source: 'ASN.1 v1.1 judges only pairs 0.1 s apart and adds a·Δt²/2 (1 cm at 2 m/s²): a subset of v1.0''s pairs
+    with nearly the same residual; T3 v1.1 = v1.0 within 1 %'
+  measured: pending
+- id: P1.RP.gt-vs-sm.v10.gap05
+  base: B
+  variant: RP-v10-gt-05
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: up
+  min_change: 0.1
+  source: 'generationTime jitters against secMark (header_jitter_ms sd 28.3, the Wyoming fit): Δt error ~40 ms adds
+    v·|e| to every pair, firing locked devices too; Wyoming 0.0 on secMark vs 214 per ID-minute on the header time,
+    Tampa 2-3x on rx (T3)'
+  measured: pending
+- id: P1.RP.v11-vs-v10.sm.gap05
+  base: B
+  variant: RP-v11-sm-05
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.3
+  - 1.02
+  source: 'ASN.1 v1.1 judges only pairs 0.1 s apart and adds a·Δt²/2 (1 cm at 2 m/s²): a subset of v1.0''s pairs
+    with nearly the same residual; T3 v1.1 = v1.0 within 1 %'
+  measured: pending
+- id: P1.ST.free-zero
+  variant: B
+  area: architecture
+  measure: x.fate.attack_lost
+  expect: eq
+  value: 0
+  source: 'P1-E6 null: an attack-free run loses zero attack evidence'
+  measured: pending
+- id: P1.ST.free-none
+  variant: B
+  area: architecture
+  measure: x.fate.attack_reports
+  expect: eq
+  value: 0
+  source: the truth join names no attacker in an attack-free run
+  measured: pending
+- id: P1.ST.attack-present
+  variant: A
+  area: architecture
+  measure: x.fate.attack_reports
+  expect: ge
+  value: 1
+  source: 'the fault for the two rows above: with attackers the same measure is non-zero'
+  measured: pending
+- id: P1.ST.q0-all-lost
+  variant: Q0
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: eq
+  value: 1.0
+  source: 'P1-E6 null: a zero quota keeps no report (SM-MBR §2.2; ''0 keeps no report''), so all attack evidence
+    is lost'
+  measured: pending
+- id: P1.ST.q0-none-delivered
+  variant: Q0
+  area: architecture
+  measure: x.fate.delivered
+  expect: eq
+  value: 0
+  source: nothing is stored, so nothing is uploaded or reaches an MA
+  measured: pending
+- id: P1.ST.q0-ma-empty
+  variant: Q0
+  area: architecture
+  measure: x.ma.received
+  expect: eq
+  value: 0
+  source: the MA receives nothing
+  measured: pending
+- id: P1.ST.q4-vs-A
+  base: A
+  variant: Q4
+  area: architecture
+  measure: x.fate.evicted_quota
+  expect: up
+  min_change: 0.0
+  source: '4 reports'' room (4,500 B; a report is 1,119 B, constants.md) against 58 (64 KiB): the quota binds'
+  measured: pending
+- id: P1.ST.q2-vs-q4
+  base: Q4
+  variant: Q2
+  area: architecture
+  measure: x.fate.lost_share
+  expect: ratio
+  band:
+  - 1.0
+  - 1000000000.0
+  source: a smaller store loses at least as large a share (lowest weight first, §2.2)
+  measured: pending
+- id: P1.ST.q0-vs-q2
+  base: Q2
+  variant: Q0
+  area: architecture
+  measure: x.fate.lost_share
+  expect: ratio
+  band:
+  - 1.0
+  - 1000000000.0
+  source: zero room loses everything
+  measured: pending
+- id: P1.ST.m05-outside
+  base: A
+  variant: M05
+  area: architecture
+  measure: x.fate.sig
+  expect: identical
+  source: SM-MBR §2.2 applies the multiplier at 05:00 Eastern only; a 17:00-17:02 EDT window never sees it, so the
+    store's life is identical
+  measured: pending
+- id: P1.ST.dec-in-window
+  variant: DEC
+  area: architecture
+  measure: x.fate.decayed_out
+  expect: ge
+  value: 1
+  source: the 18:00 ET decay inside the window halves every stored weight, so with a binding quota the older reports
+    lose their place to newer ones (Fate::DecayedOut)
+  measured: pending
+- id: P1.ST.dec-m1
+  variant: DECM1
+  area: architecture
+  measure: x.fate.decayed_out
+  expect: eq
+  value: 0
+  source: 'a multiplier of 1 changes no weight: nothing is deleted for decay'
+  measured: pending
+- id: P1.ST.dec-h5
+  variant: DECH5
+  area: architecture
+  measure: x.fate.decayed_out
+  expect: eq
+  value: 0
+  source: no decay instant in the window
+  measured: pending
+- id: P1.ST.dec-m1-vs-h5
+  base: DECH5
+  variant: DECM1
+  area: architecture
+  measure: x.fate.sig
+  expect: identical
+  source: a x1 decay at 18:00 and no decay give the same store life
+  measured: pending
+- id: P1.MA.l1-sound-zero
+  variant: MAL1
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: eq
+  value: 0
+  source: 'P1-E7 null: with the free class at 0 %, every sound rule (k >= 2, theta >= 2) revokes zero honest devices'
+  measured: pending
+- id: P1.MA.l0-red
+  variant: MAL0
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: ge
+  value: 1
+  source: 'the fault for the null: every OBU free, so honest devices draw corroborated reports and some sound rule
+    blocks one'
+  measured: pending
+- id: P1.MA.l1-attackers
+  variant: MAL1
+  area: architecture
+  measure: x.ma.sound_attackers_max
+  expect: ge
+  value: 1
+  source: 'the rules are not ''revoke nothing'': some sound rule revokes an injected attacker'
+  measured: pending
+- id: P1.VR.lint
+  variant: VR
+  area: metrics
+  measure: x.vr.export_ok
+  expect: 'true'
+  source: 'the in-run leakage linter is fatal (export.rs): the run finishing with the export means it passed'
+  measured: pending
+- id: P1.VR.roundtrip
+  variant: VR
+  area: metrics
+  measure: x.vr.roundtrip_mismatch
+  expect: eq
+  value: 0
+  source: 'every type-3 line is a recorded reception of a recorded node.tx: the same claim, sender pseudonym and
+    send time'
+  measured: pending
+- id: P1.VR.lines
+  variant: VR
+  area: metrics
+  measure: x.vr.type3
+  expect: ge
+  value: 1000
+  source: a non-empty export (the round trip above cannot pass on nothing)
+  measured: pending
+- id: P1.VR.truth
+  variant: VR
+  area: metrics
+  measure: x.vr.gt_attackers_ok
+  expect: 'true'
+  source: the ground-truth file codes exactly the run's attackers' messages as ConstPos (veremi-ext code 1) and
+    every other as 0
+  measured: pending
+- id: P1.VR.leak
+  variant: VR
+  area: metrics
+  measure: x.vr.py_leaks
+  expect: eq
+  value: 0
+  source: 'an independent linter: no visible `sender` equals a true id, one `sender` per pseudonym'
+  measured: pending
+- id: P1.VR.leak-fault
+  variant: VR
+  area: metrics
+  measure: x.vr.py_leaks_injected
+  expect: ge
+  value: 1
+  source: 'the fault: one true id written into a trace''s `sender` must be caught'
+  measured: pending
+- id: P1.BF.honest-zero
+  variant: VR
+  area: metrics
+  measure: x.bf.events_honest
+  expect: eq
+  value: 0
+  source: 'TS 103 759 BeaconFrequency with BSM_J2945_1 (min gap 0.1 - 0.025 = 75 ms, 2 in a row): an honest 10 Hz
+    fleet raises none'
+  measured: pending
+- id: P1.BF.min-gap
+  variant: VR
+  area: metrics
+  measure: x.bf.min_gap_ms
+  expect: ge
+  value: 75
+  source: 'the 25 ms tolerance covers the 10 ms hand-off jitter and 15 ms of EDCA access (ts103759.rs): no honest
+    received gap under 75 ms'
+  measured: pending
+- id: P1.BF.fault
+  variant: VR
+  area: metrics
+  measure: x.bf.events_injected20hz
+  expect: ge
+  value: 1
+  source: 'the fault: one honest sender''s receptions duplicated at +50 ms (20 Hz) must fire'
+  measured: pending
+- id: P1.E4.ks
+  variant: E4
+  area: metrics
+  measure: x.e4.ks
+  expect: le
+  value: 0.092
+  source: 'P1-E4: the engine''s locked fleet matches held-out Wyoming; tolerance 0.092: the 95th percentile of the
+    KS distance between two halves of Wyoming''s 12 IDs over all 462 splits (scripts/ks.py tol), set before the
+    run; residual = v1.0 |p1+v1·Δt·u(h1)-p2|, secMark Δt, 0.5 s limit, v1 >= 10 m/s, by tools/realdata stages 3-4'
+  measured: pending
+- id: P1.E4.ks-white-noise
+  variant: E4WN
+  area: metrics
+  measure: x.e4.ks
+  expect: ge
+  value: 0.092
+  source: 'P1-E4 fault: the same tolerance row on the old white-noise GNSS (usfp.md: p50 2.65 m vs Wyoming 0.016
+    m) must be exceeded'
+  measured: pending
+- id: P1.E4.ks-free
+  variant: E4F
+  area: metrics
+  measure: x.e4.ks
+  expect: ge
+  value: 0.092
+  source: 'the class control: an all-free fleet (Tampa free p50 0.100 m, T6) must not match all-locked Wyoming'
+  measured: pending
+- id: P1.E4.locked-rate
+  variant: E4
+  area: metrics
+  measure: x.e4.rate_per_idmin
+  expect: le
+  value: 0.568
+  source: the frozen locked bound (tools/realdata/frozen/classifier-v1.json, 0.568 per ID-minute) that Wyoming passed
+  measured: pending
+- id: P1.E4.speed
+  variant: E4
+  area: metrics
+  measure: x.e4.v_p50
+  expect: band
+  band:
+  - 25.0
+  - 36.0
+  source: 'the comparison is speed-matched: Wyoming''s p5-p95 speed is 27.6-35.6 m/s'
+  measured: pending

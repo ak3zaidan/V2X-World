@@ -1,0 +1,15 @@
+# The base with 3 % constant-position attackers from 20 s (P1-E6).
+# A one-change variant (docs/design/scms-real/testing/paper1-validation.md).
+schema: v2xw/scenario/1
+meta:
+  base: p1-base.yaml
+  name: Paper 1 p1-attack
+  description: The base with 3 % constant-position attackers from 20 s (P1-E6).
+  tags: [paper1, validation]
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.03
+      schedule:
+        from_s: 20.0
+        to_s: 172800.0

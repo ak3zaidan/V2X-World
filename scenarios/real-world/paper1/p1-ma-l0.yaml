@@ -1,0 +1,12 @@
+# P1-E7 fault: p1-ma-l1.yaml with every OBU in the free timing class (locked share 0). The
+# zero-honest-revocation row of the sound rules must be able to go red here.
+schema: v2xw/scenario/1
+meta:
+  base: p1-ma-l1.yaml
+  name: Paper 1 MA replay free
+  description: The MA-replay quarter-fleet minute with every OBU in the free timing class.
+  tags: [paper1, validation, ma-replay]
+actors:
+  vehicles:
+    bsm_timing:
+      locked_share: 0.0

@@ -1,0 +1,39 @@
+# Paper 1 validation base (docs/design/scms-real/testing/paper1-validation.md): the honest
+# Midtown BSM-timing minute (../realism/bsm-timing.yaml) stretched to 120 s, with the
+# timing classes read from the real-data fit (data/calibration/bsm-timing-cvpilot.yaml,
+# written by tools/realdata) at a locked share of 0.25, the PKI view and the report
+# records on. Run from the repository root (the calibration path is relative to it).
+#
+# Every other file in this directory changes one thing against this one (or against
+# p1-attack.yaml); the expectations are crates/v2xw-engine/tests/expectations/scms-paper1.yaml.
+schema: v2xw/scenario/1
+
+meta:
+  base: ../realism/bsm-timing.yaml
+  name: Paper 1 validation base
+  description: >-
+    An honest Midtown run of 120 s with the CV-pilot-fitted BSM timing classes (25 %
+    locked), the strict US profile on secMark, the PKI view and the report records.
+  tags: [real-world, manhattan, scms, bsm-timing, paper1, validation]
+
+time:
+  duration_s: 120.0
+  fast_forward: []
+
+actors:
+  vehicles:
+    bsm_timing:
+      enabled: true
+      calibration: data/calibration/bsm-timing-cvpilot.yaml
+      locked_share: 0.25
+
+security:
+  scms:
+    pki_view: true
+    report_records: true
+
+detection:
+  local:
+    - id: detect/us-sm-mbr
+      params:
+        time_base: secmark

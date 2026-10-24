@@ -1,0 +1,12 @@
+# p1-attack with a quota of 4,500 bytes (four reports).
+# A one-change variant (docs/design/scms-real/testing/paper1-validation.md).
+schema: v2xw/scenario/1
+meta:
+  base: p1-attack.yaml
+  name: Paper 1 p1-q4
+  description: p1-attack with a quota of 4,500 bytes (four reports).
+  tags: [paper1, validation]
+security:
+  scms:
+    lifecycle:
+      report_store_quota_bytes: 4500

@@ -1,0 +1,43 @@
+# P1-E4 (research/synthesis/paper-plan-2026-10.md §1.3): the engine's RandomPosition residual
+# distribution against held-out Wyoming (CV-pilot 7qu7-j8rx, I-80 at 27-36 m/s, all 12 IDs
+# classed locked by the frozen classifier, tools/realdata/frozen/classifier-v1.json).
+#
+# The procedural six-lane highway of ../../highway-congestion.yaml (65 mph limit) at a
+# free-flow demand, so the speeds overlap Wyoming's, with:
+#   - the smoothed receiver (the realism preset: smoothing_tau_s 100, static hold 0.3 m/s);
+#   - the BSM timing model from data/calibration/bsm-timing-cvpilot.yaml (fitted on Tampa and
+#     Orem only) at a locked share of 1: Wyoming's class composition, from the frozen
+#     classifier, not from any residual;
+#   - the strict US profile on secMark, as the real-data cell was computed;
+#   - the jsonl exporter: the residuals are recomputed from node.tx by tools/realdata's own
+#     stages (pairing.py, mbrchecks.py), the same code that scored Wyoming.
+# The tolerance (KS <= 0.092) was written into scms-paper1.yaml before this ran.
+schema: v2xw/scenario/1
+meta:
+  base: ../../highway-congestion.yaml
+  name: Paper 1 E4 highway
+  description: >-
+    A free-flow 65 mph highway minute with the CV-pilot-fitted BSM timing model (locked
+    class) and a smoothed receiver: the residual distribution compared with Wyoming.
+  tags: [paper1, validation, highway, bsm-timing]
+time:
+  duration_s: 60.0
+actors:
+  vehicles:
+    demand:
+      rate_veh_per_h: 3000.0
+    gnss:
+      smoothing_tau_s: 100.0
+      static_hold_mps: 0.3
+    bsm_timing:
+      enabled: true
+      calibration: data/calibration/bsm-timing-cvpilot.yaml
+      locked_share: 1.0
+events: []
+detection:
+  local:
+    - id: detect/us-sm-mbr
+      params:
+        time_base: secmark
+exporters:
+  - id: jsonl
