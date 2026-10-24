@@ -3569,8 +3569,9 @@ impl Engine {
         self.note_node_created(id);
         self.node_class.insert(id, radio_class(class));
         self.report.nodes_created += 1;
-        // A device joins holding every provider's `t0` CRL (R-NOCRL): it was on the road
-        // before the run and fetched them within the week. Installed as a download would
+        // A device joins holding the newest list each provider had published (R-NOCRL,
+        // R-JOINCRL): every `t0` CRL for a device on the road from the start, which it
+        // fetched within the week before the run. Installed as a download would
         // be, verified by the node itself; the fetch is logged as a pre-run PDU (OF-3).
         if let Some((version, entries, secured)) =
             self.phase2.as_mut().and_then(|p| p.prerun_crl(id, now))
