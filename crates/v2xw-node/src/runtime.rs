@@ -193,6 +193,12 @@ pub enum RxDisposition {
     /// verifier: it carries no signature, and each certificate in it is validated to an
     /// installed root before it is learned (IEEE 1609.2a-2017 §8.2.4.1.1).
     P2pcdResponse,
+    /// Refused by a 1609.2 receiver rule other than revocation ([`crate::rxval::RxReject`]:
+    /// the chain to an installed root, validity, region, PSID, an overdue CRL) before its
+    /// signature was relied on. The message is `Invalid` to the applications, as before;
+    /// the rule is kept so its `node.rx` fate names it rather than reading as a forgery
+    /// (in a multi-week run, 97,679 `crl-overdue` refusals were `signature-invalid`).
+    Refused(crate::rxval::RxReject),
     /// Discarded by the IEEE 1609.2 §5.2 relevance check of its `generationTime`
     /// ([`crate::rxval::GenerationTimeWindow`]) before the verification policy: too old
     /// or too far in the future on this node's clock. Nothing was verified, and nothing
@@ -1666,10 +1672,16 @@ impl ObuRuntime {
             // The verdict is fixed now, but the applications have it only when the server
             // is done: the message waits in `verifying` until `sched.finish`.
             let message = self.to_message(&frame, meta.arrived, verdict);
+            let refusal = self
+                .security
+                .take_last_refusal()
+                .filter(|_| verdict == VerificationState::Invalid);
             let disposition =
                 if verdict == VerificationState::Unverified && self.policy.holds_unknown_signer() {
                     self.drops.record(DropCause::VerifyPolicySkip);
                     RxDisposition::UnknownSigner
+                } else if let Some(rule) = refusal {
+                    RxDisposition::Refused(rule)
                 } else {
                     RxDisposition::Delivered(verdict)
                 };
@@ -1708,6 +1720,8 @@ impl ObuRuntime {
     /// signature check, so a frame whose signature failed never reaches the CRL with an
     /// attacker-chosen i-period in hand.
     fn classify(&mut self, ctx: &mut dyn NodeCtx, frame: &RxFrame) -> VerificationState {
+        // A refusal is this frame's only if this judgement makes it.
+        let _ = self.security.take_last_refusal();
         // The revocation check reads the certificate's own `linkageData` (iCert and the
         // linkage value), out of the certificate the signature was checked against: the
         // field a linked CRL entry is matched against [1609.2 §5.1.3.4]. Nothing else

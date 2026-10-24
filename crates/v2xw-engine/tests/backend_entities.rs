@@ -355,11 +355,36 @@ fn relayed(compromised: Option<&str>) -> Scenario {
     s
 }
 
+/// The poisoning case runs on the research suite's modelled reports
+/// (`modelled_reports: 1`): under the US profile a unit holds no pseudonym certificate to
+/// sign an SM-MBR with (R-UNSEC), so its forgery is not filed at all, and that is checked
+/// on its own run. Before relayed uploads were confirmed (FB3's lost uploads) the US-profile
+/// run passed the "authority ingested" check on one report a poisoner happened to leave
+/// alone; with every relayed report delivered, every one is forged.
 #[test]
 fn a_compromised_unit_drops_or_poisons_the_reports_it_forwards() {
     let (honest, _) = run(relayed(None));
     let (suppressing, _) = run(relayed(Some("SuppressForwardedReports")));
-    let (poisoning, rec) = run(relayed(Some("PoisonForwardedReports")));
+    let mut modelled = relayed(Some("PoisonForwardedReports"));
+    if let Some(p) = modelled.security.protocol.as_mut() {
+        p.params["modelled_reports"] = json!(1);
+    }
+    let (poisoning, rec) = run(modelled);
+    let (us_poison, _) = run(relayed(Some("PoisonForwardedReports")));
+    let unsec = us_poison
+        .phase2
+        .reports_not_filed_by
+        .get("a roadside unit holds no pseudonym certificate to sign an SM-MBR with")
+        .copied()
+        .unwrap_or(0);
+    println!(
+        "US profile: {} forged, {unsec} not filed for want of a unit pseudonym, {} at the MAs",
+        us_poison.phase2.rsu_reports_poisoned, us_poison.phase2.reports_at_ma
+    );
+    assert!(
+        us_poison.phase2.rsu_reports_poisoned > 0 && unsec > 0,
+        "under the US profile a unit's forgery is not filed (R-UNSEC)"
+    );
     let (h, s, p) = (&honest.phase2, &suppressing.phase2, &poisoning.phase2);
     println!(
         "honest: {} relayed, {} at the proxy, {} revoked honest | suppress: {} dropped, {} \
@@ -755,4 +780,114 @@ fn the_ccms_lifecycle_scenario_shows_every_stage() {
     ] {
         assert!(edge(&last, a, b), "no {a} -> {b} edge");
     }
+}
+
+/// MWP.off-no-backend (testing/rerun-2026-10-22.md §7): a vehicle switched off by a
+/// timeline `outage` installs no list a roadside unit broadcasts. Its radio still decodes
+/// the frame (the node refuses it as `receiver-off`), but the CRL beside the frame was
+/// installed regardless: in the multi-week run a car parked and off from 645 s recorded
+/// three CRLs downloaded, processed and enforced at the first live step after a
+/// fast-forward. Fault that turns it red: the off-receiver return at the top of
+/// `Engine::on_app_message` removed.
+#[test]
+fn a_switched_off_vehicle_installs_no_list_a_unit_broadcasts() {
+    use v2xw_engine::scenario::schema::{TimelineItem, TimelineKind};
+    const END: f64 = 90.0;
+    let build = || {
+        let mut s = grid(END, 900.0);
+        s.security.verification_policy = "verify-all".to_string();
+        s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
+        s.threats.attackers = vec![v2xw_engine::scenario::schema::Attacker {
+            id: "threat/attacker/legacy/ConstPos".to_string(),
+            count: Some(1),
+            schedule: Some(v2xw_engine::scenario::schema::DilationWindow {
+                from_s: 5.0,
+                to_s: END,
+            }),
+            ..Default::default()
+        }];
+        cellular(&mut s);
+        lifecycle(
+            &mut s,
+            v2xw_engine::phase2::CAMP_SCMS,
+            json!({
+                "i_period_s": 30, "cert_lifetime_s": 31, "certs_per_period": 3,
+                "cert_shuffle_window_s": 1, "first_batch_delay_s": 1,
+                "download_poll_interval_s": 1, "report_shuffle_window_s": 2,
+                "crl_cadence_s": 0, "crl_fetch_interval_s": 600,
+                "crl_broadcast_interval_s": 2
+            }),
+        );
+        for x in [150.0, 450.0, 750.0, 1050.0] {
+            for y in [150.0, 450.0] {
+                s.actors.rsus.push(v2xw_engine::scenario::Rsu {
+                    site: None,
+                    position_m: Some([x, y, 0.0]),
+                    roles: vec!["crl".to_string()],
+                    profile: None,
+                    backhaul: None,
+                    backhaul_params: None,
+                });
+            }
+        }
+        s
+    };
+    let installs = |r: &MemoryRecorder, node: u64| -> Vec<u64> {
+        records(r, "proto.revocation")
+            .iter()
+            .filter(|c| c["stage"] == "downloaded" && c["node"].as_u64() == Some(node))
+            .filter_map(|c| c["t"].as_u64())
+            .collect()
+    };
+    let downloads = |r: &MemoryRecorder, node: u64| {
+        records(r, "msg.latency")
+            .iter()
+            .filter(|c| c["flow"] == "crl-download" && c["dest"].as_u64() == Some(node))
+            .count()
+    };
+    let (_, base) = run(build());
+    let tx = records(&base, "node.tx");
+    // A vehicle that installed the list from a unit's broadcast (it downloaded none) and
+    // was transmitting in the second before it did.
+    let mut candidates: Vec<(u64, u64)> = records(&base, "proto.revocation")
+        .iter()
+        .filter(|c| c["stage"] == "downloaded")
+        .filter_map(|c| Some((c["node"].as_u64()?, c["t"].as_u64()?)))
+        .filter(|(n, _)| downloads(&base, *n) == 0)
+        .collect();
+    candidates.sort_unstable();
+    candidates.dedup_by_key(|(n, _)| *n);
+    let (node, at) = candidates
+        .into_iter()
+        .find(|(n, t)| {
+            tx.iter().any(|x| {
+                x["node"].as_u64() == Some(*n)
+                    && x["t"]
+                        .as_u64()
+                        .is_some_and(|u| u + 1_000_000_000 >= *t && u + 100_000_000 <= *t)
+            })
+        })
+        .expect("a vehicle on the air installed a list from a unit's broadcast");
+    let from = (at - 100_000_000) as f64 * 1e-9;
+    let mut off = build();
+    off.events.push(TimelineItem {
+        t: from,
+        until: Some(END),
+        kind: TimelineKind::Outage,
+        params: [("target".to_string(), json!(node))].into_iter().collect(),
+    });
+    let (_, off_rec) = run(off);
+    let while_off: Vec<u64> = installs(&off_rec, node)
+        .into_iter()
+        .filter(|t| *t as f64 * 1e-9 >= from)
+        .collect();
+    println!(
+        "node {node}: installed from a unit at {:.1} s; switched off from {from:.1} s, \
+         installs while off {while_off:?}",
+        at as f64 * 1e-9
+    );
+    assert!(
+        while_off.is_empty(),
+        "a switched-off vehicle installed a broadcast list at {while_off:?}"
+    );
 }

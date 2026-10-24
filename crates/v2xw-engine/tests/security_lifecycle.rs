@@ -1080,3 +1080,131 @@ fn linkability_counts_only_links_across_a_pseudonym_change() {
         "every claim is either across a change or spurious"
     );
 }
+
+/// FB3's 268 lost uploads (06 §6 items 5 and 9): a relayed report is an upload over a
+/// unit's IP service, so it counts as uploaded only once a `report-forward` unit takes it
+/// onto its backhaul, and one no unit takes stays in the device's store and goes again on
+/// a doubling timer (RFC 6298: 1 s, up to 64 s). Before this every report put on the air
+/// within the geometric `relay_range_m` was counted and dropped, heard or not: relay
+/// upload counts were an upper bound, and a report no unit decoded was lost.
+///
+/// Every relayed upload counted is a vehicle report at the proxy (on `e15bfec1`: 89
+/// counted, 57 at the proxy), and the reports no unit took went on the air again, but not
+/// every step. Faults that turn it red: counting
+/// the upload when it is handed to the radio (`Engine::relay_report`), or dropping it from
+/// the store there; `Phase2::relay_may_send` always true (a report on the air every
+/// 100 ms).
+#[test]
+fn a_relayed_report_is_uploaded_only_once_a_unit_takes_it() {
+    let base = |backhaul: Option<&str>| {
+        let mut s = grid(60.0, 900.0);
+        s.security.verification_policy = "verify-all".to_string();
+        s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
+        s.threats.attackers = vec![v2xw_engine::scenario::schema::Attacker {
+            id: "threat/attacker/legacy/ConstPos".to_string(),
+            count: Some(1),
+            schedule: Some(v2xw_engine::scenario::schema::DilationWindow {
+                from_s: 5.0,
+                to_s: 60.0,
+            }),
+            ..Default::default()
+        }];
+        lifecycle(&mut s, json!({"report_shuffle_window_s": 1}));
+        for x in [150.0, 450.0, 750.0, 1050.0] {
+            for y in [150.0, 450.0] {
+                s.actors.rsus.push(v2xw_engine::scenario::Rsu {
+                    site: None,
+                    position_m: Some([x, y, 0.0]),
+                    roles: vec!["report-forward".to_string()],
+                    profile: None,
+                    backhaul: backhaul.map(str::to_string),
+                    backhaul_params: None,
+                });
+            }
+        }
+        s
+    };
+    let at_proxy = |r: &RunReport| {
+        let p = &r.phase2;
+        p.access
+            .exchange_latency
+            .get("report-relay")
+            .map_or(0, |e| e.count)
+            .saturating_sub(p.reports_from_rsus)
+    };
+    let mut with_fates = base(None);
+    with_fates
+        .security
+        .scms
+        .get_or_insert_with(Default::default)
+        .report_records = Some(true);
+    let (connected, rec) = run(with_fates);
+    let p = &connected.phase2;
+    let frames = records(&rec, "node.tx")
+        .iter()
+        .filter(|r| r["msg_type"] == "mbr")
+        .count() as u64;
+    let reports = p.reports_uploaded_relay + p.reports_unsent;
+    println!(
+        "{} relayed, {} vehicle reports at the proxy through a unit, {} held; {frames} report \
+         frames on the air",
+        p.reports_uploaded_relay,
+        at_proxy(&connected),
+        p.reports_unsent
+    );
+    assert!(p.reports_uploaded_relay > 0, "nothing was relayed");
+    assert_eq!(
+        p.reports_uploaded_relay,
+        at_proxy(&connected),
+        "a relayed upload counted that never reached the proxy"
+    );
+    assert!(
+        frames > p.reports_uploaded_relay,
+        "no report a unit did not take went on the air again"
+    );
+    assert!(
+        frames <= 8 * reports,
+        "{frames} frames for {reports} reports: retried faster than the doubling timer"
+    );
+    // The timer: a vehicle puts reports on the air again less than the first 1 s timeout
+    // after its last relayed look only when a unit confirmed one of them in between.
+    let mut looks: BTreeMap<u64, BTreeSet<u64>> = BTreeMap::new();
+    for r in records(&rec, "node.tx") {
+        if r["msg_type"] == "mbr"
+            && let (Some(n), Some(t)) = (r["node"].as_u64(), r["t"].as_u64())
+        {
+            looks.entry(n).or_default().insert(t / 100_000_000);
+        }
+    }
+    let mut acks: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+    for f in records(&rec, "pki.report_fate") {
+        if f["fate"] == "uploaded"
+            && let (Some(n), Some(t)) = (f["reporter"].as_u64(), f["t"].as_u64())
+        {
+            acks.entry(n).or_default().push(t);
+        }
+    }
+    let early: Vec<(u64, u64, u64)> = looks
+        .iter()
+        .flat_map(|(n, ls)| {
+            let ls: Vec<u64> = ls.iter().copied().collect();
+            let confirmed = acks.get(n).cloned().unwrap_or_default();
+            ls.windows(2)
+                .filter(|w| w[1] - w[0] < 10)
+                .filter(|w| {
+                    !confirmed
+                        .iter()
+                        .any(|t| *t >= w[0] * 100_000_000 && *t < w[1] * 100_000_000)
+                })
+                .map(|w| (*n, w[0], w[1]))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    println!("{} acks recorded; {} early retries", acks.values().map(Vec::len).sum::<usize>(), early.len());
+    assert!(
+        early.is_empty(),
+        "{} unconfirmed retries inside the first timeout, e.g. (node, step, step) {:?}",
+        early.len(),
+        &early[..early.len().min(3)]
+    );
+}

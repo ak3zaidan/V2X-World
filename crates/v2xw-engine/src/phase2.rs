@@ -1461,7 +1461,22 @@ struct NodeSec {
     /// as a parked car with its OBU powered down. Its timers keep their due times, so it
     /// catches up at its first backend step after power returns.
     powered_off: bool,
+    /// The relay upload's retransmission timer: no report goes on the air to a unit
+    /// before it, unless in the same look as the attempt that armed it.
+    relay_retry_at: SimTime,
+    /// The look (backend step) of the last relayed attempt.
+    relay_look_at: Option<SimTime>,
+    /// Consecutive relayed looks no unit confirmed: the timer doubles with each.
+    relay_unacked: u32,
 }
+
+/// RFC 6298 §2.1: a TCP sender's first retransmission timeout, 1 s. A relayed report is
+/// an upload over the unit's IP service, so an unconfirmed one goes again after it.
+const RELAY_RTO_INITIAL: Duration = Duration::from_secs(1);
+
+/// RFC 6298 §2.5: the timeout doubles per unconfirmed attempt up to a maximum of at least
+/// 60 s; 64 s here (six doublings).
+const RELAY_RTO_MAX_DOUBLINGS: u32 = 6;
 
 /// Counters the run report carries for this path.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
@@ -1522,7 +1537,11 @@ pub struct Phase2Report {
     pub reports_sent: u64,
     /// Of those, uploaded over a cellular modem.
     pub reports_uploaded_cellular: u64,
-    /// Of those, put on the air to a relaying roadside unit.
+    /// Of those, delivered through a relaying roadside unit: put on the air and taken
+    /// onto a `report-forward` unit's backhaul. A relayed report no unit decodes stays in
+    /// the device's store and goes again (the upload is TCP over the unit's IP service,
+    /// confirmed or retried, [SM-MBR] §2.2). Before this it counted every report put on
+    /// the air within the geometric `relay_range_m`, heard or not, and dropped it.
     pub reports_uploaded_relay: u64,
     /// Reports roadside units filed themselves, straight onto their backhaul.
     pub reports_from_rsus: u64,
@@ -4716,6 +4735,49 @@ impl Phase2 {
         }
     }
 
+    /// Whether `node` may put a stored report on the air to a relaying unit at `now`: its
+    /// retransmission timer has run out, or this is the look that armed it (every stored
+    /// report goes in the same look).
+    #[must_use]
+    pub fn relay_may_send(&self, node: NodeId, now: SimTime) -> bool {
+        self.nodes
+            .get(&node)
+            .is_none_or(|n| n.relay_look_at == Some(now) || now >= n.relay_retry_at)
+    }
+
+    /// `node` put a report on the air to a relaying unit at `now`: the first such attempt
+    /// of a look arms the retransmission timer, doubled for each look no unit confirmed.
+    pub fn note_relay_sent(&mut self, node: NodeId, now: SimTime) {
+        if let Some(n) = self.nodes.get_mut(&node)
+            && n.relay_look_at != Some(now)
+        {
+            n.relay_look_at = Some(now);
+            let rto = RELAY_RTO_INITIAL
+                .as_nanos()
+                .saturating_mul(1u64 << n.relay_unacked.min(RELAY_RTO_MAX_DOUBLINGS));
+            n.relay_retry_at = now.saturating_add(rto);
+            n.relay_unacked = n.relay_unacked.saturating_add(1);
+        }
+    }
+
+    /// A `report-forward` unit took `report_id` from `node` onto its backhaul at `now`:
+    /// the upload is confirmed, so the report leaves the device's store and counts as
+    /// relayed (`pki.report_fate` `uploaded`). `false` when the store no longer holds it.
+    pub fn relay_delivered(&mut self, node: NodeId, report_id: &str, now: SimTime) -> bool {
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return false;
+        };
+        n.relay_unacked = 0;
+        n.relay_retry_at = 0;
+        let Some(e) = n.outbox.0.remove_where(|(r, _)| r.report_id == report_id) else {
+            return false;
+        };
+        n.reports_uploaded += 1;
+        self.report.reports_uploaded_relay += 1;
+        self.log_fate(now, node, &e.item.0, Fate::Uploaded, None);
+        true
+    }
+
     /// Counts a relayed report the network layer refused at its MTU (R-PQMBR): it never
     /// went on the air, so it is not an upload.
     pub fn note_report_refused_mtu(&mut self) {
@@ -6931,6 +6993,14 @@ impl Phase2 {
         if let Some(n) = self.nodes.get_mut(&node)
             && cellular
         {
+            n.crl_fetch_in_flight = false;
+        }
+    }
+
+    /// A CRL download reached a device that was switched off after it asked: nothing was
+    /// received, and the device polls again once it is back on.
+    pub fn crl_download_unreceived(&mut self, node: NodeId) {
+        if let Some(n) = self.nodes.get_mut(&node) {
             n.crl_fetch_in_flight = false;
         }
     }

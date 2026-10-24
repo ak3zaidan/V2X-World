@@ -381,8 +381,15 @@ pub fn build_vru_device(
             )
         }))
     };
+    // The scenario's signature scheme, as a vehicle's (`wiring::build_obu`): a handset
+    // used to sign and verify at the ECDSA P-256 price whatever `security.signature` said.
+    let (sign_op, verify_op) =
+        v2xw_node::profile::signature_ops(crate::signature::message_signature(scenario));
     let config = VruConfig {
         kind: VruDeviceKind::Handset,
+        sign_op,
+        verify_op,
+        cert_verify_op: crate::signature::certificate_pq_verify_op(scenario),
         services: vru_services(scenario),
         crypto_mode: crate::wiring::crypto_mode(scenario),
         wall: env.wall,

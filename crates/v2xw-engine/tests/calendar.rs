@@ -689,3 +689,79 @@ fn the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed() {
         );
     }
 }
+
+/// R-FFWIN (testing/full-bench.md §4): a metric window that reaches a fast-forward is
+/// reported where the fast-forward begins, with its own rates; the frozen span is a window
+/// of its own, reported where it ends; and the live window after it runs to the next period
+/// boundary. Period 10 s, fast-forward [25, 45] s, 60 s: samples at 10, 20, 25, 45, 50
+/// and 60 s, `mac.cbr` spans of 10, 10, 5, 20, 5 and 10 s, and the live windows' BSM
+/// verification rate is the same per second whatever their length.
+///
+/// Before the fix the 20-25 s window was flushed only at 50 s, over 30 s of which 20 were
+/// frozen: the benchmark's 230-240 s window was reported at 43,170 s with `verify_rate`
+/// 115.7/s against 4.85e5/s live. Faults that turn it red: `Engine::next_metric_flush`
+/// without the fast-forward start (no sample at 25 s), returning the boundary after the
+/// window's end (no sample at 45 s), or `emit_mac_reports` spanning the period.
+#[test]
+fn a_metric_window_that_reaches_a_fast_forward_is_reported_at_its_own_end() {
+    use v2xw_metrics::MetricSample;
+    let mut s = with_scms(crawling_fleet(3, 60.0, 0.3), json!({}));
+    s.time.t0 = "2026-10-20T08:55:00Z".into();
+    s.time.metric_period_s = Some(10.0);
+    s.time.fast_forward = vec![DilationWindow {
+        from_s: 25.0,
+        to_s: 45.0,
+    }];
+    assert!(errors_at(&s).is_empty(), "{:?}", errors_at(&s));
+    let mut engine = Engine::build(s, "").expect("builds");
+    let mut rec = MemoryRecorder::new();
+    engine.run(&mut rec).expect("runs");
+    let samples: Vec<MetricSample> = rec
+        .records()
+        .iter()
+        .filter(|(_, r)| r.channel == "metric.sample")
+        .map(|(_, r)| serde_json::from_slice(&r.json).expect("a metric sample decodes"))
+        .collect();
+    let s_ = |t: u64| t * 1_000_000_000;
+    let instants: BTreeSet<u64> = samples.iter().map(|m| m.t).collect();
+    assert_eq!(
+        instants,
+        [10, 20, 25, 45, 50, 60].into_iter().map(s_).collect(),
+        "metric windows close at"
+    );
+    let mut spans: Vec<(u64, u64)> = rec
+        .records()
+        .iter()
+        .filter(|(_, r)| r.channel == "mac.cbr")
+        .filter_map(|(t, r)| {
+            let v: serde_json::Value = serde_json::from_slice(&r.json).ok()?;
+            Some((*t, v["span_ns"].as_u64()?))
+        })
+        .collect();
+    spans.sort_unstable();
+    spans.dedup();
+    assert_eq!(
+        spans,
+        [(10, 10), (20, 10), (25, 5), (45, 20), (50, 5), (60, 10)]
+            .into_iter()
+            .map(|(t, d)| (s_(t), s_(d)))
+            .collect::<Vec<_>>(),
+        "mac.cbr windows (end, span)"
+    );
+    let rate = |t: u64| {
+        samples
+            .iter()
+            .filter(|m| m.t == s_(t) && m.metric == "verify_rate")
+            .filter_map(|m| m.value.point())
+            .sum::<f64>()
+    };
+    let (full, cut, after) = (rate(20), rate(25), rate(50));
+    println!("verify_rate: 10-20 s {full:.1}/s, 20-25 s {cut:.1}/s, 45-50 s {after:.1}/s");
+    assert!(full > 0.0, "no verification in a live window");
+    for (what, r) in [("20-25 s", cut), ("45-50 s", after)] {
+        assert!(
+            (r / full - 1.0).abs() < 0.35,
+            "the {what} window's rate {r:.1}/s is not the live rate {full:.1}/s"
+        );
+    }
+}

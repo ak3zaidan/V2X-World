@@ -1223,3 +1223,130 @@ fn a_configured_overdue_tolerance_moves_the_refusal() {
     );
     assert_eq!(refused(&strict, "crl-overdue"), 1);
 }
+
+/// Rerun §9 item 3: a message a 1609.2 receiver rule refused is reported as that rule, not
+/// as a bad signature. The security stack keeps the rule of its last refusal for the node
+/// to read once, and the handset's report on the frame carries it
+/// (`RxDisposition::Refused`), so `node.rx` names a stale list `crl-overdue` where it read
+/// `signature-invalid` (97,679 of them in a multi-week run). Faults that turn it red:
+/// `NodeSecurity`'s signer validation not keeping the rule, or `VruDeviceRuntime`'s booking
+/// reporting `Delivered(Invalid)` regardless.
+#[test]
+fn a_receiver_rule_refusal_is_reported_as_the_rule_not_as_a_bad_signature() {
+    use v2xw_node::runtime::RxDisposition;
+    use v2xw_node::vru::{VruConfig, VruDeviceRuntime, VruServices};
+    let pki = pki();
+    let bytes = linkage_crl(&pki, &[], t0());
+    let at = u64::from(WEEK + 86_400 + 60);
+    let renewed = pseudonym(&pki, &pki.aca, 13, |s| {
+        s.valid_from = t0() + WEEK + 86_400;
+    });
+    let mut strict = trusted(CryptoMode::Real, &pki);
+    strict.trust_mut().set_overdue_crl_tolerance(86_400);
+    strict.verify_secured_crl(&bytes, 5 * NS_PER_S).unwrap();
+    assert_eq!(
+        receive(&mut strict, &bsm(CryptoMode::Real, &renewed, at, None), at),
+        SpduVerdict::Refused
+    );
+    assert_eq!(strict.take_last_refusal(), Some(RxReject::CrlOverdue));
+    assert_eq!(strict.take_last_refusal(), None, "the rule is read once");
+
+    // A handset under a root its CTL dropped: the frame's report names the chain rule.
+    let other = ScmsPki::new(8, t0() - 31_556_952).unwrap();
+    let (trusted_key, _, roots, cas) = sized_fallback_cases(&pki, &other);
+    let mut rx = VruDeviceRuntime::new(
+        v2xw_core::ids::NodeId::new(3),
+        v2xw_node::profiles::get(v2xw_node::profiles::GENERIC_VRU_DEVICE)
+            .expect("the shipped VRU-device profile")
+            .clone(),
+        VruConfig {
+            services: VruServices::SAE,
+            wall: wall(),
+            ..VruConfig::default()
+        },
+        0,
+    );
+    rx.stores_mut().crl.set_period(0);
+    rx.set_belief(fix());
+    rx.security_mut().install_trust(&roots, &cas);
+    let gone = vec![Arc::new(other.root.cert.clone())];
+    assert_eq!(rx.security_mut().apply_ctl(&gone, &[]), (1, 1));
+    let reg = RngRegistry::new(62);
+    let mut reports = Vec::new();
+    for k in 0..300u64 {
+        let mut ctx = NodeRuntimeCtx::new(10 * NS_PER_S + k * 10_000_000, &reg);
+        let inbox = if k == 0 {
+            vec![sized_frame(&trusted_key, MsgType::Cam)]
+        } else {
+            Vec::new()
+        };
+        reports.extend(rx.step(&mut ctx, inbox, 0.0).rx_reports);
+    }
+    let dispositions: Vec<RxDisposition> = reports.iter().map(|r| r.disposition).collect();
+    println!("{dispositions:?}");
+    assert_eq!(dispositions.len(), 1, "one report for the one frame");
+    assert!(
+        matches!(dispositions[0], RxDisposition::Refused(r) if r.name() == "chain-untrusted-root"),
+        "the refused frame was reported as {:?}",
+        dispositions[0]
+    );
+}
+
+/// R-CCSIG on a VRU handset (06 §6 item 11): in the Partially-Hybrid mode a handset checks
+/// the issuer's post-quantum signature once on each certificate it learns, as a vehicle
+/// does (`VruConfig::cert_verify_op`), and the check is charged to the frame's
+/// verification. Before this a handset priced only the classical message check. Fault that
+/// turns it red: `VruDeviceRuntime::learn_or_request` not counting the learned
+/// certificate.
+#[test]
+fn a_vru_handset_checks_each_learned_certificate_once_in_the_partially_hybrid_mode() {
+    use v2xw_node::vru::{VruConfig, VruDeviceRuntime, VruServices};
+    let pki = pki();
+    let other = ScmsPki::new(8, t0() - 31_556_952).unwrap();
+    let (trusted_key, _, roots, cas) = sized_fallback_cases(&pki, &other);
+    let checks = |op: Option<&'static str>| {
+        let mut rx = VruDeviceRuntime::new(
+            v2xw_core::ids::NodeId::new(3),
+            v2xw_node::profiles::get(v2xw_node::profiles::GENERIC_VRU_DEVICE)
+                .expect("the shipped VRU-device profile")
+                .clone(),
+            VruConfig {
+                services: VruServices::SAE,
+                wall: wall(),
+                cert_verify_op: op,
+                ..VruConfig::default()
+            },
+            0,
+        );
+        rx.stores_mut().crl.set_period(0);
+        rx.set_belief(fix());
+        rx.security_mut().install_trust(&roots, &cas);
+        let reg = RngRegistry::new(62);
+        let mut charged = Vec::new();
+        for k in 0..300u64 {
+            let mut ctx = NodeRuntimeCtx::new(10 * NS_PER_S + k * 10_000_000, &reg);
+            // The same signer twice with its certificate: learned once, checked once.
+            let inbox = if k == 0 || k == 150 {
+                vec![sized_frame(&trusted_key, MsgType::Cam)]
+            } else {
+                Vec::new()
+            };
+            charged.extend(
+                rx.step(&mut ctx, inbox, 0.0)
+                    .rx_reports
+                    .iter()
+                    .filter_map(|r| Some(r.verify_done? - r.verify_start?)),
+            );
+        }
+        (rx.security().trust().stats.cert_pq_verifications, charged)
+    };
+    let (none, plain) = checks(None);
+    let (once, hybrid) = checks(Some("ecdsa-p256-verify"));
+    println!("checks {none} / {once}; service times {plain:?} / {hybrid:?}");
+    assert_eq!(none, 0, "a check outside the Partially-Hybrid mode");
+    assert_eq!(once, 1, "each learned certificate is checked once");
+    assert!(
+        hybrid.first() > plain.first(),
+        "the certificate check was not charged to the frame's verification"
+    );
+}

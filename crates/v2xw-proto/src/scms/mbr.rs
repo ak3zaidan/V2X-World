@@ -1027,6 +1027,13 @@ impl<T> MbrQueue<T> {
         v
     }
 
+    /// Deletes the stored report `pick` selects, its upload now confirmed ([SM-MBR] §2.2),
+    /// returning it whole; `None` when none matches. The others keep their order.
+    pub fn remove_where(&mut self, pick: impl Fn(&T) -> bool) -> Option<QueuedReport<T>> {
+        let i = self.entries.iter().position(|e| pick(&e.item))?;
+        Some(self.entries.remove(i))
+    }
+
     /// Deletes unsent reports older than [`Self::max_age_s`], returning them whole.
     pub fn expire_entries(&mut self, now_unix: i64) -> Vec<QueuedReport<T>> {
         let max = self.max_age_s;
