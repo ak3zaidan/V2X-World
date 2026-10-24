@@ -207,6 +207,18 @@ citation given.
 Suggested order: P1 → P2 → P3 → P4 (all small, and they unblock honest comparison) → P12 → P5,
 P6, P7 → P8, P9 → P10, P11.
 
+**Status (WP-02, 2026-10-23): P1 and P9 are done** in `crates/v2xw-threat/src/ts103759.rs`.
+The beacon thresholds come from a `BeaconProfile` (`bsm-j2945-1` by default,
+`cam-en302637-2`, and `f2md-veremi-1hz` for comparison runs, which reproduces 0.9 / 3.1 /
+2.1 s). The windows scale with the profile's *longest* conforming interval rather than the
+nominal one, so a J2945/1 sender stretched by congestion control towards `vMaxITT` is still
+compared. The acceptance range is a per-environment table derived from `v2xw-radio`
+(04-models.md §14 gives the numbers); under TR 37.885's urban LOS law it is about 42 km, so
+range plausibility does almost nothing in cities, and the card says so. The suite is still
+not selectable in `detection.local` (the engine ships `detect/legacy-12` and
+`detect/us-sm-mbr`), so these settings reach it through `Ts103759Params::apply`, not through
+the scenario yet.
+
 ## 6. What the engine does that F2MD cannot
 
 - **A real security envelope.** IEEE 1609.2 / TS 103 097 signatures, SCMS certificate chains,

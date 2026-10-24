@@ -200,6 +200,6 @@ pub use records::{
 pub use report::{CertValidity, Evidence, ForgeryProfile, MisbehaviourReport, forge};
 pub use resolve::{Authority, Case, CaseOutcome, ResolutionParams, TwoAuthorityResolution};
 pub use ts103759::{
-    CrossCheckInputs, ObservationClass, Ts103759Check, Ts103759Params, Ts103759Suite,
-    TsObservation, TsVerdict,
+    AcceptanceRanges, BeaconProfile, CrossCheckInputs, ObservationClass, RadioEnvironment,
+    Ts103759Check, Ts103759Params, Ts103759Suite, TsObservation, TsVerdict,
 };

@@ -373,9 +373,17 @@ impl TsVerdict {
 /// Everything the suite compares against. Every default is cited to 04-models.md §14.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ts103759Params {
-    /// The furthest a claim can plausibly be from the receiver, metres (F2MD
-    /// `MAX_PLAUSIBLE_RANGE`, 420).
-    pub max_plausible_range_m: f64,
+    /// An explicit acceptance range (ART), metres: the furthest a claim can plausibly be
+    /// from the receiver. `None`, the default, uses [`Ts103759Params::acceptance_ranges`]
+    /// for [`Ts103759Params::environment`] — the range derived from this engine's own
+    /// link budget (F2MD's `MAX_PLAUSIBLE_RANGE` 420 m is Veins' 20 mW radio, not ours;
+    /// docs/design/frameworks/f2md.md §5 P9). [`Ts103759Params::art_m`] is the value in
+    /// force.
+    pub max_plausible_range_m: Option<f64>,
+    /// The receiver's propagation environment, which selects the acceptance range.
+    pub environment: RadioEnvironment,
+    /// The acceptance range per environment, metres ([`AcceptanceRanges::DERIVED`]).
+    pub acceptance_ranges: AcceptanceRanges,
     /// The fastest a vehicle plausibly goes, m/s (F2MD `MIN_MAX_SPEED`, 40).
     pub max_plausible_speed_mps: f64,
     /// The hardest a vehicle plausibly accelerates, m/s² (F2MD `MIN_MAX_ACCEL`, 3).
@@ -387,9 +395,15 @@ pub struct Ts103759Params {
     pub max_confidence_m: f64,
     /// The largest conforming payload, bytes (04-models.md §4.6, maximum MSDU 2 304).
     pub max_payload_bytes: u32,
-    /// The longest interval the consistency checks will compare across, seconds (F2MD
-    /// `MAX_TIME_DELTA`, 3.1).
-    pub max_time_delta_s: f64,
+    /// The message profile the beacon-timing thresholds are taken from: the shortest
+    /// and longest conforming interval and the jitter tolerance
+    /// ([`BeaconProfile::BSM_J2945_1`] unless set).
+    pub beacon_profile: BeaconProfile,
+    /// An explicit longest interval the consistency checks will compare across, seconds.
+    /// `None`, the default, is [`MAX_TIME_DELTA_INTERVALS`] (F2MD `MAX_TIME_DELTA` 3.1 s
+    /// at 1 Hz, re-expressed in intervals) times the profile's longest conforming
+    /// interval; [`Ts103759Params::time_delta_s`] is the value in force.
+    pub max_time_delta_s: Option<f64>,
     /// The consistency margin, metres (F2MD `MAX_MGT_RNG`, 4).
     pub mgt_rng_m: f64,
     /// The margin on a claimed speed increase, m/s per second (F2MD `MAX_MGT_RNG_UP`,
@@ -403,12 +417,18 @@ pub struct Ts103759Params {
     /// The interval within which the heading check compares, seconds (F2MD
     /// `POS_HEADING_TIME`, 1.1).
     pub pos_heading_time_s: f64,
-    /// The minimum conforming inter-beacon time, seconds (F2MD
-    /// `MAX_BEACON_FREQUENCY`, 0.9).
-    pub min_beacon_interval_s: f64,
-    /// How long a first sighting still counts as sudden, seconds (F2MD `MAX_SA_TIME`,
-    /// 2.1).
-    pub max_sa_time_s: f64,
+    /// An explicit minimum conforming inter-beacon time, seconds. `None`, the default, is
+    /// the profile's shortest conforming interval less its jitter tolerance
+    /// ([`BeaconProfile::min_beacon_interval_s`]): 75 ms for a BSM. F2MD's
+    /// `MAX_BEACON_FREQUENCY` 0.9 s is the same rule for a 1 Hz VeReMi beacon, and taken
+    /// as it stands it flags every honest 10 Hz BSM sender (f2md.md §5 P1).
+    /// [`Ts103759Params::min_interval_s`] is the value in force.
+    pub min_beacon_interval_s: Option<f64>,
+    /// An explicit time a receiver must have listened before a first sighting counts as
+    /// sudden, seconds. `None`, the default, is [`MAX_SA_TIME_INTERVALS`] (F2MD
+    /// `MAX_SA_TIME` 2.1 s at 1 Hz) times the profile's longest conforming interval;
+    /// [`Ts103759Params::sa_time_s`] is the value in force.
+    pub max_sa_time_s: Option<f64>,
     /// The furthest a sudden appearance is considered at all, metres (F2MD
     /// `MAX_SA_RANGE`, 420).
     pub max_sa_range_m: f64,
@@ -447,20 +467,23 @@ pub struct Ts103759Params {
 impl Default for Ts103759Params {
     fn default() -> Self {
         Self {
-            max_plausible_range_m: 420.0,
+            max_plausible_range_m: None,
+            environment: RadioEnvironment::Highway,
+            acceptance_ranges: AcceptanceRanges::DERIVED,
             max_plausible_speed_mps: 40.0,
             max_plausible_accel_mps2: 3.0,
             max_plausible_decel_mps2: 4.5,
             max_confidence_m: 10.0,
             max_payload_bytes: crate::attack::MAX_MSDU_BYTES,
-            max_time_delta_s: 3.1,
+            beacon_profile: BeaconProfile::BSM_J2945_1,
+            max_time_delta_s: None,
             mgt_rng_m: 4.0,
             mgt_rng_up_mps: 2.1,
             mgt_rng_down_mps: 6.2,
             max_heading_change_deg: 90.0,
             pos_heading_time_s: 1.1,
-            min_beacon_interval_s: 0.9,
-            max_sa_time_s: 2.1,
+            min_beacon_interval_s: None,
+            max_sa_time_s: None,
             max_sa_range_m: 420.0,
             sudden_appearance_m: 30.0,
             max_distance_from_route_m: 2.0,
@@ -473,6 +496,398 @@ impl Default for Ts103759Params {
             min_consecutive: 2,
             cpm_unmatched_fraction: 1.0,
             own_region: None,
+        }
+    }
+}
+
+impl Ts103759Params {
+    /// The cited defaults for a receiver in `env` whose neighbours send `profile`.
+    #[must_use]
+    pub fn for_link(env: RadioEnvironment, profile: BeaconProfile) -> Self {
+        Self::default()
+            .with_environment(env)
+            .with_beacon_profile(profile)
+    }
+
+    /// The same thresholds for a receiver in another propagation environment.
+    #[must_use]
+    pub fn with_environment(mut self, env: RadioEnvironment) -> Self {
+        self.environment = env;
+        self
+    }
+
+    /// The same thresholds with the beacon timing of another message profile.
+    #[must_use]
+    pub fn with_beacon_profile(mut self, profile: BeaconProfile) -> Self {
+        self.beacon_profile = profile;
+        self
+    }
+
+    /// The acceptance range in force, metres: the explicit `max_plausible_range_m`, or
+    /// the derived range for this receiver's environment.
+    #[must_use]
+    pub fn art_m(&self) -> f64 {
+        self.max_plausible_range_m
+            .unwrap_or_else(|| self.acceptance_ranges.get(self.environment))
+    }
+
+    /// The minimum conforming inter-beacon time in force, seconds.
+    #[must_use]
+    pub fn min_interval_s(&self) -> f64 {
+        self.min_beacon_interval_s
+            .unwrap_or_else(|| self.beacon_profile.min_beacon_interval_s())
+    }
+
+    /// The longest interval the consistency checks compare across, in force, seconds.
+    #[must_use]
+    pub fn time_delta_s(&self) -> f64 {
+        self.max_time_delta_s
+            .unwrap_or_else(|| self.beacon_profile.max_time_delta_s())
+    }
+
+    /// The listening time before a first sighting counts as sudden, in force, seconds.
+    #[must_use]
+    pub fn sa_time_s(&self) -> f64 {
+        self.max_sa_time_s
+            .unwrap_or_else(|| self.beacon_profile.max_sa_time_s())
+    }
+
+    /// Sets one numeric parameter by name, the way `detection.local[].params` reaches a
+    /// suite (as [`crate::us_mbr::UsMbrParams::apply`] does); false for a name the suite
+    /// does not read. The keys are order-independent: an explicit threshold
+    /// (`max_plausible_range_m`, `min_beacon_interval_s`, `max_time_delta_s`,
+    /// `max_sa_time_s`) wins over the derived one whatever order the keys arrive in, and
+    /// the `art_*_m` and `beacon_*` keys change what the derivation starts from.
+    pub fn apply(&mut self, key: &str, v: f64) -> bool {
+        match key {
+            "max_plausible_range_m" => self.max_plausible_range_m = Some(v),
+            "art_highway_m" => self.acceptance_ranges.highway_m = v,
+            "art_rural_m" => self.acceptance_ranges.rural_m = v,
+            "art_suburban_m" => self.acceptance_ranges.suburban_m = v,
+            "art_urban_m" => self.acceptance_ranges.urban_m = v,
+            "beacon_min_interval_s" => self.beacon_profile.min_interval_s = v,
+            "beacon_max_interval_s" => self.beacon_profile.max_interval_s = v,
+            "beacon_jitter_tolerance_s" => self.beacon_profile.jitter_tolerance_s = v,
+            "min_beacon_interval_s" => self.min_beacon_interval_s = Some(v),
+            "max_time_delta_s" => self.max_time_delta_s = Some(v),
+            "max_sa_time_s" => self.max_sa_time_s = Some(v),
+            "max_plausible_speed_mps" => self.max_plausible_speed_mps = v,
+            "max_plausible_accel_mps2" => self.max_plausible_accel_mps2 = v,
+            "max_plausible_decel_mps2" => self.max_plausible_decel_mps2 = v,
+            "max_confidence_m" => self.max_confidence_m = v,
+            "mgt_rng_m" => self.mgt_rng_m = v,
+            "mgt_rng_up_mps" => self.mgt_rng_up_mps = v,
+            "mgt_rng_down_mps" => self.mgt_rng_down_mps = v,
+            "max_heading_change_deg" => self.max_heading_change_deg = v,
+            "pos_heading_time_s" => self.pos_heading_time_s = v,
+            "max_sa_range_m" => self.max_sa_range_m = v,
+            "sudden_appearance_m" => self.sudden_appearance_m = v,
+            "max_distance_from_route_m" => self.max_distance_from_route_m = v,
+            "proximity_distance_m" => self.proximity_distance_m = v,
+            "proximity_range_l_m" => self.proximity_range_l_m = v,
+            "max_delta_inter_s" => self.max_delta_inter_s = v,
+            "z_threshold" => self.z_threshold = v,
+            "gate_floor_m" => self.gate_floor_m = v,
+            "hard_fail_score" => self.hard_fail_score = v,
+            "cpm_unmatched_fraction" => self.cpm_unmatched_fraction = v,
+            // Counts: rounded, and saturating at the type's bounds.
+            "min_consecutive" => self.min_consecutive = v.round() as u32,
+            "max_payload_bytes" => self.max_payload_bytes = v.round() as u32,
+            _ => return false,
+        }
+        true
+    }
+}
+
+/// Every key [`Ts103759Params::apply`] reads.
+pub const PARAM_KEYS: [&str; 32] = [
+    "max_plausible_range_m",
+    "art_highway_m",
+    "art_rural_m",
+    "art_suburban_m",
+    "art_urban_m",
+    "beacon_min_interval_s",
+    "beacon_max_interval_s",
+    "beacon_jitter_tolerance_s",
+    "min_beacon_interval_s",
+    "max_time_delta_s",
+    "max_sa_time_s",
+    "max_plausible_speed_mps",
+    "max_plausible_accel_mps2",
+    "max_plausible_decel_mps2",
+    "max_confidence_m",
+    "mgt_rng_m",
+    "mgt_rng_up_mps",
+    "mgt_rng_down_mps",
+    "max_heading_change_deg",
+    "pos_heading_time_s",
+    "max_sa_range_m",
+    "sudden_appearance_m",
+    "max_distance_from_route_m",
+    "proximity_distance_m",
+    "proximity_range_l_m",
+    "max_delta_inter_s",
+    "z_threshold",
+    "gate_floor_m",
+    "hard_fail_score",
+    "cpm_unmatched_fraction",
+    "min_consecutive",
+    "max_payload_bytes",
+];
+
+// ---------------------------------------------------------------------------------------
+// Beacon timing from the message profile (docs/design/frameworks/f2md.md §5 P1)
+// ---------------------------------------------------------------------------------------
+
+/// F2MD's `MAX_TIME_DELTA` (3.1 s) in beacon intervals: F2MD sets it for a 1 Hz VeReMi
+/// beacon, so it is 3.1 intervals, and that is what carries over to another rate.
+pub const MAX_TIME_DELTA_INTERVALS: f64 = 3.1;
+
+/// F2MD's `MAX_SA_TIME` (2.1 s) in beacon intervals, for the same reason.
+pub const MAX_SA_TIME_INTERVALS: f64 = 2.1;
+
+/// The beacon timing a message profile allows, from which the beacon-frequency check and
+/// the interval windows are derived.
+///
+/// The windows scale with the **longest** conforming interval rather than the nominal
+/// one: a J2945/1 sender under congestion control stretches its interval towards
+/// `vMaxITT`, and a window sized for 100 ms would then compare no two of its messages at
+/// all. At 1 Hz the two are the same, which is how F2MD's 3.1 s and 2.1 s come back.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BeaconProfile {
+    /// The profile's id (the preset it started from).
+    pub id: &'static str,
+    /// The shortest conforming interval between two messages, seconds.
+    pub min_interval_s: f64,
+    /// The longest conforming interval, seconds.
+    pub max_interval_s: f64,
+    /// How far below the shortest interval an honest arrival gap may fall, seconds:
+    /// generation jitter and channel-access delay on the two messages a gap spans.
+    pub jitter_tolerance_s: f64,
+}
+
+impl BeaconProfile {
+    /// The US BSM, SAE J2945/1: 100 ms nominal and `vMinITT`, `vMaxITT` 600 ms
+    /// (04-models.md §8.1; `v2xw_msg::BsmGenParams::j2945_1`). The 25 ms tolerance
+    /// covers the engine's own 10 ms hand-off jitter (`v2xw_msg::GenerationTiming`,
+    /// ns-3's `TxMaxDelay`), which alone brings an honest gap down to 90 ms, and leaves
+    /// 15 ms for EDCA channel-access and queueing differences between two consecutive
+    /// frames. A 20 Hz sender's 50 ms gaps stay well under the resulting 75 ms.
+    pub const BSM_J2945_1: BeaconProfile = BeaconProfile {
+        id: "bsm-j2945-1",
+        min_interval_s: 0.1,
+        max_interval_s: 0.6,
+        jitter_tolerance_s: 0.025,
+    };
+
+    /// The ETSI CAM, EN 302 637-2 V1.4.1 §6.1.3: `T_GenCamMin` 100 ms, `T_GenCamMax`
+    /// 1,000 ms, with the BSM's tolerance.
+    pub const CAM_EN302637_2: BeaconProfile = BeaconProfile {
+        id: "cam-en302637-2",
+        min_interval_s: 0.1,
+        max_interval_s: 1.0,
+        jitter_tolerance_s: 0.025,
+    };
+
+    /// F2MD's own 1 Hz VeReMi beacon, for comparison runs: it reproduces
+    /// `MAX_BEACON_FREQUENCY` 0.9 s, `MAX_TIME_DELTA` 3.1 s and `MAX_SA_TIME` 2.1 s
+    /// (veins-f2md `F2MDParameters.h`, 04-models.md §14).
+    pub const F2MD_VEREMI_1HZ: BeaconProfile = BeaconProfile {
+        id: "f2md-veremi-1hz",
+        min_interval_s: 1.0,
+        max_interval_s: 1.0,
+        jitter_tolerance_s: 0.1,
+    };
+
+    /// Every shipped profile.
+    pub const ALL: [BeaconProfile; 3] = [
+        BeaconProfile::BSM_J2945_1,
+        BeaconProfile::CAM_EN302637_2,
+        BeaconProfile::F2MD_VEREMI_1HZ,
+    ];
+
+    /// The profile with this id.
+    #[must_use]
+    pub fn parse(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.id == id)
+    }
+
+    /// The minimum conforming arrival gap: the shortest interval less the tolerance.
+    #[must_use]
+    pub fn min_beacon_interval_s(&self) -> f64 {
+        (self.min_interval_s - self.jitter_tolerance_s).max(0.0)
+    }
+
+    /// The longest interval the consistency checks compare across.
+    #[must_use]
+    pub fn max_time_delta_s(&self) -> f64 {
+        MAX_TIME_DELTA_INTERVALS * self.max_interval_s
+    }
+
+    /// How long a receiver listens before a first sighting counts as sudden.
+    #[must_use]
+    pub fn max_sa_time_s(&self) -> f64 {
+        MAX_SA_TIME_INTERVALS * self.max_interval_s
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// The acceptance range from this engine's own link budget (f2md.md §5 P9)
+// ---------------------------------------------------------------------------------------
+
+/// The propagation environment a receiver is in: the same four classes, with the same
+/// labels, as `v2xw_world::model::EnvClass`, which this crate does not depend on (see
+/// the crate documentation, "The seam").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RadioEnvironment {
+    /// A motorway corridor.
+    Highway,
+    /// Open country.
+    Rural,
+    /// Low-rise built-up area.
+    Suburban,
+    /// Dense built-up area.
+    Urban,
+}
+
+impl RadioEnvironment {
+    /// Every environment.
+    pub const ALL: [RadioEnvironment; 4] = [
+        RadioEnvironment::Highway,
+        RadioEnvironment::Rural,
+        RadioEnvironment::Suburban,
+        RadioEnvironment::Urban,
+    ];
+
+    /// The label `EnvClass` uses.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            RadioEnvironment::Highway => "highway",
+            RadioEnvironment::Rural => "rural",
+            RadioEnvironment::Suburban => "suburban",
+            RadioEnvironment::Urban => "urban",
+        }
+    }
+
+    /// The environment with this label.
+    #[must_use]
+    pub fn parse(label: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|e| e.label() == label)
+    }
+}
+
+/// The transmit power the acceptance range is derived at, dBm: the engine's broadcast
+/// default (`v2xw_radio::types::FrameDescriptor::broadcast`).
+pub const ART_TX_POWER_DBM: f64 = 23.0;
+/// The antenna gain at each end, dBi: a car's default (`ActorClass::Car`, TR 36.885
+/// Table A.1.1-1).
+pub const ART_ANTENNA_GAIN_DBI: f64 = 3.0;
+/// The receiver sensitivity floor, dBm: the engine's default, a fielded OBU at
+/// 6 Mbit/s (`SensitivityPreset::MeasuredObu` at `Mcs::R6Qpsk12`).
+pub const ART_SENSITIVITY_DBM: f64 = -92.0;
+/// The carrier the derivation uses, Hz: the engine's default channel (`ChannelId::CCH`).
+pub const ART_CARRIER_HZ: f64 = 5.9e9;
+/// The margin above the median reach, in shadowing standard deviations of the law: a
+/// link this far out is decodable only on a 3σ shadowing upside (0.13 % one-sided).
+pub const ART_MARGIN_SIGMAS: f64 = 3.0;
+
+/// One row of the acceptance-range derivation: the line-of-sight reach of one of the
+/// engine's tier-default propagation laws in one environment, metres.
+///
+/// The distance `d` solves `P_tx + 2·G − PL_LOS(d) + k·σ = S` ([`ART_TX_POWER_DBM`],
+/// [`ART_ANTENNA_GAIN_DBI`], [`ART_MARGIN_SIGMAS`], [`ART_SENSITIVITY_DBM`]) with the
+/// law's own line-of-sight σ. `tests/ts103759.rs` recomputes every row from
+/// `v2xw-radio` and fails when one drifts by more than a metre.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArtRow {
+    /// The propagation model id.
+    pub law: &'static str,
+    /// The engine tier that selects it by default.
+    pub tier: &'static str,
+    /// The environment.
+    pub environment: RadioEnvironment,
+    /// The law's line-of-sight shadowing σ, dB.
+    pub sigma_db: f64,
+    /// The reach, metres (rounded to the metre).
+    pub reach_m: f64,
+}
+
+const fn art_row(
+    law: &'static str,
+    tier: &'static str,
+    environment: RadioEnvironment,
+    sigma_db: f64,
+    reach_m: f64,
+) -> ArtRow {
+    ArtRow {
+        law,
+        tier,
+        environment,
+        sigma_db,
+        reach_m,
+    }
+}
+
+/// The derivation, for every tier-default law and environment.
+///
+/// Free space has no shadowing. The log-distance rows are Abbas 2015's measured highway
+/// and urban LOS fits (`LogDistancePreset::for_environment`: rural takes the highway row
+/// and suburban the urban one). The TR 37.885 rows are its highway and urban LOS laws,
+/// which the high tier's `propagation/v2v-urban-geometric` also uses in line of sight;
+/// the urban law's 16.7 dB per decade reaches furthest of all.
+pub const ART_DERIVATION: [ArtRow; 12] = {
+    use RadioEnvironment::{Highway, Rural, Suburban, Urban};
+    const FS: &str = "propagation/free-space";
+    const LD: &str = "propagation/log-distance-shadowing";
+    const TR: &str = "propagation/tr37885";
+    [
+        art_row(FS, "abstract", Highway, 0.0, 4_537.0),
+        art_row(FS, "abstract", Rural, 0.0, 4_537.0),
+        art_row(FS, "abstract", Suburban, 0.0, 4_537.0),
+        art_row(FS, "abstract", Urban, 0.0, 4_537.0),
+        art_row(LD, "medium", Highway, 3.95, 5_604.0),
+        art_row(LD, "medium", Rural, 3.95, 5_604.0),
+        art_row(LD, "medium", Suburban, 4.15, 6_479.0),
+        art_row(LD, "medium", Urban, 4.15, 6_479.0),
+        art_row(TR, "high", Highway, 3.0, 12_857.0),
+        art_row(TR, "high", Rural, 3.0, 12_857.0),
+        art_row(TR, "high", Suburban, 3.0, 41_955.0),
+        art_row(TR, "high", Urban, 3.0, 41_955.0),
+    ]
+};
+
+/// The acceptance range per environment, metres.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AcceptanceRanges {
+    /// Highway.
+    pub highway_m: f64,
+    /// Rural.
+    pub rural_m: f64,
+    /// Suburban.
+    pub suburban_m: f64,
+    /// Urban.
+    pub urban_m: f64,
+}
+
+impl AcceptanceRanges {
+    /// The longest reach of [`ART_DERIVATION`] in each environment, so that an honest
+    /// line-of-sight link is inside the range whichever tier the run uses.
+    pub const DERIVED: AcceptanceRanges = AcceptanceRanges {
+        highway_m: 12_857.0,
+        rural_m: 12_857.0,
+        suburban_m: 41_955.0,
+        urban_m: 41_955.0,
+    };
+
+    /// The range for one environment.
+    #[must_use]
+    pub const fn get(&self, env: RadioEnvironment) -> f64 {
+        match env {
+            RadioEnvironment::Highway => self.highway_m,
+            RadioEnvironment::Rural => self.rural_m,
+            RadioEnvironment::Suburban => self.suburban_m,
+            RadioEnvironment::Urban => self.urban_m,
         }
     }
 }
@@ -666,10 +1081,8 @@ impl Ts103759Suite {
     ) {
         let p = self.params.clone();
         let d = math::hypot(m.claimed_x_m - me.x_m, m.claimed_y_m - me.y_m);
-        out.scores.insert(
-            Ts103759Check::RangePlausibility,
-            d / p.max_plausible_range_m,
-        );
+        out.scores
+            .insert(Ts103759Check::RangePlausibility, d / p.art_m());
         out.scores.insert(
             Ts103759Check::SpeedPlausibility,
             m.claimed_speed_mps.abs() / p.max_plausible_speed_mps,
@@ -708,13 +1121,13 @@ impl Ts103759Suite {
         // The beacon rate: fires when the gap is shorter than the conforming minimum.
         if dt > 0.0 {
             out.scores
-                .insert(Ts103759Check::BeaconFrequency, p.min_beacon_interval_s / dt);
+                .insert(Ts103759Check::BeaconFrequency, p.min_interval_s() / dt);
         }
 
         // Everything else compares across an interval, and an interval longer than
         // MAX_TIME_DELTA is not a comparison: the station may legitimately have gone
         // anywhere. Absent, not zero.
-        if dt <= 0.0 || dt > p.max_time_delta_s {
+        if dt <= 0.0 || dt > p.time_delta_s() {
             return;
         }
         out.scores.insert(
@@ -964,7 +1377,7 @@ impl Ts103759Suite {
                 // sighting.
                 let d = math::hypot(m.claimed_x_m - me.x_m, m.claimed_y_m - me.y_m);
                 let listening = ns_to_secs(t.saturating_sub(self.listening_since.unwrap_or(t)));
-                if listening > self.params.max_sa_time_s && d < self.params.max_sa_range_m {
+                if listening > self.params.sa_time_s() && d < self.params.max_sa_range_m {
                     out.scores.insert(
                         Ts103759Check::SuddenAppearance,
                         self.params.sudden_appearance_m / d.max(1e-9),
@@ -1089,6 +1502,64 @@ fn emit(ctx: &mut dyn ThreatCtx, node: v2xw_core::ids::NodeId, v: &TsVerdict) {
     }
 }
 
+/// A card row for an acceptance range, with the derivation's per-law reaches in its note.
+fn art_param(name: &str, value: f64, env: RadioEnvironment, in_force: bool) -> Parameter {
+    use serde_json::json;
+    let rows: Vec<String> = ART_DERIVATION
+        .iter()
+        .filter(|r| r.environment == env)
+        .map(|r| format!("{} ({}) {} m", r.law, r.tier, r.reach_m))
+        .collect();
+    let what = if in_force {
+        format!(
+            "the range in force: max_plausible_range_m when set, else art_{}_m",
+            env.label()
+        )
+    } else {
+        format!("the {} acceptance range", env.label())
+    };
+    let mut q = Parameter::new(
+        name,
+        "m",
+        json!(value),
+        Source {
+            kind: SourceKind::Code,
+            reference: "crates/v2xw-radio link budget (prop::friis_loss_db, \
+                        LogDistancePreset::for_environment, prop::tr37885_*_los_db; \
+                        phy::SensitivityPreset::MeasuredObu at Mcs::R6Qpsk12), \
+                        docs/design/frameworks/f2md.md §5 P9"
+                .to_string(),
+            accessed: Some(crate::cards::LEGACY_ACCESSED.to_string()),
+            note: Some(format!(
+                "{what}; 23 dBm, 3 dBi at each end, −92 dBm, 3σ margin, 5.9 GHz; per law in \
+                 {}: {}. Replaces F2MD's 420 m (Veins at 20 mW).",
+                env.label(),
+                rows.join(", ")
+            )),
+        },
+    );
+    q.range = Some(vec![json!(0.0), json!(1.0e6)]);
+    q
+}
+
+/// A card row for a threshold derived from the beacon profile.
+fn derived_param(name: &str, value: f64, rule: &str) -> Parameter {
+    use serde_json::json;
+    Parameter::new(
+        name,
+        "s",
+        json!(value),
+        Source {
+            kind: SourceKind::Code,
+            reference: "docs/design/frameworks/f2md.md §5 P1 (beacon timing from the \
+                        message profile)"
+                .to_string(),
+            accessed: Some(crate::cards::LEGACY_ACCESSED.to_string()),
+            note: Some(format!("{rule}; set explicitly to override")),
+        },
+    )
+}
+
 /// The model card for the suite.
 #[must_use]
 pub fn card(p: &Ts103759Params) -> ModelCard {
@@ -1105,7 +1576,13 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
     );
     card.tier = vec![Tier::Medium, Tier::High];
     card.equations = vec![
-        Equation::new("range plausibility", "|claim − self| / max_plausible_range"),
+        Equation::new("range plausibility", "|claim − self| / ART(environment)"),
+        Equation::new(
+            "acceptance range (ART)",
+            "ART(env) = max over the tier-default LOS laws L of d solving \
+             P_tx + 2·G − PL_L(d) + 3·σ_L = S, with P_tx 23 dBm, G 3 dBi, S −92 dBm \
+             (ART_DERIVATION, recomputed from v2xw-radio by tests/ts103759.rs)",
+        ),
         Equation::new("speed plausibility", "|v_claimed| / max_plausible_speed"),
         Equation::new(
             "acceleration plausibility",
@@ -1130,8 +1607,13 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
         ),
         Equation::new(
             "beacon frequency",
-            "MAX_BEACON_FREQUENCY / Δt_rx — fires when the gap is shorter than the \
-             conforming minimum",
+            "(T_min − jitter_tolerance) / Δt_rx, from the message profile (BSM: \
+             (100 − 25) ms) — fires when the gap is shorter than the conforming minimum",
+        ),
+        Equation::new(
+            "interval windows",
+            "MAX_TIME_DELTA = 3.1·T_max, MAX_SA_TIME = 2.1·T_max, T_max the profile's \
+             longest conforming interval (F2MD's 3.1 s and 2.1 s at 1 Hz)",
         ),
         Equation::new(
             "sudden appearance",
@@ -1159,11 +1641,45 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
         ),
     ];
     card.parameters = vec![
-        Parameter::new(
-            "max_plausible_range_m",
-            "m",
-            json!(p.max_plausible_range_m),
-            f2md.clone(),
+        art_param("max_plausible_range_m", p.art_m(), p.environment, true),
+        {
+            let mut q = Parameter::new(
+                "environment",
+                "-",
+                json!(p.environment.label()),
+                design("frameworks/f2md.md §5 P9 (ART per environment)"),
+            );
+            q.range = Some(
+                RadioEnvironment::ALL
+                    .iter()
+                    .map(|e| json!(e.label()))
+                    .collect(),
+            );
+            q
+        },
+        art_param(
+            "art_highway_m",
+            p.acceptance_ranges.highway_m,
+            RadioEnvironment::Highway,
+            false,
+        ),
+        art_param(
+            "art_rural_m",
+            p.acceptance_ranges.rural_m,
+            RadioEnvironment::Rural,
+            false,
+        ),
+        art_param(
+            "art_suburban_m",
+            p.acceptance_ranges.suburban_m,
+            RadioEnvironment::Suburban,
+            false,
+        ),
+        art_param(
+            "art_urban_m",
+            p.acceptance_ranges.urban_m,
+            RadioEnvironment::Urban,
+            false,
         ),
         Parameter::new(
             "max_plausible_speed_mps",
@@ -1195,11 +1711,71 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
             json!(p.max_payload_bytes),
             design("04-models.md §4.6 (maximum MSDU 2 304 B)"),
         ),
+        {
+            let mut q = Parameter::new(
+                "beacon_profile",
+                "-",
+                json!(p.beacon_profile.id),
+                standard(
+                    "SAE J2945/1 (BSM 100 ms, vMinITT 100 ms, vMaxITT 600 ms; \
+                     04-models.md §8.1) and EN 302 637-2 V1.4.1 §6.1.3 (T_GenCamMin \
+                     100 ms, T_GenCamMax 1 s)",
+                ),
+            );
+            q.range = Some(BeaconProfile::ALL.iter().map(|b| json!(b.id)).collect());
+            q
+        },
         Parameter::new(
-            "max_time_delta_s",
+            "beacon_min_interval_s",
             "s",
-            json!(p.max_time_delta_s),
-            f2md.clone(),
+            json!(p.beacon_profile.min_interval_s),
+            standard("SAE J2945/1 vMinITT / EN 302 637-2 V1.4.1 §6.1.3 T_GenCamMin (100 ms)"),
+        ),
+        {
+            let mut q = Parameter::new(
+                "beacon_max_interval_s",
+                "s",
+                json!(p.beacon_profile.max_interval_s),
+                standard(
+                    "SAE J2945/1 vMaxITT (600 ms, UNVERIFIED in 04-models.md §8.1) / \
+                     EN 302 637-2 V1.4.1 §6.1.3 T_GenCamMax (1 s)",
+                ),
+            );
+            q.calibration = Some(
+                "confirm vMaxITT against the J2945/1 text once it is cached; the windows \
+                 scale with it."
+                    .to_string(),
+            );
+            q
+        },
+        {
+            let mut q = Parameter::new(
+                "beacon_jitter_tolerance_s",
+                "s",
+                json!(p.beacon_profile.jitter_tolerance_s),
+                Source {
+                    kind: SourceKind::TodoCalibrate,
+                    reference: "v2xw_msg::GenerationTiming (10 ms hand-off jitter, ns-3 \
+                                BsmApplication TxMaxDelay) plus a 15 ms channel-access \
+                                allowance"
+                        .to_string(),
+                    accessed: Some(crate::cards::LEGACY_ACCESSED.to_string()),
+                    note: Some("the F2MD 1 Hz profile's 0.1 s is F2MD's own 1 − 0.9 s".to_string()),
+                },
+            );
+            q.calibration = Some(
+                "measure the honest BSM inter-arrival distribution at the receiver in a \
+                 dense benign run (CBR near the DCC thresholds) and set the tolerance so \
+                 that fewer than 1 in 10^4 consecutive gap pairs fall under the minimum."
+                    .to_string(),
+            );
+            q
+        },
+        derived_param(
+            "max_time_delta_s",
+            p.time_delta_s(),
+            "MAX_TIME_DELTA_INTERVALS (3.1, F2MD MAX_TIME_DELTA at 1 Hz) × \
+             beacon_max_interval_s",
         ),
         Parameter::new("mgt_rng_m", "m", json!(p.mgt_rng_m), f2md.clone()),
         Parameter::new(
@@ -1226,13 +1802,17 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
             json!(p.pos_heading_time_s),
             f2md.clone(),
         ),
-        Parameter::new(
+        derived_param(
             "min_beacon_interval_s",
-            "s",
-            json!(p.min_beacon_interval_s),
-            f2md.clone(),
+            p.min_interval_s(),
+            "beacon_min_interval_s − beacon_jitter_tolerance_s (F2MD MAX_BEACON_FREQUENCY \
+             0.9 s is the same rule at 1 Hz)",
         ),
-        Parameter::new("max_sa_time_s", "s", json!(p.max_sa_time_s), f2md.clone()),
+        derived_param(
+            "max_sa_time_s",
+            p.sa_time_s(),
+            "MAX_SA_TIME_INTERVALS (2.1, F2MD MAX_SA_TIME at 1 Hz) × beacon_max_interval_s",
+        ),
         Parameter::new("max_sa_range_m", "m", json!(p.max_sa_range_m), f2md.clone()),
         {
             let mut q = Parameter::new(
@@ -1387,6 +1967,18 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
          normalised on this crate's convention rather than F2MD's own, so a threshold \
          matches but a score does not compare digit for digit with an F2MD run."
             .to_string(),
+        "The acceptance range is the line-of-sight reach of the longest-reaching \
+         tier-default law. In urban and suburban areas that is TR 37.885's urban LOS law, \
+         whose 16.7 dB per decade puts the range near 42 km, so range plausibility is close \
+         to inert there: in a city the obstacle stack, not the range, ends a link. The \
+         range includes no fast-fading upside (a Nakagami up-fade at the high tier), and it \
+         is taken at 23 dBm; a fleet radiating the US 33 dBm EIRP ceiling reaches about \
+         7 dB further and needs art_*_m raised."
+            .to_string(),
+        "The beacon-timing thresholds assume every sender in range uses the receiver's \
+         beacon_profile; a mixed BSM and CAM neighbourhood shares the 100 ms minimum but \
+         not the longest interval."
+            .to_string(),
         "The per-message CPU cost is a placeholder, not a measurement.".to_string(),
     ];
     card.determinism = Determinism {
@@ -1403,6 +1995,11 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
                 .to_string(),
             "ts103759::a_claim_outside_the_sensor_coverage_is_unchecked_not_passed".to_string(),
             "ts103759::benign_traffic_stays_quiet".to_string(),
+            "ts103759::an_honest_10_hz_bsm_sender_raises_no_beacon_frequency_event".to_string(),
+            "ts103759::a_20_hz_sender_raises_beacon_frequency".to_string(),
+            "ts103759::the_1_hz_profile_reproduces_f2md".to_string(),
+            "ts103759::the_acceptance_range_is_the_engine_link_budget".to_string(),
+            "ts103759::an_honest_los_highway_link_never_fires_and_twice_the_range_does".to_string(),
         ],
     };
     card.cost = Some(v2xw_core::card::CostClass {
@@ -1486,6 +2083,15 @@ mod tests {
             "hard_fail_score",
             "min_consecutive",
             "cpm_unmatched_fraction",
+            "environment",
+            "art_highway_m",
+            "art_rural_m",
+            "art_suburban_m",
+            "art_urban_m",
+            "beacon_profile",
+            "beacon_min_interval_s",
+            "beacon_max_interval_s",
+            "beacon_jitter_tolerance_s",
         ] {
             assert!(
                 c.parameters.iter().any(|p| p.name == name),
@@ -1497,19 +2103,25 @@ mod tests {
     #[test]
     fn the_cited_defaults_are_the_numbers_04_models_gives() {
         let p = Ts103759Params::default();
-        assert_eq!(p.max_plausible_range_m, 420.0);
+        // The acceptance range is this engine's own (f2md.md §5 P9), not Veins' 420 m.
+        assert_eq!(p.max_plausible_range_m, None);
+        assert_eq!(p.environment, RadioEnvironment::Highway);
+        assert_eq!(p.art_m(), AcceptanceRanges::DERIVED.highway_m);
         assert_eq!(p.max_plausible_speed_mps, 40.0);
         assert_eq!(p.max_plausible_accel_mps2, 3.0);
         assert_eq!(p.max_plausible_decel_mps2, 4.5);
         assert_eq!(p.max_confidence_m, 10.0);
-        assert_eq!(p.max_time_delta_s, 3.1);
+        // The beacon timing is the BSM's (f2md.md §5 P1); the 1 Hz profile gives
+        // F2MD's 3.1 / 0.9 / 2.1 s (tests/ts103759.rs::the_1_hz_profile_reproduces_f2md).
+        assert_eq!(p.beacon_profile, BeaconProfile::BSM_J2945_1);
+        assert!((p.time_delta_s() - 1.86).abs() < 1e-12);
         assert_eq!(p.mgt_rng_m, 4.0);
         assert_eq!(p.mgt_rng_up_mps, 2.1);
         assert_eq!(p.mgt_rng_down_mps, 6.2);
         assert_eq!(p.max_heading_change_deg, 90.0);
         assert_eq!(p.pos_heading_time_s, 1.1);
-        assert_eq!(p.min_beacon_interval_s, 0.9);
-        assert_eq!(p.max_sa_time_s, 2.1);
+        assert!((p.min_interval_s() - 0.075).abs() < 1e-12);
+        assert!((p.sa_time_s() - 1.26).abs() < 1e-12);
         assert_eq!(p.max_sa_range_m, 420.0);
         assert_eq!(p.max_distance_from_route_m, 2.0);
         assert_eq!(p.proximity_distance_m, 2.0);
@@ -1517,6 +2129,62 @@ mod tests {
         assert_eq!(p.max_delta_inter_s, 2.0);
         assert_eq!(p.max_payload_bytes, 2_304);
         assert_eq!(p.own_region, None);
+    }
+
+    #[test]
+    fn every_settings_key_is_on_the_card_and_is_read() {
+        let c = card(&Ts103759Params::default());
+        for key in PARAM_KEYS {
+            assert!(
+                c.parameters.iter().any(|p| p.name == key),
+                "{key} is a setting the card does not declare"
+            );
+            let mut p = Ts103759Params::default();
+            assert!(p.apply(key, 7.0), "{key} is listed but not read");
+            assert_ne!(p, Ts103759Params::default(), "{key} changed nothing");
+        }
+        assert!(!Ts103759Params::default().apply("maxPlausibleRange", 1.0));
+    }
+
+    #[test]
+    fn an_explicit_threshold_wins_over_the_derivation_in_either_order() {
+        let mut a = Ts103759Params::default();
+        a.apply("max_plausible_range_m", 900.0);
+        a.apply("art_highway_m", 3_000.0);
+        let mut b = Ts103759Params::default();
+        b.apply("art_highway_m", 3_000.0);
+        b.apply("max_plausible_range_m", 900.0);
+        assert_eq!(a, b);
+        assert_eq!(a.art_m(), 900.0);
+        let mut c = Ts103759Params::default().with_environment(RadioEnvironment::Urban);
+        c.apply("art_urban_m", 3_000.0);
+        assert_eq!(c.art_m(), 3_000.0);
+        let mut d = Ts103759Params::default();
+        d.apply("beacon_jitter_tolerance_s", 0.05);
+        assert!((d.min_interval_s() - 0.05).abs() < 1e-12);
+        d.apply("min_beacon_interval_s", 0.08);
+        assert_eq!(d.min_interval_s(), 0.08);
+    }
+
+    #[test]
+    fn the_acceptance_range_per_environment_is_the_longest_derived_reach() {
+        for env in RadioEnvironment::ALL {
+            let longest = ART_DERIVATION
+                .iter()
+                .filter(|r| r.environment == env)
+                .map(|r| r.reach_m)
+                .fold(0.0, f64::max);
+            assert_eq!(
+                AcceptanceRanges::DERIVED.get(env),
+                longest,
+                "{}",
+                env.label()
+            );
+            assert_eq!(RadioEnvironment::parse(env.label()), Some(env));
+        }
+        for b in BeaconProfile::ALL {
+            assert_eq!(BeaconProfile::parse(b.id), Some(b));
+        }
     }
 
     #[test]
