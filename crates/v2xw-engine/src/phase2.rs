@@ -1411,6 +1411,9 @@ struct NodeSec {
     /// ones its poll in flight asked for: a re-issue with no new entry is fetched too.
     crl_serial: u64,
     crl_serial_asked: u64,
+    /// It joined holding a list newer than the `t0` ones (R-JOINCRL), fetched on its RA
+    /// connection before it was switched on.
+    crl_at_join: bool,
     /// The CTL sequence this vehicle installed (0: the factory one). The composite CRL
     /// file carries the home CTL (IEEE 1609.2.1 `CompositeCrlSpdu`), so a newer CTL is
     /// fetched, and installed, with the next download (edge-case package, item 8).
@@ -1627,6 +1630,13 @@ pub struct Phase2Report {
     pub crl_past_horizon: u64,
     /// How many node installations of a CRL entry.
     pub crls_installed: u64,
+    /// How many of those installations come from the list a device held when it joined
+    /// (R-JOINCRL): a device switched on after a publication fetched that list on its RA
+    /// connection before the run saw it, so neither distribution path delivered it.
+    pub crls_installed_at_join: u64,
+    /// How many of the revoked receptions were refused by a vehicle that joined holding a
+    /// list newer than the `t0` ones (R-JOINCRL).
+    pub revoked_receptions_at_join: u64,
     /// How many receptions the installed CRL caused to be classified revoked, on every
     /// node (vehicles and roadside units).
     pub revoked_receptions: u64,
@@ -3313,6 +3323,12 @@ impl Phase2 {
     /// The counters, mutably, for the engine to fold node-local totals into.
     pub fn report_mut(&mut self) -> &mut Phase2Report {
         &mut self.report
+    }
+
+    /// How many CRL entries nodes have installed so far.
+    #[must_use]
+    pub fn crls_installed(&self) -> u64 {
+        self.report.crls_installed
     }
 
     /// The counters this path accumulated during the run, with the access legs' own.
@@ -6828,7 +6844,8 @@ impl Phase2 {
         // until the RA serves something newer, so a fleet on the road from the start is
         // unchanged.
         let served = self.crl_serial_for(node);
-        let (version, serial, entries, secured) = if served > self.prerun_crl.1 {
+        let newer = served > self.prerun_crl.1;
+        let (version, serial, entries, secured) = if newer {
             let (v, e, s) = self.published_crl_for(node);
             (v, served, e, s)
         } else {
@@ -6840,6 +6857,7 @@ impl Phase2 {
         }
         let n = self.nodes.get_mut(&node)?;
         n.crl_serial = n.crl_serial.max(serial);
+        n.crl_at_join = newer;
         let out = (version, entries, secured);
         let device = device_of(node);
         let k = self.provider_of_device(device);
@@ -7317,11 +7335,13 @@ impl Phase2 {
     }
 
     /// Notes a reception the installed CRL caused to be classified revoked (`roadside`:
-    /// on a roadside unit).
-    pub fn note_revoked_reception(&mut self, roadside: bool) {
+    /// on a roadside unit; `node`: the receiver).
+    pub fn note_revoked_reception(&mut self, node: NodeId, roadside: bool) {
         self.report.revoked_receptions += 1;
         if roadside {
             self.report.rsu_revoked_receptions += 1;
+        } else if self.nodes.get(&node).is_some_and(|n| n.crl_at_join) {
+            self.report.revoked_receptions_at_join += 1;
         }
     }
 

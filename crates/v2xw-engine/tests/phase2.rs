@@ -300,9 +300,11 @@ fn with_no_attacker_nothing_is_revoked() {
 }
 
 /// Without the `crl` role, and with the cellular poll pushed past the horizon, the list is
-/// published and reaches no vehicle: the two distribution paths are the only ways into a
-/// vehicle. Roadside units still install it over their own backhaul (WP-B3b cycle) and
-/// refuse the revoked sender themselves.
+/// published and reaches no vehicle on the road: the two distribution paths are the only
+/// ways into a vehicle that was driving when it was published. A vehicle switched on after
+/// the publication holds it from the fetch on its RA connection (R-JOINCRL), and those
+/// installations are counted apart. Roadside units still install it over their own
+/// backhaul (WP-B3b cycle) and refuse the revoked sender themselves.
 #[test]
 fn without_either_distribution_path_the_revocation_never_reaches_a_vehicle() {
     let mut scenario = phase2();
@@ -321,9 +323,17 @@ fn without_either_distribution_path_the_revocation_never_reaches_a_vehicle() {
         "a unit with no `crl` role broadcast one"
     );
     assert_eq!(p.crl_downloads, 0, "a vehicle polled past its interval");
-    assert_eq!(p.crls_installed, 0);
     assert_eq!(
-        p.revoked_receptions, p.rsu_revoked_receptions,
+        p.crls_installed, p.crls_installed_at_join,
+        "a vehicle on the road installed the list with neither distribution path"
+    );
+    assert!(
+        p.crls_installed_at_join > 0,
+        "no vehicle switched on after the publication held the list (R-JOINCRL)"
+    );
+    assert_eq!(
+        p.revoked_receptions,
+        p.rsu_revoked_receptions + p.revoked_receptions_at_join,
         "a vehicle refused a revoked sender with no list installed"
     );
     assert!(

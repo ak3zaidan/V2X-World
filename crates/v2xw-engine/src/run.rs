@@ -3576,8 +3576,13 @@ impl Engine {
         if let Some((version, entries, secured)) =
             self.phase2.as_mut().and_then(|p| p.prerun_crl(id, now))
         {
+            let before = self.phase2.as_ref().map_or(0, |p| p.crls_installed());
             let mut null = crate::ctx::NullRecorder::new();
             self.install_crl_at(&mut null, id, version, &entries, &secured, now, false);
+            if let Some(p) = self.phase2.as_mut() {
+                let r = p.report_mut();
+                r.crls_installed_at_join += r.crls_installed - before;
+            }
         }
         if self.phase2.is_some() {
             let Engine {
@@ -4858,7 +4863,7 @@ impl Engine {
                     && let Some(phase2) = self.phase2.as_mut()
                 {
                     for _ in 0..revoked {
-                        phase2.note_revoked_reception(roadside);
+                        phase2.note_revoked_reception(*id, roadside);
                     }
                 }
                 if let Some(phase2) = self.phase2.as_mut() {
