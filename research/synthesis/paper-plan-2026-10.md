@@ -97,6 +97,14 @@ Sizing: about 10–15 full-scale runs plus small-fleet runs and offline replay (
 | F | **MA-side features**: secMark phase, PositionalAccuracy and issuer clustering; the evasion attacker | 200–400 LOC | E7, E8 |
 | G | **Multi-day surrogate**, shared with Paper 3 | ~300 LOC | E10 |
 
+Status 2026-10-24 (merged onto `main`, not pushed):
+- **B, delivered:** `crates/v2xw-node/src/bsm_timing.rs`, per-device timing classes read from `data/calibration/bsm-timing-cvpilot.yaml` (v2xw.bsm_timing.v1), off by default (`actors.vehicles.bsm_timing`). Built-in values are provisional until they are refit against the data package's file; the off and `enabled: false` runs reproduce the pinned digest.
+- **C, delivered:** `us_mbr.rs` reading `v1_0 | asn1_v1_1`, time base `generation_time | secmark`, `max_gap_s`. Defaults keep the old behaviour. Free class at 20 m/s: 24.1 triggers per ID-minute (locked 0.17), inside the real-data 20-195 band.
+- **D, delivered:** the store was checked against the SM-MBR v1.0 text and four defects were fixed; 8 knobs added, plus `security.scms.report_records`. Still open: no test of the Lost-to-retry path, and `NotSent` relays still drop the report.
+- **E, delivered:** `v2xw ma-replay` runs 37 settings in 4 families. A 300 s run is too short for the 05:00 decay or the cluster rule.
+- **Real-data baseline (feeds E1/E2), delivered:** `tools/realdata` v1.0.0 and `research/synthesis/p1-realdata-baseline.md`. Wyoming (held out) passes the frozen locked bound; the free class has no out-of-sample test yet, and P1-E3 needs the raw Wyoming frames.
+- A: not part of this wave (see the SCMS benchmark sections of `docs/design/BUILD-STATUS.md`). F, G: not started.
+
 Total: about 3–5 weeks of engine work after item A, in line with `final.md`'s estimate. Items B and C are the critical path: until they exist, no engine number in Paper 1 means anything.
 
 ### 1.5 Venue and deadline
