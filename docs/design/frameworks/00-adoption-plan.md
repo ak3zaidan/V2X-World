@@ -71,6 +71,13 @@ trustworthy or comparable; later waves add behaviours and radio features.
   `grep -rniE "ported from|transcribed from|field for field"` over `crates/` returns nothing
   that names a GPL/LGPL/EPL source; any line of `lc2013.rs` found to be a translation is
   rewritten from the paper and its tests still pass.
+- Status (2026-10-23): done. `lc2013.rs` restructured from Erdmann 2015 (an 800k-step
+  differential run against the old code was bit-identical, so no golden moved); the CAM oracle
+  is `crates/v2xw-msg/tests/cam_en302637.rs` from EN 302 637-2 §6.1.3 with Artery's counts as
+  an EXPECTED table and a negative control; `regate` re-derived from TS 102 687 Annex B.2;
+  `per.rs` cited to Miller Tables 3.1.1-3.1.3 (UNVERIFIED at page level). Origin comments
+  fixed across engine, netval, threat, node, radio, energy. Open items E-1 (PHEMlight), D-1
+  (TBS table), D-2 (MOVESTAR licence) are in `licence-audit.md`.
 
 **WP-02 Detector threshold fixes** (S, 2 days). Sources: F-P1, F-P9.
 - Scope: the TS 103 759 suite's minimum beacon interval comes from the message profile (BSM
@@ -85,6 +92,13 @@ trustworthy or comparable; later waves add behaviours and radio features.
   reproduces F2MD's 0.9 / 3.1 / 2.1 s; the derived ART is recorded on the card, an honest
   23 dBm line-of-sight highway link inside it never fires, and a claim at twice it does.
   Fault: restoring 0.9 s turns the honest 10 Hz test red.
+- Status (2026-10-23): done. `BeaconProfile` (bsm-j2945-1 default, cam-en302637-2,
+  f2md-veremi-1hz); windows are 3.1x / 2.1x the longest conforming interval; ART from the
+  v2xw-radio link budget (highway and rural 12,857 m, suburban and urban 41,955 m) with every
+  row on the card; `Ts103759Params::apply` makes each threshold overridable. Faults shown red:
+  0.9 s restored, one ART row moved 100 m. Open: the suite is not yet selectable in
+  `detection.local` (only legacy-12 and us-sm-mbr), so its settings are not in the scenario
+  schema; jitter tolerance and vMaxITT are todo-calibrate.
 
 **WP-03 VeReMi export and per-message metrics** (S, 3 days). Sources: F-P2, F-P3, F-P4.
 - Scope: two explicit attack codebooks chosen by an export option, `veremi-1` (1, 2, 4, 8,
@@ -107,6 +121,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
   `detection-scores` (opt-in) gives MCC/BM/MK/kappa at the report, vehicle and message
   levels and records `det.observation`. Fixture in `crates/v2xw-record/tests/fixtures/veremi`.
   Faults shown red: two codes swapped, MCC sign, nearest-reception join, node read as actor.
+  Merged 2026-10-24 (`BUILD-STATUS.md`); the MCC test now keeps to the crate's routed-sqrt rule.
 
 ### Wave 2: traffic behaviours with open failing checks
 
