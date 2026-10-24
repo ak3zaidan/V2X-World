@@ -1132,7 +1132,13 @@ fn a_relayed_report_is_uploaded_only_once_a_unit_takes_it() {
             .map_or(0, |e| e.count)
             .saturating_sub(p.reports_from_rsus)
     };
-    let (connected, rec) = run(base(None));
+    let mut with_fates = base(None);
+    with_fates
+        .security
+        .scms
+        .get_or_insert_with(Default::default)
+        .report_records = Some(true);
+    let (connected, rec) = run(with_fates);
     let p = &connected.phase2;
     let frames = records(&rec, "node.tx")
         .iter()
@@ -1159,5 +1165,46 @@ fn a_relayed_report_is_uploaded_only_once_a_unit_takes_it() {
     assert!(
         frames <= 8 * reports,
         "{frames} frames for {reports} reports: retried faster than the doubling timer"
+    );
+    // The timer: a vehicle puts reports on the air again less than the first 1 s timeout
+    // after its last relayed look only when a unit confirmed one of them in between.
+    let mut looks: BTreeMap<u64, BTreeSet<u64>> = BTreeMap::new();
+    for r in records(&rec, "node.tx") {
+        if r["msg_type"] == "mbr"
+            && let (Some(n), Some(t)) = (r["node"].as_u64(), r["t"].as_u64())
+        {
+            looks.entry(n).or_default().insert(t / 100_000_000);
+        }
+    }
+    let mut acks: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+    for f in records(&rec, "pki.report_fate") {
+        if f["fate"] == "uploaded"
+            && let (Some(n), Some(t)) = (f["reporter"].as_u64(), f["t"].as_u64())
+        {
+            acks.entry(n).or_default().push(t);
+        }
+    }
+    let early: Vec<(u64, u64, u64)> = looks
+        .iter()
+        .flat_map(|(n, ls)| {
+            let ls: Vec<u64> = ls.iter().copied().collect();
+            let confirmed = acks.get(n).cloned().unwrap_or_default();
+            ls.windows(2)
+                .filter(|w| w[1] - w[0] < 10)
+                .filter(|w| {
+                    !confirmed
+                        .iter()
+                        .any(|t| *t >= w[0] * 100_000_000 && *t < w[1] * 100_000_000)
+                })
+                .map(|w| (*n, w[0], w[1]))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    println!("{} acks recorded; {} early retries", acks.values().map(Vec::len).sum::<usize>(), early.len());
+    assert!(
+        early.is_empty(),
+        "{} unconfirmed retries inside the first timeout, e.g. (node, step, step) {:?}",
+        early.len(),
+        &early[..early.len().min(3)]
     );
 }
