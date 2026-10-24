@@ -17,7 +17,9 @@ use v2xw_threat::obs::{
     PerceivedObject, RegionId, SelfBelief, SensedObject, StationType, VerificationState,
 };
 use v2xw_threat::ts103759::{
-    CrossCheckInputs, ObservationClass, Ts103759Check, Ts103759Params, Ts103759Suite, TsVerdict,
+    ART_ANTENNA_GAIN_DBI, ART_CARRIER_HZ, ART_DERIVATION, ART_MARGIN_SIGMAS, ART_SENSITIVITY_DBM,
+    ART_TX_POWER_DBM, AcceptanceRanges, ArtRow, BeaconProfile, CrossCheckInputs, ObservationClass,
+    RadioEnvironment, Ts103759Check, Ts103759Params, Ts103759Suite, TsVerdict,
 };
 
 const RX: NodeId = NodeId::new(1);
@@ -300,13 +302,267 @@ fn class_two_fires_on_a_generation_time_that_did_not_advance() {
     assert!(fired.contains(&Ts103759Check::GenerationTimeOrder));
 }
 
+// ---------------------------------------------------------------------------------------
+// Beacon timing from the message profile (f2md.md §5 P1). This replaces the test that
+// asserted 0.1 s gaps fire: 0.1 s is an honest BSM sender, and F2MD's 0.9 s minimum is a
+// 1 Hz value that would have flagged every one of them.
+// ---------------------------------------------------------------------------------------
+
+/// A deterministic uniform draw in `[0, 1)` (SplitMix64), so the jitter is reproducible.
+fn unit(state: &mut u64) -> f64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// An honest J2945/1 sender at 10 Hz for `secs`, driving at 16 m/s, with the engine's
+/// own hand-off jitter (`U[0, 10 ms]`, `v2xw_msg::GenerationTiming`) and up to 2 ms of
+/// channel access on every message; every tenth pair is the worst case, a 10 ms jitter
+/// followed by none.
+fn honest_bsm_sender(secs: u64) -> Vec<ObservedMessage> {
+    let jitter_ns = v2xw_msg::GenerationTiming::NS3_TX_MAX_DELAY.as_nanos() as f64;
+    let mut state = 0x5EED_u64;
+    (0..secs * 10)
+        .map(|i| {
+            let j = match i % 10 {
+                4 => jitter_ns,
+                5 => 0.0,
+                _ => unit(&mut state) * jitter_ns,
+            };
+            let access = unit(&mut state) * 2.0e6;
+            let t = i * secs_to_ns(0.1) + (j + access) as u64;
+            beacon(A, 16.0 * t as f64 / NS_PER_S as f64, 16.0, t)
+        })
+        .collect()
+}
+
 #[test]
-fn class_two_fires_on_a_sender_beaconing_faster_than_the_conforming_minimum() {
-    let msgs: Vec<ObservedMessage> = (0..4u64)
-        .map(|i| beacon(A, 1.6 * i as f64, 16.0, i * secs_to_ns(0.1)))
-        .collect();
-    let (fired, _, _) = fired_over(Ts103759Params::default(), &msgs, &OnRoad);
+fn an_honest_10_hz_bsm_sender_raises_no_beacon_frequency_event() {
+    let msgs = honest_bsm_sender(60);
+    assert_eq!(msgs.len(), 600);
+    let (fired, ctx, _) = fired_over(Ts103759Params::default(), &msgs, &OnRoad);
+    assert!(
+        fired.is_empty(),
+        "an honest 10 Hz sender fired: {:?}",
+        fired.iter().map(|c| c.as_str()).collect::<Vec<_>>()
+    );
+    assert!(ctx.on_channel("det.observation").is_empty());
+    // F2MD's 0.9 s on the same traffic flags it on its second gap.
+    let f2md = Ts103759Params {
+        min_beacon_interval_s: Some(0.9),
+        ..Ts103759Params::default()
+    };
+    let (fired, _, _) = fired_over(f2md, &msgs, &OnRoad);
     assert!(fired.contains(&Ts103759Check::BeaconFrequency));
+}
+
+#[test]
+fn a_20_hz_sender_raises_beacon_frequency() {
+    let msgs: Vec<ObservedMessage> = (0..40u64)
+        .map(|i| beacon(A, 0.8 * i as f64, 16.0, i * secs_to_ns(0.05)))
+        .collect();
+    let (fired, ctx, _) = fired_over(Ts103759Params::default(), &msgs, &OnRoad);
+    assert!(fired.contains(&Ts103759Check::BeaconFrequency));
+    assert!(!ctx.on_channel("det.observation").is_empty());
+}
+
+#[test]
+fn the_1_hz_profile_reproduces_f2md() {
+    let p = Ts103759Params::default().with_beacon_profile(BeaconProfile::F2MD_VEREMI_1HZ);
+    assert_eq!(p.min_interval_s(), 0.9);
+    assert_eq!(p.time_delta_s(), 3.1);
+    assert_eq!(p.sa_time_s(), 2.1);
+    // The BSM and CAM profiles are the generators' own numbers.
+    let bsm = v2xw_msg::BsmGenParams::j2945_1();
+    let b = BeaconProfile::BSM_J2945_1;
+    assert_eq!(b.min_interval_s, bsm.min_itt.as_secs_f64());
+    assert_eq!(b.max_interval_s, bsm.max_itt.as_secs_f64());
+    let cam = v2xw_msg::CamGenParams::default();
+    let c = BeaconProfile::CAM_EN302637_2;
+    assert_eq!(c.min_interval_s, cam.t_gen_cam_min.as_secs_f64());
+    assert_eq!(c.max_interval_s, cam.t_gen_cam_max.as_secs_f64());
+    // The tolerance covers the generator's whole hand-off jitter, and a 20 Hz gap is
+    // still under the minimum it leaves.
+    let jitter = v2xw_msg::GenerationTiming::NS3_TX_MAX_DELAY.as_secs_f64();
+    assert!(b.jitter_tolerance_s > jitter);
+    assert!(b.min_beacon_interval_s() > 0.05);
+    // A 1 Hz sender is quiet under the 1 Hz profile, and 0.5 s gaps fire there.
+    let slow: Vec<ObservedMessage> = (0..20u64)
+        .map(|i| beacon(A, 16.0 * i as f64, 16.0, i * NS_PER_S))
+        .collect();
+    let (fired, _, _) = fired_over(p.clone(), &slow, &OnRoad);
+    assert!(fired.is_empty());
+    let fast: Vec<ObservedMessage> = (0..6u64)
+        .map(|i| beacon(A, 8.0 * i as f64, 16.0, i * secs_to_ns(0.5)))
+        .collect();
+    let (fired, _, _) = fired_over(p, &fast, &OnRoad);
+    assert!(fired.contains(&Ts103759Check::BeaconFrequency));
+}
+
+// ---------------------------------------------------------------------------------------
+// The acceptance range from this engine's own link budget (f2md.md §5 P9)
+// ---------------------------------------------------------------------------------------
+
+/// The furthest distance at which `loss` is within `budget_db`, by bisection (every law
+/// here is monotone in distance).
+fn reach_m(loss: impl Fn(f64) -> f64, budget_db: f64) -> f64 {
+    let (mut lo, mut hi) = (1.0f64, 1.0e6f64);
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if loss(mid) <= budget_db {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// One derivation row recomputed from `v2xw-radio`: the law's line-of-sight σ and reach.
+fn radio_reach(row: &ArtRow) -> (f64, f64) {
+    use v2xw_world::model::EnvClass;
+    let env = [
+        EnvClass::Urban,
+        EnvClass::Suburban,
+        EnvClass::Highway,
+        EnvClass::Rural,
+    ]
+    .into_iter()
+    .find(|e| e.label() == row.environment.label())
+    .expect("every environment is an EnvClass");
+    let f_hz = v2xw_radio::types::ChannelId::CCH.centre_hz();
+    let budget = ART_TX_POWER_DBM + 2.0 * ART_ANTENNA_GAIN_DBI - ART_SENSITIVITY_DBM;
+    match row.law {
+        "propagation/free-space" => (
+            0.0,
+            reach_m(|d| v2xw_radio::prop::friis_loss_db(d, f_hz), budget),
+        ),
+        "propagation/log-distance-shadowing" => {
+            let ds = v2xw_radio::LogDistancePreset::for_environment(env, false).params();
+            let margin = ART_MARGIN_SIGMAS * ds.sigma_db;
+            (
+                ds.sigma_db,
+                reach_m(|d| ds.path_loss_db(d), budget + margin),
+            )
+        }
+        "propagation/tr37885" => {
+            // The engine's own LOS dispatch (`v2xw_engine::wiring::los_mean_loss_db`):
+            // urban and suburban take the urban law.
+            let urban = matches!(env, EnvClass::Urban | EnvClass::Suburban);
+            let sigma = v2xw_radio::prop::tr37885_sigma_db(v2xw_radio::Tr37885State::Los);
+            let law = |d: f64| {
+                if urban {
+                    v2xw_radio::prop::tr37885_urban_los_db(d, f_hz / 1e9)
+                } else {
+                    v2xw_radio::prop::tr37885_highway_los_db(d, f_hz / 1e9)
+                }
+            };
+            (sigma, reach_m(law, budget + ART_MARGIN_SIGMAS * sigma))
+        }
+        other => panic!("no derivation for {other}"),
+    }
+}
+
+#[test]
+fn the_acceptance_range_is_the_engine_link_budget() {
+    use v2xw_radio::types::{ActorClass, FrameDescriptor, Mcs, SduRef};
+    // The inputs are the engine's radio defaults.
+    let frame = FrameDescriptor::broadcast(
+        300,
+        Mcs::R6Qpsk12,
+        SduRef::new(
+            v2xw_core::ids::SduId::new(1),
+            v2xw_core::ids::FrameSeq::new(1),
+        ),
+    );
+    assert_eq!(ART_TX_POWER_DBM, frame.tx_power_dbm);
+    assert_eq!(ART_ANTENNA_GAIN_DBI, ActorClass::Car.default_gain_dbi());
+    assert_eq!(
+        ART_SENSITIVITY_DBM,
+        v2xw_radio::SensitivityPreset::MeasuredObu.sensitivity_dbm(Mcs::R6Qpsk12)
+    );
+    assert_eq!(
+        ART_CARRIER_HZ,
+        v2xw_radio::types::ChannelId::CCH.centre_hz()
+    );
+    // Every row, recomputed.
+    for row in &ART_DERIVATION {
+        let (sigma, reach) = radio_reach(row);
+        assert_eq!(
+            row.sigma_db,
+            sigma,
+            "{} {}",
+            row.law,
+            row.environment.label()
+        );
+        assert!(
+            (row.reach_m - reach).abs() <= 1.0,
+            "{} {}: the card says {} m, v2xw-radio gives {reach:.1} m",
+            row.law,
+            row.environment.label(),
+            row.reach_m
+        );
+    }
+    // And the card records it.
+    let c = v2xw_threat::ts103759::card(&Ts103759Params::default());
+    let art = c
+        .parameters
+        .iter()
+        .find(|p| p.name == "max_plausible_range_m")
+        .expect("the card declares the ART");
+    assert_eq!(
+        art.default,
+        serde_json::json!(AcceptanceRanges::DERIVED.highway_m)
+    );
+    let note = art.source.note.as_deref().unwrap_or_default();
+    assert!(
+        note.contains("propagation/tr37885 (high) 12857 m"),
+        "{note}"
+    );
+    for env in RadioEnvironment::ALL {
+        let row = c
+            .parameters
+            .iter()
+            .find(|p| p.name == format!("art_{}_m", env.label()))
+            .expect("one row per environment");
+        assert_eq!(
+            row.default,
+            serde_json::json!(AcceptanceRanges::DERIVED.get(env))
+        );
+    }
+}
+
+#[test]
+fn an_honest_los_highway_link_never_fires_and_twice_the_range_does() {
+    let p = Ts103759Params::default().with_environment(RadioEnvironment::Highway);
+    let art = p.art_m();
+    // A 23 dBm sender driving away at 30 m/s and 10 Hz through the last 900 m of the
+    // range, every message at its true position and inside the range.
+    let far: Vec<ObservedMessage> = (0..300u64)
+        .map(|i| beacon(A, art - 901.0 + 3.0 * i as f64, 30.0, i * secs_to_ns(0.1)))
+        .collect();
+    assert!(far.iter().all(|m| m.claimed_x_m < art));
+    let (fired, _, _) = fired_over(p.clone(), &far, &OnRoad);
+    assert!(
+        !fired.contains(&Ts103759Check::RangePlausibility),
+        "an honest link inside the ART fired"
+    );
+    // Veins' 420 m on the same link flags it.
+    let veins = Ts103759Params {
+        max_plausible_range_m: Some(420.0),
+        ..p.clone()
+    };
+    let (fired, _, _) = fired_over(veins, &far, &OnRoad);
+    assert!(fired.contains(&Ts103759Check::RangePlausibility));
+    // A claim at twice the range fires.
+    let ghost: Vec<ObservedMessage> = (0..5u64)
+        .map(|i| beacon(B, 2.0 * art + 3.0 * i as f64, 30.0, i * secs_to_ns(0.1)))
+        .collect();
+    let (fired, _, _) = fired_over(p, &ghost, &OnRoad);
+    assert!(fired.contains(&Ts103759Check::RangePlausibility));
 }
 
 #[test]

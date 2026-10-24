@@ -1325,6 +1325,20 @@ Three detector families ship with their thresholds as cited defaults; all run on
 | POS_HEADING_TIME | 1.1 s | position and heading time gate |
 | MAX_TARGET_TIME, MAX_ACCUSED_TIME | 2 s, 2 s | retention |
 
+These are F2MD's values for a 1 Hz VeReMi beacon on Veins' 20 mW radio, and
+`detector/ts103759-observations` does not take four of them as they stand
+(frameworks/f2md.md §5 P1, P9; WP-02). MAX_BEACON_FREQUENCY becomes the message profile's
+shortest interval less a jitter tolerance (BSM: 100 − 25 = 75 ms, so an honest 10 Hz sender
+stays quiet and a 20 Hz one fires). MAX_TIME_DELTA and MAX_SA_TIME become 3.1 and 2.1 times
+the profile's longest conforming interval (BSM `vMaxITT` 600 ms: 1.86 s and 1.26 s; the
+`f2md-veremi-1hz` profile gives back 0.9 / 3.1 / 2.1 s). MAX_PLAUSIBLE_RANGE becomes the
+acceptance range derived from the engine's own link budget per environment: the
+line-of-sight reach at 23 dBm, 3 dBi at each end and the −92 dBm OBU floor with a 3σ
+shadowing margin, taking the longest of the tier-default laws (free space 4,537 m; Abbas
+log-distance 5,604 m highway, 6,479 m urban; TR 37.885 12,857 m highway, 41,955 m urban).
+The suite's card carries every row, and `tests/ts103759.rs` recomputes them from
+`v2xw-radio`. Every value is a setting (`Ts103759Params::apply`, `PARAM_KEYS`).
+
 F2MD attack and pseudonym parameters kept for the attacker and protocol presets: `LOCAL_ATTACKER_PROB` 0.05; magnitudes `RandomPosOffsetX/Y` 70, `RandomSpeedX/Y` 40, `RandomSpeedOffsetX/Y` 7, `RandomAccelX/Y` 2, `StopProb` 0.05, `StaleMessages_Buffer` 60, `DosMultipleFreq` 4, `ReplaySeqNum` 6, `SybilVehNumber` 5, `SybilDistanceX/Y` 5 / 2; pseudonym change `Period_Change_Time` 240 s, `Tolerance_Buffer` 10, `Period_Change_Distance` 80 m, `Random_Change_Chance` 0.1 [R10 §C4]. The F2MD paper's detection and false-positive rates and MA thresholds are UNVERIFIED (HAL PDF blocked) [R11 §E3].
 
 **`detector/ts103759-observations`** [TS 103 759 V2.2.1 (2026-01), R11 §E2; R10 §C5]: EEBL plausibility window 500 ms before the claimed `detectionTime`; detection-time consistency against 80 % of the minimum threshold for slow-down, dangerous-situation and EEBL events; one detection-time bound example ≤ 180 ms; speed-exceedance example > 80 km/h (`upstreamTraffic`); same-event correlation distance 1 km for `dangerousEndOfQueue` and `trafficCondition`, 100 m otherwise; DENM valid only if event trust `ETR(E, j) ≥ TrustThreshold` (value `TODO: calibrate`, plan: the TS leaves it predefined by the deployment; take the C2C-CC profile value when published). Observation classes 1-5 (implausible values; inconsistency with previous messages, with the local environment and LDM, with on-board sensors, with other stations) are the detector interface in 07-threats §3.1; TR 103 460 supplies the taxonomy (ART, eART, CoE, MPP, SAW, LEAVE, P2DAP) [R10 §C6].
