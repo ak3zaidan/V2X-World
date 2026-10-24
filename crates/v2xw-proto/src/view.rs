@@ -248,21 +248,28 @@ pub fn queue_of<M>(kernel: &Kernel<M>, node: NodeId, now: SimTime) -> Option<Que
 /// scheme's post-quantum half is visible beside its ECDSA half. The kernel counts the
 /// uncosted AES and SHA-256 work under a nominal kind; here they read as blocks and hashes,
 /// and an ECQV "sign" is the scalar multiplication it stands for.
+///
+/// The kernel's counts are keyed by node first, so this reads only `node`'s range of them.
+/// It scanned every node's counts, and the `ee` pool asks once per device: at each view
+/// that was devices × every device's counts, the long pole of each fast-forward stop
+/// (`Phase2::backend_view`, 45 % of a stop at 327 nodes; honest-density.md §6).
 #[must_use]
 pub fn ops_of<M>(kernel: &Kernel<M>, node: NodeId) -> BTreeMap<String, u64> {
     let mut out = BTreeMap::new();
-    for ((n, primitive, kind), count) in &kernel.ops {
-        if *n == node {
-            let short = primitive.strip_prefix("primitive/").unwrap_or(primitive);
-            let label = match short {
-                "aes-128" => "aes-128 block".to_string(),
-                "sha-256" => "sha-256 hash".to_string(),
-                "ecqv-p256" if *kind == "sign" => "ec scalar-mult".to_string(),
-                "ecqv-p256" => "ecqv-p256 reconstruct".to_string(),
-                _ => format!("{short} {kind}"),
-            };
-            *out.entry(label).or_insert(0) += count;
-        }
+    for ((_, primitive, kind), count) in kernel
+        .ops
+        .range((node, "", "")..)
+        .take_while(|((n, _, _), _)| *n == node)
+    {
+        let short = primitive.strip_prefix("primitive/").unwrap_or(primitive);
+        let label = match short {
+            "aes-128" => "aes-128 block".to_string(),
+            "sha-256" => "sha-256 hash".to_string(),
+            "ecqv-p256" if *kind == "sign" => "ec scalar-mult".to_string(),
+            "ecqv-p256" => "ecqv-p256 reconstruct".to_string(),
+            _ => format!("{short} {kind}"),
+        };
+        *out.entry(label).or_insert(0) += count;
     }
     out
 }
@@ -293,5 +300,51 @@ pub fn entity<M>(
         traffic: node.map(|n| kernel.traffic(n)).unwrap_or_default(),
         ops: node.map(|n| ops_of(kernel, n)).unwrap_or_default(),
         state: BTreeMap::new(),
+    }
+}
+
+#[cfg(test)]
+mod ops_tests {
+    use super::*;
+    use crate::net::BackendNet;
+
+    #[test]
+    fn ops_of_reads_one_node_and_not_every_nodes_counts() {
+        let mut k: Kernel<()> = Kernel::new(BackendNet::new());
+        let kinds = [
+            ("primitive/ecdsa-p256-sha256", "sign"),
+            ("primitive/ecdsa-p256-sha256", "verify"),
+            ("primitive/ecqv-p256", "sign"),
+            ("primitive/aes-128", "encrypt"),
+            ("primitive/sha-256", "hash"),
+        ];
+        let devices = 20_000u32;
+        for d in 0..devices {
+            for (i, (p, kind)) in kinds.iter().enumerate() {
+                k.ops
+                    .insert((NodeId::new(d), *p, *kind), u64::from(d) + i as u64);
+            }
+        }
+        // The same answer as reading every count.
+        let one = ops_of(&k, NodeId::new(7));
+        assert_eq!(one.len(), 5);
+        assert_eq!(one["ecdsa-p256-sha256 sign"], 7);
+        assert_eq!(one["ec scalar-mult"], 9);
+        assert_eq!(one["sha-256 hash"], 11);
+        assert!(ops_of(&k, NodeId::new(devices)).is_empty());
+        // The `ee` pool's question, once per device: by node range it is
+        // devices × 5 entries; scanning every count it is 2·10⁹ map steps (tens of
+        // seconds on a debug build), which this bound fails.
+        let started = std::time::Instant::now();
+        let mut total = 0u64;
+        for d in 0..devices {
+            total += ops_of(&k, NodeId::new(d)).values().sum::<u64>();
+        }
+        let took = started.elapsed();
+        assert_eq!(
+            total,
+            (0..u64::from(devices)).map(|d| 5 * d + 10).sum::<u64>()
+        );
+        assert!(took.as_secs_f64() < 2.0, "the ee pool's ops took {took:?}");
     }
 }
