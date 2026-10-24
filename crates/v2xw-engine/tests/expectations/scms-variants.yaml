@@ -315,8 +315,8 @@ rows:
   expect: le
   value: 60000
   source: 'stress MW.cost: 33 d x 1,440 idle minutes = 47,520 ticks plus due events (54,511 measured)'
-  measured: pending
-  verdict: pending
+  measured: '55512'
+  verdict: pass
 - id: RR.MW.topups
   base: MW
   variant: MW
@@ -328,8 +328,16 @@ rows:
   - 1360
   source: one 20-certificate top-up a week per device over the run's live windows (stress MW.rollovers
     1,280 = 64 x 20)
-  measured: pending
-  verdict: pending
+  measured: '1620'
+  verdict: wrong-expectation
+  note: 'Wrong expectation, corrected with evidence (rerun-2026-10-24-b.md §2.5): the band was the old
+    run''s count (64 devices x 20), not a rule. The rule is one 20-certificate top-up per device present
+    at a weekly boundary ([CAMP122] Table 67). A receptions-level re-run (MWk, pki.flow) gives 85 top-up
+    instances for 49 devices, by simulated week 12/19/21/20/13, no device topped up twice within 3 days,
+    2 refused (blocklisted, the revoked attackers): the rule holds. More devices are on the map at each
+    boundary than on 77cffb5b (lane-change and traffic changes since), so 81 x 20 = 1,620 certificates.
+    Corrected expectation: certs_topped_up = 20 x top-ups completed (81 x 20 = 1,620, as measured) and
+    at most one top-up per device per week'
 - id: RR.MW.no-overdue
   base: MW
   variant: MW
@@ -338,8 +346,13 @@ rows:
   expect: eq
   value: 0
   source: each CRL Generator reissues by nextCrl, so no list goes overdue (stress MW.crl-reissue)
-  measured: pending
-  verdict: pending
+  measured: '16618'
+  verdict: open
+  note: 'R-JOINCRL (06 §6 item 7), now shown in the base run itself: all 16,618 crl-overdue refusals (labelled
+    signature-invalid on node.rx, 06 §6 item 13) are at 33 receivers that join mid-run, every one after
+    t0 + 21 d = 1,814,400 s, each refusing from its first reception (median 0.1 s, max 92 s) until its
+    first CRL download. No device present before 700 s refuses anything. A joiner holds only the t0 lists;
+    it should hold the newest list each CRACA published before it joined'
 - id: RR.MWC.overdue
   base: MW
   variant: MWC
@@ -349,8 +362,11 @@ rows:
   value: 1
   source: '1609.2 CRL overdue rule: with the home Generator down from 700 s the t0 list goes overdue at
     t0 + 21 d and the home CRACA''s messages are refused (rerun §7, R-NOCRL fixed)'
-  measured: pending
-  verdict: pending
+  measured: '152505'
+  verdict: pass
+  note: 152,505 crl-overdue refusals, of which 16,618 are the base's joiners (R-JOINCRL, RR.MW.no-overdue).
+    No home revocation exists in this run (both are provider-b's), so MWC.revocation-blocked has nothing
+    to block
 - id: RR.MWC2.overdue
   base: MW
   variant: MWC2
@@ -360,8 +376,13 @@ rows:
   value: 1
   source: the home CRL of 190,769 s is overdue from 2,005,169 s, inside W4 (stress MWC2.overdue-onset
     87,823)
-  measured: pending
-  verdict: pending
+  measured: '152505'
+  verdict: pass
+  note: 'Passes, but the run no longer tests its premise: MWC2 and MWC refuse exactly the same 152,505
+    messages. Both revocations in the multi-week runs are now provider-b''s (the attackers'' providers
+    moved with the traffic changes), so the home provider publishes no CRL before its Generator goes down
+    at 200,000 s, and MWC2 is MWC. The scenario''s outage needs to start after a home revocation (rerun-2026-10-24-b.md
+    §2.5)'
 - id: VB.Q60.rsu-crls
   base: Q60
   variant: Q60
