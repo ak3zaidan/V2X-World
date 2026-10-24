@@ -29,9 +29,11 @@
    source: "ra-maxReqs 1: one butterfly request in the device's life; scaled to 17 M/yr that is 0.54 req/s (CAMP ~0.5)"}
 - {id: P2-rsu-app-certs, run: base, metric: perdev.EeRaCertRequestSpdu.max, expect: eq, value: 3,
    source: "an RSU requests one application certificate per week: 2 preloaded (614, 615) and the 616 renewal (CAMP122 §6.3.5; 01 §4)"}
-- {id: P3-certs-per-topup, run: base, metric: p2.certs_topped_up, expect: eq, value: 1100,
-   source: "20 certificates per device per week (CAMP122 Table 67) x the 55 devices present at the rollover"}
-- {id: P4-topups-complete, run: base, metric: p2.topups_completed, expect: eq, value: 55, source: "one .info + one file a week per device (04 §4.1, NYC top-off)"}
+- {id: P3-certs-per-topup, run: base, metric: topup.certs_per_topup, expect: eq, value: 20,
+   source: "20 certificates per device per week (CAMP122 Table 67), for every device present at the rollover",
+   note: "corrected 2026-10-24 (was certs_topped_up eq 1100 = 20 x 55 devices): the realism base's first live window is now 300 s (rerun-2026-10-24-a §2), so 105 devices are present at the rollover and 2,100 certificates are topped up; the rule is the per-device 20, the fleet is the fixture's"}
+- {id: P4-topups-complete, run: base, metric: topup.incomplete, expect: eq, value: 0, source: "one .info + one file a week per device (04 §4.1, NYC top-off): every top-up started completes",
+   note: "corrected 2026-10-24 (was topups_completed eq 55): 105 of 105 started on the 300 s base (rerun-2026-10-24-a §2)"}
 - {id: P5-topup-within-overlap, run: base, metric: topup.latency_max_s, expect: le, value: 3600,
    source: "the next week's certificates arrive inside the 1 h overlap (CAMP122 §6.3.3; 03 §11)"}
 - {id: P6-no-starvation, run: base, metric: p2.vehicles_starved, expect: eq, value: 0, source: "pool of 2 weeks + weekly top-off"}
@@ -49,7 +51,8 @@
    source: "SM-MBR §1-3: 2 signed BSMs (~200 B) + the full pseudonym certificate, signed and encrypted (~60 + ~100 B)"}
 # ---- Airtime and availability ----------------------------------------------------------
 - {id: A1-mbr-airtime, run: base, metric: air.mbr.share, expect: le, value: 0.01,
-   source: "after the false-report fix (validation/vehicle-and-roadside.md §0.6) MBR uploads are rare; 29.3 % before"}
+   source: "after the false-report fix (validation/vehicle-and-roadside.md §0.6) MBR uploads are rare; 29.3 % before", status: open,
+   note: "open 2026-10-24: 1.25 % on the 300 s base, 587 relayed uploads, every one about an attacker (0 honest at the MA): 1,995 reports from 66 reporters about 2 attackers, a report every ~6 s per reporter per pseudonym. No public source sets a per-pseudonym report rate for SM-MBR v1.0 (rerun-2026-10-24-a §3)"}
 - {id: A2-honest-not-revoked, run: base, metric: p2.revoked_honest, expect: eq, value: 0, source: "no honest device revoked in an honest-majority run"}
 - {id: A3-attackers-revoked, run: base, metric: p2.revoked_attackers, expect: eq, value: 2, source: "3 constant-position attackers, each reported by several neighbours; one sends PSMs from a handset, and SM-MBR v1.0 defines reports for PSID 0x20 (the BSM) only",
    note: "corrected 2026-10-22 (was 3): the US profile cannot report the handset attacker (testing/usfp.md §3). A gap of the real system, kept visible: research-suite revokes all 3"}
@@ -88,7 +91,8 @@
 - {id: V2-auto-same-publication, run: ma-auto, vs: base, metric: stage.published_s, expect: delta, band: [-100, 100],
    source: "decided Tue 17:00 EDT (after the slot) instead of Wed 01:00 EDT: both publish at Wednesday's business-day slot"}
 - {id: V2-auto-same-cases, run: ma-auto, vs: base, metric: p2.cases_opened, expect: ratio, band: [1, 1], source: "the mode changes when, not whether"}
-- {id: V3-on-decision-publishes-now, run: crl-on-decision, metric: stage.published_s, expect: band, band: [115183, 115300], source: "publish on the decision"}
+- {id: V3-on-decision-publishes-now, run: crl-on-decision, metric: stage.published_s, expect: band, band: [115100, 115300], source: "publish on the decision (L2's decision band: stages count from the case's first detection)",
+   note: "corrected 2026-10-24 (was [115183, 115300]): on the 300 s base the deciding attacker's first detection is at 69 s, not ~37 s, so every stage reads 32 s smaller; absolute times unchanged: decision and publication both at 115,220.2 s (case.abs.*), rerun-2026-10-24-a §3"}
 - {id: V3-on-decision-enforced-earlier, run: crl-on-decision, vs: base, metric: stage.enforced_s, expect: delta, band: [-33000, -30000], source: "the ~9 h business-day wait is gone"}
 - {id: V4-west-report-leg, run: region-west, vs: base, metric: stage.report_received_s, expect: delta, band: [0.012, 0.05],
    source: "haversine NYC-us-east 354.5 km (2.77 ms), NYC-us-west 3,691.7 km (19.47 ms) at 2/3 c + 1 ms per link: +16.7 ms per leg"}
@@ -110,3 +114,41 @@
    note: "corrected 2026-10-22 (was 3, open): after R-USFP both vehicle attackers are revoked; the third sends PSMs from a handset, which SM-MBR v1.0 cannot report (as A3)"}
 - {id: V8-us-honest-fp, run: us-profile, vs: base, metric: p2.honest_reported, expect: ratio, band: [1, 100],
    source: "a 1 m gpsDrift and no streak gate: a 12 m GNSS outlier (0.01/s, Reid 2019) on an honest sender is a RandomPosition report"}
+# ---- Added 2026-10-24 (rerun-2026-10-24-a §4): confirmed-working claims of 06 §3 that had no
+# runtime row. Written before the runs on 81a12183 that judge them.
+- {id: N1-crl-from-t0-every-craca, run: base, metric: crl.held_cracas_min, expect: eq, value: 2,
+   source: "06 §3 item 8 (R-NOCRL, OF-3): every CRACA signs a full CRL at t0, as a deployment running since 2015 does, and every device's receiver holds it; us-production-2025 has one CRACA per provider"}
+- {id: N2-crl-preload-per-device, run: base, metric: crl.preload_per_device_min, expect: eq, value: 2,
+   source: "06 §3 item 8: pki.flow carries each device's pre-run download of each CRACA's list, marked preload (one per CRACA)"}
+- {id: N3-crl-preload-every-holder, run: base, metric: crl.holders_minus_preload, expect: eq, value: 0,
+   source: "06 §3 item 8: every device whose receiver holds a list has its pre-run download on the record (no list without a download)"}
+- {id: N4-crl-next-7-days, run: base, metric: crl.next_minus_issue_s, expect: subset, value: [604800],
+   source: "06 §3 items 8-9: full CRLs only, each nextCrl exactly 7 days after its issue date (mbr 614/0 ... 616/0)"}
+- {id: N5-crl-no-stale-holder, run: base, metric: crl.nodes_stale, expect: eq, value: 0,
+   source: "06 §3 item 9: the hourly conditional poll brings every awake device the newest list within the hour (a node is stale when another held a newer list more than an hour before the node's last row). R-JOINCRL is not exercised: every device joins before any new list"}
+- {id: N6-rsu-crl-installs, run: base, metric: crl.rsu_installs_per_list, expect: eq, value: 1.0,
+   source: "06 §3 item 8: every RSU installs every list published (the 2 t0 lists, FB.crl's 60 at full fleet, and each new one)",
+   note: "corrected 2026-10-24 before commit (was rsu_crls_installed eq 60): with the revocation the base publishes a third list and 90 = 30 RSUs x 3 lists"}
+- {id: N7-rsu-app-cert-renewal, run: base, metric: p2.rsu_app_certs_renewed, expect: eq, value: 30,
+   source: "CAMP122 §6.3.5, 01 §4: an RSU holds weekly application certificates, 2 preloaded (614, 615) and one renewal (616) inside the two days: 30 renewals for 30 RSUs"}
+- {id: N8-no-rsu-filed-report, run: base, metric: p2.reports_from_rsus, expect: eq, value: 0,
+   source: "06 §3 item 10 (R-UNSEC): [SM-MBR] §3 signs with the end-entity's pseudonym certificate; USDOT RSU Spec v4.1 gives a unit no reporting function"}
+- {id: N9-research-rsu-reports-kept, run: research-suite, metric: p2.reports_from_rsus, expect: ge, value: 1,
+   source: "06 §3 item 10: modelled_reports: 1 (research) keeps the sized-only roadside path"}
+- {id: N10-evidence-time-plausible, run: base, metric: p2.reports_evidence_time_implausible, expect: eq, value: 0,
+   source: "06 §3 item 12 (measure §5): a handset applies the generationTime window when it takes a frame, so no report quotes evidence 43,125 s old"}
+- {id: N11-few-honest-reports, run: base, metric: p2.reports_about_honest, expect: le, value: 15,
+   source: "06 §3 item 13 (R-FS40): honest reports at quarter density fell 54 -> 15 with constantPositionFrozen 28 -> 0 (final-run §2); this base is a fifteenth of rush hour",
+   note: "corrected 2026-10-24 (was eq 0): 4 honest reports on the 300 s base, none reaching a case; the claim is 15 at quarter density, not 0"}
+- {id: N12-polls-answered-412, run: base, metric: p2.crl_polls_not_modified, expect: ge, value: 1,
+   source: "06 §3 items 9, 15: conditional CRL polls are answered 412 when nothing changed"}
+- {id: N13-pq-rsu-crl, run: pq-hybrid, metric: crl.rsu_installs_per_list, expect: eq, value: 1.0,
+   source: "06 §3 item 17 (R-PQRSUCRL): RSUs learn the CRL under PQ, every list as under ECDSA",
+   note: "corrected 2026-10-24 (was rsu_crls_installed eq 60): the PQ run also revokes, so 90 = 30 RSUs x 3 lists, as N6"}
+- {id: N14-determinism-metrics, run: base-repeat, vs: base, metric: digest.metrics.json, expect: same,
+   source: "06 §3 item 16: same seed, same configuration, byte-identical metrics.json"}
+- {id: N15-determinism-records, run: base-repeat, vs: base, metric: digest.records, expect: same,
+   source: "06 §3 item 16: same seed, byte-identical records",
+   note: "corrected 2026-10-24 (was the file digest of recording.mcap): the two files differ only in the manifest's build_utc, the wall-clock instant each run started (2026-10-24T15:18:39Z against 17:27:33Z); every message (topic, time, bytes, order) is identical (rerun-2026-10-24-a §4)"}
+- {id: N16-gnss-raw-evidence-time, run: gnss-raw, metric: p2.reports_evidence_time_implausible, expect: eq, value: 0,
+   source: "06 §9 owed: gnss-raw expected 0 implausible evidence after measure §5"}

@@ -129,6 +129,12 @@ def extract(run_dir):
     sep = collections.defaultdict(set)
     holds_device = set()
     shared_from = collections.Counter()
+    # What each node's receiver holds (node.security `crls`, OF-3): its last row, and every
+    # (craca, issue date) any node held, with the first time it was seen held.
+    held_last = {}
+    first_held = {}
+    next_minus_issue = set()
+    preload_crl = collections.Counter()
     path = os.path.join(run_dir, 'recording.mcap')
     first_state = True
     with open(path, 'rb') as f:
@@ -153,9 +159,18 @@ def extract(run_dir):
                         sealed_n += 1
                         if st != op and not (st == 'ee' and op.startswith('ee/')):
                             sealed_bad += 1
+                if q['flow'] == 'preload' and q.get('name') == 'SecuredCrl' and (to or '').startswith('ee/'):
+                    preload_crl[to] += 1
                 inst_t[(q['flow'], q['instance'])].append(q['t'])
                 if q['flow'] == 'topup' and q['kind'] == 'stage':
                     topup[q['instance']].setdefault(q['name'], q['t'])
+            elif t == 'record/node.security':
+                q = json.loads(m.data)
+                crls = q.get('crls') or []
+                held_last[q['node']] = (q['t'], {c['craca']: c['issue_date'] for c in crls})
+                for c in crls:
+                    first_held.setdefault((c['craca'], c['issue_date']), q['t'])
+                    next_minus_issue.add(c['next_crl'] - c['issue_date'])
             elif t == 'record/pki.case':
                 q = json.loads(m.data)
                 case_t[q['case']].setdefault(q['stage'], q['t'])
@@ -246,7 +261,54 @@ def extract(run_dir):
     out['separation.holds_device'] = sorted(holds_device)
     out['sealed.checked'] = sealed_n
     out['sealed.mismatch'] = sealed_bad
+    # CRL holdings (06 §3 item 8; OF-3). Every CRACA's list, each node's last row; a node is
+    # stale when another node already held a newer list of that CRACA more than an hour (the
+    # conditional poll period) before the stale node's last row.
+    cracas = {k[0] for k in first_held}
+    out['crl.cracas'] = len(cracas)
+    out['crl.held_cracas_min'] = min((len(h) for _, h in held_last.values()), default=0)
+    stale = 0
+    for tn, h in held_last.values():
+        for ca, iss in h.items():
+            if any(c == ca and i > iss and t0 + 3600 * NS < tn for (c, i), t0 in first_held.items()):
+                stale += 1
+                break
+    out['crl.nodes'] = len(held_last)
+    out['crl.nodes_stale'] = stale
+    out['crl.next_minus_issue_s'] = sorted(next_minus_issue)
+    out['crl.preload_devices'] = len(preload_crl)
+    out['crl.preload_per_device_min'] = min(preload_crl.values(), default=0)
+    out['crl.preload_per_device_max'] = max(preload_crl.values(), default=0)
+    out['crl.holders_minus_preload'] = len(held_last) - len(preload_crl)
+    # Determinism: the run's metrics and records, byte for byte (06 §3 item 16).
+    import hashlib
+    for name in ('metrics.json', 'recording.mcap'):
+        fp = os.path.join(run_dir, name)
+        if os.path.exists(fp):
+            out['digest.' + name] = hashlib.sha256(open(fp, 'rb').read()).hexdigest()
+    # The record stream (every message's topic, time and bytes, in file order), without the
+    # manifest metadata, whose `build_utc` is the wall-clock instant the run started.
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for _, ch, m in make_reader(f).iter_messages(log_time_order=False):
+            h.update(ch.topic.encode() + b'\0' + m.log_time.to_bytes(8, 'little') + m.data)
+    out['digest.records'] = h.hexdigest()
     return out
+
+
+def derive(d):
+    """Scale-free forms of fleet-dependent counts, from the run report's own numbers, so a
+    row states the per-device or per-list rule rather than one fixture's fleet."""
+    if d is None:
+        return None
+    done = d.get('p2.topups_completed', 0)
+    if done:
+        d['topup.certs_per_topup'] = d.get('p2.certs_topped_up', 0) / done
+    d['topup.incomplete'] = d.get('p2.topups_started', 0) - done
+    lists = d.get('p2.crl_versions_published', 0)
+    if d.get('p2.rsus') and lists:
+        d['crl.rsu_installs_per_list'] = d.get('p2.rsu_crls_installed', 0) / (d['p2.rsus'] * lists)
+    return d
 
 
 def check(table, runs_dir):
@@ -257,7 +319,7 @@ def check(table, runs_dir):
     def get(run, metric):
         if run not in cache:
             p = os.path.join(runs_dir, run, 'realism.json')
-            cache[run] = json.load(open(p)) if os.path.exists(p) else None
+            cache[run] = derive(json.load(open(p))) if os.path.exists(p) else None
         d = cache[run]
         if d is None:
             return 'NO-RUN'
@@ -291,6 +353,10 @@ def check(table, runs_dir):
                 lo, hi = row['band']
                 ok = lo <= x <= hi
                 shown = f'{v} vs {b} -> {x:.4g}'
+        elif op == 'same':
+            b = get(row['vs'], row['metric'])
+            ok = None if b in ('NO-RUN', 'ABSENT') else v == b
+            shown = f'{str(v)[:16]} vs {str(b)[:16]}'
         elif op == 'true':
             ok = bool(v)
         elif op == 'false':

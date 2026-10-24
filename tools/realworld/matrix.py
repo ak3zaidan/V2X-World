@@ -170,7 +170,7 @@ def check(table, runs_dir, fill):
     def get(run, metric):
         if run not in cache:
             p = os.path.join(runs_dir, run, 'realism.json')
-            cache[run] = json.load(open(p)) if os.path.exists(p) else None
+            cache[run] = _realism().derive(json.load(open(p))) if os.path.exists(p) else None
         d = cache[run]
         if d is None:
             return 'NO-RUN'
