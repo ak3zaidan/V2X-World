@@ -286,6 +286,13 @@ def extract(run_dir):
         fp = os.path.join(run_dir, name)
         if os.path.exists(fp):
             out['digest.' + name] = hashlib.sha256(open(fp, 'rb').read()).hexdigest()
+    # The record stream (every message's topic, time and bytes, in file order), without the
+    # manifest metadata, whose `build_utc` is the wall-clock instant the run started.
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for _, ch, m in make_reader(f).iter_messages(log_time_order=False):
+            h.update(ch.topic.encode() + b'\0' + m.log_time.to_bytes(8, 'little') + m.data)
+    out['digest.records'] = h.hexdigest()
     return out
 
 

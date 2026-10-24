@@ -142,11 +142,13 @@
    note: "corrected 2026-10-24 (was eq 0): 4 honest reports on the 300 s base, none reaching a case; the claim is 15 at quarter density, not 0"}
 - {id: N12-polls-answered-412, run: base, metric: p2.crl_polls_not_modified, expect: ge, value: 1,
    source: "06 §3 items 9, 15: conditional CRL polls are answered 412 when nothing changed"}
-- {id: N13-pq-rsu-crl, run: pq-hybrid, metric: p2.rsu_crls_installed, expect: eq, value: 60,
-   source: "06 §3 item 17 (R-PQRSUCRL): RSUs learn the CRL under PQ, 60 installs as under ECDSA"}
+- {id: N13-pq-rsu-crl, run: pq-hybrid, metric: crl.rsu_installs_per_list, expect: eq, value: 1.0,
+   source: "06 §3 item 17 (R-PQRSUCRL): RSUs learn the CRL under PQ, every list as under ECDSA",
+   note: "corrected 2026-10-24 (was rsu_crls_installed eq 60): the PQ run also revokes, so 90 = 30 RSUs x 3 lists, as N6"}
 - {id: N14-determinism-metrics, run: base-repeat, vs: base, metric: digest.metrics.json, expect: same,
    source: "06 §3 item 16: same seed, same configuration, byte-identical metrics.json"}
-- {id: N15-determinism-records, run: base-repeat, vs: base, metric: digest.recording.mcap, expect: same,
-   source: "06 §3 item 16: same seed, byte-identical records"}
+- {id: N15-determinism-records, run: base-repeat, vs: base, metric: digest.records, expect: same,
+   source: "06 §3 item 16: same seed, byte-identical records",
+   note: "corrected 2026-10-24 (was the file digest of recording.mcap): the two files differ only in the manifest's build_utc, the wall-clock instant each run started (2026-10-24T15:18:39Z against 17:27:33Z); every message (topic, time, bytes, order) is identical (rerun-2026-10-24-a §4)"}
 - {id: N16-gnss-raw-evidence-time, run: gnss-raw, metric: p2.reports_evidence_time_implausible, expect: eq, value: 0,
    source: "06 §9 owed: gnss-raw expected 0 implausible evidence after measure §5"}
