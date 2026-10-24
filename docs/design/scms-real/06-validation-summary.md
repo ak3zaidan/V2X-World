@@ -1,13 +1,17 @@
 # 06 — How close the engine's SCMS is to the real US deployment: validation summary
 
 First written 2026-10-18 at `8245ef81`. Rewritten 2026-10-22 at `0f7eda5c` and at
-`bc3bca1b`. **Rewritten again 2026-10-23 at `a4982f9f`** (main), after:
-- fix wave 3 (PQMEM, DETPRIV and RERUNS, merged at `0a125a98`, `f812677e` and `4a62ed5b`;
-  `cargo fmt` `09e55393`; docs `e4004b4c`);
-- final runs part 2 (BENCH, merged at `430f40ee`; docs `a4982f9f`).
+`bc3bca1b`, and 2026-10-23 at `a4982f9f` (fix wave 3 and final runs part 2). **Rewritten
+again 2026-10-23 at `d90a6298`** (main), after:
+- finalize 4 (TESTS, FF and MEM, merged at `2f6c664d`, `66d65542` and `58e0b270` onto
+  `747a0773`; `cargo fmt` `4a1d014e`; docs `fe3757b9`);
+- the full-scale benchmark to the end (BENCH, merged at `d90a6298`: FB3, docs and the
+  `scms-full-bench.yaml` expectations only).
 
-No Rust code changed after `09e55393`, so every test result of the wave 3 integration is a
-result for HEAD's code.
+No Rust or `ui/` code changed after `4a1d014e`, so every test result of the finalize 4
+integration is a result for HEAD's code. The one thing `d90a6298` adds that a test reads is
+`scms-full-bench.yaml`, which the expectation-loading tests parse; their run on HEAD did not
+finish (§2.2).
 
 This page states the final state of the realism round: the verdict on every real-world rule,
 the test totals across every configuration that ran, what is confirmed working, and what
@@ -25,12 +29,15 @@ and the merge notes in `docs/design/BUILD-STATUS.md`. Every claim names its row 
 - **07 §n**: `07-config-testing-report.md`.
 - **matrix**, **stress**, **oracle-final**, **final-bench**, **final-run**, **usfp**,
   **pq-profile**, **knobs**, **effects**, **edge**, **realism**, **ccsig-memory**,
-  **measure**, **rerun**: the reports in `testing/` (`rerun` is `rerun-2026-10-22.md`).
+  **measure**, **rerun**, **ff**, **memden**, **full-bench**: the reports in `testing/`
+  (`rerun` is `rerun-2026-10-22.md`, `ff` is `fast-forward.md`, `memden` is
+  `memory-density.md`).
 - **bench §n**: `docs/benchmark/scms-real-benchmark.md`.
-- **BS wave 2**, **BS final**, **BS wave 3** and **BS final 2**: the BUILD-STATUS sections
-  "SCMS realism fix wave 2 integration", "SCMS realism final test wave integration" (both
-  2026-10-22), "SCMS realism fix wave 3 integration" and "SCMS realism final runs part 2
-  integration" (both 2026-10-23).
+- **BS wave 2**, **BS final**, **BS wave 3**, **BS final 2** and **BS fin4**: the
+  BUILD-STATUS sections "SCMS realism fix wave 2 integration", "SCMS realism final test wave
+  integration" (both 2026-10-22), "SCMS realism fix wave 3 integration", "SCMS realism final
+  runs part 2 integration" and "SCMS realism finalize 4 integration" (all 2026-10-23). The
+  full-bench merge (`d90a6298`) has no BUILD-STATUS section yet (§9).
 - **04 §n** and **RT Rn**: `04-validation-report.md` and `docs/redteam/pki-privacy.md`.
 
 The checklist files keep the verdicts their validators recorded on 2026-10-18. The only
@@ -86,20 +93,27 @@ A row with two verdicts is counted under its first.
 **Final match: 275 of 326 rules (84.4 %) do what the real system does** (matches plus fixed).
 It was 264 (81.0 %) on 2026-10-18, 270 (82.8 %) at `0f7eda5c` and 275 at `bc3bca1b`.
 
-**What moved since `bc3bca1b`: no rule verdict.** Fix wave 3 fixed runtime defects that have
-no checklist row (§4.2). No rule was reopened by it or by final runs part 2. One row could
-move on an owner reading: veh M13 (do RSUs report misbehaviour?) is still counted
-unverifiable, although the engine now follows the reading that the US profile has no roadside
+**What moved since `bc3bca1b`: no rule verdict.** Fix wave 3, finalize 4 and the full-scale
+benchmark fixed or settled runtime defects that have no checklist row (§4.2). None of them
+reopened a rule. The full-scale run to the end exercised the specified report shuffle, the
+hourly conditional CRL poll, the weekly top-up at the i-period boundary and the one-hour
+certificate overlap at full fleet, and each behaved as its row says (§3 item 15). One row
+could move on an owner reading: veh M13 (do RSUs report misbehaviour?) is still counted
+unverifiable, although the engine follows the reading that the US profile has no roadside
 reporter (§8 item 6). If the owner accepts that reading, the match is 276 (84.7 %).
 
 Of the 51 rules that do not match:
 - 29 cannot be checked against any public source (§7);
 - 22 are known differences (§5). 14 of them change nothing a device trusts or does.
 
-The runtime defects that testing found and that have no checklist row are in §6. R-CCSIG,
-the largest open item in the previous version of this page, is fixed. The largest still open
-are the two fast-forward defects that the full-scale benchmark found (R-FFHOLD and
-R-FFBURST), the honest reports at full density, and the full-scale memory.
+The runtime defects that testing found and that have no checklist row are in §6. Since the
+previous version of this page, the full-scale benchmark has run to the end (172,800 s, rc 0,
+peak 2,105 MB), R-FFBURST is fixed, and R-FFHOLD, R-FFSLOW and the rollover's pseudonym
+count turned out not to be engine defects. Honest traffic at full density opens no case and
+revokes nobody. The largest items still open are the honest report volume at full density
+(2,001 reports in 300 s, explained but partly uncalibrated), R-FFWIN, the cost of the
+rollover window and of each fast-forward stop, and the re-runs that the new benchmark turn
+rule makes owed.
 
 ### 2.2 Tests across all configurations
 
@@ -121,28 +135,38 @@ in each table's expectations file.
 | Final run: certificate cycle after R-CCSIG, full-scale benchmark (`scms-final-run.yaml`) | 27 | 16 | 2 | 2 | 7 |
 | Oracle-final on `88e24b09`: expectation rows, conf and mbr runs (oracle-final §8.1) | 60 | 60 | 0 | 0 | 0 |
 | Oracle-final: `88e24b09` against `4924a5d2` and base against variant (oracle-final §8.2) | 10 | 9 | 0 | 1 | 0 |
-| **All** | **477** | **379** | **32** | **30** | **36** |
+| Full bench on `fe3757b9`: R-FFSLOW on the conformance and quarter files, the quarter fleet end to end, the full-scale file end to end (`scms-full-bench.yaml`, full-bench) | 10 | 6 | 0 | 2 | 2 |
+| **All** | **487** | **385** | **32** | **32** | **38** |
 
 The realism file records no per-row "fixed" verdict. The rows that the R-USFP fix turned
 green are counted as pass, and the 6 rows corrected in the re-run (Z1, Z3, Z4, A3,
 V8-us-catches-constpos and V8-us-checks-every-bsm, rerun §6) as corrected. Each corrected
 row was shown to fail with a value outside its new band injected.
 
-**What the 36 open rows are.** Most are not engine problems:
-- **22 are superseded by a later table, or carried into one.**
-  - Stress, 12: the 10 full-fleet rows (`FS.*`) were never run, and the final bench and final
-    run measured them as `FB.*` and `FB2.*`. `PQ.certcycle` found R-CCSIG, which is now fixed
-    (`PQHFC.sizes` and `PQHMC.sizes`, final-run). `PQ.determinism` passes in the final bench.
+**What the 38 open rows are.** Most are not engine problems:
+- **29 are superseded by a later table, or carried into one.**
+  - Stress, 12: the 10 full-fleet rows (`FS.*`) were never run, and the final bench, final
+    run and full bench measured them as `FB.*`, `FB2.*` and `FB3.*`. `PQ.certcycle` found
+    R-CCSIG, which is now fixed (`PQHFC.sizes` and `PQHMC.sizes`, final-run).
+    `PQ.determinism` passes in the final bench.
   - Final bench, 10. Six are closed by the final run: `FB.devices` and
     `FB.topups-at-rollover` pass as `FB2.*`, and `PQHMC.*` ×3 and `PQHFC.ccsig` are fixed
-    (R-CCSIG). Four are carried into final-run rows that are still open: `FB.ff-ticks`,
-    `FB.cost`, the honest false positives and the privacy link claims.
+    (R-CCSIG). Four are carried into the full bench: `FB.ff-ticks` (69,130 stops, each with a
+    real cause), `FB.cost` (into `FB3.completes`, still open), the honest false positives
+    (`FB3.honest-reports`, pass) and the privacy link claims (`FB3.privacy`, pass).
+  - Final run, 7, all closed by FB3: `FB2.completes` and `FB2.cost` (FB3 completed; its
+    cost is `FB3.completes`, open), `FB2.ff-ticks` (R-FFSLOW does not reproduce,
+    full-bench §2), `FB2.crl` and `FB2.backend-load` (`FB3.pki`, pass, and bench §000's
+    per-entity table), `FB2.honest-reports` (`FB3.honest-reports`, pass) and `FB2.privacy`
+    (`FB3.privacy`, pass). The FB2.privacy expectation itself was wrong (no change is due at
+    the boundary under CERTCHG with a one-hour overlap, ff §3), but its row in
+    `scms-final-run.yaml` still reads open and has not been corrected.
 - **1 is open by design:** the knobs row for the request shuffle, published as partial,
   because the shuffle has no in-run effect (knobs). Its test passes (`scms_knobs_runs` 18/18).
-- **13 are open items.**
-  - Final run, 7: the full-scale benchmark did not finish (`FB2.completes`, `FB2.cost`,
-    `FB2.ff-ticks`, `FB2.crl`, `FB2.backend-load`), and two of its findings
-    (`FB2.honest-reports`, `FB2.privacy`). §6 items 1–5.
+- **8 are open items.**
+  - Full bench, 2: `FB3.completes` (the rollover window took 4,767 s for 60 s and the
+    second fast-forward 2,014 s, both slower than expected; §6 item 3) and
+    `FB3.metric-window-after-ff` (R-FFWIN, §6 item 2).
   - Stress, 3: `MWC.recovery` (R-JOINCRL, §6 item 7), `MWP.off-no-backend` (reopened, §6
     item 8) and `PQ.backend-bytes` (the per-certificate factor was not isolated; final-run
     §2 shows the bytes are reports, not provisioning).
@@ -150,10 +174,15 @@ row was shown to fail with a value outside its new band injected.
   - Realism, 2: L5, the case-board review time (§6 item 15), and T5, the US component set,
     which carries `status: open` in its file.
 
-**Two notes on the table:**
+**Three notes on the table:**
 - **The matrix and realism re-runs used the release binary of `77cffb5b`**, before fix wave
   3. Wave 3 changed the GNSS propagation, stopped RSUs filing their own reports and recorded
   the pre-run CRL fetch, so their report counts are owed again (§9).
+- **The benchmark's apex turn rule (`traffic.turn_curve_window_m: 6`, memden §2.2) changes
+  the traffic of every scenario that inherits the benchmark**: the quarter fleet, LTE,
+  Portland, the stress files and, through the quarter file, the realism base and its 33
+  matrix and realism children. The matrix, realism, final-bench and final-run expectations
+  were measured without it. Only the full bench (FB3, QD, D1) ran with it.
 - **Not in the table:** the policy package's before/after runs (07 §8), and usfp's same-seed
   before/after table (§3). Neither is a row. On `edge/clock-skew-ahead`, honest vehicles
   revoked fell from 19 to 0. On the realism base under the US profile, honest vehicles
@@ -176,21 +205,25 @@ row was shown to fail with a value outside its new band injected.
 | `check_run_crl.py` on a newly generated CRL corpus (`2004bb87`) | 19/19 |
 | Published artefacts; `real_artefacts`; `profiles.py`; PDU checkers; conformance run (`8245ef81`, not re-run since) | 164/164; 7/7; 24/24; 24/24, 25/25, 18/18, 4/4; 19,183/19,183 |
 | Fault proofs of fix wave 3 | PQMEM F1–F5 red on main (BS wave 3); DETPRIV 6 of 6 injected faults red (measure §6); RERUNS: 3 sensitivity faults, the M-RX1 filter, the 5 s CRL poll and 4 realism size/count injections red (rerun §1–§3, §6) |
+| Fault proofs of finalize 4 | FF: 4 of 4 red (GNSS resume a no-op, `ped_wait` pause a no-op, privacy pause a no-op, traffic not paused; ff §6). MEM: 2 of 2 red (a parked stream that ignores its word position, an interner that never reuses a copy; memden §1.2). TESTS: 2 of 2 red (a unit that drops every reassembled report, judged evidence from another signer; §6 item 9) |
 
 **Rust, UI and build checks**
 
 | Suite | Result |
 |---|---|
-| HEAD's code (`09e55393`, run at the wave 3 integration): v2xw-sec, msg, proto, node, threat (`calibrate`, `in_the_loop`, `legacy_engine_compare` included), metrics, mobility | 1,830 pass, 5 fail, 3 ignored. The 5 are the known mobility traffic tests (calibration ×2, `pedestrian_invariants` ×2, kerbside `realism`). None uses GNSS, and their values are unchanged |
-| HEAD's code: engine lib plus 29 SCMS, phase2 and sensitivity binaries, `scms_knobs_runs` 18/18 included | 284 pass, **2 fail**, 7 ignored. The 2 failures need an owner decision (§6 item 9) |
-| HEAD `a4982f9f` (BS final 2): sec, msg, proto, node; engine lib plus 17 SCMS, phase2, PQ and sensitivity binaries | 1,015 pass, 0 fail, 1 ignored; 230 pass, the same 2 fail, 7 ignored |
+| HEAD's code (`4a1d014e`, run at the finalize 4 integration, BS fin4): `cargo check --workspace --tests` | Passes, with the known warnings (v2xw-msg unused imports). Passes again on `d90a6298` |
+| HEAD's code: v2xw-sec, msg, proto, node, core, metrics, demand, mobility, cli | **1,882 pass, 7 fail, 3 ignored.** All 7 predate the merges: the 5 known mobility traffic tests (§6 item 16), `v2xw-demand transit::a_bus_serves_its_stops` and `v2xw-cli longrun_budget`. The last two fail identically on `747a0773` before the merges, and neither was in the earlier baselines |
+| HEAD's code: engine lib plus 31 SCMS, phase2, PQ, sensitivity, calendar and VRU binaries (`scms_knobs_runs` 18/18 in 2,108 s) | **301 pass, 0 fail, 8 ignored.** `scms_wiring` and `pq_relay` pass again (§6 item 9); the new fast-forward, GNSS-resume, `ped_wait`, privacy-rate and memory tests pass (ff §6, memden §1.2) |
+| `d90a6298`'s expectation file: `sensitivity_catalogue` and `sensitivity_expectations`, which parse every yaml in `tests/expectations` | **Not finished.** The run (with phase2 and `scms_*`) was started at the full-bench integration and stopped before it reported. `scms-full-bench.yaml` uses the schema and the four verdict words of `scms-final-run.yaml`, which those tests already load |
+| v2xw-threat (`calibrate`, `in_the_loop`, `legacy_engine_compare`) | Last run on `09e55393` (wave 3): pass. Not in the finalize 4 run |
 | The 6 sensitivity failures of `bc3bca1b` | Root-caused and re-stated (rerun §1–§2): `sensitivity_radio` 27/27 (the real 80 B certificate changed frame sizes), `sensitivity_security` 20/20 (a 5 s CRL poll refuses the next pseudonym before it is reported, so nothing is left to link). CLI rows 28/28, 13/13, 3/3, 24/24 |
 | `fragmentation::a_padded_message_…` (M-RX1) | Passes. M-RX1 blamed an SDU's fate on a fragment the PHY lost after it; the engine was right (rerun §3) |
-| Regression digests | `phase2-path` and `i-s1-phase2-60s` re-blessed for wave 3's record changes; the phase2/scms_scale digests are unchanged after the merge |
-| v2xw-server and v2xw-cli (`2004bb87`, not re-run since) | Pass except `longrun_budget`: 24.9 MB against a 24 MB budget. It already failed before (24.8 MB) |
-| `timeline::a_param_change_of_the_arrival_rate_takes_effect_at_its_instant` | Fails (5.29×, band 2.5–5.0). It is traffic-only, has no SCMS, and predates this round |
-| UI (`88e24b09`) | protocol and viewer `tsc -b` pass; Studio typecheck passes; Studio 326/326 unit and 32/32 e2e. No `ui/` change since, but the Studio fixtures that contain `node.security` or the new report fields may need re-recording |
-| Release build and boot (`a4982f9f`) | Release build OK (6 m 57 s); the simulator boots on port 8758, and `/agent/status` and `/rpc/schema` both answer 200 |
+| Regression digests | `phase2-path` and `i-s1-phase2-60s` re-blessed for wave 3's record changes; the phase2 and `scms_scale` digests are unchanged by finalize 4's memory and fast-forward changes. A 20 s full-scale run gives the same stream digest before and after the memory commits (`866d3101…`, memden §1.2) |
+| `longrun_budget` (v2xw-cli) | Fails. At `2004bb87` it was 24.9 MB against a 24 MB budget; at `747a0773` and HEAD the slice cost grows from 2.26 s to 10.7 s. Pre-existing; not root-caused |
+| v2xw-server (`2004bb87`, not re-run since) | Pass |
+| `timeline::a_param_change_of_the_arrival_rate_takes_effect_at_its_instant` | Failed when last run (5.29×, band 2.5–5.0). Traffic-only, no SCMS, predates this round; not in the finalize 4 run |
+| UI (`4a1d014e`) | protocol and viewer `tsc -b` build; Studio typecheck passes; Studio 326/326 unit tests, with the PKI view fixtures re-recorded from `d0e6530b` (`aaa2f354`). Studio e2e was last run at `88e24b09` (32/32) |
+| Release build and boot (`4a1d014e`) | Release build OK (8 m 11 s); the simulator boots on port 8758, and `/agent/status` and `/rpc/schema` both answer 200. Not rebuilt for `d90a6298`, which changes no code |
 
 ## 3. What is confirmed working
 
@@ -359,14 +392,33 @@ wave 3).**
 - certificate pool mean 25.7;
 - no signature, parse or backend failures, and no starvation.
 
-**15. Full fleet, both live windows** (bench §00, final-run §4). The 0–240 s window and the
-43,170–43,230 s rollover window ran in full:
-- PDR within 100 m 0.833–0.843, and 0.846–0.853 in the rollover window; the quarter fleet
-  gives 0.838. The 130–150 s windows are identical to the first full-scale run's;
-- BSM latency mean 12.39–12.46 ms, p99 14.94–15.07 ms;
-- CBR mean 0.073–0.087 and p95 0.13–0.20, below J2945/1's 0.5;
-- 240–268 verifications per node per second, verification queue p99 0;
-- 20 valid pseudonyms at every census until the boundary, 39.8 after it, and 0 starved.
+**15. The full-scale benchmark, run to the end** (FB3 on `fe3757b9`; bench §000,
+full-bench §4). The committed file (full fleet, 172,800 s, seed `0xBE7C_0001`) completed
+with rc 0 for the first time: 15,255 s of wall time awake, 24,786 CPU-s, **peak 2,105 MB**
+(FB2 reached 3,109 MB and was stopped at 47,340 s).
+- **Radio and latency.** PDR within 100 m 0.829–0.845 in both windows (quarter fleet
+  0.858); BSM latency mean 12.39–12.48 ms, p99 14.94–15.07 ms; CBR mean 0.072–0.088 and p95
+  0.14–0.18, below J2945/1's `vMinCU` 0.5; 245–279 verifications per node per second, wait
+  p99 0.28–0.52 ms.
+- **Pseudonyms.** 20 valid at every census until the boundary, 39.9 at 43,210 s (week 615
+  valid from the boundary), 0 starved. 1,773 of 1,800 top-ups completed (35,460
+  certificates; 27 incomplete, not traced, §6 item 5).
+- **Revocation path.** 70,946 hourly conditional CRL polls, all answered 412; 60 RSU
+  installs of the t0 lists; 0 CRL entries, because nothing was revoked.
+- **Honest traffic at full density opens no case.** 2,083 detector verdicts in 300 s of
+  live traffic, 2,001 reports decided, 1,447 real SM-MBR at the two MAs, **0 vehicles
+  accused, 0 cases, 0 revocations**. FB2's 71 honest cases were R-FFBURST artefacts, now
+  fixed (§4.2).
+- **The report shuffle acts as specified.** Reports filed at 130–240 s reached the home MA
+  at 86,430 s: the RA's shuffle (CAMP-EE SCMS-765, 10,000 reports or one day) never fills
+  in a 2 km² box. A revocation therefore takes at least the day of shuffle, the manual
+  review and the business-day CRL. This is a property of the specified system.
+- **The fleet is kept across the resume** (1,830 → 1,891; FB2 fell to 1,281), with 0
+  teleports, removals or jams, and no report burst (about 67 per 10 s; FB2 had 4,876 in
+  10 s).
+- **Every fast-forward stop has a real-world cause** (full-bench §2): 69,130 stops at full
+  fleet, almost all hourly CRL polls; 11,393 on the quarter file (1,119,908 before) and
+  8,310 on the conformance file (2,415,612 before).
 
 **16. Determinism.** Record digests are identical at 1 and 4 threads. That holds on the 33-day
 run, on the first 5 s of the full fleet, and on the hybrid ML-DSA-44 run, where
@@ -400,11 +452,21 @@ standard defines PQ encodings (pq-profile).
 step. With a memo, the realism base went from 2,074 s to 164 s with identical results
 (31–41 s on `77cffb5b`). `pq-base` went from 1,175 to 125 CPU-s.
 
+**19. Leaving a fast-forward** (finalize 4, ff §1–§2). The first live step after a frozen
+window no longer reads the frozen hours as elapsed time: the traffic, the demand and every
+GNSS receiver resume as if no time had passed (tested state for state, and to 1e-9 m for
+50 receivers), and `ped_wait` and `pseudonym_change_rate` leave the pause out.
+
+**20. Memory.** Exact compacted metric samples, a 24-byte parked link-stream map, one
+shared decoded copy of each governance certificate (interned by SHA-256) and allocator
+relief halve the 100 s full-fleet peak (2,074 → 1,027 MB) with an unchanged stream digest
+(memden §1). The whole two-day run peaks at 2,105 MB, under the 2.5 GB target.
+
 ## 4. Verdicts changed in this round
 
 ### 4.1 Fixed (16 rules since 2026-10-18)
 
-No rule verdict changed in fix wave 3 or final runs part 2.
+No rule verdict changed in fix wave 3, final runs part 2, finalize 4 or the full bench.
 
 **Fixed in fix wave 2.** These are the five rules reopened at `0f7eda5c`.
 
@@ -437,6 +499,36 @@ still not encoded.
 ### 4.2 Fixes that change runtime behaviour but no checklist row
 
 Each was fixed and proved red, as its report describes.
+
+**In finalize 4** (BS fin4):
+- **R-FFBURST** (ff §1): both causes fixed. Mobility clocks (standstill, lane change, entry
+  queue, stop end, the next arrival) counted the frozen window, so a vehicle standing at a
+  red lamp had "stood" 42,930 s and the gridlock resolution teleported or removed it; and
+  the first GNSS epoch after the window had `dt` 42,930 s, so the per-second outlier and
+  burst hazards were 1 and every vehicle jumped 12 m. `Mobility::resume_after_pause` and
+  `GnssModel::resume_after_pause` move those clocks on by the pause.
+- **`ped_wait` and `pseudonym_change_rate`** across the window (ff §2): `MetricProvider::on_pause`
+  removes the pause from the wait and from the observed vehicle-hours.
+- **`FastForwardReport::stops_by_cause`** and `traffic_paused_ns`: every stop is labelled by
+  its wake source. This is what showed R-FFSLOW gone (full-bench §2).
+- **Memory** (memden §1.2): compacted metric samples, parked link streams, shared governance
+  certificates and hardware profiles, allocator relief. Results and digests unchanged.
+- **The benchmark's apex turn rule** (memden §2.2): junction connectors were capped for
+  their average radius, so apexes were driven at 8–45 m/s² and receivers saw position
+  jumps across turns. The benchmark now judges the tightest 6 m. `positionJump` 123 → 35 in
+  the first 100 s at full fleet. This is a scenario setting and changes inherited traffic
+  (§2.2).
+- **The two engine tests** `scms_wiring` and `pq_relay` (§6 item 9).
+
+**Settled as not engine defects** (ff §3–§5, full-bench §2):
+- **R-FFHOLD.** The reports held across the first fast-forward were in the RA's report
+  shuffle, whose one-day timer is a kernel delivery that the fast-forward does wake for. A
+  frozen road files no reports, so the shuffle waits; in FB3 it released at 86,430 s.
+- **The rollover's pseudonym count.** A certificate is valid for the week plus one hour,
+  and CERTCHG needs 5 minutes and 2 km; a gridlocked vehicle in a 60 s window changes
+  nothing before 46,800 s. FB3 counted 0, as expected.
+- **R-FFSLOW.** The dense stepping does not reproduce on `fe3757b9` (8,310 stops on the
+  conformance file, 2,415,612 before). Which commit removed it was not bisected.
 
 **In fix wave 3** (BS wave 3):
 - **R-CCSIG** (ccsig-memory §1): the Partially-Hybrid cycle signs a node's messages with
@@ -539,57 +631,62 @@ counted.
 
 ## 6. Runtime defects and findings with no checklist row
 
-In order of impact. Each has its evidence in the named report. Items fixed in this round are
-in §4.2. None of the open items below changes a rule verdict, but items 1–3 decide whether
-any two-day misbehaviour number is a real-world number.
+In order of impact. Each has its evidence in the named report. Items fixed or settled in
+this round are in §4.2. None of the open items below changes a rule verdict. Item 1 decides
+whether a full-fleet misbehaviour rate is a real-world number.
 
-1. **R-FFHOLD: reports are held in flight across a fast-forward** (final-run §4 item 1).
-   Open, engine defect.
-   - At full fleet the census `p2.in_flight` stayed at 1,258 from 240 s to 43,170 s, and the
-     MAs had 0 reports. They received the first window's reports only at the 43,200 s
-     i-period boundary.
-   - The fast-forward's next wake apparently does not include in-flight report deliveries.
-   - **Impact:** report → case → decision timing is 12 h late for anything reported before a
-     fast-forward. Whether the quarter-fleet runs, which also cross a fast-forward, carry
-     the same delay has not been checked.
-2. **R-FFBURST: an honest-report burst on resuming after a fast-forward** (final-run §4
-   item 2). Open, cause unconfirmed.
-   - 4,876 reports in the 10 s after the 43,170 s resume, against about 80 per 10 s live.
-   - The hypothesis is that the GNSS model or the vehicles' kinematics step across the gap as
-     one epoch. The node count also fell from 1,833 to 1,281 at the resume.
-   - With item 1 this gave 15,062 reports at the MAs in 20 s and **71 cases about honest
-     vehicles** (3.3 % of vehicles). None was decided before the run was stopped.
-3. **Honest reports at full density** (FB2.honest-reports). Open.
-   - The first live window filed 1,935 reports in 240 s (8.1 a second), all about honest
-     vehicles. The first full-scale run filed 229 in 40 s (5.7 a second), mostly
-     `constantPositionFrozen`.
-   - The R-FS40 fix removes that cause at quarter density (28 → 0) and in Monte Carlo, but
-     it is not shown to hold at full density. The detector breakdown is only in the run
-     report, which the stopped run did not write. The 71 `positionJump` verdicts of the
-     40 s window were not investigated, and density rises into gridlock (median speed 0 from
-     160 s).
-   - The 0.3 m/s hold, the 100 s smoothing constant and the velocity σ are ASSUMPTIONS on
-     cited mechanisms.
-   - **Impact:** no full-fleet false-positive rate is a real-world number until items 1–3
-     are settled.
-4. **The full-scale benchmark has not finished** (bench §00, final-run §4).
-   - Both live windows ran in full, under a 3.5 GB cap, with a peak of 3,109 MB.
-   - The second fast-forward runs at about 6.7 simulated seconds per wall second, one SCMS
-     kernel step per simulated second (bench §9.2). The run was stopped at 47,340 of
-     172,800 s, about 5.4 hours short, so it has no end-of-run report.
-   - **Memory:** the wave 3 de-duplication removed 10–15 % of the live heap but does not show
-     at full scale (2,690 MB at 150 s, as before). Allocator retention after transient peaks
-     dominates; the 2.5 GB target is not met (ccsig-memory §2).
-   - **Impact:** there is no two-day full-fleet result: no CRL, case or decision outcome
-     (FB2.crl, FB2.backend-load), and no fast-forward tick count (FB2.ff-ticks).
-5. **The rollover registers no pseudonym change** (FB2.privacy). `pseudonym_change_rate` is 0
-   in every window, the 43,200 s boundary included, and linkability is 0 of 0, although the
-   pool doubles there; the quarter fleet counted 314 changes at its rollover. The privacy
-   observer's 2,873 link claims are explained and fixed (measure §2), but no privacy number
-   at full fleet can be read until this is.
-6. **Pedestrian wait counts the fast-forward** (final-run §4 item 3). `ped_wait` has a mean
-   of 3,465 s in the window after the resume, the same class of defect as the AoI charge
-   fixed in the matrix round.
+1. **Honest reports at full density** (full-bench §4.1, memden §2). Open; explained in
+   part.
+   - FB3 filed 2,001 reports in 300 s of live traffic, all about honest vehicles, against 50
+     on the quarter fleet: 40× the reports for 6.3× the devices and 3.3× the live time.
+     None became a case (0 vehicles accused; 67 report-level false positives), so no honest
+     device is revoked, but the volume is super-linear in density.
+   - **implausibleAcceleration** (1,249). Honest emergency stops at 9–10 m/s² plus the
+     receiver's 0.1 m/s Doppler noise cross the US profile's 10 m/s² MaxAcceleration on two
+     consecutive speeds, and each stop is heard by about 25 receivers that each file. That
+     is a property of the US rule, but the rate is the engine's emergency-braking rate,
+     which is not calibrated against naturalistic driving data. One sender (node 874)
+     snaps from 1.23 to 0.00 m/s in 100 ms: car-following or the 0.3 m/s static hold, not
+     root-caused.
+   - **constantPositionFrozen** (567, against 1 on the quarter fleet). full-bench reads it
+     as standing vehicles in gridlock (median speed 0 from 200 s). At 0–100 s it was 2–6
+     (memden §2.1–§2.2), and measure §1 found the static hold cannot trigger the check, so
+     why it rises in gridlock has not been checked one verdict at a time.
+   - **positionJump** (267). No pair as sent breaks RandomPosition: every verdict compares
+     BSMs that were not consecutive on the air (receiver gaps under load and `prioritized`
+     verification, with `max_gap_s` 0.5 s an ASSUMPTION). The junction-apex cause is fixed by
+     the turn rule (§4.2); through vehicles following lane polyline vertices with no
+     curvature limit (near Broadway) are still open.
+   - **Impact:** a full-fleet false-positive count is the engine's, not yet a real-world
+     rate, until the braking rate is calibrated and the polyline turns are fixed.
+2. **R-FFWIN: a window that ends where a fast-forward starts is reported late** (FB3
+   `metric-window-after-ff`, open). The 230–240 s window is reported at 43,170 s and the
+   43,220–43,230 s window at 172,800 s, with rates divided over the frozen hours
+   (`verify_rate` 115.7/s, CBR 0). Those two samples are left out of every table. An
+   analyst reading `metrics.json` directly would see them.
+3. **Full-scale run cost** (`FB3.completes`, open).
+   - The 60 s rollover window took 4,767 s (79 wall-s per simulated second, against 35 in
+     the first window). Not profiled. The weekly pre-generation at 43,200 s is one
+     synchronous burst (57.8 MB of backend traffic in 10 s; home kernel steps 1,266 →
+     13,854 in that minute), which a real RA spreads; that is the likely cost, not traced.
+   - Each fast-forward stop costs O(fleet): 29 ms at 1,945 nodes against 3.5 ms at 327.
+     The stops are real work (hourly polls), so the remaining fix is the event-indexed
+     wake scan (ff §5, part 2).
+   - **Impact:** a two-day full-fleet run takes about 4.2 h awake on the owner's laptop.
+     The 2×/4× fleet, LTE and Portland variants are still not run.
+4. **Full-scale memory: what is left.** The target is met at 2,105 MB. The largest live
+   structure is the SCMS backend's per-device state (113 MB of RA, LA and PCA records and
+   batch files plus 58 MB of enrolment for 970 devices at 40 s, memden §1.1). Dropping it
+   changes what the MA's investigation and re-downloads rely on, so each part needs an
+   owner decision on what the RA and PCA keep.
+5. **Untraced counts in FB3.** 268 of 1,715 uploaded reports never reached an MA (1,447
+   received), possibly because `reports_uploaded_relay` counts a report put on the air, not
+   one delivered (item 9). 27 of 1,800 top-ups did not complete. 255 reports were not filed
+   (212 with too few BSMs on hand, 43 by RSUs that hold no pseudonym certificate, which is
+   the R-UNSEC rule acting).
+6. **Privacy at full fleet is still unmeasured.** FB3 counted 0 pseudonym changes and 0 link
+   claims, as expected for a 60 s gridlocked window (ff §3). A live window that reaches
+   46,800 s, or the NYC pilot rule, is needed for a full-fleet linkability number.
 7. **R-JOINCRL: a car that joins mid-run holds only the t0 CRLs** (rerun §7, §9 item 1).
    Late in a long run those lists are overdue, so the joiner refuses its home provider's
    messages until its first download (2–49 s): 755 refusals at 4 joiners in MWC's W5, and
@@ -598,9 +695,11 @@ any two-day misbehaviour number is a real-world number.
 8. **A switched-off car records CRL downloads** (`MWP.off-no-backend`, reopened; rerun §7).
    Node 20 is off from 645 s to 2,419,510 s, but `proto.revocation` records it downloading,
    processing and enforcing three CRLs at 604,740.2 s, the first live step after a
-   fast-forward. Not root-caused.
-9. **The two engine tests that failed after BS wave 3 pass again** (fix wave 4, owner
-   decisions applied; no assertion changed, no rule changed).
+   fast-forward. Not root-caused, and not re-run since finalize 4 changed how a
+   fast-forward is left.
+9. **The two engine tests that failed after BS wave 3 pass again** (finalize 4 TESTS,
+   merge `2f6c664d`; owner decisions applied; no assertion changed, no rule changed). Both
+   pass on HEAD's code (§2.2).
    - `scms_wiring::detectors_file_real_us_reports_that_the_ma_opens_and_verifies` runs the
      scenario's own 300 s instead of 120 s. With RSUs filing no report (R-UNSEC), the first
      vehicle report is filed at 108 s by one car; in 300 s 105 real reports from 12 cars
@@ -622,11 +721,16 @@ any two-day misbehaviour number is a real-world number.
      and 218 m away behind buildings. The same car, out of the units' radio range, got its
      first CRL at 95.2 s, 60 s after the MA revoked its target (35.6 s), and reported the
      revoked attacker from 65.9 s to 72.8 s. `reports_uploaded_relay` is "put on the air",
-     not "delivered".
+     not "delivered". **Impact:** relay upload counts are an upper bound (FB3's 268 lost
+     uploads may be this, item 5), and a relay-only car out of every unit's radio range
+     learns a revocation late.
+   - The relay repro now revokes 3, not 2. `pq-profile.md` still quotes the old numbers and
+     is stale.
 10. **R-PQUNSEC: under PQ an RSU's own reports are still filed** (final-run §3). PQHFC files
     7 and PQHMC 9. `Phase2::real_mbr` returns `Off` when `pki` is `None`, before the R-UNSEC
-    roadside check. The fix is one line, but it may leave the `pq_relay` R-PQRSUCRL test's MA
-    without a case, the same decision as item 9.
+    roadside check. The fix is one line. It was held because it could leave the `pq_relay`
+    test's MA without a case; that test now has a vehicle reporter of its own (actor 112,
+    item 9), so the fix may no longer empty it. Not tried; owner decision.
 11. **Post-quantum path, modelled only** (pq-profile §3; final-run §3).
     - RSUs have no application-certificate cycle under PQ.
     - Receivers check CRL entries against the Generator's list, not a signed CRL.
@@ -648,8 +752,9 @@ any two-day misbehaviour number is a real-world number.
     the real profile, which the engine reproduces faithfully. The research suite, with
     `modelled_reports: 1`, catches it: 3 of 3 revoked.
 15. **Unexplained, not yet shown to be defects:**
-    - **Fast-forward ticks.** 865,653 in the edge peer-root-removed run; related to item 4's
-      slow second fast-forward.
+    - **Fast-forward ticks.** 865,653 in the edge peer-root-removed run (an older binary).
+      The dense stepping of the same class (R-FFSLOW) no longer reproduces on `fe3757b9`
+      (§4.2); this run was not repeated with `stops_by_cause`.
     - **Case-board review time** (realism L5). The board shows 28,799.95 s on `77cffb5b`,
       against the expected ≥ 28,800 s. The review clock starts at report receipt and the
       case's corroborated stamp comes up to a second later.
@@ -663,7 +768,7 @@ any two-day misbehaviour number is a real-world number.
       aligned with its SPS reservation (matrix `lte-latency-budget`).
     - Rebroadcasting a 336 kB standing CRL every 5 s on channel 172 costs about 0.54 Mbit/s per
       RSU (07 §7 item 5). This is a configured behaviour, not a defect.
-    - **The 5 failing mobility traffic tests** (re-run on `d0e6530b`, fix wave 4; none uses
+    - **The 5 failing mobility traffic tests** (re-run on `d0e6530b`, finalize 4 TESTS; none uses
       GNSS or the SCMS, and none is weakened). Two are calibration bands, three are real
       mobility defects.
       - `calibration::a_saturated_stop_line_discharges_at_the_published_rate`: start-up lost
@@ -689,6 +794,10 @@ any two-day misbehaviour number is a real-world number.
         180 s). Overlaps now pass. A real defect; the cause recorded on 2026-10-11 (a car
         held part-way through a lane change beside a standing delivery van blocks the lane
         behind it) was not re-checked for actor 79.
+    - **Two more pre-existing failures, not in the earlier baselines** (BS fin4; both fail
+      identically on `747a0773`, before the finalize 4 merges; neither touches the SCMS):
+      `v2xw-demand transit::a_bus_serves_its_stops`, and `v2xw-cli longrun_budget`, whose
+      slice cost grows from 2.26 s to 10.7 s. Neither is root-caused or bisected.
 17. **Red-team finding.** The `generationTime` window makes a replay older than 2 s harmless,
     but the replayer is never reported or punished: 11 of 11 replayers were revoked before the
     window, and 0 after it (07 §8.1).
@@ -786,35 +895,42 @@ The totals count each row as its own checklist records it, with the changes in �
 ## 9. What remains
 
 **Fix first (engine defects, in order of impact)**
-1. **R-FFHOLD**: include in-flight report deliveries in the fast-forward's next wake. Then
-   check whether the quarter-fleet MA timings carry the same delay.
-2. **R-FFBURST**: take the detector breakdown of the 10 s after a resume, and check how the
-   GNSS model and the kinematics cross the gap.
-3. **The slow second fast-forward** (bench §9.2), then run the full-scale file again with
-   `--checkpoint-every 1h`.
-4. **Full-scale memory**: reuse per-step buffers, keep latency windows as a sketch, drop RA
-   batch files after a confirmed download, and share `Arc<HardwareProfile>` (ccsig-memory
-   §2).
-5. **The honest reports at full density**: the detector breakdown, and the 71 `positionJump`
-   verdicts.
-6. **The rollover's pseudonym change count** and **`ped_wait` across a fast-forward**.
-7. **R-JOINCRL**: a joiner holds the newest list each CRACA published before it joined.
-8. **MWP.off-no-backend**, the `node.rx` `crl-overdue` label, the 47 `Invalid` states under
+1. **The honest reports at full density** (§6 item 1): calibrate the emergency-braking rate
+   against naturalistic driving data; give lane polyline vertices a curvature limit (or
+   round them in the importer); check the 567 `constantPositionFrozen` verdicts in gridlock
+   one at a time; find the node-874 speed snap.
+2. **R-FFWIN** (§6 item 2): report a window that ends at a fast-forward at its own end, with
+   its own rates.
+3. **The full-scale cost** (§6 item 3): profile the rollover window (the weekly
+   pre-generation burst is the first suspect), then make the fast-forward's per-stop scans
+   event-indexed (ff §5, part 2).
+4. **R-JOINCRL**: a joiner holds the newest list each CRACA published before it joined.
+5. **Trace FB3's 268 lost uploads and 27 incomplete top-ups**, and make
+   `reports_uploaded_relay` count delivered reports (§6 items 5 and 9).
+6. **MWP.off-no-backend**, the `node.rx` `crl-overdue` label, the 47 `Invalid` states under
    the cycle, and VRU handsets' PQ pricing.
-9. **The enrolment certificate name** (moves the digests).
+7. **The enrolment certificate name** (moves the digests).
+8. **Mobility**: the pedestrian-invariant and kerbside defects, and the `transit` and
+   `longrun_budget` failures (§6 item 16).
 
 **Owner decisions**
-- The two failing tests (`scms_wiring`, `pq_relay`) and R-PQUNSEC, which depend on each other
-  (§6 items 9–10).
+- **What the RA and PCA keep for each device** (§6 item 4): request records, cocoons,
+  provisioning jobs, PCA issued records and batch files after a confirmed download.
+- **R-PQUNSEC** (§6 item 10): the one-line fix, now that `pq_relay` has its own reporter.
 - The RSU-reporting reading (§8 item 6).
 - CF-IPERIOD (2 s).
-- The US J2945/1 window values.
+- The US J2945/1 window values, and `max_gap_s` 0.5 s (consecutively received) against
+  0.15 s (consecutive on the air) for the US profile's pair rules (memden §2.4).
 - Whether SCMS Manager's artefacts may be vendored.
+- **MA timing studies** (ff §4): keep the report-collection period live, or set
+  `report_shuffle_threshold` / `report_shuffle_window_s` for the volume modelled, stated as
+  an assumption. A frozen road holds the shuffle.
 - The US profile stays the default of the US presets. It revokes no honest vehicle on any
-  quarter-fleet run. It misses handset attackers, as the real profile does (§6 item 14).
+  quarter-fleet run, nor on the full fleet over two days (FB3). It misses handset
+  attackers, as the real profile does (§6 item 14).
 
-Decided in this round: R-CCSIG's reversal of `45f0942f` was applied, and `target/agents` was
-deleted.
+Decided in this round: R-CCSIG's reversal of `45f0942f` was applied; the two failing
+engine tests were fixed by giving each scenario what its test needs (§6 item 9).
 
 **Engine work for the remaining deviations**
 - The `infoStatus` body (A16).
@@ -827,27 +943,37 @@ deleted.
 - SPS-aligned BSM generation for LTE-V2X.
 
 **Testing still owed**
-- **The full-scale benchmark to the end**, after fix-first items 1–4.
-- **Re-runs on wave 3 code.** The matrix and realism re-runs used `77cffb5b`; wave 3 changed
-  the GNSS propagation, the RSU filing and the records. Also owed: the R-FS40 window (expected
-  `constantPositionFrozen` near 0 and 2,873 spurious claims) and `gnss-raw` (expected 0
-  implausible evidence).
+- **The integration of `d90a6298` is unfinished** (no code changed): the
+  `sensitivity_catalogue` and `sensitivity_expectations` run that parses
+  `scms-full-bench.yaml`, the oracle selftest, mutate and verify-emitted, the release build
+  and boot check, and a BUILD-STATUS section with the plan §4.3 BENCH edit, which is in the
+  working tree but not committed.
+- **Re-runs with the apex turn rule and wave 3 code**: the 34 matrix runs and 62 realism
+  rows (last run on `77cffb5b`), the final-bench and final-run tables, and the stress
+  files. Their expectations were measured before the turn rule and before wave 3's GNSS,
+  RSU-filing and record changes. Also owed: the R-FS40 window (expected
+  `constantPositionFrozen` near 0) and `gnss-raw` (expected 0 implausible evidence).
+- **Correct the FB2.privacy row** in `scms-final-run.yaml` (wrong expectation, ff §3), and
+  bring `pq-profile.md` up to date (3 revocations in the relay repro).
+- **A full-fleet privacy number**: a live window that reaches 46,800 s, or the NYC pilot
+  rule (§6 item 6).
+- **The 2×/4× fleet, LTE and Portland variants** of the benchmark (bench §10).
 - **The oracle on current records**: a fresh conf and mbr capture through `oracle.py
   records`, and a new rule that every device holds each CRACA's current list from t0 (OF-3).
   The fault "skip `note_prerun_crl`" was not injected.
 - **The conformance run of `8245ef81`.**
-- **UI**: re-record the Studio fixtures if they contain `node.security` or the new report
-  fields, and re-run the Studio suites.
+- **UI**: the Studio e2e suite (last 32/32 at `88e24b09`).
 - **A fault proof for the OBU and VRU receiver fallback** (R-TRUSTLEAK). Only the engine and
   RSU paths were proved red.
 - **F6/F7 fault proofs** (`inject2.py`), one test at a time.
-- **Failing tests that predate this round:** `longrun_budget`, `timeline` and the 5 mobility
-  traffic tests. v2xw-server and v2xw-cli were last run at `2004bb87`.
+- **Suites not in the finalize 4 run**: v2xw-threat (last `09e55393`), v2xw-server (last
+  `2004bb87`) and `timeline`.
 
-Done since the last version of this page: the ISS-profile check (10/10), the 6 sensitivity
-failures and M-RX1, the full `scms_knobs_runs` (18/18), the three threat suites (1/1, 8/8,
-2/2), all 34 matrix runs and the 62 realism rows, the stress R-NOCRL rows, realism V8, the
-PQHFC/PQHMC re-runs, and `matrix.md` and `stress.md` brought up to date.
+Done since the last version of this page: the full-scale benchmark to the end (FB3) and the
+quarter fleet end to end on current code (QD); R-FFBURST, `ped_wait` and the privacy rate
+fixed; R-FFHOLD, R-FFSLOW and the rollover count settled; the full-scale memory target met;
+`scms_wiring` and `pq_relay` passing; the PKI Studio fixtures re-recorded; the 5 mobility
+failures classified.
 
 **Paywalled standards: buying them would turn unverifiable rows into checked ones.** These
 are the IEEE 1609.2.1 body text (crypto #10, proto D11, B9), IEEE 1609.2 §5.3.8 (crypto
@@ -863,10 +989,13 @@ will always model them, each labelled as a setting:
 
 "Identical" can therefore only ever mean identical wherever the real system is observable. On
 that measure, 275 of 326 rules (84.4 %) match. Every rule the runtime oracle checks passed on
-the last recorded runs (`88e24b09`): 279,236 of 279,236 checks.
+the last recorded runs (`88e24b09`): 279,236 of 279,236 checks. Across every configuration
+table, 487 rows: 385 pass, 32 fixed, 32 corrected expectations and 38 open, of which 8 are
+open items.
 - **What is left on the checklists:** 22 known deviations, 14 of which have no trust effect,
   and 29 rules no public source can settle.
-- **What is left at runtime:** the two fast-forward defects (R-FFHOLD, R-FFBURST), the
-  honest reports at full density, the full-scale memory and the unfinished two-day run, the
-  rollover's pseudonym count, R-JOINCRL, and two failing tests that wait on an owner
-  decision. The post-quantum certificate cycle (R-CCSIG) is fixed.
+- **What is left at runtime:** the honest report volume at full density (no case, but not
+  yet a calibrated rate), R-FFWIN, the cost of the rollover window and of each
+  fast-forward stop, R-JOINCRL, the untraced lost uploads and top-ups, R-PQUNSEC and the
+  backend retention, both owner decisions, and the re-runs that the turn rule makes owed.
+  The full-scale two-day run completes under the memory target.
