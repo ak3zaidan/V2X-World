@@ -619,6 +619,11 @@ pub fn from_records_with(
     // The truth, keyed by (actor, instant) so a reception can find the state its sender
     // really was in.
     let mut truth_at: BTreeMap<(u32, u64), GtKinematicsView> = BTreeMap::new();
+    // The actor each node rides (`gt.kinematics` `node`). Node ids and actor ids are
+    // different numberings in an engine run (roadside units take the first node ids), so
+    // a transmitter's node must be resolved to its actor before its truth, its attack
+    // label or its real id is read; a recording that names no node keeps them equal.
+    let mut node_actor: BTreeMap<u32, u32> = BTreeMap::new();
     // Which attacker family each device belongs to, and which messages it falsified.
     let mut label: BTreeMap<u32, AttackLabel> = BTreeMap::new();
     // The `sec.cert` bindings per device, in record order.
@@ -641,6 +646,9 @@ pub fn from_records_with(
             }
             "gt.kinematics" => {
                 let v: GtKinematicsView = view(r)?;
+                if let Some(n) = v.node {
+                    node_actor.entry(n.0).or_insert(v.actor.0);
+                }
                 truth_at.insert((v.actor.0, v.t), v);
             }
             "gt.attack.action" => {
@@ -710,17 +718,18 @@ pub fn from_records_with(
         }
         let Some(msg) = v.msg else { continue };
         let tx = tx_of_msg.get(&msg);
-        let (sender_actor, generated) = match tx {
+        let (sender_node, generated) = match tx {
             Some(t) => (t.node, t.generated),
             // No transmission record: fall back to the transmitter the reception names and
             // to the reception instant, rather than dropping the line.
             None => (v.tx.map_or(0, |n| n.0), v.t_start),
         };
+        let sender_actor = node_actor.get(&sender_node).copied().unwrap_or(sender_node);
         // The pseudonym the frame was signed with, as `node.tx` recorded it; else the
-        // `sec.cert` binding in force; else a stable per-device stand-in.
+        // `sec.cert` binding in force (keyed by node); else a stable per-device stand-in.
         let pseudonym = tx
             .and_then(|t| t.pseudonym.clone())
-            .unwrap_or_else(|| pseudonym_for(&certs, sender_actor, v.t_start));
+            .unwrap_or_else(|| pseudonym_for(&certs, sender_node, v.t_start));
         let truth = truth_at
             .range((sender_actor, 0)..=(sender_actor, v.t_start))
             .next_back()
@@ -775,20 +784,27 @@ pub fn from_records_with(
 
     // The receivers' own position reports (VeReMi's `type: 2`), and each receiver's own
     // attacker code for its file name.
-    for ((actor, t), k) in &truth_at {
-        if out.by_receiver.contains_key(&u64::from(*actor)) {
-            out.own_positions
-                .entry(u64::from(*actor))
-                .or_default()
-                .push(OwnPosition {
-                    t: secs(*t),
-                    ..true_state(k)
-                });
+    let receivers: Vec<u64> = out.by_receiver.keys().copied().collect();
+    for rx in &receivers {
+        let Ok(node) = u32::try_from(*rx) else {
+            continue;
+        };
+        let actor = node_actor.get(&node).copied().unwrap_or(node);
+        let own: Vec<OwnPosition> = truth_at
+            .range((actor, 0)..=(actor, u64::MAX))
+            .map(|((_, t), k)| OwnPosition {
+                t: secs(*t),
+                ..true_state(k)
+            })
+            .collect();
+        if !own.is_empty() {
+            out.own_positions.insert(*rx, own);
         }
     }
     for rx in out.by_receiver.keys() {
         let code = u32::try_from(*rx)
             .ok()
+            .map(|n| node_actor.get(&n).copied().unwrap_or(n))
             .and_then(|a| label.get(&a))
             .map_or(0, |l| opts.codebook.code(&l.family));
         if code != 0 {

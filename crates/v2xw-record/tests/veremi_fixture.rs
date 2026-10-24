@@ -285,3 +285,41 @@ fn a_reception_carries_the_claim_that_went_on_the_air() {
     assert_eq!(k.spd, [0.0, 10.0, 0.0]);
     assert_eq!(k.sender, 1);
 }
+
+/// Node ids and actor ids are different numberings in an engine run (roadside units take
+/// the first node ids). The sender's truth, attack label and real id are its actor's, and
+/// a receiver's own position is its actor's: found through `gt.kinematics` `node`.
+/// (Fault checked: with the node read as the actor, this test went red.)
+#[test]
+fn the_transmitting_node_is_resolved_to_its_actor() {
+    let t = 1_000_000_000u64;
+    let kin = |actor: u32, node: u32, x: f64| {
+        rec("gt.kinematics", t, serde_json::json!({"t": t, "actor": actor, "node": node,
+            "x_m": x, "y_m": 0.0, "speed_mps": 5.0, "heading_rad": 0.0}))
+    };
+    let recs = vec![
+        kin(2, 5, 200.0),
+        kin(3, 6, 300.0),
+        kin(5, 9, 999.0),
+        kin(6, 10, 888.0),
+        rec("gt.attack.action", t, serde_json::json!({"t": t, "actor": 2,
+            "attacker": "EventualStop", "action": "freeze", "msg": 1})),
+        rec("node.tx", t, serde_json::json!({"t": t, "node": 5, "msg": 1,
+            "bytes_on_wire": 300, "pseudonym": "00000000000000aa"})),
+        rec("phy.rx", t, serde_json::json!({"t_start": t, "t_end": t + 1, "tx": 5, "rx": 6,
+            "msg": 1, "outcome": "ok"})),
+    ];
+    let e = veremi::from_records_with(
+        &recs,
+        &VeremiOptions {
+            codebook: Codebook::Veremi1,
+            slice_s: 3600.0,
+        },
+    )
+    .expect("build");
+    let k = &e.truth[0];
+    assert_eq!(k.sender, 2, "the real id is the actor's");
+    assert_eq!(k.pos[0], 200.0, "the truth is the actor's state, not actor 5's");
+    assert_eq!(k.attacker_type, 16, "EventualStop in VeReMi 1.0");
+    assert_eq!(e.own_positions[&6][0].pos[0], 300.0, "the receiver's own actor");
+}
