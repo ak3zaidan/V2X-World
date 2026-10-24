@@ -101,3 +101,9 @@
 - {compare: [conf@4924a5d2, conf@HEAD], measure: "records / CPU", expect: "records fall by about the 1,695 empty uploads and their RA/MA hops; CPU 1-2x the release run (optimised debug build)", source: "fewer messages; opt-level 2 vs release", measured: "records 794,838 -> 771,012 (pass); CPU 310.3 -> 212.9 s: the CPU expectation was wrong (earlier speed fix), report 8.2"}
 - {compare: [mbr@4924a5d2, mbr@HEAD], measure: "CRLs", expect: "full CRLs only; per provider the t0 CRL plus one per decision day; indexWithinI without gaps; iRev 615 then 616", source: "R-NOCRL, O-1"}
 - {compare: [mbr@4924a5d2, mbr@HEAD], measure: "revocations", expect: "about 12, honest 0; every decision on a CRL by the end of the next business day", source: "same seed"}
+
+# ---- OF-3: devices hold each CRACA's current CRL from t0 (testing/oracle-2026-10-24.md; written before the 81a12183 results) ----
+- {run: conf, rule: OF-3, expect: pass, source: "a device on the road holds every CRACA's current pseudonym CRL: a CRL Store sends it each published list before its first row, and every node.security row holds a list issued by then and no more than a week out of date ([CAMP122] sec. 3 item 10; 1609.2 5.1.3.4)"}
+- {run: mbr, rule: OF-3, expect: pass, source: "as above, across 15 days and two i-period rollovers"}
+- {run: conf, rule: OF-3-JOIN, expect: pass, source: "the list a device fetches when it joins is its CRACA's newest at that instant (a device fetches on every RA connection, [PRIMER] pp. 5, 8)"}
+- {run: mbr, rule: OF-3-JOIN, expect: pass, source: "as above"}
