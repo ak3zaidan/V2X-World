@@ -186,6 +186,7 @@ rows:
   source: fewer triggers, fewer reports
   measured: pending
 - id: P1.TS.no-attack-reports
+  base: S0
   variant: S0
   area: architecture
   measure: p2.reports_about_attackers
@@ -194,6 +195,7 @@ rows:
   source: an attack-free run accuses no attacker
   measured: pending
 - id: P1.TS.no-revocation
+  base: S0
   variant: S0
   area: architecture
   measure: p2.revoked_honest
@@ -211,6 +213,7 @@ rows:
   source: 'no decision in the window, so no new CRL: the CRL count is the preload''s'
   measured: pending
 - id: P1.TS.separation
+  base: S0
   variant: S0
   area: architecture
   measure: separation.violations
@@ -450,6 +453,7 @@ rows:
     with nearly the same residual; T3 v1.1 = v1.0 within 1 %'
   measured: pending
 - id: P1.ST.free-zero
+  base: B
   variant: B
   area: architecture
   measure: x.fate.attack_lost
@@ -458,6 +462,7 @@ rows:
   source: 'P1-E6 null: an attack-free run loses zero attack evidence'
   measured: pending
 - id: P1.ST.free-none
+  base: B
   variant: B
   area: architecture
   measure: x.fate.attack_reports
@@ -466,6 +471,7 @@ rows:
   source: the truth join names no attacker in an attack-free run
   measured: pending
 - id: P1.ST.attack-present
+  base: A
   variant: A
   area: architecture
   measure: x.fate.attack_reports
@@ -474,6 +480,7 @@ rows:
   source: 'the fault for the two rows above: with attackers the same measure is non-zero'
   measured: pending
 - id: P1.ST.A-delivered
+  base: A
   variant: A
   area: architecture
   measure: x.fate.delivered
@@ -483,6 +490,7 @@ rows:
     10 s shuffle, reach the MA'
   measured: pending
 - id: P1.ST.A-ma
+  base: A
   variant: A
   area: architecture
   measure: x.ma.received
@@ -491,6 +499,7 @@ rows:
   source: the MA's own record of what it received is non-empty at the default quota
   measured: pending
 - id: P1.ST.q0-all-lost
+  base: Q0
   variant: Q0
   area: architecture
   measure: x.fate.attack_lost_share
@@ -500,6 +509,7 @@ rows:
     is lost'
   measured: pending
 - id: P1.ST.q0-none-delivered
+  base: Q0
   variant: Q0
   area: architecture
   measure: x.fate.delivered
@@ -508,6 +518,7 @@ rows:
   source: nothing is stored, so nothing is uploaded or reaches an MA
   measured: pending
 - id: P1.ST.q0-ma-empty
+  base: Q0
   variant: Q0
   area: architecture
   measure: x.ma.received
@@ -556,6 +567,7 @@ rows:
     store's life is identical
   measured: pending
 - id: P1.ST.dec-in-window
+  base: DEC
   variant: DEC
   area: architecture
   measure: x.fate.decayed_out
@@ -565,6 +577,7 @@ rows:
     lose their place to newer ones (Fate::DecayedOut)
   measured: pending
 - id: P1.ST.dec-m1
+  base: DECM1
   variant: DECM1
   area: architecture
   measure: x.fate.decayed_out
@@ -573,6 +586,7 @@ rows:
   source: 'a multiplier of 1 changes no weight: nothing is deleted for decay'
   measured: pending
 - id: P1.ST.dec-h5
+  base: DECH5
   variant: DECH5
   area: architecture
   measure: x.fate.decayed_out
@@ -589,6 +603,7 @@ rows:
   source: a x1 decay at 18:00 and no decay give the same store life
   measured: pending
 - id: P1.MA.l1-sound-zero
+  base: MAL1
   variant: MAL1
   area: architecture
   measure: x.ma.sound_honest_max
@@ -597,6 +612,7 @@ rows:
   source: 'P1-E7 null: with the free class at 0 %, every sound rule (k >= 2, theta >= 2) revokes zero honest devices'
   measured: pending
 - id: P1.MA.l0-red
+  base: MAL0
   variant: MAL0
   area: architecture
   measure: x.ma.sound_honest_max
@@ -606,6 +622,7 @@ rows:
     blocks one'
   measured: pending
 - id: P1.MA.l1-attackers
+  base: MAL1
   variant: MAL1
   area: architecture
   measure: x.ma.sound_attackers_max
@@ -614,6 +631,7 @@ rows:
   source: 'the rules are not ''revoke nothing'': some sound rule revokes an injected attacker'
   measured: pending
 - id: P1.VR.lint
+  base: VR
   variant: VR
   area: metrics
   measure: x.vr.export_ok
@@ -621,6 +639,7 @@ rows:
   source: 'the in-run leakage linter is fatal (export.rs): the run finishing with the export means it passed'
   measured: pending
 - id: P1.VR.roundtrip
+  base: VR
   variant: VR
   area: metrics
   measure: x.vr.roundtrip_mismatch
@@ -630,6 +649,7 @@ rows:
     send time'
   measured: pending
 - id: P1.VR.lines
+  base: VR
   variant: VR
   area: metrics
   measure: x.vr.type3
@@ -638,6 +658,7 @@ rows:
   source: a non-empty export (the round trip above cannot pass on nothing)
   measured: pending
 - id: P1.VR.truth
+  base: VR
   variant: VR
   area: metrics
   measure: x.vr.gt_attackers_ok
@@ -646,6 +667,7 @@ rows:
     every other as 0
   measured: pending
 - id: P1.VR.leak
+  base: VR
   variant: VR
   area: metrics
   measure: x.vr.py_leaks
@@ -654,6 +676,7 @@ rows:
   source: 'an independent linter: no visible `sender` equals a true id, one `sender` per pseudonym'
   measured: pending
 - id: P1.VR.leak-fault
+  base: VR
   variant: VR
   area: metrics
   measure: x.vr.py_leaks_injected
@@ -662,6 +685,7 @@ rows:
   source: 'the fault: one true id written into a trace''s `sender` must be caught'
   measured: pending
 - id: P1.BF.honest-zero
+  base: VR
   variant: VR
   area: metrics
   measure: x.bf.events_honest
@@ -671,6 +695,7 @@ rows:
     fleet raises none'
   measured: pending
 - id: P1.BF.min-gap
+  base: VR
   variant: VR
   area: metrics
   measure: x.bf.min_gap_ms
@@ -680,6 +705,7 @@ rows:
     received gap under 75 ms'
   measured: pending
 - id: P1.BF.fault
+  base: VR
   variant: VR
   area: metrics
   measure: x.bf.events_injected20hz
@@ -688,6 +714,7 @@ rows:
   source: 'the fault: one honest sender''s receptions duplicated at +50 ms (20 Hz) must fire'
   measured: pending
 - id: P1.E4.ks
+  base: E4
   variant: E4
   area: metrics
   measure: x.e4.ks
@@ -698,6 +725,7 @@ rows:
     run; residual = v1.0 |p1+v1·Δt·u(h1)-p2|, secMark Δt, 0.5 s limit, v1 >= 10 m/s, by tools/realdata stages 3-4'
   measured: pending
 - id: P1.E4.ks-white-noise
+  base: E4WN
   variant: E4WN
   area: metrics
   measure: x.e4.ks
@@ -707,6 +735,7 @@ rows:
     m) must be exceeded'
   measured: pending
 - id: P1.E4.ks-free
+  base: E4F
   variant: E4F
   area: metrics
   measure: x.e4.ks
@@ -715,6 +744,7 @@ rows:
   source: 'the class control: an all-free fleet (Tampa free p50 0.100 m, T6) must not match all-locked Wyoming'
   measured: pending
 - id: P1.E4.locked-rate
+  base: E4
   variant: E4
   area: metrics
   measure: x.e4.rate_per_idmin
@@ -723,6 +753,7 @@ rows:
   source: the frozen locked bound (tools/realdata/frozen/classifier-v1.json, 0.568 per ID-minute) that Wyoming passed
   measured: pending
 - id: P1.E4.speed
+  base: E4
   variant: E4
   area: metrics
   measure: x.e4.v_p50
