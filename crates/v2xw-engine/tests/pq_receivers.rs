@@ -11,7 +11,8 @@
 //!   half second).
 //! * A VRU handset signed and verified at the ECDSA P-256 price whatever
 //!   `security.signature` said. Fault that turns it red: `hosted::build_vru_device` without
-//!   the scenario's `sign_op` and `verify_op`.
+//!   the scenario's `sign_op` and `verify_op`, or the handset profile without the
+//!   `crypto_anchors` that price a post-quantum signature.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -27,6 +28,7 @@ fn stress(name: &str) -> Scenario {
         *path = root.join(&*path).to_string_lossy().into_owned();
     }
     s.time.duration_s = 0.5;
+    s.time.warmup_s = None;
     s.time.fast_forward.clear();
     s
 }

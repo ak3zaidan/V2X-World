@@ -41,6 +41,12 @@ hsm:
   ops: {}
   queue_depth: {value: null, status: not-applicable, calibration: "rule H2: no secure-element queue exists on this profile; the CPU queue of 06-node-models.md §2.1 carries the work"}
   servers: {value: null, status: not-applicable, calibration: "rule H2: no secure-element server exists on this profile"}
+# Catalogue anchors (v2xw_sec::primitive) for an operation this profile publishes no figure
+# for: the Raspberry Pi 4 liboqs measurements (arXiv 2503.10238 Table 8) of the same
+# Cortex-A72-class core its ECDSA figures are proxied from, as obu/generic-automotive-soc-no-hsm
+# does. Without it a handset priced no post-quantum signature and signed and verified at the
+# ECDSA price whatever `security.signature` said (06 §6 item 11).
+crypto_anchors: [hw-profile/cortex-a72-pi4-liboqs]
 software_crypto:
   ecdsa-p256-sign: {us: 244, status: proxy, ops_per_s: 4097.4, source: "PROXY, flagged: no handset ECDSA benchmark appears in R7 or R5, so the Cortex-A72-class figure obu/generic-automotive-soc-no-hsm anchors on is reused — OpenSSL 1.1.1d on a Raspberry Pi 4B, 0.0002 s/sign, 4097.4 sign/s [R7 §D8; R5 §B.5]. A handset application processor is the same class of core; the proxy is a class match, not a device match, and every run that uses it must say so"}
   ecdsa-p256-verify: {us: 645, status: proxy, ops_per_s: 1550.7, source: "PROXY, flagged, as ecdsa-p256-sign: OpenSSL 1.1.1d on a Raspberry Pi 4B, 0.0006 s/verify, 1550.7 verify/s [R7 §D8; R5 §B.5]"}

@@ -355,11 +355,36 @@ fn relayed(compromised: Option<&str>) -> Scenario {
     s
 }
 
+/// The poisoning case runs on the research suite's modelled reports
+/// (`modelled_reports: 1`): under the US profile a unit holds no pseudonym certificate to
+/// sign an SM-MBR with (R-UNSEC), so its forgery is not filed at all, and that is checked
+/// on its own run. Before relayed uploads were confirmed (FB3's lost uploads) the US-profile
+/// run passed the "authority ingested" check on one report a poisoner happened to leave
+/// alone; with every relayed report delivered, every one is forged.
 #[test]
 fn a_compromised_unit_drops_or_poisons_the_reports_it_forwards() {
     let (honest, _) = run(relayed(None));
     let (suppressing, _) = run(relayed(Some("SuppressForwardedReports")));
-    let (poisoning, rec) = run(relayed(Some("PoisonForwardedReports")));
+    let mut modelled = relayed(Some("PoisonForwardedReports"));
+    if let Some(p) = modelled.security.protocol.as_mut() {
+        p.params["modelled_reports"] = json!(1);
+    }
+    let (poisoning, rec) = run(modelled);
+    let (us_poison, _) = run(relayed(Some("PoisonForwardedReports")));
+    let unsec = us_poison
+        .phase2
+        .reports_not_filed_by
+        .get("a roadside unit holds no pseudonym certificate to sign an SM-MBR with")
+        .copied()
+        .unwrap_or(0);
+    println!(
+        "US profile: {} forged, {unsec} not filed for want of a unit pseudonym, {} at the MAs",
+        us_poison.phase2.rsu_reports_poisoned, us_poison.phase2.reports_at_ma
+    );
+    assert!(
+        us_poison.phase2.rsu_reports_poisoned > 0 && unsec > 0,
+        "under the US profile a unit's forgery is not filed (R-UNSEC)"
+    );
     let (h, s, p) = (&honest.phase2, &suppressing.phase2, &poisoning.phase2);
     println!(
         "honest: {} relayed, {} at the proxy, {} revoked honest | suppress: {} dropped, {} \
