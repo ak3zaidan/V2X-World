@@ -8,6 +8,15 @@ again 2026-10-23 at `d90a6298`** (main), after:
 - the full-scale benchmark to the end (BENCH, merged at `d90a6298`: FB3, docs and the
   `scms-full-bench.yaml` expectations only).
 
+**Updated 2026-10-24** after the re-run and oracle wave (ORACLE, RERUN-A, RERUN-B), merged
+onto `81a12183` (BUILD-STATUS "SCMS re-run and oracle wave integration"). §2.2, §6 and §9
+state its results: the R-JOINCRL fix (`2a14d6c4`, the only engine change), the oracle on
+fresh records with the new OF-3 rules, the matrix and realism re-runs on the 300 s realism
+base, 16 new realism rows, and 60 rows of re-runs and benchmark variants
+(`scms-variants.yaml`). Sources: `testing/oracle-2026-10-24.md` (**oracle-24**),
+`testing/rerun-2026-10-24-a.md` (**rerun-a**) and `testing/rerun-2026-10-24-b.md`
+(**rerun-b**).
+
 No Rust or `ui/` code changed after `4a1d014e`, so every test result of the finalize 4
 integration is a result for HEAD's code. The one thing `d90a6298` adds that a test reads is
 `scms-full-bench.yaml`, which the expectation-loading tests parse; their run on HEAD did not
@@ -123,8 +132,8 @@ in each table's expectations file.
 
 | Table | Rows | Pass | Fixed (bug, then pass) | Expectation wrong, corrected | Open |
 |---|---|---|---|---|---|
-| Matrix: 34 runs (32 one-change variants of the Midtown realism base, plus `gnss-raw` and `us-profile`), re-run on `77cffb5b` (`scms-matrix.yaml`) | 99 | 81 | 7 | 10 | 1 |
-| Realism rows on the matrix runs (`runtime_expectations.yaml`; re-run on `77cffb5b`) | 62 | 54 | 0 | 6 | 2 |
+| Matrix: 34 runs (32 one-change variants of the Midtown realism base, plus `gnss-raw` and `us-profile`); 44 rows re-measured on `81a12183` with the 300 s base (rerun-a, 0 fail), 55 still carry their `77cffb5b` values (`scms-matrix.yaml`) | 99 | 80 | 7 | 11 | 1 |
+| Realism rows on the matrix runs (`runtime_expectations.yaml`): 59 of the 62 old rows re-run on `81a12183` with the 300 s base, plus 16 new rows N1–N16 (rerun-a); V7 ×3 (`fleet2x`) not re-run and counted at their `77cffb5b` pass | 78 | 62 | 0 | 13 | 3 |
 | Settings knobs, same-seed pairs (knobs) | 21 | 15 | 3 | 2 | 1 |
 | Effects table (effects) | 88 | 77 | 7 | 4 | 0 |
 | Edge cases (edge; 3d fixed in 07 §7; 11 measured by matrix and stress) | 12 | 7 | 5 | 0 | 0 |
@@ -132,19 +141,25 @@ in each table's expectations file.
 | Runtime realism, changes (realism) | 8 | 6 | 2 | 0 | 0 |
 | Stress: multi-week, post-quantum, first full-fleet seconds; R-NOCRL rows re-run on `77cffb5b` (`scms-stress.yaml`) | 35 | 17 | 1 | 2 | 15 |
 | Final bench: full fleet, hybrid ML-DSA-44, certificate cycle, determinism (`scms-final-bench.yaml`) | 28 | 15 | 0 | 3 | 10 |
-| Final run: certificate cycle after R-CCSIG, full-scale benchmark (`scms-final-run.yaml`) | 27 | 16 | 2 | 2 | 7 |
+| Final run: certificate cycle after R-CCSIG, full-scale benchmark (`scms-final-run.yaml`; FB2.privacy corrected in rerun-b) | 27 | 16 | 2 | 3 | 6 |
 | Oracle-final on `88e24b09`: expectation rows, conf and mbr runs (oracle-final §8.1) | 60 | 60 | 0 | 0 | 0 |
 | Oracle-final: `88e24b09` against `4924a5d2` and base against variant (oracle-final §8.2) | 10 | 9 | 0 | 1 | 0 |
 | Full bench on `fe3757b9`: R-FFSLOW on the conformance and quarter files, the quarter fleet end to end, the full-scale file end to end (`scms-full-bench.yaml`, full-bench) | 10 | 6 | 0 | 2 | 2 |
-| **All** | **487** | **385** | **32** | **32** | **38** |
+| Re-runs and benchmark variants on `81a12183`: PQ cycle and hybrid, relay repro, R-FS40, `gnss-raw`, MW/MWC/MWC2, Q60 LTE, 2× density and Portland (`scms-variants.yaml`, rerun-b) | 60 | 51 | 0 | 5 | 4 |
+| Oracle on fresh conf and mbr records of `81a12183`, 32 rows each with OF-3 and OF-3-JOIN (oracle-24 §1–§3); 3 rows red on R-JOINCRL, green after its fix | 64 | 61 | 3 | 0 | 0 |
+| **All** | **627** | **504** | **35** | **46** | **42** |
 
 The realism file records no per-row "fixed" verdict. The rows that the R-USFP fix turned
 green are counted as pass, and the 6 rows corrected in the re-run (Z1, Z3, Z4, A3,
 V8-us-catches-constpos and V8-us-checks-every-bsm, rerun §6) as corrected. Each corrected
-row was shown to fail with a value outside its new band injected.
+row was shown to fail with a value outside its new band injected. In the 2026-10-24 re-run
+(rerun-a) P3, P4 and V3 were corrected (per-device forms; V3 counts from the case's first
+detection), and N6, N13, N11 and N15 were corrected before the results commit; all 16 new
+rows and P3, P4, V3 went red with a bad value injected. In `scms-variants.yaml` all 51
+passing rows go red under `variants_faults.py` (0 silent).
 
-**What the 38 open rows are.** Most are not engine problems:
-- **29 are superseded by a later table, or carried into one.**
+**What the 42 open rows are.** Most are not engine problems:
+- **28 are superseded by a later table, or carried into one.**
   - Stress, 12: the 10 full-fleet rows (`FS.*`) were never run, and the final bench, final
     run and full bench measured them as `FB.*`, `FB2.*` and `FB3.*`. `PQ.certcycle` found
     R-CCSIG, which is now fixed (`PQHFC.sizes` and `PQHMC.sizes`, final-run).
@@ -154,30 +169,40 @@ row was shown to fail with a value outside its new band injected.
     (R-CCSIG). Four are carried into the full bench: `FB.ff-ticks` (69,130 stops, each with a
     real cause), `FB.cost` (into `FB3.completes`, still open), the honest false positives
     (`FB3.honest-reports`, pass) and the privacy link claims (`FB3.privacy`, pass).
-  - Final run, 7, all closed by FB3: `FB2.completes` and `FB2.cost` (FB3 completed; its
+  - Final run, 6, all closed by FB3: `FB2.completes` and `FB2.cost` (FB3 completed; its
     cost is `FB3.completes`, open), `FB2.ff-ticks` (R-FFSLOW does not reproduce,
     full-bench §2), `FB2.crl` and `FB2.backend-load` (`FB3.pki`, pass, and bench §000's
     per-entity table), `FB2.honest-reports` (`FB3.honest-reports`, pass) and `FB2.privacy`
-    (`FB3.privacy`, pass). The FB2.privacy expectation itself was wrong (no change is due at
-    the boundary under CERTCHG with a one-hour overlap, ff §3), but its row in
-    `scms-final-run.yaml` still reads open and has not been corrected.
+    (`FB3.privacy`, pass). `FB2.privacy` itself was a wrong expectation (no change is due
+    at the boundary under CERTCHG with a one-hour overlap, ff §3) and is now corrected
+    (rerun-b, `7c0ace43`).
 - **1 is open by design:** the knobs row for the request shuffle, published as partial,
   because the shuffle has no in-run effect (knobs). Its test passes (`scms_knobs_runs` 18/18).
-- **8 are open items.**
+- **13 are open items.**
   - Full bench, 2: `FB3.completes` (the rollover window took 4,767 s for 60 s and the
     second fast-forward 2,014 s, both slower than expected; §6 item 3) and
     `FB3.metric-window-after-ff` (R-FFWIN, §6 item 2).
-  - Stress, 3: `MWC.recovery` (R-JOINCRL, §6 item 7), `MWP.off-no-backend` (reopened, §6
+  - Stress, 3: `MWC.recovery` (R-JOINCRL, fixed in code at `2a14d6c4`; the stress run is
+    owed again, §6 item 7), `MWP.off-no-backend` (reopened, §6
     item 8) and `PQ.backend-bytes` (the per-certificate factor was not isolated; final-run
     §2 shows the bytes are reports, not provisioning).
   - Matrix, 1: `lte-latency-budget`, outside the SCMS (§6 item 16).
-  - Realism, 2: L5, the case-board review time (§6 item 15), and T5, the US component set,
-    which carries `status: open` in its file.
+  - Realism, 3: L5, the case-board review time (§6 item 15), T5, the US component set,
+    which carries `status: open` in its file, and A1, report airtime 1.25 % against a 1 %
+    bound (§6 item 18).
+  - Variants, 4: `RR.MW.no-overdue` (R-JOINCRL in the base MW run on `81a12183`, 16,618
+    refusals from 33 joiners; fixed in code since, re-run owed), `VB.LTE.latency-budget`
+    (p95 110 ms, §6 item 16), `VB.2X.honest-reports` (13 against 20 cannot be told from
+    noise on one seed) and `VB.PDX.speed` (no published Portland speed to judge 3.2 m/s).
 
 **Three notes on the table:**
-- **The matrix and realism re-runs used the release binary of `77cffb5b`**, before fix wave
-  3. Wave 3 changed the GNSS propagation, stopped RSUs filing their own reports and recorded
-  the pre-run CRL fetch, so their report counts are owed again (§9).
+- **The realism base now runs its first live window to 300 s** (`b645dd99`, rerun-a §2).
+  With RSUs filing no report (R-UNSEC), the 0–60 s window gave the most-heard attacker only
+  2 vehicle reporters against the MA's quorum of 3, so the base opened no case (rerun-b
+  open item 1 saw the same on the 60 s base). On 300 s: 2 of 3 attackers revoked, 0 honest,
+  decision at 115,220 s and CRL at 147,600 s as before; wall 33 → 185 s. Every number
+  measured on the realism base moves (rerun-a §3); 55 matrix rows and V7 ×3 still carry
+  `77cffb5b` values from before wave 3 and the 300 s base (§9).
 - **The benchmark's apex turn rule (`traffic.turn_curve_window_m: 6`, memden §2.2) changes
   the traffic of every scenario that inherits the benchmark**: the quarter fleet, LTE,
   Portland, the stress files and, through the quarter file, the realism base and its 33
@@ -195,7 +220,10 @@ row was shown to fail with a value outside its new band injected.
 | Oracle self-test (official vectors), HEAD | 412/412 |
 | Oracle mutation run, HEAD | 24 faults, all red, 0 silent |
 | Oracle `verify-emitted`, HEAD | 10/10 |
-| Oracle `records` on two recorded runs of `88e24b09` (conf and mbr) | **279,236 of 279,236 checks pass** (conf 67,451, mbr 211,785). On `4924a5d2` it was 272,778 of 281,240, every failure OF-1 or OF-2. **Not re-run on wave 3 code**, which adds the pre-run CRL PDUs and `node.security.crls` to the records |
+| Oracle `records` on fresh conf and mbr captures, with OF-3 and OF-3-JOIN (oracle-24 §2) | On `81a12183`: conf 221,735 / 221,770, mbr 582,679 / 583,831, every red check R-JOINCRL. **With the fix (`2a14d6c4`): conf 220,684 / 220,684, mbr 583,831 / 583,831, 32/32 rows each.** Engine fault "skip `note_prerun_crl`" built and run: OF-3 red (130). Earlier, on `88e24b09`: 279,236 of 279,236 |
+| Record faults (`--mutate`) on the fresh captures | conf 38 red, 0 silent, 1 n/a; mbr 39 red, 0 silent (4 new OF-3 faults included) |
+| Conformance run on the fixed code (oracle-24) | `conformance.rs` 2/2; `check_run.py` PASS 22,982 / 22,982, 0 disagreements; `--mutate` 18/18 red |
+| Fault proofs of the re-run and oracle wave | R-TRUSTLEAK OBU and VRU fallback red, each alone; F6 and F7 red, one test at a time; `timeline` red under its fault; all restored (oracle-24 §4) |
 | Record faults injected into those runs | 69 of 69 applicable faults red (conf 34, 1 not applicable; mbr 35), 0 silent, after oracle fix 2 (oracle-final §8.5) |
 | `component_certs.py`: every component certificate of the M0 run against the published chain of its form (rerun §8) | **10/10 roles** match field for field (ISS pre-production chain for provider-a, SAESOL production chain for provider-b); every SPDU re-encodes byte for byte; `--mutate` 2 of 2 roles red |
 | `ctl-files` on the engine's own CTLs (F1 `gov.json`) | PASS: CTL-FILE 16, CTL-ORDER 4, CTL-QUORUM 6, CTL-SIG 140; 6/6 faults red after oracle fix 1 |
@@ -211,6 +239,11 @@ row was shown to fail with a value outside its new band injected.
 
 | Suite | Result |
 |---|---|
+| **2026-10-24 integration (HEAD)**: `cargo check --workspace --tests` | Passes, known v2xw-msg warnings only |
+| 2026-10-24: v2xw-engine lib and 71 of 72 test binaries, one at a time (`energy_glosa` skipped at the 4.5 GB cap, as before) | **493 pass, 2 fail, 10 ignored.** The 2 failures are the known `foundations` cellular bytes (3114 against 3574) and `applications` GLOSA. `timeline` passes (fixed in oracle-24). `sensitivity_catalogue` 3/3 and `sensitivity_expectations` 4/4 parse every expectations yaml, `scms-variants.yaml` and `scms-full-bench.yaml` included. `scms_knobs_runs` 18/18 (2,235 s). `phase2` 13/13 after one merge fix (`da643bfc`, below); `phase2-path` passes on the re-blessed digest |
+| 2026-10-24: v2xw-node | **266 pass, 0 fail** (the new OBU and VRU R-TRUSTLEAK tests included) |
+| 2026-10-24 merge fix: `phase2::without_either_distribution_path_the_revocation_never_reaches_a_vehicle` | Failed after the R-JOINCRL fix: 14 vehicles switched on after the publication hold the list from their RA connection (`crls_installed` 14 against 0; vehicle revoked receptions 116). Phase2Report now counts join installations and joiners' revoked receptions apart (`crls_installed_at_join`, `revoked_receptions_at_join`); the test asserts that every vehicle install and refusal is a joiner's and that the join path ran. No record changes |
+| 2026-10-24 (oracle-24, on the branch): v2xw-threat, v2xw-server, Studio e2e | threat 241/241 (`in_the_loop` with one test thread); server 140 pass, 4 ignored, `pacing` hang 2 of 6 runs (§6 item 20); Studio e2e 32/32 |
 | HEAD's code (`4a1d014e`, run at the finalize 4 integration, BS fin4): `cargo check --workspace --tests` | Passes, with the known warnings (v2xw-msg unused imports). Passes again on `d90a6298` |
 | HEAD's code: v2xw-sec, msg, proto, node, core, metrics, demand, mobility, cli | **1,882 pass, 7 fail, 3 ignored.** All 7 predate the merges: the 5 known mobility traffic tests (§6 item 16), `v2xw-demand transit::a_bus_serves_its_stops` and `v2xw-cli longrun_budget`. The last two fail identically on `747a0773` before the merges, and neither was in the earlier baselines |
 | HEAD's code: engine lib plus 31 SCMS, phase2, PQ, sensitivity, calendar and VRU binaries (`scms_knobs_runs` 18/18 in 2,108 s) | **301 pass, 0 fail, 8 ignored.** `scms_wiring` and `pq_relay` pass again (§6 item 9); the new fast-forward, GNSS-resume, `ped_wait`, privacy-rate and memory tests pass (ff §6, memden §1.2) |
@@ -688,6 +721,14 @@ whether a full-fleet misbehaviour rate is a real-world number.
    claims, as expected for a 60 s gridlocked window (ff §3). A live window that reaches
    46,800 s, or the NYC pilot rule, is needed for a full-fleet linkability number.
 7. **R-JOINCRL: a car that joins mid-run holds only the t0 CRLs** (rerun §7, §9 item 1).
+   **Fixed 2026-10-24** (`2a14d6c4`, oracle-24 §3): `phase2.rs` `prerun_crl` gives a joiner
+   the newest list each provider published before it joined, with a unit test. Found
+   independently by the new oracle rule OF-3-JOIN (35 stale joiner fetches on conf, 108 on
+   mbr); after the fix both captures pass every check. The `phase2-path` golden moved
+   (record `e54f1c23` → `fd19a3ed`, records 6,372,698 → 6,372,470); reverting the fix
+   reproduces the old digest. The multi-week runs that showed it (MWC W5, MWP, and the base
+   MW run of rerun-b with 16,618 refusals from 33 joiners) are owed again on the fixed code.
+   The original description:
    Late in a long run those lists are overdue, so the joiner refuses its home provider's
    messages until its first download (2–49 s): 755 refusals at 4 joiners in MWC's W5, and
    18,617 at 27 joiners in MWP. It should hold the newest list each CRACA published before
@@ -801,6 +842,26 @@ whether a full-fleet misbehaviour rate is a real-world number.
 17. **Red-team finding.** The `generationTime` window makes a replay older than 2 s harmless,
     but the replayer is never reported or punished: 11 of 11 replayers were revoked before the
     window, and 0 after it (07 §8.1).
+18. **Report airtime over its bound** (realism A1, open; rerun-a §3). On the 300 s base
+    misbehaviour reports are 1.25 % of the airtime against a 1 % bound: 587 relayed uploads,
+    all about attackers, from 66 reporters, about one report every 6 s per reporter per
+    pseudonym. No public source sets an SM-MBR v1.0 report rate, so the bound itself is
+    uncalibrated.
+19. **Findings of the 2026-10-24 re-runs** (rerun-b §6), none an engine defect yet shown:
+    - MWC2 now refuses exactly what MWC does (both runs' revocations are provider-b's), so it
+      no longer tests a late outage, and `MWC.revocation-blocked` has nothing to block.
+    - LTE-V2X PDR 0.90 against DSRC 0.30 on the Q60 window: the direction matches published
+      tests, the size is unchecked. LTE sends each packet twice under J3161/1.
+    - Per-entity backend loads grow linearly with device count (40 messages per device from
+      each LA). R-FS40 on current code: `constantPositionFrozen` 165 → 2, `positionJump`
+      71 → 7, 0 links claimed. `gnss-raw`: 0 implausible evidence; honest revocations rise
+      from 26 to 87 on the 300 s base, by construction of the fault.
+20. **Test-harness findings** (oracle-24 §8, rerun-a §5). v2xw-server
+    `pacing::a_client_synchronised_run_sheds_nothing_for_a_slow_reader` hangs intermittently
+    (2 of 6 runs) on an await with no timeout; not root-caused. The `.mcap` manifest stores
+    the wall-clock `build_utc`, so two same-seed recordings differ byte for byte while every
+    message is identical (N15 compares messages). `in_the_loop` needs one test thread to stay
+    under the 2.5 GB cap.
 
 ## 7. Every unverifiable item and how it is modelled (29)
 
@@ -904,7 +965,8 @@ The totals count each row as its own checklist records it, with the changes in �
 3. **The full-scale cost** (§6 item 3): profile the rollover window (the weekly
    pre-generation burst is the first suspect), then make the fast-forward's per-stop scans
    event-indexed (ff §5, part 2).
-4. **R-JOINCRL**: a joiner holds the newest list each CRACA published before it joined.
+4. ~~R-JOINCRL~~: fixed 2026-10-24 (`2a14d6c4`, §6 item 7); the multi-week re-runs are
+   owed (below).
 5. **Trace FB3's 268 lost uploads and 27 incomplete top-ups**, and make
    `reports_uploaded_relay` count delivered reports (§6 items 5 and 9).
 6. **MWP.off-no-backend**, the `node.rx` `crl-overdue` label, the 47 `Invalid` states under
@@ -943,33 +1005,35 @@ engine tests were fixed by giving each scenario what its test needs (§6 item 9)
 - SPS-aligned BSM generation for LTE-V2X.
 
 **Testing still owed**
+- **From the 2026-10-24 wave:** the 55 matrix rows of 19 variants (`on-demand` …
+  `real-crypto`) and `fleet2x` (realism V7 ×3) on the 300 s base; MW, MWC, MWP and the MW
+  determinism pair on the R-JOINCRL fix (`RR.MW.no-overdue`, `MWC.recovery`); MWC2 redesigned
+  so it tests a late outage; the full-fleet end-to-end run on current code (4.2 h); the
+  2× density honest verdicts on more seeds; the v2xw-server `pacing` hang.
+- **From the 2026-10-24 wave:** the 55 matrix rows of 19 variants (`on-demand` …
+  `real-crypto`) and `fleet2x` (realism V7 ×3) on the 300 s base; MW, MWC, MWP and the MW
+  determinism pair on the R-JOINCRL fix (`RR.MW.no-overdue`, `MWC.recovery`); MWC2 redesigned
+  so it tests a late outage; the full-fleet end-to-end run on current code (4.2 h); the
+  2× density honest verdicts on more seeds; the v2xw-server `pacing` hang.
 - **The integration of `d90a6298` is unfinished** (no code changed): the
   `sensitivity_catalogue` and `sensitivity_expectations` run that parses
   `scms-full-bench.yaml`, the oracle selftest, mutate and verify-emitted, the release build
   and boot check, and a BUILD-STATUS section with the plan §4.3 BENCH edit, which is in the
   working tree but not committed.
-- **Re-runs with the apex turn rule and wave 3 code**: the 34 matrix runs and 62 realism
-  rows (last run on `77cffb5b`), the final-bench and final-run tables, and the stress
-  files. Their expectations were measured before the turn rule and before wave 3's GNSS,
-  RSU-filing and record changes. Also owed: the R-FS40 window (expected
-  `constantPositionFrozen` near 0) and `gnss-raw` (expected 0 implausible evidence).
-- **Correct the FB2.privacy row** in `scms-final-run.yaml` (wrong expectation, ff §3), and
-  bring `pq-profile.md` up to date (3 revocations in the relay repro).
 - **A full-fleet privacy number**: a live window that reaches 46,800 s, or the NYC pilot
   rule (§6 item 6).
-- **The 2×/4× fleet, LTE and Portland variants** of the benchmark (bench §10).
-- **The oracle on current records**: a fresh conf and mbr capture through `oracle.py
-  records`, and a new rule that every device holds each CRACA's current list from t0 (OF-3).
-  The fault "skip `note_prerun_crl`" was not injected.
-- **The conformance run of `8245ef81`.**
-- **UI**: the Studio e2e suite (last 32/32 at `88e24b09`).
-- **A fault proof for the OBU and VRU receiver fallback** (R-TRUSTLEAK). Only the engine and
-  RSU paths were proved red.
-- **F6/F7 fault proofs** (`inject2.py`), one test at a time.
-- **Suites not in the finalize 4 run**: v2xw-threat (last `09e55393`), v2xw-server (last
-  `2004bb87`) and `timeline`.
+- **The `d90a6298` plan §4.3 BENCH edit**, if it is still wanted (it was never committed).
 
-Done since the last version of this page: the full-scale benchmark to the end (FB3) and the
+Done on 2026-10-24: R-JOINCRL fixed; the oracle on fresh conf and mbr records with OF-3 and
+OF-3-JOIN; the conformance run on fixed code; the OBU/VRU R-TRUSTLEAK, F6 and F7 fault
+proofs; v2xw-threat, v2xw-server and `timeline` (fixed at its cause: Poisson bands); Studio
+e2e 32/32; the matrix and realism re-runs on the 300 s base (44 + 59 rows) and 16 new
+realism rows; the R-FS40 window and `gnss-raw`; the PQ, relay and multi-week re-runs;
+FB2.privacy corrected and `pq-profile.md` current; the LTE, 2× and Portland variants at
+quarter fleet over a 60 s window; the `sensitivity_*` tests over every expectations file
+(§2.2).
+
+Done before that: the full-scale benchmark to the end (FB3) and the
 quarter fleet end to end on current code (QD); R-FFBURST, `ped_wait` and the privacy rate
 fixed; R-FFHOLD, R-FFSLOW and the rollover count settled; the full-scale memory target met;
 `scms_wiring` and `pq_relay` passing; the PKI Studio fixtures re-recorded; the 5 mobility
@@ -989,13 +1053,13 @@ will always model them, each labelled as a setting:
 
 "Identical" can therefore only ever mean identical wherever the real system is observable. On
 that measure, 275 of 326 rules (84.4 %) match. Every rule the runtime oracle checks passed on
-the last recorded runs (`88e24b09`): 279,236 of 279,236 checks. Across every configuration
-table, 487 rows: 385 pass, 32 fixed, 32 corrected expectations and 38 open, of which 8 are
-open items.
+the last recorded runs (fresh conf and mbr captures of `81a12183` with the R-JOINCRL fix):
+804,515 of 804,515 checks. Across every configuration table, 627 rows: 504 pass, 35 fixed,
+46 corrected expectations and 42 open, of which 13 are open items.
 - **What is left on the checklists:** 22 known deviations, 14 of which have no trust effect,
   and 29 rules no public source can settle.
 - **What is left at runtime:** the honest report volume at full density (no case, but not
   yet a calibrated rate), R-FFWIN, the cost of the rollover window and of each
-  fast-forward stop, R-JOINCRL, the untraced lost uploads and top-ups, R-PQUNSEC and the
+  fast-forward stop, report airtime (A1), the untraced lost uploads and top-ups, R-PQUNSEC and the
   backend retention, both owner decisions, and the re-runs that the turn rule makes owed.
   The full-scale two-day run completes under the memory target.
