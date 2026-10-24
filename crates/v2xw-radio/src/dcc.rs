@@ -391,28 +391,32 @@ impl AdaptiveDcc {
         0.5 * previous + 0.5 * (cbr_now + cbr_prev) / 2.0
     }
 
-    /// TS 102 687 V1.2.1 Annex B equation B.2: δ changed while the gate was closed, so the
-    /// remaining wait is rescaled to the new δ,
-    /// `t_go = t_pg + min(max(T_on/δ · (t_go − now)/(t_go − t_pg) + (now − t_pg), 25 ms), 1 s)`.
+    /// TS 102 687 V1.2.1 Annex B, equation B.2: δ changed while the gate was closed, so the
+    /// wait still to run is served at the new δ.
     ///
-    /// Transcribed from Vanetza's `LimericBudget::update` (the same rescaling, the same
-    /// 25 ms / 1 s clamp), which Artery runs. Without it a gate closed under a small δ stays
-    /// closed for the old interval after the channel has cleared, and one closed under a
-    /// large δ opens early after it has filled. The conformance floor's wait is kept.
+    /// Derivation from the clause. The gate closed at `t_pg` for an interval
+    /// `t_go − t_pg = T_on/δ_old` (B.1). At `now` the fraction of that interval still to
+    /// run is `(t_go − now)/(t_go − t_pg)`. Serving that fraction at the new δ takes
+    /// `T_on/δ · (t_go − now)/(t_go − t_pg)`, and the time already waited, `now − t_pg`,
+    /// stands. B.1's bounds apply to the whole interval, so
+    /// `t_go' = t_pg + min(max(T_on/δ · (t_go − now)/(t_go − t_pg) + (now − t_pg), 25 ms), 1 s)`.
+    ///
+    /// Without it a gate closed under a small δ stays closed for the old interval after the
+    /// channel has cleared, and one closed under a large δ opens early after it has filled.
+    /// The conformance floor's wait (EN 302 571) is kept as a lower bound.
     #[must_use]
     pub fn regate(state: &AdaptiveNodeState, now: SimTime) -> SimTime {
-        if now >= state.gate_open_at || state.gate_t_on_ns == 0 || state.delta <= 0.0 {
-            return state.gate_open_at;
+        let (t_pg, t_go) = (state.gate_pg, state.gate_open_at);
+        let closed = now < t_go && state.gate_t_on_ns != 0 && state.delta > 0.0;
+        let whole = t_go.saturating_sub(t_pg) as f64;
+        if !closed || whole <= 0.0 {
+            return t_go;
         }
-        let interval = state.gate_open_at.saturating_sub(state.gate_pg) as f64;
-        if interval <= 0.0 {
-            return state.gate_open_at;
-        }
-        let delay = state.gate_open_at.saturating_sub(now) as f64;
-        let rescaled = (state.gate_t_on_ns as f64 / state.delta) * (delay / interval)
-            + now.saturating_sub(state.gate_pg) as f64;
-        let clamped = rescaled.clamp(25e6, 1e9).round() as u64;
-        state.gate_pg + clamped.max(state.gate_floor_ns)
+        let still_to_run = t_go.saturating_sub(now) as f64 / whole;
+        let waited = now.saturating_sub(t_pg) as f64;
+        let interval = (state.gate_t_on_ns as f64 / state.delta) * still_to_run + waited;
+        let bounded = interval.clamp(25e6, 1e9).round() as u64;
+        t_pg + bounded.max(state.gate_floor_ns)
     }
 
     /// The gatekeeper interval of TS 102 687 Annex B:
@@ -2386,10 +2390,11 @@ mod tests {
         assert!((at_target - p.delta_min).abs() < 1e-9, "{at_target}");
     }
 
-    /// Equation B.2 against Vanetza's `LimericBudget::update`: a 400 µs frame under
-    /// δ = 0.004 closes the gate for 100 ms; half-way through δ doubles, so the remaining
-    /// half is served at the new δ (25 ms) and the gate opens at 75 ms, not 100. Halving δ
-    /// instead opens it at 150 ms. The conformance floor is never undercut.
+    /// Equation B.2 (TS 102 687 V1.2.1 Annex B): a 400 µs frame under δ = 0.004 closes the
+    /// gate for 100 ms; half-way through δ doubles, so the remaining half is served at the
+    /// new δ (25 ms) and the gate opens at 75 ms, not 100 (Vanetza's `LimericBudget`, run
+    /// as a cross-check, gives the same 75 ms). Halving δ instead opens it at 150 ms. The
+    /// conformance floor is never undercut.
     #[test]
     fn a_delta_change_while_the_gate_is_closed_rescales_the_wait() {
         let ms = 1_000_000u64;

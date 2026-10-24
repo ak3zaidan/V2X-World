@@ -25,7 +25,9 @@
 //!
 //! # What is reproduced, and from where
 //!
-//! The algorithm is re-implemented from `CEP.cpp`'s published description: `CalcPower`,
+//! The algorithm follows the behaviour of SUMO's PHEMlight reader (`CEP.cpp`, EPL-2.0,
+//! read for behaviour only; licence audit item E-1 asks for a re-derivation from the TU
+//! Graz PHEMlight documentation): `CalcPower`,
 //! `GetEmission` (linear interpolation, clamped at both ends of the curve),
 //! `GetCO2Emission` and `GetDecelCoast`, with the constants of `Constants.cpp` (g = 9.81,
 //! ρ = 1.182, normalising speed 19.444 m/s and acceleration 0.45 m/s², drivetrain
@@ -511,7 +513,7 @@ mod tests {
     }
 }
 
-// --- Data transcribed from SUMO's data/emissions/PHEMlight (scripted) -------------------
+// --- Data: TU Graz PHEMlight EU4 sample vehicles, values as SUMO distributes them ------
 /// `PC_G_EU4.csv` idle row: NOx, HC, CO, PM, g/h.
 const G_IDLE_POLLUTANTS: [f64; 4] = [0.2311568, 0.06580322, 1.57672, 0.0005531011];
 /// `PC_G_EU4.csv`: normalised drive power, then NOx, HC, CO, PM in g/h.

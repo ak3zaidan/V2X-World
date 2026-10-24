@@ -1254,8 +1254,9 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
                 },
             );
             q.calibration = Some(
-                "read the predicate out of the F2MD source (ExperiChecks.cc, \
-                 SuddenAppearence) and replace this with it; failing that, measure the \
+                "re-implement the published description of F2MD's sudden-appearance check \
+                 (behaviour only: the F2MD source is GPL and all rights reserved, and is \
+                 not to be copied) and replace this with it; failing that, measure the \
                  distribution of first-sighting distances in the benign reference run and \
                  set the threshold below its lower tail."
                     .to_string(),
@@ -1383,7 +1384,7 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
          reports a class-4 recall without reading that counter is reporting nothing."
             .to_string(),
         "The F2MD checks are re-implemented from the constant table of 04-models.md §14 \
-         and the published descriptions, not ported from the F2MD source: the scores are \
+         and the published descriptions; no F2MD source was used. The scores are \
          normalised on this crate's convention rather than F2MD's own, so a threshold \
          matches but a score does not compare digit for digit with an F2MD run."
             .to_string(),

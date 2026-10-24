@@ -100,9 +100,9 @@ pub const SERIES_PSEUDONYM: u16 = 1;
 /// is not openly published; the one deployed profile whose values are public is the
 /// CAR 2 CAR Communication Consortium Basic System Profile, RS_BSP_168: a CAM older than
 /// 2 s, any other message older than 10 minutes, or anything more than 40 ms in the future
-/// is discarded (transcribed in Vanetza, `vanetza/security/v2/verification.cpp`,
-/// `check_generation_time`: "Values are picked from C2C-CC Basic System Profile v1.1.0,
-/// see RS_BSP_168", read 2026-10-21). ASSUMPTION: the US receiver uses the same window
+/// is discarded (the values are the profile's; Vanetza's `check_generation_time`, read
+/// for behaviour only on 2026-10-21, names the same requirement, "C2C-CC Basic System
+/// Profile v1.1.0, see RS_BSP_168", and none of its code is used). ASSUMPTION: the US receiver uses the same window
 /// for the BSM. Settable: `security.scms.rx_beacon_max_age_s`.
 pub const BEACON_MAX_AGE_S: f64 = 2.0;
 

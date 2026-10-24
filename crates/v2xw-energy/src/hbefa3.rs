@@ -26,8 +26,8 @@
 //! * **Grade from the vehicle's own height change**, not a lane attribute: the provider
 //!   differentiates the recorded `z` over the distance travelled.
 //!
-//! The coefficient table is data, transcribed by script from SUMO's published table; the
-//! code is this crate's own.
+//! The coefficient table is data (HBEFA3 fits, values as SUMO publishes them, with
+//! attribution on the card); the code is this crate's own.
 
 use v2xw_core::card::{Family, ModelCard, SourceKind, Tier, Validation, ValidationStatus};
 use v2xw_core::model::Model;
