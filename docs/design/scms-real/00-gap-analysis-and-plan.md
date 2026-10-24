@@ -616,6 +616,9 @@ Finalize 4 status (2026-10-23, merged into `main`; details in BUILD-STATUS.md, `
 - [x] **FF** (merge `66d65542`): lost edits replayed; R-FFBURST fixed (gridlock after the gap, first GNSS fix with a 43,000 s dt); `ped_wait` and pseudonym rate skip the frozen window; `stops_by_cause` added. R-FFHOLD is not a defect. Open: R-FFSLOW, FB2 re-run.
 - [x] **MEM** (merge `58e0b270`, includes `wip/finalize4-mem`): peak 2,074 MB to 1,027 MB at full fleet, 100 s; shared governance certificates; apex turn rule in the benchmark (positionJump 123 to 35). Open: the 2.5 GB target at the resume peak is projected, not measured; per-device backend state needs owner decisions.
 
+Full-scale benchmark status (2026-10-23, merged into `main`; details in BUILD-STATUS.md, `testing/full-bench.md` and benchmark §000):
+- [x] **BENCH** (merge `d90a6298`): the full-scale benchmark ran to the end for the first time (172,800 s, full fleet, rc 0, peak 2,105 MB against FB2's 3,109 MB, 15,255 s awake wall). Honest traffic: 2,083 verdicts, 2,001 reports, 1,447 reach the MAs (at 86,430 s, the one-day shuffle), 0 cases, 0 revocations. R-FFSLOW does not reproduce on current code. 10 rows in `scms-full-bench.yaml`: 6 pass, 2 wrong expectation, 2 open. Docs and expectations only. Open: R-FFWIN (the window ending at a fast-forward is reported late with rates over the frozen hours), rollover window cost, per-stop cost growing with the fleet (event-indexed scan owed), 27 incomplete top-ups, 268 uploaded reports that never reach an MA, privacy needs a longer live window.
+
 Critical path: A1 → A3 → A5 → B4 → C2 → D1 → E1 → E2/E3 → F1. Two things could stretch it:
 - `rasn-compiler` cannot handle the 1609.2.1 modules (WP-A1 fallback adds about 8 h).
 - The published artefacts reveal format details the research did not see (WP-A5 may add a fix-up package).
