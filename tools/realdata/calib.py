@@ -22,30 +22,43 @@ def headline_units(ds_list, params, classes):
     return units
 
 
+def _class_stats(sets, params, c, key):
+    u = headline_units(sets, params, (c,))
+    rate, lo, hi = bootci.ci([(t, m) for t, m, _, _ in u], key)
+    return {"ids": len(u), "pairs": sum(x[2] for x in u), "triggers": int(sum(x[0] for x in u)),
+            "rate_per_id_min": r6(rate), "ci95": [r6(lo), r6(hi)]}
+
+
 def frozen_doc(fit_sets, params, version, fit_files):
-    by = {}
-    for c in devclass.CLASSES:
-        u = headline_units(fit_sets, params, (c,))
-        rate, lo, hi = bootci.ci([(t, m) for t, m, _, _ in u], "frozen|" + c)
-        by[c] = {"ids": len(u), "pairs": sum(x[2] for x in u), "triggers": int(sum(x[0] for x in u)),
-                 "rate_per_id_min": r6(rate), "ci95": [r6(lo), r6(hi)]}
+    """The classifier and its out-of-sample predictions, frozen before Wyoming is scored.
+
+    The free class is heterogeneous across deployments (Tampa's free devices trip far less
+    often than Orem's), so the bounds are per fit dataset, not pooled: a held-out locked class
+    must trip no more than the highest locked upper bound of any fit set, and a free class no
+    less than the lowest free lower bound."""
+    pooled = {c: _class_stats(fit_sets, params, c, "frozen|" + c) for c in devclass.CLASSES}
+    per = {ds.name: {c: _class_stats([ds], params, c, "frozen|%s|%s" % (ds.name, c)) for c in devclass.CLASSES}
+           for ds in fit_sets}
+    lk = [v["locked"]["ci95"][1] for v in per.values() if v["locked"]["ids"]]
+    fr = [v["free"]["ci95"][0] for v in per.values() if v["free"]["ids"]]
     return {
         "schema": "v2xw.realdata_classifier.v1",
         "tool": "tools/realdata " + version,
         "params": params,
-        "fitted_on": sorted({ds.name for ds in fit_sets}),
+        "fitted_on": sorted(per),
         "fit_files_sha256": fit_files,
         "headline_cell": {"check": "RandomPosition v1.0", "gps_drift_m": 1.0, "time_base": "secmark",
                           "gap_limit_s": 0.5, "speed": ">= 10 m/s", "unit": "triggers per ID-minute"},
-        "fit": by,
+        "fit": pooled,
+        "fit_by_dataset": per,
         "predictions": {
-            "locked": {"rate_at_most": by["locked"]["ci95"][1]},
-            "free": {"rate_at_least": by["free"]["ci95"][0]},
+            "locked": {"rate_at_most": max(lk) if lk else None},
+            "free": {"rate_at_least": min(fr) if fr else None},
         },
         "rule": ("Out of sample, a class passes when its point rate at the headline cell lies on the "
-                 "predicted side of the bound frozen here (locked: at most the fit upper 95% bound; "
-                 "free: at least the fit lower 95% bound). Where both classes are present the free "
-                 "rate must exceed the locked rate."),
+                 "predicted side of the bound frozen here (locked: at most the highest locked upper 95% "
+                 "bound of any fit set; free: at least the lowest free lower 95% bound of any fit set). "
+                 "Where both classes are present the free rate must exceed the locked rate."),
     }
 
 
