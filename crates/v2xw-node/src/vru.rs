@@ -980,6 +980,10 @@ pub struct VruConfig {
     pub sign_op: &'static str,
     /// The verification primitive.
     pub verify_op: &'static str,
+    /// The post-quantum issuer-signature check a Partially-Hybrid receiver makes once on
+    /// each certificate it learns, as a vehicle does (`NodeConfig::cert_verify_op`,
+    /// R-CCSIG). `None` outside that mode.
+    pub cert_verify_op: Option<&'static str>,
     /// The scenario's wall clock, for certificate validity and `generationTime`.
     pub wall: WallClock,
     /// The geodetic anchor of the world's ENU frame.
@@ -1020,6 +1024,7 @@ impl Default for VruConfig {
             tx_power_dbm: 23.0,
             sign_op: "ecdsa-p256-sign",
             verify_op: "ecdsa-p256-verify",
+            cert_verify_op: None,
             wall: WallClock::default(),
             origin: GeoOrigin::new(0.0, 0.0, 0.0),
             dims: Dims::PEDESTRIAN,
@@ -1128,6 +1133,9 @@ pub struct VruDeviceRuntime {
     p2pcd_outbox: Vec<(SimTime, Vec<u8>)>,
     /// The P2PCD counters as of the last `node.p2pcd` record.
     p2pcd_seen: crate::p2pcd::P2pcdStats,
+    /// Post-quantum certificate checks owed since the last verification was booked
+    /// ([`VruConfig::cert_verify_op`]).
+    cert_checks_due: u32,
 }
 
 impl core::fmt::Debug for VruDeviceRuntime {
@@ -1204,6 +1212,7 @@ impl VruDeviceRuntime {
             gt_pos_error_m: f32::NAN,
             p2pcd_outbox: Vec::new(),
             p2pcd_seen: crate::p2pcd::P2pcdStats::default(),
+            cert_checks_due: 0,
             service,
             config,
         }
@@ -1665,12 +1674,43 @@ impl VruDeviceRuntime {
             return;
         };
         if frame.full_certificate {
+            // A certificate the device did not hold: in the Partially-Hybrid mode its
+            // post-quantum issuer signature is checked once, now that it is learned.
+            if self.config.cert_verify_op.is_some() && !self.stores.peers.holds(&signer) {
+                self.cert_checks_due = self.cert_checks_due.saturating_add(1);
+            }
             // An evicted certificate takes its validated state with it (crate::rxval).
             if let Some(gone) = self.stores.peers.learn(&signer) {
                 self.security.trust_mut().forget(gone);
             }
         } else if !self.stores.peers.touch(&signer) {
             self.stores.peers.record_p2pcd_request();
+        }
+    }
+
+    /// The post-quantum certificate checks owed since the last booking, priced on this
+    /// device's profile as a vehicle's are (`ObuRuntime::certificate_checks`). Zero when
+    /// the mode has none.
+    fn certificate_checks(&mut self, ctx: &mut dyn NodeCtx, bytes: u32) -> Duration {
+        let n = core::mem::take(&mut self.cert_checks_due);
+        let Some(op) = self.config.cert_verify_op.filter(|_| n > 0) else {
+            return Duration::from_nanos(0);
+        };
+        self.security.trust_mut().stats.cert_pq_verifications += u64::from(n);
+        match self
+            .service
+            .service_time(ctx, &OpDescriptor::verify(op, bytes))
+        {
+            Some(d) => {
+                let total = Duration::from_nanos(d.as_nanos().saturating_mul(u64::from(n)));
+                let stats = &mut self.security.trust_mut().stats;
+                stats.charged_ns = stats.charged_ns.saturating_add(total.as_nanos());
+                total
+            }
+            None => {
+                self.security.trust_mut().stats.unpriced += u64::from(n);
+                Duration::from_nanos(0)
+            }
         }
     }
 
@@ -1788,7 +1828,9 @@ impl VruDeviceRuntime {
             // Receiver validation runs before the server is booked, so the time it charges
             // (chain links, reconstructions, CRL work) is in this frame's service time (WP-C2).
             let verdict = self.classify(ctx, &frame);
-            let cost = cost + crate::rxval::charge(&mut self.security, &self.service.profile().id);
+            let cost = cost
+                + crate::rxval::charge(&mut self.security, &self.service.profile().id)
+                + self.certificate_checks(ctx, frame.bytes);
             let sched = match where_ {
                 RunsOn::Hsm => self.hsm.submit(q.enqueued_at, cost),
                 RunsOn::Accelerator => self.accel.submit(q.enqueued_at, cost),
@@ -1814,6 +1856,10 @@ impl VruDeviceRuntime {
             ctx.emit(rec);
             let held =
                 verdict == VerificationState::Unverified && self.policy.holds_unknown_signer();
+            let refusal = self
+                .security
+                .take_last_refusal()
+                .filter(|_| verdict == VerificationState::Invalid);
             if held {
                 self.drops.record(DropCause::VerifyPolicySkip);
             } else {
@@ -1824,6 +1870,8 @@ impl VruDeviceRuntime {
                 token: item.token,
                 disposition: if held {
                     RxDisposition::UnknownSigner
+                } else if let Some(rule) = refusal {
+                    RxDisposition::Refused(rule)
                 } else {
                     RxDisposition::Delivered(verdict)
                 },
@@ -1852,6 +1900,8 @@ impl VruDeviceRuntime {
     /// The same two paths [`crate::runtime::ObuRuntime`] has: the bytes when the engine
     /// carries them, and the engine's own verdict when it does not.
     fn classify(&mut self, ctx: &mut dyn NodeCtx, frame: &RxFrame) -> VerificationState {
+        // A refusal is this frame's only if this judgement makes it.
+        let _ = self.security.take_last_refusal();
         // The revocation check reads the certificate's own `linkageData` (iCert and the
         // linkage value), out of the certificate the signature was checked against: the
         // field a linked CRL entry is matched against [1609.2 §5.1.3.4]. Nothing else

@@ -475,6 +475,9 @@ pub struct NodeSecurity {
     new_neighbour_pending: bool,
     /// The receiver trust: installed roots, validated CA paths, CRLs (WP-C2).
     trust: crate::rxval::RxTrust,
+    /// The receiver rule behind the last [`SpduVerdict::Refused`], until the node takes
+    /// it ([`NodeSecurity::take_last_refusal`]) for the frame's `node.rx` fate.
+    last_refusal: Option<crate::rxval::RxReject>,
     /// The clock receiver checks read time in (TAI `Time32`).
     wall: WallClock,
     /// Peer-to-peer certificate distribution (WP-C3, [`crate::p2pcd`]).
@@ -524,6 +527,12 @@ fn issuer_id8(c: &Certificate) -> Option<[u8; 8]> {
 }
 
 impl NodeSecurity {
+    /// The receiver rule that refused the last SPDU judged [`SpduVerdict::Refused`], once:
+    /// the node reads it for that frame's fate and the next frame starts clean.
+    pub fn take_last_refusal(&mut self) -> Option<crate::rxval::RxReject> {
+        self.last_refusal.take()
+    }
+
     /// A stack signing under `psid` on `wall`, with `mode`'s backend.
     pub fn new(wall: WallClock, mode: CryptoMode, psid: u64) -> NodeSecurity {
         NodeSecurity {
@@ -545,6 +554,7 @@ impl NodeSecurity {
             attach_on_new_neighbour: false,
             new_neighbour_pending: false,
             trust: crate::rxval::RxTrust::default(),
+            last_refusal: None,
             wall,
             p2pcd: crate::p2pcd::P2pcd::new(v2xw_sec::p2pcd::P2pcdParams::recommended(
                 default_p2pcd_flavor(EnvelopeProfile::Ieee1609Dot2),
@@ -1317,7 +1327,10 @@ impl NodeSecurity {
                 Ok(()) => {}
                 Err(crate::rxval::RxReject::UnknownIssuer) => return SpduVerdict::Unverifiable,
                 Err(r) if r.is_revocation() => return SpduVerdict::Revoked,
-                Err(_) => return SpduVerdict::Refused,
+                Err(r) => {
+                    self.last_refusal = Some(r);
+                    return SpduVerdict::Refused;
+                }
             }
         } else {
             self.trust.stats.chain_unchecked += 1;
@@ -1383,7 +1396,10 @@ impl NodeSecurity {
             Ok(()) => {}
             Err(crate::rxval::RxReject::UnknownIssuer) => return (SpduVerdict::Unverifiable, None),
             Err(r) if r.is_revocation() => return (SpduVerdict::Revoked, None),
-            Err(_) => return (SpduVerdict::Refused, None),
+            Err(r) => {
+                self.last_refusal = Some(r);
+                return (SpduVerdict::Refused, None);
+            }
         }
         (modelled, crate::rxval::linkage_key(certificate))
     }

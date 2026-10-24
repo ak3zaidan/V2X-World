@@ -1106,6 +1106,9 @@ pub struct Engine {
     lamps: BTreeMap<ActorId, u8>,
     providers: v2xw_metrics::ProviderSet,
     metric_period: Duration,
+    /// When the metric window now open began: the last flush, or zero (R-FFWIN). A
+    /// window's span is its own, which is shorter than the period at a fast-forward edge.
+    metric_window_start: SimTime,
     /// The end of the warm-up, ns (`time.warmup_s`): no sample is recorded before it.
     metric_warmup_ns: SimTime,
     reverse_node_walk: bool,
@@ -1625,6 +1628,7 @@ impl Engine {
             lamps: BTreeMap::new(),
             providers,
             metric_period: scenario_for_radio.time.metric_period(),
+            metric_window_start: 0,
             metric_warmup_ns: scenario_for_radio.time.warmup_ns(),
             reverse_node_walk: false,
             link_sweep: true,
@@ -2054,6 +2058,13 @@ impl Engine {
             // Under the SCMS the unit signs only with the application certificates its
             // provider issued before the run (WP-B3b), not with the factory's.
             self.install_rsu_app_certs(id, true);
+            // The unit's CRL gate is in the i-period its clock says from the start, not
+            // only from its first own step: a unit with no application certificate of its
+            // own (the post-quantum profile) otherwise judged every linked certificate it
+            // heard before that step against period 0 and refused it as `Invalid` (the 47
+            // first PSMs of the cycle runs, final-run.md §3).
+            let now = self.scheduler.now();
+            self.sync_credential_periods(Some(id), now);
         }
     }
 
@@ -2331,6 +2342,13 @@ impl Engine {
             .unwrap_or(Duration::from_micros(1))
     }
 
+    /// Whether `node` is switched off (a timeline `outage`).
+    fn node_is_off(&self, node: NodeId) -> bool {
+        self.nodes
+            .get(&node)
+            .is_some_and(|n| n.state() == v2xw_node::NodeState::Off)
+    }
+
     /// One node's ground-truth position at an instant, whether it rides an actor or stands
     /// on a mast.
     fn node_pos(&self, node: NodeId, at: SimTime) -> Option<Vec3> {
@@ -2377,7 +2395,7 @@ impl Engine {
             }
         }
         if !self.providers.is_empty() {
-            let first = self.metric_period.after(0);
+            let first = self.next_metric_flush(0);
             if first <= horizon {
                 self.scheduler.schedule(
                     first,
@@ -7481,6 +7499,13 @@ impl Engine {
         horizon: SimTime,
         journey: ReportJourney,
     ) {
+        // A switched-off receiver acts on nothing it "decoded" (MWP.off-no-backend): the
+        // node already refuses the frame as `receiver-off`, and the payload beside it is
+        // the same frame. Before this a parked car switched off for weeks installed the
+        // roadside CRL broadcast of the first live step after a fast-forward.
+        if self.node_is_off(rx) {
+            return;
+        }
         match app {
             AppPayload::Report(report) => {
                 // Only a unit with the `report-forward` role and a backhaul carries a
@@ -7497,10 +7522,15 @@ impl Engine {
                 if !self
                     .phase2
                     .as_mut()
-                    .is_some_and(|p| p.claim_forward(&report.report_id))
+                    // Per frame: two units that decode one transmission forward it once,
+                    // and a retransmission a dropping unit never confirmed can still go.
+                    .is_some_and(|p| {
+                        p.claim_forward(&format!("{}@{}", report.report_id, journey.msg))
+                    })
                 {
                     return;
                 }
+                let relayed_id = report.report_id.clone();
                 // The unit decides what reaches the authority: an honest one forwards the
                 // report, a compromised one may drop it or forward a forgery instead
                 // (`threats.compromised_rsus`).
@@ -7554,6 +7584,11 @@ impl Engine {
                 if at > horizon {
                     return;
                 }
+                // The unit took it onto its backhaul: the vehicle's upload is confirmed,
+                // and the report leaves its store.
+                if let Some(p) = self.phase2.as_mut() {
+                    p.relay_delivered(tx, &relayed_id, now);
+                }
                 let sdu = v2xw_core::ids::SduId::new(self.next_sdu);
                 self.next_sdu += 1;
                 self.transfers.insert(
@@ -7603,6 +7638,14 @@ impl Engine {
         cellular: bool,
     ) {
         if self.rsus.contains_key(&node) {
+            return;
+        }
+        // A download that lands on a device switched off since it asked is never received
+        // (F-OFF): the poll is open again when the device is back on.
+        if self.node_is_off(node) {
+            if cellular && let Some(p) = self.phase2.as_mut() {
+                p.crl_download_unreceived(node);
+            }
             return;
         }
         // The node's own verdict on the signed CRLs, when it can form one: every CRL
@@ -8736,8 +8779,16 @@ impl Engine {
         }
     }
 
-    /// Puts a report on the air to a relaying roadside unit in range, returning it when
-    /// there is none (or the vehicle cannot sign), so the caller holds it.
+    /// Puts a report on the air to a relaying roadside unit in range, and returns it for
+    /// the caller to keep in the store: it leaves the store only when a unit confirms it
+    /// ([`Phase2::relay_delivered`], on the unit's reception). Returns it untried when no
+    /// unit is in range, the vehicle cannot sign, or its retransmission timer is running
+    /// ([`Phase2::relay_may_send`]); `None` only when the network layer refuses it for ever.
+    ///
+    /// Before this a report on the air was counted as uploaded and dropped from the store
+    /// whether or not any unit decoded it: a relay-only car behind buildings 212 m from a
+    /// unit "uploaded" 4 reports no unit heard, and FB3's 268 uploads that never reached
+    /// an MA include such reports.
     ///
     /// A device uses whatever IP connectivity it has (05-protocols.md §3.2, "Uu or RSU
     /// backhaul"): a vehicle with no modem relays, and one whose modem has no serving cell
@@ -8755,7 +8806,12 @@ impl Engine {
             .as_ref()
             .and_then(|p| p.relay_in_range(pos, "report-forward"))
             .is_some();
-        if !in_range {
+        if !in_range
+            || !self
+                .phase2
+                .as_ref()
+                .is_some_and(|p| p.relay_may_send(node, now))
+        {
             return Some(report);
         }
         let Some(signer) = self
@@ -8777,16 +8833,11 @@ impl Engine {
             self.signing_cost(node).after(believed),
             believed,
         );
-        // Counted as an upload only once it is on the air (R-PQMBR): a signed report the
-        // network layer cannot carry (a post-quantum signature over WSMP with no SDU
-        // fragmenter) never left the device. The stack refuses that SDU every time, so
-        // the report is not kept for another try; it is counted and lost.
-        let logged = self
-            .phase2
-            .as_ref()
-            .is_some_and(crate::phase2::Phase2::records_reports)
-            .then(|| report.clone());
-        let report_id = report.report_id.clone();
+        // A signed report the network layer cannot carry (a post-quantum signature over
+        // WSMP with no SDU fragmenter) never leaves the device (R-PQMBR). The stack
+        // refuses that SDU every time, so the report is not kept for another try; it is
+        // counted and lost. One on the air stays stored until a unit confirms it.
+        let kept = report.clone();
         let handed = self.hand_down_app(
             node,
             &tx,
@@ -8794,18 +8845,19 @@ impl Engine {
             horizon,
             Some(AppPayload::Report(Box::new(report))),
         );
-        if let Some(p) = self.phase2.as_mut() {
-            p.forget_taken(node, &report_id);
-            if let (HandDown::Sent, Some(r)) = (&handed, &logged) {
-                p.note_report_uploaded(node, r, now);
+        let p = self.phase2.as_mut()?;
+        match handed {
+            HandDown::Sent => {
+                p.note_relay_sent(node, now);
+                Some(kept)
             }
-            match handed {
-                HandDown::Sent => p.note_upload(node, crate::backend::AccessKind::RsuRelay),
-                HandDown::MtuRefused => p.note_report_refused_mtu(),
-                HandDown::NotSent => {}
+            HandDown::MtuRefused => {
+                p.forget_taken(node, &kept.report_id);
+                p.note_report_refused_mtu();
+                None
             }
+            HandDown::NotSent => Some(kept),
         }
-        None
     }
 
     /// After the node phase: each vehicle's pseudonym changes (every identifier together,
@@ -9126,13 +9178,8 @@ impl Engine {
                 self.emit(recorder, &sample);
             }
         }
-        let mut next = self.metric_period.after(now);
-        // Inside a fast-forward window nothing a metric observes happens: the next
-        // window closes on the first period boundary after it (WP-D2).
-        if let Some(end) = self.scenario.time.fast_forward_end(next) {
-            let p = self.metric_period.as_nanos().max(1);
-            next = now.saturating_add((end.saturating_sub(now)).div_ceil(p).saturating_mul(p));
-        }
+        self.metric_window_start = now;
+        let next = self.next_metric_flush(now);
         if next <= horizon {
             self.scheduler.schedule(
                 next,
@@ -9144,6 +9191,31 @@ impl Engine {
         }
     }
 
+    /// The instant the metric window opened at `now` closes (WP-D2, R-FFWIN).
+    ///
+    /// A live window closes on the next period boundary, unless a `time.fast_forward`
+    /// window begins first: then it closes where the fast-forward begins, so its rates are
+    /// over its own live seconds. The frozen span is a window of its own that closes where
+    /// the fast-forward ends, and the next live window runs from there to the period
+    /// boundary after it. Before this a live window that reached a fast-forward was
+    /// flushed only at the first boundary after it, so the full-scale benchmark reported
+    /// its 230-240 s window at 43,170 s with every rate divided by the frozen hours.
+    fn next_metric_flush(&self, now: SimTime) -> SimTime {
+        let time = &self.scenario.time;
+        if let Some(end) = time.fast_forward_end(now) {
+            return end;
+        }
+        // The next boundary of the period grid (`k * period` from zero).
+        let p = self.metric_period.as_nanos().max(1);
+        let next = (now / p).saturating_add(1).saturating_mul(p);
+        time.fast_forward
+            .iter()
+            .map(|w| (w.from_s * 1e9).round().max(0.0) as SimTime)
+            .filter(|&from| from > now && from < next)
+            .min()
+            .unwrap_or(next)
+    }
+
     /// Every node's MAC report for the window that closes at `now`, on `mac.cbr`: the
     /// busy ratio its MAC measured, its EDCA queue depth, and what it offered and was
     /// refused since the previous report. Only at the tiers that model a MAC.
@@ -9153,7 +9225,9 @@ impl Engine {
     /// exceeded the pool's threshold), on the sidelink's channel, and the queue is the
     /// SPS engine's per-UE queue: the same record, measured the way the RAT measures it.
     fn emit_mac_reports(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
-        let span = self.metric_period.as_nanos();
+        // The window's own length: shorter than the period where a fast-forward cuts it,
+        // longer across a frozen span (R-FFWIN).
+        let span = now.saturating_sub(self.metric_window_start).max(1);
         let mut reports: Vec<MacCbr> = Vec::with_capacity(self.nodes.len());
         let nodes: Vec<NodeId> = self.nodes.keys().copied().collect();
         for node in nodes {
@@ -9744,6 +9818,12 @@ fn resolve_rx(attempt: NodeRx, report: &RxReport, now: SimTime) -> NodeRx {
             a.lost(now, rx_cause::SIGNATURE_INVALID)
         }
         RxDisposition::Delivered(VerificationState::Revoked) => a.lost(now, rx_cause::REVOKED),
+        // A receiver rule's refusal is named for what it is: an overdue list is not a
+        // forgery (rerun §9 item 3).
+        RxDisposition::Refused(v2xw_node::rxval::RxReject::CrlOverdue) => {
+            a.lost(now, rx_cause::CRL_OVERDUE)
+        }
+        RxDisposition::Refused(_) => a.lost(now, rx_cause::RECEIVER_RULE),
         RxDisposition::Dropped(cause) => a.lost(now, drop_cause_name(cause)),
         RxDisposition::NodeOff => a.lost(now, rx_cause::RECEIVER_OFF),
         RxDisposition::UnknownSigner => a.lost(now, rx_cause::UNKNOWN_SIGNER),

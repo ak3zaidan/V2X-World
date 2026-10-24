@@ -685,6 +685,12 @@ pub mod rx_cause {
     pub const VERIFY_OVERFLOW: &str = "verify-overflow";
     /// The signature did not verify (or the envelope did not parse).
     pub const SIGNATURE_INVALID: &str = "signature-invalid";
+    /// The signer's CRACA's CRL is more than `overdue_CRL_tolerance` past its `nextCrl`
+    /// on the receiver ([CAMP122] Table 67): a stale list, not a forgery.
+    pub const CRL_OVERDUE: &str = "crl-overdue";
+    /// Another 1609.2 receiver rule refused the message before its signature was relied
+    /// on: the chain to an installed root, the signer's validity, region or PSID.
+    pub const RECEIVER_RULE: &str = "receiver-rule";
     /// The signer's certificate is on the receiver's revocation list.
     pub const REVOKED: &str = "revoked";
     /// The receiver was switched off (an outage) or retired before it processed the frame.
@@ -695,13 +701,15 @@ pub mod rx_cause {
     pub const GENERATION_TIME: &str = "generation-time-window";
 
     /// The causes above the PHY, in a fixed order.
-    pub const ABOVE_PHY: [&str; 9] = [
+    pub const ABOVE_PHY: [&str; 11] = [
         REASSEMBLY_FAILED,
         RX_OVERFLOW,
         VERIFY_POLICY_DROP,
         UNKNOWN_SIGNER,
         VERIFY_OVERFLOW,
         SIGNATURE_INVALID,
+        CRL_OVERDUE,
+        RECEIVER_RULE,
         REVOKED,
         RECEIVER_OFF,
         GENERATION_TIME,
