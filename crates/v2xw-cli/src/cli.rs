@@ -67,6 +67,18 @@ pub enum Command {
     /// Run a sensitivity spec: a base scenario and one-at-a-time changes on the same seed,
     /// each checked for the direction (and band) theory expects of a named metric.
     Sensitivity(SensitivityArgs),
+    /// Replay a finished run's recorded misbehaviour reports through a family of MA
+    /// decision rules, without re-simulating: honest devices blocked per 10^6
+    /// device-hours and the attacker's time to act, per rule and parameter
+    /// (ma-replay.csv). The run needs `security.scms.report_records: true`.
+    MaReplay(MaReplayArgs),
+}
+
+/// `v2xw ma-replay`.
+#[derive(Debug, clap::Args)]
+pub struct MaReplayArgs {
+    /// The run directory (`recording.mcap`).
+    pub dir: PathBuf,
 }
 
 /// `v2xw sensitivity`.

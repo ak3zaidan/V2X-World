@@ -39,6 +39,7 @@ pub mod export_sumo;
 pub mod fmt;
 pub mod import;
 pub mod info;
+pub mod ma_replay;
 pub mod progress;
 pub mod run;
 pub mod runcompare;
