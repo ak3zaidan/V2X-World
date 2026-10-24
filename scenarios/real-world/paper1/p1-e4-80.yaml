@@ -1,0 +1,18 @@
+# P1-E4, speed-matched (paper1-validation.md §6): p1-e4.yaml measured a median of 20.6 m/s
+# against Wyoming's 34.4 m/s (I-80, posted 75-80 mph). Here the procedural highway is posted
+# at I-80's 80 mph (35.76 m/s) and the demand halved, so the speeds overlap Wyoming's.
+# Expectations for it were written before it ran (scms-paper1.yaml, P1.E4R.*).
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4.yaml
+  name: Paper 1 E4 highway 80 mph
+  description: The E4 highway minute posted at 80 mph with half the demand, speed-matched to Wyoming.
+  tags: [paper1, validation, highway, bsm-timing]
+world:
+  source:
+    params:
+      speed_limit_mps: 35.76
+actors:
+  vehicles:
+    demand:
+      rate_veh_per_h: 1500.0

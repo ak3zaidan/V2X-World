@@ -102,6 +102,12 @@ runs:
   E4F:
     scenario: scenarios/real-world/paper1/p1-e4-free.yaml
     base: E4
+  E4R:
+    scenario: scenarios/real-world/paper1/p1-e4-80.yaml
+    note: speed-matched E4 (80 mph, 1,500 veh/h) on the calibration refitted after a77aab7c
+  E4RWN:
+    scenario: scenarios/real-world/paper1/p1-e4-80-wn.yaml
+    base: E4R
   MAL1:
     scenario: scenarios/real-world/paper1/p1-ma-l1.yaml
     note: quarter fleet 60 s live, 3 % ConstPos from 30 s, every OBU locked; then v2xw ma-replay
@@ -762,4 +768,48 @@ rows:
   - 25.0
   - 36.0
   source: 'the comparison is speed-matched: Wyoming''s p5-p95 speed is 27.6-35.6 m/s'
+  measured: pending
+- id: P1.E4R.ks
+  base: E4R
+  variant: E4R
+  area: metrics
+  measure: x.e4.ks
+  expect: le
+  value: 0.092
+  source: 'P1-E4 (re-run: p1-e4-80.yaml, calibration refitted with the Δt-corrected slip estimator, a77aab7c); tolerance
+    0.092: the 95th percentile of the KS distance between two halves of Wyoming''s 12 IDs over all 462 splits (scripts/ks.py
+    tol), set before the run; residual = v1.0 |p1+v1·Δt·u(h1)-p2|, secMark Δt, 0.5 s limit, v1 >= 10 m/s, by tools/realdata
+    stages 3-4'
+  measured: pending
+- id: P1.E4R.ks-white-noise
+  base: E4RWN
+  variant: E4RWN
+  area: metrics
+  measure: x.e4.ks
+  expect: ge
+  value: 0.092
+  source: 'P1-E4 fault (re-run: p1-e4-80.yaml, calibration refitted with the Δt-corrected slip estimator, a77aab7c):
+    the white-noise GNSS must exceed the tolerance'
+  measured: pending
+- id: P1.E4R.locked-rate
+  base: E4R
+  variant: E4R
+  area: metrics
+  measure: x.e4.rate_per_idmin
+  expect: le
+  value: 0.568
+  source: 'the frozen locked bound 0.568 per ID-minute (re-run: p1-e4-80.yaml, calibration refitted with the Δt-corrected
+    slip estimator, a77aab7c)'
+  measured: pending
+- id: P1.E4R.speed
+  base: E4R
+  variant: E4R
+  area: metrics
+  measure: x.e4.v_p50
+  expect: band
+  band:
+  - 25.0
+  - 36.0
+  source: 'speed-matched to Wyoming''s p5-p95 27.6-35.6 m/s (re-run: p1-e4-80.yaml, calibration refitted with the
+    Δt-corrected slip estimator, a77aab7c)'
   measured: pending
