@@ -68,6 +68,9 @@ pub struct RunOptions {
     pub duration_s: Option<f64>,
     /// Override `actors.vehicles.demand.rate_veh_per_h`. Changes the scenario hash.
     pub rate_veh_per_h: Option<f64>,
+    /// Add the `veremi` exporter with this codebook (`veremi-ext` or `veremi-1`), or set
+    /// the codebook of the one the scenario names. Changes the scenario hash.
+    pub veremi: Option<String>,
     /// Run on this library city instead of the file's world ([`Scenario::with_city`]).
     pub city: Option<String>,
     /// Print the outcome as JSON on stdout instead of as a table.
@@ -380,6 +383,7 @@ pub fn resume(checkpoint: &Path, quiet: bool, json: bool) -> Result<RunOutcome> 
         stream_digest: false,
         duration_s: ck.duration_override_s,
         rate_veh_per_h: ck.rate_override_veh_per_h,
+        veremi: None,
         city: ck.city.clone(),
         json,
         long: LongRun {
@@ -940,6 +944,23 @@ fn apply_overrides(scenario: &mut Scenario, opts: &RunOptions) {
     }
     if let Some(r) = opts.rate_veh_per_h {
         scenario.actors.vehicles.demand.rate_veh_per_h = Some(r);
+    }
+    // The codebook is checked by the scenario's own validation, which runs next.
+    if let Some(codebook) = &opts.veremi {
+        match scenario.exporters.iter_mut().find(|x| x.id == "veremi") {
+            Some(x) => {
+                if !x.opts.is_object() {
+                    x.opts = serde_json::json!({});
+                }
+                x.opts["codebook"] = serde_json::Value::String(codebook.clone());
+            }
+            None => scenario
+                .exporters
+                .push(v2xw_engine::scenario::schema::ExporterSpec {
+                    id: "veremi".to_string(),
+                    opts: serde_json::json!({ "codebook": codebook }),
+                }),
+        }
     }
 }
 

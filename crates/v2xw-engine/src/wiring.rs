@@ -2909,6 +2909,21 @@ pub fn build_metrics_for(
             Box::new(v2xw_metrics::traffic::TrafficControlProvider::new()),
         )?;
     }
+    // The chance-corrected detection scores and the per-message level
+    // (`v2xw_metrics::detection::DetectionScoresProvider`): opt-in, with
+    // `metrics: [all, detection-scores]` or one of its metric names, so a bare `all` keeps
+    // its digests. Naming it also records the detectors' `det.observation` it joins on.
+    let scores_named = scenario.metrics.iter().any(|m| {
+        m == v2xw_metrics::detection::SCORES_GROUP
+            || v2xw_metrics::detection::DetectionScoresProvider::metric_names()
+                .contains(&m.as_str())
+    });
+    if scores_named {
+        set.register(
+            registry,
+            Box::new(v2xw_metrics::detection::DetectionScoresProvider::new()),
+        )?;
+    }
     if scenario.metrics.is_empty() {
         return Ok(set);
     }

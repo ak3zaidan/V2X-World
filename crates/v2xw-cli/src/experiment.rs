@@ -193,6 +193,7 @@ impl RunExecutor for CliExecutor {
             // line, so that every run's hash is the hash of the document it executed.
             duration_s: None,
             rate_veh_per_h: None,
+            veremi: None,
             city: None,
             json: false,
             long: crate::run::LongRun {

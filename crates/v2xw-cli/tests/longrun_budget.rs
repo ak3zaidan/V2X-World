@@ -46,6 +46,7 @@ fn a_long_run_holds_its_memory_and_its_cost_flat() {
         city: None,
         duration_s: Some(240.0),
         rate_veh_per_h: None,
+        veremi: None,
         json: false,
         long: LongRun {
             progress_every_s: Some(30.0),

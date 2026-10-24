@@ -4953,6 +4953,14 @@ impl Engine {
             y_m: belief.map_or(0.0, |b| b.pos.y),
             radio_range_m: self.detector_range_m,
         };
+        // The local detectors' `det.observation` records reach the recording only when the
+        // per-message detection scores are asked for (`v2xw_metrics::detection::SCORES_GROUP`),
+        // which join them to each reception; every other run records what it did before.
+        let record_observations = self.scenario.metrics.iter().any(|m| {
+            m == v2xw_metrics::detection::SCORES_GROUP
+                || v2xw_metrics::detection::DetectionScoresProvider::metric_names()
+                    .contains(&m.as_str())
+        });
         let reports = {
             let Engine {
                 scheduler,
@@ -4963,20 +4971,34 @@ impl Engine {
                 params,
                 phase2,
                 nodes,
+                deferred_records,
                 ..
             } = self;
+            let mut buffer = crate::ctx::MemoryRecorder::new();
             let mut null = crate::ctx::NullRecorder::new();
-            let mut ctx = EngineCtx::new(
-                scheduler, rng, world, snapshot, provenance, params, &mut null,
-            );
+            let sink: &mut dyn crate::ctx::RunRecorder = if record_observations {
+                &mut buffer
+            } else {
+                &mut null
+            };
+            let mut ctx = EngineCtx::new(scheduler, rng, world, snapshot, provenance, params, sink);
             let reporter = nodes
                 .get(&node)
                 .and_then(|n| n.stores().certs.active())
                 .map(|c| v2xw_core::hash::hex_encode(&c.digest.0[..]));
-            phase2
+            let reports = phase2
                 .as_mut()
                 .map(|p| p.detect(&mut ctx, world, node, &me, reporter, delivered))
-                .unwrap_or_default()
+                .unwrap_or_default();
+            drop(ctx);
+            deferred_records.extend(
+                buffer
+                    .records()
+                    .iter()
+                    .filter(|(_, r)| r.channel == "det.observation")
+                    .cloned(),
+            );
+            reports
         };
         // The node's counters are cumulative, so take the running total rather than
         // adding it: accumulating a cumulative counter once per step multiplies it by the
@@ -5596,6 +5618,7 @@ impl Engine {
                 tx.signed.as_ref().map(|f| f.payload.as_slice()),
                 &tx.signer,
                 claim,
+                crate::export::records_broadcast_accuracy(&self.scenario.exporters),
             )),
             census: BTreeMap::new(),
             frag: None,
@@ -5850,6 +5873,7 @@ impl Engine {
                 Some(payload.as_slice()),
                 &digest,
                 claim,
+                crate::export::records_broadcast_accuracy(&self.scenario.exporters),
             ));
             st.gn = if sidelink {
                 None
@@ -9795,6 +9819,7 @@ fn message_content(
     payload: Option<&[u8]>,
     signer: &v2xw_msg::sec_types::HashedId8,
     claim: (Vec3, f64, f64),
+    broadcast_accuracy: bool,
 ) -> v2xw_metrics::channels::MsgContentView {
     use v2xw_core::math::quantize_to;
     use v2xw_msg::j2735::bsm;
@@ -9831,6 +9856,21 @@ fn message_content(
         c.heading_deg = (k.heading != bsm::HEADING_UNAVAILABLE)
             .then(|| quantize_to(f64::from(k.heading) * 0.0125, Q_DEG));
         c.part_ii = Some(u8::try_from(m.part_ii.len()).unwrap_or(u8::MAX));
+        // The broadcast confidence and acceleration the BSM carried (J2735
+        // `PositionalAccuracy`, `accelSet.long`), which the VeReMi exporter writes as
+        // `pos_noise` and `acl`. Only when the scenario names that exporter, so every
+        // other run's `node.tx` records, and the digests over them, are unchanged.
+        if broadcast_accuracy {
+            let semi = |v: u8| {
+                (v != bsm::SEMI_AXIS_UNAVAILABLE).then(|| quantize_to(f64::from(v) * 0.05, Q_M))
+            };
+            c.pos_semi_major_m = semi(k.accuracy.semi_major);
+            c.pos_semi_minor_m = semi(k.accuracy.semi_minor);
+            c.pos_orientation_deg = (k.accuracy.orientation != bsm::ORIENTATION_UNAVAILABLE)
+                .then(|| quantize_to(f64::from(k.accuracy.orientation) * 360.0 / 65_535.0, Q_DEG));
+            c.accel_long_mps2 = (k.accel_set.long != bsm::ACCELERATION_UNAVAILABLE)
+                .then(|| quantize_to(f64::from(k.accel_set.long) * 0.01, Q_M));
+        }
     }
     // A pedestrian's or a cyclist's PSM, decoded from the octets its device encoded: the
     // same fields a BSM's Part I shows, from the same J2735 data elements.

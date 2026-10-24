@@ -468,6 +468,21 @@ pub struct MsgContentView {
     /// The claimed heading, radians, ENU (0 = east, counter-clockwise).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_heading_rad: Option<f64>,
+    /// The broadcast position confidence: J2735 `PositionalAccuracy.semiMajor`, metres
+    /// (LSB 0.05 m, 12.70 for "12.70 m or more"); absent when the message said
+    /// "unavailable". Recorded only when the scenario names the `veremi` exporter, which
+    /// reads it as VeReMi's `pos_noise`, so a run without one keeps its record digests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pos_semi_major_m: Option<f64>,
+    /// `PositionalAccuracy.semiMinor`, metres; same rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pos_semi_minor_m: Option<f64>,
+    /// `PositionalAccuracy.orientation`, degrees clockwise from true north; same rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pos_orientation_deg: Option<f64>,
+    /// `accelSet.long`, m/s² along the vehicle's longitudinal axis (LSB 0.01); same rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accel_long_mps2: Option<f64>,
 }
 
 impl NodeTxView {

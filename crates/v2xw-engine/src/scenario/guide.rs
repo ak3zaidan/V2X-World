@@ -239,7 +239,7 @@ const BASIC: &[Basic] = &[
     Basic {
         path: "exporters",
         explain: "Which files the run writes when it finishes, for analysis outside the Studio.",
-        recommended: "None to explore; Parquet to analyse in Python or R.",
+        recommended: "None to explore; Parquet to analyse in Python or R; veremi (codebook veremi-ext, hourly slices) to run a VeReMi-trained detector.",
     }, // traffic audit
     Basic {
         path: "actors.vehicles.drivers.speed_factor",
@@ -1241,6 +1241,10 @@ fn export_choices() -> Vec<Value> {
             "arrow" => (
                 "Tables as Arrow",
                 "One table per recorded channel as Arrow IPC files.",
+            ),
+            "veremi" => (
+                "VeReMi traces",
+                "Per-receiver traces and a ground-truth log in the VeReMi Extension format, for detectors written against VeReMi.",
             ),
             other => (other, ""),
         };

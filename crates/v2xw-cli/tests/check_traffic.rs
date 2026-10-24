@@ -41,6 +41,7 @@ fn check_traffic_passes_a_clean_run_and_fails_a_tampered_plan() {
         stream_digest: false,
         duration_s: Some(40.0),
         rate_veh_per_h: Some(6000.0),
+        veremi: None,
         city: None,
         json: false,
         long: v2xw_cli::run::LongRun::default(),
