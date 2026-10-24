@@ -255,3 +255,36 @@ fn the_ra_refuses_a_request_whose_signed_butterfly_parameters_differ() {
         PduError::Shape(_)
     ));
 }
+
+/// A component certificate checked once is not re-verified for every PDU it signs, and a
+/// remembered pass never vouches for a different certificate under the same issuer.
+#[test]
+fn a_component_certificate_is_verified_once_and_a_forgery_is_still_refused() {
+    let k = pki();
+    assert!(k.signer_key(&k.aca.cert).is_ok());
+    // The RA opens one ACA response per pseudonym certificate: 2,000 here. Re-verifying
+    // the ACA certificate's ECDSA signature each time takes tens of seconds on a debug
+    // build; remembered, each look-up is one hash of the certificate.
+    let started = std::time::Instant::now();
+    for _ in 0..2_000 {
+        assert!(k.signer_key(&k.aca.cert).is_ok());
+    }
+    let took = started.elapsed();
+    assert!(
+        took.as_secs_f64() < 3.0,
+        "2,000 look-ups of the ACA certificate took {took:?}"
+    );
+    // The same body under the same issuer, signed by another key: another hash, checked
+    // afresh, refused.
+    let other = ScmsPki::new(8, T - 1_000).unwrap();
+    let ica_key = CertKey::P256(Point::mul_base(k.ica.private.as_ref().unwrap()));
+    let forged = cert::issue_explicit_cert(
+        k.aca.cert.0.to_be_signed.clone(),
+        Some((&k.ica.cert, &ica_key)),
+        CertHash::Sha256,
+        |d| Ok(other.ica.key.sign_digest(d)),
+    )
+    .unwrap();
+    assert_eq!(k.signer_key(&forged), Err(PduError::UntrustedSigner));
+    assert!(k.signer_key(&k.aca.cert).is_ok());
+}

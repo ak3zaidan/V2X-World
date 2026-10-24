@@ -273,6 +273,43 @@ pub fn cert_id8(c: &Certificate) -> [u8; 8] {
     cert::cert_id8(c).map_or([0; 8], |h| hashedid::id8_bytes(&h))
 }
 
+/// How many explicit-certificate checks [`explicit_cert_verifies`] keeps per thread: the
+/// component certificates of every provider and generation a run holds, with room over.
+const EXPLICIT_MEMO_MAX: usize = 4_096;
+
+thread_local! {
+    /// `(whole-certificate hash of a certificate, of its issuer)` → whether the issuer's
+    /// signature on it verifies.
+    static EXPLICIT_MEMO: std::cell::RefCell<std::collections::HashMap<(Vec<u8>, Vec<u8>), bool>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Whether `issuer`'s signature on the explicit certificate `c` verifies, remembered per
+/// pair of whole-certificate hashes. A component's certificate is the signer of every PDU
+/// it sends, so the RA opening each ACA response re-verified the same ACA certificate
+/// under the same ICA: 12 % of the weekly pre-generation burst on the quarter benchmark
+/// (macOS sample at 43,200 s; honest-density.md §6). The result is a pure function of the
+/// two encodings, so remembering it changes no outcome; a real RA or OBU likewise keeps a
+/// certificate it has validated. A different certificate (another signature, a forged
+/// one) has another hash and is checked afresh.
+fn explicit_cert_verifies(c: &Certificate, issuer: &Certificate) -> bool {
+    let (Ok(a), Ok(b)) = (cert::whole_cert_hash(c), cert::whole_cert_hash(issuer)) else {
+        return sig1609::verify_explicit_cert(c, Some(issuer));
+    };
+    let key = (a, b);
+    if let Some(v) = EXPLICIT_MEMO.with(|m| m.borrow().get(&key).copied()) {
+        return v;
+    }
+    let v = sig1609::verify_explicit_cert(c, Some(issuer));
+    EXPLICIT_MEMO.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() < EXPLICIT_MEMO_MAX {
+            m.insert(key, v);
+        }
+    });
+    v
+}
+
 /// The SCMS components of one provider, with real explicit certificates:
 /// a P-384 self-signed root, a P-256 ICA under it, and the ECA, RA, ACA, MA, the two LAs
 /// and the DCM under the ICA. Each holds PSID 35 with its 1609.2.1 `SecurityMgmtSsp`;
@@ -931,7 +968,7 @@ impl ScmsPki {
         };
         match c.0.r_type {
             CertificateType::explicit => {
-                if !sig1609::verify_explicit_cert(c, Some(&issuer.cert)) {
+                if !explicit_cert_verifies(c, &issuer.cert) {
                     return Err(PduError::UntrustedSigner);
                 }
                 sig1609::explicit_key(c).ok_or(PduError::UntrustedSigner)
