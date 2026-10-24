@@ -596,9 +596,7 @@ pub fn from_records_with(
         SecCertView,
     };
 
-    fn view<T: serde::de::DeserializeOwned>(
-        rec: &crate::reader::RecordedRecord,
-    ) -> Result<T> {
+    fn view<T: serde::de::DeserializeOwned>(rec: &crate::reader::RecordedRecord) -> Result<T> {
         serde_json::from_slice(&rec.json).map_err(|e| {
             RecordError::malformed(
                 "veremi",
@@ -907,10 +905,7 @@ fn v3(v: &[f64; 3]) -> serde_json::Value {
     serde_json::json!([v[0], v[1], v[2]])
 }
 
-fn kin_fields(
-    m: &mut serde_json::Map<String, serde_json::Value>,
-    k: [&[f64; 3]; 8],
-) {
+fn kin_fields(m: &mut serde_json::Map<String, serde_json::Value>, k: [&[f64; 3]; 8]) {
     for (name, v) in [
         "pos",
         "pos_noise",
@@ -940,7 +935,13 @@ fn reception_json(r: &VeremiReception) -> serde_json::Value {
     kin_fields(
         &mut m,
         [
-            &r.pos, &r.pos_noise, &r.spd, &r.spd_noise, &r.acl, &r.acl_noise, &r.hed,
+            &r.pos,
+            &r.pos_noise,
+            &r.spd,
+            &r.spd_noise,
+            &r.acl,
+            &r.acl_noise,
+            &r.hed,
             &r.hed_noise,
         ],
     );
@@ -954,7 +955,13 @@ fn own_json(o: &OwnPosition) -> serde_json::Value {
     kin_fields(
         &mut m,
         [
-            &o.pos, &o.pos_noise, &o.spd, &o.spd_noise, &o.acl, &o.acl_noise, &o.hed,
+            &o.pos,
+            &o.pos_noise,
+            &o.spd,
+            &o.spd_noise,
+            &o.acl,
+            &o.acl_noise,
+            &o.hed,
             &o.hed_noise,
         ],
     );
@@ -972,7 +979,13 @@ fn truth_json(t: &VeremiTruth, line_type: i64) -> serde_json::Value {
     kin_fields(
         &mut m,
         [
-            &t.pos, &t.pos_noise, &t.spd, &t.spd_noise, &t.acl, &t.acl_noise, &t.hed,
+            &t.pos,
+            &t.pos_noise,
+            &t.spd,
+            &t.spd_noise,
+            &t.acl,
+            &t.acl_noise,
+            &t.hed,
             &t.hed_noise,
         ],
     );
@@ -1140,20 +1153,28 @@ pub fn write(dir: impl AsRef<Path>, export: &VeremiExport) -> Result<Vec<Exporte
 }
 
 fn num(v: &serde_json::Value, key: &str, file: &str) -> Result<f64> {
-    v.get(key).and_then(serde_json::Value::as_f64).ok_or_else(|| {
-        RecordError::malformed("veremi", format!("{file}: a line has no number `{key}`"))
-    })
+    v.get(key)
+        .and_then(serde_json::Value::as_f64)
+        .ok_or_else(|| {
+            RecordError::malformed("veremi", format!("{file}: a line has no number `{key}`"))
+        })
 }
 
 fn int(v: &serde_json::Value, key: &str, file: &str) -> Result<i64> {
-    v.get(key).and_then(serde_json::Value::as_i64).ok_or_else(|| {
-        RecordError::malformed("veremi", format!("{file}: a line has no integer `{key}`"))
-    })
+    v.get(key)
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| {
+            RecordError::malformed("veremi", format!("{file}: a line has no integer `{key}`"))
+        })
 }
 
 fn vec3(v: &serde_json::Value, key: &str, file: &str) -> Result<[f64; 3]> {
     let a = v.get(key).and_then(serde_json::Value::as_array);
-    match a.map(|a| a.iter().filter_map(serde_json::Value::as_f64).collect::<Vec<_>>()) {
+    match a.map(|a| {
+        a.iter()
+            .filter_map(serde_json::Value::as_f64)
+            .collect::<Vec<_>>()
+    }) {
         Some(x) if x.len() == 3 => Ok([x[0], x[1], x[2]]),
         _ => Err(RecordError::malformed(
             "veremi",
@@ -1196,7 +1217,10 @@ pub fn read_dir(dir: impl AsRef<Path>, codebook: Codebook, slice_s: f64) -> Resu
         ..VeremiExport::default()
     };
     let bad_name = |n: &str| {
-        RecordError::malformed("veremi", format!("{n} is not a {} file name", codebook.id()))
+        RecordError::malformed(
+            "veremi",
+            format!("{n} is not a {} file name", codebook.id()),
+        )
     };
     for name in &names {
         let path = dir.join(name);
@@ -1315,7 +1339,10 @@ pub fn read_dir(dir: impl AsRef<Path>, codebook: Codebook, slice_s: f64) -> Resu
 ///
 /// # Errors
 /// [`RecordError::Io`] if a written file cannot be read back.
-pub fn lint(files: &[ExportedFile], export: &VeremiExport) -> Result<super::leakage::LeakageReport> {
+pub fn lint(
+    files: &[ExportedFile],
+    export: &VeremiExport,
+) -> Result<super::leakage::LeakageReport> {
     let mut visible: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
     for f in files {
         let name = f
@@ -1435,7 +1462,11 @@ mod tests {
         assert_eq!(c.code("const-speed"), UNNAMED_CODE);
         assert_eq!(c.code("ConstSpeed"), UNNAMED_CODE);
         assert_eq!(c.code("ConstPos"), 1);
-        assert_eq!(c.code("RandomPos"), 8, "the engine's RandomPos is an offset attack");
+        assert_eq!(
+            c.code("RandomPos"),
+            8,
+            "the engine's RandomPos is an offset attack"
+        );
         assert_eq!(c.code("DataReplay"), UNNAMED_CODE);
     }
 
@@ -1454,7 +1485,13 @@ mod tests {
         assert_eq!(c.code("Sybil"), 16);
         assert_eq!(c.code("GhostVehicles"), 16);
         // Same name, different attack (f2md.md §4.1): left unnamed.
-        for f in ["DataReplay", "Disruptive", "DoSRandom", "RelayReplay", "Teleport"] {
+        for f in [
+            "DataReplay",
+            "Disruptive",
+            "DoSRandom",
+            "RelayReplay",
+            "Teleport",
+        ] {
             assert_eq!(c.code(f), UNNAMED_CODE, "{f}");
         }
     }
@@ -1465,8 +1502,9 @@ mod tests {
         assert_eq!(o, VeremiOptions::default());
         assert_eq!(o.codebook, Codebook::VeremiExt);
         assert_eq!(o.slice_s, 3600.0);
-        let o = VeremiOptions::from_opts(&serde_json::json!({"codebook": "veremi-1", "slice_s": 60}))
-            .expect("parses");
+        let o =
+            VeremiOptions::from_opts(&serde_json::json!({"codebook": "veremi-1", "slice_s": 60}))
+                .expect("parses");
         assert_eq!(o.codebook, Codebook::Veremi1);
         assert_eq!(o.slice_s, 60.0);
         for bad in [
@@ -1484,10 +1522,16 @@ mod tests {
         assert_eq!(ellipse_noise(Some(2.0), Some(1.0), None), [2.0, 2.0, 0.0]);
         // Major axis due north: 1 m east, 2 m north.
         let n = ellipse_noise(Some(2.0), Some(1.0), Some(0.0));
-        assert!((n[0] - 1.0).abs() < 1e-12 && (n[1] - 2.0).abs() < 1e-12, "{n:?}");
+        assert!(
+            (n[0] - 1.0).abs() < 1e-12 && (n[1] - 2.0).abs() < 1e-12,
+            "{n:?}"
+        );
         // Due east: the other way round.
         let e = ellipse_noise(Some(2.0), Some(1.0), Some(90.0));
-        assert!((e[0] - 2.0).abs() < 1e-12 && (e[1] - 1.0).abs() < 1e-12, "{e:?}");
+        assert!(
+            (e[0] - 2.0).abs() < 1e-12 && (e[1] - 1.0).abs() < 1e-12,
+            "{e:?}"
+        );
     }
 
     #[test]

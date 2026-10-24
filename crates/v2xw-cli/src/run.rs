@@ -954,10 +954,12 @@ fn apply_overrides(scenario: &mut Scenario, opts: &RunOptions) {
                 }
                 x.opts["codebook"] = serde_json::Value::String(codebook.clone());
             }
-            None => scenario.exporters.push(v2xw_engine::scenario::schema::ExporterSpec {
-                id: "veremi".to_string(),
-                opts: serde_json::json!({ "codebook": codebook }),
-            }),
+            None => scenario
+                .exporters
+                .push(v2xw_engine::scenario::schema::ExporterSpec {
+                    id: "veremi".to_string(),
+                    opts: serde_json::json!({ "codebook": codebook }),
+                }),
         }
     }
 }

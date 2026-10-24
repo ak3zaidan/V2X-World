@@ -929,7 +929,6 @@ impl MetricProvider for DetectionProvider {
     }
 }
 
-
 /// The metric group that turns the chance-corrected scores and the per-message level on
 /// (`metrics: [all, detection-scores]`). Not part of a bare `all`, so a run that does not
 /// name it keeps the record and metric digests it had; naming it also makes the engine
@@ -1043,9 +1042,7 @@ impl MessageLevel {
             self.unmatched += 1;
             return;
         };
-        let nearest = list
-            .iter_mut()
-            .min_by_key(|r| (r.t.abs_diff(t), r.t));
+        let nearest = list.iter_mut().min_by_key(|r| (r.t.abs_diff(t), r.t));
         match nearest {
             Some(r) => r.fired = true,
             None => self.unmatched += 1,
@@ -1281,11 +1278,18 @@ impl DetectionScoresProvider {
             ),
         ] {
             defs.push(
-                MetricDef::new(name, "ratio", Agg::Mean, Visibility::NodeAndGt, Quantum::RATIO, what)
-                    .with_dims([Dim::T, Dim::Level])
-                    .with_source(src.clone())
-                    .with_min_samples(1)
-                    .not_accounting_for("a confidence interval, which has no exact form here"),
+                MetricDef::new(
+                    name,
+                    "ratio",
+                    Agg::Mean,
+                    Visibility::NodeAndGt,
+                    Quantum::RATIO,
+                    what,
+                )
+                .with_dims([Dim::T, Dim::Level])
+                .with_source(src.clone())
+                .with_min_samples(1)
+                .not_accounting_for("a confidence interval, which has no exact form here"),
             );
         }
         defs
@@ -1377,7 +1381,9 @@ impl MetricProvider for DetectionScoresProvider {
             defs.iter()
                 .find(|d| d.name == name)
                 .cloned()
-                .unwrap_or_else(|| panic!("metric {name} is not one of this provider's definitions"))
+                .unwrap_or_else(|| {
+                    panic!("metric {name} is not one of this provider's definitions")
+                })
         };
         let mut out = Vec::new();
         let levels = [
@@ -1412,7 +1418,12 @@ impl MetricProvider for DetectionScoresProvider {
                 ("det_markedness", m.markedness()),
                 ("det_kappa", m.kappa()),
             ] {
-                out.push(MetricSample::new(&def(name), at, dims_for(None), score(v, n)));
+                out.push(MetricSample::new(
+                    &def(name),
+                    at,
+                    dims_for(None),
+                    score(v, n),
+                ));
             }
         }
         out
@@ -1773,7 +1784,12 @@ mod tests {
             let a = a.expect("defined");
             assert!((a - b).abs() < 1e-12, "{a} != {b}");
         };
-        let m = ConfusionMatrix { tp: 3, fp: 1, fn_: 1, tn: 5 };
+        let m = ConfusionMatrix {
+            tp: 3,
+            fp: 1,
+            fn_: 1,
+            tn: 5,
+        };
         close(m.mcc(), 14.0 / 24.0);
         close(m.informedness(), 7.0 / 12.0);
         close(m.markedness(), 7.0 / 12.0);
@@ -1782,30 +1798,60 @@ mod tests {
         // An asymmetric one, so BM and MK differ: tp = 8, fp = 2, fn = 4, tn = 6.
         // MCC = (48 − 8)/√(10·12·8·10) = 40/√9600; BM = 8/12 + 6/8 − 1 = 5/12;
         // MK = 8/10 + 6/10 − 1 = 2/5; p_o = 0.7, p_e = (10·12 + 10·8)/400 = 0.5, κ = 0.4.
-        let a = ConfusionMatrix { tp: 8, fp: 2, fn_: 4, tn: 6 };
+        let a = ConfusionMatrix {
+            tp: 8,
+            fp: 2,
+            fn_: 4,
+            tn: 6,
+        };
         close(a.mcc(), 40.0 / 9600f64.sqrt());
         close(a.informedness(), 5.0 / 12.0);
         close(a.markedness(), 0.4);
         close(a.kappa(), 0.4);
 
         // A perfect detector and an inverted one.
-        let p = ConfusionMatrix { tp: 5, fp: 0, fn_: 0, tn: 5 };
+        let p = ConfusionMatrix {
+            tp: 5,
+            fp: 0,
+            fn_: 0,
+            tn: 5,
+        };
         close(p.mcc(), 1.0);
         close(p.kappa(), 1.0);
-        let inv = ConfusionMatrix { tp: 0, fp: 5, fn_: 5, tn: 0 };
+        let inv = ConfusionMatrix {
+            tp: 0,
+            fp: 5,
+            fn_: 5,
+            tn: 0,
+        };
         close(inv.mcc(), -1.0);
         close(inv.informedness(), -1.0);
 
         // Degenerate rows are undefined, not zero.
-        let silent = ConfusionMatrix { tp: 0, fp: 0, fn_: 3, tn: 7 };
+        let silent = ConfusionMatrix {
+            tp: 0,
+            fp: 0,
+            fn_: 3,
+            tn: 7,
+        };
         assert_eq!(silent.mcc(), None, "a detector that never fires has no MCC");
         assert_eq!(silent.markedness(), None);
         close(silent.informedness(), 0.0);
         close(silent.kappa(), 0.0);
-        let no_attackers = ConfusionMatrix { tp: 0, fp: 2, fn_: 0, tn: 8 };
+        let no_attackers = ConfusionMatrix {
+            tp: 0,
+            fp: 2,
+            fn_: 0,
+            tn: 8,
+        };
         assert_eq!(no_attackers.mcc(), None);
         assert_eq!(no_attackers.informedness(), None);
-        let one_cell = ConfusionMatrix { tp: 0, fp: 0, fn_: 0, tn: 9 };
+        let one_cell = ConfusionMatrix {
+            tp: 0,
+            fp: 0,
+            fn_: 0,
+            tn: 9,
+        };
         assert_eq!(one_cell.kappa(), None, "p_e = 1");
         assert_eq!(ConfusionMatrix::new().kappa(), None);
         assert_eq!(ConfusionMatrix::new().mcc(), None);
@@ -1827,42 +1873,71 @@ mod tests {
             for (sender, pseudo) in [(1u32, "aa"), (2u32, "bb")] {
                 let msg = k * 10 + u64::from(sender);
                 let t = k * 100 * ms;
-                p.on_event(&ev("node.tx", json!({"t": t, "node": sender, "msg": msg,
-                    "bytes_on_wire": 300, "pseudonym": pseudo})));
+                p.on_event(&ev(
+                    "node.tx",
+                    json!({"t": t, "node": sender, "msg": msg,
+                    "bytes_on_wire": 300, "pseudonym": pseudo}),
+                ));
                 if sender == 2 && k >= 2 {
-                    p.on_event(&ev("gt.attack.action", json!({"t": t, "actor": 2,
-                        "attacker": "ConstPos", "action": "falsify", "msg": msg})));
+                    p.on_event(&ev(
+                        "gt.attack.action",
+                        json!({"t": t, "actor": 2,
+                        "attacker": "ConstPos", "action": "falsify", "msg": msg}),
+                    ));
                 }
                 for rx in [3u32, 4, 5] {
-                    let outcome = if rx == 5 && k == 4 { "lost" } else { "delivered" };
+                    let outcome = if rx == 5 && k == 4 {
+                        "lost"
+                    } else {
+                        "delivered"
+                    };
                     if outcome == "delivered" {
                         deliveries += 1;
                     }
-                    p.on_event(&ev("node.rx", json!({"t": t + ms, "rx": rx, "tx": sender,
-                        "msg": msg, "msg_type": "bsm", "outcome": outcome})));
+                    p.on_event(&ev(
+                        "node.rx",
+                        json!({"t": t + ms, "rx": rx, "tx": sender,
+                        "msg": msg, "msg_type": "bsm", "outcome": outcome}),
+                    ));
                 }
                 // Receiver 3 fires on every attacked message, 2 ms late on its own clock;
                 // receiver 4 fires once on an honest message (a false positive).
                 if sender == 2 && k >= 2 {
-                    p.on_event(&ev("det.observation", json!({"t": t + 3 * ms, "node": 3,
-                        "detector": "x", "subject": pseudo})));
+                    p.on_event(&ev(
+                        "det.observation",
+                        json!({"t": t + 3 * ms, "node": 3,
+                        "detector": "x", "subject": pseudo}),
+                    ));
                 }
                 if sender == 1 && k == 1 {
-                    p.on_event(&ev("det.observation", json!({"t": t + ms, "node": 4,
-                        "detector": "x", "subject": pseudo})));
+                    p.on_event(&ev(
+                        "det.observation",
+                        json!({"t": t + ms, "node": 4,
+                        "detector": "x", "subject": pseudo}),
+                    ));
                 }
             }
         }
         // A misbehaviour report delivered to a node is not a trial.
-        p.on_event(&ev("node.tx", json!({"t": 0, "node": 1, "msg": 999, "bytes_on_wire": 9,
-            "pseudonym": "aa"})));
-        p.on_event(&ev("node.rx", json!({"t": ms, "rx": 3, "msg": 999, "msg_type": "mbr",
-            "outcome": "delivered"})));
+        p.on_event(&ev(
+            "node.tx",
+            json!({"t": 0, "node": 1, "msg": 999, "bytes_on_wire": 9,
+            "pseudonym": "aa"}),
+        ));
+        p.on_event(&ev(
+            "node.rx",
+            json!({"t": ms, "rx": 3, "msg": 999, "msg_type": "mbr",
+            "outcome": "delivered"}),
+        ));
 
         let m = p.matrix(DetectionLevel::Message);
         // 5 rounds × 2 senders × 3 receivers, less the two lost at receiver 5 in round 4.
         assert_eq!(deliveries, 28);
-        assert_eq!(m.total(), deliveries, "one trial per delivered safety message");
+        assert_eq!(
+            m.total(),
+            deliveries,
+            "one trial per delivered safety message"
+        );
         // Attacked deliveries: k = 2, 3, 4 from sender 2 to receivers 3, 4, 5, less the
         // lost one: 8. Receiver 3 caught its 3.
         assert_eq!(m.tp, 3);

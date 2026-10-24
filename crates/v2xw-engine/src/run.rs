@@ -9867,9 +9867,7 @@ fn message_content(
             c.pos_semi_major_m = semi(k.accuracy.semi_major);
             c.pos_semi_minor_m = semi(k.accuracy.semi_minor);
             c.pos_orientation_deg = (k.accuracy.orientation != bsm::ORIENTATION_UNAVAILABLE)
-                .then(|| {
-                    quantize_to(f64::from(k.accuracy.orientation) * 360.0 / 65_535.0, Q_DEG)
-                });
+                .then(|| quantize_to(f64::from(k.accuracy.orientation) * 360.0 / 65_535.0, Q_DEG));
             c.accel_long_mps2 = (k.accel_set.long != bsm::ACCELERATION_UNAVAILABLE)
                 .then(|| quantize_to(f64::from(k.accel_set.long) * 0.01, Q_M));
         }

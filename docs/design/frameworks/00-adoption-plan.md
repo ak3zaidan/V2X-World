@@ -101,6 +101,12 @@ trustworthy or comparable; later waves add behaviours and radio features.
   kappa match hand-computed matrices, including degenerate rows (reported as undefined); the
   per-message matrix total equals the reception count. Fault: swapping two codes fails the
   fixture.
+- Status (2026-10-23): done. `veremi` exporter (`opts.codebook`, `opts.slice_s`) and
+  `v2xw run --veremi <codebook>`; naming it records the BSM accuracy ellipse and
+  `accelSet.long` on `node.tx` (off otherwise, so no golden moved). Metric group
+  `detection-scores` (opt-in) gives MCC/BM/MK/kappa at the report, vehicle and message
+  levels and records `det.observation`. Fixture in `crates/v2xw-record/tests/fixtures/veremi`.
+  Faults shown red: two codes swapped, MCC sign, nearest-reception join, node read as actor.
 
 ### Wave 2: traffic behaviours with open failing checks
 
