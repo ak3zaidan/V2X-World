@@ -21,6 +21,15 @@
 //! | `time_to_detect` | first correct report at the authority − attack onset | s | an attacker never reported, which contributes no sample: read it beside `det_recall` |
 //! | `time_to_decision` | authority decision − attack onset | s | the same, for attackers never decided about |
 //! | `false_accusations` | benign subjects with at least one report, and with a revocation | count | a benign subject reported and then cleared, which is still an accusation and is still counted |
+//! | `det_mcc` | (tp·tn − fp·fn) / √((tp+fp)(tp+fn)(tn+fp)(tn+fn)) | ratio | **a confidence interval**, as for F1; undefined (reported insufficient) when any marginal is zero |
+//! | `det_informedness` (BM) | tp/(tp+fn) + tn/(tn+fp) − 1 | ratio | the same; undefined when either true class is empty |
+//! | `det_markedness` (MK) | tp/(tp+fp) + tn/(tn+fn) − 1 | ratio | the same; undefined when either predicted class is empty |
+//! | `det_kappa` | (p_o − p_e) / (1 − p_e) | ratio | the same; undefined when p_e = 1 (every trial in one row and one column) |
+//!
+//! The four chance-corrected scores (Matthews 1975; Powers 2011 for informedness and
+//! markedness; Cohen 1960) are the ones F2MD reports, and they come from the opt-in
+//! [`DetectionScoresProvider`] (metric group [`SCORES_GROUP`]) at every level, the
+//! per-message level included, so a run that does not ask for them keeps its digests.
 //!
 //! # The two levels
 //!
@@ -35,6 +44,11 @@
 //!   a vehicle that signs under twenty pseudonyms is one vehicle, and counting each
 //!   pseudonym it was not revoked under as a false negative would sink recall to 1/20
 //!   for an authority that revoked it at once.
+//! * [`DetectionLevel::Message`] — one trial per received safety message, the level
+//!   F2MD and VeReMi report (f2md.md §5 P4). Truth: the message is one an attack action
+//!   falsified (`gt.attack.action` names its message id). Prediction: the receiving
+//!   node's own detectors fired on that message (`det.observation`). Only
+//!   [`DetectionScoresProvider`] holds it.
 //!
 //! # Where the truth comes from
 //!
@@ -75,6 +89,9 @@ pub enum DetectionLevel {
     /// The predictor is "the authority decided to revoke one of this vehicle's subjects";
     /// one trial per true actor.
     Vehicle,
+    /// The predictor is "the receiver's detectors fired on this message"; one trial per
+    /// received safety message. Held by [`DetectionScoresProvider`] only.
+    Message,
 }
 
 impl DetectionLevel {
@@ -87,6 +104,7 @@ impl DetectionLevel {
         match self {
             DetectionLevel::Report => "report",
             DetectionLevel::Vehicle => "vehicle",
+            DetectionLevel::Message => "message",
         }
     }
 }
@@ -207,6 +225,61 @@ impl ConfusionMatrix {
             point: (2 * self.tp) as f64 / (denom as f64),
             n: self.total(),
         }
+    }
+
+    /// The four counts as floats, for the chance-corrected scores (a product of two u64
+    /// marginals overflows long before a run's counts get large).
+    fn f(&self) -> (f64, f64, f64, f64) {
+        (
+            self.tp as f64,
+            self.fp as f64,
+            self.fn_ as f64,
+            self.tn as f64,
+        )
+    }
+
+    /// Matthews' correlation coefficient (Matthews 1975), `[-1, 1]`:
+    /// `(tp·tn − fp·fn) / √((tp+fp)(tp+fn)(tn+fp)(tn+fn))`.
+    ///
+    /// `None` — undefined — when any of the four marginals is zero: a detector that never
+    /// fires, or a population with no attacker, has no correlation to report, and the
+    /// common convention of calling it 0 would put "untested" beside "useless".
+    #[must_use]
+    pub fn mcc(&self) -> Option<f64> {
+        let (tp, fp, fn_, tn) = self.f();
+        let d = (tp + fp) * (tp + fn_) * (tn + fp) * (tn + fn_);
+        (d > 0.0).then(|| (tp * tn - fp * fn_) / v2xw_core::math::sqrt(d))
+    }
+
+    /// Informedness, also Youden's J or bookmaker informedness (Powers 2011), `[-1, 1]`:
+    /// `tpr + tnr − 1`. `None` when either true class is empty.
+    #[must_use]
+    pub fn informedness(&self) -> Option<f64> {
+        let (tp, fp, fn_, tn) = self.f();
+        (tp + fn_ > 0.0 && tn + fp > 0.0).then(|| tp / (tp + fn_) + tn / (tn + fp) - 1.0)
+    }
+
+    /// Markedness (Powers 2011), `[-1, 1]`: `ppv + npv − 1`. `None` when either predicted
+    /// class is empty.
+    #[must_use]
+    pub fn markedness(&self) -> Option<f64> {
+        let (tp, fp, fn_, tn) = self.f();
+        (tp + fp > 0.0 && tn + fn_ > 0.0).then(|| tp / (tp + fp) + tn / (tn + fn_) - 1.0)
+    }
+
+    /// Cohen's kappa (Cohen 1960): `(p_o − p_e) / (1 − p_e)`, with `p_o` the accuracy and
+    /// `p_e` the agreement two independent raters with these marginals reach by chance.
+    /// `None` when the matrix is empty or `p_e = 1`.
+    #[must_use]
+    pub fn kappa(&self) -> Option<f64> {
+        let (tp, fp, fn_, tn) = self.f();
+        let n = tp + fp + fn_ + tn;
+        if n <= 0.0 {
+            return None;
+        }
+        let po = (tp + tn) / n;
+        let pe = ((tp + fp) * (tp + fn_) + (fn_ + tn) * (fp + tn)) / (n * n);
+        (pe < 1.0).then(|| (po - pe) / (1.0 - pe))
     }
 }
 
@@ -345,8 +418,15 @@ impl DetectionProvider {
 
     /// The matrix at one level, over the declared population.
     #[must_use]
+    ///
+    /// [`DetectionLevel::Message`] is empty here: this provider keeps no per-reception
+    /// state (it runs under every `metrics: all`), and [`DetectionScoresProvider::matrix`]
+    /// is the one that has it.
     pub fn matrix(&self, level: DetectionLevel) -> ConfusionMatrix {
         let mut m = ConfusionMatrix::new();
+        if level == DetectionLevel::Message {
+            return m;
+        }
         if level == DetectionLevel::Vehicle {
             // One trial per true actor: revoked if any of its subjects was.
             let mut revoked: BTreeMap<ActorId, bool> = BTreeMap::new();
@@ -373,6 +453,7 @@ impl DetectionProvider {
                     .decision
                     .get(subject)
                     .is_some_and(|(_, d)| d == "revoke"),
+                DetectionLevel::Message => false,
             };
             m.observe(predicted, truth);
         }
@@ -761,7 +842,9 @@ impl MetricProvider for DetectionProvider {
                 DetectionLevel::Report => self
                     .report_precision()
                     .estimate(self.min_samples, self.level),
-                DetectionLevel::Vehicle => m.precision(self.min_samples, self.level),
+                DetectionLevel::Vehicle | DetectionLevel::Message => {
+                    m.precision(self.min_samples, self.level)
+                }
             };
             out.push(MetricSample::new(
                 &self.def("det_precision"),
@@ -843,6 +926,500 @@ impl MetricProvider for DetectionProvider {
 
     fn rejected(&self) -> u64 {
         self.rejected
+    }
+}
+
+
+/// The metric group that turns the chance-corrected scores and the per-message level on
+/// (`metrics: [all, detection-scores]`). Not part of a bare `all`, so a run that does not
+/// name it keeps the record and metric digests it had; naming it also makes the engine
+/// record the local detectors' `det.observation` records the per-message level joins.
+pub const SCORES_GROUP: &str = "detection-scores";
+
+/// How far, in simulated nanoseconds, a reception stays open to a detector firing before
+/// it is counted: a detector runs in the step that delivers the message, so 2 s is many
+/// steps of margin, and it bounds the provider's memory to two seconds of receptions.
+const MESSAGE_HORIZON_NS: u64 = 2_000_000_000;
+
+/// Message types the local detectors never check (a misbehaviour report, a CRL, a P2PCD
+/// response, a WSA state no kinematics of their sender), which are therefore not trials.
+const NOT_CHECKED: [&str; 4] = ["mbr", "crl", "p2pcd", "wsa"];
+
+/// One open reception: when, which message, whether its truth is "falsified", and whether
+/// the receiver's detectors fired on it.
+#[derive(Debug, Clone, Copy)]
+struct OpenReception {
+    t: SimTime,
+    truly: bool,
+    fired: bool,
+}
+
+/// The per-message confusion matrix (f2md.md §5 P4).
+///
+/// A trial is a safety message a node's stack delivered (`node.rx`, outcome delivered),
+/// joined to its transmission (`node.tx`) for the pseudonym it was signed with. Its truth
+/// is whether an attack action falsified that message id (`gt.attack.action`); an
+/// action that names no message marks every later message of its actor's subjects
+/// (`gt.subject`). Its prediction is whether a `det.observation` at the receiver about the
+/// same pseudonym fell on it: an observation is assigned to the reception of that
+/// (receiver, pseudonym) pair nearest in time, which tolerates the receiver's clock offset
+/// (a detector stamps with the node's own clock) up to half the beacon interval.
+/// Receptions older than [`MESSAGE_HORIZON_NS`] are closed into the matrix at each flush.
+#[derive(Debug, Default)]
+pub struct MessageLevel {
+    closed: ConfusionMatrix,
+    open: BTreeMap<(u32, String), Vec<OpenReception>>,
+    /// Transmissions not yet aged out: message id → (instant, pseudonym).
+    tx: BTreeMap<u64, (SimTime, String)>,
+    tx_order: std::collections::VecDeque<(SimTime, u64)>,
+    falsified: BTreeSet<u64>,
+    subject_actor: BTreeMap<String, ActorId>,
+    /// Actors with a byte-changing action that named no message, from that instant.
+    actor_from: BTreeMap<ActorId, SimTime>,
+    /// Observations with no reception of their pair to fall on.
+    unmatched: u64,
+    /// Receptions whose transmission was never seen, which cannot be joined to a pseudonym.
+    unjoined: u64,
+}
+
+impl MessageLevel {
+    /// An empty level.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A transmission: message id, instant, the pseudonym digest it was signed with.
+    pub fn on_tx(&mut self, msg: u64, t: SimTime, pseudonym: String) {
+        self.tx.insert(msg, (t, pseudonym));
+        self.tx_order.push_back((t, msg));
+    }
+
+    /// A ground-truth attack action.
+    pub fn on_attack(&mut self, v: &GtAttackActionView) {
+        if !v.changed_bytes_on_air {
+            return;
+        }
+        match v.msg {
+            Some(m) => {
+                self.falsified.insert(m);
+            }
+            None => {
+                self.actor_from.entry(v.actor).or_insert(v.t);
+            }
+        }
+    }
+
+    /// A pseudonym-to-actor declaration (`gt.subject`).
+    pub fn declare_subject(&mut self, subject: String, actor: ActorId) {
+        self.subject_actor.insert(subject, actor);
+    }
+
+    /// A delivered message at `rx`.
+    pub fn on_reception(&mut self, rx: u32, msg: u64, t: SimTime) {
+        let Some((_, subject)) = self.tx.get(&msg) else {
+            self.unjoined += 1;
+            return;
+        };
+        let truly = self.falsified.contains(&msg)
+            || self
+                .subject_actor
+                .get(subject)
+                .and_then(|a| self.actor_from.get(a))
+                .is_some_and(|from| *from <= t);
+        self.open
+            .entry((rx, subject.clone()))
+            .or_default()
+            .push(OpenReception {
+                t,
+                truly,
+                fired: false,
+            });
+    }
+
+    /// A local detector firing at `node` about `subject`.
+    pub fn on_observation(&mut self, node: u32, subject: &str, t: SimTime) {
+        let Some(list) = self.open.get_mut(&(node, subject.to_string())) else {
+            self.unmatched += 1;
+            return;
+        };
+        let nearest = list
+            .iter_mut()
+            .min_by_key(|r| (r.t.abs_diff(t), r.t));
+        match nearest {
+            Some(r) => r.fired = true,
+            None => self.unmatched += 1,
+        }
+    }
+
+    /// Closes receptions older than the horizon and ages out old transmissions.
+    pub fn close_before(&mut self, at: SimTime) {
+        let cutoff = at.saturating_sub(MESSAGE_HORIZON_NS);
+        let closed = &mut self.closed;
+        self.open.retain(|_, list| {
+            list.retain(|r| {
+                if r.t < cutoff {
+                    closed.observe(r.fired, r.truly);
+                    false
+                } else {
+                    true
+                }
+            });
+            !list.is_empty()
+        });
+        while let Some((t, msg)) = self.tx_order.front().copied() {
+            if t >= cutoff {
+                break;
+            }
+            self.tx_order.pop_front();
+            if self.tx.get(&msg).is_some_and(|(tt, _)| *tt == t) {
+                self.tx.remove(&msg);
+                self.falsified.remove(&msg);
+            }
+        }
+    }
+
+    /// The matrix so far: closed receptions plus the open ones as they stand.
+    #[must_use]
+    pub fn matrix(&self) -> ConfusionMatrix {
+        let mut m = self.closed;
+        for r in self.open.values().flatten() {
+            m.observe(r.fired, r.truly);
+        }
+        m
+    }
+
+    /// Observations that fell on no reception.
+    #[must_use]
+    pub const fn unmatched_observations(&self) -> u64 {
+        self.unmatched
+    }
+
+    /// Receptions with no recorded transmission, outside the matrix.
+    #[must_use]
+    pub const fn unjoined_receptions(&self) -> u64 {
+        self.unjoined
+    }
+}
+
+/// The chance-corrected detection scores — MCC, informedness, markedness and Cohen's
+/// kappa — at the report, vehicle and message levels, plus the per-message matrix
+/// (metric group [`SCORES_GROUP`], opt-in).
+///
+/// Re-implemented from the formulas' sources (Matthews 1975; Powers 2011; Cohen 1960) and
+/// from F2MD's per-message evaluation as the TVT 2020 paper describes it; F2MD's code was
+/// read for behaviour only and none was copied. The report and vehicle matrices are the
+/// ones [`DetectionProvider`] reports, computed by an embedded one, so the two providers
+/// cannot disagree about them.
+pub struct DetectionScoresProvider {
+    card: ModelCard,
+    inner: DetectionProvider,
+    message: MessageLevel,
+    rejected: u64,
+}
+
+impl DetectionScoresProvider {
+    /// A provider with nothing observed.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            card: Self::build_card(),
+            inner: DetectionProvider::new(),
+            message: MessageLevel::new(),
+            rejected: 0,
+        }
+    }
+
+    /// The metric names this provider defines, for a scenario that names one of them
+    /// instead of the group.
+    #[must_use]
+    pub fn metric_names() -> &'static [&'static str] {
+        &[
+            "det_mcc",
+            "det_informedness",
+            "det_markedness",
+            "det_kappa",
+            "det_message_tp",
+            "det_message_fp",
+            "det_message_fn",
+            "det_message_tn",
+        ]
+    }
+
+    /// The matrix at one level.
+    #[must_use]
+    pub fn matrix(&self, level: DetectionLevel) -> ConfusionMatrix {
+        match level {
+            DetectionLevel::Message => self.message.matrix(),
+            other => self.inner.matrix(other),
+        }
+    }
+
+    /// The per-message join's own state, for its diagnostics.
+    #[must_use]
+    pub const fn message_level(&self) -> &MessageLevel {
+        &self.message
+    }
+
+    fn build_card() -> ModelCard {
+        let mut card = cards::provider_card(
+            "metric/detection/scores",
+            "1.0.0",
+            "Matthews' correlation coefficient, informedness, markedness and Cohen's kappa \
+             at the report, vehicle and message levels, and the per-message confusion \
+             matrix (each received safety message a trial).",
+        );
+        card.equations = vec![
+            v2xw_core::card::Equation::new(
+                "mcc",
+                "mcc = (tp·tn − fp·fn) / √((tp+fp)(tp+fn)(tn+fp)(tn+fn)); undefined when a \
+                 marginal is zero",
+            ),
+            v2xw_core::card::Equation::new(
+                "informedness",
+                "bm = tp/(tp+fn) + tn/(tn+fp) − 1; undefined when a true class is empty",
+            ),
+            v2xw_core::card::Equation::new(
+                "markedness",
+                "mk = tp/(tp+fp) + tn/(tn+fn) − 1; undefined when a predicted class is empty",
+            ),
+            v2xw_core::card::Equation::new(
+                "kappa",
+                "κ = (p_o − p_e)/(1 − p_e), p_o = (tp+tn)/n, \
+                 p_e = ((tp+fp)(tp+fn) + (fn+tn)(fp+tn))/n²; undefined when p_e = 1",
+            ),
+        ];
+        card.parameters = cards::statistics_params();
+        card.sources = vec![
+            cards::paper(
+                "B. W. Matthews, Comparison of the predicted and observed secondary structure \
+                 of T4 phage lysozyme, Biochim. Biophys. Acta 405 (1975) 442-451",
+            ),
+            cards::paper(
+                "D. M. W. Powers, Evaluation: from precision, recall and F-measure to ROC, \
+                 informedness, markedness and correlation, J. Mach. Learn. Technol. 2 (2011)",
+            ),
+            cards::paper(
+                "J. Cohen, A coefficient of agreement for nominal scales, Educ. Psychol. Meas. \
+                 20 (1960) 37-46",
+            ),
+            cards::paper(
+                "J. Kamel, M. R. Ansari, J. Petit, A. Kaiser, I. Ben Jemaa, P. Urien, \
+                 Simulation framework for misbehavior detection in vehicular networks, IEEE \
+                 TVT 69(6) (2020): the per-message evaluation. Re-implemented from the paper; \
+                 F2MD was read for behaviour only and no code was copied.",
+            ),
+            cards::design("docs/design/frameworks/f2md.md §5 P4"),
+        ];
+        card.limitations = vec![
+            "MCC, informedness, markedness and kappa carry no confidence interval, for the \
+             reason F1 carries none."
+                .to_string(),
+            "A degenerate matrix (a zero marginal, or chance agreement of 1) is reported as \
+             insufficient: undefined, never 0 or NaN."
+                .to_string(),
+            "The per-message prediction joins a detector firing to the nearest reception of \
+             the same receiver and pseudonym in time; a receiver clock offset above half the \
+             beacon interval can move a firing to the neighbouring message."
+                .to_string(),
+            "A research-suite detector checks one message per sender per second, so the \
+             messages it did not check are predicted benign, as in F2MD's evaluation of an \
+             unchecked message."
+                .to_string(),
+        ];
+        card.ignores = vec![
+            "Messages a node received but whose transmission the recording does not hold; \
+             they are counted as unjoined, outside the matrix."
+                .to_string(),
+        ];
+        card.validation.tests = vec![
+            "detection::tests::the_chance_corrected_scores_match_hand_computed_matrices"
+                .to_string(),
+            "detection::tests::the_message_matrix_counts_every_reception_once".to_string(),
+        ];
+        card
+    }
+
+    fn definitions() -> Vec<MetricDef> {
+        let src = cards::design("docs/design/frameworks/f2md.md §5 P4");
+        let mut defs: Vec<MetricDef> = Cell::ALL
+            .into_iter()
+            .map(|c| {
+                MetricDef::new(
+                    format!("det_message_{c}"),
+                    "count",
+                    Agg::Count,
+                    Visibility::NodeAndGt,
+                    Quantum::COUNT,
+                    format!(
+                        "The `{c}` cell of the per-message detection confusion matrix: one \
+                         trial per received safety message."
+                    ),
+                )
+                .with_dims([Dim::T, Dim::Level, Dim::Cell])
+                .with_source(src.clone())
+                .with_min_samples(1)
+                .not_accounting_for("receptions whose transmission was never recorded")
+            })
+            .collect();
+        for (name, what) in [
+            (
+                "det_mcc",
+                "Matthews' correlation coefficient, `[-1, 1]`; insufficient when undefined.",
+            ),
+            (
+                "det_informedness",
+                "Informedness (BM), `tpr + tnr − 1`, `[-1, 1]`; insufficient when undefined.",
+            ),
+            (
+                "det_markedness",
+                "Markedness (MK), `ppv + npv − 1`, `[-1, 1]`; insufficient when undefined.",
+            ),
+            (
+                "det_kappa",
+                "Cohen's kappa, `(p_o − p_e) / (1 − p_e)`; insufficient when undefined.",
+            ),
+        ] {
+            defs.push(
+                MetricDef::new(name, "ratio", Agg::Mean, Visibility::NodeAndGt, Quantum::RATIO, what)
+                    .with_dims([Dim::T, Dim::Level])
+                    .with_source(src.clone())
+                    .with_min_samples(1)
+                    .not_accounting_for("a confidence interval, which has no exact form here"),
+            );
+        }
+        defs
+    }
+}
+
+impl Default for DetectionScoresProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Model for DetectionScoresProvider {
+    fn card(&self) -> &ModelCard {
+        &self.card
+    }
+}
+
+/// A score, or insufficient — undefined — when the matrix is degenerate.
+fn score(v: Option<f64>, n: u64) -> SampleValue {
+    SampleValue::Scalar(match v {
+        Some(point) => Estimate::Value { point, n },
+        None => Estimate::Insufficient { n, required: 1 },
+    })
+}
+
+impl MetricProvider for DetectionScoresProvider {
+    fn defs(&self) -> Vec<MetricDef> {
+        Self::definitions()
+    }
+
+    fn subscribe(&self) -> Vec<ChannelName> {
+        let mut c = self.inner.subscribe();
+        c.push(crate::channels::NodeTxView::channel_name());
+        c.push(crate::channels::NodeRxView::channel_name());
+        c
+    }
+
+    fn on_event(&mut self, ev: &EventRecord) {
+        use crate::channels::{NodeRxView, NodeTxView, RxFate};
+        self.inner.on_event(ev);
+        match ev.channel {
+            GtAttackActionView::CHANNEL => {
+                if let Ok(v) = decode::<GtAttackActionView>(ev) {
+                    self.message.on_attack(&v);
+                }
+            }
+            GtSubjectView::CHANNEL => {
+                if let Ok(v) = decode::<GtSubjectView>(ev) {
+                    self.message.declare_subject(v.subject, v.actor);
+                }
+            }
+            DetObservationView::CHANNEL => {
+                if let Ok(v) = decode::<DetObservationView>(ev) {
+                    self.message.on_observation(v.node.0, &v.subject, v.t);
+                }
+            }
+            NodeTxView::CHANNEL => match decode::<NodeTxView>(ev) {
+                Ok(v) => {
+                    if let (Some(msg), Some(p)) = (v.msg, v.pseudonym) {
+                        self.message.on_tx(msg, v.t_generated.unwrap_or(v.t), p);
+                    }
+                }
+                Err(_) => self.rejected += 1,
+            },
+            NodeRxView::CHANNEL => match decode::<NodeRxView>(ev) {
+                Ok(v) => {
+                    let checked = v
+                        .msg_type
+                        .as_deref()
+                        .is_none_or(|m| !NOT_CHECKED.contains(&m.to_ascii_lowercase().as_str()));
+                    if v.outcome == RxFate::Delivered
+                        && checked
+                        && let Some(msg) = v.msg
+                    {
+                        self.message.on_reception(v.rx.0, msg, v.t);
+                    }
+                }
+                Err(_) => self.rejected += 1,
+            },
+            _ => {}
+        }
+    }
+
+    fn flush(&mut self, at: SimTime) -> Vec<MetricSample> {
+        self.message.close_before(at);
+        let defs = Self::definitions();
+        let def = |name: &str| {
+            defs.iter()
+                .find(|d| d.name == name)
+                .cloned()
+                .unwrap_or_else(|| panic!("metric {name} is not one of this provider's definitions"))
+        };
+        let mut out = Vec::new();
+        let levels = [
+            DetectionLevel::Report,
+            DetectionLevel::Vehicle,
+            DetectionLevel::Message,
+        ];
+        for level in levels {
+            let m = self.matrix(level);
+            let dims_for = |extra: Option<Cell>| {
+                let mut d = Dims::new();
+                d.insert(Dim::Level, DimValue::label(level.as_str()));
+                if let Some(c) = extra {
+                    d.insert(Dim::Cell, DimValue::label(c.as_str()));
+                }
+                d
+            };
+            if level == DetectionLevel::Message {
+                for c in Cell::ALL {
+                    out.push(MetricSample::new(
+                        &def(&format!("det_message_{c}")),
+                        at,
+                        dims_for(Some(c)),
+                        SampleValue::count(m.cell(c)),
+                    ));
+                }
+            }
+            let n = m.total();
+            for (name, v) in [
+                ("det_mcc", m.mcc()),
+                ("det_informedness", m.informedness()),
+                ("det_markedness", m.markedness()),
+                ("det_kappa", m.kappa()),
+            ] {
+                out.push(MetricSample::new(&def(name), at, dims_for(None), score(v, n)));
+            }
+        }
+        out
+    }
+
+    fn rejected(&self) -> u64 {
+        self.rejected + self.inner.rejected()
     }
 }
 
@@ -1184,5 +1761,130 @@ mod tests {
         }
         assert_eq!(p.detector_firings().get("art"), Some(&2));
         assert_eq!(p.detector_firings().get("sybil"), Some(&1));
+    }
+
+    /// MCC, BM, MK and kappa against matrices computed by hand, the degenerate ones
+    /// included (WP-03 accept line). The fixture matrix is tp = 3, fp = 1, fn = 1, tn = 5:
+    /// MCC = (15 − 1)/√(4·4·6·6) = 14/24; BM = 3/4 + 5/6 − 1 = 7/12; MK = 3/4 + 5/6 − 1
+    /// = 7/12; p_o = 0.8, p_e = (4·4 + 6·6)/100 = 0.52, κ = 0.28/0.48 = 7/12.
+    #[test]
+    fn the_chance_corrected_scores_match_hand_computed_matrices() {
+        let close = |a: Option<f64>, b: f64| {
+            let a = a.expect("defined");
+            assert!((a - b).abs() < 1e-12, "{a} != {b}");
+        };
+        let m = ConfusionMatrix { tp: 3, fp: 1, fn_: 1, tn: 5 };
+        close(m.mcc(), 14.0 / 24.0);
+        close(m.informedness(), 7.0 / 12.0);
+        close(m.markedness(), 7.0 / 12.0);
+        close(m.kappa(), 7.0 / 12.0);
+
+        // An asymmetric one, so BM and MK differ: tp = 8, fp = 2, fn = 4, tn = 6.
+        // MCC = (48 − 8)/√(10·12·8·10) = 40/√9600; BM = 8/12 + 6/8 − 1 = 5/12;
+        // MK = 8/10 + 6/10 − 1 = 2/5; p_o = 0.7, p_e = (10·12 + 10·8)/400 = 0.5, κ = 0.4.
+        let a = ConfusionMatrix { tp: 8, fp: 2, fn_: 4, tn: 6 };
+        close(a.mcc(), 40.0 / 9600f64.sqrt());
+        close(a.informedness(), 5.0 / 12.0);
+        close(a.markedness(), 0.4);
+        close(a.kappa(), 0.4);
+
+        // A perfect detector and an inverted one.
+        let p = ConfusionMatrix { tp: 5, fp: 0, fn_: 0, tn: 5 };
+        close(p.mcc(), 1.0);
+        close(p.kappa(), 1.0);
+        let inv = ConfusionMatrix { tp: 0, fp: 5, fn_: 5, tn: 0 };
+        close(inv.mcc(), -1.0);
+        close(inv.informedness(), -1.0);
+
+        // Degenerate rows are undefined, not zero.
+        let silent = ConfusionMatrix { tp: 0, fp: 0, fn_: 3, tn: 7 };
+        assert_eq!(silent.mcc(), None, "a detector that never fires has no MCC");
+        assert_eq!(silent.markedness(), None);
+        close(silent.informedness(), 0.0);
+        close(silent.kappa(), 0.0);
+        let no_attackers = ConfusionMatrix { tp: 0, fp: 2, fn_: 0, tn: 8 };
+        assert_eq!(no_attackers.mcc(), None);
+        assert_eq!(no_attackers.informedness(), None);
+        let one_cell = ConfusionMatrix { tp: 0, fp: 0, fn_: 0, tn: 9 };
+        assert_eq!(one_cell.kappa(), None, "p_e = 1");
+        assert_eq!(ConfusionMatrix::new().kappa(), None);
+        assert_eq!(ConfusionMatrix::new().mcc(), None);
+    }
+
+    fn ev(channel: &'static str, json: serde_json::Value) -> OwnedRecord {
+        rec(channel, json)
+    }
+
+    /// Two senders, three receivers, ten messages (28 deliveries): the per-message matrix has exactly one
+    /// trial per delivered safety message, a firing lands on the message it was about, and
+    /// a lost message and a misbehaviour report are not trials.
+    #[test]
+    fn the_message_matrix_counts_every_reception_once() {
+        let mut p = DetectionScoresProvider::new();
+        let ms = 1_000_000u64;
+        let mut deliveries = 0u64;
+        for k in 0..5u64 {
+            for (sender, pseudo) in [(1u32, "aa"), (2u32, "bb")] {
+                let msg = k * 10 + u64::from(sender);
+                let t = k * 100 * ms;
+                p.on_event(&ev("node.tx", json!({"t": t, "node": sender, "msg": msg,
+                    "bytes_on_wire": 300, "pseudonym": pseudo})));
+                if sender == 2 && k >= 2 {
+                    p.on_event(&ev("gt.attack.action", json!({"t": t, "actor": 2,
+                        "attacker": "ConstPos", "action": "falsify", "msg": msg})));
+                }
+                for rx in [3u32, 4, 5] {
+                    let outcome = if rx == 5 && k == 4 { "lost" } else { "delivered" };
+                    if outcome == "delivered" {
+                        deliveries += 1;
+                    }
+                    p.on_event(&ev("node.rx", json!({"t": t + ms, "rx": rx, "tx": sender,
+                        "msg": msg, "msg_type": "bsm", "outcome": outcome})));
+                }
+                // Receiver 3 fires on every attacked message, 2 ms late on its own clock;
+                // receiver 4 fires once on an honest message (a false positive).
+                if sender == 2 && k >= 2 {
+                    p.on_event(&ev("det.observation", json!({"t": t + 3 * ms, "node": 3,
+                        "detector": "x", "subject": pseudo})));
+                }
+                if sender == 1 && k == 1 {
+                    p.on_event(&ev("det.observation", json!({"t": t + ms, "node": 4,
+                        "detector": "x", "subject": pseudo})));
+                }
+            }
+        }
+        // A misbehaviour report delivered to a node is not a trial.
+        p.on_event(&ev("node.tx", json!({"t": 0, "node": 1, "msg": 999, "bytes_on_wire": 9,
+            "pseudonym": "aa"})));
+        p.on_event(&ev("node.rx", json!({"t": ms, "rx": 3, "msg": 999, "msg_type": "mbr",
+            "outcome": "delivered"})));
+
+        let m = p.matrix(DetectionLevel::Message);
+        // 5 rounds × 2 senders × 3 receivers, less the two lost at receiver 5 in round 4.
+        assert_eq!(deliveries, 28);
+        assert_eq!(m.total(), deliveries, "one trial per delivered safety message");
+        // Attacked deliveries: k = 2, 3, 4 from sender 2 to receivers 3, 4, 5, less the
+        // lost one: 8. Receiver 3 caught its 3.
+        assert_eq!(m.tp, 3);
+        assert_eq!(m.fn_, 5);
+        assert_eq!(m.fp, 1);
+        assert_eq!(m.tn, 28 - 9);
+        assert_eq!(p.message_level().unmatched_observations(), 0);
+
+        // Closing everything into the matrix does not change it, and a flush reports it.
+        let samples = p.flush(10_000 * ms);
+        assert_eq!(p.matrix(DetectionLevel::Message), m);
+        let tp = samples
+            .iter()
+            .find(|s| s.metric == "det_message_tp")
+            .expect("the message cells are reported");
+        assert_eq!(tp.value.point(), Some(3.0));
+        for level in ["report", "vehicle", "message"] {
+            assert!(
+                samples.iter().any(|s| s.metric == "det_mcc"
+                    && s.dims.get(&Dim::Level) == Some(&DimValue::label(level))),
+                "MCC at the {level} level"
+            );
+        }
     }
 }

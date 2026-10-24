@@ -401,6 +401,13 @@ pub struct RunArgs {
     #[arg(long, value_name = "VEH_PER_H")]
     pub rate_veh_per_h: Option<f64>,
 
+    /// Also write VeReMi traces (the scenario's `veremi` exporter) with this attack
+    /// codebook: `veremi-ext` (the VeReMi Extension's F2MD enum 0-19, hourly slices) or
+    /// `veremi-1` (VeReMi 1.0's bit codes). Adds the exporter to the scenario, or sets
+    /// its codebook when the scenario already names it; changes the scenario hash.
+    #[arg(long, value_name = "CODEBOOK")]
+    pub veremi: Option<String>,
+
     /// Run the scenario on this city of the library (`v2xw cities` lists them), in place
     /// of the world the file names. Changes the scenario hash.
     #[arg(long, value_name = "ID")]
@@ -460,6 +467,7 @@ impl RunArgs {
             stream_digest: self.digest,
             duration_s: self.duration.or(self.duration_s),
             rate_veh_per_h: self.rate_veh_per_h,
+            veremi: self.veremi.clone(),
             city: self.city.clone(),
             json: self.json,
             long: crate::run::LongRun {

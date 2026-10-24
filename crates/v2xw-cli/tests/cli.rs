@@ -64,6 +64,7 @@ fn options(scenario: PathBuf, out: PathBuf) -> RunOptions {
         stream_digest: false,
         duration_s: Some(3.0),
         rate_veh_per_h: Some(3600.0),
+        veremi: None,
         city: None,
         json: false,
         long: v2xw_cli::run::LongRun::default(),

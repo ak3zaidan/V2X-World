@@ -3226,15 +3226,23 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: "metrics",
         status: Status::Wired,
-        note: "Which metric providers to install; 'all' selects every registered one.",
+        note: "Which metric providers to install; 'all' selects every registered one. \
+               Opt-in groups beside it: 'signing', 'traffic', and 'detection-scores' (MCC, \
+               informedness, markedness and Cohen's kappa at the report, vehicle and \
+               per-message levels; it also records the local detectors' det.observation).",
     },
     KeyStatus {
         path: "exporters",
         status: Status::Wired,
         note: "Written after the run, over its recording: 'recording' keeps the MCAP, \
                'jsonl', 'parquet' and 'arrow' write one table per recorded channel. \
-               opts.profile 'node' drops every ground-truth channel and column. Naming \
-               any exporter makes the run record.",
+               opts.profile 'node' drops every ground-truth channel and column. 'veremi' \
+               writes VeReMi traces: opts.codebook 'veremi-ext' (default; F2MD attack \
+               enum 0-19, Kamel et al. ICC 2020) or 'veremi-1' (bit codes 1/2/4/8/16, \
+               Van der Heijden et al. 2018), opts.slice_s the slice length in seconds \
+               (default 3600, F2MD VeReMiSliceTime; 1 to 604800); naming it records the \
+               BSM's position accuracy and acceleration on node.tx. Naming any exporter \
+               makes the run record.",
     },
     KeyStatus {
         path: "events",
@@ -3877,6 +3885,14 @@ fn unreachable_keys(s: &Scenario, e: &mut Vec<ScenarioError>) {
             crate::EngineError::Scenario(inner) => inner,
             other => ScenarioError::conflict("exporters", other.to_string()),
         }) {
+            e.push(conflict(&field, why));
+        }
+        if x.id == "veremi"
+            && let Err(crate::EngineError::Scenario(ScenarioError::Conflict {
+                field,
+                conflict: why,
+            })) = crate::export::veremi_options_of(x, i)
+        {
             e.push(conflict(&field, why));
         }
     }
@@ -6881,8 +6897,11 @@ fn threats(s: &Scenario, e: &mut Vec<ScenarioError>) {
 
 fn metrics_and_exporters(s: &Scenario, e: &mut Vec<ScenarioError>) {
     // An opt-in group (`signing`) is not selected by `all`, so it may stand beside it.
-    let opt_in =
-        |m: &String| m == v2xw_metrics::signing::GROUP || m == v2xw_metrics::traffic::GROUP;
+    let opt_in = |m: &String| {
+        m == v2xw_metrics::signing::GROUP
+            || m == v2xw_metrics::traffic::GROUP
+            || m == v2xw_metrics::detection::SCORES_GROUP
+    };
     if s.metrics.iter().any(|m| m == "all") && s.metrics.iter().filter(|m| !opt_in(m)).count() > 1 {
         e.push(conflict(
             "metrics",

@@ -268,6 +268,7 @@ fn the_veremi_export_quantises_everything_it_is_given() {
             pos: [100.123_456_7, 200.987_654_3, 0.5],
             spd: [12.345_678_9, 0.0, 0.0],
             rssi: -72.567_89,
+            ..VeremiReception::default()
         }],
     );
     e.truth.push(VeremiTruth {
@@ -278,6 +279,7 @@ fn the_veremi_export_quantises_everything_it_is_given() {
         pos: [100.0, 200.0, 0.0],
         spd: [12.345_678_9, 0.0, 0.0],
         attacker_type: 2,
+        ..VeremiTruth::default()
     });
 
     let dir = scratch_dir("grid-veremi").expect("scratch");
