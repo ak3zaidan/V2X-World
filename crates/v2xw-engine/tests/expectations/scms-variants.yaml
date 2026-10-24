@@ -1,0 +1,568 @@
+# SCMS re-runs on 81a12183 and the benchmark variants owed in scms-real-benchmark.md §10
+# (docs/design/scms-real/testing/rerun-2026-10-24-b.md). Every `expect` was written and
+# committed with `measured: pending` before the run it judges. Checker:
+#   python3 tools/realworld/matrix.py extract <runs>/<id>      (one per run)
+#   python3 tools/realworld/matrix.py check  <this file> <runs> [--fill]
+# `measured` is base -> variant, or the variant's value. Not a sweep table: `v2xw
+# sensitivity` passes over it by its `schema`.
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+#
+# Binary: the release build of 81a12183 (the integrator's), copied to the scratchpad; seed
+# 0xBE7C_0001 (the benchmark's) or the scenario's own; --no-verify; one run per run-lock
+# call (2,500 MB cap); 2 rayon threads unless a run says otherwise.
+schema: v2xw/scms-run-expectations/1
+
+runs:
+  PQ0:
+    scenario: scenarios/real-world/stress/pq-base.yaml
+    note: "quarter fleet, 60 s live, generic-sdu fragmenter, software-crypto OBU, ECDSA P-256 (--record-level metrics)"
+  PQ0-1:
+    scenario: scenarios/real-world/stress/pq-base.yaml
+    note: "PQ0 at 1 rayon thread (determinism)"
+  PQHFC: {scenario: scenarios/real-world/stress/pq-hybrid-falcon512-certcycle.yaml, base: PQ0}
+  PQHMC: {scenario: scenarios/real-world/stress/pq-hybrid-mldsa44-certcycle.yaml, base: PQ0}
+  PQHM: {scenario: scenarios/real-world/stress/pq-hybrid-mldsa44.yaml, base: PQ0}
+  FS40:
+    scenario: scenarios/real-world/stress/fs-40.yaml
+    note: "the R-FS40 window: full fleet, 0-40 s live, 10 s warm-up (--record-level events)"
+  M0:
+    scenario: scenarios/real-world/midtown-scms-realism.yaml
+    note: "the realism base of the matrix (--record-level events)"
+  GRAW: {scenario: scenarios/real-world/matrix/gnss-raw.yaml, base: M0}
+  MW:
+    scenario: scenarios/edge/multi-week.yaml
+    note: "the 33-day conformance run on the real calendar (--record-level metrics)"
+  MWC: {scenario: scenarios/edge/multi-week-crlg-down.yaml, base: MW}
+  MWC2: {scenario: scenarios/edge/multi-week-crlg-down-late.yaml, base: MW}
+  Q60:
+    scenario: scenarios/real-world/variants/q60.yaml
+    note: "the quarter-fleet benchmark, 0-60 s live, 30 s warm-up, no fast-forward (--record-level events)"
+  Q60L: {scenario: scenarios/real-world/variants/q60-lte.yaml, base: Q60}
+  Q60X2: {scenario: scenarios/real-world/variants/q60-2x.yaml, base: Q60}
+  Q60P: {scenario: scenarios/real-world/variants/q60-portland.yaml, base: Q60}
+
+rows:
+# ------------------------------------------------ (1) post-quantum re-runs (final-run §2, final-bench §3)
+- id: RR.PQHFC.bsm-bytes
+  base: PQ0
+  variant: PQHFC
+  area: metrics
+  measure: air.bsm.psdu_mean
+  expect: delta
+  band: [160, 185]
+  source: "NDSS 2024 (Twardokus et al.) Partially-Hybrid: the 858 B Falcon-512 hybrid certificate once in each 5-SPDU cycle, +858/5 = 172 B per BSM; final-run PQHFC.sizes measured +173 B"
+  measured: pending
+  verdict: pending
+- id: RR.PQHFC.one-frame
+  base: PQ0
+  variant: PQHFC
+  area: metrics
+  measure: air.bsm.frames
+  expect: ratio
+  band: [0.995, 1.005]
+  source: "the cycle keeps every BSM inside one frame (380 B < the 1,400 B WSMP MTU); final-run PQHFC.sizes 41,903 -> 41,903"
+  measured: pending
+  verdict: pending
+- id: RR.PQHFC.verify-cost
+  base: PQ0
+  variant: PQHFC
+  area: performance
+  measure: m.verify_cost.mean
+  expect: ratio
+  band: [0.95, 1.05]
+  source: "ECDSA verifies every SPDU; the PQ certificate check is under 1 % of checks (final-run PQHFC.verify 0.6278 -> 0.6288 ms)"
+  measured: pending
+  verdict: pending
+- id: RR.PQHMC.bsm-bytes
+  base: PQ0
+  variant: PQHMC
+  area: metrics
+  measure: air.bsm.psdu_mean
+  expect: delta
+  band: [590, 625]
+  source: "the 3,035 B ML-DSA-44 hybrid certificate once in each 5 SPDUs: +607 B per BSM (final-run PQHMC.sizes 814 B, +607)"
+  measured: pending
+  verdict: pending
+- id: RR.PQHMC.cbr
+  base: PQ0
+  variant: PQHMC
+  area: metrics
+  measure: m.cbr.172.mean
+  expect: ratio
+  band: [2.5, 4.5]
+  source: "airtime scales with the PSDU (+607 B on 207 B, ~3.5x the BSM airtime; final-run PQHMC.airtime CBR 0.0100 -> 0.0366)"
+  measured: pending
+  verdict: pending
+- id: RR.PQHM.fragments
+  base: PQ0
+  variant: PQHM
+  area: metrics
+  measure: air.bsm.frames
+  expect: ratio
+  band: [2.1, 2.5]
+  source: "hybrid ML-DSA-44 on every SPDU: a 2.4 kB signature plus a 3 kB certificate once a second spreads a BSM over 2.30 frames on average (final-bench PQHM.sizes, stress PQ.sizes)"
+  measured: pending
+  verdict: pending
+- id: RR.PQHM.delivery
+  base: PQ0
+  variant: PQHM
+  area: metrics
+  measure: rv.checked
+  expect: ratio
+  band: [0.55, 0.80]
+  source: "a message reaches the node only whole, so its PDR is about PDR_frag^k (k ~2.3): final-bench verified -33.8 %"
+  measured: pending
+  verdict: pending
+- id: RR.PQ.determinism
+  base: PQ0
+  variant: PQ0-1
+  area: performance
+  measure: digest.record
+  expect: identical
+  source: "the engine is deterministic across thread counts (02-architecture §determinism; stress PQ.determinism)"
+  measured: pending
+  verdict: pending
+# ------------------------------------------------ (2) R-FS40 window (measure §1-§2, §7)
+- id: RR.FS40.const-pos
+  base: FS40
+  variant: FS40
+  area: architecture
+  measure: p2.verdicts.constantPositionFrozen
+  expect: le
+  value: 10
+  source: "measure §1: with the receiver carried by the mean of the two velocities a stop-and-go Monte Carlo gives 4 frozen pairs per 509 before; 165 verdicts before the fix -> about 1, near 0"
+  measured: pending
+  verdict: pending
+- id: RR.FS40.links-claimed
+  base: FS40
+  variant: FS40
+  area: metrics
+  measure: p2.privacy_links_claimed
+  expect: eq
+  value: 0
+  source: "no pseudonym change in a 40 s window (5-minute change, no rollover), and privacy_links_claimed counts only links across a change (measure §2)"
+  measured: pending
+  verdict: pending
+- id: RR.FS40.links-spurious
+  base: FS40
+  variant: FS40
+  area: metrics
+  measure: p2.privacy_links_spurious
+  expect: band
+  band: [500, 8000]
+  source: "the Wiedersheim tracker decides at every first sighting under 10 % sniffers, so the spurious claims stay (2,873 on 77cffb5b, measure §2); the band allows the lane-change and turn-rule traffic changes since"
+  measured: pending
+  verdict: pending
+- id: RR.FS40.position-jump
+  base: FS40
+  variant: FS40
+  area: architecture
+  measure: p2.verdicts.positionJump
+  expect: le
+  value: 71
+  source: "71 on 77cffb5b before the apex turn rule (memden §2.2), which removed the junction-apex cause; through-vehicle polyline vertices remain (06 §6 item 1), so not 0"
+  measured: pending
+  verdict: pending
+- id: RR.FS40.honest
+  base: FS40
+  variant: FS40
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: "honest traffic only and an 8 h manual MA review (D3): no decision inside 40 s"
+  measured: pending
+  verdict: pending
+- id: RR.FS40.cost
+  base: FS40
+  variant: FS40
+  area: performance
+  measure: cost.peak_mb
+  expect: le
+  value: 1500
+  source: "final-bench R-FS40 910 MB at metrics level; events level adds the streamed records only"
+  measured: pending
+  verdict: pending
+# ------------------------------------------------ (3) gnss-raw (measure §7)
+- id: RR.GRAW.implausible
+  base: M0
+  variant: GRAW
+  area: architecture
+  measure: p2.reports_evidence_time_implausible
+  expect: eq
+  value: 0
+  source: "wave 3 judges old evidence at its processing time and re-checks it when judged (measure §6 item 5), so no report carries evidence whose time the MA finds implausible; 10 before"
+  measured: pending
+  verdict: pending
+- id: RR.GRAW.reports-up
+  base: M0
+  variant: GRAW
+  area: architecture
+  measure: p2.reports_about_honest
+  expect: up
+  min_change: 1.0
+  source: "raw fixes put the SM-MBR ConstantPosition condition on stopped cars' Doppler noise (usfp §2: the hold is needed); R-USFP is reproduced by construction"
+  measured: pending
+  verdict: pending
+- id: RR.M0.honest
+  base: M0
+  variant: M0
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: "usfp §3 M0 after: 0 honest revoked"
+  measured: pending
+  verdict: pending
+# ------------------------------------------------ (4) multi-week (stress §2, rerun §7)
+- id: RR.MW.cost
+  base: MW
+  variant: MW
+  area: performance
+  measure: cost.backend_ticks
+  expect: le
+  value: 60000
+  source: "stress MW.cost: 33 d x 1,440 idle minutes = 47,520 ticks plus due events (54,511 measured)"
+  measured: pending
+  verdict: pending
+- id: RR.MW.topups
+  base: MW
+  variant: MW
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: band
+  band: [1200, 1360]
+  source: "one 20-certificate top-up a week per device over the run's live windows (stress MW.rollovers 1,280 = 64 x 20)"
+  measured: pending
+  verdict: pending
+- id: RR.MW.no-overdue
+  base: MW
+  variant: MW
+  area: architecture
+  measure: rv.refused_total
+  expect: eq
+  value: 0
+  source: "each CRL Generator reissues by nextCrl, so no list goes overdue (stress MW.crl-reissue)"
+  measured: pending
+  verdict: pending
+- id: RR.MWC.overdue
+  base: MW
+  variant: MWC
+  area: metrics
+  measure: rv.refused.crl-overdue
+  expect: ge
+  value: 1
+  source: "1609.2 CRL overdue rule: with the home Generator down from 700 s the t0 list goes overdue at t0 + 21 d and the home CRACA's messages are refused (rerun §7, R-NOCRL fixed)"
+  measured: pending
+  verdict: pending
+- id: RR.MWC2.overdue
+  base: MW
+  variant: MWC2
+  area: metrics
+  measure: rv.refused.crl-overdue
+  expect: ge
+  value: 1
+  source: "the home CRL of 190,769 s is overdue from 2,005,169 s, inside W4 (stress MWC2.overdue-onset 87,823)"
+  measured: pending
+  verdict: pending
+# ------------------------------------------------ (5) the benchmark variants at quarter fleet, 60 s (bench §10)
+# Base invariants
+- id: VB.Q60.rsu-crls
+  base: Q60
+  variant: Q60
+  area: architecture
+  measure: p2.rsu_crls_installed
+  expect: eq
+  value: 60
+  source: "every unit holds each CRACA's t0 list (OF-3): 30 RSUs x 2 providers (full-bench FB3 60)"
+  measured: pending
+  verdict: pending
+- id: VB.Q60.one-request
+  base: Q60
+  variant: Q60
+  area: architecture
+  measure: perdev.EeRaCertRequestSpdu.max
+  expect: eq
+  value: 1
+  source: "CAMP 1.2.2: one certificate request per device at provisioning (ra-maxReqs 1, 2 weeks x 20 certificates; 04 §4.1)"
+  measured: pending
+  verdict: pending
+- id: VB.Q60.honest
+  base: Q60
+  variant: Q60
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: "honest traffic and an 8 h manual review: nothing is decided in 60 s"
+  measured: pending
+  verdict: pending
+# LTE-V2X
+- id: VB.LTE.latency
+  base: Q60
+  variant: Q60L
+  area: metrics
+  measure: m.e2e_latency.bsm.mean
+  expect: ratio
+  band: [2.5, 8.0]
+  source: "PC5 mode 4 SPS waits for its reserved subframe, on average half the 100 ms RRI, where DSRC contends in under a ms (3GPP TS 36.213 §14; Molina-Masegosa & Gozalvez 2017; matrix lte-latency 12.4 -> 69.4 ms)"
+  measured: pending
+  verdict: pending
+- id: VB.LTE.latency-budget
+  base: Q60
+  variant: Q60L
+  area: metrics
+  measure: m.e2e_latency.bsm.p95
+  expect: le
+  value: 100.0
+  source: "SAE J3161/1 keeps the 100 ms BSM latency budget; the engine does not align the BSM with its reservation (06 §6 item 16), so this is expected to stay open"
+  measured: pending
+  verdict: pending
+- id: VB.LTE.half-duplex
+  base: Q60
+  variant: Q60L
+  area: metrics
+  measure: m.loss_rate.half-duplex
+  expect: up
+  source: "a PC5 UE cannot receive in a 1 ms subframe it transmits in, and SPS keeps that clash for the reservation's life (Bazzi et al. 2017); DSRC frames are ~0.3 ms"
+  measured: pending
+  verdict: pending
+- id: VB.LTE.bsm-count
+  base: Q60
+  variant: Q60L
+  area: metrics
+  measure: air.bsm.frames
+  expect: ratio
+  band: [0.95, 1.05]
+  source: "J3161/1 keeps 10 Hz; its CBR rate rule does not act at a quarter fleet's load"
+  measured: pending
+  verdict: pending
+- id: VB.LTE.devices
+  base: Q60
+  variant: Q60L
+  area: architecture
+  measure: p2.devices
+  expect: same
+  source: "the radio does not change who enters the map, so the same devices are enrolled and provisioned"
+  measured: pending
+  verdict: pending
+- id: VB.LTE.ra-load
+  base: Q60
+  variant: Q60L
+  area: architecture
+  measure: pdu.EeRaCertRequestSpdu.n
+  expect: same
+  source: "provisioning runs over the backend, not the sidelink (matrix lte-backend-same)"
+  measured: pending
+  verdict: pending
+- id: VB.LTE.crl
+  base: Q60
+  variant: Q60L
+  area: architecture
+  measure: p2.rsu_crls_installed
+  expect: same
+  source: "the units' t0 lists do not depend on the radio"
+  measured: pending
+  verdict: pending
+- id: VB.LTE.honest
+  base: Q60
+  variant: Q60L
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: "as VB.Q60.honest"
+  measured: pending
+  verdict: pending
+- id: VB.LTE.cost
+  base: Q60
+  variant: Q60L
+  area: performance
+  measure: cost.wall_s
+  expect: ratio
+  band: [0.4, 2.5]
+  source: "the same nodes and receptions; SPS adds sensing per subframe, provisioning (the dominant cost, bench §7) is unchanged"
+  measured: pending
+  verdict: pending
+# 2x density
+- id: VB.2X.devices
+  base: Q60
+  variant: Q60X2
+  area: architecture
+  measure: p2.devices
+  expect: ratio
+  band: [1.6, 2.2]
+  source: "twice the offered vehicles and the handset sample; the congested box admits a little less than twice the vehicles"
+  measured: pending
+  verdict: pending
+- id: VB.2X.ra-load
+  base: Q60
+  variant: Q60X2
+  area: architecture
+  measure: pdu.EeRaCertRequestSpdu.n
+  expect: ratio
+  band: [1.6, 2.2]
+  source: "the RA's load is one request per entering device (CAMP 1.2.2), linear in the fleet"
+  measured: pending
+  verdict: pending
+- id: VB.2X.one-request
+  base: Q60
+  variant: Q60X2
+  area: architecture
+  measure: perdev.EeRaCertRequestSpdu.max
+  expect: eq
+  value: 1
+  source: "per-device behaviour is fleet-independent (CAMP ra-maxReqs 1)"
+  measured: pending
+  verdict: pending
+- id: VB.2X.receptions
+  base: Q60
+  variant: Q60X2
+  area: performance
+  measure: r.reception_attempts
+  expect: ratio
+  band: [2.6, 4.8]
+  source: "every node is a candidate receiver of every frame within the 500 m cap, which covers most of the box: attempts grow with the square of the fleet (bench §10; 05 §5)"
+  measured: pending
+  verdict: pending
+- id: VB.2X.cbr
+  base: Q60
+  variant: Q60X2
+  area: metrics
+  measure: m.cbr.172.mean
+  expect: ratio
+  band: [1.5, 2.5]
+  source: "channel busy ratio is linear in the offered load at low load (CAMP J2945/1 TVT 2019); J2945/1 power control acts only from 50 %"
+  measured: pending
+  verdict: pending
+- id: VB.2X.pdr
+  base: Q60
+  variant: Q60X2
+  area: metrics
+  measure: m.pdr
+  expect: ratio
+  band: [0.90, 1.03]
+  source: "at CBR of a few per cent collisions and hidden terminals stay under 1 % of losses (bench §3: 98.8 % below sensitivity), so PDR barely moves; the geometry of who is near whom may shift it"
+  measured: pending
+  verdict: pending
+- id: VB.2X.verify-load
+  base: Q60
+  variant: Q60X2
+  area: performance
+  measure: rv.checked
+  expect: ratio
+  band: [2.5, 4.6]
+  source: "verifications fleet-wide = receivers x heard senders ~ N^2 (bench §4: ~30 per node per second at a quarter fleet)"
+  measured: pending
+  verdict: pending
+- id: VB.2X.honest-reports
+  base: Q60
+  variant: Q60X2
+  area: architecture
+  measure: p2.verdicts_fired
+  expect: up
+  min_change: 1.0
+  source: "honest verdicts grow with events x receivers ~ N^2 (FB3: 40x the reports for 6.3x the devices, 06 §6 item 1)"
+  measured: pending
+  verdict: pending
+- id: VB.2X.honest
+  base: Q60
+  variant: Q60X2
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: "as VB.Q60.honest"
+  measured: pending
+  verdict: pending
+- id: VB.2X.cost
+  base: Q60
+  variant: Q60X2
+  area: performance
+  measure: cost.wall_s
+  expect: ratio
+  band: [2.0, 6.0]
+  source: "provisioning is linear (0.4 CPU-s per device, bench §7) and reception quadratic"
+  measured: pending
+  verdict: pending
+- id: VB.2X.memory
+  base: Q60
+  variant: Q60X2
+  area: performance
+  measure: cost.peak_mb
+  expect: ratio
+  band: [1.2, 3.0]
+  source: "per-device backend and node state is linear (memden §1.1); the streamed recording does not hold records"
+  measured: pending
+  verdict: pending
+# Portland (quarter of its own fleet: 750 veh/h, 150 pedestrians, 25 cyclists, 12 RSUs)
+- id: VB.PDX.devices
+  base: Q60
+  variant: Q60P
+  area: architecture
+  measure: p2.devices
+  expect: ratio
+  band: [0.2, 0.5]
+  source: "750 veh/h against 2,250 and 150 + 25 handsets' sample against 500 + 50: about a third of the devices"
+  measured: pending
+  verdict: pending
+- id: VB.PDX.rsus
+  base: Q60
+  variant: Q60P
+  area: architecture
+  measure: p2.rsu_crls_installed
+  expect: eq
+  value: 24
+  source: "12 roadside units each hold the two providers' t0 lists (OF-3)"
+  measured: pending
+  verdict: pending
+- id: VB.PDX.one-request
+  base: Q60
+  variant: Q60P
+  area: architecture
+  measure: perdev.EeRaCertRequestSpdu.max
+  expect: eq
+  value: 1
+  source: "the deployment is the same national SCMS: one request per device (CAMP 1.2.2)"
+  measured: pending
+  verdict: pending
+- id: VB.PDX.speed
+  base: Q60
+  variant: Q60P
+  area: metrics
+  measure: m.mean_speed
+  expect: up
+  source: "downtown Portland's coordinated 12 mph progression (5.36 m/s) and a third of the load against Midtown's gridlocked box (Midtown below 5 mph, NYC DOT 2019)"
+  measured: pending
+  verdict: pending
+- id: VB.PDX.cbr
+  base: Q60
+  variant: Q60P
+  area: metrics
+  measure: m.cbr.172.mean
+  expect: down
+  source: "fewer transmitters within range"
+  measured: pending
+  verdict: pending
+- id: VB.PDX.honest
+  base: Q60
+  variant: Q60P
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: "as VB.Q60.honest"
+  measured: pending
+  verdict: pending
+- id: VB.PDX.cost
+  base: Q60
+  variant: Q60P
+  area: performance
+  measure: cost.wall_s
+  expect: ratio
+  band: [0.1, 0.8]
+  source: "a third of the devices: provisioning a third, receptions about a ninth (plus a world import if the Portland build is not cached)"
+  measured: pending
+  verdict: pending

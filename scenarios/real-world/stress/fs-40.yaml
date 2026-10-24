@@ -1,0 +1,15 @@
+# The R-FS40 window: the full-fleet Midtown SCMS benchmark's first 40 s live, 10 s
+# warm-up, no fast-forward (final-bench.md §1, measure.md: the window on which the honest
+# constantPositionFrozen verdicts and the spurious privacy links were found and fixed).
+schema: v2xw/scenario/1
+meta:
+  name: stress-fs-40
+  description: The full-fleet Midtown SCMS benchmark's first 40 s live (R-FS40).
+  authors: [v2xw]
+  tags: [stress, benchmark, full-fleet, manhattan, scms]
+  created: "2026-10-24"
+  base: ../midtown-scms-benchmark.yaml
+time:
+  duration_s: 40.0
+  warmup_s: 10.0
+  fast_forward: []

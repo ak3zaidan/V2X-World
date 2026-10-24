@@ -1,0 +1,18 @@
+# q60.yaml at twice the road users (4,500 veh/h offered, after the same 4x fill; 1,000
+# pedestrians, 100 cyclists): the 2x-density variant of scms-real-benchmark.md §10 at
+# laptop scale (half the full file's fleet).
+schema: v2xw/scenario/1
+meta:
+  name: variants-q60-2x
+  description: The 60 s benchmark window at twice the quarter fleet's road users.
+  authors: [v2xw]
+  tags: [benchmark, variants, manhattan, scms, dsrc, density, laptop]
+  created: "2026-10-24"
+  base: q60.yaml
+actors:
+  vru:
+    pedestrians: 1000
+    cyclists: 100
+  vehicles:
+    demand:
+      rate_veh_per_h: 4500.0

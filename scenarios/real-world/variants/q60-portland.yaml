@@ -1,0 +1,22 @@
+# portland-scms-benchmark.yaml at a quarter of its road users (750 veh/h, 150 pedestrians,
+# 25 cyclists), 60 s live with a 30 s warm-up and no fast-forward: the Portland variant of
+# scms-real-benchmark.md §10 on the same terms as q60.yaml.
+schema: v2xw/scenario/1
+meta:
+  name: variants-q60-portland
+  description: Downtown Portland's SCMS benchmark at a quarter of its road users, 60 s live.
+  authors: [v2xw]
+  tags: [benchmark, variants, portland, scms, dsrc, laptop]
+  created: "2026-10-24"
+  base: ../portland-scms-benchmark.yaml
+actors:
+  vru:
+    pedestrians: 150
+    cyclists: 25
+  vehicles:
+    demand:
+      rate_veh_per_h: 750.0
+time:
+  duration_s: 60.0
+  warmup_s: 30.0
+  fast_forward: []
