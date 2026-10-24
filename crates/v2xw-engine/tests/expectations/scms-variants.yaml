@@ -31,6 +31,9 @@ runs:
     scenario: scenarios/real-world/midtown-scms-realism.yaml
     note: "the realism base of the matrix (--record-level events)"
   GRAW: {scenario: scenarios/real-world/matrix/gnss-raw.yaml, base: M0}
+  RELAY:
+    scenario: scenarios/scms-pq-relay-repro.yaml
+    note: "the pq_relay repro: hybrid Falcon-512, generic-sdu, 120 s live, actor 112 added (--record-level metrics)"
   MW:
     scenario: scenarios/edge/multi-week.yaml
     note: "the 33-day conformance run on the real calendar (--record-level metrics)"
@@ -122,6 +125,46 @@ rows:
   measure: digest.record
   expect: identical
   source: "the engine is deterministic across thread counts (02-architecture §determinism; stress PQ.determinism)"
+  measured: pending
+  verdict: pending
+- id: RR.RELAY.revocations
+  base: RELAY
+  variant: RELAY
+  area: architecture
+  measure: p2.revoked_attackers
+  expect: eq
+  value: 3
+  source: "06 §6 item 9: the repro with actor 112 revokes 3 attackers, not 2 (pq-profile.md is stale)"
+  measured: pending
+  verdict: pending
+- id: RR.RELAY.uploads
+  base: RELAY
+  variant: RELAY
+  area: architecture
+  measure: p2.reports_uploaded_relay
+  expect: band
+  band: [20, 60]
+  source: "06 §6 item 9: 36 relay uploads after actor 112 was added on relay-only node 56's road"
+  measured: pending
+  verdict: pending
+- id: RR.RELAY.mtu
+  base: RELAY
+  variant: RELAY
+  area: architecture
+  measure: p2.reports_refused_mtu
+  expect: eq
+  value: 0
+  source: "pq-profile §2: under generic-sdu an oversized relayed report is split and acted on whole, never refused"
+  measured: pending
+  verdict: pending
+- id: RR.RELAY.honest
+  base: RELAY
+  variant: RELAY
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: "the US profile with the smoothing receiver revokes no honest vehicle (usfp §3)"
   measured: pending
   verdict: pending
 # ------------------------------------------------ (2) R-FS40 window (measure §1-§2, §7)
