@@ -110,3 +110,37 @@
    note: "corrected 2026-10-22 (was 3, open): after R-USFP both vehicle attackers are revoked; the third sends PSMs from a handset, which SM-MBR v1.0 cannot report (as A3)"}
 - {id: V8-us-honest-fp, run: us-profile, vs: base, metric: p2.honest_reported, expect: ratio, band: [1, 100],
    source: "a 1 m gpsDrift and no streak gate: a 12 m GNSS outlier (0.01/s, Reid 2019) on an honest sender is a RandomPosition report"}
+# ---- Added 2026-10-24 (rerun-2026-10-24-a §4): confirmed-working claims of 06 §3 that had no
+# runtime row. Written before the runs on 81a12183 that judge them.
+- {id: N1-crl-from-t0-every-craca, run: base, metric: crl.held_cracas_min, expect: eq, value: 2,
+   source: "06 §3 item 8 (R-NOCRL, OF-3): every CRACA signs a full CRL at t0, as a deployment running since 2015 does, and every device's receiver holds it; us-production-2025 has one CRACA per provider"}
+- {id: N2-crl-preload-per-device, run: base, metric: crl.preload_per_device_min, expect: eq, value: 2,
+   source: "06 §3 item 8: pki.flow carries each device's pre-run download of each CRACA's list, marked preload (one per CRACA)"}
+- {id: N3-crl-preload-every-holder, run: base, metric: crl.holders_minus_preload, expect: eq, value: 0,
+   source: "06 §3 item 8: every device whose receiver holds a list has its pre-run download on the record (no list without a download)"}
+- {id: N4-crl-next-7-days, run: base, metric: crl.next_minus_issue_s, expect: subset, value: [604800],
+   source: "06 §3 items 8-9: full CRLs only, each nextCrl exactly 7 days after its issue date (mbr 614/0 ... 616/0)"}
+- {id: N5-crl-no-stale-holder, run: base, metric: crl.nodes_stale, expect: eq, value: 0,
+   source: "06 §3 item 9: the hourly conditional poll brings every awake device the newest list within the hour (a node is stale when another held a newer list more than an hour before the node's last row). R-JOINCRL is not exercised: every device joins before any new list"}
+- {id: N6-rsu-crl-installs, run: base, metric: p2.rsu_crls_installed, expect: eq, value: 60,
+   source: "06 §3 item 8: 2 installs per RSU of the t0 lists (30 RSUs x 2 CRACAs), as FB.crl's 60 at full fleet"}
+- {id: N7-rsu-app-cert-renewal, run: base, metric: p2.rsu_app_certs_renewed, expect: eq, value: 30,
+   source: "CAMP122 §6.3.5, 01 §4: an RSU holds weekly application certificates, 2 preloaded (614, 615) and one renewal (616) inside the two days: 30 renewals for 30 RSUs"}
+- {id: N8-no-rsu-filed-report, run: base, metric: p2.reports_from_rsus, expect: eq, value: 0,
+   source: "06 §3 item 10 (R-UNSEC): [SM-MBR] §3 signs with the end-entity's pseudonym certificate; USDOT RSU Spec v4.1 gives a unit no reporting function"}
+- {id: N9-research-rsu-reports-kept, run: research-suite, metric: p2.reports_from_rsus, expect: ge, value: 1,
+   source: "06 §3 item 10: modelled_reports: 1 (research) keeps the sized-only roadside path"}
+- {id: N10-evidence-time-plausible, run: base, metric: p2.reports_evidence_time_implausible, expect: eq, value: 0,
+   source: "06 §3 item 12 (measure §5): a handset applies the generationTime window when it takes a frame, so no report quotes evidence 43,125 s old"}
+- {id: N11-no-honest-report, run: base, metric: p2.reports_about_honest, expect: eq, value: 0,
+   source: "06 §3 item 13 (R-FS40): carrier-phase carry leaves honest creeping cars no frozen pair (final-run §2: constantPositionFrozen 28 -> 0 at quarter density)"}
+- {id: N12-polls-answered-412, run: base, metric: p2.crl_polls_not_modified, expect: ge, value: 1,
+   source: "06 §3 items 9, 15: conditional CRL polls are answered 412 when nothing changed"}
+- {id: N13-pq-rsu-crl, run: pq-hybrid, metric: p2.rsu_crls_installed, expect: eq, value: 60,
+   source: "06 §3 item 17 (R-PQRSUCRL): RSUs learn the CRL under PQ, 60 installs as under ECDSA"}
+- {id: N14-determinism-metrics, run: base-repeat, vs: base, metric: digest.metrics.json, expect: same,
+   source: "06 §3 item 16: same seed, same configuration, byte-identical metrics.json"}
+- {id: N15-determinism-records, run: base-repeat, vs: base, metric: digest.recording.mcap, expect: same,
+   source: "06 §3 item 16: same seed, byte-identical records"}
+- {id: N16-gnss-raw-evidence-time, run: gnss-raw, metric: p2.reports_evidence_time_implausible, expect: eq, value: 0,
+   source: "06 §9 owed: gnss-raw expected 0 implausible evidence after measure §5"}
