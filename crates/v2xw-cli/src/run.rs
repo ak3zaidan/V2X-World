@@ -459,6 +459,17 @@ fn execute(
         Profile::Full
     };
     let level = opts.long.record_level;
+    // The VeReMi ground truth is joined from gt.kinematics, which only `full` records; the
+    // exporter refuses a recording without it, so say so before the run rather than after.
+    if level != crate::stream::RecordLevel::Full && exporters.iter().any(|x| x.id == "veremi") {
+        return Err(CliError::BadArgument {
+            flag: "record-level",
+            problem: format!(
+                "{level:?} records no gt.kinematics, which the veremi exporter's ground truth \
+                 (true states, attack labels) is joined from; use --record-level full"
+            ),
+        });
+    }
     let checkpoint_every_ns = opts
         .long
         .checkpoint_interval_s()

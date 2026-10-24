@@ -1,0 +1,15 @@
+# RandomPosition reading asn1_v1_1, time base secmark, gap limit 0.1 s.
+# A one-change variant (docs/design/scms-real/testing/paper1-validation.md).
+schema: v2xw/scenario/1
+meta:
+  base: p1-base.yaml
+  name: Paper 1 p1-rp-v11-sm-01
+  description: RandomPosition reading asn1_v1_1, time base secmark, gap limit 0.1 s.
+  tags: [paper1, validation]
+detection:
+  local:
+    - id: detect/us-sm-mbr
+      params:
+        reading: asn1_v1_1
+        time_base: secmark
+        max_gap_s: 0.1

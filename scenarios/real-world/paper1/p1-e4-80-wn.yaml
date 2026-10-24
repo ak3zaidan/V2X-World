@@ -1,0 +1,14 @@
+# P1-E4 fault, speed-matched: p1-e4-80.yaml on the white-noise GNSS model, no timing model.
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4-80.yaml
+  name: Paper 1 E4 highway 80 mph white-noise GNSS
+  description: The speed-matched E4 minute with raw white-noise GNSS fixes and no timing model.
+  tags: [paper1, validation, highway]
+actors:
+  vehicles:
+    gnss:
+      smoothing_tau_s: 0.0
+      static_hold_mps: 0.0
+    bsm_timing:
+      enabled: false

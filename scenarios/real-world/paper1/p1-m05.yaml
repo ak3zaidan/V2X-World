@@ -1,0 +1,12 @@
+# p1-attack with a daily multiplier of 0.5 (05:00 ET is outside the window).
+# A one-change variant (docs/design/scms-real/testing/paper1-validation.md).
+schema: v2xw/scenario/1
+meta:
+  base: p1-attack.yaml
+  name: Paper 1 p1-m05
+  description: p1-attack with a daily multiplier of 0.5 (05:00 ET is outside the window).
+  tags: [paper1, validation]
+security:
+  scms:
+    lifecycle:
+      report_daily_multiplier: 0.5

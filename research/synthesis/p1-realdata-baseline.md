@@ -103,11 +103,12 @@ Every number below comes from the generated tables at the end of this file. One 
 |---|---|---|
 | ID share (pooled fit IDs) | 0.016 | 0.984 |
 | secMark phase | normal, mean −0.20 ms, sd 0.41 ms (to the nearest 50 ms epoch) | empirical, 10 ms bins, near-uniform over 0–100 ms |
-| epoch_slip_prob (onsets per moving pair) | 0.0067 | 0.227 |
-| slip size given a slip | −1: 0.44, +1: 0.56 | +1: 0.98, +2: 0.02 |
-| frozen_repeat_prob | 0 | 0.156 |
+| epoch_slip_prob (onsets per pair at v ≥ 10 m/s, Δt-corrected) | 0 (0 of 2,275) | 0.228 |
+| slip size given a slip | none observed (pooled sizes written) | −1: 0.005, +1: 0.96, +2: 0.04 |
+| frozen_repeat_prob (per pair at v ≥ 5 m/s) | 0 | 0.156 |
 | header_jitter_ms sd | 28.3 (Wyoming; mean offset 38.7 ms; PROVISIONAL until P1-E3) | borrowed from locked |
 
+- **Refit 2026-10-24 (`a77aab7c`, testing/paper1-validation.md §3).** The first fit gave the locked class 0.0067: 27 onsets, every one at v ≥ 10 m/s a :00/:50 grid hop (Δt 0.05 or 0.15 s, position consistent with Δt, residual 0.03–0.35 m) that rounding Δt to whole fix intervals read as a slip. Slip size is now the displacement beyond v̄·Δt, and the probability is fitted at v ≥ 10 m/s, where a one-epoch slip is ≥ gpsDrift. In the engine the old value gave an all-locked fleet 5.5 RandomPosition triggers per ID-minute at speed, ten times the locked bound Wyoming passed.
 - **The class share is deployment-specific.** Tampa has 23% locked IDs and Orem 0.2%. The engine should treat the share as a scenario knob, with these two values as anchors.
 - **The phase should be drawn per device and drift, not drawn independently per message** (see the YAML comment). Independent per-message phases would add a second slip mechanism on top of the fitted slip probabilities.
 - **The header offset is persistent.** It changes in steps of about 50 ms rather than per message, so an independent per-message sd overstates the pair-to-pair jitter of most pairs and understates the step.
@@ -306,11 +307,11 @@ Epoch-slip signature: |Δp| ≈ 0 (< 0.4 v Δt, stale fix) or ≈ 2 v Δt (1.6-2
 
 Written to `data/calibration/bsm-timing-cvpilot.yaml` (schema v2xw.bsm_timing.v1).
 
-| Class | IDs | single-interval moving pairs at risk | slip onsets | frozen-repeat onsets |
-|---|---|---|---|---|
-| locked | 45 | 4010 | 27 | 0 |
-| mixed | 3 | 4 | 1 | 0 |
-| free | 2754 | 554405 | 125843 | 86653 |
+| Class | IDs | single-interval moving pairs at risk (v ≥ 5 m/s) | of them v ≥ 10 m/s | slip onsets (v ≥ 10 m/s) | frozen-repeat onsets |
+|---|---|---|---|---|---|
+| locked | 45 | 4031 | 2275 | 0 | 0 |
+| mixed | 3 | 4 | 0 | 0 | 0 |
+| free | 2754 | 562740 | 451785 | 102868 | 87609 |
 
 ```yaml
 # BSM device-timing model fitted on public CV-pilot BSMs (P1-E1/P1-E2).
@@ -343,9 +344,11 @@ classes:
     # normal fitted to the 100.0% of locked BSMs within 5 ms of a 50 ms epoch
     secmark_phase_ms: {dist: normal, mean: -0.204323, sd: 0.40966}
     # secMark Δt minus 100 ms on single-interval pairs: p10 -1, p50 0, p90 1 ms
-    # onsets per single-interval moving pair (v >= 5 m/s) after a normal pair: 4010 at risk
-    epoch_slip_prob: 0.00673317
-    slip_epochs: {"-1": 0.444444, "1": 0.555556, "2": 0.0}
+    # slip onsets per single-interval pair at v >= 10 m/s after a normal pair (Δt-corrected
+    # displacement): 2275 at risk; frozen repeats below are per pair at v >= 5 m/s, 4031 at risk
+    epoch_slip_prob: 0.0
+    # no slips observed in this class; slip sizes are the pooled locked+free ones
+    slip_epochs: {"-1": 0.00502586, "1": 0.95677, "2": 0.0382043}
     frozen_repeat_prob: 0.0
     # from 6579 Wyoming BSMs (the only source with a header time; its class and rate results
     # stay held out). Header minus secMark also has a mean of 38.7 ms, and it is
@@ -361,10 +364,11 @@ classes:
     # the free BSM period exceeds the fix interval, so the phase drifts across the fix grid:
     # draw the phase per device and let it drift; independent per-message draws double count
     # the slips below, which are the observed onsets of a position-epoch change
-    # onsets per single-interval moving pair (v >= 5 m/s) after a normal pair: 554405 at risk
-    epoch_slip_prob: 0.226987
-    slip_epochs: {"-1": 0.000182767, "1": 0.978934, "2": 0.0208832}
-    frozen_repeat_prob: 0.156299
+    # slip onsets per single-interval pair at v >= 10 m/s after a normal pair (Δt-corrected
+    # displacement): 451785 at risk; frozen repeats below are per pair at v >= 5 m/s, 562740 at risk
+    epoch_slip_prob: 0.227692
+    slip_epochs: {"-1": 0.00502586, "1": 0.95677, "2": 0.0382043}
+    frozen_repeat_prob: 0.155683
     # no free-class source has a header time: borrowed from the locked Wyoming fit
     header_jitter_ms: {sd: 28.2875}
 ```

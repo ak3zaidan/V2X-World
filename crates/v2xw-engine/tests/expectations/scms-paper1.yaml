@@ -1,0 +1,1045 @@
+# Paper 1 features validated with real runs, and experiment P1-E4
+# (docs/design/scms-real/testing/paper1-validation.md). Every `expect` was written and
+# committed with `measured: pending` before the run it judges. Checker:
+#   python3 tools/realworld/matrix.py check <this file> <runs>
+# after tools/realworld/paper1/summ.py has written each run's realism.json (the
+# x.* measures: report fates, ma-replay, VeReMi round trip and leakage, BeaconFrequency
+# replay, E4 residual KS). `measured` is base -> variant, or the variant's value.
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+#
+# Binary: the release build of e15bfec1 (the integrator's), copied to the scratchpad; the
+# scenario's seed; --no-verify; one run per run-lock call (2,500 MB cap); 2 rayon threads.
+schema: v2xw/scms-run-expectations/1
+runs:
+  B:
+    scenario: scenarios/real-world/paper1/p1-base.yaml
+    note: honest Midtown 120 s, cvpilot timing at locked 0.25, US profile on secMark (--record-level events)
+  B2:
+    scenario: scenarios/real-world/paper1/p1-base.yaml
+    note: B again (determinism)
+  B1T:
+    scenario: scenarios/real-world/paper1/p1-base.yaml
+    note: B at 1 rayon thread (determinism)
+  'OFF':
+    scenario: scenarios/real-world/paper1/p1-off.yaml
+    base: B
+  S0:
+    scenario: scenarios/real-world/paper1/p1-share0.yaml
+    base: B
+  S50:
+    scenario: scenarios/real-world/paper1/p1-share50.yaml
+    base: B
+  S100:
+    scenario: scenarios/real-world/paper1/p1-share100.yaml
+    base: B
+  RP-v10-sm-01:
+    scenario: scenarios/real-world/paper1/p1-rp-v10-sm-01.yaml
+    base: B
+  RP-v10-sm-02:
+    scenario: scenarios/real-world/paper1/p1-rp-v10-sm-02.yaml
+    base: B
+  RP-v10-gt-01:
+    scenario: scenarios/real-world/paper1/p1-rp-v10-gt-01.yaml
+    base: B
+  RP-v10-gt-02:
+    scenario: scenarios/real-world/paper1/p1-rp-v10-gt-02.yaml
+    base: B
+  RP-v10-gt-05:
+    scenario: scenarios/real-world/paper1/p1-rp-v10-gt-05.yaml
+    base: B
+  RP-v11-sm-01:
+    scenario: scenarios/real-world/paper1/p1-rp-v11-sm-01.yaml
+    base: B
+  RP-v11-sm-02:
+    scenario: scenarios/real-world/paper1/p1-rp-v11-sm-02.yaml
+    base: B
+  RP-v11-sm-05:
+    scenario: scenarios/real-world/paper1/p1-rp-v11-sm-05.yaml
+    base: B
+  RP-v11-gt-01:
+    scenario: scenarios/real-world/paper1/p1-rp-v11-gt-01.yaml
+    base: B
+  RP-v11-gt-02:
+    scenario: scenarios/real-world/paper1/p1-rp-v11-gt-02.yaml
+    base: B
+  RP-v11-gt-05:
+    scenario: scenarios/real-world/paper1/p1-rp-v11-gt-05.yaml
+    base: B
+  A:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+  Q0:
+    scenario: scenarios/real-world/paper1/p1-q0.yaml
+    base: A
+  Q2:
+    scenario: scenarios/real-world/paper1/p1-q2.yaml
+    base: A
+  Q4:
+    scenario: scenarios/real-world/paper1/p1-q4.yaml
+    base: A
+  M05:
+    scenario: scenarios/real-world/paper1/p1-m05.yaml
+    base: A
+  DEC:
+    scenario: scenarios/real-world/paper1/p1-dec.yaml
+    base: A
+  DECM1:
+    scenario: scenarios/real-world/paper1/p1-dec-m1.yaml
+    base: DEC
+  DECH5:
+    scenario: scenarios/real-world/paper1/p1-dec-h5.yaml
+    base: DEC
+  VR:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+    note: p1-attack cut to 60 s, --veremi veremi-ext, --record-level receptions
+  VRF:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+    note: VR at --record-level full (the recording keeps gt.kinematics)
+  E4:
+    scenario: scenarios/real-world/paper1/p1-e4.yaml
+    note: free-flow highway 60 s, cvpilot timing at locked 1, smoothed receiver
+  E4WN:
+    scenario: scenarios/real-world/paper1/p1-e4-wn.yaml
+    base: E4
+  E4F:
+    scenario: scenarios/real-world/paper1/p1-e4-free.yaml
+    base: E4
+  E4R:
+    scenario: scenarios/real-world/paper1/p1-e4-80.yaml
+    note: speed-matched E4 (80 mph, 1,500 veh/h) on the calibration refitted after a77aab7c
+  E4RWN:
+    scenario: scenarios/real-world/paper1/p1-e4-80-wn.yaml
+    base: E4R
+  S100R:
+    scenario: scenarios/real-world/paper1/p1-share100.yaml
+    base: 'OFF'
+    note: S100 on the refitted calibration (after a77aab7c)
+  MAL1R:
+    scenario: scenarios/real-world/paper1/p1-ma-l1.yaml
+    note: MAL1 on the refitted calibration (after a77aab7c)
+  MALOFF:
+    scenario: scenarios/real-world/paper1/p1-ma-off.yaml
+    base: MAL1
+  MAL1:
+    scenario: scenarios/real-world/paper1/p1-ma-l1.yaml
+    note: quarter fleet 60 s live, 3 % ConstPos from 30 s, every OBU locked; then v2xw ma-replay
+  MAL0:
+    scenario: scenarios/real-world/paper1/p1-ma-l0.yaml
+    base: MAL1
+rows:
+- id: P1.TS.rp-share0
+  base: B
+  variant: S0
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 1.1
+  - 1.8
+  source: 'free-class triggers scale with the free share: (1-0)/(1-0.25) = 1.33; free 24.1 vs locked 0.17
+    per ID-minute (us_mbr_timing), research/synthesis/p1-realdata-baseline.md T2/T3 (Tampa free 20.4,
+    locked 0.2 per ID-minute; Wyoming locked 0.0)'
+  measured: 5097 -> 7233 (ratio 1.419)
+  verdict: pass
+- id: P1.TS.rp-share50
+  base: B
+  variant: S50
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.45
+  - 0.9
+  source: (1-0.5)/(1-0.25) = 0.67, research/synthesis/p1-realdata-baseline.md T2/T3 (Tampa free 20.4,
+    locked 0.2 per ID-minute; Wyoming locked 0.0)
+  measured: 5097 -> 4452 (ratio 0.8735)
+  verdict: pass
+- id: P1.TS.rp-share100
+  base: B
+  variant: S100
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.0
+  - 0.1
+  source: 'an all-locked fleet trips RandomPosition at about 0 (Tampa locked 0.2 vs free 20.4; Wyoming
+    0.0): under 10 % of the 25 %-locked count'
+  measured: 5097 -> 199 (ratio 0.03904)
+  verdict: pass
+- id: P1.TS.cp-share0
+  base: B
+  variant: S0
+  area: metrics
+  measure: p2.verdicts.constantPositionFrozen
+  expect: up
+  min_change: 0.1
+  source: 'the free class repeats a frozen position while moving (frozen_repeat_prob 0.156 in the fit,
+    Orem''s frozen repeats): ConstantPosition rises with the free share'
+  measured: 6512 -> 8956
+  verdict: pass
+- id: P1.TS.cp-share100
+  base: 'OFF'
+  variant: S100
+  area: metrics
+  measure: p2.verdicts.constantPositionFrozen
+  expect: ratio
+  band:
+  - 0.8
+  - 1.25
+  source: 'the locked class has frozen_repeat_prob 0: its ConstantPosition verdicts are the no-timing
+    run''s (OFF)'
+  measured: 0 -> 76 (ratio inf)
+  verdict: fixed
+  note: 'the 76 ConstantPosition verdicts of an all-locked fleet came from the calibration''s locked epoch_slip_prob
+    0.0067 (a slip of -1 repeats the previous fix exactly). That value was a tools/realdata estimator
+    artefact (grid hops read as slips), fixed in a77aab7c, refitted in df6d7a86 (locked 0); P1.TS.cp-share100-refit
+    measures 0 -> 0. Tests: test_realdata test_a_grid_hop_is_not_an_epoch_slip, test_slip_onsets_are_counted_at_speed_only'
+- id: P1.TS.reports-share0
+  base: B
+  variant: S0
+  area: architecture
+  measure: p2.reports_sent
+  expect: up
+  min_change: 0.05
+  source: 'more honest triggers file more reports (SM-MBR §2.2: every trigger is a report candidate)'
+  measured: 3794 -> 5186
+  verdict: pass
+- id: P1.TS.reports-share100
+  base: B
+  variant: S100
+  area: architecture
+  measure: p2.reports_sent
+  expect: down
+  min_change: 0.05
+  source: fewer triggers, fewer reports
+  measured: 3794 -> 161
+  verdict: pass
+- id: P1.TS.no-attack-reports
+  base: S0
+  variant: S0
+  area: architecture
+  measure: p2.reports_about_attackers
+  expect: eq
+  value: 0
+  source: an attack-free run accuses no attacker
+  measured: '0'
+  verdict: pass
+- id: P1.TS.no-revocation
+  base: S0
+  variant: S0
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: 'the US presets'' MA review is 8 h on the real calendar (the pilots'' human review, FHWA-JPO-19-775
+    p.8): no revocation can complete inside 120 s, whatever the trigger rate'
+  measured: '0'
+  verdict: pass
+- id: P1.TS.crl-same
+  base: B
+  variant: S0
+  area: architecture
+  measure: p2.crls_issued
+  expect: same
+  source: 'no decision in the window, so no new CRL: the CRL count is the preload''s'
+  measured: 0 -> 0
+  verdict: pass
+- id: P1.TS.separation
+  base: S0
+  variant: S0
+  area: architecture
+  measure: separation.violations
+  expect: empty
+  source: the timing model changes BSM contents only; no entity learns more (PKI view separation)
+  measured: '[]'
+  verdict: wrong-expectation
+  note: 'separation.violations is a list of violations, not a count: [] is none. Corrected to expect:
+    empty'
+- id: P1.TS.frames
+  base: B
+  variant: S0
+  area: performance
+  measure: r.frames_transmitted
+  expect: same
+  tol: 0.02
+  source: the model changes what a BSM says, not when it is sent; reports go over IP, not DSRC frames
+  measured: 41781 -> 41844
+  verdict: pass
+- id: P1.TS.events
+  base: B
+  variant: S0
+  area: performance
+  measure: cost.events
+  expect: ratio
+  band:
+  - 0.9
+  - 1.15
+  source: the same frames and receptions; only detection and report handling grow
+  measured: 409147 -> 410409 (ratio 1.003)
+  verdict: pass
+- id: P1.TS.memory
+  base: B
+  variant: S0
+  area: performance
+  measure: cost.peak_mb
+  expect: ratio
+  band:
+  - 0.8
+  - 1.25
+  source: per-device state is two numbers (class, phase); reports are a few KB
+  measured: 288.081 -> 301.565 (ratio 1.047)
+  verdict: pass
+- id: P1.TS.wall
+  base: B
+  variant: S0
+  area: performance
+  measure: cost.wall_s
+  expect: ratio
+  band:
+  - 0.6
+  - 1.6
+  source: a few arithmetic operations per BSM
+  measured: 43.69 -> 40.91 (ratio 0.9364)
+  verdict: pass
+- id: P1.DET.rerun
+  base: B
+  variant: B2
+  area: determinism
+  measure: digest.record
+  expect: identical
+  source: 'same seed, same build: byte-identical record stream'
+  measured: 40a5faf2b81d72ca -> 40a5faf2b81d72ca
+  verdict: pass
+- id: P1.DET.threads
+  base: B
+  variant: B1T
+  area: determinism
+  measure: digest.record
+  expect: identical
+  source: the class draw is keyed per device (its own RNG domain), not per thread
+  measured: 40a5faf2b81d72ca -> 40a5faf2b81d72ca
+  verdict: pass
+- id: P1.RP.v10-sm.gap01-vs-02
+  base: RP-v10-sm-02
+  variant: RP-v10-sm-01
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.0
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions),
+    so the count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 /
+    0.2 / 0.5 s (T3): the single-interval pairs carry most triggers'
+  measured: 4722 -> 2164 (ratio 0.4583)
+  verdict: wrong-expectation
+  note: 'counts, not rates: tools/realdata''s T3 is triggers per judged ID-minute from OBU/RSU logs that
+    lose almost nothing, while an engine receiver loses BSMs and so forms many dt ~ 0.2 s pairs; the v1.1
+    cells, which judge only pairs 0.1 s apart, are flat (2,181 at 0.1 s, 2,188 at 0.2 s), so the single-interval
+    triggers are unchanged and the rest are the loss pairs. Also: the engine judges dt <= max_gap_s exactly,
+    while realdata''s ''<= 0.1 s'' cell is dt < 0.15 s (judged(), GAP_TOL 0.05); under generationTime
+    jitter half the single-interval pairs exceed 0.100 s. The engine reproduces a realdata cell L at max_gap_s
+    = L + 0.05. Corrected expectation: the subset property only, ratio <= 1'
+- id: P1.RP.v10-sm.gap02-vs-05
+  base: B
+  variant: RP-v10-sm-02
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.7
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions),
+    so the count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 /
+    0.2 / 0.5 s (T3): the single-interval pairs carry most triggers'
+  measured: 5097 -> 4722 (ratio 0.9264)
+  verdict: pass
+- id: P1.RP.v10-gt.gap01-vs-02
+  base: RP-v10-gt-02
+  variant: RP-v10-gt-01
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.0
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions),
+    so the count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 /
+    0.2 / 0.5 s (T3): the single-interval pairs carry most triggers'
+  measured: 3941 -> 1731 (ratio 0.4392)
+  verdict: wrong-expectation
+  note: 'counts, not rates: tools/realdata''s T3 is triggers per judged ID-minute from OBU/RSU logs that
+    lose almost nothing, while an engine receiver loses BSMs and so forms many dt ~ 0.2 s pairs; the v1.1
+    cells, which judge only pairs 0.1 s apart, are flat (2,181 at 0.1 s, 2,188 at 0.2 s), so the single-interval
+    triggers are unchanged and the rest are the loss pairs. Also: the engine judges dt <= max_gap_s exactly,
+    while realdata''s ''<= 0.1 s'' cell is dt < 0.15 s (judged(), GAP_TOL 0.05); under generationTime
+    jitter half the single-interval pairs exceed 0.100 s. The engine reproduces a realdata cell L at max_gap_s
+    = L + 0.05. Corrected expectation: the subset property only, ratio <= 1'
+- id: P1.RP.v10-gt.gap02-vs-05
+  base: RP-v10-gt-05
+  variant: RP-v10-gt-02
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.7
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions),
+    so the count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 /
+    0.2 / 0.5 s (T3): the single-interval pairs carry most triggers'
+  measured: 4179 -> 3941 (ratio 0.943)
+  verdict: pass
+- id: P1.RP.v11-sm.gap01-vs-02
+  base: RP-v11-sm-02
+  variant: RP-v11-sm-01
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.5
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions),
+    so the count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 /
+    0.2 / 0.5 s (T3): the single-interval pairs carry most triggers'
+  measured: 2188 -> 2181 (ratio 0.9968)
+  verdict: pass
+- id: P1.RP.v11-sm.gap02-vs-05
+  base: RP-v11-sm-05
+  variant: RP-v11-sm-02
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.7
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions),
+    so the count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 /
+    0.2 / 0.5 s (T3): the single-interval pairs carry most triggers'
+  measured: 2188 -> 2188 (ratio 1)
+  verdict: pass
+- id: P1.RP.v11-gt.gap01-vs-02
+  base: RP-v11-gt-02
+  variant: RP-v11-gt-01
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.0
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions),
+    so the count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 /
+    0.2 / 0.5 s (T3): the single-interval pairs carry most triggers'
+  measured: 2853 -> 1304 (ratio 0.4571)
+  verdict: wrong-expectation
+  note: 'counts, not rates: tools/realdata''s T3 is triggers per judged ID-minute from OBU/RSU logs that
+    lose almost nothing, while an engine receiver loses BSMs and so forms many dt ~ 0.2 s pairs; the v1.1
+    cells, which judge only pairs 0.1 s apart, are flat (2,181 at 0.1 s, 2,188 at 0.2 s), so the single-interval
+    triggers are unchanged and the rest are the loss pairs. Also: the engine judges dt <= max_gap_s exactly,
+    while realdata''s ''<= 0.1 s'' cell is dt < 0.15 s (judged(), GAP_TOL 0.05); under generationTime
+    jitter half the single-interval pairs exceed 0.100 s. The engine reproduces a realdata cell L at max_gap_s
+    = L + 0.05. Corrected expectation: the subset property only, ratio <= 1'
+- id: P1.RP.v11-gt.gap02-vs-05
+  base: RP-v11-gt-05
+  variant: RP-v11-gt-02
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.7
+  - 1.0
+  source: 'a pair judged under a smaller gap limit is judged under every larger one (the same receptions),
+    so the count cannot fall as the limit grows; Tampa free 17.9 / 19.7 / 20.4 per ID-minute at 0.1 /
+    0.2 / 0.5 s (T3): the single-interval pairs carry most triggers'
+  measured: 2854 -> 2853 (ratio 0.9996)
+  verdict: pass
+- id: P1.RP.gt-vs-sm.v10.gap01
+  base: RP-v10-sm-01
+  variant: RP-v10-gt-01
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: up
+  min_change: 0.1
+  source: 'generationTime jitters against secMark (header_jitter_ms sd 28.3, the Wyoming fit): Δt error
+    ~40 ms adds v·|e| to every pair, firing locked devices too; Wyoming 0.0 on secMark vs 214 per ID-minute
+    on the header time, Tampa 2-3x on rx (T3)'
+  measured: 2164 -> 1731
+  verdict: open
+  note: 'OPEN TM-1 (engine, bsm_timing.rs): a slip k > 0 moves the secMark k epochs back and keeps the
+    position, so two consecutive BSMs carry the same secMark (E4F free class: secMark dt 0 ms in 17 %
+    of consecutive pairs, 200 ms in 17 %) and the generationTime clock, which follows the device''s own
+    time, sees no slip at all. Real free devices advance secMark ~100-136 ms per BSM (p50 +6 ms) and the
+    position jumps two fix epochs (Tampa T6: 46 % of triggers ''2 v dt''); the rx/header bases trip more
+    than secMark (Tampa free 45 vs 20, Wyoming 214 vs 0). The fix is a drifting per-device BSM clock (the
+    calibration''s own comment), not a patch'
+- id: P1.RP.v11-vs-v10.sm.gap01
+  base: RP-v10-sm-01
+  variant: RP-v11-sm-01
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.3
+  - 1.02
+  source: 'ASN.1 v1.1 judges only pairs 0.1 s apart and adds a·Δt²/2 (1 cm at 2 m/s²): a subset of v1.0''s
+    pairs with nearly the same residual; T3 v1.1 = v1.0 within 1 %'
+  measured: 2164 -> 2181 (ratio 1.008)
+  verdict: pass
+- id: P1.RP.gt-vs-sm.v10.gap02
+  base: RP-v10-sm-02
+  variant: RP-v10-gt-02
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: up
+  min_change: 0.1
+  source: 'generationTime jitters against secMark (header_jitter_ms sd 28.3, the Wyoming fit): Δt error
+    ~40 ms adds v·|e| to every pair, firing locked devices too; Wyoming 0.0 on secMark vs 214 per ID-minute
+    on the header time, Tampa 2-3x on rx (T3)'
+  measured: 4722 -> 3941
+  verdict: open
+  note: 'OPEN TM-1 (engine, bsm_timing.rs): a slip k > 0 moves the secMark k epochs back and keeps the
+    position, so two consecutive BSMs carry the same secMark (E4F free class: secMark dt 0 ms in 17 %
+    of consecutive pairs, 200 ms in 17 %) and the generationTime clock, which follows the device''s own
+    time, sees no slip at all. Real free devices advance secMark ~100-136 ms per BSM (p50 +6 ms) and the
+    position jumps two fix epochs (Tampa T6: 46 % of triggers ''2 v dt''); the rx/header bases trip more
+    than secMark (Tampa free 45 vs 20, Wyoming 214 vs 0). The fix is a drifting per-device BSM clock (the
+    calibration''s own comment), not a patch'
+- id: P1.RP.v11-vs-v10.sm.gap02
+  base: RP-v10-sm-02
+  variant: RP-v11-sm-02
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.3
+  - 1.02
+  source: 'ASN.1 v1.1 judges only pairs 0.1 s apart and adds a·Δt²/2 (1 cm at 2 m/s²): a subset of v1.0''s
+    pairs with nearly the same residual; T3 v1.1 = v1.0 within 1 %'
+  measured: 4722 -> 2188 (ratio 0.4634)
+  verdict: pass
+- id: P1.RP.gt-vs-sm.v10.gap05
+  base: B
+  variant: RP-v10-gt-05
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: up
+  min_change: 0.1
+  source: 'generationTime jitters against secMark (header_jitter_ms sd 28.3, the Wyoming fit): Δt error
+    ~40 ms adds v·|e| to every pair, firing locked devices too; Wyoming 0.0 on secMark vs 214 per ID-minute
+    on the header time, Tampa 2-3x on rx (T3)'
+  measured: 5097 -> 4179
+  verdict: open
+  note: 'OPEN TM-1 (engine, bsm_timing.rs): a slip k > 0 moves the secMark k epochs back and keeps the
+    position, so two consecutive BSMs carry the same secMark (E4F free class: secMark dt 0 ms in 17 %
+    of consecutive pairs, 200 ms in 17 %) and the generationTime clock, which follows the device''s own
+    time, sees no slip at all. Real free devices advance secMark ~100-136 ms per BSM (p50 +6 ms) and the
+    position jumps two fix epochs (Tampa T6: 46 % of triggers ''2 v dt''); the rx/header bases trip more
+    than secMark (Tampa free 45 vs 20, Wyoming 214 vs 0). The fix is a drifting per-device BSM clock (the
+    calibration''s own comment), not a patch'
+- id: P1.RP.v11-vs-v10.sm.gap05
+  base: B
+  variant: RP-v11-sm-05
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band:
+  - 0.3
+  - 1.02
+  source: 'ASN.1 v1.1 judges only pairs 0.1 s apart and adds a·Δt²/2 (1 cm at 2 m/s²): a subset of v1.0''s
+    pairs with nearly the same residual; T3 v1.1 = v1.0 within 1 %'
+  measured: 5097 -> 2188 (ratio 0.4293)
+  verdict: pass
+- id: P1.ST.free-zero
+  base: B
+  variant: B
+  area: architecture
+  measure: x.fate.attack_lost
+  expect: eq
+  value: 0
+  source: 'P1-E6 null: an attack-free run loses zero attack evidence'
+  measured: '0'
+  verdict: pass
+- id: P1.ST.free-none
+  base: B
+  variant: B
+  area: architecture
+  measure: x.fate.attack_reports
+  expect: eq
+  value: 0
+  source: the truth join names no attacker in an attack-free run
+  measured: '0'
+  verdict: pass
+- id: P1.ST.attack-present
+  base: A
+  variant: A
+  area: architecture
+  measure: x.fate.attack_reports
+  expect: ge
+  value: 1
+  source: 'the fault for the two rows above: with attackers the same measure is non-zero'
+  measured: '258'
+  verdict: pass
+- id: P1.ST.A-delivered
+  base: A
+  variant: A
+  area: architecture
+  measure: x.fate.delivered
+  expect: ge
+  value: 1
+  source: 'the fault for the zero-quota rows: at the default quota (58 reports) reports are uploaded and,
+    with the 10 s shuffle, reach the MA'
+  measured: '1639'
+  verdict: pass
+- id: P1.ST.A-ma
+  base: A
+  variant: A
+  area: architecture
+  measure: x.ma.received
+  expect: ge
+  value: 1
+  source: the MA's own record of what it received is non-empty at the default quota
+  measured: '1639'
+  verdict: pass
+- id: P1.ST.q0-all-lost
+  base: Q0
+  variant: Q0
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: eq
+  value: 1.0
+  source: 'P1-E6 null: a zero quota keeps no report (SM-MBR §2.2; ''0 keeps no report''), so all attack
+    evidence is lost'
+  measured: '1'
+  verdict: pass
+- id: P1.ST.q0-none-delivered
+  base: Q0
+  variant: Q0
+  area: architecture
+  measure: x.fate.delivered
+  expect: eq
+  value: 0
+  source: nothing is stored, so nothing is uploaded or reaches an MA
+  measured: '0'
+  verdict: pass
+- id: P1.ST.q0-ma-empty
+  base: Q0
+  variant: Q0
+  area: architecture
+  measure: x.ma.received
+  expect: eq
+  value: 0
+  source: the MA receives nothing
+  measured: '0'
+  verdict: pass
+- id: P1.ST.q4-vs-A
+  base: A
+  variant: Q4
+  area: architecture
+  measure: x.fate.evicted_quota
+  expect: up
+  min_change: 0.0
+  source: '4 reports'' room (4,500 B; a report is 1,119 B, constants.md) against 58 (64 KiB): the quota
+    binds'
+  measured: 0 -> 87
+  verdict: pass
+- id: P1.ST.q2-vs-q4
+  base: Q4
+  variant: Q2
+  area: architecture
+  measure: x.fate.lost_share
+  expect: ratio
+  band:
+  - 1.0
+  - 1000000000.0
+  source: a smaller store loses at least as large a share (lowest weight first, §2.2)
+  measured: 0.0456453 -> 0.0508919 (ratio 1.115)
+  verdict: pass
+- id: P1.ST.q0-vs-q2
+  base: Q2
+  variant: Q0
+  area: architecture
+  measure: x.fate.lost_share
+  expect: ratio
+  band:
+  - 1.0
+  - 1000000000.0
+  source: zero room loses everything
+  measured: 0.0508919 -> 1 (ratio 19.65)
+  verdict: pass
+- id: P1.ST.m05-outside
+  base: A
+  variant: M05
+  area: architecture
+  measure: x.fate.sig
+  expect: identical
+  source: SM-MBR §2.2 applies the multiplier at 05:00 Eastern only; a 17:00-17:02 EDT window never sees
+    it, so the store's life is identical
+  measured: 2c46a02fd8f0bba8 -> 2c46a02fd8f0bba8
+  verdict: pass
+- id: P1.ST.dec-in-window
+  base: DEC
+  variant: DEC
+  area: architecture
+  measure: x.fate.decayed_out
+  expect: ge
+  value: 1
+  source: the 18:00 ET decay inside the window halves every stored weight, so with a binding quota the
+    older reports lose their place to newer ones (Fate::DecayedOut)
+  measured: '3'
+  verdict: pass
+- id: P1.ST.dec-m1
+  base: DECM1
+  variant: DECM1
+  area: architecture
+  measure: x.fate.decayed_out
+  expect: eq
+  value: 0
+  source: 'a multiplier of 1 changes no weight: nothing is deleted for decay'
+  measured: '0'
+  verdict: pass
+- id: P1.ST.dec-h5
+  base: DECH5
+  variant: DECH5
+  area: architecture
+  measure: x.fate.decayed_out
+  expect: eq
+  value: 0
+  source: no decay instant in the window
+  measured: '0'
+  verdict: pass
+- id: P1.ST.dec-m1-vs-h5
+  base: DECH5
+  variant: DECM1
+  area: architecture
+  measure: x.fate.sig
+  expect: identical
+  source: a x1 decay at 18:00 and no decay give the same store life
+  measured: f077b0c1b0df54f0 -> f077b0c1b0df54f0
+  verdict: pass
+- id: P1.MA.l1-sound-zero
+  base: MAL1
+  variant: MAL1
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: eq
+  value: 0
+  source: 'P1-E7 null: with the free class at 0 %, every sound rule (k >= 2, theta >= 2) revokes zero
+    honest devices'
+  measured: '35'
+  verdict: fixed
+  note: 35 honest devices blocked by k=2 came from the locked slip artefact (see P1.TS.cp-share100); on
+    the refitted calibration (MAL1R) 1 remains, and it is not the timing model's (MALOFF)
+- id: P1.MA.l0-red
+  base: MAL0
+  variant: MAL0
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: ge
+  value: 1
+  source: 'the fault for the null: every OBU free, so honest devices draw corroborated reports and some
+    sound rule blocks one'
+  measured: '114'
+  verdict: pass
+- id: P1.MA.l1-attackers
+  base: MAL1
+  variant: MAL1
+  area: architecture
+  measure: x.ma.sound_attackers_max
+  expect: ge
+  value: 1
+  source: 'the rules are not ''revoke nothing'': some sound rule revokes an injected attacker'
+  measured: '5'
+  verdict: pass
+- id: P1.MA.l1r-sound-zero
+  base: MAL1R
+  variant: MAL1R
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: eq
+  value: 0
+  source: 'P1-E7 null on the refitted calibration (locked slips fitted at v >= 10 m/s: 0 of 1,152 Tampa
+    pairs): every sound rule revokes zero honest devices'
+  measured: '1'
+  verdict: open
+  note: 'OPEN (06 §6 item 1, honest reports): the one honest device blocked by k <= 5 rules is node 262,
+    accused 5 times, all mbr-Psid20-Implausible-MaxAcceleration (implied |dv|/dt > 10 m/s2); it is the
+    same with the timing model off (MALOFF, identified on a jsonl re-run) and on (MAL1R). k >= 10, device-k
+    k=20 and catch theta=10 block 0. The null holds for the timing model; it fails for the engine''s honest
+    braking/speed-snap triggers'
+- id: P1.MA.off-sound-zero
+  base: MALOFF
+  variant: MALOFF
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: eq
+  value: 0
+  source: 'with no timing model and the smoothed receiver, honest devices give no RandomPosition triggers
+    (usfp.md §3: 0 honest revocations with a realistic receiver), so no sound rule revokes one'
+  measured: '1'
+  verdict: open
+  note: 'OPEN (06 §6 item 1, honest reports): the one honest device blocked by k <= 5 rules is node 262,
+    accused 5 times, all mbr-Psid20-Implausible-MaxAcceleration (implied |dv|/dt > 10 m/s2); it is the
+    same with the timing model off (MALOFF, identified on a jsonl re-run) and on (MAL1R). k >= 10, device-k
+    k=20 and catch theta=10 block 0. The null holds for the timing model; it fails for the engine''s honest
+    braking/speed-snap triggers'
+- id: P1.TS.cp-share100-refit
+  base: 'OFF'
+  variant: S100R
+  area: metrics
+  measure: p2.verdicts.constantPositionFrozen
+  expect: ratio
+  band:
+  - 0.8
+  - 1.25
+  source: 'the refitted locked class has no slip at speed and no frozen repeat: its ConstantPosition verdicts
+    are the no-timing run''s'
+  measured: 0 -> 0 (ratio 1)
+  verdict: pass
+- id: P1.VR.lint
+  base: VR
+  variant: VR
+  area: metrics
+  measure: x.vr.export_ok
+  expect: 'true'
+  source: 'the in-run leakage linter is fatal (export.rs): the run finishing with the export means it
+    passed'
+  measured: 'True'
+  verdict: pass
+- id: P1.VR.roundtrip
+  base: VR
+  variant: VR
+  area: metrics
+  measure: x.vr.roundtrip_mismatch
+  expect: eq
+  value: 0
+  source: 'every type-3 line is a recorded reception of a recorded node.tx: the same claim, sender pseudonym
+    and send time'
+  measured: '0'
+  verdict: pass
+- id: P1.VR.lines
+  base: VR
+  variant: VR
+  area: metrics
+  measure: x.vr.type3
+  expect: ge
+  value: 1000
+  source: a non-empty export (the round trip above cannot pass on nothing)
+  measured: '25532'
+  verdict: pass
+- id: P1.VR.truth
+  base: VR
+  variant: VR
+  area: metrics
+  measure: x.vr.gt_attackers_ok
+  expect: 'true'
+  source: the ground-truth file codes exactly the run's attackers' messages as ConstPos (veremi-ext code
+    1) and every other as 0
+  measured: 'False'
+  verdict: fixed
+  note: 'at --record-level receptions there is no gt.kinematics, so all 9,035 true positions were (0,
+    0) and every attacker message was coded 0. Fixed in 8b5b1843: the export refuses such a recording
+    and v2xw run refuses --veremi below full (test dataset_profiles::a_recording_without_kinematics_is_refused_rather_than_labelled_genuine,
+    red without the fix). At full (VRF) the 3 attackers are coded 1'
+- id: P1.VR.leak
+  base: VR
+  variant: VR
+  area: metrics
+  measure: x.vr.py_leaks
+  expect: eq
+  value: 0
+  source: 'an independent linter: no visible `sender` equals a true id, one `sender` per pseudonym'
+  measured: '0'
+  verdict: pass
+- id: P1.VR.leak-fault
+  base: VR
+  variant: VR
+  area: metrics
+  measure: x.vr.py_leaks_injected
+  expect: ge
+  value: 1
+  source: 'the fault: one true id written into a trace''s `sender` must be caught'
+  measured: '525'
+  verdict: pass
+- id: P1.VR.full-truth
+  base: VRF
+  variant: VRF
+  area: metrics
+  measure: x.vr.gt_attackers_ok
+  expect: 'true'
+  source: 'written after VR showed every attacker message coded 0 at --record-level receptions: with gt.kinematics
+    recorded the truth file must code the ConstPos attackers'' messages 1'
+  measured: 'True'
+  verdict: pass
+- id: P1.VR.full-truth-pos
+  base: VRF
+  variant: VRF
+  area: metrics
+  measure: x.vr.truth_zero_pos
+  expect: eq
+  value: 0
+  source: the true position of every message is the sender's gt.kinematics, never the (0, 0) of a missing
+    join
+  measured: '26'
+  verdict: open
+  note: 'OPEN VR-2: 26 of 9,035 truth rows still (0, 0): each vehicle''s first BSM is sent (e.g. 9.781
+    s) before its first gt.kinematics record (9.9 s), and the join takes the last record at or before
+    the reception. Needs a kinematics record at spawn (engine) or a bounded forward join (exporter)'
+- id: P1.BF.honest-zero
+  base: VR
+  variant: VR
+  area: metrics
+  measure: x.bf.events_honest
+  expect: eq
+  value: 0
+  source: 'TS 103 759 BeaconFrequency with BSM_J2945_1 (min gap 0.1 - 0.025 = 75 ms, 2 in a row): an honest
+    10 Hz fleet raises none'
+  measured: '0'
+  verdict: pass
+- id: P1.BF.min-gap
+  base: VR
+  variant: VR
+  area: metrics
+  measure: x.bf.min_gap_ms
+  expect: ge
+  value: 75
+  source: 'the 25 ms tolerance covers the 10 ms hand-off jitter and 15 ms of EDCA access (ts103759.rs):
+    no honest received gap under 75 ms'
+  measured: '95'
+  verdict: pass
+- id: P1.BF.fault
+  base: VR
+  variant: VR
+  area: metrics
+  measure: x.bf.events_injected20hz
+  expect: ge
+  value: 1
+  source: 'the fault: one honest sender''s receptions duplicated at +50 ms (20 Hz) must fire'
+  measured: '910'
+  verdict: pass
+- id: P1.E4.ks
+  base: E4
+  variant: E4
+  area: metrics
+  measure: x.e4.ks
+  expect: le
+  value: 0.092
+  source: 'P1-E4: the engine''s locked fleet matches held-out Wyoming; tolerance 0.092: the 95th percentile
+    of the KS distance between two halves of Wyoming''s 12 IDs over all 462 splits (scripts/ks.py tol),
+    set before the run; residual = v1.0 |p1+v1·Δt·u(h1)-p2|, secMark Δt, 0.5 s limit, v1 >= 10 m/s, by
+    tools/realdata stages 3-4'
+  measured: '0.355424'
+  verdict: open
+  note: 'OPEN E4-BODY: the residual body is too tight: engine p50 / p90 / p99 0.012 / 0.023 / 0.044 m
+    (E4R) against Wyoming 0.016 / 0.060 / 0.157 m; the smoothed receiver''s epoch-to-epoch output noise
+    (~1 cm, about the J2735 position LSB) is below a real OBU''s. The tail at 1 m now matches (E4R 0 triggers,
+    Wyoming 0). Calibrating the receiver''s output noise against Tampa/Orem locked bodies (not Wyoming)
+    is the next step'
+- id: P1.E4.ks-white-noise
+  base: E4WN
+  variant: E4WN
+  area: metrics
+  measure: x.e4.ks
+  expect: ge
+  value: 0.092
+  source: 'P1-E4 fault: the same tolerance row on the old white-noise GNSS (usfp.md: p50 2.65 m vs Wyoming
+    0.016 m) must be exceeded'
+  measured: '0.992321'
+  verdict: pass
+- id: P1.E4.ks-free
+  base: E4F
+  variant: E4F
+  area: metrics
+  measure: x.e4.ks
+  expect: ge
+  value: 0.092
+  source: 'the class control: an all-free fleet (Tampa free p50 0.100 m, T6) must not match all-locked
+    Wyoming'
+  measured: '0.411641'
+  verdict: pass
+- id: P1.E4.locked-rate
+  base: E4
+  variant: E4
+  area: metrics
+  measure: x.e4.rate_per_idmin
+  expect: le
+  value: 0.568
+  source: the frozen locked bound (tools/realdata/frozen/classifier-v1.json, 0.568 per ID-minute) that
+    Wyoming passed
+  measured: '5.51737'
+  verdict: fixed
+  note: 5.5 per ID-minute came from the locked slip artefact; on the refit (E4R) 0.0 (0 triggers in 3,333
+    fast pairs), under the frozen bound 0.568
+- id: P1.E4.speed
+  base: E4
+  variant: E4
+  area: metrics
+  measure: x.e4.v_p50
+  expect: band
+  band:
+  - 25.0
+  - 36.0
+  source: 'the comparison is speed-matched: Wyoming''s p5-p95 speed is 27.6-35.6 m/s'
+  measured: '20.58'
+  verdict: open
+  note: 'OPEN E4-SPEED: the procedural highway does not reach Wyoming''s speeds: p50 20.6 m/s at 65 mph
+    posted and 3,000 veh/h, 22.2 m/s at 80 mph and 1,500 veh/h (Wyoming 34.4). The scenario needs a longer
+    straight or the drivers'' desired-speed spread; the KS comparison is therefore not speed-matched (the
+    body differs at cm scale, which speed changes little)'
+- id: P1.E4R.ks
+  base: E4R
+  variant: E4R
+  area: metrics
+  measure: x.e4.ks
+  expect: le
+  value: 0.092
+  source: 'P1-E4 (re-run: p1-e4-80.yaml, calibration refitted with the Δt-corrected slip estimator, a77aab7c);
+    tolerance 0.092: the 95th percentile of the KS distance between two halves of Wyoming''s 12 IDs over
+    all 462 splits (scripts/ks.py tol), set before the run; residual = v1.0 |p1+v1·Δt·u(h1)-p2|, secMark
+    Δt, 0.5 s limit, v1 >= 10 m/s, by tools/realdata stages 3-4'
+  measured: '0.337186'
+  verdict: open
+  note: 'OPEN E4-BODY: the residual body is too tight: engine p50 / p90 / p99 0.012 / 0.023 / 0.044 m
+    (E4R) against Wyoming 0.016 / 0.060 / 0.157 m; the smoothed receiver''s epoch-to-epoch output noise
+    (~1 cm, about the J2735 position LSB) is below a real OBU''s. The tail at 1 m now matches (E4R 0 triggers,
+    Wyoming 0). Calibrating the receiver''s output noise against Tampa/Orem locked bodies (not Wyoming)
+    is the next step'
+- id: P1.E4R.ks-white-noise
+  base: E4RWN
+  variant: E4RWN
+  area: metrics
+  measure: x.e4.ks
+  expect: ge
+  value: 0.092
+  source: 'P1-E4 fault (re-run: p1-e4-80.yaml, calibration refitted with the Δt-corrected slip estimator,
+    a77aab7c): the white-noise GNSS must exceed the tolerance'
+  measured: '0.992767'
+  verdict: pass
+- id: P1.E4R.locked-rate
+  base: E4R
+  variant: E4R
+  area: metrics
+  measure: x.e4.rate_per_idmin
+  expect: le
+  value: 0.568
+  source: 'the frozen locked bound 0.568 per ID-minute (re-run: p1-e4-80.yaml, calibration refitted with
+    the Δt-corrected slip estimator, a77aab7c)'
+  measured: '0'
+  verdict: pass
+- id: P1.E4R.speed
+  base: E4R
+  variant: E4R
+  area: metrics
+  measure: x.e4.v_p50
+  expect: band
+  band:
+  - 25.0
+  - 36.0
+  source: 'speed-matched to Wyoming''s p5-p95 27.6-35.6 m/s (re-run: p1-e4-80.yaml, calibration refitted
+    with the Δt-corrected slip estimator, a77aab7c)'
+  measured: '22.22'
+  verdict: open
+  note: 'OPEN E4-SPEED: the procedural highway does not reach Wyoming''s speeds: p50 20.6 m/s at 65 mph
+    posted and 3,000 veh/h, 22.2 m/s at 80 mph and 1,500 veh/h (Wyoming 34.4). The scenario needs a longer
+    straight or the drivers'' desired-speed spread; the KS comparison is therefore not speed-matched (the
+    body differs at cm scale, which speed changes little)'

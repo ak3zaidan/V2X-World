@@ -175,12 +175,13 @@ def gate_table(tab, rows, passed):
 def timing_table(tab, fit_agg, yaml_text):
     tab.add("### T8. Fitted timing-model parameters (fit sets: Tampa + Orem)", "",
             "Written to `data/calibration/bsm-timing-cvpilot.yaml` (schema v2xw.bsm_timing.v1).", "",
-            "| Class | IDs | single-interval moving pairs at risk | slip onsets | frozen-repeat onsets |",
-            "|---|---|---|---|---|")
+            "| Class | IDs | single-interval moving pairs at risk (v ≥ 5 m/s) | of them v ≥ 10 m/s | slip onsets (v ≥ 10 m/s) | frozen-repeat onsets |",
+            "|---|---|---|---|---|---|")
     for c in ("locked", "mixed", "free"):
         a = fit_agg.get(c)
         if a:
-            tab.add("| %s | %d | %d | %d | %d |" % (c, a["ids"], a["at_risk"], a["slip"], a["frozen"]))
+            tab.add("| %s | %d | %d | %d | %d | %d |" % (c, a["ids"], a["at_risk"], a["at_risk_fast"], a["slip"],
+                                                      a["frozen"]))
     tab.add("", "```yaml", yaml_text.rstrip("\n"), "```", "")
 
 

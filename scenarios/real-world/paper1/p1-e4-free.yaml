@@ -1,0 +1,12 @@
+# P1-E4 class control: p1-e4.yaml with the free class only (locked share 0). Wyoming has
+# no free IDs, so this must NOT match it: the comparison has to tell the classes apart.
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4.yaml
+  name: Paper 1 E4 highway free class
+  description: The E4 highway minute with every OBU in the free timing class.
+  tags: [paper1, validation, highway, bsm-timing]
+actors:
+  vehicles:
+    bsm_timing:
+      locked_share: 0.0

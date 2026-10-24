@@ -1,0 +1,16 @@
+# P1-E4 fault: p1-e4.yaml on the old engine's inputs, the white-noise GNSS model (raw
+# fixes, gnss/error/gauss-markov's white term fresh every 100 ms, testing/usfp.md §1) and
+# no timing model. The KS tolerance row must go red here.
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4.yaml
+  name: Paper 1 E4 highway white-noise GNSS
+  description: The E4 highway minute with raw white-noise GNSS fixes and no timing model.
+  tags: [paper1, validation, highway]
+actors:
+  vehicles:
+    gnss:
+      smoothing_tau_s: 0.0
+      static_hold_mps: 0.0
+    bsm_timing:
+      enabled: false

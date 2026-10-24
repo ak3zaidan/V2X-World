@@ -1,0 +1,14 @@
+# The base at a locked share of 0.0.
+# A one-change variant (docs/design/scms-real/testing/paper1-validation.md).
+schema: v2xw/scenario/1
+meta:
+  base: p1-base.yaml
+  name: Paper 1 p1-share0
+  description: The base at a locked share of 0.0.
+  tags: [paper1, validation]
+actors:
+  vehicles:
+    bsm_timing:
+      enabled: true
+      calibration: data/calibration/bsm-timing-cvpilot.yaml
+      locked_share: 0.0

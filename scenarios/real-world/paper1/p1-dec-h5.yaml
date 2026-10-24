@@ -1,0 +1,14 @@
+# p1-dec with the decay at 05:00 ET (outside the window).
+# A one-change variant (docs/design/scms-real/testing/paper1-validation.md).
+schema: v2xw/scenario/1
+meta:
+  base: p1-dec.yaml
+  name: Paper 1 p1-dec-h5
+  description: p1-dec with the decay at 05:00 ET (outside the window).
+  tags: [paper1, validation]
+security:
+  scms:
+    lifecycle:
+      report_store_quota_bytes: 4500
+      report_daily_multiplier: 0.5
+      report_decay_hour_et: 5

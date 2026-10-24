@@ -9,7 +9,8 @@ copy of the variant's measurement (in memory; nothing is written) and judge the 
   the band's top is unbounded);
 - eq, le, ge: the value is moved one unit past the bound (or 10 % for a float);
 - up, down: the variant takes the base's value (no change);
-- same, identical: the variant's value is changed (x1.5, or a different digest).
+- same, identical: the variant's value is changed (x1.5, or a different digest);
+- empty, true, false: a non-empty list, or the opposite truth value.
 A row that still passes under its fault cannot fail and is printed SILENT. Exit 1 on any.
 """
 import copy
@@ -45,6 +46,10 @@ def fault(row, v, b):
         return v * 1.5 + 1
     if op == 'identical':
         return str(v) + '-fault'
+    if op == 'empty':
+        return ['fault']
+    if op in ('true', 'false'):
+        return op == 'false'
     raise SystemExit(f"row {row['id']}: no fault for {op}")
 
 

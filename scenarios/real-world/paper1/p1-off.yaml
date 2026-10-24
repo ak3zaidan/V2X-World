@@ -1,0 +1,14 @@
+# The base with the BSM timing model off (enabled false).
+# A one-change variant (docs/design/scms-real/testing/paper1-validation.md).
+schema: v2xw/scenario/1
+meta:
+  base: p1-base.yaml
+  name: Paper 1 p1-off
+  description: The base with the BSM timing model off (enabled false).
+  tags: [paper1, validation]
+actors:
+  vehicles:
+    bsm_timing:
+      enabled: false
+      calibration: data/calibration/bsm-timing-cvpilot.yaml
+      locked_share: 0.25

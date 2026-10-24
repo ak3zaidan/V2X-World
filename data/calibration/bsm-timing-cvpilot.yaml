@@ -28,9 +28,11 @@ classes:
     # normal fitted to the 100.0% of locked BSMs within 5 ms of a 50 ms epoch
     secmark_phase_ms: {dist: normal, mean: -0.204323, sd: 0.40966}
     # secMark Δt minus 100 ms on single-interval pairs: p10 -1, p50 0, p90 1 ms
-    # onsets per single-interval moving pair (v >= 5 m/s) after a normal pair: 4010 at risk
-    epoch_slip_prob: 0.00673317
-    slip_epochs: {"-1": 0.444444, "1": 0.555556, "2": 0.0}
+    # slip onsets per single-interval pair at v >= 10 m/s after a normal pair (Δt-corrected
+    # displacement): 2275 at risk; frozen repeats below are per pair at v >= 5 m/s, 4031 at risk
+    epoch_slip_prob: 0.0
+    # no slips observed in this class; slip sizes are the pooled locked+free ones
+    slip_epochs: {"-1": 0.00502586, "1": 0.95677, "2": 0.0382043}
     frozen_repeat_prob: 0.0
     # from 6579 Wyoming BSMs (the only source with a header time; its class and rate results
     # stay held out). Header minus secMark also has a mean of 38.7 ms, and it is
@@ -46,9 +48,10 @@ classes:
     # the free BSM period exceeds the fix interval, so the phase drifts across the fix grid:
     # draw the phase per device and let it drift; independent per-message draws double count
     # the slips below, which are the observed onsets of a position-epoch change
-    # onsets per single-interval moving pair (v >= 5 m/s) after a normal pair: 554405 at risk
-    epoch_slip_prob: 0.226987
-    slip_epochs: {"-1": 0.000182767, "1": 0.978934, "2": 0.0208832}
-    frozen_repeat_prob: 0.156299
+    # slip onsets per single-interval pair at v >= 10 m/s after a normal pair (Δt-corrected
+    # displacement): 451785 at risk; frozen repeats below are per pair at v >= 5 m/s, 562740 at risk
+    epoch_slip_prob: 0.227692
+    slip_epochs: {"-1": 0.00502586, "1": 0.95677, "2": 0.0382043}
+    frozen_repeat_prob: 0.155683
     # no free-class source has a header time: borrowed from the locked Wyoming fit
     header_jitter_ms: {sd: 28.2875}

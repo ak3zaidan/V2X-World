@@ -680,6 +680,19 @@ pub fn from_records_with(
     for v in certs.values_mut() {
         v.sort_by_key(|(t, _)| *t);
     }
+    // The ground truth is joined from `gt.kinematics`: the senders' true states, and the
+    // node-to-actor map that `gt.attack.action` labels are keyed by. A recording made
+    // without it (`--record-level receptions | events | metrics`, or the NODE-only
+    // profile) would give every message a (0, 0) true position and label every attacker's
+    // message genuine, silently. Refuse it instead.
+    if truth_at.is_empty() && records.iter().any(|r| r.channel == "phy.rx") {
+        return Err(RecordError::malformed(
+            "veremi",
+            "the recording has receptions but no gt.kinematics, so the VeReMi ground truth \
+             (true states, attack labels) cannot be joined: record the run at \
+             --record-level full",
+        ));
+    }
     // An actor with byte-changing actions that named messages and none that did not still
     // needs its window for the fallback claim; it is the span of its labelled messages.
     let window_of = |actor: u32| -> Option<(u64, u64)> {

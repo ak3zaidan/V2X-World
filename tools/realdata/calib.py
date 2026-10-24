@@ -72,12 +72,13 @@ def timing_stats(datasets, params):
         for r in ds.ids.values():
             c = devclass.classify(r.frac, r.nsm, params)
             a = agg.setdefault(c, {"ids": 0, "phase100": Counter(), "wrapped": Counter(), "at_risk": 0,
-                                   "frozen": 0, "slip": 0, "sizes": Counter(), "hdr": Counter(),
+                                   "at_risk_fast": 0, "frozen": 0, "slip": 0, "sizes": Counter(), "hdr": Counter(),
                                    "excess": Counter()})
             a["ids"] += 1
             a["phase100"].update(r.phase100)
             a["wrapped"].update(r.wrapped)
             a["at_risk"] += r.at_risk
+            a["at_risk_fast"] += r.at_risk_fast
             a["frozen"] += r.ent_frozen
             a["slip"] += r.ent_slip
             a["sizes"].update(r.slip_sizes)
@@ -199,8 +200,10 @@ def timing_yaml(fit_agg, hdr_agg, prov, version, notes=()):
             L.append("    # draw the phase per device and let it drift; independent per-message draws double count")
             L.append("    # the slips below, which are the observed onsets of a position-epoch change")
         risk = a["at_risk"]
-        L.append("    # onsets per single-interval moving pair (v >= 5 m/s) after a normal pair: %d at risk" % risk)
-        L.append("    epoch_slip_prob: %s" % r6(a["slip"] / risk if risk else 0.0))
+        fast = a["at_risk_fast"]
+        L.append("    # slip onsets per single-interval pair at v >= 10 m/s after a normal pair (Δt-corrected")
+        L.append("    # displacement): %d at risk; frozen repeats below are per pair at v >= 5 m/s, %d at risk" % (fast, risk))
+        L.append("    epoch_slip_prob: %s" % r6(a["slip"] / fast if fast else 0.0))
         dist, tot = _slip_dist(a["sizes"])
         if not tot:
             dist, _ = _slip_dist(pooled)
