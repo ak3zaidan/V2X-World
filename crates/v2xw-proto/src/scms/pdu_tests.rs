@@ -262,17 +262,16 @@ fn the_ra_refuses_a_request_whose_signed_butterfly_parameters_differ() {
 fn a_component_certificate_is_verified_once_and_a_forgery_is_still_refused() {
     let k = pki();
     assert!(k.signer_key(&k.aca.cert).is_ok());
-    // The RA opens one ACA response per pseudonym certificate: 2,000 here. Re-verifying
-    // the ACA certificate's ECDSA signature each time takes tens of seconds on a debug
-    // build; remembered, each look-up is one hash of the certificate.
-    let started = std::time::Instant::now();
+    // The RA opens one ACA response per pseudonym certificate: 2,000 here, and the ACA
+    // certificate's ECDSA signature is verified for none of them again.
+    let before = explicit_cert_checks_run();
     for _ in 0..2_000 {
         assert!(k.signer_key(&k.aca.cert).is_ok());
     }
-    let took = started.elapsed();
-    assert!(
-        took.as_secs_f64() < 3.0,
-        "2,000 look-ups of the ACA certificate took {took:?}"
+    let checks = explicit_cert_checks_run() - before;
+    assert_eq!(
+        checks, 0,
+        "2,000 look-ups of the ACA certificate verified it {checks} times"
     );
     // The same body under the same issuer, signed by another key: another hash, checked
     // afresh, refused.
@@ -285,6 +284,12 @@ fn a_component_certificate_is_verified_once_and_a_forgery_is_still_refused() {
         |d| Ok(other.ica.key.sign_digest(d)),
     )
     .unwrap();
+    let before = explicit_cert_checks_run();
     assert_eq!(k.signer_key(&forged), Err(PduError::UntrustedSigner));
+    assert_eq!(
+        explicit_cert_checks_run() - before,
+        1,
+        "the forgery was checked afresh"
+    );
     assert!(k.signer_key(&k.aca.cert).is_ok());
 }

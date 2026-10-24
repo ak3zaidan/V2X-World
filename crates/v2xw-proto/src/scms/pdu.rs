@@ -282,6 +282,15 @@ thread_local! {
     /// signature on it verifies.
     static EXPLICIT_MEMO: std::cell::RefCell<std::collections::HashMap<(Vec<u8>, Vec<u8>), bool>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+    /// How many explicit-certificate signatures this thread has actually verified.
+    static EXPLICIT_CHECKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many explicit-certificate signatures this thread has verified (not answered from
+/// the memo of [`explicit_cert_verifies`]).
+#[must_use]
+pub fn explicit_cert_checks_run() -> u64 {
+    EXPLICIT_CHECKS.with(std::cell::Cell::get)
 }
 
 /// Whether `issuer`'s signature on the explicit certificate `c` verifies, remembered per
@@ -300,6 +309,7 @@ fn explicit_cert_verifies(c: &Certificate, issuer: &Certificate) -> bool {
     if let Some(v) = EXPLICIT_MEMO.with(|m| m.borrow().get(&key).copied()) {
         return v;
     }
+    EXPLICIT_CHECKS.with(|n| n.set(n.get() + 1));
     let v = sig1609::verify_explicit_cert(c, Some(issuer));
     EXPLICIT_MEMO.with(|m| {
         let mut m = m.borrow_mut();
