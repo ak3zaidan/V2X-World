@@ -726,6 +726,16 @@ const ADVANCED: &[Basic] = &[
         recommended: "Off (today); on for HCM heavy-vehicle gaps (+1 s, +2 s on wide roads).",
     },
     Basic {
+        path: "traffic.standing_leader_stop",
+        explain: "Whether drivers coming up behind a stopped car brake smoothly to stop at their usual gap, as they do at a stop line, rather than braking late and stopping abruptly (vans and trucks, whose following model brakes gently, were stopped in one step).",
+        recommended: "Off (today); on for smooth stops behind queues (the realistic benchmark sets it).",
+    },
+    Basic {
+        path: "traffic.lane_bend_speed",
+        explain: "Whether drivers slow for sharp bends in a street's mapped centreline as they do for corners at junctions; without it a car follows a kink in the map at full speed.",
+        recommended: "Off (today); on with turn_curve_window_m 6 for kinked city streets (the realistic benchmark sets it).",
+    },
+    Basic {
         path: "traffic.lc_speed_gain",
         explain: "How readily drivers change lane to get past slower traffic; setting any of the lane-change eagerness settings switches to SUMO's LC2013 lane-changing.",
         recommended: "Unset (today's MOBIL); 1 (SUMO default); 0.5 to 2.",

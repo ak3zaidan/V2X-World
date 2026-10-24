@@ -773,6 +773,28 @@ pub struct EngineParams {
     /// Off by default; `traffic.heavy_vehicle_gap_terms`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub heavy_vehicle_gap_terms: bool,
+    /// Whether a driver closing on a standing (or, for a heavy vehicle, crawling) vehicle
+    /// ahead brakes at no less than the constant deceleration that stops it at its
+    /// standstill gap, `v²/(2·(s − s0))`, as the stop line already is
+    /// ([`static_obstacle_accel`]; SUMO's `maximumSafeStopSpeed`). The IDM's braking
+    /// scales with its `a` (1.3 m/s² for a delivery van), so without it such a driver
+    /// reached its standstill gap still moving and the advance cap stopped it in one step:
+    /// a delivery van 0.93 → 0.08 m/s in 0.1 s (−8.5 m/s², over its own 7 m/s² emergency
+    /// limit), which an honest BSM then shows as 1.10 → 0.00 m/s and the US MaxAcceleration
+    /// rule reports (docs/design/scms-real/testing/honest-density.md §2). Off by default;
+    /// `traffic.standing_leader_stop`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub standing_leader_stop: bool,
+    /// Whether the bends of a through lane's polyline are driven no faster than the
+    /// turn-speed rule allows (`sqrt(turn_lateral_accel_mps2 · R)`, with R judged over the
+    /// tightest [`EngineParams::turn_curve_window_m`] of the lane, 6 m when that is 0), as
+    /// a junction connector already is. A lane polyline's vertex is a kink the vehicle
+    /// follows exactly; with no limit a through car on a bent street (Midtown sender 194
+    /// near Broadway, heading −2.06 → −3.11 rad and back at 10 m/s) turned at over
+    /// 12 m/s², which receivers judge as RandomPosition jumps. Off by default;
+    /// `traffic.lane_bend_speed`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub lane_bend_speed: bool,
     /// A multiplier on the HCM critical gaps and follow-up times at unsignalised
     /// junctions ([`GapAcceptanceParams::gap_factor`]); 1.0.
     pub critical_gap_factor: f64,
@@ -872,6 +894,8 @@ impl Default for EngineParams {
             speed_spread: 1.0,
             start_reaction_median_s: REACTION_MEDIAN_S,
             heavy_vehicle_gap_terms: false,
+            standing_leader_stop: false,
+            lane_bend_speed: false,
             permitted_left_critical_headway_s:
                 crate::intersection::signal_fixed_time::HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S,
             critical_gap_factor: 1.0,
@@ -1384,6 +1408,9 @@ pub struct NativeMobility {
     zones: ConflictZones,
     /// The speed each junction connector may be taken at, from its curvature.
     turn_speed: BTreeMap<LaneId, f64>,
+    /// The bends of through lanes with a turn speed under the lane's limit, as
+    /// `(from_s_m, to_s_m, speed_mps)` along each lane ([`EngineParams::lane_bend_speed`]).
+    bend_speed: BTreeMap<LaneId, Vec<(f64, f64, f64)>>,
     next_actor: u32,
     next_seq: u64,
     dropped_trips: u64,
@@ -1542,6 +1569,7 @@ impl NativeMobility {
             weather: WeatherState::CLEAR,
             zones: ConflictZones::default(),
             turn_speed: BTreeMap::new(),
+            bend_speed: BTreeMap::new(),
             next_actor: 0,
             next_seq: 0,
             dropped_trips: 0,
@@ -4897,6 +4925,16 @@ impl NativeMobility {
         let b = actor.driver.comfort_decel_mps2.max(0.1);
         let mut dist = world.lane(actor.lane).length_m - actor.s_m;
         let mut best = f64::INFINITY;
+        // The bends of this lane still ahead, or under the vehicle (`lane_bend_speed`).
+        if let Some(zones) = self.bend_speed.get(&actor.lane) {
+            for &(s0, s1, v) in zones {
+                let d = s0 - actor.s_m;
+                if s1 >= actor.s_m && d <= self.params.lookahead_m {
+                    let cap = self.class_turn_speed(actor.class, v);
+                    best = best.min(math::sqrt(cap * cap + 2.0 * b * d.max(0.0)));
+                }
+            }
+        }
         for k in 1..=4 {
             if dist > self.params.lookahead_m {
                 break;
@@ -4912,6 +4950,71 @@ impl NativeMobility {
                 cap = cap.min(self.class_turn_speed(actor.class, *v));
             }
             best = best.min(math::sqrt(cap * cap + 2.0 * b * dist.max(0.0)));
+            if let Some(zones) = self.bend_speed.get(&next) {
+                for &(s0, _, v) in zones {
+                    let d = dist + s0;
+                    if d <= self.params.lookahead_m {
+                        let cap = self.class_turn_speed(actor.class, v);
+                        best = best.min(math::sqrt(cap * cap + 2.0 * b * d.max(0.0)));
+                    }
+                }
+            }
+            dist += lane.length_m;
+        }
+        best
+    }
+
+    /// The braking a bend of a through lane ahead (or under the vehicle) asks for
+    /// ([`EngineParams::lane_bend_speed`]): `−(v² − v_b²) / 2d` to reach the bend's speed
+    /// `v_b` at its start `d` ahead, or `(v_b − v) / dt` inside it, binding only from
+    /// [`STOP_FLOOR_BIND_MPS2`] and never harder than a planned stop
+    /// ([`PLANNED_STOP_MAX_DECEL_MPS2`]). `None` when no bend binds.
+    fn bend_floor(&self, world: &World, actor: &Actor, dt_s: f64) -> Option<f64> {
+        if self.bend_speed.is_empty() || dt_s <= 0.0 {
+            return None;
+        }
+        let v = actor.speed_mps;
+        let mut best: Option<f64> = None;
+        let mut consider = |d: f64, v_b: f64| {
+            if v <= v_b {
+                return;
+            }
+            let need = if d <= 0.0 {
+                (v_b - v) / dt_s
+            } else {
+                -(v * v - v_b * v_b) / (2.0 * d)
+            };
+            if -need >= STOP_FLOOR_BIND_MPS2 {
+                let need = need.max(-PLANNED_STOP_MAX_DECEL_MPS2);
+                best = Some(best.map_or(need, |b: f64| b.min(need)));
+            }
+        };
+        if let Some(zones) = self.bend_speed.get(&actor.lane) {
+            for &(s0, s1, v_b) in zones {
+                let d = s0 - actor.s_m;
+                if s1 >= actor.s_m && d <= self.params.lookahead_m {
+                    consider(d, self.class_turn_speed(actor.class, v_b));
+                }
+            }
+        }
+        let mut dist = world.lane(actor.lane).length_m - actor.s_m;
+        for k in 1..=4 {
+            if dist > self.params.lookahead_m {
+                break;
+            }
+            let Some(next) = actor.route.lanes.get(actor.route_index + k).copied() else {
+                break;
+            };
+            let Some(lane) = world.try_lane(next) else {
+                break;
+            };
+            if let Some(zones) = self.bend_speed.get(&next) {
+                for &(s0, _, v_b) in zones {
+                    if dist + s0 <= self.params.lookahead_m {
+                        consider(dist + s0, self.class_turn_speed(actor.class, v_b));
+                    }
+                }
+            }
             dist += lane.length_m;
         }
         best
@@ -5012,6 +5115,15 @@ impl Mobility for NativeMobility {
                     self.params.turn_lateral_accel_mps2,
                     self.params.turn_curve_window_m,
                 );
+                if self.params.lane_bend_speed {
+                    let window = if self.params.turn_curve_window_m > 0.0 {
+                        self.params.turn_curve_window_m
+                    } else {
+                        DEFAULT_TURN_CURVE_WINDOW_M
+                    };
+                    self.bend_speed =
+                        bend_speeds(world, self.params.turn_lateral_accel_mps2, window);
+                }
             }
         }
         // Where a pedestrian may be placed: a pavement, never a crosswalk — putting someone
@@ -5811,6 +5923,39 @@ impl Mobility for NativeMobility {
                 accel = accel.min(actor.accel_mps2 + RELEASE_JERK_MPS3 * dt_s);
             }
             let v0_effective = v0.min(lane_view.speed_limit_mps);
+            // A standing (or, for a heavy vehicle, crawling) vehicle ahead is stopped behind
+            // at its standstill gap with the least constant deceleration that does, as a stop
+            // line is (`standing_leader_stop`): the IDM's braking scales with its `a`, and a
+            // delivery van creeping up on a stopped car reached its gap at 0.93 m/s and was
+            // stopped in one step by the advance cap below.
+            let crawl_floor = if actor.driver.max_accel_mps2 < 1.0 {
+                HEAVY_CRAWL_MPS
+            } else {
+                STANDSTILL_MPS
+            };
+            // A bend of the lane polyline ahead is braked for at the constant deceleration
+            // that reaches its turn speed at its start (`lane_bend_speed`), as a stop line
+            // is: the IDM's free term tracks a lowered desired speed only from above, by
+            // about `b / 4a` (a 6.5 m/s kink was taken at 9 m/s).
+            if along && let Some(need) = self.bend_floor(world, actor, dt_s) {
+                accel = accel.min(need);
+            }
+            if along
+                && self.params.standing_leader_stop
+                && actor.speed_mps > 0.0
+                && let Some(v) = nearest_vehicle.filter(|v| {
+                    v.speed_mps.abs() < 1e-6
+                        || (v.speed_mps.abs() < crawl_floor && actor.speed_mps > v.speed_mps)
+                })
+            {
+                let room = v.gap_m + v.speed_mps.max(0.0) * dt_s - actor.driver.min_gap_m;
+                if room > 1e-3 {
+                    let need = -(actor.speed_mps * actor.speed_mps) / (2.0 * room);
+                    if -need >= STOP_FLOOR_BIND_MPS2 {
+                        accel = accel.min(need.max(-actor.class.spec().emergency_decel_mps2));
+                    }
+                }
+            }
             // A car stopping behind one that stands still stops its standstill gap short of
             // it. The car-following model only approaches that gap asymptotically, and the
             // 0.1 s integration of the calibrated city drivers overshot it by up to 5 cm and
@@ -6870,6 +7015,57 @@ fn lanes_parallel_ahead(world: &World, actor: &Actor, from: LaneId, to: LaneId) 
         let d = v2xw_world::model::normalise_angle(a.heading_at(s) - b.heading_at(p.s_m));
         d.abs() <= LANE_CHANGE_PARALLEL_RAD
     })
+}
+
+/// The bends of every motorised through lane whose turn speed is under the lane's limit:
+/// for each interior vertex, the heading change summed over the `window_m` of polyline
+/// from it gives the radius `R = window / Σθ` of the tightest arc there, driven at
+/// `sqrt(a_lat · R)` at most ([`EngineParams::lane_bend_speed`]). Each bend holds from its
+/// first vertex to the last vertex inside the window, so a vehicle anywhere on the kink
+/// is held to the bend's speed.
+fn bend_speeds(
+    world: &World,
+    a_lat_mps2: f64,
+    window_m: f64,
+) -> BTreeMap<LaneId, Vec<(f64, f64, f64)>> {
+    let mut out = BTreeMap::new();
+    if a_lat_mps2 <= 0.0 || window_m <= 0.0 {
+        return out;
+    }
+    for lane in world.roads.lanes() {
+        if lane.kind == LaneKind::Internal || !lane.kind.is_motorised() || lane.length_m <= 0.0 {
+            continue;
+        }
+        let mut bends: Vec<(f64, f64)> = Vec::new();
+        for i in 0..lane.centreline.len().saturating_sub(2) {
+            let (a, b) = lane.segment(i);
+            let (_, c) = lane.segment(i + 1);
+            let h0 = math::atan2(b.y - a.y, b.x - a.x);
+            let h1 = math::atan2(c.y - b.y, c.x - b.x);
+            let at = lane.cumulative.get(i + 1).copied().unwrap_or(0.0);
+            bends.push((at, v2xw_world::model::normalise_angle(h1 - h0).abs()));
+        }
+        let mut zones = Vec::new();
+        for (k, &(s0, _)) in bends.iter().enumerate() {
+            let inside: Vec<&(f64, f64)> = bends[k..]
+                .iter()
+                .take_while(|b| b.0 - s0 <= window_m + 1e-9)
+                .collect();
+            let sum: f64 = inside.iter().map(|b| b.1).sum();
+            if sum <= 1e-6 {
+                continue;
+            }
+            let v = math::sqrt(a_lat_mps2 * window_m / sum);
+            if v < lane.speed_limit_mps {
+                let s1 = inside.last().map_or(s0, |b| b.0);
+                zones.push((s0, s1, v));
+            }
+        }
+        if !zones.is_empty() {
+            out.insert(lane.id, zones);
+        }
+    }
+    out
 }
 
 fn turn_speeds(world: &World, a_lat_mps2: f64, window_m: f64) -> BTreeMap<LaneId, f64> {
@@ -8703,6 +8899,180 @@ mod tests {
         }
         assert!(speed_at_5s < 1.0, "held at {speed_at_5s} m/s");
         assert!(speed_at_20s > 5.0, "released to {speed_at_20s} m/s");
+    }
+
+    /// A delivery van creeping up on a stopped car: the hardest step-to-step braking and
+    /// the gap it stands at, with and without `standing_leader_stop`.
+    fn van_behind_a_standing_car(standing_leader_stop: bool) -> (f64, f64) {
+        let world = ring(&RingParams {
+            circumference_m: 400.0,
+            segments: 4,
+            ..RingParams::default()
+        })
+        .expect("a ring");
+        let cycle = ring_cycle(&world, 0);
+        let rng = RngRegistry::new(11);
+        let params = EngineParams {
+            intersections: IntersectionMode::None,
+            lane_changes: false,
+            dynamic_rerouting: false,
+            standing_leader_stop,
+            ..EngineParams::default()
+        };
+        let mut engine = engine_on(&world, params, &rng);
+        let route: Vec<LaneId> = cycle
+            .iter()
+            .cycle()
+            .take(cycle.len() * 4)
+            .copied()
+            .collect();
+        let car = IdmPreset::Kesting2010.profile(VehicleClass::Passenger);
+        let van = IdmPreset::Kesting2010.profile(VehicleClass::Delivery);
+        let leader = engine
+            .spawn_with_route(&world, 0, VehicleClass::Passenger, car, route.clone(), 60.0)
+            .expect("leader");
+        let rear = 60.0 - VehicleClass::Passenger.spec().length_m;
+        let follower = engine
+            .spawn_with_route(
+                &world,
+                0,
+                VehicleClass::Delivery,
+                van,
+                route,
+                rear - van.min_gap_m - 1.5,
+            )
+            .expect("follower");
+        engine.set_speed(leader, 0.0).expect("speed");
+        engine.set_speed(follower, 1.5).expect("speed");
+        {
+            let mut ctx = MobilityCtx::new(0, &world, &rng);
+            engine.command(
+                &mut ctx,
+                MobilityCommand::Stop {
+                    actor: leader,
+                    until: None,
+                },
+            );
+        }
+        let mut t = 0u64;
+        let mut prev = 1.5;
+        let mut hardest = 0.0f64;
+        let mut gap = f64::INFINITY;
+        for _ in 0..150 {
+            let mut ctx = MobilityCtx::new(t, &world, &rng);
+            engine.step(&mut ctx, params.step);
+            let states = engine.longitudinal_states();
+            let l = states
+                .iter()
+                .find(|(a, _, _, _)| *a == leader)
+                .copied()
+                .expect("leader");
+            let f = states
+                .iter()
+                .find(|(a, _, _, _)| *a == follower)
+                .copied()
+                .expect("van");
+            hardest = hardest.max((prev - f.3) / 0.1);
+            prev = f.3;
+            if l.1 == f.1 {
+                gap = (l.2 - VehicleClass::Passenger.spec().length_m) - f.2;
+            }
+            t += 100 * NS_PER_MS;
+        }
+        (hardest, gap)
+    }
+
+    #[test]
+    fn a_van_behind_a_standing_car_stops_at_its_gap_without_a_one_step_stop() {
+        // Without the rule the van reaches its standstill gap still moving and the advance
+        // cap stops it in one step (the Midtown delivery van at -8.5 m/s²).
+        let (hardest_off, _) = van_behind_a_standing_car(false);
+        assert!(
+            hardest_off > 3.0,
+            "the IDM's late braking this rule replaces: {hardest_off} m/s²"
+        );
+        let (hardest, gap) = van_behind_a_standing_car(true);
+        let s0 = IdmPreset::Kesting2010
+            .profile(VehicleClass::Delivery)
+            .min_gap_m;
+        assert!(
+            hardest < 2.5,
+            "braked at {hardest} m/s² for a stop from 1.5 m/s in 1.5 m"
+        );
+        assert!(
+            gap > s0 - 0.05 && gap < s0 + 0.5,
+            "stood {gap} m behind (s0 {s0} m)"
+        );
+    }
+
+    #[test]
+    fn a_kink_in_a_through_lane_is_driven_at_its_turn_speed() {
+        // A square ring with one 45-degree vertex in the middle of every edge's lane.
+        let world = ring(&RingParams {
+            circumference_m: 800.0,
+            segments: 4,
+            points_per_segment: 2,
+            speed_limit_mps: 15.0,
+            ..RingParams::default()
+        })
+        .expect("a ring");
+        let cycle = ring_cycle(&world, 0);
+        let run = |lane_bend_speed: bool| -> (f64, f64) {
+            let rng = RngRegistry::new(13);
+            let params = EngineParams {
+                intersections: IntersectionMode::None,
+                lane_changes: false,
+                dynamic_rerouting: false,
+                turn_curve_window_m: 6.0,
+                lane_bend_speed,
+                ..EngineParams::default()
+            };
+            let mut engine = engine_on(&world, params, &rng);
+            let route: Vec<LaneId> = cycle
+                .iter()
+                .cycle()
+                .take(cycle.len() * 4)
+                .copied()
+                .collect();
+            let driver = IdmPreset::Kesting2010.profile(VehicleClass::Passenger);
+            let id = engine
+                .spawn_with_route(&world, 0, VehicleClass::Passenger, driver, route, 5.0)
+                .expect("spawned");
+            engine.set_speed(id, 15.0).expect("speed");
+            let mut t = 0u64;
+            let mut at_kink = 0.0f64;
+            let mut slowest = f64::INFINITY;
+            for _ in 0..600 {
+                let mut ctx = MobilityCtx::new(t, &world, &rng);
+                engine.step(&mut ctx, params.step);
+                let (_, lane, s, v) = engine.longitudinal_states()[0];
+                let l = world.lane(lane);
+                if l.centreline.len() == 3 && (s - l.cumulative[1]).abs() < 1.0 {
+                    at_kink = at_kink.max(v);
+                }
+                if t > 20 * NS_PER_S {
+                    slowest = slowest.min(v);
+                }
+                t += 100 * NS_PER_MS;
+            }
+            (at_kink, slowest)
+        };
+        // 0.785 rad within the 6 m window: R = 7.64 m, sqrt(5.5 · 7.64) = 6.5 m/s.
+        let cap = (DEFAULT_TURN_LATERAL_ACCEL_MPS2 * 6.0 / core::f64::consts::FRAC_PI_4).sqrt();
+        let (off, _) = run(false);
+        assert!(
+            off > 12.0,
+            "without the rule the kink is taken at {off} m/s"
+        );
+        let (on, slowest) = run(true);
+        assert!(
+            on > 0.0 && on <= cap + 0.3,
+            "the kink was taken at {on} m/s (cap {cap:.2})"
+        );
+        assert!(
+            slowest > 0.5 * cap,
+            "slowed to {slowest} m/s for a {cap:.2} m/s bend"
+        );
     }
 
     #[test]

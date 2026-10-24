@@ -692,6 +692,13 @@ whether a full-fleet misbehaviour rate is a real-world number.
      curvature limit (near Broadway) are still open.
    - **Impact:** a full-fleet false-positive count is the engine's, not yet a real-world
      rate, until the braking rate is calibrated and the polyline turns are fixed.
+   - **2026-10-24 (honest-density.md):** the braking target is calibrated against the
+     100-Car study (DOT HS 810 593: ≤ 0.28 decelerations of 0.52 g a vehicle-hour, 0.019
+     crashes and near-crashes). The node-874 snap is the standstill-gap advance cap
+     (−8.5 m/s² on a van, over its class limit), fixed behind `traffic.standing_leader_stop`;
+     lane-polyline bends get the turn-speed rule behind `traffic.lane_bend_speed`; the
+     benchmark sets both. The `constantPositionFrozen` sample is still owed (it needs the
+     full fleet past 160 s); the velocity-noise hypothesis is written there.
 2. **R-FFWIN: a window that ends where a fast-forward starts is reported late** (FB3
    `metric-window-after-ff`). **Fixed 2026-10-24 (backend wave):** `Engine::next_metric_flush`
    closes a live window where a fast-forward begins, the frozen span as a window of its
@@ -712,6 +719,11 @@ whether a full-fleet misbehaviour rate is a real-world number.
      wake scan (ff §5, part 2).
    - **Impact:** a two-day full-fleet run takes about 4.2 h awake on the owner's laptop.
      The 2×/4× fleet, LTE and Portland variants are still not run.
+   - **2026-10-24 (honest-density.md §6), profiled at quarter fleet:** the rollover is the
+     weekly pre-generation's real P-256 work on one thread (the explicit-certificate
+     re-verification, 12 % of it, is now remembered, `419b8e6b`); each fast-forward stop was
+     dominated by the backend view's O(fleet²) `ops_of`, now a key-range read (`a66aa58c`).
+     Not re-measured at full fleet.
 4. **Full-scale memory: what is left.** The target is met at 2,105 MB. The largest live
    structure is the SCMS backend's per-device state (113 MB of RA, LA and PCA records and
    batch files plus 58 MB of enrolment for 970 devices at 40 s, memden §1.1). Dropping it

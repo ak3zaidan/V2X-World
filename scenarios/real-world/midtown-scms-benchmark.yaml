@@ -170,8 +170,15 @@ actors:
 # 8-45 m/s² of lateral acceleration, and a receiver that missed three or four of their
 # BSMs judged them across a 0.4-0.5 s gap: honest SM-MBR RandomPosition reports
 # (docs/design/scms-real/testing/memory-density.md §2).
+# The same rule holds on the kinks of through lanes' polylines (`lane_bend_speed`), and a
+# driver closing on a standing vehicle brakes to stop at its standstill gap at constant
+# deceleration (`standing_leader_stop`) instead of being stopped in one step at -8.5 m/s²,
+# which an honest BSM showed as 1.10 -> 0.00 m/s in 0.1 s: an SM-MBR MaxAcceleration
+# report from every receiver (docs/design/scms-real/testing/honest-density.md).
 traffic:
   turn_curve_window_m: 6.0
+  lane_bend_speed: true
+  standing_leader_stop: true
 
 weather:
   initial: clear
