@@ -105,8 +105,14 @@ rows:
     fast-forward 10-30 min (about 4x QD's polls, ~74,000, at ~15 ms a stop). Peak 1.5-2.5 GB
     (MEM: 1,027 MB at 100 s)
   source: "final-run.md FB2; memory-density.md §1.4; QD.ff-stops"
-  measured: pending
+  measured: "rc 0. 17,381 s wall of which 2,126 s machine sleep (pmset: low-power sleep 19:16-19:52 on 1 % battery), so 15,255 s awake; CPU 24,786 s (6.9 CPU-h); peak footprint 2,105 MB, max RSS 1,299 MB. Engine wall per part: first live window 8,334 s; first fast-forward 148 s; rollover window 4,767 s; second fast-forward 2,014 s (69,076 crl-poll stops, about 29 ms each at 1,945 nodes)"
   verdict: open
+  note: >-
+    Completes for the first time. Rollover window 79 wall-s per simulated s against 35 in the
+    first window at the same node count (not profiled; the gridlocked fleet is denser): outside
+    the 20-40 min band. Second fast-forward 34 min at 29 ms a stop (QD: 3.5 ms at 327 nodes):
+    the per-stop cost is O(fleet), fast-forward.md §5 fix part 2 (event-indexed scans) is still
+    owed. Memory: inside the band, 2,105 MB against FB2's 3,109 MB.
 - id: FB3.traffic-radio
   base: FB2
   variant: FB3
@@ -118,8 +124,10 @@ rows:
     0.83-0.85, 300 m 0.28-0.29; BSM e2e mean about 12.4 ms; 240-270 verifications per node
     per second; pool 20; 40 certificates per device
   source: "final-run.md FB2 rows; J2945/1 vMinCU 0.5 (no power adaptation below it)"
-  measured: pending
-  verdict: open
+  measured: "nodes 1,618 at 150 s, 1,830 at 240 s (FB2 1,632 / 1,833); speed p50 0 from 200 s (gridlock, as FB2); CBR mean 0.076-0.088, p95 0.139-0.169; PDR 100 m 0.829-0.844, 300 m 0.280-0.292; BSM e2e mean 12.4 ms, p99 14.9-15.0; 4.85e5 verifications/s fleet-wide = 265 per node per second; unverified 5.4-6.0 %; full-certificate share 16.1-17.4 %; AoI 119-176 ms; pool 20.0; 40 certificates per device (home PCA 37,520 for 938 requests)"
+  verdict: pass
+  note: >-
+    Within FB2's bands on every row.
 - id: FB3.honest-reports
   base: FB2
   variant: FB3
@@ -132,8 +140,12 @@ rows:
     and 0-10 honest vehicles revoked by the end, decided under manual review in Tuesday's
     business day
   source: "testing/fast-forward.md §1 (R-FFBURST); memory-density.md (apex rule); final-run.md FB2.honest-reports"
-  measured: pending
-  verdict: open
+  measured: "2,083 verdicts (implausibleAcceleration 1,249, constantPositionFrozen 567, positionJump 267); 1,495 reports filed in the first window (FB2 1,935), 404 in the 60 s rollover window (about 67 per 10 s; FB2 10,357, 4,876 in 10 s); fleet 1,830 -> 1,891 across the resume (FB2 1,833 -> 1,281); 2,001 decided, 1,715 uploaded (1,371 cellular, 344 relay), 255 not filed (212 too few BSMs, 43 RSU without a pseudonym certificate), 30 unsent, 1 lost; 1,447 at the MAs (726 shared), released by the report shuffle at 86,430 s; 67 report-level false positives, 0 vehicles accused, 0 cases, 0 revocations"
+  verdict: pass
+  note: >-
+    R-FFBURST's fix holds at full scale. The first-window count is at the top of the band. The
+    MAs see the reports a day after they were filed: the CAMP-EE SCMS-765 report shuffle (10,000
+    reports or one day) never reaches 10,000 in a 2 km2 box, so its one-day timer releases them.
 - id: FB3.pki
   base: FB2
   variant: FB3
@@ -145,8 +157,12 @@ rows:
     629 home top-ups in 10 s); hourly conditional CRL polls by ~1,550 cellular devices
     (~74,000, 412 unless a provider published); a CRL issued only for a decided case
   source: "final-run.md FB2; CAMP RA sizing (scms-real-benchmark.md §5); QD.crl-topups"
-  measured: pending
-  verdict: open
+  measured: "home ECA 1,040 enrolments, home RA 1,020 butterfly requests (938 in the first 240 s, 3.9/s); fleet 2,112 devices (1,040 / 1,072); top-ups 1,800 started, 1,773 completed, 35,460 certificates, downloaded during the first fast-forward and valid from 43,200 s (pool 20 -> 39.9 at 43,210); 70,946 conditional CRL polls, all 412, 0 downloads; 2 CRL versions (the t0 lists), 0 issued, 60 RSU installs; backend 57.8 MB in the 10 s after 43,200 s (kernel steps 1,266 -> 13,854: the RA's weekly pre-generation)"
+  verdict: pass
+  note: >-
+    27 top-ups did not complete by the end (not traced). The RA request rate is the scenario
+    start's burst, 7x CAMP's national design rate of about 0.54/s in one box: a modelling
+    artefact of provisioning at entry, as scms-real-benchmark.md §5 already says.
 - id: FB3.privacy
   base: FB2
   variant: FB3
@@ -157,5 +173,23 @@ rows:
     certificate is valid to 46,800 s and CERTCHG needs 5 min and 2 km); linkability
     insufficient or 0 of few changes
   source: "testing/fast-forward.md §3; J2945/1 CERTCHG"
-  measured: pending
+  measured: "pseudonym_change_rate 0 in every window; link claims 0; linkability insufficient (0 of 0); observer tracked 1,276 vehicles, 976 chains"
+  verdict: pass
+  note: >-
+    As fast-forward.md §3: no CERTCHG condition is met in 60 s of gridlock and the old
+    certificate is valid to 46,800 s, inside the frozen window. A privacy number needs a live
+    window that spans a change (open, scenario design).
+- id: FB3.metric-window-after-ff
+  base: FB3
+  variant: FB3
+  area: metrics
+  measure: the metric sample that closes the last live window before a fast-forward
+  expect: "each 10 s live window reported at its own end (240 s, 43,230 s) with rates over 10 s"
+  source: "time.metric_period_s 10; testing/fast-forward.md §2 (the pause is not observed time)"
+  measured: "no sample at 240 s or 43,230 s: the 230-240 s window is reported at 43,170 s and 43,220-43,230 s at 172,800 s, with per-second rates divided by the frozen time (verify_rate 115.7/s = 4.97 M verifications over 42,940 s, against 4.85e5/s live) and CBR 0; QD shows the same (its 50-60 s window is reported at 43,190 s)"
   verdict: open
+  note: >-
+    R-FFWIN: the window that ends where a fast-forward starts is flushed only at the next
+    live step, and the providers that divide by elapsed time count the frozen hours.
+    Counts are right; rates, CBR and per-second loads in those two samples are not. Read
+    the full-scale tables from the other windows. Not fixed here (no build budget left).

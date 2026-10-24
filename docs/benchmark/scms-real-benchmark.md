@@ -6,7 +6,7 @@ only. It is the baseline an attack study is compared against. Every number below
 run it came from (§1.3), and each one is compared with a published or literature value
 where one exists. A value that looks implausible is flagged and was investigated (§9).
 
-**Status (2026-10-23).** §00 has the full-scale run after fix wave 3: both live windows complete, stopped in the second fast-forward. **Status (2026-10-22).** §0 has the full-scale run on current code. It was stopped by the
+**Status (2026-10-23, evening).** §000 has the end-of-run report: the full-scale file ran to 172,800 s on `fe3757b9` (after finalize 4). **Status (2026-10-23).** §00 has the full-scale run after fix wave 3: both live windows complete, stopped in the second fast-forward. **Status (2026-10-22).** §0 has the full-scale run on current code. It was stopped by the
 memory cap at about 155 simulated seconds; its complete metric windows and a complete 40 s
 run are reported there. §1–§10 are the 2026-10-18 report, unchanged.
 
@@ -25,6 +25,93 @@ their commands and the cost model that bounds them).
 pedestrians, the reports fill a quarter of the channel's airtime, and the MAs revoked 10
 honest devices in two days. Until it is fixed, no misbehaviour, airtime or revocation
 number from a scenario with VRU handsets is a real-world number.
+
+## 000. The full-scale run to the end on main `fe3757b9` (2026-10-23, after finalize 4)
+
+**Status.** Complete, rc 0. The file as committed (full fleet, 172,800 s, seed
+`0xBE7C_0001`) ran on an opt-level-2 build of `fe3757b9`, with 4 threads, a 3,500 MB cap and
+`--checkpoint-every 1h`. Nothing else heavy ran on the machine. The expectations were
+written before the run: `crates/v2xw-engine/tests/expectations/scms-full-bench.yaml`;
+method and verdicts are in `docs/design/scms-real/testing/full-bench.md`. QD is the
+quarter file run end to end on the same binary.
+
+**Run cost.**
+
+| | QD (quarter) | FB3 (full) |
+|---|---|---|
+| Wall | 189 s | 15,255 s awake (17,381 s, of which 2,126 s machine sleep) |
+| CPU (user + sys) | 280 s | 24,786 s (6.9 CPU-h) |
+| Peak footprint | 227 MB | **2,105 MB** (FB2: 3,109 MB, stopped at 47,340 s) |
+| First live window | — | 8,334 s for 240 s (35 wall-s per simulated s) |
+| First fast-forward | — | 148 s |
+| Rollover window | — | 4,767 s for 60 s (79 wall-s per simulated s; not profiled) |
+| Second fast-forward | about 1 s | 2,014 s: 69,076 stops, all hourly CRL polls, about 29 ms each |
+| Fast-forward stops | 11,393 | 69,130 (R-FFSLOW's dense stepping is gone, testing/full-bench.md §2) |
+
+**Every metric** (10 s windows; FB3's first window is 130–240 s, its rollover window
+43,170–43,230 s; QD's are 40–60 s and 43,185–43,215 s):
+
+| Quantity | QD live 1 / rollover | FB3 live 1 | FB3 rollover |
+|---|---|---|---|
+| Nodes (with 30 RSUs) | 327 | 1,618 at 150 s → 1,830 at 240 s | 1,830 → 1,891 → 1,945 (kept across the resume; FB2 fell to 1,281) |
+| Speed mean / p50 | 4.11 / 3.71 m/s; 4.22 | 2.84 → 1.86 m/s; p50 0 from 200 s (gridlock) | 1.48 → 1.38 m/s; p50 0 |
+| CBR ch 172 mean / p95 | 0.010 / 0.026; 0.016 / 0.040 | 0.076–0.088 / 0.14–0.17 | 0.072–0.085 / 0.14–0.18 |
+| PDR within 100 m / 300 m | 0.858 / 0.300; 0.908 / 0.321 | 0.829–0.844 / 0.280–0.292 | 0.835–0.845 / 0.287–0.295 |
+| Loss causes (whole run) | below sensitivity 99.1 % | below sensitivity 96.8 %, hidden terminal 2.6 %, half-duplex 0.43 %, collision 0.06 %, fading 0.03 % | — |
+| BSM e2e mean / p99 | 12.39 / 14.89 ms | 12.39–12.44 / 14.94–14.97 ms | 12.42–12.48 / 14.97–15.07 ms |
+| PSM e2e mean | 3.76 ms | 3.88 ms | — |
+| Verifications per node per second | ~33 | 245 (150 s) → 265 (230 s); wait p99 0.28–0.29 ms | 276–279; wait p99 0.40–0.52 ms |
+| Unverified share | 3.9 %; 2.4 % | 5.4–6.0 % | 6.8–7.1 % |
+| Full-certificate share | 20.6 %; 17.4 % | 16.1–17.4 % | 17.5–18.3 % |
+| AoI (100 m) | 79.9 ms; 74.3 | 119–176 ms | 164–195 ms |
+| Pseudonym pool | 20; 39.7 | 20.0 | 20 → **39.9 at 43,210 s** (week 615 valid from the boundary) |
+| Pseudonym changes / linkability | 0 / insufficient | 0 / insufficient | 0 / insufficient (no CERTCHG in 60 s of gridlock; the old week is valid to 46,800 s) |
+| `ped_wait` mean / p99 | 0.63 / 8.2 s | 0.69–1.23 / 7.9–38 s | 0.82–1.24 / 11–32 s |
+| Teleports / removals / jams | 0 | 0 | 0 |
+
+The windows that end where a fast-forward starts (230–240 s, 43,220–43,230 s) are reported
+at the next live step with their rates divided over the frozen hours (`verify_rate`
+115.7/s, CBR 0). That is R-FFWIN (open); those two samples are left out above.
+
+**Detection outcomes at full density (honest traffic only).**
+- Detector verdicts: 2,083 in 300 s of live traffic: implausibleAcceleration 1,249,
+  constantPositionFrozen 567, positionJump 267. QD had 114.
+- Reports: 2,001 decided. 1,715 were uploaded (1,371 cellular, 344 relay) and 255 were not
+  filed (212 with too few BSMs on hand, 43 RSUs holding no pseudonym certificate); 30
+  unsent, 1 lost. 1,447 real SM-MBR reached the MAs, 726 of them shared between providers.
+  268 uploads never reached an MA (not traced).
+- Report timing: 1,495 in the first window and 404 in the rollover window, about 67 per
+  10 s. There is no resume burst; FB2 had 4,876 in 10 s.
+- **The MAs received the reports at 86,430 s, one day after the first.** The report shuffle
+  (CAMP-EE SCMS-765: 10,000 reports or one day) never fills in this box.
+- Outcome: 67 report-level false positives, **0 vehicles accused, 0 cases, 0
+  revocations**, 0 CRL entries. FB2's 71 honest cases were R-FFBURST artefacts.
+- Scaling: honest report volume is super-linear in density. The fleet is 6.3× QD's and the
+  live time 3.3×, but there are 40× the reports. Standing vehicles trip
+  constantPositionFrozen, and each sender has more neighbours to judge it.
+
+**Backend load per entity against CAMP's sizing.** CAMP sizes a national deployment
+([CAMP122] §6.3; 04 §4.1: one provisioning request per vehicle life, then one `.info` and
+one batch file a week). So the comparison is per device.
+
+| Entity | FB3 (48 h, 2,112 devices; home provider 1,040) | Per device | CAMP per device | Reading |
+|---|---|---|---|---|
+| ECA | 1,040 home enrolments, most in the first 240 s | 1 at entry | 1 in the vehicle's life, at the factory | Provisioning at entry is a scenario-start burst |
+| RA, provisioning | 1,020 home butterfly requests, 938 in 240 s (3.9/s) | 1 (`ra-maxReqs` 1) | 1 in life; national design rate ≈ 0.54 req/s | One 2 km² box at its start is 7× the national design rate: modelling artefact |
+| PCA | 58,460 home certificates (40 per device at entry + 20 per top-up) | 40 + 20 a week | 20 a week (`certs_per_i_period`) | As specified |
+| LA (×2) | 1,020 home chains | 1 | 1 per request | As specified |
+| RA, top-ups | 1,800 started, 1,773 completed (35,460 certificates), downloaded in the first fast-forward, valid from 43,200 s | 0.84 in 2 days | 1 batch file a week | As specified; 27 incomplete (not traced) |
+| RA, weekly pre-generation | 57.8 MB of backend traffic in the 10 s after 43,200 s (home kernel steps 1,266 → 13,854 in that minute; by its timing the weekly pre-generation, not traced) | about 27 kB per account (2,112) | `ra-maxGenDelay` 1 week | One synchronous burst at the boundary: a load peak a real RA spreads or provisions for |
+| RA, CRL polls | 70,946 conditional polls, all answered 412 (0.41/s) | about 42 in 48 h (hourly) | at least weekly | The engine's 1 h interval is an assumption inside CAMP's weekly bound (constants.md) |
+| MA (×2) | 1,447 reports, 0 cases | 0.69 | — (no CAMP sizing) | Arrivals come once a day, by the shuffle timer |
+| CRL Generator / Store | 2 versions (the t0 lists), 0 entries; 60 RSU installs | — | one-business-day CRL SLA | Nothing to revoke |
+
+**Compared with the quarter fleet.** The fleet is 6.3×, and the per-node quantities that
+grow with density all move. CBR is 7.5–8.6× (0.010 → 0.076–0.088). Verifications per node per
+second are 8× (33 → 265). AoI doubles (80 → 120–195 ms) and the unverified share rises
+(3.9 % → 5.4–7.1 %). PDR within 100 m falls by 1–7 points. BSM latency stays at 12.4 ms,
+because the channel is far below J2945/1's `vMinCU` 0.5. The cost is 81× the wall and 89×
+the CPU of QD, and 9.3× its memory. Both runs end with 0 cases and 0 revocations.
 
 ## 00. The full-scale run on main `e4004b4c` (2026-10-23, after fix wave 3)
 
