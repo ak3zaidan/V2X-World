@@ -56,6 +56,14 @@ const MOVES: &[(&str, f64)] = &[
     ("crl_broadcast_interval_s", 2.0),
     ("ma_review_s", 100.0),
     ("ma_max_open_cases", 4.0),
+    ("report_store_quota_bytes", 1_000.0),
+    ("report_daily_multiplier", 0.5),
+    ("report_decay_hour_et", 6.0),
+    ("report_weight_random_position", 2.0),
+    ("report_weight_constant_position", 3.0),
+    ("report_weight_max_speed", 4.0),
+    ("report_weight_max_acceleration", 5.0),
+    ("report_weight_brake_acceleration", 6.0),
 ];
 
 #[test]
@@ -144,6 +152,14 @@ fn the_loader_refuses_what_the_model_cannot_run() {
         (
             json!({"ma_max_open_cases": 0}),
             "security.scms.lifecycle.ma_max_open_cases",
+        ),
+        (
+            json!({"report_daily_multiplier": 1.5}),
+            "security.scms.lifecycle.report_daily_multiplier",
+        ),
+        (
+            json!({"report_decay_hour_et": 24}),
+            "security.scms.lifecycle.report_decay_hour_et",
         ),
         (
             json!({"crl_fetch_interval_s": 0.0}),

@@ -54,10 +54,12 @@ const CHANNEL_VISIBILITY: &[(&str, &[Visibility])] = &[
     ("det.observation", &[Visibility::Node]),
     ("gt.attack.action", &[Visibility::Gt]),
     ("gt.despawn", &[Visibility::Gt]),
+    ("gt.device_exposure", &[Visibility::Gt]), // as `v2xw_record::channels` declares it
     ("gt.kinematics", &[Visibility::Gt]),
     ("gt.spawn", &[Visibility::Gt]),
     ("ma.case", &[Visibility::Node]),
     ("ma.decision", &[Visibility::Node]),
+    ("ma.received", &[Visibility::Node]), // as `v2xw_record::channels` declares it
     ("ma.report", &[Visibility::Node]),
     ("mac.cbr", &[Visibility::Node]),
     ("manifest", &[Visibility::Meta]),
@@ -98,6 +100,7 @@ const CHANNEL_VISIBILITY: &[(&str, &[Visibility])] = &[
     ("pki.case", &[Visibility::Node]),
     ("pki.flow", &[Visibility::Node]),
     ("pki.knowledge", &[Visibility::NodeAndGt]),
+    ("pki.report_fate", &[Visibility::NodeAndGt]), // as `v2xw_record::channels` declares it
     ("pki.state", &[Visibility::Public]),
     ("privacy.link", &[Visibility::Node]), // as `v2xw_record::channels` declares it
     ("privacy.track", &[Visibility::Node]), // as `v2xw_record::channels` declares it

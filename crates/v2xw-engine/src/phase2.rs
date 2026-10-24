@@ -106,6 +106,8 @@ use v2xw_core::ids::{ActorId, NodeId};
 use v2xw_core::time::{Duration, SimTime};
 use v2xw_proto::net::Transport;
 use v2xw_proto::scms::mbr::{self, MbrQueue};
+
+use crate::report_records::Fate;
 use v2xw_proto::scms::run::{ScmsRun, crl_bytes};
 use v2xw_proto::stage::{FlowRun, StageId};
 use v2xw_proto::view::{BackendView, EdgeTracker};
@@ -705,6 +707,32 @@ pub struct LifecycleParams {
     /// `docs/design/scms-real/testing/oracle-final.md`); by default such a detection is
     /// counted in [`Phase2Report::reports_not_filed`] and never leaves the device.
     pub modelled_reports: bool,
+    /// The device misbehaviour-report store's policy ([SM-MBR] §2.2): quota, subtype
+    /// weights, daily multiplier and the Eastern hour it applies at.
+    pub report_store: ReportStorePolicy,
+}
+
+/// The [SM-MBR] §2.2 on-device report store's settings (`report_store_quota_bytes`,
+/// `report_daily_multiplier`, `report_decay_hour_et`, `report_weight_*`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReportStorePolicy {
+    /// The device-specific storage quota, bytes (§2.2 leaves it to the device;
+    /// ASSUMPTION [`REPORT_STORE_QUOTA_BYTES`]). 0 keeps nothing.
+    pub quota_bytes: u64,
+    /// The Eastern hour of the daily re-weighting (§2.2: 5 am).
+    pub decay_hour_et: u32,
+    /// Each subtype's `initialWeight` and the `DailyMultiplier` (§2.3.1: 1.0 and 0.9).
+    pub weights: mbr::SubtypeWeights,
+}
+
+impl Default for ReportStorePolicy {
+    fn default() -> Self {
+        ReportStorePolicy {
+            quota_bytes: REPORT_STORE_QUOTA_BYTES,
+            decay_hour_et: mbr::DECAY_HOUR_ET,
+            weights: mbr::SubtypeWeights::default(),
+        }
+    }
 }
 
 impl LifecycleParams {
@@ -799,6 +827,7 @@ impl LifecycleParams {
             clock_skew_ns: 0,
             clock_skew_share: 1.0,
             modelled_reports: false,
+            report_store: ReportStorePolicy::default(),
         };
         let map = lifecycle_map(scenario);
         for (key, value) in &map {
@@ -861,6 +890,25 @@ impl LifecycleParams {
                 "clock_skew_s" => p.clock_skew_ns = (v * 1e9).round() as i64,
                 "clock_skew_share" => p.clock_skew_share = v.clamp(0.0, 1.0),
                 "modelled_reports" => p.modelled_reports = v >= 0.5,
+                // [SM-MBR] §2.2 / §2.3.1: the device report store.
+                "report_store_quota_bytes" => {
+                    p.report_store.quota_bytes = v.round().min(1.0e12) as u64;
+                }
+                "report_daily_multiplier" => {
+                    p.report_store.weights.daily_multiplier = v.min(1.0);
+                }
+                "report_decay_hour_et" => {
+                    p.report_store.decay_hour_et = (v.round() as u32).min(23);
+                }
+                "report_weight_random_position" => p.report_store.weights.random_position = v,
+                "report_weight_constant_position" => {
+                    p.report_store.weights.constant_position = v;
+                }
+                "report_weight_max_speed" => p.report_store.weights.max_speed = v,
+                "report_weight_max_acceleration" => p.report_store.weights.max_acceleration = v,
+                "report_weight_brake_acceleration" => {
+                    p.report_store.weights.brake_acceleration = v;
+                }
                 // The revocations already on the home provider's CRL when the run
                 // starts (read by `Phase2::new`, `ScmsRun::seed_standing_crl`).
                 "crl_background_entries" => {}
@@ -1026,6 +1074,7 @@ pub fn lifecycle_param(scenario: &Scenario, key: &str) -> Option<f64> {
 pub fn lifecycle_defaults() -> Vec<(&'static str, serde_json::Value)> {
     use serde_json::json;
     let p = ScmsParams::default();
+    let st = ReportStorePolicy::default();
     let s = |d: Duration| json!(d.as_nanos() as f64 / 1e9);
     let review = match p.ma.mode {
         v2xw_proto::scms::params::MaMode::ManualReview { review } => s(review),
@@ -1059,12 +1108,43 @@ pub fn lifecycle_defaults() -> Vec<(&'static str, serde_json::Value)> {
         ("crl_broadcast_interval_s", json!(CRL_BROADCAST_INTERVAL_S)),
         ("ma_review_s", review),
         ("ma_max_open_cases", json!(p.ma.max_open_cases)),
+        ("report_store_quota_bytes", json!(st.quota_bytes)),
+        (
+            "report_daily_multiplier",
+            json!(st.weights.daily_multiplier),
+        ),
+        ("report_decay_hour_et", json!(st.decay_hour_et)),
+        (
+            "report_weight_random_position",
+            json!(st.weights.random_position),
+        ),
+        (
+            "report_weight_constant_position",
+            json!(st.weights.constant_position),
+        ),
+        ("report_weight_max_speed", json!(st.weights.max_speed)),
+        (
+            "report_weight_max_acceleration",
+            json!(st.weights.max_acceleration),
+        ),
+        (
+            "report_weight_brake_acceleration",
+            json!(st.weights.brake_acceleration),
+        ),
     ]
 }
 
 /// The lifecycle keys `security.protocol.params` accepts (and `security.scms.lifecycle`
 /// publishes, except the ETSI and governance-event keys).
-pub const LIFECYCLE_KEYS: [&str; 32] = [
+pub const LIFECYCLE_KEYS: [&str; 40] = [
+    "report_store_quota_bytes",
+    "report_daily_multiplier",
+    "report_decay_hour_et",
+    "report_weight_random_position",
+    "report_weight_constant_position",
+    "report_weight_max_speed",
+    "report_weight_max_acceleration",
+    "report_weight_brake_acceleration",
     "i_period_s",
     "cert_lifetime_s",
     "certs_per_period",
@@ -1247,6 +1327,39 @@ impl Default for ReportStore {
     }
 }
 
+impl ReportStore {
+    /// Applies the scenario's store policy (quota and re-weighting hour).
+    fn configure(&mut self, p: &ReportStorePolicy) {
+        self.0.quota = p.quota_bytes;
+        self.0.decay_hour_et = p.decay_hour_et;
+    }
+}
+
+/// A stored report taken out for an upload attempt ([`Phase2::take_outbox`]): its place
+/// in the store, so that if the upload is not confirmed it goes back as the same report
+/// ([`MbrQueue::reinsert`]) rather than as a new one at its initial weight.
+#[derive(Debug, Clone, Copy)]
+struct TakenReport {
+    weight: f64,
+    multiplier: f64,
+    seq: u64,
+    created_unix: i64,
+    size: u64,
+}
+
+/// The report records' buffers (`security.scms.report_records`): drained by the engine
+/// each backend step ([`Phase2::take_report_records`]).
+#[derive(Debug, Default)]
+struct ReportLog {
+    fates: Vec<crate::report_records::ReportFate>,
+    received: Vec<crate::report_records::MaReceived>,
+    /// Reports already logged as stored.
+    stored: BTreeSet<String>,
+    /// When each SCMS vehicle joined and left.
+    joined: BTreeMap<NodeId, SimTime>,
+    left: BTreeMap<NodeId, SimTime>,
+}
+
 /// How many of each certificate's latest signed BSMs on the air are kept, with their
 /// `generationTime`, so a report can attach the very BSMs its reporter judged
 /// ([`judged_bsms`]). Four: a receiver judges a BSM within its verification time of the
@@ -1285,6 +1398,8 @@ struct NodeSec {
     access: Option<AccessKind>,
     /// Reports waiting for connectivity, with the instant each was detected.
     outbox: ReportStore,
+    /// Reports taken from `outbox` for an upload not yet confirmed, by report id.
+    taken: BTreeMap<String, TakenReport>,
     reports_uploaded: u32,
     crl_version: u32,
     /// The CRL entries this vehicle holds, so a list arriving in several frames, or by two
@@ -1916,6 +2031,8 @@ pub struct Phase2 {
     /// The PKI view's publisher (WP-E1), when `security.scms.pki_view` is on and an SCMS
     /// runs: what each record has already carried.
     pki: Option<v2xw_proto::scms::pki_view::PkiTracker>,
+    /// The report records (`security.scms.report_records`), when on.
+    report_log: Option<ReportLog>,
     /// Views published, for the knowledge cadence.
     views: u32,
     /// Ground truth for the run report only, never read by a decision: each attacker's
@@ -2679,6 +2796,7 @@ impl Phase2 {
             peer_trackers: Vec::new(),
             next_view: 0,
             pki: pki_view_of(scenario).then(v2xw_proto::scms::pki_view::PkiTracker::default),
+            report_log: report_records_of(scenario).then(ReportLog::default),
             views: 0,
             compromised_specs,
             compromised: BTreeMap::new(),
@@ -3303,6 +3421,9 @@ impl Phase2 {
         });
         let kind = self.access.assign(rng, node, relay);
         let device = device_of(node);
+        if let Some(log) = self.report_log.as_mut() {
+            log.joined.entry(node).or_insert(now);
+        }
         let start = self.params.period_at(now);
         if let Some(etsi) = self.etsi.as_mut() {
             // Authorization tickets: `certs_per_period` a week — the C2C-CC profile's 20
@@ -3613,6 +3734,20 @@ impl Phase2 {
             // Its unsent reports leave with it; they are counted as unsent here because
             // the vehicle took them out of the run.
             self.report.reports_lost += n.outbox.0.len() as u64;
+            if self.report_log.is_some() {
+                let left: Vec<_> = n
+                    .outbox
+                    .0
+                    .iter()
+                    .map(|e| (e.item.0.clone(), Some(e.weight)))
+                    .collect();
+                for (r, w) in left {
+                    self.log_fate(now, node, &r, Fate::LeftWithDevice, w);
+                }
+            }
+        }
+        if let Some(log) = self.report_log.as_mut() {
+            log.left.insert(node, now);
         }
         // Its own detector suite and the rate-limit stamps of what it checked go too: a
         // node id is never reused, and nothing but the node's own receptions reads them.
@@ -4074,17 +4209,292 @@ impl Phase2 {
 
     /// Stores a report the vehicle could not upload yet in its report store; over the
     /// quota the store deletes its lowest-weight report (possibly this one).
-    pub fn hold_report(&mut self, node: NodeId, report: MisbehaviourReport, detected_at: SimTime) {
+    ///
+    /// A report [`Phase2::take_outbox`] took out for an upload that did not happen goes
+    /// back as the same stored report, with the weight and order it had ([SM-MBR] §2.2:
+    /// a report leaves the store only after its TCP-confirmed upload). A new report is
+    /// weighed by its subtypes (`report_weight_*`).
+    pub fn hold_report(
+        &mut self,
+        node: NodeId,
+        report: MisbehaviourReport,
+        detected_at: SimTime,
+        now: SimTime,
+    ) {
         let unix = v2xw_core::time::WallClock::new(self.params.scms.pdu.t0_unix_s)
             .unix_seconds_at(detected_at);
-        if let Some(n) = self.nodes.get_mut(&node) {
-            let _evicted = n.outbox.0.push(
+        let policy = self.params.report_store;
+        let weighting = policy.weights.weighting(&report_subtypes(&report));
+        let first = self
+            .report_log
+            .as_ref()
+            .is_some_and(|l| !l.stored.contains(&report.report_id));
+        let fresh_copy = first.then(|| report.clone());
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return;
+        };
+        n.outbox.configure(&policy);
+        let evicted = match n.taken.remove(&report.report_id) {
+            Some(t) => n.outbox.0.reinsert(mbr::QueuedReport {
+                weight: t.weight,
+                multiplier: t.multiplier,
+                seq: t.seq,
+                created_unix: t.created_unix,
+                size: t.size,
+                item: (report, detected_at),
+            }),
+            None => n.outbox.0.push_entry(
                 (report, detected_at),
                 u64::from(report_bytes()),
-                mbr::Weighting::default(),
+                weighting,
                 unix,
-            );
+            ),
+        };
+        if self.report_log.is_none() {
+            return;
         }
+        if let Some(r) = fresh_copy {
+            self.log_fate(now, node, &r, Fate::Stored, Some(weighting.initial));
+        }
+        for e in evicted {
+            let fate = if e.weight < weighting_of(&policy, &e.item.0) * (1.0 - 1e-9) {
+                Fate::DecayedOut
+            } else {
+                Fate::EvictedQuota
+            };
+            self.log_fate(now, node, &e.item.0, fate, Some(e.weight));
+        }
+    }
+
+    /// A report the vehicle has just generated enters its store before anything is
+    /// uploaded ([SM-MBR] §2.2: each report is stored when generated and uploaded from
+    /// the store in weight order, and a new report over the quota may itself be the one
+    /// deleted). Returns whether it survived the quota; if so it is taken straight out
+    /// for its upload attempt, keeping its place for [`Phase2::hold_report`]. A report
+    /// already taken from the store (a retry) passes through. Before this a connected
+    /// vehicle's report bypassed the store, so a full or zero quota deleted nothing it
+    /// sent at once.
+    pub fn admit_report(
+        &mut self,
+        node: NodeId,
+        report: &MisbehaviourReport,
+        detected_at: SimTime,
+        now: SimTime,
+    ) -> bool {
+        let policy = self.params.report_store;
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return true;
+        };
+        if n.taken.contains_key(&report.report_id) {
+            return true;
+        }
+        let unix = v2xw_core::time::WallClock::new(self.params.scms.pdu.t0_unix_s)
+            .unix_seconds_at(detected_at);
+        let weighting = policy.weights.weighting(&report_subtypes(report));
+        n.outbox.configure(&policy);
+        let evicted = n.outbox.0.push_entry(
+            (report.clone(), detected_at),
+            u64::from(report_bytes()),
+            weighting,
+            unix,
+        );
+        let seq = n.outbox.0.last_seq();
+        let kept = n.outbox.0.take_entry(seq).map(|e| {
+            n.taken.insert(
+                report.report_id.clone(),
+                TakenReport {
+                    weight: e.weight,
+                    multiplier: e.multiplier,
+                    seq: e.seq,
+                    created_unix: e.created_unix,
+                    size: e.size,
+                },
+            );
+        });
+        if self.report_log.is_some() {
+            self.log_fate(now, node, report, Fate::Stored, Some(weighting.initial));
+            for e in evicted {
+                let fate = if e.weight < weighting_of(&policy, &e.item.0) * (1.0 - 1e-9) {
+                    Fate::DecayedOut
+                } else {
+                    Fate::EvictedQuota
+                };
+                self.log_fate(now, node, &e.item.0, fate, Some(e.weight));
+            }
+        }
+        kept.is_some()
+    }
+
+    /// Logs one step of a report's life (`pki.report_fate`) when the records are on;
+    /// a report's first step is always `stored`.
+    fn log_fate(
+        &mut self,
+        t: SimTime,
+        node: NodeId,
+        r: &MisbehaviourReport,
+        fate: Fate,
+        weight: Option<f64>,
+    ) {
+        if self.report_log.is_none() {
+            return;
+        }
+        let subject_node = self.resolve_subject(&r.subject_cert_digest).map(|x| x.0);
+        let subject_attacker = subject_node.is_some_and(|s| self.attackers.contains_key(&s));
+        let Some(log) = self.report_log.as_mut() else {
+            return;
+        };
+        let truth = crate::report_records::FateTruth {
+            subject_node,
+            subject_attacker,
+        };
+        if fate != Fate::Stored && log.stored.insert(r.report_id.clone()) {
+            log.fates.push(crate::report_records::ReportFate {
+                t,
+                report_id: r.report_id.clone(),
+                reporter: Some(node),
+                fate: Fate::Stored,
+                weight: None,
+                subject: r.subject_cert_digest.clone(),
+                truth: truth.clone(),
+            });
+        }
+        if fate == Fate::Stored && !log.stored.insert(r.report_id.clone()) {
+            return;
+        }
+        log.fates.push(crate::report_records::ReportFate {
+            t,
+            report_id: r.report_id.clone(),
+            reporter: Some(node),
+            fate,
+            weight: weight.map(v2xw_threat::records::q),
+            subject: r.subject_cert_digest.clone(),
+            truth,
+        });
+    }
+
+    /// A report reached provider `k`'s MA at `t` (`pki.report_fate` `delivered`), and
+    /// what that MA read from it (`ma.received`). `subject` is the accused device: the
+    /// MA reads its certificate's issuer and, through the LAs, its link token, never
+    /// its node id.
+    fn log_received(
+        &mut self,
+        k: usize,
+        t: SimTime,
+        r: &MisbehaviourReport,
+        subject: NodeId,
+        set_aside: Option<&str>,
+    ) {
+        if let Some(reporter) = r.reporter {
+            self.log_fate(t, reporter, r, Fate::Delivered, None);
+        }
+        let issuer = format!("provider-{}", self.provider_of_device(device_of(subject)));
+        let la_link = crate::report_records::la_link(subject, self.params.scms.master_seed);
+        let Some(log) = self.report_log.as_mut() else {
+            return;
+        };
+        log.received.push(crate::report_records::MaReceived {
+            t,
+            report_id: r.report_id.clone(),
+            ma: k as u32,
+            reporter_cert: r.reporter_cert_digest.clone(),
+            subject_cert: r.subject_cert_digest.clone(),
+            subtypes: r.reason_codes.clone(),
+            generation_time: r.generation_time,
+            evidence_start: r.st_tstart,
+            evidence_end: r.st_tend,
+            excess: v2xw_threat::records::q(r.detector_score),
+            pos_accuracy_m: v2xw_threat::records::q(r.subject_pos_confidence),
+            secmark_phase_ms: ((r.st_tend / 1_000_000) % 50) as u32,
+            issuer,
+            la_link,
+            set_aside: set_aside.map(str::to_string),
+        });
+    }
+
+    /// A report taken from `node`'s store left it for good (sent, or refused for ever):
+    /// it will not be put back.
+    pub fn forget_taken(&mut self, node: NodeId, report_id: &str) {
+        if let Some(n) = self.nodes.get_mut(&node) {
+            n.taken.remove(report_id);
+        }
+    }
+
+    /// Whether `security.scms.report_records` is on.
+    #[must_use]
+    pub fn records_reports(&self) -> bool {
+        self.report_log.is_some()
+    }
+
+    /// A report left `node` on an access link at `now` (`pki.report_fate` `uploaded`).
+    pub fn note_report_uploaded(&mut self, node: NodeId, r: &MisbehaviourReport, now: SimTime) {
+        if let Some(n) = self.nodes.get_mut(&node) {
+            n.taken.remove(&r.report_id);
+        }
+        self.log_fate(now, node, r, Fate::Uploaded, None);
+    }
+
+    /// The report records written since the last call: fates and MA receptions.
+    pub fn take_report_records(
+        &mut self,
+    ) -> (
+        Vec<crate::report_records::ReportFate>,
+        Vec<crate::report_records::MaReceived>,
+    ) {
+        self.report_log.as_mut().map_or_else(Default::default, |l| {
+            (
+                std::mem::take(&mut l.fates),
+                std::mem::take(&mut l.received),
+            )
+        })
+    }
+
+    /// At the run's end: every report still stored (`held_at_end`), then the remaining
+    /// records and each vehicle's exposure (`gt.device_exposure`).
+    pub fn final_report_records(
+        &mut self,
+        now: SimTime,
+    ) -> (
+        Vec<crate::report_records::ReportFate>,
+        Vec<crate::report_records::MaReceived>,
+        Vec<crate::report_records::DeviceExposure>,
+    ) {
+        if self.report_log.is_none() {
+            return Default::default();
+        }
+        let held: Vec<(NodeId, MisbehaviourReport, f64)> = self
+            .nodes
+            .iter()
+            .flat_map(|(id, n)| {
+                n.outbox
+                    .0
+                    .iter()
+                    .map(move |e| (*id, e.item.0.clone(), e.weight))
+            })
+            .collect();
+        for (node, r, w) in held {
+            self.log_fate(now, node, &r, Fate::HeldAtEnd, Some(w));
+        }
+        let seed = self.params.scms.master_seed;
+        let (fates, received) = self.take_report_records();
+        let log = self.report_log.as_ref().expect("on");
+        let mut exposure = Vec::new();
+        for (node, joined) in &log.joined {
+            if self.rsu_spec_of(*node).is_some() {
+                continue;
+            }
+            let attacker = self.attackers.get(node);
+            exposure.push(crate::report_records::DeviceExposure {
+                t: now,
+                node: *node,
+                la_link: crate::report_records::la_link(*node, seed),
+                joined: *joined,
+                left: log.left.get(node).copied().unwrap_or(now),
+                attacker: attacker.is_some(),
+                attack_start: attacker
+                    .map(|a| self.first_falsified.get(node).copied().unwrap_or(a.from)),
+            });
+        }
+        (fates, received, exposure)
     }
 
     /// Whether a vehicle must keep a report it would sign at `at` in its store: it is a
@@ -4126,10 +4536,33 @@ impl Phase2 {
     ) -> Vec<(MisbehaviourReport, SimTime)> {
         let unix =
             v2xw_core::time::WallClock::new(self.params.scms.pdu.t0_unix_s).unix_seconds_at(now);
+        let policy = self.params.report_store;
         let Some(n) = self.nodes.get_mut(&node) else {
             return Vec::new();
         };
-        drain_upload_order(&mut n.outbox.0, unix)
+        n.outbox.configure(&policy);
+        n.outbox.0.decay_to(unix);
+        let expired = n.outbox.0.expire_entries(unix);
+        let taken = n.outbox.0.take_upload_order(unix);
+        n.taken.clear();
+        let mut out = Vec::with_capacity(taken.len());
+        for e in taken {
+            n.taken.insert(
+                e.item.0.report_id.clone(),
+                TakenReport {
+                    weight: e.weight,
+                    multiplier: e.multiplier,
+                    seq: e.seq,
+                    created_unix: e.created_unix,
+                    size: e.size,
+                },
+            );
+            out.push(e.item);
+        }
+        for e in expired {
+            self.log_fate(now, node, &e.item.0, Fate::Expired, Some(e.weight));
+        }
+        out
     }
 
     /// The reports `node` holds, in upload order, with their current weights.
@@ -5617,6 +6050,16 @@ impl Phase2 {
                 subject: r.subject_cert_digest.clone(),
                 detector: r.leading_reason().map(str::to_string),
             });
+            if self.report_log.is_some() {
+                let set_aside = if r.reason_codes.iter().all(|c| c == SIGNATURE_VERIFICATION) {
+                    Some("evidence-unverifiable")
+                } else if !evidence_time_plausible(&r) {
+                    Some("evidence-time-implausible")
+                } else {
+                    None
+                };
+                self.log_received(k, t, &r, f.subject, set_aside);
+            }
             // Evidence the authority cannot verify is not evidence against anyone. A report
             // whose only reason is that the accused's signature failed carries messages
             // the accused's key never signed: anyone can put a certificate's digest on a
@@ -7234,6 +7677,18 @@ pub fn home_chain_file_of(scenario: &Scenario) -> Result<bool> {
     }
 }
 
+/// Whether the scenario records report fates, MA receptions and device exposure
+/// (`security.scms.report_records`): off unless set to `true`.
+#[must_use]
+pub fn report_records_of(scenario: &Scenario) -> bool {
+    scenario
+        .security
+        .scms
+        .as_ref()
+        .and_then(|s| s.report_records)
+        .unwrap_or(false)
+}
+
 /// Whether the scenario publishes the PKI view (`security.scms.pki_view`, WP-E1):
 /// on unless set to `false`.
 #[must_use]
@@ -7764,6 +8219,7 @@ fn digest_key(digest: &v2xw_msg::sec_types::HashedId8) -> [u8; 8] {
 /// Empties a report store at `now_unix` in its upload order ([SM-MBR] §2.2): first the
 /// 05:00-Eastern decays since the last look and the deletion of week-old reports, then
 /// highest weight first, newer first on ties.
+#[cfg(test)]
 fn drain_upload_order<T>(q: &mut MbrQueue<T>, now_unix: i64) -> Vec<T> {
     q.decay_to(now_unix);
     q.expire(now_unix);
@@ -7856,6 +8312,20 @@ fn us_subtype(check: &str, us: Option<&v2xw_threat::us_mbr::UsMbrParams>) -> Opt
         // this host does not collect: the (default-off) distance check stays unmapped.
         _ => None,
     }
+}
+
+/// The SM-MBR subtypes a report's fired checks file under (thresholds aside): what its
+/// store weight is read from.
+fn report_subtypes(r: &MisbehaviourReport) -> Vec<mbr::Subtype> {
+    r.reason_codes
+        .iter()
+        .filter_map(|c| us_subtype(c, None))
+        .collect()
+}
+
+/// A report's initial store weight under `policy`.
+fn weighting_of(policy: &ReportStorePolicy, r: &MisbehaviourReport) -> f64 {
+    policy.weights.weighting(&report_subtypes(r)).initial
 }
 
 fn decode_hex8(s: &str) -> Option<[u8; 8]> {

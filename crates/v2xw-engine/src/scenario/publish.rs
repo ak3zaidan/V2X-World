@@ -320,6 +320,32 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ),
     ("security.scms.lifecycle.max_download_polls", "polls"),
     ("security.scms.lifecycle.ma_max_open_cases", "cases"),
+    ("security.scms.lifecycle.report_store_quota_bytes", "B"),
+    (
+        "security.scms.lifecycle.report_daily_multiplier",
+        "× per day",
+    ),
+    (
+        "security.scms.lifecycle.report_decay_hour_et",
+        "h (Eastern)",
+    ),
+    (
+        "security.scms.lifecycle.report_weight_random_position",
+        "weight",
+    ),
+    (
+        "security.scms.lifecycle.report_weight_constant_position",
+        "weight",
+    ),
+    ("security.scms.lifecycle.report_weight_max_speed", "weight"),
+    (
+        "security.scms.lifecycle.report_weight_max_acceleration",
+        "weight",
+    ),
+    (
+        "security.scms.lifecycle.report_weight_brake_acceleration",
+        "weight",
+    ),
 ];
 
 /// The numeric leaves that genuinely have no unit, declared rather than left blank.

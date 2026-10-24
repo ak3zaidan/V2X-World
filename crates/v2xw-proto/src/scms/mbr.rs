@@ -798,6 +798,75 @@ impl Default for Weighting {
     }
 }
 
+/// The [SM-MBR] §2.3.1 `initialWeight` of each PSID-0x20 subtype and the
+/// `DailyMultiplier` applied at the daily re-weighting. Every subtype of v1.0 defaults to
+/// 1.0 and 0.9 (§2.3.1.2.2–§2.3.1.4). The specification gives each subtype its own
+/// multiplier; this store applies one multiplier to every subtype (all are 0.9 in v1.0),
+/// so a sweep moves them together.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SubtypeWeights {
+    /// 1VInconsistent / RandomPosition, §2.3.1.2.2.
+    pub random_position: f64,
+    /// 1VInconsistent / ConstantPosition, §2.3.1.2.3.
+    pub constant_position: f64,
+    /// Implausible / MaxSpeed, §2.3.1.3.1.
+    pub max_speed: f64,
+    /// Implausible / MaxAcceleration, §2.3.1.3.2.
+    pub max_acceleration: f64,
+    /// Implausible / BrakeAcceleration, §2.3.1.3.4.
+    pub brake_acceleration: f64,
+    /// ObsImplausible / Distance, §2.3.1.4 (the check is off by default).
+    pub obs_distance: f64,
+    /// `DailyMultiplier`, every subtype.
+    pub daily_multiplier: f64,
+}
+
+impl Default for SubtypeWeights {
+    fn default() -> Self {
+        SubtypeWeights {
+            random_position: 1.0,
+            constant_position: 1.0,
+            max_speed: 1.0,
+            max_acceleration: 1.0,
+            brake_acceleration: 1.0,
+            obs_distance: 1.0,
+            daily_multiplier: 0.9,
+        }
+    }
+}
+
+impl SubtypeWeights {
+    /// The `initialWeight` of one subtype.
+    #[must_use]
+    pub fn initial(&self, s: Subtype) -> f64 {
+        match s {
+            Subtype::RandomPosition { .. } => self.random_position,
+            Subtype::ConstantPosition => self.constant_position,
+            Subtype::MaxSpeed { .. } => self.max_speed,
+            Subtype::MaxAcceleration { .. } => self.max_acceleration,
+            Subtype::BrakeAcceleration => self.brake_acceleration,
+            Subtype::ObsDistance { .. } => self.obs_distance,
+        }
+    }
+
+    /// The weighting of a report listing `subtypes`. [SM-MBR] §1 lets one report carry
+    /// several subtypes of one type, and §2.2 assigns "a (subtype-specific) weight"
+    /// without saying which subtype's: ASSUMPTION, the largest, so evidence of several
+    /// misbehaviours is never stored below any one of them. No subtype: 1.0.
+    #[must_use]
+    pub fn weighting(&self, subtypes: &[Subtype]) -> Weighting {
+        let initial = subtypes
+            .iter()
+            .map(|s| self.initial(*s))
+            .reduce(f64::max)
+            .unwrap_or(1.0);
+        Weighting {
+            initial,
+            daily_multiplier: self.daily_multiplier,
+        }
+    }
+}
+
 /// One stored report.
 #[derive(Debug, Clone)]
 pub struct QueuedReport<T> {
@@ -823,6 +892,8 @@ pub struct MbrQueue<T> {
     /// Reports older than this (seconds) may be deleted unsent (03 §8.1; [CAMP122]
     /// §5.2.8.4 step 5: one week).
     pub max_age_s: i64,
+    /// The Eastern hour of the daily re-weighting ([SM-MBR] §2.2: 5 am).
+    pub decay_hour_et: u32,
     entries: Vec<QueuedReport<T>>,
     seq: u64,
     decayed_to: Option<i64>,
@@ -842,6 +913,7 @@ impl<T> MbrQueue<T> {
         MbrQueue {
             quota,
             max_age_s: 7 * 86_400,
+            decay_hour_et: DECAY_HOUR_ET,
             entries: Vec::new(),
             seq: 0,
             decayed_to: None,
@@ -877,7 +949,8 @@ impl<T> MbrQueue<T> {
     pub fn decay_to(&mut self, now_unix: i64) {
         let from = self.decayed_to.unwrap_or(now_unix);
         if now_unix > from {
-            let n = crate::scms::calendar::eastern_times_between(from, now_unix, DECAY_HOUR_ET, 0);
+            let n =
+                crate::scms::calendar::eastern_times_between(from, now_unix, self.decay_hour_et, 0);
             if n > 0 {
                 for e in &mut self.entries {
                     e.weight *= e.multiplier.powi(n as i32);
@@ -890,16 +963,83 @@ impl<T> MbrQueue<T> {
     /// Stores a report; then, while over quota, deletes the lowest weight (older first
     /// on ties) — possibly the new report itself. Returns the deleted reports.
     pub fn push(&mut self, item: T, size: u64, w: Weighting, now_unix: i64) -> Vec<T> {
+        self.push_entry(item, size, w, now_unix)
+            .into_iter()
+            .map(|e| e.item)
+            .collect()
+    }
+
+    /// [`Self::push`], returning the deleted reports whole (with their weights).
+    ///
+    /// A report generated at `now_unix` before an instant the store has already been
+    /// re-weighted to (it waited before being stored, as for a signer) takes the daily
+    /// multiplications it lived through: §2.2 weighs a report from its generation.
+    pub fn push_entry(
+        &mut self,
+        item: T,
+        size: u64,
+        w: Weighting,
+        now_unix: i64,
+    ) -> Vec<QueuedReport<T>> {
         self.decay_to(now_unix);
+        let mut weight = w.initial;
+        if let Some(d) = self.decayed_to
+            && d > now_unix
+        {
+            let n =
+                crate::scms::calendar::eastern_times_between(now_unix, d, self.decay_hour_et, 0);
+            weight *= w.daily_multiplier.powi(n as i32);
+        }
         self.seq += 1;
         self.entries.push(QueuedReport {
-            weight: w.initial,
+            weight,
             multiplier: w.daily_multiplier,
             seq: self.seq,
             created_unix: now_unix,
             size,
             item,
         });
+        self.evict_over_quota()
+    }
+
+    /// Puts back a report taken by [`Self::take_upload_order`] whose upload was not
+    /// confirmed, with the weight, order and age it had: it is the same stored report,
+    /// not a new one ([SM-MBR] §2.2 deletes a report only after its TCP-confirmed
+    /// upload). Returns what the quota then deletes.
+    pub fn reinsert(&mut self, e: QueuedReport<T>) -> Vec<QueuedReport<T>> {
+        self.seq = self.seq.max(e.seq);
+        self.entries.push(e);
+        self.evict_over_quota()
+    }
+
+    /// Takes every stored report out in upload order (highest weight first, newer first
+    /// on ties), after the re-weightings up to `now_unix`. The caller puts back with
+    /// [`Self::reinsert`] each one whose upload it could not confirm.
+    pub fn take_upload_order(&mut self, now_unix: i64) -> Vec<QueuedReport<T>> {
+        self.decay_to(now_unix);
+        let mut v: Vec<_> = self.entries.drain(..).collect();
+        v.sort_by(|a, b| {
+            b.weight
+                .partial_cmp(&a.weight)
+                .unwrap_or(core::cmp::Ordering::Equal)
+                .then(b.seq.cmp(&a.seq))
+        });
+        v
+    }
+
+    /// Deletes unsent reports older than [`Self::max_age_s`], returning them whole.
+    pub fn expire_entries(&mut self, now_unix: i64) -> Vec<QueuedReport<T>> {
+        let max = self.max_age_s;
+        let (old, keep): (Vec<_>, Vec<_>) = self
+            .entries
+            .drain(..)
+            .partition(|e| now_unix - e.created_unix > max);
+        self.entries = keep;
+        self.expired += old.len() as u64;
+        old
+    }
+
+    fn evict_over_quota(&mut self) -> Vec<QueuedReport<T>> {
         let mut out = Vec::new();
         while self.used() > self.quota && !self.entries.is_empty() {
             let i = self
@@ -914,7 +1054,7 @@ impl<T> MbrQueue<T> {
                 })
                 .map(|(i, _)| i)
                 .expect("non-empty");
-            out.push(self.entries.swap_remove(i).item);
+            out.push(self.entries.swap_remove(i));
             self.evicted += 1;
         }
         out
@@ -931,6 +1071,19 @@ impl<T> MbrQueue<T> {
         })
     }
 
+    /// The sequence number of the report stored last.
+    #[must_use]
+    pub fn last_seq(&self) -> u64 {
+        self.seq
+    }
+
+    /// Takes report `seq` out whole (for an upload attempt; [`Self::reinsert`] puts it
+    /// back if the upload is not confirmed).
+    pub fn take_entry(&mut self, seq: u64) -> Option<QueuedReport<T>> {
+        let i = self.entries.iter().position(|e| e.seq == seq)?;
+        Some(self.entries.swap_remove(i))
+    }
+
     /// The upload of report `seq` was TCP-confirmed: it is deleted.
     pub fn confirm(&mut self, seq: u64) -> Option<T> {
         let i = self.entries.iter().position(|e| e.seq == seq)?;
@@ -939,13 +1092,9 @@ impl<T> MbrQueue<T> {
 
     /// Deletes unsent reports older than [`Self::max_age_s`].
     pub fn expire(&mut self, now_unix: i64) -> Vec<T> {
-        let max = self.max_age_s;
-        let (old, keep): (Vec<_>, Vec<_>) = self
-            .entries
-            .drain(..)
-            .partition(|e| now_unix - e.created_unix > max);
-        self.entries = keep;
-        self.expired += old.len() as u64;
-        old.into_iter().map(|e| e.item).collect()
+        self.expire_entries(now_unix)
+            .into_iter()
+            .map(|e| e.item)
+            .collect()
     }
 }

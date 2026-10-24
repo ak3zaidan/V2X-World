@@ -1262,6 +1262,63 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the MA's open-case capacity",
     },
+    // SCMS Manager MBR v1.0 §2.2 / §2.3.1: the device report store.
+    Bound {
+        path: "security.scms.lifecycle.report_store_quota_bytes",
+        lo: 0.0,
+        hi: 1_000_000_000.0,
+        exclusive_lo: false,
+        what: "the report store's quota",
+    },
+    Bound {
+        path: "security.scms.lifecycle.report_daily_multiplier",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the report store's daily multiplier",
+    },
+    Bound {
+        path: "security.scms.lifecycle.report_decay_hour_et",
+        lo: 0.0,
+        hi: 23.0,
+        exclusive_lo: false,
+        what: "the report store's re-weighting hour",
+    },
+    Bound {
+        path: "security.scms.lifecycle.report_weight_random_position",
+        lo: 0.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "a report subtype's initial weight",
+    },
+    Bound {
+        path: "security.scms.lifecycle.report_weight_constant_position",
+        lo: 0.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "a report subtype's initial weight",
+    },
+    Bound {
+        path: "security.scms.lifecycle.report_weight_max_speed",
+        lo: 0.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "a report subtype's initial weight",
+    },
+    Bound {
+        path: "security.scms.lifecycle.report_weight_max_acceleration",
+        lo: 0.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "a report subtype's initial weight",
+    },
+    Bound {
+        path: "security.scms.lifecycle.report_weight_brake_acceleration",
+        lo: 0.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "a report subtype's initial weight",
+    },
     // Zero is the strictest device (refuse the moment `nextCrl` passes); a year is far
     // past any profile (CAMP 1.2.2 Table 67: two weeks).
     Bound {

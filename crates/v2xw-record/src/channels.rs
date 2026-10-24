@@ -122,6 +122,14 @@ pub const CHANNELS: &[ChannelSpec] = &[
         visibility: Visibility::Gt,
         payload_bytes: None,
     },
+    // Each SCMS device's time in the run and attack window (`security.scms.report_records`):
+    // the MA-rule replay's scoring denominator. Record-only ground truth.
+    ChannelSpec {
+        name: "gt.device_exposure",
+        wire_id: None,
+        visibility: Visibility::Gt,
+        payload_bytes: None,
+    },
     ChannelSpec {
         name: "gt.kinematics",
         wire_id: Some(1),
@@ -154,6 +162,13 @@ pub const CHANNELS: &[ChannelSpec] = &[
         wire_id: Some(33),
         visibility: Visibility::Node,
         payload_bytes: Some(40),
+    },
+    // What the deciding MA received, field for field what it reads (MA-rule replay input).
+    ChannelSpec {
+        name: "ma.received",
+        wire_id: None,
+        visibility: Visibility::Node,
+        payload_bytes: None,
     },
     ChannelSpec {
         name: "ma.report",
@@ -320,6 +335,14 @@ pub const CHANNELS: &[ChannelSpec] = &[
         visibility: Visibility::NodeAndGt,
         payload_bytes: None,
     },
+    // A misbehaviour report's fate on its device's SM-MBR store, with the accused's
+    // ground-truth join (`security.scms.report_records`).
+    ChannelSpec {
+        name: "pki.report_fate",
+        wire_id: None,
+        visibility: Visibility::NodeAndGt,
+        payload_bytes: None,
+    },
     ChannelSpec {
         name: "pki.state",
         wire_id: None,
@@ -469,7 +492,15 @@ mod tests {
             .filter(|c| c.wire_id.is_none())
             .map(|c| c.name)
             .collect();
-        assert_eq!(record_only, vec!["gt.subject", "net.reassembly", "phy.prr"]);
+        assert_eq!(
+            record_only,
+            vec![
+                "gt.device_exposure",
+                "gt.subject",
+                "net.reassembly",
+                "phy.prr"
+            ]
+        );
     }
 
     /// The channel-name pattern of §6.5's `ChannelName` schema.

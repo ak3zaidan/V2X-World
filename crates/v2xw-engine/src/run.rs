@@ -2629,6 +2629,19 @@ impl Engine {
                 self.emit(recorder, &crate::sec_records::PkiKnowledgeRecord(k));
             }
         }
+        if let Some((fates, received, exposure)) =
+            self.phase2.as_mut().map(|p| p.final_report_records(now))
+        {
+            for f in &fates {
+                self.emit(recorder, f);
+            }
+            for r in &received {
+                self.emit(recorder, r);
+            }
+            for e in &exposure {
+                self.emit(recorder, e);
+            }
+        }
         if let Some(phase2) = self.phase2.as_mut() {
             phase2.finish();
             self.report.phase2 = phase2.report();
@@ -8055,6 +8068,17 @@ impl Engine {
         for c in &claims {
             self.emit(recorder, c);
         }
+        let (fates, received) = self
+            .phase2
+            .as_mut()
+            .map(crate::phase2::Phase2::take_report_records)
+            .unwrap_or_default();
+        for f in &fates {
+            self.emit(recorder, f);
+        }
+        for r in &received {
+            self.emit(recorder, r);
+        }
         for (t, bucket, bytes, node) in &tick.bytes {
             self.emit_backend_bytes(recorder, *t, *bucket, *bytes, *node);
         }
@@ -8590,6 +8614,15 @@ impl Engine {
         {
             return;
         }
+        // [SM-MBR] §2.2: a new report enters the device's store first, where the quota
+        // may delete it (or an older, lighter one) before any upload.
+        if !self
+            .phase2
+            .as_mut()
+            .is_none_or(|p| p.admit_report(node, &report, detected_at, now))
+        {
+            return;
+        }
         let pos = self.actor_of(node).map_or(Vec3::ZERO, |a| a.last.pos);
         let bytes = crate::phase2::report_bytes();
         let sign = self.signing_cost(node);
@@ -8599,7 +8632,7 @@ impl Engine {
         if let Some(p) = self.phase2.as_mut()
             && p.report_waits_for_signer(node, sign.after(now))
         {
-            p.hold_report(node, report, detected_at);
+            p.hold_report(node, report, detected_at, now);
             return;
         }
         match kind {
@@ -8635,12 +8668,13 @@ impl Engine {
                         let at = sign.after(t).max(now + 1);
                         if at > horizon {
                             if let Some(p) = self.phase2.as_mut() {
-                                p.hold_report(node, report, detected_at);
+                                p.hold_report(node, report, detected_at, now);
                             }
                             return;
                         }
                         if let Some(p) = self.phase2.as_mut() {
                             p.note_upload(node, kind);
+                            p.note_report_uploaded(node, &report, now);
                         }
                         let sdu = v2xw_core::ids::SduId::new(self.next_sdu);
                         self.next_sdu += 1;
@@ -8663,8 +8697,13 @@ impl Engine {
                         );
                     }
                     crate::backend::AccessOutcome::Lost => {
+                        // The upload was never TCP-confirmed, so the report stays in the
+                        // store and goes again at the next look ([SM-MBR] §2.2: a report
+                        // is deleted only after its confirmed upload). Before this it was
+                        // dropped, so a lost attempt lost the evidence.
                         if let Some(p) = self.phase2.as_mut() {
                             p.note_report_lost();
+                            p.hold_report(node, report, detected_at, now);
                         }
                     }
                     crate::backend::AccessOutcome::NoCoverage => {
@@ -8672,7 +8711,7 @@ impl Engine {
                         if let Some(report) = self.relay_report(node, report, pos, now, horizon)
                             && let Some(p) = self.phase2.as_mut()
                         {
-                            p.hold_report(node, report, detected_at);
+                            p.hold_report(node, report, detected_at, now);
                         }
                     }
                 }
@@ -8680,13 +8719,13 @@ impl Engine {
             crate::backend::AccessKind::RsuRelay => {
                 if let Some(report) = self.relay_report(node, report, pos, now, horizon) {
                     if let Some(p) = self.phase2.as_mut() {
-                        p.hold_report(node, report, detected_at);
+                        p.hold_report(node, report, detected_at, now);
                     }
                 }
             }
             crate::backend::AccessKind::Offline => {
                 if let Some(p) = self.phase2.as_mut() {
-                    p.hold_report(node, report, detected_at);
+                    p.hold_report(node, report, detected_at, now);
                 }
             }
         }
@@ -8737,6 +8776,12 @@ impl Engine {
         // network layer cannot carry (a post-quantum signature over WSMP with no SDU
         // fragmenter) never left the device. The stack refuses that SDU every time, so
         // the report is not kept for another try; it is counted and lost.
+        let logged = self
+            .phase2
+            .as_ref()
+            .is_some_and(crate::phase2::Phase2::records_reports)
+            .then(|| report.clone());
+        let report_id = report.report_id.clone();
         let handed = self.hand_down_app(
             node,
             &tx,
@@ -8745,6 +8790,10 @@ impl Engine {
             Some(AppPayload::Report(Box::new(report))),
         );
         if let Some(p) = self.phase2.as_mut() {
+            p.forget_taken(node, &report_id);
+            if let (HandDown::Sent, Some(r)) = (&handed, &logged) {
+                p.note_report_uploaded(node, r, now);
+            }
             match handed {
                 HandDown::Sent => p.note_upload(node, crate::backend::AccessKind::RsuRelay),
                 HandDown::MtuRefused => p.note_report_refused_mtu(),
