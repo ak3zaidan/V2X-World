@@ -1,3 +1,5 @@
 # Oracle dev tooling (WP-A0); see docs/design/scms-real/vectors-provenance.md
 asn1tools==0.169.0
 cryptography==50.0.2
+mcap==1.4.0
+PyYAML==6.0.3

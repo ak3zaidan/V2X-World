@@ -1919,8 +1919,9 @@ pub struct Phase2 {
     /// 1609.2.1 §6.3.5.7).
     crl_feeds: Vec<Vec<CrlVersion>>,
     /// The lists every provider published at `t0` (R-NOCRL), which a device holds when it
-    /// joins: it was on the road before the run and fetched them within the week. Their
-    /// entry count, the sum of the stores' serials, the entries and the signed CRLs.
+    /// joins before its RA serves anything newer: it was on the road before the run and
+    /// fetched them within the week ([`Phase2::prerun_crl`]). Their entry count, the sum
+    /// of the stores' serials, the entries and the signed CRLs.
     prerun_crl: (u32, u64, Vec<CrlLinkageEntry>, Vec<std::sync::Arc<[u8]>>),
     /// The backend's clock at its last step.
     backend_now: SimTime,
@@ -6803,11 +6804,14 @@ impl Phase2 {
         out
     }
 
-    /// The lists `node` holds when it joins (R-NOCRL): every provider's `t0` CRL, which a
-    /// device on the road before the run fetched within the week. Marks its copy as of
-    /// those lists, so its first conditional poll is answered 412 unless a provider has
-    /// published since; the caller installs them on the node. `None` for a node with no
-    /// device record or a run whose stores published nothing.
+    /// The lists `node` holds when it joins (R-NOCRL, R-JOINCRL): the newest list each
+    /// provider had published when it joined, as its RA serves them (every provider's
+    /// `t0` CRL for a device on the road from the start, which it fetched within the week
+    /// before the run; for a later joiner, the composite list its RA serves at `now`,
+    /// since a device fetches on every RA connection, [PRIMER] pp. 5, 8). Marks its copy
+    /// as of those lists, so its first conditional poll is answered 412 unless a provider
+    /// has published since; the caller installs them on the node. `None` for a node with
+    /// no device record or a run whose stores published nothing.
     ///
     /// The fetch is logged on the device's provider's run as one pre-run `SecuredCrl` PDU
     /// per list, from that provider's CRL Store at `now` (OF-3), so the PKI view shows
@@ -6817,13 +6821,26 @@ impl Phase2 {
         node: NodeId,
         now: SimTime,
     ) -> Option<(u32, Vec<CrlLinkageEntry>, Vec<std::sync::Arc<[u8]>>)> {
-        let (version, serial, entries, secured) = &self.prerun_crl;
-        if *serial == 0 {
+        // R-JOINCRL (testing/oracle-2026-10-24.md, OF-3-JOIN): a joiner was handed the
+        // `t0` lists whatever it joined, so a car switched on after a revocation trusted
+        // the revoked senders until its first poll, and one switched on three weeks in
+        // refused every message as `crl-overdue`. The `t0` snapshot stays the answer
+        // until the RA serves something newer, so a fleet on the road from the start is
+        // unchanged.
+        let served = self.crl_serial_for(node);
+        let (version, serial, entries, secured) = if served > self.prerun_crl.1 {
+            let (v, e, s) = self.published_crl_for(node);
+            (v, served, e, s)
+        } else {
+            let (v, s, e, c) = &self.prerun_crl;
+            (*v, *s, e.clone(), c.clone())
+        };
+        if serial == 0 {
             return None;
         }
         let n = self.nodes.get_mut(&node)?;
-        n.crl_serial = n.crl_serial.max(*serial);
-        let out = (*version, entries.clone(), secured.clone());
+        n.crl_serial = n.crl_serial.max(serial);
+        let out = (version, entries, secured);
         let device = device_of(node);
         let k = self.provider_of_device(device);
         if let Some(run) = self.runs.get_mut(k) {
@@ -8528,6 +8545,81 @@ mod fast_forward_wake_tests {
         let in_transit = p.next_wake(before).expect("a wake");
         assert_eq!(in_transit, w_before.map_or(crossed, |w| w.min(crossed)));
         assert_eq!(p.next_wake(after), w_after, "a crossed version is no wake");
+    }
+}
+
+#[cfg(test)]
+mod join_crl_tests {
+    use super::*;
+
+    /// R-JOINCRL (testing/oracle-2026-10-24.md, oracle rule OF-3-JOIN): a device that
+    /// joins after a provider published a newer list holds that list, as its RA serves
+    /// it, and is marked as of it; a device that joins before anything newer is served
+    /// still holds the `t0` lists. Fault (the first form: `prerun_crl` hands every joiner
+    /// the `t0` snapshot): the late joiner holds no entry and the `t0` serial.
+    #[test]
+    fn a_device_joining_after_a_publication_holds_the_newest_list() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let mut p = Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend");
+        assert_eq!(p.crl_feeds.len(), 2, "us-production-2025: two providers");
+        let (v0, s0) = (p.prerun_crl.0, p.prerun_crl.1);
+        assert!(s0 > 0, "every CRACA publishes at t0 (R-NOCRL)");
+        let early = NodeId::new(9_001);
+        p.nodes.insert(early, NodeSec::default());
+        let (v, e, _) = p.prerun_crl(early, 0).expect("the t0 lists");
+        assert_eq!((v, e.len() as u32), (v0, v0));
+        assert_eq!(p.nodes[&early].crl_serial, s0);
+        // Both providers' t0 lists reach the feeds, then provider 0 revokes one device.
+        let serial = |p: &Phase2, k: usize| p.runs[k].state.crl_store.versions;
+        let (a0, b0) = (serial(&p, 0), serial(&p, 1));
+        p.crl_feeds[1].push(CrlVersion {
+            at: 0,
+            version: 0,
+            entries: Vec::new(),
+            secured: None,
+            serial: b0,
+        });
+        let device = v2xw_sec::linkage::DeviceLinkageContext::new(
+            v2xw_sec::linkage::LaId(1),
+            v2xw_sec::linkage::LaId(2),
+            v2xw_sec::linkage::LinkageSeed::new([7; 16]),
+            v2xw_sec::linkage::LinkageSeed::new([9; 16]),
+        );
+        let entry = CrlLinkageEntry::from_device(&device, 615, v2xw_sec::linkage::DEFAULT_JMAX);
+        let published: SimTime = 191_400_000_000_000;
+        p.crl_feeds[0].push(CrlVersion {
+            at: published,
+            version: 1,
+            entries: vec![entry],
+            secured: None,
+            serial: a0 + 1,
+        });
+        p.backend_now = published + 3_600_000_000_000;
+        let late = NodeId::new(9_002);
+        p.nodes.insert(late, NodeSec::default());
+        let (v, e, _) = p
+            .prerun_crl(late, p.backend_now)
+            .expect("the lists its RA serves");
+        assert_eq!(v, 1, "the composite version its RA serves");
+        assert_eq!(e.len(), 1, "the revocation is on the list it holds");
+        assert_eq!(
+            p.nodes[&late].crl_serial,
+            u64::from(a0 + 1 + b0),
+            "marked as of the newest lists, so its first poll is answered 412"
+        );
+        assert_eq!(
+            p.nodes[&early].crl_serial, s0,
+            "an earlier joiner is untouched"
+        );
     }
 }
 

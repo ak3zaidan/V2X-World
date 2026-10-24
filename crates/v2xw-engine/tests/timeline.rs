@@ -314,10 +314,25 @@ fn a_param_change_of_the_arrival_rate_takes_effect_at_its_instant() {
         json!({"path": "actors.vehicles.demand.rate_veh_per_h", "value": 2400.0}),
     )];
     let faster = run(s);
-    let ratio = faster.spawned as f64 / plain.spawned.max(1) as f64;
+    // Poisson arrivals: each count is Poisson(rate x 120 s), mean 20 at 600 veh/h and 80 at
+    // 2,400 veh/h, so each is held to its own mean within three standard deviations. The
+    // first form held their ratio to 2.5-5.0x, but the ratio of two Poisson counts with
+    // means 20 and 80 has a relative standard deviation of 25 % (sqrt(1/20 + 1/80)), so
+    // that band failed on about one seed in eight; it failed at 90 against 17 (5.29x)
+    // with the change acting as it should. Fault (the change ignored, so both runs are
+    // the base): the faster count is about 20, far below its band.
+    let poisson_band = |n: u64, rate: f64| {
+        let mean = rate * 120.0 / 3_600.0;
+        (n as f64 - mean).abs() <= 3.0 * mean.sqrt()
+    };
     assert!(
-        (2.5..=5.0).contains(&ratio),
-        "{} against {}: {ratio:.2}x for a fourfold rate",
+        poisson_band(plain.spawned, 600.0),
+        "{} spawned at 600 veh/h in 120 s (mean 20)",
+        plain.spawned
+    );
+    assert!(
+        poisson_band(faster.spawned, 2_400.0),
+        "{} against {}: the change to 2,400 veh/h (mean 80) did not take effect",
         faster.spawned,
         plain.spawned
     );

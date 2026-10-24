@@ -976,6 +976,194 @@ fn a_unit_forwards_a_sized_report_only_under_a_trusted_root() {
     assert_ne!(v, Some(VerificationState::Verified));
 }
 
+/// A sized frame (no SPDU) signed under `key`, with the engine's modelled verdict "good
+/// signature" and the signer certificate attached, as the engine hands a receiver an RSU
+/// CRL frame or a relayed report.
+fn sized_frame(key: &ImplicitKey, msg_type: MsgType) -> v2xw_node::runtime::RxFrame {
+    let cert = Arc::clone(key.certificate());
+    v2xw_node::runtime::RxFrame {
+        signer: Some(cert::cert_id8(&cert).expect("digest")),
+        msg_type,
+        bytes: 300,
+        claimed_pos: Some(v2xw_core::geom::Vec3::new(20.0, 0.0, 1.5)),
+        claimed_speed_mps: 10.0,
+        claimed_heading_rad: 0.0,
+        claimed_generation_time: 10 * NS_PER_S,
+        full_certificate: true,
+        signature_valid: true,
+        spdu: None,
+        signer_certificate: Some(cert),
+        bsm: Default::default(),
+    }
+}
+
+/// A three-dimensional fix at the origin, so the receiver has a position to judge by.
+fn fix() -> v2xw_core::belief::PositionEstimate {
+    let mut p = v2xw_core::belief::PositionEstimate::no_fix(0);
+    p.semi_major_m = 4.0;
+    p.semi_minor_m = 3.0;
+    p.fix = v2xw_core::belief::FixQuality::ThreeD;
+    p
+}
+
+/// The three outcomes a receiver's sized-frame fallback must give, whatever the engine's
+/// modelled signature says: under its installed root, verified; under a root it never held,
+/// not verified; under a root the CTL has since dropped, not verified.
+fn sized_fallback_cases(
+    pki: &ScmsPki,
+    other: &ScmsPki,
+) -> (
+    ImplicitKey,
+    ImplicitKey,
+    Vec<Arc<Certificate>>,
+    Vec<Arc<Certificate>>,
+) {
+    let trusted_key = pseudonym(pki, &pki.aca, 19, |_| {});
+    let rogue_key = pseudonym(other, &other.aca, 20, |_| {});
+    let cas: Vec<Arc<Certificate>> = pki.all().iter().map(|a| Arc::new(a.cert.clone())).collect();
+    (
+        trusted_key,
+        rogue_key,
+        vec![Arc::new(pki.root.cert.clone())],
+        cas,
+    )
+}
+
+/// R-TRUSTLEAK on a vehicle's receiver (06-validation-summary §9: only the engine and RSU
+/// paths had been proved red). `ObuRuntime::classify` falls back to
+/// `NodeSecurity::verify_sized` for a frame with no SPDU. Fault: make that branch return
+/// the engine's modelled verdict (`(frame.signature_valid, None)`), as before the fix, and
+/// the rogue and dropped-root frames come out `Verified`.
+#[test]
+fn an_obu_accepts_a_sized_frame_only_under_a_root_it_trusts() {
+    use v2xw_node::generate::ServiceSet;
+    use v2xw_node::policy::VerifyAll;
+    use v2xw_node::runtime::{NodeConfig, ObuRuntime};
+    use v2xw_node::stores::VerificationState;
+    let pki = pki();
+    let other = ScmsPki::new(8, t0() - 31_556_952).unwrap();
+    let (trusted_key, rogue_key, roots, cas) = sized_fallback_cases(&pki, &other);
+    let verdict = |key: &ImplicitKey, drop_root: bool| {
+        let config = NodeConfig {
+            services: ServiceSet::SAE,
+            wall: wall(),
+            ..NodeConfig::default()
+        };
+        let mut rx = ObuRuntime::new(
+            v2xw_core::ids::NodeId::new(2),
+            v2xw_node::profiles::get(v2xw_node::profiles::REFERENCE_OBU)
+                .expect("the reference profile")
+                .clone(),
+            Box::new(VerifyAll::new()),
+            config,
+            0,
+        );
+        rx.stores_mut().crl.set_period(0);
+        rx.set_belief(fix());
+        rx.security_mut().install_trust(&roots, &cas);
+        if drop_root {
+            let gone = vec![Arc::new(other.root.cert.clone())];
+            assert_eq!(rx.security_mut().apply_ctl(&gone, &[]), (1, 1));
+        }
+        let reg = RngRegistry::new(61);
+        let mut out = Vec::new();
+        // Three seconds of 10 ms steps: the validation is priced (chain links, the
+        // reconstruction), so the verdict lands some hundred milliseconds later.
+        for k in 0..300u64 {
+            let mut ctx = NodeRuntimeCtx::new(10 * NS_PER_S + k * 10_000_000, &reg);
+            let inbox = if k == 0 {
+                vec![sized_frame(key, MsgType::Bsm)]
+            } else {
+                Vec::new()
+            };
+            out.extend(rx.step(&mut ctx, inbox, 0.0).delivered);
+        }
+        out.iter()
+            .find(|m| m.msg_type == MsgType::Bsm)
+            .map(|m| m.verification)
+    };
+    assert_eq!(
+        verdict(&trusted_key, false),
+        Some(VerificationState::Verified)
+    );
+    // Not delivered at all (the signer cannot be checked, so a P2PCD learn is due) or
+    // delivered as anything but verified.
+    assert_ne!(
+        verdict(&rogue_key, false),
+        Some(VerificationState::Verified),
+        "under a root the vehicle never held"
+    );
+    assert_eq!(
+        verdict(&trusted_key, true),
+        Some(VerificationState::Invalid),
+        "under a root the CTL dropped: refused (chain-untrusted-root)"
+    );
+}
+
+/// R-TRUSTLEAK on a VRU handset's receiver: `VruDeviceRuntime::classify` has the same
+/// sized-frame fallback. Same fault, same red.
+#[test]
+fn a_vru_handset_accepts_a_sized_frame_only_under_a_root_it_trusts() {
+    use v2xw_node::stores::VerificationState;
+    use v2xw_node::vru::{VruConfig, VruDeviceRuntime, VruServices};
+    let pki = pki();
+    let other = ScmsPki::new(8, t0() - 31_556_952).unwrap();
+    let (trusted_key, rogue_key, roots, cas) = sized_fallback_cases(&pki, &other);
+    let verdict = |key: &ImplicitKey, drop_root: bool| {
+        let mut rx = VruDeviceRuntime::new(
+            v2xw_core::ids::NodeId::new(3),
+            v2xw_node::profiles::get(v2xw_node::profiles::GENERIC_VRU_DEVICE)
+                .expect("the shipped VRU-device profile")
+                .clone(),
+            VruConfig {
+                services: VruServices::SAE,
+                wall: wall(),
+                ..VruConfig::default()
+            },
+            0,
+        );
+        rx.stores_mut().crl.set_period(0);
+        rx.set_belief(fix());
+        rx.security_mut().install_trust(&roots, &cas);
+        if drop_root {
+            let gone = vec![Arc::new(other.root.cert.clone())];
+            assert_eq!(rx.security_mut().apply_ctl(&gone, &[]), (1, 1));
+        }
+        let reg = RngRegistry::new(62);
+        let mut out = Vec::new();
+        // Three seconds of 10 ms steps: the validation is priced (chain links, the
+        // reconstruction), so the verdict lands some hundred milliseconds later.
+        for k in 0..300u64 {
+            let mut ctx = NodeRuntimeCtx::new(10 * NS_PER_S + k * 10_000_000, &reg);
+            let inbox = if k == 0 {
+                vec![sized_frame(key, MsgType::Cam)]
+            } else {
+                Vec::new()
+            };
+            out.extend(rx.step(&mut ctx, inbox, 0.0).delivered);
+        }
+        out.iter()
+            .find(|m| m.msg_type == MsgType::Cam)
+            .map(|m| m.verification)
+    };
+    assert_eq!(
+        verdict(&trusted_key, false),
+        Some(VerificationState::Verified)
+    );
+    // Not delivered at all (the signer cannot be checked, so a P2PCD learn is due) or
+    // delivered as anything but verified.
+    assert_ne!(
+        verdict(&rogue_key, false),
+        Some(VerificationState::Verified),
+        "under a root the handset never held"
+    );
+    assert_eq!(
+        verdict(&trusted_key, true),
+        Some(VerificationState::Invalid),
+        "under a root the CTL dropped: refused (chain-untrusted-root)"
+    );
+}
+
 // Edge-case package, item 8: a provider's root removed from the CTL mid-run.
 #[test]
 fn a_root_a_newer_ctl_drops_is_refused_from_then_on_and_an_unchanged_ctl_forgets_nothing() {

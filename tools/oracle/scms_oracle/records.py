@@ -72,6 +72,17 @@ Rule ids (and sources):
               ([ASN-2.1] CertManagement FullIeeeTbsCtl; 03 sec. 10)
   CTL-DEV     a device's installed CTL sequence never decreases and never runs ahead of the
               published one
+  OF-3        every device holds each CRACA's current pseudonym CRL (series 1) from the moment
+              it is on the road: before its first node.security row a CRL Store sends it, per
+              CRACA that has published, a SecuredCrl that is one of that CRACA's issued lists;
+              every node.security row lists, per such CRACA, a list it issued no later than the
+              row, at least as new as the fetched one, and no older than the newest list issued a
+              week before the row ("as often as possible but no later than once a week",
+              [CAMP122] sec. 3 item 10; a receiver checks revocation against the current list,
+              1609.2 5.1.3.4; [SMP] Table 1 series 1)
+  OF-3-JOIN   the list a device fetches when it joins is its CRACA's newest at that instant
+              (R-JOINCRL: "a joiner holds the newest list each CRACA published before it
+              joined"); the same sources
 """
 
 import collections
@@ -125,6 +136,7 @@ def load(run_dir):
     R.decisions = []
     R.reports = []         # EE report messages: (id, from, transport, carries PDUs, instance, t)
     R.revstages = {}       # proto.revocation: subject -> {stage: first t}
+    R.security = collections.defaultdict(list)  # node.security: node -> [(t, pseudonym, crls)]
     R.end_t = 0
     with open(os.path.join(run_dir, 'recording.mcap'), 'rb') as f:
         for _, ch, m in make_reader(f).iter_messages():
@@ -164,6 +176,11 @@ def load(run_dir):
                     R.cert_hex.setdefault(k, h)
                 R.creds[q['device']].append((q['t'], q.get('ctl_sequence'), q.get('provider'), q.get('revoked'),
                                              sorted((q.get('certificates') or {}).keys())))
+            elif topic == 'record/node.security':
+                q = json.loads(m.data)
+                R.security[q['node']].append((q['t'], q.get('pseudonym'), [
+                    (c.get('craca'), c.get('series'), c.get('issue_date'), c.get('next_crl'))
+                    for c in q.get('crls') or []]))
             elif topic == 'record/ma.decision':
                 R.decisions.append(json.loads(m.data))
             elif topic == 'record/proto.revocation':
@@ -378,7 +395,106 @@ def run_rules(R):
     rule_craca(X, R, store, crls)
     rule_ctl(X, R)
     rule_block(X, R)
+    rule_held_crls(X, R, crls)
     return X
+
+
+PSEUDONYM_SERIES = 1
+
+
+def _crl_lists(R, crls):
+    """crlCraca hex -> [(issued ns, issueDate, nextCrl, hex)] of the pseudonym series, in issue order."""
+    issued_at = {id8: row.get('issued_at') for (_, id8), row in R.crl_rows.items()}
+    lists = collections.defaultdict(list)
+    for c in crls:
+        cc = c['cc']
+        if cc['crlSeries'] != PSEUDONYM_SERIES:
+            continue
+        at = issued_at.get(prims.hashed_id(bytes.fromhex(c['hex']), 8).hex())
+        lists[cc['crlCraca'].hex()].append((c['p']['t'] if at is None else at, cc['issueDate'], cc['nextCrl'], c['hex']))
+    for v in lists.values():
+        v.sort()
+    return lists
+
+
+def _device_of_node(R):
+    """node -> device, by the pseudonym a node.security row names and the certificates the
+    device's node.credentials rows list."""
+    owner = {}
+    for dev, rows in R.creds.items():
+        for row in rows:
+            for k in row[4]:
+                owner.setdefault(k, dev)
+    return {node: next((owner[r[1]] for r in rows if r[1] in owner), None) for node, rows in R.security.items()}
+
+
+def rule_held_crls(X, R, crls):
+    """OF-3 and OF-3-JOIN (see the module docstring)."""
+    if not R.security:
+        return
+    lists = _crl_lists(R, crls)
+
+    def newest(craca, t_ns):
+        best = None
+        for x in lists[craca]:
+            if x[0] <= t_ns and (best is None or x[1] > best[1]):
+                best = x
+        return best
+    devices = _device_of_node(R)
+    fetched = collections.defaultdict(list)  # device -> [(t, from, hex)]
+    for p in R.pdus:
+        if p['type'] == 'SecuredCrl' and str(p['to']).startswith('ee/'):
+            fetched[p['to']].append((p['t'], p['from'], p['hex']))
+    by_hex = {x[3]: (craca, x) for craca, v in lists.items() for x in v}
+    behind = 0
+    max_lag = 0
+    for node, rows in sorted(R.security.items()):
+        rows = sorted(rows, key=lambda r: r[0])
+        dev = devices.get(node)
+        w = f'node {node}'
+        if not X.check('OF-3', dev is not None, w + ': no node.credentials device holds its pseudonyms'):
+            continue
+        w = f'{dev} (node {node})'
+        join = rows[0][0]
+        got = {}
+        for t, frm, hx in sorted(fetched[dev]):
+            if t <= join and hx in by_hex and 'crl-store' in str(frm):
+                craca, x = by_hex[hx]
+                got[craca] = (t, x)
+        for craca in sorted(lists):
+            if newest(craca, join) is None:
+                continue
+            if not X.check('OF-3', craca in got, w + f': no SecuredCrl of CRACA {craca} from a CRL Store by its '
+                                                     f'first row at {join / NS:.3f} s'):
+                continue
+            t, x = got[craca]
+            now = newest(craca, t)
+            X.check('OF-3-JOIN', x[1] >= now[1], w + f': fetched the {craca} list of issueDate {x[1]} at '
+                                                      f'{t / NS:.3f} s; the newest then was {now[1]}')
+        for t, _, held in rows:
+            have = {c: (i, n) for c, s_, i, n in held if s_ == PSEUDONYM_SERIES}
+            for craca in sorted(lists):
+                if newest(craca, t) is None:
+                    continue
+                wr = w + f' at {t / NS:.3f} s, CRACA {craca}'
+                if not X.check('OF-3', craca in have, wr + ': no list held'):
+                    continue
+                i, n = have[craca]
+                real = [x for x in lists[craca] if (x[1], x[2]) == (i, n)]
+                if not X.check('OF-3', bool(real) and real[0][0] <= t,
+                               wr + f': holds issueDate {i} nextCrl {n}, not a list issued by then'):
+                    continue
+                if craca in got:
+                    X.check('OF-3', i >= got[craca][1][1], wr + f': holds {i}, older than the {got[craca][1][1]} it fetched')
+                floor = newest(craca, t - WEEK * NS)
+                X.check('OF-3', floor is None or i >= floor[1],
+                        wr + f': holds issueDate {i}; {floor and floor[1]} was issued more than a week earlier')
+                cur = newest(craca, t)
+                if i < cur[1]:
+                    behind += 1
+                    max_lag = max(max_lag, (t - cur[0]) // NS)
+    X.info['of-3'] = {'devices': len(R.security), 'rows_behind_newest': behind, 'max_lag_s': max_lag,
+                      'cracas': len(lists)}
 
 
 BLOCK_GRACE_NS = 24 * 3600 * NS
@@ -1287,6 +1403,65 @@ def _mut_noncanonical(R):
     return True
 
 
+def _mut_prerun_skipped(R):
+    """The engine's pre-run CRL fetch is skipped (ScmsRun::note_prerun_crl): no CRL Store sends a
+    device its lists before it is on the road."""
+    n = len(R.pdus)
+    R.pdus = [p for p in R.pdus if not (p['type'] == 'SecuredCrl' and p.get('flow') == 'preload')]
+    return len(R.pdus) < n
+
+
+def _mut_held_dropped(R):
+    """One device's node.security rows stop listing one CRACA's CRL."""
+    R.security = {k: list(v) for k, v in R.security.items()}
+    for node, rows in sorted(R.security.items()):
+        if rows and rows[0][2]:
+            gone = rows[0][2][0][0]
+            R.security[node] = [(t, ps, [c for c in crls if c[0] != gone]) for t, ps, crls in rows]
+            return True
+    return False
+
+
+def _mut_held_future(R):
+    """A device's first node.security row lists a CRL a week newer than the one it holds: a list
+    no CRACA had issued."""
+    R.security = {k: list(v) for k, v in R.security.items()}
+    for node, rows in sorted(R.security.items()):
+        if rows and rows[0][2]:
+            t, ps, crls = rows[0]
+            c = crls[0]
+            R.security[node] = [(t, ps, [(c[0], c[1], c[2] + WEEK, c[3] + WEEK)] + crls[1:])] + rows[1:]
+            return True
+    return False
+
+
+def _mut_join_old(R):
+    """A device's pre-run fetch moved to after its CRACA's next list was issued, keeping the older
+    bytes, and its rows with it: a joiner that holds a superseded list (R-JOINCRL)."""
+    issued = sorted((row.get('issued_at') or 0, row.get('issue_date') or 0, id8)
+                    for (_, id8), row in R.crl_rows.items() if row.get('series') == PSEUDONYM_SERIES)
+    if len(issued) < 2:
+        return False
+    late = issued[-1][0]
+    devices = _device_of_node(R)
+    R.pdus = [dict(p) for p in R.pdus]
+    for p in R.pdus:
+        if p['type'] != 'SecuredCrl' or p.get('flow') != 'preload':
+            continue
+        if prims.hashed_id(bytes.fromhex(p['hex']), 8).hex() == issued[-1][2]:
+            continue
+        node = next((n for n, d in devices.items() if d == p['to']), None)
+        if node is None:
+            continue
+        for q in R.pdus:
+            if q['type'] == 'SecuredCrl' and q.get('flow') == 'preload' and q['to'] == p['to']:
+                q['t'] = late + 1
+        R.security = {k: list(v) for k, v in R.security.items()}
+        R.security[node] = [(max(t, late + 2), ps, crls) for t, ps, crls in R.security[node]]
+        return True
+    return False
+
+
 def _mut_pub_late(R):
     """The MA's decision moved five days earlier: the CRL now comes after the SLA."""
     R.revstages = {k: dict(v) for k, v in R.revstages.items()}
@@ -1334,6 +1509,10 @@ FAULTS = {
     'ctl-quorum': ('the newest CTL has one elector signature', 'CTL-SUM', _mut_ctl(_ctl_quorum)),
     'ctl-early': ('a CTL in force before its effectiveDate', 'CTL-SUM', _mut_ctl(_ctl_early)),
     'ctl-device-ahead': ('a device holds a CTL not yet published', 'CTL-DEV', _mut_dev_ahead),
+    'crl-prerun-skipped': ('no pre-run CRL fetch (skip note_prerun_crl)', 'OF-3', _mut_prerun_skipped),
+    'crl-held-dropped': ('a device stops listing one CRACA\'s CRL', 'OF-3', _mut_held_dropped),
+    'crl-held-future': ('a device lists a CRL no CRACA has issued', 'OF-3', _mut_held_future),
+    'crl-join-old': ('a joiner fetches a superseded list', 'OF-3-JOIN', _mut_join_old),
 }
 
 
@@ -1352,6 +1531,7 @@ def mutate(R, names=None):
         M.times = list(R.times)
         M.creds = collections.defaultdict(list, {k: list(v) for k, v in R.creds.items()})
         M.ctl = list(R.ctl)
+        M.security = R.security
         if not fn(M):
             out.append((name, rule, 'n/a'))
             continue
