@@ -1528,6 +1528,26 @@ pub fn title(path: &str) -> Option<&'static str> {
         }
         "security.scms.lifecycle.ma_review_s" => "Misbehaviour Authority review time",
         "security.scms.lifecycle.ma_max_open_cases" => "Misbehaviour Authority open-case capacity",
+        "security.scms.lifecycle.report_store_quota_bytes" => "Report store: device quota",
+        "security.scms.lifecycle.report_daily_multiplier" => {
+            "Report store: daily weight multiplier"
+        }
+        "security.scms.lifecycle.report_decay_hour_et" => {
+            "Report store: re-weighting hour (Eastern)"
+        }
+        "security.scms.lifecycle.report_weight_random_position" => {
+            "Report store: RandomPosition weight"
+        }
+        "security.scms.lifecycle.report_weight_constant_position" => {
+            "Report store: ConstantPosition weight"
+        }
+        "security.scms.lifecycle.report_weight_max_speed" => "Report store: MaxSpeed weight",
+        "security.scms.lifecycle.report_weight_max_acceleration" => {
+            "Report store: MaxAcceleration weight"
+        }
+        "security.scms.lifecycle.report_weight_brake_acceleration" => {
+            "Report store: BrakeAcceleration weight"
+        }
         "actors.backend.protocol" => "Credential system (backend)",
         "messages.sets" => "Messages sent",
         "messages.codec_tier" => "Message encoding",

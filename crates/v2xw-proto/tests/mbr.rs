@@ -310,6 +310,106 @@ fn the_queue_decays_at_five_eastern_and_orders_uploads() {
     assert_eq!(q.expire(mon + 9 * 86_400).len(), 3);
 }
 
+/// A report taken out for an upload that is not confirmed goes back with its decayed
+/// weight and its age, so the store still orders it as the report it is. Fault: put it
+/// back with `push` (a fresh 1.0 and a new sequence number) and the decayed report
+/// outranks the newer full-weight one, and is no longer the one the quota deletes.
+#[test]
+fn a_report_put_back_keeps_its_weight_and_its_place() {
+    let mon = calendar::eastern_to_unix(2026, 10, 19, 4, 0);
+    let w = Weighting::default();
+    let mut q: MbrQueue<&str> = MbrQueue::new(250);
+    q.push("old", 100, w, mon);
+    // Tuesday 06:00: "old" has crossed one 05:00 (0.9 by the time it is taken out).
+    let tue = mon + 26 * 3600;
+    q.push("new", 100, w, tue);
+    let taken = q.take_upload_order(tue);
+    let order: Vec<&str> = taken.iter().map(|e| e.item).collect();
+    assert_eq!(order, vec!["new", "old"]);
+    for e in taken {
+        assert!(q.reinsert(e).is_empty());
+    }
+    let after: Vec<&str> = q
+        .take_upload_order(tue)
+        .into_iter()
+        .map(|e| e.item)
+        .collect();
+    assert_eq!(
+        after,
+        vec!["new", "old"],
+        "the put-back reports changed order"
+    );
+    let mut q: MbrQueue<&str> = MbrQueue::new(250);
+    q.push("old", 100, w, mon);
+    q.push("new", 100, w, tue);
+    for e in q.take_upload_order(tue) {
+        q.reinsert(e);
+    }
+    let evicted: Vec<&str> = q
+        .push_entry("third", 100, w, tue)
+        .into_iter()
+        .map(|e| e.item)
+        .collect();
+    assert_eq!(
+        evicted,
+        vec!["old"],
+        "the decayed report must be the one deleted"
+    );
+}
+
+/// A report generated before the store was last re-weighted, and stored only after (it
+/// waited for a signer), takes the multiplications it lived through. Fault: store it at
+/// its initial weight and it outranks a report generated after it on the same terms.
+#[test]
+fn a_report_stored_late_is_weighed_from_its_generation() {
+    let mon = calendar::eastern_to_unix(2026, 10, 19, 4, 0);
+    let w = Weighting::default();
+    let mut q: MbrQueue<&str> = MbrQueue::new(10_000);
+    q.decay_to(mon + 2 * 3600);
+    // Generated at 04:30, stored after the 05:00 re-weighting.
+    q.push("waited", 100, w, mon + 1800);
+    let e = q.iter().next().unwrap();
+    assert!((e.weight - 0.9).abs() < 1e-12, "{}", e.weight);
+}
+
+/// The subtype weights order eviction: over the quota the report of the lowest-weighted
+/// subtype goes first, and a report of several subtypes is weighed by the largest.
+/// Fault: weigh every report 1.0 and the older MaxSpeed report goes instead.
+#[test]
+fn eviction_follows_the_subtype_weights() {
+    use v2xw_proto::scms::mbr::SubtypeWeights;
+    let mon = calendar::eastern_to_unix(2026, 10, 19, 6, 0);
+    let ws = SubtypeWeights {
+        random_position: 0.5,
+        max_speed: 2.0,
+        ..SubtypeWeights::default()
+    };
+    let rp = Subtype::RandomPosition { gps_drift_mm: 1000 };
+    let ms = Subtype::MaxSpeed { threshold_mps: 90 };
+    assert!((ws.weighting(&[rp, Subtype::ConstantPosition]).initial - 1.0).abs() < 1e-12);
+    let mut q: MbrQueue<&str> = MbrQueue::new(200);
+    q.push("speed", 100, ws.weighting(&[ms]), mon);
+    q.push("jump", 100, ws.weighting(&[rp]), mon + 1);
+    let evicted = q.push(
+        "const",
+        100,
+        ws.weighting(&[Subtype::ConstantPosition]),
+        mon + 2,
+    );
+    assert_eq!(evicted, vec!["jump"]);
+    let evicted = q.push(
+        "const2",
+        100,
+        ws.weighting(&[Subtype::ConstantPosition]),
+        mon + 3,
+    );
+    assert_eq!(evicted, vec!["const"], "equal weights: the older goes");
+    // A zero quota keeps nothing.
+    let mut none: MbrQueue<&str> = MbrQueue::new(0);
+    assert_eq!(none.push("x", 100, ws.weighting(&[ms]), mon), vec!["x"]);
+    assert!(none.is_empty());
+}
+
 /// Writes the reports and the keys an independent checker needs.
 #[test]
 fn corpus_for_the_oracle() {

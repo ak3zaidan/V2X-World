@@ -2484,6 +2484,13 @@ pub struct ScmsSpec {
     /// Backend view's `backend.state` is published either way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pki_view: Option<bool>,
+    /// Record every misbehaviour report's fate (`pki.report_fate`: stored, evicted by the
+    /// quota, decayed out, expired, uploaded, delivered, held at the end), what each MA
+    /// received (`ma.received`, the fields the offline MA-rule replay reads) and each
+    /// device's exposure (`gt.scms_device`). Absent: off, so existing recordings keep
+    /// their digests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_records: Option<bool>,
     /// The credential lifecycle's timing and capacity knobs (certificates per week, the
     /// RA shuffle, downloads, enrolment, CRL cadence and distribution, the MA's review),
     /// each a field of its own. Every field left out keeps the cited default, and a field
@@ -2609,6 +2616,34 @@ pub struct LifecycleSpec {
     /// assumption: no MA capacity is published); a case beyond it waits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ma_max_open_cases: Option<u32>,
+    /// The device's misbehaviour-report storage quota, bytes (65,536, an ASSUMPTION:
+    /// SCMS Manager MBR v1.0 §2.2 makes it device-specific). Over it the lowest-weight
+    /// report is deleted; 0 keeps no report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_store_quota_bytes: Option<u32>,
+    /// The daily weight multiplier of every stored report (0.9, MBR v1.0 §2.3.1
+    /// `DailyMultiplier`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_daily_multiplier: Option<f64>,
+    /// The Eastern hour the multiplier applies at (5, MBR v1.0 §2.2: "every day, at 5 am
+    /// Eastern time").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_decay_hour_et: Option<u32>,
+    /// `initialWeight` of a RandomPosition report (1.0, MBR v1.0 §2.3.1.2.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_weight_random_position: Option<f64>,
+    /// `initialWeight` of a ConstantPosition report (1.0, MBR v1.0 §2.3.1.2.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_weight_constant_position: Option<f64>,
+    /// `initialWeight` of a MaxSpeed report (1.0, MBR v1.0 §2.3.1.3.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_weight_max_speed: Option<f64>,
+    /// `initialWeight` of a MaxAcceleration report (1.0, MBR v1.0 §2.3.1.3.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_weight_max_acceleration: Option<f64>,
+    /// `initialWeight` of a BrakeAcceleration report (1.0, MBR v1.0 §2.3.1.3.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_weight_brake_acceleration: Option<f64>,
 }
 
 impl LifecycleSpec {
@@ -2642,6 +2677,26 @@ impl LifecycleSpec {
             ("crl_broadcast_interval_s", self.crl_broadcast_interval_s),
             ("ma_review_s", self.ma_review_s),
             ("ma_max_open_cases", u(self.ma_max_open_cases)),
+            ("report_store_quota_bytes", u(self.report_store_quota_bytes)),
+            ("report_daily_multiplier", self.report_daily_multiplier),
+            ("report_decay_hour_et", u(self.report_decay_hour_et)),
+            (
+                "report_weight_random_position",
+                self.report_weight_random_position,
+            ),
+            (
+                "report_weight_constant_position",
+                self.report_weight_constant_position,
+            ),
+            ("report_weight_max_speed", self.report_weight_max_speed),
+            (
+                "report_weight_max_acceleration",
+                self.report_weight_max_acceleration,
+            ),
+            (
+                "report_weight_brake_acceleration",
+                self.report_weight_brake_acceleration,
+            ),
         ]
         .into_iter()
         .filter_map(|(k, v)| v.map(|v| (k, v)))

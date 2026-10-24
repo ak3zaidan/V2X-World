@@ -1006,6 +1006,46 @@ const ADVANCED: &[Basic] = &[
         recommended: "1,000 (an assumption); 1 to 10,000 to study an overloaded authority.",
     },
     Basic {
+        path: "security.scms.lifecycle.report_store_quota_bytes",
+        explain: "How much space a vehicle keeps for misbehaviour reports it has not uploaded yet. When a new report would overfill it, the vehicle deletes its lowest-weight report (the older one on a tie), possibly the new one. SCMS Manager MBR v1.0 §2.2 leaves the size to each device.",
+        recommended: "65,536 B (an assumption, 58 reference reports); 0 (keeps nothing) to 10 MB to study evidence crowd-out.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.report_daily_multiplier",
+        explain: "Every day at the re-weighting hour each stored report's weight is multiplied by this, so older evidence is uploaded later and deleted sooner. SCMS Manager MBR v1.0 §2.3.1 DailyMultiplier.",
+        recommended: "0.9 (MBR v1.0, every subtype); 0 to 1. 1 never ages a report.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.report_decay_hour_et",
+        explain: "The Eastern-time hour at which stored reports are re-weighted each day. SCMS Manager MBR v1.0 §2.2: 5 am Eastern.",
+        recommended: "5 (MBR v1.0); 0 to 23.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.report_weight_random_position",
+        explain: "The weight a new RandomPosition report starts with: higher weights upload first and are deleted last. SCMS Manager MBR v1.0 §2.3.1.2.2 initialWeight.",
+        recommended: "1.0 (MBR v1.0); 0 to 10.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.report_weight_constant_position",
+        explain: "The weight a new ConstantPosition report starts with. SCMS Manager MBR v1.0 §2.3.1.2.3 initialWeight.",
+        recommended: "1.0 (MBR v1.0); 0 to 10.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.report_weight_max_speed",
+        explain: "The weight a new MaxSpeed report starts with. SCMS Manager MBR v1.0 §2.3.1.3.1 initialWeight.",
+        recommended: "1.0 (MBR v1.0); 0 to 10.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.report_weight_max_acceleration",
+        explain: "The weight a new MaxAcceleration report starts with. SCMS Manager MBR v1.0 §2.3.1.3.2 initialWeight.",
+        recommended: "1.0 (MBR v1.0); 0 to 10.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.report_weight_brake_acceleration",
+        explain: "The weight a new BrakeAcceleration report starts with. SCMS Manager MBR v1.0 §2.3.1.3.4 initialWeight.",
+        recommended: "1.0 (MBR v1.0); 0 to 10.",
+    },
+    Basic {
         path: "security.scms.lifecycle.cert_shuffle_threshold",
         explain: "How many certificate requests the Registration Authority collects and mixes before passing them on, so the authority that signs the certificates cannot tell which vehicle asked when; a batch also leaves when its oldest request reaches the shuffle window. CAMP SCMS release 1.2.2, Table 67.",
         recommended: "1,000 (CAMP's production value); 10 to 10,000 (Brecht et al. 2018 used 10,000). It acts on a device's first request only: every vehicle in a run is provisioned before it joins, and its weekly top-ups are the RA's pre-generation, which does not wait in this mix, so a run's results do not change.",
