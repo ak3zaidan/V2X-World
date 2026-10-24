@@ -473,6 +473,23 @@ rows:
   value: 1
   source: 'the fault for the two rows above: with attackers the same measure is non-zero'
   measured: pending
+- id: P1.ST.A-delivered
+  variant: A
+  area: architecture
+  measure: x.fate.delivered
+  expect: ge
+  value: 1
+  source: 'the fault for the zero-quota rows: at the default quota (58 reports) reports are uploaded and, with the
+    10 s shuffle, reach the MA'
+  measured: pending
+- id: P1.ST.A-ma
+  variant: A
+  area: architecture
+  measure: x.ma.received
+  expect: ge
+  value: 1
+  source: the MA's own record of what it received is non-empty at the default quota
+  measured: pending
 - id: P1.ST.q0-all-lost
   variant: Q0
   area: architecture

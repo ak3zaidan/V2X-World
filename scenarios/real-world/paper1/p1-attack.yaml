@@ -1,5 +1,9 @@
 # The base with 3 % constant-position attackers from 20 s (P1-E6).
 # A one-change variant (docs/design/scms-real/testing/paper1-validation.md).
+# The RA's report shuffle (CAMP122 §5.2.8.4, SCMS-765: release at 10,000 reports or one day)
+# never releases inside 120 s, so no report would reach an MA and every 'delivered' row would
+# hold trivially. ASSUMPTION, stated: the window is cut to 10 s (the real shuffle fills in
+# about 20 min at the full fleet's 8 reports/s; this run files about 30 reports/s).
 schema: v2xw/scenario/1
 meta:
   base: p1-base.yaml
@@ -13,3 +17,7 @@ threats:
       schedule:
         from_s: 20.0
         to_s: 172800.0
+security:
+  scms:
+    lifecycle:
+      report_shuffle_window_s: 10
