@@ -51,7 +51,34 @@ bend rule acts on through lanes only); hard braking at 0.45 g and more stays at 
 wall cost within ±15 % of main's (the floor adds one test per vehicle and step; b1 is an
 opt-level-2 debug build, main a release build).
 
-PLACEHOLDER-TABLE
+| Quarter fleet, 0–60 s live (1.15 BSM vehicle-hours, 141 senders) | main | b1, rules on |
+|---|---|---|
+| decelerations ≥ 0.3 g over 0.5 s | 13 events (11.3 /veh-h) | 12 (10.4 /veh-h) |
+| decelerations ≥ 0.45 g / 0.52 g / 0.6 g / 0.8 g | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 |
+| BSM pairs over 10 m/s² (what MaxAcceleration sees, before receiver noise) | 1 (node 262, 1.10 → 0.00 m/s) | **0** |
+| lateral `v·Δh/Δt` between consecutive BSMs: p99, p99.9, max | 4.86, 6.20, 72.7 m/s² | 4.78, 5.87, 27.3 m/s² |
+| …pairs over 8 / over 12 m/s² (of 41,561) | 17 / 11 | **5 / 3** |
+| verdicts | 13 (implausibleAcceleration 11, positionJump 2) | **0** |
+| honest reports | 13 (**11.3 per vehicle-hour**), 2 honest vehicles reported, 0 cases | **0** (0 per vehicle-hour), 0 cases |
+| wall, peak | 89.9 s (release), 182 MB | 112.4 s (opt-2 debug), 183 MB |
+
+- **Against the target.** The engine's honest traffic at quarter density has no
+  deceleration of 0.45 g or more in 1.15 vehicle-hours, inside 100-Car's ≤ 0.28 per
+  vehicle-hour at 0.52 g (at this exposure 100-Car would expect 0–1). Its one MaxAcceleration
+  event was the snap (§3), an engine artefact, now gone; the honest report rate falls from
+  11.3 to 0 per vehicle-hour. The verdicts matched the expectation (0–2); the reports too
+  (0–4).
+- **Full density is not re-measured.** memden's 12 sender events over 10 m/s² in about 25
+  vehicle-hours (0.48 per vehicle-hour, 25× 100-Car's crash and near-crash rate) include
+  node 874's snap, now explained; sender 720's 9.6 m/s² stop at 7.9 m/s is real emergency
+  braking whose cause was not traced. The 100 s full-fleet window that would show it costs
+  about 40 min of wall time on main and was not run in this package (§5). Until then the
+  full-fleet count stays the engine's, as 06 §6 item 1 says.
+- **Same binary, rules off (b1 on the `e15bfec1` scenario):** 13 verdicts
+  (implausibleAcceleration 11, positionJump 2), 13 honest reports, the same node-262 snap at
+  46.31 s and the same braking census as main: the flags off change nothing. Wall 114.1 s
+  off against 112.4 s on (−1.5 %), peak 183 MB both: the two rules cost nothing measurable.
+  (Main's 89.9 s is a release build and does not compare.)
 
 ## 3. The node-874 speed snap: the standstill-gap advance cap (fixed, flag)
 
@@ -168,4 +195,10 @@ samples (0.6 %).
   `crl_polls_due`, the outbox and top-up scans); an event index for those is not worth its
   risk until a profile shows them.
 
-PLACEHOLDER-AFTERCOST
+**Not re-measured.** The build with both cost fixes (and the memo's fault proof: bypassed,
+its test must go red) was queued behind another package's engine test run on the machine's
+one build lock and had not run when this package stopped. Owed, on one opt-level-2 build of
+`419b8e6b`: the memo fault proof, then `QD` on the `e15bfec1` scenario against the table
+above (expected: the second fast-forward 20.6 s → 8–12 s, the rollover window 100 s → about
+90 s, every count of the run report identical), then the full-fleet second fast-forward
+(FB3: 2,014 s at 29 ms a stop).
