@@ -34,14 +34,14 @@ def res_bin(r):
 
 class IdResult:
     __slots__ = ("key", "frac", "nsm", "nbsm", "raw", "acc", "phase100", "wrapped", "at_risk", "ent_frozen",
-                 "ent_slip", "slip_sizes", "hdr_off_ms", "period_excess_ms", "res_hist", "dt_near100", "dt_all", "cnt_ok", "cnt_n")
+                 "at_risk_fast", "ent_slip", "slip_sizes", "hdr_off_ms", "period_excess_ms", "res_hist", "dt_near100", "dt_all", "cnt_ok", "cnt_n")
 
     def __init__(self, key):
         self.key = key
         self.acc = {}
         self.phase100 = Counter()
         self.wrapped = Counter()
-        self.at_risk = self.ent_frozen = self.ent_slip = 0
+        self.at_risk = self.ent_frozen = self.at_risk_fast = self.ent_slip = 0
         self.slip_sizes = Counter()
         self.hdr_off_ms = Counter()
         self.period_excess_ms = Counter()
@@ -49,11 +49,23 @@ class IdResult:
         self.dt_near100 = self.dt_all = self.cnt_ok = self.cnt_n = 0
 
 
+# A slip onset is counted only where a one-epoch slip moves the reported position by at
+# least gpsDrift (v * 100 ms >= 1 m): the band RandomPosition judges and the model is used
+# in. Below it, locked devices show sub-metre near-stale positions (Tampa: 9 onsets at
+# 5-10 m/s, residuals 0.01-0.75 m, none over 1 m; 0 of 1,152 fast pairs) that a
+# speed-independent slip probability would carry to highway speed as metre-scale triggers.
+SLIP_MIN_SPEED_MPS = 10.0
+
+
 def slip_size(p, dt):
-    """Displacement in fix intervals minus the expected number, for a moving pair."""
+    """The displacement beyond what the pair's own secMark Δt explains, in fix intervals.
+
+    Measured against v̄·Δt, not against Δt rounded to whole fix intervals: a locked device that
+    hops between the :00 and :50 grids gives Δt 0.05 s or 0.15 s with a consistent position,
+    and rounding Δt/0.1 s (round(1.49) = 1) while the displacement rounds the other way
+    (1.474 m at 9.26 m/s is 1.59 intervals) used to count that hop as a position-epoch slip."""
     vbar = 0.5 * (p.v1 + p.v2)
-    k_obs = round(math.hypot(p.dx, p.dy) / (vbar * mc.FIX_INTERVAL_S))
-    return k_obs - round(dt / mc.FIX_INTERVAL_S)
+    return round((math.hypot(p.dx, p.dy) - vbar * dt) / (vbar * mc.FIX_INTERVAL_S))
 
 
 def analyse_id(key, bsms, xy=False, nyc=False, gps_drift=mc.GPS_DRIFT_M):
@@ -90,9 +102,11 @@ def analyse_id(key, bsms, xy=False, nyc=False, gps_drift=mc.GPS_DRIFT_M):
             state = "a" if frozen or s != 0 else "n"
             if prev_state == "n":
                 res.at_risk += 1
+                fast = p.v1 >= SLIP_MIN_SPEED_MPS
+                res.at_risk_fast += fast
                 if frozen:
                     res.ent_frozen += 1
-                elif s != 0:
+                elif s != 0 and fast:
                     res.ent_slip += 1
                     res.slip_sizes[s] += 1
         prev_state = state

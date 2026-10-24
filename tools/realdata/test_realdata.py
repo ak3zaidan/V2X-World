@@ -197,6 +197,29 @@ class ClassAndPipelineTests(unittest.TestCase):
         self.assertEqual(s.slip_sizes[1], 7)
         self.assertEqual(s.ent_slip, 7)
 
+    def test_a_grid_hop_is_not_an_epoch_slip(self):
+        # A locked device moves from the :00 to the :49 grid once (Tampa: Δt 0.149 s, 1.474 m
+        # at a reported 9.26 m/s): the position is consistent with Δt (no RandomPosition
+        # trigger), so it is not a slip. Rounding Δt to whole fix intervals counted it as +1.
+        v, out = 25.0, []
+        for i in range(80):
+            t = i * 0.1 + (0.049 if i >= 40 else 0.0)
+            d = 1.05 * v * t  # the vehicle is 5 % faster than its speed field says
+            lat = 41.0 + math.degrees(d / pairing.R_EARTH)
+            out.append(normalise.Bsm("H", int(round(1000 + t * 1000)) % 60000, i % 128, 1000.0 + t, 1000.0 + t,
+                                     None, lat, -106.0, v, 0.0, 0.0, 0.5, 0.4, None))
+        r = pipeline.analyse_id("h", out)
+        self.assertEqual(sum(a[2] for k, a in r.acc.items() if k[:2] == (0, 2)), 0)
+        self.assertEqual(r.ent_slip, 0)
+        self.assertGreater(r.at_risk_fast, 70)
+
+    def test_slip_onsets_are_counted_at_speed_only(self):
+        slow = pipeline.analyse_id("s", trace(80, v=7.0, slip_every=10))
+        self.assertEqual((slow.ent_slip, slow.at_risk_fast), (0, 0))
+        self.assertGreater(slow.at_risk, 50)
+        fast = pipeline.analyse_id("f", trace(80, v=12.0, slip_every=10))
+        self.assertEqual(fast.ent_slip, 7)
+
     def test_free_phase_jitter_alone_fires_at_speed(self):
         import random
         rnd = random.Random(1)
