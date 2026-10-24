@@ -1804,7 +1804,7 @@ mod tests {
             fn_: 4,
             tn: 6,
         };
-        close(a.mcc(), 40.0 / 9600f64.sqrt());
+        close(a.mcc(), 0.408_248_290_463_863); // 40 / sqrt(9600) = 1 / sqrt(6)
         close(a.informedness(), 5.0 / 12.0);
         close(a.markedness(), 0.4);
         close(a.kappa(), 0.4);

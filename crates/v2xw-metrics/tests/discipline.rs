@@ -140,16 +140,18 @@ fn no_std_transcendental_is_called() {
              platform-dependent; use v2xw_core::math",
         );
     }
-    // …and the one square root the crate does take is the routed one.
+    // …and the two square roots the crate does take are the routed ones: the Wilson
+    // interval (stats.rs) and the Matthews correlation coefficient (detection.rs).
     let routed = hits("math::sqrt");
+    let files: Vec<&str> = routed.iter().map(|(f, _, _)| f.as_str()).collect();
     assert_eq!(
-        routed.len(),
-        1,
-        "expected exactly one v2xw_core::math::sqrt call (the Wilson interval), found {}: {:?}",
+        files,
+        ["detection.rs", "stats.rs"],
+        "expected exactly two v2xw_core::math::sqrt calls (MCC in detection.rs, the Wilson \
+         interval in stats.rs), found {}: {:?}",
         routed.len(),
         routed
     );
-    assert_eq!(routed[0].0, "stats.rs");
 }
 
 /// Rule 2: no `std` hash container, except the single-entry Arrow schema metadata.
