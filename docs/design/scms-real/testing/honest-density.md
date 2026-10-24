@@ -195,10 +195,25 @@ samples (0.6 %).
   `crl_polls_due`, the outbox and top-up scans); an event index for those is not worth its
   risk until a profile shows them.
 
-**Not re-measured.** The build with both cost fixes (and the memo's fault proof: bypassed,
-its test must go red) was queued behind another package's engine test run on the machine's
-one build lock and had not run when this package stopped. Owed, on one opt-level-2 build of
-`419b8e6b`: the memo fault proof, then `QD` on the `e15bfec1` scenario against the table
-above (expected: the second fast-forward 20.6 s → 8–12 s, the rollover window 100 s → about
-90 s, every count of the run report identical), then the full-fleet second fast-forward
-(FB3: 2,014 s at 29 ms a stop).
+**After (b2, an opt-level-2 debug build of `419b8e6b`, `QD` on the `e15bfec1` scenario):**
+
+| QD window | main (release) | b2 (opt-2 debug) |
+|---|---|---|
+| first window 0–60 s (no cost fix acts here) | 101.8 s | 115.4 s |
+| rollover 43,185–43,215 s | 100.3 s | **84.3 s** |
+| …the 43,200–43,205 s slice | 35.7 s | **26.9 s** |
+| second fast-forward | 20.6 s | **9.9 s** |
+| whole run, peak | 225.8 s, 240 MB | 214.9 s, 244 MB |
+| record digest | `70562991f815…` | `70562991f815…` (identical) |
+
+- The record digest, every `phase2` count and the fast-forward report are identical: the
+  two cost fixes change no outcome.
+- b2 is a slower build than main: its first window, where neither fix acts, is 13 % slower.
+  Against that, the rollover is 16 % faster and the second fast-forward 52 % faster; a
+  same-build comparison would show more.
+- The memo's test counts real verifications (`a6b896c9`): 0 re-checks in 2,000 look-ups,
+  red with the memo bypassed ("verified it 2000 times"). Its first form, a time bound,
+  passed with the memo bypassed (the crypto crates are optimised in the test profile), so
+  it was replaced.
+- **Owed:** the full-fleet second fast-forward (FB3: 2,014 s at 29 ms a stop), where the
+  O(fleet²) view cost was largest.
