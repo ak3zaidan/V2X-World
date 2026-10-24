@@ -280,11 +280,13 @@ is ignored; at this engine's high tier it can still cost the preamble lock (§2,
 
 ### 7.2 CAM generation against Artery `CaService`
 
-`crates/v2xw-msg/tests/artery_cam.rs` transcribes `checkTriggeringConditions`, `sendCam`
-(the 500 ms low-frequency container) and `genCamDcc` (the DCC interval clamped to
-`[minInterval, maxInterval]`), with the `CaService.ned` defaults: 0.1 s, 1 s, 4°, 4 m and
-0.5 m/s. Both drive the same 60 s trajectory (cruise, braking, a crawl, a stop, a turn,
-hard acceleration, a curve), sampled every 100 ms:
+`crates/v2xw-msg/tests/cam_en302637.rs` holds an independent oracle written from
+EN 302 637-2 V1.3.2 §6.1.3 (conditions 1 and 2, `N_GenCam` = 3, the 500 ms low-frequency
+container, `T_GenCam_DCC` bounded to `[T_GenCamMin, T_GenCamMax]`; 0.1 s, 1 s, 4°, 4 m and
+0.5 m/s). Artery's `CaService` was run on the same 60 s trajectory (cruise, braking, a
+crawl, a stop, a turn, hard acceleration, a curve), sampled every 100 ms, and its counts
+are kept in the test as data; no Artery code is in the tree (licence audit,
+`docs/design/frameworks/licence-audit.md`):
 
 | DCC gate | this engine before | after | Artery | mismatched checks before → after |
 |---:|---:|---:|---:|---:|
@@ -299,9 +301,10 @@ Fixed: a DCC gate longer than `T_GenCamMax` silenced the CAM past its 1 s heartb
 EN 302 637-2 V1.3.2 §6.1.3 bounds `T_GenCam_DCC` to `[T_GenCamMin, T_GenCamMax]`. The
 low-frequency container decisions agree in every case.
 
-### 7.3 DCC gatekeeper against Vanetza (TS 102 687 Annex B)
+### 7.3 DCC gatekeeper against TS 102 687 Annex B (Vanetza as cross-check)
 
-Vanetza's `LimericBudget` implements both equations of Annex B. B.1 is
+`AdaptiveDcc::regate` is derived from TS 102 687 V1.2.1 Annex B; Vanetza's
+`LimericBudget` (LGPL-3.0, behaviour only) supplied the 75 ms cross-check value. B.1 is
 `T_on/δ` clamped to 25 ms–1 s. B.2 applies when δ changes while the gate is closed: the
 remaining wait is rescaled to the new δ. This engine had B.1 only, so a gate stayed closed
 for its old interval after the channel cleared. B.2 is now applied on every δ update

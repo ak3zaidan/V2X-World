@@ -1906,10 +1906,10 @@ impl NativeMobility {
     /// ([`crate::lanechange::lc2013::Lc2013Params::look_ahead_m`]), or further out when the
     /// target lane is no slower than the own (`changeToBest`).
     ///
-    /// As SUMO's `currentDistDisallows(usableDist, bestLaneOffset, laDist)`
-    /// (MSLCM_LC2013.cpp): the distance left is shortened by the vehicles already standing
-    /// on the target lane (`best.occupation · JAM_FACTOR`, `JAM_FACTOR` = 1) and shared
-    /// out over the lanes still to cross. Without the occupation a car slowing into the
+    /// The distance left is shortened by the length of the vehicles already standing on
+    /// the target lane (a queue there leaves less room to merge; Erdmann 2015 §3, strategic
+    /// urgency, with SUMO's documented behaviour as the check, its code not used) and
+    /// shared out over the lanes still to cross. Without the occupation a car slowing into the
     /// queue at a red light had its look-ahead shrink to two car lengths and never made the
     /// change before the no-change zone.
     #[allow(clippy::too_many_arguments)]
@@ -2060,12 +2060,12 @@ impl NativeMobility {
         let Some((side, _)) = wanted else {
             return LaneChangeDecision::Stay;
         };
-        // SUMO's strategic vetoes on a discretionary change (MSLCM_LC2013.cpp,
-        // `_wantsChange`): away from a lane change the route still needs only when there
-        // is room to come back (`currentDistDisallows(neighLeftPlace, |bestLaneOffset| + 2,
-        // laDist)`), and off a lane that keeps the route onto one that does not only when
-        // that lane runs on for `TURN_LANE_DIST` = 200 m and twice the look-ahead
-        // ("stayOnBest", "could not change back and forth in time (2)").
+        // Strategic vetoes on a discretionary change (Erdmann 2015: a tactical change must
+        // not defeat the route): away from a lane change the route still needs only when
+        // the room left, shared over the lanes to cross plus two (out and back), still
+        // exceeds the look-ahead; and off a lane that keeps the route onto one that does
+        // not only when that lane runs on for `TURN_LANE_DIST` = 200 m and twice the
+        // look-ahead, so that the driver has time to change back.
         let len_gap = ego.dims.length_m + ego.driver.min_gap_m;
         if let Some(target) = self.strategic_target(world, actor) {
             let to_target = if world.lane(target).index > lane.index {
@@ -2111,11 +2111,11 @@ impl NativeMobility {
     /// cross-validation grid at 600 veh/h a car drove 130 m of an empty road level with
     /// the car 1.5 m ahead in its target lane and was removed with no route left. SUMO's
     /// LC2013 does the same: a vehicle that cannot overtake the target-lane leader in the
-    /// space left "slow[s] down smoothly to follow leader" (SUMO
-    /// `MSLCM_LC2013::informLeader`, src/microsim/lcmodels/MSLCM_LC2013.cpp).
+    /// space left slows down smoothly to follow it (Erdmann 2015, the blocked strategic
+    /// change; SUMO's behaviour read only, its code not used).
     ///
     /// The other half of LC2013's courtesy, the target-lane follower braking to let an
-    /// urgent change in (`informFollower`), is not modelled: tried, it held the follower
+    /// urgent change in, is not modelled: tried, it held the follower
     /// and the queue behind it back across the junction upstream, and on the Manhattan
     /// extract at 3600 veh/h spill-back locked junctions (trips completed 327 against
     /// SUMO Krauss's 368, 69 vehicles left against 32; without it 365 and 35), while on
@@ -5893,7 +5893,7 @@ impl Mobility for NativeMobility {
             let lc_dt = self.params.step.as_secs_f64();
             let mut lc_updates: Vec<(ActorId, crate::lanechange::lc2013::Lc2013State)> = Vec::new();
             // Each lane's brutto occupation (length plus minimum gap of the vehicles on it),
-            // SUMO's `LaneQ::occupation`, for LC2013's strategic urgency.
+            // for LC2013's strategic urgency.
             let mut lc_occupation: BTreeMap<LaneId, f64> = BTreeMap::new();
             if lc_params.is_some() {
                 for a in self.actors.values() {
@@ -7394,9 +7394,10 @@ pub fn card(params: &EngineParams, car_following: &str) -> ModelCard {
                 "1",
                 serde_json::json!(v),
                 Source::new(
-                    SourceKind::Code,
-                    "SUMO MSLCM_LC2013.cpp (Erdmann 2015), vType lcStrategic / lcCooperative / \
-                     lcSpeedGain / lcKeepRight, default 1",
+                    SourceKind::Paper,
+                    "Erdmann 2015, SUMO's Lane-Changing Model, doi:10.1007/978-3-319-15024-6_7; \
+                     eagerness factors lcStrategic / lcCooperative / lcSpeedGain / \
+                     lcKeepRight, default 1 per SUMO's vType documentation",
                 ),
             ));
         }

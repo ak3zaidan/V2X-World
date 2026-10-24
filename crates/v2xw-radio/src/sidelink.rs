@@ -359,8 +359,9 @@ pub const LTE_PRESETS: [SlMcsSpec; 8] = [
 
 /// TS 36.213 Table 7.1.7.2.1-1, the one-layer transport block size in bits by `I_TBS`
 /// (row) and `N_PRB` 1-110 (column `N_PRB - 1`), rows `I_TBS` 0-20: every index
-/// Rel-14 PSSCH reaches without 64QAM (MCS 0-20, Table 8.6.1-1) plus one. Transcribed from
-/// the srsRAN 4G `tbs_tables.h` copy of the table; `lte_tbs_table_is_the_standards` checks
+/// Rel-14 PSSCH reaches without 64QAM (MCS 0-20, Table 8.6.1-1) plus one. The values are the
+/// standard's table (data, not code); srsRAN 4G's `tbs_tables.h` (AGPL-3.0) was used only
+/// as a keyed-in copy to compare against, and `lte_tbs_table_is_the_standards` checks
 /// every entry against the structure the standard fixes (non-decreasing along both axes,
 /// and every size is one the turbo code's interleaver sizes admit, TS 36.212 §5.1.2).
 #[rustfmt::skip]

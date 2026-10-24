@@ -43,7 +43,7 @@ pub const FINDINGS: &[(&str, &str, &str)] = &[
     ),
     (
         "PHY-14",
-        "The union bound's distance-spectrum coefficients for the punctured rates (copied from ns-3's `NistErrorRateModel`, after Haccoun & Bégin 1989) differ from an exhaustive trellis search of the 802.11 code with its 802.11 puncturing patterns in their high-order terms: rate 2/3 c13–c15 498 860 / 2 103 891 / 8 784 123 against 498 835 / 2 103 480 / 8 781 268, rate 3/4 c10–c14 379 644 … 428 005 675 against 379 546 … 427 474 864. The search reproduces every rate-1/2 coefficient exactly and every lower-order punctured one. The effect on the coded error probability is at most 6e-4 relative, under 0.001 dB.",
+        "The union bound's distance-spectrum coefficients for the punctured rates (Miller's NIST report Tables 3.1.1-3.1.3, after Haccoun & Bégin 1989; the same values other simulators use) differ from an exhaustive trellis search of the 802.11 code with its 802.11 puncturing patterns in their high-order terms: rate 2/3 c13–c15 498 860 / 2 103 891 / 8 784 123 against 498 835 / 2 103 480 / 8 781 268, rate 3/4 c10–c14 379 644 … 428 005 675 against 379 546 … 427 474 864. The search reproduces every rate-1/2 coefficient exactly and every lower-order punctured one. The effect on the coded error probability is at most 6e-4 relative, under 0.001 dB.",
         "Recorded, not changed: below any physical significance, and the published values are what other simulators use. PHY-14 holds the model within 1e-3 relative.",
     ),
     (

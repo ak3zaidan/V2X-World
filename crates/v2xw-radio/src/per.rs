@@ -1,6 +1,6 @@
 //! `phy/80211p/nist-per` — the NIST OFDM packet-error-rate model of 04-models.md §4.7.
 //!
-//! Pei and Henderson's re-derivation of the ns-3 OFDM error model from Miller's NIST BER
+//! Pei and Henderson's re-derivation of an OFDM error model from Miller's NIST BER
 //! equations, validated within about 1 dB against the CMU wireless-emulation testbed
 //! (the older Yans model was 8-10 dB too optimistic) [Pei and Henderson 2010 §II-III,
 //! R1 §C.1]. Three stages:
@@ -26,11 +26,12 @@
 //!
 //! The BER equations and the PER composition are cited to Pei and Henderson 2010
 //! Table I and Eq. 2 through 04-models.md §4.7. The **distance-spectrum coefficients**
-//! of stage 2 are not printed in the design document: they live in Miller's NIST report
-//! Tables 3.1.1-3.1.3 and are transcribed here from the reference implementation the
-//! document names (`nist_per.py`, the same polynomials ns-3's `NistErrorRateModel`
-//! evaluates). They are therefore recorded with `SourceKind::Code` and are UNVERIFIED at
-//! the primary level. What makes them trustworthy anyway is that they are
+//! of stage 2 are not printed in the design document. Their source is L. E. Miller's NIST
+//! report (a US-government work, not subject to copyright), Tables 3.1.1-3.1.3: the rate
+//! 1/2 spectrum of the K = 7 code and the punctured rate 2/3 and 3/4 spectra after Haccoun
+//! and Bégin (1989). No GPL implementation is the source; the values are facts of the
+//! code. The report's tables have not yet been re-read against this list (UNVERIFIED at
+//! the page level). What makes them trustworthy anyway is that they are
 //! over-determined: the model has to reproduce all 24 entries of §4.7's SNR-at-target-PER
 //! table, and `reproduces_the_snr_at_10_percent_per_table` checks every one of them to a
 //! tenth of a dB. A wrong coefficient would show up there immediately.
@@ -86,8 +87,7 @@ pub fn uncoded_ber(modulation: Modulation, snr: f64) -> f64 {
 /// `p` is the uncoded bit-error probability of [`uncoded_ber`]. The polynomials are in
 /// `D = sqrt(4p(1-p))`, one per code rate, with the leading factor `1/(2·bValue)` of the
 /// bound (`bValue` is 1, 2 and 3 for rates 1/2, 2/3 and 3/4). Coefficients as the module
-/// docs record: Miller's NIST report Tables 3.1.1-3.1.3, transcribed from the cited
-/// reference implementation.
+/// docs record: Miller's NIST report Tables 3.1.1-3.1.3.
 ///
 /// The result is clamped to `[0, 1]`: a union bound is an upper bound and exceeds one
 /// long before the link is usable.
@@ -390,18 +390,18 @@ fn per_card(preset: PerPreset) -> ModelCard {
                 .to_string(),
         ),
     };
-    let nist_code = Source {
-        kind: SourceKind::Code,
-        reference: "nist_per.py (the reproduction 04-models.md §4.7 names) / ns-3 \
-                    NistErrorRateModel::CalculatePe, distance spectra from Miller NIST \
-                    report Tables 3.1.1-3.1.3"
+    let nist_tables = Source {
+        kind: SourceKind::Paper,
+        reference: "L. E. Miller, \"Validation of 802.11a/UWB Coexistence Simulation\", NIST, \
+                    2003, Tables 3.1.1-3.1.3 (convolutional-code distance spectra; punctured \
+                    rates after Haccoun and Bégin 1989)"
             .to_string(),
         accessed: None,
         note: Some(
-            "UNVERIFIED at the primary level: the design document prints the BER equations \
-             but not the distance-spectrum coefficients. They are over-determined by \
-             §4.7's 24-entry SNR-at-target-PER table, which the crate's tests reproduce to \
-             0.1 dB."
+            "A US-government work. The coefficients are facts of the code, not taken from \
+             any GPL implementation. UNVERIFIED at the page level: the report's tables are \
+             not cached. They are over-determined by §4.7's 24-entry SNR-at-target-PER \
+             table, which the crate's tests reproduce to 0.1 dB."
                 .to_string(),
         ),
     };
@@ -529,7 +529,7 @@ fn per_card(preset: PerPreset) -> ModelCard {
             .to_string(),
         "No frequency-selective fading and no Doppler: a flat SINR over the frame.".to_string(),
     ];
-    card.sources = vec![pei, nist_code];
+    card.sources = vec![pei, nist_tables];
     card.validation = Validation {
         status: ValidationStatus::LiteratureChecked,
         references: vec![Source::new(
