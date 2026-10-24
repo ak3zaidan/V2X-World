@@ -1719,6 +1719,14 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the GNSS receiver static-hold threshold",
     },
+    // The per-device BSM timing model (Paper 1 item B): a share.
+    Bound {
+        path: "actors.vehicles.bsm_timing.locked_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the share of OBUs whose BSM timestamp is locked to the GNSS fix epoch",
+    },
     // --- end traffic audit ----------------------------------------------------
 ];
 
@@ -3561,6 +3569,11 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "The positioning error every equipped vehicle's BSM carries: receiver grade, outliers, degraded bursts and outages.",
     },
     KeyStatus {
+        path: "actors.vehicles.bsm_timing",
+        status: Status::Wired,
+        note: "Per-device BSM timing (locked / free classes): secMark phase, position-epoch slips, frozen repeats and generationTime jitter on the transmitted BSM.",
+    },
+    KeyStatus {
         path: "world.signals.pedestrian_speed_mps",
         status: Status::Wired,
         note: "Walking speed an imported world's pedestrian clearance is timed for.",
@@ -4397,6 +4410,21 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
                  mobility.provider is sumo"
                     .to_string(),
             ));
+        }
+    }
+    if let Some(t) = &s.actors.vehicles.bsm_timing {
+        if let Some(v) = t.locked_share {
+            bounded_at(
+                "actors.vehicles.bsm_timing.locked_share",
+                "actors.vehicles.bsm_timing.locked_share",
+                v,
+                e,
+            );
+        }
+        if t.is_on()
+            && let Err((path, why)) = t.calibration()
+        {
+            e.push(conflict(path, why));
         }
     }
     if let Some(g) = &s.actors.vehicles.gnss {

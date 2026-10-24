@@ -95,6 +95,7 @@
 #![forbid(unsafe_code)]
 
 pub mod belief;
+pub mod bsm_fields;
 pub mod card;
 pub mod ctx;
 pub mod error;

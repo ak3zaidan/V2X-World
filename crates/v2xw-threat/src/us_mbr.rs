@@ -35,6 +35,22 @@
 //! * **Consecutive** means consecutively *received* from one certificate, at most
 //!   `max_gap_s` apart (ASSUMPTION, 0.5 s: five BSM intervals). Beyond that the first
 //!   BSM's velocity no longer predicts the second's position to within 1 m.
+//!
+//! # RandomPosition: two normative readings, two clocks (Paper 1 item C)
+//!
+//! The two texts disagree (research/synthesis/check-paper1-preemption.md §2.1), so both are
+//! implemented and the default is today's:
+//!
+//! * `reading = v1_0` (default): [SM-MBR] p.6, velocity only, `p₁ + v₁·Δt`;
+//! * `reading = asn1_v1_1`: [SM-MBR-ASN] p.8 `Psid20MbrParams1VInconsistentRandomPosition`,
+//!   "two BSMs, sent 0.1 seconds apart" and "the speed, acceleration": `p₁ + (v₁·Δt +
+//!   ½·a₁·Δt²)` along the first BSM's heading with `a₁` its `accelSet.long`, judged only
+//!   on pairs whose Δt is within `spacing_tolerance_s` (ASSUMPTION, 0.05 s, half a BSM
+//!   interval) of 0.1 s.
+//!
+//! Δt is read from the 1609.2 `generationTime` (`time_base = generation_time`, default) or
+//! from the BSM's `secMark` (`time_base = secmark`), wrapped at the minute and placed in
+//! the minute the generation times say. The gap limit `max_gap_s` is a parameter.
 
 use std::collections::BTreeMap;
 
@@ -44,7 +60,8 @@ use crate::detect::{Detector, DetectorCost, DetectorId, Fingerprint, Observation
 use crate::obs::{LocalEnvironment, ObservedKind, ObservedMessage, SelfBelief, StationType};
 use crate::records::DetObservation;
 use v2xw_core::card::{
-    Determinism, Equation, Family, ModelCard, Parameter, Tier, Validation, ValidationStatus,
+    Determinism, Equation, Family, ModelCard, Parameter, Source, SourceKind, Tier, Validation,
+    ValidationStatus,
 };
 use v2xw_core::math;
 use v2xw_core::model::Model;
@@ -88,6 +105,55 @@ pub struct UsMbrParams {
     pub position_resolution_m: f64,
     /// The smallest non-zero speed, m/s: the J2735 `Speed` LSB (0.02).
     pub speed_resolution_mps: f64,
+    /// Which normative text RandomPosition follows (v1.0, velocity only).
+    pub reading: RandomPositionReading,
+    /// Which clock the consecutive checks read Δt from (generationTime).
+    pub time_base: TimeBase,
+    /// Under the ASN.1 v1.1 reading, how far from 0.1 s a pair's Δt may be and still be
+    /// "sent 0.1 seconds apart", seconds (ASSUMPTION, 0.05).
+    pub spacing_tolerance_s: f64,
+}
+
+/// Which normative text RandomPosition follows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RandomPositionReading {
+    /// [SM-MBR] v1.0 p.6: `|p₁ + v₁·Δt − p₂| > gpsDrift` (today's behaviour).
+    #[default]
+    V1_0,
+    /// [SM-MBR-ASN] v1.1 p.8: speed and acceleration, two BSMs 0.1 s apart.
+    Asn1V1_1,
+}
+
+impl RandomPositionReading {
+    /// The name the scenario uses.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::V1_0 => "v1_0",
+            Self::Asn1V1_1 => "asn1_v1_1",
+        }
+    }
+}
+
+/// Which clock a consecutive check reads Δt from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TimeBase {
+    /// The IEEE 1609.2 header `generationTime` (today's behaviour).
+    #[default]
+    GenerationTime,
+    /// The BSM's own `secMark`, wrapped at the minute.
+    SecMark,
+}
+
+impl TimeBase {
+    /// The name the scenario uses.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::GenerationTime => "generation_time",
+            Self::SecMark => "secmark",
+        }
+    }
 }
 
 impl Default for UsMbrParams {
@@ -106,12 +172,15 @@ impl Default for UsMbrParams {
             max_gap_s: 0.5,
             position_resolution_m: 0.01,
             speed_resolution_mps: 0.02,
+            reading: RandomPositionReading::V1_0,
+            time_base: TimeBase::GenerationTime,
+            spacing_tolerance_s: 0.05,
         }
     }
 }
 
 /// The parameter names [`UsMbrParams::apply`] reads.
-pub const PARAM_KEYS: [&str; 13] = [
+pub const PARAM_KEYS: [&str; 16] = [
     "constant_position",
     "random_position",
     "gps_drift_m",
@@ -125,6 +194,9 @@ pub const PARAM_KEYS: [&str; 13] = [
     "max_gap_s",
     "position_resolution_m",
     "speed_resolution_mps",
+    "reading",
+    "time_base",
+    "spacing_tolerance_s",
 ];
 
 impl UsMbrParams {
@@ -146,9 +218,56 @@ impl UsMbrParams {
             "max_gap_s" => self.max_gap_s = v,
             "position_resolution_m" => self.position_resolution_m = v,
             "speed_resolution_mps" => self.speed_resolution_mps = v,
+            // A choice by number: 0 is the default, anything else the alternative.
+            "reading" => {
+                self.reading = if on {
+                    RandomPositionReading::Asn1V1_1
+                } else {
+                    RandomPositionReading::V1_0
+                };
+            }
+            "time_base" => {
+                self.time_base = if on {
+                    TimeBase::SecMark
+                } else {
+                    TimeBase::GenerationTime
+                };
+            }
+            "spacing_tolerance_s" => self.spacing_tolerance_s = v,
             _ => return false,
         }
         true
+    }
+
+    /// Sets a choice parameter by name (`reading`: `v1_0` | `asn1_v1_1`; `time_base`:
+    /// `generation_time` | `secmark`); false for any other key or value.
+    pub fn apply_str(&mut self, key: &str, v: &str) -> bool {
+        match (key, v) {
+            ("reading", "v1_0") => self.reading = RandomPositionReading::V1_0,
+            ("reading", "asn1_v1_1") => self.reading = RandomPositionReading::Asn1V1_1,
+            ("time_base", "generation_time") => self.time_base = TimeBase::GenerationTime,
+            ("time_base", "secmark") => self.time_base = TimeBase::SecMark,
+            _ => return false,
+        }
+        true
+    }
+
+    /// Δt between the previous BSM `r` and `m` on the configured clock, seconds.
+    fn delta_t(&self, r: &Last, m: &ObservedMessage) -> f64 {
+        let by_generation = ns_to_secs(m.claimed_generation_time.saturating_sub(r.t));
+        match (self.time_base, r.sec_mark, m.bsm.sec_mark_ms) {
+            (TimeBase::SecMark, Some(a), Some(b)) => {
+                // secMark counts milliseconds within the minute: the difference is taken
+                // in the minute the generation times put the pair in.
+                let gen_ms = (i128::from(m.claimed_generation_time) - i128::from(r.t))
+                    .div_euclid(1_000_000);
+                let d = i128::from(b) - i128::from(a);
+                let k = (gen_ms - d + 30_000).div_euclid(60_000);
+                (d + k * 60_000) as f64 * 1e-3
+            }
+            // No secMark on one of the two (not a BSM): the header clock.
+            _ => by_generation,
+        }
     }
 }
 
@@ -162,6 +281,10 @@ struct Last {
     t: SimTime,
     /// When the receiver heard it, on the receiver's own timeline: what eviction reads.
     heard: SimTime,
+    /// Its `secMark`, ms within the minute.
+    sec_mark: Option<u16>,
+    /// Its `accelSet.long`, m/s².
+    accel: Option<f64>,
 }
 
 /// How long a receiver keeps the previous BSM of a sender it no longer hears: 30 s,
@@ -221,8 +344,9 @@ impl UsSmMbr {
         let p = &self.params;
         let mut out = Vec::new();
         if let Some(r) = prev {
-            // "The time between" two BSMs is between their generation times.
-            let dt = ns_to_secs(m.claimed_generation_time.saturating_sub(r.t));
+            // "The time between" two BSMs, on the configured clock (generationTime by
+            // default, or secMark).
+            let dt = p.delta_t(&r, m);
             if dt > 0.0 && dt <= p.max_gap_s {
                 let disp = math::hypot(m.claimed_x_m - r.x, m.claimed_y_m - r.y);
                 if p.constant_position
@@ -232,10 +356,23 @@ impl UsSmMbr {
                 {
                     out.push(DetectorId::ConstantPositionFrozen);
                 }
-                if p.random_position {
+                // v1.0 judges every consecutive pair; the ASN.1 v1.1 only two BSMs "sent
+                // 0.1 seconds apart".
+                let spaced = match p.reading {
+                    RandomPositionReading::V1_0 => true,
+                    RandomPositionReading::Asn1V1_1 => (dt - 0.1).abs() <= p.spacing_tolerance_s,
+                };
+                if p.random_position && spaced {
+                    let along = match p.reading {
+                        RandomPositionReading::V1_0 => r.speed * dt,
+                        // A BSM without accelSet predicts with velocity alone.
+                        RandomPositionReading::Asn1V1_1 => {
+                            r.speed * dt + 0.5 * r.accel.unwrap_or(0.0) * dt * dt
+                        }
+                    };
                     // ENU, heading 0 = east, counter-clockwise (crate::obs).
-                    let px = r.x + r.speed * r.heading.cos() * dt;
-                    let py = r.y + r.speed * r.heading.sin() * dt;
+                    let px = r.x + along * r.heading.cos();
+                    let py = r.y + along * r.heading.sin();
                     if math::hypot(m.claimed_x_m - px, m.claimed_y_m - py) > p.gps_drift_m {
                         out.push(DetectorId::PositionJump);
                     }
@@ -299,6 +436,8 @@ impl Detector for UsSmMbr {
                 heading: m.claimed_heading_rad,
                 t: m.claimed_generation_time,
                 heard: m.received_at,
+                sec_mark: m.bsm.sec_mark_ms,
+                accel: m.bsm.accel_long_mps2,
             },
         );
         self.since_sweep += 1;
@@ -379,6 +518,10 @@ pub fn card(p: &UsMbrParams) -> ModelCard {
             "RandomPosition",
             "|p₁ + v₁·(cos ψ₁, sin ψ₁)·Δt − p₂| > gpsDrift",
         ),
+        Equation::new(
+            "RandomPosition (ASN.1 v1.1)",
+            "|p₁ + (v₁·Δt + ½·a₁·Δt²)·(cos ψ₁, sin ψ₁) − p₂| > gpsDrift, |Δt − 0.1 s| ≤ tol",
+        ),
         Equation::new("MaxSpeed", "v > v_max"),
         Equation::new("MaxAcceleration", "|v₂ − v₁| / Δt > a_max"),
         Equation::new("ObsImplausible Distance", "|p − p_self| > d_max + gpsDrift"),
@@ -399,6 +542,41 @@ pub fn card(p: &UsMbrParams) -> ModelCard {
             "m",
             json!(p.obs_gps_drift_m),
             "§2.3.1.4.2",
+        ),
+        Parameter::new(
+            "max_gap_s",
+            "s",
+            json!(p.max_gap_s),
+            design("scms-real/testing/usfp.md §1 (ASSUMPTION: in neither SM-MBR text)"),
+        ),
+        Parameter::new(
+            "reading",
+            "-",
+            json!(p.reading.as_str()),
+            standard(
+                "SM-MBR v1.0 p.6 §2.3.1.2.2 (v1_0) or ASN.1 for Misbehavior Reporting v1.1 \
+                 p.8 Psid20MbrParams1VInconsistentRandomPosition (asn1_v1_1)",
+            ),
+        ),
+        Parameter::new(
+            "time_base",
+            "-",
+            json!(p.time_base.as_str()),
+            Source::new(
+                SourceKind::Code,
+                "research/synthesis/check-realdata-and-vesnos.md §2.4: the receiver's Δt \
+                 clock, IEEE 1609.2 generationTime or J2735 secMark",
+            ),
+        ),
+        Parameter::new(
+            "spacing_tolerance_s",
+            "s",
+            json!(p.spacing_tolerance_s),
+            Source::new(
+                SourceKind::Code,
+                "ASSUMPTION: half a 100 ms BSM interval around ASN.1 v1.1's 0.1 s \
+                 (research/synthesis/check-paper1-preemption.md §2.1)",
+            ),
         ),
     ];
     card.sources = vec![
@@ -457,6 +635,7 @@ mod tests {
 
     fn bsm(t_ms: u64, x: f64, speed: f64) -> ObservedMessage {
         ObservedMessage {
+            bsm: Default::default(),
             signer: [7; 8],
             kind: ObservedKind::Beacon,
             received_at: t_ms * 1_000_000,

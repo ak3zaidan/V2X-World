@@ -145,6 +145,9 @@ pub struct ObservedMessage {
     pub cert_valid_to: SimTime,
     /// The station type the message declares about its sender.
     pub station_type: StationType,
+    /// A BSM's `secMark` and `accelSet.long`, as the frame carried them (the SM-MBR
+    /// RandomPosition variants read them; default for anything else).
+    pub bsm: v2xw_core::bsm_fields::BsmExtras,
     /// What this node concluded about the signature.
     pub verification: VerificationState,
 }
@@ -544,6 +547,7 @@ mod tests {
     #[test]
     fn a_belief_input_is_constructible_without_any_ground_truth() {
         let m = ObservedMessage {
+            bsm: Default::default(),
             signer: [1, 2, 3, 4, 5, 6, 7, 8],
             kind: ObservedKind::Beacon,
             received_at: 1_000_000_000,

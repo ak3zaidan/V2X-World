@@ -1951,6 +1951,7 @@ impl VruDeviceRuntime {
             claimed_pos: frame.claimed_pos,
             claimed_speed_mps: frame.claimed_speed_mps,
             claimed_heading_rad: frame.claimed_heading_rad,
+            bsm: frame.bsm,
             verification,
             payload: None,
         }
@@ -2071,6 +2072,8 @@ impl VruDeviceRuntime {
                 generation_time: r.at,
                 sign_start: sched.start,
                 signed: Some(frame),
+                claimed_pos: None,
+                bsm: Default::default(),
             });
         }
     }

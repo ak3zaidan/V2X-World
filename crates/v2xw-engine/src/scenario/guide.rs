@@ -928,6 +928,21 @@ const ADVANCED: &[Basic] = &[
         explain: "Below this speed the GPS receiver treats the vehicle as stopped: it holds the position and reports zero speed. Needs the smoothing.",
         recommended: "0.3 m/s (the US real-world presets); 0 for off.",
     },
+    Basic {
+        path: "actors.vehicles.bsm_timing.enabled",
+        explain: "Gives each car's radio its own message timing, as real units have: some stamp each message with the instant of the GPS fix (locked), others do not (free), and those now and then send a position one fix too old or too new, or the last one again. Real CV-pilot data shows that is what makes honest cars trip the US position-consistency check.",
+        recommended: "Off (default) to compare with earlier runs; on for honest-trigger studies.",
+    },
+    Basic {
+        path: "actors.vehicles.bsm_timing.locked_share",
+        explain: "The share of cars whose message time is locked to the GPS fix.",
+        recommended: "0.25 (Tampa CV pilot, built in); sweep 0 to 1.",
+    },
+    Basic {
+        path: "actors.vehicles.bsm_timing.calibration",
+        explain: "A timing calibration file fitted to real CV-pilot messages.",
+        recommended: "data/calibration/bsm-timing-cvpilot.yaml when present; unset uses provisional built-in values.",
+    },
     // end traffic audit
     // SCMS settings audit (docs/guides/config-inventory-scms.md)
     Basic {

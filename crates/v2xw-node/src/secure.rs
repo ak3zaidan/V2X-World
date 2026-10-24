@@ -885,6 +885,24 @@ impl NodeSecurity {
         sid: SignerIdChoice,
         location: Option<GenerationLocation>,
     ) -> Result<(SignedFrame, SecuredPdu), SecError> {
+        self.sign_with_extra_skew(ctx, msg_type, payload, sid, location, 0)
+    }
+
+    /// [`NodeSecurity::sign`] with the header's `generationTime` a further `extra_ns` off
+    /// the node's believed time: the per-device BSM timing model's header jitter
+    /// ([`crate::bsm_timing`]). `0` is [`NodeSecurity::sign`].
+    ///
+    /// # Errors
+    /// As [`NodeSecurity::sign`].
+    pub fn sign_with_extra_skew(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        msg_type: MsgType,
+        payload: &[u8],
+        sid: SignerIdChoice,
+        location: Option<GenerationLocation>,
+        extra_ns: i64,
+    ) -> Result<(SignedFrame, SecuredPdu), SecError> {
         let signer = self.signer().cloned().ok_or(SecError::MissingField {
             profile: "node/security",
             field: "no credential has been provisioned; a node without one stops \
@@ -925,7 +943,7 @@ impl NodeSecurity {
             payload,
             &hdr,
             sid,
-            self.clock_offset_ns,
+            self.clock_offset_ns.saturating_add(extra_ns),
         )?;
         let cert_bytes = if pdu.signer_id == v2xw_sec::SignerIdChoice::Certificate {
             u32::try_from(signer.cert_coer().len()).unwrap_or(u32::MAX)

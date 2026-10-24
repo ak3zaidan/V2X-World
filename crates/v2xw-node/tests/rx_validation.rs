@@ -954,6 +954,7 @@ fn a_unit_forwards_a_sized_report_only_under_a_trusted_root() {
             signature_valid: true,
             spdu: None,
             signer_certificate: Some(cert),
+            bsm: Default::default(),
         };
         let reg = RngRegistry::new(55);
         let mut ctx = NodeRuntimeCtx::new(11 * NS_PER_S, &reg);

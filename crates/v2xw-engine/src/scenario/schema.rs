@@ -1006,6 +1006,73 @@ pub struct Vehicles {
     /// percentiles, the legacy engine's outlier and burst rates).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gnss: Option<GnssSettings>,
+    /// The per-device BSM timing model (`node/bsm-timing/per-device`): each OBU's timing
+    /// class sets its transmitted BSMs' secMark phase, position-epoch slips, frozen
+    /// repeats and generationTime jitter, as measured on CV-pilot BSMs
+    /// (research/synthesis/check-realdata-and-vesnos.md §2.3). Unset is off: every BSM
+    /// reports the position at its own generation instant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bsm_timing: Option<BsmTimingSettings>,
+}
+
+/// The per-device BSM timing model's settings ([`Vehicles::bsm_timing`]).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BsmTimingSettings {
+    /// Turns the model on. Unset or false is off (every existing run unchanged).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// A `v2xw.bsm_timing.v1` calibration file (YAML), as the real-data pipeline writes
+    /// it (`data/calibration/bsm-timing-cvpilot.yaml`). Unset is the built-in values,
+    /// which are PROVISIONAL (CV-pilot sample statistics,
+    /// research/synthesis/check-realdata-and-vesnos.md §2.2-2.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration: Option<String>,
+    /// The share of OBUs in the `locked` class (secMark on the GNSS fix epoch), 0 to 1;
+    /// the other classes share the rest in proportion. Unset is the calibration's own
+    /// share (0.25 built in: Tampa's 48 locked of 190 classified IDs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locked_share: Option<f64>,
+}
+
+impl BsmTimingSettings {
+    /// Whether the model runs.
+    #[must_use]
+    pub fn is_on(&self) -> bool {
+        self.enabled == Some(true)
+    }
+
+    /// The calibration these settings name, with the locked share applied.
+    ///
+    /// # Errors
+    /// A sentence naming the field and what is wrong with it.
+    pub fn calibration(
+        &self,
+    ) -> Result<v2xw_node::bsm_timing::BsmTimingCalibration, (&'static str, String)> {
+        let cal = match &self.calibration {
+            None => v2xw_node::bsm_timing::BsmTimingCalibration::provisional(),
+            Some(path) => {
+                let text = std::fs::read_to_string(path).map_err(|e| {
+                    (
+                        "actors.vehicles.bsm_timing.calibration",
+                        format!("names {path}, which cannot be read: {e}"),
+                    )
+                })?;
+                v2xw_node::bsm_timing::BsmTimingCalibration::from_text(&text).map_err(|e| {
+                    (
+                        "actors.vehicles.bsm_timing.calibration",
+                        format!("names {path}, which is not a v2xw.bsm_timing.v1 file: {e}"),
+                    )
+                })?
+            }
+        };
+        match self.locked_share {
+            None => Ok(cal),
+            Some(share) => cal
+                .with_locked_share(share)
+                .map_err(|e| ("actors.vehicles.bsm_timing.locked_share", e)),
+        }
+    }
 }
 
 // traffic audit
@@ -1263,6 +1330,7 @@ impl Default for Vehicles {
             driving: v2xw_mobility::carfollowing::library::DrivingSpec::default(),
             drivers: Drivers::default(),
             gnss: None,
+            bsm_timing: None,
         }
     }
 }

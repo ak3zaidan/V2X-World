@@ -887,6 +887,7 @@ pub fn run(opts: &SimOptions) -> SimOut {
                     continue;
                 };
                 heard.push(ObservedMessage {
+                    bsm: Default::default(),
                     signer,
                     kind: claim.kind.clone(),
                     // The frame's own arrival, on this node's clock — see
@@ -922,6 +923,7 @@ pub fn run(opts: &SimOptions) -> SimOut {
                     continue;
                 };
                 heard.push(ObservedMessage {
+                    bsm: Default::default(),
                     signer,
                     kind: claim.kind.clone(),
                     received_at: runtime.clock().believed_time(claim.arrival),
@@ -1244,6 +1246,7 @@ pub fn run(opts: &SimOptions) -> SimOut {
                             // question and not this comparison's.
                             spdu: None,
                             signer_certificate: None,
+                            bsm: Default::default(),
                         },
                         OnAirClaim {
                             arrival: end,
