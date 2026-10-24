@@ -13,6 +13,11 @@ meta:
   tags: [benchmark, variants, manhattan, scms, dsrc, laptop]
   created: "2026-10-24"
   base: ../midtown-scms-benchmark-quarter.yaml
+security:
+  scms:
+    # The PKI view records every backend message and what each entity learns (the
+    # benchmark turns it off for its two-day run); it records, it does not change the run.
+    pki_view: true
 time:
   duration_s: 60.0
   warmup_s: 30.0

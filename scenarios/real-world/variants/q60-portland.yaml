@@ -16,6 +16,11 @@ actors:
   vehicles:
     demand:
       rate_veh_per_h: 750.0
+security:
+  scms:
+    # The PKI view records every backend message and what each entity learns (the
+    # benchmark turns it off for its two-day run); it records, it does not change the run.
+    pki_view: true
 time:
   duration_s: 60.0
   warmup_s: 30.0
