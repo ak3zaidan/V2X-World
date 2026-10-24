@@ -65,7 +65,21 @@ counted 1,251 relay uploads and 14,280 CRL broadcasts, against 15,531 MTU refusa
 
 - With generic-sdu: 616 relay uploads, 391 vehicle reports at the proxy through an RSU,
   2,148 report and 16,595 CRL-frame reassemblies, 14,700 CRL broadcasts, and 0 frames
-  refused at the MTU.
+  refused at the MTU. These are the 2026-10-22 numbers, before the wave-3 GNSS fix and
+  before the repro gained its own reporter; the current ones are below.
+- **Current repro (re-run 2026-10-24 on `81a12183`, release binary, `rerun-2026-10-24-b.md`
+  §2).** Since fix wave 3 (R-USFP's smoothing receiver, R-UNSEC) the base's honest traffic
+  no longer feeds the MA, and finalize 4 added one ConstPos attacker (actor 112) on the road
+  of relay-only node 56 (06 §6 item 9). The scenario now has 4 attackers, 113 nodes (18
+  relay-only vehicles) and, in 120 s: **3 MA revoke decisions, 3 attackers revoked, 0
+  honest**; 36 relay uploads and 182 cellular uploads; 346 reports received, 345 at the MA,
+  3 cases; 164 reports over the relay leg of which 135 are the units' own (R-PQUNSEC, 06 §6
+  item 10), so 29 vehicle reports reached the proxy through a unit; 0 reports and 0 CRL
+  frames refused at the MTU; 1,140 CRL broadcasts; 150 RSU CRL installs and 4,382 revoked
+  receptions refused at units (8,678 fleet-wide); 7,669 SDUs fragmented into 17,654
+  fragments, 21,097 reassemblies complete and 133,551 lost. 38.7 s wall, 120 MB. The
+  fourth attacker (node 46) is never reported (0 reports), which is the handset gap of
+  06 §6 item 14. Rows `RR.RELAY.*` in `scms-variants.yaml`.
 - With the certificate cycle, which splits only the certificate: 0 relay uploads and 0
   CRL broadcasts are counted, and the refusals are > 0. This variant is the one that
   shows the refusal. Under `fragmenter/none` the hybrid BSM with its certificate is
