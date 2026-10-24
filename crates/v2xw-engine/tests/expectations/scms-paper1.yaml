@@ -93,6 +93,9 @@ runs:
   VR:
     scenario: scenarios/real-world/paper1/p1-attack.yaml
     note: p1-attack cut to 60 s, --veremi veremi-ext, --record-level receptions
+  VRF:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+    note: VR at --record-level full (the recording keeps gt.kinematics)
   E4:
     scenario: scenarios/real-world/paper1/p1-e4.yaml
     note: free-flow highway 60 s, cvpilot timing at locked 1, smoothed receiver
@@ -689,6 +692,24 @@ rows:
   expect: ge
   value: 1
   source: 'the fault: one true id written into a trace''s `sender` must be caught'
+  measured: pending
+- id: P1.VR.full-truth
+  base: VRF
+  variant: VRF
+  area: metrics
+  measure: x.vr.gt_attackers_ok
+  expect: 'true'
+  source: 'written after VR showed every attacker message coded 0 at --record-level receptions: with gt.kinematics
+    recorded the truth file must code the ConstPos attackers'' messages 1'
+  measured: pending
+- id: P1.VR.full-truth-pos
+  base: VRF
+  variant: VRF
+  area: metrics
+  measure: x.vr.truth_zero_pos
+  expect: eq
+  value: 0
+  source: the true position of every message is the sender's gt.kinematics, never the (0, 0) of a missing join
   measured: pending
 - id: P1.BF.honest-zero
   base: VR
