@@ -34,7 +34,7 @@ def res_bin(r):
 
 class IdResult:
     __slots__ = ("key", "frac", "nsm", "nbsm", "raw", "acc", "phase100", "wrapped", "at_risk", "ent_frozen",
-                 "ent_slip", "slip_sizes", "hdr_diff_ms", "res_hist", "dt_near100", "dt_all", "cnt_ok", "cnt_n")
+                 "ent_slip", "slip_sizes", "hdr_off_ms", "period_excess_ms", "res_hist", "dt_near100", "dt_all", "cnt_ok", "cnt_n")
 
     def __init__(self, key):
         self.key = key
@@ -43,7 +43,8 @@ class IdResult:
         self.wrapped = Counter()
         self.at_risk = self.ent_frozen = self.ent_slip = 0
         self.slip_sizes = Counter()
-        self.hdr_diff_ms = []
+        self.hdr_off_ms = Counter()
+        self.period_excess_ms = Counter()
         self.res_hist = Counter()
         self.dt_near100 = self.dt_all = self.cnt_ok = self.cnt_n = 0
 
@@ -62,6 +63,10 @@ def analyse_id(key, bsms, xy=False, nyc=False, gps_drift=mc.GPS_DRIFT_M):
     res.nbsm = len(bs)
     sms = [b.secmark for b in bs if b.secmark is not None]
     res.frac, res.nsm = devclass.locked_fraction(sms)
+    for b in bs:
+        if b.t_hdr is not None and b.secmark is not None:
+            # header time minus the BSM's own timestamp (`order` is the unwrapped secMark time)
+            res.hdr_off_ms[int(round((b.t_hdr - b.order) * 1000.0))] += 1
     for s in sms:
         res.phase100[devclass.phase100(s)] += 1
         res.wrapped[devclass.phase_wrapped(s)] += 1
@@ -74,8 +79,8 @@ def analyse_id(key, bsms, xy=False, nyc=False, gps_drift=mc.GPS_DRIFT_M):
             if p.dcnt is not None:
                 res.cnt_n += 1
                 res.cnt_ok += p.dcnt == 1
-        if dsm is not None and p.dt[1] is not None and 0 < dsm < 0.55:
-            res.hdr_diff_ms.append(round((p.dt[1] - dsm) * 1000.0, 1))
+        if dsm is not None and 0.05 < dsm < 0.15:
+            res.period_excess_ms[int(round(dsm * 1000.0)) - 100] += 1
         # timing-model estimator on single-interval moving pairs (secMark base)
         state = None
         if (dsm is not None and 0.05 < dsm < 0.15 and p.v1 is not None and p.v2 is not None

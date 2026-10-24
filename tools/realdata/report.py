@@ -63,7 +63,7 @@ class Tables:
 
     def headline(self, datasets):
         self.add("### T2. RandomPosition v1.0 (gpsDrift 1 m), secMark Δt, gap limit 0.5 s, v ≥ 10 m/s", "",
-                 "Rate is triggers per observed ID-minute of judged pairs, with an ID-clustered bootstrap 95% CI "
+                 "Rate is triggers per observed ID-minute of judged pairs, with an ID-clustered bootstrap 95%% CI "
                  "(%d replicates)." % bootci.B, "",
                  "| Dataset | Class | IDs | Pairs | Triggers | % of pairs | Triggers per ID-minute [95% CI] |",
                  "|---|---|---|---|---|---|---|")
@@ -102,9 +102,9 @@ class Tables:
                                                                  " | ".join(self.rc(c) for c in cells)))
         self.add("")
 
-    def bands(self, datasets):
-        self.add("### T4. RandomPosition v1.0 by speed band (secMark, 0.5 s)", "",
-                 "Cells: % of judged pairs over 1 m (triggers per ID-minute).", "",
+    def bands(self, datasets, check_i=2, title="T4. RandomPosition v1.0", what="over 1 m"):
+        self.add("### %s by speed band (secMark, 0.5 s)" % title, "",
+                 "Cells: %% of judged pairs %s (triggers per ID-minute)." % what, "",
                  "| Dataset | Class | " + " | ".join(mc.BAND_NAMES) + " m/s |", "|---|---|" + "---|" * len(mc.BAND_NAMES))
         for ds in datasets:
             for cname, cls in self._cls_rows(ds):
@@ -112,12 +112,13 @@ class Tables:
                     continue
                 row = []
                 for bi in range(len(mc.SPEED_BANDS)):
-                    u = pipeline.cell_units(ds, 0, 2, (bi,), 2, cls, self.params)
+                    u = pipeline.cell_units(ds, 0, 2, (bi,), check_i, cls, self.params)
                     t = sum(x[0] for x in u)
                     n = sum(x[2] for x in u)
                     m = sum(x[1] for x in u)
                     row.append("%s%% (%s)" % (fmt(100.0 * t / n, 2), fmt(t / m)) if n else "-")
-                    self.json["T4|%s|%s|%s" % (ds.name, cname, mc.BAND_NAMES[bi])] = {"pairs": n, "triggers": int(t)}
+                    self.json["%s|%s|%s|%s" % (title.split(".")[0], ds.name, cname, mc.BAND_NAMES[bi])] = {
+                        "pairs": n, "triggers": int(t)}
                 self.add("| %s | %s | %s |" % (ds.name, cname, " | ".join(row)))
         self.add("")
 

@@ -72,7 +72,8 @@ def timing_stats(datasets, params):
         for r in ds.ids.values():
             c = devclass.classify(r.frac, r.nsm, params)
             a = agg.setdefault(c, {"ids": 0, "phase100": Counter(), "wrapped": Counter(), "at_risk": 0,
-                                   "frozen": 0, "slip": 0, "sizes": Counter(), "hdr": []})
+                                   "frozen": 0, "slip": 0, "sizes": Counter(), "hdr": Counter(),
+                                   "excess": Counter()})
             a["ids"] += 1
             a["phase100"].update(r.phase100)
             a["wrapped"].update(r.wrapped)
@@ -80,7 +81,8 @@ def timing_stats(datasets, params):
             a["frozen"] += r.ent_frozen
             a["slip"] += r.ent_slip
             a["sizes"].update(r.slip_sizes)
-            a["hdr"] += r.hdr_diff_ms
+            a["hdr"].update(r.hdr_off_ms)
+            a["excess"].update(r.period_excess_ms)
     return agg
 
 
@@ -109,26 +111,49 @@ def _empirical(phase100, width=10):
     for x, n in phase100.items():
         c[min(int(x) // width, len(bins) - 2)] += n
     tot = sum(c.values())
-    return bins, [r6(c[i] / tot) for i in range(len(bins) - 1)]
+    return bins, sum_to_one([c[i] / tot for i in range(len(bins) - 1)])
 
 
-def header_sd(diffs):
-    """Per-message header jitter sd from per-pair (header Δt - secMark Δt): robust sd / sqrt 2."""
-    if len(diffs) < 10:
-        return None
-    med = bootci.quantile(diffs, 0.5)
-    mad = bootci.quantile([abs(d - med) for d in diffs], 0.5)
-    return 1.4826 * mad / math.sqrt(2)
+def sum_to_one(ps, nd=6):
+    """Round to nd decimals so the rounded values sum to exactly 1 (the largest absorbs it)."""
+    out = [round(p, nd) for p in ps]
+    i = max(range(len(out)), key=lambda k: out[k])
+    out[i] = round(out[i] + 1.0 - sum(out), nd)
+    return out
 
 
-def timing_yaml(fit_agg, hdr_agg, prov, version):
+def counter_moments(c):
+    n = sum(c.values())
+    if n < 10:
+        return None, None, n
+    mean = sum(k * v for k, v in c.items()) / n
+    return mean, math.sqrt(sum(v * (k - mean) ** 2 for k, v in c.items()) / n), n
+
+
+def counter_q(c, q):
+    n = sum(c.values())
+    acc = 0
+    for k in sorted(c):
+        acc += c[k]
+        if acc >= q * n:
+            return k
+    return None
+
+
+def header_sd(offsets):
+    """Per-message header jitter: sd of (header time - secMark time) over messages (ms).
+    The locked class's secMark sits on the fix epoch, so it stands in for true time."""
+    return counter_moments(offsets)
+
+
+def timing_yaml(fit_agg, hdr_agg, prov, version, notes=()):
     nl = fit_agg.get("locked", {}).get("ids", 0)
     nf = fit_agg.get("free", {}).get("ids", 0)
     nm = fit_agg.get("mixed", {}).get("ids", 0)
-    hdr = []
+    hdr = Counter()
     for a in hdr_agg.values():
-        hdr += a["hdr"]
-    hsd = header_sd(hdr)
+        hdr.update(a["hdr"])
+    hmean, hsd, hn = header_sd(hdr)
     pooled = Counter()
     for c in ("locked", "free"):
         pooled.update(fit_agg.get(c, {}).get("sizes", Counter()))
@@ -138,6 +163,7 @@ def timing_yaml(fit_agg, hdr_agg, prov, version):
          "# unclassified IDs are left out of the shares. Phases are secMark mod 100 ms (fix epochs",
          "# assumed on the 100 ms grid); locked devices sit on either the :00 or the :50 grid, so the",
          "# locked phase is the distance to the nearest 50 ms epoch.",
+         *["# " + n for n in notes],
          "schema: v2xw.bsm_timing.v1",
          "provenance:",
          "  sources:"]
@@ -154,15 +180,24 @@ def timing_yaml(fit_agg, hdr_agg, prov, version):
         if not a:
             continue
         L.append("  - name: %s" % c)
-        L.append("    share: %s" % r6(n / (nl + nf)))
+        L.append("    share: %s" % sum_to_one([nl / (nl + nf), nf / (nl + nf)])[0 if c == "locked" else 1])
         if c == "locked":
             mean, sd, core = _normal_core(a["wrapped"])
             L.append("    # normal fitted to the %.1f%% of locked BSMs within 5 ms of a 50 ms epoch" % (100 * core))
             L.append("    secmark_phase_ms: {dist: normal, mean: %s, sd: %s}" % (r6(mean), r6(sd)))
         else:
             bins, p = _empirical(a["phase100"])
+            L.append("    # bins_ms are the %d edges of %d bins; p[i] is the share in [bins_ms[i], bins_ms[i+1])"
+                     % (len(bins), len(p)))
             L.append("    secmark_phase_ms: {dist: empirical, bins_ms: [%s], p: [%s]}" % (
                 ", ".join(str(b) for b in bins), ", ".join(str(x) for x in p)))
+        if a["excess"]:
+            L.append("    # secMark Δt minus 100 ms on single-interval pairs: p10 %s, p50 %s, p90 %s ms" % (
+                counter_q(a["excess"], 0.1), counter_q(a["excess"], 0.5), counter_q(a["excess"], 0.9)))
+        if c == "free":
+            L.append("    # the free BSM period exceeds the fix interval, so the phase drifts across the fix grid:")
+            L.append("    # draw the phase per device and let it drift; independent per-message draws double count")
+            L.append("    # the slips below, which are the observed onsets of a position-epoch change")
         risk = a["at_risk"]
         L.append("    # onsets per single-interval moving pair (v >= 5 m/s) after a normal pair: %d at risk" % risk)
         L.append("    epoch_slip_prob: %s" % r6(a["slip"] / risk if risk else 0.0))
@@ -173,7 +208,11 @@ def timing_yaml(fit_agg, hdr_agg, prov, version):
         L.append('    slip_epochs: {"-1": %s, "1": %s, "2": %s}' % (dist["-1"], dist["1"], dist["2"]))
         L.append("    frozen_repeat_prob: %s" % r6(a["frozen"] / risk if risk else 0.0))
         if c == "locked":
-            L.append("    # from Wyoming (the only source with a header time; its class/rate results stay held out)")
+            L.append("    # from %d Wyoming BSMs (the only source with a header time; its class and rate results" % hn)
+            L.append("    # stay held out). Header minus secMark also has a mean of %.1f ms, and it is" % hmean)
+            L.append("    # persistent: it changes in steps of about 50 ms rather than per message. PROVISIONAL")
+            L.append("    # until P1-E3: if metadata_generatedat is ODE log time, not the signed 1609.2")
+            L.append("    # generationTime, this is not a header jitter.")
         else:
             L.append("    # no free-class source has a header time: borrowed from the locked Wyoming fit")
         L.append("    header_jitter_ms: {sd: %s}" % r6(hsd))

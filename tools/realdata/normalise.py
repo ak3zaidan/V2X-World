@@ -152,10 +152,20 @@ def nyc_event_bsms(event_key, bsmlist):
         wb = (cd.get("brakes") or {}).get("wheelBrakes")
         t = cd.get("T_s")
         out.append(Bsm("%s:%s" % (event_key, cd.get("id")), None, cd.get("msgCnt"), t, None, None,
-                       cd.get("Y_m"), cd.get("X_m"), cd.get("speed_mps"), cd.get("heading_deg"),
+                       cd.get("Y_m"), cd.get("X_m"), _nyc_speed(cd.get("speed_mps")), _nyc_heading(cd.get("heading_deg")),
                        a if a is not None and abs(a) < 20.01 else None, j_axis(acc.get("semiMajor")),
                        j_axis(acc.get("semiMinor")), None if wb in (None, "") else j_brakes(_hex_bits(wb))))
     return out
+
+
+def _nyc_speed(v):
+    # NYC converted J2735 speed to m/s; 8191 (unavailable) becomes 163.82
+    return None if v is None or v < 0 or v >= 163.8 else v
+
+
+def _nyc_heading(v):
+    # 28800 (unavailable) becomes 360.0
+    return None if v is None or v < 0 or v >= 360.0 else v
 
 
 def _hex_bits(wb):

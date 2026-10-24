@@ -45,11 +45,12 @@ def rp_triggers(bs, gps_drift):
 
 
 def pick_index(bs, vmin=15.0):
-    """A BSM k in the middle of the trace whose two adjacent pairs are single-interval and fast."""
+    """A BSM k in the middle of the trace whose two adjacent pairs, and the pair before them (the
+    slip estimator needs a normal pair before an onset), are single-interval and fast."""
     ps = pairing.pairs(bs)
-    good = [k for k in range(1, len(ps)) if all(
+    good = [k for k in range(2, len(ps)) if all(
         ps[i].dt[0] is not None and 0.05 < ps[i].dt[0] < 0.15 and ps[i].v1 is not None and ps[i].v1 >= vmin
-        for i in (k - 1, k))]
+        and ps[i].v2 is not None and ps[i].v2 >= vmin for i in (k - 2, k - 1, k))]
     if not good:
         return None
     return good[len(good) // 2]

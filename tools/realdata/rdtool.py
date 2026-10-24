@@ -244,6 +244,7 @@ def cmd_all(a):
     transfer_test(tab, fs, params)
     tab.matrix(datasets, bases)
     tab.bands(datasets)
+    tab.bands(datasets, 4, "T4b. ConstantPosition", "frozen (< 1 cm) while both speeds >= 0.02 m/s")
     tab.others(datasets)
     tab.anatomy(datasets)
 
@@ -255,7 +256,13 @@ def cmd_all(a):
             "manifest_sha256": manifest.manifest_sha256(),
             "fitted_on": [sources.TAMPA, sources.OREM, sources.WYOMING + " (header_jitter_ms only)"],
             "held_out": [sources.WYOMING + " (device class and trigger rates)"]}
-    yaml_text = calib.timing_yaml(fit_agg, hdr_agg, prov, VERSION)
+    notes = []
+    for ds in fs:
+        agg = calib.timing_stats([ds], params)
+        nl, nf = agg.get("locked", {}).get("ids", 0), agg.get("free", {}).get("ids", 0)
+        notes.append("%s: %d locked, %d free IDs (locked share %.3f); the share is deployment-specific."
+                     % (ds.name, nl, nf, nl / (nl + nf) if nl + nf else float("nan")))
+    yaml_text = calib.timing_yaml(fit_agg, hdr_agg, prov, VERSION, notes)
     timing_table(tab, fit_agg, yaml_text)
     with open(YAML_OUT, "w") as f:
         f.write(yaml_text)

@@ -97,6 +97,13 @@ class NormaliseTests(unittest.TestCase):
         self.assertAlmostEqual(b.accel, 1.43)
         self.assertFalse(b.brakes)
 
+    def test_nyc_unavailable_speed_and_heading(self):
+        bl = ('[{"bsmRecord": {"bsmMsg": {"coreData": {"msgCnt": 1, "id": "A", "X_m": 0, "Y_m": 0, '
+              '"T_s": 0.1, "speed_mps": 163.82, "heading_deg": 360.0}}}}]')
+        b = normalise.nyc_event_bsms("e", bl)[0]
+        self.assertIsNone(b.speed)
+        self.assertIsNone(b.heading)
+
     def test_stream_requires_contiguous_ids(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "w.csv")
@@ -220,6 +227,17 @@ class StatsAndGateTests(unittest.TestCase):
     def test_placebo_fails_without_class_effect(self):
         flat = [("locked", 5, 1.0)] * 40 + [("free", 5, 1.0)] * 40
         self.assertFalse(fgate.g3_placebo(flat)[0])
+
+    def test_header_jitter_is_per_message_sd(self):
+        from collections import Counter
+        mean, sd, n = calib.header_sd(Counter({30: 50, 50: 50}))
+        self.assertEqual((mean, sd, n), (40.0, 10.0, 100))
+        self.assertIsNone(calib.header_sd(Counter({1: 3}))[1])
+
+    def test_rounded_shares_sum_to_one(self):
+        ps = calib.sum_to_one([1 / 3, 1 / 3, 1 / 3])
+        self.assertEqual(sum(ps), 1.0)
+        self.assertEqual(calib.sum_to_one([0.0160772, 0.9839228]), [0.016077, 0.983923])
 
     def test_frozen_doc_is_deterministic(self):
         ds = pipeline.Dataset("T", "fit")
