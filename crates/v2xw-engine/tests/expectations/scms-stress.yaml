@@ -270,9 +270,9 @@ rows:
   expect: none (a switched-off OBU reaches nothing)
   source: physical; the outage switches the OBU off
   measured: "re-run on 77cffb5b: node 20 has no node.security record and transmits nothing from 645 s to 2,419,510 s, but proto.revocation records it downloading, processing and enforcing three CRLs at 604,740.2 s (the first live step of W1) while off, and no download after power-on. Before (stress round): first download at 2,419,510 s"
-  verdict: open
-  test: "security_lifecycle::a_switched_off_device_reaches_no_scms_until_it_is_back_on (F-OFF)"
-  note: "reopened: an F-OFF hole at the fast-forward boundary, or a CRL install path that skips the power check (rerun-2026-10-22.md §7); not root-caused"
+  verdict: fixed
+  test: "security_lifecycle::a_switched_off_device_reaches_no_scms_until_it_is_back_on (F-OFF); backend_entities::a_switched_off_vehicle_installs_no_list_a_unit_broadcasts"
+  note: "reopened, then fixed 2026-10-24 (backend wave): Engine::on_app_message installed a roadside CRL broadcast on a receiver whose node was off (the carousel's first turn after the fast-forward). Re-run on the fix (opt-2 debug build of the backend branch): 0 proto.revocation records for node 20 while off (was 3 CRLs at 604,740.2 s); after power-on it downloads, processes and enforces 2. New finding, not fixed: at the power-on instant node 20 still refuses one honest message (node.rx signature-invalid, no receiver rule counted): its CRL gate follows its expired pool's i-period until its first own step (CrlGate implausible period), the vehicle form of the roadside-unit gate fix"
 - id: MWP.overdue-on-return
   base: MW
   variant: MWP

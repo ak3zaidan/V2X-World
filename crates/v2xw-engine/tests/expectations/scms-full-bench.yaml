@@ -187,9 +187,14 @@ rows:
   expect: "each 10 s live window reported at its own end (240 s, 43,230 s) with rates over 10 s"
   source: "time.metric_period_s 10; testing/fast-forward.md §2 (the pause is not observed time)"
   measured: "no sample at 240 s or 43,230 s: the 230-240 s window is reported at 43,170 s and 43,220-43,230 s at 172,800 s, with per-second rates divided by the frozen time (verify_rate 115.7/s = 4.97 M verifications over 42,940 s, against 4.85e5/s live) and CBR 0; QD shows the same (its 50-60 s window is reported at 43,190 s)"
-  verdict: open
+  verdict: fixed
+  test: "calendar::a_metric_window_that_reaches_a_fast_forward_is_reported_at_its_own_end"
   note: >-
-    R-FFWIN: the window that ends where a fast-forward starts is flushed only at the next
+    Fixed 2026-10-24 (backend wave): a live window closes where a fast-forward begins, the
+    frozen span closes where it ends, the next live window runs to the period boundary, and
+    mac.cbr spans are each window's own. Shown on the test's 60 s grid (samples at 25 and 45 s
+    with the live verify rate, 60.0/s in every live window); FB3 and QD not re-run here.
+    Before: R-FFWIN: the window that ends where a fast-forward starts is flushed only at the next
     live step, and the providers that divide by elapsed time count the frozen hours.
     Counts are right; rates, CBR and per-second loads in those two samples are not. Read
     the full-scale tables from the other windows. Not fixed here (no build budget left).

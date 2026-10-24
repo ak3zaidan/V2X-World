@@ -693,7 +693,12 @@ whether a full-fleet misbehaviour rate is a real-world number.
    - **Impact:** a full-fleet false-positive count is the engine's, not yet a real-world
      rate, until the braking rate is calibrated and the polyline turns are fixed.
 2. **R-FFWIN: a window that ends where a fast-forward starts is reported late** (FB3
-   `metric-window-after-ff`, open). The 230–240 s window is reported at 43,170 s and the
+   `metric-window-after-ff`). **Fixed 2026-10-24 (backend wave):** `Engine::next_metric_flush`
+   closes a live window where a fast-forward begins, the frozen span as a window of its
+   own where it ends, and the next live window on the period grid; `mac.cbr` spans are
+   each window's own. Test `calendar.rs`
+   `a_metric_window_that_reaches_a_fast_forward_is_reported_at_its_own_end` (red on
+   `e15bfec1`: no samples at 25 and 45 s). The original description: The 230–240 s window is reported at 43,170 s and the
    43,220–43,230 s window at 172,800 s, with rates divided over the frozen hours
    (`verify_rate` 115.7/s, CBR 0). Those two samples are left out of every table. An
    analyst reading `metrics.json` directly would see them.
@@ -714,7 +719,15 @@ whether a full-fleet misbehaviour rate is a real-world number.
    owner decision on what the RA and PCA keep.
 5. **Untraced counts in FB3.** 268 of 1,715 uploaded reports never reached an MA (1,447
    received), possibly because `reports_uploaded_relay` counts a report put on the air, not
-   one delivered (item 9). 27 of 1,800 top-ups did not complete. 255 reports were not filed
+   one delivered (item 9). **Traced and fixed 2026-10-24 (backend wave)** at its cause: a
+   relayed report was counted and dropped from the store when it went on the air, heard or
+   not. On the 60 s relay grid of `security_lifecycle.rs` that lost 32 of 89 (`e15bfec1`:
+   89 counted, 57 at the proxy). Now a relayed upload is confirmed by the
+   `report-forward` unit that takes it onto its backhaul (`Phase2::relay_delivered`), an
+   unconfirmed one stays stored and goes again on an RFC 6298 timer (1 s doubling to 64 s),
+   and the forward dedup is per frame: 88 of 89 delivered, 88 counted, 1 stored at the end.
+   FB3 itself (4.2 h) is not re-run. The 27 top-ups are not traced (they need the
+   full-scale rollover window); QD completes 278 of 278. 27 of 1,800 top-ups did not complete. 255 reports were not filed
    (212 with too few BSMs on hand, 43 by RSUs that hold no pseudonym certificate, which is
    the R-UNSEC rule acting).
 6. **Privacy at full fleet is still unmeasured.** FB3 counted 0 pseudonym changes and 0 link
@@ -736,8 +749,11 @@ whether a full-fleet misbehaviour rate is a real-world number.
 8. **A switched-off car records CRL downloads** (`MWP.off-no-backend`, reopened; rerun §7).
    Node 20 is off from 645 s to 2,419,510 s, but `proto.revocation` records it downloading,
    processing and enforcing three CRLs at 604,740.2 s, the first live step after a
-   fast-forward. Not root-caused, and not re-run since finalize 4 changed how a
-   fast-forward is left.
+   fast-forward. **Fixed 2026-10-24 (backend wave):** the roadside CRL broadcast's
+   payload was installed by `Engine::on_app_message` on a receiver whose node was off
+   (the node itself refused the frame as `receiver-off`); a CRL download landing on a
+   device switched off since it asked is now also not received. Test `backend_entities.rs`
+   `a_switched_off_vehicle_installs_no_list_a_unit_broadcasts` (red on `e15bfec1`).
 9. **The two engine tests that failed after BS wave 3 pass again** (finalize 4 TESTS,
    merge `2f6c664d`; owner decisions applied; no assertion changed, no rule changed). Both
    pass on HEAD's code (§2.2).
@@ -756,9 +772,9 @@ whether a full-fleet misbehaviour rate is a real-world number.
      relay test ("no vehicle report reached the proxy through a unit"), and the judged
      evidence taken from another signer fails the wiring test ("no real US report was
      filed"). pq_relay 3/3 and scms_wiring 4/4 pass with the faults removed.
-   - Finding, not fixed: a relay-only vehicle counts a report as uploaded once it is on the
-     air to a unit within the geometric 300 m `relay_range_m`, whether or not any unit
-     hears it. Node 82's 4 "uploads" (12 fragments) all fell below sensitivity at units 212
+   - Finding, **fixed 2026-10-24 (item 5)**: a relay-only vehicle counted a report as
+     uploaded once it was on the air to a unit within the geometric 300 m
+     `relay_range_m`, whether or not any unit heard it. Node 82's 4 "uploads" (12 fragments) all fell below sensitivity at units 212
      and 218 m away behind buildings. The same car, out of the units' radio range, got its
      first CRL at 95.2 s, 60 s after the MA revoked its target (35.6 s), and reported the
      revoked attacker from 65.9 s to 72.8 s. `reports_uploaded_relay` is "put on the air",
@@ -776,9 +792,18 @@ whether a full-fleet misbehaviour rate is a real-world number.
     - RSUs have no application-certificate cycle under PQ.
     - Receivers check CRL entries against the Generator's list, not a signed CRL.
     - Every top-up is a fresh request (there is no PQ butterfly).
-    - VRU handsets always price ECDSA.
-    - Both cycle runs show 47 `Invalid` verification states that P-256 does not, with no
-      refusal counted; not root-caused (perhaps item 13's label).
+    - VRU handsets priced ECDSA whatever the scheme. **Fixed 2026-10-24 (backend wave):** a
+      handset signs and verifies with the scenario's scheme, checks each learned
+      certificate's PQ signature in the Partially-Hybrid mode, and its profile carries the
+      Cortex-A72 liboqs anchor its ECDSA figures are proxied from (tests
+      `pq_receivers.rs`, `rx_validation.rs`).
+    - Both cycle runs showed 47 `Invalid` verification states. **Root-caused and fixed
+      2026-10-24:** they were the first PSM of each handset, judged by roadside units
+      before their first own step. A unit with no application certificate (the PQ profile
+      gives it none) held its CRL gate at i-period 0 until that step and refused each
+      linked certificate as an implausible period. The gate is now set at the unit's
+      creation. PQHFC re-run: 0 `Invalid` (Verified 373,181 to 373,228). Test
+      `pq_receivers.rs`, red with the fix removed (47).
     - No standard defines PQ encodings, so no PQ number is a real-world number.
 12. **The enrolment certificate name** (rerun §8). Every enrolment certificate is named
     `ee-<device>.provider-a`, including the 46 that provider-b's ECA issues. The name is
@@ -787,7 +812,11 @@ whether a full-fleet misbehaviour rate is a real-world number.
 13. **An overdue-CRL refusal is labelled `signature-invalid` on `node.rx`** (rerun §9 item
     3). In MWC's W4 the run report counts 97,679 `crl-overdue` refusals and `node.rx` has
     exactly 97,679 `signature-invalid` fates. An analyst reading `node.rx` would see forgery
-    where there is a stale list.
+    where there is a stale list. **Fixed 2026-10-24 (backend wave):** a receiver-rule
+    refusal is `RxDisposition::Refused(rule)`, and `node.rx` names it `crl-overdue` or
+    `receiver-rule` (chain, validity, region, PSID); the message stays `Invalid` to the
+    applications. Test `rx_validation.rs`
+    `a_receiver_rule_refusal_is_reported_as_the_rule_not_as_a_bad_signature`.
 14. **The US profile cannot report a handset** (usfp §3). SM-MBR v1.0 defines reports for
     the BSM (PSID 0x20) only, so a PSM-sending attacker goes unreported. This is a gap of
     the real profile, which the engine reproduces faithfully. The research suite, with
@@ -960,17 +989,16 @@ The totals count each row as its own checklist records it, with the changes in �
    against naturalistic driving data; give lane polyline vertices a curvature limit (or
    round them in the importer); check the 567 `constantPositionFrozen` verdicts in gridlock
    one at a time; find the node-874 speed snap.
-2. **R-FFWIN** (§6 item 2): report a window that ends at a fast-forward at its own end, with
-   its own rates.
+2. ~~**R-FFWIN**~~: fixed 2026-10-24 (backend wave, §6 item 2).
 3. **The full-scale cost** (§6 item 3): profile the rollover window (the weekly
    pre-generation burst is the first suspect), then make the fast-forward's per-stop scans
    event-indexed (ff §5, part 2).
 4. ~~R-JOINCRL~~: fixed 2026-10-24 (`2a14d6c4`, §6 item 7); the multi-week re-runs are
    owed (below).
-5. **Trace FB3's 268 lost uploads and 27 incomplete top-ups**, and make
-   `reports_uploaded_relay` count delivered reports (§6 items 5 and 9).
-6. **MWP.off-no-backend**, the `node.rx` `crl-overdue` label, the 47 `Invalid` states under
-   the cycle, and VRU handsets' PQ pricing.
+5. ~~FB3's lost uploads and `reports_uploaded_relay`~~: traced and fixed 2026-10-24 (§6
+   item 5); the 27 incomplete top-ups are still untraced (full-scale only).
+6. ~~MWP.off-no-backend, the `crl-overdue` label, the 47 `Invalid` states, VRU PQ
+   pricing~~: fixed 2026-10-24 (backend wave, §6 items 8, 11, 13).
 7. **The enrolment certificate name** (moves the digests).
 8. **Mobility**: the pedestrian-invariant and kerbside defects, and the `transit` and
    `longrun_budget` failures (§6 item 16).
