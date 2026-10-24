@@ -91,7 +91,8 @@
 - {id: V2-auto-same-publication, run: ma-auto, vs: base, metric: stage.published_s, expect: delta, band: [-100, 100],
    source: "decided Tue 17:00 EDT (after the slot) instead of Wed 01:00 EDT: both publish at Wednesday's business-day slot"}
 - {id: V2-auto-same-cases, run: ma-auto, vs: base, metric: p2.cases_opened, expect: ratio, band: [1, 1], source: "the mode changes when, not whether"}
-- {id: V3-on-decision-publishes-now, run: crl-on-decision, metric: stage.published_s, expect: band, band: [115183, 115300], source: "publish on the decision"}
+- {id: V3-on-decision-publishes-now, run: crl-on-decision, metric: stage.published_s, expect: band, band: [115100, 115300], source: "publish on the decision (L2's decision band: stages count from the case's first detection)",
+   note: "corrected 2026-10-24 (was [115183, 115300]): on the 300 s base the deciding attacker's first detection is at 69 s, not ~37 s, so every stage reads 32 s smaller; absolute times unchanged: decision and publication both at 115,220.2 s (case.abs.*), rerun-2026-10-24-a §3"}
 - {id: V3-on-decision-enforced-earlier, run: crl-on-decision, vs: base, metric: stage.enforced_s, expect: delta, band: [-33000, -30000], source: "the ~9 h business-day wait is gone"}
 - {id: V4-west-report-leg, run: region-west, vs: base, metric: stage.report_received_s, expect: delta, band: [0.012, 0.05],
    source: "haversine NYC-us-east 354.5 km (2.77 ms), NYC-us-west 3,691.7 km (19.47 ms) at 2/3 c + 1 ms per link: +16.7 ms per leg"}
