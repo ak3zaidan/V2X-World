@@ -86,6 +86,7 @@
 #![forbid(unsafe_code)]
 
 pub mod apps;
+pub mod bsm_timing;
 pub mod clock;
 pub mod cpm;
 pub mod ctx;

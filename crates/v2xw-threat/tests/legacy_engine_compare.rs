@@ -335,6 +335,7 @@ fn py_round(x: f64) -> i64 {
 
 fn observed(em: &Emission, t: SimTime, conf: f64) -> ObservedMessage {
     ObservedMessage {
+        bsm: Default::default(),
         signer: em.signer,
         kind: ObservedKind::Beacon,
         received_at: t,

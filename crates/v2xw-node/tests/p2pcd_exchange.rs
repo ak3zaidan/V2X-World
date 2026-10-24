@@ -498,6 +498,7 @@ fn frames_of(out: &v2xw_node::runtime::StepOutcome) -> Vec<v2xw_node::runtime::R
                 signature_valid: true,
                 spdu: Some(s.spdu.clone()),
                 signer_certificate: None,
+                bsm: Default::default(),
             })
         })
         .collect()

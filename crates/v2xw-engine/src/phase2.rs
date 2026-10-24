@@ -2050,6 +2050,20 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
             if let Some(map) = choice.params.as_object() {
                 for (key, value) in map {
                     let field = format!("detection.local[{i}].params.{key}");
+                    // The two choice parameters by name (Paper 1 item C).
+                    if let Some(name) = value.as_str() {
+                        if !p.apply_str(key, name) {
+                            return Err(conflict(
+                                &field,
+                                format!(
+                                    "is {value}; reading takes v1_0 or asn1_v1_1, time_base \
+                                     takes generation_time or secmark, and every other \
+                                     parameter a number"
+                                ),
+                            ));
+                        }
+                        continue;
+                    }
                     let v = value
                         .as_f64()
                         .or_else(|| value.as_bool().map(|b| if b { 1.0 } else { 0.0 }))
@@ -3882,6 +3896,7 @@ impl Phase2 {
                 LEGACY_CONFIDENCE_M
             };
             let observed = ObservedMessage {
+                bsm: m.bsm,
                 signer: key,
                 kind: match m.msg_type {
                     v2xw_msg::MsgType::Denm => ObservedKind::Denm(String::new()),
@@ -6976,6 +6991,7 @@ impl Phase2 {
         seq: Option<u8>,
     ) {
         let m = ObservedMessage {
+            bsm: Default::default(),
             signer,
             kind: ObservedKind::Beacon,
             received_at: at,

@@ -372,6 +372,7 @@ const DIMENSIONLESS: &[&str] = &[
     "actors.vehicles.drivers.speed_spread",
     "actors.vehicles.drivers.red_runner_share",
     "actors.vehicles.gnss.outage_probability",
+    "actors.vehicles.bsm_timing.locked_share",
     // end traffic audit
     "security.on_demand_threshold",
 ];

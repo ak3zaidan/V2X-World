@@ -110,6 +110,8 @@ pub struct RxFrame {
     /// the frame carries its SPDU (the certificate is in the bytes) or when the engine
     /// has none to attach.
     pub signer_certificate: Option<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
+    /// A BSM's `secMark` and `accelSet` (default for anything else).
+    pub bsm: crate::bsm_timing::BsmExtras,
 }
 
 /// A message this node received and has an opinion about — the
@@ -140,6 +142,8 @@ pub struct VerifiedMessage {
     /// The facilities-layer payload the SPDU carried, when the node's applications read
     /// the message's content ([`crate::apps`]).
     pub payload: Option<std::sync::Arc<[u8]>>,
+    /// A BSM's `secMark` and `accelSet`, as the frame carried them.
+    pub bsm: crate::bsm_timing::BsmExtras,
 }
 
 /// Whether an application reads this message type's content beyond its claims.
@@ -276,6 +280,11 @@ pub struct Transmission {
     /// produced carries `Some`, and an aggregation over `node.tx` that finds `None` is
     /// looking at a frame nobody encoded.
     pub signed: Option<SignedFrame>,
+    /// The position the payload reports when it is not the node's current belief: a BSM
+    /// under the per-device timing model ([`crate::bsm_timing`]). `None` is the belief.
+    pub claimed_pos: Option<v2xw_core::geom::Vec3>,
+    /// A BSM's `secMark` and `accelSet`, for the receivers' SM-MBR checks.
+    pub bsm: crate::bsm_timing::BsmExtras,
 }
 
 impl Transmission {
@@ -319,6 +328,8 @@ impl Transmission {
             // no queue in front of the signer, so the signature starts at generation.
             sign_start: generation_time,
             signed: None,
+            claimed_pos: None,
+            bsm: crate::bsm_timing::BsmExtras::default(),
         }
     }
 }
@@ -531,6 +542,12 @@ pub struct ObuRuntime {
     /// The two §3.5.2 fields marked **GT**, handed in from outside the firewall by
     /// [`ObuRuntime::observe_truth`] and read by nothing but the telemetry path.
     gt_pos_error_m: f32,
+    /// The per-device BSM timing model, when the scenario turns it on
+    /// ([`crate::bsm_timing`]): the calibration and this device's class.
+    bsm_timing: Option<(
+        std::sync::Arc<crate::bsm_timing::BsmTimingCalibration>,
+        Option<crate::bsm_timing::BsmTimingDevice>,
+    )>,
     /// The vehicle's own bus and what the unit derives from it (path history, path
     /// prediction, lights, event flags): [`crate::vehicle`].
     own: crate::vehicle::OwnVehicle,
@@ -618,6 +635,7 @@ impl ObuRuntime {
             dcc_state_code: v2xw_record::wire::U16_NONE,
             relevance: BTreeMap::new(),
             gt_pos_error_m: f32::NAN,
+            bsm_timing: None,
             own: crate::vehicle::OwnVehicle::default()
                 .with_path_history_points(config.path_history_points),
             apps: None,
@@ -813,6 +831,20 @@ impl ObuRuntime {
     pub fn set_belief(&mut self, belief: PositionEstimate) {
         self.belief = belief;
         self.own.on_fix(&belief);
+    }
+
+    /// Turns on the per-device BSM timing model with this calibration
+    /// ([`crate::bsm_timing`]); the device's class is drawn at its first BSM.
+    pub fn set_bsm_timing(&mut self, cal: std::sync::Arc<crate::bsm_timing::BsmTimingCalibration>) {
+        self.bsm_timing = Some((cal, None));
+    }
+
+    /// The device's timing class index, once it has sent a BSM under the model.
+    #[must_use]
+    pub fn bsm_timing_class(&self) -> Option<usize> {
+        self.bsm_timing
+            .as_ref()
+            .and_then(|(_, d)| d.as_ref().map(crate::bsm_timing::BsmTimingDevice::class))
     }
 
     /// Hands the node this step's reading of its own vehicle's bus ([`crate::vehicle`]):
@@ -1849,6 +1881,7 @@ impl ObuRuntime {
             claimed_pos: frame.claimed_pos,
             claimed_speed_mps: frame.claimed_speed_mps,
             claimed_heading_rad: frame.claimed_heading_rad,
+            bsm: frame.bsm,
             verification,
             // The facilities payload, out of the SPDU as it arrived, for the messages an
             // application reads beyond the claims above (`crate::apps`). Only when the
@@ -1979,12 +2012,25 @@ impl ObuRuntime {
 
         let mut built: Vec<(MsgType, SimTime, Option<Vec<u8>>)> =
             Vec::with_capacity(wanted as usize);
+        // Per message: the timing model's report (a BSM under `crate::bsm_timing`) and the
+        // BSM fields a receiver's SM-MBR checks read.
+        let mut extras: Vec<(Option<crate::bsm_timing::BsmReport>, crate::bsm_timing::BsmExtras)> =
+            Vec::with_capacity(wanted as usize);
         for r in requests {
-            built.push((
+            let report = if r.msg_type == MsgType::Bsm {
+                self.bsm_timing_report(ctx)
+            } else {
+                None
+            };
+            let payload = self.encode_payload(
                 r.msg_type,
-                r.at,
-                self.encode_payload(r.msg_type, believed, &cred, r.include_low_frequency),
-            ));
+                believed,
+                &cred,
+                r.include_low_frequency,
+                report.as_ref(),
+            );
+            extras.push((report, self.bsm_extras(r.msg_type, believed, report.as_ref())));
+            built.push((r.msg_type, r.at, payload));
         }
         if let Some(content) = cpm_content {
             let payload = self.encode_cpm(&content, believed, &cred);
@@ -1997,7 +2043,9 @@ impl ObuRuntime {
                 .encode(&e, believed, &cred, &self.config, &self.own);
             built.push((ty, believed, payload));
         }
+        let mut extras = extras.into_iter();
         for (msg_type, at, payload) in built {
+            let (report, bsm_fields) = extras.next().unwrap_or_default();
             let Some(payload) = payload else {
                 // The node could not build a conformant message — a belief with no fix, a
                 // position outside the ASN.1's range, a clock before the 1609.2 epoch. It
@@ -2011,7 +2059,15 @@ impl ObuRuntime {
             // ETSI profile refuses to sign one without it. The node's own belief.
             let location = (r.0 == MsgType::Denm)
                 .then(|| generation_location(&self.belief, self.config.origin));
-            let Ok((frame, pdu)) = self.security.sign(ctx, r.0, &payload, sid, location) else {
+            // The model's 1609.2 generationTime jitter rides the header as a clock skew.
+            let jitter = report.map_or(0, |x| x.header_jitter_ns);
+            let signed = if jitter == 0 {
+                self.security.sign(ctx, r.0, &payload, sid, location)
+            } else {
+                self.security
+                    .sign_with_extra_skew(ctx, r.0, &payload, sid, location, jitter)
+            };
+            let Ok((frame, pdu)) = signed else {
                 self.drops.record(DropCause::TxOverflow);
                 continue;
             };
@@ -2037,9 +2093,15 @@ impl ObuRuntime {
                 signer: cred.digest.clone(),
                 full_certificate,
                 ready_at: sched.finish,
-                generation_time: r.1,
+                generation_time: if jitter >= 0 {
+                    r.1.saturating_add(jitter.unsigned_abs())
+                } else {
+                    r.1.saturating_sub(jitter.unsigned_abs())
+                },
                 sign_start: sched.start,
                 signed: Some(frame),
+                claimed_pos: report.map(|x| x.pos),
+                bsm: bsm_fields,
             };
             if let Admission::Refused(_) = self.queues[3].push(Queued {
                 item: RxFrame {
@@ -2054,6 +2116,7 @@ impl ObuRuntime {
                     signature_valid: true,
                     spdu: None,
                     signer_certificate: None,
+                    bsm: bsm_fields,
                 },
                 enqueued_at: believed,
             }) {
@@ -2069,6 +2132,43 @@ impl ObuRuntime {
             // rather than inventing a data rate.
             self.window.message_out(Duration::ZERO, tx.full_certificate);
             out.transmissions.push(tx);
+        }
+    }
+
+    /// The timing model's report for the BSM about to be built, drawing the device's
+    /// class at its first BSM; `None` when the model is off or there is no fix.
+    fn bsm_timing_report(&mut self, ctx: &mut dyn NodeCtx) -> Option<crate::bsm_timing::BsmReport> {
+        let node = self.node;
+        let (cal, device) = self.bsm_timing.as_mut()?;
+        let mut rng = ctx.rng(
+            crate::bsm_timing::rng_domain(),
+            v2xw_core::rng::EntityRef::Node(node),
+        );
+        let device =
+            device.get_or_insert_with(|| crate::bsm_timing::BsmTimingDevice::assign(cal, &mut rng));
+        device.report(cal, &mut rng, &self.belief)
+    }
+
+    /// A BSM's `secMark` and `accelSet.long` as its encoder fills them.
+    fn bsm_extras(
+        &self,
+        msg_type: MsgType,
+        believed: SimTime,
+        timing: Option<&crate::bsm_timing::BsmReport>,
+    ) -> crate::bsm_timing::BsmExtras {
+        if msg_type != MsgType::Bsm {
+            return crate::bsm_timing::BsmExtras::default();
+        }
+        crate::bsm_timing::BsmExtras {
+            sec_mark_ms: Some(bsm::sec_mark(
+                self.config.wall,
+                timing.map_or(believed, |t| t.sec_mark_at),
+            )),
+            // J2735 Acceleration: 0.01 m/s² LSB, ±20 m/s².
+            accel_long_mps2: self
+                .own
+                .bus()
+                .map(|b| (b.a_long_mps2.clamp(-20.0, 20.0) * 100.0).round() / 100.0),
         }
     }
 
@@ -2090,6 +2190,7 @@ impl ObuRuntime {
         believed: SimTime,
         cred: &CredentialHandle,
         low_frequency: bool,
+        timing: Option<&crate::bsm_timing::BsmReport>,
     ) -> Option<Vec<u8>> {
         let mut id = [0u8; 4];
         id.copy_from_slice(&cred.digest.0[..4]);
@@ -2159,13 +2260,22 @@ impl ObuRuntime {
                 Some(encoded.bytes)
             }
             MsgType::Bsm => {
+                // Under the timing model the BSM reports the position and the secMark its
+                // device class gives it (`crate::bsm_timing`); otherwise the belief now.
+                let mut reported = self.belief;
+                if let Some(t) = timing {
+                    reported.pos = t.pos;
+                }
                 let mut input = bsm::BsmInput::new(
                     self.schedule.bsm_msg_count(),
                     id,
-                    self.belief,
+                    reported,
                     self.config.origin,
                     self.config.dims,
-                    bsm::sec_mark(self.config.wall, believed),
+                    bsm::sec_mark(
+                        self.config.wall,
+                        timing.map_or(believed, |t| t.sec_mark_at),
+                    ),
                 );
                 // Part I's dynamics from the vehicle's own sensors, which J2945/1 requires
                 // an OBU to fill (`accelSet`, `brakes`); `transmission` is forward gears

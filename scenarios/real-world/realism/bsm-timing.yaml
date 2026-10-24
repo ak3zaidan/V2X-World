@@ -1,0 +1,52 @@
+# The per-device BSM timing model on an honest city run (Paper 1 items B and C;
+# research/synthesis/paper-plan-2026-10.md §1.4).
+#
+# A variant of ../midtown-scms-realism.yaml: the US deployment, DSRC under J2945/1, the
+# real-world GNSS preset (smoothed receivers, so an honest position is right to
+# centimetres between consecutive BSMs) and the strict US profile, detect/us-sm-mbr, on
+# every OBU. Changed:
+#   - no attacker, no pedestrians or cyclists, no PKI view: every RandomPosition trigger
+#     is an honest one;
+#   - one live minute, no fast-forward;
+#   - actors.vehicles.bsm_timing on with the built-in provisional calibration (25 %
+#     locked, 75 % free); sweep locked_share 0 / 0.5 / 1 to see the class effect;
+#   - the US profile reads Δt from secMark, as the CV-pilot figures were computed
+#     (generation_time is the profile's default; check-realdata-and-vesnos.md §2.4);
+#   - the jsonl exporter, for triggers per ID-minute (node.tx, node.rx, det.observation).
+schema: v2xw/scenario/1
+
+meta:
+  base: ../midtown-scms-realism.yaml
+  name: Midtown BSM timing
+  description: >-
+    An honest Midtown minute with per-device BSM timing (locked / free OBUs) and the
+    strict US misbehaviour profile on secMark: the honest RandomPosition trigger rate.
+  tags: [real-world, manhattan, scms, realism, bsm-timing, paper1]
+
+time:
+  duration_s: 60.0
+  fast_forward: []
+
+actors:
+  vru:
+    pedestrians: 0
+    cyclists: 0
+  vehicles:
+    bsm_timing:
+      enabled: true
+
+security:
+  scms:
+    pki_view: false
+
+threats:
+  attackers: []
+
+detection:
+  local:
+    - id: detect/us-sm-mbr
+      params:
+        time_base: secmark
+
+exporters:
+  - id: jsonl

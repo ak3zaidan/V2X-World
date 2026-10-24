@@ -32,6 +32,7 @@ fn me(t: SimTime) -> SelfBelief {
 
 fn beacon(signer: [u8; 8], x_m: f64, y_m: f64, t: SimTime) -> ObservedMessage {
     ObservedMessage {
+        bsm: Default::default(),
         signer,
         kind: ObservedKind::Beacon,
         received_at: t,

@@ -49,6 +49,7 @@ fn honest_at(t: SimTime) -> HonestClaim {
 
 fn heard(signer: u8, x_m: f64, t: SimTime) -> ObservedMessage {
     ObservedMessage {
+        bsm: Default::default(),
         signer: [signer, 9, 9, 9, 9, 9, 9, 9],
         kind: ObservedKind::Beacon,
         received_at: t,

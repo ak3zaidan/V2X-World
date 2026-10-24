@@ -35,6 +35,7 @@ fn always() -> AttackSchedule {
 
 fn heard(signer: [u8; 8], t: SimTime, verification: VerificationState) -> ObservedMessage {
     ObservedMessage {
+        bsm: Default::default(),
         signer,
         kind: ObservedKind::Beacon,
         received_at: t,

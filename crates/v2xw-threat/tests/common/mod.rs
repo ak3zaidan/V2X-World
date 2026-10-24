@@ -222,6 +222,7 @@ pub fn messages_from(em: &Emission, t: SimTime, conf: f64) -> Vec<ObservedMessag
     }
     for e in &em.events {
         v.push(ObservedMessage {
+            bsm: Default::default(),
             signer: em.signer,
             kind: ObservedKind::Denm(e.event_type.clone()),
             received_at: t,
@@ -243,6 +244,7 @@ pub fn messages_from(em: &Emission, t: SimTime, conf: f64) -> Vec<ObservedMessag
 
 fn beacon(em: &Emission, t: SimTime, conf: f64) -> ObservedMessage {
     ObservedMessage {
+        bsm: Default::default(),
         signer: em.signer,
         kind: ObservedKind::Beacon,
         received_at: t,
@@ -277,6 +279,7 @@ pub fn one_message(
     received_at: SimTime,
 ) -> ObservedMessage {
     ObservedMessage {
+        bsm: Default::default(),
         signer: TX_SIGNER,
         kind: ObservedKind::Beacon,
         received_at,

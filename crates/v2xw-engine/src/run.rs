@@ -783,6 +783,8 @@ struct FrameState {
     claimed_pos: Vec3,
     claimed_speed_mps: f64,
     claimed_heading_rad: f64,
+    /// A BSM's `secMark` and `accelSet`, as its sender encoded them.
+    bsm: v2xw_node::bsm_timing::BsmExtras,
     /// When the signature completed: the earliest the MAC may have the frame.
     ready_at: SimTime,
     /// When the preamble goes on the air — the MAC's grant, not the ready instant.
@@ -1063,6 +1065,10 @@ pub struct Engine {
     /// The pseudonym-change strategy's engine half and the eavesdropper's coverage
     /// (`crate::pseudonym_policy`), when the scenario asks for either.
     pseudonym_policy: Option<crate::pseudonym_policy::PseudonymPolicy>,
+    /// The per-device BSM timing model's calibration, when
+    /// `actors.vehicles.bsm_timing.enabled` is true (`v2xw_node::bsm_timing`): every
+    /// vehicle OBU is handed it at creation.
+    bsm_timing: Option<std::sync::Arc<v2xw_node::bsm_timing::BsmTimingCalibration>>,
     /// Each vehicle's odometer and the store's change count at its last step, for the
     /// policy.
     policy_odometer: BTreeMap<NodeId, (f64, u32)>,
@@ -1604,6 +1610,7 @@ impl Engine {
             phase2: None,
             credential_factory: crate::credentials::CredentialFactory::fallback(),
             pseudonym_policy: None,
+            bsm_timing: None,
             policy_odometer: BTreeMap::new(),
             rsus: BTreeMap::new(),
             transfers: BTreeMap::new(),
@@ -1745,6 +1752,19 @@ impl Engine {
         )?;
         if policy.acts() || policy.sniffer_sites().is_some() {
             engine.pseudonym_policy = Some(policy);
+        }
+        if let Some(t) = engine
+            .scenario
+            .actors
+            .vehicles
+            .bsm_timing
+            .as_ref()
+            .filter(|t| t.is_on())
+        {
+            let cal = t.calibration().map_err(|(path, why)| {
+                EngineError::Scenario(crate::ScenarioError::conflict(path, why))
+            })?;
+            engine.bsm_timing = Some(std::sync::Arc::new(cal));
         }
         engine.gcbr = gcbr::GlobalCbr::for_scenario(&engine.scenario);
         engine.cpm_meter = cpm_metrics::CpmMeter::for_scenario(&engine.scenario);
@@ -3479,7 +3499,7 @@ impl Engine {
             )
             .into()
         } else {
-            crate::wiring::build_node(
+            let mut obu = crate::wiring::build_node(
                 &self.scenario,
                 env,
                 &self.credential_factory,
@@ -3487,8 +3507,11 @@ impl Engine {
                 now,
                 class,
                 dims,
-            )
-            .into()
+            );
+            if let Some(cal) = &self.bsm_timing {
+                obu.set_bsm_timing(std::sync::Arc::clone(cal));
+            }
+            obu.into()
         };
         // Phase 2: the backend enrols and provisions the device, and the device is
         // handed the implicit certificates the ACA issued with the keys it derived
@@ -5242,13 +5265,18 @@ impl Engine {
         }
         // The attacker's edit, immediately before the frame is built: everything after it
         // — the signing cost already paid, the MAC, DCC, the PHY — is the ordinary path.
+        // The position the payload reports: the belief, unless the sender's per-device
+        // BSM timing model (`v2xw_node::bsm_timing`) reported another fix's.
         let mut claim = (
-            belief.map_or(Vec3::ZERO, |b| b.pos),
+            tx.claimed_pos
+                .or_else(|| belief.map(|b| b.pos))
+                .unwrap_or(Vec3::ZERO),
             belief.map_or(0.0, v2xw_core::PositionEstimate::ground_speed_mps),
             belief.map_or(0.0, |b| b.heading_rad),
         );
         let mut signature_valid = true;
         let mut claimed_generation = tx.generation_time;
+        let mut bsm = tx.bsm;
         let mut ghosts: Vec<v2xw_threat::attack::Emission> = Vec::new();
         if !p2pcd && self.phase2.as_ref().is_some_and(|p| p.is_attacker(node)) {
             let actor = self
@@ -5358,6 +5386,16 @@ impl Engine {
                     tx.generation_time
                         .saturating_sub(believed - e.generation_time)
                 };
+                // The same edit moves the BSM's secMark: an attacker that delays or replays
+                // a message re-stamps both of its times.
+                if let Some(sm) = bsm.sec_mark_ms
+                    && e.generation_time != believed
+                {
+                    let shift_ms = (i128::from(e.generation_time) - i128::from(believed))
+                        .div_euclid(1_000_000);
+                    bsm.sec_mark_ms =
+                        Some((i128::from(sm) + shift_ms).rem_euclid(60_000) as u16);
+                }
             }
         }
         // The passive privacy observer hears the safety frame as it goes on the air.
@@ -5570,6 +5608,7 @@ impl Engine {
             claimed_pos: claim.0,
             claimed_speed_mps: claim.1,
             claimed_heading_rad: claim.2,
+            bsm,
             ready_at: ready,
             start: ready,
             end: air.after(ready),
@@ -9625,6 +9664,7 @@ fn rx_frame(state: &FrameState, bytes: u32) -> RxFrame {
         signature_valid: state.signature_valid,
         spdu: state.spdu.clone(),
         signer_certificate: state.signer_certificate.clone(),
+        bsm: state.bsm,
     }
 }
 
