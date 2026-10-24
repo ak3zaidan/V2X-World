@@ -107,7 +107,7 @@ not root-caused. It may be the RERUNS item that `node.rx` labels an out-of-date-
 | FB2.honest-reports | no constantPositionFrozen burst; 0–4 cases; 0 revoked | **1,935 reports in 240 s** (8.1/s), all honest, none delivered before the fast-forward. **10,357 more in the 60 s rollover window**, 4,876 of them in the 10 s after the resume. 15,062 reached the MAs at 43,200–43,220 s: **71 cases**, 71 honest vehicles falsely accused (vehicle-level FPR 3.3 %) | **open** |
 | FB2.crl | 0 entries; 2–4 versions; 0 refusals | 0 CRL Generator entries through 46,790 s; the rest needs the run report | open |
 | FB2.trust | no refusals on honest traffic | no signature, PSID, CTL or CRL loss cause; unknown-signer 1e-4 of attempts at the resume | pass (from metrics) |
-| FB2.privacy | changes at the rollover; claims ≤ changes heard | `pseudonym_change_rate` 0 in every window, the rollover included; linkability 0/0 | open |
+| FB2.privacy | changes at the rollover; claims ≤ changes heard | `pseudonym_change_rate` 0 in every window, the rollover included; linkability 0/0 | wrong expectation (corrected 2026-10-24: no change is due at the boundary under CERTCHG with the 1 h overlap, fast-forward.md §3; 0 is right) |
 | FB2.traffic | 1.5–3 m/s | 2.75 → 1.82 m/s; **p50 0 m/s from 160 s** (gridlock, density rising) | pass |
 | FB2.ff-ticks | < 5 × 10⁴ ticks | ticks only in the run report; FF1 42,930 s in 207 s wall, FF2 4,110 s in 617 s | open |
 | FB2.backend-load | RA ~1,000 requests per provider; MA reports in the hundreds | RA as CAMP sizes it per device; MAs 15,062 reports in 20 s and 71 cases | open |

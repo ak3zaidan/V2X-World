@@ -1,0 +1,24 @@
+# The quarter-fleet Midtown SCMS benchmark for its first 60 s live, no fast-forward: the
+# base of the benchmark variants owed in docs/benchmark/scms-real-benchmark.md §10, run at
+# laptop scale (docs/design/scms-real/testing/rerun-2026-10-24-b.md). The 60 s window sits
+# inside the 4x fill with a 30 s warm-up, as stress/pq-base.yaml, but with the benchmark's
+# own fragmenter and OBU, so each variant differs from it in one thing only.
+schema: v2xw/scenario/1
+meta:
+  name: variants-q60
+  description: >-
+    The quarter-fleet Midtown SCMS benchmark, 60 s live with a 30 s warm-up: the base of
+    the LTE-V2X, Portland and 2x-density variants.
+  authors: [v2xw]
+  tags: [benchmark, variants, manhattan, scms, dsrc, laptop]
+  created: "2026-10-24"
+  base: ../midtown-scms-benchmark-quarter.yaml
+security:
+  scms:
+    # The PKI view records every backend message and what each entity learns (the
+    # benchmark turns it off for its two-day run); it records, it does not change the run.
+    pki_view: true
+time:
+  duration_s: 60.0
+  warmup_s: 30.0
+  fast_forward: []

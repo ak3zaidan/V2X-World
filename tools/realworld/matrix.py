@@ -21,7 +21,8 @@ msg_type, cause, primitive, class, channel):
 - `ratio`, `delta` judge variant/base or variant - base in `band`;
 - `up`, `down` need variant > base (< base) by more than `min_change` (relative, default
   0.0); `same` needs |variant/base - 1| <= `tol` (default 0.0: identical);
-- `true`, `false`, `empty`, `subset` judge the variant's value.
+- `true`, `false`, `empty`, `subset` judge the variant's value;
+- `identical` needs the variant's value to equal the base's (a digest, say).
 `--fill` writes each row's `measured` (base -> variant, or the value) and the checker's
 verdict into the table where the row has no human verdict (`fixed`, `wrong-expectation`
 or `open` are kept). It prints one line per row and a totals line; exit 1 on a FAIL.
@@ -103,6 +104,12 @@ def extract(run_dir):
         d['r.rx_loss.' + k] = v
     for k, v in ((rep.get('receiver_validation') or {}).get('refused') or {}).items():
         d['rv.refused.' + k] = v
+    p2 = rep.get('phase2') or {}
+    for k, v in (p2.get('verdicts_by_detector') or {}).items():
+        d['p2.verdicts.' + k] = v
+    d['p2.devices'] = sum((p2.get('devices_by_provider') or {}).values())
+    R = json.load(open(os.path.join(run_dir, 'run-report.json')))
+    d['digest.record'] = R.get('record_digest')
     air = rep.get('air_bytes') or {}
     for k, v in air.items():
         if isinstance(v, (int, float)):
@@ -115,6 +122,11 @@ def judge(row, get):
     v = get(row['variant'], row['measure'])
     if v in ('NO-RUN', 'ABSENT'):
         return None, f'{v}'
+    if op == 'identical':
+        b = get(row['base'], row['measure'])
+        if b in ('NO-RUN', 'ABSENT'):
+            return None, f'base {b}'
+        return v == b, f'{fmt(b)[:16]} -> {fmt(v)[:16]}'
     if op in ('ratio', 'delta', 'up', 'down', 'same', 'changes'):
         b = get(row['base'], row['measure'])
         if b in ('NO-RUN', 'ABSENT'):

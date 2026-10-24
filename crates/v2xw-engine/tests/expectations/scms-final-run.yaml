@@ -351,7 +351,7 @@ rows:
   area: metrics
   measure: pseudonym changes, changes heard, link claims / correct / spurious, linkability
   expect: >-
-    pseudonym changes almost all at the rollover (the 240 s and 60 s live windows are
+    [as written before the run; wrong, see note] pseudonym changes almost all at the rollover (the 240 s and 60 s live windows are
     shorter than J2945/1's 5-minute period): roughly one per vehicle on the map at 43,200 s;
     privacy_links_claimed counts only claims across a heard change (bounded by
     privacy_changes_heard); correct links near 0 for a 10 % observer and a simultaneous
@@ -359,8 +359,19 @@ rows:
     thousands (R-FS40: 2,873 in 40 s)
   source: "Wiedersheim et al. 2010; testing/measure.md (privacy fields); benchmark §6"
   measured: "pseudonym_change_rate 0 in every window, including 43,200-43,220 where every pool rolls to i = 615; linkability 0/0 throughout; observer tracking 1,147 -> 1,288 vehicles heard"
-  verdict: open
-  note: "R-Q counted 314 changes at the rollover, most of them there. Whether the i-period switch registers as a change at full scale needs the run report's pseudonym_changes. A real-world J2945/1 device does change pseudonym at the boundary"
+  verdict: wrong-expectation
+  note: >-
+    Corrected 2026-10-24 (rerun-2026-10-24-b.md §4; fast-forward.md §3). The expectation
+    was wrong, not the engine: a pseudonym certificate is valid for its week plus 1 hour
+    ([CAMP-EE] §2.1.5.3.2; 03 §1 item 4), so the i = 614 certificate stays valid to
+    46,800 s, and the scenario's change rule is J2945/1 CERTCHG (5 minutes and 2 km since
+    the last change; 03 §11), which a gridlocked vehicle in a 60 s window meets neither of.
+    The corrected expectation for 43,170-43,230 s is 0 pseudonym changes and 0 changes
+    heard, so 0 link claims and linkability 0/0, which is what FB2 measured, and what FB3
+    measured on fe3757b9 (FB3.privacy, pass: 0 changes, 0 claims). The change is due at
+    46,800 s, at certificate expiry, outside both live windows. R-Q's 314 changes at the
+    rollover were counted on 18f9291's code and are not re-examined here. A full-fleet linkability number needs a live
+    window that reaches 46,800 s or the NYC pilot rule (06 §6 item 6)
 - id: FB2.traffic
   base: QD
   variant: FB2

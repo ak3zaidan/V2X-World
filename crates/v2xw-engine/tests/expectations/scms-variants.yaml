@@ -1,0 +1,797 @@
+# SCMS re-runs on 81a12183 and the benchmark variants owed in scms-real-benchmark.md §10
+# (docs/design/scms-real/testing/rerun-2026-10-24-b.md). Every `expect` was written and
+# committed with `measured: pending` before the run it judges. Checker:
+#   python3 tools/realworld/matrix.py extract <runs>/<id>      (one per run)
+#   python3 tools/realworld/matrix.py check  <this file> <runs> [--fill]
+# `measured` is base -> variant, or the variant's value. Not a sweep table: `v2xw
+# sensitivity` passes over it by its `schema`.
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+#
+# Binary: the release build of 81a12183 (the integrator's), copied to the scratchpad; seed
+# 0xBE7C_0001 (the benchmark's) or the scenario's own; --no-verify; one run per run-lock
+# call (2,500 MB cap); 2 rayon threads unless a run says otherwise.
+schema: v2xw/scms-run-expectations/1
+runs:
+  PQ0:
+    scenario: scenarios/real-world/stress/pq-base.yaml
+    note: quarter fleet, 60 s live, generic-sdu fragmenter, software-crypto OBU, ECDSA P-256 (--record-level
+      metrics)
+  PQ0-1:
+    scenario: scenarios/real-world/stress/pq-base.yaml
+    note: PQ0 at 1 rayon thread (determinism)
+  PQHFC:
+    scenario: scenarios/real-world/stress/pq-hybrid-falcon512-certcycle.yaml
+    base: PQ0
+  PQHMC:
+    scenario: scenarios/real-world/stress/pq-hybrid-mldsa44-certcycle.yaml
+    base: PQ0
+  PQHM:
+    scenario: scenarios/real-world/stress/pq-hybrid-mldsa44.yaml
+    base: PQ0
+  FS40:
+    scenario: scenarios/real-world/stress/fs-40.yaml
+    note: 'the R-FS40 window: full fleet, 0-40 s live, 10 s warm-up (--record-level events)'
+  M0:
+    scenario: scenarios/real-world/midtown-scms-realism.yaml
+    note: the realism base of the matrix (--record-level events)
+  GRAW:
+    scenario: scenarios/real-world/matrix/gnss-raw.yaml
+    base: M0
+  RELAY:
+    scenario: scenarios/scms-pq-relay-repro.yaml
+    note: 'the pq_relay repro: hybrid Falcon-512, generic-sdu, 120 s live, actor 112 added (--record-level
+      metrics)'
+  MW:
+    scenario: scenarios/edge/multi-week.yaml
+    note: the 33-day conformance run on the real calendar (--record-level metrics)
+  MWC:
+    scenario: scenarios/edge/multi-week-crlg-down.yaml
+    base: MW
+  MWC2:
+    scenario: scenarios/edge/multi-week-crlg-down-late.yaml
+    base: MW
+  Q60:
+    scenario: scenarios/real-world/variants/q60.yaml
+    note: the quarter-fleet benchmark, 0-60 s live, 30 s warm-up, no fast-forward (--record-level events)
+  Q60L:
+    scenario: scenarios/real-world/variants/q60-lte.yaml
+    base: Q60
+  Q60X2:
+    scenario: scenarios/real-world/variants/q60-2x.yaml
+    base: Q60
+  Q60P:
+    scenario: scenarios/real-world/variants/q60-portland.yaml
+    base: Q60
+rows:
+- id: RR.PQHFC.bsm-bytes
+  base: PQ0
+  variant: PQHFC
+  area: metrics
+  measure: air.bsm.psdu_mean
+  expect: delta
+  band:
+  - 160
+  - 185
+  source: 'NDSS 2024 (Twardokus et al.) Partially-Hybrid: the 858 B Falcon-512 hybrid certificate once
+    in each 5-SPDU cycle, +858/5 = 172 B per BSM; final-run PQHFC.sizes measured +173 B'
+  measured: 207 -> 379 (delta 172)
+  verdict: pass
+- id: RR.PQHFC.one-frame
+  base: PQ0
+  variant: PQHFC
+  area: metrics
+  measure: air.bsm.frames
+  expect: ratio
+  band:
+  - 0.995
+  - 1.005
+  source: the cycle keeps every BSM inside one frame (380 B < the 1,400 B WSMP MTU); final-run PQHFC.sizes
+    41,903 -> 41,903
+  measured: 41711 -> 41711 (ratio 1)
+  verdict: pass
+- id: RR.PQHFC.verify-cost
+  base: PQ0
+  variant: PQHFC
+  area: performance
+  measure: m.verify_cost.mean
+  expect: ratio
+  band:
+  - 0.95
+  - 1.05
+  source: ECDSA verifies every SPDU; the PQ certificate check is under 1 % of checks (final-run PQHFC.verify
+    0.6278 -> 0.6288 ms)
+  measured: 0.627753 -> 0.62898 (ratio 1.002)
+  verdict: pass
+- id: RR.PQHMC.bsm-bytes
+  base: PQ0
+  variant: PQHMC
+  area: metrics
+  measure: air.bsm.psdu_mean
+  expect: delta
+  band:
+  - 590
+  - 625
+  source: 'the 3,035 B ML-DSA-44 hybrid certificate once in each 5 SPDUs: +607 B per BSM (final-run PQHMC.sizes
+    814 B, +607)'
+  measured: 207 -> 814 (delta 607)
+  verdict: pass
+- id: RR.PQHMC.cbr
+  base: PQ0
+  variant: PQHMC
+  area: metrics
+  measure: m.cbr.172.mean
+  expect: ratio
+  band:
+  - 2.5
+  - 4.5
+  source: airtime scales with the PSDU (+607 B on 207 B, ~3.5x the BSM airtime; final-run PQHMC.airtime
+    CBR 0.0100 -> 0.0366)
+  measured: 0.0099028 -> 0.0364988 (ratio 3.686)
+  verdict: pass
+- id: RR.PQHM.fragments
+  base: PQ0
+  variant: PQHM
+  area: metrics
+  measure: air.bsm.frames
+  expect: ratio
+  band:
+  - 2.1
+  - 2.5
+  source: 'hybrid ML-DSA-44 on every SPDU: a 2.4 kB signature plus a 3 kB certificate once a second spreads
+    a BSM over 2.30 frames on average (final-bench PQHM.sizes, stress PQ.sizes)'
+  measured: 41711 -> 96119 (ratio 2.304)
+  verdict: pass
+- id: RR.PQHM.delivery
+  base: PQ0
+  variant: PQHM
+  area: metrics
+  measure: rv.checked
+  expect: ratio
+  band:
+  - 0.55
+  - 0.8
+  source: 'a message reaches the node only whole, so its PDR is about PDR_frag^k (k ~2.3): final-bench
+    verified -33.8 %'
+  measured: 381081 -> 255941 (ratio 0.6716)
+  verdict: pass
+- id: RR.PQ.determinism
+  base: PQ0
+  variant: PQ0-1
+  area: performance
+  measure: digest.record
+  expect: identical
+  source: the engine is deterministic across thread counts (02-architecture §determinism; stress PQ.determinism)
+  measured: 908bb508d3131f3e -> 908bb508d3131f3e
+  verdict: pass
+- id: RR.RELAY.revocations
+  base: RELAY
+  variant: RELAY
+  area: architecture
+  measure: p2.revoked_attackers
+  expect: eq
+  value: 3
+  source: '06 §6 item 9: the repro with actor 112 revokes 3 attackers, not 2 (pq-profile.md is stale)'
+  measured: '3'
+  verdict: pass
+- id: RR.RELAY.uploads
+  base: RELAY
+  variant: RELAY
+  area: architecture
+  measure: p2.reports_uploaded_relay
+  expect: band
+  band:
+  - 20
+  - 60
+  source: '06 §6 item 9: 36 relay uploads after actor 112 was added on relay-only node 56''s road'
+  measured: '36'
+  verdict: pass
+- id: RR.RELAY.mtu
+  base: RELAY
+  variant: RELAY
+  area: architecture
+  measure: p2.reports_refused_mtu
+  expect: eq
+  value: 0
+  source: 'pq-profile §2: under generic-sdu an oversized relayed report is split and acted on whole, never
+    refused'
+  measured: '0'
+  verdict: pass
+- id: RR.RELAY.honest
+  base: RELAY
+  variant: RELAY
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: the US profile with the smoothing receiver revokes no honest vehicle (usfp §3)
+  measured: '0'
+  verdict: pass
+- id: RR.FS40.const-pos
+  base: FS40
+  variant: FS40
+  area: architecture
+  measure: p2.verdicts.constantPositionFrozen
+  expect: le
+  value: 10
+  source: 'measure §1: with the receiver carried by the mean of the two velocities a stop-and-go Monte
+    Carlo gives 4 frozen pairs per 509 before; 165 verdicts before the fix -> about 1, near 0'
+  measured: '2'
+  verdict: pass
+- id: RR.FS40.links-claimed
+  base: FS40
+  variant: FS40
+  area: metrics
+  measure: p2.privacy_links_claimed
+  expect: eq
+  value: 0
+  source: no pseudonym change in a 40 s window (5-minute change, no rollover), and privacy_links_claimed
+    counts only links across a change (measure §2)
+  measured: '0'
+  verdict: pass
+- id: RR.FS40.links-spurious
+  base: FS40
+  variant: FS40
+  area: metrics
+  measure: p2.privacy_links_spurious
+  expect: band
+  band:
+  - 500
+  - 8000
+  source: the Wiedersheim tracker decides at every first sighting under 10 % sniffers, so the spurious
+    claims stay (2,873 on 77cffb5b, measure §2); the band allows the lane-change and turn-rule traffic
+    changes since
+  measured: '2863'
+  verdict: pass
+- id: RR.FS40.position-jump
+  base: FS40
+  variant: FS40
+  area: architecture
+  measure: p2.verdicts.positionJump
+  expect: le
+  value: 71
+  source: 71 on 77cffb5b before the apex turn rule (memden §2.2), which removed the junction-apex cause;
+    through-vehicle polyline vertices remain (06 §6 item 1), so not 0
+  measured: '7'
+  verdict: pass
+- id: RR.FS40.honest
+  base: FS40
+  variant: FS40
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: 'honest traffic only and an 8 h manual MA review (D3): no decision inside 40 s'
+  measured: '0'
+  verdict: pass
+- id: RR.FS40.cost
+  base: FS40
+  variant: FS40
+  area: performance
+  measure: cost.peak_mb
+  expect: le
+  value: 1500
+  source: final-bench R-FS40 910 MB at metrics level; events level adds the streamed records only
+  measured: '538.625'
+  verdict: pass
+- id: RR.GRAW.implausible
+  base: M0
+  variant: GRAW
+  area: architecture
+  measure: p2.reports_evidence_time_implausible
+  expect: eq
+  value: 0
+  source: wave 3 judges old evidence at its processing time and re-checks it when judged (measure §6 item
+    5), so no report carries evidence whose time the MA finds implausible; 10 before
+  measured: '0'
+  verdict: pass
+- id: RR.GRAW.reports-up
+  base: M0
+  variant: GRAW
+  area: architecture
+  measure: p2.reports_about_honest
+  expect: up
+  min_change: 1.0
+  source: 'raw fixes put the SM-MBR ConstantPosition condition on stopped cars'' Doppler noise (usfp §2:
+    the hold is needed); R-USFP is reproduced by construction'
+  measured: 0 -> 7337
+  verdict: pass
+- id: RR.M0.honest
+  base: M0
+  variant: M0
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: 'usfp §3 M0 after: 0 honest revoked'
+  measured: '0'
+  verdict: pass
+- id: RR.MW.cost
+  base: MW
+  variant: MW
+  area: performance
+  measure: cost.backend_ticks
+  expect: le
+  value: 60000
+  source: 'stress MW.cost: 33 d x 1,440 idle minutes = 47,520 ticks plus due events (54,511 measured)'
+  measured: '55512'
+  verdict: pass
+- id: RR.MW.topups
+  base: MW
+  variant: MW
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: band
+  band:
+  - 1200
+  - 1360
+  source: one 20-certificate top-up a week per device over the run's live windows (stress MW.rollovers
+    1,280 = 64 x 20)
+  measured: '1620'
+  verdict: wrong-expectation
+  note: 'Wrong expectation, corrected with evidence (rerun-2026-10-24-b.md §2.5): the band was the old
+    run''s count (64 devices x 20), not a rule. The rule is one 20-certificate top-up per device present
+    at a weekly boundary ([CAMP122] Table 67). A receptions-level re-run (MWk, pki.flow) gives 85 top-up
+    instances for 49 devices, by simulated week 12/19/21/20/13, no device topped up twice within 3 days,
+    2 refused (blocklisted, the revoked attackers): the rule holds. More devices are on the map at each
+    boundary than on 77cffb5b (lane-change and traffic changes since), so 81 x 20 = 1,620 certificates.
+    Corrected expectation: certs_topped_up = 20 x top-ups completed (81 x 20 = 1,620, as measured) and
+    at most one top-up per device per week'
+- id: RR.MW.no-overdue
+  base: MW
+  variant: MW
+  area: architecture
+  measure: rv.refused_total
+  expect: eq
+  value: 0
+  source: each CRL Generator reissues by nextCrl, so no list goes overdue (stress MW.crl-reissue)
+  measured: '16618'
+  verdict: open
+  note: 'R-JOINCRL (06 §6 item 7), now shown in the base run itself: all 16,618 crl-overdue refusals (labelled
+    signature-invalid on node.rx, 06 §6 item 13) are at 33 receivers that join mid-run, every one after
+    t0 + 21 d = 1,814,400 s, each refusing from its first reception (median 0.1 s, max 92 s) until its
+    first CRL download. No device present before 700 s refuses anything. A joiner holds only the t0 lists;
+    it should hold the newest list each CRACA published before it joined'
+- id: RR.MWC.overdue
+  base: MW
+  variant: MWC
+  area: metrics
+  measure: rv.refused.crl-overdue
+  expect: ge
+  value: 1
+  source: '1609.2 CRL overdue rule: with the home Generator down from 700 s the t0 list goes overdue at
+    t0 + 21 d and the home CRACA''s messages are refused (rerun §7, R-NOCRL fixed)'
+  measured: '152505'
+  verdict: pass
+  note: 152,505 crl-overdue refusals, of which 16,618 are the base's joiners (R-JOINCRL, RR.MW.no-overdue).
+    No home revocation exists in this run (both are provider-b's), so MWC.revocation-blocked has nothing
+    to block
+- id: RR.MWC2.overdue
+  base: MW
+  variant: MWC2
+  area: metrics
+  measure: rv.refused.crl-overdue
+  expect: ge
+  value: 1
+  source: the home CRL of 190,769 s is overdue from 2,005,169 s, inside W4 (stress MWC2.overdue-onset
+    87,823)
+  measured: '152505'
+  verdict: pass
+  note: 'Passes, but the run no longer tests its premise: MWC2 and MWC refuse exactly the same 152,505
+    messages. Both revocations in the multi-week runs are now provider-b''s (the attackers'' providers
+    moved with the traffic changes), so the home provider publishes no CRL before its Generator goes down
+    at 200,000 s, and MWC2 is MWC. The scenario''s outage needs to start after a home revocation (rerun-2026-10-24-b.md
+    §2.5)'
+- id: VB.Q60.rsu-crls
+  base: Q60
+  variant: Q60
+  area: architecture
+  measure: p2.rsu_crls_installed
+  expect: eq
+  value: 60
+  source: 'every unit holds each CRACA''s t0 list (OF-3): 30 RSUs x 2 providers (full-bench FB3 60)'
+  measured: '60'
+  verdict: pass
+- id: VB.Q60.one-request
+  base: Q60
+  variant: Q60
+  area: architecture
+  measure: perdev.EeRaCertRequestSpdu.max
+  expect: eq
+  value: 1
+  source: 'CAMP 1.2.2: one certificate request per device at provisioning (ra-maxReqs 1, 2 weeks x 20
+    certificates; 04 §4.1)'
+  measured: '2'
+  verdict: wrong-expectation
+  note: 'Wrong expectation, corrected with evidence (rerun-2026-10-24-b.md §3.2): the devices with two
+    EeRaCertRequestSpdu are exactly the roadside units (12 of 12 in Portland, read from pki.flow on a
+    kept recording), which request their current and next application certificate at provisioning (rsu_app_certs_preloaded
+    2 per unit). Corrected expectation: 1 per OBU or handset, 2 per RSU, so requests = devices + RSUs
+    exactly: Q60 283 + 2x30 = 343, Q60X2 572 + 60 = 632, Q60P 84 + 24 = 108, all as measured'
+- id: VB.Q60.honest
+  base: Q60
+  variant: Q60
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: 'honest traffic and an 8 h manual review: nothing is decided in 60 s'
+  measured: '0'
+  verdict: pass
+- id: VB.LTE.latency
+  base: Q60
+  variant: Q60L
+  area: metrics
+  measure: m.e2e_latency.bsm.mean
+  expect: ratio
+  band:
+  - 2.5
+  - 8.0
+  source: PC5 mode 4 SPS waits for its reserved subframe, on average half the 100 ms RRI, where DSRC contends
+    in under a ms (3GPP TS 36.213 §14; Molina-Masegosa & Gozalvez 2017; matrix lte-latency 12.4 -> 69.4
+    ms)
+  measured: 12.3628 -> 67.771 (ratio 5.482)
+  verdict: pass
+- id: VB.LTE.latency-budget
+  base: Q60
+  variant: Q60L
+  area: metrics
+  measure: m.e2e_latency.bsm.p95
+  expect: le
+  value: 100.0
+  source: SAE J3161/1 keeps the 100 ms BSM latency budget; the engine does not align the BSM with its
+    reservation (06 §6 item 16), so this is expected to stay open
+  measured: '110.438'
+  verdict: open
+  note: 'Known (06 §6 item 16, matrix lte-latency-budget 112 ms): the BSM is generated without regard
+    to its SPS reservation, which J3161/1 has the application align with'
+- id: VB.LTE.half-duplex
+  base: Q60
+  variant: Q60L
+  area: metrics
+  measure: m.loss_rate.half-duplex
+  expect: up
+  source: a PC5 UE cannot receive in a 1 ms subframe it transmits in, and SPS keeps that clash for the
+    reservation's life (Bazzi et al. 2017); DSRC frames are ~0.3 ms
+  measured: 0.00283612 -> 0.00372878
+  verdict: pass
+- id: VB.LTE.bsm-count
+  base: Q60
+  variant: Q60L
+  area: metrics
+  measure: air.bsm.frames
+  expect: ratio
+  band:
+  - 0.95
+  - 1.05
+  source: J3161/1 keeps 10 Hz; its CBR rate rule does not act at a quarter fleet's load
+  measured: 41702 -> 82711 (ratio 1.983)
+  verdict: wrong-expectation
+  note: 'Wrong expectation, corrected with evidence: SAE J3161/1 sends each packet twice (one blind HARQ
+    retransmission, ''Blind HARQ: Yes'' in the deployed-profile tests, 5GAA P-190033 Table 32; SpsParams::sae_j3161
+    max_transmissions 2), so frames are 2x the BSMs. MAC grants 49,644 against DSRC''s 49,983 frames,
+    phy.prr 49,643: the BSM rate itself is unchanged. Corrected expectation: frames x1.9-2.05; measured
+    x1.983'
+- id: VB.LTE.devices
+  base: Q60
+  variant: Q60L
+  area: architecture
+  measure: p2.devices
+  expect: same
+  source: the radio does not change who enters the map, so the same devices are enrolled and provisioned
+  measured: 313 -> 313
+  verdict: pass
+- id: VB.LTE.ra-load
+  base: Q60
+  variant: Q60L
+  area: architecture
+  measure: pdu.EeRaCertRequestSpdu.n
+  expect: same
+  source: provisioning runs over the backend, not the sidelink (matrix lte-backend-same)
+  measured: 343 -> 343
+  verdict: pass
+- id: VB.LTE.crl
+  base: Q60
+  variant: Q60L
+  area: architecture
+  measure: p2.rsu_crls_installed
+  expect: same
+  source: the units' t0 lists do not depend on the radio
+  measured: 60 -> 60
+  verdict: pass
+- id: VB.LTE.honest
+  base: Q60
+  variant: Q60L
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: as VB.Q60.honest
+  measured: '0'
+  verdict: pass
+- id: VB.LTE.cost
+  base: Q60
+  variant: Q60L
+  area: performance
+  measure: cost.wall_s
+  expect: ratio
+  band:
+  - 0.4
+  - 2.5
+  source: the same nodes and receptions; SPS adds sensing per subframe, provisioning (the dominant cost,
+    bench §7) is unchanged
+  measured: 116.61 -> 186.75 (ratio 1.601)
+  verdict: pass
+- id: VB.2X.devices
+  base: Q60
+  variant: Q60X2
+  area: architecture
+  measure: p2.devices
+  expect: ratio
+  band:
+  - 1.6
+  - 2.2
+  source: twice the offered vehicles and the handset sample; the congested box admits a little less than
+    twice the vehicles
+  measured: 313 -> 602 (ratio 1.923)
+  verdict: pass
+- id: VB.2X.ra-load
+  base: Q60
+  variant: Q60X2
+  area: architecture
+  measure: pdu.EeRaCertRequestSpdu.n
+  expect: ratio
+  band:
+  - 1.6
+  - 2.2
+  source: the RA's load is one request per entering device (CAMP 1.2.2), linear in the fleet
+  measured: 343 -> 632 (ratio 1.843)
+  verdict: pass
+- id: VB.2X.one-request
+  base: Q60
+  variant: Q60X2
+  area: architecture
+  measure: perdev.EeRaCertRequestSpdu.max
+  expect: eq
+  value: 1
+  source: per-device behaviour is fleet-independent (CAMP ra-maxReqs 1)
+  measured: '2'
+  verdict: wrong-expectation
+  note: 'Wrong expectation, corrected with evidence (rerun-2026-10-24-b.md §3.2): the devices with two
+    EeRaCertRequestSpdu are exactly the roadside units (12 of 12 in Portland, read from pki.flow on a
+    kept recording), which request their current and next application certificate at provisioning (rsu_app_certs_preloaded
+    2 per unit). Corrected expectation: 1 per OBU or handset, 2 per RSU, so requests = devices + RSUs
+    exactly: Q60 283 + 2x30 = 343, Q60X2 572 + 60 = 632, Q60P 84 + 24 = 108, all as measured'
+- id: VB.2X.receptions
+  base: Q60
+  variant: Q60X2
+  area: performance
+  measure: r.reception_attempts
+  expect: ratio
+  band:
+  - 2.6
+  - 4.8
+  source: 'every node is a candidate receiver of every frame within the 500 m cap, which covers most of
+    the box: attempts grow with the square of the fleet (bench §10; 05 §5)'
+  measured: 2628410 -> 9505837 (ratio 3.617)
+  verdict: pass
+- id: VB.2X.cbr
+  base: Q60
+  variant: Q60X2
+  area: metrics
+  measure: m.cbr.172.mean
+  expect: ratio
+  band:
+  - 1.5
+  - 2.5
+  source: channel busy ratio is linear in the offered load at low load (CAMP J2945/1 TVT 2019); J2945/1
+    power control acts only from 50 %
+  measured: 0.00988019 -> 0.0181655 (ratio 1.839)
+  verdict: pass
+- id: VB.2X.pdr
+  base: Q60
+  variant: Q60X2
+  area: metrics
+  measure: m.pdr
+  expect: ratio
+  band:
+  - 0.9
+  - 1.03
+  source: 'at CBR of a few per cent collisions and hidden terminals stay under 1 % of losses (bench §3:
+    98.8 % below sensitivity), so PDR barely moves; the geometry of who is near whom may shift it'
+  measured: 0.29689 -> 0.293332 (ratio 0.988)
+  verdict: pass
+- id: VB.2X.verify-load
+  base: Q60
+  variant: Q60X2
+  area: performance
+  measure: rv.checked
+  expect: ratio
+  band:
+  - 2.5
+  - 4.6
+  source: 'verifications fleet-wide = receivers x heard senders ~ N^2 (bench §4: ~30 per node per second
+    at a quarter fleet)'
+  measured: 380931 -> 1323413 (ratio 3.474)
+  verdict: pass
+- id: VB.2X.honest-reports
+  base: Q60
+  variant: Q60X2
+  area: architecture
+  measure: p2.verdicts_fired
+  expect: up
+  min_change: 1.0
+  source: 'honest verdicts grow with events x receivers ~ N^2 (FB3: 40x the reports for 6.3x the devices,
+    06 §6 item 1)'
+  measured: 13 -> 20
+  verdict: open
+  note: 'Not separable from noise on one seed: each run has 2-3 underlying events, each heard by several
+    receivers (13 and 20 verdicts). The mix shifts: implausibleAcceleration 11 -> 0, constantPositionFrozen
+    0 -> 18 (the gridlock class of 06 §6 item 1). Needs replications or a longer window'
+- id: VB.2X.honest
+  base: Q60
+  variant: Q60X2
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: as VB.Q60.honest
+  measured: '0'
+  verdict: pass
+- id: VB.2X.cost
+  base: Q60
+  variant: Q60X2
+  area: performance
+  measure: cost.wall_s
+  expect: ratio
+  band:
+  - 2.0
+  - 6.0
+  source: provisioning is linear (0.4 CPU-s per device, bench §7) and reception quadratic
+  measured: 116.61 -> 243.64 (ratio 2.089)
+  verdict: pass
+- id: VB.2X.memory
+  base: Q60
+  variant: Q60X2
+  area: performance
+  measure: cost.peak_mb
+  expect: ratio
+  band:
+  - 1.2
+  - 3.0
+  source: per-device backend and node state is linear (memden §1.1); the streamed recording does not hold
+    records
+  measured: 196.658 -> 345.163 (ratio 1.755)
+  verdict: pass
+- id: VB.PDX.devices
+  base: Q60
+  variant: Q60P
+  area: architecture
+  measure: p2.devices
+  expect: ratio
+  band:
+  - 0.2
+  - 0.5
+  source: '750 veh/h against 2,250 and 150 + 25 handsets'' sample against 500 + 50: about a third of the
+    devices'
+  measured: 313 -> 96 (ratio 0.3067)
+  verdict: pass
+- id: VB.PDX.rsus
+  base: Q60
+  variant: Q60P
+  area: architecture
+  measure: p2.rsu_crls_installed
+  expect: eq
+  value: 24
+  source: 12 roadside units each hold the two providers' t0 lists (OF-3)
+  measured: '24'
+  verdict: pass
+- id: VB.PDX.one-request
+  base: Q60
+  variant: Q60P
+  area: architecture
+  measure: perdev.EeRaCertRequestSpdu.max
+  expect: eq
+  value: 1
+  source: 'the deployment is the same national SCMS: one request per device (CAMP 1.2.2)'
+  measured: '2'
+  verdict: wrong-expectation
+  note: 'Wrong expectation, corrected with evidence (rerun-2026-10-24-b.md §3.2): the devices with two
+    EeRaCertRequestSpdu are exactly the roadside units (12 of 12 in Portland, read from pki.flow on a
+    kept recording), which request their current and next application certificate at provisioning (rsu_app_certs_preloaded
+    2 per unit). Corrected expectation: 1 per OBU or handset, 2 per RSU, so requests = devices + RSUs
+    exactly: Q60 283 + 2x30 = 343, Q60X2 572 + 60 = 632, Q60P 84 + 24 = 108, all as measured'
+- id: VB.PDX.speed
+  base: Q60
+  variant: Q60P
+  area: metrics
+  measure: m.mean_speed
+  expect: up
+  source: downtown Portland's coordinated 12 mph progression (5.36 m/s) and a third of the load against
+    Midtown's gridlocked box (Midtown below 5 mph, NYC DOT 2019)
+  measured: 3.92168 -> 3.19809
+  verdict: open
+  note: 'The premise was wrong: the quarter Midtown is not gridlocked (bench §2: unsaturated, ~4 m/s).
+    No published downtown-Portland peak speed was found to judge 3.20 m/s (7.2 mph); left open'
+- id: VB.PDX.cbr
+  base: Q60
+  variant: Q60P
+  area: metrics
+  measure: m.cbr.172.mean
+  expect: down
+  source: fewer transmitters within range
+  measured: 0.00988019 -> 0.00417297
+  verdict: pass
+- id: VB.PDX.honest
+  base: Q60
+  variant: Q60P
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: as VB.Q60.honest
+  measured: '0'
+  verdict: pass
+- id: VB.PDX.cost
+  base: Q60
+  variant: Q60P
+  area: performance
+  measure: cost.wall_s
+  expect: ratio
+  band:
+  - 0.1
+  - 0.8
+  source: 'a third of the devices: provisioning a third, receptions about a ninth (plus a world import
+    if the Portland build is not cached)'
+  measured: 116.61 -> 25.37 (ratio 0.2176)
+  verdict: pass
+- id: VB.LTE.frames-twice
+  base: Q60
+  variant: Q60L
+  area: metrics
+  measure: air.bsm.frames
+  expect: ratio
+  band:
+  - 1.9
+  - 2.05
+  source: 'corrected expectation of VB.LTE.bsm-count, written after its run from the standard: J3161/1
+    one blind HARQ retransmission (5GAA P-190033 Table 32), the BSM rate unchanged'
+  measured: 41702 -> 82711 (ratio 1.983)
+  verdict: pass
+- id: VB.Q60.requests
+  base: Q60
+  variant: Q60
+  area: architecture
+  measure: pdu.EeRaCertRequestSpdu.n
+  expect: eq
+  value: 343
+  source: 'corrected expectation of the one-request rows, written after the runs: one request per OBU
+    or handset (CAMP 1.2.2 ra-maxReqs 1) and two per RSU (current and next application certificate): 283
+    OBUs and handsets + 2 x 30 RSUs'
+  measured: '343'
+  verdict: pass
+- id: VB.Q60X2.requests
+  base: Q60
+  variant: Q60X2
+  area: architecture
+  measure: pdu.EeRaCertRequestSpdu.n
+  expect: eq
+  value: 632
+  source: 'corrected expectation of the one-request rows, written after the runs: one request per OBU
+    or handset (CAMP 1.2.2 ra-maxReqs 1) and two per RSU (current and next application certificate): 572
+    + 2 x 30'
+  measured: '632'
+  verdict: pass
+- id: VB.Q60P.requests
+  base: Q60
+  variant: Q60P
+  area: architecture
+  measure: pdu.EeRaCertRequestSpdu.n
+  expect: eq
+  value: 108
+  source: 'corrected expectation of the one-request rows, written after the runs: one request per OBU
+    or handset (CAMP 1.2.2 ra-maxReqs 1) and two per RSU (current and next application certificate): 84
+    + 2 x 12'
+  measured: '108'
+  verdict: pass

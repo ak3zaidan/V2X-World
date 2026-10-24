@@ -1,0 +1,12 @@
+# q60.yaml with every radio on LTE-V2X PC5 mode 4 under SAE J3161/1, as
+# midtown-scms-benchmark-lte.yaml does for the full file: only the radio differs.
+schema: v2xw/scenario/1
+meta:
+  name: variants-q60-lte
+  description: The quarter-fleet 60 s benchmark window on LTE-V2X PC5 mode 4 (J3161/1).
+  authors: [v2xw]
+  tags: [benchmark, variants, manhattan, scms, cv2x, lte, j3161, laptop]
+  created: "2026-10-24"
+  base: q60.yaml
+radio:
+  rat: lte-v2x-pc5
