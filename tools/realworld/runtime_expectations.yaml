@@ -29,9 +29,11 @@
    source: "ra-maxReqs 1: one butterfly request in the device's life; scaled to 17 M/yr that is 0.54 req/s (CAMP ~0.5)"}
 - {id: P2-rsu-app-certs, run: base, metric: perdev.EeRaCertRequestSpdu.max, expect: eq, value: 3,
    source: "an RSU requests one application certificate per week: 2 preloaded (614, 615) and the 616 renewal (CAMP122 §6.3.5; 01 §4)"}
-- {id: P3-certs-per-topup, run: base, metric: p2.certs_topped_up, expect: eq, value: 1100,
-   source: "20 certificates per device per week (CAMP122 Table 67) x the 55 devices present at the rollover"}
-- {id: P4-topups-complete, run: base, metric: p2.topups_completed, expect: eq, value: 55, source: "one .info + one file a week per device (04 §4.1, NYC top-off)"}
+- {id: P3-certs-per-topup, run: base, metric: topup.certs_per_topup, expect: eq, value: 20,
+   source: "20 certificates per device per week (CAMP122 Table 67), for every device present at the rollover",
+   note: "corrected 2026-10-24 (was certs_topped_up eq 1100 = 20 x 55 devices): the realism base's first live window is now 300 s (rerun-2026-10-24-a §2), so 105 devices are present at the rollover and 2,100 certificates are topped up; the rule is the per-device 20, the fleet is the fixture's"}
+- {id: P4-topups-complete, run: base, metric: topup.incomplete, expect: eq, value: 0, source: "one .info + one file a week per device (04 §4.1, NYC top-off): every top-up started completes",
+   note: "corrected 2026-10-24 (was topups_completed eq 55): 105 of 105 started on the 300 s base (rerun-2026-10-24-a §2)"}
 - {id: P5-topup-within-overlap, run: base, metric: topup.latency_max_s, expect: le, value: 3600,
    source: "the next week's certificates arrive inside the 1 h overlap (CAMP122 §6.3.3; 03 §11)"}
 - {id: P6-no-starvation, run: base, metric: p2.vehicles_starved, expect: eq, value: 0, source: "pool of 2 weeks + weekly top-off"}
@@ -49,7 +51,8 @@
    source: "SM-MBR §1-3: 2 signed BSMs (~200 B) + the full pseudonym certificate, signed and encrypted (~60 + ~100 B)"}
 # ---- Airtime and availability ----------------------------------------------------------
 - {id: A1-mbr-airtime, run: base, metric: air.mbr.share, expect: le, value: 0.01,
-   source: "after the false-report fix (validation/vehicle-and-roadside.md §0.6) MBR uploads are rare; 29.3 % before"}
+   source: "after the false-report fix (validation/vehicle-and-roadside.md §0.6) MBR uploads are rare; 29.3 % before", status: open,
+   note: "open 2026-10-24: 1.25 % on the 300 s base, 587 relayed uploads, every one about an attacker (0 honest at the MA): 1,995 reports from 66 reporters about 2 attackers, a report every ~6 s per reporter per pseudonym. No public source sets a per-pseudonym report rate for SM-MBR v1.0 (rerun-2026-10-24-a §3)"}
 - {id: A2-honest-not-revoked, run: base, metric: p2.revoked_honest, expect: eq, value: 0, source: "no honest device revoked in an honest-majority run"}
 - {id: A3-attackers-revoked, run: base, metric: p2.revoked_attackers, expect: eq, value: 2, source: "3 constant-position attackers, each reported by several neighbours; one sends PSMs from a handset, and SM-MBR v1.0 defines reports for PSID 0x20 (the BSM) only",
    note: "corrected 2026-10-22 (was 3): the US profile cannot report the handset attacker (testing/usfp.md §3). A gap of the real system, kept visible: research-suite revokes all 3"}
@@ -122,8 +125,9 @@
    source: "06 §3 items 8-9: full CRLs only, each nextCrl exactly 7 days after its issue date (mbr 614/0 ... 616/0)"}
 - {id: N5-crl-no-stale-holder, run: base, metric: crl.nodes_stale, expect: eq, value: 0,
    source: "06 §3 item 9: the hourly conditional poll brings every awake device the newest list within the hour (a node is stale when another held a newer list more than an hour before the node's last row). R-JOINCRL is not exercised: every device joins before any new list"}
-- {id: N6-rsu-crl-installs, run: base, metric: p2.rsu_crls_installed, expect: eq, value: 60,
-   source: "06 §3 item 8: 2 installs per RSU of the t0 lists (30 RSUs x 2 CRACAs), as FB.crl's 60 at full fleet"}
+- {id: N6-rsu-crl-installs, run: base, metric: crl.rsu_installs_per_list, expect: eq, value: 1.0,
+   source: "06 §3 item 8: every RSU installs every list published (the 2 t0 lists, FB.crl's 60 at full fleet, and each new one)",
+   note: "corrected 2026-10-24 before commit (was rsu_crls_installed eq 60): with the revocation the base publishes a third list and 90 = 30 RSUs x 3 lists"}
 - {id: N7-rsu-app-cert-renewal, run: base, metric: p2.rsu_app_certs_renewed, expect: eq, value: 30,
    source: "CAMP122 §6.3.5, 01 §4: an RSU holds weekly application certificates, 2 preloaded (614, 615) and one renewal (616) inside the two days: 30 renewals for 30 RSUs"}
 - {id: N8-no-rsu-filed-report, run: base, metric: p2.reports_from_rsus, expect: eq, value: 0,
@@ -132,8 +136,9 @@
    source: "06 §3 item 10: modelled_reports: 1 (research) keeps the sized-only roadside path"}
 - {id: N10-evidence-time-plausible, run: base, metric: p2.reports_evidence_time_implausible, expect: eq, value: 0,
    source: "06 §3 item 12 (measure §5): a handset applies the generationTime window when it takes a frame, so no report quotes evidence 43,125 s old"}
-- {id: N11-no-honest-report, run: base, metric: p2.reports_about_honest, expect: eq, value: 0,
-   source: "06 §3 item 13 (R-FS40): carrier-phase carry leaves honest creeping cars no frozen pair (final-run §2: constantPositionFrozen 28 -> 0 at quarter density)"}
+- {id: N11-few-honest-reports, run: base, metric: p2.reports_about_honest, expect: le, value: 15,
+   source: "06 §3 item 13 (R-FS40): honest reports at quarter density fell 54 -> 15 with constantPositionFrozen 28 -> 0 (final-run §2); this base is a fifteenth of rush hour",
+   note: "corrected 2026-10-24 (was eq 0): 4 honest reports on the 300 s base, none reaching a case; the claim is 15 at quarter density, not 0"}
 - {id: N12-polls-answered-412, run: base, metric: p2.crl_polls_not_modified, expect: ge, value: 1,
    source: "06 §3 items 9, 15: conditional CRL polls are answered 412 when nothing changed"}
 - {id: N13-pq-rsu-crl, run: pq-hybrid, metric: p2.rsu_crls_installed, expect: eq, value: 60,

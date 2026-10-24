@@ -289,6 +289,21 @@ def extract(run_dir):
     return out
 
 
+def derive(d):
+    """Scale-free forms of fleet-dependent counts, from the run report's own numbers, so a
+    row states the per-device or per-list rule rather than one fixture's fleet."""
+    if d is None:
+        return None
+    done = d.get('p2.topups_completed', 0)
+    if done:
+        d['topup.certs_per_topup'] = d.get('p2.certs_topped_up', 0) / done
+    d['topup.incomplete'] = d.get('p2.topups_started', 0) - done
+    lists = d.get('p2.crl_versions_published', 0)
+    if d.get('p2.rsus') and lists:
+        d['crl.rsu_installs_per_list'] = d.get('p2.rsu_crls_installed', 0) / (d['p2.rsus'] * lists)
+    return d
+
+
 def check(table, runs_dir):
     import yaml
     rows = yaml.safe_load(open(table))
@@ -297,7 +312,7 @@ def check(table, runs_dir):
     def get(run, metric):
         if run not in cache:
             p = os.path.join(runs_dir, run, 'realism.json')
-            cache[run] = json.load(open(p)) if os.path.exists(p) else None
+            cache[run] = derive(json.load(open(p))) if os.path.exists(p) else None
         d = cache[run]
         if d is None:
             return 'NO-RUN'

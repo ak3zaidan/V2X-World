@@ -338,12 +338,13 @@ rows:
   base: M0
   variant: M0
   area: architecture
-  measure: p2.certs_topped_up
+  measure: topup.certs_per_topup
   expect: eq
-  value: 1100
-  source: 55 devices present at the 614 -> 615 rollover, 20 certificates each (realism P3)
-  measured: '1100'
-  verdict: pass
+  value: 20
+  source: 20 certificates for each device present at the 614 -> 615 rollover (realism P3; CAMP122 Table 67)
+  measured: '20'
+  verdict: wrong-expectation
+  note: 'corrected 2026-10-24 (was certs_topped_up eq 1100 = 55 x 20): the base''s first live window is now 300 s (rerun-2026-10-24-a.md §2), 105 devices are present at the rollover and 2,100 are topped up; the rule is per device'
 - id: M0-separation
   base: M0
   variant: M0

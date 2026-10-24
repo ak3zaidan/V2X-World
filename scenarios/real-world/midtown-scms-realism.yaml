@@ -44,3 +44,14 @@ threats:
       schedule:
         from_s: 20.0
         to_s: 172800.0
+
+# The first live window is 300 s instead of the quarter file's 60 s (rerun-2026-10-24-a §2).
+# Since R-UNSEC (an RSU's own detection is not filed under the US profile), only vehicles
+# report, and the corroborated MA needs 3 independent trusted reporters inside a minute. At a
+# fifteenth of rush hour, 40 s of attack (20-60 s) gave the most-heard attacker 2 reporters
+# and no case: the misbehaviour flow this file exists to exercise did not happen. 280 s of
+# attack is what scms_wiring's vehicle-only quorum needed (12 reporters, revoked at 186.8 s).
+time:
+  fast_forward:
+    - {from_s: 300.0, to_s: 43185.0}
+    - {from_s: 43215.0, to_s: 172800.0}
