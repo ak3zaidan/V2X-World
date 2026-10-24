@@ -218,6 +218,17 @@ pub struct Traffic {
     /// unsignalised junctions and on a permitted left. Unset is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heavy_vehicle_gap_terms: Option<bool>,
+    /// Whether a driver closing on a standing vehicle brakes at no less than the constant
+    /// deceleration that stops it at its standstill gap, as at a stop line, instead of
+    /// being stopped in one step when the car-following model's braking (which scales
+    /// with its acceleration, low for vans and trucks) arrives too late. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standing_leader_stop: Option<bool>,
+    /// Whether the bends of a through lane's polyline are driven no faster than the
+    /// turn-speed rule allows (`turn_lateral_accel_mps2` over the tightest
+    /// `turn_curve_window_m`, 6 m when unset), as a junction connector is. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_bend_speed: Option<bool>,
     /// Kerbside stops: buses at stops, taxis picking up, delivery vans double-parked.
     /// Unset follows the jurisdiction (New York City has its taxis).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -318,6 +329,8 @@ impl Default for Traffic {
             lc_speed_gain: None,
             lc_keep_right: None,
             heavy_vehicle_gap_terms: None,
+            standing_leader_stop: None,
+            lane_bend_speed: None,
             kerbside: None,
         }
     }

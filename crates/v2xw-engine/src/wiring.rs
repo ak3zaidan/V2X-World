@@ -513,6 +513,12 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(v) = traffic.heavy_vehicle_gap_terms {
         params.heavy_vehicle_gap_terms = v;
     }
+    if let Some(v) = traffic.standing_leader_stop {
+        params.standing_leader_stop = v;
+    }
+    if let Some(v) = traffic.lane_bend_speed {
+        params.lane_bend_speed = v;
+    }
     // SUMO LC2013's motivations: any lc_* field switches them on; the unset ones take
     // SUMO's default of 1 (`v2xw_mobility::lanechange::lc2013`).
     if traffic.lc_strategic.is_some()

@@ -3516,6 +3516,16 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Heavy vehicles add the HCM 6th ed. Exhibit 20-11 heavy-vehicle critical gap and follow-up terms.",
     },
     KeyStatus {
+        path: "traffic.standing_leader_stop",
+        status: Status::Wired,
+        note: "A driver closing on a standing vehicle brakes to stop at its standstill gap at constant deceleration, as at a stop line.",
+    },
+    KeyStatus {
+        path: "traffic.lane_bend_speed",
+        status: Status::Wired,
+        note: "The bends of a through lane's polyline get the turn-speed cap a junction connector has.",
+    },
+    KeyStatus {
         path: "traffic.lc_strategic",
         status: Status::Wired,
         note: "SUMO LC2013 look-ahead for route lane changes; any lc_* switches discretionary changes from MOBIL to LC2013.",
@@ -4420,6 +4430,8 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             || t.lc_speed_gain.is_some()
             || t.lc_keep_right.is_some()
             || t.heavy_vehicle_gap_terms.is_some()
+            || t.standing_leader_stop.is_some()
+            || t.lane_bend_speed.is_some()
             || t.kerbside.is_some();
         // The LC2013 factors act only on lane changes, and the strategic one only on the
         // changes a route needs.
