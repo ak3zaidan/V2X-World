@@ -398,3 +398,49 @@ fn a_window_of_integral_ratios_is_still_exported_as_a_float_column() {
         "the cbr column is still invisible to the scan: {report:?}"
     );
 }
+
+/// The two metric samples the recorder used to refuse (sim-metrics audit,
+/// MI.samples-recorded): 73 of 13,182 samples of a 240 s Midtown run were in
+/// `metrics.json` and missing from the recording, because `write_record`'s D9 gate refused
+/// them and the run's sink discards a refusal. Each sample here is what a provider writes
+/// (`MetricSample::new`, which quantises) and must pass the gate the recorder applies.
+///
+/// * An insufficient distribution carries its samples' `sum`, which was never quantised
+///   (`538.5491059999999` in the run; `0.1 + 0.2` here).
+/// * A ratio of sums whose sums are large: an `aoi` window's 598,195,368,093 ns
+///   denominator is far past the magnitude at which doubles are a 1e-6 quantum apart, so
+///   re-rounding it onto that grid moved it and the gate called it off-grid.
+#[test]
+fn every_metric_sample_a_provider_writes_passes_the_record_gate() {
+    use v2xw_metrics::def::{Agg, Dims, MetricDef, MetricSample, SampleValue};
+    use v2xw_metrics::quant::Quantum;
+    use v2xw_metrics::stats::{Distribution, ratio_of_sums};
+    let def = MetricDef::new(
+        "aoi",
+        "ms",
+        Agg::ratio("age", "time"),
+        Visibility::NodeAndGt,
+        Quantum::TIME_MS,
+        "age of information",
+    )
+    .not_accounting_for("nothing here");
+    let mut thin = Distribution::new();
+    thin.observe_all([0.1, 0.2]);
+    let values = [
+        SampleValue::Distribution(thin.summary(30)),
+        SampleValue::Ratio(ratio_of_sums(890_030_421_523_421.2, 598_195_368_093.0, 6011, 1)),
+        SampleValue::Ratio(ratio_of_sums(
+            1_028_174_753_084_627.2,
+            2_001_407_352_638.0,
+            13_798,
+            1,
+        )),
+    ];
+    for v in values {
+        let s = MetricSample::new(&def, 60_000_000_000, Dims::new(), v);
+        let json = serde_json::to_vec(&s).expect("serialises");
+        if let Err(e) = v2xw_record::grid::scan_record("metric.sample", &json) {
+            panic!("the recorder refuses {}: {e}", String::from_utf8_lossy(&json));
+        }
+    }
+}

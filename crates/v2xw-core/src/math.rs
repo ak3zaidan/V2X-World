@@ -241,9 +241,18 @@ pub fn q3(x: f64) -> f64 {
 /// The predicate behind ADR 0004's and D9's scanning test — "a test scans every output
 /// file for any value that is off its grid". Non-finite values are on every grid, because
 /// they pass through quantisation untouched as sentinels.
+///
+/// A magnitude at which consecutive `f64`s are a quantum or more apart (`|x| / quantum`
+/// at or above 2^52) is on the grid: some multiple of the quantum lies within half a
+/// spacing of every such double, so it is already the nearest representable grid point,
+/// and `quantize_to`'s `round(x / q) * q` there only re-rounds the product. Without this
+/// a ratio of sums whose denominator was 5e15 ns was "off" the 1e-6 grid and the
+/// recorder refused the metric sample (sim-metrics audit MI.samples-recorded).
 #[inline]
 pub fn is_on_grid(x: f64, quantum: f64) -> bool {
-    !x.is_finite() || quantize_to(x, quantum).to_bits() == x.to_bits()
+    !x.is_finite()
+        || (x.abs() * (1.0 / quantum)) >= 4_503_599_627_370_496.0
+        || quantize_to(x, quantum).to_bits() == x.to_bits()
 }
 
 /// True if `x` is already on the `10^-decimals` grid. The decimal spelling of

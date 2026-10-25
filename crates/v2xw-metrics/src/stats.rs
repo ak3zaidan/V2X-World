@@ -718,7 +718,18 @@ impl DistributionSummary {
                 interpolation,
                 rejected,
             },
-            other => other,
+            // The carried sum is a recorded float like any other (D9): it goes onto the
+            // sums' 1e-3 grid, as a ratio of sums' two sums do. Unquantised, a sum such as
+            // 538.5491059999999 was off its grid and the recorder refused the whole sample,
+            // so the recording silently lacked samples metrics.json had (sim-metrics audit
+            // MI.samples-recorded).
+            DistributionSummary::Insufficient { n, required, sum } => {
+                DistributionSummary::Insufficient {
+                    n,
+                    required,
+                    sum: sum.map(|s| crate::quant::Quantum::SUM.quantise(s)),
+                }
+            }
         }
     }
 }

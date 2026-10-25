@@ -630,7 +630,9 @@ impl SampleValue {
                 (*p95, q),
                 (*p99, q),
             ],
-            SampleValue::Distribution(DistributionSummary::Insufficient { .. }) => Vec::new(),
+            SampleValue::Distribution(DistributionSummary::Insufficient { sum, .. }) => {
+                sum.map(|s| (s, Quantum::SUM)).into_iter().collect()
+            }
             SampleValue::Count { .. } => Vec::new(),
         }
     }
@@ -668,7 +670,9 @@ impl SampleValue {
                 p99,
                 ..
             }) => vec![*min, *max, *mean, *p50, *p95, *p99],
-            SampleValue::Distribution(DistributionSummary::Insufficient { .. }) => Vec::new(),
+            SampleValue::Distribution(DistributionSummary::Insufficient { sum, .. }) => {
+                sum.iter().copied().collect()
+            }
             SampleValue::Count { .. } => Vec::new(),
         }
     }
