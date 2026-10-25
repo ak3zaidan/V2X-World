@@ -627,6 +627,9 @@ pub struct BsmTimingDevice {
     pos_err: (f64, f64),
     /// Whether the device is on the other :00/:50 grid (schema v3 `grid_hop`).
     away: bool,
+    /// The previous belief's instant and ground speed (schema v3 `grid_hop`), from which a
+    /// hop BSM's speed is carried to its own instant.
+    last_speed: Option<(SimTime, f64)>,
 }
 
 impl BsmTimingDevice {
@@ -664,6 +667,7 @@ impl BsmTimingDevice {
             next_tick: None,
             pos_err: (0.0, 0.0),
             away: false,
+            last_speed: None,
         }
     }
 
@@ -839,11 +843,24 @@ impl BsmTimingDevice {
             (i128::from(epoch) + i128::from(hop_ns) + (phase_ms * 1e6).round() as i128).max(0)
                 as SimTime
         });
+        // A hop BSM is generated half an interval after the belief, its position carried
+        // there along the believed velocity (above). Its speed is carried there too, with
+        // the belief's own recent acceleration: left at the belief's instant, a hop's secMark
+        // Δt of 50 ms doubles the acceleration that MaxAcceleration reads (|Δv| / Δt), and a
+        // 5 m/s² deceleration fired it (61 honest verdicts on E4U before this fix), where
+        // CV-pilot locked devices show 0.0 per ID-minute (p1-realdata-baseline.md T5).
+        let v_now = belief.ground_speed_mps();
+        let accel = match self.last_speed {
+            Some((t0, v0)) if t > t0 && t - t0 <= 2 * iv => (v_now - v0) / ((t - t0) as f64 * 1e-9),
+            _ => 0.0,
+        };
+        if c.grid_hop.is_some() {
+            self.last_speed = Some((t, v_now));
+        }
+        let v_at = (v_now + accel * hop_ns as f64 * 1e-9).max(0.0);
         let (speed_mps, heading_rad) = match noise {
-            Some((ns, nh)) if moving => (
-                Some((belief.ground_speed_mps() + ns).max(0.0)),
-                Some(belief.heading_rad + nh),
-            ),
+            Some((ns, nh)) if moving => (Some((v_at + ns).max(0.0)), Some(belief.heading_rad + nh)),
+            _ if moving && hop_ns > 0 => (Some(v_at), Some(belief.heading_rad)),
             _ => (None, None),
         };
         Some(BsmReport {
@@ -1240,6 +1257,39 @@ classes:
         let mut v2 = cal.clone();
         v2.schema = SCHEMA_V2.to_string();
         assert!(v2.check().is_err(), "a v2 file may not carry grid_hop");
+    }
+
+    /// A hop BSM carries the speed of its own instant: under a steady 6 m/s² deceleration
+    /// the acceleration implied by consecutive BSMs (|Δv| / secMark Δt, SM-MBR
+    /// MaxAcceleration) stays 6 m/s² across the 50 ms and 150 ms hop pairs, not 12 and 4.
+    #[test]
+    fn a_hop_bsm_carries_the_speed_of_its_own_instant() {
+        let mut cal = locked_v3();
+        cal.classes[0].grid_hop = Some(GridHop {
+            leave_prob: 0.3,
+            return_prob: 0.5,
+        });
+        let mut r = rng(10);
+        let mut d = BsmTimingDevice::assign(&cal, &mut r);
+        let mut sent = Vec::new();
+        for i in 0..300u64 {
+            let t = 10.0 + 0.1 * i as f64;
+            let s = t - 10.0;
+            let mut b = belief(10_000 + 100 * i, 0.0);
+            b.vel = Vec3::new(30.0 - 6.0 * s, 0.0, 0.0);
+            b.pos = Vec3::new(30.0 * s - 3.0 * s * s, 0.0, 0.0);
+            let rep = d.report(&cal, &mut r, &b).unwrap();
+            sent.push((rep.sec_mark_at, rep.speed_mps.unwrap_or(b.vel.x)));
+        }
+        let (mut hops, mut worst) = (0, 0.0f64);
+        // The first BSM has no earlier belief to take an acceleration from.
+        for w in sent[1..].windows(2) {
+            let dt = (w[1].0 - w[0].0) as f64 * 1e-9;
+            hops += usize::from((dt - 0.1).abs() > 0.01);
+            worst = worst.max((w[1].1 - w[0].1).abs() / dt);
+        }
+        assert!(hops > 40, "{hops}");
+        assert!(worst < 6.5, "implied acceleration {worst} m/s²");
     }
 
     /// E4-BODY: position_noise is a white, heavy-tailed increment of the reported position
