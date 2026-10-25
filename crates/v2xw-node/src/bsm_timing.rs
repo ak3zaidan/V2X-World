@@ -357,7 +357,8 @@ impl BsmTimingCalibration {
             }
             if let Some(k) = &c.bsm_clock {
                 k.drift_ms.check(&format!("{at}.bsm_clock.drift_ms"))?;
-                k.period_dev_ms.check(&format!("{at}.bsm_clock.period_dev_ms"))?;
+                k.period_dev_ms
+                    .check(&format!("{at}.bsm_clock.period_dev_ms"))?;
                 if c.phase_scope == PhaseScope::Message {
                     return Err(format!(
                         "{at}: a bsm_clock moves the device's own phase; phase_scope must be device"
@@ -370,7 +371,9 @@ impl BsmTimingCalibration {
                     && n.heading_deg.is_finite()
                     && n.heading_deg >= 0.0)
             {
-                return Err(format!("{at}: output_noise sds must be finite and 0 or more"));
+                return Err(format!(
+                    "{at}: output_noise sds must be finite and 0 or more"
+                ));
             }
             if !(c.header_jitter_ms.sd.is_finite() && c.header_jitter_ms.sd >= 0.0) {
                 return Err(format!("{at}: header_jitter_ms.sd must be 0 or more"));
@@ -664,8 +667,7 @@ impl BsmTimingDevice {
         } else {
             0
         };
-        let pos_epoch =
-            (i128::from(epoch) + at_instant + i128::from(slip) * i128::from(iv)).max(0);
+        let pos_epoch = (i128::from(epoch) + at_instant + i128::from(slip) * i128::from(iv)).max(0);
         let age_s = (i128::from(t) - pos_epoch) as f64 * 1e-9;
         let mut pos = Vec3::new(
             belief.pos.x - belief.vel.x * age_s,
@@ -973,7 +975,11 @@ classes:
             sent.push((rep.sec_mark_at, rep.pos.x));
         }
         for w in sent.windows(2) {
-            assert_eq!(w[1].0 - w[0].0, 103_000_000, "secMark advances by the period");
+            assert_eq!(
+                w[1].0 - w[0].0,
+                103_000_000,
+                "secMark advances by the period"
+            );
             // 20 m/s × 100 ms = 2 m per fix.
             let fixes = ((w[1].1 - w[0].1) / 2.0).round();
             assert!(fixes == 1.0 || fixes == 2.0, "{fixes}");
