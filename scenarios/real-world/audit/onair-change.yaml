@@ -1,0 +1,16 @@
+# On-air security audit: the audit base with a pseudonym change every 30 s (the `time`
+# rule, one condition alone) so that 120 s hold several changes per vehicle: the change
+# policy, the identifiers that change together, and the eavesdropper's linkability
+# metrics are recomputed from node.tx, sec.pseudonym and privacy.link.
+schema: v2xw/scenario/1
+meta:
+  base: onair-base.yaml
+  name: On-air security audit, 30 s pseudonym change
+  description: >-
+    The on-air audit base with a pseudonym change every 30 s, for the change-policy and
+    privacy checks.
+  tags: [real-world, manhattan, scms, audit, on-air, privacy]
+security:
+  pseudonym_change:
+    strategy: time
+    period_s: 30.0
