@@ -1,0 +1,17 @@
+schema: v2xw/scenario/1
+
+# Whole-simulation metrics audit (docs/design/scms-real/testing/audit-sim-metrics.md), run S:
+# the realism file's fleet (69 vehicles, 26 handsets, 3 % constant-position attackers from
+# 20 s, PKI view on), live for 240 s with no fast-forward, so a report, a case and a
+# revocation can happen in a window short enough to record every event.
+meta:
+  base: ../midtown-scms-realism.yaml
+  name: Audit sim-metrics short Midtown
+  description: >-
+    A short live Midtown run with attackers and the PKI view on: the base of the
+    whole-simulation metrics audit (S).
+  tags: [real-world, manhattan, scms, audit]
+
+time:
+  duration_s: 240.0
+  fast_forward: []

@@ -1,0 +1,25 @@
+schema: v2xw/scenario/1
+
+# Whole-simulation metrics audit, run Q: the quarter benchmark (2,250 veh/h, 500
+# pedestrians, 50 cyclists) for two days on the real calendar, with the realism file's 3 %
+# constant-position attackers from 20 s and the PKI view on. Live 0-60 s and across the
+# 614 -> 615 rollover (43,185-43,215 s); fast-forward otherwise.
+meta:
+  base: ../midtown-scms-benchmark-quarter.yaml
+  name: Audit sim-metrics quarter fleet with attackers
+  description: >-
+    The quarter Midtown benchmark with 3 % constant-position attackers and the PKI view
+    on, over two days: the whole-simulation metrics audit (Q).
+  tags: [benchmark, real-world, manhattan, scms, audit]
+
+security:
+  scms:
+    pki_view: true
+
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.03
+      schedule:
+        from_s: 20.0
+        to_s: 172800.0

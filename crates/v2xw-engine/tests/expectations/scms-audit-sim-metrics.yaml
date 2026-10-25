@@ -1,0 +1,102 @@
+# Whole-simulation SCMS metrics audit (docs/design/scms-real/testing/audit-sim-metrics.md).
+# Every SCMS-related metric the engine emits, recomputed from the raw records by an
+# independent reader (tools/audit/sim_metrics.py, which shares no code with the engine and
+# reads only recording.mcap, metrics.json and run-report.json); conservation laws over the
+# run report and the records; run sanity (time order, cost, determinism across thread
+# counts, checkpoint and resume); the server's PKI answers against the records.
+#
+# Every row was written down, with `expect: pass` as the definition or the standard
+# predicts, before its run was read. `verdict` is filled in afterwards:
+#   pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#   wrong-expectation (corrected with the evidence in `note`) | open (documented).
+# `fault` names the injected fault `sim_metrics.py selftest` applies to show the row's check
+# can go red (each was run; the report lists the outcome).
+#
+# Binary: release build of main 8becf72a copied to the scratchpad; seed 0xBE7C_0001;
+# --record-level events (X: receptions); one run per run-lock call.
+schema: v2xw/scms-run-expectations/1
+
+runs:
+  S:  {scenario: scenarios/real-world/audit-sim/short.yaml, note: "95 devices + 30 RSUs, 3 % ConstPos from 20 s, 240 s live, PKI view; events"}
+  X:  {scenario: scenarios/real-world/audit-sim/short.yaml, note: "S cut to 50 s at --record-level receptions: node.verify kept for the verification metrics"}
+  Q:  {scenario: scenarios/real-world/audit-sim/quarter-attack.yaml, note: "quarter fleet, 3 % ConstPos, two days, live 0-60 s and 43,185-43,215 s; events"}
+  L:  {scenario: scenarios/real-world/audit-sim/lte.yaml, note: "LTE-V2X PC5 mode 4 at the quarter fleet, 90 s live; events"}
+  U:  {scenario: scenarios/real-world/audit-sim/short.yaml, note: "120 s, 2 threads, --checkpoint-every 60s: the uninterrupted reference"}
+  T1: {scenario: scenarios/real-world/audit-sim/short.yaml, note: "as U on 1 rayon thread"}
+  T4: {scenario: scenarios/real-world/audit-sim/short.yaml, note: "as U on 4 rayon threads"}
+  CK: {scenario: scenarios/real-world/audit-sim/short.yaml, note: "as U, stopped at 60 s (--stop-at) and carried on with v2xw resume"}
+
+rows:
+# ---------------------------------------------------------------- (1) metric integrity
+- {id: MI.samples-recorded, runs: [S, Q, L], check: samples_recorded, expect: pass,
+   source: "run.rs: metrics.json is every metric.sample record the run emitted; stream.rs RecordLevel::Events keeps every metric sample. The two must hold the same samples with the same values", fault: drop one metric.sample record}
+- {id: MI.windows, runs: [S, Q, L], check: windows, expect: pass,
+   source: "scenario metrics.window_s (default 10 s): every windowed SCMS metric is flushed at warmup + k*10 s up to the run's end, never inside a fast-forward gap, never twice for one (metric, dims, t)", fault: shift one sample's t by 1 s}
+- {id: MI.units, runs: [S, Q, L], check: units, expect: pass,
+   source: "MetricDef units: verify_rate, p2pcd_requests 1/s; bytes_* B/s; ratios ratio; cert_pool_valid count; pseudonym_change_rate 1/(veh*h); time_to_* s; crl_bytes B", fault: rename one sample's unit}
+
+# ---------------------------------------------------------------- (2) recomputed from records
+- {id: MR.full_cert_share, runs: [S, Q, L], check: full_cert_share, expect: pass,
+   source: "security.rs: messages signed with a full certificate / messages with a signer, per window, from node.tx signer", fault: flip one node.tx signer}
+- {id: MR.envelope_overhead, runs: [S, Q, L], check: envelope_overhead, expect: pass,
+   source: "security.rs: sum envelope_bytes / sum payload_bytes per window over node.tx (ratio of sums, n = messages)", fault: add 1 B to one envelope}
+- {id: MR.security_overhead, runs: [S, Q, L], check: security_overhead, expect: pass,
+   source: "overhead.rs: sum envelope octets / sum octets on the air, total and per msg_type", fault: add 1 B to one envelope}
+- {id: MR.cert_bytes_share, runs: [S, Q, L], check: cert_bytes_share, expect: pass,
+   source: "overhead.rs: sum certificate octets / sum envelope octets, total and per msg_type", fault: add 1 B to one cert}
+- {id: MR.p2pcd_requests, runs: [S, Q, L], check: p2pcd_requests, expect: pass,
+   source: "security.rs: sum node.telemetry p2pcd_requests / window seconds (IEEE 1609.2 P2PCD trigger count)", fault: add 1 to one telemetry row}
+- {id: MR.cert_pool_valid, runs: [S, Q, L], check: cert_pool_valid, expect: pass,
+   source: "privacy_metrics.rs: distribution of node.security pool_valid over the window's rows (n, min, max, mean)", fault: set one row's pool_valid to 0}
+- {id: MR.backend_link_up, runs: [S, Q, L], check: backend_link_up, expect: pass,
+   source: "privacy_metrics.rs: node.security rows with link_up / rows, per window", fault: flip one row's link_up}
+- {id: MR.bytes_backend, runs: [S, Q, L], check: bytes_buckets, expect: pass,
+   source: "comms.rs: bytes_uu_ul / uu_dl / backhaul / backend = sum net.bytes bytes_on_wire per bucket / window seconds", fault: add 1 B to one net.bytes row}
+- {id: MR.linkability, runs: [S, Q, L], check: linkability, expect: pass,
+   source: "privacy_metrics.rs: correct links / pseudonym changes, cumulative; trials = changes (the sec.pseudonym or node.security changes count)", fault: add one pseudonym change}
+- {id: MR.det_matrix, runs: [S, Q, L], check: det_matrix, expect: pass,
+   source: "detection.rs: report level, population = declared subjects (gt.subject), positive = a subject with at least one report at the authority (MA), truth = its actor attacked (gt.attack.action); vehicle level over actors; the summaries are functions of the four cells", fault: add one report-at-MA subject}
+- {id: MR.verify_rate, runs: [X], check: verify_rate, expect: pass,
+   source: "security.rs: Valid+Invalid node.verify outcomes per primitive / window seconds", fault: drop one node.verify record}
+- {id: MR.unverified_ratio, runs: [X], check: unverified_ratio, expect: pass,
+   source: "security.rs: Skipped / (Valid+Invalid+Skipped) node.verify outcomes; Dropped in neither term", fault: flip one outcome to skipped}
+- {id: MR.verify_cost_wait, runs: [X], check: verify_cost_wait, expect: pass,
+   source: "security.rs: cost_us/1000 and (t_start - t_enqueue)/1e6 distributions over Valid+Invalid outcomes (n, min, max)", fault: drop one node.verify record}
+- {id: MR.crl, runs: [Q], check: crl_metrics, expect: pass,
+   source: "security.rs: crl_entries / crl_bytes = the list as last published (proto.revocation), carried forward; revocation_latency_stage = consecutive emitted stages of each revocation", fault: drop the last proto.revocation record}
+
+# ---------------------------------------------------------------- (3) conservation
+- {id: CV.report-fate, runs: [S, Q, L], check: report_fate, expect: pass,
+   source: "phase2.rs: every filed report (reports_sent) ends uploaded (cellular, relay), unsent in an outbox, evicted, expired, not filed (OF-2), lost or refused for MTU; [SM-MBR] 2.2 store", fault: add one to reports_sent}
+- {id: CV.reports-received, runs: [S, Q, L], check: reports_received, expect: pass,
+   source: "reports_received = uploads that reached an RA = pki.flow report messages = sum reports_by_provider", fault: drop one pki.flow report message}
+- {id: CV.report-truth, runs: [S, Q, L], check: report_truth, expect: pass,
+   source: "every filed report is about an attacker or an honest device: about_attackers + about_honest = reports_sent", fault: add one to reports_about_honest}
+- {id: CV.verify-states, runs: [S, Q, L], check: verify_states, expect: pass,
+   source: "every checked message has one verification state: sum verification_states = messages_checked", fault: add one Verified}
+- {id: CV.privacy-links, runs: [S, Q, L], check: privacy_links, expect: pass,
+   source: "privacy_link_decisions = privacy.link records; claimed + spurious + correct consistent", fault: drop one privacy.link record}
+- {id: CV.attack-onset, runs: [S, Q, L], check: attack_onset, expect: pass,
+   source: "an attacker's onset is its first falsified message (gt.attack.action) and not before the schedule's from_s; no report about it can precede the onset (time_to_detect >= 0)", fault: move one gt.attack.action earlier}
+- {id: CV.preload, runs: [S, Q, L], check: preload, expect: pass,
+   source: "devices_by_provider = devices that sent an EeEcaCertRequestSpdu in the preload flow; every RaAcaCertRequest has one AcaRaCertResponse", fault: drop one preload request}
+
+# ---------------------------------------------------------------- (4) run sanity
+- {id: RS.time-order, runs: [S, Q, L], check: time_order, expect: pass,
+   source: "ADR 0004 / the kernel: no event in the past; each channel's records in nondecreasing log time, no record after the run's end, a record's own t not after its log time", fault: swap two records' log times}
+- {id: RS.cost-S, runs: [S], check: cost, expect: pass, bound: {wall_s: 300, peak_mb: 600},
+   source: "realism base: 95 devices 300 s live in about 180 s and 229 MB (realism.md V8); 240 s here", fault: halve the bound}
+- {id: RS.cost-Q, runs: [Q], check: cost, expect: pass, bound: {wall_s: 600, peak_mb: 1200},
+   source: "full-bench.md QD: quarter fleet 172,800 s in 189 s / 227 MB at --record-level metrics; events level and the PKI view add recording work, so 3x wall and 5x memory are the bound", fault: halve the bound}
+- {id: RS.cost-L, runs: [L], check: cost, expect: pass, bound: {wall_s: 600, peak_mb: 1200},
+   source: "quarter fleet, 90 s live: QD's live minute dominates its 189 s", fault: halve the bound}
+- {id: RS.threads, runs: [U, T1, T4], check: same_digest, expect: pass,
+   source: "ADR 0004, tests/scale.rs: the record stream is identical on 1, 2 and 4 threads; content digest and metrics.json equal", fault: alter one record of T4}
+- {id: RS.resume, runs: [U, CK], check: same_digest, expect: pass,
+   source: "checkpoint.rs: the resumed run's outputs equal an uninterrupted run's (record digest, recording content digest, metrics.json)", fault: alter one record of CK}
+
+# ---------------------------------------------------------------- (5) server and Studio
+- {id: SV.trust, runs: [S], check: server_trust, expect: pass,
+   source: "v2xw-server pki.rs inspect.trust: the newest pki.state at or before t, its counters as recorded; Studio's PKI topology draws these", fault: alter one counter in the record}
+- {id: SV.flows, runs: [S], check: server_flows, expect: pass,
+   source: "inspect.flows lists every recorded flow instance with its message count and bytes as the pki.flow records give them (within FLOW_CAP)", fault: drop one pki.flow record}
