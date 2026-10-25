@@ -9,7 +9,7 @@
 `extract` is `matrix.py extract` (run report, metrics.json pooled as `m.*`, run cost) plus
 the per-link measures of the chains, `lc.*`, from the run report and the resolved scenario:
 
-- `lc.bsms` = frames - fragment frames + fragmented SDUs (one SDU per BSM);
+- `lc.bsms` = max(0, frames - fragments) + fragmented SDUs (one SDU per BSM);
 - `lc.bsms_per_veh_s` = lc.bsms / (vehicles created x duration): the BSM rate J2945/1 sets;
 - `lc.psdu_per_bsm`, `lc.airtime_us_per_bsm`: what one BSM costs the channel;
 - `lc.frag_share` = fragmented SDUs / BSMs;
@@ -27,7 +27,8 @@ the per-link measures of the chains, `lc.*`, from the run report and the resolve
 differences (a 2 x 2 or a chain that only shows as a contrast), from DERIVED below.
 
 `faults` proves each row of the table can go red: a direction, ratio or delta row is
-re-judged with the variant replaced by its base (the knob did nothing); a value or band
+re-judged with the variant replaced by its base (the knob did nothing); a same row with
+the variant moved by 1.5 + tol of itself; a value or band
 row with its value moved outside the expectation; an identical row with a different run's
 digest. A row that still passes under its fault is printed as CANNOT-FAIL (exit 1).
 It shares no code with the engine.
@@ -87,7 +88,8 @@ def extract(run_dir):
     frames = rep.get('frames_transmitted') or 0
     frag_frames = rep.get('fragments_sent') or 0
     frag_sdus = rep.get('sdus_fragmented') or 0
-    bsms = frames - frag_frames + frag_sdus
+    # fragments still queued at the end were counted in fragments_sent but never sent
+    bsms = max(0, frames - frag_frames) + frag_sdus
     nodes = rep.get('nodes_created') or 0
     att = rep.get('reception_attempts') or 0
     air = rep.get('air_bytes') or {}
@@ -119,7 +121,7 @@ DERIVED = {
     'X-pq-density-pdr': ('m.pdr', [(+1, 'r100'), (-1, 'r100-falcon'), (-1, 'r40'), (+1, 'r40-falcon')]),
     'X-pq-density-coll': ('m.collision_rate', [(+1, 'r100-falcon'), (-1, 'r100'), (-1, 'r40-falcon'), (+1, 'r40')]),
     # DCC x density: CBR growth 40 -> 160 with J2945/1 minus without (< 0: DCC flattens it)
-    'X-dcc-density-cbr': ('m.channel_load.mean', [(+1, 'r160'), (-1, 'r40'), (-1, 'r160-nodcc'), (+1, 'r40-nodcc')]),
+    'X-dcc-density-cbr': ('m.cbr.172.mean', [(+1, 'r160'), (-1, 'r40'), (-1, 'r160-nodcc'), (+1, 'r40-nodcc')]),
     # DCC x OBU: verify wait added by switching DCC off at 160 on the slow OBU minus on the fast
     'X-dcc-obu-wait': ('m.verify_wait.mean', [(+1, 'r160-c2sw-nodcc'), (-1, 'r160-c2sw'), (-1, 'r160-nodcc'), (+1, 'r160')]),
     # CRL paths: enforcement lost to a CRL-store outage minus that lost to a CRLG outage
@@ -182,10 +184,12 @@ def faults(table, runs_dir):
             f['variant'] = f['base']          # the knob did nothing
             fget = get
         elif op == 'same':
-            # the knob moved the metric by 50 %
-            def fget(run, metric, row=row):
+            # the knob moved the metric by half again more than the row tolerates
+            k = 1.5 + row.get('tol', 0.0)
+
+            def fget(run, metric, row=row, k=k):
                 v = get(run, metric)
-                return v * 1.5 + (1.0 if v == 0 else 0.0) if run == row['variant'] else v
+                return v * k + (1.0 if v == 0 else 0.0) if run == row['variant'] else v
         elif op == 'identical':
             other = next(r for r in doc['runs'] if r not in (row['base'], row['variant'])
                          and load(r) is not None)

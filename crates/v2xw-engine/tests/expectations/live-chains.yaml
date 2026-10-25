@@ -129,7 +129,7 @@ rows:
   base: r100
   variant: r100-falcon
   area: pq-chain
-  measure: m.channel_load.mean
+  measure: m.cbr.172.mean
   expect: up
   min_change: 1.0
   source: 'CBR is the offered airtime per second over the sensing range (ETSI TS 102 687 4.2): x4.3 airtime at the same J2945/1 rate (its rate rule reads density, not CBR) -> at least double, bounded by saturation'
@@ -137,12 +137,11 @@ rows:
   base: r100
   variant: r100-falcon
   area: pq-chain
-  measure: m.channel_load.mean
+  measure: m.cbr.172.mean
   expect: band
   band: [0.3, 0.97]
   source: 'the busy ratio cannot exceed 1; 0.21 x 4.3 = 0.9 offered, held below it by CSMA deferral and J2945/1 power control above 50 % CBP'
-  verdict: wrong-expectation
-  note: 'measured 0.993. The offered airtime is 1.07 s per second (lc.offered_airtime_s_per_s: 4,845 BSMs + 491 second fragments x 1,323 us / 6 s), above capacity: the 0.9 estimate missed the second fragments and the BSM-rate rise (LC.PQ.rate-feedback-falcon). Power control cannot unload a 300 m grid: at 10 dBm + 6 dBi a 300 m link is still ~10 dB above sensitivity, so every node keeps sensing every other and the busy ratio pins at 1, as CSMA theory says for offered load > 1 (Bianchi 2000)'
+  note: 'checker corrected: every CBR row was first written on m.channel_load, which is the OFFERED load (own offered airtime + arrivals above -85 dBm over the window; it may exceed 1, the metric card says so), not the busy ratio. On it this row read 0.993 and was first judged a wrong expectation; the busy ratio m.cbr.172 reads 0.728 (offered 0.99), inside the band. All CBR rows now read m.cbr.172 (re-judged, none changed verdict except this one)'
 - id: LC.PQ.power-falcon
   base: r100
   variant: r100-falcon
@@ -240,7 +239,7 @@ rows:
   base: r100
   variant: r100-mldsa44
   area: pq-chain
-  measure: m.channel_load.mean
+  measure: m.cbr.172.mean
   expect: up
   min_change: 1.5
   source: 'x14.8 bytes on the same BSM rate is ~3x the channel capacity (0.21 x 14 > 1): the channel saturates'
@@ -288,7 +287,7 @@ rows:
   base: r100-s2
   variant: r100-falcon-s2
   area: pq-chain
-  measure: m.channel_load.mean
+  measure: m.cbr.172.mean
   expect: up
   min_change: 1.0
   source: the PQ -> CBR link holds on a second master seed
@@ -344,7 +343,7 @@ rows:
   base: r40-nodcc
   variant: r160-nodcc
   area: dcc-chain
-  measure: m.channel_load.mean
+  measure: m.cbr.172.mean
   expect: up
   min_change: 1.5
   source: 'CBR ~ N x rate x airtime while everyone hears everyone (the 300 m grid is inside the ~500 m 6 Mb/s range): x(N160/N40) ~ 3.5'
@@ -514,6 +513,8 @@ rows:
   expect: down
   min_change: 0.3
   source: 'a receiver refuses a revoked certificate only once it holds a CRL listing it (IEEE 1609.2 5.1.3; CAMP 1.2.2 CRL); the CRLG down 60-200 s issues no CRL then, so each revocation decided in it (S revokes 4 attackers ~30-60 s after 60 s) is enforced from ~200 s, not ~decision + 8 s publish + <= 30 s fetch: about 40 s of enforcement left of ~140'
+  verdict: open
+  note: "premise not met: the deployment has two providers (provider-a 52 devices, provider-b 46) and actors.backend.failures resolves 'crlg' on the HOME provider's run only (crypto_config::failure_node on runs[0]); both in-window decisions (140.9 s, attackers 39 and 48) were provider-b's, provider-a's one came at 233.4 s, after the outage; 0 deliveries held or dropped, every SCMS output identical to S to the nanosecond. Owed: a provider-qualified failure node (e.g. 'provider-b/crlg') so a scenario can take down the CRLG that holds the revocation, then this re-run"
 - id: LC.CRL.latency-up
   base: S
   variant: scms-crlg
@@ -522,6 +523,8 @@ rows:
   expect: up
   min_change: 0.5
   source: 'the decision -> enforced latency carries the rest of the outage (up to 140 s) on top of S''s ~16 s'
+  verdict: open
+  note: "as LC.CRL.enforcement-lost: the outage never met a revocation"
 - id: LC.CRL.delayed-not-lost
   base: S
   variant: scms-crlg
@@ -546,6 +549,8 @@ rows:
   expect: up
   min_change: 0.05
   source: 'a revoked attacker whose certificates are still accepted keeps being verified, judged and reported by its neighbours (detectors read only what the receiver accepted)'
+  verdict: open
+  note: "as LC.CRL.enforcement-lost"
 - id: LC.CRL.dose
   base: scms-crlg
   variant: scms-crlg-short
@@ -554,6 +559,8 @@ rows:
   expect: up
   min_change: 0.2
   source: 'an outage ending at 130 s instead of 200 s leaves 70 s more enforcement: dose-response'
+  verdict: open
+  note: "not run: its premise (LC.CRL.enforcement-lost) did not hold"
 - id: LC.CRL.store-fetches
   base: S
   variant: scms-crlstore
@@ -562,6 +569,8 @@ rows:
   expect: down
   min_change: 0.2
   source: 'the CRL store is the distribution point vehicles fetch from every 30 s over Uu: with it down 60-200 s, 140 s of 240 s of fetches find nothing'
+  verdict: open
+  note: "53 -> 53 downloads, 0 deliveries dropped: in this model a device's CRL fetch is answered by its RA ('the composite list its RA serves', phase2 R-JOINCRL, [PRIMER] pp. 5, 8), so a CRL-store outage does not reach fetches; and the store named is provider-a's only. Whether the deployed US fetch path is the RA or a CRL store is not settled here"
 - id: LC.CRL.store-issuance-unchanged
   base: S
   variant: scms-crlstore
@@ -578,6 +587,8 @@ rows:
   expect: band
   band: [-1.0e+09, -1.0e-06]
   source: 'with only the store down, the RSU still repeats the CRLs it was given on the air (role crl, CAMP RSU CRL broadcast), so less enforcement is lost than with issuance down'
+  verdict: open
+  note: "contrast 0: neither outage moved anything (above)"
 - id: LC.CRL.fleet-unchanged
   base: S
   variant: scms-crlg
@@ -595,6 +606,8 @@ rows:
   expect: ratio
   band: [3.0, 15.0]
   source: 'a 12 m outlier inside 100 ms implies 120 m/s and trips the position-jump check at every receiver that verifies the BSM (VeReMi/F2MD legacy-12): verdicts scale with outlier events, x10 (minus those hidden behind report rate limits)'
+  verdict: open
+  note: "7 -> 7 position-jump verdicts with ~1,760 single-fix 12 m outliers (0.1/s x 98 vehicles x 180 s) instead of ~176; at 0.5/s (~8,800) 7 -> 10. Yet removing outliers AND bursts (g0) removes every position jump and 27 of 34 honest reports: the degraded bursts, not the outliers, drive honest reports. Either legacy-12 tolerates a one-fix 12 m jump (its checks gate on stated confidence and consecutive pairs) or outliers do not reach the judged BSMs; telling them apart needs node.tx positions against gt (owed, a recorded run)"
 - id: LC.GN.jumps-g0
   base: S
   variant: scms-g0
@@ -603,6 +616,8 @@ rows:
   expect: down
   min_change: 0.3
   source: 'no outliers, no outlier jumps: what is left is attackers and turning geometry'
+  verdict: pass
+  note: "7 -> 0: the g0 run has no positionJump verdict at all, so the key is absent (matrix.py reads ABSENT); judged by hand from verdicts_by_detector"
 - id: LC.GN.honest-reports-g10
   base: S
   variant: scms-g10
@@ -611,6 +626,8 @@ rows:
   expect: up
   min_change: 1.0
   source: 'every honest verdict is a misbehaviour report; x10 outliers -> several times the honest reports'
+  verdict: open
+  note: "34 -> 34; see LC.GN.jumps-g10"
 - id: LC.GN.honest-reports-g0
   base: S
   variant: scms-g0
@@ -625,6 +642,8 @@ rows:
   measure: p2.honest_reported
   expect: up
   source: more honest vehicles glitch at least once while heard
+  verdict: open
+  note: "17 -> 17; see LC.GN.jumps-g10"
 - id: LC.GN.ma-load-g10
   base: S
   variant: scms-g10
@@ -633,6 +652,8 @@ rows:
   expect: up
   min_change: 0.1
   source: 'the honest reports join the attackers'' at the MA after the RA shuffle: MA load rises'
+  verdict: open
+  note: "393 -> 393; see LC.GN.jumps-g10"
 - id: LC.GN.fpr-g10
   base: S
   variant: scms-g10
@@ -640,6 +661,8 @@ rows:
   measure: m.det_fpr.report
   expect: up
   source: the detector cannot tell a GNSS outlier from a lie; its false-positive rate rises
+  verdict: open
+  note: "identical to 6 digits; see LC.GN.jumps-g10"
 - id: LC.GN.precision-g10
   base: S
   variant: scms-g10
@@ -647,6 +670,8 @@ rows:
   measure: m.det_precision.report
   expect: down
   source: more honest reports among the same attacker reports
+  verdict: open
+  note: "identical; see LC.GN.jumps-g10"
 - id: LC.GN.dose-g50
   base: scms-g10
   variant: scms-g50
@@ -655,6 +680,8 @@ rows:
   expect: up
   min_change: 0.3
   source: 'x5 outlier rate again -> more honest reports, sublinear as per-sender report limits bind'
+  verdict: open
+  note: "34 -> 40 (+18 %, under the 30 % predicted): the direction holds, the size does not; see LC.GN.jumps-g10"
 - id: LC.GN.g50-honest-revoked
   base: S
   variant: scms-g50
@@ -663,6 +690,8 @@ rows:
   expect: ge
   value: 1
   source: 'corroborated MA: an event counts with 2 independent reporters, revocation at 3 events inside a minute from >= 3 reporters; 0.5 outliers/s is 30 glitches a minute per vehicle, each heard by tens of verifiers: an honest vehicle crosses that rule (the reason deployed OBUs smooth GNSS before the BSM)'
+  verdict: open
+  note: "0 honest revoked at 0.5 outliers/s: outliers barely produce reports (40 honest reports in 180 s), so the corroborated MA's 3-events-a-minute rule is never met; the prediction assumed every outlier is reported"
 - id: LC.GN.attackers-unaffected-g0
   base: S
   variant: scms-g0
@@ -678,6 +707,8 @@ rows:
   measure: cost.events
   expect: up
   source: every extra report is an upload, a shuffle entry and an MA event
+  verdict: open
+  note: "2,230,023 -> 2,229,836 events (-0.01 %): six more reports cost nothing measurable"
 # ---------------------------------------------------------------- chain 6: signal timing -> queues -> density -> J2945/1 -> channel load
 - id: LC.SG.speed-c120
   base: sig-base
@@ -718,7 +749,7 @@ rows:
   base: sig-base
   variant: sig-c120
   area: signal-chain
-  measure: m.channel_load.p95
+  measure: m.cbr.172.p95
   expect: up
   source: 'the node beside a long queue senses more transmitters: the high-percentile CBR rises with the queue (Bazzi 2017; ETSI TS 102 687 CBR per node)'
 - id: LC.SG.demand-amplifies
@@ -804,7 +835,7 @@ rows:
   base: ped-base
   variant: ped-450
   area: ped-chain
-  measure: m.channel_load.mean
+  measure: m.cbr.172.mean
   expect: up
   source: '~2.8x the PSM airtime on the channel the BSMs use'
 - id: LC.PD.cost-450
