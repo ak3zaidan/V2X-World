@@ -150,17 +150,17 @@ on secMark. A is B with 3 % ConstPos attackers from 20 s.
 
 ## 5. Open items
 
-- **TM-1 (engine, `bsm_timing.rs`): slip semantics.**
+- **TM-1 (engine, `bsm_timing.rs`): slip semantics.** Fixed in the engine by the v2 BSM clock (§7); the re-run rows are `P1.TM1.*`.
   - **What the engine does.** A k > 0 slip keeps the position and stamps the timestamp k epochs older. Two consecutive BSMs then carry the same secMark: in the E4F free class, secMark Δt is 0 ms in 17 % of consecutive pairs, 200 ms in 17 %, and 100 ms in the rest.
   - **The consequence.** The generationTime clock follows the device's own time, so it never sees the slip. generationTime-based Δt therefore trips less often than secMark-based Δt (4,179 vs 5,097).
   - **What real data shows.** Free devices advance secMark by about 100–136 ms per BSM (p50 +6 ms), and the position jumps two fix epochs (Tampa T6: 46 % of triggers are "2 v Δt"). The rx and header bases trip more than secMark: Tampa free 45 vs 20 per ID-minute, Wyoming 214 vs 0.
   - **The fix.** A drifting per-device BSM clock, which the calibration file's own comment asks for: a BSM period above the fix period, so the phase wraps. This is a model change with goldens behind the existing flag. It is not a patch.
   - **TM-2.** A k < 0 slip repeats the previous fix exactly, so ConstantPosition fires as well. It is moot for the locked class after F1, and the free class's −1 share is 0.005.
-- **E4-BODY.**
+- **E4-BODY.** The v2 fit adds the locked instant jitter and the receiver output noise (§7); the re-run rows are `P1.E4S.*`.
   - **The gap.** The engine's residual body is too tight: p50 / p90 / p99 are 1.2 / 2.3 / 4.4 cm, against Wyoming's 1.6 / 6.0 / 15.7 cm. This is the epoch-to-epoch output noise of the smoothed receiver, about one J2735 position LSB.
   - **Effect on the paper.** It does not move the 1 m decision: the tail matches, with 0 triggers. It does keep the pre-registered KS row red.
   - **Next step.** Calibrate the receiver's output noise on the Tampa and Orem locked bodies (Tampa locked p50 0.013 m, p99 0.40 m), never on Wyoming, then re-run E4 once against the same tolerance.
-- **E4-SPEED.** The procedural 2×2 highway stays at a median of 20–22 m/s, even posted at 80 mph with half the demand, against Wyoming's 34.4 m/s. This is probably the corner slow-downs or the desired-speed spread. A longer straight segment is needed before the KS comparison is speed-matched.
+- **E4-SPEED.** `p1-e4-s.yaml` (6 km straights, 90 s; §7). The procedural 2×2 highway stays at a median of 20–22 m/s, even posted at 80 mph with half the demand, against Wyoming's 34.4 m/s. This is probably the corner slow-downs or the desired-speed spread. A longer straight segment is needed before the KS comparison is speed-matched.
 - **One honest blocked device (06 §6 item 1).**
   - **What happened.** Node 262 is accused 5 times, all by MaxAcceleration (implied |Δv|/Δt > 10 m/s²), with the timing model on or off. Five reporters are enough for k ≤ 5.
   - **What still blocks no honest device:** rules with k ≥ 10, device-k with k = 20, and CaTch with θ = 10.
@@ -183,3 +183,71 @@ python3 tools/realworld/variants_faults.py crates/v2xw-engine/tests/expectations
 
 The run list with flags is in the table's `runs` section. VR was cut to 60 s at
 `receptions` (F2 now refuses that combination). VRF is the same run at `full`.
+
+## 7. TM-1, E4-BODY and E4-SPEED: the v2 timing model and the P1-E4 re-run
+
+Commits `cca82fcd` (model, fit, tests) and `47467608` (rows written with `measured: pending`
+before any run). Binary: an optimised debug build of `cca82fcd`.
+
+**What the raw rows show** (scratch analysis of the manifest-verified CV-pilot rows, then
+`tools/realdata` 1.1.0):
+
+- **Free devices run their own BSM clock.** Tampa free IDs advance secMark by a steady
+  per-ID 103 ms (per-ID median excess 3 ms, MAD 1 ms), and the RSU receive time advances
+  with it, so the period itself exceeds the fix interval. At secMark Δt 100-105 ms, 2.3-3.4 %
+  of fast pairs move two fixes, about 1/33, the wrap rate a 3 ms excess gives. Orem's
+  per-ID median is 6 ms, with a heavy per-BSM tail (15 % of periods more than ±25 ms from
+  the ID's median).
+- **Slips and wraps are told apart by the next pair.** Of 102,868 free onsets, 25,548
+  return at the next pair (a one-message slip: "2 v Δt then ≈ 0"); the other 77,320 stay
+  (a clock wrap). v2 fits `epoch_slip_prob` on the returning ones only (0.0565, was 0.228)
+  and leaves the rest to the clock.
+- **Locked secMark jitter is a timing error.** At secMark Δt 99 / 100 / 101 ms the mean
+  along-track residual / v is +0.41 / +0.11 / −0.50 ms (Tampa + Orem locked, v ≥ 10 m/s).
+  That is the 1 ms truncation of a generation instant that jitters about the epoch with the
+  position at that instant (±0.52 ms predicted), not a position left on the epoch (±1 ms).
+  Fit: N(0.225, 0.275) ms, from the shares of −1 (20.7 %) and ≥ +1 (0.24 %).
+- **The rest of the body is velocity-domain noise.** Consecutive residuals are uncorrelated
+  (lag-1 −0.02 along, +0.03 cross on Tampa; white position noise would give −0.5). On
+  exactly-100 ms locked pairs (1,961, Tampa + Orem) the along sd is 1.11 cm and the cross
+  sd 0.89 cm (IQR/1.349) over a 0.42 cm quantisation: speed noise 0.103 m/s, heading
+  noise 0.30° (cross attributed wholly to heading; an assumption). Wyoming was not used.
+
+**The engine (`crates/v2xw-node/src/bsm_timing.rs`, schema `v2xw.bsm_timing.v2`):**
+
+- `bsm_clock`: period = fix interval + per-device `drift_ms` + per-BSM `period_dev_ms`;
+  secMark and generationTime are the tick; the position is the latest fix before it; a
+  100 ms wake with no tick sends nothing (msgCnt stays contiguous); the BSM leaves at its
+  tick (signing starts there).
+- TM-1 defect fix: a slip `k > 0` moves the position k fixes later and keeps the timestamp.
+- A per-message phase puts the position at the jittered instant.
+- `output_noise` perturbs the transmitted speed and heading only; receivers' detectors see
+  it (the frame's claimed speed and heading now come from what the BSM carries).
+- v1 files still read (`bsm-timing-cvpilot-v1.yaml` is the frozen v1 fit); v1 refuses
+  the v2 blocks. No golden moves: the model runs only when a scenario enables it.
+- **E4-SPEED:** `p1-e4-s.yaml` is `p1-e4-80.yaml` with 6 km straights and 90 s.
+
+**Results (one run measured; the run lock was held by other agents for about 20 minutes per
+run, so the other seven runs are queued, not measured, and their rows stay `pending`).**
+
+| Change | Expected (written before) | Measured (E4S) | Verdict |
+|---|---|---|---|
+| P1-E4 KS vs Wyoming, speed-matched, v2 fit | ≤ 0.092 (predicted: still above) | 0.169 (was 0.337) | **open** E4-BODY, narrowed |
+| residual p50 / p90 / p99 | about 2.2 / 4 cm predicted | 2.1 / 4.1 / 6.1 cm (Wyoming 1.6 / 6.0 / 15.7) | as predicted |
+| speed p50 | 25-36 m/s | 29.8 m/s (was 22.2) | pass (E4-SPEED closed) |
+| locked rate at speed | ≤ 0.568 per ID-minute | 0.0 (0 of 10,449 pairs) | pass |
+| honest revocations | 0 | 0 | pass |
+| secMark steps (locked) | none expected to repeat | 13,434, none repeated | — |
+| cost | — | 90 s simulated in 22.6 s wall; 239,272 events; 13,469 frames | — |
+
+**What is left of E4-BODY.** The body centre now matches to within 0.5 cm and the 1 m
+tail matches (0 triggers). Wyoming's tail between 5 and 16 cm is missing: the fitted noise
+is Gaussian, while the real residual is heavy-tailed (Tampa locked along rms 5.7 cm
+against an IQR-based sd of 1.0 cm). The next step is a heavy-tailed (mixture or Student-t)
+output noise fitted on the same Tampa + Orem pairs, then one more E4 run against the same
+tolerance. The locked :00/:50 grid hops (28 % of Wyoming pairs at Δt 50 / 150 ms) are not
+modelled either.
+
+**Not yet run (rows pending):** P1.TM1.* (BV2, GT05V2, OFFV2, E4SF), P1.E4S.ks-white-noise
+(E4SWN), P1.E4S.body-p90, frames, events, memory and reports (E4SV1), P1.E4S.rerun (E4S2).
+`tm1/runall.sh` in the scratchpad runs them in order, one run per lock call.

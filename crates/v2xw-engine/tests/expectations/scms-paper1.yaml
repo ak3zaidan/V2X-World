@@ -1134,7 +1134,9 @@ rows:
     instant N(0.225, 0.275) ms, output noise 0.103 m/s and 0.30 deg, fitted on Tampa and Orem only).
     Prediction written before the run: per-component sd about 1.9 cm at 34 m/s, so p50 about 2.2 cm (above
     Wyoming 1.6) and p90 about 4 cm (below 6.0): likely still above the tolerance'
-  measured: pending
+  measured: '0.168666'
+  verdict: open
+  note: 'OPEN E4-BODY (narrowed): 0.337 -> 0.169 on the speed-matched v2 run, still above 0.092. Engine p50 / p90 / p99 0.021 / 0.041 / 0.061 m against Wyoming 0.016 / 0.060 / 0.157 m, as predicted before the run: the body centre is now slightly wide and the tail beyond 5 cm (Wyoming p99 15.7 cm) is missing. The v2 noise is Gaussian; the real one is heavy-tailed (Tampa along rms 5.7 cm vs IQR-sd 1.0 cm)'
 - id: P1.E4S.ks-white-noise
   base: E4SWN
   variant: E4SWN
@@ -1152,7 +1154,8 @@ rows:
   expect: le
   value: 0.568
   source: the frozen locked bound 0.568 per ID-minute; Wyoming 0.0
-  measured: pending
+  measured: '0'
+  verdict: pass
 - id: P1.E4S.speed
   base: E4S
   variant: E4S
@@ -1164,7 +1167,8 @@ rows:
   - 36.0
   source: 'speed-matched to Wyoming''s p5-p95 27.6-35.6 m/s (median 34.4): free flow at 80 mph posted with
     SUMO''s speedFactor mean 1.0 gives about 35 m/s once the corners are 6 km apart'
-  measured: pending
+  measured: '29.84'
+  verdict: pass
 - id: P1.E4S.body-p90
   base: E4SV1
   variant: E4S
@@ -1222,7 +1226,8 @@ rows:
   expect: eq
   value: 0
   source: 'the 8 h MA review: no honest revocation inside a 90 s window, whatever the residual body'
-  measured: pending
+  measured: '0'
+  verdict: pass
 - id: P1.E4S.reports
   base: E4SV1
   variant: E4S
