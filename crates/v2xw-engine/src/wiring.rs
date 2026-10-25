@@ -2295,6 +2295,23 @@ pub fn generation_timing(scenario: &Scenario) -> v2xw_msg::GenerationTiming {
     {
         t.max_jitter = v2xw_radio::J2945Params::J2945_1.tx_rand;
     }
+    // A PC5 sidelink schedules, it does not contend: the per-message hand-off jitter is a
+    // CSMA convention (ns-3's WAVE `TxMaxDelay`, there to stop two stations of one phase
+    // colliding every period), and on semi-persistent scheduling it is a defect. The
+    // reservation is made for one message at an offset in [n + T1, n + T2]; a fresh
+    // U[0, 10 ms] on the next message puts it after its reserved slot whenever the draw
+    // exceeds the offset, and the grant, still inside the 100 ms budget (TS 36.321
+    // 5.14.1.1 sees no trigger), then holds it almost a whole period. Measured on the NR
+    // grid before 2026-10-25: a 1 ms selection window gave a 41.9 ms mean access wait
+    // and a 50 ms one 27.2 ms. 3GPP's periodic traffic model (TR 37.885 A.1.1) is a
+    // random start per UE and then the exact period, which is the phase alone; the
+    // sidelink keeps it and drops the jitter. A scenario's `max_jitter_ms` still wins.
+    if matches!(
+        scenario.radio.rat,
+        crate::scenario::schema::Rat::LteV2xPc5 | crate::scenario::schema::Rat::NrV2xPc5
+    ) {
+        t.max_jitter = Duration::ZERO;
+    }
     if let Some(choice) = &scenario.messages.generator {
         let ms = |key: &str| {
             choice
