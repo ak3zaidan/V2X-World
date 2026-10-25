@@ -291,6 +291,8 @@ def fault(raw, name, row):
                 rec['ma.report'] += [{'t': 0, 'reporter': 0, 'subject': hon, 'detector': det}] * 50
     elif name == 'all-caught':  # every attacker reported 1 s and revoked 2 s after onset
         for a in p.get('attacker_outcomes') or []:
+            if a.get('onset_ns') is None:
+                a['onset_ns'] = 0
             a['first_reported_ns'] = a['onset_ns'] + int(NS)
             a['decided_ns'] = a['onset_ns'] + int(2 * NS)
         p['revoked_attackers'] = p.get('attackers', 0)
