@@ -1000,7 +1000,7 @@ rows:
   base: L
   variant: FC5000
   area: scms
-  measure: m.loss_rate.unknown-signer
+  measure: x.unknown_signer_loss
   expect: up
   source: 'a newcomer waits up to 5 s for a certificate: more digest-only frames from unknown signers'
   measured: pending
@@ -1009,7 +1009,7 @@ rows:
   base: L
   variant: FC250
   area: scms
-  measure: m.loss_rate.unknown-signer
+  measure: x.unknown_signer_loss
   expect: down
   source: 'a certificate every 250 ms: a newcomer waits at most a quarter second'
   measured: pending
@@ -1018,7 +1018,7 @@ rows:
   base: L
   variant: FCX
   area: scms
-  measure: m.loss_rate.unknown-signer
+  measure: x.unknown_signer_loss
   expect: eq
   value: 0.0
   source: 'every frame carries its signer: none is from an unknown signer'
@@ -1037,7 +1037,7 @@ rows:
   base: L
   variant: NN
   area: scms
-  measure: m.loss_rate.unknown-signer
+  measure: x.unknown_signer_loss
   expect: down
   source: newcomers get the certificate in the next message
   measured: pending
@@ -1056,7 +1056,7 @@ rows:
   base: L
   variant: CHP
   area: scms
-  measure: m.loss_rate.unknown-signer
+  measure: x.unknown_signer_loss
   expect: up
   source: until the P2PCD answer arrives, the other provider's pseudonyms cannot be verified
   measured: pending

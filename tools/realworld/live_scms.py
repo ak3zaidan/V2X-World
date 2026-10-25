@@ -10,7 +10,8 @@ extract) and adds scale-free forms the rows need:
   the verified receptions (by signer provider) and its revocations;
 - x.revocation_latency_s: the run report's mean revocation latency in seconds;
 - x.airtime_per_frame_us: airtime over frames on the air;
-- x.crl_polls: CRL downloads plus not-modified polls (every poll a vehicle made).
+- x.crl_polls: CRL downloads plus not-modified polls (every poll a vehicle made);
+- x.unknown_signer_loss: m.loss_rate.unknown-signer, 0 when no frame was lost to it.
 
 `faults` proves every row can go red: for each row it injects the fault the row exists
 to catch into the variant's measures, in memory, and re-judges with matrix.py's judge:
@@ -55,6 +56,8 @@ def extend(run_dir, report_dir=None):
     fr = air.get('frames') or 0
     d['x.airtime_per_frame_us'] = air.get('airtime_us', 0) / fr if fr else 0.0
     d['x.crl_polls'] = (p.get('crl_downloads') or 0) + (p.get('crl_polls_not_modified') or 0)
+    # The loss ratio by cause is only sampled for a cause that occurred: absent is none lost.
+    d['x.unknown_signer_loss'] = d.get('m.loss_rate.unknown-signer', 0.0)
     with open(path, 'w') as f:
         json.dump(d, f, indent=1, sort_keys=True, default=str)
 
