@@ -245,3 +245,39 @@ fn a_provider_off_the_ctl_still_runs_under_its_own_root() {
     peer.preload(device, 0, 1, 2).expect("provisions");
     assert!(!peer.state.devices[&device].credentials.is_empty());
 }
+
+/// Audit-gov GOV.E3.name: an enrolment certificate names the provider whose ECA issued it
+/// ([SMP] §6.3.1, a unique name). Fault (the first form): every name said `provider-a`,
+/// including the ones provider-b's ECA certified.
+#[test]
+fn an_enrolment_certificate_names_the_provider_whose_eca_issued_it() {
+    let (mut home, mut peer) = runs();
+    let name = |run: &ScmsRun, d: NodeId| {
+        let e = run.state.devices[&d]
+            .enrolment_credential
+            .as_ref()
+            .expect("enrolled");
+        v2xw_proto::scms::enrolment::tbs_name(&e.cert.0.to_be_signed)
+            .expect("id.name")
+            .to_string()
+    };
+    let (a, b) = (NodeId::new(5_000_201), NodeId::new(5_000_202));
+    home.preload(a, 0, 1, 2).expect("provisions");
+    peer.preload(b, 0, 1, 2).expect("provisions");
+    assert_eq!(name(&home, a), format!("ee-{:08x}.provider-a", a.index()));
+    assert_eq!(name(&peer, b), format!("ee-{:08x}.provider-b", b.index()));
+}
+
+/// Audit-gov GOV.L.counters: each provider's Root CA and ICA count the certificates they
+/// signed, not the other providers'. Provider-a (ISS form): self, ICA, PG, MA and the
+/// root-issued CRL signer; provider-b (SAESOL S2X production form): self, ICA, PG, MA, and
+/// its ICA the ECA, PCA, RA, both LAs and the ICA-issued CRL signer. Fault (the first form):
+/// the home view counted every provider's (9 and 14 at t0) and provider-b's none (0).
+#[test]
+fn each_providers_root_and_ica_count_their_own_certificates() {
+    let (home, peer) = runs();
+    let (h, p) = (&home.state.gov.counters, &peer.state.gov.counters);
+    assert_eq!(h.root_certs_issued, 5, "provider-a's root: itself, ICA, PG, MA, CRLG");
+    assert_eq!(p.root_certs_issued, 4, "provider-b's root: itself, ICA, PG, MA");
+    assert_eq!(p.ica_certs_issued, 6, "provider-b's ICA: ECA, PCA, RA, LA1, LA2, CRLG");
+}

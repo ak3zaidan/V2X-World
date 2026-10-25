@@ -5760,6 +5760,13 @@ impl Phase2 {
         // Revoked as the vehicle itself knows it: it found itself on a CRL (an engine
         // run's vehicles install lists on the node, not in the backend's device record).
         let self_revoked = self.nodes.get(&node).is_some_and(|n| n.self_revoked);
+        // The CTL the vehicle installed on the road (`take_ctl_install`), which the
+        // backend's device record does not see.
+        let installed_ctl = self
+            .nodes
+            .get(&node)
+            .and_then(|n| n.ctl_trust.as_ref())
+            .and_then(|t| t.ctl_sequence);
         let mut tracker = self.pki.take()?;
         let rec = self.runs.get(k).and_then(|run| {
             v2xw_proto::scms::pki_view::node_credentials(
@@ -5769,6 +5776,7 @@ impl Phase2 {
                 &held,
                 active,
                 self_revoked,
+                installed_ctl,
                 &mut tracker,
             )
         });
@@ -6711,7 +6719,23 @@ impl Phase2 {
         } else {
             self.nodes.get(&node).map(|n| n.ctl_seq)
         }?;
-        if !self.ctl_newer_than(held) {
+        // The trust a vehicle was enrolled with: a vehicle that joins after a CTL change
+        // got the CTL in force then from its RA with its enrolment (1609.2.1 bootstrap),
+        // so it holds that one already and does not install it again. It did, counting a
+        // `trust_lists_installed` for a list it held (audit-gov GOV.C12.record).
+        let enrolled = if rsu {
+            None
+        } else {
+            let device = device_of(node);
+            let k = self.device_provider.get(&device).copied().unwrap_or(0);
+            self.runs
+                .get(k)
+                .and_then(|r| r.state.devices.get(&device))
+                .map(|d| d.trust.clone())
+                .filter(|t| t.ctl_sequence.is_some())
+        };
+        let enrolled_seq = enrolled.as_ref().and_then(|t| t.ctl_sequence);
+        if !self.ctl_newer_than(held.max(enrolled_seq.unwrap_or(0))) {
             return None;
         }
         self.ensure_factory_trust();
@@ -6722,8 +6746,10 @@ impl Phase2 {
         } else {
             self.nodes.get_mut(&node).and_then(|n| n.ctl_trust.take())
         };
+        let factory_seq = self.factory_trust.as_ref().and_then(|t| t.ctl_sequence);
         let mut trust = own
             .map(|b| *b)
+            .or_else(|| enrolled.filter(|_| enrolled_seq > factory_seq))
             .or_else(|| self.factory_trust.clone())
             .unwrap_or_default();
         let from = trust.ctl_sequence;
@@ -8767,6 +8793,59 @@ mod ctl_device_tests {
         );
         assert_eq!(p.nodes[&node].ctl_seq, genuine.sequence);
         assert!(p.take_ctl_install(node, false).is_none(), "nothing newer");
+    }
+
+    /// Audit-gov GOV.C12.record: a vehicle enrolled after a CTL change got that CTL with
+    /// its enrolment, so its first composite CRL download installs nothing; a vehicle of
+    /// the factory trust still installs it. Fault (the first form: every vehicle started
+    /// from the factory trust): the joiner installed the CTL it held, and
+    /// `trust_lists_installed` counted it.
+    #[test]
+    fn a_vehicle_enrolled_after_a_ctl_change_does_not_install_it_again() {
+        let mut p = phase2();
+        p.ensure_factory_trust();
+        let genuine = p.runs[0].state.gov.forge_next_ctl(3, &[0, 1, 2, 3, 4]);
+        p.runs[0].state.gov.ctl = genuine.clone();
+        p.runs[0].state.gov.ctl_history.push(genuine.clone());
+        let joiner = NodeId::new(9_001);
+        let i = p.runs[0].state.params.period_at(0);
+        p.runs[0].preload(device_of(joiner), i, 1, 2).expect("enrols");
+        assert_eq!(
+            p.runs[0].state.devices[&device_of(joiner)].trust.ctl_sequence,
+            Some(genuine.sequence),
+            "enrolled with the CTL in force"
+        );
+        p.nodes.insert(joiner, NodeSec::default());
+        assert!(p.take_ctl_install(joiner, false).is_none(), "held since enrolment");
+        assert_eq!(p.report.trust_lists_installed, 0);
+        let old = NodeId::new(9_000);
+        p.nodes.insert(old, NodeSec::default());
+        assert!(p.take_ctl_install(old, false).is_some(), "the factory CTL is older");
+        assert_eq!(p.report.trust_lists_installed, 1);
+    }
+
+    /// Audit-gov GOV.C12.record: the vehicle's `node.credentials` names the CTL it
+    /// installed on the road (with a composite CRL download), and the install is a change
+    /// of the record. Fault (the record read the backend's enrolment-time trust only): the
+    /// record still names no CTL after the install, so a recording showed none of the
+    /// `trust_lists_installed` it counted.
+    #[test]
+    fn the_credentials_record_names_the_ctl_the_vehicle_installed() {
+        let mut p = phase2();
+        let node = NodeId::new(9_000);
+        p.nodes.insert(node, NodeSec::default());
+        p.ensure_factory_trust();
+        let store = v2xw_node::CertStore::default();
+        let before = p.node_credentials(node, 0, &store).expect("the first record");
+        let genuine = p.runs[0].state.gov.forge_next_ctl(3, &[0, 1, 2, 3, 4]);
+        p.runs[0].state.gov.ctl = genuine.clone();
+        p.runs[0].state.gov.ctl_history.push(genuine.clone());
+        p.take_ctl_install(node, false).expect("installed");
+        let after = p
+            .node_credentials(node, 1, &store)
+            .expect("the install changes the record");
+        assert_ne!(before.ctl_sequence, after.ctl_sequence);
+        assert_eq!(after.ctl_sequence, Some(genuine.sequence));
     }
 
     /// Edge-case report §6.4: a CTL whose publication deadline falls inside a

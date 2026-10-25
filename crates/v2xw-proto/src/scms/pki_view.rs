@@ -1427,8 +1427,14 @@ pub fn credentials_digest(
 
 /// The pool of `device` (in `run`) from what its node holds, or `None` when the record
 /// would repeat the last one. `active` is the certificate it signs with now; `revoked`
-/// whether the vehicle knows itself revoked (it found itself on a CRL).
+/// whether the vehicle knows itself revoked (it found itself on a CRL); `installed_ctl`
+/// the CTL sequence the node itself installed after enrolment (with a composite CRL
+/// download), if any. The record's `ctl_sequence` is the newer of that and the one the
+/// device was enrolled with: it showed the enrolment one only, so a vehicle that
+/// installed a newer CTL on the road still read as holding the old one (audit-gov
+/// GOV.C12.record).
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn node_credentials(
     run: &ScmsRun,
     device: NodeId,
@@ -1436,10 +1442,12 @@ pub fn node_credentials(
     held: &[HeldCert],
     active: Option<[u8; 8]>,
     revoked: bool,
+    installed_ctl: Option<u32>,
     tracker: &mut PkiTracker,
 ) -> Option<NodeCredentials> {
     let st = &run.state;
     let dev = st.devices.get(&device);
+    let ctl_sequence = dev.and_then(|d| d.trust.ctl_sequence).max(installed_ctl);
     let current_i = st.params.period_at(now);
     let jmax = st.params.certs_per_period;
     let entry = tracker.creds.entry(device.index()).or_default();
@@ -1486,7 +1494,7 @@ pub fn node_credentials(
         current_i,
         enrolment.as_deref(),
         dev.map(|d| (d.enrolled, d.silenced)),
-        dev.and_then(|d| d.trust.ctl_sequence),
+        ctl_sequence,
         revoked,
     );
     if entry.0 == digest && digest != 0 {
@@ -1522,7 +1530,7 @@ pub fn node_credentials(
         active: active.map(|a| hex(&a)),
         cells,
         history,
-        ctl_sequence: dev.and_then(|d| d.trust.ctl_sequence),
+        ctl_sequence,
         revoked: revoked || dev.is_some_and(|d| d.silenced) || cells_revoked,
         certificates,
         departed: false,
