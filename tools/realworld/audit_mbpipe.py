@@ -1521,7 +1521,7 @@ def _fill(path, results):
         if cur in results and line.startswith('  verdict:'):
             if line.split(':', 1)[1].strip() in ('pass', 'FAIL', 'pending'):
                 line = f"  verdict: {'pass' if results[cur][1] else 'FAIL'}"
-                results[cur] = (results[cur][0], None)
+            results[cur] = (results[cur][0], None)   # a human verdict is kept as it is
         out.append(line)
     text = '\n'.join(out)
     # Rows that had no verdict line get one after `measured`.
