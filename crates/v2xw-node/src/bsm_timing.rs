@@ -1269,26 +1269,31 @@ classes:
             leave_prob: 0.3,
             return_prob: 0.5,
         });
-        let mut r = rng(10);
-        let mut d = BsmTimingDevice::assign(&cal, &mut r);
-        let mut sent = Vec::new();
-        for i in 0..300u64 {
-            let t = 10.0 + 0.1 * i as f64;
-            let s = t - 10.0;
-            let mut b = belief(10_000 + 100 * i, 0.0);
-            b.vel = Vec3::new(30.0 - 6.0 * s, 0.0, 0.0);
-            b.pos = Vec3::new(30.0 * s - 3.0 * s * s, 0.0, 0.0);
-            let rep = d.report(&cal, &mut r, &b).unwrap();
-            sent.push((rep.sec_mark_at, rep.speed_mps.unwrap_or(b.vel.x)));
-        }
-        let (mut hops, mut worst) = (0, 0.0f64);
-        // The first BSM has no earlier belief to take an acceleration from.
-        for w in sent[1..].windows(2) {
-            let dt = (w[1].0 - w[0].0) as f64 * 1e-9;
-            hops += usize::from((dt - 0.1).abs() > 0.01);
-            worst = worst.max((w[1].1 - w[0].1).abs() / dt);
+        let (mut hops, mut worst, mut least) = (0, 0.0f64, f64::MAX);
+        // Twelve devices, each braking from 30 to 3.6 m/s over 4.4 s.
+        for n in 0..12u32 {
+            let mut r = rng(10 + n);
+            let mut d = BsmTimingDevice::assign(&cal, &mut r);
+            let mut sent = Vec::new();
+            for i in 0..45u64 {
+                let s = 0.1 * i as f64;
+                let mut b = belief(10_000 + 100 * i, 0.0);
+                b.vel = Vec3::new(30.0 - 6.0 * s, 0.0, 0.0);
+                b.pos = Vec3::new(30.0 * s - 3.0 * s * s, 0.0, 0.0);
+                let rep = d.report(&cal, &mut r, &b).unwrap();
+                sent.push((rep.sec_mark_at, rep.speed_mps.unwrap_or(b.vel.x)));
+            }
+            // The first BSM has no earlier belief to take an acceleration from.
+            for w in sent[1..].windows(2) {
+                let dt = (w[1].0 - w[0].0) as f64 * 1e-9;
+                hops += usize::from((dt - 0.1).abs() > 0.01);
+                let a = (w[1].1 - w[0].1).abs() / dt;
+                worst = worst.max(a);
+                least = least.min(a);
+            }
         }
         assert!(hops > 40, "{hops}");
+        assert!(least > 5.5, "implied acceleration {least} m/s²");
         assert!(worst < 6.5, "implied acceleration {worst} m/s²");
     }
 
