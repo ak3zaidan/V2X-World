@@ -1,0 +1,524 @@
+# SCMS component audit db1-3: on-air security on vehicles, RSUs and handsets
+# (docs/design/scms-real/testing/audit-db1-3.md). BSM signing and its sizes on the air,
+# the receiver's verification and validated-certificate cache, P2PCD for unknown issuers,
+# the receiver's validation rules, the pseudonym change policy, the verification cost
+# charged to each device, and the privacy and linkability metrics.
+#
+# Every row was written and committed with `measured: pending` before the run it judges.
+# Each measure is computed by an INDEPENDENT reader of the raw records
+# (tools/realworld/audit/onair.py: node.tx, node.rx, node.verify, node.p2pcd,
+# node.security, node.credentials, sec.pseudonym, privacy.link, metric samples), never
+# by engine code or an engine summary; `oa.mi.*` and `oa.rep.*` rows compare the engine's
+# own metric samples and run report against that recomputation. Checker:
+#   python3 tools/realworld/audit/onair.py measure <run-dir>   (writes <run-dir>/realism.json)
+#   python3 tools/realworld/matrix.py check <this file> <runs>
+# Each row was also shown to go red under an injected fault
+# (`python3 tools/realworld/audit/onair.py faults <run-dir>`, which mutates the records in
+# memory and re-measures).
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+#
+# Binary: the release build of 8becf72a (the integrator's), copied to the scratchpad;
+# --record-level receptions; one run per run-lock call (1,200 MB cap); 2 rayon threads.
+schema: v2xw/scms-run-expectations/1
+runs:
+  A:
+    scenario: scenarios/real-world/audit/onair-base.yaml
+    note: realism base, 120 s of radio, J2945/1 CERTCHG, every reception recorded
+  A2:
+    scenario: scenarios/real-world/audit/onair-base.yaml
+    note: A again, same seed and build stamp (determinism)
+  B:
+    scenario: scenarios/real-world/audit/onair-change.yaml
+    note: A with a pseudonym change every 30 s (`time`, one condition alone)
+  C:
+    scenario: scenarios/real-world/audit/onair-p2pcd.yaml
+    note: A cut to 60 s with home-provider chain files, so P2PCD runs on the air
+rows:
+- id: OA.TX.cert-bytes
+  base: A
+  variant: A
+  area: signing
+  measure: oa.tx.cert_bytes_values
+  expect: eq
+  value:
+  - 80
+  source: 'implicit US pseudonym certificate with no region: CAMP''s 86 B carries a countryOnly 840 region
+    (crypto-formats #32), 6 B of GeographicRegion (choice 1 + SequenceOf quantity 2 + choice 1 + uint16
+    2) that the published US profile omits ([SMP] §4.4) -> 80 B'
+  measured: '80'
+  verdict: pass
+- id: OA.TX.signer-id-bytes
+  base: A
+  variant: A
+  area: signing
+  measure: oa.tx.envelope_accounting_violations
+  expect: eq
+  value: 0
+  source: 'SignerIdentifier: digest = HashedId8, 8 B; certificate = SequenceOfCertificate, 2 B COER quantity
+    + the certificate (IEEE 1609.2 §6.3.4, §6.3.24; X.696 §20). Every BSM''s envelope minus its signer
+    field is one constant per sender'
+  measured: '0'
+  verdict: pass
+  note: 'checker corrected: the COER length determinant of unsecuredData is 2 octets once the payload
+    is >= 128 B (264 BSMs, X.696 §8.6)'
+- id: OA.TX.spdu-accounting
+  base: A
+  variant: A
+  area: signing
+  measure: oa.tx.spdu_accounting_violations
+  expect: eq
+  value: 0
+  source: spdu = payload + envelope; on the wire = spdu + network header + link + fragment header (I-N1
+    byte accounting)
+  measured: '0'
+  verdict: pass
+- id: OA.TX.cert-cadence
+  base: A
+  variant: A
+  area: signing
+  measure: oa.tx.cert_cadence_violations
+  expect: eq
+  value: 0
+  source: 'J2945/1 certificate attachment: a full certificate once CertAttachInt has passed since the
+    last one, a digest otherwise (vehicle-and-roadside S2); the scenario sets 1,000 ms; measured on t_generated
+    per sender pseudonym'
+  measured: '0'
+  verdict: pass
+- id: OA.TX.first-carries-cert
+  base: A
+  variant: B
+  area: signing
+  measure: oa.tx.first_under_pseudonym_digest
+  expect: eq
+  value: 0
+  source: the first message under a new certificate carries the certificate (vehicle-and-roadside S3),
+    checked over B's changes
+  measured: 8becf72a 48; fixed 0
+  verdict: fixed
+  test: crates/v2xw-node/tests/runtime_behaviour.rs::the_first_bsm_under_a_new_pseudonym_carries_its_certificate
+  note: the signer-id cadence was kept per message type, so a change inherited the old certificate's last
+    attachment (48 of 106 changes opened with a digest); secure.rs restart_certificate_cadence at the
+    change
+- id: OA.TX.cert-gap-p50
+  base: A
+  variant: A
+  area: signing
+  measure: oa.tx.cert_gap_p50_ms
+  expect: band
+  band:
+  - 1000
+  - 1100
+  source: CertAttachInt 1,000 ms with a 100 ms BSM interval (J2945/1 at low density) -> the next BSM at
+    or after 1,000 ms
+  measured: '1000'
+  verdict: pass
+- id: OA.MI.full-cert-share
+  base: A
+  variant: A
+  area: metrics
+  measure: oa.mi.full_cert_share_bad_windows
+  expect: eq
+  value: 0
+  source: 'full_cert_share = messages carrying a full certificate / all messages, per 10 s window (v2xw-metrics
+    security.rs table): every engine sample''s successes and trials equal the recount from node.tx'
+  measured: '0'
+  verdict: pass
+  note: 'checker corrected: "all messages" includes the 17 over-the-air MBR frames'
+- id: OA.MI.envelope-overhead
+  base: A
+  variant: A
+  area: metrics
+  measure: oa.mi.envelope_overhead_bad_windows
+  expect: eq
+  value: 0
+  source: envelope_overhead = Σ envelope bytes / Σ payload bytes per window, recounted from node.tx
+  measured: '0'
+  verdict: pass
+- id: OA.RX.no-cert-no-verify
+  base: A
+  variant: A
+  area: verification
+  measure: oa.rx.verified_without_cert
+  expect: eq
+  value: 0
+  source: a digest that misses the receiver's cache cannot be verified until the certificate arrives (vehicle-and-roadside
+    S5; IEEE 1609.2 §5.2)
+  measured: '0'
+  verdict: pass
+- id: OA.RX.cached-verifies
+  base: A
+  variant: A
+  area: verification
+  measure: oa.rx.unverified_with_cert
+  expect: eq
+  value: 0
+  source: once a receiver holds a validated pseudonym certificate, later digest-signed SPDUs of it verify
+    (R16) while it is cached (4,096 entries, no eviction expected at this fleet)
+  measured: '1'
+  verdict: open
+  note: 'one case in 37,295 digest BSMs: receiver 96 validated vehicle 82''s pseudonym from a relayed
+    over-the-air MBR (EE cache) but the peer certificate store learns only from awareness frames, so 82''s
+    next digest BSM was unverified (audit O-2)'
+- id: OA.RX.ee-validations
+  base: A
+  variant: A
+  area: verification
+  measure: oa.rep.ee_validations_diff
+  expect: eq
+  value: 0
+  source: 'R16: a receiver validates a pseudonym certificate once. Recount: distinct (receiver, signer)
+    pairs with a verified delivery; the run report''s ee_validations must equal it when ee_evictions and
+    invalidated are 0'
+  measured: '0'
+  verdict: pass
+  note: 'checker corrected: plus the 8 re-validations after a fresh CRL invalidated the entry (R17, invalidated
+    8)'
+- id: OA.RX.refused-honest
+  base: A
+  variant: A
+  area: verification
+  measure: oa.rx.refused
+  expect: eq
+  value: 0
+  source: 'every signer holds a valid, unrevoked, in-region certificate permitting its PSID (R5-R9, R12):
+    no reception refused; the run report''s receiver_validation.refused agrees'
+  measured: '0'
+  verdict: pass
+- id: OA.RX.stamp-order
+  base: A
+  variant: A
+  area: verification
+  measure: oa.rx.stamp_order_violations
+  expect: eq
+  value: 0
+  source: generated <= signed <= handoff <= tx start <= tx end <= arrival <= verify start <= verify done
+    <= delivered, on every node.rx
+  measured: '0'
+  verdict: pass
+- id: OA.RX.verify-record-join
+  base: A
+  variant: A
+  area: verification
+  measure: oa.rx.verify_join_unmatched
+  expect: eq
+  value: 0
+  source: every reception that reached the verifier has exactly one node.verify (receiver, start, done),
+    and every node.verify task one reception (conservation)
+  measured: '0'
+  verdict: pass
+- id: OA.COST.repeat-veh
+  base: A
+  variant: A
+  area: cost
+  measure: oa.cost.repeat_values.veh
+  expect: eq
+  value:
+  - 400
+  source: a cached signer costs one ECDSA P-256 verify (R16); obu/unex-obu-301-craton2 ">2500 verifications/s"
+    -> 1/2500 s = 400 us
+  measured: '400'
+  verdict: pass
+- id: OA.COST.repeat-rsu
+  base: A
+  variant: A
+  area: cost
+  measure: oa.cost.repeat_values.rsu
+  expect: eq
+  value:
+  - 500
+  source: rsu/commsignia-its-rs4 ">2000 verifications" -> 500 us
+  measured: '500'
+  verdict: pass
+  note: 'checker corrected: the 8 RSU re-validations after a CRL (1,976 us) are not cached repeats'
+- id: OA.COST.repeat-vru
+  base: A
+  variant: A
+  area: cost
+  measure: oa.cost.repeat_values.vru
+  expect: eq
+  value:
+  - 645
+  source: vru-device-handset-generic, software P-256 verify on a Cortex-A72, 645 us
+  measured: '645'
+  verdict: pass
+- id: OA.COST.first-sight
+  base: A
+  variant: A
+  area: cost
+  measure: oa.cost.first_sight_not_dearer
+  expect: eq
+  value: 0
+  source: the first sight of a pseudonym pays the EE link and the key reconstruction on top of the signature
+    (R16), so it costs more than a repeat
+  measured: '0'
+  verdict: pass
+- id: OA.COST.unverifiable-free
+  base: A
+  variant: A
+  area: cost
+  measure: oa.cost.unverifiable_charged_signature
+  expect: eq
+  value: 0
+  source: a receiver that does not hold the signer's certificate (digest miss) or its issuer cannot run
+    the signature check (IEEE 1609.2 §5.2, S5; for an implicit certificate the key is reconstructed from
+    the issuer's). Such a frame must not be charged an ECDSA verify
+  measured: 8becf72a 3993; fixed 0
+  verdict: fixed
+  test: crates/v2xw-node/tests/rx_validation.rs::a_signer_the_receiver_cannot_verify_is_charged_no_signature_check
+  note: an Unverifiable frame was booked the profile's P-256 verify (3,993 tasks, 1.87 s of verifier time
+    in 120 s); now only the validation work done
+- id: OA.COST.unverifiable-free-p2pcd
+  base: A
+  variant: C
+  area: cost
+  measure: oa.cost.unverifiable_charged_signature
+  expect: eq
+  value: 0
+  source: as OA.COST.unverifiable-free, for the unknown-issuer frames of the P2PCD run
+  measured: 8becf72a 6993; fixed 2
+  verdict: fixed
+  test: crates/v2xw-node/tests/rx_validation.rs::a_signer_the_receiver_cannot_verify_is_charged_no_signature_check
+  note: 6,993 -> 2 tasks; the 2 left (12,998 us each, primitive none) are CA-certificate validation work
+    charged to a receiver's first frame (priced per operation performed, R18), not a signature
+- id: OA.MI.verify-cost
+  base: A
+  variant: A
+  area: metrics
+  measure: oa.mi.verify_cost_bad_windows
+  expect: eq
+  value: 0
+  source: verify_cost = distribution of node.verify cost per window (n, min, max, mean to its quantum);
+    verify_rate = tasks / 10 s; verify_wait = start - enqueue
+  measured: '0'
+  verdict: pass
+  note: 'checker corrected: tasks in which a signature ran (valid/invalid), windows by record time'
+- id: OA.MI.unverified-ratio
+  base: A
+  variant: A
+  area: metrics
+  measure: oa.mi.unverified_ratio_bad_windows
+  expect: eq
+  value: 0
+  source: unverified_ratio = delivered without verification / delivered, recounted from node.rx
+  measured: 8becf72a 9; fixed 0
+  verdict: fixed
+  test: crates/v2xw-node/tests/rx_validation.rs::a_signer_the_receiver_cannot_verify_is_charged_no_signature_check
+  note: a verify-all receiver's held unknown-signer frames were node.verify `skipped` and counted as delivered
+    unverified (66 of 210 at 40 s); now `dropped`, reason unknown-signer
+- id: OA.CHG.j2945-none
+  base: A
+  variant: A
+  area: pseudonym
+  measure: oa.chg.changes_tx
+  expect: eq
+  value: 0
+  source: J2945/1 CERTCHG changes only once 5 min have passed AND 2 km were driven (C4); a 120 s run holds
+    none
+  measured: '0'
+  verdict: pass
+- id: OA.CHG.age-min
+  base: A
+  variant: B
+  area: pseudonym
+  measure: oa.chg.age_min_s
+  expect: ge
+  value: 29.9
+  source: 'the `time` rule with period_s 30: no change before the pseudonym is 30 s old (the first BSM
+    under it to the first under the next; 100 ms BSM grid)'
+  measured: '30'
+  verdict: pass
+- id: OA.CHG.age-max
+  base: A
+  variant: B
+  area: pseudonym
+  measure: oa.chg.age_max_s
+  expect: le
+  value: 30.2
+  source: a change that is due happens at the next BSM (within one 100 ms interval)
+  measured: '30'
+  verdict: pass
+- id: OA.CHG.temp-id
+  base: A
+  variant: B
+  area: pseudonym
+  measure: oa.chg.temp_id_mismatch
+  expect: eq
+  value: 0
+  source: the BSM temporary ID is the first 4 octets of the signing pseudonym's HashedId8, so it changes
+    with the certificate (C7, J2945/1)
+  measured: '0'
+  verdict: pass
+- id: OA.CHG.msgcnt
+  base: A
+  variant: B
+  area: pseudonym
+  measure: oa.chg.msgcnt_continued_share
+  expect: le
+  value: 0.02
+  source: 'msgCnt restarts at an identity change (C7; J2735 MsgCount): the first msgCnt under a new pseudonym
+    continues the old sequence only by coincidence (1/128 for a random restart)'
+  measured: '0.0188679'
+  verdict: pass
+- id: OA.CHG.no-reuse
+  base: A
+  variant: B
+  area: pseudonym
+  measure: oa.chg.pseudonym_reused
+  expect: eq
+  value: 0
+  source: rotation goes round the 20-certificate pool before reusing one (C8), and no frame is signed
+    with the old pseudonym after the change
+  measured: '0'
+  verdict: pass
+- id: OA.CHG.records-agree
+  base: A
+  variant: B
+  area: pseudonym
+  measure: oa.chg.sec_vs_tx_diff
+  expect: eq
+  value: 0
+  source: every change seen on the air (node.tx) has its sec.pseudonym row, and every sec.pseudonym row
+    of a vehicle that transmits again shows on the air (conservation)
+  measured: '0'
+  verdict: pass
+  note: 'checker corrected: 46 changes made before the vehicle''s first frame have no old pseudonym on
+    the air'
+- id: OA.CHG.rate
+  base: A
+  variant: B
+  area: pseudonym
+  measure: oa.chg.rate_per_veh_h
+  expect: band
+  band:
+  - 80
+  - 121
+  source: one change every 30 s is 120 per vehicle-hour; vehicles that leave before their first 30 s pull
+    the observed rate down
+  measured: '134.978'
+  verdict: wrong-expectation
+  note: 'the band assumed the first change 30 s after a vehicle''s first frame; its pool is active before
+    it joins the road, so 46 of 152 changes come before its first frame (oa.chg.changes_before_first_frame).
+    Changes seen on the air: 106 -> 94 per veh-h, in band (audit O-4)'
+- id: OA.MI.change-rate
+  base: A
+  variant: B
+  area: metrics
+  measure: oa.mi.pseudonym_change_rate_bad_windows
+  expect: eq
+  value: 0
+  source: pseudonym_change_rate = Σ changes / Σ vehicle-hours observed (privacy_metrics.rs), recomputed
+    from sec.pseudonym and node.security, within the sample's quantum
+  measured: '0'
+  verdict: pass
+  note: 'checker corrected: the metric is cumulative over every node with security rows (handsets included),
+    as its formula'
+- id: OA.MI.linkability
+  base: A
+  variant: B
+  area: metrics
+  measure: oa.mi.linkability_bad_windows
+  expect: eq
+  value: 0
+  source: linkability = correct observer links / pseudonym changes, cumulative (ETSI TR 103 415 §5); ground
+    truth joined from node.tx (which node signed with each pseudonym), never from the engine's join
+  measured: '0'
+  verdict: pass
+- id: OA.REP.privacy
+  base: A
+  variant: B
+  area: metrics
+  measure: oa.rep.privacy_diff
+  expect: eq
+  value: 0
+  source: run report privacy_link_decisions, privacy_links_claimed, privacy_links_correct, privacy_links_spurious,
+    privacy_anonymity_set_sum and pseudonym_changes equal the recount from privacy.link and sec.pseudonym
+    (sum of absolute differences)
+  measured: '0'
+  verdict: pass
+  note: 'checker corrected: the report splits a claim with no change behind it into privacy_links_spurious'
+- id: OA.P2P.on-air
+  base: A
+  variant: C
+  area: p2pcd
+  measure: oa.p2p.responses_diff
+  expect: eq
+  value: 0
+  source: every P2PCD response is a frame of its own (1609.2 clause 8, P1/P5); node.tx p2pcd frames =
+    Σ node.p2pcd responses_sent = run report p2pcd_responses_on_air
+  measured: '0'
+  verdict: pass
+- id: OA.P2P.learned
+  base: A
+  variant: C
+  area: p2pcd
+  measure: oa.p2p.learners
+  expect: ge
+  value: 1
+  source: everyone learns from observed responses (P6)
+  measured: '19'
+  verdict: pass
+- id: OA.P2P.backoff
+  base: A
+  variant: C
+  area: p2pcd
+  measure: oa.p2p.response_after_request_max_ms
+  expect: le
+  value: 250
+  source: a responder answers within maxResponseBackoff 0.25 s of the request it observed (Annex C.2.1.3.1,
+    P4); measured from the responder's last requests_observed row to its frame
+  measured: '247.994'
+  verdict: pass
+- id: OA.P2P.no-foreign-before-learn
+  base: A
+  variant: C
+  area: p2pcd
+  measure: oa.p2p.foreign_verified_before_learn
+  expect: eq
+  value: 0
+  source: a receiver whose chain file lacks the other provider's CAs verifies none of that provider's
+    messages before it learns them (P1, P6)
+  measured: '0'
+  verdict: pass
+- id: OA.P2P.foreign-after-learn
+  base: A
+  variant: C
+  area: p2pcd
+  measure: oa.p2p.foreign_verified_after_learn
+  expect: ge
+  value: 1
+  source: after learning, the other provider's messages verify (P6)
+  measured: '1909'
+  verdict: pass
+- id: OA.P2P.trigger-metric
+  base: A
+  variant: C
+  area: metrics
+  measure: oa.mi.p2pcd_requests_bad_windows
+  expect: eq
+  value: 0
+  source: p2pcd_requests = Σ triggers / window (security.rs table), recounted from node.p2pcd
+  measured: '2'
+  verdict: open
+  note: 'p2pcd_requests is the documented digest-miss count (equal to node.telemetry p2pcd_requests in
+    every window, independent recount within 1 %); IEEE 1609.2 clause 8 P2PCD triggers only for an unknown
+    CA: 0.4-1.3/s against the metric 22-46/s. Rename and add a real P2PCD rate: owner call (audit O-1)'
+- id: OA.DET.records
+  base: A
+  variant: A2
+  area: determinism
+  measure: digest.records
+  expect: identical
+  source: same seed, same build stamp -> byte-identical record stream (06 §3 item 16)
+  measured: 266b3fa03ca62b9e -> 266b3fa03ca62b9e (8becf72a release binary; the fixed build ran once)
+  verdict: pass
+- id: OA.DET.metrics
+  base: A
+  variant: A2
+  area: determinism
+  measure: digest.metrics.json
+  expect: identical
+  source: same seed -> byte-identical metrics.json
+  measured: 3e26662c33bdb11b -> 3e26662c33bdb11b (8becf72a release binary; the fixed build ran once)
+  verdict: pass

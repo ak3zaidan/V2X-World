@@ -289,7 +289,28 @@ impl VerifyDecisionRecord {
             queue_depth: Some(queue_depth),
         }
     }
+
+    /// The record of a task in which no signature check could run: the node holds no
+    /// certificate for the signer, or not the issuer an implicit certificate's key is
+    /// reconstructed under (IEEE 1609.2 §5.2; `SpduVerdict::Unverifiable`). Delivered
+    /// unverified it is `skipped`; held back by a policy that holds unknown signers it
+    /// reaches no application and is `dropped`. No primitive ran, so none is named.
+    ///
+    /// Before this the task was recorded as `skipped` with reason `verified`, priced as a
+    /// full signature verification, and a held one counted as delivered in
+    /// `unverified_ratio` (audit db1-3, docs/design/scms-real/testing/audit-db1-3.md).
+    #[must_use]
+    pub fn unknown_signer(mut self, held: bool) -> Self {
+        self.outcome = if held { "dropped" } else { "skipped" };
+        self.reason = VERIFY_UNKNOWN_SIGNER;
+        self.primitive = None;
+        self
+    }
 }
+
+/// `node.verify`'s reason for a message whose signer this node cannot verify at all: it
+/// holds neither the signer's certificate nor the issuer behind it.
+pub const VERIFY_UNKNOWN_SIGNER: &str = "unknown-signer";
 
 impl v2xw_core::ctx::Record for VerifyDecisionRecord {
     const CHANNEL: &'static str = "node.verify";

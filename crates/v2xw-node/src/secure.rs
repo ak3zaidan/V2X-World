@@ -1053,6 +1053,17 @@ impl NodeSecurity {
         self.last_certificate.remove(msg_type.as_str());
     }
 
+    /// A pseudonym change: the cadence restarts, so the first message signed under the
+    /// new certificate carries it (vehicle-and-roadside S3; `SignerIdPolicy::choose`
+    /// attaches on a signer's first message). The bookkeeping is per message type, not
+    /// per certificate, so without this the old certificate's last attachment held the
+    /// new one back for up to a cadence period: in a 30 s change run 48 of 106 changes
+    /// opened with a digest that no receiver could resolve (audit db1-3, OA.TX.first-
+    /// carries-cert).
+    pub fn restart_certificate_cadence(&mut self) {
+        self.last_certificate.clear();
+    }
+
     /// The P2PCD fields of the next signed safety SPDU, and the note that `signer`'s chain
     /// is in use (1609.2a-2017 §8.2.4.1, §8.2.4.2).
     fn p2pcd_header(

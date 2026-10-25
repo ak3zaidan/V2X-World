@@ -1504,6 +1504,8 @@ impl VruDeviceRuntime {
                 .below(128);
             self.schedule
                 .restart_psm_count(u8::try_from(restart).unwrap_or(0));
+            // The first PSM under the new certificate carries it (S3).
+            self.security.restart_certificate_cadence();
         }
 
         if self.state.transmits() && !self.power.is_exhausted() {
@@ -1828,6 +1830,13 @@ impl VruDeviceRuntime {
             // Receiver validation runs before the server is booked, so the time it charges
             // (chain links, reconstructions, CRL work) is in this frame's service time (WP-C2).
             let verdict = self.classify(ctx, &frame);
+            // No signature check runs for a signer the handset cannot verify (no
+            // certificate or issuer held), so none is charged (as `ObuRuntime`).
+            let cost = if verdict == VerificationState::Unverified {
+                v2xw_core::time::Duration::from_nanos(0)
+            } else {
+                cost
+            };
             let cost = cost
                 + crate::rxval::charge(&mut self.security, &self.service.profile().id)
                 + self.certificate_checks(ctx, frame.bytes);
@@ -1853,6 +1862,9 @@ impl VruDeviceRuntime {
                 0,
             );
             rec.priority = item.priority;
+            if verdict == VerificationState::Unverified {
+                rec = rec.unknown_signer(self.policy.holds_unknown_signer());
+            }
             ctx.emit(rec);
             let held =
                 verdict == VerificationState::Unverified && self.policy.holds_unknown_signer();

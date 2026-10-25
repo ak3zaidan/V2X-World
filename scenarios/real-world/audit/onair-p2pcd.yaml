@@ -1,0 +1,17 @@
+# On-air security audit: the audit base with each device's chain file holding only its
+# own provider's CA certificates (`chain_file: home-provider`), so the other provider's
+# pseudonyms name an issuer the receiver does not hold and IEEE 1609.2 clause 8 P2PCD
+# runs on the air: requests in BSM headers, responses as frames of their own.
+schema: v2xw/scenario/1
+meta:
+  base: onair-base.yaml
+  name: On-air security audit, P2PCD
+  description: >-
+    The on-air audit base with home-provider chain files, so unknown issuers are learned
+    by P2PCD on the air.
+  tags: [real-world, manhattan, scms, audit, on-air, p2pcd]
+time:
+  duration_s: 60.0
+security:
+  scms:
+    chain_file: home-provider

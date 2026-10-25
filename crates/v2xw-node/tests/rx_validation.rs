@@ -1100,6 +1100,78 @@ fn an_obu_accepts_a_sized_frame_only_under_a_root_it_trusts() {
     );
 }
 
+/// Audit db1-3 (OA.COST.unverifiable-free, docs/design/scms-real/testing/audit-db1-3.md):
+/// a receiver that cannot verify a signer — here its issuer is one the node does not hold,
+/// so the implicit certificate's key cannot even be reconstructed (IEEE 1609.2 §5.2) —
+/// runs no signature check, so it is charged none. `node.verify` names no primitive, gives
+/// the reason `unknown-signer`, and under `verify-all` (which holds unknown signers back)
+/// the outcome `dropped`, so `unverified_ratio` does not count it as delivered. A signer it
+/// can verify still pays its signature. Fault: charge the signature again (drop the
+/// `Unverified` branch in `ObuRuntime`), and the stranger's frame costs the profile's
+/// verify.
+#[test]
+fn a_signer_the_receiver_cannot_verify_is_charged_no_signature_check() {
+    use v2xw_node::generate::ServiceSet;
+    use v2xw_node::policy::VerifyAll;
+    use v2xw_node::runtime::{NodeConfig, ObuRuntime};
+    let pki = pki();
+    let other = ScmsPki::new(8, t0() - 31_556_952).unwrap();
+    let (trusted_key, rogue_key, roots, cas) = sized_fallback_cases(&pki, &other);
+    let config = NodeConfig {
+        services: ServiceSet::SAE,
+        wall: wall(),
+        ..NodeConfig::default()
+    };
+    let mut rx = ObuRuntime::new(
+        v2xw_core::ids::NodeId::new(2),
+        v2xw_node::profiles::get(v2xw_node::profiles::REFERENCE_OBU)
+            .expect("the reference profile")
+            .clone(),
+        Box::new(VerifyAll::new()),
+        config,
+        0,
+    );
+    rx.stores_mut().crl.set_period(0);
+    rx.set_belief(fix());
+    rx.security_mut().install_trust(&roots, &cas);
+    let reg = RngRegistry::new(61);
+    let mut recs = Vec::new();
+    // A trusted signer first (it also pays the CA validations of the installed trust),
+    // then the stranger, then the trusted signer again (a cached repeat: its signature
+    // alone), each a second apart.
+    let order = [&trusted_key, &rogue_key, &trusted_key];
+    for k in 0..300u64 {
+        let mut ctx = NodeRuntimeCtx::new(10 * NS_PER_S + k * 10_000_000, &reg);
+        let inbox = if k % 100 == 0 {
+            vec![sized_frame(order[(k / 100) as usize], MsgType::Bsm)]
+        } else {
+            Vec::new()
+        };
+        let _ = rx.step(&mut ctx, inbox, 0.0);
+        recs.extend(
+            ctx.take_emitted()
+                .into_iter()
+                .filter(|r| r.channel == "node.verify")
+                .map(|r| serde_json::from_slice::<serde_json::Value>(&r.json).unwrap()),
+        );
+    }
+    assert_eq!(recs.len(), 3, "one task per frame: {recs:?}");
+    let (first, stranger, repeat) = (&recs[0], &recs[1], &recs[2]);
+    assert_eq!(first["outcome"], "valid", "{first}");
+    assert_eq!(repeat["outcome"], "valid", "{repeat}");
+    assert_eq!(repeat["primitive"], "ecdsa-p256-verify");
+    let paid = repeat["cost_us"].as_u64().unwrap();
+    assert!(paid > 0, "a verified repeat pays its signature: {repeat}");
+    assert_eq!(stranger["reason"], "unknown-signer", "{stranger}");
+    assert_eq!(stranger["outcome"], "dropped", "verify-all holds it back: {stranger}");
+    assert!(stranger["primitive"].is_null(), "no primitive ran: {stranger}");
+    assert_eq!(
+        stranger["cost_us"].as_u64(),
+        Some(0),
+        "no signature check, no chain link validated: {stranger} (a verified repeat cost {paid} us)"
+    );
+}
+
 /// R-TRUSTLEAK on a VRU handset's receiver: `VruDeviceRuntime::classify` has the same
 /// sized-frame fallback. Same fault, same red.
 #[test]

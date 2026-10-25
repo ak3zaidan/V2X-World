@@ -1,0 +1,18 @@
+# On-air security audit (docs/design/scms-real/testing/audit-db1-3.md): the realism base
+# (Midtown, a fifteenth of the benchmark fleet, 3 % constant-position liars from 20 s, the
+# US production deployment, J2945/1 CERTCHG, a passive eavesdropper) cut to its first
+# 120 s of radio with no fast-forward, so that every reception is recorded
+# (`--record-level receptions`) and the BSM signing, the receiver's validation and its
+# certificate cache, and the cost charged to each device can be recomputed from the raw
+# node.tx / node.rx / node.verify / node.telemetry records.
+schema: v2xw/scenario/1
+meta:
+  base: ../midtown-scms-realism.yaml
+  name: On-air security audit base
+  description: >-
+    The SCMS realism base cut to 120 s of radio with every reception recorded, for the
+    independent on-air security audit.
+  tags: [real-world, manhattan, scms, audit, on-air]
+time:
+  duration_s: 120.0
+  fast_forward: []
