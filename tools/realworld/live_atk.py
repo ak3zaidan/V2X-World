@@ -46,6 +46,15 @@ import sys
 
 NS = 1e9
 
+# The attack types each check is designed for (07-threats §3; detect.rs doc lines): a
+# report naming the check about an attacker of any other type is a cross-fire.
+DESIGNED = {
+    'signatureVerification': {'InvalidSignature'},
+    'certValidity': {'ExpiredCert', 'NotYetValid'},
+    'sybilCoLocation': {'Sybil'},
+    'staleOrReplay': {'DataReplay', 'DelayedMessages', 'OutOfOrder', 'ConstPos', 'EventualStop'},
+}
+
 
 def load_raw(run_dir):
     rep = json.load(open(os.path.join(run_dir, 'run-report.json')))
@@ -142,9 +151,12 @@ def derive(raw):
         if a is not None:
             decided_at[a] = min(decided_at.get(a, q['t']), q['t'])
     d['rec.revoked_att'] = sum(1 for a in revoked if a in att_kind)
-    d['rec.revoked_hon'] = sum(1 for a in revoked if a not in att_kind)
+    d['rec.revoked_hon'] = sum(1 for a in revoked if a is not None and a not in att_kind)
+    d['rec.revoked_unknown'] = sum(1 for a in revoked if a is None)
     d['rec.ma_reports'] = len(rec['ma.report'])
-    hon = 0
+    hon = unknown = 0
+    for det in DESIGNED:
+        d['rec.kdet_other.' + det] = 0
     for q in rec['ma.report']:
         a = actor_of.get(q['subject'])
         det = q.get('detector') or 'none'
@@ -152,10 +164,15 @@ def derive(raw):
         if a in att_kind:
             key = f'rec.kdet.{att_kind[a]}.{det}'
             d[key] = d.get(key, 0) + 1
+            if det in DESIGNED and att_kind[a] not in DESIGNED[det]:
+                d['rec.kdet_other.' + det] += 1
+        elif a is None:
+            unknown += 1
         else:
             hon += 1
             d['rec.ma_det_hon.' + det] = d.get('rec.ma_det_hon.' + det, 0) + 1
     d['rec.ma_reports_hon'] = hon
+    d['rec.ma_reports_unknown'] = unknown
     fa = fa_pre = ghost = false = true = 0
     for o in rec['app.outcome']:
         if o.get('outcome') == 'true':
@@ -261,6 +278,21 @@ def fault(raw, name, row):
             for det in ('positionJump', 'constantPositionFrozen', 'implausibleAcceleration',
                         'positionSpeedInconsistency', 'sybilCoLocation', 'staleOrReplay'):
                 rec['ma.report'] += [{'t': 0, 'reporter': 0, 'subject': hon, 'detector': det}] * 50
+    elif name == 'all-caught':  # every attacker reported 1 s and revoked 2 s after onset
+        for a in p.get('attacker_outcomes') or []:
+            a['first_reported_ns'] = a['onset_ns'] + int(NS)
+            a['decided_ns'] = a['onset_ns'] + int(2 * NS)
+        p['revoked_attackers'] = p.get('attackers', 0)
+        if rec is not None:
+            att = {a['actor'] for a in rec['gt.attack.action']}
+            for q in rec['gt.subject']:
+                if q['actor'] in att:
+                    rec['ma.decision'].append({'t': 0, 'subject': q['subject'], 'decision': 'revoke'})
+    elif name == 'crossfire':  # every report about an attacker names the row's check
+        det = m.rsplit('.', 1)[-1]
+        if rec is not None:
+            for q in rec['ma.report']:
+                q['detector'] = det
     elif name == 'warn-none':  # no warning ever comes from an attacker or a ghost
         if rec is not None:
             rec['app.outcome'] = [o for o in rec['app.outcome'] if o.get('outcome') != 'false']

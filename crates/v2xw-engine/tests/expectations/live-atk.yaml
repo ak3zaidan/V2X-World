@@ -26,6 +26,15 @@ runs:
   B0L2: {scenario: scenarios/live-atk/base.yaml, note: B0L again (determinism)}
   B0U: {scenario: scenarios/live-atk/us.yaml, note: attack-free, U suite}
   B0M: {scenario: scenarios/live-atk/modelled.yaml, note: attack-free, M suite}
+  C1L: {scenario: scenarios/live-atk/cat1.yaml, note: 'catalogue group 1, suite L'}
+  C1M: {scenario: scenarios/live-atk/cat1-m.yaml, note: 'catalogue group 1, suite M'}
+  C1U: {scenario: scenarios/live-atk/cat1-u.yaml, note: 'catalogue group 1, suite U'}
+  C2L: {scenario: scenarios/live-atk/cat2.yaml, note: 'catalogue group 2, suite L'}
+  C2M: {scenario: scenarios/live-atk/cat2-m.yaml, note: 'catalogue group 2, suite M'}
+  C2U: {scenario: scenarios/live-atk/cat2-u.yaml, note: 'catalogue group 2, suite U'}
+  C3L: {scenario: scenarios/live-atk/cat3.yaml, note: 'catalogue group 3, suite L'}
+  C3M: {scenario: scenarios/live-atk/cat3-m.yaml, note: 'catalogue group 3, suite M'}
+  C3U: {scenario: scenarios/live-atk/cat3-u.yaml, note: 'catalogue group 3, suite U'}
 rows:
 # ---- 0. Attack-free: no attacker, nothing to revoke --------------------------------------
 - id: A0.L.no-attackers
@@ -168,3 +177,942 @@ rows:
   measured: pending
   verdict: pending
   source: 'B0L files only SM-MBR-encodable checks (the pilot left 2,245 of 2,978 unfiled: no subtype); modelled_reports files every verdict, so the MA receives more'
+# ---- 1. Catalogue: every runnable attack type, one attacker each, three groups ----------
+# C<g><suite>: group g (1-3, below) under suite L, M or U; attackers from 20 s.
+
+- id: C.U.ConstPos.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.ConstPos.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'frozen position, non-zero speed: ConstantPosition; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.ConstPos.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.ConstPos.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'constantPositionFrozen maps to ConstantPosition; every BSM is evidence (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.ConstPos.constantPositionFrozen
+  base: C1M
+  variant: C1M
+  area: catalogue
+  measure: rec.kdet.ConstPos.constantPositionFrozen
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'constantPositionFrozen is the check designed for ConstPos (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.RandomPos.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.RandomPos.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: '60 m redrawn each BSM: RandomPosition every pair; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.RandomPos.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.RandomPos.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'positionJump maps to RandomPosition (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.RandomPos.positionJump
+  base: C1M
+  variant: C1M
+  area: catalogue
+  measure: rec.kdet.RandomPos.positionJump
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'positionJump is the check designed for RandomPos (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.Teleport.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.Teleport.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: '150/80 m jump every 4 s: RandomPosition at each jump; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.Teleport.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.Teleport.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'positionJump at each 4 s jump: 15 events a minute (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.Teleport.positionJump
+  base: C1M
+  variant: C1M
+  area: catalogue
+  measure: rec.kdet.Teleport.positionJump
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'positionJump is the check designed for Teleport (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.ConstSpeedOffset.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.ConstSpeedOffset.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: '+12 m/s claimed: p1 + v1 dt misses p2 by 1.2 m per 0.1 s pair, over 1 m; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.ConstSpeedOffset.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.ConstSpeedOffset.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'only positionSpeedInconsistency fires after onset, and no SM-MBR subtype encodes it (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.ConstSpeedOffset.positionSpeedInconsistency
+  base: C1M
+  variant: C1M
+  area: catalogue
+  measure: rec.kdet.ConstSpeedOffset.positionSpeedInconsistency
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'positionSpeedInconsistency is the check designed for ConstSpeedOffset (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.ReversedHeading.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.ReversedHeading.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'reciprocal heading: the prediction lands 2 v dt = 2.2 m behind at 11 m/s; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.ReversedHeading.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.ReversedHeading.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'headingInconsistency has no SM-MBR subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.ReversedHeading.headingInconsistency
+  base: C1M
+  variant: C1M
+  area: catalogue
+  measure: rec.kdet.ReversedHeading.headingInconsistency
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'headingInconsistency is the check designed for ReversedHeading (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.DataReplay.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.DataReplay.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'a replay 5 s old is refused by the generationTime window before any check (06 §6 item 17: never reported); the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.DataReplay.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.DataReplay.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'staleOrReplay has no subtype, and the stale replay is refused first (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.U.InvalidSignature.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.InvalidSignature.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'a BSM that fails verification is not evidence about its certificate and is never checked; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.InvalidSignature.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.InvalidSignature.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'signatureVerification has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.InvalidSignature.signatureVerification
+  base: C1M
+  variant: C1M
+  area: catalogue
+  measure: rec.kdet.InvalidSignature.signatureVerification
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'signatureVerification is the check designed for InvalidSignature (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.Disruptive.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.Disruptive.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'position, speed and heading falsified at once: RandomPosition and MaxAcceleration; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.Disruptive.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.Disruptive.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'positionJump and implausibleAcceleration map (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.U.ConstPosOffset.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.ConstPosOffset.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'the 25 m step at onset breaks RandomPosition once; after it the claims are consistent; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.ConstPosOffset.decided
+  base: C2L
+  variant: C2L
+  area: catalogue
+  measure: k.ConstPosOffset.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'one step at onset is one event; corroboration needs 3 in 60 s (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.U.SineWavePos.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.SineWavePos.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: '20 m x 0.6 rad/s lateral swing: up to 1.2 m per pair, over 1 m at the peaks; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.U.RandomSpeed.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.RandomSpeed.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'a fresh speed in [0, 40] m/s each BSM: |dv|/0.1 s far over 10 m/s2 (MaxAcceleration); the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.RandomSpeed.decided
+  base: C2L
+  variant: C2L
+  area: catalogue
+  measure: k.RandomSpeed.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'implausibleAcceleration maps to MaxAcceleration (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.RandomSpeed.implausibleAcceleration
+  base: C2M
+  variant: C2M
+  area: catalogue
+  measure: rec.kdet.RandomSpeed.implausibleAcceleration
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'implausibleAcceleration is the check designed for RandomSpeed (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.HeadingOffset.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.HeadingOffset.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: '45 deg: the miss is 2 v dt sin(22.5 deg) = 0.77 v dt, over 1 m only above 13 m/s, and the grid limit is 11.2 m/s; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.HeadingOffset.decided
+  base: C2L
+  variant: C2L
+  area: catalogue
+  measure: k.HeadingOffset.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'headingInconsistency has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.HeadingOffset.headingInconsistency
+  base: C2M
+  variant: C2M
+  area: catalogue
+  measure: rec.kdet.HeadingOffset.headingInconsistency
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'headingInconsistency is the check designed for HeadingOffset (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.SlowDrift.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.SlowDrift.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'the drift rate is capped at 5 m/s: 0.5 m per 0.1 s pair, under 1 m; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.U.DelayedMessages.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.DelayedMessages.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'a 6 s stale generationTime is refused by the receiver window, so never verified or checked; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.DelayedMessages.decided
+  base: C2L
+  variant: C2L
+  area: catalogue
+  measure: k.DelayedMessages.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'refused by the window; staleOrReplay has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.U.ExpiredCert.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.ExpiredCert.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'an expired certificate fails the receiver rule and the BSM is never Verified; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.ExpiredCert.decided
+  base: C2L
+  variant: C2L
+  area: catalogue
+  measure: k.ExpiredCert.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'certValidity has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.ExpiredCert.certValidity
+  base: C2M
+  variant: C2M
+  area: catalogue
+  measure: rec.kdet.ExpiredCert.certValidity
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'certValidity is the check designed for ExpiredCert (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.PosSpeedInconsistent.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.PosSpeedInconsistent.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'claims about 0 m/s while moving 11 m/s: the prediction misses by about v dt = 1.1 m; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.U.AlongRoadOffset.reported
+  base: C3U
+  variant: C3U
+  area: catalogue
+  measure: k.AlongRoadOffset.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'the 30 m step at onset breaks RandomPosition once; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.AlongRoadOffset.decided
+  base: C3L
+  variant: C3L
+  area: catalogue
+  measure: k.AlongRoadOffset.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'one step at onset is one event (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.U.StopAndGo.reported
+  base: C3U
+  variant: C3U
+  area: catalogue
+  measure: k.StopAndGo.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'alternating 0 and 35 m/s: MaxAcceleration; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.StopAndGo.decided
+  base: C3L
+  variant: C3L
+  area: catalogue
+  measure: k.StopAndGo.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'implausibleAcceleration maps to MaxAcceleration (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.StopAndGo.implausibleAcceleration
+  base: C3M
+  variant: C3M
+  area: catalogue
+  measure: rec.kdet.StopAndGo.implausibleAcceleration
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'implausibleAcceleration is the check designed for StopAndGo (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.Sybil.reported
+  base: C3U
+  variant: C3U
+  area: catalogue
+  measure: k.Sybil.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'each ghost is a separate certificate whose own consecutive claims are consistent; the profile has no co-location check; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.Sybil.decided
+  base: C3L
+  variant: C3L
+  area: catalogue
+  measure: k.Sybil.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'sybilCoLocation has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.Sybil.sybilCoLocation
+  base: C3M
+  variant: C3M
+  area: catalogue
+  measure: rec.kdet.Sybil.sybilCoLocation
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'sybilCoLocation is the check designed for Sybil (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.NotYetValid.reported
+  base: C3U
+  variant: C3U
+  area: catalogue
+  measure: k.NotYetValid.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'a not-yet-valid certificate fails the receiver rule; never Verified; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.NotYetValid.decided
+  base: C3L
+  variant: C3L
+  area: catalogue
+  measure: k.NotYetValid.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'certValidity has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.NotYetValid.certValidity
+  base: C3M
+  variant: C3M
+  area: catalogue
+  measure: rec.kdet.NotYetValid.certValidity
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'certValidity is the check designed for NotYetValid (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.OutOfOrder.reported
+  base: C3U
+  variant: C3U
+  area: catalogue
+  measure: k.OutOfOrder.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: '6-12 s stale generationTime: refused by the window; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.OutOfOrder.decided
+  base: C3L
+  variant: C3L
+  area: catalogue
+  measure: k.OutOfOrder.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'refused by the window; staleOrReplay has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.U.PosHeadingInconsistent.reported
+  base: C3U
+  variant: C3U
+  area: catalogue
+  measure: k.PosHeadingInconsistent.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: '30 m x 1.3 rad/s sideways swing: up to 3.9 m per pair; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.PosHeadingInconsistent.decided
+  base: C3L
+  variant: C3L
+  area: catalogue
+  measure: k.PosHeadingInconsistent.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'the swing breaks positionJump (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.U.EventualStop.reported
+  base: C3U
+  variant: C3U
+  area: catalogue
+  measure: k.EventualStop.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'frozen position while claiming 0.8-2.8 m/s: ConstantPosition; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.EventualStop.decided
+  base: C3L
+  variant: C3L
+  area: catalogue
+  measure: k.EventualStop.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'constantPositionFrozen maps to ConstantPosition (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.EventualStop.constantPositionFrozen
+  base: C3M
+  variant: C3M
+  area: catalogue
+  measure: rec.kdet.EventualStop.constantPositionFrozen
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'constantPositionFrozen is the check designed for EventualStop (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C1L.honest-not-revoked
+  base: C1L
+  variant: C1L
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C1M.honest-not-revoked
+  base: C1M
+  variant: C1M
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C1U.honest-not-revoked
+  base: C1U
+  variant: C1U
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C1M.crossfire.signatureVerification
+  base: C1M
+  variant: C1M
+  area: specificity
+  measure: rec.kdet_other.signatureVerification
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: pending
+  verdict: pending
+  source: 'signatureVerification fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C1M.crossfire.certValidity
+  base: C1M
+  variant: C1M
+  area: specificity
+  measure: rec.kdet_other.certValidity
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: pending
+  verdict: pending
+  source: 'certValidity fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C1M.crossfire.sybilCoLocation
+  base: C1M
+  variant: C1M
+  area: specificity
+  measure: rec.kdet_other.sybilCoLocation
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: pending
+  verdict: pending
+  source: 'sybilCoLocation fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C1M.crossfire.staleOrReplay
+  base: C1M
+  variant: C1M
+  area: specificity
+  measure: rec.kdet_other.staleOrReplay
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: pending
+  verdict: pending
+  source: 'staleOrReplay fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C2L.honest-not-revoked
+  base: C2L
+  variant: C2L
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C2M.honest-not-revoked
+  base: C2M
+  variant: C2M
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C2U.honest-not-revoked
+  base: C2U
+  variant: C2U
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C2M.crossfire.signatureVerification
+  base: C2M
+  variant: C2M
+  area: specificity
+  measure: rec.kdet_other.signatureVerification
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: pending
+  verdict: pending
+  source: 'signatureVerification fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C2M.crossfire.certValidity
+  base: C2M
+  variant: C2M
+  area: specificity
+  measure: rec.kdet_other.certValidity
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: pending
+  verdict: pending
+  source: 'certValidity fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C2M.crossfire.sybilCoLocation
+  base: C2M
+  variant: C2M
+  area: specificity
+  measure: rec.kdet_other.sybilCoLocation
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: pending
+  verdict: pending
+  source: 'sybilCoLocation fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C2M.crossfire.staleOrReplay
+  base: C2M
+  variant: C2M
+  area: specificity
+  measure: rec.kdet_other.staleOrReplay
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: pending
+  verdict: pending
+  source: 'staleOrReplay fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C3L.honest-not-revoked
+  base: C3L
+  variant: C3L
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C3M.honest-not-revoked
+  base: C3M
+  variant: C3M
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C3U.honest-not-revoked
+  base: C3U
+  variant: C3U
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C3M.crossfire.signatureVerification
+  base: C3M
+  variant: C3M
+  area: specificity
+  measure: rec.kdet_other.signatureVerification
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: pending
+  verdict: pending
+  source: 'signatureVerification fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C3M.crossfire.certValidity
+  base: C3M
+  variant: C3M
+  area: specificity
+  measure: rec.kdet_other.certValidity
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: pending
+  verdict: pending
+  source: 'certValidity fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C3M.crossfire.sybilCoLocation
+  base: C3M
+  variant: C3M
+  area: specificity
+  measure: rec.kdet_other.sybilCoLocation
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: pending
+  verdict: pending
+  source: 'sybilCoLocation fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C3M.crossfire.staleOrReplay
+  base: C3M
+  variant: C3M
+  area: specificity
+  measure: rec.kdet_other.staleOrReplay
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: pending
+  verdict: pending
+  source: 'staleOrReplay fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
