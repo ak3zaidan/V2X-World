@@ -111,7 +111,7 @@ rows:
 - {id: SM.on-air-content, check: "cargo test -p v2xw-engine --test platform_validation the_spat_and_map_on_the_air_are_the_plan_and_the_survey", expect: pass,
    source: "J2735 SPAT/MAP; CTI 4501 v01: every SPaT signal group is a MAP connection's signalGroup and the other way round; the tapped SPDU's payload decodes to the plan at the SPaT's own timeStamp",
    fault: "built into the test: the same SPaT compared with the plan 30 s later must disagree for most messages (wrong_feed_caught)",
-   verdict: pending}
+   verdict: open, note: "written and committed; its cargo test sat queued behind other agents' builds and was stopped unrun at the three-hour mark: run it first"}
 - {id: SM.on-air-range, runs: [C], check: "phy.rx decoded share by distance, RSU senders against OBU senders", expect: "RSU frames reach farther than OBU frames",
    source: "an RSU antenna on a mast at a junction (line of sight down four streets) and RSU EIRP above the OBU's (FCC 47 CFR 95.3159): its link budget beats a vehicle's",
    verdict: pass, measured: "decoded share 0-100 m: RSU 1.00, OBU 0.91; 100-200 m: 0.93 against 0.36; 200-300 m: 0.42 against 0.07"}
@@ -119,7 +119,8 @@ rows:
 # ---------------------------------------------------------------- (6) the Studio
 - {id: UI.knobs, check: "tools/audit/studio_knobs.py: one knob per settings section through scenario.set + run.start on the server, read back from run.status / metrics.query", expect: "11/11 sections move the engine as written",
    source: "each knob's row in studio_knobs.py KNOBS, with its source",
-   fault: "--fault sends the base document instead of the knob: every row must FAIL", verdict: pending}
+   fault: "--fault sends the base document instead of the knob: every row must FAIL", verdict: open,
+   measured: "first run stopped at the base: the knobs named sensitivity metric names (prr) where the server's catalogue says pdr, cbr, aoi, e2e_latency; fixed in the script; its re-run and the --fault run were queued behind the run lock and stopped unrun"}
 - {id: UI.e2e, check: "pnpm exec playwright test -c playwright.engine.config.ts e2e-engine/settings.spec.ts on ports 8754/5144", expect: pass,
    source: "the Studio's settings window against the real engine (search, edit, undo, reset, JSON round trip, Apply reaching the next run, refusals)",
    verdict: open, measured: "1 failed, 2 did not run: 'the window lists the engine's settings' expected > 50 elements, got 4. The window (398 settings) now shows one section at a time (Run: 4 visible + Advanced 16), so the spec's count of every [data-testid=setting] is stale against the sectioned layout; not an engine defect"}
