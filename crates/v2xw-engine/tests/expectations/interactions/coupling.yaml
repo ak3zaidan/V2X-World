@@ -94,7 +94,11 @@
   source: "the extra airtime per frame is multiplied by the number of transmitters in range (ETSI TS 102 687 4.2)"
 - name: Falcon-512 x density (AoI)
   family: dsrc
-  base_set: {nodes.default_obu: obu/generic-automotive-soc-no-hsm}
+  # The fragmenter (2026-10-24): a Falcon-512 SPDU carrying its certificate (897-octet key,
+  # 666-octet signatures) is over the WSMP MTU, so without one every certificate frame is
+  # refused (net_mtu_refusals 80 = 40 vehicles x 2 s x 1 Hz), no receiver learns a signer,
+  # nothing is delivered and AoI is undefined in both Falcon runs.
+  base_set: {nodes.default_obu: obu/generic-automotive-soc-no-hsm, net.fragmenter: {id: fragmenter/generic-sdu}}
   factor: {security.signature: falcon-512}
   condition: {actors.vehicles.demand.params.max_total_vehicles: 160}
   metric: aoi_ms

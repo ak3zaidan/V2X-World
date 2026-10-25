@@ -31,13 +31,16 @@ runs:
   LD:
     note: the clean link, log-distance n = 2.5, budget 115 dB (d0 = 10 m x 10^((115 - 67.8) / 25) = 766 m)
   FS3:
-    set: {radio.models.propagation: {id: propagation/free-space, params: {}}, radio.devices.obu.tx_power_dbm: 3.0}
+    common: false  # a named law refuses the log-distance exponent
+    set: {time.duration_s: 4.0, metrics: [all], messages.rate_hz: 2.0, radio.channel_model.fading: none, radio.models.propagation: {id: propagation/free-space, params: {}}, radio.devices.obu.tx_power_dbm: 3.0}
     note: free space, conducted 3 dBm (EIRP 6 dBm), budget 101 dB
   TR12:
-    set: {radio.models.propagation: {id: propagation/two-ray-ground, params: {}}, radio.devices.obu.tx_power_dbm: 12.0}
+    common: false  # a named law refuses the log-distance exponent
+    set: {time.duration_s: 4.0, metrics: [all], messages.rate_hz: 2.0, radio.channel_model.fading: none, radio.models.propagation: {id: propagation/two-ray-ground, params: {}}, radio.devices.obu.tx_power_dbm: 12.0}
     note: two-ray ground, 1.5 m antennas, conducted 12 dBm, budget 110 dB
   TR37:
-    set: {radio.models.propagation: {id: propagation/tr37885, params: {}}, radio.devices.obu.tx_power_dbm: 3.0}
+    common: false  # a named law refuses the log-distance exponent
+    set: {time.duration_s: 4.0, metrics: [all], messages.rate_hz: 2.0, radio.channel_model.fading: none, radio.channel_model.shadowing_sigma_db: 0.0, radio.models.propagation: {id: propagation/tr37885, params: {}}, radio.devices.obu.tx_power_dbm: 3.0}
     note: TR 37.885 state model (urban, the procedural grid's class), no shadowing, budget 101 dB
   RAY:
     set: {radio.channel_model.fading: rayleigh}
@@ -50,7 +53,7 @@ runs:
     note: the clean link with 6 dB log-normal shadowing, no fading
   AIRD:
     common: false
-    set: {time.duration_s: 3.0, metrics: [all], security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: true}
+    set: {time.duration_s: 3.0, metrics: [all], security.signer_id_policy.full_cert_every_ms: 3600000, security.signer_id_policy.digest_otherwise: true}
     note: the grid at 10 Hz, every BSM signed with a digest
   AIRC:
     common: false

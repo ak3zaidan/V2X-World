@@ -153,7 +153,7 @@ def judge(row, runs, mutate=False):
         L, air = vals.get("psdu_bytes"), vals.get("airtime_us")
         if L is None or air is None:
             return "missing", False
-        bps = 24 * row.get("rate_mbps", 6) / 6  # data bits per OFDM symbol at 10 MHz
+        bps = 8 * row.get("rate_mbps", 6)  # data bits per 8 us OFDM symbol (48 at 6 Mbit/s, 10 MHz)
         exp = 40 + 8 * math.ceil((22 + 8 * L) / bps)
         if mutate:
             exp += 8
