@@ -191,7 +191,10 @@ fn an_all_benign_run_produces_no_attack_label_at_all() {
 fn a_recording_without_kinematics_is_refused_rather_than_labelled_genuine() {
     let recs = records(&DatasetShape::default());
     let full = veremi::from_records(&recs).expect("build");
-    assert!(full.truth.iter().any(|t| t.attacker_type != 0), "the shape has an attacker");
+    assert!(
+        full.truth.iter().any(|t| t.attacker_type != 0),
+        "the shape has an attacker"
+    );
     let thin: Vec<_> = recs
         .iter()
         .filter(|r| r.channel != "gt.kinematics")

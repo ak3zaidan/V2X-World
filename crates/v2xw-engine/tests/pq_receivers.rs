@@ -71,7 +71,10 @@ fn a_roadside_unit_judges_the_first_frames_it_hears_in_the_current_period() {
         "{} handsets on the air; {unit_psms} PSM verifications at units; states {states:?}",
         psm_tx.len()
     );
-    assert!(unit_psms > 0, "no unit judged a PSM, so this proves nothing");
+    assert!(
+        unit_psms > 0,
+        "no unit judged a PSM, so this proves nothing"
+    );
     assert_eq!(
         states.get("Invalid").copied().unwrap_or(0),
         0,
@@ -86,11 +89,16 @@ fn a_vru_handset_signs_and_verifies_at_the_scenario_signature_price() {
         v2xw_node::profile::signature_ops(v2xw_engine::signature::message_signature(&s));
     let handset = v2xw_node::profiles::get(v2xw_node::profiles::GENERIC_VRU_DEVICE)
         .expect("the shipped handset profile");
-    let (sign, _) = handset.op_cost(sign_op).expect("the handset prices the scheme");
+    let (sign, _) = handset
+        .op_cost(sign_op)
+        .expect("the handset prices the scheme");
     let (ecdsa, _) = handset
         .op_cost("ecdsa-p256-sign")
         .expect("the handset prices ECDSA");
-    assert!(sign > ecdsa, "{sign_op} is not dearer than ECDSA on a handset");
+    assert!(
+        sign > ecdsa,
+        "{sign_op} is not dearer than ECDSA on a handset"
+    );
     let (_, rec) = run(s);
     let handsets: BTreeSet<u64> = records(&rec, "node.tx")
         .iter()

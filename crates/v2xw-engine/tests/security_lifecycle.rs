@@ -1200,7 +1200,11 @@ fn a_relayed_report_is_uploaded_only_once_a_unit_takes_it() {
                 .collect::<Vec<_>>()
         })
         .collect();
-    println!("{} acks recorded; {} early retries", acks.values().map(Vec::len).sum::<usize>(), early.len());
+    println!(
+        "{} acks recorded; {} early retries",
+        acks.values().map(Vec::len).sum::<usize>(),
+        early.len()
+    );
     assert!(
         early.is_empty(),
         "{} unconfirmed retries inside the first timeout, e.g. (node, step, step) {:?}",
