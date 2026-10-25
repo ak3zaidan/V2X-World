@@ -3467,6 +3467,12 @@ pub fn generator_params(
         // interval are the same, so the dynamics triggers have nothing to choose between.
         bsm.nominal_itt = period;
         bsm.min_itt = bsm.min_itt.min(period);
+        // And the ceiling: the generator clamps its interval into [vMinITT, vMaxITT], so a
+        // fixed rate below 1 / 600 ms (1.67 Hz) was sent at 1.67 Hz whatever it asked for
+        // (1 Hz: 113 frames where 2 s x 40 vehicles is about 80). vMaxITT is the ceiling
+        // J2945/1's congestion control may stretch the interval to, not a floor under a
+        // rate the scenario fixed.
+        bsm.max_itt = bsm.max_itt.max(period);
         cam.t_gen_cam_min = period;
         cam.t_gen_cam_max = period;
         cam.t_check_cam_gen = period.min(cam.t_check_cam_gen);

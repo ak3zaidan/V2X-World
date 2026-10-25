@@ -242,10 +242,19 @@ impl MessageSchedule {
         // The intersection broadcasts are periodic and nothing else: a controller's state
         // changes on its own schedule, and CTI 4501's rates do not adapt to it. DCC does not
         // gate them — J2945/1's rate control is the BSM's — which is stated on the card.
+        // `last` is the instant the previous message was *due*, not when the check that
+        // sent it ran: the next one is due a whole interval after that. Taking the check's
+        // instant instead rounded every interval up to the check grid, so a 150 ms SPaT
+        // went out every 200 ms (5 Hz, not 6.7) and a 250 ms one every 300 ms. A unit that
+        // fell more than an interval behind restarts from now rather than bursting.
         let periodic = |last: &mut Option<SimTime>, interval: Duration, ty: MsgType| {
-            let due = last.is_none_or(|t| believed_now.saturating_sub(t) >= interval.as_nanos());
+            let i = interval.as_nanos();
+            let due = last.is_none_or(|t| believed_now.saturating_sub(t) >= i);
             if due {
-                *last = Some(believed_now);
+                *last = Some(match *last {
+                    Some(t) if believed_now.saturating_sub(t) < 2 * i => t + i,
+                    _ => believed_now,
+                });
             }
             due.then_some(GenRequest {
                 msg_type: ty,
@@ -436,5 +445,57 @@ mod tests {
         stepped.due(0, &b, &dcc);
         // The same true instant, but this node believes a second has passed.
         assert_eq!(stepped.due(50 * NS_PER_MS + NS_PER_S, &b, &dcc).len(), 1);
+    }
+
+    /// Counts the SPaT and MAP a roadside schedule asks for over `seconds`, checked every
+    /// `check_ms` on a clock that runs `rate` times true time.
+    fn infra_counts(spat_ms: u64, map_ms: u64, check_ms: u64, seconds: u64, rate: f64) -> (usize, usize) {
+        let unit = ServiceSet {
+            spat: true,
+            map: true,
+            ..ServiceSet::NONE
+        };
+        let mut s = MessageSchedule::new(unit).with_infra_intervals(
+            Duration::from_millis(spat_ms),
+            Duration::from_millis(map_ms),
+        );
+        let b = belief_at(Vec3::ZERO, 0.0, 0.0);
+        let dcc = DccState::UNRESTRICTED;
+        let (mut spat, mut map) = (0, 0);
+        for k in 0..(seconds * 1000 / check_ms) {
+            let t = ((k * check_ms * NS_PER_MS) as f64 * rate) as SimTime;
+            for r in s.due(t, &b, &dcc) {
+                match r.msg_type {
+                    MsgType::Spat => spat += 1,
+                    MsgType::Map => map += 1,
+                    _ => {}
+                }
+            }
+        }
+        (spat, map)
+    }
+
+    /// CTI 4501's 10 Hz SPaT and 1 Hz MAP on the 100 ms check grid: one each per period.
+    #[test]
+    fn a_roadside_unit_sends_spat_at_ten_hertz_and_map_at_one() {
+        assert_eq!(infra_counts(100, 1000, 100, 10, 1.0), (100, 10));
+    }
+
+    /// A period that is not a whole number of checks keeps its rate on average: a 150 ms
+    /// SPaT is 6.7 Hz, not the 5 Hz that rounding each interval up to the grid gave, and a
+    /// 250 ms one 4 Hz, not 3.3.
+    #[test]
+    fn a_spat_period_off_the_check_grid_keeps_its_rate() {
+        assert_eq!(infra_counts(150, 1000, 100, 30, 1.0).0, 200);
+        assert_eq!(infra_counts(250, 1000, 100, 30, 1.0).0, 120);
+    }
+
+    /// A unit whose clock runs slow by 50 ppm still sends ten SPaT a second: its believed
+    /// gap between two checks is a hair under 100 ms, which used to skip every other check.
+    #[test]
+    fn a_slow_clock_does_not_halve_the_spat_rate() {
+        let (spat, map) = infra_counts(100, 1000, 100, 10, 1.0 - 50e-6);
+        assert!((99..=100).contains(&spat), "{spat} SPaT in 10 s");
+        assert!((9..=10).contains(&map), "{map} MAP in 10 s");
     }
 }

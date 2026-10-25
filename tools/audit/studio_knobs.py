@@ -30,21 +30,21 @@ import urllib.request
 KNOBS = [
     ("Run", "/time/duration_s", 3.0, "status.t_end_ns", "down",
      "the run's horizon: half the simulated time"),
-    ("World", "/world/buildings/enabled", False, "metric.prr", "up",
+    ("World", "/world/buildings/enabled", False, "metric.pdr", "up",
      "no building footprints, no obstacle loss (Sommer et al. 2011): more links clear the sensitivity"),
     ("Traffic", "/actors/vehicles/demand/rate_veh_per_h", 9000.0, "status.actors", "up",
      "three times the Poisson arrival rate: more vehicles in the same 6 s"),
     ("Environment", "/weather", {"initial": "rain", "intensity": 1.0}, "metric.traffic.speed_mean_mps", "down",
      "drivers slow in heavy rain (HCM 7th ed. Exhibit 11-20 speed adjustment; FHWA weather-responsive traffic)"),
-    ("Radio", "/radio/devices/obu/tx_power_dbm", 5.0, "metric.prr", "down",
+    ("Radio", "/radio/devices/obu/tx_power_dbm", 5.0, "metric.pdr", "down",
      "about 15 dB less EIRP: the far links fall under the sensitivity (Friis; IEEE 802.11-2020 Table 17-18)"),
-    ("Network", "/net/channel_access", "alternating", "metric.e2e_ms_mean", "up",
+    ("Network", "/net/channel_access", "alternating", "metric.e2e_latency", "up",
      "IEEE 1609.4 alternating access: a frame generated in the service-channel interval waits up to 50 ms"),
-    ("Messages", "/messages/rate_hz", 5.0, "metric.tx_rate_hz", "down",
-     "5 Hz instead of J2945/1's 10 Hz"),
-    ("Security", "/security/signer_id_policy/digest_otherwise", False, "metric.psdu_bytes", "up",
+    ("Messages", "/messages/rate_hz", 5.0, "metric.cbr", "down",
+     "5 Hz instead of J2945/1's 10 Hz: half the frames, about half the channel busy ratio"),
+    ("Security", "/security/signer_id_policy/digest_otherwise", False, "metric.cbr", "up",
      "a certificate in every message instead of an 8-octet digest (IEEE 1609.2-2016 6.4.8)"),
-    ("Nodes", "/nodes/peer_cert_cache", 1, "metric.aoi_ms", "up",
+    ("Nodes", "/nodes/peer_cert_cache", 1, "metric.aoi", "up",
      "a one-entry peer-certificate cache: digest-signed messages from evicted signers wait for the next certificate"),
     ("Measurement", "/metrics", ["prr"], "catalogue", "down",
      "only the PRR provider is configured, so the catalogue shrinks"),
@@ -99,6 +99,15 @@ def observe(rpc, st, what):
     if what == "catalogue":
         return float(len(rpc("metrics.query")["catalogue"]))
     name = what.split(".", 1)[1]
+    names = {m["name"] for m in rpc("metrics.query")["catalogue"]}
+    if name not in names:
+        # The engine's name for it: the catalogue entry that ends in the knob's last word
+        # (`traffic.speed_mean_mps` -> a `speed...` series), or nothing.
+        stem = name.split(".")[-1].split("_")[0]
+        cands = sorted(n for n in names if n.startswith(stem))
+        if not cands:
+            return None
+        name = cands[0]
     res = rpc("metrics.query", metrics=[name], bin_ns=10**15)
     cols = [c["name"] for c in res["columns"]]
     vals = [row[cols.index(name)] for row in res["rows"] if row[cols.index(name)] is not None]
@@ -135,6 +144,7 @@ def main():
         base_doc.setdefault("time", {})["duration_s"] = a.duration
         rpc("scenario.set", scenario=base_doc)
         st = run_to_end(rpc)
+        print("catalogue:", " ".join(sorted(m["name"] for m in rpc("metrics.query")["catalogue"]))[:600], flush=True)
         base = {k[3]: observe(rpc, st, k[3]) for k in KNOBS}
         for section, ptr, value, what, expect, source in KNOBS:
             try:

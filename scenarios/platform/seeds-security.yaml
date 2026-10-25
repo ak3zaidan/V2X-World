@@ -7,13 +7,6 @@ set:
   time.duration_s: 30.0
   threats.attackers: []
 rows:
-- name: seed 1 metric.verify_rate
-  set:
-    seed: 1
-  metric: metric.verify_rate
-  expect: same
-  min_change: 0.0
-  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
 - name: seed 1 aoi_ms
   set:
     seed: 1
@@ -25,13 +18,6 @@ rows:
   set:
     seed: 1
   metric: e2e_ms_mean
-  expect: same
-  min_change: 0.0
-  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 1 metric.full_cert_share
-  set:
-    seed: 1
-  metric: metric.full_cert_share
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
@@ -49,13 +35,6 @@ rows:
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 2 metric.verify_rate
-  set:
-    seed: 2
-  metric: metric.verify_rate
-  expect: same
-  min_change: 0.0
-  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
 - name: seed 2 aoi_ms
   set:
     seed: 2
@@ -67,13 +46,6 @@ rows:
   set:
     seed: 2
   metric: e2e_ms_mean
-  expect: same
-  min_change: 0.0
-  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 2 metric.full_cert_share
-  set:
-    seed: 2
-  metric: metric.full_cert_share
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
@@ -91,13 +63,6 @@ rows:
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 3 metric.verify_rate
-  set:
-    seed: 3
-  metric: metric.verify_rate
-  expect: same
-  min_change: 0.0
-  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
 - name: seed 3 aoi_ms
   set:
     seed: 3
@@ -109,13 +74,6 @@ rows:
   set:
     seed: 3
   metric: e2e_ms_mean
-  expect: same
-  min_change: 0.0
-  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 3 metric.full_cert_share
-  set:
-    seed: 3
-  metric: metric.full_cert_share
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
@@ -133,13 +91,6 @@ rows:
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 4 metric.verify_rate
-  set:
-    seed: 4
-  metric: metric.verify_rate
-  expect: same
-  min_change: 0.0
-  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
 - name: seed 4 aoi_ms
   set:
     seed: 4
@@ -151,13 +102,6 @@ rows:
   set:
     seed: 4
   metric: e2e_ms_mean
-  expect: same
-  min_change: 0.0
-  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 4 metric.full_cert_share
-  set:
-    seed: 4
-  metric: metric.full_cert_share
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
