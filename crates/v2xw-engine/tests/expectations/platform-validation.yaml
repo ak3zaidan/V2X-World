@@ -71,10 +71,11 @@ rows:
    note: "access_ms (0.039 ms, +-122 %) is a handful of contention events per run: no single-seed row should test it with a 1 % band against another seed"}
 - {id: ST.traffic, check: "scenarios/platform/seeds-traffic.yaml --json", expect: "speed and stopped share within +-10 %; the default seed inside the interval",
    source: "90 s of Poisson demand at 1500 veh/h on a 4 x 6 signalised grid: ~37 vehicles, so the fleet mean moves with which approaches the arrivals take",
-   verdict: pending}
+   verdict: open, note: "first run measured nothing: traffic.* means exist only in the catalogue sweep (sweep.rs), not in a spec's Measured, so a spec row naming one can never pass; the spec now reads actors, frames, pdr, cbr and warnings; its re-run was queued behind the run lock when the session stopped"}
 - {id: ST.security, check: "scenarios/platform/seeds-security.yaml --json", expect: "verify rate and full-cert share within +-10 %; aoi within +-15 %",
    source: "the credential lifecycle family: nine vehicles and an RSU for 30 s; few senders, so per-seed spread is wider than the radio family's",
-   verdict: pending}
+   verdict: open, measured: "aoi 232 ms +-75 % (default 307), prr 0.188 +-30 %, cbr +-49 %, e2e 12.28 ms +-0.9 %; default seed inside every interval. metric.verify_rate and metric.full_cert_share are not measured in spec mode (no metrics: [all] in the family)",
+   note: "the family's seed spread is wider than several same-seed security rows' effects (pseudonym period: aoi +46 %); those rows rely on common random numbers. Open: replicate them over seeds before trusting their magnitude"}
 
 # ---------------------------------------------------------------- (4) settings wiring
 - {id: SW.unread, check: "python3 -I tools/audit/settings_wiring.py", expect: "0 unread keys",
@@ -121,4 +122,4 @@ rows:
    fault: "--fault sends the base document instead of the knob: every row must FAIL", verdict: pending}
 - {id: UI.e2e, check: "pnpm exec playwright test -c playwright.engine.config.ts e2e-engine/settings.spec.ts on ports 8754/5144", expect: pass,
    source: "the Studio's settings window against the real engine (search, edit, undo, reset, JSON round trip, Apply reaching the next run, refusals)",
-   verdict: pending}
+   verdict: open, measured: "1 failed, 2 did not run: 'the window lists the engine's settings' expected > 50 elements, got 4. The window (398 settings) now shows one section at a time (Run: 4 visible + Advanced 16), so the spec's count of every [data-testid=setting] is stale against the sectioned layout; not an engine defect"}
