@@ -137,7 +137,8 @@ rows:
   - 10.1
   fault: half:spat
   source: SPaT at 10 Hz per unit (CTI 4501 connected intersections; 04-models.md §8.1; infra.rs SPAT interval)
-  measured: pending
+  measured: '9.99998'
+  verdict: pass
 - id: LR.G.spat-rate-max
   base: G0
   variant: G0
@@ -149,7 +150,8 @@ rows:
   - 10.1
   fault: half:spat
   source: as LR.G.spat-rate-min, the fastest unit
-  measured: pending
+  measured: '10.0001'
+  verdict: pass
 - id: LR.G.map-rate
   base: G0
   variant: G0
@@ -161,7 +163,8 @@ rows:
   - 1.05
   fault: half:map
   source: MAP at 1 Hz per unit (CTI 4501; 04-models.md §8.1)
-  measured: pending
+  measured: '1.00619'
+  verdict: pass
 - id: LR.G.determinism
   base: G0
   variant: G0b
@@ -170,7 +173,8 @@ rows:
   expect: identical
   fault: record-flip
   source: same seed and build stamp, byte-identical records
-  measured: pending
+  measured: 6f36671b2f2f3580 -> 6f36671b2f2f3580
+  verdict: pass
 - id: LR.G.c1.stops
   base: Gc0
   variant: G0
@@ -181,7 +185,8 @@ rows:
   source: GLOSA followed cuts stops (Treiber and Kesting 2014, arXiv:1408.5498, about 15 % fewer stops
     for advised vehicles at 50 km/h; Katsaros et al. 2011 IWCMC, growing with penetration); the class
     mixes advised and unadvised vehicles, so at least 3 %
-  measured: pending
+  measured: 1.15827 -> 1.10019
+  verdict: pass
 - id: LR.G.c1.fuel
   base: Gc0
   variant: G0
@@ -191,7 +196,9 @@ rows:
   min_change: 0.005
   source: fewer stop-and-go cycles burn less (Treiber and Kesting 2014, about 4 % fuel; Tielert et al.
     2012 ITST)
-  measured: pending
+  measured: 11.1701 -> 11.1177
+  verdict: open
+  note: down 0.47 % on one seed, under the 0.5 % floor; the seed-2/3 pairs were not run in the window
 - id: LR.G.c1.co2
   base: Gc0
   variant: G0
@@ -200,7 +207,11 @@ rows:
   expect: down
   min_change: 0.005
   source: CO2 is proportional to fuel under HBEFA (as LR.G.c1.fuel)
-  measured: pending
+  measured: 191.439 -> 194.177
+  verdict: open
+  note: 'CO2 per km rose 1.4 % while fuel per km fell 0.5 % in the same passenger class: CO2 is fuel x
+    a per-fuel factor under HBEFA, so this needs the diesel/petrol/EV split of the two runs (possible
+    energy-layer accounting issue); owed'
 - id: LR.G.c1.speed
   base: Gc0
   variant: G0
@@ -210,7 +221,9 @@ rows:
   tol: 0.08
   source: GLOSA trades cruising speed for standing time; the travel time is about unchanged (Treiber and
     Kesting 2014 §5), so the mean speed moves by under 8 %
-  measured: pending
+  measured: 8.6245 -> 8.34544
+  fault: scale:g.mean_speed_mps:0.85
+  verdict: pass
 - id: LR.G.c05.stops
   base: Gc0
   variant: Gc05
@@ -237,7 +250,8 @@ rows:
   fault: use:Goff
   source: compliance is the drivers' choice, not the application's; GLOSA still advises every equipped
     approaching vehicle (apps.rs; run.rs GlosaDrivers)
-  measured: pending
+  measured: '2958'
+  verdict: pass
 - id: LR.G.off.advice
   base: G0
   variant: Goff
@@ -292,7 +306,7 @@ rows:
   - 0.15
   - 0.6
   source: -13 dB, n 1.67 to 3.0 -> x0.17 to x0.37 (as LR.G.p30.range50)
-  measured: 300 -> 300 (ratio 1.0); spat_heard 132,287 -> 102,289
+  measured: 300 -> 300 (ratio 1)
   verdict: wrong-expectation
   note: 'the reach is not power-limited: TR 37.885 Table 6.2.1-1 urban LOS, PL = 38.77 + 16.7 log10 d
     + 18.2 log10 5.9 GHz: with 3 dBi each end and about -92 dBm sensitivity the LOS budget at 10 dBm reaches
@@ -376,7 +390,10 @@ rows:
   expect: up
   source: later advice leaves less distance to adapt, so fewer stops are avoided (the interaction compliance
     x reach)
-  measured: pending
+  measured: 1.10019 -> 1.10021
+  verdict: wrong-expectation
+  note: '1.10019 -> 1.10021 is no effect (+0.002 %): the premise (later advice) failed, the first advice
+    distance did not move (LR.G.p10.advice-dist); the checker passes it only because min_change is 0'
 - id: LR.G.c0p10.stops
   base: Gc0
   variant: Gc0p10
@@ -543,7 +560,8 @@ rows:
   source: 'the report is 1,123 B on the line (S0 pilot); metro fibre: 20 km x 4.9 us/km + 4 hops x 50
     us + 1,123 x 8 / 1 Gbit/s = 0.307 ms one way (ip_transport.rs WiredLink::metro_fibre; ITU-T G.652
     group index)'
-  measured: pending
+  measured: '0.306319'
+  verdict: pass
 - id: LR.S.relayed
   base: S0
   variant: S0
@@ -554,7 +572,8 @@ rows:
   fault: use:Srsu0
   source: with no cellular modem every report reaches the RA through a report-forward unit ([SM-MBR] §4,
     "whenever in range of an RSU offering SCMS connectivity")
-  measured: pending
+  measured: '186'
+  verdict: pass
 - id: LR.S.dsl.hop
   base: S0
   variant: Sdsl
@@ -614,7 +633,8 @@ rows:
   - 2000.0
   - 2001.0
   source: 'as LR.S.lat50.hop: 2,000 ms + 9 us'
-  measured: pending
+  measured: '2000.01'
+  verdict: pass
 - id: LR.S.loss10.retx
   base: S0
   variant: Sloss10
@@ -775,7 +795,10 @@ rows:
   value: 2.0
   source: 'a unit fetches the CRL over its backhaul before it can broadcast it: no unit frame of a new
     list before publication + 2 s one way (+ the 50 ms signing of the RS4 profile)'
-  measured: pending
+  measured: '2.14603'
+  verdict: pass
+  note: holds on the base binary only because the 10 s cadence is a multiple of the 5 s carousel (the
+    first list starts the carousel 2 s late and every later list lands 2 s before a tick); see LR.S.lat2000bc3.crl-lag
 - id: LR.S.lat2000.veh-lag
   base: S0
   variant: Slat2000
@@ -783,7 +806,8 @@ rows:
   measure: s.veh_crl_lag_s_mean
   expect: up
   source: the vehicles hear each list at least 2 s later
-  measured: pending
+  measured: 1.22535 -> 2.58531
+  verdict: pass
 - id: LR.S.out.crl-frames
   base: S0
   variant: Sout
@@ -812,7 +836,11 @@ rows:
   source: 'a unit can broadcast a list only after its backhaul brought it: no frame of a new list before
     publication + 2 s, whatever the carousel phase (with 5 s ticks and a 10 s cadence every list landed
     2 s before a tick, so LR.S.lat2000.crl-lag could not tell; 3 s ticks fall inside the download)'
-  measured: pending
+  measured: '2.14603'
+  verdict: open
+  note: 'held on the base binary because only one revocation list was published in the 120 s window (published
+    stage 1): the unaligned-tick case was not exercised. The defect is from code reading (install_rsu_crls
+    dropped rsu_send arrival); a 240 s window with two lists is owed'
 - id: LR.S.bc3.crl-lag
   base: S0
   variant: S0bc3
@@ -832,7 +860,8 @@ rows:
   expect: down
   min_change: 0.1
   source: 'correction of LR.G.p10.range50: -13 dB loses the NLOS receivers (urban NLOS 30 log10 d)'
-  measured: pending
+  measured: 132287 -> 102289
+  verdict: pass
 - id: LR.G.p30.heard
   base: G0
   variant: Gp30
@@ -860,7 +889,11 @@ rows:
   value: 2.0
   fault: use:Slat2000bc3
   source: LR.S.lat2000bc3.crl-lag on the fixed binary
-  measured: pending
+  measured: '2.14603'
+  verdict: pass
+  note: 'fixed binary: lag 2.146 s; RSU installs 90 -> 60 (the last list is still on the 2 s line at the
+    horizon), CRL frames 300 -> 290 (ticks skipped while a download is in flight), vehicle CRL lag mean
+    2.88 -> 3.67 s'
 - id: LR.S.fix.out.crl-frames
   base: S0
   variant: FSout

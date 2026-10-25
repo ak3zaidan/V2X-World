@@ -18,6 +18,8 @@ Faults (a row's `fault`, default `knob-ignored`):
 - spat-half: every second SPaT frame of each unit is dropped from the records (a 5 Hz unit);
 - outage-ignored: the outage unit's frames after the outage are kept (measured on the base);
 - record-flip: one record of the variant changes (the digest must differ);
+- scale:<measure>:<k>: the variant's measure multiplied by k (for `same` rows);
+- use:<run>: the variant measured on another run's records;
 - delay-zero: every relayed-report and CRL hop of the variant is given zero backhaul delay.
 """
 
@@ -327,6 +329,15 @@ def faults(runs_dir, table):
         elif f == 'record-flip':
             fv = copy.deepcopy(real(v))
             fv['digest.record'] = (fv.get('digest.record') or '') + 'x'
+        elif f.startswith('scale:'):
+            # the variant's measure moved by a factor (a `same` row must see it)
+            _, key, k = f.split(':')
+            fv = copy.deepcopy(real(v))
+            fv[key] = fv.get(key, 0) * float(k)
+        elif f.startswith('use:') and real(f[4:]) is None:
+            skip += 1
+            print(f"SKIP    {row['id']:34} [{f}] (fault run not done)")
+            continue
         else:
             fv = copy.deepcopy(real(v))
             fv.update(measure(os.path.join(runs_dir, v), f, os.path.join(runs_dir, b)))
