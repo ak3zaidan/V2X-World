@@ -1772,15 +1772,15 @@ impl ObuRuntime {
         // every one of them as a signature failure — 126 false misbehaviour reports and
         // one honest device revoked.
         //
-        // A node's own active credential is the right source: it was provisioned for the
-        // period the node is in, it is the node's own state rather than ground truth, and
-        // it needs no new plumbing from the engine.
-        if let Some(own) = self.stores.certs.active() {
-            let mine = own.i_period;
-            if self.stores.crl.current_period() != mine {
-                self.stores.crl.set_period(mine);
-            }
-        }
+        // The node's own clock read against the i-period calendar is the source
+        // (`CrlGate::follow_clock`): a real device computes its period that way, and it is
+        // the node's own state, not ground truth. Its active credential is the fallback
+        // for a node told no calendar; it is wrong for a car that powers on holding an
+        // expired pool (06-validation-summary §6 item 22).
+        let own = self.stores.certs.active().map(|c| c.i_period);
+        self.stores
+            .crl
+            .follow_clock(self.clock.believed_time(ctx.now()), own);
         match self
             .stores
             .crl

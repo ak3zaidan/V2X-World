@@ -723,3 +723,130 @@ fn a_receiver_revokes_on_the_certificates_own_linkage_data() {
         v2xw_node::stores::VerificationState::Verified
     );
 }
+
+/// A car that powers on holding an expired pool judges the first honest certificate it
+/// hears in the period its clock reads, not in its stale credential's
+/// (06-validation-summary §6 item 22: MWP's node 20 refused one honest message at
+/// power-on as an implausible period, and `node.rx` labelled it `signature-invalid`).
+///
+/// The receiver's only credential is from period 97; the sender's certificate claims 100,
+/// three periods on, outside the gate's one-period skew. Told the i-period calendar, the
+/// receiver reads period 100 off its clock and verifies; told none, it falls back to its
+/// credential, as before, and refuses. Fault that turns it red: `classify` passing the
+/// active credential's period to the gate instead of `follow_clock`'s clock reading.
+#[test]
+fn a_receiver_powering_on_with_an_expired_pool_judges_by_its_clock() {
+    const LEN_NS: u64 = 60 * NS_PER_S;
+    let issuer = v2xw_sec::credential::ImplicitIssuer::standalone(b"power-on", 0, &[0x20])
+        .expect("issuer");
+    let dev = linked_device();
+    let sender_key = issuer
+        .issue_factory(
+            v2xw_sec::credential::FactoryProfile::Pseudonym {
+                lv: dev.linkage_value_for(100, 0),
+            },
+            &[1; 32],
+            100,
+            0,
+            0,
+            &[0x20],
+        )
+        .expect("issues");
+    let receiver_key = issuer
+        .issue_factory(
+            v2xw_sec::credential::FactoryProfile::Pseudonym {
+                lv: linked_device().linkage_value_for(97, 5),
+            },
+            &[2; 32],
+            97,
+            5,
+            0,
+            &[0x20],
+        )
+        .expect("issues");
+    let config = || NodeConfig {
+        services: ServiceSet::SAE,
+        crypto_mode: CryptoMode::Real,
+        origin: origin(),
+        ..NodeConfig::default()
+    };
+    let mut sender = ObuRuntime::new(
+        NodeId::new(1),
+        reference_profile(),
+        Box::new(VerifyAll::new()),
+        config(),
+        0,
+    );
+    sender
+        .install_credential(credential(NodeId::new(1), 0), &sender_key)
+        .expect("installs");
+    sender.set_belief(belief());
+    let tx = first_of(
+        &transmissions(&run(&mut sender, 1, 100 * NS_PER_MS)),
+        MsgType::Bsm,
+    );
+    let signed = tx.signed.expect("bytes");
+    let verdict = |calendar: bool| {
+        let mut rx = ObuRuntime::new(
+            NodeId::new(2),
+            reference_profile(),
+            Box::new(VerifyAll::new()),
+            config(),
+            0,
+        );
+        let stale = CredentialHandle {
+            i_period: 97,
+            ..credential(NodeId::new(2), 5)
+        };
+        rx.install_credential(stale, &receiver_key)
+            .expect("installs");
+        rx.set_belief(belief());
+        if calendar {
+            // Period 100 runs over the run's first minute.
+            rx.stores_mut()
+                .crl
+                .set_period_grid(-100 * i128::from(LEN_NS), LEN_NS);
+        }
+        let frame = v2xw_node::runtime::RxFrame {
+            signer: Some(tx.signer.clone()),
+            msg_type: MsgType::Bsm,
+            bytes: signed.bytes_on_wire(),
+            claimed_pos: Some(POS),
+            claimed_speed_mps: SPEED_MPS,
+            claimed_heading_rad: 0.0,
+            claimed_generation_time: 0,
+            full_certificate: true,
+            signature_valid: true,
+            spdu: Some(signed.spdu.clone()),
+            signer_certificate: None,
+            bsm: Default::default(),
+        };
+        let reg = RngRegistry::new(29);
+        let mut out = Vec::new();
+        for k in 0..20u64 {
+            let mut ctx = NodeRuntimeCtx::new(k * 10 * NS_PER_MS, &reg);
+            let inbox = if k == 0 {
+                vec![frame.clone()]
+            } else {
+                Vec::new()
+            };
+            out.extend(rx.step(&mut ctx, inbox, 0.0).delivered);
+        }
+        let v = out
+            .iter()
+            .find(|m| m.msg_type == MsgType::Bsm)
+            .map(|m| m.verification)
+            .expect("delivered");
+        (v, rx.stores().crl.current_period())
+    };
+    assert_eq!(
+        verdict(true),
+        (v2xw_node::stores::VerificationState::Verified, 100),
+        "told the calendar, the gate reads period 100 off the clock"
+    );
+    assert_eq!(
+        verdict(false),
+        (v2xw_node::stores::VerificationState::Invalid, 97),
+        "told no calendar, the gate falls back to the credential's period and refuses"
+    );
+}

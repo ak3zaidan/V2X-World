@@ -578,6 +578,10 @@ pub struct CrlGate {
     /// of their `crlCraca`: an entry revokes only a series-1 certificate whose `cracaId`
     /// names the same CRACA (1609.2 §5.1.3.2; 02 §11.2).
     tagged: BTreeMap<[u8; 3], v2xw_sec::CrlStore>,
+    /// The i-period grid the node's clock is read against (`(origin_ns, len_ns)`: period
+    /// `p` begins `origin_ns + p·len_ns` after the run's start), when the credential
+    /// system has told the node its calendar. See [`CrlGate::period_at`].
+    grid: Option<(i128, u64)>,
 }
 
 /// A gate at i-period 0 with the plausibility window every gate has.
@@ -609,6 +613,7 @@ impl CrlGate {
             entries: 0,
             expansion_pm: 0,
             tagged: BTreeMap::new(),
+            grid: None,
         }
     }
 
@@ -633,6 +638,40 @@ impl CrlGate {
     /// The i-period the node believes it is in.
     pub fn current_period(&self) -> u32 {
         self.current_period
+    }
+
+    /// Tells the gate the i-period calendar: period `p` begins `origin_ns + p·len_ns`
+    /// simulated nanoseconds after the run's start (`origin_ns` negative when the grid's
+    /// epoch lies before the run). CAMP's i-periods are fixed calendar intervals from the
+    /// SCMS epoch [CAMP-EE §2.1.5.3.2], so a device reads its period off its own clock.
+    pub fn set_period_grid(&mut self, origin_ns: i128, len_ns: u64) {
+        self.grid = Some((origin_ns, len_ns.max(1)));
+    }
+
+    /// Moves the gate to the period the node is in before it judges a peer: the period its
+    /// clock reads (`believed`) on the calendar it was given, else `own` (its active
+    /// credential's period) for a node told no calendar.
+    ///
+    /// The clock, not the credential, is what a device knows its period by. A car that
+    /// powers on after weeks off holds an expired pool until it next steps; read off that
+    /// pool, its gate sat weeks in the past and refused the first honest certificate it
+    /// heard as an implausible period (MWP node 20, 06-validation-summary §6 item 22).
+    pub fn follow_clock(&mut self, believed: SimTime, own: Option<u32>) {
+        if let Some(p) = self.period_at(believed).or(own)
+            && p != self.current_period
+        {
+            self.current_period = p;
+        }
+    }
+
+    /// The i-period a clock reading of `believed` falls in, when the gate knows the
+    /// calendar ([`CrlGate::set_period_grid`]); `None` otherwise. The same arithmetic as
+    /// `ScmsParams::period_at_of`: a reading before the grid's origin is period 0.
+    #[must_use]
+    pub fn period_at(&self, believed: SimTime) -> Option<u32> {
+        let (origin, len) = self.grid?;
+        let since = (i128::from(believed) - origin).max(0);
+        Some(u32::try_from(since / i128::from(len)).unwrap_or(u32::MAX))
     }
 
     /// Adds a linkage entry.

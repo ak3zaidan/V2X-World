@@ -433,3 +433,26 @@ fn a_weekly_job_armed_before_the_blocklist_generates_nothing() {
             .contains_key(&(614 + 156, 0))
     );
 }
+
+/// The grid a device's CRL gate reads its clock against (`ScmsParams::period_grid`) is the
+/// one the backend's `period_at` uses, on the real calendar and on a run-relative epoch,
+/// on both sides of a boundary (06-validation-summary §6 item 22). Fault that turns it
+/// red: the calendar origin's sign flipped, or the run epoch left out.
+#[test]
+fn the_period_grid_a_device_reads_is_the_backends() {
+    let at = |grid: (i128, u64), t: u64| -> u32 {
+        u32::try_from((i128::from(t) - grid.0).max(0) / i128::from(grid.1)).unwrap()
+    };
+    let mut cal = ScmsParams::default();
+    cal.calendar_epoch_unix_s = Some(v2xw_proto::scms::governance::US_IPERIOD_EPOCH_UNIX_S);
+    cal.pdu.t0_unix_s = 1_792_152_000;
+    let mut rel = ScmsParams::default();
+    rel.epoch = 5_000_000_000;
+    for p in [cal, rel] {
+        let grid = p.period_grid();
+        let next = p.period_start(p.period_at(0) + 1);
+        for t in [0, 1, 4_999_999_999, 5_000_000_000, next - 1, next, next + WEEK_NS] {
+            assert_eq!(at(grid, t), p.period_at(t), "t = {t}");
+        }
+    }
+}

@@ -1936,12 +1936,10 @@ impl VruDeviceRuntime {
         let Some((i_cert, lv, craca, series)) = linkage else {
             return VerificationState::Verified;
         };
-        if let Some(own) = self.stores.certs.active() {
-            let mine = own.i_period;
-            if self.stores.crl.current_period() != mine {
-                self.stores.crl.set_period(mine);
-            }
-        }
+        let own = self.stores.certs.active().map(|c| c.i_period);
+        self.stores
+            .crl
+            .follow_clock(self.clock.believed_time(ctx.now()), own);
         match self
             .stores
             .crl
