@@ -1,0 +1,135 @@
+# Live Studio track (docs/validation/live-studio-2026-10-25.md): the engine as the owner uses
+# it, v2xw-server with the Studio. Each session starts the server on the base scenario, runs it
+# from the Studio, then for each variant types the edits into the settings window (Playwright,
+# ui/apps/studio/e2e-engine/live-studio.spec.ts), runs, and reads every metric card, one
+# single-metric view, the PKI workspace's health strip and "compare with the previous run",
+# with the server's API answers beside them and each run's recording copied aside.
+# tools/audit/studio_live.py judges these rows from that evidence alone; it re-derives the
+# display formatter, the run pooling and the statistics from the recordings' metric.sample
+# records, sharing no code with the engine or the Studio.
+#
+# Every row was written, with its predicted direction and (where theory gives one) its size,
+# before its session ran. `verdict` is filled in afterwards:
+#   pass | fixed (an engine/server/Studio defect, fixed at its cause; `test` pins it) |
+#   wrong-expectation (corrected with the evidence in `note`) | open (documented).
+# `fault` names the evidence fault `studio_live.py selftest` applies to show the row can go red.
+#
+# Base: scenarios/credential-lifecycle.yaml (the full US SCMS loop on a 5 x 8 procedural grid,
+# 1,500 veh/h Poisson demand, one RSU, 5 % ConstPos attackers from 60 s, compressed calendar)
+# cut to 120 s, with security.scms.pki_view on. Binary: release v2xw-server built from
+# 486c8cba, copied to the scratchpad; one session per run-lock call; seed 0xC0FFEE_5EED.
+schema: v2xw/scms-run-expectations/1
+
+runs:
+  s1-radio:
+    note: "A, then tx10 (tx_power_dbm 10), tx30 (30), rate5 (messages.rate_hz 5), rate20 (20), nobld (world.buildings.enabled false)"
+  s2-scms:
+    note: "A, then cpp10 (certs_per_period 10), cert200 (full_cert_every_ms 200), vprio (verification_policy prioritized), atk20 (attacker fraction 0.2), poll10 (download_poll_interval_s 10)"
+  s3-run:
+    note: "A, then seed (seed + 1), period5 (time.metric_period_s 5), dem750 (demand 750 veh/h), cw15 (radio.mac.cw_min_vo 15), dcc (radio.dcc.enabled true)"
+
+rows:
+# ------------------------------------------------------------ (1) the page shows the run
+# Every run of every session: each card is the newest window of its headline as the API
+# answers it; the API's series is the recording's samples; the single-metric view's
+# statistics are the recorded series'; the PKI strip is the API's vehicles and providers.
+- {id: SV.cards-api, cases: [s1-radio, s2-scms, s3-run], sides: [A, all], check: cards_api, expect: pass, fault: card,
+   source: "metrics/Card.tsx: the headline number is the newest window (fetchSeries over the last 4 periods at the Hello's metric period); formatNumber in metrics/model.ts"}
+- {id: SV.api-records, cases: [s1-radio, s2-scms, s3-run], sides: [A, all], check: api_records, expect: pass, fault: api,
+   source: "vwp-v1 6.12 metrics.query: binned at the metric period, a series' value per window is that window's metric.sample; the recording keeps every sample (MI.samples-recorded, 113b156e)"}
+- {id: SV.expanded-stats, cases: [s1-radio, s2-scms, s3-run], sides: [A, all], check: expanded, expect: pass, fault: stat,
+   source: "metrics/Expanded.tsx rangeStats: min, mean, p50/p95/p99 (Hyndman-Fan type 7), max and the window count of the full series over the whole run"}
+- {id: SV.pki-strip, cases: [s1-radio, s2-scms, s3-run], sides: [A, all], check: pki_strip, expect: pass, fault: strip,
+   source: "components/pki/HealthStrip.tsx + lib/pkiTopology.ts healthOf: certificates available = sum of the vehicles' usable certificates (inspect.pki vehicles, ground truth); revoked = vehicles a list names, of the providers' devices"}
+# ------------------------------------------------------------ (2) compare-runs
+- {id: SV.compare-ui-api, cases: [s1-radio, s2-scms, s3-run], sides: [variants], check: compare_ui_api, expect: pass, fault: compare_ui,
+   source: "metrics/RunCompare.tsx shows runs.compare's rows (compare.rs) through formatWithUnit"}
+- {id: SV.compare-records, cases: [s1-radio, s2-scms, s3-run], sides: [variants], check: compare_records, expect: pass, fault: compare_api,
+   source: "compare.rs module doc: a run is pooled as the experiment runner pools it - proportions by their counts, ratios of sums by their sums, distributions weighted by n; a per-window count is summed; a gauge (agg max, e.g. crl_entries 'as last published') is its largest value, not a sum over windows"}
+- {id: SV.same-seed, cases: [s1-radio, s2-scms, s3-run], sides: [variants], check: same_seed, expect: pass, fault: seed,
+   source: "compare.rs: same_seed is whether the two scenarios' seeds are equal; the dialog's noise note follows it"}
+- {id: SV.settings-named, cases: [s1-radio, s2-scms, s3-run], sides: [variants], check: settings_named, expect: pass, fault: settings,
+   source: "compare.rs settings_diff: every leaf that differs, with both values; the dialog lists them"}
+- {id: SV.edit-landed, cases: [s1-radio, s2-scms, s3-run], sides: [variants], check: edit_landed, expect: pass, fault: edit,
+   source: "settings window Run: unapplied edits are applied (scenario.set) before run.start, so the run's scenario holds them"}
+- {id: SV.only-edits, cases: [s1-radio, s2-scms, s3-run], sides: [variants], check: only_edits, expect: pass, fault: stray,
+   source: "each variant is the base plus its own edits: the previous variant's edits typed back (an emptied field is unset, widgets.tsx), nothing else touched"}
+- {id: SV.deterministic, cases: [s1-radio, s2-scms, s3-run], side: A, check: deterministic, expect: pass, fault: digest,
+   source: "same scenario, same seed: byte-identical output (02-architecture determinism); run A of every session is the base"}
+
+# ------------------------------------------------------------ (3) the change moved the run as theory says
+# s1-radio: Radio & Channel, Messages, World
+- {id: LV.tx10.rssi, case: s1-radio, side: tx10, check: predict, metric: stats.mean_rssi_dbm, expect: down, delta: [-13.5, -6.0], fault: swap,
+   source: "log-distance link budget: received power falls dB for dB with EIRP (Rappaport 4.9): -13 dB over the same links; less in magnitude if the mean is over decoded frames only (the weakest links drop out)"}
+- {id: LV.tx10.pdr, case: s1-radio, side: tx10, check: predict, metric: pdr, expect: down, min_change: 0.02, fault: swap,
+   source: "less SNR at every distance lowers the PRR curve (Bai, Stancil, Krishnan, VTC 2010); NLOS street-canyon links fall under sensitivity first"}
+- {id: LV.tx10.attempts, case: s1-radio, side: tx10, check: predict, metric: stats.rx_attempts, expect: same, tolerance: 0.02, fault: scale,
+   source: "run-cost.yaml: the followed set is taken at the fixed 33 dBm reference EIRP (FCC 47 CFR 95.3204(b)), so a power study changes outcomes, not what is evaluated"}
+- {id: LV.tx10.frames, case: s1-radio, side: tx10, check: predict, metric: stats.tx.all, expect: same, tolerance: 0.03, fault: scale,
+   source: "J2945/1 6.3.6: the BSM rate is 10 Hz at low density whatever the power; the backend's RSU traffic moves a little with reception"}
+- {id: LV.tx30.rssi, case: s1-radio, side: tx30, check: predict, metric: stats.mean_rssi_dbm, expect: up, delta: [3.0, 7.5], fault: swap,
+   source: "+7 dB EIRP is +7 dB at every receiver over the same links (Rappaport 4.9); less over decoded frames as weaker links join"}
+- {id: LV.tx30.pdr, case: s1-radio, side: tx30, check: predict, metric: pdr, expect: up, min_change: 0.01, fault: swap,
+   source: "more SNR raises the PRR curve (Bai et al. 2010)"}
+- {id: LV.rate5.frames, case: s1-radio, side: rate5, check: predict, metric: stats.tx.bsm, expect: down, ratio: [0.45, 0.56], fault: swap,
+   source: "frames = rate x vehicles x time (J2945/1 periodic BSM): 5/10 Hz halves the BSMs"}
+- {id: LV.rate5.cbr, case: s1-radio, side: rate5, check: predict, metric: cbr, expect: down, ratio: [0.35, 0.7], fault: swap,
+   source: "CBR is offered airtime (ETSI TS 102 687): half the BSMs, about half the busy time; SPDUs to and from the RSU are unchanged"}
+- {id: LV.rate5.attempts, case: s1-radio, side: rate5, check: predict, metric: stats.rx_attempts, expect: down, ratio: [0.45, 0.6], fault: swap,
+   source: "each frame is followed to every receiver in reach (run-cost.yaml), so attempts follow frames"}
+- {id: LV.rate5.events, case: s1-radio, side: rate5, check: predict, metric: events_processed, expect: down, ratio: [0.4, 0.85], fault: swap,
+   source: "the DES work is dominated by per-frame tx and rx events; mobility steps are unchanged, so less than the frames' halving"}
+- {id: LV.rate20.frames, case: s1-radio, side: rate20, check: predict, metric: stats.tx.bsm, expect: up, ratio: [1.85, 2.1], fault: swap,
+   source: "rate x vehicles x time: 20/10 Hz doubles the BSMs at a CBR far below DCC thresholds"}
+- {id: LV.rate20.cbr, case: s1-radio, side: rate20, check: predict, metric: cbr, expect: up, ratio: [1.5, 2.2], fault: swap,
+   source: "twice the offered airtime (ETSI TS 102 687)"}
+- {id: LV.rate20.wall, case: s1-radio, side: rate20, check: predict, metric: cost.wall_s, expect: up, min_change: 0.15, fault: swap,
+   source: "run-cost.yaml: wall time follows frames and reception attempts (12-15 us of CPU per attempt); twice the attempts"}
+- {id: LV.nobld.pdr, case: s1-radio, side: nobld, check: predict, metric: pdr, expect: up, min_change: 0.05, fault: swap,
+   source: "30 m block buildings put cross-street links in NLOS (+20-30 dB, WINNER II B1 / 3GPP TR 37.885 UMi NLOS); without them every link is LOS"}
+- {id: LV.nobld.rxok, case: s1-radio, side: nobld, check: predict, metric: stats.rx_ok, expect: up, min_change: 0.1, fault: swap,
+   source: "LOS everywhere: more of the same attempts decode"}
+
+# s2-scms: Certificates & SCMS, Security & Crypto, Attackers, Backend
+- {id: LV.cpp10.pool, case: s2-scms, side: cpp10, check: predict, metric: cert_pool_valid, expect: up, ratio: [1.5, 2.1], fault: swap,
+   source: "CAMP 1.2.2 / IEEE 1609.2.1: a batch holds certs_per_period certificates for each i-period; the valid-now pool of a provisioned vehicle is that number, 5 -> 10"}
+- {id: LV.cpp10.strip, case: s2-scms, side: cpp10, check: predict, metric: pki.certs, expect: up, ratio: [1.5, 2.1], fault: swap,
+   source: "the strip sums usable certificates over pool_periods periods: 2 x 5 -> 2 x 10 per provisioned vehicle"}
+- {id: LV.cert200.share, case: s2-scms, side: cert200, check: predict, metric: full_cert_share, expect: up, ratio: [2.5, 5.5], fault: swap,
+   source: "IEEE 1609.2 signer choice, J2945/1 6.3.4: a full certificate once per full_cert_every_ms; at 10 Hz 1000 ms is 1 in 10 (0.1), 200 ms 1 in 2 (0.5); new-neighbour and pseudonym-change certificates are a floor on both"}
+- {id: LV.cert200.overhead, case: s2-scms, side: cert200, check: predict, metric: envelope_overhead, expect: up, min_change: 0.2, fault: swap,
+   source: "a certificate is about 125 B more than a digest (IEEE 1609.2 8-octet HashedId8 vs explicit certificate)"}
+- {id: LV.vprio.rate, case: s2-scms, side: vprio, check: predict, metric: verify_rate, expect: down, min_change: 0.05, fault: swap,
+   source: "verify-on-demand / prioritized (1609.2 verification policy, CAMP VSC3): a receiver verifies only the messages its applications act on, not every one"}
+- {id: LV.vprio.pdr, case: s2-scms, side: vprio, check: predict, metric: pdr, expect: same, tolerance: 0.01, fault: scale,
+   source: "verification happens above the radio: what is delivered on the air does not change"}
+- {id: LV.atk20.crl, case: s2-scms, side: atk20, check: predict, metric: crl_entries, expect: up, min_change: 0.01, fault: swap,
+   source: "four times the ConstPos attackers from 60 s: more reported, corroborated and revoked devices on a CRL within the 30 s cadence (SCMS CRL, MA corroborated); open if no list names anyone by 120 s"}
+- {id: LV.atk20.pdr, case: s2-scms, side: atk20, check: predict, metric: pdr, expect: same, tolerance: 0.03, fault: scale,
+   source: "a constant-position attacker still transmits at the BSM rate: the channel load and delivery are those of the honest fleet"}
+- {id: LV.poll10.pool, case: s2-scms, side: poll10, check: predict, metric: cert_pool_valid, expect: down, min_change: 0.01, fault: swap,
+   source: "CAMP 1.2.2 download polling: each vehicle waits a uniform phase of the poll interval for its batch, mean 1 s -> 5 s, so fewer vehicles hold certificates in the early windows"}
+- {id: LV.poll10.pdr, case: s2-scms, side: poll10, check: predict, metric: pdr, expect: same, tolerance: 0.02, fault: scale,
+   source: "the download is on the Uu/backhaul path; on the air only the polls' share of SPDUs changes"}
+
+# s3-run: Run, Output, Traffic, Medium Access, Congestion Control
+- {id: LV.seed.pdr, case: s3-run, side: seed, check: predict, metric: pdr, expect: same, tolerance: 0.05, fault: scale,
+   source: "a seed draws another sample of the same process: a pooled proportion moves only within its run-to-run noise"}
+- {id: LV.period5.windows, case: s3-run, side: period5, check: predict, metric: windows.pdr, expect: down, ratio: [0.18, 0.22], fault: swap,
+   source: "schema.rs metric_period_s: one sample per period, 120 s / 1 s -> 120 s / 5 s windows"}
+- {id: LV.period5.pdr, case: s3-run, side: period5, check: predict, metric: pdr, expect: same, tolerance: 0.000001, fault: scale,
+   source: "the period only regroups the same receptions: pooled successes / trials over the run are the same counts"}
+- {id: LV.period5.latency, case: s3-run, side: period5, check: predict, metric: e2e_latency, expect: same, tolerance: 0.002, fault: scale,
+   source: "an n-weighted mean of window means is the run mean whatever the windows (to the quantum)"}
+- {id: LV.dem750.actors, case: s3-run, side: dem750, check: predict, metric: stats.actors_seen, expect: down, ratio: [0.3, 0.8], fault: swap,
+   source: "Poisson arrivals: 750/1500 halves the expected vehicles (about 50 -> 25 in 120 s, +-2 sigma), the RSU is one actor in both"}
+- {id: LV.dem750.attempts, case: s3-run, side: dem750, check: predict, metric: stats.rx_attempts, expect: down, ratio: [0.1, 0.55], fault: swap,
+   source: "attempts are sender-receiver pairs in reach, about N^2: 0.25 at half the fleet"}
+- {id: LV.dem750.wall, case: s3-run, side: dem750, check: predict, metric: cost.wall_s, expect: down, min_change: 0.1, fault: swap,
+   source: "run-cost.yaml: wall follows attempts and frames"}
+- {id: LV.cw15.access, case: s3-run, side: cw15, check: predict, metric: mac_access_delay, expect: up, min_change: 0.01, fault: swap,
+   source: "IEEE 802.11-2020 10.22.2: a frame that finds the medium busy waits uniform(0, CW) slots; CWmin 3 -> 15 is a mean 1.5 -> 7.5 slots (+78 us at 13 us); a frame finding it idle for AIFS goes at once, so the mean moves by the busy share"}
+- {id: LV.cw15.pdr, case: s3-run, side: cw15, check: predict, metric: pdr, expect: same, tolerance: 0.02, fault: scale,
+   source: "at a low CBR collisions are rare either way: delivery moves little"}
+- {id: LV.dcc.frames, case: s3-run, side: dcc, check: predict, metric: stats.tx.bsm, expect: same, tolerance: 0.05, fault: scale,
+   source: "J2945/1 / ETSI TS 102 687 DCC acts above a CBR threshold; this fleet's CBR is far below it, so the BSM rate stays 10 Hz"}
