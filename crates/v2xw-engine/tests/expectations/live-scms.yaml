@@ -792,8 +792,8 @@ rows:
   expect: eq
   value: 0
   source: 'a store of 0 bytes keeps nothing: no report is ever uploaded'
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
 - id: LS.RQ0.revocations
   base: L
   variant: RQ0
@@ -802,8 +802,8 @@ rows:
   expect: eq
   value: 0
   source: 'no report reaches the MA: nobody is revoked'
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
 - id: LS.RQ0.evicted
   base: L
   variant: RQ0
@@ -811,8 +811,8 @@ rows:
   measure: p2.reports_evicted
   expect: up
   source: every stored report is deleted for the quota at once
-  measured: pending
-  verdict: pending
+  measured: 0 -> 517
+  verdict: pass
 - id: LS.RQ2K.received
   base: L
   variant: RQ2K
