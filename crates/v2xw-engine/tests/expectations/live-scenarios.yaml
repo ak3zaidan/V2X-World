@@ -1,0 +1,119 @@
+# Live scenario audit (docs/validation/live-scenarios-2026-10-25.md): every scenario file in
+# scenarios/ boots, runs a short window (60 s, or its own length when shorter) and stays sane;
+# then one base run per world against published or physical bounds.
+#
+# Checker: tools/audit/live_scenarios.py (reads run-report.json, metrics.json and the run's
+# stderr only; shares no code with the engine). `check` evaluates the rows; `selftest` applies
+# each row's `fault` in memory and requires the row to go red.
+#
+# Every row's `expect` and band was written before its runs were read. `verdict` afterwards:
+#   pass | fixed (engine defect fixed at its cause; `test` pins it) | wrong-expectation
+#   (corrected, evidence in `note`) | open (documented).
+#
+# Runs: release v2xw built from 486c8cba, `--record-level events --build-utc 2026-01-01T00:00:00Z
+# --duration-s min(60, own)`, the scenario's own seed; one run per run-lock call. Run names are
+# the scenario path under scenarios/ with `/` as `__` and no extension (`all` = every run).
+schema: v2xw/scms-run-expectations/1
+
+runs:
+  all: {scenario: "every scenarios/**/*.yaml that `v2xw validate` accepts", note: "60 s window or shorter"}
+  midtown-normal-rep: {scenario: scenarios/midtown-normal.yaml, note: "midtown-normal again, same seed: determinism"}
+  phase1-grid-rep: {scenario: scenarios/phase1-grid.yaml, note: "phase1-grid again, same seed: determinism"}
+
+rows:
+# ---------------------------------------------------------------- (1) every scenario
+- {id: SC.boots, runs: all, check: boots, expect: pass, fault: exit-code,
+   source: "a shipped scenario that validates must run: exit 0 and a run report"}
+- {id: SC.no-panic, runs: all, check: no_panic, expect: pass, fault: panic-line,
+   source: "no Rust panic on stderr"}
+- {id: SC.records, runs: all, check: records, expect: pass, fault: unverified,
+   source: "run.rs: the recording is written and read back (integrity_verified), records > 0, metric samples > 0"}
+- {id: SC.finite, runs: all, check: finite, expect: pass, fault: nan,
+   source: "no NaN or infinity in any metric sample (D9 quantised values are finite)"}
+- {id: SC.arithmetic, runs: all, check: sample_arithmetic, expect: pass, fault: successes-over-trials,
+   source: "def.rs SampleValue: proportion = successes/trials in [0,1] inside its Wilson interval; ratio of sums = numerator/denominator (sums on the 1e-3 grid); summary min <= p50 <= p95 <= p99 <= max, mean in [min, max]; counts and non-negative units >= 0; part-of-whole ratios in [0, 1]"}
+- {id: SC.latency, runs: all, check: latency_positive, expect: pass, fault: negative-latency,
+   source: "a message cannot arrive before it is sent: e2e_latency, aoi, verify_cost min >= 0 and mean > 0 (mac_access_delay may be 0: 802.11 sends at once on a medium idle for AIFS)"}
+- {id: SC.kinematics, runs: all, check: kinematics_bounds, expect: pass, fault: speed-80,
+   params: {vmax: 45.0, amin: -10.0, amax: 5.0},
+   source: "speeds in [0, 45 m/s] on every shipped world (no US limit above 85 mph = 38 m/s); braking at most about 1 g (dry-asphalt mu ~ 1.0), acceleration at most ~5 m/s^2 (Wong, Theory of Ground Vehicles)"}
+- {id: SC.traffic-physics, runs: all, check: fundamental, expect: pass, fault: flow-x2,
+   source: "Edie (1963): flow = density x space-mean speed exactly per window; network flow <= 2,400 veh/h/ln (HCM 7th ed. basic freeway capacity), density <= ~150 veh/km/ln (jam spacing ~6.7 m)"}
+- {id: SC.demand, runs: all, check: demand, expect: pass, fault: no-spawn,
+   source: "vehicles appear when the scenario has demand, and never more than max_total_vehicles"}
+- {id: SC.radio, runs: all, check: radio_output, expect: pass, fault: no-rx,
+   source: "every shipped scenario has a fleet and a radio: frames transmitted > 0, receptions ok > 0, node.tx records"}
+- {id: SC.scms, runs: all, check: scms_output, expect: pass, fault: drop-scms-channels, fault_run: midtown-normal,
+   source: "security.scms set -> pki.flow / backend.state / pki.state / node.credentials records"}
+- {id: SC.threats, runs: all, check: threat_output, expect: pass, fault: drop-threat-channels, fault_run: attack-fake-positions,
+   source: "threats configured -> attack or detector records"}
+- {id: SC.peds, runs: all, check: ped_output, expect: pass, fault: drop-ped-metrics, fault_run: midtown-pedestrians,
+   source: "pedestrians configured -> ped_* metric samples (vru.rs)"}
+- {id: SC.determinism, runs: [midtown-normal-rep, phase1-grid-rep], check: same_digest, expect: pass, fault: digest,
+   params: {other_of: {midtown-normal-rep: midtown-normal, phase1-grid-rep: phase1-grid}},
+   source: "same scenario, same seed, same binary -> byte-identical record digest"}
+
+# ---------------------------------------------------------------- (2) one base run per world
+- {id: W.MID.speed, runs: [midtown-normal], check: band, expect: pass, fault: "scale:10",
+   params: {metric: mean_speed, lo: 2.0, hi: 9.0},
+   source: "NYC DOT Mobility Report 2019: Midtown CBD travel speed 4.7 mph (2.1 m/s); NYC limit 25 mph (11.2 m/s); a lighter-than-real fleet is faster than 2.1 m/s but stops at signals every ~80 m (Manhattan blocks)"}
+- {id: W.MID.vmax, runs: [midtown-normal, midtown-rain, midtown-rush-hour, base__midtown], check: kinematics_bounds, expect: pass, fault: speed-80,
+   params: {vmax: 16.0, amin: -10.0, amax: 5.0},
+   source: "25 mph limit (11.2 m/s); free-flow speeds observed up to ~1.4x the limit on short urban links"}
+- {id: W.MID.headway, runs: [midtown-normal], check: band, expect: pass, fault: "scale:10",
+   params: {metric: headway_time, lo: 1.0, hi: 6.0},
+   source: "urban car-following time headways: mode 1-2 s, means 1.5-3 s at signals (HCM saturation headway ~1.9 s); light traffic lengthens the mean"}
+- {id: W.MID.latency, runs: [midtown-normal], check: band, expect: pass, fault: "scale:10",
+   params: {metric: e2e_latency, lo: 0.5, hi: 100.0},
+   source: "SAE J2945/1: BSM latency budget 100 ms; one-hop DSRC with sign + verify is a few to ~15 ms"}
+- {id: W.MID.pdr-distance, runs: [midtown-normal], check: pdr_distance, expect: pass, fault: pdr-rise,
+   params: {metric: pdr, dim: dist_bin, near_min: 0.9, far_max: 0.6, tol: 0.05, min_trials: 30},
+   source: "PDR falls with distance (log-distance path loss plus building shadowing, Mangel et al. 2011); near-field (0-20 m) almost always line of sight"}
+- {id: W.MID.rain-speed, runs: [midtown-rain], check: ratio_between, expect: pass, fault: "scale:10",
+   params: {metric: mean_speed, other: midtown-normal, lo: 0.80, hi: 0.99},
+   source: "HCM 7th ed. Exh. 12-20: heavy rain lowers free-flow speed 6-14 %; urban signal delay dilutes it"}
+- {id: W.MID.rain-pdr, runs: [midtown-rain], check: ratio_between, expect: pass, fault: "scale:10",
+   params: {metric: pdr, other: midtown-normal, lo: 0.95, hi: 1.05},
+   source: "ITU-R P.838-3 at 5.9 GHz, 25 mm/h: ~0.1 dB/km, < 0.05 dB at 300 m: PDR unchanged within noise"}
+- {id: W.POR.speed, runs: [portland], check: band, expect: pass, fault: "scale:10",
+   params: {metric: mean_speed, lo: 2.0, hi: 10.0},
+   source: "Portland downtown limit 20 mph (8.9 m/s, PBOT 2017), 200 ft blocks with signals at nearly every corner"}
+- {id: W.POR.vmax, runs: [portland, portland-downtown], check: kinematics_bounds, expect: pass, fault: speed-80,
+   params: {vmax: 17.0, amin: -10.0, amax: 5.0},
+   source: "20-30 mph limits downtown (8.9-13.4 m/s); x1.25 for observed speeding"}
+- {id: W.POR.pdr-distance, runs: [portland], check: pdr_distance, expect: pass, fault: pdr-rise,
+   params: {metric: pdr, dim: dist_bin, near_min: 0.9, far_max: 0.6, tol: 0.05, min_trials: 30},
+   source: "as W.MID.pdr-distance"}
+- {id: W.HWY.speed, runs: [highway-congestion], check: band, expect: pass, fault: "scale:10",
+   params: {metric: mean_speed, lo: 8.0, hi: 34.0},
+   source: "US freeway free-flow 60-75 mph (27-33 m/s); heavy traffic and breakdowns pull the space-mean speed down, not below stop-and-go (~8 m/s) in the first minute"}
+- {id: W.HWY.vmax, runs: [highway-congestion], check: kinematics_bounds, expect: pass, fault: speed-80,
+   params: {vmax: 37.0, amin: -10.0, amax: 5.0},
+   source: "70 mph limit (31.3 m/s) + 15 % speeding"}
+- {id: W.HWY.pdr-distance, runs: [highway-congestion], check: pdr_distance, expect: pass, fault: pdr-rise,
+   params: {metric: pdr, dim: dist_bin, near_min: 0.95, far_max: 0.95, tol: 0.05, min_trials: 30},
+   source: "open road, line of sight: DSRC PDR ~1 near and falling with distance (Bai, Stancil and Krishnan, 2010)"}
+- {id: W.GRID.vmax, runs: [phase1-grid, vru-grid], check: kinematics_bounds, expect: pass, fault: speed-80,
+   params: {vmax: 20.0, amin: -10.0, amax: 5.0},
+   source: "procedural urban grid, 50 km/h-class streets"}
+- {id: W.GRID.pdr-distance, runs: [phase1-grid], check: pdr_distance, expect: pass, fault: pdr-rise,
+   params: {metric: pdr, dim: dist_bin, near_min: 0.9, far_max: 0.95, tol: 0.05, min_trials: 30},
+   source: "as W.MID.pdr-distance"}
+- {id: W.PDR.distance, runs: [pdr-vs-distance], check: pdr_distance, expect: pass, fault: pdr-rise,
+   params: {metric: pdr, dim: dist_bin, near_min: 0.95, far_max: 0.7, tol: 0.05, min_trials: 30},
+   source: "the PDR-vs-distance study: monotone fall with distance, near bins ~1 (Bai et al. 2010; Kenney 2011)"}
+
+# ---------------------------------------------------------------- (3) radio worlds
+- {id: R.DSRC.latency, runs: [radio-dsrc], check: band, expect: pass, fault: "scale:10",
+   params: {metric: e2e_latency, lo: 0.5, hi: 100.0}, source: "SAE J2945/1 100 ms budget"}
+- {id: R.LTE.latency, runs: [radio-lte], check: band, expect: pass, fault: "scale:10",
+   params: {metric: e2e_latency, lo: 1.0, hi: 100.0},
+   source: "3GPP TR 36.885 / TS 22.185: 100 ms for V2V awareness; SPS selection window <= 100 ms (06 §6 item 16 records p95 112 ms, so the mean must still be under 100)"}
+- {id: R.NR.latency, runs: [radio-nr], check: band, expect: pass, fault: "scale:10",
+   params: {metric: e2e_latency, lo: 0.5, hi: 100.0}, source: "3GPP TS 22.186: 100 ms for basic awareness; NR mode 2 slots <= 1 ms"}
+- {id: R.DSRC.cbr, runs: [radio-dsrc], check: band, expect: pass, fault: "scale:10",
+   params: {metric: cbr, lo: 0.0, hi: 0.6},
+   source: "SAE J2945/1 congestion control keeps CBR under ~0.6-0.8; a 180 s rush-hour overlay at 10 Hz should not saturate"}
+- {id: R.LTE-vs-DSRC.pdr, runs: [radio-lte], check: ratio_between, expect: pass, fault: "scale:10",
+   params: {metric: pdr, other: radio-dsrc, lo: 1.0, hi: 2.0},
+   source: "LTE-V2X PC5's turbo coding, SC-FDMA and blind retransmission give a 3-6 dB link-budget gain over 802.11p (5GAA 2017, Qualcomm/Ford field tests: ~2x range), so its PDR is at least DSRC's"}
