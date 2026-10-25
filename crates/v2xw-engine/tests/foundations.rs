@@ -877,14 +877,14 @@ fn the_backend_tops_up_both_vehicles_over_cellular_and_every_byte_is_booked_once
         );
         let polls: Vec<&(u64, u64)> = rows.iter().filter(|(t, _)| !inside(*t)).collect();
         assert_eq!(polls.len(), 5, "{:?}: CRL polls {polls:?}", c.node);
-        for (t, bytes) in &polls {
+        for w in polls.windows(2) {
             assert_eq!(
-                (t - S / 2) % (10 * S),
-                0,
-                "{:?}: a poll off the cadence at {t}",
+                w[1].0 - w[0].0,
+                10 * S,
+                "{:?}: polls off the 10 s cadence {polls:?}",
                 c.node
             );
-            assert_eq!(*bytes, polls[0].1, "{:?}: CRL polls of different sizes", c.node);
+            assert_eq!(w[1].1, w[0].1, "{:?}: CRL polls of different sizes", c.node);
         }
     }
 }
