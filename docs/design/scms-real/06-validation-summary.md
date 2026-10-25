@@ -113,6 +113,13 @@ A row with two verdicts is counted under its first.
 **Final match: 275 of 326 rules (84.4 %) do what the real system does** (matches plus fixed).
 It was 264 (81.0 %) on 2026-10-18, 270 (82.8 %) at `0f7eda5c` and 275 at `bc3bca1b`.
 
+**What moved in the 2026-10-25 residual, clock and matrix wave: no rule verdict.** Every
+fix was a runtime defect with no checklist row: the power-on CRL gate period (§6 item 22),
+the 27 incomplete top-ups (§6 item 5), parallel provisioning cryptography (§6 item 3), the
+MaxAcceleration block and TM-1 (§6 item 21). The matrix re-runs and QD confirmed R-FFWIN
+and the relay fix (§6 items 2, 5, 23). Configuration rows: 714, of which 569 pass, 41
+fixed, 51 corrected and 53 open (§2.2), plus 12 Paper 1 rows pending their runs.
+
 **What moved in the 2026-10-24 backend, density and Paper 1 wave: no rule verdict.**
 Every fix was a runtime defect with no checklist row (§6 items 1–3, 5, 8, 11, 13, 21).
 The largest runtime items now open are the honest report volume at full density (the
@@ -150,7 +157,7 @@ in each table's expectations file.
 
 | Table | Rows | Pass | Fixed (bug, then pass) | Expectation wrong, corrected | Open |
 |---|---|---|---|---|---|
-| Matrix: 34 runs (32 one-change variants of the Midtown realism base, plus `gnss-raw` and `us-profile`); 44 rows re-measured on `81a12183` with the 300 s base (rerun-a, 0 fail), 55 still carry their `77cffb5b` values (`scms-matrix.yaml`) | 99 | 80 | 7 | 11 | 1 |
+| Matrix: 34 runs (32 one-change variants of the Midtown realism base, plus `gnss-raw` and `us-profile`) and QD25 (the quarter fleet end to end); M0 and 11 variants re-measured on `8becf72a` with the 300 s base (rerun-2026-10-25, 0 fail; rsu5-reports, rsu0-topups and pen0-topups corrected), 44 rows on `81a12183` (rerun-a), 10 variants still at their `77cffb5b` values (`scms-matrix.yaml`) | 109 | 87 | 7 | 12 | 3 |
 | Realism rows on the matrix runs (`runtime_expectations.yaml`): 59 of the 62 old rows re-run on `81a12183` with the 300 s base, plus 16 new rows N1–N16 (rerun-a); V7 ×3 (`fleet2x`) not re-run and counted at their `77cffb5b` pass | 78 | 62 | 0 | 13 | 3 |
 | Settings knobs, same-seed pairs (knobs) | 21 | 15 | 3 | 2 | 1 |
 | Effects table (effects) | 88 | 77 | 7 | 4 | 0 |
@@ -165,8 +172,8 @@ in each table's expectations file.
 | Full bench on `fe3757b9`: R-FFSLOW on the conformance and quarter files, the quarter fleet end to end, the full-scale file end to end (`scms-full-bench.yaml`, full-bench) | 10 | 6 | 0 | 2 | 2 |
 | Re-runs and benchmark variants on `81a12183`: PQ cycle and hybrid, relay repro, R-FS40, `gnss-raw`, MW/MWC/MWC2, Q60 LTE, 2× density and Portland (`scms-variants.yaml`, rerun-b) | 60 | 51 | 0 | 5 | 4 |
 | Oracle on fresh conf and mbr records of `81a12183`, 32 rows each with OF-3 and OF-3-JOIN (oracle-24 §1–§3); 3 rows red on R-JOINCRL, green after its fix | 64 | 61 | 3 | 0 | 0 |
-| Paper 1 features in 41 real runs on `e15bfec1`: timing classes, MA store, VeReMi export, BeaconFrequency, P1-E4 against Wyoming, determinism (`scms-paper1.yaml`, paper1) | 73 | 55 | 4 | 4 | 10 |
-| **All** | **700** | **559** | **39** | **50** | **52** |
+| Paper 1 features in 41 real runs on `e15bfec1` plus the speed-matched E4S run on the v2 timing model: timing classes, MA store, VeReMi export, BeaconFrequency, P1-E4 against Wyoming, determinism (`scms-paper1.yaml`, paper1 §7); 12 further TM-1 and E4S rows written before their runs and still `pending` (not counted) | 77 | 58 | 6 | 4 | 9 |
+| **All** | **714** | **569** | **41** | **51** | **53** |
 
 The realism file records no per-row "fixed" verdict. The rows that the R-USFP fix turned
 green are counted as pass, and the 6 rows corrected in the re-run (Z1, Z3, Z4, A3,
@@ -737,7 +744,9 @@ whether a full-fleet misbehaviour rate is a real-world number.
    own where it ends, and the next live window on the period grid; `mac.cbr` spans are
    each window's own. Test `calendar.rs`
    `a_metric_window_that_reaches_a_fast_forward_is_reported_at_its_own_end` (red on
-   `e15bfec1`: no samples at 25 and 45 s). The original description: The 230–240 s window is reported at 43,170 s and the
+   `e15bfec1`: no samples at 25 and 45 s). **Confirmed at quarter fleet 2026-10-25**
+   (rerun-2026-10-25, QD25 rows): the 43,215 s window closes where the fast-forward starts
+   and its rate is not diluted. The full fleet (FB3) is not re-run. The original description: The 230–240 s window is reported at 43,170 s and the
    43,220–43,230 s window at 172,800 s, with rates divided over the frozen hours
    (`verify_rate` 115.7/s, CBR 0). Those two samples are left out of every table. An
    analyst reading `metrics.json` directly would see them.
@@ -760,7 +769,8 @@ whether a full-fleet misbehaviour rate is a real-world number.
      each provisioning delivery (RA expansion and signing, ACA issuance, RA checks, device
      opening) runs on the rayon pool, byte-identical at any thread count (the ACA's DRBG
      blocks are guessed and verified, `pdu::par_map_drbg`): the burst slice 93.0 → 43.2 s
-     on 1 → 8 threads at quarter fleet, same digest, and the digest of `8becf72a`.4. **Full-scale memory: what is left.** The target is met at 2,105 MB. The largest live
+     on 1 → 8 threads at quarter fleet, same digest, and the digest of `8becf72a`.
+4. **Full-scale memory: what is left.** The target is met at 2,105 MB. The largest live
    structure is the SCMS backend's per-device state (113 MB of RA, LA and PCA records and
    batch files plus 58 MB of enrolment for 970 devices at 40 s, memden §1.1). Dropping it
    changes what the MA's investigation and re-downloads rely on, so each part needs an
@@ -774,7 +784,8 @@ whether a full-fleet misbehaviour rate is a real-world number.
    `report-forward` unit that takes it onto its backhaul (`Phase2::relay_delivered`), an
    unconfirmed one stays stored and goes again on an RFC 6298 timer (1 s doubling to 64 s),
    and the forward dedup is per frame: 88 of 89 delivered, 88 counted, 1 stored at the end.
-   FB3 itself (4.2 h) is not re-run. **The 27 top-ups: traced and fixed 2026-10-24
+   **Confirmed on QD 2026-10-25** (rerun-2026-10-25): 0 reports lost, uploads equal the
+   reports at the MAs. FB3 itself (4.2 h) is not re-run. **The 27 top-ups: traced and fixed 2026-10-24
    (backend residuals, `bdcac292`).** Each is a vehicle that drove out of the map with its
    top-up in flight: `Phase2::retire` dropped it, and the top-up counted as started and
    nothing else. Reproduced on the quarter fleet with the week's top-up moved into the live
@@ -782,7 +793,7 @@ whether a full-fleet misbehaviour rate is a real-world number.
    at 7,400 s, and the 6 missing are exactly the 6 vehicles that left with one in flight.
    The device's flow carries on in the backend; only the vehicle is gone. Now counted as
    `topups_left_area` (report and `ee` view), so started = completed + refused + left + in
-   flight; QD completes 278 of 278 because its 15 s after 43,200 s lost no vehicle. 27 of 1,800 top-ups did not complete. 255 reports were not filed
+   flight; QD completes 278 of 278 because its 15 s after 43,200 s lost no vehicle. FB3 as recorded: 27 of 1,800 top-ups did not complete (now explained). 255 reports were not filed
    (212 with too few BSMs on hand, 43 by RSUs that hold no pseudonym certificate, which is
    the R-UNSEC rule acting).
 6. **Privacy at full fleet is still unmeasured.** FB3 counted 0 pseudonym changes and 0 link
@@ -958,9 +969,22 @@ whether a full-fleet misbehaviour rate is a real-world number.
       row reads 0.99, as required). The tail matches; the residual body is too tight (p90
       2.3 cm against 6.0 cm, receiver output noise), and the highway runs at a median 22
       m/s against 34.
-    - **TM-1:** a k>0 slip in `bsm_timing.rs` moves secMark back and keeps the position,
-      so 17 % of free BSMs repeat a secMark and `generationTime` trips less often than
-      secMark, the opposite of the data. Suggested fix: a drifting per-device BSM clock.
+    - **Update 2026-10-25 (clock track, paper1 §7, `cca82fcd`):** timing schema
+      `v2xw.bsm_timing.v2` (v1 files still read; `bsm-timing-cvpilot-v1.yaml` is the frozen
+      v1 fit) adds `bsm_clock`, a free OBU's own BSM timer (100 ms + per-device drift +
+      per-BSM deviation; secMark and generationTime are the tick, msgCnt contiguous) and
+      `output_noise` on the transmitted speed and heading. `tools/realdata` 1.1.0 fits them
+      on Tampa + Orem (free drift median 6 ms, returning slips 0.0565, locked instant
+      N(0.225, 0.275) ms, noise 0.103 m/s and 0.30°); the frozen classifier is unchanged.
+      **E4-SPEED fixed:** `p1-e4-s.yaml` (6 km straights, 90 s) runs at a median 29.8 m/s.
+      **P1-E4 on E4S: KS 0.169** (was 0.337, still above 0.092): p50/p90/p99 2.1/4.1/6.1 cm
+      against Wyoming's 1.6/6.0/15.7; the 5–16 cm tail is missing because the fitted noise
+      is Gaussian (E4-BODY open, narrower). 0 triggers in 10,449 pairs, 0 secMark repeats,
+      0 honest revocations. The `P1.TM1.*` and other `P1.E4S.*` rows (12) are pending:
+      the shared run lock let 1 of 8 runs start.
+    - ~~**TM-1:**~~ **fixed in the engine 2026-10-25** (rows pending): a k>0 slip in
+      `bsm_timing.rs` moved secMark back and kept the position, so 17 % of free BSMs
+      repeated a secMark; a slip now moves the position k fixes later and keeps secMark.
     - ~~One honest device blocked by sound rules (k up to 5) through MaxAcceleration~~:
       **an unrealistic deceleration, fixed by the density wave** (2026-10-24, backend
       residuals). Node 262 is a vehicle closing on a standing one that the advance cap
@@ -983,6 +1007,20 @@ whether a full-fleet misbehaviour rate is a real-world number.
     period, and `node.rx` labels it `signature-invalid` (the CRL gate, not a receiver rule,
     refuses it). Suggested fix: compute the gate period from the device clock in
     `classify`. MWC W4's `node.rx` labels were not re-run on the item 13 fix.
+23. **Matrix re-runs and QD on `8becf72a`** (rerun-2026-10-25). M0 and 11 variants
+    (on-demand, camp, test-ctl, split-90-10, rsu5, rsu0, pen0, sybil, ma-legacy, att10,
+    gnss-clean) on the 300 s base, judged against expectations committed first
+    (`7579e3e9`): 0 fail; testctl-attackers and split-a-up now pass; three expectations
+    corrected (rsu5-reports eq 0 under R-UNSEC; rsu0- and pen0-topups at most M0's 105).
+    QD (quarter fleet end to end): 0 cases, 0 revoked, R-FFWIN and the relay fix confirmed;
+    10 QD25 rows, each red when injected outside its band (13 of 13 new or corrected rows).
+    Open: QD25-wall (200 s against 189 s, contended machine) and **QD25-memory** (247.5 MB
+    against 227 MB, +9 %, untraced; a bisect of `fe3757b9..8becf72a` is owed). Untraced:
+    rsu0 and rsu5 revoke 3 attackers against M0's 2; camp records no enforced stage; a
+    frozen-span metric window carries a sample count (CBR mean 0, n 308 and 327), so a
+    run-wide pooled mean is diluted unless those windows are dropped. Not re-run: silent,
+    nyc-pilot, real-crypto, fleet2x, lte, nr, full-cert, backhaul-cellular, fleet-half,
+    tls12 (still at their `77cffb5b` values).
 
 ## 7. Every unverifiable item and how it is modelled (29)
 
@@ -1102,8 +1140,10 @@ The totals count each row as its own checklist records it, with the changes in �
 8. **Mobility**: the pedestrian-invariant and kerbside defects, and the `transit` and
    `longrun_budget` failures (§6 item 16).
 9. ~~The power-on CRL gate period~~ (§6 item 22): fixed 2026-10-24 (`297ab7f5`).
-10. **Paper 1** (§6 item 21): a drifting per-device BSM clock for TM-1; the GNSS residual
-    body and the highway speed for P1-E4; VR-2; ~~the MaxAcceleration block~~ (fixed by `standing_leader_stop`); TS 103 759
+10. **Paper 1** (§6 item 21): ~~a drifting per-device BSM clock for TM-1~~ and ~~the
+    highway speed for P1-E4~~ done 2026-10-25 (`cca82fcd`, `p1-e4-s.yaml`); left: the
+    GNSS residual tail (a heavy-tailed noise fit on Tampa + Orem, then one more E4 run,
+    KS 0.169 against 0.092), the :00/:50 grid hops of locked devices; VR-2; ~~the MaxAcceleration block~~ (fixed by `standing_leader_stop`); TS 103 759
     selectable in `detection.local`.
 
 **Owner decisions**
@@ -1136,8 +1176,16 @@ engine tests were fixed by giving each scenario what its test needs (§6 item 9)
 - SPS-aligned BSM generation for LTE-V2X.
 
 **Testing still owed**
-- **From the backend, density and Paper 1 wave:** FB3 and QD on the R-FFWIN and relay
-  fixes; MWC W4's `node.rx` labels; the full-fleet braking re-run and second fast-forward
+- **From the 2026-10-25 residual, clock and matrix wave:** the 12 pending Paper 1 rows
+  (`P1.TM1.*` on BV2, GT05V2, OFFV2, E4SF; E4SWN, E4SV1, E4S2), with `tm1/runall.sh`
+  then `matrix.py check --fill`; MAL1 for `P1.MA.l1-attackers` (MAL1R now revokes 4 of 10
+  against 5 recorded); MWP on the power-on gate fix; the full fleet (FB3 cost and top-ups);
+  the v2xw-threat `us_mbr_timing` test on the clock change; the 10 matrix variants not
+  re-run (silent, nyc-pilot, real-crypto, fleet2x, lte, nr, full-cert, backhaul-cellular,
+  fleet-half, tls12) and the no-hsm, pq-hybrid, gnss-rtk, gnss-raw and realism-variant
+  rows on current code; the QD memory bisect (+9 %, §6 item 23).
+- **From the backend, density and Paper 1 wave:** FB3 on the R-FFWIN and relay
+  fixes (QD done 2026-10-25); MWC W4's `node.rx` labels; the full-fleet braking re-run and second fast-forward
   re-measure; P1-E4 on speed-matched runs after the residual fix.
 - **From the 2026-10-24 wave:** the 55 matrix rows of 19 variants (`on-demand` …
   `real-crypto`) and `fleet2x` (realism V7 ×3) on the 300 s base; MW, MWC, MWP and the MW
@@ -1152,6 +1200,13 @@ engine tests were fixed by giving each scenario what its test needs (§6 item 9)
 - **A full-fleet privacy number**: a live window that reaches 46,800 s, or the NYC pilot
   rule (§6 item 6).
 - **The `d90a6298` plan §4.3 BENCH edit**, if it is still wanted (it was never committed).
+
+Done in the residual, clock and matrix wave (2026-10-25): the power-on CRL gate period,
+the 27 top-ups explained and counted (`topups_left_area`), provisioning cryptography on
+rayon (burst slice 93.0 → 43.2 s, byte-identical), the MaxAcceleration block closed
+(MALOFF and MAL1R block 0 honest devices), TM-1 fixed in the engine, the v2 timing model
+and E4-SPEED, P1-E4 KS 0.337 → 0.169; M0, 11 matrix variants and QD re-run on `8becf72a`
+(0 fail, 3 expectations corrected, R-FFWIN and the relay fix confirmed).
 
 Done in the backend, density and Paper 1 wave (2026-10-24): R-FFWIN, the lost relay
 uploads, `MWP.off-no-backend`, the 47 `Invalid` states, VRU PQ pricing and the `node.rx`
@@ -1189,14 +1244,14 @@ will always model them, each labelled as a setting:
 "Identical" can therefore only ever mean identical wherever the real system is observable. On
 that measure, 275 of 326 rules (84.4 %) match. Every rule the runtime oracle checks passed on
 the last recorded runs (fresh conf and mbr captures of `81a12183` with the R-JOINCRL fix):
-804,515 of 804,515 checks. Across every configuration table, 700 rows: 559 pass, 39 fixed,
-50 corrected expectations and 52 open, of which 13 are open items and 10 the Paper 1
-table's open rows.
+804,515 of 804,515 checks. Across every configuration table, 714 rows: 569 pass, 41 fixed,
+51 corrected expectations and 53 open, of which 9 are the Paper 1 table's open rows and 3
+the matrix's; 12 more Paper 1 rows are pending their runs.
 - **What is left on the checklists:** 22 known deviations, 14 of which have no trust effect,
   and 29 rules no public source can settle.
 - **What is left at runtime:** the honest report volume at full density (no case, but not
   yet a calibrated rate at full fleet), the cost of the rollover window and of each
-  fast-forward stop at full fleet, report airtime (A1), the 27 untraced top-ups, the
-  power-on CRL gate period, P1-E4 against Wyoming and TM-1, R-PQUNSEC and the
+  fast-forward stop at full fleet, report airtime (A1), P1-E4 against Wyoming (the
+  residual tail), the QD memory rise (+9 %) and the 12 pending Paper 1 rows, R-PQUNSEC and the
   backend retention, both owner decisions, and the re-runs that the turn rule makes owed.
   The full-scale two-day run completes under the memory target.
