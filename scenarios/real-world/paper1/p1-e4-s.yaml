@@ -1,0 +1,19 @@
+# P1-E4, speed-matched for E4-SPEED (testing/paper1-validation.md §5): p1-e4-80.yaml reached a
+# median of 22.2 m/s against Wyoming's 34.4 m/s (I-80 at 27.6-35.6 m/s p5-p95). The 1.5 km
+# blocks made most of each vehicle's minute a corner slow-down or the run-up from one. Here
+# the same 80 mph highway has 6 km straights and runs 90 s, so a vehicle spends its run at
+# its desired speed. Nothing else changes: the KS tolerance (0.092) and the calibration file
+# (now the v2 fit, data/calibration/bsm-timing-cvpilot.yaml) are what p1-e4-80.yaml used.
+# Expectations were written before it ran (scms-paper1.yaml, P1.E4S.*).
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4-80.yaml
+  name: Paper 1 E4 highway speed-matched
+  description: The E4 highway at 80 mph on 6 km straights for 90 s, speed-matched to Wyoming.
+  tags: [paper1, validation, highway, bsm-timing]
+time:
+  duration_s: 90.0
+world:
+  source:
+    params:
+      block_x_m: 6000.0

@@ -1,0 +1,13 @@
+# P1-E4 before the v2 refit: p1-e4-s.yaml on the frozen v1 fit (a v1 file must still read).
+# The difference from p1-e4-s.yaml is the locked class's per-message generation instant and
+# the receiver output noise; the residual body moves, the tail and the PKI do not.
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4-s.yaml
+  name: Paper 1 E4 speed-matched on the v1 fit
+  description: The speed-matched E4 highway with the frozen v1 timing calibration.
+  tags: [paper1, validation, highway, bsm-timing]
+actors:
+  vehicles:
+    bsm_timing:
+      calibration: data/calibration/bsm-timing-cvpilot-v1.yaml

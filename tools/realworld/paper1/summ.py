@@ -108,6 +108,20 @@ def e4(d, run):
     d["x.e4.r_p50"] = resid.q(rs, 0.5)
     d["x.e4.r_p90"] = resid.q(rs, 0.9)
     d["x.e4.r_p99"] = resid.q(rs, 0.99)
+    # TM-1: secMark steps of consecutive BSMs of one ID (msgCnt + 1): how often secMark
+    # repeats (0 ms) and the period excess over 100 ms (CV-pilot free devices: never 0, p50 +6 ms)
+    steps = []
+    for _, bsms in resid.engine_ids(os.path.join(run, "jsonl", "node_tx.jsonl")):
+        bs = sorted(bsms, key=lambda b: b.order)
+        for a, b in zip(bs, bs[1:]):
+            if a.secmark is None or b.secmark is None or a.msgcnt is None or b.msgcnt is None:
+                continue
+            if (b.msgcnt - a.msgcnt) % 128 == 1:
+                steps.append((b.secmark - a.secmark) % 60000)
+    single = sorted(s - 100 for s in steps if 50 < s < 150)
+    d["x.e4.sm_steps"] = len(steps)
+    d["x.e4.sm_repeat_share"] = sum(1 for s in steps if s == 0) / len(steps) if steps else None
+    d["x.e4.sm_excess_p50"] = single[len(single) // 2] if single else None
 
 
 def veremi_lines(run):

@@ -1,0 +1,13 @@
+# TM-1 on the highway: p1-e4-s.yaml with every OBU in the free class (locked share 0), so the
+# v2 BSM clock is what every device runs. Its secMark must never repeat and its period must
+# sit where the CV-pilot free devices' does (p50 +6 ms).
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4-s.yaml
+  name: Paper 1 E4 speed-matched free class
+  description: The speed-matched E4 highway with every OBU in the free timing class.
+  tags: [paper1, validation, highway, bsm-timing]
+actors:
+  vehicles:
+    bsm_timing:
+      locked_share: 0.0
