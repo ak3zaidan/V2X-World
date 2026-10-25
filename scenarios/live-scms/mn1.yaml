@@ -1,0 +1,10 @@
+# live-scms variant mn1: corroborated event_min_reporters 1, min_reporters 1
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms mn1
+detection:
+  ma:
+    params:
+      event_min_reporters: 1
+      min_reporters: 1

@@ -1,0 +1,9 @@
+# live-scms variant me1: corroborated min_events 1
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms me1
+detection:
+  ma:
+    params:
+      min_events: 1

@@ -1,0 +1,9 @@
+# live-scms variant rw90: report_shuffle_window_s 90
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms rw90
+security:
+  protocol:
+    params:
+      report_shuffle_window_s: 90

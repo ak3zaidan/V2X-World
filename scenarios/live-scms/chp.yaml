@@ -1,0 +1,8 @@
+# live-scms variant chp: chain_file home-provider (P2PCD on the air)
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms chp
+security:
+  scms:
+    chain_file: home-provider

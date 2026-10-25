@@ -1,0 +1,9 @@
+# live-scms variant cc60: crl_cadence_s 60
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms cc60
+security:
+  protocol:
+    params:
+      crl_cadence_s: 60

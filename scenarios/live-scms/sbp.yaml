@@ -1,0 +1,7 @@
+# live-scms variant sbp: signature ecdsa-brainpoolp256r1
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms sbp
+security:
+  signature: ecdsa-brainpoolp256r1

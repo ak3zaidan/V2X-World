@@ -1,0 +1,14 @@
+# live-scms variant sh90: provider shares 0.9 / 0.1
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms sh90
+security:
+  scms:
+    deployment:
+      preset: us-production-2025
+      providers:
+      - name: provider-a
+        fleet_share: 0.9
+      - name: provider-b
+        fleet_share: 0.1

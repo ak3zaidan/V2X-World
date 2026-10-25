@@ -1,0 +1,9 @@
+# live-scms variant pp4: pool_periods 4 (no top-up falls inside 180 s)
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms pp4
+security:
+  protocol:
+    params:
+      pool_periods: 4

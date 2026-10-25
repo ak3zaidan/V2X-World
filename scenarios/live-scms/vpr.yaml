@@ -1,0 +1,7 @@
+# live-scms variant vpr: verification_policy prioritized
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms vpr
+security:
+  verification_policy: prioritized

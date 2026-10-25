@@ -1,0 +1,7 @@
+# live-scms variant s384: signature ecdsa-p384
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms s384
+security:
+  signature: ecdsa-p384

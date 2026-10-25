@@ -1,0 +1,8 @@
+# live-scms variant fc250: full_cert_every_ms 250
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms fc250
+security:
+  signer_id_policy:
+    full_cert_every_ms: 250

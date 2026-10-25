@@ -1,0 +1,8 @@
+# live-scms variant fc5000: full_cert_every_ms 5000
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms fc5000
+security:
+  signer_id_policy:
+    full_cert_every_ms: 5000
