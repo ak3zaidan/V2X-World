@@ -265,10 +265,13 @@ rows:
   measure: g.spat_range50_m
   expect: ratio
   band:
-  - 1.2
-  - 3.0
-  source: 'log-distance reach scales as 10^(dP/10n): +7 dB with n 1.67 (TR 37.885 Table 6.2.1-1 urban
-    LOS) to 3.0 (urban NLOS) gives x2.62 to x1.71; buildings and the 20 m rings widen it to [1.2, 3.0]'
+  - 0.95
+  - 1.15
+  source: 'rewritten before the run (Gp10 evidence): TR 37.885 Table 6.2.1-1 urban LOS, PL = 38.77 + 16.7
+    log10 d + 18.2 log10 5.9 GHz: with 3 dBi each end and about -92 dBm sensitivity the LOS budget at
+    10 dBm reaches ~2 km and at 0 dBm ~510 m, both beyond the 300 m blocks; the PRR fall at 200-400 m
+    is the NLOS share (urban NLOS, 30 log10 d: 77 m at 10 dBm), which power moves; so the 50 % edge stays
+    at the block geometry within [0.95, 1.15]'
   measured: pending
 - id: LR.G.p10.range50
   base: G0
@@ -280,7 +283,14 @@ rows:
   - 0.15
   - 0.6
   source: -13 dB, n 1.67 to 3.0 -> x0.17 to x0.37 (as LR.G.p30.range50)
-  measured: pending
+  measured: 300 -> 300 (ratio 1.0); spat_heard 132,287 -> 102,289
+  verdict: wrong-expectation
+  note: 'the reach is not power-limited: TR 37.885 Table 6.2.1-1 urban LOS, PL = 38.77 + 16.7 log10 d
+    + 18.2 log10 5.9 GHz: with 3 dBi each end and about -92 dBm sensitivity the LOS budget at 10 dBm reaches
+    ~2 km and at 0 dBm ~510 m, both beyond the 300 m blocks; the PRR fall at 200-400 m is the NLOS share
+    (urban NLOS, 30 log10 d: 77 m at 10 dBm), which power moves. Predicted from a pure log-distance ratio,
+    which assumed the 50 % edge was a link-budget edge. Corrected rows: LR.G.p10.heard and the p30/p0
+    rows, rewritten before their runs'
 - id: LR.G.p0.range50
   base: G0
   variant: Gp0
@@ -288,9 +298,13 @@ rows:
   measure: g.spat_range50_m
   expect: ratio
   band:
-  - 0.03
-  - 0.35
-  source: -23 dB, n 1.67 to 3.0 -> x0.042 to x0.17 (as LR.G.p30.range50)
+  - 0.6
+  - 1.05
+  source: 'rewritten before the run (Gp10 evidence): TR 37.885 Table 6.2.1-1 urban LOS, PL = 38.77 + 16.7
+    log10 d + 18.2 log10 5.9 GHz: with 3 dBi each end and about -92 dBm sensitivity the LOS budget at
+    10 dBm reaches ~2 km and at 0 dBm ~510 m, both beyond the 300 m blocks; the PRR fall at 200-400 m
+    is the NLOS share (urban NLOS, 30 log10 d: 77 m at 10 dBm), which power moves; so the 50 % edge stays
+    at the block geometry within [0.6, 1.05]'
   measured: pending
 - id: LR.G.p30.prr-300-400
   base: G0
@@ -298,8 +312,9 @@ rows:
   area: radio
   measure: g.spat_prr_300_400
   expect: up
-  min_change: 0.1
-  source: more power, more receivers decode at 300-400 m
+  min_change: 0.05
+  source: 'rewritten before the run: more power reaches more NLOS receivers at 300-400 m (Gp10 moved this
+    ring 0.283 -> 0.205)'
   measured: pending
 - id: LR.G.p30.spat-frames
   base: G0
@@ -331,7 +346,10 @@ rows:
   min_change: 0.1
   source: at 10 dBm the SPaT reach falls under the 300 m advice range (LR.G.p10.range50), so the first
     advice comes closer to the stop line
-  measured: pending
+  measured: 277 -> 277
+  verdict: wrong-expectation
+  note: the first advice comes as a vehicle clears the previous junction, 300 m blocks minus the junction
+    box (277 m in every run), and the LOS SPaT reach at 10 dBm is beyond that (LR.G.p10.range50)
 - id: LR.G.p0.advice
   base: G0
   variant: Gp0
@@ -796,4 +814,31 @@ rows:
   source: 'on fibre a list is on the air by the next tick: lag <= 3 s carousel period + 0.1 s step + 0.05
     s signing'
   fault: use:Slat2000bc3
+  measured: pending
+- id: LR.G.p10.heard
+  base: G0
+  variant: Gp10
+  area: radio
+  measure: g.spat_heard
+  expect: down
+  min_change: 0.1
+  source: 'correction of LR.G.p10.range50: -13 dB loses the NLOS receivers (urban NLOS 30 log10 d)'
+  measured: pending
+- id: LR.G.p30.heard
+  base: G0
+  variant: Gp30
+  area: radio
+  measure: g.spat_heard
+  expect: up
+  min_change: 0.05
+  source: 'written before the run: +7 dB adds NLOS receivers'
+  measured: pending
+- id: LR.G.p0.heard
+  base: G0
+  variant: Gp0
+  area: radio
+  measure: g.spat_heard
+  expect: down
+  min_change: 0.25
+  source: 'written before the run: -23 dB, more than Gp10 lost'
   measured: pending
