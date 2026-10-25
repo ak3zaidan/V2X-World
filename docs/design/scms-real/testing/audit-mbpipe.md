@@ -30,6 +30,15 @@ Runs (`--record-level receptions`, run lock 1,200 MB):
 
 **Fault proof:** every row goes red under its injected fault (`selftest`, 41 of 41).
 
+**On the fixed build (AUDF):**
+- 38 of 41 pass, and the 3 open rows are unchanged.
+- AU.RA.shuffled: Kendall tau 0.009, against 1.000 before the fix.
+- AU.STORE.engine: `reports_evicted` 228, equal to the records (it was 17).
+- Every other row keeps its verdict:
+  - the same 5 attackers are decided after the same 8 h review;
+  - the same publication is at Thu 10:00:00 EDT;
+  - no honest device is decided.
+
 **Determinism:** AUD and AUD2 are byte-identical over every recorded message, the run
 report and `metrics.json` (digest `681db690d9e6d7db…`).
 
@@ -59,14 +68,14 @@ its effect. On AUD:
 | Store | stored = uploaded + evicted + decayed + expired + held + left (AU.STORE.conserve) | [SM-MBR] §2.2 | 2,876 = 2,473 + 81 + 147 + 0 + 0 + 175 | pass |
 | Store | initial weight 1.0 (AU.STORE.weight) | [SM-MBR] §2.2 | 2,876 of 2,876 | pass |
 | Store | highest weight, newest first (AU.STORE.order) | [SM-MBR] §2.2 | not observable (282 relay confirmations out of send order) | **open** (record gap) |
-| Store | run report = fates (AU.STORE.engine) | identity | engine 17 vs 228 deletions | **fixed** |
+| Store | run report = fates (AU.STORE.engine) | identity | engine 17 vs 228 deletions (AUD); 228 = 228 (AUDF) | **fixed** |
 | Upload | cellular over Uu, relay-only via unit (AU.UP.link) | [SM-MBR] §4 | 1,447 Uu / 1,026 `rsu-backhaul`, 0 wrong | pass |
 | Upload | relay upload counted only once a unit decoded it (AU.UP.relay-heard) | 06 §6 item 5 | 1,026 of 1,026 (within +10 ms) | wrong-expectation (stamp order) |
 | Upload | run-report upload counters (AU.UP.engine) | identity | 1,447 / 1,026 / 2,473 equal | wrong-expectation (see §3) |
 | Upload | cellular store→upload p95 (AU.UP.cell-latency) | immediate | 0.000 s | pass |
 | RA | every report forwarded once (AU.RA.once) | — | 0 lost, 0 dup, 1,143 held at end | pass |
 | RA | batch closes at 1 day or 10,000 (AU.RA.window) | [CAMP122] SCMS-765 | 4 batches, open + 86,400.072–.077 s | pass |
-| RA | batch order shuffled (AU.RA.shuffled) | SCMS-765 | tau 1.000 (AUD) → see AUDF | **fixed** |
+| RA | batch order shuffled (AU.RA.shuffled) | SCMS-765 | tau 1.000 (AUD), 0.009 (AUDF) | **fixed** |
 | RA | RA forwards only the encrypted report (AU.RA.strip) | [SM-MBR] §4 | 1,330 of 1,330 = PDU length | pass |
 | MA | manual review 8 h (AU.MA.review) | 28,800 s (G8, ASSUMPTION) | 28,799.84–28,800.00 s | pass |
 | MA | case stage order (AU.MA.stage-order) | [BRECHT] §VI | 5 of 5 | pass |
@@ -130,7 +139,14 @@ its effect. On AUD:
      order.
    - **Test:** `v2xw-proto lockstep::the_ra_forwards_a_report_batch_in_shuffled_order`. It is
      red with the permutation disabled ("the batch reached the MA in arrival order").
-   - **Goldens:** see the commit. Any run with a report batch of two or more moves.
+   - **Goldens:** one record digest moved, the `phase2-path` record:
+     - before: `fd19a3ed…`;
+     - after: `e723df97…`.
+
+     The record count (6,372,470) and the frame digest are unchanged, because only the MA's
+     receipt order moves. Re-blessed with `V2XW_BLESS_SCMS_DIGESTS=1` on the `phase2`,
+     `scms_scale` and `bsm_timing` tests, and every test in them passes: 3, 13 and 1 tests,
+     with 2 ignored.
    - **The certificate-request shuffle** (`provision.rs` `release_jobs`) also releases in
      arrival order. It belongs to the provisioning owner and is not changed here.
 2. **Store deletions of vehicles that left the run were lost** (AU.STORE.engine).
