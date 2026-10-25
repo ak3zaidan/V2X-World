@@ -143,8 +143,8 @@ rows:
   expect: 766 m (25 log10(d0 / 10 m) = 115 - 67.8 dB)
   source: log-distance law (Rappaport 2e Eq. 4.68); one 20 m bin of room
   fault: d0 scaled x1.25
-  measured: pending
-  verdict: pending
+  measured: '760'
+  verdict: pass
 - id: RV-PL-FS
   kind: abs
   run: FS3
@@ -153,8 +153,8 @@ rows:
   expect: 457 m (20 log10(d0) = 101 - 47.80 dB)
   source: Friis 1946; FSPL = 20 log10(4 pi d f / c)
   fault: d0 scaled x1.25
-  measured: pending
-  verdict: pending
+  measured: '460'
+  verdict: pass
 - id: RV-PL-2RAY
   kind: abs
   run: TR12
@@ -163,8 +163,8 @@ rows:
   expect: 843 m (past the 553 m crossover 4 pi ht hr / lambda, PL = 40 log10 d - 20 log10(ht hr) = 110 dB); free space would put it at 1,288 m
   source: Rappaport 2e Eq. 4.52 (two-ray ground reflection)
   fault: d0 scaled x1.25
-  measured: pending
-  verdict: pending
+  measured: '840'
+  verdict: pass
 - id: RV-PL-TR37
   kind: abs
   run: TR37
@@ -173,8 +173,8 @@ rows:
   expect: between the urban NLOS edge (36.85 + 30 log10 d + 18.9 log10 5.86 = 101 dB at 137 m) and the urban LOS edge (38.77 + 16.7 log10 d + 18.2 log10 5.86 = 101 dB at 775 m); a same-street link is LOS with P = min(1, 1.05 exp(-0.0114 d)), else NLOSv
   source: 3GPP TR 37.885 V15.3.0 Table 6.2.1-1 and §6.2.1 LOS probability
   fault: value x1.25 (stays green if near the low end; the band is a probe)
-  measured: pending
-  verdict: pending
+  measured: '760'
+  verdict: pass
 # ---- Fading and shadowing: the PRR curve is the law's tail probability ----
 - id: RV-FAD-RAY-390
   kind: curve
@@ -185,8 +185,8 @@ rows:
   expect: PRR = floor x exp(-(d / d0)^n) = 0.83 x floor at 390 m
   source: Rayleigh power is exponential with unit mean, so P(g > (d/d0)^n) = exp(-(d/d0)^n) (Rappaport 2e §5.6; Sklar, IEEE Commun. Mag. 1997)
   fault: d0 x0.85 in the theory
-  measured: pending
-  verdict: pending
+  measured: 0.803 vs theory 0.806 (floor 0.978, n=953)
+  verdict: pass
 - id: RV-FAD-RAY-570
   kind: curve
   run: RAY
@@ -196,8 +196,8 @@ rows:
   expect: 0.62 x floor
   source: as RV-FAD-RAY-390
   fault: d0 x0.85 in the theory
-  measured: pending
-  verdict: pending
+  measured: 0.584 vs theory 0.607 (floor 0.978, n=864)
+  verdict: pass
 - id: RV-FAD-RAY-770
   kind: curve
   run: RAY
@@ -207,8 +207,8 @@ rows:
   expect: 0.36 x floor
   source: as RV-FAD-RAY-390
   fault: d0 x0.85 in the theory
-  measured: pending
-  verdict: pending
+  measured: 0.333 vs theory 0.351 (floor 0.978, n=913)
+  verdict: pass
 - id: RV-FAD-NAK3-570
   kind: curve
   run: NAK3
@@ -218,8 +218,8 @@ rows:
   expect: Q(3, 3 x 0.478) = 0.83 x floor
   source: Nakagami-m power is Gamma(m, 1/m) (Nakagami 1960; Cheng et al., IEEE JSAC 2007 fit m = 3 near range for V2V)
   fault: d0 x0.85 in the theory
-  measured: pending
-  verdict: pending
+  measured: 0.786 vs theory 0.823 (floor 0.998, n=864)
+  verdict: pass
 - id: RV-FAD-NAK3-770
   kind: curve
   run: NAK3
@@ -229,8 +229,8 @@ rows:
   expect: Q(3, 3.04) = 0.41 x floor
   source: as RV-FAD-NAK3-570
   fault: d0 x0.85 in the theory
-  measured: pending
-  verdict: pending
+  measured: 0.362 vs theory 0.406 (floor 0.998, n=913)
+  verdict: pass
 - id: RV-SH6-440
   kind: curve
   run: SH6
@@ -241,8 +241,8 @@ rows:
   source: log-normal shadowing, P(X < margin) (Rappaport 2e §4.9.2); wider tolerance because a link's shadow is correlated along its 4 s
   fault: "shadowing not applied (the theory taken as the no-fading step); added after the first mutation pass showed d0 x0.85 inside the 0.08 tolerance"
   fault_law: {kind: step}
-  measured: pending
-  verdict: pending
+  measured: 0.818 vs theory 0.845 (floor 0.997, n=1424)
+  verdict: pass
 - id: RV-SH6-950
   kind: curve
   run: SH6
@@ -253,8 +253,8 @@ rows:
   source: as RV-SH6-440
   fault: "shadowing not applied (the theory taken as the no-fading step); added after the first mutation pass showed d0 x0.85 inside the 0.08 tolerance"
   fault_law: {kind: step}
-  measured: pending
-  verdict: pending
+  measured: 0.317 vs theory 0.350 (floor 0.997, n=1058)
+  verdict: pass
 - id: RV-STEP-LD
   kind: curve
   run: LD
@@ -265,8 +265,8 @@ rows:
   source: a frame below the receiver's sensitivity is not decoded (IEEE 802.11-2020 17.3.10.6)
   fault: "the sensitivity cut missing (d0 past the 1 km census)"
   fault_law: {d0: 1200}
-  measured: pending
-  verdict: pending
+  measured: 0.000 vs theory 0.000 (floor 1.000, n=2484)
+  verdict: pass
 # ---- Frame airtime ----
 - id: RV-AIR-DIGEST
   kind: txtime
@@ -293,8 +293,8 @@ rows:
   expect: every frame is 304 us (192-octet digest BSM) except one 400 us certificate frame per vehicle; total = 304 (frames - vehicles) + 400 vehicles, to 0.5 us
   source: IEEE 802.11-2020 17.4.3 TXTIME; IEEE 1609.2 5.3.1 (certificate on the first SPDU)
   fault: digest TXTIME + 1 symbol
-  measured: pending
-  verdict: pending
+  measured: airtime 367120 us over 1195 frames; theory 304 x 1155 + 400 x 40 = 367120 us
+  verdict: pass
 - id: RV-AIR-CERT
   kind: txtime
   run: AIRC
@@ -303,8 +303,8 @@ rows:
   expect: a certificate-signed BSM of 263 octets is 40 + 8 ceil((22 + 8 x 263) / 48) = 400 us
   source: IEEE 802.11-2020 17.4.3; IEEE 1609.2 certificate signer (+71 octets against the digest)
   fault: TXTIME + 1 symbol
-  measured: pending
-  verdict: pending
+  measured: airtime 400.00 us, PSDU 263.08 B, TXTIME 400 us
+  verdict: pass
 # ---- Channel load against density, and congestion ----
 - id: RV-CBR-DENSITY-2X
   kind: ratio
@@ -315,8 +315,8 @@ rows:
   expect: x2 (x1.9 to x2 once overlaps are counted once)
   source: below saturation CBR = sum over sensed stations of rate x T_air, so it is linear in density (ETSI TS 102 687 CBR; Sepulcre et al. 2022 Veins 0.00155 CBR per veh/km, radio-fidelity.md 7.5)
   fault: the change does nothing (ratio 1)
-  measured: pending
-  verdict: pending
+  measured: 0.0832 -> 0.1561 (x1.876)
+  verdict: pass
 - id: RV-CBR-DENSITY-4X
   kind: ratio
   base: N40
@@ -326,8 +326,8 @@ rows:
   expect: x4, a little less as overlapping busy periods are counted once
   source: as RV-CBR-DENSITY-2X
   fault: the change does nothing (ratio 1)
-  measured: pending
-  verdict: pending
+  measured: 0.0832 -> 0.3109 (x3.737)
+  verdict: pass
 - id: RV-CBR-BOUND
   kind: abs
   run: N40
@@ -337,8 +337,8 @@ rows:
   source: CBR is the union of sensed busy time (ETSI TS 102 687), which cannot exceed the offered airtime
   fault: "overlapping busy periods counted twice (x2); x1.25 stayed under the bound"
   fault_scale: 2.0
-  measured: pending
-  verdict: pending
+  measured: '0.0832'
+  verdict: pass
 - id: RV-CONG-COLL
   kind: chain
   runs: [N40, N80, N160]
@@ -348,8 +348,8 @@ rows:
   expect_text: collisions per attempt rise with every doubling of density
   source: more contenders per carrier-sense area and more hidden terminals (Bianchi, IEEE JSAC 2000; Jiang et al. 2008 hidden-terminal broadcast)
   fault: order reversed
-  measured: pending
-  verdict: pending
+  measured: 0.0356 -> 0.089 -> 0.1726
+  verdict: pass
 - id: RV-CONG-PDR
   kind: chain
   runs: [N40, N80, N160]
@@ -359,8 +359,8 @@ rows:
   expect_text: PDR falls monotonically with density at a fixed rate and MCS
   source: Sepulcre et al. 2022 (Veins, 802.11p) and radio-fidelity.md 7.5
   fault: order reversed
-  measured: pending
-  verdict: pending
+  measured: 0.8979 -> 0.84 -> 0.7621
+  verdict: pass
 - id: RV-CONG-ACCESS
   kind: chain
   runs: [N40, N80, N160]
@@ -370,8 +370,8 @@ rows:
   expect_text: channel-access delay rises with channel busy time (more deferrals, frozen backoff)
   source: IEEE 802.11-2020 10.3.4 (backoff frozen while the medium is busy); Bianchi 2000
   fault: order reversed
-  measured: pending
-  verdict: pending
+  measured: 0.0265 -> 0.1347 -> 0.2991
+  verdict: pass
 - id: RV-CONG-LAT
   kind: chain
   runs: [N40, N80, N160]
@@ -381,8 +381,8 @@ rows:
   expect_text: the latency tail rises with congestion
   source: queueing behind a busier channel (Kleinrock, Queueing Systems 1975); the stage access_ms above
   fault: order reversed
-  measured: pending
-  verdict: pending
+  measured: 14.62 -> 15.06 -> 40.74
+  verdict: pass
 - id: RV-CONG-HIDDEN
   kind: chain
   runs: [N40, N80, N160]
@@ -392,8 +392,8 @@ rows:
   expect_text: hidden-terminal losses per attempt rise with density
   source: two senders outside each other's carrier-sense range overlap at a receiver between them in proportion to the senders there (Tobagi and Kleinrock 1975)
   fault: order reversed
-  measured: pending
-  verdict: pending
+  measured: 0.0336 -> 0.0737 -> 0.1484
+  verdict: pass
 - id: RV-DCC-RATE-LOW
   kind: abs
   run: N160
@@ -402,31 +402,31 @@ rows:
   expect: 10 Hz; J2945/1 stretches the interval only past B = 25 vehicles within 100 m, and 160 vehicles on 16.8 km of street are about 3 per 100 m
   source: SAE J2945/1 2016 6.3.6 (ITT = 100 ms x N / B above B)
   fault: value x1.25
-  measured: pending
-  verdict: pending
+  measured: '9.837'
+  verdict: pass
 - id: RV-DET
   kind: same
   runs: [N40, N40B]
   expect: the same seed gives byte-identical measurements
   source: determinism (02-architecture.md)
   fault: one byte appended
-  measured: pending
-  verdict: pending
+  measured: identical
+  verdict: pass
 # ---- Judged by the named engine test or netval check ----
 - id: RV-NET-03
   test: v2xw-netval NET-03 (cargo test -p v2xw-netval --test layers)
   expect: every message type signed under its registered PSID / ITS-AID (BSM 0x20, SPaT and MAP 0x82 on the US stack; CAM 36, DENM 37, SPATEM 137, MAPEM 138 on the ETSI stack)
   source: IEEE 1609.12 PSID registry; ETSI TS 102 965 V2.1.1 Table A.1
   fault: BSM signed under 0x21
-  measured: pending
-  verdict: pending
+  measured: honest pass on both stacks (7 identifiers); BSM under 0x21 fails
+  verdict: fixed (a check defect, af8842ea)
 - id: RV-BACKHAUL
   test: v2xw-radio ip_transport::tests::backhaul_one_way_delays_are_their_hand_values
   expect: one-way delay of a 1,500-octet uplink packet = route km x us/km + hops x per-hop + 12,000 bits / rate. fibre 20 x 4.9 + 4 x 50 + 12 = 310 us; DSL 5 x 4.9 + 6 x 50 + 8,000 + 600 = 8,924.5 us; microwave 10 x 3.336 + 4 x 50 + 30 = 263.4 us
   source: light in glass at n = 1.47 (4.9 us/km) and in air (3.336 us/km); ITU-T G.993.2 interleaving; serialisation L / R
   fault: the DSL interleaving left out
-  measured: pending
-  verdict: pending
+  measured: 310.00 / 8,924.50 (down 8,474.50) / 263.36 us; DSL interleaving removed fails
+  verdict: pass
 # ---- NR-V2X mode 2 selection window (written before the SLT2 runs) ----
 - id: RV-SL-T2-ACCESS
   kind: chain
@@ -437,8 +437,16 @@ rows:
   expect_text: the selected resource is uniform over the candidates in [n + T1, n + T2], so the mean wait from hand-off to the reserved slot is about (T1 + T2) / 2 and rises with T2 (1, 3, 5.5, 8.75, 25.5, 50.5 ms)
   source: 3GPP TS 38.214 8.1.4 (selection window); TS 38.321 5.22.1.1 (random selection among the candidates)
   fault: order reversed
-  measured: pending
-  verdict: pending
+  measured: 41.88 -> 29.64 -> 18.86 -> 15.53 -> 27.18 -> 49.85 (before the fix)
+  verdict: FAIL (fix pending re-run)
+  note: >-
+    Before the fix: 41.88 -> 29.64 -> 18.86 -> 15.53 -> 27.18 -> 49.85 ms (e2e 57.3 -> 34.2
+    -> 42.3 -> 64.7). The per-message hand-off jitter U[0, 10 ms] put a message past the
+    slot its reservation was made for whenever the draw exceeded the reserved offset, and
+    the grant, inside the 100 ms budget, held it about a period. The same runs without the
+    jitter (RV-SL-T2J-*) follow (T1 + T2) / 2. Fixed in wiring::generation_timing (no
+    hand-off jitter on a PC5 sidelink); pinned by sensitivity_radio
+    nr_access_wait_follows_the_selection_window.
 - id: RV-SL-T2-E2E
   kind: chain
   runs: [SLT2_1, SLT2_10, SLT2_50, SLT2_100]
@@ -448,8 +456,10 @@ rows:
   expect_text: the end-to-end latency carries the access wait, so it rises with T2 (the radio.yaml selection_window_ms row)
   source: 3GPP TS 38.214 8.1.4
   fault: order reversed
-  measured: pending
-  verdict: pending
+  measured: 57.29 -> 34.18 -> 42.29 -> 64.73 (before the fix)
+  verdict: FAIL (fix pending re-run)
+  note: >-
+    The access wait of RV-SL-T2-ACCESS carried into the end-to-end latency; same cause.
 - id: RV-SL-T2-50
   kind: abs
   run: SLT2_50
@@ -459,8 +469,8 @@ rows:
   source: 3GPP TS 38.214 8.1.4; uniform selection over the window
   fault: value x1.25 (x2 below)
   fault_scale: 2.0
-  measured: pending
-  verdict: pending
+  measured: '27.18'
+  verdict: pass
 # ---- PHY error model and the cellular backhaul (judged by the named tests) ----
 - id: RV-PER-NIST
   test: v2xw-radio per::tests::reproduces_the_snr_at_10_percent_per_table (and ..._1_percent_per_column)
@@ -501,8 +511,8 @@ rows:
   expect_text: with strictly periodic generation the reserved offset persists from one message to the next, so the mean access wait is (T1 + T2) / 2 and rises with T2
   source: 3GPP TS 38.214 8.1.4; TR 37.885 A.1.1 (periodic traffic, 100 ms)
   fault: order reversed
-  measured: pending
-  verdict: pending
+  measured: 1.198 -> 3.373 -> 6.102 -> 9.555 -> 26.27 -> 47.29
+  verdict: pass
 - id: RV-SL-T2J-1
   kind: abs
   run: SLT2J_1
@@ -512,8 +522,8 @@ rows:
   source: 3GPP TS 38.214 8.1.4
   fault: value x2
   fault_scale: 3.0
-  measured: pending
-  verdict: pending
+  measured: '1.198'
+  verdict: pass
 - id: RV-SL-T2J-50
   kind: abs
   run: SLT2J_50
@@ -523,8 +533,8 @@ rows:
   source: 3GPP TS 38.214 8.1.4
   fault: value x2
   fault_scale: 2.0
-  measured: pending
-  verdict: pending
+  measured: '26.27'
+  verdict: pass
 - id: RV-SL-T2J-100
   kind: abs
   run: SLT2J_100
@@ -534,5 +544,5 @@ rows:
   source: 3GPP TS 38.214 8.1.4
   fault: value x2
   fault_scale: 2.0
-  measured: pending
-  verdict: pending
+  measured: '47.29'
+  verdict: pass
