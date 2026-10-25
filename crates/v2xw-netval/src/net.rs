@@ -47,7 +47,7 @@ pub fn checks() -> Vec<Check> {
             id: "NET-03",
             layer: Layer::Network,
             title: "Identifiers: every safety message is signed under its registered ITS-AID / PSID",
-            reference: "ETSI TS 102 965 V2.1.1 (2021-11) Table A.1, read from the published PDF: CA 36, DEN 37, TLM (SPATEM) 137, RLT (MAPEM) 138, IVI 139, CP 639, VRU 638; IEEE 1609.12: BSM 0x20",
+            reference: "ETSI TS 102 965 V2.1.1 (2021-11) Table A.1, read from the published PDF: CA 36, DEN 37, TLM (SPATEM) 137, RLT (MAPEM) 138, IVI 139, CP 639, VRU 638; IEEE 1609.12: BSM 0x20, SPaT and MAP 0x82 (intersection-safety-and-awareness); judged on `NodeSecurity::set_stack` and `psid_for`, the path every SPDU takes",
             tolerance: "exact",
             fault: "BSM signed under PSID 0x21",
             cost: Cost::Fast,
@@ -173,12 +173,43 @@ fn wsmp_header(mode: Mode) -> Outcome {
 }
 
 fn identifiers(mode: Mode) -> Outcome {
-    use v2xw_node::secure::PSID_SAFETY;
-    // Every message this simulator signs goes out under the one PSID the node holds
-    // (`NodeSecurity::psid`, set from `PSID_SAFETY` by the engine's wiring).
-    let signed_under = |_msg: &str| -> u64 { if mode.faulted() { 0x21 } else { PSID_SAFETY } };
-    let registry: [(&str, u64); 5] = [
+    use v2xw_core::time::WallClock;
+    use v2xw_msg::MsgType;
+    use v2xw_node::secure::{CryptoMode, NodeSecurity, PSID_SAFETY};
+    // The engine's own signing path: `wiring::apply_security_profile` builds the node's
+    // stack from PSID_SAFETY and then calls `set_stack` with the regional stack and the
+    // messages the node sends, and every SPDU carries `psid_for(msg_type)`. Until
+    // 2026-10-24 this check modelled the node as signing everything under PSID_SAFETY,
+    // and it also expected the US SPaT and MAP under the ETSI ITS-AIDs 137/138; on the
+    // US stack both are the intersection PSID 0x82 (IEEE 1609.12).
+    let stack = |etsi: bool, sends: &[MsgType]| {
+        let mut s = NodeSecurity::new(
+            WallClock::new(1_767_225_600),
+            CryptoMode::Modeled,
+            PSID_SAFETY,
+        );
+        s.set_stack(etsi, sends);
+        s
+    };
+    let us = stack(false, &[MsgType::Bsm, MsgType::Spat, MsgType::Map]);
+    let eu = stack(true, &[MsgType::Cam, MsgType::Denm, MsgType::Spat, MsgType::Map]);
+    let signed_under = |msg: &str| -> u64 {
+        let got = match msg {
+            "BSM (US)" => us.psid_for(MsgType::Bsm),
+            "SPaT (US)" => us.psid_for(MsgType::Spat),
+            "MAP (US)" => us.psid_for(MsgType::Map),
+            "CAM" => eu.psid_for(MsgType::Cam),
+            "DENM" => eu.psid_for(MsgType::Denm),
+            "SPATEM" => eu.psid_for(MsgType::Spat),
+            _ => eu.psid_for(MsgType::Map),
+        };
+        if mode.faulted() && msg == "BSM (US)" { 0x21 } else { got }
+    };
+    // Typed from the registries, not read from `v2xw_msg::registry`.
+    let registry: [(&str, u64); 7] = [
         ("BSM (US)", 0x20),
+        ("SPaT (US)", 0x82),
+        ("MAP (US)", 0x82),
         ("CAM", 36),
         ("DENM", 37),
         ("SPATEM", 137),
@@ -196,7 +227,7 @@ fn identifiers(mode: Mode) -> Outcome {
     Outcome::judge(
         bad.is_empty(),
         if bad.is_empty() {
-            "5 identifiers match".to_string()
+            "7 identifiers match on the US and ETSI stacks".to_string()
         } else {
             bad.join("; ")
         },
