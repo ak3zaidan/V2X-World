@@ -1,0 +1,27 @@
+# ============================================================================
+# Misbehaviour-pipeline audit run (docs/design/scms-real/testing/audit-mbpipe.md): the
+# conformance run's deployment, real calendar and fast-forwards, with every report's fate
+# on its device recorded (`report_records`), the PKI view on, and 40 % of the vehicles
+# without a cellular modem so that reports also travel the RSU relay path. Checked from
+# the raw records by tools/realworld/audit_mbpipe.py against
+# crates/v2xw-engine/tests/expectations/scms-audit-mbpipe.yaml.
+# ============================================================================
+schema: v2xw/scenario/1
+meta:
+  name: scms-audit-mbpipe
+  description: >-
+    The conformance deployment with report-fate records and a relay-only share: every
+    misbehaviour report followed from detection through store, upload, shuffle, MA case,
+    manual review, CRL publication, distribution and enforcement.
+  authors: [v2xw]
+  tags: [scms, audit, misbehaviour, revocation, crl]
+  created: "2026-10-24"
+  base: scms-conformance.yaml
+net:
+  uu:
+    id: cellular/uu/fixed-latency
+    params: {preset: 4g-east-coast, penetration: 0.6}
+security:
+  scms:
+    pki_view: true
+    report_records: true

@@ -2097,6 +2097,10 @@ pub struct Phase2 {
     /// present, the population a published CRL had to reach (the PKI view's "enforced by
     /// n of N", whose N is every device present at any instant since publication).
     retired_at: Vec<SimTime>,
+    /// The store deletions (quota, then age) of the devices that left the run: a retired
+    /// device's `MbrQueue` counters leave with it, and the run report's
+    /// `reports_evicted` / `reports_expired` sum the devices present plus these.
+    retired_store_deletions: (u64, u64),
     /// The devices the authority has decided to revoke, as the PCA and linkage
     /// authorities resolve a reported pseudonym (joint 2): one decision per device.
     ma_decided_devices: BTreeSet<NodeId>,
@@ -2853,6 +2857,7 @@ impl Phase2 {
             attacker_peak_events: BTreeMap::new(),
             revoked_devices: BTreeSet::new(),
             retired_at: Vec::new(),
+            retired_store_deletions: (0, 0),
             ma_decided_devices: BTreeSet::new(),
             broadcast_accuracy: BTreeMap::new(),
             privacy_chains: BTreeMap::new(),
@@ -3395,8 +3400,13 @@ impl Phase2 {
             r.ra_retransmissions_reacked += u64::from(run.state.ra.retransmissions_reacked);
         }
         r.reports_unsent = self.nodes.values().map(|n| n.outbox.0.len() as u64).sum();
-        r.reports_evicted = self.nodes.values().map(|n| n.outbox.0.evicted).sum();
-        r.reports_expired = self.nodes.values().map(|n| n.outbox.0.expired).sum();
+        // Every device's deletions, the ones that left the run included (before, a
+        // vehicle that drove out took its count with it: 17 of 228 quota deletions in the
+        // misbehaviour-pipeline audit run).
+        r.reports_evicted = self.retired_store_deletions.0
+            + self.nodes.values().map(|n| n.outbox.0.evicted).sum::<u64>();
+        r.reports_expired = self.retired_store_deletions.1
+            + self.nodes.values().map(|n| n.outbox.0.expired).sum::<u64>();
         r
     }
 
@@ -3783,6 +3793,8 @@ impl Phase2 {
             if n.topup.is_some() {
                 self.report.topups_left_area += 1;
             }
+            self.retired_store_deletions.0 += n.outbox.0.evicted;
+            self.retired_store_deletions.1 += n.outbox.0.expired;
             // Its unsent reports leave with it; they are counted as unsent here because
             // the vehicle took them out of the run.
             self.report.reports_lost += n.outbox.0.len() as u64;
@@ -8934,6 +8946,39 @@ mod evidence_time_tests {
         r.st_tstart = evidence;
         r.st_tend = evidence;
         r
+    }
+
+    /// The run report counts the store deletions of every device, the ones that left the
+    /// run included (misbehaviour-pipeline audit, AU.STORE.engine: the engine reported 17
+    /// quota deletions where the `pki.report_fate` records hold 228). Fault (the old sum
+    /// over the devices still present): 0 after the vehicle retires.
+    #[test]
+    fn a_retired_vehicles_store_deletions_stay_counted() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = crate::scenario::Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let mut p = Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend");
+        let node = NodeId::new(9_003);
+        let mut sec = NodeSec::default();
+        sec.outbox.0 = MbrQueue::new(250);
+        let w = mbr::Weighting::default();
+        let unix = 1_792_065_600;
+        for k in 0..3_u64 {
+            let r = report(k * NS_PER_S, k * NS_PER_S);
+            sec.outbox.0.push((r, k * NS_PER_S), 100, w, unix);
+        }
+        assert_eq!(sec.outbox.0.evicted, 1, "three 100 B reports over a 250 B quota");
+        p.nodes.insert(node, sec);
+        assert_eq!(p.report().reports_evicted, 1);
+        p.retire(node, 10 * NS_PER_S);
+        assert_eq!(p.report().reports_evicted, 1, "the deletion left with the vehicle");
     }
 
     /// The MA's evidence-time rule (the edge-case finding of a 5,000 s skew revoking 15

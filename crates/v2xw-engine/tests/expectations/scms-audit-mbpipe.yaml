@@ -1,0 +1,463 @@
+# Misbehaviour-pipeline audit (docs/design/scms-real/testing/audit-mbpipe.md): every hop
+# from the on-device detector to the receiver that drops a revoked sender, checked from the
+# raw records only (pki.report_fate, pki.flow, pki.case, proto.revocation, ma.*, node.rx,
+# node.tx, node.security, gt.*) by tools/realworld/audit_mbpipe.py, which shares no code
+# with the engine. Every row was written and committed with `measured: pending` before the
+# run it judges. Each row names the record fault (`fault`, an in-memory mutation of the
+# records or of the engine value) that the checker's `selftest` injects to show the row
+# can go red.
+#
+#   python3 -I tools/realworld/audit_mbpipe.py check <this file> <runs-dir> [--fill]
+#   python3 -I tools/realworld/audit_mbpipe.py selftest <this file> <runs-dir>
+#
+# expect: eq | le | ge | band (on `value` / `band`); `measured` is the checker's value.
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+#
+# Binary: the integrator's release build of 8becf72a, copied to the scratchpad; the
+# scenario's seed; --record-level receptions; --build-utc 2026-10-24T00:00:00Z; one run
+# per run-lock call (1,200 MB cap).
+schema: v2xw/scms-run-expectations/1
+runs:
+  AUD:
+    scenario: scenarios/scms-audit-mbpipe.yaml
+    note: conformance deployment, real calendar, 40 % relay-only, report records on
+  AUD2:
+    scenario: scenarios/scms-audit-mbpipe.yaml
+    note: AUD again (determinism)
+rows:
+# ---- 1. Detection and report creation (SM-MBR detectors on devices, PSID 0x26)
+- id: AU.DET.belief
+  run: AUD
+  area: detection
+  measure: x.det.unheard_reports
+  expect: eq
+  value: 0
+  fault: report-subject-unheard
+  measured: 0
+  verdict: pass
+  source: 'a report is built from BSMs its reporter received ([SM-MBR] §2.3.1, evidence = the accused''s signed BSMs as received); detectors read belief only. Every stored report must name a pseudonym whose BSM the reporter had delivered (verified) in the second before'
+- id: AU.DET.subtypes
+  run: AUD
+  area: detection
+  measure: x.det.non_us_subtypes
+  expect: eq
+  value: 0
+  fault: case-subtype-obs
+  measured: 0
+  verdict: pass
+  source: 'a real US report carries only SM-MBR v1.1 PSID 0x20 subtypes: 1VInconsistent ConstantPosition/RandomPosition, Implausible MaxSpeed/MaxAcceleration/BrakeAcceleration; ObsImplausible off by default ([SM-MBR] §2.3; proto F3, veh M1)'
+- id: AU.DET.rate
+  run: AUD
+  area: detection
+  measure: x.det.min_pair_gap_s
+  expect: ge
+  value: 1.0
+  fault: report-twice
+  measured: 1.0
+  verdict: wrong-expectation
+  note: "AUD: the stored instants of two reports by node 42 on 241806602d8066ab are 0.999 s apart while their judged messages (the report ids' reception instants) are 1.0008 s apart: the limit binds the judged messages, each stored instant adds its own verification delay. The measure now reads the judged instant from the report id."
+  source: 'at most one report per reporter and accused a second (REPORT_INTERVAL_S, veh M10; ASSUMPTION, no published US rate)'
+- id: AU.MBR.one-pdu
+  run: AUD
+  area: report
+  measure: x.up.posts_not_one_report
+  expect: eq
+  value: 0
+  fault: post-two-pdus
+  measured: 0
+  verdict: pass
+  source: 'one HTTPS POST per report through the RA, carrying one SecuredMisbehaviorReport ([SM-MBR] §4; proto F6, veh M7)'
+# ---- 2. The on-device store (weights, decay, quota)
+- id: AU.STORE.conserve
+  run: AUD
+  area: store
+  measure: x.store.unbalanced
+  expect: eq
+  value: 0
+  fault: fate-drop-terminal
+  measured: 0
+  verdict: pass
+  source: 'conservation: every stored report ends exactly once as uploaded, evicted, decayed out, expired, held at the end or left with its device ([SM-MBR] §2.2 store life)'
+- id: AU.STORE.weight
+  run: AUD
+  area: store
+  measure: x.store.initial_weight_not_1
+  expect: eq
+  value: 0
+  fault: fate-weight
+  measured: 0
+  verdict: pass
+  source: 'a new report enters the store at weight 1.0 ([SM-MBR] §2.2; proto F7)'
+- id: AU.STORE.order
+  run: AUD
+  area: store
+  measure: x.store.order_violations
+  expect: eq
+  value: 0
+  fault: upload-oldest-first
+  measured: 282
+  verdict: open
+  note: "Not observable from the records: 282 of 578 apparent violations are all relay-only devices whose newest reports were sent first but confirmed later (a unit missed the frame; the RFC 6298 retry confirmed it after older ones). A relayed frame's node.tx row carries no report id, so transmission order cannot be joined to the store. The engine sorts weight desc, seq desc (mbr.rs take_upload_order; unit test phase2::report_store_tests). Record gap: put the report id on the relayed frame's node.tx row."
+  source: 'upload highest weight first, newer first on ties ([SM-MBR] §2.2; proto F7, veh M8): when a device with several reports pending uploads one, it is the newest of the highest weight'
+- id: AU.STORE.engine
+  run: AUD
+  area: metrics
+  measure: x.store.engine_mismatch
+  expect: eq
+  value: 0
+  fault: engine-evicted
+  measured: 211
+  verdict: fixed
+  test: v2xw-engine phase2::evidence_time_tests::a_retired_vehicles_store_deletions_stay_counted
+  note: "Engine defect: Phase2::retire dropped a leaving vehicle's MbrQueue evicted/expired counters, so the run report summed only the devices still present (17 against 228 deletion fates on AUD). Fixed: retired deletions are kept and added (phase2.rs retired_store_deletions)."
+  source: 'run report reports_evicted = evicted_quota + decayed_out fates, reports_expired = expired fates, reports_unsent = held-at-end fates'
+# ---- 3. Upload by cellular and by RSU relay
+- id: AU.UP.link
+  run: AUD
+  area: upload
+  measure: x.up.wrong_link
+  expect: eq
+  value: 0
+  fault: upload-wrong-link
+  measured: 0
+  verdict: pass
+  source: 'a cellular device posts over Uu; a relay-only device only through a report-forward RSU ([SM-MBR] §4 "whenever in range of an RSU offering SCMS connectivity")'
+- id: AU.UP.relay-heard
+  run: AUD
+  area: upload
+  measure: x.up.relay_unheard
+  expect: eq
+  value: 0
+  fault: relay-rx-dropped
+  measured: 0
+  verdict: wrong-expectation
+  note: "AUD: all 92 first misses have a delivered unit node.rx row 0.5-2 ms after the uploaded fate: the fate is stamped at the frame's arrival, the node.rx row at its delivery. The window is now [t-5 s, t+10 ms]."
+  source: 'a relayed upload counts only once a report-forward unit decoded it (TCP-confirmed, [SM-MBR] §2.2; 06 §6 item 5): an RSU node.rx delivery of the reporter''s frame precedes every relay uploaded fate within 5 s'
+- id: AU.UP.engine
+  run: AUD
+  area: metrics
+  measure: x.up.engine_mismatch
+  expect: eq
+  value: 0
+  fault: engine-uploaded
+  measured: 0
+  verdict: wrong-expectation
+  note: "A pki.flow `detect` stage is logged only for a posted report (2,473 = posts), so it cannot count reports_sent (3,773). Now reports_mbr_real = posts. Open finding beside it: reports_sent (3,773) = stored fates (2,876) + reports_not_filed (912) - 15; the 15 are 'too few of the BSMs the reporter judged on hand' refusals of reports already stored, and reports_received (2,488) exceeds the posts by the same 15."
+  source: 'run report reports_uploaded_cellular and reports_uploaded_relay equal the uploaded fates by access link; reports_sent equals detect stages'
+- id: AU.UP.cell-latency
+  run: AUD
+  area: upload
+  measure: x.up.cell_store_to_upload_p95_s
+  expect: le
+  value: 1.0
+  fault: upload-late
+  measured: 0.0
+  verdict: pass
+  source: 'a device with a live Uu link uploads at once ([SM-MBR] §4); store to upload under a second at p95'
+# ---- 4. The RA report shuffle
+- id: AU.RA.once
+  run: AUD
+  area: ra
+  measure: x.ra.lost_or_duplicated
+  expect: eq
+  value: 0
+  fault: forward-duplicate
+  measured: 0
+  verdict: pass
+  source: 'the RA forwards every report it received to the MA exactly once; only reports received less than the shuffle window before the end may still be held'
+- id: AU.RA.window
+  run: AUD
+  area: ra
+  measure: x.ra.batch_close_error_s
+  expect: le
+  value: 1.0
+  fault: forward-early
+  measured: 0.077
+  verdict: pass
+  source: 'RA to MA report shuffle closes at 10,000 reports or one day ([CAMP122] SCMS-765; proto F8): a batch under 10,000 is forwarded 86,400 s after its first report reached the RA'
+- id: AU.RA.shuffled
+  run: AUD
+  area: ra
+  measure: x.ra.max_order_tau
+  expect: le
+  value: 0.5
+  fault: forward-in-order
+  measured: 1.0
+  verdict: fixed
+  test: v2xw-proto lockstep::the_ra_forwards_a_report_batch_in_shuffled_order
+  note: "Engine defect: release_report_shuffle forwarded each batch in arrival order (tau 1.000 in all 4 AUD batches), so the MA's receipt order revealed the upload order the shuffle exists to hide (CAMP-EE SCMS-765). Fixed: a seeded Fisher-Yates permutation on its own stream (Backend, scms/report-shuffle, generation)."
+  source: 'the shuffle breaks arrival order ([CAMP122] SCMS-765): Kendall tau between arrival and forward order in each batch of 10 or more'
+- id: AU.RA.strip
+  run: AUD
+  area: ra
+  measure: x.ra.forward_not_inner
+  expect: eq
+  value: 0
+  fault: forward-wrapper
+  measured: 0
+  verdict: pass
+  source: 'the RA strips the enrolment-signed upload wrapper and forwards only the encrypted report: report-forward bytes = the SecuredMisbehaviorReport PDU length ([SM-MBR] §4; [BRECHT] §V privacy split)'
+# ---- 5. The MA: verification, cases, manual review, decision rule
+- id: AU.MA.review
+  run: AUD
+  area: ma
+  measure: x.ma.review_error_s
+  expect: le
+  value: 1.0
+  fault: case-review-short
+  measured: 0.164
+  verdict: pass
+  source: 'manual review by an operator, default 8 h (proto G8, owner decision 7; the time is an ASSUMPTION): decision = corroborated + 28,800 s'
+- id: AU.MA.stage-order
+  run: AUD
+  area: ma
+  measure: x.ma.stage_order_violations
+  expect: eq
+  value: 0
+  fault: case-stage-swap
+  measured: 0
+  verdict: pass
+  source: 'reports-in <= corroborated <= decision <= plv-lookup <= la-seeds <= crl-published <= enforced ([BRECHT] §VI-B..D)'
+- id: AU.MA.rule
+  run: AUD
+  area: ma
+  measure: x.ma.unsupported_decisions
+  expect: eq
+  value: 0
+  fault: decision-unsupported
+  measured: 0
+  verdict: pass
+  source: 'threat/ma/corroborated: revoke needs >= 3 distinct trusted reporter certificates and >= 3 corroborated events 5 s apart, so the accepted evidence about the subject spans >= 10 s (ma_corroborate.rs defaults, a stated design choice)'
+- id: AU.MA.set-aside
+  run: AUD
+  area: ma
+  measure: x.ma.decided_on_set_aside
+  expect: eq
+  value: 0
+  fault: received-set-aside
+  measured: 0
+  verdict: pass
+  source: 'the MA acts only on reports whose evidence verifies (veh M5, [5GAA] (263)): no decision rests only on reports the MA set aside'
+- id: AU.MA.honest
+  run: AUD
+  area: ma
+  measure: x.ma.honest_decisions
+  expect: eq
+  value: 0
+  fault: decision-honest
+  measured: 0
+  verdict: pass
+  source: 'honest traffic opens no revocation (06 §3: the US profile revokes no honest vehicle on any quarter-fleet run)'
+- id: AU.MA.home
+  run: AUD
+  area: ma
+  measure: x.ma.foreign_cases
+  expect: eq
+  value: 0
+  fault: case-foreign
+  measured: 0
+  verdict: pass
+  source: 'each provider''s MA resolves only certificates its own ACA issued and shares the rest (proto G9, WP-D1)'
+# ---- 6. Linkage resolution and LA seed release
+- id: AU.LA.path
+  run: AUD
+  area: la
+  measure: x.la.bad_paths
+  expect: eq
+  value: 0
+  fault: seed-one-la
+  measured: 0
+  verdict: pass
+  source: 'per decision: MA->PCA lookup and answer, MA->RA blocklist (RA->ECA notice), MA->LA1 and MA->LA2 seed request and answer, then MA->CRLG append, all inside the provider ([BRECHT] §VI-D; proto G1, G2, G5)'
+- id: AU.LA.forward
+  run: AUD
+  area: la
+  measure: x.la.backward_seeds
+  expect: eq
+  value: 0
+  fault: seed-irev-zero
+  measured: 0
+  verdict: pass
+  source: 'the LAs release ls(i_rev) with i_rev no earlier than the reported certificate''s period, never ls(0) (proto G3, forward-only revocation)'
+# ---- 7. The CRL Generator
+- id: AU.CRL.slot
+  run: AUD
+  area: crlg
+  measure: x.crl.slot_violations
+  expect: eq
+  value: 0
+  fault: publish-saturday
+  measured: 0
+  verdict: pass
+  source: 'a change is published within one business day at the 10:00 ET slot, Mon-Fri except US federal holidays, the first slot after the decision ([SM-PROV] §3.4.9-3.4.10; proto H7)'
+- id: AU.CRL.next
+  run: AUD
+  area: crlg
+  measure: x.crl.bad_next_or_series
+  expect: eq
+  value: 0
+  fault: held-next-6d
+  measured: 0
+  verdict: pass
+  source: 'nextCrl - issueDate = 7 d (proto H8, ASSUMPTION) on every list a node holds; pseudonym lists are series 1 ([SMP] Table 1; proto H2)'
+- id: AU.CRL.entries
+  run: AUD
+  area: crlg
+  measure: x.crl.entries_mismatch
+  expect: eq
+  value: 0
+  fault: published-entries
+  measured: 0
+  verdict: pass
+  source: 'each published list carries one entry per revoke decision of its provider so far; run report revocations_by_provider = decisions per provider'
+- id: AU.CRL.no-rollback
+  run: AUD
+  area: crlg
+  measure: x.crl.rollbacks
+  expect: eq
+  value: 0
+  fault: held-rollback
+  measured: 0
+  verdict: pass
+  source: 'a node never goes back to an older list of a CRACA and series (1609.2 crlSerial / iRev + indexWithinI; proto I3, I4)'
+# ---- 8. CRL distribution and installs on devices and RSUs
+- id: AU.DIST.cell-poll
+  run: AUD
+  area: distribution
+  measure: x.dist.late_installs
+  expect: eq
+  value: 0
+  fault: install-late
+  measured: 0
+  verdict: pass
+  source: 'a cellular vehicle fetches with an hourly conditional poll (proto I6, I10): one live at a publication holds the new list within 3,660 s of it'
+- id: AU.DIST.held
+  run: AUD
+  area: distribution
+  measure: x.dist.unaccounted
+  expect: eq
+  value: 0
+  fault: held-stale
+  measured: 0
+  verdict: wrong-expectation
+  note: "AUD: the 7 misses are relay-only vehicles whose first row after the deadline is the fast-forward's end (196,200 s), with no unit frame heard since the publication (191,400 s, inside the fast-forward). A relay-only vehicle has no fetch of its own; it is now owed the list from the first row after it received a unit's CRL frame."
+  source: 'conservation: every vehicle present 3,660 s after a publication holds that list or newer (cellular by poll, relay-only by the RSU broadcast it heard); none is unaccounted'
+- id: AU.DIST.relay-heard
+  run: AUD
+  area: distribution
+  measure: x.dist.relay_install_unheard
+  expect: eq
+  value: 0
+  fault: relay-crl-rx-dropped
+  measured: 0
+  verdict: pass
+  source: 'a relay-only vehicle learns a list only from an RSU CRL frame it received (proto I9, I12): its first row holding a new list follows a delivered CRL frame'
+- id: AU.DIST.rsu
+  run: AUD
+  area: distribution
+  measure: x.dist.rsus_without_list
+  expect: eq
+  value: 0
+  fault: rsu-list-dropped
+  measured: 2
+  verdict: open
+  note: "Record gap: no record shows a unit installing a CRL (no node.security row for RSUs, no proto.revocation stage, no pki.flow message); only the engine counter rsu_crls_installed (8) and the 1,188 unit refusals of the revoked sender (rsu_revoked_receptions) say it happened. Suggested: a proto.revocation `processed`/`enforced` row for the unit, or node.security rows for RSUs."
+  source: 'every RSU installs its RA''s composite CRL over its backhaul (WP-B3b) and holds each published list'
+- id: AU.DIST.engine
+  run: AUD
+  area: metrics
+  measure: x.dist.engine_mismatch
+  expect: eq
+  value: 0
+  fault: engine-installed
+  measured: 0
+  verdict: wrong-expectation
+  note: "crls_installed (49) also counts the joiners' installs at join (crls_installed_at_join 35, R-JOINCRL), which have no proto.revocation row: 14 recorded + 35 joiners whose first node.security row holds the list = 49. Both identities are now checked."
+  source: 'run report crls_installed = enforced (node, entry) records'
+# ---- 9. Receivers dropping revoked senders
+- id: AU.ENF.drop
+  run: AUD
+  area: enforcement
+  measure: x.enf.accepted_after_install
+  expect: eq
+  value: 0
+  fault: rx-revoked-accepted
+  measured: 0
+  verdict: pass
+  source: 'a receiver holding a CRL that revokes a device refuses each later message under its revoked certificates (1609.2 5.1.3.4; proto I2)'
+- id: AU.ENF.not-before
+  run: AUD
+  area: enforcement
+  measure: x.enf.refused_before_install
+  expect: eq
+  value: 0
+  fault: rx-revoked-early
+  measured: 0
+  verdict: wrong-expectation
+  note: "1,461 first misses: 1,188 at the two units (whose installs no record shows, AU.DIST.rsu, now counted aside) and 273 at joiners (= revoked_receptions_at_join) that hold the list from their RA connection at join, before their first node.security row. Install evidence now includes the joiner's join instant."
+  source: 'who learns what: a receiver cannot refuse a sender as revoked before it holds the list that names it'
+- id: AU.ENF.self
+  run: AUD
+  area: enforcement
+  measure: x.enf.tx_after_self_revoked
+  expect: eq
+  value: 0
+  fault: tx-after-revoked
+  measured: 0
+  verdict: wrong-expectation
+  note: "The only self-revoked device (node 18) is an armed attacker: the engine deliberately leaves a compromised device transmitting (run.rs own-revocation check: the rule binds a conforming implementation; an attacker runs its own software). Its 1,635 later BSMs were refused as revoked by the receivers that held the list (AU.ENF.drop). The row now judges honest devices only (none revoked in AUD)."
+  source: 'the OBE drops its revoked certificates and stops sending under them once it finds itself on the list ([CAMP122] §5.2.10.2.3; proto I5)'
+- id: AU.ENF.engine
+  run: AUD
+  area: metrics
+  measure: x.enf.engine_mismatch
+  expect: eq
+  value: 0
+  fault: engine-revoked
+  measured: 0
+  verdict: pass
+  source: 'run report revoked_receptions = node.rx lost/revoked records; rsu_revoked_receptions = those at RSU nodes'
+# ---- 10. Metrics the components emit, recomputed from records
+- id: AU.MET.stages
+  run: AUD
+  area: metrics
+  measure: x.met.stage_mismatch
+  expect: eq
+  value: 0
+  fault: metric-stage
+  measured: 0
+  verdict: pass
+  source: 'revocation_latency_stage = t(stage) - t(previous stage) per revocation (v2xw-metrics security.rs; 08 §2): pooled n and sum per stage pair equal the proto.revocation diffs'
+- id: AU.MET.crl
+  run: AUD
+  area: metrics
+  measure: x.met.crl_mismatch
+  expect: eq
+  value: 0
+  fault: metric-crl
+  measured: 0
+  verdict: pass
+  source: 'crl_entries and crl_bytes = the list as last published (security.rs): the last window sample equals the last proto.revocation published record'
+- id: AU.MET.detection
+  run: AUD
+  area: metrics
+  measure: x.met.detection_mismatch
+  expect: eq
+  value: 0
+  fault: metric-det
+  measured: 1
+  verdict: open
+  note: "Two checker corrections (wrong expectations): time_to_detect/time_to_decision are cumulative over the run (the last sample is the run's, n=5), and the onset is the first attack action that changed bytes on the air (detection.rs on_attack). With them every det_* cell, false_accusations, time_to_decision and n, min and max of time_to_detect equal the records. OPEN metric defect left: DetectionProvider::on_report keeps the first ma.report *emitted* per subject (or_insert), and the engine emits a step's ma.report rows out of time order: actor 16's earliest report at the MA is 86,535.830 s but the first emitted is 86,535.857 s, so time_to_detect is 27 ms long for it (sum 430,436.030 s against 430,436.001 s). Suggested fix: keep the minimum t. Second finding: ma.decision is stamped when the pipeline recommends (86,955.8 s), 8 h before the operator's manual-review decision (pki.case decision 115,755.8 s), so time_to_decision and the vehicle-level det_* cells read the recommendation, not the authority's decision."
+  source: 'det_tp/fp/fn/tn at level report and vehicle, false_accusations, time_to_detect and time_to_decision (detection.rs: gt.subject, gt.attack.action, ma.report, ma.decision) recomputed from the records equal the engine''s last samples'
+# ---- 11. Determinism
+- id: AU.DET.same-seed
+  run: AUD2
+  area: determinism
+  measure: x.det.digest_differs
+  expect: eq
+  value: 0
+  fault: digest-flip
+  measured: 0
+  verdict: pass
+  source: 'same seed, same binary: every recorded message, the run report and metrics.json byte-identical'
