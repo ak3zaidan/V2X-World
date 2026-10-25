@@ -850,12 +850,12 @@ rows:
     of one'
   measured: 59 -> 212 (ratio 3.593)
   verdict: open
-  note: 'not settled. Part of the excess is the base: L''s 72 devices average about 64 s on the map,
-    so few cross a boundary (0.82 changes each), while every device older than 30 s changes in PT30.
-    But the rate is 136.9 per vehicle-hour, above the 120/h ceiling of "age 30 s plus one forced change
-    a period". Hypothesis: a scheduled change inside the 1 s certificate overlap (lifetime 61 s) picks a
-    certificate of the ending period, and the expiry forces a second change 1 s later. Needs the
-    sec.pseudonym records'
+  note: 'not settled. Part of the excess is the base: L''s 72 devices average about 64 s on the map, so
+    few cross a boundary (0.82 changes each), while every device older than 30 s changes in PT30. But
+    the rate is 136.9 per vehicle-hour, above the 120/h ceiling of "age 30 s plus one forced change a
+    period". Hypothesis: a scheduled change inside the 1 s certificate overlap (lifetime 61 s) picks a
+    certificate of the ending period, and the expiry forces a second change 1 s later. Needs the sec.pseudonym
+    records'
 - id: LS.PT10.changes
   base: L
   variant: PT10
@@ -893,10 +893,10 @@ rows:
     alone barely moves it (Wiedersheim et al. 2010; Petit et al. 2015)
   measured: 0.948038 -> 0.619622
   verdict: wrong-expectation
-  note: 'the cited claim is about the per-change link, and it holds: links_correct / changes_heard
-    56/59 = 0.949 -> 134/150 = 0.893 (-6 %). m.linkability is the end-to-end share, which compounds
-    over every change a vehicle makes (0.9^3.6 = 0.68), so it falls with change frequency. The row should
-    have used the per-change ratio'
+  note: 'the cited claim is about the per-change link, and it holds: links_correct / changes_heard 56/59
+    = 0.949 -> 134/150 = 0.893 (-6 %). m.linkability is the end-to-end share, which compounds over every
+    change a vehicle makes (0.9^3.6 = 0.68), so it falls with change frequency. The row should have used
+    the per-change ratio'
 - id: LS.PT10.starved
   base: L
   variant: PT10
@@ -1327,8 +1327,8 @@ rows:
   expect: eq
   value: 0.0
   source: 'share 0: provider-b certifies no device'
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
 - id: LS.SH100.verified-b
   base: L
   variant: SH100
@@ -1337,8 +1337,8 @@ rows:
   expect: eq
   value: 0.0
   source: no provider-b sender, nothing verified under it
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
 - id: LS.SH100.revocations-b
   base: L
   variant: SH100
@@ -1347,5 +1347,5 @@ rows:
   expect: eq
   value: 0
   source: provider-b's MA revokes nothing it never certified
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
