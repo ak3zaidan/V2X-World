@@ -16,7 +16,8 @@ the per-link measures of the chains, `lc.*`, from the run report and the resolve
 - `lc.attempts_per_frame` = reception attempts / frames: the receivers a frame reaches
   (falls when J2945/1 power control lowers the radiated power);
 - `lc.verifies_per_node_s` = receiver-validation checks / (nodes x duration);
-- `lc.events_per_attempt` = DES events / reception attempts (the run's cost per reception).
+- `lc.events_per_attempt` = DES events / reception attempts (the run's cost per reception);
+- `lc.frames.<msg>`, `lc.airtime_us.<msg>` per message type (the report's air_by_type).
 
 `derive` writes interaction runs `X-<name>` whose realism.json holds differences of
 differences (a 2 x 2 or a chain that only shows as a contrast), from DERIVED below.
@@ -53,9 +54,30 @@ def _duration(run_dir):
     return float('nan')
 
 
+def _empty_mcap(path):
+    # A run made with --no-recording (or whose recording was deleted once read) has no
+    # MCAP; runtime_realism reads the run report and the run cost before the recording, so
+    # an empty recording leaves those and drops only the PKI-view record measures.
+    from mcap.writer import Writer
+    with open(path, 'wb') as f:
+        w = Writer(f)
+        w.start()
+        w.finish()
+
+
 def extract(run_dir):
     mx = _mod('matrix')
-    d = mx.extract(run_dir)
+    rec = os.path.join(run_dir, 'recording.mcap')
+    if not os.path.exists(rec):
+        _empty_mcap(rec)
+        try:
+            d = mx.extract(run_dir)
+        finally:
+            os.remove(rec)
+        d['lc.recording_read'] = False
+    else:
+        d = mx.extract(run_dir)
+        d['lc.recording_read'] = True
     rep = json.load(open(os.path.join(run_dir, 'run-report.json')))['report']
     dur = _duration(run_dir)
     frames = rep.get('frames_transmitted') or 0
@@ -75,6 +97,10 @@ def extract(run_dir):
     d['lc.attempts_per_frame'] = att / frames if frames else 0.0
     d['lc.verifies_per_node_s'] = (rv.get('checked') or 0) / (nodes * dur) if nodes and dur else 0.0
     d['lc.events_per_attempt'] = d.get('cost.events', 0) / att if att else 0.0
+    for mt, a in (rep.get('air_by_type') or {}).items():
+        d['lc.frames.' + mt] = a.get('frames') or 0
+        d['lc.airtime_us.' + mt] = a.get('airtime_us') or 0
+    d['lc.vru_devices'] = rep.get('vru_devices_created') or 0
     with open(os.path.join(run_dir, 'realism.json'), 'w') as f:
         json.dump(d, f, indent=1, sort_keys=True, default=str)
     return d
@@ -89,6 +115,11 @@ DERIVED = {
     'X-dcc-density-cbr': ('m.channel_load.mean', [(+1, 'r160'), (-1, 'r40'), (-1, 'r160-nodcc'), (+1, 'r40-nodcc')]),
     # DCC x OBU: verify wait added by switching DCC off at 160 on the slow OBU minus on the fast
     'X-dcc-obu-wait': ('m.verify_wait.mean', [(+1, 'r160-c2sw-nodcc'), (-1, 'r160-c2sw'), (-1, 'r160-nodcc'), (+1, 'r160')]),
+    # CRL paths: enforcement lost to a CRL-store outage minus that lost to a CRLG outage
+    # (< 0: the RSU broadcast path softens a distribution outage, nothing softens issuance)
+    'X-crl-paths': ('p2.revoked_receptions', [(+1, 'S'), (-1, 'scms-crlstore'), (-1, 'S'), (+1, 'scms-crlg')]),
+    # signals x demand: speed lost to the 120 s cycle at 3,000 veh/h minus at 1,500 (> 0)
+    'X-sig-demand': ('m.mean_speed', [(+1, 'sig-r3000'), (-1, 'sig-c120-r3000'), (-1, 'sig-base'), (+1, 'sig-c120')]),
 }
 
 

@@ -47,6 +47,26 @@ runs:
   X-pq-density-coll: {scenario: derived, note: '(r100-falcon - r100) - (r40-falcon - r40) collision rate'}
   X-dcc-density-cbr: {scenario: derived, note: '(r160 - r40) - (r160-nodcc - r40-nodcc) CBR'}
   X-dcc-obu-wait: {scenario: derived, note: '(r160-c2sw-nodcc - r160-c2sw) - (r160-nodcc - r160) verify wait'}
+  S: {scenario: scenarios/live-chains/scms-base.yaml, note: 'CAMP lifecycle 240 s, 5 % ConstPos from 60 s, --no-recording'}
+  scms-crlg: {scenario: scenarios/live-chains/scms-crlg.yaml, note: 'S, CRL generator offline 60-200 s'}
+  scms-crlg-short: {scenario: scenarios/live-chains/scms-crlg-short.yaml, note: 'S, CRL generator offline 60-130 s'}
+  scms-crlstore: {scenario: scenarios/live-chains/scms-crlstore.yaml, note: 'S, CRL store offline 60-200 s'}
+  scms-g0: {scenario: scenarios/live-chains/scms-g0.yaml, note: 'S, no GNSS outliers or bursts'}
+  scms-g10: {scenario: scenarios/live-chains/scms-g10.yaml, note: 'S, GNSS outliers 0.1 /s'}
+  scms-g50: {scenario: scenarios/live-chains/scms-g50.yaml, note: 'S, GNSS outliers 0.5 /s (edge)'}
+  sig-base: {scenario: scenarios/live-chains/sig-base.yaml, note: 'signalised 4 x 6 grid, 60 s cycle, 1,500 veh/h, 180 s'}
+  sig-c40: {scenario: scenarios/live-chains/sig-c40.yaml, note: sig-base with a 40 s cycle}
+  sig-c120: {scenario: scenarios/live-chains/sig-c120.yaml, note: sig-base with a 120 s cycle}
+  sig-c180: {scenario: scenarios/live-chains/sig-c180.yaml, note: sig-base with a 180 s cycle (edge)}
+  sig-r3000: {scenario: scenarios/live-chains/sig-r3000.yaml, note: 'sig-base at 3,000 veh/h'}
+  sig-c120-r3000: {scenario: scenarios/live-chains/sig-c120-r3000.yaml, note: 'sig-c120 at 3,000 veh/h'}
+  ped-base: {scenario: scenarios/live-chains/ped-base.yaml, note: 'vru-grid 60 s: 150 pedestrians, 15 cyclists, 30 % with a PSM device'}
+  ped-50: {scenario: scenarios/live-chains/ped-50.yaml, note: ped-base with 50 pedestrians}
+  ped-450: {scenario: scenarios/live-chains/ped-450.yaml, note: ped-base with 450 pedestrians}
+  ped-dev0: {scenario: scenarios/live-chains/ped-dev0.yaml, note: ped-base with no PSM device}
+  ped-dev100: {scenario: scenarios/live-chains/ped-dev100.yaml, note: ped-base with a PSM device on every VRU}
+  X-crl-paths: {scenario: derived, note: '(S - scms-crlstore) - (S - scms-crlg) revoked receptions'}
+  X-sig-demand: {scenario: derived, note: '(sig-r3000 - sig-c120-r3000) - (sig-base - sig-c120) mean speed'}
 rows:
 # ---------------------------------------------------------------- chain 1: PQ -> bytes -> airtime -> CBR -> collisions -> PDR
 - id: LC.PQ.psdu-falcon
@@ -454,3 +474,313 @@ rows:
   measure: m.verify_wait.mean
   expect: up
   source: 'one HSM verification server and a 9 ms sign that holds it, vs four software cores: the HSM queues more at the same offered load'
+# ---------------------------------------------------------------- chain 4: backend outage -> CRL late -> revoked attacker accepted longer
+- id: LC.CRL.enforcement-lost
+  base: S
+  variant: scms-crlg
+  area: crl-chain
+  measure: p2.revoked_receptions
+  expect: down
+  min_change: 0.3
+  source: 'a receiver refuses a revoked certificate only once it holds a CRL listing it (IEEE 1609.2 5.1.3; CAMP 1.2.2 CRL); the CRLG down 60-200 s issues no CRL then, so each revocation decided in it (S revokes 4 attackers ~30-60 s after 60 s) is enforced from ~200 s, not ~decision + 8 s publish + <= 30 s fetch: about 40 s of enforcement left of ~140'
+- id: LC.CRL.latency-up
+  base: S
+  variant: scms-crlg
+  area: crl-chain
+  measure: p2.revocation_latency_ns
+  expect: up
+  min_change: 0.5
+  source: 'the decision -> enforced latency carries the rest of the outage (up to 140 s) on top of S''s ~16 s'
+- id: LC.CRL.delayed-not-lost
+  base: S
+  variant: scms-crlg
+  area: crl-chain
+  measure: p2.revoked_attackers
+  expect: same
+  tol: 0.0
+  source: 'the MA''s revocation requests reach the CRLG over a reliable backend transport (TLS over TCP, retried by the sender; CAMP 1.2.2 backend interfaces): an outage delays the CRL entries, it does not erase decisions; the same seed revokes the same attackers once the CRLG is back'
+- id: LC.CRL.decisions-unchanged
+  base: S
+  variant: scms-crlg
+  area: crl-chain
+  measure: p2.ma_revoke_decisions
+  expect: same
+  tol: 0.0
+  source: 'the MA is upstream of the CRLG: detection, reports and the MA''s decisions do not depend on CRL issuance'
+- id: LC.CRL.attackers-reported-longer
+  base: S
+  variant: scms-crlg
+  area: crl-chain
+  measure: p2.reports_about_attackers
+  expect: up
+  min_change: 0.05
+  source: 'a revoked attacker whose certificates are still accepted keeps being verified, judged and reported by its neighbours (detectors read only what the receiver accepted)'
+- id: LC.CRL.dose
+  base: scms-crlg
+  variant: scms-crlg-short
+  area: crl-chain
+  measure: p2.revoked_receptions
+  expect: up
+  min_change: 0.2
+  source: 'an outage ending at 130 s instead of 200 s leaves 70 s more enforcement: dose-response'
+- id: LC.CRL.store-fetches
+  base: S
+  variant: scms-crlstore
+  area: crl-chain
+  measure: p2.crl_downloads
+  expect: down
+  min_change: 0.2
+  source: 'the CRL store is the distribution point vehicles fetch from every 30 s over Uu: with it down 60-200 s, 140 s of 240 s of fetches find nothing'
+- id: LC.CRL.store-issuance-unchanged
+  base: S
+  variant: scms-crlstore
+  area: crl-chain
+  measure: p2.crls_issued
+  expect: same
+  tol: 0.0
+  source: 'the CRLG still issues on its cadence; only distribution is down'
+- id: LC.CRL.broadcast-softens
+  base: X-crl-paths
+  variant: X-crl-paths
+  area: crl-chain
+  measure: x.value
+  expect: band
+  band: [-1.0e+09, -1.0e-06]
+  source: 'with only the store down, the RSU still repeats the CRLs it was given on the air (role crl, CAMP RSU CRL broadcast), so less enforcement is lost than with issuance down'
+- id: LC.CRL.fleet-unchanged
+  base: S
+  variant: scms-crlg
+  area: crl-chain
+  measure: p2.devices
+  expect: same
+  tol: 0.0
+  source: 'a backend outage does not change the fleet: the same seed enrols the same devices'
+# ---------------------------------------------------------------- chain 5: GNSS degradation -> honest triggers -> reports -> MA load
+- id: LC.GN.jumps-g10
+  base: S
+  variant: scms-g10
+  area: gnss-chain
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band: [3.0, 15.0]
+  source: 'a 12 m outlier inside 100 ms implies 120 m/s and trips the position-jump check at every receiver that verifies the BSM (VeReMi/F2MD legacy-12): verdicts scale with outlier events, x10 (minus those hidden behind report rate limits)'
+- id: LC.GN.jumps-g0
+  base: S
+  variant: scms-g0
+  area: gnss-chain
+  measure: p2.verdicts.positionJump
+  expect: down
+  min_change: 0.3
+  source: 'no outliers, no outlier jumps: what is left is attackers and turning geometry'
+- id: LC.GN.honest-reports-g10
+  base: S
+  variant: scms-g10
+  area: gnss-chain
+  measure: p2.reports_about_honest
+  expect: up
+  min_change: 1.0
+  source: 'every honest verdict is a misbehaviour report; x10 outliers -> several times the honest reports'
+- id: LC.GN.honest-reports-g0
+  base: S
+  variant: scms-g0
+  area: gnss-chain
+  measure: p2.reports_about_honest
+  expect: down
+  source: fewer honest glitches -> fewer honest reports
+- id: LC.GN.honest-devices-g10
+  base: S
+  variant: scms-g10
+  area: gnss-chain
+  measure: p2.honest_reported
+  expect: up
+  source: more honest vehicles glitch at least once while heard
+- id: LC.GN.ma-load-g10
+  base: S
+  variant: scms-g10
+  area: gnss-chain
+  measure: p2.reports_at_ma
+  expect: up
+  min_change: 0.1
+  source: 'the honest reports join the attackers'' at the MA after the RA shuffle: MA load rises'
+- id: LC.GN.fpr-g10
+  base: S
+  variant: scms-g10
+  area: gnss-chain
+  measure: m.det_fpr.report
+  expect: up
+  source: the detector cannot tell a GNSS outlier from a lie; its false-positive rate rises
+- id: LC.GN.precision-g10
+  base: S
+  variant: scms-g10
+  area: gnss-chain
+  measure: m.det_precision.report
+  expect: down
+  source: more honest reports among the same attacker reports
+- id: LC.GN.dose-g50
+  base: scms-g10
+  variant: scms-g50
+  area: gnss-chain
+  measure: p2.reports_about_honest
+  expect: up
+  min_change: 0.3
+  source: 'x5 outlier rate again -> more honest reports, sublinear as per-sender report limits bind'
+- id: LC.GN.g50-honest-revoked
+  base: S
+  variant: scms-g50
+  area: gnss-chain
+  measure: p2.revoked_honest
+  expect: ge
+  value: 1
+  source: 'corroborated MA: an event counts with 2 independent reporters, revocation at 3 events inside a minute from >= 3 reporters; 0.5 outliers/s is 30 glitches a minute per vehicle, each heard by tens of verifiers: an honest vehicle crosses that rule (the reason deployed OBUs smooth GNSS before the BSM)'
+- id: LC.GN.attackers-unaffected-g0
+  base: S
+  variant: scms-g0
+  area: gnss-chain
+  measure: p2.revoked_attackers
+  expect: same
+  tol: 0.0
+  source: 'ConstPos attackers send a frozen position whatever their receiver reads; the MA''s evidence about them does not depend on honest GNSS noise'
+- id: LC.GN.cost-g50
+  base: S
+  variant: scms-g50
+  area: gnss-chain
+  measure: cost.events
+  expect: up
+  source: every extra report is an upload, a shuffle entry and an MA event
+# ---------------------------------------------------------------- chain 6: signal timing -> queues -> density -> J2945/1 -> channel load
+- id: LC.SG.speed-c120
+  base: sig-base
+  variant: sig-c120
+  area: signal-chain
+  measure: m.mean_speed
+  expect: down
+  source: 'Webster''s uniform delay d1 = C (1 - g/C)^2 / (2 (1 - x g/C)) is proportional to C at a fixed green share: a 120 s cycle doubles the per-junction delay (Webster 1958; HCM 7th ed. Eq. 19-19)'
+- id: LC.SG.speed-c40
+  base: sig-base
+  variant: sig-c40
+  area: signal-chain
+  measure: m.mean_speed
+  expect: up
+  source: shorter cycle -> shorter reds -> less uniform delay (same equation), lost time per cycle aside at this low v/c
+- id: LC.SG.speed-c180
+  base: sig-c120
+  variant: sig-c180
+  area: signal-chain
+  measure: m.mean_speed
+  expect: down
+  source: 'the same equation at the edge: 180 s > 120 s'
+- id: LC.SG.density-c120
+  base: sig-base
+  variant: sig-c120
+  area: signal-chain
+  measure: m.density
+  expect: up
+  source: 'Little''s law N = lambda T: the same arrivals with a longer travel time keep more vehicles in the network'
+- id: LC.SG.rate-c120
+  base: sig-base
+  variant: sig-c120
+  area: signal-chain
+  measure: lc.bsms_per_veh_s
+  expect: down
+  source: 'longer reds pack more vehicles into stop-line queues (Q = lambda r): the count within 100 m crosses J2945/1 B = 25 more often, so its density rule lengthens the ITT'
+- id: LC.SG.cbr-peak-c120
+  base: sig-base
+  variant: sig-c120
+  area: signal-chain
+  measure: m.channel_load.p95
+  expect: up
+  source: 'the node beside a long queue senses more transmitters: the high-percentile CBR rises with the queue (Bazzi 2017; ETSI TS 102 687 CBR per node)'
+- id: LC.SG.demand-amplifies
+  base: X-sig-demand
+  variant: X-sig-demand
+  area: signal-chain
+  measure: x.value
+  expect: band
+  band: [1.0e-06, 1.0e+03]
+  source: 'Webster: the delay a longer cycle adds grows with the degree of saturation x (the 1/(1 - x g/C) factor and the overflow term), so the speed lost to 120 s is larger at 3,000 veh/h'
+- id: LC.SG.cost-r3000
+  base: sig-base
+  variant: sig-r3000
+  area: signal-chain
+  measure: cost.events
+  expect: up
+  min_change: 0.5
+  source: 'twice the vehicles, receptions ~ N^2 within range: events more than 1.5x'
+# ---------------------------------------------------------------- chain 7: pedestrian surge -> PSM load -> channel -> VRU safety
+- id: LC.PD.psm-450
+  base: ped-base
+  variant: ped-450
+  area: ped-chain
+  measure: lc.frames.psm
+  expect: ratio
+  band: [2.3, 3.4]
+  source: 'PSM devices = pedestrians x device_fraction (plus the 15 cyclists'' 30 %): (450 x 0.3 + 4.5) / (150 x 0.3 + 4.5) = 2.8, each at the same J2945/9 rate'
+- id: LC.PD.psm-50
+  base: ped-base
+  variant: ped-50
+  area: ped-chain
+  measure: lc.frames.psm
+  expect: ratio
+  band: [0.25, 0.5]
+  source: '(50 x 0.3 + 4.5) / 49.5 = 0.39'
+- id: LC.PD.psm-dev100
+  base: ped-base
+  variant: ped-dev100
+  area: ped-chain
+  measure: lc.frames.psm
+  expect: ratio
+  band: [2.7, 3.7]
+  source: 'device_fraction 1.0 / 0.3 = 3.33 on pedestrians and cyclists alike'
+- id: LC.PD.psm-dev0
+  base: ped-base
+  variant: ped-dev0
+  area: ped-chain
+  measure: lc.frames.psm
+  expect: eq
+  value: 0
+  source: no device, no PSM
+- id: LC.PD.pcw-dev0
+  base: ped-base
+  variant: ped-dev0
+  area: ped-chain
+  measure: m.app_warnings.pcw
+  expect: eq
+  value: 0
+  source: 'a vehicle warns of a pedestrian it believes in: with no PSM (and no perception sharing in this scenario) it holds no belief about any pedestrian, so pedestrian collision warning cannot fire (applications read belief only)'
+- id: LC.PD.pcw-dev100
+  base: ped-base
+  variant: ped-dev100
+  area: ped-chain
+  measure: m.app_warnings.pcw
+  expect: up
+  source: more announced pedestrians -> more of the real conflicts are visible to the vehicles
+- id: LC.PD.truth-dev0
+  base: ped-base
+  variant: ped-dev0
+  area: ped-chain
+  measure: m.ped_conflicts
+  expect: same
+  tol: 0.0
+  source: 'carrying a handset does not change how a pedestrian walks or how drivers (who do not act on PSMs here) drive: ground-truth conflicts are unchanged on the same seed'
+- id: LC.PD.conflicts-450
+  base: ped-base
+  variant: ped-450
+  area: ped-chain
+  measure: m.ped_conflicts
+  expect: up
+  source: 'pedestrian-vehicle conflicts scale with the product of the two flows at crossings (exposure; Brude-Larsson power model; AASHTO HSM pedestrian model)'
+- id: LC.PD.cbr-450
+  base: ped-base
+  variant: ped-450
+  area: ped-chain
+  measure: m.channel_load.mean
+  expect: up
+  source: '~2.8x the PSM airtime on the channel the BSMs use'
+- id: LC.PD.cost-450
+  base: ped-base
+  variant: ped-450
+  area: ped-chain
+  measure: cost.events
+  expect: up
+  min_change: 0.2
+  source: 'three times the walkers to step (social force) and ~2.8x the PSM transmissions to receive'

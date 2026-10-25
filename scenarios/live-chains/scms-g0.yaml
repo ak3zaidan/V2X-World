@@ -1,0 +1,9 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains scms-g0
+  base: scms-base.yaml
+  description: >-
+    No GNSS outliers or degraded bursts.
+actors:
+  vehicles:
+    gnss: {outlier_rate_hz: 0.0, burst_rate_hz: 0.0}

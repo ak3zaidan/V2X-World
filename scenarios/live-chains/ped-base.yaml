@@ -1,0 +1,10 @@
+schema: v2xw/scenario/1
+# live-chains pedestrians base: vru-grid.yaml (7 x 12 Midtown-shaped grid, 150 pedestrians,
+# 15 cyclists, 30 % carrying a PSM device, 1,500 veh/h) cut to 60 s: the base of the
+# pedestrian-surge -> PSM load -> channel -> VRU-safety chain (each equipped VRU is a
+# device sending signed J2735 PSMs).
+meta:
+  name: live-chains ped base
+  base: ../vru-grid.yaml
+time: {duration_s: 60.0}
+metrics: [all]
