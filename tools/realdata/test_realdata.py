@@ -220,6 +220,56 @@ class ClassAndPipelineTests(unittest.TestCase):
         fast = pipeline.analyse_id("f", trace(80, v=12.0, slip_every=10))
         self.assertEqual(fast.ent_slip, 7)
 
+    def test_a_returning_slip_is_a_slip_and_a_clock_wrap_is_not(self):
+        # trace(slip_every=10) moves one BSM's position a fix later: it returns at the next pair.
+        s = pipeline.analyse_id("s", trace(80, slip_every=10))
+        self.assertEqual((s.ent_slip, s.ent_slip_ret, s.slip_sizes_ret[1]), (7, 7, 7))
+        # A free device whose BSM clock runs 3 ms long per message (Tampa's free median): its
+        # position is the latest fix before each tick, so every ~33 BSMs it skips a fix and stays
+        # there. Those onsets are persistent, not slips, and the drift is its median excess.
+        v, out = 25.0, []
+        for i in range(300):
+            g = 1000 + i * 103 + 7  # the tick, ms
+            fix = (g // 100) * 100  # the latest 10 Hz fix at or before it
+            lat = 41.0 + math.degrees(v * (fix - 1000) / 1000.0 / pairing.R_EARTH)
+            out.append(normalise.Bsm("W", g % 60000, i % 128, g / 1000.0, g / 1000.0, None, lat, -106.0,
+                                     v, 0.0, 0.0, 0.5, 0.4, None))
+        w = pipeline.analyse_id("w", out)
+        self.assertEqual(devclass.classify(w.frac, w.nsm), "free")
+        self.assertGreaterEqual(w.ent_slip, 8)
+        self.assertEqual(w.ent_slip_ret, 0)
+        self.assertEqual(w.drift_med, 3)
+        self.assertEqual(sum(w.period_dev_ms.values()), 299)
+
+    def test_output_noise_recovers_an_injected_speed_and_heading_noise(self):
+        import random
+
+        def fleet(sp_sd, hd_sd):
+            rnd = random.Random(7)
+            agg = dict(body_n=0, vdt2=0.0, q2=0.0, body_al=calib.Counter(), body_cr=calib.Counter())
+            for k in range(20):
+                v, out = 30.0, []
+                for i in range(200):
+                    d = v * i * 0.1
+                    lat = round(41.0 + math.degrees(d / pairing.R_EARTH), 7)
+                    out.append(normalise.Bsm("N%d" % k, (1000 + i * 100) % 60000, i % 128, 1000.0 + i * 0.1,
+                                             1000.0 + i * 0.1, None, lat, -106.0, v + rnd.gauss(0, sp_sd),
+                                             rnd.gauss(0, hd_sd), 0.0, 0.5, 0.4, None))
+                r = pipeline.analyse_id("n", out)
+                agg["body_n"] += r.body_n
+                agg["vdt2"] += r.body_vdt2
+                agg["q2"] += r.body_q2
+                agg["body_al"].update(r.body_al)
+                agg["body_cr"].update(r.body_cr)
+            return calib.output_noise(agg)
+
+        sp, hd = fleet(0.2, 0.3)[:2]
+        self.assertAlmostEqual(sp, 0.2, delta=0.04)
+        self.assertAlmostEqual(hd, 0.3, delta=0.08)
+        clean = fleet(0.0, 0.0)[:2]
+        self.assertLess(clean[0], 0.03)
+        self.assertLess(clean[1], 0.05)
+
     def test_free_phase_jitter_alone_fires_at_speed(self):
         import random
         rnd = random.Random(1)

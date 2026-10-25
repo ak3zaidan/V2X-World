@@ -25,6 +25,23 @@
 //! * the 1609.2 `generationTime` is the device's own time plus a normal jitter of
 //!   `header_jitter_ms.sd`.
 //!
+//! Schema `v2xw.bsm_timing.v2` (v1 files still read) adds two per-class blocks:
+//!
+//! * `bsm_clock`: the device's own BSM clock. A free OBU generates its BSMs on its own
+//!   timer, whose period is the fix interval plus a per-device `drift_ms` and a per-BSM
+//!   `period_dev_ms`; `secMark` and `generationTime` are the tick, and the position is the
+//!   latest fix at or before the tick. The tick's phase therefore walks across the fix grid,
+//!   and each wrap skips a fix (two epochs of travel in one secMark period) while secMark
+//!   keeps advancing by about one period: CV-pilot free devices advance secMark by 100-136 ms
+//!   per BSM and never repeat it (TM-1, testing/paper1-validation.md §5). The node wakes on
+//!   its 100 ms schedule; a window with no tick sends nothing, and the BSM leaves at its tick.
+//! * `output_noise`: the receiver's per-BSM speed and heading output noise, white, on the
+//!   transmitted `speed` and `heading` only (the reported position follows the fix).
+//!
+//! A slip `k > 0` reports the position of the fix `k` epochs **later** than the timestamp
+//! says (an over-extrapolated, latency-compensated output), with the timestamp unchanged;
+//! v1's "older timestamp" form repeated secMark, which no CV-pilot device does.
+//!
 //! Ground truth, the mobility model and the GNSS model are untouched: the slip is between
 //! the reported position and the reported time. The position of an earlier fix epoch is
 //! the node's own belief carried back along its own believed velocity, which is exactly the
@@ -52,8 +69,11 @@ use v2xw_core::time::SimTime;
 /// The model id, which is also the name of its RNG domain.
 pub const MODEL_ID: &str = "node/bsm-timing/per-device";
 
-/// The calibration schema this module reads.
+/// The first calibration schema this module reads.
 pub const SCHEMA: &str = "v2xw.bsm_timing.v1";
+
+/// The current schema: v1 plus a class's `bsm_clock` and `output_noise`.
+pub const SCHEMA_V2: &str = "v2xw.bsm_timing.v2";
 
 /// The RNG domain every draw of the model comes from: one stream per node.
 #[must_use]
@@ -197,6 +217,26 @@ pub struct Jitter {
     pub sd: f64,
 }
 
+/// The `bsm_clock` block (schema v2): the device's own BSM timer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BsmClock {
+    /// The device's period minus the fix interval, ms, drawn once per device.
+    pub drift_ms: PhaseDist,
+    /// Each BSM's period minus the device's own, ms, drawn per BSM. Its tail is the
+    /// clock's resets.
+    pub period_dev_ms: PhaseDist,
+}
+
+/// The `output_noise` block (schema v2): the receiver's white output noise on the
+/// transmitted speed and heading.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct OutputNoise {
+    /// Standard deviation of the transmitted speed, m/s.
+    pub speed_mps: f64,
+    /// Standard deviation of the transmitted heading, degrees.
+    pub heading_deg: f64,
+}
+
 /// One device timing class.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimingClass {
@@ -219,6 +259,12 @@ pub struct TimingClass {
     /// `generationTime` minus true time.
     #[serde(default)]
     pub header_jitter_ms: Jitter,
+    /// The device's own BSM clock (schema v2); `None`: the BSM is stamped at the node's wake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bsm_clock: Option<BsmClock>,
+    /// The receiver's output noise on speed and heading (schema v2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_noise: Option<OutputNoise>,
 }
 
 fn slip_map<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<i32, f64>, D::Error> {
@@ -281,9 +327,9 @@ impl BsmTimingCalibration {
     /// # Errors
     /// The first problem, as a sentence.
     pub fn check(&self) -> Result<(), String> {
-        if self.schema != SCHEMA {
+        if self.schema != SCHEMA && self.schema != SCHEMA_V2 {
             return Err(format!(
-                "schema is {:?}; this build reads {SCHEMA}",
+                "schema is {:?}; this build reads {SCHEMA} and {SCHEMA_V2}",
                 self.schema
             ));
         }
@@ -304,6 +350,28 @@ impl BsmTimingCalibration {
             }
             total += c.share;
             c.secmark_phase_ms.check(&at)?;
+            if self.schema == SCHEMA && (c.bsm_clock.is_some() || c.output_noise.is_some()) {
+                return Err(format!(
+                    "{at}: bsm_clock and output_noise need schema {SCHEMA_V2}"
+                ));
+            }
+            if let Some(k) = &c.bsm_clock {
+                k.drift_ms.check(&format!("{at}.bsm_clock.drift_ms"))?;
+                k.period_dev_ms.check(&format!("{at}.bsm_clock.period_dev_ms"))?;
+                if c.phase_scope == PhaseScope::Message {
+                    return Err(format!(
+                        "{at}: a bsm_clock moves the device's own phase; phase_scope must be device"
+                    ));
+                }
+            }
+            if let Some(n) = c.output_noise
+                && !(n.speed_mps.is_finite()
+                    && n.speed_mps >= 0.0
+                    && n.heading_deg.is_finite()
+                    && n.heading_deg >= 0.0)
+            {
+                return Err(format!("{at}: output_noise sds must be finite and 0 or more"));
+            }
             if !(c.header_jitter_ms.sd.is_finite() && c.header_jitter_ms.sd >= 0.0) {
                 return Err(format!("{at}: header_jitter_ms.sd must be 0 or more"));
             }
@@ -403,6 +471,8 @@ impl BsmTimingCalibration {
                     slip_epochs: slips.clone(),
                     frozen_repeat_prob: 0.0,
                     header_jitter_ms: Jitter { sd: 27.0 },
+                    bsm_clock: None,
+                    output_noise: None,
                 },
                 TimingClass {
                     name: "free".to_string(),
@@ -413,6 +483,8 @@ impl BsmTimingCalibration {
                     slip_epochs: slips,
                     frozen_repeat_prob: 0.005,
                     header_jitter_ms: Jitter { sd: 27.0 },
+                    bsm_clock: None,
+                    output_noise: None,
                 },
             ],
         }
@@ -436,6 +508,15 @@ pub struct BsmReport {
     pub slip: i32,
     /// Whether the position was repeated from the previous message.
     pub frozen: bool,
+    /// False when the device's BSM clock has no tick in this wake's window: nothing is
+    /// sent (schema v2 `bsm_clock`); always true otherwise.
+    pub send: bool,
+    /// How long after the belief's instant the message is generated (its tick), ns.
+    pub tx_delay_ns: u64,
+    /// The transmitted speed when the class has `output_noise`, m/s.
+    pub speed_mps: Option<f64>,
+    /// The transmitted heading when the class has `output_noise`, radians.
+    pub heading_rad: Option<f64>,
 }
 
 /// One device's class and memory.
@@ -444,6 +525,10 @@ pub struct BsmTimingDevice {
     class: usize,
     phase_ms: f64,
     last_pos: Option<Vec3>,
+    /// The device's BSM-clock drift, ms (0 without a `bsm_clock`).
+    drift_ms: f64,
+    /// The device's next BSM-clock tick on the GNSS timeline, once it has sent.
+    next_tick: Option<SimTime>,
 }
 
 impl BsmTimingDevice {
@@ -467,10 +552,18 @@ impl BsmTimingDevice {
             }
         }
         let phase_ms = cal.classes[class].secmark_phase_ms.draw(rng);
+        // A v2 clock's drift is a third draw, taken only by a class that has a clock, so a
+        // v1 class's sequence is the one it always was.
+        let drift_ms = cal.classes[class]
+            .bsm_clock
+            .as_ref()
+            .map_or(0.0, |k| k.drift_ms.draw(rng));
         Self {
             class,
             phase_ms,
             last_pos: None,
+            drift_ms,
+            next_tick: None,
         }
     }
 
@@ -483,7 +576,8 @@ impl BsmTimingDevice {
     /// Applies the class to one message built from `belief` (on the simulation timeline at
     /// `belief.time_ns`). `None` when the belief has no position: nothing is sent.
     ///
-    /// Every call consumes the same seven 64-bit draws, whatever the class's numbers.
+    /// Every call consumes the same seven 64-bit draws, whatever the class's numbers, plus
+    /// two for a `bsm_clock` and two for `output_noise` when the class has them.
     pub fn report(
         &mut self,
         cal: &BsmTimingCalibration,
@@ -496,6 +590,11 @@ impl BsmTimingDevice {
         let u_size = rng.uniform(0.0, 1.0);
         let u_frozen = rng.uniform(0.0, 1.0);
         let jitter = rng.normal(0.0, 1.0) * c.header_jitter_ms.sd; // 2 draws
+        let period_dev_ms = c.bsm_clock.as_ref().map(|k| k.period_dev_ms.draw(rng)); // 2
+        let noise = c.output_noise.map(|n| {
+            let ns = rng.normal(0.0, 1.0) * n.speed_mps;
+            (ns, rng.normal(0.0, 1.0) * n.heading_deg.to_radians())
+        }); // 2 draws
         if !belief.fix.has_position() {
             return None;
         }
@@ -505,7 +604,44 @@ impl BsmTimingDevice {
         };
         let iv = cal.interval_ns();
         let t = belief.time_ns;
-        let epoch = t - t % iv;
+        // With a BSM clock the message is generated at the device's own tick in this wake's
+        // window [t, t + T_fix), and the fix it carries is the latest at or before the tick.
+        let mut tick = None;
+        if let Some(dev) = period_dev_ms {
+            let win_end = t.saturating_add(iv);
+            let g = match self.next_tick {
+                Some(g) => g.max(t),
+                None => {
+                    let base = t - t % iv;
+                    let phase_ns =
+                        ((phase_ms * 1e6).round() as i128).rem_euclid(i128::from(iv)) as u64;
+                    let g = base + phase_ns;
+                    if g < t { g + iv } else { g }
+                }
+            };
+            if g >= win_end {
+                // No tick in this window: the device sends nothing until its next one.
+                self.next_tick = Some(g);
+                return Some(BsmReport {
+                    pos: belief.pos,
+                    sec_mark_at: g,
+                    header_jitter_ns: 0,
+                    slip: 0,
+                    frozen: false,
+                    send: false,
+                    tx_delay_ns: 0,
+                    speed_mps: None,
+                    heading_rad: None,
+                });
+            }
+            let period_ms = cal.fix_interval_ms + self.drift_ms + dev;
+            let next = (i128::from(g) + (period_ms * 1e6).round() as i128).max(0) as SimTime;
+            // One BSM per wake: a period shorter than what is left of the window waits for
+            // the next one.
+            self.next_tick = Some(next.max(win_end));
+            tick = Some(g);
+        }
+        let epoch = tick.map_or(t - t % iv, |g| g - g % iv);
         let mut slip = 0;
         if u_slip < c.epoch_slip_prob {
             let mut acc = 0.0;
@@ -517,13 +653,20 @@ impl BsmTimingDevice {
                 }
             }
         }
-        let back = |k: i32| u64::from(k.unsigned_abs()).saturating_mul(iv);
-        let (pos_epoch, time_epoch) = match slip {
-            k if k < 0 => (epoch.saturating_sub(back(k)), epoch),
-            k if k > 0 => (epoch, epoch.saturating_sub(back(k))),
-            _ => (epoch, epoch),
+        // A per-message phase is the generation instant's jitter about the epoch, and the
+        // position is the fix carried to that instant: CV-pilot locked devices' along-track
+        // residual at secMark Δt 99 / 101 ms is +0.41 / -0.50 ms × v, the 1 ms truncation of a
+        // jittered instant, not the ±1 ms of a position left on the epoch
+        // (data/calibration/bsm-timing-cvpilot.yaml). The timestamp keeps its epoch; a slip
+        // moves the position k fixes (later for k > 0).
+        let at_instant = if tick.is_none() && c.phase_scope == PhaseScope::Message {
+            (phase_ms * 1e6).round() as i128
+        } else {
+            0
         };
-        let age_s = t.saturating_sub(pos_epoch) as f64 * 1e-9;
+        let pos_epoch =
+            (i128::from(epoch) + at_instant + i128::from(slip) * i128::from(iv)).max(0);
+        let age_s = (i128::from(t) - pos_epoch) as f64 * 1e-9;
         let mut pos = Vec3::new(
             belief.pos.x - belief.vel.x * age_s,
             belief.pos.y - belief.vel.y * age_s,
@@ -536,14 +679,26 @@ impl BsmTimingDevice {
             pos = p;
         }
         self.last_pos = Some(pos);
-        let sec_mark_at =
-            (i128::from(time_epoch) + (phase_ms * 1e6).round() as i128).max(0) as SimTime;
+        let sec_mark_at = tick.unwrap_or_else(|| {
+            (i128::from(epoch) + (phase_ms * 1e6).round() as i128).max(0) as SimTime
+        });
+        let (speed_mps, heading_rad) = match noise {
+            Some((ns, nh)) if moving => (
+                Some((belief.ground_speed_mps() + ns).max(0.0)),
+                Some(belief.heading_rad + nh),
+            ),
+            _ => (None, None),
+        };
         Some(BsmReport {
             pos,
             sec_mark_at,
             header_jitter_ns: (jitter * 1e6).round() as i64,
             slip,
             frozen,
+            send: true,
+            tx_delay_ns: tick.map_or(0, |g| g.saturating_sub(t)),
+            speed_mps,
+            heading_rad,
         })
     }
 }
@@ -752,5 +907,108 @@ classes:
         };
         assert_eq!(run(3), run(3));
         assert_ne!(run(3), run(4), "a different key gives a different sequence");
+    }
+
+    /// TM-1: a slip k > 0 moves the position a fix later and keeps the timestamp, so no two
+    /// BSMs share a secMark (the v1 form stamped the message a fix older instead).
+    #[test]
+    fn a_positive_slip_moves_the_position_forward_and_keeps_the_stamp() {
+        let mut cal = BsmTimingCalibration::provisional()
+            .with_locked_share(1.0)
+            .unwrap();
+        cal.classes[0].secmark_phase_ms = PhaseDist::Normal { mean: 0.0, sd: 0.0 };
+        cal.classes[0].epoch_slip_prob = 1.0;
+        cal.classes[0].slip_epochs = BTreeMap::from([(1, 1.0)]);
+        let mut r = rng(1);
+        let mut d = BsmTimingDevice::assign(&cal, &mut r);
+        let rep = d.report(&cal, &mut r, &belief(1_230, 20.0)).unwrap();
+        assert_eq!(rep.slip, 1);
+        assert_eq!(rep.sec_mark_at, 1_200 * 1_000_000);
+        // The fix of 1.3 s, the device's own belief carried forward along its velocity.
+        assert!((rep.pos.x - 26.0).abs() < 1e-9, "{}", rep.pos.x);
+    }
+
+    fn clocked(drift_ms: f64, dev_ms: f64) -> BsmTimingCalibration {
+        let mut cal = BsmTimingCalibration::provisional()
+            .with_locked_share(0.0)
+            .unwrap();
+        cal.schema = SCHEMA_V2.to_string();
+        let c = &mut cal.classes[1];
+        c.epoch_slip_prob = 0.0;
+        c.frozen_repeat_prob = 0.0;
+        c.header_jitter_ms = Jitter { sd: 0.0 };
+        c.bsm_clock = Some(BsmClock {
+            drift_ms: PhaseDist::Empirical {
+                bins_ms: vec![drift_ms],
+                p: vec![1.0],
+            },
+            period_dev_ms: PhaseDist::Empirical {
+                bins_ms: vec![dev_ms],
+                p: vec![1.0],
+            },
+        });
+        cal.check().expect("a valid v2 calibration");
+        cal
+    }
+
+    /// TM-1: a free device whose own BSM clock runs 3 ms long per message walks across the
+    /// fix grid: secMark always advances by its period (never by 0), a window without a tick
+    /// sends nothing, and at each wrap the position jumps two fixes.
+    #[test]
+    fn a_drifting_bsm_clock_never_repeats_a_secmark_and_skips_a_fix_at_each_wrap() {
+        let cal = clocked(3.0, 0.0);
+        let mut r = rng(5);
+        let mut d = BsmTimingDevice::assign(&cal, &mut r);
+        assert_eq!(d.class(), 1);
+        let (mut sent, mut skipped, mut doubles) = (Vec::new(), 0, 0);
+        for i in 0..1_030u64 {
+            let rep = d
+                .report(&cal, &mut r, &belief(10_000 + 100 * i, 20.0))
+                .unwrap();
+            if !rep.send {
+                skipped += 1;
+                continue;
+            }
+            assert!(rep.tx_delay_ns < 100_000_000);
+            sent.push((rep.sec_mark_at, rep.pos.x));
+        }
+        for w in sent.windows(2) {
+            assert_eq!(w[1].0 - w[0].0, 103_000_000, "secMark advances by the period");
+            // 20 m/s × 100 ms = 2 m per fix.
+            let fixes = ((w[1].1 - w[0].1) / 2.0).round();
+            assert!(fixes == 1.0 || fixes == 2.0, "{fixes}");
+            doubles += usize::from(fixes == 2.0);
+        }
+        // 1,030 windows of 100 ms hold 1,000 ticks 103 ms apart.
+        assert!((29..=31).contains(&skipped), "{skipped}");
+        assert!((29..=31).contains(&doubles), "{doubles}");
+    }
+
+    #[test]
+    fn output_noise_reaches_the_speed_and_a_v1_file_refuses_it() {
+        let mut cal = clocked(3.0, 0.0);
+        cal.classes[1].bsm_clock = None;
+        cal.classes[1].output_noise = Some(OutputNoise {
+            speed_mps: 0.2,
+            heading_deg: 0.5,
+        });
+        cal.check().expect("valid");
+        let mut r = rng(6);
+        let mut d = BsmTimingDevice::assign(&cal, &mut r);
+        let (mut s2, mut n) = (0.0, 0.0);
+        for i in 0..2_000u64 {
+            let rep = d
+                .report(&cal, &mut r, &belief(10_000 + 100 * i, 20.0))
+                .unwrap();
+            s2 += (rep.speed_mps.expect("a noisy speed") - 20.0).powi(2);
+            n += 1.0;
+            assert!(rep.heading_rad.is_some());
+            assert!((rep.pos.x - 20.0 * (10.0 + 0.1 * i as f64)).abs() < 1e-6);
+        }
+        let sd = (s2 / n).sqrt();
+        assert!((sd - 0.2).abs() < 0.02, "{sd}");
+        let mut v1 = cal.clone();
+        v1.schema = SCHEMA.to_string();
+        assert!(v1.check().is_err(), "a v1 file may not carry output_noise");
     }
 }

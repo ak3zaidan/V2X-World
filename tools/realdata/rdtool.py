@@ -26,7 +26,7 @@ import pairing
 import pipeline
 import report
 import sources
-from version import VERSION
+from version import CLASSIFIER_VERSION, VERSION
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -91,7 +91,7 @@ def cmd_fit(a):
     if bad:
         sys.exit("raw data do not match the manifest: " + "; ".join(bad))
     fs = fit_sets(a.raw)
-    doc = calib.frozen_doc(fs, devclass.params(), VERSION, fit_file_hashes(("tampa", "orem")))
+    doc = calib.frozen_doc(fs, devclass.params(), CLASSIFIER_VERSION, fit_file_hashes(("tampa", "orem")))
     os.makedirs(os.path.dirname(FROZEN), exist_ok=True)
     with open(FROZEN, "w") as f:
         f.write(calib.dump_json(doc))
@@ -207,7 +207,7 @@ def cmd_all(a):
         sys.exit("raw data do not match the committed manifest: " + "; ".join(bad))
     params = devclass.params()
     fs = fit_sets(a.raw)
-    doc = calib.frozen_doc(fs, params, VERSION, fit_file_hashes(("tampa", "orem")))
+    doc = calib.frozen_doc(fs, params, CLASSIFIER_VERSION, fit_file_hashes(("tampa", "orem")))
     if not os.path.exists(FROZEN):
         sys.exit("no frozen classifier: run `fit`, commit %s, then `all`" % os.path.relpath(FROZEN, REPO))
     if open(FROZEN).read() != calib.dump_json(doc):

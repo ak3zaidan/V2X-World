@@ -2038,6 +2038,14 @@ impl ObuRuntime {
             } else {
                 None
             };
+            if report.is_some_and(|x| !x.send) {
+                // The device's own BSM clock has no tick in this window
+                // (`crate::bsm_timing`, schema v2): nothing is generated, and msgCnt counts
+                // only what is sent.
+                let count = self.schedule.bsm_msg_count();
+                self.schedule.restart_bsm_count((count + 127) % 128);
+                continue;
+            }
             let payload = self.encode_payload(
                 r.msg_type,
                 believed,
@@ -2078,8 +2086,12 @@ impl ObuRuntime {
             // ETSI profile refuses to sign one without it. The node's own belief.
             let location = (r.0 == MsgType::Denm)
                 .then(|| generation_location(&self.belief, self.config.origin));
-            // The model's 1609.2 generationTime jitter rides the header as a clock skew.
-            let jitter = report.map_or(0, |x| x.header_jitter_ns);
+            // The model's 1609.2 generationTime jitter rides the header as a clock skew, and
+            // so does a BSM clock's tick: the message is generated and stamped at the tick,
+            // up to one fix interval after the wake, and signed from then.
+            let tx_delay = report.map_or(0, |x| x.tx_delay_ns);
+            let jitter = report.map_or(0, |x| x.header_jitter_ns)
+                + i64::try_from(tx_delay).unwrap_or(i64::MAX);
             let signed = if jitter == 0 {
                 self.security.sign(ctx, r.0, &payload, sid, location)
             } else {
@@ -2099,10 +2111,11 @@ impl ObuRuntime {
                 self.drops.record(DropCause::TxOverflow);
                 continue;
             };
+            let at = believed.saturating_add(tx_delay);
             let sched = match self.service.runs_on(&op) {
-                RunsOn::Hsm => self.hsm.submit(believed, cost),
-                RunsOn::Accelerator => self.accel.submit(believed, cost),
-                RunsOn::Cpu => self.cpu.submit(believed, cost),
+                RunsOn::Hsm => self.hsm.submit(at, cost),
+                RunsOn::Accelerator => self.accel.submit(at, cost),
+                RunsOn::Cpu => self.cpu.submit(at, cost),
             };
             let full_certificate = pdu.signer_id == v2xw_sec::SignerIdChoice::Certificate;
             let bytes = frame.bytes_on_wire();
@@ -2179,6 +2192,8 @@ impl ObuRuntime {
             return crate::bsm_timing::BsmExtras::default();
         }
         crate::bsm_timing::BsmExtras {
+            speed_mps: timing.and_then(|t| t.speed_mps),
+            heading_rad: timing.and_then(|t| t.heading_rad),
             sec_mark_ms: Some(bsm::sec_mark(
                 self.config.wall,
                 timing.map_or(believed, |t| t.sec_mark_at),
@@ -2284,6 +2299,19 @@ impl ObuRuntime {
                 let mut reported = self.belief;
                 if let Some(t) = timing {
                     reported.pos = t.pos;
+                    // The receiver's output noise on the transmitted speed and heading.
+                    if let Some(s) = t.speed_mps {
+                        let g = reported.ground_speed_mps();
+                        let k = if g > 0.0 { s / g } else { 0.0 };
+                        reported.vel = v2xw_core::geom::Vec3::new(
+                            reported.vel.x * k,
+                            reported.vel.y * k,
+                            reported.vel.z,
+                        );
+                    }
+                    if let Some(h) = t.heading_rad {
+                        reported.heading_rad = h;
+                    }
                 }
                 let mut input = bsm::BsmInput::new(
                     self.schedule.bsm_msg_count(),

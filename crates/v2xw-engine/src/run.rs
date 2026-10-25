@@ -5308,8 +5308,12 @@ impl Engine {
             tx.claimed_pos
                 .or_else(|| belief.map(|b| b.pos))
                 .unwrap_or(Vec3::ZERO),
-            belief.map_or(0.0, v2xw_core::PositionEstimate::ground_speed_mps),
-            belief.map_or(0.0, |b| b.heading_rad),
+            tx.bsm.speed_mps.unwrap_or_else(|| {
+                belief.map_or(0.0, v2xw_core::PositionEstimate::ground_speed_mps)
+            }),
+            tx.bsm
+                .heading_rad
+                .unwrap_or_else(|| belief.map_or(0.0, |b| b.heading_rad)),
         );
         let mut signature_valid = true;
         let mut claimed_generation = tx.generation_time;
