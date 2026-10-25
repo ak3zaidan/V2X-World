@@ -43,41 +43,27 @@ def headline(sample):
     return all(k == 't' for k in dims)
 
 
-def kind_of(v):
-    if not isinstance(v, dict):
-        return 'number', v
-    if len(v) == 1:
-        (k, inner), = v.items()
-        return k.lower(), inner
-    return 'object', v
-
-
 def point(v):
-    """The point estimate of one recorded sample value; None when it has none."""
+    """The point estimate of one recorded sample value (v2xw-metrics SampleValue as JSON:
+    kind count / ratio / distribution / scalar, state insufficient carries none)."""
     if v is None:
         return None
     if isinstance(v, (int, float)):
         return float(v)
-    k, inner = kind_of(v)
-    if k == 'count':
-        return float(inner['count'] if isinstance(inner, dict) else inner)
-    if 'count' in v and len(v) == 1:
-        return float(v['count'])
-    if k == 'insufficient' or v.get('insufficient'):
+    if v.get('state') == 'insufficient':
         return None
-    if k == 'ratio' or k == 'proportion' or k == 'ratioofsums':
-        return point(inner)
-    if 'successes' in v and 'trials' in v:
-        return v['successes'] / v['trials'] if v['trials'] else None
-    if 'numerator' in v and 'denominator' in v:
-        return v['numerator'] / v['denominator'] if v['denominator'] else None
-    if 'mean' in v:
-        return v['mean']
-    if 'value' in v:
-        return point(v['value'])
-    if k in ('scalar', 'distribution', 'summary', 'exact', 'estimate'):
-        return point(inner)
-    return None
+    kind = v.get('kind')
+    if kind == 'count':
+        return float(v['count'])
+    if kind == 'distribution':
+        return v.get('mean')
+    if 'point' in v:
+        return v['point']
+    if 'successes' in v and v.get('trials'):
+        return v['successes'] / v['trials']
+    if 'numerator' in v and v.get('denominator'):
+        return v['numerator'] / v['denominator']
+    return v.get('mean')
 
 
 # ------------------------------------------------------------------------------ display
@@ -125,6 +111,7 @@ class Case:
         self.name = os.path.basename(d.rstrip('/'))
         self.ev = json.load(open(os.path.join(d, 'evidence.json')))
         self._rec = {}
+        self._series = {}
 
     def run(self, side):
         return self.ev['runs'].get(side)
@@ -163,21 +150,39 @@ class Case:
         return out
 
     def rec_series(self, side):
-        """{metric: [(t_s, point)]} from the recording's headline samples."""
+        """{series: [(t_s, point)]} from the recording: a metric's headline samples (or, for a
+        metric recorded under one breakdown value only, such as bytes_air[air] or cbr[172],
+        that value's), and `metric[value]` for each single-dimension breakdown value."""
+        if side in self._series:
+            return self._series[side]
         rec = self.records(side)
         if rec is None:
             return None
-        out = {}
+        heads, dimsets, out = {}, {}, {}
         for s in rec:
-            if not headline(s):
-                continue
             p = point(s.get('value'))
+            dims = {k: v for k, v in (s.get('dims') or {}).items() if k != 't'}
+            m = s['metric']
+            dimsets.setdefault(m, set()).add(json.dumps(dims, sort_keys=True))
             if p is None:
                 continue
-            out.setdefault(s['metric'], []).append((s['t'] / NS, p))
+            item = (s['t'] / NS, p)
+            if not dims:
+                heads.setdefault(m, []).append(item)
+            elif len(dims) == 1:
+                out.setdefault(f'{m}[{next(iter(dims.values()))}]', []).append(item)
+        for m, sets in dimsets.items():
+            if m in heads:
+                out[m] = heads[m]
+            elif len(sets) == 1:
+                only = json.loads(next(iter(sets)))
+                if len(only) == 1:
+                    out[m] = list(out.get(f'{m}[{next(iter(only.values()))}]', []))
         for v in out.values():
             v.sort()
+        self._series[side] = out
         return out
+
 
     def agg_of(self, side, metric):
         for c in self.run(side)['catalogue']:
@@ -192,22 +197,22 @@ class Case:
         rec = self.records(side)
         succ = trials = num = den = wsum = wn = 0.0
         counts = []
-        for s in rec or []:
-            if s['metric'] != metric or not headline(s):
-                continue
+        mine = [s for s in rec or [] if s['metric'] == metric]
+        # A metric with one breakdown value only (cbr per channel) has no headline: pool it all.
+        heads = [s for s in mine if headline(s)] or mine
+        for s in heads:
             v = s.get('value')
-            flat = json.dumps(v)
-            if 'insufficient' in flat.lower():
+            if v.get('state') == 'insufficient':
                 continue
-            sv = find(v, 'successes'), find(v, 'trials')
-            if sv[1]:
-                succ += sv[0]
-                trials += sv[1]
+            # Classified by the sample's own state, not by a non-zero term: a first window's
+            # denominator can quantise to 0 and still carry its numerator into the pool.
+            if v.get('state') == 'proportion':
+                succ += v['successes']
+                trials += v['trials']
                 continue
-            nd = find(v, 'numerator'), find(v, 'denominator')
-            if nd[1]:
-                num += nd[0]
-                den += nd[1]
+            if v.get('state') == 'ratio-of-sums':
+                num += v['numerator']
+                den += v['denominator']
                 continue
             c = find(v, 'count')
             if c is not None and find(v, 'mean') is None:
@@ -322,7 +327,7 @@ def c_compare_ui_api(case, side, row):
     """Every compare row shows runs.compare's values for the two runs."""
     ui_doc, api_doc = case.cmp(side)
     ui = ui_doc.get('rows', {})
-    api = {m['name']: m for m in api_doc.get('metrics', [])}
+    api = {m['name']: m for m in api_doc.get('rows', [])}
     bad, n = [], 0
     for name, r in ui.items():
         m = api.get(name)
@@ -339,7 +344,7 @@ def c_compare_ui_api(case, side, row):
 
 def c_compare_records(case, side, row):
     """runs.compare's pooled value of every metric is the run's own value from its records."""
-    api = case.cmp(side)[1].get('metrics', [])
+    api = case.cmp(side)[1].get('rows', [])
     bad, n = [], 0
     only = row.get('metrics')
     for m in api:
@@ -561,7 +566,7 @@ def apply_fault(case, row):
         r = next(iter(run['compare']['ui']['rows'].values()))
         r['a'] = '777,777'
     elif f == 'compare_api':
-        for m in run['compare']['api']['metrics']:
+        for m in run['compare']['api']['rows']:
             if m.get('a') is not None and '.' not in m['name'] and (not row.get('metrics') or m['name'] in row['metrics']):
                 m['a'] = m['a'] * 3 + 1
                 break
@@ -631,6 +636,7 @@ def judge(doc, cdir, fault=False):
                     c = copy.copy(c0)
                     c.ev = copy.deepcopy(c0.ev)
                     c._rec = dict(c0._rec)
+                    c._series = {}
                     try:
                         apply_fault(c, r)
                     except (StopIteration, KeyError, TypeError) as e:

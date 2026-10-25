@@ -26,7 +26,7 @@ runs:
   s2-scms:
     note: "A, then cpp10 (certs_per_period 10), cert200 (full_cert_every_ms 200), vprio (verification_policy prioritized), atk20 (attacker fraction 0.2), poll10 (download_poll_interval_s 10)"
   s3-run:
-    note: "A, then seed (seed + 1), period5 (time.metric_period_s 5), dem750 (demand 750 veh/h), cw15 (radio.mac.cw_min_vo 15), dcc (radio.dcc.enabled true)"
+    note: "A, then seed (seed + 1), period5 (time.metric_period_s 5), dem750 (demand 750 veh/h), cw15 (radio.mac.cw_min_vo 15), dcc (radio.dcc.enabled true), step50 (time.mobility_step_ms 50), rate20s50 (step 50 and messages.rate_hz 20)"
 
 rows:
 # ------------------------------------------------------------ (1) the page shows the run
@@ -60,35 +60,50 @@ rows:
 # ------------------------------------------------------------ (3) the change moved the run as theory says
 # s1-radio: Radio & Channel, Messages, World
 - {id: LV.tx10.rssi, case: s1-radio, side: tx10, check: predict, metric: stats.mean_rssi_dbm, expect: down, delta: [-13.5, -6.0], fault: swap,
-   source: "log-distance link budget: received power falls dB for dB with EIRP (Rappaport 4.9): -13 dB over the same links; less in magnitude if the mean is over decoded frames only (the weakest links drop out)"}
+   source: "log-distance link budget: received power falls dB for dB with EIRP (Rappaport 4.9): -13 dB over the same links; less in magnitude if the mean is over decoded frames only (the weakest links drop out)",
+   verdict: pass, measured: "-102.10 -> -109.09 dBm (-6.99 dB): the base OBU already transmits at its region cap (mean 16.99 dBm conducted), so 23 -> 10 dBm configured is -7 dB actual, not -13"}
 - {id: LV.tx10.pdr, case: s1-radio, side: tx10, check: predict, metric: pdr, expect: down, min_change: 0.02, fault: swap,
-   source: "less SNR at every distance lowers the PRR curve (Bai, Stancil, Krishnan, VTC 2010); NLOS street-canyon links fall under sensitivity first"}
+   source: "less SNR at every distance lowers the PRR curve (Bai, Stancil, Krishnan, VTC 2010); NLOS street-canyon links fall under sensitivity first",
+   verdict: pass, measured: "0.3613 -> 0.2447 (-32 %)"}
 - {id: LV.tx10.attempts, case: s1-radio, side: tx10, check: predict, metric: stats.rx_attempts, expect: same, tolerance: 0.02, fault: scale,
-   source: "run-cost.yaml: the followed set is taken at the fixed 33 dBm reference EIRP (FCC 47 CFR 95.3204(b)), so a power study changes outcomes, not what is evaluated"}
+   source: "run-cost.yaml: the followed set is taken at the fixed 33 dBm reference EIRP (FCC 47 CFR 95.3204(b)), so a power study changes outcomes, not what is evaluated",
+   verdict: pass, measured: "576,245 -> 576,240"}
 - {id: LV.tx10.frames, case: s1-radio, side: tx10, check: predict, metric: stats.tx.all, expect: same, tolerance: 0.03, fault: scale,
-   source: "J2945/1 6.3.6: the BSM rate is 10 Hz at low density whatever the power; the backend's RSU traffic moves a little with reception"}
+   source: "J2945/1 6.3.6: the BSM rate is 10 Hz at low density whatever the power; the backend's RSU traffic moves a little with reception",
+   verdict: pass, measured: "23,425 -> 23,425 BSMs"}
 - {id: LV.tx30.rssi, case: s1-radio, side: tx30, check: predict, metric: stats.mean_rssi_dbm, expect: up, delta: [3.0, 7.5], fault: swap,
-   source: "+7 dB EIRP is +7 dB at every receiver over the same links (Rappaport 4.9); less over decoded frames as weaker links join"}
+   source: "+7 dB EIRP is +7 dB at every receiver over the same links (Rappaport 4.9); less over decoded frames as weaker links join",
+   verdict: wrong-expectation, measured: "-102.102 -> -102.102 dBm, run byte-identical in every metric", note: "run.rs tx_power_dbm: an OBU transmits at min(P, region EIRP cap - net antenna gain) (radio/regulation.rs, US OBU EIRP limit toward the horizon); the default 23 dBm already exceeds the cap (mean conducted 16.99 dBm), so 30 dBm changes nothing. Correct and realistic: a unit cannot radiate above its licence. The settings window does not say the value is clamped (open, Studio)"}
 - {id: LV.tx30.pdr, case: s1-radio, side: tx30, check: predict, metric: pdr, expect: up, min_change: 0.01, fault: swap,
-   source: "more SNR raises the PRR curve (Bai et al. 2010)"}
+   source: "more SNR raises the PRR curve (Bai et al. 2010)",
+   verdict: wrong-expectation, measured: "0.3613 -> 0.3613", note: "as LV.tx30.rssi: the power above the regulatory cap is not radiated"}
 - {id: LV.rate5.frames, case: s1-radio, side: rate5, check: predict, metric: stats.tx.bsm, expect: down, ratio: [0.45, 0.56], fault: swap,
-   source: "frames = rate x vehicles x time (J2945/1 periodic BSM): 5/10 Hz halves the BSMs"}
+   source: "frames = rate x vehicles x time (J2945/1 periodic BSM): 5/10 Hz halves the BSMs",
+   verdict: pass, measured: "23,425 -> 11,713 BSMs (x0.500)"}
 - {id: LV.rate5.cbr, case: s1-radio, side: rate5, check: predict, metric: cbr, expect: down, ratio: [0.35, 0.7], fault: swap,
-   source: "CBR is offered airtime (ETSI TS 102 687): half the BSMs, about half the busy time; SPDUs to and from the RSU are unchanged"}
+   source: "CBR is offered airtime (ETSI TS 102 687): half the BSMs, about half the busy time; SPDUs to and from the RSU are unchanged",
+   verdict: pass, measured: "0.00883 -> 0.00468 (x0.53)"}
 - {id: LV.rate5.attempts, case: s1-radio, side: rate5, check: predict, metric: stats.rx_attempts, expect: down, ratio: [0.45, 0.6], fault: swap,
-   source: "each frame is followed to every receiver in reach (run-cost.yaml), so attempts follow frames"}
+   source: "each frame is followed to every receiver in reach (run-cost.yaml), so attempts follow frames",
+   verdict: pass, measured: "576,245 -> 287,914 (x0.500)"}
 - {id: LV.rate5.events, case: s1-radio, side: rate5, check: predict, metric: events_processed, expect: down, ratio: [0.4, 0.85], fault: swap,
-   source: "the DES work is dominated by per-frame tx and rx events; mobility steps are unchanged, so less than the frames' halving"}
+   source: "the DES work is dominated by per-frame tx and rx events; mobility steps are unchanged, so less than the frames' halving",
+   verdict: wrong-expectation, measured: "not observed: events_processed is a machine-dependent diagnostic and is in neither the catalogue the Studio reads nor the recording; the run cost moved instead: wall 48.3 -> 31.0 s (x0.64), engine footprint 219 -> 160 MB"}
 - {id: LV.rate20.frames, case: s1-radio, side: rate20, check: predict, metric: stats.tx.bsm, expect: up, ratio: [1.85, 2.1], fault: swap,
-   source: "rate x vehicles x time: 20/10 Hz doubles the BSMs at a CBR far below DCC thresholds"}
+   source: "rate x vehicles x time: 20/10 Hz doubles the BSMs at a CBR far below DCC thresholds",
+   verdict: wrong-expectation, measured: "refused", note: "validate.rs: 20 Hz needs time.mobility_step_ms <= 50 (each vehicle generator runs once a step); the engine refuses the run with that guidance and the Studio marks the field. Correct; re-planned as LV.rate20s50.* in s3-run"}
 - {id: LV.rate20.cbr, case: s1-radio, side: rate20, check: predict, metric: cbr, expect: up, ratio: [1.5, 2.2], fault: swap,
-   source: "twice the offered airtime (ETSI TS 102 687)"}
+   source: "twice the offered airtime (ETSI TS 102 687)",
+   verdict: wrong-expectation, measured: "refused, as LV.rate20.frames"}
 - {id: LV.rate20.wall, case: s1-radio, side: rate20, check: predict, metric: cost.wall_s, expect: up, min_change: 0.15, fault: swap,
-   source: "run-cost.yaml: wall time follows frames and reception attempts (12-15 us of CPU per attempt); twice the attempts"}
+   source: "run-cost.yaml: wall time follows frames and reception attempts (12-15 us of CPU per attempt); twice the attempts",
+   verdict: wrong-expectation, measured: "refused, as LV.rate20.frames"}
 - {id: LV.nobld.pdr, case: s1-radio, side: nobld, check: predict, metric: pdr, expect: up, min_change: 0.05, fault: swap,
-   source: "30 m block buildings put cross-street links in NLOS (+20-30 dB, WINNER II B1 / 3GPP TR 37.885 UMi NLOS); without them every link is LOS"}
+   source: "30 m block buildings put cross-street links in NLOS (+20-30 dB, WINNER II B1 / 3GPP TR 37.885 UMi NLOS); without them every link is LOS",
+   verdict: pass, measured: "0.3613 -> 0.9937"}
 - {id: LV.nobld.rxok, case: s1-radio, side: nobld, check: predict, metric: stats.rx_ok, expect: up, min_change: 0.1, fault: swap,
-   source: "LOS everywhere: more of the same attempts decode"}
+   source: "LOS everywhere: more of the same attempts decode",
+   verdict: pass, measured: "92,411 -> 571,248 decoded receptions; wall 48 -> 95 s (decode work), footprint 219 -> 318 MB"}
 
 # s2-scms: Certificates & SCMS, Security & Crypto, Attackers, Backend
 - {id: LV.cpp10.pool, case: s2-scms, side: cpp10, check: predict, metric: cert_pool_valid, expect: up, ratio: [1.5, 2.1], fault: swap,
@@ -133,3 +148,15 @@ rows:
    source: "at a low CBR collisions are rare either way: delivery moves little"}
 - {id: LV.dcc.frames, case: s3-run, side: dcc, check: predict, metric: stats.tx.bsm, expect: same, tolerance: 0.05, fault: scale,
    source: "J2945/1 / ETSI TS 102 687 DCC acts above a CBR threshold; this fleet's CBR is far below it, so the BSM rate stays 10 Hz"}
+# Added before s3-run ran (2026-10-25, after s1-radio showed 20 Hz is refused at a 100 ms step):
+- {id: LV.step50.frames, case: s3-run, side: step50, check: predict, metric: stats.tx.bsm, expect: same, tolerance: 0.05, fault: scale,
+   source: "J2945/1: the BSM rate is 10 Hz whatever the mobility step; a finer step only resamples the kinematics (the arrivals and routes move a little)"}
+- {id: LV.step50.wall, case: s3-run, side: step50, check: predict, metric: cost.wall_s, expect: up, min_change: 0.05, fault: swap,
+   source: "twice the mobility steps (and keyframes) for the same frames: the per-step work doubles"}
+- {id: LV.rate20s50.frames, case: s3-run, side: rate20s50, against: step50, check: predict, metric: stats.tx.bsm, expect: up, ratio: [1.85, 2.1], fault: swap,
+   source: "rate x vehicles x time at a 50 ms step: 20/10 Hz doubles the BSMs"}
+- {id: LV.rate20s50.cbr, case: s3-run, side: rate20s50, against: step50, check: predict, metric: cbr, expect: up, ratio: [1.5, 2.2], fault: swap,
+   source: "twice the offered airtime (ETSI TS 102 687)"}
+- {id: LV.rate20s50.attempts, case: s3-run, side: rate20s50, against: step50, check: predict, metric: stats.rx_attempts, expect: up, ratio: [1.85, 2.1], fault: swap,
+   source: "attempts follow frames (run-cost.yaml)"}
+
