@@ -1,0 +1,345 @@
+# Radio, MAC and networking validation against theory and published results
+# (docs/validation/radio-2026-10-24.md). Every `expect` below was written and committed with
+# `measured: pending` before the run it judges. Not a sweep table: `v2xw sensitivity` passes
+# over it by its `schema`.
+#
+# Runs: each is a base-only sensitivity run (`v2xw sensitivity --base-only`) of the open
+# 1.2 km grid (scenarios/sensitivity/dsrc-grid.yaml: 40 vehicles, 802.11p, BSMs, US region)
+# with `common` and the run's `set` applied:
+#   python3 -I tools/radioval/radioval.py plan  <this file> <outdir>   (writes the specs)
+#   v2xw sensitivity --base-only <outdir>/<run>.spec.yaml > <outdir>/<run>.out   (one per run-lock call)
+#   python3 -I tools/radioval/radioval.py check <this file> <outdir> [--fill] [--mutate]
+# Rows with a `kind` are judged by that script (theory computed there, never read from the
+# engine); rows without one are judged by the test or check they name.
+#
+# The clean link (common): single-slope log-distance n = 2.5, no shadowing, no fading, BSMs
+# at 2 Hz for 4 s (collisions under 3 %). Budget: EIRP 20 dBm (J2945/1 cap) + 3 dBi receive
+# - (-92 dBm sensitivity) = 115 dB; a conducted power below the cap radiates tx + 3 dBi, so
+# the budget is tx + 98 dB. Free space at 5.86 GHz: FSPL = 20 log10(d) + 47.80 dB.
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+schema: v2xw/scms-run-expectations/1
+common:
+  time.duration_s: 4.0
+  metrics: [all]
+  messages.rate_hz: 2.0
+  radio.channel_model.path_loss_exponent: 2.5
+  radio.channel_model.shadowing_sigma_db: 0.0
+  radio.channel_model.fading: none
+runs:
+  LD:
+    note: the clean link, log-distance n = 2.5, budget 115 dB (d0 = 10 m x 10^((115 - 67.8) / 25) = 766 m)
+  FS3:
+    set: {radio.models.propagation: {id: propagation/free-space, params: {}}, radio.devices.obu.tx_power_dbm: 3.0}
+    note: free space, conducted 3 dBm (EIRP 6 dBm), budget 101 dB
+  TR12:
+    set: {radio.models.propagation: {id: propagation/two-ray-ground, params: {}}, radio.devices.obu.tx_power_dbm: 12.0}
+    note: two-ray ground, 1.5 m antennas, conducted 12 dBm, budget 110 dB
+  TR37:
+    set: {radio.models.propagation: {id: propagation/tr37885, params: {}}, radio.devices.obu.tx_power_dbm: 3.0}
+    note: TR 37.885 state model (urban, the procedural grid's class), no shadowing, budget 101 dB
+  RAY:
+    set: {radio.channel_model.fading: rayleigh}
+    note: the clean link with Rayleigh fading
+  NAK3:
+    set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_shape: 3.0}
+    note: the clean link with Nakagami m = 3
+  SH6:
+    set: {radio.channel_model.shadowing_sigma_db: 6.0}
+    note: the clean link with 6 dB log-normal shadowing, no fading
+  AIRD:
+    common: false
+    set: {time.duration_s: 3.0, metrics: [all], security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: true}
+    note: the grid at 10 Hz, every BSM signed with a digest
+  AIRC:
+    common: false
+    set: {time.duration_s: 3.0, metrics: [all], security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
+    note: the grid at 10 Hz, every BSM carries the full certificate
+  N40:
+    common: false
+    set: {time.duration_s: 3.0, metrics: [all]}
+    note: the grid at its default channel (medium tier), 10 Hz, 40 vehicles
+  N40B:
+    common: false
+    set: {time.duration_s: 3.0, metrics: [all]}
+    note: N40 again (determinism)
+  N80:
+    common: false
+    set: {time.duration_s: 3.0, metrics: [all], actors.vehicles.demand.params.max_total_vehicles: 80}
+  N160:
+    common: false
+    set: {time.duration_s: 3.0, metrics: [all], actors.vehicles.demand.params.max_total_vehicles: 160}
+rows:
+# ---- Path loss: the PRR 0.5 edge sits where the law spends the budget (no fading) ----
+- id: RV-PL-LD
+  kind: abs
+  run: LD
+  metric: range_m
+  band: [720, 800]
+  expect: 766 m (25 log10(d0 / 10 m) = 115 - 67.8 dB)
+  source: log-distance law (Rappaport 2e Eq. 4.68); one 20 m bin of room
+  fault: d0 scaled x1.25
+  measured: pending
+  verdict: pending
+- id: RV-PL-FS
+  kind: abs
+  run: FS3
+  metric: range_m
+  band: [420, 480]
+  expect: 457 m (20 log10(d0) = 101 - 47.80 dB)
+  source: Friis 1946; FSPL = 20 log10(4 pi d f / c)
+  fault: d0 scaled x1.25
+  measured: pending
+  verdict: pending
+- id: RV-PL-2RAY
+  kind: abs
+  run: TR12
+  metric: range_m
+  band: [800, 880]
+  expect: 843 m (past the 553 m crossover 4 pi ht hr / lambda, PL = 40 log10 d - 20 log10(ht hr) = 110 dB); free space would put it at 1,288 m
+  source: Rappaport 2e Eq. 4.52 (two-ray ground reflection)
+  fault: d0 scaled x1.25
+  measured: pending
+  verdict: pending
+- id: RV-PL-TR37
+  kind: abs
+  run: TR37
+  metric: range_m
+  band: [120, 800]
+  expect: between the urban NLOS edge (36.85 + 30 log10 d + 18.9 log10 5.86 = 101 dB at 137 m) and the urban LOS edge (38.77 + 16.7 log10 d + 18.2 log10 5.86 = 101 dB at 775 m); a same-street link is LOS with P = min(1, 1.05 exp(-0.0114 d)), else NLOSv
+  source: 3GPP TR 37.885 V15.3.0 Table 6.2.1-1 and §6.2.1 LOS probability
+  fault: value x1.25 (stays green if near the low end; the band is a probe)
+  measured: pending
+  verdict: pending
+# ---- Fading and shadowing: the PRR curve is the law's tail probability ----
+- id: RV-FAD-RAY-390
+  kind: curve
+  run: RAY
+  range: [360, 420]
+  law: {kind: rayleigh, d0: 766, n: 2.5}
+  tol: 0.06
+  expect: PRR = floor x exp(-(d / d0)^n) = 0.83 x floor at 390 m
+  source: Rayleigh power is exponential with unit mean, so P(g > (d/d0)^n) = exp(-(d/d0)^n) (Rappaport 2e §5.6; Sklar, IEEE Commun. Mag. 1997)
+  fault: d0 x0.85 in the theory
+  measured: pending
+  verdict: pending
+- id: RV-FAD-RAY-570
+  kind: curve
+  run: RAY
+  range: [540, 600]
+  law: {kind: rayleigh, d0: 766, n: 2.5}
+  tol: 0.06
+  expect: 0.62 x floor
+  source: as RV-FAD-RAY-390
+  fault: d0 x0.85 in the theory
+  measured: pending
+  verdict: pending
+- id: RV-FAD-RAY-770
+  kind: curve
+  run: RAY
+  range: [740, 800]
+  law: {kind: rayleigh, d0: 766, n: 2.5}
+  tol: 0.06
+  expect: 0.36 x floor
+  source: as RV-FAD-RAY-390
+  fault: d0 x0.85 in the theory
+  measured: pending
+  verdict: pending
+- id: RV-FAD-NAK3-570
+  kind: curve
+  run: NAK3
+  range: [540, 600]
+  law: {kind: nakagami, m: 3, d0: 766, n: 2.5}
+  tol: 0.06
+  expect: Q(3, 3 x 0.478) = 0.83 x floor
+  source: Nakagami-m power is Gamma(m, 1/m) (Nakagami 1960; Cheng et al., IEEE JSAC 2007 fit m = 3 near range for V2V)
+  fault: d0 x0.85 in the theory
+  measured: pending
+  verdict: pending
+- id: RV-FAD-NAK3-770
+  kind: curve
+  run: NAK3
+  range: [740, 800]
+  law: {kind: nakagami, m: 3, d0: 766, n: 2.5}
+  tol: 0.06
+  expect: Q(3, 3.04) = 0.41 x floor
+  source: as RV-FAD-NAK3-570
+  fault: d0 x0.85 in the theory
+  measured: pending
+  verdict: pending
+- id: RV-SH6-440
+  kind: curve
+  run: SH6
+  range: [400, 480]
+  law: {kind: lognormal, sigma: 6.0, d0: 766, n: 2.5}
+  tol: 0.08
+  expect: Phi(25 log10(766 / 440) / 6) = 0.84 x floor
+  source: log-normal shadowing, P(X < margin) (Rappaport 2e §4.9.2); wider tolerance because a link's shadow is correlated along its 4 s
+  fault: d0 x0.85 in the theory
+  measured: pending
+  verdict: pending
+- id: RV-SH6-950
+  kind: curve
+  run: SH6
+  range: [900, 1000]
+  law: {kind: lognormal, sigma: 6.0, d0: 766, n: 2.5}
+  tol: 0.08
+  expect: Phi(-0.39) = 0.35 x floor (shadowing carries PRR past the no-fading edge)
+  source: as RV-SH6-440
+  fault: d0 x0.85 in the theory
+  measured: pending
+  verdict: pending
+- id: RV-STEP-LD
+  kind: curve
+  run: LD
+  range: [800, 1000]
+  law: {kind: step, d0: 766, n: 2.5}
+  tol: 0.03
+  expect: 0 past the sensitivity distance without fading
+  source: a frame below the receiver's sensitivity is not decoded (IEEE 802.11-2020 17.3.10.6)
+  fault: "d0 x0.85 in the theory (stays 0: this row cannot fail under that fault; its fault is a d0 past 1 km)"
+  measured: pending
+  verdict: pending
+# ---- Frame airtime ----
+- id: RV-AIR-DIGEST
+  kind: txtime
+  run: AIRD
+  rate_mbps: 6
+  equals: 304
+  expect: a digest-signed BSM of 192 octets (56 BSM + 93 envelope + 5 WSMP + 38 LLC/MAC/FCS) is 40 + 8 ceil((22 + 8 x 192) / 48) = 304 us
+  source: IEEE 802.11-2020 17.4.3 TXTIME at 10 MHz (8 us symbols, 40 us preamble and SIGNAL); docs/validation/foundations.md frame octets
+  fault: TXTIME + 1 symbol
+  measured: pending
+  verdict: pending
+- id: RV-AIR-CERT
+  kind: txtime
+  run: AIRC
+  rate_mbps: 6
+  equals: 400
+  expect: a certificate-signed BSM of 263 octets is 40 + 8 ceil((22 + 8 x 263) / 48) = 400 us
+  source: IEEE 802.11-2020 17.4.3; IEEE 1609.2 certificate signer (+71 octets against the digest)
+  fault: TXTIME + 1 symbol
+  measured: pending
+  verdict: pending
+# ---- Channel load against density, and congestion ----
+- id: RV-CBR-DENSITY-2X
+  kind: ratio
+  base: N40
+  run: N80
+  metric: cbr_mean
+  band: [1.75, 2.05]
+  expect: x2 (x1.9 to x2 once overlaps are counted once)
+  source: below saturation CBR = sum over sensed stations of rate x T_air, so it is linear in density (ETSI TS 102 687 CBR; Sepulcre et al. 2022 Veins 0.00155 CBR per veh/km, radio-fidelity.md 7.5)
+  fault: the change does nothing (ratio 1)
+  measured: pending
+  verdict: pending
+- id: RV-CBR-DENSITY-4X
+  kind: ratio
+  base: N40
+  run: N160
+  metric: cbr_mean
+  band: [3.2, 4.1]
+  expect: x4, a little less as overlapping busy periods are counted once
+  source: as RV-CBR-DENSITY-2X
+  fault: the change does nothing (ratio 1)
+  measured: pending
+  verdict: pending
+- id: RV-CBR-BOUND
+  kind: abs
+  run: N40
+  metric: cbr_mean
+  band: [0.01, 0.1254]
+  expect: at most every vehicle sensing every frame, 40 x (400 + 9 x 304 us) per s = 0.125
+  source: CBR is the union of sensed busy time (ETSI TS 102 687), which cannot exceed the offered airtime
+  fault: value x1.25 (green while the measure is under 0.1)
+  measured: pending
+  verdict: pending
+- id: RV-CONG-COLL
+  kind: chain
+  runs: [N40, N80, N160]
+  metric: collision_rate
+  expect: up
+  min_change: 0.05
+  expect_text: collisions per attempt rise with every doubling of density
+  source: more contenders per carrier-sense area and more hidden terminals (Bianchi, IEEE JSAC 2000; Jiang et al. 2008 hidden-terminal broadcast)
+  fault: order reversed
+  measured: pending
+  verdict: pending
+- id: RV-CONG-PDR
+  kind: chain
+  runs: [N40, N80, N160]
+  metric: pdr
+  expect: down
+  min_change: 0.001
+  expect_text: PDR falls monotonically with density at a fixed rate and MCS
+  source: Sepulcre et al. 2022 (Veins, 802.11p) and radio-fidelity.md 7.5
+  fault: order reversed
+  measured: pending
+  verdict: pending
+- id: RV-CONG-ACCESS
+  kind: chain
+  runs: [N40, N80, N160]
+  metric: access_ms
+  expect: up
+  min_change: 0.01
+  expect_text: channel-access delay rises with channel busy time (more deferrals, frozen backoff)
+  source: IEEE 802.11-2020 10.3.4 (backoff frozen while the medium is busy); Bianchi 2000
+  fault: order reversed
+  measured: pending
+  verdict: pending
+- id: RV-CONG-LAT
+  kind: chain
+  runs: [N40, N80, N160]
+  metric: e2e_ms_p95
+  expect: up
+  min_change: 0.005
+  expect_text: the latency tail rises with congestion
+  source: queueing behind a busier channel (Kleinrock, Queueing Systems 1975); the stage access_ms above
+  fault: order reversed
+  measured: pending
+  verdict: pending
+- id: RV-CONG-HIDDEN
+  kind: chain
+  runs: [N40, N80, N160]
+  metric: loss_hidden-terminal
+  expect: up
+  min_change: 0.05
+  expect_text: hidden-terminal losses per attempt rise with density
+  source: two senders outside each other's carrier-sense range overlap at a receiver between them in proportion to the senders there (Tobagi and Kleinrock 1975)
+  fault: order reversed
+  measured: pending
+  verdict: pending
+- id: RV-DCC-RATE-LOW
+  kind: abs
+  run: N160
+  metric: tx_rate_hz
+  band: [9.8, 10.05]
+  expect: 10 Hz; J2945/1 stretches the interval only past B = 25 vehicles within 100 m, and 160 vehicles on 16.8 km of street are about 3 per 100 m
+  source: SAE J2945/1 2016 6.3.6 (ITT = 100 ms x N / B above B)
+  fault: value x1.25
+  measured: pending
+  verdict: pending
+- id: RV-DET
+  kind: same
+  runs: [N40, N40B]
+  expect: the same seed gives byte-identical measurements
+  source: determinism (02-architecture.md)
+  fault: one byte appended
+  measured: pending
+  verdict: pending
+# ---- Judged by the named engine test or netval check ----
+- id: RV-NET-03
+  test: v2xw-netval NET-03 (cargo test -p v2xw-netval --test layers)
+  expect: every message type signed under its registered PSID / ITS-AID (BSM 0x20, SPaT and MAP 0x82 on the US stack; CAM 36, DENM 37, SPATEM 137, MAPEM 138 on the ETSI stack)
+  source: IEEE 1609.12 PSID registry; ETSI TS 102 965 V2.1.1 Table A.1
+  fault: BSM signed under 0x21
+  measured: pending
+  verdict: pending
+- id: RV-BACKHAUL
+  test: v2xw-radio ip_transport::tests::backhaul_one_way_delays_are_their_hand_values
+  expect: one-way delay of a 1,500-octet uplink packet = route km x us/km + hops x per-hop + 12,000 bits / rate. fibre 20 x 4.9 + 4 x 50 + 12 = 310 us; DSL 5 x 4.9 + 6 x 50 + 8,000 + 600 = 8,924.5 us; microwave 10 x 3.336 + 4 x 50 + 30 = 263.4 us
+  source: light in glass at n = 1.47 (4.9 us/km) and in air (3.336 us/km); ITU-T G.993.2 interleaving; serialisation L / R
+  fault: the DSL interleaving left out
+  measured: pending
+  verdict: pending
