@@ -2,11 +2,16 @@
 # realism base cut to a 120 s live window (no fast-forward), with a 5 s report shuffle, no
 # MA review delay and a CRL every 10 s, so reports relayed through roadside units and CRLs
 # fetched over their backhaul both happen inside the window. 30 units on metro fibre,
-# report-forward + crl + provisioning-proxy, 80 % cellular penetration (the rest relay-only).
+# report-forward + crl + provisioning-proxy. No vehicle has a cellular modem (penetration 0),
+# so every report and every CRL a vehicle gets goes through a unit and its backhaul.
 schema: v2xw/scenario/1
 meta:
   base: ../real-world/midtown-scms-realism.yaml
   name: live-rsu scms base
+net:
+  uu:
+    params:
+      penetration: 0.0
 time:
   duration_s: 120.0
   fast_forward: []

@@ -8,7 +8,7 @@ crates/v2xw-engine/tests/expectations/live-rsu.yaml.
     live_rsu.py faults <runs-dir> <table.yaml> re-judges every row with its injected fault
                                                and prints whether it goes red
 
-It reads `recording.mcap` (node.tx, phy.prr, app.advice, pki.flow), `metrics.json`,
+It reads `recording.mcap` (node.tx, phy.prr, app.advice, msg.latency, proto.revocation), `metrics.json`,
 `run-report.json` and the run lock's cost line (`<run-dir>.cost.json`), and never imports
 engine code.
 
@@ -36,6 +36,8 @@ OUTAGE_NODE = 2           # glosa-out.yaml: the unit at site 10, junction 10
 OUTAGE_JUNCTION = 10
 OUTAGE_T_NS = 60 * NS
 SPAT_FRESH_NS = 1 * NS    # a SPaT older than 1 s is not used (apps.rs signal_situation)
+SCMS_OUTAGE_NODE = 5      # scms-out.yaml: unit 5 off from 30 s
+SCMS_OUTAGE_T_NS = 30 * NS
 
 
 def _mod(name):
@@ -63,9 +65,9 @@ def pct(xs, q):
 
 def raw(run_dir):
     """The records the measures read, as plain lists (so a fault can mutate them)."""
-    r = {'tx': [], 'prr': [], 'advice': [], 'flow': []}
+    r = {'tx': [], 'prr': [], 'advice': [], 'flow': [], 'lat': [], 'rev': []}
     for t, d in records(os.path.join(run_dir, 'recording.mcap'),
-                        {'node.tx', 'phy.prr', 'app.advice', 'pki.flow'}):
+                        {'node.tx', 'phy.prr', 'app.advice', 'msg.latency', 'proto.revocation'}):
         if t == 'node.tx':
             r['tx'].append({k: d.get(k) for k in ('t', 'node', 'msg', 'msg_type', 'bytes_on_wire',
                                                   't_generated', 'power_dbm')})
@@ -74,10 +76,11 @@ def raw(run_dir):
                 r['prr'].append(d)
         elif t == 'app.advice':
             r['advice'].append(d)
+        elif t == 'msg.latency':
+            if d.get('flow') == 'mbr':
+                r['lat'].append(d)
         else:
-            r['flow'].append({k: d.get(k) for k in ('t', 'flow', 'name', 'from', 'to', 'bytes',
-                                                    'instance', 'via', 'transport', 't_recv',
-                                                    'arrives')})
+            r['rev'].append({k: d.get(k) for k in ('t', 'stage', 'node', 'id')})
     rep = json.load(open(os.path.join(run_dir, 'run-report.json')))['report']
     cost = {}
     cp = run_dir.rstrip('/') + '.cost.json'
@@ -186,15 +189,75 @@ def measures(r):
               'crl_versions_published', 'reports_from_rsus', 'relay_delivered'):
         d['s.' + k] = p2.get(k, 0)
     d['s.relay_only_vehicles'] = acc2.get('relay_only_vehicles', 0)
+    d['s.retx_share'] = d['s.backhaul_retx'] / d['s.backhaul_messages'] if d['s.backhaul_messages'] else 0.0
     d['s.backhaul_bytes'] = acc2.get('backhaul_bytes', 0)
-    flows = scms_flows(r['flow'])
+    flows = scms_flows(r)
     d.update(flows)
     return d
 
 
-def scms_flows(flow):
-    """Report and CRL hops on the units' backhaul, from pki.flow (filled in after the pilot)."""
-    return {}
+def scms_flows(r):
+    """Reports relayed through the units (msg.latency spans) and the CRL path through them
+    (proto.revocation `published` and `downloaded`, the units' own CRL frames in node.tx)."""
+    d = {}
+    zero = r.get('_zero_delay')
+    bh = []
+    e2e = []
+    for x in r['lat']:
+        if x.get('flow') != 'mbr':
+            continue
+        spans = x.get('spans') or []
+        b = [s for s in spans if s['stage'] == 'backhaul']
+        if not b:
+            continue
+        dt = sum(s['end'] - s['start'] for s in b)
+        if zero:
+            dt = 0
+        bh.append(dt / 1e6)
+        e2e.append((max(s['end'] for s in spans) - x['t_origin']) / 1e6 - (0 if not zero else sum(
+            s['end'] - s['start'] for s in b) / 1e6))
+    d['s.relayed_reports'] = len(bh)
+    d['s.backhaul_ms_mean'] = sum(bh) / len(bh) if bh else 0.0
+    d['s.backhaul_ms_p50'] = pct(bh, 0.5)
+    d['s.backhaul_ms_max'] = max(bh) if bh else 0.0
+    d['s.report_e2e_ms_mean'] = sum(e2e) / len(e2e) if e2e else 0.0
+    pub = sorted(x['t'] for x in r['rev'] if x['stage'] == 'published')
+    d['s.crl_published'] = len(pub)
+    crl_tx = sorted((x['t'], x['node']) for x in r['tx'] if x['msg_type'] == 'crl')
+    d['s.crl_frames'] = len(crl_tx)
+    d['s.crl_units'] = len({n for _, n in crl_tx})
+    d['s.crl_frames_from_outage_unit'] = sum(1 for t, n in crl_tx if n == SCMS_OUTAGE_NODE and t > SCMS_OUTAGE_T_NS)
+    # each publication's first unit frame after it, and every unit's first frame after it
+    lags, unit_lags = [], []
+    for i, p in enumerate(pub):
+        nxt = pub[i + 1] if i + 1 < len(pub) else math.inf
+        after = [(t, n) for t, n in crl_tx if p <= t < nxt]
+        if not after:
+            continue
+        lags.append((after[0][0] - p) / NS)
+        first = {}
+        for t, n in after:
+            first.setdefault(n, t)
+        unit_lags += [(t - p) / NS for t in first.values()]
+    if zero:
+        lags = [0.0 for _ in lags]
+        unit_lags = [0.0 for _ in unit_lags]
+    d['s.crl_first_frame_lag_s_min'] = min(lags) if lags else -1.0
+    d['s.crl_first_frame_lag_s_mean'] = sum(lags) / len(lags) if lags else -1.0
+    d['s.crl_unit_lag_s_min'] = min(unit_lags) if unit_lags else -1.0
+    d['s.crl_unit_lag_s_mean'] = sum(unit_lags) / len(unit_lags) if unit_lags else -1.0
+    # vehicles: a relay-only vehicle's `downloaded` after the latest publication
+    vl = []
+    for x in r['rev']:
+        if x['stage'] != 'downloaded' or x.get('node') is None:
+            continue
+        before = [p for p in pub if p <= x['t']]
+        if before:
+            vl.append((x['t'] - before[-1]) / NS)
+    d['s.veh_crl_downloads'] = len(vl)
+    d['s.veh_crl_lag_s_p50'] = pct(vl, 0.5)
+    d['s.veh_crl_lag_s_mean'] = sum(vl) / len(vl) if vl else -1.0
+    return d
 
 
 def measure(run_dir, fault=None, base_dir=None):
@@ -219,7 +282,7 @@ def measure(run_dir, fault=None, base_dir=None):
         for a in r['advice']:
             a['distance_m'] = a['distance_m'] + 50.0
     elif fault == 'delay-zero':
-        r['flow'] = [dict(f, _zero=True) for f in r['flow']]
+        r['_zero_delay'] = True
     d = measures(r)
     return d
 
