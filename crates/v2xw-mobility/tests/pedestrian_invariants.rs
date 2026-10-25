@@ -474,14 +474,19 @@ fn trace_the_observed_run() {
             let actors = engine.audit_actors(&world, update.t);
             for a in actors.iter().filter(|a| watch.contains(&a.actor.index())) {
                 eprintln!(
-                    "t={ts:.1} watch {} {:?} lane {} s {:.3} v {:.3} acc {:.2} changing {:?}",
+                    "t={ts:.1} watch {} {:?} lane {} s {:.3} v {:.3} acc {:.2} changing {:?} pos ({:.2},{:.2}) hdg {:.3} prev {:?} next {:?}",
                     a.actor.index(),
                     a.class,
                     a.lane.index(),
                     a.s_m,
                     a.speed_mps,
                     a.accel_mps2,
-                    a.changing.map(|(f, to)| (f.index(), to.index()))
+                    a.changing.map(|(f, to)| (f.index(), to.index())),
+                    a.pos.x,
+                    a.pos.y,
+                    a.heading_rad,
+                    a.prev_lane.map(|l| l.index()),
+                    a.route_next.map(|l| l.index())
                 );
             }
             for sp in &update.spawned {
@@ -538,5 +543,64 @@ fn trace_the_observed_run() {
             }
         }
         t = update.t;
+    }
+}
+
+/// A diagnostic, ignored: the lanes named in `V2XW_LANES` (comma-separated ids) — kind,
+/// junction, ends, length, the connection each lane carries — and each internal lane's
+/// foes in its junction's conflict matrix.
+#[test]
+#[ignore = "a diagnostic, not a gate"]
+fn describe_lanes() {
+    let world = world();
+    let ids: Vec<u32> = std::env::var("V2XW_LANES")
+        .ok()
+        .map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+        .unwrap_or_default();
+    let roads = &world.roads;
+    for id in &ids {
+        let lane = roads
+            .lanes()
+            .iter()
+            .find(|l| l.id.index() == *id)
+            .expect("lane");
+        let (a, b) = (lane.centreline[0], *lane.centreline.last().expect("pts"));
+        let conns: Vec<_> = roads
+            .connections()
+            .iter()
+            .filter(|c| c.via == Some(lane.id) || c.from_lane == lane.id)
+            .map(|c| {
+                (
+                    c.from_lane.index(),
+                    c.to_lane.index(),
+                    c.via.map(|v| v.index()),
+                    c.direction,
+                )
+            })
+            .collect();
+        eprintln!(
+            "lane {id} {:?} junction {:?} index {} from ({:.2},{:.2}) to ({:.2},{:.2}) len {:.2} conns {:?}",
+            lane.kind,
+            lane.junction.map(|j| j.index()),
+            lane.index,
+            a.x,
+            a.y,
+            b.x,
+            b.y,
+            lane.length_m,
+            conns
+        );
+        if let Some(j) = lane.junction {
+            let junction = roads.junction(j);
+            if let Some(me) = junction.internal.iter().position(|l| *l == lane.id) {
+                let foes: Vec<u32> = junction
+                    .conflicts
+                    .foes_of(me)
+                    .iter()
+                    .map(|i| junction.internal[*i].index())
+                    .collect();
+                eprintln!("    foes {foes:?}");
+            }
+        }
     }
 }

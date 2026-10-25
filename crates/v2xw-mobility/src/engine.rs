@@ -489,10 +489,15 @@ pub struct VruPopulation {
 /// The model id VRU placement draws its streams under.
 const VRU_PLACEMENT_ID: &str = "mobility/vru/population";
 
-/// How far apart two connectors from one approach lane must be before a cyclist on one no
-/// longer occupies the other, metres: half a truck (2.6 m) plus half a bicycle (0.65 m)
-/// plus a margin, rounded up.
+/// How far apart two connectors from one approach lane must be before a road user on one no
+/// longer occupies the other, metres: half the widest class (a coach, 2.6 m) plus half a
+/// car (1.8 m) plus a margin — and so also clear of a bicycle (0.65 m), for which it was
+/// first set.
 const DIVERGED_M: f64 = 2.5;
+
+/// The same for a road user wider than 2 m (a truck, bus or coach): half of 2.6 m on each
+/// side plus 0.3 m.
+const DIVERGED_WIDE_M: f64 = 2.9;
 
 /// How many walkable lanes a pedestrian's walk strings together at most.
 const PEDESTRIAN_WALK_LANES: usize = 12;
@@ -1349,6 +1354,31 @@ impl Actor {
     }
 }
 
+/// How far beyond a body's ends another body on the lane beside must be for the body to
+/// finish a lane change into that lane while standing, metres. **A choice**: half the
+/// 2 m standstill gap (IDM `s0`) on each side.
+const BESIDE_CLEAR_M: f64 = 1.0;
+
+/// Whether no body but `me`'s — a vehicle's or a ghost's (a vehicle part-way out of
+/// `lane`) — is on `lane` within [`BESIDE_CLEAR_M`] of the stretch `[s_m - length_m, s_m]`.
+fn lane_clear_beside(
+    snapshot: &ActorSnapshot,
+    me: ActorId,
+    lane: LaneId,
+    s_m: f64,
+    length_m: f64,
+) -> bool {
+    snapshot.on_lane(lane).iter().all(|(front, other)| {
+        if *other == me {
+            return true;
+        }
+        let other_len = snapshot
+            .view(*other)
+            .map_or(length_m, |v| v.dims.length_m);
+        *front + BESIDE_CLEAR_M < s_m - length_m || *front - other_len - BESIDE_CLEAR_M > s_m
+    })
+}
+
 /// The heading deviation a lateral velocity produces at a longitudinal speed.
 fn lateral_heading_offset(lateral_rate: f64, speed_mps: f64) -> f64 {
     if lateral_rate == 0.0 {
@@ -1383,7 +1413,7 @@ pub struct NativeMobility {
     crosswalks: CrosswalkIndex,
     /// Each junction connector's siblings from the same approach lane, and where they
     /// part (`diverging_connectors`). Built in `init`.
-    diverging: BTreeMap<LaneId, Vec<(LaneId, f64)>>,
+    diverging: BTreeMap<LaneId, Vec<(LaneId, f64, f64)>>,
     vru: Option<SocialForce>,
     /// Whether each vehicle that met a pedestrian waiting mid-block yields to them, drawn
     /// once per pair: `(pedestrian, vehicle) → yields`.
@@ -3751,26 +3781,30 @@ impl NativeMobility {
                     snapshot.push_ghost(tr.from, a.s_m + tr.from_s_delta, a.id);
                 }
             }
-            // A cyclist on a junction connector still occupies the start of every sibling
-            // connector leaving the same approach lane, until the two paths are apart: a
-            // car turning right from behind a cyclist going straight on would otherwise
-            // not see it, because the cyclist is not on the car's route — and a bicycle
-            // accelerates and cruises slower than the car behind, so the car drove into
-            // it where the connectors diverge (the pedestrian_invariants gate measured
-            // it). Registering every class this way is the general fix; it is limited to
-            // bicycles so that motor traffic, which the auditor holds at zero overlaps
-            // without it, keeps its calibrated behaviour and its golden records.
-            for a in self
-                .actors
-                .values()
-                .filter(|a| a.class == VehicleClass::Bicycle)
-            {
+            // A road user on a junction connector still occupies the start of every sibling
+            // connector leaving the same approach lane, until the two paths are apart. The
+            // driver behind, going another way, would otherwise not see it, because it is
+            // not on their route: a car going straight on drove into the rear of a car
+            // turning left from the same lane at the mouth of the junction, where the two
+            // connectors share their first metres (pedestrian_invariants: 42 and 14
+            // overlaps, every one between two motor vehicles on sibling connectors, on
+            // 486c8cba). This was first done for bicycles only, which accelerate and
+            // cruise slower than the car behind; a turning car is as slow. SUMO does the
+            // same through the leaders it reports from a link's sibling links
+            // (`MSLink::getLeaderInfo`, links that share their approach lane).
+            for a in self.actors.values() {
                 let Some(siblings) = self.diverging.get(&a.lane) else {
                     continue;
                 };
-                let rear = a.s_m - a.class.spec().length_m;
-                for (sibling, apart_s) in siblings {
-                    if rear < *apart_s {
+                let spec = a.class.spec();
+                let rear = a.s_m - spec.length_m;
+                for (sibling, apart_s, apart_wide_s) in siblings {
+                    let apart = if spec.width_m > 2.0 {
+                        *apart_wide_s
+                    } else {
+                        *apart_s
+                    };
+                    if rear < apart {
                         snapshot.push_ghost(*sibling, a.s_m, a.id);
                     }
                 }
@@ -3781,9 +3815,9 @@ impl NativeMobility {
     }
 
     /// For every junction connector, the other connectors that leave the same approach
-    /// lane, each with the arc length beyond which the two centrelines are at least
-    /// [`DIVERGED_M`] apart.
-    fn diverging_connectors(world: &World) -> BTreeMap<LaneId, Vec<(LaneId, f64)>> {
+    /// lane, each with the arc lengths beyond which the two centrelines are at least
+    /// [`DIVERGED_M`] and [`DIVERGED_WIDE_M`] apart.
+    fn diverging_connectors(world: &World) -> BTreeMap<LaneId, Vec<(LaneId, f64, f64)>> {
         let mut by_approach: BTreeMap<LaneId, Vec<LaneId>> = BTreeMap::new();
         for c in world.roads.connections() {
             if let Some(via) = c.via {
@@ -3793,7 +3827,7 @@ impl NativeMobility {
                 }
             }
         }
-        let mut out: BTreeMap<LaneId, Vec<(LaneId, f64)>> = BTreeMap::new();
+        let mut out: BTreeMap<LaneId, Vec<(LaneId, f64, f64)>> = BTreeMap::new();
         for connectors in by_approach.values() {
             for a in connectors {
                 for b in connectors {
@@ -3802,11 +3836,16 @@ impl NativeMobility {
                     }
                     let (la, lb) = (world.lane(*a), world.lane(*b));
                     let end = la.length_m.min(lb.length_m);
-                    let mut s = 0.0;
-                    while s < end && la.point_at(s).distance_2d(lb.point_at(s)) < DIVERGED_M {
-                        s += 0.5;
-                    }
-                    out.entry(*a).or_default().push((*b, s.min(end)));
+                    let apart = |m: f64| {
+                        let mut s = 0.0;
+                        while s < end && la.point_at(s).distance_2d(lb.point_at(s)) < m {
+                            s += 0.5;
+                        }
+                        s.min(end)
+                    };
+                    out.entry(*a)
+                        .or_default()
+                        .push((*b, apart(DIVERGED_M), apart(DIVERGED_WIDE_M)));
                 }
             }
         }
@@ -6382,9 +6421,30 @@ impl Mobility for NativeMobility {
                 // taxi swung its heading from 94 to 133 degrees on the spot and swept its
                 // body into the queue in the next lane (`tests/realism.rs`, kerbside on:
                 // 206 overlap steps).
+                //
+                // The hold ends when the stretch of the target lane beside the body is
+                // clear: the vehicle then finishes the move into it (its heading is held,
+                // `lateral_rate_at`). Held for good, a car that changed out of a queue and
+                // stopped behind that queue's next car — its body still over the line, so
+                // it follows that car too — stood part-way across for the rest of the run
+                // and blocked both lanes: every `phantom_stop` of the signalised grid at
+                // 9,000 veh/h (`check-traffic`: 3, 1, 3, 5 and 7 over five same-seed
+                // variants, 25 to 110 s each, lateral offsets 1.2 to 2.2 m) and the
+                // kerbside test's standstill (actor 62, 180 s beside a delivery van). A
+                // driver in that spot steers into the free lane; SUMO lets a standing
+                // vehicle finish a lane change by default (`lcMaxSpeedLatStanding` =
+                // `maxSpeedLat`). The 7 m truck's next lane was not clear, so it still
+                // holds.
                 if transition.switched
                     && transition.began_moving
                     && actor.speed_mps <= STANDSTILL_MPS
+                    && !lane_clear_beside(
+                        &snapshot,
+                        actor.id,
+                        transition.to,
+                        actor.s_m,
+                        actor.class.spec().length_m,
+                    )
                 {
                     transition.started = transition.started.saturating_add(t1.saturating_sub(t0));
                 }
@@ -9380,6 +9440,114 @@ mod tests {
         assert!(
             (off - free).abs() < 1e-9,
             "with rerouting off the lane costs {off} s, not its free {free} s"
+        );
+    }
+
+    /// A car brought to a stand part-way through a lane change, behind a car standing in
+    /// the lane it is leaving, finishes the change when the lane it is entering is clear
+    /// beside it — and stays held while a car stands there. Held for good, it stood
+    /// across both lanes for the rest of the run (`check-traffic` `phantom_stop` on the
+    /// signalised grid, every case a car 1.2 to 2.2 m off its lane's centre).
+    #[test]
+    fn a_car_stopped_part_way_across_finishes_the_change_when_the_lane_beside_is_clear() {
+        let world = v2xw_world::procedural::grid(
+            &GridParams {
+                lanes_per_direction: 2,
+                ..GridParams::legacy().with_size(3, 3).with_signals(false)
+            },
+            &ImportOptions::default(),
+        )
+        .expect("grid");
+        let (from, to) = world
+            .roads
+            .lanes()
+            .iter()
+            .find_map(|l| {
+                if l.kind != LaneKind::Driving || l.index != 0 || l.length_m < 80.0 {
+                    return None;
+                }
+                let beside = world
+                    .edge(l.edge)
+                    .lanes
+                    .iter()
+                    .copied()
+                    .find(|x| world.lane(*x).index == 1)?;
+                Some((l.id, beside))
+            })
+            .expect("a two-lane edge");
+        let run = |blocker_beside: bool| {
+            let rng = RngRegistry::new(5);
+            let params = EngineParams::default();
+            let mut engine = engine_on(&world, params, &rng);
+            let trip = |seq: u64, lane: LaneId, s: f64| TripRequest {
+                seq,
+                t: 0,
+                origin: lane,
+                origin_s_m: s,
+                destination: world.successors(lane)[0].to_lane,
+                class: VehicleClass::Passenger,
+                desired_speed_mps: 11.0,
+            };
+            let lead = engine.insert_trip(&world, &trip(0, from, 60.0), 0).expect("lead");
+            let ego = engine.insert_trip(&world, &trip(1, to, 30.0), 0).expect("ego");
+            let side = blocker_beside
+                .then(|| engine.insert_trip(&world, &trip(2, to, 62.0), 0).expect("side"));
+            let t_start = 10 * NS_PER_S;
+            let len = VehicleClass::Passenger.spec().length_m;
+            // The lead and the car beside stand for good.
+            for id in [Some(lead), side].into_iter().flatten() {
+                let a = engine.actors.get_mut(&id).expect("actor");
+                a.speed_mps = 0.0;
+                a.stopped_until = Some(SimTime::MAX);
+            }
+            if let Some(id) = side {
+                // Beside the ego's body: [51.5, 56] against its [49.5, 54].
+                engine.actors.get_mut(&id).expect("side").s_m = 56.0;
+            }
+            // The ego: in the target lane's frame, half-way across from `from`, its front
+            // 1.5 m behind the lead's rear (inside the 2 m standstill gap), standing.
+            let home = engine.lane_position_m(VehicleClass::Passenger);
+            let from_offset = {
+                let p = world.lane(from).offset_point(60.0 - len - 1.5, 0.0);
+                world.lane(to).project_point(p).d_m
+            };
+            {
+                let a = engine.actors.get_mut(&ego).expect("ego");
+                a.s_m = 60.0 - len - 1.5;
+                a.speed_mps = 0.0;
+                a.lateral_m = 0.5 * (from_offset + home);
+                a.transition = Some(Transition {
+                    from,
+                    to,
+                    started: t_start - 1_500_000_000,
+                    duration: Duration::from_secs(3),
+                    from_offset_m: from_offset,
+                    to_offset_m: home,
+                    switched: true,
+                    from_s_delta: 0.0,
+                    pull_out: false,
+                    began_moving: true,
+                });
+            }
+            let mut t = t_start;
+            while t < t_start + 5 * NS_PER_S {
+                let mut ctx = MobilityCtx::new(t, &world, &rng);
+                engine.step(&mut ctx, params.step);
+                t += params.step.as_nanos();
+            }
+            engine.actors.get(&ego).map_or((true, 0.0), |a| {
+                (a.transition.is_none(), (a.lateral_m - home).abs())
+            })
+        };
+        let (done, off) = run(false);
+        assert!(
+            done && off < 0.05,
+            "with the lane beside clear the change never finished: {off:.2} m off the centre"
+        );
+        let (done, off) = run(true);
+        assert!(
+            !done && off > 1.0,
+            "a car slid sideways into the lane beside it while one stood there ({off:.2} m off)"
         );
     }
 

@@ -21,7 +21,9 @@ use v2xw_mobility::calibration::{
 };
 use v2xw_mobility::demand::{OdParams, PoissonDemand, PoissonParams};
 use v2xw_mobility::engine::VruPopulation;
-use v2xw_mobility::{EngineParams, Mobility, MobilityCtx, NativeMobility};
+use v2xw_mobility::{
+    EngineParams, Mobility, MobilityCtx, NativeMobility, SocialForce, SocialForceParams,
+};
 use v2xw_world::procedural::GridParams;
 use v2xw_world::{ImportOptions, World};
 
@@ -143,10 +145,16 @@ fn drivers_and_pedestrians_on_a_midtown_grid_move_as_published() {
     let rng = RngRegistry::new(0xCA11_B8A7);
     let seconds = 300;
     let params = EngineParams::default();
-    let mut engine = NativeMobility::new(params).with_vru_population(VruPopulation {
-        pedestrians: 120,
-        cyclists: 0,
-    });
+    // The pedestrians a scenario gets (`actors.vru.behaviour: observed`, the default):
+    // Knoblauch's age groups and Weidmann's crowd slowing. The social-force document
+    // defaults (one 1.34 ± 0.26 m/s law) are not what any run walks with, so measuring
+    // them against Knoblauch's field study compared the wrong model with it.
+    let mut engine = NativeMobility::new(params)
+        .with_vru(SocialForce::new(SocialForceParams::observed()))
+        .with_vru_population(VruPopulation {
+            pedestrians: 120,
+            cyclists: 0,
+        });
     let demand = PoissonDemand::new(
         &world,
         PoissonParams {

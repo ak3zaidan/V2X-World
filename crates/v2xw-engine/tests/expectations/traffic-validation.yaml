@@ -1,0 +1,139 @@
+# Traffic and pedestrian validation against published traffic engineering (2026-10-24,
+# docs/validation/traffic-2026-10-24.md). Not a `v2xw sensitivity --expect` table: these
+# rows judge absolute levels (a saturation headway in seconds, a capacity in veh/h/ln) and
+# same-seed base/variant pairs read from `v2xw check-traffic --json` and `metrics.json`,
+# which the sensitivity fingerprint does not carry.
+#
+# Every row's `expect` and `source` were written down before its runs were read. `verdict`
+# is filled in afterwards:
+#   pass | fixed (an engine or harness defect fixed at its cause; `test` pins it) |
+#   wrong-expectation (corrected, with the evidence in `note`) | open (documented).
+# `fault` names the fault injected to show the check can go red: `judge:` faults are applied
+# to the measured input by the judge's selftest (tools: the scratch judge described in the
+# report); `test:` faults were injected in the named engine test and the test went red.
+#
+# Binary: release build of 486c8cba (copied to the scratchpad). Every run: one run-lock call,
+# --record-level full, recording deleted after check-traffic. Seeds are the scenarios' own.
+#
+# The schema is the whole-run expectation schema the SCMS audit files use: it is what makes
+# `sensitivity::sweep::load_expectations` pass over a file that is not a sweep table (the
+# `--expect` default reads this whole directory).
+schema: v2xw/scms-run-expectations/1
+
+runs:
+  S0:  {scenario: scenarios/phase1-grid.yaml, set: {time.duration_s: 300, world.source.params.cols: 4, world.source.params.rows: 6, actors.vehicles.demand.rate_veh_per_h: 9000, actors.vehicles.equipped_fraction: 0.0},
+        note: "signalised Midtown-shaped grid, 2 lanes each way, 25 mph, fixed time, 60 s cycle, even split, no pedestrians, traffic only"}
+  S0R: {as: S0, note: "S0 again, same seed: determinism"}
+  S1:  {as: S0, set: {world.source.params.cycle_s: 120}, note: "cycle 60 -> 120 s, same split"}
+  S2:  {as: S0, set: {world.source.params.ew_green_share: 0.3}, note: "east-west green share 0.5 -> 0.3"}
+  S3:  {as: S0, set: {actors.vehicles.drivers.queue_start_delay_s: 1.0}, note: "queued drivers' start-up delay median 0.5 -> 1.0 s"}
+  S4:  {as: S0, set: {actors.vehicles.drivers.start_reaction_s: 2.0}, note: "queue head's green-onset reaction median 1.08 -> 2.0 s"}
+  P0:  {as: S0, set: {actors.vru.pedestrians: 300}, note: "S0 with 300 pedestrians on its sidewalks and crosswalks"}
+  F3k: {scenario: scenarios/highway-congestion.yaml, set: {time.duration_s: 240, events: [], actors.vehicles.equipped_fraction: 0.0, actors.vehicles.demand.rate_veh_per_h: 3000},
+        note: "the six-lane 65 mph highway, breakdowns removed"}
+  F6k: {as: F3k, set: {actors.vehicles.demand.rate_veh_per_h: 6000}}
+  F12k: {as: F3k, set: {actors.vehicles.demand.rate_veh_per_h: 12000}}
+  F24k: {as: F3k, set: {actors.vehicles.demand.rate_veh_per_h: 24000}}
+  M0:  {scenario: scenarios/midtown-peak-load.yaml, set: {time.duration_s: 180, actors.vehicles.equipped_fraction: 0.0, actors.vru.device_fraction: 0.0},
+        note: "real Midtown (OSM), peak demand, 2,000 pedestrians and 200 cyclists, traffic only"}
+  M1:  {as: M0, set: {actors.vru.pedestrians: 0, actors.vru.cyclists: 0}, note: "M0 without pedestrians or cyclists"}
+  # Added 2026-10-25 (resumed), before these runs were read. The 9,000 veh/h family turned
+  # out to be over saturation (network mean speed 3.4 m/s against an 11.2 m/s limit; 37 of
+  # 653 vehicles stood longer than a cycle), so its discharge is interrupted by spillback
+  # and by lane changes out of blocked queues, which the HCM field method excludes (HCM 6th
+  # ed. ch. 31: only queues that discharge unimpeded are timed). The saturation and Webster
+  # rows are registered again on a family at half the demand ("L"); the 9,000 family keeps
+  # its rows as measured.
+  L0:  {as: S0, set: {actors.vehicles.demand.rate_veh_per_h: 4500}, note: "the grid at half the demand"}
+  L1:  {as: L0, set: {world.source.params.cycle_s: 120}}
+  L2:  {as: L0, set: {world.source.params.ew_green_share: 0.3}}
+  L3:  {as: L0, set: {actors.vehicles.drivers.queue_start_delay_s: 1.0}}
+  L4:  {as: L0, set: {actors.vehicles.drivers.start_reaction_s: 2.0}}
+  # Suffix x: the same scenario on this branch's binary (opt-level 2 debug build), which
+  # has both engine changes: sibling-connector ghosts for every class (DIVERGED_WIDE_M)
+  # and the lane-change hold released beside a clear lane (`lane_clear_beside`); xR: run
+  # again, same seed. Wall times of x runs are not comparable with the release runs.
+
+rows:
+# ------------------------------------------------------------------ determinism and cost
+- {id: TV.det.same-seed, runs: [S0, S0R], check: "record_digest and content_digest equal", expect: pass,
+   source: "the engine's determinism contract (docs/design 02-architecture: one master seed, every stream derived)", fault: "judge: flip one digest character"}
+- {id: TV.cost.cycle, runs: [S0, S1], check: "run_s ratio S1/S0 in [0.7, 1.4]", expect: pass,
+   source: "the same demand and network: the cycle changes when vehicles stand, not how many there are or how many steps run (cost ~ vehicle-steps)", fault: "judge: scale S1 run_s by 2"}
+
+# ------------------------------------------------------------------ saturation flow (HCM 7th ed. ch. 19)
+- {id: TV.sat.queues, runs: [S0], check: "check-traffic discharge.queues >= 10", expect: pass,
+   source: "precondition: the family must queue six or more vehicles at green onsets often enough to measure the HCM field method (HCM 6th ed. ch. 31)", fault: "judge: queues = 3"}
+- {id: TV.sat.headway, runs: [S0], check: "discharge.saturation_headway_s in [1.8, 2.4]", expect: pass,
+   source: "HCM base 1,900 pc/h/ln x CBD area factor 0.90 = 1,710 veh/h/ln, h_s 2.11 s; FHWA Signal Timing Manual 2e 3.3.1: saturation flow commonly 1,500-2,000 veh/h/ln", fault: "judge: h_s = 2.9"}
+- {id: TV.sat.lost-time, runs: [S0], check: "discharge.startup_lost_time_s in [1.0, 3.0]", expect: pass,
+   source: "HCM default start-up lost time 2.0 s (FHWA STM 2e 3.3.1: commonly about 2 s); band +-1 s", fault: "judge: lost time = 4.3"}
+- {id: TV.sat.positions, runs: [S0], check: "h1 > h5 and |h4 - h_s| <= 0.25 h_s", expect: pass,
+   source: "discharge headways shorten over the first four queued vehicles and then stabilise (Greenshields, Schapiro & Ericksen 1947: 3.8, 3.1, 2.7, 2.4, 2.2 s; FHWA STM 2e Fig. 3-2)", fault: "judge: reverse the headway list"}
+- {id: TV.sat.hs-independent-of-cycle, runs: [S0, S1], check: "|h_s(S1) - h_s(S0)| <= 0.10 h_s(S0)", expect: pass,
+   source: "saturation flow is a property of the approach and its drivers, not of the timing (HCM 7th ed. eq. 19-8 has no cycle term)", fault: "judge: h_s(S1) x 1.3"}
+- {id: TV.start.follow-delay, runs: [S0, S3], check: "h_s(S3) - h_s(S0) >= 0.2 s", expect: pass,
+   source: "each queued driver starts a follow delay after the car ahead moves, so the start-up wave, and the saturation headway it sets, grows with it (Bonneson 1992, TRR 1365: h_s = start response + travel to the line)", fault: "judge: h_s(S3) = h_s(S0)"}
+- {id: TV.start.head-reaction, runs: [S0, S4], check: "lost(S4) - lost(S0) >= 0.5 s and |h_s(S4) - h_s(S0)| <= 0.10 h_s(S0)", expect: pass,
+   source: "the queue head's green-onset reaction enters h1 alone: start-up lost time grows by about the mean reaction change, (2.0 - 1.08) x e^(0.5^2/2) = 1.04 s, and h_s does not move (HCM 7th ed. 19.2: l1 = sum of the first four headways' excess)", fault: "judge: lost(S4) = lost(S0)"}
+
+# ------------------------------------------------------------------ Webster delay (Webster 1958; HCM 7th ed. eq. 19-20)
+- {id: TV.web.cycle-speed, runs: [S0, S1], check: "mean_speed(S1) / mean_speed(S0) in [0.6, 0.97]", expect: pass,
+   source: "uniform delay d1 = 0.5 C (1 - g/C)^2 / (1 - x g/C) grows with C at a fixed split: from 60 to 120 s (effective green 26 -> 56 s, x ~ 0.5) d1 rises about 1.7x, so more of each trip is stopped and the network speed falls", fault: "judge: mean_speed(S1) = mean_speed(S0)"}
+- {id: TV.web.cycle-longest-stop, runs: [S0, S1], check: "longest_stop_s(S1) > longest_stop_s(S0)", expect: pass,
+   source: "the longest wait at a red is bounded by the red: 31 s at 60 s, 61 s at 120 s (half the cycle less amber)", fault: "judge: swap the two"}
+- {id: TV.web.split, runs: [S0, S2], check: "mean_speed(S2) / mean_speed(S0) in [0.7, 0.99]", expect: pass,
+   source: "Webster's optimum split gives each phase green in proportion to its flow ratio; on a grid with balanced demand, moving the split from 0.5 to 0.3 raises the starved phase's x by 1.67x and the total delay with it", fault: "judge: mean_speed(S2) = mean_speed(S0)"}
+
+# ------------------------------------------------------------------ held on green / at a clear junction (owner complaint)
+- {id: TV.hold.green, runs: [S0, S1, S2, S3, S4], check: "stopped_on_green = 0 and stopped_on_permitted_green = 0", expect: pass,
+   source: "with no pedestrians and a clear exit, a queue head on its own green goes once it reacts: lognormal median 1.08 s, sigma 0.5 (Bonneson 1992 mean 1.22 s), so P(reaction > 6 s) = 3e-4", fault: "judge: stopped_on_green = 1"}
+- {id: TV.hold.phantom, runs: [S0, S1, S2, S3, S4], check: "phantom_stop = 0", expect: pass,
+   source: "a driver with nobody within 30 m ahead and no red does not stand mid-lane (IDM free term: acceleration > 0 below v0)", fault: "judge: phantom_stop = 1"}
+- {id: TV.hold.long, runs: [S0, S2, S3, S4], check: "long_stop = 0", expect: pass,
+   source: "below saturation every stop at a fixed-time signal ends within one cycle (HCM 7th ed. 19: uniform delay; a queue that clears every green)", fault: "judge: long_stop = 1"}
+- {id: TV.hold.peds, runs: [P0], check: "stopped_on_green(P0) reported; every case a yield to a walker", expect: pass,
+   source: "a turning driver on green yields to pedestrians lawfully in the crosswalk (NY VTL 1111(a)1; MUTCD 2009 4E): stops on green with walkers present are lawful", fault: "none (reported)"}
+- {id: TV.hold.midtown, runs: [M0, M1], check: "stopped_on_green(M1) <= stopped_on_green(M0); counts reported per cause", expect: pass,
+   source: "the walkers explain part of the stops on green (round 15: 37 without walkers against 76 with)", fault: "none (reported)"}
+- {id: TV.safety.grid, runs: [S0, S1, S2, S3, S4], check: "overlap = 0, red_entry = 0, decel = 0, accel = 0", expect: pass,
+   source: "no vehicle touches another; red_runner_share is 0 by default so nobody enters on red; braking within 9 m/s^2 and launch within 6 m/s^2 (AASHTO 2018 3.2.2)", fault: "judge: overlap = 1"}
+
+# ------------------------------------------------------------------ freeway fundamental diagram (HCM 7th ed. ch. 12)
+- {id: TV.fd.free-flow, runs: [F3k], check: "mean speed of per-lane windows with k < 10 veh/km/ln >= 22 m/s", expect: pass,
+   source: "below about 10 veh/km/ln drivers keep their free speed: 65 mph limit x speedFactor N(1, 0.1), HCM 7th ed. Exh. 12-7 flat to 1,000 pc/h/ln", fault: "judge: speeds x 0.7"}
+- {id: TV.fd.capacity, runs: [F3k, F6k, F12k, F24k], check: "max over 2 veh/km k-bins of mean per-lane q in [1700, 2400] veh/h/ln", expect: pass,
+   source: "HCM 7th ed. Exh. 12-6: basic freeway capacity 2,350 pc/h/ln at FFS 65 mph; 12 % trucks at E_T 2 gives f_HV 0.89, 2,100 veh/h/ln; IDM with T 1.5 s, s0 2 m, l 5 m: 1/(T + (s0+l)/v) ~ 1,950", fault: "judge: q x 1.5"}
+- {id: TV.fd.critical-density, runs: [F3k, F6k, F12k, F24k], check: "k at that maximum in [15, 35] veh/km/ln", expect: pass,
+   source: "HCM 7th ed.: capacity is reached at 45 pc/mi/ln (28 pc/km/ln); with trucks fewer vehicles, so 15-35 veh/km/ln", fault: "judge: k x 2"}
+
+# ------------------------------------------------------------------ pedestrians (fast engine tests)
+- {id: TV.ped.speed, runs: [], check: "v2xw-mobility tests/calibration.rs drivers_and_pedestrians_on_a_midtown_grid_move_as_published: kerb-to-kerb crossing speed mean in [1.2, 1.6], 15th percentile in [0.97, 1.40]", expect: pass,
+   source: "Knoblauch, Pietrucha & Nitzburg 1996 (TRR 1538): 14-64 mean 1.51, p15 1.25 m/s; 65+ mean 1.25, p15 0.97 m/s; MUTCD 2009 4E.06 design 1.07 m/s", fault: "test: the shipped 'observed' pedestrians replaced by walkers at 1.0 +- 0.26 m/s"}
+- {id: TV.ped.compliance, runs: [], check: "calibration.rs: share of signalised crossings started on Walk reported beside Basch et al. 2015 (89 %)", expect: pass,
+   source: "Basch et al. 2015, five Manhattan intersections (secondary)", fault: "none (reported)"}
+
+# ================================================================== added 2026-10-25 (resumed)
+# ------------------------------------------------------------------ the lane-change hold (fix)
+- {id: TV.lc.hold-released, runs: [S0x, S1x, S2x, S3x, S4x], check: "phantom_stop = 0 in every run", expect: pass,
+   source: "a driver part-way across with the lane beside clear steers into it; SUMO lets a standing vehicle finish a lane change by default (lcMaxSpeedLatStanding = maxSpeedLat)", fault: "test: engine.rs a_car_stopped_part_way_across_finishes_the_change_when_the_lane_beside_is_clear, release removed"}
+- {id: TV.lc.no-slide-into-a-car, runs: [], check: "the same unit test: with a car standing beside, the change stays held (lateral offset > 1 m after 5 s)", expect: pass,
+   source: "the 2026-10-11 hold (f88e663b): a vehicle does not slide sideways into an occupied lane", fault: "test: release without the beside-clear guard"}
+- {id: TV.lc.flow-not-worse, runs: [S0, S0x], check: "mean_speed(S0x) >= mean_speed(S0) and long_stop(S0x) <= long_stop(S0)", expect: pass,
+   source: "a vehicle no longer stands across two lanes, so no queue forms behind it", fault: "judge: mean_speed(S0x) x 0.9"}
+- {id: TV.lc.det, runs: [S0x, S0xR], check: "digests equal", expect: pass, source: "determinism contract", fault: "judge: flip one digest character"}
+
+# ------------------------------------------------------------------ the unsaturated family
+- {id: TV.L.unsaturated, runs: [L0x], check: "long_stop = 0 and network mean speed >= 5 m/s", expect: pass,
+   source: "precondition: below saturation every queue clears each green (HCM 7th ed. ch. 19); urban running speed with signal delay about half the 25 mph limit or more (HCM 7th ed. ch. 16, LOS B-D)", fault: "judge: long_stop = 1"}
+- {id: TV.L.sat.headway, runs: [L0x], check: "saturation_headway_s in [1.8, 2.4] and queues >= 10", expect: pass, source: "as TV.sat.headway", fault: "judge: h_s = 2.9"}
+- {id: TV.L.sat.lost-time, runs: [L0x], check: "startup_lost_time_s in [1.0, 3.0]", expect: pass, source: "as TV.sat.lost-time", fault: "judge: lost = 4.3"}
+- {id: TV.L.sat.positions, runs: [L0x], check: "h1 > h5 and |h4 - h_s| <= 0.25 h_s", expect: pass, source: "as TV.sat.positions", fault: "judge: reverse"}
+- {id: TV.L.hs-cycle, runs: [L0x, L1x], check: "|h_s(L1x) - h_s(L0x)| <= 0.10 h_s(L0x)", expect: pass, source: "as TV.sat.hs-independent-of-cycle", fault: "judge: x 1.3"}
+- {id: TV.L.follow-delay, runs: [L0x, L3x], check: "h_s(L3x) - h_s(L0x) >= 0.2 s", expect: pass, source: "as TV.start.follow-delay", fault: "judge: equal"}
+- {id: TV.L.head-reaction, runs: [L0x, L4x], check: "lost(L4x) - lost(L0x) >= 0.5 s and |h_s(L4x) - h_s(L0x)| <= 0.10 h_s(L0x)", expect: pass, source: "as TV.start.head-reaction", fault: "judge: equal"}
+- {id: TV.L.web.cycle, runs: [L0x, L1x], check: "mean_speed ratio in [0.6, 0.97] and longest_stop(L1x) > longest_stop(L0x)", expect: pass, source: "as TV.web.cycle-speed and cycle-longest-stop (Webster d1 grows with C)", fault: "judge: equal"}
+- {id: TV.L.web.split, runs: [L0x, L2x], check: "mean_speed ratio in [0.7, 0.99]", expect: pass, source: "as TV.web.split", fault: "judge: equal"}
+- {id: TV.L.hold, runs: [L0x, L1x, L2x, L3x, L4x], check: "stopped_on_green = 0, phantom_stop = 0, long_stop = 0", expect: pass, source: "as TV.hold.*: below saturation, with no pedestrians, only the lamp holds a queue head", fault: "judge: stopped_on_green = 1"}
+- {id: TV.L.safety, runs: [L0x, L1x, L2x, L3x, L4x], check: "overlap = 0, decel = 0, accel = 0; red_entry reported", expect: pass, source: "as TV.safety.grid", fault: "judge: overlap = 1"}
+- {id: TV.L.cost, runs: [L0x, S0x], check: "run_s(L0x) < run_s(S0x)", expect: pass, source: "cost ~ vehicle-steps: half the demand, fewer vehicles in the network at once", fault: "judge: swap"}

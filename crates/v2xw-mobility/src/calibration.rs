@@ -14,7 +14,7 @@
 //!
 //! | Figure | Procedure | Reference |
 //! |---|---|---|
-//! | saturation headway `h_s` | HCM field method: at the onset of green, every vehicle standing in the queue on an approach lane is recorded; each one's **rear** crossing of the stop line is timed; `h_s` is the mean headway from the 4th queued vehicle on (positions ≥ 5), through movements only, excluding a vehicle that stopped again before the line | HCM base 1,900 pc/h/ln × CBD area factor 0.90 = 1,710 veh/h/ln, `h_s` = 2.11 s; practical range 1,500–2,000 (FHWA Signal Timing Manual 2008 §3.3.1) |
+//! | saturation headway `h_s` | HCM field method: at the onset of green, every vehicle standing in the queue on an approach lane is recorded; each one's **rear axle** crossing of the stop line is timed ([`rear_axle_from_front_m`]); `h_s` is the mean headway from the 4th queued vehicle on (positions ≥ 5), through movements only, excluding a vehicle that stopped again before the line | HCM base 1,900 pc/h/ln × CBD area factor 0.90 = 1,710 veh/h/ln, `h_s` = 2.11 s; practical range 1,500–2,000 (FHWA Signal Timing Manual 2008 §3.3.1) |
 //! | start-up lost time `l1` | `Σ_{i=1..4} (h_i − h_s)`, `h_1` measured from the green onset | HCM default 2.0 s (FHWA STM §3.3.1: "commonly assumed to be approximately 2 seconds") |
 //! | discharge headway by queue position | mean `h_i` for i = 1..10 | "after approximately the fourth vehicle in the queue, the flow rate tends to stabilize" (FHWA STM §3.3.1, Fig. 3-2) |
 //! | queue spacing | front-to-front distance between consecutive vehicles standing in a queue at green onset | HCM average queue storage 25 ft (7.6 m) per vehicle |
@@ -23,7 +23,7 @@
 //! | stopping deceleration | peak deceleration of each stop from above 5 m/s to standstill | AASHTO *Green Book* 2018 §3.2.2: 3.4 m/s² is comfortable for most drivers |
 //! | turning speed | lowest speed through each junction connector, by turn, traversals that never stopped | reported, not tested: no single published figure fits every corner radius |
 //! | travel speed | total distance over total vehicle-time, all vehicles | NYC DOT *Mobility Report* 2019: Midtown core ≈ 5 mph (2.2 m/s), CBD ≈ 7 mph (3.1 m/s), 2017 taxi GPS — a whole-day average over real demand, so a comparison, not a test |
-//! | pedestrian walking speed | speed of every walking pedestrian step (≥ 0.3 m/s) | Knoblauch, Pietrucha & Nitzburg 1996 (TRR 1538): younger pedestrians mean 1.51 m/s, 15th percentile 1.25 m/s; MUTCD 2009 §4E.06 design speed 3.5 ft/s (1.07 m/s) |
+//! | pedestrian walking speed | kerb-to-kerb speed of each crossing (distance walked on the crossing over the time on it), crossings during which the walker stood or crept below 0.3 m/s left out; the per-step speed is reported beside it | Knoblauch, Pietrucha & Nitzburg 1996 (TRR 1538): younger pedestrians mean 1.51 m/s, 15th percentile 1.25 m/s; MUTCD 2009 §4E.06 design speed 3.5 ft/s (1.07 m/s) |
 //! | permitted-left critical gap | lags offered to left turners on a permissive green, timed to the closing opposing vehicle's actual arrival at its stop line, each accepted or rejected by the turner; Raff's method on the two samples | HCM 6th ed. Ch. 31: 4.5 s (secondary, LTRC Report 715) |
 //! | pedestrian signal compliance | share of kerb departures onto a signalised crossing made on walk | Basch et al. 2015, five Manhattan intersections: about 89 % on Walk (secondary); reported, since the model's `jaywalk_probability` is 0 by default |
 //! | approach volumes | vehicles per hour over the stop line of every signalised approach road, avenues (3+ lanes) and side streets apart | NYC DOT automated counts, Midtown 08:00-19:00: avenues 970-1,890 veh/h, side streets 330-640 veh/h — set by demand, reported |
@@ -83,7 +83,7 @@ struct Member {
     front_cross: Option<f64>,
     /// Distance driven since its front crossed, metres.
     past_line_m: f64,
-    /// When its rear crossed the stop line.
+    /// When its rear axle crossed the stop line (the HCM field method's reference point).
     rear_cross: Option<f64>,
     /// The turn it took.
     turn: Option<TurnDirection>,
@@ -91,7 +91,8 @@ struct Member {
     peak_mps: f64,
     /// True if it stood again after having got going, before its front crossed.
     restopped: bool,
-    length_m: f64,
+    /// How far behind its front bumper its rear axle is, metres ([`rear_axle_from_front_m`]).
+    axle_m: f64,
     /// How far behind the stop line its front stood at the green onset, metres.
     dist_m: f64,
     /// When it first moved off after the onset (above 0.5 m/s), seconds.
@@ -161,6 +162,11 @@ pub struct CalibrationObserver {
     total_s: f64,
     ped_prev: BTreeMap<ActorId, v2xw_core::geom::Vec3>,
     ped_speed_mps: Vec<f64>,
+    /// Each pedestrian on a crossing now: (crossing lane, metres walked on it, seconds on
+    /// it, whether it stood or crept below 0.3 m/s there).
+    ped_on_crossing: BTreeMap<ActorId, (LaneId, f64, f64, bool)>,
+    /// Kerb-to-kerb speeds of unimpeded crossings, m/s (Knoblauch et al. 1996's measure).
+    ped_crossing_speed_mps: Vec<f64>,
     /// Each signalised crossing lane's plan index.
     crossing_plan: BTreeMap<LaneId, usize>,
     /// Each pedestrian's lane at the previous step.
@@ -290,6 +296,8 @@ impl CalibrationObserver {
             total_s: 0.0,
             ped_prev: BTreeMap::new(),
             ped_speed_mps: Vec::new(),
+            ped_on_crossing: BTreeMap::new(),
+            ped_crossing_speed_mps: Vec::new(),
             steps: 0,
         }
     }
@@ -589,7 +597,7 @@ impl CalibrationObserver {
                             turn: None,
                             peak_mps: a.speed_mps,
                             restopped: false,
-                            length_m: a.length_m,
+                            axle_m: rear_axle_from_front_m(a.class, a.length_m),
                             dist_m: front_behind,
                             moved_at: None,
                             heavy: crate::style::is_heavy(a.class)
@@ -679,9 +687,9 @@ impl CalibrationObserver {
                 } else {
                     m.past_line_m += a.speed_mps * dt;
                 }
-                if m.past_line_m >= m.length_m {
+                if m.past_line_m >= m.axle_m {
                     let v = a.speed_mps.max(0.1);
-                    let over = ((m.past_line_m - m.length_m) / v).min(dt);
+                    let over = ((m.past_line_m - m.axle_m) / v).min(dt);
                     m.rear_cross = Some(t1_s - over);
                 } else {
                     done = false;
@@ -919,15 +927,44 @@ impl CalibrationObserver {
         }
         self.ped_lane = lanes;
         let mut next = BTreeMap::new();
+        let mut on_crossing = BTreeMap::new();
         for p in pedestrians {
-            if let Some(q) = self.ped_prev.get(&p.actor) {
-                let v = q.distance_2d(p.pos) / dt;
+            let step = self.ped_prev.get(&p.actor).map(|q| q.distance_2d(p.pos));
+            if let Some(d) = step {
+                let v = d / dt;
                 if (0.3..4.0).contains(&v) {
                     self.ped_speed_mps.push(v);
                 }
             }
+            // Kerb to kerb: Knoblauch, Pietrucha & Nitzburg timed each pedestrian across
+            // the crosswalk, so a crossing's speed is the distance walked on it over the
+            // time on it. A crossing during which the walker stood or crept (a step below
+            // 0.3 m/s: yielding to a turning car, a refuge) is impeded and left out, as
+            // the field study kept free-walking crossers only.
+            let was = self.ped_on_crossing.get(&p.actor).copied();
+            let crossing = world
+                .try_lane(p.lane)
+                .is_some_and(|l| l.kind == LaneKind::Crossing);
+            match (was, crossing) {
+                (Some((lane, m, s, stood)), true) if lane == p.lane => {
+                    let d = step.unwrap_or(0.0);
+                    on_crossing.insert(p.actor, (lane, m + d, s + dt, stood || d / dt < 0.3));
+                }
+                (was, now) => {
+                    if let Some((_, m, s, stood)) = was
+                        && !stood
+                        && s >= 2.0
+                    {
+                        self.ped_crossing_speed_mps.push(m / s);
+                    }
+                    if now {
+                        on_crossing.insert(p.actor, (p.lane, 0.0, 0.0, false));
+                    }
+                }
+            }
             next.insert(p.actor, p.pos);
         }
+        self.ped_on_crossing = on_crossing;
         self.ped_prev = next;
     }
 
@@ -1056,6 +1093,7 @@ impl CalibrationObserver {
             },
             trip_speed_mps: Summary::of(&self.trip_speed_mps),
             pedestrian_speed_mps: Summary::of(&self.ped_speed_mps),
+            pedestrian_crossing_speed_mps: Summary::of(&self.ped_crossing_speed_mps),
             permitted_left_lag_accepted_s: Summary::of(&self.lag_accepted_s),
             permitted_left_lag_rejected_s: Summary::of(&self.lag_rejected_s),
             permitted_left_lag_ped_blocked_s: Summary::of(&self.lag_ped_blocked_s),
@@ -1164,6 +1202,22 @@ pub fn raff_critical_gap(accepted: &[f64], rejected: &[f64]) -> f64 {
     f64::NAN
 }
 
+/// How far behind the front bumper a vehicle's rear axle sits, metres: the reference point
+/// of the HCM saturation-flow field method, which times each queued vehicle as its **rear
+/// axle** crosses the stop line (HCM 6th ed. ch. 31, field measurement of saturation flow;
+/// **secondary**: as the FHWA and McTrans field guides reproduce it). The body length less
+/// the rear overhang, which is taken as 0.6 of the class's total overhang
+/// `length − wheelbase`: the AASHTO Green Book 2018 design vehicles put 0.63 (P: 0.9 m front,
+/// 1.5 m rear), 0.60 (SU-9) and 0.54 (CITY-BUS) of it behind the rear axle, with the
+/// wheelbase of [`crate::VehicleClass::design_turn`]. Until 2026-10-24 the harness timed the
+/// rear bumper, which adds the overhang's travel time (about 0.25 s for a car moving off) to
+/// the first headway only, and so to the start-up lost time.
+pub fn rear_axle_from_front_m(class: crate::VehicleClass, length_m: f64) -> f64 {
+    let (_, wheelbase, _) = class.design_turn();
+    let overhang = (length_m - wheelbase).max(0.0);
+    (length_m - 0.6 * overhang).clamp(0.0, length_m)
+}
+
 fn is_green(s: SignalState) -> bool {
     matches!(s, SignalState::Green | SignalState::GreenYield)
 }
@@ -1266,8 +1320,10 @@ pub struct CalibrationReport {
     pub network_speed_mps: f64,
     /// Completed trips' mean speed, m/s.
     pub trip_speed_mps: Summary,
-    /// Walking pedestrians' speed, m/s.
+    /// Walking pedestrians' speed per step, m/s (every step at 0.3 m/s or more).
     pub pedestrian_speed_mps: Summary,
+    /// Kerb-to-kerb speed of every unimpeded crossing, m/s.
+    pub pedestrian_crossing_speed_mps: Summary,
     /// Lags permitted left turners accepted, seconds.
     pub permitted_left_lag_accepted_s: Summary,
     /// Lags they rejected, seconds.
@@ -1428,8 +1484,8 @@ impl CalibrationReport {
             },
             Comparison {
                 metric: "pedestrian walking speed, mean, m/s",
-                measured: self.pedestrian_speed_mps.mean,
-                samples: self.pedestrian_speed_mps.n,
+                measured: self.pedestrian_crossing_speed_mps.mean,
+                samples: self.pedestrian_crossing_speed_mps.n,
                 reference: 1.51,
                 band: (1.2, 1.6),
                 source: "Knoblauch, Pietrucha & Nitzburg 1996, TRR 1538: younger pedestrians \
@@ -1438,13 +1494,24 @@ impl CalibrationReport {
             },
             Comparison {
                 metric: "pedestrian walking speed, 15th percentile, m/s",
-                measured: self.pedestrian_speed_mps.p15,
-                samples: self.pedestrian_speed_mps.n,
+                measured: self.pedestrian_crossing_speed_mps.p15,
+                samples: self.pedestrian_crossing_speed_mps.n,
                 reference: 1.25,
                 band: (0.97, 1.4),
                 source: "Knoblauch 1996: 15th percentile 1.25 m/s younger, 0.97 m/s older; \
                          MUTCD 2009 §4E.06 design 3.5 ft/s (1.07 m/s)",
                 tested: true,
+            },
+            Comparison {
+                metric: "pedestrian step speed, every walking step, mean, m/s",
+                measured: self.pedestrian_speed_mps.mean,
+                samples: self.pedestrian_speed_mps.n,
+                reference: 1.34,
+                band: (0.0, f64::INFINITY),
+                source: "reported: every step on a sidewalk or crossing, slowing at kerbs and \
+                         corners included, which no field study of free walking measures \
+                         (Helbing & Molnár 1995's 1.34 m/s is a desired speed)",
+                tested: false,
             },
             Comparison {
                 metric: "permitted left critical gap (Raff), s",
