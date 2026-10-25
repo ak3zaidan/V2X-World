@@ -67,9 +67,12 @@ class Run:
         lp = os.path.join(d, 'run.log')
         self.log = open(lp, errors='replace').read() if os.path.exists(lp) else ''
         self.rc = None
+        self.window = (self.doc or {}).get('duration_s')
         for line in self.log.splitlines():
             if line.startswith('rc='):
                 self.rc = int(line[3:])
+            if line.startswith('window=') and self.window is None:
+                self.window = float(line[7:])
         meta = os.path.join(d, 'scenario.txt')
         self.scenario_path = open(meta).read().strip() if os.path.exists(meta) else None
         self.scenario = load_scenario(os.path.join(ROOT, self.scenario_path)) if self.scenario_path else {}
@@ -166,7 +169,7 @@ def c_sample_arithmetic(run, p):
             N, D, P = v['numerator'], v['denominator'], v['point']
             if N < 0 or D < 0:
                 out.append('%s negative sums %s/%s' % (tag, N, D))
-            elif P and abs(N / P - D) > 0.0005 + 1e-6 * D and abs(P - N / D) > max(q, 1e-6 * abs(P)):
+            elif P and abs(N / P - D) > 0.0005 + 1e-6 * D and abs(P * D - N) > 0.0005 + 1e-6 * N and abs(P - N / D) > max(q, 1e-6 * abs(P)):
                 # the two sums are written on the 1e-3 grid (Quantum::SUM, D9), so the
                 # denominator a reader sees is the true one to within half a step
                 out.append('%s point %s != %s/%s' % (tag, P, N, D))
@@ -272,7 +275,8 @@ def c_radio_output(run, p):
 def c_scms_output(run, p):
     """A scenario with the SCMS on writes its backend and PKI records."""
     sec = run.scenario.get('security') or {}
-    if not sec.get('scms') and not p.get('force'):
+    proto = (sec.get('protocol') or {}).get('id', '') if isinstance(sec.get('protocol'), dict) else str(sec.get('protocol') or '')
+    if not sec.get('scms') and 'scms' not in proto and not p.get('force'):
         return []
     have = [c for c in ('pki.flow', 'backend.state', 'pki.state', 'node.credentials') if run.chn(c)]
     return [] if have else ['security.scms set but no pki.flow/backend.state/pki.state/node.credentials records']
@@ -283,6 +287,21 @@ def c_threat_output(run, p):
     thr = run.scenario.get('threats') or run.scenario.get('attacks')
     if not thr:
         return []
+    starts = []
+    for a in (thr.get('attackers') or []) + (thr.get('jammers') or []):
+        sch = a.get('schedule') or a.get('params') or {}
+        starts.append(sch.get('from_s', 0.0) or 0.0)
+    if not starts:
+        return []  # an empty attacker list
+    if run.window is not None and min(starts) >= run.window:
+        return []  # every attack starts after the window ends
+    n_att = (run.report.get('phase2') or {}).get('attackers')
+    if n_att == 0 and not thr.get('jammers'):
+        # A Bernoulli draw per vehicle can give no attacker in a short window: that is a pass
+        # only when it is not improbable, (1 - f)^N >= 1e-3 for the vehicles that ran.
+        f = sum(a.get('fraction') or 0 for a in thr.get('attackers') or [])
+        n = run.report.get('actors_spawned') or 0
+        return [] if (1 - min(f, 1)) ** n >= 1e-3 else ['0 attackers of %s vehicles at fraction %s' % (n, f)]
     have = [c for c in run.channels() if c.startswith(THREAT_PREFIXES)]
     return [] if have else ['threats configured but no threat/attack/detector records (channels: %s)' % sorted(run.channels())[:12]]
 
@@ -290,7 +309,7 @@ def c_threat_output(run, p):
 def c_ped_output(run, p):
     """A scenario with pedestrians spawns walkers (gt.subject) and measures them (ped_* metrics)."""
     act = run.scenario.get('actors') or {}
-    if not act.get('pedestrians'):
+    if not act.get('pedestrians') and not (act.get('vru') or {}).get('pedestrians'):
         return []
     seen = {s['metric'] for s in run.samples if s['metric'].startswith('ped_')}
     return [] if seen else ['pedestrians configured but no ped_* metric sample']
@@ -559,8 +578,11 @@ def main():
             fails = {}
             for n in targets:
                 run = get(n)
-                if row['check'] == 'band' and run.doc is None:
-                    fails[n] = ['no run']
+                if run.doc is None and row['check'] not in ('boots', 'records'):
+                    # a run that did not start fails SC.boots; the content rows judge only runs
+                    # that ran, unless they name the run
+                    if row['runs'] != 'all':
+                        fails[n] = ['no run']
                     continue
                 res = fn(run, p, {k: get(k) for k in names}) if row['check'] in PAIRED else fn(run, p)
                 if res:
