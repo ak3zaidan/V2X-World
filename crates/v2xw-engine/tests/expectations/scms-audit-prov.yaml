@@ -34,223 +34,230 @@ rows:
   behaviour: one butterfly EeRaCertRequestSpdu per vehicle for its whole life
   spec: ra-maxReqs = 1 ([SMP] Table 3; [CAMP122] SCMS-520)
   expect: {every_vehicle: 1}
-  measured: pending
-  verdict: pending
+  measured: '65 vehicles, counts [(1, 65)], off 0'
+  verdict: pass
 - id: PV.ack-per-request
   run: conf
   behaviour: the RA acknowledges every request once (RaEeCertAckSpdu to the requester)
   spec: '[ASN-2.1] EeRaInterface raEeCertAck; [CAMP122] 5.2.7.6'
   expect: {acks_minus_requests: 0}
-  measured: pending
-  verdict: pending
+  measured: 'requests 71, acks 71, per-device diff 0'
+  verdict: pass
 - id: PV.plv-per-cert
   run: conf
   behaviour: each LA sends one EncryptedIndividualPLV per certificate, sealed to the ACA
   spec: one pre-linkage value per certificate per LA ([CAMP122] 5.2.7.6.5; [BRECHT] III-C); 20 x 2 weeks per vehicle
   expect: {per_la_per_vehicle: 40, sealed_to_aca: all}
-  measured: pending
-  verdict: pending
+  measured: 'PLVs per LA {''provider-a/la1/0'': 1400, ''provider-a/la2/0'': 1400, ''provider-b/la1/0'': 1200, ''provider-b/la2/0'': 1200}, vehicles {''provider-a'': 35, ''provider-b'': 30}, ratio-off [], not sealed to ACA 0'
+  verdict: pass
 - id: PV.aca-per-cert
   run: conf
   behaviour: one RaAcaCertRequestSpdu, one AcaRaCertResponseSpdu and one AcaEeCertResponsePrivateSpdu per certificate
   spec: '[ASN-2.1] RaAcaInterface (one request per certificate); [CAMP122] 5.2.7.6.6'
   expect: {requests_eq_responses_eq_private: true, per_vehicle: 40}
-  measured: pending
-  verdict: pending
+  measured: 'RaAca 2846, AcaRa 2846, AcaEePrivate 2846; vehicles with != 40 pre-run 0'
+  verdict: pass
 - id: PV.encrypted-to-device
   run: conf
   behaviour: the PCA encrypts every pseudonym certificate response to the device; only the device opens it
   spec: AcaEeCertResponsePrivateSpdu = SignedEncrypted to the EE's response key ([ASN-2.1]; [CAMP122] 5.2.7.6.6 "the RA cannot read")
   expect: {sealed_to_ee: all, opened_by_ra: 0}
-  measured: pending
-  verdict: pending
+  measured: '2846 private responses, not sealed to ee 0, opened at an RA 0'
+  verdict: pass
 - id: PV.aca-learns-no-device
   run: conf
   behaviour: no RA-to-ACA request carries the device's enrolment certificate id, its request hash or its node index
   spec: the ACA never sees the EE identity ([CAMP122] 5.2.7.6.6; [BRECHT] II, "the PCA does not know the device")
   expect: {leaks: 0}
-  measured: pending
-  verdict: pending
+  measured: '2846 RA-to-ACA requests searched for 199 device identifiers: 0 found'
+  verdict: pass
 - id: PV.aca-cannot-group
   run: conf
   behaviour: the ACA cannot group a device's certificates by the RA message that carries them
   spec: the RA shuffles the requests of different devices before the ACA sees them, so the ACA cannot link certificates of one device ([CAMP122] 5.2.7.6.4 shuffle; [BRECHT] III-C, VI)
   expect: {max_certs_of_one_device_per_ra_aca_message: 1}
-  measured: pending
-  verdict: pending
+  measured: '14 RA-to-ACA messages; most certificates of one device in one message: 20'
+  verdict: open
+  note: release_jobs sends one cert-request per (job, i) holding the device's whole week; the PCA answers by flow run. Records repaired to one message per request turn it green. Open, fix design in audit-prov.md 4.1
 - id: PV.lop-not-deployed
   run: conf
   behaviour: the US profile deploys no LOP; device traffic reaches the RA with no LOP hop
   spec: LOP specified but not deployed (01 sec. 2.2; governance D-6)
   expect: {lop_hops: 0}
-  measured: pending
-  verdict: pending
+  measured: 'pki.flow LOP hops 0; backend.state still shows 2 LOP boxes with 2087 messages'
+  verdict: pass
+  note: backend.state still draws a LOP box per provider with its transparent-link traffic (view note, audit-prov.md 4.4)
 # ---- the certificates the devices hold (node.credentials certificate bytes, decoded)
 - id: PV.cert-implicit
   run: conf
   behaviour: every pseudonym certificate is an implicit (ECQV) certificate
   spec: 1609.2 6.4.8 verifyKeyIndicator reconstructionValue; [SMP] 6.3 (pseudonyms implicit)
   expect: {explicit: 0}
-  measured: pending
-  verdict: pending
+  measured: '2840 pseudonym certificates, explicit 0'
+  verdict: pass
 - id: PV.cert-validity
   run: conf
   behaviour: every pseudonym certificate starts at its i-period boundary and lasts one week plus one hour
   spec: i-period 1 week from 2015-01-06 04:00 ET, certificate hours(169) ([SMP] Table 2; [CAMP122] Table 3)
   expect: {bad_start: 0, bad_duration: 0}
-  measured: pending
-  verdict: pending
+  measured: '2840 certificates, start off the i-period grid 0, duration not 169 h 0'
+  verdict: pass
 - id: PV.cert-linkage
   run: conf
   behaviour: every pseudonym certificate carries linkageData with iCert = its i-period and a 9-byte linkage value, crlSeries 1
   spec: 1609.2 6.4.12 LinkageData; [SMP] Table 1 (series 1); 03 sec. 6
   expect: {bad: 0}
-  measured: pending
-  verdict: pending
+  measured: '2840 certificates, linkage data off 0'
+  verdict: pass
 - id: PV.pool-20-per-week
   run: conf
   behaviour: every vehicle holds 20 distinct certificates for each i-period it holds
   spec: 20 per period ([SMP] Table 2; [CAMP122] Table 3)
   expect: {every_device_period: 20}
-  measured: pending
-  verdict: pending
+  measured: 'certificates per (vehicle, i-period): {20: 142}'
+  verdict: pass
 - id: PV.pool-at-join
   run: conf
   behaviour: a vehicle joins holding two i-periods (the current one and the next)
   spec: device_pool_periods = 2 (ASSUMPTION, constants.md; NYC 1 week, THEA 156 bracket it)
   expect: {every_vehicle_periods: 2}
-  measured: pending
-  verdict: pending
+  measured: 'i-periods held at the first node.credentials row: {2: 65}'
+  verdict: pass
 # ---- in-run top-up at the 614 -> 615 boundary (600 s)
 - id: PV.topup-at-boundary
   run: conf
   behaviour: every vehicle on the road at 600 s whose pool ends at 615 starts its top-up at the boundary
   spec: weekly top-off at the i-period boundary (topup_below_periods = 1; [CAMP122] 5.2.7.8)
   expect: {missing: 0, start_minus_boundary_s_max: 0.1}
-  measured: pending
-  verdict: pending
+  measured: 'on the road across the boundary with pool to 615: 12; top-ups started 12; missing 0; max start - boundary 0.0166 s'
+  verdict: pass
 - id: PV.topup-no-new-request
   run: conf
   behaviour: an in-run top-up sends no new butterfly request; it is a .info poll then one batch download
   spec: ra-maxReqs = 1 and the .info top-off ([CAMP122] 5.2.7.8, SCMS-576)
   expect: {vehicle_ee_ra_cert_requests_in_run: 0, download_requests_per_topup: 2}
-  measured: pending
-  verdict: pending
+  measured: 'vehicle butterfly requests in the run 0; download requests per top-up {2: 12}'
+  verdict: pass
 - id: PV.topup-20-certs
   run: conf
   behaviour: each top-up delivers 20 certificates for the period after next (616)
   spec: 20 per period; the pool reaches two periods ahead
   expect: {per_topup: 20, period: 616}
-  measured: pending
-  verdict: pending
+  measured: 'certificates per top-up download {20: 12}; i=616 certificates held after install {20: 12}'
+  verdict: pass
 - id: PV.pregen-delay
   run: conf
   behaviour: the RA generates the new week (expanded) no later than ra-maxGenDelay after the boundary
   spec: ra-maxGenDelay 1 week ([SMP] Table 3; [PRIMER] p.6)
   expect: {max_s: 604800}
-  measured: pending
-  verdict: pending
+  measured: '12 weekly jobs; expanded - boundary 0.094 .. 0.096 s'
+  verdict: pass
 - id: PV.download-after-ready
   run: conf
   behaviour: the device asks for its batch only once the RA holds it, and within download-minWait of that
   spec: 'nextDlTime ([ASN-2.1] RaEeCertAck/.info); download-minWait 5 min ([SMP] Table 3)'
   expect: {early: 0, late_over_300s: 0}
-  measured: pending
-  verdict: pending
+  measured: '12 batch requests; before the batch was ready 0; more than 300 s after 0'
+  verdict: pass
 - id: PV.topup-conservation
   run: conf
   behaviour: top-ups requested = installed + refused + still in flight at the end
   spec: conservation
   expect: {imbalance: 0}
-  measured: pending
-  verdict: pending
+  measured: 'requested 12 = installed 12 + refused 0 + in flight 0'
+  verdict: pass
 # ---- RSU application certificates
 - id: PV.rsu-renewal
   run: conf
   behaviour: each RSU requests one application certificate at the boundary, without butterfly, LAs or shuffle
   spec: '[CAMP122] Table 3, Table 68, SCMS-1213: weekly, not pre-generated, no butterfly, no shuffle; encrypted to the RA'
   expect: {per_rsu: 1, la_messages: 0, shuffle_stages: 0, request_sealed_to_ra: all}
-  measured: pending
-  verdict: pending
+  measured: 'requests per RSU {''ee/1000000'': 1, ''ee/1000001'': 1}; LA messages 0; shuffle/expansion stages 0; not sealed to the RA 0; off the boundary 0'
+  verdict: pass
 - id: PV.rsu-cert
   run: conf
   behaviour: the RSU application certificate is implicit, hours(169), crlSeries 3, no linkageData
   spec: '[CAMP122] Table 3; [SMP] 6.3.3'
   expect: {bad: 0}
-  measured: pending
-  verdict: pending
+  measured: '0 series-3 application certificates in the stores; off 0'
+  verdict: open
+  note: no record carries an RSU application certificate (node.credentials is vehicles only; the PCA response is sealed and recorded without plaintext). Open, audit-prov.md 4.3; library capture check_appcerts.py covers the format
 # ---- metrics integrity (engine values against the records)
 - id: PV.m.topups
   run: conf
   behaviour: run-report topups_started / topups_completed / certs_topped_up equal the records' top-up instances, installs and certificates
   spec: same quantity, two sources
   expect: {diff: 0}
-  measured: pending
-  verdict: pending
+  measured: 'engine 12/12/240, records 12/12/240'
+  verdict: pass
 - id: PV.m.topup-latency
   run: conf
   behaviour: run-report access.exchange_latency.topup (count, sum, max) equals the records' requested-to-installed times
   spec: same quantity, two sources (ns, per top-up)
   expect: {diff_s_max: 0.001}
-  measured: pending
-  verdict: pending
+  measured: 'engine n 12 sum 724.085 s max 60.342 s; records n 12 sum 724.085 s max 60.342 s'
+  verdict: pass
+  note: checker rule corrected before the verdict - exchange_latency is request (the boundary trigger) to completion (backend.rs), not from the requested stamp, which follows the device's signing (16.6 ms)
 - id: PV.m.rsu-app-certs
   run: conf
   behaviour: run-report rsu_app_certs_renewed equals the installed app-cert flows in the records
   spec: same quantity, two sources
   expect: {diff: 0}
-  measured: pending
-  verdict: pending
+  measured: 'engine renewed 2 preloaded 4; records 2 / 4'
+  verdict: pass
 - id: PV.m.backend-traffic
   run: conf
   behaviour: the Backend view's received/sent counters of the RA, LA1, LA2 and ACA at the end equal the pki.flow messages to and from each
   spec: same quantity, two sources
   expect: {diff: 0}
-  measured: pending
-  verdict: pending
+  measured: '8 entities; mismatched (id, view rx, records rx, view tx, records tx): []'
+  verdict: pass
 - id: PV.m.issued-counters
   run: conf
   behaviour: the PKI view's entity counters at the end (LA plv_issued, ACA certs_issued, RA requests_accepted) equal the SPDUs in the records (pre-run and in-run)
   spec: same quantity, two sources
   expect: {diff: 0}
-  measured: pending
-  verdict: pending
+  measured: '8 counters; off (entity, counter, view, records): []'
+  verdict: pass
   note: added after the first checker pass, before its own run
 - id: PV.m.pool-fields
   run: conf
   behaviour: node.security pool_stored equals the certificates node.credentials says the device holds
   spec: same quantity, two sources
   expect: {mismatched_rows: 0}
-  measured: pending
-  verdict: pending
+  measured: '16558 node.security rows; pool_stored off node.credentials 0'
+  verdict: pass
+  note: checker rule corrected before the verdict - pool_stored counts expired certificates (sec_records.rs 'stored at all')
 - id: PV.cell-expiry
   run: conf
   behaviour: a node.credentials cell is `expired` only after its certificate's validity (start + 169 h) ends, and `valid`/`active` only inside it
   spec: 1609.2 6.4.14 validityPeriod; the one-hour overlap ([CAMP122] Table 3)
   expect: {early_expired: 0, valid_outside: 0}
-  measured: pending
-  verdict: pending
+  measured: '7540 cells; expired while the certificate is still valid 0; valid/active outside its validity 0'
+  verdict: pass
   note: added after the first checker pass, when PV.m.pool-fields showed i = 614 cells marked expired at 600 s
 - id: PV.view-pdu-carrier
   run: conf
   behaviour: in the PKI view every message is at least as long as the SPDUs it is shown carrying, and a .info request's SPDU rides on the info-request
   spec: a message's bytes include every SPDU it carries (the Studio PKI view draws them together)
   expect: {short_messages: 0}
-  measured: pending
-  verdict: pending
+  measured: 'messages shorter than the SPDUs they carry: 16 {''file-request'': 12, ''report-forward'': 4}'
+  verdict: fixed
+  test: v2xw-proto pki_view::a_top_off_s_info_request_carries_its_own_spdu_and_no_step_is_shorter_than_its_spdus
+  note: attribute_pdus put every SPDU of a handler on the first step of its leg (fix ccff6ad4, goldens 966de5d0)
 # ---- per-entity backend load against CAMP sizing
 - id: PV.camp-sizing
   run: conf
   behaviour: per device-week the RA receives 1 .info poll and serves 1 batch file; ACA 20 issuances; each LA 20 PLVs; scaled to the fleet these give CAMP's rates
   spec: '[CAMP122] 6.3.4.4 (.info 14 req/s year 1 for 17 M new vehicles a year, half of new plus all existing weekly), 6.3.6.4'
   expect: {info_per_device_week: 1, files_per_device_week: 1, aca_per_device_week: 20, plv_per_la_per_device_week: 20, info_rate_y1_req_s: [13.5, 14.5]}
-  measured: pending
-  verdict: pending
+  measured: 'per device-week: .info 1.0, files 1.0, ACA 20.0, PLV per LA 20.0; .info year-1 rate 14.05 req/s (CAMP 14)'
+  verdict: pass
 # ---- determinism
 - id: PV.determinism
   run: conf2
   behaviour: same seed, the provisioning records (pki.flow, node.credentials) are byte-identical
   spec: engine invariant
   expect: {identical: true}
-  measured: pending
-  verdict: pending
+  measured: 'pki.flow + node.credentials sha256 c55693ad829c355a vs c55693ad829c355a'
+  verdict: pass
