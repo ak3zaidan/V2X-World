@@ -230,24 +230,106 @@ def r_aca_learns_no_device(R, D):
     return leaks == 0 and checked > 0, f'{checked} RA-to-ACA requests searched for {sum(len(v) for v in names.values())} device identifiers: {leaks} found'
 
 
-def r_aca_cannot_group(R, D):
-    worst = 0
-    msgs = 0
-    for q in R.msgs:
+def ra_aca_requests(R):
+    """Every in-run RA-to-ACA certificate request as the ACA receives it, in record order:
+    (batch key, message index, pdu, instance). A batch is what one RA released at one
+    instant (the shuffle releases a batch at once); the instance is ground truth (one
+    account's job: one device's week), never an input to an attack."""
+    out = []
+    for k, q in enumerate(R.msgs):
         if role(q.get('from')) == 'ra' and role(q.get('to')) in ('aca', 'pca'):
-            n = sum(1 for p in q.get('pdus') or [] if p['type'] == 'RaAcaCertRequestSpdu')
-            if n == 0:
-                continue
-            msgs += 1
-            # every request in one message of a top-up flow is one device's (the flow instance
-            # is one device's run; the batch download of that instance goes to one device)
-            devs = {p['to'] for x in D.by_inst[q['instance']] if x['kind'] == 'msg' for p in x.get('pdus') or []
-                    if p['type'] == 'AcaEeCertResponsePrivateSpdu'}
-            if len(devs) == 1:
-                worst = max(worst, n)
-            else:
-                worst = max(worst, 1 if devs else n)
-    return worst <= 1 and msgs > 0, f'{msgs} RA-to-ACA messages; most certificates of one device in one message: {worst}'
+            for p in q.get('pdus') or []:
+                if p['type'] == 'RaAcaCertRequestSpdu':
+                    out.append(((q['from'], q['t']), k, p, q['instance']))
+    return out
+
+
+def aca_batches(R):
+    b = collections.defaultdict(list)
+    for key, k, p, inst in ra_aca_requests(R):
+        b[key].append((k, p, inst))
+    return b
+
+
+def r_aca_cannot_group(R, D):
+    """Each message carries one request, and every ACA batch mixes devices: the largest
+    share of one device in a batch is the population baseline 1/k (k devices whose week
+    is in the batch, each with the same number of requests)."""
+    per_msg = collections.Counter(k for _, k, _, _ in ra_aca_requests(R))
+    most_per_msg = max(per_msg.values(), default=0)
+    B = aca_batches(R)
+    worst_share, worst_excess, min_dev, n_req = 0.0, 0.0, None, 0
+    for key, xs in B.items():
+        c = collections.Counter(inst for _, _, inst in xs)
+        share = max(c.values()) / len(xs)
+        worst_share = max(worst_share, share)
+        worst_excess = max(worst_excess, share - 1 / len(c))
+        min_dev = len(c) if min_dev is None else min(min_dev, len(c))
+        n_req += len(xs)
+    ok = B and most_per_msg == 1 and min_dev >= 2 and worst_excess <= 1e-9
+    return ok, (f'{len(B)} ACA batches, {n_req} requests; requests per message max {most_per_msg}; '
+                f'devices per batch min {min_dev}; largest share of one device {worst_share:.4f} '
+                f'(over the 1/k baseline by {worst_excess:.4f})')
+
+
+def _ngrams(hx, n=8):
+    b = bytes.fromhex(hx)
+    return {b[i:i + n] for i in range(0, max(0, len(b) - n + 1))}
+
+
+def grouping_attacks(R):
+    """What the ACA sees of each batch (arrival order, message length, SPDU bytes) and three
+    ways to link two requests as one device's: adjacent in arrival order; equal length; a
+    shared 8-byte string that is not common to most of the batch (any field, any offset:
+    a per-device constant anywhere in the SPDU would show). Scored against the batch's
+    population baseline, the chance that two random requests of the batch are one
+    device's. Returns {attack: (links, same-device links, expected at baseline, z)}."""
+    res = {}
+    acc = {a: [0, 0, 0.0, 0.0] for a in ('order', 'length', 'bytes')}
+    for key, xs in aca_batches(R).items():
+        xs = sorted(xs, key=lambda x: x[0])
+        n = len(xs)
+        if n < 2:
+            continue
+        c = collections.Counter(inst for _, _, inst in xs)
+        p0 = sum(v * (v - 1) for v in c.values()) / (n * (n - 1))
+        links = {'order': [(a, a + 1) for a in range(n - 1)], 'length': [], 'bytes': set()}
+        by_len = collections.defaultdict(list)
+        for a, (_, p, _) in enumerate(xs):
+            by_len[p['len']].append(a)
+        if len(by_len) > 1:
+            for v in by_len.values():
+                if len(v) <= n // 2:
+                    links['length'] += [(v[a], v[b]) for a in range(len(v)) for b in range(a + 1, len(v))]
+        holders = collections.defaultdict(set)
+        for a, (_, p, _) in enumerate(xs):
+            for g in _ngrams(p.get('hex') or ''):
+                holders[g].add(a)
+        for g, hs in holders.items():
+            if 1 < len(hs) <= n // 2:
+                hs = sorted(hs)
+                links['bytes'].update((hs[a], hs[b]) for a in range(len(hs)) for b in range(a + 1, len(hs)))
+        for att, L in links.items():
+            same = sum(1 for a, b in L if xs[a][2] == xs[b][2])
+            acc[att][0] += len(L)
+            acc[att][1] += same
+            acc[att][2] += p0 * len(L)
+            acc[att][3] += p0 * (1 - p0) * len(L)
+    for att, (L, S, E, V) in acc.items():
+        z = (S - E) / V ** 0.5 if V > 0 else (0.0 if S <= E else float('inf'))
+        res[att] = (L, S, E, z)
+    return res
+
+
+def r_aca_grouping_attack(R, D):
+    """The ACA tries to link certificates of one device from what it sees; every attack must
+    do no better than the population baseline (z <= 3 over all batches)."""
+    res = grouping_attacks(R)
+    if not ra_aca_requests(R):
+        return False, 'no RA-to-ACA request in the run'
+    ok = all(z <= 3 for _, _, _, z in res.values())
+    return ok, '; '.join(f'{a}: {L} links, {S} one device\'s vs {E:.1f} at baseline (z {z:.2f})'
+                         for a, (L, S, E, z) in res.items())
 
 
 def r_lop_not_deployed(R, D):
@@ -588,11 +670,17 @@ def r_camp_sizing(R, D):
     k = len(done) or 1
     info = sum(1 for _, _, ms in done for m in ms if m['name'] == 'info-request') / k
     files = sum(1 for _, _, ms in done for m in ms if m['name'] == 'batch-download') / k
-    aca = sum(1 for _, _, ms in done for m in ms for p in m.get('pdus') or [] if p['type'] == 'RaAcaCertRequestSpdu') / k
-    plv = sum(1 for _, _, ms in done for m in ms if m['name'] == 'pre-linkage-response' for p in m.get('pdus') or [] if p['type'] == 'EncryptedIndividualPLV') / k / 2
+    # ACA and LA work per account-week: one weekly job per account (the device that asked
+    # first carries its week on its top-up flow, every other account's runs on a
+    # `pregeneration` flow), so counted over the jobs, not over the top-ups.
+    jobs = [xs for xs in D.by_inst.values() if xs and xs[0]['flow'] in ('topup', 'pregeneration')
+            and any(x['kind'] == 'stage' and x['name'] == 'expanded' for x in xs)]
+    kj = len(jobs) or 1
+    aca = sum(1 for xs in jobs for m in xs if m['kind'] == 'msg' for p in m.get('pdus') or [] if p['type'] == 'RaAcaCertRequestSpdu') / kj
+    plv = sum(1 for xs in jobs for m in xs if m['kind'] == 'msg' and m['name'] == 'pre-linkage-response' for p in m.get('pdus') or [] if p['type'] == 'EncryptedIndividualPLV') / kj / 2
     rate = 0.5 * CAMP_NEW_PER_YEAR * info / WEEK
     ok = info == 1 and files == 1 and aca == 20 and plv == 20 and 13.5 <= rate <= 14.5
-    return ok, f'per device-week: .info {info}, files {files}, ACA {aca}, PLV per LA {plv}; .info year-1 rate {rate:.2f} req/s (CAMP 14)'
+    return ok, f'per device-week: .info {info}, files {files} ({k} top-ups); ACA {aca}, PLV per LA {plv} ({len(jobs)} weekly jobs); .info year-1 rate {rate:.2f} req/s (CAMP 14)'
 
 
 def r_determinism(R, D, twin=None):
@@ -610,6 +698,7 @@ ROWS = {
     'PV.encrypted-to-device': r_encrypted_to_device,
     'PV.aca-learns-no-device': r_aca_learns_no_device,
     'PV.aca-cannot-group': r_aca_cannot_group,
+    'PV.aca-grouping-attack': r_aca_grouping_attack,
     'PV.lop-not-deployed': r_lop_not_deployed,
     'PV.cert-implicit': r_cert_implicit,
     'PV.cert-validity': r_cert_validity,
@@ -668,7 +757,8 @@ FAULTS = {
     'PV.encrypted-to-device': lambda R, D: _first(D.pre, lambda p: p['type'] == 'AcaEeCertResponsePrivateSpdu').__setitem__('sealed_to', None),
     'PV.aca-learns-no-device': lambda R, D: (lambda p, e: p.__setitem__('hex', p['hex'] + e))(
         _first(D.pre, lambda p: p['type'] == 'RaAcaCertRequestSpdu' and p.get('hex')), R.creds[sorted(R.creds)[0]][0]['enrolment']),
-    'PV.aca-cannot-group': None,      # already red on the real records; fault: split (see below)
+    'PV.aca-cannot-group': lambda R, D: _per_device_instants(R),
+    'PV.aca-grouping-attack': lambda R, D: _arrival_by_device(R),
     'PV.lop-not-deployed': lambda R, D: R.msgs.append(dict(R.msgs[0], to='provider-a/lop/0')),
     'PV.cert-implicit': lambda R, D: _mut_cert(R, lambda c: c.__setitem__('type', 'explicit')),
     'PV.cert-validity': lambda R, D: _mut_cert(R, lambda c: c['toBeSigned']['validityPeriod'].__setitem__('duration', ('hours', 168))),
@@ -698,23 +788,35 @@ FAULTS = {
 }
 
 
-def _split_ra_aca(R, D):
-    """The shape the rule asks for: one RA-to-ACA message per certificate request."""
-    out = []
+def _per_device_instants(R):
+    """The pre-fix shape: each device's week leaves the RA on its own, at its own instant,
+    in one message (the batch then holds one device)."""
+    groups = collections.defaultdict(list)
+    keep = []
     for q in R.msgs:
-        ps = q.get('pdus') or []
-        if role(q.get('from')) == 'ra' and role(q.get('to')) in ('aca', 'pca') and len(ps) > 1:
-            out += [dict(q, pdus=[p], bytes=p['len']) for p in ps]
+        if role(q.get('from')) == 'ra' and role(q.get('to')) in ('aca', 'pca') and any(
+                p['type'] == 'RaAcaCertRequestSpdu' for p in q.get('pdus') or []):
+            groups[q['instance']].append(q)
         else:
-            out.append(q)
-    R.msgs[:] = out
+            keep.append(q)
+    for d, (inst, qs) in enumerate(sorted(groups.items())):
+        pdus = [p for q in qs for p in q['pdus']]
+        keep.append(dict(qs[0], pdus=pdus, bytes=sum(p['len'] for p in pdus), t=qs[0]['t'] + d + 1))
+    R.msgs[:] = keep
+
+
+def _arrival_by_device(R):
+    """An unshuffled release: each batch's requests arrive grouped by device."""
+    idx = [k for k, q in enumerate(R.msgs) if role(q.get('from')) == 'ra' and role(q.get('to')) in ('aca', 'pca')
+           and any(p['type'] == 'RaAcaCertRequestSpdu' for p in q.get('pdus') or [])]
+    qs = sorted((R.msgs[k] for k in idx), key=lambda q: (q['from'], q['t'], q['instance']))
+    for k, q in zip(idx, qs):
+        R.msgs[k] = q
 
 
 # rows red on the real records: a repair of the records that must turn them green, so a
 # red row is shown to be a finding and not a rule that cannot pass
-GREEN = {
-    'PV.aca-cannot-group': _split_ra_aca,
-}
+GREEN = {}
 
 
 def judge(R, D, row, twin=None):

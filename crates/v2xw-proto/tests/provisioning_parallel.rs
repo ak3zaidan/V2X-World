@@ -120,5 +120,7 @@ fn provisioning_gives_the_same_bytes_on_any_number_of_threads() {
     assert_eq!(one.0, PINNED, "the sequential code's bytes");
 }
 
-/// `provision_and_top_off`'s digest on `8becf72a`, before the loops ran in parallel.
-const PINNED: &str = "99f8481ae97f25dd68c1464156313748155984ded567aef63c7972c26af386ae";
+/// `provision_and_top_off`'s digest. Re-pinned for the RA shuffle (audit-prov
+/// PV.aca-cannot-group: one RA→ACA request per message in a seeded order across devices,
+/// and the weekly job for every account); before it, `99f8481a…` on `8becf72a`.
+const PINNED: &str = "1ce71853417f847cfbfb3b50ca44fbc19095c97cc303dfca6a591b2a56e7c595";

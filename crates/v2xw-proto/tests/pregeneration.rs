@@ -334,7 +334,9 @@ fn the_aca_can_link_no_certificate_to_a_device_or_to_another() {
     run.topup(DEVICE_A, 2, 2);
     run.run().expect("runs");
     let st = &run.state;
-    assert_eq!(st.pca.issued.len(), 10);
+    // 2 × (2 periods × 2) at the requests, then the weekly job adds week 2 for every
+    // account (A asked; B's week is in the same population batch): 8 + 2 × 2.
+    assert_eq!(st.pca.issued.len(), 12);
     let pca = format!("{:?}", st.pca);
     let pca_node = st.nodes.pca.index();
     let to_aca: Vec<&[u8]> = st
@@ -343,7 +345,7 @@ fn the_aca_can_link_no_certificate_to_a_device_or_to_another() {
         .filter(|p| p.to == pca_node)
         .filter_map(|p| p.bytes.as_ref().map(|b| b.bytes()))
         .collect();
-    assert_eq!(to_aca.len(), 10, "one RaAcaCertRequestSpdu per certificate");
+    assert_eq!(to_aca.len(), 12, "one RaAcaCertRequestSpdu per certificate");
     let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
     let contains = |hay: &[u8], needle: &[u8]| hay.windows(needle.len()).any(|w| w == needle);
     for dev in [DEVICE_A, DEVICE_B] {
@@ -381,11 +383,19 @@ fn the_aca_can_link_no_certificate_to_a_device_or_to_another() {
     for ((i, _), l) in &st.pca.issued {
         let req = st.ra.handles[&l.handle];
         let owner = st.ra.requests[&req].device;
+        // The owner holds it, or (B's week 2, made by the weekly job before B asked) the
+        // RA holds it in the owner's batch file.
+        let suffix = format!("_{i:X}.zip");
         assert!(
             st.devices[&owner]
                 .credentials
                 .keys()
                 .any(|&(ci, _)| ci == *i)
+                || st
+                    .ra
+                    .batch_files(owner)
+                    .iter()
+                    .any(|(n, _)| n.ends_with(&suffix))
         );
     }
 }
@@ -463,4 +473,57 @@ fn the_period_grid_a_device_reads_is_the_backends() {
             assert_eq!(at(grid, t), p.period_at(t), "t = {t}");
         }
     }
+}
+
+/// The weekly job is one population batch, shuffled across devices before the ACA sees it
+/// (audit-prov PV.aca-cannot-group; [CAMP122] 5.2.7.6.4; [BRECHT] §V): A asks for week 1
+/// and B's week 1 goes out in the same batch. Each RA→ACA message carries one request, the
+/// order interleaves the two devices, and the RA files each answer into the right device's
+/// batch file by the request's hash alone.
+#[test]
+fn the_weekly_job_sends_one_batch_shuffled_across_every_account() {
+    let mut run = bytes_run(&[DEVICE_A, DEVICE_B]);
+    provisioned(&mut run, DEVICE_A, 0, 1, 20);
+    provisioned(&mut run, DEVICE_B, 0, 1, 20);
+    let mark = run.state.pdus.len();
+    run.topup(DEVICE_A, 1, 20);
+    run.run().expect("runs");
+    let st = &run.state;
+    let pca = st.nodes.pca.index();
+    let device_of = |b: &[u8]| {
+        let h = v2xw_core::hash::sha256(b);
+        let rh = st.ra.handles.get(&h).expect("the RA keeps every handle");
+        st.ra.requests[rh].device
+    };
+    let reqs: Vec<_> = st.pdus[mark..]
+        .iter()
+        .filter(|p| p.kind == SpduKind::RaAcaCertRequest && p.to == pca)
+        .collect();
+    assert_eq!(reqs.len(), 40, "week 1 of both accounts");
+    let mut steps: Vec<_> = reqs.iter().map(|p| p.step).collect();
+    steps.sort_unstable();
+    steps.dedup();
+    assert_eq!(steps.len(), 40, "one request per RA→ACA message");
+    let order: Vec<NodeId> = reqs
+        .iter()
+        .map(|p| device_of(p.bytes.as_ref().unwrap().bytes()))
+        .collect();
+    assert_eq!(order.iter().filter(|d| **d == DEVICE_B).count(), 20);
+    let switches = order.windows(2).filter(|w| w[0] != w[1]).count();
+    assert!(
+        switches >= 10,
+        "the batch left grouped by device: {switches} switches"
+    );
+    // B never asked, yet its file for week 1 is whole, and A holds its week: the RA routed
+    // all 40 answers by hash.
+    for d in [DEVICE_B] {
+        let files = st.ra.batch_files(d);
+        let week1 = files
+            .iter()
+            .find(|(n, _)| n.ends_with("_1.zip"))
+            .expect("week 1 filed");
+        assert_eq!(week1.1.len(), 20, "{d:?}: {week1:?}");
+    }
+    assert_eq!(st.ra.unrouted_responses, 0);
+    assert_eq!(run.state.devices[&DEVICE_A].credentials.len(), 40);
 }

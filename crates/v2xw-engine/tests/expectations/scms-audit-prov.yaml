@@ -75,10 +75,18 @@ rows:
   run: conf
   behaviour: the ACA cannot group a device's certificates by the RA message that carries them
   spec: the RA shuffles the requests of different devices before the ACA sees them, so the ACA cannot link certificates of one device ([CAMP122] 5.2.7.6.4 shuffle; [BRECHT] III-C, VI)
-  expect: {max_certs_of_one_device_per_ra_aca_message: 1}
-  measured: '14 RA-to-ACA messages; most certificates of one device in one message: 20'
-  verdict: open
-  note: release_jobs sends one cert-request per (job, i) holding the device's whole week; the PCA answers by flow run. Records repaired to one message per request turn it green. Open, fix design in audit-prov.md 4.1
+  expect: {requests_per_ra_aca_message: 1, min_devices_per_aca_batch: 2, largest_share_of_one_device_over_1_over_k: 0}
+  measured: pending
+  verdict: pending
+  note: 'first pass (8becf72a) open: release_jobs sent one cert-request per (job, i) holding the device''s whole week, 20 per message, and the PCA answered by flow run. Rule rewritten for the fix (a batch is what one RA releases at one instant; the share is judged against the 1/k population baseline); fault: each device''s week leaves at its own instant in one message'
+- id: PV.aca-grouping-attack
+  run: conf
+  behaviour: an ACA-side grouping attack (adjacency in arrival order, equal length, any shared 8-byte string not common to most of the batch) links one device's certificates no better than the batch's population baseline
+  spec: the PCA learns nothing linking two certificates of one device ([BRECHT] V, VI-D; [CAMP122] 5.2.7.6.4 shuffle)
+  expect: {max_z_over_baseline: 3}
+  measured: pending
+  verdict: pending
+  note: added with the fix (row 32); ground truth is the job's flow instance, never an input to the attacks; fault: each batch arrives grouped by device (an unshuffled release)
 - id: PV.lop-not-deployed
   run: conf
   behaviour: the US profile deploys no LOP; device traffic reaches the RA with no LOP hop

@@ -489,6 +489,29 @@ pub struct RaState {
     /// RA→ACA request hash → the device request it came from: what the RA keeps so a
     /// PCA answer resolves, and the ACA never sees.
     pub handles: BTreeMap<[u8; 32], [u8; 32]>,
+    /// HashedId8 of each RA→ACA request in flight → where its answer goes: the job, the
+    /// i-period and `j`, which the ACA never sees. The RA routes every PCA answer by this
+    /// alone (the request hash the `AcaRaCertResponseSpdu` carries, 02 §9.5), never by the
+    /// flow the answer arrived on, and assembles each device's batch file itself.
+    aca_routes: BTreeMap<[u8; 8], AcaRoute>,
+    /// Flows that asked for `(device, i)` while its week was being generated: each is
+    /// told `batch_ready` when the RA has assembled that file.
+    ready_watchers: BTreeMap<(NodeId, u32), Vec<(FlowId, FlowRun)>>,
+    /// The flows already told `batch_ready`, so a re-poll does not stamp it twice.
+    ready_told: BTreeSet<FlowRun>,
+    /// Weekly pre-generation jobs run (population batches), and certificate-request
+    /// releases: the keys of their own shuffle streams.
+    pregen_batches: u64,
+    cert_releases: u64,
+}
+
+/// Where the RA files the answer to one RA→ACA request.
+#[derive(Debug, Clone, Copy)]
+struct AcaRoute {
+    /// The provisioning job's run (the RA's own key for the job).
+    job: FlowRun,
+    i: u32,
+    j: u32,
 }
 
 /// What the RA keeps from a device's one butterfly request to pre-generate every later
@@ -619,9 +642,11 @@ struct ProvisioningJob {
         (u32, u32),
         v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ra_interface::EncryptedIndividualPLV,
     >; 2],
-    /// HashedId8 of each `RaAcaCertRequestSpdu` → `(i, j)`: the RA keeps `j`, which the
-    /// ACA never sees, and routes the answer by this hash (02 §9.5).
-    aca_requests: BTreeMap<[u8; 8], (u32, u32)>,
+    /// Per i-period: RA→ACA requests sent, answers received, and the batch file the RA
+    /// is assembling from them.
+    expected: BTreeMap<u32, u32>,
+    answered: BTreeMap<u32, u32>,
+    assembling: BTreeMap<u32, RepoBatch>,
     /// HashedId8 of the device's `EeRaCertRequestSpdu`: the batch files' name prefix.
     request_hash8: Option<[u8; 8]>,
     lci: [Option<Lci>; 2],
@@ -631,9 +656,11 @@ struct ProvisioningJob {
     periods_certified: u32,
     sent: bool,
     batch_ready_stamped: bool,
-    /// A pre-generated period of an accepted request: released to the ACA as soon as its
-    /// pre-linkage values are in, not held for the initial-request shuffle.
+    /// A pre-generated period of an accepted request: released to the ACA with its weekly
+    /// job's population batch, not held for the initial-request shuffle.
     pregen: bool,
+    /// The weekly job (population batch) it belongs to; `None` for an initial request.
+    batch: Option<u64>,
 }
 
 /// The Pseudonym Certificate Authority's state ([BRECHT Table II]).
@@ -1008,6 +1035,8 @@ pub enum Pending {
         i: u32,
         /// The certificates, computed before the committee signed.
         credentials: Box<Vec<IssuedCredential>>,
+        /// The handles of the requests answered.
+        answers: Box<Vec<[u8; 32]>>,
         /// The flow.
         flow: FlowId,
         /// Its run.
@@ -1942,9 +1971,10 @@ impl ScmsState {
             Pending::IssueBatch {
                 i,
                 credentials,
+                answers,
                 flow,
                 run,
-            } => self.send_batch(i, *credentials, flow, run, _at, out),
+            } => self.send_batch(i, *credentials, *answers, flow, run, _at, out),
             Pending::PublishCrl { flow, run } => {
                 // The simulation's real ECDSA signature stands in for the committee's (a
                 // CGGMP21 output *is* one; a FROST one is a Schnorr signature the size
