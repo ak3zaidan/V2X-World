@@ -18,7 +18,7 @@
 # variants (on-demand, camp, test-ctl, split-90-10, rsu5, rsu0, pen0, sybil, ma-legacy, att10,
 # gnss-clean) re-measured on the 300 s base; the QD25 rows are the quarter fleet end to end.
 # Still carrying 77cffb5b values (owed): silent, nyc-pilot, real-crypto, lte, nr, full-cert,
-# backhaul-cellular, fleet-half, tls12 and fleet2x. Rows of no-hsm, pq-hybrid, gnss-rtk,
+# backhaul-cellular, fleet-half, tls12 and fleet2x (re-run 2026-10-26 on 486c8cba below). Rows of no-hsm, pq-hybrid, gnss-rtk,
 # gnss-raw and the realism variants carry 81a12183 values (not re-run on 8becf72a).
 schema: v2xw/scms-run-expectations/1
 runs:
@@ -787,6 +787,18 @@ rows:
   source: the change strategy uses the pool the RA issued; the top-off is weekly whatever the strategy
   measured: 1100 -> 1100
   verdict: pass
+- id: nyc-p2pcd-bounded
+  base: M0
+  variant: nyc-pilot
+  area: metrics
+  measure: m.p2pcd_requests
+  expect: ratio
+  band:
+  - 0
+  - 1.5
+  source: 'IEEE 1609.2 §6.3.4 / J2945/1: the first BSM after a certificate change carries the full certificate,
+    so receivers never miss the new digest and P2PCD requests grow far less than the changes (52fd05a2);
+    written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.2)'
 - id: silent-frames
   base: M0
   variant: silent
@@ -799,6 +811,17 @@ rows:
   verdict: wrong-expectation
   note: '`silent` means no scheduled change (wiring.rs rotation_policy), not a silent period: the run
     is the base''s (23,549 frames, 0 changes)'
+- id: silent-changes
+  base: M0
+  variant: silent
+  area: architecture
+  measure: p2.pseudonym_changes
+  expect: ratio
+  band:
+  - 0
+  - 1
+  source: '`silent` keeps one identity (options.rs: "Never"): it can only remove changes the base makes,
+    never add one; written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.2)'
 - id: fullcert-bytes
   base: M0
   variant: full-cert
@@ -981,6 +1004,14 @@ rows:
   source: fewer neighbours, fewer verifications
   measured: 77517 -> 36509
   verdict: pass
+- id: half-events
+  base: M0
+  variant: fleet-half
+  area: performance
+  measure: cost.events
+  expect: down
+  source: 'half the senders and receivers: fewer transmissions, receptions and verifications (05 §5);
+    written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.2)'
 - id: att10-revoked
   base: M0
   variant: att10
@@ -1057,6 +1088,16 @@ rows:
     does), so the TLS version cannot show'
   measured: 2895577 -> 2895577
   verdict: pass
+- id: tls12-no-tcp
+  base: M0
+  variant: tls12
+  area: architecture
+  measure: access.tcp_connections
+  expect: eq
+  value: 0
+  source: 'the TLS flights (backend.rs SCMS_TLS12_FLIGHTS) are charged only on the packet-level Uu, which
+    the realism base does not run: the setting is inert here, and this row says so; written 2026-10-26
+    before the 486c8cba runs (rerun-2026-10-26 §1.2)'
 - id: real-same-topups
   base: M0
   variant: real-crypto
@@ -1102,6 +1143,14 @@ rows:
   source: real P-256 arithmetic for every certificate (~0.4 CPU-s a device on release)
   measured: 34.54 -> 66.25
   verdict: pass
+- id: real-same-reports
+  base: M0
+  variant: real-crypto
+  area: misbehaviour
+  measure: p2.reports_at_ma
+  expect: same
+  source: real signatures verify exactly where the modelled ones do, so the detectors see the same beliefs
+    and file the same reports; written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.2)
 - id: cert60-x3
   base: M0
   variant: cert60
