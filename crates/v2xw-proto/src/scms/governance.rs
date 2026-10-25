@@ -1567,9 +1567,15 @@ impl Governance {
             None,
         );
         let cert = issue(tbs, issuer.map(|i| (&i.cert, &i.key)), &key);
-        match spec.issuer {
-            IssuedBy::SelfSigned | IssuedBy::Root => self.counters.root_certs_issued += 1,
-            IssuedBy::Ica => self.counters.ica_certs_issued += 1,
+        // This view's own Root CA and ICA only: another provider's root and ICA sign
+        // that provider's certificates, and its view counts them ([`Governance::rehome`]).
+        // They were counted here, so the home root showed every provider's work and a
+        // peer's root none (audit-gov GOV.L.counters).
+        if label == self.config.provider {
+            match spec.issuer {
+                IssuedBy::SelfSigned | IssuedBy::Root => self.counters.root_certs_issued += 1,
+                IssuedBy::Ica => self.counters.ica_certs_issued += 1,
+            }
         }
         Authority {
             node,
@@ -1736,6 +1742,19 @@ impl Governance {
             .clone();
         let mut old_set = self.authorities.clone();
         old_set.insert("root", old_root);
+        // What `label`'s own Root CA and ICA signed (the root's self-signature counted, as
+        // `GovernanceCounters::root_certs_issued` has it); the home view counts only its
+        // own (audit-gov GOV.L.counters).
+        let by = |pred: fn(IssuedBy) -> bool| {
+            u32::try_from(
+                set.keys()
+                    .filter(|r| pred(peer.profile.spec(r).issuer))
+                    .count(),
+            )
+            .unwrap_or(u32::MAX)
+        };
+        let root_issued = by(|i| matches!(i, IssuedBy::SelfSigned | IssuedBy::Root));
+        let ica_issued = by(|i| matches!(i, IssuedBy::Ica));
         set.remove("root");
         let mut peer_authorities = self.peer_authorities.clone();
         peer_authorities.remove(label);
@@ -1772,7 +1791,11 @@ impl Governance {
             gccf: self.gccf.clone(),
             lpf: self.lpf.clone(),
             lccf: self.lccf.clone(),
-            counters: GovernanceCounters::default(),
+            counters: GovernanceCounters {
+                root_certs_issued: root_issued,
+                ica_certs_issued: ica_issued,
+                ..GovernanceCounters::default()
+            },
             log: Vec::new(),
         };
         gov.lpf.version = 0;

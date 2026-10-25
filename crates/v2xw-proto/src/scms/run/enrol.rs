@@ -154,10 +154,11 @@ impl ScmsRun {
     }
 }
 
-/// The `id.name` a device's enrolment certificate carries: unique per device and
-/// provider (neutral label).
-fn device_name(device: NodeId) -> String {
-    format!("ee-{:08x}.provider-a", device.index())
+/// The `id.name` a device's enrolment certificate carries: unique per device, under the
+/// neutral label of the provider whose ECA issues it (`provider`). It named every device
+/// `provider-a`, including the ones provider-b's ECA certified (audit-gov GOV.E3.name).
+fn device_name(device: NodeId, provider: &str) -> String {
+    format!("ee-{:08x}.{provider}", device.index())
 }
 
 fn signer_of(k: &p256::Scalar) -> Option<Signer1609> {
@@ -221,7 +222,12 @@ impl ScmsState {
         self.eca.canonical.insert(cid.clone(), c_pub);
         let k_u = self.pdu_rng.scalar();
         let t = self.time32(at);
-        let name = device_name(device);
+        let label = self
+            .deployment
+            .providers
+            .get(self.provider)
+            .map_or("provider-a", |p| p.name.as_str());
+        let name = device_name(device, label);
         // A device that joins with an aged certificate asks for its back-dated start
         // ([`ScmsRun::age_enrolment`]); a new one for a certificate valid from now.
         let start = self
