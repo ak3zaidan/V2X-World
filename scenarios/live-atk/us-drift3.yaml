@@ -1,0 +1,7 @@
+# str-constspeedoffset-u-1p0 with gpsDrift 3 m.
+schema: v2xw/scenario/1
+meta: {base: str-constspeedoffset-u-1p0.yaml, name: live-atk us-drift3}
+detection:
+  local:
+    - id: detect/us-sm-mbr
+      params: {gps_drift_m: 3.0}

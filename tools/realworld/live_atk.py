@@ -190,7 +190,8 @@ def derive(raw):
             if o['t'] < decided_at.get(actor, float('inf')):
                 fa_pre += 1
     d.update({'rec.warn_false_att': fa, 'rec.warn_false_att_pre': fa_pre,
-              'rec.warn_false_ghost': ghost, 'rec.warn_false': false, 'rec.warn_true': true})
+              'rec.warn_false_ghost': ghost, 'rec.warn_false': false, 'rec.warn_true': true,
+              'rec.warn_pre_share': fa_pre / fa if fa else None})
     d['rec.enforced_n'] = sum(1 for q in rec['proto.revocation'] if q.get('stage') == 'enforced')
     return d
 
@@ -293,6 +294,13 @@ def fault(raw, name, row):
         if rec is not None:
             for q in rec['ma.report']:
                 q['detector'] = det
+    elif name == 'warn-late':  # attackers keep raising warnings long after their revocation
+        if rec is not None and rec['gt.attack.action']:
+            a = rec['gt.attack.action'][0]['actor']
+            sub = next((q['subject'] for q in rec['gt.subject'] if q['actor'] == a), None)
+            rec['ma.decision'].append({'t': 1, 'subject': sub, 'decision': 'revoke'})
+            rec['app.outcome'] += [{'t': 10**15, 'node': 1, 'app': 'fcw', 'subject': a + 1,
+                                    'outcome': 'false'}] * 5000
     elif name == 'warn-none':  # no warning ever comes from an attacker or a ghost
         if rec is not None:
             rec['app.outcome'] = [o for o in rec['app.outcome'] if o.get('outcome') != 'false']

@@ -1,0 +1,7 @@
+# attack-free US profile with gpsDrift 0.5 m.
+schema: v2xw/scenario/1
+meta: {base: us.yaml, name: live-atk us-drift05-free}
+detection:
+  local:
+    - id: detect/us-sm-mbr
+      params: {gps_drift_m: 0.5}
