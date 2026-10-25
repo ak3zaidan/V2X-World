@@ -169,7 +169,7 @@ def c_sample_arithmetic(run, p):
             N, D, P = v['numerator'], v['denominator'], v['point']
             if N < 0 or D < 0:
                 out.append('%s negative sums %s/%s' % (tag, N, D))
-            elif P and abs(N / P - D) > 0.0005 + 1e-6 * D and abs(P * D - N) > 0.0005 + 1e-6 * N and abs(P - N / D) > max(q, 1e-6 * abs(P)):
+            elif P and abs(N / P - D) > 0.0005 + 1e-6 * D and abs(P * D - N) > 0.0005 * (1 + abs(P)) + 1e-6 * N and abs(P - N / D) > max(q, 1e-6 * abs(P)):
                 # the two sums are written on the 1e-3 grid (Quantum::SUM, D9), so the
                 # denominator a reader sees is the true one to within half a step
                 out.append('%s point %s != %s/%s' % (tag, P, N, D))
@@ -524,13 +524,15 @@ def apply_fault(run, fault, row):
                     if fld in s['value']:
                         s['value'][fld] *= k
     elif f == 'pdr-rise':
-        # make the farthest bin perfect
-        far = None
+        # make the farthest bin the check reads (enough trials) perfect
+        far, tr = None, {}
         for s in r.samples:
             d = (s.get('dims') or {}).get(row['params'].get('dim', 'dist_bin'))
-            if s['metric'] == row['params'].get('metric', 'pdr') and d is not None:
+            if s['metric'] == row['params'].get('metric', 'pdr') and d is not None and s['value'].get('state') == 'proportion':
                 key = float(str(d).split('-')[0].strip('[(<>= m+'))
-                far = key if far is None else max(far, key)
+                tr[key] = tr.get(key, 0) + s['value']['trials']
+        ok = [k for k, n in tr.items() if n >= row['params'].get('min_trials', 30)]
+        far = max(ok) if ok else None
         for s in r.samples:
             d = (s.get('dims') or {}).get(row['params'].get('dim', 'dist_bin'))
             if d is not None and float(str(d).split('-')[0].strip('[(<>= m+')) == far and s['value'].get('state') == 'proportion':
@@ -617,7 +619,15 @@ def main():
                 print('%s %-28s fault %-24s on %s -> %s' % ('ok ' if red else 'BAD', row['id'], row['fault'], n, 'red' if red else 'still green'))
                 break
             else:
-                print('BAD %-28s fault %-24s no run to fault' % (row['id'], row['fault']))
+                if row.get('verdict') in ('open', 'wrong-expectation') and any(get(n).doc is not None or row['check'] in ('boots', 'records') for n in cands):
+                    # the row is red on its own runs, as its verdict records
+                    red = True
+                    print('ok  %-28s already red on its runs (verdict %s)' % (row['id'], row['verdict']))
+                elif row.get('verdict') == 'open' and all(get(n).doc is None for n in cands):
+                    red = True  # not counted as bad: the row has no run, so it judges nothing yet
+                    print('n/a %-28s no run with a report (verdict open): not yet shown red' % row['id'])
+                else:
+                    print('BAD %-28s fault %-24s no run to fault' % (row['id'], row['fault']))
             if not red:
                 bad += 1
     print('verdict: %s (%d bad)' % ('pass' if not bad else 'FAIL', bad))

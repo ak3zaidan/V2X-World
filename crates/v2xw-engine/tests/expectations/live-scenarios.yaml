@@ -24,19 +24,19 @@ rows:
 # ---------------------------------------------------------------- (1) every scenario
 - {id: SC.boots, runs: all, check: boots, expect: pass, fault: exit-code,
    source: "a shipped scenario that validates must run: exit 0 and a run report",
-   verdict: open, measured: "every run that started exited 0; three did not finish a short window: highway-congestion (shortest window 80 s, killed at the 600 s budget), midtown-peak-load (60 s over 600 s), manhattan-day (the loader refuses a window that ends before its 6 h attack, by design)"}
+   verdict: open, measured: "115 runs: every run that started exited 0. Refused by the loader when --duration-s cuts a scheduled item: 40 runs of multi-day scenarios (time.fast_forward past the end), 7 with warmup_s >= the window, 5 with an event or attack past it (manhattan-day at 6 h, edge/multi-week-parked at 640 s; the rest retried and ran); 25 multi-day ones then ran as 40-65 s overlays (meta.base + duration + fast_forward: []) and pass. Did not finish in 600 s: highway-congestion (80 s), midtown-peak-load at 60 s (passes at 10 s)"}
 - {id: SC.no-panic, runs: all, check: no_panic, expect: pass, fault: panic-line,
    source: "no Rust panic on stderr",
    verdict: pass, measured: "no panic in any run"}
 - {id: SC.records, runs: all, check: records, expect: pass, fault: unverified,
    source: "run.rs: the recording is written and read back (integrity_verified), records > 0, metric samples > 0",
-   verdict: open, measured: "every run that finished wrote a verified recording; the three above wrote none"}
+   verdict: open, measured: "every run that finished wrote a verified recording; the refused and timed-out runs above wrote none"}
 - {id: SC.finite, runs: all, check: finite, expect: pass, fault: nan,
    source: "no NaN or infinity in any metric sample (D9 quantised values are finite)",
    verdict: pass, measured: "no NaN or infinity"}
 - {id: SC.arithmetic, runs: all, check: sample_arithmetic, expect: pass, fault: successes-over-trials,
    source: "def.rs SampleValue: proportion = successes/trials in [0,1] inside its Wilson interval; ratio of sums = numerator/denominator (sums on the 1e-3 grid); summary min <= p50 <= p95 <= p99 <= max, mean in [min, max]; counts and non-negative units >= 0; part-of-whole ratios in [0, 1]",
-   verdict: wrong-expectation, measured: "pass once the checker allows the documented D9 1e-3 grid on both sums: compare-signature-schemes sig_cbr_extra writes numerator 0.001 for 0.0008 and bytes_per_vehicle_hour denominator 0.001 h for 0.00053 h (the point is computed before rounding and is right; a reader cannot recompute it from the sums)"}
+   verdict: open, measured: "pass once the checker allows the documented D9 1e-3 grid on both sums: sig_cbr_extra numerator 0.001 for 0.0008, bytes_per_vehicle_hour denominator 0.001 h for 0.00053 h, glosa-energy nox_per_km 0.023/0.014 against point 1.705 (points are computed before rounding and are right; a reader cannot recompute them from the sums). OPEN DEFECT: matrix/pq-hybrid (40 s overlay): cert_bytes_share{msg_type: psm} = 623,200 / 454,860 = 1.37, i.e. the PSMs attached-certificate octets exceed their whole envelope (security_overhead 0.95); every other run and message type holds"}
 - {id: SC.latency, runs: all, check: latency_positive, expect: pass, fault: negative-latency,
    source: "a message cannot arrive before it is sent: e2e_latency, aoi, verify_cost min >= 0 and mean > 0 (mac_access_delay may be 0: 802.11 sends at once on a medium idle for AIFS)",
    verdict: pass, measured: "e2e_latency min > 0 everywhere"}
@@ -51,7 +51,7 @@ rows:
    source: "vehicles appear when the scenario has demand, and never more than max_total_vehicles",
    verdict: pass, measured: "base/midtown 52 actors at 3,000 veh/h x 60 s (Poisson mean 50)"}
 - {id: SC.radio, runs: all, check: radio_output, expect: pass, fault: no-rx,
-   exempt: {phase1-grid: "2 vehicles on 3.3 x 2.6 km of 30 m buildings: 470 attempts, all below sensitivity", phase1-grid-rep: "as phase1-grid"},
+   exempt: {phase1-grid: "2 vehicles on 3.3 x 2.6 km of 30 m buildings: 470 attempts, all below sensitivity", phase1-grid-rep: "as phase1-grid", phase1-manhattan: "2 vehicles in the 10 s window and 0 reception attempts: no pair in candidate range"},
    source: "every shipped scenario has a fleet and a radio: frames transmitted > 0, receptions ok > 0, node.tx records",
    verdict: wrong-expectation, measured: "phase1-grid (exempt): 2 vehicles on a 3.3 x 2.6 km grid of 30 m buildings; all 470 attempts below sensitivity, so PDR 0 is the physics; every other run receives"}
 - {id: SC.scms, runs: all, check: scms_output, expect: pass, fault: drop-scms-channels, fault_run: midtown-normal,
@@ -139,15 +139,19 @@ rows:
 # p1-e4 (highway-congestion's world at 3,000 veh/h, no events, 60 s). Rows written before it ran.
 - {id: W.HWY2.speed, runs: [p1-e4-hwy60], check: band, expect: pass, fault: "scale:10",
    params: {metric: mean_speed, lo: 20.0, hi: 33.0},
-   source: "uncongested US freeway (3,000 veh/h offered on 6 lanes, ~500 veh/h/ln, LOS A): space-mean speed near free-flow 60-75 mph (27-33 m/s; HCM 7th ed. Exh. 12-7), lowered by entry acceleration in the first minute"}
+   source: "uncongested US freeway (3,000 veh/h offered on 6 lanes, ~500 veh/h/ln, LOS A): space-mean speed near free-flow 60-75 mph (27-33 m/s; HCM 7th ed. Exh. 12-7), lowered by entry acceleration in the first minute",
+   verdict: open, measured: "mean_speed 15.5 m/s over 60 s; per-window mean 9.0 (10 s), 12.5 (30 s), 18.0-18.4 (40-60 s), p50 20, p95 29-30. Cause: every vehicle is spawned at 0 m/s (mobility engine.rs spawn_with_route, speed_mps 0.0) mid-lane on a 29 m/s road, and the synthetic highway is a 2 x 2 grid ring with at-grade corners (15 m radius). A real freeway entry merges at speed. Defect candidate; a depart-speed fix moves every traffic golden, so it belongs behind a flag"}
 - {id: W.HWY2.vmax, runs: [p1-e4-hwy60], check: kinematics_bounds, expect: pass, fault: speed-80,
-   params: {vmax: 37.0, amin: -10.0, amax: 5.0}, source: "as W.HWY.vmax"}
+   params: {vmax: 37.0, amin: -10.0, amax: 5.0}, source: "as W.HWY.vmax",
+   verdict: pass, measured: "max 30.0 m/s"}
 - {id: W.HWY2.headway, runs: [p1-e4-hwy60], check: band, expect: pass, fault: "scale:10",
    params: {metric: headway_time, lo: 1.0, hi: 10.0},
-   source: "freeway time headways at LOS A: mean several seconds, 1-2 s minimum in platoons (HCM; Hoogendoorn 1998)"}
+   source: "freeway time headways at LOS A: mean several seconds, 1-2 s minimum in platoons (HCM; Hoogendoorn 1998)",
+   verdict: pass, measured: "headway_time mean 3.0 s, min 1.26 s"}
 - {id: W.HWY2.pdr-distance, runs: [p1-e4-hwy60], check: pdr_distance, expect: pass, fault: pdr-rise,
    params: {metric: pdr, dim: dist_bin, near_min: 0.95, far_max: 0.95, tol: 0.05, min_trials: 30},
-   source: "as W.HWY.pdr-distance"}
+   source: "as W.HWY.pdr-distance",
+   verdict: pass, measured: "LOS: 1.00 to 160 m, 0.92 at 600 m"}
 - {id: W.GRID.vmax, runs: [phase1-grid, vru-grid], check: kinematics_bounds, expect: pass, fault: speed-80,
    params: {vmax: 20.0, amin: -10.0, amax: 5.0},
    source: "procedural urban grid, 50 km/h-class streets",
@@ -172,7 +176,7 @@ rows:
 - {id: R.NR.latency, runs: [radio-nr], check: band, expect: pass, fault: "scale:10",
    params: {metric: e2e_latency, lo: 0.5, hi: 100.0}, source: "3GPP TS 22.186: 100 ms for basic awareness; NR mode 2 slots <= 1 ms",
    verdict: pass, measured: "mean 32.1 ms, max 119 ms"}
-- {id: R.DSRC.cbr, runs: [radio-dsrc], check: band, expect: pass, fault: "scale:10",
+- {id: R.DSRC.cbr, runs: [radio-dsrc], check: band, expect: pass, fault: "scale:100",
    params: {metric: cbr, lo: 0.0, hi: 0.6},
    source: "SAE J2945/1 congestion control keeps CBR under ~0.6-0.8; a 180 s rush-hour overlay at 10 Hz should not saturate",
    verdict: pass, measured: "CBR mean 0.007, max 0.016"}
