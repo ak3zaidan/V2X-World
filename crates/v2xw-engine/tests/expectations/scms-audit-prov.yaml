@@ -187,6 +187,13 @@ rows:
   expect: {diff: 0}
   measured: pending
   verdict: pending
+- id: PV.m.topup-latency
+  run: conf
+  behaviour: run-report access.exchange_latency.topup (count, sum, max) equals the records' requested-to-installed times
+  spec: same quantity, two sources (ns, per top-up)
+  expect: {diff_s_max: 0.001}
+  measured: pending
+  verdict: pending
 - id: PV.m.rsu-app-certs
   run: conf
   behaviour: run-report rsu_app_certs_renewed equals the installed app-cert flows in the records
