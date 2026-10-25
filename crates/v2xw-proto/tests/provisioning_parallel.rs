@@ -97,7 +97,11 @@ fn provision_and_top_off() -> (String, usize) {
         run.topup(DEVICE_B, 614 + week, 20);
         run.run().expect("runs");
     }
-    assert!(run.state.pdu_rejections.is_empty(), "{:?}", run.state.pdu_rejections);
+    assert!(
+        run.state.pdu_rejections.is_empty(),
+        "{:?}",
+        run.state.pdu_rejections
+    );
     let held = run.state.devices[&DEVICE_A].credentials.len()
         + run.state.devices[&DEVICE_B].credentials.len();
     (digest(&run), held)
@@ -107,7 +111,10 @@ fn provision_and_top_off() -> (String, usize) {
 fn provisioning_gives_the_same_bytes_on_any_number_of_threads() {
     let one = pool(1).install(provision_and_top_off);
     let four = pool(4).install(provision_and_top_off);
-    println!("one thread {} ({} credentials); four {}", one.0, one.1, four.0);
+    println!(
+        "one thread {} ({} credentials); four {}",
+        one.0, one.1, four.0
+    );
     assert_eq!(one.1, 120, "two devices, three weeks of 20");
     assert_eq!(one, four);
     assert_eq!(one.0, PINNED, "the sequential code's bytes");

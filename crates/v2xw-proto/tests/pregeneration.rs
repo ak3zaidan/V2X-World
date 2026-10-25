@@ -451,7 +451,15 @@ fn the_period_grid_a_device_reads_is_the_backends() {
     for p in [cal, rel] {
         let grid = p.period_grid();
         let next = p.period_start(p.period_at(0) + 1);
-        for t in [0, 1, 4_999_999_999, 5_000_000_000, next - 1, next, next + WEEK_NS] {
+        for t in [
+            0,
+            1,
+            4_999_999_999,
+            5_000_000_000,
+            next - 1,
+            next,
+            next + WEEK_NS,
+        ] {
             assert_eq!(at(grid, t), p.period_at(t), "t = {t}");
         }
     }

@@ -923,7 +923,10 @@ fn a_top_up_whose_vehicle_leaves_the_area_is_counted_as_leaving() {
         p.topups_left_area,
         ee["topups_left_area"]
     );
-    assert!(p.topups_completed > 0, "no top-up completed, so this proves nothing");
+    assert!(
+        p.topups_completed > 0,
+        "no top-up completed, so this proves nothing"
+    );
     assert!(
         p.topups_left_area > 0,
         "no vehicle left with a top-up in flight, so this proves nothing"
@@ -935,5 +938,8 @@ fn a_top_up_whose_vehicle_leaves_the_area_is_counted_as_leaving() {
         n("topups_completed") + n("topups_refused") + n("topups_left_area") + in_flight,
         "a top-up was started and neither completed, refused, in flight nor left the area"
     );
-    assert!(n("topups_left_area") > 0, "the view does not show the vehicles that left");
+    assert!(
+        n("topups_left_area") > 0,
+        "the view does not show the vehicles that left"
+    );
 }

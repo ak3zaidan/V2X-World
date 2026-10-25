@@ -737,8 +737,8 @@ fn a_receiver_revokes_on_the_certificates_own_linkage_data() {
 #[test]
 fn a_receiver_powering_on_with_an_expired_pool_judges_by_its_clock() {
     const LEN_NS: u64 = 60 * NS_PER_S;
-    let issuer = v2xw_sec::credential::ImplicitIssuer::standalone(b"power-on", 0, &[0x20])
-        .expect("issuer");
+    let issuer =
+        v2xw_sec::credential::ImplicitIssuer::standalone(b"power-on", 0, &[0x20]).expect("issuer");
     let dev = linked_device();
     let sender_key = issuer
         .issue_factory(
