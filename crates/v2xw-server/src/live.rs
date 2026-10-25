@@ -3231,6 +3231,7 @@ fn revocation_payload(view: &ProtoRevocationView) -> Vec<u8> {
         "processed" => 8,
         "enforced" => 9,
         "residual_harm" => 10,
+        "rsu_installed" => 11,
         _ => 0,
     };
     p[29] = 0;

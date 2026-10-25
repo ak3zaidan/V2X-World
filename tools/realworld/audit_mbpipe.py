@@ -368,10 +368,10 @@ def publications(D):
 
 
 def install_times(D):
-    """(receiver, revoked node) -> first enforced instant."""
+    """(receiver, revoked node) -> first enforced instant (a unit's: its `rsu_installed` row)."""
     T = {}
     for r in D['rev']:
-        if r['stage'] == 'enforced' and r.get('node') is not None:
+        if r['stage'] in ('enforced', 'rsu_installed') and r.get('node') is not None:
             d = D['p2n'].get(r['id'])
             if d is None:
                 continue
@@ -886,7 +886,8 @@ def m_dist_relay_unheard(D):
 
 def m_dist_rsu(D):
     bad = n = 0
-    enf = {(r['node'], r['id']) for r in D['rev'] if r['stage'] == 'enforced'}
+    # A unit's install is its `rsu_installed` row (2026-10-25; until then no record showed one).
+    enf = {(r['node'], r['id']) for r in D['rev'] if r['stage'] == 'rsu_installed'}
     for P in publications(D):
         rows = _first_rows_after(D, P['t'] + POLL_DEADLINE_S * NS)
         for u in D['rsus']:
@@ -958,14 +959,13 @@ def m_enf_before(D):
         if q['cause'] != 'revoked':
             continue
         if q['rx'] in D['rsus']:
-            # No record shows a unit's install (AU.DIST.rsu, open): not judged here.
+            # A unit's install is its `rsu_installed` row: judged like a vehicle's.
             rsu += 1
-            continue
         n += 1
         k = (q['rx'], q['tx'])
         bad += k not in T or q['t'] < T[k]
-    other = D['rx_revoked'] - n - rsu
-    return bad + max(0, other), f'{bad} of {n} vehicle refusals before the receiver held the list; {other} refusals of senders never revoked; {rsu} unit refusals not judged'
+    other = D['rx_revoked'] - n
+    return bad + max(0, other), f'{bad} of {n} refusals before the receiver held the list ({rsu} at units); {other} refusals of senders never revoked'
 
 
 def m_enf_self(D):

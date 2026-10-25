@@ -527,11 +527,19 @@ impl ScmsState {
                 Self::verify(out, 1);
                 Self::sign(out, 1);
                 out.stage_at(StageId::ProxyForwarded, to, None, flow, run);
+                // The hop carries the device's own `EeEcaCertRequestSpdu`, which the ECA
+                // verifies against the device's canonical key: it is on `pki.flow` like
+                // the device's hop to the DCM, and its bytes are what the link carries
+                // (audit-gov §4 item 4: the ECA's traffic showed 0 requests received).
+                let size = match &pdu {
+                    Some(p) => self.emit_pdu(SpduKind::EeEcaCertRequest, to, n.eca, at, p),
+                    None => self.sizes.enrol_forward(),
+                };
                 out.send(
                     n.eca,
                     ScmsMsg::EnrolForward { device, pdu },
                     "enrol-forward",
-                    self.sizes.enrol_forward(),
+                    size,
                     Transport::BackendNet,
                     flow,
                     run,

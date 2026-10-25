@@ -361,6 +361,44 @@ impl ScmsState {
         };
         let full = sign(&full_spec)?;
         log.push((1, false, individual.len(), full.clone()));
+        // Every CRL signer a root rollover superseded signs the same list under its own
+        // CRACA (its issuer, by `issuerIsCraca`): the old hierarchy's pseudonyms name
+        // that CRACA until they expire, and a device matches an entry only to a CRL of
+        // the certificate's own CRACA (audit-gov §4 item 2).
+        let issuer_of = |c: &v2xw_msg::sec_types::Certificate| match &c.0.issuer {
+            v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha256AndDigest(h)
+            | v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha384AndDigest(h) => {
+                Some(v2xw_sec::hashedid::id8_bytes(h))
+            }
+            _ => None,
+        };
+        let mut retired = Vec::new();
+        for signer in pki
+            .retired
+            .iter()
+            .filter(|a| crate::scms::governance::role_of(&a.cert) == Some("crlg"))
+        {
+            let Some(craca) = issuer_of(&signer.cert).and_then(|id| {
+                pki.retired.iter().map(|a| a.id8()).find(|a| *a == id)
+            }) else {
+                continue;
+            };
+            let spec = CrlSpec {
+                craca,
+                ..full_spec.clone()
+            };
+            let contents = v2xw_sec::crl::crl_contents(&spec);
+            let Some(p) = v2xw_sec::crl::sign_crl(&contents, &signer.cert, &signer.key)
+                .ok()
+                .and_then(|c| v2xw_sec::crl::encode_crl(&c).ok())
+                .map(crate::scms::pdu::Pdu::new)
+            else {
+                continue;
+            };
+            log.push((1, false, individual.len(), p.clone()));
+            retired.push(p);
+        }
+        self.crlg.secured_retired = retired;
         let since = self.crlg.published_entries.min(self.crlg.entries.len());
         if self.params.crl.deltas && self.crlg.secured.is_some() {
             let added = linkage_revocations(&self.crlg.entries[since..], i_rev);
@@ -608,6 +646,7 @@ impl ScmsState {
             ScmsMsg::CrlPublish { entries } => {
                 let list = self.crlg.entries.clone();
                 let secured = self.crlg.secured.clone();
+                let retired = self.crlg.secured_retired.clone();
                 let size = secured.as_ref().map_or_else(
                     || self.sizes.crl(entries).bytes(),
                     crate::scms::pdu::Pdu::len,
@@ -616,6 +655,7 @@ impl ScmsState {
                 if to == n.crl_store {
                     self.crl_store.entries = list;
                     self.crl_store.secured = secured;
+                    self.crl_store.secured_retired = retired;
                     self.crl_store.signature = signature;
                     self.crl_store.versions += 1;
                     self.crl_store.published_runs.push(run);
@@ -623,6 +663,7 @@ impl ScmsState {
                 } else {
                     self.crl_broadcast.entries = list;
                     self.crl_broadcast.secured = secured;
+                    self.crl_broadcast.secured_retired = retired;
                     self.crl_broadcast.signature = signature;
                     self.crl_broadcast.versions += 1;
                     out.stage_at(StageId::FirstRsuBroadcast, to, Some(size), flow, run);

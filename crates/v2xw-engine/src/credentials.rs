@@ -30,7 +30,7 @@ use v2xw_sec::linkage::{DeviceLinkageContext, LaId, LinkageSeed, LinkageValue};
 
 /// Issues implicit certificates for the run without the protocol's flows. See the module
 /// documentation for where it is used and why.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CredentialFactory {
     issuer: ImplicitIssuer,
     seed: [u8; 32],
@@ -180,6 +180,34 @@ impl CredentialFactory {
             self.assignment = Some((deployment, seed));
         }
         self
+    }
+
+    /// This factory after the SCMS's PDU PKI followed a root rollover
+    /// ([`crate::phase2::Phase2::take_pki_changeover`]): the run's ACA, every provider's
+    /// ACA, the trust a node installs and the per-provider chain files are the new ones
+    /// (each given only when this factory already used one).
+    #[must_use]
+    pub fn after_changeover(
+        &self,
+        aca: Option<ImplicitIssuer>,
+        roots: Vec<Arc<v2xw_msg::sec_types::Certificate>>,
+        chain_file: Vec<Arc<v2xw_msg::sec_types::Certificate>>,
+        home_chain_files: Vec<Vec<Arc<v2xw_msg::sec_types::Certificate>>>,
+        providers: Vec<ImplicitIssuer>,
+    ) -> CredentialFactory {
+        let mut f = self.clone();
+        if f.scms_aca
+            && let Some(a) = aca
+        {
+            f.issuer = a;
+        }
+        if !f.providers.is_empty() && providers.len() == f.providers.len() {
+            f.providers = providers;
+        }
+        if !f.home_chain_files.is_empty() {
+            f.home_chain_files = home_chain_files;
+        }
+        f.with_trust(roots, chain_file)
     }
 
     /// Every provider's ACA certificate, in deployment order (just the run's issuer

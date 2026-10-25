@@ -821,6 +821,12 @@ pub struct CrlState {
     pub versions: u32,
     /// The current full series-1 `SecuredCrl` (WP-B4), when the PDU layer is on.
     pub secured: Option<crate::scms::pdu::Pdu>,
+    /// The same full series-1 list signed by each CRL signer a root rollover superseded,
+    /// under its own CRACA: the certificates the old hierarchy issued name the old
+    /// CRACA and stay valid until they expire, so their revocations need a CRL that
+    /// CRACA signs (each CRACA has its own CRL; 1609.2 §5.1.3.4). Empty before any
+    /// rollover's changeover.
+    pub secured_retired: Vec<crate::scms::pdu::Pdu>,
     /// The latest delta linkage CRL (CRL Generator only).
     pub delta: Option<crate::scms::pdu::Pdu>,
     /// Every CRL the Generator signed, in order (CRL Generator only).
@@ -982,6 +988,32 @@ pub struct SharedReports {
 }
 
 /// What `home`'s MA verifies under: `home` plus every authority of `peers`.
+impl ScmsState {
+    /// Provider `label`'s PDU PKI from now on (a root rollover's changeover, Provider
+    /// Req. §3.5.4): this run's own when `label` is its provider, else its copy of that
+    /// peer's. The MA's trust view follows. Returns whether anything changed.
+    pub fn follow_pki(
+        &mut self,
+        label: &str,
+        pki: std::sync::Arc<crate::scms::pdu::ScmsPki>,
+    ) -> bool {
+        let own = self
+            .deployment
+            .providers
+            .get(self.provider)
+            .is_some_and(|p| p.name == label);
+        if own {
+            self.pki = Some(pki);
+        } else if let Some(e) = self.peer_pki.iter_mut().find(|(l, _)| l == label) {
+            e.1 = pki;
+        } else {
+            return false;
+        }
+        self.ma_trust = ma_trust_of(self.pki.as_ref(), &self.peer_pki);
+        true
+    }
+}
+
 fn ma_trust_of(
     home: Option<&std::sync::Arc<crate::scms::pdu::ScmsPki>>,
     peers: &[(String, std::sync::Arc<crate::scms::pdu::ScmsPki>)],
@@ -993,7 +1025,7 @@ fn ma_trust_of(
     let mut view = (**home).clone();
     for (_, p) in peers {
         view.extra
-            .extend(p.all().into_iter().chain(p.extra.iter()).cloned());
+            .extend(p.all().into_iter().chain(p.extra.iter()).chain(p.retired.iter()).cloned());
     }
     Some(std::sync::Arc::new(view))
 }
@@ -1172,60 +1204,21 @@ impl ScmsRun {
         let committees = build_committees(&params, &nodes, &mut kernel, sizes.envelope_digest());
         let wall = v2xw_core::time::WallClock::new(params.pdu.t0_unix_s);
         let pki = if params.pdu.enabled && params.hybrid.is_none() && params.kem.is_none() {
-            // The Root CA and ICA are the governance entities' own (the root the
-            // genesis CTL approves, WP-B5); the online components are certified under
-            // that ICA from the start of its validity.
-            let refuse = |detail: String| ProtoError::Payload {
-                what: "SCMS PKI",
-                detail,
-            };
-            let anchor = |role: &str| {
-                gov.cert(role)
-                    .zip(gov.signing_key(role))
-                    .ok_or_else(|| refuse(format!("governance holds no {role}")))
-            };
-            let (root, ica) = (anchor("root")?, anchor("ica")?);
-            let start = ica.0.0.to_be_signed.validity_period.start.0.0;
-            Some(std::sync::Arc::new(
-                crate::scms::pdu::ScmsPki::under_anchors_profiled(
-                    &deployment.providers[0].name,
-                    deployment.providers[0].cert_profile,
-                    params.master_seed,
-                    start,
-                    root,
-                    ica,
-                )
-                .map_err(|e| refuse(e.to_string()))?,
-            ))
+            // Every component is the governance entities' own certificate and key (the
+            // root the genesis CTL approves, the ICA under it, the components the chain
+            // files list): one certificate per component, the one that signs on the
+            // wire ([SMP] §6.1; audit-gov GOV.L.onecert). It was a second set drawn
+            // under the governance ICA.
+            let label = &deployment.providers[0].name;
+            Some(std::sync::Arc::new(pdu_pki_of(&gov, label)?))
         } else {
             None
         };
-        // Every other provider's PDU PKI, under its own governance root and ICA; its
-        // component keys from its own stream (the label keys the seed).
+        // Every other provider's PDU PKI: its own governance root, ICA and components.
         let mut peer_pki = Vec::new();
         if pki.is_some() {
             for p in &deployment.providers[1..] {
-                let refuse = |detail: String| ProtoError::Payload {
-                    what: "SCMS PKI",
-                    detail,
-                };
-                let anchor = |role: &str| {
-                    gov.peer_cert(&p.name, role)
-                        .zip(gov.peer_signing_key(&p.name, role))
-                        .ok_or_else(|| refuse(format!("governance holds no {role} of {}", p.name)))
-                };
-                let (root, ica) = (anchor("root")?, anchor("ica")?);
-                let start = ica.0.0.to_be_signed.validity_period.start.0.0;
-                let seed = provider_seed(params.master_seed, &p.name);
-                let peer = crate::scms::pdu::ScmsPki::under_anchors_profiled(
-                    &p.name,
-                    p.cert_profile,
-                    seed,
-                    start,
-                    root,
-                    ica,
-                )
-                .map_err(|e| refuse(e.to_string()))?;
+                let peer = pdu_pki_of(&gov, &p.name)?;
                 peer_pki.push((p.name.clone(), std::sync::Arc::new(peer)));
             }
         }
@@ -2357,4 +2350,22 @@ fn attribute_pdus(
         }
         p.step = k.and_then(|k| u32::try_from(first + k).ok());
     }
+}
+
+/// Provider `label`'s PDU-layer PKI from the governance
+/// ([`crate::scms::governance::Governance::pdu_pki`]).
+///
+/// # Errors
+/// The governance does not know `label`, or a role is missing.
+pub fn pdu_pki_of(
+    gov: &crate::scms::governance::Governance,
+    label: &str,
+) -> Result<crate::scms::pdu::ScmsPki> {
+    let refuse = |detail: String| ProtoError::Payload {
+        what: "SCMS PKI",
+        detail,
+    };
+    gov.pdu_pki(label)
+        .ok_or_else(|| refuse(format!("governance holds no provider {label}")))?
+        .map_err(|e| refuse(e.to_string()))
 }

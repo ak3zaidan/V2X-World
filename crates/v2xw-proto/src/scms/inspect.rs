@@ -55,7 +55,23 @@ impl ScmsRun {
     /// time.
     #[allow(clippy::too_many_lines)]
     pub fn backend_view(&self, now: SimTime, tracker: &mut EdgeTracker) -> BackendView {
-        tracker.absorb(&self.kernel, |node| self.role_of(node));
+        // A deployment without a LOP (the US profile deploys none, 00 §2.3) still routes
+        // device-to-RA traffic through a transparent zero-latency hop at the LOP's node:
+        // the view draws that traffic as the device-to-RA edge it is, and no LOP box
+        // (audit-gov §4: it drew a LOP with traffic).
+        let lop_on = self.state.deployment.options.lop;
+        let (lop, ra) = (self.state.nodes.lop, self.state.nodes.ra);
+        tracker.absorb_where(
+            &self.kernel,
+            |node| {
+                if !lop_on && node == lop {
+                    "ra".to_string()
+                } else {
+                    self.role_of(node)
+                }
+            },
+            |s| lop_on || !((s.from == lop && s.to == ra) || (s.from == ra && s.to == lop)),
+        );
         let k = &self.kernel;
         let st = &self.state;
         let n = st.nodes;
@@ -195,7 +211,9 @@ impl ScmsRun {
         );
         lop.set("relayed_to_ra", st.lop.upstream);
         lop.set("relayed_to_devices", st.lop.downstream);
-        out.push(lop);
+        if lop_on {
+            out.push(lop);
+        }
 
         let mut ra = entity(
             k,

@@ -333,6 +333,37 @@ impl core::fmt::Debug for Authority {
 }
 
 impl Authority {
+    /// A component from its certificate and keys (`enc` the ECIES scalar behind the
+    /// certificate's `encryptionKey`).
+    ///
+    /// # Errors
+    /// A scalar is zero or not below the group order.
+    pub fn of_keys(
+        name: &str,
+        cert: Certificate,
+        key: Signer1609,
+        enc: Option<[u8; 32]>,
+    ) -> Result<Authority> {
+        let private = match &key {
+            Signer1609::P256(k) => {
+                let mut b = [0u8; 32];
+                b.copy_from_slice(&k.to_bytes());
+                Some(ec::scalar_from_be32(&b).map_err(|_| PduError::Key("component scalar"))?)
+            }
+            Signer1609::P384(_) => None,
+        };
+        let enc_private = enc
+            .map(|b| ec::scalar_from_be32(&b).map_err(|_| PduError::Key("encryption scalar")))
+            .transpose()?;
+        Ok(Authority {
+            name: name.into(),
+            cert,
+            key,
+            private,
+            enc_private,
+        })
+    }
+
     /// The whole-certificate HashedId8 (canonical COER, SHA-256 or SHA-384 per issuer).
     pub fn id8(&self) -> [u8; 8] {
         cert_id8(&self.cert)
@@ -435,6 +466,10 @@ pub struct ScmsPki {
     /// The provider's certificate form: which certificate is the CRACA, its lifetimes,
     /// regions and RA permission form ([`CertProfile`]).
     pub profile: CertProfile,
+    /// The hierarchy a root rollover superseded (Provider Req. §3.5.4): the old root,
+    /// ICA and components no longer sign, but what they certified stays valid until it
+    /// expires, so [`ScmsPki::by_id8`] and [`ScmsPki::signer_key`] still resolve them.
+    pub retired: Vec<Authority>,
 }
 
 /// How a component certificate is shaped beyond its role: the `cracaId` it names, the
@@ -842,7 +877,54 @@ impl ScmsPki {
             crlg,
             extra: Vec::new(),
             profile,
+            retired: Vec::new(),
         })
+    }
+
+    /// The provider's PKI from the governance entities' own certificates and keys
+    /// ([`crate::scms::governance::Governance::pdu_pki`]): one certificate per component,
+    /// as a provider's chain file lists the certificate that signs ([SMP] §6.1;
+    /// audit-gov GOV.L.onecert). `by_role` gives each governance role's (certificate,
+    /// signing key, encryption scalar); the ACA is the governance role `pca`.
+    ///
+    /// # Errors
+    /// A role is missing, or a key is not a usable scalar.
+    pub fn of_governance(
+        label: &str,
+        profile: CertProfile,
+        by_role: impl Fn(&str) -> Option<(Certificate, Signer1609, Option<[u8; 32]>)>,
+    ) -> Result<ScmsPki> {
+        let take = |role: &str, name: &str| -> Result<Authority> {
+            let (cert, key, enc) = by_role(role).ok_or(PduError::Key("governance role missing"))?;
+            Authority::of_keys(&format!("{name}.{label}"), cert, key, enc)
+        };
+        Ok(ScmsPki {
+            root: take("root", "root")?,
+            ica: take("ica", "ica")?,
+            eca: take("eca", "eca")?,
+            ra: take("ra", "ra")?,
+            aca: take("pca", "aca")?,
+            ma: take("ma", "ma")?,
+            la1: take("la1", "la1")?,
+            la2: take("la2", "la2")?,
+            dcm: take("dcm", "dcm")?,
+            crlg: take("crlg", "crlg")?,
+            extra: Vec::new(),
+            profile,
+            retired: Vec::new(),
+        })
+    }
+
+    /// This PKI after a root rollover's publication: `next` signs from now on, and every
+    /// certificate of this one (and of what it had retired) stays resolvable until it
+    /// expires ([`ScmsPki::retired`]). The extra components carry over.
+    #[must_use]
+    pub fn superseded_by(&self, mut next: ScmsPki) -> ScmsPki {
+        let mut retired: Vec<Authority> = self.all().into_iter().cloned().collect();
+        retired.extend(self.retired.iter().cloned());
+        next.extra.clone_from(&self.extra);
+        next.retired = retired;
+        next
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -963,6 +1045,7 @@ impl ScmsPki {
         self.all()
             .into_iter()
             .chain(self.extra.iter())
+            .chain(self.retired.iter())
             .find(|a| &a.id8() == id8)
     }
 
@@ -1040,8 +1123,10 @@ impl ScmsPki {
     pub fn signer_key(&self, c: &Certificate) -> Result<(Hash1609, Vec<u8>)> {
         let issuer = match &c.0.issuer {
             IssuerIdentifier::R_self(_) => {
-                // Only the root is self-issued, and only the root as held here counts.
-                if cert_id8(c) != self.root.id8() {
+                // Only the root is self-issued, and only a root held here counts (the
+                // current one, or one a rollover superseded).
+                let id = cert_id8(c);
+                if id != self.root.id8() && !self.retired.iter().any(|a| a.id8() == id) {
                     return Err(PduError::UntrustedSigner);
                 }
                 return sig1609::explicit_key(c).ok_or(PduError::UntrustedSigner);
