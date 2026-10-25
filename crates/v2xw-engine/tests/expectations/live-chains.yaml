@@ -101,6 +101,8 @@ rows:
   expect: ratio
   band: [30.0, 60.0]
   source: 'SLH-DSA-SHA2-128s signature 7,856 B, public key 32 B (FIPS 205 Table 2): (200 + 7,792 + 0.11 x ~7,830) / 200 = x44'
+  verdict: open
+  note: "ENGINE FINDING: SLH-DSA-SHA2-128s on the no-HSM SoC, 38 vehicles for 6 s: 2,101 node tasks and 0 frames on the air, while every loss counter stays 0 (net_mtu_refusals, mac_drops, suppressed_frames, phy_refusals, credentials_refused). The loader accepted the scenario (the profile prices the scheme from a catalogue anchor), and the run then put nothing on the air and counted no loss. The likely cause is the signing time (SLH-DSA-128s signs in tenths of a second on Cortex-A72-class cores, against a 100 ms BSM interval), but no record says so. Owed: count the BSMs lost before the air, or refuse the scheme at load as a profile with no sign cost is refused"
 - id: LC.PQ.frag-share-falcon
   base: r100
   variant: r100-falcon
@@ -473,6 +475,8 @@ rows:
   expect: up
   min_change: 1.0
   source: 'utilisation lambda x S / c: 610/s x 0.645 ms / 4 cores = 0.10 vs 610/s x 1.29 ms / 2 cores = 0.39; M/D/c waiting grows superlinearly in rho'
+  verdict: pass
+  note: "0.19 -> 10.8 ms; the source's 4-core and 2-core utilisations are wrong for the medium compute tier (one CPU server each, LC.OB.wait-c2sw-nodcc): rho 0.40 vs 0.79 on one server, which still predicts the rise"
 - id: LC.OB.wait-c2sw-nodcc
   base: r160-c2sw
   variant: r160-c2sw-nodcc
@@ -481,6 +485,8 @@ rows:
   expect: up
   min_change: 1.0
   source: 'at 160 vehicles without the rate cut each OBU must verify ~N x 10/s; on 2 x 1.29 ms servers rho approaches 1 and the wait explodes (M/D/c)'
+  verdict: wrong-expectation
+  note: "74.8 -> 78.4 ms (+5 %). The prediction counted the profile's 2 cores; at nodes.compute_tier medium (the default) the CPU is ONE server (v2xw-node server.rs ServerBank, 06-node-models 2.1: medium = one CPU and one HSM server, high = c cores). With one 1.34 ms server rho = 720/s x 1.34 ms = 0.96 with J2945/1 and 897/s x 1.34 ms = 1.2 without: both at or over capacity, so the verify throughput pins at ~636/s per node in both runs and the queue grows the same over 6 s. Congestion control cannot rescue an OBU already saturated by its neighbours"
 - id: LC.OB.e2e-c2sw-nodcc
   base: r160-c2sw
   variant: r160-c2sw-nodcc
@@ -489,6 +495,8 @@ rows:
   expect: up
   min_change: 0.1
   source: the verify queue is a stage of end-to-end latency
+  verdict: wrong-expectation
+  note: "80.3 -> 86.5 ms (+8 %, under the 10 % predicted): the same saturation (LC.OB.wait-c2sw-nodcc); the end-to-end latency is the verify queue (75 of 80 ms) in both"
 - id: LC.OB.dcc-protects-slow-obu
   base: X-dcc-obu-wait
   variant: X-dcc-obu-wait
