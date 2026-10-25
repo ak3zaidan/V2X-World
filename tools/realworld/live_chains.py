@@ -17,6 +17,10 @@ the per-link measures of the chains, `lc.*`, from the run report and the resolve
   (falls when J2945/1 power control lowers the radiated power);
 - `lc.verifies_per_node_s` = receiver-validation checks / (nodes x duration);
 - `lc.events_per_attempt` = DES events / reception attempts (the run's cost per reception);
+- `lc.below_sens_per_frame`: receptions lost below sensitivity per frame (rises when power
+  control lowers the radiated power; reception attempts are culled at the nominal range);
+- `lc.offered_airtime_s_per_s`: all frames' airtime per second of run (> 1: the channel
+  cannot carry the offered load even when every node hears every other);
 - `lc.frames.<msg>`, `lc.airtime_us.<msg>` per message type (the report's air_by_type).
 
 `derive` writes interaction runs `X-<name>` whose realism.json holds differences of
@@ -101,6 +105,9 @@ def extract(run_dir):
         d['lc.frames.' + mt] = a.get('frames') or 0
         d['lc.airtime_us.' + mt] = a.get('airtime_us') or 0
     d['lc.vru_devices'] = rep.get('vru_devices_created') or 0
+    bs = (rep.get('rx_losses') or {}).get('below-sensitivity') or 0
+    d['lc.below_sens_per_frame'] = bs / frames if frames else 0.0
+    d['lc.offered_airtime_s_per_s'] = (air.get('airtime_us') or 0) / 1e6 / dur if dur else 0.0
     with open(os.path.join(run_dir, 'realism.json'), 'w') as f:
         json.dump(d, f, indent=1, sort_keys=True, default=str)
     return d

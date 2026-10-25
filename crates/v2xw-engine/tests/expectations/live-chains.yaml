@@ -141,6 +141,8 @@ rows:
   expect: band
   band: [0.3, 0.97]
   source: 'the busy ratio cannot exceed 1; 0.21 x 4.3 = 0.9 offered, held below it by CSMA deferral and J2945/1 power control above 50 % CBP'
+  verdict: wrong-expectation
+  note: 'measured 0.993. The offered airtime is 1.07 s per second (lc.offered_airtime_s_per_s: 4,845 BSMs + 491 second fragments x 1,323 us / 6 s), above capacity: the 0.9 estimate missed the second fragments and the BSM-rate rise (LC.PQ.rate-feedback-falcon). Power control cannot unload a 300 m grid: at 10 dBm + 6 dBi a 300 m link is still ~10 dB above sensitivity, so every node keeps sensing every other and the busy ratio pins at 1, as CSMA theory says for offered load > 1 (Bianchi 2000)'
 - id: LC.PQ.power-falcon
   base: r100
   variant: r100-falcon
@@ -149,6 +151,35 @@ rows:
   expect: down
   min_change: 0.02
   source: 'J2945/1 power control lowers the radiated power linearly from 20 to 10 dBm as CBP goes 50 -> 80 % (Ahmad 2019 Eq. 9; the engine J2945_1 rp_max/rp_min, min_cu/max_cu): fewer receivers in range per frame'
+  verdict: wrong-expectation
+  note: 'measured 79.6 -> 80.1: reception attempts are culled at the nominal range (radio.range.margin_db over the device power), not at the controlled power, so they cannot show it; the controlled power shows as receptions lost below sensitivity, 0.0007 -> 0.044 per frame (x63) at CBR 0.99, and not at all in r40-falcon at CBR 0.45 (below the 50 % knee): LC.PQ.power-falcon-bs'
+- id: LC.PQ.power-falcon-bs
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: lc.below_sens_per_frame
+  expect: up
+  min_change: 5.0
+  source: 'J2945/1 power control (as LC.PQ.power-falcon): at CBP > 80 % RP = 10 dBm, 10 dB under the 20 dBm of a light channel, so the receivers near the edge of the 6 Mb/s range fall below sensitivity'
+  note: 'corrected measure for LC.PQ.power-falcon, written after r100-falcon; judged before the runs of LC.PQ.power-knee-r40 and LC.PQ.nodcc-power-back'
+- id: LC.PQ.power-knee-r40
+  base: r40
+  variant: r40-falcon
+  area: pq-chain
+  measure: lc.below_sens_per_frame
+  expect: same
+  tol: 2.0
+  source: 'at 40 vehicles Falcon raises CBR to ~0.45, under the 50 % knee of J2945/1 power control: the power stays at 20 dBm and below-sensitivity losses do not multiply (a 3x band for count noise)'
+  note: written after r100-falcon, from r40 and r40-falcon already run (a check of the knee, not a blind prediction)
+- id: LC.PQ.rate-feedback-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: lc.bsms_per_veh_s
+  expect: up
+  min_change: 0.05
+  source: 'J2945/1 counts the vehicle density from the BSMs it RECEIVED within 100 m (SAE J2945/1 6.3.8.1, vDensityCalcRange; Ahmad 2019 Eq. 7): when Falcon cuts PDR to 0.65 a vehicle hears fewer neighbours, under-counts N and shortens its ITT, a positive feedback that adds load to a saturated channel'
+  note: 'found on r100-falcon (8.05 -> 9.07 BSM/s); not predicted before that run. At 40 vehicles N < B both ways and the rate is unchanged (9.21 -> 9.21)'
 - id: LC.PQ.collisions-falcon
   base: r100
   variant: r100-falcon
@@ -226,9 +257,9 @@ rows:
   variant: r100-mldsa44
   area: pq-chain
   measure: lc.bsms
-  expect: same
-  tol: 0.15
-  source: 'the BSM generation rate is set by J2945/1 density rule and mobility, not by the scheme: the same seed generates about the same number of BSMs (frames differ, BSMs do not)'
+  expect: up
+  min_change: 0.05
+  source: 'changed before this run (was: same within 15 %): J2945/1 counts density from received BSMs, and ML-DSA-44 collapses PDR further than Falcon, so the under-count and the rate rise are at least Falcon''s (LC.PQ.rate-feedback-falcon)'
 - id: LC.PQ.density-amplifies-pdr
   base: X-pq-density-pdr
   variant: X-pq-density-pdr
@@ -249,10 +280,10 @@ rows:
   base: r100-falcon
   variant: r100-falcon-nodcc
   area: pq-chain
-  measure: lc.attempts_per_frame
-  expect: up
-  min_change: 0.02
-  source: 'with J2945/1 off the OBU transmits its fixed 23 dBm (radio.devices.obu), not the 10-20 dBm power control picks under load: more receivers per frame'
+  measure: lc.below_sens_per_frame
+  expect: down
+  min_change: 0.5
+  source: 'with J2945/1 off the OBU transmits its fixed 23 dBm (radio.devices.obu), not the 10 dBm power control picks at CBP > 80 %: below-sensitivity losses fall back (measure changed from lc.attempts_per_frame before this run, see LC.PQ.power-falcon)'
 - id: LC.PQ.seed2-cbr
   base: r100-s2
   variant: r100-falcon-s2
