@@ -34,7 +34,9 @@ def res_bin(r):
 
 class IdResult:
     __slots__ = ("key", "frac", "nsm", "nbsm", "raw", "acc", "phase100", "wrapped", "at_risk", "ent_frozen",
-                 "at_risk_fast", "ent_slip", "slip_sizes", "hdr_off_ms", "period_excess_ms", "res_hist", "dt_near100", "dt_all", "cnt_ok", "cnt_n")
+                 "at_risk_fast", "ent_slip", "slip_sizes", "hdr_off_ms", "period_excess_ms", "res_hist", "dt_near100", "dt_all", "cnt_ok", "cnt_n",
+                 "ent_slip_ret", "slip_sizes_ret", "drift_med", "period_dev_ms", "body_al", "body_cr", "body_n", "body_vdt2",
+                 "body_q2", "stamp_al")
 
     def __init__(self, key):
         self.key = key
@@ -47,6 +49,18 @@ class IdResult:
         self.period_excess_ms = Counter()
         self.res_hist = Counter()
         self.dt_near100 = self.dt_all = self.cnt_ok = self.cnt_n = 0
+        # v2 timing model (schema v2xw.bsm_timing.v2): slips that return at the next pair, the
+        # device's BSM-clock drift (median period excess) and its per-BSM deviation, and the
+        # residual body of exactly-100 ms pairs (receiver output noise), mm bins.
+        self.ent_slip_ret = 0
+        self.slip_sizes_ret = Counter()
+        self.drift_med = None
+        self.period_dev_ms = Counter()
+        self.body_al = Counter()
+        self.body_cr = Counter()
+        self.body_n = 0
+        self.body_vdt2 = self.body_q2 = 0.0
+        self.stamp_al = Counter()
 
 
 # A slip onset is counted only where a one-epoch slip moves the reported position by at
@@ -83,8 +97,27 @@ def analyse_id(key, bsms, xy=False, nyc=False, gps_drift=mc.GPS_DRIFT_M):
         res.phase100[devclass.phase100(s)] += 1
         res.wrapped[devclass.phase_wrapped(s)] += 1
     prev_state = None  # entry estimator: state of the previous pair ('n', 'a' or None)
-    for p in pairing.pairs(bs, xy, nyc):
+    pending = None  # the size of a slip onset at the previous pair, awaiting the return test
+    excess = []
+    for i, p in enumerate(pairing.pairs(bs, xy, nyc)):
         dsm = p.dt[0]
+        if dsm is not None and 0.05 < dsm < 0.15 and p.dcnt == 1:
+            excess.append(int(round(dsm * 1000.0)) - 100)
+        if (not xy and dsm is not None and p.dcnt == 1 and p.v1 is not None and p.v1 >= SLIP_MIN_SPEED_MPS
+                and p.h1 is not None and 0.0985 <= dsm <= 0.1015):
+            ex, ey = mc.residual(p, dsm)
+            al, cr = mc.along_cross(p, ex, ey)
+            e_ms = int(round(dsm * 1000.0)) - 100
+            res.stamp_al[(e_ms, "sum")] += al / p.v1 * 1000.0
+            res.stamp_al[(e_ms, "n")] += 1
+            if e_ms == 0:
+                res.body_al[int(round(al * 1000.0))] += 1
+                res.body_cr[int(round(cr * 1000.0))] += 1
+                res.body_n += 1
+                res.body_vdt2 += (p.v1 * dsm) ** 2
+                lsb_n = math.radians(mc.POS_LSB_DEG) * pairing.R_EARTH
+                lsb_e = lsb_n * math.cos(math.radians(bs[i].lat))
+                res.body_q2 += (lsb_n ** 2 + lsb_e ** 2) / 12.0
         if dsm is not None and dsm > 0:
             res.dt_all += 1
             res.dt_near100 += 0.09 <= dsm <= 0.11
@@ -98,8 +131,15 @@ def analyse_id(key, bsms, xy=False, nyc=False, gps_drift=mc.GPS_DRIFT_M):
         if (dsm is not None and 0.05 < dsm < 0.15 and p.v1 is not None and p.v2 is not None
                 and p.v1 >= 5.0 and p.v2 >= 5.0):
             frozen = math.hypot(p.dx, p.dy) < mc.POS_RES_M
-            s = 0 if frozen else slip_size(p, dsm)
+            s_raw = slip_size(p, dsm)
+            s = 0 if frozen else s_raw
             state = "a" if frozen or s != 0 else "n"
+            if pending is not None and s_raw == -pending:
+                # the slipped BSM's position came back to its own epoch: a one-message slip.
+                # An onset that does not return is a persistent phase step (a BSM-clock wrap).
+                res.ent_slip_ret += 1
+                res.slip_sizes_ret[pending] += 1
+            pending = None
             if prev_state == "n":
                 res.at_risk += 1
                 fast = p.v1 >= SLIP_MIN_SPEED_MPS
@@ -109,6 +149,9 @@ def analyse_id(key, bsms, xy=False, nyc=False, gps_drift=mc.GPS_DRIFT_M):
                 elif s != 0 and fast:
                     res.ent_slip += 1
                     res.slip_sizes[s] += 1
+                    pending = s
+        else:
+            pending = None
         prev_state = state
         if p.v1 is None or p.h1 is None:
             continue
@@ -140,7 +183,18 @@ def analyse_id(key, bsms, xy=False, nyc=False, gps_drift=mc.GPS_DRIFT_M):
                 a[I_SLIPZ] += sig == "zero"
                 a[I_SLIPD] += sig == "double"
                 a[I_CROSS] += cross
+    if len(excess) >= DRIFT_MIN_PAIRS:
+        xs = sorted(excess)
+        med = xs[len(xs) // 2] if len(xs) % 2 else 0.5 * (xs[len(xs) // 2 - 1] + xs[len(xs) // 2])
+        res.drift_med = med
+        for e in excess:
+            res.period_dev_ms[max(-50, min(50, int(round(e - med))))] += 1
     return res
+
+
+# An ID's BSM-clock drift is the median of its single-interval secMark Δt minus 100 ms over
+# consecutive msgCnt pairs; fewer pairs than this leave the ID out of the drift fit.
+DRIFT_MIN_PAIRS = 20
 
 
 class Dataset:

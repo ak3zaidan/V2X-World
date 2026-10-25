@@ -86,6 +86,7 @@ fn minute(cal: &BsmTimingCalibration, device: u32, speed: f64, p: &UsMbrParams) 
             bsm: BsmExtras {
                 sec_mark_ms: Some(((rep.sec_mark_at / MS) % 60_000) as u16),
                 accel_long_mps2: Some(0.0),
+                ..BsmExtras::default()
             },
             signer: [9; 8],
             kind: ObservedKind::Beacon,
@@ -209,6 +210,7 @@ fn the_two_readings_and_the_two_clocks_disagree_where_the_texts_do() {
         bsm: BsmExtras {
             sec_mark_ms: Some(sm),
             accel_long_mps2: Some(accel),
+            ..BsmExtras::default()
         },
         signer: [3; 8],
         kind: ObservedKind::Beacon,

@@ -11,4 +11,9 @@ pub struct BsmExtras {
     pub sec_mark_ms: Option<u16>,
     /// `accelSet.long`, m/s², at the J2735 0.01 m/s² resolution.
     pub accel_long_mps2: Option<f64>,
+    /// The `speed` the BSM carries when the sender's output differs from its belief (the
+    /// device's receiver output noise, `v2xw_node::bsm_timing`), m/s; `None`: the belief's.
+    pub speed_mps: Option<f64>,
+    /// The `heading` the BSM carries when it differs from the belief, radians.
+    pub heading_rad: Option<f64>,
 }

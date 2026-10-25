@@ -127,6 +127,31 @@ runs:
   MAL0:
     scenario: scenarios/real-world/paper1/p1-ma-l0.yaml
     base: MAL1
+  BV2:
+    scenario: scenarios/real-world/paper1/p1-base.yaml
+    note: B on the v2 engine and the v2 fit (bsm_clock for the free class, TM-1 slip semantics)
+  OFFV2:
+    scenario: scenarios/real-world/paper1/p1-off.yaml
+    note: OFF on the v2 engine
+  GT05V2:
+    scenario: scenarios/real-world/paper1/p1-rp-v10-gt-05.yaml
+    base: BV2
+    note: RP-v10-gt-05 on the v2 engine and the v2 fit
+  E4S:
+    scenario: scenarios/real-world/paper1/p1-e4-s.yaml
+    note: speed-matched E4 (80 mph, 6 km straights, 90 s), v2 fit, locked share 1
+  E4S2:
+    scenario: scenarios/real-world/paper1/p1-e4-s.yaml
+    note: E4S again (determinism)
+  E4SWN:
+    scenario: scenarios/real-world/paper1/p1-e4-s-wn.yaml
+    base: E4S
+  E4SV1:
+    scenario: scenarios/real-world/paper1/p1-e4-s-v1.yaml
+    note: E4S on the frozen v1 fit (body before E4-BODY)
+  E4SF:
+    scenario: scenarios/real-world/paper1/p1-e4-s-free.yaml
+    note: E4S with every OBU free (the v2 BSM clock on every device)
 rows:
 - id: P1.TS.rp-share0
   base: B
@@ -1043,3 +1068,173 @@ rows:
     posted and 3,000 veh/h, 22.2 m/s at 80 mph and 1,500 veh/h (Wyoming 34.4). The scenario needs a longer
     straight or the drivers'' desired-speed spread; the KS comparison is therefore not speed-matched (the
     body differs at cm scale, which speed changes little)'
+- id: P1.TM1.gt-vs-sm.v2
+  base: BV2
+  variant: GT05V2
+  area: metrics
+  measure: p2.verdicts.positionJump
+  expect: up
+  min_change: 0.1
+  source: 'TM-1 re-run on the v2 clock: generationTime is the tick plus the 28.3 ms header jitter, so header
+    dt adds v·|dj| to every secMark residual and trips more, as real data does (rx/header base above secMark:
+    Tampa free 45 vs 20, Wyoming 214 vs 0 per ID-minute, p1-realdata-baseline.md T3)'
+  measured: pending
+- id: P1.TM1.sm-repeat
+  base: E4SF
+  variant: E4SF
+  area: metrics
+  measure: x.e4.sm_repeat_share
+  expect: le
+  value: 0.01
+  source: 'CV-pilot free devices advance secMark every BSM: consecutive-msgCnt pairs with secMark dt under
+    10 ms are 0 in Tampa and 0.07 % in an Orem day (scratch analysis of the raw rows); the v1 engine gave 17 %'
+  measured: pending
+- id: P1.TM1.sm-excess
+  base: E4SF
+  variant: E4SF
+  area: metrics
+  measure: x.e4.sm_excess_p50
+  expect: band
+  band:
+  - 3
+  - 12
+  source: 'secMark dt minus 100 ms on single-interval pairs of the fit sets'' free class: p50 +6 ms (T8);
+    the engine draws drift_ms and period_dev_ms from that fit'
+  measured: pending
+- id: P1.TM1.free-rate
+  base: E4SF
+  variant: E4SF
+  area: metrics
+  measure: x.e4.rate_per_idmin
+  expect: ge
+  value: 18.2
+  source: 'the frozen free bound (lowest free lower 95 % bound of the fit sets, Tampa 18.2 per ID-minute);
+    the free fit is Orem-dominated (188.8), so a rate near Orem''s is expected'
+  measured: pending
+- id: P1.TM1.frames
+  base: OFFV2
+  variant: BV2
+  area: performance
+  measure: r.frames_transmitted
+  expect: ratio
+  band:
+  - 0.88
+  - 0.97
+  source: 'a free OBU''s BSM period is 100 ms + drift + deviation (fit mean about 11.7 ms), so it sends
+    about 10 % fewer BSMs; with 75 % free devices the frame count falls to about 0.92 of timing off'
+  measured: pending
+- id: P1.E4S.ks
+  base: E4S
+  variant: E4S
+  area: metrics
+  measure: x.e4.ks
+  expect: le
+  value: 0.092
+  source: 'P1-E4 with the pre-registered tolerance 0.092 (unchanged), speed-matched, on the v2 fit (locked
+    instant N(0.225, 0.275) ms, output noise 0.103 m/s and 0.30 deg, fitted on Tampa and Orem only).
+    Prediction written before the run: per-component sd about 1.9 cm at 34 m/s, so p50 about 2.2 cm (above
+    Wyoming 1.6) and p90 about 4 cm (below 6.0): likely still above the tolerance'
+  measured: '0.168666'
+  verdict: open
+  note: 'OPEN E4-BODY (narrowed): 0.337 -> 0.169 on the speed-matched v2 run, still above 0.092. Engine p50 / p90 / p99 0.021 / 0.041 / 0.061 m against Wyoming 0.016 / 0.060 / 0.157 m, as predicted before the run: the body centre is now slightly wide and the tail beyond 5 cm (Wyoming p99 15.7 cm) is missing. The v2 noise is Gaussian; the real one is heavy-tailed (Tampa along rms 5.7 cm vs IQR-sd 1.0 cm)'
+- id: P1.E4S.ks-white-noise
+  base: E4SWN
+  variant: E4SWN
+  area: metrics
+  measure: x.e4.ks
+  expect: ge
+  value: 0.092
+  source: 'P1-E4 fault on the speed-matched highway: the white-noise GNSS must exceed the tolerance'
+  measured: pending
+- id: P1.E4S.locked-rate
+  base: E4S
+  variant: E4S
+  area: metrics
+  measure: x.e4.rate_per_idmin
+  expect: le
+  value: 0.568
+  source: the frozen locked bound 0.568 per ID-minute; Wyoming 0.0
+  measured: '0'
+  verdict: pass
+- id: P1.E4S.speed
+  base: E4S
+  variant: E4S
+  area: metrics
+  measure: x.e4.v_p50
+  expect: band
+  band:
+  - 25.0
+  - 36.0
+  source: 'speed-matched to Wyoming''s p5-p95 27.6-35.6 m/s (median 34.4): free flow at 80 mph posted with
+    SUMO''s speedFactor mean 1.0 gives about 35 m/s once the corners are 6 km apart'
+  measured: '29.84'
+  verdict: pass
+- id: P1.E4S.body-p90
+  base: E4SV1
+  variant: E4S
+  area: metrics
+  measure: x.e4.r_p90
+  expect: up
+  min_change: 0.3
+  source: 'E4-BODY: the v2 fit adds the locked instant''s 1 ms secMark truncation (along/v sd about 0.41 ms,
+    1.4 cm at 34 m/s) and the output noise (1.0 cm along, 1.8 cm cross) to the v1 body (p90 2.3 cm)'
+  measured: pending
+- id: P1.E4S.rerun
+  base: E4S
+  variant: E4S2
+  area: determinism
+  measure: digest.record
+  expect: identical
+  source: 'same seed, same build: byte-identical record stream with the v2 model on'
+  measured: pending
+- id: P1.E4S.frames-locked
+  base: E4SV1
+  variant: E4S
+  area: performance
+  measure: r.frames_transmitted
+  expect: same
+  tol: 0.02
+  source: the locked class has no bsm_clock, so the v2 fit changes what a BSM says, not when it is sent
+  measured: pending
+- id: P1.E4S.events
+  base: E4SV1
+  variant: E4S
+  area: performance
+  measure: cost.events
+  expect: ratio
+  band:
+  - 0.95
+  - 1.05
+  source: the same frames and receptions; the model adds two or four draws per BSM, no events
+  measured: pending
+- id: P1.E4S.memory
+  base: E4SV1
+  variant: E4S
+  area: performance
+  measure: cost.peak_mb
+  expect: ratio
+  band:
+  - 0.8
+  - 1.25
+  source: per-device state grows by two numbers (drift, next tick)
+  measured: pending
+- id: P1.E4S.revoked-honest
+  base: E4S
+  variant: E4S
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: 'the 8 h MA review: no honest revocation inside a 90 s window, whatever the residual body'
+  measured: '0'
+  verdict: pass
+- id: P1.E4S.reports
+  base: E4SV1
+  variant: E4S
+  area: architecture
+  measure: p2.reports_sent
+  expect: same
+  tol: 0.25
+  source: 'a locked fleet trips RandomPosition 0 times per ID-minute either way (the body moves at cm scale,
+    the 1 m threshold is 20x above it), so the misbehaviour reports to the RA do not change'
+  measured: pending

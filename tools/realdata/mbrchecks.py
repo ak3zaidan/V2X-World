@@ -29,6 +29,8 @@ GPS_DRIFT_M = 1.0
 MAX_SPEED_MPS = 90.0
 MAX_ACCEL_MPS2 = 10.0
 POS_RES_M = 0.01
+# J2735 Latitude and Longitude LSB (1/10 micro degree): the position quantisation of every source
+POS_LSB_DEG = 1e-7
 SPEED_RES_MPS = 0.02
 GAP_LIMITS_S = (0.1, 0.2, 0.5)
 GAP_TOL_S = 0.05
