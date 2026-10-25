@@ -650,12 +650,6 @@ pub fn ssp_version(profile: CertProfile, role: &str) -> u8 {
     }
 }
 
-/// [`security_mgmt_ssp`] at the version of `profile`'s published form ([`ssp_version`]).
-#[must_use]
-pub fn security_mgmt_ssp_of(profile: CertProfile, role: &str) -> SecurityMgmtSsp {
-    security_mgmt_ssp_v(role, ssp_version(profile, role))
-}
-
 fn security_mgmt_ssp_v(role: &str, version: u8) -> SecurityMgmtSsp {
     let v = Uint8(version);
     match role {
@@ -744,9 +738,22 @@ fn explicit_psids(items: Vec<(u64, Option<SspRange>)>) -> SubjectPermissions {
     ))
 }
 
+/// The PSID-35 SSP bytes of `role` in `profile`'s form. The 2022 module's types fix
+/// `version` at 2, so a version-1 SSP (ISS) is the version-2 encoding with that byte
+/// (choice tag, SEQUENCE preamble, `version`) set to 1: the bodies are the same, and the
+/// published bytes are exactly that (`83 00 01`, `88 00 01 00 04`).
+fn ssp_bytes(profile: CertProfile, role: &str) -> Vec<u8> {
+    let mut b = coer(&security_mgmt_ssp(role)).expect("an SSP encodes");
+    let v = ssp_version(profile, role);
+    if v != 2 && b.len() > 2 {
+        b[2] = v;
+    }
+    b
+}
+
 /// A role's `appPermissions` in `profile`'s form.
 fn app_permissions(profile: CertProfile, role: &str) -> Vec<PsidSsp> {
-    let ssp = coer(&security_mgmt_ssp_of(profile, role)).expect("an SSP encodes");
+    let ssp = ssp_bytes(profile, role);
     let mut v = vec![PsidSsp::new(psid(SECURITY_MGMT_PSID), Some(opaque(ssp)))];
     match role {
         // Published roots: `256: 00 01 00 01 01 01 00` (CrlSsp isCraca, series 256).

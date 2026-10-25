@@ -915,6 +915,47 @@ impl ScmsPki {
         })
     }
 
+    /// `current` and every component a rollover superseded in the same role (by its
+    /// PSID-35 SSP), current first: the certificates a message to or from that role may
+    /// name while the old hierarchy's certificates are still valid.
+    pub fn in_role<'a>(&'a self, current: &'a Authority) -> Vec<&'a Authority> {
+        let role = crate::scms::governance::role_of(&current.cert);
+        core::iter::once(current)
+            .chain(
+                self.retired
+                    .iter()
+                    .filter(|a| role.is_some() && crate::scms::governance::role_of(&a.cert) == role),
+            )
+            .collect()
+    }
+
+    /// Whether `id8` is the certificate of `current`'s role: `current`, or the one a
+    /// rollover superseded (an enrolment certificate the old ECA issued stays valid for
+    /// its six years, Provider Req. §3.5.4).
+    pub fn is_role(&self, current: &Authority, id8: &[u8; 8]) -> bool {
+        self.in_role(current).iter().any(|a| a.id8() == *id8)
+    }
+
+    /// Decrypts `bytes` addressed to `current`'s role: under its encryption key, or under
+    /// the key of the certificate a rollover superseded (a device that encrypted before it
+    /// learned the new certificate).
+    ///
+    /// # Errors
+    /// No certificate of the role has an encryption key, or none decrypts.
+    pub fn decrypt_as(&self, current: &Authority, bytes: &[u8]) -> Result<Vec<u8>> {
+        let mut last = PduError::Key("encryption key");
+        for a in self.in_role(current) {
+            let Some(enc) = a.enc_private.as_ref() else {
+                continue;
+            };
+            match decrypt_cert(bytes, &a.cert, enc) {
+                Ok(p) => return Ok(p),
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    }
+
     /// This PKI after a root rollover's publication: `next` signs from now on, and every
     /// certificate of this one (and of what it had retired) stays resolvable until it
     /// expires ([`ScmsPki::retired`]). The extra components carry over.
@@ -2011,11 +2052,7 @@ pub fn ra_open_ee_ra_cert_request(
     spdu: &[u8],
     expected: &ButterflyOriginal,
 ) -> Result<Certificate> {
-    let enc = pki
-        .ra
-        .enc_private
-        .ok_or(PduError::Key("RA encryption key"))?;
-    let plain = decrypt_cert(spdu, &pki.ra.cert, &enc)?;
+    let plain = pki.decrypt_as(&pki.ra, spdu)?;
     let (p, signer) = open_signed_cert_request(&plain, pki)?;
     let RequestSignerFound::Cert(ec_cert) = signer else {
         return Err(PduError::Signer(
@@ -2023,7 +2060,7 @@ pub fn ra_open_ee_ra_cert_request(
         ));
     };
     let issued_by_eca = matches!(&ec_cert.0.issuer,
-        IssuerIdentifier::sha256AndDigest(h) if hashedid::id8_bytes(h) == pki.eca.id8());
+        IssuerIdentifier::sha256AndDigest(h) if pki.is_role(&pki.eca, &hashedid::id8_bytes(h)));
     if !issued_by_eca {
         return Err(PduError::UntrustedSigner);
     }

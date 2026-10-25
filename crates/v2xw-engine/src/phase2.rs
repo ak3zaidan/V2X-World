@@ -3045,7 +3045,19 @@ impl Phase2 {
                         period: c.cred.period,
                         valid_from: c.from,
                         valid_until: c.until,
-                        key: std::sync::Arc::new(c.cred.implicit_key(&pki.aca.cert)?),
+                        // Under the ACA that issued it: the current one, or the one a
+                        // root rollover superseded.
+                        key: std::sync::Arc::new(c.cred.implicit_key(
+                            &pki.in_role(&pki.aca)
+                                .into_iter()
+                                .find(|a| {
+                                    matches!(&c.cred.cert.0.issuer,
+                                        v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha256AndDigest(h)
+                                            if h.0[..] == a.id8()[..])
+                                })
+                                .unwrap_or(&pki.aca)
+                                .cert,
+                        )?),
                         preloaded: c.at == 0,
                     })
                 })

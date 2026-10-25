@@ -818,14 +818,10 @@ pub fn ra_open_download_request(
     now: u32,
     tolerance_s: u32,
 ) -> Result<OpenedDownload> {
-    let enc = pki
-        .ra
-        .enc_private
-        .ok_or(PduError::Key("RA encryption key"))?;
-    let plain = pdu::decrypt_cert(bytes, &pki.ra.cert, &enc)?;
+    let plain = pki.decrypt_as(&pki.ra, bytes)?;
     let (p, signer) = pdu::open_signed_pdu(&plain, pki)?;
     let issued_by_eca = matches!(&signer.0.issuer,
-        IssuerIdentifier::sha256AndDigest(h) if hashedid::id8_bytes(h) == pki.eca.id8());
+        IssuerIdentifier::sha256AndDigest(h) if pki.is_role(&pki.eca, &hashedid::id8_bytes(h)));
     if !issued_by_eca {
         return Err(PduError::UntrustedSigner);
     }

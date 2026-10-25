@@ -308,7 +308,7 @@ impl ScmsState {
     fn ee_check_ack(&self, device: NodeId, ack: &Pdu) -> pdu::Result<()> {
         let pki = self.pki.clone().ok_or(PduError::Shape("PDU layer off"))?;
         let (p, signer) = pdu::open_signed_pdu(ack.bytes(), &pki)?;
-        if pdu::cert_id8(&signer) != pki.ra.id8() {
+        if !pki.is_role(&pki.ra, &pdu::cert_id8(&signer)) {
             return Err(PduError::Signer("an ack is signed by the RA"));
         }
         let ScmsPduContent::ee_ra(EeRaInterfacePdu::raEeCertAck(a)) = p.content else {

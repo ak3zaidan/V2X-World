@@ -418,17 +418,13 @@ impl ScmsState {
         let h = s.header.as_ref().ok_or(PduError::Shape(
             "a report upload carries a Download-Req header",
         ))?;
-        let plain = pdu::decrypt_cert(
-            h.bytes(),
-            &pki.ra.cert,
-            pki.ra.enc_private.as_ref().ok_or(PduError::Key("RA key"))?,
-        )?;
+        let plain = pki.decrypt_as(&pki.ra, h.bytes())?;
         let (p, signer) = pdu::open_signed_pdu(&plain, pki)?;
         // The signer must be an enrolment certificate the ECA issued (implicit, under the
         // ECA), not a pseudonym or a component certificate.
         let issued_by_eca = matches!(&signer.0.issuer,
             v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha256AndDigest(d)
-                if d.0[..] == pki.eca.id8()[..]);
+                if pki.is_role(&pki.eca, &v2xw_sec::hashedid::id8_bytes(d)));
         if !issued_by_eca {
             return Err(PduError::Signer("the enrolment certificate"));
         }
@@ -583,15 +579,24 @@ impl ScmsState {
                     Self::decrypt(out, 1);
                     let n_bsm = 1;
                     Self::verify(out, n_bsm);
-                    let opened = match crate::scms::mbr::ma_open_report(
-                        s.report.bytes(),
-                        &pki.ma.cert,
-                        pki.ma
-                            .enc_private
-                            .as_ref()
-                            .expect("the MA certificate has a key"),
-                        &pki,
-                    ) {
+                    // Under the MA certificate the reporter encrypted to: the current
+                    // one, or the one a root rollover superseded.
+                    let mut opened = Err(crate::scms::pdu::PduError::Key("MA encryption key"));
+                    for ma in pki.in_role(&pki.ma) {
+                        let Some(key) = ma.enc_private.as_ref() else {
+                            continue;
+                        };
+                        opened = crate::scms::mbr::ma_open_report(
+                            s.report.bytes(),
+                            &ma.cert,
+                            key,
+                            &pki,
+                        );
+                        if opened.is_ok() {
+                            break;
+                        }
+                    }
+                    let opened = match opened {
                         Ok(o) => o,
                         Err(e) => {
                             self.reject_pdu(SpduKind::SecuredMisbehaviorReport, to, at, e);

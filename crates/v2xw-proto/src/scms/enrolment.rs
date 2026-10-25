@@ -416,11 +416,7 @@ pub fn ee_ra_successor_request(inner: &[u8]) -> Result<ScmsPdu> {
 /// PKI's ECA issued, and return that certificate and the inner `EeEcaCertRequestSpdu`
 /// bytes, which the RA forwards to the ECA.
 pub fn ra_open_successor_request(pki: &ScmsPki, spdu: &[u8]) -> Result<(Certificate, Vec<u8>)> {
-    let enc = pki
-        .ra
-        .enc_private
-        .ok_or(PduError::Key("RA encryption key"))?;
-    let plain = pdu::decrypt_cert(spdu, &pki.ra.cert, &enc)?;
+    let plain = pki.decrypt_as(&pki.ra, spdu)?;
     let (p, signer) = pdu::open_signed_cert_request(&plain, pki)?;
     let RequestSignerFound::Cert(current) = signer else {
         return Err(PduError::Signer(
@@ -428,7 +424,7 @@ pub fn ra_open_successor_request(pki: &ScmsPki, spdu: &[u8]) -> Result<(Certific
         ));
     };
     let issued_by_eca = matches!(&current.0.issuer,
-        IssuerIdentifier::sha256AndDigest(h) if hashedid::id8_bytes(h) == pki.eca.id8());
+        IssuerIdentifier::sha256AndDigest(h) if pki.is_role(&pki.eca, &hashedid::id8_bytes(h)));
     if !issued_by_eca {
         return Err(PduError::UntrustedSigner);
     }

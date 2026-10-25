@@ -158,9 +158,9 @@ def load(run):
                 for p in q.get('providers') or []:
                     for x in p.get('components') or []:
                         if x.get('instance') == 0 and x.get('cert'):
-                            h = R['comp_hist'].setdefault((p['label'], x['role']), [])
-                            if not h or h[-1][1] != x['cert']:
-                                h.append((q['t'], x['cert']))
+                            hist = R['comp_hist'].setdefault((p['label'], x['role']), [])
+                            if not hist or hist[-1][1] != x['cert']:
+                                hist.append((q['t'], x['cert']))
             elif tp == 'record/node.credentials':
                 q = json.loads(m.data)
                 R['creds'].setdefault(q['device'], []).append(
@@ -658,25 +658,37 @@ def r_Lroll(R):
                 return prims.sha256(bytes.fromhex(h)).hex()
             hx, seen = c['issuer'][1].hex(), seen + 1
         return None
-    after = before = 0
+    approved = set(ch[-1][2]['roots'])
+    after = before = later = 0
     bad = []
     for k, t in R['cred_first'].items():
-        if R['creds'].get(R['owner'].get(k), [(0, 0, None)])[0][2] != 'provider-a':
+        dev = R['owner'].get(k)
+        recs = R['creds'].get(dev, [(0, 0, None)])
+        if recs[0][2] != 'provider-a':
             continue
         r = root_of(k)
-        if t > pub:
+        if recs[0][0] > pub:
+            # A device that joined after the publication: enrolled and provisioned under
+            # the new hierarchy only.
             after += 1
             if r not in new:
-                bad.append(f'after:{k}')
-        else:
+                bad.append(f'joiner:{k}')
+        elif t <= pub:
             before += 1
             if r in new or r is None:
                 bad.append(f'before:{k}')
+        else:
+            # Held first after it by a device from before: issued either side of the
+            # changeover, on a root the CTL approves.
+            later += 1
+            if r not in approved:
+                bad.append(f'later:{k}')
     moved = {role: [c for tt, c in R['comp_hist'].get(('provider-a', role), []) if tt >= pub] for role in ('eca', 'aca', 'ica')}
     recert = all(moved.values())
     ok = not bad and after > 0 and before > 0 and recert
-    return ok, (f'publication t={pub / 1e9:.0f} s; {after} certificates held after it, {before} before; '
-                f'{len(bad)} on the wrong root {" ".join(bad[:3])}; ECA/ACA/ICA re-certified after it: {recert}')
+    return ok, (f'publication t={pub / 1e9:.0f} s; joiners after it hold {after} certificates, {before} held before it, '
+                f'{later} held later by earlier devices; {len(bad)} on the wrong root {" ".join(bad[:3])}; '
+                f'ECA/ACA/ICA re-certified after it: {recert}')
 
 
 def r_K1(R):
@@ -949,10 +961,11 @@ def m_Lroll(R):
     # on the old root: move its first sighting after the publication onto a pre-change one.
     ch = ctl_changes(R)
     pub = ch[1][0] if len(ch) > 1 else 0
-    old = next((k for k, t in sorted(R['cred_first'].items(), key=lambda kv: kv[1]) if t <= pub
-                and R['creds'].get(R['owner'].get(k), [(0, 0, None)])[0][2] == 'provider-a'), None)
-    if old:
-        R['cred_first'][old] = pub + 1
+    # Re-date one pre-change device as a joiner after the publication: its old-root
+    # certificates are then a joiner's on the old root.
+    dev = next((d for d, recs in sorted(R['creds'].items()) if recs[0][0] <= pub and recs[0][2] == 'provider-a'), None)
+    if dev is not None:
+        R['creds'][dev] = [(pub + 1,) + r[1:] for r in R['creds'][dev]]
 
 
 def m_DET(R):
