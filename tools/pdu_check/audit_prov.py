@@ -191,7 +191,37 @@ def r_aca_per_cert(R, D):
     # per vehicle (pre-run): private responses addressed to each vehicle
     pv = collections.Counter(p['to'] for p in D.pre if p['type'] == 'AcaEeCertResponsePrivateSpdu')
     off = [v for v in D.vehicles if pv.get(v, 0) != 40]
-    return a == b == e and not off, f'RaAca {a}, AcaRa {b}, AcaEePrivate {e}; vehicles with != 40 pre-run {len(off)}'
+    # The weekly job makes the week of every account, also of devices that have not asked
+    # (flow `pregeneration`): those answers stay in the RA's batch files until the device
+    # downloads, so they have no AcaEe-private delivery in the run.
+    # Each delivered private response is matched to the AcaRa answer that carried it (a
+    # 40-hex-digit chunk of its bytes inside the answer's bytes).
+    W = 40
+    chunk = {}
+    for p in D.pre + D.inrun:
+        if p['type'] == 'AcaEeCertResponsePrivateSpdu' and p.get('hex') and len(p['hex']) >= 200:
+            chunk[p['hex'][100:100 + W]] = p
+    flows = {}
+    for q in R.msgs:
+        for p in q.get('pdus') or []:
+            flows[id(p)] = q['flow']
+    matched, held, lost = set(), 0, 0
+    for p in D.pre + D.inrun:
+        if p['type'] != 'AcaRaCertResponseSpdu' or not p.get('hex'):
+            continue
+        hx = p['hex']
+        hit = next((chunk[hx[k:k + W]] for k in range(0, len(hx) - W + 1, 2) if hx[k:k + W] in chunk), None)
+        if hit is not None:
+            matched.add(id(hit))
+        elif flows.get(id(p)) == 'pregeneration':
+            held += 1
+        else:
+            lost += 1
+    orphans = e - len(matched)
+    ok = a == b and orphans == 0 and lost == 0 and not off
+    return ok, (f'RaAca {a}, AcaRa {b}, AcaEePrivate {e} = delivered {len(matched)}; undelivered AcaRa: '
+                f'{held} held at the RA for devices that have not asked, {lost} lost; private with no AcaRa {orphans}; '
+                f'vehicles with != 40 pre-run {len(off)}')
 
 
 def r_encrypted_to_device(R, D):

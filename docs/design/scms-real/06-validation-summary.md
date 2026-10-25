@@ -1252,10 +1252,10 @@ The totals count each row as its own checklist records it, with the changes in �
 - **What the RA and PCA keep for each device** (§6 item 4): request records, cocoons,
   provisioning jobs, PCA issued records and batch files after a confirmed download.
 - **R-PQUNSEC** (§6 item 10): the one-line fix, now that `pq_relay` has its own reporter.
-- **PV.aca-cannot-group** (§6 item 24, audit-prov §4.1): each RA→ACA message carries one
-  device's week of requests, so the ACA can group a device's certificates. The fix (routing
-  by certificate handle, mixed-device batches, a population-wide weekly pre-generation job)
-  moves every SCMS golden and the cost.
+- ~~**PV.aca-cannot-group**~~: fixed 2026-10-25 (`0d62f322`, audit-prov §4.1): one RA→ACA
+  request per message in a seeded order across devices, answers routed by request hash, the
+  weekly job for every account; the ACA-side grouping attack is at the population baseline
+  (PV.aca-grouping-attack). Left: provider-b's second ACA (GOV.D1.acas).
 - Renaming `p2pcd_requests` (it counts digest misses, 22–46/s, not P2PCD triggers).
 - Whether the ECA and ACA should hold one certificate (PDU-layer and governance are two
   today, `GOV.L.onecert`).
