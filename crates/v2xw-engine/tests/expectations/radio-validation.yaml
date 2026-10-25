@@ -103,6 +103,36 @@ runs:
     common: false
     set: {time.duration_s: 4.0, metrics: [all]}
     note: NR-V2X mode 2 with the profile's T2 (33 slots = 16.5 ms)
+  SLT2J_1:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 1, messages.generator: {id: generator/timing-phase-jitter, params: {max_jitter_ms: 0}}}
+    note: as SLT2_1 with no per-message hand-off jitter (each node keeps its own uniform phase)
+  SLT2J_5:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 5, messages.generator: {id: generator/timing-phase-jitter, params: {max_jitter_ms: 0}}}
+    note: as SLT2_5 with no per-message hand-off jitter (each node keeps its own uniform phase)
+  SLT2J_10:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 10, messages.generator: {id: generator/timing-phase-jitter, params: {max_jitter_ms: 0}}}
+    note: as SLT2_10 with no per-message hand-off jitter (each node keeps its own uniform phase)
+  SLT2J_U:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], messages.generator: {id: generator/timing-phase-jitter, params: {max_jitter_ms: 0}}}
+    note: as SLT2_U with no per-message hand-off jitter (each node keeps its own uniform phase)
+  SLT2J_50:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 50, messages.generator: {id: generator/timing-phase-jitter, params: {max_jitter_ms: 0}}}
+    note: as SLT2_50 with no per-message hand-off jitter (each node keeps its own uniform phase)
+  SLT2J_100:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 100, messages.generator: {id: generator/timing-phase-jitter, params: {max_jitter_ms: 0}}}
+    note: as SLT2_100 with no per-message hand-off jitter (each node keeps its own uniform phase)
 rows:
 # ---- Path loss: the PRR 0.5 edge sits where the law spends the budget (no fading) ----
 - id: RV-PL-LD
@@ -451,5 +481,58 @@ rows:
   expect: a vehicle's cellular downlink carries its top-up (93 + 4 + 3,017 = 3,114 octets inside the exchange) and five CRL polls, 10 s apart, of one size (92 octets)
   source: CAMP SCMS top-up exchange; crl_fetch_interval_s 10 (docs/validation/foundations.md)
   fault: the CRL poll interval 10 s -> 9 s in the engine
+  measured: pending
+  verdict: pending
+# ---- The same, generated strictly periodically (written before the SLT2J runs) ----
+# The SLT2 runs carry the default hand-off jitter, U[0, 10 ms] drawn afresh for every
+# message (ns-3's WAVE value). A reservation made for one message then sits at a fixed
+# slot while the next message's hand-off moves by up to 10 ms: when it lands after the
+# reserved slot, the grant is still inside the 100 ms budget (TS 36.321 5.14.1.1 sees no
+# trigger), so the message waits almost a whole period. The smaller T2, the likelier the
+# miss: P(j1 > j0 + U[T1, T2]) with j0, j1 ~ U[0, 10] ms is 0.40 at T2 = 1 ms and 0 past
+# T2 = 10 ms. Theory for strictly periodic traffic (TR 37.885 A.1.1, 100 ms period) is the
+# rows below.
+- id: RV-SL-T2J-ACCESS
+  kind: chain
+  runs: [SLT2J_1, SLT2J_5, SLT2J_10, SLT2J_U, SLT2J_50, SLT2J_100]
+  metric: access_ms
+  expect: up
+  min_change: 0.05
+  expect_text: with strictly periodic generation the reserved offset persists from one message to the next, so the mean access wait is (T1 + T2) / 2 and rises with T2
+  source: 3GPP TS 38.214 8.1.4; TR 37.885 A.1.1 (periodic traffic, 100 ms)
+  fault: order reversed
+  measured: pending
+  verdict: pending
+- id: RV-SL-T2J-1
+  kind: abs
+  run: SLT2J_1
+  metric: access_ms
+  band: [0.5, 3.0]
+  expect: T2 = 1 ms is the 2-slot T1 (TS 38.214 T2 >= T1), so the wait is about 1 ms plus the slot alignment (0 to 0.5 ms)
+  source: 3GPP TS 38.214 8.1.4
+  fault: value x2
+  fault_scale: 3.0
+  measured: pending
+  verdict: pending
+- id: RV-SL-T2J-50
+  kind: abs
+  run: SLT2J_50
+  metric: access_ms
+  band: [18.0, 33.0]
+  expect: (1 + 50) / 2 = 25.5 ms, within 30 %
+  source: 3GPP TS 38.214 8.1.4
+  fault: value x2
+  fault_scale: 2.0
+  measured: pending
+  verdict: pending
+- id: RV-SL-T2J-100
+  kind: abs
+  run: SLT2J_100
+  metric: access_ms
+  band: [38.0, 63.0]
+  expect: (1 + 100) / 2 = 50.5 ms, within 25 %
+  source: 3GPP TS 38.214 8.1.4
+  fault: value x2
+  fault_scale: 2.0
   measured: pending
   verdict: pending
