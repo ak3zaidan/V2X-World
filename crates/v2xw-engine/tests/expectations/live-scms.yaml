@@ -1054,8 +1054,8 @@ rows:
   expect: up
   source: 'a home-provider chain file lacks the other provider''s ICA and ACA: receivers learn them by
     P2PCD (IEEE 1609.2 clause 8)'
-  measured: pending
-  verdict: pending
+  measured: 0 -> 77
+  verdict: pass
 - id: LS.CHP.unknown
   base: L
   variant: CHP
@@ -1063,8 +1063,8 @@ rows:
   measure: x.unknown_signer_loss
   expect: up
   source: until the P2PCD answer arrives, the other provider's pseudonyms cannot be verified
-  measured: pending
-  verdict: pending
+  measured: 0.00747263 -> 0.0459558
+  verdict: pass
 - id: LS.VOD.verify
   base: L
   variant: VOD
@@ -1073,8 +1073,8 @@ rows:
   expect: down
   min_change: 0.5
   source: on-demand verifies only messages an application is about to act on
-  measured: pending
-  verdict: pending
+  measured: 1925.95 -> 59.2222
+  verdict: pass
 - id: LS.VOD.reports
   base: L
   variant: VOD
@@ -1083,8 +1083,8 @@ rows:
   expect: down
   min_change: 0.5
   source: 'detection judges only verified messages (SM-MBR 2.3.1.2.1): 897 -> 79 in earlier testing'
-  measured: pending
-  verdict: pending
+  measured: 582 -> 5
+  verdict: pass
 - id: LS.VOD.revocations
   base: L
   variant: VOD
@@ -1095,8 +1095,8 @@ rows:
   - 0.0
   - 1.0
   source: fewer reports, at most as many revocations
-  measured: pending
-  verdict: pending
+  measured: 2 -> 0 (ratio 0)
+  verdict: pass
 - id: LS.VOD.cost
   base: L
   variant: VOD
@@ -1105,8 +1105,8 @@ rows:
   expect: down
   min_change: 0.1
   source: one verification task fewer for every unchecked reception
-  measured: pending
-  verdict: pending
+  measured: 883333 -> 542603
+  verdict: pass
 - id: LS.VPR.verify
   base: L
   variant: VPR
@@ -1150,12 +1150,11 @@ rows:
   source: a P-384 verification costs more than a P-256 one on any accelerator
   measured: 0.422132 -> 0.422136
   verdict: open
-  note: 'engine modelling choice, not yet fixed: v2xw-node profile::signature_ops keeps the P-256
-    sign and verify ops for every classical curve ("one P-384 figure is not a table"), so P-384
-    costs exactly P-256 (sign 9.012 ms, verify 0.422 ms, the rate still keyed ecdsa-p256-verify)
-    although obu-generic-automotive-soc-no-hsm publishes P-384 (8,104 us sign, 5,721 us verify,
-    R5 B.5). Sizes are right (+37 B). Proposed fix: use the scheme''s own op where the profile
-    prices it, P-256 otherwise, flagged on the card'
+  note: 'engine modelling choice, not yet fixed: v2xw-node profile::signature_ops keeps the P-256 sign
+    and verify ops for every classical curve ("one P-384 figure is not a table"), so P-384 costs exactly
+    P-256 (sign 9.012 ms, verify 0.422 ms, the rate still keyed ecdsa-p256-verify) although obu-generic-automotive-soc-no-hsm
+    publishes P-384 (8,104 us sign, 5,721 us verify, R5 B.5). Sizes are right (+37 B). Proposed fix: use
+    the scheme''s own op where the profile prices it, P-256 otherwise, flagged on the card'
 - id: LS.SBP.size
   base: L
   variant: SBP
