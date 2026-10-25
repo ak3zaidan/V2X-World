@@ -475,15 +475,25 @@ impl ScmsState {
         }
         let mut cocoons = BTreeMap::new();
         let mut cocoon_enc = BTreeMap::new();
-        for j in 0..jmax {
-            let (b, q) = butterfly::ra_cocoon_keys(
-                &req.signing_public,
-                &req.encryption_public,
-                &req.ck,
-                &req.ek,
-                i,
-                j,
-            );
+        // Each certificate's two cocoon keys are a pure function of (i, j): expanded side by
+        // side, kept by (i, j).
+        let expanded: Vec<_> = {
+            use rayon::prelude::*;
+            (0..jmax)
+                .into_par_iter()
+                .map(|j| {
+                    butterfly::ra_cocoon_keys(
+                        &req.signing_public,
+                        &req.encryption_public,
+                        &req.ck,
+                        &req.ek,
+                        i,
+                        j,
+                    )
+                })
+                .collect()
+        };
+        for (j, (b, q)) in (0..jmax).zip(expanded) {
             cocoons.insert((i, j), b);
             cocoon_enc.insert((i, j), q);
         }
@@ -630,7 +640,10 @@ impl ScmsState {
             job.sent = true;
             out.stage_at(StageId::Shuffled, to, None, job.flow, job.run);
             for i in job.start_i..job.start_i + job.periods {
-                let mut items = Vec::new();
+                // The requests' inputs in order (each dummy linkage value drawn where the
+                // sequential loop drew it), then every RA signature at once (a pure
+                // function of its input), then the items in order: the same bytes.
+                let mut staged = Vec::new();
                 for j in 0..job.jmax {
                     let (Some(b), Some(p1), Some(p2), Some(l1), Some(l2)) = (
                         job.cocoons.get(&(i, j)).copied(),
@@ -643,16 +656,16 @@ impl ScmsState {
                     };
                     // The real `RaAcaCertRequestSpdu`: B_ij, J_ij, both encrypted PLVs and a
                     // dummy linkage value, signed by the RA (03 §3.3, §9).
-                    let spdu = match (
+                    let input = match (
                         pki.as_deref(),
                         job.cocoon_enc.get(&(i, j)),
                         job.enc_plv[0].get(&(i, j)),
                         job.enc_plv[1].get(&(i, j)),
                     ) {
-                        (Some(pki), Some(jk), Some(e1), Some(e2)) => {
+                        (Some(_), Some(jk), Some(e1), Some(e2)) => {
                             let mut dummy = [0u8; 9];
                             dummy.copy_from_slice(&self.pdu_rng.next32()[..9]);
-                            let x = pdu_prov::RaAcaInput {
+                            Some(pdu_prov::RaAcaInput {
                                 generation_time: now32,
                                 i: u16::try_from(i).unwrap_or(u16::MAX),
                                 cocoon_signing: b,
@@ -663,11 +676,24 @@ impl ScmsState {
                                 // What the device's request asked for (its own
                                 // profile: a PSM device's differs from a vehicle's).
                                 psids: self.pseudonym_psids_of(job.device).as_slice().to_vec(),
-                            };
-                            pdu_prov::ra_aca_cert_request_spdu(pki, &x).ok()
+                            })
                         }
                         _ => None,
                     };
+                    staged.push((j, b, p1, p2, l1, l2, input));
+                }
+                let spdus: Vec<Option<Pdu>> = {
+                    use rayon::prelude::*;
+                    staged
+                        .par_iter()
+                        .map(|st| match (pki.as_deref(), &st.6) {
+                            (Some(pki), Some(x)) => pdu_prov::ra_aca_cert_request_spdu(pki, x).ok(),
+                            _ => None,
+                        })
+                        .collect()
+                };
+                let mut items = Vec::new();
+                for ((j, b, p1, p2, l1, l2, _), spdu) in staged.into_iter().zip(spdus) {
                     if let Some(p) = &spdu {
                         job.aca_requests.insert(p.hashed_id8(), (i, j));
                     }
@@ -1550,16 +1576,16 @@ impl ScmsState {
                     let keys = self.la_aca.unwrap_or(pdu_prov::LaAcaKeys::new(0, 0));
                     let now32 = self.time32(at);
                     let mut credentials = Vec::new();
-                    for item in items.into_iter() {
+                    // Each certificate's issuance is a pure function of its request and
+                    // the generator's block, so they run side by side and are taken in
+                    // order (`pdu::par_map_drbg`: the bytes of the sequential loop).
+                    let issued = pdu::par_map_drbg(&mut self.pdu_rng, items.len(), |k, g| {
+                        let spdu = items[k].spdu.as_ref().expect("checked");
+                        pdu_prov::aca_issue(&pki, &keys, spdu.bytes(), now32, g)
+                    });
+                    for (item, issued) in items.into_iter().zip(issued) {
                         let (lci1, lci2) = (item.lci1, item.lci2);
-                        let spdu = item.spdu.expect("checked");
-                        match pdu_prov::aca_issue(
-                            &pki,
-                            &keys,
-                            spdu.bytes(),
-                            now32,
-                            &mut self.pdu_rng,
-                        ) {
+                        match issued {
                             Ok(iss) => {
                                 self.pca.issued.insert(
                                     (u32::from(iss.i), *iss.lv.as_bytes()),
@@ -1711,11 +1737,24 @@ impl ScmsState {
                 let pki = self.pki.clone();
                 let job = self.ra.jobs.iter().position(|j| j.run == run);
                 let mut opened = 0u32;
-                for c in credentials.into_iter() {
-                    match (&c.response, pki.as_deref()) {
-                        (Some(resp), Some(pki)) => {
+                // Every signature check at once (pure), each answer then filed in order.
+                let checked: Vec<Option<_>> = {
+                    use rayon::prelude::*;
+                    credentials
+                        .par_iter()
+                        .map(|c| match (&c.response, pki.as_deref()) {
+                            (Some(resp), Some(pki)) => {
+                                Some(pdu_prov::ra_open_aca_response(pki, resp.bytes()))
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                };
+                for (c, checked) in credentials.into_iter().zip(checked) {
+                    match checked {
+                        Some(checked) => {
                             opened += 1;
-                            match pdu_prov::ra_open_aca_response(pki, resp.bytes()) {
+                            match checked {
                                 Ok((rh, private)) => {
                                     let ij = job.and_then(|k| {
                                         self.ra.jobs[k].aca_requests.get(&rh).copied()
@@ -1959,8 +1998,18 @@ impl ScmsState {
                     Self::verify(out, n_files);
                     Self::decrypt(out, n_files);
                     if let (Some(pki), Some(cat)) = (pki, cat) {
-                        for (j, p) in files.iter() {
-                            match pdu_prov::ee_open_aca_response(&pki, p.bytes(), &cat, i, *j) {
+                        // Each file opens on its own (pure); refusals are recorded in order.
+                        let opened: Vec<_> = {
+                            use rayon::prelude::*;
+                            files
+                                .par_iter()
+                                .map(|(j, p)| {
+                                    pdu_prov::ee_open_aca_response(&pki, p.bytes(), &cat, i, *j)
+                                })
+                                .collect()
+                        };
+                        for ((j, _), opened) in files.iter().zip(opened) {
+                            match opened {
                                 Ok(o) => credentials.push(IssuedCredential {
                                     i,
                                     j: *j,

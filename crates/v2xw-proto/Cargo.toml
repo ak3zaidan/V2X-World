@@ -30,6 +30,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # Crate error type.
 thiserror = { workspace = true }
+# The weekly pre-generation's per-certificate cryptography, spread over the cores and
+# merged in certificate order (`scms::pdu::par_map_drbg`): byte-identical at any thread count.
+rayon = { workspace = true }
 
 [dev-dependencies]
 # Records are serialised through `v2xw_core::ctx::ErasedRecord`, which this crate already
