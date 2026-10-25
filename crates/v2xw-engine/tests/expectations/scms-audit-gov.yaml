@@ -24,6 +24,9 @@ runs:
   B2:
     scenario: scenarios/scms-conformance.yaml
     note: B again (determinism)
+  SRV:
+    scenario: scenarios/scms-conformance.yaml
+    note: the release v2xw-server of 8becf72a serving the first 140 s live (no fast-forward), --speed 0, --record (the Studio's PKI view source)
 rows:
 # --- electors and the CTL ---------------------------------------------------------------
 - id: GOV.G3.electors
@@ -244,6 +247,14 @@ rows:
   check: every pseudonym certificate in node.credentials starts at Time32 of the UTC boundary of its i (epoch + i weeks) and lasts hours(169)
   source: '[SMP] Table 2 (1 week, 1 h overlap); CAMP122 §5.1.5.4, Table 5 (09:00:00 UTC with leap seconds); gov K-2, K-5'
   expect: 0 violations
+  measured: pending
+  verdict: pending
+# --- server API and the Studio's PKI view ---------------------------------------------
+- id: GOV.SRV.trust
+  area: metrics
+  check: v2xw-server's inspect.trust (what the Studio's PKI view draws) at t = 0, 30, 60, 121 and 139 s against the pki.state record of the same instant in the server's own recording; the CTL, every component's cert and counters, the device counts
+  source: crates/v2xw-server/src/pki.rs (inspect.trust answers the newest pki.state at or before t)
+  expect: equal at every instant
   measured: pending
   verdict: pending
 # --- determinism ------------------------------------------------------------------------
