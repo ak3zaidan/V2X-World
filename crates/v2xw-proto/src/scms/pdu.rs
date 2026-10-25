@@ -228,6 +228,81 @@ impl Drbg {
         k.copy_from_slice(&b[..12]);
         k
     }
+
+    /// How many 32-byte blocks this generator has produced: its whole state beside the
+    /// seed and label, since block `k` is a hash of `k`.
+    #[must_use]
+    pub fn position(&self) -> u64 {
+        self.counter
+    }
+
+    /// The same generator moved to block `counter`.
+    #[must_use]
+    fn at(&self, counter: u64) -> Drbg {
+        Drbg {
+            seed: self.seed,
+            label: self.label.clone(),
+            counter,
+        }
+    }
+}
+
+/// `f` over `0..n` exactly as `(0..n).map(|k| f(k, g))` computes it, the generator left
+/// where that loop leaves it, with the items spread over rayon's pool.
+///
+/// Why this is byte-identical: [`Drbg`] is a counter generator, so an item's randomness
+/// is fixed by the block it starts at. Item 0 runs first and measures how many blocks one
+/// item takes; every later item runs in parallel from the block it would start at if each
+/// took as many. The results are then accepted in order while each item's guessed start
+/// is the block the one before it really ended at; at the first that is not (an item
+/// whose failure path drew fewer blocks, or a nonzero-scalar retry), that item and every
+/// one after it are recomputed in order from the true block. `f` must be a pure function
+/// of its index and the generator (no shared state written), which is what lets the
+/// caller apply each item's side effects afterwards, in order. The weekly pre-generation
+/// burst (honest-density.md §6) is these loops: one ECQV issuance, ECIES encryption and two
+/// signatures per certificate at the ACA, one signature check per certificate at the RA,
+/// one decryption and reconstruction per certificate at the device.
+pub fn par_map_drbg<T, F>(g: &mut Drbg, n: usize, f: F) -> Vec<T>
+where
+    T: Send,
+    F: Fn(usize, &mut Drbg) -> T + Sync,
+{
+    use rayon::prelude::*;
+    let mut out = Vec::with_capacity(n);
+    if n == 0 {
+        return out;
+    }
+    let start = g.counter;
+    out.push(f(0, g));
+    if n == 1 {
+        return out;
+    }
+    let stride = g.counter - start;
+    let base = g.counter;
+    let template = g.at(base);
+    let guessed: Vec<(T, u64, u64)> = (1..n)
+        .into_par_iter()
+        .map(|k| {
+            let from = base + (k as u64 - 1) * stride;
+            let mut h = template.at(from);
+            let r = f(k, &mut h);
+            (r, from, h.counter)
+        })
+        .collect();
+    let mut next = base;
+    for (k, (r, from, to)) in (1..n).zip(guessed) {
+        if from != next {
+            g.counter = next;
+            for kk in k..n {
+                out.push(f(kk, g));
+            }
+            return out;
+        }
+        out.push(r);
+        next = to;
+    }
+    g.counter = next;
+    out
 }
 
 // ---------------------------------------------------------------------------------------

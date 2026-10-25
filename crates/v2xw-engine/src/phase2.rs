@@ -1478,6 +1478,12 @@ const RELAY_RTO_INITIAL: Duration = Duration::from_secs(1);
 /// 60 s; 64 s here (six doublings).
 const RELAY_RTO_MAX_DOUBLINGS: u32 = 6;
 
+/// Serde's skip test for a counter that is new and zero on every run it does not concern.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero_count(n: &u64) -> bool {
+    *n == 0
+}
+
 /// Counters the run report carries for this path.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Phase2Report {
@@ -1677,6 +1683,13 @@ pub struct Phase2Report {
     pub topups_refused: u64,
     /// Of those, refused because the enrolment was blocklisted (passive revocation).
     pub topups_refused_blocklisted: u64,
+    /// Top-ups still in flight when their vehicle drove out of the simulated area. The
+    /// device's flow carries on in the backend (the RA, PCA and LOP still do the work), but
+    /// the vehicle is gone, so the install is never seen here: `topups_started` is
+    /// `topups_completed + topups_refused + topups_left_area + topups_in_flight`. FB3's
+    /// 27 of 1,800 top-ups that "did not complete" were these (full-bench.md §4).
+    #[serde(skip_serializing_if = "is_zero_count")]
+    pub topups_left_area: u64,
     /// Successor enrolments started, completed and refused.
     pub reenrolments_started: u64,
     /// See [`Phase2Report::reenrolments_started`].
@@ -3767,6 +3780,9 @@ impl Phase2 {
         self.access.retire(node);
         if let Some(n) = self.nodes.remove(&node) {
             self.retired_at.push(now);
+            if n.topup.is_some() {
+                self.report.topups_left_area += 1;
+            }
             // Its unsent reports leave with it; they are counted as unsent here because
             // the vehicle took them out of the run.
             self.report.reports_lost += n.outbox.0.len() as u64;
@@ -5840,6 +5856,9 @@ impl Phase2 {
                     e.set("topups_started", r.topups_started);
                     e.set("topups_completed", r.topups_completed);
                     e.set("topups_refused", r.topups_refused);
+                    if r.topups_left_area > 0 {
+                        e.set("topups_left_area", r.topups_left_area);
+                    }
                     e.set(
                         "topups_in_flight",
                         self.nodes.values().filter(|n| n.topup.is_some()).count() as u64,

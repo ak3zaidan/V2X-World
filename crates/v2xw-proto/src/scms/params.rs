@@ -653,6 +653,19 @@ impl ScmsParams {
         u32::try_from((since.max(0)) / len).unwrap_or(u32::MAX)
     }
 
+    /// The i-period grid as `(origin_ns, len_ns)`: period `p` begins `origin_ns + p·len_ns`
+    /// simulated nanoseconds after the run's start (`origin_ns` negative on the real
+    /// calendar, whose epoch lies years before the run). What a device's CRL gate reads its
+    /// clock against; [`Self::period_at`] is `max(t - origin, 0) / len` of it.
+    #[must_use]
+    pub fn period_grid(&self) -> (i128, u64) {
+        let origin = match self.calendar_epoch_unix_s {
+            Some(e) => self.epoch_offset_ns(e),
+            None => i128::from(self.epoch),
+        };
+        (origin, self.i_period.as_nanos().max(1))
+    }
+
     /// The `Time32` at which period `p` of a `len` grid begins: on the real calendar the
     /// exact TAI instant of the UTC boundary (leap seconds included, so it is the real
     /// bits even for a period that began before the run); else `time32` of its start.

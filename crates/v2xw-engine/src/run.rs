@@ -1956,6 +1956,15 @@ impl Engine {
     /// Keyed by the node id alone, so the phase does not depend on when the node was
     /// created or how many were created before it.
     fn note_node_created(&mut self, id: NodeId) {
+        // The node's CRL gate reads its period off its own clock on the i-period calendar,
+        // as a device does, so it is right from its first reception even when the
+        // credential it holds is from an expired pool (06-validation-summary §6 item 22).
+        if let Some(p) = self.phase2.as_ref() {
+            let (origin, len) = p.params().scms.period_grid();
+            if let Some(rt) = self.nodes.get_mut(&id) {
+                rt.stores_mut().crl.set_period_grid(origin, len);
+            }
+        }
         let phase = self.gen_timing.phase(&self.rng, id);
         self.node_phase.insert(id, phase);
         if phase >= self.scenario.time.mobility_step() {

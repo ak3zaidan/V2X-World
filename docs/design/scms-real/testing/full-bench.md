@@ -72,6 +72,7 @@ the 30 s census are in the scratchpad (`fullbench/out-fb3`, not committed).
 Nothing in the engine. R-FFSLOW did not reproduce on current code (§2), so the build budget
 went to one optimised build and the full-scale run. One new open item, R-FFWIN (§4).
 Carried open: the rollover window's cost (79 wall-s per simulated s, not profiled), the
-O(fleet) stop cost, 27 incomplete top-ups (not traced), and 268 uploaded reports that never
+O(fleet) stop cost, 27 incomplete top-ups (traced 2026-10-24: vehicles that left the map
+with a top-up in flight, now `topups_left_area`; 06 §6 item 5), and 268 uploaded reports that never
 reached an MA (1,715 uploaded, 1,447 received; not traced, possibly TESTS' open item that
 `reports_uploaded_relay` counts on-air reports).
