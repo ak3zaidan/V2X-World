@@ -116,6 +116,15 @@ runs:
   S0bc3:
     scenario: scenarios/live-rsu/scms-bc3.yaml
     note: fibre with the carousel at 3 s (the interaction base)
+  FSlat2000bc3:
+    scenario: scenarios/live-rsu/scms-lat2000-bc3.yaml
+    note: Slat2000bc3 on the fixed binary (this branch, opt-level 2 debug build)
+  FSout:
+    scenario: scenarios/live-rsu/scms-out.yaml
+    note: Sout on the fixed binary (this branch, opt-level 2 debug build)
+  FS0:
+    scenario: scenarios/live-rsu/scms-base.yaml
+    note: S0 on the fixed binary (this branch, opt-level 2 debug build)
 rows:
 - id: LR.G.spat-rate-min
   base: G0
@@ -841,4 +850,34 @@ rows:
   expect: down
   min_change: 0.25
   source: 'written before the run: -23 dB, more than Gp10 lost'
+  measured: pending
+- id: LR.S.fix.lat2000bc3.crl-lag
+  base: S0bc3
+  variant: FSlat2000bc3
+  area: crl
+  measure: s.crl_first_frame_lag_s_min
+  expect: ge
+  value: 2.0
+  fault: use:Slat2000bc3
+  source: LR.S.lat2000bc3.crl-lag on the fixed binary
+  measured: pending
+- id: LR.S.fix.out.crl-frames
+  base: S0
+  variant: FSout
+  area: outage
+  measure: s.crl_frames_from_outage_unit
+  expect: eq
+  value: 0
+  fault: use:Sout
+  source: LR.S.out.crl-frames on the fixed binary
+  measured: pending
+- id: LR.S.fix.neutral
+  base: S0
+  variant: FS0
+  area: determinism
+  measure: digest.record
+  expect: identical
+  fault: record-flip
+  source: 'the fix moves nothing on a backhaul faster than one mobility step with every unit on: the base
+    records are byte-identical'
   measured: pending
