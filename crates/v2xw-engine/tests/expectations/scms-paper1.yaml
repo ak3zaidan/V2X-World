@@ -167,6 +167,17 @@ runs:
   E4U2:
     scenario: scenarios/real-world/paper1/p1-e4-u.yaml
     note: E4U again (determinism)
+  E4V1:
+    scenario: scenarios/real-world/paper1/p1-e4-u.yaml
+    base: E4U
+    note: E4U with the hop-speed fix (a grid-hop BSM carries the speed of its own instant), the same v3 fit (tools/realdata 1.2.0)
+  E4V:
+    scenario: scenarios/real-world/paper1/p1-e4-u.yaml
+    base: E4V1
+    note: E4V1 on the ID-weighted v3 refit (tools/realdata 1.3.0), the final P1-E4
+  E4V2:
+    scenario: scenarios/real-world/paper1/p1-e4-u.yaml
+    note: E4V again (determinism)
 rows:
 - id: P1.TS.rp-share0
   base: B
@@ -789,8 +800,10 @@ rows:
   expect: ge
   value: 1
   source: 'the rules are not ''revoke nothing'': some sound rule revokes an injected attacker'
-  measured: '5'
+  measured: '4'
   verdict: pass
+  note: 'Re-run on the v2 engine and fit (486c8cba, bsm_clock for the free class): 4 of the injected attackers
+    revoked by the best sound rule (5 on the v1 engine); still ge 1.'
 - id: P1.MA.l1r-sound-zero
   base: MAL1R
   variant: MAL1R
@@ -1093,7 +1106,8 @@ rows:
   source: 'TM-1 re-run on the v2 clock: generationTime is the tick plus the 28.3 ms header jitter, so header
     dt adds v·|dj| to every secMark residual and trips more, as real data does (rx/header base above secMark:
     Tampa free 45 vs 20, Wyoming 214 vs 0 per ID-minute, p1-realdata-baseline.md T3)'
-  measured: pending
+  measured: '5318 -> 5935'
+  verdict: pass
 - id: P1.TM1.sm-repeat
   base: E4SF
   variant: E4SF
@@ -1103,7 +1117,8 @@ rows:
   value: 0.01
   source: 'CV-pilot free devices advance secMark every BSM: consecutive-msgCnt pairs with secMark dt under
     10 ms are 0 in Tampa and 0.07 % in an Orem day (scratch analysis of the raw rows); the v1 engine gave 17 %'
-  measured: pending
+  measured: '0'
+  verdict: pass
 - id: P1.TM1.sm-excess
   base: E4SF
   variant: E4SF
@@ -1115,7 +1130,8 @@ rows:
   - 12
   source: 'secMark dt minus 100 ms on single-interval pairs of the fit sets'' free class: p50 +6 ms (T8);
     the engine draws drift_ms and period_dev_ms from that fit'
-  measured: pending
+  measured: '7'
+  verdict: pass
 - id: P1.TM1.free-rate
   base: E4SF
   variant: E4SF
@@ -1125,7 +1141,8 @@ rows:
   value: 18.2
   source: 'the frozen free bound (lowest free lower 95 % bound of the fit sets, Tampa 18.2 per ID-minute);
     the free fit is Orem-dominated (188.8), so a rate near Orem''s is expected'
-  measured: pending
+  measured: '253.568'
+  verdict: pass
 - id: P1.TM1.frames
   base: OFFV2
   variant: BV2
@@ -1137,7 +1154,8 @@ rows:
   - 0.97
   source: 'a free OBU''s BSM period is 100 ms + drift + deviation (fit mean about 11.7 ms), so it sends
     about 10 % fewer BSMs; with 75 % free devices the frame count falls to about 0.92 of timing off'
-  measured: pending
+  measured: '41469 -> 38474 (ratio 0.9278)'
+  verdict: pass
 - id: P1.E4S.ks
   base: E4S
   variant: E4S
@@ -1160,7 +1178,8 @@ rows:
   expect: ge
   value: 0.092
   source: 'P1-E4 fault on the speed-matched highway: the white-noise GNSS must exceed the tolerance'
-  measured: pending
+  measured: '0.991896'
+  verdict: pass
 - id: P1.E4S.locked-rate
   base: E4S
   variant: E4S
@@ -1193,7 +1212,8 @@ rows:
   min_change: 0.3
   source: 'E4-BODY: the v2 fit adds the locked instant''s 1 ms secMark truncation (along/v sd about 0.41 ms,
     1.4 cm at 34 m/s) and the output noise (1.0 cm along, 1.8 cm cross) to the v1 body (p90 2.3 cm)'
-  measured: pending
+  measured: '0.0214333 -> 0.040568'
+  verdict: pass
 - id: P1.E4S.rerun
   base: E4S
   variant: E4S2
@@ -1201,7 +1221,8 @@ rows:
   measure: digest.record
   expect: identical
   source: 'same seed, same build: byte-identical record stream with the v2 model on'
-  measured: pending
+  measured: 'c4bcda06f2a3984c -> c4bcda06f2a3984c'
+  verdict: pass
 - id: P1.E4S.frames-locked
   base: E4SV1
   variant: E4S
@@ -1210,7 +1231,8 @@ rows:
   expect: same
   tol: 0.02
   source: the locked class has no bsm_clock, so the v2 fit changes what a BSM says, not when it is sent
-  measured: pending
+  measured: '13469 -> 13469'
+  verdict: pass
 - id: P1.E4S.events
   base: E4SV1
   variant: E4S
@@ -1221,7 +1243,8 @@ rows:
   - 0.95
   - 1.05
   source: the same frames and receptions; the model adds two or four draws per BSM, no events
-  measured: pending
+  measured: '235295 -> 235514 (ratio 1.001)'
+  verdict: pass
 - id: P1.E4S.memory
   base: E4SV1
   variant: E4S
@@ -1232,7 +1255,8 @@ rows:
   - 0.8
   - 1.25
   source: per-device state grows by two numbers (drift, next tick)
-  measured: pending
+  measured: '130.237 -> 129.188 (ratio 0.9919)'
+  verdict: pass
 - id: P1.E4S.revoked-honest
   base: E4S
   variant: E4S
@@ -1276,7 +1300,9 @@ rows:
     simulated at 30 m/s, no Wyoming): p50 / p90 / p99 about 1.9 / 5.7 / 19.5 cm against Wyoming''s
     1.6 / 6.0 / 15.7, so the KS should fall well below 0.169; passing depends on Wyoming''s devices being
     like the fit sets'''
-  measured: pending
+  measured: '0.165451'
+  verdict: open
+  note: 'Measured above the tolerance. KS located at 1.28 cm, in the body; superseded by E4U, E4V1 and E4V (P1.E4V.ks, the final P1-E4).'
 - id: P1.E4T.ks-down
   base: E4TV2
   variant: E4T
@@ -1287,7 +1313,9 @@ rows:
   source: 'the v2 body is too narrow above 5 cm (p90 4.1 cm, p99 6.1 cm against Wyoming 6.0 / 15.7) and too
     wide at its centre (p50 2.1 cm against 1.6, the 0.30 deg heading noise at 30 m/s); the v3 fit moves both
     toward Wyoming, so the KS distance falls by more than 30 %'
-  measured: pending
+  measured: '0.168666 -> 0.165451'
+  verdict: open
+  note: 'The v3 fit moved the KS 2 %, not 30 %: the tail now matches (p90 6.3 / p99 20.5 cm against Wyoming 6.0 / 15.7) but the body widened (p50 2.26 cm against 2.1 on v2). The extra width was the GNSS layer''s white velocity noise (E4U) and the pair-weighted fit (E4V).'
 - id: P1.E4T.body-p50
   base: E4T
   variant: E4T
@@ -1299,7 +1327,8 @@ rows:
   - 0.023
   source: 'the v3 model simulated at 30 m/s: p50 1.85 cm (stamp jitter 0.28 ms x v along, quantisation 0.43 cm,
     the mixture''s 58 % core); the fit sets'' locked residual p50 is 1.7 cm at 13.5 m/s'
-  measured: pending
+  measured: '0.0226128'
+  verdict: pass
 - id: P1.E4T.tail-p90
   base: E4T
   variant: E4T
@@ -1311,7 +1340,8 @@ rows:
   - 0.075
   source: 'the v3 model simulated at 30 m/s: p90 5.7 cm (the mixture''s 25.7 % component at 2.8 / 2.3 cm and
     8.5 % at 12.6 / 6.0 cm); the v2 fit gave 4.1 cm'
-  measured: pending
+  measured: '0.063091'
+  verdict: pass
 - id: P1.E4T.tail-p99
   base: E4T
   variant: E4T
@@ -1323,7 +1353,8 @@ rows:
   - 0.3
   source: 'the v3 model simulated at 30 m/s: p99 19.5 cm; the fit sets'' locked p99 is 26.9 cm (all Δt, with
     RSU gaps the engine''s node.tx has not), the v2 fit gave 6.1 cm'
-  measured: pending
+  measured: '0.205279'
+  verdict: pass
 - id: P1.E4T.hop-share
   base: E4T
   variant: E4T
@@ -1335,7 +1366,8 @@ rows:
   - 0.22
   source: 'the fit sets'' locked consecutive-msgCnt BSMs: (836 + 831) / 9,255 = 0.180 of secMark steps are
     50 or 150 ms; the engine draws leave 0.113 and return 0.445 per BSM, 2lr/(l+r) = 0.180'
-  measured: pending
+  measured: '0.185351'
+  verdict: pass
 - id: P1.E4T.locked-rate
   base: E4T
   variant: E4T
@@ -1345,7 +1377,8 @@ rows:
   value: 0.568
   source: 'the frozen locked bound 0.568 per ID-minute (Wyoming 0.0): the widest mixture component (12.6 cm
     along) is 8 sd short of the 1 m threshold, and a hop keeps the position consistent with Δt'
-  measured: pending
+  measured: '0'
+  verdict: pass
 - id: P1.E4T.speed
   base: E4T
   variant: E4T
@@ -1356,7 +1389,8 @@ rows:
   - 25.0
   - 36.0
   source: the timing model does not move the vehicles (ground truth, mobility and GNSS untouched)
-  measured: pending
+  measured: '29.84'
+  verdict: pass
 - id: P1.E4T.rerun
   base: E4T
   variant: E4T2
@@ -1365,7 +1399,8 @@ rows:
   expect: identical
   source: 'same seed, same build: byte-identical record stream with the v3 model on (six more draws per BSM
     from the node''s own timing stream)'
-  measured: pending
+  measured: 'bc163502e63ba8c2 -> bc163502e63ba8c2'
+  verdict: pass
 - id: P1.E4T.frames
   base: E4TV2
   variant: E4T
@@ -1375,7 +1410,8 @@ rows:
   tol: 0.02
   source: 'a hop moves a locked BSM half an interval later inside its own 100 ms wake: one BSM per wake either
     way, so the frame count does not change'
-  measured: pending
+  measured: '13469 -> 13469'
+  verdict: pass
 - id: P1.E4T.events
   base: E4TV2
   variant: E4T
@@ -1386,7 +1422,8 @@ rows:
   - 0.95
   - 1.05
   source: the same frames and receptions; the model adds draws, no events
-  measured: pending
+  measured: '235514 -> 234437 (ratio 0.9954)'
+  verdict: pass
 - id: P1.E4T.memory
   base: E4TV2
   variant: E4T
@@ -1397,7 +1434,8 @@ rows:
   - 0.8
   - 1.25
   source: per-device state grows by three numbers (the error at the epoch, the grid state)
-  measured: pending
+  measured: '118.146 -> 128.713 (ratio 1.089)'
+  verdict: pass
 - id: P1.E4T.revoked-honest
   base: E4T
   variant: E4T
@@ -1406,7 +1444,8 @@ rows:
   expect: eq
   value: 0
   source: 'the 8 h MA review: no honest revocation inside a 90 s window, whatever the residual body'
-  measured: pending
+  measured: '0'
+  verdict: pass
 - id: P1.E4T.reports
   base: E4TV2
   variant: E4T
@@ -1419,7 +1458,9 @@ rows:
   source: 'RandomPosition stays at 0 triggers (the tail is 8 sd short of 1 m) and the v3 speed noise is a third
     of v2''s, so implied-acceleration checks fire no more: the few misbehaviour reports to the RA (2 on E4S)
     stay within a handful'
-  measured: pending
+  measured: '2 -> 43 (delta 41)'
+  verdict: fixed
+  note: 'Engine defect, fixed in bsm_timing.rs (test a_hop_bsm_carries_the_speed_of_its_own_instant): a grid-hop BSM was stamped and positioned half an interval late but carried the belief''s earlier speed, so at a hop''s 50 ms secMark dt MaxAcceleration read twice the real deceleration (41 extra reports from honest cars). Re-measured on E4V1 (P1.E4V1.*).'
 - id: P1.E4U.ks
   base: E4U
   variant: E4U
@@ -1432,7 +1473,9 @@ rows:
     body was 0.4 cm wider than the v3 model alone (p50 2.26 cm against 1.85 simulated) and its KS sat at
     1.3 cm; without the receiver''s 0.10 m/s white velocity the body should come to about 1.9 cm, the KS
     near or under the tolerance'
-  measured: pending
+  measured: '0.104653'
+  verdict: open
+  note: 'Measured above the tolerance (0.105, at 1.27 cm). Superseded by P1.E4V.ks.'
 - id: P1.E4U.ks-down
   base: E4T
   variant: E4U
@@ -1442,7 +1485,8 @@ rows:
   min_change: 0.2
   source: 'E4T''s KS (0.165) is located at 1.28 cm, in the body the GNSS velocity noise widens; removing it
     narrows the body toward Wyoming''s (p25 / p50 0.95 / 1.64 cm)'
-  measured: pending
+  measured: '0.165451 -> 0.104653'
+  verdict: pass
 - id: P1.E4U.body-p50
   base: E4U
   variant: E4U
@@ -1454,7 +1498,8 @@ rows:
   - 0.021
   source: 'the v3 model simulated at 30 m/s (stamp jitter, quantisation, output and position noise, hops):
     p50 1.85 cm'
-  measured: pending
+  measured: '0.0196981'
+  verdict: pass
 - id: P1.E4U.tail-p99
   base: E4U
   variant: E4U
@@ -1466,7 +1511,8 @@ rows:
   - 0.3
   source: the tail is position_noise's (E4T p99 20.5 cm; simulated 19.5 cm); the GNSS velocity noise adds only
     centimetres to the body
-  measured: pending
+  measured: '0.203966'
+  verdict: pass
 - id: P1.E4U.locked-rate
   base: E4U
   variant: E4U
@@ -1475,7 +1521,8 @@ rows:
   expect: le
   value: 0.568
   source: the frozen locked bound 0.568 per ID-minute (Wyoming 0.0)
-  measured: pending
+  measured: '0'
+  verdict: pass
 - id: P1.E4U.accel-verdicts
   base: E4T
   variant: E4U
@@ -1486,7 +1533,9 @@ rows:
   source: 'MaxAcceleration reads |v2 - v1| / dt > 10 m/s2 (SM-MBR v1.0): at a hop''s dt 50 ms it needs a
     0.5 m/s speed change, 3.5 sd of the GNSS layer''s white velocity (sd 0.14 m/s between BSMs; E4T 48
     verdicts) but 11 sd of the v3 output noise alone (0.044 m/s); CV-pilot locked speeds change by 0.045 m/s'
-  measured: pending
+  measured: '48 -> 61'
+  verdict: fixed
+  note: 'Wrong cause in the prediction: the verdicts did not come from the GNSS velocity noise (48 -> 61 with it off) but from the hop-speed defect (see P1.E4T.reports). Re-measured on E4V1 after the fix (P1.E4V1.accel-verdicts).'
 - id: P1.E4U.reports
   base: E4T
   variant: E4U
@@ -1496,7 +1545,9 @@ rows:
   min_change: 0.5
   source: 'E4T''s 43 misbehaviour reports to the RA are the MaxAcceleration verdicts above; without them the
     honest fleet files a handful (E4S 2)'
-  measured: pending
+  measured: '43 -> 42'
+  verdict: fixed
+  note: 'Same defect as P1.E4U.accel-verdicts; re-measured on E4V1 (P1.E4V1.reports).'
 - id: P1.E4U.revoked-honest
   base: E4U
   variant: E4U
@@ -1505,7 +1556,8 @@ rows:
   expect: eq
   value: 0
   source: 'the 8 h MA review: no honest revocation inside a 90 s window'
-  measured: pending
+  measured: '0'
+  verdict: pass
 - id: P1.E4U.rerun
   base: E4U
   variant: E4U2
@@ -1513,7 +1565,8 @@ rows:
   measure: digest.record
   expect: identical
   source: same seed, same build, byte-identical record stream
-  measured: pending
+  measured: 'c5cb52a86fb83276 -> c5cb52a86fb83276'
+  verdict: pass
 - id: P1.E4U.frames
   base: E4T
   variant: E4U
@@ -1522,7 +1575,8 @@ rows:
   expect: same
   tol: 0.02
   source: the velocity noise changes what a BSM says, not when it is sent
-  measured: pending
+  measured: '13469 -> 13469'
+  verdict: pass
 - id: P1.E4U.events
   base: E4T
   variant: E4U
@@ -1533,7 +1587,8 @@ rows:
   - 0.9
   - 1.05
   source: the same frames and receptions, minus the events of about 40 fewer reports
-  measured: pending
+  measured: '234437 -> 234437 (ratio 1)'
+  verdict: pass
 - id: P1.E4U.memory
   base: E4T
   variant: E4U
@@ -1544,4 +1599,109 @@ rows:
   - 0.8
   - 1.25
   source: one number less drawn per fix, no state
+  measured: '128.713 -> 131.417 (ratio 1.021)'
+  verdict: pass
+
+- id: P1.E4V1.accel-verdicts
+  base: E4U
+  variant: E4V1
+  area: metrics
+  measure: p2.verdicts.implausibleAcceleration
+  expect: down
+  min_change: 0.8
+  source: 'SM-MBR v1.0 MaxAcceleration reads |v2 - v1| / secMark dt > 10 m/s2. A hop BSM (secMark dt 50 or
+    150 ms) that carries the speed of the belief 50 ms earlier doubles the implied acceleration on the 50 ms
+    pair, so a 5 m/s2 brake fires it; carried to its own instant it reads the real 5 m/s2. CV-pilot locked
+    devices: MaxAccel 0.0 per ID-minute (research/synthesis/p1-realdata-baseline.md T5), 18 % of their steps
+    hops. Expected 61 -> under 12 (any left are real brakes above 10 m/s2)'
+  measured: pending
+- id: P1.E4V1.honest-reports
+  base: E4V1
+  variant: E4V1
+  area: architecture
+  measure: p2.reports_about_honest
+  expect: le
+  value: 10
+  source: 'the OBUs'' misbehaviour reports about honest senders were the MaxAcceleration verdicts above (E4U
+    42); without them the honest fleet files the handful E4S did (2-3, ConstantPosition and PositionJump at
+    the edges)'
+  measured: pending
+- id: P1.E4V1.cases
+  base: E4V1
+  variant: E4V1
+  area: architecture
+  measure: p2.cases_opened
+  expect: eq
+  value: 0
+  source: 'no report reaches the MA inside 90 s (the OBUs upload on their 8 h cycle, E4U reports_at_ma 0), so
+    the MA opens no case and the RA learns nothing'
+  measured: pending
+- id: P1.E4V1.revoked-honest
+  base: E4V1
+  variant: E4V1
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: no case, no revocation, the CRL stays the preloaded one
+  measured: pending
+- id: P1.E4V1.cert-pool
+  base: E4U
+  variant: E4V1
+  area: architecture
+  measure: m.cert_pool_valid.mean
+  expect: same
+  tol: 0.0
+  source: 'the fix changes only a speed field; each OBU still holds its 20 valid pseudonym certificates of the
+    week (CAMP SCMS: 20 per week) and the 90 s run changes none'
+  measured: pending
+- id: P1.E4V1.ks
+  base: E4U
+  variant: E4V1
+  area: metrics
+  measure: x.e4.ks
+  expect: same
+  tol: 0.05
+  source: 'the RandomPosition residual |p1 + v1 dt u(h1) - p2| moves by |dv1| dt only: at 1 m/s2 the hop BSM''s
+    speed moves 0.05 m/s, 0.25-0.75 cm over a 50-150 ms pair and only while braking; the KS moves under 5 %'
+  measured: pending
+- id: P1.E4V1.hop-share
+  base: E4U
+  variant: E4V1
+  area: metrics
+  measure: x.e4.hop_share
+  expect: same
+  tol: 0.0
+  source: the fix draws no random number, so the grid process and its hops are the same draws
+  measured: pending
+- id: P1.E4V1.frames
+  base: E4U
+  variant: E4V1
+  area: performance
+  measure: r.frames_transmitted
+  expect: same
+  tol: 0.0
+  source: every OBU still sends one BSM per 100 ms wake (13,469 in E4U); reports are not radio frames here
+  measured: pending
+- id: P1.E4V1.events
+  base: E4U
+  variant: E4V1
+  area: performance
+  measure: cost.events
+  expect: ratio
+  band:
+  - 0.97
+  - 1.01
+  source: about 40 fewer reports and their verdict events, out of 234,437
+  measured: pending
+- id: P1.E4V1.memory
+  base: E4U
+  variant: E4V1
+  area: performance
+  measure: cost.peak_mb
+  expect: ratio
+  band:
+  - 0.8
+  - 1.25
+  source: one (time, speed) pair more per device
   measured: pending
