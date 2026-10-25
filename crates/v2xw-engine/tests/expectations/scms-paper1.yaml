@@ -161,6 +161,12 @@ runs:
   E4TV2:
     scenario: scenarios/real-world/paper1/p1-e4-s-v2.yaml
     note: E4T's binary on the frozen v2 fit (the body before E4-BODY's v3 refit)
+  E4U:
+    scenario: scenarios/real-world/paper1/p1-e4-u.yaml
+    note: E4T with the GNSS receiver's white velocity output noise off (gnss.velocity_noise_mps 0), the final P1-E4
+  E4U2:
+    scenario: scenarios/real-world/paper1/p1-e4-u.yaml
+    note: E4U again (determinism)
 rows:
 - id: P1.TS.rp-share0
   base: B
@@ -1413,4 +1419,129 @@ rows:
   source: 'RandomPosition stays at 0 triggers (the tail is 8 sd short of 1 m) and the v3 speed noise is a third
     of v2''s, so implied-acceleration checks fire no more: the few misbehaviour reports to the RA (2 on E4S)
     stay within a handful'
+  measured: pending
+- id: P1.E4U.ks
+  base: E4U
+  variant: E4U
+  area: metrics
+  measure: x.e4.ks
+  expect: le
+  value: 0.092
+  source: 'P1-E4, final: the pre-registered tolerance 0.092 (unchanged) against held-out Wyoming, on the v3 fit
+    with the GNSS layer''s white velocity noise off (p1-e4-u.yaml). Prediction written before the run: E4T''s
+    body was 0.4 cm wider than the v3 model alone (p50 2.26 cm against 1.85 simulated) and its KS sat at
+    1.3 cm; without the receiver''s 0.10 m/s white velocity the body should come to about 1.9 cm, the KS
+    near or under the tolerance'
+  measured: pending
+- id: P1.E4U.ks-down
+  base: E4T
+  variant: E4U
+  area: metrics
+  measure: x.e4.ks
+  expect: down
+  min_change: 0.2
+  source: 'E4T''s KS (0.165) is located at 1.28 cm, in the body the GNSS velocity noise widens; removing it
+    narrows the body toward Wyoming''s (p25 / p50 0.95 / 1.64 cm)'
+  measured: pending
+- id: P1.E4U.body-p50
+  base: E4U
+  variant: E4U
+  area: metrics
+  measure: x.e4.r_p50
+  expect: band
+  band:
+  - 0.015
+  - 0.021
+  source: 'the v3 model simulated at 30 m/s (stamp jitter, quantisation, output and position noise, hops):
+    p50 1.85 cm'
+  measured: pending
+- id: P1.E4U.tail-p99
+  base: E4U
+  variant: E4U
+  area: metrics
+  measure: x.e4.r_p99
+  expect: band
+  band:
+  - 0.12
+  - 0.3
+  source: the tail is position_noise's (E4T p99 20.5 cm; simulated 19.5 cm); the GNSS velocity noise adds only
+    centimetres to the body
+  measured: pending
+- id: P1.E4U.locked-rate
+  base: E4U
+  variant: E4U
+  area: metrics
+  measure: x.e4.rate_per_idmin
+  expect: le
+  value: 0.568
+  source: the frozen locked bound 0.568 per ID-minute (Wyoming 0.0)
+  measured: pending
+- id: P1.E4U.accel-verdicts
+  base: E4T
+  variant: E4U
+  area: metrics
+  measure: p2.verdicts.implausibleAcceleration
+  expect: down
+  min_change: 0.8
+  source: 'MaxAcceleration reads |v2 - v1| / dt > 10 m/s2 (SM-MBR v1.0): at a hop''s dt 50 ms it needs a
+    0.5 m/s speed change, 3.5 sd of the GNSS layer''s white velocity (sd 0.14 m/s between BSMs; E4T 48
+    verdicts) but 11 sd of the v3 output noise alone (0.044 m/s); CV-pilot locked speeds change by 0.045 m/s'
+  measured: pending
+- id: P1.E4U.reports
+  base: E4T
+  variant: E4U
+  area: architecture
+  measure: p2.reports_sent
+  expect: down
+  min_change: 0.5
+  source: 'E4T''s 43 misbehaviour reports to the RA are the MaxAcceleration verdicts above; without them the
+    honest fleet files a handful (E4S 2)'
+  measured: pending
+- id: P1.E4U.revoked-honest
+  base: E4U
+  variant: E4U
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: 'the 8 h MA review: no honest revocation inside a 90 s window'
+  measured: pending
+- id: P1.E4U.rerun
+  base: E4U
+  variant: E4U2
+  area: determinism
+  measure: digest.record
+  expect: identical
+  source: same seed, same build, byte-identical record stream
+  measured: pending
+- id: P1.E4U.frames
+  base: E4T
+  variant: E4U
+  area: performance
+  measure: r.frames_transmitted
+  expect: same
+  tol: 0.02
+  source: the velocity noise changes what a BSM says, not when it is sent
+  measured: pending
+- id: P1.E4U.events
+  base: E4T
+  variant: E4U
+  area: performance
+  measure: cost.events
+  expect: ratio
+  band:
+  - 0.9
+  - 1.05
+  source: the same frames and receptions, minus the events of about 40 fewer reports
+  measured: pending
+- id: P1.E4U.memory
+  base: E4T
+  variant: E4U
+  area: performance
+  measure: cost.peak_mb
+  expect: ratio
+  band:
+  - 0.8
+  - 1.25
+  source: one number less drawn per fix, no state
   measured: pending

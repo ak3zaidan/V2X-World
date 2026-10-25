@@ -939,6 +939,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "0.3 m/s (the US real-world presets); 0 for off.",
     },
     Basic {
+        path: "actors.vehicles.gnss.velocity_noise_mps",
+        explain: "How much the GPS receiver's reported speed jitters from one fix to the next. Unset uses the GPS service's 95 % accuracy figure, which makes consecutive messages' speeds differ about three times more than real CV-pilot units' do.",
+        recommended: "Unset (default) to compare with earlier runs; 0 with the BSM timing model on, whose fitted output noise then carries the message-level speed and heading noise.",
+    },
+    Basic {
         path: "actors.vehicles.bsm_timing.enabled",
         explain: "Gives each car's radio its own message timing, as real units have: some stamp each message with the instant of the GPS fix (locked), others do not (free), and those now and then send a position one fix too old or too new, or the last one again. Real CV-pilot data shows that is what makes honest cars trip the US position-consistency check.",
         recommended: "Off (default) to compare with earlier runs; on for honest-trigger studies.",
