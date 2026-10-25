@@ -69,6 +69,8 @@ runs:
   UD050: {scenario: scenarios/live-atk/us-drift05-free.yaml, note: 'attack-free US profile with gpsDrift 0.5 m'}
   RI02: {scenario: scenarios/live-atk/repint-0p2.yaml, note: 'SCL10 with report_interval_s 0.2'}
   RI5: {scenario: scenarios/live-atk/repint-5p0.yaml, note: 'SCL10 with report_interval_s 5'}
+  RAWL: {scenario: scenarios/live-atk/rawgnss.yaml, note: 'attack-free, raw GNSS fixes, suite L'}
+  RAWU: {scenario: scenarios/live-atk/rawgnss-us.yaml, note: 'attack-free, raw GNSS fixes, suite U'}
 rows:
 # ---- 0. Attack-free: no attacker, nothing to revoke --------------------------------------
 - id: A0.L.no-attackers
@@ -2020,3 +2022,52 @@ rows:
   measured: pending
   verdict: pending
   source: 'a report every 5 s per reporter still gives one per 5 s event: 3 events from 2 reporters in 60 s'
+
+# ---- 6. GNSS x suite interaction --------------------------------------------------------
+# Found on the first B0U (raw fixes, the base before it took the deployed receiver model):
+# 47 honest vehicles revoked, positionJump on 157,572 of 188,574 BSMs checked (old-B0U).
+- id: G.U.raw-honest-reports
+  base: B0U
+  variant: RAWU
+  area: interaction
+  measure: p2.reports_about_honest
+  expect: up
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'raw 10 Hz fixes with fresh 1.6 m noise disagree with their own speed and heading by 2.6 m at the median, over the 1 m RandomPosition drift (R-USFP: honest reports on 87 % of BSMs)'
+
+- id: G.U.raw-honest-revoked
+  base: RAWU
+  variant: RAWU
+  area: interaction
+  measure: rec.revoked_hon
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'R-USFP: the realism base on raw fixes revoked 26 honest vehicles under the US profile'
+
+- id: G.L.raw-tolerated
+  base: RAWL
+  variant: RAWL
+  area: interaction
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'the research suite tolerates the accuracy each BSM states (use_stated_accuracy), so raw-fix noise inside it is not misbehaviour'
+
+- id: G.LU.interaction
+  base: RAWL
+  variant: RAWU
+  area: interaction
+  measure: p2.reports_about_honest
+  expect: up
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'raw noise hurts the tolerance-free US profile far more than the research suite: under raw fixes U files more honest reports than L'
