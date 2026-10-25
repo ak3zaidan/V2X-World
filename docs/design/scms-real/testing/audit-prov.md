@@ -129,10 +129,29 @@ places:
 The Studio PKI view and every `pki.flow` reader (the oracle, `audit_prov.py`) saw messages
 shorter than their contents.
 
-**Fix.** A step takes an SPDU only while it still has room for it (step bytes ≥ the SPDUs it
-carries), with the old leg-only rule kept as the fallback. Pinned by
-`v2xw-proto/tests/pki_view.rs::a_top_off_s_info_request_carries_its_own_spdu_and_no_step_is_shorter_than_its_spdus`,
-which fails without the fix. Golden updates are listed in the fix commit.
+**Fix (`ccff6ad4`).** A step takes an SPDU only while it still has room for it (step bytes ≥
+the SPDUs it carries). The old leg-only rule stays as the fallback.
+
+**Test.** `v2xw-proto/tests/pki_view.rs::a_top_off_s_info_request_carries_its_own_spdu_and_no_step_is_shorter_than_its_spdus`.
+Without the fix it fails with "EeRaCertRequest rode the file-request": a device's first
+provisioning session had the same fault.
+
+**Goldens (`966de5d0`).** The `phase2-path` record digest moved
+(`fd19a3ed…` → `57c38506…`). Its frame digest and record count did not change, and
+`i-s1-phase2-60s` did not move.
+
+**Tests run.** `phase2` 13/13, `scms_scale` 1/1, engine `pki_view` 8/8, proto `pki_view`
+10/10.
+
+**Re-run on the fixed build** (`conf-fix`, same seed):
+- PV.view-pdu-carrier is green: 0 short messages.
+- Every other row keeps its verdict.
+- `phase2` report, `apps` and the record count are identical to `conf`. Only `pki.flow`'s
+  bytes change (32,195,437 → 32,203,537 B, same 24,384 records).
+- Oracle `records` on `conf-fix`: **PASS, 220,684 / 220,684** checks over 19,643 PDUs, the
+  same count as oracle-2026-10-24.
+- Proto `appcert` 11/11, `ma_cases` 7/7, `pregeneration` 11/11 and `provider_runs` 7/7
+  pass.
 
 ### 4.3 Open: no record carries an RSU's application certificate (PV.rsu-cert)
 
