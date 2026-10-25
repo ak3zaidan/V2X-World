@@ -106,8 +106,11 @@ fn a_vru_handset_signs_and_verifies_at_the_scenario_signature_price() {
         .filter_map(|t| t["node"].as_u64())
         .collect();
     let verify = records(&rec, "node.verify");
+    // A task for a signer the handset cannot verify runs no primitive (reason
+    // `unknown-signer`, audit db1-3 F1), so it names none and is not a verification.
     let at_handsets: Vec<&serde_json::Value> = verify
         .iter()
+        .filter(|v| v["reason"].as_str() != Some(v2xw_node::policy::VERIFY_UNKNOWN_SIGNER))
         .filter(|v| v["node"].as_u64().is_some_and(|n| handsets.contains(&n)))
         .collect();
     let wrong: BTreeSet<String> = at_handsets

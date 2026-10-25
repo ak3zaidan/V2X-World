@@ -525,8 +525,11 @@ fn a_hybrid_signature_costs_its_post_quantum_time() {
     };
     let costs = |rec: &MemoryRecorder| {
         // A verification's service time: when its server started it to when it finished.
+        // A task for a signer the receiver cannot verify runs no signature check and is
+        // charged none (reason `unknown-signer`, audit db1-3 F1), so it is not one.
         let verify: Vec<u64> = records(rec, "node.verify")
             .iter()
+            .filter(|r| r["reason"].as_str() != Some(v2xw_node::policy::VERIFY_UNKNOWN_SIGNER))
             .filter_map(|r| Some((r["t_done"].as_u64()? - r["t_start"].as_u64()?) / 1_000))
             .collect();
         let sign: Vec<u64> = records(rec, "node.tx")

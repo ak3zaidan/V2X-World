@@ -20,7 +20,7 @@
 #   conf  = scenarios/scms-conformance.yaml (real calendar, real crypto, i-period 614 -> 615
 #           at 600 s, 65 vehicles, 2 RSUs, fast-forward to day 5)
 #   conf2 = conf again, same seed (determinism)
-schema: v2xw/scms-audit-expectations/1
+schema: v2xw/scms-run-expectations/1
 runs:
   conf:
     scenario: scenarios/scms-conformance.yaml
