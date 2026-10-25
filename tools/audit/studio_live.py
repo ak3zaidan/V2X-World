@@ -23,16 +23,19 @@ NS = 10**9
 # ------------------------------------------------------------------------------ the records
 
 def mcap_samples(path):
-    """[(metric, t_ns, dims, value_dict, unit)] for every metric.sample record."""
+    """Every metric.sample record of a recording, as dicts. The first read keeps them in
+    <path>.samples.json, so the recording itself can be deleted once it has been read."""
+    cache = path + '.samples.json'
+    if os.path.exists(cache):
+        return json.load(open(cache))
     from mcap.reader import make_reader
     out = []
     with open(path, 'rb') as f:
-        for _s, ch, msg in make_reader(f).iter_messages(log_time_order=False):
-            topic = ch.topic.split('/', 1)[1] if ch.topic.startswith('record/') else ch.topic
-            if topic != 'metric.sample':
-                continue
-            d = json.loads(msg.data)
-            out.append(d)
+        reader = make_reader(f)
+        topics = [c.topic for c in reader.get_summary().channels.values() if c.topic.endswith('metric.sample')]
+        for _s, _ch, msg in reader.iter_messages(topics=topics, log_time_order=False):
+            out.append(json.loads(msg.data))
+    json.dump(out, open(cache, 'w'))
     return out
 
 
@@ -134,7 +137,8 @@ class Case:
     def records(self, side):
         if side not in self._rec:
             p = os.path.join(self.dir, f'{side}.mcap')
-            self._rec[side] = mcap_samples(p) if os.path.exists(p) else None
+            have = os.path.exists(p) or os.path.exists(p + '.samples.json')
+            self._rec[side] = mcap_samples(p) if have else None
         return self._rec[side]
 
     def api_series(self, side):
@@ -382,7 +386,10 @@ def c_settings_named(case, side, row):
     text = ui.get('settings', '')
     changes = api.get('settings', [])
     bad = []
+    before = flat(scenario_doc(case, case.prev(side)))
     for pointer, value in case.edits(side):
+        if same_value(before.get(pointer), value):
+            continue  # the run before had it already: not a change between the two
         if value not in text:
             bad.append(f'{pointer}={value} not in the dialog')
         key = pointer.strip('/').replace('/', '.')
@@ -396,6 +403,9 @@ def same_value(cur, typed):
     its parsed document, a number is equal as a number, a boolean as 'true' / 'false'."""
     if typed == '':
         return cur is None
+    hexes = [str(x).replace('_', '').lower() for x in (cur, typed)]
+    if all(h.startswith('0x') for h in hexes):
+        return int(hexes[0], 16) == int(hexes[1], 16)
     if isinstance(cur, bool):
         return str(cur).lower() == typed
     try:
@@ -449,7 +459,12 @@ def c_only_edits(case, side, row):
     b = flat(scenario_doc(case, side))
     edited = {p for p, _v in case.edits(side)}
     diff = sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
-    stray = [k for k in diff if not any(k == p or k.startswith(p + '/') for p in edited)]
+    reverted = {}
+    for v in case.order()[1:case.order().index(side)]:
+        for p, _v, back in case.ev.get('variants', {}).get(v, []):
+            reverted[p] = back
+    stray = [k for k in diff if not any(k == p or k.startswith(p + '/') for p in edited)
+             and not (a.get(k) is None and k in reverted and same_value(b.get(k), reverted[k]))]
     return not stray and bool(diff), f'{len(diff)} paths differ; ' + ('stray: ' + ', '.join(f"{k} {a.get(k)!r}->{b.get(k)!r}" for k in stray[:5]) if stray else 'only the edits')
 
 
@@ -577,7 +592,7 @@ def apply_fault(case, row):
         run['compare']['ui']['settings'] = ''
     elif f == 'stray':
         doc = scenario_doc(case, side)
-        doc['seed'] = str(doc.get('seed')) + '1'
+        doc['time']['duration_s'] = doc['time']['duration_s'] + 1  # no variant edits it
     elif f == 'edit':
         case.ev['variants'][side] = [[p, v + '9', b] for p, v, b in case.ev['variants'][side]]
     elif f == 'strip':
