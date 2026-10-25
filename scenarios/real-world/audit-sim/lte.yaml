@@ -1,0 +1,28 @@
+schema: v2xw/scenario/1
+
+# Whole-simulation metrics audit, run L: the LTE-V2X benchmark (PC5 mode 4, SAE J3161/1) at
+# the quarter fleet, live for 90 s (30 s warm-up) with the PKI view on.
+meta:
+  base: ../midtown-scms-benchmark-lte.yaml
+  name: Audit sim-metrics LTE quarter minute
+  description: >-
+    The Midtown LTE-V2X benchmark at a quarter of its fleet for 90 live seconds with the
+    PKI view on: the whole-simulation metrics audit (L).
+  tags: [benchmark, real-world, manhattan, scms, cv2x, lte, audit]
+
+actors:
+  vru:
+    pedestrians: 500
+    cyclists: 50
+  vehicles:
+    demand:
+      rate_veh_per_h: 2250.0
+
+security:
+  scms:
+    pki_view: true
+
+time:
+  warmup_s: 30.0
+  duration_s: 90.0
+  fast_forward: []
