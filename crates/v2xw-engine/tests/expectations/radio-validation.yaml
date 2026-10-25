@@ -246,6 +246,23 @@ rows:
   expect: a digest-signed BSM of 192 octets (56 BSM + 93 envelope + 5 WSMP + 38 LLC/MAC/FCS) is 40 + 8 ceil((22 + 8 x 192) / 48) = 304 us
   source: IEEE 802.11-2020 17.4.3 TXTIME at 10 MHz (8 us symbols, 40 us preamble and SIGNAL); docs/validation/foundations.md frame octets
   fault: TXTIME + 1 symbol
+  measured: airtime 307.21 us, PSDU 194.46 B, TXTIME 304 us
+  verdict: wrong-expectation
+  note: >-
+    The run's mean mixes in each vehicle's first SPDU. With full_cert_every_ms 3,600,000 a
+    vehicle has sent no certificate before its first BSM, so that one carries it (IEEE
+    1609.2 5.3.1 signer choice; J2945/1 6.1.2.2): 40 of 1,195 frames at 400 us, and
+    304 x 1,155 + 400 x 40 = 367,120 us, the run's total exactly. RV-AIR-DIGEST-MIX judges
+    the per-frame 304 us on that total.
+- id: RV-AIR-DIGEST-MIX
+  kind: txmix
+  run: AIRD
+  rate_mbps: 6
+  digest_octets: 192
+  cert_octets: 263
+  expect: every frame is 304 us (192-octet digest BSM) except one 400 us certificate frame per vehicle; total = 304 (frames - vehicles) + 400 vehicles, to 0.5 us
+  source: IEEE 802.11-2020 17.4.3 TXTIME; IEEE 1609.2 5.3.1 (certificate on the first SPDU)
+  fault: digest TXTIME + 1 symbol
   measured: pending
   verdict: pending
 - id: RV-AIR-CERT

@@ -23,6 +23,7 @@ Row kinds (theory is computed here, never read back from the engine):
           pass when |measured - expected| <= tol
   txtime  airtime_us equals the 802.11 OFDM TXTIME of psdu_bytes at the run's rate,
           40 us + 8 us * ceil((16 + 6 + 8 L) / bits_per_symbol) (IEEE 802.11-2020 17.4.3, 10 MHz)
+  txmix   total airtime = TXTIME(digest) x (frames - vehicles) + TXTIME(cert) x vehicles
   same    the two runs' outputs are byte-identical (determinism)
 """
 import math
@@ -163,6 +164,23 @@ def judge(row, runs, mutate=False):
         want = row.get("equals")
         ok = abs(air - exp) < 0.01 and (want is None or abs(air - want) < 0.01)
         return f"airtime {air:.2f} us, PSDU {L:.2f} B, TXTIME {exp:.0f} us", ok
+    if k == "txmix":
+        # Total airtime of a run whose frames are digest-signed except the first SPDU of
+        # each vehicle, which carries the certificate (no certificate sent before it).
+        vals = runs[row["run"]][0]
+        air, frames, k_cert = (vals.get(x) for x in ("report.air_bytes.airtime_us",
+                                                     "report.air_bytes.frames",
+                                                     "report.actors_spawned"))
+        if air is None or frames is None or k_cert is None:
+            return "missing", False
+        bps = 8 * row.get("rate_mbps", 6)
+        tx = lambda L: 40 + 8 * math.ceil((22 + 8 * L) / bps)
+        d, c = tx(row["digest_octets"]), tx(row["cert_octets"])
+        if mutate:
+            d += 8
+        exp = d * (frames - k_cert) + c * k_cert
+        return (f"airtime {air:.0f} us over {frames:.0f} frames; theory {d} x {frames - k_cert:.0f}"
+                f" + {c} x {k_cert:.0f} = {exp:.0f} us", abs(air - exp) < 0.5)
     if k == "same":
         a, b = (open(os.path.join(OUT, f"{r}.out"), "rb").read() for r in row["runs"])
         if mutate:
