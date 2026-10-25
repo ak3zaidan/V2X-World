@@ -1,0 +1,456 @@
+# Live cross-domain causal chains (docs/validation/live-chains-2026-10-25.md): every link of
+# a chain that crosses domains (security -> radio -> MAC -> application; traffic -> radio
+# -> DCC -> verification load; OBU hardware -> latency; backhaul -> CRL -> acceptance;
+# GNSS -> detectors -> reports -> MA; signals -> queues -> channel load; pedestrians -> PSM
+# -> VRU safety) is predicted here, with its source or equation, BEFORE the runs that
+# judge it, and measured on the real engine (the release v2xw of 486c8cba, copied to the
+# scratchpad), same seed for base and variant, one run per run-lock call.
+#
+# Reading: tools/realworld/live_chains.py extract <run-dir> (matrix.py extract plus the
+# per-link `lc.*` measures), live_chains.py derive <runs> (the X-* contrast runs), then
+#   python3 tools/realworld/matrix.py check <this file> <runs> [--fill]
+# Every row goes red under an injected fault: live_chains.py faults <this file> <runs>
+# (variant := base for direction rows, value moved out of band for value rows).
+#
+# Calibration seen before these rows were written: one 5 s run of the dense grid on the
+# Craton2 (89 vehicles, 8.19 BSM/vehicle/s under J2945/1, CBR 0.21, PSDU 200 B per BSM,
+# 315 us per BSM, 78 receivers per frame, collision rate 0.023, PDR 0.976, sign 9.0 ms,
+# verify 0.45 ms). No variant had been run.
+#
+# verdict: pass | fixed | wrong-expectation (corrected with the evidence in `note`) | open.
+schema: v2xw/scms-run-expectations/1
+runs:
+  r100: {scenario: scenarios/live-chains/r100.yaml, note: 'dense 300 m grid, <=100 vehicles, 6 s, no-HSM SoC, J2945/1 on, ECDSA P-256'}
+  r100b: {scenario: scenarios/live-chains/r100.yaml, note: r100 again (determinism)}
+  r40: {scenario: scenarios/live-chains/r40.yaml, note: r100 with <=40 vehicles}
+  r160: {scenario: scenarios/live-chains/r160.yaml, note: r100 with <=160 vehicles}
+  r40-nodcc: {scenario: scenarios/live-chains/r40-nodcc.yaml, note: r40, congestion control off}
+  r100-nodcc: {scenario: scenarios/live-chains/r100-nodcc.yaml, note: r100, congestion control off}
+  r160-nodcc: {scenario: scenarios/live-chains/r160-nodcc.yaml, note: r160, congestion control off}
+  r100-falcon: {scenario: scenarios/live-chains/r100-falcon.yaml, note: r100 under Falcon-512}
+  r100-hybrid: {scenario: scenarios/live-chains/r100-hybrid.yaml, note: r100 under hybrid Falcon-512 + P-256}
+  r100-mldsa44: {scenario: scenarios/live-chains/r100-mldsa44.yaml, note: r100 under ML-DSA-44}
+  r100-falcon-nodcc: {scenario: scenarios/live-chains/r100-falcon-nodcc.yaml, note: r100-falcon, congestion control off}
+  r40-falcon: {scenario: scenarios/live-chains/r40-falcon.yaml, note: r40 under Falcon-512}
+  r40-slh: {scenario: scenarios/live-chains/r40-slh.yaml, note: r40 under SLH-DSA-SHA2-128s (edge)}
+  r100-craton2: {scenario: scenarios/live-chains/r100-craton2.yaml, note: r100 on the Craton2 HSM}
+  r100-c2sw: {scenario: scenarios/live-chains/r100-c2sw.yaml, note: r100 on the Craton2, ECDSA in software}
+  r160-c2sw: {scenario: scenarios/live-chains/r160-c2sw.yaml, note: r160 on the Craton2, ECDSA in software}
+  r160-c2sw-nodcc: {scenario: scenarios/live-chains/r160-c2sw-nodcc.yaml, note: r160-c2sw, congestion control off}
+  r160-craton2: {scenario: scenarios/live-chains/r160-craton2.yaml, note: r160 on the Craton2 HSM}
+  r100-b10: {scenario: scenarios/live-chains/r100-b10.yaml, note: 'r100, J2945/1 B = 10'}
+  r100-b50: {scenario: scenarios/live-chains/r100-b50.yaml, note: 'r100, J2945/1 B = 50'}
+  r100-itt300: {scenario: scenarios/live-chains/r100-itt300.yaml, note: 'r100, vMax_ITT 300 ms'}
+  r100-s2: {scenario: scenarios/live-chains/r100-s2.yaml, note: r100 on a second seed}
+  r100-falcon-s2: {scenario: scenarios/live-chains/r100-falcon-s2.yaml, note: r100-falcon on a second seed}
+  X-pq-density-pdr: {scenario: derived, note: '(r100 - r100-falcon) - (r40 - r40-falcon) PDR'}
+  X-pq-density-coll: {scenario: derived, note: '(r100-falcon - r100) - (r40-falcon - r40) collision rate'}
+  X-dcc-density-cbr: {scenario: derived, note: '(r160 - r40) - (r160-nodcc - r40-nodcc) CBR'}
+  X-dcc-obu-wait: {scenario: derived, note: '(r160-c2sw-nodcc - r160-c2sw) - (r160-nodcc - r160) verify wait'}
+rows:
+# ---------------------------------------------------------------- chain 1: PQ -> bytes -> airtime -> CBR -> collisions -> PDR
+- id: LC.PQ.psdu-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: lc.psdu_per_bsm
+  expect: ratio
+  band: [3.5, 6.0]
+  source: 'Falcon-512 signature 666 B for ECDSA 64 B (+602 B on every BSM; Falcon spec 1.2 Table 3.3); its certificate explicit with an 897 B key and a 666 B CA signature for the 80 B implicit one (+~1,530 B) on the ~11 % of BSMs that attach it (CertAttachInt 1 s): 200 + 602 + 0.11 x 1,530 = 970 B, x4.85'
+- id: LC.PQ.psdu-hybrid
+  base: r100
+  variant: r100-hybrid
+  area: pq-chain
+  measure: lc.psdu_per_bsm
+  expect: ratio
+  band: [4.0, 6.5]
+  source: 'hybrid = ECDSA 64 B + Falcon 666 B signatures concatenated (+666 B per BSM), the certificate carries both keys and both CA signatures: (200 + 666 + 0.11 x ~1,600) / 200 = x5.2'
+- id: LC.PQ.psdu-mldsa44
+  base: r100
+  variant: r100-mldsa44
+  area: pq-chain
+  measure: lc.psdu_per_bsm
+  expect: ratio
+  band: [11.0, 19.0]
+  source: 'ML-DSA-44 signature 2,420 B, public key 1,312 B (FIPS 204 Table 2): (200 + 2,356 + 0.11 x ~3,650) / 200 = x14.8, plus a fragment header per extra frame'
+- id: LC.PQ.psdu-slh-edge
+  base: r40
+  variant: r40-slh
+  area: pq-chain
+  measure: lc.psdu_per_bsm
+  expect: ratio
+  band: [30.0, 60.0]
+  source: 'SLH-DSA-SHA2-128s signature 7,856 B, public key 32 B (FIPS 205 Table 2): (200 + 7,792 + 0.11 x ~7,830) / 200 = x44'
+- id: LC.PQ.frag-share-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: lc.frag_share
+  expect: band
+  band: [0.05, 0.25]
+  source: 'a Falcon BSM with a digest (~870 B) fits the 1,400 B WSMP MTU; one carrying the ~2,400 B certificate does not, so only the certificate-carrying share (~0.11, J2945/1 CertAttachInt) is fragmented'
+- id: LC.PQ.frag-share-mldsa44
+  base: r100
+  variant: r100-mldsa44
+  area: pq-chain
+  measure: lc.frag_share
+  expect: band
+  band: [0.95, 1.0]
+  source: 'every ML-DSA-44 BSM (>= 2,556 B) is above the 1,400 B MTU, so every one is fragmented'
+- id: LC.PQ.airtime-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: lc.airtime_us_per_bsm
+  expect: ratio
+  band: [3.3, 5.5]
+  source: '802.11p 10 MHz at 6 Mb/s: 40 us preamble+SIGNAL + 8 us per 48 data bits (IEEE 802.11-2020 17.4.3): 200 B -> 312 us; 970 B -> 1,336 us (x4.3); a second fragment adds a preamble and headers'
+- id: LC.PQ.cbr-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: m.channel_load.mean
+  expect: up
+  min_change: 1.0
+  source: 'CBR is the offered airtime per second over the sensing range (ETSI TS 102 687 4.2): x4.3 airtime at the same J2945/1 rate (its rate rule reads density, not CBR) -> at least double, bounded by saturation'
+- id: LC.PQ.cbr-falcon-bounded
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: m.channel_load.mean
+  expect: band
+  band: [0.3, 0.97]
+  source: 'the busy ratio cannot exceed 1; 0.21 x 4.3 = 0.9 offered, held below it by CSMA deferral and J2945/1 power control above 50 % CBP'
+- id: LC.PQ.power-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: lc.attempts_per_frame
+  expect: down
+  min_change: 0.02
+  source: 'J2945/1 power control lowers the radiated power linearly from 20 to 10 dBm as CBP goes 50 -> 80 % (Ahmad 2019 Eq. 9; the engine J2945_1 rp_max/rp_min, min_cu/max_cu): fewer receivers in range per frame'
+- id: LC.PQ.collisions-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: m.collision_rate
+  expect: up
+  min_change: 1.0
+  source: 'a frame 4x longer overlaps 4x more of the other transmissions it can collide with (vulnerable period scales with airtime; Bazzi et al., IEEE TVT 2017 PRR vs packet size)'
+- id: LC.PQ.pdr-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: m.pdr
+  expect: down
+  min_change: 0.01
+  source: 'more collisions and less power: PDR falls (Bazzi et al. 2017; Falcon x density rows of interactions/coupling.yaml)'
+- id: LC.PQ.access-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: m.mac_access_delay.mean
+  expect: up
+  min_change: 0.5
+  source: 'a busier channel defers more often and for longer (Bianchi, IEEE JSAC 2000); each deferral now waits out a 4x longer frame'
+- id: LC.PQ.sign-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: m.latency_stage.sign.mean
+  expect: ratio
+  band: [5.0, 8.0]
+  source: 'no-HSM SoC: Falcon-512 sign 1,625 us vs ECDSA 244 us (liboqs / OpenSSL on Pi 4B, profile R5 B.2, B.5): x6.7'
+- id: LC.PQ.verify-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: m.verify_cost.mean
+  expect: ratio
+  band: [0.12, 0.40]
+  source: 'Falcon-512 verify 127 us vs ECDSA 645 us on the same SoC: x0.2 (a PQ chain that makes the air worse makes verification cheaper)'
+- id: LC.PQ.sign-hybrid
+  base: r100
+  variant: r100-hybrid
+  area: pq-chain
+  measure: m.latency_stage.sign.mean
+  expect: ratio
+  band: [6.0, 9.5]
+  source: 'hybrid signs both: (244 + 1,625) / 244 = x7.7'
+- id: LC.PQ.verify-hybrid
+  base: r100
+  variant: r100-hybrid
+  area: pq-chain
+  measure: m.verify_cost.mean
+  expect: ratio
+  band: [1.05, 1.45]
+  source: 'hybrid verifies both: (645 + 127) / 645 = x1.2'
+- id: LC.PQ.mldsa44-saturates
+  base: r100
+  variant: r100-mldsa44
+  area: pq-chain
+  measure: m.channel_load.mean
+  expect: up
+  min_change: 1.5
+  source: 'x14.8 bytes on the same BSM rate is ~3x the channel capacity (0.21 x 14 > 1): the channel saturates'
+- id: LC.PQ.mldsa44-pdr
+  base: r100
+  variant: r100-mldsa44
+  area: pq-chain
+  measure: m.pdr
+  expect: down
+  min_change: 0.05
+  source: 'a BSM in 2-5 fragments is lost when any fragment is; on a saturated channel the loss compounds'
+- id: LC.PQ.mldsa44-cost
+  base: r100
+  variant: r100-mldsa44
+  area: pq-chain
+  measure: lc.bsms
+  expect: same
+  tol: 0.15
+  source: 'the BSM generation rate is set by J2945/1 density rule and mobility, not by the scheme: the same seed generates about the same number of BSMs (frames differ, BSMs do not)'
+- id: LC.PQ.density-amplifies-pdr
+  base: X-pq-density-pdr
+  variant: X-pq-density-pdr
+  area: pq-chain
+  measure: x.value
+  expect: band
+  band: [1.0e-06, 1.0]
+  source: 'Falcon costs more PDR at 100 vehicles than at 40: the collision term grows with the number of contenders x the airtime (interactions/coupling.yaml Falcon x density; Bazzi 2017)'
+- id: LC.PQ.density-amplifies-coll
+  base: X-pq-density-coll
+  variant: X-pq-density-coll
+  area: pq-chain
+  measure: x.value
+  expect: band
+  band: [1.0e-06, 1.0]
+  source: 'the collision rate Falcon adds is larger at 100 vehicles than at 40'
+- id: LC.PQ.nodcc-power-back
+  base: r100-falcon
+  variant: r100-falcon-nodcc
+  area: pq-chain
+  measure: lc.attempts_per_frame
+  expect: up
+  min_change: 0.02
+  source: 'with J2945/1 off the OBU transmits its fixed 23 dBm (radio.devices.obu), not the 10-20 dBm power control picks under load: more receivers per frame'
+- id: LC.PQ.seed2-cbr
+  base: r100-s2
+  variant: r100-falcon-s2
+  area: pq-chain
+  measure: m.channel_load.mean
+  expect: up
+  min_change: 1.0
+  source: the PQ -> CBR link holds on a second master seed
+- id: LC.PQ.seed2-pdr
+  base: r100-s2
+  variant: r100-falcon-s2
+  area: pq-chain
+  measure: m.pdr
+  expect: down
+  source: the PQ -> PDR link holds on a second master seed
+# ---------------------------------------------------------------- chain 2: density -> CBR -> J2945/1 -> BSM rate -> load and freshness
+- id: LC.DD.rate-low-density
+  base: r40-nodcc
+  variant: r40
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: same
+  tol: 0.12
+  source: 'J2945/1: ITT = 100 ms while the smoothed count within 100 m is <= B = 25 (SAE J2945/1 6.3.8; Ahmad 2019 Eq. 7): at 40 vehicles on 0.09 km^2 the rate stays 10 Hz'
+- id: LC.DD.rate-100
+  base: r100-nodcc
+  variant: r100
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: ratio
+  band: [0.65, 0.95]
+  source: 'ITT = 100 ms x N/B above B = 25; calibration 8.19 BSM/s at 89 vehicles (N100 ~ 30 smoothed with lambda 0.05 per 100 ms) -> ~0.82 of 10 Hz'
+- id: LC.DD.rate-160
+  base: r160-nodcc
+  variant: r160
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: ratio
+  band: [0.35, 0.85]
+  source: 'more vehicles within 100 m -> longer ITT (linear in N up to 600 ms at 150): the rate falls further than at 100'
+- id: LC.DD.rate-falls-with-density
+  base: r100
+  variant: r160
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: down
+  min_change: 0.05
+  source: J2945/1 density rule (as above)
+- id: LC.DD.nodcc-rate-flat
+  base: r40-nodcc
+  variant: r160-nodcc
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: same
+  tol: 0.1
+  source: 'without congestion control every vehicle sends at the 10 Hz BSM rate at any density (J2945/1 vMin_ITT)'
+- id: LC.DD.cbr-grows-nodcc
+  base: r40-nodcc
+  variant: r160-nodcc
+  area: dcc-chain
+  measure: m.channel_load.mean
+  expect: up
+  min_change: 1.5
+  source: 'CBR ~ N x rate x airtime while everyone hears everyone (the 300 m grid is inside the ~500 m 6 Mb/s range): x(N160/N40) ~ 3.5'
+- id: LC.DD.dcc-flattens-cbr
+  base: X-dcc-density-cbr
+  variant: X-dcc-density-cbr
+  area: dcc-chain
+  measure: x.value
+  expect: band
+  band: [-1.0, -1.0e-06]
+  source: 'with J2945/1 the per-vehicle rate falls as N grows, so CBR grows less from 40 to 160 than without it'
+- id: LC.DD.dcc-pdr-160
+  base: r160-nodcc
+  variant: r160
+  area: dcc-chain
+  measure: m.pdr
+  expect: up
+  source: fewer transmissions -> fewer collisions -> higher PDR (the purpose of congestion control; Bansal 2013)
+- id: LC.DD.dcc-collisions-160
+  base: r160-nodcc
+  variant: r160
+  area: dcc-chain
+  measure: m.collision_rate
+  expect: down
+  source: fewer simultaneous transmitters per unit time
+- id: LC.DD.dcc-verify-load-160
+  base: r160-nodcc
+  variant: r160
+  area: dcc-chain
+  measure: lc.verifies_per_node_s
+  expect: down
+  min_change: 0.15
+  source: 'every received BSM is verified (verify-all): verifies per node ~ neighbours x their BSM rate, so the rate cut is a verification-load cut of about the same size'
+- id: LC.DD.aoi-100
+  base: r100-nodcc
+  variant: r100
+  area: dcc-chain
+  measure: m.aoi
+  expect: up
+  min_change: 0.05
+  source: 'average AoI ~ T/2 + latency for update period T (Kaul et al., SECON 2011): T 100 -> ~122 ms raises it'
+- id: LC.DD.b10
+  base: r100
+  variant: r100-b10
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: down
+  min_change: 0.2
+  source: 'B = 10: ITT = 100 ms x N/10 above 10 vehicles (2.5x longer than B = 25 at the same N)'
+- id: LC.DD.b50
+  base: r100
+  variant: r100-b50
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: up
+  min_change: 0.05
+  source: 'B = 50: no rate cut until 50 vehicles within 100 m; r100 has ~30 -> back to 10 Hz'
+- id: LC.DD.itt300-no-effect
+  base: r100
+  variant: r100-itt300
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: same
+  tol: 0.03
+  source: 'the linear segment is 100 + 4 (N - 25) ms for vMax_ITT 600 (top at 150) and for 300 (top at 75) alike; only the cap differs, and N100 ~ 30 < 75: no effect'
+- id: LC.DD.cost-nodcc-160
+  base: r160
+  variant: r160-nodcc
+  area: dcc-chain
+  measure: cost.events
+  expect: up
+  min_change: 0.1
+  source: 'DES events ~ frames x receivers; switching the rate cut off adds frames, each heard by everyone'
+- id: LC.DD.cost-density-nodcc
+  base: r40-nodcc
+  variant: r160-nodcc
+  area: dcc-chain
+  measure: cost.events
+  expect: ratio
+  band: [4.0, 20.0]
+  source: 'receptions ~ N^2 when every vehicle hears every other: (N160/N40)^2 ~ 10 events, the reception work dominating'
+- id: LC.DD.determinism
+  base: r100
+  variant: r100b
+  area: dcc-chain
+  measure: digest.record
+  expect: identical
+  source: same seed, same build stamp -> byte-identical records
+# ---------------------------------------------------------------- chain 3: OBU crypto cost -> latency -> queueing under load
+- id: LC.OB.sign-hsm
+  base: r100
+  variant: r100-craton2
+  area: obu-chain
+  measure: m.latency_stage.sign.mean
+  expect: ratio
+  band: [25.0, 45.0]
+  source: 'Craton2 HSM signs in <9 ms (R7 A4, upper bound used) vs 244 us on the no-HSM SoC: x37'
+- id: LC.OB.e2e-hsm
+  base: r100
+  variant: r100-craton2
+  area: obu-chain
+  measure: m.e2e_latency.bsm.mean
+  expect: delta
+  band: [6.0, 12.0]
+  source: 'end-to-end latency carries the sign time once: +9 - 0.24 ms, give or take the verify difference (400 vs 645 us)'
+- id: LC.OB.verify-hsm
+  base: r100
+  variant: r100-craton2
+  area: obu-chain
+  measure: m.verify_cost.mean
+  expect: ratio
+  band: [0.45, 0.9]
+  source: 'Craton2 verification engine 2,500/s (400 us as one server) vs 645 us: x0.62'
+- id: LC.OB.verify-c2sw
+  base: r100
+  variant: r100-c2sw
+  area: obu-chain
+  measure: m.verify_cost.mean
+  expect: ratio
+  band: [1.6, 2.5]
+  source: 'Craton2 ECDSA in software: 1,290 us verify (Pi 3B Cortex-A53 proxy) vs 645 us: x2.0'
+- id: LC.OB.wait-c2sw
+  base: r100
+  variant: r100-c2sw
+  area: obu-chain
+  measure: m.verify_wait.mean
+  expect: up
+  min_change: 1.0
+  source: 'utilisation lambda x S / c: 610/s x 0.645 ms / 4 cores = 0.10 vs 610/s x 1.29 ms / 2 cores = 0.39; M/D/c waiting grows superlinearly in rho'
+- id: LC.OB.wait-c2sw-nodcc
+  base: r160-c2sw
+  variant: r160-c2sw-nodcc
+  area: obu-chain
+  measure: m.verify_wait.mean
+  expect: up
+  min_change: 1.0
+  source: 'at 160 vehicles without the rate cut each OBU must verify ~N x 10/s; on 2 x 1.29 ms servers rho approaches 1 and the wait explodes (M/D/c)'
+- id: LC.OB.e2e-c2sw-nodcc
+  base: r160-c2sw
+  variant: r160-c2sw-nodcc
+  area: obu-chain
+  measure: m.e2e_latency.bsm.mean
+  expect: up
+  min_change: 0.1
+  source: the verify queue is a stage of end-to-end latency
+- id: LC.OB.dcc-protects-slow-obu
+  base: X-dcc-obu-wait
+  variant: X-dcc-obu-wait
+  area: obu-chain
+  measure: x.value
+  expect: band
+  band: [1.0e-06, 1.0e+06]
+  source: 'the wait that switching DCC off adds is larger on the slow OBU (rho 0.85) than on the 4-core SoC (rho 0.2): congestion control protects the slow OBU most'
+- id: LC.OB.hsm-160-wait
+  base: r160
+  variant: r160-craton2
+  area: obu-chain
+  measure: m.verify_wait.mean
+  expect: up
+  source: 'one HSM verification server and a 9 ms sign that holds it, vs four software cores: the HSM queues more at the same offered load'

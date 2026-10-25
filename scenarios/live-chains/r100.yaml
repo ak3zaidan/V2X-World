@@ -1,0 +1,17 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains r100
+  base: ../sensitivity/dsrc-dense.yaml
+  description: >-
+    The dense 300 m DSRC grid with up to 100 vehicles for 6 s, the software-crypto SoC
+    (the only OBU profile that prices every PQ scheme) and the generic SDU fragmenter, so
+    that every signature scheme can be put on the air against the same seed. J2945/1
+    rate and power control is on (the engine's default for 802.11p at the medium MAC).
+time: {duration_s: 6.0}
+actors:
+  vehicles:
+    demand: {params: {max_total_vehicles: 100}}
+nodes: {default_obu: obu/generic-automotive-soc-no-hsm}
+net:
+  fragmenter: {id: fragmenter/generic-sdu}
+metrics: [all]

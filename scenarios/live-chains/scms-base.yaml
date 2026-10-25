@@ -1,0 +1,6 @@
+# live-chains SCMS base: the CAMP lifecycle whole (300 s, i-period 60 s, 5 % ConstPos from
+# 60 s, legacy-12 detectors, corroborated MA, 30 s CRL cadence and fetch), unchanged.
+# The base of the backhaul-outage -> CRL -> acceptance chain and the GNSS -> reports chain
+# (docs/validation/live-chains-2026-10-25.md).
+schema: v2xw/scenario/1
+meta: {name: live-chains scms base, base: ../credential-lifecycle.yaml}

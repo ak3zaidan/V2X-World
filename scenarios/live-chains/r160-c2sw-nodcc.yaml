@@ -1,0 +1,8 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains r160-c2sw-nodcc
+  base: r160-c2sw.yaml
+  description: >-
+    r160-c2sw with congestion control off.
+radio:
+  dcc: {enabled: false}
