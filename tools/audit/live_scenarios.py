@@ -283,7 +283,7 @@ def c_threat_output(run, p):
     thr = run.scenario.get('threats') or run.scenario.get('attacks')
     if not thr:
         return []
-    have = [c for c in run.channels() if c.startswith(('threat.', 'attack.', 'mbd.', 'det.', 'misbehavior', 'ma.'))]
+    have = [c for c in run.channels() if c.startswith(THREAT_PREFIXES)]
     return [] if have else ['threats configured but no threat/attack/detector records (channels: %s)' % sorted(run.channels())[:12]]
 
 
@@ -294,6 +294,23 @@ def c_ped_output(run, p):
         return []
     seen = {s['metric'] for s in run.samples if s['metric'].startswith('ped_')}
     return [] if seen else ['pedestrians configured but no ped_* metric sample']
+
+
+def c_vru_devices(run, p):
+    """VRU devices: device_fraction of the walkers and riders (configured population plus the
+    ones that replaced a completed trip), within 4 binomial sigma."""
+    vru = (run.scenario.get('actors') or {}).get('vru') or {}
+    if not vru or run.doc is None:
+        return []
+    n = (vru.get('pedestrians') or 0) + (vru.get('cyclists') or 0)
+    f = vru.get('device_fraction')
+    if f is None or not n:
+        return []
+    done = (run.report.get('despawn_causes') or {}).get('TripComplete', 0)
+    got = run.report.get('vru_devices_created') or 0
+    lo = f * n - 4 * math.sqrt(n * f * (1 - f))
+    hi = f * (n + done) + 4 * math.sqrt((n + done) * f * (1 - f))
+    return [] if lo <= got <= hi else ['vru_devices_created %s outside [%.0f, %.0f] (N %s, f %s)' % (got, lo, hi, n, f)]
 
 
 def _pool(run, metric, dims=None, t_from=0):
@@ -428,10 +445,11 @@ CHECKS = {
     'kinematics_bounds': c_kinematics_bounds, 'demand': c_demand, 'radio_output': c_radio_output,
     'scms_output': c_scms_output, 'threat_output': c_threat_output, 'ped_output': c_ped_output,
     'band': c_band, 'pdr_distance': c_pdr_distance, 'same_digest': c_same_digest,
-    'fundamental': c_fundamental, 'ratio_between': c_ratio_between,
+    'fundamental': c_fundamental, 'vru_devices': c_vru_devices, 'ratio_between': c_ratio_between,
 }
 
 PAIRED = {'same_digest', 'ratio_between'}
+THREAT_PREFIXES = ('gt.attack', 'threat.', 'attack.', 'mbd.', 'det.', 'misbehavior', 'ma.', 'jam')
 
 # ------------------------------------------------------------------------------ faults
 
@@ -474,7 +492,7 @@ def apply_fault(run, fault, row):
             r.doc['channels'].pop(c, None)
     elif f == 'drop-threat-channels':
         for c in list(r.doc['channels']):
-            if c.startswith(('threat.', 'attack.', 'mbd.', 'det.', 'misbehavior', 'ma.')):
+            if c.startswith(THREAT_PREFIXES):
                 r.doc['channels'].pop(c)
     elif f == 'drop-ped-metrics':
         r.samples = [s for s in r.samples if not s['metric'].startswith('ped_')]
@@ -498,6 +516,8 @@ def apply_fault(run, fault, row):
             d = (s.get('dims') or {}).get(row['params'].get('dim', 'dist_bin'))
             if d is not None and float(str(d).split('-')[0].strip('[(<>= m+')) == far and s['value'].get('state') == 'proportion':
                 s['value']['successes'] = s['value']['trials']
+    elif f == 'vru-devices-0':
+        r.report['vru_devices_created'] = 0
     elif f == 'flow-x2':
         for s in r.samples:
             if s['metric'] == 'flow' and 'point' in s['value']:
@@ -532,7 +552,8 @@ def main():
             continue
         fn = CHECKS[row['check']]
         p = row.get('params') or {}
-        targets = names if row['runs'] == 'all' else [n for n in row['runs'] if n in names]
+        exempt = row.get('exempt') or {}  # run -> the evidence that the row does not apply
+        targets = [n for n in (names if row['runs'] == 'all' else [n for n in row['runs'] if n in names]) if n not in exempt]
         missing = [] if row['runs'] == 'all' else [n for n in row['runs'] if n not in names]
         if mode == 'check':
             fails = {}

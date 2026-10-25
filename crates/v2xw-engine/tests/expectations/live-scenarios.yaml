@@ -49,6 +49,8 @@ rows:
    source: "threats configured -> attack or detector records"}
 - {id: SC.peds, runs: all, check: ped_output, expect: pass, fault: drop-ped-metrics, fault_run: midtown-pedestrians,
    source: "pedestrians configured -> ped_* metric samples (vru.rs)"}
+- {id: SC.vru-devices, runs: all, check: vru_devices, expect: pass, fault: vru-devices-0, fault_run: midtown-pedestrians,
+   source: "actors.vru.device_fraction of the walkers and riders carry a V2X device (binomial, 4 sigma); written after midtown-pedestrians and midtown-street-life were read (189 of 708, 432 of 1,713), applies to every later run"}
 - {id: SC.determinism, runs: [midtown-normal-rep, phase1-grid-rep], check: same_digest, expect: pass, fault: digest,
    params: {other_of: {midtown-normal-rep: midtown-normal, phase1-grid-rep: phase1-grid}},
    source: "same scenario, same seed, same binary -> byte-identical record digest"}
@@ -93,6 +95,20 @@ rows:
 - {id: W.HWY.pdr-distance, runs: [highway-congestion], check: pdr_distance, expect: pass, fault: pdr-rise,
    params: {metric: pdr, dim: dist_bin, near_min: 0.95, far_max: 0.95, tol: 0.05, min_trials: 30},
    source: "open road, line of sight: DSRC PDR ~1 near and falling with distance (Bai, Stancil and Krishnan, 2010)"}
+# highway-congestion's shortest window is 80 s (its first breakdown at 75 s) and at ~164
+# all-in-range vehicles that run passed the 10-minute budget, so the highway base run is
+# p1-e4 (highway-congestion's world at 3,000 veh/h, no events, 60 s). Rows written before it ran.
+- {id: W.HWY2.speed, runs: [p1-e4-hwy60], check: band, expect: pass, fault: "scale:10",
+   params: {metric: mean_speed, lo: 20.0, hi: 33.0},
+   source: "uncongested US freeway (3,000 veh/h offered on 6 lanes, ~500 veh/h/ln, LOS A): space-mean speed near free-flow 60-75 mph (27-33 m/s; HCM 7th ed. Exh. 12-7), lowered by entry acceleration in the first minute"}
+- {id: W.HWY2.vmax, runs: [p1-e4-hwy60], check: kinematics_bounds, expect: pass, fault: speed-80,
+   params: {vmax: 37.0, amin: -10.0, amax: 5.0}, source: "as W.HWY.vmax"}
+- {id: W.HWY2.headway, runs: [p1-e4-hwy60], check: band, expect: pass, fault: "scale:10",
+   params: {metric: headway_time, lo: 1.0, hi: 10.0},
+   source: "freeway time headways at LOS A: mean several seconds, 1-2 s minimum in platoons (HCM; Hoogendoorn 1998)"}
+- {id: W.HWY2.pdr-distance, runs: [p1-e4-hwy60], check: pdr_distance, expect: pass, fault: pdr-rise,
+   params: {metric: pdr, dim: dist_bin, near_min: 0.95, far_max: 0.95, tol: 0.05, min_trials: 30},
+   source: "as W.HWY.pdr-distance"}
 - {id: W.GRID.vmax, runs: [phase1-grid, vru-grid], check: kinematics_bounds, expect: pass, fault: speed-80,
    params: {vmax: 20.0, amin: -10.0, amax: 5.0},
    source: "procedural urban grid, 50 km/h-class streets"}
