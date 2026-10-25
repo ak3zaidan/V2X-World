@@ -95,6 +95,15 @@ def extract(run_dir):
     for k, v in (p2.get('access') or {}).items():
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             out['access.' + k] = v
+    # The per-message carrier (packet-level Uu TCP/TLS, RSU backhaul lines) and the
+    # backend latency per exchange type (rerun-2026-10-26: the TLS version acts here).
+    for k, v in ((p2.get('access') or {}).get('carrier') or {}).items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out['access.carrier.' + k] = v
+    for name, e in ((p2.get('access') or {}).get('exchange_latency') or {}).items():
+        if isinstance(e, dict) and e.get('count'):
+            out['access.exchange.' + name + '.n'] = e['count']
+            out['access.exchange.' + name + '.mean_ms'] = e['sum_ns'] / e['count'] / 1e6
     for name, t in p2.get('revocation_stages') or []:
         out['stage.' + name + '_s'] = t / NS
     for k, v in (r.get('receiver_validation') or {}).items():
