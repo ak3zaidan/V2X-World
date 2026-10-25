@@ -849,18 +849,43 @@ fn the_backend_tops_up_both_vehicles_over_cellular_and_every_byte_is_booked_once
         sums["bytes_backend{\"bucket\":\"backend\"}"],
         a.backend_bytes as f64
     );
-    // What a vehicle downloaded for a top-up is what crossed its cellular downlink, not
-    // the backend's own exchanges (7,319 octets were reported before 2026-10-07 against
-    // 1,141 on the downlink).
+    // What a vehicle downloaded for a top-up is what crossed its cellular downlink while
+    // the top-up ran, not the backend's own exchanges (7,319 octets were reported before
+    // 2026-10-07 against 1,141 on the downlink). The same downlink also carries the
+    // vehicle's CRL polls, one every `crl_fetch_interval_s` (10 s) from its first at
+    // 2.5 s, so the books are: the top-up's octets inside its exchange (from the 30 s
+    // period boundary that triggers it to its completion), and every other downlink
+    // record a CRL poll on that cadence, each the same size. Before 2026-10-24 this test
+    // summed the whole downlink and failed by exactly the five polls (3,574 = 3,114 +
+    // 5 x 92).
     let topups: Vec<_> = certs.iter().filter(|c| c.event == "top-up").collect();
     assert_eq!(topups.len(), 2);
     for c in topups {
-        let dl: u64 = nb
+        let rows: Vec<(u64, u64)> = nb
             .iter()
             .filter(|r| r.bucket == B::CellularDl && r.node == Some(c.node))
-            .map(|r| r.bytes_on_wire)
-            .sum();
-        assert_eq!(c.bytes, Some(dl), "{:?}", c.node);
+            .map(|r| (r.t, r.bytes_on_wire))
+            .collect();
+        let inside = |t: u64| (30 * S..=c.t).contains(&t);
+        let dl: u64 = rows.iter().filter(|(t, _)| inside(*t)).map(|r| r.1).sum();
+        assert_eq!(
+            c.bytes,
+            Some(dl),
+            "{:?}: top-up at {} ns; its downlink (ns, octets) {rows:?}",
+            c.node,
+            c.t
+        );
+        let polls: Vec<&(u64, u64)> = rows.iter().filter(|(t, _)| !inside(*t)).collect();
+        assert_eq!(polls.len(), 5, "{:?}: CRL polls {polls:?}", c.node);
+        for (t, bytes) in &polls {
+            assert_eq!(
+                (t - S / 2) % (10 * S),
+                0,
+                "{:?}: a poll off the cadence at {t}",
+                c.node
+            );
+            assert_eq!(*bytes, polls[0].1, "{:?}: CRL polls of different sizes", c.node);
+        }
     }
 }
 

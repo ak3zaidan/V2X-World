@@ -179,7 +179,8 @@ rows:
   tol: 0.08
   expect: Phi(25 log10(766 / 440) / 6) = 0.84 x floor
   source: log-normal shadowing, P(X < margin) (Rappaport 2e §4.9.2); wider tolerance because a link's shadow is correlated along its 4 s
-  fault: d0 x0.85 in the theory
+  fault: "shadowing not applied (the theory taken as the no-fading step); added after the first mutation pass showed d0 x0.85 inside the 0.08 tolerance"
+  fault_law: {kind: step}
   measured: pending
   verdict: pending
 - id: RV-SH6-950
@@ -190,7 +191,8 @@ rows:
   tol: 0.08
   expect: Phi(-0.39) = 0.35 x floor (shadowing carries PRR past the no-fading edge)
   source: as RV-SH6-440
-  fault: d0 x0.85 in the theory
+  fault: "shadowing not applied (the theory taken as the no-fading step); added after the first mutation pass showed d0 x0.85 inside the 0.08 tolerance"
+  fault_law: {kind: step}
   measured: pending
   verdict: pending
 - id: RV-STEP-LD
@@ -201,7 +203,8 @@ rows:
   tol: 0.03
   expect: 0 past the sensitivity distance without fading
   source: a frame below the receiver's sensitivity is not decoded (IEEE 802.11-2020 17.3.10.6)
-  fault: "d0 x0.85 in the theory (stays 0: this row cannot fail under that fault; its fault is a d0 past 1 km)"
+  fault: "the sensitivity cut missing (d0 past the 1 km census)"
+  fault_law: {d0: 1200}
   measured: pending
   verdict: pending
 # ---- Frame airtime ----
@@ -255,7 +258,8 @@ rows:
   band: [0.01, 0.1254]
   expect: at most every vehicle sensing every frame, 40 x (400 + 9 x 304 us) per s = 0.125
   source: CBR is the union of sensed busy time (ETSI TS 102 687), which cannot exceed the offered airtime
-  fault: value x1.25 (green while the measure is under 0.1)
+  fault: "overlapping busy periods counted twice (x2); x1.25 stayed under the bound"
+  fault_scale: 2.0
   measured: pending
   verdict: pending
 - id: RV-CONG-COLL

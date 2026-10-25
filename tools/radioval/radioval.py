@@ -107,7 +107,7 @@ def census(bins, lo, hi):
 def judge(row, runs, mutate=False):
     """(measured text, pass bool) or None when the row is not this script's."""
     k = row.get("kind")
-    tweak = (lambda v: v * row.get("fault_scale", 1.25)) if mutate else (lambda v: v)
+    tweak = (lambda v: None if v is None else v * row.get("fault_scale", 1.25)) if mutate else (lambda v: v)
     if k == "abs":
         v = tweak(runs[row["run"]][0].get(row["metric"]))
         if v is None:
@@ -143,7 +143,10 @@ def judge(row, runs, mutate=False):
             return "no census", False
         law = dict(row["law"])
         if mutate:
-            law["d0"] *= 0.85
+            if row.get("fault_law"):
+                law.update(row["fault_law"])
+            else:
+                law["d0"] *= 0.85
         exp = floor * sum(n * law_p(law, (i + 0.5) * 20) for i, (n, _) in enumerate(bins)
                           if lo <= i * 20 and (i + 1) * 20 <= hi) / c
         return (f"{meas:.3f} vs theory {exp:.3f} (floor {floor:.3f}, n={c})",
