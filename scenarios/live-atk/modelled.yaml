@@ -1,0 +1,8 @@
+# live-atk base whose research-suite verdicts all reach the MA on the modelled report path
+# (`modelled_reports: 1`): a US device otherwise files only what SM-MBR v1.1 encodes.
+schema: v2xw/scenario/1
+meta: {base: base.yaml, name: live-atk modelled}
+security:
+  protocol:
+    params:
+      modelled_reports: 1

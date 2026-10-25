@@ -1,0 +1,170 @@
+# Live attack-and-detection tests (docs/validation/live-atk-2026-10-25.md): every attack
+# family at two to three attacker shares and strengths, under each selectable detector suite
+# and MA rule, on the real engine (the integrator's release build of 486c8cba, copied to the
+# scratchpad). Every row was written and committed with `measured: pending` before the run
+# it judges. Each row names the raw-input `fault` (a mutation of the run report or records,
+# applied before the measures are derived) that the checker's `selftest` injects to show the
+# row can go red.
+#
+#   python3 -I tools/realworld/live_atk.py extract <run-dir> <cost-file>
+#   python3 -I tools/realworld/live_atk.py check <this file> <runs-dir> [--fill]
+#   python3 -I tools/realworld/live_atk.py selftest <this file> <runs-dir>
+#
+# expect: eq | le | ge | band (the variant's value); up | down | same | ratio | delta |
+# identical (variant against base). verdict: pass | fixed (engine defect fixed at its cause;
+# `test` pins it) | wrong-expectation (corrected with the evidence in `note`) | open.
+#
+# Runs: scenarios/live-atk/*.yaml, the SCMS lifecycle family (credential-lifecycle.yaml:
+# compressed calendar, CRL every 30 s, MA review 0 s) held at 40 vehicles for 150 s, seed
+# 0xC0FFEE_5EED, --record-level events, --build-utc 2026-10-25T00:00:00Z, one run per
+# run-lock call (1,200 MB cap). Suites: L = detect/legacy-12 filing what SM-MBR v1.1 can
+# encode (the default), M = the same with `modelled_reports: 1`, U = detect/us-sm-mbr.
+# MA: threat/ma/corroborated (default) or threat/ma/legacy-window.
+schema: v2xw/scms-run-expectations/1
+runs:
+  B0L: {scenario: scenarios/live-atk/base.yaml, note: attack-free, L suite}
+  B0L2: {scenario: scenarios/live-atk/base.yaml, note: B0L again (determinism)}
+  B0U: {scenario: scenarios/live-atk/us.yaml, note: attack-free, U suite}
+  B0M: {scenario: scenarios/live-atk/modelled.yaml, note: attack-free, M suite}
+rows:
+# ---- 0. Attack-free: no attacker, nothing to revoke --------------------------------------
+- id: A0.L.no-attackers
+  base: B0L
+  variant: B0L
+  area: attack-free
+  measure: rec.attackers
+  expect: eq
+  value: 0
+  fault: scalar
+  measured: pending
+  verdict: pending
+  source: 'threats.attackers is empty: no gt.attack.action record may exist'
+- id: A0.L.no-revocation
+  base: B0L
+  variant: B0L
+  area: attack-free
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'the corroborated MA needs 3 events, each from 2 trusted reporters, inside 60 s (ma_corroborate defaults; F2MD DELTA_REPORT_TIME); honest GNSS noise does not sustain that (QD and FB3: 0 honest revoked, 06 §6 item 1)'
+- id: A0.L.no-decision
+  base: B0L
+  variant: B0L
+  area: attack-free
+  measure: p2.ma_revoke_decisions
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'as A0.L.no-revocation, read from the run report rather than the records'
+- id: A0.L.report-revoked-honest
+  base: B0L
+  variant: B0L
+  area: attack-free
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'as A0.L.no-revocation'
+- id: A0.L.honest-reports-small
+  base: B0L
+  variant: B0L
+  area: attack-free
+  measure: p2.reports_about_honest
+  expect: le
+  value: 60
+  fault: honest-reported
+  measured: pending
+  verdict: pending
+  source: 'the 300 s lifecycle pilot (124 vehicles, 5 attackers) filed 50 reports about 26 honest vehicles; 40 vehicles for 150 s is about the same vehicle-seconds, so tens, not hundreds'
+- id: A0.L.no-attacker-warnings
+  base: B0L
+  variant: B0L
+  area: attack-free
+  measure: rec.warn_false_ghost
+  expect: eq
+  value: 0
+  fault: warn-flood
+  measured: pending
+  verdict: pending
+  source: 'no Sybil attacker, so no warning names a subject nobody signs under (app_truth: a ghost subject is a false warning)'
+- id: A0.L.determinism
+  base: B0L
+  variant: B0L2
+  area: attack-free
+  measure: digest
+  expect: identical
+  fault: nondeterministic
+  measured: pending
+  verdict: pending
+  source: 'same scenario, seed and build: the record digest is byte-identical (01-architecture determinism)'
+- id: A0.L.cost-memory
+  base: B0L
+  variant: B0L
+  area: cost
+  measure: cost.peak_mb
+  expect: le
+  value: 600
+  fault: cost-x10
+  measured: pending
+  verdict: pending
+  source: 'the 300 s pilot with up to 62 vehicles peaked at 111 MB; 40 vehicles is fewer receivers'
+- id: A0.U.no-revocation
+  base: B0U
+  variant: B0U
+  area: attack-free
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'the US profile revokes no honest vehicle on any quarter-fleet run nor on the full fleet over two days (06 §9, FB3)'
+- id: A0.U.no-decision
+  base: B0U
+  variant: B0U
+  area: attack-free
+  measure: p2.ma_revoke_decisions
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'as A0.U.no-revocation'
+- id: A0.U.honest-reports-vs-L
+  base: B0L
+  variant: B0U
+  area: attack-free
+  measure: p2.reports_about_honest
+  expect: up
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'the US profile checks every consecutive BSM pair with no streak gate and no stated-accuracy tolerance (RandomPosition at 1 m gpsDrift, MaxAcceleration at 10 m/s2; us_mbr.rs), where the research suite gates on streaks and stated accuracy: more honest reports at the same noise'
+- id: A0.M.no-revocation
+  base: B0M
+  variant: B0M
+  area: attack-free
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'every research verdict reaches the MA, but corroboration (3 events x 2 reporters in 60 s) still holds honest noise below the bar'
+- id: A0.M.ma-up
+  base: B0L
+  variant: B0M
+  area: attack-free
+  measure: p2.reports_received
+  expect: up
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'B0L files only SM-MBR-encodable checks (the pilot left 2,245 of 2,978 unfiled: no subtype); modelled_reports files every verdict, so the MA receives more'

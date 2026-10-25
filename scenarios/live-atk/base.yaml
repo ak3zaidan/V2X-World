@@ -1,0 +1,14 @@
+# Live attack-and-detection tests (docs/validation/live-atk-2026-10-25.md): the SCMS
+# lifecycle family (../credential-lifecycle.yaml: every US SCMS entity, the compressed
+# calendar, a 30 s CRL cadence, MA review 0 s) held at 40 vehicles from t = 0 for 150 s,
+# attack-free. Each variant in this folder adds one change; same seed.
+schema: v2xw/scenario/1
+meta: {base: ../credential-lifecycle.yaml, name: live-atk base}
+time: {duration_s: 150.0}
+actors:
+  vehicles:
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: null
+      fleet_size: 40
+threats: {attackers: []}
