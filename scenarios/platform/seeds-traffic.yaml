@@ -1,0 +1,153 @@
+# Seed spread for the platform validation (docs/validation/platform-2026-10-24.md section 3):
+# the base (seed 0xC0FFEE_5EED) and four other seeds, nothing else changed. Not a theory
+# table: a row 'fails' whenever the seed moves its metric; the values are read with --json
+# and their 95 % t-interval computed.
+base: ../phase1-grid.yaml
+set:
+  time.duration_s: 90.0
+  actors.vehicles.demand.rate_veh_per_h: 1500.0
+  world.source.params.cols: 4
+  world.source.params.rows: 6
+  metrics:
+  - all
+rows:
+- name: seed 1 traffic.speed_mean_mps
+  set:
+    seed: 1
+  metric: traffic.speed_mean_mps
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 1 traffic.stopped_share
+  set:
+    seed: 1
+  metric: traffic.stopped_share
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 1 traffic.actors
+  set:
+    seed: 1
+  metric: traffic.actors
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 1 traffic.lane_changes_per_veh
+  set:
+    seed: 1
+  metric: traffic.lane_changes_per_veh
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 1 metric.headway_time
+  set:
+    seed: 1
+  metric: metric.headway_time
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 2 traffic.speed_mean_mps
+  set:
+    seed: 2
+  metric: traffic.speed_mean_mps
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 2 traffic.stopped_share
+  set:
+    seed: 2
+  metric: traffic.stopped_share
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 2 traffic.actors
+  set:
+    seed: 2
+  metric: traffic.actors
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 2 traffic.lane_changes_per_veh
+  set:
+    seed: 2
+  metric: traffic.lane_changes_per_veh
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 2 metric.headway_time
+  set:
+    seed: 2
+  metric: metric.headway_time
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 3 traffic.speed_mean_mps
+  set:
+    seed: 3
+  metric: traffic.speed_mean_mps
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 3 traffic.stopped_share
+  set:
+    seed: 3
+  metric: traffic.stopped_share
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 3 traffic.actors
+  set:
+    seed: 3
+  metric: traffic.actors
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 3 traffic.lane_changes_per_veh
+  set:
+    seed: 3
+  metric: traffic.lane_changes_per_veh
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 3 metric.headway_time
+  set:
+    seed: 3
+  metric: metric.headway_time
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 4 traffic.speed_mean_mps
+  set:
+    seed: 4
+  metric: traffic.speed_mean_mps
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 4 traffic.stopped_share
+  set:
+    seed: 4
+  metric: traffic.stopped_share
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 4 traffic.actors
+  set:
+    seed: 4
+  metric: traffic.actors
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 4 traffic.lane_changes_per_veh
+  set:
+    seed: 4
+  metric: traffic.lane_changes_per_veh
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 4 metric.headway_time
+  set:
+    seed: 4
+  metric: metric.headway_time
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'

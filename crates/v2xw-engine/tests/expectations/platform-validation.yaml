@@ -1,0 +1,124 @@
+# Platform validation (docs/validation/platform-2026-10-24.md): the run-cost and
+# security-network tables re-run, determinism across thread counts and checkpoint/resume,
+# seed spread, the settings wiring audit, the RSU applications (SPaT and MAP) and the
+# Studio's settings reaching the engine.
+#
+# Every row was written down, with what theory or the standard predicts, before its run was
+# read. `verdict` is filled in afterwards:
+#   pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#   wrong-expectation (corrected with the evidence in `note`) | open (documented).
+# `fault` is the injected fault that turned the row's check red (each was run; the report
+# lists the outcome).
+#
+# Binary: release v2xw / v2xw-server built from 486c8cba, copied to the scratchpad; one run
+# per run-lock call; --build-utc 2026-01-01T00:00:00Z. Rows marked `binary: fixed` ran on
+# the debug build (opt-level 2) of this branch.
+#
+# The `schema` line keeps this out of the sweep loader (crates/v2xw-engine/src/sensitivity/
+# sweep.rs load_expectations): these rows are run checks, not single-setting sweep rows.
+# The setting rows they cite live in scenarios/platform/rsu-apps.yaml (a sensitivity spec).
+schema: v2xw/scms-run-expectations/1
+
+runs:
+  D: {scenario: scenarios/sensitivity/dsrc-grid.yaml, note: "40 vehicles, 1.2 km open grid, 802.11p BSM, 3 s"}
+  L: {scenario: scenarios/sensitivity/lte-grid.yaml, note: "the same fleet on LTE-V2X PC5 mode 4, 3 s"}
+  G: {scenario: scenarios/sensitivity/gn-grid.yaml, note: "ETSI GN/BTP, CAM + a DENM forwarded hop by hop, 24 s"}
+  C: {scenario: scenarios/connected-intersections.yaml, note: "4 RSUs SPaT/MAP, SRM/SSM, buildings, 3000 veh/h, 20 s"}
+  S: {scenario: scenarios/credential-lifecycle.yaml, note: "CAMP SCMS lifecycle, RSU, ConstPos attackers from 60 s, 75 s"}
+
+rows:
+# ---------------------------------------------------------------- (1) re-runs
+- {id: RR.run-cost, check: "v2xw sensitivity --expect run-cost.yaml", expect: "8/8",
+   source: "docs/validation/test-run-cost.md: work counters follow rate x vehicles x time and the followed-link set",
+   verdict: pass, measured: "8/8 in 13 s; attempts 31,005 base, 2,421 at max_m 200 m (-92 %), frames 795 -> 1,590 at 20 Hz"}
+- {id: RR.run-cost.rate-low-magnitude, check: "rsu-apps.yaml row 'BSM 10 -> 1 Hz frames' (band 0.08-0.13); dsrc family 795 -> n frames", expect: "ratio 0.10 (1 Hz / 10 Hz)",
+   source: "frames = rate x vehicles x time (SAE J2945/1 periodic BSM). run-cost.yaml's 'rate_hz low' row only asks for down and passed at -85.8 %",
+   fault: "the 486c8cba engine itself", verdict: fixed,
+   measured: "486c8cba: 576 -> 93 (0.161) on C, 795 -> 113 (0.142) on D; per-vehicle BSM interval p50 599.9 ms at 1 Hz: the generator clamps a fixed period into [vMinITT, vMaxITT] = [100, 600] ms",
+   test: "v2xw-engine platform_validation a_fixed_bsm_rate_is_the_rate_sent_across_its_range", fix: "wiring::generator_params raises vMaxITT to a fixed period above it"}
+- {id: RR.security-network, check: "v2xw sensitivity --expect security-network.yaml", expect: "22/22",
+   source: "docs/validation/test-security.md rows (IEEE 1609.2 signer id, PQ signature sizes, P2PCD, streak gate, EN 302 636-4-1 CBF)",
+   verdict: pass, measured: "22/22 in 72 s (17 perturbations)"}
+
+# ---------------------------------------------------------------- (2) determinism
+- {id: DT.threads.D, runs: [D], check: "record_digest, content_digest and metrics.json sha equal on RAYON_NUM_THREADS 1, 2, 4", expect: identical,
+   source: "ADR 0004: parallel phases are pure maps merged by NodeId; the result does not depend on the thread count",
+   fault: "seed 1 instead of 0xC0FFEE_5EED (det-Dseed): every digest must differ", verdict: pass,
+   measured: "059165b8 / af45d5e9 / 73d3576c, 139,298 records on 1, 2, 4; seed 1: 3cc243d7 / 6b07dc4b, 132,228 records"}
+- {id: DT.threads.L, runs: [L], check: same as DT.threads.D, expect: identical, source: ADR 0004, verdict: pass,
+   measured: "0c4a25e7 / 0ec4761e, 139,816 records on 1, 2, 4"}
+- {id: DT.threads.G, runs: [G], check: same as DT.threads.D, expect: identical, source: ADR 0004, verdict: pass,
+   measured: "8f7fe22b / d81371c0, 784,717 records on 1, 2, 4"}
+- {id: DT.threads.C, runs: [C], check: same as DT.threads.D, expect: identical, source: ADR 0004, verdict: pass,
+   measured: "66073a7b / bf29e741, 81,219 records on 1, 2, 4"}
+- {id: DT.threads.S, runs: [S], check: same as DT.threads.D, expect: identical,
+   source: "ADR 0004; per-certificate provisioning cryptography runs on rayon (RESIDUAL cc1ed05e) and must stay byte-identical", verdict: pass,
+   measured: "85385d6d / d742af71, 334,102 records on 1, 2, 4"}
+- {id: DT.resume.C, runs: [C], check: "--checkpoint-every 5s --stop-at 10s, then v2xw resume: digests equal the uninterrupted run with and without checkpoints", expect: identical,
+   source: "crates/v2xw-cli/src/checkpoint.rs: a resume replays to t, refuses unless the record digest at t matches, and finishes the same outputs", verdict: pass,
+   measured: "resumed 66073a7b / bf29e741 / metrics 96b67db0 = uninterrupted = no-checkpoint run; 4 segments"}
+- {id: DT.resume.G, runs: [G], check: "as DT.resume.C, --checkpoint-every 8s --stop-at 12s", expect: identical, source: checkpoint.rs, verdict: pass,
+   measured: "8f7fe22b / d81371c0 / ee8e1123 in all three"}
+- {id: DT.cost.threads, runs: [D, L, G, C, S], check: "wall time 1 -> 4 threads", expect: "no slower; speed-up only where the parallel reception phase is a large share",
+   source: "test-run-cost.md: 2.47 / 1.74 / 1.38 s per simulated s on 145 vehicles; the node phase is sequential (run.rs on_node_phase: ObuRuntime is not Send)",
+   verdict: pass, measured: "D 2.91/2.86/2.92 s, L 3.64/3.36/3.42, G 13.9/13.0/13.2, C 4.9/3.9/3.6, S 9.6/9.3/9.1; RSS flat (28-88 MB)",
+   note: "40-vehicle families are dominated by the world build and the sequential node phase: Amdahl, not a defect"}
+
+# ---------------------------------------------------------------- (3) seed spread (5 seeds, 95 % t-interval of the mean, n = 5)
+- {id: ST.dsrc, check: "scenarios/platform/seeds-dsrc.yaml --json", expect: "radio metrics within +-5 % of the mean across seeds; the default seed inside the interval",
+   source: "40 vehicles x 3 s gives ~46,000 link attempts per run, so binomial noise is < 1 %; the seed moves the spawn layout, which moves range and load by a few %",
+   verdict: pass, measured: "prr 0.914 +-1.8 %, cbr 0.080 +-4.6 %, range90 704 m +-8.4 %, aoi 72.0 ms +-3.3 %, e2e 12.40 ms +-0.3 %, attempts 45,680 +-3.4 %; default seed inside every interval but e2e (12.453 against [12.36, 12.45], at the edge)",
+   note: "access_ms (0.039 ms, +-122 %) is a handful of contention events per run: no single-seed row should test it with a 1 % band against another seed"}
+- {id: ST.traffic, check: "scenarios/platform/seeds-traffic.yaml --json", expect: "speed and stopped share within +-10 %; the default seed inside the interval",
+   source: "90 s of Poisson demand at 1500 veh/h on a 4 x 6 signalised grid: ~37 vehicles, so the fleet mean moves with which approaches the arrivals take",
+   verdict: pending}
+- {id: ST.security, check: "scenarios/platform/seeds-security.yaml --json", expect: "verify rate and full-cert share within +-10 %; aoi within +-15 %",
+   source: "the credential lifecycle family: nine vehicles and an RSU for 30 s; few senders, so per-seed spread is wider than the radio family's",
+   verdict: pending}
+
+# ---------------------------------------------------------------- (4) settings wiring
+- {id: SW.unread, check: "python3 -I tools/audit/settings_wiring.py", expect: "0 unread keys",
+   source: "a key the engine reads by nothing changes the scenario hash and nothing else (validate.rs Status::NotImplemented); KEY_STATUS lists none",
+   fault: "a field `fake_unread_knob_hz` added to Radio in a copy of schema.rs (--schema): FAIL 1 unread radio.fake_unread_knob_hz",
+   verdict: pass, measured: "546 keys, 0 unread; 4 unread by design: meta.authors (Descriptive), time.des_resolution, detection.responder, detection.perception_tier (Refused: the loader refuses any value it cannot honour)"}
+- {id: SW.guides, check: "python3 -I tools/audit/settings_wiring.py", expect: "every dotted knob a guide names exists",
+   source: "docs/guides/ are the user's reference; a knob there the loader rejects is a broken instruction",
+   fault: "a guide copy naming `radio.range.fake_margin_db` (--guides): FAIL 1 missing", verdict: pass,
+   measured: "403 knob mentions in 6 guides, 0 missing"}
+
+# ---------------------------------------------------------------- (5) RSU applications (records and on the air)
+- {id: SM.spat-rate, runs: [C], check: "node.tx spat per unit / s", expect: "10 Hz per unit",
+   source: "CTI 4501 v01 (Connected Intersections): SPaT at 10 Hz; J2735 SPAT carries one IntersectionState per broadcast",
+   verdict: pass, measured: "798 SPaT from 4 units in 20 s (9.98 Hz each)"}
+- {id: SM.map-rate, runs: [C], check: "node.tx map per unit / s", expect: "1 Hz per unit", source: "CTI 4501 v01: MAP at least once per second",
+   verdict: pass, measured: "80 MAP from 4 units in 20 s; MAP PSDU 501 octets, under the 1400-octet WSM limit, so never fragmented"}
+- {id: SM.spat-interval-200, check: "rsu-apps.yaml 'SPaT 100 -> 200 ms' band 0.48-0.52", expect: "0.5", source: "the scenario's period", verdict: pass,
+   measured: "398 -> 200 (0.503)"}
+- {id: SM.spat-interval-150, check: "rsu-apps.yaml 'SPaT 100 -> 150 ms' band 0.64-0.69", expect: "0.667 (6.67 Hz)",
+   source: "the unit's SPaT timer runs at its own period; a 150 ms period must keep its mean rate on the 100 ms node-step grid",
+   fault: "the 486c8cba engine itself", verdict: fixed,
+   measured: "486c8cba: 398 -> 200 (0.50, 5 Hz): MessageSchedule's periodic timer restarted from each check's instant, so every interval rounded up to the 100 ms step",
+   test: "v2xw-node generate::tests a_spat_period_off_the_check_grid_keeps_its_rate (and a_slow_clock_does_not_halve_the_spat_rate)",
+   fix: "the timer anchors on the instant the previous message was due"}
+- {id: SM.map-interval, check: "rsu-apps.yaml MAP 500 ms (band 1.9-2.1) and 2500 ms (0.35-0.45)", expect: "2.0 and 0.4", source: "the scenario's period", verdict: pass,
+   measured: "40 -> 80 (2.0); 40 -> 16 (0.4)"}
+- {id: SM.spat-independent-of-bsm-rate, check: "rsu-apps.yaml 'BSM 10 -> 5 Hz leaves SPaT at 10 Hz'", expect: same,
+   source: "messages.rate_hz is the vehicles' J2945/1 rate; the RSU timer is CTI 4501's", verdict: pass, measured: "398 -> 396 (-0.5 %)"}
+- {id: SM.spat-size, check: "rsu-apps.yaml 'SPaT size at 200 ms'", expect: "up 2-4 % (first written: same)",
+   source: "IEEE 1609.2 signer policy full_cert_every_ms 1000: one SPaT per second per unit carries the certificate (+64 octets on C: 280 against 216), so at 5 Hz one in five instead of one in ten: 222.4 -> 228.8 octets (+2.9 %)",
+   verdict: wrong-expectation, measured: "221 -> 227 (+2.7 %)", note: "the row first said `same`; the share of certificate-signed SPaTs is the cause, measured on C from node.tx signer"}
+- {id: SM.on-air-content, check: "cargo test -p v2xw-engine --test platform_validation the_spat_and_map_on_the_air_are_the_plan_and_the_survey", expect: pass,
+   source: "J2735 SPAT/MAP; CTI 4501 v01: every SPaT signal group is a MAP connection's signalGroup and the other way round; the tapped SPDU's payload decodes to the plan at the SPaT's own timeStamp",
+   fault: "built into the test: the same SPaT compared with the plan 30 s later must disagree for most messages (wrong_feed_caught)",
+   verdict: pending}
+- {id: SM.on-air-range, runs: [C], check: "phy.rx decoded share by distance, RSU senders against OBU senders", expect: "RSU frames reach farther than OBU frames",
+   source: "an RSU antenna on a mast at a junction (line of sight down four streets) and RSU EIRP above the OBU's (FCC 47 CFR 95.3159): its link budget beats a vehicle's",
+   verdict: pass, measured: "decoded share 0-100 m: RSU 1.00, OBU 0.91; 100-200 m: 0.93 against 0.36; 200-300 m: 0.42 against 0.07"}
+
+# ---------------------------------------------------------------- (6) the Studio
+- {id: UI.knobs, check: "tools/audit/studio_knobs.py: one knob per settings section through scenario.set + run.start on the server, read back from run.status / metrics.query", expect: "11/11 sections move the engine as written",
+   source: "each knob's row in studio_knobs.py KNOBS, with its source",
+   fault: "--fault sends the base document instead of the knob: every row must FAIL", verdict: pending}
+- {id: UI.e2e, check: "pnpm exec playwright test -c playwright.engine.config.ts e2e-engine/settings.spec.ts on ports 8754/5144", expect: pass,
+   source: "the Studio's settings window against the real engine (search, edit, undo, reset, JSON round trip, Apply reaching the next run, refusals)",
+   verdict: pending}
