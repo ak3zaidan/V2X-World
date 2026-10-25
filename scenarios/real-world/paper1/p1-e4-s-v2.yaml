@@ -1,0 +1,14 @@
+# P1-E4 speed-matched on the frozen v2 fit (testing/paper1-validation.md §8): p1-e4-s.yaml with
+# data/calibration/bsm-timing-cvpilot-v2.yaml, the Gaussian speed and heading output noise of
+# tools/realdata 1.1.0, so the v3 refit (heavy-tailed position noise and the locked :00/:50
+# grid hops) is compared with the body before it on the same binary and seed.
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4-s.yaml
+  name: Paper 1 E4 speed-matched on the v2 fit
+  description: The speed-matched E4 highway with the frozen v2 timing calibration.
+  tags: [paper1, validation, highway, bsm-timing]
+actors:
+  vehicles:
+    bsm_timing:
+      calibration: data/calibration/bsm-timing-cvpilot-v2.yaml

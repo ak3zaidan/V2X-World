@@ -152,6 +152,15 @@ runs:
   E4SF:
     scenario: scenarios/real-world/paper1/p1-e4-s-free.yaml
     note: E4S with every OBU free (the v2 BSM clock on every device)
+  E4T:
+    scenario: scenarios/real-world/paper1/p1-e4-s.yaml
+    note: E4S on the v3 fit (tools/realdata 1.2.0; heavy-tailed position noise, bounded output noise, locked grid hops)
+  E4T2:
+    scenario: scenarios/real-world/paper1/p1-e4-s.yaml
+    note: E4T again (determinism)
+  E4TV2:
+    scenario: scenarios/real-world/paper1/p1-e4-s-v2.yaml
+    note: E4T's binary on the frozen v2 fit (the body before E4-BODY's v3 refit)
 rows:
 - id: P1.TS.rp-share0
   base: B
@@ -1237,4 +1246,163 @@ rows:
   tol: 0.25
   source: 'a locked fleet trips RandomPosition 0 times per ID-minute either way (the body moves at cm scale,
     the 1 m threshold is 20x above it), so the misbehaviour reports to the RA do not change'
+  measured: pending
+- id: P1.E4T.ks
+  base: E4T
+  variant: E4T
+  area: metrics
+  measure: x.e4.ks
+  expect: le
+  value: 0.092
+  source: 'P1-E4, the final run: the pre-registered tolerance 0.092 (unchanged) against held-out Wyoming,
+    speed-matched, on the v3 fit (tools/realdata 1.2.0, Tampa + Orem only): a heavy-tailed reported-position
+    increment (4-component normal mixture, 8.5 % of epochs at 12.6 cm along / 6.0 cm across), output noise
+    bounded by the BSM-to-BSM speed and heading change (0.031 m/s, 0.052 deg), and the locked class''s
+    :00/:50 grid hops (leave 0.113, return 0.445 per BSM). Prediction written before the run (the model
+    simulated at 30 m/s, no Wyoming): p50 / p90 / p99 about 1.9 / 5.7 / 19.5 cm against Wyoming''s
+    1.6 / 6.0 / 15.7, so the KS should fall well below 0.169; passing depends on Wyoming''s devices being
+    like the fit sets'''
+  measured: pending
+- id: P1.E4T.ks-down
+  base: E4TV2
+  variant: E4T
+  area: metrics
+  measure: x.e4.ks
+  expect: down
+  min_change: 0.3
+  source: 'the v2 body is too narrow above 5 cm (p90 4.1 cm, p99 6.1 cm against Wyoming 6.0 / 15.7) and too
+    wide at its centre (p50 2.1 cm against 1.6, the 0.30 deg heading noise at 30 m/s); the v3 fit moves both
+    toward Wyoming, so the KS distance falls by more than 30 %'
+  measured: pending
+- id: P1.E4T.body-p50
+  base: E4T
+  variant: E4T
+  area: metrics
+  measure: x.e4.r_p50
+  expect: band
+  band:
+  - 0.015
+  - 0.023
+  source: 'the v3 model simulated at 30 m/s: p50 1.85 cm (stamp jitter 0.28 ms x v along, quantisation 0.43 cm,
+    the mixture''s 58 % core); the fit sets'' locked residual p50 is 1.7 cm at 13.5 m/s'
+  measured: pending
+- id: P1.E4T.tail-p90
+  base: E4T
+  variant: E4T
+  area: metrics
+  measure: x.e4.r_p90
+  expect: band
+  band:
+  - 0.045
+  - 0.075
+  source: 'the v3 model simulated at 30 m/s: p90 5.7 cm (the mixture''s 25.7 % component at 2.8 / 2.3 cm and
+    8.5 % at 12.6 / 6.0 cm); the v2 fit gave 4.1 cm'
+  measured: pending
+- id: P1.E4T.tail-p99
+  base: E4T
+  variant: E4T
+  area: metrics
+  measure: x.e4.r_p99
+  expect: band
+  band:
+  - 0.12
+  - 0.3
+  source: 'the v3 model simulated at 30 m/s: p99 19.5 cm; the fit sets'' locked p99 is 26.9 cm (all Δt, with
+    RSU gaps the engine''s node.tx has not), the v2 fit gave 6.1 cm'
+  measured: pending
+- id: P1.E4T.hop-share
+  base: E4T
+  variant: E4T
+  area: metrics
+  measure: x.e4.hop_share
+  expect: band
+  band:
+  - 0.14
+  - 0.22
+  source: 'the fit sets'' locked consecutive-msgCnt BSMs: (836 + 831) / 9,255 = 0.180 of secMark steps are
+    50 or 150 ms; the engine draws leave 0.113 and return 0.445 per BSM, 2lr/(l+r) = 0.180'
+  measured: pending
+- id: P1.E4T.locked-rate
+  base: E4T
+  variant: E4T
+  area: metrics
+  measure: x.e4.rate_per_idmin
+  expect: le
+  value: 0.568
+  source: 'the frozen locked bound 0.568 per ID-minute (Wyoming 0.0): the widest mixture component (12.6 cm
+    along) is 8 sd short of the 1 m threshold, and a hop keeps the position consistent with Δt'
+  measured: pending
+- id: P1.E4T.speed
+  base: E4T
+  variant: E4T
+  area: metrics
+  measure: x.e4.v_p50
+  expect: band
+  band:
+  - 25.0
+  - 36.0
+  source: the timing model does not move the vehicles (ground truth, mobility and GNSS untouched)
+  measured: pending
+- id: P1.E4T.rerun
+  base: E4T
+  variant: E4T2
+  area: determinism
+  measure: digest.record
+  expect: identical
+  source: 'same seed, same build: byte-identical record stream with the v3 model on (six more draws per BSM
+    from the node''s own timing stream)'
+  measured: pending
+- id: P1.E4T.frames
+  base: E4TV2
+  variant: E4T
+  area: performance
+  measure: r.frames_transmitted
+  expect: same
+  tol: 0.02
+  source: 'a hop moves a locked BSM half an interval later inside its own 100 ms wake: one BSM per wake either
+    way, so the frame count does not change'
+  measured: pending
+- id: P1.E4T.events
+  base: E4TV2
+  variant: E4T
+  area: performance
+  measure: cost.events
+  expect: ratio
+  band:
+  - 0.95
+  - 1.05
+  source: the same frames and receptions; the model adds draws, no events
+  measured: pending
+- id: P1.E4T.memory
+  base: E4TV2
+  variant: E4T
+  area: performance
+  measure: cost.peak_mb
+  expect: ratio
+  band:
+  - 0.8
+  - 1.25
+  source: per-device state grows by three numbers (the error at the epoch, the grid state)
+  measured: pending
+- id: P1.E4T.revoked-honest
+  base: E4T
+  variant: E4T
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: 'the 8 h MA review: no honest revocation inside a 90 s window, whatever the residual body'
+  measured: pending
+- id: P1.E4T.reports
+  base: E4TV2
+  variant: E4T
+  area: architecture
+  measure: p2.reports_sent
+  expect: delta
+  band:
+  - -5
+  - 5
+  source: 'RandomPosition stays at 0 triggers (the tail is 8 sd short of 1 m) and the v3 speed noise is a third
+    of v2''s, so implied-acceleration checks fire no more: the few misbehaviour reports to the RA (2 on E4S)
+    stay within a handful'
   measured: pending

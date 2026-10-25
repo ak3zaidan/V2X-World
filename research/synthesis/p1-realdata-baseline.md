@@ -322,7 +322,7 @@ Written to `data/calibration/bsm-timing-cvpilot.yaml` (schema v2xw.bsm_timing.v1
 # locked phase is the distance to the nearest 50 ms epoch.
 # Tampa: 41 locked, 137 free IDs (locked share 0.230); the share is deployment-specific.
 # Orem: 4 locked, 2617 free IDs (locked share 0.002); the share is deployment-specific.
-schema: v2xw.bsm_timing.v2
+schema: v2xw.bsm_timing.v3
 provenance:
   sources:
     - {dataset: ev64-jn8c, rows: 295906, query: "https://data.transportation.gov/resource/ev64-jn8c.csv?%24select=tmstp_epoch,temp_id,msg_count,sec_mark,latitude,longitude,speed,heading,longitudinal_acceleration,semi_major_axis_accuracy,semi_minor_axis_accuracy,wheel_brakes_flags&%24order=temp_id,tmstp_epoch,:id&%24where=date_utc+%3D+'2025-02-02T00:00:00.000'"}
@@ -336,7 +336,7 @@ provenance:
   manifest_sha256: ee6eeab3f926d0fefac2e790d0dea9c5411531d7823d39558620a5521189d412
   fitted_on: ["nm7w-nvbm", "ev64-jn8c", "7qu7-j8rx (header_jitter_ms only)"]
   held_out: ["7qu7-j8rx (device class and trigger rates)"]
-  tool: tools/realdata 1.1.0
+  tool: tools/realdata 1.2.0
 fix_interval_ms: 100
 classes:
   - name: locked
@@ -364,9 +364,22 @@ classes:
     # until P1-E3: if metadata_generatedat is ODE log time, not the signed 1609.2
     # generationTime, this is not a header jitter.
     header_jitter_ms: {sd: 28.2875}
-    # receiver output noise, from 1961 exactly-100 ms pairs of the locked class at v >= 10 m/s:
-    # along sd 0.0111 m, cross sd 0.0089 m (IQR/1.349), quantisation 0.0042 m per component
-    output_noise: {speed_mps: 0.10289, heading_deg: 0.304444}
+    # receiver output noise, white, bounded by the change of the transmitted speed and heading
+    # between consecutive exactly-100 ms BSMs of the locked class at v >= 10 m/s (1961 pairs):
+    # change sd 0.0445 m/s and 0.0741 deg (IQR/1.349), so noise <= change/sqrt(2). The v2 fit
+    # read the whole residual body (along 0.0111 m, cross 0.0089 m) as this noise
+    output_noise: {speed_mps: 0.0314503, heading_deg: 0.0524171}
+    # the rest of the body and its tail: the reported position's error increment per fix
+    # interval, a Gaussian scale mixture (EM, 4 components, log-lik 10861.1) on 1961 exactly-100 ms
+    # pairs of the locked class at v >= 10 m/s with their own speed and heading change removed
+    # and the quantisation, the stamp jitter (0.284 ms x v) and the output noise above
+    # deconvolved. Increments are white (lag-1 ~ 0), so the error is a random walk over the
+    # fix epochs, mean-reverting with tau_s (an assumption: tau >= 1 s keeps lag-1 within 0.05)
+    position_noise: {dist: normal_mixture, tau_s: 1.0, p: [0.576868, 0.081631, 0.25678, 0.084721], along_m: [0.0001, 0.0001, 0.0280148, 0.125834], cross_m: [0.00327369, 0.0136374, 0.0226062, 0.0604023]}
+    # :00/:50 grid hops: consecutive-msgCnt BSMs (Δt 50/100/150 ms) home->home 6552, home->away 836,
+    # away->home 831, away->away 1036; a hop is Δt 50 then 150 ms (or 150 then 50), the position
+    # at the new instant. The engine puts the away grid half an interval late
+    grid_hop: {leave_prob: 0.113156, return_prob: 0.445099}
   - name: free
     share: 0.983923
     # bins_ms are the 11 edges of 10 bins; p[i] is the share in [bins_ms[i], bins_ms[i+1])
@@ -389,9 +402,18 @@ classes:
     frozen_repeat_prob: 0.155683
     # no free-class source has a header time: borrowed from the locked Wyoming fit
     header_jitter_ms: {sd: 28.2875}
-    # receiver output noise, from 1961 exactly-100 ms pairs of the locked class (borrowed) at v >= 10 m/s:
-    # along sd 0.0111 m, cross sd 0.0089 m (IQR/1.349), quantisation 0.0042 m per component
-    output_noise: {speed_mps: 0.10289, heading_deg: 0.304444}
+    # receiver output noise, white, bounded by the change of the transmitted speed and heading
+    # between consecutive exactly-100 ms BSMs of the locked class (borrowed) at v >= 10 m/s (1961 pairs):
+    # change sd 0.0445 m/s and 0.0741 deg (IQR/1.349), so noise <= change/sqrt(2). The v2 fit
+    # read the whole residual body (along 0.0111 m, cross 0.0089 m) as this noise
+    output_noise: {speed_mps: 0.0314503, heading_deg: 0.0524171}
+    # the rest of the body and its tail: the reported position's error increment per fix
+    # interval, a Gaussian scale mixture (EM, 4 components, log-lik 10861.1) on 1961 exactly-100 ms
+    # pairs of the locked class (borrowed) at v >= 10 m/s with their own speed and heading change removed
+    # and the quantisation, the stamp jitter (0.284 ms x v) and the output noise above
+    # deconvolved. Increments are white (lag-1 ~ 0), so the error is a random walk over the
+    # fix epochs, mean-reverting with tau_s (an assumption: tau >= 1 s keeps lag-1 within 0.05)
+    position_noise: {dist: normal_mixture, tau_s: 1.0, p: [0.576868, 0.081631, 0.25678, 0.084721], along_m: [0.0001, 0.0001, 0.0280148, 0.125834], cross_m: [0.00327369, 0.0136374, 0.0226062, 0.0604023]}
 ```
 
 <!-- END GENERATED -->

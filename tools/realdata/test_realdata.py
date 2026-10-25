@@ -270,6 +270,55 @@ class ClassAndPipelineTests(unittest.TestCase):
         self.assertLess(clean[0], 0.03)
         self.assertLess(clean[1], 0.05)
 
+    def test_position_noise_recovers_an_injected_heavy_tailed_walk(self):
+        # v3: a reported-position error that walks with a heavy-tailed increment (80 % at 3 mm,
+        # 20 % at 5 cm along track; 2 mm / 3 cm across) on a north-bound 30 m/s fleet, J2735
+        # quantised. The EM fit must find the tail's weight and the increment's rms.
+        import random
+
+        def fleet(scale):
+            rnd = random.Random(11)
+            pairs = []
+            for k in range(20):
+                v, out, ea, ec = 30.0, [], 0.0, 0.0
+                for i in range(200):
+                    big = rnd.random() < 0.2
+                    ea += scale * rnd.gauss(0, 0.05 if big else 0.003)
+                    ec += scale * rnd.gauss(0, 0.03 if big else 0.002)
+                    d = v * i * 0.1 + ea
+                    lat = round(41.0 + math.degrees(d / pairing.R_EARTH), 7)
+                    lon = round(-106.0 + math.degrees(ec / (pairing.R_EARTH * math.cos(math.radians(41.0)))), 7)
+                    out.append(normalise.Bsm("P%d" % k, (1000 + i * 100) % 60000, i % 128, 1000.0 + i * 0.1,
+                                             1000.0 + i * 0.1, None, lat, lon, v, 0.0, 0.0, 0.5, 0.4, None))
+                pairs.extend(pipeline.analyse_id("p", out).body_pairs)
+            return calib.position_noise({"pairs": pairs}, 0.0, 0.0, 0.0, iters=150)
+
+        w, sa, sc, n, _ = fleet(1.0)
+        self.assertEqual(n, 20 * 199)
+        rms = lambda s: math.sqrt(sum(p * x * x for p, x in zip(w, s)))
+        self.assertAlmostEqual(rms(sa), math.sqrt(0.8 * 0.003 ** 2 + 0.2 * 0.05 ** 2), delta=0.003)
+        self.assertAlmostEqual(rms(sc), math.sqrt(0.8 * 0.002 ** 2 + 0.2 * 0.03 ** 2), delta=0.003)
+        self.assertAlmostEqual(sum(p for p, x in zip(w, sa) if x > 0.02), 0.2, delta=0.05)
+        w, sa, sc, _, _ = fleet(0.0)
+        self.assertLess(rms(sa), 0.004)  # uniform quantisation deconvolved as a normal leaves ~2 mm
+
+    def test_grid_hops_are_counted_from_the_home_grid(self):
+        # A locked device on :00 hops to :50 (Δt 150 ms), stays 3 BSMs, and returns (Δt 50 ms).
+        v, out, t = 25.0, [], 0.0
+        for i in range(30):
+            t = i * 0.1 + (0.05 if 10 <= i < 14 else 0.0)
+            lat = 41.0 + math.degrees(v * t / pairing.R_EARTH)
+            out.append(normalise.Bsm("G", int(round(1000 + t * 1000)) % 60000, i % 128, 1000.0 + t, 1000.0 + t,
+                                     None, lat, -106.0, v, 0.0, 0.0, 0.5, 0.4, None))
+        r = pipeline.analyse_id("g", out)
+        self.assertEqual(r.hop[("home", "away")], 1)
+        self.assertEqual(r.hop[("away", "home")], 1)
+        self.assertEqual(r.hop[("away", "away")], 3)
+        self.assertEqual(r.hop[("home", "home")], 24)
+        leave, ret, _ = calib.grid_hop({"hop": r.hop})
+        self.assertAlmostEqual(leave, 1 / 25)
+        self.assertAlmostEqual(ret, 1 / 4)
+
     def test_free_phase_jitter_alone_fires_at_speed(self):
         import random
         rnd = random.Random(1)
