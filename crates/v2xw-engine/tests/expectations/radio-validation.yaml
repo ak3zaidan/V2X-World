@@ -1,0 +1,548 @@
+# Radio, MAC and networking validation against theory and published results
+# (docs/validation/radio-2026-10-24.md). Every `expect` below was written and committed with
+# `measured: pending` before the run it judges. Not a sweep table: `v2xw sensitivity` passes
+# over it by its `schema`.
+#
+# Runs: each is a base-only sensitivity run (`v2xw sensitivity --base-only`) of the open
+# 1.2 km grid (scenarios/sensitivity/dsrc-grid.yaml: 40 vehicles, 802.11p, BSMs, US region)
+# with `common` and the run's `set` applied:
+#   python3 -I tools/radioval/radioval.py plan  <this file> <outdir>   (writes the specs)
+#   v2xw sensitivity --base-only <outdir>/<run>.spec.yaml > <outdir>/<run>.out   (one per run-lock call)
+#   python3 -I tools/radioval/radioval.py check <this file> <outdir> [--fill] [--mutate]
+# Rows with a `kind` are judged by that script (theory computed there, never read from the
+# engine); rows without one are judged by the test or check they name.
+#
+# The clean link (common): single-slope log-distance n = 2.5, no shadowing, no fading, BSMs
+# at 2 Hz for 4 s (collisions under 3 %). Budget: EIRP 20 dBm (J2945/1 cap) + 3 dBi receive
+# - (-92 dBm sensitivity) = 115 dB; a conducted power below the cap radiates tx + 3 dBi, so
+# the budget is tx + 98 dB. Free space at 5.86 GHz: FSPL = 20 log10(d) + 47.80 dB.
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+schema: v2xw/scms-run-expectations/1
+common:
+  time.duration_s: 4.0
+  metrics: [all]
+  messages.rate_hz: 2.0
+  radio.channel_model.path_loss_exponent: 2.5
+  radio.channel_model.shadowing_sigma_db: 0.0
+  radio.channel_model.fading: none
+runs:
+  LD:
+    note: the clean link, log-distance n = 2.5, budget 115 dB (d0 = 10 m x 10^((115 - 67.8) / 25) = 766 m)
+  FS3:
+    common: false  # a named law refuses the log-distance exponent
+    set: {time.duration_s: 4.0, metrics: [all], messages.rate_hz: 2.0, radio.channel_model.fading: none, radio.models.propagation: {id: propagation/free-space, params: {}}, radio.devices.obu.tx_power_dbm: 3.0}
+    note: free space, conducted 3 dBm (EIRP 6 dBm), budget 101 dB
+  TR12:
+    common: false  # a named law refuses the log-distance exponent
+    set: {time.duration_s: 4.0, metrics: [all], messages.rate_hz: 2.0, radio.channel_model.fading: none, radio.models.propagation: {id: propagation/two-ray-ground, params: {}}, radio.devices.obu.tx_power_dbm: 12.0}
+    note: two-ray ground, 1.5 m antennas, conducted 12 dBm, budget 110 dB
+  TR37:
+    common: false  # a named law refuses the log-distance exponent
+    set: {time.duration_s: 4.0, metrics: [all], messages.rate_hz: 2.0, radio.channel_model.fading: none, radio.channel_model.shadowing_sigma_db: 0.0, radio.models.propagation: {id: propagation/tr37885, params: {}}, radio.devices.obu.tx_power_dbm: 3.0}
+    note: TR 37.885 state model (urban, the procedural grid's class), no shadowing, budget 101 dB
+  RAY:
+    set: {radio.channel_model.fading: rayleigh}
+    note: the clean link with Rayleigh fading
+  NAK3:
+    set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_shape: 3.0}
+    note: the clean link with Nakagami m = 3
+  SH6:
+    set: {radio.channel_model.shadowing_sigma_db: 6.0}
+    note: the clean link with 6 dB log-normal shadowing, no fading
+  AIRD:
+    common: false
+    set: {time.duration_s: 3.0, metrics: [all], security.signer_id_policy.full_cert_every_ms: 3600000, security.signer_id_policy.digest_otherwise: true}
+    note: the grid at 10 Hz, every BSM signed with a digest
+  AIRC:
+    common: false
+    set: {time.duration_s: 3.0, metrics: [all], security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
+    note: the grid at 10 Hz, every BSM carries the full certificate
+  N40:
+    common: false
+    set: {time.duration_s: 3.0, metrics: [all]}
+    note: the grid at its default channel (medium tier), 10 Hz, 40 vehicles
+  N40B:
+    common: false
+    set: {time.duration_s: 3.0, metrics: [all]}
+    note: N40 again (determinism)
+  N80:
+    common: false
+    set: {time.duration_s: 3.0, metrics: [all], actors.vehicles.demand.params.max_total_vehicles: 80}
+  N160:
+    common: false
+    set: {time.duration_s: 3.0, metrics: [all], actors.vehicles.demand.params.max_total_vehicles: 160}
+  SLT2_1:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 1}
+    note: NR-V2X mode 2 (Ali/Todisco profile, mu = 1, 0.5 ms slots, T1 = 2 slots), T2 = 1 ms
+  SLT2_5:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 5}
+    note: NR-V2X mode 2 (Ali/Todisco profile, mu = 1, 0.5 ms slots, T1 = 2 slots), T2 = 5 ms
+  SLT2_10:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 10}
+    note: NR-V2X mode 2 (Ali/Todisco profile, mu = 1, 0.5 ms slots, T1 = 2 slots), T2 = 10 ms
+  SLT2_50:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 50}
+    note: NR-V2X mode 2 (Ali/Todisco profile, mu = 1, 0.5 ms slots, T1 = 2 slots), T2 = 50 ms
+  SLT2_100:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 100}
+    note: NR-V2X mode 2 (Ali/Todisco profile, mu = 1, 0.5 ms slots, T1 = 2 slots), T2 = 100 ms
+  SLT2_U:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all]}
+    note: NR-V2X mode 2 with the profile's T2 (33 slots = 16.5 ms)
+  SLT2J_1:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 1, messages.generator: {id: generator/timing-phase-jitter, params: {max_jitter_ms: 0}}}
+    note: as SLT2_1 with no per-message hand-off jitter (each node keeps its own uniform phase)
+  SLT2J_5:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 5, messages.generator: {id: generator/timing-phase-jitter, params: {max_jitter_ms: 0}}}
+    note: as SLT2_5 with no per-message hand-off jitter (each node keeps its own uniform phase)
+  SLT2J_10:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 10, messages.generator: {id: generator/timing-phase-jitter, params: {max_jitter_ms: 0}}}
+    note: as SLT2_10 with no per-message hand-off jitter (each node keeps its own uniform phase)
+  SLT2J_U:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], messages.generator: {id: generator/timing-phase-jitter, params: {max_jitter_ms: 0}}}
+    note: as SLT2_U with no per-message hand-off jitter (each node keeps its own uniform phase)
+  SLT2J_50:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 50, messages.generator: {id: generator/timing-phase-jitter, params: {max_jitter_ms: 0}}}
+    note: as SLT2_50 with no per-message hand-off jitter (each node keeps its own uniform phase)
+  SLT2J_100:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 100, messages.generator: {id: generator/timing-phase-jitter, params: {max_jitter_ms: 0}}}
+    note: as SLT2_100 with no per-message hand-off jitter (each node keeps its own uniform phase)
+rows:
+# ---- Path loss: the PRR 0.5 edge sits where the law spends the budget (no fading) ----
+- id: RV-PL-LD
+  kind: abs
+  run: LD
+  metric: range_m
+  band: [720, 800]
+  expect: 766 m (25 log10(d0 / 10 m) = 115 - 67.8 dB)
+  source: log-distance law (Rappaport 2e Eq. 4.68); one 20 m bin of room
+  fault: d0 scaled x1.25
+  measured: '760'
+  verdict: pass
+- id: RV-PL-FS
+  kind: abs
+  run: FS3
+  metric: range_m
+  band: [420, 480]
+  expect: 457 m (20 log10(d0) = 101 - 47.80 dB)
+  source: Friis 1946; FSPL = 20 log10(4 pi d f / c)
+  fault: d0 scaled x1.25
+  measured: '460'
+  verdict: pass
+- id: RV-PL-2RAY
+  kind: abs
+  run: TR12
+  metric: range_m
+  band: [800, 880]
+  expect: 843 m (past the 553 m crossover 4 pi ht hr / lambda, PL = 40 log10 d - 20 log10(ht hr) = 110 dB); free space would put it at 1,288 m
+  source: Rappaport 2e Eq. 4.52 (two-ray ground reflection)
+  fault: d0 scaled x1.25
+  measured: '840'
+  verdict: pass
+- id: RV-PL-TR37
+  kind: abs
+  run: TR37
+  metric: range_m
+  band: [120, 800]
+  expect: between the urban NLOS edge (36.85 + 30 log10 d + 18.9 log10 5.86 = 101 dB at 137 m) and the urban LOS edge (38.77 + 16.7 log10 d + 18.2 log10 5.86 = 101 dB at 775 m); a same-street link is LOS with P = min(1, 1.05 exp(-0.0114 d)), else NLOSv
+  source: 3GPP TR 37.885 V15.3.0 Table 6.2.1-1 and §6.2.1 LOS probability
+  fault: value x1.25 (stays green if near the low end; the band is a probe)
+  measured: '760'
+  verdict: pass
+# ---- Fading and shadowing: the PRR curve is the law's tail probability ----
+- id: RV-FAD-RAY-390
+  kind: curve
+  run: RAY
+  range: [360, 420]
+  law: {kind: rayleigh, d0: 766, n: 2.5}
+  tol: 0.06
+  expect: PRR = floor x exp(-(d / d0)^n) = 0.83 x floor at 390 m
+  source: Rayleigh power is exponential with unit mean, so P(g > (d/d0)^n) = exp(-(d/d0)^n) (Rappaport 2e §5.6; Sklar, IEEE Commun. Mag. 1997)
+  fault: d0 x0.85 in the theory
+  measured: 0.803 vs theory 0.806 (floor 0.978, n=953)
+  verdict: pass
+- id: RV-FAD-RAY-570
+  kind: curve
+  run: RAY
+  range: [540, 600]
+  law: {kind: rayleigh, d0: 766, n: 2.5}
+  tol: 0.06
+  expect: 0.62 x floor
+  source: as RV-FAD-RAY-390
+  fault: d0 x0.85 in the theory
+  measured: 0.584 vs theory 0.607 (floor 0.978, n=864)
+  verdict: pass
+- id: RV-FAD-RAY-770
+  kind: curve
+  run: RAY
+  range: [740, 800]
+  law: {kind: rayleigh, d0: 766, n: 2.5}
+  tol: 0.06
+  expect: 0.36 x floor
+  source: as RV-FAD-RAY-390
+  fault: d0 x0.85 in the theory
+  measured: 0.333 vs theory 0.351 (floor 0.978, n=913)
+  verdict: pass
+- id: RV-FAD-NAK3-570
+  kind: curve
+  run: NAK3
+  range: [540, 600]
+  law: {kind: nakagami, m: 3, d0: 766, n: 2.5}
+  tol: 0.06
+  expect: Q(3, 3 x 0.478) = 0.83 x floor
+  source: Nakagami-m power is Gamma(m, 1/m) (Nakagami 1960; Cheng et al., IEEE JSAC 2007 fit m = 3 near range for V2V)
+  fault: d0 x0.85 in the theory
+  measured: 0.786 vs theory 0.823 (floor 0.998, n=864)
+  verdict: pass
+- id: RV-FAD-NAK3-770
+  kind: curve
+  run: NAK3
+  range: [740, 800]
+  law: {kind: nakagami, m: 3, d0: 766, n: 2.5}
+  tol: 0.06
+  expect: Q(3, 3.04) = 0.41 x floor
+  source: as RV-FAD-NAK3-570
+  fault: d0 x0.85 in the theory
+  measured: 0.362 vs theory 0.406 (floor 0.998, n=913)
+  verdict: pass
+- id: RV-SH6-440
+  kind: curve
+  run: SH6
+  range: [400, 480]
+  law: {kind: lognormal, sigma: 6.0, d0: 766, n: 2.5}
+  tol: 0.08
+  expect: Phi(25 log10(766 / 440) / 6) = 0.84 x floor
+  source: log-normal shadowing, P(X < margin) (Rappaport 2e §4.9.2); wider tolerance because a link's shadow is correlated along its 4 s
+  fault: "shadowing not applied (the theory taken as the no-fading step); added after the first mutation pass showed d0 x0.85 inside the 0.08 tolerance"
+  fault_law: {kind: step}
+  measured: 0.818 vs theory 0.845 (floor 0.997, n=1424)
+  verdict: pass
+- id: RV-SH6-950
+  kind: curve
+  run: SH6
+  range: [900, 1000]
+  law: {kind: lognormal, sigma: 6.0, d0: 766, n: 2.5}
+  tol: 0.08
+  expect: Phi(-0.39) = 0.35 x floor (shadowing carries PRR past the no-fading edge)
+  source: as RV-SH6-440
+  fault: "shadowing not applied (the theory taken as the no-fading step); added after the first mutation pass showed d0 x0.85 inside the 0.08 tolerance"
+  fault_law: {kind: step}
+  measured: 0.317 vs theory 0.350 (floor 0.997, n=1058)
+  verdict: pass
+- id: RV-STEP-LD
+  kind: curve
+  run: LD
+  range: [800, 1000]
+  law: {kind: step, d0: 766, n: 2.5}
+  tol: 0.03
+  expect: 0 past the sensitivity distance without fading
+  source: a frame below the receiver's sensitivity is not decoded (IEEE 802.11-2020 17.3.10.6)
+  fault: "the sensitivity cut missing (d0 past the 1 km census)"
+  fault_law: {d0: 1200}
+  measured: 0.000 vs theory 0.000 (floor 1.000, n=2484)
+  verdict: pass
+# ---- Frame airtime ----
+- id: RV-AIR-DIGEST
+  kind: txtime
+  run: AIRD
+  rate_mbps: 6
+  equals: 304
+  expect: a digest-signed BSM of 192 octets (56 BSM + 93 envelope + 5 WSMP + 38 LLC/MAC/FCS) is 40 + 8 ceil((22 + 8 x 192) / 48) = 304 us
+  source: IEEE 802.11-2020 17.4.3 TXTIME at 10 MHz (8 us symbols, 40 us preamble and SIGNAL); docs/validation/foundations.md frame octets
+  fault: TXTIME + 1 symbol
+  measured: airtime 307.21 us, PSDU 194.46 B, TXTIME 304 us
+  verdict: wrong-expectation
+  note: >-
+    The run's mean mixes in each vehicle's first SPDU. With full_cert_every_ms 3,600,000 a
+    vehicle has sent no certificate before its first BSM, so that one carries it (IEEE
+    1609.2 5.3.1 signer choice; J2945/1 6.1.2.2): 40 of 1,195 frames at 400 us, and
+    304 x 1,155 + 400 x 40 = 367,120 us, the run's total exactly. RV-AIR-DIGEST-MIX judges
+    the per-frame 304 us on that total.
+- id: RV-AIR-DIGEST-MIX
+  kind: txmix
+  run: AIRD
+  rate_mbps: 6
+  digest_octets: 192
+  cert_octets: 263
+  expect: every frame is 304 us (192-octet digest BSM) except one 400 us certificate frame per vehicle; total = 304 (frames - vehicles) + 400 vehicles, to 0.5 us
+  source: IEEE 802.11-2020 17.4.3 TXTIME; IEEE 1609.2 5.3.1 (certificate on the first SPDU)
+  fault: digest TXTIME + 1 symbol
+  measured: airtime 367120 us over 1195 frames; theory 304 x 1155 + 400 x 40 = 367120 us
+  verdict: pass
+- id: RV-AIR-CERT
+  kind: txtime
+  run: AIRC
+  rate_mbps: 6
+  equals: 400
+  expect: a certificate-signed BSM of 263 octets is 40 + 8 ceil((22 + 8 x 263) / 48) = 400 us
+  source: IEEE 802.11-2020 17.4.3; IEEE 1609.2 certificate signer (+71 octets against the digest)
+  fault: TXTIME + 1 symbol
+  measured: airtime 400.00 us, PSDU 263.08 B, TXTIME 400 us
+  verdict: pass
+# ---- Channel load against density, and congestion ----
+- id: RV-CBR-DENSITY-2X
+  kind: ratio
+  base: N40
+  run: N80
+  metric: cbr_mean
+  band: [1.75, 2.05]
+  expect: x2 (x1.9 to x2 once overlaps are counted once)
+  source: below saturation CBR = sum over sensed stations of rate x T_air, so it is linear in density (ETSI TS 102 687 CBR; Sepulcre et al. 2022 Veins 0.00155 CBR per veh/km, radio-fidelity.md 7.5)
+  fault: the change does nothing (ratio 1)
+  measured: 0.0832 -> 0.1561 (x1.876)
+  verdict: pass
+- id: RV-CBR-DENSITY-4X
+  kind: ratio
+  base: N40
+  run: N160
+  metric: cbr_mean
+  band: [3.2, 4.1]
+  expect: x4, a little less as overlapping busy periods are counted once
+  source: as RV-CBR-DENSITY-2X
+  fault: the change does nothing (ratio 1)
+  measured: 0.0832 -> 0.3109 (x3.737)
+  verdict: pass
+- id: RV-CBR-BOUND
+  kind: abs
+  run: N40
+  metric: cbr_mean
+  band: [0.01, 0.1254]
+  expect: at most every vehicle sensing every frame, 40 x (400 + 9 x 304 us) per s = 0.125
+  source: CBR is the union of sensed busy time (ETSI TS 102 687), which cannot exceed the offered airtime
+  fault: "overlapping busy periods counted twice (x2); x1.25 stayed under the bound"
+  fault_scale: 2.0
+  measured: '0.0832'
+  verdict: pass
+- id: RV-CONG-COLL
+  kind: chain
+  runs: [N40, N80, N160]
+  metric: collision_rate
+  expect: up
+  min_change: 0.05
+  expect_text: collisions per attempt rise with every doubling of density
+  source: more contenders per carrier-sense area and more hidden terminals (Bianchi, IEEE JSAC 2000; Jiang et al. 2008 hidden-terminal broadcast)
+  fault: order reversed
+  measured: 0.0356 -> 0.089 -> 0.1726
+  verdict: pass
+- id: RV-CONG-PDR
+  kind: chain
+  runs: [N40, N80, N160]
+  metric: pdr
+  expect: down
+  min_change: 0.001
+  expect_text: PDR falls monotonically with density at a fixed rate and MCS
+  source: Sepulcre et al. 2022 (Veins, 802.11p) and radio-fidelity.md 7.5
+  fault: order reversed
+  measured: 0.8979 -> 0.84 -> 0.7621
+  verdict: pass
+- id: RV-CONG-ACCESS
+  kind: chain
+  runs: [N40, N80, N160]
+  metric: access_ms
+  expect: up
+  min_change: 0.01
+  expect_text: channel-access delay rises with channel busy time (more deferrals, frozen backoff)
+  source: IEEE 802.11-2020 10.3.4 (backoff frozen while the medium is busy); Bianchi 2000
+  fault: order reversed
+  measured: 0.0265 -> 0.1347 -> 0.2991
+  verdict: pass
+- id: RV-CONG-LAT
+  kind: chain
+  runs: [N40, N80, N160]
+  metric: e2e_ms_p95
+  expect: up
+  min_change: 0.005
+  expect_text: the latency tail rises with congestion
+  source: queueing behind a busier channel (Kleinrock, Queueing Systems 1975); the stage access_ms above
+  fault: order reversed
+  measured: 14.62 -> 15.06 -> 40.74
+  verdict: pass
+- id: RV-CONG-HIDDEN
+  kind: chain
+  runs: [N40, N80, N160]
+  metric: loss_hidden-terminal
+  expect: up
+  min_change: 0.05
+  expect_text: hidden-terminal losses per attempt rise with density
+  source: two senders outside each other's carrier-sense range overlap at a receiver between them in proportion to the senders there (Tobagi and Kleinrock 1975)
+  fault: order reversed
+  measured: 0.0336 -> 0.0737 -> 0.1484
+  verdict: pass
+- id: RV-DCC-RATE-LOW
+  kind: abs
+  run: N160
+  metric: tx_rate_hz
+  band: [9.8, 10.05]
+  expect: 10 Hz; J2945/1 stretches the interval only past B = 25 vehicles within 100 m, and 160 vehicles on 16.8 km of street are about 3 per 100 m
+  source: SAE J2945/1 2016 6.3.6 (ITT = 100 ms x N / B above B)
+  fault: value x1.25
+  measured: '9.837'
+  verdict: pass
+- id: RV-DET
+  kind: same
+  runs: [N40, N40B]
+  expect: the same seed gives byte-identical measurements
+  source: determinism (02-architecture.md)
+  fault: one byte appended
+  measured: identical
+  verdict: pass
+# ---- Judged by the named engine test or netval check ----
+- id: RV-NET-03
+  test: v2xw-netval NET-03 (cargo test -p v2xw-netval --test layers)
+  expect: every message type signed under its registered PSID / ITS-AID (BSM 0x20, SPaT and MAP 0x82 on the US stack; CAM 36, DENM 37, SPATEM 137, MAPEM 138 on the ETSI stack)
+  source: IEEE 1609.12 PSID registry; ETSI TS 102 965 V2.1.1 Table A.1
+  fault: BSM signed under 0x21
+  measured: honest pass on both stacks (7 identifiers); BSM under 0x21 fails
+  verdict: fixed (a check defect, af8842ea)
+- id: RV-BACKHAUL
+  test: v2xw-radio ip_transport::tests::backhaul_one_way_delays_are_their_hand_values
+  expect: one-way delay of a 1,500-octet uplink packet = route km x us/km + hops x per-hop + 12,000 bits / rate. fibre 20 x 4.9 + 4 x 50 + 12 = 310 us; DSL 5 x 4.9 + 6 x 50 + 8,000 + 600 = 8,924.5 us; microwave 10 x 3.336 + 4 x 50 + 30 = 263.4 us
+  source: light in glass at n = 1.47 (4.9 us/km) and in air (3.336 us/km); ITU-T G.993.2 interleaving; serialisation L / R
+  fault: the DSL interleaving left out
+  measured: 310.00 / 8,924.50 (down 8,474.50) / 263.36 us; DSL interleaving removed fails
+  verdict: pass
+# ---- NR-V2X mode 2 selection window (written before the SLT2 runs) ----
+- id: RV-SL-T2-ACCESS
+  kind: chain
+  runs: [SLT2_1, SLT2_5, SLT2_10, SLT2_U, SLT2_50, SLT2_100]
+  metric: access_ms
+  expect: up
+  min_change: 0.05
+  expect_text: the selected resource is uniform over the candidates in [n + T1, n + T2], so the mean wait from hand-off to the reserved slot is about (T1 + T2) / 2 and rises with T2 (1, 3, 5.5, 8.75, 25.5, 50.5 ms)
+  source: 3GPP TS 38.214 8.1.4 (selection window); TS 38.321 5.22.1.1 (random selection among the candidates)
+  fault: order reversed
+  measured: 41.88 -> 29.64 -> 18.86 -> 15.53 -> 27.18 -> 49.85 (before the fix)
+  verdict: FAIL (fix pending re-run)
+  note: >-
+    Before the fix: 41.88 -> 29.64 -> 18.86 -> 15.53 -> 27.18 -> 49.85 ms (e2e 57.3 -> 34.2
+    -> 42.3 -> 64.7). The per-message hand-off jitter U[0, 10 ms] put a message past the
+    slot its reservation was made for whenever the draw exceeded the reserved offset, and
+    the grant, inside the 100 ms budget, held it about a period. The same runs without the
+    jitter (RV-SL-T2J-*) follow (T1 + T2) / 2. Fixed in wiring::generation_timing (no
+    hand-off jitter on a PC5 sidelink); pinned by sensitivity_radio
+    nr_access_wait_follows_the_selection_window.
+- id: RV-SL-T2-E2E
+  kind: chain
+  runs: [SLT2_1, SLT2_10, SLT2_50, SLT2_100]
+  metric: e2e_ms_mean
+  expect: up
+  min_change: 0.05
+  expect_text: the end-to-end latency carries the access wait, so it rises with T2 (the radio.yaml selection_window_ms row)
+  source: 3GPP TS 38.214 8.1.4
+  fault: order reversed
+  measured: 57.29 -> 34.18 -> 42.29 -> 64.73 (before the fix)
+  verdict: FAIL (fix pending re-run)
+  note: >-
+    The access wait of RV-SL-T2-ACCESS carried into the end-to-end latency; same cause.
+- id: RV-SL-T2-50
+  kind: abs
+  run: SLT2_50
+  metric: access_ms
+  band: [18.0, 33.0]
+  expect: (T1 + T2) / 2 = (1 + 50) / 2 = 25.5 ms, within 30 %
+  source: 3GPP TS 38.214 8.1.4; uniform selection over the window
+  fault: value x1.25 (x2 below)
+  fault_scale: 2.0
+  measured: '27.18'
+  verdict: pass
+# ---- PHY error model and the cellular backhaul (judged by the named tests) ----
+- id: RV-PER-NIST
+  test: v2xw-radio per::tests::reproduces_the_snr_at_10_percent_per_table (and ..._1_percent_per_column)
+  expect: the SNR at 10 % PER for each of the 8 MCSs at 200, 400 and 1,000 octets, and at 1 % PER at 400 octets, within 0.1 dB of the NIST model's table (6 Mbit/s QPSK 1/2 at 400 octets 6.6 dB; 3 Mbit/s BPSK 1/2 3.6 dB)
+  source: Pei and Henderson 2010 (NIST OFDM error model, within about 1 dB of the CMU testbed); Miller, NIST distance spectra; 04-models.md 4.7
+  fault: QPSK uncoded BER computed at SNR instead of SNR / 2 (3 dB optimistic)
+  measured: pending
+  verdict: pending
+- id: RV-BACKHAUL-CELL
+  test: v2xw-radio cellular_packet::tests::an_unloaded_lte_round_trip_lands_near_the_measured_first_hop
+  expect: an unloaded LTE first-hop round trip (100-octet request up, reply down) of 15 to 40 ms, around the measured 29.2 +- 4.8 ms; NR's uplink under 10 ms
+  source: Narayanan et al., WWW 2020 (LTE first-hop RTT); 3GPP TS 36.321 5.4.4 (scheduling request before an uplink grant)
+  fault: the uplink skips the scheduling-request wait and grant
+  measured: pending
+  verdict: pending
+- id: RV-FOUND-CRL
+  test: v2xw-engine foundations the_backend_tops_up_both_vehicles_over_cellular_and_every_byte_is_booked_once
+  expect: a vehicle's cellular downlink carries its top-up (93 + 4 + 3,017 = 3,114 octets inside the exchange) and five CRL polls, 10 s apart, of one size (92 octets)
+  source: CAMP SCMS top-up exchange; crl_fetch_interval_s 10 (docs/validation/foundations.md)
+  fault: the CRL poll interval 10 s -> 9 s in the engine
+  measured: pending
+  verdict: pending
+# ---- The same, generated strictly periodically (written before the SLT2J runs) ----
+# The SLT2 runs carry the default hand-off jitter, U[0, 10 ms] drawn afresh for every
+# message (ns-3's WAVE value). A reservation made for one message then sits at a fixed
+# slot while the next message's hand-off moves by up to 10 ms: when it lands after the
+# reserved slot, the grant is still inside the 100 ms budget (TS 36.321 5.14.1.1 sees no
+# trigger), so the message waits almost a whole period. The smaller T2, the likelier the
+# miss: P(j1 > j0 + U[T1, T2]) with j0, j1 ~ U[0, 10] ms is 0.40 at T2 = 1 ms and 0 past
+# T2 = 10 ms. Theory for strictly periodic traffic (TR 37.885 A.1.1, 100 ms period) is the
+# rows below.
+- id: RV-SL-T2J-ACCESS
+  kind: chain
+  runs: [SLT2J_1, SLT2J_5, SLT2J_10, SLT2J_U, SLT2J_50, SLT2J_100]
+  metric: access_ms
+  expect: up
+  min_change: 0.05
+  expect_text: with strictly periodic generation the reserved offset persists from one message to the next, so the mean access wait is (T1 + T2) / 2 and rises with T2
+  source: 3GPP TS 38.214 8.1.4; TR 37.885 A.1.1 (periodic traffic, 100 ms)
+  fault: order reversed
+  measured: 1.198 -> 3.373 -> 6.102 -> 9.555 -> 26.27 -> 47.29
+  verdict: pass
+- id: RV-SL-T2J-1
+  kind: abs
+  run: SLT2J_1
+  metric: access_ms
+  band: [0.5, 3.0]
+  expect: T2 = 1 ms is the 2-slot T1 (TS 38.214 T2 >= T1), so the wait is about 1 ms plus the slot alignment (0 to 0.5 ms)
+  source: 3GPP TS 38.214 8.1.4
+  fault: value x2
+  fault_scale: 3.0
+  measured: '1.198'
+  verdict: pass
+- id: RV-SL-T2J-50
+  kind: abs
+  run: SLT2J_50
+  metric: access_ms
+  band: [18.0, 33.0]
+  expect: (1 + 50) / 2 = 25.5 ms, within 30 %
+  source: 3GPP TS 38.214 8.1.4
+  fault: value x2
+  fault_scale: 2.0
+  measured: '26.27'
+  verdict: pass
+- id: RV-SL-T2J-100
+  kind: abs
+  run: SLT2J_100
+  metric: access_ms
+  band: [38.0, 63.0]
+  expect: (1 + 100) / 2 = 50.5 ms, within 25 %
+  source: 3GPP TS 38.214 8.1.4
+  fault: value x2
+  fault_scale: 2.0
+  measured: '47.29'
+  verdict: pass

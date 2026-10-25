@@ -21,9 +21,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use v2xw_core::ctx::OwnedRecord;
 use v2xw_core::ids::{ActorId, NodeId};
+use v2xw_core::time::SimTime;
 use v2xw_energy::{EnergyProvider, EnergySpec, Totals};
-use v2xw_engine::{Engine, MemoryRecorder, Scenario};
+use v2xw_engine::{Engine, RunRecorder, Scenario};
 use v2xw_metrics::MetricProvider;
 use v2xw_metrics::channels::{GtKinematicsView, decode};
 
@@ -93,10 +95,35 @@ fn corridor(compliance: f64, rate_veh_per_h: f64) -> Scenario {
     Scenario::from_document(doc).expect("the corridor deserialises")
 }
 
+/// Keeps only the three channels this file reads. A `MemoryRecorder` held every
+/// `phy.rx` of the 180 s corridor runs too, and the binary stopped at the 4.5 GB cap
+/// before it judged anything (BUILD-STATUS, every wave since 2026-10-23).
+#[derive(Default)]
+struct Kept {
+    records: Vec<(SimTime, OwnedRecord)>,
+}
+
+impl Kept {
+    fn records(&self) -> &[(SimTime, OwnedRecord)] {
+        &self.records
+    }
+}
+
+impl RunRecorder for Kept {
+    fn write(&mut self, at: SimTime, record: &OwnedRecord) {
+        if matches!(
+            record.channel,
+            "metric.sample" | "gt.kinematics" | "app.advice"
+        ) {
+            self.records.push((at, record.clone()));
+        }
+    }
+}
+
 fn run(s: Scenario) -> Outcome {
     let seed = s.seed;
     let mut engine = Engine::build(s, "").expect("builds");
-    let mut recorder = MemoryRecorder::new();
+    let mut recorder = Kept::default();
     engine.run(&mut recorder).expect("runs");
 
     let mut live: BTreeMap<String, (u64, f64)> = BTreeMap::new();

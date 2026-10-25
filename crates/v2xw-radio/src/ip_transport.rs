@@ -945,6 +945,31 @@ mod tests {
         assert_eq!(wired_cards().len(), 3);
     }
 
+    /// Each backhaul's one-way delay is its hand value: route length at the speed of light
+    /// in the medium (4.9 µs/km in glass, n = 1.47; 3.336 µs/km in air), the hops, the DSL
+    /// interleaving (ITU-T G.993.2) and the serialisation L / R, typed here from the
+    /// figures, not from the constants (radio-validation.yaml RV-BACKHAUL).
+    #[test]
+    fn backhaul_one_way_delays_are_their_hand_values() {
+        let ue = NodeId::new(1);
+        let one = |mut l: WiredLink, bytes: u32, dir: Direction| -> f64 {
+            PacketPath::<()>::deliver(&mut l, &mut (), ue, dir, 0, bytes).unwrap() as f64 / 1e3
+        };
+        let us = |a: f64, b: f64| (a - b).abs() < 0.01;
+        // Fibre: 20 km x 4.9 + 4 hops x 50 + 12,000 b / 1 Gbit/s = 98 + 200 + 12.
+        let f = one(WiredLink::metro_fibre(), 1500, Direction::Uplink);
+        assert!(us(f, 310.0), "fibre {f} us");
+        // DSL up: 5 km x 4.9 + 6 x 50 + 8,000 interleaving + 12,000 b / 20 Mbit/s = 24.5 + 300 + 8,000 + 600.
+        let d = one(WiredLink::copper(), 1500, Direction::Uplink);
+        assert!(us(d, 8_924.5), "DSL up {d} us");
+        // DSL down at 80 Mbit/s: 150 us of serialisation.
+        let dn = one(WiredLink::copper(), 1500, Direction::Downlink);
+        assert!(us(dn, 8_474.5), "DSL down {dn} us");
+        // Microwave: 10 km x 3.336 + 4 x 50 + 12,000 b / 400 Mbit/s = 33.36 + 200 + 30.
+        let m = one(WiredLink::microwave(), 1500, Direction::Uplink);
+        assert!(us(m, 263.36), "microwave {m} us");
+    }
+
     #[test]
     fn handshakes_cost_round_trips() {
         let mut ctx = TestCtx::new(1);

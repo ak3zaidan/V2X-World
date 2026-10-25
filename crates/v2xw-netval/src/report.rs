@@ -53,8 +53,8 @@ pub const FINDINGS: &[(&str, &str, &str)] = &[
     ),
     (
         "NET-03",
-        "Every message is signed under one PSID, 0x20 (`v2xw_node::secure::PSID_SAFETY`), including ETSI CAMs and DENMs (ITS-AID 36 and 37 in TS 102 965 Table A.1) and SPATEM/MAPEM (137, 138). A receiver filtering on ITS-AID, and the SPDU size (a 2-octet ITS-AID for 137/138), differ from a real stack.",
-        "Open, recorded for the V2X-applications track that owns `crates/v2xw-node` this round: the PSID must follow the message type and the envelope profile.",
+        "Was: every message signed under one PSID, 0x20 (`v2xw_node::secure::PSID_SAFETY`), including ETSI CAMs and DENMs (ITS-AID 36 and 37 in TS 102 965 Table A.1) and SPATEM/MAPEM (137, 138). A receiver filtering on ITS-AID, and the SPDU size (a 2-octet ITS-AID for 137/138), differ from a real stack.",
+        "Fixed in the engine since (`v2xw_msg::registry`, `NodeSecurity::set_stack`, wired for vehicles, roadside units and VRU devices); the check itself still modelled one PSID and expected the US SPaT and MAP under the ETSI ITS-AIDs, so it failed on correct code. Since 2026-10-24 it drives `set_stack` and `psid_for` on both stacks against the registries (BSM 0x20, SPaT/MAP 0x82; CAM 36, DENM 37, SPATEM 137, MAPEM 138).",
     ),
 ];
 

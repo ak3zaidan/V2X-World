@@ -152,27 +152,54 @@ fn glosa_advice_is_given_and_followed_by_the_drivers_who_follow_it() {
             }
         }
     }
+    // "While it stands": the app re-issues a standing advisory at least once a second
+    // (`apps.rs`, `changed`), so the advice in force at t + 4 s is the node's latest
+    // advisory at or before then, and it still stands only if that one is under a second
+    // old. An advisory withdrawn (green reached, junction passed) or raised since is not
+    // one a driver who follows GLOSA keeps to.
     let mut followed = 0;
+    let mut standing = 0;
+    let mut why = Vec::new();
     for a in &slowed {
-        let (Some(node), Some(t), Some(v)) = (
-            a["node"].as_u64(),
-            a["t"].as_u64(),
-            a["advised_mps"].as_f64(),
-        ) else {
+        let (Some(node), Some(t)) = (a["node"].as_u64(), a["t"].as_u64()) else {
             continue;
         };
+        let at = t + 4_000_000_000;
+        let Some(cur) = advice
+            .iter()
+            .filter(|b| b["node"].as_u64() == Some(node))
+            .filter(|b| b["t"].as_u64().is_some_and(|tb| tb <= at))
+            .max_by_key(|b| b["t"].as_u64())
+        else {
+            continue;
+        };
+        let (Some(tc), Some(v)) = (cur["t"].as_u64(), cur["advised_mps"].as_f64()) else {
+            continue;
+        };
+        if tc + 1_100_000_000 < at || v.is_nan() {
+            continue;
+        }
+        standing += 1;
         let later = speeds.get(&node).and_then(|s| {
-            s.iter()
-                .find(|(tt, _)| *tt >= t + 4_000_000_000)
-                .map(|(_, sp)| *sp)
+            s.iter().find(|(tt, _)| *tt >= at).map(|(_, sp)| *sp)
         });
         if later.is_some_and(|sp| sp <= v + 0.6) {
             followed += 1;
+        } else if why.len() < 6 {
+            why.push(format!(
+                "node {node} t {t}: advised {v} at {tc}, speed {later:?}, {} m to the line",
+                cur["distance_m"]
+            ));
         }
     }
+    eprintln!(
+        "{} slowed, {standing} still standing 4 s later, {followed} of those followed; first misses {why:?}",
+        slowed.len()
+    );
+    assert!(standing > 0, "no slowed advisory still stood 4 s later");
     assert!(
-        followed * 2 >= slowed.len(),
-        "{followed} of {} slowed advisories were followed",
+        followed * 2 >= standing,
+        "{followed} of {standing} standing slowed advisories were followed ({} slowed in all): {why:?}",
         slowed.len()
     );
 }
