@@ -209,6 +209,7 @@ def fault(raw, name, row):
     m = row['measure']
     if name == 'honest-revoked':  # the MA revokes an honest device
         p['revoked_honest'] = p.get('revoked_honest', 0) + 1
+        p['ma_revoke_decisions'] = p.get('ma_revoke_decisions', 0) + 1
         if rec is not None:
             hon = next((q['subject'] for q in rec['gt.subject']
                         if q['actor'] not in {a['actor'] for a in rec['gt.attack.action']}), None)
@@ -307,10 +308,11 @@ def fault(raw, name, row):
         for t in (r['report'].get('apps') or {}).values():
             t['false_warnings'] = 0
     elif name == 'warn-flood':  # every warning is false and from an attacker
-        if rec is not None and rec['gt.attack.action']:
-            a = rec['gt.attack.action'][0]['actor']
-            rec['app.outcome'] += [{'t': 0, 'node': 1, 'app': 'fcw', 'subject': a + 1,
-                                    'outcome': 'false'}] * 5000
+        if rec is not None:
+            if rec['gt.attack.action']:
+                a = rec['gt.attack.action'][0]['actor']
+                rec['app.outcome'] += [{'t': 0, 'node': 1, 'app': 'fcw', 'subject': a + 1,
+                                        'outcome': 'false'}] * 5000
             rec['app.outcome'] += [{'t': 0, 'node': 1, 'app': 'fcw', 'subject': None,
                                     'outcome': 'false'}] * 5000
         for t in (r['report'].get('apps') or {}).values():
