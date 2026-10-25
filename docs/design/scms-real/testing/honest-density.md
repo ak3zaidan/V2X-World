@@ -178,6 +178,15 @@ opened), so it is not removed:
 - **Open:** spreading the pre-generation as a real RA does moves the work but does not
   shrink it; what would shrink the wall time is running each device's provisioning on the
   rayon pool, merged in device order (the kernel handles one delivery at a time today).
+- **Done 2026-10-24 (backend residuals, `cc1ed05e`):** inside each delivery, the
+  per-certificate loops run on the rayon pool and are taken in order: the RA's cocoon
+  expansion and request signatures, the ACA's issuance (its counter DRBG handled by
+  `pdu::par_map_drbg`, which guesses each item's start block and recomputes on a miss),
+  the RA's response checks and the device's file opening. On the quarter fleet with the
+  week's boundary moved to 100 s (opt-2 debug build, a loaded laptop): the 100-105 s slice
+  93.0 s on one thread against 43.2 s on eight, 0-105 s 737 against 562 s, the same
+  stream digest; at 99 s the stream digest equals the `8becf72a` release binary's
+  (`918168fa…`). Full fleet not re-measured.
 
 **Each fast-forward stop was dominated by the backend view, not by the wake scan.** In the
 second fast-forward, `on_backend_step` is 75 % of the main thread and `Phase2::backend_view`

@@ -756,7 +756,11 @@ whether a full-fleet misbehaviour rate is a real-world number.
      re-verification, 12 % of it, is now remembered, `419b8e6b`); each fast-forward stop was
      dominated by the backend view's O(fleet²) `ops_of`, now a key-range read (`a66aa58c`).
      Not re-measured at full fleet.
-4. **Full-scale memory: what is left.** The target is met at 2,105 MB. The largest live
+   - **2026-10-24 (backend residuals, `cc1ed05e`):** the per-certificate cryptography of
+     each provisioning delivery (RA expansion and signing, ACA issuance, RA checks, device
+     opening) runs on the rayon pool, byte-identical at any thread count (the ACA's DRBG
+     blocks are guessed and verified, `pdu::par_map_drbg`): the burst slice 93.0 → 43.2 s
+     on 1 → 8 threads at quarter fleet, same digest, and the digest of `8becf72a`.4. **Full-scale memory: what is left.** The target is met at 2,105 MB. The largest live
    structure is the SCMS backend's per-device state (113 MB of RA, LA and PCA records and
    batch files plus 58 MB of enrolment for 970 devices at 40 s, memden §1.1). Dropping it
    changes what the MA's investigation and re-downloads rely on, so each part needs an
@@ -1083,8 +1087,9 @@ The totals count each row as its own checklist records it, with the changes in �
 3. **The full-scale cost** (§6 item 3). Profiled 2026-10-24 (density §6): the rollover is
    the weekly pre-generation's P-256 work on one thread, and each stop was dominated by an
    O(fleet²) `ops_of`, now a key-range read; QD's second fast-forward 20.6 → 9.9 s and
-   rollover 100.3 → 84.3 s, record digest unchanged. Left: parallel provisioning
-   cryptography, the event index for the per-node wake scans (0.6 % of samples), and the
+   rollover 100.3 → 84.3 s, record digest unchanged. ~~Parallel provisioning~~ done
+   (`cc1ed05e`: the burst slice 2.2× faster on 8 threads, byte-identical). Left: the
+   event index for the per-node wake scans (0.6 % of samples), and the
    full-fleet re-measure.
 4. ~~R-JOINCRL~~: fixed 2026-10-24 (`2a14d6c4`, §6 item 7); the multi-week re-runs are
    owed (below).
