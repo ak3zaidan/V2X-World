@@ -110,6 +110,12 @@ runs:
   Sout:
     scenario: scenarios/live-rsu/scms-out.yaml
     note: unit 5 off from 30 s
+  Slat2000bc3:
+    scenario: scenarios/live-rsu/scms-lat2000-bc3.yaml
+    note: 'interaction: 2,000 ms backhaul with the carousel at 3 s'
+  S0bc3:
+    scenario: scenarios/live-rsu/scms-bc3.yaml
+    note: fibre with the carousel at 3 s (the interaction base)
 rows:
 - id: LR.G.spat-rate-min
   base: G0
@@ -768,4 +774,26 @@ rows:
   expect: eq
   value: 29
   source: the other 29 units keep broadcasting
+  measured: pending
+- id: LR.S.lat2000bc3.crl-lag
+  base: S0bc3
+  variant: Slat2000bc3
+  area: crl
+  measure: s.crl_first_frame_lag_s_min
+  expect: ge
+  value: 2.0
+  source: 'a unit can broadcast a list only after its backhaul brought it: no frame of a new list before
+    publication + 2 s, whatever the carousel phase (with 5 s ticks and a 10 s cadence every list landed
+    2 s before a tick, so LR.S.lat2000.crl-lag could not tell; 3 s ticks fall inside the download)'
+  measured: pending
+- id: LR.S.bc3.crl-lag
+  base: S0
+  variant: S0bc3
+  area: crl
+  measure: s.crl_first_frame_lag_s_max
+  expect: le
+  value: 3.2
+  source: 'on fibre a list is on the air by the next tick: lag <= 3 s carousel period + 0.1 s step + 0.05
+    s signing'
+  fault: use:Slat2000bc3
   measured: pending

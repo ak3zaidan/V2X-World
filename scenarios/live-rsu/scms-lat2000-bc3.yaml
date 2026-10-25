@@ -1,0 +1,12 @@
+# Live RSU track, SCMS family interaction: the 2,000 ms backhaul of scms-lat2000.yaml with
+# the CRL carousel at 3 s, so the carousel's ticks are not aligned with the 10 s CRL cadence
+# and a tick can fall inside a unit's download (with 5 s ticks every list lands 2 s before
+# a tick and the download time is hidden).
+schema: v2xw/scenario/1
+meta:
+  base: scms-lat2000.yaml
+  name: live-rsu scms lat2000-bc3
+security:
+  scms:
+    lifecycle:
+      crl_broadcast_interval_s: 3.0

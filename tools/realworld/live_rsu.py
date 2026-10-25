@@ -243,6 +243,7 @@ def scms_flows(r):
         lags = [0.0 for _ in lags]
         unit_lags = [0.0 for _ in unit_lags]
     d['s.crl_first_frame_lag_s_min'] = min(lags) if lags else -1.0
+    d['s.crl_first_frame_lag_s_max'] = max(lags) if lags else -1.0
     d['s.crl_first_frame_lag_s_mean'] = sum(lags) / len(lags) if lags else -1.0
     d['s.crl_unit_lag_s_min'] = min(unit_lags) if unit_lags else -1.0
     d['s.crl_unit_lag_s_mean'] = sum(unit_lags) / len(unit_lags) if unit_lags else -1.0
