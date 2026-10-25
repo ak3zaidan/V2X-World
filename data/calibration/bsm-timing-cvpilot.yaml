@@ -20,18 +20,18 @@ provenance:
   manifest_sha256: ee6eeab3f926d0fefac2e790d0dea9c5411531d7823d39558620a5521189d412
   fitted_on: ["nm7w-nvbm", "ev64-jn8c", "7qu7-j8rx (header_jitter_ms only)"]
   held_out: ["7qu7-j8rx (device class and trigger rates)"]
-  tool: tools/realdata 1.2.0
+  tool: tools/realdata 1.3.0
 fix_interval_ms: 100
 classes:
   - name: locked
     share: 0.016077
     # the 100.0% of locked BSMs within 5 ms of a 50 ms epoch; whole-ms offsets -1, +0, +1, +2 with
-    # shares 0.206856, 0.790702, 0.002352, 9e-05. Mean along-track residual / v by secMark Δt - 100 ms (v >= 10 m/s):
+    # shares 0.130608, 0.866902, 0.00246, 3e-05. Mean along-track residual / v by secMark Δt - 100 ms (v >= 10 m/s):
     # -1 ms: 0.41 ms (439), +0 ms: 0.11 ms (1961), +1 ms: -0.50 ms (456)
     # That is the 1 ms truncation of a generation instant that jitters about the epoch, with
     # the position at that instant (+-0.5 ms expected; +-1 ms if the position stayed on the
     # epoch). The instant is the normal whose truncation gives the shares of -1 and >= +1:
-    secmark_phase_ms: {dist: normal, mean: 0.225051, sd: 0.275333}
+    secmark_phase_ms: {dist: normal, mean: 0.285749, sd: 0.254333}
     phase_scope: message
     # secMark Δt minus 100 ms on single-interval pairs: p10 -1, p50 0, p90 1 ms
     # slip onsets per single-interval pair at v >= 10 m/s after a normal pair (Δt-corrected
@@ -54,12 +54,14 @@ classes:
     # read the whole residual body (along 0.0111 m, cross 0.0089 m) as this noise
     output_noise: {speed_mps: 0.0314503, heading_deg: 0.0524171}
     # the rest of the body and its tail: the reported position's error increment per fix
-    # interval, a Gaussian scale mixture (EM, 4 components, log-lik 10861.1) on 1961 exactly-100 ms
+    # interval, a Gaussian scale mixture (EM, 4 components, log-lik 10712.6) on 1961 exactly-100 ms
     # pairs of the locked class at v >= 10 m/s with their own speed and heading change removed
-    # and the quantisation, the stamp jitter (0.284 ms x v) and the output noise above
+    # and the quantisation, the stamp jitter (0.286 ms x v) and the output noise above
     # deconvolved. Increments are white (lag-1 ~ 0), so the error is a random walk over the
-    # fix epochs, mean-reverting with tau_s (an assumption: tau >= 1 s keeps lag-1 within 0.05)
-    position_noise: {dist: normal_mixture, tau_s: 1.0, p: [0.576868, 0.081631, 0.25678, 0.084721], along_m: [0.0001, 0.0001, 0.0280148, 0.125834], cross_m: [0.00327369, 0.0136374, 0.0226062, 0.0604023]}
+    # fix epochs, mean-reverting with tau_s: the shortest tau (of 1/2/5/10/20/50/100 s, capped at the receiver's
+    # 100 s smoothing) whose simulated exactly-100 ms residual matches these pairs, each ID
+    # weighing one, within KS 0.01 of the best; KS by tau: 1 s 0.275, 2 s 0.219, 5 s 0.154, 10 s 0.117, 20 s 0.094, 50 s 0.083, 100 s 0.079
+    position_noise: {dist: normal_mixture, tau_s: 50.0, p: [0.633315, 0.169124, 0.113336, 0.084225], along_m: [0.0001, 0.0001, 0.0518646, 0.132925], cross_m: [0.00323245, 0.0118151, 0.0309238, 0.0982351]}
     # :00/:50 grid hops: consecutive-msgCnt BSMs (Δt 50/100/150 ms) home->home 6552, home->away 836,
     # away->home 831, away->away 1036; a hop is Δt 50 then 150 ms (or 150 then 50), the position
     # at the new instant. The engine puts the away grid half an interval late
@@ -92,9 +94,11 @@ classes:
     # read the whole residual body (along 0.0111 m, cross 0.0089 m) as this noise
     output_noise: {speed_mps: 0.0314503, heading_deg: 0.0524171}
     # the rest of the body and its tail: the reported position's error increment per fix
-    # interval, a Gaussian scale mixture (EM, 4 components, log-lik 10861.1) on 1961 exactly-100 ms
+    # interval, a Gaussian scale mixture (EM, 4 components, log-lik 10712.6) on 1961 exactly-100 ms
     # pairs of the locked class (borrowed) at v >= 10 m/s with their own speed and heading change removed
-    # and the quantisation, the stamp jitter (0.284 ms x v) and the output noise above
+    # and the quantisation, the stamp jitter (0.286 ms x v) and the output noise above
     # deconvolved. Increments are white (lag-1 ~ 0), so the error is a random walk over the
-    # fix epochs, mean-reverting with tau_s (an assumption: tau >= 1 s keeps lag-1 within 0.05)
-    position_noise: {dist: normal_mixture, tau_s: 1.0, p: [0.576868, 0.081631, 0.25678, 0.084721], along_m: [0.0001, 0.0001, 0.0280148, 0.125834], cross_m: [0.00327369, 0.0136374, 0.0226062, 0.0604023]}
+    # fix epochs, mean-reverting with tau_s: the shortest tau (of 1/2/5/10/20/50/100 s, capped at the receiver's
+    # 100 s smoothing) whose simulated exactly-100 ms residual matches these pairs, each ID
+    # weighing one, within KS 0.01 of the best; KS by tau: 1 s 0.275, 2 s 0.219, 5 s 0.154, 10 s 0.117, 20 s 0.094, 50 s 0.083, 100 s 0.079
+    position_noise: {dist: normal_mixture, tau_s: 50.0, p: [0.633315, 0.169124, 0.113336, 0.084225], along_m: [0.0001, 0.0001, 0.0518646, 0.132925], cross_m: [0.00323245, 0.0118151, 0.0309238, 0.0982351]}

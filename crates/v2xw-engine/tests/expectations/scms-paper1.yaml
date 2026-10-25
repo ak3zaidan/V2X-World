@@ -1705,3 +1705,165 @@ rows:
   - 1.25
   source: one (time, speed) pair more per device
   measured: pending
+- id: P1.E4V.ks
+  base: E4V
+  variant: E4V
+  area: metrics
+  measure: x.e4.ks
+  expect: le
+  value: 0.092
+  source: 'P1-E4, final: the pre-registered tolerance 0.092 (unchanged) against held-out Wyoming, on the
+    tools/realdata 1.3.0 refit (Tampa + Orem only; each ID weighs one in the stamp-offset and position-noise
+    fits, the walk''s tau fitted in sample: 50 s, in-sample KS 0.083 against 0.275 at the assumed 1 s).
+    Prediction written before the run, from the model simulated at 29.8 m/s without Wyoming: p10 / p25 /
+    p50 / p75 / p90 / p99 0.36 / 0.82 / 1.38 / 2.46 / 6.8 / 22.7 cm, plus the engine''s own ~0.1 cm (E4U 1.97
+    against 1.85 simulated). KS not predicted: Wyoming is a third deployment'
+  measured: pending
+- id: P1.E4V.body-p50
+  base: E4V
+  variant: E4V
+  area: metrics
+  measure: x.e4.r_p50
+  expect: band
+  band:
+  - 0.012
+  - 0.017
+  source: the 1.3.0 model simulated at 29.8 m/s, p50 1.38 cm, plus up to 0.3 cm of engine kinematics and GNSS
+  measured: pending
+- id: P1.E4V.body-down
+  base: E4V1
+  variant: E4V
+  area: metrics
+  measure: x.e4.r_p50
+  expect: down
+  min_change: 0.15
+  source: 'at tau 1 s the walk added (rho - 1)·e, about 1 cm per axis, to every pair; at the fitted 50 s about
+    0.15 cm: simulated p50 1.85 -> 1.38 cm (-25 %)'
+  measured: pending
+- id: P1.E4V.tail-p90
+  base: E4V
+  variant: E4V
+  area: metrics
+  measure: x.e4.r_p90
+  expect: band
+  band:
+  - 0.05
+  - 0.085
+  source: the ID-weighted mixture's tail (Tampa's, heavier than Orem's) simulated p90 6.8 cm
+  measured: pending
+- id: P1.E4V.tail-p99
+  base: E4V
+  variant: E4V
+  area: metrics
+  measure: x.e4.r_p99
+  expect: band
+  band:
+  - 0.15
+  - 0.3
+  source: simulated p99 22.7 cm; the fit sets' ID-weighted exactly-100 ms p99 26.9 cm
+  measured: pending
+- id: P1.E4V.locked-rate
+  base: E4V
+  variant: E4V
+  area: metrics
+  measure: x.e4.rate_per_idmin
+  expect: le
+  value: 0.568
+  source: 'the frozen locked bound 0.568 per ID-minute (Wyoming 0.0); the walk''s tail stays under the 1 m
+    gpsDrift (simulated 0 of 26,970 pairs above it)'
+  measured: pending
+- id: P1.E4V.hop-share
+  base: E4V
+  variant: E4V
+  area: metrics
+  measure: x.e4.hop_share
+  expect: band
+  band:
+  - 0.14
+  - 0.22
+  source: grid_hop unchanged by the refit (leave 0.113, return 0.445; CV-pilot locked 18.0 % of steps)
+  measured: pending
+- id: P1.E4V.accel-verdicts
+  base: E4V
+  variant: E4V
+  area: metrics
+  measure: p2.verdicts.implausibleAcceleration
+  expect: le
+  value: 12
+  source: the refit changes positions, not speeds; MaxAcceleration stays where the hop fix left it (E4V1)
+  measured: pending
+- id: P1.E4V.honest-reports
+  base: E4V
+  variant: E4V
+  area: architecture
+  measure: p2.reports_about_honest
+  expect: le
+  value: 10
+  source: as E4V1; RandomPosition at 1 m does not fire on a 23 cm p99
+  measured: pending
+- id: P1.E4V.cases
+  base: E4V
+  variant: E4V
+  area: architecture
+  measure: p2.cases_opened
+  expect: eq
+  value: 0
+  source: no report reaches the MA inside 90 s, so no case, no linkage request to the LAs, nothing to the RA
+  measured: pending
+- id: P1.E4V.revoked-honest
+  base: E4V
+  variant: E4V
+  area: architecture
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: no case, no revocation; the CRL stays the preloaded one
+  measured: pending
+- id: P1.E4V.cert-pool
+  base: E4V1
+  variant: E4V
+  area: architecture
+  measure: m.cert_pool_valid.mean
+  expect: same
+  tol: 0.0
+  source: a timing-model refit does not touch the pseudonym pools (20 valid certificates per OBU)
+  measured: pending
+- id: P1.E4V.rerun
+  base: E4V
+  variant: E4V2
+  area: determinism
+  measure: digest.record
+  expect: identical
+  source: same seed, same build, byte-identical record stream
+  measured: pending
+- id: P1.E4V.frames
+  base: E4V1
+  variant: E4V
+  area: performance
+  measure: r.frames_transmitted
+  expect: same
+  tol: 0.0
+  source: one BSM per 100 ms wake, unchanged by the noise parameters
+  measured: pending
+- id: P1.E4V.events
+  base: E4V1
+  variant: E4V
+  area: performance
+  measure: cost.events
+  expect: ratio
+  band:
+  - 0.98
+  - 1.02
+  source: the same draws per BSM, new parameters only
+  measured: pending
+- id: P1.E4V.memory
+  base: E4V1
+  variant: E4V
+  area: performance
+  measure: cost.peak_mb
+  expect: ratio
+  band:
+  - 0.8
+  - 1.25
+  source: no new state
+  measured: pending

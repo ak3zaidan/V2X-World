@@ -2564,7 +2564,7 @@
  },
  "frozen_commit": "0ebf53a3",
  "manifest_sha256": "ee6eeab3f926d0fefac2e790d0dea9c5411531d7823d39558620a5521189d412",
- "tool": "tools/realdata 1.2.0",
+ "tool": "tools/realdata 1.3.0",
  "verdicts": {
   "free": null,
   "locked": true
