@@ -107,6 +107,11 @@ Every number below comes from the generated tables at the end of this file. One 
 | slip size given a slip | none observed (pooled sizes written) | −1: 0.005, +1: 0.96, +2: 0.04 |
 | frozen_repeat_prob (per pair at v ≥ 5 m/s) | 0 | 0.156 |
 | header_jitter_ms sd | 28.3 (Wyoming; mean offset 38.7 ms; PROVISIONAL until P1-E3) | borrowed from locked |
+| output_noise (v3, tools/realdata 1.2.0) | speed 0.031 m/s, heading 0.052° (≤ BSM-to-BSM change / √2) | borrowed from locked |
+| position_noise (v3) | random walk over fix epochs, τ 1 s; increment a 4-component normal mixture: p 0.577 / 0.082 / 0.257 / 0.085 with along 0.0 / 0.0 / 2.8 / 12.6 cm and cross 0.3 / 1.4 / 2.3 / 6.0 cm | borrowed from locked |
+| grid_hop (v3) | leave the home :00/:50 grid 0.113, return 0.445 per BSM (18.0 % of steps are 50 or 150 ms) | none (own BSM clock) |
+
+- **Refit 2026-10-25 (tools/realdata 1.2.0, schema v3, testing/paper1-validation.md §8).** On the locked exactly-100 ms pairs (1,961, Tampa + Orem) the transmitted speed and heading barely change between BSMs (sd 0.045 m/s and 0.074°), so the residual body cannot be velocity noise: v2's 0.103 m/s and 0.30° would make those changes 0.15 m/s and 0.43°. What is left after each pair's own speed and heading change, the quantisation, the stamp jitter (0.28 ms × v) and that bounded output noise is a heavy-tailed, white increment of the reported position (Tampa rms 5.7 cm against an IQR-based sd of 0.7 cm; lag-1 −0.02 along, +0.05 across), fitted as a normal mixture by EM. Orem's 3 locked IDs are noisier and closer to white position noise (lag-1 −0.33); the pooled fit weights them by their pairs. The :00/:50 grid hops are a two-state process per BSM from 9,255 consecutive-msgCnt transitions. Wyoming was not used.
 
 - **Refit 2026-10-24 (`a77aab7c`, testing/paper1-validation.md §3).** The first fit gave the locked class 0.0067: 27 onsets, every one at v ≥ 10 m/s a :00/:50 grid hop (Δt 0.05 or 0.15 s, position consistent with Δt, residual 0.03–0.35 m) that rounding Δt to whole fix intervals read as a slip. Slip size is now the displacement beyond v̄·Δt, and the probability is fitted at v ≥ 10 m/s, where a one-epoch slip is ≥ gpsDrift. In the engine the old value gave an all-locked fleet 5.5 RandomPosition triggers per ID-minute at speed, ten times the locked bound Wyoming passed.
 - **The class share is deployment-specific.** Tampa has 23% locked IDs and Orem 0.2%. The engine should treat the share as a scenario knob, with these two values as anchors.
@@ -305,7 +310,7 @@ Epoch-slip signature: |Δp| ≈ 0 (< 0.4 v Δt, stale fix) or ≈ 2 v Δt (1.6-2
 
 ### T8. Fitted timing-model parameters (fit sets: Tampa + Orem)
 
-Written to `data/calibration/bsm-timing-cvpilot.yaml` (schema v2xw.bsm_timing.v1).
+Written to `data/calibration/bsm-timing-cvpilot.yaml` (schema v2xw.bsm_timing.v3).
 
 | Class | IDs | single-interval moving pairs at risk (v ≥ 5 m/s) | of them v ≥ 10 m/s | slip onsets (v ≥ 10 m/s) | frozen-repeat onsets |
 |---|---|---|---|---|---|

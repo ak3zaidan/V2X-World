@@ -1242,11 +1242,19 @@ rows:
   variant: E4S
   area: architecture
   measure: p2.reports_sent
-  expect: same
-  tol: 0.25
+  expect: delta
+  band:
+  - -5
+  - 5
   source: 'a locked fleet trips RandomPosition 0 times per ID-minute either way (the body moves at cm scale,
     the 1 m threshold is 20x above it), so the misbehaviour reports to the RA do not change'
-  measured: pending
+  measured: 3 -> 2
+  verdict: wrong-expectation
+  note: 'the reports are not RandomPosition on node.tx (0 triggers in 10,449 transmitted pairs in both runs)
+    but 3 and 2 receiver-side positionJump verdicts out of about 99,600 receptions (p2.verdicts.positionJump
+    3 -> 2, all about honest senders, none reaching the MA in 90 s). A relative tolerance of 25 % on a count of
+    3 is below its own Poisson spread (sd 1.7). Corrected to an absolute change within 5 reports (run on
+    486c8cba, v2 fit, 2026-10-25)'
 - id: P1.E4T.ks
   base: E4T
   variant: E4T
