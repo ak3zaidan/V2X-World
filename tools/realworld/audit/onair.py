@@ -650,7 +650,7 @@ FAULTS = {
 }
 
 
-def faults(runs_dir, table):
+def faults(runs_dir, table, only=None):
     """Re-measure each row's run under the row's fault and judge it: it must go red."""
     import yaml
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
@@ -663,6 +663,8 @@ def faults(runs_dir, table):
             print(f"NOFAULT {row['id']:30} {row['measure']} (see the report's fault table)")
             continue
         run = row['variant']
+        if only and run not in only:
+            continue
         if not all(os.path.exists(os.path.join(runs_dir, r, 'realism.json')) for r in (run, row['base'])):
             print(f"NO-RUN  {row['id']}")
             continue
@@ -686,4 +688,4 @@ if __name__ == '__main__':
                 print(k, json.dumps(v)[:120])
         print('detail', json.dumps(d['oa.detail'], default=str)[:1500])
     elif sys.argv[1] == 'faults':
-        faults(sys.argv[2], sys.argv[3])
+        faults(sys.argv[2], sys.argv[3], sys.argv[4].split(',') if len(sys.argv) > 4 else None)
