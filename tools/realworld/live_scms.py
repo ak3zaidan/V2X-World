@@ -11,6 +11,8 @@ extract) and adds scale-free forms the rows need:
 - x.revocation_latency_s: the run report's mean revocation latency in seconds;
 - x.airtime_per_frame_us: airtime over frames on the air;
 - x.crl_polls: CRL downloads plus not-modified polls (every poll a vehicle made);
+- xm.<from>-><to>, xb.<from>-><to>: backend link messages (pki.flow `msg`) and their bytes
+  per entity pair, each entity with its provider (`provider-a/ra`, `ee`);
 - x.unknown_signer_loss: m.loss_rate.unknown-signer, 0 when no frame was lost to it.
 
 `faults` proves every row can go red: for each row it injects the fault the row exists
@@ -58,6 +60,23 @@ def extend(run_dir, report_dir=None):
     d['x.crl_polls'] = (p.get('crl_downloads') or 0) + (p.get('crl_polls_not_modified') or 0)
     # The loss ratio by cause is only sampled for a cause that occurred: absent is none lost.
     d['x.unknown_signer_loss'] = d.get('m.loss_rate.unknown-signer', 0.0)
+    # Backend load per entity: link messages (pki.flow kind `msg`, not the SPDUs inside
+    # them) and their bytes, per sending and receiving entity with its provider.
+    rec = os.path.join(run_dir, 'recording.mcap')
+    if os.path.exists(rec):
+        from mcap.reader import make_reader
+        ent = _matrix()._realism().ent
+        n_msg, n_bytes = {}, {}
+        with open(rec, 'rb') as f:
+            for _, _ch, m in make_reader(f).iter_messages(topics=['record/pki.flow']):
+                q = json.loads(m.data)
+                if q.get('kind') == 'msg' and q.get('to'):
+                    k = f"{ent(q.get('from'))}->{ent(q['to'])}"
+                    n_msg[k] = n_msg.get(k, 0) + 1
+                    n_bytes[k] = n_bytes.get(k, 0) + (q.get('bytes') or 0)
+        for k, v in n_msg.items():
+            d['xm.' + k] = v
+            d['xb.' + k] = n_bytes[k]
     with open(path, 'w') as f:
         json.dump(d, f, indent=1, sort_keys=True, default=str)
 
@@ -99,11 +118,11 @@ def faults(table, runs_dir):
     for run in doc['runs']:
         p = os.path.join(runs_dir, run, 'realism.json')
         data[run] = m._realism().derive(json.load(open(p))) if os.path.exists(p) else None
-    green = 0
+    green = red = missing = no_run = 0
     for row in doc['rows']:
         base, var = row['base'], row['variant']
         if data.get(var) is None or data.get(base) is None:
-            print(f"NO-RUN  {row['id']}")
+            no_run += 1
             continue
         d = copy.deepcopy(data)
         two = base != var and row['expect'] not in ('same', 'identical')
@@ -137,7 +156,12 @@ def faults(table, runs_dir):
         if ok:
             green += 1
             print(f"GREEN   {row['id']:30} under {how}: {shown}")
-    print(f'faults: {len(doc["rows"])} rows, {green} stay green under their fault')
+        elif ok is None:
+            missing += 1
+        else:
+            red += 1
+    print(f'faults: {len(doc["rows"])} rows: {red} red under their fault, {green} stay green, '
+          f'{missing} not judged (a measure absent), {no_run} without their runs')
     return 1 if green else 0
 
 
