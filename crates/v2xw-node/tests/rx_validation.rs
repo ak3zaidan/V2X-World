@@ -1163,8 +1163,14 @@ fn a_signer_the_receiver_cannot_verify_is_charged_no_signature_check() {
     let paid = repeat["cost_us"].as_u64().unwrap();
     assert!(paid > 0, "a verified repeat pays its signature: {repeat}");
     assert_eq!(stranger["reason"], "unknown-signer", "{stranger}");
-    assert_eq!(stranger["outcome"], "dropped", "verify-all holds it back: {stranger}");
-    assert!(stranger["primitive"].is_null(), "no primitive ran: {stranger}");
+    assert_eq!(
+        stranger["outcome"], "dropped",
+        "verify-all holds it back: {stranger}"
+    );
+    assert!(
+        stranger["primitive"].is_null(),
+        "no primitive ran: {stranger}"
+    );
     assert_eq!(
         stranger["cost_us"].as_u64(),
         Some(0),

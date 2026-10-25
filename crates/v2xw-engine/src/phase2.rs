@@ -8840,18 +8840,28 @@ mod ctl_device_tests {
         p.runs[0].state.gov.ctl_history.push(genuine.clone());
         let joiner = NodeId::new(9_001);
         let i = p.runs[0].state.params.period_at(0);
-        p.runs[0].preload(device_of(joiner), i, 1, 2).expect("enrols");
+        p.runs[0]
+            .preload(device_of(joiner), i, 1, 2)
+            .expect("enrols");
         assert_eq!(
-            p.runs[0].state.devices[&device_of(joiner)].trust.ctl_sequence,
+            p.runs[0].state.devices[&device_of(joiner)]
+                .trust
+                .ctl_sequence,
             Some(genuine.sequence),
             "enrolled with the CTL in force"
         );
         p.nodes.insert(joiner, NodeSec::default());
-        assert!(p.take_ctl_install(joiner, false).is_none(), "held since enrolment");
+        assert!(
+            p.take_ctl_install(joiner, false).is_none(),
+            "held since enrolment"
+        );
         assert_eq!(p.report.trust_lists_installed, 0);
         let old = NodeId::new(9_000);
         p.nodes.insert(old, NodeSec::default());
-        assert!(p.take_ctl_install(old, false).is_some(), "the factory CTL is older");
+        assert!(
+            p.take_ctl_install(old, false).is_some(),
+            "the factory CTL is older"
+        );
         assert_eq!(p.report.trust_lists_installed, 1);
     }
 
@@ -8867,7 +8877,9 @@ mod ctl_device_tests {
         p.nodes.insert(node, NodeSec::default());
         p.ensure_factory_trust();
         let store = v2xw_node::CertStore::default();
-        let before = p.node_credentials(node, 0, &store).expect("the first record");
+        let before = p
+            .node_credentials(node, 0, &store)
+            .expect("the first record");
         let genuine = p.runs[0].state.gov.forge_next_ctl(3, &[0, 1, 2, 3, 4]);
         p.runs[0].state.gov.ctl = genuine.clone();
         p.runs[0].state.gov.ctl_history.push(genuine.clone());
@@ -8974,11 +8986,18 @@ mod evidence_time_tests {
             let r = report(k * NS_PER_S, k * NS_PER_S);
             sec.outbox.0.push((r, k * NS_PER_S), 100, w, unix);
         }
-        assert_eq!(sec.outbox.0.evicted, 1, "three 100 B reports over a 250 B quota");
+        assert_eq!(
+            sec.outbox.0.evicted, 1,
+            "three 100 B reports over a 250 B quota"
+        );
         p.nodes.insert(node, sec);
         assert_eq!(p.report().reports_evicted, 1);
         p.retire(node, 10 * NS_PER_S);
-        assert_eq!(p.report().reports_evicted, 1, "the deletion left with the vehicle");
+        assert_eq!(
+            p.report().reports_evicted,
+            1,
+            "the deletion left with the vehicle"
+        );
     }
 
     /// The MA's evidence-time rule (the edge-case finding of a 5,000 s skew revoking 15

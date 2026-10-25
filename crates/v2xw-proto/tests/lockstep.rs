@@ -218,7 +218,11 @@ fn the_ra_forwards_a_report_batch_in_shuffled_order() {
             .collect();
         let mut seen = order.clone();
         seen.sort_unstable();
-        assert_eq!(seen, (0..12).collect::<Vec<_>>(), "each report once: {order:?}");
+        assert_eq!(
+            seen,
+            (0..12).collect::<Vec<_>>(),
+            "each report once: {order:?}"
+        );
         order
     };
     let first = order();

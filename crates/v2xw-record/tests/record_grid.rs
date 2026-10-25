@@ -428,7 +428,12 @@ fn every_metric_sample_a_provider_writes_passes_the_record_gate() {
     thin.observe_all([0.1, 0.2]);
     let values = [
         SampleValue::Distribution(thin.summary(30)),
-        SampleValue::Ratio(ratio_of_sums(890_030_421_523_421.2, 598_195_368_093.0, 6011, 1)),
+        SampleValue::Ratio(ratio_of_sums(
+            890_030_421_523_421.2,
+            598_195_368_093.0,
+            6011,
+            1,
+        )),
         SampleValue::Ratio(ratio_of_sums(
             1_028_174_753_084_627.2,
             2_001_407_352_638.0,
@@ -440,7 +445,10 @@ fn every_metric_sample_a_provider_writes_passes_the_record_gate() {
         let s = MetricSample::new(&def, 60_000_000_000, Dims::new(), v);
         let json = serde_json::to_vec(&s).expect("serialises");
         if let Err(e) = v2xw_record::grid::scan_record("metric.sample", &json) {
-            panic!("the recorder refuses {}: {e}", String::from_utf8_lossy(&json));
+            panic!(
+                "the recorder refuses {}: {e}",
+                String::from_utf8_lossy(&json)
+            );
         }
     }
 }

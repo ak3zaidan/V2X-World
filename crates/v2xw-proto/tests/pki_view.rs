@@ -847,7 +847,10 @@ fn a_top_off_s_info_request_carries_its_own_spdu_and_no_step_is_shorter_than_its
             info += 1;
         }
     }
-    assert!(info >= 1, "the top-off's .info request rode an info-request");
+    assert!(
+        info >= 1,
+        "the top-off's .info request rode an info-request"
+    );
     for (s, n) in carried {
         let step = &steps[s as usize];
         assert!(

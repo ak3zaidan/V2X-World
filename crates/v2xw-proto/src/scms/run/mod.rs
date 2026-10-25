@@ -2346,10 +2346,7 @@ fn attribute_pdus(
         let leg = |s: &crate::stage::WireStep| s.from.index() == p.from && s.to.index() == p.to;
         let recv = |s: &crate::stage::WireStep| s.to.index() == p.to;
         let fits = |m: &dyn Fn(&crate::stage::WireStep) -> bool| {
-            steps
-                .iter()
-                .zip(&room)
-                .position(|(s, r)| m(s) && *r >= len)
+            steps.iter().zip(&room).position(|(s, r)| m(s) && *r >= len)
         };
         let k = fits(&leg)
             .or_else(|| fits(&recv))

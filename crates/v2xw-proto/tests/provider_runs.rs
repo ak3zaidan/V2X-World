@@ -277,7 +277,16 @@ fn an_enrolment_certificate_names_the_provider_whose_eca_issued_it() {
 fn each_providers_root_and_ica_count_their_own_certificates() {
     let (home, peer) = runs();
     let (h, p) = (&home.state.gov.counters, &peer.state.gov.counters);
-    assert_eq!(h.root_certs_issued, 5, "provider-a's root: itself, ICA, PG, MA, CRLG");
-    assert_eq!(p.root_certs_issued, 4, "provider-b's root: itself, ICA, PG, MA");
-    assert_eq!(p.ica_certs_issued, 6, "provider-b's ICA: ECA, PCA, RA, LA1, LA2, CRLG");
+    assert_eq!(
+        h.root_certs_issued, 5,
+        "provider-a's root: itself, ICA, PG, MA, CRLG"
+    );
+    assert_eq!(
+        p.root_certs_issued, 4,
+        "provider-b's root: itself, ICA, PG, MA"
+    );
+    assert_eq!(
+        p.ica_certs_issued, 6,
+        "provider-b's ICA: ECA, PCA, RA, LA1, LA2, CRLG"
+    );
 }
