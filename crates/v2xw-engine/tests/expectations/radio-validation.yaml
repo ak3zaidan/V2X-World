@@ -73,6 +73,36 @@ runs:
   N160:
     common: false
     set: {time.duration_s: 3.0, metrics: [all], actors.vehicles.demand.params.max_total_vehicles: 160}
+  SLT2_1:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 1}
+    note: NR-V2X mode 2 (Ali/Todisco profile, mu = 1, 0.5 ms slots, T1 = 2 slots), T2 = 1 ms
+  SLT2_5:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 5}
+    note: NR-V2X mode 2 (Ali/Todisco profile, mu = 1, 0.5 ms slots, T1 = 2 slots), T2 = 5 ms
+  SLT2_10:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 10}
+    note: NR-V2X mode 2 (Ali/Todisco profile, mu = 1, 0.5 ms slots, T1 = 2 slots), T2 = 10 ms
+  SLT2_50:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 50}
+    note: NR-V2X mode 2 (Ali/Todisco profile, mu = 1, 0.5 ms slots, T1 = 2 slots), T2 = 50 ms
+  SLT2_100:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all], radio.sidelink.selection_window_ms: 100}
+    note: NR-V2X mode 2 (Ali/Todisco profile, mu = 1, 0.5 ms slots, T1 = 2 slots), T2 = 100 ms
+  SLT2_U:
+    base: nr-grid.yaml
+    common: false
+    set: {time.duration_s: 4.0, metrics: [all]}
+    note: NR-V2X mode 2 with the profile's T2 (33 slots = 16.5 ms)
 rows:
 # ---- Path loss: the PRR 0.5 edge sits where the law spends the budget (no fading) ----
 - id: RV-PL-LD
@@ -348,5 +378,39 @@ rows:
   expect: one-way delay of a 1,500-octet uplink packet = route km x us/km + hops x per-hop + 12,000 bits / rate. fibre 20 x 4.9 + 4 x 50 + 12 = 310 us; DSL 5 x 4.9 + 6 x 50 + 8,000 + 600 = 8,924.5 us; microwave 10 x 3.336 + 4 x 50 + 30 = 263.4 us
   source: light in glass at n = 1.47 (4.9 us/km) and in air (3.336 us/km); ITU-T G.993.2 interleaving; serialisation L / R
   fault: the DSL interleaving left out
+  measured: pending
+  verdict: pending
+# ---- NR-V2X mode 2 selection window (written before the SLT2 runs) ----
+- id: RV-SL-T2-ACCESS
+  kind: chain
+  runs: [SLT2_1, SLT2_5, SLT2_10, SLT2_U, SLT2_50, SLT2_100]
+  metric: access_ms
+  expect: up
+  min_change: 0.05
+  expect_text: the selected resource is uniform over the candidates in [n + T1, n + T2], so the mean wait from hand-off to the reserved slot is about (T1 + T2) / 2 and rises with T2 (1, 3, 5.5, 8.75, 25.5, 50.5 ms)
+  source: 3GPP TS 38.214 8.1.4 (selection window); TS 38.321 5.22.1.1 (random selection among the candidates)
+  fault: order reversed
+  measured: pending
+  verdict: pending
+- id: RV-SL-T2-E2E
+  kind: chain
+  runs: [SLT2_1, SLT2_10, SLT2_50, SLT2_100]
+  metric: e2e_ms_mean
+  expect: up
+  min_change: 0.05
+  expect_text: the end-to-end latency carries the access wait, so it rises with T2 (the radio.yaml selection_window_ms row)
+  source: 3GPP TS 38.214 8.1.4
+  fault: order reversed
+  measured: pending
+  verdict: pending
+- id: RV-SL-T2-50
+  kind: abs
+  run: SLT2_50
+  metric: access_ms
+  band: [18.0, 33.0]
+  expect: (T1 + T2) / 2 = (1 + 50) / 2 = 25.5 ms, within 30 %
+  source: 3GPP TS 38.214 8.1.4; uniform selection over the window
+  fault: value x1.25 (x2 below)
+  fault_scale: 2.0
   measured: pending
   verdict: pending
