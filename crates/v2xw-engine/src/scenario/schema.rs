@@ -3489,6 +3489,9 @@ mod gnss_settings_tests {
             ..GnssSettings::default()
         };
         assert_eq!(quiet.params().sigma_velocity_mps, 0.0);
-        assert!(default > 0.1, "the SPS default is 0.2 m/s at 95 %: {default}");
+        assert!(
+            default > 0.1,
+            "the SPS default is 0.2 m/s at 95 %: {default}"
+        );
     }
 }
