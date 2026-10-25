@@ -34,241 +34,249 @@ rows:
   check: every pki.state CTL lists 5 electors and the governance has 5 elector entities with distinct certificates
   source: Elector Technical Specification v1.1 §2.1 (exactly 5); every published CTL lists 5
   expect: 5
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 5 elector entities, 5 certs, 0 states with electors != 5 | B PASS: 5 elector entities, 5 certs, 0 states with electors != 5'
+  verdict: pass
 - id: GOV.G4.quorum
   area: spec
   check: ctl.quorum in every pki.state
   source: Elector Tech Spec v1.1 §2.4 (any 3 of 5); published CTLs since sequence 1 carry quorum 3
   expect: 3
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: quorum values [3] | B PASS: quorum values [3]'
+  verdict: pass
 - id: GOV.G5.signers
   area: spec
   check: every CTL in ctl.history is signed by all 5 electors (signers), never fewer than quorum
   source: Elector Tech Spec v1.1 §2.4 (SCMS Manager requires all 5 to respond); published CTLs carry 5 signatures
   expect: 5 of 5 on every CTL
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: signers per CTL [5, 5] | B PASS: signers per CTL [5, 5]'
+  verdict: pass
 - id: GOV.C1.roots
   area: spec
   check: CTL 0 rootCaApprove = SHA-256 (HashedId32) of the COER of every on-CTL provider root certificate in pki.state
   source: '[SMP] §6.1 fullIeeeCtl; 1609.2 HashedId32 = SHA-256 of the root certificate (crypto #7)'
   expect: '{root(provider-a), root(provider-b)}'
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: CTL0 roots 2, recomputed 2, equal True | B PASS: CTL0 roots 2, recomputed 2, equal True'
+  verdict: pass
 - id: GOV.L6.rollover
   area: spec
   check: the CTL after the root rollover decided at 120 s approves the old provider-a root, the provider-b root and one new root, and nothing else; sequence +1
   source: '[SM-PROV] §3.5.4 key changeover: the old certificate stays available (the old root stays approved until remove_root, gov L-6)'
   expect: sequence 0 -> 1; roots 2 -> 3 (old ones kept)
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: seq 0->1, roots 2->3, kept True | B PASS: seq 0->1, roots 2->3, kept True'
+  verdict: pass
 - id: GOV.C6.deadline
   area: timing
   check: the first pki.state carrying CTL 1 is after the decision (t = 120 s) and no later than 3 Eastern business days after it (federal holidays skipped, computed here)
   source: '[SM-PROV] §3.4.11 root addition published within 3 business days; gov C-6, K-7'
   expect: 120 s < t_pub <= Tue 2026-10-20 04:52 EDT + 3 business days = Fri 2026-10-23 04:52 EDT (259,320 s)
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: published Fri 2026-10-23 08:52:00Z (t=259320 s), deadline Fri 2026-10-23 08:52Z | B PASS: published Fri 2026-10-23 08:52:00Z (t=259320 s), deadline Fri 2026-10-23 08:52Z'
+  verdict: pass
 - id: GOV.C9.effective
   area: spec
   check: CTL 1 effectiveDate (Time32) against the Time32 of its publication instant, and greater than CTL 0's
   source: gov C-9 (DOCUMENTED DEVIATION) - the engine sets effectiveDate to the publication deadline; SCMS Manager's is the ballot date
   expect: effective == Time32(t_pub) > effective(CTL 0)
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: effective 719830325, Time32(publication) 719830325, CTL0 719571005 | B PASS: effective 719830325, Time32(publication) 719830325, CTL0 719571005'
+  verdict: pass
 - id: GOV.C12.monotone
   area: invariant
   check: per device, node.credentials ctl_sequence never decreases and never names a CTL before pki.state publishes it
   source: 1609.2.1 / Tech Spec §2.6 a device installs CTLs in sequence
   expect: 0 violations
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 0 violations over 65 devices | B PASS: 0 violations over 65 devices'
+  verdict: pass
 - id: GOV.C12.record
   area: metrics
   check: run-report phase2.trust_lists_installed against the CTL installs the records show (devices whose node.credentials ctl_sequence rises) plus at most one per roadside unit (RSUs have no node.credentials)
   source: metric integrity; a device that installs CTL 1 holds it (1609.2.1); the Studio's pool panel reads node.credentials
   expect: 0 <= trust_lists_installed - record_installs <= n_rsus
-  measured: pending
-  verdict: pending
+  measured: 'A FAIL: trust_lists_installed 24, record installs 0, RSUs 2 | B PASS: trust_lists_installed 24, record installs 22, RSUs 2'
+  verdict: fixed
+  note: 'test: phase2 the_credentials_record_names_the_ctl_the_vehicle_installed, a_vehicle_enrolled_after_a_ctl_change_does_not_install_it_again'
 - id: GOV.C12.verifications
   area: metrics
   check: phase2.trust_list_verifications = trust_lists_installed x (elector signatures + root self-signatures of the CTL installed)
   source: metric definition (phase2.rs Phase2Report::trust_list_verifications); one CTL change in this run
   expect: equality
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: verifications 192 = installs 24 x 8? | B PASS: verifications 192 = installs 24 x 8?'
+  verdict: pass
 - id: GOV.M.ctls_published
   area: metrics
   check: phase2.ctls_published and gov_decisions against the CTL sequence changes in pki.state and the scenario's one EAC decision
   source: metric definition; scenario root_rollover_at_s 120
   expect: ctls_published == changes == 1; gov_decisions == 1; elector entities' ctl_sequence counter == ctl.sequence at the end
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: ctls_published 1, changes 1, gov_decisions 1, elector ctl_sequence [1] vs 1 | B PASS: ctls_published 1, changes 1, gov_decisions 1, elector ctl_sequence [1] vs 1'
+  verdict: pass
 # --- Root CAs, ICAs and component profiles per provider -----------------------------------
 - id: GOV.L1.lifetimes
   area: spec
   check: every component certificate in pki.state against the published certificate of its provider's form (provider-a ISS, provider-b SAESOL S2X production; third_party/scms-artefacts chain files); validity duration
   source: published chain files 2025-07-17 (ISS preprod, SAESOL test) and 2025-08-13 (SAESOL production); gov L-1, L-2; ISS root 70 y from the production CTL
   expect: equal for every role with a published certificate
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 15 compared; all equal | B PASS: 15 compared; all equal'
+  verdict: pass
 - id: GOV.L3.crlseries
   area: spec
   check: crlSeries of every component certificate against the published one (ICA-issued 2, root-issued 256, root 0)
   source: '[SMP] Table 1; published chain files; gov L-3'
   expect: equal
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 15 compared; all equal | B PASS: 15 compared; all equal'
+  verdict: pass
 - id: GOV.L4.enckey
   area: spec
   check: presence of encryptionKey on every component certificate against the published one
   source: published chain files; gov L-4
   expect: equal
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 15 compared; all equal | B PASS: 15 compared; all equal'
+  verdict: pass
 - id: GOV.L5.region
   area: spec
   check: presence of identifiedRegion on every component certificate against the published one (ISS sub-CAs {124, 484, 840}; S2X none)
   source: published chain files; gov L-5
   expect: equal
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 15 compared; all equal | B PASS: 15 compared; all equal'
+  verdict: pass
 - id: GOV.L10.ssp
   area: spec
   check: the security-management SSP choice byte of every component certificate equals the published one; S2X bytes equal byte for byte
   source: published chain files; gov L-10, L-11 (version 2 is the 2022 module's fixed value; ISS preprod carries version 1)
   expect: choice equal everywhere; S2X bytes equal
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 15 compared; all equal | B PASS: 15 compared; all equal'
+  verdict: pass
 - id: GOV.L.chain
   area: spec
   check: every component certificate's explicit signature verifies under its issuer (oracle ECDSA), and every chain ends at a root the CTL approves
   source: 1609.2 §5.1 chain rules; [SMP] §6.1
   expect: 0 failures
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 20 chains; 0 failures | B PASS: 20 chains; 0 failures'
+  verdict: pass
+  note: 'check corrected before A was judged: the oracle chain.validate group rule rejects SCMS Manager published production chain (ica.prod.s2x.io: minChainLength 3 > 1 + 1), so chain length is not judged; signatures, issuer, validity, region and CTL root are'
 - id: GOV.L.names
   area: spec
   check: every component certificate's id.name carries its own provider's label
   source: Provider Req. v1.1 §3.3.1.1 (each provider names its own components)
   expect: 0 mismatches
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 0 mismatches | B PASS: 0 mismatches'
+  verdict: pass
 - id: GOV.L.onecert
   area: metrics
   check: each component's pki.state `cert` equals the certificate its counters name (`counters.certificate`) at t0, before any rollover
   source: one component has one certificate (the chain file lists the certificate that signs, [SMP] §6.1); the Studio shows both
   expect: equal for every component with both
-  measured: pending
-  verdict: pending
+  measured: 'A FAIL: 8 with both; differ: 4 provider-a/eca provider-a/aca provider-b/eca provider-b/aca | B FAIL: 8 with both; differ: 4 provider-a/eca provider-a/aca provider-b/eca provider-b/aca'
+  verdict: open
+  note: 'ECA and ACA carry a PDU-layer certificate (signs) and a governance one (chain files, rollover); audit-gov.md §4 item 1'
 - id: GOV.L.counters
   area: metrics
   check: pki.state root and ICA counters.certs_issued at t0 against the certificates in pki.state each signed (self-signature counted for the root), allowing the components with no recorded certificate (the PG, the CRL Store)
   source: metric integrity (per provider)
   expect: observed <= certs_issued <= observed + unrecorded, per provider
-  measured: pending
-  verdict: pending
+  measured: 'A FAIL: provider-a/root 9 (records 4+3), provider-a/ica 14 (records 6+3), provider-b/root 0 (records 3+4), provider-b/ica 0 (records 7+4) | B FAIL: provider-a/root 5 (records 4+3), provider-a/ica 8 (records 6+3), provider-b/root 4 (records 3+4), provider-b/ica 6 (records 7+4)'
+  verdict: open
+  note: 'partly fixed (the cross-provider count; test: provider_runs each_providers_root_and_ica_count_their_own_certificates). Left: provider-b ICA 6 against 7 recorded, the GOV.L.onecert duality (audit-gov.md §4 item 1)'
 - id: GOV.D1.acas
   area: spec
   check: provider-b runs two ACAs and each holds a certificate (SAESOL publishes two aca certificates in both chain files)
   source: published chain files 2025-07-17 and 2025-08-13 (two aca.*.s2x.io / aca.v2x-scms.saesoltech.io certificates); gov D-2
   expect: 2 ACAs, 2 certificates
-  measured: pending
-  verdict: pending
+  measured: 'A FAIL: 2 ACAs, 1 with a certificate | B FAIL: 2 ACAs, 1 with a certificate'
+  verdict: open
+  note: 'provider-b aca/1 is placed but uncertified and carries no traffic; audit-gov.md §4 item 3'
 # --- ECA and enrolment ----------------------------------------------------------------------
 - id: GOV.E1.lifetime
   area: spec
   check: every enrolment certificate's validity duration
   source: CAMP122 Table 3 (6 years); gov E-1, E-2 (encoding hours(52560) unverifiable)
   expect: hours 52560 (6 x 365 d) on every one
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 65 certificates, durations [(''hours'', 52560)] | B PASS: 65 certificates, durations [(''hours'', 52560)]'
+  verdict: pass
 - id: GOV.E3.profile
   area: spec
   check: every enrolment certificate is implicit, crlSeries 4, identifiedRegion {840, 124, 484}, certRequestPermissions present, issued by its own provider's ECA (issuer HashedId8 = SHA-256 of that ECA certificate), cracaId = the CRL signer's issuer of that provider's form (ISS root, S2X ICA)
   source: '[SMP] §6.3.1; [SMP] Table 1; gov E-3'
   expect: 0 violations
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 65 certificates, 0 violations | B PASS: 65 certificates, 0 violations'
+  verdict: pass
 - id: GOV.E3.name
   area: spec
   check: enrolment id.name unique per device and naming the provider whose ECA issued it
   source: '[SMP] §6.3.1 (unique name); 06 §6 item 12 (every name said provider-a)'
   expect: unique; 0 names of another provider
-  measured: pending
-  verdict: pending
+  measured: 'A FAIL: 65 names, 65 distinct, 30 name another provider ee/1000005(provider-b)=ee-000f4245.provider-a ee/1000006(provider-b)=ee-000f4246.provider-a | B PASS: 65 names, 65 distinct, 0 name another provider'
+  verdict: fixed
+  note: 'test: provider_runs an_enrolment_certificate_names_the_provider_whose_eca_issued_it'
 - id: GOV.E3.key
   area: spec
   check: no two enrolment certificates carry the same reconstruction value (a key never used before)
   source: '[SMP] §6.3.1'
   expect: all distinct
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 65 keys, 65 distinct | B PASS: 65 keys, 65 distinct'
+  verdict: pass
 - id: GOV.E.chain
   area: spec
   check: every enrolment certificate's implicit key reconstructs on P-256 under its ECA, and the chain enrolment -> ECA -> ICA -> root validates (oracle chain.validate) against the CTL roots
   source: 1609.2 §5.3 ECQV; 1609.2.1 chain validation on devices
   expect: 0 failures
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 65 chains, 0 failures | B PASS: 65 chains, 0 failures'
+  verdict: pass
+  note: 'as GOV.L.chain'
 - id: GOV.E.once
   area: invariant
   check: per device one EeEcaCertRequestSpdu and one ECA response delivered to it, request before response, response before its first EeRaCertRequestSpdu; the response's ECA is its own provider's
   source: CAMP122 bootstrap; [SMP] §6.3.1
   expect: 0 violations
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 67 devices, 0 violations | B PASS: 67 devices, 0 violations'
+  verdict: pass
 - id: GOV.E.count
   area: metrics
   check: pki.state ECA counters.enrolment_certs_issued and providers.devices.enrolled at the end against the devices the records show enrolled by that provider's ECA
   source: metric integrity
   expect: equal per provider
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: provider-a: issued 37, enrolled 37, records 37; provider-b: issued 30, enrolled 30, records 30 | B PASS: provider-a: issued 37, enrolled 37, records 37; provider-b: issued 30, enrolled 30, records 30'
+  verdict: pass
 # --- the real calendar ------------------------------------------------------------------
 - id: GOV.K1.time32
   area: timing
   check: every pki.state time32 against Time32(t0 + t) computed here (TAI since 2004-01-01, 5 leap seconds)
   source: 1609.2 Time32; IERS leap seconds 2005-12-31 ... 2016-12-31; gov K-4
   expect: equal on every record
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 9563 records, 0 differ | B PASS: 9563 records, 0 differ'
+  verdict: pass
 - id: GOV.K3.iperiod
   area: timing
   check: node.credentials current_i and node.security cert_i against i = floor((unix - 1,420,534,800) / 604,800) at the record's instant (cert_i may lag by the 1 h overlap)
   source: '[SMP] Table 2 iPeriodEpoch 2015-01-06 04:00 Eastern, 1 week; gov K-1, K-3'
   expect: current_i equal everywhere; cert_i in {i, i-1} and i-1 only within 3,600 s of the boundary
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: current_i: 0/176 differ; cert_i: 0/16558 outside i or the overlap | B PASS: current_i: 0/176 differ; cert_i: 0/16558 outside i or the overlap'
+  verdict: pass
 - id: GOV.K5.pseudonym
   area: timing
   check: every pseudonym certificate in node.credentials starts at Time32 of the UTC boundary of its i (epoch + i weeks) and lasts hours(169)
   source: '[SMP] Table 2 (1 week, 1 h overlap); CAMP122 §5.1.5.4, Table 5 (09:00:00 UTC with leap seconds); gov K-2, K-5'
   expect: 0 violations
-  measured: pending
-  verdict: pending
+  measured: 'A PASS: 2840 pseudonym certificates, 0 violations | B PASS: 2840 pseudonym certificates, 0 violations'
+  verdict: wrong-expectation
+  note: 'expected hours(169); the engine encodes minutes(10140) = 169 h (constants.md cert_lifetime_minutes CITED CAMP-EE R1.1 §2.1.5.3.2; crypto #31). Corrected to 169 h in any unit'
 # --- server API and the Studio's PKI view ---------------------------------------------
 - id: GOV.SRV.trust
   area: metrics
   check: v2xw-server's inspect.trust (what the Studio's PKI view draws) at t = 0, 30, 60, 121 and 139 s against the pki.state record of the same instant in the server's own recording; the CTL, every component's cert and counters, the device counts
   source: crates/v2xw-server/src/pki.rs (inspect.trust answers the newest pki.state at or before t)
   expect: equal at every instant
-  measured: pending
-  verdict: pending
+  measured: 'SRV: 5 of 5 instants equal (byte stores certificates and CRL hex left out, served by inspect.cert); fault: provider-b root certs_issued + 1 at 121 s goes red'
+  verdict: pass
 # --- determinism ------------------------------------------------------------------------
 - id: GOV.DET.release
   area: determinism
   check: SHA-256 over every record (topic, log time, payload) of A against P0 (same binary, same seed)
   source: engine contract (same seed, byte-identical)
   expect: equal
-  measured: pending
-  verdict: pending
+  measured: 'A f00dc8b049a9114a vs f00dc8b049a9114a'
+  verdict: pass
 - id: GOV.DET.fixed
   area: determinism
   check: the same digest of B against B2
   source: engine contract
   expect: equal
-  measured: pending
-  verdict: pending
+  measured: 'B 681eeb980c7be640 = B2 681eeb980c7be640 (A f00dc8b049a9114a: the fixes move the records)'
+  verdict: pass
