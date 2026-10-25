@@ -2323,21 +2323,41 @@ fn host_governance(kernel: &mut Kernel<ScmsMsg>, gov: &Governance, p: &ScmsParam
 ///
 /// `pdus` are the PDUs the handler emitted, in emission order; `steps` the steps its
 /// dispatch logged, the first being step number `first`. A PDU belongs to the first step
-/// with its own sender and receiver; failing that (a PDU built in the name of the device
-/// a relay forwards for), to the first step with its receiver. Exact, because both lists
-/// come from one handler invocation: no other handler's PDU or step is in either.
+/// with its own sender and receiver that still has room for it (a message's bytes are at
+/// least the SPDUs it carries); failing that (a PDU built in the name of the device a
+/// relay forwards for), to the first step with its receiver that has room; and only then
+/// to the first step with its sender and receiver, or its receiver, whatever its size.
+/// Both lists come from one handler invocation: no other handler's PDU or step is in
+/// either.
+///
+/// The room matters when one handler sends several messages on the same leg: a top-off
+/// session sends the 103-byte `file-request` and then the `info-request` that carries
+/// the 318-byte `.info` `EeRaDownloadRequestSpdu`, and the RA's report-shuffle release
+/// sends one `report-forward` per report. Matching on the leg alone put the `.info`
+/// request on the `file-request` and every released report on the first forward.
 fn attribute_pdus(
     pdus: &mut [crate::scms::pdu::EmittedPdu],
     steps: &[crate::stage::WireStep],
     first: usize,
 ) {
+    let mut room: Vec<u64> = steps.iter().map(|s| u64::from(s.bytes)).collect();
     for p in pdus.iter_mut().filter(|p| p.step.is_none()) {
-        let exact = steps
-            .iter()
-            .position(|s| s.from.index() == p.from && s.to.index() == p.to);
-        let by_receiver = || steps.iter().position(|s| s.to.index() == p.to);
-        p.step = exact
-            .or_else(by_receiver)
-            .and_then(|k| u32::try_from(first + k).ok());
+        let len = u64::from(p.len);
+        let leg = |s: &crate::stage::WireStep| s.from.index() == p.from && s.to.index() == p.to;
+        let recv = |s: &crate::stage::WireStep| s.to.index() == p.to;
+        let fits = |m: &dyn Fn(&crate::stage::WireStep) -> bool| {
+            steps
+                .iter()
+                .zip(&room)
+                .position(|(s, r)| m(s) && *r >= len)
+        };
+        let k = fits(&leg)
+            .or_else(|| fits(&recv))
+            .or_else(|| steps.iter().position(leg))
+            .or_else(|| steps.iter().position(recv));
+        if let Some(k) = k {
+            room[k] = room[k].saturating_sub(len);
+        }
+        p.step = k.and_then(|k| u32::try_from(first + k).ok());
     }
 }

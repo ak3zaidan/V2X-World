@@ -815,6 +815,50 @@ fn the_credentials_change_digest_is_a_stable_sha256() {
 /// the deployment's architecture: a device talks to the RA, there is no LOP leg, no LOP
 /// stamp, no LOP component and no LOP `-proxied` name, and every PDU the deployment sends
 /// appears once. (Before the fold the records showed ee -> lop -> ra, CAMP's design.)
+/// A weekly top-off is one session on one leg: the `file-request` (LPF/LCCF check, no
+/// SPDU) and the `info-request` carrying the signed `.info` `EeRaDownloadRequestSpdu`.
+/// The SPDU rides the `info-request`, and no step is shorter than the SPDUs it carries
+/// (audit-prov `PV.view-pdu-carrier`: on the leg alone the 318-byte `.info` request rode
+/// the 103-byte `file-request`).
+#[test]
+fn a_top_off_s_info_request_carries_its_own_spdu_and_no_step_is_shorter_than_its_spdus() {
+    let mut p = ScmsParams::default().quick();
+    p.pdu.keep_bytes = true;
+    let mut run = ScmsRun::new(p).expect("certificates encode");
+    run.add_device(DEVICE_A);
+    provisioned(&mut run, DEVICE_A, 0, 2, JMAX);
+    run.topup(DEVICE_A, 2, JMAX);
+    run.run().expect("the top-off runs");
+    let (steps, _) = run.kernel.steps_since(0);
+    let mut carried: BTreeMap<u32, u64> = BTreeMap::new();
+    let mut info = 0;
+    for q in &run.state.pdus {
+        let Some(s) = q.step else { continue };
+        *carried.entry(s).or_default() += u64::from(q.len);
+        let step = &steps[s as usize];
+        assert!(
+            !step.step.starts_with("file-request"),
+            "{:?} rode the {}",
+            q.kind,
+            step.step
+        );
+        if step.step.starts_with("info-request") {
+            assert_eq!(q.kind, SpduKind::EeRaDownloadRequest);
+            info += 1;
+        }
+    }
+    assert!(info >= 1, "the top-off's .info request rode an info-request");
+    for (s, n) in carried {
+        let step = &steps[s as usize];
+        assert!(
+            u64::from(step.bytes) >= n,
+            "{} is {} B but carries {n} B of SPDUs",
+            step.step,
+            step.bytes
+        );
+    }
+}
+
 #[test]
 fn without_a_deployed_lop_the_records_show_a_device_talking_to_the_ra() {
     use v2xw_proto::scms::deployment::{Deployment, Preset};
