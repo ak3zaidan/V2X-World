@@ -8,6 +8,14 @@ again 2026-10-23 at `d90a6298`** (main), after:
 - the full-scale benchmark to the end (BENCH, merged at `d90a6298`: FB3, docs and the
   `scms-full-bench.yaml` expectations only).
 
+**Updated 2026-10-25** after the db1 SCMS component audit (governance, provisioning,
+on-air security, misbehaviour pipeline, metrics), merged onto `8a31d8d1` (BUILD-STATUS
+"SCMS component audit wave db1 integration"). §2.2, §6 item 24 and §9 state its results:
+179 rows, 142 pass, 10 fixed, 10 corrected, 17 open; ten engine defects fixed, among them
+the enrolment certificate name (§6 item 12) and the RA's unshuffled report batches.
+Sources: `testing/audit-gov.md`, `audit-prov.md`, `audit-db1-3.md`, `audit-mbpipe.md`,
+`audit-sim-metrics.md`.
+
 **Updated again 2026-10-24** after the backend, density and Paper 1 wave (BACKEND,
 DENSITY, PAPER1VAL), merged onto `e15bfec1` (BUILD-STATUS "SCMS backend, density and
 Paper 1 wave integration"). §2.2, §6 and §9 state its results: R-FFWIN fixed; the lost
@@ -113,6 +121,16 @@ A row with two verdicts is counted under its first.
 **Final match: 275 of 326 rules (84.4 %) do what the real system does** (matches plus fixed).
 It was 264 (81.0 %) on 2026-10-18, 270 (82.8 %) at `0f7eda5c` and 275 at `bc3bca1b`.
 
+**What moved in the 2026-10-25 db1 component audit: no rule verdict.** Five audits read
+raw records only, with independent checkers, and judged 179 rows written before their runs:
+142 pass, 10 fixed, 10 corrected with evidence, 17 open (§2.2, §6 item 24). The ten engine
+fixes are runtime defects with no checklist row, including §6 item 12 (the enrolment
+certificate name, now fixed). One fix touches a behaviour §3 counted as working: the RA
+now shuffles released report batches (they were forwarded in arrival order); the rule
+rows that cite the shuffle were judged on its timing, which did not change, so none is
+re-judged here. Configuration rows: 893, of which 711 pass, 51 fixed, 61 corrected and
+70 open.
+
 **What moved in the 2026-10-25 residual, clock and matrix wave: no rule verdict.** Every
 fix was a runtime defect with no checklist row: the power-on CRL gate period (§6 item 22),
 the 27 incomplete top-ups (§6 item 5), parallel provisioning cryptography (§6 item 3), the
@@ -173,7 +191,12 @@ in each table's expectations file.
 | Re-runs and benchmark variants on `81a12183`: PQ cycle and hybrid, relay repro, R-FS40, `gnss-raw`, MW/MWC/MWC2, Q60 LTE, 2× density and Portland (`scms-variants.yaml`, rerun-b) | 60 | 51 | 0 | 5 | 4 |
 | Oracle on fresh conf and mbr records of `81a12183`, 32 rows each with OF-3 and OF-3-JOIN (oracle-24 §1–§3); 3 rows red on R-JOINCRL, green after its fix | 64 | 61 | 3 | 0 | 0 |
 | Paper 1 features in 41 real runs on `e15bfec1` plus the speed-matched E4S run on the v2 timing model: timing classes, MA store, VeReMi export, BeaconFrequency, P1-E4 against Wyoming, determinism (`scms-paper1.yaml`, paper1 §7); 12 further TM-1 and E4S rows written before their runs and still `pending` (not counted) | 77 | 58 | 6 | 4 | 9 |
-| **All** | **714** | **569** | **41** | **51** | **53** |
+| SCMS component audit, db1 wave (2026-10-25), on `8becf72a`, each checker reading raw records only, every row committed `pending` before its run and red under its injected fault. Governance and trust anchors (`scms-audit-gov.yaml`, audit-gov) | 34 | 28 | 2 | 1 | 3 |
+| Component audit: pseudonym provisioning (`scms-audit-prov.yaml`, audit-prov) | 31 | 28 | 1 | 0 | 2 |
+| Component audit: on-air security (`scms-audit-db1-3.yaml`, audit-db1-3) | 41 | 34 | 4 | 1 | 2 |
+| Component audit: misbehaviour pipeline, detector to enforcement (`scms-audit-mbpipe.yaml`, audit-mbpipe) | 41 | 29 | 2 | 7 | 3 |
+| Component audit: every SCMS metric recomputed from the records, run-report conservation (`scms-audit-sim-metrics.yaml`, audit-sim-metrics) | 32 | 23 | 1 | 1 | 7 |
+| **All** | **893** | **711** | **51** | **61** | **70** |
 
 The realism file records no per-row "fixed" verdict. The rows that the R-USFP fix turned
 green are counted as pass, and the 6 rows corrected in the re-run (Z1, Z3, Z4, A3,
@@ -186,7 +209,8 @@ passing rows go red under `variants_faults.py` (0 silent). In `scms-paper1.yaml`
 59 passing rows go red under it; the silent one (a ratio over a zero base) went red on the
 real pre-refit fault (0 to 76, paper1 §3).
 
-**What the 52 open rows are.** Most are not engine problems:
+**What the 52 open rows are** (before the db1 component audit; its 17 are listed after
+them). Most are not engine problems:
 - **28 are superseded by a later table, or carried into one.**
   - Stress, 12: the 10 full-fleet rows (`FS.*`) were never run, and the final bench, final
     run and full bench measured them as `FB.*`, `FB2.*` and `FB3.*`. `PQ.certcycle` found
@@ -230,6 +254,28 @@ real pre-refit fault (0 to 76, paper1 §3).
     refusals from 33 joiners; fixed in code since, re-run owed), `VB.LTE.latency-budget`
     (p95 110 ms, §6 item 16), `VB.2X.honest-reports` (13 against 20 cannot be told from
     noise on one seed) and `VB.PDX.speed` (no published Portland speed to judge 3.2 m/s).
+- **17 are the db1 component audit's open rows** (§6 item 24):
+  - Governance, 3: `GOV.L.onecert` (the ECA and ACA each hold a PDU-layer certificate
+    that signs and a different governance one for chain files and rollover),
+    `GOV.L.counters` (the cross-provider count is fixed; left: provider-b's ICA counter
+    reads 6 against 7 in the records, from that duality) and `GOV.D1.acas` (provider-b's
+    second ACA has no certificate and no traffic).
+  - Provisioning, 2: `PV.aca-cannot-group` (a privacy deviation: each RA→ACA message
+    carries one device's week of 20 requests, so the ACA can group them; owner decision) and
+    `PV.rsu-cert` (no record carries an RSU application certificate).
+  - On-air, 2: `OA.RX.cached-verifies` (a certificate learned from an MBR relayed over
+    the air does not resolve the sender's later digest BSMs; 1 case in 37,295) and
+    `OA.P2P.trigger-metric` (`p2pcd_requests`
+    counts digest misses, 22–46/s, against real P2PCD triggers of 0.4–1.3/s; renaming it is
+    an owner decision).
+  - Misbehaviour, 3: `AU.STORE.order` (relayed frames carry no report id),
+    `AU.DIST.rsu` (no record shows an RSU installing a CRL), `AU.MET.detection`
+    (`time_to_detect` keeps the first-emitted report, not the earliest; 27 ms off; a
+    one-line fix).
+  - Metrics, 7: `RS.time-order` (privacy.link claims stamped up to 11.7 ms after their log
+    time), `RS.cost-Q` and `RS.cost-L` (Q's second fast-forward 453 s against QD's 9.9 s,
+    likely the PKI view's per-tick snapshots, unprofiled), and four not run: `RS.threads`,
+    `RS.resume`, `SV.trust`, `SV.flows`.
 
 **Three notes on the table:**
 - **The realism base now runs its first live window to 300 s** (`b645dd99`, rerun-a §2).
@@ -484,7 +530,10 @@ with rc 0 for the first time: 15,255 s of wall time awake, 24,786 CPU-s, **peak 
 - **The report shuffle acts as specified.** Reports filed at 130–240 s reached the home MA
   at 86,430 s: the RA's shuffle (CAMP-EE SCMS-765, 10,000 reports or one day) never fills
   in a 2 km² box. A revocation therefore takes at least the day of shuffle, the manual
-  review and the business-day CRL. This is a property of the specified system.
+  review and the business-day CRL. This is a property of the specified system. The timing
+  held, but until 2026-10-25 the RA forwarded each released batch in arrival order (Kendall
+  tau 1.000); it now shuffles it with a seeded permutation (tau 0.009, audit-mbpipe, §6
+  item 24).
 - **The fleet is kept across the resume** (1,830 → 1,891; FB2 fell to 1,281), with 0
   teleports, removals or jams, and no report burst (about 67 per 10 s; FB2 had 4,876 in
   10 s).
@@ -871,10 +920,11 @@ whether a full-fleet misbehaviour rate is a real-world number.
       creation. PQHFC re-run: 0 `Invalid` (Verified 373,181 to 373,228). Test
       `pq_receivers.rs`, red with the fix removed (47).
     - No standard defines PQ encodings, so no PQ number is a real-world number.
-12. **The enrolment certificate name** (rerun §8). Every enrolment certificate is named
-    `ee-<device>.provider-a`, including the 46 that provider-b's ECA issues. The name is
-    still unique per device, so crypto #28, proto C3 and gov E-3 hold, and the size is
-    unchanged. Fixing it moves certificate bytes and the regression digests.
+12. ~~**The enrolment certificate name**~~ (rerun §8). **Fixed 2026-10-25** (audit-gov,
+    `a26fae9f`, row `GOV.E3.name`): every enrolment certificate was named
+    `ee-<device>.provider-a`, including the 46 that provider-b's ECA issues; each is now
+    named after its issuing provider. crypto #28, proto C3 and gov E-3 held before and
+    hold now; the record digests moved and were re-blessed (`43958e55`).
 13. **An overdue-CRL refusal is labelled `signature-invalid` on `node.rx`** (rerun §9 item
     3). In MWC's W4 the run report counts 97,679 `crl-overdue` refusals and `node.rx` has
     exactly 97,679 `signature-invalid` fates. An analyst reading `node.rx` would see forgery
@@ -1021,6 +1071,49 @@ whether a full-fleet misbehaviour rate is a real-world number.
     run-wide pooled mean is diluted unless those windows are dropped. Not re-run: silent,
     nyc-pilot, real-crypto, fleet2x, lte, nr, full-cert, backhaul-cellular, fleet-half,
     tls12 (still at their `77cffb5b` values).
+24. **The db1 component audit** (2026-10-25, on `8becf72a`; testing/audit-gov,
+    audit-prov, audit-db1-3, audit-mbpipe, audit-sim-metrics). Five audits, each with a
+    checker that reads only the raw records (the oracle's COER codec, SCMS Manager's
+    published chain files; never engine code): 179 rows committed `pending` before their
+    runs, 142 pass, 10 fixed, 10 corrected, 17 open (§2.2); every row red under its
+    injected fault, every new test red with its fix removed, same-seed twins byte-identical.
+    **Fixed (10 defects):**
+    - Governance (`a26fae9f`): provider-b enrolment certificates named provider-a (item
+      12); each Root CA/ICA counter counted every provider's certificates; `node.credentials`
+      never showed a CTL installed on the road (24 counted, 0 recorded); a vehicle joining
+      after a CTL change installed it twice.
+    - Provisioning (`ccff6ad4`): the PKI view put each SPDU on the wrong message when a
+      handler sends several on one link (the `.info` request on the 103 B file request, up
+      to 149 released reports on the first report-forward). Oracle 220,684 / 220,684.
+    - On-air (`52fd05a2`, `v2xw-node`): F1, a frame from a signer the receiver cannot verify was charged
+      a full P-256 verify (3,993 tasks, 1.87 s in run A) and, when held back by verify-all,
+      counted as delivered in `unverified_ratio`; `node.verify` now records reason
+      `unknown-signer` (`dropped` when held). F2, 48 of 106 pseudonym changes opened with a
+      digest no receiver could resolve; the first BSM or PSM under a new pseudonym now
+      carries its certificate.
+    - Misbehaviour (`58367e2d`): the RA forwarded report batches in arrival order (tau
+      1.000, now 0.009 with a seeded permutation; the MA's receipt order moves); store
+      deletions of vehicles that left the run were lost from the run report (17 against
+      228, now 228).
+    - Metrics (`113b156e`): recordings silently dropped metric samples (73/62/20 per run)
+      because the recorder refused off-grid floats (an unquantised `sum`, and `is_on_grid`
+      rejecting large values). Every SCMS metric now equals its recount from the records in
+      every window of runs S, Q, L and X; the run-report conservation laws hold.
+    **Open, no row:** the PDU PKI is fixed at run start, so after a root rollover nothing
+    on the wire chains to the new root; the enrolment request's DCM→ECA hop is not on
+    `pki.flow`; ISS pre-production certificates use SSP version 1 against the engine's 2;
+    the oracle's `chain.check_pair` length rule rejects SCMS Manager's own production chain
+    (the audit checker does not use it); vehicles verify relayed MBRs they overhear (O-3);
+    some pseudonym changes happen before a vehicle's first frame (135 against 120 per
+    vehicle-hour, O-4); the linkability card text is stale; `ma.decision` is stamped 8 h
+    before the operator's manual-review decision; `reports_sent` is 15 off stored plus
+    not-filed; the certificate-request shuffle also keeps arrival order; the Backend view
+    draws a LOP box with traffic though the US profile deploys none; preload `pki.flow`
+    records stamped up to 0.42 s after their log time 0; on Q, `net.bytes` and
+    `proto.revocation` stamped after the backend tick that logs them; the run report's
+    `onset_to_detection` saturates to 0 when a report precedes the label onset. Not covered:
+    CRL refusals and the i-period rollover on the air, the link-layer address, the server
+    API and Studio views of a recorded run.
 
 ## 7. Every unverifiable item and how it is modelled (29)
 
@@ -1136,7 +1229,7 @@ The totals count each row as its own checklist records it, with the changes in �
    counted (`topups_left_area`).
 6. ~~MWP.off-no-backend, the `crl-overdue` label, the 47 `Invalid` states, VRU PQ
    pricing~~: fixed 2026-10-24 (backend wave, §6 items 8, 11, 13).
-7. **The enrolment certificate name** (moves the digests).
+7. ~~**The enrolment certificate name**~~: fixed 2026-10-25 (audit-gov `a26fae9f`, §6 item 12).
 8. **Mobility**: the pedestrian-invariant and kerbside defects, and the `transit` and
    `longrun_budget` failures (§6 item 16).
 9. ~~The power-on CRL gate period~~ (§6 item 22): fixed 2026-10-24 (`297ab7f5`).
@@ -1145,11 +1238,27 @@ The totals count each row as its own checklist records it, with the changes in �
     GNSS residual tail (a heavy-tailed noise fit on Tampa + Orem, then one more E4 run,
     KS 0.169 against 0.092), the :00/:50 grid hops of locked devices; VR-2; ~~the MaxAcceleration block~~ (fixed by `standing_leader_stop`); TS 103 759
     selectable in `detection.local`.
+11. **db1 component audit leftovers** (§6 item 24): `AU.MET.detection` (`time_to_detect`
+    should keep the earliest report; one line), `ma.decision`'s stamp 8 h before the
+    manual-review decision, `reports_sent` 15 off, the certificate-request shuffle in
+    arrival order, provider-b's second ACA without a certificate, the PDU PKI not following
+    a root rollover, the O-2 relayed-MBR certificate, the 0.42 s preload stamps and Q's
+    late `net.bytes`/`proto.revocation` stamps, and Q's 453 s second fast-forward (profile
+    the PKI view's per-tick snapshots). Owed runs: S on a fixed binary for
+    `MI.samples-recorded`, the metrics thread-count, resume and server/Studio rows
+    (`RS.threads`, `RS.resume`, `SV.*`), and the audit checkers re-run on the merged tree.
 
 **Owner decisions**
 - **What the RA and PCA keep for each device** (§6 item 4): request records, cocoons,
   provisioning jobs, PCA issued records and batch files after a confirmed download.
 - **R-PQUNSEC** (§6 item 10): the one-line fix, now that `pq_relay` has its own reporter.
+- **PV.aca-cannot-group** (§6 item 24, audit-prov §4.1): each RA→ACA message carries one
+  device's week of requests, so the ACA can group a device's certificates. The fix (routing
+  by certificate handle, mixed-device batches, a population-wide weekly pre-generation job)
+  moves every SCMS golden and the cost.
+- Renaming `p2pcd_requests` (it counts digest misses, 22–46/s, not P2PCD triggers).
+- Whether the ECA and ACA should hold one certificate (PDU-layer and governance are two
+  today, `GOV.L.onecert`).
 - The RSU-reporting reading (§8 item 6).
 - CF-IPERIOD (2 s).
 - The US J2945/1 window values, and `max_gap_s` 0.5 s (consecutively received) against
