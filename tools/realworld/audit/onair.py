@@ -79,9 +79,12 @@ def measure(run_dir, fault=None):
     sec_pseudo = []
     links = []
     alltx = []
+    tel_w = collections.Counter()
     for t, v in records(rec, {'node.tx', 'node.p2pcd', 'node.credentials', 'node.security',
-                              'sec.pseudonym', 'privacy.link'}):
-        if t == 'node.tx':
+                              'sec.pseudonym', 'privacy.link', 'node.telemetry'}):
+        if t == 'node.telemetry':
+            tel_w[win(v['_lt'])] += v.get('p2pcd_requests') or 0
+        elif t == 'node.tx':
             alltx.append((v['_lt'], v.get('signer'), v.get('envelope_bytes'), v.get('payload_bytes')))
             sent[v['node']].add(v['msg_type'])
             tx[(v['node'], v['msg'])] = (v.get('pseudonym'), v.get('signer'), v['msg_type'])
@@ -101,7 +104,7 @@ def measure(run_dir, fault=None):
             links.append(v)
     kind = {n: kind_of(s) for n, s in sent.items()}
     if fault == 'cert_bytes':
-        next(b for b in bsm if b['signer'] == 'certificate')['cert_bytes'] += 1
+        next(b for b in bsm if b['signer'] == 'certificate' and b['msg_type'] == 'bsm')['cert_bytes'] += 1
     if fault == 'envelope':
         next(b for b in bsm if b['signer'] == 'digest')['envelope_bytes'] += 1
     if fault == 'spdu':
@@ -253,13 +256,27 @@ def measure(run_dir, fault=None):
         sp_veh = sp_veh[1:]
     if fault == 'rate_hi':
         sp_veh = sp_veh + sp_veh
-    tx_new = collections.Counter((c[0]) for c in vch)
-    sp_new = collections.Counter()
-    for s in sp_veh:
-        lst = per.get(s['node'], [])
-        if any(b['t_generated'] >= s['t'] for b in lst) and s.get('new_digest'):
-            sp_new[s['node']] += 1
-    out['oa.chg.sec_vs_tx_diff'] = sum(abs(tx_new[n] - sp_new[n]) for n in set(tx_new) | set(sp_new))
+    # Every change on the air (a vehicle's pseudonym after its first) has its row, and the
+    # new pseudonym of every row of a vehicle that transmits after it goes on the air. A
+    # row whose old pseudonym never went on the air is a change made before the vehicle's
+    # first frame (its pool was active before it joined the road): counted, not a fault.
+    on_air = set()
+    heard = collections.defaultdict(set)
+    for n, lst in per.items():
+        if kind.get(n) != 'veh':
+            continue
+        seq = []
+        for b in lst:
+            heard[n].add(b['pseudonym'])
+            if not seq or seq[-1] != b['pseudonym']:
+                seq.append(b['pseudonym'])
+        on_air |= {(n, p) for p in seq[1:]}
+    rows = {(s['node'], s.get('new_digest')) for s in sp_veh}
+    missing = sum(1 for s in sp_veh if any(b['t_generated'] >= s['t'] for b in per.get(s['node'], []))
+                  and s.get('new_digest') not in heard[s['node']])
+    out['oa.chg.sec_vs_tx_diff'] = len(on_air - rows) + missing
+    out['oa.chg.changes_before_first_frame'] = sum(1 for s in sp_veh
+                                                   if s.get('old_digest') not in heard[s['node']])
     # Change rate: changes / vehicle-hours observed (node.security first..last row).
     veh_s = sum((max(ts) - min(ts)) / NS for n, ts in sec_rows.items() if kind.get(n) == 'veh')
     out['oa.chg.rate_per_veh_h'] = len(sp_veh) / (veh_s / 3600) if veh_s else 0.0
@@ -449,7 +466,7 @@ def measure(run_dir, fault=None):
             env[w] += e
             pay[w] += pl
     if fault == 'fcs':
-        fcs_s[next(iter(fcs_s))] += 1
+        fcs_s[max(fcs_s)] += 1
     bad = []
     for s in samples('full_cert_share'):
         v = s['value']
@@ -458,7 +475,7 @@ def measure(run_dir, fault=None):
     out['oa.mi.full_cert_share_bad_windows'] = len(bad)
     detail['full_cert_share'] = bad[:3]
     if fault == 'env':
-        env[next(iter(env))] += 1
+        env[max(env)] += 1
     bad = []
     for s in samples('envelope_overhead'):
         v = s['value']
@@ -475,7 +492,7 @@ def measure(run_dir, fault=None):
         vc[win(v['_lt'])].append(v['cost_us'] / 1000.0)
         vw[win(v['_lt'])].append((v['t_start'] - v['t_enqueue']) / 1e6)
     if fault == 'vcost':
-        vc[next(iter(vc))].append(99.0)
+        vc[max(vc)].append(99.0)
     bad = []
     for s in samples('verify_cost'):
         v = s['value']
@@ -503,19 +520,21 @@ def measure(run_dir, fault=None):
     out['oa.mi.unverified_ratio_bad_windows'] = len(bad)
     detail['unverified_ratio'] = bad[:3]
 
-    # pseudonym_change_rate (per window) and linkability (cumulative)
-    ch_w = collections.Counter(win(s['_lt']) for s in sp_veh)
-    if fault == 'rate':
-        ch_w[next(iter(ch_w), WINDOW * 5)] += 1
-    seen = {n: (min(ts), max(ts)) for n, ts in sec_rows.items() if kind.get(n) == 'veh'}
+    # pseudonym_change_rate: cumulative, every node with security rows (handsets included,
+    # as the provider's `seen`), Σ changes / Σ (last row - first row) up to the sample.
     bad = []
     for s in samples('pseudonym_change_rate'):
-        w1, w0 = s['t'], s['t'] - WINDOW
-        h = sum(max(0, min(b, w1) - max(a, w0)) for a, b in seen.values()) / NS / 3600
-        mine_v = ch_w[s['t']] / h if h else 0.0
+        w1 = s['t']
+        ch = sum(1 for x in sec_pseudo if x['_lt'] < w1) + (1 if fault == 'rate' else 0)
+        spans = [(min(t for t in ts if t < w1), max(t for t in ts if t < w1))
+                 for ts in sec_rows.values() if any(t < w1 for t in ts)]
+        h = sum(b - a for a, b in spans) / NS / 3600
+        if s['value'].get('point') is None:
+            continue
+        mine_v = ch / h if h else 0.0
         q = s.get('quantum') or 1e-4
-        if abs(s['value']['point'] - mine_v) > max(q, 0.01 * mine_v):
-            bad.append((s['t'] // NS, s['value']['point'], round(mine_v, 4), ch_w[s['t']]))
+        if abs(s['value']['point'] - mine_v) > q:
+            bad.append((s['t'] // NS, s['value']['point'], round(mine_v, 4), ch))
     out['oa.mi.pseudonym_change_rate_bad_windows'] = len(bad)
     detail['pseudonym_change_rate'] = bad[:3]
     bad = []
@@ -537,7 +556,7 @@ def measure(run_dir, fault=None):
     trig_w = collections.Counter()
     for r in p2pcd_rows:
         for k, x in r.items():
-            if isinstance(x, int) and k not in ('t', 'node'):
+            if isinstance(x, int) and k not in ('t', 'node', '_lt'):
                 sums[k] += x
         if fault == 'nolearn':
             r['learned'] = 0
@@ -582,6 +601,13 @@ def measure(run_dir, fault=None):
             bad.append((s['t'] // NS, s['value']['point'], mine_v, trig_w[s['t']] / (WINDOW / NS)))
         trig_bad += abs(s['value']['point'] - trig_w[s['t']] / (WINDOW / NS)) > 1e-3
     out['oa.mi.p2pcd_requests_vs_p2pcd_triggers_bad_windows'] = trig_bad
+    # The metric against the per-node telemetry counter it sums (node.telemetry
+    # p2pcd_requests, by record window), and that counter's run total against the
+    # independent digest-miss recount.
+    out['oa.mi.p2pcd_requests_vs_telemetry_bad_windows'] = sum(
+        abs(s['value']['point'] - tel_w[s['t']] / (WINDOW / NS)) > 1e-3 for s in samples('p2pcd_requests'))
+    out['oa.p2p.digest_miss_recount'] = sum(miss_w.values())
+    out['oa.p2p.digest_miss_telemetry'] = sum(tel_w.values())
     out['oa.mi.p2pcd_requests_bad_windows'] = len(bad)
     detail['p2pcd_requests'] = bad[:3]
 

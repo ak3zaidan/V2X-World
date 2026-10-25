@@ -1455,6 +1455,13 @@ impl RsuRuntime {
             // Receiver validation runs before the server is booked, so the time it charges
             // (chain links, reconstructions, CRL work) is in this frame's service time (WP-C2).
             let verdict = self.classify(ctx, &frame);
+            // No signature check runs for a signer the unit cannot verify (no certificate
+            // or issuer held), so none is charged (as `ObuRuntime`).
+            let cost = if verdict == VerificationState::Unverified {
+                v2xw_core::time::Duration::from_nanos(0)
+            } else {
+                cost
+            };
             let cost = cost + crate::rxval::charge(&mut self.security, &self.service.profile().id);
             let sched = match where_ {
                 RunsOn::Hsm => self.hsm.submit(q.enqueued_at, cost),
@@ -1478,6 +1485,9 @@ impl RsuRuntime {
                 0,
             );
             rec.priority = priority;
+            if verdict == VerificationState::Unverified {
+                rec = rec.unknown_signer(self.policy.holds_unknown_signer());
+            }
             ctx.emit(rec);
             // The report-forwarding role, on the one message type that reaches it over the
             // air: a verified misbehaviour report goes into store-and-forward, and an

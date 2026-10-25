@@ -1120,6 +1120,8 @@ impl ObuRuntime {
                 .below(128);
             self.schedule
                 .restart_bsm_count(u8::try_from(restart).unwrap_or(0));
+            // The first BSM under the new certificate carries it (S3).
+            self.security.restart_certificate_cadence();
         }
 
         if self.state.transmits() {
@@ -1640,6 +1642,14 @@ impl ObuRuntime {
             // Receiver validation runs before the server is booked, so the time it charges
             // (chain links, reconstructions, CRL work) is in this frame's service time (WP-C2).
             let verdict = self.classify(ctx, &frame);
+            // A signer whose certificate (or issuer) this node does not hold cannot be
+            // verified, so no signature check runs and none is charged; only the
+            // validation work actually done is (IEEE 1609.2 §5.2, crate::rxval).
+            let cost = if verdict == VerificationState::Unverified {
+                Duration::from_nanos(0)
+            } else {
+                cost
+            };
             let cost = cost
                 + crate::rxval::charge(&mut self.security, &self.service.profile().id)
                 + self.certificate_checks(ctx, frame.bytes);
@@ -1668,6 +1678,9 @@ impl ObuRuntime {
             );
             // The priority it was served by: 0 for every policy but `prioritized`.
             rec.priority = meta.priority;
+            if verdict == VerificationState::Unverified {
+                rec = rec.unknown_signer(self.policy.holds_unknown_signer());
+            }
             ctx.emit(rec);
             // The verdict is fixed now, but the applications have it only when the server
             // is done: the message waits in `verifying` until `sched.finish`.

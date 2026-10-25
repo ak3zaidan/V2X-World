@@ -1121,3 +1121,38 @@ fn a_message_outside_the_generation_time_window_is_discarded_unverified() {
     );
     assert!(!refused.contains_key("generation-time-in-future"));
 }
+
+/// Audit db1-3 (OA.TX.first-carries-cert, docs/design/scms-real/testing/audit-db1-3.md):
+/// the first BSM signed under a new pseudonym carries its certificate (vehicle-and-roadside
+/// S3), whatever the cadence had last attached under the old one. Changes every 3.05 s
+/// against the node's certificate cadence put the change at every phase of it. Fault: drop
+/// `restart_certificate_cadence` at the change in `ObuRuntime::step_timed`, and changes
+/// open with a digest no neighbour can resolve.
+#[test]
+fn the_first_bsm_under_a_new_pseudonym_carries_its_certificate() {
+    let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+    let certs = core::mem::take(&mut rt.stores_mut().certs);
+    rt.stores_mut().certs = certs.with_policy(v2xw_node::stores::RotationPolicy {
+        min_age: Duration::from_millis(3_050),
+        min_distance_m: f64::INFINITY,
+        require_both: false,
+    });
+    let out = run(&mut rt, 200, 100 * NS_PER_MS, |_| Vec::new());
+    let bsms: Vec<_> = out
+        .iter()
+        .flat_map(|o| o.transmissions.iter())
+        .filter(|t| t.msg_type == MsgType::Bsm)
+        .collect();
+    let mut changes = 0;
+    for w in bsms.windows(2) {
+        if w[1].signer != w[0].signer {
+            changes += 1;
+            assert!(
+                w[1].full_certificate,
+                "the first BSM under {:?} at {} named it by digest",
+                w[1].signer, w[1].generation_time
+            );
+        }
+    }
+    assert!(changes >= 5, "the run changed pseudonym {changes} times");
+}
