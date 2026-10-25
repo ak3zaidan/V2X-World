@@ -11,6 +11,20 @@ set:
   metrics:
   - all
 rows:
+- name: seed 1 traffic.speed_mean_mps
+  set:
+    seed: 1
+  metric: traffic.speed_mean_mps
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 1 traffic.stopped_share
+  set:
+    seed: 1
+  metric: traffic.stopped_share
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
 - name: seed 1 report.actors_spawned
   set:
     seed: 1
@@ -39,17 +53,24 @@ rows:
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 1 report.apps.ima.issued
+- name: seed 1 metric.app_warnings
   set:
     seed: 1
-  metric: report.apps.ima.issued
+  metric: metric.app_warnings
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 1 report.apps.fcw.issued
+- name: seed 2 traffic.speed_mean_mps
   set:
-    seed: 1
-  metric: report.apps.fcw.issued
+    seed: 2
+  metric: traffic.speed_mean_mps
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 2 traffic.stopped_share
+  set:
+    seed: 2
+  metric: traffic.stopped_share
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
@@ -81,17 +102,24 @@ rows:
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 2 report.apps.ima.issued
+- name: seed 2 metric.app_warnings
   set:
     seed: 2
-  metric: report.apps.ima.issued
+  metric: metric.app_warnings
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 2 report.apps.fcw.issued
+- name: seed 3 traffic.speed_mean_mps
   set:
-    seed: 2
-  metric: report.apps.fcw.issued
+    seed: 3
+  metric: traffic.speed_mean_mps
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 3 traffic.stopped_share
+  set:
+    seed: 3
+  metric: traffic.stopped_share
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
@@ -123,17 +151,24 @@ rows:
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 3 report.apps.ima.issued
+- name: seed 3 metric.app_warnings
   set:
     seed: 3
-  metric: report.apps.ima.issued
+  metric: metric.app_warnings
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 3 report.apps.fcw.issued
+- name: seed 4 traffic.speed_mean_mps
   set:
-    seed: 3
-  metric: report.apps.fcw.issued
+    seed: 4
+  metric: traffic.speed_mean_mps
+  expect: same
+  min_change: 0.0
+  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
+- name: seed 4 traffic.stopped_share
+  set:
+    seed: 4
+  metric: traffic.stopped_share
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
@@ -165,17 +200,10 @@ rows:
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 4 report.apps.ima.issued
+- name: seed 4 metric.app_warnings
   set:
     seed: 4
-  metric: report.apps.ima.issued
-  expect: same
-  min_change: 0.0
-  source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'
-- name: seed 4 report.apps.fcw.issued
-  set:
-    seed: 4
-  metric: report.apps.fcw.issued
+  metric: metric.app_warnings
   expect: same
   min_change: 0.0
   source: 'seed spread, not a theory row: the change is the seed alone (docs/validation/platform-2026-10-24.md section 3)'

@@ -1,0 +1,43 @@
+# BSM inter-transmission time off the 100 ms node-step grid (docs/validation/
+# platform-2026-10-24.md, continuation section). SAE J2945/1 measures the interval from the
+# previous BSM; the node checks on its 100 ms step. An interval that is not a whole number of
+# steps must keep its mean rate: rounding each interval up to the grid sends a 150 ms ITT
+# every 200 ms (0.50 of the 10 Hz frames instead of 0.667). Written before the run; each band
+# is the rate ratio 100 / ITT.
+#
+# dsrc-grid (40 vehicles, 1.2 km open grid, 3 s) with congestion control off, so the
+# generator's own interval is the only thing that sets the rate. The J2945/1 rows run on the
+# dense base, where MaxITT = 100 ms x N/B is continuous above B = 25 neighbours.
+base: ../sensitivity/dsrc-grid.yaml
+set: {radio.dcc.enabled: false}
+rows:
+  - name: BSM ITT 100 -> 150 ms
+    set: {messages.generator: {id: generator/bsm-j2945-1, params: {nominal_itt_ms: 150}}}
+    metric: report.air_by_type.bsm.frames
+    expect: down
+    band: [0.64, 0.69]
+    source: "6.67 Hz: 100/150 = 0.667 of the 10 Hz frames (SAE J2945/1 ITT measured from the previous BSM); rounding to the 100 ms check grid gives 0.50"
+  - name: BSM ITT 100 -> 250 ms
+    set: {messages.generator: {id: generator/bsm-j2945-1, params: {nominal_itt_ms: 250}}}
+    metric: report.air_by_type.bsm.frames
+    expect: down
+    band: [0.38, 0.42]
+    source: "4 Hz: 100/250 = 0.40; rounding to the grid gives 300 ms, 0.333"
+  - name: BSM ITT 100 -> 300 ms (on the grid)
+    set: {messages.generator: {id: generator/bsm-j2945-1, params: {nominal_itt_ms: 300}}}
+    metric: report.air_by_type.bsm.frames
+    expect: down
+    band: [0.31, 0.35]
+    source: "3.33 Hz: 100/300 = 0.333 under either rule (control: a period on the grid is unchanged)"
+  - name: BSM ITT 100 -> 150 ms, channel load
+    set: {messages.generator: {id: generator/bsm-j2945-1, params: {nominal_itt_ms: 150}}}
+    metric: cbr_mean
+    expect: down
+    band: [0.58, 0.75]
+    source: "CBR is the offered airtime share (ETSI TS 102 687), proportional to the frame rate well below saturation: about 0.667"
+  - name: BSM ITT 100 -> 150 ms, run cost
+    set: {messages.generator: {id: generator/bsm-j2945-1, params: {nominal_itt_ms: 150}}}
+    metric: report.events_by_class.PhyEnd
+    expect: down
+    band: [0.62, 0.71]
+    source: "run cost: one PHY end event per frame, so the event count follows the frame rate"

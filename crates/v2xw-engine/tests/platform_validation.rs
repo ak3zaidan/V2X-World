@@ -241,3 +241,27 @@ fn the_spat_and_map_on_the_air_are_the_plan_and_the_survey() {
     }
     assert_eq!(groups_by_id.len(), 4, "the four units' junctions");
 }
+
+/// A spec row (`v2xw sensitivity <spec>`) measures every name the catalogue fingerprint
+/// does: the ground-truth `traffic.*` state and the `metric.*` sample means as well as the
+/// radio harness's names and `report.*`. Before, `measure` ran the radio harness alone, so
+/// a seed-spread row on `traffic.speed_mean_mps` was "not measured" whatever the engine did
+/// (platform validation rows ST.traffic and ST.security).
+#[test]
+fn a_spec_row_measures_the_traffic_state_and_the_metric_samples() {
+    let base = Scenario::load(scenarios().join("phase1-grid.yaml")).expect("loads");
+    let mut set = BTreeMap::new();
+    set.insert("time.duration_s".to_string(), serde_json::json!(6.0));
+    set.insert("metrics".to_string(), serde_json::json!(["all"]));
+    let s = v2xw_engine::sensitivity::apply(&base, &set).expect("the set applies");
+    let m = v2xw_engine::sensitivity::measure(s).expect("runs");
+    let speed = m.get("traffic.speed_mean_mps");
+    assert!(speed.is_some_and(|v| v > 0.0), "traffic.speed_mean_mps = {speed:?}");
+    assert!(m.get("traffic.stopped_share").is_some(), "traffic.stopped_share");
+    let samples = m.values.keys().filter(|k| k.starts_with("metric.")).count();
+    assert!(samples > 0, "no metric.* sample means");
+    // The radio names, report.* and the recording's bookkeeping are still there.
+    for k in ["pdr", "frames_tx", "report.actors_spawned", "report.records"] {
+        assert!(m.get(k).is_some(), "{k} is not measured");
+    }
+}

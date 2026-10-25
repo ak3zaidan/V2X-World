@@ -35,12 +35,23 @@ test.afterAll(async () => {
 
 const DURATION = '[data-testid="setting"][data-pointer="/time/duration_s"]';
 
+/** Every setting the window lists: the sum of its sections' counts in the tree. The page shows
+ * one section at a time (`SettingsWindow.tsx`), so the rows on the page are one section's. */
+async function listed(page: import("@playwright/test").Page): Promise<number> {
+  const counts = await page.locator('[data-testid="settings-tree-group"] .count').allTextContents();
+  return counts.reduce((sum, c) => sum + Number(c.trim()), 0);
+}
+
 test("search, edit, undo, reset, JSON round trip, apply to the next run", async ({ page }) => {
   await open(page);
   await openSettings(page);
   const search = page.getByTestId("settings-filter");
-  const all = await page.getByTestId("setting").count();
+  const all = await listed(page);
   expect(all, "the window lists the engine's settings").toBeGreaterThan(50);
+  expect(await page.getByTestId("settings-tree-group").count(), "in its research sections").toBeGreaterThanOrEqual(10);
+  // One section on the page at a time, and the rows on it are that section's count.
+  const shown = await page.getByTestId("setting").count();
+  expect(shown, "one section is shown, not every setting").toBeLessThan(all);
 
   // --- 1. search by name, description and path --------------------------------------------------
   await search.fill("duration");
@@ -130,9 +141,9 @@ test("search, edit, undo, reset, JSON round trip, apply to the next run", async 
   expect(modified.map(([p]) => p)).toContain("/time/duration_s");
   await page.getByTestId("settings-modified").click();
   const unsupported = Number((await page.getByTestId("settings-unsupported").locator(".count").innerText()).trim());
-  const shownBefore = await page.getByTestId("setting").count();
+  const shownBefore = await listed(page);
   await page.getByTestId("settings-unsupported").click();
-  expect(await page.getByTestId("setting").count(), "Unsupported adds exactly the settings it counts").toBe(shownBefore + unsupported);
+  expect(await listed(page), "Unsupported adds exactly the settings it counts").toBe(shownBefore + unsupported);
   await page.getByTestId("settings-unsupported").click();
 
   // --- 7a. the address keeps the window ---------------------------------------------------------

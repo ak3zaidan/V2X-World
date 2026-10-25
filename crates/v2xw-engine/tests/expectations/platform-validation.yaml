@@ -124,3 +124,34 @@ rows:
 - {id: UI.e2e, check: "pnpm exec playwright test -c playwright.engine.config.ts e2e-engine/settings.spec.ts on ports 8754/5144", expect: pass,
    source: "the Studio's settings window against the real engine (search, edit, undo, reset, JSON round trip, Apply reaching the next run, refusals)",
    verdict: open, measured: "1 failed, 2 did not run: 'the window lists the engine's settings' expected > 50 elements, got 4. The window (398 settings) now shows one section at a time (Run: 4 visible + Advanced 16), so the spec's count of every [data-testid=setting] is stale against the sectioned layout; not an engine defect"}
+
+# ================================================================ continuation, 2026-10-25
+# Written before the runs of the second session. `binary: fixed` is this branch's debug
+# build (opt-level 2) with the BSM/PSM interval anchor and the spec-mode fingerprint.
+# ---------------------------------------------------------------- (7) BSM interval off the check grid
+- {id: BQ.itt150, check: "scenarios/platform/bsm-itt.yaml 'BSM ITT 100 -> 150 ms' (band 0.64-0.69)", expect: "0.667 of the 10 Hz frames",
+   source: "SAE J2945/1 measures the ITT from the previous BSM; 100/150", fault: "the 486c8cba engine: 0.50 predicted (each interval rounded up to the 100 ms check)", verdict: pending}
+- {id: BQ.itt250, check: "bsm-itt.yaml 'BSM ITT 100 -> 250 ms' (band 0.38-0.42)", expect: "0.40", source: "100/250; the grid rule gives 0.333", verdict: pending}
+- {id: BQ.itt300, check: "bsm-itt.yaml 'BSM ITT 100 -> 300 ms (on the grid)'", expect: "0.333 under both engines (control)", source: "100/300", verdict: pending}
+- {id: BQ.cbr-and-cost, check: "bsm-itt.yaml ITT 150 rows on cbr_mean (0.58-0.75) and PhyEnd events (0.62-0.71)", expect: "both follow the frame rate, about 0.667",
+   source: "CBR is offered airtime (ETSI TS 102 687) well below saturation; one PhyEnd per frame", verdict: pending}
+- {id: BQ.j2945-dense, runs: [dsrc-dense], check: "scenarios/sensitivity/dsrc-dense.yaml, 3 s, J2945/1 on (the DSRC default): tx_rate_hz, cbr_mean, aoi_ms, 486c8cba against the fixed build",
+   expect: "tx_rate_hz and cbr_mean up (several %), aoi_ms down: about 100 vehicles in a 300 m square put MaxITT = 100 ms x N/B on the continuous segment above B = 25, which the grid rule rounded up",
+   source: "SAE J2945/1 6.3.6 via Ahmad 2019 Eq. 6 (dcc.rs max_itt_for)", verdict: pending}
+- {id: BQ.j2945-dense.off, runs: [dsrc-dense], check: "the same with radio.dcc.enabled false: record digests of the two binaries", expect: "identical (every interval is 100 ms, on the grid)",
+   source: "the anchored rule fires at the same checks on the grid (generator.rs check)", verdict: pending}
+- {id: BQ.goldens, runs: [D, L, G, C, S], check: "record digests of the fixed build against the 486c8cba digests of DT.threads (RAYON 2)",
+   expect: "D, L, G, S identical (fewer than 25 neighbours within 100 m, or no BSM: ITT 100 ms on the grid; SPaT/MAP periods on the grid); C may move: 3000 veh/h queues at four signals can pass B = 25 within 100 m",
+   source: "the anchored rule is the old one on the grid", verdict: pending}
+# ---------------------------------------------------------------- (8) the open rows of the first session
+- {id: ST.traffic.2, check: "scenarios/platform/seeds-traffic.yaml --json (binary: fixed; spec mode now measures traffic.* and metric.*)",
+   expect: "traffic.speed_mean_mps and traffic.stopped_share within +-10 % (95 % t-interval of the mean, n = 5); every seed inside the 95 % prediction interval",
+   source: "about 37 vehicles over 90 s; the fleet mean of a signalised grid moves with the arrivals (HCM 7th ed. ch. 19: control delay is a per-cycle average)", verdict: pending}
+- {id: ST.security.2, check: "scenarios/platform/seeds-security.yaml --json (binary: fixed)",
+   expect: "metric.verify_rate within +-10 %; metric.full_cert_share within +-5 % (a timer rule: one certificate per full_cert_every_ms 1000 at 10 Hz is 0.10 whatever the seed); unverified_ratio near 0 with no attackers",
+   source: "IEEE 1609.2 signer-id policy; the scenario's security.signer_id_policy", verdict: pending}
+- {id: SM.spat-interval-150.fixed, check: "rsu-apps.yaml on the fixed build", expect: "every row passes, SPaT 150 ms at 0.667", source: "as SM.spat-interval-150", verdict: pending}
+- {id: SM.on-air-content.2, check: "cargo test -p v2xw-engine --test platform_validation", expect: "all pass, including the_spat_and_map_on_the_air_are_the_plan_and_the_survey and a_spec_row_measures_the_traffic_state_and_the_metric_samples",
+   fault: "measure() with the radio harness alone (the 486c8cba code): the spec-row test must fail", verdict: pending}
+- {id: UI.e2e.2, check: "settings.spec.ts with the section-aware count (the sum of the tree's section counts)", expect: pass,
+   source: "SettingsWindow.tsx shows one research section at a time; the tree counts every listed setting", fault: "count > 5000 instead of > 50: must fail", verdict: pending}

@@ -736,6 +736,9 @@ impl Default for PsmGenParams {
 pub struct PsmTimer {
     params: PsmGenParams,
     last: Option<SimTime>,
+    /// The instant the previous PSM was due; the next interval is measured from it, so an
+    /// interval off the 100 ms check grid keeps its rate (as `BsmGenerator::check`).
+    due_anchor: Option<SimTime>,
     msg_count: u8,
 }
 
@@ -746,6 +749,7 @@ impl PsmTimer {
         PsmTimer {
             params,
             last: None,
+            due_anchor: None,
             msg_count: 0,
         }
     }
@@ -781,21 +785,28 @@ impl PsmTimer {
     /// own clock, so a device whose clock has been stepped transmits at a visibly wrong
     /// rate rather than at a correct one.
     pub fn check(&mut self, now: SimTime, dcc: &DccState) -> Option<GenReason> {
-        let reason = match self.last {
+        let interval = self
+            .params
+            .interval
+            .max(dcc.t_off)
+            .max(self.params.min_interval);
+        let reason = match self.due_anchor {
             None => GenReason::First,
-            Some(last) => {
-                let elapsed = Duration::between(last, now);
-                let interval = self
-                    .params
-                    .interval
-                    .max(dcc.t_off)
-                    .max(self.params.min_interval);
-                if elapsed < interval {
+            Some(anchor) => {
+                if Duration::between(anchor, now) < interval {
                     return None;
                 }
                 GenReason::Periodic
             }
         };
+        // Measured from when the previous PSM was due, not from the check that sent it:
+        // a 150 ms interval on the 100 ms check grid is 6.7 Hz, not 5 Hz. A device more
+        // than an interval behind (a stepped clock) restarts from now.
+        let i = interval.as_nanos();
+        self.due_anchor = Some(match self.due_anchor {
+            Some(a) if now.saturating_sub(a) < 2 * i => a + i,
+            _ => now,
+        });
         self.last = Some(now);
         self.msg_count = (self.msg_count + 1) % 128;
         Some(reason)
@@ -2667,6 +2678,21 @@ fn card(profile: &HardwareProfile, config: &VruConfig) -> ModelCard {
 
 #[cfg(test)]
 mod tests {
+    /// A PSM interval off the 100 ms check grid keeps its rate: 150 ms is 200 PSMs in 30 s
+    /// (measuring from the check that sent the last one gave 150).
+    #[test]
+    fn a_psm_interval_off_the_check_grid_keeps_its_rate() {
+        let mut t = super::PsmTimer::new(super::PsmGenParams {
+            interval: v2xw_core::time::Duration::from_millis(150),
+            min_interval: v2xw_core::time::Duration::from_millis(100),
+        });
+        let dcc = super::DccState::UNRESTRICTED;
+        let sent = (0..300u64)
+            .filter(|k| t.check(k * 100_000_000, &dcc).is_some())
+            .count();
+        assert_eq!(sent, 200);
+    }
+
     use super::*;
     use v2xw_core::belief::FixQuality;
     use v2xw_core::geom::Vec3;
