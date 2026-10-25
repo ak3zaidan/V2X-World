@@ -71,6 +71,8 @@ runs:
   RI5: {scenario: scenarios/live-atk/repint-5p0.yaml, note: 'SCL10 with report_interval_s 5'}
   RAWL: {scenario: scenarios/live-atk/rawgnss.yaml, note: 'attack-free, raw GNSS fixes, suite L'}
   RAWU: {scenario: scenarios/live-atk/rawgnss-us.yaml, note: 'attack-free, raw GNSS fixes, suite U'}
+  C2Mb: {scenario: scenarios/live-atk/cat2-m.yaml, note: 'C2M on the branch build (flag default)'}
+  C2MJ: {scenario: scenarios/live-atk/cat2-m-jr.yaml, note: 'C2M with judge_revoked 0, branch build'}
 rows:
 # ---- 0. Attack-free: no attacker, nothing to revoke --------------------------------------
 - id: A0.L.no-attackers
@@ -2071,3 +2073,61 @@ rows:
   measured: pending
   verdict: pending
   source: 'raw noise hurts the tolerance-free US profile far more than the research suite: under raw fixes U files more honest reports than L'
+
+# ---- 7. judge_revoked (engine flag added on this branch) ---------------------------------
+- id: JR.default-unchanged
+  base: C2M
+  variant: C2Mb
+  area: judge-revoked
+  measure: digest
+  expect: identical
+  fault: nondeterministic
+  measured: pending
+  verdict: pending
+  source: 'the flag defaults to the old behaviour: the branch build reproduces C2M byte for byte'
+
+- id: JR.no-signature-crossfire
+  base: C2MJ
+  variant: C2MJ
+  area: judge-revoked
+  measure: rec.kdet_other.signatureVerification
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: pending
+  verdict: pending
+  source: 'with CRL-refused BSMs not judged, no attacker that signs validly is reported for a bad signature'
+
+- id: JR.fewer-reports
+  base: C2Mb
+  variant: C2MJ
+  area: judge-revoked
+  measure: p2.reports_about_attackers
+  expect: down
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'the reports about already revoked attackers are gone'
+
+- id: JR.same-decisions
+  base: C2Mb
+  variant: C2MJ
+  area: judge-revoked
+  measure: ao.decided
+  expect: same
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'a report about a revoked device cannot revoke anyone new: the same attackers are decided'
+
+- id: JR.no-honest
+  base: C2MJ
+  variant: C2MJ
+  area: judge-revoked
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'dropping CRL-refused BSMs removes evidence, never adds it'

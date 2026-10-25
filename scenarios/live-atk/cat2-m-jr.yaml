@@ -1,0 +1,7 @@
+# cat2-m.yaml with the research suite not judging CRL-refused BSMs (judge_revoked: 0).
+schema: v2xw/scenario/1
+meta: {base: cat2-m.yaml, name: live-atk cat2-m-jr}
+detection:
+  local:
+    - id: detect/legacy-12
+      params: {judge_revoked: 0}

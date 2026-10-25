@@ -60,6 +60,11 @@ def load_raw(run_dir):
     rep = json.load(open(os.path.join(run_dir, 'run-report.json')))
     raw = {'report': rep['report'], 'cost': {}, 'rec': None,
            'digest': rep.get('record_digest') or rep.get('content_digest')}
+    sc = os.path.join(run_dir, 'scenario.resolved.yaml')
+    if os.path.exists(sc):
+        import yaml
+        g = (((yaml.safe_load(open(sc)).get('actors') or {}).get('vehicles') or {}).get('gnss') or {})
+        raw['gnss_tau'] = g.get('smoothing_tau_s')
     cost = os.path.join(run_dir, 'cost.txt')
     if os.path.exists(cost):
         for tok in open(cost).read().split():
@@ -87,7 +92,7 @@ def med(xs):
 
 
 def derive(raw):
-    d = {'digest': raw.get('digest')}
+    d = {'digest': raw.get('digest'), 'cfg.gnss_tau': raw.get('gnss_tau')}
     rep = raw['report']
     p = rep.get('phase2') or {}
     for k, v in p.items():
