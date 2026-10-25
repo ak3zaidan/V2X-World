@@ -13,7 +13,13 @@
 # Re-run 2026-10-24 on 81a12183 (docs/design/scms-real/testing/rerun-2026-10-24-a.md): the
 # base's first live window is now 300 s. `measured` is from that re-run for the rows of M0,
 # no-hsm, pq-hybrid, gnss-rtk, gnss-raw and the realism variants (44 rows judged, 0 fail);
-# the other 55 rows still carry their 77cffb5b values (60 s base) and are owed.
+# the other 55 rows still carry their 77cffb5b values (60 s base) and were owed.
+# Re-run 2026-10-25 on 8becf72a (docs/design/scms-real/testing/rerun-2026-10-25.md): M0 and 11
+# variants (on-demand, camp, test-ctl, split-90-10, rsu5, rsu0, pen0, sybil, ma-legacy, att10,
+# gnss-clean) re-measured on the 300 s base; the QD25 rows are the quarter fleet end to end.
+# Still carrying 77cffb5b values (owed): silent, nyc-pilot, real-crypto, lte, nr, full-cert,
+# backhaul-cellular, fleet-half, tls12 and fleet2x. Rows of no-hsm, pq-hybrid, gnss-rtk,
+# gnss-raw and the realism variants carry 81a12183 values (not re-run on 8becf72a).
 schema: v2xw/scms-run-expectations/1
 runs:
   M0:
@@ -123,6 +129,10 @@ runs:
     binary: b1
     note: 'M0 on this branch before the two fixes: 2,074 s wall, aoi 1,693,079 ms; every other measurement
       identical'
+  QD:
+    scenario: scenarios/real-world/midtown-scms-benchmark-quarter.yaml
+    note: 'the quarter fleet end to end (172,800 s) on 8becf72a, --record-level metrics (full-bench.md
+      method): confirms R-FFWIN and the relay confirmation in a long run (rerun-2026-10-25 §4)'
 rows:
 - id: M0-pdr
   base: M0
@@ -135,7 +145,7 @@ rows:
   - 0.9
   source: 'urban DSRC to 500 m among Midtown buildings: most pairs past ~150 m are NLOS and below sensitivity
     (Mangel et al. 2011 NLOS; 04-models PHY); never 1, never near 0'
-  measured: '0.431244'
+  measured: '0.431775'
   verdict: pass
 - id: M0-bsm-latency
   base: M0
@@ -155,7 +165,7 @@ rows:
   expect: le
   value: 0.6
   source: a fifteenth of rush hour stays far below the J2945/1 congestion-control range (CBR 50-80 %)
-  measured: '0.0518'
+  measured: '0.0645'
   verdict: pass
 - id: M0-aoi-peak
   base: M0
@@ -168,7 +178,7 @@ rows:
   - 1000.0
   source: '10 Hz BSMs: a neighbour''s peak age is at least one interval (100 ms), a few intervals with
     loss'
-  measured: '114.578'
+  measured: '114.405'
   verdict: pass
 - id: M0-aoi-mean
   base: M0
@@ -181,7 +191,7 @@ rows:
   - 5000.0
   source: time-average age of a 10 Hz stream with ~36 % PDR is a few hundred ms (Kaul et al. 2011); the
     fast-forward days carry no radio and must not count
-  measured: '69.8712'
+  measured: '69.7644'
   verdict: fixed
   note: 'pre-fix M0-b1: 1,693,079 ms, the fast-forward silence charged as age; after: 81.6 ms'
   test: v2xw-metrics awareness::tests::neighbourhood_aoi_restarts_after_a_silence_rather_than_charging_it
@@ -194,7 +204,7 @@ rows:
   value: 0.1
   source: prioritised verification sheds only when the verifier falls behind; at CBR < 5 % the OBU's verifier
     keeps up (verify_wait ~0)
-  measured: '0.0141231'
+  measured: '0.0137718'
   verdict: pass
 - id: M0-sec-overhead
   base: M0
@@ -207,7 +217,7 @@ rows:
   - 0.7
   source: '1609.2 BSM: ~40 B payload against ~100 B security (digest) and ~170 B (certificate once a second):
     security is about half the frame'
-  measured: '0.440901'
+  measured: '0.441223'
   verdict: pass
 - id: M0-full-cert-share
   base: M0
@@ -220,7 +230,7 @@ rows:
   - 0.3
   source: 'J2945/1 §6.1.2.2: certificate once a second, digest otherwise (1 in 10 at 10 Hz), plus the
     new-neighbour rule'
-  measured: '0.126662'
+  measured: '0.128396'
   verdict: pass
 - id: M0-pool
   base: M0
@@ -391,7 +401,7 @@ rows:
   expect: le
   value: 2500.0
   source: the owner's 8 GB machine; realism base 127-229 MB
-  measured: '200.852'
+  measured: '198.018'
   verdict: pass
 - id: nohsm-verify-slower
   base: M0
@@ -543,7 +553,7 @@ rows:
   measure: p2.reports_about_honest
   expect: down
   source: removing the 12 m outliers and the bursts removes the biggest jumps; the 1.6 m white noise remains
-  measured: 5 -> 5
+  measured: 2 -> 2
   verdict: wrong-expectation
   note: 'written for raw fixes (7375 -> 7360 then). Re-run on 77cffb5b (rerun-2026-10-22.md §6): with
     the smoothed receiver the base has 5 honest reports, from one vehicle below 1 m/s, none from GNSS
@@ -557,7 +567,7 @@ rows:
   min_change: 0.5
   source: 'on-demand verifies only what an application acts on (Krishnan & Weimerskirch 2011; 07 §2: 756/s
     -> 46/s)'
-  measured: 77517 -> 37572
+  measured: 1308399 -> 316023
   verdict: pass
 - id: ond-reports
   base: M0
@@ -567,7 +577,7 @@ rows:
   expect: down
   min_change: 0.3
   source: 'SM-MBR judges only verified BSMs (07 §8.2): detection is nearly blind'
-  measured: 235 -> 105
+  measured: 2296 -> 0
   verdict: pass
 - id: ond-backend-same
   base: M0
@@ -576,7 +586,7 @@ rows:
   measure: p2.certs_topped_up
   expect: same
   source: the receiver policy does not change provisioning
-  measured: 1100 -> 1100
+  measured: 2100 -> 2100
   verdict: pass
 - id: camp-lop
   base: M0
@@ -586,7 +596,7 @@ rows:
   expect: ge
   value: 1
   source: the CAMP reference design puts the LOP between the device and the RA (CAMP 1.2.2 §5.2)
-  measured: '595'
+  measured: '2980'
   verdict: pass
 - id: camp-one-provider
   base: M0
@@ -615,7 +625,7 @@ rows:
   measure: p2.certs_topped_up
   expect: same
   source: the topology does not change the batch (20 a week) or who is present at the rollover
-  measured: 1100 -> 1100
+  measured: 2100 -> 2100
   verdict: pass
 - id: camp-separation
   base: M0
@@ -633,7 +643,7 @@ rows:
   measure: p2.certs_topped_up
   expect: same
   source: 'the test trust list approves both providers'' roots: issuance is unchanged'
-  measured: 1100 -> 1100
+  measured: 2100 -> 2100
   verdict: pass
 - id: testctl-attackers
   base: M0
@@ -642,10 +652,11 @@ rows:
   measure: p2.revoked_attackers
   expect: same
   source: 'as testctl-same-topups: detection and revocation are unchanged'
-  measured: 2 -> 1
-  verdict: wrong-expectation
-  note: us-test-ctl-2025 deploys six providers at 1/6 each (devices 10/21/18/11/14/...), so the fleet
-    split and MA routing change, not only the trust list
+  measured: 2 -> 2
+  verdict: pass
+  note: 'us-test-ctl-2025 deploys six providers at 1/6 each (devices 10/21/18/11/14/...), so the fleet
+    split and MA routing change, not only the trust list. rerun-2026-10-25 §3: on the 300 s base the original
+    expectation holds, the 77cffb5b deviation was the 60 s window.'
 - id: split-b-down
   base: M0
   variant: split-90-10
@@ -656,7 +667,7 @@ rows:
   - 0.05
   - 0.45
   source: 'provider-b''s fleet share 50 % -> 10 %: its signed BSMs fall to about a fifth'
-  measured: 55698 -> 12179 (ratio 0.2187)
+  measured: 710070 -> 154749 (ratio 0.2179)
   verdict: pass
 - id: split-a-up
   base: M0
@@ -668,10 +679,11 @@ rows:
   - 1.4
   - 2.4
   source: 'provider-a''s share 50 % -> 90 %: about x1.8'
-  measured: 21819 -> 65338 (ratio 2.995)
-  verdict: wrong-expectation
+  measured: 598329 -> 1153650 (ratio 1.928)
+  verdict: pass
   note: 'the base''s verified traffic is not split like its devices (49/46 devices, 29 %/71 % of verified
-    BSMs from a/b); 90/10 gives a 84 %: x2.95 is that shift'
+    BSMs from a/b); 90/10 gives a 84 %: x2.95 is that shift. rerun-2026-10-25 §3: on the 300 s base the
+    original expectation holds, the 77cffb5b deviation was the 60 s window.'
 - id: split-topups
   base: M0
   variant: split-90-10
@@ -682,7 +694,7 @@ rows:
   - 0.9
   - 1.1
   source: the split moves devices between providers; the total top-off is the same 20 per device
-  measured: 1100 -> 1100 (ratio 1)
+  measured: 2100 -> 2100 (ratio 1)
   verdict: pass
 - id: split-req
   base: M0
@@ -843,10 +855,14 @@ rows:
   variant: rsu5
   area: metrics
   measure: p2.reports_from_rsus
-  expect: down
+  expect: eq
   source: fewer RSUs hear and file fewer reports
-  measured: 105 -> 8
-  verdict: pass
+  measured: '0'
+  verdict: wrong-expectation
+  value: 0
+  note: 'rerun-2026-10-25 §3: 0 -> 0. Under the US profile RSUs file no reports of their own (R-UNSEC,
+    06 §8 item 6), so the base has none to lose. The 77cffb5b 105 -> 8 predates R-UNSEC. Corrected from
+    down to eq 0 (stricter).'
 - id: rsu0-no-rsu-reports
   base: M0
   variant: rsu0
@@ -862,12 +878,17 @@ rows:
   variant: rsu0
   area: architecture
   measure: p2.topups_completed
-  expect: le
-  value: 55
+  expect: ratio
   source: the 20 % with no cellular reach the RA only through an RSU (relay); with none they cannot top
     off
-  measured: '51'
-  verdict: pass
+  measured: 105 -> 92 (ratio 0.8762)
+  verdict: wrong-expectation
+  band:
+  - 0.0
+  - 1.0
+  note: 'rerun-2026-10-25 §3: le 55 was the 60 s base fleet at the rollover (55 devices). On the 300 s
+    base M0 tops up 105 and this variant 92. Corrected to at most the base (ratio at most 1), the claim
+    the source makes.'
 - id: rsu0-no-app-certs
   base: M0
   variant: rsu0
@@ -903,11 +924,16 @@ rows:
   variant: pen0
   area: architecture
   measure: p2.topups_completed
-  expect: le
-  value: 55
+  expect: ratio
   source: top-off only within an RSU's reach (provisioning-proxy role)
-  measured: '47'
-  verdict: pass
+  measured: 105 -> 86 (ratio 0.819)
+  verdict: wrong-expectation
+  band:
+  - 0.0
+  - 1.0
+  note: 'rerun-2026-10-25 §3: le 55 was the 60 s base fleet at the rollover (55 devices). On the 300 s
+    base M0 tops up 105 and this variant 86. Corrected to at most the base (ratio at most 1), the claim
+    the source makes.'
 - id: bhcell-rsu-cert
   base: M0
   variant: backhaul-cellular
@@ -962,7 +988,7 @@ rows:
   measure: p2.revoked_attackers
   expect: up
   source: about 7 attackers instead of 3, all ConstantPosition
-  measured: 2 -> 4
+  measured: 2 -> 7
   verdict: pass
 - id: att10-crl
   base: M0
@@ -971,7 +997,7 @@ rows:
   measure: m.crl_entries
   expect: up
   source: 'one CRL entry per revoked device: the CRL grows (~33 B an entry, Brecht)'
-  measured: 2 -> 4
+  measured: 2 -> 7
   verdict: fixed
   note: 'was open: 27 CRL entries in M0, att10 and sybil alike, the R-USFP false positives (usfp.md §4).
     Fixed by the smoothed GNSS receiver (DETECT); re-run on 77cffb5b: 2 -> 4, 0 honest'
@@ -982,7 +1008,7 @@ rows:
   measure: p2.cases_opened
   expect: up
   source: 'one case per accused device (gap row 27: cases run side by side)'
-  measured: 2 -> 4
+  measured: 2 -> 7
   verdict: fixed
   note: 'as att10-crl: was 27 cases in M0, att10 and sybil; 2 -> 4 on 77cffb5b'
 - id: sybil-not-revoked
@@ -1182,3 +1208,120 @@ rows:
   source: 'realism: 3 of 3'
   measured: '3'
   verdict: pass
+- id: QD25-cases
+  base: QD
+  variant: QD
+  area: scms
+  measure: p2.cases_opened
+  expect: eq
+  value: 0
+  source: 'honest traffic only: no case (usfp.md; QD on fe3757b9 0); rerun-2026-10-25 §1.3, written before
+    the run; full-bench.md QD on fe3757b9'
+  measured: '0'
+  verdict: pass
+- id: QD25-honest-revoked
+  base: QD
+  variant: QD
+  area: scms
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  source: 'honest traffic only: no revocation; rerun-2026-10-25 §1.3, written before the run; full-bench.md
+    QD on fe3757b9'
+  measured: '0'
+  verdict: pass
+- id: QD25-verdicts
+  base: QD
+  variant: QD
+  area: metrics
+  measure: p2.verdicts_fired
+  expect: le
+  value: 114
+  source: 'density rules: honest verdicts fall below QD fe3757b9 114 (honest-density.md); rerun-2026-10-25
+    §1.3, written before the run; full-bench.md QD on fe3757b9'
+  measured: '79'
+  verdict: pass
+- id: QD25-reports-lost
+  base: QD
+  variant: QD
+  area: pki
+  measure: p2.reports_lost
+  expect: eq
+  value: 0
+  source: 'relay confirmation (06 6 item 5): no uploaded report is lost; rerun-2026-10-25 §1.3, written
+    before the run; full-bench.md QD on fe3757b9'
+  measured: '0'
+  verdict: pass
+- id: QD25-reports-unsent
+  base: QD
+  variant: QD
+  area: pki
+  measure: p2.reports_unsent
+  expect: le
+  value: 2
+  source: 'relay retries on an RFC 6298 timer: at most a few still stored at the end; rerun-2026-10-25
+    §1.3, written before the run; full-bench.md QD on fe3757b9'
+  measured: '0'
+  verdict: pass
+- id: QD25-crl-polls
+  base: QD
+  variant: QD
+  area: pki
+  measure: p2.crl_polls_not_modified
+  expect: band
+  band:
+  - 10000
+  - 12500
+  source: 'hourly 412 polls by every cellular device: 80 % of 303 x 48 h = 11,600 (phase2.rs CRL_FETCH_INTERVAL_S);
+    rerun-2026-10-25 §1.3, written before the run; full-bench.md QD on fe3757b9'
+  measured: '11291'
+  verdict: pass
+- id: QD25-rsu-crls
+  base: QD
+  variant: QD
+  area: pki
+  measure: p2.rsu_crls_installed
+  expect: eq
+  value: 60
+  source: each of 30 RSUs installs both providers t0 CRLs, nothing revoked; rerun-2026-10-25 §1.3, written
+    before the run; full-bench.md QD on fe3757b9
+  measured: '60'
+  verdict: pass
+- id: QD25-topups
+  base: QD
+  variant: QD
+  area: pki
+  measure: p2.topups_refused
+  expect: eq
+  value: 0
+  source: every vehicle on the map at 43,200 s tops off (CAMP-EE 2.1.5.3.2); rerun-2026-10-25 §1.3, written
+    before the run; full-bench.md QD on fe3757b9
+  measured: '0'
+  verdict: pass
+- id: QD25-wall
+  base: QD
+  variant: QD
+  area: performance
+  measure: cost.wall_s
+  expect: le
+  value: 189.0
+  source: 'memo and key-range read cut the rollover and stops (honest-density.md 6): QD wall at most fe3757b9
+    189 s; rerun-2026-10-25 §1.3, written before the run; full-bench.md QD on fe3757b9'
+  verdict: open
+  note: 'rerun-2026-10-25 §4: 200.4 s against 189 s. Run under the shared run lock while another package
+    ran a simulation outside it (two v2xw processes on 2 cores), not a clean timing. Re-measure on an
+    idle machine.'
+  measured: '200.39'
+- id: QD25-memory
+  base: QD
+  variant: QD
+  area: performance
+  measure: cost.peak_mb
+  expect: le
+  value: 227.0
+  source: 'no change raises memory: peak at most fe3757b9 227 MB; rerun-2026-10-25 §1.3, written before
+    the run; full-bench.md QD on fe3757b9'
+  verdict: open
+  note: 'rerun-2026-10-25 §4: 247.5 MB against 227 MB (+9 %). Not attributed: the only new cache (419b8e6b)
+    is bounded at 4,096 entries (about 0.3 MB). Bisect fe3757b9..8becf72a owed.'
+  measured: '247.497'
