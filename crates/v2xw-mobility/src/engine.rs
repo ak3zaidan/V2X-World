@@ -489,10 +489,15 @@ pub struct VruPopulation {
 /// The model id VRU placement draws its streams under.
 const VRU_PLACEMENT_ID: &str = "mobility/vru/population";
 
-/// How far apart two connectors from one approach lane must be before a cyclist on one no
-/// longer occupies the other, metres: half a truck (2.6 m) plus half a bicycle (0.65 m)
-/// plus a margin, rounded up.
+/// How far apart two connectors from one approach lane must be before a road user on one no
+/// longer occupies the other, metres: half the widest class (a coach, 2.6 m) plus half a
+/// car (1.8 m) plus a margin — and so also clear of a bicycle (0.65 m), for which it was
+/// first set.
 const DIVERGED_M: f64 = 2.5;
+
+/// The same for a road user wider than 2 m (a truck, bus or coach): half of 2.6 m on each
+/// side plus 0.3 m.
+const DIVERGED_WIDE_M: f64 = 2.9;
 
 /// How many walkable lanes a pedestrian's walk strings together at most.
 const PEDESTRIAN_WALK_LANES: usize = 12;
@@ -1383,7 +1388,7 @@ pub struct NativeMobility {
     crosswalks: CrosswalkIndex,
     /// Each junction connector's siblings from the same approach lane, and where they
     /// part (`diverging_connectors`). Built in `init`.
-    diverging: BTreeMap<LaneId, Vec<(LaneId, f64)>>,
+    diverging: BTreeMap<LaneId, Vec<(LaneId, f64, f64)>>,
     vru: Option<SocialForce>,
     /// Whether each vehicle that met a pedestrian waiting mid-block yields to them, drawn
     /// once per pair: `(pedestrian, vehicle) → yields`.
@@ -3751,26 +3756,30 @@ impl NativeMobility {
                     snapshot.push_ghost(tr.from, a.s_m + tr.from_s_delta, a.id);
                 }
             }
-            // A cyclist on a junction connector still occupies the start of every sibling
-            // connector leaving the same approach lane, until the two paths are apart: a
-            // car turning right from behind a cyclist going straight on would otherwise
-            // not see it, because the cyclist is not on the car's route — and a bicycle
-            // accelerates and cruises slower than the car behind, so the car drove into
-            // it where the connectors diverge (the pedestrian_invariants gate measured
-            // it). Registering every class this way is the general fix; it is limited to
-            // bicycles so that motor traffic, which the auditor holds at zero overlaps
-            // without it, keeps its calibrated behaviour and its golden records.
-            for a in self
-                .actors
-                .values()
-                .filter(|a| a.class == VehicleClass::Bicycle)
-            {
+            // A road user on a junction connector still occupies the start of every sibling
+            // connector leaving the same approach lane, until the two paths are apart. The
+            // driver behind, going another way, would otherwise not see it, because it is
+            // not on their route: a car going straight on drove into the rear of a car
+            // turning left from the same lane at the mouth of the junction, where the two
+            // connectors share their first metres (pedestrian_invariants: 42 and 14
+            // overlaps, every one between two motor vehicles on sibling connectors, on
+            // 486c8cba). This was first done for bicycles only, which accelerate and
+            // cruise slower than the car behind; a turning car is as slow. SUMO does the
+            // same through the leaders it reports from a link's sibling links
+            // (`MSLink::getLeaderInfo`, links that share their approach lane).
+            for a in self.actors.values() {
                 let Some(siblings) = self.diverging.get(&a.lane) else {
                     continue;
                 };
-                let rear = a.s_m - a.class.spec().length_m;
-                for (sibling, apart_s) in siblings {
-                    if rear < *apart_s {
+                let spec = a.class.spec();
+                let rear = a.s_m - spec.length_m;
+                for (sibling, apart_s, apart_wide_s) in siblings {
+                    let apart = if spec.width_m > 2.0 {
+                        *apart_wide_s
+                    } else {
+                        *apart_s
+                    };
+                    if rear < apart {
                         snapshot.push_ghost(*sibling, a.s_m, a.id);
                     }
                 }
@@ -3781,9 +3790,9 @@ impl NativeMobility {
     }
 
     /// For every junction connector, the other connectors that leave the same approach
-    /// lane, each with the arc length beyond which the two centrelines are at least
-    /// [`DIVERGED_M`] apart.
-    fn diverging_connectors(world: &World) -> BTreeMap<LaneId, Vec<(LaneId, f64)>> {
+    /// lane, each with the arc lengths beyond which the two centrelines are at least
+    /// [`DIVERGED_M`] and [`DIVERGED_WIDE_M`] apart.
+    fn diverging_connectors(world: &World) -> BTreeMap<LaneId, Vec<(LaneId, f64, f64)>> {
         let mut by_approach: BTreeMap<LaneId, Vec<LaneId>> = BTreeMap::new();
         for c in world.roads.connections() {
             if let Some(via) = c.via {
@@ -3793,7 +3802,7 @@ impl NativeMobility {
                 }
             }
         }
-        let mut out: BTreeMap<LaneId, Vec<(LaneId, f64)>> = BTreeMap::new();
+        let mut out: BTreeMap<LaneId, Vec<(LaneId, f64, f64)>> = BTreeMap::new();
         for connectors in by_approach.values() {
             for a in connectors {
                 for b in connectors {
@@ -3802,11 +3811,16 @@ impl NativeMobility {
                     }
                     let (la, lb) = (world.lane(*a), world.lane(*b));
                     let end = la.length_m.min(lb.length_m);
-                    let mut s = 0.0;
-                    while s < end && la.point_at(s).distance_2d(lb.point_at(s)) < DIVERGED_M {
-                        s += 0.5;
-                    }
-                    out.entry(*a).or_default().push((*b, s.min(end)));
+                    let apart = |m: f64| {
+                        let mut s = 0.0;
+                        while s < end && la.point_at(s).distance_2d(lb.point_at(s)) < m {
+                            s += 0.5;
+                        }
+                        s.min(end)
+                    };
+                    out.entry(*a)
+                        .or_default()
+                        .push((*b, apart(DIVERGED_M), apart(DIVERGED_WIDE_M)));
                 }
             }
         }
