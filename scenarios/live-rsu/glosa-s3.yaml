@@ -1,0 +1,6 @@
+# Live RSU track, application family: glosa-base.yaml with one change (seed 3).
+schema: v2xw/scenario/1
+meta:
+  base: glosa-base.yaml
+  name: live-rsu glosa s3
+seed: 3

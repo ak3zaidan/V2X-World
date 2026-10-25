@@ -1,0 +1,433 @@
+# Live RSU track (docs/validation/live-rsu-2026-10-25.md): roadside units and their
+# applications on the real engine. RSU count and placement, transmit power, SPaT and MAP,
+# GLOSA followed or not, a unit going down; then the SCMS path through the units (report
+# relay and CRL over each backhaul medium, loss and latency, a unit with no backhaul).
+#
+# Every row was written before the run it judges (predicted direction and, where theory
+# gives one, size, with the source). Each measure is computed by an INDEPENDENT reader of
+# the raw records (tools/realworld/live_rsu.py: node.tx, phy.prr, app.advice, pki.flow,
+# metric samples, the run report and the run lock's cost line), never by engine code.
+#   python3 -I tools/realworld/live_rsu.py measure <run-dir>     (writes <run-dir>/realism.json)
+#   python3 -I tools/realworld/matrix.py check <this file> <runs-dir>
+# Each row was also shown to go red under its injected fault (`fault`, default
+# knob-ignored: the variant measured on the base's records, as if the setting were dropped):
+#   python3 -I tools/realworld/live_rsu.py faults <runs-dir> <this file>
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+#
+# Binary: the release build of 486c8cba (the integrator's), copied to the scratchpad; one
+# run per run-lock call (1,200 MB cap); --record-level events.
+schema: v2xw/scms-run-expectations/1
+runs:
+  G0:
+    scenario: scenarios/live-rsu/glosa-base.yaml
+    note: five SPaT/MAP units at 23 dBm, 2,400 veh/h, every driver following GLOSA, 150 s
+  G0b:
+    scenario: scenarios/live-rsu/glosa-base.yaml
+    note: G0 again, same seed and build stamp (determinism)
+  Gc0:
+    scenario: scenarios/live-rsu/glosa-c0.yaml
+    note: no driver follows the advice
+  Gc05:
+    scenario: scenarios/live-rsu/glosa-c05.yaml
+    note: half the drivers follow it
+  Goff:
+    scenario: scenarios/live-rsu/glosa-off.yaml
+    note: GLOSA not running (edge)
+  Gp0:
+    scenario: scenarios/live-rsu/glosa-p0.yaml
+    note: units at 0 dBm (edge)
+  Gp10:
+    scenario: scenarios/live-rsu/glosa-p10.yaml
+    note: units at 10 dBm
+  Gp30:
+    scenario: scenarios/live-rsu/glosa-p30.yaml
+    note: units at 30 dBm (33 dBm EIRP, the FCC roadside limit)
+  Gnomap:
+    scenario: scenarios/live-rsu/glosa-nomap.yaml
+    note: SPaT without MAP
+  Grsu1:
+    scenario: scenarios/live-rsu/glosa-rsu1.yaml
+    note: one unit (site 10) instead of five
+  Gout:
+    scenario: scenarios/live-rsu/glosa-out.yaml
+    note: the unit at site 10 (node 2) off from 60 s
+  Gc0p10:
+    scenario: scenarios/live-rsu/glosa-c0p10.yaml
+    note: interaction, GLOSA ignored with the units at 10 dBm
+  Gs2:
+    scenario: scenarios/live-rsu/glosa-s2.yaml
+    note: G0 on seed 2
+  Gc0s2:
+    scenario: scenarios/live-rsu/glosa-c0s2.yaml
+    note: Gc0 on seed 2
+  Gs3:
+    scenario: scenarios/live-rsu/glosa-s3.yaml
+    note: G0 on seed 3
+  Gc0s3:
+    scenario: scenarios/live-rsu/glosa-c0s3.yaml
+    note: Gc0 on seed 3
+rows:
+# ---- SPaT and MAP on the air
+- id: LR.G.spat-rate-min
+  base: G0
+  variant: G0
+  area: messages
+  measure: g.spat_hz_min
+  expect: band
+  band: [9.9, 10.1]
+  fault: half:spat
+  source: SPaT at 10 Hz per unit (CTI 4501 connected intersections; 04-models.md §8.1; infra.rs SPAT interval)
+  measured: pending
+- id: LR.G.spat-rate-max
+  base: G0
+  variant: G0
+  area: messages
+  measure: g.spat_hz_max
+  expect: band
+  band: [9.9, 10.1]
+  fault: half:spat
+  source: as LR.G.spat-rate-min, the fastest unit
+  measured: pending
+- id: LR.G.map-rate
+  base: G0
+  variant: G0
+  area: messages
+  measure: g.map_hz_per_unit
+  expect: band
+  band: [0.95, 1.05]
+  fault: half:map
+  source: MAP at 1 Hz per unit (CTI 4501; 04-models.md §8.1)
+  measured: pending
+- id: LR.G.determinism
+  base: G0
+  variant: G0b
+  area: determinism
+  measure: digest.record
+  expect: identical
+  fault: record-flip
+  source: same seed and build stamp, byte-identical records
+  measured: pending
+# ---- GLOSA followed or not
+- id: LR.G.c1.stops
+  base: Gc0
+  variant: G0
+  area: glosa
+  measure: g.stops_per_km
+  expect: down
+  min_change: 0.03
+  source: GLOSA followed cuts stops (Treiber and Kesting 2014, arXiv:1408.5498, about 15 % fewer stops for advised vehicles at 50 km/h; Katsaros et al. 2011 IWCMC, growing with penetration); the class mixes advised and unadvised vehicles, so at least 3 %
+  measured: pending
+- id: LR.G.c1.fuel
+  base: Gc0
+  variant: G0
+  area: glosa
+  measure: g.fuel_per_100km
+  expect: down
+  min_change: 0.005
+  source: fewer stop-and-go cycles burn less (Treiber and Kesting 2014, about 4 % fuel; Tielert et al. 2012 ITST)
+  measured: pending
+- id: LR.G.c1.co2
+  base: Gc0
+  variant: G0
+  area: glosa
+  measure: g.co2_per_km
+  expect: down
+  min_change: 0.005
+  source: CO2 is proportional to fuel under HBEFA (as LR.G.c1.fuel)
+  measured: pending
+- id: LR.G.c1.speed
+  base: Gc0
+  variant: G0
+  area: glosa
+  measure: g.mean_speed_mps
+  expect: same
+  tol: 0.08
+  source: GLOSA trades cruising speed for standing time; the travel time is about unchanged (Treiber and Kesting 2014 §5), so the mean speed moves by under 8 %
+  measured: pending
+- id: LR.G.c05.stops
+  base: Gc0
+  variant: Gc05
+  area: glosa
+  measure: g.stops_per_km
+  expect: down
+  source: 'half the drivers following removes part of the stops (Katsaros 2011: the gain grows with penetration)'
+  measured: pending
+- id: LR.G.c05-c1.stops
+  base: Gc05
+  variant: G0
+  area: glosa
+  measure: g.stops_per_km
+  expect: down
+  source: monotone in compliance (Katsaros 2011)
+  measured: pending
+- id: LR.G.c0.advice-issued
+  base: Gc0
+  variant: Gc0
+  area: glosa
+  measure: g.glosa_advice
+  expect: ge
+  value: 100
+  fault: use:Goff
+  source: compliance is the drivers' choice, not the application's; GLOSA still advises every equipped approaching vehicle (apps.rs; run.rs GlosaDrivers)
+  measured: pending
+- id: LR.G.off.advice
+  base: G0
+  variant: Goff
+  area: glosa
+  measure: g.glosa_advice
+  expect: eq
+  value: 0
+  source: an application that is not enabled issues nothing (apps.enabled)
+  measured: pending
+- id: LR.G.off-vs-c0.stops
+  base: Gc0
+  variant: Goff
+  area: glosa
+  measure: g.stops_per_km
+  expect: same
+  tol: 0.0
+  fault: use:G0
+  source: advice nobody follows cannot move a vehicle, so GLOSA off and GLOSA ignored drive the same traffic, identically (the compliance draw is made only when compliance > 0)
+  measured: pending
+# ---- Transmit power: coverage, advice distance, cost
+- id: LR.G.p30.power-on-air
+  base: G0
+  variant: Gp30
+  area: radio
+  measure: g.spat_tx_power_dbm
+  expect: eq
+  value: 30.0
+  source: radio.devices.rsu.tx_power_dbm is the unit's conducted power
+  measured: pending
+- id: LR.G.p30.range50
+  base: G0
+  variant: Gp30
+  area: radio
+  measure: g.spat_range50_m
+  expect: ratio
+  band: [1.2, 3.0]
+  source: 'log-distance reach scales as 10^(dP/10n): +7 dB with n 1.67 (TR 37.885 Table 6.2.1-1 urban LOS) to 3.0 (urban NLOS) gives x2.62 to x1.71; buildings and the 20 m rings widen it to [1.2, 3.0]'
+  measured: pending
+- id: LR.G.p10.range50
+  base: G0
+  variant: Gp10
+  area: radio
+  measure: g.spat_range50_m
+  expect: ratio
+  band: [0.15, 0.6]
+  source: -13 dB, n 1.67 to 3.0 -> x0.17 to x0.37 (as LR.G.p30.range50)
+  measured: pending
+- id: LR.G.p0.range50
+  base: G0
+  variant: Gp0
+  area: radio
+  measure: g.spat_range50_m
+  expect: ratio
+  band: [0.03, 0.35]
+  source: -23 dB, n 1.67 to 3.0 -> x0.042 to x0.17 (as LR.G.p30.range50)
+  measured: pending
+- id: LR.G.p30.prr-300-400
+  base: G0
+  variant: Gp30
+  area: radio
+  measure: g.spat_prr_300_400
+  expect: up
+  min_change: 0.1
+  source: more power, more receivers decode at 300-400 m
+  measured: pending
+- id: LR.G.p30.spat-frames
+  base: G0
+  variant: Gp30
+  area: radio
+  measure: g.spat_frames
+  expect: same
+  tol: 0.001
+  fault: half:spat
+  source: power changes reach, not the SPaT rate
+  measured: pending
+- id: LR.G.p30.advice-cap
+  base: G0
+  variant: Gp30
+  area: glosa
+  measure: g.glosa_first_dist_p90
+  expect: le
+  value: 300.0
+  fault: advice-far
+  source: GLOSA advises within glosa_range_m = 300 m whatever the radio reach (apps.rs SignalAppParams; CTI 4501 approach distance)
+  measured: pending
+- id: LR.G.p10.advice-dist
+  base: G0
+  variant: Gp10
+  area: glosa
+  measure: g.glosa_first_dist_p90
+  expect: down
+  min_change: 0.1
+  source: at 10 dBm the SPaT reach falls under the 300 m advice range (LR.G.p10.range50), so the first advice comes closer to the stop line
+  measured: pending
+- id: LR.G.p0.advice
+  base: G0
+  variant: Gp0
+  area: glosa
+  measure: g.glosa_advice
+  expect: down
+  min_change: 0.2
+  source: a unit heard only near the junction advises fewer vehicles for less time
+  measured: pending
+- id: LR.G.p10.stops
+  base: G0
+  variant: Gp10
+  area: glosa
+  measure: g.stops_per_km
+  expect: up
+  source: later advice leaves less distance to adapt, so fewer stops are avoided (the interaction compliance x reach)
+  measured: pending
+- id: LR.G.c0p10.stops
+  base: Gc0
+  variant: Gc0p10
+  area: glosa
+  measure: g.stops_per_km
+  expect: same
+  tol: 0.0
+  fault: use:Gp10
+  source: 'with nobody following, the unit''s power cannot move the traffic (interaction: the power effect on stops exists only through compliance)'
+  measured: pending
+- id: LR.C.p30.events
+  base: G0
+  variant: Gp30
+  area: cost
+  measure: c.events
+  expect: up
+  source: more receivers per frame within reach (receptions scale with the covered area), more reception events at the same frame count
+  measured: pending
+- id: LR.C.p0.events
+  base: G0
+  variant: Gp0
+  area: cost
+  measure: c.events
+  expect: down
+  source: as LR.C.p30.events, fewer receivers
+  measured: pending
+# ---- MAP, count and placement, a unit down
+- id: LR.G.nomap.advice
+  base: G0
+  variant: Gnomap
+  area: glosa
+  measure: g.glosa_advice
+  expect: eq
+  value: 0
+  source: a SPaT's signal groups mean nothing without the MAP that ties lanes to them (J2735 SPAT/MapData; CTI 4501 §4), so no advice
+  measured: pending
+- id: LR.G.nomap.map-frames
+  base: G0
+  variant: Gnomap
+  area: messages
+  measure: g.map_frames
+  expect: eq
+  value: 0
+  source: no unit carries the map role
+  measured: pending
+- id: LR.G.rsu1.units
+  base: G0
+  variant: Grsu1
+  area: placement
+  measure: g.units_on_air
+  expect: eq
+  value: 1
+  source: one unit configured
+  measured: pending
+- id: LR.G.rsu1.junctions
+  base: G0
+  variant: Grsu1
+  area: placement
+  measure: g.glosa_junctions
+  expect: eq
+  value: 1
+  source: a unit serves the one signalised junction it is wired to (infra.rs SERVICE_RADIUS_M)
+  measured: pending
+- id: LR.G.rsu1.advised
+  base: G0
+  variant: Grsu1
+  area: placement
+  measure: g.glosa_advised_vehicles
+  expect: down
+  min_change: 0.3
+  source: one junction of five advised
+  measured: pending
+- id: LR.G.rsu1.stops
+  base: G0
+  variant: Grsu1
+  area: glosa
+  measure: g.stops_per_km
+  expect: up
+  source: four junctions lose their advice, so their avoidable stops come back
+  measured: pending
+- id: LR.C.rsu1.events
+  base: G0
+  variant: Grsu1
+  area: cost
+  measure: c.events
+  expect: down
+  min_change: 0.05
+  source: four transmitters of 11 frames/s fewer, each heard by every vehicle in reach
+  measured: pending
+- id: LR.G.out.spat-after
+  base: G0
+  variant: Gout
+  area: outage
+  measure: g.outage_unit_spat_after
+  expect: eq
+  value: 0
+  source: a unit that is down transmits nothing (outage event, run.rs)
+  measured: pending
+- id: LR.G.out.spat-frames
+  base: G0
+  variant: Gout
+  area: outage
+  measure: g.spat_frames
+  expect: ratio
+  band: [0.87, 0.89]
+  source: 'one of five units silent for 90 of 150 s: 1 - 90/(5 x 150) = 0.88; the other four unchanged'
+  measured: pending
+- id: LR.G.out.advice-after
+  base: G0
+  variant: Gout
+  area: outage
+  measure: g.advice_outage_junction_after
+  expect: eq
+  value: 0
+  source: a SPaT older than 1 s is not used (apps.rs signal_situation), so the dark junction gets no advice from 61 s
+  measured: pending
+- id: LR.G.c1.stops-seed2
+  base: Gc0s2
+  variant: Gs2
+  area: glosa
+  measure: g.stops_per_km
+  expect: down
+  source: LR.G.c1.stops on seed 2
+  measured: pending
+- id: LR.G.c1.stops-seed3
+  base: Gc0s3
+  variant: Gs3
+  area: glosa
+  measure: g.stops_per_km
+  expect: down
+  source: LR.G.c1.stops on seed 3
+  measured: pending
+- id: LR.G.c1.fuel-seed2
+  base: Gc0s2
+  variant: Gs2
+  area: glosa
+  measure: g.fuel_per_100km
+  expect: down
+  source: LR.G.c1.fuel on seed 2
+  measured: pending
+- id: LR.G.c1.fuel-seed3
+  base: Gc0s3
+  variant: Gs3
+  area: glosa
+  measure: g.fuel_per_100km
+  expect: down
+  source: LR.G.c1.fuel on seed 3
+  measured: pending

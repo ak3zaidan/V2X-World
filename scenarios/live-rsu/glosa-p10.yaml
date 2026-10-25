@@ -1,0 +1,9 @@
+# Live RSU track, application family: glosa-base.yaml with one change (RSU transmit power 10 dBm).
+schema: v2xw/scenario/1
+meta:
+  base: glosa-base.yaml
+  name: live-rsu glosa p10
+radio:
+  devices:
+    rsu:
+      tx_power_dbm: 10.0

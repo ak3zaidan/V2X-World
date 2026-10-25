@@ -1,0 +1,7 @@
+# Live RSU track, application family: glosa-base.yaml with one change (half the drivers follow GLOSA).
+schema: v2xw/scenario/1
+meta:
+  base: glosa-base.yaml
+  name: live-rsu glosa c05
+apps:
+  glosa_compliance: 0.5

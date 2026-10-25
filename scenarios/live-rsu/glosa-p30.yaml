@@ -1,0 +1,9 @@
+# Live RSU track, application family: glosa-base.yaml with one change (RSU transmit power 30 dBm, 33 dBm EIRP with the 3 dBi antenna: the FCC 5.9 GHz roadside limit).
+schema: v2xw/scenario/1
+meta:
+  base: glosa-base.yaml
+  name: live-rsu glosa p30
+radio:
+  devices:
+    rsu:
+      tx_power_dbm: 30.0

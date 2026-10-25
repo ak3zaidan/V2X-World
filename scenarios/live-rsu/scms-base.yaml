@@ -1,0 +1,19 @@
+# Live RSU track (docs/validation/live-rsu-2026-10-25.md), SCMS family base: the Midtown
+# realism base cut to a 120 s live window (no fast-forward), with a 5 s report shuffle, no
+# MA review delay and a CRL every 10 s, so reports relayed through roadside units and CRLs
+# fetched over their backhaul both happen inside the window. 30 units on metro fibre,
+# report-forward + crl + provisioning-proxy, 80 % cellular penetration (the rest relay-only).
+schema: v2xw/scenario/1
+meta:
+  base: ../real-world/midtown-scms-realism.yaml
+  name: live-rsu scms base
+time:
+  duration_s: 120.0
+  fast_forward: []
+security:
+  protocol:
+    id: protocol/scms/camp
+    params:
+      report_shuffle_window_s: 5.0
+      ma_review_s: 0.0
+      crl_cadence_s: 10.0
