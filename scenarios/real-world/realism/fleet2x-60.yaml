@@ -1,0 +1,6 @@
+# fleet2x (1,200 veh/h, twice the base's demand) on the 60 s base-60 (rerun-2026-10-26 §1.4).
+schema: v2xw/scenario/1
+meta: {base: base-60.yaml, name: Midtown SCMS realism fleet2x-60}
+actors:
+  vehicles:
+    demand: {rate_veh_per_h: 1200.0}

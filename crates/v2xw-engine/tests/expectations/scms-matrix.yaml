@@ -115,6 +115,14 @@ runs:
   fleet2x:
     base: M0
     scenario: scenarios/real-world/realism/fleet2x.yaml
+  base-60:
+    base: M0
+    scenario: scenarios/real-world/realism/base-60.yaml
+    note: 'M0 with a 60 s first live window: the short base of the fleet2x-60 pair'
+  fleet2x-60:
+    base: base-60
+    scenario: scenarios/real-world/realism/fleet2x-60.yaml
+    note: fleet2x on base-60 (keeps the doubled fleet inside the 10-minute run budget)
   ma-auto:
     base: M0
     scenario: scenarios/real-world/realism/ma-auto.yaml
@@ -1245,6 +1253,59 @@ rows:
   source: per-device behaviour is fleet-independent
   measured: '1'
   verdict: pass
+- base: base-60
+  variant: fleet2x-60
+  id: fleet2x60-req
+  area: architecture
+  measure: perdev.EeRaCertRequestSpdu.median
+  expect: eq
+  value: 1
+  source: 'ra-maxReqs 1: one butterfly request per device whatever the fleet (CAMP122 §6.3.3.4; realism
+    V7); written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.4)'
+- base: base-60
+  variant: fleet2x-60
+  id: fleet2x60-checks
+  area: performance
+  measure: p2.messages_checked
+  expect: ratio
+  band:
+  - 1.5
+  - 5
+  source: 'more senders and more receivers: checks grow between n and n^2 (realism V7); written 2026-10-26
+    before the 486c8cba runs (rerun-2026-10-26 §1.4)'
+- base: base-60
+  variant: fleet2x-60
+  id: fleet2x60-cost
+  area: performance
+  measure: cost.cpu_s
+  expect: ratio
+  band:
+  - 1.2
+  - 5
+  source: provisioning linear in devices, receptions ~n^2 (05 §5; realism V7); written 2026-10-26 before
+    the 486c8cba runs (rerun-2026-10-26 §1.4)
+- base: base-60
+  variant: fleet2x-60
+  id: fleet2x60-memory
+  area: performance
+  measure: cost.peak_mb
+  expect: ratio
+  band:
+  - 1.05
+  - 3
+  source: 'per-device state (pools, receivers, caches) doubles over a fixed share (map, PKI, recorder):
+    more than the base, less than 3x; written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.4)'
+- base: base-60
+  variant: fleet2x-60
+  id: fleet2x60-topups
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: ratio
+  band:
+  - 1.5
+  - 2.5
+  source: '20 certificates per device at the rollover: top-ups scale with the devices live at 43,200 s
+    (realism P3); written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.4)'
 - id: maauto-decision
   base: M0
   variant: ma-auto
