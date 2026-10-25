@@ -1084,6 +1084,9 @@ pub struct Engine {
     next_backend_bytes: u64,
     /// Whether the roadside CRL broadcast timer is running.
     crl_timer_armed: bool,
+    /// Each roadside unit's CRL download in flight over its backhaul, and when it lands
+    /// (live-rsu §3): the unit installs and broadcasts the list only once it has it.
+    rsu_crl_fetch: BTreeMap<NodeId, SimTime>,
     next_node: u32,
     next_frame: u32,
     /// The producer of the normative `Keyframe`/`Delta` stream (vwp-v1 §3.3, §3.4).
@@ -1620,6 +1623,7 @@ impl Engine {
             next_sdu: 0,
             next_backend_bytes: 0,
             crl_timer_armed: false,
+            rsu_crl_fetch: BTreeMap::new(),
             next_node: 0,
             next_frame: 0,
             snapshots,
@@ -2088,15 +2092,37 @@ impl Engine {
             .as_ref()
             .map(crate::phase2::Phase2::rsu_crls_due)
             .unwrap_or_default();
+        // The backend runs once per mobility step: a download that lands inside this step
+        // is installed now, a later one at the first step it has landed by.
+        let step_end = self.scenario.time.mobility_step().after(now);
         for rsu in due {
+            // A unit that is switched off fetches nothing; it fetches when it is back on.
+            if self.node_is_off(rsu) {
+                continue;
+            }
             let Some(p) = self.phase2.as_mut() else {
                 return;
             };
+            // The download goes down the unit's backhaul line once, and the unit holds the
+            // list only when it has landed (latency, serialisation, retransmissions).
+            let lands = match self.rsu_crl_fetch.get(&rsu) {
+                Some(&at) => at,
+                None => {
+                    // The real composite CRL's bytes (edge-case package, item 6).
+                    let size = p.crl_download_size(rsu);
+                    let at = p
+                        .access_mut()
+                        .rsu_send(rsu, v2xw_radio::cellular::Direction::Downlink, size, now)
+                        .unwrap_or(now);
+                    self.rsu_crl_fetch.insert(rsu, at);
+                    at
+                }
+            };
+            if lands >= step_end {
+                continue;
+            }
+            self.rsu_crl_fetch.remove(&rsu);
             let (version, entries, secured) = p.published_crl_for(rsu);
-            // The real composite CRL's bytes (edge-case package, item 6).
-            let size = p.crl_download_size(rsu);
-            p.access_mut()
-                .rsu_send(rsu, v2xw_radio::cellular::Direction::Downlink, size, now);
             let ctl = p.take_ctl_install(rsu, true);
             let Some(rt) = self.nodes.get_mut(&rsu) else {
                 continue;
@@ -7951,10 +7977,13 @@ impl Engine {
         let secured = phase2.broadcast_secured_crls();
         // Each unit asked about itself, and only a unit whose backhaul brought it the
         // list broadcasts it.
+        // A unit that is switched off transmits nothing, and a unit whose download of the
+        // list is still on its backhaul does not hold it yet (live-rsu §3).
         let broadcasters: Vec<NodeId> = phase2
             .rsus_with_role("crl")
             .into_iter()
             .filter(|n| phase2.rsu_spec_of(*n).is_some_and(|s| s.backhaul.connected))
+            .filter(|n| !self.node_is_off(*n) && !self.rsu_crl_fetch.contains_key(n))
             .collect();
         // Split the list so no frame exceeds the network layer's MTU: `fragmenter/none`
         // refuses an SDU above it, and a CRL of a few dozen 40-byte entries reaches it.
