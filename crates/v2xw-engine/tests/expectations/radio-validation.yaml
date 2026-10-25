@@ -431,3 +431,25 @@ rows:
   fault_scale: 2.0
   measured: pending
   verdict: pending
+# ---- PHY error model and the cellular backhaul (judged by the named tests) ----
+- id: RV-PER-NIST
+  test: v2xw-radio per::tests::reproduces_the_snr_at_10_percent_per_table (and ..._1_percent_per_column)
+  expect: the SNR at 10 % PER for each of the 8 MCSs at 200, 400 and 1,000 octets, and at 1 % PER at 400 octets, within 0.1 dB of the NIST model's table (6 Mbit/s QPSK 1/2 at 400 octets 6.6 dB; 3 Mbit/s BPSK 1/2 3.6 dB)
+  source: Pei and Henderson 2010 (NIST OFDM error model, within about 1 dB of the CMU testbed); Miller, NIST distance spectra; 04-models.md 4.7
+  fault: QPSK uncoded BER computed at SNR instead of SNR / 2 (3 dB optimistic)
+  measured: pending
+  verdict: pending
+- id: RV-BACKHAUL-CELL
+  test: v2xw-radio cellular_packet::tests::an_unloaded_lte_round_trip_lands_near_the_measured_first_hop
+  expect: an unloaded LTE first-hop round trip (100-octet request up, reply down) of 15 to 40 ms, around the measured 29.2 +- 4.8 ms; NR's uplink under 10 ms
+  source: Narayanan et al., WWW 2020 (LTE first-hop RTT); 3GPP TS 36.321 5.4.4 (scheduling request before an uplink grant)
+  fault: the uplink skips the scheduling-request wait and grant
+  measured: pending
+  verdict: pending
+- id: RV-FOUND-CRL
+  test: v2xw-engine foundations the_backend_tops_up_both_vehicles_over_cellular_and_every_byte_is_booked_once
+  expect: a vehicle's cellular downlink carries its top-up (93 + 4 + 3,017 = 3,114 octets inside the exchange) and five CRL polls, 10 s apart, of one size (92 octets)
+  source: CAMP SCMS top-up exchange; crl_fetch_interval_s 10 (docs/validation/foundations.md)
+  fault: the CRL poll interval 10 s -> 9 s in the engine
+  measured: pending
+  verdict: pending
