@@ -73,6 +73,7 @@ runs:
   RAWU: {scenario: scenarios/live-atk/rawgnss-us.yaml, note: 'attack-free, raw GNSS fixes, suite U'}
   C2Mb: {scenario: scenarios/live-atk/cat2-m.yaml, note: 'C2M on the branch build (flag default)'}
   C2MJ: {scenario: scenarios/live-atk/cat2-m-jr.yaml, note: 'C2M with judge_revoked 0, branch build'}
+  SYM10b: {scenario: scenarios/live-atk/share-sybil-m-10.yaml, note: 'SYM10 on the branch build (ghost frames open the attacker window)'}
 rows:
 # ---- 0. Attack-free: no attacker, nothing to revoke --------------------------------------
 - id: A0.L.no-attackers
@@ -2131,3 +2132,39 @@ rows:
   measured: pending
   verdict: pending
   source: 'dropping CRL-refused BSMs removes evidence, never adds it'
+
+# ---- 8. Sybil outcome onset (engine fix on this branch) ----------------------------------
+# Found on SYM10 (release build): 5 Sybil attackers, 19,212 ghost frames, 5 revoked, but every
+# attacker outcome had onset none and 0 falsified claims, so no time to detect or revoke.
+- id: SYMb.onset
+  base: SYM10b
+  variant: SYM10b
+  area: run-report
+  measure: ao.no_onset
+  expect: eq
+  value: 0
+  fault: scalar
+  measured: pending
+  verdict: pending
+  source: 'a ghost frame is a false claim (a vehicle that does not exist): every Sybil attacker that sent one has an onset'
+- id: SYMb.ttd
+  base: SYM10b
+  variant: SYM10b
+  area: timing
+  measure: ao.ttd_med_s
+  expect: band
+  band: [0.0, 6.0]
+  fault: slow
+  measured: pending
+  verdict: pending
+  source: 'six certificates at one point are co-located from the first ghost BSM; the research suite needs two consecutive 1 Hz checks (min_consecutive 2)'
+- id: SYMb.same-revocations
+  base: SYM10
+  variant: SYM10b
+  area: run-report
+  measure: rec.revoked_att
+  expect: same
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'the fix changes only the bookkeeping of the outcome, not what any receiver or the MA does'

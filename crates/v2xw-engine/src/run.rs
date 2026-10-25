@@ -5972,7 +5972,7 @@ impl Engine {
             // view of the ghost's stated accuracy, exactly as for the attacker's own frame.
             self.app_truth.note_signer(&digest.0[..], node);
             if let Some(p) = self.phase2.as_mut() {
-                p.note_ghost_frame();
+                p.note_ghost_frame(node, now);
                 if p.note_digest(node, &digest, i, j)
                     && let Some(actor) = self.node_actor.get(&node).copied()
                 {

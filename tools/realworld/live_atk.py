@@ -103,7 +103,11 @@ def derive(raw):
     d['p2.not_filed_unmapped'] = sum(
         v for k, v in (p.get('reports_not_filed_by') or {}).items() if 'subtype' in k)
     end_ns = rep.get('end_ns') or 0
-    ao = p.get('attacker_outcomes') or []
+    ao_all = p.get('attacker_outcomes') or []
+    # An attacker whose window never opened while it was on the road has no onset: it never
+    # lied, so it is not scored (counted apart).
+    ao = [a for a in ao_all if a.get('onset_ns') is not None]
+    d['ao.no_onset'] = len(ao_all) - len(ao)
     d['ao.n'] = len(ao)
     rep_ = [a for a in ao if a.get('first_reported_ns') is not None]
     dec = [a for a in ao if a.get('decided_ns') is not None]
@@ -407,7 +411,9 @@ def summaries(runs_dir, names):
     for n in names:
         p = os.path.join(runs_dir, n, 'atk.json')
         if os.path.exists(p):
-            out[n] = json.load(open(p))
+            d = json.load(open(p))
+            if not d.get('placeholder'):
+                out[n] = d
     return out
 
 

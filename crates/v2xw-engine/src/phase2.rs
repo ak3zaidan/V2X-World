@@ -2010,6 +2010,14 @@ pub struct Phase2 {
     /// the legacy constant 5 m (`detection.local[].params.use_stated_accuracy: 0`, kept to
     /// reproduce the runs before 2026-09-30).
     stated_accuracy: bool,
+    /// Whether the research suite judges a message its receiver refused on the CRL
+    /// (`true`, the default, which reproduces the runs before 2026-10-25;
+    /// `detection.local[].params.judge_revoked: 0` drops it before the suite). A revoked
+    /// sender's BSM has been dropped by the security layer: the suite then scores it a
+    /// failed signature, though the signature verified, and files a report about a device
+    /// already revoked (live-atk §3, `C2M`: 347 `signatureVerification` reports about a
+    /// revoked SlowDrift attacker). The US profile judges only verified BSMs either way.
+    judge_revoked: bool,
     /// Whether each receiver checks a claimed position against its own map of the road
     /// network (`true`, the default; `detection.local[].params.use_map: 0` is a receiver
     /// with no map, whose `mapOffRoad` check cannot fire).
@@ -2189,6 +2197,7 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
     };
     let mut report_interval = secs(REPORT_INTERVAL_S);
     let mut stated_accuracy = true;
+    let mut judge_revoked = true;
     let mut map_check = true;
     let mut us_profile: Option<v2xw_threat::us_mbr::UsMbrParams> = None;
     for (i, choice) in scenario.detection.local.iter().enumerate() {
@@ -2294,6 +2303,8 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
                     stated_accuracy = v != 0.0;
                 } else if key == "use_map" {
                     map_check = v != 0.0;
+                } else if key == "judge_revoked" {
+                    judge_revoked = v != 0.0;
                 } else if !apply_detector_param(&mut detector_params, key, v) {
                     // `DETECTOR_PARAM_KEYS` names a key this function does not read: the
                     // list and the reader disagree, and the loader test over the list fails.
@@ -2317,6 +2328,7 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
         detector_params,
         report_interval,
         stated_accuracy,
+        judge_revoked,
         map_check,
         us_profile,
     })
@@ -2328,6 +2340,8 @@ pub(crate) struct DetectionParams {
     pub report_interval: Duration,
     /// Whether the detectors take a message's stated accuracy (`use_stated_accuracy`).
     pub stated_accuracy: bool,
+    /// Whether the research suite judges CRL-refused messages (`judge_revoked`).
+    pub judge_revoked: bool,
     /// Whether the map-bound check runs (`use_map`).
     pub map_check: bool,
     /// The strict US profile's thresholds, when `detection.local` names it.
@@ -2335,7 +2349,12 @@ pub(crate) struct DetectionParams {
 }
 
 /// The keys `detection.local[].params` accepts that the host reads rather than the suite.
-pub const HOST_PARAM_KEYS: [&str; 3] = ["report_interval_s", "use_stated_accuracy", "use_map"];
+pub const HOST_PARAM_KEYS: [&str; 4] = [
+    "report_interval_s",
+    "use_stated_accuracy",
+    "use_map",
+    "judge_revoked",
+];
 
 /// The keys `detection.local[].params` accepts besides `report_interval_s`: exactly the
 /// names [`apply_detector_param`] reads.
@@ -2503,6 +2522,7 @@ impl Phase2 {
             detector_params,
             report_interval,
             stated_accuracy,
+            judge_revoked,
             map_check,
             us_profile,
         } = detection_params(scenario)?;
@@ -2799,6 +2819,7 @@ impl Phase2 {
             us_profile,
             detection_on: wants_detection,
             stated_accuracy,
+            judge_revoked,
             // A world with no motor-vehicle lane (a fixture, an empty extract) gives the
             // receivers no map rather than one on which every claim is off the road.
             map_check: map_check
@@ -3914,8 +3935,19 @@ impl Phase2 {
         }
     }
 
-    /// Counts one Sybil ghost frame handed to the access layer.
-    pub fn note_ghost_frame(&mut self) {
+    /// Counts one Sybil ghost frame `node` handed to the access layer at `at`.
+    ///
+    /// A ghost frame is a lie (a vehicle that does not exist), so it opens and extends the
+    /// attacker's falsification window like a falsified claim of its own: before
+    /// 2026-10-25 a Sybil attacker's outcome had no onset and 0 falsified claims however
+    /// many ghosts it sent, so its time to detect and revoke were never measured
+    /// (live-atk §3, SYM10: 19,212 ghost frames, 5 attackers revoked, onset none).
+    pub fn note_ghost_frame(&mut self, node: NodeId, at: SimTime) {
+        self.report.falsified_claims += 1;
+        self.first_falsified.entry(node).or_insert(at);
+        let lies = self.attacker_lies.entry(node).or_insert((at, 0));
+        lies.0 = lies.0.max(at);
+        lies.1 += 1;
         self.report.ghost_frames += 1;
     }
 
@@ -4063,6 +4095,12 @@ impl Phase2 {
             // The US profile compares every BSM with the one before it from the same
             // certificate ("two consecutive BSMs", [SM-MBR] §2.3.1.2.2), so it checks
             // every message.
+            if !self.judge_revoked
+                && m.verification == v2xw_node::stores::VerificationState::Revoked
+            {
+                self.report.messages_not_checked += 1;
+                continue;
+            }
             if self.us_profile.is_none()
                 && let Some(last) = self.checked_at.get(&(node, key))
                 && m.received_at
