@@ -405,7 +405,7 @@ impl StubEngine {
         t.crl_entries = 12;
         t.outbox_msgs = u32::try_from(step % 4).unwrap_or(0);
         t.peer_cache_entries = 40 + u32::try_from(step % 20).unwrap_or(0);
-        t.p2pcd_requests = u32::try_from(step % 3).unwrap_or(0);
+        t.digest_misses = u32::try_from(step % 3).unwrap_or(0);
         t.full_cert_msgs = u32::try_from(step % 10).unwrap_or(0);
         t.msgs_in_per_s = (60.0 + 90.0 * wobble) as f32;
         t.msgs_out_per_s = 10.0;

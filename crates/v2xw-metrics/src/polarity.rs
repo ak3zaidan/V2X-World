@@ -77,11 +77,12 @@ pub const NEUTRAL: &[&str] = &[
     "events_processed",
     "events_per_second",
     "bytes_total",
-    // P2PCD requests mark digest-signed messages from signers not yet cached (IEEE 1609.2
-    // peer-to-peer certificate distribution); they follow pseudonym changes and new
-    // neighbours, so a higher rate means more churn, not a worse network. It was
-    // lower-is-better by default before.
+    // P2PCD learning requests (IEEE 1609.2 clause 8) and digest misses (digest-signed
+    // messages from signers not yet cached, named `p2pcd_requests` before 2026-10-25)
+    // follow pseudonym changes and new neighbours, so a higher rate means more churn, not
+    // a worse network. They were lower-is-better by default before.
     "p2pcd_requests",
+    "digest_misses",
     // The full-certificate share is a policy (SAE J2945/1 sends the full certificate once a
     // second or to a new neighbour): a trade between overhead and verifiability.
     "full_cert_share",
@@ -174,6 +175,7 @@ mod tests {
     #[test]
     fn debatable_entries() {
         assert_eq!(better_of("p2pcd_requests"), None);
+        assert_eq!(better_of("digest_misses"), None);
         assert_eq!(better_of("app_lead_time_s"), Some(Better::Higher));
         assert_eq!(better_of("e2e_latency"), Some(Better::Lower));
     }

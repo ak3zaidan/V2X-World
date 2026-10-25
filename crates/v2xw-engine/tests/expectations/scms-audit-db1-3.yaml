@@ -498,12 +498,26 @@ rows:
   measure: oa.mi.p2pcd_requests_bad_windows
   expect: eq
   value: 0
-  source: p2pcd_requests = Σ triggers / window (security.rs table), recounted from node.p2pcd
+  source: p2pcd_requests = Σ P2PCD learning requests sent (requests_sent + inline_requests_sent) /
+    window (security.rs table), recounted from node.p2pcd
   measured: '2'
   verdict: open
-  note: 'p2pcd_requests is the documented digest-miss count (equal to node.telemetry p2pcd_requests in
+  note: 'p2pcd_requests was the documented digest-miss count (equal to node.telemetry p2pcd_requests in
     every window, independent recount within 1 %); IEEE 1609.2 clause 8 P2PCD triggers only for an unknown
-    CA: 0.4-1.3/s against the metric 22-46/s. Rename and add a real P2PCD rate: owner call (audit O-1)'
+    CA: 0.4-1.3/s against the metric 22-46/s. 2026-10-25 (recmetric): the old count is digest_misses
+    (OA.MI.digest-misses) and p2pcd_requests counts the requests node.p2pcd records; re-measured on the
+    fixed engine below'
+- id: OA.MI.digest-misses
+  base: A
+  variant: C
+  area: metrics
+  measure: oa.mi.digest_misses_vs_telemetry_bad_windows
+  expect: eq
+  value: 0
+  source: digest_misses = Σ node.telemetry digest_misses / window (security.rs table; the metric was
+    p2pcd_requests before 2026-10-25)
+  measured: pending
+  verdict: open
 - id: OA.DET.records
   base: A
   variant: A2

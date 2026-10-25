@@ -914,7 +914,7 @@ fn an_unknown_signer_costs_a_p2pcd_request_and_a_full_certificate_stops_it() {
         .filter_map(|o| o.telemetry.as_ref())
         .next()
         .unwrap();
-    assert_eq!(ta.p2pcd_requests, 11, "every message missed the cache");
+    assert_eq!(ta.digest_misses, 11, "every message missed the cache");
     assert_eq!(ta.peer_cache_entries, 0, "and nothing was learned");
 
     let mut attaches = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
@@ -931,7 +931,7 @@ fn an_unknown_signer_costs_a_p2pcd_request_and_a_full_certificate_stops_it() {
         .next()
         .unwrap();
     assert_eq!(
-        tb.p2pcd_requests, 0,
+        tb.digest_misses, 0,
         "one attachment served the whole second"
     );
     assert_eq!(tb.peer_cache_entries, 1);

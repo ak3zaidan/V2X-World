@@ -61,7 +61,7 @@ const OVERVIEW_LABEL: Readonly<Record<string, string>> = {
   crl_bytes: "CRL size",
   crl_expansion_pm: "CRL expansion done",
   full_cert_msgs: "sent with full certificate",
-  p2pcd_requests: "certificate requests (P2PCD)",
+  digest_misses: "from uncached signers",
 };
 
 /** A label in the overview's lower case, acronyms (CBR, TX, CPU, HSM…) left as they are. */
@@ -260,7 +260,7 @@ function Overview(): React.JSX.Element {
           field("nbr_unverified"),
           (byKey.get("nbr_revoked")?.raw ?? 0) > 0 ? field("nbr_revoked") : null,
           (byKey.get("full_cert_msgs")?.raw ?? 0) > 0 ? field("full_cert_msgs") : null,
-          (byKey.get("p2pcd_requests")?.raw ?? 0) > 0 ? field("p2pcd_requests") : null,
+          (byKey.get("digest_misses")?.raw ?? 0) > 0 ? field("digest_misses") : null,
         ]}
       </Section>
 

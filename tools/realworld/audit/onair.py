@@ -83,7 +83,9 @@ def measure(run_dir, fault=None):
     for t, v in records(rec, {'node.tx', 'node.p2pcd', 'node.credentials', 'node.security',
                               'sec.pseudonym', 'privacy.link', 'node.telemetry'}):
         if t == 'node.telemetry':
-            tel_w[win(v['_lt'])] += v.get('p2pcd_requests') or 0
+            # `digest_misses`; `p2pcd_requests` before 2026-10-25 (the same counter).
+            tel_w[win(v['_lt'])] += (v.get('digest_misses', v.get('p2pcd_requests')) or 0) + (
+                1 if fault == 'miss_tel' and not tel_w else 0)
         elif t == 'node.tx':
             alltx.append((v['_lt'], v.get('signer'), v.get('envelope_bytes'), v.get('payload_bytes')))
             sent[v['node']].add(v['msg_type'])
@@ -355,7 +357,7 @@ def measure(run_dir, fault=None):
             if ver == 'unverified':
                 deliv_unv[win(v['_lt'])] += 1
         key = (v['rx'], p)
-        # The digest-miss count (the documented `p2pcd_requests` formula): a digest-signed
+        # The digest-miss count (the `digest_misses` formula): a digest-signed
         # frame that reached the verifier stage from a signer whose certificate the receiver
         # had not been handed in an earlier frame.
         if p and (v['t_verify_start'] is not None or v['cause'] == 'unknown-signer'):
@@ -554,6 +556,7 @@ def measure(run_dir, fault=None):
     learned_at = {}
     obs_t = collections.defaultdict(list)
     trig_w = collections.Counter()
+    req_w = collections.Counter()
     for r in p2pcd_rows:
         for k, x in r.items():
             if isinstance(x, int) and k not in ('t', 'node', '_lt'):
@@ -565,6 +568,7 @@ def measure(run_dir, fault=None):
         if r.get('requests_observed'):
             obs_t[r['node']].append(r['t'])
         trig_w[win(r['_lt'])] += r.get('triggers', 0)
+        req_w[win(r['_lt'])] += r.get('requests_sent', 0) + r.get('inline_requests_sent', 0)
     frames = len(p2pcd_frames) + (1 if fault == 'p2p_frames' else 0)
     onair = rep.get('p2pcd_responses_on_air', 0)
     out['oa.p2p.responses_diff'] = abs(frames - sums['responses_sent']) + abs(frames - onair)
@@ -593,23 +597,38 @@ def measure(run_dir, fault=None):
         fb += 1
     out['oa.p2p.foreign_verified_before_learn'] = fb
     out['oa.p2p.foreign_verified_after_learn'] = fa
+    # `p2pcd_requests` (since 2026-10-25, audit O-1): the learning requests the P2PCD
+    # entities sent, out-of-band or inline, recounted from node.p2pcd per window. A run
+    # with no node.p2pcd record has no sample; every window after the first has one.
     bad = []
     trig_bad = 0
-    for s in samples('p2pcd_requests'):
-        mine_v = miss_w[s['t']] / (WINDOW / NS) + (1 if fault == 'trig' else 0)
+    first_p2pcd = min((win(r['_lt']) for r in p2pcd_rows), default=None)
+    req_samples = samples('p2pcd_requests')
+    for s in req_samples:
+        mine_v = req_w[s['t']] / (WINDOW / NS) + (1 if fault == 'trig' else 0)
         if abs(s['value']['point'] - mine_v) > 1e-3:
             bad.append((s['t'] // NS, s['value']['point'], mine_v, trig_w[s['t']] / (WINDOW / NS)))
         trig_bad += abs(s['value']['point'] - trig_w[s['t']] / (WINDOW / NS)) > 1e-3
+    have = {s['t'] for s in req_samples}
+    missing = sorted(w for w in req_w if first_p2pcd is not None and w not in have and req_w[w])
+    bad.extend(('missing', w // NS) for w in missing)
     out['oa.mi.p2pcd_requests_vs_p2pcd_triggers_bad_windows'] = trig_bad
-    # The metric against the per-node telemetry counter it sums (node.telemetry
-    # p2pcd_requests, by record window), and that counter's run total against the
-    # independent digest-miss recount.
-    out['oa.mi.p2pcd_requests_vs_telemetry_bad_windows'] = sum(
-        abs(s['value']['point'] - tel_w[s['t']] / (WINDOW / NS)) > 1e-3 for s in samples('p2pcd_requests'))
-    out['oa.p2p.digest_miss_recount'] = sum(miss_w.values())
-    out['oa.p2p.digest_miss_telemetry'] = sum(tel_w.values())
+    out['oa.p2p.requests_sent'] = sum(req_w.values())
     out['oa.mi.p2pcd_requests_bad_windows'] = len(bad)
     detail['p2pcd_requests'] = bad[:3]
+    # `digest_misses` (the old `p2pcd_requests`): against the per-node telemetry counter
+    # it sums (by record window), and against the independent digest-miss recount.
+    dbad = []
+    for s in samples('digest_misses'):
+        mine_v = miss_w[s['t']] / (WINDOW / NS) + (1 if fault == 'miss' else 0)
+        if abs(s['value']['point'] - mine_v) > 1e-3:
+            dbad.append((s['t'] // NS, s['value']['point'], mine_v))
+    out['oa.mi.digest_misses_vs_telemetry_bad_windows'] = sum(
+        abs(s['value']['point'] - tel_w[s['t']] / (WINDOW / NS)) > 1e-3 for s in samples('digest_misses'))
+    out['oa.p2p.digest_miss_recount'] = sum(miss_w.values())
+    out['oa.p2p.digest_miss_telemetry'] = sum(tel_w.values())
+    out['oa.mi.digest_misses_bad_windows'] = len(dbad)
+    detail['digest_misses'] = dbad[:3]
 
     # ------------------------------------------------------------ determinism
     if fault in (None, 'digest'):
@@ -639,6 +658,7 @@ FAULTS = {
     'oa.mi.pseudonym_change_rate_bad_windows': 'rate', 'oa.mi.linkability_bad_windows': 'linkability',
     'oa.p2p.responses_diff': 'p2p_frames', 'oa.p2p.response_after_request_max_ms': 'backoff',
     'oa.p2p.foreign_verified_before_learn': 'foreign', 'oa.mi.p2pcd_requests_bad_windows': 'trig',
+    'oa.mi.digest_misses_vs_telemetry_bad_windows': 'miss_tel',
     'oa.tx.first_under_pseudonym_digest': 'first_digest', 'oa.tx.cert_gap_p50_ms': 'gap',
     'oa.rx.verified_without_cert': 'nocert', 'oa.rx.unverified_with_cert': 'cached',
     'oa.rx.refused': 'refused', 'oa.rx.stamp_order_violations': 'stamps',

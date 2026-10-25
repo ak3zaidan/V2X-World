@@ -22,6 +22,7 @@
     "det_fpr": "lower-better",
     "det_precision": "higher-better",
     "det_recall": "higher-better",
+    "digest_misses": "neutral",
     "drac": "lower-better",
     "e2e_latency": "lower-better",
     "ev_soc_min": "higher-better",

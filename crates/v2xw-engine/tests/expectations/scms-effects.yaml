@@ -443,7 +443,7 @@ rows:
   base: L0b
   variant: AALL
   area: metrics
-  measure: p2pcd_requests
+  measure: digest_misses
   expect: down
   source: no digest-signed frame from an unknown signer, so nothing to ask for (IEEE 1609.2 8.4)
   measured: 26.44 -> 0
@@ -655,7 +655,7 @@ rows:
   base: L0b
   variant: P60
   area: metrics
-  measure: p2pcd_requests
+  measure: digest_misses
   expect: up
   source: each change makes the sender unknown to its neighbours (IEEE 1609.2 8.4)
   measured: 26.44 -> 31.95

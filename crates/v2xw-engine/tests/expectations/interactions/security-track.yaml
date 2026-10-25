@@ -99,7 +99,7 @@
   base_set: {}
   factor: {security.pseudonym_change.period_s: 5.0}
   condition: {nodes.peer_cert_cache: 16}
-  metric: metric.p2pcd_requests
+  metric: metric.digest_misses
   expect: holds
   direction: up
   source: "after each change the new pseudonym is unknown to every neighbour until its next full certificate, so digest-signed messages from it trigger P2PCD (IEEE 1609.2-2016 8.4)"

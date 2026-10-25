@@ -1428,3 +1428,153 @@ fn a_vru_handset_checks_each_learned_certificate_once_in_the_partially_hybrid_mo
         "the certificate check was not charged to the frame's verification"
     );
 }
+
+/// audit-db1-3 O-3: a relayed misbehaviour report (PSID 0x26) is for the roadside unit
+/// that forwards it. No application on a vehicle registered that PSID, so WSMP discards
+/// the frame (IEEE 1609.3-2020) before the security services see it: it is reported
+/// `PsidNotRegistered`, nothing is verified or delivered, and its certificate is not
+/// learned. Fault that turns it red: the `MsgType::Mbr` discard in `ObuRuntime::receive`
+/// removed (the report is then verified at first-sight cost and delivered `Verified`).
+#[test]
+fn a_vehicle_discards_an_overheard_relayed_report_unverified() {
+    use v2xw_node::generate::ServiceSet;
+    use v2xw_node::policy::VerifyAll;
+    use v2xw_node::runtime::{NodeConfig, ObuRuntime, RxDisposition};
+    let pki = pki();
+    let other = ScmsPki::new(8, t0() - 31_556_952).unwrap();
+    let (key, _, roots, cas) = sized_fallback_cases(&pki, &other);
+    let config = NodeConfig {
+        services: ServiceSet::SAE,
+        wall: wall(),
+        ..NodeConfig::default()
+    };
+    let mut rx = ObuRuntime::new(
+        v2xw_core::ids::NodeId::new(2),
+        v2xw_node::profiles::get(v2xw_node::profiles::REFERENCE_OBU)
+            .expect("the reference profile")
+            .clone(),
+        Box::new(VerifyAll::new()),
+        config,
+        0,
+    );
+    rx.stores_mut().crl.set_period(0);
+    rx.set_belief(fix());
+    rx.security_mut().install_trust(&roots, &cas);
+    let reg = RngRegistry::new(62);
+    let (mut delivered, mut dispositions) = (Vec::new(), Vec::new());
+    for k in 0..100u64 {
+        let mut ctx = NodeRuntimeCtx::new(10 * NS_PER_S + k * 10_000_000, &reg);
+        let inbox = if k == 0 {
+            vec![sized_frame(&key, MsgType::Mbr)]
+        } else {
+            Vec::new()
+        };
+        let out = rx.step(&mut ctx, inbox, 0.0);
+        delivered.extend(out.delivered.into_iter().map(|m| m.msg_type));
+        dispositions.extend(out.rx_reports.into_iter().map(|r| r.disposition));
+    }
+    assert_eq!(dispositions, vec![RxDisposition::PsidNotRegistered]);
+    assert!(delivered.is_empty(), "delivered {delivered:?}");
+    let id8 = cert::cert_id8(key.certificate()).expect("digest");
+    assert!(
+        !rx.stores().peers.holds(&id8),
+        "the discarded frame's certificate was learned"
+    );
+}
+
+/// audit-db1-3 O-2: the SDS's certificate cache is not per application. A roadside unit
+/// that verified a relayed report (a sized frame with the signer's certificate attached)
+/// resolves the same pseudonym's next digest-signed BSM against it. Before the fix the
+/// cache marked the digest held with no certificate behind it, and the BSM was
+/// unverifiable. Fault that turns it red: `learn_attached` replaced by the digest-only
+/// `learn` in `RsuRuntime::learn_or_request`.
+#[test]
+fn a_certificate_learned_from_a_relayed_report_resolves_the_senders_digest_bsm() {
+    use v2xw_node::rsu::{Backhaul, RsuConfig, RsuRole, RsuRoles, RsuRuntime};
+    use v2xw_node::runtime::RxFrame;
+    use v2xw_node::stores::VerificationState;
+    let pki = pki();
+    let key = pseudonym(&pki, &pki.aca, 21, |_| {});
+    let cas: Vec<Arc<Certificate>> = pki.all().iter().map(|a| Arc::new(a.cert.clone())).collect();
+    let profile = v2xw_node::profiles::get(v2xw_node::profiles::DEFAULT_RSU)
+        .expect("the default roadside profile")
+        .clone();
+    let mut cfg = RsuConfig::with_roles(RsuRoles::NONE.with(RsuRole::ReportForwarding));
+    cfg.wall = wall();
+    cfg.crypto_mode = CryptoMode::Real;
+    let mut u = RsuRuntime::new(
+        v2xw_core::ids::NodeId::new(50),
+        profile,
+        cfg,
+        Backhaul::fibre(),
+        0,
+    );
+    u.stores_mut().crl.set_period(0);
+    u.security_mut()
+        .install_trust(&[Arc::new(pki.root.cert.clone())], &cas);
+    let reg = RngRegistry::new(56);
+    let mut ctx = NodeRuntimeCtx::new(11 * NS_PER_S, &reg);
+    let mut mbr = sized_frame(&key, MsgType::Mbr);
+    mbr.claimed_generation_time = 11 * NS_PER_S;
+    let first = u.step(&mut ctx, vec![mbr]);
+    assert_eq!(
+        first.delivered.first().map(|m| m.verification),
+        Some(VerificationState::Verified),
+        "the relayed report verifies"
+    );
+    // The same pseudonym's next BSM, signed by digest.
+    let spdu = {
+        let reg = RngRegistry::new(3);
+        let mut c = NodeRuntimeCtx::new(12 * NS_PER_S, &reg);
+        let mut tx = NodeSecurity::new(wall(), CryptoMode::Real, PSID_SAFETY);
+        tx.install(v2xw_core::ids::NodeId::new(1), 0, 0, &key)
+            .expect("installs");
+        assert!(tx.set_active(0, 0));
+        tx.sign(
+            &mut c,
+            MsgType::Bsm,
+            b"bsm-payload",
+            SignerIdChoice::Digest,
+            None,
+        )
+        .expect("signs")
+        .0
+        .spdu
+    };
+    let digest_bsm = RxFrame {
+        signer: Some(cert::cert_id8(key.certificate()).expect("digest")),
+        msg_type: MsgType::Bsm,
+        bytes: u32::try_from(spdu.len()).expect("len"),
+        claimed_pos: Some(v2xw_core::geom::Vec3::new(20.0, 0.0, 1.5)),
+        claimed_speed_mps: 10.0,
+        claimed_heading_rad: 0.0,
+        claimed_generation_time: 12 * NS_PER_S,
+        full_certificate: false,
+        signature_valid: true,
+        spdu: Some(spdu),
+        signer_certificate: None,
+        bsm: Default::default(),
+    };
+    let mut delivered = Vec::new();
+    let mut inbox = vec![digest_bsm];
+    for k in 0..100u64 {
+        let mut ctx = NodeRuntimeCtx::new(12 * NS_PER_S + 50_000_000 + k * 10_000_000, &reg);
+        delivered.extend(u.step(&mut ctx, core::mem::take(&mut inbox)).delivered);
+    }
+    println!(
+        "refused {:?} delivered {:?}",
+        u.security().trust().stats.refused,
+        delivered
+            .iter()
+            .map(|m| (m.msg_type, m.verification))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        delivered
+            .iter()
+            .find(|m| m.msg_type == MsgType::Bsm)
+            .map(|m| m.verification),
+        Some(VerificationState::Verified),
+        "the digest-signed BSM resolves against the report's certificate"
+    );
+}

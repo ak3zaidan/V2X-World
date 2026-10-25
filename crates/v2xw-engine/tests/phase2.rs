@@ -175,6 +175,48 @@ fn a_report_becomes_a_vehicle_that_cannot_sign() {
     assert!(p.revocation_latency_ns > 0);
 }
 
+/// CV.attack-onset (audit-sim-metrics §3 item 5): the run report's onset is the first
+/// action that changed bytes on the air, as `time_to_detect`'s, not the 07-threats label
+/// rule's first falsified claim, which can come hours later; and `onset_to_detection_ns`
+/// runs to the earliest report at or after it, so it never saturates to 0. Faults that
+/// turn it red: `onset_ns` read from `first_falsified`, or the latency taken from the
+/// first report whatever its time.
+#[test]
+fn the_run_report_onset_is_the_first_change_on_the_air() {
+    let (report, _) = path_run();
+    let p = &report.phase2;
+    let mut want = Vec::new();
+    for o in &p.attacker_outcomes {
+        println!(
+            "attacker {} onset {:?} falsified {:?} reported {:?} detected {:?} decided {:?}",
+            o.node,
+            o.onset_ns,
+            o.first_falsified_ns,
+            o.first_reported_ns,
+            o.first_detected_ns,
+            o.decided_ns
+        );
+        if let (Some(on), Some(f)) = (o.onset_ns, o.first_falsified_ns) {
+            assert!(
+                on <= f,
+                "attacker {}: onset {on} after its first lie {f}",
+                o.node
+            );
+        }
+        if let (Some(on), Some(d)) = (o.onset_ns, o.first_detected_ns) {
+            assert!(d >= on, "attacker {}: detected before its onset", o.node);
+            if o.decided_ns.is_some() {
+                want.push(d - on);
+            }
+        }
+    }
+    let mut got = p.onset_to_detection_ns.clone();
+    got.sort_unstable();
+    want.sort_unstable();
+    assert!(!got.is_empty(), "no decided attacker was measured");
+    assert_eq!(got, want, "onset_to_detection_ns is not detected - onset");
+}
+
 /// Found by the SCMS effects round (docs/design/scms-real/testing/effects.md, rows
 /// base-concurrent-cases and att-spread): the backend opened one case per provider at a
 /// time, so under the pilots' manual review the n-th attacker decided in one shuffle

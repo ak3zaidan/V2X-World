@@ -53,7 +53,7 @@ pub struct NodeTelemetry {
     pub crl_entries: u32,
     pub outbox_msgs: u32,
     pub peer_cache_entries: u32,
-    pub p2pcd_requests: u32,
+    pub digest_misses: u32,
     pub full_cert_msgs: u32,
     pub msgs_in_per_s: f32,
     pub msgs_out_per_s: f32,
@@ -138,7 +138,7 @@ impl NodeTelemetry {
             crl_entries: U32_NONE,
             outbox_msgs: U32_NONE,
             peer_cache_entries: U32_NONE,
-            p2pcd_requests: U32_NONE,
+            digest_misses: U32_NONE,
             full_cert_msgs: U32_NONE,
             msgs_in_per_s: f32::NAN,
             msgs_out_per_s: f32::NAN,
@@ -231,7 +231,7 @@ impl NodeTelemetry {
         put_u32(out, at + 88, self.crl_entries);
         put_u32(out, at + 92, self.outbox_msgs);
         put_u32(out, at + 96, self.peer_cache_entries);
-        put_u32(out, at + 100, self.p2pcd_requests);
+        put_u32(out, at + 100, self.digest_misses);
         put_u32(out, at + 104, self.full_cert_msgs);
         put_f32(out, at + 108, self.msgs_in_per_s);
         put_f32(out, at + 112, self.msgs_out_per_s);
@@ -293,7 +293,7 @@ impl NodeTelemetry {
             crl_entries: get_u32(body, at + 88, WHAT)?,
             outbox_msgs: get_u32(body, at + 92, WHAT)?,
             peer_cache_entries: get_u32(body, at + 96, WHAT)?,
-            p2pcd_requests: get_u32(body, at + 100, WHAT)?,
+            digest_misses: get_u32(body, at + 100, WHAT)?,
             full_cert_msgs: get_u32(body, at + 104, WHAT)?,
             msgs_in_per_s: get_f32(body, at + 108, WHAT)?,
             msgs_out_per_s: get_f32(body, at + 112, WHAT)?,

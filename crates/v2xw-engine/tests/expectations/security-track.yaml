@@ -25,15 +25,15 @@
 # ---- Certificate attach policy and P2PCD ----
 - {setting: security.signer_id_policy.full_cert_every_ms, change: low, metric: metric.full_cert_share, expect: up,
    source: "a certificate every 500 ms instead of 1000 ms doubles the share of frames carrying one (SAE J2945/1 6.1.2)"}
-- {setting: security.signer_id_policy.full_cert_every_ms, change: high, metric: metric.p2pcd_requests, expect: up,
+- {setting: security.signer_id_policy.full_cert_every_ms, change: high, metric: metric.digest_misses, expect: up,
    source: "certificates further apart leave a new neighbour without one longer, so it asks for it (IEEE 1609.2-2016 8.4 P2PCD)"}
 - {setting: security.signer_id_policy.digest_otherwise, change: false, metric: metric.full_cert_share, expect: up,
    source: "every frame carries a certificate (IEEE 1609.2-2016 6.4.8)"}
-- {setting: security.signer_id_policy.digest_otherwise, change: false, metric: metric.p2pcd_requests, expect: down,
+- {setting: security.signer_id_policy.digest_otherwise, change: false, metric: metric.digest_misses, expect: down,
    source: "no digest-signed frame from an unknown signer, so nothing to ask for (IEEE 1609.2-2016 8.4)"}
 - {setting: security.signer_id_policy.on_new_neighbour, change: true, metric: metric.full_cert_share, expect: up, min_change: 0.002,
    source: "an extra certificate after a new neighbour appears (ETSI TS 103 097 V1.3.1 7.1.1)"}
-- {setting: security.pseudonym_change.period_s, change: low, metric: metric.p2pcd_requests, expect: up,
+- {setting: security.pseudonym_change.period_s, change: low, metric: metric.digest_misses, expect: up,
    source: "each change makes the sender unknown to every neighbour (IEEE 1609.2-2016 8.4)"}
 - {setting: security.pseudonym_change.period_s, change: low, metric: report.phase2.pseudonym_changes, expect: up,
    source: "a 1 s period changes thirty times in 30 s where 300 s changes none (ETSI TR 103 415 4.2)"}
@@ -56,9 +56,9 @@
 # software in 244 us (openssl speed, R5 B.2). An HSM buys key protection, not speed.
 - {setting: nodes.default_obu, change: obu/generic-automotive-soc-no-hsm, metric: stage_sign_ms, expect: down,
    source: "Craton2 HSM P-256 sign latency <9 ms, an upper bound (Unex/Autotalks brief, R7 A4) against 244 us in software on a Cortex-A72 (R5 B.2)"}
-- {setting: nodes.peer_cert_cache, change: low, metric: metric.p2pcd_requests, expect: up,
+- {setting: nodes.peer_cert_cache, change: low, metric: metric.digest_misses, expect: up,
    source: "a smaller cache evicts known signers, whose next digest frame needs P2PCD (IEEE 1609.2-2016 5.1.3, 8.4)"}
-- {setting: nodes.peer_cert_cache, change: high, metric: metric.p2pcd_requests, expect: same, min_change: 0.0,
+- {setting: nodes.peer_cert_cache, change: high, metric: metric.digest_misses, expect: same, min_change: 0.0,
    source: "40 vehicles never fill a 128-entry cache, so a bigger one changes nothing"}
 - {setting: nodes.verify_queue_depth, change: high, metric: metric.unverified_ratio, expect: same, min_change: 0.0,
    source: "at 40 vehicles the verifier keeps up (queue depth about 0.05), so a deeper queue changes nothing"}

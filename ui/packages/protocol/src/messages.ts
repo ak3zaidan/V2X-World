@@ -1123,7 +1123,8 @@ export const NODE_TELEMETRY_OFFSETS = {
   /** `u32` @88 */ crlEntries: 88,
   /** `u32` @92 */ outboxMsgs: 92,
   /** `u32` @96 */ peerCacheEntries: 96,
-  /** `u32` @100 */ p2pcdRequests: 100,
+  /** `u32` @100: digest-signed messages from uncached signers (`digest_misses`; the name is the
+   * field's before 2026-10-25, kept as the wire alias). Not P2PCD requests. */ p2pcdRequests: 100,
   /** `u32` @104 */ fullCertMsgs: 104,
   /** `f32` @108 */ msgsInPerS: 108,
   /** `f32` @112 */ msgsOutPerS: 112,

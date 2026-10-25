@@ -300,7 +300,7 @@ fn the_certificate_attach_cadence_moves_overhead() {
     assert!(all.get("security_overhead") > slow.get("security_overhead"));
     // Fewer certificates on the air means more digests whose certificate a receiver has
     // not cached, and so more peer-to-peer certificate requests (IEEE 1609.2 clause 8).
-    let p2pcd = |m: &Measured| events(m, "p2pcd_requests");
+    let p2pcd = |m: &Measured| events(m, "digest_misses");
     println!(
         "ROW p2pcd: every msg {}, 1 Hz {}, 5 s {}",
         p2pcd(all),
@@ -459,13 +459,13 @@ fn the_pseudonym_strategy_moves_linkability_and_p2pcd() {
             m.report.phase2.privacy_links_claimed,
             linkability(m),
             m.last.get("linkability").copied().unwrap_or(f64::NAN),
-            events(m, "p2pcd_requests"),
+            events(m, "digest_misses"),
             node_lost(m, "unknown-signer"),
             m.report.frames_transmitted
         );
     }
     assert!(t.report.phase2.pseudonym_changes > b.report.phase2.pseudonym_changes);
-    assert!(t.get("p2pcd_requests") > b.get("p2pcd_requests"));
+    assert!(t.get("digest_misses") > b.get("digest_misses"));
     assert!(
         t.report.phase2.privacy_links_correct > 0,
         "the observer links some changes"
@@ -1017,11 +1017,11 @@ fn the_peer_cert_cache_moves_p2pcd_and_unknown_signers() {
     for (name, m) in [("cache 128", &b), ("cache 4", &s)] {
         println!(
             "ROW {name}: p2pcd {} unknown {}",
-            events(m, "p2pcd_requests"),
+            events(m, "digest_misses"),
             node_lost(m, "unknown-signer")
         );
     }
-    assert!(s.get("p2pcd_requests") > b.get("p2pcd_requests"));
+    assert!(s.get("digest_misses") > b.get("digest_misses"));
     assert!(node_lost(&s, "unknown-signer") > node_lost(&b, "unknown-signer"));
 }
 

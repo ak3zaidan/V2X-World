@@ -90,6 +90,7 @@ def load(run_dir):
     cred = {}
     subj_actor, onset, expo = {}, {}, {}
     txp = {}                       # (node, msg) -> pseudonym, BSMs
+    report_sent = {}               # report id -> first relayed frame on the air (node.tx)
     tx_by_node = collections.defaultdict(list)   # node -> [(t, pseudonym)] BSMs
     tx_types = collections.Counter()
     tx_nodes = set()
@@ -111,6 +112,9 @@ def load(run_dir):
                     tx_by_node[q['node']].append((q['t'], q.get('pseudonym')))
                 else:
                     txp[(q['node'], q['msg'])] = q.get('pseudonym')
+                    rid = q.get('report_id')
+                    if rid:
+                        report_sent[rid] = min(report_sent.get(rid, q['t']), q['t'])
             elif t == 'pki.report_fate':
                 fates.append(json.loads(m.data))
             elif t == 'pki.flow':
@@ -157,7 +161,7 @@ def load(run_dir):
                 expo[q['node']] = q
     D.update(fates=fates, flow=flow, case=case, rev=rev, mad=mad, mar=mar, marec=marec,
              sec=sec, cred=cred, subj_actor=subj_actor, onset=onset, expo=expo, txp=txp,
-             tx_by_node=dict(tx_by_node), tx_types=tx_types)
+             tx_by_node=dict(tx_by_node), tx_types=tx_types, report_sent=report_sent)
     D['rsus'] = sorted(n for n in tx_nodes if n not in cred and n not in expo)
     _static(D)
     _rx_pass(D, path)
@@ -474,19 +478,36 @@ def m_store_weight(D):
 
 
 def m_store_order(D):
-    bad = exercised = 0
-    pend = collections.defaultdict(dict)
+    # The order a device *sends* its reports in: a relayed report is sent when its first
+    # frame is on the air (node.tx report_id, since 2026-10-25) and confirmed later, so
+    # its confirmation order is not its send order (282 apparent violations on AUD); an
+    # upload over the modem is sent at its `uploaded` fate. At each send, no report still
+    # pending (stored, unsent, not ended) may be newer than the one sent.
+    sent_at = D.get('report_sent', {})
+    life = collections.defaultdict(dict)   # reporter -> rid -> [stored, sent, ended]
     for f in D['fates']:
-        r = f.get('reporter')
+        r, rid = f.get('reporter'), f['report_id']
         if f['fate'] == 'stored':
-            pend[r][f['report_id']] = f['t']
-        elif f['fate'] in TERMINAL and f['report_id'] in pend[r]:
-            ts = pend[r].pop(f['report_id'])
-            if f['fate'] == 'uploaded' and pend[r]:
+            life[r][rid] = [f['t'], None, None]
+        elif f['fate'] in TERMINAL and rid in life[r] and life[r][rid][2] is None:
+            e = life[r][rid]
+            e[2] = f['t']
+            if f['fate'] == 'uploaded':
+                e[1] = min(sent_at.get(rid, f['t']), f['t'])
+    bad = exercised = relayed = 0
+    for reps in life.values():
+        for rid, (st, s, _end) in reps.items():
+            if s is None:
+                continue
+            relayed += rid in sent_at
+            pending = [st2 for r2, (st2, s2, e2) in reps.items() if r2 != rid and st2 <= s
+                       and (s2 is None or s2 > s) and (e2 is None or e2 > s)]
+            if pending:
                 exercised += 1
-                if max(pend[r].values()) > ts:
+                if max(pending) > st:
                     bad += 1
-    return bad, f'{bad} of {exercised} uploads made with other reports pending went out of order'
+    return bad, (f'{bad} of {exercised} sends made with other reports pending went out of order '
+                 f'({relayed} relayed, sent at their first frame on the air)')
 
 
 def m_store_engine(D):

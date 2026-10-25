@@ -253,8 +253,9 @@ pub struct TelemetryInputs {
     pub outbox_msgs: u32,
     /// Peer certificates cached.
     pub peer_cache_entries: u32,
-    /// P2PCD requests issued this window.
-    pub p2pcd_requests: u32,
+    /// Digest-signed messages received this window whose signer certificate was not
+    /// cached. Named `p2pcd_requests` before 2026-10-25; not a P2PCD request.
+    pub digest_misses: u32,
     /// Horizontal 1-sigma from the GNSS model's own noise parameters.
     pub gnss_sigma_m: f32,
     /// Horizontal dilution of precision, or `NaN` when not modelled.
@@ -319,7 +320,7 @@ impl TelemetryWindow {
         r.crl_entries = i.crl_entries;
         r.outbox_msgs = i.outbox_msgs;
         r.peer_cache_entries = i.peer_cache_entries;
-        r.p2pcd_requests = i.p2pcd_requests;
+        r.digest_misses = i.digest_misses;
         r.full_cert_msgs = self.full_cert_msgs;
 
         r.msgs_in_per_s = self.rate(self.msgs_in, now);

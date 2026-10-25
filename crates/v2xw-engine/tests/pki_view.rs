@@ -181,6 +181,50 @@ fn the_state_names_both_providers_and_every_component() {
     }
 }
 
+/// audit-sim-metrics §3 item 4: `pki.state` and `pki.knowledge` were written at every
+/// backend view whether or not anything had changed (591 MB of JSON on Q, most of a 453 s
+/// fast-forward). A reader takes the newest snapshot at or before an instant, so a repeat
+/// adds only its time: a snapshot equal to the last one written (its time aside) is not
+/// written again until `VIEW_KEYFRAME_S` has passed. Fault that turns it red: write every
+/// snapshot again (`repeats` always false in `Phase2::publish_pki`).
+#[test]
+fn an_unchanged_snapshot_is_not_written_again_before_the_keyframe() {
+    let keyframe = v2xw_engine::phase2::VIEW_KEYFRAME_S * 1_000_000_000;
+    let strip = |v: &Value| {
+        let mut v = v.clone();
+        if let Some(m) = v.as_object_mut() {
+            for k in ["t", "time32", "certificates"] {
+                m.remove(k);
+            }
+        }
+        v
+    };
+    let mut repeats = 0;
+    for channel in ["pki.state", "pki.knowledge"] {
+        let mut last: BTreeMap<String, (u64, Value)> = BTreeMap::new();
+        for (c, t, v) in recording() {
+            if c != channel {
+                continue;
+            }
+            let key = format!("{}/{}", v["entity"], v["role"]);
+            let body = strip(v);
+            if let Some((t0, b0)) = last.get(&key)
+                && *b0 == body
+                && t - t0 < keyframe
+                && v["certificates"].as_object().is_none_or(|m| m.is_empty())
+            {
+                repeats += 1;
+            }
+            last.insert(key, (*t, body));
+        }
+    }
+    assert!(!of("pki.state").is_empty(), "no state was written");
+    assert_eq!(
+        repeats, 0,
+        "{repeats} snapshots repeat the last one written"
+    );
+}
+
 #[test]
 fn every_spdu_is_recorded_once_with_bytes_and_recipients_open_theirs() {
     let flows: Vec<PkiFlow> = of("pki.flow")

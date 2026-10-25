@@ -255,6 +255,74 @@ fn the_change_period_reaches_the_run_and_the_observer_measures_it() {
     );
 }
 
+/// The privacy observer and the pseudonym clock read what is on the air.
+///
+/// * audit-sim-metrics §3 item 1: the passive observer read a frame when it was built, at
+///   its `ready` instant, so a `privacy.link` claim was stamped after the step that logged
+///   it (219 of 643 on S, up to 11.7 ms) and a frame the MAC dropped was still "heard".
+///   It reads a frame when it goes on the air. Fault: observe in `hand_down_app` again.
+/// * audit-db1-3 O-4: a vehicle's first pseudonym aged from the run's start, so its first
+///   change under the time rule could come before its first frame (46 of 152 in B). It
+///   ages from the first fix. Fault: `rotate_in_use` replaced by `rotate` in the runtime.
+#[test]
+fn link_claims_and_pseudonym_changes_follow_the_frames_on_the_air() {
+    let mut s = grid(45.0, 300.0);
+    s.security.pseudonym_change.period_s = Some(10.0);
+    let (report, rec) = run(s);
+    let late: Vec<(u64, u64)> = rec
+        .records()
+        .iter()
+        .filter(|(_, r)| r.channel == "privacy.link")
+        .map(|(at, r)| {
+            let v: serde_json::Value = serde_json::from_slice(&r.json).expect("json");
+            (*at, v["t"].as_u64().expect("t"))
+        })
+        .filter(|(at, t)| t > at)
+        .collect();
+    assert!(
+        report.phase2.privacy_link_decisions > 0,
+        "the observer decided nothing, so this proves nothing"
+    );
+    assert!(
+        late.is_empty(),
+        "{} privacy.link claims stamped after the step that logged them: {:?}",
+        late.len(),
+        &late[..late.len().min(3)]
+    );
+    // Every change the rule makes comes after the vehicle's first frame on the air (an
+    // expired or revoked credential is replaced whenever it happens).
+    let mut first_tx: BTreeMap<u64, u64> = BTreeMap::new();
+    for r in records(&rec, "node.tx") {
+        let (n, t) = (
+            r["node"].as_u64().expect("node"),
+            r["t"].as_u64().expect("t"),
+        );
+        let e = first_tx.entry(n).or_insert(t);
+        *e = (*e).min(t);
+    }
+    let changes: Vec<serde_json::Value> = records(&rec, "sec.pseudonym")
+        .into_iter()
+        .filter(|c| c["reason"] == "age" || c["reason"] == "distance")
+        .collect();
+    let early: Vec<&serde_json::Value> = changes
+        .iter()
+        .filter(|c| {
+            let n = c["node"].as_u64().expect("node");
+            first_tx
+                .get(&n)
+                .is_none_or(|&t| c["t"].as_u64().expect("t") <= t)
+        })
+        .collect();
+    assert!(changes.len() > 5, "only {} changes", changes.len());
+    assert!(
+        early.is_empty(),
+        "{} of {} changes before the vehicle's first frame: {:?}",
+        early.len(),
+        changes.len(),
+        early.first()
+    );
+}
+
 /// Honest traffic is never revoked at the default thresholds, and it is the authority's
 /// persistence gate that prevents it: with the gate opened to a single report, the same
 /// honest fleet's false positives (at the legacy detector operating point, which files
@@ -804,6 +872,40 @@ fn a_vehicle_without_a_modem_relays_through_a_roadside_unit() {
             .iter()
             .any(|r| r["msg_type"] == "mbr"),
         "a relayed report is a frame on the air"
+    );
+    // AU.STORE.order (audit-mbpipe): every relayed report frame names its report, so
+    // transmission order joins to the store's and the RA's. Fault: drop `with_report_id`
+    // in `Engine::emit_tx_record`.
+    let mbr_tx: Vec<serde_json::Value> = records(&rec, "node.tx")
+        .into_iter()
+        .filter(|r| r["msg_type"] == "mbr")
+        .collect();
+    assert!(
+        mbr_tx.iter().all(|r| r["report_id"].is_string()),
+        "a relayed report frame without its report id"
+    );
+    assert!(
+        records(&rec, "node.tx")
+            .iter()
+            .filter(|r| r["msg_type"] != "mbr")
+            .all(|r| r.get("report_id").is_none()),
+        "a frame other than a relayed report names one"
+    );
+    // audit-mbpipe `reports_sent` 15 off: a retransmission of a report a unit had already
+    // confirmed was forwarded again, so the RA counted one more arrival than uploads. Each
+    // relayed upload reaches the proxy once. Fault: drop the `relay_pending` check in
+    // `Engine::on_app_message`.
+    println!(
+        "relay: {} duplicates discarded, {} received, {} relayed, {} cellular",
+        p.reports_relay_duplicates,
+        p.reports_received,
+        p.reports_uploaded_relay,
+        p.reports_uploaded_cellular
+    );
+    assert_eq!(
+        p.reports_received,
+        p.reports_uploaded_relay + p.reports_uploaded_cellular,
+        "a relayed upload reached the proxy more than once"
     );
 
     let (cut, _) = run(base(Some("backhaul/none")));

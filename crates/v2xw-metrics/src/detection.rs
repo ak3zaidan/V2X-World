@@ -333,10 +333,13 @@ pub struct DetectionProvider {
     subject_actor: BTreeMap<String, ActorId>,
     /// Actors that took at least one attack action that changed bytes on the air.
     attackers: BTreeSet<ActorId>,
-    /// The first such action per actor: the attack onset.
+    /// The earliest such action per actor: the attack onset.
     onset: BTreeMap<ActorId, SimTime>,
-    /// The first report about each subject that reached the authority.
-    first_report: BTreeMap<String, SimTime>,
+    /// When each report about a subject reached the authority. A set, not the first one
+    /// emitted: the engine writes a step's `ma.report` rows out of time order, so the
+    /// first emitted was up to 27 ms after the earliest (audit-mbpipe AU.MET.detection),
+    /// and the latency reads the earliest at or after the onset.
+    report_times: BTreeMap<String, BTreeSet<SimTime>>,
     /// Reports per subject, for the per-report precision.
     reports: BTreeMap<String, u64>,
     /// The authority's decision per subject, and when.
@@ -360,7 +363,7 @@ impl DetectionProvider {
             subject_actor: BTreeMap::new(),
             attackers: BTreeSet::new(),
             onset: BTreeMap::new(),
-            first_report: BTreeMap::new(),
+            report_times: BTreeMap::new(),
             reports: BTreeMap::new(),
             decision: BTreeMap::new(),
             undeclared: BTreeSet::new(),
@@ -448,7 +451,7 @@ impl DetectionProvider {
         for (subject, actor) in &self.subject_actor {
             let truth = self.attackers.contains(actor);
             let predicted = match level {
-                DetectionLevel::Report => self.first_report.contains_key(subject),
+                DetectionLevel::Report => self.report_times.contains_key(subject),
                 DetectionLevel::Vehicle => self
                     .decision
                     .get(subject)
@@ -719,11 +722,15 @@ impl DetectionProvider {
             return;
         }
         self.attackers.insert(v.actor);
-        self.onset.entry(v.actor).or_insert(v.t);
+        let onset = self.onset.entry(v.actor).or_insert(v.t);
+        *onset = (*onset).min(v.t);
     }
 
     fn on_report(&mut self, v: &MaReportView) {
-        self.first_report.entry(v.subject.clone()).or_insert(v.t);
+        self.report_times
+            .entry(v.subject.clone())
+            .or_default()
+            .insert(v.t);
         *self.reports.entry(v.subject.clone()).or_insert(0) += 1;
         if !self.subject_actor.contains_key(&v.subject) {
             self.undeclared.insert(v.subject.clone());
@@ -731,9 +738,14 @@ impl DetectionProvider {
     }
 
     fn on_decision(&mut self, v: &MaDecisionView) {
-        self.decision
+        // The earliest decision about the subject, whatever order the rows came in.
+        let e = self
+            .decision
             .entry(v.subject.clone())
             .or_insert((v.t, v.decision.clone()));
+        if v.t < e.0 {
+            *e = (v.t, v.decision.clone());
+        }
         if !self.subject_actor.contains_key(&v.subject) {
             self.undeclared.insert(v.subject.clone());
         }
@@ -886,8 +898,12 @@ impl MetricProvider for DetectionProvider {
                 continue;
             }
             let e = first.entry(*actor).or_insert((None, None));
-            if let Some(&t) = self.first_report.get(subject)
-                && t >= onset
+            // The earliest report at or after the onset: a report before the attack
+            // began did not detect it.
+            if let Some(&t) = self
+                .report_times
+                .get(subject)
+                .and_then(|ts| ts.range(onset..).next())
             {
                 e.0 = Some(e.0.map_or(t, |x| x.min(t)));
             }
@@ -1668,6 +1684,36 @@ mod tests {
         assert_eq!(sample(&s, "time_to_detect").value.point(), Some(2.5));
         assert_eq!(sample(&s, "time_to_detect").value.n(), 1);
         assert_eq!(sample(&s, "time_to_decision").value.point(), Some(5.0));
+    }
+
+    /// AU.MET.detection (audit-mbpipe): the engine writes one step's `ma.report` rows out
+    /// of time order, and the latency keeps the earliest report, not the first emitted;
+    /// a report before the onset detected nothing and is not the one measured.
+    #[test]
+    fn detection_latency_keeps_the_earliest_report_not_the_first_emitted() {
+        let mut p = DetectionProvider::new().with_min_samples(1);
+        p.declare_subject("a", ActorId::new(1));
+        p.on_event(&rec(
+            "gt.attack.action",
+            json!({"t":1_000_000_000u64,"actor":1,"attacker":"ghost","action":"x"}),
+        ));
+        // Before the onset: not a detection of the attack.
+        p.on_event(&rec(
+            "ma.report",
+            json!({"t":500_000_000u64,"subject":"a","detector":"d1"}),
+        ));
+        // Emitted first, but 27 ms after the earliest.
+        p.on_event(&rec(
+            "ma.report",
+            json!({"t":3_527_000_000u64,"subject":"a","detector":"d1"}),
+        ));
+        p.on_event(&rec(
+            "ma.report",
+            json!({"t":3_500_000_000u64,"subject":"a","detector":"d1"}),
+        ));
+        let s = p.flush(10_000_000_000);
+        assert_eq!(sample(&s, "time_to_detect").value.point(), Some(2.5));
+        assert_eq!(sample(&s, "time_to_detect").value.n(), 1);
     }
 
     #[test]
