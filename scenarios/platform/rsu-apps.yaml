@@ -1,0 +1,54 @@
+# RSU applications: SPaT and MAP rates against CTI 4501 and the scenario's own intervals
+# (docs/validation/platform-2026-10-24.md section 5). Four roadside units at signalised
+# junctions (connected-intersections.yaml), 10 s, no priority requests (SRM/SSM off, so the
+# plan runs fixed-time), the BSM fleet as is. `v2xw sensitivity scenarios/platform/rsu-apps.yaml`.
+# Written before the run; every band is the rate ratio theory gives.
+base: ../connected-intersections.yaml
+set: {time.duration_s: 10.0, metrics: [all], messages.sets: [bsm, spat, map]}
+rows:
+  # ---- the periods the scenario asks for ----
+  - name: SPaT 100 -> 200 ms
+    set: {messages.spat_interval_ms: 200}
+    metric: report.air_by_type.spat.frames
+    expect: down
+    band: [0.48, 0.52]
+    source: "the unit's SPaT timer at 5 Hz instead of CTI 4501's 10 Hz: half the SPaT frames (4 units x 10 s x 5 Hz = 200 against 400)"
+  - name: SPaT 100 -> 150 ms
+    set: {messages.spat_interval_ms: 150}
+    metric: report.air_by_type.spat.frames
+    expect: down
+    band: [0.64, 0.69]
+    source: "6.67 Hz: 100/150 = 0.667 of the 10 Hz frames. A unit's timer runs at its own period; a period off the 100 ms node-step grid must keep its mean rate (a 200 ms rounding would give 0.5)"
+  - name: MAP 1000 -> 500 ms
+    set: {messages.map_interval_ms: 500}
+    metric: report.air_by_type.map.frames
+    expect: up
+    band: [1.9, 2.1]
+    source: "MAP at 2 Hz instead of CTI 4501's 1 Hz: twice the MAP frames"
+  - name: MAP 1000 -> 2500 ms
+    set: {messages.map_interval_ms: 2500}
+    metric: report.air_by_type.map.frames
+    expect: down
+    band: [0.35, 0.45]
+    source: "0.4 Hz: 10 s holds 4 MAPs per unit against 10 (the first at t0, then every 2.5 s)"
+  # ---- what must not move them ----
+  - name: BSM 10 -> 5 Hz leaves SPaT at 10 Hz
+    set: {messages.rate_hz: 5.0}
+    metric: report.air_by_type.spat.frames
+    expect: same
+    min_change: 0.01
+    source: "messages.rate_hz is the vehicles' awareness rate (J2945/1 BSM); a roadside unit's SPaT timer is CTI 4501's and is not the BSM's"
+  - name: BSM 10 -> 1 Hz frames
+    set: {messages.rate_hz: 1.0}
+    metric: report.air_by_type.bsm.frames
+    expect: down
+    band: [0.08, 0.13]
+    source: "a fixed 1 Hz is 1/10 of the 10 Hz frames (rate x vehicles x time, J2945/1 periodic BSM); vMaxITT 600 ms is the ceiling J2945/1 congestion control may stretch to, not a floor under a fixed rate (1.67 Hz would be 0.167)"
+  # Corrected (first written `same`, measured 221 -> 227): the payload is the same, but the
+  # certificate is attached by time, once per full_cert_every_ms per unit.
+  - name: SPaT size at 200 ms
+    set: {messages.spat_interval_ms: 200}
+    metric: report.air_by_type.spat.psdu_mean
+    expect: up
+    band: [1.02, 1.04]
+    source: "the payload is the same J2735 SPAT; IEEE 1609.2's signer policy attaches the unit's certificate once per 1000 ms (+64 octets: 280 against 216 on this run), so at 5 Hz one SPaT in five carries it instead of one in ten: 222.4 -> 228.8 octets (+2.9 %)"

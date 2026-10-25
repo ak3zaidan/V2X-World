@@ -599,6 +599,12 @@ impl SensitivityRecorder {
 /// Runs `s` and measures it. The scenario is validated first, and its metric list is set
 /// to `cbr` when empty, because the engine reports `mac.cbr` only when a provider runs.
 ///
+/// A spec row measures every name the catalogue's fingerprint does: the radio harness's
+/// names above, `report.*`, the `metric.*` sample means and the ground-truth `traffic.*` /
+/// `vru.*` state ([`sweep::FingerprintRecorder`]). A spec row naming `traffic.speed_mean_mps`
+/// or `metric.verify_rate` used to measure nothing and fail as "not measured" whatever the
+/// engine did (platform validation 2026-10-24, rows ST.traffic and ST.security).
+///
 /// # Errors
 /// The scenario is refused, or the engine fails to build or run.
 pub fn measure(mut s: Scenario) -> Result<Measured> {
@@ -608,9 +614,19 @@ pub fn measure(mut s: Scenario) -> Result<Measured> {
     s.validate()?;
     let duration = s.time.duration_s;
     let mut engine = Engine::build(s, "")?;
-    let mut rec = SensitivityRecorder::default();
+    let mut rec = sweep::FingerprintRecorder::default();
     let report = engine.run(&mut rec)?;
-    Ok(rec.finish(&report, duration))
+    let prr_bins = rec.prr_bins();
+    let mut values = rec.finish(&report, duration);
+    // The fingerprint leaves out the recording's bookkeeping; a spec row may still name it.
+    if let Ok(v) = serde_json::to_value(&report) {
+        let mut all = BTreeMap::new();
+        sweep::flatten("report", &v, &mut all);
+        for (k, x) in all {
+            values.entry(k).or_insert(x);
+        }
+    }
+    Ok(Measured { values, prr_bins })
 }
 
 /// One row's outcome.

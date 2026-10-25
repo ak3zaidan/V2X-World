@@ -751,6 +751,10 @@ pub struct BsmGenerator {
     card: ModelCard,
     params: BsmGenParams,
     last_tx: Option<SimTime>,
+    /// The instant the previous BSM was *due* (`last_tx` is when the check that sent it
+    /// ran): the next interval is measured from here, so the rate is the interval's and
+    /// not the check grid's.
+    due_anchor: Option<SimTime>,
     msg_count: u8,
 }
 
@@ -767,6 +771,7 @@ impl BsmGenerator {
             card: bsm_card(&params),
             params,
             last_tx: None,
+            due_anchor: None,
             msg_count: 0,
         }
     }
@@ -790,22 +795,35 @@ impl BsmGenerator {
     }
 
     /// The decision, with no engine attached — the testable core.
+    ///
+    /// J2945/1 measures the inter-transmission time from the previous BSM, and the node
+    /// checks on its 100 ms step. The interval is measured from the instant the previous
+    /// BSM was due, not from the check that sent it: measuring from the check rounded
+    /// every interval up to the grid, so a congestion-control `MaxITT` of 150 ms (J2945/1's
+    /// `100·N/B` is continuous) went out every 200 ms, 5 Hz instead of 6.7, and 260 ms
+    /// every 300 ms. A sender that fell more than an interval behind restarts from now
+    /// rather than bursting. On the 100 ms grid with a 100 ms interval the two rules send
+    /// at the same checks.
     pub fn check(&mut self, now: SimTime, dcc: &DccState) -> Option<GenReason> {
-        let reason = match self.last_tx {
+        let interval = self
+            .params
+            .nominal_itt
+            .max(dcc.t_off)
+            .clamp(self.params.min_itt, self.params.max_itt);
+        let reason = match self.due_anchor {
             None => GenReason::First,
-            Some(last) => {
-                let elapsed = Duration::between(last, now);
-                let interval = self
-                    .params
-                    .nominal_itt
-                    .max(dcc.t_off)
-                    .clamp(self.params.min_itt, self.params.max_itt);
-                if elapsed < interval {
+            Some(anchor) => {
+                if Duration::between(anchor, now) < interval {
                     return None;
                 }
                 GenReason::Periodic
             }
         };
+        let i = interval.as_nanos();
+        self.due_anchor = Some(match self.due_anchor {
+            Some(a) if now.saturating_sub(a) < 2 * i => a + i,
+            _ => now,
+        });
         self.last_tx = Some(now);
         self.msg_count = (self.msg_count + 1) % 128;
         Some(reason)
@@ -1706,6 +1724,29 @@ mod tests {
         };
         assert_eq!(g.check(ms(599), &extreme), None);
         assert_eq!(g.check(ms(600), &extreme), Some(GenReason::Periodic));
+    }
+
+    /// A congestion-control interval that is not a whole number of 100 ms checks keeps
+    /// its rate: J2945/1's `MaxITT = 100·N/B` ms of 150 ms is 6.67 Hz, and 260 ms 3.85 Hz.
+    /// Measuring each interval from the check that sent the last BSM gave 5 Hz and
+    /// 3.33 Hz (every interval rounded up to the check grid).
+    #[test]
+    fn an_off_grid_itt_keeps_its_rate_on_the_check_grid() {
+        let count = |itt_ms: u64, seconds: u64| {
+            let mut g = BsmGenerator::default();
+            let dcc = DccState {
+                t_off: Duration::from_millis(itt_ms),
+                cbr: Some(0.5),
+            };
+            (0..seconds * 10)
+                .filter(|k| g.check(ms(100 * k), &dcc).is_some())
+                .count()
+        };
+        assert_eq!(count(150, 30), 200);
+        assert_eq!(count(260, 26), 100);
+        // On the grid nothing changes: 10 Hz and, at vMaxITT, 1.67 Hz.
+        assert_eq!(count(100, 30), 300);
+        assert_eq!(count(600, 30), 50);
     }
 
     #[test]

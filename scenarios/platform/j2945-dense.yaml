@@ -1,0 +1,30 @@
+# SAE J2945/1 congestion control on the dense 802.11p base (up to 150 vehicles in a 300 m
+# square, every one in range of every other; docs/validation/platform-2026-10-24.md,
+# continuation section). Each row turns congestion control off against the base, where it is
+# on (the DSRC default). Run on two engines with --json, the base values are the cross-engine
+# check of row BQ.j2945-dense: MaxITT = 100 ms x N/B is continuous above B = 25 neighbours,
+# and an engine that rounds each interval up to the 100 ms check sends fewer BSMs than the
+# ITT asks for. Written before the run.
+base: ../sensitivity/dsrc-dense.yaml
+set: {time.duration_s: 3.0}
+rows:
+  - name: J2945/1 on -> off, rate
+    set: {radio.dcc.enabled: false}
+    metric: tx_rate_hz
+    expect: up
+    source: "off, every vehicle sends at the nominal 10 Hz; on, at 1000 / MaxITT Hz with MaxITT = 100 N/B ms > 100 ms (SAE J2945/1 6.3.6)"
+  - name: J2945/1 on -> off, channel load
+    set: {radio.dcc.enabled: false}
+    metric: cbr_mean
+    expect: up
+    source: "CBR follows the offered airtime (ETSI TS 102 687)"
+  - name: J2945/1 on -> off, information age
+    set: {radio.dcc.enabled: false}
+    metric: aoi_ms
+    expect: down
+    source: "a shorter update interval keeps the neighbour table fresher (Kaul, Yates, Gruteser, INFOCOM 2012)"
+  - name: J2945/1 on -> off, frames
+    set: {radio.dcc.enabled: false}
+    metric: frames_tx
+    expect: up
+    source: "the frame count is rate x vehicles x time"

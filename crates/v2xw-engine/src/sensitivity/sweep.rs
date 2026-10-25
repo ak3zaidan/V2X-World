@@ -813,6 +813,12 @@ const BOOKKEEPING: &[&str] = &[
 ];
 
 impl FingerprintRecorder {
+    /// The radio harness's PRR census, per 20 m bin.
+    #[must_use]
+    pub fn prr_bins(&self) -> Vec<(u64, u64)> {
+        self.inner.prr.clone()
+    }
+
     /// The fingerprint, joined with the run report.
     #[must_use]
     pub fn finish(&self, report: &RunReport, duration_s: f64) -> Fingerprint {
