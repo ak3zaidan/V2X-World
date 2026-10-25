@@ -891,3 +891,49 @@ fn a_switched_off_vehicle_installs_no_list_a_unit_broadcasts() {
         "a switched-off vehicle installed a broadcast list at {while_off:?}"
     );
 }
+
+/// FB3's 27 incomplete top-ups (full-bench.md §4, 06-validation-summary §6 item 5): a
+/// vehicle that drives out of the simulated area with its top-up in flight. The device's
+/// flow carries on in the backend, but the vehicle is retired, so its install is never
+/// seen, and the run report counted the top-up as started and nothing else. Reproduced on
+/// the quarter Midtown benchmark with the week's top-up moved into the live window (6 of
+/// 343 in the first minute). The books now close: every top-up started is completed,
+/// refused, still in flight, or left the area with its vehicle. Fault that turns it red:
+/// the `topups_left_area` count in `Phase2::retire` removed.
+#[test]
+fn a_top_up_whose_vehicle_leaves_the_area_is_counted_as_leaving() {
+    const END: f64 = 150.0;
+    let mut s = grid(END, 1800.0);
+    cellular(&mut s);
+    let mut params = compressed();
+    // The batch takes a while to be ready, so some vehicles leave with it in flight.
+    params["first_batch_delay_s"] = json!(10);
+    lifecycle(&mut s, v2xw_engine::phase2::CAMP_SCMS, params);
+    let (report, rec) = run(s);
+    let p = &report.phase2;
+    let last = records(&rec, "backend.state").pop().expect("a view");
+    let ee = &entity(&last, "ee")["state"];
+    let in_flight = ee["topups_in_flight"].as_u64().expect("in flight");
+    println!(
+        "top-ups started {}, completed {}, refused {}, left the area {}, in flight {in_flight}; \
+         view says left {}",
+        p.topups_started,
+        p.topups_completed,
+        p.topups_refused,
+        p.topups_left_area,
+        ee["topups_left_area"]
+    );
+    assert!(p.topups_completed > 0, "no top-up completed, so this proves nothing");
+    assert!(
+        p.topups_left_area > 0,
+        "no vehicle left with a top-up in flight, so this proves nothing"
+    );
+    // One snapshot: the view's own counters at its last publication.
+    let n = |k: &str| ee[k].as_u64().unwrap_or(0);
+    assert_eq!(
+        n("topups_started"),
+        n("topups_completed") + n("topups_refused") + n("topups_left_area") + in_flight,
+        "a top-up was started and neither completed, refused, in flight nor left the area"
+    );
+    assert!(n("topups_left_area") > 0, "the view does not show the vehicles that left");
+}

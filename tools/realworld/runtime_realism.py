@@ -304,7 +304,10 @@ def derive(d):
     done = d.get('p2.topups_completed', 0)
     if done:
         d['topup.certs_per_topup'] = d.get('p2.certs_topped_up', 0) / done
-    d['topup.incomplete'] = d.get('p2.topups_started', 0) - done
+    # A top-up whose vehicle drove out of the simulated area is not an SCMS failure: the
+    # flow carries on in the backend, unseen (`topups_left_area`, full-bench.md §4's 27).
+    d['topup.left_area'] = d.get('p2.topups_left_area', 0)
+    d['topup.incomplete'] = d.get('p2.topups_started', 0) - done - d['topup.left_area']
     lists = d.get('p2.crl_versions_published', 0)
     if d.get('p2.rsus') and lists:
         d['crl.rsu_installs_per_list'] = d.get('p2.rsu_crls_installed', 0) / (d['p2.rsus'] * lists)
