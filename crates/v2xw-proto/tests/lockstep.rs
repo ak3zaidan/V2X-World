@@ -175,6 +175,61 @@ fn the_crl_is_published_on_its_cadence() {
     assert!(published < (issued / cadence + 1) * cadence);
 }
 
+/// The RA *shuffles* a closed report batch (CAMP-EE SCMS-765): the MA receives the
+/// reports in an order that is not the order they reached the RA, the same order for the
+/// same seed. Red before the fix: the batch left in arrival order (the misbehaviour-pipeline
+/// audit's AU.RA.shuffled, Kendall tau 1.0 in every batch).
+#[test]
+fn the_ra_forwards_a_report_batch_in_shuffled_order() {
+    let order = || {
+        let mut run = deployment(2);
+        run.state.params.report_shuffle_window = Duration::from_secs(100);
+        run.state.params.report_shuffle_threshold = 10_000;
+        run.preload(DEVICE_A, 0, 1, 2).expect("preloads");
+        let lv = run.state.devices[&DEVICE_A].credentials[&(0, 0)].lv;
+        let sent: Vec<_> = (1..=12u64)
+            .map(|s| {
+                run.report_at_proxy(
+                    DEVICE_B,
+                    0,
+                    lv,
+                    s * NS_PER_S,
+                    s * NS_PER_S + 10_000_000,
+                    s * NS_PER_S + 50_000_000,
+                    Transport::CellularUu,
+                    1_200,
+                )
+            })
+            .collect();
+        run.run_until(300 * NS_PER_S).expect("runs");
+        for r in &sent {
+            assert!(
+                run.kernel.stages.at(*r, StageId::ReportReceived).is_some(),
+                "the window released every report"
+            );
+        }
+        // The MA's own arrival order, each report named by its detection second.
+        let order: Vec<usize> = run
+            .state
+            .ma
+            .reports
+            .iter()
+            .map(|r| usize::try_from(r.observed_at / NS_PER_S).expect("fits") - 1)
+            .collect();
+        let mut seen = order.clone();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..12).collect::<Vec<_>>(), "each report once: {order:?}");
+        order
+    };
+    let first = order();
+    assert_ne!(
+        first,
+        (0..12).collect::<Vec<_>>(),
+        "the batch reached the MA in arrival order"
+    );
+    assert_eq!(first, order(), "same seed, same shuffle");
+}
+
 /// "10,000 requests or one day, whichever comes first" (CAMP-EE SCMS-765): the report
 /// shuffle closes at its count, not only at its window — and the window's timer, still
 /// armed for the batch the count released, releases nothing early from the next batch.

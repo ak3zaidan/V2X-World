@@ -460,7 +460,24 @@ impl ScmsState {
     ) {
         self.ra.report_shuffle_armed = false;
         self.ra.report_shuffle_generation += 1;
-        for (r_run, mut report) in core::mem::take(&mut self.ra.reports) {
+        // The RA *shuffles* the batch before it goes on (CAMP-EE SCMS-765): the MA must
+        // not learn the order in which the reports reached the RA, which would let it
+        // correlate a report with its upload. Before, the batch left in arrival order
+        // (Kendall tau 1.0 between arrival and forward order in every batch of the
+        // misbehaviour-pipeline audit). A seeded Fisher-Yates permutation of its own
+        // stream, so no other draw moves and the same seed gives the same order.
+        let mut batch = core::mem::take(&mut self.ra.reports);
+        {
+            let mut g = self.rng.checkout(
+                RngDomain::Backend,
+                EntityRef::custom("scms/report-shuffle", self.ra.report_shuffle_generation),
+            );
+            for i in (1..batch.len()).rev() {
+                let j = g.below(i as u64 + 1) as usize;
+                batch.swap(i, j);
+            }
+        }
+        for (r_run, mut report) in batch {
             out.stage_at(StageId::Shuffled, to, None, FlowId::Report, r_run);
             // The RA keeps the upload's authentication to itself: only the encrypted
             // report goes on to the MA (the LOP/RA strip identifiers, 03 §8.2).
