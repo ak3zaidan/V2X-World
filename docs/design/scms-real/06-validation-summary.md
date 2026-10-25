@@ -770,8 +770,15 @@ whether a full-fleet misbehaviour rate is a real-world number.
    `report-forward` unit that takes it onto its backhaul (`Phase2::relay_delivered`), an
    unconfirmed one stays stored and goes again on an RFC 6298 timer (1 s doubling to 64 s),
    and the forward dedup is per frame: 88 of 89 delivered, 88 counted, 1 stored at the end.
-   FB3 itself (4.2 h) is not re-run. The 27 top-ups are not traced (they need the
-   full-scale rollover window); QD completes 278 of 278. 27 of 1,800 top-ups did not complete. 255 reports were not filed
+   FB3 itself (4.2 h) is not re-run. **The 27 top-ups: traced and fixed 2026-10-24
+   (backend residuals, `bdcac292`).** Each is a vehicle that drove out of the map with its
+   top-up in flight: `Phase2::retire` dropped it, and the top-up counted as started and
+   nothing else. Reproduced on the quarter fleet with the week's top-up moved into the live
+   window (t0 08:58:20Z, top-up at 100 s): 343 started, 337 completed, 0 refused, 0 in flight
+   at 7,400 s, and the 6 missing are exactly the 6 vehicles that left with one in flight.
+   The device's flow carries on in the backend; only the vehicle is gone. Now counted as
+   `topups_left_area` (report and `ee` view), so started = completed + refused + left + in
+   flight; QD completes 278 of 278 because its 15 s after 43,200 s lost no vehicle. 27 of 1,800 top-ups did not complete. 255 reports were not filed
    (212 with too few BSMs on hand, 43 by RSUs that hold no pseudonym certificate, which is
    the R-UNSEC rule acting).
 6. **Privacy at full fleet is still unmeasured.** FB3 counted 0 pseudonym changes and 0 link
@@ -936,7 +943,8 @@ whether a full-fleet misbehaviour rate is a real-world number.
     message is identical (N15 compares messages). `in_the_loop` needs one test thread to stay
     under the 2.5 GB cap.
 21. **Paper 1 features in real runs** (paper1; 73 rows: 55 pass, 4 fixed, 4 corrected, 10
-    open). Fixed: **F1** (`a77aab7c`, refit `df6d7a86`): the real-data slip estimator read
+    open; since the backend residuals 6 fixed and 8 open, `P1.MA.l1r-sound-zero` and
+    `P1.MA.off-sound-zero` re-measured at 0). Fixed: **F1** (`a77aab7c`, refit `df6d7a86`): the real-data slip estimator read
     the locked class's :00/:50 grid hops as epoch slips; the refit takes locked
     `epoch_slip_prob` from 0.0067 to 0, the E4 locked rate from 5.5 to 0.0 per ID-minute,
     and honest devices blocked by sound MA rules from 35 to 1. **F2** (`8b5b1843`): the
@@ -949,14 +957,24 @@ whether a full-fleet misbehaviour rate is a real-world number.
     - **TM-1:** a k>0 slip in `bsm_timing.rs` moves secMark back and keeps the position,
       so 17 % of free BSMs repeat a secMark and `generationTime` trips less often than
       secMark, the opposite of the data. Suggested fix: a drifting per-device BSM clock.
-    - One honest device is still blocked by sound rules (k up to 5) through
-      MaxAcceleration, timing on or off (item 1).
+    - ~~One honest device blocked by sound rules (k up to 5) through MaxAcceleration~~:
+      **an unrealistic deceleration, fixed by the density wave** (2026-10-24, backend
+      residuals). Node 262 is a vehicle closing on a standing one that the advance cap
+      stopped in one step, 0.93 → 0.08 m/s in 0.1 s (−8.5 m/s² ground truth, over its
+      emergency limit); `traffic.standing_leader_stop` (`0588ae6c`) is that fix, and the
+      Paper 1 scenarios inherit it from the benchmark. MALOFF on `8becf72a`: 0 MaxAcceleration
+      reports, 0 honest devices blocked by any of the 37 rules (4 of 10 attackers revoked);
+      with the flag off, node 262's 5 reports from 5 reporters return.
     - **VR-2:** 26 VeReMi true positions at (0, 0), from a vehicle's first BSM sent before
       its first `gt.kinematics` record.
     - The TS 103 759 suite cannot be selected in `detection.local`; it was replayed offline.
     - Assumption: the RA shuffle window was cut to 10 s in the Paper 1 scenarios.
 22. **A car that powers on uses its expired pool's i-period at its CRL gate** (backend
-    wave, found, not fixed). When MWP's node 20 powers on, its gate keeps the expired
+    wave; **fixed 2026-10-24, backend residuals, `297ab7f5`**: the engine gives every
+    node's gate the i-period grid, `ScmsParams::period_grid`, and `classify` reads the
+    period off the node's own clock, `CrlGate::follow_clock`; a node told no calendar
+    falls back to its credential. Test
+    `a_receiver_powering_on_with_an_expired_pool_judges_by_its_clock`; MWP not re-run). When MWP's node 20 powers on, its gate keeps the expired
     pool's i-period until its first step: it refuses one honest message as an implausible
     period, and `node.rx` labels it `signature-invalid` (the CRL gate, not a receiver rule,
     refuses it). Suggested fix: compute the gate period from the device clock in
@@ -1071,15 +1089,16 @@ The totals count each row as its own checklist records it, with the changes in �
 4. ~~R-JOINCRL~~: fixed 2026-10-24 (`2a14d6c4`, §6 item 7); the multi-week re-runs are
    owed (below).
 5. ~~FB3's lost uploads and `reports_uploaded_relay`~~: traced and fixed 2026-10-24 (§6
-   item 5); the 27 incomplete top-ups are still untraced (full-scale only).
+   item 5); ~~the 27 incomplete top-ups~~: vehicles that left the map mid top-up, now
+   counted (`topups_left_area`).
 6. ~~MWP.off-no-backend, the `crl-overdue` label, the 47 `Invalid` states, VRU PQ
    pricing~~: fixed 2026-10-24 (backend wave, §6 items 8, 11, 13).
 7. **The enrolment certificate name** (moves the digests).
 8. **Mobility**: the pedestrian-invariant and kerbside defects, and the `transit` and
    `longrun_budget` failures (§6 item 16).
-9. **The power-on CRL gate period** (§6 item 22): compute it from the device clock.
+9. ~~The power-on CRL gate period~~ (§6 item 22): fixed 2026-10-24 (`297ab7f5`).
 10. **Paper 1** (§6 item 21): a drifting per-device BSM clock for TM-1; the GNSS residual
-    body and the highway speed for P1-E4; VR-2; the MaxAcceleration block; TS 103 759
+    body and the highway speed for P1-E4; VR-2; ~~the MaxAcceleration block~~ (fixed by `standing_leader_stop`); TS 103 759
     selectable in `detection.local`.
 
 **Owner decisions**

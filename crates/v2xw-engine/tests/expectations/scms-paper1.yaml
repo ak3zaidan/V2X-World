@@ -760,13 +760,13 @@ rows:
   value: 0
   source: 'P1-E7 null on the refitted calibration (locked slips fitted at v >= 10 m/s: 0 of 1,152 Tampa
     pairs): every sound rule revokes zero honest devices'
-  measured: '1'
-  verdict: open
-  note: 'OPEN (06 §6 item 1, honest reports): the one honest device blocked by k <= 5 rules is node 262,
-    accused 5 times, all mbr-Psid20-Implausible-MaxAcceleration (implied |dv|/dt > 10 m/s2); it is the
-    same with the timing model off (MALOFF, identified on a jsonl re-run) and on (MAL1R). k >= 10, device-k
-    k=20 and catch theta=10 block 0. The null holds for the timing model; it fails for the engine''s honest
-    braking/speed-snap triggers'
+  measured: '1 -> 0'
+  verdict: fixed
+  note: 'FIXED (2026-10-24, backend residuals): node 262, accused 5 times by MaxAcceleration, was the
+    engine''s one-step stop behind a standing vehicle (gt.kinematics 0.93 -> 0.08 m/s in 0.1 s, -8.5 m/s2),
+    fixed by traffic.standing_leader_stop (0588ae6c), which the Paper 1 scenarios inherit from the benchmark.
+    MAL1R on 8becf72a: 0 honest blocked under all 37 rules, 4 of 10 attackers revoked. Fault: MALOFF with standing_leader_stop and lane_bend_speed off gives node 262''s
+    5 MaxAcceleration reports from 5 reporters back (measured 1)'
 - id: P1.MA.off-sound-zero
   base: MALOFF
   variant: MALOFF
@@ -776,13 +776,13 @@ rows:
   value: 0
   source: 'with no timing model and the smoothed receiver, honest devices give no RandomPosition triggers
     (usfp.md §3: 0 honest revocations with a realistic receiver), so no sound rule revokes one'
-  measured: '1'
-  verdict: open
-  note: 'OPEN (06 §6 item 1, honest reports): the one honest device blocked by k <= 5 rules is node 262,
-    accused 5 times, all mbr-Psid20-Implausible-MaxAcceleration (implied |dv|/dt > 10 m/s2); it is the
-    same with the timing model off (MALOFF, identified on a jsonl re-run) and on (MAL1R). k >= 10, device-k
-    k=20 and catch theta=10 block 0. The null holds for the timing model; it fails for the engine''s honest
-    braking/speed-snap triggers'
+  measured: '1 -> 0'
+  verdict: fixed
+  note: 'FIXED (2026-10-24, backend residuals): node 262, accused 5 times by MaxAcceleration, was the
+    engine''s one-step stop behind a standing vehicle (gt.kinematics 0.93 -> 0.08 m/s in 0.1 s, -8.5 m/s2),
+    fixed by traffic.standing_leader_stop (0588ae6c), which the Paper 1 scenarios inherit from the benchmark.
+    MALOFF on 8becf72a: 0 MaxAcceleration reports, 0 honest blocked under all 37 rules, 4 of 10 attackers revoked. Fault: MALOFF with standing_leader_stop and lane_bend_speed off gives node 262''s
+    5 MaxAcceleration reports from 5 reporters back (measured 1)'
 - id: P1.TS.cp-share100-refit
   base: 'OFF'
   variant: S100R
