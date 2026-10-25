@@ -208,6 +208,14 @@ rows:
   expect: {diff: 0}
   measured: pending
   verdict: pending
+- id: PV.m.issued-counters
+  run: conf
+  behaviour: the PKI view's entity counters at the end (LA plv_issued, ACA certs_issued, RA requests_accepted) equal the SPDUs in the records (pre-run and in-run)
+  spec: same quantity, two sources
+  expect: {diff: 0}
+  measured: pending
+  verdict: pending
+  note: added after the first checker pass, before its own run
 - id: PV.m.pool-fields
   run: conf
   behaviour: node.security pool_stored equals the certificates node.credentials says the device holds

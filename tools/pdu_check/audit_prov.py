@@ -508,6 +508,25 @@ def r_m_backend(R, D):
     return rows and not bad, f'{len(rows)} entities; mismatched (id, view rx, records rx, view tx, records tx): {bad}'
 
 
+def r_m_issued(R, D):
+    allp = D.pre + D.inrun
+    rows = []
+    for pv in R.pki_state['providers']:
+        for c in pv['components']:
+            r, cid, k = c['role'], c['id'], c.get('counters') or {}
+            if r in ('la1', 'la2') and 'plv_issued' in k:
+                rec = sum(1 for p in allp if p['type'] == 'EncryptedIndividualPLV' and p['from'] == cid)
+                rows.append((cid, 'plv_issued', k['plv_issued'], rec))
+            if r in ('aca', 'pca') and 'certs_issued' in k:
+                rec = sum(1 for p in allp if p['type'] == 'AcaRaCertResponseSpdu' and p['from'] == cid)
+                rows.append((cid, 'certs_issued', k['certs_issued'], rec))
+            if r == 'ra' and 'requests_accepted' in k:
+                rec = sum(1 for p in allp if p['type'] == 'RaEeCertAckSpdu' and p['from'] == cid and p['to'] in D.vehicles)
+                rows.append((cid, 'requests_accepted', k['requests_accepted'], rec))
+    bad = [r for r in rows if r[2] != r[3]]
+    return rows and not bad, f'{len(rows)} counters; off (entity, counter, view, records): {bad}'
+
+
 def r_m_pool_fields(R, D):
     bad = n = 0
     for node, rows in R.sec.items():
@@ -609,6 +628,7 @@ ROWS = {
     'PV.m.topup-latency': r_m_topup_latency,
     'PV.m.rsu-app-certs': r_m_rsu,
     'PV.m.backend-traffic': r_m_backend,
+    'PV.m.issued-counters': r_m_issued,
     'PV.m.pool-fields': r_m_pool_fields,
     'PV.cell-expiry': r_cell_expiry,
     'PV.view-pdu-carrier': r_view_pdu_carrier,
@@ -669,11 +689,31 @@ FAULTS = {
     'PV.m.topup-latency': lambda R, D: _bump(R.report['access']['exchange_latency']['topup'], 'sum_ns', NS),
     'PV.m.rsu-app-certs': lambda R, D: _bump(R.report, 'rsu_app_certs_renewed'),
     'PV.m.backend-traffic': lambda R, D: _bump(next(e for e in R.backend['entities'] if e['id'] == 'la1')['traffic'], 'received'),
+    'PV.m.issued-counters': lambda R, D: _bump(next(c for pv in R.pki_state['providers'] for c in pv['components'] if c['role'] == 'la1')['counters'], 'plv_issued'),
     'PV.m.pool-fields': lambda R, D: next(r for rows in R.sec.values() for t, r in rows if R.node_dev.get(r['node']) in D.vehicles).__setitem__('pool_stored', 99),
     'PV.cell-expiry': lambda R, D: _first(R.creds[sorted(D.vehicles)[0]][0]['cells'], lambda c: c['state'] == 'valid').__setitem__('state', 'expired'),
     'PV.view-pdu-carrier': lambda R, D: _first(R.msgs, lambda q: q.get('pdus') and q['name'] == 'batch-download').__setitem__('bytes', 10),
     'PV.camp-sizing': lambda R, D: _first(R.msgs, lambda q: q['flow'] == 'topup' and q['name'] == 'info-request').__setitem__('name', 'x'),
     'PV.determinism': lambda R, D: setattr(R, 'digest', hashlib.sha256(R.digest.encode() + b'x').hexdigest()),
+}
+
+
+def _split_ra_aca(R, D):
+    """The shape the rule asks for: one RA-to-ACA message per certificate request."""
+    out = []
+    for q in R.msgs:
+        ps = q.get('pdus') or []
+        if role(q.get('from')) == 'ra' and role(q.get('to')) in ('aca', 'pca') and len(ps) > 1:
+            out += [dict(q, pdus=[p], bytes=p['len']) for p in ps]
+        else:
+            out.append(q)
+    R.msgs[:] = out
+
+
+# rows red on the real records: a repair of the records that must turn them green, so a
+# red row is shown to be a finding and not a rule that cannot pass
+GREEN = {
+    'PV.aca-cannot-group': _split_ra_aca,
 }
 
 
@@ -722,6 +762,12 @@ def main():
                 silent.append(row)
             print(f'MUTATE {row}: {"SILENT" if ok else "red"} ({meas[:120]})')
         print(f'MUTATE silent: {silent}')
+        for row, fix in GREEN.items():
+            R2 = copy.deepcopy(R)
+            fix(R2, None)
+            D3 = derive(R2)
+            ok, meas = judge(R2, D3, row, twin)
+            print(f'GREEN {row}: {"green" if ok else "still red"} ({meas[:120]})')
     if '--json' in opt:
         json.dump({k: {'pass': v[0], 'measured': v[1]} for k, v in results.items()}, open(opt['--json'], 'w'), indent=1)
 
