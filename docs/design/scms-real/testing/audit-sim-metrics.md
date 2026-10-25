@@ -132,4 +132,14 @@ end to end.
 
 ## 4. Fault proofs
 
-RESULTS-SELFTEST
+`sim_metrics.py selftest` re-runs all 74 row-run checks, each with the fault its row names
+(a raw record or an engine value mutated in memory). All 74 go red.
+
+Two faults first left their check green and were strengthened:
+- **MR.crl on Q.** Dropping the last `proto.revocation` record left an earlier record
+  that gave the same size, so the fault now enlarges the last publication.
+- **CV.reports-received on L.** L has no uploads, so there was nothing to drop. The fault
+  now adds an upload when there is none.
+
+`check` on the release binary of `8becf72a`: 66 of 74 as expected, with the 8 red results
+all on rows whose verdict is fixed or open (§2, §3).

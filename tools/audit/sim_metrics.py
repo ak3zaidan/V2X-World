@@ -553,7 +553,11 @@ def c_verify_cost_wait(run, fault):
 def c_crl_metrics(run, fault):
     rows = [d for _lt, d in run.ch('proto.revocation')]
     if fault and rows:
-        rows = rows[:-1]
+        # the last publication recorded one entry and 32 bytes larger than it was
+        last = dict(rows[-1])
+        last['entries'] = (last.get('entries') or 0) + 1
+        last['size_bytes'] = (last.get('size_bytes') or 0) + 32
+        rows = rows[:-1] + [last]
     last_e = last_b = None
     for d in rows:
         if d.get('entries') is not None:
@@ -592,7 +596,7 @@ def c_report_fate(run, fault):
 def c_reports_received(run, fault):
     msgs = [d for _lt, d in run.ch('pki.flow') if d['kind'] == 'msg' and d.get('flow') == 'report' and d.get('name') == 'report']
     if fault:
-        msgs = msgs[1:]
+        msgs = msgs[1:] if msgs else [{'kind': 'msg', 'flow': 'report', 'name': 'report'}]
     byp = sum((run.p2.get('reports_by_provider') or {}).values())
     up = run.p2.get('reports_uploaded_cellular', 0) + run.p2.get('reports_uploaded_relay', 0)
     rec = run.p2.get('reports_received', 0)
