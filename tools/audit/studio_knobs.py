@@ -108,10 +108,15 @@ def observe(rpc, st, what):
         if not cands:
             return None
         name = cands[0]
-    res = rpc("metrics.query", metrics=[name], bin_ns=10**15)
-    cols = [c["name"] for c in res["columns"]]
-    vals = [row[cols.index(name)] for row in res["rows"] if row[cols.index(name)] is not None]
-    return float(sum(vals) / len(vals)) if vals else None
+    # A dimensioned metric (`aoi` per link) has no pooled bare value; its `[all]` series is the
+    # pool over every dimension (the Nodes row read `aoi None -> None` on connected-intersections).
+    for n in [name] + ([f"{name}[all]"] if f"{name}[all]" in names else []):
+        res = rpc("metrics.query", metrics=[n], bin_ns=10**15)
+        cols = [c["name"] for c in res["columns"]]
+        vals = [row[cols.index(n)] for row in res["rows"] if row[cols.index(n)] is not None]
+        if vals:
+            return float(sum(vals) / len(vals))
+    return None
 
 
 def apply(rpc, base_doc, pointer, value):

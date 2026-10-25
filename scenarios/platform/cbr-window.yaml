@@ -1,0 +1,22 @@
+# Is `cbr_mean` the channel's busy share? (docs/validation/platform-2026-10-24.md,
+# continuation section.) `mac.cbr` reports each node's CBR meter, whose window is the last
+# 100 ms, once per 1 s metric flush; `cbr_mean` averages those reports. A busy share must
+# follow the offered airtime (ETSI TS 102 687 CBR; well below saturation airtime is linear in
+# the frame rate), so halving the BSM rate halves it. A 200 ms interval is on the 100 ms check
+# grid, so both engines send the same frames: the row tests the measurement, not the
+# generator. Written before the run.
+base: ../sensitivity/dsrc-grid.yaml
+set: {radio.dcc.enabled: false}
+rows:
+  - name: BSM ITT 100 -> 200 ms, frames
+    set: {messages.generator: {id: generator/bsm-j2945-1, params: {nominal_itt_ms: 200}}}
+    metric: report.air_by_type.bsm.frames
+    expect: down
+    band: [0.48, 0.52]
+    source: "100/200 (SAE J2945/1 ITT)"
+  - name: BSM ITT 100 -> 200 ms, channel busy ratio
+    set: {messages.generator: {id: generator/bsm-j2945-1, params: {nominal_itt_ms: 200}}}
+    metric: cbr_mean
+    expect: down
+    band: [0.42, 0.58]
+    source: "the busy share follows the airtime: about 0.5 (ETSI TS 102 687 CBR over the measurement window)"

@@ -130,28 +130,38 @@ rows:
 # build (opt-level 2) with the BSM/PSM interval anchor and the spec-mode fingerprint.
 # ---------------------------------------------------------------- (7) BSM interval off the check grid
 - {id: BQ.itt150, check: "scenarios/platform/bsm-itt.yaml 'BSM ITT 100 -> 150 ms' (band 0.64-0.69)", expect: "0.667 of the 10 Hz frames",
-   source: "SAE J2945/1 measures the ITT from the previous BSM; 100/150", fault: "the 486c8cba engine: 0.50 predicted (each interval rounded up to the 100 ms check)", verdict: pending}
-- {id: BQ.itt250, check: "bsm-itt.yaml 'BSM ITT 100 -> 250 ms' (band 0.38-0.42)", expect: "0.40", source: "100/250; the grid rule gives 0.333", verdict: pending}
-- {id: BQ.itt300, check: "bsm-itt.yaml 'BSM ITT 100 -> 300 ms (on the grid)'", expect: "0.333 under both engines (control)", source: "100/300", verdict: pending}
+   source: "SAE J2945/1 measures the ITT from the previous BSM; 100/150", fault: "the 486c8cba engine: 0.50 predicted (each interval rounded up to the 100 ms check)", verdict: fixed, measured: "binary fixed: 1193 -> 793 frames, 0.665. 486c8cba: 1193 -> 600, 0.503 (red, as predicted). Tests: generator::tests::an_off_grid_itt_keeps_its_rate_on_the_check_grid"}
+- {id: BQ.itt250, check: "bsm-itt.yaml 'BSM ITT 100 -> 250 ms' (band 0.38-0.42)", expect: "0.40", source: "100/250; the grid rule gives 0.333", verdict: fixed, measured: "binary fixed: 0.402; 486c8cba 0.335 (red)"}
+- {id: BQ.itt300, check: "bsm-itt.yaml 'BSM ITT 100 -> 300 ms (on the grid)'", expect: "0.333 under both engines (control)", source: "100/300", verdict: pass, measured: "0.335 on both engines; the 1193-frame base is identical on both"}
 - {id: BQ.cbr-and-cost, check: "bsm-itt.yaml ITT 150 rows on cbr_mean (0.58-0.75) and PhyEnd events (0.62-0.71)", expect: "both follow the frame rate, about 0.667",
-   source: "CBR is offered airtime (ETSI TS 102 687) well below saturation; one PhyEnd per frame", verdict: pending}
+   source: "CBR is offered airtime (ETSI TS 102 687) well below saturation; one PhyEnd per frame", verdict: fixed, measured: "binary fixed: cbr 0.0824 -> 0.0549 (0.666), PhyEnd 0.665. 486c8cba: cbr 0.146, outside the band by far more than the frames (0.503): see CW.cbr-window"}
 - {id: BQ.j2945-dense, runs: [dsrc-dense], check: "scenarios/sensitivity/dsrc-dense.yaml, 3 s, J2945/1 on (the DSRC default): tx_rate_hz, cbr_mean, aoi_ms, 486c8cba against the fixed build",
    expect: "tx_rate_hz and cbr_mean up (several %), aoi_ms down: about 100 vehicles in a 300 m square put MaxITT = 100 ms x N/B on the continuous segment above B = 25, which the grid rule rounded up",
-   source: "SAE J2945/1 6.3.6 via Ahmad 2019 Eq. 6 (dcc.rs max_itt_for)", verdict: pending}
+   source: "SAE J2945/1 6.3.6 via Ahmad 2019 Eq. 6 (dcc.rs max_itt_for)", verdict: fixed, measured: "fixed / 486c8cba: frames 2824 -> 2918 (+3.3 %), records 842,052 -> 870,244, rx_ok +3.2 %, mac.cbr mean 0.267 -> 0.289, busy share of the run 0.290 -> 0.299. BSM intervals in the 200 ms bin 140 -> 62, p95 196 -> 104 ms"}
 - {id: BQ.j2945-dense.off, runs: [dsrc-dense], check: "the same with radio.dcc.enabled false: record digests of the two binaries", expect: "identical (every interval is 100 ms, on the grid)",
-   source: "the anchored rule fires at the same checks on the grid (generator.rs check)", verdict: pending}
+   source: "the anchored rule fires at the same checks on the grid (generator.rs check)", verdict: pass, measured: "record digest 6b12a47c8487 on both engines (888,879 records, 2985 frames)"}
 - {id: BQ.goldens, runs: [D, L, G, C, S], check: "record digests of the fixed build against the 486c8cba digests of DT.threads (RAYON 2)",
    expect: "D, L, G, S identical (fewer than 25 neighbours within 100 m, or no BSM: ITT 100 ms on the grid; SPaT/MAP periods on the grid); C may move: 3000 veh/h queues at four signals can pass B = 25 within 100 m",
-   source: "the anchored rule is the old one on the grid", verdict: pending}
+   source: "the anchored rule is the old one on the grid", verdict: pass, measured: "D (RAYON 2), C (RAYON 2 and 4) and S (RAYON 2): record digest, content digest and metrics.json equal to 486c8cba. C did not move: its queues stay under B = 25 within 100 m. L and G were not re-run (time); neither has a BSM interval off the grid"}
 # ---------------------------------------------------------------- (8) the open rows of the first session
 - {id: ST.traffic.2, check: "scenarios/platform/seeds-traffic.yaml --json (binary: fixed; spec mode now measures traffic.* and metric.*)",
    expect: "traffic.speed_mean_mps and traffic.stopped_share within +-10 % (95 % t-interval of the mean, n = 5); every seed inside the 95 % prediction interval",
-   source: "about 37 vehicles over 90 s; the fleet mean of a signalised grid moves with the arrivals (HCM 7th ed. ch. 19: control delay is a per-cycle average)", verdict: pending}
+   source: "about 37 vehicles over 90 s; the fleet mean of a signalised grid moves with the arrivals (HCM 7th ed. ch. 19: control delay is a per-cycle average)", verdict: pass, measured: "speed 5.63 m/s +-4.6 %, stopped share 0.175 +-10.1 % (at the bound), pdr +-10.5 %, actors 39.4 +-19 %, frames +-28 %, cbr +-28 %, app warnings +-68 %; every seed inside its 95 % prediction interval; the default seed inside every CI"}
 - {id: ST.security.2, check: "scenarios/platform/seeds-security.yaml --json (binary: fixed)",
    expect: "metric.verify_rate within +-10 %; metric.full_cert_share within +-5 % (a timer rule: one certificate per full_cert_every_ms 1000 at 10 Hz is 0.10 whatever the seed); unverified_ratio near 0 with no attackers",
-   source: "IEEE 1609.2 signer-id policy; the scenario's security.signer_id_policy", verdict: pending}
-- {id: SM.spat-interval-150.fixed, check: "rsu-apps.yaml on the fixed build", expect: "every row passes, SPaT 150 ms at 0.667", source: "as SM.spat-interval-150", verdict: pending}
+   source: "IEEE 1609.2 signer-id policy; the scenario's security.signer_id_policy", verdict: wrong-expectation, measured: "full_cert_share 0.1018 +-1.0 % (theory 0.10: pass); unverified_ratio 0 on every seed (pass); verify_rate 82.8 /s +-52 %: it is verifications per second (bins.rs), so it scales with receptions (prr +-30 %, aoi +-75 % on 9 vehicles), not a ratio; the +-10 % was wrong. e2e +-0.9 %"}
+- {id: SM.spat-interval-150.fixed, check: "rsu-apps.yaml on the fixed build", expect: "every row passes, SPaT 150 ms at 0.667", source: "as SM.spat-interval-150", verdict: pass, measured: "7/7: SPaT 150 ms 398 -> 266 (0.668), 200 ms 0.503, MAP 500 / 2500 ms 2.000 / 0.400, BSM 5 Hz leaves SPaT at 0.995, BSM 1 Hz 0.099, SPaT PSDU +2.7 %"}
 - {id: SM.on-air-content.2, check: "cargo test -p v2xw-engine --test platform_validation", expect: "all pass, including the_spat_and_map_on_the_air_are_the_plan_and_the_survey and a_spec_row_measures_the_traffic_state_and_the_metric_samples",
    fault: "measure() with the radio harness alone (the 486c8cba code): the spec-row test must fail", verdict: pending}
 - {id: UI.e2e.2, check: "settings.spec.ts with the section-aware count (the sum of the tree's section counts)", expect: pass,
    source: "SettingsWindow.tsx shows one research section at a time; the tree counts every listed setting", fault: "count > 5000 instead of > 50: must fail", verdict: pending}
+# ---------------------------------------------------------------- (9) the channel busy ratio as measured
+- {id: CW.cbr-window, check: "scenarios/platform/cbr-window.yaml: ITT 100 -> 200 ms (on the grid) on frames (0.48-0.52) and cbr_mean (0.42-0.58)", expect: "both about 0.5",
+   source: "the busy share follows the offered airtime (ETSI TS 102 687); 200 ms is on the check grid, so the generator is not under test",
+   note: "suspected from bsm-itt.yaml on 486c8cba: ITT 150 (sent every 200 ms) gave frames 0.503 but cbr_mean 0.146. mac.cbr is the meter's last 100 ms at each 1 s flush, and dsrc-grid starts every vehicle at t = 0, so a 200 ms period leaves the window before each flush empty",
+   verdict: pending}
+# ---------------------------------------------------------------- (10) the Studio, second run
+- {id: UI.knobs.2, check: "tools/audit/studio_knobs.py --scenario scenarios/connected-intersections.yaml --duration 8 (release v2xw-server 486c8cba, port 8754)", expect: "11/11 sections move the engine as written",
+   source: "each knob's row in studio_knobs.py KNOBS", fault: "--fault: 0/11 (every row red; the base re-run gives the same values, so the server is deterministic across runs)",
+   verdict: open, measured: "10/11. Buildings off pdr 0.532 -> 1.000; tx power 5 dBm pdr -> 0.506; rain speed 3.12 -> 2.97 m/s; alternating access e2e 47.5 -> 53.2 ms; full certificates cbr 0.0065 -> 0.0082; demand and timeline actors 7 -> 14; duration; catalogue 260 -> 0. Nodes (peer_cert_cache 1): aoi not measured over 8 s (aoi and aoi[all] empty in metrics.query). rate_hz 5 Hz moved cbr only -4.4 % where airtime theory gives about -50 %: the direction passes, the magnitude is CW.cbr-window",
+   note: "the first session's run used phase1-grid, which has one vehicle in 6 s (4/11, every radio row unmeasured): a test-setup error, not the engine"}

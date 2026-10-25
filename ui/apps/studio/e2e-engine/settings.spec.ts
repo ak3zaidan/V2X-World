@@ -77,7 +77,7 @@ test("search, edit, undo, reset, JSON round trip, apply to the next run", async 
   await input.fill("5");
   await expect(row).toHaveAttribute("data-edited", "true");
   await expect(page.getByTestId("settings-pending"), "the gear says an edit is waiting").toBeVisible();
-  await expect(page.getByTestId("edit-route")).toContainText("1 unapplied edit");
+  await expect(page.getByTestId("edit-route")).toContainText("1 unapplied change");
   await row.getByTestId("setting-undo").click();
   await expect(input).toHaveValue(original);
   await expect(row).toHaveAttribute("data-edited", "false");
@@ -112,7 +112,7 @@ test("search, edit, undo, reset, JSON round trip, apply to the next run", async 
   // --- 4. apply reaches the next run ------------------------------------------------------------
   await page.getByTestId("apply").click();
   await expect(page.getByTestId("scenario-message")).toContainText("Changes take effect when you restart");
-  await expect(page.getByTestId("staged-note")).toContainText("waiting for the next run");
+  await expect(page.getByTestId("staged-note")).toContainText("wait for the next run");
   expect((await status(page)).staged_hash).not.toBeNull();
   const done = await runToEnd(page);
   expect(done.t_end_ns, "the run is the length the window set").toBe(3_000_000_000);
