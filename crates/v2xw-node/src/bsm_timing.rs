@@ -1211,9 +1211,17 @@ classes:
             let b = belief(10_000 + 100 * i, 20.0);
             let rep = d.report(&cal, &mut r, &b).unwrap();
             assert!(rep.send);
-            assert_eq!(rep.sec_mark_at, b.time_ns + rep.tx_delay_ns, "sent at its stamp");
+            assert_eq!(
+                rep.sec_mark_at,
+                b.time_ns + rep.tx_delay_ns,
+                "sent at its stamp"
+            );
             let x = 20.0 * rep.sec_mark_at as f64 * 1e-9;
-            assert!((rep.pos.x - x).abs() < 1e-6, "position at the stamp: {} vs {x}", rep.pos.x);
+            assert!(
+                (rep.pos.x - x).abs() < 1e-6,
+                "position at the stamp: {} vs {x}",
+                rep.pos.x
+            );
             sent.push(rep.sec_mark_at);
         }
         let (mut n50, mut n150) = (0usize, 0usize);
@@ -1269,13 +1277,20 @@ classes:
         // sqrt(0.9·0.005² + 0.1·0.1²) = 0.0320; sqrt(0.9·0.002² + 0.1·0.05²) = 0.0159.
         assert!((rms(&al) - 0.0320).abs() < 0.003, "{}", rms(&al));
         assert!((rms(&cr) - 0.0159).abs() < 0.0015, "{}", rms(&cr));
-        assert!(rms(&al) > 3.0 * iqr_sd(&al), "heavy-tailed: {} vs {}", rms(&al), iqr_sd(&al));
-        let lag1 = al.windows(2).map(|w| w[0] * w[1]).sum::<f64>()
-            / al.len() as f64
-            / rms(&al).powi(2);
+        assert!(
+            rms(&al) > 3.0 * iqr_sd(&al),
+            "heavy-tailed: {} vs {}",
+            rms(&al),
+            iqr_sd(&al)
+        );
+        let lag1 =
+            al.windows(2).map(|w| w[0] * w[1]).sum::<f64>() / al.len() as f64 / rms(&al).powi(2);
         assert!(lag1.abs() < 0.05, "white increments: lag-1 {lag1}");
         let mut v2 = cal.clone();
         v2.schema = SCHEMA_V2.to_string();
-        assert!(v2.check().is_err(), "a v2 file may not carry position_noise");
+        assert!(
+            v2.check().is_err(),
+            "a v2 file may not carry position_noise"
+        );
     }
 }
