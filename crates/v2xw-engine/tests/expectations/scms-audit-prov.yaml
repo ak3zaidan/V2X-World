@@ -215,6 +215,14 @@ rows:
   expect: {mismatched_rows: 0}
   measured: pending
   verdict: pending
+- id: PV.cell-expiry
+  run: conf
+  behaviour: a node.credentials cell is `expired` only after its certificate's validity (start + 169 h) ends, and `valid`/`active` only inside it
+  spec: 1609.2 6.4.14 validityPeriod; the one-hour overlap ([CAMP122] Table 3)
+  expect: {early_expired: 0, valid_outside: 0}
+  measured: pending
+  verdict: pending
+  note: added after the first checker pass, when PV.m.pool-fields showed i = 614 cells marked expired at 600 s
 - id: PV.view-pdu-carrier
   run: conf
   behaviour: in the PKI view every message is at least as long as the SPDUs it is shown carrying, and a .info request's SPDU rides on the info-request
