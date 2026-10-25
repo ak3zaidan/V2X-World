@@ -412,9 +412,22 @@ rows:
   variant: PP4
   area: scms
   measure: p2.topups_started
+  expect: down
+  min_change: 0.5
+  source: 'pool 4: a joiner in period 0 is due at 180 s, the run''s last instant (L shows top-ups due
+    at the end are started: 121 started, 59 completed); only those, against every joiner of L'
+  measured: pending
+  verdict: pending
+  note: 'prediction corrected before the PP4 run, on L''s numbers: written first as eq 0, but a
+    top-up due at the run end is started (L: 62 of 121 started at 180 s)'
+- id: LS.PP4.topups-done
+  base: L
+  variant: PP4
+  area: scms
+  measure: p2.topups_completed
   expect: eq
   value: 0
-  source: 'pool 4: a joiner in period 0 is due at 180 s, the run end; none falls inside the run'
+  source: 'every PP4 top-up is started at 180 s, the run end; none completes inside the run'
   measured: pending
   verdict: pending
 - id: LS.PP4.preload
@@ -487,25 +500,45 @@ rows:
   source: 'threshold 1: every report is a full batch on arrival and goes at once'
   measured: pending
   verdict: pending
+- id: LS.RW0.report-stage
+  base: L
+  variant: RW0
+  area: scms
+  measure: stage.report_received_s
+  expect: le
+  value: 1.0
+  source: 'window 0: the first case''s report reaches the MA within the Uu and backend links (L: 7.1 s
+    after the detection, the shuffle wait)'
+  measured: pending
+  verdict: pending
 - id: LS.RW0.latency
   base: L
   variant: RW0
   area: scms
   measure: x.revocation_latency_s
-  expect: down
-  min_change: 0.2
-  source: the mean shuffle wait (about half the window, 15 s) leaves the revocation path
+  expect: ratio
+  band: [0.0, 1.0]
+  source: 'a shorter shuffle moves the decision earlier, but the CRL waits for the next 30 s slot
+    (L: decision at 7.1 s, published at 16.2 s): the latency is quantised by the slot, so no later
+    and possibly the same'
   measured: pending
   verdict: pending
+  note: 'prediction corrected before the RW0 run, on L''s stages: written first as down (the slot
+    quantisation was missed)'
 - id: LS.RW10.latency
   base: L
   variant: RW10
   area: scms
   measure: x.revocation_latency_s
-  expect: down
-  source: a 10 s window waits less than a 30 s one
+  expect: ratio
+  band: [0.0, 1.0]
+  source: 'a shorter shuffle moves the decision earlier, but the CRL waits for the next 30 s slot
+    (L: decision at 7.1 s, published at 16.2 s): the latency is quantised by the slot, so no later
+    and possibly the same'
   measured: pending
   verdict: pending
+  note: 'prediction corrected before the RW10 run, on L''s stages: written first as down (the slot
+    quantisation was missed)'
 - id: LS.RW90.latency
   base: L
   variant: RW90
