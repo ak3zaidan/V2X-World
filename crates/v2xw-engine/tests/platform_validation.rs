@@ -386,3 +386,37 @@ fn a_spec_row_measures_the_traffic_state_and_the_metric_samples() {
         assert!(m.get(k).is_some(), "{k} is not measured");
     }
 }
+
+/// `mac.cbr` is the share of its own window the channel was busy, so it follows the offered
+/// airtime whatever the BSM period (ETSI TS 102 687: CBR is busy time over the
+/// measurement interval; well below saturation airtime is linear in the frame rate).
+/// Before, it was each node's last 100 ms read at the 1 s flush: with a fleet started
+/// together, a 200 ms interval left that 100 ms empty, and the busy ratio fell ×0.146
+/// where the frames fell ×0.503 (row CW.cbr-window).
+#[test]
+fn the_channel_busy_ratio_follows_the_airtime_at_any_bsm_interval() {
+    let base = Scenario::load(scenarios().join("sensitivity/dsrc-grid.yaml")).expect("loads");
+    let run = |itt_ms: u64| {
+        let mut set = BTreeMap::new();
+        set.insert("radio.dcc.enabled".to_string(), serde_json::json!(false));
+        set.insert(
+            "messages.generator".to_string(),
+            serde_json::json!({"id": "generator/bsm-j2945-1",
+                               "params": {"nominal_itt_ms": itt_ms}}),
+        );
+        let s = v2xw_engine::sensitivity::apply(&base, &set).expect("the set applies");
+        let m = v2xw_engine::sensitivity::measure(s).expect("runs");
+        let frames = m.get("report.air_by_type.bsm.frames").expect("frames");
+        let cbr = m.get("cbr_mean").expect("cbr_mean");
+        (frames, cbr)
+    };
+    let (f100, c100) = run(100);
+    let (f200, c200) = run(200);
+    let frames = f200 / f100;
+    let cbr = c200 / c100;
+    assert!((0.48..=0.52).contains(&frames), "frames x{frames:.3}");
+    assert!(
+        (0.42..=0.58).contains(&cbr),
+        "cbr_mean {c100:.4} -> {c200:.4}: x{cbr:.3} where the frames went x{frames:.3}"
+    );
+}

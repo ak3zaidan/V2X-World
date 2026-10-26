@@ -831,12 +831,18 @@ impl SpsEngine {
     /// ring holds.
     #[must_use]
     pub fn sidelink_cbr(&self, node: NodeId, slot: u64) -> f64 {
+        self.sidelink_cbr_over(node, slot, 100 * u64::from(self.pool.mu.slots_per_ms()))
+    }
+
+    /// The same busy share over the last `slots` slots before `slot`, clamped to what the
+    /// sensing ring holds: the mean of the 100 ms CBR readings that tile a report window,
+    /// for a report longer than one CBR window (`mac.cbr` once per metric flush).
+    #[must_use]
+    pub fn sidelink_cbr_over(&self, node: NodeId, slot: u64, slots: u64) -> f64 {
         let Some(st) = self.ues.get(&node.index()) else {
             return 0.0;
         };
-        let window = (100 * u64::from(self.pool.mu.slots_per_ms()))
-            .min(st.history.window_slots())
-            .min(slot);
+        let window = slots.min(st.history.window_slots()).min(slot);
         let s = self.pool.subchannels();
         if window == 0 || s == 0 {
             return 0.0;
