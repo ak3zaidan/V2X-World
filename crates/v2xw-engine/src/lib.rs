@@ -79,6 +79,7 @@ pub mod priority;
 pub mod privacy_metrics;
 pub mod pseudonym_policy;
 pub mod records;
+pub mod reroute_info;
 pub mod report_records;
 pub mod run;
 pub mod safety_events;

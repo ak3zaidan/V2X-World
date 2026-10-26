@@ -1189,9 +1189,14 @@ impl TrafficAuditor {
                         a,
                         None,
                         format!(
-                            "junction {}, body centre {:.1} m outside its area",
+                            "junction {}, body centre {:.1} m outside its area ({} {:.1} m \
+                             long, front {:.1} m into the {:.1} m connector)",
                             j.id.index(),
-                            math::sqrt(ring_distance_sq_2d(&j.shape, c))
+                            math::sqrt(ring_distance_sq_2d(&j.shape, c)),
+                            a.class,
+                            a.length_m,
+                            a.s_m,
+                            lane.length_m
                         ),
                     );
                     self.flag(Check::OutsideJunction, ex);

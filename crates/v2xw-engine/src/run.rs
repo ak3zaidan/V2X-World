@@ -4827,6 +4827,45 @@ impl Engine {
             }
         }
 
+        // The V2X re-routing source (`traffic.reroute_source: v2x`): each lane-blocking
+        // DENM a vehicle's own unit delivered to its applications, verified, tells that
+        // driver — and only that driver — the lane at the event is blocked
+        // (`crate::reroute_info`). Delivered at a wake as at a periodic step.
+        let v2x_reroute = self
+            .scenario
+            .traffic
+            .as_ref()
+            .and_then(|t| t.reroute_source)
+            == Some(v2xw_mobility::routing::dynamic::RerouteSource::V2x);
+        if v2x_reroute {
+            let mut commands = Vec::new();
+            for (id, outcome, _, _) in &results {
+                let Some(actor) = self.node_actor.get(id).copied() else {
+                    continue;
+                };
+                for m in &outcome.delivered {
+                    if m.msg_type != v2xw_msg::MsgType::Denm
+                        || !matches!(
+                            m.verification,
+                            v2xw_node::stores::VerificationState::Verified
+                        )
+                    {
+                        continue;
+                    }
+                    let Some(payload) = m.payload.as_deref() else {
+                        continue;
+                    };
+                    if let Some(lane) = crate::reroute_info::blocking_event_lane(&self.world, payload)
+                    {
+                        commands.push(v2xw_mobility::MobilityCommand::HazardHeard { actor, lane });
+                    }
+                }
+            }
+            if !commands.is_empty() {
+                self.command_mobility(commands);
+            }
+        }
+
         // GLOSA's advice, followed by the drivers who follow it. Only a periodic step
         // runs the applications; a wake hands over finished checks and advises nothing.
         if !wake && self.glosa.compliance > 0.0 {

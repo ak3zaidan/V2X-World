@@ -298,6 +298,14 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the rerouting period",
     },
+    // A share: 0 is nobody, 1 everybody (SUMO device.rerouting.probability).
+    Bound {
+        path: "traffic.reroute_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the share of drivers who re-route",
+    },
     Bound {
         path: "traffic.signals.min_green_s",
         lo: 2.0,
@@ -3534,6 +3542,21 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "The bends of a through lane's polyline get the turn-speed cap a junction connector has.",
     },
     KeyStatus {
+        path: "traffic.depart_at_speed",
+        status: Status::Wired,
+        note: "Vehicles entering at the map's edge are put on at the lane's start at their desired speed, capped by the safe speed to the leader and the lane end (SUMO departSpeed).",
+    },
+    KeyStatus {
+        path: "traffic.reroute_share",
+        status: Status::Wired,
+        note: "The share of drivers who re-route on information, drawn per driver (SUMO device.rerouting.probability).",
+    },
+    KeyStatus {
+        path: "traffic.reroute_source",
+        status: Status::Wired,
+        note: "navigation: network-wide smoothed speeds and every closure; v2x: only received and verified DENM/TIM hazard warnings on the route.",
+    },
+    KeyStatus {
         path: "traffic.lc_strategic",
         status: Status::Wired,
         note: "SUMO LC2013 look-ahead for route lane changes; any lc_* switches discretionary changes from MOBIL to LC2013.",
@@ -4440,6 +4463,9 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             || t.heavy_vehicle_gap_terms.is_some()
             || t.standing_leader_stop.is_some()
             || t.lane_bend_speed.is_some()
+            || t.depart_at_speed.is_some()
+            || t.reroute_share.is_some()
+            || t.reroute_source.is_some()
             || t.kerbside.is_some();
         // The LC2013 factors act only on lane changes, and the strategic one only on the
         // changes a route needs.
@@ -5597,6 +5623,22 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
             t.reroute_period_s,
             e,
         );
+        if let Some(share) = t.reroute_share {
+            bounded_at("traffic.reroute_share", "traffic.reroute_share", share, e);
+        }
+        for (path, set) in [
+            ("traffic.reroute_share", t.reroute_share.is_some()),
+            ("traffic.reroute_source", t.reroute_source.is_some()),
+        ] {
+            if set && !t.dynamic_rerouting {
+                e.push(conflict(
+                    path,
+                    "decides who re-routes and on what, and traffic.dynamic_rerouting is \
+                     false"
+                        .to_string(),
+                ));
+            }
+        }
         if t.reroute_period_s > 0.0 && t.reroute_period_s < 10.0 {
             e.push(conflict(
                 "traffic.reroute_period_s",

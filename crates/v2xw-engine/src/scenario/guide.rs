@@ -77,6 +77,21 @@ const BASIC: &[Basic] = &[
         recommended: "0 (off) for a baseline; 60 to 300 to model navigation-app drivers.",
     },
     Basic {
+        path: "traffic.reroute_share",
+        explain: "The share of drivers who change route on information (a navigation app or a received V2X warning); the rest keep the route they chose and only detour round a closure they can see.",
+        recommended: "1 (every driver, today); about 0.3-0.6 for today's navigation-app use in a US city.",
+    },
+    Basic {
+        path: "traffic.reroute_source",
+        explain: "Where re-routing drivers learn that the road has changed: a navigation app, which sees the whole network a few minutes late, or only the V2X hazard warnings their own car received, which are local and immediate.",
+        recommended: "navigation (today); v2x to measure what V2X hazard warnings are worth to routing.",
+    },
+    Basic {
+        path: "traffic.depart_at_speed",
+        explain: "Whether cars entering the map from outside it are already moving, as real traffic crossing the map's edge is, instead of starting from rest at the edge; cars starting inside the map still start from rest.",
+        recommended: "Off (today); on for realistic map edges (no false halts or stopped-vehicle warnings there).",
+    },
+    Basic {
         path: "traffic.right_turn_on_red",
         explain: "Whether drivers may turn right on a red light after stopping. Legal in most of the US, banned in New York City.",
         recommended: "Leave empty to follow the city's rule.",
