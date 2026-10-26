@@ -376,7 +376,9 @@ fn apply_tuning(
     }
     if let Some(on) = t.sensing {
         params.sensing = on;
-        params.srssi_ranking = on;
+        // Only LTE's procedure ranks by S-RSSI (TS 36.213 §14.1.1.6 step 8); NR mode 2
+        // reports S_A unranked (TS 38.214 §8.1.4), so sensing on does not add a ranking.
+        params.srssi_ranking = on && params.rat == v2xw_radio::SlRat::LteMode4;
     }
     if let Some(dbm) = t.rsrp_threshold_dbm {
         params.rsrp_threshold_dbm = dbm;

@@ -180,6 +180,15 @@ context:
   - {prefix: radio.dcc.reactive_table, set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687, params: {}}}}
   - {prefix: radio.dcc.reactive_hold_ms, set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687, params: {}}}}
   - {prefix: radio.tiers.phy, set: {radio.tiers.mac: high}}
+  # The noise figure acts at the noise-limited edge, and the rows read PRR at 600-1,000 m.
+  # At the family's 20 dBm the sidelink edge is past 1 km (PRR 0.96 in the band), so 3 dB
+  # of NF moved it 0.02 % (radio-2026-10-24.md §5). At 5 dBm the edge is inside the band,
+  # the setup of radio-cv2x.yaml's noise-figure rows.
+  - {prefix: radio.sidelink.noise_figure_db, set: {radio.devices.obu.tx_power_dbm: 5.0}}
+  # Sensing acts at reselections; in the family's 2 s every UE's first, blind pick (empty
+  # sensing window at power-on) dominates, and one persistent pair can decide the row.
+  # 8 s is the steady state radio-cv2x.yaml's sensing rows measure (radio-2026-10-24.md §6).
+  - {prefix: radio.sidelink.sensing, set: {time.duration_s: 8.0}}
   - {prefix: messages.rate_hz, set: {time.mobility_step_ms: 50}}
   - {prefix: messages.cpm_interval_ms, set: {messages.sets: [bsm, cpm]}}
   # The post-quantum signatures need an OBU that publishes a figure for them
