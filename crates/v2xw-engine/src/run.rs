@@ -813,10 +813,13 @@ struct FrameState {
     /// revocation path needs and no node runtime generates.
     app: Option<AppPayload>,
     /// Whether the frame's signature verifies. `false` only for an attacker's forged or
-    /// tampered message, or one signed under a certificate outside its validity window;
-    /// the SPDU's signature octets are then corrupted, so a receiver that checks the bytes
-    /// finds it out by checking them, and one that has no bytes reads this field.
+    /// tampered message; the SPDU's signature octets are then corrupted, so a receiver
+    /// that checks the bytes finds it out by checking them, and one that has no bytes
+    /// reads this field.
     signature_valid: bool,
+    /// The validity period of the genuine certificate an attacker signed under outside
+    /// that period (`ExpiredCert`, `NotYetValid`): [`v2xw_node::RxFrame::signer_validity`].
+    signer_validity: Option<(SimTime, SimTime)>,
     /// The signed SPDU as it goes on the air, when the node's own generator built one.
     ///
     /// `None` for the two frames the engine synthesises on a node's behalf (the
@@ -5402,6 +5405,7 @@ impl Engine {
                 .unwrap_or_else(|| belief.map_or(0.0, |b| b.heading_rad)),
         );
         let mut signature_valid = true;
+        let mut signer_validity: Option<(SimTime, SimTime)> = None;
         let mut claimed_generation = tx.generation_time;
         let mut bsm = tx.bsm;
         let mut ghosts: Vec<v2xw_threat::attack::Emission> = Vec::new();
@@ -5496,13 +5500,23 @@ impl Engine {
                     e.heading_rad,
                 );
                 // What the attacker's edit does to the envelope, rendered on the air: a
-                // forged signature, a certificate outside its validity window (the
-                // receiver's IEEE 1609.2 validity check refuses it as surely as a bad
-                // signature), and the generation time the message claims (a delayed,
-                // replayed or out-of-order message).
+                // forged signature, a certificate outside its validity window, and the
+                // generation time the message claims (a delayed, replayed or
+                // out-of-order message).
+                //
+                // A certificate outside its window is a genuine certificate used out of
+                // time, so its signature verifies: what refuses the frame is the
+                // receiver's IEEE 1609.2 §5.2 generation-time-in-validity rule, and the
+                // receiver knows that is why. Rendering it as a corrupted signature made
+                // every receiver report a bad signature (`signatureVerification`, 613
+                // reports about one ExpiredCert attacker in live-atk C2M) and left
+                // `certValidity` unreachable (live-atk F4).
                 let window_forged = (e.cert_valid_from, e.cert_valid_to) != cert
                     && !(e.cert_valid_from..=e.cert_valid_to).contains(&believed);
-                signature_valid = e.signature_valid && !window_forged;
+                signature_valid = e.signature_valid;
+                if window_forged {
+                    signer_validity = Some((e.cert_valid_from, e.cert_valid_to));
+                }
                 // The model edits the time it was handed (`believed`); its edit moves the
                 // message's own stamp by the same amount, so an attack that leaves the
                 // time alone leaves the frame's generation time exactly as it was.
@@ -5730,6 +5744,7 @@ impl Engine {
             tx_heading: None,
             app,
             signature_valid,
+            signer_validity,
             spdu: tx.signed.as_ref().map(|f| {
                 let mut spdu = f.spdu.clone();
                 // The signature is the SPDU's last field (IEEE 1609.2 SignedData), so
@@ -6014,6 +6029,7 @@ impl Engine {
             st.claimed_speed_mps = claim.1;
             st.claimed_heading_rad = claim.2;
             st.signature_valid = true;
+            st.signer_validity = None;
             st.spdu = Some(signed.spdu.clone());
             st.payload_bytes = split.map(|(p, _)| p);
             st.envelope_bytes = split.map(|(_, e)| e);
@@ -9928,6 +9944,7 @@ fn rx_frame(state: &FrameState, bytes: u32) -> RxFrame {
         // is, unless an attacker forged it). The receiver only learns it by *spending* the
         // verification time, which `ObuRuntime::step` charges against its servers.
         signature_valid: state.signature_valid,
+        signer_validity: state.signer_validity,
         spdu: state.spdu.clone(),
         signer_certificate: state.signer_certificate.clone(),
         bsm: state.bsm,

@@ -1414,3 +1414,53 @@ fn a_crl_refused_bsm_is_not_judged_when_judge_revoked_is_off() {
     assert_eq!(off.phase2.revoked_attackers, on.phase2.revoked_attackers);
     assert_eq!(off.phase2.revoked_honest, 0);
 }
+
+/// An attacker signing under a genuine certificate outside its validity period
+/// (`ExpiredCert`, `NotYetValid`) has a good signature: its receivers refuse the BSM by the
+/// IEEE 1609.2 §5.2 generation-time-in-validity rule, and the research suite reports
+/// `certValidity`, the check built for it. Before the fix the engine rendered the forged
+/// window as a corrupted signature, so every receiver reported `signatureVerification` and
+/// `certValidity` could not fire (live-atk 2026-10-25 F4: 613 and 642 reports about one
+/// ExpiredCert and one NotYetValid attacker).
+///
+/// Fault injected (and reverted): restoring `signature_valid = e.signature_valid &&
+/// !window_forged` in `run.rs` makes the first two assertions fail.
+#[test]
+fn a_certificate_used_outside_its_validity_is_reported_as_cert_validity() {
+    let mut s = Scenario::load(scenarios().join("live-atk/cat2.yaml"))
+        .expect("the live-atk scenario loads");
+    s.time.duration_s = 50.0;
+    let window = Some(v2xw_engine::scenario::schema::DilationWindow {
+        from_s: 10.0,
+        to_s: 50.0,
+    });
+    s.threats
+        .attackers
+        .retain(|a| a.id.ends_with("/ExpiredCert"));
+    assert_eq!(s.threats.attackers.len(), 1, "cat2 has one ExpiredCert attacker");
+    let mut nyv = s.threats.attackers[0].clone();
+    nyv.id = "threat/attacker/legacy/NotYetValid".to_string();
+    nyv.actor_ids = vec![30];
+    s.threats.attackers.push(nyv);
+    for a in &mut s.threats.attackers {
+        a.schedule = window;
+    }
+    let (r, _) = run(s);
+    let by = |d: &str| r.phase2.verdicts_by_detector.get(d).copied().unwrap_or(0);
+    println!(
+        "certValidity {}, signatureVerification {}, checked {}",
+        by("certValidity"),
+        by("signatureVerification"),
+        r.phase2.messages_checked
+    );
+    assert!(
+        by("certValidity") > 0,
+        "no receiver reported a certificate used outside its validity"
+    );
+    assert_eq!(
+        by("signatureVerification"),
+        0,
+        "a validly signed BSM under an out-of-window certificate was judged a bad signature"
+    );
+    assert_eq!(r.phase2.revoked_honest, 0);
+}

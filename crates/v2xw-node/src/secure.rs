@@ -533,6 +533,13 @@ impl NodeSecurity {
         self.last_refusal.take()
     }
 
+    /// Records a receiver-rule refusal the runtime made itself, before any SPDU reached
+    /// this stack (the generation-time-in-validity rule on
+    /// [`crate::runtime::RxFrame::signer_validity`]), for the frame's `node.rx` fate.
+    pub fn note_refusal(&mut self, rule: crate::rxval::RxReject) {
+        self.last_refusal = Some(rule);
+    }
+
     /// A stack signing under `psid` on `wall`, with `mode`'s backend.
     pub fn new(wall: WallClock, mode: CryptoMode, psid: u64) -> NodeSecurity {
         NodeSecurity {

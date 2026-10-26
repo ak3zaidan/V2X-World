@@ -4270,6 +4270,10 @@ impl Phase2 {
             } else {
                 LEGACY_CONFIDENCE_M
             };
+            // The research suite reads a validity refusal as such (live-atk F4); the US
+            // profile checks only verified BSM pairs and has no certificate subtype, so it
+            // sees the refusal as before.
+            let research_validity = m.outside_validity.filter(|_| self.us_profile.is_none());
             let observed = ObservedMessage {
                 bsm: m.bsm,
                 signer: key,
@@ -4285,8 +4289,10 @@ impl Phase2 {
                 claimed_heading_rad: m.claimed_heading_rad,
                 claimed_pos_confidence_m: confidence_m,
                 repetitions: 1,
-                cert_valid_from: 0,
-                cert_valid_to: SimTime::MAX,
+                // The signer certificate's validity period, when the receiver refused the
+                // message for lying outside it; every other message passed that rule.
+                cert_valid_from: research_validity.map_or(0, |w| w.0),
+                cert_valid_to: research_validity.map_or(SimTime::MAX, |w| w.1),
                 // A PSM is a vulnerable road user's own declaration (J2735 PSM; a CAM's
                 // stationType does the same in Europe): the suite then drops the vehicle
                 // kinematic and map checks a pedestrian would fail honestly.
@@ -4297,6 +4303,16 @@ impl Phase2 {
                 },
                 verification: match m.verification {
                     v2xw_node::stores::VerificationState::Verified => VerificationState::Valid,
+                    // Refused by the generation-time-in-validity rule alone: a genuine
+                    // certificate used out of its period, whose signature is good. The
+                    // research suite judges it as the legacy corpus does (signature
+                    // valid, certificate out of window), so its `certValidity` check
+                    // names the failure; it is not a bad signature.
+                    v2xw_node::stores::VerificationState::Invalid
+                        if research_validity.is_some() =>
+                    {
+                        VerificationState::Valid
+                    }
                     v2xw_node::stores::VerificationState::Invalid => {
                         VerificationState::BadSignature
                     }
