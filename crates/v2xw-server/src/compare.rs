@@ -12,7 +12,11 @@
 //!
 //! As `v2xw compare-signatures` and the experiment runner do: proportions pool their counts,
 //! ratios of sums their two sums, scalars and distributions are sample-count weighted means
-//! of each window's figure (so a p95 is the typical window's p95), and counts are summed.
+//! of each window's figure (so a p95 is the typical window's p95), and counts are summed —
+//! except a count whose metric aggregates by its maximum (`agg: max`: a revocation list's
+//! entries and bytes "as last published", the memory high-water mark), which is a level
+//! carried from window to window and pools to its largest value. Summing it would report a
+//! list of 42 entries as 42 times the number of windows.
 //!
 //! # When a difference is "meaningful"
 //!
@@ -181,13 +185,15 @@ pub struct Pool {
     w: [f64; 4],
     wn: f64,
     count: Option<u64>,
+    /// The largest window value of a count whose metric aggregates by its maximum.
+    peak: Option<u64>,
     distribution: bool,
     n: u64,
 }
 
 impl Pool {
-    /// Adds one window's value.
-    pub fn add(&mut self, unit: &str, value: &SampleValue) {
+    /// Adds one window's value; `agg` is the metric's aggregation tag (`Agg::tag`).
+    pub fn add(&mut self, unit: &str, agg: &str, value: &SampleValue) {
         if self.unit.is_empty() {
             self.unit = unit.to_string();
         }
@@ -224,6 +230,10 @@ impl Pool {
                 }
                 self.wn += w;
             }
+            SampleValue::Count { count } if agg == "max" => {
+                let p = self.peak.get_or_insert(0);
+                *p = (*p).max(*count);
+            }
             SampleValue::Count { count } => *self.count.get_or_insert(0) += count,
             other => {
                 if let Some(p) = other.point() {
@@ -252,6 +262,8 @@ impl Pool {
             }
         } else if let Some(c) = self.count {
             out.push(("", c as f64));
+        } else if let Some(p) = self.peak {
+            out.push(("", p as f64));
         }
         out
     }
@@ -289,10 +301,11 @@ impl DigestBuilder {
         }
         let t: u64 = sample.t;
         self.t_max_ns = self.t_max_ns.max(t);
-        self.pools
-            .entry(sample.metric.clone())
-            .or_default()
-            .add(&sample.unit, &sample.value);
+        self.pools.entry(sample.metric.clone()).or_default().add(
+            &sample.unit,
+            &sample.agg,
+            &sample.value,
+        );
         if self.keep_series && !sample.value.is_insufficient() {
             let ts = t as f64 / 1e9;
             let mut push = |name: String, v: Option<f64>| {
@@ -1357,6 +1370,7 @@ mod tests {
         for (s, t) in [(8u64, 10u64), (1, 10)] {
             p.add(
                 "ratio",
+                "ratio",
                 &SampleValue::Ratio(RatioEstimate::Proportion {
                     point: s as f64 / t as f64,
                     ci_lo: 0.0,
@@ -1371,5 +1385,60 @@ mod tests {
         let flat: Vec<(f64, f64)> = (0..20).map(|i| (f64::from(i), 1.0)).collect();
         assert_eq!(batch_se(&flat), Some(0.0));
         assert!(batch_se(&flat[..4]).is_none());
+    }
+
+    /// A count a metric aggregates by its maximum is a level carried from window to window
+    /// (the CRL "as last published"), so the run's value is its largest window, not the sum
+    /// of every window's copy of it; a per-window count (events processed) is still summed.
+    /// Live Studio track (docs/validation/live-studio-2026-10-25.md, SV.compare-records).
+    #[test]
+    fn a_max_aggregated_count_pools_to_its_peak_and_a_window_count_to_its_sum() {
+        use v2xw_core::ctx::Visibility;
+        use v2xw_metrics::{Agg, Dim, Dims, MetricDef, Quantum};
+        let crl = MetricDef::new(
+            "crl_entries",
+            "count",
+            Agg::Max,
+            Visibility::Public,
+            Quantum::COUNT,
+            "entries",
+        )
+        .with_dims([Dim::T]);
+        let events = MetricDef::new(
+            "events_processed",
+            "count",
+            Agg::Count,
+            Visibility::Public,
+            Quantum::COUNT,
+            "events",
+        )
+        .with_dims([Dim::T]);
+        let mut b = DigestBuilder::new(false);
+        for (i, (entries, n)) in [(3_u64, 10_u64), (3, 20), (5, 30), (5, 40)]
+            .into_iter()
+            .enumerate()
+        {
+            let t = (i as u64 + 1) * 1_000_000_000;
+            b.add(&MetricSample::new(
+                &crl,
+                t,
+                Dims::new(),
+                SampleValue::count(entries),
+            ));
+            b.add(&MetricSample::new(
+                &events,
+                t,
+                Dims::new(),
+                SampleValue::count(n),
+            ));
+        }
+        let value = |name: &str| {
+            b.metrics(None)
+                .into_iter()
+                .find(|m| m.name == name)
+                .and_then(|m| m.value)
+        };
+        assert_eq!(value("crl_entries"), Some(5.0));
+        assert_eq!(value("events_processed"), Some(100.0));
     }
 }
