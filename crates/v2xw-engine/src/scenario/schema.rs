@@ -2000,6 +2000,62 @@ pub struct ObuRadio {
     /// truck or bus — every vehicle's on the roof, or none.
     #[serde(default, skip_serializing_if = "ObuAntennaPattern::is_default")]
     pub antenna_pattern: ObuAntennaPattern,
+    /// A measured installed pattern (`antenna/sampled`, WP-09): when set it replaces
+    /// `antenna_pattern` on every vehicle. Unset, the default, changes nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampled_pattern: Option<SampledPattern>,
+}
+
+/// A measured antenna pattern every vehicle carries (`radio.devices.obu.sampled_pattern`,
+/// `v2xw_radio::antenna::SampledAntenna`). Re-implemented from Eckhoff, Brummer and Sommer,
+/// IEEE VNC 2016 §III (sampled azimuth gains, interpolated between samples), with measured
+/// vehicle patterns such as Kornek et al., IEEE ICC Workshops 2010.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SampledPattern {
+    /// The table, as CSV text (a YAML block scalar): a header naming `gain_db` (dB
+    /// relative to `antenna_gain_dbi`), `azimuth_deg` (counter-clockwise from the heading)
+    /// or `azimuth_cw_deg` (clockwise), and optionally `elevation_deg`; then one sample a
+    /// line. Interpolated linearly in dB. No default: the measurement is the scenario's.
+    pub csv: String,
+    /// The mount's rotation from the heading, degrees counter-clockwise; default 0
+    /// (Veins `SampledAntenna1D` rotation, behaviour only).
+    #[serde(default)]
+    pub rotation_deg: f64,
+    /// A per-vehicle random mount rotation on top: `none` (default), `uniform` in
+    /// ±`rotation_jitter_deg`, or `normal` with σ = `rotation_jitter_deg` (Veins
+    /// `SampledAntenna1D` random rotation, behaviour only). Keyed by seed and node.
+    #[serde(default)]
+    pub rotation_jitter: RotationJitter,
+    /// The width of that rotation, degrees; default 0.
+    #[serde(default)]
+    pub rotation_jitter_deg: f64,
+}
+
+/// How a sampled antenna's mount rotation varies from vehicle to vehicle
+/// (`radio.devices.obu.sampled_pattern.rotation_jitter`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RotationJitter {
+    /// Every mount at `rotation_deg`.
+    #[default]
+    None,
+    /// Uniform in ±`rotation_jitter_deg` per vehicle.
+    Uniform,
+    /// Normal with σ = `rotation_jitter_deg` per vehicle.
+    Normal,
+}
+
+impl RotationJitter {
+    /// The radio crate's value.
+    #[must_use]
+    pub fn to_radio(self) -> v2xw_radio::antenna::RotationJitter {
+        match self {
+            RotationJitter::None => v2xw_radio::antenna::RotationJitter::None,
+            RotationJitter::Uniform => v2xw_radio::antenna::RotationJitter::Uniform,
+            RotationJitter::Normal => v2xw_radio::antenna::RotationJitter::Normal,
+        }
+    }
 }
 
 /// A vehicle antenna's radiation pattern (`radio.devices.obu.antenna_pattern`).
@@ -2039,6 +2095,7 @@ impl Default for ObuRadio {
             cable_loss_db: 0.0,
             antenna_height_m: None,
             antenna_pattern: ObuAntennaPattern::Tr37885,
+            sampled_pattern: None,
         }
     }
 }

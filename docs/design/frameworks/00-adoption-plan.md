@@ -212,6 +212,28 @@ trustworthy or comparable; later waves add behaviours and radio features.
   positions; the Veins catch-test inputs agree as numbers; a flat 0 dBi CSV reproduces
   isotropic results byte for byte; a rotated pattern moves the null by the rotation. Fault:
   a sign error in the phase term fails the closed-form test.
+- Status 2026-10-26 (WP-09 agent, branch of `adbbc4c8`). Done: `propagation/two-ray-interference`
+  (`prop.rs`; Sommer 2012 Eq. 4-6, εr 1.02 read from the paper's Figure 4, full text cached as
+  `research/papers/sommer2012applicability.pdf`, UNVERIFIED cleared), selectable as
+  `radio.models.propagation: {id: propagation/two-ray-interference, params: {epsilon_r}}`;
+  the candidate range uses the monotone bound Friis − 6.02 dB. `antenna/sampled`
+  (`antenna.rs`): CSV `azimuth_deg | azimuth_cw_deg [, elevation_deg], gain_db`, linear in dB
+  with wrap, fixed `rotation_deg` and keyed per-node `rotation_jitter` (none/uniform/normal),
+  wired as `radio.devices.obu.sampled_pattern` (card registered only when set). Both off by
+  default, so goldens do not move. Tests: closed form at sample distances and the fade/peak
+  depths `∓20·log10(1 ∓ |Γ⊥|)` at `d_ref − d = kλ`; Veins catch numbers (TRI 10 m and 100 m,
+  SampledAntenna1D seven rows); null moves by the rotation; engine: received power under TRI
+  minus free space equals Eq. 6 per link, flat table equals the isotropic run record for
+  record, same seed same run. Note: Γ⊥ is real, so negating φ alone is unobservable; the
+  phase fault used is the reflected ray's sign (`1 − Γe^{iφ}`). Validated: engine lib
+  `scenario::` tests (28) and the flat-table/isotropic and rear-null engine test pass; the
+  radio unit tests passed except the closed-form test, whose fade expectation was corrected
+  (fade depth is −20·log10(1 − |Γ⊥|), 8.5 dB at 88.5 m, not "> 15 dB") and not yet re-run
+  (the re-run hit a linker failure on the shared target). Open: the engine TRI test is
+  `#[ignore]`d: links from node 11 imply a 1.85 m antenna height where 1.5 m was assumed;
+  no fault injection has been run yet (planned: `1 − Γe^{iφ}`, rotation sign, a sampled-gain
+  bias). Γ∥ (vertical polarisation) not shipped because
+  its sign convention against Sommer's calibration is unverified.
 
 ### Wave 4: stronger detection, safety measures, message generation
 

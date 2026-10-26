@@ -39,7 +39,10 @@
 //!   functional form from the dual-slope law implemented here. A building-obstructed link
 //!   is served by `propagation/tr37885`'s NLOS formula or by the Sommer building term on
 //!   top of a LOS law.
-//! * `two-ray-interference` — its ground permittivity ε_r is UNVERIFIED (not in cache).
+//!
+//! `propagation/two-ray-interference` is shipped (WP-09, 2026-10-26): the ground
+//! permittivity ε_r = 1.02 was read from the cached full text of Sommer, Joerer and
+//! Dressler, IEEE VNC 2012.
 //!
 //! `propagation/winner-plus-b1` is likewise absent: 04-models.md §3.3 records that all of
 //! its coefficients are `TODO: calibrate` because WINNER II D1.1.2 is not cached.
@@ -1132,9 +1135,9 @@ fn two_ray_card() -> ModelCard {
         "Both antenna heights are above zero; a zero height falls back to Friis.".to_string(),
     ];
     card.limitations = vec![
-        "No phase-accurate interference pattern: the Veins two-ray interference variant \
-         with a reflection coefficient is not shipped, because its default ground \
-         permittivity is UNVERIFIED (04-models.md §3.1)."
+        "No phase-accurate interference pattern: the d^-4 asymptote smooths away the deep \
+         fades; propagation/two-ray-interference is the phase-exact law with the Fresnel \
+         coefficient (Sommer 2012, εr 1.02)."
             .to_string(),
     ];
     card.ignores = vec![
@@ -1151,6 +1154,289 @@ fn two_ray_card() -> ModelCard {
         )],
         tests: vec!["the_two_ray_crossover_and_fresnel_breakpoint_match_the_document".to_string()],
     };
+    card
+}
+
+// =========================================================================================
+// `propagation/two-ray-interference`
+// =========================================================================================
+
+/// The relative permittivity of the road surface the two-ray interference law reflects
+/// off, 1.02: the value Sommer, Joerer and Dressler calibrated against their 5.89 GHz
+/// highway measurements ("On the Applicability of Two-Ray Path Loss Models for Vehicular
+/// Network Simulation", IEEE VNC 2012, §II-B and Figure 4, "analytical model,
+/// εr = 1.02"; full text read 2026-10-26). Veins ships the same default.
+pub const GROUND_EPSILON_R: f64 = 1.02;
+
+/// The reflection coefficient of the ground for a wave polarised perpendicular to the
+/// plane of incidence, `Γ⊥ = (sinθ − √(εr − cos²θ)) / (sinθ + √(εr − cos²θ))`
+/// [Sommer 2012 Eq. 5; Rappaport, *Wireless Communications* 2nd ed. §4.6].
+///
+/// `sin_theta` and `cos_theta` are those of the grazing angle. Real for `εr ≥ 1` (every
+/// ground), which is the range the model accepts; it tends to −1 at grazing incidence.
+#[must_use]
+pub fn ground_reflection_coefficient(sin_theta: f64, cos_theta: f64, epsilon_r: f64) -> f64 {
+    let root = math::sqrt((epsilon_r - cos_theta * cos_theta).max(0.0));
+    (sin_theta - root) / (sin_theta + root)
+}
+
+/// The two-ray interference factor `20·log10|1 + Γ⊥·e^{iφ}|`, dB, a gain: +6.02 dB at
+/// most (the two rays in phase), a deep fade where they cancel.
+///
+/// Geometry as Sommer 2012 Figure 1 and Eq. 4: `d` the ground distance, `d_los =
+/// √(d² + (h_t − h_r)²)`, `d_ref = √(d² + (h_t + h_r)²)`, `φ = 2π·(d_los − d_ref)/λ`,
+/// `sinθ = (h_t + h_r)/d_ref`, `cosθ = d/d_ref`. Zero (no reflection) when either antenna
+/// is at or below the ground.
+///
+/// Note that `Γ⊥` is real for `εr ≥ 1`, so `|1 + Γ·e^{iφ}| = |1 + Γ·e^{−iφ}|`: the sign
+/// of `φ` is not observable, and a phase fault shows only as a shifted phase (`φ + π`, the
+/// reflected ray's sign) or a wrong path difference.
+#[must_use]
+pub fn two_ray_interference_gain_db(
+    d_m: f64,
+    h_t_m: f64,
+    h_r_m: f64,
+    f_hz: f64,
+    epsilon_r: f64,
+) -> f64 {
+    if h_t_m <= 0.0 || h_r_m <= 0.0 {
+        return 0.0;
+    }
+    let d = d_m.max(D_MIN_M);
+    let lambda = numeric::wavelength_m(f_hz);
+    let d_los = math::hypot(d, h_t_m - h_r_m);
+    let d_ref = math::hypot(d, h_t_m + h_r_m);
+    let phi = 2.0 * core::f64::consts::PI * (d_los - d_ref) / lambda;
+    let gamma = ground_reflection_coefficient((h_t_m + h_r_m) / d_ref, d / d_ref, epsilon_r);
+    let (s, c) = math::sin_cos(phi);
+    // |1 + Γ·e^{iφ}|² = (1 + Γ·cosφ)² + (Γ·sinφ)².
+    let re = 1.0 + gamma * c;
+    let im = gamma * s;
+    // Never exactly zero for a finite distance (|Γ| < 1 while sinθ > 0); the floor only
+    // keeps the logarithm finite.
+    10.0 * math::log10((re * re + im * im).max(1e-30))
+}
+
+/// Two-ray interference path loss, dB:
+/// `L = 20·log10(4π·d/λ · |1 + Γ⊥·e^{iφ}|⁻¹)` [Sommer 2012 Eq. 6].
+///
+/// The Friis loss at the ground distance less [`two_ray_interference_gain_db`]. Unlike
+/// every other law in this module it is **not** monotone in distance: the deep fades at
+/// `d_ref − d_los = k·λ` are the point of it.
+#[must_use]
+pub fn two_ray_interference_loss_db(
+    d_m: f64,
+    h_t_m: f64,
+    h_r_m: f64,
+    f_hz: f64,
+    epsilon_r: f64,
+) -> f64 {
+    friis_loss_db(d_m, f_hz) - two_ray_interference_gain_db(d_m, h_t_m, h_r_m, f_hz, epsilon_r)
+}
+
+/// The constructive bound of the two-ray interference law, dB: Friis less 20·log10(2),
+/// the loss when the reflected ray arrives in phase with |Γ| = 1. The least loss the law
+/// can give at `d_m`, and monotone, which is what a candidate range needs.
+#[must_use]
+pub fn two_ray_interference_envelope_db(d_m: f64, f_hz: f64) -> f64 {
+    friis_loss_db(d_m, f_hz) - 20.0 * math::log10(2.0)
+}
+
+/// `propagation/two-ray-interference` — the phase-exact ground reflection with the
+/// Fresnel coefficient of a road of permittivity `εr` (Sommer, Joerer, Dressler, IEEE
+/// VNC 2012 Eq. 4-6; Rappaport §4.6). The Veins default for highway studies.
+#[derive(Debug, Clone)]
+pub struct TwoRayInterference {
+    card: ModelCard,
+    tier: Tier,
+    epsilon_r: f64,
+}
+
+impl TwoRayInterference {
+    /// The model's id.
+    pub const ID: &'static str = "propagation/two-ray-interference";
+
+    /// The model at `tier` with the calibrated ground permittivity [`GROUND_EPSILON_R`].
+    #[must_use]
+    pub fn new(tier: Tier) -> Self {
+        Self {
+            card: two_ray_interference_card(),
+            tier,
+            epsilon_r: GROUND_EPSILON_R,
+        }
+    }
+
+    /// The same model reflecting off a ground of relative permittivity `epsilon_r`
+    /// (at least 1).
+    #[must_use]
+    pub fn with_epsilon_r(mut self, epsilon_r: f64) -> Self {
+        self.epsilon_r = epsilon_r.max(1.0);
+        self
+    }
+
+    /// The ground permittivity in use.
+    #[must_use]
+    pub fn epsilon_r(&self) -> f64 {
+        self.epsilon_r
+    }
+}
+
+impl Default for TwoRayInterference {
+    fn default() -> Self {
+        Self::new(Tier::Medium)
+    }
+}
+
+impl Model for TwoRayInterference {
+    fn card(&self) -> &ModelCard {
+        &self.card
+    }
+}
+
+impl<C: Ctx + ?Sized> Propagation<C> for TwoRayInterference {
+    fn tier(&self) -> Tier {
+        self.tier
+    }
+
+    fn loss_db(
+        &mut self,
+        _ctx: &mut C,
+        tx: &RadioEndpoint,
+        rx: &RadioEndpoint,
+        f_hz: f64,
+        _los: &LosResult,
+        _w: &WeatherState,
+    ) -> LossBreakdown {
+        let d = tx.pos.distance_2d(rx.pos);
+        let path = two_ray_interference_loss_db(
+            d,
+            tx.height_m(),
+            rx.height_m(),
+            f_hz,
+            self.epsilon_r,
+        );
+        LossBreakdown::new(path, 0.0, 0.0, 0.0, tx.gain_dbi + rx.gain_dbi)
+    }
+}
+
+fn sommer_2012() -> Source {
+    Source {
+        kind: SourceKind::Paper,
+        reference: "C. Sommer, S. Joerer, F. Dressler, \"On the Applicability of Two-Ray \
+                    Path Loss Models for Vehicular Network Simulation\", IEEE VNC 2012, \
+                    pp. 64-69, doi:10.1109/VNC.2012.6407446, Eq. 4-6 and Figure 4"
+            .to_string(),
+        accessed: Some("2026-10-26".to_string()),
+        note: Some(
+            "Full text cached as research/papers/sommer2012applicability.pdf. εr = 1.02 is \
+             the value the paper's Figure 4 overlays on its 5.89 GHz measurements \
+             (ht = hr = 1.895 m)."
+                .to_string(),
+        ),
+    }
+}
+
+fn two_ray_interference_card() -> ModelCard {
+    let sommer = sommer_2012();
+    let rappaport = Source::new(
+        SourceKind::Paper,
+        "T. S. Rappaport, Wireless Communications: Principles and Practice, 2nd ed., \
+         §4.5-4.6 (Fresnel reflection coefficient, two-ray ground reflection)",
+    );
+    let mut card = ModelCard::new(
+        TwoRayInterference::ID,
+        Family::Propagation,
+        "1.0.0",
+        "Two-ray interference path loss: the direct ray and its ground reflection added \
+         with their phase difference and the road's Fresnel reflection coefficient, so the \
+         deep fades at characteristic distances that the d^-4 two-ray model smooths away \
+         are reproduced.",
+    );
+    card.tier = vec![Tier::Medium, Tier::High];
+    card.equations = vec![
+        Equation::new(
+            "geometry",
+            "d_los = √(d² + (h_t − h_r)²), d_ref = √(d² + (h_t + h_r)²), \
+             φ = 2π·(d_los − d_ref)/λ, sinθ = (h_t + h_r)/d_ref, cosθ = d/d_ref",
+        ),
+        Equation::new(
+            "reflection coefficient",
+            "Γ⊥ = (sinθ − √(εr − cos²θ)) / (sinθ + √(εr − cos²θ))",
+        ),
+        Equation {
+            name: "path loss".to_string(),
+            latex_or_text: "L[dB] = 20·log10(4π·d/λ · |1 + Γ⊥·e^{iφ}|⁻¹)".to_string(),
+            notes: Some(
+                "d is the ground distance (Sommer 2012 Figure 1). Deep fades where \
+                 d_ref − d_los = k·λ; the constructive bound Friis − 6.02 dB is what the \
+                 candidate range is planned on."
+                    .to_string(),
+            ),
+        },
+    ];
+    card.parameters = vec![
+        Parameter {
+            name: "epsilon_r".to_string(),
+            unit: "-".to_string(),
+            default: serde_json::json!(GROUND_EPSILON_R),
+            range: Some(vec![serde_json::json!(1.0), serde_json::json!(100.0)]),
+            source: sommer.clone(),
+            calibration: None,
+        },
+        Parameter {
+            name: "h_tx_m".to_string(),
+            unit: "m".to_string(),
+            default: serde_json::json!(1.5),
+            range: Some(vec![serde_json::json!(0.1), serde_json::json!(15.0)]),
+            source: Source::new(
+                SourceKind::Standard,
+                "3GPP TR 36.885 (vehicle antenna 1.5 m); the endpoint's own z is used",
+            ),
+            calibration: None,
+        },
+    ];
+    card.assumptions = vec![
+        "A flat ground plane between the antennas; the antenna heights are the endpoints' \
+         z (on terrain, height above the datum, as propagation/two-ray-ground)."
+            .to_string(),
+        "Perpendicular (horizontal) polarisation, the coefficient Sommer 2012 calibrated \
+         εr = 1.02 with; one reflected ray."
+            .to_string(),
+        "Equal ray amplitudes in the interference term (Eq. 6 corrects the Friis loss at \
+         the ground distance d only by the relative phase and Γ)."
+            .to_string(),
+    ];
+    card.limitations = vec![
+        "Not monotone in distance, by design: 03-interfaces.md §17's monotone LOS invariant \
+         is met by the free-space laws, not by this one."
+            .to_string(),
+        "No vertical-polarisation coefficient Γ∥ and no further reflections (Sommer 2012 \
+         ref. [18]); a building-blocked link still takes its loss from the obstacle stack."
+            .to_string(),
+    ];
+    card.ignores = vec![
+        "Shadowing and fading: this is a deterministic distance law; the fading family \
+         adds the small-scale part."
+            .to_string(),
+    ];
+    card.sources = vec![sommer.clone(), rappaport];
+    card.validation = Validation {
+        status: ValidationStatus::LiteratureChecked,
+        references: vec![
+            sommer,
+            Source::new(
+                SourceKind::Code,
+                "Veins veins_catch TwoRayInterferenceModel test (2.4 GHz, 2 m antennas, \
+                 εr 1.02: 9.5587819943e-07 at 10 m, 2.0317806459e-08 at 100 m), inputs \
+                 and expected numbers used as a cross-check only; no code was copied",
+            ),
+        ],
+        tests: vec![
+            "two_ray_interference_matches_the_closed_form_and_its_deep_fades".to_string(),
+            "two_ray_interference_agrees_with_the_veins_catch_numbers".to_string(),
+        ],
+    };
+    card.determinism = Determinism::default();
     card
 }
 
@@ -2820,6 +3106,121 @@ mod tests {
         assert!((b - a - 12.041_199_826_559_248).abs() < 1e-9, "{a} {b}");
     }
 
+    /// Sommer 2012 Eq. 4-6 evaluated in a second, independent algebra:
+    /// `|1 + Γ·e^{iφ}|² = 1 + Γ² + 2Γ·cosφ`, the Friis term written in metres and hertz.
+    fn tri_reference_db(d: f64, h_t: f64, h_r: f64, f: f64, eps: f64) -> f64 {
+        let c = 299_792_458.0;
+        let lambda = c / f;
+        let d_los = (d * d + (h_t - h_r) * (h_t - h_r)).sqrt();
+        let d_ref = (d * d + (h_t + h_r) * (h_t + h_r)).sqrt();
+        let phi = 2.0 * core::f64::consts::PI * (d_los - d_ref) / lambda;
+        let sin_t = (h_t + h_r) / d_ref;
+        let cos_t = d / d_ref;
+        let root = (eps - cos_t * cos_t).sqrt();
+        let g = (sin_t - root) / (sin_t + root);
+        let mag2 = 1.0 + g * g + 2.0 * g * phi.cos();
+        20.0 * (4.0 * core::f64::consts::PI * d / lambda).log10() - 10.0 * mag2.log10()
+    }
+
+    #[test]
+    fn two_ray_interference_matches_the_closed_form_and_its_deep_fades() {
+        let f = 5.9e9;
+        let lambda = numeric::wavelength_m(f);
+        // Sample distances, equal and unequal heights, two grounds.
+        for (h_t, h_r) in [(1.5, 1.5), (1.895, 1.895), (1.5, 5.0), (3.0, 1.5)] {
+            for eps in [GROUND_EPSILON_R, 15.0] {
+                for d in [5.0, 10.0, 37.0, 88.0, 150.0, 333.0, 1_000.0, 4_000.0] {
+                    let got = two_ray_interference_loss_db(d, h_t, h_r, f, eps);
+                    let want = tri_reference_db(d, h_t, h_r, f, eps);
+                    assert!(
+                        (got - want).abs() < 1e-6,
+                        "d {d} h {h_t}/{h_r} εr {eps}: {got} against {want}"
+                    );
+                }
+            }
+        }
+        // The deep fades: for equal heights h the rays are in phase again (e^{iφ} = 1,
+        // and Γ ≈ −1 cancels the direct ray) where d_ref − d = k·λ, that is at
+        // d_k = (4h² − k²λ²)/(2kλ); half-way, at (k + ½)·λ, they add.
+        let h = 1.5;
+        let fade_at = |k: f64| (4.0 * h * h - k * k * lambda * lambda) / (2.0 * k * lambda);
+        // At a fade the loss exceeds Friis by exactly −20·log10(1 − |Γ⊥|), at a peak it
+        // falls short of it by 20·log10(1 + |Γ⊥|): 8.5 dB and 4.2 dB at the last fade
+        // (88.5 m, |Γ⊥| = 0.62), shallower nearer in, where the grazing angle is steeper.
+        let gamma_at = |d: f64| {
+            let d_ref = (d * d + 4.0 * h * h).sqrt();
+            let (s, c) = (2.0 * h / d_ref, d / d_ref);
+            let root = (GROUND_EPSILON_R - c * c).sqrt();
+            ((s - root) / (s + root)).abs()
+        };
+        for k in [1.0, 2.0, 3.0, 5.0, 8.0] {
+            let d = fade_at(k);
+            let excess = two_ray_interference_loss_db(d, h, h, f, GROUND_EPSILON_R)
+                - friis_loss_db(d, f);
+            let depth = -20.0 * (1.0 - gamma_at(d)).log10();
+            assert!(
+                (excess - depth).abs() < 1e-6 && excess > 2.0,
+                "fade {k} at {d:.2} m is {excess:.3} dB deep, Γ says {depth:.3}"
+            );
+            // (|Γ⊥| grows with distance, so the factor's true minimum sits a little beyond
+            // d_k; at d_k itself the depth is exactly the one above.)
+            let d_peak = fade_at(k + 0.5);
+            let gain = friis_loss_db(d_peak, f)
+                - two_ray_interference_loss_db(d_peak, h, h, f, GROUND_EPSILON_R);
+            let up = 20.0 * (1.0 + gamma_at(d_peak)).log10();
+            assert!(
+                (gain - up).abs() < 1e-6 && gain > 1.0,
+                "peak {k}.5 at {d_peak:.2} m is {gain:.3} dB up, Γ says {up:.3}"
+            );
+            assert!(gain <= 20.0 * 2f64.log10() + 1e-12);
+        }
+        // The last fade for two 1.5 m antennas at 5.9 GHz sits at 88.5 m.
+        assert!((fade_at(1.0) - 88.54).abs() < 0.05, "{}", fade_at(1.0));
+        // Far beyond the crossover it converges on the d⁻⁴ two-ray ground law.
+        let far = two_ray_interference_loss_db(10_000.0, h, h, f, GROUND_EPSILON_R);
+        let trg = two_ray_ground_loss_db(10_000.0, h, h, f, 1.0);
+        assert!((far - trg).abs() < 0.5, "{far} against {trg}");
+        // Never below the constructive envelope the candidate range is planned on.
+        let mut d = 1.0;
+        while d < 3_000.0 {
+            let l = two_ray_interference_loss_db(d, h, h, f, GROUND_EPSILON_R);
+            assert!(l >= two_ray_interference_envelope_db(d, f) - 1e-9, "{d}");
+            d += 0.37;
+        }
+        // The model computes it from the endpoints' ground distance and heights.
+        let mut ctx = TestCtx::new(1);
+        let mut m = TwoRayInterference::default();
+        let tx = endpoint(1, 0.0, 0.0, 1.5);
+        let rx = endpoint(2, 60.0, 80.0, 1.5);
+        let b = Propagation::<TestCtx>::loss_db(
+            &mut m,
+            &mut ctx,
+            &tx,
+            &rx,
+            f,
+            &LosResult::clear(),
+            &WeatherState::CLEAR,
+        );
+        let want = tri_reference_db(100.0, 1.5, 1.5, f, GROUND_EPSILON_R);
+        assert!((b.path_db - want).abs() < 1e-6, "{} against {want}", b.path_db);
+        two_ray_interference_card().validate().expect("the card validates");
+    }
+
+    #[test]
+    fn two_ray_interference_agrees_with_the_veins_catch_numbers() {
+        // Veins veins_catch, TwoRayInterferenceModel: 2.4 GHz, both antennas 2 m high,
+        // εr 1.02; the received fraction of the power at 10 m and at 100 m. The inputs and
+        // expected numbers are the test's; the implementation is this crate's own.
+        for (d, want) in [(10.0, 9.558_781_994_3e-7), (100.0, 2.031_780_645_9e-8)] {
+            let l = two_ray_interference_loss_db(d, 2.0, 2.0, 2.4e9, 1.02);
+            let got = 10f64.powf(-l / 10.0);
+            assert!(
+                ((got - want) / want).abs() < 1e-9,
+                "{d} m: {got:e} against {want:e}"
+            );
+        }
+    }
+
     #[test]
     fn the_abbas_presets_match_the_table() {
         let rows: [(LogDistancePreset, Option<f64>, f64, f64, f64, f64); 4] = [
@@ -3366,13 +3767,15 @@ mod tests {
         for card in [
             free_space_card(),
             two_ray_card(),
+            two_ray_interference_card(),
             log_distance_card(LogDistancePreset::AbbasLosUrban, true, false),
             tr37885_card(),
         ] {
             card.validate().expect("card validates");
             registry.register(card).expect("registers");
         }
-        assert_eq!(registry.len(), 4);
+        assert_eq!(registry.len(), 5);
+        assert!(registry.contains(TwoRayInterference::ID));
         assert!(registry.contains(FreeSpace::ID));
         assert!(registry.contains(TwoRayGround::ID));
         assert!(registry.contains(LogDistanceShadowing::ID));

@@ -1171,6 +1171,8 @@ pub struct Engine {
     /// decisions of who charges buildings and who needs street geometry.
     main_law: crate::wiring::PropagationChoice,
     focus_law: Option<crate::wiring::PropagationChoice>,
+    /// The measured vehicle antenna pattern (`radio.devices.obu.sampled_pattern`).
+    sampled_antenna: Option<std::sync::Arc<v2xw_radio::antenna::SampledAntenna>>,
     /// The environment a sidelink link-level curve is read in: urban when the world's
     /// land use at its centre is urban or suburban, highway otherwise (TR 37.885's two
     /// CDL environments).
@@ -1420,6 +1422,24 @@ impl Engine {
             fading.as_ref(),
             &crate::wiring::build_phy(&scenario),
         )?;
+        // WP-09: a measured vehicle antenna pattern, when the scenario supplies one. Its
+        // card is registered only then, so a run without one pins the same models.
+        let sampled_antenna = match scenario.radio.devices.obu.sampled_pattern.as_ref() {
+            Some(sp) => {
+                let p = v2xw_radio::antenna::SampledAntenna::from_csv(&sp.csv).map_err(|why| {
+                    crate::error::ScenarioError::conflict(
+                        "radio.devices.obu.sampled_pattern.csv",
+                        format!("is not an antenna pattern table: {why}"),
+                    )
+                })?;
+                let card = v2xw_radio::antenna::sampled_card();
+                if !registry.contains(&card.id) {
+                    registry.register(card)?;
+                }
+                Some(std::sync::Arc::new(p))
+            }
+            None => None,
+        };
         let obstacles = crate::wiring::build_obstacles(&scenario, &world);
         obstacles.register(&mut registry)?;
         let focus = crate::wiring::build_focus(&scenario, &world);
@@ -1676,6 +1696,7 @@ impl Engine {
             range,
             main_law,
             focus_law,
+            sampled_antenna,
             radio_env,
             regulation,
             dsrc_channel,
@@ -9333,6 +9354,7 @@ impl Engine {
             focus: self.focus.as_ref().map(|f| &f.plan),
             main_law: self.main_law,
             focus_law: self.focus_law,
+            sampled_antenna: self.sampled_antenna.as_deref(),
         }
     }
 
