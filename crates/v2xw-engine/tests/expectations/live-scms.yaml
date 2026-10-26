@@ -663,8 +663,9 @@ rows:
   - 1.0
   - 1000000000.0
   source: 'one reporter an event and overall: every default case still closes'
-  measured: pending
-  verdict: pending
+  measured: 2 -> 2 (ratio 1)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.MN1.honest
   base: L
   variant: MN1
@@ -673,8 +674,14 @@ rows:
   expect: up
   source: 'with one reporter enough, an honest pseudonym falsely reported in three 5 s events by one receiver
     (26 honest vehicles were reported in L0) is revoked: the reason the corroboration exists'
-  measured: pending
-  verdict: pending
+  measured: 0 -> 0
+  verdict: wrong-expectation
+  measured_on: 2026-10-26, 938fb16a release
+  note: '2026-10-26 (938fb16a): L has 12 reports about 9 honest pseudonyms (at most 2 about any one),
+    so none reaches the corroborated rule''s min_events of 3 however few reporters it asks for. MN1 runs
+    event for event as L (883,278 events, the same 327 reports received, 2 cases); its digest differs
+    by the scenario hash only. The row needed honest false reports in three events, which this 180 s base
+    does not make'
 - id: LS.MLG.revocations
   base: L
   variant: MLG
