@@ -236,7 +236,7 @@ def fault(raw, name, row):
             rec['ma.decision'].append({'t': 0, 'subject': hon, 'decision': 'revoke'})
     elif name == 'attack-off':  # the attack is never put on the air
         for k in list(p):
-            if isinstance(p[k], (int, float)) and ('attack' in k or 'falsified' in k):
+            if isinstance(p[k], (int, float)) and ('attack' in k or 'falsified' in k or 'ghost' in k):
                 p[k] = 0
         p['attacker_outcomes'] = []
         p['verdicts_by_detector'] = {}

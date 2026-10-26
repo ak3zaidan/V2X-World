@@ -171,7 +171,7 @@ rows:
   expect: le
   value: 600
   fault: cost-x10
-  measured: '64'
+  measured: '83'
   verdict: pass
   source: 'the 300 s pilot with up to 62 vehicles peaked at 111 MB; 40 vehicles is fewer receivers'
 - id: A0.U.no-revocation
@@ -1054,7 +1054,7 @@ rows:
   expect: eq
   value: 0
   fault: crossfire
-  measured: '1225'
+  measured: '1244'
   verdict: open
   note: 'F2 (and F4: 613 about ExpiredCert)'
   source: 'signatureVerification fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
@@ -1270,7 +1270,7 @@ rows:
   expect: band
   band: [0.0, 6.0]
   fault: slow
-  measured: '2.412'
+  measured: '2.811'
   verdict: pass
   source: 'the first falsified BSM pair is judged on reception (10 Hz); the pilot measured 2.6-3.8 s (the onset is the first BSM after the schedule start and the suites need a few pairs)'
 
@@ -1330,8 +1330,8 @@ rows:
   expect: ratio
   band: [2.0, 8.0]
   fault: attack-off
-  measured: pending
-  verdict: pending
+  measured: '2 -> 10'
+  verdict: pass
   source: 'fraction 0.05 -> 0.20 of every vehicle spawned: four times the attackers (binomial; 40 held + replacements)'
 
 - id: SCU.reports-up.05-10
@@ -1341,8 +1341,8 @@ rows:
   measure: p2.reports_about_attackers
   expect: up
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '788 -> 1528'
+  verdict: pass
   source: 'twice the attackers, each heard by about as many receivers: about twice the reports (reports are per receiver per subject per interval)'
 
 - id: SCU.reports-up.10-20
@@ -1352,8 +1352,8 @@ rows:
   measure: p2.reports_about_attackers
   expect: up
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '1528 -> 2199'
+  verdict: pass
   source: 'twice the attackers, each heard by about as many receivers: about twice the reports (reports are per receiver per subject per interval)'
 
 - id: SCU.honest-not-revoked
@@ -1364,8 +1364,8 @@ rows:
   expect: eq
   value: 0
   fault: honest-revoked
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'attackers lying about themselves give no honest vehicle corroborated events, at any share'
 
 - id: SCU.cost-events
@@ -1376,8 +1376,8 @@ rows:
   expect: same
   fault: cost-x10
   tol: 0.1
-  measured: pending
-  verdict: pending
+  measured: '952406 -> 925357'
+  verdict: pass
   source: '40 vehicles transmit at 10 Hz whatever the share; reports are thousands against millions of events'
 
 - id: SCU.revoked-up
@@ -1387,8 +1387,8 @@ rows:
   measure: rec.revoked_att
   expect: up
   fault: no-revocation
-  measured: pending
-  verdict: pending
+  measured: '2 -> 9'
+  verdict: pass
   source: 'each attacker is detected and decided independently: four times the attackers, more revoked'
 
 - id: SCU.detected-share
@@ -1399,8 +1399,8 @@ rows:
   expect: band
   band: [0.8, 1.0]
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '1'
+  verdict: pass
   source: 'ConstPos breaks a check on every BSM (ConstantPosition); every attacker heard is reported'
 
 - id: SCU.ttd
@@ -1411,8 +1411,8 @@ rows:
   expect: band
   band: [0.0, 6.0]
   fault: slow
-  measured: pending
-  verdict: pending
+  measured: '0.01327'
+  verdict: pass
   source: 'the first falsified BSM pair is judged on reception (10 Hz); the pilot measured 2.6-3.8 s (the onset is the first BSM after the schedule start and the suites need a few pairs)'
 
 - id: SCU.ttr
@@ -1423,8 +1423,8 @@ rows:
   expect: band
   band: [10.0, 75.0]
   fault: slow
-  measured: pending
-  verdict: pending
+  measured: '30.17'
+  verdict: pass
   source: 'decision = detection + RA shuffle (report_shuffle_window_s 30) + 3 corroborated 5 s events: 15-60 s (pilot median 33 s)'
 
 - id: SCU.decided-early
@@ -1435,8 +1435,8 @@ rows:
   expect: band
   band: [0.7, 1.0]
   fault: no-revocation
-  measured: pending
-  verdict: pending
+  measured: '1'
+  verdict: pass
   source: 'an attacker with 60 s of run left after its onset has time for 3 events and the 30 s shuffle'
 
 - id: SCU.warnings-up
@@ -1446,8 +1446,8 @@ rows:
   measure: rec.warn_false_att
   expect: up
   fault: warn-none
-  measured: pending
-  verdict: pending
+  measured: '0 -> 3'
+  verdict: pass
   source: 'a frozen or random claimed position is a phantom vehicle: followers and crossers raise false FCW/IMA/LTA warnings; more attackers, more phantoms'
 
 - id: SCU.warnings-before-revocation
@@ -1458,8 +1458,9 @@ rows:
   expect: band
   band: [0.5, 1.0]
   fault: warn-late
-  measured: pending
-  verdict: pending
+  measured: 'None'
+  verdict: open
+  note: '2026-10-26: SCU10 has 0 attacker warnings (28 false, all honest), so the share is undefined, as SCL10 (F10)'
   source: 'once the CRL is enforced the attacker is dropped, so most of its false warnings come before its revocation decision (decision -> enforcement about 16 s, pilot)'
 
 - id: SRL.attackers-up
@@ -1470,8 +1471,8 @@ rows:
   expect: ratio
   band: [2.0, 8.0]
   fault: attack-off
-  measured: pending
-  verdict: pending
+  measured: '2 -> 10'
+  verdict: pass
   source: 'fraction 0.05 -> 0.20 of every vehicle spawned: four times the attackers (binomial; 40 held + replacements)'
 
 - id: SRL.reports-up.05-10
@@ -1504,8 +1505,8 @@ rows:
   expect: eq
   value: 0
   fault: honest-revoked
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'attackers lying about themselves give no honest vehicle corroborated events, at any share'
 
 - id: SRL.cost-events
@@ -1516,8 +1517,8 @@ rows:
   expect: same
   fault: cost-x10
   tol: 0.1
-  measured: pending
-  verdict: pending
+  measured: '951920 -> 917353'
+  verdict: pass
   source: '40 vehicles transmit at 10 Hz whatever the share; reports are thousands against millions of events'
 
 - id: SRL.revoked-up
@@ -1527,8 +1528,8 @@ rows:
   measure: rec.revoked_att
   expect: up
   fault: no-revocation
-  measured: pending
-  verdict: pending
+  measured: '2 -> 9'
+  verdict: pass
   source: 'each attacker is detected and decided independently: four times the attackers, more revoked'
 
 - id: SRL.detected-share
@@ -1586,8 +1587,8 @@ rows:
   measure: rec.warn_false_att
   expect: up
   fault: warn-none
-  measured: pending
-  verdict: pending
+  measured: '10 -> 41'
+  verdict: pass
   source: 'a frozen or random claimed position is a phantom vehicle: followers and crossers raise false FCW/IMA/LTA warnings; more attackers, more phantoms'
 
 - id: SRL.warnings-before-revocation
@@ -1610,8 +1611,8 @@ rows:
   expect: ratio
   band: [2.0, 8.0]
   fault: attack-off
-  measured: pending
-  verdict: pending
+  measured: '2 -> 10'
+  verdict: pass
   source: 'fraction 0.05 -> 0.20 of every vehicle spawned: four times the attackers (binomial; 40 held + replacements)'
 
 - id: SYM.reports-up.05-10
@@ -1621,8 +1622,8 @@ rows:
   measure: p2.reports_about_attackers
   expect: up
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '2004 -> 5756'
+  verdict: pass
   source: 'twice the attackers, each heard by about as many receivers: about twice the reports (reports are per receiver per subject per interval)'
 
 - id: SYM.reports-up.10-20
@@ -1632,8 +1633,8 @@ rows:
   measure: p2.reports_about_attackers
   expect: up
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '5756 -> 9917'
+  verdict: pass
   source: 'twice the attackers, each heard by about as many receivers: about twice the reports (reports are per receiver per subject per interval)'
 
 - id: SYM.honest-not-revoked
@@ -1644,8 +1645,8 @@ rows:
   expect: eq
   value: 0
   fault: honest-revoked
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'attackers lying about themselves give no honest vehicle corroborated events, at any share'
 
 - id: SYM.cost-events
@@ -1656,8 +1657,9 @@ rows:
   expect: same
   fault: cost-x10
   tol: 0.1
-  measured: pending
-  verdict: pending
+  measured: '1057443 -> 1515285'
+  verdict: wrong-expectation
+  note: '2026-10-26: a ghost is a frame: ghost frames 5,852 -> 35,708 add 457,842 events, 15.3 per ghost frame (one transmission plus its receptions; honest frames cost about 17). Corrected: events grow by (receivers + 1) x ghost frames, +43 % at 20 % Sybil'
   source: '40 vehicles transmit at 10 Hz whatever the share; reports are thousands against millions of events'
 
 - id: SYM.ghost-frames
@@ -1668,8 +1670,8 @@ rows:
   expect: ratio
   band: [1.3, 3.5]
   fault: attack-off
-  measured: pending
-  verdict: pending
+  measured: '5852 -> 19212'
+  verdict: pass
   source: 'each Sybil attacker sends sybil_ghosts = 6 extra identities per BSM: ghost frames scale with the attackers'
 
 - id: SYM.ghost-warnings-up
@@ -1679,8 +1681,9 @@ rows:
   measure: rec.warn_false_ghost
   expect: up
   fault: warn-none
-  measured: pending
-  verdict: pending
+  measured: '0 -> 0'
+  verdict: wrong-expectation
+  note: '2026-10-26: the engine''s ghosts are signed under the attacker''s own spare pseudonyms (run.rs sign_as) within sybil_jitter_m of it, so the labeller attributes them to the attacker''s node: rec.warn_false_ghost is 0 in SYM05, SYM10 and SYM20, and the attacker false warnings go 5 -> 7. Corrected: ghost-caused warnings are counted in rec.warn_false_att'
   source: 'ghost vehicles nobody drives are false warnings when an application acts on them (app_truth: a ghost subject has no truth episode)'
 
 - id: SYM.sybil-detected
@@ -1704,8 +1707,8 @@ rows:
   expect: eq
   value: 0
   fault: scalar
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'intensity 0 is a 0 m/s offset: no claim differs from the truth, so nothing is falsified'
 
 - id: TCU.zero-not-revoked
@@ -1716,8 +1719,8 @@ rows:
   expect: eq
   value: 0
   fault: all-caught
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'a 0 m/s offset is honest behaviour'
 
 - id: TCU.half-under-drift
@@ -1817,8 +1820,8 @@ rows:
   expect: eq
   value: 0
   fault: all-caught
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: '0.6 m half-range is inside the stated GNSS accuracy the research suite tolerates (use_stated_accuracy): not distinguishable from noise'
 
 - id: TRL.reports-up-0p01-0p1
@@ -1862,8 +1865,8 @@ rows:
   measure: ao.ttr_med_s
   expect: down
   fault: slow
-  measured: pending
-  verdict: pending
+  measured: '32.5 -> 32.48'
+  verdict: pass
   source: 'the legacy window decides on 3 trusted reporters spanning 3 s inside 15 s; the corroborated rule needs 3 events of 5 s inside 60 s, so it decides later on the same reports'
 
 - id: ME1.faster
@@ -1895,8 +1898,8 @@ rows:
   measure: ao.ttr_med_s
   expect: up
   fault: no-revocation
-  measured: pending
-  verdict: pending
+  measured: '32.5 -> 32.53'
+  verdict: pass
   source: 'four distinct reporters per event instead of two: events form later, the decision comes later'
 
 - id: MR1.not-slower
@@ -1907,8 +1910,9 @@ rows:
   expect: ratio
   band: [0.0, 1.0]
   fault: slow
-  measured: pending
-  verdict: pending
+  measured: '32.5 -> 32.5'
+  verdict: wrong-expectation
+  note: '2026-10-26: 32.5003 -> 32.5030 s, 3 ms later (ratio 1.0001): the event rule does not set the time to revoke; the RA''s 30 s shuffle and the CRL cadence do (10-25 headline). Corrected: same within 0.01 %'
   source: 'one reporter per event: events form no later'
 
 - id: MAL0.attack-free
@@ -1931,8 +1935,8 @@ rows:
   expect: eq
   value: 0
   fault: honest-revoked
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'attack-free: whatever the rule, honest noise this sparse (B0L) gives no revocation'
 
 - id: ME60.attack-free
@@ -1943,8 +1947,8 @@ rows:
   expect: eq
   value: 0
   fault: honest-revoked
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'attack-free: whatever the rule, honest noise this sparse (B0L) gives no revocation'
 
 - id: MR10.attack-free
@@ -1955,8 +1959,8 @@ rows:
   expect: eq
   value: 0
   fault: honest-revoked
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'attack-free: whatever the rule, honest noise this sparse (B0L) gives no revocation'
 
 - id: MR40.attack-free
@@ -1991,8 +1995,9 @@ rows:
   expect: eq
   value: 0
   fault: all-caught
-  measured: pending
-  verdict: pending
+  measured: '5'
+  verdict: wrong-expectation
+  note: '2026-10-26: 5 of 5 decided, through ConstantPosition (216 constantPositionFrozen reports) as in F7: a car stopped at a light claims 12 m/s, which no gpsDrift tolerance hides; positionJump 129. Corrected: gpsDrift blinds only the RandomPosition pair rule'
   source: '1.2 m misses under a 3 m gpsDrift: the 12 m/s offset is invisible after the onset step'
 
 - id: UD3.fewer-reports
@@ -2001,9 +2006,9 @@ rows:
   area: detector-param
   measure: p2.reports_about_attackers
   expect: down
-  fault: honest-reported
-  measured: pending
-  verdict: pending
+  fault: scalar  # 2026-10-26: the named fault could not push a 'down' row up (selftest CANNOT-FAIL)
+  measured: '1763 -> 529'
+  verdict: pass
   source: 'a wider drift allowance fires on fewer pairs'
 
 - id: UD05.more-honest
@@ -2025,8 +2030,9 @@ rows:
   expect: ratio
   band: [2.5, 6.0]
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '2228 -> 3438'
+  verdict: wrong-expectation
+  note: '2026-10-26: 2,228 -> 3,438 (x 1.54); RI02 files every fired verdict (reports_sent = verdicts_fired = 3,438) and checks exactly as many messages (42,167): the research suite checks a sender at its 1 Hz check rate, so a report interval under 1 s cannot add reports beyond one per check. Corrected: ratio = fired/filed at 1 s'
   source: 'a ConstPos attacker trips the check on every 10 Hz BSM; the per-(reporter, subject) interval caps the reports at 1/s, and at 0.2 s at 5/s'
 
 - id: RI5.fewer-reports
@@ -2087,8 +2093,8 @@ rows:
   expect: eq
   value: 0
   fault: honest-revoked
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'the research suite tolerates the accuracy each BSM states (use_stated_accuracy), so raw-fix noise inside it is not misbehaviour'
 
 - id: G.LU.interaction
@@ -2110,8 +2116,8 @@ rows:
   measure: digest
   expect: identical
   fault: nondeterministic
-  measured: pending
-  verdict: pending
+  measured: '069fdf180f988b4ed3161791557b1add0ca01472d22f1418d9c6ea39144369c0 -> 069fdf180f988b4ed3161791557b1add0ca01472d22f1418d9c6ea39144369c0'
+  verdict: pass
   source: 'the flag defaults to the old behaviour: the branch build reproduces C2M byte for byte'
 
 - id: JR.no-signature-crossfire
@@ -2122,8 +2128,9 @@ rows:
   expect: eq
   value: 0
   fault: crossfire
-  measured: pending
-  verdict: pending
+  measured: '618'
+  verdict: open
+  note: '2026-10-26: all 618 are about the ExpiredCert attacker, i.e. F4, not F2 (judge_revoked 0 removed every CRL-refused one). Fixed by the F4 change on the branch, not yet run on a build of it'
   source: 'with CRL-refused BSMs not judged, no attacker that signs validly is reported for a bad signature'
 
 - id: JR.fewer-reports
@@ -2132,9 +2139,9 @@ rows:
   area: judge-revoked
   measure: p2.reports_about_attackers
   expect: down
-  fault: detector-blind
-  measured: pending
-  verdict: pending
+  fault: scalar  # 2026-10-26: the named fault could not push a 'down' row up (selftest CANNOT-FAIL)
+  measured: '1683 -> 1005'
+  verdict: pass
   source: 'the reports about already revoked attackers are gone'
 
 - id: JR.same-decisions
@@ -2144,8 +2151,8 @@ rows:
   measure: ao.decided
   expect: same
   fault: all-caught
-  measured: pending
-  verdict: pending
+  measured: '4 -> 4'
+  verdict: pass
   source: 'a report about a revoked device cannot revoke anyone new: the same attackers are decided'
 
 - id: JR.no-honest
@@ -2156,8 +2163,8 @@ rows:
   expect: eq
   value: 0
   fault: honest-revoked
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'dropping CRL-refused BSMs removes evidence, never adds it'
 
 # ---- 8. Sybil outcome onset (engine fix on this branch) ----------------------------------
@@ -2171,8 +2178,8 @@ rows:
   expect: eq
   value: 0
   fault: scalar
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'a ghost frame is a false claim (a vehicle that does not exist): every Sybil attacker that sent one has an onset'
 - id: SYMb.ttd
   base: SYM10b
@@ -2182,8 +2189,8 @@ rows:
   expect: band
   band: [0.0, 6.0]
   fault: slow
-  measured: pending
-  verdict: pending
+  measured: '1.112'
+  verdict: pass
   source: 'six certificates at one point are co-located from the first ghost BSM; the research suite needs two consecutive 1 Hz checks (min_consecutive 2)'
 - id: SYMb.same-revocations
   base: SYM10
@@ -2192,8 +2199,8 @@ rows:
   measure: rec.revoked_att
   expect: same
   fault: no-revocation
-  measured: pending
-  verdict: pending
+  measured: '5 -> 5'
+  verdict: pass
   source: 'the fix changes only the bookkeeping of the outcome, not what any receiver or the MA does'
 
 # ---- 9. 2026-10-26: F4, F5 fixes and the F6 model (written before their runs) -----------
@@ -2373,8 +2380,8 @@ rows:
   expect: band
   band: [0.03, 0.5]
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '0.08772'
+  verdict: pass
   source: 'both checks read the same checks of one RandomSpeed sender; the model gives 0.05 to 0.45 over v 0 to 12 m/s and confidence 3 to 5 m'
 - id: F6.RSL.accel-fires
   base: RSL
@@ -2385,6 +2392,6 @@ rows:
   value: 1
   fault: detector-blind
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '5'
+  verdict: pass
   source: 'the check does fire on RandomSpeed, rarely (C2L: 3)'
