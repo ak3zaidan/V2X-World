@@ -1107,6 +1107,9 @@ pub struct Engine {
     /// Each roadside unit's CRL download in flight over its backhaul, and when it lands
     /// (live-rsu §3): the unit installs and broadcasts the list only once it has it.
     rsu_crl_fetch: BTreeMap<NodeId, SimTime>,
+    /// When each unit's fetch of this step's due list lands (in flight or landed), for the
+    /// carousel start: the list rides each unit's line once, as the unit's own fetch.
+    rsu_crl_landing: BTreeMap<NodeId, SimTime>,
     next_node: u32,
     next_frame: u32,
     /// The producer of the normative `Keyframe`/`Delta` stream (vwp-v1 §3.3, §3.4).
@@ -1644,6 +1647,7 @@ impl Engine {
             next_backend_bytes: 0,
             crl_timer_armed: false,
             rsu_crl_fetch: BTreeMap::new(),
+            rsu_crl_landing: BTreeMap::new(),
             next_node: 0,
             next_frame: 0,
             snapshots,
@@ -2134,6 +2138,7 @@ impl Engine {
         // The backend runs once per mobility step: a download that lands inside this step
         // is installed now, a later one at the first step it has landed by.
         let step_end = self.scenario.time.mobility_step().after(now);
+        self.rsu_crl_landing.clear();
         for rsu in due {
             // A unit that is switched off fetches nothing; it fetches when it is back on.
             if self.node_is_off(rsu) {
@@ -2157,6 +2162,7 @@ impl Engine {
                     at
                 }
             };
+            self.rsu_crl_landing.insert(rsu, lands);
             if lands >= step_end {
                 continue;
             }
@@ -8318,28 +8324,43 @@ impl Engine {
 
         // 4. A newly published list starts the roadside broadcast.
         if tick.published.is_some() && !self.crl_timer_armed {
-            // The list goes down each broadcasting unit's backhaul line, its bytes queued
-            // with whatever else the line carries; the broadcast starts when the first
-            // unit has it.
+            // The broadcast starts when the first broadcasting unit has the list. A unit in
+            // the certificate cycle fetched it over its own line in step 3b, and its timing
+            // is that fetch's: the list rides the line once (live-rsu §3, the double booking
+            // fixed 2026-10-26: each publication went down every unit's line a second time,
+            // 30 extra messages per list on the Midtown base). A unit outside the cycle has
+            // no fetch, and the list goes down its line here, queued with whatever else the
+            // line carries. A unit that is switched off has nothing on the air to start.
+            let landing = std::mem::take(&mut self.rsu_crl_landing);
+            let units: Vec<NodeId> = self
+                .phase2
+                .as_ref()
+                .map(|p| {
+                    p.rsus_with_role("crl")
+                        .into_iter()
+                        .filter(|n| p.rsu_spec_of(*n).is_some_and(|s| s.backhaul.connected))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let units: Vec<NodeId> = units
+                .into_iter()
+                .filter(|n| !self.node_is_off(*n))
+                .collect();
             let at = self
                 .phase2
                 .as_mut()
                 .and_then(|p| {
                     let size = p.crl_size(p.published_crl().0);
-                    let units: Vec<NodeId> = p
-                        .rsus_with_role("crl")
-                        .into_iter()
-                        .filter(|n| p.rsu_spec_of(*n).is_some_and(|s| s.backhaul.connected))
-                        .collect();
                     units
                         .into_iter()
-                        .filter_map(|n| {
-                            p.access_mut().rsu_send(
+                        .filter_map(|n| match landing.get(&n) {
+                            Some(&lands) => Some(lands),
+                            None => p.access_mut().rsu_send(
                                 n,
                                 v2xw_radio::cellular::Direction::Downlink,
                                 size,
                                 now,
-                            )
+                            ),
                         })
                         .min()
                 })
