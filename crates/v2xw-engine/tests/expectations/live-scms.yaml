@@ -196,8 +196,9 @@ rows:
   value: 1.0
   source: a top-up installs one i-period of certs_per_period = 1 certificates (CAMP-EE 2.1.5.3.2; IEEE
     1609.2.1 6.3.3)
-  measured: pending
-  verdict: pending
+  measured: '1'
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CP20.certs-per-topup
   base: L
   variant: CP20
@@ -231,8 +232,9 @@ rows:
   - 0.20600000000000002
   source: 'the ACA answers the RA once per certificate (one AcaRaCertResponse per butterfly-expanded key):
     preload and top-ups both scale by 1/5 = 0.2 on an unchanged fleet'
-  measured: pending
-  verdict: pending
+  measured: 1034 -> 210 (ratio 0.2031)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CP1.plv
   base: L
   variant: CP1
@@ -244,8 +246,9 @@ rows:
   - 0.20600000000000002
   source: 'each LA returns one encrypted pre-linkage value per certificate (CAMP 1.2.2 linkage, two LAs):
     x 0.2'
-  measured: pending
-  verdict: pending
+  measured: 2060 -> 412 (ratio 0.2)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CP1.topups
   base: L
   variant: CP1
@@ -255,8 +258,9 @@ rows:
   tol: 0.03
   source: one request and one download per top-up whatever the batch size (1609.2.1 6.3.3); the trigger
     is the period, not the count
-  measured: pending
-  verdict: pending
+  measured: 59 -> 59
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CP1.bsm-size
   base: L
   variant: CP1
@@ -265,8 +269,9 @@ rows:
   expect: same
   tol: 0.005
   source: 'a pseudonym certificate is the same 80 B whatever the batch size: nothing on the air changes'
-  measured: pending
-  verdict: pending
+  measured: 213 -> 213
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CP20.aca-responses
   base: L
   variant: CP20
@@ -379,8 +384,9 @@ rows:
   measure: access.uu_dl_bytes
   expect: down
   source: 'one certificate a batch instead of five: less downlink'
-  measured: pending
-  verdict: pending
+  measured: 381511 -> 244847
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CP60.cost
   base: L
   variant: CP60
@@ -401,8 +407,9 @@ rows:
   min_change: 0.3
   source: 'pool 1 with below 1: the top-up is due at the period a vehicle joins in, so every vehicle tops
     up at once and again each period'
-  measured: pending
-  verdict: pending
+  measured: 121 -> 190
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.PP3.topups
   base: L
   variant: PP3
@@ -508,8 +515,9 @@ rows:
   expect: le
   value: 1.0
   source: 'threshold 1: every report is a full batch on arrival and goes at once'
-  measured: pending
-  verdict: pending
+  measured: '0.0805'
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.RW0.report-stage
   base: L
   variant: RW0
@@ -587,8 +595,9 @@ rows:
   - 1.05
   source: the shuffle only reorders and delays; earlier revocation stops reports about revoked attackers,
     so at most as many reach the MA
-  measured: pending
-  verdict: pending
+  measured: 322 -> 327 (ratio 1.016)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.MR10.latency
   base: L
   variant: MR10
