@@ -1533,8 +1533,10 @@ pub struct Phase2Report {
     /// Sybil ghost frames put on the air: each a genuine SPDU signed under one of the
     /// attacker's concurrent pseudonyms, with its certificate attached.
     pub ghost_frames: u64,
-    /// Delivered messages the local detectors did not check because they state nothing
-    /// about their sender's motion: relayed reports, CRLs, P2PCD responses, WSAs.
+    /// Delivered messages the local detectors did not check: ones that state nothing
+    /// about their sender's motion (relayed reports, CRLs, P2PCD responses, WSAs), ones
+    /// from a revoked signer (unless `judge_revoked`), and ones the verification policy
+    /// delivered unverified.
     pub messages_not_checked: u64,
     /// How many messages the local detectors checked.
     pub messages_checked: u64,
@@ -4239,6 +4241,20 @@ impl Phase2 {
                 self.report.messages_not_checked += 1;
                 continue;
             }
+            // A message this node's policy delivered without checking its signature is
+            // not judged: misbehaviour detection reads authenticated BSMs ([SM-MBR]
+            // 2.3.1.2.1: the evidence is the signed BSMs, which the reporter has checked),
+            // and the suite zeroes every check of an unverified message anyway. Before, it
+            // was still fed to the detector and counted as checked: under on-demand
+            // verification `messages_checked` rose 45,071 -> 49,194 while 97 % of
+            // receptions went unverified (live-scms VOD), and the trackers' state moved on
+            // content nobody had authenticated. A compromised unit still keeps what it
+            // heard (its forgeries frame a vehicle it heard, verified or not).
+            let unverified = m.verification == v2xw_node::stores::VerificationState::Unverified;
+            if unverified && !compromised {
+                self.report.messages_not_checked += 1;
+                continue;
+            }
             if self.us_profile.is_none()
                 && let Some(last) = self.checked_at.get(&(node, key))
                 && m.received_at
@@ -4250,7 +4266,7 @@ impl Phase2 {
             }
             // The rate-limit stamp is read only by the research suite's 1 s rate (above);
             // the US profile checks every message and never reads it, so it is not kept.
-            if self.us_profile.is_none() {
+            if self.us_profile.is_none() && !unverified {
                 self.checked_at.insert((node, key), m.received_at);
             }
             let claimed = m.claimed_pos.unwrap_or(Vec3::ZERO);
@@ -4308,6 +4324,10 @@ impl Phase2 {
             };
             if compromised {
                 heard.push(observed.clone());
+            }
+            if unverified {
+                self.report.messages_not_checked += 1;
+                continue;
             }
             // The BSMs this judgement is about, named before the suite moves on to `m`.
             let judged = detector.judged_times(&observed);
@@ -5290,9 +5310,15 @@ impl Phase2 {
         r: &MisbehaviourReport,
         location: v2xw_sec::envelope::GenerationLocation,
     ) -> MbrBuild {
-        if self.etsi.is_some() || self.home().state.pki.is_none() {
+        if self.etsi.is_some() {
             return MbrBuild::Off;
         }
+        // The two filing rules of the US profile come before the PDU layer's check
+        // (R-KEMFILE, R-PQUNSEC): neither depends on how the report would be encrypted or
+        // whether its bytes are built. Under a post-quantum KEM (which turns the
+        // 1609.2.1 PDU layer off) a detection no SM-MBR v1.1 subtype maps, or a roadside
+        // unit's own detection, had nothing to file before and still has nothing: before,
+        // `Off` came first and 255 such detections were uploaded on the modelled path.
         if r.reporter.is_some_and(|n| self.rsu_spec_of(n).is_some()) {
             // R-UNSEC: the US profile has no roadside reporter, so a unit's own detection
             // is not filed (`Phase2::files_report`; sized-only on the modelled path only
@@ -5313,6 +5339,10 @@ impl Phase2 {
         let Some(subtype) = r.reason_codes.iter().find_map(|c| us_subtype(c, us)) else {
             return MbrBuild::Unmapped;
         };
+        if self.home().state.pki.is_none() {
+            // No PDU layer: the report is fileable and travels on the modelled path.
+            return MbrBuild::Off;
+        }
         if !r.reporter.is_some_and(|n| {
             self.run_of(device_of(n))
                 .state

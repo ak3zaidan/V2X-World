@@ -44,13 +44,13 @@ pub const ECDSA_P384: SignatureScheme = SignatureScheme {
     mode: SchemeMode::Classical,
     parts: &[Part {
         primitive: PrimitiveId::ECDSA_P384,
-        // As before this registry existed: one P-384 figure is not a table, so the node
-        // keeps charging P-256 operations.
-        op_prefix: "ecdsa-p256",
+        // Its own operations: a profile that publishes P-384 figures charges them, and
+        // one that does not charges P-256 (`v2xw_node::profile::HardwareProfile::priced_op`).
+        op_prefix: "ecdsa-p384",
         post_quantum: false,
     }],
     standard: "IEEE 1609.2-2016 §6.3.29 (EcdsaP384Signature); SEC 1 §2.3.3",
     real_crypto: false,
     defines: None,
-    notes: "Sizes are P-384's (98-byte signature, 49-byte key); time is charged as P-256.",
+    notes: "Sizes are P-384's (98-byte signature, 49-byte key); time is the profile's P-384 figure, or P-256 where it publishes none.",
 };

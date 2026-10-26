@@ -962,6 +962,43 @@ impl HardwareProfile {
             .collect()
     }
 
+    /// Whether this profile itself prices `op`: an HSM figure (a service time or a
+    /// published range), a software-table figure, or a catalogue anchor.
+    fn publishes_op(&self, op: &str) -> bool {
+        (self.hsm.kind != HsmKind::None
+            && self
+                .hsm
+                .ops
+                .get(op)
+                .is_some_and(|s| s.service_time().is_some() || s.range_us().is_some()))
+            || self
+                .software_crypto
+                .get(op)
+                .and_then(CostUs::service_time)
+                .is_some()
+            || self.anchored_cost(op).is_some()
+    }
+
+    /// The operation this profile actually charges for `op`. ECDSA P-384 is charged with
+    /// its own figure where the profile publishes one (`obu-generic-automotive-soc-no-hsm`:
+    /// 8,104 us sign, 5,721 us verify, R5 B.5), and as P-256 otherwise
+    /// ([`HardwareProfile::op_cost_is_curve_proxy`] flags it). Before, every profile
+    /// charged P-384 as P-256, even the one that publishes P-384 (live-scms S384.verify).
+    #[must_use]
+    pub fn priced_op<'a>(&self, op: &'a str) -> &'a str {
+        match curve_fallback(op) {
+            Some(fallback) if !self.publishes_op(op) => fallback,
+            _ => op,
+        }
+    }
+
+    /// Whether `op` is charged as another curve's operation on this profile: a P-384
+    /// operation the profile does not price, charged as P-256.
+    #[must_use]
+    pub fn op_cost_is_curve_proxy(&self, op: &str) -> bool {
+        self.priced_op(op) != op
+    }
+
     /// The service time this profile gives one cryptographic operation, and where it runs.
     ///
     /// Resolution order, which is rule H2 plus §2.1's "service times come from the
@@ -975,6 +1012,7 @@ impl HardwareProfile {
     /// node using it can run — deliberately, because the alternative is an invented number
     /// that would silently set the load of every run.
     pub fn op_cost(&self, op: &str) -> Option<(Duration, RunsOn)> {
+        let op = self.priced_op(op);
         // A hybrid signature is both signatures, made or checked one after the other: its
         // cost is the sum of the components' costs, and it needs every one. It runs where
         // the first (classical) half runs; a post-quantum half on a CPU beside an HSM
@@ -1072,6 +1110,8 @@ impl HardwareProfile {
     /// `None` when [`HardwareProfile::op_cost`] has none. The same resolution order.
     pub fn op_cost_facts(&self, op: &str) -> Option<OpCostFacts> {
         let (t, runs_on) = self.op_cost(op)?;
+        let curve_proxy = self.op_cost_is_curve_proxy(op);
+        let charged = self.priced_op(op);
         let us = t.as_nanos() as f64 / 1e3;
         let mut facts = OpCostFacts {
             op: op.to_string(),
@@ -1086,7 +1126,7 @@ impl HardwareProfile {
             return Some(facts);
         }
         if self.hsm.kind != HsmKind::None
-            && let Some(spec) = self.hsm.ops.get(op)
+            && let Some(spec) = self.hsm.ops.get(charged)
             && let Some(basis) = spec.basis()
         {
             facts.basis = basis;
@@ -1099,15 +1139,22 @@ impl HardwareProfile {
                 .source
                 .clone()
                 .or_else(|| spec.throughput_per_s.source.clone());
+            if curve_proxy {
+                facts.source = Some(curve_proxy_note(op, facts.source.as_deref()));
+            }
             return Some(facts);
         }
-        if let Some(c) = self.software_crypto.get(op).filter(|c| c.us.is_some()) {
+        if let Some(c) = self.software_crypto.get(charged).filter(|c| c.us.is_some()) {
             facts.basis = if matches!(c.status, Some(FieldStatus::Proxy)) {
                 CostBasis::SoftwareProxy
             } else {
                 CostBasis::SoftwareBenchmark
             };
-            facts.source = c.source.clone();
+            facts.source = if curve_proxy {
+                Some(curve_proxy_note(op, c.source.as_deref()))
+            } else {
+                c.source.clone()
+            };
         } else if self.op_cost_is_pq_proxy(op) {
             facts.basis = CostBasis::SoftwareProxy;
             facts.source = Some(format!(
@@ -1409,13 +1456,32 @@ fn unit_of(name: &str) -> &'static str {
 /// A hybrid is the ECDSA P-256 signature with a post-quantum one concatenated
 /// (05-protocols.md §5.3): signing makes both and verifying checks both, so its ops are
 /// compound ids whose cost [`HardwareProfile::op_cost`] composes from the components. A
-/// pure post-quantum scheme signs with its own primitive's op. The classical curves other
-/// than P-256 keep the P-256 ops: no shipped profile publishes a brainpool figure, and one
-/// P-384 figure is not a table. An unknown name falls back to P-256, which the loader
+/// pure post-quantum scheme signs with its own primitive's op. Brainpool keeps the P-256
+/// ops (no shipped profile publishes a brainpool figure). P-384 signs and verifies with
+/// `ecdsa-p384-*`, which a profile without a P-384 figure charges as P-256
+/// ([`HardwareProfile::priced_op`]). An unknown name falls back to P-256, which the loader
 /// never lets through.
 #[must_use]
 pub fn signature_ops(signature: &str) -> (&'static str, &'static str) {
     v2xw_sec::scheme::signature(signature).map_or(("ecdsa-p256-sign", "ecdsa-p256-verify"), |s| {
         (s.sign_op(), s.verify_op())
     })
+}
+
+/// The P-256 operation a P-384 one is charged as on a profile that does not price P-384
+/// ([`HardwareProfile::priced_op`]); `None` for every other operation.
+fn curve_fallback(op: &str) -> Option<&'static str> {
+    match op {
+        "ecdsa-p384-sign" => Some("ecdsa-p256-sign"),
+        "ecdsa-p384-verify" => Some("ecdsa-p256-verify"),
+        "ecdsa-p384-keygen" => Some("ecdsa-p256-keygen"),
+        _ => None,
+    }
+}
+
+fn curve_proxy_note(op: &str, source: Option<&str>) -> String {
+    format!(
+        "{op} charged as P-256: this profile publishes no P-384 figure ({})",
+        source.unwrap_or("no source")
+    )
 }
