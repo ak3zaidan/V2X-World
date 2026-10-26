@@ -1,0 +1,7 @@
+# share-constpos-l-10 with the MA rule threat/ma/corroborated {min_events: 1}.
+schema: v2xw/scenario/1
+meta: {base: share-constpos-l-10.yaml, name: live-atk ma-minev1}
+detection:
+  ma:
+    id: threat/ma/corroborated
+    params: {min_events: 1}

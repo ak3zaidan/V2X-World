@@ -1,0 +1,856 @@
+# Live cross-domain causal chains (docs/validation/live-chains-2026-10-25.md): every link of
+# a chain that crosses domains (security -> radio -> MAC -> application; traffic -> radio
+# -> DCC -> verification load; OBU hardware -> latency; backhaul -> CRL -> acceptance;
+# GNSS -> detectors -> reports -> MA; signals -> queues -> channel load; pedestrians -> PSM
+# -> VRU safety) is predicted here, with its source or equation, BEFORE the runs that
+# judge it, and measured on the real engine (the release v2xw of 486c8cba, copied to the
+# scratchpad), same seed for base and variant, one run per run-lock call.
+#
+# Reading: tools/realworld/live_chains.py extract <run-dir> (matrix.py extract plus the
+# per-link `lc.*` measures), live_chains.py derive <runs> (the X-* contrast runs), then
+#   python3 tools/realworld/matrix.py check <this file> <runs> [--fill]
+# Every row goes red under an injected fault: live_chains.py faults <this file> <runs>
+# (variant := base for direction rows, value moved out of band for value rows).
+#
+# Calibration seen before these rows were written: one 5 s run of the dense grid on the
+# Craton2 (89 vehicles, 8.19 BSM/vehicle/s under J2945/1, CBR 0.21, PSDU 200 B per BSM,
+# 315 us per BSM, 78 receivers per frame, collision rate 0.023, PDR 0.976, sign 9.0 ms,
+# verify 0.45 ms). No variant had been run.
+#
+# verdict: pass | fixed | wrong-expectation (corrected with the evidence in `note`) | open.
+schema: v2xw/scms-run-expectations/1
+runs:
+  r100: {scenario: scenarios/live-chains/r100.yaml, note: 'dense 300 m grid, <=100 vehicles, 6 s, no-HSM SoC, J2945/1 on, ECDSA P-256'}
+  r100b: {scenario: scenarios/live-chains/r100.yaml, note: r100 again (determinism)}
+  r40: {scenario: scenarios/live-chains/r40.yaml, note: r100 with <=40 vehicles}
+  r160: {scenario: scenarios/live-chains/r160.yaml, note: r100 with <=160 vehicles}
+  r40-nodcc: {scenario: scenarios/live-chains/r40-nodcc.yaml, note: r40, congestion control off}
+  r100-nodcc: {scenario: scenarios/live-chains/r100-nodcc.yaml, note: r100, congestion control off}
+  r160-nodcc: {scenario: scenarios/live-chains/r160-nodcc.yaml, note: r160, congestion control off}
+  r100-falcon: {scenario: scenarios/live-chains/r100-falcon.yaml, note: r100 under Falcon-512}
+  r100-hybrid: {scenario: scenarios/live-chains/r100-hybrid.yaml, note: r100 under hybrid Falcon-512 + P-256}
+  r100-mldsa44: {scenario: scenarios/live-chains/r100-mldsa44.yaml, note: r100 under ML-DSA-44}
+  r100-falcon-nodcc: {scenario: scenarios/live-chains/r100-falcon-nodcc.yaml, note: r100-falcon, congestion control off}
+  r40-falcon: {scenario: scenarios/live-chains/r40-falcon.yaml, note: r40 under Falcon-512}
+  r40-slh: {scenario: scenarios/live-chains/r40-slh.yaml, note: r40 under SLH-DSA-SHA2-128s (edge)}
+  r100-craton2: {scenario: scenarios/live-chains/r100-craton2.yaml, note: r100 on the Craton2 HSM}
+  r100-c2sw: {scenario: scenarios/live-chains/r100-c2sw.yaml, note: r100 on the Craton2, ECDSA in software}
+  r160-c2sw: {scenario: scenarios/live-chains/r160-c2sw.yaml, note: r160 on the Craton2, ECDSA in software}
+  r160-c2sw-nodcc: {scenario: scenarios/live-chains/r160-c2sw-nodcc.yaml, note: r160-c2sw, congestion control off}
+  r160-craton2: {scenario: scenarios/live-chains/r160-craton2.yaml, note: r160 on the Craton2 HSM}
+  r100-b10: {scenario: scenarios/live-chains/r100-b10.yaml, note: 'r100, J2945/1 B = 10'}
+  r100-b50: {scenario: scenarios/live-chains/r100-b50.yaml, note: 'r100, J2945/1 B = 50'}
+  r100-itt300: {scenario: scenarios/live-chains/r100-itt300.yaml, note: 'r100, vMax_ITT 300 ms'}
+  r100-s2: {scenario: scenarios/live-chains/r100-s2.yaml, note: r100 on a second seed}
+  r100-falcon-s2: {scenario: scenarios/live-chains/r100-falcon-s2.yaml, note: r100-falcon on a second seed}
+  X-pq-density-pdr: {scenario: derived, note: '(r100 - r100-falcon) - (r40 - r40-falcon) PDR'}
+  X-pq-density-coll: {scenario: derived, note: '(r100-falcon - r100) - (r40-falcon - r40) collision rate'}
+  X-dcc-density-cbr: {scenario: derived, note: '(r160 - r40) - (r160-nodcc - r40-nodcc) CBR'}
+  X-dcc-obu-wait: {scenario: derived, note: '(r160-c2sw-nodcc - r160-c2sw) - (r160-nodcc - r160) verify wait'}
+  S: {scenario: scenarios/live-chains/scms-base.yaml, note: 'CAMP lifecycle 240 s, 5 % ConstPos from 60 s, --no-recording'}
+  scms-crlg: {scenario: scenarios/live-chains/scms-crlg.yaml, note: 'S, CRL generator offline 60-200 s'}
+  scms-crlg-short: {scenario: scenarios/live-chains/scms-crlg-short.yaml, note: 'S, CRL generator offline 60-130 s'}
+  scms-crlstore: {scenario: scenarios/live-chains/scms-crlstore.yaml, note: 'S, CRL store offline 60-200 s'}
+  scms-g0: {scenario: scenarios/live-chains/scms-g0.yaml, note: 'S, no GNSS outliers or bursts'}
+  scms-g10: {scenario: scenarios/live-chains/scms-g10.yaml, note: 'S, GNSS outliers 0.1 /s'}
+  scms-g50: {scenario: scenarios/live-chains/scms-g50.yaml, note: 'S, GNSS outliers 0.5 /s (edge)'}
+  sig-base: {scenario: scenarios/live-chains/sig-base.yaml, note: 'signalised 4 x 6 grid, 60 s cycle, 1,500 veh/h, 180 s'}
+  sig-c40: {scenario: scenarios/live-chains/sig-c40.yaml, note: sig-base with a 40 s cycle}
+  sig-c120: {scenario: scenarios/live-chains/sig-c120.yaml, note: sig-base with a 120 s cycle}
+  sig-c180: {scenario: scenarios/live-chains/sig-c180.yaml, note: sig-base with a 180 s cycle (edge)}
+  sig-r3000: {scenario: scenarios/live-chains/sig-r3000.yaml, note: 'sig-base at 3,000 veh/h'}
+  sig-c120-r3000: {scenario: scenarios/live-chains/sig-c120-r3000.yaml, note: 'sig-c120 at 3,000 veh/h'}
+  ped-base: {scenario: scenarios/live-chains/ped-base.yaml, note: 'vru-grid 60 s: 150 pedestrians, 15 cyclists, 30 % with a PSM device'}
+  ped-50: {scenario: scenarios/live-chains/ped-50.yaml, note: ped-base with 50 pedestrians}
+  ped-450: {scenario: scenarios/live-chains/ped-450.yaml, note: ped-base with 450 pedestrians}
+  ped-dev0: {scenario: scenarios/live-chains/ped-dev0.yaml, note: ped-base with no PSM device}
+  ped-dev100: {scenario: scenarios/live-chains/ped-dev100.yaml, note: ped-base with a PSM device on every VRU}
+  X-crl-paths: {scenario: derived, note: '(S - scms-crlstore) - (S - scms-crlg) revoked receptions'}
+  X-sig-demand: {scenario: derived, note: '(sig-r3000 - sig-c120-r3000) - (sig-base - sig-c120) mean speed'}
+rows:
+# ---------------------------------------------------------------- chain 1: PQ -> bytes -> airtime -> CBR -> collisions -> PDR
+- id: LC.PQ.psdu-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: lc.psdu_per_bsm
+  expect: ratio
+  band: [3.5, 6.0]
+  source: 'Falcon-512 signature 666 B for ECDSA 64 B (+602 B on every BSM; Falcon spec 1.2 Table 3.3); its certificate explicit with an 897 B key and a 666 B CA signature for the 80 B implicit one (+~1,530 B) on the ~11 % of BSMs that attach it (CertAttachInt 1 s): 200 + 602 + 0.11 x 1,530 = 970 B, x4.85'
+- id: LC.PQ.psdu-hybrid
+  base: r100
+  variant: r100-hybrid
+  area: pq-chain
+  measure: lc.psdu_per_bsm
+  expect: ratio
+  band: [4.0, 6.5]
+  source: 'hybrid = ECDSA 64 B + Falcon 666 B signatures concatenated (+666 B per BSM), the certificate carries both keys and both CA signatures: (200 + 666 + 0.11 x ~1,600) / 200 = x5.2'
+- id: LC.PQ.psdu-mldsa44
+  base: r100
+  variant: r100-mldsa44
+  area: pq-chain
+  measure: lc.psdu_per_bsm
+  expect: ratio
+  band: [11.0, 19.0]
+  source: 'ML-DSA-44 signature 2,420 B, public key 1,312 B (FIPS 204 Table 2): (200 + 2,356 + 0.11 x ~3,650) / 200 = x14.8, plus a fragment header per extra frame'
+- id: LC.PQ.psdu-slh-edge
+  base: r40
+  variant: r40-slh
+  area: pq-chain
+  measure: lc.psdu_per_bsm
+  expect: ratio
+  band: [30.0, 60.0]
+  source: 'SLH-DSA-SHA2-128s signature 7,856 B, public key 32 B (FIPS 205 Table 2): (200 + 7,792 + 0.11 x ~7,830) / 200 = x44'
+  verdict: open
+  note: "ENGINE FINDING: SLH-DSA-SHA2-128s on the no-HSM SoC, 38 vehicles for 6 s: 2,101 node tasks and 0 frames on the air, while every loss counter stays 0 (net_mtu_refusals, mac_drops, suppressed_frames, phy_refusals, credentials_refused). The loader accepted the scenario (the profile prices the scheme from a catalogue anchor), and the run then put nothing on the air and counted no loss. The likely cause is the signing time (SLH-DSA-128s signs in tenths of a second on Cortex-A72-class cores, against a 100 ms BSM interval), but no record says so. Owed: count the BSMs lost before the air, or refuse the scheme at load as a profile with no sign cost is refused"
+- id: LC.PQ.frag-share-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: lc.frag_share
+  expect: band
+  band: [0.05, 0.25]
+  source: 'a Falcon BSM with a digest (~870 B) fits the 1,400 B WSMP MTU; one carrying the ~2,400 B certificate does not, so only the certificate-carrying share (~0.11, J2945/1 CertAttachInt) is fragmented'
+- id: LC.PQ.frag-share-mldsa44
+  base: r100
+  variant: r100-mldsa44
+  area: pq-chain
+  measure: lc.frag_share
+  expect: band
+  band: [0.95, 1.0]
+  source: 'every ML-DSA-44 BSM (>= 2,556 B) is above the 1,400 B MTU, so every one is fragmented'
+- id: LC.PQ.airtime-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: lc.airtime_us_per_bsm
+  expect: ratio
+  band: [3.3, 5.5]
+  source: '802.11p 10 MHz at 6 Mb/s: 40 us preamble+SIGNAL + 8 us per 48 data bits (IEEE 802.11-2020 17.4.3): 200 B -> 312 us; 970 B -> 1,336 us (x4.3); a second fragment adds a preamble and headers'
+- id: LC.PQ.cbr-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: m.cbr.172.mean
+  expect: up
+  min_change: 1.0
+  source: 'CBR is the offered airtime per second over the sensing range (ETSI TS 102 687 4.2): x4.3 airtime at the same J2945/1 rate (its rate rule reads density, not CBR) -> at least double, bounded by saturation'
+- id: LC.PQ.cbr-falcon-bounded
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: m.cbr.172.mean
+  expect: band
+  band: [0.3, 0.97]
+  source: 'the busy ratio cannot exceed 1; 0.21 x 4.3 = 0.9 offered, held below it by CSMA deferral and J2945/1 power control above 50 % CBP'
+  note: 'checker corrected: every CBR row was first written on m.channel_load, which is the OFFERED load (own offered airtime + arrivals above -85 dBm over the window; it may exceed 1, the metric card says so), not the busy ratio. On it this row read 0.993 and was first judged a wrong expectation; the busy ratio m.cbr.172 reads 0.728 (offered 0.99), inside the band. All CBR rows now read m.cbr.172 (re-judged, none changed verdict except this one)'
+- id: LC.PQ.power-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: lc.attempts_per_frame
+  expect: down
+  min_change: 0.02
+  source: 'J2945/1 power control lowers the radiated power linearly from 20 to 10 dBm as CBP goes 50 -> 80 % (Ahmad 2019 Eq. 9; the engine J2945_1 rp_max/rp_min, min_cu/max_cu): fewer receivers in range per frame'
+  verdict: wrong-expectation
+  note: 'measured 79.6 -> 80.1: reception attempts are culled at the nominal range (radio.range.margin_db over the device power), not at the controlled power, so they cannot show it; the controlled power shows as receptions lost below sensitivity, 0.0007 -> 0.044 per frame (x63) at CBR 0.99, and not at all in r40-falcon at CBR 0.45 (below the 50 % knee): LC.PQ.power-falcon-bs'
+- id: LC.PQ.power-falcon-bs
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: lc.below_sens_per_frame
+  expect: up
+  min_change: 5.0
+  source: 'J2945/1 power control (as LC.PQ.power-falcon): at CBP > 80 % RP = 10 dBm, 10 dB under the 20 dBm of a light channel, so the receivers near the edge of the 6 Mb/s range fall below sensitivity'
+  note: 'corrected measure for LC.PQ.power-falcon, written after r100-falcon; judged before the runs of LC.PQ.power-knee-r40 and LC.PQ.nodcc-power-back'
+- id: LC.PQ.power-knee-r40
+  base: r40
+  variant: r40-falcon
+  area: pq-chain
+  measure: lc.below_sens_per_frame
+  expect: same
+  tol: 2.0
+  source: 'at 40 vehicles Falcon raises CBR to ~0.45, under the 50 % knee of J2945/1 power control: the power stays at 20 dBm and below-sensitivity losses do not multiply (a 3x band for count noise)'
+  note: written after r100-falcon, from r40 and r40-falcon already run (a check of the knee, not a blind prediction)
+- id: LC.PQ.rate-feedback-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: lc.bsms_per_veh_s
+  expect: up
+  min_change: 0.05
+  source: 'J2945/1 counts the vehicle density from the BSMs it RECEIVED within 100 m (SAE J2945/1 6.3.8.1, vDensityCalcRange; Ahmad 2019 Eq. 7): when Falcon cuts PDR to 0.65 a vehicle hears fewer neighbours, under-counts N and shortens its ITT, a positive feedback that adds load to a saturated channel'
+  note: 'found on r100-falcon (8.05 -> 9.07 BSM/s); not predicted before that run. At 40 vehicles N < B both ways and the rate is unchanged (9.21 -> 9.21)'
+- id: LC.PQ.collisions-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: m.collision_rate
+  expect: up
+  min_change: 1.0
+  source: 'a frame 4x longer overlaps 4x more of the other transmissions it can collide with (vulnerable period scales with airtime; Bazzi et al., IEEE TVT 2017 PRR vs packet size)'
+- id: LC.PQ.pdr-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: m.pdr
+  expect: down
+  min_change: 0.01
+  source: 'more collisions and less power: PDR falls (Bazzi et al. 2017; Falcon x density rows of interactions/coupling.yaml)'
+- id: LC.PQ.access-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: m.mac_access_delay.mean
+  expect: up
+  min_change: 0.5
+  source: 'a busier channel defers more often and for longer (Bianchi, IEEE JSAC 2000); each deferral now waits out a 4x longer frame'
+- id: LC.PQ.sign-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: m.latency_stage.sign.mean
+  expect: ratio
+  band: [5.0, 8.0]
+  source: 'no-HSM SoC: Falcon-512 sign 1,625 us vs ECDSA 244 us (liboqs / OpenSSL on Pi 4B, profile R5 B.2, B.5): x6.7'
+- id: LC.PQ.verify-falcon
+  base: r100
+  variant: r100-falcon
+  area: pq-chain
+  measure: m.verify_cost.mean
+  expect: ratio
+  band: [0.12, 0.40]
+  source: 'Falcon-512 verify 127 us vs ECDSA 645 us on the same SoC: x0.2 (a PQ chain that makes the air worse makes verification cheaper)'
+- id: LC.PQ.sign-hybrid
+  base: r100
+  variant: r100-hybrid
+  area: pq-chain
+  measure: m.latency_stage.sign.mean
+  expect: ratio
+  band: [6.0, 9.5]
+  source: 'hybrid signs both: (244 + 1,625) / 244 = x7.7'
+- id: LC.PQ.verify-hybrid
+  base: r100
+  variant: r100-hybrid
+  area: pq-chain
+  measure: m.verify_cost.mean
+  expect: ratio
+  band: [1.05, 1.45]
+  source: 'hybrid verifies both: (645 + 127) / 645 = x1.2'
+- id: LC.PQ.mldsa44-saturates
+  base: r100
+  variant: r100-mldsa44
+  area: pq-chain
+  measure: m.cbr.172.mean
+  expect: up
+  min_change: 1.5
+  source: 'x14.8 bytes on the same BSM rate is ~3x the channel capacity (0.21 x 14 > 1): the channel saturates'
+- id: LC.PQ.mldsa44-pdr
+  base: r100
+  variant: r100-mldsa44
+  area: pq-chain
+  measure: m.pdr
+  expect: down
+  min_change: 0.05
+  source: 'a BSM in 2-5 fragments is lost when any fragment is; on a saturated channel the loss compounds'
+- id: LC.PQ.mldsa44-cost
+  base: r100
+  variant: r100-mldsa44
+  area: pq-chain
+  measure: lc.bsms
+  expect: up
+  min_change: 0.05
+  source: 'changed before this run (was: same within 15 %): J2945/1 counts density from received BSMs, and ML-DSA-44 collapses PDR further than Falcon, so the under-count and the rate rise are at least Falcon''s (LC.PQ.rate-feedback-falcon)'
+- id: LC.PQ.density-amplifies-pdr
+  base: X-pq-density-pdr
+  variant: X-pq-density-pdr
+  area: pq-chain
+  measure: x.value
+  expect: band
+  band: [1.0e-06, 1.0]
+  source: 'Falcon costs more PDR at 100 vehicles than at 40: the collision term grows with the number of contenders x the airtime (interactions/coupling.yaml Falcon x density; Bazzi 2017)'
+- id: LC.PQ.density-amplifies-coll
+  base: X-pq-density-coll
+  variant: X-pq-density-coll
+  area: pq-chain
+  measure: x.value
+  expect: band
+  band: [1.0e-06, 1.0]
+  source: 'the collision rate Falcon adds is larger at 100 vehicles than at 40'
+- id: LC.PQ.nodcc-power-back
+  base: r100-falcon
+  variant: r100-falcon-nodcc
+  area: pq-chain
+  measure: lc.below_sens_per_frame
+  expect: down
+  min_change: 0.5
+  source: 'with J2945/1 off the OBU transmits its fixed 23 dBm (radio.devices.obu), not the 10 dBm power control picks at CBP > 80 %: below-sensitivity losses fall back (measure changed from lc.attempts_per_frame before this run, see LC.PQ.power-falcon)'
+- id: LC.PQ.seed2-cbr
+  base: r100-s2
+  variant: r100-falcon-s2
+  area: pq-chain
+  measure: m.cbr.172.mean
+  expect: up
+  min_change: 1.0
+  source: the PQ -> CBR link holds on a second master seed
+- id: LC.PQ.seed2-pdr
+  base: r100-s2
+  variant: r100-falcon-s2
+  area: pq-chain
+  measure: m.pdr
+  expect: down
+  source: the PQ -> PDR link holds on a second master seed
+# ---------------------------------------------------------------- chain 2: density -> CBR -> J2945/1 -> BSM rate -> load and freshness
+- id: LC.DD.rate-low-density
+  base: r40-nodcc
+  variant: r40
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: same
+  tol: 0.12
+  source: 'J2945/1: ITT = 100 ms while the smoothed count within 100 m is <= B = 25 (SAE J2945/1 6.3.8; Ahmad 2019 Eq. 7): at 40 vehicles on 0.09 km^2 the rate stays 10 Hz'
+- id: LC.DD.rate-100
+  base: r100-nodcc
+  variant: r100
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: ratio
+  band: [0.65, 0.95]
+  source: 'ITT = 100 ms x N/B above B = 25; calibration 8.19 BSM/s at 89 vehicles (N100 ~ 30 smoothed with lambda 0.05 per 100 ms) -> ~0.82 of 10 Hz'
+- id: LC.DD.rate-160
+  base: r160-nodcc
+  variant: r160
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: ratio
+  band: [0.35, 0.85]
+  source: 'more vehicles within 100 m -> longer ITT (linear in N up to 600 ms at 150): the rate falls further than at 100'
+- id: LC.DD.rate-falls-with-density
+  base: r100
+  variant: r160
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: down
+  min_change: 0.05
+  source: J2945/1 density rule (as above)
+- id: LC.DD.nodcc-rate-flat
+  base: r40-nodcc
+  variant: r160-nodcc
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: same
+  tol: 0.1
+  source: 'without congestion control every vehicle sends at the 10 Hz BSM rate at any density (J2945/1 vMin_ITT)'
+- id: LC.DD.cbr-grows-nodcc
+  base: r40-nodcc
+  variant: r160-nodcc
+  area: dcc-chain
+  measure: m.cbr.172.mean
+  expect: up
+  min_change: 1.5
+  source: 'CBR ~ N x rate x airtime while everyone hears everyone (the 300 m grid is inside the ~500 m 6 Mb/s range): x(N160/N40) ~ 3.5'
+- id: LC.DD.dcc-flattens-cbr
+  base: X-dcc-density-cbr
+  variant: X-dcc-density-cbr
+  area: dcc-chain
+  measure: x.value
+  expect: band
+  band: [-1.0, -1.0e-06]
+  source: 'with J2945/1 the per-vehicle rate falls as N grows, so CBR grows less from 40 to 160 than without it'
+- id: LC.DD.dcc-pdr-160
+  base: r160-nodcc
+  variant: r160
+  area: dcc-chain
+  measure: m.pdr
+  expect: up
+  source: fewer transmissions -> fewer collisions -> higher PDR (the purpose of congestion control; Bansal 2013)
+- id: LC.DD.dcc-collisions-160
+  base: r160-nodcc
+  variant: r160
+  area: dcc-chain
+  measure: m.collision_rate
+  expect: down
+  source: fewer simultaneous transmitters per unit time
+- id: LC.DD.dcc-verify-load-160
+  base: r160-nodcc
+  variant: r160
+  area: dcc-chain
+  measure: lc.verifies_per_node_s
+  expect: down
+  min_change: 0.15
+  source: 'every received BSM is verified (verify-all): verifies per node ~ neighbours x their BSM rate, so the rate cut is a verification-load cut of about the same size'
+- id: LC.DD.aoi-100
+  base: r100-nodcc
+  variant: r100
+  area: dcc-chain
+  measure: m.aoi
+  expect: up
+  min_change: 0.05
+  source: 'average AoI ~ T/2 + latency for update period T (Kaul et al., SECON 2011): T 100 -> ~122 ms raises it'
+- id: LC.DD.b10
+  base: r100
+  variant: r100-b10
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: down
+  min_change: 0.2
+  source: 'B = 10: ITT = 100 ms x N/10 above 10 vehicles (2.5x longer than B = 25 at the same N)'
+- id: LC.DD.b50
+  base: r100
+  variant: r100-b50
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: up
+  min_change: 0.05
+  source: 'B = 50: no rate cut until 50 vehicles within 100 m; r100 has ~30 -> back to 10 Hz'
+- id: LC.DD.itt300-no-effect
+  base: r100
+  variant: r100-itt300
+  area: dcc-chain
+  measure: lc.bsms_per_veh_s
+  expect: same
+  tol: 0.03
+  source: 'the linear segment is 100 + 4 (N - 25) ms for vMax_ITT 600 (top at 150) and for 300 (top at 75) alike; only the cap differs, and N100 ~ 30 < 75: no effect'
+- id: LC.DD.cost-nodcc-160
+  base: r160
+  variant: r160-nodcc
+  area: dcc-chain
+  measure: cost.events
+  expect: up
+  min_change: 0.1
+  source: 'DES events ~ frames x receivers; switching the rate cut off adds frames, each heard by everyone'
+- id: LC.DD.cost-density-nodcc
+  base: r40-nodcc
+  variant: r160-nodcc
+  area: dcc-chain
+  measure: cost.events
+  expect: ratio
+  band: [4.0, 20.0]
+  source: 'receptions ~ N^2 when every vehicle hears every other: (N160/N40)^2 ~ 10 events, the reception work dominating'
+- id: LC.DD.determinism
+  base: r100
+  variant: r100b
+  area: dcc-chain
+  measure: digest.record
+  expect: identical
+  source: same seed, same build stamp -> byte-identical records
+# ---------------------------------------------------------------- chain 3: OBU crypto cost -> latency -> queueing under load
+- id: LC.OB.sign-hsm
+  base: r100
+  variant: r100-craton2
+  area: obu-chain
+  measure: m.latency_stage.sign.mean
+  expect: ratio
+  band: [25.0, 45.0]
+  source: 'Craton2 HSM signs in <9 ms (R7 A4, upper bound used) vs 244 us on the no-HSM SoC: x37'
+- id: LC.OB.e2e-hsm
+  base: r100
+  variant: r100-craton2
+  area: obu-chain
+  measure: m.e2e_latency.bsm.mean
+  expect: delta
+  band: [6.0, 12.0]
+  source: 'end-to-end latency carries the sign time once: +9 - 0.24 ms, give or take the verify difference (400 vs 645 us)'
+- id: LC.OB.verify-hsm
+  base: r100
+  variant: r100-craton2
+  area: obu-chain
+  measure: m.verify_cost.mean
+  expect: ratio
+  band: [0.45, 0.9]
+  source: 'Craton2 verification engine 2,500/s (400 us as one server) vs 645 us: x0.62'
+- id: LC.OB.verify-c2sw
+  base: r100
+  variant: r100-c2sw
+  area: obu-chain
+  measure: m.verify_cost.mean
+  expect: ratio
+  band: [1.6, 2.5]
+  source: 'Craton2 ECDSA in software: 1,290 us verify (Pi 3B Cortex-A53 proxy) vs 645 us: x2.0'
+- id: LC.OB.wait-c2sw
+  base: r100
+  variant: r100-c2sw
+  area: obu-chain
+  measure: m.verify_wait.mean
+  expect: up
+  min_change: 1.0
+  source: 'utilisation lambda x S / c: 610/s x 0.645 ms / 4 cores = 0.10 vs 610/s x 1.29 ms / 2 cores = 0.39; M/D/c waiting grows superlinearly in rho'
+  verdict: pass
+  note: "0.19 -> 10.8 ms; the source's 4-core and 2-core utilisations are wrong for the medium compute tier (one CPU server each, LC.OB.wait-c2sw-nodcc): rho 0.40 vs 0.79 on one server, which still predicts the rise"
+- id: LC.OB.wait-c2sw-nodcc
+  base: r160-c2sw
+  variant: r160-c2sw-nodcc
+  area: obu-chain
+  measure: m.verify_wait.mean
+  expect: up
+  min_change: 1.0
+  source: 'at 160 vehicles without the rate cut each OBU must verify ~N x 10/s; on 2 x 1.29 ms servers rho approaches 1 and the wait explodes (M/D/c)'
+  verdict: wrong-expectation
+  note: "74.8 -> 78.4 ms (+5 %). The prediction counted the profile's 2 cores; at nodes.compute_tier medium (the default) the CPU is ONE server (v2xw-node server.rs ServerBank, 06-node-models 2.1: medium = one CPU and one HSM server, high = c cores). With one 1.34 ms server rho = 720/s x 1.34 ms = 0.96 with J2945/1 and 897/s x 1.34 ms = 1.2 without: both at or over capacity, so the verify throughput pins at ~636/s per node in both runs and the queue grows the same over 6 s. Congestion control cannot rescue an OBU already saturated by its neighbours"
+- id: LC.OB.e2e-c2sw-nodcc
+  base: r160-c2sw
+  variant: r160-c2sw-nodcc
+  area: obu-chain
+  measure: m.e2e_latency.bsm.mean
+  expect: up
+  min_change: 0.1
+  source: the verify queue is a stage of end-to-end latency
+  verdict: wrong-expectation
+  note: "80.3 -> 86.5 ms (+8 %, under the 10 % predicted): the same saturation (LC.OB.wait-c2sw-nodcc); the end-to-end latency is the verify queue (75 of 80 ms) in both"
+- id: LC.OB.dcc-protects-slow-obu
+  base: X-dcc-obu-wait
+  variant: X-dcc-obu-wait
+  area: obu-chain
+  measure: x.value
+  expect: band
+  band: [1.0e-06, 1.0e+06]
+  source: 'the wait that switching DCC off adds is larger on the slow OBU (rho 0.85) than on the 4-core SoC (rho 0.2): congestion control protects the slow OBU most'
+- id: LC.OB.hsm-160-wait
+  base: r160
+  variant: r160-craton2
+  area: obu-chain
+  measure: m.verify_wait.mean
+  expect: up
+  source: 'one HSM verification server and a 9 ms sign that holds it, vs four software cores: the HSM queues more at the same offered load'
+# ---------------------------------------------------------------- chain 4: backend outage -> CRL late -> revoked attacker accepted longer
+- id: LC.CRL.enforcement-lost
+  base: S
+  variant: scms-crlg
+  area: crl-chain
+  measure: p2.revoked_receptions
+  expect: down
+  min_change: 0.3
+  source: 'a receiver refuses a revoked certificate only once it holds a CRL listing it (IEEE 1609.2 5.1.3; CAMP 1.2.2 CRL); the CRLG down 60-200 s issues no CRL then, so each revocation decided in it (S revokes 4 attackers ~30-60 s after 60 s) is enforced from ~200 s, not ~decision + 8 s publish + <= 30 s fetch: about 40 s of enforcement left of ~140'
+  verdict: open
+  note: "premise not met: the deployment has two providers (provider-a 52 devices, provider-b 46) and actors.backend.failures resolves 'crlg' on the HOME provider's run only (crypto_config::failure_node on runs[0]); both in-window decisions (140.9 s, attackers 39 and 48) were provider-b's, provider-a's one came at 233.4 s, after the outage; 0 deliveries held or dropped, every SCMS output identical to S to the nanosecond. Owed: a provider-qualified failure node (e.g. 'provider-b/crlg') so a scenario can take down the CRLG that holds the revocation, then this re-run"
+- id: LC.CRL.latency-up
+  base: S
+  variant: scms-crlg
+  area: crl-chain
+  measure: p2.revocation_latency_ns
+  expect: up
+  min_change: 0.5
+  source: 'the decision -> enforced latency carries the rest of the outage (up to 140 s) on top of S''s ~16 s'
+  verdict: open
+  note: "as LC.CRL.enforcement-lost: the outage never met a revocation"
+- id: LC.CRL.delayed-not-lost
+  base: S
+  variant: scms-crlg
+  area: crl-chain
+  measure: p2.revoked_attackers
+  expect: same
+  tol: 0.0
+  source: 'the MA''s revocation requests reach the CRLG over a reliable backend transport (TLS over TCP, retried by the sender; CAMP 1.2.2 backend interfaces): an outage delays the CRL entries, it does not erase decisions; the same seed revokes the same attackers once the CRLG is back'
+- id: LC.CRL.decisions-unchanged
+  base: S
+  variant: scms-crlg
+  area: crl-chain
+  measure: p2.ma_revoke_decisions
+  expect: same
+  tol: 0.0
+  source: 'the MA is upstream of the CRLG: detection, reports and the MA''s decisions do not depend on CRL issuance'
+- id: LC.CRL.attackers-reported-longer
+  base: S
+  variant: scms-crlg
+  area: crl-chain
+  measure: p2.reports_about_attackers
+  expect: up
+  min_change: 0.05
+  source: 'a revoked attacker whose certificates are still accepted keeps being verified, judged and reported by its neighbours (detectors read only what the receiver accepted)'
+  verdict: open
+  note: "as LC.CRL.enforcement-lost"
+- id: LC.CRL.dose
+  base: scms-crlg
+  variant: scms-crlg-short
+  area: crl-chain
+  measure: p2.revoked_receptions
+  expect: up
+  min_change: 0.2
+  source: 'an outage ending at 130 s instead of 200 s leaves 70 s more enforcement: dose-response'
+  verdict: open
+  note: "not run: its premise (LC.CRL.enforcement-lost) did not hold"
+- id: LC.CRL.store-fetches
+  base: S
+  variant: scms-crlstore
+  area: crl-chain
+  measure: p2.crl_downloads
+  expect: down
+  min_change: 0.2
+  source: 'the CRL store is the distribution point vehicles fetch from every 30 s over Uu: with it down 60-200 s, 140 s of 240 s of fetches find nothing'
+  verdict: open
+  note: "53 -> 53 downloads, 0 deliveries dropped: in this model a device's CRL fetch is answered by its RA ('the composite list its RA serves', phase2 R-JOINCRL, [PRIMER] pp. 5, 8), so a CRL-store outage does not reach fetches; and the store named is provider-a's only. Whether the deployed US fetch path is the RA or a CRL store is not settled here"
+- id: LC.CRL.store-issuance-unchanged
+  base: S
+  variant: scms-crlstore
+  area: crl-chain
+  measure: p2.crls_issued
+  expect: same
+  tol: 0.0
+  source: 'the CRLG still issues on its cadence; only distribution is down'
+- id: LC.CRL.broadcast-softens
+  base: X-crl-paths
+  variant: X-crl-paths
+  area: crl-chain
+  measure: x.value
+  expect: band
+  band: [-1.0e+09, -1.0e-06]
+  source: 'with only the store down, the RSU still repeats the CRLs it was given on the air (role crl, CAMP RSU CRL broadcast), so less enforcement is lost than with issuance down'
+  verdict: open
+  note: "contrast 0: neither outage moved anything (above)"
+- id: LC.CRL.fleet-unchanged
+  base: S
+  variant: scms-crlg
+  area: crl-chain
+  measure: p2.devices
+  expect: same
+  tol: 0.0
+  source: 'a backend outage does not change the fleet: the same seed enrols the same devices'
+# ---------------------------------------------------------------- chain 5: GNSS degradation -> honest triggers -> reports -> MA load
+- id: LC.GN.jumps-g10
+  base: S
+  variant: scms-g10
+  area: gnss-chain
+  measure: p2.verdicts.positionJump
+  expect: ratio
+  band: [3.0, 15.0]
+  source: 'a 12 m outlier inside 100 ms implies 120 m/s and trips the position-jump check at every receiver that verifies the BSM (VeReMi/F2MD legacy-12): verdicts scale with outlier events, x10 (minus those hidden behind report rate limits)'
+  verdict: open
+  note: "7 -> 7 position-jump verdicts with ~1,760 single-fix 12 m outliers (0.1/s x 98 vehicles x 180 s) instead of ~176; at 0.5/s (~8,800) 7 -> 10. Yet removing outliers AND bursts (g0) removes every position jump and 27 of 34 honest reports: the degraded bursts, not the outliers, drive honest reports. Either legacy-12 tolerates a one-fix 12 m jump (its checks gate on stated confidence and consecutive pairs) or outliers do not reach the judged BSMs; telling them apart needs node.tx positions against gt (owed, a recorded run)"
+- id: LC.GN.jumps-g0
+  base: S
+  variant: scms-g0
+  area: gnss-chain
+  measure: p2.verdicts.positionJump
+  expect: down
+  min_change: 0.3
+  source: 'no outliers, no outlier jumps: what is left is attackers and turning geometry'
+  verdict: pass
+  note: "7 -> 0: the g0 run has no positionJump verdict at all, so the key is absent (matrix.py reads ABSENT); judged by hand from verdicts_by_detector"
+- id: LC.GN.honest-reports-g10
+  base: S
+  variant: scms-g10
+  area: gnss-chain
+  measure: p2.reports_about_honest
+  expect: up
+  min_change: 1.0
+  source: 'every honest verdict is a misbehaviour report; x10 outliers -> several times the honest reports'
+  verdict: open
+  note: "34 -> 34; see LC.GN.jumps-g10"
+- id: LC.GN.honest-reports-g0
+  base: S
+  variant: scms-g0
+  area: gnss-chain
+  measure: p2.reports_about_honest
+  expect: down
+  source: fewer honest glitches -> fewer honest reports
+- id: LC.GN.honest-devices-g10
+  base: S
+  variant: scms-g10
+  area: gnss-chain
+  measure: p2.honest_reported
+  expect: up
+  source: more honest vehicles glitch at least once while heard
+  verdict: open
+  note: "17 -> 17; see LC.GN.jumps-g10"
+- id: LC.GN.ma-load-g10
+  base: S
+  variant: scms-g10
+  area: gnss-chain
+  measure: p2.reports_at_ma
+  expect: up
+  min_change: 0.1
+  source: 'the honest reports join the attackers'' at the MA after the RA shuffle: MA load rises'
+  verdict: open
+  note: "393 -> 393; see LC.GN.jumps-g10"
+- id: LC.GN.fpr-g10
+  base: S
+  variant: scms-g10
+  area: gnss-chain
+  measure: m.det_fpr.report
+  expect: up
+  source: the detector cannot tell a GNSS outlier from a lie; its false-positive rate rises
+  verdict: open
+  note: "identical to 6 digits; see LC.GN.jumps-g10"
+- id: LC.GN.precision-g10
+  base: S
+  variant: scms-g10
+  area: gnss-chain
+  measure: m.det_precision.report
+  expect: down
+  source: more honest reports among the same attacker reports
+  verdict: open
+  note: "identical; see LC.GN.jumps-g10"
+- id: LC.GN.dose-g50
+  base: scms-g10
+  variant: scms-g50
+  area: gnss-chain
+  measure: p2.reports_about_honest
+  expect: up
+  min_change: 0.3
+  source: 'x5 outlier rate again -> more honest reports, sublinear as per-sender report limits bind'
+  verdict: open
+  note: "34 -> 40 (+18 %, under the 30 % predicted): the direction holds, the size does not; see LC.GN.jumps-g10"
+- id: LC.GN.g50-honest-revoked
+  base: S
+  variant: scms-g50
+  area: gnss-chain
+  measure: p2.revoked_honest
+  expect: ge
+  value: 1
+  source: 'corroborated MA: an event counts with 2 independent reporters, revocation at 3 events inside a minute from >= 3 reporters; 0.5 outliers/s is 30 glitches a minute per vehicle, each heard by tens of verifiers: an honest vehicle crosses that rule (the reason deployed OBUs smooth GNSS before the BSM)'
+  verdict: open
+  note: "0 honest revoked at 0.5 outliers/s: outliers barely produce reports (40 honest reports in 180 s), so the corroborated MA's 3-events-a-minute rule is never met; the prediction assumed every outlier is reported"
+- id: LC.GN.attackers-unaffected-g0
+  base: S
+  variant: scms-g0
+  area: gnss-chain
+  measure: p2.revoked_attackers
+  expect: same
+  tol: 0.0
+  source: 'ConstPos attackers send a frozen position whatever their receiver reads; the MA''s evidence about them does not depend on honest GNSS noise'
+- id: LC.GN.cost-g50
+  base: S
+  variant: scms-g50
+  area: gnss-chain
+  measure: cost.events
+  expect: up
+  source: every extra report is an upload, a shuffle entry and an MA event
+  verdict: open
+  note: "2,230,023 -> 2,229,836 events (-0.01 %): six more reports cost nothing measurable"
+# ---------------------------------------------------------------- chain 6: signal timing -> queues -> density -> J2945/1 -> channel load
+- id: LC.SG.speed-c120
+  base: sig-base
+  variant: sig-c120
+  area: signal-chain
+  measure: m.mean_speed
+  expect: down
+  source: 'Webster''s uniform delay d1 = C (1 - g/C)^2 / (2 (1 - x g/C)) is proportional to C at a fixed green share: a 120 s cycle doubles the per-junction delay (Webster 1958; HCM 7th ed. Eq. 19-19)'
+- id: LC.SG.speed-c40
+  base: sig-base
+  variant: sig-c40
+  area: signal-chain
+  measure: m.mean_speed
+  expect: up
+  source: shorter cycle -> shorter reds -> less uniform delay (same equation), lost time per cycle aside at this low v/c
+- id: LC.SG.speed-c180
+  base: sig-c120
+  variant: sig-c180
+  area: signal-chain
+  measure: m.mean_speed
+  expect: down
+  source: 'the same equation at the edge: 180 s > 120 s'
+- id: LC.SG.density-c120
+  base: sig-base
+  variant: sig-c120
+  area: signal-chain
+  measure: m.density
+  expect: up
+  source: 'Little''s law N = lambda T: the same arrivals with a longer travel time keep more vehicles in the network'
+- id: LC.SG.rate-c120
+  base: sig-base
+  variant: sig-c120
+  area: signal-chain
+  measure: lc.bsms_per_veh_s
+  expect: down
+  source: 'longer reds pack more vehicles into stop-line queues (Q = lambda r): the count within 100 m crosses J2945/1 B = 25 more often, so its density rule lengthens the ITT'
+- id: LC.SG.cbr-peak-c120
+  base: sig-base
+  variant: sig-c120
+  area: signal-chain
+  measure: m.cbr.172.p95
+  expect: up
+  source: 'the node beside a long queue senses more transmitters: the high-percentile CBR rises with the queue (Bazzi 2017; ETSI TS 102 687 CBR per node)'
+- id: LC.SG.demand-amplifies
+  base: X-sig-demand
+  variant: X-sig-demand
+  area: signal-chain
+  measure: x.value
+  expect: band
+  band: [1.0e-06, 1.0e+03]
+  source: 'Webster: the delay a longer cycle adds grows with the degree of saturation x (the 1/(1 - x g/C) factor and the overflow term), so the speed lost to 120 s is larger at 3,000 veh/h'
+- id: LC.SG.cost-r3000
+  base: sig-base
+  variant: sig-r3000
+  area: signal-chain
+  measure: cost.events
+  expect: up
+  min_change: 0.5
+  source: 'twice the vehicles, receptions ~ N^2 within range: events more than 1.5x'
+# ---------------------------------------------------------------- chain 7: pedestrian surge -> PSM load -> channel -> VRU safety
+- id: LC.PD.psm-450
+  base: ped-base
+  variant: ped-450
+  area: ped-chain
+  measure: lc.frames.psm
+  expect: ratio
+  band: [2.3, 3.4]
+  source: 'PSM devices = pedestrians x device_fraction (plus the 15 cyclists'' 30 %): (450 x 0.3 + 4.5) / (150 x 0.3 + 4.5) = 2.8, each at the same J2945/9 rate'
+- id: LC.PD.psm-50
+  base: ped-base
+  variant: ped-50
+  area: ped-chain
+  measure: lc.frames.psm
+  expect: ratio
+  band: [0.25, 0.5]
+  source: '(50 x 0.3 + 4.5) / 49.5 = 0.39'
+- id: LC.PD.psm-dev100
+  base: ped-base
+  variant: ped-dev100
+  area: ped-chain
+  measure: lc.frames.psm
+  expect: ratio
+  band: [2.7, 3.7]
+  source: 'device_fraction 1.0 / 0.3 = 3.33 on pedestrians and cyclists alike'
+- id: LC.PD.psm-dev0
+  base: ped-base
+  variant: ped-dev0
+  area: ped-chain
+  measure: lc.frames.psm
+  expect: eq
+  value: 0
+  source: no device, no PSM
+- id: LC.PD.pcw-dev0
+  base: ped-base
+  variant: ped-dev0
+  area: ped-chain
+  measure: m.app_warnings.pcw
+  expect: eq
+  value: 0
+  source: 'a vehicle warns of a pedestrian it believes in: with no PSM (and no perception sharing in this scenario) it holds no belief about any pedestrian, so pedestrian collision warning cannot fire (applications read belief only)'
+- id: LC.PD.pcw-dev100
+  base: ped-base
+  variant: ped-dev100
+  area: ped-chain
+  measure: m.app_warnings.pcw
+  expect: up
+  source: more announced pedestrians -> more of the real conflicts are visible to the vehicles
+- id: LC.PD.truth-dev0
+  base: ped-base
+  variant: ped-dev0
+  area: ped-chain
+  measure: m.ped_conflicts
+  expect: same
+  tol: 0.0
+  source: 'carrying a handset does not change how a pedestrian walks or how drivers (who do not act on PSMs here) drive: ground-truth conflicts are unchanged on the same seed'
+- id: LC.PD.conflicts-450
+  base: ped-base
+  variant: ped-450
+  area: ped-chain
+  measure: m.ped_conflicts
+  expect: up
+  source: 'pedestrian-vehicle conflicts scale with the product of the two flows at crossings (exposure; Brude-Larsson power model; AASHTO HSM pedestrian model)'
+- id: LC.PD.cbr-450
+  base: ped-base
+  variant: ped-450
+  area: ped-chain
+  measure: m.cbr.172.mean
+  expect: up
+  source: '~2.8x the PSM airtime on the channel the BSMs use'
+- id: LC.PD.cost-450
+  base: ped-base
+  variant: ped-450
+  area: ped-chain
+  measure: cost.events
+  expect: up
+  min_change: 0.2
+  source: 'three times the walkers to step (social force) and ~2.8x the PSM transmissions to receive'

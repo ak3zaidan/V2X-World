@@ -1,0 +1,8 @@
+# 5 % RandomPos attackers from 20 s, suite L.
+schema: v2xw/scenario/1
+meta: {base: base.yaml, name: live-atk share-randompos-l-05}
+threats:
+  attackers:
+    - id: threat/attacker/legacy/RandomPos
+      fraction: 0.05
+      schedule: {from_s: 20.0, to_s: 150.0}

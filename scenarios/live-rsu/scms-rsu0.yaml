@@ -1,0 +1,8 @@
+# Live RSU track, SCMS family: scms-base.yaml with one change (no unit (edge)).
+schema: v2xw/scenario/1
+meta:
+  base: scms-base.yaml
+  name: live-rsu scms rsu0
+actors:
+  rsu_placement:
+    count: 0

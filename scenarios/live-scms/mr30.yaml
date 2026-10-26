@@ -1,0 +1,9 @@
+# live-scms variant mr30: ma_review_s 30
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms mr30
+security:
+  protocol:
+    params:
+      ma_review_s: 30

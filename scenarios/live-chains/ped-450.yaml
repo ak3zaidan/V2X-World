@@ -1,0 +1,8 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains ped-450
+  base: ped-base.yaml
+  description: >-
+    450 pedestrians (a surge).
+actors:
+  vru: {pedestrians: 450}

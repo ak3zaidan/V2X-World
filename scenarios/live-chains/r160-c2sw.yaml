@@ -1,0 +1,7 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains r160-c2sw
+  base: r160.yaml
+  description: >-
+    r160 on the Craton2 with ECDSA in software.
+nodes: {default_obu: obu/unex-obu-301-craton2-software}

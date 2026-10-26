@@ -1,0 +1,11 @@
+# Live RSU track, application family: glosa-base.yaml with one change (GLOSA ignored and the units at 10 dBm).
+schema: v2xw/scenario/1
+meta:
+  base: glosa-base.yaml
+  name: live-rsu glosa c0p10
+apps:
+  glosa_compliance: 0.0
+radio:
+  devices:
+    rsu:
+      tx_power_dbm: 10.0

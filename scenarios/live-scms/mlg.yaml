@@ -1,0 +1,8 @@
+# live-scms variant mlg: MA rule legacy-window
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms mlg
+detection:
+  ma:
+    id: threat/ma/legacy-window

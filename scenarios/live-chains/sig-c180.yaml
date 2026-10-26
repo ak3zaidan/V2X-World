@@ -1,0 +1,9 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains sig-c180
+  base: sig-base.yaml
+  description: >-
+    Signal cycle 180 s (edge).
+world:
+  source:
+    params: {cycle_s: 180.0}

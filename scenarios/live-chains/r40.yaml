@@ -1,0 +1,9 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains r40
+  base: r100.yaml
+  description: >-
+    r100 with up to 40 vehicles.
+actors:
+  vehicles:
+    demand: {params: {max_total_vehicles: 40}}

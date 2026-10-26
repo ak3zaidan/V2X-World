@@ -1,0 +1,8 @@
+# Live RSU track, SCMS family: scms-base.yaml with one change (fibre with 50 ms one way).
+schema: v2xw/scenario/1
+meta:
+  base: scms-base.yaml
+  name: live-rsu scms lat50
+actors:
+  rsu_placement:
+    backhaul_params: {latency_ms: 50.0}

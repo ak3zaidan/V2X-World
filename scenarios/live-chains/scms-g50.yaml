@@ -1,0 +1,9 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains scms-g50
+  base: scms-base.yaml
+  description: >-
+    GNSS outliers at the bound, 0.5 per second per vehicle (edge).
+actors:
+  vehicles:
+    gnss: {outlier_rate_hz: 0.5}

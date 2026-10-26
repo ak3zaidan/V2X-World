@@ -1,0 +1,10 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains scms-crlg-short
+  base: scms-base.yaml
+  description: >-
+    The CRL generator offline from 60 s to 130 s.
+actors:
+  backend:
+    failures:
+      - {node: crlg, mode: offline, from_s: 60.0, to_s: 130.0}

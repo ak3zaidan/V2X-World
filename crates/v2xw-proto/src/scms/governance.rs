@@ -1723,18 +1723,24 @@ impl Governance {
         let parts = |a: &Authority| (a.cert.clone(), a.key.clone(), a.enc_scalar);
         if label == self.config.provider {
             let root = parts(&self.home_root().authority);
-            return Some(crate::scms::pdu::ScmsPki::of_governance(label, profile, |r| {
-                if r == "root" {
-                    Some(root.clone())
-                } else {
-                    self.authorities.get(r).map(parts)
-                }
-            }));
+            return Some(crate::scms::pdu::ScmsPki::of_governance(
+                label,
+                profile,
+                |r| {
+                    if r == "root" {
+                        Some(root.clone())
+                    } else {
+                        self.authorities.get(r).map(parts)
+                    }
+                },
+            ));
         }
         let set = self.peer_authorities.get(label)?;
-        Some(crate::scms::pdu::ScmsPki::of_governance(label, profile, |r| {
-            set.get(r).map(parts)
-        }))
+        Some(crate::scms::pdu::ScmsPki::of_governance(
+            label,
+            profile,
+            |r| set.get(r).map(parts),
+        ))
     }
 
     /// The `HashedId32` of the newest approved root of provider `label` (home or peer).

@@ -1,0 +1,9 @@
+# live-scms variant pp3: pool_periods 3
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms pp3
+security:
+  protocol:
+    params:
+      pool_periods: 3

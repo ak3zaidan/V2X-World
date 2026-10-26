@@ -530,6 +530,15 @@ fn sybil_ghosts_are_on_the_air_and_detected() {
         fired(&p) > fired(&q),
         "the co-location detector did not see the ghosts"
     );
+    // A ghost frame is a lie: the attacker's outcome opens at its first ghost and counts
+    // every ghost, so its time to detect is measured (live-atk 2026-10-25, SYM10).
+    // Fault injected (and reverted): `note_ghost_frame` not noting the onset fails these.
+    let o = &p.attacker_outcomes[0];
+    assert!(
+        o.onset_ns.is_some(),
+        "a Sybil attacker's outcome has no onset: {o:?}"
+    );
+    assert!(o.falsified_claims >= p.ghost_frames, "{o:?}");
 }
 
 /// An attack the engine cannot put on the air is refused by name, not run silently.
@@ -1338,4 +1347,70 @@ fn a_relayed_report_is_uploaded_only_once_a_unit_takes_it() {
         early.len(),
         &early[..early.len().min(3)]
     );
+}
+
+/// `detection.local[].params.judge_revoked: 0`: a BSM its receiver refused on the CRL is
+/// not judged by the research suite. Judged (the default), it scores as a failed signature
+/// though its signature verified, and the receiver keeps reporting a device the SCMS has
+/// already revoked (live-atk 2026-10-25 §3: 347 `signatureVerification` reports about a
+/// revoked SlowDrift attacker in one 150 s run). The MA's decisions do not move: the
+/// research suite's reports about a revoked device carry no SM-MBR subtype and are not
+/// filed.
+///
+/// Fault injected (and reverted): the host's `judge_revoked` skip removed makes the third
+/// assertion fail (the flag-off run still scores CRL-refused frames).
+#[test]
+fn a_crl_refused_bsm_is_not_judged_when_judge_revoked_is_off() {
+    let base = |judge: Option<f64>| {
+        let mut s = Scenario::load(scenarios().join("live-atk/share-constpos-l-10.yaml"))
+            .expect("the live-atk scenario loads");
+        s.time.duration_s = 100.0;
+        for a in &mut s.threats.attackers {
+            a.schedule = Some(v2xw_engine::scenario::schema::DilationWindow {
+                from_s: 10.0,
+                to_s: 100.0,
+            });
+        }
+        if let Some(j) = judge {
+            s.detection.local = vec![ModelChoice {
+                id: v2xw_engine::phase2::LEGACY_12.to_string(),
+                params: json!({ "judge_revoked": j }),
+            }];
+        }
+        s
+    };
+    let sig = |r: &RunReport| {
+        r.phase2
+            .verdicts_by_detector
+            .get("signatureVerification")
+            .copied()
+            .unwrap_or(0)
+    };
+    let (on, _) = run(base(None));
+    let (off, _) = run(base(Some(0.0)));
+    println!(
+        "judged: {} CRL refusals, {} signature verdicts, {} revoked; not judged: {} \
+         refusals, {} signature verdicts, {} revoked",
+        on.phase2.revoked_receptions,
+        sig(&on),
+        on.phase2.revoked_attackers,
+        off.phase2.revoked_receptions,
+        sig(&off),
+        off.phase2.revoked_attackers
+    );
+    assert!(
+        on.phase2.revoked_receptions > 0,
+        "no receiver refused a revoked sender, so this test proves nothing"
+    );
+    assert!(
+        sig(&on) > 0,
+        "the default must still judge CRL-refused frames (the runs before 2026-10-25)"
+    );
+    assert_eq!(
+        sig(&off),
+        0,
+        "a CRL-refused frame was judged with judge_revoked 0"
+    );
+    assert_eq!(off.phase2.revoked_attackers, on.phase2.revoked_attackers);
+    assert_eq!(off.phase2.revoked_honest, 0);
 }

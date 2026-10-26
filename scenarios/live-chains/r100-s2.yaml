@@ -1,0 +1,7 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains r100-s2
+  base: r100.yaml
+  description: >-
+    r100 on a second master seed.
+seed: "0x5EED_0002"

@@ -1051,8 +1051,13 @@ fn ma_trust_of(
     }
     let mut view = (**home).clone();
     for (_, p) in peers {
-        view.extra
-            .extend(p.all().into_iter().chain(p.extra.iter()).chain(p.retired.iter()).cloned());
+        view.extra.extend(
+            p.all()
+                .into_iter()
+                .chain(p.extra.iter())
+                .chain(p.retired.iter())
+                .cloned(),
+        );
     }
     Some(std::sync::Arc::new(view))
 }

@@ -1,0 +1,8 @@
+# Live RSU track, application family: glosa-base.yaml with one change (GLOSA not running (edge)).
+schema: v2xw/scenario/1
+meta:
+  base: glosa-base.yaml
+  name: live-rsu glosa off
+apps:
+  enabled: [fcw, eebl, ima, lta, bsw, pcw, rlvw]
+  glosa_compliance: 0.0

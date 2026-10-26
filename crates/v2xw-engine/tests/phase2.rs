@@ -376,13 +376,18 @@ fn without_either_distribution_path_the_revocation_never_reaches_a_vehicle() {
         .iter()
         .map(|v| v["node"].as_u64().expect("a unit row names its unit"))
         .collect();
-    assert!(!units.is_empty(), "no record shows a unit installing the list");
+    assert!(
+        !units.is_empty(),
+        "no record shows a unit installing the list"
+    );
     assert!(
         units.len() as u64 <= report.phase2.rsu_crls_installed,
         "a row for a unit the engine never counted as installing"
     );
     assert!(
-        rsu_rows.iter().all(|v| v["entries"].as_u64().is_some_and(|e| e > 0)),
+        rsu_rows
+            .iter()
+            .all(|v| v["entries"].as_u64().is_some_and(|e| e > 0)),
         "each row carries the installed list's version"
     );
     let p = &report.phase2;

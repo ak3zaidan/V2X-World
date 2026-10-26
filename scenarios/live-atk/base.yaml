@@ -1,0 +1,18 @@
+# Live attack-and-detection tests (docs/validation/live-atk-2026-10-25.md): the SCMS
+# lifecycle family (../credential-lifecycle.yaml: every US SCMS entity, the compressed
+# calendar, a 30 s CRL cadence, MA review 0 s) held at 40 vehicles from t = 0 for 150 s,
+# attack-free. Each variant in this folder adds one change; same seed. Positioning is the
+# deployed receiver's smoothed solution, as the US presets run it (tau 100 s, 0.3 m/s static
+# hold; midtown-scms-benchmark.yaml, R-USFP): raw 10 Hz fixes with fresh 1.6 m noise make
+# the SM-MBR 1 m RandomPosition check fire on most honest BSMs (gnss-raw.yaml).
+schema: v2xw/scenario/1
+meta: {base: ../credential-lifecycle.yaml, name: live-atk base}
+time: {duration_s: 150.0}
+actors:
+  vehicles:
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: null
+      fleet_size: 40
+    gnss: {smoothing_tau_s: 100.0, static_hold_mps: 0.3}
+threats: {attackers: []}

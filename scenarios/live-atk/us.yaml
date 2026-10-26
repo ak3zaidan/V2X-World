@@ -1,0 +1,7 @@
+# live-atk base with the strict US misbehaviour profile (SM-MBR v1.0 PSID-0x20 subtypes)
+# in place of the research suite. Attack-free.
+schema: v2xw/scenario/1
+meta: {base: base.yaml, name: live-atk us}
+detection:
+  local:
+    - id: detect/us-sm-mbr

@@ -1,0 +1,9 @@
+# 10 % RandomSpeed attackers at attack intensity 1.0 (every magnitude x 1.0), suite U.
+schema: v2xw/scenario/1
+meta: {base: us.yaml, name: live-atk str-randomspeed-u-1p0}
+threats:
+  attackers:
+    - id: threat/attacker/legacy/RandomSpeed
+      fraction: 0.1
+      params: {intensity: 1.0}
+      schedule: {from_s: 20.0, to_s: 150.0}

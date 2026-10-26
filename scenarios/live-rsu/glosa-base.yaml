@@ -1,0 +1,13 @@
+# Live RSU track (docs/validation/live-rsu-2026-10-25.md), application family base:
+# glosa-energy (five SPaT/MAP units, sites 8-12 on the middle row of a 7x3 signalised grid,
+# 2,400 veh/h, every driver following GLOSA) cut to 150 s. Every variant in this folder
+# named glosa-*.yaml changes one thing against it, on the same seed.
+schema: v2xw/scenario/1
+meta:
+  base: ../glosa-energy.yaml
+  name: live-rsu glosa base
+time:
+  duration_s: 150.0
+# One run per file, not glosa-energy's compliance sweep (which also fails validation on a
+# variant whose `apps` block equals the default: the swept path is then not serialised).
+experiment: null

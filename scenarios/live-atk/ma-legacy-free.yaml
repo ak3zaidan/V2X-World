@@ -1,0 +1,6 @@
+# attack-free base with the MA rule threat/ma/legacy-window .
+schema: v2xw/scenario/1
+meta: {base: base.yaml, name: live-atk ma-legacy-free}
+detection:
+  ma:
+    id: threat/ma/legacy-window

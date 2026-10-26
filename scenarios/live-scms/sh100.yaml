@@ -1,0 +1,14 @@
+# live-scms variant sh100: provider shares 1.0 / 0.0 (edge)
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms sh100
+security:
+  scms:
+    deployment:
+      preset: us-production-2025
+      providers:
+      - name: provider-a
+        fleet_share: 1.0
+      - name: provider-b
+        fleet_share: 0.0

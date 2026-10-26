@@ -1,0 +1,6 @@
+# rawgnss.yaml under the strict US profile. Attack-free.
+schema: v2xw/scenario/1
+meta: {base: rawgnss.yaml, name: live-atk rawgnss-us}
+detection:
+  local:
+    - id: detect/us-sm-mbr

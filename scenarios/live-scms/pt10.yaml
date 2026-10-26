@@ -1,0 +1,8 @@
+# live-scms variant pt10: pseudonym period_s 10 (more changes than certificates)
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms pt10
+security:
+  pseudonym_change:
+    period_s: 10.0

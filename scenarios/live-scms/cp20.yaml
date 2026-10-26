@@ -1,0 +1,9 @@
+# live-scms variant cp20: certs_per_period 20
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms cp20
+security:
+  protocol:
+    params:
+      certs_per_period: 20

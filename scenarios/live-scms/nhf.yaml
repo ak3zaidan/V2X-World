@@ -1,0 +1,10 @@
+# live-scms variant nhf: no-HSM OBU and the generic fragmenter (the hybrid run's classical twin)
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms nhf
+nodes:
+  default_obu: obu/generic-automotive-soc-no-hsm
+net:
+  fragmenter:
+    id: fragmenter/generic-sdu

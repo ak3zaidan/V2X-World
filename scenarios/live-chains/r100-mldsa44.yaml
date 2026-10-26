@@ -1,0 +1,7 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains r100-mldsa44
+  base: r100.yaml
+  description: >-
+    r100 under ML-DSA-44.
+security: {signature: ml-dsa-44}

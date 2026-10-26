@@ -922,9 +922,9 @@ impl ScmsPki {
         let role = crate::scms::governance::role_of(&current.cert);
         core::iter::once(current)
             .chain(
-                self.retired
-                    .iter()
-                    .filter(|a| role.is_some() && crate::scms::governance::role_of(&a.cert) == role),
+                self.retired.iter().filter(|a| {
+                    role.is_some() && crate::scms::governance::role_of(&a.cert) == role
+                }),
             )
             .collect()
     }

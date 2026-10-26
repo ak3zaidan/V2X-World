@@ -1,0 +1,7 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains r100-hybrid
+  base: r100.yaml
+  description: >-
+    r100 under hybrid Falcon-512 + ECDSA P-256.
+security: {signature: hybrid-falcon512-ecdsa-p256}

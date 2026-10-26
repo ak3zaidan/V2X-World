@@ -1,0 +1,1351 @@
+# Live SCMS knob tests (docs/validation/live-scms-2026-10-25.md): one-change variants of
+# scenarios/live-scms/base.yaml (credential-lifecycle cut to 180 s: compressed calendar,
+# 60 s i-periods, 5 certificates a period, 2 preloaded, 30 s report shuffle, automatic MA,
+# CRL every 30 s, 1,500 veh/h, 5 % ConstPos from 60 s), run on the integrator's release
+# build of 486c8cba, one run per run-lock call.
+#
+# Not a sweep table (schema v2xw/scms-run-expectations/1, like scms-matrix.yaml). Every row
+# was written with `measured: pending` and committed before the runs it judges.
+# Measures: tools/realworld/matrix.py extract plus tools/realworld/live_scms.py extend.
+#   python3 -I tools/realworld/matrix.py check <this file> <runs-dir> [--fill]
+#   python3 -I tools/realworld/live_scms.py faults <this file> <runs-dir>   (every row red under its fault)
+# verdict: pass | fixed | wrong-expectation (corrected with the evidence in `note`) | open.
+schema: v2xw/scms-run-expectations/1
+runs:
+  L:
+    scenario: scenarios/live-scms/base.yaml
+    note: 'the live SCMS base: credential-lifecycle cut to 180 s'
+  L2:
+    scenario: scenarios/live-scms/base.yaml
+    note: L again, same seed and build stamp (determinism)
+  CB1:
+    scenario: scenarios/live-scms/cb1.yaml
+    note: crl_broadcast_interval_s 1
+  CB20:
+    scenario: scenarios/live-scms/cb20.yaml
+    note: crl_broadcast_interval_s 20
+  CC10:
+    scenario: scenarios/live-scms/cc10.yaml
+    note: crl_cadence_s 10
+  CC60:
+    scenario: scenarios/live-scms/cc60.yaml
+    note: crl_cadence_s 60
+  CF10:
+    scenario: scenarios/live-scms/cf10.yaml
+    note: crl_fetch_interval_s 10
+  CHP:
+    scenario: scenarios/live-scms/chp.yaml
+    note: chain_file home-provider (P2PCD on the air)
+  CP1:
+    scenario: scenarios/live-scms/cp1.yaml
+    note: certs_per_period 1
+  CP20:
+    scenario: scenarios/live-scms/cp20.yaml
+    note: certs_per_period 20
+  CP60:
+    scenario: scenarios/live-scms/cp60.yaml
+    note: certs_per_period 60 (the range edge)
+  FC250:
+    scenario: scenarios/live-scms/fc250.yaml
+    note: full_cert_every_ms 250
+  FC5000:
+    scenario: scenarios/live-scms/fc5000.yaml
+    note: full_cert_every_ms 5000
+  FCX:
+    scenario: scenarios/live-scms/fcx.yaml
+    note: digest_otherwise false (every BSM a certificate)
+  HYB:
+    scenario: scenarios/live-scms/hyb.yaml
+    note: nhf plus signature hybrid-falcon512-ecdsa-p256
+  KEM:
+    scenario: scenarios/live-scms/kem.yaml
+    note: kem ml-kem-768 (the 1609.2.1 PDU layer off)
+  ME1:
+    scenario: scenarios/live-scms/me1.yaml
+    note: corroborated min_events 1
+  ME5:
+    scenario: scenarios/live-scms/me5.yaml
+    note: corroborated min_events 5
+  MLG:
+    scenario: scenarios/live-scms/mlg.yaml
+    note: MA rule legacy-window
+  MN1:
+    scenario: scenarios/live-scms/mn1.yaml
+    note: corroborated event_min_reporters 1, min_reporters 1
+  MR10:
+    scenario: scenarios/live-scms/mr10.yaml
+    note: ma_review_s 10
+  MR30:
+    scenario: scenarios/live-scms/mr30.yaml
+    note: ma_review_s 30
+  NHF:
+    scenario: scenarios/live-scms/nhf.yaml
+    note: no-HSM OBU and the generic fragmenter (the hybrid run's classical twin)
+  NN:
+    scenario: scenarios/live-scms/nn.yaml
+    note: on_new_neighbour true
+  PP1:
+    scenario: scenarios/live-scms/pp1.yaml
+    note: pool_periods 1
+  PP3:
+    scenario: scenarios/live-scms/pp3.yaml
+    note: pool_periods 3
+  PP4:
+    scenario: scenarios/live-scms/pp4.yaml
+    note: pool_periods 4 (no top-up falls inside 180 s)
+  PSIL:
+    scenario: scenarios/live-scms/psil.yaml
+    note: pseudonym strategy silent
+  PT10:
+    scenario: scenarios/live-scms/pt10.yaml
+    note: pseudonym period_s 10 (more changes than certificates)
+  PT30:
+    scenario: scenarios/live-scms/pt30.yaml
+    note: pseudonym period_s 30
+  RQ0:
+    scenario: scenarios/live-scms/rq0.yaml
+    note: report_store_quota_bytes 0 (keeps nothing)
+  RQ2K:
+    scenario: scenarios/live-scms/rq2k.yaml
+    note: report_store_quota_bytes 2000
+  RT1:
+    scenario: scenarios/live-scms/rt1.yaml
+    note: report_shuffle_threshold 1
+  RW0:
+    scenario: scenarios/live-scms/rw0.yaml
+    note: report_shuffle_window_s 0 (edge)
+  RW10:
+    scenario: scenarios/live-scms/rw10.yaml
+    note: report_shuffle_window_s 10
+  RW90:
+    scenario: scenarios/live-scms/rw90.yaml
+    note: report_shuffle_window_s 90
+  S384:
+    scenario: scenarios/live-scms/s384.yaml
+    note: signature ecdsa-p384
+  SBP:
+    scenario: scenarios/live-scms/sbp.yaml
+    note: signature ecdsa-brainpoolp256r1
+  SH100:
+    scenario: scenarios/live-scms/sh100.yaml
+    note: provider shares 1.0 / 0.0 (edge)
+  SH90:
+    scenario: scenarios/live-scms/sh90.yaml
+    note: provider shares 0.9 / 0.1
+  TB2:
+    scenario: scenarios/live-scms/tb2.yaml
+    note: topup_below_periods 2
+  VOD:
+    scenario: scenarios/live-scms/vod.yaml
+    note: verification_policy on-demand
+  VPR:
+    scenario: scenarios/live-scms/vpr.yaml
+    note: verification_policy prioritized
+rows:
+- id: LS.DET.records
+  base: L
+  variant: L2
+  area: determinism
+  measure: digest.records
+  expect: identical
+  source: 'same seed, same build stamp: the record stream byte for byte (06 §3 item 16)'
+  measured: 555506b4a27d911b -> 555506b4a27d911b
+  verdict: pass
+- id: LS.DET.metrics
+  base: L
+  variant: L2
+  area: determinism
+  measure: digest.metrics.json
+  expect: identical
+  source: 'same seed: metrics.json byte for byte'
+  measured: 57f59a317c64f1e5 -> 57f59a317c64f1e5
+  verdict: pass
+- id: LS.COST.peak
+  base: L
+  variant: L
+  area: cost
+  measure: cost.peak_mb
+  expect: le
+  value: 1200
+  source: a 180 s lifecycle run fits the second run slot (1,200 MB); L0 at 300 s peaked at 119 MB
+  measured: '66.6014'
+  verdict: pass
+- id: LS.L.certs-per-topup
+  base: L
+  variant: L
+  area: scms
+  measure: topup.certs_per_topup
+  expect: eq
+  value: 5.0
+  source: a top-up installs one i-period of certs_per_period = 5 certificates (CAMP-EE 2.1.5.3.2; IEEE
+    1609.2.1 6.3.3)
+  measured: '5'
+  verdict: pass
+- id: LS.CP1.certs-per-topup
+  base: L
+  variant: CP1
+  area: scms
+  measure: topup.certs_per_topup
+  expect: eq
+  value: 1.0
+  source: a top-up installs one i-period of certs_per_period = 1 certificates (CAMP-EE 2.1.5.3.2; IEEE
+    1609.2.1 6.3.3)
+  measured: pending
+  verdict: pending
+- id: LS.CP20.certs-per-topup
+  base: L
+  variant: CP20
+  area: scms
+  measure: topup.certs_per_topup
+  expect: eq
+  value: 20.0
+  source: a top-up installs one i-period of certs_per_period = 20 certificates (CAMP-EE 2.1.5.3.2; IEEE
+    1609.2.1 6.3.3)
+  measured: pending
+  verdict: pending
+- id: LS.CP60.certs-per-topup
+  base: L
+  variant: CP60
+  area: scms
+  measure: topup.certs_per_topup
+  expect: eq
+  value: 60.0
+  source: a top-up installs one i-period of certs_per_period = 60 certificates (CAMP-EE 2.1.5.3.2; IEEE
+    1609.2.1 6.3.3)
+  measured: '60'
+  verdict: pass
+- id: LS.CP1.aca-responses
+  base: L
+  variant: CP1
+  area: scms
+  measure: pdu.AcaRaCertResponseSpdu.n
+  expect: ratio
+  band:
+  - 0.194
+  - 0.20600000000000002
+  source: 'the ACA answers the RA once per certificate (one AcaRaCertResponse per butterfly-expanded key):
+    preload and top-ups both scale by 1/5 = 0.2 on an unchanged fleet'
+  measured: pending
+  verdict: pending
+- id: LS.CP1.plv
+  base: L
+  variant: CP1
+  area: scms
+  measure: pdu.EncryptedIndividualPLV.n
+  expect: ratio
+  band:
+  - 0.194
+  - 0.20600000000000002
+  source: 'each LA returns one encrypted pre-linkage value per certificate (CAMP 1.2.2 linkage, two LAs):
+    x 0.2'
+  measured: pending
+  verdict: pending
+- id: LS.CP1.topups
+  base: L
+  variant: CP1
+  area: scms
+  measure: p2.topups_completed
+  expect: same
+  tol: 0.03
+  source: one request and one download per top-up whatever the batch size (1609.2.1 6.3.3); the trigger
+    is the period, not the count
+  measured: pending
+  verdict: pending
+- id: LS.CP1.bsm-size
+  base: L
+  variant: CP1
+  area: on-air
+  measure: air.bsm.psdu_mean
+  expect: same
+  tol: 0.005
+  source: 'a pseudonym certificate is the same 80 B whatever the batch size: nothing on the air changes'
+  measured: pending
+  verdict: pending
+- id: LS.CP20.aca-responses
+  base: L
+  variant: CP20
+  area: scms
+  measure: pdu.AcaRaCertResponseSpdu.n
+  expect: ratio
+  band:
+  - 3.88
+  - 4.12
+  source: 'the ACA answers the RA once per certificate (one AcaRaCertResponse per butterfly-expanded key):
+    preload and top-ups both scale by 20/5 = 4 on an unchanged fleet'
+  measured: pending
+  verdict: pending
+- id: LS.CP20.plv
+  base: L
+  variant: CP20
+  area: scms
+  measure: pdu.EncryptedIndividualPLV.n
+  expect: ratio
+  band:
+  - 3.88
+  - 4.12
+  source: 'each LA returns one encrypted pre-linkage value per certificate (CAMP 1.2.2 linkage, two LAs):
+    x 4'
+  measured: pending
+  verdict: pending
+- id: LS.CP20.topups
+  base: L
+  variant: CP20
+  area: scms
+  measure: p2.topups_completed
+  expect: same
+  tol: 0.03
+  source: one request and one download per top-up whatever the batch size (1609.2.1 6.3.3); the trigger
+    is the period, not the count
+  measured: pending
+  verdict: pending
+- id: LS.CP20.bsm-size
+  base: L
+  variant: CP20
+  area: on-air
+  measure: air.bsm.psdu_mean
+  expect: same
+  tol: 0.005
+  source: 'a pseudonym certificate is the same 80 B whatever the batch size: nothing on the air changes'
+  measured: pending
+  verdict: pending
+- id: LS.CP60.aca-responses
+  base: L
+  variant: CP60
+  area: scms
+  measure: pdu.AcaRaCertResponseSpdu.n
+  expect: ratio
+  band:
+  - 11.64
+  - 12.36
+  source: 'the ACA answers the RA once per certificate (one AcaRaCertResponse per butterfly-expanded key):
+    preload and top-ups both scale by 60/5 = 12 on an unchanged fleet'
+  measured: 1009 -> 12064 (ratio 11.96)
+  verdict: pass
+- id: LS.CP60.plv
+  base: L
+  variant: CP60
+  area: scms
+  measure: pdu.EncryptedIndividualPLV.n
+  expect: ratio
+  band:
+  - 11.64
+  - 12.36
+  source: 'each LA returns one encrypted pre-linkage value per certificate (CAMP 1.2.2 linkage, two LAs):
+    x 12'
+  measured: 2010 -> 24120 (ratio 12)
+  verdict: pass
+- id: LS.CP60.topups
+  base: L
+  variant: CP60
+  area: scms
+  measure: p2.topups_completed
+  expect: same
+  tol: 0.03
+  source: one request and one download per top-up whatever the batch size (1609.2.1 6.3.3); the trigger
+    is the period, not the count
+  measured: 59 -> 59
+  verdict: pass
+- id: LS.CP60.bsm-size
+  base: L
+  variant: CP60
+  area: on-air
+  measure: air.bsm.psdu_mean
+  expect: same
+  tol: 0.005
+  source: 'a pseudonym certificate is the same 80 B whatever the batch size: nothing on the air changes'
+  measured: 213 -> 213
+  verdict: pass
+- id: LS.CP60.dl-bytes
+  base: L
+  variant: CP60
+  area: load
+  measure: access.uu_dl_bytes
+  expect: up
+  min_change: 0.5
+  source: 'a download carries every certificate of the batch (12x the certificates): the cellular downlink
+    grows'
+  measured: 382039 -> 2266361
+  verdict: pass
+- id: LS.CP1.dl-bytes
+  base: L
+  variant: CP1
+  area: load
+  measure: access.uu_dl_bytes
+  expect: down
+  source: 'one certificate a batch instead of five: less downlink'
+  measured: pending
+  verdict: pending
+- id: LS.CP60.cost
+  base: L
+  variant: CP60
+  area: cost
+  measure: cost.wall_s
+  expect: up
+  min_change: 0.05
+  source: 'the 1609.2.1 PDU layer signs and encrypts every certificate response with real keys: 12x the
+    provisioning cryptography costs wall time'
+  measured: 49.17 -> 195.83
+  verdict: pass
+- id: LS.PP1.topups
+  base: L
+  variant: PP1
+  area: scms
+  measure: p2.topups_started
+  expect: up
+  min_change: 0.3
+  source: 'pool 1 with below 1: the top-up is due at the period a vehicle joins in, so every vehicle tops
+    up at once and again each period'
+  measured: pending
+  verdict: pending
+- id: LS.PP3.topups
+  base: L
+  variant: PP3
+  area: scms
+  measure: p2.topups_started
+  expect: down
+  source: 'pool 3: a joiner tops up only at its second period boundary; in 180 s only period-0 joiners
+    still on the map at 120 s do'
+  measured: pending
+  verdict: pending
+- id: LS.PP4.topups
+  base: L
+  variant: PP4
+  area: scms
+  measure: p2.topups_started
+  expect: down
+  min_change: 0.5
+  source: 'pool 4: a joiner in period 0 is due at 180 s, the run''s last instant (L shows top-ups due
+    at the end are started: 121 started, 59 completed); only those, against every joiner of L'
+  measured: pending
+  verdict: pending
+  note: 'prediction corrected before the PP4 run, on L''s numbers: written first as eq 0, but a top-up
+    due at the run end is started (L: 62 of 121 started at 180 s)'
+- id: LS.PP4.topups-done
+  base: L
+  variant: PP4
+  area: scms
+  measure: p2.topups_completed
+  expect: eq
+  value: 0
+  source: every PP4 top-up is started at 180 s, the run end; none completes inside the run
+  measured: pending
+  verdict: pending
+- id: LS.PP4.preload
+  base: L
+  variant: PP4
+  area: scms
+  measure: pdu.AcaRaCertResponseSpdu.n
+  expect: up
+  min_change: 0.3
+  source: the preload is pool_periods x certs_per_period per device (4 x 5 against 2 x 5 plus top-ups)
+  measured: pending
+  verdict: pending
+- id: LS.PP3.pool
+  base: L
+  variant: PP3
+  area: scms
+  measure: m.cert_pool_valid.mean
+  expect: up
+  min_change: 0.2
+  source: 'a larger preload: more valid certificates held on average'
+  measured: pending
+  verdict: pending
+- id: LS.TB2.topups
+  base: L
+  variant: TB2
+  area: scms
+  measure: p2.topups_started
+  expect: up
+  min_change: 0.3
+  source: 'below 2 with pool 2: due at the joining period, like pool 1'
+  measured: pending
+  verdict: pending
+- id: LS.L.shuffle-stage
+  base: L
+  variant: L
+  area: scms
+  measure: m.revocation_latency_stage.report_sent->report_received.mean
+  expect: le
+  value: 31.0
+  source: the RA holds a report at most the 30 s window (threshold 10,000 is never reached) plus the network
+  measured: '5.21'
+  verdict: pass
+- id: LS.RW0.shuffle-stage
+  base: L
+  variant: RW0
+  area: scms
+  measure: m.revocation_latency_stage.report_sent->report_received.mean
+  expect: le
+  value: 1.0
+  source: 'window 0: a report is forwarded at once; only the Uu and backend links remain (under 1 s)'
+  measured: pending
+  verdict: pending
+- id: LS.RW10.shuffle-stage
+  base: L
+  variant: RW10
+  area: scms
+  measure: m.revocation_latency_stage.report_sent->report_received.mean
+  expect: le
+  value: 11.0
+  source: 'window 10 s: held at most 10 s'
+  measured: pending
+  verdict: pending
+- id: LS.RT1.shuffle-stage
+  base: L
+  variant: RT1
+  area: scms
+  measure: m.revocation_latency_stage.report_sent->report_received.mean
+  expect: le
+  value: 1.0
+  source: 'threshold 1: every report is a full batch on arrival and goes at once'
+  measured: pending
+  verdict: pending
+- id: LS.RW0.report-stage
+  base: L
+  variant: RW0
+  area: scms
+  measure: stage.report_received_s
+  expect: le
+  value: 1.0
+  source: 'window 0: the first case''s report reaches the MA within the Uu and backend links (L: 7.1 s
+    after the detection, the shuffle wait)'
+  measured: pending
+  verdict: pending
+- id: LS.RW0.latency
+  base: L
+  variant: RW0
+  area: scms
+  measure: x.revocation_latency_s
+  expect: ratio
+  band:
+  - 0.0
+  - 1.0
+  source: 'a shorter shuffle moves the decision earlier, but the CRL waits for the next 30 s slot (L:
+    decision at 7.1 s, published at 16.2 s): the latency is quantised by the slot, so no later and possibly
+    the same'
+  measured: pending
+  verdict: pending
+  note: 'prediction corrected before the RW0 run, on L''s stages: written first as down (the slot quantisation
+    was missed)'
+- id: LS.RW10.latency
+  base: L
+  variant: RW10
+  area: scms
+  measure: x.revocation_latency_s
+  expect: ratio
+  band:
+  - 0.0
+  - 1.0
+  source: 'a shorter shuffle moves the decision earlier, but the CRL waits for the next 30 s slot (L:
+    decision at 7.1 s, published at 16.2 s): the latency is quantised by the slot, so no later and possibly
+    the same'
+  measured: pending
+  verdict: pending
+  note: 'prediction corrected before the RW10 run, on L''s stages: written first as down (the slot quantisation
+    was missed)'
+- id: LS.RW90.latency
+  base: L
+  variant: RW90
+  area: scms
+  measure: x.revocation_latency_s
+  expect: up
+  source: a 90 s window holds the attack reports longer
+  measured: pending
+  verdict: pending
+- id: LS.RW90.revocations
+  base: L
+  variant: RW90
+  area: scms
+  measure: p2.revocations
+  expect: ratio
+  band:
+  - 0.0
+  - 1.0
+  source: with reports from 60 s held up to 90 s, fewer cases can close by 180 s
+  measured: pending
+  verdict: pending
+- id: LS.RT1.reports-at-ma
+  base: L
+  variant: RT1
+  area: scms
+  measure: p2.reports_at_ma
+  expect: ratio
+  band:
+  - 0.0
+  - 1.05
+  source: the shuffle only reorders and delays; earlier revocation stops reports about revoked attackers,
+    so at most as many reach the MA
+  measured: pending
+  verdict: pending
+- id: LS.MR10.latency
+  base: L
+  variant: MR10
+  area: scms
+  measure: x.revocation_latency_s
+  expect: delta
+  band:
+  - 0.0
+  - 30.5
+  source: review 10 s delays the decision 10 s; the CRL then waits for the next 30 s slot, so the latency
+    grows by 0 to 30 s
+  measured: pending
+  verdict: pending
+- id: LS.MR30.latency
+  base: L
+  variant: MR30
+  area: scms
+  measure: x.revocation_latency_s
+  expect: delta
+  band:
+  - 29.0
+  - 31.0
+  source: 'review 30 s is one CRL slot: the same slot sequence shifted by exactly 30 s (scms-knobs: 60
+    s gave exactly +60 s)'
+  measured: pending
+  verdict: pending
+- id: LS.ME1.revocations
+  base: L
+  variant: ME1
+  area: scms
+  measure: p2.revocations
+  expect: ratio
+  band:
+  - 1.0
+  - 1000000000.0
+  source: 'one corroborated event suffices: every case the default closes closes, and more may'
+  measured: pending
+  verdict: pending
+- id: LS.ME1.latency
+  base: L
+  variant: ME1
+  area: scms
+  measure: x.revocation_latency_s
+  expect: ratio
+  band:
+  - 0.0
+  - 1.0
+  source: 'no 10 s of sustained evidence needed: no later than the default'
+  measured: pending
+  verdict: pending
+- id: LS.ME5.decisions
+  base: L
+  variant: ME5
+  area: scms
+  measure: p2.ma_revoke_decisions
+  expect: ratio
+  band:
+  - 0.0
+  - 1.0
+  source: 'five events (20 s sustained inside one 60 s pseudonym): at most the default decisions'
+  measured: pending
+  verdict: pending
+- id: LS.MN1.revocations
+  base: L
+  variant: MN1
+  area: scms
+  measure: p2.revocations
+  expect: ratio
+  band:
+  - 1.0
+  - 1000000000.0
+  source: 'one reporter an event and overall: every default case still closes'
+  measured: pending
+  verdict: pending
+- id: LS.MN1.honest
+  base: L
+  variant: MN1
+  area: scms
+  measure: p2.revoked_honest
+  expect: up
+  source: 'with one reporter enough, an honest pseudonym falsely reported in three 5 s events by one receiver
+    (26 honest vehicles were reported in L0) is revoked: the reason the corroboration exists'
+  measured: pending
+  verdict: pending
+- id: LS.MLG.revocations
+  base: L
+  variant: MLG
+  area: scms
+  measure: p2.revocations
+  expect: ratio
+  band:
+  - 1.0
+  - 1000000000.0
+  source: 'the legacy rule needs k = 3 reporters only, not 3 events over 10 s: at least as many revocations'
+  measured: pending
+  verdict: pending
+- id: LS.CC10.latency
+  base: L
+  variant: CC10
+  area: scms
+  measure: x.revocation_latency_s
+  expect: down
+  source: a 10 s slot waits 5 s on average, a 30 s slot 15 s
+  measured: pending
+  verdict: pending
+- id: LS.CC60.latency
+  base: L
+  variant: CC60
+  area: scms
+  measure: x.revocation_latency_s
+  expect: up
+  source: a 60 s slot waits 30 s on average
+  measured: pending
+  verdict: pending
+- id: LS.CC60.versions
+  base: L
+  variant: CC60
+  area: scms
+  measure: p2.crl_versions_published
+  expect: ratio
+  band:
+  - 0.0
+  - 1.0
+  source: the CRL Generator publishes a new version only when an entry is added; fewer slots group more
+    revocations
+  measured: pending
+  verdict: pending
+- id: LS.CC10.versions
+  base: L
+  variant: CC10
+  area: scms
+  measure: p2.crl_versions_published
+  expect: ratio
+  band:
+  - 1.0
+  - 1000000000.0
+  source: more slots group fewer revocations into one version
+  measured: pending
+  verdict: pending
+- id: LS.CF10.polls
+  base: L
+  variant: CF10
+  area: load
+  measure: x.crl_polls
+  expect: ratio
+  band:
+  - 2.0
+  - 3.3
+  source: 'a cellular vehicle polls once per interval: 30 s / 10 s = 3 times as often, less the poll at
+    join every vehicle makes either way'
+  measured: pending
+  verdict: pending
+- id: LS.CF10.dl-stage
+  base: L
+  variant: CF10
+  area: scms
+  measure: m.revocation_latency_stage.published->downloaded.mean
+  expect: ratio
+  band:
+  - 0.0
+  - 1.0
+  source: a shorter poll interval cannot make the first download later
+  measured: pending
+  verdict: pending
+- id: LS.CF10.ul-bytes
+  base: L
+  variant: CF10
+  area: load
+  measure: access.uu_ul_bytes
+  expect: up
+  source: three times the conditional GETs on the uplink
+  measured: pending
+  verdict: pending
+- id: LS.CB1.frames
+  base: L
+  variant: CB1
+  area: on-air
+  measure: air.crl.frames
+  expect: ratio
+  band:
+  - 4.5
+  - 5.5
+  source: 'the RSU repeats the CRL every interval (Store and Repeat): 5 s / 1 s = 5 times the frames'
+  measured: pending
+  verdict: pending
+- id: LS.CB20.frames
+  base: L
+  variant: CB20
+  area: on-air
+  measure: air.crl.frames
+  expect: ratio
+  band:
+  - 0.15
+  - 0.35
+  source: 5 s / 20 s = a quarter of the frames (quantised by the run length)
+  measured: pending
+  verdict: pending
+- id: LS.CB1.channel
+  base: L
+  variant: CB1
+  area: on-air
+  measure: m.channel_load.mean
+  expect: same
+  tol: 0.01
+  source: CRL frames are 0.03 % of the airtime; five times that moves the channel load by under 1 %
+  measured: pending
+  verdict: pending
+- id: LS.RQ0.received
+  base: L
+  variant: RQ0
+  area: scms
+  measure: p2.reports_received
+  expect: eq
+  value: 0
+  source: 'a store of 0 bytes keeps nothing: no report is ever uploaded'
+  measured: '0'
+  verdict: pass
+- id: LS.RQ0.revocations
+  base: L
+  variant: RQ0
+  area: scms
+  measure: p2.revocations
+  expect: eq
+  value: 0
+  source: 'no report reaches the MA: nobody is revoked'
+  measured: '0'
+  verdict: pass
+- id: LS.RQ0.evicted
+  base: L
+  variant: RQ0
+  area: scms
+  measure: p2.reports_evicted
+  expect: up
+  source: every stored report is deleted for the quota at once
+  measured: 0 -> 517
+  verdict: pass
+- id: LS.RQ2K.received
+  base: L
+  variant: RQ2K
+  area: scms
+  measure: p2.reports_received
+  expect: ratio
+  band:
+  - 0.0
+  - 1.0
+  source: 'a store of about two reports loses any third report pending at once: at most as many reach
+    the MA'
+  measured: pending
+  verdict: pending
+- id: LS.PSIL.changes
+  base: L
+  variant: PSIL
+  area: privacy
+  measure: p2.pseudonym_changes
+  expect: same
+  tol: 0.0
+  source: in L every change is forced by the 61 s certificate lifetime (the 300 s period never elapses);
+    silent still changes when forced (v2xw-proto pseudonym.rs)
+  measured: pending
+  verdict: pending
+- id: LS.PT30.changes
+  base: L
+  variant: PT30
+  area: privacy
+  measure: p2.pseudonym_changes
+  expect: ratio
+  band:
+  - 1.4
+  - 2.2
+  source: 'a change at age 30 s and the forced one at the period boundary: about two per 60 s period instead
+    of one'
+  measured: 59 -> 212 (ratio 3.593)
+  verdict: open
+  note: 'not settled. Part of the excess is the base: L''s 72 devices average about 64 s on the map, so
+    few cross a boundary (0.82 changes each), while every device older than 30 s changes in PT30. But
+    the rate is 136.9 per vehicle-hour, above the 120/h ceiling of "age 30 s plus one forced change a
+    period". Hypothesis: a scheduled change inside the 1 s certificate overlap (lifetime 61 s) picks a
+    certificate of the ending period, and the expiry forces a second change 1 s later. Needs the sec.pseudonym
+    records'
+- id: LS.PT10.changes
+  base: L
+  variant: PT10
+  area: privacy
+  measure: p2.pseudonym_changes
+  expect: ratio
+  band:
+  - 2.5
+  - 6.5
+  source: age 10 s gives up to six a period but each period holds five certificates
+  measured: pending
+  verdict: pending
+- id: LS.PT30.full-cert
+  base: L
+  variant: PT30
+  area: on-air
+  measure: m.full_cert_share
+  expect: up
+  source: the first message under a new pseudonym carries its certificate (audit db1-3 F2)
+  measured: 0.100699 -> 0.100699
+  verdict: open
+  note: 'identical to 16 digits although changes rose 59 -> 212. runtime.rs:1123 restarts the certificate
+    cadence at each change, which should add about 150 certificates (+0.003). The unknown-signer loss
+    rose 0.0075 -> 0.0089, which points to digest-first frames after a change. The BSM shrank 213 -> 206
+    B, consistent with the J2945/1 path-history reset at a change. Open: whether m.full_cert_share counts
+    on-air certificates, and whether the restart takes effect'
+- id: LS.PT30.linkability
+  base: L
+  variant: PT30
+  area: privacy
+  measure: m.linkability
+  expect: same
+  tol: 0.05
+  source: with no silent period a tracker links across a change by position continuity; change frequency
+    alone barely moves it (Wiedersheim et al. 2010; Petit et al. 2015)
+  measured: 0.948038 -> 0.619622
+  verdict: wrong-expectation
+  note: 'the cited claim is about the per-change link, and it holds: links_correct / changes_heard 56/59
+    = 0.949 -> 134/150 = 0.893 (-6 %). m.linkability is the end-to-end share, which compounds over every
+    change a vehicle makes (0.9^3.6 = 0.68), so it falls with change frequency. The row should have used
+    the per-change ratio'
+- id: LS.PT10.starved
+  base: L
+  variant: PT10
+  area: scms
+  measure: p2.vehicles_starved
+  expect: same
+  tol: 0.0
+  source: changing more often never uses a certificate outside its period
+  measured: pending
+  verdict: pending
+- id: LS.L.full-cert
+  base: L
+  variant: L
+  area: on-air
+  measure: m.full_cert_share
+  expect: band
+  band:
+  - 0.095
+  - 0.115
+  source: 'BSMs at 10 Hz, a certificate once 1,000 ms have passed: 1 in 10, plus the first under each
+    pseudonym'
+  measured: '0.100699'
+  verdict: pass
+- id: LS.FC250.full-cert
+  base: L
+  variant: FC250
+  area: on-air
+  measure: m.full_cert_share
+  expect: band
+  band:
+  - 0.3
+  - 0.42
+  source: '250 ms at 100 ms spacing: every third BSM (0.333), up to 0.4 with jitter'
+  measured: pending
+  verdict: pending
+- id: LS.FC5000.full-cert
+  base: L
+  variant: FC5000
+  area: on-air
+  measure: m.full_cert_share
+  expect: band
+  band:
+  - 0.019
+  - 0.035
+  source: 1 in 50 plus one at each 60 s change (1/600)
+  measured: pending
+  verdict: pending
+- id: LS.FCX.full-cert
+  base: L
+  variant: FCX
+  area: on-air
+  measure: m.full_cert_share
+  expect: band
+  band:
+  - 0.99
+  - 1.0
+  source: 'digest_otherwise false: every BSM carries its certificate'
+  measured: '1'
+  verdict: pass
+- id: LS.FC250.size
+  base: L
+  variant: FC250
+  area: on-air
+  measure: air.bsm.psdu_mean
+  expect: delta
+  band:
+  - 15.0
+  - 24.0
+  source: 74 B x (0.333 - 0.1) = +17 B (to +22 B at 0.4), mean rounded to the byte
+  measured: pending
+  verdict: pending
+- id: LS.FC5000.size
+  base: L
+  variant: FC5000
+  area: on-air
+  measure: air.bsm.psdu_mean
+  expect: delta
+  band:
+  - -7.0
+  - -4.5
+  source: 74 B x (0.021 - 0.1) = -5.8 B
+  measured: pending
+  verdict: pending
+- id: LS.FCX.size
+  base: L
+  variant: FCX
+  area: on-air
+  measure: air.bsm.psdu_mean
+  expect: delta
+  band:
+  - 65.0
+  - 68.5
+  source: 74 B x 0.9 = +66.6 B
+  measured: 213 -> 279 (delta 66)
+  verdict: pass
+- id: LS.FCX.airtime
+  base: L
+  variant: FCX
+  area: on-air
+  measure: x.airtime_per_frame_us
+  expect: ratio
+  band:
+  - 1.24
+  - 1.34
+  source: '802.11p 10 MHz at 6 Mb/s, 48 data bits a symbol of 8 us plus 40 us preamble and SIGNAL: 213
+    B is 36 symbols (328 us), 280 B is 48 (424 us): x 1.29'
+  measured: 331.621 -> 419.791 (ratio 1.266)
+  verdict: pass
+- id: LS.FCX.cbr
+  base: L
+  variant: FCX
+  area: on-air
+  measure: m.cbr.172.mean
+  expect: up
+  min_change: 0.15
+  source: 'the same frames, each 29 % longer on the air: the busy ratio rises about as much'
+  measured: 0.0154425 -> 0.0202582
+  verdict: pass
+- id: LS.FC5000.unknown
+  base: L
+  variant: FC5000
+  area: scms
+  measure: x.unknown_signer_loss
+  expect: up
+  source: 'a newcomer waits up to 5 s for a certificate: more digest-only frames from unknown signers'
+  measured: pending
+  verdict: pending
+- id: LS.FC250.unknown
+  base: L
+  variant: FC250
+  area: scms
+  measure: x.unknown_signer_loss
+  expect: down
+  source: 'a certificate every 250 ms: a newcomer waits at most a quarter second'
+  measured: pending
+  verdict: pending
+- id: LS.FCX.unknown
+  base: L
+  variant: FCX
+  area: scms
+  measure: x.unknown_signer_loss
+  expect: eq
+  value: 0.0
+  source: 'every frame carries its signer: none is from an unknown signer'
+  measured: '0'
+  verdict: pass
+- id: LS.NN.full-cert
+  base: L
+  variant: NN
+  area: on-air
+  measure: m.full_cert_share
+  expect: up
+  source: a certificate also whenever a new neighbour is heard (TS 103 097 7.1.1 rule)
+  measured: pending
+  verdict: pending
+- id: LS.NN.unknown
+  base: L
+  variant: NN
+  area: scms
+  measure: x.unknown_signer_loss
+  expect: down
+  source: newcomers get the certificate in the next message
+  measured: pending
+  verdict: pending
+- id: LS.CHP.p2pcd
+  base: L
+  variant: CHP
+  area: on-air
+  measure: r.p2pcd_responses_on_air
+  expect: up
+  source: 'a home-provider chain file lacks the other provider''s ICA and ACA: receivers learn them by
+    P2PCD (IEEE 1609.2 clause 8)'
+  measured: 0 -> 77
+  verdict: pass
+- id: LS.CHP.unknown
+  base: L
+  variant: CHP
+  area: scms
+  measure: x.unknown_signer_loss
+  expect: up
+  source: until the P2PCD answer arrives, the other provider's pseudonyms cannot be verified
+  measured: 0.00747263 -> 0.0459558
+  verdict: pass
+- id: LS.VOD.verify
+  base: L
+  variant: VOD
+  area: scms
+  measure: m.verify_rate.ecdsa-p256-verify
+  expect: down
+  min_change: 0.5
+  source: on-demand verifies only messages an application is about to act on
+  measured: 1925.95 -> 59.2222
+  verdict: pass
+- id: LS.VOD.reports
+  base: L
+  variant: VOD
+  area: scms
+  measure: p2.reports_sent
+  expect: down
+  min_change: 0.5
+  source: 'detection judges only verified messages (SM-MBR 2.3.1.2.1): 897 -> 79 in earlier testing'
+  measured: 582 -> 5
+  verdict: pass
+- id: LS.VOD.revocations
+  base: L
+  variant: VOD
+  area: scms
+  measure: p2.revocations
+  expect: ratio
+  band:
+  - 0.0
+  - 1.0
+  source: fewer reports, at most as many revocations
+  measured: 2 -> 0 (ratio 0)
+  verdict: pass
+- id: LS.VOD.cost
+  base: L
+  variant: VOD
+  area: cost
+  measure: cost.events
+  expect: down
+  min_change: 0.1
+  source: one verification task fewer for every unchecked reception
+  measured: 883333 -> 542603
+  verdict: pass
+- id: LS.VPR.verify
+  base: L
+  variant: VPR
+  area: scms
+  measure: m.verify_rate.ecdsa-p256-verify
+  expect: same
+  tol: 0.02
+  source: prioritised only reorders a backlog; the queue is under one task on average (L0 0.009)
+  measured: pending
+  verdict: pending
+- id: LS.VPR.reports
+  base: L
+  variant: VPR
+  area: scms
+  measure: p2.reports_sent
+  expect: same
+  tol: 0.05
+  source: the same messages are verified, the same detections filed
+  measured: pending
+  verdict: pending
+- id: LS.S384.size
+  base: L
+  variant: S384
+  area: on-air
+  measure: air.bsm.psdu_mean
+  expect: delta
+  band:
+  - 31.5
+  - 37.5
+  source: 'P-384: the signature''s r and s are 48 B instead of 32 (+32 B every BSM); a P-384 certificate
+    adds 16 B of key and 32 B of signature (x 0.1)'
+  measured: 213 -> 250 (delta 37)
+  verdict: pass
+- id: LS.S384.verify
+  base: L
+  variant: S384
+  area: scms
+  measure: m.verify_cost.mean
+  expect: up
+  min_change: 0.3
+  source: a P-384 verification costs more than a P-256 one on any accelerator
+  measured: 0.422132 -> 0.422136
+  verdict: open
+  note: 'engine modelling choice, not yet fixed: v2xw-node profile::signature_ops keeps the P-256 sign
+    and verify ops for every classical curve ("one P-384 figure is not a table"), so P-384 costs exactly
+    P-256 (sign 9.012 ms, verify 0.422 ms, the rate still keyed ecdsa-p256-verify) although obu-generic-automotive-soc-no-hsm
+    publishes P-384 (8,104 us sign, 5,721 us verify, R5 B.5). Sizes are right (+37 B). Proposed fix: use
+    the scheme''s own op where the profile prices it, P-256 otherwise, flagged on the card'
+- id: LS.SBP.size
+  base: L
+  variant: SBP
+  area: on-air
+  measure: air.bsm.psdu_mean
+  expect: delta
+  band:
+  - -0.5
+  - 0.5
+  source: 'brainpoolP256r1 has P-256''s 32 B coordinates: the same sizes'
+  measured: pending
+  verdict: pending
+- id: LS.SBP.verify
+  base: L
+  variant: SBP
+  area: scms
+  measure: m.verify_cost.mean
+  expect: ratio
+  band:
+  - 1.0
+  - 3.0
+  source: 'no special-form prime: at least P-256''s cost, at most about 3x'
+  measured: pending
+  verdict: pending
+- id: LS.KEM.bsm
+  base: L
+  variant: KEM
+  area: on-air
+  measure: air.bsm.psdu_mean
+  expect: same
+  tol: 0.0
+  source: 'the KEM encrypts backend responses only: the BSM is untouched'
+  measured: 213 -> 213
+  verdict: pass
+- id: LS.KEM.airtime
+  base: L
+  variant: KEM
+  area: on-air
+  measure: air.airtime_us
+  expect: same
+  tol: 0.01
+  source: nothing on the air changes
+  measured: 18073000 -> 18058992
+  verdict: pass
+- id: LS.KEM.sealed
+  base: L
+  variant: KEM
+  area: load
+  measure: sealed.checked
+  expect: eq
+  value: 0
+  source: 'a PQ KEM turns the real 1609.2.1 PDU layer off (ScmsRun: pki only with no hybrid and no KEM):
+    no sealed SPDU on any link'
+  measured: '0'
+  verdict: pass
+- id: LS.KEM.dl-bytes
+  base: L
+  variant: KEM
+  area: load
+  measure: access.uu_dl_bytes
+  expect: up
+  source: an ML-KEM-768 ciphertext is 1,088 B against ECIES-P256's 65 B point and 16 B tag in every encrypted
+    response
+  measured: 382039 -> 408085
+  verdict: pass
+- id: LS.NHF.sign
+  base: L
+  variant: NHF
+  area: scms
+  measure: m.latency_stage.sign.mean
+  expect: down
+  min_change: 0.5
+  source: 'no HSM: software P-256 on the SoC (613 us, R7 D8) instead of the CRATON2 bound (9 ms)'
+  measured: pending
+  verdict: pending
+- id: LS.HYB.size
+  base: NHF
+  variant: HYB
+  area: on-air
+  measure: air.bsm.psdu_mean
+  expect: up
+  min_change: 2.0
+  source: Falcon-512 adds a ~666 B signature to every BSM and a 897 B key to every certificate
+  measured: pending
+  verdict: pending
+- id: LS.HYB.fragments
+  base: NHF
+  variant: HYB
+  area: on-air
+  measure: r.fragments_sent
+  expect: up
+  source: 'the hybrid BSM exceeds one frame: the generic fragmenter splits it'
+  measured: pending
+  verdict: pending
+- id: LS.HYB.channel
+  base: NHF
+  variant: HYB
+  area: on-air
+  measure: m.channel_load.mean
+  expect: up
+  min_change: 1.0
+  source: several times the airtime per message
+  measured: pending
+  verdict: pending
+- id: LS.HYB.cost
+  base: NHF
+  variant: HYB
+  area: cost
+  measure: cost.events
+  expect: up
+  source: more frames, more MAC and PHY events
+  measured: pending
+  verdict: pending
+- id: LS.L.share-b
+  base: L
+  variant: L
+  area: scms
+  measure: x.share_b
+  expect: band
+  band:
+  - 0.35
+  - 0.65
+  source: 'two providers at 0.5 each, assigned by a hash: binomial on about 75 devices'
+  measured: '0.444444'
+  verdict: pass
+- id: LS.SH90.share-b
+  base: L
+  variant: SH90
+  area: scms
+  measure: x.share_b
+  expect: band
+  band:
+  - 0.02
+  - 0.2
+  source: 0.1 of about 75 devices (binomial sd 0.035)
+  measured: pending
+  verdict: pending
+- id: LS.SH90.verified-b
+  base: L
+  variant: SH90
+  area: scms
+  measure: x.verified_share_b
+  expect: band
+  band:
+  - 0.02
+  - 0.22
+  source: 'receptions follow the senders: about 0.1 signed under provider-b'
+  measured: pending
+  verdict: pending
+- id: LS.SH100.share-b
+  base: L
+  variant: SH100
+  area: scms
+  measure: x.share_b
+  expect: eq
+  value: 0.0
+  source: 'share 0: provider-b certifies no device'
+  measured: '0'
+  verdict: pass
+- id: LS.SH100.verified-b
+  base: L
+  variant: SH100
+  area: scms
+  measure: x.verified_share_b
+  expect: eq
+  value: 0.0
+  source: no provider-b sender, nothing verified under it
+  measured: '0'
+  verdict: pass
+- id: LS.SH100.revocations-b
+  base: L
+  variant: SH100
+  area: scms
+  measure: x.revocations_b
+  expect: eq
+  value: 0
+  source: provider-b's MA revokes nothing it never certified
+  measured: '0'
+  verdict: pass

@@ -1,0 +1,9 @@
+# Live RSU track, SCMS family: scms-base.yaml with one change (the units repeat the CRL every 1 s instead of 5 s).
+schema: v2xw/scenario/1
+meta:
+  base: scms-base.yaml
+  name: live-rsu scms bc1
+security:
+  scms:
+    lifecycle:
+      crl_broadcast_interval_s: 1.0

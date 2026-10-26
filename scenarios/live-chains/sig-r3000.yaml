@@ -1,0 +1,9 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains sig-r3000
+  base: sig-base.yaml
+  description: >-
+    Demand 3,000 veh/h.
+actors:
+  vehicles:
+    demand: {rate_veh_per_h: 3000.0}

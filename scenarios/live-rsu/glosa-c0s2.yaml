@@ -1,0 +1,8 @@
+# Live RSU track, application family: glosa-base.yaml with one change (seed 2, GLOSA ignored).
+schema: v2xw/scenario/1
+meta:
+  base: glosa-base.yaml
+  name: live-rsu glosa c0s2
+seed: 2
+apps:
+  glosa_compliance: 0.0

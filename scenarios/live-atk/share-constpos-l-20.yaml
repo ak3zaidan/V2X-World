@@ -1,0 +1,8 @@
+# 20 % ConstPos attackers from 20 s, suite L.
+schema: v2xw/scenario/1
+meta: {base: base.yaml, name: live-atk share-constpos-l-20}
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.2
+      schedule: {from_s: 20.0, to_s: 150.0}

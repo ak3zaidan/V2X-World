@@ -1,0 +1,9 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains scms-g10
+  base: scms-base.yaml
+  description: >-
+    GNSS outliers ten times as often (0.1 per second per vehicle).
+actors:
+  vehicles:
+    gnss: {outlier_rate_hz: 0.1}

@@ -59,7 +59,10 @@ fn the_ctl_lists_exactly_one_root_per_provider() {
     // component (audit-gov §4 item 1) the peer's DCM is in its chain set too.
     let dcm_a = g.cert("dcm").expect("home DCM");
     let dcm_b = g.peer_cert("provider-b", "dcm").expect("peer DCM");
-    assert_ne!(cert_hashed_id8(dcm_a).unwrap(), cert_hashed_id8(dcm_b).unwrap());
+    assert_ne!(
+        cert_hashed_id8(dcm_a).unwrap(),
+        cert_hashed_id8(dcm_b).unwrap()
+    );
     // Provider-b's ICA is issued by provider-b's root, not provider-a's.
     let ica_b = g.peer_cert("provider-b", "ica").unwrap();
     assert_eq!(

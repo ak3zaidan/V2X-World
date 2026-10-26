@@ -1,0 +1,30 @@
+# Catalogue group 1: one attacker of each type from 20 s, on actors present from the
+# start (picked from the attack-free run by stay). Suite of base.yaml.
+schema: v2xw/scenario/1
+meta: {base: base.yaml, name: live-atk cat1}
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      actor_ids: [39]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/RandomPos
+      actor_ids: [19]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/Teleport
+      actor_ids: [11]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/ConstSpeedOffset
+      actor_ids: [31]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/ReversedHeading
+      actor_ids: [37]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/DataReplay
+      actor_ids: [1]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/InvalidSignature
+      actor_ids: [12]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/Disruptive
+      actor_ids: [25]
+      schedule: {from_s: 20.0, to_s: 150.0}

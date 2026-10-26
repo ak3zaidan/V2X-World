@@ -1,0 +1,24 @@
+# Live RSU track, application family: glosa-base.yaml with one change (the units broadcast SPaT but no MAP).
+schema: v2xw/scenario/1
+meta:
+  base: glosa-base.yaml
+  name: live-rsu glosa nomap
+actors:
+  rsus:
+    - site: 8
+      roles: [spat]
+      profile: rsu/commsignia-its-rs4
+    - site: 9
+      roles: [spat]
+      profile: rsu/commsignia-its-rs4
+    - site: 10
+      roles: [spat]
+      profile: rsu/commsignia-its-rs4
+    - site: 11
+      roles: [spat]
+      profile: rsu/commsignia-its-rs4
+    - site: 12
+      roles: [spat]
+      profile: rsu/commsignia-its-rs4
+messages:
+  sets: [bsm, spat]

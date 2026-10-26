@@ -1,0 +1,2186 @@
+# Live attack-and-detection tests (docs/validation/live-atk-2026-10-25.md): every attack
+# family at two to three attacker shares and strengths, under each selectable detector suite
+# and MA rule, on the real engine (the integrator's release build of 486c8cba, copied to the
+# scratchpad). Every row was written and committed with `measured: pending` before the run
+# it judges. Each row names the raw-input `fault` (a mutation of the run report or records,
+# applied before the measures are derived) that the checker's `selftest` injects to show the
+# row can go red.
+#
+#   python3 -I tools/realworld/live_atk.py extract <run-dir> <cost-file>
+#   python3 -I tools/realworld/live_atk.py check <this file> <runs-dir> [--fill]
+#   python3 -I tools/realworld/live_atk.py selftest <this file> <runs-dir>
+#
+# expect: eq | le | ge | band (the variant's value); up | down | same | ratio | delta |
+# identical (variant against base). verdict: pass | fixed (engine defect fixed at its cause;
+# `test` pins it) | wrong-expectation (corrected with the evidence in `note`) | open.
+#
+# Runs: scenarios/live-atk/*.yaml, the SCMS lifecycle family (credential-lifecycle.yaml:
+# compressed calendar, CRL every 30 s, MA review 0 s) held at 40 vehicles for 150 s, seed
+# 0xC0FFEE_5EED, --record-level events, --build-utc 2026-10-25T00:00:00Z, one run per
+# run-lock call (1,200 MB cap). Suites: L = detect/legacy-12 filing what SM-MBR v1.1 can
+# encode (the default), M = the same with `modelled_reports: 1`, U = detect/us-sm-mbr.
+# MA: threat/ma/corroborated (default) or threat/ma/legacy-window.
+schema: v2xw/scms-run-expectations/1
+runs:
+  B0L: {scenario: scenarios/live-atk/base.yaml, note: attack-free, L suite}
+  B0L2: {scenario: scenarios/live-atk/base.yaml, note: B0L again (determinism)}
+  B0U: {scenario: scenarios/live-atk/us.yaml, note: attack-free, U suite}
+  B0M: {scenario: scenarios/live-atk/modelled.yaml, note: attack-free, M suite}
+  C1L: {scenario: scenarios/live-atk/cat1.yaml, note: 'catalogue group 1, suite L'}
+  C1M: {scenario: scenarios/live-atk/cat1-m.yaml, note: 'catalogue group 1, suite M'}
+  C1U: {scenario: scenarios/live-atk/cat1-u.yaml, note: 'catalogue group 1, suite U'}
+  C2L: {scenario: scenarios/live-atk/cat2.yaml, note: 'catalogue group 2, suite L'}
+  C2M: {scenario: scenarios/live-atk/cat2-m.yaml, note: 'catalogue group 2, suite M'}
+  C2U: {scenario: scenarios/live-atk/cat2-u.yaml, note: 'catalogue group 2, suite U'}
+  C3L: {scenario: scenarios/live-atk/cat3.yaml, note: 'catalogue group 3, suite L'}
+  C3M: {scenario: scenarios/live-atk/cat3-m.yaml, note: 'catalogue group 3, suite M'}
+  C3U: {scenario: scenarios/live-atk/cat3-u.yaml, note: 'catalogue group 3, suite U'}
+  SCL05: {scenario: scenarios/live-atk/share-constpos-l-05.yaml, note: '5 % ConstPos, suite L'}
+  SCL10: {scenario: scenarios/live-atk/share-constpos-l-10.yaml, note: '10 % ConstPos, suite L'}
+  SCL20: {scenario: scenarios/live-atk/share-constpos-l-20.yaml, note: '20 % ConstPos, suite L'}
+  SCU05: {scenario: scenarios/live-atk/share-constpos-u-05.yaml, note: '5 % ConstPos, suite U'}
+  SCU10: {scenario: scenarios/live-atk/share-constpos-u-10.yaml, note: '10 % ConstPos, suite U'}
+  SCU20: {scenario: scenarios/live-atk/share-constpos-u-20.yaml, note: '20 % ConstPos, suite U'}
+  SRL05: {scenario: scenarios/live-atk/share-randompos-l-05.yaml, note: '5 % RandomPos, suite L'}
+  SRL10: {scenario: scenarios/live-atk/share-randompos-l-10.yaml, note: '10 % RandomPos, suite L'}
+  SRL20: {scenario: scenarios/live-atk/share-randompos-l-20.yaml, note: '20 % RandomPos, suite L'}
+  SYM05: {scenario: scenarios/live-atk/share-sybil-m-05.yaml, note: '5 % Sybil, suite M'}
+  SYM10: {scenario: scenarios/live-atk/share-sybil-m-10.yaml, note: '10 % Sybil, suite M'}
+  SYM20: {scenario: scenarios/live-atk/share-sybil-m-20.yaml, note: '20 % Sybil, suite M'}
+  TCU0p0: {scenario: scenarios/live-atk/str-constspeedoffset-u-0p0.yaml, note: '10 % ConstSpeedOffset at intensity 0p0, suite U'}
+  TCU0p5: {scenario: scenarios/live-atk/str-constspeedoffset-u-0p5.yaml, note: '10 % ConstSpeedOffset at intensity 0p5, suite U'}
+  TCU1p0: {scenario: scenarios/live-atk/str-constspeedoffset-u-1p0.yaml, note: '10 % ConstSpeedOffset at intensity 1p0, suite U'}
+  TCU3p0: {scenario: scenarios/live-atk/str-constspeedoffset-u-3p0.yaml, note: '10 % ConstSpeedOffset at intensity 3p0, suite U'}
+  TSU1p0: {scenario: scenarios/live-atk/str-randomspeed-u-1p0.yaml, note: '10 % RandomSpeed at intensity 1p0, suite U'}
+  TSU3p0: {scenario: scenarios/live-atk/str-randomspeed-u-3p0.yaml, note: '10 % RandomSpeed at intensity 3p0, suite U'}
+  TRL0p01: {scenario: scenarios/live-atk/str-randompos-l-0p01.yaml, note: '10 % RandomPos at intensity 0p01, suite L'}
+  TRL0p1: {scenario: scenarios/live-atk/str-randompos-l-0p1.yaml, note: '10 % RandomPos at intensity 0p1, suite L'}
+  MAL: {scenario: scenarios/live-atk/ma-legacy.yaml, note: 'SCL10 with legacy-window MA'}
+  MAL0: {scenario: scenarios/live-atk/ma-legacy-free.yaml, note: 'attack-free with legacy-window MA'}
+  ME1: {scenario: scenarios/live-atk/ma-minev1.yaml, note: 'SCL10 with min_events 1'}
+  ME10: {scenario: scenarios/live-atk/ma-minev1-free.yaml, note: 'attack-free with min_events 1'}
+  ME6: {scenario: scenarios/live-atk/ma-minev6.yaml, note: 'SCL10 with min_events 6'}
+  ME60: {scenario: scenarios/live-atk/ma-minev6-free.yaml, note: 'attack-free with min_events 6'}
+  MR1: {scenario: scenarios/live-atk/ma-evrep1.yaml, note: 'SCL10 with event_min_reporters 1'}
+  MR10: {scenario: scenarios/live-atk/ma-evrep1-free.yaml, note: 'attack-free with event_min_reporters 1'}
+  MR4: {scenario: scenarios/live-atk/ma-evrep4.yaml, note: 'SCL10 with event_min_reporters 4'}
+  MR40: {scenario: scenarios/live-atk/ma-evrep4-free.yaml, note: 'attack-free with event_min_reporters 4'}
+  UD3: {scenario: scenarios/live-atk/us-drift3.yaml, note: 'TCU1p0 with gpsDrift 3 m'}
+  UD050: {scenario: scenarios/live-atk/us-drift05-free.yaml, note: 'attack-free US profile with gpsDrift 0.5 m'}
+  RI02: {scenario: scenarios/live-atk/repint-0p2.yaml, note: 'SCL10 with report_interval_s 0.2'}
+  RI5: {scenario: scenarios/live-atk/repint-5p0.yaml, note: 'SCL10 with report_interval_s 5'}
+  RAWL: {scenario: scenarios/live-atk/rawgnss.yaml, note: 'attack-free, raw GNSS fixes, suite L'}
+  RAWU: {scenario: scenarios/live-atk/rawgnss-us.yaml, note: 'attack-free, raw GNSS fixes, suite U'}
+  C2Mb: {scenario: scenarios/live-atk/cat2-m.yaml, note: 'C2M on the branch build (flag default)'}
+  C2MJ: {scenario: scenarios/live-atk/cat2-m-jr.yaml, note: 'C2M with judge_revoked 0, branch build'}
+  SYM10b: {scenario: scenarios/live-atk/share-sybil-m-10.yaml, note: 'SYM10 on the branch build (ghost frames open the attacker window)'}
+rows:
+# ---- 0. Attack-free: no attacker, nothing to revoke --------------------------------------
+- id: A0.L.no-attackers
+  base: B0L
+  variant: B0L
+  area: attack-free
+  measure: rec.attackers
+  expect: eq
+  value: 0
+  fault: scalar
+  measured: '0'
+  verdict: pass
+  source: 'threats.attackers is empty: no gt.attack.action record may exist'
+- id: A0.L.no-revocation
+  base: B0L
+  variant: B0L
+  area: attack-free
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'the corroborated MA needs 3 events, each from 2 trusted reporters, inside 60 s (ma_corroborate defaults; F2MD DELTA_REPORT_TIME); honest GNSS noise does not sustain that (QD and FB3: 0 honest revoked, 06 §6 item 1)'
+- id: A0.L.no-decision
+  base: B0L
+  variant: B0L
+  area: attack-free
+  measure: p2.ma_revoke_decisions
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'as A0.L.no-revocation, read from the run report rather than the records'
+- id: A0.L.report-revoked-honest
+  base: B0L
+  variant: B0L
+  area: attack-free
+  measure: p2.revoked_honest
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'as A0.L.no-revocation'
+- id: A0.L.honest-reports-small
+  base: B0L
+  variant: B0L
+  area: attack-free
+  measure: p2.reports_about_honest
+  expect: le
+  value: 60
+  fault: honest-reported
+  measured: '2'
+  verdict: pass
+  source: 'the 300 s lifecycle pilot (124 vehicles, 5 attackers) filed 50 reports about 26 honest vehicles; 40 vehicles for 150 s is about the same vehicle-seconds, so tens, not hundreds'
+- id: A0.L.no-attacker-warnings
+  base: B0L
+  variant: B0L
+  area: attack-free
+  measure: rec.warn_false_ghost
+  expect: eq
+  value: 0
+  fault: warn-flood
+  measured: '0'
+  verdict: pass
+  source: 'no Sybil attacker, so no warning names a subject nobody signs under (app_truth: a ghost subject is a false warning)'
+- id: A0.L.determinism
+  base: B0L
+  variant: B0L2
+  area: attack-free
+  measure: digest
+  expect: identical
+  fault: nondeterministic
+  measured: 'ade2f953431acf1dc2d12d38c430759a6ea7ba9a7f2888b2a38a36e4cc75af2b -> ade2f953431acf1dc2d12d38c430759a6ea7ba9a7f2888b2a38a36e4cc75af2b'
+  verdict: pass
+  source: 'same scenario, seed and build: the record digest is byte-identical (01-architecture determinism)'
+- id: A0.L.cost-memory
+  base: B0L
+  variant: B0L
+  area: cost
+  measure: cost.peak_mb
+  expect: le
+  value: 600
+  fault: cost-x10
+  measured: '64'
+  verdict: pass
+  source: 'the 300 s pilot with up to 62 vehicles peaked at 111 MB; 40 vehicles is fewer receivers'
+- id: A0.U.no-revocation
+  base: B0U
+  variant: B0U
+  area: attack-free
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  note: 'first run on raw fixes (old-B0U) revoked 47 honest vehicles (F1); this row is judged on the deployed receiver model'
+  source: 'the US profile revokes no honest vehicle on any quarter-fleet run nor on the full fleet over two days (06 §9, FB3)'
+- id: A0.U.no-decision
+  base: B0U
+  variant: B0U
+  area: attack-free
+  measure: p2.ma_revoke_decisions
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'as A0.U.no-revocation'
+- id: A0.U.honest-reports-vs-L
+  base: B0L
+  variant: B0U
+  area: attack-free
+  measure: p2.reports_about_honest
+  expect: up
+  fault: detector-blind
+  measured: '2 -> 11'
+  verdict: pass
+  source: 'the US profile checks every consecutive BSM pair with no streak gate and no stated-accuracy tolerance (RandomPosition at 1 m gpsDrift, MaxAcceleration at 10 m/s2; us_mbr.rs), where the research suite gates on streaks and stated accuracy: more honest reports at the same noise'
+- id: A0.M.no-revocation
+  base: B0M
+  variant: B0M
+  area: attack-free
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'every research verdict reaches the MA, but corroboration (3 events x 2 reporters in 60 s) still holds honest noise below the bar'
+- id: A0.M.ma-up
+  base: B0L
+  variant: B0M
+  area: attack-free
+  measure: p2.reports_received
+  expect: up
+  fault: detector-blind
+  measured: '0 -> 2'
+  verdict: pass
+  source: 'B0L files only SM-MBR-encodable checks (the pilot left 2,245 of 2,978 unfiled: no subtype); modelled_reports files every verdict, so the MA receives more'
+# ---- 1. Catalogue: every runnable attack type, one attacker each, three groups ----------
+# C<g><suite>: group g (1-3, below) under suite L, M or U; attackers from 20 s.
+
+- id: C.U.ConstPos.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.ConstPos.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: 'frozen position, non-zero speed: ConstantPosition; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.ConstPos.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.ConstPos.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: '1'
+  verdict: pass
+  source: 'constantPositionFrozen maps to ConstantPosition; every BSM is evidence (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.ConstPos.constantPositionFrozen
+  base: C1M
+  variant: C1M
+  area: catalogue
+  measure: rec.kdet.ConstPos.constantPositionFrozen
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: '128'
+  verdict: pass
+  source: 'constantPositionFrozen is the check designed for ConstPos (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.RandomPos.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.RandomPos.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: '60 m redrawn each BSM: RandomPosition every pair; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.RandomPos.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.RandomPos.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: '1'
+  verdict: pass
+  source: 'positionJump maps to RandomPosition (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.RandomPos.positionJump
+  base: C1M
+  variant: C1M
+  area: catalogue
+  measure: rec.kdet.RandomPos.positionJump
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: '2'
+  verdict: pass
+  source: 'positionJump is the check designed for RandomPos (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.Teleport.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.Teleport.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: '150/80 m jump every 4 s: RandomPosition at each jump; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.Teleport.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.Teleport.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: '1'
+  verdict: pass
+  source: 'positionJump at each 4 s jump: 15 events a minute (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.Teleport.positionJump
+  base: C1M
+  variant: C1M
+  area: catalogue
+  measure: rec.kdet.Teleport.positionJump
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: '0'
+  verdict: wrong-expectation
+  note: 'F9: ma.report names only the leading check; a teleport leads with positionSpeedInconsistency (13) or headingInconsistency (12), never positionJump (C1M)'
+  source: 'positionJump is the check designed for Teleport (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.ConstSpeedOffset.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.ConstSpeedOffset.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: '+12 m/s claimed: p1 + v1 dt misses p2 by 1.2 m per 0.1 s pair, over 1 m; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.ConstSpeedOffset.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.ConstSpeedOffset.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '1'
+  verdict: wrong-expectation
+  note: 'F7: revoked through constantPositionFrozen (35 reports): standing at a red light it claims 12 m/s, which ConstantPosition encodes'
+  source: 'only positionSpeedInconsistency fires after onset, and no SM-MBR subtype encodes it (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.ConstSpeedOffset.positionSpeedInconsistency
+  base: C1M
+  variant: C1M
+  area: catalogue
+  measure: rec.kdet.ConstSpeedOffset.positionSpeedInconsistency
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: '41'
+  verdict: pass
+  source: 'positionSpeedInconsistency is the check designed for ConstSpeedOffset (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.ReversedHeading.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.ReversedHeading.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: 'reciprocal heading: the prediction lands 2 v dt = 2.2 m behind at 11 m/s; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.ReversedHeading.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.ReversedHeading.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'headingInconsistency has no SM-MBR subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.ReversedHeading.headingInconsistency
+  base: C1M
+  variant: C1M
+  area: catalogue
+  measure: rec.kdet.ReversedHeading.headingInconsistency
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: '73'
+  verdict: pass
+  source: 'headingInconsistency is the check designed for ReversedHeading (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.DataReplay.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.DataReplay.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'a replay 5 s old is refused by the generationTime window before any check (06 §6 item 17: never reported); the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.DataReplay.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.DataReplay.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'staleOrReplay has no subtype, and the stale replay is refused first (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.U.InvalidSignature.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.InvalidSignature.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'a BSM that fails verification is not evidence about its certificate and is never checked; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.InvalidSignature.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.InvalidSignature.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'signatureVerification has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.InvalidSignature.signatureVerification
+  base: C1M
+  variant: C1M
+  area: catalogue
+  measure: rec.kdet.InvalidSignature.signatureVerification
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: '426'
+  verdict: pass
+  source: 'signatureVerification is the check designed for InvalidSignature (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.Disruptive.reported
+  base: C1U
+  variant: C1U
+  area: catalogue
+  measure: k.Disruptive.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: 'position, speed and heading falsified at once: RandomPosition and MaxAcceleration; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.Disruptive.decided
+  base: C1L
+  variant: C1L
+  area: catalogue
+  measure: k.Disruptive.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: '1'
+  verdict: pass
+  source: 'positionJump and implausibleAcceleration map (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.U.ConstPosOffset.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.ConstPosOffset.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: 'the 25 m step at onset breaks RandomPosition once; after it the claims are consistent; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.ConstPosOffset.decided
+  base: C2L
+  variant: C2L
+  area: catalogue
+  measure: k.ConstPosOffset.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'one step at onset is one event; corroboration needs 3 in 60 s (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.U.SineWavePos.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.SineWavePos.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: '20 m x 0.6 rad/s lateral swing: up to 1.2 m per pair, over 1 m at the peaks; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.U.RandomSpeed.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.RandomSpeed.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: 'a fresh speed in [0, 40] m/s each BSM: |dv|/0.1 s far over 10 m/s2 (MaxAcceleration); the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.RandomSpeed.decided
+  base: C2L
+  variant: C2L
+  area: catalogue
+  measure: k.RandomSpeed.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: '0'
+  verdict: open
+  note: 'F6: legacy implausibleAcceleration fired 2-7 times per run against ~10^2 expected from |dv|/dt over 12 m/s2 on U[0,40] draws; not traced'
+  source: 'implausibleAcceleration maps to MaxAcceleration (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.RandomSpeed.implausibleAcceleration
+  base: C2M
+  variant: C2M
+  area: catalogue
+  measure: rec.kdet.RandomSpeed.implausibleAcceleration
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: '1'
+  verdict: pass
+  source: 'implausibleAcceleration is the check designed for RandomSpeed (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.HeadingOffset.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.HeadingOffset.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '1'
+  verdict: wrong-expectation
+  note: 'F8: the honest receiver residual adds to the 0.86 m heading miss; RandomPosition fired 37 times, attacker revoked (C2U)'
+  source: '45 deg: the miss is 2 v dt sin(22.5 deg) = 0.77 v dt, over 1 m only above 13 m/s, and the grid limit is 11.2 m/s; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.HeadingOffset.decided
+  base: C2L
+  variant: C2L
+  area: catalogue
+  measure: k.HeadingOffset.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'headingInconsistency has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.HeadingOffset.headingInconsistency
+  base: C2M
+  variant: C2M
+  area: catalogue
+  measure: rec.kdet.HeadingOffset.headingInconsistency
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: '44'
+  verdict: pass
+  source: 'headingInconsistency is the check designed for HeadingOffset (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.SlowDrift.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.SlowDrift.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '1'
+  verdict: wrong-expectation
+  note: 'F8: the honest residual adds to the 0.5 m drift per pair; 256 RandomPosition reports, revoked (C2U)'
+  source: 'the drift rate is capped at 5 m/s: 0.5 m per 0.1 s pair, under 1 m; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.U.DelayedMessages.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.DelayedMessages.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'a 6 s stale generationTime is refused by the receiver window, so never verified or checked; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.DelayedMessages.decided
+  base: C2L
+  variant: C2L
+  area: catalogue
+  measure: k.DelayedMessages.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'refused by the window; staleOrReplay has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.U.ExpiredCert.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.ExpiredCert.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'an expired certificate fails the receiver rule and the BSM is never Verified; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.ExpiredCert.decided
+  base: C2L
+  variant: C2L
+  area: catalogue
+  measure: k.ExpiredCert.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'certValidity has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.ExpiredCert.certValidity
+  base: C2M
+  variant: C2M
+  area: catalogue
+  measure: rec.kdet.ExpiredCert.certValidity
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: '0'
+  verdict: open
+  note: 'F4: the host passes cert_valid_from 0 / cert_valid_to MAX, and the receiver rule refuses the certificate first, so the suite reports signatureVerification (613 in C2M); certValidity is unreachable'
+  source: 'certValidity is the check designed for ExpiredCert (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.PosSpeedInconsistent.reported
+  base: C2U
+  variant: C2U
+  area: catalogue
+  measure: k.PosSpeedInconsistent.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: 'claims about 0 m/s while moving 11 m/s: the prediction misses by about v dt = 1.1 m; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.U.AlongRoadOffset.reported
+  base: C3U
+  variant: C3U
+  area: catalogue
+  measure: k.AlongRoadOffset.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: 'the 30 m step at onset breaks RandomPosition once; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.AlongRoadOffset.decided
+  base: C3L
+  variant: C3L
+  area: catalogue
+  measure: k.AlongRoadOffset.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'one step at onset is one event (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.U.StopAndGo.reported
+  base: C3U
+  variant: C3U
+  area: catalogue
+  measure: k.StopAndGo.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: 'alternating 0 and 35 m/s: MaxAcceleration; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.StopAndGo.decided
+  base: C3L
+  variant: C3L
+  area: catalogue
+  measure: k.StopAndGo.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: '1'
+  verdict: pass
+  source: 'implausibleAcceleration maps to MaxAcceleration (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.StopAndGo.implausibleAcceleration
+  base: C3M
+  variant: C3M
+  area: catalogue
+  measure: rec.kdet.StopAndGo.implausibleAcceleration
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: '15'
+  verdict: pass
+  source: 'implausibleAcceleration is the check designed for StopAndGo (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.Sybil.reported
+  base: C3U
+  variant: C3U
+  area: catalogue
+  measure: k.Sybil.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: 'None'
+  verdict: open
+  note: 'F3: on the release build a Sybil attacker has no onset, so it has no outcome to score; fixed on this branch (SYMb rows), re-run owed'
+  source: 'each ghost is a separate certificate whose own consecutive claims are consistent; the profile has no co-location check; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.Sybil.decided
+  base: C3L
+  variant: C3L
+  area: catalogue
+  measure: k.Sybil.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: 'None'
+  verdict: open
+  note: 'F3, as C.U.Sybil.reported'
+  source: 'sybilCoLocation has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.Sybil.sybilCoLocation
+  base: C3M
+  variant: C3M
+  area: catalogue
+  measure: rec.kdet.Sybil.sybilCoLocation
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: '21'
+  verdict: pass
+  source: 'sybilCoLocation is the check designed for Sybil (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.NotYetValid.reported
+  base: C3U
+  variant: C3U
+  area: catalogue
+  measure: k.NotYetValid.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'a not-yet-valid certificate fails the receiver rule; never Verified; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.NotYetValid.decided
+  base: C3L
+  variant: C3L
+  area: catalogue
+  measure: k.NotYetValid.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'certValidity has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.NotYetValid.certValidity
+  base: C3M
+  variant: C3M
+  area: catalogue
+  measure: rec.kdet.NotYetValid.certValidity
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: '0'
+  verdict: open
+  note: 'F4, as C.M.ExpiredCert.certValidity'
+  source: 'certValidity is the check designed for NotYetValid (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C.U.OutOfOrder.reported
+  base: C3U
+  variant: C3U
+  area: catalogue
+  measure: k.OutOfOrder.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: '6-12 s stale generationTime: refused by the window; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.OutOfOrder.decided
+  base: C3L
+  variant: C3L
+  area: catalogue
+  measure: k.OutOfOrder.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '0'
+  verdict: pass
+  source: 'refused by the window; staleOrReplay has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.U.PosHeadingInconsistent.reported
+  base: C3U
+  variant: C3U
+  area: catalogue
+  measure: k.PosHeadingInconsistent.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: '30 m x 1.3 rad/s sideways swing: up to 3.9 m per pair; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.PosHeadingInconsistent.decided
+  base: C3L
+  variant: C3L
+  area: catalogue
+  measure: k.PosHeadingInconsistent.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: '1'
+  verdict: pass
+  source: 'the swing breaks positionJump (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.U.EventualStop.reported
+  base: C3U
+  variant: C3U
+  area: catalogue
+  measure: k.EventualStop.reported
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: 'frozen position while claiming 0.8-2.8 m/s: ConstantPosition; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+
+- id: C.L.EventualStop.decided
+  base: C3L
+  variant: C3L
+  area: catalogue
+  measure: k.EventualStop.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: '1'
+  verdict: pass
+  source: 'constantPositionFrozen maps to ConstantPosition (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+
+- id: C.M.EventualStop.constantPositionFrozen
+  base: C3M
+  variant: C3M
+  area: catalogue
+  measure: rec.kdet.EventualStop.constantPositionFrozen
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: '131'
+  verdict: pass
+  source: 'constantPositionFrozen is the check designed for EventualStop (detect.rs); with every verdict filed it reaches the MA'
+
+- id: C1L.honest-not-revoked
+  base: C1L
+  variant: C1L
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C1M.honest-not-revoked
+  base: C1M
+  variant: C1M
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C1U.honest-not-revoked
+  base: C1U
+  variant: C1U
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C1M.crossfire.signatureVerification
+  base: C1M
+  variant: C1M
+  area: specificity
+  measure: rec.kdet_other.signatureVerification
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: '974'
+  verdict: open
+  note: 'F2: CRL-refused BSMs of revoked attackers scored as failed signatures; judge_revoked: 0 (this branch) drops them, JR rows'
+  source: 'signatureVerification fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C1M.crossfire.certValidity
+  base: C1M
+  variant: C1M
+  area: specificity
+  measure: rec.kdet_other.certValidity
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: '0'
+  verdict: pass
+  source: 'certValidity fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C1M.crossfire.sybilCoLocation
+  base: C1M
+  variant: C1M
+  area: specificity
+  measure: rec.kdet_other.sybilCoLocation
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: '0'
+  verdict: pass
+  source: 'sybilCoLocation fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C1M.crossfire.staleOrReplay
+  base: C1M
+  variant: C1M
+  area: specificity
+  measure: rec.kdet_other.staleOrReplay
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: '0'
+  verdict: pass
+  source: 'staleOrReplay fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C2L.honest-not-revoked
+  base: C2L
+  variant: C2L
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C2M.honest-not-revoked
+  base: C2M
+  variant: C2M
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C2U.honest-not-revoked
+  base: C2U
+  variant: C2U
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C2M.crossfire.signatureVerification
+  base: C2M
+  variant: C2M
+  area: specificity
+  measure: rec.kdet_other.signatureVerification
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: '1225'
+  verdict: open
+  note: 'F2 (and F4: 613 about ExpiredCert)'
+  source: 'signatureVerification fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C2M.crossfire.certValidity
+  base: C2M
+  variant: C2M
+  area: specificity
+  measure: rec.kdet_other.certValidity
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: '0'
+  verdict: pass
+  source: 'certValidity fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C2M.crossfire.sybilCoLocation
+  base: C2M
+  variant: C2M
+  area: specificity
+  measure: rec.kdet_other.sybilCoLocation
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: '0'
+  verdict: pass
+  source: 'sybilCoLocation fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C2M.crossfire.staleOrReplay
+  base: C2M
+  variant: C2M
+  area: specificity
+  measure: rec.kdet_other.staleOrReplay
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: '0'
+  verdict: pass
+  source: 'staleOrReplay fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C3L.honest-not-revoked
+  base: C3L
+  variant: C3L
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C3M.honest-not-revoked
+  base: C3M
+  variant: C3M
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C3U.honest-not-revoked
+  base: C3U
+  variant: C3U
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'an attacker lying about itself gives no honest vehicle three corroborated events: no honest revocation under attack'
+
+- id: C3M.crossfire.signatureVerification
+  base: C3M
+  variant: C3M
+  area: specificity
+  measure: rec.kdet_other.signatureVerification
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: '2699'
+  verdict: open
+  note: 'F2'
+  source: 'signatureVerification fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C3M.crossfire.certValidity
+  base: C3M
+  variant: C3M
+  area: specificity
+  measure: rec.kdet_other.certValidity
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: '0'
+  verdict: pass
+  source: 'certValidity fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C3M.crossfire.sybilCoLocation
+  base: C3M
+  variant: C3M
+  area: specificity
+  measure: rec.kdet_other.sybilCoLocation
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: '0'
+  verdict: pass
+  source: 'sybilCoLocation fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+- id: C3M.crossfire.staleOrReplay
+  base: C3M
+  variant: C3M
+  area: specificity
+  measure: rec.kdet_other.staleOrReplay
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: '0'
+  verdict: pass
+  source: 'staleOrReplay fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+
+# ---- 2-5. Shares, strength, MA rules, detector parameters ---------------------------
+- id: SCL.attackers-up
+  base: SCL05
+  variant: SCL20
+  area: share
+  measure: ao.n
+  expect: ratio
+  band: [2.0, 8.0]
+  fault: attack-off
+  measured: '2 -> 10'
+  verdict: pass
+  source: 'fraction 0.05 -> 0.20 of every vehicle spawned: four times the attackers (binomial; 40 held + replacements)'
+
+- id: SCL.reports-up.05-10
+  base: SCL05
+  variant: SCL10
+  area: share
+  measure: p2.reports_about_attackers
+  expect: up
+  fault: detector-blind
+  measured: '839 -> 2227'
+  verdict: pass
+  source: 'twice the attackers, each heard by about as many receivers: about twice the reports (reports are per receiver per subject per interval)'
+
+- id: SCL.reports-up.10-20
+  base: SCL10
+  variant: SCL20
+  area: share
+  measure: p2.reports_about_attackers
+  expect: up
+  fault: detector-blind
+  measured: '2227 -> 3253'
+  verdict: pass
+  source: 'twice the attackers, each heard by about as many receivers: about twice the reports (reports are per receiver per subject per interval)'
+
+- id: SCL.honest-not-revoked
+  base: SCL20
+  variant: SCL20
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'attackers lying about themselves give no honest vehicle corroborated events, at any share'
+
+- id: SCL.cost-events
+  base: SCL05
+  variant: SCL20
+  area: cost
+  measure: cost.events
+  expect: same
+  fault: cost-x10
+  tol: 0.1
+  measured: '952140 -> 924525'
+  verdict: pass
+  source: '40 vehicles transmit at 10 Hz whatever the share; reports are thousands against millions of events'
+
+- id: SCL.revoked-up
+  base: SCL05
+  variant: SCL20
+  area: share
+  measure: rec.revoked_att
+  expect: up
+  fault: no-revocation
+  measured: '2 -> 9'
+  verdict: pass
+  source: 'each attacker is detected and decided independently: four times the attackers, more revoked'
+
+- id: SCL.detected-share
+  base: SCL10
+  variant: SCL10
+  area: share
+  measure: ao.reported_share
+  expect: band
+  band: [0.8, 1.0]
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: 'ConstPos breaks a check on every BSM (ConstantPosition); every attacker heard is reported'
+
+- id: SCL.ttd
+  base: SCL10
+  variant: SCL10
+  area: timing
+  measure: ao.ttd_med_s
+  expect: band
+  band: [0.0, 6.0]
+  fault: slow
+  measured: '2.412'
+  verdict: pass
+  source: 'the first falsified BSM pair is judged on reception (10 Hz); the pilot measured 2.6-3.8 s (the onset is the first BSM after the schedule start and the suites need a few pairs)'
+
+- id: SCL.ttr
+  base: SCL10
+  variant: SCL10
+  area: timing
+  measure: ao.ttr_med_s
+  expect: band
+  band: [10.0, 75.0]
+  fault: slow
+  measured: '32.5'
+  verdict: pass
+  source: 'decision = detection + RA shuffle (report_shuffle_window_s 30) + 3 corroborated 5 s events: 15-60 s (pilot median 33 s)'
+
+- id: SCL.decided-early
+  base: SCL10
+  variant: SCL10
+  area: share
+  measure: ao.decided_early_share
+  expect: band
+  band: [0.7, 1.0]
+  fault: no-revocation
+  measured: '1'
+  verdict: pass
+  source: 'an attacker with 60 s of run left after its onset has time for 3 events and the 30 s shuffle'
+
+- id: SCL.warnings-up
+  base: SCL05
+  variant: SCL20
+  area: attacker-gain
+  measure: rec.warn_false_att
+  expect: up
+  fault: warn-none
+  measured: '0 -> 3'
+  verdict: pass
+  source: 'a frozen or random claimed position is a phantom vehicle: followers and crossers raise false FCW/IMA/LTA warnings; more attackers, more phantoms'
+
+- id: SCL.warnings-before-revocation
+  base: SCL10
+  variant: SCL10
+  area: attacker-gain
+  measure: rec.warn_pre_share
+  expect: band
+  band: [0.5, 1.0]
+  fault: warn-late
+  measured: 'None'
+  verdict: open
+  note: 'F10: SCL10 raised no attacker false warning, so there is no share; SCL20 1 of 3 and TCU1p0 6 of 7 before the decision'
+  source: 'once the CRL is enforced the attacker is dropped, so most of its false warnings come before its revocation decision (decision -> enforcement about 16 s, pilot)'
+
+- id: SCU.attackers-up
+  base: SCU05
+  variant: SCU20
+  area: share
+  measure: ao.n
+  expect: ratio
+  band: [2.0, 8.0]
+  fault: attack-off
+  measured: pending
+  verdict: pending
+  source: 'fraction 0.05 -> 0.20 of every vehicle spawned: four times the attackers (binomial; 40 held + replacements)'
+
+- id: SCU.reports-up.05-10
+  base: SCU05
+  variant: SCU10
+  area: share
+  measure: p2.reports_about_attackers
+  expect: up
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'twice the attackers, each heard by about as many receivers: about twice the reports (reports are per receiver per subject per interval)'
+
+- id: SCU.reports-up.10-20
+  base: SCU10
+  variant: SCU20
+  area: share
+  measure: p2.reports_about_attackers
+  expect: up
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'twice the attackers, each heard by about as many receivers: about twice the reports (reports are per receiver per subject per interval)'
+
+- id: SCU.honest-not-revoked
+  base: SCU20
+  variant: SCU20
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'attackers lying about themselves give no honest vehicle corroborated events, at any share'
+
+- id: SCU.cost-events
+  base: SCU05
+  variant: SCU20
+  area: cost
+  measure: cost.events
+  expect: same
+  fault: cost-x10
+  tol: 0.1
+  measured: pending
+  verdict: pending
+  source: '40 vehicles transmit at 10 Hz whatever the share; reports are thousands against millions of events'
+
+- id: SCU.revoked-up
+  base: SCU05
+  variant: SCU20
+  area: share
+  measure: rec.revoked_att
+  expect: up
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'each attacker is detected and decided independently: four times the attackers, more revoked'
+
+- id: SCU.detected-share
+  base: SCU10
+  variant: SCU10
+  area: share
+  measure: ao.reported_share
+  expect: band
+  band: [0.8, 1.0]
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'ConstPos breaks a check on every BSM (ConstantPosition); every attacker heard is reported'
+
+- id: SCU.ttd
+  base: SCU10
+  variant: SCU10
+  area: timing
+  measure: ao.ttd_med_s
+  expect: band
+  band: [0.0, 6.0]
+  fault: slow
+  measured: pending
+  verdict: pending
+  source: 'the first falsified BSM pair is judged on reception (10 Hz); the pilot measured 2.6-3.8 s (the onset is the first BSM after the schedule start and the suites need a few pairs)'
+
+- id: SCU.ttr
+  base: SCU10
+  variant: SCU10
+  area: timing
+  measure: ao.ttr_med_s
+  expect: band
+  band: [10.0, 75.0]
+  fault: slow
+  measured: pending
+  verdict: pending
+  source: 'decision = detection + RA shuffle (report_shuffle_window_s 30) + 3 corroborated 5 s events: 15-60 s (pilot median 33 s)'
+
+- id: SCU.decided-early
+  base: SCU10
+  variant: SCU10
+  area: share
+  measure: ao.decided_early_share
+  expect: band
+  band: [0.7, 1.0]
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'an attacker with 60 s of run left after its onset has time for 3 events and the 30 s shuffle'
+
+- id: SCU.warnings-up
+  base: SCU05
+  variant: SCU20
+  area: attacker-gain
+  measure: rec.warn_false_att
+  expect: up
+  fault: warn-none
+  measured: pending
+  verdict: pending
+  source: 'a frozen or random claimed position is a phantom vehicle: followers and crossers raise false FCW/IMA/LTA warnings; more attackers, more phantoms'
+
+- id: SCU.warnings-before-revocation
+  base: SCU10
+  variant: SCU10
+  area: attacker-gain
+  measure: rec.warn_pre_share
+  expect: band
+  band: [0.5, 1.0]
+  fault: warn-late
+  measured: pending
+  verdict: pending
+  source: 'once the CRL is enforced the attacker is dropped, so most of its false warnings come before its revocation decision (decision -> enforcement about 16 s, pilot)'
+
+- id: SRL.attackers-up
+  base: SRL05
+  variant: SRL20
+  area: share
+  measure: ao.n
+  expect: ratio
+  band: [2.0, 8.0]
+  fault: attack-off
+  measured: pending
+  verdict: pending
+  source: 'fraction 0.05 -> 0.20 of every vehicle spawned: four times the attackers (binomial; 40 held + replacements)'
+
+- id: SRL.reports-up.05-10
+  base: SRL05
+  variant: SRL10
+  area: share
+  measure: p2.reports_about_attackers
+  expect: up
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'twice the attackers, each heard by about as many receivers: about twice the reports (reports are per receiver per subject per interval)'
+
+- id: SRL.reports-up.10-20
+  base: SRL10
+  variant: SRL20
+  area: share
+  measure: p2.reports_about_attackers
+  expect: up
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'twice the attackers, each heard by about as many receivers: about twice the reports (reports are per receiver per subject per interval)'
+
+- id: SRL.honest-not-revoked
+  base: SRL20
+  variant: SRL20
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'attackers lying about themselves give no honest vehicle corroborated events, at any share'
+
+- id: SRL.cost-events
+  base: SRL05
+  variant: SRL20
+  area: cost
+  measure: cost.events
+  expect: same
+  fault: cost-x10
+  tol: 0.1
+  measured: pending
+  verdict: pending
+  source: '40 vehicles transmit at 10 Hz whatever the share; reports are thousands against millions of events'
+
+- id: SRL.revoked-up
+  base: SRL05
+  variant: SRL20
+  area: share
+  measure: rec.revoked_att
+  expect: up
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'each attacker is detected and decided independently: four times the attackers, more revoked'
+
+- id: SRL.detected-share
+  base: SRL10
+  variant: SRL10
+  area: share
+  measure: ao.reported_share
+  expect: band
+  band: [0.8, 1.0]
+  fault: detector-blind
+  measured: '1'
+  verdict: pass
+  source: 'RandomPos breaks a check on every BSM (RandomPosition); every attacker heard is reported'
+
+- id: SRL.ttd
+  base: SRL10
+  variant: SRL10
+  area: timing
+  measure: ao.ttd_med_s
+  expect: band
+  band: [0.0, 6.0]
+  fault: slow
+  measured: '1.61'
+  verdict: pass
+  source: 'the first falsified BSM pair is judged on reception (10 Hz); the pilot measured 2.6-3.8 s (the onset is the first BSM after the schedule start and the suites need a few pairs)'
+
+- id: SRL.ttr
+  base: SRL10
+  variant: SRL10
+  area: timing
+  measure: ao.ttr_med_s
+  expect: band
+  band: [10.0, 75.0]
+  fault: slow
+  measured: '31.25'
+  verdict: pass
+  source: 'decision = detection + RA shuffle (report_shuffle_window_s 30) + 3 corroborated 5 s events: 15-60 s (pilot median 33 s)'
+
+- id: SRL.decided-early
+  base: SRL10
+  variant: SRL10
+  area: share
+  measure: ao.decided_early_share
+  expect: band
+  band: [0.7, 1.0]
+  fault: no-revocation
+  measured: '1'
+  verdict: pass
+  source: 'an attacker with 60 s of run left after its onset has time for 3 events and the 30 s shuffle'
+
+- id: SRL.warnings-up
+  base: SRL05
+  variant: SRL20
+  area: attacker-gain
+  measure: rec.warn_false_att
+  expect: up
+  fault: warn-none
+  measured: pending
+  verdict: pending
+  source: 'a frozen or random claimed position is a phantom vehicle: followers and crossers raise false FCW/IMA/LTA warnings; more attackers, more phantoms'
+
+- id: SRL.warnings-before-revocation
+  base: SRL10
+  variant: SRL10
+  area: attacker-gain
+  measure: rec.warn_pre_share
+  expect: band
+  band: [0.5, 1.0]
+  fault: warn-late
+  measured: '0.8889'
+  verdict: pass
+  source: 'once the CRL is enforced the attacker is dropped, so most of its false warnings come before its revocation decision (decision -> enforcement about 16 s, pilot)'
+
+- id: SYM.attackers-up
+  base: SYM05
+  variant: SYM20
+  area: share
+  measure: ao.n
+  expect: ratio
+  band: [2.0, 8.0]
+  fault: attack-off
+  measured: pending
+  verdict: pending
+  source: 'fraction 0.05 -> 0.20 of every vehicle spawned: four times the attackers (binomial; 40 held + replacements)'
+
+- id: SYM.reports-up.05-10
+  base: SYM05
+  variant: SYM10
+  area: share
+  measure: p2.reports_about_attackers
+  expect: up
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'twice the attackers, each heard by about as many receivers: about twice the reports (reports are per receiver per subject per interval)'
+
+- id: SYM.reports-up.10-20
+  base: SYM10
+  variant: SYM20
+  area: share
+  measure: p2.reports_about_attackers
+  expect: up
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'twice the attackers, each heard by about as many receivers: about twice the reports (reports are per receiver per subject per interval)'
+
+- id: SYM.honest-not-revoked
+  base: SYM20
+  variant: SYM20
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'attackers lying about themselves give no honest vehicle corroborated events, at any share'
+
+- id: SYM.cost-events
+  base: SYM05
+  variant: SYM20
+  area: cost
+  measure: cost.events
+  expect: same
+  fault: cost-x10
+  tol: 0.1
+  measured: pending
+  verdict: pending
+  source: '40 vehicles transmit at 10 Hz whatever the share; reports are thousands against millions of events'
+
+- id: SYM.ghost-frames
+  base: SYM05
+  variant: SYM10
+  area: attacker-gain
+  measure: p2.ghost_frames
+  expect: ratio
+  band: [1.3, 3.5]
+  fault: attack-off
+  measured: pending
+  verdict: pending
+  source: 'each Sybil attacker sends sybil_ghosts = 6 extra identities per BSM: ghost frames scale with the attackers'
+
+- id: SYM.ghost-warnings-up
+  base: SYM05
+  variant: SYM20
+  area: attacker-gain
+  measure: rec.warn_false_ghost
+  expect: up
+  fault: warn-none
+  measured: pending
+  verdict: pending
+  source: 'ghost vehicles nobody drives are false warnings when an application acts on them (app_truth: a ghost subject has no truth episode)'
+
+- id: SYM.sybil-detected
+  base: SYM10
+  variant: SYM10
+  area: catalogue
+  measure: rec.kdet.Sybil.sybilCoLocation
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: '794'
+  verdict: pass
+  source: 'six certificates at one point and heading: sybilCoLocation'
+
+- id: TCU.zero-falsifies-nothing
+  base: TCU0p0
+  variant: TCU0p0
+  area: strength
+  measure: p2.falsified_claims
+  expect: eq
+  value: 0
+  fault: scalar
+  measured: pending
+  verdict: pending
+  source: 'intensity 0 is a 0 m/s offset: no claim differs from the truth, so nothing is falsified'
+
+- id: TCU.zero-not-revoked
+  base: TCU0p0
+  variant: TCU0p0
+  area: strength
+  measure: ao.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'a 0 m/s offset is honest behaviour'
+
+- id: TCU.half-under-drift
+  base: TCU0p5
+  variant: TCU0p5
+  area: strength
+  measure: ao.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: '5'
+  verdict: wrong-expectation
+  note: 'F7: all 5 revoked through ConstantPosition at stops (6 m/s claimed while standing), as at intensity 1'
+  source: '6 m/s x 0.1 s = 0.6 m, under the 1 m gpsDrift: only the onset step (60 m/s2 MaxAcceleration, one event) is reported'
+
+- id: TCU.full-over-drift
+  base: TCU1p0
+  variant: TCU1p0
+  area: strength
+  measure: ao.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: '5'
+  verdict: pass
+  source: '12 m/s x 0.1 s = 1.2 m, over the 1 m gpsDrift on every moving pair: RandomPosition, corroborated'
+
+- id: TCU.reports-cross-threshold
+  base: TCU0p5
+  variant: TCU1p0
+  area: strength
+  measure: p2.reports_about_attackers
+  expect: up
+  fault: detector-blind
+  min_change: 1.0
+  measured: '776 -> 1760'
+  verdict: pass
+  source: 'the RandomPosition threshold is crossed between intensity 0.5 and 1 (offset x dt = 1 m at 10 m/s, k = 0.83)'
+
+- id: TCU.stronger-faster
+  base: TCU1p0
+  variant: TCU3p0
+  area: strength
+  measure: ao.ttr_med_s
+  expect: ratio
+  band: [0.0, 1.1]
+  fault: slow
+  measured: '30.2 -> 30.2'
+  verdict: pass
+  source: '36 m/s breaks the pair rule even at low speed: decided no later than at 12 m/s'
+
+- id: TSU.no-maxspeed-at-40
+  base: TSU1p0
+  variant: TSU1p0
+  area: specificity
+  measure: p2.verdicts.implausibleSpeed
+  expect: eq
+  value: 0
+  fault: honest-reported
+  absent_is_zero: true
+  measured: '0'
+  verdict: pass
+  source: 'RandomSpeed draws at most 40 m/s, under the 90 m/s MaxSpeed ([SM-MBR] 2.3.1.3.2)'
+
+- id: TSU.maxspeed-at-120
+  base: TSU3p0
+  variant: TSU3p0
+  area: strength
+  measure: p2.verdicts.implausibleSpeed
+  expect: ge
+  value: 1
+  fault: detector-blind
+  absent_is_zero: true
+  measured: '0'
+  verdict: open
+  note: 'F5: RandomSpeed ignores intensity (reads magnitude_scale only); the draws stayed under 40 m/s, so the run did not test 120 m/s'
+  source: 'intensity 3 draws up to 120 m/s: a quarter of the draws are over 90 m/s'
+
+- id: TSU.maxaccel
+  base: TSU1p0
+  variant: TSU1p0
+  area: catalogue
+  measure: p2.verdicts.implausibleAcceleration
+  expect: ge
+  value: 1
+  fault: detector-blind
+  absent_is_zero: true
+  measured: '14244'
+  verdict: pass
+  source: 'a fresh speed each 0.1 s: |dv|/dt over 10 m/s2 (MaxAcceleration)'
+
+- id: TRL.sub-accuracy-not-revoked
+  base: TRL0p01
+  variant: TRL0p01
+  area: strength
+  measure: ao.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: '0.6 m half-range is inside the stated GNSS accuracy the research suite tolerates (use_stated_accuracy): not distinguishable from noise'
+
+- id: TRL.reports-up-0p01-0p1
+  base: TRL0p01
+  variant: TRL0p1
+  area: strength
+  measure: p2.reports_about_attackers
+  expect: up
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: '6 m random jumps exceed the stated-accuracy tolerance on some pairs, 0.6 m on none'
+
+- id: TRL.decided-monotone
+  base: TRL0p1
+  variant: SRL10
+  area: strength
+  measure: ao.decided
+  expect: delta
+  band: [0, 50]
+  fault: scalar  # the raw faults cannot lower a base of 0 or raise a ratio past 1 here
+  measured: '0 -> 5'
+  verdict: pass
+  source: '60 m jumps are caught at least as often as 6 m jumps'
+
+- id: TRL.warnings-up
+  base: TRL0p01
+  variant: SRL10
+  area: attacker-gain
+  measure: rec.warn_false_att
+  expect: up
+  fault: warn-none
+  measured: pending
+  verdict: pending
+  source: 'a phantom 60 m away from the true car crosses other vehicles paths more than one 0.6 m away'
+
+- id: MAL.faster
+  base: SCL10
+  variant: MAL
+  area: ma-rule
+  measure: ao.ttr_med_s
+  expect: down
+  fault: slow
+  measured: pending
+  verdict: pending
+  source: 'the legacy window decides on 3 trusted reporters spanning 3 s inside 15 s; the corroborated rule needs 3 events of 5 s inside 60 s, so it decides later on the same reports'
+
+- id: ME1.faster
+  base: SCL10
+  variant: ME1
+  area: ma-rule
+  measure: ao.ttr_med_s
+  expect: down
+  fault: slow
+  measured: '32.5 -> 32.38'
+  verdict: pass
+  source: 'one corroborated event instead of three: the decision comes at the first event'
+
+- id: ME6.slower
+  base: SCL10
+  variant: ME6
+  area: ma-rule
+  measure: ao.ttr_med_s
+  expect: up
+  fault: no-revocation
+  measured: '32.5 -> 56.48'
+  verdict: pass
+  source: 'six events of 5 s instead of three: at least 15 s more sustained evidence'
+
+- id: MR4.fewer-or-slower
+  base: SCL10
+  variant: MR4
+  area: ma-rule
+  measure: ao.ttr_med_s
+  expect: up
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'four distinct reporters per event instead of two: events form later, the decision comes later'
+
+- id: MR1.not-slower
+  base: SCL10
+  variant: MR1
+  area: ma-rule
+  measure: ao.ttr_med_s
+  expect: ratio
+  band: [0.0, 1.0]
+  fault: slow
+  measured: pending
+  verdict: pending
+  source: 'one reporter per event: events form no later'
+
+- id: MAL0.attack-free
+  base: MAL0
+  variant: MAL0
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: '0'
+  verdict: pass
+  source: 'attack-free: whatever the rule, honest noise this sparse (B0L) gives no revocation'
+
+- id: ME10.attack-free
+  base: ME10
+  variant: ME10
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'attack-free: whatever the rule, honest noise this sparse (B0L) gives no revocation'
+
+- id: ME60.attack-free
+  base: ME60
+  variant: ME60
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'attack-free: whatever the rule, honest noise this sparse (B0L) gives no revocation'
+
+- id: MR10.attack-free
+  base: MR10
+  variant: MR10
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'attack-free: whatever the rule, honest noise this sparse (B0L) gives no revocation'
+
+- id: MR40.attack-free
+  base: MR40
+  variant: MR40
+  area: false-positive
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'attack-free: whatever the rule, honest noise this sparse (B0L) gives no revocation'
+
+- id: ME6.decided-down
+  base: SCL10
+  variant: ME6
+  area: ma-rule
+  measure: ao.decided
+  expect: ratio
+  band: [0.0, 1.0]
+  fault: scalar  # the raw faults cannot lower a base of 0 or raise a ratio past 1 here
+  measured: '5 -> 4'
+  verdict: pass
+  source: 'a stricter rule revokes no more attackers'
+
+- id: UD3.blind
+  base: UD3
+  variant: UD3
+  area: detector-param
+  measure: ao.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: '1.2 m misses under a 3 m gpsDrift: the 12 m/s offset is invisible after the onset step'
+
+- id: UD3.fewer-reports
+  base: TCU1p0
+  variant: UD3
+  area: detector-param
+  measure: p2.reports_about_attackers
+  expect: down
+  fault: honest-reported
+  measured: pending
+  verdict: pending
+  source: 'a wider drift allowance fires on fewer pairs'
+
+- id: UD05.more-honest
+  base: B0U
+  variant: UD050
+  area: detector-param
+  measure: p2.reports_about_honest
+  expect: up
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'half the drift allowance: honest GNSS noise and integration error over 0.1 s cross it more often'
+
+- id: RI02.more-reports
+  base: SCL10
+  variant: RI02
+  area: detector-param
+  measure: p2.reports_sent
+  expect: ratio
+  band: [2.5, 6.0]
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'a ConstPos attacker trips the check on every 10 Hz BSM; the per-(reporter, subject) interval caps the reports at 1/s, and at 0.2 s at 5/s'
+
+- id: RI5.fewer-reports
+  base: SCL10
+  variant: RI5
+  area: detector-param
+  measure: p2.reports_sent
+  expect: ratio
+  band: [0.1, 0.4]
+  fault: honest-reported
+  measured: pending
+  verdict: pending
+  source: 'one report per 5 s instead of per 1 s'
+
+- id: RI5.still-decided
+  base: RI5
+  variant: RI5
+  area: detector-param
+  measure: ao.decided_early_share
+  expect: band
+  band: [0.6, 1.0]
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'a report every 5 s per reporter still gives one per 5 s event: 3 events from 2 reporters in 60 s'
+
+# ---- 6. GNSS x suite interaction --------------------------------------------------------
+# Found on the first B0U (raw fixes, the base before it took the deployed receiver model):
+# 47 honest vehicles revoked, positionJump on 157,572 of 188,574 BSMs checked (old-B0U).
+- id: G.U.raw-honest-reports
+  base: B0U
+  variant: RAWU
+  area: interaction
+  measure: p2.reports_about_honest
+  expect: up
+  fault: detector-blind
+  measured: '11 -> 19442'
+  verdict: pass
+  source: 'raw 10 Hz fixes with fresh 1.6 m noise disagree with their own speed and heading by 2.6 m at the median, over the 1 m RandomPosition drift (R-USFP: honest reports on 87 % of BSMs)'
+
+- id: G.U.raw-honest-revoked
+  base: RAWU
+  variant: RAWU
+  area: interaction
+  measure: rec.revoked_hon
+  expect: ge
+  value: 1
+  fault: detector-blind
+  measured: '47'
+  verdict: pass
+  source: 'R-USFP: the realism base on raw fixes revoked 26 honest vehicles under the US profile'
+
+- id: G.L.raw-tolerated
+  base: RAWL
+  variant: RAWL
+  area: interaction
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'the research suite tolerates the accuracy each BSM states (use_stated_accuracy), so raw-fix noise inside it is not misbehaviour'
+
+- id: G.LU.interaction
+  base: RAWL
+  variant: RAWU
+  area: interaction
+  measure: p2.reports_about_honest
+  expect: up
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'raw noise hurts the tolerance-free US profile far more than the research suite: under raw fixes U files more honest reports than L'
+
+# ---- 7. judge_revoked (engine flag added on this branch) ---------------------------------
+- id: JR.default-unchanged
+  base: C2M
+  variant: C2Mb
+  area: judge-revoked
+  measure: digest
+  expect: identical
+  fault: nondeterministic
+  measured: pending
+  verdict: pending
+  source: 'the flag defaults to the old behaviour: the branch build reproduces C2M byte for byte'
+
+- id: JR.no-signature-crossfire
+  base: C2MJ
+  variant: C2MJ
+  area: judge-revoked
+  measure: rec.kdet_other.signatureVerification
+  expect: eq
+  value: 0
+  fault: crossfire
+  measured: pending
+  verdict: pending
+  source: 'with CRL-refused BSMs not judged, no attacker that signs validly is reported for a bad signature'
+
+- id: JR.fewer-reports
+  base: C2Mb
+  variant: C2MJ
+  area: judge-revoked
+  measure: p2.reports_about_attackers
+  expect: down
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'the reports about already revoked attackers are gone'
+
+- id: JR.same-decisions
+  base: C2Mb
+  variant: C2MJ
+  area: judge-revoked
+  measure: ao.decided
+  expect: same
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'a report about a revoked device cannot revoke anyone new: the same attackers are decided'
+
+- id: JR.no-honest
+  base: C2MJ
+  variant: C2MJ
+  area: judge-revoked
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'dropping CRL-refused BSMs removes evidence, never adds it'
+
+# ---- 8. Sybil outcome onset (engine fix on this branch) ----------------------------------
+# Found on SYM10 (release build): 5 Sybil attackers, 19,212 ghost frames, 5 revoked, but every
+# attacker outcome had onset none and 0 falsified claims, so no time to detect or revoke.
+- id: SYMb.onset
+  base: SYM10b
+  variant: SYM10b
+  area: run-report
+  measure: ao.no_onset
+  expect: eq
+  value: 0
+  fault: scalar
+  measured: pending
+  verdict: pending
+  source: 'a ghost frame is a false claim (a vehicle that does not exist): every Sybil attacker that sent one has an onset'
+- id: SYMb.ttd
+  base: SYM10b
+  variant: SYM10b
+  area: timing
+  measure: ao.ttd_med_s
+  expect: band
+  band: [0.0, 6.0]
+  fault: slow
+  measured: pending
+  verdict: pending
+  source: 'six certificates at one point are co-located from the first ghost BSM; the research suite needs two consecutive 1 Hz checks (min_consecutive 2)'
+- id: SYMb.same-revocations
+  base: SYM10
+  variant: SYM10b
+  area: run-report
+  measure: rec.revoked_att
+  expect: same
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'the fix changes only the bookkeeping of the outcome, not what any receiver or the MA does'

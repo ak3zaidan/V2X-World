@@ -8,6 +8,14 @@ again 2026-10-23 at `d90a6298`** (main), after:
 - the full-scale benchmark to the end (BENCH, merged at `d90a6298`: FB3, docs and the
   `scms-full-bench.yaml` expectations only).
 
+**Updated 2026-10-26** after the live-run wave (SCENARIOS, SCMSKNOBS, ATTACKS, RSUAPPS,
+CHAINS, STUDIOLIVE), merged onto `adbbc4c8` (BUILD-STATUS "live-run wave integration").
+§2.2, §6 item 26 and §9 state its results: six new tables, 545 rows written before their
+runs, 348 judged: 271 pass, 1 fixed, 24 corrected, 52 open; 197 still pending (not
+counted). Three engine or server fixes: Sybil onset (`9cdb1639`), RSU CRL install on
+backhaul arrival (`4399f8f8`), compare-runs peak pooling (`ce532c6e`). No rule verdict
+moved. Sources: `docs/validation/live-{scenarios,scms,atk,rsu,chains,studio}-2026-10-25.md`.
+
 **Updated 2026-10-25** after the db1 SCMS component audit (governance, provisioning,
 on-air security, misbehaviour pipeline, metrics), merged onto `8a31d8d1` (BUILD-STATUS
 "SCMS component audit wave db1 integration"). §2.2, §6 item 24 and §9 state its results:
@@ -132,6 +140,13 @@ corrected and 73 open (§2.2), plus 26 Paper 1 rows and 2 governance rows writte
 their runs and still pending. The records branch's audit rows were not re-judged on the
 fixed binary (§9).
 
+**What moved in the 2026-10-26 live-run wave: no rule verdict.** Six live tracks ran the
+`486c8cba` release binary (scenarios, SCMS knobs, attacks, RSU applications, cross-domain
+chains, Studio) with every row committed before its run and each judged row shown red under
+an injected fault. Their fixes are runtime defects with no checklist row (§6 item 26).
+Configuration rows: 1,299, of which 1,031 pass, 57 fixed, 86 corrected and 125 open (§2.2),
+plus 197 live-wave rows, 26 Paper 1 rows and 2 governance rows still pending.
+
 **What moved in the 2026-10-25 db1 component audit: no rule verdict.** Five audits read
 raw records only, with independent checkers, and judged 179 rows written before their runs:
 142 pass, 10 fixed, 10 corrected with evidence, 17 open (§2.2, §6 item 24). The ten engine
@@ -207,7 +222,13 @@ in each table's expectations file.
 | Component audit: on-air security (`scms-audit-db1-3.yaml`, audit-db1-3; OA.MI.digest-misses added open 2026-10-25) | 42 | 34 | 4 | 1 | 3 |
 | Component audit: misbehaviour pipeline, detector to enforcement (`scms-audit-mbpipe.yaml`, audit-mbpipe) | 41 | 29 | 2 | 7 | 3 |
 | Component audit: every SCMS metric recomputed from the records, run-report conservation (`scms-audit-sim-metrics.yaml`, audit-sim-metrics; MR.digest_misses added) | 33 | 24 | 1 | 1 | 7 |
-| **All** | **951** | **760** | **56** | **62** | **73** |
+| Live wave 2026-10-26, on the `486c8cba` release binary, rows committed before their runs, judged rows red under injected faults. Scenarios: 115 short runs of the shipped scenario files (`live-scenarios.yaml`, live-scenarios) | 42 | 28 | 0 | 5 | 9 |
+| Live: one-change SCMS knob variants of a 180 s credential-lifecycle base, 12 of 43 runs (`live-scms.yaml`, live-scms; 68 rows pending, not counted) | 40 | 36 | 0 | 1 | 3 |
+| Live: 23 attack types under legacy-12, all-reports and us-sm-mbr detectors, 29 of 52 runs (`live-atk.yaml`, live-atk; Sybil onset fixed `9cdb1639` with no row of its own; 54 pending) | 122 | 107 | 0 | 5 | 10 |
+| Live: RSU applications, GLOSA and RSU SCMS backhaul, 8 runs (`live-rsu.yaml`, live-rsu; RSU CRL install fixed `4399f8f8` with no row of its own; 54 pending) | 20 | 14 | 0 | 3 | 3 |
+| Live: cross-domain chains (PQ x density x J2945/1, CRL outage, GNSS) (`live-chains.yaml`, live-chains; 21 not run) | 73 | 54 | 0 | 3 | 16 |
+| Live: Studio against the server API and recordings, two sessions (`live-studio.yaml`, live-studio; `runs.compare` peak pooling fixed `ce532c6e`) | 51 | 32 | 1 | 7 | 11 |
+| **All** | **1,299** | **1,031** | **57** | **86** | **125** |
 
 The realism file records no per-row "fixed" verdict. The rows that the R-USFP fix turned
 green are counted as pass, and the 6 rows corrected in the re-run (Z1, Z3, Z4, A3,
@@ -1172,6 +1193,38 @@ whether a full-fleet misbehaviour rate is a real-world number.
     another worktree's artefacts when its sources are newer (mtime fingerprints, relative
     dep-info paths), which is the likely cause.
 
+26. **The live-run wave** (integrated 2026-10-26 onto `adbbc4c8`; docs/validation
+    live-scenarios, live-scms, live-atk, live-rsu, live-chains, live-studio, all
+    2026-10-25). Six tracks ran the `486c8cba` release binary; 545 rows written before
+    their runs, 348 judged (271 pass, 1 fixed, 24 corrected, 52 open), 197 pending.
+    **Fixed:** a Sybil ghost frame opens its attacker's falsification window, so Sybil
+    time-to-detect and time-to-revoke are measured (`9cdb1639`, plus a `judge_revoked`
+    flag, default unchanged); a roadside unit installs a CRL only once its backhaul
+    download lands, and a unit that is down neither fetches nor broadcasts (`4399f8f8`);
+    `runs.compare` keeps the peak of a max-aggregated count (`ce532c6e`). No golden moved
+    (`phase2` 14/14, `scms_scale`, `security_lifecycle` 20/20 on the merged tree).
+    **Open, traced:** R-P2PCD-ASYM (provider-b receivers verify 33 provider-a messages
+    against 82,120; an unanchored learned ACA's ICA is never requested); R-KEMFILE (a PQ
+    KEM files 255 reports the US profile refuses; gate order in `real_mbr`, tied to
+    R-PQUNSEC); P-384 costed as P-256; KEM download bytes too small; VOD
+    `messages_checked` counts unverified messages; PT30 pseudonym changes above the
+    rule's ceiling; full-cert share unchanged; certValidity can never fire (cert dates
+    0/MAX from the host); intensity has no effect on RandomSpeed; every CRL publication
+    booked twice on each RSU backhaul line (fixing it moves every SCMS digest); SLH-DSA-128s
+    sends 0 frames with no loss counted; backend failures name only the home provider's
+    entities, so the CRL-outage chain was not tested; J2945/1 counts density from received
+    BSMs and switches itself off as PQ collapses PDR (0.98 -> 0.65 at 100 vehicles under
+    Falcon); PSM `cert_bytes_share` 1.37 under pq-hybrid; highway vehicles spawn at
+    0 m/s; compare `Pool::add` drops insufficient windows before pooling.
+    **Tests failing on the merged tree, all identical on `adbbc4c8`:**
+    `scms_knobs_runs::a_longer_download_wait_lengthens_a_late_topup` (20,873 against
+    19,182 ms, needs +5,000; the base top-up already waits about 19 s since the ACA
+    request shuffle), `sensitivity_security::the_backhaul_latency_and_bandwidth_move_relay_topups`
+    (128 kbit/s 1,690 ms against the default 2,023 ms) and
+    `::the_pseudonym_strategy_moves_linkability_and_p2pcd` (897 against 731 unknown
+    signers; item 25 saw it pass, so the stale-artefact explanation there is in doubt:
+    both runs here compiled v2xw-engine afresh). Not root-caused.
+
 ## 7. Every unverifiable item and how it is modelled (29)
 
 ### Cryptography and data formats (5)
@@ -1305,6 +1358,16 @@ The totals count each row as its own checklist records it, with the changes in �
     `MI.samples-recorded`, the metrics thread-count, resume and server/Studio rows
     (`RS.threads`, `RS.resume`, `SV.*`), and the audit checkers re-run on the merged tree.
 
+12. **Live-run wave leftovers** (§6 item 26): R-P2PCD-ASYM, R-KEMFILE, P-384 pricing,
+    KEM download bytes, VOD `messages_checked`, the PT30 change rate and full-cert share,
+    certValidity dates, RandomSpeed intensity, the RSU double CRL booking (re-bless),
+    SLH-DSA-128s silent loss, provider-qualified backend failure nodes, PSM cert bytes
+    under pq-hybrid, highway depart speed, compare `Pool::add`; and the three SCMS test
+    failures of item 26. Owed runs: 197 pending live rows (live-scms 31 runs, live-atk
+    incl. C2Mb/C2MJ/SYM10b on the fixed binary, live-rsu FS0 for byte identity plus Sout
+    and FSout, live-chains signal/pedestrian/seed-2/Craton2/CRLG, Studio s2-scms and the
+    soak, 117 scenarios); `tests/live_rsu.rs` (ignored) has not been run.
+
 **Owner decisions**
 - **What the RA and PCA keep for each device** (§6 item 4): request records, cocoons,
   provisioning jobs, PCA issued records and batch files after a confirmed download.
@@ -1317,6 +1380,10 @@ The totals count each row as its own checklist records it, with the changes in �
   an alias.
 - ~~Whether the ECA and ACA should hold one certificate~~: one certificate per component
   since 2026-10-25 (`GOV.L.onecert`).
+- From the live-run wave (§6 item 26): price software crypto at the medium compute tier on
+  the profile's core count or behind a flag; a loader warning when us-sm-mbr runs on raw
+  GNSS fixes; whether a CLI `--duration` may clip fast-forward windows, events and warmup;
+  a finer D9 grid for fractional sums (moves digests).
 - The RSU-reporting reading (§8 item 6).
 - CF-IPERIOD (2 s).
 - The US J2945/1 window values, and `max_gap_s` 0.5 s (consecutively received) against

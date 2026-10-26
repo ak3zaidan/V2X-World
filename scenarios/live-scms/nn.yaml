@@ -1,0 +1,8 @@
+# live-scms variant nn: on_new_neighbour true
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms nn
+security:
+  signer_id_policy:
+    on_new_neighbour: true
