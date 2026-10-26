@@ -199,7 +199,7 @@ impl ServiceModel for ProfileServiceModel {
                 // An upper-bound latency with a stated lower edge is drawn per call from
                 // the node's own stream, so a run is still a function of its seed.
                 let ranged = (!self.unlimited)
-                    .then(|| self.profile.hsm.ops.get(op.op))
+                    .then(|| self.profile.hsm.ops.get(self.profile.priced_op(op.op)))
                     .flatten()
                     .filter(|_| self.profile.hsm.kind != crate::profile::HsmKind::None)
                     .and_then(crate::profile::HsmOp::range_us);

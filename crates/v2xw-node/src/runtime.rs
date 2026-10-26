@@ -602,7 +602,7 @@ impl ObuRuntime {
             || profile
                 .hsm
                 .ops
-                .get(config.verify_op)
+                .get(profile.priced_op(config.verify_op))
                 .and_then(crate::profile::HsmOp::range_us)
                 .is_some();
         let stores = Stores {

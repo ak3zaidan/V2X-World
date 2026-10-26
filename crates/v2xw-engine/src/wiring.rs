@@ -3217,7 +3217,8 @@ pub(crate) fn with_sign_lower_edge(
     if let Some(lo) = scenario.nodes.hsm_sign_lower_us {
         let (sign_op, _) =
             v2xw_node::profile::signature_ops(crate::signature::message_signature(scenario));
-        if let Some(op) = profile.hsm.ops.get_mut(sign_op) {
+        let sign_op = profile.priced_op(sign_op).to_string();
+        if let Some(op) = profile.hsm.ops.get_mut(sign_op.as_str()) {
             op.latency_lower_us.value = Some(lo);
             op.latency_lower_us.source = Some("scenario nodes.hsm_sign_lower_us".to_string());
         }
