@@ -125,4 +125,4 @@ fn provisioning_gives_the_same_bytes_on_any_number_of_threads() {
 /// and the weekly job for every account) and for one certificate per component (audit-gov
 /// §4 item 1: every component certificate byte moved); one thread = four still. Before
 /// both, `99f8481a…` on `8becf72a`.
-const PINNED: &str = "TO-MEASURE";
+const PINNED: &str = "783c2b499d38bafd058f1fc6a675d498ad1a947993f8b45a6d7958ac6c01f98d";
