@@ -644,8 +644,9 @@ rows:
   - 1.0
   - 1000000000.0
   source: 'one corroborated event suffices: every case the default closes closes, and more may'
-  measured: pending
-  verdict: pending
+  measured: 2 -> 2 (ratio 1)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.ME1.latency
   base: L
   variant: ME1
@@ -656,8 +657,14 @@ rows:
   - 0.0
   - 1.0
   source: 'no 10 s of sustained evidence needed: no later than the default'
-  measured: pending
-  verdict: pending
+  measured: 16.3205 -> 38.52 (ratio 2.36)
+  verdict: open
+  measured_on: 2026-10-26, 938fb16a release
+  note: '2026-10-26 (938fb16a): 16.3 -> 38.5 s. The latency is measured from the first enforced case''s
+    own detection. In ME1 that case''s report reaches the MA 29.3 s after its detection, against 7.1 s
+    in L. With one event enough, the first case is likely anchored on an earlier, single-event detection
+    that waited in the 30 s shuffle. Settling "no later" needs the absolute enforcement instants (pki.case
+    records), which this run did not keep'
 - id: LS.ME5.decisions
   base: L
   variant: ME5
@@ -709,8 +716,9 @@ rows:
   - 1.0
   - 1000000000.0
   source: 'the legacy rule needs k = 3 reporters only, not 3 events over 10 s: at least as many revocations'
-  measured: pending
-  verdict: pending
+  measured: 2 -> 2 (ratio 1)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CC10.latency
   base: L
   variant: CC10
@@ -771,8 +779,9 @@ rows:
   - 3.3
   source: 'a cellular vehicle polls once per interval: 30 s / 10 s = 3 times as often, less the poll at
     join every vehicle makes either way'
-  measured: pending
-  verdict: pending
+  measured: 182 -> 541 (ratio 2.973)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CF10.dl-stage
   base: L
   variant: CF10
@@ -783,8 +792,9 @@ rows:
   - 0.0
   - 1.0
   source: a shorter poll interval cannot make the first download later
-  measured: pending
-  verdict: pending
+  measured: 0.157 -> 0.157 (ratio 1)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CF10.ul-bytes
   base: L
   variant: CF10
@@ -792,8 +802,13 @@ rows:
   measure: access.uu_ul_bytes
   expect: up
   source: three times the conditional GETs on the uplink
-  measured: pending
-  verdict: pending
+  measured: 413045 -> 362849
+  verdict: wrong-expectation
+  measured_on: 2026-10-26, 938fb16a release
+  note: '2026-10-26 (938fb16a): 413 -> 363 KB. The 359 extra conditional GETs (182 -> 541 polls) are small.
+    The uplink is dominated by misbehaviour reports, and a 10 s fetch installs the CRL sooner, so receivers
+    stop reporting the revoked attackers: 327 -> 248 reports uploaded (-24 %). The row counted the GETs
+    only'
 - id: LS.CB1.frames
   base: L
   variant: CB1
@@ -804,8 +819,9 @@ rows:
   - 4.5
   - 5.5
   source: 'the RSU repeats the CRL every interval (Store and Repeat): 5 s / 1 s = 5 times the frames'
-  measured: pending
-  verdict: pending
+  measured: 6 -> 30 (ratio 5)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CB20.frames
   base: L
   variant: CB20
@@ -826,8 +842,9 @@ rows:
   expect: same
   tol: 0.01
   source: CRL frames are 0.03 % of the airtime; five times that moves the channel load by under 1 %
-  measured: pending
-  verdict: pending
+  measured: 0.0188679 -> 0.0188886
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.RQ0.received
   base: L
   variant: RQ0
@@ -981,8 +998,9 @@ rows:
   - 0.3
   - 0.42
   source: '250 ms at 100 ms spacing: every third BSM (0.333), up to 0.4 with jitter'
-  measured: pending
-  verdict: pending
+  measured: '0.334073'
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.FC5000.full-cert
   base: L
   variant: FC5000
@@ -1018,8 +1036,9 @@ rows:
   - 15.0
   - 24.0
   source: 74 B x (0.333 - 0.1) = +17 B (to +22 B at 0.4), mean rounded to the byte
-  measured: pending
-  verdict: pending
+  measured: 213 -> 230 (delta 17)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.FC5000.size
   base: L
   variant: FC5000
@@ -1085,8 +1104,9 @@ rows:
   measure: x.unknown_signer_loss
   expect: down
   source: 'a certificate every 250 ms: a newcomer waits at most a quarter second'
-  measured: pending
-  verdict: pending
+  measured: 0.00751551 -> 0.00201268
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.FCX.unknown
   base: L
   variant: FCX
