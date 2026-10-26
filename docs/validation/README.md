@@ -8,6 +8,12 @@ the figures. SCMS validation lives in `docs/design/scms-real/` and `testing/`, n
 
 | Report | Date | Pass | Fixed | Corrected | Open | Notes |
 |---|---|---|---|---|---|---|
+| [live-scenarios-2026-10-25.md](live-scenarios-2026-10-25.md) | 2026-10-25 | 28 | 0 | 5 | 9 | rows in `live-scenarios.yaml`; 115 runs, 117 scenarios not run |
+| [live-scms-2026-10-25.md](live-scms-2026-10-25.md) | 2026-10-25 | 36 | 0 | 1 | 3 | rows in `live-scms.yaml`; 68 pending; R-P2PCD-ASYM, R-KEMFILE open |
+| [live-atk-2026-10-25.md](live-atk-2026-10-25.md) | 2026-10-25 | 107 | 0 | 5 | 10 | rows in `live-atk.yaml`; 54 pending; Sybil onset fixed `9cdb1639` |
+| [live-rsu-2026-10-25.md](live-rsu-2026-10-25.md) | 2026-10-25 | 14 | 0 | 3 | 3 | rows in `live-rsu.yaml`; 54 pending; RSU CRL install fixed `4399f8f8` |
+| [live-chains-2026-10-25.md](live-chains-2026-10-25.md) | 2026-10-25 | 54 | 0 | 3 | 16 | rows in `live-chains.yaml`; 21 not run |
+| [live-studio-2026-10-25.md](live-studio-2026-10-25.md) | 2026-10-25 | 32 | 1 | 7 | 11 | rows in `live-studio.yaml`; compare peak pooling fixed `ce532c6e` |
 | [platform-2026-10-24.md](platform-2026-10-24.md) | 2026-10-24/25 | 24 | 6 | 2 | 9 | rows in `platform-validation.yaml`; CBR window aliasing (CW.cbr-window) open |
 | [radio-2026-10-24.md](radio-2026-10-24.md) | 2026-10-24 | 31 | 1 | 1 | 5 | rows in `radio-validation.yaml`; open = 2 NR selection-window rows FAIL (fix `877d530c` reverted at merge, on `wip/radio-sidelink-nojitter`), 3 fault runs pending |
 | [traffic-2026-10-24.md](traffic-2026-10-24.md) | 2026-10-24/25 | 8 | 2 | 4 | 9 | rows in `traffic-validation.yaml` (1 fixed in part, 1 inconclusive counted open); GreenYield queue-head hold open |
