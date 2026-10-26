@@ -136,6 +136,12 @@ runs:
   FS240:
     scenario: scenarios/live-rsu/scms-lat2000-bc3-240.yaml
     note: S240 on the 4399f8f8 build (the fix alone)
+  S240bc4:
+    scenario: scenarios/live-rsu/scms-lat2000-bc4-240.yaml
+    note: S240 with the carousel at 4 s (lists 30 s apart are not aligned with it), 486c8cba release
+  FS240bc4:
+    scenario: scenarios/live-rsu/scms-lat2000-bc4-240.yaml
+    note: S240bc4 on the 4399f8f8 build (the fix alone)
   DS0:
     scenario: scenarios/live-rsu/scms-base.yaml
     note: S0 with each list booked once on each unit's line (this branch)
@@ -1195,3 +1201,47 @@ rows:
   tol: 0.02
   fault: scale:c.events:1.1
   source: the fix moves CRL frames in time, not the run's size
+# Correction rows (2026-10-26, written after S240/FS240 and before S240bc4/FS240bc4): in the
+# 240 s pair the three lists came 30 s apart, a multiple of the 3 s carousel, so the later
+# lists met a tick 2.146 s after publication on both binaries and the l240 rows above passed
+# without exercising the unaligned case. With a 4 s carousel a list 10 or 30 s after the
+# arming one meets a tick (2.146 - 30) mod 4 = 0.146 s after its publication.
+- id: LR.S.l240.bc4.base.lag-min
+  base: S240bc4
+  variant: S240bc4
+  area: crl
+  measure: s.crl_first_frame_lag_s_min
+  expect: le
+  value: 1.0
+  fault: scale:s.crl_first_frame_lag_s_min:15
+  source: 'the defect on the release: a unit holds a later list from its publication step, so the next 4 s
+    tick puts it on the air 0.146 s after it, whatever the 2,000 ms line'
+- id: LR.S.l240.bc4.fix.lag-min
+  base: FS240bc4
+  variant: FS240bc4
+  area: crl
+  measure: s.crl_first_frame_lag_s_min
+  expect: ge
+  value: 2.0
+  fault: delay-zero
+  source: no list on the air before its 2,000 ms download lands; the later list's first frame comes at the
+    first tick after landing, 4.146 s
+- id: LR.S.l240.bc4.fix.lag-max
+  base: FS240bc4
+  variant: FS240bc4
+  area: crl
+  measure: s.crl_first_frame_lag_s_max
+  expect: band
+  band:
+  - 4.0
+  - 6.3
+  fault: scale:s.crl_first_frame_lag_s_max:2
+  source: 2 s download + up to one 4 s carousel period (+0.1 s step, 0.05 s signing); the 4.146 s of the
+    later lists
+- id: LR.S.l240.bc4.veh-lag
+  base: S240bc4
+  variant: FS240bc4
+  area: crl
+  measure: s.veh_crl_lag_s_mean
+  expect: up
+  source: vehicles hear a later list 4 s later than on the release
