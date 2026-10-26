@@ -369,7 +369,13 @@ def faults(runs_dir, table):
             continue
         else:
             fv = copy.deepcopy(real(v))
-            fv.update(measure(os.path.join(runs_dir, v), f, os.path.join(runs_dir, b)))
+            try:
+                fv.update(measure(os.path.join(runs_dir, v), f, os.path.join(runs_dir, b)))
+            except FileNotFoundError:
+                # the fault rewrites raw records, and this run's recording was deleted
+                skip += 1
+                print(f"SKIP    {row['id']:34} [{f}] (no recording)")
+                continue
         def get(run, metric, fv=fv, v=v):
             src = fv if run == v else real(run)
             return src.get(metric, 'ABSENT')
