@@ -1648,6 +1648,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "traffic.turn_curve_window_m" => "Corner radius judged over",
         "traffic.heavy_vehicle_gap_terms" => "Trucks and buses wait for longer gaps (HCM)",
         "traffic.standing_leader_stop" => "Smooth stop behind a standing vehicle",
+        "traffic.depart_at_speed" => "Enter the road moving (SUMO departSpeed=max)",
         "traffic.lane_bend_speed" => "Slow for bends in a street's centreline",
         "traffic.lc_strategic" => "Lane change for the turn: eagerness (LC2013)",
         "traffic.lc_cooperative" => "Lane change to let others in (LC2013)",

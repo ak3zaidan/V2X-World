@@ -3529,6 +3529,11 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "A driver closing on a standing vehicle brakes to stop at its standstill gap at constant deceleration, as at a stop line.",
     },
     KeyStatus {
+        path: "traffic.depart_at_speed",
+        status: Status::Wired,
+        note: "A trip enters the road at the highest safe speed there (SUMO departSpeed=max) instead of at rest.",
+    },
+    KeyStatus {
         path: "traffic.lane_bend_speed",
         status: Status::Wired,
         note: "The bends of a through lane's polyline get the turn-speed cap a junction connector has.",
@@ -4439,6 +4444,7 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             || t.lc_keep_right.is_some()
             || t.heavy_vehicle_gap_terms.is_some()
             || t.standing_leader_stop.is_some()
+            || t.depart_at_speed.is_some()
             || t.lane_bend_speed.is_some()
             || t.kerbside.is_some();
         // The LC2013 factors act only on lane changes, and the strategic one only on the
