@@ -698,6 +698,21 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the VRU device's antenna height",
     },
+    // A measured antenna's mount rotation (WP-09; Veins SampledAntenna1D's rotation).
+    Bound {
+        path: "radio.devices.obu.sampled_pattern.rotation_deg",
+        lo: -360.0,
+        hi: 360.0,
+        exclusive_lo: false,
+        what: "the sampled antenna's mount rotation",
+    },
+    Bound {
+        path: "radio.devices.obu.sampled_pattern.rotation_jitter_deg",
+        lo: 0.0,
+        hi: 180.0,
+        exclusive_lo: false,
+        what: "the sampled antenna's per-vehicle rotation spread",
+    },
     Bound {
         path: "radio.range.margin_db",
         lo: 0.0,
@@ -2569,6 +2584,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                staggered by 0-5 ms. Unknown families, ids and values are refused.",
     },
     KeyStatus {
+        path: "radio.devices.obu.sampled_pattern",
+        status: Status::Wired,
+        note: "A measured antenna pattern every vehicle carries instead of obu.antenna_pattern: \
+               a CSV table of azimuth (optionally elevation) gains in dB relative to the \
+               antenna gain, interpolated between samples, with an optional fixed and \
+               per-vehicle random mount rotation (Eckhoff et al., IEEE VNC 2016). Unset, \
+               the default, changes nothing; a table of zeros is the isotropic antenna.",
+    },
+    KeyStatus {
         path: "radio.devices",
         status: Status::Wired,
         note: "The radio each kind of node carries. Transmit power is the conducted power \
@@ -4127,6 +4151,22 @@ fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             bounded_at(&path, &path, v, e);
         }
     }
+    // WP-09: a measured antenna table must parse, and its rotations sit in their bounds.
+    if let Some(sp) = &s.radio.devices.obu.sampled_pattern {
+        if let Err(why) = v2xw_radio::antenna::SampledAntenna::from_csv(&sp.csv) {
+            e.push(conflict(
+                "radio.devices.obu.sampled_pattern.csv",
+                format!("is not an antenna pattern table: {why}"),
+            ));
+        }
+        for (leaf, v) in [
+            ("rotation_deg", sp.rotation_deg),
+            ("rotation_jitter_deg", sp.rotation_jitter_deg),
+        ] {
+            let path = format!("radio.devices.obu.sampled_pattern.{leaf}");
+            bounded_at(&path, &path, v, e);
+        }
+    }
     let sl = &s.radio.sidelink;
     for (leaf, v) in [
         ("candidate_percent", sl.candidate_percent.map(f64::from)),
@@ -4148,6 +4188,7 @@ fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
         PropagationChoice::Tr37885 => "propagation/tr37885",
         PropagationChoice::Geometric => "propagation/v2v-urban-geometric",
         PropagationChoice::WinnerB1(..) => "propagation/winner-plus-b1",
+        PropagationChoice::TwoRayInterference(_) => "propagation/two-ray-interference",
     };
 
     if c.path_loss_exponent.is_some() && !matches!(law, PropagationChoice::LogDistance(..)) {
@@ -4160,7 +4201,9 @@ fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
     }
     let no_shadow = matches!(
         law,
-        PropagationChoice::FreeSpace | PropagationChoice::TwoRayGround
+        PropagationChoice::FreeSpace
+            | PropagationChoice::TwoRayGround
+            | PropagationChoice::TwoRayInterference(_)
     );
     for (leaf, set) in [
         ("shadowing_sigma_db", c.shadowing_sigma_db.is_some()),

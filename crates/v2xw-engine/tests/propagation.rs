@@ -357,3 +357,148 @@ fn the_high_tier_stack_keeps_terrain_and_adds_corners_and_vehicles() {
     let stack = v2xw_engine::wiring::build_obstacles(&s, &world);
     assert!(stack.corners.is_none() && stack.vehicles.is_none());
 }
+
+// -----------------------------------------------------------------------------------------
+// WP-09: two-ray interference and measured antennas
+// -----------------------------------------------------------------------------------------
+
+/// A passenger-only open-air fleet with no fading: every vehicle's antenna is 1.5 m up.
+fn passenger_open_air(n: u32, secs: f64) -> Scenario {
+    let mut s = open_air(with_model(grid_fleet(n, secs), "fading", "fading/none"));
+    s.actors.vehicles.classes =
+        serde_json::from_value(serde_json::json!({ "passenger": { "fraction": 1.0 } }))
+            .expect("a class mix");
+    s
+}
+
+type Recorded = Vec<(v2xw_core::time::SimTime, v2xw_core::ctx::OwnedRecord)>;
+
+fn run_records(scenario: Scenario) -> Recorded {
+    let errors = v2xw_engine::scenario::validate(&scenario);
+    assert!(errors.is_empty(), "the scenario does not load: {errors:?}");
+    let mut engine = Engine::build(scenario, "").expect("builds");
+    let mut recorder = MemoryRecorder::new();
+    engine.run(&mut recorder).expect("runs");
+    recorder.records().to_vec()
+}
+
+type ByLink = std::collections::BTreeMap<(u32, u32, v2xw_core::time::SimTime), (f64, f64)>;
+
+fn rx_by_link(rx: &[PhyRxView]) -> ByLink {
+    rx.iter()
+        .filter_map(|v| {
+            Some((
+                (v.tx?.index(), v.rx.index(), v.t_start),
+                (v.rssi_dbm?, v.dist_m?),
+            ))
+        })
+        .collect()
+}
+
+/// Sommer 2012 Eq. 4-6 for two 1.5 m antennas over a road of εr 1.02 at `f`, written
+/// out here (`|1 + Γe^{iφ}|² = 1 + Γ² + 2Γ·cosφ`) rather than read from the engine.
+fn closed_form_gain_db(d: f64, f: f64) -> f64 {
+    let h = 1.5;
+    let lambda = 299_792_458.0 / f;
+    let d_ref = (d * d + 4.0 * h * h).sqrt();
+    let phi = 2.0 * std::f64::consts::PI * (d - d_ref) / lambda;
+    let (s, c) = (2.0 * h / d_ref, d / d_ref);
+    let root = (1.02 - c * c).sqrt();
+    let g = (s - root) / (s + root);
+    10.0 * (1.0 + g * g + 2.0 * g * phi.cos()).log10()
+}
+
+/// The two-ray interference law reaches every received power as its closed form: on the
+/// same links at the same instants, the received power under it differs from free space's
+/// by exactly `20·log10|1 + Γ⊥·e^{iφ}|` (Sommer 2012 Eq. 6) at the recorded distance,
+/// deep fades included — and the same seed gives the same run.
+#[test]
+fn two_ray_interference_reaches_the_received_power_as_its_closed_form() {
+    let base = passenger_open_air(60, 3.0);
+    let f = v2xw_engine::wiring::radio_regulation(&base)
+        .expect("the region's channel")
+        .centre_hz();
+    let fs = with_model(base.clone(), "propagation", "propagation/free-space");
+    let tri = with_model(base, "propagation", "propagation/two-ray-interference");
+    assert!(v2xw_engine::scenario::validate(&tri).is_empty());
+    let (_, fs_rx, _) = run(fs);
+    let (_, tri_rx, _) = run(tri.clone());
+    let (_, again, _) = run(tri);
+    let fs = rx_by_link(&fs_rx);
+    let tri = rx_by_link(&tri_rx);
+    assert_eq!(tri, rx_by_link(&again), "the same seed gave another run");
+    let (mut matched, mut deep, mut up) = (0, 0, 0);
+    for (k, &(t, d)) in &tri {
+        let Some(&(r, _)) = fs.get(k) else { continue };
+        matched += 1;
+        let want = closed_form_gain_db(d, f);
+        let got = t - r;
+        if want > -15.0 {
+            assert!(
+                (got - want).abs() < 0.02,
+                "{k:?} at {d} m: moved {got:.3} dB, Eq. 6 says {want:.3}"
+            );
+        } else {
+            assert!(got < -10.0, "{k:?} at {d} m: a {want:.1} dB fade moved {got:.2}");
+        }
+        if want < -5.0 {
+            deep += 1;
+        }
+        if want > 3.0 {
+            up += 1;
+        }
+    }
+    eprintln!("{matched} links matched, {deep} in a deep fade, {up} constructive");
+    assert!(matched > 500, "only {matched} links in common");
+    assert!(deep > 0 && up > 0, "{deep} fades and {up} peaks: the pattern was not exercised");
+}
+
+/// A measured antenna table of zeros is the isotropic antenna, record for record, even
+/// with a random mount rotation drawn per vehicle; a table with a deep rear null makes
+/// some links weaker and none stronger, and repeats itself under the same seed.
+#[test]
+fn a_flat_sampled_pattern_is_the_isotropic_antenna_byte_for_byte() {
+    let base = passenger_open_air(40, 3.0);
+    let mut iso = base.clone();
+    iso.radio.devices.obu.antenna_pattern =
+        serde_json::from_value(serde_json::json!("isotropic")).expect("a pattern");
+    let sampled = |csv: &str| {
+        let mut s = base.clone();
+        s.radio.devices.obu.sampled_pattern = Some(
+            serde_json::from_value(serde_json::json!({
+                "csv": csv,
+                "rotation_deg": 10.0,
+                "rotation_jitter": "uniform",
+                "rotation_jitter_deg": 180.0,
+            }))
+            .expect("a sampled pattern"),
+        );
+        s
+    };
+    let flat = sampled("azimuth_deg,gain_db\n0,0\n90,0\n180,0\n270,0\n");
+    let a = run_records(iso.clone());
+    let b = run_records(flat);
+    assert!(a.len() > 1_000, "only {} records", a.len());
+    assert_eq!(a.len(), b.len(), "a flat table changed how many records the run wrote");
+    let first = a.iter().zip(&b).position(|(x, y)| x != y);
+    assert!(first.is_none(), "record {first:?} differs from the isotropic run");
+
+    let null = sampled("azimuth_deg,gain_db\n0,0\n90,-3\n150,-10\n180,-30\n210,-10\n270,-3\n");
+    let (_, iso_rx, _) = run(iso);
+    let (_, null_rx, _) = run(null.clone());
+    let (_, null_again, _) = run(null);
+    let nulled = rx_by_link(&null_rx);
+    assert_eq!(nulled, rx_by_link(&null_again), "the same seed gave another run");
+    let iso = rx_by_link(&iso_rx);
+    let (mut matched, mut weaker) = (0, 0);
+    for (k, &(n, _)) in &nulled {
+        let Some(&(i, _)) = iso.get(k) else { continue };
+        matched += 1;
+        assert!(n <= i + 1e-9, "the table added gain on {k:?}: {n} against {i}");
+        if n < i - 3.0 {
+            weaker += 1;
+        }
+    }
+    eprintln!("{matched} links matched, {weaker} weaker by more than 3 dB");
+    assert!(matched > 100 && weaker > 0, "{matched} matched, {weaker} weaker");
+}
