@@ -965,7 +965,7 @@ rows:
   value: 3.2
   source: 'on fibre a list is on the air by the next tick: lag <= 3 s carousel period + 0.1 s step + 0.05
     s signing'
-  fault: use:Slat2000bc3
+  fault: scale:s.crl_first_frame_lag_s_max:25
   measured: "0.146324"
   verdict: pass
   judged: 2026-10-26
