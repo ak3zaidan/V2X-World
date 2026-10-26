@@ -111,7 +111,7 @@ use crate::adapters::{BoxedFading, BoxedPropagation};
 use crate::ctx::{EngineCtx, RunRecorder};
 use crate::error::{EngineError, Result, ScenarioError};
 use crate::event::{Event, Observe};
-use crate::records::{GtKinematics, MacCbr, NetBytes, NodeRx, NodeTx, PhyRx};
+use crate::records::{BusyShare, GtKinematics, MacCbr, NetBytes, NodeRx, NodeTx, PhyRx};
 use crate::scenario::Scenario;
 use crate::snapshot::{ActorState, SnapshotStream};
 
@@ -1054,6 +1054,11 @@ pub struct Engine {
     cert_cycles: BTreeMap<NodeId, (u64, v2xw_core::ids::SduId)>,
     /// Per-node MAC counters since the last `mac.cbr` report.
     mac_window: BTreeMap<NodeId, MacWindow>,
+    /// Per node, where its current `mac.cbr` window began: the instant (its last report, or
+    /// its creation) and its MAC's running busy time then ([`CbrMeter::busy_total_ns`]).
+    ///
+    /// [`CbrMeter::busy_total_ns`]: v2xw_radio::mac::CbrMeter::busy_total_ns
+    cbr_mark: BTreeMap<NodeId, (SimTime, u64)>,
     /// `node.rx` fates settled where no recorder is in hand (a receiver retired), written
     /// at the next point that has one.
     orphaned_rx: Vec<NodeRx>,
@@ -1624,6 +1629,7 @@ impl Engine {
             frag_resolved: BTreeMap::new(),
             cert_cycles: BTreeMap::new(),
             mac_window: BTreeMap::new(),
+            cbr_mark: BTreeMap::new(),
             orphaned_rx: Vec::new(),
             frames: BTreeMap::new(),
             live_at_rx: BTreeMap::new(),
@@ -1994,6 +2000,9 @@ impl Engine {
     /// Keyed by the node id alone, so the phase does not depend on when the node was
     /// created or how many were created before it.
     fn note_node_created(&mut self, id: NodeId) {
+        // Its first `mac.cbr` window starts when it does, not at the window's start.
+        let now = self.scheduler.now();
+        self.cbr_mark.insert(id, (now, 0));
         // The node's CRL gate reads its period off its own clock on the i-period calendar,
         // as a device does, so it is right from its first reception even when the
         // credential it holds is from an expired pool (06-validation-summary §6 item 22).
@@ -3766,6 +3775,7 @@ impl Engine {
                 self.node_first_step.remove(&node);
                 self.node_class.remove(&node);
                 self.mac_window.remove(&node);
+                self.cbr_mark.remove(&node);
                 self.node_wake.remove(&node);
                 // Node ids are never reused, so a retired node's J2945/1 sub-interval is
                 // read by nothing again; kept, it grew with every vehicle of a run of days.
@@ -9333,6 +9343,16 @@ impl Engine {
     /// TS 38.215 §5.1.25: the share of the last 100 ms of sub-channels whose S-RSSI
     /// exceeded the pool's threshold), on the sidelink's channel, and the queue is the
     /// SPS engine's per-UE queue: the same record, measured the way the RAT measures it.
+    ///
+    /// The busy ratio is the share of the report's own window the medium was busy: the
+    /// mean of the 100 ms CBR readings that tile it (ETSI TS 102 687 §4.2: CBR is busy
+    /// time over the measurement interval), with `busy_us` and `window_us` beside it. One
+    /// 100 ms reading taken at the flush, which this replaced, aliased with every traffic
+    /// period other than 100 ms: a fleet started together at a 200 ms BSM interval read
+    /// ×0.146 of the 10 Hz busy ratio where its airtime was ×0.503 (platform validation
+    /// 2026-10-24, open item 8). A node created inside the window is measured from its
+    /// creation. On a sidelink the share is the S-RSSI busy share over the window, as far
+    /// back as the UE's sensing ring holds (1 s for LTE-V2X, 100 ms for NR-V2X).
     fn emit_mac_reports(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
         // The window's own length: shorter than the period where a fast-forward cuts it,
         // longer across a frozen span (R-FFWIN).
@@ -9340,19 +9360,37 @@ impl Engine {
         let mut reports: Vec<MacCbr> = Vec::with_capacity(self.nodes.len());
         let nodes: Vec<NodeId> = self.nodes.keys().copied().collect();
         for node in nodes {
-            let (channel, cbr, depth) = if let Some(mac) = self.mac.as_ref() {
+            let (from, busy_then) = self
+                .cbr_mark
+                .get(&node)
+                .copied()
+                .unwrap_or((self.metric_window_start, 0));
+            let from = from.max(self.metric_window_start).min(now);
+            let (channel, busy, depth) = if let Some(mac) = self.mac.as_ref() {
+                let total = mac.busy_total_ns(node, self.dsrc_channel, now);
+                self.cbr_mark.insert(node, (now, total));
                 (
                     self.dsrc_channel.0,
-                    Mac::<EngineCtx<'_>>::cbr(mac, node, self.dsrc_channel, now),
+                    BusyShare::Time {
+                        busy_ns: total.saturating_sub(busy_then),
+                        window_ns: now - from,
+                    },
                     AccessCategory::ALL
                         .into_iter()
                         .map(|ac| mac.queue_len(node, self.dsrc_channel, ac) as u64)
                         .sum::<u64>(),
                 )
             } else if let Some(sl) = self.sidelink.as_ref() {
+                self.cbr_mark.insert(node, (now, 0));
+                let slot = sl.mac.pool().slot_of(now);
+                let slots = (now - from) / sl.mac.pool().slot().as_nanos().max(1);
                 (
                     sl.channel.0,
-                    Mac::<EngineCtx<'_>>::cbr(&sl.mac, node, sl.channel, now),
+                    BusyShare::Ratio(if slots == 0 {
+                        Mac::<EngineCtx<'_>>::cbr(&sl.mac, node, sl.channel, now)
+                    } else {
+                        sl.mac.sidelink_cbr_over(node, slot, slots)
+                    }),
                     sl.mac.queue_len(node) as u64,
                 )
             } else {
@@ -9363,7 +9401,7 @@ impl Engine {
                 now,
                 node,
                 channel,
-                cbr,
+                busy,
                 depth,
                 w.drops,
                 w.frames,

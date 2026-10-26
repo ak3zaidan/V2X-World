@@ -83,6 +83,13 @@ pub struct CbrMeter {
     busy: VecDeque<(SimTime, SimTime)>,
     /// The instant the medium became busy, while it still is.
     open: Option<SimTime>,
+    /// Merged busy time before [`Self::settled_to`], ns: what the window has forgotten,
+    /// kept as one running sum so [`Self::busy_total_ns`] can answer for any span.
+    #[serde(default)]
+    settled_ns: u64,
+    /// The instant up to which busy time has been folded into [`Self::settled_ns`].
+    #[serde(default)]
+    settled_to: SimTime,
 }
 
 impl CbrMeter {
@@ -99,6 +106,8 @@ impl CbrMeter {
             window,
             busy: VecDeque::new(),
             open: None,
+            settled_ns: 0,
+            settled_to: 0,
         }
     }
 
@@ -142,6 +151,12 @@ impl CbrMeter {
 
     fn prune(&mut self, now: SimTime) {
         let cutoff = now.saturating_sub(self.window.as_nanos());
+        // What is about to leave the window is folded into the running sum first, merged
+        // with everything still held, so the sum never counts an overlap twice.
+        if cutoff > self.settled_to {
+            self.settled_ns += self.busy_between(self.settled_to, cutoff);
+            self.settled_to = cutoff;
+        }
         while let Some(&(_, to)) = self.busy.front() {
             if to <= cutoff {
                 self.busy.pop_front();
@@ -157,7 +172,25 @@ impl CbrMeter {
     /// overlap in time make the medium busy once and the ratio can never exceed one.
     #[must_use]
     pub fn busy_ns(&self, now: SimTime) -> u64 {
-        let from = now.saturating_sub(self.window.as_nanos());
+        self.busy_between(now.saturating_sub(self.window.as_nanos()), now)
+    }
+
+    /// Merged busy time since the meter began, up to `now`, ns: monotone in `now`, so the
+    /// busy time of any span `[a, b]` is `busy_total_ns(b) - busy_total_ns(a)`.
+    ///
+    /// This is what a report over a window longer than `T_CBR` divides by its length: the
+    /// mean of the 100 ms CBR readings that tile the window, which a single reading at the
+    /// window's end is not (it aliases with any traffic period other than 100 ms).
+    #[must_use]
+    pub fn busy_total_ns(&self, now: SimTime) -> u64 {
+        self.settled_ns + self.busy_between(self.settled_to, now)
+    }
+
+    /// Merged busy time inside `[from, now]`, open interval included, ns.
+    fn busy_between(&self, from: SimTime, now: SimTime) -> u64 {
+        if now <= from {
+            return 0;
+        }
         let mut spans: Vec<(SimTime, SimTime)> = self
             .busy
             .iter()
@@ -420,6 +453,14 @@ impl EdcaOcbMac {
     /// transitions instead.
     pub fn note_busy(&mut self, node: NodeId, ch: ChannelId, from: SimTime, to: SimTime) {
         self.state(node, ch).cbr.note_busy(from, to);
+    }
+
+    /// A node's merged busy time on a channel since its meter began, up to `now`, ns
+    /// ([`CbrMeter::busy_total_ns`]); zero for a node that has heard nothing.
+    #[must_use]
+    pub fn busy_total_ns(&self, node: NodeId, ch: ChannelId, now: SimTime) -> u64 {
+        self.state_ref(node, ch)
+            .map_or(0, |s| s.cbr.busy_total_ns(now))
     }
 
     /// Suspends every running countdown as of `since`, the instant the medium actually
@@ -1706,6 +1747,59 @@ mod tests {
         let cbr = meter.cbr(100_000_000);
         assert!((cbr - 0.7).abs() < 1e-12, "{cbr}");
         assert!(cbr <= 1.0);
+    }
+
+    /// The running busy time over a span is the mean of the 100 ms readings that tile it:
+    /// a 2 ms frame every 200 ms is a 1 % busy share, which no single reading at a 1 s
+    /// flush shows (each reads 0 % or 2 %, and the one at 1 s reads 0 %). The reading at
+    /// the flush was `mac.cbr` before (platform validation 2026-10-24, open item 8).
+    #[test]
+    fn the_running_busy_time_is_the_mean_of_the_readings_that_tile_a_span() {
+        const MS: u64 = 1_000_000;
+        let mut meter = CbrMeter::new();
+        let mut tiled_ns = 0.0;
+        let mut marks = vec![meter.busy_total_ns(0)];
+        for tile in 1..=20u64 {
+            let end = tile * 100 * MS;
+            // Causal: the frames that start inside this tile, noted before it is read.
+            for start in (end - 100 * MS..end).step_by((200 * MS) as usize) {
+                if start % (200 * MS) == 0 {
+                    meter.note_busy(start, start + 2 * MS);
+                }
+            }
+            tiled_ns += meter.cbr(end) * (100 * MS) as f64;
+            if tile == 10 {
+                assert_eq!(meter.cbr(end), 0.0, "the reading at the flush aliases");
+            }
+            if tile % 10 == 0 {
+                marks.push(meter.busy_total_ns(end));
+                assert!(
+                    (meter.busy_total_ns(end) as f64 - tiled_ns).abs() < 1.0,
+                    "at {end}: running {} against the tiled readings {tiled_ns}",
+                    meter.busy_total_ns(end)
+                );
+            }
+        }
+        assert_eq!(marks, vec![0, 10 * MS, 20 * MS], "1 % of each second");
+    }
+
+    /// Overlaps are merged across the instant the running sum folds them in, and a busy
+    /// period still open counts up to the instant asked about.
+    #[test]
+    fn the_running_busy_time_merges_overlaps_and_counts_an_open_period() {
+        const MS: u64 = 1_000_000;
+        let mut meter = CbrMeter::new();
+        meter.note_busy(0, 60 * MS);
+        meter.note_busy(40 * MS, 90 * MS);
+        // Folds [0, 50 ms) in while [40, 90) is still held.
+        meter.note_busy(140 * MS, 150 * MS);
+        meter.note_busy(80 * MS, 120 * MS);
+        assert_eq!(meter.busy_total_ns(500 * MS), 130 * MS);
+        meter.busy_from(600 * MS);
+        assert_eq!(meter.busy_total_ns(650 * MS), 180 * MS);
+        meter.idle_at(900 * MS);
+        meter.note_busy(1_200 * MS, 1_201 * MS);
+        assert_eq!(meter.busy_total_ns(2_000 * MS), 431 * MS);
     }
 
     #[test]

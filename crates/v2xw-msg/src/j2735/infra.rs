@@ -217,7 +217,7 @@ fn card() -> ModelCard {
         "Real fields — MapData: timeStamp, msgIssueRevision, and 1..32 IntersectionGeometry, \
          each with id, revision, refPoint (Position3D lat/long/elevation), laneWidth and \
          1..255 GenericLane carrying laneID, ingressApproach, egressApproach, \
-         laneAttributes (directionalUse, sharedWith, laneType: vehicle only), maneuvers, an \
+         laneAttributes (directionalUse, sharedWith, laneType: vehicle or crosswalk), maneuvers, an \
          explicit NodeListXY node set of 2..63 NodeXY over all six node-XY alternatives and \
          node-LatLon, and 1..16 Connection (connectingLane with its maneuver, \
          remoteIntersection, signalGroup, userClass, connectionID)."

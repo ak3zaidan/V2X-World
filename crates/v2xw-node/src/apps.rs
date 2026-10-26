@@ -894,6 +894,11 @@ impl AppLayer {
             entry.ingress.clear();
             entry.egress.clear();
             for lane in &g.lanes {
+                // A vehicle is matched to vehicle lanes only: a crosswalk is walked both
+                // ways and would otherwise read as an ingress lane across the junction.
+                if !lane.attributes.is_vehicle() {
+                    continue;
+                }
                 let mut points = Vec::with_capacity(lane.nodes.len());
                 let mut at_p = reference;
                 for n in &lane.nodes {
