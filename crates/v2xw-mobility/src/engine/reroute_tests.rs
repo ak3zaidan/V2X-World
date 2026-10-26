@@ -38,13 +38,13 @@ fn trip(seq: u64, origin: LaneId, s_m: f64, destination: LaneId) -> TripRequest 
     }
 }
 
-/// A driving lane over 150 m long and a destination at least eight lanes of route away.
+/// A driving lane over 100 m long and a destination at least eight lanes of route away.
 fn far_trip(world: &World) -> (LaneId, LaneId) {
     let mut driving: Vec<LaneId> = world
         .roads
         .lanes()
         .iter()
-        .filter(|l| l.kind == LaneKind::Driving && l.length_m > 150.0)
+        .filter(|l| l.kind == LaneKind::Driving && l.length_m > 100.0)
         .map(|l| l.id)
         .collect();
     driving.sort_unstable();
