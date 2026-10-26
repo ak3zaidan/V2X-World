@@ -78,6 +78,13 @@ runs:
   r40b2: {scenario: scenarios/live-chains/r40.yaml, note: r40 on the fixed binary}
   r40-slh2: {scenario: scenarios/live-chains/r40-slh.yaml, note: r40-slh on the fixed binary}
   r160-c2sw-high: {scenario: scenarios/live-chains/r160-c2sw-high.yaml, note: 'r160-c2sw, nodes.compute_tier high (release binary)'}
+  # the 938fb16a release moved the radio runs (r160: 1,410,172 -> 1,628,202 events), so a
+  # base for a row judged on that release or on the fixed binary is re-run on that release
+  S-rel: {scenario: scenarios/live-chains/scms-base.yaml, note: 'S on the 938fb16a release'}
+  scms-crlg-rel: {scenario: scenarios/live-chains/scms-crlg.yaml, note: 'scms-crlg on the 938fb16a release'}
+  scms-g10-rel: {scenario: scenarios/live-chains/scms-g10.yaml, note: 'scms-g10 on the 938fb16a release'}
+  r40-rel: {scenario: scenarios/live-chains/r40.yaml, note: 'r40 on the 938fb16a release'}
+  r160-c2sw-rel: {scenario: scenarios/live-chains/r160-c2sw.yaml, note: 'r160-c2sw on the 938fb16a release'}
 rows:
 # ---------------------------------------------------------------- chain 1: PQ -> bytes -> airtime -> CBR -> collisions -> PDR
 - id: LC.PQ.psdu-falcon
@@ -873,14 +880,14 @@ rows:
 # decision -> enforced 16.3 s, so S enforces provider-b's two from ~157 s (83 s of the
 # 240 s run); BACKEND_RETRY re-sends a held message once the receiver is back.
 - id: LC.FIX.S-unmoved
-  base: S
+  base: S-rel
   variant: S2
   area: crl-chain
   measure: digest.record
   expect: identical
   source: 'the fix only routes a failure to the run of the provider that hosts it; with no failure it changes nothing, so the record is byte-identical'
 - id: LC.FIX.crlg-home-unmoved
-  base: scms-crlg
+  base: scms-crlg-rel
   variant: scms-crlg2
   area: crl-chain
   measure: digest.record
@@ -1024,7 +1031,7 @@ rows:
   tol: 0.15
   source: 'correction of LC.GN.jumps-g10 (judged on its runs): a 12 m single-fix outlier cannot score 1 on legacy-12''s position-jump check (bound above) and is never two in a row'
 - id: LC.GN.m30-jumps
-  base: scms-g10
+  base: scms-g10-rel
   variant: scms-g10-m30
   area: gnss-chain
   measure: p2.verdicts.positionJump
@@ -1032,7 +1039,7 @@ rows:
   min_change: 0.5
   source: 'a 30 m outlier scores > 1 for v < ~6 m/s (30 / (1.5 v + 21) with conf ~5.4 m), and every receiver that misses the message after it (or whose next message lands < 1.5 s after the post-outlier one) sees it twice as the lagged reference: ~1,760 outliers x ~20 receivers x a few % gives hundreds of flagged pairs'
 - id: LC.GN.m30-honest-reports
-  base: scms-g10
+  base: scms-g10-rel
   variant: scms-g10-m30
   area: gnss-chain
   measure: p2.reports_about_honest
@@ -1040,7 +1047,7 @@ rows:
   min_change: 0.5
   source: 'the flagged pairs are honest senders: reports about honest vehicles rise from 34'
 - id: LC.GN.m30-attackers-unaffected
-  base: scms-g10
+  base: scms-g10-rel
   variant: scms-g10-m30
   area: gnss-chain
   measure: p2.revoked_attackers
@@ -1049,7 +1056,7 @@ rows:
   source: 'the constant-position attackers are caught by constant-position verdicts, which an outlier on another sender does not touch'
 # finding 8 fixed: a message still signing at the run's end is counted (signed_past_end).
 - id: LC.FIX.r40-record-unmoved
-  base: r40
+  base: r40-rel
   variant: r40b2
   area: pq-chain
   measure: digest.record
@@ -1081,7 +1088,7 @@ rows:
   source: 'the fix counts the loss; it does not change what goes on the air (0 BSMs)'
 # finding 4: the existing flag nodes.compute_tier high runs the CPU as the profile's cores
 - id: LC.OB.c2sw-high-wait
-  base: r160-c2sw
+  base: r160-c2sw-rel
   variant: r160-c2sw-high
   area: obu-chain
   measure: m.verify_wait.mean
@@ -1089,7 +1096,7 @@ rows:
   min_change: 0.8
   source: 'one server at rho ~0.85 (636 verifications/s x 1.34 ms) waits 75 ms; two cores halve rho to ~0.43, and an M/D/2 queue at 0.43 waits well under a service time (Erlang C ~0.26 x 1.34 ms / (2 x 0.57) ~0.3 ms): the wait falls by > 80 %'
 - id: LC.OB.c2sw-high-e2e
-  base: r160-c2sw
+  base: r160-c2sw-rel
   variant: r160-c2sw-high
   area: obu-chain
   measure: m.e2e_latency.bsm.mean
@@ -1097,7 +1104,7 @@ rows:
   min_change: 0.5
   source: 'end to end is ~80 ms of which ~75 ms is the verify wait: it falls to a few ms'
 - id: LC.OB.c2sw-high-air-same
-  base: r160-c2sw
+  base: r160-c2sw-rel
   variant: r160-c2sw-high
   area: obu-chain
   measure: lc.bsms_per_veh_s
