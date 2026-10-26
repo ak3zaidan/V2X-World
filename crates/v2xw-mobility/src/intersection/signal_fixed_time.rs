@@ -525,8 +525,10 @@ impl FixedTimeSignals {
                 Some(t) => (t - PERMITTED_LEFT_ARRIVAL_MARGIN_S).max(0.0),
                 // A hand-built view without a tracked arrival: the assumed launch of an
                 // opposing car from its line.
-                None => c
-                    .time_to_stop_line_launching_s(OPPOSING_START_ACCEL_MPS2, OPPOSING_CRUISE_CAP_MPS),
+                None => c.time_to_stop_line_launching_s(
+                    OPPOSING_START_ACCEL_MPS2,
+                    OPPOSING_CRUISE_CAP_MPS,
+                ),
             };
             self.params
                 .patience
@@ -881,7 +883,9 @@ pub fn card(params: &SignalPlanParams) -> ModelCard {
         ),
     ];
     card.parameters
-        .extend(crate::intersection::gap_acceptance::patience_parameters(&params.patience));
+        .extend(crate::intersection::gap_acceptance::patience_parameters(
+            &params.patience,
+        ));
     card.assumptions = vec![
         "Pre-timed, no actuation (04-models.md §2.3).".to_string(),
         "The generated plan splits movements into two phase groups by the axis of their \

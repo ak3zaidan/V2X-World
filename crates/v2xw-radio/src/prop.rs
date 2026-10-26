@@ -1308,13 +1308,8 @@ impl<C: Ctx + ?Sized> Propagation<C> for TwoRayInterference {
         _w: &WeatherState,
     ) -> LossBreakdown {
         let d = tx.pos.distance_2d(rx.pos);
-        let path = two_ray_interference_loss_db(
-            d,
-            tx.height_m(),
-            rx.height_m(),
-            f_hz,
-            self.epsilon_r,
-        );
+        let path =
+            two_ray_interference_loss_db(d, tx.height_m(), rx.height_m(), f_hz, self.epsilon_r);
         LossBreakdown::new(path, 0.0, 0.0, 0.0, tx.gain_dbi + rx.gain_dbi)
     }
 }
@@ -3159,8 +3154,8 @@ mod tests {
         let mut farther_peak = f64::INFINITY;
         for k in [1.0, 2.0, 3.0, 5.0, 8.0] {
             let d = fade_at(k);
-            let excess = two_ray_interference_loss_db(d, h, h, f, GROUND_EPSILON_R)
-                - friis_loss_db(d, f);
+            let excess =
+                two_ray_interference_loss_db(d, h, h, f, GROUND_EPSILON_R) - friis_loss_db(d, f);
             let depth = -20.0 * (1.0 - gamma_at(d)).log10();
             assert!(
                 (excess - depth).abs() < 1e-6 && excess > 0.5 && excess < farther_depth,
@@ -3209,8 +3204,14 @@ mod tests {
             &WeatherState::CLEAR,
         );
         let want = tri_reference_db(100.0, 1.5, 1.5, f, GROUND_EPSILON_R);
-        assert!((b.path_db - want).abs() < 1e-6, "{} against {want}", b.path_db);
-        two_ray_interference_card().validate().expect("the card validates");
+        assert!(
+            (b.path_db - want).abs() < 1e-6,
+            "{} against {want}",
+            b.path_db
+        );
+        two_ray_interference_card()
+            .validate()
+            .expect("the card validates");
     }
 
     #[test]

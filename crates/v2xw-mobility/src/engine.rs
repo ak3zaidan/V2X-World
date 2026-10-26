@@ -84,9 +84,9 @@ use crate::vru::crosswalk::{CrosswalkIndex, VehiclePath};
 use crate::vru::social_force::SocialForce;
 use v2xw_core::rng::{EntityRef, RngDomain};
 
-mod tiering;
 #[cfg(test)]
 mod reroute_tests;
+mod tiering;
 pub use tiering::{Handoff, TripAdmission};
 
 /// The model id.
@@ -2785,11 +2785,16 @@ impl NativeMobility {
     /// [`crate::drivers::ViolationParams::crash_clearance_s`].
     fn resolve_collisions(&mut self, world: &World, t1: SimTime) {
         let actors = self.audit_actors(world, t1);
-        let pairs = crate::audit::overlapping_pairs(&actors, crate::audit::AuditParams::default().footprint_shrink_m);
+        let pairs = crate::audit::overlapping_pairs(
+            &actors,
+            crate::audit::AuditParams::default().footprint_shrink_m,
+        );
         if pairs.is_empty() {
             return;
         }
-        let clear_at = t1.saturating_add(secs_to_ns(self.params.violations.crash_clearance_s.max(0.0)));
+        let clear_at = t1.saturating_add(secs_to_ns(
+            self.params.violations.crash_clearance_s.max(0.0),
+        ));
         for (i, j) in pairs {
             let (a, b) = (actors[i].actor, actors[j].actor);
             let tagged = |id: ActorId| {
@@ -3695,7 +3700,11 @@ impl NativeMobility {
         let mut view = LaneView::of(lane);
         view.speed_limit_mps *= a.traits.speed_factor;
         let b = a.driver.comfort_decel_mps2.max(0.1);
-        let free = a.driver.desired_speed_mps.min(view.speed_limit_mps).max(0.0);
+        let free = a
+            .driver
+            .desired_speed_mps
+            .min(view.speed_limit_mps)
+            .max(0.0);
         let to_end = (lane.length_m - a.s_m - a.driver.min_gap_m).max(0.0);
         let mut v = free.min(math::sqrt(2.0 * b * to_end));
         // The nearest vehicle ahead: on the lane, else on the next lanes of the route.
@@ -5448,7 +5457,12 @@ impl NativeMobility {
     /// The junction a permitted left turner waiting inside it is judged at, with the gap to
     /// its wait point ([`Self::box_wait_s`]), metres; `None` unless the actor is on a
     /// signalised permitted-left connector and not yet past the wait point.
-    fn box_wait_view(&self, world: &World, actor: &Actor, t: SimTime) -> Option<(JunctionView, f64)> {
+    fn box_wait_view(
+        &self,
+        world: &World,
+        actor: &Actor,
+        t: SimTime,
+    ) -> Option<(JunctionView, f64)> {
         let lane = world.try_lane(actor.lane)?;
         if lane.kind != LaneKind::Internal {
             return None;
@@ -6219,7 +6233,9 @@ impl Mobility for NativeMobility {
                     && self.amber_follows_permissive(world, junction.id, junction.movement_lane, t0)
                     && let Some(left) =
                         self.amber_left_s(world, junction.id, junction.movement_lane, t0)
-                    && self.signals.sneaker_may_go(&ego, &junction, &conflicts, left)
+                    && self
+                        .signals
+                        .sneaker_may_go(&ego, &junction, &conflicts, left)
                 {
                     decision = EntryDecision::Proceed;
                 }
@@ -11185,12 +11201,7 @@ mod tests {
             );
             let r = auditor.report();
             if tag {
-                assert_eq!(
-                    r.count(crate::audit::Check::Overlap),
-                    0,
-                    "{:?}",
-                    r.examples
-                );
+                assert_eq!(r.count(crate::audit::Check::Overlap), 0, "{:?}", r.examples);
                 assert!(r.stats.crash_overlap_steps > 0);
                 assert_eq!(r.stats.crashes_cleared, 2);
                 assert_eq!(r.count(crate::audit::Check::MidRoadDespawn), 0);

@@ -441,7 +441,10 @@ fn two_ray_interference_reaches_the_received_power_as_its_closed_form() {
                 "{k:?} at {d} m: moved {got:.3} dB, Eq. 6 says {want:.3}"
             );
         } else {
-            assert!(got < -10.0, "{k:?} at {d} m: a {want:.1} dB fade moved {got:.2}");
+            assert!(
+                got < -10.0,
+                "{k:?} at {d} m: a {want:.1} dB fade moved {got:.2}"
+            );
         }
         if want < -5.0 {
             deep += 1;
@@ -452,7 +455,10 @@ fn two_ray_interference_reaches_the_received_power_as_its_closed_form() {
     }
     eprintln!("{matched} links matched, {deep} in a deep fade, {up} constructive");
     assert!(matched > 500, "only {matched} links in common");
-    assert!(deep > 0 && up > 0, "{deep} fades and {up} peaks: the pattern was not exercised");
+    assert!(
+        deep > 0 && up > 0,
+        "{deep} fades and {up} peaks: the pattern was not exercised"
+    );
 }
 
 /// A measured antenna table of zeros is the isotropic antenna, record for record, even
@@ -481,26 +487,43 @@ fn a_flat_sampled_pattern_is_the_isotropic_antenna_byte_for_byte() {
     let a = run_records(iso.clone());
     let b = run_records(flat);
     assert!(a.len() > 1_000, "only {} records", a.len());
-    assert_eq!(a.len(), b.len(), "a flat table changed how many records the run wrote");
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "a flat table changed how many records the run wrote"
+    );
     let first = a.iter().zip(&b).position(|(x, y)| x != y);
-    assert!(first.is_none(), "record {first:?} differs from the isotropic run");
+    assert!(
+        first.is_none(),
+        "record {first:?} differs from the isotropic run"
+    );
 
     let null = sampled("azimuth_deg,gain_db\n0,0\n90,-3\n150,-10\n180,-30\n210,-10\n270,-3\n");
     let (_, iso_rx, _) = run(iso);
     let (_, null_rx, _) = run(null.clone());
     let (_, null_again, _) = run(null);
     let nulled = rx_by_link(&null_rx);
-    assert_eq!(nulled, rx_by_link(&null_again), "the same seed gave another run");
+    assert_eq!(
+        nulled,
+        rx_by_link(&null_again),
+        "the same seed gave another run"
+    );
     let iso = rx_by_link(&iso_rx);
     let (mut matched, mut weaker) = (0, 0);
     for (k, &(n, _)) in &nulled {
         let Some(&(i, _)) = iso.get(k) else { continue };
         matched += 1;
-        assert!(n <= i + 1e-9, "the table added gain on {k:?}: {n} against {i}");
+        assert!(
+            n <= i + 1e-9,
+            "the table added gain on {k:?}: {n} against {i}"
+        );
         if n < i - 3.0 {
             weaker += 1;
         }
     }
     eprintln!("{matched} links matched, {weaker} weaker by more than 3 dB");
-    assert!(matched > 100 && weaker > 0, "{matched} matched, {weaker} weaker");
+    assert!(
+        matched > 100 && weaker > 0,
+        "{matched} matched, {weaker} weaker"
+    );
 }

@@ -536,8 +536,7 @@ pub fn sampled_card() -> ModelCard {
         "One table for every vehicle (car, van, motorcycle, truck, bus); roadside units and \
          VRU devices keep their scalar gain."
             .to_string(),
-        "A vehicle whose heading is unknown is treated as isotropic toward that link."
-            .to_string(),
+        "A vehicle whose heading is unknown is treated as isotropic toward that link.".to_string(),
         "Gains are relative to radio.devices.obu.antenna_gain_dbi, so a table of zeros is \
          the isotropic antenna exactly."
             .to_string(),
@@ -625,7 +624,10 @@ mod tests {
             "elevation_deg,azimuth_deg,gain_db\n95,0,0\n",
             "azimuth_deg,gain_db\n",
         ] {
-            assert!(SampledAntenna::from_csv(bad).is_err(), "{bad:?} was accepted");
+            assert!(
+                SampledAntenna::from_csv(bad).is_err(),
+                "{bad:?} was accepted"
+            );
         }
         sampled_card().validate().expect("the card validates");
     }
@@ -637,14 +639,23 @@ mod tests {
         let mut csv = String::from("azimuth_deg,gain_db\n");
         for a in (0..360).step_by(10) {
             let off = f64::from(a.min(360 - a)); // 0 ahead, 180 behind
-            let g = if off == 180.0 { -40.0 } else { -12.0 * (off / 120.0).powi(2) };
+            let g = if off == 180.0 {
+                -40.0
+            } else {
+                -12.0 * (off / 120.0).powi(2)
+            };
             csv.push_str(&format!("{a},{g}\n"));
         }
         let p = SampledAntenna::from_csv(&csv).unwrap();
         let null_of = |rot_deg: f64| {
             (0..3600)
                 .map(|i| f64::from(i) * 0.1)
-                .map(|a| (a, p.relative_gain_db(a / DEG_PER_RAD, 0.0, rot_deg / DEG_PER_RAD)))
+                .map(|a| {
+                    (
+                        a,
+                        p.relative_gain_db(a / DEG_PER_RAD, 0.0, rot_deg / DEG_PER_RAD),
+                    )
+                })
                 .min_by(|x, y| x.1.total_cmp(&y.1).then(x.0.total_cmp(&y.0)))
                 .map(|(a, _)| a)
                 .unwrap()
@@ -654,7 +665,10 @@ mod tests {
         for rot in [15.0, 90.0, -40.0, 200.0, 7.3] {
             let moved = null_of(rot);
             let want = (base + rot).rem_euclid(360.0);
-            assert!((moved - want).abs() < 1e-6, "rotation {rot}: null at {moved}, want {want}");
+            assert!(
+                (moved - want).abs() < 1e-6,
+                "rotation {rot}: null at {moved}, want {want}"
+            );
             // And the null's depth goes with it.
             let depth = p.relative_gain_db(want / DEG_PER_RAD, 0.0, rot / DEG_PER_RAD);
             assert!((depth + 40.0).abs() < 1e-6, "{depth}");
@@ -663,12 +677,27 @@ mod tests {
         // zero when switched off, inside the uniform width.
         use v2xw_core::ids::NodeId;
         let a = rotation_draw_rad(7, NodeId::new(3), RotationJitter::Uniform, 30.0);
-        assert_eq!(a, rotation_draw_rad(7, NodeId::new(3), RotationJitter::Uniform, 30.0));
-        assert_ne!(a, rotation_draw_rad(7, NodeId::new(4), RotationJitter::Uniform, 30.0));
-        assert_ne!(a, rotation_draw_rad(8, NodeId::new(3), RotationJitter::Uniform, 30.0));
+        assert_eq!(
+            a,
+            rotation_draw_rad(7, NodeId::new(3), RotationJitter::Uniform, 30.0)
+        );
+        assert_ne!(
+            a,
+            rotation_draw_rad(7, NodeId::new(4), RotationJitter::Uniform, 30.0)
+        );
+        assert_ne!(
+            a,
+            rotation_draw_rad(8, NodeId::new(3), RotationJitter::Uniform, 30.0)
+        );
         assert!(a.abs() <= 30.0 / DEG_PER_RAD);
-        assert_eq!(rotation_draw_rad(7, NodeId::new(3), RotationJitter::None, 30.0), 0.0);
-        assert_eq!(rotation_draw_rad(7, NodeId::new(3), RotationJitter::Normal, 0.0), 0.0);
+        assert_eq!(
+            rotation_draw_rad(7, NodeId::new(3), RotationJitter::None, 30.0),
+            0.0
+        );
+        assert_eq!(
+            rotation_draw_rad(7, NodeId::new(3), RotationJitter::Normal, 0.0),
+            0.0
+        );
     }
 
     #[test]

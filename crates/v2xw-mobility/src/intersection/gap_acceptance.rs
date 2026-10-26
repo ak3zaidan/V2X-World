@@ -553,7 +553,11 @@ pub fn patience_parameters(p: &JunctionPatience) -> Vec<Parameter> {
         Parameter::new(
             "patience_foe_braking_decel",
             "m/s²",
-            serde_json::json!(if p.foe_braking { FOE_BRAKING_DECEL_MPS2 } else { 0.0 }),
+            serde_json::json!(if p.foe_braking {
+                FOE_BRAKING_DECEL_MPS2
+            } else {
+                0.0
+            }),
             sumo,
         ),
     ]
@@ -840,7 +844,10 @@ mod tests {
         assert!((p.critical_gap_s(4.5, 0.0, 0.0) - 4.5).abs() < 1e-12);
         assert!((p.critical_gap_s(4.5, 0.0, 90.0) - 3.825).abs() < 1e-12);
         assert!((p.critical_gap_s(4.5, 0.0, 180.0) - 3.15).abs() < 1e-12);
-        assert_eq!(p.critical_gap_s(4.5, 0.0, 900.0), p.critical_gap_s(4.5, 0.0, 180.0));
+        assert_eq!(
+            p.critical_gap_s(4.5, 0.0, 900.0),
+            p.critical_gap_s(4.5, 0.0, 180.0)
+        );
         assert_eq!(JunctionPatience::OFF.critical_gap_s(4.5, 2.0, 900.0), 4.5);
     }
 
@@ -902,8 +909,14 @@ mod tests {
         assert_eq!(p.foe_time_s(3.0, 30.0, 10.0, 0.0), 3.0);
         assert_eq!(p.foe_time_s(3.0, 30.0, 10.0, 180.0), f64::INFINITY);
         let late = p.foe_time_s(0.5, 5.0, 10.0, 180.0);
-        assert!((late - (10.0 - 55.0f64.sqrt()) / 4.5).abs() < 1e-12, "{late}");
-        assert_eq!(JunctionPatience::REALISTIC.foe_time_s(3.0, 30.0, 10.0, 180.0), 3.0);
+        assert!(
+            (late - (10.0 - 55.0f64.sqrt()) / 4.5).abs() < 1e-12,
+            "{late}"
+        );
+        assert_eq!(
+            JunctionPatience::REALISTIC.foe_time_s(3.0, 30.0, 10.0, 180.0),
+            3.0
+        );
     }
 
     #[test]

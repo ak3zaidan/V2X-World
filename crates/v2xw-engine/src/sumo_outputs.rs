@@ -147,7 +147,12 @@ pub fn options_of(id: &str, opts: &Value) -> Result<SumoOptions, OptError> {
         let num = |lo: f64, hi: f64| -> Result<f64, OptError> {
             v.as_f64()
                 .filter(|x| x.is_finite() && *x >= lo && *x <= hi)
-                .ok_or_else(|| (format!("opts.{k}"), format!("must be a number in [{lo}, {hi}]")))
+                .ok_or_else(|| {
+                    (
+                        format!("opts.{k}"),
+                        format!("must be a number in [{lo}, {hi}]"),
+                    )
+                })
         };
         match k.as_str() {
             "profile" => {}
@@ -202,12 +207,22 @@ fn detectors_of(id: &str, v: &Value) -> Result<Vec<DetectorSpec>, OptError> {
             .get("pos_m")
             .and_then(Value::as_f64)
             .filter(|x| x.is_finite() && *x >= 0.0)
-            .ok_or_else(|| (f("pos_m"), "is required, metres along the lane, ≥ 0".to_string()))?;
+            .ok_or_else(|| {
+                (
+                    f("pos_m"),
+                    "is required, metres along the lane, ≥ 0".to_string(),
+                )
+            })?;
         let length_m = if id == "sumo-e2" {
             d.get("length_m")
                 .and_then(Value::as_f64)
                 .filter(|x| x.is_finite() && *x > 0.0)
-                .ok_or_else(|| (f("length_m"), "is required for an E2, metres, > 0".to_string()))?
+                .ok_or_else(|| {
+                    (
+                        f("length_m"),
+                        "is required for an E2, metres, > 0".to_string(),
+                    )
+                })?
         } else {
             0.0
         };
@@ -400,7 +415,8 @@ impl Ctx<'_> {
         fmt(ns as f64 / 1e9, self.p)
     }
     fn lane_id(&self, l: Option<LaneId>) -> Option<&str> {
-        l.and_then(|l| self.ids.sumo_lane.get(&l)).map(String::as_str)
+        l.and_then(|l| self.ids.sumo_lane.get(&l))
+            .map(String::as_str)
     }
     fn edge_id(&self, l: Option<LaneId>) -> Option<&str> {
         l.filter(|l| (l.0 as usize) < self.world.roads.lanes().len())
@@ -934,7 +950,10 @@ fn summary(c: &Ctx, o: &SumoOptions, tr: &Tracks) -> (String, usize) {
                 depart: t.depart()?,
                 end: t.despawn.as_ref().map(|d| d.t),
                 requested: t.spawn.as_ref().and_then(|s| s.requested_t),
-                arrived: t.despawn.as_ref().is_some_and(|d| d.cause == "trip-complete"),
+                arrived: t
+                    .despawn
+                    .as_ref()
+                    .is_some_and(|d| d.cause == "trip-complete"),
             })
         })
         .collect();
@@ -1120,7 +1139,10 @@ fn e1(c: &Ctx, o: &SumoOptions, tr: &Tracks) -> Result<(String, usize), String> 
                 .iter()
                 .filter(|p| p.passed && p.exit.is_some_and(|x| x >= b && x < e))
                 .collect();
-            let entered = passes.iter().filter(|p| p.enter >= b && p.enter < e).count();
+            let entered = passes
+                .iter()
+                .filter(|p| p.enter >= b && p.enter < e)
+                .count();
             let occ: f64 = passes
                 .iter()
                 .map(|p| (p.exit.unwrap_or(e).min(e) - p.enter.max(b)).max(0.0))
@@ -1184,9 +1206,14 @@ fn e2(c: &Ctx, o: &SumoOptions, tr: &Tracks) -> Result<(String, usize), String> 
                 let (r, f) = (s.s, s.s + len.max(0.01));
                 if f > lo && r < hi {
                     let loss = c.time_loss(s, desired);
-                    at.entry(s.t)
-                        .or_default()
-                        .push((*a, r.max(lo), f.min(hi), s.speed, s.dt, loss));
+                    at.entry(s.t).or_default().push((
+                        *a,
+                        r.max(lo),
+                        f.min(hi),
+                        s.speed,
+                        s.dt,
+                        loss,
+                    ));
                 }
             }
         }
@@ -1292,9 +1319,14 @@ fn e2(c: &Ctx, o: &SumoOptions, tr: &Tracks) -> Result<(String, usize), String> 
             let span_steps = (((*e - *b) as f64 / 1e9) / step).max(1.0);
             let n_seen = seen.len();
             let per = |s: f64, n: f64| if n > 0.0 { s / n } else { -1.0 };
-            let hs: Vec<f64> = seen.iter().map(|a| halt_total.get(a).copied().unwrap_or(0.0)).collect();
-            let hi_: Vec<f64> =
-                seen.iter().map(|a| halt_interval.get(a).copied().unwrap_or(0.0)).collect();
+            let hs: Vec<f64> = seen
+                .iter()
+                .map(|a| halt_total.get(a).copied().unwrap_or(0.0))
+                .collect();
+            let hi_: Vec<f64> = seen
+                .iter()
+                .map(|a| halt_interval.get(a).copied().unwrap_or(0.0))
+                .collect();
             let sum = |v: &[f64]| v.iter().sum::<f64>();
             let max = |v: &[f64]| v.iter().copied().fold(0.0, f64::max);
             lines[i].push(format!(
@@ -1355,8 +1387,14 @@ mod tests {
     #[test]
     fn angles_are_compass_degrees() {
         assert!((angle_deg(0.0) - 90.0).abs() < 1e-9, "east is 90");
-        assert!((angle_deg(std::f64::consts::FRAC_PI_2)).abs() < 1e-9, "north is 0");
-        assert!((angle_deg(std::f64::consts::PI) - 270.0).abs() < 1e-9, "west is 270");
+        assert!(
+            (angle_deg(std::f64::consts::FRAC_PI_2)).abs() < 1e-9,
+            "north is 0"
+        );
+        assert!(
+            (angle_deg(std::f64::consts::PI) - 270.0).abs() < 1e-9,
+            "west is 270"
+        );
     }
 
     #[test]
@@ -1378,9 +1416,6 @@ mod tests {
     #[test]
     fn intervals_cover_the_run() {
         assert_eq!(intervals(None, 5), vec![(0, 5)]);
-        assert_eq!(
-            intervals(Some(2e-9), 5),
-            vec![(0, 2), (2, 4), (4, 5)]
-        );
+        assert_eq!(intervals(Some(2e-9), 5), vec![(0, 2), (2, 4), (4, 5)]);
     }
 }

@@ -1577,9 +1577,7 @@ pub fn radio_models(
                     v2xw_radio::TwoRayInterference::ID => {
                         match params_of::<TwoRayInterferenceParams>(&choice.params) {
                             Ok(p) => {
-                                let eps = p
-                                    .epsilon_r
-                                    .unwrap_or(v2xw_radio::prop::GROUND_EPSILON_R);
+                                let eps = p.epsilon_r.unwrap_or(v2xw_radio::prop::GROUND_EPSILON_R);
                                 if !(1.0..=100.0).contains(&eps) {
                                     errors.push(bad(format!(
                                         "epsilon_r {eps} is outside 1 to 100 (a ground's \

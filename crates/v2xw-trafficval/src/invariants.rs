@@ -488,14 +488,14 @@ fn boundary_insertion(lab: &mut Lab, variant: Variant) -> Result<Outcome, String
         *params = serde_json::json!({});
     }
     params["od"] = serde_json::json!({ "boundary_origins": true });
-    s.traffic.get_or_insert_with(Default::default).depart_at_speed =
-        Some(variant != Variant::Fault(0));
+    s.traffic
+        .get_or_insert_with(Default::default)
+        .depart_at_speed = Some(variant != Variant::Fault(0));
     let world = world_of(lab, &s)?;
     let mut w = EntryWatch::default();
     scenario_run(lab, &s, Engine::Shipped, &[], None, |t, actors| {
         for a in actors {
-            if w.seen.insert(a.actor) && v2xw_mobility::engine::is_boundary_entry(&world, a.lane)
-            {
+            if w.seen.insert(a.actor) && v2xw_mobility::engine::is_boundary_entry(&world, a.lane) {
                 w.first_lane.insert(a.actor, a.lane);
                 w.entrants += 1;
                 let lane = world.lane(a.lane);
@@ -521,9 +521,7 @@ fn boundary_insertion(lab: &mut Lab, variant: Variant) -> Result<Outcome, String
                 continue;
             }
             let lane = world.lane(a.lane);
-            if a.speed_mps < 0.1
-                && lane.length_m - a.s_m > 15.0
-                && nearest_ahead(actors, a) > 15.0
+            if a.speed_mps < 0.1 && lane.length_m - a.s_m > 15.0 && nearest_ahead(actors, a) > 15.0
             {
                 w.halts += 1;
                 if w.examples.len() < 8 {

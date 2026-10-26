@@ -124,7 +124,11 @@ fn validate(xsd: &Path, file: &Path) -> Result<(), String> {
     if out.status.success() {
         Ok(())
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).lines().take(3).collect::<Vec<_>>().join(" | "))
+        Err(String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .take(3)
+            .collect::<Vec<_>>()
+            .join(" | "))
     }
 }
 
@@ -143,12 +147,21 @@ fn scenario(dir: &Path, detectors: &serde_json::Value) -> PathBuf {
     };
     s.exporters = vec![
         ex("sumo-fcd", serde_json::Value::Null),
-        ex("sumo-tripinfo", serde_json::json!({"write_unfinished": true})),
+        ex(
+            "sumo-tripinfo",
+            serde_json::json!({"write_unfinished": true}),
+        ),
         ex("sumo-edgedata", serde_json::json!({"period_s": 30.0})),
         ex("sumo-lanedata", serde_json::Value::Null),
         ex("sumo-summary", serde_json::Value::Null),
-        ex("sumo-e1", serde_json::json!({"detectors": detectors["e1"], "period_s": 30.0})),
-        ex("sumo-e2", serde_json::json!({"detectors": detectors["e2"], "period_s": 30.0})),
+        ex(
+            "sumo-e1",
+            serde_json::json!({"detectors": detectors["e1"], "period_s": 30.0}),
+        ),
+        ex(
+            "sumo-e2",
+            serde_json::json!({"detectors": detectors["e2"], "period_s": 30.0}),
+        ),
     ];
     std::fs::create_dir_all(dir).expect("dir");
     let path = dir.join("sumo-outputs.yaml");
@@ -247,8 +260,8 @@ fn drop_attr(xml: &str, attr: &str) -> Option<String> {
 #[test]
 fn sumo_outputs_validate_and_agree_with_the_run() {
     let base = out_dir("sumo-outputs");
-    let pre = v2xw_engine::Scenario::load(repo_root().join("scenarios/phase1-grid.yaml"))
-        .expect("load");
+    let pre =
+        v2xw_engine::Scenario::load(repo_root().join("scenarios/phase1-grid.yaml")).expect("load");
     let mut small = pre.clone();
     if let v2xw_world::WorldSourceSpec::Procedural { params, .. } = &mut small.world.source {
         params["cols"] = 4.into();
@@ -258,7 +271,10 @@ fn sumo_outputs_validate_and_agree_with_the_run() {
     let world = world_engine.world().clone();
     drop(world_engine);
     let dets = detectors(&world);
-    assert!(!dets["e1"].as_array().expect("e1").is_empty(), "no lane for a detector");
+    assert!(
+        !dets["e1"].as_array().expect("e1").is_empty(),
+        "no lane for a detector"
+    );
 
     let path = scenario(&base, &dets);
     let a = run(&options(path.clone(), base.join("a"))).expect("run a");
@@ -295,12 +311,29 @@ fn sumo_outputs_validate_and_agree_with_the_run() {
     let trips = elements(&read("sumo-tripinfo", "tripinfo.xml"), "tripinfo");
     let report = &a.report;
     let left: u64 = report.despawn_causes.values().sum();
-    let complete = report.despawn_causes.get("TripComplete").copied().unwrap_or(0);
-    let finished: Vec<_> = trips.iter().filter(|t| t.get("vaporized").map(String::as_str) != Some("end")).collect();
-    assert!(complete > 0, "no trip finished in the run; the comparison would be empty");
-    assert_eq!(finished.len() as u64, left, "tripinfo rows against the vehicles that left");
+    let complete = report
+        .despawn_causes
+        .get("TripComplete")
+        .copied()
+        .unwrap_or(0);
+    let finished: Vec<_> = trips
+        .iter()
+        .filter(|t| t.get("vaporized").map(String::as_str) != Some("end"))
+        .collect();
+    assert!(
+        complete > 0,
+        "no trip finished in the run; the comparison would be empty"
+    );
     assert_eq!(
-        finished.iter().filter(|t| !t.contains_key("vaporized")).count() as u64,
+        finished.len() as u64,
+        left,
+        "tripinfo rows against the vehicles that left"
+    );
+    assert_eq!(
+        finished
+            .iter()
+            .filter(|t| !t.contains_key("vaporized"))
+            .count() as u64,
         complete,
         "tripinfo arrivals against the TripComplete despawns"
     );
@@ -316,7 +349,9 @@ fn sumo_outputs_validate_and_agree_with_the_run() {
             (n("arrival") - n("depart") - n("duration")).abs() <= 0.011,
             "duration is arrival - depart: {t:?}"
         );
-        assert!(n("waitingTime") <= n("duration") + 0.011 && n("timeLoss") <= n("duration") + 0.011);
+        assert!(
+            n("waitingTime") <= n("duration") + 0.011 && n("timeLoss") <= n("duration") + 0.011
+        );
     }
 
     // 2b. edgeData counts against a recount of the recording.
@@ -333,17 +368,23 @@ fn sumo_outputs_validate_and_agree_with_the_run() {
     for r in records.iter().filter(|r| r.channel == "gt.kinematics") {
         let v: serde_json::Value = serde_json::from_slice(&r.json).expect("json");
         let class = v["class"].as_str().unwrap_or("").to_string();
-        lane_at.entry(v["actor"].as_u64().expect("actor") as u32).or_default().push((
-            v["t"].as_u64().expect("t"),
-            v["lane"].as_u64().map(|x| x as u32),
-            class,
-        ));
+        lane_at
+            .entry(v["actor"].as_u64().expect("actor") as u32)
+            .or_default()
+            .push((
+                v["t"].as_u64().expect("t"),
+                v["lane"].as_u64().map(|x| x as u32),
+                class,
+            ));
     }
     // (interval begin ns, edge) → (departed, entered, left)
     let mut want: BTreeMap<(u64, String), (u64, u64, u64)> = BTreeMap::new();
     let period = 30_000_000_000u64;
     let edge_of = |l: Option<u32>| {
-        l.and_then(|l| ids.edge_of_lane(&world, v2xw_core::ids::LaneId::new(l)).map(str::to_string))
+        l.and_then(|l| {
+            ids.edge_of_lane(&world, v2xw_core::ids::LaneId::new(l))
+                .map(str::to_string)
+        })
     };
     for samples in lane_at.values_mut() {
         samples.sort();
@@ -389,12 +430,18 @@ fn sumo_outputs_validate_and_agree_with_the_run() {
     }
     want.retain(|_, v| *v != (0, 0, 0));
     assert!(!want.is_empty(), "the recount found no traffic");
-    assert_eq!(got, want, "edgeData departed/entered/left against the recording's recount");
+    assert_eq!(
+        got, want,
+        "edgeData departed/entered/left against the recording's recount"
+    );
 
     // 2c. The summary's final step against the run report.
     let steps = elements(&read("sumo-summary", "summary.xml"), "step");
     let last = steps.last().expect("a summary step");
-    assert_eq!(last["inserted"].parse::<u64>().expect("n"), vehicles_spawned);
+    assert_eq!(
+        last["inserted"].parse::<u64>().expect("n"),
+        vehicles_spawned
+    );
     assert_eq!(last["arrived"].parse::<u64>().expect("n"), complete);
 
     // 4. SUMO's own tools, where SUMO is installed.

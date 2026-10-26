@@ -184,7 +184,10 @@ pub fn run_exporters_in(
             let Some(world) = world else {
                 return Err(EngineError::Scenario(crate::ScenarioError::conflict(
                     format!("exporters[{i}].id"),
-                    format!("'{}' needs the run's world, and this caller has none", spec.id),
+                    format!(
+                        "'{}' needs the run's world, and this caller has none",
+                        spec.id
+                    ),
                 )));
             };
             if records.is_none() {

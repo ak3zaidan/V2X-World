@@ -478,8 +478,7 @@ impl ViolationParams {
     /// (`u_share` below the share) and how late (`u_tol`, inverse exponential CDF), seconds;
     /// 0 for a driver who never enters on red.
     pub fn red_tolerance_s(&self, u_share: f64, u_tol: f64) -> f64 {
-        if !self.enabled || u_share >= self.red_run_share || self.red_run_tolerance_mean_s <= 0.0
-        {
+        if !self.enabled || u_share >= self.red_run_share || self.red_run_tolerance_mean_s <= 0.0 {
             return 0.0;
         }
         let u = u_tol.clamp(1e-12, 1.0 - 1e-12);

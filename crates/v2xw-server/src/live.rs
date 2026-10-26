@@ -730,7 +730,7 @@ fn spawn_host(
                     out_dir,
                     Some(engine.world()),
                 )
-                    .map_err(|e| e.to_string());
+                .map_err(|e| e.to_string());
                 let _ = step_tx.send(HostMsg::Exported(result));
             }
             let _ = match outcome {

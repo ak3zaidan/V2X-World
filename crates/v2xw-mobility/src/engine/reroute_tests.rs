@@ -180,7 +180,10 @@ fn under_the_v2x_source_only_the_warned_driver_reroutes() {
             .expect("placed");
         // A plain driving lane well ahead on the shared route.
         let route = engine.actors[&a].route.lanes.clone();
-        assert_eq!(route, engine.actors[&b].route.lanes, "same trip, same route");
+        assert_eq!(
+            route, engine.actors[&b].route.lanes,
+            "same trip, same route"
+        );
         let blocked = *route
             .iter()
             .skip(3)
@@ -201,7 +204,12 @@ fn under_the_v2x_source_only_the_warned_driver_reroutes() {
             let x = &engine.actors[&id];
             x.route.lanes[x.route_index..].contains(&blocked)
         };
-        (ahead(a), ahead(b), engine.rerouted_on_information().clone(), a)
+        (
+            ahead(a),
+            ahead(b),
+            engine.rerouted_on_information().clone(),
+            a,
+        )
     };
     let (a_v2x, b_v2x, who, a) = run(RerouteSource::V2x);
     assert!(!a_v2x, "the warned driver still drives the blocked lane");
@@ -209,7 +217,10 @@ fn under_the_v2x_source_only_the_warned_driver_reroutes() {
     assert_eq!(who, BTreeSet::from([a]), "re-planned on information");
     let (a_nav, _, who_nav, _) = run(RerouteSource::Navigation);
     assert!(a_nav, "a warning moved a navigation-app driver");
-    assert!(who_nav.is_empty(), "navigation source: {who_nav:?} re-planned");
+    assert!(
+        who_nav.is_empty(),
+        "navigation source: {who_nav:?} re-planned"
+    );
 }
 
 /// A procedural grid has no boundary entries (every lane is fed by the junction it
@@ -220,7 +231,11 @@ fn under_the_v2x_source_only_the_warned_driver_reroutes() {
 fn the_insertion_speed_is_the_free_speed_capped_by_the_road_ahead() {
     let world = grid();
     assert!(
-        world.roads.lanes().iter().all(|l| !is_boundary_entry(&world, l.id)),
+        world
+            .roads
+            .lanes()
+            .iter()
+            .all(|l| !is_boundary_entry(&world, l.id)),
         "a grid lane counted as a map-edge entry"
     );
     let (origin, destination) = far_trip(&world);
@@ -236,7 +251,10 @@ fn the_insertion_speed_is_the_free_speed_capped_by_the_road_ahead() {
     let lone = engine
         .insert_trip(&world, &trip(0, origin, 20.0, destination), 0)
         .expect("placed");
-    assert_eq!(engine.actors[&lone].speed_mps, 0.0, "an interior origin starts at rest");
+    assert_eq!(
+        engine.actors[&lone].speed_mps, 0.0,
+        "an interior origin starts at rest"
+    );
     let a = engine.actors[&lone].clone();
     let lane = world.lane(origin);
     let free = 11.0_f64.min(lane.speed_limit_mps);
@@ -271,6 +289,13 @@ fn the_insertion_speed_is_the_free_speed_capped_by_the_road_ahead() {
             &engine.weather,
         )
     };
-    assert!(accel(v) >= -b - 1e-2, "at {v} m/s it brakes at {}", accel(v));
-    assert!(accel(v + 0.5) < -b, "0.5 m/s faster would still be comfortable");
+    assert!(
+        accel(v) >= -b - 1e-2,
+        "at {v} m/s it brakes at {}",
+        accel(v)
+    );
+    assert!(
+        accel(v + 0.5) < -b,
+        "0.5 m/s faster would still be comfortable"
+    );
 }

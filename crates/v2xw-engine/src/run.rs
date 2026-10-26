@@ -3820,8 +3820,10 @@ impl Engine {
                     actor: *actor,
                     cause,
                 };
-                self.lifecycle
-                    .push((update.t, Lifecycle::Despawn(crate::records::GtDespawn(view))));
+                self.lifecycle.push((
+                    update.t,
+                    Lifecycle::Despawn(crate::records::GtDespawn(view)),
+                ));
             }
             *self
                 .report
@@ -4953,7 +4955,8 @@ impl Engine {
                     let Some(payload) = m.payload.as_deref() else {
                         continue;
                     };
-                    if let Some(lane) = crate::reroute_info::blocking_event_lane(&self.world, payload)
+                    if let Some(lane) =
+                        crate::reroute_info::blocking_event_lane(&self.world, payload)
                     {
                         commands.push(v2xw_mobility::MobilityCommand::HazardHeard { actor, lane });
                     }
