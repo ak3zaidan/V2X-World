@@ -83,7 +83,7 @@ answers sit beside them in the evidence, and each run's recording is copied asid
    are red. Thin-window means moved most: `ttc_min` 82.3 against 156.6, `headway_distance`
    50.75 against 55.39. Tests:
    `compare::tests::a_thin_window_is_pooled_by_its_counts_so_the_period_does_not_move_a_run`,
-   `reduce::tests::a_thin_proportion_window_is_pooled_so_the_period_does_not_move_a_run`.
+   `reduce::tests::a_thin_proportion_window_is_pooled_so_the_period_does_not_move_a_run`, both red with their arm disabled (then restored); the experiment lib suite passes (48).
    These are readers of the records, so no recorded output, digest or golden moves.
 3. **`s2-scms` failed in `open()`, not at its base run** (2026-10-26 re-reading of its log).
    The settings window's close click missed, and the window stayed open for the 30 s wait.
