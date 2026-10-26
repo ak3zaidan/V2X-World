@@ -486,8 +486,9 @@ rows:
   expect: up
   min_change: 0.3
   source: 'below 2 with pool 2: due at the joining period, like pool 1'
-  measured: pending
-  verdict: pending
+  measured: 121 -> 190
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.L.shuffle-stage
   base: L
   variant: L
@@ -517,8 +518,9 @@ rows:
   expect: le
   value: 11.0
   source: 'window 10 s: held at most 10 s'
-  measured: pending
-  verdict: pending
+  measured: '8.322'
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.RT1.shuffle-stage
   base: L
   variant: RT1
@@ -571,10 +573,11 @@ rows:
   source: 'a shorter shuffle moves the decision earlier, but the CRL waits for the next 30 s slot (L:
     decision at 7.1 s, published at 16.2 s): the latency is quantised by the slot, so no later and possibly
     the same'
-  measured: pending
-  verdict: pending
+  measured: 16.3205 -> 16.3205 (ratio 1)
+  verdict: pass
   note: 'prediction corrected before the RW10 run, on L''s stages: written first as down (the slot quantisation
     was missed)'
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.RW90.latency
   base: L
   variant: RW90
@@ -626,8 +629,12 @@ rows:
   - 30.5
   source: review 10 s delays the decision 10 s; the CRL then waits for the next 30 s slot, so the latency
     grows by 0 to 30 s
-  measured: pending
-  verdict: pending
+  measured: 16.3205 -> 0 (delta -16.32)
+  verdict: wrong-expectation
+  measured_on: 2026-10-26, 938fb16a release
+  note: '2026-10-26 (938fb16a): the run horizon, as MR30. The decision moves from about 141 s to about
+    151 s, so the CRL waits for the 180 s slot, the run end. No vehicle enforces and the latency reads
+    0'
 - id: LS.MR30.latency
   base: L
   variant: MR30
@@ -687,8 +694,9 @@ rows:
   - 0.0
   - 1.0
   source: 'five events (20 s sustained inside one 60 s pseudonym): at most the default decisions'
-  measured: pending
-  verdict: pending
+  measured: 2 -> 2 (ratio 1)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.MN1.revocations
   base: L
   variant: MN1
@@ -738,8 +746,14 @@ rows:
   measure: x.revocation_latency_s
   expect: down
   source: a 10 s slot waits 5 s on average, a 30 s slot 15 s
-  measured: pending
-  verdict: pending
+  measured: 16.3205 -> 16.3205
+  verdict: wrong-expectation
+  measured_on: 2026-10-26, 938fb16a release
+  note: '2026-10-26 (938fb16a): unchanged, event for event (883,278 events). The entries reach the CRL
+    Generator about 141 s in, and the next 10 s boundary from the epoch (150 s) is also the next 30 s
+    boundary, so both publish at 150 s (issued->published 9.03 s in both). "5 s against 15 s on average"
+    holds over arrival instants. A single arrival 9 s before a common boundary cannot show it; it needs
+    seeds or a later first decision'
 - id: LS.CC60.latency
   base: L
   variant: CC60
@@ -778,8 +792,9 @@ rows:
   - 1.0
   - 1000000000.0
   source: more slots group fewer revocations into one version
-  measured: pending
-  verdict: pending
+  measured: 3 -> 3 (ratio 1)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CF10.polls
   base: L
   variant: CF10
@@ -844,8 +859,9 @@ rows:
   - 0.15
   - 0.35
   source: 5 s / 20 s = a quarter of the frames (quantised by the run length)
-  measured: pending
-  verdict: pending
+  measured: 6 -> 2 (ratio 0.3333)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CB1.channel
   base: L
   variant: CB1
@@ -897,8 +913,9 @@ rows:
   - 1.0
   source: 'a store of about two reports loses any third report pending at once: at most as many reach
     the MA'
-  measured: pending
-  verdict: pending
+  measured: 327 -> 327 (ratio 1)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.PSIL.changes
   base: L
   variant: PSIL
