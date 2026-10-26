@@ -122,14 +122,14 @@ fn a_scheme_added_through_the_template_is_selectable_end_to_end() {
     assert_eq!(op(&cv, "pca", "ml-dsa-65 sign"), 0);
     // Its certificates are larger: the same top-ups move more bytes to the devices.
     println!(
-        "top-ups classic {} pq {}; LOP->ee bytes classic {} pq {}",
+        "top-ups classic {} pq {}; RA->ee bytes classic {} pq {}",
         classic.phase2.topups_completed,
         pq.phase2.topups_completed,
-        edge_bytes(&cv, "lop", "ee"),
-        edge_bytes(&pv, "lop", "ee")
+        edge_bytes(&cv, "ra", "ee"),
+        edge_bytes(&pv, "ra", "ee")
     );
     assert!(pq.phase2.topups_completed > 0);
-    assert!(edge_bytes(&pv, "lop", "ee") > edge_bytes(&cv, "lop", "ee"));
+    assert!(edge_bytes(&pv, "ra", "ee") > edge_bytes(&cv, "ra", "ee"));
     // And on the air every message is several fragments.
     let air = |r: &RunReport| serde_json::to_value(r).expect("report")["frames_tx"].as_u64();
     if let (Some(a), Some(b)) = (air(&classic), air(&pq)) {
@@ -347,8 +347,8 @@ fn fleet_costs_by_scheme() {
                 "rx_losses": r.rx_losses,
                 "topups_completed": r.phase2.topups_completed,
                 "certs_topped_up": r.phase2.certs_topped_up,
-                "lop_to_ee_bytes": edge_bytes(&view, "lop", "ee"),
-                "ee_to_lop_bytes": edge_bytes(&view, "ee", "lop"),
+                "ra_to_ee_bytes": edge_bytes(&view, "ra", "ee"),
+                "ee_to_ra_bytes": edge_bytes(&view, "ee", "ra"),
                 "pca_busy_ns": pca_busy,
                 "metrics": last,
             })

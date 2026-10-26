@@ -1,0 +1,3 @@
+pkill -f v2xw-server; pkill -f "vite/bin/vite.js"
+./target/release/v2xw-server --scenario scenarios/manhattan-5min.yaml --port 8787 --paused --speed 0
+pnpm --dir ui --filter @vwp/studio dev

@@ -118,11 +118,21 @@ fn the_backend_state_names_every_scms_entity_once_a_second() {
         views.len(),
         report.phase2.topups_completed
     );
+    // The view is taken once a simulated second, and a snapshot equal to the last one
+    // written (time aside) is not written again before `VIEW_KEYFRAME_S` (records audit,
+    // audit-sim-metrics §3 item 4): at most 31 over 30 s, each one a change.
     assert!(
-        (28..=32).contains(&views.len()),
-        "one snapshot a simulated second over 30 s, got {}",
+        (2..=32).contains(&views.len()),
+        "at most one snapshot a simulated second over 30 s, got {}",
         views.len()
     );
+    assert!(v2xw_engine::phase2::VIEW_KEYFRAME_S > 30);
+    for w in views.windows(2) {
+        let (mut a, mut b) = (w[0].clone(), w[1].clone());
+        a["t"] = Value::Null;
+        b["t"] = Value::Null;
+        assert_ne!(a, b, "an unchanged snapshot written again at t {}", w[1]["t"]);
+    }
     let ts: Vec<u64> = views.iter().filter_map(|v| v["t"].as_u64()).collect();
     assert!(ts.windows(2).all(|w| w[0] < w[1]), "snapshots go forward");
     let last = views.last().expect("one");
@@ -135,7 +145,6 @@ fn the_backend_state_names_every_scms_entity_once_a_second() {
         "ica",
         "dcm",
         "eca",
-        "lop",
         "ra",
         "la1",
         "la2",
@@ -152,6 +161,15 @@ fn the_backend_state_names_every_scms_entity_once_a_second() {
             "{id} unnamed"
         );
     }
+    // The US deployment (the engine's default for an SCMS run) runs no LOP: the view
+    // draws no LOP box and the transparent hop's traffic as the device-RA edge it is
+    // (audit-gov §4).
+    assert!(
+        last["entities"]
+            .as_array()
+            .is_some_and(|a| a.iter().all(|e| e["id"] != "lop")),
+        "a LOP entity in a deployment without one"
+    );
     assert!(entity(last, "root")["state"]["certs_issued"].as_u64() >= Some(5));
     assert_eq!(entity(last, "root")["online"], false);
     assert!(entity(last, "ee")["state"]["vehicles"].as_u64() > Some(0));
@@ -161,22 +179,24 @@ fn the_backend_state_names_every_scms_entity_once_a_second() {
     assert!(entity(last, "la1")["state"]["chains"].as_u64() > Some(0));
     assert!(entity(last, "dcm")["state"]["devices_bootstrapped"].as_u64() > Some(0));
     assert!(entity(last, "ee")["state"]["trust_installed"].as_u64() > Some(0));
-    // The in-run top-ups: device -> LOP -> RA -> LAs/PCA and back through the LOP.
+    // The in-run top-ups: device -> RA -> LAs/PCA and back to the device.
     assert!(report.phase2.topups_completed > 0, "no top-up to draw");
     for (a, b) in [
-        ("ee", "lop"),
-        ("lop", "ra"),
+        ("ee", "ra"),
         ("ra", "la1"),
         ("ra", "la2"),
         ("ra", "pca"),
-        ("ra", "lop"),
-        ("lop", "ee"),
+        ("ra", "ee"),
     ] {
         assert!(edge(last, a, b), "no {a} -> {b} edge");
     }
+    // No LOP is deployed, so no edge may name one (its transparent hop is folded into the
+    // device-RA edges above).
     assert!(
-        !edge(last, "ee", "ra"),
-        "a vehicle reached the RA without the LOP"
+        last["edges"]
+            .as_array()
+            .is_some_and(|a| a.iter().all(|e| e["from"] != "lop" && e["to"] != "lop")),
+        "an edge names the undeployed LOP"
     );
     let ra = entity(last, "ra");
     assert!(ra["queue"]["served"].as_u64() > Some(0));
@@ -647,14 +667,14 @@ fn a_hybrid_signature_is_the_credential_systems_scheme_too() {
             .unwrap_or(0)
     };
     println!(
-        "top-ups: classic {} hybrid {}; LOP->device bytes classic {} hybrid {}; device->LOP \
+        "top-ups: classic {} hybrid {}; RA->device bytes classic {} hybrid {}; device->RA \
          classic {} hybrid {}; PCA falcon signs {}",
         classic.phase2.topups_completed,
         hybrid.phase2.topups_completed,
-        edge_bytes(&cv, "lop", "ee"),
-        edge_bytes(&hv, "lop", "ee"),
-        edge_bytes(&cv, "ee", "lop"),
-        edge_bytes(&hv, "ee", "lop"),
+        edge_bytes(&cv, "ra", "ee"),
+        edge_bytes(&hv, "ra", "ee"),
+        edge_bytes(&cv, "ee", "ra"),
+        edge_bytes(&hv, "ee", "ra"),
         op(&hv, "pca", "falcon-512 sign"),
     );
     assert!(classic.phase2.topups_completed > 0 && hybrid.phase2.topups_completed > 0);
@@ -670,7 +690,7 @@ fn a_hybrid_signature_is_the_credential_systems_scheme_too() {
     let per = |bytes: u64, n: u64| bytes as f64 / n.max(1) as f64;
     let extra = f64::from(897 + 666) * 3.0;
     let down = |v: &Value, r: &v2xw_engine::RunReport| {
-        per(edge_bytes(v, "lop", "ee"), r.phase2.topups_completed)
+        per(edge_bytes(v, "ra", "ee"), r.phase2.topups_completed)
     };
     assert!(
         down(&hv, &hybrid) - down(&cv, &classic) >= extra,
@@ -679,7 +699,7 @@ fn a_hybrid_signature_is_the_credential_systems_scheme_too() {
         down(&cv, &classic)
     );
     let up = |v: &Value, r: &v2xw_engine::RunReport| {
-        per(edge_bytes(v, "ee", "lop"), r.phase2.topups_started)
+        per(edge_bytes(v, "ee", "ra"), r.phase2.topups_started)
     };
     assert!(up(&hv, &hybrid) > up(&cv, &classic) + 3.0 * 897.0);
     assert_eq!(
@@ -726,15 +746,16 @@ fn the_credential_lifecycle_scenario_shows_every_stage() {
     assert!(p.reports_at_ma > 0, "no report reached the MA");
     assert_eq!(p.backend_errors, 0, "{}", p.first_backend_error);
     let last = records(&rec, "backend.state").pop().expect("a view");
-    for (a, b) in [
-        ("ee", "lop"),
-        ("lop", "ra"),
-        ("ra", "pca"),
-        ("ra", "la1"),
-        ("lop", "ee"),
-    ] {
+    // The US deployment runs no LOP; the device's top-ups are drawn device-RA.
+    for (a, b) in [("ee", "ra"), ("ra", "pca"), ("ra", "la1"), ("ra", "ee")] {
         assert!(edge(&last, a, b), "no {a} -> {b} edge");
     }
+    assert!(
+        last["edges"]
+            .as_array()
+            .is_some_and(|a| a.iter().all(|e| e["from"] != "lop" && e["to"] != "lop")),
+        "an edge names the undeployed LOP"
+    );
 }
 
 /// The shipped `scenarios/ccms-lifecycle.yaml`, the European counterpart: CAMs over
