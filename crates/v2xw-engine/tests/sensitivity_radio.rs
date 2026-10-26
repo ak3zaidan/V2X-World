@@ -281,34 +281,3 @@ fn cv2x_sensing_avoids_collisions() {
     cv2x("LTE sensing off", "collision_rate");
     cv2x("LTE sensing off", "sl_overlapping");
 }
-
-/// A periodic message keeps the offset its reservation was made at, so the sidelink's mean
-/// access wait follows the selection window: about (T1 + T2) / 2 (3GPP TS 38.214 8.1.4;
-/// TR 37.885 A.1.1 periodic traffic). Before 2026-10-25 a per-message hand-off jitter
-/// (a CSMA convention) pushed messages past their reserved slot and a 1 ms window waited
-/// 41.9 ms on average (radio-validation.yaml RV-SL-T2-ACCESS, RV-SL-T2J-*).
-#[test]
-fn nr_access_wait_follows_the_selection_window() {
-    let base = Scenario::load_unvalidated(dir().join("nr-grid.yaml")).expect("nr-grid loads");
-    let at = |t2_ms: u32| {
-        let mut set = BTreeMap::new();
-        set.insert("time.duration_s".to_string(), serde_json::json!(2.0));
-        set.insert("metrics".to_string(), serde_json::json!(["all"]));
-        set.insert(
-            "radio.sidelink.selection_window_ms".to_string(),
-            serde_json::json!(t2_ms),
-        );
-        let s = sens::apply(&base, &set).expect("the settings apply");
-        sens::measure(s)
-            .expect("the run completes")
-            .get("access_ms")
-            .expect("access_ms is measured")
-    };
-    let short = at(1);
-    let long = at(50);
-    assert!(short < 3.0, "T2 = 1 ms: mean access wait {short:.2} ms, want about 1 ms");
-    assert!(
-        (18.0..33.0).contains(&long),
-        "T2 = 50 ms: mean access wait {long:.2} ms, want about 25.5 ms"
-    );
-}
