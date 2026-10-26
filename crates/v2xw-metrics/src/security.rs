@@ -9,7 +9,8 @@
 //! | `verify_wait` | start − enqueue | ms | a task that never started, which has no wait to report and is therefore missing from the distribution rather than counted as an infinite wait |
 //! | `verify_queue_depth` | distribution of the depth at enqueue | count | the depth between enqueues: this is sampled at arrivals, so it is an arrival-biased estimate of the queue, not a time average |
 //! | `unverified_ratio` | delivered without verification / delivered | ratio | messages that were dropped rather than delivered |
-//! | `p2pcd_requests` | Σ digest-signed messages whose signer was not cached / window (the P2PCD trigger count) | 1/s | the exchange itself (requests sent, responses, certificates learned), which `v2xw-node::p2pcd::P2pcdStats` counts per node (WP-C3) and no telemetry field carries yet |
+//! | `p2pcd_requests` | Σ signed SPDUs carrying a P2PCD learning request (out-of-band or inline), `node.p2pcd` / window | 1/s | the responses and the certificates learned, which the same records carry; a node whose P2PCD entity is off sends none |
+//! | `digest_misses` | Σ digest-signed messages whose signer was not cached / window | 1/s | what the receiver did next: a missed pseudonym waits for the sender's next certificate, and only an unknown CA certificate starts P2PCD (IEEE 1609.2-2022 clause 8). This was `p2pcd_requests` before 2026-10-25 |
 //! | `full_cert_share` | messages carrying a full certificate / all messages | ratio | peer-to-peer certificate distribution responses, which carry certificates outside the ordinary message flow |
 //! | `envelope_overhead` | Σ envelope bytes / Σ payload bytes | ratio | network and MAC headers, which are neither envelope nor payload; and it is a **ratio of sums**, so it carries no confidence interval |
 //! | `revocation_latency_stage` | t(stage) − t(previous stage) for one revocation | s | a revocation whose stages a protocol does not emit: a missing stage produces no sample, and invariant I-P4 is what reports the omission |
@@ -31,8 +32,8 @@ use v2xw_core::time::{Duration, SimTime};
 
 use crate::cards;
 use crate::channels::{
-    ChannelView, NodeTelemetryView, NodeTxView, NodeVerifyView, ProtoRevocationView, SignerId,
-    VerifyOutcome, decode,
+    ChannelView, NodeP2pcdView, NodeTelemetryView, NodeTxView, NodeVerifyView, ProtoRevocationView,
+    SignerId, VerifyOutcome, decode,
 };
 use crate::def::{Agg, DEFAULT_LEVEL, Dim, DimValue, Dims, MetricDef, MetricSample, SampleValue};
 use crate::provider::{Decoded, MetricProvider};
@@ -88,8 +89,14 @@ pub struct SecurityProvider {
     unverified: Proportion,
     /// Messages, and whether they carried a full certificate.
     full_cert: Proportion,
-    /// P2PCD requests the nodes issued in this window, and whether any node reported.
-    p2pcd: Option<u64>,
+    /// Digest-signed messages from uncached signers in this window, and whether any node
+    /// reported its telemetry.
+    digest_misses: Option<u64>,
+    /// P2PCD learning requests the nodes sent in this window (`node.p2pcd`).
+    p2pcd_requests: u64,
+    /// Whether any `node.p2pcd` record has been read: a run with no P2PCD entity reports
+    /// no rate rather than a zero.
+    p2pcd_seen: bool,
     /// Envelope and payload bytes, as integers.
     envelope_bytes: u64,
     payload_bytes: u64,
@@ -123,7 +130,9 @@ impl SecurityProvider {
             queue_depth: Distribution::new(),
             unverified: Proportion::new(),
             full_cert: Proportion::new(),
-            p2pcd: None,
+            digest_misses: None,
+            p2pcd_requests: 0,
+            p2pcd_seen: false,
             envelope_bytes: 0,
             payload_bytes: 0,
             envelope_messages: 0,
@@ -181,8 +190,13 @@ impl SecurityProvider {
             ),
             v2xw_core::card::Equation::new(
                 "p2pcd_requests",
-                "p2pcd_requests = Σ peer-to-peer certificate requests the nodes issued / \
-                 window length, in 1/s",
+                "p2pcd_requests = Σ signed SPDUs carrying a P2PCD learning request \
+                 (p2pcdLearningRequest or inlineP2pcdRequest) / window length, in 1/s",
+            ),
+            v2xw_core::card::Equation::new(
+                "digest_misses",
+                "digest_misses = Σ digest-signed messages whose signer certificate the \
+                 receiver had not cached / window length, in 1/s",
             ),
             v2xw_core::card::Equation::new(
                 "envelope_overhead",
@@ -334,15 +348,33 @@ impl SecurityProvider {
                 Agg::Rate,
                 Visibility::Node,
                 Quantum::COUNT,
-                "Peer-to-peer certificate distribution requests per second, all nodes: a \
-                 message signed with a certificate digest whose certificate the receiver \
-                 had not cached (IEEE 1609.2-2022 clause 8). Attaching the full \
-                 certificate more often lowers it.",
+                "Peer-to-peer certificate distribution requests per second, all nodes: \
+                 signed SPDUs carrying a learning request for a certificate the sender \
+                 could not resolve, out-of-band (p2pcdLearningRequest) or inline \
+                 (inlineP2pcdRequest), IEEE 1609.2-2022 clause 8. Before 2026-10-25 this \
+                 name counted digest misses, which are now `digest_misses`.",
             )
             .with_dims([Dim::T])
             .with_source(sec22.clone())
             .with_min_samples(1)
-            .not_accounting_for("the responses, which this build does not send"),
+            .not_accounting_for("the responses and the certificates learned")
+            .not_accounting_for("nodes whose P2PCD entity is off, which send none"),
+            MetricDef::new(
+                "digest_misses",
+                "1/s",
+                Agg::Rate,
+                Visibility::Node,
+                Quantum::COUNT,
+                "Digest-signed messages per second, all nodes, whose signer certificate \
+                 the receiver had not cached. Attaching the full certificate more often \
+                 lowers it. Not a P2PCD request: a missed pseudonym waits for the \
+                 sender's next certificate (IEEE 1609.2-2022 clause 8). Named \
+                 `p2pcd_requests` before 2026-10-25.",
+            )
+            .with_dims([Dim::T])
+            .with_source(sec22.clone())
+            .with_min_samples(1)
+            .not_accounting_for("what the receiver did next"),
             MetricDef::new(
                 "envelope_overhead",
                 "ratio",
@@ -475,9 +507,17 @@ impl SecurityProvider {
         if let Some(d) = v.verify_queue_depth {
             self.queue_depth.observe(d as f64);
         }
-        if let Some(n) = v.p2pcd_requests {
-            *self.p2pcd.get_or_insert(0) += u64::from(n);
+        if let Some(n) = v.digest_misses {
+            *self.digest_misses.get_or_insert(0) += u64::from(n);
         }
+    }
+
+    fn on_p2pcd(&mut self, v: &NodeP2pcdView) {
+        self.p2pcd_seen = true;
+        self.p2pcd_requests = self
+            .p2pcd_requests
+            .saturating_add(v.requests_sent)
+            .saturating_add(v.inline_requests_sent);
     }
 
     /// The stage-to-stage latencies that have become measurable and are not yet reported.
@@ -543,6 +583,7 @@ impl MetricProvider for SecurityProvider {
             NodeTxView::channel_name(),
             NodeVerifyView::channel_name(),
             NodeTelemetryView::channel_name(),
+            NodeP2pcdView::channel_name(),
             ProtoRevocationView::channel_name(),
         ]
     }
@@ -568,6 +609,10 @@ impl MetricProvider for SecurityProvider {
             },
             ProtoRevocationView::CHANNEL => match decode::<ProtoRevocationView>(ev) {
                 Ok(v) => self.on_revocation(&v),
+                Err(_) => self.rejected += 1,
+            },
+            NodeP2pcdView::CHANNEL => match decode::<NodeP2pcdView>(ev) {
+                Ok(v) => self.on_p2pcd(&v),
                 Err(_) => self.rejected += 1,
             },
             _ => {}
@@ -636,19 +681,30 @@ impl MetricProvider for SecurityProvider {
 
         // Only a window in which some node reported its telemetry has a rate; a run whose
         // nodes publish no telemetry reports nothing rather than a zero.
-        if let Some(n) = self.p2pcd.take() {
-            let value = match secs {
-                Some(s) => Estimate::Value {
-                    point: (n as f64) / s,
-                    n,
-                },
-                None => Estimate::Insufficient { n, required: 1 },
-            };
+        let rate = |n: u64| match secs {
+            Some(s) => Estimate::Value {
+                point: (n as f64) / s,
+                n,
+            },
+            None => Estimate::Insufficient { n, required: 1 },
+        };
+        if let Some(n) = self.digest_misses.take() {
+            out.push(MetricSample::new(
+                &self.def("digest_misses"),
+                at,
+                Dims::new(),
+                SampleValue::Scalar(rate(n)),
+            ));
+        }
+        // Every window once a P2PCD entity has reported: a window in which none sent a
+        // request is a measured zero, not a gap.
+        if self.p2pcd_seen {
+            let n = core::mem::take(&mut self.p2pcd_requests);
             out.push(MetricSample::new(
                 &self.def("p2pcd_requests"),
                 at,
                 Dims::new(),
-                SampleValue::Scalar(value),
+                SampleValue::Scalar(rate(n)),
             ));
         }
 
@@ -732,6 +788,35 @@ mod tests {
         p.validate_defs().unwrap();
         p.card().validate().unwrap();
         p.card().check_api_version().unwrap();
+    }
+
+    /// audit-db1-3 O-1: `p2pcd_requests` is the learning requests the P2PCD entities sent
+    /// (`node.p2pcd`), and the digest-miss count it used to be is `digest_misses`; a
+    /// recording written before the rename names the telemetry field `p2pcd_requests`,
+    /// which still reads as the miss count.
+    #[test]
+    fn p2pcd_requests_counts_requests_sent_and_digest_misses_the_cache_misses() {
+        let mut p = SecurityProvider::new(0).with_min_samples(1);
+        p.on_event(&rec(
+            "node.telemetry",
+            json!({"t": 1_000_000_000u64, "node": 1, "digest_misses": 30}),
+        ));
+        // The pre-rename spelling of the same field.
+        p.on_event(&rec(
+            "node.telemetry",
+            json!({"t": 1_500_000_000u64, "node": 2, "p2pcd_requests": 10}),
+        ));
+        p.on_event(&rec(
+            "node.p2pcd",
+            json!({"t": 1_200_000_000u64, "node": 1, "flavor": "out-of-band",
+                   "triggers": 3, "requests_sent": 1, "inline_requests_sent": 1}),
+        ));
+        let s = p.flush(2_000_000_000);
+        assert_eq!(sample(&s, "digest_misses").value.point(), Some(20.0));
+        assert_eq!(sample(&s, "p2pcd_requests").value.point(), Some(1.0));
+        // A later window with no request is a measured zero.
+        let s = p.flush(4_000_000_000);
+        assert_eq!(sample(&s, "p2pcd_requests").value.point(), Some(0.0));
     }
 
     /// Four verifications in a 2 s window at 1.2 ms each: a rate of 2/s and a mean cost of

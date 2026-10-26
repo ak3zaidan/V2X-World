@@ -901,7 +901,7 @@ over `window_ns`.
 | 88 | 4 | `u32` | `crl_entries` | entries | NODE |
 | 92 | 4 | `u32` | `outbox_msgs` | pending reports | NODE |
 | 96 | 4 | `u32` | `peer_cache_entries` | peer certificate cache size | NODE |
-| 100 | 4 | `u32` | `p2pcd_requests` | count in window | NODE |
+| 100 | 4 | `u32` | `digest_misses` (alias `p2pcd_requests`, its name before 2026-10-25): digest-signed messages whose signer was not cached; not P2PCD requests | count in window | NODE |
 | 104 | 4 | `u32` | `full_cert_msgs` | messages sent carrying a full certificate | NODE |
 | 108 | 4 | `f32` | `msgs_in_per_s` | 1/s (delivered to the stack) | NODE |
 | 112 | 4 | `f32` | `msgs_out_per_s` | 1/s | NODE |

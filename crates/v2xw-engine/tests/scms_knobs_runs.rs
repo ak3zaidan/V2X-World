@@ -25,7 +25,7 @@ struct Pki(Vec<(String, Value)>);
 
 impl RunRecorder for Pki {
     fn write(&mut self, _at: SimTime, r: &OwnedRecord) {
-        if r.channel == "pki.flow" || r.channel == "pki.case" {
+        if r.channel == "pki.flow" || r.channel == "pki.case" || r.channel == "ma.decision" {
             let mut v: Value = serde_json::from_slice(&r.json).expect("json");
             if let Some(m) = v.as_object_mut() {
                 m.remove("pdus");
@@ -341,6 +341,48 @@ fn the_ma_review_delays_every_revocation() {
         revocation_s(b)
     );
     assert!(v.report.phase2.crls_issued <= b.report.phase2.crls_issued);
+}
+
+/// When each `ma.decision` record is stamped, s.
+fn ma_decisions_s(o: &Out) -> Vec<f64> {
+    o.pki
+        .iter()
+        .filter(|(c, _)| c == "ma.decision")
+        .filter_map(|(_, v)| v["t"].as_u64())
+        .map(|t| t as f64 / 1e9)
+        .collect()
+}
+
+#[test]
+fn ma_decision_is_the_operators_decision_after_the_review() {
+    // audit-mbpipe: `ma.decision` was stamped when the MA pipeline recommended, 8 h before
+    // the operator's decision under ManualReview, so `time_to_decision` and the
+    // vehicle-level det_* cells counted decisions not yet taken. The record is the
+    // case's `decision` stage: the review moves the first one by the review (the run is
+    // identical up to the first recommendation), and every one is a case's decision.
+    let (b, v) = (base(), with(json!({"ma_review_s": 60})));
+    let (db, dv) = (ma_decisions_s(b), ma_decisions_s(&v));
+    let first = |d: &[f64]| d.iter().copied().fold(f64::INFINITY, f64::min);
+    assert!(!db.is_empty() && !dv.is_empty(), "both decide");
+    assert!(
+        first(&dv) >= first(&db) + 59.0,
+        "{} vs {}",
+        first(&dv),
+        first(&db)
+    );
+    let stages: Vec<f64> = v
+        .pki
+        .iter()
+        .filter(|(c, x)| c == "pki.case" && x["stage"] == "decision")
+        .filter_map(|(_, x)| x["t"].as_u64())
+        .map(|t| t as f64 / 1e9)
+        .collect();
+    for t in &dv {
+        assert!(
+            stages.contains(t),
+            "ma.decision at {t} s is no case's decision"
+        );
+    }
 }
 
 #[test]

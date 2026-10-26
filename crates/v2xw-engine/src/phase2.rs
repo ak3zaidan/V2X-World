@@ -1627,6 +1627,10 @@ pub struct Phase2Report {
     pub revoked_by_provider: BTreeMap<String, u64>,
     /// Reports the access link lost.
     pub reports_lost: u64,
+    /// Relayed report frames a unit decoded after the report's upload was already
+    /// confirmed (a retransmission sent before the confirmation): discarded by the
+    /// upload's session, not forwarded a second time.
+    pub reports_relay_duplicates: u64,
     /// How many reached the Location Obscurer Proxy.
     pub reports_received: u64,
     /// How many the authority ingested, after the RA's shuffle.
@@ -1816,8 +1820,9 @@ pub struct Phase2Report {
     /// Revocation decisions the authority took about an honest device (ground truth),
     /// counted at the decision and before the backend carried it out.
     pub decisions_honest: u64,
-    /// Per attacker the authority decided to revoke: its first falsified claim to the
-    /// first report about it, ns, in decision order.
+    /// Per attacker the authority decided to revoke: its attack onset (the first action
+    /// that changed bytes on the air) to the earliest report about it at or after the
+    /// onset, ns, in decision order. No sample for an attacker reported only before it.
     pub onset_to_detection_ns: Vec<u64>,
     /// Per attacker the authority decided to revoke: the first report about it to the
     /// authority's decision, ns, in decision order.
@@ -1870,14 +1875,21 @@ pub struct AttackerOutcome {
     pub node: u32,
     /// The attack model it ran.
     pub attack: String,
-    /// Its first falsified claim, ns of simulated time.
+    /// Its attack onset, ns: its first action that changed bytes on the air, the onset
+    /// `time_to_detect` uses (it was the first falsified claim by the 07-threats §4 label
+    /// rule, which can come hours later; CV.attack-onset).
     pub onset_ns: Option<u64>,
+    /// Its first falsified claim by the 07-threats §4 label rule, ns.
+    pub first_falsified_ns: Option<u64>,
     /// Its last falsified claim, ns: with the onset, how long it was on the air lying.
     pub last_falsified_ns: Option<u64>,
     /// Falsified claims it signed.
     pub falsified_claims: u64,
     /// The first report any receiver filed about it, ns.
     pub first_reported_ns: Option<u64>,
+    /// The earliest report about it at or after its onset, ns: the detection
+    /// `onset_to_detection_ns` and `time_to_detect` measure to.
+    pub first_detected_ns: Option<u64>,
     /// Reports filed about it.
     pub reports: u64,
     /// Distinct pseudonyms of its that those reports named.
@@ -1907,6 +1919,33 @@ pub struct PkiTick {
 /// `pki.knowledge` is published every this many backend views: what an entity holds
 /// changes slowly and each record lists rows.
 pub const KNOWLEDGE_EVERY: u32 = 10;
+
+/// The longest a `backend.state`, `pki.state` or `pki.knowledge` snapshot that has not
+/// changed goes unrepeated, simulated seconds.
+///
+/// Each is a whole snapshot, and a reader takes the newest at or before an instant (the
+/// server's `inspect.trust`, the Studio's Backend and PKI views), so one equal to the last
+/// written adds nothing but its time. On Q (two days, the PKI view on) writing every one
+/// was 591 MB of JSON over 11,004 backend ticks and most of a 453 s second fast-forward,
+/// with the backend idle (audit-sim-metrics §3 item 4). An unchanged snapshot is now
+/// written again only when this long has passed since the last, so the newest snapshot's
+/// time, and what changes with time alone (a CRL's age, a credential's expiry), is never
+/// more than this stale; every change is written at the view it happens in.
+pub const VIEW_KEYFRAME_S: u64 = 300;
+
+/// The last snapshots written, for [`VIEW_KEYFRAME_S`].
+#[derive(Debug, Default)]
+struct LastViews {
+    backend: Option<BackendView>,
+    pki: Option<v2xw_proto::scms::pki_view::PkiState>,
+    knowledge: BTreeMap<(String, String), v2xw_proto::scms::pki_view::Knowledge>,
+}
+
+/// Whether a snapshot taken at `now` repeats `last` and the keyframe is not yet due:
+/// `same` compares them with the time fields aligned.
+fn repeats<T>(last: Option<&T>, at: impl Fn(&T) -> SimTime, now: SimTime, same: bool) -> bool {
+    last.is_some_and(|l| same && now < at(l).saturating_add(VIEW_KEYFRAME_S * 1_000_000_000))
+}
 
 /// Rows per list in a `pki.knowledge` record (totals are uncapped).
 pub const KNOWLEDGE_ROWS: usize = 64;
@@ -2078,9 +2117,17 @@ pub struct Phase2 {
     report_log: Option<ReportLog>,
     /// Views published, for the knowledge cadence.
     views: u32,
+    /// The last `backend.state`, `pki.state` and `pki.knowledge` records written, with
+    /// when, so an unchanged snapshot is not written again ([`VIEW_KEYFRAME_S`]).
+    last_views: LastViews,
     /// Ground truth for the run report only, never read by a decision: each attacker's
     /// first falsified claim, each subject's first report, each subject's decision.
     first_falsified: BTreeMap<NodeId, SimTime>,
+    /// Per attacker, its first action that changed bytes on the air: the attack onset,
+    /// as `time_to_detect` reads it from `gt.attack.action` (CV.attack-onset).
+    first_on_air: BTreeMap<NodeId, SimTime>,
+    /// Per attacker, its earliest report at or after that onset.
+    first_detected: BTreeMap<NodeId, SimTime>,
     first_reported: BTreeMap<NodeId, SimTime>,
     decided: BTreeMap<NodeId, SimTime>,
     /// Per attacker (ground truth, run report only): `(last falsified claim, falsified
@@ -2845,10 +2892,13 @@ impl Phase2 {
             pki: pki_view_of(scenario).then(v2xw_proto::scms::pki_view::PkiTracker::default),
             report_log: report_records_of(scenario).then(ReportLog::default),
             views: 0,
+            last_views: LastViews::default(),
             compromised_specs,
             compromised: BTreeMap::new(),
             compromised_nodes: BTreeMap::new(),
             first_falsified: BTreeMap::new(),
+            first_on_air: BTreeMap::new(),
+            first_detected: BTreeMap::new(),
             first_reported: BTreeMap::new(),
             decided: BTreeMap::new(),
             attacker_lies: BTreeMap::new(),
@@ -3995,6 +4045,9 @@ impl Phase2 {
         }
         let id = slot.id.clone();
         v2xw_threat::log_actions(ctx, believed_time, actor, &id, &actions, Some(msg));
+        if actions.iter().any(|a| a.changed_bytes_on_air()) {
+            self.first_on_air.entry(node).or_insert(believed_time);
+        }
         if v2xw_threat::is_falsified(&honest, &out, believed_time, StationType::Vehicle) {
             self.report.falsified_claims += 1;
             self.first_falsified.entry(node).or_insert(believed_time);
@@ -4227,6 +4280,15 @@ impl Phase2 {
         } else {
             self.report.reports_about_honest += 1;
         }
+        // A report detects the attack only from its onset on, and reports are filed out
+        // of time order within a step: the earliest one at or after the onset.
+        if attacker
+            && let Some(&onset) = self.first_on_air.get(&subject)
+            && at >= onset
+        {
+            let d = self.first_detected.entry(subject).or_insert(at);
+            *d = (*d).min(at);
+        }
         if let std::collections::btree_map::Entry::Vacant(e) = self.first_reported.entry(subject) {
             e.insert(at);
             if attacker {
@@ -4251,11 +4313,17 @@ impl Phase2 {
             self.report
                 .detection_to_decision_ns
                 .push(at.saturating_sub(*first));
-            if let Some(onset) = self.first_falsified.get(&subject) {
-                self.report
-                    .onset_to_detection_ns
-                    .push(first.saturating_sub(*onset));
-            }
+        }
+        // From the first action that changed bytes on the air to the earliest report at
+        // or after it, as `time_to_detect`. It read the 07-threats label onset, which in Q
+        // came 43,127 s after node 303's first change, so a report before it saturated
+        // the latency to 0 (audit-sim-metrics CV.attack-onset); an attacker reported
+        // only before its onset contributes no sample, as there.
+        if let (Some(onset), Some(first)) = (
+            self.first_on_air.get(&subject),
+            self.first_detected.get(&subject),
+        ) {
+            self.report.onset_to_detection_ns.push(first - onset);
         }
     }
 
@@ -4555,7 +4623,7 @@ impl Phase2 {
                 left: log.left.get(node).copied().unwrap_or(now),
                 attacker: attacker.is_some(),
                 attack_start: attacker
-                    .map(|a| self.first_falsified.get(node).copied().unwrap_or(a.from)),
+                    .map(|a| self.first_on_air.get(node).copied().unwrap_or(a.from)),
             });
         }
         (fates, received, exposure)
@@ -4786,6 +4854,24 @@ impl Phase2 {
             n.relay_retry_at = now.saturating_add(rto);
             n.relay_unacked = n.relay_unacked.saturating_add(1);
         }
+    }
+
+    /// Whether `node`'s store still holds `report_id`, unconfirmed: what a relaying unit's
+    /// IP stack learns from the upload's own session. A retransmission of a report a unit
+    /// already confirmed is a duplicate the session discards; forwarded, it reached the
+    /// RA twice, and its second build found its evidence spent and was counted as a
+    /// report not filed (audit-mbpipe: `reports_sent` 15 off, `reports_received` 15 over
+    /// the uploads).
+    #[must_use]
+    pub fn relay_pending(&self, node: NodeId, report_id: &str) -> bool {
+        self.nodes
+            .get(&node)
+            .is_some_and(|n| n.outbox.0.contains_where(|(r, _)| r.report_id == report_id))
+    }
+
+    /// Counts a relayed report frame a unit decoded for an upload already confirmed.
+    pub fn note_relay_duplicate(&mut self) {
+        self.report.reports_relay_duplicates += 1;
     }
 
     /// A `report-forward` unit took `report_id` from `node` onto its backhaul at `now`:
@@ -5243,6 +5329,16 @@ impl Phase2 {
                         None,
                         None,
                     ));
+                    // The authority's decision is the operator's go-ahead, when the case
+                    // enters its `decision` stage (at once under the automatic MA).
+                    if stage == StageId::Decision {
+                        tick.ma_decisions
+                            .push(v2xw_threat::records::MaDecisionRecord {
+                                t,
+                                subject: case.subject_digest.clone(),
+                                decision: "revoke".to_string(),
+                            });
+                    }
                 }
             }
         }
@@ -5641,7 +5737,17 @@ impl Phase2 {
             return;
         }
         self.next_view = self.params.view_interval.after(now);
-        tick.view = Some(self.backend_view(now));
+        let view = self.backend_view(now);
+        let last = self.last_views.backend.as_ref();
+        let same = last.is_some_and(|l| {
+            let mut v = view.clone();
+            v.t = l.t;
+            v == *l
+        });
+        if !repeats(last, |l| l.t, now, same) {
+            self.last_views.backend = Some(view.clone());
+            tick.view = Some(view);
+        }
         self.publish_pki(now, tick);
         self.views = self.views.wrapping_add(1);
     }
@@ -5668,7 +5774,23 @@ impl Phase2 {
         let Some(mut tracker) = self.pki.take() else {
             return;
         };
-        tick.pki.state = pki_view::pki_state(&self.runs, now, &mut tracker);
+        // The trust domain's state, unless it repeats the last one written. A state that
+        // brings certificates the reader has not seen is never a repeat.
+        if let Some(state) = pki_view::pki_state(&self.runs, now, &mut tracker) {
+            let last = self.last_views.pki.as_ref();
+            let same = state.certificates.is_empty()
+                && last.is_some_and(|l| {
+                    let mut s = state.clone();
+                    s.t = l.t;
+                    s.time32 = l.time32;
+                    s.certificates.clone_from(&l.certificates);
+                    s == *l
+                });
+            if !repeats(last, |l| l.t, now, same) {
+                self.last_views.pki = Some(state.clone());
+                tick.pki.state = Some(state);
+            }
+        }
         tick.pki.flows = pki_view::drain_flows(&self.runs, &mut tracker);
         for run in &mut self.runs {
             for p in &mut run.state.pdus {
@@ -5693,7 +5815,17 @@ impl Phase2 {
             for run in &self.runs {
                 for role in pki_view::KNOWLEDGE_ROLES {
                     if let Some(k) = pki_view::knowledge(run, role, now, KNOWLEDGE_ROWS) {
-                        tick.pki.knowledge.push(k);
+                        let key = (k.entity.clone(), k.role.clone());
+                        let last = self.last_views.knowledge.get(&key);
+                        let same = last.is_some_and(|l| {
+                            let mut c = k.clone();
+                            c.t = l.t;
+                            c == *l
+                        });
+                        if !repeats(last, |l| l.t, now, same) {
+                            self.last_views.knowledge.insert(key, k.clone());
+                            tick.pki.knowledge.push(k);
+                        }
                     }
                 }
             }
@@ -6235,12 +6367,20 @@ impl Phase2 {
                     continue;
                 }
                 self.report.ma_revoke_decisions += 1;
-                tick.ma_decisions
-                    .push(v2xw_threat::records::MaDecisionRecord {
-                        t,
-                        subject: subject.clone(),
-                        decision: "revoke".to_string(),
-                    });
+                // The ETSI EA blocks at once. Under the US SCMS this is the pipeline's
+                // recommendation: `ma.decision` is written when the case reaches its
+                // `decision` stage, after the operator's review ([`Phase2::advance`]'s
+                // case loop). It was stamped here, 8 h before the decision under
+                // ManualReview (audit-mbpipe), so `time_to_decision` and the
+                // vehicle-level `det_*` cells counted a decision not yet taken.
+                if self.etsi.is_some() {
+                    tick.ma_decisions
+                        .push(v2xw_threat::records::MaDecisionRecord {
+                            t,
+                            subject: subject.clone(),
+                            decision: "revoke".to_string(),
+                        });
+                }
                 decisions.push((f.subject, subject, run, t));
             }
         }
@@ -7555,10 +7695,12 @@ impl Phase2 {
                 AttackerOutcome {
                     node: node.index(),
                     attack: slot.id.clone(),
-                    onset_ns: self.first_falsified.get(node).copied(),
+                    onset_ns: self.first_on_air.get(node).copied(),
+                    first_falsified_ns: self.first_falsified.get(node).copied(),
                     last_falsified_ns: self.attacker_lies.get(node).map(|l| l.0),
                     falsified_claims: self.attacker_lies.get(node).map_or(0, |l| l.1),
                     first_reported_ns: self.first_reported.get(node).copied(),
+                    first_detected_ns: self.first_detected.get(node).copied(),
                     reports: reports.map_or(0, |r| r.0),
                     pseudonyms_reported: reports.map_or(0, |r| r.1.len() as u64),
                     reports_at_ma: self.attacker_at_ma.get(node).copied().unwrap_or(0),

@@ -1501,7 +1501,10 @@ impl VruDeviceRuntime {
         self.stores.certs.travelled(distance_travelled_m);
         self.stores.certs.sweep(believed, &self.stores.crl);
         let changes_before = self.stores.certs.changes();
-        let _ = self.stores.certs.rotate(believed);
+        let _ = self
+            .stores
+            .certs
+            .rotate_in_use(believed, self.belief.fix.has_position());
         if self.stores.certs.changes() > changes_before {
             // Every identifier on the air changes together, as on a vehicle (the
             // certificate carries the PSM `id` with it): `msgCnt` restarts at a random
@@ -1564,6 +1567,20 @@ impl VruDeviceRuntime {
                 out.rx_reports.push(RxReport {
                     token: item.token,
                     disposition: RxDisposition::P2pcdResponse,
+                    arrived: item.arrived,
+                    parsed: item.arrived,
+                    verify_start: None,
+                    verify_done: None,
+                });
+                continue;
+            }
+            // A relayed misbehaviour report (PSID 0x26) is for the roadside unit: no
+            // application on a handset registered its PSID, so WSMP discards it (as on a
+            // vehicle, `RxDisposition::PsidNotRegistered`).
+            if frame.msg_type == MsgType::Mbr {
+                out.rx_reports.push(RxReport {
+                    token: item.token,
+                    disposition: RxDisposition::PsidNotRegistered,
                     arrived: item.arrived,
                     parsed: item.arrived,
                     verify_start: None,
@@ -1693,11 +1710,15 @@ impl VruDeviceRuntime {
                 self.cert_checks_due = self.cert_checks_due.saturating_add(1);
             }
             // An evicted certificate takes its validated state with it (crate::rxval).
-            if let Some(gone) = self.stores.peers.learn(&signer) {
+            if let Some(gone) = self
+                .stores
+                .peers
+                .learn_attached(&signer, frame.signer_certificate.as_ref())
+            {
                 self.security.trust_mut().forget(gone);
             }
         } else if !self.stores.peers.touch(&signer) {
-            self.stores.peers.record_p2pcd_request();
+            self.stores.peers.record_digest_miss();
         }
     }
 
@@ -2316,7 +2337,7 @@ impl VruDeviceRuntime {
             crl_entries: self.stores.crl.entries() as u32,
             outbox_msgs: self.stores.outbox.len() as u32,
             peer_cache_entries: self.stores.peers.len() as u32,
-            p2pcd_requests: self.stores.peers.p2pcd_requests(),
+            digest_misses: self.stores.peers.digest_misses(),
             gnss_sigma_m: self.belief.semi_major_m as f32,
             gnss_hdop: f32::NAN,
             clock_drift_ppm: self.clock.drift_ppm() as f32,

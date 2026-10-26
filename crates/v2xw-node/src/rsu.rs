@@ -1412,11 +1412,15 @@ impl RsuRuntime {
         };
         if frame.full_certificate {
             // An evicted certificate takes its validated state with it (crate::rxval).
-            if let Some(gone) = self.stores.peers.learn(&signer) {
+            if let Some(gone) = self
+                .stores
+                .peers
+                .learn_attached(&signer, frame.signer_certificate.as_ref())
+            {
                 self.security.trust_mut().forget(gone);
             }
         } else if !self.stores.peers.touch(&signer) {
-            self.stores.peers.record_p2pcd_request();
+            self.stores.peers.record_digest_miss();
         }
     }
 
@@ -1869,7 +1873,7 @@ impl RsuRuntime {
             crl_entries: self.stores.crl.entries() as u32,
             outbox_msgs: u32::try_from(self.forward.len()).unwrap_or(u32::MAX),
             peer_cache_entries: self.stores.peers.len() as u32,
-            p2pcd_requests: self.stores.peers.p2pcd_requests(),
+            digest_misses: self.stores.peers.digest_misses(),
             gnss_sigma_m: self.belief.semi_major_m as f32,
             gnss_hdop: f32::NAN,
             clock_drift_ppm: self.clock.drift_ppm() as f32,

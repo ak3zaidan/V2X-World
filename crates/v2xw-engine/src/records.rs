@@ -330,7 +330,15 @@ impl NodeTx {
             pseudonym: None,
             content: None,
             radio: None,
+            report_id: None,
         })
+    }
+
+    /// Names the misbehaviour report a relayed report frame carries.
+    #[must_use]
+    pub fn with_report_id(mut self, id: Option<String>) -> Self {
+        self.0.report_id = id;
+        self
     }
 
     /// Fills in the transmitter's congestion-control state when the frame went out.

@@ -2877,8 +2877,8 @@ fn apply_reported(row: &mut NodeTelemetry, view: &NodeTelemetryView) {
     if let Some(n) = view.nbr_verified {
         row.nbr_verified = n;
     }
-    if let Some(n) = view.p2pcd_requests {
-        row.p2pcd_requests = n;
+    if let Some(n) = view.digest_misses {
+        row.digest_misses = n;
     }
 }
 

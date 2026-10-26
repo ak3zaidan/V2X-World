@@ -825,7 +825,7 @@ rows:
   base: M0
   variant: full-cert
   area: metrics
-  measure: m.p2pcd_requests
+  measure: m.digest_misses
   expect: le
   value: 0.0
   source: with a certificate on every frame no receiver needs to ask for one (1609.2a §8.2.4)

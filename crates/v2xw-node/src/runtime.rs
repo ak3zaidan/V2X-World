@@ -199,6 +199,14 @@ pub enum RxDisposition {
     /// the rule is kept so its `node.rx` fate names it rather than reading as a forgery
     /// (in a multi-week run, 97,679 `crl-overdue` refusals were `signature-invalid`).
     Refused(crate::rxval::RxReject),
+    /// Discarded by WSMP because no higher-layer entity on this device registered the
+    /// frame's PSID (IEEE 1609.3-2020: a received WSM is delivered only to the entity that
+    /// registered its PSID). A vehicle or handset has no application for a relayed
+    /// misbehaviour report (PSID 0x26, [SM-MBR] §2.2: the report is for the RSU that
+    /// forwards it), so it never reaches the device's 1609.2 security services and
+    /// nothing is verified (audit-db1-3 O-3: 17 overheard reports were verified at
+    /// first-sight cost, 2,349 µs each).
+    PsidNotRegistered,
     /// Discarded by the IEEE 1609.2 §5.2 relevance check of its `generationTime`
     /// ([`crate::rxval::GenerationTimeWindow`]) before the verification policy: too old
     /// or too far in the future on this node's clock. Nothing was verified, and nothing
@@ -1105,7 +1113,10 @@ impl ObuRuntime {
         self.stores.certs.travelled(distance_travelled_m);
         self.stores.certs.sweep(believed, &self.stores.crl);
         let changes_before = self.stores.certs.changes();
-        let _ = self.stores.certs.rotate(believed);
+        let _ = self
+            .stores
+            .certs
+            .rotate_in_use(believed, self.belief.fix.has_position());
         if self.stores.certs.changes() > changes_before {
             // Every identifier on the air changes together (C2C-CC BSP RS_BSP_182; SAE
             // J2945/1). The certificate carries the `TemporaryID` and the link-layer
@@ -1306,6 +1317,22 @@ impl ObuRuntime {
                 out.rx_reports.push(RxReport {
                     token: stamp.token,
                     disposition: RxDisposition::P2pcdResponse,
+                    arrived,
+                    parsed,
+                    verify_start: None,
+                    verify_done: None,
+                });
+                continue;
+            }
+
+            // A relayed misbehaviour report (PSID 0x26) is addressed to the roadside unit
+            // that forwards it: no application on a vehicle registered its PSID, so WSMP
+            // discards it before the security services see it ([`RxDisposition::
+            // PsidNotRegistered`]). Nothing is learned from its certificate either.
+            if frame.msg_type == MsgType::Mbr {
+                out.rx_reports.push(RxReport {
+                    token: stamp.token,
+                    disposition: RxDisposition::PsidNotRegistered,
                     arrived,
                     parsed,
                     verify_start: None,
@@ -1543,11 +1570,15 @@ impl ObuRuntime {
                 self.cert_checks_due = self.cert_checks_due.saturating_add(1);
             }
             // An evicted certificate takes its validated state with it (crate::rxval).
-            if let Some(gone) = self.stores.peers.learn(&signer) {
+            if let Some(gone) = self
+                .stores
+                .peers
+                .learn_attached(&signer, frame.signer_certificate.as_ref())
+            {
                 self.security.trust_mut().forget(gone);
             }
         } else if !self.stores.peers.touch(&signer) {
-            self.stores.peers.record_p2pcd_request();
+            self.stores.peers.record_digest_miss();
         }
     }
 
@@ -2410,7 +2441,7 @@ impl ObuRuntime {
             crl_entries: self.stores.crl.entries() as u32,
             outbox_msgs: self.stores.outbox.len() as u32,
             peer_cache_entries: self.stores.peers.len() as u32,
-            p2pcd_requests: self.stores.peers.p2pcd_requests(),
+            digest_misses: self.stores.peers.digest_misses(),
             gnss_sigma_m: self.belief.semi_major_m as f32,
             gnss_hdop: f32::NAN,
             clock_drift_ppm: self.clock.drift_ppm() as f32,

@@ -152,14 +152,16 @@ def windows_of(samples, metric):
 # With fault=True it first applies the row's injected fault to its own copy of the input.
 
 SCMS_WINDOWED = ['verify_rate', 'verify_cost', 'verify_wait', 'verify_queue_depth', 'unverified_ratio',
-                 'full_cert_share', 'p2pcd_requests', 'envelope_overhead', 'security_overhead',
+                 'full_cert_share', 'p2pcd_requests', 'digest_misses', 'envelope_overhead',
+                 'security_overhead',
                  'cert_bytes_share', 'cert_pool_valid', 'backend_link_up', 'bytes_backend',
                  'bytes_backhaul', 'bytes_uu_ul', 'bytes_uu_dl', 'linkability', 'pseudonym_change_rate',
                  'det_tp', 'det_fp', 'det_fn', 'det_tn', 'det_recall', 'det_precision', 'det_fpr',
                  'det_f1', 'det_accuracy', 'time_to_detect', 'time_to_decision', 'false_accusations',
                  'crl_entries', 'crl_bytes', 'e2e_latency', 'latency_stage']
 
-UNITS = {'verify_rate': '1/s', 'p2pcd_requests': '1/s', 'bytes_backend': 'B/s', 'bytes_backhaul': 'B/s',
+UNITS = {'verify_rate': '1/s', 'p2pcd_requests': '1/s', 'digest_misses': '1/s',
+         'bytes_backend': 'B/s', 'bytes_backhaul': 'B/s',
          'bytes_uu_ul': 'B/s', 'bytes_uu_dl': 'B/s', 'unverified_ratio': 'ratio', 'full_cert_share': 'ratio',
          'envelope_overhead': 'ratio', 'security_overhead': 'ratio', 'cert_bytes_share': 'ratio',
          'backend_link_up': 'ratio', 'linkability': 'ratio', 'cert_pool_valid': 'count',
@@ -372,32 +374,65 @@ def c_cert_pool_valid(run, fault):
     return f'{n} windows equal'
 
 
-def c_p2pcd_requests(run, fault):
+def c_digest_misses(run, fault):
+    # Σ node.telemetry digest_misses / window: digest-signed messages from uncached signers
+    # (the metric was named p2pcd_requests before 2026-10-25, and so was the field).
     rows = run.ch('node.telemetry')
     acc = collections.Counter()
     seen = set()
     first = True
     for lt, d in rows:
-        if d.get('p2pcd_requests') is None:
+        x = d.get('digest_misses', d.get('p2pcd_requests'))
+        if x is None:
             continue
-        x = d['p2pcd_requests']
         if fault and first and lt > 40 * NS:
             x += 1
             first = False
         acc[wend(lt)] += x
         seen.add(wend(lt))
+    idx = sample_index(run.samples, 'digest_misses')
+    n = 0
+    for (t, _dk), s in idx.items():
+        v = s['value']
+        need(v['n'] == acc[t], f'digest_misses at {t / NS:.0f} s: n {v["n"]} vs telemetry sum {acc[t]}')
+        need(close(v['point'], acc[t] / wlen(t), s['quantum']), f'digest_misses at {t / NS:.0f} s point {v["point"]} vs {acc[t] / wlen(t)}')
+        n += 1
+    windows = set(windows_of(run.samples, 'verify_queue_depth'))
+    missing = sorted(t for t in seen & windows if (t, '{}') not in idx)
+    need(not missing, f'digest_misses missing in windows with telemetry: {missing[:3]}')
+    need(n > 0, 'no digest_misses samples')
+    return f'{n} windows equal'
+
+
+def c_p2pcd_requests(run, fault):
+    # Σ node.p2pcd (requests_sent + inline_requests_sent) / window: the learning requests
+    # the P2PCD entities sent (IEEE 1609.2 clause 8). Every window from the first
+    # node.p2pcd record on has a sample, zero included.
+    rows = run.ch('node.p2pcd')
+    acc = collections.Counter()
+    first_w = None
+    faulted = False
+    for lt, d in rows:
+        x = d.get('requests_sent', 0) + d.get('inline_requests_sent', 0)
+        if fault and not faulted:
+            x += 1
+            faulted = True
+        acc[wend(lt)] += x
+        first_w = wend(lt) if first_w is None else min(first_w, wend(lt))
     idx = sample_index(run.samples, 'p2pcd_requests')
     n = 0
     for (t, _dk), s in idx.items():
         v = s['value']
-        need(v['n'] == acc[t], f'p2pcd_requests at {t / NS:.0f} s: n {v["n"]} vs telemetry sum {acc[t]}')
-        need(close(v['point'], acc[t] / wlen(t), s['quantum']), f'p2pcd at {t / NS:.0f} s point {v["point"]} vs {acc[t] / wlen(t)}')
+        need(v['n'] == acc[t], f'p2pcd_requests at {t / NS:.0f} s: n {v["n"]} vs node.p2pcd sum {acc[t]}')
+        need(close(v['point'], acc[t] / wlen(t), s['quantum']), f'p2pcd_requests at {t / NS:.0f} s point {v["point"]} vs {acc[t] / wlen(t)}')
         n += 1
+    if first_w is None:
+        need(n == 0, f'{n} p2pcd_requests samples without a node.p2pcd record')
+        return 'no P2PCD entity reported: no samples'
     windows = set(windows_of(run.samples, 'verify_queue_depth'))
-    missing = sorted(t for t in seen & windows if (t, '{}') not in idx)
-    need(not missing, f'p2pcd_requests missing in windows with telemetry: {missing[:3]}')
-    need(n > 0, 'no p2pcd_requests samples')
-    return f'{n} windows equal'
+    missing = sorted(t for t in windows if t >= first_w and (t, '{}') not in idx)
+    need(not missing, f'p2pcd_requests missing in windows after the first node.p2pcd: {missing[:3]}')
+    return f'{n} windows equal, {sum(acc.values())} requests'
 
 
 def c_bytes_buckets(run, fault):

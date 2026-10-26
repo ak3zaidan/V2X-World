@@ -93,7 +93,7 @@ fn every_telemetry_field_round_trips_and_has_a_sentinel() {
     full.crl_entries = 30;
     full.outbox_msgs = 4;
     full.peer_cache_entries = 55;
-    full.p2pcd_requests = 2;
+    full.digest_misses = 2;
     full.full_cert_msgs = 9;
     full.msgs_in_per_s = 37.5;
     full.msgs_out_per_s = 10.0;

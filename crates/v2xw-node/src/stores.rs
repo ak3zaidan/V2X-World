@@ -161,6 +161,10 @@ impl RotationPolicy {
 pub struct CertStore {
     creds: Vec<CredentialHandle>,
     last_change: Option<SimTime>,
+    /// When the device first had a position fix and began to use its pseudonym
+    /// ([`CertStore::rotate_in_use`]): the first pseudonym's age and distance count from
+    /// here, not from the run's start.
+    in_use_since: Option<SimTime>,
     distance_since_change_m: f64,
     changes: u32,
     policy: Option<RotationPolicy>,
@@ -273,7 +277,35 @@ impl CertStore {
     /// transmitting, which the caller sees as `Some(reason)` with
     /// [`CertStore::active`] still `None`.
     pub fn rotate(&mut self, now: SimTime) -> Option<ChangeReason> {
-        let reason = self.change_due(now)?;
+        self.rotate_when(now, true)
+    }
+
+    /// [`CertStore::rotate`] for a device whose first pseudonym is in use from its first
+    /// position fix: the policy's age and distance count from that instant, and before it
+    /// only an expired or revoked credential is replaced.
+    ///
+    /// A vehicle's pool is active before it reaches the road. Counted from the run's
+    /// start, the first change under the time rule came the step a vehicle joined, before
+    /// its first frame (46 of 152 changes in audit-db1-3 run B, O-4), and no observer could
+    /// see the pseudonym it left. A device that sends no BSM without a fix (SAE J2945/1
+    /// §6.3) has used no pseudonym until it has one, so that is where its age begins: the
+    /// change-at-ignition practice, with the device's arrival as its ignition.
+    pub fn rotate_in_use(&mut self, now: SimTime, has_fix: bool) -> Option<ChangeReason> {
+        if has_fix && self.in_use_since.is_none() {
+            self.in_use_since = Some(now);
+            self.distance_since_change_m = 0.0;
+        }
+        let policy_applies = self.in_use_since.is_some() || self.last_change.is_some();
+        self.rotate_when(now, policy_applies)
+    }
+
+    /// When the device first used its pseudonym ([`CertStore::rotate_in_use`]).
+    pub fn in_use_since(&self) -> Option<SimTime> {
+        self.in_use_since
+    }
+
+    fn rotate_when(&mut self, now: SimTime, policy_applies: bool) -> Option<ChangeReason> {
+        let reason = self.change_due(now, policy_applies)?;
         let key = |c: &CredentialHandle| (c.i_period, c.j_index, c.valid_from);
         // The credential being left counts as used once, however it became active.
         if let Some(current) = self.creds.first() {
@@ -324,14 +356,16 @@ impl CertStore {
         self.last_reason
     }
 
-    fn change_due(&self, now: SimTime) -> Option<ChangeReason> {
+    fn change_due(&self, now: SimTime, policy_applies: bool) -> Option<ChangeReason> {
         match self.creds.first() {
             None => Some(ChangeReason::Startup),
             Some(c) if c.state == CredState::Revoked => Some(ChangeReason::Revoked),
             Some(c) if !c.is_valid_at(now) => Some(ChangeReason::Expired),
+            Some(_) if !policy_applies => None,
             Some(_) => {
                 let policy = self.policy?;
-                let age = Duration::between(self.last_change.unwrap_or(0), now);
+                let since = self.last_change.or(self.in_use_since).unwrap_or(0);
+                let age = Duration::between(since, now);
                 if !policy.is_due(age, self.distance_since_change_m) {
                     return None;
                 }
@@ -845,7 +879,7 @@ pub struct PeerCertCache {
     /// holds and what they cost it in bytes; `inner` holds the certificates themselves
     /// for a scenario running real ones, and stays empty for one running the size model.
     lru: Vec<[u8; 8]>,
-    p2pcd_requests: u32,
+    digest_misses: u32,
     evictions: u32,
 }
 
@@ -859,7 +893,7 @@ impl PeerCertCache {
             inner: v2xw_sec::PeerCertCache::new(),
             capacity,
             lru: Vec::new(),
-            p2pcd_requests: 0,
+            digest_misses: 0,
             evictions: 0,
         }
     }
@@ -911,6 +945,29 @@ impl PeerCertCache {
         self.note_insert(&digest)
     }
 
+    /// Learns the certificate a frame attached, whatever the frame's PSID: the real
+    /// certificate when the frame carried one beside its sized payload
+    /// ([`crate::runtime::RxFrame::signer_certificate`]), so a later digest-signed SPDU
+    /// from that signer resolves against it; the digest alone otherwise.
+    ///
+    /// The SDS's certificate cache is not per application (IEEE 1609.2-2022 §5.2): a
+    /// pseudonym learned from a relayed misbehaviour report verifies its owner's next
+    /// digest-signed BSM. Before this a frame on the legacy path (a relayed report, a CRL
+    /// broadcast) marked the digest held with no certificate behind it, and the next BSM
+    /// was unverifiable although the cache claimed the signer (audit-db1-3 O-2).
+    pub fn learn_attached(
+        &mut self,
+        digest: &HashedId8,
+        certificate: Option<&std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
+    ) -> Option<[u8; 8]> {
+        if let Some(c) = certificate
+            && let Ok(d) = self.inner.insert(c.clone(), false)
+        {
+            return self.note_insert(&d);
+        }
+        self.note_insert(digest)
+    }
+
     /// Whether the cache holds `digest`, without refreshing its recency.
     pub fn holds(&self, digest: &HashedId8) -> bool {
         self.lru.contains(&key(digest))
@@ -924,9 +981,12 @@ impl PeerCertCache {
         self.inner.get(digest).map(|c| c.certificate.clone())
     }
 
-    /// How many P2PCD requests this node has issued in the window.
-    pub fn p2pcd_requests(&self) -> u32 {
-        self.p2pcd_requests
+    /// How many digest-signed messages this window named a signer this cache did not
+    /// hold. Not a P2PCD request: IEEE 1609.2-2022 clause 8 requests only an unknown CA
+    /// certificate, and a missed pseudonym waits for its next certificate
+    /// (audit-db1-3 O-1). Named `p2pcd_requests` before 2026-10-25.
+    pub fn digest_misses(&self) -> u32 {
+        self.digest_misses
     }
 
     /// How many certificates have been evicted for capacity.
@@ -946,14 +1006,14 @@ impl PeerCertCache {
         true
     }
 
-    /// Records that a lookup missed and a P2PCD request went out.
-    pub fn record_p2pcd_request(&mut self) {
-        self.p2pcd_requests = self.p2pcd_requests.saturating_add(1);
+    /// Records that a digest lookup missed.
+    pub fn record_digest_miss(&mut self) {
+        self.digest_misses = self.digest_misses.saturating_add(1);
     }
 
     /// Clears the window counters.
     pub fn reset_window(&mut self) {
-        self.p2pcd_requests = 0;
+        self.digest_misses = 0;
         self.evictions = 0;
     }
 
@@ -1169,6 +1229,42 @@ mod tests {
         s.travelled(2500.0);
         assert_eq!(s.rotate(800 * NS_PER_S), Some(ChangeReason::Age));
         assert_eq!(s.active().unwrap().j_index, 3);
+    }
+
+    /// audit-db1-3 O-4: a device that joins at 290 s under a 30 s time rule does not
+    /// change pseudonym before its first fix, and its first pseudonym's age counts from
+    /// that fix, not from the run's start; an expired credential is still replaced.
+    #[test]
+    fn the_first_pseudonym_ages_from_the_first_fix_not_the_run_start() {
+        let policy = RotationPolicy {
+            min_age: Duration::from_secs(30),
+            min_distance_m: f64::INFINITY,
+            require_both: false,
+        };
+        let mut s = CertStore::new().with_policy(policy);
+        for j in 0..3 {
+            s.insert(cred(10, j, 0, 1000 * NS_PER_S));
+        }
+        // No fix yet: nothing is due, although 290 s have passed since the run began.
+        assert_eq!(s.rotate_in_use(290 * NS_PER_S, false), None);
+        assert_eq!(s.rotate_in_use(295 * NS_PER_S, false), None);
+        // The first fix at 300 s starts the pseudonym's age.
+        assert_eq!(s.rotate_in_use(300 * NS_PER_S, true), None);
+        assert_eq!(s.in_use_since(), Some(300 * NS_PER_S));
+        assert_eq!(s.rotate_in_use(329 * NS_PER_S, true), None);
+        assert_eq!(
+            s.rotate_in_use(330 * NS_PER_S, true),
+            Some(ChangeReason::Age)
+        );
+        assert_eq!(s.changes(), 1);
+        // Without a fix, an expired credential is still replaced.
+        let mut e = CertStore::new().with_policy(policy);
+        e.insert(cred(10, 0, 0, 100 * NS_PER_S));
+        e.insert(cred(10, 1, 0, 1000 * NS_PER_S));
+        assert_eq!(
+            e.rotate_in_use(200 * NS_PER_S, false),
+            Some(ChangeReason::Expired)
+        );
     }
 
     /// Every credential of the pool is used once before any is used again. The rule

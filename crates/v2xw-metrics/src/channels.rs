@@ -371,6 +371,11 @@ pub struct NodeTxView {
     /// sidelink the congestion state and which HARQ transmission this was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radio: Option<TxRadioView>,
+    /// For a relayed misbehaviour report on the air: the report's id, as the store, the
+    /// unit's forward and the RA's arrival name it, so transmission order joins to the
+    /// store's upload order (audit-mbpipe AU.STORE.order). `None` for every other frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_id: Option<String>,
 }
 
 /// How one transmission went out, in the access layer's own terms (NODE).
@@ -699,9 +704,12 @@ pub mod rx_cause {
     /// or too far in the future on the receiver's clock, IEEE 1609.2 §5.2): discarded
     /// before verification.
     pub const GENERATION_TIME: &str = "generation-time-window";
+    /// WSMP discarded the frame: no higher-layer entity on the receiver registered its
+    /// PSID (IEEE 1609.3), as a vehicle for a relayed misbehaviour report (PSID 0x26).
+    pub const PSID_NOT_REGISTERED: &str = "psid-not-registered";
 
     /// The causes above the PHY, in a fixed order.
-    pub const ABOVE_PHY: [&str; 11] = [
+    pub const ABOVE_PHY: [&str; 12] = [
         REASSEMBLY_FAILED,
         RX_OVERFLOW,
         VERIFY_POLICY_DROP,
@@ -713,6 +721,7 @@ pub mod rx_cause {
         REVOKED,
         RECEIVER_OFF,
         GENERATION_TIME,
+        PSID_NOT_REGISTERED,
     ];
 
     /// True for a cause the PHY decided.
@@ -1382,14 +1391,42 @@ pub struct NodeTelemetryView {
     /// Neighbours in state *verified*.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nbr_verified: Option<u16>,
-    /// Peer-to-peer certificate distribution requests this node issued in the window: a
-    /// digest-signed message whose signer was not cached (IEEE 1609.2-2022 clause 8).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub p2pcd_requests: Option<u32>,
+    /// Digest-signed messages this node received in the window whose signer certificate
+    /// it had not cached. Not a P2PCD request: IEEE 1609.2-2022 clause 8 requests only an
+    /// unknown CA certificate, and a missed pseudonym waits for the sender's next
+    /// certificate (audit-db1-3 O-1, 22-46/s against 0.4-1.3/s real requests). Alias
+    /// `p2pcd_requests`: the field's name before 2026-10-25, when it meant this count, so
+    /// an older recording reads into the right field.
+    #[serde(
+        default,
+        alias = "p2pcd_requests",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub digest_misses: Option<u32>,
 }
 
 impl ChannelView for NodeTelemetryView {
     const CHANNEL: &'static str = "node.telemetry";
+}
+
+/// `node.p2pcd` — what one node's P2PCD entity did in one step (NODE), the counters this
+/// crate reads; the record carries every `v2xw-node::p2pcd::P2pcdStats` counter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeP2pcdView {
+    /// The step's end, node clock.
+    pub t: SimTime,
+    /// The node.
+    pub node: NodeId,
+    /// Signed SPDUs the node sent carrying `p2pcdLearningRequest` (out-of-band).
+    #[serde(default)]
+    pub requests_sent: u64,
+    /// Signed SPDUs the node sent carrying `inlineP2pcdRequest`.
+    #[serde(default)]
+    pub inline_requests_sent: u64,
+}
+
+impl ChannelView for NodeP2pcdView {
+    const CHANNEL: &'static str = "node.p2pcd";
 }
 
 /// `node.drop` — what one node discarded in one step with no frame to record it on (NODE).

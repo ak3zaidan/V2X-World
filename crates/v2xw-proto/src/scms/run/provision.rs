@@ -227,9 +227,14 @@ impl ScmsRun {
             outcome = Self::drain_into(&mut self.state, &mut self.kernel);
         }
         core::mem::swap(&mut self.kernel, &mut real);
+        // Stamped no later than the run's own clock: the scratch kernel's time is the
+        // pre-run exchange's, and leaked into the PKI view as flow times after the instant
+        // that logged them (0.42 s past t = 0, audit-sim-metrics §3 item 2).
+        let run_now = self.kernel.now();
         for p in &mut self.state.pdus[pdu0..] {
             p.step = None;
             p.preload = true;
+            p.at = p.at.min(run_now);
         }
         self.state.params = saved;
         let leftover = core::mem::replace(&mut self.state.ra.jobs, run_jobs);

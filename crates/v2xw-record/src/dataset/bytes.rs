@@ -335,6 +335,7 @@ mod tests {
             pseudonym: None,
             content: None,
             radio: None,
+            report_id: None,
         }
     }
 

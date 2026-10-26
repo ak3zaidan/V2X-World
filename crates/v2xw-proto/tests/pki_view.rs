@@ -219,6 +219,28 @@ fn every_spdu_rides_the_step_that_carried_it() {
     assert!(lone.iter().all(|f| f.flow == "preload"));
 }
 
+/// audit-sim-metrics §3 item 2: a device provisioned before the run starts has its PDUs
+/// logged at t = 0, and their stamps ran on the scratch kernel's clock to 0.42 s, after
+/// the instant that logged them. They are stamped no later than the run's own clock.
+/// Fault that turns it red: the `p.at.min(run_now)` clamp in `ScmsRun::preload_at` removed.
+#[test]
+fn pre_run_pdus_are_stamped_no_later_than_the_run_clock() {
+    let mut p = ScmsParams::default().quick();
+    p.pdu.keep_bytes = true;
+    let mut run = ScmsRun::new(p).expect("certificates encode");
+    run.add_device(DEVICE_A);
+    let now = run.kernel.now();
+    run.preload(DEVICE_A, 0, 1, JMAX).expect("preload");
+    let pre: Vec<_> = run.state.pdus.iter().filter(|p| p.preload).collect();
+    assert!(pre.len() > 2, "the preload emits PDUs");
+    let late: Vec<u64> = pre.iter().map(|p| p.at).filter(|&t| t > now).collect();
+    assert!(
+        late.is_empty(),
+        "{} pre-run PDUs stamped after {now}: {late:?}",
+        late.len()
+    );
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn the_flow_records_carry_each_spdu_once_and_only_its_recipient_reads_it() {

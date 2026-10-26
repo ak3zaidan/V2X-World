@@ -1034,6 +1034,11 @@ impl<T> MbrQueue<T> {
         Some(self.entries.remove(i))
     }
 
+    /// Whether a stored report matches `pick`.
+    pub fn contains_where(&self, pick: impl Fn(&T) -> bool) -> bool {
+        self.entries.iter().any(|e| pick(&e.item))
+    }
+
     /// Deletes unsent reports older than [`Self::max_age_s`], returning them whole.
     pub fn expire_entries(&mut self, now_unix: i64) -> Vec<QueuedReport<T>> {
         let max = self.max_age_s;

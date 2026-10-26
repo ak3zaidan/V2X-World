@@ -52,7 +52,10 @@ rows:
    source: "overhead.rs: sum certificate octets / sum envelope octets, total and per msg_type", fault: add 1 B to one cert,
    verdict: pass}
 - {id: MR.p2pcd_requests, runs: [S, Q, L], check: p2pcd_requests, expect: pass,
-   source: "security.rs: sum node.telemetry p2pcd_requests / window seconds (IEEE 1609.2 P2PCD trigger count)", fault: add 1 to one telemetry row,
+   source: "security.rs: sum node.p2pcd requests_sent + inline_requests_sent / window seconds (IEEE 1609.2 clause 8 learning requests); before 2026-10-25 this name was the digest-miss count, now MR.digest_misses (audit-db1-3 O-1)", fault: add 1 to one node.p2pcd row,
+   verdict: pass, note: "a rate divides by the window length: 5 s for the window after a fast-forward edge; a run with no node.p2pcd record has no sample"}
+- {id: MR.digest_misses, runs: [S, Q, L], check: digest_misses, expect: pass,
+   source: "security.rs: sum node.telemetry digest_misses / window seconds (digest-signed messages from uncached signers; the row was MR.p2pcd_requests before 2026-10-25)", fault: add 1 to one telemetry row,
    verdict: pass, note: "a rate divides by the window length: 5 s for the window after a fast-forward edge"}
 - {id: MR.cert_pool_valid, runs: [S, Q, L], check: cert_pool_valid, expect: pass,
    source: "privacy_metrics.rs: distribution of node.security pool_valid over the window's rows (n, min, max, mean)", fault: set one row's pool_valid to 0,

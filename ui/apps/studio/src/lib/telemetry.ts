@@ -155,7 +155,7 @@ export function hudGroups(t: NodeTelemetry): HudGroup[] {
         { key: "unverified_ratio_pm", label: "unverified delivered", value: permillePct(t.unverifiedRatioPm), raw: u16v(t.unverifiedRatioPm), unit: "per-mille", visibility: "NODE", help: "Share of messages handed to applications without verification." },
         { key: "airtime_ms_per_s", label: "air time", value: `${num(t.airtimeMsPerS, 1)} ms/s`, raw: f32v(t.airtimeMsPerS), unit: "ms/s", visibility: "NODE" },
         { key: "full_cert_msgs", label: "full-cert msgs", value: countU32(t.fullCertMsgs), raw: u32v(t.fullCertMsgs), unit: "count", visibility: "NODE" },
-        { key: "p2pcd_requests", label: "P2PCD requests", value: countU32(t.p2pcdRequests), raw: u32v(t.p2pcdRequests), unit: "count", visibility: "NODE" },
+        { key: "digest_misses", label: "Digest misses", value: countU32(t.p2pcdRequests), raw: u32v(t.p2pcdRequests), unit: "count", visibility: "NODE" },
       ],
     },
     {

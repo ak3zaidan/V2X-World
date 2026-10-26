@@ -885,6 +885,26 @@ struct FrameState {
     cert_frag: Option<crate::frag::FragMeta>,
     /// The GeoNetworking packet the frame carries, when the run forwards on the air.
     gn: Option<gn_air::GnFrame>,
+    /// What the passive privacy observer reads from this frame, handed to it when the
+    /// frame goes on the air ([`Engine::start_frame`]), so a frame the MAC drops is never
+    /// heard and a link claim is never stamped before the frame was sent. It was read
+    /// when the frame was built, at its `ready` instant: on S, 219 of 643 `privacy.link`
+    /// claims were stamped up to 11.7 ms after the step that logged them
+    /// (audit-sim-metrics §3 item 1).
+    privacy_obs: Option<PrivacyObs>,
+}
+
+/// What the passive privacy observer reads from one safety frame on the air: the signer
+/// digest, the claim, its stated confidence and a BSM's `msgCnt`.
+#[derive(Debug, Clone, Copy)]
+struct PrivacyObs {
+    signer: [u8; 8],
+    /// The generation instant on the simulation's timeline.
+    generated: SimTime,
+    /// Position, speed (m/s) and heading (rad) the frame claims.
+    claim: (Vec3, f64, f64),
+    confidence: f64,
+    seq: Option<u8>,
 }
 
 /// What became of a transmission [`Engine::hand_down_app`] was given.
@@ -5447,9 +5467,12 @@ impl Engine {
                 }
             }
         }
-        // The passive privacy observer hears the safety frame as it goes on the air.
-        // Only what a sniffer hears, when the scenario limits the eavesdropper's coverage:
-        // where the transmitter physically is decides that, as it decides reception.
+        // The passive privacy observer hears the safety frame when it goes on the air
+        // ([`Engine::start_frame`]): what it will read is taken here, with the claim the
+        // frame carries. Only what a sniffer hears, when the scenario limits the
+        // eavesdropper's coverage: where the transmitter physically is decides that, as it
+        // decides reception.
+        let mut privacy_obs: Option<PrivacyObs> = None;
         let heard_by_eavesdropper = self.pseudonym_policy.as_ref().is_none_or(|p| {
             let at = self
                 .actor_of(node)
@@ -5470,33 +5493,13 @@ impl Engine {
                 .flatten()
                 .and_then(|f| v2xw_msg::j2735::bsm::decode_message_frame(&f.payload).ok())
                 .map(|m| m.core.msg_cnt);
-            let Engine {
-                scheduler,
-                rng,
-                world,
-                snapshot,
-                provenance,
-                params,
-                phase2,
-                ..
-            } = self;
-            let mut null = crate::ctx::NullRecorder::new();
-            let mut ctx = EngineCtx::new(
-                scheduler, rng, world, snapshot, provenance, params, &mut null,
-            );
-            if let Some(p) = phase2.as_mut() {
-                p.observe_frame(
-                    &mut ctx,
-                    signer,
-                    ready,
-                    t_generated,
-                    claim.0,
-                    claim.1,
-                    claim.2,
-                    confidence,
-                    seq,
-                );
-            }
+            privacy_obs = Some(PrivacyObs {
+                signer,
+                generated: t_generated,
+                claim,
+                confidence,
+                seq,
+            });
         }
         // The positional accuracy the safety message states on the air, for the receivers'
         // detectors: they judge a claim against the sender's own stated accuracy (a BSM's
@@ -5644,6 +5647,7 @@ impl Engine {
             None
         };
         let base = FrameState {
+            privacy_obs,
             signer_certificate,
             tx: node,
             // Filled in when the grant fixes the transmit instant; a frame that is
@@ -5767,6 +5771,10 @@ impl Engine {
                     let psdu = layers.psdu_bytes();
                     let air = air_of(psdu);
                     let mut state = base.clone();
+                    // The observer reads the SDU once, from its first piece on the air.
+                    if k > 0 {
+                        state.privacy_obs = None;
+                    }
                     state.bytes = desc.total_bytes();
                     state.descriptor.bytes = psdu;
                     state.descriptor.sdu_ref = SduRef::new(sdu, seq);
@@ -5937,6 +5945,7 @@ impl Engine {
                 g.heading_rad,
             );
             let mut st = base.clone();
+            st.privacy_obs = None;
             st.bytes = sdu_bytes;
             st.descriptor.bytes = psdu;
             st.descriptor.sdu_ref = SduRef::new(sdu, seq);
@@ -6598,6 +6607,36 @@ impl Engine {
         state.end = handle.end;
         self.on_air_tx.entry(state.tx).or_default().insert(frame);
         self.report.frames_transmitted += 1;
+        // The passive observer hears the frame now that it is on the air.
+        if let Some(o) = state.privacy_obs.take() {
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                phase2,
+                ..
+            } = self;
+            let mut null = crate::ctx::NullRecorder::new();
+            let mut ctx = EngineCtx::new(
+                scheduler, rng, world, snapshot, provenance, params, &mut null,
+            );
+            if let Some(p) = phase2.as_mut() {
+                p.observe_frame(
+                    &mut ctx,
+                    o.signer,
+                    now,
+                    o.generated,
+                    o.claim.0,
+                    o.claim.1,
+                    o.claim.2,
+                    o.confidence,
+                    o.seq,
+                );
+            }
+        }
         // §3.3.4 bit 4: "transmitted at least once in the last mobility step". Set where
         // the preamble actually goes on the air, not where the node decided to send, so
         // a frame the MAC dropped does not light the bit.
@@ -7466,6 +7505,10 @@ impl Engine {
         .with_layers(&state.layers, state.cert_bytes)
         .with_content(Some(hex_digest(&state.signer.0[..])), state.content.clone())
         .with_radio(mcs_index, Some(radio))
+        .with_report_id(match &state.app {
+            Some(AppPayload::Report(r)) => Some(r.report_id.clone()),
+            _ => None,
+        })
         .with_dcc(
             self.dcc
                 .as_ref()
@@ -7544,6 +7587,18 @@ impl Engine {
                     return;
                 }
                 let relayed_id = report.report_id.clone();
+                // A retransmission of an upload a unit has already confirmed: the
+                // session discards the duplicate, and the report goes no further.
+                if !self
+                    .phase2
+                    .as_ref()
+                    .is_some_and(|p| p.relay_pending(tx, &relayed_id))
+                {
+                    if let Some(p) = self.phase2.as_mut() {
+                        p.note_relay_duplicate();
+                    }
+                    return;
+                }
                 // The unit decides what reaches the authority: an honest one forwards the
                 // report, a compromised one may drop it or forward a forgery instead
                 // (`threats.compromised_rsus`).
@@ -9843,6 +9898,7 @@ fn resolve_rx(attempt: NodeRx, report: &RxReport, now: SimTime) -> NodeRx {
         // Unsecured by design (IEEE 1609.2 clause 8): handed to the P2PCD Entity.
         RxDisposition::P2pcdResponse => a.delivered(now, "unsecured", delivered_at),
         RxDisposition::NotRelevant(_) => a.lost(now, rx_cause::GENERATION_TIME),
+        RxDisposition::PsidNotRegistered => a.lost(now, rx_cause::PSID_NOT_REGISTERED),
     }
 }
 
@@ -9978,7 +10034,7 @@ fn telemetry_record(
         cert_active: count(w.cert_active),
         nbr_total: count(w.nbr_total),
         nbr_verified: count(w.nbr_verified),
-        p2pcd_requests: (w.p2pcd_requests != U32_NONE).then_some(w.p2pcd_requests),
+        digest_misses: (w.digest_misses != U32_NONE).then_some(w.digest_misses),
     })
 }
 
