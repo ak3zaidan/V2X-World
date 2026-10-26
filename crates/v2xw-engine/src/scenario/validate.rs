@@ -1440,6 +1440,39 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the permitted left-turn critical gap",
     },
+    // WP-04. Field critical-gap spreads run cv 0.15-0.2 (SUMO P1); 0.5 is past any.
+    Bound {
+        path: "traffic.critical_gap_cv",
+        lo: 0.0,
+        hi: 0.5,
+        exclusive_lo: false,
+        what: "the critical-gap coefficient of variation",
+    },
+    // 0 is off; SUMO's default is 180 s, and an hour is past any junction wait.
+    Bound {
+        path: "traffic.time_to_impatience_s",
+        lo: 0.0,
+        hi: 3600.0,
+        exclusive_lo: false,
+        what: "the time to full impatience",
+    },
+    // A floor of 1 is no impatience; below 0.3 the HCM 4.5 s headway would fall under the
+    // 1.4 s a car needs to clear a lane.
+    Bound {
+        path: "traffic.impatience_gap_floor",
+        lo: 0.3,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the critical-gap floor at full impatience",
+    },
+    // The HCM credits 2 sneakers per cycle; 4 is past what a junction mouth holds.
+    Bound {
+        path: "traffic.permissive_sneakers",
+        lo: 0.0,
+        hi: 4.0,
+        exclusive_lo: false,
+        what: "the sneakers per cycle",
+    },
     // 0 turns the turn-speed limit off; 10 m/s² is about 1 g, past any tyre's grip
     // (SUMO's default is 5.5).
     Bound {
@@ -3565,6 +3598,31 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Heavy vehicles add the HCM 6th ed. Exhibit 20-11 heavy-vehicle critical gap and follow-up terms.",
     },
     KeyStatus {
+        path: "traffic.critical_gap_cv",
+        status: Status::Wired,
+        note: "Each driver's critical gap is lognormal around the HCM value with this coefficient of variation.",
+    },
+    KeyStatus {
+        path: "traffic.time_to_impatience_s",
+        status: Status::Wired,
+        note: "A yielding driver's critical gap falls with standing time, to its floor after this many seconds (SUMO 180 s).",
+    },
+    KeyStatus {
+        path: "traffic.impatience_gap_floor",
+        status: Status::Wired,
+        note: "The critical gap at full impatience as a share of the driver's own.",
+    },
+    KeyStatus {
+        path: "traffic.impatience_foe_braking",
+        status: Status::Wired,
+        note: "An impatient driver judges a foe as if it would brake at impatience times 4.5 m/s².",
+    },
+    KeyStatus {
+        path: "traffic.permissive_sneakers",
+        status: Status::Wired,
+        note: "Permitted left turners per lane that complete the turn in the amber ending a permissive green (HCM: 2).",
+    },
+    KeyStatus {
         path: "traffic.standing_leader_stop",
         status: Status::Wired,
         note: "A driver closing on a standing vehicle brakes to stop at its standstill gap at constant deceleration, as at a stop line.",
@@ -4459,6 +4517,13 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
         for (path, v) in [
             ("traffic.critical_gap_factor", t.critical_gap_factor),
             ("traffic.permitted_left_gap_s", t.permitted_left_gap_s),
+            ("traffic.critical_gap_cv", t.critical_gap_cv),
+            ("traffic.time_to_impatience_s", t.time_to_impatience_s),
+            ("traffic.impatience_gap_floor", t.impatience_gap_floor),
+            (
+                "traffic.permissive_sneakers",
+                t.permissive_sneakers.map(f64::from),
+            ),
             ("traffic.turn_lateral_accel_mps2", t.turn_lateral_accel_mps2),
             ("traffic.turn_curve_window_m", t.turn_curve_window_m),
             ("traffic.lc_strategic", t.lc_strategic),
@@ -4521,6 +4586,11 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             || t.lc_speed_gain.is_some()
             || t.lc_keep_right.is_some()
             || t.heavy_vehicle_gap_terms.is_some()
+            || t.critical_gap_cv.is_some()
+            || t.time_to_impatience_s.is_some()
+            || t.impatience_gap_floor.is_some()
+            || t.impatience_foe_braking.is_some()
+            || t.permissive_sneakers.is_some()
             || t.standing_leader_stop.is_some()
             || t.lane_bend_speed.is_some()
             || t.depart_at_speed.is_some()

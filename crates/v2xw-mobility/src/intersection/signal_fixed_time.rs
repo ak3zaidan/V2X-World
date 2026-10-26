@@ -45,6 +45,7 @@ use v2xw_world::{
     quant::quantise,
 };
 
+use crate::intersection::gap_acceptance::JunctionPatience;
 use crate::intersection::{STOP_LINE_OFFSET_M, on_east_west_axis};
 use crate::traits::IntersectionControl;
 use crate::views::{ConflictView, EntryDecision, JunctionView, PhaseState, VehicleView};
@@ -53,7 +54,7 @@ use crate::views::{ConflictView, EntryDecision, JunctionView, PhaseState, Vehicl
 pub const MODEL_ID: &str = "mobility/intersection/signal-fixed-time";
 
 /// The model version.
-pub const MODEL_VERSION: &str = "1.0.0";
+pub const MODEL_VERSION: &str = "1.1.0";
 
 /// The acceleration a permissive turn assumes the opposing stream — which has the same
 /// green — pulls away with, m/s²: the Kesting 2010 IDM passenger-car maximum
@@ -161,7 +162,35 @@ pub struct SignalPlanParams {
     pub gap_factor: f64,
     /// How far before the stop line a vehicle halts, metres.
     pub stop_line_offset_m: f64,
+    /// Per-driver critical headways and impatience on a permitted left and a right turn
+    /// on red ([`JunctionPatience`]); off by default (`traffic.critical_gap_cv`,
+    /// `traffic.time_to_impatience_s`, `traffic.impatience_gap_floor`,
+    /// `traffic.impatience_foe_braking`).
+    #[serde(skip_serializing_if = "JunctionPatience::is_off")]
+    pub patience: JunctionPatience,
+    /// How many permitted left turners of one lane may complete the turn in the change
+    /// interval that ends a permissive green, the HCM's "sneakers"
+    /// ([`HCM_SNEAKERS_PER_CYCLE`]); 0 is none (`traffic.permissive_sneakers`). See
+    /// [`FixedTimeSignals::sneaker_may_go`].
+    #[serde(skip_serializing_if = "is_zero_u8")]
+    pub sneakers: u8,
 }
+
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
+}
+
+/// The left turners per cycle that clear at the end of a permissive green, the
+/// "sneakers": HCM 6th ed. (2016) ch. 31 / 7th ed. ch. 19 permitted left-turn procedure,
+/// which credits each cycle with 2 (**secondary**: the value as the HCM's permitted
+/// left-turn capacity model is commonly summarised; the chapter text was not re-read).
+pub const HCM_SNEAKERS_PER_CYCLE: u8 = 2;
+
+/// How long a sneaker standing at the line is assumed to take to react to the amber
+/// before it moves off, seconds: the start-up reaction median of this crate's drivers
+/// (`engine::REACTION_MEDIAN_S`, Bonneson 1992), so a sneaker that could not cross the
+/// line before the red does not try.
+pub const SNEAKER_REACTION_S: f64 = 1.1;
 
 impl Default for SignalPlanParams {
     fn default() -> Self {
@@ -186,6 +215,8 @@ impl Default for SignalPlanParams {
             right_turn_on_red: false,
             gap_factor: 1.0,
             stop_line_offset_m: STOP_LINE_OFFSET_M,
+            patience: JunctionPatience::OFF,
+            sneakers: 0,
         }
     }
 }
@@ -409,15 +440,26 @@ impl FixedTimeSignals {
         }
         // On red the turner has right of way over nobody: every conflicting claimant
         // counts, whatever priority the matrix gives the two movements on a green.
-        let critical = crate::intersection::gap_acceptance::HcmGaps::of(
-            crate::intersection::gap_acceptance::Movement::MinorRight,
-        )
-        .critical_gap_s(j.major_lanes)
-            * self.params.gap_factor;
+        let critical = self.params.patience.critical_gap_s(
+            crate::intersection::gap_acceptance::HcmGaps::of(
+                crate::intersection::gap_acceptance::Movement::MinorRight,
+            )
+            .critical_gap_s(j.major_lanes)
+                * self.params.gap_factor,
+            j.gap_z,
+            j.waiting_s,
+        );
         let closing = conflicts
             .iter()
             .filter(|c| c.conflicts)
-            .map(ConflictView::time_to_stop_line_s)
+            .map(|c| {
+                self.params.patience.foe_time_s(
+                    c.time_to_stop_line_s(),
+                    c.stop_line_gap_m,
+                    c.speed_mps,
+                    j.waiting_s,
+                )
+            })
             .fold(f64::INFINITY, f64::min);
         if closing >= critical {
             EntryDecision::Proceed
@@ -425,6 +467,158 @@ impl FixedTimeSignals {
             EntryDecision::Stop { gap_m: gap }
         }
     }
+}
+
+/// A left turn (or a U-turn), which crosses the opposing stream.
+fn turns_left(m: TurnDirection) -> bool {
+    matches!(
+        m,
+        TurnDirection::Left | TurnDirection::SlightLeft | TurnDirection::UTurn
+    )
+}
+
+/// Whether a permissive turner gives way to claimant `c`: a conflicting claimant it must
+/// yield to, or — for a left turner — anything conflicting that is not itself turning left
+/// (UVC §11-402).
+fn permissive_foe(c: &ConflictView, turning_left: bool) -> bool {
+    c.conflicts
+        && (c.ego_must_yield
+            || (turning_left && !matches!(c.movement, TurnDirection::Left | TurnDirection::UTurn)))
+}
+
+/// How near the stop line a permitted left turner must be at the change interval to be
+/// one of its sneakers, metres: two queued cars (5 m each, 2.5 m standstill gaps) and the
+/// stop-line offset. **This crate's choice**: the HCM's sneakers wait inside the junction,
+/// which this model does not let a permissive turner enter to wait.
+pub const SNEAKER_ZONE_M: f64 = 15.0;
+
+/// The margin a sneaker keeps on reaching the stop line before the red, seconds (the
+/// engine's amber-go margin).
+pub const SNEAKER_MARGIN_S: f64 = 0.3;
+
+impl FixedTimeSignals {
+    /// The permitted-left critical headway this driver accepts: the HCM value, the
+    /// heavy-vehicle term when on, then the driver's own spread and impatience.
+    fn permitted_critical_s(&self, ego: &VehicleView, j: &JunctionView) -> f64 {
+        let table = self.params.permitted_left_critical_headway_s
+            + if self.params.heavy_vehicle_terms && crate::style::is_heavy(ego.class) {
+                crate::intersection::gap_acceptance::hcm_heavy_vehicle_terms_s(j.major_lanes).0
+            } else {
+                0.0
+            };
+        self.params
+            .patience
+            .critical_gap_s(table, j.gap_z, j.waiting_s)
+    }
+
+    /// The time to the nearest of `foes` as a permissive turner judges it, seconds.
+    fn permissive_closing_s<'a>(
+        &self,
+        j: &JunctionView,
+        foes: impl Iterator<Item = &'a ConflictView>,
+    ) -> f64 {
+        foes.map(|c| {
+            let t = match c.arrival_s {
+                // The claimant's own tracked arrival, less SUMO's minor-link margin
+                // (jmTimegapMinor, 1 s; MSLink::blockedAtTime): a tracked arrival is the
+                // claimant's plan, not a promise.
+                Some(t) => (t - PERMITTED_LEFT_ARRIVAL_MARGIN_S).max(0.0),
+                // A hand-built view without a tracked arrival: the assumed launch of an
+                // opposing car from its line.
+                None => c
+                    .time_to_stop_line_launching_s(OPPOSING_START_ACCEL_MPS2, OPPOSING_CRUISE_CAP_MPS),
+            };
+            self.params
+                .patience
+                .foe_time_s(t, c.stop_line_gap_m, c.speed_mps, j.waiting_s)
+        })
+        .fold(f64::INFINITY, f64::min)
+    }
+
+    /// Whether a permitted left turner may complete its turn in the change interval that
+    /// ends its permissive green — one of the HCM's "sneakers"
+    /// ([`SignalPlanParams::sneakers`]). The caller has established that the ego's
+    /// movement shows amber after a permissive green; `amber_left_s` is how much of the
+    /// amber remains.
+    ///
+    /// The opposing stream is stopping for its own amber, so the gap a sneaker needs is
+    /// only against the opposing claimants still able to reach their line before the red
+    /// (moving, and nearer it than the amber that remains). It goes only if it is among
+    /// the first [`SignalPlanParams::sneakers`] of its lane's queue, within
+    /// [`SNEAKER_ZONE_M`] of the line, and crosses the line before the red at its own
+    /// acceleration after [`SNEAKER_REACTION_S`] of reaction if standing. A sneaker
+    /// therefore never enters on red; the cross street, whose green comes after the
+    /// clearance, waits for it as for any vehicle lawfully within the junction (the
+    /// engine's entry rule).
+    pub fn sneaker_may_go(
+        &self,
+        ego: &VehicleView,
+        j: &JunctionView,
+        conflicts: &[ConflictView],
+        amber_left_s: f64,
+    ) -> bool {
+        if self.params.sneakers == 0
+            || !turns_left(j.movement)
+            || j.stop_line_gap_m <= 0.0
+            || j.stop_line_gap_m > SNEAKER_ZONE_M
+        {
+            return false;
+        }
+        let ahead = conflicts
+            .iter()
+            .filter(|c| {
+                !c.conflicts
+                    && c.movement_lane == j.movement_lane
+                    && c.stop_line_gap_m < j.stop_line_gap_m
+            })
+            .count();
+        if ahead >= usize::from(self.params.sneakers) {
+            return false;
+        }
+        // Its time to the line from where it is, at its own acceleration.
+        let a = ego.driver.max_accel_mps2.max(0.1);
+        let v = ego.speed_mps.max(0.0);
+        let d = j.stop_line_gap_m;
+        let reach = if v < RIGHT_ON_RED_STANDING_MPS {
+            SNEAKER_REACTION_S + v2xw_core::math::sqrt(2.0 * d / a)
+        } else {
+            (-v + v2xw_core::math::sqrt(v * v + 2.0 * a * d)) / a
+        };
+        if reach + SNEAKER_MARGIN_S > amber_left_s {
+            return false;
+        }
+        self.box_may_clear(ego, j, conflicts, amber_left_s)
+    }
+
+    /// Whether a permitted left turner waiting inside the junction (or about to be a
+    /// sneaker) may clear it in the change interval: no opposing claimant that can still
+    /// reach its own line before the red — moving, and nearer it than the `amber_left_s`
+    /// that remains — is inside the driver's critical headway. On red (`amber_left_s` 0)
+    /// nobody opposing is coming, and the turner clears the junction it is lawfully in.
+    pub fn box_may_clear(
+        &self,
+        ego: &VehicleView,
+        j: &JunctionView,
+        conflicts: &[ConflictView],
+        amber_left_s: f64,
+    ) -> bool {
+        let critical = self.permitted_critical_s(ego, j);
+        let closing = self.permissive_closing_s(
+            j,
+            conflicts.iter().filter(|c| {
+                permissive_foe(c, true)
+                    && c.speed_mps > 1.0
+                    && c.stop_line_gap_m.max(0.0) / c.speed_mps < amber_left_s
+            }),
+        );
+        closing >= critical
+    }
+}
+
+/// Whether `m` is a turn across the opposing stream, which a permissive green makes give
+/// way to it (a left or a U-turn).
+pub fn crosses_opposing(m: TurnDirection) -> bool {
+    turns_left(m)
 }
 
 impl v2xw_core::model::Model for FixedTimeSignals {
@@ -473,48 +667,17 @@ impl IntersectionControl for FixedTimeSignals {
             // give way to is closing on the junction. The critical gap is the HCM
             // signalised procedure's permitted left-turn critical headway.
             Some(SignalState::GreenYield) => {
-                let critical = self.params.permitted_left_critical_headway_s
-                    + if self.params.heavy_vehicle_terms && crate::style::is_heavy(ego.class) {
-                        crate::intersection::gap_acceptance::hcm_heavy_vehicle_terms_s(
-                            j.major_lanes,
-                        )
-                        .0
-                    } else {
-                        0.0
-                    };
+                let critical = self.permitted_critical_s(ego, j);
                 // A left turner on a permissive green gives way to everything coming the
                 // other way that is not itself turning left (UVC §11-402), whatever the
                 // junction's matrix says. A matrix that leaves the two movements level
                 // handed the turner priority whenever it was nearer its line, and one took
                 // a 1.2 s lag in front of a car at 11 m/s (an overlap on the dense grid).
-                let turning_left = matches!(
-                    j.movement,
-                    TurnDirection::Left | TurnDirection::SlightLeft | TurnDirection::UTurn
+                let turning_left = turns_left(j.movement);
+                let closing = self.permissive_closing_s(
+                    j,
+                    conflicts.iter().filter(|c| permissive_foe(c, turning_left)),
                 );
-                let closing = conflicts
-                    .iter()
-                    .filter(|c| {
-                        c.conflicts
-                            && (c.ego_must_yield
-                                || (turning_left
-                                    && !matches!(
-                                        c.movement,
-                                        TurnDirection::Left | TurnDirection::UTurn
-                                    )))
-                    })
-                    .map(|c| match c.arrival_s {
-                        // The claimant's own tracked arrival, less SUMO's minor-link
-                        // margin (jmTimegapMinor, 1 s; MSLink::blockedAtTime): a
-                        // tracked arrival is the claimant's plan, not a promise.
-                        Some(t) => (t - PERMITTED_LEFT_ARRIVAL_MARGIN_S).max(0.0),
-                        // A hand-built view without a tracked arrival: the assumed
-                        // launch of an opposing car from its line.
-                        None => c.time_to_stop_line_launching_s(
-                            OPPOSING_START_ACCEL_MPS2,
-                            OPPOSING_CRUISE_CAP_MPS,
-                        ),
-                    })
-                    .fold(f64::INFINITY, f64::min);
                 if closing >= critical {
                     EntryDecision::Proceed
                 } else {
@@ -704,7 +867,21 @@ pub fn card(params: &SignalPlanParams) -> ModelCard {
                 "legacy/scms_sim_ref/mock_pipeline/run.py L2467 (halt 2 m before the line)",
             ),
         ),
+        Parameter::new(
+            "sneakers_per_cycle",
+            "veh",
+            serde_json::json!(params.sneakers),
+            Source::new(
+                SourceKind::Standard,
+                "HCM 6th ed. (2016) ch. 31 / 7th ed. ch. 19 permitted left-turn capacity: 2 \
+                 sneakers per cycle complete the turn at the end of the permissive green \
+                 (secondary: the commonly summarised value). 0 is off. Sneakers here start \
+                 from the stop line, so only those that cross it before the red go",
+            ),
+        ),
     ];
+    card.parameters
+        .extend(crate::intersection::gap_acceptance::patience_parameters(&params.patience));
     card.assumptions = vec![
         "Pre-timed, no actuation (04-models.md §2.3).".to_string(),
         "The generated plan splits movements into two phase groups by the axis of their \
@@ -784,6 +961,8 @@ mod tests {
             movement_lane: Some(LaneId::new(1)),
             signal,
             major_lanes: 2,
+            waiting_s: 0.0,
+            gap_z: 0.0,
         }
     }
 
@@ -904,6 +1083,99 @@ mod tests {
             m.may_enter(&ego(5.0), &j, &[opposing(53.0)], &WeatherState::CLEAR),
             EntryDecision::Proceed
         );
+    }
+
+    /// WP-04: a permitted left turner who has stood long enough takes a 3.6 s lag that
+    /// the HCM's 4.5 s refuses.
+    #[test]
+    fn a_permitted_left_grows_impatient() {
+        let m = FixedTimeSignals::new(SignalPlanParams {
+            patience: JunctionPatience {
+                critical_gap_cv: 0.0,
+                ..JunctionPatience::REALISTIC
+            },
+            ..SignalPlanParams::default()
+        });
+        let mut j = junction(Some(SignalState::GreenYield), 20.0);
+        j.movement = TurnDirection::Left;
+        let opposing = ConflictView {
+            actor: ActorId::new(9),
+            stop_line_gap_m: 40.0,
+            speed_mps: 10.0,
+            heading_rad: core::f64::consts::PI,
+            movement: TurnDirection::Straight,
+            movement_lane: Some(LaneId::new(2)),
+            conflicts: true,
+            ego_must_yield: true,
+            arrival_s: None,
+        };
+        assert_eq!(
+            m.may_enter(&ego(0.0), &j, &[opposing], &WeatherState::CLEAR),
+            EntryDecision::Stop { gap_m: 18.0 }
+        );
+        j.waiting_s = 180.0;
+        assert_eq!(
+            m.may_enter(&ego(0.0), &j, &[opposing], &WeatherState::CLEAR),
+            EntryDecision::Proceed
+        );
+    }
+
+    /// WP-04: the HCM's sneakers. On the amber after a permissive green, the head of the
+    /// left-turn queue standing at the line goes once the opposing stream is stopping,
+    /// but not with sneakers off, not against an opposing car that can still reach its
+    /// line before the red, not if it cannot cross its own line before the red, not from
+    /// third in the queue, and not on a through movement.
+    #[test]
+    fn a_sneaker_clears_on_the_amber_once_the_opposing_stream_stops() {
+        let m = FixedTimeSignals::new(SignalPlanParams {
+            sneakers: HCM_SNEAKERS_PER_CYCLE,
+            ..SignalPlanParams::default()
+        });
+        let mut j = junction(Some(SignalState::Amber), 1.0);
+        j.movement = TurnDirection::Left;
+        let opposing = |gap: f64| ConflictView {
+            actor: ActorId::new(9),
+            stop_line_gap_m: gap,
+            speed_mps: 10.0,
+            heading_rad: core::f64::consts::PI,
+            movement: TurnDirection::Straight,
+            movement_lane: Some(LaneId::new(2)),
+            conflicts: true,
+            ego_must_yield: true,
+            arrival_s: None,
+        };
+        let queued = |id: u32, gap: f64| ConflictView {
+            actor: ActorId::new(id),
+            stop_line_gap_m: gap,
+            speed_mps: 0.0,
+            heading_rad: 0.0,
+            movement: TurnDirection::Left,
+            movement_lane: Some(LaneId::new(1)),
+            conflicts: false,
+            ego_must_yield: false,
+            arrival_s: None,
+        };
+        // Standing 1 m out: 1.1 s + sqrt(2/1.4) = 2.3 s to the line, inside a 3 s amber;
+        // the opposing car 40 m out at 10 m/s (4 s) stops for its amber.
+        assert!(m.sneaker_may_go(&ego(0.0), &j, &[opposing(40.0)], 3.0));
+        assert!(!FixedTimeSignals::default().sneaker_may_go(&ego(0.0), &j, &[opposing(40.0)], 3.0));
+        assert!(!m.sneaker_may_go(&ego(0.0), &j, &[opposing(20.0)], 3.0));
+        assert!(!m.sneaker_may_go(&ego(0.0), &j, &[opposing(40.0)], 2.0));
+        assert!(!m.sneaker_may_go(
+            &ego(0.0),
+            &j,
+            &[opposing(40.0), queued(3, 0.2), queued(4, 0.6)],
+            3.0
+        ));
+        assert!(m.sneaker_may_go(&ego(0.0), &j, &[opposing(40.0), queued(3, 0.2)], 3.0));
+        let mut through = j;
+        through.movement = TurnDirection::Straight;
+        assert!(!m.sneaker_may_go(&ego(0.0), &through, &[opposing(40.0)], 3.0));
+        // Waiting inside the junction it clears on the red whoever is still moving the other
+        // way (they are held by their own red), and on the amber only once they stop.
+        assert!(m.box_may_clear(&ego(0.0), &j, &[opposing(20.0)], 0.0));
+        assert!(!m.box_may_clear(&ego(0.0), &j, &[opposing(20.0)], 3.0));
+        assert!(m.box_may_clear(&ego(0.0), &j, &[opposing(40.0)], 3.0));
     }
 
     /// New York City's rule by default: red holds a right turn like any other movement.

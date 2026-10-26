@@ -522,6 +522,22 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(v) = traffic.heavy_vehicle_gap_terms {
         params.heavy_vehicle_gap_terms = v;
     }
+    // WP-04: per-driver critical gaps, junction impatience and the permissive sneakers.
+    if let Some(v) = traffic.critical_gap_cv {
+        params.junction_patience.critical_gap_cv = v;
+    }
+    if let Some(v) = traffic.time_to_impatience_s {
+        params.junction_patience.time_to_impatience_s = v;
+    }
+    if let Some(v) = traffic.impatience_gap_floor {
+        params.junction_patience.floor_ratio = v;
+    }
+    if let Some(v) = traffic.impatience_foe_braking {
+        params.junction_patience.foe_braking = v;
+    }
+    if let Some(v) = traffic.permissive_sneakers {
+        params.permissive_sneakers = v;
+    }
     if let Some(v) = traffic.standing_leader_stop {
         params.standing_leader_stop = v;
     }

@@ -741,6 +741,31 @@ const ADVANCED: &[Basic] = &[
         recommended: "Off (today); on for HCM heavy-vehicle gaps (+1 s, +2 s on wide roads).",
     },
     Basic {
+        path: "traffic.critical_gap_cv",
+        explain: "How much drivers differ in the gap they wait for before pulling out or turning across traffic: 0 gives everyone the same gap.",
+        recommended: "0 (today); 0.18 for realistic drivers (field spreads 0.15 to 0.2).",
+    },
+    Basic {
+        path: "traffic.time_to_impatience_s",
+        explain: "How long a driver waiting to pull out or turn across traffic stands before they accept the shortest gap they ever will; the longer they wait, the smaller the gap they take.",
+        recommended: "0 (off, today); 180 s (SUMO) for realistic waiting.",
+    },
+    Basic {
+        path: "traffic.impatience_gap_floor",
+        explain: "How short a gap a driver who has waited a long time accepts, as a share of the gap they wanted at first.",
+        recommended: "0.7; 0.5 to 0.9.",
+    },
+    Basic {
+        path: "traffic.impatience_foe_braking",
+        explain: "Whether an impatient driver pulls out counting on oncoming cars to brake for them.",
+        recommended: "Off; on for SUMO-like assertive drivers.",
+    },
+    Basic {
+        path: "traffic.permissive_sneakers",
+        explain: "How many drivers waiting to turn left on a green may finish the turn as the light turns yellow, when oncoming traffic stops; without them a left turn into steady oncoming traffic can wait for minutes.",
+        recommended: "0 (today); 2 (HCM) for realistic left turns.",
+    },
+    Basic {
         path: "traffic.standing_leader_stop",
         explain: "Whether drivers coming up behind a stopped car brake smoothly to stop at their usual gap, as they do at a stop line, rather than braking late and stopping abruptly (vans and trucks, whose following model brakes gently, were stopped in one step).",
         recommended: "Off (today); on for smooth stops behind queues (the realistic benchmark sets it).",
