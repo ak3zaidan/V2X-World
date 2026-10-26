@@ -1,0 +1,10 @@
+# The realism base (../midtown-scms-realism.yaml) with the quarter file's 60 s first live window
+# instead of 300 s: the short base of the fleet2x-60 pair (rerun-2026-10-26 §1.4), which keeps
+# a doubled fleet inside the 10-minute run budget. The rollover window (43,185-43,215 s) and the
+# calendar to 172,800 s are unchanged. Not a misbehaviour base: 40 s of attack decides no case.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS realism base-60}
+time:
+  fast_forward:
+    - {from_s: 60.0, to_s: 43185.0}
+    - {from_s: 43215.0, to_s: 172800.0}

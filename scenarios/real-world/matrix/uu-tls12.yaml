@@ -1,0 +1,8 @@
+# TLS 1.2 instead of 1.3 on the packet-level Uu (uu-tls13.yaml): one more round trip before
+# the first request of each session (RFC 5246 vs RFC 8446 §2), the measured US-profile
+# flights (backend.rs SCMS_TLS12_FLIGHTS). Same seed, one change.
+schema: v2xw/scenario/1
+meta: {base: uu-tls13.yaml, name: Midtown SCMS matrix uu-tls12}
+security:
+  scms:
+    tls: "1.2"

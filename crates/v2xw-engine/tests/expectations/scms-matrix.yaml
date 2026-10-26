@@ -18,7 +18,7 @@
 # variants (on-demand, camp, test-ctl, split-90-10, rsu5, rsu0, pen0, sybil, ma-legacy, att10,
 # gnss-clean) re-measured on the 300 s base; the QD25 rows are the quarter fleet end to end.
 # Still carrying 77cffb5b values (owed): silent, nyc-pilot, real-crypto, lte, nr, full-cert,
-# backhaul-cellular, fleet-half, tls12 and fleet2x. Rows of no-hsm, pq-hybrid, gnss-rtk,
+# backhaul-cellular, fleet-half, tls12 and fleet2x (re-run 2026-10-26 on 486c8cba below). Rows of no-hsm, pq-hybrid, gnss-rtk,
 # gnss-raw and the realism variants carry 81a12183 values (not re-run on 8becf72a).
 schema: v2xw/scms-run-expectations/1
 runs:
@@ -96,6 +96,13 @@ runs:
   tls12:
     base: M0
     scenario: scenarios/real-world/matrix/tls12.yaml
+  uu-tls13:
+    base: M0
+    scenario: scenarios/real-world/matrix/uu-tls13.yaml
+    note: 'the TLS pair base: M0 on the packet-level LTE Uu, 0-60 s and 43,185-43,290 s live'
+  uu-tls12:
+    base: uu-tls13
+    scenario: scenarios/real-world/matrix/uu-tls12.yaml
   real-crypto:
     base: M0
     scenario: scenarios/real-world/matrix/real-crypto.yaml
@@ -108,6 +115,14 @@ runs:
   fleet2x:
     base: M0
     scenario: scenarios/real-world/realism/fleet2x.yaml
+  base-60:
+    base: M0
+    scenario: scenarios/real-world/realism/base-60.yaml
+    note: 'M0 with a 60 s first live window: the short base of the fleet2x-60 pair'
+  fleet2x-60:
+    base: base-60
+    scenario: scenarios/real-world/realism/fleet2x-60.yaml
+    note: fleet2x on base-60 (keeps the doubled fleet inside the 10-minute run budget)
   ma-auto:
     base: M0
     scenario: scenarios/real-world/realism/ma-auto.yaml
@@ -155,7 +170,7 @@ rows:
   expect: le
   value: 100.0
   source: 'SAE J2945/1 §6.3: BSM latency budget 100 ms; DSRC channel access is sub-ms at low CBR'
-  measured: '14.631'
+  measured: '14.628'
   verdict: pass
 - id: M0-cbr
   base: M0
@@ -191,7 +206,7 @@ rows:
   - 5000.0
   source: time-average age of a 10 Hz stream with ~36 % PDR is a few hundred ms (Kaul et al. 2011); the
     fast-forward days carry no radio and must not count
-  measured: '69.7644'
+  measured: '69.764'
   verdict: fixed
   note: 'pre-fix M0-b1: 1,693,079 ms, the fast-forward silence charged as age; after: 81.6 ms'
   test: v2xw-metrics awareness::tests::neighbourhood_aoi_restarts_after_a_silence_rather_than_charging_it
@@ -204,7 +219,7 @@ rows:
   value: 0.1
   source: prioritised verification sheds only when the verifier falls behind; at CBR < 5 % the OBU's verifier
     keeps up (verify_wait ~0)
-  measured: '0.0137718'
+  measured: '0.0114243'
   verdict: pass
 - id: M0-sec-overhead
   base: M0
@@ -401,7 +416,7 @@ rows:
   expect: le
   value: 2500.0
   source: the owner's 8 GB machine; realism base 127-229 MB
-  measured: '198.018'
+  measured: '174.13'
   verdict: pass
 - id: nohsm-verify-slower
   base: M0
@@ -714,7 +729,7 @@ rows:
   expect: up
   source: LTE-V2X mode 4 SPS waits for its reserved subframe (selection window up to 100 ms, mean ~half
     the RRI) where DSRC contends sub-ms (3GPP TS 36.213 §14; Molina-Masegosa 2017)
-  measured: 12.3563 -> 69.4155
+  measured: 12.3186 -> 66.4099
   verdict: pass
 - id: lte-latency-budget
   base: M0
@@ -724,7 +739,7 @@ rows:
   expect: le
   value: 100.0
   source: 'SAE J3161/1: the BSM latency budget is still 100 ms'
-  measured: '112.123'
+  measured: '113.026'
   verdict: open
   note: 'LTE-V2X BSM p95 112 ms (mean 68 ms) exceeds the 100 ms budget: the BSM is generated without regard
     to the SPS reservation, which J3161/1 has the application align with; DSRC p95 14.6 ms'
@@ -735,7 +750,7 @@ rows:
   measure: p2.certs_topped_up
   expect: same
   source: the access radio does not change the backend flows (cellular Uu and RSU backhaul unchanged)
-  measured: 1100 -> 1100
+  measured: 2100 -> 2100
   verdict: pass
 - id: lte-sizes
   base: M0
@@ -753,7 +768,7 @@ rows:
   measure: p2.certs_topped_up
   expect: same
   source: as lte-backend-same
-  measured: 1100 -> 1100
+  measured: 2100 -> 2100
   verdict: pass
 - id: nr-pdr
   base: M0
@@ -765,7 +780,7 @@ rows:
   - 0.1
   - 0.95
   source: NR-V2X PC5 is plausible in the same urban geometry
-  measured: '0.627642'
+  measured: '0.648183'
   verdict: pass
 - id: nyc-changes
   base: M0
@@ -776,7 +791,7 @@ rows:
   source: 'NYC pilot: 5 min OR 2 km ([PRIMER] pp.8-9); a vehicle alive across the fast-forward is 43,000
     s old at the second window and changes; J2945/1 also needs 2 km, which nobody drives in 240 s of Midtown
     traffic'
-  measured: 0 -> 65
+  measured: 1 -> 118
   verdict: pass
 - id: nyc-backend-same
   base: M0
@@ -785,7 +800,21 @@ rows:
   measure: p2.certs_topped_up
   expect: same
   source: the change strategy uses the pool the RA issued; the top-off is weekly whatever the strategy
-  measured: 1100 -> 1100
+  measured: 2100 -> 2100
+  verdict: pass
+- id: nyc-p2pcd-bounded
+  base: M0
+  variant: nyc-pilot
+  area: metrics
+  measure: m.p2pcd_requests
+  expect: ratio
+  band:
+  - 0
+  - 1.5
+  source: 'IEEE 1609.2 §6.3.4 / J2945/1: the first BSM after a certificate change carries the full certificate,
+    so receivers never miss the new digest and P2PCD requests grow far less than the changes (52fd05a2);
+    written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.2)'
+  measured: 60.3903 -> 74.0258 (ratio 1.226)
   verdict: pass
 - id: silent-frames
   base: M0
@@ -799,6 +828,19 @@ rows:
   verdict: wrong-expectation
   note: '`silent` means no scheduled change (wiring.rs rotation_policy), not a silent period: the run
     is the base''s (23,549 frames, 0 changes)'
+- id: silent-changes
+  base: M0
+  variant: silent
+  area: architecture
+  measure: p2.pseudonym_changes
+  expect: ratio
+  band:
+  - 0
+  - 1
+  source: '`silent` keeps one identity (options.rs: "Never"): it can only remove changes the base makes,
+    never add one; written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.2)'
+  measured: 1 -> 0 (ratio 0)
+  verdict: pass
 - id: fullcert-bytes
   base: M0
   variant: full-cert
@@ -809,7 +851,7 @@ rows:
   - 1.2
   - 2.5
   source: 'a 77 B implicit certificate replaces the 8 B digest on 9 of 10 BSMs: ~+69 B on ~100 B of security'
-  measured: 2446111 -> 3863211 (ratio 1.579)
+  measured: 21678241 -> 35370017 (ratio 1.632)
   verdict: pass
 - id: fullcert-share
   base: M0
@@ -838,7 +880,7 @@ rows:
   measure: p2.certs_topped_up
   expect: same
   source: attachment is a transmit choice
-  measured: 1100 -> 1100
+  measured: 2100 -> 2100
   verdict: pass
 - id: rsu5-app-certs
   base: M0
@@ -941,7 +983,7 @@ rows:
   measure: flow.rsu-application-cert.median_s
   expect: up
   source: 'cellular backhaul has more delay than fibre: the RSU''s renewal round trips take longer'
-  measured: 60.0268 -> 60.0984
+  measured: 60.0273 -> 60.0989
   verdict: pass
 - id: bhcell-counts
   base: M0
@@ -960,7 +1002,7 @@ rows:
   expect: down
   min_change: 0.2
   source: fewer vehicles present at the rollover; still 20 each
-  measured: 1100 -> 780
+  measured: 2100 -> 1320
   verdict: pass
 - id: half-req
   base: M0
@@ -979,7 +1021,17 @@ rows:
   measure: rv.checked
   expect: down
   source: fewer neighbours, fewer verifications
-  measured: 77517 -> 36509
+  measured: 1308399 -> 405186
+  verdict: pass
+- id: half-events
+  base: M0
+  variant: fleet-half
+  area: performance
+  measure: cost.events
+  expect: down
+  source: 'half the senders and receivers: fewer transmissions, receptions and verifications (05 §5);
+    written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.2)'
+  measured: 3295502 -> 1228842
   verdict: pass
 - id: att10-revoked
   base: M0
@@ -1045,7 +1097,7 @@ rows:
   measure: p2.certs_topped_up
   expect: same
   source: TLS 1.2 adds a round trip, not a message; the top-off is unchanged
-  measured: 1100 -> 1100
+  measured: 2100 -> 2100
   verdict: pass
 - id: tls12-bytes
   base: M0
@@ -1055,7 +1107,107 @@ rows:
   expect: same
   source: 'cell-capacity-mm1 carries no TCP or TLS (base tcp_connections 0; scms-knobs: only packet-pf
     does), so the TLS version cannot show'
-  measured: 2895577 -> 2895577
+  measured: 10044369 -> 10044369
+  verdict: pass
+- id: tls12-no-tcp
+  base: M0
+  variant: tls12
+  area: architecture
+  measure: access.tcp_connections
+  expect: eq
+  value: 0
+  source: 'the TLS flights (backend.rs SCMS_TLS12_FLIGHTS) are charged only on the packet-level Uu, which
+    the realism base does not run: the setting is inert here, and this row says so; written 2026-10-26
+    before the 486c8cba runs (rerun-2026-10-26 §1.2)'
+  measured: '0'
+  verdict: pass
+- id: uutls-sessions
+  base: uu-tls13
+  variant: uu-tls13
+  area: architecture
+  measure: access.carrier.tls_handshakes
+  expect: ge
+  value: 1
+  source: on the packet-level Uu every cellular vehicle opens a TLS session to the RA before its first
+    backend message ([SMP] §2.1.18 session-scmsAuth); written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26
+    §1.3)
+  measured: '563'
+  verdict: pass
+- base: uu-tls13
+  variant: uu-tls12
+  id: uutls-same-sessions
+  area: architecture
+  measure: access.carrier.tls_handshakes
+  expect: same
+  source: the TLS version changes how a session is set up, not how many are opened; written 2026-10-26
+    before the 486c8cba runs (rerun-2026-10-26 §1.3)
+  measured: 563 -> 563
+  verdict: pass
+- base: uu-tls13
+  variant: uu-tls12
+  id: uutls-bytes
+  area: architecture
+  measure: access.carrier.tls_handshake_bytes
+  expect: ratio
+  band:
+  - 1.0001
+  - 1.15
+  source: 'TLS 1.2 payloads 173 + 934 + 93 + 51 = 1,251 B against 1.3 1,322 B, but two more flights each
+    with TCP/IP headers (constants.md TLS; scms_knobs_runs tls_1_2_costs_more_handshake_and_a_slower_topup):
+    slightly more bytes; written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.3)'
+  measured: 870398 -> 888977 (ratio 1.021)
+  verdict: pass
+- base: uu-tls13
+  variant: uu-tls12
+  id: uutls-report-latency
+  area: metrics
+  measure: access.exchange.report-uu.mean_ms
+  expect: ratio
+  band:
+  - 0.99
+  - 1.01
+  source: 'a full TLS 1.2 handshake is two round trips before the first request, 1.3 one (RFC 8446 §2,
+    RFC 5246 §7.3): only a message that opens a session waits the extra RTT. No report upload here opens
+    one: every reporter''s session (5 min, no resumption) was already open from an earlier backend exchange,
+    so the report mean stays within channel noise'
+  note: 'corrected 2026-10-26 (was up, written before the runs): measured 34.4132 -> 34.4370 (n 126, first
+    cut) and 34.5258 -> 34.4983 (n 182), +/-0.08 %, where one session-opening upload in 182 would add
+    ~0.2 ms (the top-up, which opens its session, gains 40.9 ms: uutls-topup-latency). Evidence in rerun-2026-10-26
+    §2.2'
+  measured: 34.5258 -> 34.4983 (ratio 0.9992)
+  verdict: pass
+- base: uu-tls13
+  variant: uu-tls12
+  id: uutls-topup-latency
+  area: metrics
+  measure: access.exchange.topup.mean_ms
+  expect: up
+  source: as uutls-report-latency, for the rollover top-up sessions; written 2026-10-26 before the 486c8cba
+    runs (rerun-2026-10-26 §1.3)
+  measured: 60273.7 -> 60314.7
+  verdict: pass
+- base: uu-tls13
+  variant: uu-tls12
+  id: uutls-topups-same
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: same
+  source: an RTT does not change which certificates the RA issues; written 2026-10-26 before the 486c8cba
+    runs (rerun-2026-10-26 §1.3)
+  measured: 1060 -> 1060
+  verdict: pass
+- id: uutls-topups-complete
+  base: uu-tls13
+  variant: uu-tls13
+  area: architecture
+  measure: p2.topups_completed
+  expect: ge
+  value: 50
+  source: 'guards uutls-topups-same against 0 -> 0: the rollover top-up completes about 60.1 s after 43,200
+    s (M0 flow.topup.median_s 60.118), so the window must run past 43,261 s; about 55 devices start one
+    (the first 43,230 s cut left all 55 incomplete); written 2026-10-26 after the first uu-tls13 run,
+    before the corrected pair (rerun-2026-10-26 §2.2)'
+  measured: '53'
   verdict: pass
 - id: real-same-topups
   base: M0
@@ -1064,7 +1216,7 @@ rows:
   measure: p2.certs_topped_up
   expect: same
   source: 'I-S1: real and modelled crypto give the same records (scms_scale.rs)'
-  measured: 1100 -> 1100
+  measured: 2100 -> 2100
   verdict: pass
 - id: real-same-revocations
   base: M0
@@ -1082,7 +1234,7 @@ rows:
   measure: r.frames_transmitted
   expect: same
   source: 'I-S1: identical frames'
-  measured: 23148 -> 23148
+  measured: 212772 -> 212772
   verdict: pass
 - id: real-same-sizes
   base: M0
@@ -1100,7 +1252,17 @@ rows:
   measure: cost.cpu_s
   expect: up
   source: real P-256 arithmetic for every certificate (~0.4 CPU-s a device on release)
-  measured: 34.54 -> 66.25
+  measured: 390.25 -> 617.2
+  verdict: pass
+- id: real-same-reports
+  base: M0
+  variant: real-crypto
+  area: misbehaviour
+  measure: p2.reports_at_ma
+  expect: same
+  source: real signatures verify exactly where the modelled ones do, so the detectors see the same beliefs
+    and file the same reports; written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.2)
+  measured: 2296 -> 2296
   verdict: pass
 - id: cert60-x3
   base: M0
@@ -1133,6 +1295,69 @@ rows:
   value: 1
   source: per-device behaviour is fleet-independent
   measured: '1'
+  verdict: pass
+- base: base-60
+  variant: fleet2x-60
+  id: fleet2x60-req
+  area: architecture
+  measure: perdev.EeRaCertRequestSpdu.median
+  expect: eq
+  value: 1
+  source: 'ra-maxReqs 1: one butterfly request per device whatever the fleet (CAMP122 §6.3.3.4; realism
+    V7); written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.4)'
+  measured: '1'
+  verdict: pass
+- base: base-60
+  variant: fleet2x-60
+  id: fleet2x60-checks
+  area: performance
+  measure: p2.messages_checked
+  expect: ratio
+  band:
+  - 1.5
+  - 5
+  source: 'more senders and more receivers: checks grow between n and n^2 (realism V7); written 2026-10-26
+    before the 486c8cba runs (rerun-2026-10-26 §1.4)'
+  measured: 76684 -> 196858 (ratio 2.567)
+  verdict: pass
+- base: base-60
+  variant: fleet2x-60
+  id: fleet2x60-cost
+  area: performance
+  measure: cost.cpu_s
+  expect: ratio
+  band:
+  - 1.2
+  - 5
+  source: provisioning linear in devices, receptions ~n^2 (05 §5; realism V7); written 2026-10-26 before
+    the 486c8cba runs (rerun-2026-10-26 §1.4)
+  measured: 49.73 -> 117.98 (ratio 2.372)
+  verdict: pass
+- base: base-60
+  variant: fleet2x-60
+  id: fleet2x60-memory
+  area: performance
+  measure: cost.peak_mb
+  expect: ratio
+  band:
+  - 1.05
+  - 3
+  source: 'per-device state (pools, receivers, caches) doubles over a fixed share (map, PKI, recorder):
+    more than the base, less than 3x; written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.4)'
+  measured: 128.205 -> 148.767 (ratio 1.16)
+  verdict: pass
+- base: base-60
+  variant: fleet2x-60
+  id: fleet2x60-topups
+  area: architecture
+  measure: p2.certs_topped_up
+  expect: ratio
+  band:
+  - 1.5
+  - 2.5
+  source: '20 certificates per device at the rollover: top-ups scale with the devices live at 43,200 s
+    (realism P3); written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.4)'
+  measured: 1100 -> 1940 (ratio 1.764)
   verdict: pass
 - id: maauto-decision
   base: M0
