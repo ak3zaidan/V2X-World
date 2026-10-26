@@ -570,8 +570,12 @@ rows:
   measure: x.revocation_latency_s
   expect: up
   source: a 90 s window holds the attack reports longer
-  measured: pending
-  verdict: pending
+  measured: 16.3205 -> 0
+  verdict: wrong-expectation
+  measured_on: 2026-10-26, 938fb16a release
+  note: '2026-10-26 (938fb16a): the run horizon. The first detection comes about 134 s in, and a 90 s
+    shuffle window holds its reports past the 180 s end: no case closes (revocations 2 -> 0, row RW90.revocations),
+    so the latency is unmeasured (0), not longer. The row needed a run of at least 300 s'
 - id: LS.RW90.revocations
   base: L
   variant: RW90
@@ -582,8 +586,9 @@ rows:
   - 0.0
   - 1.0
   source: with reports from 60 s held up to 90 s, fewer cases can close by 180 s
-  measured: pending
-  verdict: pending
+  measured: 2 -> 0 (ratio 0)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.RT1.reports-at-ma
   base: L
   variant: RT1
