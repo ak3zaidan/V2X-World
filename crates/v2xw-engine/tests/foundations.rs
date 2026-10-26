@@ -875,15 +875,24 @@ fn the_backend_tops_up_both_vehicles_over_cellular_and_every_byte_is_booked_once
             c.node,
             c.t
         );
+        // Each vehicle's first poll has its own phase inside the first interval
+        // (`phase_crl_poll`, a keyed draw), so how many polls fall in the 45 s run outside
+        // the top-up depends on that phase: every point of its 10 s cadence before the end
+        // of the run, less those inside the top-up's exchange.
         let polls: Vec<&(u64, u64)> = rows.iter().filter(|(t, _)| !inside(*t)).collect();
-        assert_eq!(polls.len(), 5, "{:?}: CRL polls {polls:?}", c.node);
+        let first = polls
+            .first()
+            .unwrap_or_else(|| panic!("{:?}: no CRL poll", c.node))
+            .0;
+        assert!(first < 10 * S, "{:?}: first CRL poll at {first} ns", c.node);
+        let cadence: Vec<u64> = (0..)
+            .map(|k| first + k * 10 * S)
+            .take_while(|t| *t < 45 * S)
+            .filter(|t| !inside(*t))
+            .collect();
+        let at: Vec<u64> = polls.iter().map(|r| r.0).collect();
+        assert_eq!(at, cadence, "{:?}: CRL polls {polls:?}", c.node);
         for w in polls.windows(2) {
-            assert_eq!(
-                w[1].0 - w[0].0,
-                10 * S,
-                "{:?}: polls off the 10 s cadence {polls:?}",
-                c.node
-            );
             assert_eq!(w[1].1, w[0].1, "{:?}: CRL polls of different sizes", c.node);
         }
     }
