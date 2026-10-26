@@ -397,6 +397,7 @@ const DIMENSIONLESS: &[&str] = &[
     "traffic.lc_keep_right",
     "traffic.kerbside.taxi_share",
     "traffic.kerbside.delivery_stop_share",
+    "traffic.reroute_share",
     "actors.vehicles.drivers.speed_factor",
     "actors.vehicles.drivers.speed_spread",
     "actors.vehicles.drivers.red_runner_share",

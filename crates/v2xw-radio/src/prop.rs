@@ -3153,15 +3153,20 @@ mod tests {
             let root = (GROUND_EPSILON_R - c * c).sqrt();
             ((s - root) / (s + root)).abs()
         };
+        // Depths 8.46, 4.39, 2.66, 1.24 and 0.56 dB for k = 1, 2, 3, 5, 8: each fade is
+        // shallower than the one beyond it.
+        let mut farther_depth = f64::INFINITY;
+        let mut farther_peak = f64::INFINITY;
         for k in [1.0, 2.0, 3.0, 5.0, 8.0] {
             let d = fade_at(k);
             let excess = two_ray_interference_loss_db(d, h, h, f, GROUND_EPSILON_R)
                 - friis_loss_db(d, f);
             let depth = -20.0 * (1.0 - gamma_at(d)).log10();
             assert!(
-                (excess - depth).abs() < 1e-6 && excess > 2.0,
+                (excess - depth).abs() < 1e-6 && excess > 0.5 && excess < farther_depth,
                 "fade {k} at {d:.2} m is {excess:.3} dB deep, Γ says {depth:.3}"
             );
+            farther_depth = excess;
             // (|Γ⊥| grows with distance, so the factor's true minimum sits a little beyond
             // d_k; at d_k itself the depth is exactly the one above.)
             let d_peak = fade_at(k + 0.5);
@@ -3169,9 +3174,11 @@ mod tests {
                 - two_ray_interference_loss_db(d_peak, h, h, f, GROUND_EPSILON_R);
             let up = 20.0 * (1.0 + gamma_at(d_peak)).log10();
             assert!(
-                (gain - up).abs() < 1e-6 && gain > 1.0,
+                (gain - up).abs() < 1e-6 && gain > 0.4 && gain < farther_peak,
                 "peak {k}.5 at {d_peak:.2} m is {gain:.3} dB up, Γ says {up:.3}"
             );
+            // (3.49, 2.42, 1.72, 0.94 and 0.47 dB: each peak lower than the one beyond.)
+            farther_peak = gain;
             assert!(gain <= 20.0 * 2f64.log10() + 1e-12);
         }
         // The last fade for two 1.5 m antennas at 5.9 GHz sits at 88.5 m.
