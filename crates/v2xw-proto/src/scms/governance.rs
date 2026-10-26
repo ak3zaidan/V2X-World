@@ -1581,7 +1581,10 @@ impl Governance {
         } else {
             (cert_issue_permissions(role), None)
         };
-        let name = format!("{}.{}.sim", spec.host, label);
+        // The name the PDU layer always used (`eca.provider-a`): with one certificate per
+        // component these are what the devices see, so the device-facing sizes stay those
+        // reconciled with CAMP Table 3 (04 §3).
+        let name = format!("{}.{}", spec.host, label);
         let tbs = ToBeSignedCertificate::new(
             CertificateId::name(Hostname(name)),
             HashedId3(FixedOctetString::from(craca)),

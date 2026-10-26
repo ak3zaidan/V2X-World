@@ -156,20 +156,23 @@ fn certificate_sizes_against_camp_table_3() {
         ("rse-enrolment", 99, 87),
         ("obe-identification", 70, 89),
         ("rse-application", 65, 89),
-        // The components the devices see (the PDU PKI). Each encodes like the published
-        // certificate of the same role field for field except the name
+        // The components the devices see (the PDU PKI) are the governance's own
+        // certificates, one per component (audit-gov §4 item 1): the same bytes as the
+        // `governance/*` rows below, asserted after the table. Until then the PDU layer drew
+        // a second set named `*.provider-a` (4 B shorter: 171 ECA, 192 RA, 156 ACA, ...).
+        ("pdu-pki/root.provider-a", 206, 211),
+        ("pdu-pki/ica.provider-a", 179, 195),
+        ("pdu-pki/eca.provider-a", 175, 150),
+        ("pdu-pki/ra.provider-a", 196, 217),
+        ("pdu-pki/aca.provider-a", 160, 216),
+        ("pdu-pki/la1.provider-a", 158, 205),
+        ("pdu-pki/la2.provider-a", 158, 205),
+        ("pdu-pki/ma.provider-a", 194, 205),
+        ("pdu-pki/crlg.provider-a", 176, 190),
+        ("pdu-pki/dcm.provider-a", 156, 219),
+        // The governance hierarchy (WP-B5) names its components `*.sim`. Each encodes like
+        // the published certificate of the same role field for field except the name
         // (tools/realworld/sizes.py `same_encoding_but_name_as`).
-        ("pdu-pki/root.governance", 206, 211),
-        ("pdu-pki/ica.governance", 179, 195),
-        ("pdu-pki/eca.provider-a", 171, 150),
-        ("pdu-pki/ra.provider-a", 192, 217),
-        ("pdu-pki/aca.provider-a", 156, 216),
-        ("pdu-pki/la1.provider-a", 154, 205),
-        ("pdu-pki/la2.provider-a", 154, 205),
-        ("pdu-pki/ma.provider-a", 190, 205),
-        ("pdu-pki/crlg.provider-a", 172, 190),
-        ("pdu-pki/dcm.provider-a", 152, 219),
-        // The governance hierarchy (WP-B5) names its components `*.sim`: 4 B more.
         ("governance/root", 206, 211),
         ("governance/ica", 179, 195),
         ("governance/eca", 175, 150),
@@ -187,6 +190,25 @@ fn certificate_sizes_against_camp_table_3() {
             sizes.get(role).copied(),
             Some(engine),
             "{role}: CAMP Table 3 example {camp} B"
+        );
+    }
+    // One certificate per component: what signs on the wire is the chain-file certificate.
+    for (pdu, gov) in [
+        ("root", "root"),
+        ("ica", "ica"),
+        ("eca", "eca"),
+        ("ra", "ra"),
+        ("aca", "pca"),
+        ("la1", "la1"),
+        ("la2", "la2"),
+        ("ma", "ma"),
+        ("crlg", "crlg"),
+        ("dcm", "dcm"),
+    ] {
+        assert_eq!(
+            c.certs.get(&format!("pdu-pki/{pdu}.provider-a")),
+            c.certs.get(&format!("governance/{gov}")),
+            "the PDU layer's {pdu} is the governance's {gov}"
         );
     }
     assert_eq!(
