@@ -508,7 +508,10 @@ impl SensitivityRecorder {
             put("airtime_us", self.airtime_us as f64 / self.airtime_n as f64);
         }
         if self.power_n > 0 {
-            put("tx_power_dbm_mean", self.power_dbm_sum / self.power_n as f64);
+            put(
+                "tx_power_dbm_mean",
+                self.power_dbm_sum / self.power_n as f64,
+            );
         }
         if report.air_bytes.frames > 0 {
             put(

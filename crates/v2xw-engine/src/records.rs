@@ -840,7 +840,10 @@ mod tests {
         let cbr = MacCbr::report(5, NodeId::new(4), 172, time, 0, 0, 5, 1500, 2000, 1);
         let owned = cbr.to_owned_record().expect("serialises");
         let view: MacCbrView = decode(&owned).expect("decodes");
-        assert_eq!((view.busy_us, view.window_us), (Some(12_345), Some(1_000_000)));
+        assert_eq!(
+            (view.busy_us, view.window_us),
+            (Some(12_345), Some(1_000_000))
+        );
         assert_eq!(view.cbr, 0.0123);
         v2xw_record::grid::scan_record("mac.cbr", &owned.json).expect("on its declared grid");
     }

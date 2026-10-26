@@ -80,9 +80,9 @@ use serde_json::{Map, Value, json};
 use v2xw_core::rng::RngStream;
 
 use v2xw_msg::j2735::map::{
-    self, AllowedManeuvers, ConnectingLane, Connection, GenericLane, IntersectionGeometry,
-    LaneAttributes, LaneDirection, LaneSharing, MapData, NodeOffset, NodeXy, Position3D,
-    CrosswalkLaneAttributes, LaneType, VehicleLaneAttributes, XyAlternative, XyOffset,
+    self, AllowedManeuvers, ConnectingLane, Connection, CrosswalkLaneAttributes, GenericLane,
+    IntersectionGeometry, LaneAttributes, LaneDirection, LaneSharing, LaneType, MapData,
+    NodeOffset, NodeXy, Position3D, VehicleLaneAttributes, XyAlternative, XyOffset,
 };
 use v2xw_msg::j2735::spat::{
     self, IntersectionReferenceId, IntersectionState, IntersectionStatus, MovementEvent,

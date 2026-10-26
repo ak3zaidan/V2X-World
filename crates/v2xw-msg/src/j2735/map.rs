@@ -791,8 +791,10 @@ const F_SHARED_WITH: Field = Field::new("laneAttributes.sharedWith", "LaneSharin
 const F_LANE_TYPE: Field = Field::new("laneAttributes.laneType", "LaneTypeAttributes");
 const F_LANE_TYPE_VEHICLE: Field =
     Field::new("laneAttributes.laneType.vehicle", "LaneAttributes-Vehicle");
-const F_LANE_TYPE_CROSSWALK: Field =
-    Field::new("laneAttributes.laneType.crosswalk", "LaneAttributes-Crosswalk");
+const F_LANE_TYPE_CROSSWALK: Field = Field::new(
+    "laneAttributes.laneType.crosswalk",
+    "LaneAttributes-Crosswalk",
+);
 const F_MANEUVERS: Field = Field::new("genericLane.maneuvers", "AllowedManeuvers");
 const F_NODE_LIST: Field = Field::new("genericLane.nodeList", "NodeListXY");
 const F_NODES_LEN: Field = Field::new("nodeListXY.nodes", "SEQUENCE (SIZE(2..63)) OF NodeXY");
@@ -1872,12 +1874,20 @@ mod tests {
         write_lane_attributes(&mut w, &a).expect("writes");
         let raw = w.into_bytes();
         let mut r = BitReader::new(&raw);
-        assert_eq!(r.read_bits(1 + 2 + 10).expect("preamble and flags"), 0b0_11_0000000001);
-        assert_eq!(r.read_bits(4).expect("choice"), 0b0001, "not extended, index 1");
+        assert_eq!(
+            r.read_bits(1 + 2 + 10).expect("preamble and flags"),
+            0b0_11_0000000001
+        );
+        assert_eq!(
+            r.read_bits(4).expect("choice"),
+            0b0001,
+            "not extended, index 1"
+        );
         assert_eq!(r.read_bits(16).expect("crosswalk"), 0b0001_0100_0000_0000);
         // Seven bits more than the minimal vehicle lane.
         let mut plain = minimal();
-        plain.intersections[0].lanes[0].connects_to = map.intersections[0].lanes[0].connects_to.clone();
+        plain.intersections[0].lanes[0].connects_to =
+            map.intersections[0].lanes[0].connects_to.clone();
         let vehicle = encode_map(&plain).expect("encodes");
         let crosswalk = encode_map(&map).expect("encodes");
         assert!(crosswalk.size >= vehicle.size && crosswalk.size <= vehicle.size + 1);

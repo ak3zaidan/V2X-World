@@ -306,7 +306,10 @@ fn nr_access_wait_follows_the_selection_window() {
     };
     let short = at(1);
     let long = at(50);
-    assert!(short < 3.0, "T2 = 1 ms: mean access wait {short:.2} ms, want about 1 ms");
+    assert!(
+        short < 3.0,
+        "T2 = 1 ms: mean access wait {short:.2} ms, want about 1 ms"
+    );
     assert!(
         (18.0..33.0).contains(&long),
         "T2 = 50 ms: mean access wait {long:.2} ms, want about 25.5 ms"

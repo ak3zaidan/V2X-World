@@ -2111,7 +2111,9 @@ mod tests {
             .collect();
         assert_eq!(
             excluded,
-            (0..4).map(|sc| SlResource::new(110, sc, 1)).collect::<Vec<_>>(),
+            (0..4)
+                .map(|sc| SlResource::new(110, sc, 1))
+                .collect::<Vec<_>>(),
             "slot 110 must be excluded on every sub-channel"
         );
     }
@@ -2127,8 +2129,15 @@ mod tests {
             crate::sidelink::nr_mcs(21).expect("MCS 21"),
         );
         let s = pool.subchannels();
-        assert_eq!(s, 5, "one quiet sub-channel of five is the 20 % a ranking keeps");
-        let mut e = SpsEngine::new(Tier::High, pool, SpsParams::ali_todisco(Numerology::Mu0, true));
+        assert_eq!(
+            s, 5,
+            "one quiet sub-channel of five is the 20 % a ranking keeps"
+        );
+        let mut e = SpsEngine::new(
+            Tier::High,
+            pool,
+            SpsParams::ali_todisco(Numerology::Mu0, true),
+        );
         let mut ctx = TestCtx::new(5);
         let mut loud = 0;
         for n in 0..60u32 {
@@ -2148,7 +2157,10 @@ mod tests {
             }
         }
         // Uniform over S_A: 4/5 of 60 = 48 on average.
-        assert!(loud >= 30, "{loud} of 60 picks on loud sub-channels, want about 48");
+        assert!(
+            loud >= 30,
+            "{loud} of 60 picks on loud sub-channels, want about 48"
+        );
     }
 
     /// Step 5's S-RSSI metric averages the slots the UE monitored; one it transmitted in
@@ -2168,7 +2180,10 @@ mod tests {
         let mut own = SensingHistory::new(4, 1000);
         own.note_transmitted(110);
         own.note_transmitted(10);
-        assert_eq!(ranking_srssi_mw(&own, SlResource::new(210, 0, 1), 205, 100, 1000), 0.0);
+        assert_eq!(
+            ranking_srssi_mw(&own, SlResource::new(210, 0, 1), 205, 100, 1000),
+            0.0
+        );
     }
 
     #[test]
