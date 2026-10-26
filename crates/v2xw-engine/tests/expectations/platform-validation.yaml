@@ -165,3 +165,23 @@ rows:
    source: "each knob's row in studio_knobs.py KNOBS", fault: "--fault: 0/11 (every row red; the base re-run gives the same values, so the server is deterministic across runs)",
    verdict: open, measured: "10/11. Buildings off pdr 0.532 -> 1.000; tx power 5 dBm pdr -> 0.506; rain speed 3.12 -> 2.97 m/s; alternating access e2e 47.5 -> 53.2 ms; full certificates cbr 0.0065 -> 0.0082; demand and timeline actors 7 -> 14; duration; catalogue 260 -> 0. Nodes (peer_cert_cache 1): aoi not measured over 8 s (aoi and aoi[all] empty in metrics.query). rate_hz 5 Hz moved cbr only -4.4 % where airtime theory gives about -50 %: the direction passes, the magnitude is CW.cbr-window",
    note: "the first session's run used phase1-grid, which has one vehicle in 6 s (4/11, every radio row unmeasured): a test-setup error, not the engine"}
+# ---------------------------------------------------------------- (11) third session: the fixes of items 7 and 8
+- {id: CW.cbr-window.fixed, check: "scenarios/platform/cbr-window.yaml on the fixed build (mac.cbr = busy/window over the report's window)", expect: "frames 0.48-0.52, cbr_mean 0.42-0.58",
+   source: "ETSI TS 102 687: CBR is busy time over the measurement interval; the mean of the 100 ms readings tiling a 1 s window", verdict: fixed,
+   fault: "mac.cbr back to the meter's last 100 ms at the flush: platform_validation the_channel_busy_ratio_follows_the_airtime_at_any_bsm_interval reads x0.146 and fails",
+   measured: "frames 1193 -> 600 (0.503); cbr_mean 0.0861 -> 0.0471 (0.547); airtime per frame 313.7 -> 323.2 us, so offered airtime x0.518",
+   test: "v2xw-engine platform_validation the_channel_busy_ratio_follows_the_airtime_at_any_bsm_interval; v2xw-radio mac::tests::the_running_busy_time_*"}
+- {id: BQ.cbr-and-cost.fixed, check: "bsm-itt.yaml on the fixed build", expect: "5/5; cbr_mean follows the offered airtime", source: "as BQ.cbr-and-cost", verdict: pass,
+   measured: "5/5. ITT 150: cbr_mean 0.684, frames 0.665, airtime per frame 1.016 (offered 0.676)"}
+- {id: SM.crosswalk-lanes, check: "cargo test -p v2xw-engine --test platform_validation (every_spat_signal_group_has_a_map_lane un-ignored)", expect: "every SPaT signal group has a MAP lane; a pedestrian group only on crosswalk lanes",
+   source: "SAE J2735: a SPaT movement is placed only through a lane's connectsTo.signalGroup", verdict: fixed,
+   fault: "the crosswalk lanes left out of build_map: intersection 8 SPaT groups against the MAP groups fails",
+   measured: "5/5 pass; MAP PSDU on rsu-apps 496 -> 565 octets mean; rsu-apps 7/7"}
+- {id: SM.on-air-content.3, check: "platform_validation with measure back on SensitivityRecorder", expect: "a_spec_row_measures_the_traffic_state_and_the_metric_samples fails", source: "as SM.on-air-content.2", verdict: pass,
+   measured: "fails with traffic.speed_mean_mps = None; restored: passes"}
+- {id: UI.knobs.3, check: "studio_knobs.py --only Messages,Security,Nodes on the fixed v2xw-server, connected-intersections, 8 s", expect: "3/3 move the engine",
+   source: "each knob's row in studio_knobs.py KNOBS", verdict: pass,
+   measured: "Messages 5 Hz cbr 0.00776 -> 0.00700 (x0.902); full certificates cbr -> 0.00935; peer_cert_cache 1 aoi[all] 203.4 -> 354.1 ms. Bare aoi (100 m) has no value because no two vehicles are within 100 m in 8 s (0 trials in every window; aoi[300m] 73 updates)",
+   note: "the Messages row's 'about half' was a wrong expectation for this scenario: BSM is 180.9 of 349.8 ms airtime on the rsu-apps base, so halving it gives at most x0.74 of offered airtime"}
+- {id: DT.goldens.LG, runs: [L, G], check: "record and content digests on the 38ad00cf release (RAYON 2) against 486c8cba", expect: identical, source: "the anchored BSM rule is the old one on the grid",
+   verdict: pass, measured: "L 0c4a25e7 / 0ec4761e, G 8f7fe22b / d81371c0: identical"}
