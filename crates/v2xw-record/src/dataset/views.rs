@@ -50,6 +50,36 @@ pub struct GtSpawnView {
     /// allows for with its RSU allowance.
     #[serde(default)]
     pub is_rsu: bool,
+    /// The vehicle's length, metres: what places its front bumper in a SUMO FCD trace
+    /// (`crate::export` `sumo-*`). Written only by a run that names a SUMO exporter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_m: Option<f64>,
+    /// The driver's desired (free-road) speed, m/s: the ideal speed a SUMO `timeLoss`
+    /// is measured against together with the lane's limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desired_speed_mps: Option<f64>,
+    /// The planned route's length, metres.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_length_m: Option<f64>,
+    /// When the trip asked to depart, nanoseconds: `t` minus this is SUMO's
+    /// `departDelay`. Absent when the mobility provider does not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_t: Option<SimTime>,
+}
+
+/// `gt.despawn` — an actor left the simulation (GT).
+///
+/// Like `gt.spawn` it has no `Event`-frame payload; the serde record is its only
+/// encoding. Written only by a run that names a SUMO exporter (`crate::export`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GtDespawnView {
+    /// The instant it left: the end of the mobility step it left in.
+    pub t: SimTime,
+    /// The actor.
+    pub actor: ActorId,
+    /// Why (`v2xw_mobility::DespawnCause`, kebab-case): `trip-complete`,
+    /// `route-blocked`, `commanded`, `lifetime-expired`.
+    pub cause: String,
 }
 
 /// `ma.case` — the authority opened a case (NODE).

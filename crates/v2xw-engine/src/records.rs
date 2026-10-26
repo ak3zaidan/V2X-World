@@ -97,6 +97,22 @@ channel_record!(
     Visibility::Gt
 );
 channel_record!(
+    /// `gt.spawn` — an actor entered the run. Recorded only when a SUMO exporter is named
+    /// ([`crate::export::records_lifecycle`]).
+    GtSpawn,
+    v2xw_record::dataset::views::GtSpawnView,
+    "gt.spawn",
+    Visibility::Gt
+);
+channel_record!(
+    /// `gt.despawn` — an actor left the run, with why. Recorded only when a SUMO exporter
+    /// is named ([`crate::export::records_lifecycle`]).
+    GtDespawn,
+    v2xw_record::dataset::views::GtDespawnView,
+    "gt.despawn",
+    Visibility::Gt
+);
+channel_record!(
     /// `gt.kinematics` — an actor's true state.
     GtKinematics,
     GtKinematicsView,

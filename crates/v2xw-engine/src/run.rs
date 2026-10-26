@@ -750,6 +750,13 @@ const fn cause_name(cause: LossCause) -> &'static str {
     }
 }
 
+/// One `gt.spawn` or `gt.despawn` record waiting for the step's recorder.
+#[derive(Debug, Clone)]
+enum Lifecycle {
+    Spawn(crate::records::GtSpawn),
+    Despawn(crate::records::GtDespawn),
+}
+
 /// Everything the engine knows about one actor that the mobility update does not repeat.
 #[derive(Debug, Clone)]
 struct ActorRecord {
@@ -1017,6 +1024,10 @@ pub struct Engine {
     /// The last `node.credentials` of vehicles that left in this step, recorded once the
     /// step's recorder is at hand.
     departed_credentials: Vec<v2xw_proto::scms::pki_view::NodeCredentials>,
+    /// The `gt.spawn` and `gt.despawn` records of this step, with their instants, kept
+    /// only when a SUMO exporter is named ([`crate::export::records_lifecycle`]) and
+    /// recorded once the step's recorder is at hand.
+    lifecycle: Vec<(SimTime, Lifecycle)>,
     /// The receiver validation of every node that left the run (edge-case package):
     /// summed into the report with the nodes still present. Until 2026-10-19 a departed
     /// node's refusals were dropped from `receiver_validation` with it.
@@ -1610,6 +1621,7 @@ impl Engine {
                 .then(crate::perception::Perception::new),
             retired: Vec::new(),
             departed_credentials: Vec::new(),
+            lifecycle: Vec::new(),
             departed_rx: ReceiverValidationReport::default(),
             bodies: link::BodyIndex::default(),
             radios: radios::RadioIndex::default(),
@@ -3326,6 +3338,12 @@ impl Engine {
         for c in core::mem::take(&mut self.departed_credentials) {
             self.emit(recorder, &crate::sec_records::NodeCredentialsRecord(c));
         }
+        for (at, rec) in core::mem::take(&mut self.lifecycle) {
+            match rec {
+                Lifecycle::Spawn(r) => self.emit_at(recorder, at, &r),
+                Lifecycle::Despawn(r) => self.emit_at(recorder, at, &r),
+            }
+        }
         self.update_radio_gate(now);
         self.log_traffic_control(recorder, now);
         self.set_lamps(lamps, step.after(now));
@@ -3713,8 +3731,28 @@ impl Engine {
 
     /// Takes the spawns and despawns out of an update, creating and retiring nodes.
     fn absorb(&mut self, update: &MobilityUpdate, now: SimTime) {
+        let lifecycle = crate::export::records_lifecycle(&self.scenario.exporters);
         for spawn in &update.spawned {
             self.report.actors_spawned += 1;
+            if lifecycle {
+                use v2xw_core::math::q3;
+                let view = v2xw_record::dataset::views::GtSpawnView {
+                    t: spawn.t,
+                    actor: spawn.actor,
+                    is_attacker: false,
+                    attacker_role: None,
+                    colluding_group_id: None,
+                    is_faulty: false,
+                    class: Some(spawn.class.as_str().to_string()),
+                    is_rsu: false,
+                    length_m: Some(q3(spawn.kinematics.dims.length_m)),
+                    desired_speed_mps: Some(q3(spawn.driver.desired_speed_mps)),
+                    route_length_m: Some(q3(spawn.route.length_m)),
+                    requested_t: spawn.requested,
+                };
+                self.lifecycle
+                    .push((spawn.t, Lifecycle::Spawn(crate::records::GtSpawn(view))));
+            }
             // The equipped draw is keyed by the actor, so whether a vehicle carries an OBU
             // does not depend on how many vehicles spawned before it (ADR 0004 §3).
             let fraction = if crate::wiring::is_vru_class(spawn.class) {
@@ -3751,6 +3789,19 @@ impl Engine {
             );
         }
         for (actor, cause) in &update.despawned {
+            if lifecycle {
+                let cause = serde_json::to_value(cause)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_else(|| format!("{cause:?}"));
+                let view = v2xw_record::dataset::views::GtDespawnView {
+                    t: update.t,
+                    actor: *actor,
+                    cause,
+                };
+                self.lifecycle
+                    .push((update.t, Lifecycle::Despawn(crate::records::GtDespawn(view))));
+            }
             *self
                 .report
                 .despawn_causes

@@ -470,6 +470,21 @@ fn execute(
             ),
         });
     }
+    // Every SUMO-format output is computed from gt.kinematics, as the VeReMi one is.
+    if level != crate::stream::RecordLevel::Full
+        && let Some(x) = exporters
+            .iter()
+            .find(|x| v2xw_engine::sumo_outputs::is_sumo(&x.id))
+    {
+        return Err(CliError::BadArgument {
+            flag: "record-level",
+            problem: format!(
+                "{level:?} records no gt.kinematics, which the {} exporter is computed from; \
+                 use --record-level full",
+                x.id
+            ),
+        });
+    }
     let checkpoint_every_ns = opts
         .long
         .checkpoint_interval_s()
@@ -859,7 +874,12 @@ fn execute(
     }
 
     if !exporters.is_empty() {
-        outcome.exports = v2xw_engine::export::run_exporters(&exporters, &recording_path, out_dir)?;
+        outcome.exports = v2xw_engine::export::run_exporters_in(
+            &exporters,
+            &recording_path,
+            out_dir,
+            Some(engine.world()),
+        )?;
     }
 
     // The deterministic artefacts are digested before the manifest is written, because the

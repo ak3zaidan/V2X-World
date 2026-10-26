@@ -1316,6 +1316,28 @@ fn export_choices() -> Vec<Value> {
                 "VeReMi traces",
                 "Per-receiver traces and a ground-truth log in the VeReMi Extension format, for detectors written against VeReMi.",
             ),
+            "sumo-fcd" => (
+                "SUMO FCD trace",
+                "Every vehicle's position, speed and lane each step, as SUMO's fcd-output.",
+            ),
+            "sumo-tripinfo" => (
+                "SUMO trip info",
+                "One line per finished trip (duration, waiting time, time loss), as SUMO's tripinfo-output.",
+            ),
+            "sumo-edgedata" => (
+                "SUMO edge data",
+                "Per-road flow, speed, density and occupancy, as SUMO's edgeData.",
+            ),
+            "sumo-lanedata" => (
+                "SUMO lane data",
+                "The same measures per lane, as SUMO's laneData.",
+            ),
+            "sumo-summary" => (
+                "SUMO summary",
+                "Vehicles inserted, running and arrived each step, as SUMO's summary-output.",
+            ),
+            // Detectors need positions, so they are not one-click choices.
+            "sumo-e1" | "sumo-e2" => continue,
             other => (other, ""),
         };
         out.push(choice(

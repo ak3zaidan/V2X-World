@@ -157,6 +157,21 @@ trustworthy or comparable; later waves add behaviours and radio features.
   vendored); tripinfo totals equal the engine's own trip records; edgeData flow equals the
   recording's counts; SUMO's own tools read the files where SUMO is installed. Fault: a
   dropped required attribute fails validation.
+- Status (2026-10-26): code written, NOT yet compiled or validated (the machine-wide build
+  lock was held by other agents' full engine test runs for most of the session). Done:
+  exporter ids `sumo-fcd`, `sumo-tripinfo`, `sumo-edgedata`, `sumo-lanedata`,
+  `sumo-summary`, `sumo-e1`, `sumo-e2` (`crates/v2xw-engine/src/sumo_outputs.rs`, model card
+  there; options validated in `scenario/validate.rs`, documented in `export.rs`); naming one
+  records `gt.spawn` (length, desired speed, route length, requested depart time) and
+  `gt.despawn` (cause), so runs without them are byte-unchanged; the CLI refuses a non-`full`
+  record level for them. Test `crates/v2xw-cli/tests/sumo_outputs.rs`: xmllint against
+  SUMO 1.27.1 XSDs (local install or fetched into git-ignored `target/sumo-xsd/`), a
+  dropped-required-attribute negative control per file, tripinfo vs the report's despawn
+  causes, edgeData departed/entered/left vs an independent recount, two-run byte identity,
+  `xml2csv.py` and `sumolib` against a netconvert net. Found: SUMO's own `summary_file.xsd`
+  does not compile (undefined type `nonNegativeFloat`, every release checked); the test
+  patches the cached copy. Open: compile, run the test, inject faults in the totals and
+  recount checks, review the E2 halting-duration semantics.
 
 ### Wave 3: attacks, violators and cheap radio laws
 
