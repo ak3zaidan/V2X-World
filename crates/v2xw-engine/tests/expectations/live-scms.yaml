@@ -484,8 +484,9 @@ rows:
   expect: le
   value: 1.0
   source: 'window 0: a report is forwarded at once; only the Uu and backend links remain (under 1 s)'
-  measured: pending
-  verdict: pending
+  measured: '0.0815'
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.RW10.shuffle-stage
   base: L
   variant: RW10
@@ -515,8 +516,9 @@ rows:
   value: 1.0
   source: 'window 0: the first case''s report reaches the MA within the Uu and backend links (L: 7.1 s
     after the detection, the shuffle wait)'
-  measured: pending
-  verdict: pending
+  measured: '0.089975'
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.RW0.latency
   base: L
   variant: RW0
@@ -529,10 +531,11 @@ rows:
   source: 'a shorter shuffle moves the decision earlier, but the CRL waits for the next 30 s slot (L:
     decision at 7.1 s, published at 16.2 s): the latency is quantised by the slot, so no later and possibly
     the same'
-  measured: pending
-  verdict: pending
+  measured: 16.3205 -> 16.3205 (ratio 1)
+  verdict: pass
   note: 'prediction corrected before the RW0 run, on L''s stages: written first as down (the slot quantisation
     was missed)'
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.RW10.latency
   base: L
   variant: RW10
@@ -607,8 +610,13 @@ rows:
   - 31.0
   source: 'review 30 s is one CRL slot: the same slot sequence shifted by exactly 30 s (scms-knobs: 60
     s gave exactly +60 s)'
-  measured: pending
-  verdict: pending
+  measured: 16.3205 -> 0 (delta -16.32)
+  verdict: wrong-expectation
+  measured_on: 2026-10-26, 938fb16a release
+  note: '2026-10-26 (938fb16a): the review moves the decision by exactly +30 s (MR30 records: report received
+    140.95 s, decision 170.96 s, CRL issued 170.97 s), but the first detection is at 133.8 s, so the first
+    enforcement falls at the next 30 s fetch after 170.97 s, past the 180 s end: no case is enforced and
+    the latency reads 0. The row needed a run of at least 210 s, or the decision stage as its measure'
 - id: LS.ME1.revocations
   base: L
   variant: ME1
@@ -855,13 +863,13 @@ rows:
   source: 'a change at age 30 s and the forced one at the period boundary: about two per 60 s period instead
     of one'
   measured: 59 -> 212 (ratio 3.593)
-  verdict: open
-  note: 'not settled. Part of the excess is the base: L''s 72 devices average about 64 s on the map, so
-    few cross a boundary (0.82 changes each), while every device older than 30 s changes in PT30. But
-    the rate is 136.9 per vehicle-hour, above the 120/h ceiling of "age 30 s plus one forced change a
-    period". Hypothesis: a scheduled change inside the 1 s certificate overlap (lifetime 61 s) picks a
-    certificate of the ending period, and the expiry forces a second change 1 s later. Needs the sec.pseudonym
-    records'
+  verdict: wrong-expectation
+  note: '2026-10-26 re-run on 938fb16a: 150 changes (96 age, 54 expiry), 2.54 x L 59. The double-change
+    hypothesis is refuted: sec.pseudonym has no two changes of a node less than 2 s apart (4 under 10
+    s). 150 changes over the 1.549 vehicle-hours is 96.8/h, under the 120/h ceiling; the 212 of 486c8cba
+    included changes before a vehicle''s first frame (O-4, fixed in the records merge 9003768e). The predicted
+    band assumed L devices cross a boundary as often as PT30 ones; L''s 64 s average dwell makes its base
+    small (0.82 changes per device)'
 - id: LS.PT10.changes
   base: L
   variant: PT10
@@ -883,11 +891,11 @@ rows:
   source: the first message under a new pseudonym carries its certificate (audit db1-3 F2)
   measured: 0.100699 -> 0.100699
   verdict: open
-  note: 'identical to 16 digits although changes rose 59 -> 212. runtime.rs:1123 restarts the certificate
-    cadence at each change, which should add about 150 certificates (+0.003). The unknown-signer loss
-    rose 0.0075 -> 0.0089, which points to digest-first frames after a change. The BSM shrank 213 -> 206
-    B, consistent with the J2945/1 path-history reset at a change. Open: whether m.full_cert_share counts
-    on-air certificates, and whether the restart takes effect'
+  note: '2026-10-26 (938fb16a): node.tx certificate frames 5,489 of 54,500 in both L and PT30. Age changes
+    are phase-locked with the cadence: both count from the device''s first fix, so the restarted cadence
+    lands on a frame whose certificate was due anyway (repro, node 3: change 5.056 s, certificate 5.067
+    s, then every 1.000 s as before). Expiry changes (54 against 59) should add one certificate where
+    a vehicle''s 1 s phase is not its first 100 ms tick; why the count still matches exactly is not shown'
 - id: LS.PT30.linkability
   base: L
   variant: PT30

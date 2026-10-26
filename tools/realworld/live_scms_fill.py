@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Judge only the still-pending rows of a live expectations table on a new runs folder.
 
-    python3 -I tools/realworld/live_scms_fill.py <table> <runs-dir> <stamp> [--write]
+    python3 -I tools/realworld/live_scms_fill.py <table> <runs-dir> <stamp> [--write] [--fixed]
 
 `matrix.py check --fill` re-judges every row on one runs folder. A table measured over
 several sessions and binaries keeps its judged rows on the runs that judged them, so this
@@ -9,6 +9,8 @@ fills a row only when its `verdict` is `pending` and both its runs are in `<runs
 uses matrix.py's own `judge` and derived measures, writes `measured`, `verdict` (`pass`,
 or `FAIL` for a person to settle) and `measured_on: <stamp>`, and prints one line per row
 it judged. Judged rows, and rows whose runs are not in the folder, are left as they are.
+Rows whose `note` says they are judged on the fixed binary are filled only with `--fixed`
+(and then only they are).
 """
 import importlib.util
 import json
@@ -25,7 +27,7 @@ def _matrix():
     return m
 
 
-def main(table, runs_dir, stamp, write):
+def main(table, runs_dir, stamp, write, fixed):
     import yaml
     m = _matrix()
     doc = yaml.safe_load(open(table))
@@ -43,6 +45,9 @@ def main(table, runs_dir, stamp, write):
     n = {'pass': 0, 'FAIL': 0, 'missing': 0}
     for row in doc['rows']:
         if row.get('verdict') != 'pending':
+            continue
+        # A row meant for the fixed binary is judged only on its runs (`--fixed`).
+        if ('fixed binary' in str(row.get('note', ''))) != fixed:
             continue
         if get(row['base'], row['measure']) == 'NO-RUN' or get(row['variant'], row['measure']) == 'NO-RUN':
             continue
@@ -71,4 +76,4 @@ def main(table, runs_dir, stamp, write):
 
 
 if __name__ == '__main__':
-    main(sys.argv[1], sys.argv[2], sys.argv[3], '--write' in sys.argv)
+    main(sys.argv[1], sys.argv[2], sys.argv[3], '--write' in sys.argv, '--fixed' in sys.argv)
