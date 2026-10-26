@@ -55,8 +55,9 @@ rows:
   behaviour: one RaAcaCertRequestSpdu, one AcaRaCertResponseSpdu and one AcaEeCertResponsePrivateSpdu per certificate
   spec: '[ASN-2.1] RaAcaInterface (one request per certificate); [CAMP122] 5.2.7.6.6'
   expect: {requests_eq_responses_eq_private: true, per_vehicle: 40}
-  measured: 'RaAca 2846, AcaRa 2846, AcaEePrivate 2846; vehicles with != 40 pre-run 0'
+  measured: 'RaAca 3146, AcaRa 3146, AcaEePrivate 2846 = delivered 2846; undelivered AcaRa: 300 held at the RA for devices that have not asked, 0 lost; private with no AcaRa 0; vehicles with != 40 pre-run 0'
   verdict: pass
+  note: 'rule corrected with the RA shuffle fix (0d62f322): the weekly job makes every account''s week, so an AcaRa answer of a device that has not asked stays held at the RA; each delivered private response is matched to its AcaRa by bytes'
 - id: PV.encrypted-to-device
   run: conf
   behaviour: the PCA encrypts every pseudonym certificate response to the device; only the device opens it
@@ -69,16 +70,25 @@ rows:
   behaviour: no RA-to-ACA request carries the device's enrolment certificate id, its request hash or its node index
   spec: the ACA never sees the EE identity ([CAMP122] 5.2.7.6.6; [BRECHT] II, "the PCA does not know the device")
   expect: {leaks: 0}
-  measured: '2846 RA-to-ACA requests searched for 199 device identifiers: 0 found'
+  measured: '3146 RA-to-ACA requests searched for 199 device identifiers: 0 found'
   verdict: pass
 - id: PV.aca-cannot-group
   run: conf
   behaviour: the ACA cannot group a device's certificates by the RA message that carries them
   spec: the RA shuffles the requests of different devices before the ACA sees them, so the ACA cannot link certificates of one device ([CAMP122] 5.2.7.6.4 shuffle; [BRECHT] III-C, VI)
-  expect: {max_certs_of_one_device_per_ra_aca_message: 1}
-  measured: '14 RA-to-ACA messages; most certificates of one device in one message: 20'
-  verdict: open
-  note: release_jobs sends one cert-request per (job, i) holding the device's whole week; the PCA answers by flow run. Records repaired to one message per request turn it green. Open, fix design in audit-prov.md 4.1
+  expect: {requests_per_ra_aca_message: 1, min_devices_per_aca_batch: 2, largest_share_of_one_device_over_1_over_k: 0}
+  measured: '3 ACA batches, 542 requests; requests per message max 1; devices per batch min 2; largest share of one device 0.5000 (over the 1/k baseline by 0.0000)'
+  verdict: fixed
+  test: crates/v2xw-proto/tests/pregeneration.rs the_weekly_job_sends_one_batch_shuffled_across_every_account
+  note: 'first pass (8becf72a) open: release_jobs sent one cert-request per (job, i) holding the device''s whole week, 20 per message, and the PCA answered by flow run. Rule rewritten for the fix (a batch is what one RA releases at one instant; the share is judged against the 1/k population baseline); fault: each device''s week leaves at its own instant in one message'
+- id: PV.aca-grouping-attack
+  run: conf
+  behaviour: an ACA-side grouping attack (adjacency in arrival order, equal length, any shared 8-byte string not common to most of the batch) links certificates of one device no better than the batch's population baseline
+  spec: the PCA learns nothing linking two certificates of one device ([BRECHT] V, VI-D; [CAMP122] 5.2.7.6.4 shuffle)
+  expect: {max_z_over_baseline: 3}
+  measured: 'order: 539 links, 52 one device''s vs 38.0 at baseline (z 2.36); length: 0 links, 0 one device''s vs 0.0 at baseline (z 0.00); bytes: 20055 links, 1317 one device''s vs 1325.7 at baseline (z -0.25)'
+  verdict: fixed
+  note: 'added with the fix (row 32); ground truth is the job''s flow instance, never an input to the attacks. Fault: each batch arrives grouped by device (an unshuffled release), z 80'
 - id: PV.lop-not-deployed
   run: conf
   behaviour: the US profile deploys no LOP; device traffic reaches the RA with no LOP hop
@@ -150,7 +160,7 @@ rows:
   behaviour: the RA generates the new week (expanded) no later than ra-maxGenDelay after the boundary
   spec: ra-maxGenDelay 1 week ([SMP] Table 3; [PRIMER] p.6)
   expect: {max_s: 604800}
-  measured: '12 weekly jobs; expanded - boundary 0.094 .. 0.096 s'
+  measured: '2 weekly jobs; expanded - boundary 0.100 .. 0.104 s'
   verdict: pass
 - id: PV.download-after-ready
   run: conf
@@ -195,7 +205,7 @@ rows:
   behaviour: run-report access.exchange_latency.topup (count, sum, max) equals the records' requested-to-installed times
   spec: same quantity, two sources (ns, per top-up)
   expect: {diff_s_max: 0.001}
-  measured: 'engine n 12 sum 724.085 s max 60.342 s; records n 12 sum 724.085 s max 60.342 s'
+  measured: 'engine n 12 sum 724.094 s max 60.350 s; records n 12 sum 724.094 s max 60.350 s'
   verdict: pass
   note: checker rule corrected before the verdict - exchange_latency is request (the boundary trigger) to completion (backend.rs), not from the requested stamp, which follows the device's signing (16.6 ms)
 - id: PV.m.rsu-app-certs
@@ -251,7 +261,7 @@ rows:
   behaviour: per device-week the RA receives 1 .info poll and serves 1 batch file; ACA 20 issuances; each LA 20 PLVs; scaled to the fleet these give CAMP's rates
   spec: '[CAMP122] 6.3.4.4 (.info 14 req/s year 1 for 17 M new vehicles a year, half of new plus all existing weekly), 6.3.6.4'
   expect: {info_per_device_week: 1, files_per_device_week: 1, aca_per_device_week: 20, plv_per_la_per_device_week: 20, info_rate_y1_req_s: [13.5, 14.5]}
-  measured: 'per device-week: .info 1.0, files 1.0, ACA 20.0, PLV per LA 20.0; .info year-1 rate 14.05 req/s (CAMP 14)'
+  measured: 'per device-week: .info 1.0, files 1.0 (12 top-ups); ACA 20.0, PLV per LA 20.0 (27 weekly jobs); .info year-1 rate 14.05 req/s (CAMP 14)'
   verdict: pass
 # ---- determinism
 - id: PV.determinism
@@ -259,5 +269,5 @@ rows:
   behaviour: same seed, the provisioning records (pki.flow, node.credentials) are byte-identical
   spec: engine invariant
   expect: {identical: true}
-  measured: 'pki.flow + node.credentials sha256 c55693ad829c355a vs c55693ad829c355a'
+  measured: 'pki.flow + node.credentials sha256 2db9550db0a22a4d vs 2db9550db0a22a4d'
   verdict: pass

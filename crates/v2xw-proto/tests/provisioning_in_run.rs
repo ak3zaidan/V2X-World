@@ -193,8 +193,8 @@ fn a_fleet_starting_together_makes_the_backend_queue() {
 
     assert_eq!(
         pca.served(),
-        u64::from(FLEET),
-        "one certification request per vehicle"
+        u64::from(FLEET) * 20,
+        "one RA→ACA message per certificate request: 20 per vehicle, shuffled across the fleet"
     );
     assert!(
         pca.waiting().as_nanos() > 0,

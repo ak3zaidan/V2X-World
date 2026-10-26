@@ -132,6 +132,18 @@ pub const FLOWS: &[FlowSpec] = &[
         stages: PROVISIONING_STAGES,
     },
     FlowSpec {
+        // The RA's weekly job for an account whose device has not asked yet: backend only.
+        id: FlowId::Pregeneration,
+        participants: &["RA", "LA1", "LA2", "PCA"],
+        stages: &[
+            StageId::Expanded,
+            StageId::PreLinkageReady,
+            StageId::Shuffled,
+            StageId::Certified,
+            StageId::BatchReady,
+        ],
+    },
+    FlowSpec {
         id: FlowId::Report,
         participants: &["EE", "LOP", "RA", "MA"],
         stages: &[

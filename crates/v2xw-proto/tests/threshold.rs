@@ -18,6 +18,10 @@ use v2xw_proto::threshold::{
 
 const PERIODS: u32 = 2;
 const JMAX: u32 = 2;
+/// The RA sends one request per message, shuffled across devices (audit-prov
+/// PV.aca-cannot-group), and the PCA's committee signs each message's answer in a session
+/// of its own: one session per certificate request.
+const REQUESTS: u64 = (PERIODS * JMAX) as u64;
 
 fn committee(n: u16, t: u16) -> Committee {
     Committee {
@@ -164,12 +168,12 @@ fn a_threshold_pca_issues_every_batch_through_two_rounds_with_the_counted_messag
     provisioned(&mut run, DEVICE_A, 0, PERIODS, JMAX);
     assert_eq!(held(&run), (PERIODS * JMAX) as usize);
     let s = stats(&run, "pca");
-    // One session per i-period batch; two rounds each; a quorum of 3 asked in each round,
+    // One session per RA→ACA request; two rounds each; a quorum of 3 asked in each round,
     // each answering once: 2 rounds × (3 requests + 3 responses).
-    assert_eq!(s.sessions, u64::from(PERIODS));
-    assert_eq!(s.completed, u64::from(PERIODS));
-    assert_eq!(s.rounds, 2 * u64::from(PERIODS));
-    assert_eq!(s.messages, u64::from(PERIODS) * 2 * (3 + 3));
+    assert_eq!(s.sessions, REQUESTS);
+    assert_eq!(s.completed, REQUESTS);
+    assert_eq!(s.rounds, 2 * REQUESTS);
+    assert_eq!(s.messages, REQUESTS * 2 * (3 + 3));
     assert_eq!((s.restarts, s.timeouts, s.failed), (0, 0, 0));
     // No single server signed: the PCA charged no certificate signature of its own.
     let pca = run.state.nodes.pca;
@@ -226,9 +230,9 @@ fn an_offline_member_is_timed_out_excluded_and_replaced() {
         "4 of 5 still make a quorum of 3"
     );
     let s = stats(&run, "pca");
-    assert_eq!(s.completed, u64::from(PERIODS));
-    assert_eq!(s.timeouts, u64::from(PERIODS), "one timeout per session");
-    assert!(s.exclusions >= u64::from(PERIODS));
+    assert_eq!(s.completed, REQUESTS);
+    assert_eq!(s.timeouts, REQUESTS, "one timeout per session");
+    assert!(s.exclusions >= REQUESTS);
     // The timeout is in the latency.
     let timeout = ThresholdDeployment::default().round_timeout;
     assert!(s.mean_latency_ns() >= timeout.as_nanos(), "{s:?}");
@@ -330,12 +334,12 @@ fn a_malicious_member_is_caught_by_its_share_excluded_and_the_session_restarts()
     provisioned(&mut run, DEVICE_A, 0, PERIODS, JMAX);
     assert_eq!(held(&run), (PERIODS * JMAX) as usize);
     let first = stats(&run, "pca");
-    // One PCA session per i-period, and the RA releases a device's periods together from
-    // its shuffle, so both sessions open at the same instant and both ask the liar before
-    // either has seen its share. Each catches it once (identifiable abort names the
+    // One PCA session per RA→ACA request, and the RA releases its shuffle batch at once, so
+    // every session opens at the same instant and each asks the liar before any has seen
+    // its share. Each catches it once (identifiable abort names the
     // cheater), excludes it and restarts: one invalid share and one restart per session,
     // never two in one session.
-    assert_eq!(first.sessions, u64::from(PERIODS), "{first:?}");
+    assert_eq!(first.sessions, REQUESTS, "{first:?}");
     assert_eq!(first.invalid_shares, first.sessions, "{first:?}");
     assert_eq!(first.restarts, first.sessions, "{first:?}");
     assert_eq!(first.failed, 0);

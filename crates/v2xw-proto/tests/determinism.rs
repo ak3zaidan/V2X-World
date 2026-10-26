@@ -118,7 +118,9 @@ fn queueing_delay_appears_when_entities_are_loaded() {
     run.run().expect("runs");
 
     let pca = run.kernel.queue(run.state.nodes.pca).expect("hosted");
-    assert_eq!(pca.served(), 20);
+    // One RA→ACA message per certificate request, shuffled across the twenty devices
+    // (the RA shuffle, audit-prov PV.aca-cannot-group): 400 requests served.
+    assert_eq!(pca.served(), 400);
     assert!(
         pca.waiting().as_nanos() > 0,
         "twenty simultaneous batches of twenty certificates must queue at four servers"

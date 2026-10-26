@@ -11,6 +11,14 @@ use crate::scms::pdu_prov;
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::EeRaInterfacePdu;
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::ScmsPduContent;
 
+/// The RA's key for routing a PCA answer: the request's HashedId8 (the low 8 bytes of the
+/// SHA-256 handle), which the `AcaRaCertResponseSpdu` carries as its request hash.
+fn route_key(handle: &[u8; 32]) -> [u8; 8] {
+    let mut k = [0u8; 8];
+    k.copy_from_slice(&handle[24..32]);
+    k
+}
+
 /// The hash the RA knows a provisioning request by.
 ///
 /// Over the request's public material, so two different requests cannot collide and the
@@ -416,14 +424,26 @@ impl ScmsState {
             .get(&device)
             .is_some_and(|r| r.contains_key(&i))
         {
+            // Held already (the weekly job of another account's request made it): ready
+            // for this flow now.
+            if self.ra.ready_told.insert(run) {
+                out.stage_at(StageId::BatchReady, self.nodes.ra, None, flow, run);
+            }
             return Some(at);
         }
         let ready_after = self.params.first_batch_delay;
         if account.generated.contains(&i) {
+            // Being generated (in its weekly job's batch, or its request's own): this flow
+            // is told when the RA has assembled the file.
+            self.ra
+                .ready_watchers
+                .entry((device, i))
+                .or_default()
+                .push((flow, run));
             return Some(ready_after.after(at));
         }
         if due <= at {
-            self.start_pregen_job(device, i, out, flow, run);
+            self.start_pregen_week(device, i, at, out, flow, run);
             return Some(ready_after.after(at));
         }
         self.ra.pregen_deferred += 1;
@@ -438,8 +458,47 @@ impl ScmsState {
         Some(ready_after.after(due))
     }
 
+    /// The RA's weekly job for week `i`, run when the schedule reaches it (or when a device
+    /// first asks for a week the schedule already reached): every account the RA holds
+    /// whose week `i` is due and not yet generated gets it, in one population batch that
+    /// the RA shuffles before the ACA sees it. A real RA adds the week for every account;
+    /// it does not wait for each device's `.info` ([PRIMER] p.6; [CAMP122] 5.2.7.6.4).
+    /// `device`, the account that asked (or whose timer fired), carries its week on its own
+    /// flow; every other account's week runs on a `pregeneration` flow of its own.
+    fn start_pregen_week(
+        &mut self,
+        device: NodeId,
+        i: u32,
+        at: SimTime,
+        out: &mut Outbox<ScmsMsg>,
+        flow: FlowId,
+        run: FlowRun,
+    ) {
+        self.ra.pregen_batches += 1;
+        let batch = self.ra.pregen_batches;
+        let others: Vec<NodeId> = self
+            .ra
+            .accounts
+            .iter()
+            .filter(|(d, a)| {
+                **d != device
+                    && !self.ra.blocklist.contains(d)
+                    && !a.generated.contains(&i)
+                    && self.pregen_due(a, i).is_some_and(|t| t <= at)
+            })
+            .map(|(d, _)| *d)
+            .collect();
+        self.start_pregen_job(device, i, out, flow, run, batch);
+        for d in others {
+            self.next_run += 1;
+            let r = FlowRun(self.next_run);
+            self.start_pregen_job(d, i, out, FlowId::Pregeneration, r, batch);
+        }
+    }
+
     /// Expands, and sends to the LAs, one pre-generated week of `device`'s account, under
-    /// the policy in force now (a smaller `certs_per_period` clips it).
+    /// the policy in force now (a smaller `certs_per_period` clips it), as part of the
+    /// weekly job's population batch `batch`.
     fn start_pregen_job(
         &mut self,
         device: NodeId,
@@ -447,6 +506,7 @@ impl ScmsState {
         out: &mut Outbox<ScmsMsg>,
         flow: FlowId,
         run: FlowRun,
+        batch: u64,
     ) {
         let n = self.nodes;
         // A timer armed before the MA's decision still fires: the RA checks its
@@ -515,7 +575,9 @@ impl ScmsState {
             cocoon_enc,
             plv: [BTreeMap::new(), BTreeMap::new()],
             enc_plv: [BTreeMap::new(), BTreeMap::new()],
-            aca_requests: BTreeMap::new(),
+            expected: BTreeMap::new(),
+            answered: BTreeMap::new(),
+            assembling: BTreeMap::new(),
             request_hash8,
             lci: [None, None],
             lci_sealed: [BTreeMap::new(), BTreeMap::new()],
@@ -524,6 +586,7 @@ impl ScmsState {
             sent: false,
             batch_ready_stamped: false,
             pregen: true,
+            batch: Some(batch),
         });
         for la in [LaIndex::One, LaIndex::Two] {
             out.send(
@@ -566,6 +629,7 @@ impl ScmsState {
         &mut self,
         i: u32,
         credentials: Vec<IssuedCredential>,
+        answers: Vec<[u8; 32]>,
         flow: FlowId,
         run: FlowRun,
         at: SimTime,
@@ -598,6 +662,7 @@ impl ScmsState {
             ScmsMsg::CertResponse {
                 i,
                 credentials: Box::new(credentials),
+                answers: Box::new(answers),
             },
             "cert-response",
             size,
@@ -623,32 +688,48 @@ impl ScmsState {
         self.release_jobs(out, n, to, at, None);
     }
 
-    /// Sends the RA→ACA requests of every job whose pre-linkage values are in (`only`:
-    /// just that run's, a pre-generated week).
+    /// Sends the RA→ACA requests of every job whose pre-linkage values are in and that
+    /// belongs to `batch` (`None`: the initial-request shuffle; `Some`: one weekly job's
+    /// population batch).
+    ///
+    /// The RA shuffles the requests of every device in the batch together before the ACA
+    /// sees them ([CAMP122] 5.2.7.6.4; [BRECHT] §V): one `cert-request` per request, in a
+    /// seeded permutation of the whole batch, so neither the carrying message nor the
+    /// order tells the ACA which requests are one device's. Before, each message held one
+    /// device's whole week in `j` order and the answer came back by the device's flow
+    /// (audit-prov PV.aca-cannot-group). Each request's answer is routed by its own hash
+    /// ([`RaState::aca_routes`]).
     fn release_jobs(
         &mut self,
         out: &mut Outbox<ScmsMsg>,
         n: ScmsNodes,
         to: NodeId,
         at: SimTime,
-        only: Option<FlowRun>,
+        batch: Option<u64>,
     ) {
-        let jobs = core::mem::take(&mut self.ra.jobs);
+        struct Staged {
+            job: usize,
+            i: u32,
+            j: u32,
+            b: Point,
+            plv: [SealedForPca<PreLinkageValue>; 2],
+            lci: [SealedForLa<Lci>; 2],
+            input: Option<pdu_prov::RaAcaInput>,
+        }
+        let mut jobs = core::mem::take(&mut self.ra.jobs);
         let pki = self.pki.clone();
         let now32 = self.time32(at);
-        let mut still_waiting = Vec::new();
-        for mut job in jobs {
-            if job.responses < 2 || job.sent || only.is_some_and(|r| r != job.run) {
-                still_waiting.push(job);
+        let mut staged: Vec<Staged> = Vec::new();
+        for (k, job) in jobs.iter_mut().enumerate() {
+            if job.responses < 2 || job.sent || job.batch != batch {
                 continue;
             }
             job.sent = true;
             out.stage_at(StageId::Shuffled, to, None, job.flow, job.run);
+            // What the device's request asked for (its own profile: a PSM device's
+            // differs from a vehicle's).
+            let psids = self.pseudonym_psids_of(job.device).as_slice().to_vec();
             for i in job.start_i..job.start_i + job.periods {
-                // The requests' inputs in order (each dummy linkage value drawn where the
-                // sequential loop drew it), then every RA signature at once (a pure
-                // function of its input), then the items in order: the same bytes.
-                let mut staged = Vec::new();
                 for j in 0..job.jmax {
                     let (Some(b), Some(p1), Some(p2), Some(l1), Some(l2)) = (
                         job.cocoons.get(&(i, j)).copied(),
@@ -678,93 +759,166 @@ impl ScmsState {
                                 plv: [e1.clone(), e2.clone()],
                                 valid_from: self.params.period_start_time32(i),
                                 dummy_lv: dummy,
-                                // What the device's request asked for (its own
-                                // profile: a PSM device's differs from a vehicle's).
-                                psids: self.pseudonym_psids_of(job.device).as_slice().to_vec(),
+                                psids: psids.clone(),
                             })
                         }
                         _ => None,
                     };
-                    staged.push((j, b, p1, p2, l1, l2, input));
-                }
-                let spdus: Vec<Option<Pdu>> = {
-                    use rayon::prelude::*;
-                    staged
-                        .par_iter()
-                        .map(|st| match (pki.as_deref(), &st.6) {
-                            (Some(pki), Some(x)) => pdu_prov::ra_aca_cert_request_spdu(pki, x).ok(),
-                            _ => None,
-                        })
-                        .collect()
-                };
-                let mut items = Vec::new();
-                for ((j, b, p1, p2, l1, l2, _), spdu) in staged.into_iter().zip(spdus) {
-                    if let Some(p) = &spdu {
-                        job.aca_requests.insert(p.hashed_id8(), (i, j));
-                    }
-                    // The PCA's handle on this certificate: the hash of this one request
-                    // (Brecht §VI-D), unique per certificate; the RA alone maps it back.
-                    let handle = match &spdu {
-                        Some(p) => sha256(p.bytes()),
-                        None => {
-                            let mut m = Vec::with_capacity(60);
-                            m.extend_from_slice(b"ra-aca-request");
-                            m.extend_from_slice(&self.params.master_seed.to_be_bytes());
-                            m.extend_from_slice(&job.request_hash);
-                            m.extend_from_slice(&i.to_be_bytes());
-                            m.extend_from_slice(&j.to_be_bytes());
-                            sha256(&m)
-                        }
-                    };
-                    self.ra.handles.insert(handle, job.request_hash);
-                    items.push(CertRequestItem {
+                    staged.push(Staged {
+                        job: k,
                         i,
                         j,
-                        cocoon_signing: b,
-                        plv1: p1,
-                        plv2: p2,
-                        lci1: l1,
-                        lci2: l2,
-                        handle,
-                        spdu,
+                        b,
+                        plv: [p1, p2],
+                        lci: [l1, l2],
+                        input,
                     });
                 }
-                let count = u32::try_from(items.len()).unwrap_or(u32::MAX);
-                let mut real = 0u32;
-                let mut signed = 0u32;
-                for it in &items {
-                    if let Some(p) = &it.spdu {
-                        signed += 1;
-                        real = real.saturating_add(
-                            self.emit_pdu(SpduKind::RaAcaCertRequest, to, n.pca, at, p)
-                                .bytes(),
-                        );
-                    }
-                }
-                // The RA signs every request it forwards.
-                Self::sign(out, signed);
-                let size = if signed > 0 {
-                    WireSize::real(real, "RaAcaCertRequestSpdu x n")
-                } else {
-                    self.sizes.cert_request_for(count)
-                };
-                out.send(
-                    n.pca,
-                    ScmsMsg::CertRequest {
-                        i,
-                        items: Box::new(items),
-                    },
-                    "cert-request",
-                    size,
-                    Transport::BackendNet,
-                    job.flow,
-                    job.run,
-                );
             }
             self.ra.repos.entry(job.device).or_default();
-            still_waiting.push(job);
         }
-        self.ra.jobs = still_waiting;
+        if staged.is_empty() {
+            self.ra.jobs = jobs;
+            return;
+        }
+        // The shuffle: a seeded Fisher-Yates permutation of the whole batch on its own
+        // stream (keyed by the release), so no other draw moves and one seed gives one
+        // order. Before, the batch left in arrival order.
+        self.ra.cert_releases += 1;
+        {
+            let mut g = self.rng.checkout(
+                RngDomain::Backend,
+                EntityRef::custom("scms/cert-request-shuffle", self.ra.cert_releases),
+            );
+            for x in (1..staged.len()).rev() {
+                let y = g.below(x as u64 + 1) as usize;
+                staged.swap(x, y);
+            }
+        }
+        // Every RA signature at once (a pure function of its input), then the requests in
+        // the shuffled order.
+        let spdus: Vec<Option<Pdu>> = {
+            use rayon::prelude::*;
+            staged
+                .par_iter()
+                .map(|st| match (pki.as_deref(), &st.input) {
+                    (Some(pki), Some(x)) => pdu_prov::ra_aca_cert_request_spdu(pki, x).ok(),
+                    _ => None,
+                })
+                .collect()
+        };
+        for (st, spdu) in staged.into_iter().zip(spdus) {
+            let job = &mut jobs[st.job];
+            // The PCA's handle on this certificate: the hash of this one request
+            // (Brecht §VI-D), unique per certificate; the RA alone maps it back.
+            let handle = match &spdu {
+                Some(p) => sha256(p.bytes()),
+                None => {
+                    let mut m = Vec::with_capacity(60);
+                    m.extend_from_slice(b"ra-aca-request");
+                    m.extend_from_slice(&self.params.master_seed.to_be_bytes());
+                    m.extend_from_slice(&job.request_hash);
+                    m.extend_from_slice(&st.i.to_be_bytes());
+                    m.extend_from_slice(&st.j.to_be_bytes());
+                    sha256(&m)
+                }
+            };
+            self.ra.handles.insert(handle, job.request_hash);
+            self.ra.aca_routes.insert(
+                route_key(&handle),
+                AcaRoute {
+                    job: job.run,
+                    i: st.i,
+                    j: st.j,
+                },
+            );
+            *job.expected.entry(st.i).or_default() += 1;
+            let [plv1, plv2] = st.plv;
+            let [lci1, lci2] = st.lci;
+            let size = match &spdu {
+                Some(p) => {
+                    // The RA signs every request it forwards.
+                    Self::sign(out, 1);
+                    let b = self
+                        .emit_pdu(SpduKind::RaAcaCertRequest, to, n.pca, at, p)
+                        .bytes();
+                    WireSize::real(b, "RaAcaCertRequestSpdu")
+                }
+                None => self.sizes.cert_request_for(1),
+            };
+            let item = CertRequestItem {
+                i: st.i,
+                j: st.j,
+                cocoon_signing: st.b,
+                plv1,
+                plv2,
+                lci1,
+                lci2,
+                handle,
+                spdu,
+            };
+            out.send(
+                n.pca,
+                ScmsMsg::CertRequest {
+                    i: st.i,
+                    items: Box::new(vec![item]),
+                },
+                "cert-request",
+                size,
+                Transport::BackendNet,
+                job.flow,
+                job.run,
+            );
+        }
+        self.ra.jobs = jobs;
+    }
+
+    /// The RA's bookkeeping once every request of `(job, i)` has its answer: the batch
+    /// file it assembled goes into the device's folder, and the flows waiting for it learn
+    /// it is ready.
+    fn file_period(&mut self, job_run: FlowRun, i: u32, at: SimTime, out: &mut Outbox<ScmsMsg>) {
+        let to = self.nodes.ra;
+        let Some(k) = self.ra.jobs.iter().position(|j| j.run == job_run) else {
+            return;
+        };
+        let job = &mut self.ra.jobs[k];
+        let sent = job.expected.get(&i).copied().unwrap_or(0);
+        if job.answered.get(&i).copied().unwrap_or(0) < sent {
+            return;
+        }
+        let mut batch = job.assembling.remove(&i).unwrap_or_default();
+        batch.files.sort_by_key(|(j, _)| *j);
+        batch.modelled.sort_by_key(|c| c.j);
+        if let Some(h) = job.request_hash8 {
+            batch.name = pdu::batch_filename(h, i);
+        }
+        let device = job.device;
+        let (flow, run) = (job.flow, job.run);
+        // `batch_ready` is the first moment the repository holds something the device
+        // can fetch, not the last: a device that polls early downloads the first i-period
+        // while later ones are still being certified, and a stage that came after that
+        // download would be a lie about the order.
+        job.periods_certified += 1;
+        let first = !core::mem::replace(&mut job.batch_ready_stamped, true);
+        let finished = job.periods_certified >= job.periods;
+        self.ra.repos.entry(device).or_default().insert(i, batch);
+        if first && self.ra.ready_told.insert(run) {
+            out.stage_at(StageId::BatchReady, to, None, flow, run);
+        }
+        for (f, r) in self
+            .ra
+            .ready_watchers
+            .remove(&(device, i))
+            .unwrap_or_default()
+        {
+            if self.ra.ready_told.insert(r) {
+                out.stage_at(StageId::BatchReady, to, None, f, r);
+            }
+        }
+        if finished {
+            self.ra.jobs.retain(|j| j.run != job_run);
+        }
+        let _ = at;
     }
 
     /// Handles every message of this flow; [`ScmsState::handle`] routes here.
@@ -861,7 +1015,7 @@ impl ScmsState {
         out: &mut Outbox<ScmsMsg>,
     ) -> Result<()> {
         let n = self.nodes;
-        let (flow, run, to, at, from) = (d.flow, d.run, d.to, d.at, d.from);
+        let (flow, run, to, at) = (d.flow, d.run, d.to, d.at);
         match d.msg {
             ScmsMsg::ProvisioningRequest(mut req) if to == req.device => {
                 // The request is signed with the enrolment certificate, so a device still
@@ -1220,7 +1374,9 @@ impl ScmsState {
                     cocoon_enc,
                     plv: [BTreeMap::new(), BTreeMap::new()],
                     enc_plv: [BTreeMap::new(), BTreeMap::new()],
-                    aca_requests: BTreeMap::new(),
+                    expected: BTreeMap::new(),
+                    answered: BTreeMap::new(),
+                    assembling: BTreeMap::new(),
                     request_hash8,
                     lci: [None, None],
                     lci_sealed: [BTreeMap::new(), BTreeMap::new()],
@@ -1229,6 +1385,7 @@ impl ScmsState {
                     sent: false,
                     batch_ready_stamped: false,
                     pregen: false,
+                    batch: None,
                 });
                 // Pre-generation expands the butterfly keys the request carries. Under a
                 // hybrid scheme there is no post-quantum butterfly (`crate::hybrid`): the
@@ -1519,23 +1676,33 @@ impl ScmsState {
                 let hash = job.request_hash;
                 let ready = job.responses == 2;
                 let pregen = job.pregen;
+                let batch = job.batch;
                 let lcis = job.lci;
                 if let Some(rec) = self.ra.requests.get_mut(&hash) {
                     rec.lci1 = lcis[0];
                     rec.lci2 = lcis[1];
                 }
                 if ready && pregen {
-                    // A pre-generated week: the weekly job's population shuffle is not
-                    // the initial request's age-bound one; it goes to the ACA now.
+                    // A pre-generated week: the weekly job's population batch is not the
+                    // initial request's age-bound shuffle; it goes to the ACA, shuffled
+                    // across every account in it, once every account's values are in.
                     out.stage_at(StageId::PreLinkageReady, to, None, flow, run);
-                    self.release_jobs(out, n, to, at, Some(run));
+                    let all_in = self
+                        .ra
+                        .jobs
+                        .iter()
+                        .filter(|j| j.batch == batch && !j.sent)
+                        .all(|j| j.responses >= 2);
+                    if all_in {
+                        self.release_jobs(out, n, to, at, batch);
+                    }
                 } else if ready {
                     out.stage_at(StageId::PreLinkageReady, to, None, flow, run);
                     let waiting = self
                         .ra
                         .jobs
                         .iter()
-                        .filter(|j| j.responses >= 2 && !j.sent)
+                        .filter(|j| j.responses >= 2 && !j.sent && j.batch.is_none())
                         .count();
                     if waiting >= self.params.shuffle_threshold as usize {
                         // The count closes this batch before the window does.
@@ -1561,6 +1728,8 @@ impl ScmsState {
             }
             ScmsMsg::CertRequest { i, items } => {
                 let count = u32::try_from(items.len()).unwrap_or(u32::MAX);
+                // What the PCA answers: each request by its handle, issued or not.
+                let answers: Vec<[u8; 32]> = items.iter().map(|it| it.handle).collect();
                 let real = self.pki.is_some() && items.iter().all(|it| it.spdu.is_some());
                 if real {
                     // The real path (WP-B3a): the ACA reads only the RA-signed request.
@@ -1611,6 +1780,7 @@ impl ScmsState {
                                     c: p256::Scalar::ZERO,
                                     response: Some(iss.to_ra),
                                     implicit: None,
+                                    handle: item.handle,
                                 });
                             }
                             Err(e) => self.reject_pdu(SpduKind::RaAcaCertRequest, to, at, e),
@@ -1630,6 +1800,7 @@ impl ScmsState {
                             Pending::IssueBatch {
                                 i,
                                 credentials: Box::new(credentials),
+                                answers: Box::new(answers),
                                 flow,
                                 run,
                             },
@@ -1641,7 +1812,7 @@ impl ScmsState {
                         );
                         return Ok(());
                     }
-                    self.send_batch(i, credentials, flow, run, at, out);
+                    self.send_batch(i, credentials, answers, flow, run, at, out);
                     return Ok(());
                 }
                 // Per certificate: two decryptions of the pre-linkage values, one ECQV
@@ -1702,6 +1873,7 @@ impl ScmsState {
                         c,
                         response: None,
                         implicit: None,
+                        handle: item.handle,
                     });
                 }
                 if let Some(role) = committee {
@@ -1714,6 +1886,7 @@ impl ScmsState {
                         Pending::IssueBatch {
                             i,
                             credentials: Box::new(credentials),
+                            answers: Box::new(answers),
                             flow,
                             run,
                         },
@@ -1725,22 +1898,29 @@ impl ScmsState {
                     );
                     return Ok(());
                 }
-                self.send_batch(i, credentials, flow, run, at, out);
+                self.send_batch(i, credentials, answers, flow, run, at, out);
             }
-            ScmsMsg::CertResponse { i, credentials } => {
-                // The PCA does not know whose batch this is; the RA routes it by its own
-                // job (the request it holds for this run).
-                let Some(device) = self.ra.jobs.iter().find(|j| j.run == run).map(|j| j.device)
-                else {
-                    self.ra.unrouted_responses += 1;
-                    return Ok(());
-                };
-                // The real path: the RA verifies each ACA-signed answer, routes it by the
-                // request hash to the `(i, j)` it kept, and files the private response as
-                // `i_j` in `<requestHash>_<i>.zip`. It cannot open what it files.
-                let mut batch = RepoBatch::default();
+            ScmsMsg::CertResponse {
+                i,
+                credentials,
+                answers,
+            } => {
+                // The PCA does not know whose certificates these are, and the RA does not
+                // ask: it routes each answer by the hash of the request it answers (its own
+                // `aca_routes`), verifies each ACA-signed answer, and files the private
+                // response as `i_j` in the device's `<requestHash>_<i>.zip`, which it
+                // assembles itself. It cannot open what it files.
                 let pki = self.pki.clone();
-                let job = self.ra.jobs.iter().position(|j| j.run == run);
+                let mut routes: BTreeMap<[u8; 8], AcaRoute> = BTreeMap::new();
+                for h in answers.iter() {
+                    let key = route_key(h);
+                    match self.ra.aca_routes.remove(&key) {
+                        Some(r) => {
+                            routes.insert(key, r);
+                        }
+                        None => self.ra.unrouted_responses += 1,
+                    }
+                }
                 let mut opened = 0u32;
                 // Every signature check at once (pure), each answer then filed in order.
                 let checked: Vec<Option<_>> = {
@@ -1756,51 +1936,49 @@ impl ScmsState {
                         .collect()
                 };
                 for (c, checked) in credentials.into_iter().zip(checked) {
-                    match checked {
-                        Some(checked) => {
+                    let (key, real) = match checked {
+                        Some(Ok((rh, private))) => {
                             opened += 1;
-                            match checked {
-                                Ok((rh, private)) => {
-                                    let ij = job.and_then(|k| {
-                                        self.ra.jobs[k].aca_requests.get(&rh).copied()
-                                    });
-                                    match ij {
-                                        Some((ii, jj)) if ii == i => {
-                                            batch.files.push((jj, private));
-                                        }
-                                        _ => self.ra.unrouted_responses += 1,
-                                    }
-                                }
-                                Err(e) => {
-                                    self.reject_pdu(SpduKind::AcaRaCertResponse, to, at, e);
-                                }
-                            }
+                            (rh, Some(private))
                         }
-                        _ => batch.modelled.push(c),
+                        Some(Err(e)) => {
+                            opened += 1;
+                            self.reject_pdu(SpduKind::AcaRaCertResponse, to, at, e);
+                            continue;
+                        }
+                        None => (route_key(&c.handle), None),
+                    };
+                    let target = routes
+                        .get(&key)
+                        .copied()
+                        .filter(|r| r.i == i)
+                        .and_then(|r| {
+                            self.ra
+                                .jobs
+                                .iter_mut()
+                                .find(|j| j.run == r.job)
+                                .map(|j| (j, r.j))
+                        });
+                    let Some((job, jj)) = target else {
+                        self.ra.unrouted_responses += 1;
+                        continue;
+                    };
+                    let file = job.assembling.entry(i).or_default();
+                    match real {
+                        Some(private) => file.files.push((jj, private)),
+                        None => file.modelled.push(c),
                     }
                 }
                 Self::verify(out, opened);
-                batch.files.sort_by_key(|(j, _)| *j);
-                if let Some(h) = job.and_then(|k| self.ra.jobs[k].request_hash8) {
-                    batch.name = pdu::batch_filename(h, i);
+                let mut touched = BTreeSet::new();
+                for r in routes.values() {
+                    if let Some(job) = self.ra.jobs.iter_mut().find(|j| j.run == r.job) {
+                        *job.answered.entry(r.i).or_default() += 1;
+                        touched.insert((r.job, r.i));
+                    }
                 }
-                self.ra.repos.entry(device).or_default().insert(i, batch);
-                // `batch_ready` is the first moment the repository holds something the
-                // device can fetch, not the last: a device that polls early downloads the
-                // first i-period while later ones are still being certified, and a stage
-                // that came after that download would be a lie about the order.
-                let mut first = false;
-                let mut finished = false;
-                if let Some(j) = self.ra.jobs.iter_mut().find(|j| j.run == run) {
-                    j.periods_certified += 1;
-                    first = !core::mem::replace(&mut j.batch_ready_stamped, true);
-                    finished = j.periods_certified >= j.periods;
-                }
-                if first {
-                    out.stage_at(StageId::BatchReady, to, None, flow, run);
-                }
-                if finished {
-                    self.ra.jobs.retain(|j| j.run != run);
+                for (job_run, ii) in touched {
+                    self.file_period(job_run, ii, at, out);
                 }
             }
             ScmsMsg::BatchDownloadRequest { device, i, .. } if to == device => {
@@ -2022,6 +2200,7 @@ impl ScmsState {
                                     certified_public: o.public,
                                     c: p256::Scalar::ZERO,
                                     response: None,
+                                    handle: [0; 32],
                                     implicit: Some(Box::new(
                                         crate::scms::msg::ImplicitCredential {
                                             aca_id8: pdu::cert_id8(&o.aca),
@@ -2258,7 +2437,7 @@ impl ScmsState {
                     .get(&device)
                     .is_some_and(|a| a.generated.contains(&i));
                 if !held {
-                    self.start_pregen_job(device, i, out, flow, run);
+                    self.start_pregen_week(device, i, at, out, flow, run);
                 }
             }
             ScmsMsg::InfoResponse {

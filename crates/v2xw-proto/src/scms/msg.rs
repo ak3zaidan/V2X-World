@@ -238,6 +238,11 @@ pub struct IssuedCredential {
     /// The real path, on the device: what it derived from the decrypted
     /// `AcaEeCertResponsePrivateSpdu`.
     pub implicit: Option<Box<ImplicitCredential>>,
+    /// The handle of the RA→ACA request this certificate answers: the SHA-256 of that one
+    /// request ([BRECHT] §VI-D), which the PCA knows and the RA alone maps back to a
+    /// device. The RA files the answer by it, never by the flow it arrived on. Zero on
+    /// the device.
+    pub handle: [u8; 32],
 }
 
 /// An implicit pseudonym certificate as the device derived it (WP-B3a).
@@ -421,7 +426,8 @@ pub enum ScmsMsg {
         /// The batch generation the timer was armed for.
         generation: u64,
     },
-    /// RA → PCA: one i-period of certificate requests.
+    /// RA → PCA: certificate requests of one i-period. The RA sends one request per
+    /// message, released in a shuffled order across every device of the batch.
     CertRequest {
         /// The i-period.
         i: u32,
@@ -434,6 +440,10 @@ pub enum ScmsMsg {
         i: u32,
         /// The credentials.
         credentials: Box<Vec<IssuedCredential>>,
+        /// The handles of the requests this message answers, issued or not (an HTTP
+        /// response names the request it answers): how the RA knows a period of a device's
+        /// batch file is complete without asking the PCA whose it was.
+        answers: Box<Vec<[u8; 32]>>,
     },
     /// Device → RA: fetch one batch.
     BatchDownloadRequest {

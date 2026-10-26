@@ -135,8 +135,9 @@ fn the_scms_plug_in_describes_itself_completely() {
     assert_eq!(scms.credential_types().len(), 2);
     assert_eq!(
         scms.flows().len(),
-        9,
-        "the seven of 05-protocols §3.2, successor enrolment and policy distribution"
+        10,
+        "the seven of 05-protocols §3.2, successor enrolment, policy distribution and the \
+         RA's weekly pre-generation job"
     );
     assert_eq!(scms.separations().len(), 10);
     assert_eq!(scms.primitives().len(), 4);
