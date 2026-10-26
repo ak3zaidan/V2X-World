@@ -3052,7 +3052,7 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                committee member, '<role>-member-<k>', the home provider's unless qualified \
                by its provider, '<provider>/<role>' ('provider-b/crlg'). Two-of-two linkage \
                with an LA down cannot revoke; a t-of-n committee with fewer than n − t + 1 \
-               down can.
+               down can.",
     },
     KeyStatus {
         path: "security.crypto_mode",
