@@ -422,10 +422,11 @@ rows:
   min_change: 0.5
   source: 'pool 4: a joiner in period 0 is due at 180 s, the run''s last instant (L shows top-ups due
     at the end are started: 121 started, 59 completed); only those, against every joiner of L'
-  measured: pending
-  verdict: pending
+  measured: 121 -> 10
+  verdict: pass
   note: 'prediction corrected before the PP4 run, on L''s numbers: written first as eq 0, but a top-up
     due at the run end is started (L: 62 of 121 started at 180 s)'
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.PP4.topups-done
   base: L
   variant: PP4
@@ -434,8 +435,9 @@ rows:
   expect: eq
   value: 0
   source: every PP4 top-up is started at 180 s, the run end; none completes inside the run
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.PP4.preload
   base: L
   variant: PP4
@@ -444,8 +446,9 @@ rows:
   expect: up
   min_change: 0.3
   source: the preload is pool_periods x certs_per_period per device (4 x 5 against 2 x 5 plus top-ups)
-  measured: pending
-  verdict: pending
+  measured: 1034 -> 1424
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.PP3.pool
   base: L
   variant: PP3
@@ -710,8 +713,13 @@ rows:
   measure: x.revocation_latency_s
   expect: up
   source: a 60 s slot waits 30 s on average
-  measured: pending
-  verdict: pending
+  measured: 16.3205 -> 0
+  verdict: wrong-expectation
+  measured_on: 2026-10-26, 938fb16a release
+  note: '2026-10-26 (938fb16a): the run horizon, as MR30: the first report reaches the MA about 141 s
+    in and a 60 s CRL cadence publishes next at 180 s, the run end, so no vehicle enforces and the latency
+    reads 0 (2 revocations, 2 CRL versions against 3). The row needed a run past the next slot plus one
+    fetch (about 240 s)'
 - id: LS.CC60.versions
   base: L
   variant: CC60
@@ -723,8 +731,9 @@ rows:
   - 1.0
   source: the CRL Generator publishes a new version only when an entry is added; fewer slots group more
     revocations
-  measured: pending
-  verdict: pending
+  measured: 3 -> 2 (ratio 0.6667)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CC10.versions
   base: L
   variant: CC10
@@ -887,8 +896,13 @@ rows:
   - 2.5
   - 6.5
   source: age 10 s gives up to six a period but each period holds five certificates
-  measured: pending
-  verdict: pending
+  measured: 59 -> 515 (ratio 8.729)
+  verdict: wrong-expectation
+  measured_on: 2026-10-26, 938fb16a release
+  note: '2026-10-26 (938fb16a): 515 changes (465 age, 50 expiry), x8.7. The pool does not cap the changes:
+    the store goes round its valid certificates again (least used first, stores.rs rotate_when), as a
+    CAMP device reuses its week of certificates, so age 10 s gives a change about every 10 s of use. 4
+    pairs of changes under 2 s apart (age then expiry at a period end); 0 vehicles starved'
 - id: LS.PT30.full-cert
   base: L
   variant: PT30
@@ -926,8 +940,9 @@ rows:
   expect: same
   tol: 0.0
   source: changing more often never uses a certificate outside its period
-  measured: pending
-  verdict: pending
+  measured: 0 -> 0
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.L.full-cert
   base: L
   variant: L
