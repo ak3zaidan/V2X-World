@@ -3008,7 +3008,9 @@ impl ThresholdSpec {
 #[serde(deny_unknown_fields)]
 pub struct BackendFailureSpec {
     /// The server: a role (`pca`, `la1`, `la2`, `ma`, `crlg`, `ra`, …) or a committee
-    /// member, `<role>-member-<k>` (`pca-member-0`, `linkage-member-2`, `crl-member-1`).
+    /// member, `<role>-member-<k>` (`pca-member-0`, `linkage-member-2`, `crl-member-1`);
+    /// the home provider's, unless qualified by its provider, `<provider>/<role>`
+    /// (`provider-b/crlg`).
     pub node: String,
     /// `offline`, `slow` or `malicious`.
     pub mode: String,

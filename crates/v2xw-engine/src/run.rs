@@ -567,6 +567,14 @@ pub struct RunReport {
     /// How many frames were *not* generated because the instant fell in a time-dilation
     /// window (02-architecture.md §5.4).
     pub suppressed_frames: u64,
+    /// How many messages a node generated and began to sign whose signature (with its
+    /// hand-off) completes after the run's end, so they never reached the MAC. A healthy
+    /// run counts only the last instants' messages, about one per node; a signer that
+    /// cannot keep up (a sign time above the message interval: SLH-DSA-SHA2-128s on an
+    /// automotive SoC signs in seconds) counts nearly every message here. Before this
+    /// count such a run put nothing on the air and no counter said why (live-chains
+    /// finding 8).
+    pub signed_past_end: u64,
     /// The credential system's calendar (`time.calendar`, WP-D2): `real`, the
     /// deployment's weekly grid from the 2015 epoch, or `compressed`, whose i-period
     /// numbers and calendar waits are not the deployment's. Empty for a run without a
@@ -5256,6 +5264,7 @@ impl Engine {
         // The signature's end, before the hand-off [`Engine::hand_down`] added.
         let t_signed = ready.saturating_sub(self.pending_handoff).max(t_sign_start);
         if ready > horizon {
+            self.report.signed_past_end += 1;
             return HandDown::NotSent;
         }
         if self.is_dilated(ready) {

@@ -3049,8 +3049,10 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Backend servers that are 'offline' (deliveries dropped), 'slow' (extra_ms \
                more service time per message) or 'malicious' (invalid threshold shares) \
                between from_s and to_s. 'node' is a role (pca, la1, la2, ma, crlg, …) or a \
-               committee member, '<role>-member-<k>'. Two-of-two linkage with an LA down \
-               cannot revoke; a t-of-n committee with fewer than n − t + 1 down can.",
+               committee member, '<role>-member-<k>', the home provider's unless qualified \
+               by its provider, '<provider>/<role>' ('provider-b/crlg'). Two-of-two linkage \
+               with an LA down cannot revoke; a t-of-n committee with fewer than n − t + 1 \
+               down can.
     },
     KeyStatus {
         path: "security.crypto_mode",

@@ -195,3 +195,48 @@ fn the_validator_refuses_what_the_partially_hybrid_cycle_cannot_run() {
         assert!(e.is_empty(), "{sig}: {e}");
     }
 }
+
+/// Live-chains finding 8 (docs/validation/live-chains-2026-10-25.md): SLH-DSA-SHA2-128s
+/// signs in seconds on the no-HSM SoC (2.72 G cycles on the Xeon reference, SPHINCS+
+/// round-3.1 Table 4), against a 100 ms BSM interval, so the signer never catches up and
+/// every BSM's signature completes after a short run's end. The run put nothing on the
+/// air while `net_mtu_refusals`, `mac_drops`, `suppressed_frames` and `phy_refusals` all
+/// stayed 0: a loss no counter showed. Each such message is now counted in
+/// `signed_past_end`; a P-256 run counts only its last instant's messages. Fault (the
+/// counter not incremented): the SLH-DSA run counts 0.
+#[test]
+fn a_signer_that_cannot_keep_up_counts_the_messages_it_never_finished() {
+    let short = |sig: &str| {
+        let mut s = grid(sig);
+        s.time.duration_s = 3.0;
+        s.actors.vehicles.demand.rate_veh_per_h = Some(8_000.0);
+        s.net.fragmenter = Some(ModelChoice::new(v2xw_net::FRAGMENTER_GENERIC_ID));
+        s
+    };
+    let (p256, _) = run(short("ecdsa-p256"));
+    let (slh, _) = run(short("slh-dsa-sha2-128s"));
+    println!(
+        "p256: {} nodes, {} frames, {} past end; slh: {} nodes, {} frames, {} past end",
+        p256.nodes_created,
+        p256.frames_transmitted,
+        p256.signed_past_end,
+        slh.nodes_created,
+        slh.frames_transmitted,
+        slh.signed_past_end
+    );
+    assert!(p256.frames_transmitted > 0);
+    assert!(
+        p256.signed_past_end <= 2 * p256.nodes_created,
+        "a signer that keeps up leaves at most its last messages unfinished"
+    );
+    assert!(slh.nodes_created > 0);
+    assert!(
+        slh.frames_transmitted < p256.frames_transmitted / 10,
+        "the signer cannot keep up"
+    );
+    assert!(
+        slh.signed_past_end > 5 * slh.nodes_created,
+        "every message still signing at the end is counted: {}",
+        slh.signed_past_end
+    );
+}
