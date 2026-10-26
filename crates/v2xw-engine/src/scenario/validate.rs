@@ -7371,7 +7371,7 @@ fn experiment(s: &Scenario, e: &mut Vec<ScenarioError>) {
         ));
     }
     for (path, values) in &x.sweep {
-        if resolve_path(&doc, path).is_none() {
+        if resolve_path(&doc, path).is_none() && !names_a_default_section(&doc, path, values) {
             e.push(conflict(
                 &format!("experiment.sweep.{path}"),
                 format!("'{path}' does not name a field of this scenario"),
@@ -7386,6 +7386,92 @@ fn experiment(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ));
         }
     }
+}
+
+/// Whether `path` names a field inside a section the serialised scenario leaves out because
+/// it is at its default (`apps` when every application setting is the default: then
+/// `apps.glosa_compliance` is a field of the scenario that its document does not show, and
+/// `glosa-energy.yaml`'s own sweep was refused on a variant whose `apps` was the default,
+/// live-rsu §3). The path's first missing segment must be a whole section (not the last
+/// segment), and written with one of the swept values the document must still read as a
+/// scenario and give the value back at that path, inside a section that came back with its
+/// other fields: a free-form map (which comes back holding only the written key) and a key
+/// the schema does not have (refused on read) are still refused.
+pub fn names_a_default_section(doc: &Value, path: &str, values: &[Value]) -> bool {
+    default_section(doc, path, values).is_some()
+}
+
+/// Writes into `doc` the section [`names_a_default_section`] finds missing for `path`, with
+/// every field it holds (the swept field at one of `values`, to be replaced), so a sweep can
+/// replace `path` in it. Returns whether it wrote one.
+pub fn fill_default_section(doc: &mut Value, path: &str, values: &[Value]) -> bool {
+    if resolve_path(doc, path).is_some() {
+        return false;
+    }
+    let Some((keys, section)) = default_section(doc, path, values) else {
+        return false;
+    };
+    let mut at = doc;
+    for k in &keys[..keys.len() - 1] {
+        let Some(next) = at.get_mut(k.as_str()) else {
+            return false;
+        };
+        at = next;
+    }
+    let Some(obj) = at.as_object_mut() else {
+        return false;
+    };
+    obj.insert(keys[keys.len() - 1].clone(), section);
+    true
+}
+
+/// The missing section's key path and its full serialised form, or `None`.
+fn default_section(doc: &Value, path: &str, values: &[Value]) -> Option<(Vec<String>, Value)> {
+    if path.contains('[') {
+        return None;
+    }
+    let keys: Vec<&str> = path.split('.').collect();
+    let mut cur = doc;
+    let mut missing = None;
+    for (i, k) in keys.iter().enumerate() {
+        match cur.get(*k) {
+            Some(v) => cur = v,
+            None => {
+                missing = Some(i);
+                break;
+            }
+        }
+    }
+    let first = missing?;
+    if first + 1 >= keys.len() {
+        return None;
+    }
+    let section: Vec<String> = keys[..=first].iter().map(|k| (*k).to_string()).collect();
+    let section_path = section.join(".");
+    values.iter().find_map(|value| {
+        let mut d = doc.clone();
+        let mut at = &mut d;
+        for (i, k) in keys.iter().enumerate() {
+            let obj = at.as_object_mut()?;
+            if i + 1 == keys.len() {
+                obj.insert((*k).to_string(), value.clone());
+                break;
+            }
+            at = obj
+                .entry((*k).to_string())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        }
+        let scenario = serde_json::from_value::<crate::scenario::Scenario>(d).ok()?;
+        let back = serde_json::to_value(&scenario).ok()?;
+        let same = match (resolve_path(&back, path), value) {
+            (Some(Value::Number(a)), Value::Number(b)) => a.as_f64() == b.as_f64(),
+            (Some(a), b) => a == b,
+            (None, _) => false,
+        };
+        let full = resolve_path(&back, &section_path)
+            .filter(|v| v.as_object().is_some_and(|o| o.len() > 1))?;
+        same.then(|| (section.clone(), full.clone()))
+    })
 }
 
 /// Walks a dotted path into a document, `a.b[2].c`.
