@@ -849,9 +849,9 @@ mod tests {
     #[test]
     fn per_driver_critical_gaps_spread_around_the_table_value() {
         let p = JunctionPatience::REALISTIC;
-        let (mut m1, mut m2) = (0.0, 0.0);
+        let (mut m1, mut m2) = (0.0f64, 0.0f64);
         let dz = 1e-3;
-        let mut z = -8.0;
+        let mut z: f64 = -8.0;
         while z < 8.0 {
             let w = (-0.5 * z * z).exp() / (2.0 * core::f64::consts::PI).sqrt() * dz;
             let g = p.critical_gap_s(4.5, z, 0.0);
