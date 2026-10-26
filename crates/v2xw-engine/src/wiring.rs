@@ -571,6 +571,9 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(v) = drivers.red_runner_share {
         params.red_runner_share = v;
     }
+    if let Some(v) = &drivers.violations {
+        params.violations = v.params();
+    }
     if let Some(v) = drivers.start_reaction_s {
         params.start_reaction_median_s = v;
     }

@@ -57,6 +57,19 @@
 //! Truck Lane Restriction Studies*, 2004: 26 states). With `truck_lane_restriction` a
 //! truck or a trailer on a motorway or trunk edge of three or more lanes makes no
 //! discretionary change into its leftmost lane.
+//!
+//! # 5. Rule violations and crash states
+//!
+//! [`ViolationParams`], off by default: red-light running after the red onset, amber
+//! running beyond the dilemma zone, failure to yield to a slow foe, and collisions that
+//! become crash states (stopped, lane blocked, cleared after a duration). The red-light
+//! numbers are fitted to Bonneson, Zimmerman & Quiroga, *An Engineer's Guide to Reducing
+//! Red-Light-Related Crashes* (TTI 0-4196-P1): 1.0 violation per 10,000 vehicle-cycles
+//! (3-6 per 1,000 vehicles), median entry under 0.5 s into red, 98 % within 4.0 s. The
+//! failure-to-yield semantics follow SUMO's documented `jmIgnoreFoeProb` /
+//! `jmIgnoreFoeSpeed`; re-implemented from the documentation and the field data — SUMO was
+//! read for behaviour only and no code was copied. Every violation committed on purpose is
+//! tagged ([`crate::audit::intent`]) so the auditor tells it from a model defect.
 
 use std::collections::VecDeque;
 
@@ -346,9 +359,169 @@ pub fn is_restricted_left_lane(world: &v2xw_world::World, lane: v2xw_core::ids::
     driving.len() >= 3 && driving.iter().max() == Some(&l.index)
 }
 
+// ---------------------------------------------------------------------------
+// Rule violations and crash states (WP-08)
+// ---------------------------------------------------------------------------
+
+/// Bonneson et al.'s red-light violation rate at Texas urban signals: 1.0 violation per
+/// 10,000 vehicle-cycles (Bonneson, Zimmerman & Quiroga, *An Engineer's Guide to
+/// Reducing Red-Light-Related Crashes*, TTI 0-4196-P1, Table 1: Texas, 20 approaches;
+/// direct observation, every entry after the red onset counted).
+pub const RED_RUN_PER_VEH_CYCLE: f64 = 1.0e-4;
+
+/// The field band of red-light violations per 1,000 vehicles entering, read from the
+/// same Table 1: Iowa 3.0, Texas 4.1, United Kingdom 5.3, and the guide's statement that
+/// 1.0 per 10,000 vehicle-cycles "equates to 3 to 6 violations per 1000 vehicles for
+/// cycle lengths in the range of 60 to 120 s".
+pub const RED_RUN_PER_1000_VEH_BAND: (f64, f64) = (3.0, 6.0);
+
+/// The mean of a red-light runner's tolerance, seconds: how late after the red onset they
+/// still enter, exponential across runners. The guide (Figure 4, 541 phases with a
+/// through vehicle entering on red) puts the median entry under 0.5 s into red; with
+/// arrivals uniform in time an exponential tolerance gives an exponential entry time, and
+/// 0.6 s gives a median of 0.6 ln 2 = 0.42 s. **Calibrated** to that median.
+pub const RED_RUN_TOLERANCE_MEAN_S: f64 = 0.6;
+
+/// The share of drivers who will enter on red within their tolerance, by default. With
+/// arrivals uniform over a cycle of length `C`, a share `p` with mean tolerance `μ` makes
+/// `p·μ/C` violations per vehicle, so `p·μ = 3600 s · 1.0e-4 = 0.36 s` reproduces
+/// [`RED_RUN_PER_VEH_CYCLE`]: `0.36 / 0.6 = 0.6`. **Calibrated**, not measured; the
+/// guide's driver survey (Porter & Berry, its ref. 15) says most early-red entries are
+/// intentional, which is what a per-driver propensity models.
+pub const RED_RUN_SHARE: f64 = 0.6;
+
+/// The longest tolerance drawn, seconds: the guide's 98 % of violations within 4.0 s of
+/// the red onset (Table 3).
+pub const RED_RUN_TOLERANCE_MAX_S: f64 = 4.0;
+
+/// How fast a foe may be moving for a driver who fails to yield to ignore it, m/s: SUMO's
+/// `jmIgnoreFoeSpeed` semantics (only foes at or below this speed are ignored; SUMO's
+/// documented default is 0). **A choice**: a vehicle still rolling up to its own line,
+/// which a failing driver takes to be stopping.
+pub const IGNORE_FOE_SPEED_MPS: f64 = 5.0;
+
+/// How long a crashed vehicle stands in its lane before it is cleared, seconds. **A
+/// choice, todo-calibrate**: the order of a minor-crash clearance in incident-management
+/// practice (a quarter of an hour); no field distribution was read.
+pub const CRASH_CLEARANCE_S: f64 = 900.0;
+
+/// The rule violations the drivers commit, and what a collision turns into
+/// (`actors.vehicles.drivers.violations`). Off by default: with `enabled` false no draw is
+/// made and nothing in a run changes.
+///
+/// * **Red-light running after the red onset** (SUMO's `jmDriveAfterRedTime`, re-
+///   implemented from the field data): a share [`RED_RUN_SHARE`] of drivers each carry a
+///   tolerance, exponential with mean [`RED_RUN_TOLERANCE_MEAN_S`] and capped at
+///   [`RED_RUN_TOLERANCE_MAX_S`]. At the amber onset they go if, at their present speed,
+///   they reach the line no later than their tolerance after the red; seeing a red first,
+///   they go if the red began no longer ago than their tolerance less the time to the line.
+/// * **Amber running beyond the dilemma zone**: each driver's amber threshold is the
+///   Zegeer & Deen logistic without the clamp at its far edge (5.5 s), up to
+///   `amber_tail_max_s`: the logistic's own tail of drivers who go from further back.
+/// * **Failure to yield**: a share of drivers, at each unsignalised junction or permissive
+///   green they reach (a keyed draw per driver and junction), ignore conflicting foes moving
+///   at or below `ignore_foe_speed_mps` (SUMO `jmIgnoreFoeProb` / `jmIgnoreFoeSpeed`).
+/// * **Crash states**: with `crashes` on, two vehicles whose footprints intersect stop where
+///   they are, block their lanes, and are removed after `crash_clearance_s` with
+///   [`crate::DespawnCause::Collision`].
+///
+/// Every violation the engine commits on purpose is **tagged** on the actor
+/// ([`crate::audit::intent`]), so the traffic auditor counts it as behaviour and still
+/// flags an untagged one as a model defect.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ViolationParams {
+    /// Whether any of this acts.
+    pub enabled: bool,
+    /// The share of drivers who run reds within their tolerance.
+    pub red_run_share: f64,
+    /// The mean of a runner's tolerance after the red onset, seconds.
+    pub red_run_tolerance_mean_s: f64,
+    /// The longest tolerance, seconds.
+    pub red_run_tolerance_max_s: f64,
+    /// The longest amber threshold drawn, seconds; the dilemma zone's far edge (5.5 s)
+    /// keeps the clamp, so nobody goes from beyond it.
+    pub amber_tail_max_s: f64,
+    /// The probability that a driver fails to yield at a junction where they must give way.
+    pub fail_to_yield_share: f64,
+    /// Foes at or below this speed may be ignored by a driver who fails to yield, m/s.
+    pub ignore_foe_speed_mps: f64,
+    /// Whether a collision resolves to a crash state.
+    pub crashes: bool,
+    /// How long a crashed vehicle stands before it is cleared, seconds.
+    pub crash_clearance_s: f64,
+}
+
+impl Default for ViolationParams {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            red_run_share: RED_RUN_SHARE,
+            red_run_tolerance_mean_s: RED_RUN_TOLERANCE_MEAN_S,
+            red_run_tolerance_max_s: RED_RUN_TOLERANCE_MAX_S,
+            amber_tail_max_s: 8.0,
+            fail_to_yield_share: 0.0,
+            ignore_foe_speed_mps: IGNORE_FOE_SPEED_MPS,
+            crashes: true,
+            crash_clearance_s: CRASH_CLEARANCE_S,
+        }
+    }
+}
+
+impl ViolationParams {
+    /// Whether this is the default (off) block, which serialises to nothing.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The red-light tolerance of a driver from two uniforms: whether they run at all
+    /// (`u_share` below the share) and how late (`u_tol`, inverse exponential CDF), seconds;
+    /// 0 for a driver who never enters on red.
+    pub fn red_tolerance_s(&self, u_share: f64, u_tol: f64) -> f64 {
+        if !self.enabled || u_share >= self.red_run_share || self.red_run_tolerance_mean_s <= 0.0
+        {
+            return 0.0;
+        }
+        let u = u_tol.clamp(1e-12, 1.0 - 1e-12);
+        (-self.red_run_tolerance_mean_s * math::ln(1.0 - u))
+            .min(self.red_run_tolerance_max_s.max(0.0))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_red_tolerance_is_exponential_for_the_share_and_zero_otherwise() {
+        let p = ViolationParams {
+            enabled: true,
+            ..ViolationParams::default()
+        };
+        let n = 20_000;
+        let mut runners = 0;
+        let mut tol = Vec::new();
+        for i in 0..n {
+            let u1 = (i as f64 + 0.5) / n as f64;
+            let u2 = ((i * 7919) % n) as f64 / n as f64 + 0.5 / n as f64;
+            let t = p.red_tolerance_s(u1, u2);
+            if t > 0.0 {
+                runners += 1;
+                tol.push(t);
+            }
+        }
+        let share = runners as f64 / n as f64;
+        assert!((share - RED_RUN_SHARE).abs() < 0.01, "share {share}");
+        tol.sort_by(f64::total_cmp);
+        let median = tol[tol.len() / 2];
+        assert!(
+            (median - RED_RUN_TOLERANCE_MEAN_S * math::ln(2.0)).abs() < 0.02,
+            "median {median}"
+        );
+        assert!(tol.iter().all(|t| *t <= RED_RUN_TOLERANCE_MAX_S));
+        let off = ViolationParams::default();
+        assert_eq!(off.red_tolerance_s(0.0, 0.9), 0.0, "disabled: nobody runs");
+    }
 
     #[test]
     fn the_spread_keeps_the_mean_and_has_the_cv() {

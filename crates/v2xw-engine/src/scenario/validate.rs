@@ -1596,6 +1596,55 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the share of drivers who run reds",
     },
+    Bound {
+        path: "actors.vehicles.drivers.violations.red_run_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the share of red-light runners",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.violations.red_run_tolerance_mean_s",
+        lo: 0.0,
+        hi: 4.0,
+        exclusive_lo: false,
+        what: "the mean red-light tolerance",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.violations.red_run_tolerance_max_s",
+        lo: 0.0,
+        hi: 16.0,
+        exclusive_lo: false,
+        what: "the longest red-light tolerance",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.violations.amber_tail_max_s",
+        lo: 5.5,
+        hi: 12.0,
+        exclusive_lo: false,
+        what: "the longest amber threshold",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.violations.fail_to_yield_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the failure-to-yield probability",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.violations.ignore_foe_speed_mps",
+        lo: 0.0,
+        hi: 40.0,
+        exclusive_lo: false,
+        what: "the fastest foe ignored",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.violations.crash_clearance_s",
+        lo: 0.0,
+        hi: 86400.0,
+        exclusive_lo: false,
+        what: "the crash clearance time",
+    },
     // The engine clamps each driver's draw to 0.3-3 s (Taoka 1989's lognormal: median
     // 1.1-1.2 s); a median outside that would be clamped flat.
     Bound {
@@ -3688,6 +3737,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "The share of drivers who go on an amber inside their dilemma-zone threshold \
                without checking they reach the line before the red, so some enter on red. \
                Microscopic engine only. Needs realism other than identical.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.violations",
+        status: Status::Wired,
+        note: "Rule violations and crash states (WP-08): red-light running after the red onset \
+               (Bonneson et al., TTI 0-4196-P1), amber running beyond the dilemma zone, failure \
+               to yield (SUMO jmIgnoreFoeProb/Speed semantics) and collisions that stop both \
+               vehicles and block the lane until cleared. Off by default. Microscopic engine \
+               only; needs realism other than identical.",
     },
     KeyStatus {
         path: "actors.vehicles.drivers.start_reaction_s",

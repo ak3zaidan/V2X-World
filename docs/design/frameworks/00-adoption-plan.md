@@ -255,6 +255,28 @@ trustworthy or comparable; later waves add behaviours and radio features.
   1,000 cycles sits in the cited band; the RLVW and IMA applications fire on non-scripted
   violators in a test scenario; `audit.rs` still flags an untagged violation (fault: an
   untagged red-light crossing is caught as a defect).
+- Status (2026-10-26): in code, not yet compiled or run (branch `worktree-wf_06761ffa-754-5`).
+  The build machine was held for the whole session by the integrator's
+  `cargo test -p v2xw-engine -p v2xw-server` (over 95 minutes), so no build of this package
+  ran. Done: `ViolationParams` in `drivers.rs` (`actors.vehicles.drivers.violations`, off
+  by default, in the schema with bounds, status, labels and a guide row); red-light running
+  after the red onset as a per-driver tolerance, exponential with mean 0.6 s for a share of
+  0.6, fitted to Bonneson, Zimmerman & Quiroga, TTI 0-4196-P1 (verified from the PDF:
+  Table 1 Iowa 3.0, Texas 4.1, UK 5.3 per 1,000 veh, Texas 1.0 per 10,000 veh-cycles;
+  Figure 4 median entry under 0.5 s; Table 3 98 % within 4.0 s); the Zegeer & Deen
+  logistic's tail past 5.5 s; failure to yield to foes at or below 5 m/s (SUMO
+  `jmIgnoreFoeProb`/`Speed` semantics); collisions turned into crash states (stopped, lane
+  blocked, `DespawnCause::Collision` after 900 s); intent tags that the auditor counts in
+  new `AuditStats` fields. Written, not run: three mobility tests (the field band per 1,000
+  vehicles and per 10,000 veh-cycles, with an untagged copy of the run as the fault; off
+  is byte-identical and on is deterministic; crash, blocked lane and clearance, with the
+  untagged crash still an overlap defect) and `v2xw-engine/tests/violations.rs` (RLVW and
+  IMA, on against off). Open: compile and run all of this, plus the fault proofs and the
+  golden suites; pedestrian non-yield is not started (it needs the pedestrian's position
+  relative to the vehicle's path, not just crosswalk occupancy); no field rate for failure
+  to yield (default 0, todo-calibrate); crash clearance is a choice; no hazard lamps or
+  DENM/TIM for a crash; vehicle-pedestrian collisions are not resolved; and the
+  rate-per-1,000-veh band is still unmeasured on the engine.
 
 **WP-09 Two-ray interference and measured antennas** (S ×2, 3 days). Sources: O-P5, O-P6.
 - Scope: the two-ray interference law with the Fresnel ground reflection (Rappaport §4.6;

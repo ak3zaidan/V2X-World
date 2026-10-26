@@ -400,6 +400,8 @@ const DIMENSIONLESS: &[&str] = &[
     "actors.vehicles.drivers.speed_factor",
     "actors.vehicles.drivers.speed_spread",
     "actors.vehicles.drivers.red_runner_share",
+    "actors.vehicles.drivers.violations.red_run_share",
+    "actors.vehicles.drivers.violations.fail_to_yield_share",
     "actors.vehicles.gnss.outage_probability",
     "actors.vehicles.bsm_timing.locked_share",
     // end traffic audit
