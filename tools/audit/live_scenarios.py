@@ -131,9 +131,22 @@ def c_records(run, p):
         out.append('empty recording')
     if not run.report.get('records'):
         out.append('report.records 0')
-    if not run.samples:
+    if not run.samples and not (p.get('period_aware') and not _period_closes(run)):
         out.append('no metric samples')
     return out
+
+
+def _period_closes(run):
+    """Whether a metric period boundary (k * time.metric_period_s, default 1 s) falls after
+    time.warmup_s and no later than the run's window: only then can a run record a sample
+    (run.rs on_metric_flush: windows close on the period grid; one closing inside the
+    warm-up is not recorded)."""
+    t = run.scenario.get('time') or {}
+    period = float(t.get('metric_period_s') or 1.0)
+    warm = float(t.get('warmup_s') or 0.0)
+    end = float(run.window or t.get('duration_s') or 0.0)
+    k = math.floor(warm / period) + 1
+    return k * period <= end + 1e-9
 
 
 def c_finite(run, p):
@@ -266,7 +279,13 @@ def c_radio_output(run, p):
     if not tx:
         out.append('0 frames transmitted')
     elif not ok:
-        out.append('%s frames transmitted, 0 receptions ok' % tx)
+        att = run.report.get('reception_attempts', 0)
+        lost = run.report.get('rx_losses') or {}
+        out_of_range = sum(lost.get(k, 0) for k in ('below-sensitivity', 'half-duplex'))
+        # range_aware: no reception is the physics when every attempt was below the receiver's
+        # sensitivity (or met a half-duplex transmitter), as on a sparse fleet in a big world
+        if not (p.get('range_aware') and att == out_of_range):
+            out.append('%s frames transmitted, 0 receptions ok (%s attempts, %s out of range)' % (tx, att, out_of_range))
     if tx and not run.chn('node.tx'):
         out.append('frames transmitted but no node.tx records')
     return out
@@ -311,6 +330,8 @@ def c_ped_output(run, p):
     act = run.scenario.get('actors') or {}
     if not act.get('pedestrians') and not (act.get('vru') or {}).get('pedestrians'):
         return []
+    if p.get('period_aware') and not _period_closes(run):
+        return []
     seen = {s['metric'] for s in run.samples if s['metric'].startswith('ped_')}
     return [] if seen else ['pedestrians configured but no ped_* metric sample']
 
@@ -332,12 +353,14 @@ def c_vru_devices(run, p):
     return [] if lo <= got <= hi else ['vru_devices_created %s outside [%.0f, %.0f] (N %s, f %s)' % (got, lo, hi, n, f)]
 
 
-def _pool(run, metric, dims=None, t_from=0):
+def _pool(run, metric, dims=None, t_from=0, t_to=None):
     """Pool every summary sample of `metric` (dims matching) from t_from: n-weighted mean and the
     window means' median."""
     xs = []
     for s in run.samples:
         if s['metric'] != metric or s['t'] < t_from * 1e9:
+            continue
+        if t_to is not None and s['t'] > t_to * 1e9:
             continue
         if dims and any((s.get('dims') or {}).get(k) != v for k, v in dims.items()):
             continue
@@ -356,7 +379,7 @@ def _pool(run, metric, dims=None, t_from=0):
 
 
 def measure(run, p):
-    xs = _pool(run, p['metric'], p.get('dims'), p.get('t_from', 0))
+    xs = _pool(run, p['metric'], p.get('dims'), p.get('t_from', 0), p.get('t_to'))
     if not xs:
         return None
     field = p.get('field', 'mean')
@@ -506,6 +529,8 @@ def apply_fault(run, fault, row):
         r.report['actors_spawned'] = 0
     elif f == 'no-rx':
         r.report['receptions_ok'] = 0
+    elif f == 'drop-samples':
+        r.samples = []
     elif f == 'drop-scms-channels':
         for c in ('pki.flow', 'backend.state', 'pki.state', 'node.credentials'):
             r.doc['channels'].pop(c, None)

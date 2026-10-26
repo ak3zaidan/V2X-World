@@ -19,12 +19,17 @@ runs:
   all: {scenario: "every scenarios/**/*.yaml that `v2xw validate` accepts", note: "60 s window or shorter"}
   midtown-normal-rep: {scenario: scenarios/midtown-normal.yaml, note: "midtown-normal again, same seed: determinism"}
   phase1-grid-rep: {scenario: scenarios/phase1-grid.yaml, note: "phase1-grid again, same seed: determinism"}
+  # 2026-10-26
+  real-world__matrix__pq-hybrid~ov-fix: {scenario: "40 s overlay of scenarios/real-world/matrix/pq-hybrid.yaml (no fast-forward)", note: "debug v2xw with fragment_cert_share"}
+  p1-e4-hwy60: {scenario: scenarios/real-world/paper1/p1-e4.yaml, note: "60 s, release v2xw 938fb16a"}
+  p1-e4-hwy60-fix: {scenario: scenarios/real-world/paper1/p1-e4.yaml, note: "60 s, debug v2xw with traffic.depart_at_speed (off)"}
+  p1-e4-depart60: {scenario: "overlay of p1-e4.yaml with traffic.depart_at_speed: true", note: "60 s, debug v2xw"}
 
 rows:
 # ---------------------------------------------------------------- (1) every scenario
 - {id: SC.boots, runs: all, check: boots, expect: pass, fault: exit-code,
    source: "a shipped scenario that validates must run: exit 0 and a run report",
-   verdict: open, measured: "115 runs: every run that started exited 0. Refused by the loader when --duration-s cuts a scheduled item: 40 runs of multi-day scenarios (time.fast_forward past the end), 7 with warmup_s >= the window, 5 with an event or attack past it (manhattan-day at 6 h, edge/multi-week-parked at 640 s; the rest retried and ran); 25 multi-day ones then ran as 40-65 s overlays (meta.base + duration + fast_forward: []) and pass. Did not finish in 600 s: highway-congestion (80 s), midtown-peak-load at 60 s (passes at 10 s)"}
+   verdict: open, measured: "115 runs: every run that started exited 0. Refused by the loader when --duration-s cuts a scheduled item: 40 runs of multi-day scenarios (time.fast_forward past the end), 7 with warmup_s >= the window, 5 with an event or attack past it (manhattan-day at 6 h, edge/multi-week-parked at 640 s; the rest retried and ran); 25 multi-day ones then ran as 40-65 s overlays (meta.base + duration + fast_forward: []) and pass. Did not finish in 600 s: highway-congestion (80 s), midtown-peak-load at 60 s (passes at 10 s). 2026-10-26 (release 938fb16a): 115 of the 117 unrun files ran and exited 0; stress/fs-first-window (130 s full fleet) and the portland-scms-benchmark overlay (130 s) timed out at 600 s"}
 - {id: SC.no-panic, runs: all, check: no_panic, expect: pass, fault: panic-line,
    source: "no Rust panic on stderr",
    verdict: pass, measured: "no panic in any run"}
@@ -36,7 +41,7 @@ rows:
    verdict: pass, measured: "no NaN or infinity"}
 - {id: SC.arithmetic, runs: all, check: sample_arithmetic, expect: pass, fault: successes-over-trials,
    source: "def.rs SampleValue: proportion = successes/trials in [0,1] inside its Wilson interval; ratio of sums = numerator/denominator (sums on the 1e-3 grid); summary min <= p50 <= p95 <= p99 <= max, mean in [min, max]; counts and non-negative units >= 0; part-of-whole ratios in [0, 1]",
-   verdict: open, measured: "pass once the checker allows the documented D9 1e-3 grid on both sums: sig_cbr_extra numerator 0.001 for 0.0008, bytes_per_vehicle_hour denominator 0.001 h for 0.00053 h, glosa-energy nox_per_km 0.023/0.014 against point 1.705 (points are computed before rounding and are right; a reader cannot recompute them from the sums). OPEN DEFECT: matrix/pq-hybrid (40 s overlay): cert_bytes_share{msg_type: psm} = 623,200 / 454,860 = 1.37, i.e. the PSMs attached-certificate octets exceed their whole envelope (security_overhead 0.95); every other run and message type holds"}
+   verdict: open, measured: "pass once the checker allows the documented D9 1e-3 grid on both sums: sig_cbr_extra numerator 0.001 for 0.0008, bytes_per_vehicle_hour denominator 0.001 h for 0.00053 h, glosa-energy nox_per_km 0.023/0.014 against point 1.705 (points are computed before rounding and are right; a reader cannot recompute them from the sums). OPEN DEFECT: matrix/pq-hybrid (40 s overlay): cert_bytes_share{msg_type: psm} = 623,200 / 454,860 = 1.37, i.e. the PSMs attached-certificate octets exceed their whole envelope (security_overhead 0.95); every other run and message type holds. 2026-10-26: the same on every PQ run that fragments (stress/pq-hybrid-falcon512 1.37, pq-hybrid-mldsa44 3.01, pq-mldsa44 3.02, scms-pq-relay-repro 1.37). Cause: run.rs hand_down cloned the whole SPDU cert_bytes onto every generic-sdu piece; fixed by frag::fragment_cert_share (test fragmentation.rs a_split_certificate_is_counted_once_across_its_pieces); re-run owed (PQH.*)"}
 - {id: SC.latency, runs: all, check: latency_positive, expect: pass, fault: negative-latency,
    source: "a message cannot arrive before it is sent: e2e_latency, aoi, verify_cost min >= 0 and mean > 0 (mac_access_delay may be 0: 802.11 sends at once on a medium idle for AIFS)",
    verdict: pass, measured: "e2e_latency min > 0 everywhere"}
@@ -184,3 +189,70 @@ rows:
    params: {metric: pdr, other: radio-dsrc, lo: 1.0, hi: 2.0},
    source: "LTE-V2X PC5's turbo coding, SC-FDMA and blind retransmission give a 3-6 dB link-budget gain over 802.11p (5GAA 2017, Qualcomm/Ford field tests: ~2x range), so its PDR is at least DSRC's",
    verdict: wrong-expectation, measured: "ratio 2.26 (0.445/0.197). The pooled PDR weights far bins where DSRC is ~0; the distance where PDR = 0.5 is 340 m against 140 m (2.4x), inside the 1.8-2.6x that a 8-11 dB link-budget gain gives at urban exponents 2.7-3.5. The band [1, 2] was too narrow for a pooled ratio"}
+
+# ---------------------------------------------------------------- (4) 2026-10-26: the 117 unrun scenarios and the fixes
+# Runs: release v2xw built from 938fb16a (copied), same flags; multi-day files as 40 s
+# overlays without fast-forward as on 10-25; `-fix` runs use the optimised debug v2xw built
+# from this branch (the two fixes below). Rows written before the runs they judge, except
+# the two correction rows, which say so.
+#
+# Correction rows (written after their runs were read; the original rows are unchanged):
+- {id: SC.records-b, runs: all, check: records, expect: pass, fault: drop-samples,
+   params: {period_aware: true},
+   source: "correction of SC.records (2026-10-26): a metric window closes only on the time.metric_period_s grid and one closing inside the warm-up is not recorded (run.rs on_metric_flush), so a run whose window holds no period boundary after warmup_s records no sample by design; written after stress/fs-det (period 10 s, warmup 2 s, 5 s window) wrote 1.12 M records and an empty metrics.json",
+   verdict: open, measured: "2026-10-26: holds on every run that started (stress/fs-det now passes); red only on the loader refusals and timeouts of SC.boots"}
+- {id: SC.peds-b, runs: all, check: ped_output, expect: pass, fault: drop-ped-metrics, fault_run: midtown-pedestrians,
+   params: {period_aware: true},
+   source: "correction of SC.peds (2026-10-26), for the reason of SC.records-b: no metric period closes after the warm-up in stress/fs-det's 5 s window, so no ped_* sample can exist",
+   verdict: pass, measured: "2026-10-26: holds on all 210 runs, fs-det included"}
+- {id: SC.radio-b, runs: all, check: radio_output, expect: pass, fault: no-rx,
+   params: {range_aware: true},
+   exempt: {scale__cost__pq-mldsa87: "every ML-DSA-87 BSM (4,627 B signature) is above the WSMP MTU and fragmenter/none refuses it before the MAC (2,850 net_mtu_refusals, IEEE 1609.3 has no fragmentation): 0 frames is the configured stack, a scenario finding"},
+   source: "correction of SC.radio (2026-10-26): 0 receptions is the physics when every reception attempt was below sensitivity or met a half-duplex transmitter (attempts = below-sensitivity + half-duplex); written after scale/2 (5 vehicles on Midtown with buildings: 295 attempts, 291 below sensitivity, 4 half-duplex)",
+   verdict: pass, measured: "2026-10-26: holds on 209 runs (scale/2 and scale/base pass on the range rule; pq-mldsa87 exempt)"}
+# Finding 1 fixed (fragment_cert_share): each generic-sdu piece of a certificate-bearing SPDU
+# repeated the whole certificate. Predicted before the -fix run: the PSMs' certificate share
+# falls from 1.37 by about the mean piece count (2 for a ~2.6 kB hybrid SPDU at a ~1.4 kB
+# MTU): 1.37 / 2 = 0.69, band [0.55, 0.80]; the envelope octets do not move (security_overhead
+# 0.95 +- 0.01); BSMs stay <= 1.
+- {id: PQH.psm-cert-share, runs: [real-world__matrix__pq-hybrid~ov-fix], check: band, expect: pass, fault: "scale:10",
+   params: {metric: cert_bytes_share, dims: {msg_type: psm}, lo: 0.55, hi: 0.80},
+   source: "IEEE 1609.2 SignedData: the signer certificate is part of the envelope, so its octets cannot exceed it; Σ over an SDU's pieces must count it once (FrameLayers::fragment apportions the split the same way)",
+   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+- {id: PQH.psm-overhead, runs: [real-world__matrix__pq-hybrid~ov-fix], check: band, expect: pass, fault: "scale:10",
+   params: {metric: security_overhead, dims: {msg_type: psm}, lo: 0.94, hi: 0.96},
+   source: "the fix moves only cert_bytes; envelope and air octets are unchanged (10-25: 0.95)",
+   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+- {id: PQH.arithmetic, runs: [real-world__matrix__pq-hybrid~ov-fix], check: sample_arithmetic, expect: pass, fault: successes-over-trials,
+   source: "as SC.arithmetic on the fixed binary: every part-of-whole ratio in [0, 1]",
+   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+# Finding 3 behind a flag (traffic.depart_at_speed, SUMO departSpeed="max"). Predictions
+# written before the runs, on p1-e4 (3,000 veh/h, 60 s): flag off on the fixed binary is
+# byte-identical to the release binary; flag on, the first 10 s mean speed rises from 9.0 to
+# at least 15 m/s (a car inserted at ~v0 = 29 m/s needs no 0 -> 29 m/s run-up of ~20 s at
+# a = 1.4 m/s^2); the 60 s mean from 15.5 to [16.5, 23] m/s, not to free flow, because the
+# synthetic highway is a grid ring whose 15 m corners cap speed at sqrt(5.5 x 15) = 9 m/s
+# (the 10-25 base reached only 18.4 by 40-60 s); no harder braking (inserted at a safe speed).
+- {id: HWY3.off-unchanged, runs: [p1-e4-hwy60-fix], check: same_digest, expect: pass, fault: digest,
+   params: {other_of: {p1-e4-hwy60-fix: p1-e4-hwy60}},
+   source: "a flag left off changes nothing: record digest identical to the release binary's",
+   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+- {id: HWY3.first-window, runs: [p1-e4-depart60], check: band, expect: pass, fault: "scale:0.1",
+   params: {metric: mean_speed, t_to: 10, lo: 15.0, hi: 31.0},
+   source: "SUMO departSpeed=max: entry at the safe desired speed; base 9.0 m/s at 10 s",
+   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+- {id: HWY3.speed, runs: [p1-e4-depart60], check: band, expect: pass, fault: "scale:10",
+   params: {metric: mean_speed, lo: 16.5, hi: 23.0},
+   source: "entry deficit removed; corners of the grid ring (15 m radius, 9 m/s turn speed) still cap the space-mean speed near the 10-25 steady 18-20 m/s",
+   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+- {id: HWY3.vs-base, runs: [p1-e4-depart60], check: ratio_between, expect: pass, fault: "scale:10",
+   params: {metric: mean_speed, other: p1-e4-hwy60-fix, lo: 1.05, hi: 1.5},
+   source: "same seed, same demand, only the depart speed changes",
+   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+- {id: HWY3.kinematics, runs: [p1-e4-depart60], check: kinematics_bounds, expect: pass, fault: speed-80,
+   params: {vmax: 37.0, amin: -9.0, amax: 5.0},
+   source: "inserted below the IDM's safe speed: no braking past ~0.9 g, no speed over 70 mph + 15 %",
+   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+- {id: HWY3.headway, runs: [p1-e4-depart60], check: band, expect: pass, fault: "scale:10",
+   params: {metric: headway_time, lo: 1.0, hi: 10.0}, source: "as W.HWY2.headway",
+   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}

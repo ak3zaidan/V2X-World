@@ -224,6 +224,11 @@ pub struct Traffic {
     /// with its acceleration, low for vans and trucks) arrives too late. Unset is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub standing_leader_stop: Option<bool>,
+    /// Whether a trip enters the road already moving, at the highest safe speed there
+    /// (SUMO's `departSpeed="max"`) instead of at rest (SUMO's default, `departSpeed="0"`):
+    /// a freeway entry merges at speed. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depart_at_speed: Option<bool>,
     /// Whether the bends of a through lane's polyline are driven no faster than the
     /// turn-speed rule allows (`turn_lateral_accel_mps2` over the tightest
     /// `turn_curve_window_m`, 6 m when unset), as a junction connector is. Unset is off.
@@ -330,6 +335,7 @@ impl Default for Traffic {
             lc_keep_right: None,
             heavy_vehicle_gap_terms: None,
             standing_leader_stop: None,
+            depart_at_speed: None,
             lane_bend_speed: None,
             kerbside: None,
         }

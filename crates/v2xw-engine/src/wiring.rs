@@ -516,6 +516,9 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(v) = traffic.standing_leader_stop {
         params.standing_leader_stop = v;
     }
+    if let Some(v) = traffic.depart_at_speed {
+        params.depart_at_speed = v;
+    }
     if let Some(v) = traffic.lane_bend_speed {
         params.lane_bend_speed = v;
     }

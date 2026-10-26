@@ -5817,6 +5817,10 @@ impl Engine {
                     .map(|l| air_of(l.psdu_bytes()).as_nanos() / 1_000)
                     .sum();
                 self.report.sdus_fragmented += 1;
+                // The SDU's attached certificate is counted once across its pieces, each
+                // carrying its share as it carries its share of the envelope.
+                let whole_cert = base.cert_bytes;
+                let mut carried_before = 0_u32;
                 for (k, (desc, layers)) in pieces.into_iter().zip(layered).enumerate() {
                     let seq = if k == 0 {
                         frame
@@ -5839,6 +5843,15 @@ impl Engine {
                     state.end = air.after(ready);
                     state.payload_bytes = split.map(|_| layers.payload);
                     state.envelope_bytes = split.map(|_| layers.security);
+                    state.cert_bytes = whole_cert.map(|c| {
+                        crate::frag::fragment_cert_share(
+                            c,
+                            sdu_bytes,
+                            carried_before,
+                            desc.payload_bytes,
+                        )
+                    });
+                    carried_before = carried_before.saturating_add(desc.payload_bytes);
                     state.layers = layers;
                     state.frag = Some(crate::frag::FragMeta {
                         desc,
