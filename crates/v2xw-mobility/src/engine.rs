@@ -139,11 +139,6 @@ const STOP_LINE_ONSET_NOTE: &str = "a virtual stop-line obstacle is braked for a
 /// walking pace; below it the queue is standing or creeping.
 const EXIT_QUEUE_MOVING_MPS: f64 = 2.0;
 
-/// Below this speed a claimant on a junction's approach counts as standing, so a claimant
-/// queued behind it on the same lane cannot reach the junction first, m/s. **This crate's
-/// choice**: the speed under which the auditor counts a vehicle as stopped.
-const CLAIM_STANDING_MPS: f64 = 0.5;
-
 /// How many lanes behind its front a vehicle's body is tracked across. A car is shorter
 /// than any three consecutive lanes; a connector can be shorter than a car.
 const TRAIL_LANES: usize = 3;
@@ -248,15 +243,6 @@ const LAMP_HABIT_ID: &str = "mobility/native/driver/lamps";
 /// reach the line this long before it turns red at their present speed. **This crate's
 /// choice**, one 0.1 s step and a little more, so a vehicle that goes never meets the red.
 const AMBER_GO_MARGIN_S: f64 = 0.3;
-
-/// How far short of the first conflict zone it gives way at a permitted left turner
-/// waiting inside the junction stops ([`NativeMobility::permissive_wait_m`]), m.
-/// **This crate's choice**: the stop-line margin.
-const WAIT_INSIDE_MARGIN_M: f64 = STOP_LINE_MARGIN_M;
-
-/// The least room past the stop line that is worth pulling into to wait, m: less and the
-/// turner waits at the line as before. **This crate's choice.**
-const WAIT_INSIDE_MIN_M: f64 = 1.0;
 
 /// How soon a conflicting car still to enter on the end of its amber must reach its stop
 /// line for a driver on a fresh green to wait for it, seconds ([`NativeMobility::
@@ -1050,9 +1036,6 @@ struct Actor {
     traits: DriverTraits,
     /// While standing: when what held it first let it go (the start of its reaction).
     release_at: Option<SimTime>,
-    /// The junction a permitted left turner pulled into to give way inside
-    /// ([`NativeMobility::permissive_wait_m`]), while it still waits there.
-    wait_inside: Option<JunctionId>,
     /// A scripted emergency stop in progress ([`MobilityCommand::Brake`]): the
     /// deceleration, and when the vehicle may move off once it stands.
     forced_brake: Option<(f64, Option<SimTime>)>,
@@ -2375,7 +2358,6 @@ impl NativeMobility {
                     a.amber_commit = None;
                     a.amber_seen = None;
                     a.release_at = None;
-                    a.wait_inside = None;
                     a.stuck_since = None;
                     first_rear.insert(l, 0.0);
                     self.gridlock.teleported += 1;
@@ -2681,7 +2663,6 @@ impl NativeMobility {
                 amber_seen: None,
                 traits: DriverTraits::NEUTRAL,
                 release_at: None,
-                wait_inside: None,
                 forced_brake: None,
                 forced_cut_in: None,
                 kerb: crate::kerbside::KerbState::NONE,
@@ -3278,7 +3259,6 @@ impl NativeMobility {
                 amber_seen: None,
                 traits,
                 release_at: None,
-                wait_inside: None,
                 forced_brake: None,
                 forced_cut_in: None,
                 kerb: crate::kerbside::KerbState::NONE,
@@ -4076,7 +4056,6 @@ impl NativeMobility {
         junction: &JunctionView,
         ego: &VehicleView,
         claims: &BTreeMap<JunctionId, Vec<ConflictView>>,
-        held_claims: &BTreeSet<ActorId>,
         t: SimTime,
     ) -> Vec<ConflictView> {
         let Some(all) = claims.get(&junction.id) else {
@@ -4144,12 +4123,7 @@ impl NativeMobility {
                 // A claimant held by a red is not coming. Counting it had a left turner on
                 // a permissive green wait for the cross street's car standing at *its* red
                 // — which in turn waited for the left turner — for good.
-                // Nor is one that cannot reach the junction before something else moves:
-                // held at its line by a full exit, or queued behind a standing vehicle
-                // ([`Self::held_claimants`]).
-                let held = self.along_path()
-                    && (held_claims.contains(&c.actor)
-                        || self.held_by_signal(world, junction.id, c, t));
+                let held = self.along_path() && self.held_by_signal(world, junction.id, c, t);
                 ConflictView {
                     conflicts: conflicts && !held,
                     ego_must_yield: ego_must_yield && !held,
@@ -4726,45 +4700,19 @@ impl NativeMobility {
         occupancy: &BTreeMap<LaneId, Vec<(ActorId, f64, f64)>>,
         actor: &Actor,
         movement: LaneId,
-        t: SimTime,
     ) -> bool {
         for z in self.zones.of(movement) {
             if z.merge {
                 continue; // a merge is followed through, not waited for: `junction_leader`
             }
-            // A permitted left turner waiting short of the zone on its permissive green
-            // is giving way, not in the way ([`Self::permissive_wait_m`]).
             if let Some(list) = occupancy.get(&z.other)
-                && list.iter().any(|(other, rear, front)| {
-                    *other != actor.id
-                        && z.other_not_clear(*rear)
-                        && !self.waiting_short_of(
-                            world,
-                            *other,
-                            z.other,
-                            *front,
-                            z.s_other - z.half_other,
-                            Some(movement),
-                            t,
-                        )
-                })
+                && list
+                    .iter()
+                    .any(|(other, rear, _)| *other != actor.id && z.other_not_clear(*rear))
             {
                 return true;
             }
         }
-        let _ = world;
-        self.exit_full(snapshot, occupancy, actor, movement)
-    }
-
-    /// Whether `movement`'s exit lane has no room for `actor` behind a queue standing on
-    /// it — the second half of [`Self::junction_blocked`] (NY VTL §1175).
-    fn exit_full(
-        &self,
-        snapshot: &ActorSnapshot,
-        occupancy: &BTreeMap<LaneId, Vec<(ActorId, f64, f64)>>,
-        actor: &Actor,
-        movement: LaneId,
-    ) -> bool {
         let Some(exit) = self.zones.exit_of(movement) else {
             return false;
         };
@@ -4793,278 +4741,8 @@ impl NativeMobility {
                 }
             }
         }
+        let _ = world;
         room < need
-    }
-
-    /// The claimants that are not coming, whatever their own lamp shows:
-    ///
-    /// * one that will stop at its line because its movement's exit has no room for it
-    ///   ([`Self::exit_full`]) and can still stop there at a planned deceleration;
-    /// * one queued on its approach lane behind another claimant on the same junction
-    ///   that is standing — it cannot reach the junction before that vehicle moves, and
-    ///   the vehicle in front is judged on its own.
-    ///
-    /// A left turner on a permissive green used to count an opposing car standing at its
-    /// line behind a full exit as arriving in 0.7 s, and every car queued behind it as
-    /// arriving in 3–5 s (their launch from a standstill on a clear road), so it never
-    /// found the 4.5 s critical headway; the opposing queue in turn waited on the turner's
-    /// own followers, and both heads stood for minutes on an empty junction (the dense
-    /// grid, `traffic-validation` open item 1). SUMO's link logic skips the same foes: an
-    /// approaching vehicle that plans to stop short of the link does not register as
-    /// passing it (`MSLink::blockedAtTime`, `willPass`). Not applied in the legacy parity
-    /// mode.
-    fn held_claimants(
-        &self,
-        world: &World,
-        snapshot: &ActorSnapshot,
-        occupancy: &BTreeMap<LaneId, Vec<(ActorId, f64, f64)>>,
-        claims: &BTreeMap<JunctionId, Vec<ConflictView>>,
-    ) -> BTreeSet<ActorId> {
-        let mut out = BTreeSet::new();
-        if !self.along_path() {
-            return out;
-        }
-        for list in claims.values() {
-            for c in list {
-                let Some(actor) = self.actors.get(&c.actor) else {
-                    continue;
-                };
-                if c.stop_line_gap_m <= 0.0 {
-                    continue;
-                }
-                let queued = list.iter().any(|l| {
-                    l.actor != c.actor
-                        && l.stop_line_gap_m > 0.0
-                        && l.stop_line_gap_m < c.stop_line_gap_m
-                        && l.speed_mps < CLAIM_STANDING_MPS
-                        && self.actors.get(&l.actor).is_some_and(|a| a.lane == actor.lane)
-                });
-                let can_stop = c.speed_mps * c.speed_mps / (2.0 * PLANNED_STOP_MAX_DECEL_MPS2)
-                    <= c.stop_line_gap_m + 0.5;
-                let exit_held = self.params.junction_clearance
-                    && can_stop
-                    && c
-                        .movement_lane
-                        .filter(|l| world.lane(*l).kind == LaneKind::Internal)
-                        .is_some_and(|m| self.exit_full(snapshot, occupancy, actor, m));
-                if queued || exit_held {
-                    out.insert(c.actor);
-                }
-            }
-        }
-        out
-    }
-
-    /// Whether `c` is a claimant on its own amber who has seen it, did not commit to it
-    /// and can still stop at a planned deceleration: a driver stopping, not coming.
-    fn stopping_on_amber(&self, world: &World, junction: JunctionId, c: &ConflictView, t: SimTime) -> bool {
-        let Some(JunctionControl::Signalised { plan }) =
-            world.roads.try_junction(junction).map(|j| j.control)
-        else {
-            return false;
-        };
-        let Some(plan) = world.signal_plan(plan) else {
-            return false;
-        };
-        c.movement_lane.is_some_and(|l| {
-            self.signals.state_for(plan, l, ns_to_secs(t)) == Some(SignalState::Amber)
-        }) && self.actors.get(&c.actor).is_some_and(|o| {
-            o.amber_seen == Some(junction) && o.amber_commit != Some(junction)
-        }) && c.speed_mps * c.speed_mps / (2.0 * PLANNED_STOP_MAX_DECEL_MPS2)
-            <= c.stop_line_gap_m.max(0.0) + 0.5
-    }
-
-    /// Whether `movement` is a permitted left turn: a left (or U) turn its plan shows a
-    /// permissive green ([`SignalState::GreenYield`]) in some phase.
-    fn is_permitted_left(&self, world: &World, movement: LaneId) -> bool {
-        let Some(junction) = world.lane(movement).junction else {
-            return false;
-        };
-        let Some(JunctionControl::Signalised { plan }) =
-            world.roads.try_junction(junction).map(|j| j.control)
-        else {
-            return false;
-        };
-        let Some(plan) = world.signal_plan(plan) else {
-            return false;
-        };
-        let Some(k) = plan.controlled.iter().position(|l| *l == movement) else {
-            return false;
-        };
-        let left = world.roads.connections().iter().any(|c| {
-            c.via == Some(movement)
-                && matches!(
-                    c.direction,
-                    TurnDirection::Left | TurnDirection::SlightLeft | TurnDirection::UTurn
-                )
-        });
-        left && plan
-            .phases
-            .iter()
-            .any(|p| p.states.get(k) == Some(&SignalState::GreenYield))
-    }
-
-    /// Where a permitted left turner gives way inside the junction: the distance from its
-    /// front (at `pos` along its connector, negative before the stop line) to
-    /// [`WAIT_INSIDE_MARGIN_M`] short of the first conflict zone ahead whose movement has a
-    /// claimant it must give way to closing inside the permitted-left critical headway;
-    /// `None` when no such claimant is closing on any zone ahead.
-    ///
-    /// A US driver waiting to turn left on a permissive green pulls forward into the
-    /// junction and waits there, short of the opposing lanes (UVC §11-401/§11-402), and
-    /// at the end of the green completes the turn once the opposing flow has stopped —
-    /// lawfully, being already within the junction. These are the HCM's "sneakers" (HCM
-    /// 6th ed. Ch. 31: about two a cycle on a permitted left lane), and against a
-    /// continuous opposing stream they are its only capacity. Waiting at the stop line
-    /// instead, a turner on the dense grid stood through green after green for 216-258 s
-    /// (`traffic-validation` open item 1). The give-way test is the one the stop line
-    /// uses ([`crate::intersection::signal_fixed_time`]); on the amber, an opposing
-    /// driver who is stopping ([`Self::stopping_on_amber`]) is not coming, and one held
-    /// by a red never is ([`Self::conflicts_for`]).
-    #[allow(clippy::too_many_arguments)]
-    fn permissive_wait_m(
-        &self,
-        world: &World,
-        snapshot: &ActorSnapshot,
-        occupancy: &BTreeMap<LaneId, Vec<(ActorId, f64, f64)>>,
-        ego: &VehicleView,
-        junction: &JunctionView,
-        movement: LaneId,
-        pos: f64,
-        conflicts: &[ConflictView],
-        t: SimTime,
-    ) -> Option<f64> {
-        let _ = snapshot;
-        let mut zones: Vec<&crate::intersection::zones::Zone> = self
-            .zones
-            .of(movement)
-            .iter()
-            .filter(|z| z.s_self - z.half_self > pos)
-            .collect();
-        zones.sort_by(|a, b| {
-            (a.s_self - a.half_self)
-                .partial_cmp(&(b.s_self - b.half_self))
-                .unwrap_or(core::cmp::Ordering::Equal)
-        });
-        // Clearing on its amber or red, the turner gives way only to the flow its own
-        // green ran with: a cross-street driver starting on a fresh green gives way to a
-        // vehicle lawfully within the junction (UVC §11-202(a)1), and is held at its line
-        // for it ([`Self::junction_blocked`]).
-        let clearing = !matches!(junction.signal, Some(SignalState::GreenYield) | None);
-        let plan = match world.roads.try_junction(junction.id).map(|j| j.control) {
-            Some(JunctionControl::Signalised { plan }) => world.signal_plan(plan),
-            _ => None,
-        };
-        let fresh_green = |c: &ConflictView| {
-            clearing
-                && plan.zip(c.movement_lane).is_some_and(|(p, l)| {
-                    matches!(
-                        self.signals.state_for(p, l, ns_to_secs(t)),
-                        Some(SignalState::Green | SignalState::GreenYield)
-                    )
-                })
-        };
-        for z in zones {
-            let start = z.s_self - z.half_self;
-            // A vehicle already inside on the other path that has not cleared the zone,
-            // and is not itself waiting short of it, goes first.
-            if !z.merge
-                && occupancy.get(&z.other).is_some_and(|list| {
-                    list.iter().any(|(o, rear, front)| {
-                        *o != ego.actor
-                            && z.other_not_clear(*rear)
-                            && !self.waiting_short_of(
-                                world,
-                                *o,
-                                z.other,
-                                *front,
-                                z.s_other - z.half_other,
-                                Some(movement),
-                                t,
-                            )
-                    })
-                })
-            {
-                return Some((start - WAIT_INSIDE_MARGIN_M - pos).max(0.0));
-            }
-            let on_zone: Vec<ConflictView> = conflicts
-                .iter()
-                .filter(|c| {
-                    c.conflicts
-                        && c.movement_lane == Some(z.other)
-                        && !self.stopping_on_amber(world, junction.id, c, t)
-                        && !fresh_green(c)
-                })
-                .copied()
-                .collect();
-            if on_zone.is_empty() {
-                continue;
-            }
-            let at_zone = JunctionView {
-                signal: Some(SignalState::GreenYield),
-                stop_line_gap_m: (start - pos).max(1e-3),
-                ..*junction
-            };
-            if self.signals.may_enter(ego, &at_zone, &on_zone, &self.weather)
-                != EntryDecision::Proceed
-            {
-                return Some((start - WAIT_INSIDE_MARGIN_M - pos).max(0.0));
-            }
-        }
-        None
-    }
-
-    /// True if `other`, on connector `movement` with its front at `front`, is a permitted
-    /// left turner giving way inside the junction ([`Self::permissive_wait_m`]) short of a
-    /// zone that starts at `zone_start_on_other` along its path, to a vehicle on
-    /// `asker`: a vehicle it is waiting for may go on through that zone.
-    ///
-    /// On its permissive green it waits for every flow it must yield to. Once its own
-    /// movement has gone to amber or red it is clearing the junction, and only the flow
-    /// that ran with it — itself now on amber or red — is still given way to; a
-    /// cross-street driver starting on a fresh green waits for it (UVC §11-202(a)1).
-    #[allow(clippy::too_many_arguments)]
-    fn waiting_short_of(
-        &self,
-        world: &World,
-        other: ActorId,
-        movement: LaneId,
-        front: f64,
-        zone_start_on_other: f64,
-        asker: Option<LaneId>,
-        t: SimTime,
-    ) -> bool {
-        if !self.along_path() || front >= zone_start_on_other - 0.1 {
-            return false;
-        }
-        let Some(junction) = world.lane(movement).junction else {
-            return false;
-        };
-        if !self
-            .actors
-            .get(&other)
-            .is_some_and(|a| a.wait_inside == Some(junction))
-        {
-            return false;
-        }
-        let Some(JunctionControl::Signalised { plan }) =
-            world.roads.try_junction(junction).map(|j| j.control)
-        else {
-            return false;
-        };
-        let Some(plan) = world.signal_plan(plan) else {
-            return false;
-        };
-        let t_s = ns_to_secs(t);
-        match self.signals.state_for(plan, movement, t_s) {
-            Some(SignalState::GreenYield) => true,
-            _ => !asker.is_some_and(|l| {
-                matches!(
-                    self.signals.state_for(plan, l, t_s),
-                    Some(SignalState::Green | SignalState::GreenYield)
-                )
-            }),
-        }
     }
 
     /// The constraint other vehicles inside a junction put on `actor`, as a virtual leader.
@@ -5219,38 +4897,10 @@ impl NativeMobility {
                         continue; // we are in it already, or they have cleared it
                     }
                     let d_self = edge - pos;
-                    let edge_other = z.s_other - z.half_other;
-                    let d_other = edge_other - front;
-                    // A permitted left turner waiting short of the zone gives way to the
-                    // vehicle crossing it, and is not waited for by it
-                    // ([`Self::permissive_wait_m`]).
-                    let other_waits = self.waiting_short_of(
-                        world,
-                        other,
-                        z.other,
-                        front,
-                        edge_other,
-                        Some(movement),
-                        t,
-                    );
-                    let self_waits = self.waiting_short_of(
-                        world,
-                        actor.id,
-                        movement,
-                        pos,
-                        edge,
-                        Some(z.other),
-                        t,
-                    );
-                    let first = match (other_waits, self_waits) {
-                        (true, false) => d_other <= 0.0,
-                        (false, true) => true,
-                        _ => {
-                            d_other <= 0.0
-                                || d_other < d_self
-                                || (d_other == d_self && other < actor.id)
-                        }
-                    };
+                    let d_other = (z.s_other - z.half_other) - front;
+                    let first = d_other <= 0.0
+                        || d_other < d_self
+                        || (d_other == d_self && other < actor.id);
                     if first {
                         let l = LeaderView::virtual_obstacle(d_self.max(0.0), 0.0);
                         best = Self::closest(best, Some(l));
@@ -5451,8 +5101,6 @@ struct Decision {
     /// When the standing vehicle's reaction to being let go began, carried to the next
     /// step.
     release_at: Option<SimTime>,
-    /// The junction it is giving way inside, carried to the next step.
-    wait_inside: Option<JunctionId>,
     /// How far the front may advance this step without closing inside the standstill gap
     /// of a vehicle standing ahead, metres; `None` when the car ahead is moving or there is
     /// none.
@@ -5706,7 +5354,6 @@ impl Mobility for NativeMobility {
         // --- pass 5: claims ------------------------------------------------
         let claims = self.claims(world, &snapshot, t0);
         let occupancy = self.occupancy(world);
-        let held_claims = self.held_claimants(world, &snapshot, &occupancy, &claims);
         // The crosswalks someone is walking on, from the start-of-step positions.
         // Not counted: someone at the far end of one crossing about to go onto the next (a
         // refuge island, where `SocialForce` holds them while a vehicle is too close to
@@ -5783,43 +5430,9 @@ impl Mobility for NativeMobility {
             let mut binding_stop_line: Option<f64> = None;
             // A signal's "stop" hidden behind a car ahead that is going on (see below).
             let mut signal_stop: Option<(LeaderView, f64)> = None;
-            // A permitted left turner's give-way point inside the junction it is pulling
-            // into, as a distance from its front ([`Self::permissive_wait_m`]).
-            let mut wait_inside: Option<(JunctionId, f64)> = None;
             for junction in self.junctions_ahead(world, actor, t0) {
-                let conflicts =
-                    self.conflicts_for(world, &junction, &ego, &claims, &held_claims, t0);
+                let conflicts = self.conflicts_for(world, &junction, &ego, &claims, t0);
                 let mut decision = self.entry_decision(world, &ego, &junction, &conflicts);
-                // A permitted left turner that must give way pulls into the junction and
-                // waits short of the opposing lanes instead of at the stop line, when its
-                // connector is free and there is room in front of the zone; the entry
-                // checks below (a foe inside, the exit's room) still hold it at the line.
-                if along
-                    && wait_inside.is_none()
-                    && junction.signal == Some(SignalState::GreenYield)
-                    && matches!(decision, EntryDecision::Stop { .. })
-                    && junction.stop_line_gap_m > 0.0
-                    && let Some(m) = junction.movement_lane
-                    && self.is_permitted_left(world, m)
-                    && occupancy
-                        .get(&m)
-                        .is_none_or(|l| l.iter().all(|(o, _, _)| *o == actor.id))
-                    && let Some(d) = self.permissive_wait_m(
-                        world,
-                        &snapshot,
-                        &occupancy,
-                        &ego,
-                        &junction,
-                        m,
-                        -junction.stop_line_gap_m,
-                        &conflicts,
-                        t0,
-                    )
-                    && d - junction.stop_line_gap_m >= WAIT_INSIDE_MIN_M
-                {
-                    decision = EntryDecision::Proceed;
-                    wait_inside = Some((junction.id, d));
-                }
                 // The amber decision, taken once, at the onset: a driver who could stop still
                 // goes if they are nearer the line than their own threshold
                 // ([`DriverTraits::amber_go_tti_s`]) and reach it before the red. Taken
@@ -5904,7 +5517,7 @@ impl Mobility for NativeMobility {
                     && let Some(movement) = junction
                         .movement_lane
                         .filter(|l| world.lane(*l).kind == LaneKind::Internal)
-                    && self.junction_blocked(world, &snapshot, &occupancy, actor, movement, t0)
+                    && self.junction_blocked(world, &snapshot, &occupancy, actor, movement)
                 {
                     decision = EntryDecision::Stop {
                         gap_m: (junction.stop_line_gap_m - STOP_LINE_OFFSET_M).max(0.0),
@@ -5948,11 +5561,6 @@ impl Mobility for NativeMobility {
                         > PLANNED_STOP_MAX_DECEL_MPS2
                 {
                     decision = EntryDecision::Proceed;
-                }
-                if wait_inside.is_some_and(|(j, _)| j == junction.id)
-                    && decision != EntryDecision::Proceed
-                {
-                    wait_inside = None;
                 }
                 let virtual_leader = decision.as_leader().map(|mut l| {
                     // The stop line is `STOP_LINE_OFFSET_M` before the junction, and the
@@ -6009,65 +5617,6 @@ impl Mobility for NativeMobility {
                     binding_stop_line = None;
                 }
                 merge_partner = inside.and_then(|c| c.merge);
-            }
-            // A permitted left turner that pulled into the junction to give way keeps
-            // waiting short of the opposing lanes for what it must yield to — on its green,
-            // and on the amber and red it then clears on — until the way is clear; it
-            // does not stop again once it has gone. One that took a gap at the stop line
-            // is committed to it.
-            if along
-                && lane.kind == LaneKind::Internal
-                && let Some(jid) = lane.junction
-                && actor.wait_inside == Some(jid)
-                && let Some(j) = world.roads.try_junction(jid)
-                && self.is_permitted_left(world, actor.lane)
-            {
-                let signal = self.signal_for(world, jid, Some(actor.lane), actor, t0);
-                if signal != Some(SignalState::Green) {
-                    let movement = world
-                        .roads
-                        .connections()
-                        .iter()
-                        .find(|c| c.via == Some(actor.lane))
-                        .map_or(TurnDirection::Left, |c| c.direction);
-                    let view = JunctionView {
-                        id: jid,
-                        position: j.position,
-                        control: j.control,
-                        stop_line_gap_m: -actor.s_m,
-                        movement,
-                        movement_lane: Some(actor.lane),
-                        signal,
-                        major_lanes: u8::try_from(j.incoming.len()).unwrap_or(u8::MAX),
-                    };
-                    let conflicts =
-                        self.conflicts_for(world, &view, &ego, &claims, &held_claims, t0);
-                    if let Some(d) = self.permissive_wait_m(
-                        world,
-                        &snapshot,
-                        &occupancy,
-                        &ego,
-                        &view,
-                        actor.lane,
-                        actor.s_m,
-                        &conflicts,
-                        t0,
-                    ) && ego.speed_mps * ego.speed_mps / (2.0 * d.max(0.1))
-                        <= PLANNED_STOP_MAX_DECEL_MPS2
-                    {
-                        wait_inside = Some((jid, d));
-                    }
-                }
-            }
-            if along && let Some((_, d)) = wait_inside {
-                let before = leader;
-                leader = Self::closest(
-                    leader,
-                    Some(LeaderView::virtual_obstacle(d + actor.driver.min_gap_m, 0.0)),
-                );
-                if leader != before {
-                    binding_stop_line = None;
-                }
             }
             // Crosswalks: yield to anyone on one, and do not stop inside one
             // (`crate::vru::crosswalk`, UVC §11-502(a), §11-202(a)1, §11-1003).
@@ -6486,7 +6035,6 @@ impl Mobility for NativeMobility {
                     amber_commit,
                     amber_seen,
                     release_at,
-                    wait_inside: wait_inside.map(|(j, _)| j),
                     advance_cap_m,
                     detour_ok: false,
                     human: human_next,
@@ -6710,7 +6258,6 @@ impl Mobility for NativeMobility {
             actor.amber_commit = decision.amber_commit;
             actor.amber_seen = decision.amber_seen;
             actor.release_at = decision.release_at;
-            actor.wait_inside = decision.wait_inside;
             if let Some((wg, wr, decided)) = decision.human {
                 actor.human.w_gap = wg;
                 actor.human.w_rate = wr;
