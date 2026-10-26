@@ -560,8 +560,8 @@ rows:
   value: 1
   fault: no-revocation
   measured: '0'
-  verdict: open
-  note: 'F6: legacy implausibleAcceleration fired 2-7 times per run against ~10^2 expected from |dv|/dt over 12 m/s2 on U[0,40] draws; not traced'
+  verdict: wrong-expectation
+  note: '2026-10-26 (F6): the legacy acceleration check reads the newest fix at least 1.5 s old (dt 1.8 to 2 s at the 0.9 to 1 s check rate), so it needs |dv| > 22 to 24 m/s on two checks running: 0.026 to 0.044 firings per check (Monte Carlo). RSL (the attacker alone): 5 accel against 57 PSI firings, ratio 0.088 inside the model''s 0.05 to 0.45 (row F6.RSL.accel-per-psi); PSI has no SM-MBR subtype, so L files too little for the corroborated MA'
   source: 'implausibleAcceleration maps to MaxAcceleration (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
 
 - id: C.M.RandomSpeed.implausibleAcceleration
@@ -1482,8 +1482,8 @@ rows:
   measure: p2.reports_about_attackers
   expect: up
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '696 -> 2108'
+  verdict: pass
   source: 'twice the attackers, each heard by about as many receivers: about twice the reports (reports are per receiver per subject per interval)'
 
 - id: SRL.reports-up.10-20
@@ -1493,8 +1493,8 @@ rows:
   measure: p2.reports_about_attackers
   expect: up
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '2108 -> 3054'
+  verdict: pass
   source: 'twice the attackers, each heard by about as many receivers: about twice the reports (reports are per receiver per subject per interval)'
 
 - id: SRL.honest-not-revoked
@@ -1808,7 +1808,7 @@ rows:
   value: 1
   fault: detector-blind
   absent_is_zero: true
-  measured: '14244'
+  measured: '14262'
   verdict: pass
   source: 'a fresh speed each 0.1 s: |dv|/dt over 10 m/s2 (MaxAcceleration)'
 
@@ -1854,8 +1854,8 @@ rows:
   measure: rec.warn_false_att
   expect: up
   fault: warn-none
-  measured: pending
-  verdict: pending
+  measured: '0 -> 27'
+  verdict: pass
   source: 'a phantom 60 m away from the true car crosses other vehicles paths more than one 0.6 m away'
 
 - id: MAL.faster
@@ -2042,9 +2042,9 @@ rows:
   measure: p2.reports_sent
   expect: ratio
   band: [0.1, 0.4]
-  fault: honest-reported
-  measured: pending
-  verdict: pending
+  fault: scalar  # 2026-10-26: the named fault could not push a 'down' row up (selftest CANNOT-FAIL)
+  measured: '2228 -> 825'
+  verdict: pass
   source: 'one report per 5 s instead of per 1 s'
 
 - id: RI5.still-decided
@@ -2055,8 +2055,8 @@ rows:
   expect: band
   band: [0.6, 1.0]
   fault: no-revocation
-  measured: pending
-  verdict: pending
+  measured: '1'
+  verdict: pass
   source: 'a report every 5 s per reporter still gives one per 5 s event: 3 events from 2 reporters in 60 s'
 
 # ---- 6. GNSS x suite interaction --------------------------------------------------------
@@ -2201,6 +2201,7 @@ rows:
   fault: no-revocation
   measured: '5 -> 5'
   verdict: pass
+  note: '2026-10-26: both runs on the 938fb16a release (which carries the fix). Across builds: SYM10 on 486c8cba had 5 revoked and 5 attackers with no onset; SYM10b has 5 revoked and 0 with no onset'
   source: 'the fix changes only the bookkeeping of the outcome, not what any receiver or the MA does'
 
 # ---- 9. 2026-10-26: F4, F5 fixes and the F6 model (written before their runs) -----------
