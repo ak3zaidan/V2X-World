@@ -1,0 +1,8 @@
+# Live RSU track, SCMS family: scms-base.yaml with one change (no unit has a backhaul (edge)).
+schema: v2xw/scenario/1
+meta:
+  base: scms-base.yaml
+  name: live-rsu scms none
+actors:
+  rsu_placement:
+    backhaul: backhaul/none

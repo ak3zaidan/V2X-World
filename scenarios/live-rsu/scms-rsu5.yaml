@@ -1,0 +1,8 @@
+# Live RSU track, SCMS family: scms-base.yaml with one change (5 units instead of 30).
+schema: v2xw/scenario/1
+meta:
+  base: scms-base.yaml
+  name: live-rsu scms rsu5
+actors:
+  rsu_placement:
+    count: 5

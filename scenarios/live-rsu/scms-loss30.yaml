@@ -1,0 +1,8 @@
+# Live RSU track, SCMS family: scms-base.yaml with one change (fibre losing 30 % of packets).
+schema: v2xw/scenario/1
+meta:
+  base: scms-base.yaml
+  name: live-rsu scms loss30
+actors:
+  rsu_placement:
+    backhaul_params: {loss: 0.3}

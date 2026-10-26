@@ -1,0 +1,916 @@
+# Live RSU track (docs/validation/live-rsu-2026-10-25.md): roadside units and their
+# applications on the real engine. RSU count and placement, transmit power, SPaT and MAP,
+# GLOSA followed or not, a unit going down; then the SCMS path through the units (report
+# relay and CRL over each backhaul medium, loss and latency, a unit with no backhaul).
+#
+# Every row was written before the run it judges (predicted direction and, where theory
+# gives one, size, with the source). Each measure is computed by an INDEPENDENT reader of
+# the raw records (tools/realworld/live_rsu.py: node.tx, phy.prr, app.advice, pki.flow,
+# metric samples, the run report and the run lock's cost line), never by engine code.
+#   python3 -I tools/realworld/live_rsu.py measure <run-dir>     (writes <run-dir>/realism.json)
+#   python3 -I tools/realworld/matrix.py check <this file> <runs-dir>
+# Each row was also shown to go red under its injected fault (`fault`, default
+# knob-ignored: the variant measured on the base's records, as if the setting were dropped):
+#   python3 -I tools/realworld/live_rsu.py faults <runs-dir> <this file>
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+#
+# Binary: the release build of 486c8cba (the integrator's), copied to the scratchpad; one
+# run per run-lock call (1,200 MB cap); --record-level events.
+schema: v2xw/scms-run-expectations/1
+runs:
+  G0:
+    scenario: scenarios/live-rsu/glosa-base.yaml
+    note: five SPaT/MAP units at 23 dBm, 2,400 veh/h, every driver following GLOSA, 150 s
+  G0b:
+    scenario: scenarios/live-rsu/glosa-base.yaml
+    note: G0 again, same seed and build stamp (determinism)
+  Gc0:
+    scenario: scenarios/live-rsu/glosa-c0.yaml
+    note: no driver follows the advice
+  Gc05:
+    scenario: scenarios/live-rsu/glosa-c05.yaml
+    note: half the drivers follow it
+  Goff:
+    scenario: scenarios/live-rsu/glosa-off.yaml
+    note: GLOSA not running (edge)
+  Gp0:
+    scenario: scenarios/live-rsu/glosa-p0.yaml
+    note: units at 0 dBm (edge)
+  Gp10:
+    scenario: scenarios/live-rsu/glosa-p10.yaml
+    note: units at 10 dBm
+  Gp30:
+    scenario: scenarios/live-rsu/glosa-p30.yaml
+    note: units at 30 dBm (33 dBm EIRP, the FCC roadside limit)
+  Gnomap:
+    scenario: scenarios/live-rsu/glosa-nomap.yaml
+    note: SPaT without MAP
+  Grsu1:
+    scenario: scenarios/live-rsu/glosa-rsu1.yaml
+    note: one unit (site 10) instead of five
+  Gout:
+    scenario: scenarios/live-rsu/glosa-out.yaml
+    note: the unit at site 10 (node 2) off from 60 s
+  Gc0p10:
+    scenario: scenarios/live-rsu/glosa-c0p10.yaml
+    note: interaction, GLOSA ignored with the units at 10 dBm
+  Gs2:
+    scenario: scenarios/live-rsu/glosa-s2.yaml
+    note: G0 on seed 2
+  Gc0s2:
+    scenario: scenarios/live-rsu/glosa-c0s2.yaml
+    note: Gc0 on seed 2
+  Gs3:
+    scenario: scenarios/live-rsu/glosa-s3.yaml
+    note: G0 on seed 3
+  Gc0s3:
+    scenario: scenarios/live-rsu/glosa-c0s3.yaml
+    note: Gc0 on seed 3
+  S0:
+    scenario: scenarios/live-rsu/scms-base.yaml
+    note: 30 units on metro fibre, every vehicle relay-only, 120 s live
+  Sdsl:
+    scenario: scenarios/live-rsu/scms-dsl.yaml
+    note: VDSL2 copper backhaul
+  Smw:
+    scenario: scenarios/live-rsu/scms-mw.yaml
+    note: point-to-point microwave backhaul
+  Scell:
+    scenario: scenarios/live-rsu/scms-cell.yaml
+    note: cellular backhaul (the unit is a UE)
+  Snone:
+    scenario: scenarios/live-rsu/scms-none.yaml
+    note: no backhaul (edge)
+  Slat50:
+    scenario: scenarios/live-rsu/scms-lat50.yaml
+    note: fibre with 50 ms one way
+  Slat2000:
+    scenario: scenarios/live-rsu/scms-lat2000.yaml
+    note: fibre with 2,000 ms one way (edge)
+  Sloss10:
+    scenario: scenarios/live-rsu/scms-loss10.yaml
+    note: fibre losing 10 % of packets
+  Sloss30:
+    scenario: scenarios/live-rsu/scms-loss30.yaml
+    note: fibre losing 30 % of packets
+  Srsu5:
+    scenario: scenarios/live-rsu/scms-rsu5.yaml
+    note: 5 units
+  Srsu0:
+    scenario: scenarios/live-rsu/scms-rsu0.yaml
+    note: no unit (edge)
+  Sbc1:
+    scenario: scenarios/live-rsu/scms-bc1.yaml
+    note: CRL repeated every 1 s
+  Sbc20:
+    scenario: scenarios/live-rsu/scms-bc20.yaml
+    note: CRL repeated every 20 s
+  Sout:
+    scenario: scenarios/live-rsu/scms-out.yaml
+    note: unit 5 off from 30 s
+  Slat2000bc3:
+    scenario: scenarios/live-rsu/scms-lat2000-bc3.yaml
+    note: 'interaction: 2,000 ms backhaul with the carousel at 3 s'
+  S0bc3:
+    scenario: scenarios/live-rsu/scms-bc3.yaml
+    note: fibre with the carousel at 3 s (the interaction base)
+  FSlat2000bc3:
+    scenario: scenarios/live-rsu/scms-lat2000-bc3.yaml
+    note: Slat2000bc3 on the fixed binary (this branch, opt-level 2 debug build)
+  FSout:
+    scenario: scenarios/live-rsu/scms-out.yaml
+    note: Sout on the fixed binary (this branch, opt-level 2 debug build)
+  FS0:
+    scenario: scenarios/live-rsu/scms-base.yaml
+    note: S0 on the fixed binary (this branch, opt-level 2 debug build)
+rows:
+- id: LR.G.spat-rate-min
+  base: G0
+  variant: G0
+  area: messages
+  measure: g.spat_hz_min
+  expect: band
+  band:
+  - 9.9
+  - 10.1
+  fault: half:spat
+  source: SPaT at 10 Hz per unit (CTI 4501 connected intersections; 04-models.md §8.1; infra.rs SPAT interval)
+  measured: '9.99998'
+  verdict: pass
+- id: LR.G.spat-rate-max
+  base: G0
+  variant: G0
+  area: messages
+  measure: g.spat_hz_max
+  expect: band
+  band:
+  - 9.9
+  - 10.1
+  fault: half:spat
+  source: as LR.G.spat-rate-min, the fastest unit
+  measured: '10.0001'
+  verdict: pass
+- id: LR.G.map-rate
+  base: G0
+  variant: G0
+  area: messages
+  measure: g.map_hz_per_unit
+  expect: band
+  band:
+  - 0.95
+  - 1.05
+  fault: half:map
+  source: MAP at 1 Hz per unit (CTI 4501; 04-models.md §8.1)
+  measured: '1.00619'
+  verdict: pass
+- id: LR.G.determinism
+  base: G0
+  variant: G0b
+  area: determinism
+  measure: digest.record
+  expect: identical
+  fault: record-flip
+  source: same seed and build stamp, byte-identical records
+  measured: 6f36671b2f2f3580 -> 6f36671b2f2f3580
+  verdict: pass
+- id: LR.G.c1.stops
+  base: Gc0
+  variant: G0
+  area: glosa
+  measure: g.stops_per_km
+  expect: down
+  min_change: 0.03
+  source: GLOSA followed cuts stops (Treiber and Kesting 2014, arXiv:1408.5498, about 15 % fewer stops
+    for advised vehicles at 50 km/h; Katsaros et al. 2011 IWCMC, growing with penetration); the class
+    mixes advised and unadvised vehicles, so at least 3 %
+  measured: 1.15827 -> 1.10019
+  verdict: pass
+- id: LR.G.c1.fuel
+  base: Gc0
+  variant: G0
+  area: glosa
+  measure: g.fuel_per_100km
+  expect: down
+  min_change: 0.005
+  source: fewer stop-and-go cycles burn less (Treiber and Kesting 2014, about 4 % fuel; Tielert et al.
+    2012 ITST)
+  measured: 11.1701 -> 11.1177
+  verdict: open
+  note: down 0.47 % on one seed, under the 0.5 % floor; the seed-2/3 pairs were not run in the window
+- id: LR.G.c1.co2
+  base: Gc0
+  variant: G0
+  area: glosa
+  measure: g.co2_per_km
+  expect: down
+  min_change: 0.005
+  source: CO2 is proportional to fuel under HBEFA (as LR.G.c1.fuel)
+  measured: 191.439 -> 194.177
+  verdict: open
+  note: 'CO2 per km rose 1.4 % while fuel per km fell 0.5 % in the same passenger class: CO2 is fuel x
+    a per-fuel factor under HBEFA, so this needs the diesel/petrol/EV split of the two runs (possible
+    energy-layer accounting issue); owed'
+- id: LR.G.c1.speed
+  base: Gc0
+  variant: G0
+  area: glosa
+  measure: g.mean_speed_mps
+  expect: same
+  tol: 0.08
+  source: GLOSA trades cruising speed for standing time; the travel time is about unchanged (Treiber and
+    Kesting 2014 §5), so the mean speed moves by under 8 %
+  measured: 8.6245 -> 8.34544
+  fault: scale:g.mean_speed_mps:0.85
+  verdict: pass
+- id: LR.G.c05.stops
+  base: Gc0
+  variant: Gc05
+  area: glosa
+  measure: g.stops_per_km
+  expect: down
+  source: 'half the drivers following removes part of the stops (Katsaros 2011: the gain grows with penetration)'
+  measured: pending
+- id: LR.G.c05-c1.stops
+  base: Gc05
+  variant: G0
+  area: glosa
+  measure: g.stops_per_km
+  expect: down
+  source: monotone in compliance (Katsaros 2011)
+  measured: pending
+- id: LR.G.c0.advice-issued
+  base: Gc0
+  variant: Gc0
+  area: glosa
+  measure: g.glosa_advice
+  expect: ge
+  value: 100
+  fault: use:Goff
+  source: compliance is the drivers' choice, not the application's; GLOSA still advises every equipped
+    approaching vehicle (apps.rs; run.rs GlosaDrivers)
+  measured: '2958'
+  verdict: pass
+- id: LR.G.off.advice
+  base: G0
+  variant: Goff
+  area: glosa
+  measure: g.glosa_advice
+  expect: eq
+  value: 0
+  source: an application that is not enabled issues nothing (apps.enabled)
+  measured: pending
+- id: LR.G.off-vs-c0.stops
+  base: Gc0
+  variant: Goff
+  area: glosa
+  measure: g.stops_per_km
+  expect: same
+  tol: 0.0
+  fault: use:G0
+  source: advice nobody follows cannot move a vehicle, so GLOSA off and GLOSA ignored drive the same traffic,
+    identically (the compliance draw is made only when compliance > 0)
+  measured: pending
+- id: LR.G.p30.power-on-air
+  base: G0
+  variant: Gp30
+  area: radio
+  measure: g.spat_tx_power_dbm
+  expect: eq
+  value: 30.0
+  source: radio.devices.rsu.tx_power_dbm is the unit's conducted power
+  measured: pending
+- id: LR.G.p30.range50
+  base: G0
+  variant: Gp30
+  area: radio
+  measure: g.spat_range50_m
+  expect: ratio
+  band:
+  - 0.95
+  - 1.15
+  source: 'rewritten before the run (Gp10 evidence): TR 37.885 Table 6.2.1-1 urban LOS, PL = 38.77 + 16.7
+    log10 d + 18.2 log10 5.9 GHz: with 3 dBi each end and about -92 dBm sensitivity the LOS budget at
+    10 dBm reaches ~2 km and at 0 dBm ~510 m, both beyond the 300 m blocks; the PRR fall at 200-400 m
+    is the NLOS share (urban NLOS, 30 log10 d: 77 m at 10 dBm), which power moves; so the 50 % edge stays
+    at the block geometry within [0.95, 1.15]'
+  measured: pending
+- id: LR.G.p10.range50
+  base: G0
+  variant: Gp10
+  area: radio
+  measure: g.spat_range50_m
+  expect: ratio
+  band:
+  - 0.15
+  - 0.6
+  source: -13 dB, n 1.67 to 3.0 -> x0.17 to x0.37 (as LR.G.p30.range50)
+  measured: 300 -> 300 (ratio 1)
+  verdict: wrong-expectation
+  note: 'the reach is not power-limited: TR 37.885 Table 6.2.1-1 urban LOS, PL = 38.77 + 16.7 log10 d
+    + 18.2 log10 5.9 GHz: with 3 dBi each end and about -92 dBm sensitivity the LOS budget at 10 dBm reaches
+    ~2 km and at 0 dBm ~510 m, both beyond the 300 m blocks; the PRR fall at 200-400 m is the NLOS share
+    (urban NLOS, 30 log10 d: 77 m at 10 dBm), which power moves. Predicted from a pure log-distance ratio,
+    which assumed the 50 % edge was a link-budget edge. Corrected rows: LR.G.p10.heard and the p30/p0
+    rows, rewritten before their runs'
+- id: LR.G.p0.range50
+  base: G0
+  variant: Gp0
+  area: radio
+  measure: g.spat_range50_m
+  expect: ratio
+  band:
+  - 0.6
+  - 1.05
+  source: 'rewritten before the run (Gp10 evidence): TR 37.885 Table 6.2.1-1 urban LOS, PL = 38.77 + 16.7
+    log10 d + 18.2 log10 5.9 GHz: with 3 dBi each end and about -92 dBm sensitivity the LOS budget at
+    10 dBm reaches ~2 km and at 0 dBm ~510 m, both beyond the 300 m blocks; the PRR fall at 200-400 m
+    is the NLOS share (urban NLOS, 30 log10 d: 77 m at 10 dBm), which power moves; so the 50 % edge stays
+    at the block geometry within [0.6, 1.05]'
+  measured: pending
+- id: LR.G.p30.prr-300-400
+  base: G0
+  variant: Gp30
+  area: radio
+  measure: g.spat_prr_300_400
+  expect: up
+  min_change: 0.05
+  source: 'rewritten before the run: more power reaches more NLOS receivers at 300-400 m (Gp10 moved this
+    ring 0.283 -> 0.205)'
+  measured: pending
+- id: LR.G.p30.spat-frames
+  base: G0
+  variant: Gp30
+  area: radio
+  measure: g.spat_frames
+  expect: same
+  tol: 0.001
+  fault: half:spat
+  source: power changes reach, not the SPaT rate
+  measured: pending
+- id: LR.G.p30.advice-cap
+  base: G0
+  variant: Gp30
+  area: glosa
+  measure: g.glosa_first_dist_p90
+  expect: le
+  value: 300.0
+  fault: advice-far
+  source: GLOSA advises within glosa_range_m = 300 m whatever the radio reach (apps.rs SignalAppParams;
+    CTI 4501 approach distance)
+  measured: pending
+- id: LR.G.p10.advice-dist
+  base: G0
+  variant: Gp10
+  area: glosa
+  measure: g.glosa_first_dist_p90
+  expect: down
+  min_change: 0.1
+  source: at 10 dBm the SPaT reach falls under the 300 m advice range (LR.G.p10.range50), so the first
+    advice comes closer to the stop line
+  measured: 277 -> 277
+  verdict: wrong-expectation
+  note: the first advice comes as a vehicle clears the previous junction, 300 m blocks minus the junction
+    box (277 m in every run), and the LOS SPaT reach at 10 dBm is beyond that (LR.G.p10.range50)
+- id: LR.G.p0.advice
+  base: G0
+  variant: Gp0
+  area: glosa
+  measure: g.glosa_advice
+  expect: down
+  min_change: 0.2
+  source: a unit heard only near the junction advises fewer vehicles for less time
+  measured: pending
+- id: LR.G.p10.stops
+  base: G0
+  variant: Gp10
+  area: glosa
+  measure: g.stops_per_km
+  expect: up
+  source: later advice leaves less distance to adapt, so fewer stops are avoided (the interaction compliance
+    x reach)
+  measured: 1.10019 -> 1.10021
+  verdict: wrong-expectation
+  note: '1.10019 -> 1.10021 is no effect (+0.002 %): the premise (later advice) failed, the first advice
+    distance did not move (LR.G.p10.advice-dist); the checker passes it only because min_change is 0'
+- id: LR.G.c0p10.stops
+  base: Gc0
+  variant: Gc0p10
+  area: glosa
+  measure: g.stops_per_km
+  expect: same
+  tol: 0.0
+  fault: use:Gp10
+  source: 'with nobody following, the unit''s power cannot move the traffic (interaction: the power effect
+    on stops exists only through compliance)'
+  measured: pending
+- id: LR.C.p30.events
+  base: G0
+  variant: Gp30
+  area: cost
+  measure: c.events
+  expect: up
+  source: more receivers per frame within reach (receptions scale with the covered area), more reception
+    events at the same frame count
+  measured: pending
+- id: LR.C.p0.events
+  base: G0
+  variant: Gp0
+  area: cost
+  measure: c.events
+  expect: down
+  source: as LR.C.p30.events, fewer receivers
+  measured: pending
+- id: LR.G.nomap.advice
+  base: G0
+  variant: Gnomap
+  area: glosa
+  measure: g.glosa_advice
+  expect: eq
+  value: 0
+  source: a SPaT's signal groups mean nothing without the MAP that ties lanes to them (J2735 SPAT/MapData;
+    CTI 4501 §4), so no advice
+  measured: pending
+- id: LR.G.nomap.map-frames
+  base: G0
+  variant: Gnomap
+  area: messages
+  measure: g.map_frames
+  expect: eq
+  value: 0
+  source: no unit carries the map role
+  measured: pending
+- id: LR.G.rsu1.units
+  base: G0
+  variant: Grsu1
+  area: placement
+  measure: g.units_on_air
+  expect: eq
+  value: 1
+  source: one unit configured
+  measured: pending
+- id: LR.G.rsu1.junctions
+  base: G0
+  variant: Grsu1
+  area: placement
+  measure: g.glosa_junctions
+  expect: eq
+  value: 1
+  source: a unit serves the one signalised junction it is wired to (infra.rs SERVICE_RADIUS_M)
+  measured: pending
+- id: LR.G.rsu1.advised
+  base: G0
+  variant: Grsu1
+  area: placement
+  measure: g.glosa_advised_vehicles
+  expect: down
+  min_change: 0.3
+  source: one junction of five advised
+  measured: pending
+- id: LR.G.rsu1.stops
+  base: G0
+  variant: Grsu1
+  area: glosa
+  measure: g.stops_per_km
+  expect: up
+  source: four junctions lose their advice, so their avoidable stops come back
+  measured: pending
+- id: LR.C.rsu1.events
+  base: G0
+  variant: Grsu1
+  area: cost
+  measure: c.events
+  expect: down
+  min_change: 0.05
+  source: four transmitters of 11 frames/s fewer, each heard by every vehicle in reach
+  measured: pending
+- id: LR.G.out.spat-after
+  base: G0
+  variant: Gout
+  area: outage
+  measure: g.outage_unit_spat_after
+  expect: eq
+  value: 0
+  source: a unit that is down transmits nothing (outage event, run.rs)
+  measured: pending
+- id: LR.G.out.spat-frames
+  base: G0
+  variant: Gout
+  area: outage
+  measure: g.spat_frames
+  expect: ratio
+  band:
+  - 0.87
+  - 0.89
+  source: 'one of five units silent for 90 of 150 s: 1 - 90/(5 x 150) = 0.88; the other four unchanged'
+  measured: pending
+- id: LR.G.out.advice-after
+  base: G0
+  variant: Gout
+  area: outage
+  measure: g.advice_outage_junction_after
+  expect: eq
+  value: 0
+  source: a SPaT older than 1 s is not used (apps.rs signal_situation), so the dark junction gets no advice
+    from 61 s
+  measured: pending
+- id: LR.G.c1.stops-seed2
+  base: Gc0s2
+  variant: Gs2
+  area: glosa
+  measure: g.stops_per_km
+  expect: down
+  source: LR.G.c1.stops on seed 2
+  measured: pending
+- id: LR.G.c1.stops-seed3
+  base: Gc0s3
+  variant: Gs3
+  area: glosa
+  measure: g.stops_per_km
+  expect: down
+  source: LR.G.c1.stops on seed 3
+  measured: pending
+- id: LR.G.c1.fuel-seed2
+  base: Gc0s2
+  variant: Gs2
+  area: glosa
+  measure: g.fuel_per_100km
+  expect: down
+  source: LR.G.c1.fuel on seed 2
+  measured: pending
+- id: LR.G.c1.fuel-seed3
+  base: Gc0s3
+  variant: Gs3
+  area: glosa
+  measure: g.fuel_per_100km
+  expect: down
+  source: LR.G.c1.fuel on seed 3
+  measured: pending
+- id: LR.S.fibre.hop
+  base: S0
+  variant: S0
+  area: backhaul
+  measure: s.backhaul_ms_p50
+  expect: band
+  band:
+  - 0.29
+  - 0.33
+  fault: delay-zero
+  source: 'the report is 1,123 B on the line (S0 pilot); metro fibre: 20 km x 4.9 us/km + 4 hops x 50
+    us + 1,123 x 8 / 1 Gbit/s = 0.307 ms one way (ip_transport.rs WiredLink::metro_fibre; ITU-T G.652
+    group index)'
+  measured: '0.306319'
+  verdict: pass
+- id: LR.S.relayed
+  base: S0
+  variant: S0
+  area: relay
+  measure: s.relayed_reports
+  expect: ge
+  value: 20
+  fault: use:Srsu0
+  source: with no cellular modem every report reaches the RA through a report-forward unit ([SM-MBR] §4,
+    "whenever in range of an RSU offering SCMS connectivity")
+  measured: '186'
+  verdict: pass
+- id: LR.S.dsl.hop
+  base: S0
+  variant: Sdsl
+  area: backhaul
+  measure: s.backhaul_ms_p50
+  expect: band
+  band:
+  - 8.3
+  - 9.3
+  source: 'the report is 1,123 B on the line (S0 pilot); VDSL2: 5 km x 4.9 us + 6 hops x 50 us + 8 ms
+    interleaving + 1,123 x 8 / 20 Mbit/s = 8.77 ms (WiredLink::copper; ITU-T G.993.2 delay_max; Openreach
+    SIN 498 80/20)'
+  measured: pending
+- id: LR.S.mw.hop
+  base: S0
+  variant: Smw
+  area: backhaul
+  measure: s.backhaul_ms_p50
+  expect: band
+  band:
+  - 0.24
+  - 0.28
+  source: 'the report is 1,123 B on the line (S0 pilot); microwave: 10 km x 3.336 us (light in air) +
+    4 x 50 us + 1,123 x 8 / 400 Mbit/s = 0.256 ms (WiredLink::microwave)'
+  measured: pending
+- id: LR.S.cell.hop
+  base: S0
+  variant: Scell
+  area: backhaul
+  measure: s.backhaul_ms_p50
+  expect: band
+  band:
+  - 25.0
+  - 35.0
+  source: 'the report is 1,123 B on the line (S0 pilot); cellular: the Uu one way, half the 29.2 ms LTE
+    first-hop RTT (Narayanan et al. WWW 2020) plus the 14.4 ms core-to-backend leg, + 1,123 x 8 / 28 Mbit/s
+    = 29.3 ms'
+  measured: pending
+- id: LR.S.lat50.hop
+  base: S0
+  variant: Slat50
+  area: backhaul
+  measure: s.backhaul_ms_p50
+  expect: band
+  band:
+  - 50.0
+  - 50.5
+  source: 'backhaul_params.latency_ms replaces the fixed part: 50 ms + 9 us serialisation'
+  measured: pending
+- id: LR.S.lat2000.hop
+  base: S0
+  variant: Slat2000
+  area: backhaul
+  measure: s.backhaul_ms_p50
+  expect: band
+  band:
+  - 2000.0
+  - 2001.0
+  source: 'as LR.S.lat50.hop: 2,000 ms + 9 us'
+  measured: '2000.01'
+  verdict: pass
+- id: LR.S.loss10.retx
+  base: S0
+  variant: Sloss10
+  area: backhaul
+  measure: s.retx_share
+  expect: band
+  band:
+  - 0.05
+  - 0.2
+  source: 'each loss costs a TCP retransmission after the 200 ms RTO floor (Linux TCP_RTO_MIN; RFC 6298):
+    retransmissions per message = p + p^2 + p^3 + p^4 = 0.111 at p = 0.1'
+  measured: pending
+- id: LR.S.loss10.delay
+  base: S0
+  variant: Sloss10
+  area: backhaul
+  measure: s.backhaul_ms_mean
+  expect: band
+  band:
+  - 5.0
+  - 60.0
+  source: mean hop = 0.3 ms + 200 ms x 0.111 = 22.5 ms; the band allows the binomial spread of a few dozen
+    reports
+  measured: pending
+- id: LR.S.loss30.retx
+  base: S0
+  variant: Sloss30
+  area: backhaul
+  measure: s.retx_share
+  expect: band
+  band:
+  - 0.3
+  - 0.55
+  source: 'as LR.S.loss10.retx at p = 0.3: 0.3 + 0.09 + 0.027 + 0.008 = 0.425'
+  measured: pending
+- id: LR.S.loss30.delay
+  base: S0
+  variant: Sloss30
+  area: backhaul
+  measure: s.backhaul_ms_mean
+  expect: band
+  band:
+  - 40.0
+  - 150.0
+  source: mean hop = 0.3 + 200 x 0.425 = 85 ms
+  measured: pending
+- id: LR.S.loss30.delivered
+  base: S0
+  variant: Sloss30
+  area: backhaul
+  measure: s.relayed_reports
+  expect: same
+  tol: 0.05
+  fault: use:Snone
+  source: 'TCP retransmits until delivered: loss delays reports and loses none (RFC 793 reliability)'
+  measured: pending
+- id: LR.S.none.relayed
+  base: S0
+  variant: Snone
+  area: backhaul
+  measure: s.relayed_reports
+  expect: eq
+  value: 0
+  source: a unit with no backhaul cannot forward a report (store-and-forward only, 06-node-models.md §3)
+  measured: pending
+- id: LR.S.none.crl-frames
+  base: S0
+  variant: Snone
+  area: backhaul
+  measure: s.crl_frames
+  expect: eq
+  value: 0
+  source: a unit whose backhaul never brought the list has no list to broadcast
+  measured: pending
+- id: LR.S.none.rsu-installs
+  base: S0
+  variant: Snone
+  area: backhaul
+  measure: s.rsu_crls_installed
+  expect: eq
+  value: 0
+  source: no backhaul, no CRL fetch
+  measured: pending
+- id: LR.S.rsu0.relayed
+  base: S0
+  variant: Srsu0
+  area: placement
+  measure: s.relayed_reports
+  expect: eq
+  value: 0
+  source: no unit, no relay path for a relay-only vehicle
+  measured: pending
+- id: LR.S.rsu5.relayed
+  base: S0
+  variant: Srsu5
+  area: placement
+  measure: s.relayed_reports
+  expect: down
+  min_change: 0.2
+  source: 'five units cover a sixth of the junctions: fewer reports are uttered within range of one'
+  measured: pending
+- id: LR.S.rsu5.veh-crl
+  base: S0
+  variant: Srsu5
+  area: placement
+  measure: s.veh_crl_downloads
+  expect: down
+  min_change: 0.2
+  source: fewer broadcasting units, fewer relay-only vehicles hear the CRL inside the window
+  measured: pending
+- id: LR.C.rsu0.events
+  base: S0
+  variant: Srsu0
+  area: cost
+  measure: c.events
+  expect: down
+  source: 'no unit: no CRL frames, relays or unit receptions to simulate'
+  measured: pending
+- id: LR.S.bc1.crl-frames
+  base: S0
+  variant: Sbc1
+  area: crl
+  measure: s.crl_frames
+  expect: ratio
+  band:
+  - 3.5
+  - 5.5
+  source: the carousel repeats 5x as often (crl_broadcast_interval_s 5 -> 1) over the same span after
+    the first list
+  measured: pending
+- id: LR.S.bc20.crl-frames
+  base: S0
+  variant: Sbc20
+  area: crl
+  measure: s.crl_frames
+  expect: ratio
+  band:
+  - 0.15
+  - 0.45
+  source: a quarter as often (5 -> 20 s); the first frame of each list is not repeated, so the ratio is
+    a little above 0.25
+  measured: pending
+- id: LR.S.bc20.veh-lag
+  base: S0
+  variant: Sbc20
+  area: crl
+  measure: s.veh_crl_lag_s_mean
+  expect: up
+  source: 'a vehicle passing a unit hears the list only on a repetition: the mean wait grows with the
+    period'
+  measured: pending
+- id: LR.S.lat2000.crl-lag
+  base: S0
+  variant: Slat2000
+  area: crl
+  measure: s.crl_first_frame_lag_s_min
+  expect: ge
+  value: 2.0
+  source: 'a unit fetches the CRL over its backhaul before it can broadcast it: no unit frame of a new
+    list before publication + 2 s one way (+ the 50 ms signing of the RS4 profile)'
+  measured: '2.14603'
+  verdict: pass
+  note: holds on the base binary only because the 10 s cadence is a multiple of the 5 s carousel (the
+    first list starts the carousel 2 s late and every later list lands 2 s before a tick); see LR.S.lat2000bc3.crl-lag
+- id: LR.S.lat2000.veh-lag
+  base: S0
+  variant: Slat2000
+  area: crl
+  measure: s.veh_crl_lag_s_mean
+  expect: up
+  source: the vehicles hear each list at least 2 s later
+  measured: 1.22535 -> 2.58531
+  verdict: pass
+- id: LR.S.out.crl-frames
+  base: S0
+  variant: Sout
+  area: outage
+  measure: s.crl_frames_from_outage_unit
+  expect: eq
+  value: 0
+  source: a unit that is down transmits nothing, CRL frames included (outage event, run.rs)
+  measured: pending
+- id: LR.S.out.crl-units
+  base: S0
+  variant: Sout
+  area: outage
+  measure: s.crl_units
+  expect: eq
+  value: 29
+  source: the other 29 units keep broadcasting
+  measured: pending
+- id: LR.S.lat2000bc3.crl-lag
+  base: S0bc3
+  variant: Slat2000bc3
+  area: crl
+  measure: s.crl_first_frame_lag_s_min
+  expect: ge
+  value: 2.0
+  source: 'a unit can broadcast a list only after its backhaul brought it: no frame of a new list before
+    publication + 2 s, whatever the carousel phase (with 5 s ticks and a 10 s cadence every list landed
+    2 s before a tick, so LR.S.lat2000.crl-lag could not tell; 3 s ticks fall inside the download)'
+  measured: '2.14603'
+  verdict: open
+  note: 'held on the base binary because only one revocation list was published in the 120 s window (published
+    stage 1): the unaligned-tick case was not exercised. The defect is from code reading (install_rsu_crls
+    dropped rsu_send arrival); a 240 s window with two lists is owed'
+- id: LR.S.bc3.crl-lag
+  base: S0
+  variant: S0bc3
+  area: crl
+  measure: s.crl_first_frame_lag_s_max
+  expect: le
+  value: 3.2
+  source: 'on fibre a list is on the air by the next tick: lag <= 3 s carousel period + 0.1 s step + 0.05
+    s signing'
+  fault: use:Slat2000bc3
+  measured: pending
+- id: LR.G.p10.heard
+  base: G0
+  variant: Gp10
+  area: radio
+  measure: g.spat_heard
+  expect: down
+  min_change: 0.1
+  source: 'correction of LR.G.p10.range50: -13 dB loses the NLOS receivers (urban NLOS 30 log10 d)'
+  measured: 132287 -> 102289
+  verdict: pass
+- id: LR.G.p30.heard
+  base: G0
+  variant: Gp30
+  area: radio
+  measure: g.spat_heard
+  expect: up
+  min_change: 0.05
+  source: 'written before the run: +7 dB adds NLOS receivers'
+  measured: pending
+- id: LR.G.p0.heard
+  base: G0
+  variant: Gp0
+  area: radio
+  measure: g.spat_heard
+  expect: down
+  min_change: 0.25
+  source: 'written before the run: -23 dB, more than Gp10 lost'
+  measured: pending
+- id: LR.S.fix.lat2000bc3.crl-lag
+  base: S0bc3
+  variant: FSlat2000bc3
+  area: crl
+  measure: s.crl_first_frame_lag_s_min
+  expect: ge
+  value: 2.0
+  fault: use:Slat2000bc3
+  source: LR.S.lat2000bc3.crl-lag on the fixed binary
+  measured: '2.14603'
+  verdict: pass
+  note: 'fixed binary: lag 2.146 s; RSU installs 90 -> 60 (the last list is still on the 2 s line at the
+    horizon), CRL frames 300 -> 290 (ticks skipped while a download is in flight), vehicle CRL lag mean
+    2.88 -> 3.67 s'
+- id: LR.S.fix.out.crl-frames
+  base: S0
+  variant: FSout
+  area: outage
+  measure: s.crl_frames_from_outage_unit
+  expect: eq
+  value: 0
+  fault: use:Sout
+  source: LR.S.out.crl-frames on the fixed binary
+  measured: pending
+- id: LR.S.fix.neutral
+  base: S0
+  variant: FS0
+  area: determinism
+  measure: digest.record
+  expect: identical
+  fault: record-flip
+  source: 'the fix moves nothing on a backhaul faster than one mobility step with every unit on: the base
+    records are byte-identical'
+  measured: pending

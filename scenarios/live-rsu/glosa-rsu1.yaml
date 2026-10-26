@@ -1,0 +1,10 @@
+# Live RSU track, application family: glosa-base.yaml with one change (one unit, at site 10, instead of five).
+schema: v2xw/scenario/1
+meta:
+  base: glosa-base.yaml
+  name: live-rsu glosa rsu1
+actors:
+  rsus:
+    - site: 10
+      roles: [spat, map]
+      profile: rsu/commsignia-its-rs4

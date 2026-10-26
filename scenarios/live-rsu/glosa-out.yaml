@@ -1,0 +1,7 @@
+# Live RSU track, application family: glosa-base.yaml with one change (the unit at site 10 (node 2) is down from 60 s to the end).
+schema: v2xw/scenario/1
+meta:
+  base: glosa-base.yaml
+  name: live-rsu glosa out
+events:
+  - {t: 60.0, until: 150.0, type: outage, target: 2}

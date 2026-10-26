@@ -1,0 +1,7 @@
+# Live RSU track, SCMS family: scms-base.yaml with one change (unit 5 is off from 30 s to the end).
+schema: v2xw/scenario/1
+meta:
+  base: scms-base.yaml
+  name: live-rsu scms out
+events:
+  - {t: 30.0, until: 120.0, type: outage, target: 5}
