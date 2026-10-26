@@ -865,8 +865,9 @@ rows:
   tol: 0.0
   source: in L every change is forced by the 61 s certificate lifetime (the 300 s period never elapses);
     silent still changes when forced (v2xw-proto pseudonym.rs)
-  measured: pending
-  verdict: pending
+  measured: 59 -> 59
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.PT30.changes
   base: L
   variant: PT30
@@ -978,8 +979,9 @@ rows:
   - 0.019
   - 0.035
   source: 1 in 50 plus one at each 60 s change (1/600)
-  measured: pending
-  verdict: pending
+  measured: '0.0209541'
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.FCX.full-cert
   base: L
   variant: FCX
@@ -1014,8 +1016,9 @@ rows:
   - -7.0
   - -4.5
   source: 74 B x (0.021 - 0.1) = -5.8 B
-  measured: pending
-  verdict: pending
+  measured: 213 -> 207 (delta -6)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.FCX.size
   base: L
   variant: FCX
@@ -1058,8 +1061,9 @@ rows:
   measure: x.unknown_signer_loss
   expect: up
   source: 'a newcomer waits up to 5 s for a certificate: more digest-only frames from unknown signers'
-  measured: pending
-  verdict: pending
+  measured: 0.00751551 -> 0.0270677
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.FC250.unknown
   base: L
   variant: FC250
@@ -1279,8 +1283,9 @@ rows:
   expect: down
   min_change: 0.5
   source: 'no HSM: software P-256 on the SoC (613 us, R7 D8) instead of the CRATON2 bound (9 ms)'
-  measured: pending
-  verdict: pending
+  measured: 9.01218 -> 0.258785
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.HYB.size
   base: NHF
   variant: HYB
@@ -1289,8 +1294,9 @@ rows:
   expect: up
   min_change: 2.0
   source: Falcon-512 adds a ~666 B signature to every BSM and a 897 B key to every certificate
-  measured: pending
-  verdict: pending
+  measured: 213 -> 946
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.HYB.fragments
   base: NHF
   variant: HYB
@@ -1298,8 +1304,9 @@ rows:
   measure: r.fragments_sent
   expect: up
   source: 'the hybrid BSM exceeds one frame: the generic fragmenter splits it'
-  measured: pending
-  verdict: pending
+  measured: 0 -> 11038
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.HYB.channel
   base: NHF
   variant: HYB
@@ -1308,8 +1315,9 @@ rows:
   expect: up
   min_change: 1.0
   source: several times the airtime per message
-  measured: pending
-  verdict: pending
+  measured: 0.018878 -> 0.081624
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.HYB.cost
   base: NHF
   variant: HYB
@@ -1317,8 +1325,9 @@ rows:
   measure: cost.events
   expect: up
   source: more frames, more MAC and PHY events
-  measured: pending
-  verdict: pending
+  measured: 893236 -> 1046791
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.L.share-b
   base: L
   variant: L
