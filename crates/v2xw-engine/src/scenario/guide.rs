@@ -310,6 +310,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "0 (the default); 0.05 to 0.2 to study red-light-violation warnings. Field studies count roughly 1 to 5 red entries per 1,000 vehicles at urban signals (Bonneson, Zimmerman & Brewer, TTI 0-4027, 2002, as FHWA's red-light-running guidance quotes it).",
     },
     Basic {
+        path: "actors.vehicles.drivers.violations.red_run_share",
+        explain: "With violations enabled, the share of drivers who will still enter after the light turns red, each up to their own lateness (exponential, mean red_run_tolerance_mean_s).",
+        recommended: "0.6 (the default) with the 0.6 s mean tolerance reproduces 1.0 red-light violation per 10,000 vehicle-cycles and 3 to 6 per 1,000 vehicles (Bonneson, Zimmerman & Quiroga, TTI 0-4196-P1, Table 1); 0 for none.",
+    },
+    Basic {
         path: "traffic.lc_strategic",
         explain: "How early drivers move into the lane their next turn needs: higher values change lane further before the junction.",
         recommended: "Unset (today's MOBIL); 1 (SUMO default); 0.5 to 4.",

@@ -236,6 +236,38 @@ const AMBER_TRAIT_ID: &str = "mobility/native/driver/amber";
 /// ([`EngineParams::red_runner_share`]).
 const AMBER_RUNNER_ID: &str = "mobility/native/driver/amber-runner";
 
+/// The model id a driver's red-light tolerance is drawn under
+/// ([`crate::drivers::ViolationParams`]).
+const RED_RUN_ID: &str = "mobility/native/driver/red-run";
+
+/// The salt of a driver's failure-to-yield draw at one junction
+/// ([`crate::drivers::ViolationParams::fail_to_yield_share`]).
+const FAIL_TO_YIELD_SALT: u64 = 0x6661_696c_7969_656c; // "failyiel"
+
+/// The slowest a driver who sees a red first must be going to run it, m/s: a vehicle
+/// rolling up to the line at a walking pace stops. **A choice.**
+const RED_RUN_MIN_SPEED_MPS: f64 = 3.0;
+
+/// A uniform in [0, 1) keyed by the trip `seq` and the junction: the failure-to-yield draw.
+fn fail_to_yield_uniform(seq: u64, junction: u64) -> f64 {
+    use crate::drivers::splitmix64;
+    let h = splitmix64(splitmix64(seq ^ FAIL_TO_YIELD_SALT) ^ junction);
+    (h >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// A driver's amber threshold from the uniform `u`: the logistic across the dilemma zone
+/// [`AMBER_DILEMMA_TTI_S`], 10 % going at its far edge and 90 % at its near edge (median
+/// 4.0 s, scale 1.5 s / ln 9), clamped to the near edge and to `far_s` — the zone's far
+/// edge, or with violations on the logistic's tail up to
+/// [`crate::drivers::ViolationParams::amber_tail_max_s`].
+fn amber_threshold(u: f64, far_s: f64) -> f64 {
+    let (near, far) = AMBER_DILEMMA_TTI_S;
+    let u = u.clamp(1e-9, 1.0 - 1e-9);
+    let median = 0.5 * (near + far);
+    let scale = 0.5 * (far - near) / math::ln(9.0);
+    (median + scale * math::ln(u / (1.0 - u))).clamp(near, far_s.max(near))
+}
+
 /// The keyed stream a driver's signalling habit is drawn from ([`crate::lamps`]).
 const LAMP_HABIT_ID: &str = "mobility/native/driver/lamps";
 
@@ -325,6 +357,9 @@ pub struct DriverTraits {
     /// reach the line before the red, and so may enter on red
     /// ([`EngineParams::red_runner_share`]); false for every driver by default.
     pub amber_runner: bool,
+    /// How late after the red onset this driver still enters, seconds
+    /// ([`crate::drivers::ViolationParams`]); zero for every driver unless violations are on.
+    pub red_tolerance_s: f64,
     /// How the driver follows ([`crate::style::DriverStyle`]), read from the same latent
     /// as `speed_factor`.
     pub style: crate::style::DriverStyle,
@@ -343,6 +378,7 @@ impl DriverTraits {
         follow_reaction_s: 0.0,
         amber_go_tti_s: 0.0,
         amber_runner: false,
+        red_tolerance_s: 0.0,
         style: crate::style::DriverStyle::Normal,
         params_z: [0.0; 4],
         noise_key: 0,
@@ -395,19 +431,14 @@ impl DriverTraits {
             math::exp(math::ln(follow_median_s.max(0.05)) + REACTION_SIGMA * z).clamp(0.2, 3.0);
         // The amber threshold: logistic across the dilemma zone, 10 % at its near edge
         // and 90 % at its far edge (median 4.0 s, scale 1.5 s / ln 9), clamped to it.
-        let amber_go_tti_s = {
-            let (near, far) = AMBER_DILEMMA_TTI_S;
-            let u = ctx
-                .rng(
-                    RngDomain::ReactionTime,
-                    EntityRef::custom(AMBER_TRAIT_ID, seq),
-                )
-                .uniform(0.0, 1.0)
-                .clamp(1e-9, 1.0 - 1e-9);
-            let median = 0.5 * (near + far);
-            let scale = 0.5 * (far - near) / math::ln(9.0);
-            (median + scale * math::ln(u / (1.0 - u))).clamp(near, far)
-        };
+        let amber_go_tti_s = amber_threshold(
+            ctx.rng(
+                RngDomain::ReactionTime,
+                EntityRef::custom(AMBER_TRAIT_ID, seq),
+            )
+            .uniform(0.0, 1.0),
+            AMBER_DILEMMA_TTI_S.1,
+        );
         // The driver's own car-following parameters and perception noise come from a
         // stream of their own, so drawing them leaves every other draw as it was.
         let (params_z, noise_key) = {
@@ -429,6 +460,7 @@ impl DriverTraits {
             follow_reaction_s,
             amber_go_tti_s,
             amber_runner: false,
+            red_tolerance_s: 0.0,
             style: crate::style::DriverStyle::of_speed_factor_around(
                 speed_factor,
                 law.speed_factor_mean,
@@ -864,6 +896,10 @@ pub struct EngineParams {
     /// the heavy-vehicle left-lane restriction ([`crate::drivers`]). All off by default.
     /// Not applied in the legacy parity mode.
     pub human: crate::drivers::HumanDriverParams,
+    /// Rule violations and crash states ([`crate::drivers::ViolationParams`]). Off by
+    /// default. Not applied in the legacy parity mode.
+    #[serde(skip_serializing_if = "crate::drivers::ViolationParams::is_default")]
+    pub violations: crate::drivers::ViolationParams,
     /// **A test hook, not a model parameter.** Walks the decision pass in reverse actor
     /// order. Because the pass reads only the frozen snapshot, the published result must be
     /// bit-identical either way; that is the ADR 0004 Jacobi property, and this is how the
@@ -917,9 +953,21 @@ impl Default for EngineParams {
             lc2013: None,
             reroute_period_s: 0.0,
             human: crate::drivers::HumanDriverParams::default(),
+            violations: crate::drivers::ViolationParams::default(),
             reverse_order: false,
         }
     }
+}
+
+/// A vehicle's crash ([`crate::drivers::ViolationParams::crashes`]): it stands where it
+/// collided until `clear_at`, then leaves with [`DespawnCause::Collision`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CrashState {
+    /// When it is cleared from the road.
+    clear_at: SimTime,
+    /// Whether either vehicle was committing a tagged violation when they collided: a crash
+    /// between two lawful vehicles is a model defect, and stays visible to the auditor.
+    by_violation: bool,
 }
 
 /// A lane-change transition in progress.
@@ -1032,6 +1080,14 @@ struct Actor {
     amber_commit: Option<JunctionId>,
     /// The junction whose amber the vehicle has already seen and decided on.
     amber_seen: Option<JunctionId>,
+    /// The junction whose amber or red this driver has already judged for a violation
+    /// ([`crate::drivers::ViolationParams`]): they decide once, as at the amber.
+    signal_look: Option<JunctionId>,
+    /// The violations this vehicle is committing on purpose ([`crate::audit::intent`]
+    /// bits), kept while it is inside the junction they were committed at.
+    violation: u8,
+    /// Its crash, once it has collided ([`crate::drivers::ViolationParams::crashes`]).
+    crash: Option<CrashState>,
     /// The driver's own speed factor and reaction time.
     traits: DriverTraits,
     /// While standing: when what held it first let it go (the start of its reaction).
@@ -2357,6 +2413,8 @@ impl NativeMobility {
                     a.transition = None;
                     a.amber_commit = None;
                     a.amber_seen = None;
+                    a.signal_look = None;
+                    a.violation = 0;
                     a.release_at = None;
                     a.stuck_since = None;
                     first_rear.insert(l, 0.0);
@@ -2552,9 +2610,53 @@ impl NativeMobility {
                     min_path_radius_m: a.class.min_path_radius_m(),
                     lane_position_m: self.lane_position_m(a.class),
                     kerbside: a.kerb.at_kerb_as(),
+                    intent: a.violation
+                        | if a.crash.is_some_and(|c| c.by_violation) {
+                            crate::audit::intent::CRASHED
+                        } else {
+                            0
+                        },
                 }
             })
             .collect()
+    }
+
+    /// Collisions at `t1` resolve to crash states: every pair of vehicles whose footprints
+    /// intersect (the auditor's [`crate::audit::overlapping_pairs`], so a crash is exactly
+    /// what the auditor would call an overlap) stops where it is and stands for
+    /// [`crate::drivers::ViolationParams::crash_clearance_s`].
+    fn resolve_collisions(&mut self, world: &World, t1: SimTime) {
+        let actors = self.audit_actors(world, t1);
+        let pairs = crate::audit::overlapping_pairs(&actors, crate::audit::AuditParams::default().footprint_shrink_m);
+        if pairs.is_empty() {
+            return;
+        }
+        let clear_at = t1.saturating_add(secs_to_ns(self.params.violations.crash_clearance_s.max(0.0)));
+        for (i, j) in pairs {
+            let (a, b) = (actors[i].actor, actors[j].actor);
+            let tagged = |id: ActorId| {
+                self.actors
+                    .get(&id)
+                    .is_some_and(|x| x.violation != 0 || x.crash.is_some_and(|c| c.by_violation))
+            };
+            let by_violation = tagged(a) || tagged(b);
+            for id in [a, b] {
+                if let Some(x) = self.actors.get_mut(&id) {
+                    if x.crash.is_none() {
+                        x.crash = Some(CrashState {
+                            clear_at,
+                            by_violation,
+                        });
+                        x.speed_mps = 0.0;
+                        x.accel_mps2 = 0.0;
+                        x.transition = None;
+                        x.stopped_until = Some(clear_at);
+                    } else if by_violation && let Some(c) = x.crash.as_mut() {
+                        c.by_violation = true;
+                    }
+                }
+            }
+        }
     }
 
     /// Every pedestrian as the traffic auditor reads it, in actor-id order.
@@ -2661,6 +2763,9 @@ impl NativeMobility {
                 trail: Vec::new(),
                 amber_commit: None,
                 amber_seen: None,
+                signal_look: None,
+                violation: 0,
+                crash: None,
                 traits: DriverTraits::NEUTRAL,
                 release_at: None,
                 forced_brake: None,
@@ -2851,7 +2956,8 @@ impl NativeMobility {
             .filter(|a| {
                 a.speed_mps < STUCK_SPEED_MPS
                     && (matches!(a.forced_brake, Some((_, None)))
-                        || a.stopped_until == Some(SimTime::MAX))
+                        || a.stopped_until == Some(SimTime::MAX)
+                        || a.crash.is_some())
             })
             .map(|a| a.lane)
             .collect()
@@ -3006,6 +3112,27 @@ impl NativeMobility {
                     )
                     .uniform(0.0, 1.0);
                 traits.amber_runner = u < share;
+            }
+            let v = self.params.violations;
+            if v.enabled {
+                // Each from a keyed stream of its own, so turning violations on moves no
+                // other draw.
+                let mut rng = ctx.rng(
+                    RngDomain::ReactionTime,
+                    EntityRef::custom(RED_RUN_ID, trip.seq),
+                );
+                let (u_share, u_tol) = (rng.uniform(0.0, 1.0), rng.uniform(0.0, 1.0));
+                traits.red_tolerance_s = v.red_tolerance_s(u_share, u_tol);
+                if v.amber_tail_max_s > AMBER_DILEMMA_TTI_S.1 {
+                    traits.amber_go_tti_s = amber_threshold(
+                        ctx.rng(
+                            RngDomain::ReactionTime,
+                            EntityRef::custom(AMBER_TRAIT_ID, trip.seq),
+                        )
+                        .uniform(0.0, 1.0),
+                        v.amber_tail_max_s,
+                    );
+                }
             }
             traits
         } else {
@@ -3257,6 +3384,9 @@ impl NativeMobility {
                 trail: Vec::new(),
                 amber_commit: None,
                 amber_seen: None,
+                signal_look: None,
+                violation: 0,
+                crash: None,
                 traits,
                 release_at: None,
                 forced_brake: None,
@@ -4949,6 +5079,43 @@ impl NativeMobility {
         Some(left.max(0.0))
     }
 
+    /// How long the red shown to the movement on `movement_lane` at `junction` has been
+    /// showing at `t`, seconds: `None` if it shows no red or nothing is signalled. Read
+    /// from the plan, as [`Self::amber_left_s`] is.
+    fn red_elapsed_s(
+        &self,
+        world: &World,
+        junction: JunctionId,
+        movement_lane: Option<LaneId>,
+        t: SimTime,
+    ) -> Option<f64> {
+        let JunctionControl::Signalised { plan } = world.roads.try_junction(junction)?.control
+        else {
+            return None;
+        };
+        let plan = world.signal_plan(plan)?;
+        let k = plan
+            .controlled
+            .iter()
+            .position(|l| Some(*l) == movement_lane)?;
+        let (i, into) = plan.phase_at(ns_to_secs(t))?;
+        let red = |p: usize| plan.phases[p].states.get(k) == Some(&SignalState::Red);
+        if !red(i) {
+            return None;
+        }
+        let n = plan.phases.len();
+        let mut elapsed = into;
+        let mut j = i;
+        for _ in 1..n {
+            j = (j + n - 1) % n;
+            if !red(j) {
+                break;
+            }
+            elapsed += plan.phases[j].duration_s;
+        }
+        Some(elapsed.max(0.0))
+    }
+
     /// The speed a junction connector is driven at: its turn speed, or its limit.
     fn connector_speed(&self, world: &World, connector: LaneId) -> f64 {
         let limit = world.lane(connector).speed_limit_mps;
@@ -5098,6 +5265,10 @@ struct Decision {
     amber_commit: Option<JunctionId>,
     /// The junction whose amber this vehicle has decided on, carried to the next step.
     amber_seen: Option<JunctionId>,
+    /// The junction whose amber or red the driver has judged for a violation.
+    signal_look: Option<JunctionId>,
+    /// The violations decided this step ([`crate::audit::intent`] bits).
+    violation: u8,
     /// When the standing vehicle's reaction to being let go began, carried to the next
     /// step.
     release_at: Option<SimTime>,
@@ -5424,6 +5595,10 @@ impl Mobility for NativeMobility {
             // The junction ahead becomes a virtual leader when it says stop or slow.
             let mut amber_commit: Option<JunctionId> = None;
             let mut amber_seen: Option<JunctionId> = None;
+            let mut signal_look: Option<JunctionId> = None;
+            let mut violation: u8 = 0;
+            let viol = self.params.violations;
+            let violating = along && viol.enabled;
             let mut commit_floor: Option<f64> = None;
             // The stop line behind the binding virtual obstacle, when a junction's "stop"
             // is what binds: how much room there is up to the line itself.
@@ -5433,6 +5608,68 @@ impl Mobility for NativeMobility {
             for junction in self.junctions_ahead(world, actor, t0) {
                 let conflicts = self.conflicts_for(world, &junction, &ego, &claims, t0);
                 let mut decision = self.entry_decision(world, &ego, &junction, &conflicts);
+                // Failure to yield ([`crate::drivers::ViolationParams::fail_to_yield_share`]):
+                // where this driver must give way — no signal, or a permissive green — a
+                // keyed draw per driver and junction decides whether they ignore the
+                // conflicting foes slow enough to look as if they are stopping.
+                if violating
+                    && viol.fail_to_yield_share > 0.0
+                    && junction.stop_line_gap_m > 0.0
+                    && matches!(decision, EntryDecision::Stop { .. })
+                    && matches!(junction.signal, None | Some(SignalState::GreenYield))
+                {
+                    // A hash, not a stream: the decision pass runs in parallel on the
+                    // frozen snapshot and draws nothing from the context.
+                    let u = fail_to_yield_uniform(actor.seq, u64::from(junction.id.index()));
+                    if u < viol.fail_to_yield_share {
+                        let kept: Vec<ConflictView> = conflicts
+                            .iter()
+                            .filter(|c| !(c.conflicts && c.speed_mps <= viol.ignore_foe_speed_mps))
+                            .cloned()
+                            .collect();
+                        if kept.len() < conflicts.len()
+                            && self.entry_decision(world, &ego, &junction, &kept)
+                                == EntryDecision::Proceed
+                        {
+                            decision = EntryDecision::Proceed;
+                            violation |= crate::audit::intent::FOE_IGNORED;
+                        }
+                    }
+                }
+                // Red-light running after the red onset: a driver who sees the red before
+                // they have judged this junction's amber goes if the red began no longer
+                // ago than their tolerance less the time they need to the line.
+                if violating
+                    && junction.signal == Some(SignalState::Red)
+                    && junction.stop_line_gap_m > 0.0
+                    && actor.signal_look != Some(junction.id)
+                    && actor.amber_seen != Some(junction.id)
+                    && signal_look.is_none()
+                {
+                    if actor.traits.red_tolerance_s > 0.0
+                        && matches!(decision, EntryDecision::Stop { .. })
+                        && ego.speed_mps > RED_RUN_MIN_SPEED_MPS
+                        && let Some(into) =
+                            self.red_elapsed_s(world, junction.id, junction.movement_lane, t0)
+                        && into + junction.stop_line_gap_m / ego.speed_mps
+                            <= actor.traits.red_tolerance_s
+                    {
+                        decision = EntryDecision::Proceed;
+                        amber_commit = Some(junction.id);
+                        commit_floor = Some(f64::INFINITY);
+                        violation |= crate::audit::intent::RED_RUN;
+                    }
+                    signal_look = Some(junction.id);
+                }
+                if violating
+                    && matches!(junction.signal, Some(SignalState::Amber | SignalState::Red))
+                    && signal_look.is_none()
+                    && (actor.signal_look == Some(junction.id)
+                        || actor.amber_seen == Some(junction.id)
+                        || actor.amber_commit == Some(junction.id))
+                {
+                    signal_look = Some(junction.id);
+                }
                 // The amber decision, taken once, at the onset: a driver who could stop still
                 // goes if they are nearer the line than their own threshold
                 // ([`DriverTraits::amber_go_tti_s`]) and reach it before the red. Taken
@@ -5457,6 +5694,29 @@ impl Mobility for NativeMobility {
                             && (actor.traits.amber_runner || tti + AMBER_GO_MARGIN_S <= left)
                         {
                             decision = EntryDecision::Proceed;
+                            if violating {
+                                if tti >= AMBER_DILEMMA_TTI_S.1 {
+                                    violation |= crate::audit::intent::AMBER_RUN;
+                                }
+                                if tti + AMBER_GO_MARGIN_S > left {
+                                    violation |= crate::audit::intent::RED_RUN;
+                                }
+                            }
+                        } else if violating
+                            && tti < actor.traits.amber_go_tti_s
+                            && actor.traits.red_tolerance_s > 0.0
+                            && tti - left <= actor.traits.red_tolerance_s
+                        {
+                            // A red-light runner: they will reach the line after the red,
+                            // but within their tolerance of it.
+                            decision = EntryDecision::Proceed;
+                            violation |= crate::audit::intent::RED_RUN;
+                            if tti >= AMBER_DILEMMA_TTI_S.1 {
+                                violation |= crate::audit::intent::AMBER_RUN;
+                            }
+                        }
+                        if violating {
+                            signal_look = Some(junction.id);
                         }
                     }
                     amber_seen = Some(junction.id);
@@ -6034,6 +6294,8 @@ impl Mobility for NativeMobility {
                     lane_change: LaneChangeDecision::Stay,
                     amber_commit,
                     amber_seen,
+                    signal_look,
+                    violation,
                     release_at,
                     advance_cap_m,
                     detour_ok: false,
@@ -6245,6 +6507,24 @@ impl Mobility for NativeMobility {
             let Some(actor) = self.actors.get_mut(&decision.actor) else {
                 continue;
             };
+            // A crashed vehicle stands where it collided, blocking its lane, until it is
+            // cleared.
+            if let Some(crash) = actor.crash {
+                actor.speed_mps = 0.0;
+                actor.accel_mps2 = 0.0;
+                if t1 >= crash.clear_at {
+                    despawned.push((decision.actor, DespawnCause::Collision));
+                }
+                continue;
+            }
+            actor.signal_look = decision.signal_look;
+            if decision.violation != 0 {
+                actor.violation |= decision.violation;
+            } else if decision.amber_commit.is_none()
+                && world.lane(actor.lane).kind != LaneKind::Internal
+            {
+                actor.violation = 0;
+            }
             // Longitudinal: the legacy integration order — the new speed carries the step,
             // which is what keeps a vehicle from rolling through a stop line.
             //
@@ -6675,6 +6955,9 @@ impl Mobility for NativeMobility {
             self.closure_detours(world, t1, &costs);
         }
         despawned.extend(vru_gone);
+        if along && self.params.violations.enabled && self.params.violations.crashes {
+            self.resolve_collisions(world, t1);
+        }
 
         // Publish, in actor-id order.
         let mut states: Vec<(ActorId, Kinematics)> = self
@@ -9966,5 +10249,334 @@ mod tests {
         assert_eq!(engine.tier(), Tier::Medium);
         let legacy = NativeMobility::legacy(EngineParams::default());
         assert_eq!(legacy.tier(), Tier::Abstract);
+    }
+
+    // ---- WP-08: rule violations and crash states ------------------------------------
+
+    /// What one run of Poisson arrivals on a signalised approach produced.
+    struct ApproachRun {
+        /// Vehicles that entered the junction from the approach.
+        entries: u64,
+        /// Of those, entries on red, with how long the red had shown, seconds.
+        into_red_s: Vec<f64>,
+        /// The auditor fed the engine's own tags.
+        tagged: crate::audit::AuditReport,
+        /// The auditor fed the same states with every tag stripped: the fault "an untagged
+        /// red-light crossing", which must be caught as a defect.
+        untagged: crate::audit::AuditReport,
+        /// Every published state, for the identity checks.
+        states: Vec<Vec<(ActorId, Kinematics)>>,
+        /// The signal cycle, seconds.
+        cycle_s: f64,
+    }
+
+    fn approach_run(
+        params: EngineParams,
+        rate_veh_per_h: f64,
+        duration_s: f64,
+        seed: u64,
+    ) -> ApproachRun {
+        let world = grid(true);
+        let (approach, beyond) = signalised_approach(&world);
+        let rng = RngRegistry::new(seed);
+        let junction = world.edge(world.lane(approach).edge).to;
+        let plan_id = match world.roads.junction(junction).control {
+            JunctionControl::Signalised { plan } => plan,
+            _ => unreachable!("chosen above"),
+        };
+        let plan = world.signal_plan(plan_id).expect("a plan");
+        let cycle_s: f64 = plan.phases.iter().map(|p| p.duration_s).sum();
+        let movement = world
+            .successors(approach)
+            .iter()
+            .find(|c| c.to_lane == beyond)
+            .and_then(|c| c.via)
+            .expect("an internal connector");
+        let signals = FixedTimeSignals::default();
+        // Poisson arrivals from a fixed hash, so the arrival stream is the same whatever
+        // the engine draws.
+        let mut arrivals = Vec::new();
+        let mut t_s = 0.0;
+        let mut k = 0u64;
+        while t_s < duration_s {
+            let h = crate::drivers::splitmix64(seed ^ k.wrapping_mul(0x9e37_79b9));
+            let u = (h >> 11) as f64 / (1u64 << 53) as f64;
+            t_s += -math::ln(1.0 - u.min(1.0 - 1e-12)) * 3600.0 / rate_veh_per_h;
+            arrivals.push(secs_to_ns(t_s));
+            k += 1;
+        }
+        let mut engine = engine_on(&world, params, &rng);
+        let audit = crate::audit::AuditParams::default();
+        let mut tagged = crate::audit::TrafficAuditor::new(&world, audit);
+        let mut untagged = crate::audit::TrafficAuditor::new(&world, audit);
+        let mut run = ApproachRun {
+            entries: 0,
+            into_red_s: Vec::new(),
+            tagged: crate::audit::AuditReport::default(),
+            untagged: crate::audit::AuditReport::default(),
+            states: Vec::new(),
+            cycle_s,
+        };
+        let mut next = 0usize;
+        let mut red_since: Option<SimTime> = None;
+        let mut on_approach: BTreeSet<ActorId> = BTreeSet::new();
+        let mut t = 0;
+        let end = secs_to_ns(duration_s);
+        while t < end {
+            let mut ctx = MobilityCtx::new(t, &world, &rng);
+            while next < arrivals.len() && arrivals[next] <= t {
+                engine.command(
+                    &mut ctx,
+                    MobilityCommand::Spawn(TripRequest {
+                        seq: next as u64,
+                        t,
+                        origin: approach,
+                        origin_s_m: 5.0,
+                        destination: beyond,
+                        class: VehicleClass::Passenger,
+                        desired_speed_mps: 13.89,
+                    }),
+                );
+                next += 1;
+            }
+            let state = signals
+                .state_for(plan, movement, ns_to_secs(t))
+                .expect("controlled");
+            if state == SignalState::Red {
+                red_since.get_or_insert(t);
+            } else {
+                red_since = None;
+            }
+            let update = engine.step(&mut ctx, params.step);
+            let t1 = t + params.step.as_nanos();
+            let actors = engine.audit_actors(&world, t1);
+            for a in &actors {
+                if a.lane == approach {
+                    on_approach.insert(a.actor);
+                } else if on_approach.remove(&a.actor) {
+                    run.entries += 1;
+                    if let Some(since) = red_since {
+                        run.into_red_s.push(ns_to_secs(t - since));
+                    }
+                }
+            }
+            tagged.observe(&world, t, t1, &actors, &update.despawned);
+            let stripped: Vec<crate::audit::AuditActor> = actors
+                .iter()
+                .map(|a| crate::audit::AuditActor { intent: 0, ..*a })
+                .collect();
+            untagged.observe(&world, t, t1, &stripped, &update.despawned);
+            run.states.push(update.states);
+            t = t1;
+        }
+        run.tagged = tagged.report();
+        run.untagged = untagged.report();
+        run
+    }
+
+    fn violations_on() -> EngineParams {
+        EngineParams {
+            intersections: IntersectionMode::SignalsOnly,
+            lane_changes: false,
+            violations: crate::drivers::ViolationParams {
+                enabled: true,
+                ..crate::drivers::ViolationParams::default()
+            },
+            ..EngineParams::default()
+        }
+    }
+
+    /// With violations on, red-light running on a signalised approach sits in the field
+    /// band (Bonneson, Zimmerman & Quiroga, TTI 0-4196-P1, Table 1: 3.0-5.3 violations per
+    /// 1,000 vehicles, 1.0 per 10,000 vehicle-cycles), entries come early in the red
+    /// (median under 0.5 s, Figure 4; none beyond 4.0 s, Table 3), every one of them is
+    /// tagged, and the same entries untagged are caught as defects.
+    #[test]
+    fn red_light_running_sits_in_the_field_band_and_untagged_it_is_a_defect() {
+        let run = approach_run(violations_on(), 600.0, 3600.0, 21);
+        let v = run.into_red_s.len() as f64;
+        let n = run.entries as f64;
+        let per_1000_veh = 1000.0 * v / n;
+        let cycles = 3600.0 / run.cycle_s;
+        let per_1000_cycles = 1000.0 * v / cycles;
+        let per_10k_veh_cycles = per_1000_veh * run.cycle_s / 360.0;
+        let mut into = run.into_red_s.clone();
+        into.sort_by(f64::total_cmp);
+        let median = into.get(into.len() / 2).copied().unwrap_or(f64::NAN);
+        eprintln!(
+            "cycle {:.0} s, {n} entries, {v} on red: {per_1000_veh:.2} per 1,000 veh, \
+             {per_1000_cycles:.1} per 1,000 cycles, {per_10k_veh_cycles:.2} per 10,000 \
+             veh-cycles; into red median {median:.2} s, max {:.2} s; tagged {:?}",
+            run.cycle_s,
+            into.last().copied().unwrap_or(0.0),
+            (
+                run.tagged.stats.intended_red_entries,
+                run.tagged.count(crate::audit::Check::RedEntry)
+            )
+        );
+        let (lo, hi) = crate::drivers::RED_RUN_PER_1000_VEH_BAND;
+        assert!(n > 400.0, "too few entries to judge a rate: {n}");
+        assert!(
+            (lo..=hi).contains(&per_1000_veh),
+            "{per_1000_veh:.2} red entries per 1,000 vehicles, outside the field band {lo}-{hi}"
+        );
+        assert!(
+            (0.5..=2.0).contains(&per_10k_veh_cycles),
+            "{per_10k_veh_cycles:.2} per 10,000 veh-cycles, against Texas's 1.0"
+        );
+        assert!(
+            median < 0.5,
+            "median entry {median:.2} s into red (field: under 0.5 s)"
+        );
+        assert!(
+            into.iter()
+                .all(|x| *x <= crate::drivers::RED_RUN_TOLERANCE_MAX_S),
+            "an entry later than 4.0 s into red"
+        );
+        // Every one tagged: behaviour, not a defect.
+        assert_eq!(run.tagged.count(crate::audit::Check::RedEntry), 0);
+        assert_eq!(run.tagged.stats.intended_red_entries, v as u64);
+        // The fault: the same entries without their tag are red-entry defects.
+        assert_eq!(run.untagged.count(crate::audit::Check::RedEntry), v as u64);
+        assert!(v > 0.0);
+    }
+
+    /// With violations off — the default, or `enabled: false` whatever else the block
+    /// says — the published states are byte-identical to a run without the block; and a
+    /// run with violations on is reproducible.
+    #[test]
+    fn violations_off_change_nothing_and_on_is_deterministic() {
+        let base = EngineParams {
+            intersections: IntersectionMode::SignalsOnly,
+            lane_changes: false,
+            ..EngineParams::default()
+        };
+        let off = EngineParams {
+            violations: crate::drivers::ViolationParams {
+                enabled: false,
+                red_run_share: 1.0,
+                fail_to_yield_share: 1.0,
+                amber_tail_max_s: 12.0,
+                ..crate::drivers::ViolationParams::default()
+            },
+            ..base
+        };
+        let inert = EngineParams {
+            violations: crate::drivers::ViolationParams {
+                enabled: true,
+                red_run_share: 0.0,
+                amber_tail_max_s: AMBER_DILEMMA_TTI_S.1,
+                ..crate::drivers::ViolationParams::default()
+            },
+            ..base
+        };
+        let a = approach_run(base, 600.0, 400.0, 5);
+        let b = approach_run(off, 600.0, 400.0, 5);
+        let c = approach_run(inert, 600.0, 400.0, 5);
+        assert!(a.states == b.states, "enabled: false moved a state");
+        assert!(
+            a.states == c.states,
+            "violations on with every violation zero moved a state"
+        );
+        let on1 = approach_run(violations_on(), 600.0, 400.0, 5);
+        let on2 = approach_run(violations_on(), 600.0, 400.0, 5);
+        assert!(on1.states == on2.states, "same seed, different states");
+        assert!(on1.states != a.states, "violations on changed nothing");
+    }
+
+    /// A collision resolves to a crash state: both vehicles stop where they are, the lane
+    /// is blocked (the car behind stops short of them), and after the clearance time both
+    /// leave with `Collision`. A crash a tagged violation caused is behaviour to the
+    /// auditor; the same crash between untagged vehicles is still an overlap defect.
+    #[test]
+    fn a_collision_becomes_a_crash_that_blocks_the_lane_until_cleared() {
+        let world = grid(true);
+        let (approach, _) = signalised_approach(&world);
+        let route = vec![approach];
+        let rng = RngRegistry::new(3);
+        let params = EngineParams {
+            intersections: IntersectionMode::SignalsOnly,
+            lane_changes: false,
+            violations: crate::drivers::ViolationParams {
+                enabled: true,
+                crash_clearance_s: 5.0,
+                ..crate::drivers::ViolationParams::default()
+            },
+            ..EngineParams::default()
+        };
+        for tag in [false, true] {
+            let mut engine = engine_on(&world, params, &rng);
+            let driver = engine.driver_for(VehicleClass::Passenger);
+            let car = VehicleClass::Passenger;
+            let a = engine
+                .spawn_with_route(&world, 0, car, driver, route.clone(), 32.0)
+                .expect("spawn");
+            let b = engine
+                .spawn_with_route(&world, 0, car, driver, route.clone(), 30.0)
+                .expect("spawn");
+            let c = engine
+                .spawn_with_route(&world, 0, car, driver, route.clone(), 6.0)
+                .expect("spawn");
+            engine.set_speed(b, 8.0).expect("speed");
+            engine.set_speed(c, 8.0).expect("speed");
+            if tag {
+                engine.actors.get_mut(&b).expect("b").violation = crate::audit::intent::RED_RUN;
+            }
+            let mut auditor =
+                crate::audit::TrafficAuditor::new(&world, crate::audit::AuditParams::default());
+            let mut gone = Vec::new();
+            let mut t = 0;
+            while t < secs_to_ns(12.0) {
+                let mut ctx = MobilityCtx::new(t, &world, &rng);
+                let update = engine.step(&mut ctx, params.step);
+                let t1 = t + params.step.as_nanos();
+                let actors = engine.audit_actors(&world, t1);
+                auditor.observe(&world, t, t1, &actors, &update.despawned);
+                if t == 0 {
+                    for id in [a, b] {
+                        let x = &engine.actors[&id];
+                        assert!(x.crash.is_some(), "{id:?} did not crash");
+                        assert_eq!(x.speed_mps, 0.0);
+                        assert_eq!(x.crash.map(|k| k.by_violation), Some(tag));
+                    }
+                    assert!(
+                        engine.broken_down_lanes().contains(&approach),
+                        "lane not blocked"
+                    );
+                }
+                gone.extend(update.despawned.iter().copied());
+                t = t1;
+            }
+            assert!(gone.contains(&(a, DespawnCause::Collision)), "{gone:?}");
+            assert!(gone.contains(&(b, DespawnCause::Collision)), "{gone:?}");
+            assert!(
+                !gone.iter().any(|(id, _)| *id == c),
+                "the car behind left: {gone:?}"
+            );
+            // The car behind stopped short of the crash and never touched it.
+            assert!(
+                engine.actors[&c].crash.is_none(),
+                "the car behind crashed into it"
+            );
+            let r = auditor.report();
+            if tag {
+                assert_eq!(
+                    r.count(crate::audit::Check::Overlap),
+                    0,
+                    "{:?}",
+                    r.examples
+                );
+                assert!(r.stats.crash_overlap_steps > 0);
+                assert_eq!(r.stats.crashes_cleared, 2);
+                assert_eq!(r.count(crate::audit::Check::MidRoadDespawn), 0);
+            } else {
+                assert!(
+                    r.count(crate::audit::Check::Overlap) > 0,
+                    "an untagged crash went unflagged"
+                );
+                assert_eq!(r.stats.crashes_cleared, 0);
+                assert_eq!(r.count(crate::audit::Check::MidRoadDespawn), 2);
+            }
+        }
     }
 }

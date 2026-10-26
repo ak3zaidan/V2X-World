@@ -549,6 +549,9 @@ pub enum DespawnCause {
     Commanded,
     /// It exceeded its maximum lifetime, which bounds a run's memory.
     LifetimeExpired,
+    /// It crashed and, once the crash had stood its clearance time, was cleared from the
+    /// road ([`crate::drivers::ViolationParams::crashes`]).
+    Collision,
 }
 
 /// The live state of one signal controller, as the mobility step publishes it.

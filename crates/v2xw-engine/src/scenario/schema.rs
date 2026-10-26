@@ -1233,6 +1233,11 @@ pub struct Drivers {
     /// without checking they reach the line before the red. Unset is 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub red_runner_share: Option<f64>,
+    /// Rule violations and crash states (WP-08): red-light running after the red onset,
+    /// amber running beyond the dilemma zone, failure to yield, and collisions that stop
+    /// the vehicles and block the lane until cleared. Unset (or `enabled: false`) is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub violations: Option<Violations>,
     /// The median time a driver takes to move off when the light turns green or a
     /// crosswalk clears, seconds. Unset is 1.08 s (Bonneson 1992's 1.22 s mean start-response, lognormal σ 0.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1256,6 +1261,82 @@ pub struct Drivers {
     /// Cyclists' car-following numbers. Unset is SUMO's bicycle vType.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bicycle: Option<ClassDriver>,
+}
+
+/// `actors.vehicles.drivers.violations` ([`v2xw_mobility::drivers::ViolationParams`]);
+/// every unset field keeps its default.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Violations {
+    /// Whether drivers commit violations at all. Unset is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// The share of drivers who enter on red within their tolerance. Unset is 0.6,
+    /// calibrated so that the run reproduces 1.0 violation per 10,000 vehicle-cycles
+    /// (Bonneson et al., TTI 0-4196-P1, Table 1, Texas).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red_run_share: Option<f64>,
+    /// The mean of a runner's tolerance after the red onset, seconds (exponential). Unset is
+    /// 0.6 s: a median entry 0.42 s into red (TTI 0-4196-P1 Figure 4: under 0.5 s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red_run_tolerance_mean_s: Option<f64>,
+    /// The longest tolerance, seconds. Unset is 4.0 s (98 % of violations within 4.0 s,
+    /// TTI 0-4196-P1 Table 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red_run_tolerance_max_s: Option<f64>,
+    /// The longest amber threshold drawn, seconds: the Zegeer & Deen 1978 logistic's tail
+    /// beyond the dilemma zone's far edge. Unset is 8 s; 5.5 keeps the clamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amber_tail_max_s: Option<f64>,
+    /// The probability that a driver fails to yield at a junction where they must give way
+    /// (SUMO `jmIgnoreFoeProb`). Unset is 0 (todo-calibrate: no field rate was read).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fail_to_yield_share: Option<f64>,
+    /// The fastest foe a failing driver ignores, m/s (SUMO `jmIgnoreFoeSpeed`). Unset is 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ignore_foe_speed_mps: Option<f64>,
+    /// Whether a collision resolves to a crash state. Unset is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crashes: Option<bool>,
+    /// How long a crashed vehicle stands before it is cleared, seconds. Unset is 900 s (a
+    /// choice, todo-calibrate).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crash_clearance_s: Option<f64>,
+}
+
+impl Violations {
+    /// The engine's parameters this block asks for.
+    pub fn params(&self) -> v2xw_mobility::drivers::ViolationParams {
+        let mut p = v2xw_mobility::drivers::ViolationParams::default();
+        if let Some(x) = self.enabled {
+            p.enabled = x;
+        }
+        if let Some(x) = self.red_run_share {
+            p.red_run_share = x;
+        }
+        if let Some(x) = self.red_run_tolerance_mean_s {
+            p.red_run_tolerance_mean_s = x;
+        }
+        if let Some(x) = self.red_run_tolerance_max_s {
+            p.red_run_tolerance_max_s = x;
+        }
+        if let Some(x) = self.amber_tail_max_s {
+            p.amber_tail_max_s = x;
+        }
+        if let Some(x) = self.fail_to_yield_share {
+            p.fail_to_yield_share = x;
+        }
+        if let Some(x) = self.ignore_foe_speed_mps {
+            p.ignore_foe_speed_mps = x;
+        }
+        if let Some(x) = self.crashes {
+            p.crashes = x;
+        }
+        if let Some(x) = self.crash_clearance_s {
+            p.crash_clearance_s = x;
+        }
+        p
+    }
 }
 
 // traffic audit
