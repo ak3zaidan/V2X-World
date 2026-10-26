@@ -1372,9 +1372,7 @@ fn lane_clear_beside(
         if *other == me {
             return true;
         }
-        let other_len = snapshot
-            .view(*other)
-            .map_or(length_m, |v| v.dims.length_m);
+        let other_len = snapshot.view(*other).map_or(length_m, |v| v.dims.length_m);
         *front + BESIDE_CLEAR_M < s_m - length_m || *front - other_len - BESIDE_CLEAR_M > s_m
     })
 }
@@ -3843,9 +3841,11 @@ impl NativeMobility {
                         }
                         s.min(end)
                     };
-                    out.entry(*a)
-                        .or_default()
-                        .push((*b, apart(DIVERGED_M), apart(DIVERGED_WIDE_M)));
+                    out.entry(*a).or_default().push((
+                        *b,
+                        apart(DIVERGED_M),
+                        apart(DIVERGED_WIDE_M),
+                    ));
                 }
             }
         }
@@ -9488,10 +9488,17 @@ mod tests {
                 class: VehicleClass::Passenger,
                 desired_speed_mps: 11.0,
             };
-            let lead = engine.insert_trip(&world, &trip(0, from, 60.0), 0).expect("lead");
-            let ego = engine.insert_trip(&world, &trip(1, to, 30.0), 0).expect("ego");
-            let side = blocker_beside
-                .then(|| engine.insert_trip(&world, &trip(2, to, 62.0), 0).expect("side"));
+            let lead = engine
+                .insert_trip(&world, &trip(0, from, 60.0), 0)
+                .expect("lead");
+            let ego = engine
+                .insert_trip(&world, &trip(1, to, 30.0), 0)
+                .expect("ego");
+            let side = blocker_beside.then(|| {
+                engine
+                    .insert_trip(&world, &trip(2, to, 62.0), 0)
+                    .expect("side")
+            });
             let t_start = 10 * NS_PER_S;
             let len = VehicleClass::Passenger.spec().length_m;
             // The lead and the car beside stand for good.

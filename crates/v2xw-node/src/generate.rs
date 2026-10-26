@@ -449,7 +449,13 @@ mod tests {
 
     /// Counts the SPaT and MAP a roadside schedule asks for over `seconds`, checked every
     /// `check_ms` on a clock that runs `rate` times true time.
-    fn infra_counts(spat_ms: u64, map_ms: u64, check_ms: u64, seconds: u64, rate: f64) -> (usize, usize) {
+    fn infra_counts(
+        spat_ms: u64,
+        map_ms: u64,
+        check_ms: u64,
+        seconds: u64,
+        rate: f64,
+    ) -> (usize, usize) {
         let unit = ServiceSet {
             spat: true,
             map: true,

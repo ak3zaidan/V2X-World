@@ -192,7 +192,10 @@ fn identifiers(mode: Mode) -> Outcome {
         s
     };
     let us = stack(false, &[MsgType::Bsm, MsgType::Spat, MsgType::Map]);
-    let eu = stack(true, &[MsgType::Cam, MsgType::Denm, MsgType::Spat, MsgType::Map]);
+    let eu = stack(
+        true,
+        &[MsgType::Cam, MsgType::Denm, MsgType::Spat, MsgType::Map],
+    );
     let signed_under = |msg: &str| -> u64 {
         let got = match msg {
             "BSM (US)" => us.psid_for(MsgType::Bsm),
@@ -203,7 +206,11 @@ fn identifiers(mode: Mode) -> Outcome {
             "SPATEM" => eu.psid_for(MsgType::Spat),
             _ => eu.psid_for(MsgType::Map),
         };
-        if mode.faulted() && msg == "BSM (US)" { 0x21 } else { got }
+        if mode.faulted() && msg == "BSM (US)" {
+            0x21
+        } else {
+            got
+        }
     };
     // Typed from the registries, not read from `v2xw_msg::registry`.
     let registry: [(&str, u64); 7] = [

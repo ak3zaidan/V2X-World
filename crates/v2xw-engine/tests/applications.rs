@@ -180,9 +180,9 @@ fn glosa_advice_is_given_and_followed_by_the_drivers_who_follow_it() {
             continue;
         }
         standing += 1;
-        let later = speeds.get(&node).and_then(|s| {
-            s.iter().find(|(tt, _)| *tt >= at).map(|(_, sp)| *sp)
-        });
+        let later = speeds
+            .get(&node)
+            .and_then(|s| s.iter().find(|(tt, _)| *tt >= at).map(|(_, sp)| *sp));
         if later.is_some_and(|sp| sp <= v + 0.6) {
             followed += 1;
         } else if why.len() < 6 {

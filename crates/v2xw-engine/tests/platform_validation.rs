@@ -55,7 +55,14 @@ fn bsms_in(s: &Scenario, seconds: u64) -> usize {
 #[test]
 fn a_fixed_bsm_rate_is_the_rate_sent_across_its_range() {
     let mut s = Scenario::load(scenarios().join("sensitivity/dsrc-grid.yaml")).expect("loads");
-    for (hz, want) in [(1.0, 10), (1.25, 13), (2.0, 20), (5.0, 50), (10.0, 100), (20.0, 200)] {
+    for (hz, want) in [
+        (1.0, 10),
+        (1.25, 13),
+        (2.0, 20),
+        (5.0, 50),
+        (10.0, 100),
+        (20.0, 200),
+    ] {
         s.messages.rate_hz = Some(hz);
         let got = bsms_in(&s, 10);
         assert_eq!(got, want, "messages.rate_hz {hz}: {got} BSMs in 10 s");
@@ -102,15 +109,27 @@ fn payload<T>(
 /// Whether `on_air` is what `feed` reports at `t`: the same signal groups in the same
 /// states, each changing at the same tenth of a second (±1 for the millisecond the SPaT's
 /// `timeStamp` rounds its instant to).
-fn same_spat(on_air: &spat::Spat, feed: &IntersectionFeed, t: SimTime, wall: WallClock) -> Result<(), String> {
+fn same_spat(
+    on_air: &spat::Spat,
+    feed: &IntersectionFeed,
+    t: SimTime,
+    wall: WallClock,
+) -> Result<(), String> {
     let bytes = feed.spat_bytes(t, wall, InfraFraming::J2735)?;
     let want = spat::decode_message_frame(&bytes).map_err(|e| e.to_string())?;
     let (a, b) = (&on_air.intersections[0], &want.intersections[0]);
     if a.id != b.id {
-        return Err(format!("intersection {:?} on the air, {:?} from the feed", a.id, b.id));
+        return Err(format!(
+            "intersection {:?} on the air, {:?} from the feed",
+            a.id, b.id
+        ));
     }
     if a.states.len() != b.states.len() {
-        return Err(format!("{} movement states on the air, {} from the feed", a.states.len(), b.states.len()));
+        return Err(format!(
+            "{} movement states on the air, {} from the feed",
+            a.states.len(),
+            b.states.len()
+        ));
     }
     for (x, y) in a.states.iter().zip(&b.states) {
         let (ex, ey) = (&x.events[0], &y.events[0]);
@@ -120,11 +139,19 @@ fn same_spat(on_air: &spat::Spat, feed: &IntersectionFeed, t: SimTime, wall: Wal
                 x.signal_group, ex.event_state, y.signal_group, ey.event_state
             ));
         }
-        let (tx, ty) = (ex.timing.map(|m| m.min_end_time), ey.timing.map(|m| m.min_end_time));
+        let (tx, ty) = (
+            ex.timing.map(|m| m.min_end_time),
+            ey.timing.map(|m| m.min_end_time),
+        );
         match (tx, ty) {
             (Some(p), Some(q)) if (i32::from(p) - i32::from(q)).abs() <= 1 => {}
             (None, None) => {}
-            _ => return Err(format!("group {}: minEndTime {tx:?} on the air, {ty:?} from the plan", x.signal_group)),
+            _ => {
+                return Err(format!(
+                    "group {}: minEndTime {tx:?} on the air, {ty:?} from the plan",
+                    x.signal_group
+                ));
+            }
         }
     }
     Ok(())
@@ -157,15 +184,24 @@ fn on_air_signal_groups() -> BTreeMap<u16, (BTreeSet<u8>, BTreeSet<u8>)> {
         inner: MemoryRecorder::new(),
         taps: BTreeMap::new(),
     };
-    Engine::build(s, "").expect("builds").run(&mut rec).expect("runs");
+    Engine::build(s, "")
+        .expect("builds")
+        .run(&mut rec)
+        .expect("runs");
 
     let mut spats = 0usize;
     let mut maps = 0usize;
     let mut wrong_feed_caught = 0usize;
     let mut groups_by_id: BTreeMap<u16, (BTreeSet<u8>, BTreeSet<u8>)> = BTreeMap::new();
-    for (_, r) in rec.inner.records().iter().filter(|(_, r)| r.channel == "node.tx") {
+    for (_, r) in rec
+        .inner
+        .records()
+        .iter()
+        .filter(|(_, r)| r.channel == "node.tx")
+    {
         let tx: NodeTxView = decode(r).expect("node.tx decodes");
-        let (Some(kind), Some(msg), Some(len)) = (tx.msg_type.as_deref(), tx.msg, tx.payload_bytes) else {
+        let (Some(kind), Some(msg), Some(len)) = (tx.msg_type.as_deref(), tx.msg, tx.payload_bytes)
+        else {
             continue;
         };
         let Some((node, octets)) = rec.taps.get(&msg) else {
@@ -187,11 +223,17 @@ fn on_air_signal_groups() -> BTreeMap<u16, (BTreeSet<u8>, BTreeSet<u8>)> {
                     .unwrap_or_else(|| panic!("SPaT {msg} names intersection {}", state.id.id));
                 // The instant the state was determined: `timeStamp` is the millisecond
                 // of the minute, at or before the frame went out.
-                let stamp = state.time_stamp.expect("a SPaT states when it was determined");
+                let stamp = state
+                    .time_stamp
+                    .expect("a SPaT states when it was determined");
                 let t_gen = (0..=500u64)
                     .map(|d| tx.t.saturating_sub(d * NS_PER_MS) / NS_PER_MS * NS_PER_MS)
                     .find(|t| spat::d_second(wall, *t) == stamp)
-                    .unwrap_or_else(|| panic!("SPaT {msg}: timeStamp {stamp} is not within 500 ms before it was sent"));
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "SPaT {msg}: timeStamp {stamp} is not within 500 ms before it was sent"
+                        )
+                    });
                 assert_eq!(
                     state.moy,
                     Some(spat::minute_of_the_year(wall, t_gen)),
@@ -221,17 +263,31 @@ fn on_air_signal_groups() -> BTreeMap<u16, (BTreeSet<u8>, BTreeSet<u8>)> {
                 let feed = feeds
                     .get(&g.id.id)
                     .unwrap_or_else(|| panic!("MAP {msg} names intersection {}", g.id.id));
-                assert_eq!(&on_air, feed.map(), "MAP {msg}: the survey, as the feed holds it");
+                assert_eq!(
+                    &on_air,
+                    feed.map(),
+                    "MAP {msg}: the survey, as the feed holds it"
+                );
                 let e = groups_by_id.entry(g.id.id).or_default();
-                e.1.extend(g.lanes.iter().flat_map(|l| l.connects_to.iter().filter_map(|c| c.signal_group)));
+                e.1.extend(
+                    g.lanes
+                        .iter()
+                        .flat_map(|l| l.connects_to.iter().filter_map(|c| c.signal_group)),
+                );
                 maps += 1;
             }
             _ => {}
         }
     }
     // Four units for 6 s: 10 Hz SPaT and 1 Hz MAP each.
-    assert!((4 * 58..=4 * 61).contains(&spats), "{spats} SPaT from four units in 6 s");
-    assert!((4 * 5..=4 * 7).contains(&maps), "{maps} MAP from four units in 6 s");
+    assert!(
+        (4 * 58..=4 * 61).contains(&spats),
+        "{spats} SPaT from four units in 6 s"
+    );
+    assert!(
+        (4 * 5..=4 * 7).contains(&maps),
+        "{maps} MAP from four units in 6 s"
+    );
     assert!(
         wrong_feed_caught * 2 > spats,
         "only {wrong_feed_caught} of {spats} SPaT disagree with the plan half a cycle on: the comparison is too loose"
@@ -242,9 +298,15 @@ fn on_air_signal_groups() -> BTreeMap<u16, (BTreeSet<u8>, BTreeSet<u8>)> {
     // them yet (`every_spat_signal_group_has_a_map_lane`, ignored, is that open defect).
     let ped = v2xw_engine::infra::signal_group_id(v2xw_world::walk::PEDESTRIAN_GROUP_BASE);
     for (id, (in_spat, in_map)) in &groups_by_id {
-        assert!(!in_map.is_empty(), "intersection {id}: the MAP connects no lane under a signal group");
+        assert!(
+            !in_map.is_empty(),
+            "intersection {id}: the MAP connects no lane under a signal group"
+        );
         let vehicle: BTreeSet<u8> = in_spat.iter().copied().filter(|g| *g < ped).collect();
-        assert_eq!(&vehicle, in_map, "intersection {id}: SPaT vehicle groups vs the MAP's connection groups");
+        assert_eq!(
+            &vehicle, in_map,
+            "intersection {id}: SPaT vehicle groups vs the MAP's connection groups"
+        );
     }
     assert_eq!(groups_by_id.len(), 4, "the four units' junctions");
     groups_by_id
@@ -266,7 +328,10 @@ fn the_spat_and_map_on_the_air_are_the_plan_and_the_survey() {
 #[ignore = "open: the MAP has no crosswalk lanes, so pedestrian signal groups have no MAP lane"]
 fn every_spat_signal_group_has_a_map_lane() {
     for (id, (in_spat, in_map)) in &on_air_signal_groups() {
-        assert_eq!(in_spat, in_map, "intersection {id}: SPaT groups vs the MAP's connection groups");
+        assert_eq!(
+            in_spat, in_map,
+            "intersection {id}: SPaT groups vs the MAP's connection groups"
+        );
     }
 }
 
@@ -284,12 +349,23 @@ fn a_spec_row_measures_the_traffic_state_and_the_metric_samples() {
     let s = v2xw_engine::sensitivity::apply(&base, &set).expect("the set applies");
     let m = v2xw_engine::sensitivity::measure(s).expect("runs");
     let speed = m.get("traffic.speed_mean_mps");
-    assert!(speed.is_some_and(|v| v > 0.0), "traffic.speed_mean_mps = {speed:?}");
-    assert!(m.get("traffic.stopped_share").is_some(), "traffic.stopped_share");
+    assert!(
+        speed.is_some_and(|v| v > 0.0),
+        "traffic.speed_mean_mps = {speed:?}"
+    );
+    assert!(
+        m.get("traffic.stopped_share").is_some(),
+        "traffic.stopped_share"
+    );
     let samples = m.values.keys().filter(|k| k.starts_with("metric.")).count();
     assert!(samples > 0, "no metric.* sample means");
     // The radio names, report.* and the recording's bookkeeping are still there.
-    for k in ["pdr", "frames_tx", "report.actors_spawned", "report.records"] {
+    for k in [
+        "pdr",
+        "frames_tx",
+        "report.actors_spawned",
+        "report.records",
+    ] {
         assert!(m.get(k).is_some(), "{k} is not measured");
     }
 }
