@@ -1,0 +1,10 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains scms-crlstore
+  base: scms-base.yaml
+  description: >-
+    The CRL store (the CRL distribution point vehicles fetch from) offline from 60 s to 200 s.
+actors:
+  backend:
+    failures:
+      - {node: crl_store, mode: offline, from_s: 60.0, to_s: 200.0}

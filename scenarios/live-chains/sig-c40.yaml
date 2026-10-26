@@ -1,0 +1,9 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains sig-c40
+  base: sig-base.yaml
+  description: >-
+    Signal cycle 40 s.
+world:
+  source:
+    params: {cycle_s: 40.0}

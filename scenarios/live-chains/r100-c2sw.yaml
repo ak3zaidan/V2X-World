@@ -1,0 +1,7 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains r100-c2sw
+  base: r100.yaml
+  description: >-
+    r100 on the Craton2 with ECDSA in software (1,290 us verify, 2 cores).
+nodes: {default_obu: obu/unex-obu-301-craton2-software}

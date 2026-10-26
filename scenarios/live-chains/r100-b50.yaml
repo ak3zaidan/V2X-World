@@ -1,0 +1,8 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains r100-b50
+  base: r100.yaml
+  description: >-
+    r100 with the J2945/1 density coefficient B = 50.
+radio:
+  dcc: {density_coefficient: 50.0}

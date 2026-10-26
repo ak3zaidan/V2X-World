@@ -1,0 +1,7 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains r100-craton2
+  base: r100.yaml
+  description: >-
+    r100 on the Craton2 with its HSM (verify >2,500/s, sign <9 ms).
+nodes: {default_obu: obu/unex-obu-301-craton2}

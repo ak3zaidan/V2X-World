@@ -1,0 +1,15 @@
+schema: v2xw/scenario/1
+# live-chains signals base: the signalised Midtown-shaped grid (phase1-grid.yaml, 4 x 6
+# blocks, two lanes each way, 60 s cycle) with 1,500 veh/h Poisson demand for 180 s, every
+# vehicle sending BSMs: the base of the signal-timing -> queues -> density -> CBR chain.
+meta:
+  name: live-chains sig base
+  base: ../phase1-grid.yaml
+time: {duration_s: 180.0}
+world:
+  source:
+    params: {cols: 4, rows: 6}
+actors:
+  vehicles:
+    demand: {rate_veh_per_h: 1500.0}
+metrics: [all]

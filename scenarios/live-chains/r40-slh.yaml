@@ -1,0 +1,7 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains r40-slh
+  base: r40.yaml
+  description: >-
+    r40 under SLH-DSA-SHA2-128s (edge: a 7,856 B signature).
+security: {signature: slh-dsa-sha2-128s}
