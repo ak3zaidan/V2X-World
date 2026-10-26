@@ -282,9 +282,10 @@ def refusal_vectors():
         }
         v["intersections"][0]["laneSet"][0]["nodeList"] = ("nodes", nodes)
 
-    def set_crosswalk_lane(v):
+    def set_bike_lane(v):
+        # A crosswalk is modelled now (Rust vectors carry it); a bike lane is not.
         v["intersections"][0]["laneSet"][0]["laneAttributes"]["laneType"] = (
-            "crosswalk",
+            "bikeLane",
             (0, 16),
         )
 
@@ -338,7 +339,7 @@ def refusal_vectors():
     )
     cases.append(
         map_case(
-            "python/map-crosswalk-lane", "LaneAttributes.laneType", set_crosswalk_lane
+            "python/map-bike-lane", "LaneAttributes.laneType", set_bike_lane
         )
     )
     cases.append(

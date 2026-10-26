@@ -82,7 +82,7 @@ use v2xw_core::rng::RngStream;
 use v2xw_msg::j2735::map::{
     self, AllowedManeuvers, ConnectingLane, Connection, GenericLane, IntersectionGeometry,
     LaneAttributes, LaneDirection, LaneSharing, MapData, NodeOffset, NodeXy, Position3D,
-    VehicleLaneAttributes, XyAlternative, XyOffset,
+    CrosswalkLaneAttributes, LaneType, VehicleLaneAttributes, XyAlternative, XyOffset,
 };
 use v2xw_msg::j2735::spat::{
     self, IntersectionReferenceId, IntersectionState, IntersectionStatus, MovementEvent,
@@ -220,10 +220,16 @@ fn lane_attributes_json(a: &LaneAttributes) -> Value {
     json!({
         "directionalUse": bits(u64::from(a.directional_use.0), map::LANE_DIRECTION_BITS),
         "sharedWith": bits(u64::from(a.shared_with.0), map::LANE_SHARING_BITS),
-        "laneType": choice(
-            "vehicle",
-            bits(u64::from(a.vehicle.0), map::LANE_ATTRIBUTES_VEHICLE_BITS),
-        ),
+        "laneType": match a.lane_type {
+            LaneType::Vehicle(v) => choice(
+                "vehicle",
+                bits(u64::from(v.0), map::LANE_ATTRIBUTES_VEHICLE_BITS),
+            ),
+            LaneType::Crosswalk(c) => choice(
+                "crosswalk",
+                bits(u64::from(c.0), map::LANE_ATTRIBUTES_CROSSWALK_BITS),
+            ),
+        },
     })
 }
 
@@ -377,7 +383,7 @@ fn nominal_map() -> MapData {
                 attributes: LaneAttributes {
                     directional_use: LaneDirection::INGRESS,
                     shared_with: LaneSharing::BUS,
-                    vehicle: VehicleLaneAttributes::NONE,
+                    lane_type: LaneType::Vehicle(VehicleLaneAttributes::NONE),
                 },
                 maneuvers: Some(AllowedManeuvers::STRAIGHT.with(AllowedManeuvers::RIGHT)),
                 nodes: vec![
@@ -542,9 +548,14 @@ fn map_boundary_vectors() -> Vec<(String, MapData)> {
         m.intersections[0].lanes[0].attributes = LaneAttributes {
             directional_use: LaneDirection::BOTH,
             shared_with: LaneSharing(0x3ff),
-            vehicle: VehicleLaneAttributes(0xff),
+            lane_type: LaneType::Vehicle(VehicleLaneAttributes(0xff)),
         };
         m.intersections[0].lanes[0].maneuvers = Some(AllowedManeuvers(0xfff));
+    });
+    add("crosswalk-lane-all-bits", &|m| {
+        let lane = &mut m.intersections[0].lanes[0];
+        lane.attributes = LaneAttributes::crosswalk(CrosswalkLaneAttributes(0xffff));
+        lane.connects_to = vec![Connection::signalised(lane.lane_id, 101)];
     });
     add("every-node-alternative", &|m| {
         m.intersections[0].lanes[0].nodes = XyAlternative::ALL
@@ -793,7 +804,11 @@ fn random_lane(rng: &mut RngStream, lane_id: u8) -> GenericLane {
     let attributes = LaneAttributes {
         directional_use: LaneDirection((rng.u32() & 0b11) as u8),
         shared_with: LaneSharing((rng.u32() & 0x3ff) as u16),
-        vehicle: VehicleLaneAttributes((rng.u32() & 0xff) as u8),
+        lane_type: if rng.u32() % 4 == 0 {
+            LaneType::Crosswalk(CrosswalkLaneAttributes((rng.u32() & 0xffff) as u16))
+        } else {
+            LaneType::Vehicle(VehicleLaneAttributes((rng.u32() & 0xff) as u8))
+        },
     };
     let maneuvers = maybe(rng, |r| AllowedManeuvers((r.u32() & 0xfff) as u16));
     GenericLane {
