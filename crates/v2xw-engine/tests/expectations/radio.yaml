@@ -99,8 +99,8 @@
    source: "SL CBR counts subchannels whose S-RSSI exceeds the threshold: a higher threshold counts fewer (3GPP TS 36.214 5.1.30)"}
 - {setting: radio.sidelink.cbr_threshold_dbm, change: low, metric: cbr_mean, expect: up,
    source: "3GPP TS 36.214 5.1.30"}
-- {setting: radio.sidelink.candidate_percent, change: high, metric: collision_rate, expect: down,
-   source: "a larger candidate set lowers the chance two UEs pick the same resource (3GPP TS 38.214 8.1.4 X%; Molina-Masegosa and Gozalvez, IEEE VT Magazine 2017)"}
+- {setting: radio.sidelink.candidate_percent, change: high, metric: collision_rate, expect: same, min_change: 0.001,
+   source: "X % is a floor on the exclusion's survivors: the RSRP threshold steps up only while fewer than X·M_total candidates remain (3GPP TS 38.214 8.1.4 steps 5-7), and NR has no S-RSSI ranking (LTE's TS 36.213 14.1.1.6 step 8). On the 40-vehicle NR family (CBR 0.06) most candidates survive, so 20 -> 50 % binds nowhere; measured bit-identical at 40, 160 (CBR 0.24) and 300 vehicles (CBR 0.40). The direction once it binds (CBR above about 0.5) is not settled here. Before 2026-10-25 the NR profile ranked by S-RSSI and X sized that list: 0.00024 -> 0.0097 (radio-2026-10-24.md §5, §6)"}
 - {setting: radio.sidelink.selection_window_ms, change: low, metric: e2e_ms_mean, expect: down,
    source: "the selected resource lies in [n + T1, n + T2]: a smaller T2 bounds the access delay (3GPP TS 38.214 8.1.4)"}
 - {setting: radio.sidelink.sensing, change: false, metric: collision_rate, expect: up,

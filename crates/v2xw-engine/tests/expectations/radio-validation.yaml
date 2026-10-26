@@ -437,8 +437,8 @@ rows:
   expect_text: the selected resource is uniform over the candidates in [n + T1, n + T2], so the mean wait from hand-off to the reserved slot is about (T1 + T2) / 2 and rises with T2 (1, 3, 5.5, 8.75, 25.5, 50.5 ms)
   source: 3GPP TS 38.214 8.1.4 (selection window); TS 38.321 5.22.1.1 (random selection among the candidates)
   fault: order reversed
-  measured: 41.88 -> 29.64 -> 18.86 -> 15.53 -> 27.18 -> 49.85 (before the fix)
-  verdict: FAIL (fix pending re-run)
+  measured: 1.198 -> 3.179 -> 5.641 -> 8.82 -> 25.32 -> 49.73
+  verdict: fixed (an engine defect)
   note: >-
     Before the fix: 41.88 -> 29.64 -> 18.86 -> 15.53 -> 27.18 -> 49.85 ms (e2e 57.3 -> 34.2
     -> 42.3 -> 64.7). The per-message hand-off jitter U[0, 10 ms] put a message past the
@@ -446,7 +446,9 @@ rows:
     the grant, inside the 100 ms budget, held it about a period. The same runs without the
     jitter (RV-SL-T2J-*) follow (T1 + T2) / 2. Fixed in wiring::generation_timing (no
     hand-off jitter on a PC5 sidelink); pinned by sensitivity_radio
-    nr_access_wait_follows_the_selection_window.
+    nr_access_wait_follows_the_selection_window. Measured after the fix on 2026-10-25
+    (with NR's S-RSSI ranking removed too, TS 38.214 8.1.4): 1.198, 3.179, 5.641, 8.82,
+    25.32, 49.73 ms against 1, 3, 5.5, 8.75, 25.5, 50.5.
 - id: RV-SL-T2-E2E
   kind: chain
   runs: [SLT2_1, SLT2_10, SLT2_50, SLT2_100]
@@ -456,10 +458,11 @@ rows:
   expect_text: the end-to-end latency carries the access wait, so it rises with T2 (the radio.yaml selection_window_ms row)
   source: 3GPP TS 38.214 8.1.4
   fault: order reversed
-  measured: 57.29 -> 34.18 -> 42.29 -> 64.73 (before the fix)
-  verdict: FAIL (fix pending re-run)
+  measured: 11.25 -> 15.75 -> 35.41 -> 59.8
+  verdict: fixed (an engine defect)
   note: >-
     The access wait of RV-SL-T2-ACCESS carried into the end-to-end latency; same cause.
+    Before the fix 57.29 -> 34.18 -> 42.29 -> 64.73 ms.
 - id: RV-SL-T2-50
   kind: abs
   run: SLT2_50
@@ -469,7 +472,7 @@ rows:
   source: 3GPP TS 38.214 8.1.4; uniform selection over the window
   fault: value x1.25 (x2 below)
   fault_scale: 2.0
-  measured: '27.18'
+  measured: '25.32'
   verdict: pass
 # ---- PHY error model and the cellular backhaul (judged by the named tests) ----
 - id: RV-PER-NIST
@@ -511,7 +514,7 @@ rows:
   expect_text: with strictly periodic generation the reserved offset persists from one message to the next, so the mean access wait is (T1 + T2) / 2 and rises with T2
   source: 3GPP TS 38.214 8.1.4; TR 37.885 A.1.1 (periodic traffic, 100 ms)
   fault: order reversed
-  measured: 1.198 -> 3.373 -> 6.102 -> 9.555 -> 26.27 -> 47.29
+  measured: 1.198 -> 3.179 -> 5.641 -> 8.82 -> 25.32 -> 49.73 (2026-10-25, NR unranked; before 1.198 -> 3.373 -> 6.102 -> 9.555 -> 26.27 -> 47.29)
   verdict: pass
 - id: RV-SL-T2J-1
   kind: abs
@@ -533,7 +536,7 @@ rows:
   source: 3GPP TS 38.214 8.1.4
   fault: value x2
   fault_scale: 2.0
-  measured: '26.27'
+  measured: '25.32'
   verdict: pass
 - id: RV-SL-T2J-100
   kind: abs
@@ -544,5 +547,5 @@ rows:
   source: 3GPP TS 38.214 8.1.4
   fault: value x2
   fault_scale: 2.0
-  measured: '47.29'
+  measured: '49.73'
   verdict: pass

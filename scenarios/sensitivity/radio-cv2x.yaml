@@ -115,12 +115,23 @@ rows:
     expect: up
     band: [1.6, 4.0]
     source: reselection after each reselection counter expiry unless kept with P (TS 36.321 5.14.1.1)
+  # Sensing acts at (re)selections, and every UE powers on at t = 0 with an empty sensing
+  # window, so its first pick is blind either way. With exact periodic phases, keep
+  # probability 0.8 and 5 to 15 periods per counter, a 3 s run holds 40 blind first picks
+  # against about 13 reselections, and its collision count is set by one or two persistent
+  # pairs: on this seed one UE whose both copies collided carried 697 of the 722 losses
+  # (sensing on 0.0161, off 0.0020). Seeds 0x1111 and 0x2222 at 3 s go the other way
+  # (0.0009 / 0.0142, 0.0010 / 0.0077); at 8 s every seed tried has sensing ahead (this one
+  # 0.0072 / 0.0105, 0x1111 0.0003 / 0.0082, 0x2222 0.0005 / 0.0101, 0x3333 0.0142 /
+  # 0.0203). radio-2026-10-24.md §6.
   - name: LTE sensing off
+    base_set: {time.duration_s: 8.0}
     set: {radio.sidelink.sensing: false}
     metric: collision_rate
     expect: up
-    source: random selection baseline (Ali 2021 II.1) loses the sensing exclusion
+    source: random selection baseline (Ali 2021 II.1) loses the sensing exclusion, in steady state (8 s)
   - name: LTE sensing off
+    base_set: {time.duration_s: 8.0}
     set: {radio.sidelink.sensing: false}
     metric: sl_overlapping
     expect: up
