@@ -339,7 +339,8 @@ impl Tracks {
                 "gt.despawn" => {
                     let v: GtDespawnView = view(r)?;
                     last = last.max(v.t);
-                    by_actor.entry(v.actor.0).or_default().despawn = Some(v);
+                    let actor = v.actor.0;
+                    by_actor.entry(actor).or_default().despawn = Some(v);
                 }
                 _ => {}
             }
