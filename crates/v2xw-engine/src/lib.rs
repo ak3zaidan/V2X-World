@@ -69,6 +69,7 @@ pub mod driving;
 pub mod error;
 pub mod event;
 pub mod export;
+pub mod sumo_outputs;
 pub mod frag;
 pub mod hosted;
 pub mod infra;

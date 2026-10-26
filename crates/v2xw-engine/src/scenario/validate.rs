@@ -3314,8 +3314,17 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                enum 0-19, Kamel et al. ICC 2020) or 'veremi-1' (bit codes 1/2/4/8/16, \
                Van der Heijden et al. 2018), opts.slice_s the slice length in seconds \
                (default 3600, F2MD VeReMiSliceTime; 1 to 604800); naming it records the \
-               BSM's position accuracy and acceleration on node.tx. Naming any exporter \
-               makes the run record.",
+               BSM's position accuracy and acceleration on node.tx. The SUMO-format \
+               exporters (WP-06) write SUMO's own output files from a full recording: \
+               'sumo-fcd', 'sumo-tripinfo' (opts.write_unfinished, default false), \
+               'sumo-edgedata', 'sumo-lanedata', 'sumo-summary', 'sumo-e1' \
+               (opts.detectors [{id, lane, pos_m}], lane a SUMO lane id) and 'sumo-e2' \
+               ([{id, lane, pos_m, length_m}], opts.time_threshold_s 1 s, \
+               speed_threshold_mps 1.39 m/s, jam_threshold_m 10 m: SUMO's defaults); \
+               each takes opts.period_s (seconds; every step for fcd and summary, the \
+               whole run otherwise) and opts.precision (decimals, default 2, SUMO \
+               --precision). Naming one records gt.spawn and gt.despawn. Naming any \
+               exporter makes the run record.",
     },
     KeyStatus {
         path: "events",
@@ -3980,6 +3989,14 @@ fn unreachable_keys(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 field,
                 conflict: why,
             })) = crate::export::veremi_options_of(x, i)
+        {
+            e.push(conflict(&field, why));
+        }
+        if crate::sumo_outputs::is_sumo(&x.id)
+            && let Err(crate::EngineError::Scenario(ScenarioError::Conflict {
+                field,
+                conflict: why,
+            })) = crate::export::sumo_options_of(x, i)
         {
             e.push(conflict(&field, why));
         }

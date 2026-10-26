@@ -266,6 +266,7 @@ impl Mobility for KinematicLaneFollow {
                             min_gap_m: actor.class.spec().min_gap_m,
                         },
                         seq: actor.seq,
+                        requested: None,
                     });
                 }
             }

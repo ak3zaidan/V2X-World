@@ -440,7 +440,7 @@ pub fn build_mobility_for(scenario: &Scenario, world: &World) -> Result<Box<dyn 
 
 /// The translation the SUMO importer applied (its `frame` transformation in the world's
 /// provenance), `(0, 0)` when there is none.
-fn sumo_shift(world: &World) -> (f64, f64) {
+pub(crate) fn sumo_shift(world: &World) -> (f64, f64) {
     let get = |key: &str| {
         world
             .provenance

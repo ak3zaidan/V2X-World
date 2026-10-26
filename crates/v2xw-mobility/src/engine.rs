@@ -3435,6 +3435,7 @@ impl NativeMobility {
                             min_gap_m: 0.0,
                         },
                         seq: self.next_seq,
+                        requested: None,
                     });
                     self.next_seq += 1;
                 }
@@ -3484,7 +3485,7 @@ impl NativeMobility {
                 let traits = self.traits_for(&*ctx, &trip);
                 let world = ctx.world();
                 if let Insertion::Placed(id) = self.try_insert(world, &trip, now, None, traits) {
-                    spawned.push(self.actor_spawn(world, id, now));
+                    spawned.push(self.actor_spawn(world, id, now).with_requested(trip.t));
                     missing -= 1;
                 }
             }
@@ -3692,6 +3693,7 @@ impl NativeMobility {
             route: actor.route.clone(),
             driver: actor.driver,
             seq: actor.seq,
+            requested: None,
         }
     }
 
@@ -5255,7 +5257,7 @@ impl Mobility for NativeMobility {
                     match self.try_insert(world, &trip, t0, reserved, traits) {
                         Insertion::Placed(id) => {
                             self.assign_kerbside(&*ctx, id);
-                            spawned.push(self.actor_spawn(world, id, t0));
+                            spawned.push(self.actor_spawn(world, id, t0).with_requested(trip.t));
                         }
                         Insertion::Occupied
                             if t0.saturating_sub(since) < MAX_DEPART_DELAY.as_nanos() =>
@@ -5302,7 +5304,7 @@ impl Mobility for NativeMobility {
                     match self.try_insert(world, &trip, t0, None, traits) {
                         Insertion::Placed(id) => {
                             self.assign_kerbside(&*ctx, id);
-                            spawned.push(self.actor_spawn(world, id, t0));
+                            spawned.push(self.actor_spawn(world, id, t0).with_requested(trip.t));
                             pending -= 1;
                             failed_in_row = 0;
                         }
@@ -5336,7 +5338,7 @@ impl Mobility for NativeMobility {
                 for trip in trips {
                     let traits = self.traits_for(&*ctx, &trip);
                     if let Some(id) = self.insert_trip_with(world, &trip, t0, traits) {
-                        spawned.push(self.actor_spawn(world, id, t0));
+                        spawned.push(self.actor_spawn(world, id, t0).with_requested(trip.t));
                     }
                 }
             }

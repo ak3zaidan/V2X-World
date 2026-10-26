@@ -535,6 +535,20 @@ pub struct ActorSpawn {
     pub driver: DriverProfile,
     /// The demand-stream position it came from.
     pub seq: u64,
+    /// When its trip asked to depart, where the provider knows it: the spawn's `t` minus
+    /// this is SUMO's `departDelay` (a trip that waited for room at its origin). Not
+    /// serialised, so an update's bytes are what they were before the field existed.
+    #[serde(skip)]
+    pub requested: Option<SimTime>,
+}
+
+impl ActorSpawn {
+    /// The same spawn, naming when its trip asked to depart.
+    #[must_use]
+    pub fn with_requested(mut self, t: SimTime) -> Self {
+        self.requested = Some(t);
+        self
+    }
 }
 
 /// Why an actor left the simulation.
