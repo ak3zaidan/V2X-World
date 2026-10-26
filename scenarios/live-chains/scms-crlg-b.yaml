@@ -1,0 +1,10 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains scms-crlg-b
+  base: scms-base.yaml
+  description: >-
+    Provider-b's CRL generator (the one that holds the in-window revocations) offline from 60 s to 200 s.
+actors:
+  backend:
+    failures:
+      - {node: provider-b/crlg, mode: offline, from_s: 60.0, to_s: 200.0}

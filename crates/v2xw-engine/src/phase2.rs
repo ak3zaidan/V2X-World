@@ -2713,18 +2713,31 @@ impl Phase2 {
             )
         })?;
         apply_backend_topology(scenario, &mut scms)?;
+        // Each failure goes to the run of the provider that hosts its node: that run
+        // delivers to the node (its own flows, and the MA-to-MA reports other providers
+        // share with it), so its fault plan is the one that must hold them. Before this a
+        // failure could only name the home provider's servers.
         let faults = crate::crypto_config::backend_faults(scenario, &scms)?;
-        scms.set_faults(faults);
+        let fault_of = |k: usize| -> Vec<v2xw_proto::fault::Fault> {
+            faults
+                .iter()
+                .filter(|(p, _)| *p == k)
+                .map(|(_, f)| *f)
+                .collect()
+        };
+        scms.set_faults(fault_of(0));
         // One run per provider (WP-D1): every other provider's run is built from the
         // home one, on the same CTL, electors and clock, under its own PKI and seed.
         let mut runs = Vec::with_capacity(scms.state.deployment.providers.len());
         for k in 1..scms.state.deployment.providers.len() {
-            runs.push(ScmsRun::new_peer(&scms, k).map_err(|e| {
+            let mut peer = ScmsRun::new_peer(&scms, k).map_err(|e| {
                 conflict(
                     "security.scms.deployment",
                     format!("provider {k}'s backend refused to start: {e}"),
                 )
-            })?);
+            })?;
+            peer.set_faults(fault_of(k));
+            runs.push(peer);
         }
         runs.insert(0, scms);
         // Per provider (WP-D1): its own CRL publication rule, and its own MA mode when
@@ -9126,6 +9139,113 @@ mod join_crl_tests {
             p.nodes[&early].crl_serial, s0,
             "an earlier joiner is untouched"
         );
+    }
+}
+
+#[cfg(test)]
+mod provider_failure_tests {
+    use super::*;
+
+    fn two_providers(failures: &[(&str, f64, f64)]) -> Phase2 {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        s.actors.backend.failures = failures
+            .iter()
+            .map(|(node, from, to)| crate::scenario::schema::BackendFailureSpec {
+                node: (*node).to_string(),
+                mode: "offline".to_string(),
+                from_s: *from,
+                to_s: Some(*to),
+                extra_ms: None,
+            })
+            .collect();
+        assert!(
+            crate::crypto_config::check(&s).is_ok(),
+            "the loader accepts {failures:?}"
+        );
+        let engine = crate::Engine::build(s, "").expect("builds");
+        Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend")
+    }
+
+    /// Live-chains finding 5 (docs/validation/live-chains-2026-10-25.md): a backend
+    /// failure could name only the home provider's servers, so an outage of the CRL
+    /// Generator or CRL Store that held a revocation (provider-b's, in the
+    /// credential-lifecycle runs) could not be declared, and the CRL-outage chain was
+    /// never tested. A provider-qualified node (`provider-b/crl_store`) takes down that
+    /// provider's server in that provider's run: its CRL Generator's renewal at `nextCrl`
+    /// waits in the Generator's queue (held, not dropped) until the store is back, the
+    /// list every RA serves (and so every device CRL fetch) carries provider-b's new list
+    /// only from then, and the home provider's store and list are untouched. Fault (the
+    /// first form, `failure_node` on the home run only): the loader refuses the name.
+    #[test]
+    fn a_provider_qualified_crl_store_outage_holds_that_providers_list_from_every_fetch() {
+        let week = 7.0 * 86_400.0;
+        let (from, to) = (week - 60.0, week + 600.0);
+        let mut p = two_providers(&[("provider-b/crl_store", from, to)]);
+        assert_eq!(p.runs.len(), 2, "us-production-2025: two providers");
+        let b_store = p.home().state.deployment.nodes(1).online.crl_store;
+        assert!(p.runs[0].state.faults.faults.is_empty(), "the home run is up");
+        assert_eq!(p.runs[1].state.faults.faults.len(), 1);
+        assert_eq!(p.runs[1].state.faults.faults[0].node, b_store);
+        let next_crl = p.runs[1].state.params.crl.next_crl;
+        assert_eq!(next_crl.as_secs_f64(), week, "the cited weekly nextCrl");
+        let store = |p: &Phase2, k: usize| p.runs[k].state.crl_store.versions;
+        let generated = |p: &Phase2, k: usize| p.runs[k].state.crlg.versions;
+        let served_serial = |p: &Phase2, k: usize| {
+            p.visible_versions(0)
+                .iter()
+                .find(|(j, _)| *j == k)
+                .map_or(0, |(_, v)| v.serial)
+        };
+        let s = |t: f64| (t * 1e9) as SimTime;
+        let (a0, b0, g0) = (store(&p, 0), store(&p, 1), generated(&p, 1));
+        p.advance(s(week + 120.0));
+        assert_eq!(generated(&p, 1), g0 + 1, "provider-b renewed its list at nextCrl");
+        assert_eq!(store(&p, 1), b0, "provider-b's store is down: nothing landed");
+        assert!(p.runs[1].state.faults.held >= 1, "the publication is held, not lost");
+        assert_eq!(p.runs[1].state.faults.dropped, 0);
+        assert_eq!(store(&p, 0), a0 + 1, "the home store published its renewal");
+        assert_eq!(p.runs[0].state.faults.held, 0);
+        assert_eq!(
+            served_serial(&p, 1),
+            b0,
+            "the RA serves provider-b's old list while its store is down"
+        );
+        p.advance(s(to + 300.0));
+        assert_eq!(store(&p, 1), b0 + 1, "delivered on the retry after the outage");
+        assert_eq!(served_serial(&p, 1), b0 + 1, "every RA serves it from then");
+        let at = p.crl_feeds[1].last().expect("a version").at;
+        assert!(at >= s(to), "provider-b's list is served from the store's return");
+    }
+
+    /// The unqualified name keeps its meaning (the home provider's server), and a
+    /// provider the deployment does not have is refused by name.
+    #[test]
+    fn an_unqualified_failure_is_the_home_providers_and_an_unknown_provider_is_refused() {
+        let p = two_providers(&[("crlg", 0.0, 10.0), ("provider-a/ma", 0.0, 10.0)]);
+        let home = p.home().state.nodes;
+        let f = &p.runs[0].state.faults.faults;
+        assert_eq!((f[0].node, f[1].node), (home.crlg, home.ma));
+        assert!(p.runs[1].state.faults.faults.is_empty());
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.actors.backend.failures = vec![crate::scenario::schema::BackendFailureSpec {
+            node: "provider-z/crlg".to_string(),
+            mode: "offline".to_string(),
+            from_s: 0.0,
+            to_s: None,
+            extra_ms: None,
+        }];
+        let e = crate::crypto_config::check(&s).expect_err("no provider-z").to_string();
+        assert!(e.contains("provider-a, provider-b"), "{e}");
     }
 }
 
