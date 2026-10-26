@@ -194,6 +194,9 @@ export async function closeSettings(page: Page): Promise<void> {
     .getByTestId("settings-close")
     .click({ timeout: 5_000 })
     .catch(() => undefined);
+  // On a loaded machine the click can miss the window's first frames (live Studio s2-scms,
+  // 2026-10-25, load 21: the window stayed open for the 30 s wait); Esc closes it too.
+  if (await settings.isVisible().catch(() => false)) await page.keyboard.press("Escape").catch(() => undefined);
   await expect(settings).toHaveCount(0);
 }
 

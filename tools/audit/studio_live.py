@@ -207,6 +207,15 @@ class Case:
         for s in heads:
             v = s.get('value')
             if v.get('state') == 'insufficient':
+                # A window too thin to estimate alone carries its exact counts so that it can
+                # be pooled (stats.rs): a proportion its successes and trials, a distribution
+                # its sum and n (the run's mean is every sample's sum over their count).
+                if v.get('kind') == 'ratio' and v.get('successes') is not None:
+                    succ += v['successes']
+                    trials += v['trials']
+                elif v.get('kind') == 'distribution' and v.get('sum') is not None:
+                    wsum += v['sum']
+                    wn += v['n']
                 continue
             # Classified by the sample's own state, not by a non-zero term: a first window's
             # denominator can quantise to 0 and still carry its numerator into the pool.
@@ -526,8 +535,16 @@ def raw_value(case, side, metric):
 def c_predict(case, side, row):
     """`metric` moves `expect` (up/down/same) from A to B by at least `min_change` (relative),
     or within `ratio` [lo, hi] of B/A when given."""
-    a = value_of(case, row.get('against', 'A'), row['metric'])
-    b = value_of(case, side, row['metric'])
+    if row['metric'].startswith('compare.'):
+        # runs.compare's own pooled values of the run before this one (a) and of this one (b).
+        name = row['metric'].split('.', 1)[1]
+        m = next((m for m in case.cmp(side)[1].get('rows', []) if m['name'] == name), {})
+        a, b = m.get('a'), m.get('b')
+        if b is not None:
+            b *= getattr(case, 'scale', {}).get(side, 1.0)
+    else:
+        a = value_of(case, row.get('against', 'A'), row['metric'])
+        b = value_of(case, side, row['metric'])
     if a is None or b is None:
         return False, f'A {a}, B {b}: not observed'
     rel = (b - a) / abs(a) if a else (math.inf if b > 0 else (-math.inf if b < 0 else 0.0))
@@ -550,7 +567,37 @@ def c_predict(case, side, row):
     return ok, f'A {a:.6g} -> B {b:.6g} ({rel:+.1%})'
 
 
+SOAK = re.compile(r'soak sample: t=(\d+) s \(wall (\d+) s\): engine footprint ([\d.]+) MB '
+                  r'\(seek history ([\d.]+) MB\), tab heap ([\d.]+) MB')
+
+
+def c_spec_pass(case, side, row):
+    """A Playwright spec's own assertions held: its log says every test passed, none failed."""
+    log = case.run(side).get('log', '')
+    passed = re.search(r'^\s*(\d+) passed', log, re.M)
+    failed = re.search(r'^\s*(\d+) (failed|flaky|did not run|interrupted)', log, re.M)
+    n = int(passed.group(1)) if passed else 0
+    ok = failed is None and n >= row.get('tests', 1)
+    return ok, f'{n} passed' + (f', {failed.group(0).strip()}' if failed else '')
+
+
+def c_soak_mem(case, side, row):
+    """The soak's engine footprint beside the seek history ('rest') or the tab heap ('heap'),
+    from the sample a quarter of the way in to the last: last <= warm x ratio_max + add_mb."""
+    rows = [tuple(float(x) for x in m.groups()) for m in SOAK.finditer(case.run(side).get('log', ''))]
+    if len(rows) < 2:
+        return False, f'{len(rows)} samples'
+    sim = case.ev.get('sim_s') or rows[-1][0]
+    warm = next((r for r in rows if r[0] >= sim / 4), rows[0])
+    last = rows[-1]
+    pick = (lambda r: r[2] - r[3]) if row['series'] == 'rest' else (lambda r: r[4])
+    w, l = pick(warm), pick(last)
+    bound = w * row['ratio_max'] + row['add_mb']
+    return l <= bound, f'{row["series"]} {w:.1f} MB at {warm[0]:.0f} s -> {l:.1f} MB at {last[0]:.0f} s (bound {bound:.1f}; {len(rows)} samples)'
+
+
 CHECKS = {
+    'spec_pass': c_spec_pass, 'soak_mem': c_soak_mem,
     'cards_api': c_cards_api, 'api_records': c_api_records, 'expanded': c_expanded,
     'compare_ui_api': c_compare_ui_api, 'compare_records': c_compare_records,
     'same_seed': c_same_seed, 'settings_named': c_settings_named, 'edit_landed': c_edit_landed,
@@ -565,7 +612,17 @@ def apply_fault(case, row):
     f = row.get('fault', '')
     side = row.get('side', 'A')
     run = case.ev['runs'][side]
-    if f == 'card':
+    if f == 'log':
+        run['log'] = run.get('log', '') + '\n  1 failed\n'
+    elif f == 'grow':
+        # The last soak sample's footprint and heap doubled.
+        ms = list(SOAK.finditer(run.get('log', '')))
+        m = ms[-1]
+        t, w, fp, sh, hp = m.groups()
+        fake = (f'soak sample: t={t} s (wall {w} s): engine footprint {float(fp) * 2 + 100:.1f} MB '
+                f'(seek history {sh} MB), tab heap {float(hp) * 2 + 100:.1f} MB')
+        run['log'] = run['log'][:m.start()] + fake + run['log'][m.end():]
+    elif f == 'card':
         k = next(k for k, v in run['cards'].items() if not v.startswith('EMPTY'))
         run['cards'][k] = '123,456'
     elif f == 'api':
