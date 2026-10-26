@@ -4,6 +4,8 @@ A simulator for connected-vehicle (V2X) networks: realistic traffic on real city
 
 It is built as a research instrument. Every model states its equations, its defaults and the citation behind each default; every metric says how it is computed; and every run is byte-identical for the same scenario and seed, on any machine and any number of threads.
 
+https://github.com/user-attachments/assets/5bd97631-f240-4698-ae43-bce1383829e7
+
 ## What it simulates
 
 **Traffic**
