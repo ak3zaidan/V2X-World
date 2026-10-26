@@ -757,8 +757,13 @@ fn an_mbms_broadcast_delivers_the_crl() {
 /// do not check it as a beacon: it states nothing about its sender's motion, and checking
 /// it (with no stated accuracy, as a vehicle) drew verdicts against the uploader.
 ///
-/// Fault injected: `Phase2::detect` without the non-station skip — `messages_not_checked`
-/// stays 0 and this test fails.
+/// Since audit-db1-3 O-3 a neighbour's WSMP discards the frame before anything reads it
+/// (no application on a vehicle registered PSID 0x26, IEEE 1609.3), so it never reaches
+/// `Phase2::detect` and `messages_not_checked` (whose skip still covers a CRL, a P2PCD
+/// response or a WSA) counts none here: the neighbours' receptions of it are lost as
+/// `psid-not-registered` and none is delivered. Fault injected: the `MsgType::Mbr` discard
+/// in `ObuRuntime::receive` removed — the reports are verified and delivered to the
+/// neighbours, and this test fails.
 #[test]
 fn a_relayed_report_is_not_checked_as_a_beacon() {
     let mut s = grid(40.0, 900.0);
@@ -786,19 +791,39 @@ fn a_relayed_report_is_not_checked_as_a_beacon() {
             });
         }
     }
-    let (report, _) = run(s);
+    let (report, rec) = run(s);
     let p = &report.phase2;
+    // The receptions of relayed report frames by vehicles (node ids past the eight units).
+    let units = 8;
+    let overheard: Vec<serde_json::Value> = records(&rec, "node.rx")
+        .into_iter()
+        .filter(|r| r["msg_type"] == "mbr")
+        .filter(|r| r["rx"].as_u64().is_some_and(|n| n >= units))
+        .collect();
+    let discarded = overheard
+        .iter()
+        .filter(|r| r["cause"] == "psid-not-registered")
+        .count();
+    let delivered = overheard
+        .iter()
+        .filter(|r| r["outcome"] == "delivered")
+        .count();
     println!(
-        "{} relayed, {} not checked, {} checked, verdicts {:?}",
+        "{} relayed, {} not checked, {} checked, {} overheard ({} discarded by WSMP, {} \
+         delivered), verdicts {:?}",
         p.reports_uploaded_relay,
         p.messages_not_checked,
         p.messages_checked,
+        overheard.len(),
+        discarded,
+        delivered,
         p.verdicts_by_detector
     );
     assert!(p.reports_uploaded_relay > 0, "no report went on the air");
-    assert!(
-        p.messages_not_checked > 0,
-        "a relayed report reached the detectors as a beacon"
+    assert!(discarded > 0, "no neighbour heard a relayed report");
+    assert_eq!(
+        delivered, 0,
+        "a relayed report reached a vehicle's applications and detectors"
     );
 }
 
