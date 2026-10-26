@@ -241,6 +241,7 @@ impl NativeMobility {
                 amber_seen: None,
                 traits: h.traits,
                 release_at: None,
+                wait_inside: None,
                 forced_brake: None,
                 forced_cut_in: None,
                 kerb: crate::kerbside::KerbState::NONE,
