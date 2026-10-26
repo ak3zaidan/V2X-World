@@ -135,6 +135,31 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: `calibration/permitted-left-gap` passes (Raff critical gap in the HCM band around
   4.5 s, today 6.8 s); accepted gap falls monotonically with waiting time; byte-identical
   reruns. Fault: impatience disabled turns the check red again.
+- Status (2026-10-26): code written, **not yet compiled or run** (branch
+  `worktree-wf_06761ffa-754-1`; the machine-wide build lock was held by engine test suites
+  for the whole session). Done: `JunctionPatience` in `gap_acceptance.rs` (lognormal
+  per-driver t_c with the HCM value as mean, cv; impatience = standing / time-to-impatience,
+  linear to a floor; optional foe braking at impatience × 4.5 m/s²), used by unsignalised gap
+  acceptance, the signalised permitted left and right-on-red; `JunctionView.waiting_s` /
+  `gap_z` (the ego's own standing time and keyed quantile, `mobility/native/driver/gap`;
+  put on `JunctionView`, not `ConflictView`, because impatience is the ego's); "impatience
+  growth" moved from the card's `ignores` to `patience_*` parameters. The GreenYield
+  queue-head hold (216-258 s, traffic-2026-10-24.md item 1) traced on L0: actor 22 waits four
+  cycles for a 5.5 s lag (4.5 s + the 1 s arrival margin) in steady opposing flow; the
+  engine had no sneakers, and a stop-line sneaker cannot cross its line inside a 3 s amber
+  from 5.4 m back. Fix: `permissive_sneakers` — a refused turner pulls into the junction to
+  a wait point 1 m short of the first opposing-stream zone, the opposing stream is not
+  held by it while it stands there, and it clears once the opposing stream stops at the
+  amber or on the red; further sneakers go from the line only if they cross it before the
+  red. New keys `traffic.critical_gap_cv`, `time_to_impatience_s`, `impatience_gap_floor`,
+  `impatience_foe_braking`, `permissive_sneakers`, all off by default (no golden moves by
+  construction). `calibration/permitted-left-gap` now runs with the realistic set (cv 0.18,
+  180 s, floor 0.7, 2 sneakers), fault = impatience off; shipped value reported beside it.
+  Unit tests written (monotone impatience, lognormal mean/cv, waited driver takes a refused
+  gap, foe braking, sneaker and box-clear conditions). Rows TV.wp04.* pre-registered in
+  `traffic-validation.yaml`. Open: compile, unit tests and their mutation proofs, the
+  calibration check and its fault, the L0w/L0s/L0p/L0pR runs, whether the default should
+  become on (a defect fix that would move the phase2 digests).
 
 **WP-05 Small traffic fixes** (S ×3, 4-5 days). Sources: S-P9, S-P14, S-P16.
 - Scope: vehicles entering at map boundaries are inserted at the desired speed, capped by the
