@@ -36,7 +36,7 @@ class IdResult:
     __slots__ = ("key", "frac", "nsm", "nbsm", "raw", "acc", "phase100", "wrapped", "at_risk", "ent_frozen",
                  "at_risk_fast", "ent_slip", "slip_sizes", "hdr_off_ms", "period_excess_ms", "res_hist", "dt_near100", "dt_all", "cnt_ok", "cnt_n",
                  "ent_slip_ret", "slip_sizes_ret", "drift_med", "period_dev_ms", "body_al", "body_cr", "body_n", "body_vdt2",
-                 "body_q2", "stamp_al")
+                 "body_q2", "stamp_al", "body_pairs", "body_dv", "body_dh", "hop")
 
     def __init__(self, key):
         self.key = key
@@ -61,6 +61,15 @@ class IdResult:
         self.body_n = 0
         self.body_vdt2 = self.body_q2 = 0.0
         self.stamp_al = Counter()
+        # v3 (schema v2xw.bsm_timing.v3): the exactly-100 ms pairs with the pair's own
+        # kinematics removed (along: half the speed change times Δt; across: half the heading
+        # change times v·Δt), per pair (along m, cross m, v1 m/s, quantisation variance m²);
+        # the speed and heading changes of the same pairs in J2735 LSBs; and the :00/:50 grid
+        # state transitions of consecutive BSMs (home or away of the ID's majority grid).
+        self.body_pairs = []
+        self.body_dv = Counter()
+        self.body_dh = Counter()
+        self.hop = Counter()
 
 
 # A slip onset is counted only where a one-epoch slip moves the reported position by at
@@ -96,6 +105,7 @@ def analyse_id(key, bsms, xy=False, nyc=False, gps_drift=mc.GPS_DRIFT_M):
     for s in sms:
         res.phase100[devclass.phase100(s)] += 1
         res.wrapped[devclass.phase_wrapped(s)] += 1
+    hop_states(res, bs)
     prev_state = None  # entry estimator: state of the previous pair ('n', 'a' or None)
     pending = None  # the size of a slip onset at the previous pair, awaiting the return test
     excess = []
@@ -118,6 +128,14 @@ def analyse_id(key, bsms, xy=False, nyc=False, gps_drift=mc.GPS_DRIFT_M):
                 lsb_n = math.radians(mc.POS_LSB_DEG) * pairing.R_EARTH
                 lsb_e = lsb_n * math.cos(math.radians(bs[i].lat))
                 res.body_q2 += (lsb_n ** 2 + lsb_e ** 2) / 12.0
+                if p.v2 is not None and p.h2 is not None:
+                    dh = ((p.h2 - p.h1 + 180.0) % 360.0) - 180.0
+                    alc = al - 0.5 * (p.v2 - p.v1) * dsm
+                    crc = cr + 0.5 * p.v1 * dsm * math.radians(dh)
+                    res.body_pairs.append((round(alc, 5), round(crc, 5), round(p.v1, 3),
+                                           (lsb_n ** 2 + lsb_e ** 2) / 12.0))
+                    res.body_dv[int(round((p.v2 - p.v1) / mc.SPEED_RES_MPS))] += 1
+                    res.body_dh[int(round(dh / mc.HEADING_LSB_DEG))] += 1
         if dsm is not None and dsm > 0:
             res.dt_all += 1
             res.dt_near100 += 0.09 <= dsm <= 0.11
@@ -190,6 +208,39 @@ def analyse_id(key, bsms, xy=False, nyc=False, gps_drift=mc.GPS_DRIFT_M):
         for e in excess:
             res.period_dev_ms[max(-50, min(50, int(round(e - med))))] += 1
     return res
+
+
+# Grid-state tolerance: secMark within this many ms of the :00 or :50 epoch (the locked class
+# sits within 5 ms of a 50 ms epoch, data/calibration/bsm-timing-cvpilot.yaml).
+HOP_TOL_MS = 5
+
+def grid_state(secmark, tol_ms=HOP_TOL_MS):
+    """0 on the :00 grid, 1 on the :50 grid (secMark mod 100 ms within tol_ms), else None."""
+    s = secmark % 100
+    if min(s, 100 - s) <= tol_ms:
+        return 0
+    if abs(s - 50) <= tol_ms:
+        return 1
+    return None
+
+
+def hop_states(res, bs):
+    """The :00/:50 grid process of one ID: its home grid is the one most of its BSMs sit on,
+    and each consecutive-msgCnt pair whose secMark Δt is 50, 100 or 150 ms (± tol) counts one
+    transition (home or away -> home or away). A locked device that hops shows Δt 50 then
+    150 ms (or 150 then 50) with a position consistent with Δt (testing/paper1-validation.md §3)."""
+    st = [None if b.secmark is None else grid_state(b.secmark) for b in bs]
+    n0, n1 = st.count(0), st.count(1)
+    if n0 + n1 == 0:
+        return
+    home = 0 if n0 >= n1 else 1
+    for a, b, sa, sb in zip(bs, bs[1:], st, st[1:]):
+        if sa is None or sb is None or a.msgcnt is None or b.msgcnt is None or (b.msgcnt - a.msgcnt) % 128 != 1:
+            continue
+        d = (b.secmark - a.secmark) % 60000
+        if not any(abs(d - x) <= HOP_TOL_MS for x in (50, 100, 150)):
+            continue
+        res.hop[("home" if sa == home else "away", "home" if sb == home else "away")] += 1
 
 
 # An ID's BSM-clock drift is the median of its single-interval secMark Δt minus 100 ms over

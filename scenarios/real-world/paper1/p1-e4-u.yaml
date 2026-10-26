@@ -1,0 +1,22 @@
+# P1-E4, final (testing/paper1-validation.md §8): p1-e4-s.yaml on the v3 fit with the GNSS
+# receiver's white velocity output noise off. E4T (p1-e4-s.yaml, v3 fit) kept the engine's
+# default receiver velocity noise, the GPS SPS committed accuracy (0.2 m/s at 95 %) drawn
+# afresh at every 10 Hz fix: the transmitted speed then changes by sd 0.14 m/s from one BSM
+# to the next and the smoothed position steps with it, a residual body of about 1 cm that
+# no CV-pilot device shows (their speed changes by 0.045 m/s, research/synthesis/
+# p1-realdata-baseline.md §4). With bsm_timing on, the fitted output_noise carries the
+# BSM-level speed and heading noise and position_noise the position's, so the GNSS layer
+# under them keeps its slow error only. Expectations were written before it ran
+# (scms-paper1.yaml, P1.E4U.*).
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4-s.yaml
+  name: Paper 1 E4 final
+  description: The speed-matched E4 highway on the v3 timing fit, receiver velocity noise left to the timing model.
+  tags: [paper1, validation, highway, bsm-timing]
+actors:
+  vehicles:
+    gnss:
+      smoothing_tau_s: 100.0
+      static_hold_mps: 0.3
+      velocity_noise_mps: 0.0

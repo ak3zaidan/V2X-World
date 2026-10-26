@@ -108,6 +108,13 @@ def e4(d, run):
     d["x.e4.r_p50"] = resid.q(rs, 0.5)
     d["x.e4.r_p90"] = resid.q(rs, 0.9)
     d["x.e4.r_p99"] = resid.q(rs, 0.99)
+    for f in (0.1, 0.25, 0.75):
+        d["x.e4.r_p%d" % round(f * 100)] = resid.q(rs, f)
+    # where the two CDFs are furthest apart (the KS statistic's location), m
+    if rs:
+        import bisect
+        a, b = sorted(rs), sorted(wy)
+        d["x.e4.ks_at_m"] = max(a + b, key=lambda x: abs(bisect.bisect_right(a, x) / len(a) - bisect.bisect_right(b, x) / len(b)))
     # TM-1: secMark steps of consecutive BSMs of one ID (msgCnt + 1): how often secMark
     # repeats (0 ms) and the period excess over 100 ms (CV-pilot free devices: never 0, p50 +6 ms)
     steps = []
@@ -122,6 +129,10 @@ def e4(d, run):
     d["x.e4.sm_steps"] = len(steps)
     d["x.e4.sm_repeat_share"] = sum(1 for s in steps if s == 0) / len(steps) if steps else None
     d["x.e4.sm_excess_p50"] = single[len(single) // 2] if single else None
+    # :00/:50 grid hops: consecutive-msgCnt secMark steps of 50 or 150 ms (± 5 ms), the
+    # pipeline's grid-state tolerance (tools/realdata/pipeline.py HOP_TOL_MS)
+    hops = sum(1 for s in steps if abs(s - 50) <= 5 or abs(s - 150) <= 5)
+    d["x.e4.hop_share"] = hops / len(steps) if steps else None
 
 
 def veremi_lines(run):

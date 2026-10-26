@@ -252,3 +252,40 @@ modelled either.
 **Not yet run (rows pending):** P1.TM1.* (BV2, GT05V2, OFFV2, E4SF), P1.E4S.ks-white-noise
 (E4SWN), P1.E4S.body-p90, frames, events, memory and reports (E4SV1), P1.E4S.rerun (E4S2).
 `tm1/runall.sh` in the scratchpad runs them in order, one run per lock call.
+
+## 8. E4-BODY v3, the hop-speed defect and the 1.3.0 refit
+
+Commits `ff7c9e8e`, `204d5d85` (v3 fit, GNSS velocity-noise knob), `8d3990b7` (rows measured,
+E4V1 rows written before its run), `775c9cc0` (tools/realdata 1.3.0, E4V rows written before
+its run) and `098c9c3a` (hop-speed fix). Wyoming was never used to fit.
+
+**Queued §7 rows, now measured** (486c8cba release binary): P1.TM1.* all pass (positionJump
+5,318 -> 5,935 at gt 0.5 s; free secMark never repeats, p50 excess 7 ms, 254 triggers per
+ID-minute; frames ratio 0.928). P1.E4S.* pass except the KS (0.169, open). P1.MA.l1-attackers 4.
+
+| Change | Expected (written before) | Measured | Verdict |
+|---|---|---|---|
+| E4T: v3 fit (heavy-tailed walk, hops) vs v2 | KS ≤ 0.092, down 30 % | 0.169 -> 0.165; p50 / p90 / p99 2.26 / 6.3 / 20.5 cm (Wyoming 1.64 / 6.0 / 15.7) | open: tail matches, body too wide |
+| E4T reports vs E4TV2 | delta ±5 | 2 -> 43 | **fixed** (hop-speed defect) |
+| E4U: GNSS white velocity noise off | KS down 20 %, ≤ 0.092 | 0.165 -> 0.105 at 1.27 cm; p50 1.97 cm | open |
+| E4U MaxAcceleration verdicts | down 80 % (blamed on velocity noise) | 48 -> 61 | **fixed**: wrong cause, see below |
+| E4U determinism, frames, events, memory | identical; same | identical; 13,469; ratio 1.00; 1.02 | pass |
+
+**Defect: a hop BSM's speed.** A device on the :50 grid stamps and positions its BSM 50 ms
+after the belief but sent the belief's speed, so at a hop's 50 ms secMark Δt MaxAcceleration
+read twice the deceleration. Fixed in `bsm_timing.rs`; test
+`a_hop_bsm_carries_the_speed_of_its_own_instant`. Rows `P1.E4V1.*` re-measure it.
+
+**Fit defect (tools/realdata 1.3.0).** Simulated at the fit pairs' own speeds, the 1.2.0 model
+missed its own exactly-100 ms residuals (KS 0.275): the walk's assumed τ 1 s adds (ρ − 1)·e,
+about 1 cm per axis, to every pair, while the EM reads each residual as the increment alone.
+τ is now fitted in sample (grid 1–100 s, capped at the receiver's 100 s smoothing): 50 s, KS
+0.083. Stamp offsets and the position-noise EM weigh each ID once (Orem's 3 IDs held 28 % of
+the pairs). Model prediction at 29.8 m/s, written before the run: p10 / p25 / p50 / p75 /
+p90 / p99 0.36 / 0.82 / 1.38 / 2.46 / 6.8 / 22.7 cm. Three new tests, each red under its fault.
+
+**Not yet run (rows pending):** E4V1 (hop fix, 1.2.0 fit; cwd a scratch root holding the
+1.2.0 calibration), E4V (the final P1-E4 on 1.3.0) and E4V2 (determinism). The build lock was
+held by other agents for over three hours, so the fix binary was not built. Open: the hop
+test's red-under-fault run; the walk's stationary spread (about 0.7 m along, 0.5 m across)
+adds to the GNSS model's absolute error.

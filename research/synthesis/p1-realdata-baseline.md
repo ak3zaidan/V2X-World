@@ -102,11 +102,17 @@ Every number below comes from the generated tables at the end of this file. One 
 | Parameter | locked | free |
 |---|---|---|
 | ID share (pooled fit IDs) | 0.016 | 0.984 |
-| secMark phase | normal, mean −0.20 ms, sd 0.41 ms (to the nearest 50 ms epoch) | empirical, 10 ms bins, near-uniform over 0–100 ms |
+| secMark phase | normal per message, mean 0.286 ms, sd 0.254 ms about the nearest 50 ms epoch, each ID weighing one (1.3.0; v1: −0.20 / 0.41) | empirical, 10 ms bins, near-uniform over 0–100 ms |
 | epoch_slip_prob (onsets per pair at v ≥ 10 m/s, Δt-corrected) | 0 (0 of 2,275) | 0.228 |
 | slip size given a slip | none observed (pooled sizes written) | −1: 0.005, +1: 0.96, +2: 0.04 |
 | frozen_repeat_prob (per pair at v ≥ 5 m/s) | 0 | 0.156 |
 | header_jitter_ms sd | 28.3 (Wyoming; mean offset 38.7 ms; PROVISIONAL until P1-E3) | borrowed from locked |
+| output_noise (v3, tools/realdata 1.2.0) | speed 0.031 m/s, heading 0.052° (≤ BSM-to-BSM change / √2) | borrowed from locked |
+| position_noise (v3, 1.3.0) | random walk over fix epochs, τ 50 s (fitted in sample); increment a 4-component normal mixture, each ID weighing one: p 0.633 / 0.169 / 0.113 / 0.084 with along 0.0 / 0.0 / 5.2 / 13.3 cm and cross 0.3 / 1.2 / 3.1 / 9.8 cm | borrowed from locked |
+| grid_hop (v3) | leave the home :00/:50 grid 0.113, return 0.445 per BSM (18.0 % of steps are 50 or 150 ms) | none (own BSM clock) |
+
+- **Refit 2026-10-25b (tools/realdata 1.3.0, testing/paper1-validation.md §8).** The 1.2.0 model, simulated at the fit pairs' own speeds and quantisation, did not reproduce its own exactly-100 ms residuals (KS 0.275): a walk reverting with the assumed τ 1 s adds (ρ − 1)·e to every pair, about 1 cm per axis with the fitted tail, while the EM reads each residual as the increment alone. τ is now fitted in sample over 1–100 s (the cap is the receiver's 100 s carrier smoothing): 50 s, KS 0.083. The stamp offsets and the position-noise EM weigh each ID once, as the engine's fleet is devices (Orem's 3 locked IDs held 28 % of the pairs): the locked secMark phase is N(0.286, 0.254) ms (13 % of BSMs a whole ms early, was 21 %). Cost: the walk's stationary spread is about 0.7 m along and 0.5 m across, on top of the engine's GNSS error (open). Wyoming was not used.
+- **Refit 2026-10-25 (tools/realdata 1.2.0, schema v3, testing/paper1-validation.md §8).** On the locked exactly-100 ms pairs (1,961, Tampa + Orem) the transmitted speed and heading barely change between BSMs (sd 0.045 m/s and 0.074°), so the residual body cannot be velocity noise: v2's 0.103 m/s and 0.30° would make those changes 0.15 m/s and 0.43°. What is left after each pair's own speed and heading change, the quantisation, the stamp jitter (0.28 ms × v) and that bounded output noise is a heavy-tailed, white increment of the reported position (Tampa rms 5.7 cm against an IQR-based sd of 0.7 cm; lag-1 −0.02 along, +0.05 across), fitted as a normal mixture by EM. Orem's 3 locked IDs are noisier and closer to white position noise (lag-1 −0.33); the pooled fit weights them by their pairs. The :00/:50 grid hops are a two-state process per BSM from 9,255 consecutive-msgCnt transitions. Wyoming was not used.
 
 - **Refit 2026-10-24 (`a77aab7c`, testing/paper1-validation.md §3).** The first fit gave the locked class 0.0067: 27 onsets, every one at v ≥ 10 m/s a :00/:50 grid hop (Δt 0.05 or 0.15 s, position consistent with Δt, residual 0.03–0.35 m) that rounding Δt to whole fix intervals read as a slip. Slip size is now the displacement beyond v̄·Δt, and the probability is fitted at v ≥ 10 m/s, where a one-epoch slip is ≥ gpsDrift. In the engine the old value gave an all-locked fleet 5.5 RandomPosition triggers per ID-minute at speed, ten times the locked bound Wyoming passed.
 - **The class share is deployment-specific.** Tampa has 23% locked IDs and Orem 0.2%. The engine should treat the share as a scenario knob, with these two values as anchors.
@@ -305,7 +311,7 @@ Epoch-slip signature: |Δp| ≈ 0 (< 0.4 v Δt, stale fix) or ≈ 2 v Δt (1.6-2
 
 ### T8. Fitted timing-model parameters (fit sets: Tampa + Orem)
 
-Written to `data/calibration/bsm-timing-cvpilot.yaml` (schema v2xw.bsm_timing.v1).
+Written to `data/calibration/bsm-timing-cvpilot.yaml` (schema v2xw.bsm_timing.v3).
 
 | Class | IDs | single-interval moving pairs at risk (v ≥ 5 m/s) | of them v ≥ 10 m/s | slip onsets (v ≥ 10 m/s) | frozen-repeat onsets |
 |---|---|---|---|---|---|
@@ -322,7 +328,7 @@ Written to `data/calibration/bsm-timing-cvpilot.yaml` (schema v2xw.bsm_timing.v1
 # locked phase is the distance to the nearest 50 ms epoch.
 # Tampa: 41 locked, 137 free IDs (locked share 0.230); the share is deployment-specific.
 # Orem: 4 locked, 2617 free IDs (locked share 0.002); the share is deployment-specific.
-schema: v2xw.bsm_timing.v2
+schema: v2xw.bsm_timing.v3
 provenance:
   sources:
     - {dataset: ev64-jn8c, rows: 295906, query: "https://data.transportation.gov/resource/ev64-jn8c.csv?%24select=tmstp_epoch,temp_id,msg_count,sec_mark,latitude,longitude,speed,heading,longitudinal_acceleration,semi_major_axis_accuracy,semi_minor_axis_accuracy,wheel_brakes_flags&%24order=temp_id,tmstp_epoch,:id&%24where=date_utc+%3D+'2025-02-02T00:00:00.000'"}
@@ -336,18 +342,18 @@ provenance:
   manifest_sha256: ee6eeab3f926d0fefac2e790d0dea9c5411531d7823d39558620a5521189d412
   fitted_on: ["nm7w-nvbm", "ev64-jn8c", "7qu7-j8rx (header_jitter_ms only)"]
   held_out: ["7qu7-j8rx (device class and trigger rates)"]
-  tool: tools/realdata 1.1.0
+  tool: tools/realdata 1.3.0
 fix_interval_ms: 100
 classes:
   - name: locked
     share: 0.016077
     # the 100.0% of locked BSMs within 5 ms of a 50 ms epoch; whole-ms offsets -1, +0, +1, +2 with
-    # shares 0.206856, 0.790702, 0.002352, 9e-05. Mean along-track residual / v by secMark Δt - 100 ms (v >= 10 m/s):
+    # shares 0.130608, 0.866902, 0.00246, 3e-05. Mean along-track residual / v by secMark Δt - 100 ms (v >= 10 m/s):
     # -1 ms: 0.41 ms (439), +0 ms: 0.11 ms (1961), +1 ms: -0.50 ms (456)
     # That is the 1 ms truncation of a generation instant that jitters about the epoch, with
     # the position at that instant (+-0.5 ms expected; +-1 ms if the position stayed on the
     # epoch). The instant is the normal whose truncation gives the shares of -1 and >= +1:
-    secmark_phase_ms: {dist: normal, mean: 0.225051, sd: 0.275333}
+    secmark_phase_ms: {dist: normal, mean: 0.285749, sd: 0.254333}
     phase_scope: message
     # secMark Δt minus 100 ms on single-interval pairs: p10 -1, p50 0, p90 1 ms
     # slip onsets per single-interval pair at v >= 10 m/s after a normal pair (Δt-corrected
@@ -364,9 +370,24 @@ classes:
     # until P1-E3: if metadata_generatedat is ODE log time, not the signed 1609.2
     # generationTime, this is not a header jitter.
     header_jitter_ms: {sd: 28.2875}
-    # receiver output noise, from 1961 exactly-100 ms pairs of the locked class at v >= 10 m/s:
-    # along sd 0.0111 m, cross sd 0.0089 m (IQR/1.349), quantisation 0.0042 m per component
-    output_noise: {speed_mps: 0.10289, heading_deg: 0.304444}
+    # receiver output noise, white, bounded by the change of the transmitted speed and heading
+    # between consecutive exactly-100 ms BSMs of the locked class at v >= 10 m/s (1961 pairs):
+    # change sd 0.0445 m/s and 0.0741 deg (IQR/1.349), so noise <= change/sqrt(2). The v2 fit
+    # read the whole residual body (along 0.0111 m, cross 0.0089 m) as this noise
+    output_noise: {speed_mps: 0.0314503, heading_deg: 0.0524171}
+    # the rest of the body and its tail: the reported position's error increment per fix
+    # interval, a Gaussian scale mixture (EM, 4 components, log-lik 10712.6) on 1961 exactly-100 ms
+    # pairs of the locked class at v >= 10 m/s with their own speed and heading change removed
+    # and the quantisation, the stamp jitter (0.286 ms x v) and the output noise above
+    # deconvolved. Increments are white (lag-1 ~ 0), so the error is a random walk over the
+    # fix epochs, mean-reverting with tau_s: the shortest tau (of 1/2/5/10/20/50/100 s, capped at the receiver's
+    # 100 s smoothing) whose simulated exactly-100 ms residual matches these pairs, each ID
+    # weighing one, within KS 0.01 of the best; KS by tau: 1 s 0.275, 2 s 0.219, 5 s 0.154, 10 s 0.117, 20 s 0.094, 50 s 0.083, 100 s 0.079
+    position_noise: {dist: normal_mixture, tau_s: 50.0, p: [0.633315, 0.169124, 0.113336, 0.084225], along_m: [0.0001, 0.0001, 0.0518646, 0.132925], cross_m: [0.00323245, 0.0118151, 0.0309238, 0.0982351]}
+    # :00/:50 grid hops: consecutive-msgCnt BSMs (Δt 50/100/150 ms) home->home 6552, home->away 836,
+    # away->home 831, away->away 1036; a hop is Δt 50 then 150 ms (or 150 then 50), the position
+    # at the new instant. The engine puts the away grid half an interval late
+    grid_hop: {leave_prob: 0.113156, return_prob: 0.445099}
   - name: free
     share: 0.983923
     # bins_ms are the 11 edges of 10 bins; p[i] is the share in [bins_ms[i], bins_ms[i+1])
@@ -389,9 +410,20 @@ classes:
     frozen_repeat_prob: 0.155683
     # no free-class source has a header time: borrowed from the locked Wyoming fit
     header_jitter_ms: {sd: 28.2875}
-    # receiver output noise, from 1961 exactly-100 ms pairs of the locked class (borrowed) at v >= 10 m/s:
-    # along sd 0.0111 m, cross sd 0.0089 m (IQR/1.349), quantisation 0.0042 m per component
-    output_noise: {speed_mps: 0.10289, heading_deg: 0.304444}
+    # receiver output noise, white, bounded by the change of the transmitted speed and heading
+    # between consecutive exactly-100 ms BSMs of the locked class (borrowed) at v >= 10 m/s (1961 pairs):
+    # change sd 0.0445 m/s and 0.0741 deg (IQR/1.349), so noise <= change/sqrt(2). The v2 fit
+    # read the whole residual body (along 0.0111 m, cross 0.0089 m) as this noise
+    output_noise: {speed_mps: 0.0314503, heading_deg: 0.0524171}
+    # the rest of the body and its tail: the reported position's error increment per fix
+    # interval, a Gaussian scale mixture (EM, 4 components, log-lik 10712.6) on 1961 exactly-100 ms
+    # pairs of the locked class (borrowed) at v >= 10 m/s with their own speed and heading change removed
+    # and the quantisation, the stamp jitter (0.286 ms x v) and the output noise above
+    # deconvolved. Increments are white (lag-1 ~ 0), so the error is a random walk over the
+    # fix epochs, mean-reverting with tau_s: the shortest tau (of 1/2/5/10/20/50/100 s, capped at the receiver's
+    # 100 s smoothing) whose simulated exactly-100 ms residual matches these pairs, each ID
+    # weighing one, within KS 0.01 of the best; KS by tau: 1 s 0.275, 2 s 0.219, 5 s 0.154, 10 s 0.117, 20 s 0.094, 50 s 0.083, 100 s 0.079
+    position_noise: {dist: normal_mixture, tau_s: 50.0, p: [0.633315, 0.169124, 0.113336, 0.084225], along_m: [0.0001, 0.0001, 0.0518646, 0.132925], cross_m: [0.00323245, 0.0118151, 0.0309238, 0.0982351]}
 ```
 
 <!-- END GENERATED -->

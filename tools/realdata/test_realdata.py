@@ -270,6 +270,101 @@ class ClassAndPipelineTests(unittest.TestCase):
         self.assertLess(clean[0], 0.03)
         self.assertLess(clean[1], 0.05)
 
+    def test_position_noise_recovers_an_injected_heavy_tailed_walk(self):
+        # v3: a reported-position error that walks with a heavy-tailed increment (80 % at 3 mm,
+        # 20 % at 5 cm along track; 2 mm / 3 cm across) on a north-bound 30 m/s fleet, J2735
+        # quantised. The EM fit must find the tail's weight and the increment's rms.
+        import random
+
+        def fleet(scale):
+            rnd = random.Random(11)
+            pairs = []
+            for k in range(20):
+                v, out, ea, ec = 30.0, [], 0.0, 0.0
+                for i in range(200):
+                    big = rnd.random() < 0.2
+                    ea += scale * rnd.gauss(0, 0.05 if big else 0.003)
+                    ec += scale * rnd.gauss(0, 0.03 if big else 0.002)
+                    d = v * i * 0.1 + ea
+                    lat = round(41.0 + math.degrees(d / pairing.R_EARTH), 7)
+                    lon = round(-106.0 + math.degrees(ec / (pairing.R_EARTH * math.cos(math.radians(41.0)))), 7)
+                    out.append(normalise.Bsm("P%d" % k, (1000 + i * 100) % 60000, i % 128, 1000.0 + i * 0.1,
+                                             1000.0 + i * 0.1, None, lat, lon, v, 0.0, 0.0, 0.5, 0.4, None))
+                pairs.extend(pipeline.analyse_id("p", out).body_pairs)
+            return calib.position_noise({"pairs": pairs}, 0.0, 0.0, 0.0, iters=150)
+
+        w, sa, sc, n, _ = fleet(1.0)
+        self.assertEqual(n, 20 * 199)
+        rms = lambda s: math.sqrt(sum(p * x * x for p, x in zip(w, s)))
+        self.assertAlmostEqual(rms(sa), math.sqrt(0.8 * 0.003 ** 2 + 0.2 * 0.05 ** 2), delta=0.003)
+        self.assertAlmostEqual(rms(sc), math.sqrt(0.8 * 0.002 ** 2 + 0.2 * 0.03 ** 2), delta=0.003)
+        self.assertAlmostEqual(sum(p for p, x in zip(w, sa) if x > 0.02), 0.2, delta=0.05)
+        w, sa, sc, _, _ = fleet(0.0)
+        self.assertLess(rms(sa), 0.004)  # uniform quantisation deconvolved as a normal leaves ~2 mm
+
+    def test_position_noise_weighs_each_id_once(self):
+        # One noisy ID with 1,000 pairs and 30 quiet IDs with 30 pairs each: by pair the noisy
+        # component holds 53 % of the mixture, by ID (timing_stats' weight 1 / the ID's pairs)
+        # 1 in 31.
+        import random
+        rnd = random.Random(5)
+        pairs = [(rnd.gauss(0, 0.05), rnd.gauss(0, 0.05), 30.0, 0.0, 1.0 / 1000) for _ in range(1000)]
+        for _ in range(30):
+            pairs += [(rnd.gauss(0, 0.003), rnd.gauss(0, 0.003), 30.0, 0.0, 1.0 / 30) for _ in range(30)]
+        w, sa, _, n, _ = calib.position_noise({"pairs": pairs}, 0.0, 0.0, 0.0, iters=150)
+        self.assertEqual(n, 1900)
+        self.assertAlmostEqual(sum(p for p, x in zip(w, sa) if x > 0.02), 1 / 31, delta=0.02)
+        w, sa, _, _, _ = calib.position_noise({"pairs": [x[:4] for x in pairs]}, 0.0, 0.0, 0.0, iters=150)
+        self.assertAlmostEqual(sum(p for p, x in zip(w, sa) if x > 0.02), 1000 / 1900, delta=0.05)
+
+    def test_position_tau_tells_a_reverting_walk_from_a_free_one(self):
+        # Pairs from the same heavy-tailed increments: a walk reverting with tau 1 s carries
+        # (rho - 1)·e on every pair, a free walk (tau 1000 s) does not; position_tau finds each.
+        import random
+        pn = ([0.8, 0.2], [0.003, 0.05], [0.003, 0.05])
+
+        def pairs(tau):
+            rnd, rho, out, ea, ec = random.Random(3), math.exp(-0.1 / tau), [], 0.0, 0.0
+            for i in range(6000):
+                big = rnd.random() < 0.2
+                na = rho * ea + rnd.gauss(0, 0.05 if big else 0.003)
+                nc = rho * ec + rnd.gauss(0, 0.05 if big else 0.003)
+                if i >= 4000:
+                    out.append((na - ea, nc - ec, 20.0, 0.0, 1.0))
+                ea, ec = na, nc
+            return {"pairs": out}
+
+        self.assertLessEqual(calib.position_tau(pairs(1.0), 0.0, 0.0, 0.0, pn)[0], 2.0)
+        self.assertGreaterEqual(calib.position_tau(pairs(1000.0), 0.0, 0.0, 0.0, pn)[0], 20.0)
+
+    def test_locked_stamp_offsets_weigh_each_id_once(self):
+        # A 200-BSM ID stamped on its epoch and a 50-BSM ID stamped 1 ms early: by message 20 %
+        # of offsets are -1 ms, by ID half.
+        import types
+        ra = pipeline.analyse_id("a", trace(200, phase_ms=0))
+        rb = pipeline.analyse_id("b", trace(50, phase_ms=-1))
+        agg = calib.timing_stats([types.SimpleNamespace(ids={"a": ra, "b": rb})], devclass.params())
+        w = agg["locked"]["wrapped"]
+        self.assertAlmostEqual(w[-1] / sum(w.values()), 0.5)
+        self.assertEqual(agg["locked"]["ids"], 2)
+
+    def test_grid_hops_are_counted_from_the_home_grid(self):
+        # A locked device on :00 hops to :50 (Δt 150 ms), stays 3 BSMs, and returns (Δt 50 ms).
+        v, out, t = 25.0, [], 0.0
+        for i in range(30):
+            t = i * 0.1 + (0.05 if 10 <= i < 14 else 0.0)
+            lat = 41.0 + math.degrees(v * t / pairing.R_EARTH)
+            out.append(normalise.Bsm("G", int(round(1000 + t * 1000)) % 60000, i % 128, 1000.0 + t, 1000.0 + t,
+                                     None, lat, -106.0, v, 0.0, 0.0, 0.5, 0.4, None))
+        r = pipeline.analyse_id("g", out)
+        self.assertEqual(r.hop[("home", "away")], 1)
+        self.assertEqual(r.hop[("away", "home")], 1)
+        self.assertEqual(r.hop[("away", "away")], 3)
+        self.assertEqual(r.hop[("home", "home")], 24)
+        leave, ret, _ = calib.grid_hop({"hop": r.hop})
+        self.assertAlmostEqual(leave, 1 / 25)
+        self.assertAlmostEqual(ret, 1 / 4)
+
     def test_free_phase_jitter_alone_fires_at_speed(self):
         import random
         rnd = random.Random(1)

@@ -38,6 +38,21 @@
 //! * `output_noise`: the receiver's per-BSM speed and heading output noise, white, on the
 //!   transmitted `speed` and `heading` only (the reported position follows the fix).
 //!
+//! Schema `v2xw.bsm_timing.v3` adds two more:
+//!
+//! * `position_noise`: the receiver's reported-position error, a random walk over the fix
+//!   epochs whose per-epoch increment is a Gaussian scale mixture (one component drawn per
+//!   epoch, along- and cross-track sds per component), mean-reverting with `tau_s`. A BSM
+//!   between two epochs carries the error interpolated between them. CV-pilot locked
+//!   devices' exactly-100 ms residuals are white (lag-1 about 0) and heavy-tailed (rms 5.7
+//!   cm against an IQR-based sd of 1.0 cm on Tampa), which white Gaussian velocity noise
+//!   (v2's `output_noise` read alone) does not give (testing/paper1-validation.md §8).
+//! * `grid_hop`: a locked device's :00/:50 grid process. Per BSM, a device on its home grid
+//!   leaves with `leave_prob` and one away returns with `return_prob`; away, the BSM is
+//!   generated half a fix interval after the epoch (secMark, position and the transmission
+//!   all at that instant), so a hop shows as secMark Δt 150 then 50 ms with a position
+//!   consistent with Δt.
+//!
 //! A slip `k > 0` reports the position of the fix `k` epochs **later** than the timestamp
 //! says (an over-extrapolated, latency-compensated output), with the timestamp unchanged;
 //! v1's "older timestamp" form repeated secMark, which no CV-pilot device does.
@@ -72,8 +87,11 @@ pub const MODEL_ID: &str = "node/bsm-timing/per-device";
 /// The first calibration schema this module reads.
 pub const SCHEMA: &str = "v2xw.bsm_timing.v1";
 
-/// The current schema: v1 plus a class's `bsm_clock` and `output_noise`.
+/// v1 plus a class's `bsm_clock` and `output_noise`.
 pub const SCHEMA_V2: &str = "v2xw.bsm_timing.v2";
+
+/// The current schema: v2 plus a class's `position_noise` and `grid_hop`.
+pub const SCHEMA_V3: &str = "v2xw.bsm_timing.v3";
 
 /// The RNG domain every draw of the model comes from: one stream per node.
 #[must_use]
@@ -237,6 +255,32 @@ pub struct OutputNoise {
     pub heading_deg: f64,
 }
 
+/// The `position_noise` block (schema v3): the reported position's error, a random walk
+/// over the fix epochs with a Gaussian scale-mixture increment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PositionNoise {
+    /// `normal_mixture` (the only form).
+    pub dist: String,
+    /// Mean-reversion time of the walk, s: each epoch the error keeps `exp(-T_fix / tau_s)`
+    /// of itself before the increment is added.
+    pub tau_s: f64,
+    /// The weight of each mixture component; sums to 1.
+    pub p: Vec<f64>,
+    /// Each component's along-track increment sd, m.
+    pub along_m: Vec<f64>,
+    /// Each component's cross-track increment sd, m.
+    pub cross_m: Vec<f64>,
+}
+
+/// The `grid_hop` block (schema v3): a locked device's :00/:50 grid process, per BSM.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GridHop {
+    /// P(a device on its home grid moves to the other one at this BSM).
+    pub leave_prob: f64,
+    /// P(a device on the other grid moves back at this BSM).
+    pub return_prob: f64,
+}
+
 /// One device timing class.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimingClass {
@@ -265,6 +309,12 @@ pub struct TimingClass {
     /// The receiver's output noise on speed and heading (schema v2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_noise: Option<OutputNoise>,
+    /// The reported position's error process (schema v3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_noise: Option<PositionNoise>,
+    /// The :00/:50 grid hops of a device without a `bsm_clock` (schema v3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_hop: Option<GridHop>,
 }
 
 fn slip_map<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<i32, f64>, D::Error> {
@@ -327,9 +377,9 @@ impl BsmTimingCalibration {
     /// # Errors
     /// The first problem, as a sentence.
     pub fn check(&self) -> Result<(), String> {
-        if self.schema != SCHEMA && self.schema != SCHEMA_V2 {
+        if self.schema != SCHEMA && self.schema != SCHEMA_V2 && self.schema != SCHEMA_V3 {
             return Err(format!(
-                "schema is {:?}; this build reads {SCHEMA} and {SCHEMA_V2}",
+                "schema is {:?}; this build reads {SCHEMA}, {SCHEMA_V2} and {SCHEMA_V3}",
                 self.schema
             ));
         }
@@ -354,6 +404,43 @@ impl BsmTimingCalibration {
                 return Err(format!(
                     "{at}: bsm_clock and output_noise need schema {SCHEMA_V2}"
                 ));
+            }
+            if self.schema != SCHEMA_V3 && (c.position_noise.is_some() || c.grid_hop.is_some()) {
+                return Err(format!(
+                    "{at}: position_noise and grid_hop need schema {SCHEMA_V3}"
+                ));
+            }
+            if let Some(n) = &c.position_noise {
+                let k = n.p.len();
+                let psum: f64 = n.p.iter().sum();
+                let sd_ok = |v: &f64| v.is_finite() && *v >= 0.0;
+                if n.dist != "normal_mixture"
+                    || k == 0
+                    || n.along_m.len() != k
+                    || n.cross_m.len() != k
+                    || !n.p.iter().all(|v| prob(*v))
+                    || (psum - 1.0).abs() > 1e-6
+                    || !n.along_m.iter().all(sd_ok)
+                    || !n.cross_m.iter().all(sd_ok)
+                    || !(n.tau_s.is_finite() && n.tau_s > 0.0)
+                {
+                    return Err(format!(
+                        "{at}: position_noise is a normal_mixture with p summing to 1, one \
+                         along_m and cross_m sd (0 or more) per component, and tau_s > 0"
+                    ));
+                }
+            }
+            if let Some(h) = c.grid_hop {
+                if !prob(h.leave_prob) || !prob(h.return_prob) {
+                    return Err(format!(
+                        "{at}: grid_hop leave_prob and return_prob must be in 0..1"
+                    ));
+                }
+                if c.bsm_clock.is_some() {
+                    return Err(format!(
+                        "{at}: grid_hop is for a device on the fix grid; a bsm_clock has its own phase"
+                    ));
+                }
             }
             if let Some(k) = &c.bsm_clock {
                 k.drift_ms.check(&format!("{at}.bsm_clock.drift_ms"))?;
@@ -476,6 +563,8 @@ impl BsmTimingCalibration {
                     header_jitter_ms: Jitter { sd: 27.0 },
                     bsm_clock: None,
                     output_noise: None,
+                    position_noise: None,
+                    grid_hop: None,
                 },
                 TimingClass {
                     name: "free".to_string(),
@@ -488,6 +577,8 @@ impl BsmTimingCalibration {
                     header_jitter_ms: Jitter { sd: 27.0 },
                     bsm_clock: None,
                     output_noise: None,
+                    position_noise: None,
+                    grid_hop: None,
                 },
             ],
         }
@@ -532,6 +623,13 @@ pub struct BsmTimingDevice {
     drift_ms: f64,
     /// The device's next BSM-clock tick on the GNSS timeline, once it has sent.
     next_tick: Option<SimTime>,
+    /// The reported position's error at the current fix epoch, ENU metres (schema v3).
+    pos_err: (f64, f64),
+    /// Whether the device is on the other :00/:50 grid (schema v3 `grid_hop`).
+    away: bool,
+    /// The previous belief's instant and ground speed (schema v3 `grid_hop`), from which a
+    /// hop BSM's speed is carried to its own instant.
+    last_speed: Option<(SimTime, f64)>,
 }
 
 impl BsmTimingDevice {
@@ -567,6 +665,9 @@ impl BsmTimingDevice {
             last_pos: None,
             drift_ms,
             next_tick: None,
+            pos_err: (0.0, 0.0),
+            away: false,
+            last_speed: None,
         }
     }
 
@@ -580,7 +681,8 @@ impl BsmTimingDevice {
     /// `belief.time_ns`). `None` when the belief has no position: nothing is sent.
     ///
     /// Every call consumes the same seven 64-bit draws, whatever the class's numbers, plus
-    /// two for a `bsm_clock` and two for `output_noise` when the class has them.
+    /// two for a `bsm_clock`, two for `output_noise`, five for `position_noise` and one for
+    /// `grid_hop` when the class has them.
     pub fn report(
         &mut self,
         cal: &BsmTimingCalibration,
@@ -598,8 +700,44 @@ impl BsmTimingDevice {
             let ns = rng.normal(0.0, 1.0) * n.speed_mps;
             (ns, rng.normal(0.0, 1.0) * n.heading_deg.to_radians())
         }); // 2 draws
+        // v3: one mixture component for this epoch's increment and its two parts (5 draws),
+        // then the grid process (1 draw).
+        let pn_step = c.position_noise.as_ref().map(|n| {
+            let u = rng.uniform(0.0, 1.0);
+            let za = rng.normal(0.0, 1.0);
+            let zc = rng.normal(0.0, 1.0);
+            let mut j = n.p.len() - 1;
+            let mut acc = 0.0;
+            for (i, p) in n.p.iter().enumerate() {
+                acc += p;
+                if u < acc {
+                    j = i;
+                    break;
+                }
+            }
+            (za * n.along_m[j], zc * n.cross_m[j], n.tau_s)
+        });
+        let u_hop = c.grid_hop.map(|_| rng.uniform(0.0, 1.0));
         if !belief.fix.has_position() {
             return None;
+        }
+        // The error walk advances one fix epoch per wake: (error now, error at the next epoch).
+        let pn = pn_step.map(|(wa, wc, tau)| {
+            let (sh, ch) = belief.heading_rad.sin_cos();
+            // along = (cos h, sin h), left of track = (-sin h, cos h): ENU, h from east.
+            let w = (wa * ch - wc * sh, wa * sh + wc * ch);
+            let rho = (-cal.fix_interval_ms * 1e-3 / tau).exp();
+            let cur = self.pos_err;
+            let next = (rho * cur.0 + w.0, rho * cur.1 + w.1);
+            self.pos_err = next;
+            (cur, next)
+        });
+        if let (Some(h), Some(u)) = (c.grid_hop, u_hop) {
+            self.away = if self.away {
+                u >= h.return_prob
+            } else {
+                u < h.leave_prob
+            };
         }
         let phase_ms = match c.phase_scope {
             PhaseScope::Device => self.phase_ms,
@@ -645,6 +783,12 @@ impl BsmTimingDevice {
             tick = Some(g);
         }
         let epoch = tick.map_or(t - t % iv, |g| g - g % iv);
+        // Away on the other grid, the BSM is generated half a fix interval after the epoch.
+        let hop_ns = if tick.is_none() && c.grid_hop.is_some() && self.away {
+            iv / 2
+        } else {
+            0
+        };
         let mut slip = 0;
         if u_slip < c.epoch_slip_prob {
             let mut acc = 0.0;
@@ -667,7 +811,11 @@ impl BsmTimingDevice {
         } else {
             0
         };
-        let pos_epoch = (i128::from(epoch) + at_instant + i128::from(slip) * i128::from(iv)).max(0);
+        let pos_epoch = (i128::from(epoch)
+            + i128::from(hop_ns)
+            + at_instant
+            + i128::from(slip) * i128::from(iv))
+        .max(0);
         let age_s = (i128::from(t) - pos_epoch) as f64 * 1e-9;
         let mut pos = Vec3::new(
             belief.pos.x - belief.vel.x * age_s,
@@ -676,19 +824,43 @@ impl BsmTimingDevice {
         );
         // J2735 Speed LSB: below it the vehicle is not moving and a repeat is no repeat.
         let moving = belief.ground_speed_mps() >= 0.02;
+        // The reported position's error at the generation instant, between this epoch's and
+        // the next one's (fitted at speed only, so a standing vehicle reports its fix).
+        if let Some((cur, next)) = pn
+            && moving
+        {
+            let inst = tick.map_or(epoch + hop_ns, |g| g);
+            let f = ((inst.saturating_sub(t - t % iv)) as f64 / iv as f64).clamp(0.0, 1.0);
+            pos.x += cur.0 + f * (next.0 - cur.0);
+            pos.y += cur.1 + f * (next.1 - cur.1);
+        }
         let frozen = moving && u_frozen < c.frozen_repeat_prob && self.last_pos.is_some();
         if frozen && let Some(p) = self.last_pos {
             pos = p;
         }
         self.last_pos = Some(pos);
         let sec_mark_at = tick.unwrap_or_else(|| {
-            (i128::from(epoch) + (phase_ms * 1e6).round() as i128).max(0) as SimTime
+            (i128::from(epoch) + i128::from(hop_ns) + (phase_ms * 1e6).round() as i128).max(0)
+                as SimTime
         });
+        // A hop BSM is generated half an interval after the belief, its position carried
+        // there along the believed velocity (above). Its speed is carried there too, with
+        // the belief's own recent acceleration: left at the belief's instant, a hop's secMark
+        // Δt of 50 ms doubles the acceleration that MaxAcceleration reads (|Δv| / Δt), and a
+        // 5 m/s² deceleration fired it (61 honest verdicts on E4U before this fix), where
+        // CV-pilot locked devices show 0.0 per ID-minute (p1-realdata-baseline.md T5).
+        let v_now = belief.ground_speed_mps();
+        let accel = match self.last_speed {
+            Some((t0, v0)) if t > t0 && t - t0 <= 2 * iv => (v_now - v0) / ((t - t0) as f64 * 1e-9),
+            _ => 0.0,
+        };
+        if c.grid_hop.is_some() {
+            self.last_speed = Some((t, v_now));
+        }
+        let v_at = (v_now + accel * hop_ns as f64 * 1e-9).max(0.0);
         let (speed_mps, heading_rad) = match noise {
-            Some((ns, nh)) if moving => (
-                Some((belief.ground_speed_mps() + ns).max(0.0)),
-                Some(belief.heading_rad + nh),
-            ),
+            Some((ns, nh)) if moving => (Some((v_at + ns).max(0.0)), Some(belief.heading_rad + nh)),
+            _ if moving && hop_ns > 0 => (Some(v_at), Some(belief.heading_rad)),
             _ => (None, None),
         };
         Some(BsmReport {
@@ -698,7 +870,7 @@ impl BsmTimingDevice {
             slip,
             frozen,
             send: true,
-            tx_delay_ns: tick.map_or(0, |g| g.saturating_sub(t)),
+            tx_delay_ns: tick.map_or((epoch + hop_ns).saturating_sub(t), |g| g.saturating_sub(t)),
             speed_mps,
             heading_rad,
         })
@@ -769,6 +941,12 @@ pub fn card(cal: &BsmTimingCalibration) -> ModelCard {
          older timestamp."
             .to_string(),
         "phase_scope device (default) draws the secMark phase once per device.".to_string(),
+        "position_noise (v3) is applied to the transmitted position only, while moving; the \
+         node's belief and the GNSS model are untouched."
+            .to_string(),
+        "grid_hop (v3) puts the other grid half a fix interval late; a device that hops early \
+         (Δt 50 then 150 ms) is modelled as a late one (150 then 50 ms)."
+            .to_string(),
     ];
     card.limitations = vec![
         "The phase does not drift with the device oscillator; a slip stands in for the \
@@ -1016,5 +1194,158 @@ classes:
         let mut v1 = cal.clone();
         v1.schema = SCHEMA.to_string();
         assert!(v1.check().is_err(), "a v1 file may not carry output_noise");
+    }
+
+    /// A v3 locked class on the epoch exactly (phase 0, no slips, no jitter).
+    fn locked_v3() -> BsmTimingCalibration {
+        let mut cal = BsmTimingCalibration::provisional()
+            .with_locked_share(1.0)
+            .unwrap();
+        cal.schema = SCHEMA_V3.to_string();
+        let c = &mut cal.classes[0];
+        c.secmark_phase_ms = PhaseDist::Normal { mean: 0.0, sd: 0.0 };
+        c.epoch_slip_prob = 0.0;
+        c.frozen_repeat_prob = 0.0;
+        c.header_jitter_ms = Jitter { sd: 0.0 };
+        cal
+    }
+
+    /// E4-BODY: a locked device that hops to the :50 grid stamps, positions and sends its
+    /// BSM half an interval late, so secMark Δt is 150 then 50 ms and the position stays
+    /// consistent with the stamp; the hop pairs' share follows leave and return.
+    #[test]
+    fn a_grid_hop_moves_the_stamp_the_position_and_the_send_together() {
+        let mut cal = locked_v3();
+        cal.classes[0].grid_hop = Some(GridHop {
+            leave_prob: 0.2,
+            return_prob: 0.5,
+        });
+        cal.check().expect("a valid v3 calibration");
+        let mut r = rng(8);
+        let mut d = BsmTimingDevice::assign(&cal, &mut r);
+        let mut sent = Vec::new();
+        for i in 0..4_000u64 {
+            let b = belief(10_000 + 100 * i, 20.0);
+            let rep = d.report(&cal, &mut r, &b).unwrap();
+            assert!(rep.send);
+            assert_eq!(
+                rep.sec_mark_at,
+                b.time_ns + rep.tx_delay_ns,
+                "sent at its stamp"
+            );
+            let x = 20.0 * rep.sec_mark_at as f64 * 1e-9;
+            assert!(
+                (rep.pos.x - x).abs() < 1e-6,
+                "position at the stamp: {} vs {x}",
+                rep.pos.x
+            );
+            sent.push(rep.sec_mark_at);
+        }
+        let (mut n50, mut n150) = (0usize, 0usize);
+        for w in sent.windows(2) {
+            match w[1] - w[0] {
+                50_000_000 => n50 += 1,
+                100_000_000 => {}
+                150_000_000 => n150 += 1,
+                d => panic!("secMark Δt {d} ns"),
+            }
+        }
+        // P(hop pair) = 2·l·r / (l + r) = 0.286.
+        let share = (n50 + n150) as f64 / (sent.len() - 1) as f64;
+        assert!((0.25..0.32).contains(&share), "{share}");
+        assert!(n50.abs_diff(n150) <= 1, "{n50} vs {n150}");
+        let mut v2 = cal.clone();
+        v2.schema = SCHEMA_V2.to_string();
+        assert!(v2.check().is_err(), "a v2 file may not carry grid_hop");
+    }
+
+    /// A hop BSM carries the speed of its own instant: under a steady 6 m/s² deceleration
+    /// the acceleration implied by consecutive BSMs (|Δv| / secMark Δt, SM-MBR
+    /// MaxAcceleration) stays 6 m/s² across the 50 ms and 150 ms hop pairs, not 12 and 4.
+    #[test]
+    fn a_hop_bsm_carries_the_speed_of_its_own_instant() {
+        let mut cal = locked_v3();
+        cal.classes[0].grid_hop = Some(GridHop {
+            leave_prob: 0.3,
+            return_prob: 0.5,
+        });
+        let (mut hops, mut worst, mut least) = (0, 0.0f64, f64::MAX);
+        // Twelve devices, each braking from 30 to 3.6 m/s over 4.4 s.
+        for n in 0..12u32 {
+            let mut r = rng(10 + n);
+            let mut d = BsmTimingDevice::assign(&cal, &mut r);
+            let mut sent = Vec::new();
+            for i in 0..45u64 {
+                let s = 0.1 * i as f64;
+                let mut b = belief(10_000 + 100 * i, 0.0);
+                b.vel = Vec3::new(30.0 - 6.0 * s, 0.0, 0.0);
+                b.pos = Vec3::new(30.0 * s - 3.0 * s * s, 0.0, 0.0);
+                let rep = d.report(&cal, &mut r, &b).unwrap();
+                sent.push((rep.sec_mark_at, rep.speed_mps.unwrap_or(b.vel.x)));
+            }
+            // The first BSM has no earlier belief to take an acceleration from.
+            for w in sent[1..].windows(2) {
+                let dt = (w[1].0 - w[0].0) as f64 * 1e-9;
+                hops += usize::from((dt - 0.1).abs() > 0.01);
+                let a = (w[1].1 - w[0].1).abs() / dt;
+                worst = worst.max(a);
+                least = least.min(a);
+            }
+        }
+        assert!(hops > 40, "{hops}");
+        assert!(least > 5.5, "implied acceleration {least} m/s²");
+        assert!(worst < 6.5, "implied acceleration {worst} m/s²");
+    }
+
+    /// E4-BODY: position_noise is a white, heavy-tailed increment of the reported position
+    /// (a random walk over the fix epochs): exactly-100 ms residuals have the mixture's rms,
+    /// an rms far above their IQR-based sd, and no lag-1 correlation; speed is untouched.
+    #[test]
+    fn position_noise_is_a_heavy_tailed_random_walk_on_the_reported_position() {
+        let mut cal = locked_v3();
+        cal.classes[0].position_noise = Some(PositionNoise {
+            dist: "normal_mixture".to_string(),
+            tau_s: 1.0e4,
+            p: vec![0.9, 0.1],
+            along_m: vec![0.005, 0.1],
+            cross_m: vec![0.002, 0.05],
+        });
+        cal.check().expect("a valid v3 calibration");
+        let mut r = rng(9);
+        let mut d = BsmTimingDevice::assign(&cal, &mut r);
+        let mut pts = Vec::new();
+        for i in 0..20_000u64 {
+            let rep = d
+                .report(&cal, &mut r, &belief(10_000 + 100 * i, 20.0))
+                .unwrap();
+            assert!(rep.speed_mps.is_none());
+            pts.push((rep.pos.x, rep.pos.y));
+        }
+        let al: Vec<f64> = pts.windows(2).map(|w| w[1].0 - w[0].0 - 2.0).collect();
+        let cr: Vec<f64> = pts.windows(2).map(|w| w[1].1 - w[0].1).collect();
+        let rms = |v: &[f64]| (v.iter().map(|x| x * x).sum::<f64>() / v.len() as f64).sqrt();
+        let iqr_sd = |v: &[f64]| {
+            let mut s = v.to_vec();
+            s.sort_by(f64::total_cmp);
+            (s[s.len() * 3 / 4] - s[s.len() / 4]) / 1.349
+        };
+        // sqrt(0.9·0.005² + 0.1·0.1²) = 0.0320; sqrt(0.9·0.002² + 0.1·0.05²) = 0.0159.
+        assert!((rms(&al) - 0.0320).abs() < 0.003, "{}", rms(&al));
+        assert!((rms(&cr) - 0.0159).abs() < 0.0015, "{}", rms(&cr));
+        assert!(
+            rms(&al) > 3.0 * iqr_sd(&al),
+            "heavy-tailed: {} vs {}",
+            rms(&al),
+            iqr_sd(&al)
+        );
+        let lag1 =
+            al.windows(2).map(|w| w[0] * w[1]).sum::<f64>() / al.len() as f64 / rms(&al).powi(2);
+        assert!(lag1.abs() < 0.05, "white increments: lag-1 {lag1}");
+        let mut v2 = cal.clone();
+        v2.schema = SCHEMA_V2.to_string();
+        assert!(
+            v2.check().is_err(),
+            "a v2 file may not carry position_noise"
+        );
     }
 }

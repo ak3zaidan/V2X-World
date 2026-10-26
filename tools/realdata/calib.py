@@ -6,6 +6,7 @@ from collections import Counter
 
 import bootci
 import devclass
+import mbrchecks as mc
 import pipeline
 
 
@@ -75,10 +76,16 @@ def timing_stats(datasets, params):
                                    "at_risk_fast": 0, "frozen": 0, "slip": 0, "sizes": Counter(), "hdr": Counter(),
                                    "excess": Counter(), "ret": 0, "ret_sizes": Counter(), "drift": [],
                                    "dev": Counter(), "body_al": Counter(), "body_cr": Counter(), "body_n": 0,
-                                   "vdt2": 0.0, "q2": 0.0, "stamp": Counter()})
+                                   "vdt2": 0.0, "q2": 0.0, "stamp": Counter(), "pairs": [], "dv": Counter(),
+                                   "dh": Counter(), "hop": Counter()})
             a["ids"] += 1
             a["phase100"].update(r.phase100)
-            a["wrapped"].update(r.wrapped)
+            # The secMark offsets weigh each ID once too (the stamp jitter of a random device):
+            # by message, Orem's 3 locked IDs, a third of whose pairs are 99 or 101 ms apart,
+            # outweighed Tampa's 41 (one in seven).
+            nw = sum(r.wrapped.values())
+            if nw:
+                a["wrapped"].update({x: m / nw for x, m in r.wrapped.items()})
             a["at_risk"] += r.at_risk
             a["at_risk_fast"] += r.at_risk_fast
             a["frozen"] += r.ent_frozen
@@ -97,6 +104,14 @@ def timing_stats(datasets, params):
             a["vdt2"] += r.body_vdt2
             a["q2"] += r.body_q2
             a["stamp"].update(r.stamp_al)
+            # Each ID's pairs together weigh one: the engine's fleet is devices, each sending
+            # about as many BSMs as the next, so the fit is the distribution of a random
+            # device, not of a random pair (Orem's 3 locked IDs held 28 % of the pairs).
+            nb = len(r.body_pairs)
+            a["pairs"].extend(x + (1.0 / nb,) for x in r.body_pairs)
+            a["dv"].update(r.body_dv)
+            a["dh"].update(r.body_dh)
+            a["hop"].update(r.hop)
     return agg
 
 
@@ -125,6 +140,183 @@ def output_noise(a):
     sp = math.sqrt(max(0.0, sa * sa - q2)) / 0.1
     hd = math.degrees(math.sqrt(max(0.0, sc * sc - q2) / vdt2))
     return sp, hd, n, sa, sc, math.sqrt(q2)
+
+
+def _lsb_sd(c, lsb):
+    """IQR / 1.349 of a histogram counted in LSBs, in the LSB's unit."""
+    q1, q3 = counter_q(c, 0.25), counter_q(c, 0.75)
+    return None if q1 is None else (q3 - q1) * lsb / 1.349
+
+
+def output_noise_v3(a):
+    """The receiver's white speed and heading output noise, bounded by how much the
+    transmitted speed and heading change between consecutive exactly-100 ms BSMs: a white
+    noise of sd s gives a change of sd s·√2, and the true change over 100 ms only adds to it,
+    so s = sd(change)/√2 is an upper bound. The v2 fit read the whole residual body as
+    velocity noise (0.103 m/s, 0.30 deg), which predicts a heading change of sd 0.43 deg
+    between consecutive BSMs; the fit sets' is 0.07 deg (research/synthesis/p1-realdata-baseline.md §4).
+    Returns (speed sd m/s, heading sd deg, pairs, change sds) or None."""
+    n = sum(a.get("dv", Counter()).values())
+    if n < 50:
+        return None
+    sdv = _lsb_sd(a["dv"], mc.SPEED_RES_MPS)
+    sdh = _lsb_sd(a["dh"], mc.HEADING_LSB_DEG)
+    return sdv / math.sqrt(2.0), sdh / math.sqrt(2.0), n, sdv, sdh
+
+
+def stamp_diff_sd_s(mu_ms, sd_ms):
+    """sd of the difference of two generation instants N(mu, sd) ms about their epochs, given
+    that both truncate to the same whole ms (secMark Δt exactly 100 ms), seconds."""
+    num = den = 0.0
+    for k in range(-4, 5):
+        xs = [k + (i + 0.5) / 400.0 for i in range(400)]
+        w = [math.exp(-0.5 * ((x - mu_ms) / sd_ms) ** 2) for x in xs]
+        pk = sum(w)
+        if pk <= 0:
+            continue
+        m = sum(a * b for a, b in zip(w, xs)) / pk
+        var = sum(a * (b - m) ** 2 for a, b in zip(w, xs)) / pk
+        num += pk * pk * 2.0 * var
+        den += pk * pk
+    return math.sqrt(num / den) * 1e-3
+
+
+# The position-noise mixture: components, EM iterations, and the floor of a component sd (m).
+PN_K = 4
+PN_ITERS = 400
+PN_FLOOR_M = 1e-4
+
+
+def position_noise(a, speed_sd, heading_sd_deg, stamp_sd_s, k=PN_K, iters=PN_ITERS):
+    """The receiver's reported-position error increment per fix interval, a zero-mean
+    Gaussian scale mixture (shared component for the along- and cross-track parts), fitted by
+    EM on the exactly-100 ms pairs of one class at v >= 10 m/s after their own kinematics are
+    removed. Each pair's known nuisance is deconvolved: the J2735 position quantisation of
+    both BSMs, the jitter of both generation instants (stamp_sd_s × v along track), and the
+    white speed (× Δt) and heading (× v·Δt) output noise. Consecutive residuals are
+    uncorrelated (lag-1 -0.02 along, +0.05 across on Tampa), so the increments are white:
+    the error is a random walk at 100 ms, not white position noise (lag-1 -0.5).
+    A pair's optional fifth field is its weight (1 / the pairs of its ID, timing_stats: each
+    ID weighs one); without it every pair weighs one.
+    Returns (weights, along sds m, cross sds m, pairs, log-likelihood) or None."""
+    X = a.get("pairs", [])
+    if len(X) < 200:
+        return None
+    hd = math.radians(heading_sd_deg)
+    data = []
+    wt = []
+    for x in X:
+        al, cr, v1, q2 = x[:4]
+        na = q2 + (v1 * stamp_sd_s) ** 2 + (speed_sd * mc.FIX_INTERVAL_S) ** 2
+        nc = q2 + (v1 * mc.FIX_INTERVAL_S * hd) ** 2
+        data.append((al, cr, na, nc))
+        wt.append(x[4] if len(x) > 4 else 1.0)
+    wsum = sum(wt)
+    sa = [0.002 * 3 ** j for j in range(k)]
+    sc = list(sa)
+    pi = [1.0 / k] * k
+    ll = 0.0
+    for _ in range(iters):
+        R = []
+        ll = 0.0
+        for al, cr, na, nc in data:
+            lw = []
+            for j in range(k):
+                va, vc = sa[j] ** 2 + na, sc[j] ** 2 + nc
+                lw.append(math.log(pi[j]) - 0.5 * (al * al / va + cr * cr / vc) - 0.5 * math.log(va * vc)
+                          - math.log(2 * math.pi))
+            m = max(lw)
+            t = sum(math.exp(x - m) for x in lw)
+            ll += m + math.log(t)
+            R.append([math.exp(x - m) / t for x in lw])
+        for j in range(k):
+            w = sum(r[j] * u for r, u in zip(R, wt))
+            pi[j] = max(w / wsum, 1e-12)
+            sa[j] = math.sqrt(max(PN_FLOOR_M ** 2, sum(r[j] * u * (x[0] ** 2 - x[2])
+                                                        for r, u, x in zip(R, wt, data)) / max(w, 1e-300)))
+            sc[j] = math.sqrt(max(PN_FLOOR_M ** 2, sum(r[j] * u * (x[1] ** 2 - x[3])
+                                                        for r, u, x in zip(R, wt, data)) / max(w, 1e-300)))
+    order = sorted(range(k), key=lambda j: sa[j] ** 2 + sc[j] ** 2)
+    return [pi[j] for j in order], [sa[j] for j in order], [sc[j] for j in order], len(data), ll
+
+
+# The position walk's mean-reversion time constants tried (s). The cap is the receiver's
+# carrier-smoothing time constant (Hatch 1982; RTCA DO-229: 100 s): its position error does not
+# wander for longer than the filter remembers.
+PN_TAU_GRID_S = (1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0)
+# A tau whose in-sample KS is within this of the best one's fits as well (the sampling noise of
+# a KS over about 40 IDs); the shortest such tau keeps the walk's own absolute error smallest.
+PN_TAU_KS_TOL = 0.01
+PN_TAU_REPS = 10
+
+
+def _wks(data, sim):
+    """KS distance between a weighted sample [(x, w)] and an unweighted one [x]."""
+    data = sorted(data)
+    sim = sorted(sim)
+    tw = sum(w for _, w in data)
+    d, cw, j = 0.0, 0.0, 0
+    for x, w in data:
+        cw += w
+        while j < len(sim) and sim[j] <= x:
+            j += 1
+        d = max(d, abs(cw / tw - j / len(sim)), abs((cw - w) / tw - j / len(sim)))
+    return d
+
+
+def position_tau(a, speed_sd, heading_sd_deg, stamp_sd_s, pn, grid=PN_TAU_GRID_S, seed=1):
+    """The walk's mean-reversion tau, fitted in sample: the EM above reads an exactly-100 ms
+    residual as the increment w alone, but a walk reverting with rho = exp(-T/tau) adds
+    (rho - 1)·e to every pair, e the walk's own error (sd sigma / sqrt(1 - rho^2)): at tau 1 s
+    and the fitted tail that is about 1 cm per axis on every pair, a body the data do not show.
+    For each tau the model's residual (the walk, plus the nuisance the EM deconvolved) is
+    simulated at each fit pair's own speed and quantisation and compared with the pairs'
+    residuals, each ID weighing one (KS). Returns (tau, [(tau, ks)])."""
+    import random
+    X = a.get("pairs", [])
+    w, sa, sc = pn[0], pn[1], pn[2]
+    hd = math.radians(heading_sd_deg)
+    data = [(math.hypot(x[0], x[1]), x[4] if len(x) > 4 else 1.0) for x in X]
+    cum = [sum(w[:i + 1]) for i in range(len(w))]
+    out = []
+    for tau in grid:
+        rho = math.exp(-mc.FIX_INTERVAL_S / tau)
+        rnd = random.Random(seed)
+        ea = ec = 0.0
+        sim = []
+        for rep in range(PN_TAU_REPS + 1):
+            for x in X:
+                v1, q2 = x[2], x[3]
+                u = rnd.random()
+                j = next((i for i, c in enumerate(cum) if u < c), len(w) - 1)
+                na, nc = rho * ea + rnd.gauss(0.0, sa[j]), rho * ec + rnd.gauss(0.0, sc[j])
+                ra, rc = na - ea, nc - ec
+                ea, ec = na, nc
+                # the first pass is the burn-in: the walk reaches its stationary spread
+                if rep:
+                    sda = math.sqrt(q2 + (v1 * stamp_sd_s) ** 2 + (speed_sd * mc.FIX_INTERVAL_S) ** 2)
+                    sdc = math.sqrt(q2 + (v1 * mc.FIX_INTERVAL_S * hd) ** 2)
+                    sim.append(math.hypot(ra + rnd.gauss(0.0, sda), rc + rnd.gauss(0.0, sdc)))
+        out.append((tau, _wks(data, sim)))
+    best = min(k for _, k in out)
+    return next(t for t, k in out if k <= best + PN_TAU_KS_TOL), out
+
+
+def grid_hop(a):
+    """The locked class's :00/:50 grid process, per BSM: P(leave the home grid) and
+    P(return to it), from consecutive-msgCnt transitions. Returns (leave, return, counts)."""
+    h = a.get("hop", Counter())
+    hh, ha, ah, aa = (h.get(("home", "home"), 0), h.get(("home", "away"), 0), h.get(("away", "home"), 0),
+                      h.get(("away", "away"), 0))
+    if hh + ha == 0 or ah + aa == 0:
+        return None
+    return ha / (hh + ha), ah / (ah + aa), (hh, ha, ah, aa)
+
+
+# The mean-reversion time of the position error increments' random walk is fitted
+# (position_tau): the lag-1 bound (an AR(1) with step coefficient rho gives consecutive
+# residuals a lag-1 correlation of about -(1 - rho) / 2, within 0.05 of 0 on Tampa) only says
+# tau >= 1 s, and 1 s itself put a centimetre body on every pair (1.2.0).
 
 
 def _stamp_note(a):
@@ -245,7 +437,7 @@ def timing_yaml(fit_agg, hdr_agg, prov, version, notes=()):
          "# assumed on the 100 ms grid); locked devices sit on either the :00 or the :50 grid, so the",
          "# locked phase is the distance to the nearest 50 ms epoch.",
          *["# " + n for n in notes],
-         "schema: v2xw.bsm_timing.v2",
+         "schema: v2xw.bsm_timing.v3",
          "provenance:",
          "  sources:"]
     for s in prov["sources"]:
@@ -325,11 +517,46 @@ def timing_yaml(fit_agg, hdr_agg, prov, version, notes=()):
         L.append("    header_jitter_ms: {sd: %s}" % r6(hsd))
         # Fitted on the locked class only: a free device's exactly-100 ms pairs carry its
         # drifting stamp phase as well, so the free class borrows the locked receiver's noise.
-        on = output_noise(fit_agg.get("locked", {}))
+        lk = fit_agg.get("locked", {})
+        src = "the locked class" if c == "locked" else "the locked class (borrowed)"
+        on = output_noise_v3(lk)
+        v2 = output_noise(lk)
         if on:
-            src = "the locked class" if c == "locked" else "the locked class (borrowed)"
-            L.append("    # receiver output noise, from %d exactly-100 ms pairs of %s at v >= 10 m/s:" % (on[2], src))
-            L.append("    # along sd %.4f m, cross sd %.4f m (IQR/1.349), quantisation %.4f m per component" % (
-                on[3], on[4], on[5]))
+            L.append("    # receiver output noise, white, bounded by the change of the transmitted speed and heading")
+            L.append("    # between consecutive exactly-100 ms BSMs of %s at v >= 10 m/s (%d pairs):" % (src, on[2]))
+            L.append("    # change sd %.4f m/s and %.4f deg (IQR/1.349), so noise <= change/sqrt(2). The v2 fit" % (
+                on[3], on[4]))
+            if v2:
+                L.append("    # read the whole residual body (along %.4f m, cross %.4f m) as this noise" % (v2[3], v2[4]))
             L.append("    output_noise: {speed_mps: %s, heading_deg: %s}" % (r6(on[0]), r6(on[1])))
+            mu, sg = _floor_normal(*_point_pmf(lk["wrapped"])[:2])
+            ssd = stamp_diff_sd_s(mu, sg)
+            pn = position_noise(lk, on[0], on[1], ssd)
+            if pn:
+                w, sa, sc, npairs, ll = pn
+                L.append("    # the rest of the body and its tail: the reported position's error increment per fix")
+                L.append("    # interval, a Gaussian scale mixture (EM, %d components, log-lik %.1f) on %d exactly-100 ms" % (
+                    len(w), ll, npairs))
+                L.append("    # pairs of %s at v >= 10 m/s with their own speed and heading change removed" % src)
+                L.append("    # and the quantisation, the stamp jitter (%.3f ms x v) and the output noise above" % (ssd * 1e3))
+                L.append("    # deconvolved. Increments are white (lag-1 ~ 0), so the error is a random walk over the")
+                L.append("    # fix epochs, mean-reverting with tau_s: the shortest tau (of %s s, capped at the receiver's" % (
+                    "/".join("%g" % t for t in PN_TAU_GRID_S)))
+                if "tau" not in lk:
+                    lk["tau"] = position_tau(lk, on[0], on[1], ssd, pn)
+                tau, tks = lk["tau"]
+                L.append("    # 100 s smoothing) whose simulated exactly-100 ms residual matches these pairs, each ID")
+                L.append("    # weighing one, within KS %g of the best; KS by tau: %s" % (
+                    PN_TAU_KS_TOL, ", ".join("%g s %.3f" % (t, k) for t, k in tks)))
+                L.append("    position_noise: {dist: normal_mixture, tau_s: %s, p: [%s], along_m: [%s], cross_m: [%s]}" % (
+                    r6(tau), ", ".join(str(x) for x in sum_to_one(w)), ", ".join(str(r6(x)) for x in sa),
+                    ", ".join(str(r6(x)) for x in sc)))
+        if c == "locked":
+            gh = grid_hop(lk)
+            if gh:
+                hh, ha, ah, aa = gh[2]
+                L.append("    # :00/:50 grid hops: consecutive-msgCnt BSMs (Δt 50/100/150 ms) home->home %d, home->away %d," % (hh, ha))
+                L.append("    # away->home %d, away->away %d; a hop is Δt 50 then 150 ms (or 150 then 50), the position" % (ah, aa))
+                L.append("    # at the new instant. The engine puts the away grid half an interval late")
+                L.append("    grid_hop: {leave_prob: %s, return_prob: %s}" % (r6(gh[0]), r6(gh[1])))
     return "\n".join(L) + "\n"

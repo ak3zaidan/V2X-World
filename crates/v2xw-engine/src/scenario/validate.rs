@@ -1776,6 +1776,14 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the GNSS receiver static-hold threshold",
     },
+    // The receiver's white velocity output noise: 0 to five times the SPS committed sd.
+    Bound {
+        path: "actors.vehicles.gnss.velocity_noise_mps",
+        lo: 0.0,
+        hi: 0.5,
+        exclusive_lo: false,
+        what: "the GNSS receiver velocity output noise",
+    },
     // The per-device BSM timing model (Paper 1 item B): a share.
     Bound {
         path: "actors.vehicles.bsm_timing.locked_share",
@@ -4510,6 +4518,10 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ),
             ("actors.vehicles.gnss.smoothing_tau_s", g.smoothing_tau_s),
             ("actors.vehicles.gnss.static_hold_mps", g.static_hold_mps),
+            (
+                "actors.vehicles.gnss.velocity_noise_mps",
+                g.velocity_noise_mps,
+            ),
         ] {
             if let Some(v) = v {
                 bounded_at(path, path, v, e);

@@ -1123,6 +1123,14 @@ pub struct GnssSettings {
     /// `smoothing_tau_s`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub static_hold_mps: Option<f64>,
+    /// The receiver's velocity output noise, m/s per horizontal axis, drawn afresh at every
+    /// fix. Unset is the GPS SPS committed velocity accuracy (0.2 m/s at 95 %, σ 0.102 m/s),
+    /// which as a white 10 Hz noise makes consecutive BSMs' speeds differ by sd 0.14 m/s,
+    /// where CV-pilot locked devices' differ by 0.045 m/s
+    /// (research/synthesis/p1-realdata-baseline.md §4). 0 leaves the BSM-level speed and
+    /// heading noise to `bsm_timing`'s fitted `output_noise`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub velocity_noise_mps: Option<f64>,
 }
 
 impl GnssSettings {
@@ -1149,6 +1157,9 @@ impl GnssSettings {
         }
         if let Some(v) = self.static_hold_mps {
             p.static_hold_mps = v;
+        }
+        if let Some(v) = self.velocity_noise_mps {
+            p.sigma_velocity_mps = v;
         }
         p
     }
@@ -3461,4 +3472,26 @@ pub(crate) fn is_true(b: &bool) -> bool {
 /// `true`, as a function, for `#[serde(default = …)]`.
 pub(crate) fn truth() -> bool {
     true
+}
+
+#[cfg(test)]
+mod gnss_settings_tests {
+    use super::GnssSettings;
+
+    /// E4-BODY: `gnss.velocity_noise_mps` reaches the receiver model, and unset keeps the
+    /// SPS default (so no scenario that does not set it moves).
+    #[test]
+    fn velocity_noise_reaches_the_receiver_and_unset_keeps_the_default() {
+        let default = v2xw_mobility::gnss::GaussMarkovParams::default().sigma_velocity_mps;
+        assert!((GnssSettings::default().params().sigma_velocity_mps - default).abs() < 1e-12);
+        let quiet = GnssSettings {
+            velocity_noise_mps: Some(0.0),
+            ..GnssSettings::default()
+        };
+        assert_eq!(quiet.params().sigma_velocity_mps, 0.0);
+        assert!(
+            default > 0.1,
+            "the SPS default is 0.2 m/s at 95 %: {default}"
+        );
+    }
 }
