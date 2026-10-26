@@ -159,31 +159,32 @@ fn certificate_sizes_against_camp_table_3() {
         // The components the devices see (the PDU PKI) are the governance's own
         // certificates, one per component (audit-gov §4 item 1): the same bytes as the
         // `governance/*` rows below, asserted after the table. Until then the PDU layer drew
-        // a second set named `*.provider-a` (4 B shorter: 171 ECA, 192 RA, 156 ACA, ...).
-        ("pdu-pki/root.provider-a", 206, 211),
-        ("pdu-pki/ica.provider-a", 179, 195),
-        ("pdu-pki/eca.provider-a", 175, 150),
-        ("pdu-pki/ra.provider-a", 196, 217),
-        ("pdu-pki/aca.provider-a", 160, 216),
-        ("pdu-pki/la1.provider-a", 158, 205),
-        ("pdu-pki/la2.provider-a", 158, 205),
-        ("pdu-pki/ma.provider-a", 194, 205),
-        ("pdu-pki/crlg.provider-a", 176, 190),
-        ("pdu-pki/dcm.provider-a", 156, 219),
-        // The governance hierarchy (WP-B5) names its components `*.sim`. Each encodes like
-        // the published certificate of the same role field for field except the name
+        // a second set of the same names and sizes, signed apart from the chain file.
+        ("pdu-pki/root.provider-a", 202, 211),
+        ("pdu-pki/ica.provider-a", 175, 195),
+        ("pdu-pki/eca.provider-a", 171, 150),
+        ("pdu-pki/ra.provider-a", 192, 217),
+        ("pdu-pki/aca.provider-a", 156, 216),
+        ("pdu-pki/la1.provider-a", 154, 205),
+        ("pdu-pki/la2.provider-a", 154, 205),
+        ("pdu-pki/ma.provider-a", 190, 205),
+        ("pdu-pki/crlg.provider-a", 172, 190),
+        ("pdu-pki/dcm.provider-a", 152, 219),
+        // The governance hierarchy (WP-B5) names its components `<host>.<provider>`, the
+        // name the PDU layer used. Each encodes like the published certificate of the same
+        // role field for field except the name
         // (tools/realworld/sizes.py `same_encoding_but_name_as`).
-        ("governance/root", 206, 211),
-        ("governance/ica", 179, 195),
-        ("governance/eca", 175, 150),
-        ("governance/ra", 196, 217),
-        ("governance/pca", 160, 216),
-        ("governance/la1", 158, 205),
-        ("governance/la2", 158, 205),
-        ("governance/ma", 194, 205),
-        ("governance/crlg", 176, 190),
-        ("governance/pg", 155, 172),
-        ("governance/dcm", 156, 219),
+        ("governance/root", 202, 211),
+        ("governance/ica", 175, 195),
+        ("governance/eca", 171, 150),
+        ("governance/ra", 192, 217),
+        ("governance/pca", 156, 216),
+        ("governance/la1", 154, 205),
+        ("governance/la2", 154, 205),
+        ("governance/ma", 190, 205),
+        ("governance/crlg", 172, 190),
+        ("governance/pg", 151, 172),
+        ("governance/dcm", 152, 219),
     ];
     for &(role, engine, camp) in PINNED {
         assert_eq!(
