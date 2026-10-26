@@ -14,9 +14,9 @@ the figures. SCMS validation lives in `docs/design/scms-real/` and `testing/`, n
 | [live-rsu-2026-10-25.md](live-rsu-2026-10-25.md) | 2026-10-25 | 14 | 0 | 3 | 3 | rows in `live-rsu.yaml`; 54 pending; RSU CRL install fixed `4399f8f8` |
 | [live-chains-2026-10-25.md](live-chains-2026-10-25.md) | 2026-10-25 | 54 | 0 | 3 | 16 | rows in `live-chains.yaml`; 21 not run |
 | [live-studio-2026-10-25.md](live-studio-2026-10-25.md) | 2026-10-25 | 32 | 1 | 7 | 11 | rows in `live-studio.yaml`; compare peak pooling fixed `ce532c6e` |
-| [platform-2026-10-24.md](platform-2026-10-24.md) | 2026-10-24/25 | 24 | 6 | 2 | 9 | rows in `platform-validation.yaml`; CBR window aliasing (CW.cbr-window) open |
-| [radio-2026-10-24.md](radio-2026-10-24.md) | 2026-10-24 | 31 | 1 | 1 | 5 | rows in `radio-validation.yaml`; open = 2 NR selection-window rows FAIL (fix `877d530c` reverted at merge, on `wip/radio-sidelink-nojitter`), 3 fault runs pending |
-| [traffic-2026-10-24.md](traffic-2026-10-24.md) | 2026-10-24/25 | 8 | 2 | 4 | 9 | rows in `traffic-validation.yaml` (1 fixed in part, 1 inconclusive counted open); GreenYield queue-head hold open |
+| [platform-2026-10-24.md](platform-2026-10-24.md) | 2026-10-24/25, upd. 10-26 | 24 | 8 | 3 | 14 | rows in `platform-validation.yaml`; third session fixed CBR window share (`9de6e99e`) and MAP crosswalk lanes (`38230208`); open includes DCC x density interaction red (item 18) |
+| [radio-2026-10-24.md](radio-2026-10-24.md) | 2026-10-24, upd. 10-26 | 31 | 3 | 1 | 2 | rows in `radio-validation.yaml`; §6: PC5 no-jitter fix landed (`454b4372`), sensing per TS 36.213/38.214 (`53b9aed8`), both NR selection-window rows fixed; open = fault runs for RV-PER-NIST, RV-BACKHAUL-CELL |
+| [traffic-2026-10-24.md](traffic-2026-10-24.md) | 2026-10-24/25, upd. 10-26 | 8 | 2 | 4 | 9 | rows in `traffic-validation.yaml` (1 fixed in part, 1 inconclusive counted open); §5 diagnoses the GreenYield hold; its fix `455f0fcd` was reverted at merge (on `wip/traffic-permitted-left`) |
 | [sensitivity-radio.md](sensitivity-radio.md) | 2026-10-12, upd. 10-22 | 24 | - | - | - | re-stated rows 24/24 on `77cffb5b` |
 | [network.md](network.md) | 2026-10-06, upd. 10-23 | 44 | - | - | 1 | 45 checks, each proved able to fail |
 | [radio-fidelity.md](radio-fidelity.md) | 2026-10-07, upd. 10-23 | not counted | | | | channel, receiver and MAC against Veins, OpenCV2X and the literature |
