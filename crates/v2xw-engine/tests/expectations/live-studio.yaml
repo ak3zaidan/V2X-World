@@ -27,44 +27,52 @@ runs:
     note: "A, then cpp10 (certs_per_period 10), cert200 (full_cert_every_ms 200), vprio (verification_policy prioritized), atk20 (attacker fraction 0.2), poll10 (download_poll_interval_s 10)"
   s3-run:
     note: "A, then seed (seed + 1), period5 (time.metric_period_s 5), dem750 (demand 750 veh/h), cw15 (radio.mac.cw_min_vo 15), dcc (radio.dcc.enabled true), step50 (time.mobility_step_ms 50), rate20s50 (step 50 and messages.rate_hz 20)"
+  # Added 2026-10-26, before their sessions ran (continuation; v2xw-server built at -O2 from
+  # 938fb16a plus the compare.rs thin-window fix, copied to the scratchpad):
+  s3b-period:
+    note: "A, then period5 (time.metric_period_s 5) and dcc (radio.dcc.enabled true), on the fixed server: the re-run of LV.period5.pdr and of SV.compare-ui-api [s3-run:dcc]"
+  s4-soak:
+    note: "ui/apps/studio/e2e-engine/soak.spec.ts with VWP_SOAK_SIM_S=600: credential-lifecycle at 900 veh/h with 30 pedestrians, the CAMP backend, attackers, a closure, a demand surge and a weather front, played as fast as the engine goes"
+  s5-life:
+    note: "ui/apps/studio/e2e-engine/lifecycle.spec.ts: edits reach the next run; every transport control (pause, resume, speed, step, stop, restart); run after run with edits and scenario switches; a reload mid-run and a restarted engine"
 
 rows:
 # ------------------------------------------------------------ (1) the page shows the run
 # Every run of every session: each card is the newest window of its headline as the API
 # answers it; the API's series is the recording's samples; the single-metric view's
 # statistics are the recorded series'; the PKI strip is the API's vehicles and providers.
-- {id: SV.cards-api, cases: [s1-radio, s2-scms, s3-run], sides: [A, all], check: cards_api, expect: pass, fault: card,
+- {id: SV.cards-api, cases: [s1-radio, s2-scms, s3-run, s3b-period], sides: [A, all], check: cards_api, expect: pass, fault: card,
    source: "metrics/Card.tsx: the headline number is the newest window (fetchSeries over the last 4 periods at the Hello's metric period); formatNumber in metrics/model.ts",
    verdict: pass, measured: "56 cards in each of 13 runs (s1-radio, s3-run) equal formatNumber of the newest API window"}
-- {id: SV.api-records, cases: [s1-radio, s2-scms, s3-run], sides: [A, all], check: api_records, expect: pass, fault: api,
+- {id: SV.api-records, cases: [s1-radio, s2-scms, s3-run, s3b-period], sides: [A, all], check: api_records, expect: pass, fault: api,
    source: "vwp-v1 6.12 metrics.query: binned at the metric period, a series' value per window is that window's metric.sample; the recording keeps every sample (MI.samples-recorded, 113b156e)",
    verdict: pass, measured: "about 6,300 windows over 56 metrics per run equal the recording (a metric recorded under one breakdown value only, bytes_air[air], cbr[172], reads that value)"}
-- {id: SV.expanded-stats, cases: [s1-radio, s2-scms, s3-run], sides: [A, all], check: expanded, expect: pass, fault: stat,
+- {id: SV.expanded-stats, cases: [s1-radio, s2-scms, s3-run, s3b-period], sides: [A, all], check: expanded, expect: pass, fault: stat,
    source: "metrics/Expanded.tsx rangeStats: min, mean, p50/p95/p99 (Hyndman-Fan type 7), max and the window count of the full series over the whole run",
    verdict: pass, measured: "pdr and pdr[100m]: min, mean, p50/p95/p99, max and n equal the recorded series in every run"}
-- {id: SV.pki-strip, cases: [s1-radio, s2-scms, s3-run], sides: [A, all], check: pki_strip, expect: pass, fault: strip,
+- {id: SV.pki-strip, cases: [s1-radio, s2-scms, s3-run, s3b-period], sides: [A, all], check: pki_strip, expect: pass, fault: strip,
    source: "components/pki/HealthStrip.tsx + lib/pkiTopology.ts healthOf: certificates available = sum of the vehicles' usable certificates (inspect.pki vehicles, ground truth); revoked = vehicles a list names, of the providers' devices",
    verdict: pass, measured: "certificates 460, revoked 0 of 47 in every run of s1 and s3 equal inspect.pki vehicles and inspect.trust providers"}
 # ------------------------------------------------------------ (2) compare-runs
-- {id: SV.compare-ui-api, cases: [s1-radio, s2-scms, s3-run], sides: [variants], check: compare_ui_api, expect: pass, fault: compare_ui,
+- {id: SV.compare-ui-api, cases: [s1-radio, s2-scms, s3-run, s3b-period], sides: [variants], check: compare_ui_api, expect: pass, fault: compare_ui,
    source: "metrics/RunCompare.tsx shows runs.compare's rows (compare.rs) through formatWithUnit",
    verdict: pass, measured: "every row of 10 of 11 comparisons equals runs.compare; s3-run dcc read 0 rows (66 in runs.compare, none meaningful) - the Show-all table had not rendered within the 20 s wait on a machine at load 21; open, not reproduced"}
-- {id: SV.compare-records, cases: [s1-radio, s2-scms, s3-run], sides: [variants], check: compare_records, expect: pass, fault: compare_api,
+- {id: SV.compare-records, cases: [s1-radio, s2-scms, s3-run, s3b-period], sides: [variants], check: compare_records, expect: pass, fault: compare_api,
    source: "compare.rs module doc: a run is pooled as the experiment runner pools it - proportions by their counts, ratios of sums by their sums, distributions weighted by n; a per-window count is summed; a gauge (agg max, e.g. crl_entries 'as last published') is its largest value, not a sum over windows",
-   verdict: fixed, measured: "100 pooled values per comparison equal the records (proportions, ratios of sums, n-weighted means)", test: "v2xw-server compare::tests::a_max_aggregated_count_pools_to_its_peak_and_a_window_count_to_its_sum", note: "by reading compare.rs against this row: Pool summed every Count sample, so crl_entries, crl_bytes and memory_high_water_mark (agg max, levels carried across windows) pooled to a sum over windows; fixed ce532c6e. These runs published no CRL entry, so the live rows could not show the old defect; the unit test is red without the fix (16 against 5). Open, found by LV.period5.pdr: the pool also drops insufficient windows, whose proportion counts RatioEstimate::Insufficient carries precisely so they can be pooled"}
-- {id: SV.same-seed, cases: [s1-radio, s2-scms, s3-run], sides: [variants], check: same_seed, expect: pass, fault: seed,
+   verdict: fixed, measured: "100 pooled values per comparison equal the records (proportions, ratios of sums, n-weighted means)", test: "v2xw-server compare::tests::a_max_aggregated_count_pools_to_its_peak_and_a_window_count_to_its_sum", note: "by reading compare.rs against this row: Pool summed every Count sample, so crl_entries, crl_bytes and memory_high_water_mark (agg max, levels carried across windows) pooled to a sum over windows; fixed ce532c6e. These runs published no CRL entry, so the live rows could not show the old defect; the unit test is red without the fix (16 against 5). Found by LV.period5.pdr: the pool also dropped insufficient windows, whose counts RatioEstimate::Insufficient and DistributionSummary::Insufficient carry precisely so they can be pooled; fixed dfa0e13e (2026-10-26). Re-judged with the checker pooling them, all 11 comparisons of the 2026-10-25 evidence (old server) are red: pdr 0.361336 against 0.361380, headway_distance 50.75 against 55.39, ttc_min 82.3 against 156.6 m; the fixed server's re-run is s3b-period"}
+- {id: SV.same-seed, cases: [s1-radio, s2-scms, s3-run, s3b-period], sides: [variants], check: same_seed, expect: pass, fault: seed,
    source: "compare.rs: same_seed is whether the two scenarios' seeds are equal; the dialog's noise note follows it",
    verdict: pass, measured: "true for 10 same-seed comparisons, false for the seed variant, in the dialog and runs.compare"}
-- {id: SV.settings-named, cases: [s1-radio, s2-scms, s3-run], sides: [variants], check: settings_named, expect: pass, fault: settings,
+- {id: SV.settings-named, cases: [s1-radio, s2-scms, s3-run, s3b-period], sides: [variants], check: settings_named, expect: pass, fault: settings,
    source: "compare.rs settings_diff: every leaf that differs, with both values; the dialog lists them",
    verdict: wrong-expectation, measured: "every edit named in 10 comparisons; the seed change is not in the settings table", note: "compare.rs settings_diff leaves the seed out on purpose and names it in the summary and the noise note ('only the seed changed (828927532781 -> 828927532783), so every difference below is run-to-run noise'); the check also skips an edit the run before already had (rate20s50 after step50)"}
-- {id: SV.edit-landed, cases: [s1-radio, s2-scms, s3-run], sides: [variants], check: edit_landed, expect: pass, fault: edit,
+- {id: SV.edit-landed, cases: [s1-radio, s2-scms, s3-run, s3b-period], sides: [variants], check: edit_landed, expect: pass, fault: edit,
    source: "settings window Run: unapplied edits are applied (scenario.set) before run.start, so the run's scenario holds them",
    verdict: pass, measured: "every typed edit is in the scenario each variant ran (hex seeds compared as numbers)"}
-- {id: SV.only-edits, cases: [s1-radio, s2-scms, s3-run], sides: [variants], check: only_edits, expect: pass, fault: stray,
+- {id: SV.only-edits, cases: [s1-radio, s2-scms, s3-run, s3b-period], sides: [variants], check: only_edits, expect: pass, fault: stray,
    source: "each variant is the base plus its own edits: the previous variant's edits typed back (an emptied field is unset, widgets.tsx), nothing else touched",
    verdict: pass, measured: "each variant differs from A only by its edits; a checkbox typed back to false where A left it unset (radio.dcc.enabled) is the same value, as the settings window cannot unset a checkbox"}
-- {id: SV.deterministic, cases: [s1-radio, s2-scms, s3-run], side: A, check: deterministic, expect: pass, fault: digest,
+- {id: SV.deterministic, cases: [s1-radio, s2-scms, s3-run, s3b-period], side: A, check: deterministic, expect: pass, fault: digest,
    source: "same scenario, same seed: byte-identical output (02-architecture determinism); run A of every session is the base",
    verdict: pass, measured: "run A output digest f935c0ce... in s1-radio and s3-run; its counters equal the CLI run of the same file (23,425 frames, 576,245 attempts, 92,411 decoded)"}
 
@@ -157,7 +165,7 @@ rows:
    verdict: pass, measured: "118 -> 24 sufficient windows"}
 - {id: LV.period5.pdr, case: s3-run, side: period5, check: predict, metric: pdr, expect: same, tolerance: 0.000001, fault: scale,
    source: "the period only regroups the same receptions: pooled successes / trials over the run are the same counts",
-   verdict: open, measured: "0.361336 -> 0.361380 (+0.012 %)", note: "the records hold 69,514 / 192,357 in both runs; runs.compare drops the 2 insufficient 1 s windows (32 trials) and none of the 5 s ones, so the pooled value depends on the window. A server defect (compare.rs Pool::add returns on is_insufficient before pooling RatioEstimate::Insufficient{successes, trials}); fix owed"}
+   verdict: fixed, measured: "0.361336 -> 0.361380 (+0.012 %)", test: "v2xw-server compare::tests::a_thin_window_is_pooled_by_its_counts_so_the_period_does_not_move_a_run; v2xw-experiment reduce::tests::a_thin_proportion_window_is_pooled_so_the_period_does_not_move_a_run", note: "the records hold 69,514 / 192,357 in both runs; runs.compare drops the 2 insufficient 1 s windows (32 trials) and none of the 5 s ones, so the pooled value depends on the window. A server defect (compare.rs Pool::add returns on is_insufficient before pooling RatioEstimate::Insufficient{successes, trials}); the checker shared it. 2026-10-26: fixed dfa0e13e in compare.rs (a thin proportion's counts, a thin distribution's sum and n into the mean) and in the experiment reducer (the same drop); both tests are red with their arm disabled (pdr and the reducer value off at 1 s), restored. Re-judged with the checker pooling thin windows, this row reads 0.36138 -> 0.36138 on the 2026-10-25 records; the re-run on the fixed server is LV.period5b.*"}
 - {id: LV.period5.latency, case: s3-run, side: period5, check: predict, metric: e2e_latency, expect: same, tolerance: 0.002, fault: scale,
    source: "an n-weighted mean of window means is the run mean whatever the windows (to the quantum)",
    verdict: pass, measured: "12.2673 -> 12.2670 ms"}
@@ -196,3 +204,24 @@ rows:
    source: "attempts follow frames (run-cost.yaml)",
    verdict: pass, measured: "575,907 -> 1,152,220 (x2.00)"}
 
+
+# ------------------------------------------------------------ (4) added 2026-10-26, before their sessions ran
+# s3b-period: the compare-runs pool fixed (thin windows pooled by their counts), re-run.
+- {id: LV.period5b.pdr, case: s3b-period, side: period5, check: predict, metric: pdr, expect: same, tolerance: 0.000001, fault: scale,
+   source: "as LV.period5.pdr: the period only regroups the same receptions, so the run's successes / trials (every window's, a thin one's included: stats.rs RatioEstimate::Insufficient carries them to be pooled) are the same counts"}
+- {id: LV.period5b.compare-pdr, case: s3b-period, side: period5, check: predict, metric: compare.pdr, expect: same, tolerance: 0.000001, fault: scale,
+   source: "runs.compare's pooled pdr of A and of period5 (compare.rs Pool pools a thin window's counts): equal to 1e-6; red on the old server, which gave 0.361336 against 0.361380"}
+- {id: LV.period5b.compare-latency, case: s3b-period, side: period5, check: predict, metric: compare.e2e_latency, expect: same, tolerance: 0.0001, fault: scale,
+   source: "the run's mean latency is every sample's sum over their count, a thin window's sum and n included; the windows' quantised means (1e-3 ms) leave at most 5e-4 ms per window, about 4e-5 of 12 ms"}
+- {id: LV.dcc2.frames, case: s3b-period, side: dcc, check: predict, metric: stats.tx.bsm, expect: same, tolerance: 0.05, fault: scale,
+   source: "as LV.dcc.frames: the fleet's CBR (about 0.009) is far below the J2945/1 and TS 102 687 thresholds, so the BSM rate stays 10 Hz"}
+# s4-soak: ten simulated minutes of everything through the page.
+- {id: SV.soak.spec, case: s4-soak, side: A, check: spec_pass, expect: pass, fault: log,
+   source: "soak.spec.ts asserts: the run reaches its end, the engine never enters error, the page and console log no error, the seek history keeps to its budget, a vehicle is followed, footprint and heap within 1.3 x + 50 / 20 MB of a quarter-way sample"}
+- {id: LV.soak.rest, case: s4-soak, side: A, check: soak_mem, series: rest, ratio_max: 1.15, add_mb: 20, expect: pass, fault: grow,
+   source: "a stationary Poisson fleet (900 veh/h, about constant vehicles alive after the first trip time) holds O(vehicles alive) state; the SCMS stores grow with issued certificates and reports, a few kB per vehicle-hour: the engine footprint beside the seek history moves less than 15 % + 20 MB from 150 s to 600 s"}
+- {id: LV.soak.heap, case: s4-soak, side: A, check: soak_mem, series: heap, ratio_max: 1.3, add_mb: 20, expect: pass, fault: grow,
+   source: "the page keeps a bounded window of poses, messages and metrics (the spec's bound): the tab heap is flat from a quarter of the way in"}
+# s5-life: the run lifecycle through the page.
+- {id: SV.lifecycle.spec, case: s5-life, side: A, check: spec_pass, expect: pass, tests: 4, fault: log,
+   source: "lifecycle.spec.ts's four tests: an edited setting (duration, seed, arrival rate, radio, message family) reaches the next run; pause, resume, speed, step, stop and restart do what they say and a stopped run leaves no kernel behind; run after run with edits and scenario switches; a reload mid-run reattaches and a restarted engine is reconnected to"}

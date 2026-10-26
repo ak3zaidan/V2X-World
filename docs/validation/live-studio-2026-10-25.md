@@ -6,7 +6,7 @@ types the edits into the settings window, runs, and reads every metric card, the
 view, the PKI workspace's health strip and "compare with the previous run". The server's API
 answers sit beside them in the evidence, and each run's recording is copied aside.
 
-- Rows: `crates/v2xw-engine/tests/expectations/live-studio.yaml` (51 rows, written before
+- Rows: `crates/v2xw-engine/tests/expectations/live-studio.yaml` (59 rows: 51 from 2026-10-25 and 8 added 2026-10-26, each written before
   their sessions; 5 rows added before `s3-run` after `s1-radio` showed 20 Hz is refused).
 - Collector: `ui/apps/studio/e2e-engine/live-studio.spec.ts`.
 - Checker: `tools/audit/studio_live.py`. It re-derives the Studio's number format, the run
@@ -33,7 +33,7 @@ answers sit beside them in the evidence, and each run's recording is copied asid
 | Single-metric view stats = records (`SV.expanded-stats`) | pdr, pdr[100m]: min/mean/p50/p95/p99/max/n | pass |
 | PKI strip = `inspect.pki` / `inspect.trust` (`SV.pki-strip`) | 460 certificates, 0 of 47 revoked | pass |
 | Compare dialog = `runs.compare` (`SV.compare-ui-api`) | 10 of 11 comparisons. dcc read 0 rows; runs.compare has 66, none meaningful | open (load timing, not reproduced) |
-| `runs.compare` pooled value = records (`SV.compare-records`) | 100 values per comparison | **fixed** (agg-max counts), one open (insufficient windows) |
+| `runs.compare` pooled value = records (`SV.compare-records`) | 100 values per comparison | **fixed** (agg-max counts `ce532c6e`; thin windows `dfa0e13e`, 2026-10-26) |
 | Same-seed flag (`SV.same-seed`) | true x10, false for the seed variant | pass |
 | Edits named in the dialog (`SV.settings-named`) | every edit. The seed is in the summary, not the table, by design | wrong expectation |
 | Edit reached the run (`SV.edit-landed`), only the edits differ (`SV.only-edits`) | every variant | pass |
@@ -51,7 +51,7 @@ answers sit beside them in the evidence, and each run's recording is copied asid
 | 20 Hz at 50 ms (against 50 ms) | frames, attempts x1.85–2.1, CBR x1.5–2.2 | x2.000, x2.00, x2.01 | pass |
 | Buildings off | PDR up >= 5 %, decoded up | 0.361 -> 0.994; decoded 92,411 -> 571,248; wall x2, footprint 219 -> 318 MB | pass |
 | Seed + 2 | PDR within 5 % | -2.5 % (63 vehicles against 46) | pass |
-| Metric period 1 -> 5 s | windows /5, pooled PDR identical, latency identical | 118 -> 24 windows; latency equal; PDR +0.012 % | **open, server defect**: the pool drops insufficient windows |
+| Metric period 1 -> 5 s | windows /5, pooled PDR identical, latency identical | 118 -> 24 windows; latency equal; PDR +0.012 % | **fixed** (`dfa0e13e`): the pool dropped insufficient windows; re-run `LV.period5b.*` pending |
 | Demand 1,500 -> 750 veh/h | vehicles x0.3–0.8, attempts x0.1–0.55, wall down | 46 -> 18, x0.21, 114 -> 47 s | pass |
 | CWmin(VO) 3 -> 15 | access delay up, PDR the same | +34 % (only busy-medium frames back off), PDR equal | pass |
 | DCC on | BSMs the same (CBR 0.009) | equal | pass |
@@ -68,17 +68,55 @@ answers sit beside them in the evidence, and each run's recording is copied asid
    which is red with the arm disabled (16 against 5). No recorded output or golden moves.
    These runs published no CRL entry, so the live rows could not show the old behaviour.
 
+2. **Compare-runs and the experiment reducer dropped thin windows** (`dfa0e13e`, 2026-10-26;
+   `crates/v2xw-server/src/compare.rs`, `crates/v2xw-experiment/src/reduce.rs`). Found by
+   `LV.period5.pdr`: both runs record 69,514 / 192,357, but `Pool::add` returned on
+   `is_insufficient()` before pooling, so the 1 s run lost its two thin windows (32 trials)
+   and its PDR moved +0.012 % with the period. `RatioEstimate::Insufficient` carries
+   successes and trials, and `DistributionSummary::Insufficient` a sum and n, so that thin
+   windows can be pooled (`stats.rs`). The pool now adds a thin proportion's counts, and a
+   thin distribution's sum and n to the mean (not the percentiles, which stay the typical
+   summarised window's). The experiment reducer had the same drop, with a stale doc saying
+   the successes were not carried. It now pools a thin proportion's counts, which matters
+   most for per-distance-bin PDR. The checker shared the defect and was fixed with it. Re-judged
+   with the corrected checker, all 11 comparisons of the 2026-10-25 evidence (old server)
+   are red. Thin-window means moved most: `ttc_min` 82.3 against 156.6, `headway_distance`
+   50.75 against 55.39. Tests:
+   `compare::tests::a_thin_window_is_pooled_by_its_counts_so_the_period_does_not_move_a_run`,
+   `reduce::tests::a_thin_proportion_window_is_pooled_so_the_period_does_not_move_a_run`, both red with their arm disabled (then restored); the experiment lib suite passes (48).
+   These are readers of the records, so no recorded output, digest or golden moves.
+3. **`s2-scms` failed in `open()`, not at its base run** (2026-10-26 re-reading of its log).
+   The settings window's close click missed, and the window stayed open for the 30 s wait.
+   `closeSettings` (`e2e-engine/support.ts`) now presses Esc when the click misses
+   (`276d2dcf`).
+
+## Continuation, 2026-10-26
+
+Rows added before their sessions (8, in `live-studio.yaml` section 4):
+- `s3b-period` (A, period5, dcc) on the fixed server: `LV.period5b.pdr`, `LV.period5b.compare-pdr`
+  (runs.compare's own value, red on the old server), `LV.period5b.compare-latency` and
+  `LV.dcc2.frames`. The SV rows also cover this session.
+- `s4-soak` (`soak.spec.ts`, 600 simulated s): `SV.soak.spec`, `LV.soak.rest`, `LV.soak.heap`.
+- `s5-life` (`lifecycle.spec.ts`): `SV.lifecycle.spec`.
+
+The checker gained `spec_pass`, `soak_mem`, a `compare.<metric>` source for prediction
+rows, and the faults `log` and `grow`. Selftest on the 2026-10-25 evidence: 146 of 147
+pairs go red. The new checks went red under their faults on a synthetic log (4 of 4).
+
+Not run in this window: `s2-scms`, `s3b-period`, `s4-soak` and `s5-life`. The machine-wide
+build lock was held by full `cargo test -p v2xw-engine` runs for most of the three hours,
+so the fixed binary and the Studio sessions (pnpm/Playwright go through the same lock) did
+not get a turn. The scripts are ready in the scratchpad (`studiolive/pw.sh <session>`,
+`mkspec.py`, `chk.sh`).
+
 ## Open
 
-- **Insufficient windows dropped from the run pool** (`LV.period5.pdr`). Both runs record
-  69,514 / 192,357. `runs.compare` returns from `Pool::add` on `is_insufficient()` before
-  it pools `RatioEstimate::Insufficient { successes: Some(..), trials }`. That variant
-  carries these counts "so that windows too thin to estimate alone can still be pooled"
-  (`stats.rs`). The result is that a run's value depends on the metric period. The bias is
-  small here and grows with sparse fleets. Fix: pool the insufficient proportion's counts.
-  It needs a test and a build, both owed.
-- tx power above the region cap is silently clamped. The settings window and the run
-  status give no warning.
+- **Default OBU power is itself above the cap.** tx power above the region cap is clamped
+  silently, and the settings window and run status give no warning. The base's 23 dBm
+  conducted is also clamped: mean conducted is 16.99 dBm, because the US OBU EIRP limit
+  minus the antenna's net gain is about 17 dBm conducted. A loader warning would therefore
+  fire on every default US scenario. Whether the default should move to the legal
+  conducted power, or the warning should land, is an owner decision.
 - `s2-scms` (certs per period, full-certificate period, verification policy, attacker
   fraction, download poll) and the lifecycle checks (pause, resume, speed, reset, scenario
   switch, long-run memory soak) were not reached in the time budget. The collector supports

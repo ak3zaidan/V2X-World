@@ -22,8 +22,11 @@
 //! Two kinds of sample never reach the table, and both are counted so their absence is
 //! visible rather than silent:
 //!
-//! * **an insufficient window.** `RatioEstimate::Insufficient` carries its trial count but
-//!   not its successes, so there is nothing to pool; the trials are reported as dropped.
+//! * **an insufficient window with nothing to pool.** A proportion too thin to estimate in
+//!   its own window carries its successes and trials (`RatioEstimate::Insufficient`), and
+//!   those counts are pooled like any other window's, so a run's value does not depend on its
+//!   metric period or on how thin its distance bins are. A refusal that carries no counts (a
+//!   ratio of sums, a scalar, a distribution) is reported as a dropped window.
 //! * **a diagnostic sample.** `events_per_second`, `wall_clock_per_sim_second` and
 //!   `memory_high_water_mark` are machine-dependent by construction — `v2xw-metrics` keeps
 //!   them out of every digest for exactly this reason — and a results table that averaged
@@ -283,6 +286,15 @@ enum Window {
 /// The shape a sample pools as.
 fn window_of(value: &SampleValue) -> Window {
     match value {
+        // Too thin to estimate alone, but the counts are exact and pool like any others.
+        SampleValue::Ratio(RatioEstimate::Insufficient {
+            trials,
+            successes: Some(successes),
+            ..
+        }) if *trials > 0 => Window::Proportion {
+            successes: *successes,
+            trials: *trials,
+        },
         SampleValue::Ratio(RatioEstimate::Proportion {
             successes, trials, ..
         }) => Window::Proportion {
@@ -477,4 +489,71 @@ impl Accumulator {
 pub(crate) fn ordered_sum(values: &mut Vec<f64>) -> f64 {
     v2xw_core::math::sort_total_order(values);
     v2xw_core::math::sum_ordered(values.iter().copied())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use v2xw_core::ctx::Visibility;
+    use v2xw_metrics::stats::{ConfidenceLevel, Proportion};
+    use v2xw_metrics::{Agg, Dim, Dims, MetricDef, Quantum};
+
+    /// The same receptions binned at a 1 s and a 5 s metric period reduce to the same run
+    /// proportion: a window below `min_trials` is pooled by the counts it carries. Live Studio
+    /// track (docs/validation/live-studio-2026-10-25.md, LV.period5.pdr).
+    #[test]
+    fn a_thin_proportion_window_is_pooled_so_the_period_does_not_move_a_run() {
+        let pdr = MetricDef::new(
+            "pdr",
+            "ratio",
+            Agg::Ratio {
+                numerator: "rx_ok".into(),
+                denominator: "rx_attempts".into(),
+            },
+            Visibility::Public,
+            Quantum::PROBABILITY,
+            "delivery",
+        )
+        .with_dims([Dim::T]);
+        let windows: [(u64, u64); 10] = [
+            (3, 3),
+            (10, 40),
+            (2, 2),
+            (20, 50),
+            (15, 30),
+            (1, 1),
+            (9, 45),
+            (4, 4),
+            (7, 35),
+            (5, 25),
+        ];
+        let reduced = |period: usize| {
+            let samples: Vec<MetricSample> = windows
+                .chunks(period)
+                .enumerate()
+                .map(|(k, group)| {
+                    let (s, n) = group.iter().fold((0, 0), |(s, n), (a, b)| (s + a, n + b));
+                    let t = ((k + 1) * period) as u64 * 1_000_000_000;
+                    let ratio = Proportion::from_counts(s, n).estimate(10, ConfidenceLevel::P95);
+                    MetricSample::new(&pdr, t, Dims::new(), SampleValue::Ratio(ratio))
+                })
+                .collect();
+            let run = reduce_run(&samples).unwrap();
+            let m = run.values().next().unwrap().clone();
+            (m.value, m.windows, m.dropped_windows)
+        };
+        for period in [1, 5] {
+            let (value, windows_pooled, dropped) = reduced(period);
+            assert_eq!(
+                value,
+                RunValue::Proportion {
+                    successes: 76,
+                    trials: 235
+                },
+                "period {period} s"
+            );
+            assert_eq!(windows_pooled as usize, 10 / period, "period {period} s");
+            assert_eq!(dropped, 0, "period {period} s");
+        }
+    }
 }
