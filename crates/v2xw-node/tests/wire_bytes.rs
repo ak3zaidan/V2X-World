@@ -697,6 +697,7 @@ fn a_receiver_revokes_on_the_certificates_own_linkage_data() {
             // Deliberately the opposite of the truth: the node must not read it when it
             // has the bytes.
             signature_valid: false,
+            signer_validity: None,
             spdu: Some(signed.spdu.clone()),
             signer_certificate: None,
             bsm: Default::default(),
@@ -817,6 +818,7 @@ fn a_receiver_powering_on_with_an_expired_pool_judges_by_its_clock() {
             claimed_generation_time: 0,
             full_certificate: true,
             signature_valid: true,
+            signer_validity: None,
             spdu: Some(signed.spdu.clone()),
             signer_certificate: None,
             bsm: Default::default(),

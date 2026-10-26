@@ -218,6 +218,85 @@ fn the_speed_family_edits_the_speed_and_nothing_else() {
     }
 }
 
+/// `attack_intensity` multiplies the speed lie of RandomSpeed and StopAndGo, as it does
+/// every other magnitude (k = intensity × scale). Before the fix both read only the
+/// per-type scale, so intensity 3 still drew at most 40 m/s (live-atk 2026-10-25 F5).
+///
+/// Fault injected (and reverted): `k` back to the per-type scale in the two branches of
+/// `attack_claim` makes the intensity-3 assertions fail.
+#[test]
+fn the_intensity_dial_scales_the_speed_lies_too() {
+    use v2xw_core::time::secs_to_ns;
+    use v2xw_threat::attack::{Attacker, AttackerView};
+    use v2xw_threat::attack_legacy::LegacyAttacker;
+    use v2xw_threat::capability::{AttackSchedule, Capabilities};
+    use v2xw_threat::ctx::CollectingCtx;
+    use v2xw_threat::obs::SelfBelief;
+    let speeds = |kind: AttackKind, intensity: f64| -> Vec<f64> {
+        let mut p = LegacyAttackerParams::new(kind);
+        p.intensity = intensity;
+        let mut a = LegacyAttacker::new(
+            common::TX,
+            p,
+            Capabilities::insider(20),
+            AttackSchedule {
+                from: 0,
+                to: u64::MAX,
+                ..AttackSchedule::default()
+            },
+            common::ghost_signers(1),
+        );
+        let mut ctx = CollectingCtx::new(7);
+        (0..400u64)
+            .map(|i| {
+                let t = secs_to_ns(i as f64 * 0.1);
+                ctx.set_now(t);
+                let honest = HonestClaim {
+                    x_m: SPEED_MPS * i as f64 * 0.1,
+                    y_m: 0.0,
+                    speed_mps: SPEED_MPS,
+                    heading_rad: 0.0,
+                };
+                let view = AttackerView {
+                    own_rx: &[],
+                    own_credentials: &[],
+                    crl_revocations_seen: None,
+                    own_belief: SelfBelief {
+                        node: common::TX,
+                        believed_time: t,
+                        x_m: honest.x_m,
+                        y_m: 0.0,
+                        radio_range_m: common::RX_RANGE_M,
+                    },
+                    honest,
+                    believed_time: t,
+                };
+                let mut em = Emission::honest(common::TX_SIGNER, honest, t, 0, u64::MAX);
+                a.act(&mut ctx, &view, &mut em);
+                em.speed_mps
+            })
+            .collect()
+    };
+    let max = |v: &[f64]| v.iter().copied().fold(0.0, f64::max);
+    let r1 = speeds(AttackKind::RandomSpeed, 1.0);
+    let r3 = speeds(AttackKind::RandomSpeed, 3.0);
+    assert!(max(&r1) <= 40.0, "intensity 1 is the historic U[0, 40]");
+    // Same draws: the intensity-3 lie is three times the intensity-1 lie.
+    for (a, b) in r1.iter().zip(&r3) {
+        assert!(
+            (b - (SPEED_MPS + (a - SPEED_MPS) * 3.0).max(0.0)).abs() < 1e-9,
+            "{a} at intensity 1 became {b} at intensity 3"
+        );
+    }
+    assert!(max(&r3) > 90.0, "intensity 3 never claimed more than 90 m/s");
+    let s3 = speeds(AttackKind::StopAndGo, 3.0);
+    assert!(
+        (max(&s3) - (SPEED_MPS + (35.0 - SPEED_MPS) * 3.0)).abs() < 1e-9,
+        "StopAndGo's go phase at intensity 3 claimed {}",
+        max(&s3)
+    );
+}
+
 #[test]
 fn the_heading_family_edits_the_heading_and_nothing_else() {
     let rev = run(&Scenario::attacking(AttackKind::ReversedHeading));

@@ -396,6 +396,7 @@ fn report_frame(valid: bool) -> RxFrame {
         claimed_generation_time: 0,
         full_certificate: true,
         signature_valid: valid,
+        signer_validity: None,
         spdu: None,
         signer_certificate: None,
         bsm: Default::default(),

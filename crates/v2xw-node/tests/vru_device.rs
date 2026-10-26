@@ -426,6 +426,7 @@ fn rx_frame(j: u32) -> RxFrame {
         claimed_generation_time: 0,
         full_certificate: true,
         signature_valid: true,
+        signer_validity: None,
         spdu: None,
         signer_certificate: None,
         bsm: Default::default(),
