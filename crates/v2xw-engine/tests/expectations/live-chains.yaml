@@ -586,7 +586,7 @@ rows:
   min_change: 0.2
   source: 'an outage ending at 130 s instead of 200 s leaves 70 s more enforcement: dose-response'
   verdict: open
-  note: "not run: its premise (LC.CRL.enforcement-lost) did not hold"
+  note: "2026-10-26: run on the 938fb16a release (scms-crlg-short; scms-crlg-rel as its same-binary base): identical to scms-crlg, 22,318 -> 22,318: the home CRLG holds no in-window revocation, so the premise still fails. Superseded by LC.CRL.b-dose on provider-b's CRLG | 2026-10-25: not run: its premise (LC.CRL.enforcement-lost) did not hold"
 - id: LC.CRL.store-fetches
   base: S
   variant: scms-crlstore
@@ -632,8 +632,8 @@ rows:
   expect: ratio
   band: [3.0, 15.0]
   source: 'a 12 m outlier inside 100 ms implies 120 m/s and trips the position-jump check at every receiver that verifies the BSM (VeReMi/F2MD legacy-12): verdicts scale with outlier events, x10 (minus those hidden behind report rate limits)'
-  verdict: open
-  note: "7 -> 7 position-jump verdicts with ~1,760 single-fix 12 m outliers (0.1/s x 98 vehicles x 180 s) instead of ~176; at 0.5/s (~8,800) 7 -> 10. Yet removing outliers AND bursts (g0) removes every position jump and 27 of 34 honest reports: the degraded bursts, not the outliers, drive honest reports. Either legacy-12 tolerates a one-fix 12 m jump (its checks gate on stated confidence and consecutive pairs) or outliers do not reach the judged BSMs; telling them apart needs node.tx positions against gt (owed, a recorded run)"
+  verdict: wrong-expectation
+  note: "2026-10-26: legacy-12's position-jump score is disp / (avg_v dt + 3 tol + 5 m) with tol >= 2.5 m (v2xw-threat detect.rs `motion`), so a 12 m jump scores at most (v dt + 12) / (v dt + 12.5) < 1 at any speed, and a detector fires only after min_consecutive = 2 flagged messages; a single-fix outlier gives neither. Confirmed by a dose in magnitude: 30 m outliers at the same rate take position jumps 7 -> 49 and honest reports 34 -> 145 (LC.GN.m30-*). Correction: LC.GN.jumps-g10-bounded | 2026-10-25: 7 -> 7 position-jump verdicts with ~1,760 single-fix 12 m outliers (0.1/s x 98 vehicles x 180 s) instead of ~176; at 0.5/s (~8,800) 7 -> 10. Yet removing outliers AND bursts (g0) removes every position jump and 27 of 34 honest reports: the degraded bursts, not the outliers, drive honest reports. Either legacy-12 tolerates a one-fix 12 m jump (its checks gate on stated confidence and consecutive pairs) or outliers do not reach the judged BSMs; telling them apart needs node.tx positions against gt (owed, a recorded run)"
 - id: LC.GN.jumps-g0
   base: S
   variant: scms-g0
@@ -652,8 +652,8 @@ rows:
   expect: up
   min_change: 1.0
   source: 'every honest verdict is a misbehaviour report; x10 outliers -> several times the honest reports'
-  verdict: open
-  note: "34 -> 34; see LC.GN.jumps-g10"
+  verdict: wrong-expectation
+  note: "2026-10-26: a 12 m single-fix outlier is below legacy-12's position-jump floor and never two in a row (LC.GN.jumps-g10); at 30 m honest reports rise 34 -> 145 (LC.GN.m30-honest-reports) | 2026-10-25: 34 -> 34; see LC.GN.jumps-g10"
 - id: LC.GN.honest-reports-g0
   base: S
   variant: scms-g0
@@ -668,8 +668,8 @@ rows:
   measure: p2.honest_reported
   expect: up
   source: more honest vehicles glitch at least once while heard
-  verdict: open
-  note: "17 -> 17; see LC.GN.jumps-g10"
+  verdict: wrong-expectation
+  note: "2026-10-26: as LC.GN.honest-reports-g10; 30 m outliers take honest reported devices 17 -> 46 | 2026-10-25: 17 -> 17; see LC.GN.jumps-g10"
 - id: LC.GN.ma-load-g10
   base: S
   variant: scms-g10
@@ -678,8 +678,8 @@ rows:
   expect: up
   min_change: 0.1
   source: 'the honest reports join the attackers'' at the MA after the RA shuffle: MA load rises'
-  verdict: open
-  note: "393 -> 393; see LC.GN.jumps-g10"
+  verdict: wrong-expectation
+  note: "2026-10-26: as LC.GN.honest-reports-g10; 30 m outliers take reports at the MA 393 -> 432 | 2026-10-25: 393 -> 393; see LC.GN.jumps-g10"
 - id: LC.GN.fpr-g10
   base: S
   variant: scms-g10
@@ -687,8 +687,8 @@ rows:
   measure: m.det_fpr.report
   expect: up
   source: the detector cannot tell a GNSS outlier from a lie; its false-positive rate rises
-  verdict: open
-  note: "identical to 6 digits; see LC.GN.jumps-g10"
+  verdict: wrong-expectation
+  note: "2026-10-26: as LC.GN.honest-reports-g10: no added honest report, so no added false positive | 2026-10-25: identical to 6 digits; see LC.GN.jumps-g10"
 - id: LC.GN.precision-g10
   base: S
   variant: scms-g10
@@ -696,8 +696,8 @@ rows:
   measure: m.det_precision.report
   expect: down
   source: more honest reports among the same attacker reports
-  verdict: open
-  note: "identical; see LC.GN.jumps-g10"
+  verdict: wrong-expectation
+  note: "2026-10-26: as LC.GN.fpr-g10 | 2026-10-25: identical; see LC.GN.jumps-g10"
 - id: LC.GN.dose-g50
   base: scms-g10
   variant: scms-g50
@@ -706,8 +706,8 @@ rows:
   expect: up
   min_change: 0.3
   source: 'x5 outlier rate again -> more honest reports, sublinear as per-sender report limits bind'
-  verdict: open
-  note: "34 -> 40 (+18 %, under the 30 % predicted): the direction holds, the size does not; see LC.GN.jumps-g10"
+  verdict: wrong-expectation
+  note: "2026-10-26: at 0.5/s two outliers on consecutive messages of one sender (or noise tails over the 12.5 m floor) are rare but not zero: +6 honest reports; the dose that moves reports is the magnitude, not the rate (LC.GN.m30-*) | 2026-10-25: 34 -> 40 (+18 %, under the 30 % predicted): the direction holds, the size does not; see LC.GN.jumps-g10"
 - id: LC.GN.g50-honest-revoked
   base: S
   variant: scms-g50
@@ -716,8 +716,8 @@ rows:
   expect: ge
   value: 1
   source: 'corroborated MA: an event counts with 2 independent reporters, revocation at 3 events inside a minute from >= 3 reporters; 0.5 outliers/s is 30 glitches a minute per vehicle, each heard by tens of verifiers: an honest vehicle crosses that rule (the reason deployed OBUs smooth GNSS before the BSM)'
-  verdict: open
-  note: "0 honest revoked at 0.5 outliers/s: outliers barely produce reports (40 honest reports in 180 s), so the corroborated MA's 3-events-a-minute rule is never met; the prediction assumed every outlier is reported"
+  verdict: wrong-expectation
+  note: "2026-10-26: as LC.GN.dose-g50; even the 30 m run revokes no honest vehicle (corroborated MA) | 2026-10-25: 0 honest revoked at 0.5 outliers/s: outliers barely produce reports (40 honest reports in 180 s), so the corroborated MA's 3-events-a-minute rule is never met; the prediction assumed every outlier is reported"
 - id: LC.GN.attackers-unaffected-g0
   base: S
   variant: scms-g0
@@ -733,8 +733,8 @@ rows:
   measure: cost.events
   expect: up
   source: every extra report is an upload, a shuffle entry and an MA event
-  verdict: open
-  note: "2,230,023 -> 2,229,836 events (-0.01 %): six more reports cost nothing measurable"
+  verdict: wrong-expectation
+  note: "2026-10-26: the outliers add no reports to carry, so the event count does not grow (2,230,023 -> 2,229,836: the draws only) | 2026-10-25: 2,230,023 -> 2,229,836 events (-0.01 %): six more reports cost nothing measurable"
 # ---------------------------------------------------------------- chain 6: signal timing -> queues -> density -> J2945/1 -> channel load
 - id: LC.SG.speed-c120
   base: sig-base
@@ -771,6 +771,8 @@ rows:
   measure: lc.bsms_per_veh_s
   expect: down
   source: 'longer reds pack more vehicles into stop-line queues (Q = lambda r): the count within 100 m crosses J2945/1 B = 25 more often, so its density rule lengthens the ITT'
+  verdict: wrong-expectation
+  note: "2026-10-26 (938fb16a release): 5.06 -> 5.29 BSM per created node per second. The measure divides frames by nodes created x duration, and the 120 s cycle keeps vehicles on the map longer: 6 of 75 trips complete in 180 s against 12 at 60 s (21 at 40 s), so more vehicle-seconds send. The predicted mechanism cannot act here: CBR is 0.03 (p95 0.10), far under J2945/1's density knee (N < B = 25), as LC.DD.rate-low-density showed. Correction: LC.SG.rate-c120-below-knee"
 - id: LC.SG.cbr-peak-c120
   base: sig-base
   variant: sig-c120
@@ -864,6 +866,8 @@ rows:
   measure: m.cbr.172.mean
   expect: up
   source: '~2.8x the PSM airtime on the channel the BSMs use'
+  verdict: open
+  note: "2026-10-26 (938fb16a release): the mean busy ratio fell 0.00254 -> 0.00248 (p95 0.0161 -> 0.011) while the offered airtime rose 62 % (0.0565 -> 0.0915 s/s, LC.PD.offered-450) and PSM frames x2.98. m.cbr.172 is a mean over every node's samples, and 95 more VRU devices sample it; that a sample-composition effect hides the added load is the likely reading, not shown (needs the per-node CBR records of a recorded run)"
 - id: LC.PD.cost-450
   base: ped-base
   variant: ped-450
@@ -1111,3 +1115,20 @@ rows:
   expect: same
   tol: 0.05
   source: 'signing is on the same CPU but at ~0.07 utilisation either way, and J2945/1 counts density from receptions, which the receive-side queue does not change: the send rate stays'
+# corrections judged on the runs of the rows they correct (2026-10-26)
+- id: LC.SG.rate-c120-below-knee
+  base: sig-c120
+  variant: sig-c120
+  area: signal-chain
+  measure: m.cbr.172.mean
+  expect: band
+  band: [0.0, 0.3]
+  source: 'correction of LC.SG.rate-c120: the queues of a 120 s cycle at 1,500 veh/h stay far under J2945/1''s knee, so its density term cannot cut the rate; the per-node rate moves with how long vehicles stay on the map (6 vs 12 trips complete)'
+- id: LC.PD.offered-450
+  base: ped-base
+  variant: ped-450
+  area: ped-chain
+  measure: lc.offered_airtime_s_per_s
+  expect: up
+  min_change: 0.3
+  source: 'correction of LC.PD.cbr-450: three times the walkers put ~2.8x the PSM airtime on the channel (PSM frames x2.98): the offered airtime rises by > 30 %'

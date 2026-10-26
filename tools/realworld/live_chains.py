@@ -103,6 +103,10 @@ def extract(run_dir):
     d['lc.attempts_per_frame'] = att / frames if frames else 0.0
     d['lc.verifies_per_node_s'] = (rv.get('checked') or 0) / (nodes * dur) if nodes and dur else 0.0
     d['lc.events_per_attempt'] = d.get('cost.events', 0) / att if att else 0.0
+    # a type nothing sent is absent from air_by_type: it sent 0 frames, not an unknown number
+    for mt in ('bsm', 'psm'):
+        d['lc.frames.' + mt] = 0
+        d['lc.airtime_us.' + mt] = 0
     for mt, a in (rep.get('air_by_type') or {}).items():
         d['lc.frames.' + mt] = a.get('frames') or 0
         d['lc.airtime_us.' + mt] = a.get('airtime_us') or 0
