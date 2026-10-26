@@ -107,6 +107,7 @@ def extract(run_dir):
         d['lc.frames.' + mt] = a.get('frames') or 0
         d['lc.airtime_us.' + mt] = a.get('airtime_us') or 0
     d['lc.vru_devices'] = rep.get('vru_devices_created') or 0
+    d['lc.signed_past_end'] = rep.get('signed_past_end') or 0
     bs = (rep.get('rx_losses') or {}).get('below-sensitivity') or 0
     d['lc.below_sens_per_frame'] = bs / frames if frames else 0.0
     d['lc.offered_airtime_s_per_s'] = (air.get('airtime_us') or 0) / 1e6 / dur if dur else 0.0
@@ -127,6 +128,9 @@ DERIVED = {
     # CRL paths: enforcement lost to a CRL-store outage minus that lost to a CRLG outage
     # (< 0: the RSU broadcast path softens a distribution outage, nothing softens issuance)
     'X-crl-paths': ('p2.revoked_receptions', [(+1, 'S'), (-1, 'scms-crlstore'), (-1, 'S'), (+1, 'scms-crlg')]),
+    # the same on the fixed binary, with the outages on provider-b's servers (< 0: a store
+    # outage loses less than an issuance outage of the same window)
+    'X-crl-paths-b': ('p2.revoked_receptions', [(+1, 'S2'), (-1, 'scms-crlstore-b'), (-1, 'S2'), (+1, 'scms-crlg-b')]),
     # signals x demand: speed lost to the 120 s cycle at 3,000 veh/h minus at 1,500 (> 0)
     'X-sig-demand': ('m.mean_speed', [(+1, 'sig-r3000'), (-1, 'sig-c120-r3000'), (-1, 'sig-base'), (+1, 'sig-c120')]),
 }

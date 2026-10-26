@@ -67,6 +67,16 @@ runs:
   ped-dev100: {scenario: scenarios/live-chains/ped-dev100.yaml, note: ped-base with a PSM device on every VRU}
   X-crl-paths: {scenario: derived, note: '(S - scms-crlstore) - (S - scms-crlg) revoked receptions'}
   X-sig-demand: {scenario: derived, note: '(sig-r3000 - sig-c120-r3000) - (sig-base - sig-c120) mean speed'}
+  # 2026-10-26 continuation: the fixed binary (provider-qualified failures, signed_past_end)
+  S2: {scenario: scenarios/live-chains/scms-base.yaml, note: 'S on the fixed binary (no failure: must equal S)'}
+  scms-crlg2: {scenario: scenarios/live-chains/scms-crlg.yaml, note: 'scms-crlg on the fixed binary (unqualified crlg: must equal scms-crlg)'}
+  scms-crlg-b: {scenario: scenarios/live-chains/scms-crlg-b.yaml, note: 'S2, provider-b''s CRL generator offline 60-200 s (fixed binary)'}
+  scms-crlg-b-short: {scenario: scenarios/live-chains/scms-crlg-b-short.yaml, note: 'S2, provider-b''s CRL generator offline 60-160 s (fixed binary)'}
+  scms-crlstore-b: {scenario: scenarios/live-chains/scms-crlstore-b.yaml, note: 'S2, provider-b''s CRL store offline 60-200 s (fixed binary)'}
+  X-crl-paths-b: {scenario: derived, note: '(S2 - scms-crlstore-b) - (S2 - scms-crlg-b) revoked receptions'}
+  scms-g10-m30: {scenario: scenarios/live-chains/scms-g10-m30.yaml, note: 'scms-g10 with 30 m outliers (release binary)'}
+  r40b2: {scenario: scenarios/live-chains/r40.yaml, note: r40 on the fixed binary}
+  r40-slh2: {scenario: scenarios/live-chains/r40-slh.yaml, note: r40-slh on the fixed binary}
 rows:
 # ---------------------------------------------------------------- chain 1: PQ -> bytes -> airtime -> CBR -> collisions -> PDR
 - id: LC.PQ.psdu-falcon
@@ -854,3 +864,217 @@ rows:
   expect: up
   min_change: 0.2
   source: 'three times the walkers to step (social force) and ~2.8x the PSM transmissions to receive'
+# ---------------------------------------------------------------- 2026-10-26 continuation (rows written before their runs)
+# chain 4 again, on the fixed binary: a failure may now name either provider's server
+# (`provider-b/crlg`), so the outage can hit the CRL Generator that holds the in-window
+# revocations (provider-b's two, decided at 140.9 s in S; provider-a's at 233.4 s).
+# Timing used below, all from S and the base scenario: CRL cadence 30 s, fetch 30 s,
+# decision -> enforced 16.3 s, so S enforces provider-b's two from ~157 s (83 s of the
+# 240 s run); BACKEND_RETRY re-sends a held message once the receiver is back.
+- id: LC.FIX.S-unmoved
+  base: S
+  variant: S2
+  area: crl-chain
+  measure: digest.record
+  expect: identical
+  source: 'the fix only routes a failure to the run of the provider that hosts it; with no failure it changes nothing, so the record is byte-identical'
+- id: LC.FIX.crlg-home-unmoved
+  base: scms-crlg
+  variant: scms-crlg2
+  area: crl-chain
+  measure: digest.record
+  expect: identical
+  source: 'an unqualified name keeps its meaning (the home provider''s server, still in the home run only): the record of scms-crlg is byte-identical on the fixed binary'
+- id: LC.CRL.b-held
+  base: S2
+  variant: scms-crlg-b
+  area: crl-chain
+  measure: p2.backend_deliveries_held
+  expect: ge
+  value: 1
+  source: 'the MA->CRLG revocation requests (~141 s) meet provider-b''s CRLG down and wait in the MA''s queue (component to component: held, retried, crate::fault edge case 3d)'
+- id: LC.CRL.b-not-dropped
+  base: S2
+  variant: scms-crlg-b
+  area: crl-chain
+  measure: p2.backend_deliveries_dropped
+  expect: eq
+  value: 0
+  source: 'nothing a device sends goes to a CRLG, and backend-to-backend messages are held, not dropped'
+- id: LC.CRL.b-enforcement-lost
+  base: S2
+  variant: scms-crlg-b
+  area: crl-chain
+  measure: p2.revoked_receptions
+  expect: down
+  min_change: 0.5
+  source: 'enforcement of provider-b''s two starts at ~200 s (retry) + <=30 s (cadence) + <=30 s (fetch), ~225 s, instead of ~157 s: ~15 of 83 s of enforcement left, a loss of ~80 % (50-100 % with the poll phases)'
+- id: LC.CRL.b-latency-up
+  base: S2
+  variant: scms-crlg-b
+  area: crl-chain
+  measure: p2.revocation_latency_ns
+  expect: up
+  min_change: 1.0
+  source: 'decision -> enforced carries the rest of the outage (200 - 141 = 59 s) on top of S''s 16.3 s: ~x4.6, at least x2'
+- id: LC.CRL.b-decisions-unchanged
+  base: S2
+  variant: scms-crlg-b
+  area: crl-chain
+  measure: p2.ma_revoke_decisions
+  expect: same
+  tol: 0.0
+  source: 'the MA is upstream of the CRLG'
+- id: LC.CRL.b-delayed-not-lost
+  base: S2
+  variant: scms-crlg-b
+  area: crl-chain
+  measure: p2.revoked_attackers
+  expect: same
+  tol: 0.0
+  source: 'the held requests reach the CRLG at ~200 s: the entries are issued late, not lost'
+- id: LC.CRL.b-attackers-reported-longer
+  base: S2
+  variant: scms-crlg-b
+  area: crl-chain
+  measure: p2.reports_about_attackers
+  expect: up
+  min_change: 0.05
+  source: 'the two revoked attackers stay accepted ~68 s longer each, and accepted messages keep being judged and reported (~2.5 reports per attacker-second in S: +~340 of 2,248)'
+- id: LC.CRL.b-fleet-unchanged
+  base: S2
+  variant: scms-crlg-b
+  area: crl-chain
+  measure: p2.devices
+  expect: same
+  tol: 0.0
+  source: 'a backend outage does not change the fleet'
+- id: LC.CRL.b-dose
+  base: scms-crlg-b
+  variant: scms-crlg-b-short
+  area: crl-chain
+  measure: p2.revoked_receptions
+  expect: up
+  min_change: 0.5
+  source: 'the outage ending at 160 s instead of 200 s starts enforcement ~40 s earlier: ~55 s of enforcement instead of ~15 s (x3.7)'
+- id: LC.CRL.b-store-held
+  base: S2
+  variant: scms-crlstore-b
+  area: crl-chain
+  measure: p2.backend_deliveries_held
+  expect: ge
+  value: 1
+  source: 'the CRLG''s publication of provider-b''s list (~150-170 s) meets its store down and waits in the CRLG''s queue until 200 s'
+- id: LC.CRL.b-store-enforcement-lost
+  base: S2
+  variant: scms-crlstore-b
+  area: crl-chain
+  measure: p2.revoked_receptions
+  expect: down
+  min_change: 0.4
+  source: 'every RA serves a provider''s list from its CRL store (the composite CRL, 1609.2.1 6.3.5.8): with the store down the new list lands at ~200 s and is enforced from ~215 s: ~25 of 83 s left (-70 %)'
+- id: LC.CRL.b-store-latency-up
+  base: S2
+  variant: scms-crlstore-b
+  area: crl-chain
+  measure: p2.revocation_latency_ns
+  expect: up
+  min_change: 1.0
+  source: 'decision -> enforced carries the store''s remaining outage (~30-50 s) on top of 16.3 s: at least x2'
+- id: LC.CRL.b-store-fetches-delayed
+  base: S2
+  variant: scms-crlstore-b
+  area: crl-chain
+  measure: p2.crl_downloads
+  expect: same
+  tol: 0.25
+  source: 'the RA holds the composite list and answers every poll (412 while nothing is newer): a store outage delays the download of the new list, it does not remove it, when the store is back more than one 30 s poll interval before the end (200 + 30 < 240); only devices that leave between ~157 and ~230 s miss it'
+- id: LC.CRL.b-store-issuance-unchanged
+  base: S2
+  variant: scms-crlstore-b
+  area: crl-chain
+  measure: p2.crls_issued
+  expect: same
+  tol: 0.0
+  source: 'the CRLG still issues on its cadence; only its publication to the store waits'
+- id: LC.CRL.b-paths
+  base: X-crl-paths-b
+  variant: X-crl-paths-b
+  area: crl-chain
+  measure: x.value
+  expect: band
+  band: [-1.0e+09, -1.0e-06]
+  source: 'a store outage loses less than an issuance outage of the same window: the CRLG issued on its 30 s cadence before the outage ended and its list waits only for the store, while a CRLG back at 200 s still waits for its next cadence slot (~0-30 s) before it issues'
+# chain 5 corrected (the evidence for LC.GN.jumps-g10's note): legacy-12's position-jump
+# score is disp / (avg_v dt + z tol + c) with z = 3, tol >= max(conf, 0.5 c) = 2.5 m and
+# c = 5 m (v2xw-threat detect.rs `motion`), so a 12 m jump scores at most
+# (v dt + 12) / (v dt + 12.5) < 1 whatever the speed; and a detector fires only after
+# min_consecutive = 2 flagged messages from one signer, which a single-fix outlier
+# (the next message is clean) does not give. A 30 m outlier scores > 1 on slow vehicles
+# (and position-speed inconsistency (|disp - v dt| - jerk) / (3 tol) > 1 up to ~10 m/s),
+# and a pair forms when the outlier stays the 1.5 s lagged reference for two messages:
+# a lost next message at the receiver, or interval jitter.
+- id: LC.GN.jumps-g10-bounded
+  base: S
+  variant: scms-g10
+  area: gnss-chain
+  measure: p2.verdicts.positionJump
+  expect: same
+  tol: 0.15
+  source: 'correction of LC.GN.jumps-g10 (judged on its runs): a 12 m single-fix outlier cannot score 1 on legacy-12''s position-jump check (bound above) and is never two in a row'
+- id: LC.GN.m30-jumps
+  base: scms-g10
+  variant: scms-g10-m30
+  area: gnss-chain
+  measure: p2.verdicts.positionJump
+  expect: up
+  min_change: 0.5
+  source: 'a 30 m outlier scores > 1 for v < ~6 m/s (30 / (1.5 v + 21) with conf ~5.4 m), and every receiver that misses the message after it (or whose next message lands < 1.5 s after the post-outlier one) sees it twice as the lagged reference: ~1,760 outliers x ~20 receivers x a few % gives hundreds of flagged pairs'
+- id: LC.GN.m30-honest-reports
+  base: scms-g10
+  variant: scms-g10-m30
+  area: gnss-chain
+  measure: p2.reports_about_honest
+  expect: up
+  min_change: 0.5
+  source: 'the flagged pairs are honest senders: reports about honest vehicles rise from 34'
+- id: LC.GN.m30-attackers-unaffected
+  base: scms-g10
+  variant: scms-g10-m30
+  area: gnss-chain
+  measure: p2.revoked_attackers
+  expect: same
+  tol: 0.0
+  source: 'the constant-position attackers are caught by constant-position verdicts, which an outlier on another sender does not touch'
+# finding 8 fixed: a message still signing at the run's end is counted (signed_past_end).
+- id: LC.FIX.r40-record-unmoved
+  base: r40
+  variant: r40b2
+  area: pq-chain
+  measure: digest.record
+  expect: identical
+  source: 'the counter writes no record: r40''s record is byte-identical on the fixed binary'
+- id: LC.FIX.r40-past-end-small
+  base: r40b2
+  variant: r40b2
+  area: pq-chain
+  measure: lc.signed_past_end
+  expect: le
+  value: 80
+  source: 'a P-256 signer keeps up (rho ~0.002): only the messages of the last instant are unfinished, at most ~2 per node (38-40 nodes)'
+- id: LC.FIX.slh-past-end-counted
+  base: r40b2
+  variant: r40-slh2
+  area: pq-chain
+  measure: lc.signed_past_end
+  expect: ge
+  value: 1800
+  source: 'SLH-DSA-SHA2-128s signs in seconds on this SoC (2.72 G cycles on the Xeon reference), so every one of the ~2,100 BSMs r40 sends in 6 s is still signing at the end and is counted (2,101 node tasks in r40-slh)'
+- id: LC.FIX.slh-still-silent
+  base: r40-slh
+  variant: r40-slh2
+  area: pq-chain
+  measure: lc.bsms
+  expect: same
+  tol: 0.0
+  source: 'the fix counts the loss; it does not change what goes on the air (0 BSMs)'
