@@ -208,8 +208,9 @@ rows:
   value: 20.0
   source: a top-up installs one i-period of certs_per_period = 20 certificates (CAMP-EE 2.1.5.3.2; IEEE
     1609.2.1 6.3.3)
-  measured: pending
-  verdict: pending
+  measured: '20'
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CP60.certs-per-topup
   base: L
   variant: CP60
@@ -283,8 +284,9 @@ rows:
   - 4.12
   source: 'the ACA answers the RA once per certificate (one AcaRaCertResponse per butterfly-expanded key):
     preload and top-ups both scale by 20/5 = 4 on an unchanged fleet'
-  measured: pending
-  verdict: pending
+  measured: 1034 -> 4124 (ratio 3.988)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CP20.plv
   base: L
   variant: CP20
@@ -296,8 +298,9 @@ rows:
   - 4.12
   source: 'each LA returns one encrypted pre-linkage value per certificate (CAMP 1.2.2 linkage, two LAs):
     x 4'
-  measured: pending
-  verdict: pending
+  measured: 2060 -> 8240 (ratio 4)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CP20.topups
   base: L
   variant: CP20
@@ -307,8 +310,9 @@ rows:
   tol: 0.03
   source: one request and one download per top-up whatever the batch size (1609.2.1 6.3.3); the trigger
     is the period, not the count
-  measured: pending
-  verdict: pending
+  measured: 59 -> 59
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CP20.bsm-size
   base: L
   variant: CP20
@@ -317,8 +321,9 @@ rows:
   expect: same
   tol: 0.005
   source: 'a pseudonym certificate is the same 80 B whatever the batch size: nothing on the air changes'
-  measured: pending
-  verdict: pending
+  measured: 213 -> 213
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CP60.aca-responses
   base: L
   variant: CP60
@@ -418,8 +423,9 @@ rows:
   expect: down
   source: 'pool 3: a joiner tops up only at its second period boundary; in 180 s only period-0 joiners
     still on the map at 120 s do'
-  measured: pending
-  verdict: pending
+  measured: 121 -> 50
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.PP4.topups
   base: L
   variant: PP4
@@ -464,8 +470,14 @@ rows:
   expect: up
   min_change: 0.2
   source: 'a larger preload: more valid certificates held on average'
-  measured: pending
-  verdict: pending
+  measured: 5.05454 -> 5.05454
+  verdict: wrong-expectation
+  measured_on: 2026-10-26, 938fb16a release
+  note: '2026-10-26 (938fb16a): 5.0545 in both, to 15 digits. m.cert_pool_valid counts the certificates
+    valid at the sample instant: the current period''s 5 (10 in the 1 s overlap, the p95). A deeper preload
+    adds future periods, which are stored but not yet valid, so the metric cannot move. The preload itself
+    moved as predicted: top-ups 121 -> 50 (row PP3.topups). The row needed the stored pool (node.security
+    pool_stored)'
 - id: LS.TB2.topups
   base: L
   variant: TB2
@@ -1124,8 +1136,9 @@ rows:
   measure: m.full_cert_share
   expect: up
   source: a certificate also whenever a new neighbour is heard (TS 103 097 7.1.1 rule)
-  measured: pending
-  verdict: pending
+  measured: 0.100716 -> 0.170037
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.NN.unknown
   base: L
   variant: NN
@@ -1133,8 +1146,9 @@ rows:
   measure: x.unknown_signer_loss
   expect: down
   source: newcomers get the certificate in the next message
-  measured: pending
-  verdict: pending
+  measured: 0.00751551 -> 0.00363989
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.CHP.p2pcd
   base: L
   variant: CHP
@@ -1204,8 +1218,9 @@ rows:
   expect: same
   tol: 0.02
   source: prioritised only reorders a backlog; the queue is under one task on average (L0 0.009)
-  measured: pending
-  verdict: pending
+  measured: 1925.51 -> 1925.51
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.VPR.reports
   base: L
   variant: VPR
@@ -1214,8 +1229,9 @@ rows:
   expect: same
   tol: 0.05
   source: the same messages are verified, the same detections filed
-  measured: pending
-  verdict: pending
+  measured: 582 -> 583
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.S384.size
   base: L
   variant: S384
@@ -1254,8 +1270,9 @@ rows:
   - -0.5
   - 0.5
   source: 'brainpoolP256r1 has P-256''s 32 B coordinates: the same sizes'
-  measured: pending
-  verdict: pending
+  measured: 213 -> 213 (delta 0)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.SBP.verify
   base: L
   variant: SBP
@@ -1266,8 +1283,9 @@ rows:
   - 1.0
   - 3.0
   source: 'no special-form prime: at least P-256''s cost, at most about 3x'
-  measured: pending
-  verdict: pending
+  measured: 0.422163 -> 0.422163 (ratio 1)
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.KEM.bsm
   base: L
   variant: KEM
@@ -1384,8 +1402,9 @@ rows:
   - 0.02
   - 0.2
   source: 0.1 of about 75 devices (binomial sd 0.035)
-  measured: pending
-  verdict: pending
+  measured: '0.0972222'
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.SH90.verified-b
   base: L
   variant: SH90
@@ -1396,8 +1415,9 @@ rows:
   - 0.02
   - 0.22
   source: 'receptions follow the senders: about 0.1 signed under provider-b'
-  measured: pending
-  verdict: pending
+  measured: '0.142184'
+  verdict: pass
+  measured_on: 2026-10-26, 938fb16a release
 - id: LS.SH100.share-b
   base: L
   variant: SH100
