@@ -1,0 +1,9 @@
+# live-scms variant tb2: topup_below_periods 2
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms tb2
+security:
+  protocol:
+    params:
+      topup_below_periods: 2

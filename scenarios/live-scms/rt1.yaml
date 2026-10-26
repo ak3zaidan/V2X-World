@@ -1,0 +1,9 @@
+# live-scms variant rt1: report_shuffle_threshold 1
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms rt1
+security:
+  protocol:
+    params:
+      report_shuffle_threshold: 1

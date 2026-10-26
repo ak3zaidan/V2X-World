@@ -1,0 +1,9 @@
+# live-scms variant rw0: report_shuffle_window_s 0 (edge)
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms rw0
+security:
+  protocol:
+    params:
+      report_shuffle_window_s: 0

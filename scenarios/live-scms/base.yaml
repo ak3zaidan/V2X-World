@@ -1,0 +1,8 @@
+# Live SCMS knob tests (crates/v2xw-engine/tests/expectations/live-scms.yaml): the
+# credential-lifecycle scenario cut to 180 s (three 60 s i-periods, attack from 60 s).
+schema: v2xw/scenario/1
+meta:
+  base: ../credential-lifecycle.yaml
+  name: live-scms base
+time:
+  duration_s: 180.0

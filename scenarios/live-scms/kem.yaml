@@ -1,0 +1,7 @@
+# live-scms variant kem: kem ml-kem-768 (the 1609.2.1 PDU layer off)
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms kem
+security:
+  kem: ml-kem-768

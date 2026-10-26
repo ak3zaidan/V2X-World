@@ -1,0 +1,9 @@
+# live-scms variant cb20: crl_broadcast_interval_s 20
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms cb20
+security:
+  protocol:
+    params:
+      crl_broadcast_interval_s: 20

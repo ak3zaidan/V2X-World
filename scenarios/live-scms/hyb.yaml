@@ -1,0 +1,12 @@
+# live-scms variant hyb: nhf plus signature hybrid-falcon512-ecdsa-p256
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms hyb
+nodes:
+  default_obu: obu/generic-automotive-soc-no-hsm
+net:
+  fragmenter:
+    id: fragmenter/generic-sdu
+security:
+  signature: hybrid-falcon512-ecdsa-p256

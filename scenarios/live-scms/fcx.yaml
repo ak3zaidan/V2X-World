@@ -1,0 +1,8 @@
+# live-scms variant fcx: digest_otherwise false (every BSM a certificate)
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms fcx
+security:
+  signer_id_policy:
+    digest_otherwise: false

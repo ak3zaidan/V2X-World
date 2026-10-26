@@ -1,0 +1,9 @@
+# live-scms variant rq0: report_store_quota_bytes 0 (keeps nothing)
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms rq0
+security:
+  protocol:
+    params:
+      report_store_quota_bytes: 0

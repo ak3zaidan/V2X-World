@@ -1,0 +1,9 @@
+# live-scms variant psil: pseudonym strategy silent
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms psil
+security:
+  pseudonym_change:
+    strategy: silent
+    period_s: null

@@ -1,0 +1,9 @@
+# live-scms variant cf10: crl_fetch_interval_s 10
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms cf10
+security:
+  protocol:
+    params:
+      crl_fetch_interval_s: 10

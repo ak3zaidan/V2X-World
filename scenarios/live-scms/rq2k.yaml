@@ -1,0 +1,9 @@
+# live-scms variant rq2k: report_store_quota_bytes 2000
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms rq2k
+security:
+  protocol:
+    params:
+      report_store_quota_bytes: 2000

@@ -1,0 +1,9 @@
+# live-scms variant cp60: certs_per_period 60 (the range edge)
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms cp60
+security:
+  protocol:
+    params:
+      certs_per_period: 60
