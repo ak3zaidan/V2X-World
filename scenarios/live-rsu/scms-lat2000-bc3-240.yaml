@@ -1,0 +1,10 @@
+# Live RSU track, SCMS family interaction (2026-10-26): scms-lat2000-bc3.yaml run for 240 s, so
+# at least two revocation lists fall in the window. The first list arms the carousel at the
+# units' 2 s download; a later list finds the 3 s carousel already ticking, and only the
+# download-in-flight rule of the RSU CRL fix (4399f8f8) keeps it off the air until it lands.
+schema: v2xw/scenario/1
+meta:
+  base: scms-lat2000-bc3.yaml
+  name: live-rsu scms lat2000-bc3 240s
+time:
+  duration_s: 240.0

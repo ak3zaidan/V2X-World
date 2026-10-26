@@ -177,6 +177,27 @@ def measures(r):
             a[2] += v.get('n') or 0
     for k, (num, den, n) in acc.items():
         d['g.' + k] = num / den if den else 0.0
+    # The energy metrics are cumulative ("run so far", v2xw_energy provider): the sums above
+    # weight every window's running ratio by its distance so far, which is not the run's
+    # ratio. The final sample is (2026-10-26 correction, live-rsu §3). co2_per_km divides by
+    # every km (EVs included), fuel_per_100km by combustion km only, so CO2 per combustion
+    # km and CO2 per litre are derived from the two final samples.
+    last = {}
+    for s in json.load(open(r['metrics']))['samples'] if os.path.exists(r['metrics']) else []:
+        if s['dims'].get('class') != 'passenger' or s['value'].get('kind') != 'ratio':
+            continue
+        if s['metric'] in ('stops_per_km', 'fuel_per_100km', 'co2_per_km'):
+            if s['metric'] not in last or s['t'] >= last[s['metric']][0]:
+                last[s['metric']] = (s['t'], s['value'].get('numerator') or 0.0,
+                                     s['value'].get('denominator') or 0.0)
+    for k, (_, num, den) in last.items():
+        d['g.final_' + k] = num / den if den else 0.0
+    if 'co2_per_km' in last and 'fuel_per_100km' in last:
+        co2_g, km_all = last['co2_per_km'][1], last['co2_per_km'][2]
+        fuel_l, km_ice = last['fuel_per_100km'][1], last['fuel_per_100km'][2] * 100.0
+        d['g.final_co2_per_ice_km'] = co2_g / km_ice if km_ice else 0.0
+        d['g.final_co2_per_litre'] = co2_g / fuel_l if fuel_l else 0.0
+        d['g.final_ev_km_share'] = 1.0 - km_ice / km_all if km_all else 0.0
     if acc.get('stops_per_km') and acc['stops_per_km'][2]:
         # vehicle-steps of 100 ms in the energy windows -> the mean speed of the class
         num, den, n = acc['stops_per_km']
@@ -195,6 +216,10 @@ def measures(r):
     d['s.backhaul_bytes'] = acc2.get('backhaul_bytes', 0)
     flows = scms_flows(r)
     d.update(flows)
+    # Line messages that are neither a relayed report nor a unit's own CRL fetch that landed
+    # (on a line faster than a mobility step every fetch lands; the units' certificate cycle
+    # sends nothing in a 120 s window): the double booking of live-rsu §3 shows here.
+    d['s.line_msgs_unexplained'] = d['s.backhaul_messages'] - d['s.relayed_reports'] - d['s.rsu_crls_installed']
     return d
 
 
@@ -265,8 +290,12 @@ def scms_flows(r):
 
 def measure(run_dir, fault=None, base_dir=None):
     if fault and fault.startswith('use:'):
-        # the variant measured on another run's records (e.g. the drivers had followed)
-        return measures(raw(os.path.join(os.path.dirname(run_dir.rstrip('/')), fault[4:])))
+        # the variant measured on another run's records (e.g. the drivers had followed); a
+        # run whose recording was deleted once summarised is read from its measures
+        other = os.path.join(os.path.dirname(run_dir.rstrip('/')), fault[4:])
+        if not os.path.exists(os.path.join(other, 'recording.mcap')):
+            return json.load(open(os.path.join(other, 'realism.json')))
+        return measures(raw(other))
     r = raw(run_dir)
     if fault == 'knob-ignored' or fault == 'outage-ignored':
         r = raw(base_dir)
