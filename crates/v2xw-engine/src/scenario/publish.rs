@@ -277,6 +277,7 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("actors.rsus[].site", "site id"),
     ("actors.rsu_placement.count", "roadside units"),
     ("actors.vehicles.demand.fleet_size", "vehicles"),
+    ("traffic.permissive_sneakers", "vehicles per lane per cycle"),
     ("radio.tiers.focus.region.node", "node id"),
     ("threats.attackers[].count", "vehicles"),
     ("threats.attackers[].actor_ids[]", "actor id"),
@@ -388,6 +389,8 @@ const DIMENSIONLESS: &[&str] = &[
     "radio.dcc.adaptive_beta",
     // traffic audit
     "traffic.critical_gap_factor",
+    "traffic.critical_gap_cv",
+    "traffic.impatience_gap_floor",
     "traffic.lc_strategic",
     "traffic.lc_cooperative",
     "traffic.lc_speed_gain",

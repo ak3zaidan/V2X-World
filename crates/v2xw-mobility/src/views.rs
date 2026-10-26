@@ -308,6 +308,19 @@ pub struct JunctionView {
     /// How many major-stream lanes the conflicting flow has, which chooses the HCM
     /// critical-gap column (04-models.md §2.3: `< 4 lanes` or `>= 4 lanes`).
     pub major_lanes: u8,
+    /// How long the ego has been standing, seconds (0 while it moves): the waiting time
+    /// junction impatience reads
+    /// ([`crate::intersection::gap_acceptance::JunctionPatience`]).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub waiting_s: f64,
+    /// The ego driver's own standard normal for the per-driver critical gap (0 is the
+    /// table's mean driver).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub gap_z: f64,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 /// One other claimant on the same junction.

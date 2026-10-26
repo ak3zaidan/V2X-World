@@ -25,6 +25,11 @@ group tests fail.
 | `actors.vehicles.drivers.{truck,bus,motorcycle,bicycle}.{max_accel_mps2,comfort_decel_mps2,time_headway_s,min_gap_m}` | class's own | as passenger rows | Per-class IDM a, b, T, s0 over the model calibration (SUMO vTypes; Treiber & Kesting 2013 Table 11.2); truck = truck+trailer, bus = bus+coach, motorcycle = motorcycle+moped |
 | `traffic.critical_gap_factor` | 1 | 0.5-2 | Scales the HCM 6th ed. ch. 20 critical gaps and follow-up times (unsignalised junctions) |
 | `traffic.permitted_left_gap_s` | 4.5 s | 2.5-8 s | Permitted left-turn critical headway (HCM 6th ed. ch. 31) |
+| `traffic.critical_gap_cv` | 0 (off) | 0-0.5 | Per-driver critical gap, lognormal with the HCM value as mean (WP-04; realistic 0.18, field 0.15-0.2) |
+| `traffic.time_to_impatience_s` | 0 (off) | 0-3600 s | Standing time to full impatience (SUMO `--time-to-impatience` 180 s); critical gap falls linearly to the floor |
+| `traffic.impatience_gap_floor` | 0.7 | 0.3-1 | Critical gap at full impatience / the driver's own (this crate's choice; Polus et al. 2003) |
+| `traffic.impatience_foe_braking` | off | bool | Impatient driver judges a foe as braking at impatience x 4.5 m/s² (SUMO blend) |
+| `traffic.permissive_sneakers` | 0 (off) | 0-4 | Permitted left turners per lane clearing at the end of a permissive green (HCM: 2): one waits inside the junction, others cross the line before the red |
 | `traffic.turn_lateral_accel_mps2` | 5.5 m/s² | 0-10 | Turn-speed cap sqrt(a·R) (SUMO `--junctions.limit-turn-speed`) |
 | `traffic.turn_curve_window_m` | 0 (average radius) | 0-30 m | Radius over the tightest arc of this length; 6 m suggested (`DEFAULT_TURN_CURVE_WINDOW_M`, this crate's choice) |
 | `traffic.kerbside.enabled` | on | bool | Kerbside stops on/off |

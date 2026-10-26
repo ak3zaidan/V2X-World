@@ -387,6 +387,8 @@ mod tests {
             movement_lane: None,
             signal,
             major_lanes: 2,
+            waiting_s: 0.0,
+            gap_z: 0.0,
         }
     }
 

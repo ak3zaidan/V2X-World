@@ -232,6 +232,10 @@ pub const AMBER_DILEMMA_TTI_S: (f64, f64) = (2.5, 5.5);
 /// The model id a driver's amber threshold is drawn under ([`DriverTraits`]).
 const AMBER_TRAIT_ID: &str = "mobility/native/driver/amber";
 
+/// The [`EntityRef::custom`] kind keying a driver's critical-gap quantile
+/// ([`DriverTraits::gap_z`]).
+const GAP_TRAIT_ID: &str = "mobility/native/driver/gap";
+
 /// The model id a driver's red-light-running habit is drawn under
 /// ([`EngineParams::red_runner_share`]).
 const AMBER_RUNNER_ID: &str = "mobility/native/driver/amber-runner";
@@ -333,6 +337,10 @@ pub struct DriverTraits {
     pub params_z: [f64; 4],
     /// The key of this driver's perception-error noise ([`crate::drivers::std_normal`]).
     pub noise_key: u64,
+    /// This driver's standard normal for the per-driver critical gap
+    /// ([`crate::intersection::gap_acceptance::JunctionPatience`]); zero for the neutral
+    /// driver. Read only when `EngineParams::junction_patience` spreads the gaps.
+    pub gap_z: f64,
 }
 
 impl DriverTraits {
@@ -346,6 +354,7 @@ impl DriverTraits {
         style: crate::style::DriverStyle::Normal,
         params_z: [0.0; 4],
         noise_key: 0,
+        gap_z: 0.0,
     };
 
     /// The traits of the driver of trip `seq` in a vehicle of `class`, with the queue
@@ -423,6 +432,14 @@ impl DriverTraits {
             ];
             (z, rng.u64())
         };
+        // The critical-gap quantile: a stream of its own, so drawing it leaves every other
+        // draw as it was.
+        let gap_z = ctx
+            .rng(
+                RngDomain::ReactionTime,
+                EntityRef::custom(GAP_TRAIT_ID, seq),
+            )
+            .normal(0.0, 1.0);
         DriverTraits {
             speed_factor,
             reaction_s,
@@ -436,6 +453,7 @@ impl DriverTraits {
             ),
             params_z,
             noise_key,
+            gap_z,
         }
     }
 }
@@ -803,6 +821,19 @@ pub struct EngineParams {
     /// A multiplier on the HCM critical gaps and follow-up times at unsignalised
     /// junctions ([`GapAcceptanceParams::gap_factor`]); 1.0.
     pub critical_gap_factor: f64,
+    /// Per-driver critical gaps and junction impatience, at unsignalised junctions, on a
+    /// permitted left and on a right turn on red
+    /// ([`crate::intersection::gap_acceptance::JunctionPatience`]). Off by default
+    /// (`traffic.critical_gap_cv`, `traffic.time_to_impatience_s`,
+    /// `traffic.impatience_gap_floor`, `traffic.impatience_foe_braking`).
+    #[serde(skip_serializing_if = "crate::intersection::gap_acceptance::JunctionPatience::is_off")]
+    pub junction_patience: crate::intersection::gap_acceptance::JunctionPatience,
+    /// How many permitted left turners per lane may complete the turn in the change
+    /// interval after a permissive green, the HCM's sneakers
+    /// ([`crate::intersection::signal_fixed_time::FixedTimeSignals::sneaker_may_go`]); 0
+    /// is none, the default (`traffic.permissive_sneakers`; the HCM credits 2).
+    #[serde(skip_serializing_if = "is_zero_u8")]
+    pub permissive_sneakers: u8,
     /// How motorcycles and mopeds ride ([`TwoWheelerParams`]). Not applied in the legacy
     /// parity mode.
     pub two_wheelers: TwoWheelerParams,
@@ -876,6 +907,18 @@ fn is_zero_share(x: &f64) -> bool {
     *x == 0.0
 }
 
+fn is_zero_u8(x: &u8) -> bool {
+    *x == 0
+}
+
+/// How far short of the first opposing-stream zone a permitted left turner waiting inside
+/// the junction stops, metres. **This crate's choice.**
+const BOX_WAIT_MARGIN_M: f64 = 1.0;
+
+/// The least distance into the junction a wait point must lie for a turner to pull in to
+/// it, metres: nearer the line, waiting there is waiting at the line.
+const BOX_WAIT_MIN_M: f64 = 2.0;
+
 impl Default for EngineParams {
     fn default() -> Self {
         Self {
@@ -904,6 +947,8 @@ impl Default for EngineParams {
             permitted_left_critical_headway_s:
                 crate::intersection::signal_fixed_time::HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S,
             critical_gap_factor: 1.0,
+            junction_patience: crate::intersection::gap_acceptance::JunctionPatience::OFF,
+            permissive_sneakers: 0,
             two_wheelers: TwoWheelerParams::default(),
             cyclists: CyclistSpeeds::default(),
             amber_commit_lapse: true,
@@ -1562,6 +1607,7 @@ impl NativeMobility {
             gap: GapAcceptance::new(GapAcceptanceParams {
                 gap_factor: params.critical_gap_factor,
                 heavy_vehicle_terms: params.heavy_vehicle_gap_terms,
+                patience: params.junction_patience,
                 ..GapAcceptanceParams::default()
             }),
             signals: FixedTimeSignals::new(SignalPlanParams {
@@ -1569,6 +1615,8 @@ impl NativeMobility {
                 gap_factor: params.critical_gap_factor,
                 permitted_left_critical_headway_s: params.permitted_left_critical_headway_s,
                 heavy_vehicle_terms: params.heavy_vehicle_gap_terms,
+                patience: params.junction_patience,
+                sneakers: params.permissive_sneakers,
                 ..SignalPlanParams::default()
             }),
             two_coloring: None,
@@ -3954,6 +4002,11 @@ impl NativeMobility {
             movement_lane,
             signal,
             major_lanes,
+            waiting_s: actor
+                .stuck_since
+                .filter(|_| actor.speed_mps < STUCK_SPEED_MPS)
+                .map_or(0.0, |since| ns_to_secs(t.saturating_sub(since))),
+            gap_z: actor.traits.gap_z,
         })
     }
 
@@ -4706,9 +4759,19 @@ impl NativeMobility {
                 continue; // a merge is followed through, not waited for: `junction_leader`
             }
             if let Some(list) = occupancy.get(&z.other)
-                && list
-                    .iter()
-                    .any(|(other, rear, _)| *other != actor.id && z.other_not_clear(*rear))
+                && list.iter().any(|(other, rear, front)| {
+                    *other != actor.id
+                        && z.other_not_clear(*rear)
+                        // A permitted left turner standing in the junction short of this
+                        // zone is waiting for this vehicle, not crossing it (box entry,
+                        // `permissive_sneakers`).
+                        && !(self.params.permissive_sneakers > 0
+                            && *front < z.s_other - z.half_other
+                            && self.opposing_approaches(world, movement, z.other)
+                            && snapshot
+                                .view(*other)
+                                .is_some_and(|v| v.speed_mps < STUCK_SPEED_MPS))
+                })
             {
                 return true;
             }
@@ -4916,6 +4979,126 @@ impl NativeMobility {
 
     /// How long the amber shown to the movement on `movement_lane` at `junction` has left
     /// at `t`, seconds: `Some(0)` if it shows no amber, `None` if nothing is signalled.
+    /// Whether connectors `a` and `b` come from opposite approaches (headings at the
+    /// approach lanes' ends more than 150° apart).
+    fn opposing_approaches(&self, world: &World, a: LaneId, b: LaneId) -> bool {
+        let (Some(la), Some(lb)) = (self.zones.approach_of(a), self.zones.approach_of(b)) else {
+            return false;
+        };
+        let (la, lb) = (world.lane(la), world.lane(lb));
+        v2xw_world::model::normalise_angle(la.heading_at(la.length_m) - lb.heading_at(lb.length_m))
+            .abs()
+            > core::f64::consts::PI * (150.0 / 180.0)
+    }
+
+    /// Where on permitted-left connector `movement` a turner waiting inside the junction
+    /// stops, metres of arc length: [`BOX_WAIT_MARGIN_M`] short of the first zone it
+    /// shares with a movement from the opposing approach, the stream it waits for. `None`
+    /// for a movement that does not cross the opposing stream, or whose first such zone is
+    /// too near the line to wait short of.
+    fn box_wait_s(&self, world: &World, movement: LaneId, turn: TurnDirection) -> Option<f64> {
+        if !crate::intersection::signal_fixed_time::crosses_opposing(turn) {
+            return None;
+        }
+        self.zones.approach_of(movement)?;
+        let first = self
+            .zones
+            .of(movement)
+            .iter()
+            .filter(|z| !z.merge)
+            .filter(|z| self.opposing_approaches(world, movement, z.other))
+            .map(|z| z.s_self - z.half_self)
+            .fold(f64::INFINITY, f64::min);
+        let w = first - BOX_WAIT_MARGIN_M;
+        (w.is_finite() && w >= BOX_WAIT_MIN_M).then_some(w)
+    }
+
+    /// The junction a permitted left turner waiting inside it is judged at, with the gap to
+    /// its wait point ([`Self::box_wait_s`]), metres; `None` unless the actor is on a
+    /// signalised permitted-left connector and not yet past the wait point.
+    fn box_wait_view(&self, world: &World, actor: &Actor, t: SimTime) -> Option<(JunctionView, f64)> {
+        let lane = world.try_lane(actor.lane)?;
+        if lane.kind != LaneKind::Internal {
+            return None;
+        }
+        let junction_id = lane.junction?;
+        let junction = world.roads.try_junction(junction_id)?;
+        let JunctionControl::Signalised { plan } = junction.control else {
+            return None;
+        };
+        let from = self.zones.approach_of(actor.lane)?;
+        let turn = world
+            .successors(from)
+            .iter()
+            .find(|c| c.via == Some(actor.lane))?
+            .direction;
+        let w = self.box_wait_s(world, actor.lane, turn)?;
+        let gap = w - actor.s_m;
+        if gap < -BOX_WAIT_MARGIN_M {
+            return None; // past its wait point: it has gone
+        }
+        let plan = world.signal_plan(plan)?;
+        let signal = self.signals.state_for(plan, actor.lane, ns_to_secs(t));
+        Some((
+            JunctionView {
+                id: junction_id,
+                position: junction.position,
+                control: junction.control,
+                stop_line_gap_m: gap.max(0.01),
+                movement: turn,
+                movement_lane: Some(actor.lane),
+                signal,
+                major_lanes: u8::try_from(junction.incoming.len()).unwrap_or(u8::MAX),
+                waiting_s: actor
+                    .stuck_since
+                    .filter(|_| actor.speed_mps < STUCK_SPEED_MPS)
+                    .map_or(0.0, |since| ns_to_secs(t.saturating_sub(since))),
+                gap_z: actor.traits.gap_z,
+            },
+            gap,
+        ))
+    }
+
+    /// Whether the amber `movement_lane` shows at `t` ends a permissive green
+    /// ([`SignalState::GreenYield`]): the state of the phase before its run of amber
+    /// phases.
+    fn amber_follows_permissive(
+        &self,
+        world: &World,
+        junction: JunctionId,
+        movement_lane: Option<LaneId>,
+        t: SimTime,
+    ) -> bool {
+        let Some(JunctionControl::Signalised { plan }) =
+            world.roads.try_junction(junction).map(|j| j.control)
+        else {
+            return false;
+        };
+        let Some(plan) = world.signal_plan(plan) else {
+            return false;
+        };
+        let Some(k) = plan
+            .controlled
+            .iter()
+            .position(|l| Some(*l) == movement_lane)
+        else {
+            return false;
+        };
+        let Some((i, _)) = plan.phase_at(ns_to_secs(t)) else {
+            return false;
+        };
+        let n = plan.phases.len();
+        let state = |p: usize| plan.phases[p].states.get(k).copied();
+        let mut j = i;
+        for _ in 0..n {
+            match state(j) {
+                Some(SignalState::Amber) => j = (j + n - 1) % n,
+                s => return s == Some(SignalState::GreenYield),
+            }
+        }
+        false
+    }
+
     fn amber_left_s(
         &self,
         world: &World,
@@ -5461,6 +5644,48 @@ impl Mobility for NativeMobility {
                     }
                     amber_seen = Some(junction.id);
                 }
+                // A permitted left turner held through its permissive green may complete
+                // the turn in the change interval, as the HCM's sneakers do, when it can
+                // cross the line before the red and no opposing car still able to reach
+                // its own line is inside its gap
+                // ([`FixedTimeSignals::sneaker_may_go`]). Off unless
+                // `permissive_sneakers` is set.
+                if along
+                    && self.params.permissive_sneakers > 0
+                    && junction.signal == Some(SignalState::Amber)
+                    && matches!(decision, EntryDecision::Stop { .. })
+                    && self.amber_follows_permissive(world, junction.id, junction.movement_lane, t0)
+                    && let Some(left) =
+                        self.amber_left_s(world, junction.id, junction.movement_lane, t0)
+                    && self.signals.sneaker_may_go(&ego, &junction, &conflicts, left)
+                {
+                    decision = EntryDecision::Proceed;
+                }
+                // A permitted left turner refused a gap on its permissive green pulls into
+                // the junction and waits there, short of the opposing stream's paths, so
+                // that it is within the junction when the green ends and clears it then:
+                // the HCM's sneakers, and UVC §11-402's "within the intersection". Only one
+                // waits on a connector at a time, never with the exit full or a conflicting
+                // vehicle still inside ([`Self::junction_blocked`]). Off unless
+                // `permissive_sneakers` is set.
+                if along
+                    && self.params.permissive_sneakers > 0
+                    && junction.signal == Some(SignalState::GreenYield)
+                    && matches!(decision, EntryDecision::Stop { .. })
+                    && junction.stop_line_gap_m > 0.0
+                    && let Some(movement) = junction
+                        .movement_lane
+                        .filter(|l| world.lane(*l).kind == LaneKind::Internal)
+                    && let Some(w) = self.box_wait_s(world, movement, junction.movement)
+                    && occupancy
+                        .get(&movement)
+                        .is_none_or(|l| l.iter().all(|(o, _, _)| *o == actor.id))
+                    && !self.junction_blocked(world, &snapshot, &occupancy, actor, movement)
+                {
+                    decision = EntryDecision::Stop {
+                        gap_m: junction.stop_line_gap_m + w,
+                    };
+                }
                 // A vehicle that chose to go on amber — it was inside the distance it could
                 // stop in — is committed: it does not change its mind a step later because
                 // it has slowed for the turn ahead, which is what left drivers braking into
@@ -5581,6 +5806,38 @@ impl Mobility for NativeMobility {
                     && signal_stop.is_none()
                 {
                     signal_stop = Some((v, junction.stop_line_gap_m));
+                }
+            }
+            // A permitted left turner waiting inside the junction (box entry, above): it
+            // goes on when the gap test passes on the permissive green, and clears in the
+            // change interval once the opposing stream has stopped
+            // ([`FixedTimeSignals::box_may_clear`]); until then it holds at its wait point.
+            if along
+                && self.params.permissive_sneakers > 0
+                && let Some((jv, w_gap)) = self.box_wait_view(world, actor, t0)
+            {
+                let conflicts = self.conflicts_for(world, &jv, &ego, &claims, t0);
+                let go = match jv.signal {
+                    Some(SignalState::GreenYield) => {
+                        self.signals.may_enter(&ego, &jv, &conflicts, &self.weather)
+                            == EntryDecision::Proceed
+                    }
+                    Some(SignalState::Amber | SignalState::Red | SignalState::RedAmber) => {
+                        let left = self
+                            .amber_left_s(world, jv.id, jv.movement_lane, t0)
+                            .unwrap_or(0.0);
+                        self.signals.box_may_clear(&ego, &jv, &conflicts, left)
+                    }
+                    _ => true,
+                };
+                if !go {
+                    leader = Self::closest(
+                        leader,
+                        EntryDecision::Stop {
+                            gap_m: w_gap.max(0.0),
+                        }
+                        .as_leader(),
+                    );
                 }
             }
             // While a lane change is under way the body is still partly in the lane being

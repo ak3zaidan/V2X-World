@@ -218,6 +218,30 @@ pub struct Traffic {
     /// unsignalised junctions and on a permitted left. Unset is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heavy_vehicle_gap_terms: Option<bool>,
+    /// The spread of drivers' critical gaps: each driver's is lognormal around the HCM
+    /// value with this coefficient of variation (0.15-0.2 in field studies, SUMO P1;
+    /// 0.18 is the realistic preset), at unsignalised junctions, on a permitted left and
+    /// on a right turn on red. Unset is 0: every driver the HCM value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub critical_gap_cv: Option<f64>,
+    /// Seconds of standing after which a yielding driver's impatience is full and its
+    /// critical gap has fallen to `impatience_gap_floor` of its own (SUMO
+    /// `--time-to-impatience`, 180 s). Unset is 0: no impatience.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_to_impatience_s: Option<f64>,
+    /// The critical gap at full impatience as a share of the driver's own. Unset is 0.7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impatience_gap_floor: Option<f64>,
+    /// Whether an impatient driver judges an approaching foe as if it would brake at
+    /// impatience times 4.5 m/s² (SUMO's blend toward the foe's braking arrival). Unset is
+    /// off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impatience_foe_braking: Option<bool>,
+    /// How many permitted left turners per lane may complete the turn in the amber that
+    /// ends a permissive green, the HCM's "sneakers" (2 per cycle). Each must cross the
+    /// stop line before the red. Unset is 0: none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissive_sneakers: Option<u8>,
     /// Whether a driver closing on a standing vehicle brakes at no less than the constant
     /// deceleration that stops it at its standstill gap, as at a stop line, instead of
     /// being stopped in one step when the car-following model's braking (which scales
@@ -329,6 +353,11 @@ impl Default for Traffic {
             lc_speed_gain: None,
             lc_keep_right: None,
             heavy_vehicle_gap_terms: None,
+            critical_gap_cv: None,
+            time_to_impatience_s: None,
+            impatience_gap_floor: None,
+            impatience_foe_braking: None,
+            permissive_sneakers: None,
             standing_leader_stop: None,
             lane_bend_speed: None,
             kerbside: None,
