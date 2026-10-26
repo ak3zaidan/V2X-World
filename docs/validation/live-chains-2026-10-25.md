@@ -105,18 +105,20 @@ events and its J2945/1 rate from 7.10 to 7.99 BSM/s; r160 without DCC is unchang
 |---|---|
 | PQ seed 2 | Falcon on seed 2: CBR 0.229 → 0.758, PDR 0.976 → 0.673. Both pass, as on seed 1 (0.21 → 0.73, 0.98 → 0.65) |
 | HSM at 160 | verify wait 0.34 → 1.70 ms (pass): one HSM server queues more than four software cores |
-| Signal timing | Mean speed: c40 6.72, base 6.39, c120 3.95, c180 3.36 m/s (all pass); density up (pass); CBR p95 up (pass). **SG.rate-c120 wrong:** the per-node rate rose 5.06 → 5.29 because 6 trips of 75 complete at c120, against 12 at 60 s and 21 at 40 s, at CBR 0.03, far under J2945/1's knee. `sig-c120-r3000` (and so X-sig-demand and SG.cost-r3000) was still in the queue at the stop |
+| Signal timing | Mean speed: c40 6.72, base 6.39, c120 3.95, c180 3.36 m/s (all pass); density up (pass); CBR p95 up (pass). **SG.rate-c120 wrong:** the per-node rate rose 5.06 → 5.29 because 6 trips of 75 complete at c120, against 12 at 60 s and 21 at 40 s, at CBR 0.03, far under J2945/1's knee. SG.cost-r3000 passes (events x2.96 at 3,000 veh/h). `sig-c120-r3000`, and so X-sig-demand, was stopped in the queue when disk ran low |
 | Pedestrians | PSM frames x2.98 for 450 walkers, x0.42 for 50, x3.44 with every VRU equipped, 0 with none (all pass). PCW 13 → 0 → 43, conflicts unchanged without devices, events x2.5 (pass). **PD.cbr-450 open:** the mean busy ratio fell 0.00254 → 0.00248 while the offered airtime rose 62 % (correction LC.PD.offered-450 passes); likely the 95 extra VRU devices' own CBR samples in the mean |
 | CRLG dose (home) | Identical to scms-crlg: the home CRLG still holds no in-window revocation. Superseded by `LC.CRL.b-dose` |
 
 **Build and the CRL chain end to end (open).**
-- The build machine's lock was held by other agents' test runs for the whole package
-  (one `cargo test -p v2xw-engine --no-fail-fast` held it for over 1 h 50 min). Neither
-  the targeted tests nor the fixed binary got built before the stop.
-- Every engine change above is committed with its test, but **neither test has been run,
-  and neither has been shown red under its fault**.
+- Other agents' test runs held the build lock for almost the whole package (one
+  `cargo test -p v2xw-engine --no-fail-fast` held it for over 1 h 50 min).
+- The one compile that ran, at the stop, failed: the `actors.backend.failures` key note
+  in `validate.rs` was left unterminated. That is fixed in `dadecf1e`, which has not been
+  compiled.
+- Disk free then fell to 2 GB (5 GB at the stop), so no further build was run.
+- **Neither test has been run, and neither has been shown red under its fault.**
 - The provider-b CRL chain (S2, scms-crlg-b, scms-crlg-b-short, scms-crlstore-b,
-  scms-crlg2, and r40b2/r40-slh2 for `signed_past_end`) needs the fixed binary. Its 23
+  scms-crlg2, and r40b2/r40-slh2 for `signed_past_end`) needs the fixed binary. Its 22
   rows are committed with predictions and are `not run`.
 - To resume:
   1. `cargo test -p v2xw-engine --lib --test cert_cycle_signature -- provider_failure a_signer_that`.
@@ -269,13 +271,15 @@ predicted.**
 ## Not run
 
 2026-10-25's pending runs were run on 2026-10-26, except `sig-c120-r3000`, which was
-still queued at the stop (SG.demand-amplifies and SG.cost-r3000 are pending on it). The
-23 rows of the provider-b CRL chain and the `signed_past_end` rows wait for the fixed
+stopped in the queue (SG.demand-amplifies is pending on it). The
+22 rows of the provider-b CRL chain and the `signed_past_end` rows wait for the fixed
 binary (continuation, "Build").
+The run stopped when disk free fell to 2 GB, under the 5 GB floor, while other agents
+held the build lock.
 
 ## Rows
 
-The table has 124 rows: 80 pass, 13 wrong expectations (each corrected with evidence), 8 open and 23 not run. No row fails, and no row was weakened. A correction keeps the original row with its verdict and adds the corrected measure as a new row; a 2026-10-26 judgement says so in the row's `note`. Rows judged on 2026-10-25 against the r160 run, which was re-run on the 938fb16a release, keep their 2026-10-25 measure, marked `(2026-10-25)`.
+The table has 124 rows: 81 pass, 13 wrong expectations (each corrected with evidence), 8 open and 22 not run. No row fails, and no row was weakened. A correction keeps the original row with its verdict and adds the corrected measure as a new row; a 2026-10-26 judgement says so in the row's `note`. Rows judged on 2026-10-25 against the r160 run, which was re-run on the 938fb16a release, keep their 2026-10-25 measure, marked `(2026-10-25)`.
 
 **pq-chain**
 
@@ -389,7 +393,7 @@ The table has 124 rows: 80 pass, 13 wrong expectations (each corrected with evid
 | SG.rate-c120 | sig-base -> sig-c120 | `lc.bsms_per_veh_s` | down | 5.06289 -> 5.28941 | wrong-expectation |
 | SG.cbr-peak-c120 | sig-base -> sig-c120 | `m.cbr.172.p95` | up | 0.0963 -> 0.0988 | pass |
 | SG.demand-amplifies | X-sig-demand | `x.value` | band [1e-06, 1000] | not run (run-slot budget) | not run |
-| SG.cost-r3000 | sig-base -> sig-r3000 | `cost.events` | up > 0.5x | not run (run-slot budget) | not run |
+| SG.cost-r3000 | sig-base -> sig-r3000 | `cost.events` | up > 0.5x | 1686086 -> 4987321 | pass |
 
 **ped-chain**
 
