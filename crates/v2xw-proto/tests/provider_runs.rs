@@ -454,3 +454,39 @@ fn component_ssp_versions_follow_each_providers_published_form() {
         assert_eq!(version(&cert), 2, "S2X {role}");
     }
 }
+
+/// Audit-gov §4 item 4: the enrolment request's DCM->ECA hop is on `pki.flow`. CAMP's
+/// bootstrap is EE -> DCM -> ECA, and the DCM forwards the device's own
+/// `EeEcaCertRequestSpdu`, so each provider's records show as many DCM->ECA requests as
+/// EE->DCM ones, each forward no earlier than its request. Fault (the first form): only
+/// EE->DCM, ECA->DCM and DCM->EE were recorded and the ECA showed 0 requests received.
+#[test]
+fn every_enrolment_request_is_recorded_on_the_dcm_to_eca_hop() {
+    let (mut home, mut peer) = runs();
+    let (a, b) = (NodeId::new(5_000_231), NodeId::new(5_000_232));
+    home.preload(a, 0, 1, 2).expect("provisions");
+    peer.preload(b, 0, 1, 2).expect("provisions");
+    for run in [&home, &peer] {
+        let n = run.state.nodes;
+        let (dcm, eca) = (n.dcm.index(), n.eca.index());
+        let req = |from: Option<u32>, to: u32| -> Vec<u64> {
+            run.state
+                .pdus
+                .iter()
+                .filter(|q| {
+                    q.kind == v2xw_proto::scms::pdu::SpduKind::EeEcaCertRequest
+                        && q.to == to
+                        && from.is_none_or(|f| q.from == f)
+                })
+                .map(|q| q.at)
+                .collect()
+        };
+        let to_dcm = req(None, dcm);
+        let to_eca = req(Some(dcm), eca);
+        assert!(!to_dcm.is_empty(), "a device asked its DCM");
+        assert_eq!(to_eca.len(), to_dcm.len(), "one forward per request");
+        for (r, f) in to_dcm.iter().zip(&to_eca) {
+            assert!(f >= r, "forwarded no earlier than requested");
+        }
+    }
+}

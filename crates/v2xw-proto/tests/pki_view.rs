@@ -941,3 +941,42 @@ fn without_a_deployed_lop_the_records_show_a_device_talking_to_the_ra() {
         "an undeployed LOP is not a component"
     );
 }
+
+/// Audit-gov §4: the Studio's Backend view drew a LOP box carrying traffic although the US
+/// profile deploys none. Without a deployed LOP the view has no `lop` entity and no edge
+/// that names it; the transparent hop's traffic is the device-to-RA edge it is. Fault (the
+/// first form): a `lop` entity, and `ee -> lop` and `lop -> ra` edges with messages.
+#[test]
+fn without_a_deployed_lop_the_backend_view_draws_none() {
+    use v2xw_proto::scms::deployment::{Deployment, Preset};
+    let d = Deployment::preset(Preset::UsProduction2025);
+    assert!(!d.options.lop, "the US deployment runs no LOP");
+    let mut run = ScmsRun::new_deployed(ScmsParams::default().quick(), 0, d).expect("builds");
+    run.add_device(DEVICE_A);
+    provisioned(&mut run, DEVICE_A, 0, 1, JMAX);
+    let mut tracker = v2xw_proto::view::EdgeTracker::default();
+    let view = run.backend_view(run.kernel.now(), &mut tracker);
+    assert!(
+        view.entities.iter().all(|e| e.id != "lop"),
+        "no LOP entity: {:?}",
+        view.entities.iter().map(|e| e.id.as_str()).collect::<Vec<_>>()
+    );
+    for e in &view.edges {
+        assert!(
+            e.from != "lop" && e.to != "lop",
+            "an edge names the LOP: {} -> {}",
+            e.from,
+            e.to
+        );
+    }
+    assert!(
+        view.edges
+            .iter()
+            .any(|e| e.from == "ee" && e.to == "ra" && e.messages > 0),
+        "the device's traffic to the RA is drawn as such: {:?}",
+        view.edges
+            .iter()
+            .map(|e| (e.from.as_str(), e.to.as_str()))
+            .collect::<Vec<_>>()
+    );
+}

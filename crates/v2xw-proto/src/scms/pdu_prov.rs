@@ -377,7 +377,7 @@ fn ssp_of(c: &Certificate) -> Option<SecurityMgmtSsp> {
             return None;
         }
         match p.ssp.as_ref()? {
-            ServiceSpecificPermissions::opaque(o) => pdu::decode(o).ok(),
+            ServiceSpecificPermissions::opaque(o) => v2xw_sec::ctl::decode_security_mgmt_ssp(o),
             _ => None,
         }
     })

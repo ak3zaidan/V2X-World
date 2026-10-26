@@ -54,12 +54,19 @@ fn the_ctl_lists_exactly_one_root_per_provider() {
             "{role}"
         );
     }
-    assert!(
-        g.peer_cert("provider-b", "dcm").is_none(),
-        "the DCM is the factory's"
-    );
+    // Each provider's DCM is its own and certified under its own ICA: it signs the
+    // enrolment responses it relays to that provider's devices, so with one certificate per
+    // component (audit-gov §4 item 1) the peer's DCM is in its chain set too.
+    let dcm_a = g.cert("dcm").expect("home DCM");
+    let dcm_b = g.peer_cert("provider-b", "dcm").expect("peer DCM");
+    assert_ne!(cert_hashed_id8(dcm_a).unwrap(), cert_hashed_id8(dcm_b).unwrap());
     // Provider-b's ICA is issued by provider-b's root, not provider-a's.
     let ica_b = g.peer_cert("provider-b", "ica").unwrap();
+    assert_eq!(
+        issuer_id8(dcm_b),
+        Some(cert_hashed_id8(ica_b).unwrap()),
+        "the peer DCM is issued by the peer ICA"
+    );
     assert_eq!(
         issuer_id8(ica_b),
         Some(cert_hashed_id8(g.peer_cert("provider-b", "root").unwrap()).unwrap())
