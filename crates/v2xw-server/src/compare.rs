@@ -16,7 +16,10 @@
 //! except a count whose metric aggregates by its maximum (`agg: max`: a revocation list's
 //! entries and bytes "as last published", the memory high-water mark), which is a level
 //! carried from window to window and pools to its largest value. Summing it would report a
-//! list of 42 entries as 42 times the number of windows.
+//! list of 42 entries as 42 times the number of windows. A window too thin to estimate
+//! alone is pooled by the counts it carries (a proportion's successes and trials, a
+//! distribution's sum and n, which join the run's mean but not its percentiles), so a run's
+//! value does not depend on its metric period.
 //!
 //! # When a difference is "meaningful"
 //!
@@ -187,6 +190,11 @@ pub struct Pool {
     count: Option<u64>,
     /// The largest window value of a count whose metric aggregates by its maximum.
     peak: Option<u64>,
+    /// The sum and sample count of distribution windows too thin to summarise alone: they
+    /// join the run's mean (a sum over every sample divided by their count), not its
+    /// percentiles, which are the typical summarised window's.
+    thin_sum: f64,
+    thin_n: f64,
     distribution: bool,
     n: u64,
 }
@@ -198,6 +206,32 @@ impl Pool {
             self.unit = unit.to_string();
         }
         if value.is_insufficient() {
+            // A window too thin to estimate alone still carries its counts, so that it can be
+            // pooled into a run that is not (`RatioEstimate::Insufficient`,
+            // `DistributionSummary::Insufficient`). Dropping it would make a run's value
+            // depend on its metric period: a 1 s period has thin windows a 5 s period has not.
+            match value {
+                SampleValue::Ratio(RatioEstimate::Insufficient {
+                    trials,
+                    successes: Some(successes),
+                    ..
+                }) => {
+                    self.successes += successes;
+                    self.trials += trials;
+                    self.n += trials;
+                }
+                SampleValue::Distribution(DistributionSummary::Insufficient {
+                    n,
+                    sum: Some(sum),
+                    ..
+                }) if sum.is_finite() => {
+                    self.distribution = true;
+                    self.thin_sum += sum;
+                    self.thin_n += *n as f64;
+                    self.n += n;
+                }
+                _ => {}
+            }
             return;
         }
         self.n += value.n();
@@ -253,9 +287,9 @@ impl Pool {
             out.push(("", self.successes as f64 / self.trials as f64));
         } else if self.den > 0.0 {
             out.push(("", self.num / self.den));
-        } else if self.wn > 0.0 {
-            out.push(("", self.w[0] / self.wn));
-            if self.distribution {
+        } else if self.wn + self.thin_n > 0.0 {
+            out.push(("", (self.w[0] + self.thin_sum) / (self.wn + self.thin_n)));
+            if self.distribution && self.wn > 0.0 {
                 out.push((".p50", self.w[1] / self.wn));
                 out.push((".p95", self.w[2] / self.wn));
                 out.push((".p99", self.w[3] / self.wn));
@@ -1440,5 +1474,106 @@ mod tests {
         };
         assert_eq!(value("crl_entries"), Some(5.0));
         assert_eq!(value("events_processed"), Some(100.0));
+    }
+
+    /// The same receptions and latencies binned at a 1 s and a 5 s metric period pool to the
+    /// same run value: a window too thin to estimate alone (below `min_trials`, or below a
+    /// distribution's `min_samples`) is pooled by the counts it carries, not dropped. Live
+    /// Studio track, LV.period5.pdr: the run's PDR moved with the period (+0.012 %) because
+    /// the 1 s run's two thin windows were left out.
+    #[test]
+    fn a_thin_window_is_pooled_by_its_counts_so_the_period_does_not_move_a_run() {
+        use v2xw_core::ctx::Visibility;
+        use v2xw_metrics::stats::{ConfidenceLevel, Distribution, Proportion};
+        use v2xw_metrics::{Agg, Dim, Dims, MetricDef, Quantum};
+        let pdr = MetricDef::new(
+            "pdr",
+            "ratio",
+            Agg::Ratio {
+                numerator: "rx_ok".into(),
+                denominator: "rx_attempts".into(),
+            },
+            Visibility::Public,
+            Quantum::PROBABILITY,
+            "delivery",
+        )
+        .with_dims([Dim::T]);
+        let lat = MetricDef::new(
+            "e2e_latency",
+            "ms",
+            Agg::Mean,
+            Visibility::Public,
+            Quantum::TIME_MS,
+            "latency",
+        )
+        .with_dims([Dim::T]);
+        // Ten 1 s windows: (successes, trials) and that window's latencies (ms). Windows 0,
+        // 2, 5 and 7 are below 10 trials and below 5 latency samples, and deliver better and
+        // slower than the rest, so leaving them out moves both run values.
+        let windows: [((u64, u64), &[f64]); 10] = [
+            ((3, 3), &[50.0, 52.0]),
+            ((10, 40), &[10.0, 11.0, 12.0, 9.0, 10.0, 11.0]),
+            ((2, 2), &[60.0]),
+            ((20, 50), &[8.0, 9.0, 10.0, 11.0, 12.0]),
+            ((15, 30), &[10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0]),
+            ((1, 1), &[70.0, 40.0, 41.0]),
+            ((9, 45), &[12.0, 13.0, 14.0, 15.0, 16.0]),
+            ((4, 4), &[55.0]),
+            ((7, 35), &[9.0, 9.0, 9.0, 9.0, 9.0]),
+            ((5, 25), &[11.0, 12.0, 13.0, 14.0, 15.0, 16.0]),
+        ];
+        let pooled = |period: usize| {
+            let mut b = DigestBuilder::new(false);
+            for (k, group) in windows.chunks(period).enumerate() {
+                let (mut s, mut n) = (0, 0);
+                let mut d = Distribution::default();
+                for ((ws, wn), xs) in group {
+                    s += ws;
+                    n += wn;
+                    d.observe_all(xs.iter().copied());
+                }
+                let t = ((k + 1) * period) as u64 * 1_000_000_000;
+                let ratio = Proportion::from_counts(s, n).estimate(10, ConfidenceLevel::P95);
+                b.add(&MetricSample::new(
+                    &pdr,
+                    t,
+                    Dims::new(),
+                    SampleValue::Ratio(ratio),
+                ));
+                b.add(&MetricSample::new(
+                    &lat,
+                    t,
+                    Dims::new(),
+                    SampleValue::Distribution(d.summary(5)),
+                ));
+            }
+            let value = |name: &str| {
+                b.metrics(None)
+                    .into_iter()
+                    .find(|m| m.name == name)
+                    .and_then(|m| m.value)
+                    .unwrap()
+            };
+            (value("pdr"), value("e2e_latency"))
+        };
+        let (s, n) = windows
+            .iter()
+            .fold((0, 0), |(s, n), ((a, b), _)| (s + a, n + b));
+        let all: Vec<f64> = windows
+            .iter()
+            .flat_map(|(_, xs)| xs.iter().copied())
+            .collect();
+        let mean = all.iter().sum::<f64>() / all.len() as f64;
+        for period in [1, 5] {
+            let (p, l) = pooled(period);
+            assert!(
+                (p - s as f64 / n as f64).abs() < 1e-9,
+                "period {period} s: pdr {p} against {s}/{n}"
+            );
+            assert!(
+                (l - mean).abs() < 2e-3,
+                "period {period} s: mean latency {l} against {mean}"
+            );
+        }
     }
 }
