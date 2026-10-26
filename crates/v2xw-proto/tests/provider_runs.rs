@@ -296,7 +296,10 @@ fn each_providers_root_and_ica_count_their_own_certificates() {
 /// The PDU-layer components of `run`'s provider, by governance role.
 fn pdu_components(
     run: &ScmsRun,
-) -> Vec<(&'static str, v2xw_msg::sec_types::ieee1609_dot2::Certificate)> {
+) -> Vec<(
+    &'static str,
+    v2xw_msg::sec_types::ieee1609_dot2::Certificate,
+)> {
     let pki = run.state.pki.as_ref().expect("the PDU layer is on");
     vec![
         ("root", pki.root.cert.clone()),
@@ -412,26 +415,43 @@ fn after_a_rollovers_changeover_new_certificates_chain_to_the_new_root() {
         assert!(pki.signer_key(&c.certificate).is_ok());
     }
     assert_eq!(issuer8(&pki.aca.cert), pki.ica.id8());
-    assert_eq!(issuer8(&pki.ica.cert), pki.root.id8(), "the chain ends at the new root");
+    assert_eq!(
+        issuer8(&pki.ica.cert),
+        pki.root.id8(),
+        "the chain ends at the new root"
+    );
     // The device enrolled before the changeover keeps certificates that still verify.
     let old_dev = &home.state.devices[&before];
     let old_enrol = &old_dev.enrolment_credential.as_ref().unwrap().cert;
     assert_eq!(issuer8(old_enrol), old.eca.id8());
-    assert!(pki.signer_key(old_enrol).is_ok(), "the old enrolment still verifies");
-    for c in old_dev.credentials.values().filter_map(|c| c.implicit.as_ref()) {
-        assert!(pki.signer_key(&c.certificate).is_ok(), "an old pseudonym still verifies");
+    assert!(
+        pki.signer_key(old_enrol).is_ok(),
+        "the old enrolment still verifies"
+    );
+    for c in old_dev
+        .credentials
+        .values()
+        .filter_map(|c| c.implicit.as_ref())
+    {
+        assert!(
+            pki.signer_key(&c.certificate).is_ok(),
+            "an old pseudonym still verifies"
+        );
     }
     // One CRL per CRACA: the current one, and the superseded hierarchy's.
     home.seed_standing_crl(1);
     let crlg = &home.state.crlg;
     let full = v2xw_sec::crl::decode_crl(crlg.secured.as_ref().unwrap().bytes()).unwrap();
     assert_eq!(full.contents.crl_craca.0[..], pki.craca_id8()[..]);
-    assert_eq!(crlg.secured_retired.len(), 1, "the old CRL signer signs too");
+    assert_eq!(
+        crlg.secured_retired.len(),
+        1,
+        "the old CRL signer signs too"
+    );
     let retired = v2xw_sec::crl::decode_crl(crlg.secured_retired[0].bytes()).unwrap();
     assert_eq!(retired.contents.crl_craca.0[..], old.craca_id8()[..]);
     assert_ne!(old.craca_id8(), pki.craca_id8());
 }
-
 
 /// Audit-gov §4 item 5: each provider's component certificates carry the
 /// `SecurityMgmtSsp` version of its published chain files. ISS pre-production (provider-a)
@@ -442,7 +462,9 @@ fn after_a_rollovers_changeover_new_certificates_chain_to_the_new_root() {
 fn component_ssp_versions_follow_each_providers_published_form() {
     let (home, peer) = runs();
     let version = |c: &v2xw_msg::sec_types::ieee1609_dot2::Certificate| {
-        let ssp = v2xw_sec::ctl::app_ssp(c, 35).flatten().expect("PSID 35 SSP");
+        let ssp = v2xw_sec::ctl::app_ssp(c, 35)
+            .flatten()
+            .expect("PSID 35 SSP");
         // choice tag, SEQUENCE preamble, then the `version` Uint8.
         ssp[2]
     };

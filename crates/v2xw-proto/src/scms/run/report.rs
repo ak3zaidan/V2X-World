@@ -586,12 +586,8 @@ impl ScmsState {
                         let Some(key) = ma.enc_private.as_ref() else {
                             continue;
                         };
-                        opened = crate::scms::mbr::ma_open_report(
-                            s.report.bytes(),
-                            &ma.cert,
-                            key,
-                            &pki,
-                        );
+                        opened =
+                            crate::scms::mbr::ma_open_report(s.report.bytes(), &ma.cert, key, &pki);
                         if opened.is_ok() {
                             break;
                         }

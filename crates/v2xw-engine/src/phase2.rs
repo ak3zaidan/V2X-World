@@ -3861,7 +3861,12 @@ impl Phase2 {
             .collect();
         let cas = pkis
             .iter()
-            .flat_map(|p| p.all().into_iter().chain(p.extra.iter()).chain(p.retired.iter()))
+            .flat_map(|p| {
+                p.all()
+                    .into_iter()
+                    .chain(p.extra.iter())
+                    .chain(p.retired.iter())
+            })
             .map(|a| std::sync::Arc::new(a.cert.clone()))
             .collect();
         (roots, cas)
@@ -9259,7 +9264,10 @@ mod ctl_device_tests {
         p.governance_due(t0);
         let (publish, _) = p.home().state.gov.pending[0].clone();
         assert!(!p.take_pki_changeover(), "decided, not yet published");
-        assert_eq!(p.home().state.pki.as_ref().unwrap().root.cert, old.root.cert);
+        assert_eq!(
+            p.home().state.pki.as_ref().unwrap().root.cert,
+            old.root.cert
+        );
         p.governance_due(publish);
         assert!(p.take_pki_changeover(), "the changeover at publication");
         let pki = std::sync::Arc::clone(p.home().state.pki.as_ref().unwrap());
@@ -9279,16 +9287,25 @@ mod ctl_device_tests {
                 .iter()
                 .find(|(l, _)| *l == label)
                 .expect("the home provider is a peer");
-            assert!(std::sync::Arc::ptr_eq(&copy.1, &pki), "every peer run follows");
+            assert!(
+                std::sync::Arc::ptr_eq(&copy.1, &pki),
+                "every peer run follows"
+            );
         }
         let (roots, cas) = p.trust_bundle();
         for c in [&pki.root.cert, &old.root.cert] {
             assert!(roots.iter().any(|r| **r == *c), "both roots are anchors");
         }
         for c in [&pki.aca.cert, &old.aca.cert] {
-            assert!(cas.iter().any(|r| **r == *c), "both ACAs are in the chain file");
+            assert!(
+                cas.iter().any(|r| **r == *c),
+                "both ACAs are in the chain file"
+            );
         }
-        assert_eq!(p.provider_issuers()[0].certificate().as_ref(), &pki.aca.cert);
+        assert_eq!(
+            p.provider_issuers()[0].certificate().as_ref(),
+            &pki.aca.cert
+        );
         p.governance_due(publish + 1);
         assert!(!p.take_pki_changeover(), "once");
     }

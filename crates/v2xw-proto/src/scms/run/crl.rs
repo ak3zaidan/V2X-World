@@ -378,9 +378,9 @@ impl ScmsState {
             .iter()
             .filter(|a| crate::scms::governance::role_of(&a.cert) == Some("crlg"))
         {
-            let Some(craca) = issuer_of(&signer.cert).and_then(|id| {
-                pki.retired.iter().map(|a| a.id8()).find(|a| *a == id)
-            }) else {
+            let Some(craca) = issuer_of(&signer.cert)
+                .and_then(|id| pki.retired.iter().map(|a| a.id8()).find(|a| *a == id))
+            else {
                 continue;
             };
             let spec = CrlSpec {

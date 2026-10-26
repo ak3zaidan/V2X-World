@@ -534,7 +534,10 @@ fn sybil_ghosts_are_on_the_air_and_detected() {
     // every ghost, so its time to detect is measured (live-atk 2026-10-25, SYM10).
     // Fault injected (and reverted): `note_ghost_frame` not noting the onset fails these.
     let o = &p.attacker_outcomes[0];
-    assert!(o.onset_ns.is_some(), "a Sybil attacker's outcome has no onset: {o:?}");
+    assert!(
+        o.onset_ns.is_some(),
+        "a Sybil attacker's outcome has no onset: {o:?}"
+    );
     assert!(o.falsified_claims >= p.ghost_frames, "{o:?}");
 }
 
@@ -1403,7 +1406,11 @@ fn a_crl_refused_bsm_is_not_judged_when_judge_revoked_is_off() {
         sig(&on) > 0,
         "the default must still judge CRL-refused frames (the runs before 2026-10-25)"
     );
-    assert_eq!(sig(&off), 0, "a CRL-refused frame was judged with judge_revoked 0");
+    assert_eq!(
+        sig(&off),
+        0,
+        "a CRL-refused frame was judged with judge_revoked 0"
+    );
     assert_eq!(off.phase2.revoked_attackers, on.phase2.revoked_attackers);
     assert_eq!(off.phase2.revoked_honest, 0);
 }

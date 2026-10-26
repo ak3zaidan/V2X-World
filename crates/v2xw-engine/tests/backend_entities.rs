@@ -131,7 +131,11 @@ fn the_backend_state_names_every_scms_entity_once_a_second() {
         let (mut a, mut b) = (w[0].clone(), w[1].clone());
         a["t"] = Value::Null;
         b["t"] = Value::Null;
-        assert_ne!(a, b, "an unchanged snapshot written again at t {}", w[1]["t"]);
+        assert_ne!(
+            a, b,
+            "an unchanged snapshot written again at t {}",
+            w[1]["t"]
+        );
     }
     let ts: Vec<u64> = views.iter().filter_map(|v| v["t"].as_u64()).collect();
     assert!(ts.windows(2).all(|w| w[0] < w[1]), "snapshots go forward");

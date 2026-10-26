@@ -981,7 +981,10 @@ fn without_a_deployed_lop_the_backend_view_draws_none() {
     assert!(
         view.entities.iter().all(|e| e.id != "lop"),
         "no LOP entity: {:?}",
-        view.entities.iter().map(|e| e.id.as_str()).collect::<Vec<_>>()
+        view.entities
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect::<Vec<_>>()
     );
     for e in &view.edges {
         assert!(
