@@ -1,0 +1,8 @@
+# 20 % Sybil attackers from 20 s, suite M.
+schema: v2xw/scenario/1
+meta: {base: modelled.yaml, name: live-atk share-sybil-m-20}
+threats:
+  attackers:
+    - id: threat/attacker/legacy/Sybil
+      fraction: 0.2
+      schedule: {from_s: 20.0, to_s: 150.0}

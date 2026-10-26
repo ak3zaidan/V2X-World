@@ -1,0 +1,7 @@
+# live-atk base on the raw 10 Hz GNSS fixes (no receiver smoothing, no static hold): the
+# positioning every scenario without a gnss block runs. Attack-free, suite L.
+schema: v2xw/scenario/1
+meta: {base: base.yaml, name: live-atk rawgnss}
+actors:
+  vehicles:
+    gnss: {smoothing_tau_s: 0.0, static_hold_mps: 0.0}

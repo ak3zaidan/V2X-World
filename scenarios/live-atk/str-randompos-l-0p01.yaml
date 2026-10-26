@@ -1,0 +1,9 @@
+# 10 % RandomPos attackers at attack intensity 0.01 (every magnitude x 0.01), suite L.
+schema: v2xw/scenario/1
+meta: {base: base.yaml, name: live-atk str-randompos-l-0p01}
+threats:
+  attackers:
+    - id: threat/attacker/legacy/RandomPos
+      fraction: 0.1
+      params: {intensity: 0.01}
+      schedule: {from_s: 20.0, to_s: 150.0}

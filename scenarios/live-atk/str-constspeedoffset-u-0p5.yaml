@@ -1,0 +1,9 @@
+# 10 % ConstSpeedOffset attackers at attack intensity 0.5 (every magnitude x 0.5), suite U.
+schema: v2xw/scenario/1
+meta: {base: us.yaml, name: live-atk str-constspeedoffset-u-0p5}
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstSpeedOffset
+      fraction: 0.1
+      params: {intensity: 0.5}
+      schedule: {from_s: 20.0, to_s: 150.0}

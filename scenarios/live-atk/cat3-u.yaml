@@ -1,0 +1,27 @@
+# Catalogue group 3: one attacker of each type from 20 s, on actors present from the
+# start (picked from the attack-free run by stay). Suite of us.yaml.
+schema: v2xw/scenario/1
+meta: {base: us.yaml, name: live-atk cat3-u}
+threats:
+  attackers:
+    - id: threat/attacker/legacy/AlongRoadOffset
+      actor_ids: [9]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/StopAndGo
+      actor_ids: [32]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/Sybil
+      actor_ids: [6]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/NotYetValid
+      actor_ids: [30]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/OutOfOrder
+      actor_ids: [22]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/PosHeadingInconsistent
+      actor_ids: [34]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/EventualStop
+      actor_ids: [16]
+      schedule: {from_s: 20.0, to_s: 150.0}

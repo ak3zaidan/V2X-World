@@ -1,0 +1,7 @@
+# share-constpos-l-10 with report_interval_s 5.0.
+schema: v2xw/scenario/1
+meta: {base: share-constpos-l-10.yaml, name: live-atk repint-5p0}
+detection:
+  local:
+    - id: detect/legacy-12
+      params: {report_interval_s: 5.0}

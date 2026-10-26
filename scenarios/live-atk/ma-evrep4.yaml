@@ -1,0 +1,7 @@
+# share-constpos-l-10 with the MA rule threat/ma/corroborated {event_min_reporters: 4}.
+schema: v2xw/scenario/1
+meta: {base: share-constpos-l-10.yaml, name: live-atk ma-evrep4}
+detection:
+  ma:
+    id: threat/ma/corroborated
+    params: {event_min_reporters: 4}

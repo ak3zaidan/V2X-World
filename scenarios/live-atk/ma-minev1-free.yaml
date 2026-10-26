@@ -1,0 +1,7 @@
+# attack-free base with the MA rule threat/ma/corroborated {min_events: 1}.
+schema: v2xw/scenario/1
+meta: {base: base.yaml, name: live-atk ma-minev1-free}
+detection:
+  ma:
+    id: threat/ma/corroborated
+    params: {min_events: 1}
