@@ -74,6 +74,17 @@ runs:
   C2Mb: {scenario: scenarios/live-atk/cat2-m.yaml, note: 'C2M on the branch build (flag default)'}
   C2MJ: {scenario: scenarios/live-atk/cat2-m-jr.yaml, note: 'C2M with judge_revoked 0, branch build'}
   SYM10b: {scenario: scenarios/live-atk/share-sybil-m-10.yaml, note: 'SYM10 on the branch build (ghost frames open the attacker window)'}
+  # 2026-10-26: every run above re-made on the release build of 938fb16a (which carries the
+  # F2 flag and the F3 fix); the runs below are new. `f` = the fix build (938fb16a + the
+  # F4 and F5 fixes, optimised debug build).
+  RSL: {scenario: scenarios/live-atk/rs-only-l.yaml, note: 'one RandomSpeed attacker alone, suite L (F6)'}
+  B0Lf: {scenario: scenarios/live-atk/base.yaml, note: 'B0L on the fix build'}
+  C2Lf: {scenario: scenarios/live-atk/cat2.yaml, note: 'C2L on the fix build'}
+  C2Mf: {scenario: scenarios/live-atk/cat2-m.yaml, note: 'C2M on the fix build'}
+  C2Uf: {scenario: scenarios/live-atk/cat2-u.yaml, note: 'C2U on the fix build'}
+  C3Mf: {scenario: scenarios/live-atk/cat3-m.yaml, note: 'C3M on the fix build'}
+  TSU1f: {scenario: scenarios/live-atk/str-randomspeed-u-1p0.yaml, note: 'TSU1p0 on the fix build'}
+  TSU3f: {scenario: scenarios/live-atk/str-randomspeed-u-3p0.yaml, note: 'TSU3p0 on the fix build'}
 rows:
 # ---- 0. Attack-free: no attacker, nothing to revoke --------------------------------------
 - id: A0.L.no-attackers
@@ -2184,3 +2195,196 @@ rows:
   measured: pending
   verdict: pending
   source: 'the fix changes only the bookkeeping of the outcome, not what any receiver or the MA does'
+
+# ---- 9. 2026-10-26: F4, F5 fixes and the F6 model (written before their runs) -----------
+# F4 fix: an ExpiredCert / NotYetValid attacker signs under a genuine certificate used out
+# of its validity, so its signature verifies; the receiver refuses the BSM by the IEEE
+# 1609.2 §5.2 generation-time-in-validity rule and the research suite reads that as
+# certValidity (the legacy model: signature valid, certificate out of window).
+- id: F4.B0L.untouched
+  base: B0L
+  variant: B0Lf
+  area: fix-F4
+  measure: digest
+  expect: identical
+  fault: nondeterministic
+  measured: pending
+  verdict: pending
+  source: 'the fix changes only frames under an out-of-window certificate and RandomSpeed/StopAndGo at k != 1; an attack-free run is byte-identical'
+- id: F4.M.ExpiredCert.certValidity
+  base: C2Mf
+  variant: C2Mf
+  area: fix-F4
+  measure: rec.kdet.ExpiredCert.certValidity
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'certValidity is the check built for ExpiredCert; the BSM verifies, its certificate expired 5 s before (expired_cert_lag_s 5 > cert_slack_s 1)'
+- id: F4.M.ExpiredCert.no-signature
+  base: C2Mf
+  variant: C2Mf
+  area: fix-F4
+  measure: rec.kdet.ExpiredCert.signatureVerification
+  expect: eq
+  value: 0
+  fault: crossfire
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'its signature is good, and the validity rule refuses before the CRL is read, so no receiver reports a bad signature about it (613 before the fix)'
+- id: F4.M.ExpiredCert.decided
+  base: C2Mf
+  variant: C2Mf
+  area: fix-F4
+  measure: k.ExpiredCert.decided
+  expect: ge
+  value: 1
+  fault: no-revocation
+  measured: pending
+  verdict: pending
+  source: 'certValidity evidence is not set aside (only signature-only evidence is, phase2.rs evidence-unverifiable); with every verdict filed (M) the corroborated MA gets 3 events x 2 reporters in 60 s'
+- id: F4.M.crossfire-down
+  base: C2M
+  variant: C2Mf
+  area: fix-F4
+  measure: rec.kdet_other.signatureVerification
+  expect: down
+  min_change: 0.3
+  fault: crossfire
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'the ExpiredCert share of the cross-fire (613 of 1,225 on 486c8cba) goes; the CRL-refused part (F2, flag default) stays'
+- id: F4.M.no-honest
+  base: C2Mf
+  variant: C2Mf
+  area: fix-F4
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'the fix adds a check that fires only on an out-of-window certificate'
+- id: F4.M.NotYetValid.certValidity
+  base: C3Mf
+  variant: C3Mf
+  area: fix-F4
+  measure: rec.kdet.NotYetValid.certValidity
+  expect: ge
+  value: 1
+  fault: swap-detector
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'certValidity is built for NotYetValid; the certificate starts 5 s after the BSM (not_yet_valid_lead_s 5 > cert_slack_s 1)'
+- id: F4.M.NotYetValid.no-signature
+  base: C3Mf
+  variant: C3Mf
+  area: fix-F4
+  measure: rec.kdet.NotYetValid.signatureVerification
+  expect: eq
+  value: 0
+  fault: crossfire
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'as F4.M.ExpiredCert.no-signature (642 before the fix)'
+- id: F4.L.ExpiredCert.verdicts
+  base: C2Lf
+  variant: C2Lf
+  area: fix-F4
+  measure: p2.verdicts.certValidity
+  expect: ge
+  value: 1
+  fault: detector-blind
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'the research suite fires certValidity under L as under M; only filing differs'
+- id: F4.L.ExpiredCert.decided
+  base: C2Lf
+  variant: C2Lf
+  area: fix-F4
+  measure: k.ExpiredCert.decided
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'certValidity has no SM-MBR v1.1 subtype, so a US device files none of it (OF-2)'
+- id: F4.U.ExpiredCert.reported
+  base: C2Uf
+  variant: C2Uf
+  area: fix-F4
+  measure: k.ExpiredCert.reported
+  expect: eq
+  value: 0
+  fault: all-caught
+  measured: pending
+  verdict: pending
+  source: 'the US profile checks only verified BSM pairs and has no certificate check: a refused BSM is not judged, before or after the fix'
+- id: F4.U.no-honest
+  base: C2Uf
+  variant: C2Uf
+  area: fix-F4
+  measure: rec.revoked_hon
+  expect: eq
+  value: 0
+  fault: honest-revoked
+  measured: pending
+  verdict: pending
+  source: 'nothing honest changes under U'
+# F5 fix: k = intensity x magnitude_scale now scales RandomSpeed's (and StopAndGo's) lie.
+- id: F5.k1-untouched
+  base: TSU1p0
+  variant: TSU1f
+  area: fix-F5
+  measure: digest
+  expect: identical
+  fault: nondeterministic
+  measured: pending
+  verdict: pending
+  source: 'at k = 1 the claimed speed is the historic draw; the run is byte-identical'
+- id: F5.maxspeed-at-k3
+  base: TSU3f
+  variant: TSU3f
+  area: fix-F5
+  measure: p2.verdicts.implausibleSpeed
+  expect: ge
+  value: 1
+  fault: detector-blind
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'claimed = v + 3(u - v), u ~ U[0, 40]: over MaxSpeed 90 m/s when u > 30 + 2v/3, about 8 % of draws at v = 10 m/s'
+# F6: the legacy implausibleAcceleration reads the newest fix at least detector_lag_s
+# (1.5 s) old, i.e. dt 1.8 to 2 s at a 0.9 to 1 s check rate, not the 1 s the 10-25
+# prediction assumed; the two-check streak squares the per-check chance. Monte Carlo of
+# the formulas (tools/realworld/live_atk.py docstring): 0.026 to 0.044 firings per check.
+- id: F6.RSL.accel-per-psi
+  base: RSL
+  variant: RSL
+  area: model-F6
+  measure: p2.accel_per_psi
+  expect: band
+  band: [0.03, 0.5]
+  fault: detector-blind
+  measured: pending
+  verdict: pending
+  source: 'both checks read the same checks of one RandomSpeed sender; the model gives 0.05 to 0.45 over v 0 to 12 m/s and confidence 3 to 5 m'
+- id: F6.RSL.accel-fires
+  base: RSL
+  variant: RSL
+  area: model-F6
+  measure: p2.verdicts.implausibleAcceleration
+  expect: ge
+  value: 1
+  fault: detector-blind
+  absent_is_zero: true
+  measured: pending
+  verdict: pending
+  source: 'the check does fire on RandomSpeed, rarely (C2L: 3)'
