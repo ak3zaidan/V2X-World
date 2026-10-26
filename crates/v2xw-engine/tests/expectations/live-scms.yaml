@@ -141,6 +141,12 @@ runs:
   VPR:
     scenario: scenarios/live-scms/vpr.yaml
     note: verification_policy prioritized
+  LG:
+    scenario: scenarios/live-scms/lg.yaml
+    note: the base on obu/generic-automotive-soc-no-hsm (publishes P-384)
+  S384G:
+    scenario: scenarios/live-scms/s384g.yaml
+    note: signature ecdsa-p384 on obu/generic-automotive-soc-no-hsm
 rows:
 - id: LS.DET.records
   base: L
@@ -1349,3 +1355,79 @@ rows:
   source: provider-b's MA revokes nothing it never certified
   measured: '0'
   verdict: pass
+- id: LS.S384G.verify
+  base: LG
+  variant: S384G
+  area: scms
+  measure: m.verify_cost.mean
+  expect: ratio
+  band:
+  - 7.5
+  - 9.5
+  source: 'the profile prices P-384 itself: 5,721 us against 645 us for P-256 verify (R5 B.5): x8.87'
+  note: judged on the fixed binary of 2026-10-26 (runs folder r2), not on 938fb16a
+  measured: pending
+  verdict: pending
+- id: LS.S384G.size
+  base: LG
+  variant: S384G
+  area: on-air
+  measure: air.bsm.psdu_mean
+  expect: delta
+  band:
+  - 31.5
+  - 37.5
+  source: 'as S384: +32 B signature, +48 B on each certificate x0.1'
+  note: judged on the fixed binary of 2026-10-26 (runs folder r2), not on 938fb16a
+  measured: pending
+  verdict: pending
+- id: LS.S384F.verify
+  base: L
+  variant: S384
+  area: scms
+  measure: m.verify_cost.mean
+  expect: same
+  tol: 0.001
+  source: 'the Craton2 profile publishes no P-384 figure: P-384 is charged as P-256 (flagged on the card)'
+  note: judged on the fixed binary of 2026-10-26 (runs folder r2), not on 938fb16a
+  measured: pending
+  verdict: pending
+- id: LS.KEMF.not-filed
+  base: L
+  variant: KEM
+  area: scms
+  measure: p2.reports_not_filed
+  expect: ratio
+  band:
+  - 0.8
+  - 1.25
+  source: 'R-KEMFILE fix: the SM-MBR filing rules do not depend on the KEM, so the US profile refuses
+    about what it refuses classically (486c8cba: 255 -> 0)'
+  note: judged on the fixed binary of 2026-10-26 (runs folder r2), not on 938fb16a
+  measured: pending
+  verdict: pending
+- id: LS.KEMF.received
+  base: L
+  variant: KEM
+  area: scms
+  measure: p2.reports_received
+  expect: ratio
+  band:
+  - 0.8
+  - 1.25
+  source: 'R-KEMFILE fix: the MA receives about the classical number (486c8cba: 327 -> 582, +78 %)'
+  note: judged on the fixed binary of 2026-10-26 (runs folder r2), not on 938fb16a
+  measured: pending
+  verdict: pending
+- id: LS.VODF.checked
+  base: L
+  variant: VOD
+  area: scms
+  measure: p2.messages_checked
+  expect: down
+  min_change: 0.9
+  source: 'detection judges verified BSMs only (SM-MBR 2.3.1.2.1); on-demand leaves ~97 % unverified (486c8cba:
+    45,071 -> 49,194)'
+  note: judged on the fixed binary of 2026-10-26 (runs folder r2), not on 938fb16a
+  measured: pending
+  verdict: pending

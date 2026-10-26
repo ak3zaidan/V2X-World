@@ -1,0 +1,8 @@
+# live-scms variant lg: the base on the generic automotive SoC without an HSM, the one
+# shipped OBU profile that publishes a P-384 figure (R5 B.5), as the base of s384g.
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: live-scms lg
+nodes:
+  default_obu: obu/generic-automotive-soc-no-hsm
