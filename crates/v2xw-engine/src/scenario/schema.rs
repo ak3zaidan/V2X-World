@@ -233,6 +233,24 @@ pub struct Traffic {
     /// Unset follows the jurisdiction (New York City has its taxis).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kerbside: Option<KerbsideSettings>,
+    /// Whether a vehicle entering the map from outside it (its origin a lane no road of
+    /// the map feeds, at the map's edge) is put on at the start of that lane at its
+    /// desired speed, capped by the speed that is safe behind the vehicle ahead and that
+    /// can still stop at the lane's end, as SUMO's departSpeed="desired" with
+    /// departPos="base" does. Origins inside the network stay at rest. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depart_at_speed: Option<bool>,
+    /// The share of drivers who re-route on information, 0-1, drawn once per driver
+    /// (SUMO device.rerouting.probability). The rest keep the route they chose and detour
+    /// only round a closure they can see. Unset is 1: every driver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reroute_share: Option<f64>,
+    /// Where those drivers learn that the road has changed: `navigation` (a navigation
+    /// app: network-wide, on speeds smoothed over three minutes, and every closure) or
+    /// `v2x` (only a DENM or TIM their own unit received and verified, placing a blocking
+    /// event on their route: local and belief-only). Unset is navigation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reroute_source: Option<v2xw_mobility::routing::dynamic::RerouteSource>,
 }
 
 // traffic audit
@@ -332,6 +350,9 @@ impl Default for Traffic {
             standing_leader_stop: None,
             lane_bend_speed: None,
             kerbside: None,
+            depart_at_speed: None,
+            reroute_share: None,
+            reroute_source: None,
         }
     }
 }

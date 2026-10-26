@@ -697,6 +697,17 @@ pub enum MobilityCommand {
         /// `true` closes it.
         closed: bool,
     },
+    /// The actor's on-board unit received and verified a hazard warning (a DENM or TIM
+    /// for a blocked lane) placing the event on `lane`: what this driver now *believes*,
+    /// not ground truth. Under [`crate::routing::dynamic::RerouteSource::V2x`] a driver
+    /// who re-routes on information avoids the lane from the next step; otherwise it is
+    /// kept and has no effect.
+    HazardHeard {
+        /// The receiving actor.
+        actor: ActorId,
+        /// The lane the warning's event position maps to on the receiver's map.
+        lane: LaneId,
+    },
     /// Put a specific trip on the road, bypassing the demand model.
     Spawn(TripRequest),
     /// Brake at `decel_mps2` until the vehicle stands, then hold it until `hold_until`

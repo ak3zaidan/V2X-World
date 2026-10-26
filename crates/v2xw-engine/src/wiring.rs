@@ -480,6 +480,15 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     }
     params.dynamic_rerouting = traffic.dynamic_rerouting;
     params.reroute_period_s = traffic.reroute_period_s.max(0.0);
+    if let Some(share) = traffic.reroute_share {
+        params.reroute_share = share.clamp(0.0, 1.0);
+    }
+    if let Some(source) = traffic.reroute_source {
+        params.reroute_source = source;
+    }
+    if let Some(v) = traffic.depart_at_speed {
+        params.depart_at_speed = v;
+    }
     params.lane_changes = traffic.lane_changes;
     params.strategic_lane_choice = traffic.strategic_lane_choice;
     params.junction_clearance = traffic.keep_junctions_clear;

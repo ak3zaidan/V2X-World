@@ -239,11 +239,17 @@ fn audit_city(path: &str, id: &str, seconds: f64) -> serde_json::Value {
         .filter(|c| report.count(**c) > 0)
         .map(|c| format!("{} {}", c.label(), report.count(*c)))
         .collect();
+    // `V2XW_AUDIT_EXAMPLES=<check label>` lists up to 16 examples of that one check
+    // instead of the first four safety examples, for tracing one defect class.
+    let focus = std::env::var("V2XW_AUDIT_EXAMPLES").ok();
     let examples: Vec<String> = report
         .examples
         .iter()
-        .filter(|e| SAFETY.contains(&e.check) || e.check == Class::Standstill)
-        .take(4)
+        .filter(|e| match &focus {
+            Some(label) => e.check.label() == label.as_str(),
+            None => SAFETY.contains(&e.check) || e.check == Class::Standstill,
+        })
+        .take(if focus.is_some() { 16 } else { 4 })
         .map(|e| {
             format!(
                 "{} t={:.1}s actor={:?} lane={:?} ({:.1},{:.1}): {}",

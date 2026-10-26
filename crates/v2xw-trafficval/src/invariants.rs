@@ -378,6 +378,22 @@ pub fn checks() -> Vec<Check> {
             ],
             run: closure,
         },
+        Check {
+            id: "invariants/boundary-insertion",
+            group: Group::Invariants,
+            title: "Vehicles entering at the map's edge come in moving: no halts on their first lane at light demand",
+            procedure: "`portland-downtown.yaml` at a light 600 veh/h with no pedestrians and \
+                origins on the map's perimeter (`od.boundary_origins`), \
+                `traffic.depart_at_speed` on, 180 s (120 s in quick mode). A vehicle whose \
+                first lane is a map-edge entry (`v2xw_mobility::engine::is_boundary_entry`: \
+                fed by no road of the map, starting at its edge) is followed while it is \
+                on that lane. A halt is a step below 0.1 m/s (SUMO's halting speed) more \
+                than 15 m before the lane's end with nobody within 15 m ahead; a slow \
+                entry is a first step below half the lane's limit with the lane clear for \
+                50 m and more than 50 m of it left.",
+            faults: &["`traffic.depart_at_speed` off: map-edge entrants are put down at rest"],
+            run: boundary_insertion,
+        },
     ]
 }
 
@@ -443,6 +459,125 @@ fn shipped(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         }
     }
     Ok(Outcome { rows, notes })
+}
+
+/// What [`boundary_insertion`] follows: each map-edge entrant on its first lane.
+#[derive(Default)]
+struct EntryWatch {
+    seen: BTreeSet<ActorId>,
+    first_lane: BTreeMap<ActorId, LaneId>,
+    entrants: u64,
+    slow_entries: u64,
+    halts: u64,
+    entry_ratio_sum: f64,
+    examples: Vec<String>,
+}
+
+fn boundary_insertion(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
+    let seconds = lab.cfg.secs(180, 120) as f64;
+    let mut s = load(
+        &lab.cfg.root.join("scenarios/portland-downtown.yaml"),
+        &Overrides {
+            rate_veh_per_h: Some(600.0),
+            seconds: Some(seconds),
+            pedestrians: Some(0),
+        },
+    )?;
+    let params = &mut s.actors.vehicles.demand.params;
+    if !params.is_object() {
+        *params = serde_json::json!({});
+    }
+    params["od"] = serde_json::json!({ "boundary_origins": true });
+    s.traffic.get_or_insert_with(Default::default).depart_at_speed =
+        Some(variant != Variant::Fault(0));
+    let world = world_of(lab, &s)?;
+    let mut w = EntryWatch::default();
+    scenario_run(lab, &s, Engine::Shipped, &[], None, |t, actors| {
+        for a in actors {
+            if w.seen.insert(a.actor) && v2xw_mobility::engine::is_boundary_entry(&world, a.lane)
+            {
+                w.first_lane.insert(a.actor, a.lane);
+                w.entrants += 1;
+                let lane = world.lane(a.lane);
+                let ahead = nearest_ahead(actors, a);
+                let limit = lane.speed_limit_mps.max(1e-9);
+                w.entry_ratio_sum += a.speed_mps / limit;
+                if a.speed_mps < 0.5 * limit && ahead > 50.0 && lane.length_m - a.s_m > 50.0 {
+                    w.slow_entries += 1;
+                    if w.examples.len() < 4 {
+                        w.examples.push(format!(
+                            "slow entry: actor {} at t {t:.1} s on lane {} at {:.2} m/s \
+                             (limit {limit:.1}), {:.0} m of lane left",
+                            a.actor.index(),
+                            a.lane.index(),
+                            a.speed_mps,
+                            lane.length_m - a.s_m
+                        ));
+                    }
+                }
+            }
+            if w.first_lane.get(&a.actor) != Some(&a.lane) {
+                w.first_lane.remove(&a.actor);
+                continue;
+            }
+            let lane = world.lane(a.lane);
+            if a.speed_mps < 0.1
+                && lane.length_m - a.s_m > 15.0
+                && nearest_ahead(actors, a) > 15.0
+            {
+                w.halts += 1;
+                if w.examples.len() < 8 {
+                    w.examples.push(format!(
+                        "halt: actor {} at t {t:.1} s on lane {}, {:.0} m before its end",
+                        a.actor.index(),
+                        a.lane.index(),
+                        lane.length_m - a.s_m
+                    ));
+                }
+            }
+        }
+    })?;
+    let rows = vec![
+        Row::held(
+            "map-edge entrants followed",
+            w.entrants as f64,
+            (10.0, f64::INFINITY),
+            "the run must put traffic in at the map's edge, or the check proves nothing",
+        ),
+        Row::zero(
+            "slow entries on a clear first lane",
+            w.slow_entries,
+            "SUMO departSpeed=\"desired\": traffic crossing the map's edge is already moving",
+        ),
+        Row::zero(
+            "halts on the first lane after the map's edge, road ahead clear",
+            w.halts,
+            "SUMO's halting speed 0.1 m/s; a free-flowing entry does not stop",
+        ),
+        Row::reported(
+            "mean entry speed over the lane's limit",
+            if w.entrants > 0 {
+                w.entry_ratio_sum / w.entrants as f64
+            } else {
+                0.0
+            },
+            "—",
+        ),
+    ];
+    Ok(Outcome {
+        rows,
+        notes: w.examples,
+    })
+}
+
+/// The net gap, metres, from `a`'s front to the rear of the nearest vehicle ahead of it on
+/// its lane (infinite when there is none).
+fn nearest_ahead(actors: &[AuditActor], a: &AuditActor) -> f64 {
+    actors
+        .iter()
+        .filter(|o| o.actor != a.actor && o.lane == a.lane && o.s_m > a.s_m)
+        .map(|o| o.s_m - o.length_m - a.s_m)
+        .fold(f64::INFINITY, f64::min)
 }
 
 fn grid_scenario(lab: &Lab, rate: f64, seconds: f64) -> Result<Scenario, String> {

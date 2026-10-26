@@ -148,6 +148,35 @@ trustworthy or comparable; later waves add behaviours and radio features.
   the V2X source only receivers of the message re-route; the outside-junction defects in
   `cities/berlin` and `midtown-street-life` go to zero. Fault per item: revert each change and
   its check goes red.
+- Status (2026-10-26): P9 and P14 implemented behind flags, P16 being traced; see the
+  notes below. Defaults are unchanged (no new draw at `reroute_share` 1, no serialised
+  parameter, no card line), so no golden moves.
+  - P9 `traffic.depart_at_speed` (off): `engine::is_boundary_entry` (motor lane fed by no
+    road except a U-turn, starting within 30 m of the world box; a procedural grid has
+    none) puts the vehicle at the lane start at min(desired, limit × speed factor),
+    capped by `sqrt(2·b·(d_end − s0))` and by bisection on the IDM so the leader (this
+    lane or the next two) asks for no more than `b`. Check: `invariants/boundary-insertion`
+    (Portland, 600 veh/h, perimeter origins; entrants ≥ 10, slow clear-lane entries 0,
+    halts 0; fault: flag off).
+  - P14 `traffic.reroute_share` (1) and `traffic.reroute_source` (`navigation` | `v2x`):
+    per-driver keyed draw (`mobility/routing/reroute-share`); only drawn drivers take
+    periodic, closure-generation and beyond-sight closure re-plans. Under `v2x` the engine
+    turns each verified lane-blocking DENM a vehicle's own unit delivered (accident,
+    roadworks, obstacle, stationary vehicle) into `MobilityCommand::HazardHeard` for that
+    vehicle only (`v2xw-engine/src/reroute_info.rs`, map-matched within 10 m); the driver
+    re-plans round the lane. TIM is not in the message set yet. Tests:
+    `engine::reroute_tests` (share 0/0.3/1 with 3σ, gating, v2x receiver only).
+  - P16: the hull already covers connector centrelines (d6696116, 2026-09-29), yet the
+    reports still list outside-junction steps; the auditor example now names class,
+    length and connector position so the cause can be read off a city run.
+  - Validated so far: `v2xw-mobility` compiles (tests too) under a distinct
+    `CARGO_PROFILE_DEV_CODEGEN_UNITS` (this worktree had no per-worktree cargo config,
+    so the shared target served another worktree's crate as fresh). Open: the four
+    `engine::reroute_tests` (first run fell over a lane-length filter, fixed, re-run
+    queued behind engine suites), compiling `v2xw-engine`/`v2xw-trafficval`, the
+    `invariants/boundary-insertion` run and its fault, the city runs that trace P16,
+    an engine-level V2X re-route run (breakdown with DENM on), and the red-under-fault
+    proofs for every new check.
 
 **WP-06 SUMO-format outputs** (S, 2 days). Source: S-P7.
 - Scope: FCD XML, tripinfo, edgeData/laneData, summary, and E1/E2 virtual detectors at named

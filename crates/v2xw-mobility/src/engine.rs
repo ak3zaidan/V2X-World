@@ -70,7 +70,7 @@ use crate::intersection::zones::ConflictZones;
 use crate::intersection::{STOP_LINE_OFFSET_M, headings_conflict};
 use crate::lanechange::mobil::{Mobil, MobilParams, MobilPreset, smoothstep};
 use crate::routing::dijkstra::DijkstraParams;
-use crate::routing::dynamic::{DynamicCost, DynamicReroute};
+use crate::routing::dynamic::{DynamicCost, DynamicReroute, RerouteSource};
 use crate::snapshot::{ActorSnapshot, NeighborOptions};
 use crate::traits::{
     CarFollowing, ClockModel, Demand, IntersectionControl, LaneChange, Mobility, VruMobility,
@@ -85,6 +85,8 @@ use crate::vru::social_force::SocialForce;
 use v2xw_core::rng::{EntityRef, RngDomain};
 
 mod tiering;
+#[cfg(test)]
+mod reroute_tests;
 pub use tiering::{Handoff, TripAdmission};
 
 /// The model id.
@@ -333,6 +335,9 @@ pub struct DriverTraits {
     pub params_z: [f64; 4],
     /// The key of this driver's perception-error noise ([`crate::drivers::std_normal`]).
     pub noise_key: u64,
+    /// Whether this driver re-routes on information ([`EngineParams::reroute_share`]);
+    /// true for every driver by default.
+    pub reroutes: bool,
 }
 
 impl DriverTraits {
@@ -346,6 +351,7 @@ impl DriverTraits {
         style: crate::style::DriverStyle::Normal,
         params_z: [0.0; 4],
         noise_key: 0,
+        reroutes: true,
     };
 
     /// The traits of the driver of trip `seq` in a vehicle of `class`, with the queue
@@ -436,6 +442,7 @@ impl DriverTraits {
             ),
             params_z,
             noise_key,
+            reroutes: true,
         }
     }
 }
@@ -703,6 +710,51 @@ pub struct DriverOverride {
     pub min_gap_m: Option<f64>,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_one(v: &f64) -> bool {
+    *v == 1.0
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_navigation(s: &crate::routing::dynamic::RerouteSource) -> bool {
+    *s == crate::routing::dynamic::RerouteSource::Navigation
+}
+
+/// How far from the world's bounding box, metres, a lane may start and still count as
+/// entering the map from outside it ([`is_boundary_entry`]). An import clips its roads at
+/// the box, so a cut road starts on it; the band absorbs the junction set-back the
+/// importer pulls a lane's end back by. This crate's choice.
+pub const BOUNDARY_BAND_M: f64 = 30.0;
+
+/// Whether `lane` brings traffic in from outside the map: a motorised lane outside any
+/// junction that no motorised lane feeds except by a U-turn, starting within
+/// [`BOUNDARY_BAND_M`] of the world's bounding box. A dead end inside the map (a garage, a
+/// cul-de-sac) is not one: traffic there really does start from rest. A procedural grid
+/// has none, every lane being fed by the junction it leaves.
+pub fn is_boundary_entry(world: &World, lane: LaneId) -> bool {
+    let Some(l) = world.try_lane(lane) else {
+        return false;
+    };
+    if !l.kind.is_motorised() || l.kind == LaneKind::Internal || l.junction.is_some() {
+        return false;
+    }
+    let fed = world.predecessors(lane).iter().any(|c| {
+        c.direction != TurnDirection::UTurn
+            && world
+                .try_lane(c.from_lane)
+                .is_some_and(|f| f.kind.is_motorised())
+    });
+    if fed {
+        return false;
+    }
+    let p = l.start();
+    let b = world.bbox;
+    (p.x - b.min.x).abs() <= BOUNDARY_BAND_M
+        || (b.max.x - p.x).abs() <= BOUNDARY_BAND_M
+        || (p.y - b.min.y).abs() <= BOUNDARY_BAND_M
+        || (b.max.y - p.y).abs() <= BOUNDARY_BAND_M
+}
+
 /// The engine's parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -860,6 +912,28 @@ pub struct EngineParams {
     /// (SUMO's rerouting device, `--device.rerouting.period`, with its default adaptation
     /// interval of 1 s and 180 adaptation steps). Set by `traffic.reroute_period_s`.
     pub reroute_period_s: f64,
+    /// The share of drivers who re-route on information (0-1), drawn once per driver
+    /// ([`crate::routing::dynamic::draws_reroute`]): SUMO's
+    /// `device.rerouting.probability`. 1 (the default) is every driver, as before; the
+    /// rest keep the route they chose and detour only round a closure they can see.
+    /// Set by `traffic.reroute_share`.
+    #[serde(skip_serializing_if = "is_one")]
+    pub reroute_share: f64,
+    /// Where those drivers learn that the road has changed
+    /// ([`crate::routing::dynamic::RerouteSource`]): a navigation app (the default) or
+    /// the V2X warnings their own unit received. Set by `traffic.reroute_source`.
+    #[serde(skip_serializing_if = "is_navigation")]
+    pub reroute_source: crate::routing::dynamic::RerouteSource,
+    /// Vehicles whose origin is a lane entering the map from outside it
+    /// ([`is_boundary_entry`]) are put on at the lane's start at their desired speed,
+    /// capped by the speed that is safe behind the vehicle ahead and that can still stop
+    /// at the lane's end at the comfortable deceleration; origins inside the network
+    /// stay at rest. SUMO `departSpeed="desired"` with `departPos="base"` (sumo.md P9):
+    /// a car crossing the map's edge is already moving, and one dropped there at rest is
+    /// a false halt and a false stopped-vehicle BSM. Off by default;
+    /// `traffic.depart_at_speed`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub depart_at_speed: bool,
     /// Human drivers: per-driver parameter spread, reaction time, perception errors and
     /// the heavy-vehicle left-lane restriction ([`crate::drivers`]). All off by default.
     /// Not applied in the legacy parity mode.
@@ -916,6 +990,9 @@ impl Default for EngineParams {
             strategic_lane_choice: false,
             lc2013: None,
             reroute_period_s: 0.0,
+            reroute_share: 1.0,
+            reroute_source: crate::routing::dynamic::RerouteSource::Navigation,
+            depart_at_speed: false,
             human: crate::drivers::HumanDriverParams::default(),
             reverse_order: false,
         }
@@ -1053,6 +1130,15 @@ struct Actor {
 }
 
 impl Actor {
+    /// Whether any of `lanes` is still ahead on this actor's route.
+    fn reroutes_on(&self, lanes: &BTreeSet<LaneId>) -> bool {
+        self.route
+            .lanes
+            .iter()
+            .skip(self.route_index + 1)
+            .any(|l| lanes.contains(l))
+    }
+
     /// What the exterior-lamp rules need to know about this vehicle ([`crate::lamps`]):
     /// its speed and acceleration, the lane change under way, the turn it is making, and
     /// the next turn on its route with the distance to where it starts.
@@ -1427,6 +1513,14 @@ pub struct NativeMobility {
     /// generation ([`DynamicCost::with_generation`]). Counting the closed lanes instead
     /// missed a reopen and a close in the same step.
     closure_changes: u64,
+    /// The blocked lanes each driver's own unit has told it about
+    /// ([`MobilityCommand::HazardHeard`]), not yet acted on and acted on: its belief, kept
+    /// for the rest of its trip. Read only under [`RerouteSource::V2x`].
+    heard_hazards: BTreeMap<ActorId, (BTreeSet<LaneId>, bool)>,
+    /// Every actor that has re-planned on information (a periodic congestion re-plan, a
+    /// closure beyond its sight, a warning it received): what `reroute_share` and
+    /// `reroute_source` gate ([`NativeMobility::rerouted_on_information`]).
+    info_rerouted: BTreeSet<ActorId>,
     pending: Vec<MobilityCommand>,
     /// Trips whose origin had no room when they arrived, with the instant they first
     /// asked, oldest first (not in the legacy parity mode).
@@ -1592,6 +1686,8 @@ impl NativeMobility {
             closed: BTreeSet::new(),
             holds: BTreeSet::new(),
             closure_changes: 0,
+            heard_hazards: BTreeMap::new(),
+            info_rerouted: BTreeSet::new(),
             pending: Vec::new(),
             waiting: Vec::new(),
             weather: WeatherState::CLEAR,
@@ -2286,6 +2382,20 @@ impl NativeMobility {
         self.actors.is_empty()
     }
 
+    /// Every actor that has re-planned its route on information so far: a periodic
+    /// congestion re-plan, a closure beyond its sight, or a warning its own unit received
+    /// ([`EngineParams::reroute_share`], [`EngineParams::reroute_source`]). A scripted
+    /// destination change and a detour round a closure in sight are not counted.
+    pub fn rerouted_on_information(&self) -> &BTreeSet<ActorId> {
+        &self.info_rerouted
+    }
+
+    /// Whether `actor`'s driver re-routes on information ([`DriverTraits::reroutes`]), or
+    /// `None` for an actor not on the road.
+    pub fn reroutes_on_information(&self, actor: ActorId) -> Option<bool> {
+        self.actors.get(&actor).map(|a| a.traits.reroutes)
+    }
+
     /// What the gridlock resolution has done so far.
     pub fn gridlock_counters(&self) -> GridlockCounters {
         self.gridlock
@@ -2748,6 +2858,14 @@ impl NativeMobility {
                         a.forced_cut_in = Some((side, until));
                     }
                 }
+                MobilityCommand::HazardHeard { actor, lane } => {
+                    if self.actors.contains_key(&actor) && world.try_lane(lane).is_some() {
+                        let e = self.heard_hazards.entry(actor).or_default();
+                        if e.0.insert(lane) {
+                            e.1 = true;
+                        }
+                    }
+                }
                 MobilityCommand::Spawn(trip) => {
                     let traits = self.traits_for(ctx, &trip);
                     if let Some(id) = self.insert_trip_with(world, &trip, now, traits) {
@@ -2807,31 +2925,48 @@ impl NativeMobility {
     /// next [`CLOSURE_SIGHT_LANES`] lanes of their route — at the junction they are
     /// approaching, where the barrier is in sight.
     fn closure_detours(&mut self, world: &World, t: SimTime, costs: &DynamicCost<'_>) {
-        let sight = if self.params.dynamic_rerouting {
-            usize::MAX
-        } else {
-            CLOSURE_SIGHT_LANES
-        };
-        let cut: Vec<ActorId> = self
+        // A driver with a navigation app hears of a closure anywhere on its route; one
+        // without (outside `reroute_share`, or under the V2X source) sees it within
+        // CLOSURE_SIGHT_LANES, or hears of it from a warning its own unit received.
+        let navigation = self.params.dynamic_rerouting
+            && self.params.reroute_source == RerouteSource::Navigation;
+        let cut: Vec<(ActorId, bool)> = self
             .actors
             .values()
-            .filter(|a| {
-                a.route
+            .filter_map(|a| {
+                let heard = self.heard_hazards.get(&a.id).map(|h| &h.0);
+                let k = a
+                    .route
                     .lanes
                     .iter()
                     .skip(a.route_index + 1)
-                    .take(sight)
-                    .any(|l| self.closed.contains(l))
+                    .position(|l| self.closed.contains(l))?;
+                let lane = a.route.lanes[a.route_index + 1 + k];
+                let told = (navigation && a.traits.reroutes)
+                    || (self.params.dynamic_rerouting
+                        && a.traits.reroutes
+                        && heard.is_some_and(|h| h.contains(&lane)));
+                (k < CLOSURE_SIGHT_LANES || told).then_some((a.id, k >= CLOSURE_SIGHT_LANES))
             })
-            .map(|a| a.id)
             .collect();
         let generation = costs.generation();
-        for id in cut {
+        for (id, informed) in cut {
             let (lane, destination, class) = {
                 let a = &self.actors[&id];
                 (a.lane, a.destination, a.class)
             };
-            let found = Self::detour(self.router_for(class), world, lane, destination, t, costs);
+            let own = self.costs_with_hazards(costs, id);
+            let found = Self::detour(
+                self.router_for(class),
+                world,
+                lane,
+                destination,
+                t,
+                own.as_ref().unwrap_or(costs),
+            );
+            if informed {
+                self.info_rerouted.insert(id);
+            }
             if let Some((route, to)) = found {
                 let a = self.actors.get_mut(&id).expect("present");
                 a.route = route;
@@ -2839,6 +2974,80 @@ impl NativeMobility {
                 a.destination = to;
                 a.planned_at = t;
                 a.planned_generation = generation;
+            }
+        }
+    }
+
+    /// `costs` with the lanes `actor`'s own unit warned it of closed, under the V2X
+    /// source; `None` when there are none to add.
+    fn costs_with_hazards<'a>(
+        &self,
+        costs: &DynamicCost<'a>,
+        actor: ActorId,
+    ) -> Option<DynamicCost<'a>> {
+        if self.params.reroute_source != RerouteSource::V2x {
+            return None;
+        }
+        let heard = self.heard_hazards.get(&actor)?;
+        if heard.0.is_empty() {
+            return None;
+        }
+        let generation = costs.generation();
+        let mut own = costs.clone();
+        for lane in &heard.0 {
+            own.set_closed(*lane, true);
+        }
+        Some(own.with_generation(generation))
+    }
+
+    /// Under the V2X source, every driver who re-routes on information and whose unit
+    /// has just warned it of a blocked lane still ahead on its route re-plans round it
+    /// (and round every lane it was warned of before). A warning for a lane it will not
+    /// drive is kept and acted on no further; one heard on a junction connector waits for
+    /// the next lane, as every re-plan does.
+    fn hazard_detours(&mut self, world: &World, t: SimTime, costs: &DynamicCost<'_>) {
+        if self.params.reroute_source != RerouteSource::V2x || !self.params.dynamic_rerouting {
+            return;
+        }
+        let fresh: Vec<ActorId> = self
+            .heard_hazards
+            .iter()
+            .filter(|(_, (_, new))| *new)
+            .map(|(id, _)| *id)
+            .collect();
+        let generation = costs.generation();
+        for id in fresh {
+            let Some(a) = self.actors.get(&id) else {
+                self.heard_hazards.remove(&id);
+                continue;
+            };
+            if world.lane(a.lane).kind == LaneKind::Internal {
+                continue;
+            }
+            let ahead = a.traits.reroutes && a.reroutes_on(&self.heard_hazards[&id].0);
+            let (lane, s_m, destination, class) = (a.lane, a.s_m, a.destination, a.class);
+            if ahead {
+                let own = self.costs_with_hazards(costs, id);
+                let replanned = self.plan_route_strategic(
+                    class,
+                    world,
+                    lane,
+                    s_m,
+                    destination,
+                    t,
+                    own.as_ref().unwrap_or(costs),
+                );
+                self.info_rerouted.insert(id);
+                let a = self.actors.get_mut(&id).expect("present");
+                a.planned_at = t;
+                a.planned_generation = generation;
+                if let Some(route) = replanned {
+                    a.route = route;
+                    a.route_index = 0;
+                }
+            }
+            if let Some(h) = self.heard_hazards.get_mut(&id) {
+                h.1 = false;
             }
         }
     }
@@ -2985,7 +3194,7 @@ impl NativeMobility {
     /// The traits the driver of `trip` gets: drawn from the trip's own streams, or
     /// [`DriverTraits::NEUTRAL`] in the legacy parity mode or with heterogeneity off.
     fn traits_for(&self, ctx: &dyn MobCtx, trip: &TripRequest) -> DriverTraits {
-        if self.along_path() && self.params.driver_heterogeneity {
+        let mut traits = if self.along_path() && self.params.driver_heterogeneity {
             let mut traits = DriverTraits::draw_law(
                 ctx,
                 trip.seq,
@@ -3010,7 +3219,12 @@ impl NativeMobility {
             traits
         } else {
             DriverTraits::NEUTRAL
-        }
+        };
+        // Who re-routes on information: its own stream, drawn only below a share of 1, so
+        // the default draws nothing and every other stream is untouched.
+        traits.reroutes =
+            crate::routing::dynamic::draws_reroute(ctx, trip.seq, self.params.reroute_share);
+        traits
     }
 
     fn try_insert(
@@ -3100,7 +3314,17 @@ impl NativeMobility {
         // pair, which refused every insertion onto any lane holding any vehicle at all,
         // however far away.
         let length = trip.class.spec().length_m;
-        let front = trip.origin_s_m.max(length);
+        // A vehicle crossing the map's edge comes in at the start of its lane, moving
+        // (`depart_at_speed`, SUMO `departPos="base"`); everyone else is put down where the
+        // demand model drew, at rest.
+        let at_speed = self.along_path()
+            && self.params.depart_at_speed
+            && is_boundary_entry(world, trip.origin);
+        let front = if at_speed {
+            length
+        } else {
+            trip.origin_s_m.max(length)
+        };
         if self.along_path() {
             // The body has to fit on the origin lane: inserted on a 1 m lane (Manhattan
             // has them between close junctions) a 5 m car was placed straight across the
@@ -3267,7 +3491,83 @@ impl NativeMobility {
             },
         );
         self.next_seq = self.next_seq.max(trip.seq + 1);
+        if at_speed {
+            let v = self.insertion_speed(world, id);
+            if let Some(a) = self.actors.get_mut(&id) {
+                a.speed_mps = v;
+            }
+        }
         Insertion::Placed(id)
+    }
+
+    /// The speed a vehicle entering the map at a boundary is put on the road at
+    /// ([`EngineParams::depart_at_speed`]): its free speed — its desired speed, at most the
+    /// lane's limit times its own speed factor — capped twice. Once by the stop it may
+    /// have to make at the end of its lane, `sqrt(2·b·(d − s0))` at its comfortable
+    /// deceleration `b`; and once by the vehicle ahead (on its lane or the next two of its
+    /// route): the highest speed at which the car-following model asks for no harder
+    /// braking than `b`, found by bisection. SUMO's `departSpeed="desired"` refuses an
+    /// unsafe insertion; this is its `"max"` variant, which reduces the speed instead
+    /// (SUMO user documentation, *Definition of Vehicles*, departSpeed).
+    fn insertion_speed(&self, world: &World, id: ActorId) -> f64 {
+        let Some(a) = self.actors.get(&id) else {
+            return 0.0;
+        };
+        let lane = world.lane(a.lane);
+        let mut view = LaneView::of(lane);
+        view.speed_limit_mps *= a.traits.speed_factor;
+        let b = a.driver.comfort_decel_mps2.max(0.1);
+        let free = a.driver.desired_speed_mps.min(view.speed_limit_mps).max(0.0);
+        let to_end = (lane.length_m - a.s_m - a.driver.min_gap_m).max(0.0);
+        let mut v = free.min(math::sqrt(2.0 * b * to_end));
+        // The nearest vehicle ahead: on the lane, else on the next lanes of the route.
+        let mut leader: Option<(f64, f64)> = None;
+        let mut offset = 0.0;
+        for (k, l) in a.route.lanes.iter().take(3).enumerate() {
+            let rear = self
+                .actors
+                .values()
+                .filter(|o| o.id != a.id && o.lane == *l && (k > 0 || o.s_m > a.s_m))
+                .map(|o| (o.s_m - o.class.spec().length_m, o.speed_mps))
+                .min_by(|x, y| x.0.total_cmp(&y.0));
+            if let Some((rear_s, speed)) = rear {
+                let gap = if k == 0 {
+                    rear_s - a.s_m
+                } else {
+                    offset + rear_s
+                };
+                leader = Some((gap.max(0.0), speed));
+                break;
+            }
+            offset += if k == 0 {
+                world.lane(*l).length_m - a.s_m
+            } else {
+                world.lane(*l).length_m
+            };
+        }
+        if let Some((gap, v_lead)) = leader {
+            let obstacle = LeaderView::virtual_obstacle(gap, v_lead);
+            let safe = |speed: f64| {
+                let mut probe = a.clone();
+                probe.speed_mps = speed;
+                self.cf
+                    .accel(&probe.view(world), Some(&obstacle), &view, &self.weather)
+                    >= -b
+            };
+            if !safe(v) {
+                let (mut lo, mut hi) = (0.0, v);
+                for _ in 0..30 {
+                    let mid = 0.5 * (lo + hi);
+                    if safe(mid) {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                v = lo;
+            }
+        }
+        math::q3(v)
     }
 
     /// Whether `follower` can take a vehicle standing `gap_m` ahead of it without braking
@@ -6636,25 +6936,48 @@ impl Mobility for NativeMobility {
         };
         let period = secs_to_ns(self.params.reroute_period_s.max(0.0));
         if self.params.dynamic_rerouting {
-            let due: Vec<ActorId> = self
+            // Only a driver with a navigation app re-plans on what the network shows; a
+            // scripted destination change (`Reroute`) re-plans whoever it is sent to.
+            let navigation = self.params.reroute_source == RerouteSource::Navigation;
+            let due: Vec<(ActorId, bool)> = self
                 .actors
                 .values()
-                .filter(|a| {
-                    self.router
-                        .due(t1, a.planned_at, a.planned_generation, generation)
-                        || (period > 0
-                            && t1.saturating_sub(a.planned_at) >= period
-                            && world.lane(a.lane).kind != LaneKind::Internal)
+                .filter_map(|a| {
+                    if a.planned_generation == u64::MAX {
+                        return self
+                            .router
+                            .due(t1, a.planned_at, a.planned_generation, generation)
+                            .then_some((a.id, false));
+                    }
+                    let due = navigation
+                        && a.traits.reroutes
+                        && (self
+                            .router
+                            .due(t1, a.planned_at, a.planned_generation, generation)
+                            || (period > 0
+                                && t1.saturating_sub(a.planned_at) >= period
+                                && world.lane(a.lane).kind != LaneKind::Internal));
+                    due.then_some((a.id, true))
                 })
-                .map(|a| a.id)
                 .collect();
-            for id in due {
+            for (id, informed) in due {
                 let (lane, s_m, destination, class) = {
                     let a = &self.actors[&id];
                     (a.lane, a.s_m, a.destination, a.class)
                 };
-                let replanned =
-                    self.plan_route_strategic(class, world, lane, s_m, destination, t1, &costs);
+                let own = self.costs_with_hazards(&costs, id);
+                let replanned = self.plan_route_strategic(
+                    class,
+                    world,
+                    lane,
+                    s_m,
+                    destination,
+                    t1,
+                    own.as_ref().unwrap_or(&costs),
+                );
+                if informed {
+                    self.info_rerouted.insert(id);
+                }
                 let a = self.actors.get_mut(&id).expect("present");
                 a.planned_at = t1;
                 a.planned_generation = generation;
@@ -6675,6 +6998,11 @@ impl Mobility for NativeMobility {
         }
         if along && !self.closed.is_empty() {
             self.closure_detours(world, t1, &costs);
+        }
+        if !self.heard_hazards.is_empty() {
+            self.heard_hazards
+                .retain(|id, _| !despawned.iter().any(|(d, _)| d == id));
+            self.hazard_detours(world, t1, &costs);
         }
         despawned.extend(vru_gone);
 
@@ -7628,6 +7956,44 @@ pub fn card(params: &EngineParams, car_following: &str) -> ModelCard {
         ],
     };
     // Listed only when set, so a card of the default engine is unchanged.
+    if params.depart_at_speed {
+        card.parameters.push(Parameter::new(
+            "depart_at_speed",
+            "-",
+            serde_json::json!(true),
+            Source::new(
+                SourceKind::Code,
+                "Re-implemented from the SUMO user documentation (Definition of Vehicles: \
+                 departSpeed=\"desired\"/\"max\", departPos=\"base\"); SUMO was read for \
+                 behaviour only and no code was copied. Boundary entries only; the \
+                 boundary band (30 m) is this crate's choice",
+            ),
+        ));
+    }
+    if params.reroute_share < 1.0 || params.reroute_source != RerouteSource::Navigation {
+        card.parameters.push(Parameter::new(
+            "reroute_share",
+            "1",
+            serde_json::json!(params.reroute_share),
+            Source::new(
+                SourceKind::Code,
+                "Re-implemented from the SUMO user documentation (Rerouting device: \
+                 device.rerouting.probability); SUMO was read for behaviour only and no \
+                 code was copied",
+            ),
+        ));
+        card.parameters.push(Parameter::new(
+            "reroute_source",
+            "-",
+            serde_json::json!(params.reroute_source.as_str()),
+            Source::new(
+                SourceKind::Code,
+                "this crate's choice (sumo.md P14): a navigation app sees the whole \
+                 network on 3-minute smoothed speeds; the V2X source re-routes only on a \
+                 hazard warning the driver's own unit received and verified",
+            ),
+        ));
+    }
     if params.turn_curve_window_m > 0.0 {
         card.parameters.push(Parameter::new(
             "turn_curve_window",
