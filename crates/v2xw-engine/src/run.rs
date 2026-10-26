@@ -1802,6 +1802,24 @@ impl Engine {
         Ok(engine)
     }
 
+    /// The SCMS's PDU PKI followed a published root rollover: the credentials no
+    /// protocol flow issues, and the trust a node installs when it joins, follow it
+    /// (Provider Req. §3.5.4; audit-gov §4 item 2).
+    fn follow_pki_changeover(&mut self) {
+        let Some(p) = self.phase2.as_ref() else {
+            return;
+        };
+        let (roots, chain_file) = p.trust_bundle();
+        let next = self.credential_factory.after_changeover(
+            p.aca_issuer(),
+            roots,
+            chain_file,
+            p.provider_chain_files(),
+            p.provider_issuers(),
+        );
+        self.credential_factory = std::sync::Arc::new(next);
+    }
+
     /// The manifest this run will be recorded under.
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
@@ -2102,7 +2120,8 @@ impl Engine {
     /// verifies: each signed CRL chains to an installed root and passes `verify_crl`,
     /// and only the entries a CRL signs go into the unit's gate, under that CRL's CRACA.
     /// Its receiver validation then refuses revoked senders as a vehicle's does.
-    fn install_rsu_crls(&mut self, now: SimTime) {
+    fn install_rsu_crls(&mut self, now: SimTime) -> Vec<crate::sec_records::ProtoRevocation> {
+        let mut records = Vec::new();
         let due = self
             .phase2
             .as_ref()
@@ -2110,7 +2129,7 @@ impl Engine {
             .unwrap_or_default();
         for rsu in due {
             let Some(p) = self.phase2.as_mut() else {
-                return;
+                return records;
             };
             let (version, entries, secured) = p.published_crl_for(rsu);
             // The real composite CRL's bytes (edge-case package, item 6).
@@ -2161,6 +2180,8 @@ impl Engine {
             let Some(rt) = self.nodes.get_mut(&rsu) else {
                 continue;
             };
+            // The entries the unit installed: those a CRL it verified signs.
+            let mut held = Vec::new();
             if ok {
                 for v in &crls {
                     let signed: Vec<v2xw_sec::linkage::CrlLinkageEntry> = entries
@@ -2170,12 +2191,22 @@ impl Engine {
                     if !signed.is_empty() {
                         rt.stores_mut().crl.add_verified_linkage(v.craca, &signed);
                     }
+                    held.extend(
+                        entries
+                            .iter()
+                            .filter(|e| v.signed_form(e).is_some_and(|r| r.is_ok()))
+                            .copied(),
+                    );
                 }
             }
             if let Some(p) = self.phase2.as_mut() {
                 p.note_rsu_crl(rsu, version, ok);
+                if ok {
+                    records.extend(p.rsu_crl_records(rsu, version, &held, now));
+                }
             }
         }
+        records
     }
 
     /// Hands roadside unit `rsu` the application certificates the SCMS installed since
@@ -8167,6 +8198,13 @@ impl Engine {
             Some(p) => p.advance(now),
             None => return,
         };
+        if self
+            .phase2
+            .as_mut()
+            .is_some_and(crate::phase2::Phase2::take_pki_changeover)
+        {
+            self.follow_pki_changeover();
+        }
         for r in &tick.stages {
             self.emit(recorder, r);
         }
@@ -8243,8 +8281,11 @@ impl Engine {
             self.emit(recorder, &crate::sec_records::PkiKnowledgeRecord(k));
         }
 
-        // 3b. Roadside units fetch their RA's composite CRL over the backhaul.
-        self.install_rsu_crls(now);
+        // 3b. Roadside units fetch their RA's composite CRL over the backhaul, and each
+        // install of a case's entry is recorded (AU.DIST.rsu).
+        for r in self.install_rsu_crls(now) {
+            self.emit(recorder, &r);
+        }
 
         // 4. A newly published list starts the roadside broadcast.
         if tick.published.is_some() && !self.crl_timer_armed {

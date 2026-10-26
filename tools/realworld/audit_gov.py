@@ -135,6 +135,9 @@ def load(run):
     R['sec'] = []          # (t_ns, node, cert_i)
     R['enrol'] = []        # (type, from, to, t_ns, msg provider)
     R['ra_first'] = {}     # device -> first EeRaCertRequestSpdu t_ns
+    R['allcerts'] = {}     # id8 -> hex, every certificate any pki.state carried
+    R['comp_hist'] = {}    # (label, role) -> [(t_ns, cert id8)] when it changed
+    R['cred_first'] = {}   # certificate id8 -> first node.credentials t_ns carrying it
     h = hashlib.sha256()
     with open(os.path.join(run, 'recording.mcap'), 'rb') as f:
         for _, ch, m in make_reader(f).iter_messages():
@@ -151,6 +154,13 @@ def load(run):
                 if R['first'] is None:
                     R['first'] = q
                 R['last_raw'] = m.data
+                R['allcerts'].update(q.get('certificates') or {})
+                for p in q.get('providers') or []:
+                    for x in p.get('components') or []:
+                        if x.get('instance') == 0 and x.get('cert'):
+                            hist = R['comp_hist'].setdefault((p['label'], x['role']), [])
+                            if not hist or hist[-1][1] != x['cert']:
+                                hist.append((q['t'], x['cert']))
             elif tp == 'record/node.credentials':
                 q = json.loads(m.data)
                 R['creds'].setdefault(q['device'], []).append(
@@ -158,6 +168,7 @@ def load(run):
                 for k, v in (q.get('certificates') or {}).items():
                     R['certs'].setdefault(k, v)
                     R['owner'].setdefault(k, q['device'])
+                    R['cred_first'].setdefault(k, q['t'])
             elif tp == 'record/node.security':
                 q = json.loads(m.data)
                 R['sec'].append((q['t'], q['node'], q.get('cert_i')))
@@ -403,7 +414,7 @@ def r_L10(R):
             return a, b
         if FORM.get(lab) == 's2x' and role not in ('la1', 'la2'):
             return a.hex(), b.hex()
-        return a[:1].hex(), b[:1].hex()
+        return a[:3].hex(), b[:3].hex()
     return _field_rows(R, f, 'ssp')
 
 
@@ -493,13 +504,23 @@ def r_E1(R):
 
 
 def eca_of(R):
+    """label -> every ECA certificate id8 the provider used; (label, role) likewise for the root and ICA."""
     out = {}
-    for (lab, role, inst), x in comps(R['first']).items():
-        if role == 'eca' and x['cert']:
-            out[lab] = x['cert']
-        if role in ('root', 'ica') and x['cert']:
-            out[(lab, role)] = x['cert']
+    for (lab, role), hist in R['comp_hist'].items():
+        if role == 'eca':
+            out.setdefault(lab, set()).update(c for _, c in hist)
+        if role in ('root', 'ica'):
+            out.setdefault((lab, role), set()).update(c for _, c in hist)
     return out
+
+
+def up(R, hx):
+    """The issuer id8 (hex) of the certificate with id8 `hx`, from every pki.state certificate."""
+    h = R['allcerts'].get(hx)
+    if not h:
+        return None
+    c = dec_cert(h)
+    return None if c['issuer'][0] == 'self' else c['issuer'][1].hex()
 
 
 def r_E3(R):
@@ -509,10 +530,12 @@ def r_E3(R):
         t = c['toBeSigned']
         reg = t.get('region')
         regs = sorted(x[1] for x in reg[1]) if reg and reg[0] == 'identifiedRegion' else None
-        craca = ids.get((lab, 'root' if FORM.get(lab) == 'iss' else 'ica'), '')[-6:]
+        eca = c['issuer'][1].hex() if c['issuer'][0] == 'sha256AndDigest' else ''
+        ica = up(R, eca) or ''
+        craca = ((up(R, ica) or '') if FORM.get(lab) == 'iss' else ica)[-6:]
         why = [k for k, ok in [('type', c['type'] == 'implicit'), ('crlSeries', t['crlSeries'] == 4),
                                ('region', regs == [124, 484, 840]), ('crp', bool(t.get('certRequestPermissions'))),
-                               ('issuer', c['issuer'][0] == 'sha256AndDigest' and c['issuer'][1].hex() == ids.get(lab)),
+                               ('issuer', eca in ids.get(lab, ())),
                                ('cracaId', t['cracaId'].hex() == craca)] if not ok]
         if why:
             bad.append(f'{d}:{",".join(why)}')
@@ -534,12 +557,12 @@ def r_E3k(R):
 
 
 def r_Echain(R):
-    e, ids = enrolments(R), eca_of(R)
+    e = enrolments(R)
     by = {}
-    for h in R['first']['certificates'].values():
+    for h in R['allcerts'].values():
         c = dec_cert(h)
         by[certs.hashed_id8(c)] = c
-    anchors = {bytes.fromhex(x) for x in R['states'][0][2]['roots']}
+    anchors = {bytes.fromhex(x) for _, _, c in R['states'] if c for x in c['roots']}
     bad = []
     for d, (lab, c) in e.items():
         ch = [c]
@@ -563,7 +586,7 @@ def r_Echain(R):
 def r_Eonce(R):
     per = {}
     for typ, fr, to, t, prov in R['enrol']:
-        if typ == 'EeEcaCertRequestSpdu':
+        if typ == 'EeEcaCertRequestSpdu' and fr.startswith('ee/'):
             per.setdefault(fr, {'req': [], 'rsp': [], 'prov': set()})['req'].append(t)
         elif to.startswith('ee/'):
             p = per.setdefault(to, {'req': [], 'rsp': [], 'prov': set()})
@@ -592,6 +615,80 @@ def r_Ecnt(R):
         txt.append(f'{p["label"]}: issued {a}, enrolled {b}, records {c}')
         bad |= not (a == b == c)
     return not bad, '; '.join(txt)
+
+
+def r_Edcm(R):
+    """Every device's EeEcaCertRequestSpdu to its DCM is forwarded to its provider's ECA (DCM->ECA on pki.flow)."""
+    reqs, fwd = {}, {}
+    for typ, fr, to, t, prov in R['enrol']:
+        if typ != 'EeEcaCertRequestSpdu':
+            continue
+        if fr.startswith('ee/') and '/dcm/' in to:
+            reqs.setdefault(prov, []).append(t)
+        elif '/dcm/' in fr and '/eca/' in to:
+            fwd.setdefault(prov, []).append(t)
+    txt, bad = [], False
+    for p in sorted(set(reqs) | set(fwd), key=str):
+        a, b = sorted(reqs.get(p, [])), sorted(fwd.get(p, []))
+        ok = len(a) == len(b) and len(a) > 0 and all(x <= y for x, y in zip(a, b))
+        bad |= not ok
+        txt.append(f'{p}: {len(a)} EE->DCM, {len(b)} DCM->ECA')
+    return bool(txt) and not bad, '; '.join(txt) or 'no enrolment requests'
+
+
+def r_Lroll(R):
+    """After CTL 1 publishes the home provider's new root: certificates first held after the
+    publication chain to the new root, earlier ones to the old root, and the home ECA and ACA in
+    pki.state are re-certified (Provider Req. 3.5.4)."""
+    ch = ctl_changes(R)
+    if len(ch) < 2:
+        return False, 'no CTL 1'
+    pub = ch[1][0]
+    new = set(ch[1][2]['roots']) - set(ch[0][2]['roots'])
+    if len(new) != 1:
+        return False, f'{len(new)} roots added'
+    def root_of(hx):
+        seen = 0
+        while hx and seen < 6:
+            h = R['allcerts'].get(hx) or R['certs'].get(hx)
+            if not h:
+                return None
+            c = dec_cert(h)
+            if c['issuer'][0] == 'self':
+                return prims.sha256(bytes.fromhex(h)).hex()
+            hx, seen = c['issuer'][1].hex(), seen + 1
+        return None
+    approved = set(ch[-1][2]['roots'])
+    after = before = later = 0
+    bad = []
+    for k, t in R['cred_first'].items():
+        dev = R['owner'].get(k)
+        recs = R['creds'].get(dev, [(0, 0, None)])
+        if recs[0][2] != 'provider-a':
+            continue
+        r = root_of(k)
+        if recs[0][0] > pub:
+            # A device that joined after the publication: enrolled and provisioned under
+            # the new hierarchy only.
+            after += 1
+            if r not in new:
+                bad.append(f'joiner:{k}')
+        elif t <= pub:
+            before += 1
+            if r in new or r is None:
+                bad.append(f'before:{k}')
+        else:
+            # Held first after it by a device from before: issued either side of the
+            # changeover, on a root the CTL approves.
+            later += 1
+            if r not in approved:
+                bad.append(f'later:{k}')
+    moved = {role: [c for tt, c in R['comp_hist'].get(('provider-a', role), []) if tt >= pub] for role in ('eca', 'aca', 'ica')}
+    recert = all(moved.values())
+    ok = not bad and after > 0 and before > 0 and recert
+    return ok, (f'publication t={pub / 1e9:.0f} s; joiners after it hold {after} certificates, {before} held before it, '
+                f'{later} held later by earlier devices; {len(bad)} on the wrong root {" ".join(bad[:3])}; '
+                f'ECA/ACA/ICA re-certified after it: {recert}')
 
 
 def r_K1(R):
@@ -654,7 +751,8 @@ ROWS = [
     ('GOV.L4.enckey', r_L4), ('GOV.L5.region', r_L5), ('GOV.L10.ssp', r_L10), ('GOV.L.chain', r_Lchain),
     ('GOV.L.names', r_Lnames), ('GOV.L.onecert', r_Lone), ('GOV.L.counters', r_Lcnt), ('GOV.D1.acas', r_D1),
     ('GOV.E1.lifetime', r_E1), ('GOV.E3.profile', r_E3), ('GOV.E3.name', r_E3n), ('GOV.E3.key', r_E3k),
-    ('GOV.E.chain', r_Echain), ('GOV.E.once', r_Eonce), ('GOV.E.count', r_Ecnt),
+    ('GOV.E.chain', r_Echain), ('GOV.E.once', r_Eonce), ('GOV.E.count', r_Ecnt), ('GOV.E.dcm-hop', r_Edcm),
+    ('GOV.L.rollover-wire', r_Lroll),
     ('GOV.K1.time32', r_K1), ('GOV.K3.iperiod', r_K3), ('GOV.K5.pseudonym', r_K5),
     ('GOV.DET.release', r_DET), ('GOV.DET.fixed', r_DET),
 ]
@@ -761,12 +859,13 @@ def m_L5(R):
 
 
 def m_L10(R):
-    x = _first_comp(R, 'provider-b', 'aca')
+    # The first form: ISS components at version 2 (`85 00 02`), as SAESOL's.
+    x = _first_comp(R, 'provider-a', 'aca')
 
     def f(c):
         for p in c['toBeSigned']['appPermissions']:
             if p['psid'] == 35:
-                p['ssp'] = ('opaque', b'\x84\x00\x02')
+                p['ssp'] = ('opaque', b'\x85\x00\x02')
     _reenc_cert(R, R['first']['certificates'], x['cert'], f)
 
 
@@ -853,6 +952,22 @@ def m_K5(R):
             return
 
 
+def m_Edcm(R):
+    R['enrol'] = [e for e in R['enrol'] if not ('/dcm/' in e[1] and '/eca/' in e[2])]
+
+
+def m_Lroll(R):
+    # The first form: the PDU PKI fixed at run start, so a post-publication certificate is
+    # on the old root: move its first sighting after the publication onto a pre-change one.
+    ch = ctl_changes(R)
+    pub = ch[1][0] if len(ch) > 1 else 0
+    # Re-date one pre-change device as a joiner after the publication: its old-root
+    # certificates are then a joiner's on the old root.
+    dev = next((d for d, recs in sorted(R['creds'].items()) if recs[0][0] <= pub and recs[0][2] == 'provider-a'), None)
+    if dev is not None:
+        R['creds'][dev] = [(pub + 1,) + r[1:] for r in R['creds'][dev]]
+
+
 def m_DET(R):
     R['digest'] = '0' + R['digest'][1:]
 
@@ -865,7 +980,8 @@ MUT = {'GOV.G3.electors': m_G3, 'GOV.G4.quorum': m_G4, 'GOV.G5.signers': m_G5, '
        'GOV.L.names': m_Lnames, 'GOV.L.onecert': m_Lone, 'GOV.L.counters': m_Lcnt, 'GOV.D1.acas': m_D1,
        'GOV.E1.lifetime': m_E1, 'GOV.E3.profile': m_E3, 'GOV.E3.name': m_E3n, 'GOV.E3.key': m_E3k,
        'GOV.E.chain': m_Echain, 'GOV.E.once': m_Eonce, 'GOV.E.count': m_Ecnt, 'GOV.K1.time32': m_K1,
-       'GOV.K3.iperiod': m_K3, 'GOV.K5.pseudonym': m_K5, 'GOV.DET.release': m_DET, 'GOV.DET.fixed': m_DET}
+       'GOV.K3.iperiod': m_K3, 'GOV.K5.pseudonym': m_K5, 'GOV.DET.release': m_DET, 'GOV.DET.fixed': m_DET,
+       'GOV.E.dcm-hop': m_Edcm, 'GOV.L.rollover-wire': m_Lroll}
 
 
 def judge(R, only=None):

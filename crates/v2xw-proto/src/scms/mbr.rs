@@ -581,7 +581,7 @@ pub fn ma_covers(cert: &Certificate, app_psid: u64) -> bool {
     let Some(Some(ssp)) = v2xw_sec::ctl::app_ssp(cert, pdu::SECURITY_MGMT_PSID) else {
         return false;
     };
-    let Ok(SecurityMgmtSsp::ma(ma)) = pdu::decode::<SecurityMgmtSsp>(&ssp) else {
+    let Some(SecurityMgmtSsp::ma(ma)) = v2xw_sec::ctl::decode_security_mgmt_ssp(&ssp) else {
         return false;
     };
     ma.relevant_psids

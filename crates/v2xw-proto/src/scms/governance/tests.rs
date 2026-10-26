@@ -400,7 +400,7 @@ fn every_component_certificate_has_the_published_shape() {
             sig1609::explicit_key(c),
             Some((sig1609::Hash1609::Sha256, _))
         ));
-        let cid = format!("{}.provider-a.sim", spec.host);
+        let cid = format!("{}.provider-a", spec.host);
         assert_eq!(ctl::cert_name(c), Some(cid.as_str()));
     }
     assert!(g.encryption_scalar("ra").is_some() && g.encryption_scalar("pca").is_none());

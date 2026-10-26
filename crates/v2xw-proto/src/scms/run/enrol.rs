@@ -313,7 +313,7 @@ impl ScmsState {
     ) -> pdu::Result<pdu::EnrolmentCredential> {
         let pki = self.pki.clone().ok_or(PduError::Shape("PDU layer off"))?;
         let (p, signer) = pdu::open_signed_pdu(resp.bytes(), &pki)?;
-        if pdu::cert_id8(&signer) != pki.eca.id8() {
+        if !pki.is_role(&pki.eca, &pdu::cert_id8(&signer)) {
             return Err(PduError::Signer(
                 "an enrolment response is signed by the ECA",
             ));
@@ -341,7 +341,7 @@ impl ScmsState {
     fn response_cert_id8(&self, resp: &Pdu) -> pdu::Result<[u8; 8]> {
         let pki = self.pki.clone().ok_or(PduError::Shape("PDU layer off"))?;
         let (p, signer) = pdu::open_signed_pdu(resp.bytes(), &pki)?;
-        if pdu::cert_id8(&signer) != pki.eca.id8() {
+        if !pki.is_role(&pki.eca, &pdu::cert_id8(&signer)) {
             return Err(PduError::Signer(
                 "an enrolment response is signed by the ECA",
             ));
@@ -446,11 +446,7 @@ impl ScmsState {
     /// certificate of `device`, and names the file of its successor request.
     fn ra_open_download(&self, device: NodeId, spdu: &Pdu, hash8: [u8; 8]) -> pdu::Result<()> {
         let pki = self.pki.clone().ok_or(PduError::Shape("PDU layer off"))?;
-        let enc = pki
-            .ra
-            .enc_private
-            .ok_or(PduError::Key("RA encryption key"))?;
-        let plain = pdu::decrypt_cert(spdu.bytes(), &pki.ra.cert, &enc)?;
+        let plain = pki.decrypt_as(&pki.ra, spdu.bytes())?;
         let (p, signer) = pdu::open_signed_pdu(&plain, &pki)?;
         if !self.ra.is_registered(device, Some(pdu::cert_id8(&signer))) {
             return Err(PduError::UntrustedSigner);
@@ -527,11 +523,19 @@ impl ScmsState {
                 Self::verify(out, 1);
                 Self::sign(out, 1);
                 out.stage_at(StageId::ProxyForwarded, to, None, flow, run);
+                // The hop carries the device's own `EeEcaCertRequestSpdu`, which the ECA
+                // verifies against the device's canonical key: it is on `pki.flow` like
+                // the device's hop to the DCM, and its bytes are what the link carries
+                // (audit-gov §4 item 4: the ECA's traffic showed 0 requests received).
+                let size = match &pdu {
+                    Some(p) => self.emit_pdu(SpduKind::EeEcaCertRequest, to, n.eca, at, p),
+                    None => self.sizes.enrol_forward(),
+                };
                 out.send(
                     n.eca,
                     ScmsMsg::EnrolForward { device, pdu },
                     "enrol-forward",
-                    self.sizes.enrol_forward(),
+                    size,
                     Transport::BackendNet,
                     flow,
                     run,
@@ -1010,7 +1014,7 @@ impl ScmsState {
                 if let (Some(p), Some(pki)) = (&pdu, self.pki.clone()) {
                     let ok = pdu::open_signed_pdu(p.bytes(), &pki)
                         .ok()
-                        .and_then(|(q, s)| (pdu::cert_id8(&s) == pki.ra.id8()).then_some(q));
+                        .and_then(|(q, s)| (pki.is_role(&pki.ra, &pdu::cert_id8(&s))).then_some(q));
                     let matches = ok.is_some_and(|q| {
                         matches!(q.content,
                             ScmsPduContent::ee_ra(EeRaInterfacePdu::raEeCertInfo(i))

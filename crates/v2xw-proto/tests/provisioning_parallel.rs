@@ -120,5 +120,7 @@ fn provisioning_gives_the_same_bytes_on_any_number_of_threads() {
     assert_eq!(one.0, PINNED, "the sequential code's bytes");
 }
 
-/// `provision_and_top_off`'s digest on `8becf72a`, before the loops ran in parallel.
-const PINNED: &str = "99f8481ae97f25dd68c1464156313748155984ded567aef63c7972c26af386ae";
+/// `provision_and_top_off`'s digest on `8becf72a`, before the loops ran in parallel;
+/// re-pinned when the PDU layer took the governance's certificates (one per component,
+/// audit-gov §4 item 1: every component certificate byte moved; one thread = four still).
+const PINNED: &str = "33ef02dd745fef3f9de145aa342935e657acc3dd161a960d0b357f85a54c9c23";

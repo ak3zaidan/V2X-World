@@ -1230,8 +1230,9 @@ struct CrlVersion {
     version: u32,
     /// Its entries.
     entries: Vec<CrlLinkageEntry>,
-    /// The signed CRL its CRL Generator issued (`None` with the PDU layer off).
-    secured: Option<std::sync::Arc<[u8]>>,
+    /// The signed CRLs its CRL Generator issued: the current CRACA's, then each one a
+    /// root rollover superseded (empty with the PDU layer off).
+    secured: Vec<std::sync::Arc<[u8]>>,
     /// The CRL Store's publication count: a re-issue at `nextCrl` has the same entries
     /// and a higher count.
     serial: u32,
@@ -2065,6 +2066,12 @@ pub struct Phase2 {
     in_flight: BTreeMap<(usize, FlowRun), InFlightReport>,
     /// The home root a scheduled rollover superseded (`root_removal_at_s` removes it).
     superseded_root: Option<[u8; 32]>,
+    /// The PDU PKI followed a published root rollover since the engine last looked
+    /// ([`Phase2::take_pki_changeover`]).
+    pki_changeover: bool,
+    /// (roadside unit, case subject) pairs whose CRL entry the unit has installed: one
+    /// `rsu_installed` row each ([`Phase2::rsu_crl_records`]).
+    rsu_case_installs: BTreeSet<(NodeId, String)>,
     /// The CTL sequence every device holds from the factory (the one in force when the
     /// governance first ran); a device installs a newer one with its next composite CRL.
     factory_ctl_seq: Option<u32>,
@@ -2864,6 +2871,8 @@ impl Phase2 {
             evidence: BTreeMap::new(),
             judged_evidence: BTreeMap::new(),
             superseded_root: None,
+            pki_changeover: false,
+            rsu_case_installs: BTreeSet::new(),
             factory_ctl_seq: None,
             factory_trust: None,
             removed_peer: None,
@@ -3086,7 +3095,19 @@ impl Phase2 {
                         period: c.cred.period,
                         valid_from: c.from,
                         valid_until: c.until,
-                        key: std::sync::Arc::new(c.cred.implicit_key(&pki.aca.cert)?),
+                        // Under the ACA that issued it: the current one, or the one a
+                        // root rollover superseded.
+                        key: std::sync::Arc::new(c.cred.implicit_key(
+                            &pki.in_role(&pki.aca)
+                                .into_iter()
+                                .find(|a| {
+                                    matches!(&c.cred.cert.0.issuer,
+                                        v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha256AndDigest(h)
+                                            if h.0[..] == a.id8()[..])
+                                })
+                                .unwrap_or(&pki.aca)
+                                .cert,
+                        )?),
                         preloaded: c.at == 0,
                     })
                 })
@@ -3213,6 +3234,44 @@ impl Phase2 {
         } else {
             self.report.rsu_crls_refused += 1;
         }
+    }
+
+    /// The `proto.revocation` rows of roadside unit `node` installing the verified
+    /// composite CRL `version` that holds `entries`: one `rsu_installed` row for each
+    /// revocation case whose entry the unit holds for the first time, with the list's
+    /// size and version. A unit enforces the list on what it receives as a vehicle does
+    /// (`rsu_revoked_receptions`); until this, no record showed a unit installing one
+    /// (audit-mbpipe AU.DIST.rsu).
+    pub fn rsu_crl_records(
+        &mut self,
+        node: NodeId,
+        version: u32,
+        entries: &[CrlLinkageEntry],
+        now: SimTime,
+    ) -> Vec<crate::sec_records::ProtoRevocation> {
+        let size = u64::from(crl_bytes(&self.home().state.sizes, version).bytes());
+        let mut out = Vec::new();
+        for case in &self.cases {
+            let Some((entry, _)) = case.entry.as_ref() else {
+                continue;
+            };
+            if !entries.contains(entry)
+                || !self
+                    .rsu_case_installs
+                    .insert((node, case.subject_digest.clone()))
+            {
+                continue;
+            }
+            out.push(crate::sec_records::ProtoRevocation::stage(
+                now,
+                "rsu_installed",
+                &case.subject_digest,
+                Some(size),
+                Some(u64::from(version)),
+                Some(node),
+            ));
+        }
+        out
     }
 
     /// Counts CRL frames a roadside unit could not sign.
@@ -3755,13 +3814,33 @@ impl Phase2 {
                 .filter(|(label, _)| on_ctl(label))
                 .map(|(_, p)| p),
         );
+        // A root a rollover superseded stays a trust anchor while the CTL approves it,
+        // and its hierarchy stays in the chain file: what it certified is valid until it
+        // expires (Provider Req. §3.5.4).
+        let approved = |c: &v2xw_msg::sec_types::Certificate| {
+            v2xw_sec::sig1609::cert_hashed_id32(c).is_ok_and(|h| st.gov.ctl.roots.contains(&h))
+        };
+        let self_signed = |c: &v2xw_msg::sec_types::Certificate| {
+            matches!(
+                c.0.issuer,
+                v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::R_self(_)
+            )
+        };
         let roots = pkis
             .iter()
-            .map(|p| std::sync::Arc::new(p.root.cert.clone()))
+            .flat_map(|p| {
+                core::iter::once(&p.root.cert).chain(
+                    p.retired
+                        .iter()
+                        .map(|a| &a.cert)
+                        .filter(|c| self_signed(c) && approved(c)),
+                )
+            })
+            .map(|c| std::sync::Arc::new(c.clone()))
             .collect();
         let cas = pkis
             .iter()
-            .flat_map(|p| p.all().into_iter().chain(p.extra.iter()))
+            .flat_map(|p| p.all().into_iter().chain(p.extra.iter()).chain(p.retired.iter()))
             .map(|a| std::sync::Arc::new(a.cert.clone()))
             .collect();
         (roots, cas)
@@ -3788,6 +3867,7 @@ impl Phase2 {
             p.all()
                 .into_iter()
                 .chain(p.extra.iter())
+                .chain(p.retired.iter())
                 .map(|a| std::sync::Arc::new(a.cert.clone()))
                 .collect::<Vec<_>>()
         };
@@ -4761,6 +4841,46 @@ impl Phase2 {
                 run.state.gov.sync_peer_from(&home.state.gov);
             }
         }
+        self.follow_published_pki();
+    }
+
+    /// A root rollover's changeover on the wire (Provider Req. §3.5.4: after the
+    /// changeover the provider signs only with the new keys). Once the CTL approving the
+    /// home provider's new root is published, every run's PDU PKI for that provider is
+    /// the governance's re-certified hierarchy: new pseudonym, application and enrolment
+    /// certificates, CRLs and backend SPDUs chain to the new root, and the superseded
+    /// certificates stay resolvable until they expire ([`ScmsPki::retired`]). Before
+    /// this, the PDU PKI was fixed at run start and nothing on the wire reached the new
+    /// root (audit-gov §4 item 2).
+    ///
+    /// [`ScmsPki::retired`]: v2xw_proto::scms::pdu::ScmsPki::retired
+    fn follow_published_pki(&mut self) {
+        let st = &self.runs[0].state;
+        let Some(old) = st.pki.clone() else {
+            return;
+        };
+        let label = st.deployment.providers[0].name.clone();
+        let published = st
+            .gov
+            .root_of(&label)
+            .is_some_and(|r| st.gov.ctl.roots.contains(&r));
+        if !published || st.gov.cert("ica").is_none_or(|c| *c == old.ica.cert) {
+            return;
+        }
+        let Some(Ok(next)) = st.gov.pdu_pki(&label) else {
+            return;
+        };
+        let next = std::sync::Arc::new(old.superseded_by(next));
+        for run in &mut self.runs {
+            run.state.follow_pki(&label, std::sync::Arc::clone(&next));
+        }
+        self.pki_changeover = true;
+    }
+
+    /// Whether the PDU PKI followed a root rollover since the last call: the engine's
+    /// credential factory and the trust a joining device installs follow it.
+    pub fn take_pki_changeover(&mut self) -> bool {
+        core::mem::take(&mut self.pki_changeover)
     }
 
     fn note_unsecured(&mut self, why: &str) {
@@ -5372,8 +5492,10 @@ impl Phase2 {
                 secured: st
                     .crlg
                     .secured
-                    .as_ref()
-                    .map(|p| std::sync::Arc::<[u8]>::from(p.bytes())),
+                    .iter()
+                    .chain(st.crlg.secured_retired.iter())
+                    .map(|p| std::sync::Arc::<[u8]>::from(p.bytes()))
+                    .collect(),
             });
             let size = u64::from(crl_bytes(&st.sizes, store).bytes());
             for s in &stamps[k] {
@@ -6811,7 +6933,13 @@ impl Phase2 {
     pub fn broadcast_secured_crls(&self) -> Vec<std::sync::Arc<[u8]>> {
         self.runs
             .iter()
-            .filter_map(|r| r.state.crl_broadcast.secured.as_ref())
+            .flat_map(|r| {
+                r.state
+                    .crl_broadcast
+                    .secured
+                    .iter()
+                    .chain(r.state.crl_broadcast.secured_retired.iter())
+            })
             .map(|p| std::sync::Arc::<[u8]>::from(p.bytes()))
             .collect()
     }
@@ -8828,7 +8956,7 @@ mod fast_forward_wake_tests {
             at,
             version: 1,
             entries: Vec::new(),
-            secured: None,
+            secured: Vec::new(),
             serial: 1,
         });
         let in_transit = p.next_wake(before).expect("a wake");
@@ -8874,7 +9002,7 @@ mod join_crl_tests {
             at: 0,
             version: 0,
             entries: Vec::new(),
-            secured: None,
+            secured: Vec::new(),
             serial: b0,
         });
         let device = v2xw_sec::linkage::DeviceLinkageContext::new(
@@ -8889,7 +9017,7 @@ mod join_crl_tests {
             at: published,
             version: 1,
             entries: vec![entry],
-            secured: None,
+            secured: Vec::new(),
             serial: a0 + 1,
         });
         p.backend_now = published + 3_600_000_000_000;
@@ -9074,6 +9202,57 @@ mod ctl_device_tests {
         );
         p.governance_due(at);
         assert_eq!(p.home().state.gov.ctl.sequence, seq + 1, "published at it");
+    }
+
+    /// Audit-gov §4 item 2: a root rollover reaches the wire. The decision changes nothing
+    /// the devices see; once the CTL approving the new root is published, every run's
+    /// PDU PKI for the home provider is the governance's re-certified hierarchy (the peer
+    /// runs' copies too), the trust a device installs holds both roots and both
+    /// hierarchies, and the issuer the engine's credential factory follows is the new
+    /// ACA. Fault (the first form, the PDU PKI fixed at run start): no changeover, and
+    /// the PKI still signs under the old root.
+    #[test]
+    fn a_published_root_rollover_moves_the_wire_pki_to_the_new_root() {
+        let mut p = phase2();
+        let t0: SimTime = 300 * 1_000_000_000;
+        p.governance_due(t0);
+        let old = std::sync::Arc::clone(p.home().state.pki.as_ref().expect("PDU layer"));
+        p.params.root_rollover_at = Some(t0);
+        p.governance_due(t0);
+        let (publish, _) = p.home().state.gov.pending[0].clone();
+        assert!(!p.take_pki_changeover(), "decided, not yet published");
+        assert_eq!(p.home().state.pki.as_ref().unwrap().root.cert, old.root.cert);
+        p.governance_due(publish);
+        assert!(p.take_pki_changeover(), "the changeover at publication");
+        let pki = std::sync::Arc::clone(p.home().state.pki.as_ref().unwrap());
+        let label = p.home().state.deployment.providers[0].name.clone();
+        assert_eq!(
+            v2xw_sec::sig1609::cert_hashed_id32(&pki.root.cert).ok(),
+            p.home().state.gov.root_of(&label),
+            "signs under the newest approved root"
+        );
+        assert_ne!(pki.root.cert, old.root.cert);
+        assert_eq!(pki.ica.cert, *p.home().state.gov.cert("ica").unwrap());
+        assert!(pki.retired.iter().any(|a| a.cert == old.aca.cert));
+        for run in &p.runs[1..] {
+            let copy = run
+                .state
+                .peer_pki
+                .iter()
+                .find(|(l, _)| *l == label)
+                .expect("the home provider is a peer");
+            assert!(std::sync::Arc::ptr_eq(&copy.1, &pki), "every peer run follows");
+        }
+        let (roots, cas) = p.trust_bundle();
+        for c in [&pki.root.cert, &old.root.cert] {
+            assert!(roots.iter().any(|r| **r == *c), "both roots are anchors");
+        }
+        for c in [&pki.aca.cert, &old.aca.cert] {
+            assert!(cas.iter().any(|r| **r == *c), "both ACAs are in the chain file");
+        }
+        assert_eq!(p.provider_issuers()[0].certificate().as_ref(), &pki.aca.cert);
+        p.governance_due(publish + 1);
+        assert!(!p.take_pki_changeover(), "once");
     }
 }
 

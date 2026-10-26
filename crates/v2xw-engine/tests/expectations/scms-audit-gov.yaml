@@ -27,6 +27,15 @@ runs:
   SRV:
     scenario: scenarios/scms-conformance.yaml
     note: the release v2xw-server of 8becf72a serving the first 140 s live (no fast-forward), --speed 0, --record (the Studio's PKI view source)
+  A3:
+    scenario: scenarios/scms-conformance.yaml
+    note: 2026-10-25 governance round, the integrator's release build of 486c8cba, --record-level events (baseline for the rows below)
+  G:
+    scenario: scenarios/scms-conformance.yaml
+    note: 2026-10-25 governance round, this branch's build (opt-level 2 dev), --record-level events
+  G2:
+    scenario: scenarios/scms-conformance.yaml
+    note: G again (determinism)
 rows:
 # --- electors and the CTL ---------------------------------------------------------------
 - id: GOV.G3.electors
@@ -235,6 +244,20 @@ rows:
   measured: 'A PASS: provider-a: issued 37, enrolled 37, records 37; provider-b: issued 30, enrolled 30, records 30 | B PASS: provider-a: issued 37, enrolled 37, records 37; provider-b: issued 30, enrolled 30, records 30'
   verdict: pass
 # --- the real calendar ------------------------------------------------------------------
+- id: GOV.E.dcm-hop
+  area: invariant
+  check: per provider, every EeEcaCertRequestSpdu a device sends its DCM is forwarded DCM->ECA on pki.flow, as many forwards as requests, each no earlier than its request
+  source: CAMP122 bootstrap (EE -> DCM -> ECA); audit-gov.md §4 item 4 (the ECA showed 0 requests received)
+  expect: equal counts, in order, for both providers
+  measured: pending
+  verdict: pending
+- id: GOV.L.rollover-wire
+  area: invariant
+  check: after CTL 1 (the home root rollover) publishes, every home-provider certificate first held in node.credentials after the publication chains to the new root, every one held before chains to the old root, and the home ECA, ACA and ICA in pki.state change at or after the publication
+  source: Provider Req. §3.5.4 (after a changeover the provider signs only with the new key; what the old key certified stays valid until it expires); audit-gov.md §4 item 2
+  expect: 0 on the wrong root, at least one certificate on each side, the components re-certified
+  measured: pending
+  verdict: pending
 - id: GOV.K1.time32
   area: timing
   check: every pki.state time32 against Time32(t0 + t) computed here (TAI since 2004-01-01, 5 leap seconds)

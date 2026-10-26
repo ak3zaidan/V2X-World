@@ -153,10 +153,23 @@ pub struct EdgeTracker {
 impl EdgeTracker {
     /// Reads every step logged since the last call, naming nodes with `role`.
     pub fn absorb<M>(&mut self, kernel: &Kernel<M>, role: impl Fn(NodeId) -> String) {
+        self.absorb_where(kernel, role, |_| true);
+    }
+
+    /// [`EdgeTracker::absorb`] of the steps `keep` accepts only (a hop through a node
+    /// the deployment does not have, such as the transparent LOP of the US profile).
+    pub fn absorb_where<M>(
+        &mut self,
+        kernel: &Kernel<M>,
+        role: impl Fn(NodeId) -> String,
+        keep: impl Fn(&WireStep) -> bool,
+    ) {
         let (steps, cursor) = kernel.steps_since(self.cursor);
         self.cursor = cursor;
         for s in steps {
-            self.note(s, &role);
+            if keep(s) {
+                self.note(s, &role);
+            }
         }
     }
 

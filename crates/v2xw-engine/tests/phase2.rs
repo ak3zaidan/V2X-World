@@ -23,7 +23,7 @@ use std::sync::OnceLock;
 
 use serde_json::json;
 use v2xw_engine::scenario::ModelChoice;
-use v2xw_engine::{DigestRecorder, Engine, RunReport, Scenario};
+use v2xw_engine::{DigestRecorder, Engine, MemoryRecorder, RunReport, Scenario};
 
 fn scenarios() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -80,6 +80,14 @@ fn run(scenario: Scenario) -> (RunReport, regression::Pinned) {
         records: recorder.written(),
     };
     (report, pinned)
+}
+
+/// [`run`] keeping every record.
+fn run_recorded(scenario: Scenario) -> (RunReport, MemoryRecorder) {
+    let mut engine = Engine::build(scenario, "").expect("builds");
+    let mut recorder = MemoryRecorder::new();
+    let report = engine.run(&mut recorder).expect("runs");
+    (report, recorder)
 }
 
 /// The path run, once for every test in this binary that reads it.
@@ -346,7 +354,9 @@ fn with_no_attacker_nothing_is_revoked() {
 /// ways into a vehicle that was driving when it was published. A vehicle switched on after
 /// the publication holds it from the fetch on its RA connection (R-JOINCRL), and those
 /// installations are counted apart. Roadside units still install it over their own
-/// backhaul (WP-B3b cycle) and refuse the revoked sender themselves.
+/// backhaul (WP-B3b cycle) and refuse the revoked sender themselves, and each unit's
+/// install of the revoked device's entry is a `proto.revocation` row `rsu_installed`
+/// (audit-mbpipe AU.DIST.rsu; fault, the first form: no record showed a unit install).
 #[test]
 fn without_either_distribution_path_the_revocation_never_reaches_a_vehicle() {
     let mut scenario = phase2();
@@ -354,7 +364,27 @@ fn without_either_distribution_path_the_revocation_never_reaches_a_vehicle() {
         rsu.roles.retain(|r| r != "crl");
     }
     lifecycle(&mut scenario, "crl_fetch_interval_s", 1.0e6);
-    let (report, _) = run(scenario);
+    let (report, recorder) = run_recorded(scenario);
+    let rsu_rows: Vec<serde_json::Value> = recorder
+        .records()
+        .iter()
+        .filter(|(_, r)| r.channel == "proto.revocation")
+        .map(|(_, r)| serde_json::from_slice::<serde_json::Value>(&r.json).expect("json"))
+        .filter(|v| v["stage"] == "rsu_installed")
+        .collect();
+    let units: std::collections::BTreeSet<u64> = rsu_rows
+        .iter()
+        .map(|v| v["node"].as_u64().expect("a unit row names its unit"))
+        .collect();
+    assert!(!units.is_empty(), "no record shows a unit installing the list");
+    assert!(
+        units.len() as u64 <= report.phase2.rsu_crls_installed,
+        "a row for a unit the engine never counted as installing"
+    );
+    assert!(
+        rsu_rows.iter().all(|v| v["entries"].as_u64().is_some_and(|e| e > 0)),
+        "each row carries the installed list's version"
+    );
     let p = &report.phase2;
     // The first half is unchanged.
     assert!(p.reports_received > 0);

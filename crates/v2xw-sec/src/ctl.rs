@@ -152,7 +152,23 @@ pub fn app_ssp(cert: &Certificate, psid: u64) -> Option<Option<Vec<u8>>> {
 /// The `SecurityMgmtSsp` a certificate holds for PSID 35, decoded.
 pub fn security_mgmt_ssp(cert: &Certificate) -> Option<SecurityMgmtSsp> {
     let ssp = app_ssp(cert, SECURITY_MGMT_PSID)??;
-    rasn::coer::decode(&ssp).ok()
+    decode_security_mgmt_ssp(&ssp)
+}
+
+/// Decodes a PSID-35 `SecurityMgmtSsp`. The 1609.2.1-2022 module fixes each SSP's
+/// `version` at 2; certificates issued under the earlier module carry version 1 with the
+/// same body (the published ISS pre-production chain: `83 00 01`, `85 00 01`, `8b 00 01`,
+/// `86 00 01`), and are read here in the 2022 form, as a receiver that accepts that
+/// chain must.
+#[must_use]
+pub fn decode_security_mgmt_ssp(b: &[u8]) -> Option<SecurityMgmtSsp> {
+    rasn::coer::decode(b).ok().or_else(|| {
+        (b.len() > 2 && b[2] == 1).then_some(()).and_then(|()| {
+            let mut v = b.to_vec();
+            v[2] = 2;
+            rasn::coer::decode(&v).ok()
+        })
+    })
 }
 
 /// A decoded `ToBeSignedCtlSignature`.

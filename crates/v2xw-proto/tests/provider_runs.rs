@@ -271,8 +271,10 @@ fn an_enrolment_certificate_names_the_provider_whose_eca_issued_it() {
 /// Audit-gov GOV.L.counters: each provider's Root CA and ICA count the certificates they
 /// signed, not the other providers'. Provider-a (ISS form): self, ICA, PG, MA and the
 /// root-issued CRL signer; provider-b (SAESOL S2X production form): self, ICA, PG, MA, and
-/// its ICA the ECA, PCA, RA, both LAs and the ICA-issued CRL signer. Fault (the first form):
-/// the home view counted every provider's (9 and 14 at t0) and provider-b's none (0).
+/// its ICA the ECA, PCA, RA, both LAs, the DCM and the ICA-issued CRL signer. Fault (the
+/// first form): the home view counted every provider's (9 and 14 at t0) and provider-b's
+/// none (0). Provider-b's ICA count was 6 while its records showed 7: the DCM that signs
+/// its enrolment traffic had a PDU-layer certificate only (GOV.L.onecert).
 #[test]
 fn each_providers_root_and_ica_count_their_own_certificates() {
     let (home, peer) = runs();
@@ -286,7 +288,205 @@ fn each_providers_root_and_ica_count_their_own_certificates() {
         "provider-b's root: itself, ICA, PG, MA"
     );
     assert_eq!(
-        p.ica_certs_issued, 6,
-        "provider-b's ICA: ECA, PCA, RA, LA1, LA2, CRLG"
+        p.ica_certs_issued, 7,
+        "provider-b's ICA: ECA, PCA, RA, LA1, LA2, DCM, CRLG"
     );
+}
+
+/// The PDU-layer components of `run`'s provider, by governance role.
+fn pdu_components(
+    run: &ScmsRun,
+) -> Vec<(&'static str, v2xw_msg::sec_types::ieee1609_dot2::Certificate)> {
+    let pki = run.state.pki.as_ref().expect("the PDU layer is on");
+    vec![
+        ("root", pki.root.cert.clone()),
+        ("ica", pki.ica.cert.clone()),
+        ("eca", pki.eca.cert.clone()),
+        ("ra", pki.ra.cert.clone()),
+        ("pca", pki.aca.cert.clone()),
+        ("ma", pki.ma.cert.clone()),
+        ("la1", pki.la1.cert.clone()),
+        ("la2", pki.la2.cert.clone()),
+        ("dcm", pki.dcm.cert.clone()),
+        ("crlg", pki.crlg.cert.clone()),
+    ]
+}
+
+/// Audit-gov GOV.L.onecert: each SCMS component holds one certificate, the one its
+/// provider's chain file lists and the one that signs on the wire ([SMP] §6.1). For both
+/// providers every PDU-layer component certificate is the governance's (the chain file's),
+/// and an enrolment certificate names that ECA as issuer. Fault (the first form): the PDU
+/// layer drew its own ECA, RA, ACA, MA, LAs, DCM and CRL signer under the governance ICA,
+/// so `pki.state` named one certificate and the entity's counters another.
+#[test]
+fn every_component_signs_with_the_certificate_its_chain_file_lists() {
+    let (mut home, mut peer) = runs();
+    for run in [&home, &peer] {
+        let gov = &run.state.gov;
+        for (role, cert) in pdu_components(run) {
+            assert_eq!(
+                gov.cert(role),
+                Some(&cert),
+                "{}: the {role} signs with its chain-file certificate",
+                gov.config.provider
+            );
+            assert!(
+                gov.lccf.certs.contains(&cert),
+                "{}: the {role} certificate is in the local chain file",
+                gov.config.provider
+            );
+        }
+    }
+    let (a, b) = (NodeId::new(5_000_211), NodeId::new(5_000_212));
+    home.preload(a, 0, 1, 2).expect("provisions");
+    peer.preload(b, 0, 1, 2).expect("provisions");
+    for (run, d) in [(&home, a), (&peer, b)] {
+        let e = run.state.devices[&d]
+            .enrolment_credential
+            .as_ref()
+            .expect("enrolled");
+        let issuer = match &e.cert.0.issuer {
+            v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha256AndDigest(h) => {
+                h.0.to_vec()
+            }
+            other => panic!("an enrolment certificate is issued by digest: {other:?}"),
+        };
+        assert_eq!(
+            Some(issuer),
+            run.state.gov.cert_digest("eca").map(|h| h.to_vec()),
+            "the enrolment certificate's issuer is the chain file's ECA"
+        );
+    }
+}
+
+/// Audit-gov §4 item 2: a root rollover reaches the wire. Once the CTL approving the new
+/// root is published, the provider's PDU PKI follows the governance (`follow_pki`): a
+/// device enrolled after the changeover holds an enrolment certificate and pseudonyms that
+/// chain to the new root; a device enrolled before keeps certificates that still verify
+/// ([SM-PROV] §3.5.4); and the CRL is signed under both CRACAs, so the old hierarchy's
+/// pseudonyms can still be revoked. Fault (the first form): the PDU PKI was fixed at run
+/// start, so the joiner's certificates chained to the old root.
+#[test]
+fn after_a_rollovers_changeover_new_certificates_chain_to_the_new_root() {
+    let (mut home, _) = runs();
+    let label = home.state.gov.config.provider.clone();
+    let before = NodeId::new(5_000_221);
+    home.preload(before, 0, 1, 2).expect("provisions");
+    let old = std::sync::Arc::clone(home.state.pki.as_ref().unwrap());
+    let st = &mut home.state;
+    let (_old_root, new_root, publish) = st.gov.rollover_root(&st.rng, &st.nodes, 1_000);
+    st.gov.publish_due(publish);
+    assert!(st.gov.ctl.roots.contains(&new_root), "the CTL is published");
+    let next = v2xw_proto::scms::run::pdu_pki_of(&st.gov, &label).expect("builds");
+    assert!(st.follow_pki(&label, std::sync::Arc::new(old.superseded_by(next))));
+    let pki = std::sync::Arc::clone(home.state.pki.as_ref().unwrap());
+    assert_eq!(
+        v2xw_sec::sig1609::cert_hashed_id32(&pki.root.cert).ok(),
+        Some(new_root),
+        "the PDU layer signs under the new root"
+    );
+    assert_ne!(pki.eca.cert, old.eca.cert);
+    let issuer8 = |c: &v2xw_msg::sec_types::ieee1609_dot2::Certificate| match &c.0.issuer {
+        v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha256AndDigest(h)
+        | v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha384AndDigest(h) => {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&h.0[..]);
+            b
+        }
+        _ => [0; 8],
+    };
+    let joiner = NodeId::new(5_000_222);
+    home.preload(joiner, 0, 1, 2).expect("provisions");
+    let dev = &home.state.devices[&joiner];
+    let enrol = &dev.enrolment_credential.as_ref().expect("enrolled").cert;
+    assert_eq!(issuer8(enrol), pki.eca.id8(), "enrolled by the new ECA");
+    assert!(pki.signer_key(enrol).is_ok());
+    let ps: Vec<_> = dev
+        .credentials
+        .values()
+        .filter_map(|c| c.implicit.as_ref())
+        .collect();
+    assert!(!ps.is_empty(), "the joiner holds pseudonyms");
+    for c in &ps {
+        assert_eq!(c.aca_id8, pki.aca.id8(), "issued by the new ACA");
+        assert!(pki.signer_key(&c.certificate).is_ok());
+    }
+    assert_eq!(issuer8(&pki.aca.cert), pki.ica.id8());
+    assert_eq!(issuer8(&pki.ica.cert), pki.root.id8(), "the chain ends at the new root");
+    // The device enrolled before the changeover keeps certificates that still verify.
+    let old_dev = &home.state.devices[&before];
+    let old_enrol = &old_dev.enrolment_credential.as_ref().unwrap().cert;
+    assert_eq!(issuer8(old_enrol), old.eca.id8());
+    assert!(pki.signer_key(old_enrol).is_ok(), "the old enrolment still verifies");
+    for c in old_dev.credentials.values().filter_map(|c| c.implicit.as_ref()) {
+        assert!(pki.signer_key(&c.certificate).is_ok(), "an old pseudonym still verifies");
+    }
+    // One CRL per CRACA: the current one, and the superseded hierarchy's.
+    home.seed_standing_crl(1);
+    let crlg = &home.state.crlg;
+    let full = v2xw_sec::crl::decode_crl(crlg.secured.as_ref().unwrap().bytes()).unwrap();
+    assert_eq!(full.contents.crl_craca.0[..], pki.craca_id8()[..]);
+    assert_eq!(crlg.secured_retired.len(), 1, "the old CRL signer signs too");
+    let retired = v2xw_sec::crl::decode_crl(crlg.secured_retired[0].bytes()).unwrap();
+    assert_eq!(retired.contents.crl_craca.0[..], old.craca_id8()[..]);
+    assert_ne!(old.craca_id8(), pki.craca_id8());
+}
+
+
+/// Audit-gov §4 item 5: each provider's component certificates carry the
+/// `SecurityMgmtSsp` version of its published chain files. ISS pre-production (provider-a)
+/// carries version 1 on the root, ICA, ACA, RA, MA, LAs and CRL signer and version 2 on
+/// its 1609.2.1 ECA (`dot1.eca.preprod`); SAESOL (provider-b) version 2 throughout. Fault
+/// (the first form): version 2 for every provider.
+#[test]
+fn component_ssp_versions_follow_each_providers_published_form() {
+    let (home, peer) = runs();
+    let version = |c: &v2xw_msg::sec_types::ieee1609_dot2::Certificate| {
+        let ssp = v2xw_sec::ctl::app_ssp(c, 35).flatten().expect("PSID 35 SSP");
+        // choice tag, SEQUENCE preamble, then the `version` Uint8.
+        ssp[2]
+    };
+    for (role, cert) in pdu_components(&home) {
+        let want = if role == "eca" { 2 } else { 1 };
+        assert_eq!(version(&cert), want, "ISS {role}");
+    }
+    for (role, cert) in pdu_components(&peer) {
+        assert_eq!(version(&cert), 2, "S2X {role}");
+    }
+}
+
+/// Audit-gov §4 item 4: the enrolment request's DCM->ECA hop is on `pki.flow`. CAMP's
+/// bootstrap is EE -> DCM -> ECA, and the DCM forwards the device's own
+/// `EeEcaCertRequestSpdu`, so each provider's records show as many DCM->ECA requests as
+/// EE->DCM ones, each forward no earlier than its request. Fault (the first form): only
+/// EE->DCM, ECA->DCM and DCM->EE were recorded and the ECA showed 0 requests received.
+#[test]
+fn every_enrolment_request_is_recorded_on_the_dcm_to_eca_hop() {
+    let (mut home, mut peer) = runs();
+    let (a, b) = (NodeId::new(5_000_231), NodeId::new(5_000_232));
+    home.preload(a, 0, 1, 2).expect("provisions");
+    peer.preload(b, 0, 1, 2).expect("provisions");
+    for run in [&home, &peer] {
+        let n = run.state.nodes;
+        let (dcm, eca) = (n.dcm.index(), n.eca.index());
+        let req = |from: Option<u32>, to: u32| -> Vec<u64> {
+            run.state
+                .pdus
+                .iter()
+                .filter(|q| {
+                    q.kind == v2xw_proto::scms::pdu::SpduKind::EeEcaCertRequest
+                        && q.to == to
+                        && from.is_none_or(|f| q.from == f)
+                })
+                .map(|q| q.at)
+                .collect()
+        };
+        let to_dcm = req(None, dcm);
+        let to_eca = req(Some(dcm), eca);
+        assert!(!to_dcm.is_empty(), "a device asked its DCM");
+        assert_eq!(to_eca.len(), to_dcm.len(), "one forward per request");
+        for (r, f) in to_dcm.iter().zip(&to_eca) {
+            assert!(f >= r, "forwarded no earlier than requested");
+        }
+    }
 }

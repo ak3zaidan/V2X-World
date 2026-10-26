@@ -60,7 +60,9 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
     assert_eq!(
         counts,
         BTreeMap::from([
-            (SpduKind::EeEcaCertRequest, 1),
+            // Device → DCM, then DCM → ECA: the DCM forwards the device's own request
+            // (CAMP122 bootstrap; audit-gov §4 item 4, the second hop was not recorded).
+            (SpduKind::EeEcaCertRequest, 2),
             // ECA → DCM, then DCM → device (WP-B2: the DCM relays and registers).
             (SpduKind::EcaEeCertResponse, 2),
             (SpduKind::EeRaCertRequest, 2),

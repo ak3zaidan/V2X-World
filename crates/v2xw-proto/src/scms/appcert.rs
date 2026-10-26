@@ -373,11 +373,7 @@ impl OpenedRequest {
 /// LinkageData"; butterfly without LinkageData → 3); `cracaId 000000`, `crlSeries 0`;
 /// `verificationKey` P-256; `additionalParams` either `encryptionKey` or `original`.
 pub fn ra_open_request(pki: &ScmsPki, spdu: &[u8]) -> Result<OpenedRequest> {
-    let enc = pki
-        .ra
-        .enc_private
-        .ok_or(PduError::Key("RA encryption key"))?;
-    let plain = pdu::decrypt_cert(spdu, &pki.ra.cert, &enc)?;
+    let plain = pki.decrypt_as(&pki.ra, spdu)?;
     let (p, signer) = pdu::open_signed_cert_request(&plain, pki)?;
     let RequestSignerFound::Cert(ec_cert) = signer else {
         return Err(PduError::Signer(
@@ -385,7 +381,7 @@ pub fn ra_open_request(pki: &ScmsPki, spdu: &[u8]) -> Result<OpenedRequest> {
         ));
     };
     let issued_by_eca = matches!(&ec_cert.0.issuer,
-        IssuerIdentifier::sha256AndDigest(h) if hashedid::id8_bytes(h) == pki.eca.id8());
+        IssuerIdentifier::sha256AndDigest(h) if pki.is_role(&pki.eca, &hashedid::id8_bytes(h)));
     if !issued_by_eca {
         return Err(PduError::UntrustedSigner);
     }
@@ -551,7 +547,7 @@ pub fn aca_issue(
 /// cannot open it: it is encrypted to the EE).
 pub fn ra_open_aca_response(pki: &ScmsPki, spdu: &[u8], request_hash8: [u8; 8]) -> Result<Vec<u8>> {
     let (p, signer) = pdu::open_signed_pdu(spdu, pki)?;
-    if pdu::cert_id8(&signer) != pki.aca.id8() {
+    if !pki.is_role(&pki.aca, &pdu::cert_id8(&signer)) {
         return Err(PduError::Signer(
             "an AcaRaCertResponse is signed by the ACA",
         ));
@@ -633,7 +629,7 @@ pub fn ee_open_response(
 ) -> Result<AppCredential> {
     let o = pdu::open_signed(spdu, pki)?;
     let signer_id8 = pdu::cert_id8(&o.signer);
-    if signer_id8 != pki.aca.id8() {
+    if !pki.is_role(&pki.aca, &signer_id8) {
         return Err(PduError::Signer("the response is signed by the ACA"));
     }
     let inner = pdu::decrypt_key(&o.payload, &keys.response_private())?;
@@ -744,7 +740,7 @@ pub fn ra_ee_cert_ack(
 /// `firstI` present exactly for a butterfly request. Returns `nextDlTime`.
 pub fn ee_check_ack(pki: &ScmsPki, ack: &[u8], sent: [u8; 8], butterfly: bool) -> Result<u32> {
     let (p, signer) = pdu::open_signed_pdu(ack, pki)?;
-    if pdu::cert_id8(&signer) != pki.ra.id8() {
+    if !pki.is_role(&pki.ra, &pdu::cert_id8(&signer)) {
         return Err(PduError::Signer("an ack is signed by the RA"));
     }
     let ScmsPduContent::ee_ra(EeRaInterfacePdu::raEeCertAck(a)) = p.content else {
@@ -788,11 +784,7 @@ pub fn ee_download_request_spdu(
 /// The RA's checks on a download request: it decrypts, verifies under an enrolment
 /// certificate of this PKI, and returns `(filename, signer)`.
 pub fn ra_open_download_request(pki: &ScmsPki, spdu: &[u8]) -> Result<(String, Certificate)> {
-    let enc = pki
-        .ra
-        .enc_private
-        .ok_or(PduError::Key("RA encryption key"))?;
-    let plain = pdu::decrypt_cert(spdu, &pki.ra.cert, &enc)?;
+    let plain = pki.decrypt_as(&pki.ra, spdu)?;
     let (p, signer) = pdu::open_signed_pdu(&plain, pki)?;
     let ScmsPduContent::ee_ra(EeRaInterfacePdu::eeRaDownloadRequest(r)) = p.content else {
         return Err(PduError::Shape("expected ee-ra.eeRaDownloadRequest"));

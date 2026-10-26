@@ -629,10 +629,29 @@ pub const ICA_ISSUED: [&str; 8] = ["eca", "pca", "ra", "la1", "la2", "lop", "dcm
 pub const ROOT_ISSUED: [&str; 3] = ["pg", "ma", "crlg"];
 
 /// The `SecurityMgmtSsp` a role's certificate carries for PSID 35 (1609.2.1-2022
-/// `Ieee1609Dot2Dot1Protocol`; version 2 throughout, as the 2022 module fixes).
+/// `Ieee1609Dot2Dot1Protocol`) at version 2, as the 2022 module fixes and every SAESOL
+/// certificate carries ([`security_mgmt_ssp_of`] for a provider's own form).
 #[must_use]
 pub fn security_mgmt_ssp(role: &str) -> SecurityMgmtSsp {
-    let v = Uint8(2);
+    security_mgmt_ssp_v(role, 2)
+}
+
+/// The `SecurityMgmtSsp` version a provider's `role` certificate carries, as its
+/// published chain files show: SAESOL (S2X production and test) version 2 throughout;
+/// ISS pre-production version 1 on the root, PG, ICA, ACA, CRL signer, RA, MA and LAs
+/// (`81 00 01`, `83 00 01`, `85 00 01`, `86 00 01`, `8b 00 01`, ...) and version 2 on
+/// its 1609.2.1 ECA (`dot1.eca.preprod`, `84 00 02`) and the end entities (audit-gov
+/// §4 item 5).
+#[must_use]
+pub fn ssp_version(profile: CertProfile, role: &str) -> u8 {
+    match (profile, role) {
+        (CertProfile::Iss, r) if !matches!(r, "eca" | "ee" | "elector") => 1,
+        _ => 2,
+    }
+}
+
+fn security_mgmt_ssp_v(role: &str, version: u8) -> SecurityMgmtSsp {
+    let v = Uint8(version);
     match role {
         "elector" => SecurityMgmtSsp::elector(
             v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::ElectorSsp::new(v),
@@ -719,9 +738,22 @@ fn explicit_psids(items: Vec<(u64, Option<SspRange>)>) -> SubjectPermissions {
     ))
 }
 
-/// A role's `appPermissions`.
-fn app_permissions(role: &str) -> Vec<PsidSsp> {
-    let ssp = coer(&security_mgmt_ssp(role)).expect("an SSP encodes");
+/// The PSID-35 SSP bytes of `role` in `profile`'s form. The 2022 module's types fix
+/// `version` at 2, so a version-1 SSP (ISS) is the version-2 encoding with that byte
+/// (choice tag, SEQUENCE preamble, `version`) set to 1: the bodies are the same, and the
+/// published bytes are exactly that (`83 00 01`, `88 00 01 00 04`).
+fn ssp_bytes(profile: CertProfile, role: &str) -> Vec<u8> {
+    let mut b = coer(&security_mgmt_ssp(role)).expect("an SSP encodes");
+    let v = ssp_version(profile, role);
+    if v != 2 && b.len() > 2 {
+        b[2] = v;
+    }
+    b
+}
+
+/// A role's `appPermissions` in `profile`'s form.
+fn app_permissions(profile: CertProfile, role: &str) -> Vec<PsidSsp> {
+    let ssp = ssp_bytes(profile, role);
     let mut v = vec![PsidSsp::new(psid(SECURITY_MGMT_PSID), Some(opaque(ssp)))];
     match role {
         // Published roots: `256: 00 01 00 01 01 01 00` (CrlSsp isCraca, series 256).
@@ -1264,11 +1296,13 @@ impl PeerProvider {
     }
 }
 
-/// The roles a peer provider certifies: everything but the factory's DCM and the CAMP
-/// reference design's LOP and CRL Store (01 §9; 00 §2.3).
+/// The roles a peer provider certifies: everything but the CAMP reference design's LOP
+/// and CRL Store (01 §9; 00 §2.3). Its DCM is certified: it is the component that signs
+/// the peer's enrolment traffic on the wire, so its certificate is the chain file's
+/// (one certificate per component, audit-gov GOV.L.onecert).
 pub const PEER_ROOT_ISSUED: [&str; 3] = ROOT_ISSUED;
 /// See [`PEER_ROOT_ISSUED`].
-pub const PEER_ICA_ISSUED: [&str; 5] = ["eca", "pca", "ra", "la1", "la2"];
+pub const PEER_ICA_ISSUED: [&str; 6] = ["eca", "pca", "ra", "la1", "la2", "dcm"];
 
 /// The bootstrap trust a device is provisioned with (Profile §2.1.15): the elector
 /// certificates, the quorum, and its clock.
@@ -1547,7 +1581,10 @@ impl Governance {
         } else {
             (cert_issue_permissions(role), None)
         };
-        let name = format!("{}.{}.sim", spec.host, label);
+        // The name the PDU layer always used (`eca.provider-a`): with one certificate per
+        // component these are what the devices see, so the device-facing sizes stay those
+        // reconciled with CAMP Table 3 (04 §3).
+        let name = format!("{}.{}", spec.host, label);
         let tbs = ToBeSignedCertificate::new(
             CertificateId::name(Hostname(name)),
             HashedId3(FixedOctetString::from(craca)),
@@ -1555,7 +1592,7 @@ impl Governance {
             ValidityPeriod::new(Time32(Uint32(start)), spec.lifetime.to_asn1()),
             region,
             None,
-            Some(SequenceOfPsidSsp(app_permissions(role))),
+            Some(SequenceOfPsidSsp(app_permissions(profile, role))),
             cip,
             crp,
             None,
@@ -1668,6 +1705,36 @@ impl Governance {
         set.insert("ica", ica);
         set.insert("root", root);
         self.peer_authorities.insert(label.to_string(), set);
+    }
+
+    /// Provider `label`'s PDU-layer PKI (home or peer): its current root, ICA and
+    /// components, the very certificates and keys the chain files carry and a rollover
+    /// re-certifies, so one certificate per component signs on the wire and appears in
+    /// the records and the Studio ([SMP] §6.1; audit-gov GOV.L.onecert). `None` for an
+    /// unknown label.
+    ///
+    /// # Errors
+    /// A role the PDU layer needs is not certified, or a key is unusable.
+    pub fn pdu_pki(
+        &self,
+        label: &str,
+    ) -> Option<Result<crate::scms::pdu::ScmsPki, crate::scms::pdu::PduError>> {
+        let profile = self.profile_of(label);
+        let parts = |a: &Authority| (a.cert.clone(), a.key.clone(), a.enc_scalar);
+        if label == self.config.provider {
+            let root = parts(&self.home_root().authority);
+            return Some(crate::scms::pdu::ScmsPki::of_governance(label, profile, |r| {
+                if r == "root" {
+                    Some(root.clone())
+                } else {
+                    self.authorities.get(r).map(parts)
+                }
+            }));
+        }
+        let set = self.peer_authorities.get(label)?;
+        Some(crate::scms::pdu::ScmsPki::of_governance(label, profile, |r| {
+            set.get(r).map(parts)
+        }))
     }
 
     /// The `HashedId32` of the newest approved root of provider `label` (home or peer).
