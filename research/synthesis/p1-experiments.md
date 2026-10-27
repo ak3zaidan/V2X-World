@@ -117,6 +117,19 @@ E7-F0/F0b, E7C-F0/F0b).
 - **Reception within 300 m.** DSRC 0.35, LTE-V2X 0.94, NR-V2X 0.66 at low load. LTE-V2X sends
   twice the frames (18,970 vs 9,586) and books no loss as below-sensitivity. Both are worth an
   audit; not judged here.
+  - **Audited 2026-10-27 (radio-fix3, `crates/v2xw-engine/tests/expectations/radio-fix3.yaml`
+    rows R3.1.\*, 9/9 pass, each red on a swapped run): no defect; the gap is the link budgets.**
+    DSRC radiates 20 dBm EIRP (J2945/1 vRP max) into a −92 dBm receiver (J2945/1; Unex OBU-301
+    sheet); LTE-V2X 26 dBm EIRP (23 dBm class + 3 dBi, under §95.3204's 27 dBm) with two
+    chase-combined copies, 50 % delivered at −102 dBm; NR one 16QAM copy, 50 % at −94 dBm. TR
+    37.885's urban NLOS law puts those budgets' edges at 133, ~450 and 250 m; the runs' 0.5
+    crossings are 175, 425 and 275 m. LTE's second frame is the J3161/1 deployed blind
+    retransmission (5GAA P-190033 Table 32); off, frames halve and reception within 300 m
+    falls 0.943 -> 0.857. At DSRC's 20 dBm EIRP LTE reaches 1.86x DSRC's 0.5 crossing, inside
+    the UDOT 2021 field range (C-V2X +33 % NLOS to +90 % LOS, both at 20 dBm). "No
+    below-sensitivity loss" is by design: the sidelink receiver is its BLER curve unless
+    `sensitivity: ts-36-101`. Open: NR's profile (one 16QAM copy) is not a deployment fact;
+    the C-V2X OBU power J3161/1 sets is not in a cached source.
 - **Load.** The small fleets never load the channel: mean CBR is 0.003 to 0.034 at every load.
   - The CBR rows pass for DSRC (0.0026 -> 0.0144).
   - Reception within 300 m stays flat (0.346 -> 0.346).
