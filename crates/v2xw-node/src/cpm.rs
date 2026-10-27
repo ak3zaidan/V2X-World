@@ -98,16 +98,22 @@ pub struct ObjectIn {
 }
 
 /// One sensor, as the sensor information container describes it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct SensorIn {
     /// `sensorId`.
     pub id: u8,
-    /// `SensorType`: 1 radar, 3 mono-optical.
+    /// `SensorType`: 1 radar, 2 lidar, 3 mono-optical.
     pub sensor_type: u8,
     /// Range, metres.
     pub range_m: f64,
     /// Half the horizontal opening, radians.
     pub half_fov_rad: f64,
+    /// The opening's centre, radians counter-clockwise from the frame's x axis (the
+    /// vehicle's heading; east at a roadside unit).
+    pub azimuth_rad: f64,
+    /// Where the sensor sits, metres from the station's reference position in the same
+    /// frame, when the configured suite states it (`perception` in the scenario).
+    pub mount_m: Option<[f64; 3]>,
 }
 
 /// What the next CPM carries.

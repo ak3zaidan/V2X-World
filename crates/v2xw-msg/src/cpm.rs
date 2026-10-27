@@ -31,8 +31,8 @@ use v2xw_core::geo::GeoOrigin;
 use v2xw_core::geom::Vec3;
 
 use crate::asn1::cdd::{
-    AngleConfidence, CardinalNumber1B, CartesianAngle, CartesianAngleValue,
-    CartesianCoordinateLarge, CartesianCoordinateWithConfidence, CartesianPosition3dWithConfidence,
+    AngleConfidence, CardinalNumber1B, CartesianAngle, CartesianAngleValue, CartesianCoordinate,
+    CartesianCoordinateLarge, CartesianPosition3d, CartesianCoordinateWithConfidence, CartesianPosition3dWithConfidence,
     ConfidenceLevel, CoordinateConfidence, DeltaTimeMilliSecondSigned, Identifier1B, Identifier2B,
     ItsPduHeader, MessageId, ObjectClass, ObjectClassDescription, ObjectClassWithConfidence,
     ObjectDimension, ObjectDimensionConfidence, ObjectDimensionValue, ObjectPerceptionQuality,
@@ -49,7 +49,7 @@ use crate::asn1::cpm_asn1::{
 };
 use crate::asn1::cpm_objects::{PerceivedObjectContainer, PerceivedObjects};
 use crate::asn1::cpm_sensors::{SensorInformation, SensorInformationContainer};
-use crate::asn1::cpm_stations::OriginatingVehicleContainer;
+use crate::asn1::cpm_stations::{OriginatingRsuContainer, OriginatingVehicleContainer};
 use crate::codec::{Encoded, MsgType, uper_decode, uper_encode};
 use crate::error::CodecError;
 use crate::units;
@@ -61,6 +61,8 @@ pub const CPM_PROTOCOL_VERSION: u8 = 2;
 
 /// `originatingVehicleContainer`.
 pub const CONTAINER_ORIGINATING_VEHICLE: u8 = 1;
+/// `originatingRsuContainer`: a roadside unit's CPM (TS 103 324 V2.1.1 §7.1.3).
+pub const CONTAINER_ORIGINATING_RSU: u8 = 2;
 /// `sensorInformationContainer`.
 pub const CONTAINER_SENSOR_INFORMATION: u8 = 3;
 /// `perceivedObjectContainer`.
@@ -105,16 +107,24 @@ pub struct CpmObject {
 }
 
 /// One sensor, in the simulator's units.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct CpmSensor {
     /// `sensorId`.
     pub id: u8,
-    /// `SensorType`: 1 radar, 3 mono-optical.
+    /// `SensorType`: 1 radar, 2 lidar, 3 mono-optical.
     pub sensor_type: u8,
     /// Range, metres.
     pub range_m: f64,
     /// Half the horizontal opening, radians.
     pub half_fov_rad: f64,
+    /// The opening's centre (boresight), radians counter-clockwise from the frame's x axis:
+    /// the vehicle's heading for a vehicle sensor (§7.1.4, body-fixed), east for a
+    /// roadside unit's.
+    pub azimuth_rad: f64,
+    /// The sensor's position in the same frame, metres from the station's reference
+    /// position (`shapeReferencePoint`); `None` leaves it out (the shape is then centred on
+    /// the reference position, as before 2026-10-26).
+    pub mount_m: Option<[f64; 3]>,
 }
 
 /// Everything [`build_cpm`] needs.
@@ -132,6 +142,10 @@ pub struct CpmInput {
     pub objects: Vec<CpmObject>,
     /// The sensors, when the sensor information container goes.
     pub sensors: Option<Vec<CpmSensor>>,
+    /// The originator is a roadside unit: the CPM carries the `originatingRsuContainer`
+    /// instead of the vehicle's (TS 103 324 V2.1.1 §7.1.3), and its sensors' shapes are in
+    /// the east-north-up frame.
+    pub rsu: bool,
 }
 
 fn cm(m: f64) -> i32 {
@@ -236,19 +250,27 @@ pub fn build_cpm(input: &CpmInput) -> Result<CollectivePerceptionMessage, CodecE
     let management =
         ManagementContainer::new(input.reference_time.clone(), reference_position, None, None);
     let mut containers: Vec<WrappedCpmContainer> = Vec::new();
-    let vehicle = OriginatingVehicleContainer::new(
-        Wgs84Angle::new(
-            Wgs84AngleValue(units::wgs84_angle(input.position.heading_rad)),
-            Wgs84AngleConfidence(127),
-        ),
-        None,
-        None,
-        None,
-    );
-    containers.push(WrappedCpmContainer::new(
-        CpmContainerId(CONTAINER_ORIGINATING_VEHICLE),
-        Any::new(encode_part(&vehicle)?),
-    ));
+    if input.rsu {
+        // No MAP reference: the unit's objects are placed by coordinates, not on a lane.
+        containers.push(WrappedCpmContainer::new(
+            CpmContainerId(CONTAINER_ORIGINATING_RSU),
+            Any::new(encode_part(&OriginatingRsuContainer::new(None))?),
+        ));
+    } else {
+        let vehicle = OriginatingVehicleContainer::new(
+            Wgs84Angle::new(
+                Wgs84AngleValue(units::wgs84_angle(input.position.heading_rad)),
+                Wgs84AngleConfidence(127),
+            ),
+            None,
+            None,
+            None,
+        );
+        containers.push(WrappedCpmContainer::new(
+            CpmContainerId(CONTAINER_ORIGINATING_VEHICLE),
+            Any::new(encode_part(&vehicle)?),
+        ));
+    }
     if let Some(sensors) = &input.sensors
         && !sensors.is_empty()
     {
@@ -256,15 +278,31 @@ pub fn build_cpm(input: &CpmInput) -> Result<CollectivePerceptionMessage, CodecE
             .iter()
             .map(|s| {
                 let half = s.half_fov_rad.to_degrees();
+                let az = s.azimuth_rad.to_degrees();
                 // CartesianAngleValue ::= INTEGER (0..3601), 0.1°, counter-clockwise from
-                // the x axis; the opening runs from `360 − half` round to `half`.
-                let start = ((360.0 - half) * 10.0).round().clamp(0.0, 3_599.0) as u16;
-                let end = (half * 10.0).round().clamp(0.0, 3_599.0) as u16;
+                // the x axis; the opening runs from `azimuth − half` round to
+                // `azimuth + half` (for a boresight on the x axis, from `360 − half` round
+                // to `half`). A full circle is 0 round to 359.9°.
+                let (start, end) = if half >= 180.0 {
+                    (0, 3_599)
+                } else {
+                    (
+                        ((az - half).rem_euclid(360.0) * 10.0).round().clamp(0.0, 3_599.0) as u16,
+                        ((az + half).rem_euclid(360.0) * 10.0).round().clamp(0.0, 3_599.0) as u16,
+                    )
+                };
+                // CartesianCoordinate ::= INTEGER (-32768..32767), centimetres.
+                let coord = |m: f64| {
+                    CartesianCoordinate((m * 100.0).round().clamp(-32_768.0, 32_767.0) as i16)
+                };
+                let reference = s.mount_m.map(|[x, y, z]| {
+                    CartesianPosition3d::new(coord(x), coord(y), Some(coord(z)))
+                });
                 SensorInformation::new(
                     Identifier1B(s.id),
                     SensorType(s.sensor_type),
                     Some(Shape::radial(RadialShape::new(
-                        None,
+                        reference,
                         StandardLength12b((s.range_m * 10.0).round().clamp(0.0, 4_095.0) as u16),
                         CartesianAngleValue(start),
                         CartesianAngleValue(end),
@@ -381,6 +419,17 @@ pub fn encode_cpm(cpm: &CollectivePerceptionMessage) -> Result<Encoded, CodecErr
 /// The generated decoder's refusal.
 pub fn decode_cpm(bytes: &[u8]) -> Result<CollectivePerceptionMessage, CodecError> {
     uper_decode(MsgType::Cpm, bytes)
+}
+
+/// Whether a received CPM comes from a roadside unit: it carries the
+/// `originatingRsuContainer` (TS 103 324 V2.1.1 §7.1.3). Read from the message alone.
+pub fn from_rsu(cpm: &CollectivePerceptionMessage) -> bool {
+    cpm.payload
+        .cpm_containers
+        .0
+        .0
+        .iter()
+        .any(|c| c.container_id.0 == CONTAINER_ORIGINATING_RSU)
 }
 
 /// The objects a received CPM reports, back in world ENU metres, and its sender's

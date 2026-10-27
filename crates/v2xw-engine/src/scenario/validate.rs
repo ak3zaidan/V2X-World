@@ -2206,6 +2206,37 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Vehicles per hour offered to the network.",
     },
     KeyStatus {
+        path: "perception",
+        status: Status::Wired,
+        note: "The sensors of the vehicles and roadside units that send CPMs, and how a \
+               road user is hidden from them (WP-14); needs 'cpm' in messages.sets.",
+    },
+    KeyStatus {
+        path: "perception.occlusion",
+        status: Status::Wired,
+        note: "centre-line (the line to the reference point, vehicles as discs; the \
+               default) or outline (any visible corner of the target's outline, vehicles \
+               as their body rectangles).",
+    },
+    KeyStatus {
+        path: "perception.vehicle",
+        status: Status::Wired,
+        note: "Every CPM-sending vehicle's suite: each sensor's kind, range, opening, \
+               boresight azimuth and mount; absent is the default front suite.",
+    },
+    KeyStatus {
+        path: "perception.classes",
+        status: Status::Wired,
+        note: "A suite per vehicle class (a truck's own radars, a bus's), over \
+               perception.vehicle.",
+    },
+    KeyStatus {
+        path: "perception.rsu",
+        status: Status::Wired,
+        note: "The suite of every roadside unit with the 'cpm' role, east-north-up from \
+               its antenna; its objects go out in infrastructure CPMs.",
+    },
+    KeyStatus {
         path: "traffic",
         status: Status::Wired,
         note: "How the traffic behaves at junctions and in jams; every field changes the run.",
@@ -3894,6 +3925,7 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     scms_lifecycle(s, &mut e);
     unreachable_keys(s, &mut e);
     absent_radio_holders(s, &mut e);
+    perception(s, &mut e);
     e
 }
 
@@ -4470,6 +4502,160 @@ fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             "radio.sidelink.selection_window_ms",
             format!("{ms} ms is under LTE's 20 ms minimum T2 (TS 36.213 §14.1.1.6)"),
         ));
+    }
+}
+
+/// The sensor suites (`perception`, WP-14): each sensor's id is a CPM `sensorId` bit the
+/// object list can name (1 to 7, distinct within a suite), its range fits the CPM's
+/// `StandardLength12b` (409.5 m), its opening is a real one, its probabilities are
+/// probabilities, and its offsets fit the shape's `CartesianCoordinate` (±327.67 m). A
+/// block, a class suite or a roadside suite that nothing would read is refused, as is a
+/// unit given the `cpm` role in a scenario that sends no CPM.
+fn perception(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    let sends_cpm = s.messages.sets.iter().any(|m| m == "cpm");
+    let rsu_roles = s
+        .actors
+        .rsus
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (format!("actors.rsus[{i}].roles"), &r.roles))
+        .chain(
+            s.actors
+                .rsu_placement
+                .iter()
+                .map(|p| ("actors.rsu_placement.roles".to_string(), &p.roles)),
+        );
+    let mut cpm_units = false;
+    for (field, roles) in rsu_roles {
+        if roles.iter().any(|r| r == "cpm") {
+            cpm_units = true;
+            if !sends_cpm {
+                e.push(conflict(
+                    &field,
+                    "gives a roadside unit the 'cpm' role, and messages.sets does not carry \
+                     'cpm', so the unit would send no infrastructure CPM; add 'cpm' to \
+                     messages.sets or drop the role"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    let Some(p) = &s.perception else {
+        return;
+    };
+    if !sends_cpm {
+        e.push(conflict(
+            "perception",
+            "would change nothing: only a station that sends CPMs runs the perception \
+             model; add 'cpm' to messages.sets"
+                .to_string(),
+        ));
+    }
+    if p.rsu.is_some() && !cpm_units {
+        e.push(conflict(
+            "perception.rsu",
+            "would change nothing: no roadside unit has the 'cpm' role".to_string(),
+        ));
+    }
+    let suite = |field: &str, list: &[crate::scenario::schema::SensorConf], e: &mut Vec<ScenarioError>| {
+        if list.is_empty() || list.len() > 7 {
+            e.push(conflict(
+                field,
+                format!(
+                    "has {} sensors; a suite has 1 to 7 (a CPM object names its sensors by \
+                     a bit per id)",
+                    list.len()
+                ),
+            ));
+        }
+        let mut ids = BTreeSet::new();
+        for (i, c) in list.iter().enumerate() {
+            let f = |leaf: &str| format!("{field}[{i}].{leaf}");
+            if !(1..=7).contains(&c.id) || !ids.insert(c.id) {
+                e.push(conflict(
+                    &f("id"),
+                    format!("{} is not a distinct sensor id from 1 to 7", c.id),
+                ));
+            }
+            if !(c.range_m > 0.0 && c.range_m <= 409.5) {
+                e.push(conflict(
+                    &f("range_m"),
+                    format!(
+                        "{} m is outside (0, 409.5]: the CPM's sensor range is a \
+                         StandardLength12b in decimetres",
+                        c.range_m
+                    ),
+                ));
+            }
+            if !(c.fov_deg > 0.0 && c.fov_deg <= 360.0) {
+                e.push(conflict(
+                    &f("fov_deg"),
+                    format!("{}° is not an opening in (0, 360]", c.fov_deg),
+                ));
+            }
+            if !c.azimuth_deg.is_finite() || c.azimuth_deg.abs() > 360.0 {
+                e.push(conflict(
+                    &f("azimuth_deg"),
+                    format!("{}° is outside [-360, 360]", c.azimuth_deg),
+                ));
+            }
+            for (leaf, v) in [("pd_near", c.pd_near), ("pd_far", c.pd_far)] {
+                if !(0.0..=1.0).contains(&v) {
+                    e.push(conflict(&f(leaf), format!("{v} is not a probability")));
+                }
+            }
+            for (leaf, v) in [("ahead_m", c.ahead_m), ("left_m", c.left_m), ("height_m", c.height_m)] {
+                if !v.is_finite() || v.abs() > 327.67 {
+                    e.push(conflict(
+                        &f(leaf),
+                        format!(
+                            "{v} m is outside ±327.67 m, the CPM shape's CartesianCoordinate"
+                        ),
+                    ));
+                }
+            }
+            for (leaf, v) in [
+                ("sigma_base_m", c.sigma_base_m),
+                ("sigma_range_fraction", c.sigma_range_fraction),
+            ] {
+                if let Some(v) = v
+                    && !(v.is_finite() && v >= 0.0)
+                {
+                    e.push(conflict(&f(leaf), format!("{v} is not a non-negative error")));
+                }
+            }
+        }
+    };
+    if let Some(v) = &p.vehicle {
+        suite("perception.vehicle", v, e);
+    }
+    if let Some(v) = &p.rsu {
+        suite("perception.rsu", v, e);
+    }
+    for (class, v) in &p.classes {
+        let field = format!("perception.classes.{class}");
+        let known = v2xw_mobility::VehicleClass::ALL
+            .iter()
+            .find(|c| c.as_str() == class);
+        match known {
+            None => e.push(conflict(
+                &field,
+                format!(
+                    "'{class}' is not a vehicle class; one of {}",
+                    v2xw_mobility::VehicleClass::ALL
+                        .iter()
+                        .filter(|c| !c.is_vru())
+                        .map(|c| c.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )),
+            Some(c) if c.is_vru() => e.push(conflict(
+                &field,
+                format!("would change nothing: a {class} sends no CPM"),
+            )),
+            Some(_) => suite(&field, v, e),
+        }
     }
 }
 

@@ -3257,6 +3257,9 @@ pub fn rsu_services(scenario: &Scenario, roles: &[String]) -> ServiceSet {
         spat: has("spat") && role("spat"),
         map: has("map") && role("map"),
         ssm: has("ssm") && role("spat"),
+        // Infrastructure collective perception (TS 103 324 §7.1.3): the unit's own
+        // sensors' objects (`crate::perception`, `perception.rsu`).
+        cpm: has("cpm") && role("cpm"),
         ..ServiceSet::NONE
     }
 }

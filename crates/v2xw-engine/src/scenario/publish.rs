@@ -206,6 +206,12 @@ const GROUPS: &[(&str, &str, &str)] = &[
          their advice.",
     ),
     (
+        "perception",
+        "Messages",
+        "The sensors behind collective perception: each vehicle class's suite, the roadside \
+         units' and how a road user is hidden from them.",
+    ),
+    (
         "mobility",
         "Traffic",
         "Who drives the vehicles: this engine, or SUMO over TraCI.",

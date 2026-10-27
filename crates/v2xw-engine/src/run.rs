@@ -1657,7 +1657,12 @@ impl Engine {
                 .sets
                 .iter()
                 .any(|s| s == "cpm")
-                .then(crate::perception::Perception::new),
+                .then(|| {
+                    scenario_for_radio.perception.as_ref().map_or_else(
+                        crate::perception::Perception::new,
+                        crate::perception::Perception::from_spec,
+                    )
+                }),
             retired: Vec::new(),
             departed_credentials: Vec::new(),
             lifecycle: Vec::new(),
@@ -4217,6 +4222,7 @@ impl Engine {
             actors,
             snapshot,
             nodes,
+            rsus,
             ..
         } = self;
         let Some(perception) = perception.as_mut() else {
@@ -4229,7 +4235,7 @@ impl Engine {
             }
             _ => crate::perception::ObjectClass::Vehicle,
         };
-        let observers: Vec<crate::perception::Observer> = actors
+        let mut observers: Vec<crate::perception::Observer> = actors
             .iter()
             .filter(|(_, a)| !a.class.is_vru())
             .filter_map(|(id, a)| {
@@ -4240,30 +4246,37 @@ impl Engine {
                     .is_some_and(|o| o.schedule().services().cpm);
                 runs.then_some(crate::perception::Observer {
                     node,
-                    actor: *id,
+                    actor: Some(*id),
                     k: a.last,
+                    frame: crate::perception::Frame::Vehicle,
+                    suite: perception.suite_for(a.class.as_str()),
                 })
             })
             .collect();
-        let sensors: Vec<v2xw_node::cpm::SensorIn> = perception
-            .sensors()
-            .iter()
-            .map(|s| v2xw_node::cpm::SensorIn {
-                id: s.id,
-                sensor_type: match s.kind {
-                    crate::perception::SensorKind::Radar => 1,
-                    crate::perception::SensorKind::Camera => 3,
-                },
-                range_m: s.range_m,
-                half_fov_rad: s.half_fov_rad,
-            })
-            .collect();
-        let reach = perception
-            .sensors()
-            .iter()
-            .map(|s| s.range_m)
-            .fold(0.0_f64, f64::max);
+        // Roadside units with the `cpm` role: their mast-mounted suite, in the
+        // east-north-up frame (an infrastructure CPM, TS 103 324 §7.1.3).
+        if let Some(suite) = perception.rsu_suite() {
+            for (node, pos) in rsus.iter() {
+                let runs = nodes
+                    .get(node)
+                    .and_then(|n| n.as_obu())
+                    .is_some_and(|o| o.schedule().services().cpm);
+                if runs {
+                    let mut k = v2xw_core::kinematics::Kinematics::at_rest(now, *pos);
+                    k.dims = v2xw_core::geom::Dims::new(0.0, 0.0, 0.0);
+                    observers.push(crate::perception::Observer {
+                        node: *node,
+                        actor: None,
+                        k,
+                        frame: crate::perception::Frame::Fixed,
+                        suite,
+                    });
+                }
+            }
+        }
         for o in observers {
+            let sensors = perception.sensor_info(o.suite, o.frame, o.k.dims);
+            let reach = perception.reach(o.suite, o.frame, o.k.dims);
             let mut near: Vec<ActorId> = snapshot.actors_within(o.k.pos, reach);
             near.sort_unstable();
             near.dedup();
@@ -4306,7 +4319,7 @@ impl Engine {
                 })
                 .collect();
             if let Some(obu) = nodes.get_mut(&o.node).and_then(|n| n.as_obu_mut()) {
-                obu.set_perception(objects, sensors.clone());
+                obu.set_perception(objects, sensors);
             }
         }
     }
@@ -5092,6 +5105,11 @@ impl Engine {
         // The local detector suite, over what each node's own runtime delivered to its
         // applications. It runs here and not inside the node phase's map because a report
         // is a *transmission*, and the map may not touch the heap (ADR 0004 decision 5).
+        if self.cpm_meter.is_some() {
+            for (id, outcome, _, _) in &results {
+                self.cpm_on_verified(*id, &outcome.delivered);
+            }
+        }
         if self.phase2.is_some() {
             for (id, outcome, _, _) in &results {
                 // What the installed CRL cost the liar: every delivered message whose

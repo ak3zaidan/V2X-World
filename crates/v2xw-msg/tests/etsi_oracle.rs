@@ -231,15 +231,18 @@ fn cpms(rng: &mut RngStream) -> Vec<(String, Vec<u8>)> {
                             sensor_type: 1,
                             range_m: 250.0,
                             half_fov_rad: 9f64.to_radians(),
+                            ..CpmSensor::default()
                         },
                         CpmSensor {
                             id: 3,
                             sensor_type: 3,
                             range_m: 80.0,
                             half_fov_rad: 26f64.to_radians(),
+                            ..CpmSensor::default()
                         },
                     ]
                 }),
+                rsu: false,
             };
             let message = cpm::build_cpm(&input).expect("builds");
             (
@@ -248,6 +251,80 @@ fn cpms(rng: &mut RngStream) -> Vec<(String, Vec<u8>)> {
             )
         })
         .collect()
+}
+
+/// WP-14: a roadside unit's CPM whose sensors state their mount and boresight, and its
+/// originating-RSU and sensor-information containers on their own, so the independent
+/// decoder reads the fields inside the open types too.
+fn wp14_vectors() -> Vec<(String, &'static str, Vec<u8>)> {
+    use v2xw_msg::cpm::{self, CpmInput, CpmSensor};
+    let wall = WallClock::parse_rfc3339("2027-03-04T08:00:00Z").expect("t0");
+    let input = CpmInput {
+        station_id: 77,
+        position: PositionEstimate {
+            pos: Vec3::new(10.0, 20.0, 6.0),
+            vel: Vec3::ZERO,
+            heading_rad: 0.0,
+            semi_major_m: 0.0,
+            semi_minor_m: 0.0,
+            orientation_rad: 0.0,
+            time_ns: 0,
+            fix: FixQuality::Rtk,
+        },
+        origin: origin(),
+        reference_time: cam::timestamp_its(wall, 1_000_000_000).expect("timestamp"),
+        objects: Vec::new(),
+        sensors: Some(vec![
+            CpmSensor {
+                id: 1,
+                sensor_type: 3,
+                range_m: 80.0,
+                half_fov_rad: 45f64.to_radians(),
+                azimuth_rad: 90f64.to_radians(),
+                mount_m: Some([1.5, -0.5, 6.0]),
+            },
+            CpmSensor {
+                id: 4,
+                sensor_type: 1,
+                range_m: 80.0,
+                half_fov_rad: 75f64.to_radians(),
+                azimuth_rad: 180f64.to_radians(),
+                mount_m: None,
+            },
+        ]),
+        rsu: true,
+    };
+    let bytes = cpm::encode_cpm(&cpm::build_cpm(&input).expect("builds"))
+        .expect("encodes")
+        .bytes;
+    let back = cpm::decode_cpm(&bytes).expect("decodes");
+    let inner = |id: u8| {
+        back.payload
+            .cpm_containers
+            .0
+            .0
+            .iter()
+            .find(|c| c.container_id.0 == id)
+            .map(|c| c.container_data.as_bytes().to_vec())
+            .expect("the container")
+    };
+    vec![
+        (
+            "cpm/wp14/rsu-cpm".to_string(),
+            "CollectivePerceptionMessage",
+            bytes.clone(),
+        ),
+        (
+            "cpm/wp14/rsu-container".to_string(),
+            "OriginatingRsuContainer",
+            inner(cpm::CONTAINER_ORIGINATING_RSU),
+        ),
+        (
+            "cpm/wp14/sensors".to_string(),
+            "SensorInformationContainer",
+            inner(cpm::CONTAINER_SENSOR_INFORMATION),
+        ),
+    ]
 }
 
 /// Every ETSI message the simulator sends decodes in an independent implementation and
@@ -276,6 +353,7 @@ fn etsi_encodings_are_read_identically_by_asn1tools() {
     for (n, b) in cpms(&mut rng) {
         vectors.push((n, "CollectivePerceptionMessage", b));
     }
+    vectors.extend(wp14_vectors());
     let payload: Vec<Value> = vectors
         .iter()
         .map(|(name, pdu, bytes)| json!({"name": name, "pdu": pdu, "rust_hex": hex(bytes)}))
@@ -338,5 +416,37 @@ fn etsi_encodings_are_read_identically_by_asn1tools() {
     assert_eq!(
         stationary["decoded"]["denm"]["situation"]["eventType"]["ccAndScc"]["__choice__"][1],
         json!(2)
+    );
+    // WP-14: the RSU's CPM names container 2, and its sensors read back with their mount
+    // and their opening about the boresight.
+    let named = |n: &str| {
+        results
+            .iter()
+            .find(|r| r["name"] == n)
+            .unwrap_or_else(|| panic!("{n} among the results"))
+    };
+    let ids: Vec<Value> = named("cpm/wp14/rsu-cpm")["decoded"]["payload"]["cpmContainers"]
+        .as_array()
+        .expect("containers")
+        .iter()
+        .map(|c| c["containerId"].clone())
+        .collect();
+    assert_eq!(ids, vec![json!(2), json!(3)], "{ids:?}");
+    let sensors = &named("cpm/wp14/sensors")["decoded"];
+    let cam = &sensors[0]["perceptionRegionShape"]["__choice__"];
+    assert_eq!(cam[0], json!("radial"), "{sensors}");
+    assert_eq!(
+        cam[1]["shapeReferencePoint"],
+        json!({"xCoordinate": 150, "yCoordinate": -50, "zCoordinate": 600}),
+        "{sensors}"
+    );
+    assert_eq!(
+        (cam[1]["horizontalOpeningAngleStart"].clone(), cam[1]["horizontalOpeningAngleEnd"].clone()),
+        (json!(450), json!(1_350))
+    );
+    let rear = &sensors[1]["perceptionRegionShape"]["__choice__"][1];
+    assert_eq!(
+        (rear["horizontalOpeningAngleStart"].clone(), rear["horizontalOpeningAngleEnd"].clone()),
+        (json!(1_050), json!(2_550))
     );
 }
