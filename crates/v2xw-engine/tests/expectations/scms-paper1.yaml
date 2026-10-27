@@ -3136,7 +3136,8 @@ rows:
   expect: band
   band: [-0.05, 0.05]
   source: 'the engine channel has no mechanism locked to the UTC 100 ms interval: the loss at 10-30 ms equals the loss at 50-99 ms within sampling noise. Tampa nm7w-nvbm RSU log, msgCnt-attested losses (scratch tgaps/tclass/tbump.py, 2026-10-27): a k-interval rx gap carries a msgCnt step of k in 84-89 % of pairs (the BSMs were sent); free devices lose 0.51 of BSMs generated 10-30 ms into the UTC 100 ms interval and 0.22 at 50-99 ms, at every 0.005-degree cell, with no locked device within 300 m'
-  measured: pending
+  measured: '-0.0231512'
+  verdict: pass
 - id: P1.GAP.off-bump-excess
   base: G-OFF
   variant: G-OFF
@@ -3145,7 +3146,8 @@ rows:
   expect: band
   band: [0.15, 0.35]
   source: 'with the fitted off-channel schedule the RSU loses about Tampa''s excess (all devices, 10-30 ms minus 50-99 ms: 0.505 - 0.25 = 0.25) +-0.10. Tampa nm7w-nvbm RSU log, msgCnt-attested losses (scratch tgaps/tclass/tbump.py, 2026-10-27): a k-interval rx gap carries a msgCnt step of k in 84-89 % of pairs (the BSMs were sent); free devices lose 0.51 of BSMs generated 10-30 ms into the UTC 100 ms interval and 0.22 at 50-99 ms, at every 0.005-degree cell, with no locked device within 300 m'
-  measured: pending
+  measured: '0.334286'
+  verdict: pass
 - id: P1.GAP.off-rest-same
   base: G-D1
   variant: G-OFF
@@ -3154,7 +3156,8 @@ rows:
   expect: delta
   band: [-0.03, 0.03]
   source: 'the fitted absence reaches past 50 ms of air time only in its longest draws, so the loss at 50-99 ms phase moves by under 0.03'
-  measured: pending
+  measured: '0.236802 -> 0.226573 (delta -0.01023)'
+  verdict: pass
 - id: P1.GAP.off-1int-down
   base: G-D1
   variant: G-OFF
@@ -3163,7 +3166,8 @@ rows:
   expect: band
   band: [0.74, 0.86]
   source: 'about 10 % more frames lost at the RSU (p x mean absence / 100 ms) moves the one-interval share from 0.898 toward Tampa''s 0.759: Bernoulli estimate 0.80, band +-0.06'
-  measured: pending
+  measured: '0.805345'
+  verdict: pass
 - id: P1.GAP.off-2int-up
   base: G-D1
   variant: G-OFF
@@ -3171,7 +3175,8 @@ rows:
   measure: x.e5.rsu.share_2int
   expect: up
   source: 'single missed BSMs become more common: the two-interval share rises from 0.060 toward Tampa''s 0.112'
-  measured: pending
+  measured: '0.0545878 -> 0.105842'
+  verdict: pass
 - id: P1.GAP.off-p90-up
   base: G-D1
   variant: G-OFF
@@ -3179,7 +3184,8 @@ rows:
   measure: x.e5.rsu.p90_ms
   expect: up
   source: 'Tampa p90 303 ms against the engine''s 151: the added losses lengthen the tail'
-  measured: pending
+  measured: '147.49 -> 241.675'
+  verdict: pass
 - id: P1.GAP.off-ks
   base: G-OFF
   variant: G-OFF
@@ -3188,7 +3194,9 @@ rows:
   expect: le
   value: 0.0748
   source: 'the pre-registered P1-E5 test (tolerance 0.0747 fixed before any E5 run) on the off-channel run. Predicted before the run: still above, because the rest-of-interval loss (Tampa 0.22) is not modelled'
-  measured: pending
+  measured: '0.144099'
+  verdict: open
+  note: 'as predicted: interval shares now match Tampa (one 0.805 vs 0.759, two 0.106 vs 0.112, 3-5 0.066 vs 0.065, p90 242 vs 303 ms), and the KS maximum moved from 156 ms to 97 ms: inside the interval (engine CDF 0.164 vs Tampa 0.276 at 100 ms). See P1.GAP.offt-* and s2-*.'
 - id: P1.GAP.off-ks-down
   base: G-D1
   variant: G-OFF
@@ -3196,7 +3204,9 @@ rows:
   measure: x.e5.rsu.ks_tampa
   expect: down
   source: 'the off-channel schedule moves the RSU gap distribution toward Tampa''s'
-  measured: pending
+  measured: '0.138585 -> 0.144099'
+  verdict: open
+  note: 'KS rose 0.139 -> 0.144 although every interval share moved onto Tampa: the maximum moved inside the one-interval peak (97 ms), where the pooled free-class clock (mostly Orem, drift p50 6 ms) and the RSU log''s stamp jitter dominate. Not a defect of the off-channel model.'
 - id: P1.GAP.off-lt50
   base: G-OFF
   variant: G-OFF
@@ -3205,7 +3215,8 @@ rows:
   expect: eq
   value: 0.0
   source: 'Tampa''s 1.6 % of sub-50 ms rx gaps are log artefacts, not channel: 224 of 547 carry msgCnt -1 (logged out of order) and 157 a +100 ms secMark step; no receiver model makes them, so the engine stays at 0'
-  measured: pending
+  measured: '0'
+  verdict: pass
 - id: P1.GAP.off-cause
   base: G-OFF
   variant: G-OFF
@@ -3214,7 +3225,8 @@ rows:
   expect: ge
   value: 1
   source: 'the recorded network state names the mechanism: frames lost as off-channel at the RSUs'
-  measured: pending
+  measured: '8574'
+  verdict: pass
 - id: P1.GAP.base-cause
   base: G-D1
   variant: G-D1
@@ -3223,7 +3235,9 @@ rows:
   expect: eq
   value: 0
   source: 'unset, no unit ever leaves the channel (the flag''s default changes nothing)'
-  measured: pending
+  measured: 'absent from run-report rx_losses (0 frames)'
+  verdict: pass
+  note: 'the map lists only causes that occurred; G-D1 has none'
 - id: P1.GAP.off-obu-same
   base: G-D1
   variant: G-OFF
@@ -3232,7 +3246,8 @@ rows:
   expect: same
   tol: 0.0
   source: 'the schedule touches roadside receivers only: every vehicle-received gap is unchanged'
-  measured: pending
+  measured: '0.865446 -> 0.865446'
+  verdict: pass
 - id: P1.GAP.off-frames
   base: G-D1
   variant: G-OFF
@@ -3241,7 +3256,8 @@ rows:
   expect: ratio
   band: [0.98, 1.02]
   source: 'no transmitter changes (an absent unit''s own frames are not deferred, stated): frames within 2 %'
-  measured: pending
+  measured: '9604 -> 9605 (ratio 1)'
+  verdict: pass
 - id: P1.GAP.off-events
   base: G-D1
   variant: G-OFF
@@ -3250,7 +3266,8 @@ rows:
   expect: ratio
   band: [0.95, 1.05]
   source: 'one keyed draw per RSU arrival and fewer RSU verifications: events within 5 %'
-  measured: pending
+  measured: '92500 -> 88479 (ratio 0.9565)'
+  verdict: pass
 - id: P1.GAP.off-wall
   base: G-D1
   variant: G-OFF
@@ -3259,7 +3276,8 @@ rows:
   expect: ratio
   band: [0.75, 1.25]
   source: 'the decision is O(1) per arrival: wall time within 25 % (shared machine)'
-  measured: pending
+  measured: '20.87 -> 20.08 (ratio 0.9621)'
+  verdict: pass
 - id: P1.GAP.nak-rest-up
   base: G-D1
   variant: G-NAK
@@ -3267,7 +3285,9 @@ rows:
   measure: x.e5.rsu.loss_rest
   expect: up
   source: 'fast fading (Nakagami m = 3, the 802.11p fit) turns links near sensitivity intermittent: the phase-independent loss rises toward Tampa''s 0.22-0.25'
-  measured: pending
+  measured: '0.236802 -> 0.215464'
+  verdict: wrong-expectation
+  note: 'the premise was wrong: the base already draws Nakagami m = 3 per frame (wiring.rs default_fading FixedMedium for 802.11p at the medium tier; budget.rs''s ''medium passes NoFading'' describes its own unit stack). The variant only changed coherence to doppler. The base''s loss at 50-99 ms phase (0.237) already matches Tampa''s 0.228.'
 - id: P1.GAP.nak-bump-flat
   base: G-NAK
   variant: G-NAK
@@ -3276,7 +3296,8 @@ rows:
   expect: band
   band: [-0.05, 0.05]
   source: 'fading is not locked to the UTC interval: no phase excess (only the off-channel schedule can make one)'
-  measured: pending
+  measured: '-0.0201107'
+  verdict: pass
 - id: P1.GAP.nak-1int-down
   base: G-D1
   variant: G-NAK
@@ -3284,7 +3305,9 @@ rows:
   measure: x.e5.rsu.share_1int
   expect: down
   source: 'intermittent losses make fewer single-interval gaps (medium tier: no diffraction opening new links, unlike the refuted high-tier run E5-D1H)'
-  measured: pending
+  measured: '0.90794 -> 0.913464'
+  verdict: wrong-expectation
+  note: 'same premise error as nak-rest-up: fading was already on; doppler coherence moves the one-interval share by +0.006 (noise). E5-D1H''s refutation therefore tested diffraction, not fading.'
 - id: P1.GAP.det
   base: G-D1
   variant: G-D1b
@@ -3292,7 +3315,8 @@ rows:
   measure: digest.record
   expect: identical
   source: 'same seed, byte-identical'
-  measured: pending
+  measured: '871613c30caa5920 -> 871613c30caa5920'
+  verdict: pass
 - id: P1.GAP.rsu10-exposure
   base: G-Q4
   variant: G-RSU10
@@ -3300,7 +3324,8 @@ rows:
   measure: x.exposure.sig
   expect: identical
   source: 'P1-E6 confound fixed: RSU ids no longer share the vehicle counter, so 10 instead of 30 RSUs leaves every vehicle''s node id and keyed draws (spawn, attacker arming, la_link, attack start) byte-identical. Fault: tests/stable_node_keys.rs red with units on the vehicle counter'
-  measured: pending
+  measured: '403d948c90ba6769 -> 403d948c90ba6769'
+  verdict: pass
 - id: P1.GAP.rsu10-uploaded
   base: G-Q4
   variant: G-RSU10
@@ -3309,7 +3334,8 @@ rows:
   expect: delta
   band: [-1000000, 0]
   source: 'a third of the RSUs on common random numbers: fewer report-forward contacts, so uploads non-increasing (the confounded E6 row measured +62)'
-  measured: pending
+  measured: '1987 -> 1939 (delta -48)'
+  verdict: pass
 - id: P1.GAP.rsu10-attack-lost
   base: G-Q4
   variant: G-RSU10
@@ -3318,7 +3344,8 @@ rows:
   expect: delta
   band: [0, 1]
   source: 'attack-evidence loss lives on the RSU-relay path (E6 cellular row): fewer RSUs lose no less'
-  measured: pending
+  measured: '0 -> 0 (delta 0)'
+  verdict: pass
 - id: P1.GAP.evp-pseudonym-k
   base: G-EV0
   variant: G-EVP
@@ -3327,7 +3354,8 @@ rows:
   expect: same
   tol: 0.0
   source: 're-judges P1.E8.evp-pseudonym-k after the attack_start fix (gt.device_exposure = first falsified message): pseudonym-k reads no device-class feature and no decision moved, so the budget is identical'
-  measured: pending
+  measured: '560.5 -> 560.5'
+  verdict: pass
 - id: P1.GAP.eva-pseudonym-k
   base: G-EV0
   variant: G-EVA
@@ -3336,7 +3364,8 @@ rows:
   expect: same
   tol: 0.0
   source: 're-judges P1.E8.eva-pseudonym-k after the attack_start fix (gt.device_exposure = first falsified message): pseudonym-k reads no device-class feature and no decision moved, so the budget is identical'
-  measured: pending
+  measured: '560.5 -> 560.5'
+  verdict: pass
 - id: P1.GAP.evb-pseudonym-k
   base: G-EV0
   variant: G-EVB
@@ -3345,7 +3374,8 @@ rows:
   expect: same
   tol: 0.0
   source: 're-judges P1.E8.evb-pseudonym-k after the attack_start fix (gt.device_exposure = first falsified message): pseudonym-k reads no device-class feature and no decision moved, so the budget is identical'
-  measured: pending
+  measured: '560.5 -> 560.5'
+  verdict: pass
 - id: P1.GAP.evp-device-k
   base: G-EV0
   variant: G-EVP
@@ -3354,7 +3384,8 @@ rows:
   expect: same
   tol: 0.0
   source: 're-judges P1.E8.evp-device-k after the attack_start fix (gt.device_exposure = first falsified message): device-k reads no device-class feature and no decision moved, so the budget is identical'
-  measured: pending
+  measured: '3059.2 -> 3059.2'
+  verdict: pass
 - id: P1.GAP.eva-device-k
   base: G-EV0
   variant: G-EVA
@@ -3363,7 +3394,8 @@ rows:
   expect: same
   tol: 0.0
   source: 're-judges P1.E8.eva-device-k after the attack_start fix (gt.device_exposure = first falsified message): device-k reads no device-class feature and no decision moved, so the budget is identical'
-  measured: pending
+  measured: '3059.2 -> 3059.2'
+  verdict: pass
 - id: P1.GAP.evb-device-k
   base: G-EV0
   variant: G-EVB
@@ -3372,7 +3404,8 @@ rows:
   expect: same
   tol: 0.0
   source: 're-judges P1.E8.evb-device-k after the attack_start fix (gt.device_exposure = first falsified message): device-k reads no device-class feature and no decision moved, so the budget is identical'
-  measured: pending
+  measured: '3059.2 -> 3059.2'
+  verdict: pass
 - id: P1.GAP.l1-reproduces
   base: G-L1
   variant: G-L1
@@ -3381,7 +3414,8 @@ rows:
   expect: ge
   value: 1
   source: 'L1 = p1-ma-l1 (the same resolved scenario as MAL1R), so its 31 against MAL1R''s 0 is the binary: MAL1R ran on 8becf72a, before the v3 timing fit (204d5d85: heavy-tailed walk and :00/:50 grid hops). On this binary the failure reproduces'
-  measured: pending
+  measured: '33'
+  verdict: pass
 - id: P1.GAP.l1c-down
   base: G-L1
   variant: G-L1C
@@ -3389,7 +3423,8 @@ rows:
   measure: x.ma.sound_honest_max
   expect: down
   source: 'E7 root cause: a grid hop is a 50 ms secMark dt, and the default GNSS white velocity noise (sd 0.14 m/s between fixes) then reads as more than 10 m/s2 (CV-pilot locked devices differ by sd 0.045 m/s). Without it the honest blocks fall'
-  measured: pending
+  measured: '33 -> 4'
+  verdict: pass
 - id: P1.GAP.l1c-k2-only
   base: G-L1C
   variant: G-L1C
@@ -3398,7 +3433,9 @@ rows:
   expect: le
   value: 2
   source: 'E7C at 0 % free: only k = 2 rules still block honest devices (1 per seed, ConstantPosition at creep speed, Tampa locked 13.0 per ID-minute); the bound allows 2 on this one seed'
-  measured: pending
+  measured: '4'
+  verdict: open
+  note: 'velocity noise was the main cause (implausibleAcceleration verdicts 327 -> 0; honest blocks 33 -> 4) but 4 honest devices stay blocked up to k = 5 and catch theta = 5 (pseudonym-k k = 10 blocks 0). The EV family records no jsonl, so the accusing detector is not separated (positionJump verdicts 2,112 -> 2,207).'
 - id: P1.GAP.l1b-catch
   base: G-L1
   variant: G-L1B
@@ -3407,7 +3444,8 @@ rows:
   expect: ratio
   band: [1.0, 1000.0]
   source: 'reported (P1.E8.l1b-catch, not run before): the budget under catch when the disguised attackers are the only free class'
-  measured: pending
+  measured: '1202 -> 1202 (ratio 1)'
+  verdict: pass
 - id: P1.GAP.l1b-cluster
   base: G-L1
   variant: G-L1B
@@ -3416,7 +3454,9 @@ rows:
   expect: ratio
   band: [1.0, 1000.0]
   source: 'reported (P1.E8.l1b-cluster): cluster gains when the disguise makes attackers the only free class, which is uncrowded'
-  measured: pending
+  measured: '685 -> 590.6 (ratio 0.8622)'
+  verdict: wrong-expectation
+  note: 'the disguise costs budget under cluster in the all-locked fleet (685 -> 591 s): disguised as free, the attackers are the only free class, which is uncrowded, so cluster''s crowded-class relaxation does not apply and they stand out. Consistent with the P1-E8 mechanism; the >= 1 band assumed a gain.'
 - id: P1.GAP.offt-p50
   base: G-OFFT
   variant: G-OFFT
@@ -3425,7 +3465,8 @@ rows:
   expect: band
   band: [103.0, 107.0]
   source: 'G-OFF matches Tampa''s interval shares (one 0.805 vs 0.759, two 0.106 vs 0.112, 3-5 0.066 vs 0.065) and its KS maximum moved to 97 ms: engine CDF 0.164 vs Tampa 0.276 at 100 ms, p50 108.5 vs 105 ms. The engine''s free class runs the pooled (mostly Orem) clock, drift p50 6 ms and 15 % of periods beyond +-25 ms; Tampa''s free IDs drift p50 3 ms with 91 % of periods within +-5 ms (tdrift.py). With Tampa''s clock the RSU gap median moves to Tampa''s 105 ms +-2'
-  measured: pending
+  measured: '105.318'
+  verdict: pass
 - id: P1.GAP.offt-ks-down
   base: G-OFF
   variant: G-OFFT
@@ -3433,7 +3474,9 @@ rows:
   measure: x.e5.rsu.ks_tampa
   expect: down
   source: 'G-OFF matches Tampa''s interval shares (one 0.805 vs 0.759, two 0.106 vs 0.112, 3-5 0.066 vs 0.065) and its KS maximum moved to 97 ms: engine CDF 0.164 vs Tampa 0.276 at 100 ms, p50 108.5 vs 105 ms. The engine''s free class runs the pooled (mostly Orem) clock, drift p50 6 ms and 15 % of periods beyond +-25 ms; Tampa''s free IDs drift p50 3 ms with 91 % of periods within +-5 ms (tdrift.py). KS falls'
-  measured: pending
+  measured: '0.144099 -> 0.164634'
+  verdict: open
+  note: 'with Tampa''s own free clock the one-interval peak becomes too tight on air instants (engine CDF 0.001 vs Tampa 0.063 at 90 ms; p50 105.3 vs 105): KS 0.165. The remaining difference is the RSU log''s own stamp jitter (Tampa one-interval rx-gap IQR 11 ms vs secMark-gap IQR 4 ms). With that observation model (sd 5.4 ms, e5gaps ks_tampa_logjit) KS is 0.071 on this run (post hoc), 0.076 out of sample (s2).'
 - id: P1.GAP.offt-ks
   base: G-OFFT
   variant: G-OFFT
@@ -3442,7 +3485,9 @@ rows:
   expect: le
   value: 0.0748
   source: 'the pre-registered P1-E5 test (0.0747) on the off-channel run with Tampa''s own free clock. Predicted: may still fail by the RSU log''s own timestamp jitter (Tampa one-interval rx-gap IQR 11 ms against the secMark gap''s 4 ms), which no channel model makes'
-  measured: pending
+  measured: '0.164634'
+  verdict: open
+  note: 'raw KS 0.165 (air instants, no log stamp jitter). See offt-ks-down and s2-ks-logjit.'
 - id: P1.GAP.offt-shares
   base: G-OFF
   variant: G-OFFT
@@ -3451,7 +3496,8 @@ rows:
   expect: delta
   band: [-0.02, 0.02]
   source: 'the clock moves gaps inside an interval, not across: the two-interval share moves by under 0.02'
-  measured: pending
+  measured: '0.105842 -> 0.105576 (delta -0.0002659)'
+  verdict: pass
 - id: P1.GAP.s2-ks-logjit
   base: G-OFFT2
   variant: G-OFFT2
@@ -3460,7 +3506,9 @@ rows:
   expect: le
   value: 0.0748
   source: 'the full P1-E5 pipeline out of sample: on G-OFFT the KS with the log''s stamp jitter (sd 5.4 ms, from Tampa''s one-interval rx-gap IQR 11 ms vs secMark-gap IQR 4 ms) was 0.066, found post hoc. Written before this seed-2 run: within the pre-registered tolerance 0.0747'
-  measured: pending
+  measured: '0.0763696'
+  verdict: open
+  note: 'out of sample (seed 2): 0.0764 against 0.0748, a narrow miss; this seed''s RSU gaps are cleaner (one-interval 0.842 vs G-OFFT 0.820). Two seeds give 0.071 and 0.076: the pipeline sits at the tolerance, not inside it. Next: more seeds, and the rx-time jitter fitted per stamp rather than as a Gaussian.'
 - id: P1.GAP.s2-ks-raw
   base: G-OFFT2
   variant: G-OFFT2
@@ -3469,7 +3517,8 @@ rows:
   expect: ge
   value: 0.0748
   source: 'fault for the row above: without the log''s stamp jitter the same run stays over the tolerance (G-OFFT 0.165), so the jitter step is what closes it, not the seed'
-  measured: pending
+  measured: '0.163769'
+  verdict: pass
 - id: P1.GAP.s2-1int
   base: G-OFFT2
   variant: G-OFFT2
@@ -3478,4 +3527,5 @@ rows:
   expect: band
   band: [0.609, 0.909]
   source: 'Tampa 0.759 +-0.15 (the original secondary band); G-OFFT 0.820'
-  measured: pending
+  measured: '0.842016'
+  verdict: pass
