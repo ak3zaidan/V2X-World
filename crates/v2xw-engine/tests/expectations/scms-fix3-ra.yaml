@@ -114,7 +114,7 @@ rows:
   expect: 'F < B: the RA-LA-ACA hops of the pre-generated weeks happened when the weeks fell due (here before the run), not at each top-up'
   source: '[CAMP122] 5.2.7.6.4 (the RA pre-generates); [PRIMER] p.6'
   measured: 'B 1,482,343 against F 959,355 bytes (-35 %)'
-  verdict: open
+  verdict: wrong-expectation
   note: 'as written it passes, but the expectation is not the deployment: a real RA adds week (i + horizon) for every account at each boundary, in the run ([PRIMER] p.6), so the in-run RA-LA-ACA load is about one week per account per boundary. The engine generates only weeks a device asks for; with the 3-year horizon none is generated in the run, and scms_knobs_runs the_architecture_is_the_deployments fails (no RA-LA message in the run). Open: run the far-horizon weekly job in the run. Taken up by RA.boundary-job (ScmsRun::arm_boundary_jobs)'
 - id: RA.uu-bytes-per-topup
   base: B
@@ -211,7 +211,7 @@ rows:
   measure: phase2.access.backend_bytes (in run)
   expect: 'G > F, and G - F > B - F: at each of the two boundaries every account adds the week that comes into ra-maxPreloadTime, so the RA-LA-ACA hops of one week per account per boundary are on the run (more weeks than the 59 the lazy RA generated on request in B)'
   source: '[PRIMER] p.6 (the RA adds one week every week); [CAMP122] 5.2.7.6.4; [SMP] Table 3 ra-maxPreloadTime'
-  measured: pending
+  measured: 'backend F 959,355 against G 1,720,133 bytes (+760,778; B - F = 522,988): two boundaries, every account''s next week on the run. scms_knobs_runs the_architecture_is_the_deployments pending its run; pregeneration every_account_gets_its_next_horizon_week_at_the_boundary_without_asking passes'
   verdict: pending
 - id: RA.boundary-metrics
   base: F
@@ -220,7 +220,7 @@ rows:
   measure: topup mean, topups_completed, receiver_validation refused
   expect: 'top-up mean within +-10 % (the boundary week is not one any device asks for in the run; the RA serves .info and downloads from held files while the job runs), topups_completed equal, refusals equal'
   source: 1609.2.1 §6.3.5.4 (the top-off of a held week is .info + download); queueing at an RA with backend_servers parallel servers
-  measured: pending
+  measured: 'topup F 337.1 ms against G 337.1 ms (59 each), topups 121/59/295 both, refusals 0 both'
   verdict: pending
 - id: RA.boundary-cost
   base: F
@@ -229,8 +229,8 @@ rows:
   measure: events (engine classes), wall, peak memory (one binary each: F on fix1, G on fix2)
   expect: 'events within +-1 % (the backend kernel is not in events_by_class, RA.events); peak memory within +10 % (one more week of files per account per boundary); wall reported, not judged across binaries'
   source: event accounting; RA repository size
-  measured: pending
-  verdict: pending
+  measured: 'events 883,278 both; peak F 68.2 MB against G 72.6 MB (+6.4 %); wall F 70.7 s, G 63.7 s (different binaries, not judged)'
+  verdict: pass
 # --- (2) R-PQUNSEC -------------------------------------------------------------------------
 - id: PQ.rsu-own-reports
   base: PQF
@@ -290,7 +290,7 @@ rows:
   measure: provider-b ACA instances with a certificate in its PKI (pki.state component records; test pki_view / provider_runs)
   expect: '2 ACAs, 2 certificates (was 2 placed, 1 certified)'
   source: SAESOL published chain files 2025-07-17 and 2025-08-13 (two ACA certificates); audit-gov GOV.D1.acas
-  measured: pending
+  measured: 'provider_runs provider_bs_second_aca_is_certified_and_issues_its_share (third build): 2 provider-b ACA components in pki.state, both with a certificate'
   verdict: pending
 - id: D1.form
   base: G
@@ -299,7 +299,7 @@ rows:
   measure: aca/1 certificate against aca/0
   expect: 'same issuer (provider-b ICA), validity, SSP, region, CRACA and encryption-key presence; a different verification key'
   source: the two published SAESOL ACA certificates share one form; audit-prov §4.1 design
-  measured: pending
+  measured: 'same test: issuer, validity, appPermissions, certIssuePermissions, region, CRACA, CRL series and encryption-key presence equal; verification keys differ (first equal only after 6869fb6a, D1.chain-permissions)'
   verdict: pending
 - id: D1.split
   base: G
@@ -308,7 +308,7 @@ rows:
   measure: provider-b RaAcaCertRequest SPDUs to aca/0 and aca/1 (test)
   expect: 'each ACA gets half of every release within one request (round-robin over the shuffled batch, ASSUMPTION: the split rule is not published); every certificate is verified by its device and signed by the ACA that received its request (same-ACA rule, 1609.2.1 §6.3.5.4)'
   source: audit-prov §4.1; IEEE 1609.2.1 (AcaEeCertResponse signed by the issuing ACA)
-  measured: pending
+  measured: 'same test: a 20-certificate provisioning sends 10 RaAcaCertRequest SPDUs to aca/0 and 10 to aca/1; the device installs 20, 10 signed by aca/1; 0 PDU rejections'
   verdict: pending
 - id: D1.chain-permissions
   base: Gp
@@ -317,7 +317,7 @@ rows:
   measure: receiver_validation refused (all reasons)
   expect: '0 refusals, as F: a pseudonym aca/1 issued chains to provider-b's root through an ACA certificate whose certIssuePermissions covers it, as the core ACA's does (both published SAESOL ACA certificates hold {all, 1, 0, app})'
   source: IEEE 1609.2 §5.1.2.4 (chain permissions); SAESOL chain files 2025-07-17, 2025-08-13
-  measured: 'Gp 81,410 chain-permission-not-covered (aca/1 issued with no certIssuePermissions: tbs_for read the role from the name prefix aca-1); G pending'
+  measured: 'Gp 81,410 chain-permission-not-covered (aca/1 issued with no certIssuePermissions: tbs_for read the role from the name prefix aca-1); G 0'
   verdict: fixed
   test: provider_runs provider_bs_second_aca_is_certified_and_issues_its_share (cert_issue_permissions equal)
 - id: D1.metrics-unchanged
@@ -327,7 +327,7 @@ rows:
   measure: topup mean, topups_completed, receiver_validation refused, checked, uu bytes per top-up
   expect: 'top-up mean within +-2 % (an on-time ACA is not a bottleneck: the wait is the exchange), topups_completed equal, 0 refusals, checked within +-1 % (pseudonyms from the second ACA have the same form and size), uu bytes per top-up within +-1 %'
   source: queueing (M/D/c with utilisation near 0 at the ACA); same certificate form
-  measured: pending
+  measured: 'topup F 337.1 / G 337.1 ms; topups_completed 59 / 59; refusals 0 / 0; checked 346,489 / 346,489; uu bytes per top-up 13,465.5 / 13,467.6 (+0.02 %)'
   verdict: pending
 - id: D1.slow-aca-halved
   base: FSB
@@ -355,7 +355,7 @@ rows:
   measure: events, peak memory
   expect: 'events within +-1 %; peak memory within +-10 % (one more hosted node, a second ACA certificate)'
   source: one backend node more per provider-b run
-  measured: pending
+  measured: 'events 883,278 / 883,278; peak 68.2 / 72.6 MB (+6.4 %, includes the boundary job)'
   verdict: pending
 - id: D1.determinism
   base: G
@@ -364,5 +364,5 @@ rows:
   measure: stream_digest
   expect: byte-identical
   source: engine determinism contract
-  measured: pending
-  verdict: pending
+  measured: 'G 8d2e40153d8e = G2 8d2e40153d8e (and Gp = Gp again, d8c53aeb2a42)'
+  verdict: pass
