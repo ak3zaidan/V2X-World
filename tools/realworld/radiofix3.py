@@ -87,6 +87,7 @@ def main():
             ev[k] += 1 + sum(1 for a, b in zip(ts, ts[1:]) if b - a > 3.0)
             rep[k] += [round(b - a, 2) for a, b in zip(ts, ts[1:]) if b - a <= 3.0]
         out["denm_events_by_cause"] = dict(ev)
+        out["denm_gap_hist_by_cause"] = {k: dict(collections.Counter(round(g, 1) for g in v if g >= 0.2).most_common(4)) for k, v in rep.items()}
         out["denm_median_gap_by_cause"] = {k: (sorted(v)[len(v) // 2] if v else None) for k, v in rep.items()}
         out["denm_first_t_by_cause"] = {k: round(min(ts[0] for (kk, _), ts in denm_t.items() if kk == k), 2) for k in ev}
         out["vehicle_km"] = round(veh_m / 1000.0, 2)
