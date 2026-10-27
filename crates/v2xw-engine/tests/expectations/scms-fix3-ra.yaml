@@ -1,0 +1,212 @@
+# SCMS fix round 3, RA and PKI track: (1) the RA serves a week that fell due before the
+# request as held (the two failing SCMS tests), (2) R-PQUNSEC under PQ, (3) provider-b's
+# second ACA and provider-qualified backend failure nodes, (4) roadside application
+# certificates that permit what the unit's applications sign.
+#
+# Every row was written, with `measured: pending`, before the run it judges: the direction
+# and, where the source gives one, the size, with the source. Measures are read from each
+# run's run-report.json by a short reader (scratchpad sum.py: phase2 exchange latencies,
+# access bytes, receiver_validation refusals, the cpm block, event counts) and from
+# /usr/bin/time -l, never from engine code.
+#
+# Binaries: "rel" = the integrator's release build of f4982788, copied (behaviour that
+# predates the Paper 1 part 2 and WP-10..15 merges: the RA's lazy weekly job, the B3b RSU
+# certificate, R-PQUNSEC's 82533437 and the provider-qualified failures' 0de68cac are all
+# in it); "fix" = this branch's opt-level-2 debug build. A defect fix's before/after
+# necessarily spans the two; every knob comparison (base and variant) uses one binary.
+# Run cost compares event counts across binaries and wall time/peak memory only within one.
+#
+# verdict: pass | fixed (an engine defect fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+schema: v2xw/scms-run-expectations/1
+runs:
+  B:
+    scenario: scenarios/scms-fix3/base.yaml
+    note: rel; credential-lifecycle at 180 s
+  F:
+    scenario: scenarios/scms-fix3/base.yaml
+    note: fix
+  F2:
+    scenario: scenarios/scms-fix3/base.yaml
+    note: fix, again (determinism)
+  BS:
+    scenario: scenarios/scms-fix3/slow-aca.yaml
+    note: rel; the ACA 4 s slow per message, 0-300 s
+  FS:
+    scenario: scenarios/scms-fix3/slow-aca.yaml
+    note: fix
+  FH:
+    scenario: scenarios/scms-fix3/h2.yaml
+    note: fix; ra-maxPreloadTime 2 weeks (each later week is an in-run weekly job), ACA slow
+  FH20:
+    scenario: scenarios/scms-fix3/h2-poll20.yaml
+    note: fix; FH with download-minWait 20 s
+  CB:
+    scenario: scenarios/scms-fix3/ci-scms.yaml
+    note: rel; connected-intersections under the US SCMS (SPaT/MAP/SSM units, WSMP)
+  CF:
+    scenario: scenarios/scms-fix3/ci-scms.yaml
+    note: fix
+  CPF:
+    scenario: scenarios/scms-fix3/ci-scms-cpm.yaml
+    note: fix; GN/BTP, CAM + CPM, four roadside-camera units under the US SCMS
+  PQF:
+    scenario: scenarios/scms-pq-relay-repro.yaml
+    note: fix; hybrid Falcon-512, the PDU layer off (R-PQUNSEC)
+rows:
+# --- (1) the RA serves a past-due week as held ---------------------------------------------
+- id: RA.topup-mean
+  base: B
+  variant: F
+  area: metrics
+  measure: phase2.access.exchange_latency.topup mean, ms
+  expect: 'F < 1,000 ms and F <= B - 1,500 ms (B about 2,340: the 2 s first_batch_delay plus the exchanges)'
+  source: '[PRIMER] p.6 (the RA keeps 3 years generated, adds a week every week); [SMP] Table 3 ra-maxPreloadTime; 1609.2.1 §6.3.5.4/§8.2 (a top-off is the .info request and the batch download of a file the RA holds: nextDlTime now)'
+  measured: pending
+  verdict: pending
+- id: RA.topup-max
+  base: F
+  variant: F
+  area: metrics
+  measure: topup max, ms
+  expect: '< 1,000 ms: no top-up waits for a generation'
+  source: as RA.topup-mean
+  measured: pending
+  verdict: pending
+- id: RA.topups-completed
+  base: B
+  variant: F
+  area: metrics
+  measure: phase2 topups_completed, certs_topped_up
+  expect: 'F >= B (a shorter exchange is cut off less often by a departure or the run end); certs_topped_up = 5 x topups_completed in both'
+  source: CAMP-EE §2.1.5.3.2 (one i-period of certs_per_period = 5 per top-up)
+  measured: pending
+  verdict: pending
+- id: RA.backend-bytes
+  base: B
+  variant: F
+  area: network
+  measure: phase2.access.backend_bytes (in run)
+  expect: 'F < B: the RA-LA-ACA hops of the pre-generated weeks happened when the weeks fell due (here before the run), not at each top-up'
+  source: '[CAMP122] 5.2.7.6.4 (the RA pre-generates); [PRIMER] p.6'
+  measured: pending
+  verdict: pending
+- id: RA.uu-bytes-per-topup
+  base: B
+  variant: F
+  area: network
+  measure: (uu_ul_bytes + uu_dl_bytes) / topups_completed
+  expect: 'within +-10 %: the device side of a top-off (.info, its answer, the batch download, CRL fetches, reports) is the same exchange; only the wait moved'
+  source: 1609.2.1 §6.3.5.4 (the same two downloads)
+  measured: pending
+  verdict: pending
+- id: RA.events
+  base: B
+  variant: F
+  area: cost
+  measure: sum of events_by_class
+  expect: 'F < B (fewer in-run backend deliveries); within -20 % (vehicles, radio and mobility dominate)'
+  source: event accounting (the backend share of credential-lifecycle's events is small)
+  measured: pending
+  verdict: pending
+- id: RA.peak-memory
+  base: F
+  variant: FS
+  area: cost
+  measure: /usr/bin/time -l peak memory footprint
+  expect: within +-15 % (one binary; the scratch kernel of a past-due week is dropped after it)
+  source: ScmsRun::generate_past_due (a kernel per job, as a preload)
+  measured: pending
+  verdict: pending
+- id: RA.determinism
+  base: F
+  variant: F2
+  area: determinism
+  measure: stream_digest
+  expect: byte-identical
+  source: engine determinism contract (same seed, same build)
+  measured: pending
+  verdict: pending
+- id: RA.slow-aca-held
+  base: F
+  variant: FS
+  area: metrics
+  measure: topup mean, ms
+  expect: 'FS within +-10 % of F: an ACA slow in the run does not delay a week the RA generated before the request'
+  source: '[PRIMER] p.6; ScmsRun::generate_past_due (the job runs at its due instant, here t = 0 to 20 s, under the faults then; its file is held long before the 60 s top-ups)'
+  measured: pending
+  verdict: pending
+- id: RA.slow-aca-old
+  base: B
+  variant: BS
+  area: metrics
+  measure: topup mean, ms
+  expect: 'BS > B + 10,000 ms: the old lazy job ran the ACA work at the request (scms_knobs_runs measured 19,182 ms)'
+  source: integrator trace 2026-10-26 (validation summary §6 item 27)
+  measured: pending
+  verdict: pending
+- id: RA.download-wait
+  base: FH
+  variant: FH20
+  area: metrics
+  measure: topup mean, ms
+  expect: 'FH20 > FH + 5,000 ms: a week generated at its in-run boundary under a 4 s slow ACA is not ready at nextDlTime; a 20 s download-minWait finds it up to 20 s later than a 2 s one'
+  source: SCMS Manager EE profile Table 3 download-minWait; [SMP] Table 3 ra-maxPreloadTime 2 weeks minimum
+  measured: pending
+  verdict: pending
+- id: RA.h2-in-run-jobs
+  base: FS
+  variant: FH
+  area: network
+  measure: backend_bytes; topup mean
+  expect: 'FH > FS on both: with a 2-week horizon each later week is the weekly job at its boundary in the run, its RA-LA-ACA hops on the run, and the device waits for the slow ACA'
+  source: '[PRIMER] p.6 (adds one week every week); [SMP] Table 3'
+  measured: pending
+  verdict: pending
+# --- (2) R-PQUNSEC -------------------------------------------------------------------------
+- id: PQ.rsu-own-reports
+  base: PQF
+  variant: PQF
+  area: metrics
+  measure: phase2 reports_from_rsus; reports_not_filed_by (roadside key)
+  expect: 'reports_from_rsus 0 and a roadside not-filed count > 0 under PQ, as under P-256 (R-UNSEC)'
+  source: '[SM-MBR] §3 and §2.3.1.4.1 (an SM-MBR is signed with a pseudonym certificate; the reporter is an OBE); USDOT RSU Specification v4.1 p. 15 (no reporting function)'
+  measured: pending
+  verdict: pending
+- id: PQ.relay-case-kept
+  base: PQF
+  variant: PQF
+  area: metrics
+  measure: ma_revoke_decisions, rsu_crls_installed, rsu_revoked_receptions
+  expect: 'all > 0: the MA still revokes (the vehicle reporter, actor 112) and the units refuse the revoked sender (R-PQRSUCRL)'
+  source: testing/pq-profile.md §3; pq_relay.rs
+  measured: pending
+  verdict: pending
+# --- (4) roadside application certificates -------------------------------------------------
+- id: RSU.ssm-refused-before
+  base: CB
+  variant: CB
+  area: metrics
+  measure: receiver_validation.refused psid-not-permitted
+  expect: '> 0: a unit''s certificate permitted SPaT/MAP (0x82) only, so every receiver refused its SSMs (PSID 0x204095)'
+  source: IEEE 1609.2 §5.2 (the SPDU PSID must be in the signer's appPermissions); IEEE PSID registry (SSM psid-traffic-signal-priority-status 2113685)
+  measured: pending
+  verdict: pending
+- id: RSU.ssm-accepted-after
+  base: CB
+  variant: CF
+  area: metrics
+  measure: receiver_validation.refused psid-not-permitted
+  expect: '0 in CF: the unit''s certificate lists 0x82 and 0x204095, the PSIDs of its enabled applications'
+  source: USDOT RSU Specification v4.1 p. 15 (certificates to support the unit's transmissions, by PSID); [CAMP122] Table 1 (no SSP for SPaT/MAP or SSM)
+  measured: pending
+  verdict: pending
+- id: RSU.cpm-verified
+  base: CPF
+  variant: CPF
+  area: metrics
+  measure: cpm.rsu_cpms_sent, rsu_cpms_verified
+  expect: 'both > 10: a receiver accepts the roadside CPM signed with the SCMS application certificate (ITS-AID 639 listed)'
+  source: ETSI TS 103 324 (CPM, ITS-AID 639 psid-collective-perception-service); IEEE 1609.2 §5.2
+  measured: pending
+  verdict: pending

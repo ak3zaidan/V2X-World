@@ -1,0 +1,8 @@
+# SCMS fix round 3, RA and PKI track (crates/v2xw-engine/tests/expectations/scms-fix3-ra.yaml):
+# the credential-lifecycle scenario cut to 180 s (three 60 s i-periods, attack from 60 s).
+schema: v2xw/scenario/1
+meta:
+  base: ../credential-lifecycle.yaml
+  name: scms-fix3 base
+time:
+  duration_s: 180.0

@@ -1,0 +1,10 @@
+# scms-fix3 slow-aca: the ACA 4 s slow per message for the whole run (scms_knobs_runs
+# `slow_aca`): a week the RA generated before the request is not delayed by it.
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: scms-fix3 slow-aca
+actors:
+  backend:
+    failures:
+      - {node: pca, mode: slow, from_s: 0.0, to_s: 300.0, extra_ms: 4000.0}

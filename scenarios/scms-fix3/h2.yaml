@@ -1,0 +1,11 @@
+# scms-fix3 h2: ra-maxPreloadTime at its 2-week floor ([SMP] Table 3), so each later week is
+# the weekly job's at its in-run boundary, with the ACA 4 s slow: the batch is late at
+# nextDlTime and the device polls again every download-minWait (2 s here).
+schema: v2xw/scenario/1
+meta:
+  base: slow-aca.yaml
+  name: scms-fix3 h2
+security:
+  protocol:
+    params:
+      max_periods_ahead: 2
