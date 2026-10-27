@@ -1,0 +1,14 @@
+# radio.devices.rsu.off_channel fitted on the public Tampa CV-pilot RSU log (nm7w-nvbm,
+# 34,186 rx gaps, 226 temp IDs). Derived statistics only; no raw rows.
+# Fit: tools/realworld/paper1/fitoff.py <tampa.csv> <engine base run>/jsonl/node_tx.jsonl
+#   (2 ms secMark-phase bins of free devices' msgCnt-attested losses, excess over the
+#   50-99 ms loss 0.228, least squares; the engine's own air-minus-secMark latency, p50
+#   12.7 ms, from run G-D1; constraint: back on the channel by the end of the 1609.4
+#   control-channel interval, from + max <= 50 ms).
+# Observed: free-device loss 0.515 at 10-30 ms phase, 0.228 at 50-99 ms; predicted by
+# this fit 0.492. Mean time away 14.4 ms per sync interval.
+# Assumption: real devices' generation-to-air latency equals the engine's.
+probability: 0.45
+from_ms: 18.0
+min_duration_ms: 32.0
+max_duration_ms: 32.0
