@@ -1,0 +1,8 @@
+# radio-fix3 R3.3.FREE: highway-denm.yaml with no breakdown: free flow at the limit.
+schema: v2xw/scenario/1
+meta:
+  base: highway-denm.yaml
+  name: radio-fix3 highway-denm-free
+  description: highway-denm without the breakdowns.
+  tags: [radio-fix3, experiment, highway, denm]
+events: []

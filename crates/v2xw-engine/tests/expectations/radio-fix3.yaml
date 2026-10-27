@@ -30,6 +30,26 @@ runs:
     scenario: scenarios/real-world/radio-fix3/lte-eqp.yaml
     base: L1
     binary: f4982788 release copy
+  G:
+    scenario: scenarios/real-world/radio-fix3/dense-grid.yaml
+    binary: this branch's debug build (opt-level 2)
+    note: procedural grid, 12,000 veh/h, 40 s, one channel
+  G-MAP:
+    scenario: scenarios/real-world/radio-fix3/dense-grid-map.yaml
+    base: G
+    binary: this branch's debug build (opt-level 2)
+  H:
+    scenario: scenarios/real-world/radio-fix3/highway-denm.yaml
+    binary: this branch's debug build (opt-level 2)
+    note: built-in highway, ETSI CAM+DENM, WP-12 triggers on, breakdowns at 60 and 75 s, 150 s
+  H-FREE:
+    scenario: scenarios/real-world/radio-fix3/highway-denm-free.yaml
+    base: H
+    binary: this branch's debug build (opt-level 2)
+  H-ICE:
+    scenario: scenarios/real-world/radio-fix3/highway-denm-ice.yaml
+    base: H
+    binary: this branch's debug build (opt-level 2)
 rows:
 # ---- Item 1: reception within 300 m against theory and published measurements ----
 - id: R3.1.DSRC-NLOS-EDGE
@@ -143,3 +163,120 @@ rows:
   verdict: pass
   fault: "L1 (26 dBm) judged in place of L1-EQP: 2.43, red"
   note: "inside UDOT's band but at its LOS end, though Midtown is NLOS-dominated; the 50 m bins resolve the ratio only to about +-0.3. At the deployed powers (26 vs 20 dBm EIRP) the engine's LTE/DSRC ratio is 2.43, which no equal-power field test bounds; the C-V2X OBU power J3161/1 sets is not in a cached source (open item O-CV2X-POWER)"
+# ---- Item 2: WP-13 follow-ups ----
+- id: R3.2.DCC
+  test: v2xw-engine tests/multichannel.rs the_etsi_gate_spaces_each_channel_on_its_own
+  expect: >-
+    DCC is a per-channel loop: TS 102 687's gate spaces a unit's frames on a channel by
+    T_on/delta, at least 25 ms at low load, from that channel's CBR; a second radio is a
+    second transmitter. With SPaT (10 Hz) on 172 and MAP (1 Hz) on 174 from each RSU, no frame
+    waits over 1 ms at a per-channel gate (100 ms and 1 s spacing both exceed 25 ms); a shared
+    gate holds every MAP sent within 25 ms of the unit's last SPaT (about a quarter of them)
+  source: ETSI TS 102 687 V1.2.1 Annex A (adaptive gate, T_off per channel CBR); EN 302 571 §4.2.10.4
+  fault: dcc_service never built (one gate for both radios)
+  measured: pending
+- id: R3.2.P2-14
+  test: v2xw-engine tests/phase2.rs without_either_distribution_path_the_revocation_never_reaches_a_vehicle
+  expect: >-
+    The test reads one record channel; keeping only proto.revocation instead of every record
+    (MemoryRecorder held every phy.rx of the Midtown run) takes its peak under the 2.5 GB run
+    cap with every assertion unchanged
+  source: WP-13 status (the 14th phase2 test hit the 2.5 GB cap at 2,554 MB)
+  fault: the recorder keeping a channel no record is written on (no unit row: red)
+  measured: pending
+- id: R3.2.SUITES
+  test: v2xw-engine tests scms_scale, radio_channel (each binary alone)
+  expect: green on the merged tree with this branch's changes (no expectation in them moved)
+  source: WP-13 status (owed)
+  measured: pending
+- id: R3.2.DENSE-CBR
+  run: G
+  metric: mean CBR on 172 over the live window, per unit-measurement
+  band: [0.15, 0.8]
+  expect: >-
+    At 12,000 veh/h on the 6x6 grid each unit hears tens of BSM senders at 10 Hz x ~0.4 ms;
+    the safety channel is in the congested regime J2945/1's power control acts in (vMinChanUtil
+    0.5 to vMaxChanUtil 0.8) or approaching it, not at the 0.003-0.03 of the P1-E5 small fleets
+  source: SAE J2945/1 §6.3.8 (CBR thresholds 50 % / 80 %); airtime arithmetic
+  measured: pending
+- id: R3.2.DENSE-MOVE
+  run: G-MAP
+  metric: CBR172(map) / CBR172(base)
+  band: [s-0.03, s+0.03] around 1 - s, s = the SPaT+MAP share of 172 airtime in G (air_by_type)
+  expect: >-
+    Moving SPaT and MAP to 174 removes their busy time from 172; the BSM load (J2945/1 rate by
+    density, which the move does not change) stays, so CBR172 falls by their airtime share.
+    Power control may raise BSM power a little as CBR falls, so the ratio may sit slightly
+    above 1 - s
+  source: WP-13 accept rule (lowers its CBR by the moved share); IEEE 1609.4-2016 §6.2.5
+  measured: pending
+- id: R3.2.DENSE-WALL
+  run: G-MAP
+  metric: wall time, variant / base
+  band: [0.8, 1.25]
+  expect: the same frames go on air (on two channels instead of one); the per-(node, channel) MAC and leakage bookkeeping add little, so the wall time stays within 25 %
+  source: cost model
+  measured: pending
+# ---- Item 3: WP-12 on the built-in highway ----
+- id: R3.3.CLASS
+  test: v2xw-world procedural::tests::an_unsignalised_65_mph_grid_is_a_motorway
+  expect: >-
+    A 65 mph six-lane road with no signals and no crossings is a motorway on any digital map
+    (OSM highway=motorway); the C2C-CC services read the map's class for their non-urban
+    precondition (RS 2007 RS_tcTrJa_94, RS 2002 RS_tcAdWe_175). Every procedural edge was
+    tagged Residential, which the engine maps to urban: the built-in highway told the DENM
+    services it was a town street, and the traction-loss service used its urban repetition
+  source: C2C-CC RS 2007 / RS 2002 (R1.6.10); FHWA-SA-12-004 (55 mph freeway floor)
+  fault: street_class returning Residential always
+  measured: pending
+- id: R3.3.FREE
+  run: H-FREE
+  metric: DENMs sent by cause (trafficCondition 1, dangerousEndOfQueue 27, adhesion 6)
+  band: [0, 0]
+  expect: >-
+    Free flow at the limit on a dry road meets no RS 2007 trigger (no speed drop to a blocked
+    lane, no 120 s average at or under 30 km/h, no stationary vehicle) and no RS 2002 one (no
+    braking at the adhesion limit): zero DENMs of every cause
+  source: C2C-CC RS 2007 §3 TRCO_0, RS_tcTrJa; RS 2002 §3.3 i/j
+  measured: pending
+- id: R3.3.EOQ
+  run: H
+  metric: dangerousEndOfQueue (27) originators; events per originator
+  band: [1, vehicles that reached the queue tail]; events per originator <= ceil((150 - 60) / 60) = 2
+  expect: >-
+    Each vehicle that brakes from over 80 km/h into the queue behind a breakdown while its own
+    sensors see the lane blocked under 50 km/h meets TRCO_0 and raises one end-of-queue DENM,
+    then is blocked for 60 s: so originators are the vehicles that arrived at the tail at
+    speed (a minority of all, since followers already slow), at most two events each in the
+    90 s after the first breakdown. Each event repeats every 0.5 s for 20 s (<= 40 frames)
+  source: C2C-CC RS 2007 (sudden speed drop: hold 10 s, blocking 60 s, 0.5 s x 20 s)
+  measured: pending
+- id: R3.3.TC
+  run: H
+  metric: trafficCondition (1) DENMs
+  band: [0, n]
+  expect: >-
+    Local slow-down needs a 120 s average at or under 30 km/h (impossible in the 90 s of queue
+    this run has) or 30 s stationary with >= 5 slow CAMs / a relevant DENM / >= 5 slow vehicles
+    seen within 100 m: possible only for vehicles stopped behind a breakdown from about 90 s,
+    so few, all from vehicles standing in the queue, each once (180 s blocking)
+  source: C2C-CC RS 2007 (local slow down: 5 s hold, 180 s blocking, 1 s x 60 s)
+  measured: pending
+- id: R3.3.ICE
+  run: H-ICE
+  metric: adhesion (6) DENM originators; their repetition interval
+  band: [1, all braking vehicles]; repetition 1 s (non-urban), not the urban 4 s
+  expect: >-
+    On ice (mu 0.1) braking for the queue is at the adhesion limit, ABS regulates, the
+    friction estimate |a|/g = 0.1 < 0.2 holds 5 s, and RS 2002 condition j raises a traction-
+    loss DENM (quality 7) repeated every 1 s on a non-urban road (urban: 4 s). Before the class
+    fix the map said urban
+  source: C2C-CC RS 2002 §3.3 (conditions i/j; 1 s x 300 s non-urban, 4 s x 180 s urban)
+  measured: pending
+- id: R3.3.ICE-FREE-CMP
+  run: H-ICE
+  metric: H-ICE vehicles completing the run's trips / H's
+  band: [0, 1.0]
+  expect: ice caps braking at 0.98 m/s2 and lengthens following gaps, so throughput past the breakdowns does not rise
+  source: AASHTO (2018) §3.2.2 stopping sight distance; the surface cap
+  measured: pending

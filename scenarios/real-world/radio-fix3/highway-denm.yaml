@@ -1,0 +1,31 @@
+# radio-fix3 R3.3: the built-in highway (highway-congestion.yaml: 2x1500 m, three lanes a
+# direction, 65 mph, no signals) as an ETSI C-ITS run with the WP-12 C2C-CC DENM triggers on
+# (RS 2007 sudden speed drop / local slow down, RS 2002 traction loss) and the CPM under DCC.
+# Cut to 6,000 veh/h and 150 s to fit a run slot; the two breakdowns stay at 60 and 75 s.
+schema: v2xw/scenario/1
+meta:
+  base: ../../highway-congestion.yaml
+  name: radio-fix3 highway-denm
+  description: Built-in highway, ETSI CAM+DENM, WP-12 DENM triggers on, two breakdowns.
+  tags: [radio-fix3, experiment, highway, denm]
+time:
+  duration_s: 150.0
+actors:
+  vehicles:
+    demand:
+      rate_veh_per_h: 6000.0
+radio:
+  region: eu
+  models:
+    dcc: {id: dcc/etsi/adaptive-ts102687, params: {}}
+net:
+  layer: gn-btp
+security:
+  envelope: etsi103097
+messages:
+  sets: [cam, denm]
+  codec_tier: uper
+  denm_traffic_condition: true
+  denm_traction_loss: true
+exporters:
+  - id: jsonl

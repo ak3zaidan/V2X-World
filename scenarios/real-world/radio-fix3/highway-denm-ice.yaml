@@ -1,0 +1,11 @@
+# radio-fix3 R3.3.ICE: highway-denm.yaml on an icy surface (mu 0.1), breakdowns kept.
+schema: v2xw/scenario/1
+meta:
+  base: highway-denm.yaml
+  name: radio-fix3 highway-denm-ice
+  description: highway-denm on ice.
+  tags: [radio-fix3, experiment, highway, denm]
+weather:
+  initial: clear
+  intensity: 0.0
+  surface: ice
