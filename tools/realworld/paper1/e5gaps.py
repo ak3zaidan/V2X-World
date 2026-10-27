@@ -30,6 +30,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SESSION_S = 10.0
+LOG_JITTER_MS = 5.4  # per-stamp jitter of the Tampa RSU log (derived in run())
 
 
 def q(xs, f):
@@ -83,6 +84,7 @@ def run(rd, tampa):
     w0 = int(warm * 1e9)
     # node.tx: BSM secMark and pseudonym by message id; RSU ids are the nodes that never send a BSM
     secmark, pseud, senders = {}, {}, set()
+    seq = {}  # sender -> its BSMs in send order: (t_generated, msg, secMark)
     for line in open(os.path.join(J, "node_tx.jsonl")):
         r = json.loads(line)
         if r.get("msg_type") != "bsm":
@@ -91,6 +93,17 @@ def run(rd, tampa):
         secmark[r["msg"]] = (r["t_generated"], c.get("sec_mark_ms"))
         pseud[r["msg"]] = r.get("pseudonym")
         senders.add(r["node"])
+        seq.setdefault(r["node"], []).append((r["t_generated"], r["msg"], c.get("sec_mark_ms")))
+    at = {}
+    for node, lst in seq.items():
+        lst.sort()
+        for i, (_, m, _sm) in enumerate(lst):
+            at[m] = (node, i)
+    # P1-E5 gap shape: the BSMs an RSU missed between two it decoded on one stream, by the
+    # missed BSM's secMark phase (the msgCnt method on Tampa: 0.51 lost at 10-30 ms, 0.22 at
+    # 50-99 ms, free devices)
+    ph = {"bump": [0, 0], "rest": [0, 0]}
+    lastm = {}
     last = {}
     lastv = {}
     gaps = {"rsu": [], "obu": []}
@@ -116,6 +129,22 @@ def run(rd, tampa):
             if dt <= SESSION_S * 1000.0:
                 gaps[cls].append(dt)
         last[k] = t
+        if cls == "rsu":
+            pm = lastm.get(k)
+            cur = at.get(r["msg"])
+            if pm is not None and cur is not None and pm[0] == cur[0] and p is not None \
+                    and (t - p) / 1e6 <= SESSION_S * 1000.0:
+                lst = seq[cur[0]]
+                for j in range(pm[1] + 1, cur[1] + 1):
+                    sm = lst[j][2]
+                    if sm is None:
+                        continue
+                    w = "bump" if 10 <= sm % 100 < 30 else "rest" if sm % 100 >= 50 else None
+                    if w:
+                        ph[w][0] += 1
+                        ph[w][1] += j < cur[1]
+            if cur is not None:
+                lastm[k] = cur
         # the injected fault (fault proof of the KS row): every second decoded BSM dropped
         n = cnt[k] = cnt.get(k, 0) + 1
         if cls == "rsu" and n % 2 == 0:
@@ -136,6 +165,20 @@ def run(rd, tampa):
     for cls in ("rsu", "obu"):
         for kk, v in summary(gaps[cls], ref).items():
             d[f"x.e5.{cls}.{kk}"] = v
+    for w in ("bump", "rest"):
+        d[f"x.e5.rsu.loss_{w}"] = ph[w][1] / ph[w][0] if ph[w][0] else None
+    lb, lr = d["x.e5.rsu.loss_bump"], d["x.e5.rsu.loss_rest"]
+    d["x.e5.rsu.loss_bump_excess"] = lb - lr if lb is not None and lr is not None else None
+    # The observation model of the reference, not of the channel: Tampa's RSU log stamps
+    # each BSM with its own logging clock. On one-interval pairs (msgCnt +1) the rx-gap IQR is
+    # 11 ms against the secMark gap's 4 ms, so each stamp carries an extra jitter of sd
+    # sqrt((11/1.349)^2 - (4/1.349)^2) / sqrt(2) = 5.4 ms. Applied to the engine's RSU gaps
+    # (air instants) before the KS, with a fixed seed, as the log would have stamped them.
+    if ref is not None and gaps["rsu"]:
+        import random
+        rng = random.Random(20261027)
+        gj = [x + rng.gauss(0.0, LOG_JITTER_MS) - rng.gauss(0.0, LOG_JITTER_MS) for x in gaps["rsu"]]
+        d["x.e5.rsu.ks_tampa_logjit"] = ks(gj, ref)
     d["x.e5.rsu.ks_tampa_drop2"] = ks(drop2, ref) if ref is not None else None
     d["x.e5.judged_share"] = judged[0] / judged[1] if judged[1] else None
     d["x.e5.judged_pairs"] = judged[0]

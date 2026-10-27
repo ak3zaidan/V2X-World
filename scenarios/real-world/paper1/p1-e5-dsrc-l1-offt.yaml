@@ -1,0 +1,14 @@
+# P1 gaps (2026-10-27): p1-e5-dsrc-l1-off with the free class's BSM clock refitted on Tampa
+# alone (per-ID drift p50 3 ms, period deviations within +-5 ms for 91 %), since the
+# comparison is against Tampa's RSU log and the pooled fit is mostly Orem's (drift p50 6 ms,
+# 15 % of periods beyond +-25 ms). Rows P1.GAP.offt-*, pending before the run.
+schema: v2xw/scenario/1
+meta:
+  base: p1-e5-dsrc-l1-off.yaml
+  name: Paper 1 p1-e5-dsrc-l1-offt
+  description: P1-E5 DSRC load 1, RSU off-channel schedule, Tampa-fitted free-class clock.
+  tags: [paper1, experiment]
+actors:
+  vehicles:
+    bsm_timing:
+      calibration: data/calibration/bsm-timing-cvpilot-tampa-free.yaml

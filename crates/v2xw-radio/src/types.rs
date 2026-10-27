@@ -623,6 +623,10 @@ pub enum LossCause {
     /// mask's leakage and this receiver's imperfect selectivity. Attributed on the same
     /// counterfactual as [`LossCause::Jammed`].
     AdjacentChannel,
+    /// The receiver's radio was away from the frame's channel: a roadside unit that leaves
+    /// the safety channel early in an IEEE 1609.4 sync interval
+    /// (`radio.devices.rsu.off_channel`).
+    OffChannel,
     /// The abstract tier's Bernoulli draw said "not received" and the tier models no
     /// mechanism finer than that.
     Abstract,
@@ -644,6 +648,7 @@ impl LossCause {
             LossCause::InBandEmission => "in-band-emission",
             LossCause::ResourceCollision => "resource-collision",
             LossCause::AdjacentChannel => "adjacent-channel",
+            LossCause::OffChannel => "off-channel",
             LossCause::Abstract => "abstract",
         }
     }

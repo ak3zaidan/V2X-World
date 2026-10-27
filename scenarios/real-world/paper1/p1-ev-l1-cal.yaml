@@ -1,0 +1,15 @@
+# P1 gaps item 4 (2026-10-27): p1-ev-l1-plain (every OBU locked) on the calibrated
+# receiver of the final P1-E4 and E7C runs (no GNSS white velocity noise). Hypothesis:
+# L1's honest blocks are the v3 timing fit's 50 ms grid hops read through the default
+# velocity noise as MaxAcceleration (E7's root cause), which MAL1R (8becf72a, before the
+# v3 fit) could not show.
+schema: v2xw/scenario/1
+meta:
+  base: p1-ev-l1-plain.yaml
+  name: Paper 1 evasion l1-cal
+  description: p1-ev-l1-plain.yaml with gnss.velocity_noise_mps 0 (the calibrated receiver).
+  tags: [paper1, validation, ma-replay, evasion]
+actors:
+  vehicles:
+    gnss:
+      velocity_noise_mps: 0.0

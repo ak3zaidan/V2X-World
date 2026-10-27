@@ -664,7 +664,7 @@ pub enum RxFate {
 /// The layer that decided a loss, for the loss-cause vocabulary of `node.rx`.
 pub mod rx_cause {
     /// Causes the physical layer decides (invariant I-R3's list, `v2xw_radio::LossCause`).
-    pub const PHY: [&str; 11] = [
+    pub const PHY: [&str; 12] = [
         "out-of-range",
         "below-sensitivity",
         "collision",
@@ -676,6 +676,7 @@ pub mod rx_cause {
         "in-band-emission",
         "resource-collision",
         "adjacent-channel",
+        "off-channel",
     ];
     /// A fragmented SDU whose set never completed at this receiver.
     pub const REASSEMBLY_FAILED: &str = "reassembly-failed";

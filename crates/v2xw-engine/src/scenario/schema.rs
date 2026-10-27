@@ -2300,6 +2300,33 @@ pub struct RsuRadio {
     /// `radio.channels`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radios: Option<u8>,
+    /// A unit that leaves the safety channel early in some IEEE 1609.4 sync intervals
+    /// (802.11p only): it hears nothing there while away. Unset, the default, keeps it on
+    /// the channel all the time. Fitted on Tampa's RSU log (`tools/realdata`, P1-E5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off_channel: Option<RsuOffChannel>,
+}
+
+/// When a roadside unit is away from the safety channel (`radio.devices.rsu.off_channel`).
+///
+/// IEEE 1609.4-2016 §6.2.5 divides UTC time into 100 ms sync intervals whose first 50 ms
+/// are the control-channel interval. Tampa's RSU-received BSMs (CV Pilot THEA, msgCnt-
+/// attested losses) lose 50-57 % of free devices' BSMs generated 10-30 ms into the UTC
+/// 100 ms interval against 18-24 % in its second half, at every location, with no locked
+/// device near: a receiver-side deafness locked to the sync interval's first half. The
+/// unit leaves, independently in each interval with `probability`, from `from_ms` after
+/// the interval's start for a duration uniform in `[min_duration_ms, max_duration_ms]`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RsuOffChannel {
+    /// The share of sync intervals the unit leaves in, 0 to 1.
+    pub probability: f64,
+    /// When it leaves, after the start of the UTC 100 ms sync interval, ms.
+    pub from_ms: f64,
+    /// The shortest time away, ms.
+    pub min_duration_ms: f64,
+    /// The longest time away, ms.
+    pub max_duration_ms: f64,
 }
 
 impl RsuRadio {
@@ -2319,6 +2346,7 @@ impl Default for RsuRadio {
             cable_loss_db: 0.0,
             antenna_height_m: None,
             radios: None,
+            off_channel: None,
         }
     }
 }

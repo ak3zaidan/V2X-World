@@ -52,10 +52,10 @@
 //! 1. **The draw.** `RngRegistry::checkout(RngDomain::Spawn, EntityRef::Actor(a))
 //!    .bool(equipped_fraction)` — keyed by the actor, so it does not depend on how many
 //!    spawned before it.
-//! 2. **The counter starts after the masts.** One counter serves both minting sites, and
-//!    `Engine::create_rsus` runs first, at build. A scenario with `n` roadside units puts
-//!    them at `0..n` and its first vehicle at `n`; a reconstruction counting from zero
-//!    shifts every vehicle's node id by `n`. See [`roadside_node_count`].
+//! 2. **The masts are out of the counter's way.** `Engine::create_rsus` names unit `i`
+//!    `v2xw_engine::run::ROADSIDE_ID_BASE + i` and vehicle spawn counts from 0, so the
+//!    first vehicle is node 0 whatever the roadside deployment (until 2026-10-27 the masts
+//!    took the counter's first `n` values and shifted every vehicle by `n`).
 //! 3. **A node is named before its actor is.** The mobility phase publishes the state of
 //!    the instant it is *dispatched* at, and a spawn's state belongs to the next instant,
 //!    so an equipped vehicle's first frame lands one mobility step before its first
@@ -253,11 +253,8 @@ struct Setup {
     /// `actors.vru.device_fraction`: what the kernel draws a pedestrian's or a cyclist's
     /// device with, instead of `equipped_fraction`.
     vru_device_fraction: f64,
-    /// How many node ids the kernel mints before the first vehicle's.
-    ///
-    /// `v2xw_engine::Engine::build` calls `create_rsus` before it seeds the timeline, and
-    /// that site and vehicle spawn take ids from **one** counter, so the first vehicle's
-    /// node id is the roadside count rather than zero. See [`roadside_node_count`].
+    /// How many roadside units the scenario declares: nodes
+    /// `ROADSIDE_ID_BASE..ROADSIDE_ID_BASE + roadside_nodes`. See [`roadside_node_count`].
     roadside_nodes: u32,
     /// The roadside units' node rows, which every `Hello` lists ahead of the vehicles:
     /// a unit never spawns, so no stream frame would ever announce it.
@@ -933,8 +930,8 @@ fn assemble_setup(
     // §3.1.3: the node table the connection opens with. A vehicle's radio is announced by
     // its spawn row, but a roadside unit never spawns, so a live Hello that listed nothing
     // left every unit out of the page's node table: the inspector could not count them and
-    // the developer chip said "0 RSUs" beside one. They are created before any vehicle,
-    // in the scenario's order, so unit `i` is node `i` ([`roadside_node_count`]).
+    // the developer chip said "0 RSUs" beside one. Unit `i`, in the scenario's order, is
+    // node `ROADSIDE_ID_BASE + i` ([`roadside_node_count`]).
     let rsu_facts: Vec<crate::engine::NodeFacts> = scenario
         .actors
         .rsus
@@ -955,7 +952,7 @@ fn assemble_setup(
                 .as_deref()
                 .unwrap_or(v2xw_engine::phase2::DEFAULT_RSU_PROFILE);
             Some(crate::engine::NodeFacts {
-                node_id: u32::try_from(i).ok()?,
+                node_id: v2xw_engine::run::roadside_node(i).index(),
                 actor_id: U32_NONE,
                 pos_m: [pos.x as f32, pos.y as f32, pos.z as f32],
                 label: format!("rsu_{i:04}"),
@@ -1183,17 +1180,13 @@ fn assemble_setup(
     }))
 }
 
-/// How many node ids the kernel hands out before the first vehicle's.
+/// How many roadside units the scenario declares.
 ///
-/// A roadside unit is a node and **not** an actor: `v2xw_engine::Engine::create_rsus` runs
-/// at build time, before the timeline is seeded, and it takes its ids from the same counter
-/// vehicle spawn takes them from. So a scenario with `n` roadside units puts them at
-/// `0..n` and its first vehicle at `n`.
-///
-/// This is the second published fact the actor→node reconstruction rests on, and it was
-/// the one the projector did not model: counting from zero shifted every vehicle's node id
-/// by the roadside count, which made the whole mapping wrong for any scenario with a mast
-/// in it — silently, because the node ids still existed and still looked dense.
+/// A roadside unit is a node and **not** an actor: `v2xw_engine::Engine::create_rsus` names
+/// unit `i` `ROADSIDE_ID_BASE + i` at build time, and vehicle spawn counts from 0. So the
+/// masts occupy `ROADSIDE_ID_BASE..ROADSIDE_ID_BASE + n` and the first vehicle is node 0
+/// whatever `n` is. (Before 2026-10-27 the masts took the vehicle counter's first `n`
+/// values; this count was then the offset of every vehicle's node id.)
 fn roadside_node_count(scenario: &Scenario) -> u32 {
     u32::try_from(scenario.actors.rsus.len()).unwrap_or(u32::MAX)
 }
@@ -1430,7 +1423,7 @@ struct Projector {
     /// `actors.vru.device_fraction`: what the kernel draws a pedestrian's or a cyclist's
     /// device with, instead of `equipped_fraction`.
     vru_device_fraction: f64,
-    /// The node ids `0..roadside_nodes`, which the kernel gave to masts and not to actors.
+    /// How many node ids from `ROADSIDE_ID_BASE` the kernel gave to masts and not to actors.
     /// No reconstruction is owed for them and none is possible: a roadside unit has no
     /// `gt.kinematics` record because it has no actor.
     roadside_nodes: u32,
@@ -1567,8 +1560,8 @@ impl Projector {
             equipped_fraction: setup.equipped_fraction,
             vru_device_fraction: setup.vru_device_fraction,
             roadside_nodes: setup.roadside_nodes,
-            // Not zero: the masts hold `0..roadside_nodes` (see `roadside_node_count`).
-            next_node: setup.roadside_nodes,
+            // Zero: the masts are numbered from `ROADSIDE_ID_BASE` (`roadside_node_count`).
+            next_node: 0,
             assigned_nodes: BTreeSet::new(),
             signals: setup.signals.clone(),
             str_ids,
@@ -1605,8 +1598,8 @@ impl Projector {
     ///
     /// **This is the reconstruction the module header names**, and all three of its facts
     /// are here: the draw is keyed by `(RngDomain::Spawn, EntityRef::Actor)` so it does not
-    /// depend on spawn order; node ids are dense and ascending in spawn order *from
-    /// `roadside_nodes`*, because the masts took the counter's first values at build time;
+    /// depend on spawn order; node ids are dense and ascending in spawn order from 0,
+    /// because the masts are numbered apart, from `ROADSIDE_ID_BASE`;
     /// and the id counts as accounted for the moment it is handed out, even if a record
     /// named it a step earlier. The caller equips a step's new actors in `ActorId` order,
     /// which is spawn order, because the kernel assigns `ActorId`s ascending at spawn.
@@ -1979,7 +1972,8 @@ impl Projector {
     fn note_node(&mut self, node: NodeId) {
         // A mast is a node the kernel minted at build time and no actor carries, so there
         // is nothing to reconstruct and nothing to disagree about.
-        if node.index() < self.roadside_nodes {
+        let base = v2xw_engine::run::ROADSIDE_ID_BASE;
+        if (base..base.saturating_add(self.roadside_nodes)).contains(&node.index()) {
             return;
         }
         if self.assigned_nodes.contains(&node.index()) {
@@ -3591,7 +3585,7 @@ impl LiveEngine {
 
     /// The node table as of the emitted step, for `Hello` (§3.1.3) and `inspect.node`.
     fn node_rows(&self) -> Vec<crate::engine::NodeFacts> {
-        // The roadside units first: they hold node ids `0..n` and never spawn, so this
+        // The roadside units first: they hold node ids from `ROADSIDE_ID_BASE` and never spawn, so this
         // table is the only place a client learns of them.
         let mut rows: Vec<crate::engine::NodeFacts> = self.setup.rsu_facts.clone();
         let Some(step) = self.emitted() else {
@@ -5244,7 +5238,7 @@ mod tests {
         assert_eq!(
             roadside_node_count(&phase2) as usize,
             units,
-            "with {units} masts the first vehicle's node id is {units}, not 0"
+            "the count is the scenario's {units} masts"
         );
     }
 }

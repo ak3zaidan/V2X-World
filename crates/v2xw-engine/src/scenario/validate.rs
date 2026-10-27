@@ -629,6 +629,34 @@ pub static BOUNDS: &[Bound] = &[
         what: "the on-board unit's transmit power",
     },
     Bound {
+        path: "radio.devices.rsu.off_channel.probability",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the share of sync intervals a roadside unit leaves the safety channel in",
+    },
+    Bound {
+        path: "radio.devices.rsu.off_channel.from_ms",
+        lo: 0.0,
+        hi: 100.0,
+        exclusive_lo: false,
+        what: "when a roadside unit leaves the safety channel within the sync interval",
+    },
+    Bound {
+        path: "radio.devices.rsu.off_channel.min_duration_ms",
+        lo: 0.0,
+        hi: 100.0,
+        exclusive_lo: false,
+        what: "a roadside unit's shortest time off the safety channel",
+    },
+    Bound {
+        path: "radio.devices.rsu.off_channel.max_duration_ms",
+        lo: 0.0,
+        hi: 100.0,
+        exclusive_lo: false,
+        what: "a roadside unit's longest time off the safety channel",
+    },
+    Bound {
         path: "radio.devices.rsu.tx_power_dbm",
         lo: -20.0,
         hi: 33.0,
@@ -2827,6 +2855,17 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                radio.channels.",
     },
     KeyStatus {
+        path: "radio.devices.rsu.off_channel",
+        status: Status::Wired,
+        note: "A roadside unit that leaves the 802.11p safety channel early in some IEEE \
+               1609.4 sync intervals (UTC 100 ms) and hears nothing while away: in each \
+               interval with `probability`, from `from_ms` for a duration uniform in \
+               [min_duration_ms, max_duration_ms]; a frame overlapping the absence is lost \
+               as off-channel. Unset, the default, keeps the unit on the channel. Fitted \
+               on Tampa's RSU log, where losses double in the interval's first half \
+               (data/calibration/rsu-off-channel-tampa.yaml). Sidelink runs ignore it.",
+    },
+    KeyStatus {
         path: "radio.devices.vru.radios",
         status: Status::Wired,
         note: "Radios on a pedestrian's or cyclist's device (WP-13): 1 (default) or 2. \
@@ -4039,6 +4078,18 @@ fn absent_radio_holders(s: &Scenario, e: &mut Vec<ScenarioError>) {
             "sets the roadside units' radio, and the scenario has none; add actors.rsus or \
              actors.rsu_placement, or unset it"
                 .to_string(),
+        ));
+    }
+    if let Some(o) = &d.rsu.off_channel
+        && (o.min_duration_ms > o.max_duration_ms || o.from_ms + o.max_duration_ms > 100.0)
+    {
+        e.push(conflict(
+            "radio.devices.rsu.off_channel",
+            format!(
+                "leaves at {} ms for {}..{} ms: the shortest absence must not exceed the \
+                 longest, and the unit must be back within its 100 ms sync interval",
+                o.from_ms, o.min_duration_ms, o.max_duration_ms
+            ),
         ));
     }
     let v = &s.actors.vru;

@@ -129,6 +129,7 @@ pub use air_bytes::{AirBytes, TypeAir};
 pub mod jamming;
 mod link;
 pub(crate) mod channels;
+mod off_channel;
 mod radios;
 pub mod sidelink;
 
@@ -752,6 +753,19 @@ fn distance_to_segment_2d(p: Vec3, a: Vec3, b: Vec3) -> f64 {
     p.distance_2d(q)
 }
 
+/// The first roadside unit's node id: unit `i` of `actors.rsus` is `ROADSIDE_ID_BASE + i`.
+///
+/// Out of the vehicle counter's way (a run mints one id per equipped actor from 0) and
+/// below the jammers' and the SCMS backend's offset ids, so a vehicle's node id, and every
+/// draw keyed by it, is the same whatever the roadside deployment.
+pub const ROADSIDE_ID_BASE: u32 = 0x4000_0000;
+
+/// The node id of roadside unit `i` ([`ROADSIDE_ID_BASE`]).
+#[must_use]
+pub fn roadside_node(i: usize) -> NodeId {
+    NodeId::new(ROADSIDE_ID_BASE + u32::try_from(i).expect("fewer than 2^30 roadside units"))
+}
+
 /// The kebab-case name a `phy.rx` record carries for a loss cause.
 ///
 /// `LossCause` serialises kebab-case already, but a record field is a `&str` and going
@@ -770,6 +784,7 @@ const fn cause_name(cause: LossCause) -> &'static str {
         LossCause::InBandEmission => "in-band-emission",
         LossCause::ResourceCollision => "resource-collision",
         LossCause::AdjacentChannel => "adjacent-channel",
+        LossCause::OffChannel => "off-channel",
         // `LossCause` is `#[non_exhaustive]`: a cause added upstream lands here rather
         // than failing the build, and reports itself as unknown rather than as something
         // it is not.
@@ -2172,18 +2187,20 @@ impl Engine {
     /// states, store-and-forward — now ships as [`v2xw_node::RsuRuntime`] and this site
     /// has not been moved onto it; see `crate::phase2`'s "What is not here".
     ///
-    /// The node ids are minted here, **before** the timeline is seeded and therefore
-    /// before any vehicle's, from the same counter vehicle spawn uses. That ordering is
-    /// published: `v2xw-server`'s live projector reconstructs the actor→node map from it
-    /// and offsets its own counter by the roadside count.
+    /// Unit `i` (in `actors.rsus` order) is node [`ROADSIDE_ID_BASE`]` + i`, apart from the
+    /// counter vehicle spawn takes its ids from. Before 2026-10-27 the units took that
+    /// counter's first values, so adding or removing a mast renumbered every vehicle and
+    /// re-keyed every draw keyed by its node (access class, timing class, clock, GNSS,
+    /// attacker arming): an RSU-count sweep was not common random numbers (P1-E6). That
+    /// numbering is published: `v2xw-server`'s live projector reconstructs the
+    /// actor→node map from it.
     fn create_rsus(&mut self) {
         let Some(phase2) = self.phase2.as_mut() else {
             return;
         };
         let specs: Vec<crate::phase2::RsuSpec> = phase2.rsu_specs().to_vec();
-        for spec in specs {
-            let id = NodeId::new(self.next_node);
-            self.next_node += 1;
+        for (i, spec) in specs.into_iter().enumerate() {
+            let id = roadside_node(i);
             let env = crate::wiring::NodeEnv::new(&self.world, self.wall);
             let mut runtime = crate::wiring::build_rsu(
                 &self.scenario,
@@ -7532,6 +7549,9 @@ impl Engine {
         // A fragment's success probability is what 04-models.md §7.4's prediction is built
         // from; it costs one more pass over the SINR windows, so only fragments pay it.
         let fragment = state.frag.is_some() || state.cert_frag.is_some();
+        // A roadside unit away from the safety channel hears nothing there (P1-E5).
+        let off = off_channel::OffChannel::from_scenario(&self.scenario);
+        let rsus = &self.rsus;
         let one = |(&rx, &(power_dbm, distance_m)): (&NodeId, &(f64, f64))| {
             let mut out = LinkOutcome {
                 rx,
@@ -7562,7 +7582,15 @@ impl Engine {
             // already carried.
             let draw = rng.checkout(domain, OfdmPhy::frame_key(arrival)).f64();
             let decided_high = high || state.focus_high.contains(&rx);
-            match phy.decide(arrival, decided_high, draw) {
+            let away = off.as_ref().is_some_and(|o| {
+                rsus.contains_key(&rx) && o.away(rng, rx, arrival.start, arrival.end)
+            });
+            let decided = if away {
+                v2xw_radio::RxOutcome::Lost(LossCause::OffChannel)
+            } else {
+                phy.decide(arrival, decided_high, draw)
+            };
+            match decided {
                 v2xw_radio::RxOutcome::Received { .. } => {
                     out.received = true;
                     out.cause = None;
@@ -7576,7 +7604,8 @@ impl Engine {
                     Some(
                         LossCause::HalfDuplex
                         | LossCause::BelowSensitivity
-                        | LossCause::PreambleMissed,
+                        | LossCause::PreambleMissed
+                        | LossCause::OffChannel,
                     ) => 0.0,
                     _ => phy.success_probability(arrival),
                 });

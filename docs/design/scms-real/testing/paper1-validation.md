@@ -289,3 +289,14 @@ p90 / p99 0.36 / 0.82 / 1.38 / 2.46 / 6.8 / 22.7 cm. Three new tests, each red u
 held by other agents for over three hours, so the fix binary was not built. Open: the hop
 test's red-under-fault run; the walk's stationary spread (about 0.7 m along, 0.5 m across)
 adds to the GNSS model's absolute error.
+
+## 9. P1 engine gaps (2026-10-27)
+
+P1-E5 gap shape, the P1-E6 RSU-count confound, the P1-E8 attack start and L1: results,
+rows and the open items are in research/synthesis/p1-experiments.md ("P1 engine gaps").
+Short form: the Tampa RSU deafness locked to the first half of the UTC 100 ms interval is
+modelled (`radio.devices.rsu.off_channel`) and matches every interval share; KS 0.071 and
+0.076 on two seeds with Tampa's free clock and the log's stamp jitter, against 0.0747 (open).
+RSU ids now start at `ROADSIDE_ID_BASE`, so a vehicle's draws do not depend on the RSU count
+(the golden digests of scenarios with RSUs, tests/regression phase2-path and i-s1-phase2-60s, are expected to move and are not yet re-blessed: the test lock was not free); `attack_start` is the first falsified
+message, and the six k-rule budget rows pass.

@@ -1,0 +1,17 @@
+# P1 gaps (2026-10-27): p1-e5-dsrc-l1 with the roadside units away from the safety channel
+# early in some IEEE 1609.4 sync intervals, fitted on Tampa's RSU log
+# (data/calibration/rsu-off-channel-tampa.yaml). Rows P1.GAP.off-*, pending before the run.
+schema: v2xw/scenario/1
+meta:
+  base: p1-e5-dsrc-l1.yaml
+  name: Paper 1 p1-e5-dsrc-l1-off
+  description: P1-E5 DSRC load 1 with the Tampa-fitted RSU off-channel schedule.
+  tags: [paper1, experiment]
+radio:
+  devices:
+    rsu:
+      off_channel:
+        probability: 0.45
+        from_ms: 18.0
+        min_duration_ms: 32.0
+        max_duration_ms: 32.0
