@@ -30,6 +30,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SESSION_S = 10.0
+LOG_JITTER_MS = 5.4  # per-stamp jitter of the Tampa RSU log (derived in run())
 
 
 def q(xs, f):
@@ -168,6 +169,16 @@ def run(rd, tampa):
         d[f"x.e5.rsu.loss_{w}"] = ph[w][1] / ph[w][0] if ph[w][0] else None
     lb, lr = d["x.e5.rsu.loss_bump"], d["x.e5.rsu.loss_rest"]
     d["x.e5.rsu.loss_bump_excess"] = lb - lr if lb is not None and lr is not None else None
+    # The observation model of the reference, not of the channel: Tampa's RSU log stamps
+    # each BSM with its own logging clock. On one-interval pairs (msgCnt +1) the rx-gap IQR is
+    # 11 ms against the secMark gap's 4 ms, so each stamp carries an extra jitter of sd
+    # sqrt((11/1.349)^2 - (4/1.349)^2) / sqrt(2) = 5.4 ms. Applied to the engine's RSU gaps
+    # (air instants) before the KS, with a fixed seed, as the log would have stamped them.
+    if ref is not None and gaps["rsu"]:
+        import random
+        rng = random.Random(20261027)
+        gj = [x + rng.gauss(0.0, LOG_JITTER_MS) - rng.gauss(0.0, LOG_JITTER_MS) for x in gaps["rsu"]]
+        d["x.e5.rsu.ks_tampa_logjit"] = ks(gj, ref)
     d["x.e5.rsu.ks_tampa_drop2"] = ks(drop2, ref) if ref is not None else None
     d["x.e5.judged_share"] = judged[0] / judged[1] if judged[1] else None
     d["x.e5.judged_pairs"] = judged[0]

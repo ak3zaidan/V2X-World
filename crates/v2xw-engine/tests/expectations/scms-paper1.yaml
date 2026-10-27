@@ -435,6 +435,10 @@ runs:
     scenario: scenarios/real-world/paper1/p1-e5-dsrc-l1-offt.yaml
     base: G-OFF
     note: G-OFF with the free-class BSM clock refitted on Tampa alone
+  G-OFFT2:
+    scenario: scenarios/real-world/paper1/p1-e5-dsrc-l1-offt-s2.yaml
+    base: G-OFFT
+    note: G-OFFT on a second master seed (out of sample)
 rows:
 - id: P1.TS.rp-share0
   base: B
@@ -3447,4 +3451,31 @@ rows:
   expect: delta
   band: [-0.02, 0.02]
   source: 'the clock moves gaps inside an interval, not across: the two-interval share moves by under 0.02'
+  measured: pending
+- id: P1.GAP.s2-ks-logjit
+  base: G-OFFT2
+  variant: G-OFFT2
+  area: metrics
+  measure: x.e5.rsu.ks_tampa_logjit
+  expect: le
+  value: 0.0748
+  source: 'the full P1-E5 pipeline out of sample: on G-OFFT the KS with the log''s stamp jitter (sd 5.4 ms, from Tampa''s one-interval rx-gap IQR 11 ms vs secMark-gap IQR 4 ms) was 0.066, found post hoc. Written before this seed-2 run: within the pre-registered tolerance 0.0747'
+  measured: pending
+- id: P1.GAP.s2-ks-raw
+  base: G-OFFT2
+  variant: G-OFFT2
+  area: metrics
+  measure: x.e5.rsu.ks_tampa
+  expect: ge
+  value: 0.0748
+  source: 'fault for the row above: without the log''s stamp jitter the same run stays over the tolerance (G-OFFT 0.165), so the jitter step is what closes it, not the seed'
+  measured: pending
+- id: P1.GAP.s2-1int
+  base: G-OFFT2
+  variant: G-OFFT2
+  area: metrics
+  measure: x.e5.rsu.share_1int
+  expect: band
+  band: [0.609, 0.909]
+  source: 'Tampa 0.759 +-0.15 (the original secondary band); G-OFFT 0.820'
   measured: pending
