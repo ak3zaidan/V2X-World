@@ -21,10 +21,11 @@
 # backhaul-cellular, fleet-half, tls12 and fleet2x (re-run 2026-10-26 on 486c8cba below). Rows of no-hsm, pq-hybrid, gnss-rtk,
 # gnss-raw and the realism variants carry 81a12183 values (not re-run on 8becf72a).
 # Re-run 2026-10-27 on the f4982788 release (06-validation-summary §9, tiny slot: 450 MB cap, one
-# rayon thread): M0, no-hsm, pq-hybrid, gnss-rtk and the realism variants cert60, crl-on-decision,
-# ma-auto, no-sharing, off-ctl, region-west, research-suite; 43 rows judged, 0 fail. gnss-raw
-# (458 MB, stopped by the cap) and fleet2x (300 s, ~20 min) keep their earlier values. Rows of the
-# other variants carry 486c8cba / 8becf72a values and are owed on current code.
+# rayon thread): 33 runs, every run except gnss-raw (458 MB, stopped by the cap), lte, real-crypto
+# and fleet2x (each over the 10-minute slot), M0-b1 (a pre-fix build) and QD (too big), whose rows keep
+# their earlier values. 104 rows judged, 0 fail: 83 pass, 7 fixed rows still pass, 12 earlier
+# corrections still hold (same values, or now passing), 2 corrected now (uutls-topup-latency,
+# nyc-p2pcd-bounded).
 schema: v2xw/scms-run-expectations/1
 runs:
   M0:
@@ -573,7 +574,7 @@ rows:
   measure: p2.reports_about_honest
   expect: down
   source: removing the 12 m outliers and the bursts removes the biggest jumps; the 1.6 m white noise remains
-  measured: 2 -> 2
+  measured: 1 -> 1
   verdict: wrong-expectation
   note: 'written for raw fixes (7375 -> 7360 then). Re-run on 77cffb5b (rerun-2026-10-22.md §6): with
     the smoothed receiver the base has 5 honest reports, from one vehicle below 1 m/s, none from GNSS
@@ -587,7 +588,7 @@ rows:
   min_change: 0.5
   source: 'on-demand verifies only what an application acts on (Krishnan & Weimerskirch 2011; 07 §2: 756/s
     -> 46/s)'
-  measured: 1308399 -> 316023
+  measured: 1300642 -> 312287
   verdict: pass
 - id: ond-reports
   base: M0
@@ -687,7 +688,7 @@ rows:
   - 0.05
   - 0.45
   source: 'provider-b''s fleet share 50 % -> 10 %: its signed BSMs fall to about a fifth'
-  measured: 710070 -> 154749 (ratio 0.2179)
+  measured: 707464 -> 154666 (ratio 0.2186)
   verdict: pass
 - id: split-a-up
   base: M0
@@ -699,7 +700,7 @@ rows:
   - 1.4
   - 2.4
   source: 'provider-a''s share 50 % -> 90 %: about x1.8'
-  measured: 598329 -> 1153650 (ratio 1.928)
+  measured: 593178 -> 1145976 (ratio 1.932)
   verdict: pass
   note: 'the base''s verified traffic is not split like its devices (49/46 devices, 29 %/71 % of verified
     BSMs from a/b); 90/10 gives a 84 %: x2.95 is that shift. rerun-2026-10-25 §3: on the 300 s base the
@@ -785,7 +786,7 @@ rows:
   - 0.1
   - 0.95
   source: NR-V2X PC5 is plausible in the same urban geometry
-  measured: '0.648183'
+  measured: '0.64609'
   verdict: pass
 - id: nyc-changes
   base: M0
@@ -796,7 +797,7 @@ rows:
   source: 'NYC pilot: 5 min OR 2 km ([PRIMER] pp.8-9); a vehicle alive across the fast-forward is 43,000
     s old at the second window and changes; J2945/1 also needs 2 km, which nobody drives in 240 s of Midtown
     traffic'
-  measured: 1 -> 118
+  measured: 1 -> 113
   verdict: pass
 - id: nyc-backend-same
   base: M0
@@ -811,7 +812,7 @@ rows:
   base: M0
   variant: nyc-pilot
   area: metrics
-  measure: m.p2pcd_requests
+  measure: m.digest_misses
   expect: ratio
   band:
   - 0
@@ -819,8 +820,12 @@ rows:
   source: 'IEEE 1609.2 §6.3.4 / J2945/1: the first BSM after a certificate change carries the full certificate,
     so receivers never miss the new digest and P2PCD requests grow far less than the changes (52fd05a2);
     written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.2)'
-  measured: 60.3903 -> 74.0258 (ratio 1.226)
-  verdict: pass
+  measured: 61.1806 -> 74.9839 (ratio 1.226)
+  verdict: wrong-expectation
+  note: 'Measure corrected 2026-10-27 (no new band): the count this row reads was renamed `digest_misses`
+    in eaf1260f, after 486c8cba (v2xw-metrics security.rs lines 12-13). `p2pcd_requests` now counts only
+    real P2PCD learning requests, which start on an unknown CA certificate (IEEE 1609.2-2022 clause 8),
+    and none occur in either run. On 486c8cba the row read 60.3903 -> 74.0258 under the old name'
 - id: silent-frames
   base: M0
   variant: silent
@@ -856,7 +861,7 @@ rows:
   - 1.2
   - 2.5
   source: 'a 77 B implicit certificate replaces the 8 B digest on 9 of 10 BSMs: ~+69 B on ~100 B of security'
-  measured: 21678241 -> 35370017 (ratio 1.632)
+  measured: 21678240 -> 35370016 (ratio 1.632)
   verdict: pass
 - id: fullcert-share
   base: M0
@@ -973,7 +978,7 @@ rows:
   measure: p2.topups_completed
   expect: ratio
   source: top-off only within an RSU's reach (provisioning-proxy role)
-  measured: 105 -> 86 (ratio 0.819)
+  measured: 105 -> 85 (ratio 0.8095)
   verdict: wrong-expectation
   band:
   - 0.0
@@ -1026,7 +1031,7 @@ rows:
   measure: rv.checked
   expect: down
   source: fewer neighbours, fewer verifications
-  measured: 1308399 -> 405186
+  measured: 1300642 -> 400473
   verdict: pass
 - id: half-events
   base: M0
@@ -1036,7 +1041,7 @@ rows:
   expect: down
   source: 'half the senders and receivers: fewer transmissions, receptions and verifications (05 §5);
     written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.2)'
-  measured: 3295502 -> 1228842
+  measured: 3288012 -> 1220848
   verdict: pass
 - id: att10-revoked
   base: M0
@@ -1112,7 +1117,7 @@ rows:
   expect: same
   source: 'cell-capacity-mm1 carries no TCP or TLS (base tcp_connections 0; scms-knobs: only packet-pf
     does), so the TLS version cannot show'
-  measured: 10044369 -> 10044369
+  measured: 10526961 -> 10526961
   verdict: pass
 - id: tls12-no-tcp
   base: M0
@@ -1179,7 +1184,7 @@ rows:
     cut) and 34.5258 -> 34.4983 (n 182), +/-0.08 %, where one session-opening upload in 182 would add
     ~0.2 ms (the top-up, which opens its session, gains 40.9 ms: uutls-topup-latency). Evidence in rerun-2026-10-26
     §2.2'
-  measured: 34.5258 -> 34.4983 (ratio 0.9992)
+  measured: 34.6522 -> 34.4709 (ratio 0.9948)
   verdict: pass
 - base: uu-tls13
   variant: uu-tls12
@@ -1189,8 +1194,15 @@ rows:
   expect: up
   source: as uutls-report-latency, for the rollover top-up sessions; written 2026-10-26 before the 486c8cba
     runs (rerun-2026-10-26 §1.3)
-  measured: 60273.7 -> 60314.7
-  verdict: pass
+  measured: 49358.2 -> 43946
+  verdict: wrong-expectation
+  note: 'Corrected 2026-10-27 on the f4982788 release: the row held on 486c8cba (60273.7 -> 60314.7, one
+    RTT). Since 0d62f322 a rollover top-up waits for the RA''s weekly population batch, which goes to
+    the ACA only once every account''s linkage values are in (v2xw-proto provision.rs 460-466 and 1686-1695;
+    [PRIMER] p.6, [CAMP122] 5.2.7.6.4). The top-up''s mean is now the batch''s completion time (44-49
+    s), which TLS 1.2''s extra round trip moves by seconds in either direction, not by one RTT. TLS 1.2''s
+    cost is still checked where no batch intervenes: uutls-bytes (handshake bytes up) and uutls-same-sessions.
+    The expectation stays as written, as the record of what the old model gave'
 - base: uu-tls13
   variant: uu-tls12
   id: uutls-topups-same
@@ -1199,7 +1211,7 @@ rows:
   expect: same
   source: an RTT does not change which certificates the RA issues; written 2026-10-26 before the 486c8cba
     runs (rerun-2026-10-26 §1.3)
-  measured: 1060 -> 1060
+  measured: 1100 -> 1100
   verdict: pass
 - id: uutls-topups-complete
   base: uu-tls13
@@ -1212,7 +1224,7 @@ rows:
     s (M0 flow.topup.median_s 60.118), so the window must run past 43,261 s; about 55 devices start one
     (the first 43,230 s cut left all 55 incomplete); written 2026-10-26 after the first uu-tls13 run,
     before the corrected pair (rerun-2026-10-26 §2.2)'
-  measured: '53'
+  measured: '55'
   verdict: pass
 - id: real-same-topups
   base: M0
@@ -1323,7 +1335,7 @@ rows:
   - 5
   source: 'more senders and more receivers: checks grow between n and n^2 (realism V7); written 2026-10-26
     before the 486c8cba runs (rerun-2026-10-26 §1.4)'
-  measured: 76684 -> 196858 (ratio 2.567)
+  measured: 75322 -> 192322 (ratio 2.553)
   verdict: pass
 - base: base-60
   variant: fleet2x-60
@@ -1336,7 +1348,7 @@ rows:
   - 5
   source: provisioning linear in devices, receptions ~n^2 (05 §5; realism V7); written 2026-10-26 before
     the 486c8cba runs (rerun-2026-10-26 §1.4)
-  measured: 49.73 -> 117.98 (ratio 2.372)
+  measured: 60.18 -> 123.7 (ratio 2.056)
   verdict: pass
 - base: base-60
   variant: fleet2x-60
@@ -1349,7 +1361,7 @@ rows:
   - 3
   source: 'per-device state (pools, receivers, caches) doubles over a fixed share (map, PKI, recorder):
     more than the base, less than 3x; written 2026-10-26 before the 486c8cba runs (rerun-2026-10-26 §1.4)'
-  measured: 128.205 -> 148.767 (ratio 1.16)
+  measured: 122.815 -> 170.984 (ratio 1.392)
   verdict: pass
 - base: base-60
   variant: fleet2x-60
