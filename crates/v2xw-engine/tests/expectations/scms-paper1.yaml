@@ -420,6 +420,17 @@ runs:
     scenario: scenarios/real-world/paper1/p1-ev-both.yaml
     base: G-EV0
     note: EVB on this branch's binary
+  G-L1:
+    scenario: scenarios/real-world/paper1/p1-ev-l1-plain.yaml
+    note: P1-E8 L1 (every OBU locked, = p1-ma-l1) on this branch's binary; then v2xw ma-replay
+  G-L1C:
+    scenario: scenarios/real-world/paper1/p1-ev-l1-cal.yaml
+    base: G-L1
+    note: G-L1 on the calibrated receiver (gnss.velocity_noise_mps 0)
+  G-L1B:
+    scenario: scenarios/real-world/paper1/p1-ev-l1-both.yaml
+    base: G-L1
+    note: P1-E8 L1B (both disguises, every OBU locked) on this branch's binary
 rows:
 - id: P1.TS.rp-share0
   base: B
@@ -3134,7 +3145,7 @@ rows:
   measure: x.e5.rsu.loss_rest
   expect: delta
   band: [-0.03, 0.03]
-  source: 'the absence ends before 50 ms (from_ms + max_duration_ms <= 50), so the loss in the interval''s second half does not move beyond noise'
+  source: 'the fitted absence reaches past 50 ms of air time only in its longest draws, so the loss at 50-99 ms phase moves by under 0.03'
   measured: pending
 - id: P1.GAP.off-1int-down
   base: G-D1
@@ -3353,4 +3364,48 @@ rows:
   expect: same
   tol: 0.0
   source: 're-judges P1.E8.evb-device-k after the attack_start fix (gt.device_exposure = first falsified message): device-k reads no device-class feature and no decision moved, so the budget is identical'
+  measured: pending
+- id: P1.GAP.l1-reproduces
+  base: G-L1
+  variant: G-L1
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: ge
+  value: 1
+  source: 'L1 = p1-ma-l1 (the same resolved scenario as MAL1R), so its 31 against MAL1R''s 0 is the binary: MAL1R ran on 8becf72a, before the v3 timing fit (204d5d85: heavy-tailed walk and :00/:50 grid hops). On this binary the failure reproduces'
+  measured: pending
+- id: P1.GAP.l1c-down
+  base: G-L1
+  variant: G-L1C
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: down
+  source: 'E7 root cause: a grid hop is a 50 ms secMark dt, and the default GNSS white velocity noise (sd 0.14 m/s between fixes) then reads as more than 10 m/s2 (CV-pilot locked devices differ by sd 0.045 m/s). Without it the honest blocks fall'
+  measured: pending
+- id: P1.GAP.l1c-k2-only
+  base: G-L1C
+  variant: G-L1C
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: le
+  value: 2
+  source: 'E7C at 0 % free: only k = 2 rules still block honest devices (1 per seed, ConstantPosition at creep speed, Tampa locked 13.0 per ID-minute); the bound allows 2 on this one seed'
+  measured: pending
+- id: P1.GAP.l1b-catch
+  base: G-L1
+  variant: G-L1B
+  area: metrics
+  measure: x.ma.budget.catch
+  expect: ratio
+  band: [1.0, 1000.0]
+  source: 'reported (P1.E8.l1b-catch, not run before): the budget under catch when the disguised attackers are the only free class'
+  measured: pending
+- id: P1.GAP.l1b-cluster
+  base: G-L1
+  variant: G-L1B
+  area: metrics
+  measure: x.ma.budget.cluster
+  expect: ratio
+  band: [1.0, 1000.0]
+  source: 'reported (P1.E8.l1b-cluster): cluster gains when the disguise makes attackers the only free class, which is uncrowded'
   measured: pending
