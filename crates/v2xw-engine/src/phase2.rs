@@ -9230,6 +9230,10 @@ mod provider_failure_tests {
         );
         p.advance(s(to + 300.0));
         assert_eq!(store(&p, 1), b0 + 1, "delivered on the retry after the outage");
+        // The backend stamps a publication with the step that saw it; provider-a's RA
+        // holds it only once the inter-provider link has carried it (milliseconds), so
+        // look one step later.
+        p.advance(s(to + 301.0));
         assert_eq!(served_serial(&p, 1), b0 + 1, "every RA serves it from then");
         let at = p.crl_feeds[1].last().expect("a version").at;
         assert!(at >= s(to), "provider-b's list is served from the store's return");

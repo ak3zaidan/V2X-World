@@ -570,8 +570,8 @@ fn fcd(c: &Ctx, o: &SumoOptions, tr: &Tracks) -> (String, usize) {
         for persons in [false, true] {
             for (a, track, s) in list.iter().filter(|(_, k, _)| k.is_person() == persons) {
                 let len = if persons { 0.0 } else { track.length() };
-                let fx = s.x + len * s.heading.cos() - c.shift.0;
-                let fy = s.y + len * s.heading.sin() - c.shift.1;
+                let fx = s.x + len * v2xw_core::math::cos(s.heading) - c.shift.0;
+                let fy = s.y + len * v2xw_core::math::sin(s.heading) - c.shift.1;
                 let _ = write!(
                     x,
                     "        <{} id=\"{a}\" x=\"{}\" y=\"{}\"",
