@@ -66,6 +66,11 @@ def summarise(out, log, dst):
         s['progress.t_end'] = prog[-1]['t_s']
         first = [x['t_s'] for x in prog if x['census'].get('scms.ma_reports', 0) > 0]
         s['census.ma_first_receipt_s'] = first[0] if first else None
+        filed = [x['t_s'] for x in prog if x['census'].get('p2.filed', 0) > 0]
+        s['census.first_filed_s'] = filed[0] if filed else None
+        if first and filed:
+            # the RA arms its one-day shuffle timer at the first upload (30 s census grid)
+            s['census.ma_release_after_first_filed_s'] = first[0] - filed[0]
         for k in ('scms.ma_reports', 'scms.pca_issued', 'scms.devices', 'scms.ra_requests',
                   'scms.issued_enrolment', 'scms.kernel_steps', 'scms.la0_chains', 'nodes'):
             s['census.end.' + k] = prog[-1]['census'].get(k)
@@ -252,7 +257,10 @@ def check(table, run, summ, inject):
             continue
         res = []
         for key, op, want in row['checks']:
+            op = 'true' if op is True else op  # YAML reads a bare `true` as a boolean
             v = s.get(key)
+            if v is None and key.startswith('p2.verdicts.') and 'p2.verdicts_total' in s:
+                v = 0  # a detector that never fired is absent from verdicts_by_detector
             ok = judge(op, want, v)
             vs = f'{v:.4g}' if isinstance(v, float) else str(v)
             res.append((key, ok, vs))
