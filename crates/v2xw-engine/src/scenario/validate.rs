@@ -1903,6 +1903,21 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the GNSS receiver velocity output noise",
     },
+    // The stated one-sigma accuracy: J2735 SemiMajorAxisAccuracy tops out at 12.70 m.
+    Bound {
+        path: "actors.vehicles.gnss.stated_sigma_m",
+        lo: 0.0,
+        hi: 12.7,
+        exclusive_lo: false,
+        what: "the GNSS receiver's stated one-sigma accuracy",
+    },
+    Bound {
+        path: "actors.vehicles.gnss.stated_sigma_log_sd",
+        lo: 0.0,
+        hi: 3.0,
+        exclusive_lo: false,
+        what: "the per-device spread of the stated accuracy",
+    },
     // The per-device BSM timing model (Paper 1 item B): a share.
     Bound {
         path: "actors.vehicles.bsm_timing.locked_share",
@@ -3472,7 +3487,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                heading_threshold_deg, detector_lag_s, z_threshold, min_consecutive, \
                sybil_min_certs, art_max_m, max_accel_mps2, stale_max_s, …) and \
                report_interval_s (default 1: a reporter files about one subject at most \
-               once a second).",
+               once a second). 'detect/ts103759' (listed alone) runs the ETSI TS 103 759 \
+               observation suite on every message instead: params take its card's \
+               parameters by name (threat/detector/ts103759-observations, each with its \
+               default, unit and source), the labels environment, beacon_profile, fusion \
+               and scoring, and the host keys above; each frame's J2735 VehicleSize (BSM, \
+               centre reference) or CAM size (front-centre reference) and the receiver's \
+               own class footprint feed its box check, and the run report tallies every \
+               check per sender class (ts_checks, ts_messages). Only speedPlausibility \
+               and accelerationPlausibility have an SM-MBR v1.1 subtype to file under.",
     },
     KeyStatus {
         path: "detection.ma",
@@ -3949,7 +3972,7 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: "actors.vehicles.gnss",
         status: Status::Wired,
-        note: "The positioning error every equipped vehicle's BSM carries: receiver grade, outliers, degraded bursts and outages.",
+        note: "The positioning error every equipped vehicle's BSM carries: receiver grade, outliers, degraded bursts and outages; and the accuracy its PositionalAccuracy states (stated_sigma_m, stated_sigma_log_sd: unset states the model's honest radius, set states a deployed OBU's, CV-pilot medians 0.30-2.00 m).",
     },
     KeyStatus {
         path: "actors.vehicles.bsm_timing",
@@ -5037,6 +5060,11 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             (
                 "actors.vehicles.gnss.velocity_noise_mps",
                 g.velocity_noise_mps,
+            ),
+            ("actors.vehicles.gnss.stated_sigma_m", g.stated_sigma_m),
+            (
+                "actors.vehicles.gnss.stated_sigma_log_sd",
+                g.stated_sigma_log_sd,
             ),
         ] {
             if let Some(v) = v {

@@ -1019,6 +1019,16 @@ const ADVANCED: &[Basic] = &[
         recommended: "Unset (default) to compare with earlier runs; 0 with the BSM timing model on, whose fitted output noise then carries the message-level speed and heading noise.",
     },
     Basic {
+        path: "actors.vehicles.gnss.stated_sigma_m",
+        explain: "The position accuracy each car's radio claims in its messages (one standard deviation). Unset claims the receiver's true error statistics; real deployed units claim much less than their real error, which makes detectors that trust the claim stricter.",
+        recommended: "Unset (default) to compare with earlier runs; 0.3 m (Tampa CV pilot) or 2.0 m (Orem) to match a deployment.",
+    },
+    Basic {
+        path: "actors.vehicles.gnss.stated_sigma_log_sd",
+        explain: "How much the claimed accuracy differs from one car to the next.",
+        recommended: "0.81 with 0.3 m (Tampa's spread); 0 with 2.0 m (Orem's units all claim the same).",
+    },
+    Basic {
         path: "actors.vehicles.bsm_timing.enabled",
         explain: "Gives each car's radio its own message timing, as real units have: some stamp each message with the instant of the GPS fix (locked), others do not (free), and those now and then send a position one fix too old or too new, or the last one again. Real CV-pilot data shows that is what makes honest cars trip the US position-consistency check.",
         recommended: "Off (default) to compare with earlier runs; on for honest-trigger studies.",

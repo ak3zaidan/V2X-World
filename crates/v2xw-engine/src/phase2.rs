@@ -153,11 +153,79 @@ pub fn evidence_time_plausible(r: &MisbehaviourReport) -> bool {
 /// default thresholds, `v2xw_threat::us_mbr`), as `detection.local` names it.
 pub const US_SM_MBR: &str = "detect/us-sm-mbr";
 
+/// The ETSI TS 103 759 observation suite's id (`v2xw_threat::ts103759`: classes 1-5,
+/// F2MD-style checks, the WP-10 Kalman, envelope and box checks, its own fusion and
+/// scoring modes), as `detection.local` names it. Listed alone: it is a whole suite.
+pub const TS_103_759: &str = "detect/ts103759";
+
 /// One receiver's local misbehaviour detector: the research suite or the US profile.
 #[derive(Debug, Clone)]
 enum LocalSuite {
     Research(Box<Legacy12>),
     Us(Box<v2xw_threat::us_mbr::UsSmMbr>),
+    Ts(Box<v2xw_threat::ts103759::Ts103759Suite>),
+}
+
+/// What one suite made of one message: the legacy verdict (typed on the corpus's check
+/// enum) or the TS 103 759 suite's own (`v2xw_threat::ts103759`, "Why this suite does not
+/// implement Detector").
+enum LocalVerdict {
+    Legacy(v2xw_threat::Verdict),
+    Ts(v2xw_threat::ts103759::TsVerdict),
+}
+
+impl LocalVerdict {
+    fn fired(&self) -> bool {
+        match self {
+            LocalVerdict::Legacy(v) => v.fired(),
+            LocalVerdict::Ts(v) => v.fired(),
+        }
+    }
+
+    fn subject(&self) -> &str {
+        match self {
+            LocalVerdict::Legacy(v) => &v.subject,
+            LocalVerdict::Ts(v) => &v.subject,
+        }
+    }
+
+    fn fired_ids(&self) -> Vec<&'static str> {
+        match self {
+            LocalVerdict::Legacy(v) => v.fired.iter().map(|o| o.detector.as_str()).collect(),
+            LocalVerdict::Ts(v) => v.fired.iter().map(|o| o.check.as_str()).collect(),
+        }
+    }
+
+    /// The report this verdict files, in the one wire shape both suites share.
+    fn report(
+        &self,
+        id: String,
+        node: NodeId,
+        reporter: String,
+        evidence: &v2xw_threat::report::Evidence,
+    ) -> Option<MisbehaviourReport> {
+        match self {
+            LocalVerdict::Legacy(v) => {
+                MisbehaviourReport::from_verdict(id, node, reporter, v, evidence)
+            }
+            LocalVerdict::Ts(v) => {
+                let reasons: Vec<(String, f64)> = v
+                    .fired
+                    .iter()
+                    .map(|o| (o.check.as_str().to_string(), o.score))
+                    .collect();
+                MisbehaviourReport::from_named_checks(
+                    id,
+                    node,
+                    reporter,
+                    v.subject.clone(),
+                    &reasons,
+                    &v.columns(),
+                    evidence,
+                )
+            }
+        }
+    }
 }
 
 impl LocalSuite {
@@ -167,10 +235,16 @@ impl LocalSuite {
         me: &SelfBelief,
         m: &ObservedMessage,
         env: &dyn v2xw_threat::obs::LocalEnvironment,
-    ) -> v2xw_threat::Verdict {
+        x: &v2xw_threat::ts103759::CrossCheckInputs<'_>,
+    ) -> LocalVerdict {
         match self {
-            LocalSuite::Research(d) => v2xw_threat::Detector::on_message(&mut **d, ctx, me, m, env),
-            LocalSuite::Us(d) => v2xw_threat::Detector::on_message(&mut **d, ctx, me, m, env),
+            LocalSuite::Research(d) => LocalVerdict::Legacy(v2xw_threat::Detector::on_message(
+                &mut **d, ctx, me, m, env,
+            )),
+            LocalSuite::Us(d) => LocalVerdict::Legacy(v2xw_threat::Detector::on_message(
+                &mut **d, ctx, me, m, env,
+            )),
+            LocalSuite::Ts(d) => LocalVerdict::Ts(d.check(ctx, me, m, env, x)),
         }
     }
 
@@ -181,7 +255,7 @@ impl LocalSuite {
     /// adds the BSM the certificate put on the air just before it.
     fn judged_times(&self, m: &ObservedMessage) -> (Option<SimTime>, SimTime) {
         let prev = match self {
-            LocalSuite::Research(_) => None,
+            LocalSuite::Research(_) | LocalSuite::Ts(_) => None,
             LocalSuite::Us(d) => d.consecutive_before(&m.signer, m.claimed_generation_time),
         };
         (prev, m.claimed_generation_time)
@@ -1490,6 +1564,17 @@ fn is_zero_count(n: &u64) -> bool {
     *n == 0
 }
 
+/// One TS 103 759 tally ([`Phase2Report::ts_checks`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TsCheckCount {
+    /// Messages judged.
+    pub evaluated: u64,
+    /// Messages scored at or above 1 (before the fusion gate).
+    pub exceeded: u64,
+    /// Messages on which the check fired (after the gate).
+    pub fired: u64,
+}
+
 /// Counters the run report carries for this path.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Phase2Report {
@@ -1531,6 +1616,20 @@ pub struct Phase2Report {
     pub verification_states: std::collections::BTreeMap<String, u64>,
     /// How many times each detector fired, by detector id.
     pub verdicts_by_detector: std::collections::BTreeMap<String, u64>,
+    /// `detect/ts103759` only, per check id and then per sender class (`honest`, or the
+    /// attacker model id while that sender was attacking when it generated the message):
+    /// the messages the check ran on, scored at or above 1, and fired after the fusion
+    /// gate. The class is ground truth for the run report; no detector reads it.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub ts_checks: std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, TsCheckCount>,
+    >,
+    /// `detect/ts103759` only, per sender class: the messages judged, those on which any
+    /// check scored at or above 1, and those on which any check fired (the per-message
+    /// level F2MD and VeReMi-Ext publish).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub ts_messages: std::collections::BTreeMap<String, TsCheckCount>,
     /// How many nodes were armed as attackers.
     pub attackers: u64,
     /// How many outgoing claims an attacker falsified.
@@ -2052,6 +2151,8 @@ pub struct Phase2 {
     /// The strict US profile's thresholds when `detection.local` names it, else the
     /// research suite runs.
     us_profile: Option<v2xw_threat::us_mbr::UsMbrParams>,
+    /// The TS 103 759 suite's thresholds when `detection.local` names it.
+    ts_profile: Option<v2xw_threat::ts103759::Ts103759Params>,
     detection_on: bool,
     /// Whether the detectors read each message's stated accuracy (`true`, the default) or
     /// the legacy constant 5 m (`detection.local[].params.use_stated_accuracy: 0`, kept to
@@ -2178,6 +2279,12 @@ pub struct Phase2 {
     /// `v2xw_node::VerifiedMessage` does not carry it, so the detector host joins it back
     /// by `(signer, generation time)`, which is what the message itself carries.
     broadcast_accuracy: BTreeMap<[u8; 8], VecDeque<(SimTime, Option<f64>)>>,
+    /// The frame fields the TS 103 759 suite's box and Kalman checks read that
+    /// `VerifiedMessage` does not carry (the BSM's J2735 `VehicleSize`, a CAM's vehicle
+    /// length and width, and the reference point the message's standard puts its
+    /// position at), joined back as `broadcast_accuracy` is. Kept only when that suite
+    /// runs.
+    broadcast_frame: BTreeMap<[u8; 8], VecDeque<(SimTime, v2xw_threat::FrameExtras)>>,
     /// The ground-truth side of the eavesdropper's chains, for the run report only: by the
     /// pseudonym at a chain's end, the vehicle it is truly following and since when.
     privacy_chains: BTreeMap<[u8; 8], (Option<NodeId>, SimTime)>,
@@ -2268,14 +2375,92 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
     let mut judge_revoked = true;
     let mut map_check = true;
     let mut us_profile: Option<v2xw_threat::us_mbr::UsMbrParams> = None;
+    let mut ts_profile: Option<v2xw_threat::ts103759::Ts103759Params> = None;
     for (i, choice) in scenario.detection.local.iter().enumerate() {
         let us = choice.id == US_SM_MBR;
+        if choice.id == TS_103_759 {
+            if scenario.detection.local.len() > 1 {
+                return Err(conflict(
+                    &format!("detection.local[{i}]"),
+                    format!("{TS_103_759} is a whole suite: list it alone"),
+                ));
+            }
+            let mut p = v2xw_threat::ts103759::Ts103759Params::default();
+            if let Some(map) = choice.params.as_object() {
+                for (key, value) in map {
+                    let field = format!("detection.local[{i}].params.{key}");
+                    if let Some(label) = value.as_str() {
+                        let ok = match key.as_str() {
+                            "environment" => v2xw_threat::ts103759::RadioEnvironment::parse(label)
+                                .map(|e| p = p.clone().with_environment(e))
+                                .is_some(),
+                            "beacon_profile" => v2xw_threat::ts103759::BeaconProfile::parse(label)
+                                .map(|b| p = p.clone().with_beacon_profile(b))
+                                .is_some(),
+                            _ => p.apply_label(key, label),
+                        };
+                        if !ok {
+                            return Err(conflict(
+                                &field,
+                                format!(
+                                    "is {value}; environment takes highway, rural, suburban \
+                                     or urban, beacon_profile bsm-j2945-1, cam-en302637-2 or \
+                                     f2md-veremi-1hz, fusion consecutive, windowed-mean or \
+                                     leaky-bucket, scoring threshold or catch, and every \
+                                     other parameter a number"
+                                ),
+                            ));
+                        }
+                        continue;
+                    }
+                    let v = value
+                        .as_f64()
+                        .filter(|v| v.is_finite() && *v >= 0.0)
+                        .ok_or_else(|| {
+                            conflict(
+                                &field,
+                                format!("is {value}; it must be a finite number, 0 or more"),
+                            )
+                        })?;
+                    match key.as_str() {
+                        "report_interval_s" => report_interval = secs(v),
+                        "use_stated_accuracy" => stated_accuracy = v != 0.0,
+                        "use_map" => map_check = v != 0.0,
+                        "judge_revoked" => judge_revoked = v != 0.0,
+                        _ if p.apply(key, v) => {}
+                        _ => {
+                            return Err(conflict(
+                                &field,
+                                format!(
+                                    "'{key}' is not a parameter of {TS_103_759}; it takes \
+                                     {}, environment, beacon_profile, {}, {}",
+                                    HOST_PARAM_KEYS.join(", "),
+                                    v2xw_threat::ts103759::LABEL_KEYS.join(", "),
+                                    v2xw_threat::ts103759::PARAM_KEYS.join(", ")
+                                ),
+                            ));
+                        }
+                    }
+                }
+            } else if !choice.params.is_null() {
+                return Err(conflict(
+                    &format!("detection.local[{i}].params"),
+                    format!(
+                        "is {}; it must be an object of parameter names and values",
+                        choice.params
+                    ),
+                ));
+            }
+            ts_profile = Some(p);
+            continue;
+        }
         if choice.id != LEGACY_12 && !us {
             return Err(conflict(
                 &format!("detection.local[{i}]"),
                 format!(
-                    "this build ships two local detector suites, {LEGACY_12} (the research \
-                     suite) and {US_SM_MBR} (the strict US profile); got {}",
+                    "this build ships three local detector suites, {LEGACY_12} (the research \
+                     suite), {US_SM_MBR} (the strict US profile) and {TS_103_759} (the ETSI \
+                     TS 103 759 observations); got {}",
                     choice.id
                 ),
             ));
@@ -2399,6 +2584,7 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
         judge_revoked,
         map_check,
         us_profile,
+        ts_profile,
     })
 }
 
@@ -2414,6 +2600,8 @@ pub(crate) struct DetectionParams {
     pub map_check: bool,
     /// The strict US profile's thresholds, when `detection.local` names it.
     pub us_profile: Option<v2xw_threat::us_mbr::UsMbrParams>,
+    /// The TS 103 759 suite's thresholds, when `detection.local` names it.
+    pub ts_profile: Option<v2xw_threat::ts103759::Ts103759Params>,
 }
 
 /// The keys `detection.local[].params` accepts that the host reads rather than the suite.
@@ -2593,6 +2781,7 @@ impl Phase2 {
             judge_revoked,
             map_check,
             us_profile,
+            ts_profile,
         } = detection_params(scenario)?;
         let ma = MaHost::from_scenario(scenario)?;
 
@@ -2910,6 +3099,7 @@ impl Phase2 {
             detectors: BTreeMap::new(),
             detector_params,
             us_profile,
+            ts_profile,
             detection_on: wants_detection,
             stated_accuracy,
             judge_revoked,
@@ -2979,6 +3169,7 @@ impl Phase2 {
             retired_store_deletions: (0, 0),
             ma_decided_devices: BTreeSet::new(),
             broadcast_accuracy: BTreeMap::new(),
+            broadcast_frame: BTreeMap::new(),
             privacy_chains: BTreeMap::new(),
             privacy_tracked: BTreeMap::new(),
             privacy_across: BTreeSet::new(),
@@ -4108,6 +4299,11 @@ impl Phase2 {
     /// A new receiver's detector: the US profile when the scenario names it, else the
     /// research suite.
     fn local_suite(&self) -> LocalSuite {
+        if let Some(p) = &self.ts_profile {
+            return LocalSuite::Ts(Box::new(v2xw_threat::ts103759::Ts103759Suite::new(
+                p.clone(),
+            )));
+        }
         match &self.us_profile {
             Some(p) => LocalSuite::Us(Box::new(v2xw_threat::us_mbr::UsSmMbr::new(p.clone()))),
             None => LocalSuite::Research(Box::new(Legacy12::new(self.detector_params.clone()))),
@@ -4149,6 +4345,27 @@ impl Phase2 {
             q.pop_front();
         }
         q.push_back((generated, accuracy_95_m));
+    }
+
+    /// Whether the TS 103 759 suite runs, so the host keeps the frame fields it reads.
+    #[must_use]
+    pub fn wants_frame_extras(&self) -> bool {
+        self.detection_on && self.ts_profile.is_some()
+    }
+
+    /// Notes the frame fields the TS 103 759 suite reads (vehicle size and the
+    /// position's reference point), as the safety message goes on the air.
+    pub fn note_broadcast_frame(
+        &mut self,
+        signer: [u8; 8],
+        generated: SimTime,
+        frame: v2xw_threat::FrameExtras,
+    ) {
+        let q = self.broadcast_frame.entry(signer).or_default();
+        if q.len() >= ACCURACY_JOIN_DEPTH {
+            q.pop_front();
+        }
+        q.push_back((generated, frame));
     }
 
     /// The accuracy a received message stated: `Some(None)` for "unavailable", `None` when
@@ -4234,10 +4451,14 @@ impl Phase2 {
         me: &SelfBelief,
         reporter_digest: Option<String>,
         delivered: &[v2xw_node::VerifiedMessage],
+        own: Option<v2xw_threat::OwnFootprint>,
     ) -> Vec<MisbehaviourReport> {
         let Some(detector) = self.detectors.get_mut(&node) else {
             return Vec::new();
         };
+        // Only the research suite is rate-limited to one check per sender per second; the
+        // US profile and the TS 103 759 suite are defined on every message.
+        let rate_limited = self.us_profile.is_none() && self.ts_profile.is_none();
         let interval = secs(self.detector_params.generation_interval_s);
         let mut out = Vec::new();
         let mut truths: Vec<(String, SimTime)> = Vec::new();
@@ -4297,7 +4518,7 @@ impl Phase2 {
                 self.report.messages_not_checked += 1;
                 continue;
             }
-            if self.us_profile.is_none()
+            if rate_limited
                 && let Some(last) = self.checked_at.get(&(node, key))
                 && m.received_at
                     < interval
@@ -4308,7 +4529,7 @@ impl Phase2 {
             }
             // The rate-limit stamp is read only by the research suite's 1 s rate (above);
             // the US profile checks every message and never reads it, so it is not kept.
-            if self.us_profile.is_none() && !unverified {
+            if rate_limited && !unverified {
                 self.checked_at.insert((node, key), m.received_at);
             }
             let claimed = m.claimed_pos.unwrap_or(Vec3::ZERO);
@@ -4389,8 +4610,56 @@ impl Phase2 {
             }
             // The BSMs this judgement is about, named before the suite moves on to `m`.
             let judged = detector.judged_times(&observed);
-            let verdict = detector.on_message(ctx, me, &observed, env);
+            let frame = self.broadcast_frame.get(&key).and_then(|q| {
+                q.iter()
+                    .rev()
+                    .find(|(t, _)| *t == m.claimed_generation_time)
+                    .map(|(_, f)| *f)
+            });
+            let mut inputs = v2xw_threat::ts103759::CrossCheckInputs::none();
+            if let Some(f) = frame.as_ref() {
+                inputs = inputs.and_frame(f);
+            }
+            if let Some(o) = own.as_ref() {
+                inputs = inputs.and_own(o);
+            }
+            let verdict = detector.on_message(ctx, me, &observed, env, &inputs);
             self.report.messages_checked += 1;
+            if let LocalVerdict::Ts(v) = &verdict {
+                // Ground truth for the run report only (never read by a detector): was the
+                // sender attacking when it generated this message, and as what.
+                let class = self
+                    .by_digest
+                    .get(&key)
+                    .and_then(|(n, _, _)| self.attackers.get(n))
+                    .filter(|a| {
+                        m.claimed_generation_time >= a.from && m.claimed_generation_time < a.to
+                    })
+                    .map_or_else(|| "honest".to_string(), |a| a.id.clone());
+                let fired: BTreeSet<&str> = v.fired.iter().map(|o| o.check.as_str()).collect();
+                let mut any_exceeded = false;
+                for (check, score) in &v.scores {
+                    let row = self
+                        .report
+                        .ts_checks
+                        .entry(check.as_str().to_string())
+                        .or_default()
+                        .entry(class.clone())
+                        .or_default();
+                    row.evaluated += 1;
+                    if *score >= 1.0 {
+                        row.exceeded += 1;
+                        any_exceeded = true;
+                    }
+                    if fired.contains(check.as_str()) {
+                        row.fired += 1;
+                    }
+                }
+                let row = self.report.ts_messages.entry(class).or_default();
+                row.evaluated += 1;
+                row.exceeded += u64::from(any_exceeded);
+                row.fired += u64::from(!fired.is_empty());
+            }
             *self
                 .report
                 .verification_states
@@ -4401,14 +4670,14 @@ impl Phase2 {
                 continue;
             }
             self.report.verdicts_fired += 1;
-            for o in &verdict.fired {
+            for id in verdict.fired_ids() {
                 *self
                     .report
                     .verdicts_by_detector
-                    .entry(o.detector.as_str().to_string())
+                    .entry(id.to_string())
                     .or_insert(0) += 1;
             }
-            let pair = (node, verdict.subject.clone());
+            let pair = (node, verdict.subject().to_string());
             if let Some(last) = self.filed.get(&pair)
                 && m.received_at < self.report_interval.after(*last)
             {
@@ -4416,7 +4685,7 @@ impl Phase2 {
             }
             self.filed.insert(pair, m.received_at);
             let evidence = Evidence::at(m.received_at, m.received_at, confidence_m);
-            let id = format!("r-{}-{}-{}", node.index(), verdict.subject, m.received_at);
+            let id = format!("r-{}-{}-{}", node.index(), verdict.subject(), m.received_at);
             let reporter = reporter_digest
                 .clone()
                 .unwrap_or_else(|| v2xw_core::hash::hex_encode(&me.node.index().to_le_bytes()));
@@ -4425,9 +4694,7 @@ impl Phase2 {
                     ma.trust_infrastructure(reporter.clone());
                 }
             }
-            if let Some(mut report) =
-                MisbehaviourReport::from_verdict(id, node, reporter, &verdict, &evidence)
-            {
+            if let Some(mut report) = verdict.report(id, node, reporter, &evidence) {
                 // The evidence window is the accused message's own `generationTime`, on
                 // the sender's clock, as the signed BSM in the report carries it
                 // ([SM-MBR] §2.3.1.2.1); the report's own generation time is the
@@ -4451,7 +4718,7 @@ impl Phase2 {
                     }
                 }
                 self.report.reports_sent += 1;
-                truths.push((verdict.subject.clone(), m.received_at));
+                truths.push((verdict.subject().to_string(), m.received_at));
                 out.push(report);
             }
         }
@@ -5405,7 +5672,12 @@ impl Phase2 {
             );
         }
         let us = self.us_profile.as_ref();
-        let Some(subtype) = r.reason_codes.iter().find_map(|c| us_subtype(c, us)) else {
+        let ts = self.ts_profile.as_ref();
+        let Some(subtype) = r
+            .reason_codes
+            .iter()
+            .find_map(|c| us_subtype(c, us).or_else(|| ts.and_then(|t| ts_subtype(c, t))))
+        else {
             return MbrBuild::Unmapped;
         };
         if self.home().state.pki.is_none() {
@@ -8966,12 +9238,31 @@ fn us_subtype(check: &str, us: Option<&v2xw_threat::us_mbr::UsMbrParams>) -> Opt
     }
 }
 
+/// The SM-MBR v1.1 subtype a TS 103 759 check reports as, at the suite's own thresholds:
+/// only the two value checks have one ([SM-MBR] §2.3: MaxSpeed and MaxAcceleration). The
+/// other observations (consistency, Kalman, envelope, box, range, beacon timing) have no
+/// PSID-0x20 subtype, so a US device cannot file them (`reports_not_filed_by`).
+fn ts_subtype(check: &str, p: &v2xw_threat::ts103759::Ts103759Params) -> Option<mbr::Subtype> {
+    use v2xw_threat::ts103759::Ts103759Check as C;
+    let u16_of = |v: f64| v.round().clamp(0.0, f64::from(u16::MAX)) as u16;
+    match check {
+        c if c == C::SpeedPlausibility.as_str() => Some(mbr::Subtype::MaxSpeed {
+            threshold_mps: u16_of(p.max_plausible_speed_mps),
+        }),
+        c if c == C::AccelerationPlausibility.as_str() => Some(mbr::Subtype::MaxAcceleration {
+            threshold_cmps2: u16_of(p.max_plausible_accel_mps2 * 100.0),
+        }),
+        _ => None,
+    }
+}
+
 /// The SM-MBR subtypes a report's fired checks file under (thresholds aside): what its
 /// store weight is read from.
 fn report_subtypes(r: &MisbehaviourReport) -> Vec<mbr::Subtype> {
+    let ts = v2xw_threat::ts103759::Ts103759Params::default();
     r.reason_codes
         .iter()
-        .filter_map(|c| us_subtype(c, None))
+        .filter_map(|c| us_subtype(c, None).or_else(|| ts_subtype(c, &ts)))
         .collect()
 }
 
