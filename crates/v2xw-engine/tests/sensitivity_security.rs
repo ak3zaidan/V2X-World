@@ -444,8 +444,8 @@ fn the_pseudonym_strategy_moves_linkability_and_p2pcd() {
     let mut silent = time.clone();
     silent.security.pseudonym_change.silent_period_s = Some(vec![2.0, 4.0]);
     let b = run(base);
-    let t = run(time);
-    let q = run(silent);
+    let t = run(time.clone());
+    let q = run(silent.clone());
     let linkability = |m: &Measured| {
         m.report.phase2.privacy_links_correct as f64
             / m.report.phase2.pseudonym_changes.max(1) as f64
@@ -478,10 +478,83 @@ fn the_pseudonym_strategy_moves_linkability_and_p2pcd() {
     // The frames a silence discards were signed, but their certificates reached no one:
     // the first frame after it must still carry one. Before the fix the cadence counted
     // them and unknown signers rose from 843 to 4,051.
-    assert!(
-        node_lost(&q, "unknown-signer") <= node_lost(&t, "unknown-signer"),
-        "a silence must not hide the new certificate"
+    //
+    // The mechanism, on the records: the first signed frame each vehicle generates after
+    // each change carries the full certificate.
+    let opened = first_frames_after_changes(&q);
+    assert!(opened.0 > 0, "the silence run changed no pseudonym");
+    assert_eq!(
+        opened.1, 0,
+        "a silence hid the new certificate: {} of {} changes opened with a digest",
+        opened.1, opened.0
     );
+    // The count, pooled over three seeds: all 20 vehicles spawn at once, so one seed's
+    // unknown signers follow a single hidden-terminal collision pattern (897 against 731
+    // on the scenario's seed, every one a certificate frame lost on the air), not the
+    // mechanism; seeds 2 and 3 give 760 -> 579 and 1,009 -> 702
+    // (docs/validation/live-scms-2026-10-25.md, 2026-10-26).
+    let (mut lost_t, mut lost_q) = (
+        node_lost(&t, "unknown-signer"),
+        node_lost(&q, "unknown-signer"),
+    );
+    for seed in [2_u64, 3] {
+        let mut ts = time.clone();
+        ts.seed = seed;
+        let mut qs = silent.clone();
+        qs.seed = seed;
+        let (tm, qm) = (run(ts), run(qs));
+        let opened = first_frames_after_changes(&qm);
+        assert_eq!(opened.1, 0, "seed {seed}: a silence hid the new certificate");
+        lost_t += node_lost(&tm, "unknown-signer");
+        lost_q += node_lost(&qm, "unknown-signer");
+    }
+    println!("ROW strategy pooled seeds: unknown 5 s {lost_t} 5 s + silence {lost_q}");
+    assert!(
+        lost_q <= lost_t,
+        "a silence must not hide the new certificate: {lost_q} unknown signers against {lost_t}"
+    );
+}
+
+/// Per run: how many pseudonym changes it made, and after how many of them the first
+/// signed frame the vehicle generated carried a digest rather than the new certificate.
+fn first_frames_after_changes(m: &Measured) -> (usize, usize) {
+    use serde_json::Value;
+    let mut changes: Vec<(u64, u64)> = Vec::new();
+    let mut frames: BTreeMap<u64, Vec<(u64, bool)>> = BTreeMap::new();
+    for (_, r) in m.rec.records() {
+        if r.channel != "sec.pseudonym" && r.channel != "node.tx" {
+            continue;
+        }
+        let Ok(o) = serde_json::from_slice::<Value>(&r.json) else {
+            continue;
+        };
+        let n = |k: &str| o.get(k).and_then(Value::as_u64);
+        let (Some(node), Some(t)) = (n("node"), n("t")) else {
+            continue;
+        };
+        if r.channel == "sec.pseudonym" {
+            changes.push((node, t));
+            continue;
+        }
+        let Some(signer) = o.get("signer").and_then(Value::as_str) else {
+            continue;
+        };
+        let generated = n("t_generated").unwrap_or(t);
+        frames
+            .entry(node)
+            .or_default()
+            .push((generated, signer == "certificate"));
+    }
+    let digest_first = changes
+        .iter()
+        .filter(|(node, at)| {
+            frames
+                .get(node)
+                .and_then(|f| f.iter().filter(|(g, _)| g >= at).min_by_key(|(g, _)| *g))
+                .is_some_and(|(_, cert)| !cert)
+        })
+        .count();
+    (changes.len(), digest_first)
 }
 
 /// The BSM's Part II path history: none, 1 point, and J2945/1's 15. Each point is about
