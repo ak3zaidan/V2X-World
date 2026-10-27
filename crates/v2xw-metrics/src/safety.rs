@@ -58,7 +58,18 @@ use crate::channels::{ChannelView, GtKinematicsView};
 use crate::def::{Agg, Dim, DimValue, Dims, MetricDef, MetricSample, SampleValue};
 use crate::provider::{Decoded, MetricProvider};
 use crate::quant::Quantum;
+use crate::ssm::{EncounterType, Follow, SsmActor, SsmParams, SsmTracker};
 use crate::stats::{Distribution, Estimate, ratio_of_sums};
+
+/// The opt-in metric group of the full surrogate safety measures ([`crate::ssm`]):
+/// `metrics: [all, ssm]` or any `ssm_*` name. Not under a bare `all`, so a run that does not
+/// name it keeps the metrics and digests it had.
+pub const SSM_GROUP: &str = "ssm";
+
+/// The body a vehicle of an undeclared class is given for the full surrogate measures,
+/// length and width in metres: a passenger car. A run declares every class's own with
+/// [`SafetyProvider::declare_class_dims`].
+const DEFAULT_BODY_M: (f64, f64) = (4.5, 1.8);
 
 /// The time-to-collision threshold below which a same-lane pair is counted as a conflict:
 /// **1.5 s**.
@@ -154,6 +165,16 @@ pub struct SafetyProvider {
 
     window_start: SimTime,
     rejected: u64,
+
+    /// The full surrogate safety measures, when the `ssm` group is on.
+    ssm: Option<SsmTracker>,
+    /// Body length and width by class name, for the measures' rectangles.
+    class_dims: BTreeMap<String, (f64, f64)>,
+    ssm_counts: BTreeMap<EncounterType, u64>,
+    ssm_min_ttc: Distribution,
+    ssm_max_drac: Distribution,
+    ssm_max_mdrac: Distribution,
+    ssm_min_ppet: Distribution,
 }
 
 impl SafetyProvider {
@@ -186,7 +207,38 @@ impl SafetyProvider {
             cell_last: BTreeMap::new(),
             window_start: t0,
             rejected: 0,
+            ssm: None,
+            class_dims: BTreeMap::new(),
+            ssm_counts: BTreeMap::new(),
+            ssm_min_ttc: Distribution::new(),
+            ssm_max_drac: Distribution::new(),
+            ssm_max_mdrac: Distribution::new(),
+            ssm_min_ppet: Distribution::new(),
         }
+    }
+
+    /// Turns the full surrogate safety measures on ([`crate::ssm`], the `ssm` group) with
+    /// SUMO's SSM-device defaults as thresholds. Off by default.
+    #[must_use]
+    pub fn with_ssm(self, on: bool) -> Self {
+        self.with_ssm_params(on.then(SsmParams::default))
+    }
+
+    /// As [`SafetyProvider::with_ssm`], with explicit parameters (`None` is off).
+    #[must_use]
+    pub fn with_ssm_params(mut self, params: Option<SsmParams>) -> Self {
+        self.ssm = params.map(SsmTracker::new);
+        self.card = Self::build_card();
+        if let Some(p) = params {
+            add_ssm_card(&mut self.card, &p);
+        }
+        self
+    }
+
+    /// Declares a class's body length and width, metres, for the full surrogate measures.
+    pub fn declare_class_dims(&mut self, class: &str, length_m: f64, width_m: f64) {
+        self.class_dims
+            .insert(class.to_string(), (length_m, width_m));
     }
 
     /// Sets the insufficiency threshold.
@@ -370,7 +422,7 @@ impl SafetyProvider {
         let ssam = cards::paper("FHWA-HRT-08-051 (SSAM); 04-models.md §11");
         let edie =
             cards::paper("L. C. Edie 1963; FHWA Traffic Flow Theory ch. 2; 04-models.md §2.9");
-        vec![
+        let mut defs = vec![
             MetricDef::new(
                 "ttc_min",
                 "s",
@@ -530,7 +582,11 @@ impl SafetyProvider {
             .with_min_samples(self.min_samples)
             .not_accounting_for("the same time-weighting bias as `speed`")
             .not_accounting_for("jerk, which the kinematics channel does not carry"),
-        ]
+        ];
+        if self.ssm.is_some() {
+            defs.extend(ssm_definitions(self.min_samples));
+        }
+        defs
     }
 
     fn def(&self, name: &str) -> MetricDef {
@@ -604,6 +660,7 @@ impl SafetyProvider {
         }
 
         // --- same-lane pairing ----------------------------------------------------------
+        let mut follows: Vec<Follow> = Vec::new();
         for vehicles in by_lane.values_mut() {
             // Sorted by the integer grid index, tie-broken by actor id: a total order that
             // two platforms cannot disagree about.
@@ -615,6 +672,13 @@ impl SafetyProvider {
                 if gap <= 0.0 {
                     // Two vehicles on the same grid point: no gap, so no surrogate measure.
                     continue;
+                }
+                if self.ssm.is_some() {
+                    follows.push(Follow {
+                        follower: follower.actor,
+                        leader: leader.actor,
+                        gap_m: gap,
+                    });
                 }
                 self.headway_distance.observe(gap);
                 if follower.speed_mps >= HEADWAY_MIN_SPEED_MPS
@@ -633,6 +697,52 @@ impl SafetyProvider {
                     }
                     self.drac.observe(closing * closing / (2.0 * gap));
                 }
+            }
+        }
+
+        // --- the full surrogate measures (opt-in) ----------------------------------------
+        if let Some(tracker) = self.ssm.as_mut() {
+            let actors: Vec<SsmActor> = frame
+                .values()
+                .filter_map(|v| {
+                    let heading = v.heading_rad?;
+                    let (length_m, width_m) = v
+                        .class
+                        .as_deref()
+                        .and_then(|c| self.class_dims.get(c).copied())
+                        .unwrap_or(DEFAULT_BODY_M);
+                    Some(SsmActor {
+                        actor: v.actor,
+                        x_m: v.x_m,
+                        y_m: v.y_m,
+                        heading_rad: heading,
+                        speed_mps: v.speed_mps.max(0.0),
+                        length_m,
+                        width_m,
+                        lane: v.lane,
+                    })
+                })
+                .collect();
+            tracker.step(t as f64 / 1e9, &actors, &follows);
+            let log = tracker.take_conflicts();
+            self.log_conflicts(log);
+        }
+    }
+
+    fn log_conflicts(&mut self, log: Vec<crate::ssm::Conflict>) {
+        for c in log {
+            *self.ssm_counts.entry(c.ty).or_default() += 1;
+            if let Some((_, v)) = c.min_ttc {
+                self.ssm_min_ttc.observe(v);
+            }
+            if let Some((_, v)) = c.max_drac {
+                self.ssm_max_drac.observe(v);
+            }
+            if let Some((_, v)) = c.max_mdrac {
+                self.ssm_max_mdrac.observe(v);
+            }
+            if let Some((_, v)) = c.min_ppet {
+                self.ssm_min_ppet.observe(v);
             }
         }
     }
@@ -729,6 +839,33 @@ impl MetricProvider for SafetyProvider {
             Dims::new(),
             SampleValue::count(core::mem::take(&mut self.ttc_conflicts)),
         ));
+        if let Some(tracker) = self.ssm.as_mut() {
+            // Encounters idle past the extra time at the window's end belong to it.
+            tracker.close_idle(at as f64 / 1e9);
+            let log = tracker.take_conflicts();
+            self.log_conflicts(log);
+            let counts = core::mem::take(&mut self.ssm_counts);
+            for ty in EncounterType::ALL {
+                out.push(MetricSample::new(
+                    &self.def(&ssm_count_name(ty)),
+                    at,
+                    Dims::new(),
+                    SampleValue::count(counts.get(&ty).copied().unwrap_or(0)),
+                ));
+            }
+            let dists = [
+                ("ssm_min_ttc", core::mem::replace(&mut self.ssm_min_ttc, Distribution::new())),
+                ("ssm_max_drac", core::mem::replace(&mut self.ssm_max_drac, Distribution::new())),
+                (
+                    "ssm_max_mdrac",
+                    core::mem::replace(&mut self.ssm_max_mdrac, Distribution::new()),
+                ),
+                ("ssm_min_ppet", core::mem::replace(&mut self.ssm_min_ppet, Distribution::new())),
+            ];
+            for (name, d) in dists {
+                push_distribution(&mut out, self.def(name), d);
+            }
+        }
 
         // --- Edie's aggregates, per lane -------------------------------------------------
         let flow_def = self.def("flow");
@@ -850,6 +987,171 @@ impl MetricProvider for SafetyProvider {
     fn rejected(&self) -> u64 {
         self.rejected
     }
+}
+
+/// The count metric of one encounter type: `ssm_conflicts_<type>`, or `ssm_collisions`.
+#[must_use]
+pub fn ssm_count_name(ty: EncounterType) -> String {
+    if ty == EncounterType::Collision {
+        "ssm_collisions".to_string()
+    } else {
+        format!("ssm_conflicts_{}", ty.label())
+    }
+}
+
+/// The names of the `ssm` group's metrics.
+#[must_use]
+pub fn ssm_metric_names() -> Vec<String> {
+    let mut v: Vec<String> = EncounterType::ALL.iter().map(|t| ssm_count_name(*t)).collect();
+    v.extend(["ssm_min_ttc", "ssm_max_drac", "ssm_max_mdrac", "ssm_min_ppet"].map(String::from));
+    v
+}
+
+fn ssm_definitions(min_samples: u64) -> Vec<MetricDef> {
+    let sumo = cards::paper(
+        "SUMO documentation, Simulation/Output/SSM Device (thresholds TTC 3.0 s, DRAC 3.0, \
+         MDRAC 3.4, PPET 2.0 s, range 50 m, extratime 5 s); Gettman et al. 2008, \
+         FHWA-HRT-08-051 (SSAM); Laureshyn et al. 2010; Fazekas et al. 2017",
+    );
+    let mut defs: Vec<MetricDef> = EncounterType::ALL
+        .iter()
+        .map(|ty| {
+            let what = if *ty == EncounterType::Collision {
+                "Encounters whose bodies overlapped (SUMO code 111), logged when the \
+                 encounter closed."
+                    .to_string()
+            } else {
+                format!(
+                    "Conflicts of type {} (SUMO code {}): closed encounters whose minimum \
+                     TTC fell below 3.0 s, maximum DRAC or MDRAC rose above 3.0 or 3.4 \
+                     m/s², or minimum PPET fell below 2.0 s; the type is the one at the \
+                     minimum TTC.",
+                    ty.label(),
+                    ty.sumo_code()
+                )
+            };
+            MetricDef::new(
+                ssm_count_name(*ty),
+                "count",
+                Agg::Count,
+                Visibility::Gt,
+                Quantum::COUNT,
+                what,
+            )
+            .with_dims([Dim::T])
+            .with_source(sumo.clone())
+            .with_min_samples(1)
+            .not_accounting_for("an encounter still open at the run's last window")
+            .not_accounting_for("a turning vehicle's curved path: extrapolation is straight")
+        })
+        .collect();
+    for (name, unit, q, what) in [
+        (
+            "ssm_min_ttc",
+            "s",
+            Quantum::TIME_S,
+            "Each logged conflict's minimum time to collision, every encounter type: the \
+             first overlap of the two bodies' rectangles extrapolated at current velocity \
+             (Laureshyn et al. 2010), or gap / Δv for a same-lane pair.",
+        ),
+        (
+            "ssm_max_drac",
+            "m/s²",
+            Quantum::SPEED,
+            "Each logged conflict's maximum deceleration rate to avoid the crash.",
+        ),
+        (
+            "ssm_max_mdrac",
+            "m/s²",
+            Quantum::SPEED,
+            "Each logged conflict's maximum MDRAC: the DRAC after a 1 s perception-reaction \
+             time (Fazekas et al. 2017).",
+        ),
+        (
+            "ssm_min_ppet",
+            "s",
+            Quantum::TIME_S,
+            "Each logged conflict's minimum predicted post-encroachment time at a crossing \
+             or merging conflict area, when no collision was predicted.",
+        ),
+    ] {
+        defs.push(
+            MetricDef::new(name, unit, Agg::Distribution, Visibility::Gt, q, what)
+                .with_dims([Dim::T])
+                .with_source(sumo.clone())
+                .with_min_samples(min_samples)
+                .not_accounting_for("an encounter still open at the run's last window"),
+        );
+    }
+    defs
+}
+
+fn add_ssm_card(card: &mut ModelCard, p: &SsmParams) {
+    card.equations.push(v2xw_core::card::Equation::new(
+        "ssm_ttc",
+        "TTC = first t >= 0 at which the two bodies' rectangles, moved at constant velocity, \
+         overlap on all four separating axes (Laureshyn et al. 2010 extended TTC); a \
+         same-lane pair keeps gap / Δv",
+    ));
+    card.equations.push(v2xw_core::card::Equation::new(
+        "ssm_drac_crossing",
+        "DRAC = 2(v·T − d)/T² for the later arrival, d its distance to the conflict area and \
+         T the earlier vehicle's exit time; v²/(2d) when that would stop it short",
+    ));
+    card.equations.push(v2xw_core::card::Equation::new(
+        "ssm_mdrac",
+        "MDRAC = Δv / (2(TTC − R)) (Fazekas et al. 2017); crossing: the DRAC rule with d − vR \
+         and T − R",
+    ));
+    card.equations.push(v2xw_core::card::Equation::new(
+        "ssm_ppet",
+        "PPET = t_in(second) − t_out(first) over the conflict area at current speeds",
+    ));
+    let sumo = |what: &str| {
+        cards::paper(&format!(
+            "SUMO documentation, Simulation/Output/SSM Device: default {what}"
+        ))
+    };
+    for (name, unit, v, lo, hi, what) in [
+        ("ssm_ttc_threshold_s", "s", p.ttc_s, 0.1, 10.0, "TTC threshold 3.0 s"),
+        ("ssm_drac_threshold_mps2", "m/s²", p.drac_mps2, 0.1, 10.0, "DRAC threshold 3.0 m/s²"),
+        ("ssm_mdrac_threshold_mps2", "m/s²", p.mdrac_mps2, 0.1, 10.0, "MDRAC threshold 3.4 m/s²"),
+        ("ssm_ppet_threshold_s", "s", p.ppet_s, 0.1, 10.0, "PPET threshold 2.0 s"),
+        ("ssm_range_m", "m", p.range_m, 1.0, 500.0, "range 50 m"),
+        ("ssm_extra_time_s", "s", p.extra_time_s, 0.0, 60.0, "extratime 5 s"),
+        ("ssm_reaction_s", "s", p.reaction_s, 0.0, 5.0, "mdrac.prt 1 s"),
+    ] {
+        card.parameters
+            .push(cards::param(name, unit, json!(v), json!(lo), json!(hi), sumo(what)));
+    }
+    card.sources.push(cards::paper(
+        "D. Gettman, L. Pu, T. Sayed, S. Shelby, Surrogate Safety Assessment Model and \
+         Validation: Final Report, FHWA-HRT-08-051, 2008 (conflict-angle classes 30°/85°)",
+    ));
+    card.sources.push(cards::paper(
+        "A. Laureshyn, Å. Svensson, C. Hydén, Evaluation of traffic safety, based on \
+         micro-level behavioural data, Accident Analysis and Prevention 42(6), 2010 \
+         (extended TTC by extrapolation)",
+    ));
+    card.sources.push(cards::paper(
+        "A. Fazekas, F. Hennecke, E. Kalló, M. Horváth, A novel surrogate indicator based on \
+         constant initial acceleration and reaction time assumption, J. Advanced \
+         Transportation 2017 (MDRAC)",
+    ));
+    card.limitations.push(
+        "Full SSM: trajectories are extrapolated in a straight line at the current velocity, \
+         so a turning vehicle's predicted path leaves its lane; SUMO's device extrapolates \
+         along the route. Bodies are the class's declared length and width. Re-implemented \
+         from the cited papers and SUMO's documentation; SUMO was read for behaviour only \
+         and no code was copied."
+            .to_string(),
+    );
+    card.validation
+        .tests
+        .push("ssm::tests::a_hand_computed_crossing_case_matches".to_string());
+    card.validation
+        .tests
+        .push("safety::tests::the_ssm_following_results_equal_the_same_lane_measures".to_string());
 }
 
 #[cfg(test)]
@@ -1149,5 +1451,107 @@ mod tests {
         p.on_event(&kin(0, 1, Some(7), 0.0, 20.0, None));
         let s = p.flush(1_000_000_000);
         assert_eq!(sample(&s, "speed").value.n(), 1);
+    }
+
+    fn kin_h(t: SimTime, actor: u32, lane: Option<u32>, x: f64, y: f64, h: f64, v: f64) -> OwnedRecord {
+        let mut j = json!({
+            "t": t, "actor": actor, "x_m": x, "y_m": y, "speed_mps": v, "heading_rad": h,
+        });
+        if let Some(l) = lane {
+            j["lane"] = json!(l);
+            j["lane_pos_m"] = json!(x);
+        }
+        OwnedRecord {
+            channel: "gt.kinematics",
+            visibility: Visibility::Gt,
+            json: serde_json::to_vec(&j).unwrap(),
+        }
+    }
+
+    fn dist_min(s: &MetricSample) -> Option<f64> {
+        match &s.value {
+            SampleValue::Distribution(crate::stats::DistributionSummary::Summary { min, .. }) => {
+                Some(*min)
+            }
+            _ => None,
+        }
+    }
+
+    /// A follower closing at 4 m/s from 20 m for 3 s, then holding its gap: with the `ssm`
+    /// group on, every existing sample is byte-identical to the run without it, and the one
+    /// following conflict's minimum TTC is the same-lane `ttc_min`'s minimum.
+    #[test]
+    fn the_ssm_following_results_equal_the_same_lane_measures() {
+        let run = |ssm: bool| {
+            let mut p = SafetyProvider::new(0).with_min_samples(1).with_ssm(ssm);
+            for k in 0..=100u64 {
+                let t = k * 100_000_000;
+                let ts = k as f64 * 0.1;
+                let (xf, vf) = if ts <= 3.0 { (12.0 * ts, 12.0) } else { (36.0 + 8.0 * (ts - 3.0), 8.0) };
+                p.on_event(&kin_h(t, 1, Some(7), xf, 0.0, 0.0, vf));
+                p.on_event(&kin_h(t, 2, Some(7), 20.0 + 8.0 * ts, 0.0, 0.0, 8.0));
+            }
+            p.flush(10_100_000_000)
+        };
+        let off = run(false);
+        let on = run(true);
+        for s in &off {
+            let twin = on.iter().find(|o| o.key() == s.key()).expect("every sample kept");
+            assert_eq!(
+                serde_json::to_string(s).unwrap(),
+                serde_json::to_string(twin).unwrap()
+            );
+        }
+        assert!(off.iter().all(|s| !s.metric.starts_with("ssm_")));
+        assert_eq!(
+            sample(&on, "ssm_conflicts_following").value,
+            SampleValue::count(1)
+        );
+        let ttc = dist_min(sample(&on, "ttc_min")).expect("a ttc");
+        assert_eq!(dist_min(sample(&on, "ssm_min_ttc")), Some(ttc));
+        assert_eq!(sample(&on, "ssm_conflicts_crossing").value, SampleValue::count(0));
+    }
+
+    /// The crossing case through the provider: two cars on different lanes, headings 0
+    /// and π/2, meeting at the origin as in `ssm::tests`: one crossing conflict with the
+    /// hand-computed 2.5 s minimum TTC at the first frame; the same-lane measures see
+    /// nothing.
+    #[test]
+    fn the_provider_logs_the_crossing_conflict() {
+        let mut p = SafetyProvider::new(0).with_min_samples(1).with_ssm(true);
+        p.declare_class_dims("car", 4.0, 2.0);
+        for k in 0..=80u64 {
+            let t = k * 100_000_000;
+            let ts = k as f64 * 0.1;
+            let stop = ts >= 0.5;
+            let (xa, ya) = if stop { (-25.0, 0.0) } else { (-30.0 + 10.0 * ts, 0.0) };
+            let (xb, yb) = if stop { (0.0, -16.0) } else { (0.0, -20.0 + 8.0 * ts) };
+            let mut a = kin_h(t, 1, Some(1), xa, ya, 0.0, if stop { 0.0 } else { 10.0 });
+            let mut b = kin_h(t, 2, Some(2), xb, yb, core::f64::consts::FRAC_PI_2, if stop { 0.0 } else { 8.0 });
+            for r in [&mut a, &mut b] {
+                let mut j: serde_json::Value = serde_json::from_slice(&r.json).unwrap();
+                j["class"] = json!("car");
+                r.json = serde_json::to_vec(&j).unwrap();
+            }
+            p.on_event(&a);
+            p.on_event(&b);
+        }
+        let s = p.flush(8_100_000_000);
+        assert_eq!(sample(&s, "ssm_conflicts_crossing").value, SampleValue::count(1));
+        assert_eq!(sample(&s, "ssm_conflicts_following").value, SampleValue::count(0));
+        // TTC 2.5 − t falls to 2.1 at the last moving frame (0.4 s).
+        assert_eq!(dist_min(sample(&s, "ssm_min_ttc")), Some(2.1));
+        assert_eq!(sample(&s, "ttc_min").value.n(), 0);
+    }
+
+    #[test]
+    fn the_ssm_definitions_validate_and_the_card_is_accepted() {
+        let p = SafetyProvider::new(0).with_ssm(true);
+        p.validate_defs().unwrap();
+        p.card().validate().unwrap();
+        let names: Vec<String> = p.defs().into_iter().map(|d| d.name).collect();
+        for n in ssm_metric_names() {
+            assert!(names.contains(&n), "{n}");
+        }
     }
 }
