@@ -72,8 +72,24 @@ def _param(rep_txt, key, default):
     return float(m.group(1)) if m else default
 
 
+def _messages(path):
+    """(topic, data) in file order. A stream read, so it also reads a recording that is
+    still being written (a truncated tail ends the iteration)."""
+    from mcap.records import Channel, Message
+    from mcap.stream_reader import StreamReader
+    chans = {}
+    with open(path, 'rb') as f:
+        try:
+            for r in StreamReader(f, skip_magic=False).records:
+                if isinstance(r, Channel):
+                    chans[r.id] = r.topic
+                elif isinstance(r, Message):
+                    yield chans.get(r.channel_id, ''), r.data
+        except Exception as e:      # noqa: BLE001  (a partial file's last record)
+            print(f'records: stream ended early ({type(e).__name__})', file=sys.stderr)
+
+
 def summarise(run_dir, grid_deg=GRID_DEG, band_m=BAND_M):
-    from mcap.reader import make_reader
     dur, ff, t0 = _resolved(run_dir)
     windows = live_windows(dur, ff)
     rep_path = os.path.join(run_dir, 'run-report.json')
@@ -88,11 +104,11 @@ def summarise(run_dir, grid_deg=GRID_DEG, band_m=BAND_M):
     ma = []                                           # (t_s, ma, set_aside)
     stored = []                                       # (t_s, 'stored', subject, corridor)
     cases = 0
-    with open(os.path.join(run_dir, 'recording.mcap'), 'rb') as f:
-        for _, ch, m in make_reader(f).iter_messages():
-            t = ch.topic[7:] if ch.topic.startswith('record/') else ch.topic
+    if True:  # one pass over the recording
+        for topic, data in _messages(os.path.join(run_dir, 'recording.mcap')):
+            t = topic[7:] if topic.startswith('record/') else topic
             if t == 'node.tx':
-                q = json.loads(m.data)
+                q = json.loads(data)
                 if q.get('report_id'):
                     relayed.add(q['report_id'])
                 if q.get('msg_type') != 'bsm':
@@ -108,11 +124,11 @@ def summarise(run_dir, grid_deg=GRID_DEG, band_m=BAND_M):
                 if w is not None:
                     expo[(p, w, k)] += 1
             elif t == 'det.observation':
-                q = json.loads(m.data)
+                q = json.loads(data)
                 s = q['subject']
                 verdicts.append((q['t'] / NS, q['detector'], s, last_pos.get(s)))
             elif t == 'pki.report_fate':
-                q = json.loads(m.data)
+                q = json.loads(data)
                 r = q['report_id']
                 fates[r].append((q['t'] / NS, q['fate']))
                 if r not in subject_of:
@@ -121,7 +137,7 @@ def summarise(run_dir, grid_deg=GRID_DEG, band_m=BAND_M):
                 if q['fate'] == 'stored':
                     stored.append((q['t'] / NS, 'stored', q['subject'], last_pos.get(q['subject'])))
             elif t == 'ma.received':
-                q = json.loads(m.data)
+                q = json.loads(data)
                 ma.append((q['t'] / NS, q['ma'], q.get('set_aside')))
             elif t in ('ma.case', 'pki.case'):
                 cases += 1

@@ -167,6 +167,59 @@ class Projection(unittest.TestCase):
         self.assertEqual(sum(d['uploaded'] for d in out['per_day']), 0)
 
 
+class Summarise(unittest.TestCase):
+    """records.summarise end to end on a small synthetic recording."""
+
+    def test_classes_exposure_triggers_and_fates(self):
+        import tempfile
+        from mcap.writer import Writer
+        d = tempfile.mkdtemp()
+        open(os.path.join(d, 'scenario.resolved.yaml'), 'w').write(
+            "time:\n  t0: '2026-10-19T21:00:00Z'\n  duration_s: 100.0\n  fast_forward:\n"
+            "  - from_s: 20.0\n    to_s: 100.0\n")
+        json.dump({'report': {'phase2': {'verdicts_fired': 7, 'reports_not_filed': 1}}},
+                  open(os.path.join(d, 'run-report.json'), 'w'))
+        rng = random.Random(5)
+        with open(os.path.join(d, 'recording.mcap'), 'wb') as f:
+            w = Writer(f)
+            w.start()
+            sid = w.register_schema('j', 'jsonschema', b'{}')
+            ch = {t: w.register_channel('record/' + t, 'json', sid)
+                  for t in ('node.tx', 'pki.report_fate', 'ma.received')}
+
+            def put(t, ts, q):
+                w.add_message(ch[t], int(ts * 1e9), json.dumps(q).encode(), int(ts * 1e9))
+            for i in range(150):                       # 15 s of 10 Hz BSMs from two devices
+                ts = i * 0.1
+                put('node.tx', ts, {'t': int(ts * 1e9), 'node': 1, 'msg_type': 'bsm', 'pseudonym': 'aa',
+                                    'content': {'sec_mark_ms': (i * 100) % 60000,
+                                                'claimed_x_m': 10.0, 'claimed_y_m': 0.0}})
+                put('node.tx', ts + 0.01, {'t': int((ts + 0.01) * 1e9), 'node': 2, 'msg_type': 'bsm',
+                                           'pseudonym': 'bb',
+                                           'content': {'sec_mark_ms': rng.randrange(60000),
+                                                       'claimed_x_m': 600.0, 'claimed_y_m': 0.0}})
+            for j in range(5):
+                put('pki.report_fate', 16 + j, {'t': int((16 + j) * 1e9), 'report_id': f'r{j}', 'fate': 'stored',
+                                                'subject': 'bb', 'reporter': 1})
+                put('pki.report_fate', 16.5 + j, {'t': int((16.5 + j) * 1e9), 'report_id': f'r{j}',
+                                                  'fate': 'uploaded', 'subject': 'bb', 'reporter': 1})
+            put('node.tx', 17.0, {'t': int(17e9), 'node': 1, 'msg_type': 'mbr', 'report_id': 'r1'})
+            put('ma.received', 90.0, {'t': int(90e9), 'report_id': 'r0', 'ma': 0, 'set_aside': None})
+            w.finish()
+        S = records.summarise(d)
+        self.assertEqual(S['windows'], [(0.0, 20.0)])
+        self.assertEqual(S['trigger'], 'stored')
+        self.assertEqual(len(S['verdicts']), 5)
+        self.assertTrue(all(v['cls'] == 'free' for v in S['verdicts']))
+        self.assertEqual(S['verdicts'][0]['corr'], records.corridor_of(600.0, 0.0))
+        ex = {k.split('|')[1]: v for k, v in S['exposure_s'].items()}
+        self.assertAlmostEqual(ex['locked'], 15.0)
+        self.assertAlmostEqual(ex['free'], 15.0)
+        self.assertEqual(sum(1 for r in S['reports'] if r['relay']), 1)
+        self.assertEqual(S['verdicts_fired'], 7)
+        self.assertEqual(len(S['ma']), 1)
+
+
 class Fill(unittest.TestCase):
     TABLE = """# head comment
 schema: v2xw/scms-run-expectations/1
