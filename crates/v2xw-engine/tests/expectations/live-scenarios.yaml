@@ -218,14 +218,14 @@ rows:
 - {id: PQH.psm-cert-share, runs: [real-world__matrix__pq-hybrid~ov-fix], check: band, expect: pass, fault: "scale:10",
    params: {metric: cert_bytes_share, dims: {msg_type: psm}, lo: 0.55, hi: 0.80},
    source: "IEEE 1609.2 SignedData: the signer certificate is part of the envelope, so its octets cannot exceed it; Σ over an SDU's pieces must count it once (FrameLayers::fragment apportions the split the same way)",
-   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+   verdict: fixed, test: "fragmentation.rs a_split_certificate_is_counted_once_across_its_pieces", measured: "311,600 / 454,860 = 0.685 (10-25: 1.37 = 2 pieces x 0.685) (2026-10-27, f4982788 release, which holds 28ba5f0a; selftest red under the fault)"}
 - {id: PQH.psm-overhead, runs: [real-world__matrix__pq-hybrid~ov-fix], check: band, expect: pass, fault: "scale:10",
    params: {metric: security_overhead, dims: {msg_type: psm}, lo: 0.94, hi: 0.96},
    source: "the fix moves only cert_bytes; envelope and air octets are unchanged (10-25: 0.95)",
-   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+   verdict: pass, measured: "454,860 / 478,420 = 0.951 (2026-10-27, f4982788 release, which holds 28ba5f0a; selftest red under the fault)"}
 - {id: PQH.arithmetic, runs: [real-world__matrix__pq-hybrid~ov-fix], check: sample_arithmetic, expect: pass, fault: successes-over-trials,
    source: "as SC.arithmetic on the fixed binary: every part-of-whole ratio in [0, 1]",
-   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+   verdict: pass, measured: "every part-of-whole ratio in [0, 1] (2026-10-27, f4982788 release, which holds 28ba5f0a; selftest red under the fault)"}
 # Finding 3 behind a flag (traffic.depart_speed_max, SUMO departSpeed="max"). Predictions
 # written before the runs, on p1-e4 (3,000 veh/h, 60 s): flag off on the fixed binary is
 # byte-identical to the release binary; flag on, the first 10 s mean speed rises from 9.0 to

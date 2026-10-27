@@ -1414,6 +1414,20 @@ The totals count each row as its own checklist records it, with the changes in �
     incl. C2Mb/C2MJ/SYM10b on the fixed binary, live-rsu FS0 for byte identity plus Sout
     and FSout, live-chains signal/pedestrian/seed-2/Craton2/CRLG, Studio s2-scms and the
     soak, 117 scenarios); `tests/live_rsu.rs` (ignored) has not been run.
+    **2026-10-27 (fix round 3, `scms-fix3-left.yaml`):** fixed at the cause, each with a
+    test: R-P2PCD-ASYM (factory pseudonyms came from the home ACA, so provider-b devices
+    cached provider-a's ACA unanchored and never asked for it; b<-a verified 33 -> 82,006)
+    and the KEM download bytes (a CRL fetch without the PDU layer is now the 1609.2.1
+    composite, 292 -> ~3,300 B; Uu +26.6 -> +178.7 kB). A SlowDrift onset test now covers
+    `onset_to_detection` (phase2.rs). Judged on the `f4982788` release, all pass: P-384
+    pricing (S384G ×8.67), R-KEMFILE (KEMF ratio 1.0), VOD `messages_checked` (45,055 ->
+    3,035), PSM cert bytes under pq-hybrid (0.685), SLH-DSA-128s `signed_past_end` (2,101),
+    certValidity (live-atk F4, 11 rows). PT30 full-cert share: a wrong expectation (a
+    cadence replay reproduces every signer choice). Left: Q's late `net.bytes` /
+    `proto.revocation` stamps (`Kernel::dispatch` stamps a step at the entity's finish,
+    which can lie past the backend tick's `now`; proposed: hold such records to the next
+    tick, which moves the SCMS record digests), the SLH-DSA sign queue (unbounded FIFO; no
+    published drop policy found), and why CHP raises reports received 327 -> 429.
 
 **Owner decisions**
 - **What the RA and PCA keep for each device** (§6 item 4): request records, cocoons,

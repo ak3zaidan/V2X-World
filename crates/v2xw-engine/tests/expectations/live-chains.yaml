@@ -1082,6 +1082,9 @@ rows:
   expect: ge
   value: 1800
   source: 'SLH-DSA-SHA2-128s signs in seconds on this SoC (2.72 G cycles on the Xeon reference), so every one of the ~2,100 BSMs r40 sends in 6 s is still signing at the end and is counted (2,101 node tasks in r40-slh)'
+  measured: '2101'
+  verdict: pass
+  measured_on: 2026-10-27, f4982788 release (0de68cac in); r40b2 counts 1
 - id: LC.FIX.slh-still-silent
   base: r40-slh
   variant: r40-slh2
@@ -1090,6 +1093,9 @@ rows:
   expect: same
   tol: 0.0
   source: 'the fix counts the loss; it does not change what goes on the air (0 BSMs)'
+  measured: 0 -> 0
+  verdict: pass
+  measured_on: 2026-10-27, r40-slh2 on the f4982788 release (0de68cac in) against the 938fb16a r40-slh
 # finding 4: the existing flag nodes.compute_tier high runs the CPU as the profile's cores
 - id: LC.OB.c2sw-high-wait
   base: r160-c2sw-rel

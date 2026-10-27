@@ -352,7 +352,12 @@ impl CredentialFactory {
     }
 
     /// A pseudonym certificate for `node`'s `(i, j)` carrying `lv`, valid from `from` (on
-    /// the run's wall clock), permitting `psids`.
+    /// the run's wall clock), permitting `psids`, from the ACA of the provider that
+    /// certifies `node` ([`CredentialFactory::provider_of`], as an RSU's application
+    /// certificate). Issuing every vehicle's factory pool from the home ACA put the home
+    /// provider's ACA, unanchored, in every other provider's devices' CA caches: under
+    /// `chain_file: home-provider` they then never asked for it by P2PCD and lost the
+    /// home provider's traffic as unknown signers (R-P2PCD-ASYM).
     ///
     /// # Errors
     /// `psids` is empty.
@@ -365,7 +370,11 @@ impl CredentialFactory {
         from: SimTime,
         psids: &[u64],
     ) -> Result<ImplicitKey, v2xw_sec::SecError> {
-        self.issuer.issue_factory(
+        let issuer = self
+            .providers
+            .get(self.provider_of(node))
+            .unwrap_or(&self.issuer);
+        issuer.issue_factory(
             FactoryProfile::Pseudonym { lv },
             &self.device_secret(node, b"obu"),
             i,

@@ -67,6 +67,9 @@ struct Run {
     step_ns: u64,
     /// SPaT and MAP receptions verified by a vehicle.
     spat_verified: u64,
+    /// Σ `node.p2pcd` `triggers` by the provider that certifies the node (deployment
+    /// order: provider-a, the home provider, first).
+    triggers_by_provider: BTreeMap<usize, u64>,
 }
 
 fn run(chain_file: &str) -> Run {
@@ -80,6 +83,15 @@ fn run(chain_file: &str) -> Run {
     let mut rx: BTreeMap<String, u64> = BTreeMap::new();
     let mut spat_verified = 0;
     let mut nodes = std::collections::BTreeSet::new();
+    let seed = engine.scenario().seed;
+    let provider_of = |node: u64| {
+        engine
+            .phase2()
+            .expect("an SCMS run")
+            .deployment()
+            .provider_of(seed, node)
+    };
+    let mut triggers_by_provider: BTreeMap<usize, u64> = BTreeMap::new();
     for (_, r) in rec.records() {
         let v: serde_json::Value = match r.channel {
             "node.tx" | "node.p2pcd" | "node.rx" => serde_json::from_slice(&r.json).expect("json"),
@@ -97,6 +109,9 @@ fn run(chain_file: &str) -> Run {
                 ));
             }
             "node.p2pcd" => {
+                if let (Some(node), Some(n)) = (v["node"].as_u64(), v["triggers"].as_u64()) {
+                    *triggers_by_provider.entry(provider_of(node)).or_insert(0) += n;
+                }
                 if let Some(o) = v.as_object() {
                     for (k, x) in o {
                         if let Some(n) = x.as_u64()
@@ -142,14 +157,16 @@ fn run(chain_file: &str) -> Run {
         phase,
         step_ns,
         spat_verified,
+        triggers_by_provider,
     };
     eprintln!(
-        "{chain_file}: on_air {} frames {} p2pcd {:?} rx {:?} spat/map verified {}",
+        "{chain_file}: on_air {} frames {} p2pcd {:?} rx {:?} spat/map verified {} triggers by provider {:?}",
         out.on_air,
         out.frames.len(),
         out.p2pcd,
         out.rx,
-        out.spat_verified
+        out.spat_verified,
+        out.triggers_by_provider
     );
     out
 }
@@ -190,6 +207,25 @@ fn an_unknown_provider_ca_is_learned_from_a_response_on_the_air() {
         r.spat_verified > 0,
         "after learning, no vehicle verified a unit's SPaT or MAP"
     );
+}
+
+/// R-P2PCD-ASYM (docs/validation/live-scms-2026-10-25.md finding 1): IEEE 1609.2 P2PCD is
+/// symmetric, so each provider's devices ask for the other provider's CA certificates.
+/// Every vehicle's factory pool used to be issued by the home provider's ACA, which put
+/// that ACA (unanchored) in every provider-b device's cache: provider-b devices then never
+/// raised a request for provider-a's issuer, and lost its traffic as unknown signers.
+/// Fault: `CredentialFactory::pseudonym` issuing from the home ACA again gives provider-b
+/// 0 triggers.
+#[test]
+fn both_providers_devices_ask_for_the_other_providers_issuer() {
+    let r = run("home-provider");
+    for k in [0usize, 1] {
+        assert!(
+            r.triggers_by_provider.get(&k).copied().unwrap_or(0) > 0,
+            "provider {k}'s devices never asked for the other provider's issuer: {:?}",
+            r.triggers_by_provider
+        );
+    }
 }
 
 #[test]

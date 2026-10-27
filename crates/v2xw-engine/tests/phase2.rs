@@ -225,6 +225,63 @@ fn the_run_report_onset_is_the_first_change_on_the_air() {
     assert_eq!(got, want, "onset_to_detection_ns is not detected - onset");
 }
 
+/// The onset test above cannot fail under its own fault: a ConstPos attacker's first change
+/// on the air is also its first falsified claim, so reading the onset from the 07-threats
+/// label gives the same instants (06-validation-summary §9 item 11). A SlowDrift attacker
+/// starts with a centimetre of drift, which changes the bytes on the air long before the
+/// label rule calls the claim falsified, so here the two onsets differ and
+/// `onset_to_detection_ns` must run from the first change. Faults that turn it red:
+/// `AttackerOutcome::onset_ns` (and the latency) read from `first_falsified`, or the
+/// latency taken from the first report whatever its time.
+#[test]
+fn a_slow_drift_onset_is_its_first_centimetre_not_its_first_falsified_claim() {
+    let mut s = rooted(
+        Scenario::load(scenarios().join("live-atk/share-constpos-l-10.yaml"))
+            .expect("the live-atk scenario loads"),
+    );
+    s.time.duration_s = 100.0;
+    for a in &mut s.threats.attackers {
+        a.id = "threat/attacker/legacy/SlowDrift".to_string();
+        a.schedule = Some(v2xw_engine::scenario::schema::DilationWindow {
+            from_s: 10.0,
+            to_s: 100.0,
+        });
+    }
+    let (report, _) = run(s);
+    let p = &report.phase2;
+    let mut want = Vec::new();
+    let mut ahead = 0;
+    for o in &p.attacker_outcomes {
+        println!(
+            "{} {}: onset {:?} falsified {:?} detected {:?} decided {:?}",
+            o.attack, o.node, o.onset_ns, o.first_falsified_ns, o.first_detected_ns, o.decided_ns
+        );
+        assert!(o.attack.ends_with("SlowDrift"), "{}", o.attack);
+        if let (Some(on), Some(f)) = (o.onset_ns, o.first_falsified_ns) {
+            assert!(on <= f, "attacker {}: onset {on} after its first lie {f}", o.node);
+            if on < f {
+                ahead += 1;
+            }
+        }
+        if let (Some(on), Some(d)) = (o.onset_ns, o.first_detected_ns) {
+            assert!(d >= on, "attacker {}: detected before its onset", o.node);
+            if o.decided_ns.is_some() {
+                want.push(d - on);
+            }
+        }
+    }
+    assert!(
+        ahead > 0,
+        "no SlowDrift attacker changed its bytes before its first falsified claim: the \
+         onset is read from the label rule"
+    );
+    let mut got = p.onset_to_detection_ns.clone();
+    got.sort_unstable();
+    want.sort_unstable();
+    assert!(!got.is_empty(), "no decided SlowDrift attacker was measured");
+    assert_eq!(got, want, "onset_to_detection_ns is not detected - first change");
+}
+
 /// Found by the SCMS effects round (docs/design/scms-real/testing/effects.md, rows
 /// base-concurrent-cases and att-spread): the backend opened one case per provider at a
 /// time, so under the pilots' manual review the n-th attacker decided in one shuffle

@@ -972,8 +972,19 @@ rows:
   expect: up
   source: the first message under a new pseudonym carries its certificate (audit db1-3 F2)
   measured: 0.100699 -> 0.100699
-  verdict: open
-  note: '2026-10-26 (938fb16a): node.tx certificate frames 5,489 of 54,500 in both L and PT30. Age changes
+  verdict: wrong-expectation
+  note: '2026-10-27 (f4982788 release, folder r1): explained, no defect. A replay of the 1 s cadence
+    (a certificate when none was attached for 1 s, and on the first frame after a change) on each
+    vehicle''s recorded BSM instants reproduces all 54,494 recorded signer choices in both runs, and
+    the same replay without the changes gives 5,480 certificates (and mismatches 4,249 recorded choices, so
+    the replay can tell a missing restart): the changes add 3 in L and 3 in
+    PT30. An age change lands on the cadence grid (30 s after a certificate frame). An expiry change
+    off the grid sends one certificate early and shifts the grid later by its offset f, which costs
+    one certificate before the vehicle''s last frame unless that frame is at least f past a grid
+    instant; at 180 s the last frames and the expiries both sit on whole wall seconds, so 33 of L''s
+    59 and 30 of PT30''s 54 off-grid expiry changes net 3. The share rises only with changes off the
+    grid whose shift survives to the vehicle''s last frame (tools/realworld/cert_cadence_replay.py).
+    2026-10-26 (938fb16a): node.tx certificate frames 5,489 of 54,500 in both L and PT30. Age changes
     are phase-locked with the cadence: both count from the device''s first fix, so the restarted cadence
     lands on a frame whose certificate was due anyway (repro, node 3: change 5.056 s, certificate 5.067
     s, then every 1.000 s as before). Expiry changes (54 against 59) should add one certificate where
@@ -1476,8 +1487,9 @@ rows:
   - 9.5
   source: 'the profile prices P-384 itself: 5,721 us against 645 us for P-256 verify (R5 B.5): x8.87'
   note: judged on the fixed binary of 2026-10-26 (runs folder r2), not on 938fb16a
-  measured: pending
-  verdict: pending
+  measured: 0.646249 -> 5.60063 (ratio 8.666)
+  verdict: pass
+  measured_on: 2026-10-27, f4982788 release (fixes 82533437 in)
 - id: LS.S384G.size
   base: LG
   variant: S384G
@@ -1489,8 +1501,9 @@ rows:
   - 37.5
   source: 'as S384: +32 B signature, +48 B on each certificate x0.1'
   note: judged on the fixed binary of 2026-10-26 (runs folder r2), not on 938fb16a
-  measured: pending
-  verdict: pending
+  measured: 213 -> 250 (delta 37)
+  verdict: pass
+  measured_on: 2026-10-27, f4982788 release (fixes 82533437 in)
 - id: LS.S384F.verify
   base: L
   variant: S384
@@ -1500,8 +1513,9 @@ rows:
   tol: 0.001
   source: 'the Craton2 profile publishes no P-384 figure: P-384 is charged as P-256 (flagged on the card)'
   note: judged on the fixed binary of 2026-10-26 (runs folder r2), not on 938fb16a
-  measured: pending
-  verdict: pending
+  measured: 0.422163 -> 0.422106
+  verdict: pass
+  measured_on: 2026-10-27, f4982788 release (fixes 82533437 in)
 - id: LS.KEMF.not-filed
   base: L
   variant: KEM
@@ -1514,8 +1528,9 @@ rows:
   source: 'R-KEMFILE fix: the SM-MBR filing rules do not depend on the KEM, so the US profile refuses
     about what it refuses classically (486c8cba: 255 -> 0)'
   note: judged on the fixed binary of 2026-10-26 (runs folder r2), not on 938fb16a
-  measured: pending
-  verdict: pending
+  measured: 255 -> 255 (ratio 1)
+  verdict: pass
+  measured_on: 2026-10-27, f4982788 release (fixes 82533437 in)
 - id: LS.KEMF.received
   base: L
   variant: KEM
@@ -1527,8 +1542,9 @@ rows:
   - 1.25
   source: 'R-KEMFILE fix: the MA receives about the classical number (486c8cba: 327 -> 582, +78 %)'
   note: judged on the fixed binary of 2026-10-26 (runs folder r2), not on 938fb16a
-  measured: pending
-  verdict: pending
+  measured: 327 -> 327 (ratio 1)
+  verdict: pass
+  measured_on: 2026-10-27, f4982788 release (fixes 82533437 in)
 - id: LS.VODF.checked
   base: L
   variant: VOD
@@ -1539,5 +1555,6 @@ rows:
   source: 'detection judges verified BSMs only (SM-MBR 2.3.1.2.1); on-demand leaves ~97 % unverified (486c8cba:
     45,071 -> 49,194)'
   note: judged on the fixed binary of 2026-10-26 (runs folder r2), not on 938fb16a
-  measured: pending
-  verdict: pending
+  measured: 45055 -> 3035
+  verdict: pass
+  measured_on: 2026-10-27, f4982788 release (fixes 82533437 in)
