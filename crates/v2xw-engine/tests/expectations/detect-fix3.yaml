@@ -34,6 +34,7 @@ runs:
   TO: {scenario: scenarios/detect-fix3/ts-base-orem.yaml, note: 'T0, OBUs state Orem 2.00 m'}
   L0: {scenario: scenarios/live-atk/base.yaml, note: attack-free, legacy-12 (default suite)}
   LT: {scenario: scenarios/detect-fix3/l-base-tampa.yaml, note: 'L0, OBUs state Tampa accuracy'}
+  TC: {scenario: scenarios/detect-fix3/ts-base-catch.yaml, note: 'T0 with CaTCh scoring'}
 rows:
 # --- item 1: the suite is selectable and its inputs are filled -------------------------
 - id: DF.sel.runs
@@ -347,5 +348,33 @@ rows:
   value: tsm.honest.fired_rate
   source: 'any detector worth hosting fires more on attacking messages than on honest ones'
   fault: 'tsm.attacking.fired_rate=0'
+  measured: pending
+  verdict: pending
+# --- added after T0, before TC ran: T0 found three point-tolerance checks firing on honest
+# traffic (positionPlausibility 2.2 %, intersection 2.0 %, boxIntersection 1.4 % of
+# messages): each compares a claimed point with a fixed 2 m (or box overlap) tolerance,
+# below the honest error (5.1 m at 95 %). CaTCh scores the overlap of the stated
+# confidence region instead, which Kamel et al. (WCNC 2019) introduced to tolerate sensor
+# error.
+- id: DF.catch.map
+  base: T0
+  variant: TC
+  area: metrics
+  measure: tsc.positionPlausibility.honest.fired_rate
+  expect: le_base_half
+  source: 'CaTCh scores the share of the stated confidence disc off the road, so an honest
+    claim 2-5 m off the lane centre inside a 5.1 m disc no longer scores 1 (WCNC 2019 §IV)'
+  fault: 'tsc.positionPlausibility.honest.fired_rate=1 on TC'
+  measured: pending
+  verdict: pending
+- id: DF.catch.intersection
+  base: T0
+  variant: TC
+  area: metrics
+  measure: tsc.intersection.honest.fired_rate
+  expect: le_base_half
+  source: 'CaTCh intersection: overlap of the two confidence discs against the proximity
+    range, not a point distance'
+  fault: 'tsc.intersection.honest.fired_rate=1 on TC'
   measured: pending
   verdict: pending

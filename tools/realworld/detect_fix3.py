@@ -84,7 +84,7 @@ def judge(row, base, var):
     m = row['measure']
     e = row['expect']
     v = var.get(m) if var else None
-    if e in ('same', 'ratio_band', 'ge_base'):
+    if e in ('same', 'ratio_band', 'ge_base', 'le_base_half'):
         b = base.get(m) if base else None
         if v is None or b is None:
             return None, None
@@ -92,6 +92,8 @@ def judge(row, base, var):
             return '%s vs %s' % (v, b), v == b
         if e == 'ge_base':
             return '%s vs %s' % (v, b), v >= b
+        if e == 'le_base_half':
+            return '%.4g vs %.4g' % (v, b), v <= 0.5 * b
         lo, hi = row['value']
         ratio = v / b if b else float('inf')
         return '%.3f (%s / %s)' % (ratio, v, b), lo <= ratio <= hi
