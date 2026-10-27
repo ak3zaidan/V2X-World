@@ -45,7 +45,7 @@ rows:
   base: as W11.xval.crossing
   variant: as W11.xval.crossing
   measure: oncoming conflicts, ours
-  expect: 0 (SUMO 0: oncoming is two vehicles on one lane in opposite directions; one-way lanes never hold it); geometric base 28
+  expect: '0 (SUMO 0: oncoming is two vehicles on one lane in opposite directions; one-way lanes never hold it); geometric base 28'
   source: SUMO SSM documentation, encounter type 20
   fault: as W11.xval.crossing
   measured: '0 on every case (geometric base 28 on grid@1800)'

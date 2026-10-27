@@ -236,7 +236,7 @@ rows:
   base: F
   variant: G
   area: cost
-  measure: events (engine classes), wall, peak memory (one binary each: F on fix1, G on fix2)
+  measure: 'events (engine classes), wall, peak memory (one binary each: F on fix1, G on fix2)'
   expect: 'events within +-1 % (the backend kernel is not in events_by_class, RA.events); peak memory within +10 % (one more week of files per account per boundary); wall reported, not judged across binaries'
   source: event accounting; RA repository size
   measured: 'events 883,278 both; peak F 68.2 MB against G 72.6 MB (+6.4 %); wall F 70.7 s, G 63.7 s (different binaries, not judged)'
@@ -325,7 +325,7 @@ rows:
   variant: G
   area: metrics
   measure: receiver_validation refused (all reasons)
-  expect: '0 refusals, as F: a pseudonym aca/1 issued chains to provider-b's root through an ACA certificate whose certIssuePermissions covers it, as the core ACA's does (both published SAESOL ACA certificates hold {all, 1, 0, app})'
+  expect: '0 refusals, as F: a pseudonym aca/1 issued chains to provider-b''s root through an ACA certificate whose certIssuePermissions covers it, as the core ACA''s does (both published SAESOL ACA certificates hold {all, 1, 0, app})'
   source: IEEE 1609.2 §5.1.2.4 (chain permissions); SAESOL chain files 2025-07-17, 2025-08-13
   measured: 'Gp 81,410 chain-permission-not-covered (aca/1 issued with no certIssuePermissions: tbs_for read the role from the name prefix aca-1); G 0'
   verdict: fixed
