@@ -1,0 +1,13 @@
+# P1-E6: p1-q4 with a cellular share of 0.0 (net.uu penetration; 0.8 in the base).
+schema: v2xw/scenario/1
+meta:
+  base: p1-q4.yaml
+  name: Paper 1 p1-e6-cell0
+  description: p1-q4 at cellular share 0.0.
+  tags: [paper1, experiment]
+net:
+  uu:
+    id: cellular/uu/cell-capacity-mm1
+    params:
+      isd_m: 500
+      penetration: 0.0

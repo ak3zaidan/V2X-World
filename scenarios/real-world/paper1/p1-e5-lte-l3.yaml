@@ -1,0 +1,11 @@
+# P1-E5: p1-e5-lte-l1 at 5400 veh/h.
+schema: v2xw/scenario/1
+meta:
+  base: p1-e5-lte-l1.yaml
+  name: Paper 1 p1-e5-lte-l3
+  description: P1-E5 LTE, l3 (5400 veh/h), 60 s.
+  tags: [paper1, experiment]
+actors:
+  vehicles:
+    demand:
+      rate_veh_per_h: 5400.0

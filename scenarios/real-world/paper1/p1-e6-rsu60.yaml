@@ -1,0 +1,10 @@
+# P1-E6: p1-q4 with 60 roadside units (30 in the base).
+schema: v2xw/scenario/1
+meta:
+  base: p1-q4.yaml
+  name: Paper 1 p1-e6-rsu60
+  description: p1-q4 with 60 RSUs.
+  tags: [paper1, experiment]
+actors:
+  rsu_placement:
+    count: 60
