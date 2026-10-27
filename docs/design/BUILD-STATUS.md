@@ -4036,6 +4036,33 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-27: SCMS fix round 3, RA and PKI track (scmsra, branch only)
+
+Expectations, runs and verdicts: `crates/v2xw-engine/tests/expectations/scms-fix3-ra.yaml`
+(scenarios in `scenarios/scms-fix3/`). Each row was written before its run; base and
+variant of one comparison use one binary.
+
+- **Held weeks** (3c40282a): a week that fell due before the device asks is generated at its
+  due instant off the run's kernel and served as held. Top-up 2,338 ms → 337 ms on
+  base.yaml; slow ACA from 30 s: 337 ms (was 16,412 ms with the lazy job).
+- **The weekly job at every boundary** (52432316, `ScmsRun::arm_boundary_jobs`): every
+  account adds the week entering `ra-maxPreloadTime` ([PRIMER] p.6). Backend bytes
+  959,355 → 1,720,133; top-up, refusals, checked and events unchanged; peak +6.4 %.
+- **RSU application certificates** list their applications' PSIDs: 299 SSM refusals → 0.
+- **R-PQUNSEC** (82533437) pinned in `pq_relay`.
+- **GOV.D1.acas** (52432316, 6869fb6a): provider-b's `aca/1` is certified, hosted and linked,
+  and gets half of each batch. A bug found on the way: its certificate had no
+  certIssuePermissions, giving 81,410 refusals; now 0.
+- **Tests:** the proto tests pass (15 binaries, including provider_runs and pregeneration),
+  as do rsu_certs, pq_relay, report_filing, cpm_metrics, security_lifecycle, scms_scale,
+  bsm_timing and phase2. Every new test went red under its fault, then the fault was
+  removed. The regression record digests were re-blessed; the frame digests did not
+  change. Determinism: G = G2.
+- **Open:** sensitivity_security backhaul test (5 ms line 272 against 264 messages: the
+  `.info` estimate for a week the boundary job is still generating);
+  backend_entities left-area test moved to the 2-week horizon, not yet run; the full
+  scms_knobs_runs binary not re-run on the third build; D1.slow-aca-h2 top-up count.
+
 ## 2026-10-26: four-round integration (FIXWAVE3, WAVE754, WAVE5BC, SCMS fix round 2 tests)
 
 One integrator replaced the four stalled ones. It worked in the main checkout and ran one heavy command at a time.
