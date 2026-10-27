@@ -58,8 +58,9 @@ still owed. It needs one unbroken run of about 5 h on a quiet machine.
   36 h into the run. The CAMP-EE SCMS-765 one-day shuffle compounds with low report
   volume: the quieter the region, the later the first decision can start.
 - **The RA's weekly job is one population batch.** It pre-generates a week of 20
-  certificates for accounts that did not ask, here about 7 vehicles that had left the map
-  (2.9 extra certificates per home device). That stays inside CAMP's 20 a week per
+  certificates for accounts that did not ask, here 146 weeks for about 124 home top-ups by
+  fleet share, so about 20 accounts that had left the map (2.9 extra certificates per home
+  device). That stays inside CAMP's 20 a week per
   account. It also means the PCA's weekly load follows the registered population, not the
   vehicles present.
 
