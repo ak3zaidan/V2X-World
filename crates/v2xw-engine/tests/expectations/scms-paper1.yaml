@@ -431,6 +431,10 @@ runs:
     scenario: scenarios/real-world/paper1/p1-ev-l1-both.yaml
     base: G-L1
     note: P1-E8 L1B (both disguises, every OBU locked) on this branch's binary
+  G-OFFT:
+    scenario: scenarios/real-world/paper1/p1-e5-dsrc-l1-offt.yaml
+    base: G-OFF
+    note: G-OFF with the free-class BSM clock refitted on Tampa alone
 rows:
 - id: P1.TS.rp-share0
   base: B
@@ -3408,4 +3412,39 @@ rows:
   expect: ratio
   band: [1.0, 1000.0]
   source: 'reported (P1.E8.l1b-cluster): cluster gains when the disguise makes attackers the only free class, which is uncrowded'
+  measured: pending
+- id: P1.GAP.offt-p50
+  base: G-OFFT
+  variant: G-OFFT
+  area: metrics
+  measure: x.e5.rsu.p50_ms
+  expect: band
+  band: [103.0, 107.0]
+  source: 'G-OFF matches Tampa''s interval shares (one 0.805 vs 0.759, two 0.106 vs 0.112, 3-5 0.066 vs 0.065) and its KS maximum moved to 97 ms: engine CDF 0.164 vs Tampa 0.276 at 100 ms, p50 108.5 vs 105 ms. The engine''s free class runs the pooled (mostly Orem) clock, drift p50 6 ms and 15 % of periods beyond +-25 ms; Tampa''s free IDs drift p50 3 ms with 91 % of periods within +-5 ms (tdrift.py). With Tampa''s clock the RSU gap median moves to Tampa''s 105 ms +-2'
+  measured: pending
+- id: P1.GAP.offt-ks-down
+  base: G-OFF
+  variant: G-OFFT
+  area: metrics
+  measure: x.e5.rsu.ks_tampa
+  expect: down
+  source: 'G-OFF matches Tampa''s interval shares (one 0.805 vs 0.759, two 0.106 vs 0.112, 3-5 0.066 vs 0.065) and its KS maximum moved to 97 ms: engine CDF 0.164 vs Tampa 0.276 at 100 ms, p50 108.5 vs 105 ms. The engine''s free class runs the pooled (mostly Orem) clock, drift p50 6 ms and 15 % of periods beyond +-25 ms; Tampa''s free IDs drift p50 3 ms with 91 % of periods within +-5 ms (tdrift.py). KS falls'
+  measured: pending
+- id: P1.GAP.offt-ks
+  base: G-OFFT
+  variant: G-OFFT
+  area: metrics
+  measure: x.e5.rsu.ks_tampa
+  expect: le
+  value: 0.0748
+  source: 'the pre-registered P1-E5 test (0.0747) on the off-channel run with Tampa''s own free clock. Predicted: may still fail by the RSU log''s own timestamp jitter (Tampa one-interval rx-gap IQR 11 ms against the secMark gap''s 4 ms), which no channel model makes'
+  measured: pending
+- id: P1.GAP.offt-shares
+  base: G-OFF
+  variant: G-OFFT
+  area: metrics
+  measure: x.e5.rsu.share_2int
+  expect: delta
+  band: [-0.02, 0.02]
+  source: 'the clock moves gaps inside an interval, not across: the two-interval share moves by under 0.02'
   measured: pending
