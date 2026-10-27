@@ -2669,6 +2669,30 @@ pub struct Messages {
     /// TS 103 324 §6.1.2.3, 100 ms unless set; at most `T_GenCpmMax`, 1 000 ms).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpm_interval_ms: Option<u64>,
+    /// Whether `T_GenCpm` follows the congestion control: the DCC's minimum gap between
+    /// transmissions, clamped to `[T_GenCpmMin, T_GenCpmMax]` = [100, 1 000] ms (ETSI TS
+    /// 103 324 V2.1.1 §6.1.2.1, Annex D; WP-12). Off unless set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpm_dcc_limited: Option<bool>,
+    /// `ObjectPerceptionQualityThreshold`, 0 to 15: a CPM carries only objects whose
+    /// §7.1.8.6 quality exceeds it, and states that quality (TS 103 324 §6.1.2.3, Table
+    /// F.1 recommends 3; WP-12). Not applied unless set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpm_quality_threshold: Option<u8>,
+    /// The most perceived objects one CPM carries, 1 to 255: the selection is ordered by
+    /// the §6.1.3.2 object utility and the lowest-utility objects beyond it wait for the
+    /// next event (WP-12). The ASN.1 bound 255, in perception order, unless set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpm_max_objects: Option<u32>,
+    /// Whether a vehicle running `denm` raises the C2C-CC traffic-condition DENMs (sudden
+    /// speed drop / dangerous end of queue, local slow down / traffic jam ahead; RS 2007
+    /// R1.6.10; WP-12). Off unless set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denm_traffic_condition: Option<bool>,
+    /// Whether a vehicle running `denm` raises the C2C-CC traction-loss DENM (adverse
+    /// weather, RS 2002 R1.6.10 §3.3; WP-12). Off unless set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denm_traction_loss: Option<bool>,
     /// The most path-history points a BSM's Part II (and a CAM's low-frequency container)
     /// carries: J2945/1's 15 unless set, at most J2735's 23; 0 sends none. The points are
     /// the Part II's bulk, about 8 to 9 bytes each.
@@ -2695,6 +2719,11 @@ impl Default for Messages {
             spat_interval_ms: None,
             map_interval_ms: None,
             cpm_interval_ms: None,
+            cpm_dcc_limited: None,
+            cpm_quality_threshold: None,
+            cpm_max_objects: None,
+            denm_traffic_condition: None,
+            denm_traction_loss: None,
             path_history_points: None,
         }
     }

@@ -102,6 +102,9 @@ pub struct CpmObject {
     pub sensor_ids: [u8; 3],
     /// How many of `sensor_ids` are set.
     pub sensor_count: u8,
+    /// Its `objectPerceptionQuality` as the CP service computed it (ETSI TS 103 324
+    /// §7.1.8.6), when it did; `None` keeps the σ mapping `15 − 5σ`.
+    pub quality: Option<u8>,
 }
 
 /// One sensor, in the simulator's units.
@@ -355,9 +358,10 @@ fn perceived_object(o: &CpmObject, reference: Vec3) -> PerceivedObject {
         object_dimension_y: Some(dimension(o.width_m)),
         object_dimension_x: Some(dimension(o.length_m)),
         object_age: Some(DeltaTimeMilliSecondSigned(o.age_ms.min(2_047) as i16)),
-        object_perception_quality: Some(ObjectPerceptionQuality(
-            (15.0 - o.sigma_m * 5.0).round().clamp(0.0, 15.0) as u8,
-        )),
+        object_perception_quality: Some(ObjectPerceptionQuality(o.quality.map_or_else(
+            || (15.0 - o.sigma_m * 5.0).round().clamp(0.0, 15.0) as u8,
+            |q| q.min(15),
+        ))),
         sensor_id_list: (!sensors.is_empty())
             .then(|| SequenceOfIdentifier1B(SequenceOf::from(sensors))),
         classification: Some(ObjectClassDescription(SequenceOf::from(vec![

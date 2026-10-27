@@ -92,6 +92,15 @@ pub struct VehicleBus {
     /// The speed limit of the road it is on, m/s, from its navigation map; zero when the
     /// map has none.
     pub speed_limit_mps: f64,
+    /// Whether its navigation map puts the road it is on outside the urban environment
+    /// (a motorway or trunk road); `None` when the map cannot say (a junction's interior,
+    /// a slip road, an unclassified road). The C2C-CC traffic-condition preconditions read
+    /// it ([`crate::events`]).
+    pub non_urban: Option<bool>,
+    /// Whether the anti-lock braking system is regulating: the vehicle is braking at the
+    /// tyre-road adhesion limit of a slippery surface (its own wheel-speed sensors; the
+    /// C2C-CC traction-loss trigger reads it, [`crate::events`]).
+    pub abs_active: bool,
 }
 
 impl VehicleBus {
@@ -321,6 +330,8 @@ mod tests {
             intent: None,
             heavy: false,
             speed_limit_mps: 13.4,
+            non_urban: None,
+            abs_active: false,
         }
     }
 

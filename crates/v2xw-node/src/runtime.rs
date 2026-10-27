@@ -455,6 +455,12 @@ pub struct NodeConfig {
     pub map_interval: Duration,
     /// The CPM generation interval `T_GenCpm` (network audit).
     pub cpm_interval: Duration,
+    /// The CP service's load behaviour: DCC-limited `T_GenCpm`, the quality threshold and
+    /// the utility cut (WP-12; [`crate::cpm::CpmConfig`], off by default).
+    pub cpm: crate::cpm::CpmConfig,
+    /// The optional DENM triggers (WP-12; [`crate::events::DenmTriggers`], off by
+    /// default).
+    pub denm_triggers: crate::events::DenmTriggers,
     /// The most path-history points a BSM or CAM carries (J2945/1's 15;
     /// `messages.path_history_points`).
     pub path_history_points: usize,
@@ -492,6 +498,8 @@ impl Default for NodeConfig {
             spat_interval: crate::generate::SPAT_INTERVAL,
             map_interval: crate::generate::MAP_INTERVAL,
             cpm_interval: crate::cpm::T_GEN_CPM,
+            cpm: crate::cpm::CpmConfig::default(),
+            denm_triggers: crate::events::DenmTriggers::default(),
             path_history_points: v2xw_msg::j2945::PathHistoryParams::J2945_1.max_points,
             etsi_facilities: false,
         }
@@ -668,7 +676,11 @@ impl ObuRuntime {
             schedule: MessageSchedule::new(config.services)
                 .with_params(config.cam_params, config.bsm_params)
                 .with_infra_intervals(config.spat_interval, config.map_interval),
-            events: crate::events::EventServices::default(),
+            events: {
+                let mut e = crate::events::EventServices::default();
+                e.set_triggers(config.denm_triggers, config.origin);
+                e
+            },
             state: NodeState::Active,
             received: Vec::new(),
             evidence_capacity: 256,
@@ -681,7 +693,9 @@ impl ObuRuntime {
             own: crate::vehicle::OwnVehicle::default()
                 .with_path_history_points(config.path_history_points),
             apps: None,
-            cpm: crate::cpm::CpmService::default().with_generation_interval(config.cpm_interval),
+            cpm: crate::cpm::CpmService::default()
+                .with_generation_interval(config.cpm_interval)
+                .with_config(config.cpm),
             security: NodeSecurity::new(config.wall, config.crypto_mode, config.psid),
             etsi: EtsiUperCodec::new(),
             service,
@@ -940,7 +954,14 @@ impl ObuRuntime {
         objects: Vec<crate::cpm::ObjectIn>,
         sensors: Vec<crate::cpm::SensorIn>,
     ) {
+        self.events.set_perceived(&objects);
         self.cpm.set_perception(objects, sensors);
+    }
+
+    /// The WP-12 DENM triggers this node runs; the engine runs the perception model for a
+    /// vehicle whose traffic-condition trigger reads its sensors.
+    pub fn denm_triggers(&self) -> crate::events::DenmTriggers {
+        self.events.triggers()
     }
 
     /// The collective perception service's state.
@@ -967,7 +988,8 @@ impl ObuRuntime {
         let objects = content
             .objects
             .iter()
-            .map(|o| {
+            .enumerate()
+            .map(|(k, o)| {
                 let mut sensor_ids = [0u8; 3];
                 let mut count = 0u8;
                 for bit in 1..8u8 {
@@ -995,6 +1017,7 @@ impl ObuRuntime {
                     sigma_m: o.sigma_m,
                     sensor_ids,
                     sensor_count: count,
+                    quality: content.quality.as_ref().and_then(|q| q.get(k).copied()),
                 }
             })
             .collect();
@@ -2070,7 +2093,9 @@ impl ObuRuntime {
             .due(believed, &self.belief, self.schedule.services(), station_id);
         // The collective perception service: a CPM when its generation rules say so.
         let cpm_content = if self.schedule.services().cpm {
-            self.cpm.due(believed)
+            // WP-12: under `messages.cpm_dcc_limited` the generation interval follows the
+            // DCC's gap; otherwise `due_under_dcc` ignores it.
+            self.cpm.due_under_dcc(believed, self.dcc.t_off)
         } else {
             None
         };

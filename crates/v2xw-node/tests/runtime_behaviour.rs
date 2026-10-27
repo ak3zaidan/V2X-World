@@ -1157,3 +1157,95 @@ fn the_first_bsm_under_a_new_pseudonym_carries_its_certificate() {
     }
     assert!(changes >= 5, "the run changed pseudonym {changes} times");
 }
+
+// -------------------------------------------------------------------------------------
+// WP-12: the CP service under the DCC, and a traction-loss DENM on the air
+// -------------------------------------------------------------------------------------
+
+/// A node on CAM + CPM, with the CP service's DCC limit `dcc_limited`.
+fn cpm_node(dcc_limited: bool) -> ObuRuntime {
+    let node = NodeId::new(1);
+    let mut rt = ObuRuntime::new(
+        node,
+        profile(v2xw_node::profiles::REFERENCE_OBU),
+        Box::new(VerifyAll::new()),
+        NodeConfig {
+            services: ServiceSet {
+                cam: true,
+                cpm: true,
+                ..ServiceSet::NONE
+            },
+            cpm: v2xw_node::cpm::CpmConfig {
+                dcc_limited,
+                ..v2xw_node::cpm::CpmConfig::default()
+            },
+            ..NodeConfig::default()
+        },
+        0,
+    );
+    rt.stores_mut().crl.set_period(100);
+    for j in 0..4 {
+        let c = credential(node, j);
+        let k = test_key(node, c.i_period, c.j_index);
+        rt.install_credential(c, &k).expect("installs");
+    }
+    rt.set_belief(belief(Vec3::ZERO, 10.0));
+    rt
+}
+
+/// How many CPMs a node puts on the air in 3 s at 100 ms steps under a DCC gap of
+/// `t_off_ms`, its sensors reporting a car that moves 5 m a step (due at every event).
+fn cpms_under_dcc(dcc_limited: bool, t_off_ms: u64) -> usize {
+    let mut rt = cpm_node(dcc_limited);
+    rt.set_dcc(
+        v2xw_msg::generator::DccState {
+            t_off: Duration::from_millis(t_off_ms),
+            cbr: Some(0.6),
+        },
+        0,
+    );
+    let reg = RngRegistry::new(7);
+    let mut n = 0;
+    for k in 0..30u64 {
+        let now = k * 100 * NS_PER_MS;
+        rt.set_perception(
+            vec![v2xw_node::cpm::ObjectIn {
+                id: 1,
+                pos: Vec3::new(20.0 + 5.0 * k as f64, 0.0, 0.0),
+                vel: Vec3::new(50.0, 0.0, 0.0),
+                heading_rad: 0.0,
+                length_m: 4.5,
+                width_m: 1.8,
+                kind: v2xw_node::cpm::ObjectKind::Vehicle,
+                sigma_m: 0.3,
+                measured_at: now,
+                first_seen: 0,
+                sensors: 1 << 1,
+                detection_confidence: 0.95,
+            }],
+            Vec::new(),
+        );
+        let mut ctx = NodeRuntimeCtx::new(now, &reg);
+        let o = rt.step(&mut ctx, Vec::new(), 0.0);
+        n += o
+            .transmissions
+            .iter()
+            .filter(|t| t.msg_type == MsgType::Cpm)
+            .count();
+    }
+    n
+}
+
+/// ETSI TS 103 324 §6.1.2.1 and Annex D through the runtime (WP-12): with
+/// `messages.cpm_dcc_limited` a 300 ms DCC gap makes the CPM rate 3.3 Hz; without it, or
+/// on an unrestricted channel, it stays at the 10 Hz generation events. Fault: the
+/// runtime handing the CP service a zero gap leaves the limited node at 30 CPMs.
+#[test]
+fn the_cpm_rate_follows_a_300_ms_dcc_interval() {
+    let limited = cpms_under_dcc(true, 300);
+    let free = cpms_under_dcc(true, 0);
+    let ignoring = cpms_under_dcc(false, 300);
+    assert_eq!(free, 30, "an unrestricted channel: every 100 ms event");
+    assert_eq!(limited, 10, "a 300 ms DCC interval: one CPM every 300 ms");
+    assert_eq!(ignoring, 30, "the knob off: the DCC does not reach the CP service");
+}
