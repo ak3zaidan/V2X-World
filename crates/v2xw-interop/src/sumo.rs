@@ -502,6 +502,7 @@ impl SumoMobility {
                         .strip_prefix("v2xw_")
                         .and_then(|n| n.parse().ok())
                         .unwrap_or((1u64 << 40) + u64::from(id.index())),
+                    requested: None,
                 });
             }
             self.kin.insert(id, kin);

@@ -298,6 +298,14 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the rerouting period",
     },
+    // A share: 0 is nobody, 1 everybody (SUMO device.rerouting.probability).
+    Bound {
+        path: "traffic.reroute_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the share of drivers who re-route",
+    },
     Bound {
         path: "traffic.signals.min_green_s",
         lo: 2.0,
@@ -697,6 +705,21 @@ pub static BOUNDS: &[Bound] = &[
         hi: 15.0,
         exclusive_lo: false,
         what: "the VRU device's antenna height",
+    },
+    // A measured antenna's mount rotation (WP-09; Veins SampledAntenna1D's rotation).
+    Bound {
+        path: "radio.devices.obu.sampled_pattern.rotation_deg",
+        lo: -360.0,
+        hi: 360.0,
+        exclusive_lo: false,
+        what: "the sampled antenna's mount rotation",
+    },
+    Bound {
+        path: "radio.devices.obu.sampled_pattern.rotation_jitter_deg",
+        lo: 0.0,
+        hi: 180.0,
+        exclusive_lo: false,
+        what: "the sampled antenna's per-vehicle rotation spread",
     },
     Bound {
         path: "radio.range.margin_db",
@@ -1417,6 +1440,39 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the permitted left-turn critical gap",
     },
+    // WP-04. Field critical-gap spreads run cv 0.15-0.2 (SUMO P1); 0.5 is past any.
+    Bound {
+        path: "traffic.critical_gap_cv",
+        lo: 0.0,
+        hi: 0.5,
+        exclusive_lo: false,
+        what: "the critical-gap coefficient of variation",
+    },
+    // 0 is off; SUMO's default is 180 s, and an hour is past any junction wait.
+    Bound {
+        path: "traffic.time_to_impatience_s",
+        lo: 0.0,
+        hi: 3600.0,
+        exclusive_lo: false,
+        what: "the time to full impatience",
+    },
+    // A floor of 1 is no impatience; below 0.3 the HCM 4.5 s headway would fall under the
+    // 1.4 s a car needs to clear a lane.
+    Bound {
+        path: "traffic.impatience_gap_floor",
+        lo: 0.3,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the critical-gap floor at full impatience",
+    },
+    // The HCM credits 2 sneakers per cycle; 4 is past what a junction mouth holds.
+    Bound {
+        path: "traffic.permissive_sneakers",
+        lo: 0.0,
+        hi: 4.0,
+        exclusive_lo: false,
+        what: "the sneakers per cycle",
+    },
     // 0 turns the turn-speed limit off; 10 m/s² is about 1 g, past any tyre's grip
     // (SUMO's default is 5.5).
     Bound {
@@ -1539,6 +1595,55 @@ pub static BOUNDS: &[Bound] = &[
         hi: 1.0,
         exclusive_lo: false,
         what: "the share of drivers who run reds",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.violations.red_run_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the share of red-light runners",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.violations.red_run_tolerance_mean_s",
+        lo: 0.0,
+        hi: 4.0,
+        exclusive_lo: false,
+        what: "the mean red-light tolerance",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.violations.red_run_tolerance_max_s",
+        lo: 0.0,
+        hi: 16.0,
+        exclusive_lo: false,
+        what: "the longest red-light tolerance",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.violations.amber_tail_max_s",
+        lo: 5.5,
+        hi: 12.0,
+        exclusive_lo: false,
+        what: "the longest amber threshold",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.violations.fail_to_yield_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the failure-to-yield probability",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.violations.ignore_foe_speed_mps",
+        lo: 0.0,
+        hi: 40.0,
+        exclusive_lo: false,
+        what: "the fastest foe ignored",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.violations.crash_clearance_s",
+        lo: 0.0,
+        hi: 86400.0,
+        exclusive_lo: false,
+        what: "the crash clearance time",
     },
     // The engine clamps each driver's draw to 0.3-3 s (Taoka 1989's lognormal: median
     // 1.1-1.2 s); a median outside that would be clamped flat.
@@ -2569,6 +2674,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                staggered by 0-5 ms. Unknown families, ids and values are refused.",
     },
     KeyStatus {
+        path: "radio.devices.obu.sampled_pattern",
+        status: Status::Wired,
+        note: "A measured antenna pattern every vehicle carries instead of obu.antenna_pattern: \
+               a CSV table of azimuth (optionally elevation) gains in dB relative to the \
+               antenna gain, interpolated between samples, with an optional fixed and \
+               per-vehicle random mount rotation (Eckhoff et al., IEEE VNC 2016). Unset, \
+               the default, changes nothing; a table of zeros is the isotropic antenna.",
+    },
+    KeyStatus {
         path: "radio.devices",
         status: Status::Wired,
         note: "The radio each kind of node carries. Transmit power is the conducted power \
@@ -3314,8 +3428,17 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                enum 0-19, Kamel et al. ICC 2020) or 'veremi-1' (bit codes 1/2/4/8/16, \
                Van der Heijden et al. 2018), opts.slice_s the slice length in seconds \
                (default 3600, F2MD VeReMiSliceTime; 1 to 604800); naming it records the \
-               BSM's position accuracy and acceleration on node.tx. Naming any exporter \
-               makes the run record.",
+               BSM's position accuracy and acceleration on node.tx. The SUMO-format \
+               exporters (WP-06) write SUMO's own output files from a full recording: \
+               'sumo-fcd', 'sumo-tripinfo' (opts.write_unfinished, default false), \
+               'sumo-edgedata', 'sumo-lanedata', 'sumo-summary', 'sumo-e1' \
+               (opts.detectors [{id, lane, pos_m}], lane a SUMO lane id) and 'sumo-e2' \
+               ([{id, lane, pos_m, length_m}], opts.time_threshold_s 1 s, \
+               speed_threshold_mps 1.39 m/s, jam_threshold_m 10 m: SUMO's defaults); \
+               each takes opts.period_s (seconds; every step for fcd and summary, the \
+               whole run otherwise) and opts.precision (decimals, default 2, SUMO \
+               --precision). Naming one records gt.spawn and gt.despawn. Naming any \
+               exporter makes the run record.",
     },
     KeyStatus {
         path: "events",
@@ -3524,6 +3647,31 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Heavy vehicles add the HCM 6th ed. Exhibit 20-11 heavy-vehicle critical gap and follow-up terms.",
     },
     KeyStatus {
+        path: "traffic.critical_gap_cv",
+        status: Status::Wired,
+        note: "Each driver's critical gap is lognormal around the HCM value with this coefficient of variation.",
+    },
+    KeyStatus {
+        path: "traffic.time_to_impatience_s",
+        status: Status::Wired,
+        note: "A yielding driver's critical gap falls with standing time, to its floor after this many seconds (SUMO 180 s).",
+    },
+    KeyStatus {
+        path: "traffic.impatience_gap_floor",
+        status: Status::Wired,
+        note: "The critical gap at full impatience as a share of the driver's own.",
+    },
+    KeyStatus {
+        path: "traffic.impatience_foe_braking",
+        status: Status::Wired,
+        note: "An impatient driver judges a foe as if it would brake at impatience times 4.5 m/s².",
+    },
+    KeyStatus {
+        path: "traffic.permissive_sneakers",
+        status: Status::Wired,
+        note: "Permitted left turners per lane that complete the turn in the amber ending a permissive green (HCM: 2).",
+    },
+    KeyStatus {
         path: "traffic.standing_leader_stop",
         status: Status::Wired,
         note: "A driver closing on a standing vehicle brakes to stop at its standstill gap at constant deceleration, as at a stop line.",
@@ -3532,6 +3680,21 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "traffic.lane_bend_speed",
         status: Status::Wired,
         note: "The bends of a through lane's polyline get the turn-speed cap a junction connector has.",
+    },
+    KeyStatus {
+        path: "traffic.depart_at_speed",
+        status: Status::Wired,
+        note: "Vehicles entering at the map's edge are put on at the lane's start at their desired speed, capped by the safe speed to the leader and the lane end (SUMO departSpeed).",
+    },
+    KeyStatus {
+        path: "traffic.reroute_share",
+        status: Status::Wired,
+        note: "The share of drivers who re-route on information, drawn per driver (SUMO device.rerouting.probability).",
+    },
+    KeyStatus {
+        path: "traffic.reroute_source",
+        status: Status::Wired,
+        note: "navigation: network-wide smoothed speeds and every closure; v2x: only received and verified DENM/TIM hazard warnings on the route.",
     },
     KeyStatus {
         path: "traffic.lc_strategic",
@@ -3574,6 +3737,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "The share of drivers who go on an amber inside their dilemma-zone threshold \
                without checking they reach the line before the red, so some enter on red. \
                Microscopic engine only. Needs realism other than identical.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.violations",
+        status: Status::Wired,
+        note: "Rule violations and crash states (WP-08): red-light running after the red onset \
+               (Bonneson et al., TTI 0-4196-P1), amber running beyond the dilemma zone, failure \
+               to yield (SUMO jmIgnoreFoeProb/Speed semantics) and collisions that stop both \
+               vehicles and block the lane until cleared. Off by default. Microscopic engine \
+               only; needs realism other than identical.",
     },
     KeyStatus {
         path: "actors.vehicles.drivers.start_reaction_s",
@@ -3983,6 +4155,14 @@ fn unreachable_keys(s: &Scenario, e: &mut Vec<ScenarioError>) {
         {
             e.push(conflict(&field, why));
         }
+        if crate::sumo_outputs::is_sumo(&x.id)
+            && let Err(crate::EngineError::Scenario(ScenarioError::Conflict {
+                field,
+                conflict: why,
+            })) = crate::export::sumo_options_of(x, i)
+        {
+            e.push(conflict(&field, why));
+        }
     }
 
     // The fragmenter (`crate::frag`): the model and its parameters resolve against its
@@ -4127,6 +4307,22 @@ fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             bounded_at(&path, &path, v, e);
         }
     }
+    // WP-09: a measured antenna table must parse, and its rotations sit in their bounds.
+    if let Some(sp) = &s.radio.devices.obu.sampled_pattern {
+        if let Err(why) = v2xw_radio::antenna::SampledAntenna::from_csv(&sp.csv) {
+            e.push(conflict(
+                "radio.devices.obu.sampled_pattern.csv",
+                format!("is not an antenna pattern table: {why}"),
+            ));
+        }
+        for (leaf, v) in [
+            ("rotation_deg", sp.rotation_deg),
+            ("rotation_jitter_deg", sp.rotation_jitter_deg),
+        ] {
+            let path = format!("radio.devices.obu.sampled_pattern.{leaf}");
+            bounded_at(&path, &path, v, e);
+        }
+    }
     let sl = &s.radio.sidelink;
     for (leaf, v) in [
         ("candidate_percent", sl.candidate_percent.map(f64::from)),
@@ -4148,6 +4344,7 @@ fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
         PropagationChoice::Tr37885 => "propagation/tr37885",
         PropagationChoice::Geometric => "propagation/v2v-urban-geometric",
         PropagationChoice::WinnerB1(..) => "propagation/winner-plus-b1",
+        PropagationChoice::TwoRayInterference(_) => "propagation/two-ray-interference",
     };
 
     if c.path_loss_exponent.is_some() && !matches!(law, PropagationChoice::LogDistance(..)) {
@@ -4160,7 +4357,9 @@ fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
     }
     let no_shadow = matches!(
         law,
-        PropagationChoice::FreeSpace | PropagationChoice::TwoRayGround
+        PropagationChoice::FreeSpace
+            | PropagationChoice::TwoRayGround
+            | PropagationChoice::TwoRayInterference(_)
     );
     for (leaf, set) in [
         ("shadowing_sigma_db", c.shadowing_sigma_db.is_some()),
@@ -4376,6 +4575,13 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
         for (path, v) in [
             ("traffic.critical_gap_factor", t.critical_gap_factor),
             ("traffic.permitted_left_gap_s", t.permitted_left_gap_s),
+            ("traffic.critical_gap_cv", t.critical_gap_cv),
+            ("traffic.time_to_impatience_s", t.time_to_impatience_s),
+            ("traffic.impatience_gap_floor", t.impatience_gap_floor),
+            (
+                "traffic.permissive_sneakers",
+                t.permissive_sneakers.map(f64::from),
+            ),
             ("traffic.turn_lateral_accel_mps2", t.turn_lateral_accel_mps2),
             ("traffic.turn_curve_window_m", t.turn_curve_window_m),
             ("traffic.lc_strategic", t.lc_strategic),
@@ -4438,8 +4644,16 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             || t.lc_speed_gain.is_some()
             || t.lc_keep_right.is_some()
             || t.heavy_vehicle_gap_terms.is_some()
+            || t.critical_gap_cv.is_some()
+            || t.time_to_impatience_s.is_some()
+            || t.impatience_gap_floor.is_some()
+            || t.impatience_foe_braking.is_some()
+            || t.permissive_sneakers.is_some()
             || t.standing_leader_stop.is_some()
             || t.lane_bend_speed.is_some()
+            || t.depart_at_speed.is_some()
+            || t.reroute_share.is_some()
+            || t.reroute_source.is_some()
             || t.kerbside.is_some();
         // The LC2013 factors act only on lane changes, and the strategic one only on the
         // changes a route needs.
@@ -5597,6 +5811,22 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
             t.reroute_period_s,
             e,
         );
+        if let Some(share) = t.reroute_share {
+            bounded_at("traffic.reroute_share", "traffic.reroute_share", share, e);
+        }
+        for (path, set) in [
+            ("traffic.reroute_share", t.reroute_share.is_some()),
+            ("traffic.reroute_source", t.reroute_source.is_some()),
+        ] {
+            if set && !t.dynamic_rerouting {
+                e.push(conflict(
+                    path,
+                    "decides who re-routes and on what, and traffic.dynamic_rerouting is \
+                     false"
+                        .to_string(),
+                ));
+            }
+        }
         if t.reroute_period_s > 0.0 && t.reroute_period_s < 10.0 {
             e.push(conflict(
                 "traffic.reroute_period_s",

@@ -308,6 +308,19 @@ pub struct JunctionView {
     /// How many major-stream lanes the conflicting flow has, which chooses the HCM
     /// critical-gap column (04-models.md §2.3: `< 4 lanes` or `>= 4 lanes`).
     pub major_lanes: u8,
+    /// How long the ego has been standing, seconds (0 while it moves): the waiting time
+    /// junction impatience reads
+    /// ([`crate::intersection::gap_acceptance::JunctionPatience`]).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub waiting_s: f64,
+    /// The ego driver's own standard normal for the per-driver critical gap (0 is the
+    /// table's mean driver).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub gap_z: f64,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 /// One other claimant on the same junction.
@@ -535,6 +548,20 @@ pub struct ActorSpawn {
     pub driver: DriverProfile,
     /// The demand-stream position it came from.
     pub seq: u64,
+    /// When its trip asked to depart, where the provider knows it: the spawn's `t` minus
+    /// this is SUMO's `departDelay` (a trip that waited for room at its origin). Not
+    /// serialised, so an update's bytes are what they were before the field existed.
+    #[serde(skip)]
+    pub requested: Option<SimTime>,
+}
+
+impl ActorSpawn {
+    /// The same spawn, naming when its trip asked to depart.
+    #[must_use]
+    pub fn with_requested(mut self, t: SimTime) -> Self {
+        self.requested = Some(t);
+        self
+    }
 }
 
 /// Why an actor left the simulation.
@@ -549,6 +576,9 @@ pub enum DespawnCause {
     Commanded,
     /// It exceeded its maximum lifetime, which bounds a run's memory.
     LifetimeExpired,
+    /// It crashed and, once the crash had stood its clearance time, was cleared from the
+    /// road ([`crate::drivers::ViolationParams::crashes`]).
+    Collision,
 }
 
 /// The live state of one signal controller, as the mobility step publishes it.
@@ -682,6 +712,17 @@ pub enum MobilityCommand {
         lane: LaneId,
         /// `true` closes it.
         closed: bool,
+    },
+    /// The actor's on-board unit received and verified a hazard warning (a DENM or TIM
+    /// for a blocked lane) placing the event on `lane`: what this driver now *believes*,
+    /// not ground truth. Under [`crate::routing::dynamic::RerouteSource::V2x`] a driver
+    /// who re-routes on information avoids the lane from the next step; otherwise it is
+    /// kept and has no effect.
+    HazardHeard {
+        /// The receiving actor.
+        actor: ActorId,
+        /// The lane the warning's event position maps to on the receiver's map.
+        lane: LaneId,
     },
     /// Put a specific trip on the road, bypassing the demand model.
     Spawn(TripRequest),

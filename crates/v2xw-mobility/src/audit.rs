@@ -134,6 +134,61 @@ pub struct AuditActor {
     /// stop, a taxi, a delivery. A vehicle standing at the kerb on purpose is not gridlock,
     /// so [`Check::Standstill`] does not count it.
     pub kerbside: Option<crate::kerbside::KerbRole>,
+    /// The violations this vehicle is committing on purpose ([`intent`] bits; zero for a
+    /// lawful vehicle). A tagged violation is behaviour the run asked for
+    /// ([`crate::drivers::ViolationParams`]) and is counted in [`AuditStats`]; the same
+    /// event untagged is still a model defect and is flagged.
+    pub intent: u8,
+}
+
+/// The violation tags an [`AuditActor`] carries ([`AuditActor::intent`]).
+pub mod intent {
+    /// Entering on red within the driver's tolerance.
+    pub const RED_RUN: u8 = 1;
+    /// Going on an amber from beyond the dilemma zone's far edge.
+    pub const AMBER_RUN: u8 = 2;
+    /// Entering a junction ignoring a slow foe it had to give way to.
+    pub const FOE_IGNORED: u8 = 4;
+    /// Standing in a crash that a tagged violation caused.
+    pub const CRASHED: u8 = 8;
+    /// Any of the junction violations.
+    pub const JUNCTION: u8 = RED_RUN | AMBER_RUN | FOE_IGNORED;
+}
+
+/// The pairs of `actors` whose footprints (shrunk by `shrink` metres each side) intersect,
+/// on the same level, as indices in ascending order: what [`Check::Overlap`] counts, and
+/// what the engine resolves into crash states.
+pub fn overlapping_pairs(actors: &[AuditActor], shrink: f64) -> Vec<(usize, usize)> {
+    let boxes: Vec<Obb> = actors.iter().map(|a| Obb::of(a, shrink)).collect();
+    let cell = 12.0;
+    let mut grid: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
+    for (i, b) in boxes.iter().enumerate() {
+        let key = (
+            (b.centre.0 / cell).floor() as i64,
+            (b.centre.1 / cell).floor() as i64,
+        );
+        grid.entry(key).or_default().push(i);
+    }
+    let mut pairs: BTreeSet<(usize, usize)> = BTreeSet::new();
+    for (&(cx, cy), members) in &grid {
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                let Some(others) = grid.get(&(cx + dx, cy + dy)) else {
+                    continue;
+                };
+                for &i in members {
+                    for &j in others {
+                        // Two levels (a tunnel under a street) do not collide.
+                        let apart = (actors[i].pos.z - actors[j].pos.z).abs() > UNDERGROUND_Z_M;
+                        if i < j && !apart && boxes[i].intersects(&boxes[j]) {
+                            pairs.insert((i, j));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    pairs.into_iter().collect()
 }
 
 /// One pedestrian as the auditor sees it.
@@ -483,6 +538,21 @@ pub struct AuditStats {
     pub pedestrian_near_misses: u64,
     /// The smallest vehicle-pedestrian time to collision seen, seconds (0 when none).
     pub min_pedestrian_ttc_s: f64,
+    /// Junctions entered on red by a driver tagged as running it
+    /// ([`intent::RED_RUN`]): behaviour the run asked for, not [`Check::RedEntry`].
+    pub intended_red_entries: u64,
+    /// Junctions entered on an amber from beyond the dilemma zone by a tagged driver
+    /// ([`intent::AMBER_RUN`]), not [`Check::AmberEntry`].
+    pub intended_amber_entries: u64,
+    /// Conflict-zone co-occupancies with a tagged violator in them, not
+    /// [`Check::ConflictZone`].
+    pub violation_conflicts: u64,
+    /// Vehicle-steps of two vehicles overlapping in a crash a tagged violation caused, not
+    /// [`Check::Overlap`].
+    pub crash_overlap_steps: u64,
+    /// Crashed vehicles cleared from the road ([`DespawnCause::Collision`] after a tagged
+    /// crash), not [`Check::MidRoadDespawn`].
+    pub crashes_cleared: u64,
     /// Sum of speeds, for the mean.
     #[serde(skip)]
     speed_sum: f64,
@@ -746,36 +816,14 @@ impl TrafficAuditor {
     fn check_overlaps(&mut self, t: SimTime, actors: &[AuditActor]) {
         let shrink = self.params.footprint_shrink_m;
         let boxes: Vec<Obb> = actors.iter().map(|a| Obb::of(a, shrink)).collect();
-        let cell = 12.0;
-        let mut grid: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
-        for (i, b) in boxes.iter().enumerate() {
-            let key = (
-                (b.centre.0 / cell).floor() as i64,
-                (b.centre.1 / cell).floor() as i64,
-            );
-            grid.entry(key).or_default().push(i);
-        }
-        let mut pairs: BTreeSet<(usize, usize)> = BTreeSet::new();
-        for (&(cx, cy), members) in &grid {
-            for dx in -1..=1 {
-                for dy in -1..=1 {
-                    let Some(others) = grid.get(&(cx + dx, cy + dy)) else {
-                        continue;
-                    };
-                    for &i in members {
-                        for &j in others {
-                            // Two levels (a tunnel under a street) do not collide.
-                            let apart = (actors[i].pos.z - actors[j].pos.z).abs() > UNDERGROUND_Z_M;
-                            if i < j && !apart && boxes[i].intersects(&boxes[j]) {
-                                pairs.insert((i, j));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        for (i, j) in pairs {
+        for (i, j) in overlapping_pairs(actors, shrink) {
             let (a, b) = (&actors[i], &actors[j]);
+            // The two vehicles of a crash a tagged violation caused stand where they
+            // collided: behaviour, counted, not a defect.
+            if (a.intent | b.intent) & intent::CRASHED != 0 {
+                self.stats.crash_overlap_steps += 1;
+                continue;
+            }
             let ex = Self::example(
                 Check::Overlap,
                 t,
@@ -1081,6 +1129,9 @@ impl TrafficAuditor {
         for (fi, li, gap) in found {
             let f = &actors[fi];
             let l = &actors[li];
+            if (f.intent | l.intent) & intent::CRASHED != 0 {
+                continue;
+            }
             self.stats.min_gap_m = self.stats.min_gap_m.min(gap);
             if gap < f.min_gap_m - self.params.gap_tolerance_m {
                 let ex = Self::example(
@@ -1189,9 +1240,14 @@ impl TrafficAuditor {
                         a,
                         None,
                         format!(
-                            "junction {}, body centre {:.1} m outside its area",
+                            "junction {}, body centre {:.1} m outside its area ({} {:.1} m \
+                             long, front {:.1} m into the {:.1} m connector)",
                             j.id.index(),
-                            math::sqrt(ring_distance_sq_2d(&j.shape, c))
+                            math::sqrt(ring_distance_sq_2d(&j.shape, c)),
+                            a.class,
+                            a.length_m,
+                            a.s_m,
+                            lane.length_m
                         ),
                     );
                     self.flag(Check::OutsideJunction, ex);
@@ -1347,6 +1403,9 @@ impl TrafficAuditor {
                 {
                     self.stats.right_turns_on_red += 1;
                 }
+                SignalState::Red | SignalState::RedAmber if a.intent & intent::RED_RUN != 0 => {
+                    self.stats.intended_red_entries += 1;
+                }
                 SignalState::Red | SignalState::RedAmber => {
                     let ex = Self::example(
                         Check::RedEntry,
@@ -1369,7 +1428,12 @@ impl TrafficAuditor {
                     if let Some((_, gap, v)) = self.amber_onset.get(&a.actor).copied() {
                         let stopping = v * v / (2.0 * self.params.amber_decel_mps2);
                         let tti = if v > 0.0 { gap / v } else { f64::INFINITY };
-                        if stopping + 0.5 < gap && tti >= self.params.amber_go_tti_max_s {
+                        if stopping + 0.5 < gap
+                            && tti >= self.params.amber_go_tti_max_s
+                            && a.intent & intent::AMBER_RUN != 0
+                        {
+                            self.stats.intended_amber_entries += 1;
+                        } else if stopping + 0.5 < gap && tti >= self.params.amber_go_tti_max_s {
                             let ex = Self::example(
                                 Check::AmberEntry,
                                 t1,
@@ -1457,6 +1521,13 @@ impl TrafficAuditor {
                                 if !reported.insert(key) {
                                     continue;
                                 }
+                                if (actors[i].intent | actors[k].intent)
+                                    & (intent::JUNCTION | intent::CRASHED)
+                                    != 0
+                                {
+                                    self.stats.violation_conflicts += 1;
+                                    continue;
+                                }
                                 let ex = Self::example(
                                     Check::ConflictZone,
                                     t,
@@ -1486,6 +1557,10 @@ impl TrafficAuditor {
 
     fn check_kinematics(&mut self, t: SimTime, dt: f64, actors: &[AuditActor]) {
         for a in actors {
+            // A tagged crash stops a vehicle in one step: that is the crash.
+            if a.intent & intent::CRASHED != 0 {
+                continue;
+            }
             if a.accel_mps2 > a.max_accel_mps2 + 1e-6 || a.accel_mps2 < -self.params.max_decel_mps2
             {
                 let ex = Self::example(
@@ -1638,7 +1713,7 @@ impl TrafficAuditor {
         let present: BTreeSet<ActorId> = actors.iter().map(|a| a.actor).collect();
         self.standing_since.retain(|a, _| present.contains(a));
         for a in actors {
-            if a.speed_mps > 0.1 || a.kerbside.is_some() {
+            if a.speed_mps > 0.1 || a.kerbside.is_some() || a.intent & intent::CRASHED != 0 {
                 self.standing_since.remove(&a.actor);
                 continue;
             }
@@ -1667,6 +1742,10 @@ impl TrafficAuditor {
             let Some(p) = self.prev.get(actor).copied() else {
                 continue;
             };
+            if *cause == DespawnCause::Collision && p.intent & intent::CRASHED != 0 {
+                self.stats.crashes_cleared += 1;
+                continue;
+            }
             let lane = world.lane(p.lane);
             let ex = Self::example(
                 Check::MidRoadDespawn,
@@ -1978,6 +2057,7 @@ mod tests {
             min_path_radius_m: crate::VehicleClass::Passenger.min_path_radius_m(),
             lane_position_m: 0.0,
             kerbside: None,
+            intent: 0,
         }
     }
 

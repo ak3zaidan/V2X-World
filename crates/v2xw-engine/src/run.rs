@@ -750,6 +750,13 @@ const fn cause_name(cause: LossCause) -> &'static str {
     }
 }
 
+/// One `gt.spawn` or `gt.despawn` record waiting for the step's recorder.
+#[derive(Debug, Clone)]
+enum Lifecycle {
+    Spawn(crate::records::GtSpawn),
+    Despawn(crate::records::GtDespawn),
+}
+
 /// Everything the engine knows about one actor that the mobility update does not repeat.
 #[derive(Debug, Clone)]
 struct ActorRecord {
@@ -1017,6 +1024,10 @@ pub struct Engine {
     /// The last `node.credentials` of vehicles that left in this step, recorded once the
     /// step's recorder is at hand.
     departed_credentials: Vec<v2xw_proto::scms::pki_view::NodeCredentials>,
+    /// The `gt.spawn` and `gt.despawn` records of this step, with their instants, kept
+    /// only when a SUMO exporter is named ([`crate::export::records_lifecycle`]) and
+    /// recorded once the step's recorder is at hand.
+    lifecycle: Vec<(SimTime, Lifecycle)>,
     /// The receiver validation of every node that left the run (edge-case package):
     /// summed into the report with the nodes still present. Until 2026-10-19 a departed
     /// node's refusals were dropped from `receiver_validation` with it.
@@ -1165,6 +1176,8 @@ pub struct Engine {
     /// decisions of who charges buildings and who needs street geometry.
     main_law: crate::wiring::PropagationChoice,
     focus_law: Option<crate::wiring::PropagationChoice>,
+    /// The measured vehicle antenna pattern (`radio.devices.obu.sampled_pattern`).
+    sampled_antenna: Option<std::sync::Arc<v2xw_radio::antenna::SampledAntenna>>,
     /// The environment a sidelink link-level curve is read in: urban when the world's
     /// land use at its centre is urban or suburban, highway otherwise (TR 37.885's two
     /// CDL environments).
@@ -1414,6 +1427,24 @@ impl Engine {
             fading.as_ref(),
             &crate::wiring::build_phy(&scenario),
         )?;
+        // WP-09: a measured vehicle antenna pattern, when the scenario supplies one. Its
+        // card is registered only then, so a run without one pins the same models.
+        let sampled_antenna = match scenario.radio.devices.obu.sampled_pattern.as_ref() {
+            Some(sp) => {
+                let p = v2xw_radio::antenna::SampledAntenna::from_csv(&sp.csv).map_err(|why| {
+                    crate::error::ScenarioError::conflict(
+                        "radio.devices.obu.sampled_pattern.csv",
+                        format!("is not an antenna pattern table: {why}"),
+                    )
+                })?;
+                let card = v2xw_radio::antenna::sampled_card();
+                if !registry.contains(&card.id) {
+                    registry.register(card)?;
+                }
+                Some(std::sync::Arc::new(p))
+            }
+            None => None,
+        };
         let obstacles = crate::wiring::build_obstacles(&scenario, &world);
         obstacles.register(&mut registry)?;
         let focus = crate::wiring::build_focus(&scenario, &world);
@@ -1615,6 +1646,7 @@ impl Engine {
                 .then(crate::perception::Perception::new),
             retired: Vec::new(),
             departed_credentials: Vec::new(),
+            lifecycle: Vec::new(),
             departed_rx: ReceiverValidationReport::default(),
             bodies: link::BodyIndex::default(),
             radios: radios::RadioIndex::default(),
@@ -1670,6 +1702,7 @@ impl Engine {
             range,
             main_law,
             focus_law,
+            sampled_antenna,
             radio_env,
             regulation,
             dsrc_channel,
@@ -3335,6 +3368,12 @@ impl Engine {
         for c in core::mem::take(&mut self.departed_credentials) {
             self.emit(recorder, &crate::sec_records::NodeCredentialsRecord(c));
         }
+        for (at, rec) in core::mem::take(&mut self.lifecycle) {
+            match rec {
+                Lifecycle::Spawn(r) => self.emit_at(recorder, at, &r),
+                Lifecycle::Despawn(r) => self.emit_at(recorder, at, &r),
+            }
+        }
         self.update_radio_gate(now);
         self.log_traffic_control(recorder, now);
         self.set_lamps(lamps, step.after(now));
@@ -3722,8 +3761,28 @@ impl Engine {
 
     /// Takes the spawns and despawns out of an update, creating and retiring nodes.
     fn absorb(&mut self, update: &MobilityUpdate, now: SimTime) {
+        let lifecycle = crate::export::records_lifecycle(&self.scenario.exporters);
         for spawn in &update.spawned {
             self.report.actors_spawned += 1;
+            if lifecycle {
+                use v2xw_core::math::q3;
+                let view = v2xw_record::dataset::views::GtSpawnView {
+                    t: spawn.t,
+                    actor: spawn.actor,
+                    is_attacker: false,
+                    attacker_role: None,
+                    colluding_group_id: None,
+                    is_faulty: false,
+                    class: Some(spawn.class.as_str().to_string()),
+                    is_rsu: false,
+                    length_m: Some(q3(spawn.kinematics.dims.length_m)),
+                    desired_speed_mps: Some(q3(spawn.driver.desired_speed_mps)),
+                    route_length_m: Some(q3(spawn.route.length_m)),
+                    requested_t: spawn.requested,
+                };
+                self.lifecycle
+                    .push((spawn.t, Lifecycle::Spawn(crate::records::GtSpawn(view))));
+            }
             // The equipped draw is keyed by the actor, so whether a vehicle carries an OBU
             // does not depend on how many vehicles spawned before it (ADR 0004 §3).
             let fraction = if crate::wiring::is_vru_class(spawn.class) {
@@ -3760,6 +3819,21 @@ impl Engine {
             );
         }
         for (actor, cause) in &update.despawned {
+            if lifecycle {
+                let cause = serde_json::to_value(cause)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_else(|| format!("{cause:?}"));
+                let view = v2xw_record::dataset::views::GtDespawnView {
+                    t: update.t,
+                    actor: *actor,
+                    cause,
+                };
+                self.lifecycle.push((
+                    update.t,
+                    Lifecycle::Despawn(crate::records::GtDespawn(view)),
+                ));
+            }
             *self
                 .report
                 .despawn_causes
@@ -4860,6 +4934,46 @@ impl Engine {
                     .request(&self.world, plan, requester, group, eta, now_s)
             {
                 self.emit(recorder, &rec);
+            }
+        }
+
+        // The V2X re-routing source (`traffic.reroute_source: v2x`): each lane-blocking
+        // DENM a vehicle's own unit delivered to its applications, verified, tells that
+        // driver — and only that driver — the lane at the event is blocked
+        // (`crate::reroute_info`). Delivered at a wake as at a periodic step.
+        let v2x_reroute = self
+            .scenario
+            .traffic
+            .as_ref()
+            .and_then(|t| t.reroute_source)
+            == Some(v2xw_mobility::routing::dynamic::RerouteSource::V2x);
+        if v2x_reroute {
+            let mut commands = Vec::new();
+            for (id, outcome, _, _) in &results {
+                let Some(actor) = self.node_actor.get(id).copied() else {
+                    continue;
+                };
+                for m in &outcome.delivered {
+                    if m.msg_type != v2xw_msg::MsgType::Denm
+                        || !matches!(
+                            m.verification,
+                            v2xw_node::stores::VerificationState::Verified
+                        )
+                    {
+                        continue;
+                    }
+                    let Some(payload) = m.payload.as_deref() else {
+                        continue;
+                    };
+                    if let Some(lane) =
+                        crate::reroute_info::blocking_event_lane(&self.world, payload)
+                    {
+                        commands.push(v2xw_mobility::MobilityCommand::HazardHeard { actor, lane });
+                    }
+                }
+            }
+            if !commands.is_empty() {
+                self.command_mobility(commands);
             }
         }
 
@@ -9292,6 +9406,7 @@ impl Engine {
             focus: self.focus.as_ref().map(|f| &f.plan),
             main_law: self.main_law,
             focus_law: self.focus_law,
+            sampled_antenna: self.sampled_antenna.as_deref(),
         }
     }
 

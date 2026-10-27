@@ -182,8 +182,9 @@ pub use phy::{
 pub use prop::{
     DualSlope, FreeSpace, GeometricState, GeometricUrbanV2v, LogDistancePreset,
     LogDistanceShadowing, LogDistanceTuning, Polarization, RainAttenuation, ShadowProcess,
-    SommerCoefficients, Tr37885, Tr37885State, TwoRayGround, friis_loss_db, mangel_breakpoint_m,
-    mangel_nlos_db, p838_coefficients, rain_attenuation_db, two_ray_ground_loss_db,
+    SommerCoefficients, Tr37885, Tr37885State, TwoRayGround, TwoRayInterference, friis_loss_db,
+    mangel_breakpoint_m, mangel_nlos_db, p838_coefficients, rain_attenuation_db,
+    two_ray_ground_loss_db, two_ray_interference_envelope_db, two_ray_interference_loss_db,
 };
 pub use terrain::{
     EdgeExtraction, GroundProfile, ProfilePoint, TerrainProfile, any_edge_obstructs, knife_edges,

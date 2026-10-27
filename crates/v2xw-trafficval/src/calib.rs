@@ -77,6 +77,10 @@ pub enum GridVariant {
     Motorcycles,
     /// 15 % motorcycles that drive with the car's parameters.
     MotorcyclesAsCars,
+    /// Realistic junction drivers (WP-04): per-driver critical gaps (cv 0.18), the HCM's
+    /// 2 sneakers per cycle, and impatience growing to full after 180 s when the flag is
+    /// true (false: the same drivers with impatience off, the check's fault).
+    Patience(bool),
 }
 
 /// A car-following model that delegates to the city IDM but hands out broken drivers.
@@ -177,6 +181,19 @@ pub fn grid_study(
                 params.turn_lateral_accel_mps2 = f64::from(a) / 10.0;
             }
             GridVariant::Jaywalk(pm) => sf.jaywalk_probability = f64::from(pm) / 1000.0,
+            GridVariant::Patience(impatient) => {
+                params.junction_patience =
+                    v2xw_mobility::intersection::gap_acceptance::JunctionPatience {
+                        time_to_impatience_s: if impatient {
+                            v2xw_mobility::intersection::gap_acceptance::SUMO_TIME_TO_IMPATIENCE_S
+                        } else {
+                            0.0
+                        },
+                        ..v2xw_mobility::intersection::gap_acceptance::JunctionPatience::REALISTIC
+                    };
+                params.permissive_sneakers =
+                    v2xw_mobility::intersection::signal_fixed_time::HCM_SNEAKERS_PER_CYCLE;
+            }
             GridVariant::Motorcycles => {
                 fleet = FleetMix::from_shares(&[
                     (VehicleClass::Passenger, 0.85),
@@ -288,11 +305,14 @@ pub fn checks() -> Vec<Check> {
             id: "calibration/permitted-left-gap",
             group: Group::Calibration,
             title: "Permitted left turners accept gaps like the HCM's field drivers (critical headway 4.5 s)",
-            procedure: "The Midtown-grid study: each lag offered to a left turner waiting at \
-                the stop line on a permissive green, timed to the opposing car's arrival at \
-                its stop line, accepted or rejected; Raff's critical gap from the two \
-                samples (Raff & Hart 1950).",
-            faults: &[],
+            procedure: "The Midtown-grid study with realistic junction drivers (WP-04: \
+                per-driver critical gaps, lognormal cv 0.18; impatience to full after \
+                SUMO's 180 s, floor 0.7; the HCM's 2 sneakers per cycle): each lag offered \
+                to a left turner waiting at the stop line on a permissive green, timed to \
+                the opposing car's arrival at its stop line, accepted or rejected; Raff's \
+                critical gap from the two samples (Raff & Hart 1950). The shipped default \
+                (all three off) is reported beside it.",
+            faults: &["the same drivers with impatience off"],
             run: permitted_left,
         },
         Check {
@@ -489,8 +509,8 @@ fn turning(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     })
 }
 
-fn permitted_left(lab: &mut Lab, _variant: Variant) -> Result<Outcome, String> {
-    let s = grid_study(lab, GridVariant::Shipped, None)?;
+fn permitted_left(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
+    let s = grid_study(lab, GridVariant::Patience(!variant.is_fault()), None)?;
     let mut rows = rows_from(&s.calib, &["permitted left critical gap (Raff), s"]);
     let a = &s.calib.permitted_left_lag_accepted_s;
     let r = &s.calib.permitted_left_lag_rejected_s;
@@ -505,9 +525,22 @@ fn permitted_left(lab: &mut Lab, _variant: Variant) -> Result<Outcome, String> {
         )
         .n(pb.n),
     );
+    let shipped = grid_study(lab, GridVariant::Shipped, None)?;
+    if let Some(r) = rows_from(&shipped.calib, &["permitted left critical gap (Raff), s"])
+        .into_iter()
+        .next()
+    {
+        let mut row = Row::reported(
+            "permitted left critical gap (Raff) with the shipped default (no spread, no impatience, no sneakers), s",
+            r.measured,
+            "the shipped default",
+        );
+        row.samples = r.samples;
+        rows.push(row);
+    }
     Ok(Outcome {
         rows,
-        notes: vec!["No fault is listed: a fault only proves a check can fail, and this one has failed as shipped (see the verdict).".to_string()],
+        notes: vec![],
     })
 }
 

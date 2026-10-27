@@ -440,7 +440,7 @@ pub fn build_mobility_for(scenario: &Scenario, world: &World) -> Result<Box<dyn 
 
 /// The translation the SUMO importer applied (its `frame` transformation in the world's
 /// provenance), `(0, 0)` when there is none.
-fn sumo_shift(world: &World) -> (f64, f64) {
+pub(crate) fn sumo_shift(world: &World) -> (f64, f64) {
     let get = |key: &str| {
         world
             .provenance
@@ -480,6 +480,15 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     }
     params.dynamic_rerouting = traffic.dynamic_rerouting;
     params.reroute_period_s = traffic.reroute_period_s.max(0.0);
+    if let Some(share) = traffic.reroute_share {
+        params.reroute_share = share.clamp(0.0, 1.0);
+    }
+    if let Some(source) = traffic.reroute_source {
+        params.reroute_source = source;
+    }
+    if let Some(v) = traffic.depart_at_speed {
+        params.depart_at_speed = v;
+    }
     params.lane_changes = traffic.lane_changes;
     params.strategic_lane_choice = traffic.strategic_lane_choice;
     params.junction_clearance = traffic.keep_junctions_clear;
@@ -513,6 +522,22 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(v) = traffic.heavy_vehicle_gap_terms {
         params.heavy_vehicle_gap_terms = v;
     }
+    // WP-04: per-driver critical gaps, junction impatience and the permissive sneakers.
+    if let Some(v) = traffic.critical_gap_cv {
+        params.junction_patience.critical_gap_cv = v;
+    }
+    if let Some(v) = traffic.time_to_impatience_s {
+        params.junction_patience.time_to_impatience_s = v;
+    }
+    if let Some(v) = traffic.impatience_gap_floor {
+        params.junction_patience.floor_ratio = v;
+    }
+    if let Some(v) = traffic.impatience_foe_braking {
+        params.junction_patience.foe_braking = v;
+    }
+    if let Some(v) = traffic.permissive_sneakers {
+        params.permissive_sneakers = v;
+    }
     if let Some(v) = traffic.standing_leader_stop {
         params.standing_leader_stop = v;
     }
@@ -545,6 +570,9 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     }
     if let Some(v) = drivers.red_runner_share {
         params.red_runner_share = v;
+    }
+    if let Some(v) = &drivers.violations {
+        params.violations = v.params();
     }
     if let Some(v) = drivers.start_reaction_s {
         params.start_reaction_median_s = v;
@@ -831,6 +859,7 @@ pub const RADIO_MODEL_FAMILIES: &[(&str, &[&str])] = &[
             v2xw_radio::Tr37885::ID,
             v2xw_radio::GeometricUrbanV2v::ID,
             v2xw_radio::WinnerPlusB1::ID,
+            v2xw_radio::TwoRayInterference::ID,
         ],
     ),
     (
@@ -1379,6 +1408,10 @@ pub enum PropagationChoice {
     /// actual}` picks the breakpoint convention ([`v2xw_radio::winner::B1Heights`]);
     /// `nlos: sommer | manhattan` the building-blocked law ([`v2xw_radio::winner::B1Nlos`]).
     WinnerB1(v2xw_radio::winner::B1Heights, v2xw_radio::winner::B1Nlos),
+    /// `propagation/two-ray-interference`: the phase-exact ground reflection with the
+    /// Fresnel coefficient of a ground of this relative permittivity (`params:
+    /// {epsilon_r}`, default 1.02, Sommer 2012). Opt-in (WP-09).
+    TwoRayInterference(f64),
 }
 
 impl PropagationChoice {
@@ -1463,6 +1496,13 @@ struct WinnerParams {
 
 #[derive(Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+struct TwoRayInterferenceParams {
+    #[serde(default)]
+    epsilon_r: Option<f64>,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BuildingParams {
     #[serde(default)]
     fit: Option<v2xw_radio::SommerFit>,
@@ -1534,6 +1574,26 @@ pub fn radio_models(
                     v2xw_radio::TwoRayGround::ID => PropagationChoice::TwoRayGround,
                     v2xw_radio::Tr37885::ID => PropagationChoice::Tr37885,
                     v2xw_radio::GeometricUrbanV2v::ID => PropagationChoice::Geometric,
+                    v2xw_radio::TwoRayInterference::ID => {
+                        match params_of::<TwoRayInterferenceParams>(&choice.params) {
+                            Ok(p) => {
+                                let eps = p.epsilon_r.unwrap_or(v2xw_radio::prop::GROUND_EPSILON_R);
+                                if !(1.0..=100.0).contains(&eps) {
+                                    errors.push(bad(format!(
+                                        "epsilon_r {eps} is outside 1 to 100 (a ground's \
+                                         relative permittivity; 1.02 is Sommer 2012's \
+                                         calibrated road)"
+                                    )));
+                                    continue;
+                                }
+                                PropagationChoice::TwoRayInterference(eps)
+                            }
+                            Err(e) => {
+                                errors.push(bad(e));
+                                continue;
+                            }
+                        }
+                    }
                     v2xw_radio::WinnerPlusB1::ID => {
                         match params_of::<WinnerParams>(&choice.params) {
                             Ok(p) => PropagationChoice::WinnerB1(
@@ -1963,6 +2023,11 @@ pub fn los_mean_loss_db(
         PropagationChoice::TwoRayGround => {
             v2xw_radio::two_ray_ground_loss_db(d_m, h_t_m, h_r_m, f_hz, 1.0)
         }
+        // The law is not monotone (its deep fades), so the reach is planned on its
+        // constructive bound, Friis − 6.02 dB: never short of a link the law can close.
+        PropagationChoice::TwoRayInterference(_) => {
+            v2xw_radio::two_ray_interference_envelope_db(d_m, f_hz)
+        }
         PropagationChoice::LogDistance(Some(preset), t) => {
             t.apply(preset.params()).path_loss_db(d_m)
         }
@@ -2128,6 +2193,9 @@ pub fn build_radio_at(
     let propagation: Box<dyn BoxedPropagation> = match propagation_choice_at(scenario, tier) {
         PropagationChoice::FreeSpace => Box::new(v2xw_radio::FreeSpace::new(tier)),
         PropagationChoice::TwoRayGround => Box::new(v2xw_radio::TwoRayGround::new(tier)),
+        PropagationChoice::TwoRayInterference(eps) => {
+            Box::new(v2xw_radio::TwoRayInterference::new(tier).with_epsilon_r(eps))
+        }
         PropagationChoice::Tr37885 => {
             Box::new(v2xw_radio::Tr37885::new(tier, env).with_shadowing(shadow))
         }

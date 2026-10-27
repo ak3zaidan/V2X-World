@@ -471,6 +471,7 @@ impl Mobility for TieredMobility {
                             route: v.route.clone(),
                             driver: v.driver,
                             seq: v.seq,
+                            requested: None,
                         });
                     }
                 }

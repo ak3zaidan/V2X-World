@@ -28,6 +28,22 @@
 //! read from ([`records_broadcast_accuracy`]); a run that names no `veremi` exporter
 //! records exactly what it did before. The written traces go through the leakage linter
 //! and the export fails if it finds anything.
+//!
+//! The SUMO-format exporters (adoption package WP-06, [`crate::sumo_outputs`]) write the
+//! file SUMO's output of the same name would, readable by SUMO's tools, into
+//! `out_dir/<id>/`. Every one needs a `full` recording (they read `gt.kinematics`), and
+//! naming any of them makes the run record `gt.spawn` and `gt.despawn`
+//! ([`records_lifecycle`]); a run that names none records exactly what it did before.
+//!
+//! | id | file | SUMO equivalent | options (default, unit; SUMO option) |
+//! |---|---|---|---|
+//! | `sumo-fcd` | `fcd.xml` | `--fcd-output` | `period_s` (every step, s; `--device.fcd.period`), `precision` (2; `--precision`) |
+//! | `sumo-tripinfo` | `tripinfo.xml` | `--tripinfo-output` | `write_unfinished` (false; `--tripinfo-output.write-unfinished`), `precision` |
+//! | `sumo-edgedata` | `edgedata.xml` | `<edgeData>` | `period_s` (whole run, s; `period`), `precision` |
+//! | `sumo-lanedata` | `lanedata.xml` | `<laneData>` | `period_s`, `precision` |
+//! | `sumo-summary` | `summary.xml` | `--summary-output` | `period_s` (every step, s; `--summary-output.period`), `precision` |
+//! | `sumo-e1` | `e1.xml` | `<inductionLoop>` | `detectors: [{id, lane, pos_m}]` (required; `lane` a SUMO lane id), `period_s` (whole run, s; `period`), `precision` |
+//! | `sumo-e2` | `e2.xml` | `<laneAreaDetector>` | `detectors: [{id, lane, pos_m, length_m}]`, `period_s`, `time_threshold_s` (1 s), `speed_threshold_mps` (1.39 m/s), `jam_threshold_m` (10 m; SUMO's `timeThreshold`, `speedThreshold`, `jamThreshold`), `precision` |
 
 use std::path::{Path, PathBuf};
 
@@ -37,13 +53,49 @@ use crate::error::{EngineError, Result};
 use crate::scenario::schema::ExporterSpec;
 
 /// The exporter ids this build implements.
-pub const EXPORTERS: [&str; 5] = ["recording", "jsonl", "parquet", "arrow", "veremi"];
+pub const EXPORTERS: [&str; 12] = [
+    "recording",
+    "jsonl",
+    "parquet",
+    "arrow",
+    "veremi",
+    "sumo-fcd",
+    "sumo-tripinfo",
+    "sumo-edgedata",
+    "sumo-lanedata",
+    "sumo-summary",
+    "sumo-e1",
+    "sumo-e2",
+];
 
 /// Whether a run with these exporters records the BSM's broadcast accuracy and
 /// acceleration on `node.tx` (the `veremi` exporter reads them).
 #[must_use]
 pub fn records_broadcast_accuracy(specs: &[ExporterSpec]) -> bool {
     specs.iter().any(|x| x.id == "veremi")
+}
+
+/// Whether a run with these exporters records `gt.spawn` and `gt.despawn` (every SUMO
+/// exporter reads them: depart and arrival, why a vehicle left, its length).
+#[must_use]
+pub fn records_lifecycle(specs: &[ExporterSpec]) -> bool {
+    specs.iter().any(|x| crate::sumo_outputs::is_sumo(&x.id))
+}
+
+/// A SUMO exporter's options.
+///
+/// # Errors
+/// A conflict naming the option when one is unknown or out of range.
+pub fn sumo_options_of(
+    spec: &ExporterSpec,
+    index: usize,
+) -> Result<crate::sumo_outputs::SumoOptions> {
+    crate::sumo_outputs::options_of(&spec.id, &spec.opts).map_err(|(field, why)| {
+        EngineError::Scenario(crate::ScenarioError::conflict(
+            format!("exporters[{index}].{field}"),
+            why,
+        ))
+    })
 }
 
 /// The `veremi` exporter's options.
@@ -108,9 +160,62 @@ pub fn run_exporters(
     recording: &Path,
     out_dir: &Path,
 ) -> Result<Vec<Exported>> {
+    run_exporters_in(specs, recording, out_dir, None)
+}
+
+/// [`run_exporters`] with the run's world, which the SUMO exporters need for lane and
+/// edge ids, lengths and speed limits.
+///
+/// # Errors
+/// As [`run_exporters`], and a scenario conflict when a SUMO exporter is named without a
+/// world.
+pub fn run_exporters_in(
+    specs: &[ExporterSpec],
+    recording: &Path,
+    out_dir: &Path,
+    world: Option<&v2xw_world::World>,
+) -> Result<Vec<Exported>> {
     let mut out = Vec::new();
     let mut records = None;
+    let mut tracks = None;
     for (i, spec) in specs.iter().enumerate() {
+        if crate::sumo_outputs::is_sumo(&spec.id) {
+            let opts = sumo_options_of(spec, i)?;
+            let Some(world) = world else {
+                return Err(EngineError::Scenario(crate::ScenarioError::conflict(
+                    format!("exporters[{i}].id"),
+                    format!(
+                        "'{}' needs the run's world, and this caller has none",
+                        spec.id
+                    ),
+                )));
+            };
+            if records.is_none() {
+                let mut reader =
+                    v2xw_record::Reader::open(recording).map_err(record_error(recording))?;
+                records = Some(reader.records(None).map_err(record_error(recording))?);
+            }
+            let dir = out_dir.join(&spec.id);
+            let io = |why: String| EngineError::Io {
+                path: dir.display().to_string(),
+                source: std::io::Error::other(why),
+            };
+            if tracks.is_none() {
+                tracks = Some(
+                    crate::sumo_outputs::Tracks::from_records(records.as_deref().unwrap_or(&[]))
+                        .map_err(io)?,
+                );
+            }
+            let tr = tracks.as_ref().expect("read above");
+            let (path, rows) =
+                crate::sumo_outputs::write(&spec.id, &opts, tr, world, &dir).map_err(io)?;
+            let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            out.push(Exported {
+                exporter: spec.id.clone(),
+                files: vec![ExportedPath { path, rows, bytes }],
+            });
+            continue;
+        }
         let format = match spec.id.as_str() {
             "recording" => {
                 let bytes = std::fs::metadata(recording).map(|m| m.len()).unwrap_or(0);

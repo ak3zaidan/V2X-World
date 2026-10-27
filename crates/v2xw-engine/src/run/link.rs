@@ -42,6 +42,8 @@ pub(super) struct LinkView<'a> {
     pub focus: Option<&'a v2xw_radio::FocusPlan>,
     pub main_law: PropagationChoice,
     pub focus_law: Option<PropagationChoice>,
+    /// The measured vehicle antenna pattern, when the scenario supplies one (WP-09).
+    pub sampled_antenna: Option<&'a v2xw_radio::antenna::SampledAntenna>,
 }
 
 /// One link's geometry: what [`LinkView::geometry`] computes and the budget consumes.
@@ -189,6 +191,36 @@ impl LinkView<'_> {
         use v2xw_radio::antenna::AntennaMount;
         if end.node.index() >= jamming::JAMMER_ID_BASE || self.rsus.contains_key(&end.node) {
             return 0.0;
+        }
+        // A measured pattern (`radio.devices.obu.sampled_pattern`) replaces the TR 37.885
+        // one on every vehicle; a device with no vehicle pattern, or a vehicle whose
+        // heading is unknown, keeps its scalar gain.
+        if let (Some(p), Some(sp)) = (
+            self.sampled_antenna,
+            self.scenario.radio.devices.obu.sampled_pattern.as_ref(),
+        ) {
+            if AntennaMount::for_class(end.class) == AntennaMount::Isotropic {
+                return 0.0;
+            }
+            let Some(h) = heading else {
+                return 0.0;
+            };
+            let (dx, dy, dz) = (
+                toward.x - end.pos.x,
+                toward.y - end.pos.y,
+                toward.z - end.pos.z,
+            );
+            let horizontal = v2xw_core::math::hypot(dx, dy);
+            let elevation = v2xw_core::math::atan2(dz, horizontal.max(1e-9));
+            let azimuth = v2xw_core::math::atan2(dy, dx) - h;
+            let rotation = sp.rotation_deg.to_radians()
+                + v2xw_radio::antenna::rotation_draw_rad(
+                    self.scenario.seed,
+                    end.node,
+                    sp.rotation_jitter.to_radio(),
+                    sp.rotation_jitter_deg,
+                );
+            return p.relative_gain_db(azimuth, elevation, rotation);
         }
         let mount = match (
             self.scenario.radio.devices.obu.antenna_pattern,

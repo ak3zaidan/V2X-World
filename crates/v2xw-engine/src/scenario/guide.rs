@@ -77,6 +77,21 @@ const BASIC: &[Basic] = &[
         recommended: "0 (off) for a baseline; 60 to 300 to model navigation-app drivers.",
     },
     Basic {
+        path: "traffic.reroute_share",
+        explain: "The share of drivers who change route on information (a navigation app or a received V2X warning); the rest keep the route they chose and only detour round a closure they can see.",
+        recommended: "1 (every driver, today); about 0.3-0.6 for today's navigation-app use in a US city.",
+    },
+    Basic {
+        path: "traffic.reroute_source",
+        explain: "Where re-routing drivers learn that the road has changed: a navigation app, which sees the whole network a few minutes late, or only the V2X hazard warnings their own car received, which are local and immediate.",
+        recommended: "navigation (today); v2x to measure what V2X hazard warnings are worth to routing.",
+    },
+    Basic {
+        path: "traffic.depart_at_speed",
+        explain: "Whether cars entering the map from outside it are already moving, as real traffic crossing the map's edge is, instead of starting from rest at the edge; cars starting inside the map still start from rest.",
+        recommended: "Off (today); on for realistic map edges (no false halts or stopped-vehicle warnings there).",
+    },
+    Basic {
         path: "traffic.right_turn_on_red",
         explain: "Whether drivers may turn right on a red light after stopping. Legal in most of the US, banned in New York City.",
         recommended: "Leave empty to follow the city's rule.",
@@ -308,6 +323,11 @@ const ADVANCED: &[Basic] = &[
         path: "actors.vehicles.drivers.red_runner_share",
         explain: "The share of drivers who keep going on amber even when they will reach the line after it turns red, as red-light runners do; 0 makes every driver clear on amber.",
         recommended: "0 (the default); 0.05 to 0.2 to study red-light-violation warnings. Field studies count roughly 1 to 5 red entries per 1,000 vehicles at urban signals (Bonneson, Zimmerman & Brewer, TTI 0-4027, 2002, as FHWA's red-light-running guidance quotes it).",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.violations.red_run_share",
+        explain: "With violations enabled, the share of drivers who will still enter after the light turns red, each up to their own lateness (exponential, mean red_run_tolerance_mean_s).",
+        recommended: "0.6 (the default) with the 0.6 s mean tolerance reproduces 1.0 red-light violation per 10,000 vehicle-cycles and 3 to 6 per 1,000 vehicles (Bonneson, Zimmerman & Quiroga, TTI 0-4196-P1, Table 1); 0 for none.",
     },
     Basic {
         path: "traffic.lc_strategic",
@@ -724,6 +744,31 @@ const ADVANCED: &[Basic] = &[
         path: "traffic.heavy_vehicle_gap_terms",
         explain: "Whether trucks and buses, which accelerate slowly, wait for longer gaps in traffic than cars before pulling out or turning left across it.",
         recommended: "Off (today); on for HCM heavy-vehicle gaps (+1 s, +2 s on wide roads).",
+    },
+    Basic {
+        path: "traffic.critical_gap_cv",
+        explain: "How much drivers differ in the gap they wait for before pulling out or turning across traffic: 0 gives everyone the same gap.",
+        recommended: "0 (today); 0.18 for realistic drivers (field spreads 0.15 to 0.2).",
+    },
+    Basic {
+        path: "traffic.time_to_impatience_s",
+        explain: "How long a driver waiting to pull out or turn across traffic stands before they accept the shortest gap they ever will; the longer they wait, the smaller the gap they take.",
+        recommended: "0 (off, today); 180 s (SUMO) for realistic waiting.",
+    },
+    Basic {
+        path: "traffic.impatience_gap_floor",
+        explain: "How short a gap a driver who has waited a long time accepts, as a share of the gap they wanted at first.",
+        recommended: "0.7; 0.5 to 0.9.",
+    },
+    Basic {
+        path: "traffic.impatience_foe_braking",
+        explain: "Whether an impatient driver pulls out counting on oncoming cars to brake for them.",
+        recommended: "Off; on for SUMO-like assertive drivers.",
+    },
+    Basic {
+        path: "traffic.permissive_sneakers",
+        explain: "How many drivers waiting to turn left on a green may finish the turn as the light turns yellow, when oncoming traffic stops; without them a left turn into steady oncoming traffic can wait for minutes.",
+        recommended: "0 (today); 2 (HCM) for realistic left turns.",
     },
     Basic {
         path: "traffic.standing_leader_stop",
@@ -1316,6 +1361,28 @@ fn export_choices() -> Vec<Value> {
                 "VeReMi traces",
                 "Per-receiver traces and a ground-truth log in the VeReMi Extension format, for detectors written against VeReMi.",
             ),
+            "sumo-fcd" => (
+                "SUMO FCD trace",
+                "Every vehicle's position, speed and lane each step, as SUMO's fcd-output.",
+            ),
+            "sumo-tripinfo" => (
+                "SUMO trip info",
+                "One line per finished trip (duration, waiting time, time loss), as SUMO's tripinfo-output.",
+            ),
+            "sumo-edgedata" => (
+                "SUMO edge data",
+                "Per-road flow, speed, density and occupancy, as SUMO's edgeData.",
+            ),
+            "sumo-lanedata" => (
+                "SUMO lane data",
+                "The same measures per lane, as SUMO's laneData.",
+            ),
+            "sumo-summary" => (
+                "SUMO summary",
+                "Vehicles inserted, running and arrived each step, as SUMO's summary-output.",
+            ),
+            // Detectors need positions, so they are not one-click choices.
+            "sumo-e1" | "sumo-e2" => continue,
             other => (other, ""),
         };
         out.push(choice(

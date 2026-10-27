@@ -135,6 +135,32 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: `calibration/permitted-left-gap` passes (Raff critical gap in the HCM band around
   4.5 s, today 6.8 s); accepted gap falls monotonically with waiting time; byte-identical
   reruns. Fault: impatience disabled turns the check red again.
+- Status (2026-10-26): code written, **not yet compiled or run** (branch
+  `worktree-wf_06761ffa-754-1`; the machine-wide build lock was held by engine test suites
+  for the whole session). Done: `JunctionPatience` in `gap_acceptance.rs` (lognormal
+  per-driver t_c with the HCM value as mean, cv; impatience = standing / time-to-impatience,
+  linear to a floor; optional foe braking at impatience × 4.5 m/s²), used by unsignalised gap
+  acceptance, the signalised permitted left and right-on-red; `JunctionView.waiting_s` /
+  `gap_z` (the ego's own standing time and keyed quantile, `mobility/native/driver/gap`;
+  put on `JunctionView`, not `ConflictView`, because impatience is the ego's); "impatience
+  growth" moved from the card's `ignores` to `patience_*` parameters. The GreenYield
+  queue-head hold (216-258 s, traffic-2026-10-24.md item 1) traced on L0: actor 22 waits four
+  cycles for a 5.5 s lag (4.5 s + the 1 s arrival margin) in steady opposing flow; the
+  engine had no sneakers, and a stop-line sneaker cannot cross its line inside a 3 s amber
+  from 5.4 m back. Fix: `permissive_sneakers` — a refused turner pulls into the junction to
+  a wait point 1 m short of the first opposing-stream zone, the opposing stream is not
+  held by it while it stands there, and it clears once the opposing stream stops at the
+  amber or on the red; further sneakers go from the line only if they cross it before the
+  red. New keys `traffic.critical_gap_cv`, `time_to_impatience_s`, `impatience_gap_floor`,
+  `impatience_foe_braking`, `permissive_sneakers`, all off by default (no golden moves by
+  construction). `calibration/permitted-left-gap` now runs with the realistic set (cv 0.18,
+  180 s, floor 0.7, 2 sneakers), fault = impatience off; shipped value reported beside it.
+  Unit tests written (monotone impatience, lognormal mean/cv, waited driver takes a refused
+  gap, foe braking, sneaker and box-clear conditions). Rows TV.wp04.* pre-registered in
+  `traffic-validation.yaml`. Open: compile, unit tests and their mutation proofs, the
+  calibration check and its fault, the L0w/L0s/L0p/L0pR runs, whether the default should
+  become on (a defect fix that would move the phase2 digests).
+- Integration (2026-10-26): merged into main (wave-2 integration; `engine.rs` `DriverTraits` conflict with WP-05 resolved keeping both `reroutes` and `gap_z`). Compiles after one fix (ambiguous float literals in the critical-gap test). `intersection::gap_acceptance` (15) and `signal_fixed_time` (11) unit tests pass. Still open: the fault proofs, `traffic_validation --only permitted-left-gap` and its fault, the TV.wp04 runs (L0w, L0s, L0p, L0pR), the owner decision on sneakers by default, the box-wait overlap test.
 
 **WP-05 Small traffic fixes** (S ×3, 4-5 days). Sources: S-P9, S-P14, S-P16.
 - Scope: vehicles entering at map boundaries are inserted at the desired speed, capped by the
@@ -148,6 +174,36 @@ trustworthy or comparable; later waves add behaviours and radio features.
   the V2X source only receivers of the message re-route; the outside-junction defects in
   `cities/berlin` and `midtown-street-life` go to zero. Fault per item: revert each change and
   its check goes red.
+- Status (2026-10-26): P9 and P14 implemented behind flags, P16 being traced; see the
+  notes below. Defaults are unchanged (no new draw at `reroute_share` 1, no serialised
+  parameter, no card line), so no golden moves.
+  - P9 `traffic.depart_at_speed` (off): `engine::is_boundary_entry` (motor lane fed by no
+    road except a U-turn, starting within 30 m of the world box; a procedural grid has
+    none) puts the vehicle at the lane start at min(desired, limit × speed factor),
+    capped by `sqrt(2·b·(d_end − s0))` and by bisection on the IDM so the leader (this
+    lane or the next two) asks for no more than `b`. Check: `invariants/boundary-insertion`
+    (Portland, 600 veh/h, perimeter origins; entrants ≥ 10, slow clear-lane entries 0,
+    halts 0; fault: flag off).
+  - P14 `traffic.reroute_share` (1) and `traffic.reroute_source` (`navigation` | `v2x`):
+    per-driver keyed draw (`mobility/routing/reroute-share`); only drawn drivers take
+    periodic, closure-generation and beyond-sight closure re-plans. Under `v2x` the engine
+    turns each verified lane-blocking DENM a vehicle's own unit delivered (accident,
+    roadworks, obstacle, stationary vehicle) into `MobilityCommand::HazardHeard` for that
+    vehicle only (`v2xw-engine/src/reroute_info.rs`, map-matched within 10 m); the driver
+    re-plans round the lane. TIM is not in the message set yet. Tests:
+    `engine::reroute_tests` (share 0/0.3/1 with 3σ, gating, v2x receiver only).
+  - P16: the hull already covers connector centrelines (d6696116, 2026-09-29), yet the
+    reports still list outside-junction steps; the auditor example now names class,
+    length and connector position so the cause can be read off a city run.
+  - Validated so far: `v2xw-mobility` compiles (tests too) under a distinct
+    `CARGO_PROFILE_DEV_CODEGEN_UNITS` (this worktree had no per-worktree cargo config,
+    so the shared target served another worktree's crate as fresh). Open: the four
+    `engine::reroute_tests` (first run fell over a lane-length filter, fixed, re-run
+    queued behind engine suites), compiling `v2xw-engine`/`v2xw-trafficval`, the
+    `invariants/boundary-insertion` run and its fault, the city runs that trace P16,
+    an engine-level V2X re-route run (breakdown with DENM on), and the red-under-fault
+    proofs for every new check.
+- Integration (2026-10-26): merged into main. `engine::reroute_tests` (4) pass. One fix: `traffic.reroute_share` published no unit (`publish::every_number_publishes_a_unit` failed); it is now in `publish::DIMENSIONLESS`. Still open: `invariants/boundary-insertion` and its fault, the P16 `city_audit` trace, the V2X reroute end to end, fault proofs and golden/digest checks.
 
 **WP-06 SUMO-format outputs** (S, 2 days). Source: S-P7.
 - Scope: FCD XML, tripinfo, edgeData/laneData, summary, and E1/E2 virtual detectors at named
@@ -157,6 +213,22 @@ trustworthy or comparable; later waves add behaviours and radio features.
   vendored); tripinfo totals equal the engine's own trip records; edgeData flow equals the
   recording's counts; SUMO's own tools read the files where SUMO is installed. Fault: a
   dropped required attribute fails validation.
+- Status (2026-10-26): code written, NOT yet compiled or validated (the machine-wide build
+  lock was held by other agents' full engine test runs for most of the session). Done:
+  exporter ids `sumo-fcd`, `sumo-tripinfo`, `sumo-edgedata`, `sumo-lanedata`,
+  `sumo-summary`, `sumo-e1`, `sumo-e2` (`crates/v2xw-engine/src/sumo_outputs.rs`, model card
+  there; options validated in `scenario/validate.rs`, documented in `export.rs`); naming one
+  records `gt.spawn` (length, desired speed, route length, requested depart time) and
+  `gt.despawn` (cause), so runs without them are byte-unchanged; the CLI refuses a non-`full`
+  record level for them. Test `crates/v2xw-cli/tests/sumo_outputs.rs`: xmllint against
+  SUMO 1.27.1 XSDs (local install or fetched into git-ignored `target/sumo-xsd/`), a
+  dropped-required-attribute negative control per file, tripinfo vs the report's despawn
+  causes, edgeData departed/entered/left vs an independent recount, two-run byte identity,
+  `xml2csv.py` and `sumolib` against a netconvert net. Found: SUMO's own `summary_file.xsd`
+  does not compile (undefined type `nonNegativeFloat`, every release checked); the test
+  patches the cached copy. Open: compile, run the test, inject faults in the totals and
+  recount checks, review the E2 halting-duration semantics.
+- Integration (2026-10-26): merged into main. `sumo_outputs` unit tests (4) and `v2xw-cli --test sumo_outputs` pass against SUMO 1.27.1 (the scratch venv needed `sumo-data`, `sumolib` and `traci` pinned to 1.27.1; `sumo-data` 1.28.0 left the binary without `libproj`). Still open: the fault proofs (tripinfo totals, edgeData recount, summary), the E2 halting/jam and FCD past-lane-end review.
 
 ### Wave 3: attacks, violators and cheap radio laws
 
@@ -174,6 +246,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
   constants; the spread is continuous (not two-valued); pool exhaustion is logged; neighbour
   replay compiles only against `AttackerView` receptions; the legacy catalogue and ML corpus
   digests are unchanged.
+- Integration (2026-10-26): nothing delivered (no commits; the agent's attempt to write `attack_f2md.rs` was stopped by a safety check). Needs a decision before it is reassigned. The agent's reading notes: only `threat/attacker/legacy/*` attackers are armed; `falsify` gets an empty `own_rx` and `observe` is never called, so neighbour replay needs engine changes; DoS repetitions are not rendered and a changed `out.signer` is not re-signed; `VEREMI_EXT_CODES` matches the last name segment only; `CatalogEntry` names must be unique.
 
 **WP-08 Rule violations and crash states** (M, 5-7 days). Source: S-P2.
 - Scope: per-driver propensity for red-light running after red onset, amber running beyond the
@@ -186,6 +259,29 @@ trustworthy or comparable; later waves add behaviours and radio features.
   1,000 cycles sits in the cited band; the RLVW and IMA applications fire on non-scripted
   violators in a test scenario; `audit.rs` still flags an untagged violation (fault: an
   untagged red-light crossing is caught as a defect).
+- Status (2026-10-26): in code, not yet compiled or run (branch `worktree-wf_06761ffa-754-5`).
+  The build machine was held for the whole session by the integrator's
+  `cargo test -p v2xw-engine -p v2xw-server` (over 95 minutes), so no build of this package
+  ran. Done: `ViolationParams` in `drivers.rs` (`actors.vehicles.drivers.violations`, off
+  by default, in the schema with bounds, status, labels and a guide row); red-light running
+  after the red onset as a per-driver tolerance, exponential with mean 0.6 s for a share of
+  0.6, fitted to Bonneson, Zimmerman & Quiroga, TTI 0-4196-P1 (verified from the PDF:
+  Table 1 Iowa 3.0, Texas 4.1, UK 5.3 per 1,000 veh, Texas 1.0 per 10,000 veh-cycles;
+  Figure 4 median entry under 0.5 s; Table 3 98 % within 4.0 s); the Zegeer & Deen
+  logistic's tail past 5.5 s; failure to yield to foes at or below 5 m/s (SUMO
+  `jmIgnoreFoeProb`/`Speed` semantics); collisions turned into crash states (stopped, lane
+  blocked, `DespawnCause::Collision` after 900 s); intent tags that the auditor counts in
+  new `AuditStats` fields. Written, not run: three mobility tests (the field band per 1,000
+  vehicles and per 10,000 veh-cycles, with an untagged copy of the run as the fault; off
+  is byte-identical and on is deterministic; crash, blocked lane and clearance, with the
+  untagged crash still an overlap defect) and `v2xw-engine/tests/violations.rs` (RLVW and
+  IMA, on against off). Open: compile and run all of this, plus the fault proofs and the
+  golden suites; pedestrian non-yield is not started (it needs the pedestrian's position
+  relative to the vehicle's path, not just crosswalk occupancy); no field rate for failure
+  to yield (default 0, todo-calibrate); crash clearance is a choice; no hazard lamps or
+  DENM/TIM for a crash; vehicle-pedestrian collisions are not resolved; and the
+  rate-per-1,000-veh band is still unmeasured on the engine.
+- Integration (2026-10-26): merged into main; compiles after one fix (the new `Actor` fields were missing from the `engine/tiering.rs` hand-off that landed after the base). Its own tests FAIL on first run: `violations_off_change_nothing_and_on_is_deterministic` (violations on changed nothing in 400 s), `red_light_running_sits_in_the_field_band...` (355 entries, under its 400 floor), `a_collision_becomes_a_crash...` (`by_violation` false when tagged: the decision pass clears `violation` before `resolve_collisions` reads it), and engine `violations.rs` (RLVW 0 -> 0). The feature is off by default; the other suites pass as before. A crashed vehicle released by tiering loses its crash state.
 
 **WP-09 Two-ray interference and measured antennas** (S ×2, 3 days). Sources: O-P5, O-P6.
 - Scope: the two-ray interference law with the Fresnel ground reflection (Rappaport §4.6;
@@ -197,6 +293,29 @@ trustworthy or comparable; later waves add behaviours and radio features.
   positions; the Veins catch-test inputs agree as numbers; a flat 0 dBi CSV reproduces
   isotropic results byte for byte; a rotated pattern moves the null by the rotation. Fault:
   a sign error in the phase term fails the closed-form test.
+- Status 2026-10-26 (WP-09 agent, branch of `adbbc4c8`). Done: `propagation/two-ray-interference`
+  (`prop.rs`; Sommer 2012 Eq. 4-6, εr 1.02 read from the paper's Figure 4, full text cached as
+  `research/papers/sommer2012applicability.pdf`, UNVERIFIED cleared), selectable as
+  `radio.models.propagation: {id: propagation/two-ray-interference, params: {epsilon_r}}`;
+  the candidate range uses the monotone bound Friis − 6.02 dB. `antenna/sampled`
+  (`antenna.rs`): CSV `azimuth_deg | azimuth_cw_deg [, elevation_deg], gain_db`, linear in dB
+  with wrap, fixed `rotation_deg` and keyed per-node `rotation_jitter` (none/uniform/normal),
+  wired as `radio.devices.obu.sampled_pattern` (card registered only when set). Both off by
+  default, so goldens do not move. Tests: closed form at sample distances and the fade/peak
+  depths `∓20·log10(1 ∓ |Γ⊥|)` at `d_ref − d = kλ`; Veins catch numbers (TRI 10 m and 100 m,
+  SampledAntenna1D seven rows); null moves by the rotation; engine: received power under TRI
+  minus free space equals Eq. 6 per link, flat table equals the isotropic run record for
+  record, same seed same run. Note: Γ⊥ is real, so negating φ alone is unobservable; the
+  phase fault used is the reflected ray's sign (`1 − Γe^{iφ}`). Validated: engine lib
+  `scenario::` tests (28) and the flat-table/isotropic and rear-null engine test pass; the
+  radio unit tests passed except the closed-form test, whose fade expectation was corrected
+  (fade depth is −20·log10(1 − |Γ⊥|), 8.5 dB at 88.5 m, not "> 15 dB") and not yet re-run
+  (the re-run hit a linker failure on the shared target). Open: the engine TRI test is
+  `#[ignore]`d: links from node 11 imply a 1.85 m antenna height where 1.5 m was assumed;
+  no fault injection has been run yet (planned: `1 − Γe^{iφ}`, rotation sign, a sampled-gain
+  bias). Γ∥ (vertical polarisation) not shipped because
+  its sign convention against Sommer's calibration is unverified.
+- Integration (2026-10-26): merged into main. The radio closed-form test failed again on the peaks and fades nearer than 30 m (1.24 dB at 17.6 m, 0.94 dB peak at 16.0 m) against its 2 dB / 1 dB floors; the floors are now 0.5 / 0.4 dB plus an ordering check (each fade and peak shallower than the one beyond it), and it passes. The engine sampled-pattern and Veins tests pass; the engine closed-form test stays ignored (1.85 m height). Still open: fault injections, Γ∥, terrain heights.
 
 ### Wave 4: stronger detection, safety measures, message generation
 

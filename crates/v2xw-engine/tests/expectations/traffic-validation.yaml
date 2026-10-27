@@ -137,3 +137,25 @@ rows:
 - {id: TV.L.hold, runs: [L0x, L1x, L2x, L3x, L4x], check: "stopped_on_green = 0, phantom_stop = 0, long_stop = 0", expect: pass, source: "as TV.hold.*: below saturation, with no pedestrians, only the lamp holds a queue head", fault: "judge: stopped_on_green = 1"}
 - {id: TV.L.safety, runs: [L0x, L1x, L2x, L3x, L4x], check: "overlap = 0, decel = 0, accel = 0; red_entry reported", expect: pass, source: "as TV.safety.grid", fault: "judge: overlap = 1"}
 - {id: TV.L.cost, runs: [L0x, S0x], check: "run_s(L0x) < run_s(S0x)", expect: pass, source: "cost ~ vehicle-steps: half the demand, fewer vehicles in the network at once", fault: "judge: swap"}
+
+# ------------------------------------------------------------------ WP-04 (2026-10-26)
+# Junction impatience, per-driver critical gaps and the permissive sneakers
+# (docs/design/frameworks/00-adoption-plan.md WP-04). Registered before the runs were read.
+# Runs on the WP-04 branch's opt-level-2 debug build (suffix w); L0 is the release run of
+# adbbc4c8 on the same seed (actor 22 stood 257.7 s at a GreenYield stop line).
+#   L0w:  L0 on the WP-04 build, every new knob off: the shipped default.
+#   L0s:  L0w with traffic.permissive_sneakers: 2 (box entry and sneakers only).
+#   L0p:  L0s with traffic.critical_gap_cv: 0.18 and traffic.time_to_impatience_s: 180.
+#   L0pR: L0p again, same seed.
+- {id: TV.wp04.off-is-shipped, runs: [L0, L0w], check: "data_digest equal", expect: pass,
+   source: "rule 4 of the adoption plan: with every new knob off the run is the shipped one (no golden moves)", fault: "judge: flip one digest character"}
+- {id: TV.wp04.det, runs: [L0p, L0pR], check: "data_digest equal", expect: pass,
+   source: "the determinism contract: the per-driver gap quantile is a keyed draw of its own (RngDomain::ReactionTime, mobility/native/driver/gap)", fault: "judge: flip one digest character"}
+- {id: TV.wp04.no-minute-holds, runs: [L0s, L0p], check: "longest_stop_s <= 120 (two 60 s cycles)", expect: pass,
+   source: "HCM 6th ed. ch. 31 / 7th ed. ch. 19: about 2 permitted left turners clear per cycle at the end of the green (sneakers), so a queue head below saturation waits at most a cycle or two, not the 216-258 s measured on adbbc4c8", fault: "L0w: the knobs off (the shipped 257.7 s)"}
+- {id: TV.wp04.long-stops-down, runs: [L0w, L0p], check: "long_stop(L0p) < long_stop(L0w)", expect: pass,
+   source: "as TV.wp04.no-minute-holds: the permitted-left holds are most of the long stops below saturation (traffic-2026-10-24.md open item 1)", fault: "judge: equal"}
+- {id: TV.wp04.safety, runs: [L0w, L0s, L0p], check: "overlap(L0s, L0p) = 0 and red_entry(L0s, L0p) <= red_entry(L0w)", expect: pass,
+   source: "sneakers cross the stop line before the red or are already within the junction when it comes; the cross street waits for a vehicle lawfully within the junction (UVC 11-202(a)1)", fault: "judge: overlap = 1"}
+- {id: TV.wp04.speed, runs: [L0w, L0p], check: "mean_speed(L0p) >= mean_speed(L0w)", expect: pass,
+   source: "removing minutes-long holds of a lane's queue cuts delay (Webster d2 falls as the permitted-left capacity rises with sneakers)", fault: "judge: swap"}

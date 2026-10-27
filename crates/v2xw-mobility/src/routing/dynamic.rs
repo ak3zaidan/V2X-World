@@ -222,6 +222,62 @@ impl Router for DynamicReroute {
     }
 }
 
+/// Where a re-routing driver learns that the road has changed (WP-05, sumo.md P14).
+///
+/// Re-implemented from the SUMO user documentation's description of the rerouting device
+/// (`device.rerouting.probability`, the equipped share; `device.rerouting.period` with its
+/// 1 s adaptation interval and 180 adaptation steps). SUMO was read for behaviour only and
+/// no code was copied. The V2X source is this engine's own: SUMO has no notion of who
+/// received a message.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RerouteSource {
+    /// A navigation app: network-wide and delayed. Its driver re-plans once a
+    /// `reroute_period_s` on lane speeds smoothed over the last three minutes, and at once
+    /// on a closure anywhere on its route. The default, and what every driver did before.
+    #[default]
+    Navigation,
+    /// Received V2X warnings only: local and belief-only. Its driver re-plans when its own
+    /// on-board unit has received and verified a DENM or TIM placing a blocking event on a
+    /// lane of its route ([`crate::MobilityCommand::HazardHeard`]); a closure it has not
+    /// been told about it sees only when it comes within sight of it, as a driver without
+    /// any information does.
+    V2x,
+}
+
+impl RerouteSource {
+    /// The scenario spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            RerouteSource::Navigation => "navigation",
+            RerouteSource::V2x => "v2x",
+        }
+    }
+}
+
+/// The plug-in id the re-routing share draws under, keyed by the trip's demand sequence
+/// number so one driver's draw does not depend on anybody else's.
+pub const REROUTE_SHARE_ID: &str = "mobility/routing/reroute-share";
+
+/// Whether the driver of trip `seq` re-routes on information, under `share` (the
+/// equipped share, 0-1). `share >= 1` draws nothing and is always true, so a scenario that
+/// leaves the share at its default keeps every stream it had.
+pub fn draws_reroute(ctx: &dyn MobCtx, seq: u64, share: f64) -> bool {
+    if share >= 1.0 {
+        return true;
+    }
+    if share <= 0.0 || !share.is_finite() {
+        return false;
+    }
+    let u = ctx
+        .rng(
+            v2xw_core::rng::RngDomain::plugin(REROUTE_SHARE_ID),
+            v2xw_core::rng::EntityRef::custom(REROUTE_SHARE_ID, seq),
+        )
+        .uniform(0.0, 1.0);
+    u < share
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

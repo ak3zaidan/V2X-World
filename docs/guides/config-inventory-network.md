@@ -113,6 +113,8 @@ These are listed so that the inventory is complete. The paths and sources are in
 | `P838_*` | `prop.rs` | ITU-R P.838 coefficients. Weather intensity is `weather.*`. |
 | WINNER+ B1 constants (`SIGMA_*`, `HALF_STREET_WIDTH_M`, heights) | `winner.rs` | Published model constants. Sigma is overridable. |
 | TR 37.885 antenna pattern (`THETA_3DB_DEG`, `SLA_V_DB`, ...) | `antenna.rs` | Standard pattern. The choice is `radio.devices.obu.antenna_pattern`. |
+| Two-ray interference ground permittivity (`GROUND_EPSILON_R` 1.02) | `prop.rs` | Sommer 2012 Figure 4. Overridable: `radio.models.propagation: {id: propagation/two-ray-interference, params: {epsilon_r}}` (1 to 100). |
+| Measured antenna table (`antenna/sampled`) | `antenna.rs` | `radio.devices.obu.sampled_pattern: {csv, rotation_deg (0, deg), rotation_jitter (none/uniform/normal), rotation_jitter_deg (0, deg)}`; gains dB relative to `antenna_gain_dbi` (Eckhoff 2016). Unset by default. |
 | `DETOUR_RATIO`, `MAX_CANDIDATES`, `MAX_WALL_M`, `GAP_M`, `SNAP_M` | `obstacle.rs` | Building-geometry search limits. |
 | `DEFAULT_PROFILE_SAMPLES`, `DEFAULT_MAX_EDGES` | `terrain.rs` | Terrain profile sampling resolution. |
 | Band-plan rules and spectrum masks | `regulation.rs` | Regulatory tables, chosen by `radio.region` and `radio.channel`. |

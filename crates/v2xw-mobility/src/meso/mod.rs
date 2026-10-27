@@ -1058,6 +1058,7 @@ impl Mobility for MesoMobility {
                     route: v.route.clone(),
                     driver: v.driver,
                     seq: v.seq,
+                    requested: None,
                 })
             })
             .collect();

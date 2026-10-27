@@ -218,6 +218,30 @@ pub struct Traffic {
     /// unsignalised junctions and on a permitted left. Unset is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heavy_vehicle_gap_terms: Option<bool>,
+    /// The spread of drivers' critical gaps: each driver's is lognormal around the HCM
+    /// value with this coefficient of variation (0.15-0.2 in field studies, SUMO P1;
+    /// 0.18 is the realistic preset), at unsignalised junctions, on a permitted left and
+    /// on a right turn on red. Unset is 0: every driver the HCM value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub critical_gap_cv: Option<f64>,
+    /// Seconds of standing after which a yielding driver's impatience is full and its
+    /// critical gap has fallen to `impatience_gap_floor` of its own (SUMO
+    /// `--time-to-impatience`, 180 s). Unset is 0: no impatience.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_to_impatience_s: Option<f64>,
+    /// The critical gap at full impatience as a share of the driver's own. Unset is 0.7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impatience_gap_floor: Option<f64>,
+    /// Whether an impatient driver judges an approaching foe as if it would brake at
+    /// impatience times 4.5 m/s² (SUMO's blend toward the foe's braking arrival). Unset is
+    /// off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impatience_foe_braking: Option<bool>,
+    /// How many permitted left turners per lane may complete the turn in the amber that
+    /// ends a permissive green, the HCM's "sneakers" (2 per cycle). Each must cross the
+    /// stop line before the red. Unset is 0: none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissive_sneakers: Option<u8>,
     /// Whether a driver closing on a standing vehicle brakes at no less than the constant
     /// deceleration that stops it at its standstill gap, as at a stop line, instead of
     /// being stopped in one step when the car-following model's braking (which scales
@@ -233,6 +257,24 @@ pub struct Traffic {
     /// Unset follows the jurisdiction (New York City has its taxis).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kerbside: Option<KerbsideSettings>,
+    /// Whether a vehicle entering the map from outside it (its origin a lane no road of
+    /// the map feeds, at the map's edge) is put on at the start of that lane at its
+    /// desired speed, capped by the speed that is safe behind the vehicle ahead and that
+    /// can still stop at the lane's end, as SUMO's departSpeed="desired" with
+    /// departPos="base" does. Origins inside the network stay at rest. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depart_at_speed: Option<bool>,
+    /// The share of drivers who re-route on information, 0-1, drawn once per driver
+    /// (SUMO device.rerouting.probability). The rest keep the route they chose and detour
+    /// only round a closure they can see. Unset is 1: every driver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reroute_share: Option<f64>,
+    /// Where those drivers learn that the road has changed: `navigation` (a navigation
+    /// app: network-wide, on speeds smoothed over three minutes, and every closure) or
+    /// `v2x` (only a DENM or TIM their own unit received and verified, placing a blocking
+    /// event on their route: local and belief-only). Unset is navigation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reroute_source: Option<v2xw_mobility::routing::dynamic::RerouteSource>,
 }
 
 // traffic audit
@@ -329,9 +371,17 @@ impl Default for Traffic {
             lc_speed_gain: None,
             lc_keep_right: None,
             heavy_vehicle_gap_terms: None,
+            critical_gap_cv: None,
+            time_to_impatience_s: None,
+            impatience_gap_floor: None,
+            impatience_foe_braking: None,
+            permissive_sneakers: None,
             standing_leader_stop: None,
             lane_bend_speed: None,
             kerbside: None,
+            depart_at_speed: None,
+            reroute_share: None,
+            reroute_source: None,
         }
     }
 }
@@ -1233,6 +1283,11 @@ pub struct Drivers {
     /// without checking they reach the line before the red. Unset is 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub red_runner_share: Option<f64>,
+    /// Rule violations and crash states (WP-08): red-light running after the red onset,
+    /// amber running beyond the dilemma zone, failure to yield, and collisions that stop
+    /// the vehicles and block the lane until cleared. Unset (or `enabled: false`) is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub violations: Option<Violations>,
     /// The median time a driver takes to move off when the light turns green or a
     /// crosswalk clears, seconds. Unset is 1.08 s (Bonneson 1992's 1.22 s mean start-response, lognormal σ 0.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1256,6 +1311,82 @@ pub struct Drivers {
     /// Cyclists' car-following numbers. Unset is SUMO's bicycle vType.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bicycle: Option<ClassDriver>,
+}
+
+/// `actors.vehicles.drivers.violations` ([`v2xw_mobility::drivers::ViolationParams`]);
+/// every unset field keeps its default.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Violations {
+    /// Whether drivers commit violations at all. Unset is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// The share of drivers who enter on red within their tolerance. Unset is 0.6,
+    /// calibrated so that the run reproduces 1.0 violation per 10,000 vehicle-cycles
+    /// (Bonneson et al., TTI 0-4196-P1, Table 1, Texas).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red_run_share: Option<f64>,
+    /// The mean of a runner's tolerance after the red onset, seconds (exponential). Unset is
+    /// 0.6 s: a median entry 0.42 s into red (TTI 0-4196-P1 Figure 4: under 0.5 s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red_run_tolerance_mean_s: Option<f64>,
+    /// The longest tolerance, seconds. Unset is 4.0 s (98 % of violations within 4.0 s,
+    /// TTI 0-4196-P1 Table 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red_run_tolerance_max_s: Option<f64>,
+    /// The longest amber threshold drawn, seconds: the Zegeer & Deen 1978 logistic's tail
+    /// beyond the dilemma zone's far edge. Unset is 8 s; 5.5 keeps the clamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amber_tail_max_s: Option<f64>,
+    /// The probability that a driver fails to yield at a junction where they must give way
+    /// (SUMO `jmIgnoreFoeProb`). Unset is 0 (todo-calibrate: no field rate was read).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fail_to_yield_share: Option<f64>,
+    /// The fastest foe a failing driver ignores, m/s (SUMO `jmIgnoreFoeSpeed`). Unset is 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ignore_foe_speed_mps: Option<f64>,
+    /// Whether a collision resolves to a crash state. Unset is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crashes: Option<bool>,
+    /// How long a crashed vehicle stands before it is cleared, seconds. Unset is 900 s (a
+    /// choice, todo-calibrate).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crash_clearance_s: Option<f64>,
+}
+
+impl Violations {
+    /// The engine's parameters this block asks for.
+    pub fn params(&self) -> v2xw_mobility::drivers::ViolationParams {
+        let mut p = v2xw_mobility::drivers::ViolationParams::default();
+        if let Some(x) = self.enabled {
+            p.enabled = x;
+        }
+        if let Some(x) = self.red_run_share {
+            p.red_run_share = x;
+        }
+        if let Some(x) = self.red_run_tolerance_mean_s {
+            p.red_run_tolerance_mean_s = x;
+        }
+        if let Some(x) = self.red_run_tolerance_max_s {
+            p.red_run_tolerance_max_s = x;
+        }
+        if let Some(x) = self.amber_tail_max_s {
+            p.amber_tail_max_s = x;
+        }
+        if let Some(x) = self.fail_to_yield_share {
+            p.fail_to_yield_share = x;
+        }
+        if let Some(x) = self.ignore_foe_speed_mps {
+            p.ignore_foe_speed_mps = x;
+        }
+        if let Some(x) = self.crashes {
+            p.crashes = x;
+        }
+        if let Some(x) = self.crash_clearance_s {
+            p.crash_clearance_s = x;
+        }
+        p
+    }
 }
 
 // traffic audit
@@ -2000,6 +2131,62 @@ pub struct ObuRadio {
     /// truck or bus — every vehicle's on the roof, or none.
     #[serde(default, skip_serializing_if = "ObuAntennaPattern::is_default")]
     pub antenna_pattern: ObuAntennaPattern,
+    /// A measured installed pattern (`antenna/sampled`, WP-09): when set it replaces
+    /// `antenna_pattern` on every vehicle. Unset, the default, changes nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampled_pattern: Option<SampledPattern>,
+}
+
+/// A measured antenna pattern every vehicle carries (`radio.devices.obu.sampled_pattern`,
+/// `v2xw_radio::antenna::SampledAntenna`). Re-implemented from Eckhoff, Brummer and Sommer,
+/// IEEE VNC 2016 §III (sampled azimuth gains, interpolated between samples), with measured
+/// vehicle patterns such as Kornek et al., IEEE ICC Workshops 2010.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SampledPattern {
+    /// The table, as CSV text (a YAML block scalar): a header naming `gain_db` (dB
+    /// relative to `antenna_gain_dbi`), `azimuth_deg` (counter-clockwise from the heading)
+    /// or `azimuth_cw_deg` (clockwise), and optionally `elevation_deg`; then one sample a
+    /// line. Interpolated linearly in dB. No default: the measurement is the scenario's.
+    pub csv: String,
+    /// The mount's rotation from the heading, degrees counter-clockwise; default 0
+    /// (Veins `SampledAntenna1D` rotation, behaviour only).
+    #[serde(default)]
+    pub rotation_deg: f64,
+    /// A per-vehicle random mount rotation on top: `none` (default), `uniform` in
+    /// ±`rotation_jitter_deg`, or `normal` with σ = `rotation_jitter_deg` (Veins
+    /// `SampledAntenna1D` random rotation, behaviour only). Keyed by seed and node.
+    #[serde(default)]
+    pub rotation_jitter: RotationJitter,
+    /// The width of that rotation, degrees; default 0.
+    #[serde(default)]
+    pub rotation_jitter_deg: f64,
+}
+
+/// How a sampled antenna's mount rotation varies from vehicle to vehicle
+/// (`radio.devices.obu.sampled_pattern.rotation_jitter`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RotationJitter {
+    /// Every mount at `rotation_deg`.
+    #[default]
+    None,
+    /// Uniform in ±`rotation_jitter_deg` per vehicle.
+    Uniform,
+    /// Normal with σ = `rotation_jitter_deg` per vehicle.
+    Normal,
+}
+
+impl RotationJitter {
+    /// The radio crate's value.
+    #[must_use]
+    pub fn to_radio(self) -> v2xw_radio::antenna::RotationJitter {
+        match self {
+            RotationJitter::None => v2xw_radio::antenna::RotationJitter::None,
+            RotationJitter::Uniform => v2xw_radio::antenna::RotationJitter::Uniform,
+            RotationJitter::Normal => v2xw_radio::antenna::RotationJitter::Normal,
+        }
+    }
 }
 
 /// A vehicle antenna's radiation pattern (`radio.devices.obu.antenna_pattern`).
@@ -2039,6 +2226,7 @@ impl Default for ObuRadio {
             cable_loss_db: 0.0,
             antenna_height_m: None,
             antenna_pattern: ObuAntennaPattern::Tr37885,
+            sampled_pattern: None,
         }
     }
 }

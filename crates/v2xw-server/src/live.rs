@@ -724,8 +724,13 @@ fn spawn_host(
                 && let Some(path) = recording.as_deref()
             {
                 let out_dir = path.parent().unwrap_or(std::path::Path::new("."));
-                let result = v2xw_engine::export::run_exporters(&exporters, path, out_dir)
-                    .map_err(|e| e.to_string());
+                let result = v2xw_engine::export::run_exporters_in(
+                    &exporters,
+                    path,
+                    out_dir,
+                    Some(engine.world()),
+                )
+                .map_err(|e| e.to_string());
                 let _ = step_tx.send(HostMsg::Exported(result));
             }
             let _ = match outcome {

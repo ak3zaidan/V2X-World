@@ -246,6 +246,9 @@ impl NativeMobility {
                 kerb: crate::kerbside::KerbState::NONE,
                 stuck_since: None,
                 human: crate::drivers::HumanState::default(),
+                signal_look: None,
+                violation: 0,
+                crash: None,
                 lc: crate::lanechange::lc2013::Lc2013State::default(),
             },
         );
