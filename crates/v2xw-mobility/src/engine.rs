@@ -9341,7 +9341,9 @@ mod tests {
                 ..EngineParams::default()
             };
             let mut engine = engine_on(&world, params, &rng);
-            let lead = engine.insert_trip(&world, &trip_at(60.0, 0), 0).expect("lead");
+            let lead = engine
+                .insert_trip(&world, &trip_at(60.0, 0), 0)
+                .expect("lead");
             let body = VehicleClass::Passenger.spec().length_m;
             let back = engine
                 .insert_trip(&world, &trip_at(60.0 - body - 8.0, 1), 0)
@@ -9349,18 +9351,39 @@ mod tests {
             let st = engine.longitudinal_states();
             let v = |id| st.iter().find(|x| x.0 == id).map(|x| x.3).unwrap();
             let d = engine.actors[&back].driver;
-            (v(lead), v(back), d, engine.actors[&lead].traits.speed_factor)
+            (
+                v(lead),
+                v(back),
+                d,
+                engine.actors[&lead].traits.speed_factor,
+            )
         };
         let (lead0, back0, _, _) = speeds(false);
-        assert_eq!((lead0, back0), (0.0, 0.0), "off: every trip departs at rest");
+        assert_eq!(
+            (lead0, back0),
+            (0.0, 0.0),
+            "off: every trip departs at rest"
+        );
         let (lead, back, d, factor) = speeds(true);
         let cap = 13.89_f64.min(lane.speed_limit_mps * factor);
         let stop = (2.0 * d.comfort_decel_mps2 * (lane.length_m - 60.0)).sqrt();
-        assert!(lead > 0.5 * cap.min(stop), "the clear lane's trip departs moving: {lead}");
-        assert!(lead <= cap.min(stop) + 1e-9, "{lead} over min({cap}, {stop})");
+        assert!(
+            lead > 0.5 * cap.min(stop),
+            "the clear lane's trip departs moving: {lead}"
+        );
+        assert!(
+            lead <= cap.min(stop) + 1e-9,
+            "{lead} over min({cap}, {stop})"
+        );
         let room = 8.0 - d.min_gap_m;
-        assert!(back <= room / d.time_headway_s + 1e-9, "{back} crowds the leader");
-        assert!(back < lead, "the trip 8 m behind departs slower: {back} vs {lead}");
+        assert!(
+            back <= room / d.time_headway_s + 1e-9,
+            "{back} crowds the leader"
+        );
+        assert!(
+            back < lead,
+            "the trip 8 m behind departs slower: {back} vs {lead}"
+        );
     }
 
     #[test]

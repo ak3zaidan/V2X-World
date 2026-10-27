@@ -25,8 +25,16 @@ fn a_profile_that_publishes_p384_charges_it() {
     let (_, verify) = signature_ops("ecdsa-p384");
     let (sign, _) = signature_ops("ecdsa-p384");
     let us = |op: &str| p.op_cost(op).map(|c| c.0.as_secs_f64() * 1e6);
-    assert!(us(verify).is_some_and(|t| (t - 5_721.0).abs() < 1.0), "{:?}", us(verify));
-    assert!(us(sign).is_some_and(|t| (t - 8_104.0).abs() < 1.0), "{:?}", us(sign));
+    assert!(
+        us(verify).is_some_and(|t| (t - 5_721.0).abs() < 1.0),
+        "{:?}",
+        us(verify)
+    );
+    assert!(
+        us(sign).is_some_and(|t| (t - 8_104.0).abs() < 1.0),
+        "{:?}",
+        us(sign)
+    );
     assert!(!p.op_cost_is_curve_proxy(verify));
     let p256 = p.op_cost("ecdsa-p256-verify").expect("priced").0;
     assert!(p.op_cost(verify).expect("priced").0 > p256 * 5);
@@ -46,7 +54,10 @@ fn a_profile_without_p384_charges_p256_and_says_so() {
         );
         let facts = p.op_cost_facts(op).expect("priced");
         assert!(
-            facts.source.as_deref().is_some_and(|s| s.contains("charged as P-256")),
+            facts
+                .source
+                .as_deref()
+                .is_some_and(|s| s.contains("charged as P-256")),
             "{facts:?}"
         );
     }

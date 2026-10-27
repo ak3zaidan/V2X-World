@@ -475,13 +475,20 @@ fn a_split_certificate_is_counted_once_across_its_pieces() {
         let (Some(e), Some(c)) = (t.envelope_bytes, t.cert_bytes) else {
             continue;
         };
-        assert!(c <= e, "a frame's certificate octets {c} exceed its envelope {e}: {t:?}");
-        let s = sums.entry(t.msg_type.clone().unwrap_or_default()).or_default();
+        assert!(
+            c <= e,
+            "a frame's certificate octets {c} exceed its envelope {e}: {t:?}"
+        );
+        let s = sums
+            .entry(t.msg_type.clone().unwrap_or_default())
+            .or_default();
         s.0 += c;
         s.1 += e;
         if c > 0 && t.frag_header_bytes.unwrap_or(0) > 0 {
             split_with_cert += 1;
-            *groups.entry((t.node.index(), t.msg.unwrap_or(0))).or_default() += c;
+            *groups
+                .entry((t.node.index(), t.msg.unwrap_or(0)))
+                .or_default() += c;
         }
     }
     assert!(split_with_cert > 0, "no certificate-bearing SPDU was split");
@@ -490,5 +497,9 @@ fn a_split_certificate_is_counted_once_across_its_pieces() {
     }
     // Every split certificate sums back to one hybrid certificate's size.
     let sizes: BTreeSet<u64> = groups.values().copied().collect();
-    assert_eq!(sizes.len(), 1, "split certificates sum to different sizes: {sizes:?}");
+    assert_eq!(
+        sizes.len(),
+        1,
+        "split certificates sum to different sizes: {sizes:?}"
+    );
 }

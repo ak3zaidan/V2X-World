@@ -504,7 +504,10 @@ fn the_pseudonym_strategy_moves_linkability_and_p2pcd() {
         qs.seed = seed;
         let (tm, qm) = (run(ts), run(qs));
         let opened = first_frames_after_changes(&qm);
-        assert_eq!(opened.1, 0, "seed {seed}: a silence hid the new certificate");
+        assert_eq!(
+            opened.1, 0,
+            "seed {seed}: a silence hid the new certificate"
+        );
         lost_t += node_lost(&tm, "unknown-signer");
         lost_q += node_lost(&qm, "unknown-signer");
     }

@@ -1437,7 +1437,11 @@ fn a_certificate_used_outside_its_validity_is_reported_as_cert_validity() {
     s.threats
         .attackers
         .retain(|a| a.id.ends_with("/ExpiredCert"));
-    assert_eq!(s.threats.attackers.len(), 1, "cat2 has one ExpiredCert attacker");
+    assert_eq!(
+        s.threats.attackers.len(),
+        1,
+        "cat2 has one ExpiredCert attacker"
+    );
     let mut nyv = s.threats.attackers[0].clone();
     nyv.id = "threat/attacker/legacy/NotYetValid".to_string();
     nyv.actor_ids = vec![30];

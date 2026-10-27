@@ -9156,13 +9156,15 @@ mod provider_failure_tests {
         });
         s.actors.backend.failures = failures
             .iter()
-            .map(|(node, from, to)| crate::scenario::schema::BackendFailureSpec {
-                node: (*node).to_string(),
-                mode: "offline".to_string(),
-                from_s: *from,
-                to_s: Some(*to),
-                extra_ms: None,
-            })
+            .map(
+                |(node, from, to)| crate::scenario::schema::BackendFailureSpec {
+                    node: (*node).to_string(),
+                    mode: "offline".to_string(),
+                    from_s: *from,
+                    to_s: Some(*to),
+                    extra_ms: None,
+                },
+            )
             .collect();
         assert!(
             crate::crypto_config::check(&s).is_ok(),
@@ -9191,7 +9193,10 @@ mod provider_failure_tests {
         let mut p = two_providers(&[("provider-b/crl_store", from, to)]);
         assert_eq!(p.runs.len(), 2, "us-production-2025: two providers");
         let b_store = p.home().state.deployment.nodes(1).online.crl_store;
-        assert!(p.runs[0].state.faults.faults.is_empty(), "the home run is up");
+        assert!(
+            p.runs[0].state.faults.faults.is_empty(),
+            "the home run is up"
+        );
         assert_eq!(p.runs[1].state.faults.faults.len(), 1);
         assert_eq!(p.runs[1].state.faults.faults[0].node, b_store);
         let next_crl = p.runs[1].state.params.crl.next_crl;
@@ -9217,9 +9222,20 @@ mod provider_failure_tests {
             serial: b0,
         });
         p.advance(s(week + 120.0));
-        assert_eq!(generated(&p, 1), g0 + 1, "provider-b renewed its list at nextCrl");
-        assert_eq!(store(&p, 1), b0, "provider-b's store is down: nothing landed");
-        assert!(p.runs[1].state.faults.held >= 1, "the publication is held, not lost");
+        assert_eq!(
+            generated(&p, 1),
+            g0 + 1,
+            "provider-b renewed its list at nextCrl"
+        );
+        assert_eq!(
+            store(&p, 1),
+            b0,
+            "provider-b's store is down: nothing landed"
+        );
+        assert!(
+            p.runs[1].state.faults.held >= 1,
+            "the publication is held, not lost"
+        );
         assert_eq!(p.runs[1].state.faults.dropped, 0);
         assert_eq!(store(&p, 0), a0 + 1, "the home store published its renewal");
         assert_eq!(p.runs[0].state.faults.held, 0);
@@ -9229,14 +9245,21 @@ mod provider_failure_tests {
             "the RA serves provider-b's old list while its store is down"
         );
         p.advance(s(to + 300.0));
-        assert_eq!(store(&p, 1), b0 + 1, "delivered on the retry after the outage");
+        assert_eq!(
+            store(&p, 1),
+            b0 + 1,
+            "delivered on the retry after the outage"
+        );
         // The backend stamps a publication with the step that saw it; provider-a's RA
         // holds it only once the inter-provider link has carried it (milliseconds), so
         // look one step later.
         p.advance(s(to + 301.0));
         assert_eq!(served_serial(&p, 1), b0 + 1, "every RA serves it from then");
         let at = p.crl_feeds[1].last().expect("a version").at;
-        assert!(at >= s(to), "provider-b's list is served from the store's return");
+        assert!(
+            at >= s(to),
+            "provider-b's list is served from the store's return"
+        );
     }
 
     /// The unqualified name keeps its meaning (the home provider's server), and a
@@ -9258,7 +9281,9 @@ mod provider_failure_tests {
             to_s: None,
             extra_ms: None,
         }];
-        let e = crate::crypto_config::check(&s).expect_err("no provider-z").to_string();
+        let e = crate::crypto_config::check(&s)
+            .expect_err("no provider-z")
+            .to_string();
         assert!(e.contains("provider-a, provider-b"), "{e}");
     }
 }

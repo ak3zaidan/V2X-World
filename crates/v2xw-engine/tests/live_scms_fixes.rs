@@ -28,7 +28,10 @@ fn detection_never_judges_an_unverified_message() {
         p.messages_checked, p.messages_not_checked, p.verification_states
     );
     assert_eq!(
-        p.verification_states.get("Unverified").copied().unwrap_or(0),
+        p.verification_states
+            .get("Unverified")
+            .copied()
+            .unwrap_or(0),
         0,
         "{:?}",
         p.verification_states

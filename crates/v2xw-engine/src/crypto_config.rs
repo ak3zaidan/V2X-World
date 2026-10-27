@@ -178,11 +178,7 @@ pub fn failure_node(name: &str, run: &ScmsRun) -> Option<NodeId> {
 
 /// `role` (or `<role>-member-<k>`) among the components `n` names. Committee member ids
 /// are the same block in every provider's run, so any provider's `run` resolves them.
-fn role_node(
-    name: &str,
-    n: &v2xw_proto::scms::params::ScmsNodes,
-    run: &ScmsRun,
-) -> Option<NodeId> {
+fn role_node(name: &str, n: &v2xw_proto::scms::params::ScmsNodes, run: &ScmsRun) -> Option<NodeId> {
     if let Some((role, k)) = member_name(name) {
         return run.committee_members(role).get(usize::from(k)).copied();
     }
