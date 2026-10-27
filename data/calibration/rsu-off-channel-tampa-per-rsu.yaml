@@ -1,0 +1,43 @@
+# CANDIDATE (not read by the engine yet): per-RSU spread of radio.devices.rsu.off_channel,
+# from the public Tampa CV-pilot RSU log. Derived statistics only; no raw rows.
+# Status: analysis 2026-10-27, research/synthesis/p1-realdata-baseline.md section 7.
+provenance:
+  dataset: nm7w-nvbm   # Tampa CV Pilot BSM Sample, CC BY-SA 4.0, data.transportation.gov
+  query: "https://data.transportation.gov/resource/nm7w-nvbm.csv?$select=metadata_rsuid,metadata_recordgeneratedat,coredata_id,coredata_secmark,coredata_msgcnt,coredata_speed&$order=coredata_id,metadata_recordgeneratedat,:id"
+  rows: 34464
+  file_sha256: e209906614f7c7a29a04fb60c2108ce11c7ce0709e7a67407dbc12510e9a4832
+  tool: "python3 -I tools/realdata/phaseloss.py tampa tampa_rsu.csv  (fetch: tools/realdata/phasefetch.py)"
+  method: >-
+    msgCnt-attested losses of free devices (137 of 226 temporary IDs), each missing BSM placed
+    at its interpolated secMark phase (mod 100 ms), sequenced per (ID, RSU) so a loss is a
+    loss at that RSU; the counting rule is fitoff.py's (commit ca0d0ec4). excess =
+    (loss[10,30) - loss[50,100)) / (1 - loss[50,100)); p_off scales the pooled fit
+    (probability 0.45 at excess 0.372, rsu-off-channel-tampa.yaml of commit ca0d0ec4, not yet on this branch) linearly, assuming every
+    RSU has the pooled fit's timing (from 18 ms, 32 ms away).
+  assumption: same generation-to-air latency as the pooled fit; RSU timing identical.
+pooled: {excess: 0.372, p_off: 0.45, loss_10_30: 0.515, loss_50_99: 0.228}
+# The phase lock is the same in every hour of the sample (UTC 04, 05, 06: excess 0.385,
+# 0.372, 0.370), so it is a fixed RSU schedule, not a load effect.
+by_hour_utc: {"04": 0.385, "05": 0.372, "06": 0.370}
+# Two of 15 RSUs show no phase lock (95 % ID-bootstrap CI of the loss difference covers 0):
+# a deployment mixes continuous-receive units with units that leave the channel.
+share_without_off_channel: 0.133   # 2 of 15 (thea17, thea24)
+rsus:   # id: [temp IDs, excess, p_off, rest-of-interval loss]
+  thea1:  [11, 0.665, 0.80, 0.457]
+  thea10: [3, 0.393, 0.48, 0.115]
+  thea15: [3, 0.521, 0.63, 0.198]
+  thea17: [4, 0.058, 0.07, 0.265]
+  thea18: [6, 0.309, 0.37, 0.337]
+  thea24: [10, 0.005, 0.01, 0.163]
+  thea25: [6, 0.166, 0.20, 0.292]
+  thea29: [4, 0.341, 0.41, 0.211]
+  thea33: [2, 0.534, 0.65, 0.154]
+  thea39: [3, 0.291, 0.35, 0.201]
+  thea4:  [2, 0.579, 0.70, 0.158]
+  thea42: [11, 0.751, 0.91, 0.374]
+  thea5:  [2, 0.307, 0.37, 0.179]
+  thea6:  [2, 0.463, 0.56, 0.118]
+  thea9:  [3, 0.472, 0.57, 0.156]
+# Candidate engine form: draw each RSU's off_channel.probability from this list (or from
+# {0 w.p. 0.133, else uniform over the 13 non-zero p_off}) instead of one value for all RSUs.
+# Not observable at Wyoming (host-OBU log, no RSU reception) or NYC (no UTC time).

@@ -148,6 +148,144 @@ HEAVY_LOCK=/private/tmp/claude-501/v2xw-run.lock HEAVY_MEM_CAP_MB=2500 heavy.sh 
 - **What it writes:** the tables below, `research/synthesis/p1-realdata-results.json` and the YAML.
 - **`rdtool.py fit` is the only way to re-freeze the classifier.** After it, the frozen file must be committed before `all` will score Wyoming.
 
+## 7. Phase-locked RSU loss across sites, and the device clock behind P1-E4 (2026-10-27)
+
+This is analysis only. No engine runs were made and no shipped numbers changed. The candidates are new files: `data/calibration/rsu-off-channel-tampa-per-rsu.yaml` and `data/calibration/bsm-stamp-epoch-candidates.yaml`.
+
+- **Tools:** `tools/realdata/phasefetch.py` adds two side queries:
+  - Tampa with `metadata_rsuid`: 34,464 rows, sha256 `e2099066…`;
+  - Wyoming with its log metadata: 6,597 rows, sha256 `10dbee68…`.
+  These are separate files, so the pinned manifest does not move.
+- **Analysis scripts:** `phaseloss.py`, `e4clock.py`, `stampjit.py`, `kinlag.py` and `e4stampmc.py`. Each one's usage is in its docstring.
+- **Sources:** the three DOT datasets `nm7w-nvbm`, `7qu7-j8rx`, `vxmm-9bi5`, and Orem `ev64-jn8c` for contrast. `secMark` is milliseconds within the UTC minute (SAE J2735 DE_DSecond).
+- **Where the 100 ms grid comes from:** IEEE Std 1609.4-2016 channel-interval timing. Each 100 ms sync interval starts on the UTC second and splits into a control-channel half and a service-channel half, each opening with a guard interval. The clause number was not re-checked for this section.
+
+### 7.1 Is the Tampa loss phase-locked at every RSU and every hour?
+
+The counting is fitoff.py's (commit `ca0d0ec4`). Only free devices are used, 137 of 226 IDs. Each loss is a msgCnt-attested missing BSM, placed at its interpolated secMark phase. The data are sequenced per (ID, RSU), so a loss is a loss at that RSU. excess = (loss[10,30) − loss[50,100)) / (1 − loss[50,100)). The CI is a 95 % bootstrap over IDs.
+
+| group | IDs | loss 10-30 ms | loss 50-99 ms | diff (95 % CI) | excess |
+|---|---|---|---|---|---|
+| all RSUs | 137 | 0.515 | 0.228 | +0.287 (+0.234..+0.337) | 0.372 |
+| hour 04 UTC | 30 | 0.520 | 0.219 | +0.301 (+0.230..+0.374) | 0.385 |
+| hour 05 UTC | 23 | 0.570 | 0.316 | +0.255 (+0.171..+0.364) | 0.372 |
+| hour 06 UTC | 84 | 0.507 | 0.217 | +0.290 (+0.216..+0.357) | 0.370 |
+| thea24 | 10 | 0.167 | 0.163 | +0.004 (−0.056..+0.089) | 0.005 |
+| thea17 | 4 | 0.307 | 0.265 | +0.042 (−0.015..+0.413) | 0.058 |
+| thea25 | 6 | 0.410 | 0.292 | +0.118 (+0.089..+0.215) | 0.166 |
+| thea39 / thea5 / thea18 | 3 / 2 / 6 | 0.43-0.54 | 0.18-0.34 | +0.21..+0.25 | 0.29-0.31 |
+| thea29 / thea10 / thea6 / thea9 | 4 / 3 / 2 / 3 | 0.46-0.55 | 0.12-0.21 | +0.27..+0.41 | 0.34-0.47 |
+| thea15 / thea33 / thea4 | 3 / 2 / 2 | 0.61-0.65 | 0.15-0.20 | +0.42..+0.49 | 0.52-0.58 |
+| thea1 / thea42 | 11 / 11 | 0.82-0.84 | 0.37-0.46 | +0.36..+0.47 | 0.67-0.75 |
+
+Loss by 10 ms phase decade (all RSUs):
+
+| phase | 0 | 10 | 20 | 30 | 40 | 50 | 60 | 70 | 80 | 90 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| loss | 0.336 | 0.525 | 0.505 | 0.418 | 0.350 | 0.256 | 0.211 | 0.231 | 0.216 | 0.224 |
+
+**Finding 1.** The lock is the same in all three hours (excess 0.370-0.385), so it is a fixed schedule, not a load effect. It is common to 13 of 15 RSUs at the same UTC phase, which points to a 1609.4-synchronised schedule. Two RSUs (thea24, thea17) show none, and their CIs cover 0.
+
+- So a deployment mixes continuous-receive units with units that leave the channel.
+- Among the units that leave, the excess spans 0.17-0.75.
+- `rsu-off-channel-tampa-per-rsu.yaml` lists each RSU's p_off, scaled from the pooled fit (0.45). The scaling assumes every RSU shares the pooled timing.
+- The per-RSU values from 2-3 IDs are wide. thea1 and thea42 also have the highest rest-of-interval loss, which fits coverage-edge units.
+
+**Wyoming (`7qu7-j8rx`) cannot show this.** All 6,597 rows are the host OBU's own log: `metadata_bsmsource` is EV and `metadata_recordtype` is bsmLogDuringEvent or bsmTx. Every row also comes from one OBU, because every `metadata_logfilename` ends in the same link-local address while 16 temporary IDs rotate. So there is no reception and nothing for an RSU to lose. Every stream is locked, so the 10-30 ms window is empty.
+
+- Outside an event's core the log drops to 1 Hz: 1,520 pairs have msgCnt steps of 10/11.
+- Excluding those, msgCnt-attested gaps are 0.016 of slots. The :00 and :50 grids are alike (0.015 / 0.016).
+- So the host OBU itself does not skip phase-dependently. Tampa's lock is on the receive side.
+
+**NYC (`vxmm-9bi5`) cannot be put on UTC.** `T_s` is translated per event (normalise.py, per the dataset's DataProcessing.txt), so it carries no UTC phase. What can be formed is the remote-BSM loss by phase relative to the host's own BSM: 254 remote IDs, 1 Hz decimation excluded. In 10 ms bins it is 0.056 / 0.112 / 0.069 / 0.065 / 0.086 / 0.088 / 0.089 / 0.030 / 0.087 / 0.040.
+
+- The [10,30) vs [50,100) difference against the event origin is +0.017, with CI −0.028..+0.061.
+- There is no structure beyond noise, and no half-duplex dip at the host's own transmit phase at this 10 ms resolution.
+- A NYC OBU receiving on a continuous channel would look like this, but the data cannot tell that apart from a UTC lock.
+
+### 7.2 What is left of P1-E4: the stamp model, not the hops or the header clock
+
+Pairs are resid.py's: secMark dt, judged at 0.5 s, v1 ≥ 10 m/s. Wyoming has 4,946 pairs over 12 IDs. Splits:
+
+| Wyoming split | share | residual p50 / p90 / p99 cm |
+|---|---|---|
+| secMark dt 100 ms | 0.705 | 1.58 / 5.70 / 15.4 |
+| :00/:50 hop (dt 50 or 150) | 0.282 | 1.75 / 6.01 / 15.5 |
+| msgCnt-attested loss (dt 200-500) | 0.006 | 5.74 / 20.5 / 29.4 |
+| header − secMark dt ≤ 5 ms / 5-20 / 20-50 / > 50 | 0.40 / 0.22 / 0.22 / 0.16 | p90 5.43 / 6.77 / 7.01 / 5.28 |
+
+- **The hops carry the position at the new instant.** Recomputing with dt rounded to 100 ms turns p90 into 174 cm. Dropping all hop pairs moves Wyoming's own distribution by only KS 0.022, so the grid hops are not the gap.
+- **The log clock is not the BSM clock.** Binned by header − secMark dt, the residual barely changes. `metadata_generatedat` carries nothing about the position's time.
+
+Along-track residual / v (ms) by secMark-dt offset e = dt − nominal, with msgCnt +1:
+
+| e (ms) | Wyoming share (100 ms) | Wyoming mean (sd) | Tampa locked mean (sd) | Orem locked mean (sd) |
+|---|---|---|---|---|
+| −1 | 0.195 | +1.02 (2.12) | +2.21 (7.9) | −0.23 (2.7) |
+| 0 | 0.598 | −0.17 (0.49) | +0.28 (3.4) | −0.34 (2.5) |
+| +1 | 0.207 | −1.20 (0.16) | −0.86 (0.56) | −0.36 (2.4) |
+
+**Finding 2. Wyoming's position sits on the fix epoch.** Only the stamp moves: secMark = epoch + o with o ∈ {−1, 0} ms on both grids (P(o = −1) 0.46). It is a Markov chain: stay −1 0.566, stay 0 0.630.
+
+- A position left on the epoch gives a mean of −e, which is what the table shows. A position at the jittered instant gives about 0.
+- At 34 m/s each e = ±1 pair therefore carries exactly 3.4 cm. That is the 0.16 ms sd at e = +1.
+- Tampa's locked IDs (a fit set) show the same signature at a lower rate: P(o = −1) 0.10.
+- Orem's locked IDs are at the instant, and their −1 never persists (stay −1 0.03).
+- The shipped v3 fit pools these behaviours: a normal instant 0.286 / 0.254 ms with the position at the instant (`bsm_timing.rs` "at_instant"). It smears every pair by about v × 0.36 ms, about 1.2 cm, instead of 40 % of pairs exactly ±v × 1 ms and 60 % with none.
+
+**Finding 3. The tail is persistent position steps, tied to 0 → −1 stamp transitions.**
+
+| transition o1 → o2 | Wyoming pairs | Wyoming p50 / p90 / p99 cm | Tampa locked pairs | Tampa p50 / p90 / p99 cm |
+|---|---|---|---|---|
+| −1 → −1 | 1,282 | 1.02 / 1.76 / 2.81 | 53 | 0.78 / 1.68 / 5.55 |
+| 0 → 0 | 1,649 | 1.11 / 2.70 / 11.0 | 1,856 | 0.86 / 6.12 / 23.3 |
+| −1 → 0 | 983 | 4.20 / 5.01 / 5.99 | 173 | 1.37 / 3.37 / 3.92 |
+| 0 → −1 | 969 | 4.82 / 12.7 / 27.4 | 165 | 7.84 / 19.9 / 49.5 |
+
+- A residual > 5 cm falls on a 0 → −1 transition with P 0.48 at Wyoming and 0.70 at Tampa. Elsewhere it is 0.05 and 0.11.
+- The steps are along-track: 90 % have |along| > |cross|. Wyoming's step |along| has p50 6.3 cm and p90 13.0 cm.
+- They persist. 0-2 % are followed by an opposite step of half the size, and the lag-1 along correlation is 0.00. They are not spikes.
+- A step comes with a change in the reported speed: corr(along, Δv·dt) 0.69 at Wyoming, 0.59 at Tampa, with slopes 6.8 and 4.4 against 0.5 for constant-acceleration motion. That fits a positioning filter that corrects position and velocity together.
+- The shipped walk draws its heavy increments at every epoch, independently of the stamp, and leaves speed alone.
+
+**Decomposition** (`e4stampmc.py`, 20,000 synthetic pairs at Wyoming's speeds). The base and step pools both come from Wyoming, so only the stamp model varies:
+
+| stamp model | steps | KS vs Wyoming | p50 / p90 / p99 cm |
+|---|---|---|---|
+| epoch chain, Wyoming rates | on | **0.078** | 1.84 / 4.71 / 14.8 |
+| epoch chain, Wyoming rates | off | 0.150 | 1.61 / 4.09 / 5.2 |
+| epoch chain, Tampa-locked rates | on | 0.173 | 1.23 / 4.34 / 14.9 |
+| at the instant (shipped v3) | on | 0.208 | 1.52 / 3.76 / 14.1 |
+| none | on | 0.274 | 1.12 / 3.26 / 13.9 |
+
+**Verdict on P1-E4.** The remaining KS (0.165 v3, 0.105 with GNSS velocity noise off) is explained by device clock behaviour.
+
+- The cause is the stamp model: the position goes on the epoch and the stamp offset follows a {−1, 0} chain, against the instant model's continuous smear.
+- Then comes the device's offset rate: Wyoming's OBU is early on 46 % of BSMs, Tampa's locked units on 10 %.
+- The grid hops and the header clock do not explain it.
+- With both in, a synthetic body lands at KS 0.078, under the 0.092 tolerance.
+
+**Caveat that changes the reading of P1-E4.** Wyoming is one OBU, so the 0.092 tolerance is a between-temp-ID spread of a single device, not a between-device spread. Matching it with the Wyoming chain rates would put the held-out set in-sample on two parameters.
+
+- Realistic, out-of-sample form: give the engine device profiles with the epoch-chain mechanism, using `bsm-stamp-epoch-candidates.yaml`'s Tampa-locked rates as the fit.
+- Report P1-E4 against Wyoming with the chain rate as the one stated device parameter: in-sample on that rate, out-of-sample on everything else.
+
+**Expected, written before any engine run, for the engine owner:**
+- epoch-chain stamps at Tampa rates, with the v3 walk unchanged: KS between 0.15 and 0.19;
+- with Wyoming rates: KS ≤ 0.10;
+- with steps also moved onto 0 → −1 transitions: KS ≤ 0.092.
+
+### 7.3 Side finding: Wyoming's reported speed lags its position
+
+`kinlag.py` compares the reported speed with the position-derived speed (1 s centred window) at shifts −0.5..+2 s.
+
+- At Wyoming the best shift is 0.475 s on 6 of 8 IDs. All 8 are the same OBU. The rms difference drops from 0.120 to 0.096 m/s.
+- The heading shift is 0.075 s.
+- At Tampa the best shift is 0.05 s: the rms difference is 0.75 m/s, too noisy to read.
+- Taking the speed 0.475 s later does not shrink the RandomPosition residual (p90 5.82 → 5.84 cm), so it is not part of P1-E4.
+- It does matter for speed-consistency detectors (MaxAcceleration, the speed-vs-displacement checks).
+- It is one device, so it is listed as an observation, not a calibration.
+
 ---
 
 ## Generated tables
