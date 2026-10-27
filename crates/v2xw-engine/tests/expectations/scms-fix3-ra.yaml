@@ -106,7 +106,7 @@ rows:
   source: '[CAMP122] 5.2.7.6.4 (the RA pre-generates); [PRIMER] p.6'
   measured: 'B 1,482,343 against F 959,355 bytes (-35 %)'
   verdict: open
-  note: 'as written it passes, but the expectation is not the deployment: a real RA adds week (i + horizon) for every account at each boundary, in the run ([PRIMER] p.6), so the in-run RA-LA-ACA load is about one week per account per boundary. The engine generates only weeks a device asks for; with the 3-year horizon none is generated in the run, and scms_knobs_runs the_architecture_is_the_deployments fails (no RA-LA message in the run). Open: run the far-horizon weekly job in the run'
+  note: 'as written it passes, but the expectation is not the deployment: a real RA adds week (i + horizon) for every account at each boundary, in the run ([PRIMER] p.6), so the in-run RA-LA-ACA load is about one week per account per boundary. The engine generates only weeks a device asks for; with the 3-year horizon none is generated in the run, and scms_knobs_runs the_architecture_is_the_deployments fails (no RA-LA message in the run). Open: run the far-horizon weekly job in the run. Taken up by RA.boundary-job (ScmsRun::arm_boundary_jobs)'
 - id: RA.uu-bytes-per-topup
   base: B
   variant: F
@@ -191,6 +191,37 @@ rows:
   source: '[PRIMER] p.6 (adds one week every week); [SMP] Table 3'
   measured: 'backend FH 1,197,991 > FS 959,355 bytes; topup FH 14,886 > FS 4,947 ms'
   verdict: pass
+# --- (1b) the RA's weekly job at every boundary, unasked (RA.backend-bytes open item) ------
+# Written 2026-10-27 12:20 before the second build ran. G = base.yaml on the second build
+# (arm_boundary_jobs and provider-b's second ACA); base.yaml's i-period is 60 s, so the run
+# crosses the boundaries at 60 s and 120 s.
+- id: RA.boundary-job
+  base: F
+  variant: G
+  area: network
+  measure: phase2.access.backend_bytes (in run)
+  expect: 'G > F, and G - F > B - F: at each of the two boundaries every account adds the week that comes into ra-maxPreloadTime, so the RA-LA-ACA hops of one week per account per boundary are on the run (more weeks than the 59 the lazy RA generated on request in B)'
+  source: '[PRIMER] p.6 (the RA adds one week every week); [CAMP122] 5.2.7.6.4; [SMP] Table 3 ra-maxPreloadTime'
+  measured: pending
+  verdict: pending
+- id: RA.boundary-metrics
+  base: F
+  variant: G
+  area: metrics
+  measure: topup mean, topups_completed, receiver_validation refused
+  expect: 'top-up mean within +-10 % (the boundary week is not one any device asks for in the run; the RA serves .info and downloads from held files while the job runs), topups_completed equal, refusals equal'
+  source: 1609.2.1 §6.3.5.4 (the top-off of a held week is .info + download); queueing at an RA with backend_servers parallel servers
+  measured: pending
+  verdict: pending
+- id: RA.boundary-cost
+  base: F
+  variant: G
+  area: cost
+  measure: events (engine classes), wall, peak memory (one binary each: F on fix1, G on fix2)
+  expect: 'events within +-1 % (the backend kernel is not in events_by_class, RA.events); peak memory within +10 % (one more week of files per account per boundary); wall reported, not judged across binaries'
+  source: event accounting; RA repository size
+  measured: pending
+  verdict: pending
 # --- (2) R-PQUNSEC -------------------------------------------------------------------------
 - id: PQ.rsu-own-reports
   base: PQF
