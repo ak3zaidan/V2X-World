@@ -704,6 +704,39 @@ pub fn adjacent_acir_db(
     Ok(acir_db(aclr, acs))
 }
 
+/// The leakage between a run's own channels (WP-13): for every ordered pair of distinct
+/// channels in `channels`, the ACIR of a transmitter of `technology` on the first into a
+/// receiver of the same technology on the second, as [`adjacent_acir_db`] prices it at the
+/// victim's rate index `victim_mcs_index`. Keyed `(aggressor, victim)`; a pair that
+/// overlaps or that the region does not open is left out (the loader refuses both).
+///
+/// Re-implemented from 3GPP TR 36.942 §5.1.1.3 (ACIR) with the ETSI EN 302 571 V2.1.1
+/// mask and Table 8 selectivity; Veins/Artery were read for behaviour only and no code
+/// was copied. Beyond the alternate channel the alternate-channel selectivity is kept,
+/// which is conservative: a real receiver rejects a channel three away by more.
+#[must_use]
+pub fn own_channel_leakage(
+    region: Region,
+    technology: Technology,
+    channels: &[u16],
+    victim_mcs_index: u8,
+) -> std::collections::BTreeMap<(u16, u16), f64> {
+    let mut out = std::collections::BTreeMap::new();
+    for &a in channels {
+        for &v in channels {
+            if a == v {
+                continue;
+            }
+            if let Ok(acir) =
+                adjacent_acir_db(region, technology, a, technology, v, victim_mcs_index)
+            {
+                out.insert((a, v), acir);
+            }
+        }
+    }
+    out
+}
+
 /// The most a station may radiate on a channel, dBm EIRP.
 ///
 /// * An RSU gets the channel's limit, less `20·log10(h/8)` dB when its antenna is above

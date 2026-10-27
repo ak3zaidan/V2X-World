@@ -499,6 +499,26 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: a single-channel configuration is byte-identical to today; moving SPaT/MAP/TIM/WSA
   off the safety channel lowers its CBR by the moved share; the adjacent-channel noise rise
   equals the ACIR computed from `regulation.rs`. Fault: leakage disabled fails the noise test.
+- Status (2026-10-27): done, opt-in (branch `worktree-wf_6a49856b-494-4`). `radio.channels`
+  (`[{channel, messages}]`, default empty) maps message sets onto one service channel of the
+  region's band plan (`run/channels.rs`); `radio.devices.{obu,vru}.radios` (default 1) and
+  `rsu.radios` (default 2) decide who sends and hears it; `radio.channel_leakage` (default on)
+  prices our own channels' leakage by `regulation::own_channel_leakage` (EN 302 571 mask +
+  Table 8 ACS, TR 36.942 ACIR). PHY half-duplex is per (node, channel) and `leaked_dbm` is the
+  one leakage rule for SINR, carrier sense and CBR; MAC timers, CCA and CBR follow the frame's
+  channel; report `channel_busy_ns`/`channel_window_ns`, `untuned_arrivals`, `untuned_tx_drops`.
+  Validated (`tests/multichannel.rs`, `phy::tests::own_channel_leakage_*`): a 172-only map is
+  byte-identical to no map (records and report) and multi-channel runs are deterministic; SPaT+MAP
+  to 180 (share 0.787): CBR172 0.00793 -> 0.00169 (theory 0.00169), CBR180 0.00624 (theory
+  0.00623); 174->172 ACIR 12.98 dB and the recorded noise rise matches it within 0.3 dB in >= 90 %
+  of covered BSMs. Each red under its fault (leakage off, busy on the safety channel, co-channel
+  attenuated, every unit tuned to all, validation skipped). bsm_timing 3/3, phase2 13/13 run incl. the regression digest (the 14th hit the 2.5 GB run cap), engine `scenario::`
+  28/28 and radio `phy::`/`regulation::` 37/37 pass.
+  Open: no TIM message exists (SPaT/MAP/WSA only); one service channel (more needs WP-16
+  switching); co-located desense between a unit's two radios is not modelled; the DCC gate and
+  jammers act per node, not per channel; ACS beyond the alternate channel is held at the
+  alternate figure (conservative); the USDOT RSU Spec v4.1 two-radio clause is not yet checked
+  against a cached copy; C-V2X runs refuse a map.
 
 **WP-14 Configurable sensors, RSU sensors, outline occlusion** (M, 7 days). Source: O-P3a.
 - Scope: a sensor suite per vehicle class with mount point and azimuth (front and rear radars,

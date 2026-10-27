@@ -2787,6 +2787,52 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                jammer), as is one the region does not allow the technology on.",
     },
     KeyStatus {
+        path: "radio.channels",
+        status: Status::Wired,
+        note: "The run's own channel map (WP-13): each entry names a channel of the \
+               region's band plan and the message sets that go out on it (spat, map, wsa, \
+               srm, ssm, crl, mbr, denm, cpm, ...); everything else stays on radio.channel, \
+               which the safety broadcasts (bsm, cam, psm, vam) never leave. One service \
+               channel beside the safety channel (IEEE 1609.4-2016 §6.2.5 service \
+               channels; SAE J2945/1 keeps the BSM on 172; ETSI EN 302 663 / TS 103 141 in \
+               Europe). A unit sends and hears the service channel only with a second \
+               radio (radio.devices.*.radios: 2); a message for a channel it has no radio \
+               on is not sent (untuned_tx_drops). Each channel has its own EDCA queues, \
+               carrier sense and busy ratio (channel_busy_ns / channel_window_ns in the \
+               report). Empty, the default: the single-channel run, byte for byte.",
+    },
+    KeyStatus {
+        path: "radio.channel_leakage",
+        status: Status::Wired,
+        note: "Whether the run's own channels leak into each other (WP-13): a frame on \
+               one is energy on the other at its received power less the ACIR of \
+               v2xw_radio::regulation (the EN 302 571 V2.1.1 mask's ACLR with the Table 8 \
+               selectivity at the run's rate, TR 36.942 §5.1.1.3). It enters the SINR, \
+               carrier sense and the busy ratio. Unset is on; false is ideal channel \
+               filters. Only acts with radio.channels.",
+    },
+    KeyStatus {
+        path: "radio.devices.obu.radios",
+        status: Status::Wired,
+        note: "Radios on a vehicle's unit (WP-13): 1 (default; SAE J2945/1's single \
+               continuous safety-channel radio) or 2 (adds one on radio.channels' service \
+               channel). Acts only with radio.channels.",
+    },
+    KeyStatus {
+        path: "radio.devices.rsu.radios",
+        status: Status::Wired,
+        note: "Radios on a roadside unit (WP-13): 2 (default; the USDOT DSRC RSU \
+               Specification v4.1 calls for two) or 1, which keeps the unit on the safety \
+               channel and drops its service-channel messages. Acts only with \
+               radio.channels.",
+    },
+    KeyStatus {
+        path: "radio.devices.vru.radios",
+        status: Status::Wired,
+        note: "Radios on a pedestrian's or cyclist's device (WP-13): 1 (default) or 2. \
+               Acts only with radio.channels.",
+    },
+    KeyStatus {
         path: "radio.channel",
         status: Status::Wired,
         note: "The IEEE channel number within the region's band plan (170-184); unset, the \
@@ -6541,6 +6587,13 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
         }
         if let Err((path, why)) = crate::wiring::radio_regulation(s) {
             e.push(conflict(path, why));
+        }
+        // `radio.channels` (WP-13): the map's channels must be the region's, one service
+        // channel beside the safety one, real message sets, and one or two radios.
+        if let Err(errors) = crate::run::channels::plan(s) {
+            for (path, why) in errors {
+                e.push(conflict(&path, why));
+            }
         }
     }
 
