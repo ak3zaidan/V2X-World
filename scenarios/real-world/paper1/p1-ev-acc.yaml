@@ -1,0 +1,16 @@
+# P1-E8: p1-ev-plain.yaml with the attackers as threat/attacker/evasion/BenignClassMimic
+# over the same ConstPos payload: a stated 9 m 95 % accuracy.
+schema: v2xw/scenario/1
+meta:
+  base: p1-ev-plain.yaml
+  name: Paper 1 evasion acc
+  description: p1-ev-plain.yaml with the ConstPos attackers disguised (a stated 9 m 95 % accuracy).
+  tags: [paper1, validation, ma-replay, evasion]
+threats:
+  attackers:
+    - id: threat/attacker/evasion/BenignClassMimic
+      fraction: 0.03
+      params: {payload: ConstPos, stated_accuracy_m: 9.0}
+      schedule:
+        from_s: 30.0
+        to_s: 172800.0
