@@ -131,6 +131,7 @@ def main():
     rep = json.load(open(os.path.join(rd, "run-report.json")))
     r = rep.get("report") or {}
     out["frames_transmitted"] = r.get("frames_transmitted")
+    out["trips_complete"] = (r.get("despawn_causes") or {}).get("TripComplete")
     sl = r.get("sidelink") or {}
     out["sidelink"] = {k: v for k, v in sl.items() if not isinstance(v, (dict, list))}
     out["content_digest"] = rep.get("content_digest")
