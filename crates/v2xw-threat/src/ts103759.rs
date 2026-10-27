@@ -503,6 +503,11 @@ pub struct Ts103759Params {
     pub kalman_pos_floor_m: f64,
     /// The floor on the Kalman check's speed measurement σ, m/s (F2MD, 1 m/s).
     pub kalman_speed_floor_mps: f64,
+    /// What the broadcast position confidence is divided by to give the per-axis σ the
+    /// Kalman check uses. Default 2.4477: this engine's receivers broadcast the 95 %
+    /// circular radius (`v2xw_mobility::gnss::RAYLEIGH_95` · σ, the Gauss–Markov card's
+    /// "reported confidence"); 1 treats the confidence as one σ, as F2MD does.
+    pub kalman_conf_divisor: f64,
     /// The white-noise-acceleration spectral density q, m²/s³. Default b² · T with b the
     /// hardest braking of any vehicle class (10 m/s²) and T the BSM nominal interval
     /// (0.1 s): Bar-Shalom et al. 2001 §6.2.2 size q so that √(q·T) is the largest
@@ -651,6 +656,7 @@ impl Default for Ts103759Params {
             own_region: None,
             kalman_pos_floor_m: 4.0,
             kalman_speed_floor_mps: 1.0,
+            kalman_conf_divisor: 2.447_746_830_680_826_5,
             kalman_q_m2ps3: 10.0,
             kalman_gate_z: 3.0902,
             kalman_window: 10,
@@ -778,6 +784,7 @@ impl Ts103759Params {
             "mean_history" => self.mean_history = v.round() as u32,
             "kalman_pos_floor_m" => self.kalman_pos_floor_m = v,
             "kalman_speed_floor_mps" => self.kalman_speed_floor_mps = v,
+            "kalman_conf_divisor" => self.kalman_conf_divisor = v,
             "kalman_q_m2ps3" => self.kalman_q_m2ps3 = v,
             "kalman_gate_z" => self.kalman_gate_z = v,
             "envelope_margin_m" => self.envelope_margin_m = v,
@@ -818,7 +825,7 @@ impl Ts103759Params {
 pub const LABEL_KEYS: [&str; 2] = ["fusion", "scoring"];
 
 /// Every key [`Ts103759Params::apply`] reads.
-pub const PARAM_KEYS: [&str; 48] = [
+pub const PARAM_KEYS: [&str; 49] = [
     "max_plausible_range_m",
     "art_highway_m",
     "art_rural_m",
@@ -853,6 +860,7 @@ pub const PARAM_KEYS: [&str; 48] = [
     "max_payload_bytes",
     "kalman_pos_floor_m",
     "kalman_speed_floor_mps",
+    "kalman_conf_divisor",
     "kalman_q_m2ps3",
     "kalman_gate_z",
     "kalman_window",
@@ -1486,7 +1494,8 @@ impl Ts103759Suite {
     /// `kalman_window` messages against the χ² quantile of 4·n degrees of freedom.
     fn kalman(&mut self, m: &ObservedMessage, t: SimTime, x: &CrossCheckInputs<'_>, out: &mut TsVerdict) {
         let p = &self.params;
-        let sp = m.claimed_pos_confidence_m.max(p.kalman_pos_floor_m);
+        let sp = (m.claimed_pos_confidence_m / p.kalman_conf_divisor.max(1e-9))
+            .max(p.kalman_pos_floor_m);
         let sv = speed_conf(x.frame, p.kalman_speed_floor_mps);
         let sh = x.frame.and_then(|f| f.heading_confidence_rad).unwrap_or(0.0).max(0.0);
         let v = m.claimed_speed_mps;
@@ -2578,6 +2587,12 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
             json!(p.kalman_speed_floor_mps),
             tvt.clone(),
         ),
+        Parameter::new(
+            "kalman_conf_divisor",
+            "-",
+            json!(p.kalman_conf_divisor),
+            design("models/gnss gauss-markov card: reported confidence = RAYLEIGH_95 · √(σ² + σ_b²)"),
+        ),
         Parameter::new("kalman_q_m2ps3", "m^2/s^3", json!(p.kalman_q_m2ps3), bar_shalom.clone()),
         Parameter::new("kalman_gate_z", "-", json!(p.kalman_gate_z), bar_shalom.clone()),
         Parameter::new("kalman_window", "messages", json!(p.kalman_window), bar_shalom.clone()),
@@ -2683,8 +2698,9 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
         "The per-message CPU cost is a placeholder, not a measurement.".to_string(),
         "WP-10 checks are re-implemented from Kamel et al. TVT 2020, WCNC 2019 and \
          Bar-Shalom et al. 2001. F2MD was read for behaviour only and no code was copied. \
-         The Kalman check treats the broadcast position confidence as one σ (as F2MD does); \
-         a 95 % confidence makes it conservative by about 2.4x. The box check needs the \
+         The Kalman check divides the broadcast position confidence by kalman_conf_divisor \
+         (2.4477, this engine's 95 % radius; F2MD uses the confidence as one σ), and the \
+         envelope tolerance uses it undivided. The box check needs the \
          frame's vehicle size (FrameExtras) and is unchecked without it."
             .to_string(),
         "The suite is not yet selectable in detection.local, so its settings (including \

@@ -343,6 +343,39 @@ trustworthy or comparable; later waves add behaviours and radio features.
   not flagged while overlapping ghosts are; an honest 8 m/s² emergency stop is not flagged;
   the leaky bucket keeps each timeout on its own pseudonym after removals. Each check is
   shown red under an injected fault.
+- Status (2026-10-27, WP-10 agent, branch of `f4982788`). **Done**, in `v2xw-threat` only:
+  - New `consistency.rs`: CV Kalman (Bar-Shalom 2001 §6.2.2, NIS §5.4.2), Wilson–Hilferty χ²,
+    the reachable-distance envelope (closed form, chord-corrected on curves), oriented boxes
+    (SAT + Sutherland–Hodgman), CaTCh disc and interval overlaps.
+  - `ts103759.rs` new ids: `kalmanConsistencyTs`, `positionSpeedEnvelope`,
+    `positionSpeedMaxConsistency` (class 2), `boxIntersection` (class 5; other claims moved
+    on at their claimed velocity, scaled by (2 s − age)/2 s, plus the receiver's own
+    footprint). Inputs: `FrameExtras` (size, speed/heading confidence, reference point) and
+    `OwnFootprint` on `CrossCheckInputs`; absent inputs are unchecked and counted.
+  - `fusion` = `consecutive` (default) | `windowed-mean` | `leaky-bucket` (keyed by
+    pseudonym, D6 fixed), `scoring` = `threshold` (default) | `catch`. 17 new numeric keys
+    in `PARAM_KEYS` (plus `fusion`/`scoring` in `LABEL_KEYS`), each on the card with unit
+    and citation. Kalman R uses the broadcast confidence ÷ 2.4477 (`kalman_conf_divisor`:
+    the engine broadcasts the 95 % radius), floored at 4 m and 1 m/s.
+  - Defect fix: `max_plausible_accel/decel` 3/4.5 → 6/10 m/s² (the largest class accel and
+    emergency decel), and SpeedConsistency floors F2MD's margins at them; F2MD's values
+    flagged every honest emergency stop. F2MD's are `f2md_kinematics()`.
+- **Validated** (`tests/ts103759_wp10.rs`, 10 tests; lib 90, ts103759 25): every Accept
+  line, each red under an injected fault (gate z 30; length/width swapped; decel 4.5; D6
+  value shift on removal; θ 0.5; window cutoff off; envelope ×0; PSMax ×0; Kalman R
+  without the broadcast confidence, which gave 0.65 % honest Kalman firings). Honest
+  Gauss–Markov grid (test harness `tests/common/sim.rs` with a new delivery tap; 40
+  vehicles, 40 s, 397,854 deliveries, side-by-side lanes and signal queues): Kalman 68
+  firings (0.017 %), envelope, PSMax and box 0 (bound 0.1 % per evaluated message). A
+  receiver under-reporting its confidence as 1 m draws 0.95 % Kalman and 0.85 % envelope
+  firings (diagnostic). The same deliveries give byte-identical scores.
+- **Open**: the suite is still not selectable in `detection.local` (no scenario-schema
+  entry; engine hosting is the next step). Found, not fixed (out of scope):
+  `confidencePlausibility` fires on 99.7 % of honest messages, because the engine's GM
+  receiver broadcasts a 15.79 m 95 % radius against F2MD's 10 m `MAX_CONFIDENCE_RANGE`.
+  The engine host must fill `FrameExtras`/`OwnFootprint` from J2735 `VehicleSize` and
+  the node's own class; until then the box check is unchecked. The BSM centre / CAM front
+  reference points are as read, not checked against the standard text.
 
 **WP-11 Full surrogate safety measures** (M, 5 days). Source: S-P7b.
 - Scope: crossing, merging and oncoming TTC by trajectory extrapolation within 50 m; MDRAC
