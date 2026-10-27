@@ -53,6 +53,18 @@ runs:
   CPF:
     scenario: scenarios/scms-fix3/ci-scms-cpm.yaml
     note: fix; GN/BTP, CAM + CPM, four roadside-camera units under the US SCMS
+  G:
+    scenario: scenarios/scms-fix3/base.yaml
+    note: second build (provider-b's second ACA)
+  G2:
+    scenario: scenarios/scms-fix3/base.yaml
+    note: G again (determinism)
+  FSB:
+    scenario: scenarios/scms-fix3/slow-aca-b.yaml
+    note: first build (one ACA at provider-b); provider-b's core ACA 4 s slow
+  GSB:
+    scenario: scenarios/scms-fix3/slow-aca-b.yaml
+    note: second build
   PQF:
     scenario: scenarios/scms-pq-relay-repro.yaml
     note: fix; hybrid Falcon-512, the PDU layer off (R-PQUNSEC)
@@ -220,5 +232,73 @@ rows:
   measure: cpm.rsu_cpms_sent, rsu_cpms_verified
   expect: 'both > 10: a receiver accepts the roadside CPM signed with the SCMS application certificate (ITS-AID 639 listed)'
   source: ETSI TS 103 324 (CPM, ITS-AID 639 psid-collective-perception-service); IEEE 1609.2 §5.2
+  measured: pending
+  verdict: pending
+# --- (3) provider-b's second ACA (GOV.D1.acas) ----------------------------------------------
+# Runs: G = base.yaml, GSB = slow-aca-b.yaml, G2 = G again, on this branch's second build (the
+# ACA instance certified, hosted, linked, sent its share of requests and signing what it
+# issues); compared with F / FSB (the first build: one ACA serves provider-b). Rows written
+# before the second build ran.
+- id: D1.certs
+  base: G
+  variant: G
+  area: network
+  measure: provider-b ACA instances with a certificate in its PKI (pki.state component records; test pki_view / provider_runs)
+  expect: '2 ACAs, 2 certificates (was 2 placed, 1 certified)'
+  source: SAESOL published chain files 2025-07-17 and 2025-08-13 (two ACA certificates); audit-gov GOV.D1.acas
+  measured: pending
+  verdict: pending
+- id: D1.form
+  base: G
+  variant: G
+  area: network
+  measure: aca/1 certificate against aca/0
+  expect: 'same issuer (provider-b ICA), validity, SSP, region, CRACA and encryption-key presence; a different verification key'
+  source: the two published SAESOL ACA certificates share one form; audit-prov §4.1 design
+  measured: pending
+  verdict: pending
+- id: D1.split
+  base: G
+  variant: G
+  area: network
+  measure: provider-b RaAcaCertRequest SPDUs to aca/0 and aca/1 (test)
+  expect: 'each ACA gets half of every release within one request (round-robin over the shuffled batch, ASSUMPTION: the split rule is not published); every certificate is verified by its device and signed by the ACA that received its request (same-ACA rule, 1609.2.1 §6.3.5.4)'
+  source: audit-prov §4.1; IEEE 1609.2.1 (AcaEeCertResponse signed by the issuing ACA)
+  measured: pending
+  verdict: pending
+- id: D1.metrics-unchanged
+  base: F
+  variant: G
+  area: metrics
+  measure: topup mean, topups_completed, receiver_validation refused, checked, uu bytes per top-up
+  expect: 'top-up mean within +-2 % (an on-time ACA is not a bottleneck: the wait is the exchange), topups_completed equal, 0 refusals, checked within +-1 % (pseudonyms from the second ACA have the same form and size), uu bytes per top-up within +-1 %'
+  source: queueing (M/D/c with utilisation near 0 at the ACA); same certificate form
+  measured: pending
+  verdict: pending
+- id: D1.slow-aca-halved
+  base: FSB
+  variant: GSB
+  area: metrics
+  measure: topup mean, ms; cert_unavailable_ns
+  expect: 'GSB < FSB on both: provider-b sends half its requests to the healthy aca/1, so its jobs under the slow core ACA finish sooner (the slow server carries half the work); provider-a untouched'
+  source: queueing (work at the slow server halved); audit-prov §4.1. (An unqualified `pca` fault is provider-a's ACA, crypto_config::failure_target, so slow-aca.yaml cannot show it.)
+  measured: pending
+  verdict: pending
+- id: D1.cost
+  base: F
+  variant: G
+  area: cost
+  measure: events, peak memory
+  expect: 'events within +-1 %; peak memory within +-10 % (one more hosted node, a second ACA certificate)'
+  source: one backend node more per provider-b run
+  measured: pending
+  verdict: pending
+- id: D1.determinism
+  base: G
+  variant: G2
+  area: determinism
+  measure: stream_digest
+  expect: byte-identical
+  source: engine determinism contract
   measured: pending
   verdict: pending
