@@ -8,6 +8,7 @@
 extract) and adds scale-free forms the rows need:
 - x.share_b, x.verified_share_b, x.revocations_b: provider-b's share of the devices, of
   the verified receptions (by signer provider) and its revocations;
+- x.verified.<receiver><-<signer>: verified receptions per provider pair;
 - x.revocation_latency_s: the run report's mean revocation latency in seconds;
 - x.airtime_per_frame_us: airtime over frames on the air;
 - x.crl_polls: CRL downloads plus not-modified polls (every poll a vehicle made);
@@ -52,6 +53,9 @@ def extend(run_dir, report_dir=None):
     a = sum(v for k, v in vbp.items() if k.endswith('<-provider-a'))
     b = sum(v for k, v in vbp.items() if k.endswith('<-provider-b'))
     d['x.verified_share_b'] = b / (a + b) if a + b else 0.0
+    # Each receiver<-signer provider pair's verified receptions (R-P2PCD-ASYM).
+    for k, v in vbp.items():
+        d['x.verified.' + k] = v
     d['x.revocations_b'] = (p.get('revocations_by_provider') or {}).get('provider-b', 0)
     d['x.revocation_latency_s'] = (p.get('revocation_latency_ns') or 0) / 1e9
     air = r.get('air_bytes') or {}
