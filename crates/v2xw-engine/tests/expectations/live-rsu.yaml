@@ -456,7 +456,9 @@ rows:
   fault: use:Gp10
   source: 'with nobody following, the unit''s power cannot move the traffic (interaction: the power effect
     on stops exists only through compliance)'
-  measured: pending
+  measured: "1.15842 -> 1.15842"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LR.C.p30.events
   base: G0
   variant: Gp30
@@ -487,7 +489,9 @@ rows:
   value: 0
   source: a SPaT's signal groups mean nothing without the MAP that ties lanes to them (J2735 SPAT/MapData;
     CTI 4501 §4), so no advice
-  measured: pending
+  measured: "0"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LR.G.nomap.map-frames
   base: G0
   variant: Gnomap
@@ -496,7 +500,9 @@ rows:
   expect: eq
   value: 0
   source: no unit carries the map role
-  measured: pending
+  measured: "0"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LR.G.rsu1.units
   base: G0
   variant: Grsu1
@@ -505,7 +511,9 @@ rows:
   expect: eq
   value: 1
   source: one unit configured
-  measured: pending
+  measured: "1"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LR.G.rsu1.junctions
   base: G0
   variant: Grsu1
@@ -514,7 +522,9 @@ rows:
   expect: eq
   value: 1
   source: a unit serves the one signalised junction it is wired to (infra.rs SERVICE_RADIUS_M)
-  measured: pending
+  measured: "1"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LR.G.rsu1.advised
   base: G0
   variant: Grsu1
@@ -523,7 +533,9 @@ rows:
   expect: down
   min_change: 0.3
   source: one junction of five advised
-  measured: pending
+  measured: "67 -> 30"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LR.G.rsu1.stops
   base: G0
   variant: Grsu1
@@ -531,7 +543,9 @@ rows:
   measure: g.stops_per_km
   expect: up
   source: four junctions lose their advice, so their avoidable stops come back
-  measured: pending
+  measured: "1.10097 -> 1.13452"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LR.C.rsu1.events
   base: G0
   variant: Grsu1
@@ -540,7 +554,9 @@ rows:
   expect: down
   min_change: 0.05
   source: four transmitters of 11 frames/s fewer, each heard by every vehicle in reach
-  measured: pending
+  measured: "2378587 -> 2037328"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LR.G.out.spat-after
   base: G0
   variant: Gout
@@ -549,7 +565,10 @@ rows:
   expect: eq
   value: 0
   source: a unit that is down transmits nothing (outage event, run.rs)
-  measured: pending
+  measured: "1"
+  verdict: open
+  judged: "2026-10-27, f4982788 release"
+  note: 'ENGINE FINDING (traced, not fixed): the one frame is a SPaT the unit generated at 59.981 s, before the outage, and that went on the air at 60.034 s, 34 ms after the unit was switched off. The outage (run.rs:2927) sets the node Off, which stops RsuRuntime::step from producing frames, but on_mac_timer (run.rs:6466) grants the channel to frames already queued in the MAC without checking node_is_off, so a powered-off unit transmits its queue. A unit that loses power drops its queue; the fix is a node_is_off check in on_mac_timer (flush the queue). The expectation stands.'
 - id: LR.G.out.spat-frames
   base: G0
   variant: Gout
@@ -560,7 +579,9 @@ rows:
   - 0.87
   - 0.89
   source: 'one of five units silent for 90 of 150 s: 1 - 90/(5 x 150) = 0.88; the other four unchanged'
-  measured: pending
+  measured: "7497 -> 6598 (ratio 0.8801)"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LR.G.out.advice-after
   base: G0
   variant: Gout
@@ -570,7 +591,9 @@ rows:
   value: 0
   source: a SPaT older than 1 s is not used (apps.rs signal_situation), so the dark junction gets no advice
     from 61 s
-  measured: pending
+  measured: "0"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LR.G.c1.stops-seed2
   base: Gc0s2
   variant: Gs2
@@ -1201,6 +1224,10 @@ rows:
   fault: use:S0
   source: 'a unit relays the list it downloaded, unchanged ([PRIMER] p.5): its line carries the reports it
     forwards and its own CRL fetches, nothing else (fibre: every fetch lands inside its step)'
+  measured: "10"
+  verdict: open
+  judged: "2026-10-27, f4982788 release"
+  note: "ENGINE FINDING (traced, not fixed): 316 line messages = 186 relayed reports + 120 own fetches + 10. The carousel start (run.rs:8728-8737) still sends the list down the line of a crl unit that has no entry in rsu_crl_landing for that step; the map is cleared every step (run.rs:2246) and filled only for units whose own fetch was due. A unit whose RA version for it did not change has no fetch, so for one list 10 units book it again: the 10 of 30 units of the carousel-content defect (live-rsu 6.3, FS240bc4: 10 units air a list they never downloaded). The fix is the per-unit carousel content of 6.3: a unit relays what it installed and books nothing at the carousel start. The expectation stands."
 - id: LR.S.dbl.messages
   base: S0
   variant: DS0
@@ -1209,6 +1236,10 @@ rows:
   expect: down
   min_change: 0.05
   source: 30 x k messages fewer (k = 2 on the 10-25 S0, 60 of 366)
+  measured: "366 (938fb16a S0, recorded) -> 316"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
+  note: "both runs on the f4982788 release, which carries the double-booking fix; the 938fb16a S0 base is gone, so a directional row is judged against the S0 value the table records for 938fb16a (366 = 186 + 120 + 60), and other changes between the binaries are in the difference too"
 - id: LR.S.dbl.bytes
   base: S0
   variant: DS0
@@ -1217,6 +1248,10 @@ rows:
   expect: down
   min_change: 0.05
   source: the second copy of each list off the line
+  measured: "not judgeable: S0 line bytes on 938fb16a not recorded; DS0 592134"
+  verdict: open
+  judged: "2026-10-27, f4982788 release"
+  note: "both runs on the f4982788 release, which carries the double-booking fix; the 938fb16a S0 base is gone, so a directional row is judged against the S0 value the table records for 938fb16a (366 = 186 + 120 + 60), and other changes between the binaries are in the difference too; owed: S0 on a build of the parent of the fix commit"
 - id: LR.S.dbl.relayed
   base: S0
   variant: DS0
@@ -1227,6 +1262,10 @@ rows:
   fault: scale:s.relayed_reports:0.8
   source: reports ride the line as before; the carousel starts a few microseconds earlier, which perturbs
     the radio only slightly
+  measured: "186 (938fb16a S0, recorded) -> 186"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
+  note: "both runs on the f4982788 release, which carries the double-booking fix; the 938fb16a S0 base is gone, so a directional row is judged against the S0 value the table records for 938fb16a (366 = 186 + 120 + 60), and other changes between the binaries are in the difference too"
 - id: LR.S.dbl.installs
   base: S0
   variant: DS0
@@ -1236,6 +1275,10 @@ rows:
   tol: 0.05
   fault: scale:s.rsu_crls_installed:0.8
   source: every unit still fetches and installs each list
+  measured: "120 (938fb16a S0, recorded) -> 120"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
+  note: "both runs on the f4982788 release, which carries the double-booking fix; the 938fb16a S0 base is gone, so a directional row is judged against the S0 value the table records for 938fb16a (366 = 186 + 120 + 60), and other changes between the binaries are in the difference too"
 - id: LR.S.dbl.lag
   base: S0
   variant: DS0
@@ -1246,6 +1289,10 @@ rows:
   fault: scale:s.crl_first_frame_lag_s_min:1.5
   source: the carousel starts when the first unit's own fetch lands instead of the second copy behind it, one
     CRL serialisation (microseconds) earlier
+  measured: "not judgeable: S0 lag on 938fb16a not recorded; DS0 0.146266 s"
+  verdict: open
+  judged: "2026-10-27, f4982788 release"
+  note: "both runs on the f4982788 release, which carries the double-booking fix; the 938fb16a S0 base is gone, so a directional row is judged against the S0 value the table records for 938fb16a (366 = 186 + 120 + 60), and other changes between the binaries are in the difference too; owed: S0 on a build of the parent of the fix commit"
 - id: LR.S.dbl.events
   base: S0
   variant: DS0
@@ -1255,6 +1302,10 @@ rows:
   tol: 0.02
   fault: scale:c.events:1.1
   source: 60 line messages of about 486,000 events
+  measured: "not judgeable: S0 events on 938fb16a not recorded; DS0 484840"
+  verdict: open
+  judged: "2026-10-27, f4982788 release"
+  note: "both runs on the f4982788 release, which carries the double-booking fix; the 938fb16a S0 base is gone, so a directional row is judged against the S0 value the table records for 938fb16a (366 = 186 + 120 + 60), and other changes between the binaries are in the difference too; owed: S0 on a build of the parent of the fix commit"
 - id: LR.S.dbl.lat2000.unexplained
   base: Slat2000bc3
   variant: DSlat2000bc3
@@ -1265,6 +1316,10 @@ rows:
   fault: use:Slat2000bc3
   source: on the 2 s line only the fetches still in flight at the horizon are unexplained (one list x 30 units
     at most, since lists come every 10 s)
+  measured: "12"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
+  note: "DSlat2000bc3 on the f4982788 release: 325 = 253 relayed + 60 fetches + 12 (the same carousel-start booking as LR.S.dbl.unexplained), under the bound of 30"
 - id: LR.S.dbl.lat2000.lag
   base: Slat2000bc3
   variant: DSlat2000bc3
@@ -1274,6 +1329,10 @@ rows:
   value: 2.0
   fault: delay-zero
   source: the carousel still waits for the units' 2,000 ms download
+  measured: "2.146026"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
+  note: "DSlat2000bc3 on the f4982788 release: no unit airs a list before its 2,000 ms download lands"
 # The 10-25 fix (4399f8f8) on two revocation lists: 486c8cba release (S240) against the fix alone (FS240).
 - id: LR.S.l240.lists
   base: FS240
