@@ -45,7 +45,8 @@ VERSION = '1.0.0'
 DAY = 86400.0
 CLASSES = ('locked', 'free', 'mixed', 'unclassified')
 FAULTS = ('rate_x1.5', 'no_shuffle', 'pool_class', 'pool_corridor', 'shift_corridor',
-          'drop_window1', 'no_conversion', 'flip_relay', 'cases_1pct')
+          'drop_window1', 'no_conversion', 'flip_relay', 'cases_1pct', 'flat_corridor',
+          'threshold_x2')
 
 
 def _cell(key):
@@ -270,6 +271,10 @@ def _apply_faults(rates, fault):
     elif fault == 'flip_relay':
         for cv in r['conversion'].values():
             cv['relay_share'] = 1.0 - cv['relay_share']
+    elif fault == 'threshold_x2':
+        r['shuffle']['threshold'] *= 2
+    elif fault == 'flat_corridor':
+        pass                                     # applied to the exposure in predict
     elif fault == 'cases_1pct':
         r['ma']['cases_per_received'] = 0.01
     elif fault == 'no_conversion':
@@ -285,6 +290,14 @@ def predict(rates, exposure_s, windows, fault=None):
     """Expected day-1 measures of a run with this exposure (seconds per window|class|corridor)."""
     r = _apply_faults(rates, fault)
     lam, lam_c = r['lambda_per_s'], r['lambda_class_per_s']
+    if fault == 'flat_corridor':
+        # the target's exposure spread evenly over its corridors: traffic's layout ignored
+        ks = sorted({_cell(k)[2] for k in exposure_s})
+        tot = {}
+        for key, e in exposure_s.items():
+            w, c, _ = _cell(key)
+            tot[(w, c)] = tot.get((w, c), 0.0) + e
+        exposure_s = {f'{w}|{c}|{k}': e / len(ks) for (w, c), e in tot.items() for k in ks}
     V = {}                                   # (w, cls, corr) -> expected verdicts
     Etot = 0.0
     for key, e in exposure_s.items():
@@ -513,7 +526,7 @@ def _matrix():
 def e10_rows(table):
     import yaml
     doc = yaml.safe_load(open(table))
-    return doc, [r for r in doc['rows'] if r['id'].startswith('P1.E10.')]
+    return doc, [r for r in doc['rows'] if r['id'].startswith(('P1.E10.', 'P1.E10U.'))]
 
 
 def judge_rows(rows, measures):
@@ -532,7 +545,7 @@ def selftest(table, runs_dir):
     rates = load(os.path.join(runs_dir, 'E10CAL', 'rates.json'))
     target = load(os.path.join(runs_dir, 'E10A', 'summary.json'))
     obs = observe(target)
-    bad = 0
+    bad, ever_red = 0, set()
     for fault in FAULTS:
         named = [r for r in rows if fault in (r.get('fault') or '').split()]
         if not named:
@@ -544,11 +557,13 @@ def selftest(table, runs_dir):
         clean = predict(rates, target['exposure_s'], target['windows'])
         res = judge_rows(named, {'E10A': o, 'E10S': p, 'E10SU': pu, 'E10S2': clean})
         red = [i for i, (ok, _) in res.items() if ok is False]
+        ever_red.update(red)
         st = 'RED' if red else 'SILENT'
         bad += 0 if red else 1
         print(f'{st:8} {fault}: {len(red)}/{len(named)} named rows red ({", ".join(red)[:150]})')
-    print(f'selftest: {len(FAULTS) - bad}/{len(FAULTS)} faults caught')
-    return 1 if bad else 0
+    never = [r['id'] for r in rows if r['id'] not in ever_red]
+    print(f'selftest: {len(FAULTS) - bad}/{len(FAULTS)} faults caught; rows never red: {never or "none"}')
+    return 1 if (bad or never) else 0
 
 
 def fill(table, runs_dir):

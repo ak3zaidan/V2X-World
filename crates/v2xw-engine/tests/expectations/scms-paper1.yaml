@@ -1907,7 +1907,8 @@ rows:
   band: [0.75, 1.33]
   fault: rate_x1.5
   source: day-1 detector verdicts (run report verdicts_fired) = triggers x the calibration's verdicts per trigger
-  measured: pending
+  measured: "77739.9 -> 83797 (ratio 1.078)"
+  verdict: pass
 - id: P1.E10.triggers-w0
   base: E10S
   variant: E10A
@@ -1915,9 +1916,10 @@ rows:
   measure: x.e10.triggers.w0
   expect: ratio
   band: [0.6, 1.67]
-  fault: shift_corridor
+  fault: rate_x1.5 shift_corridor
   source: the rush-hour window (0-60 s, inside the 4x demand fill)
-  measured: pending
+  measured: "11735.2 -> 10072 (ratio 0.8583)"
+  verdict: pass
 - id: P1.E10.triggers-w1
   base: E10S
   variant: E10A
@@ -1927,7 +1929,8 @@ rows:
   band: [0.6, 1.67]
   fault: drop_window1 shift_corridor
   source: the week-rollover window (43,185-43,215 s, 05:00 ET, after 12 h of fast-forward)
-  measured: pending
+  measured: "13092.8 -> 17326 (ratio 1.323)"
+  verdict: pass
 - id: P1.E10.free-share
   base: E10S
   variant: E10A
@@ -1937,7 +1940,8 @@ rows:
   band: [-0.10, 0.10]
   fault: pool_class
   source: the free (secMark not on the fix epoch) class's share of triggers, P1-E2 classifier
-  measured: pending
+  measured: "0.990066 -> 0.98259 (delta -0.007476)"
+  verdict: pass
 - id: P1.E10.corridor-tvd
   base: E10S
   variant: E10A
@@ -1945,9 +1949,10 @@ rows:
   measure: x.e10.corridor_tvd
   expect: le
   value: 0.15
-  fault: shift_corridor
+  fault: flat_corridor shift_corridor
   source: total-variation distance between the engine's and the surrogate's triggers by avenue band
-  measured: pending
+  measured: "0.129998"
+  verdict: pass
 - id: P1.E10.stored
   base: E10S
   variant: E10A
@@ -1957,7 +1962,8 @@ rows:
   band: [0.75, 1.33]
   fault: rate_x1.5
   source: reports put in the SM-MBR §2.2 store on day 1
-  measured: pending
+  measured: "24828 -> 27398 (ratio 1.104)"
+  verdict: pass
 - id: P1.E10.uploaded
   base: E10S
   variant: E10A
@@ -1967,7 +1973,8 @@ rows:
   band: [0.75, 1.33]
   fault: rate_x1.5 no_conversion
   source: reports uploaded (cellular or RSU relay) by 86,400 s
-  measured: pending
+  measured: "23314.2 -> 25569 (ratio 1.097)"
+  verdict: pass
 - id: P1.E10.relay-share
   base: E10S
   variant: E10A
@@ -1977,7 +1984,8 @@ rows:
   band: [-0.10, 0.10]
   fault: flip_relay
   source: share of day-1 uploads that left through a report-forward RSU
-  measured: pending
+  measured: "0.133181 -> 0.137706 (delta 0.004525)"
+  verdict: pass
 - id: P1.E10.ma-batch
   base: E10S
   variant: E10A
@@ -1985,9 +1993,10 @@ rows:
   measure: x.e10.ma_batch
   expect: ratio
   band: [0.75, 1.33]
-  fault: rate_x1.5 no_conversion
+  fault: drop_window1 threshold_x2 rate_x1.5 no_conversion
   source: day-1 reports the MAs receive in the RA's first release (before 93,600 s)
-  measured: pending
+  measured: "20000 -> 20000 (ratio 1)"
+  verdict: pass
 - id: P1.E10.ma-first-t
   base: E10S
   variant: E10A
@@ -1997,7 +2006,8 @@ rows:
   band: [-120.0, 120.0]
   fault: no_shuffle
   source: CAMP-EE SCMS-765 report shuffle, one day after the batch's first report
-  measured: pending
+  measured: "43206.5 -> 43203.1 (delta -3.468)"
+  verdict: pass
 - id: P1.E10.cases
   base: E10S
   variant: E10A
@@ -2007,16 +2017,18 @@ rows:
   tol: 0.0
   fault: cases_1pct
   source: honest traffic, corroborated MA; cases per MA receipt carried from the calibration
-  measured: pending
+  measured: "0 -> 0"
+  verdict: pass
 - id: P1.E10.rerun
   base: E10S
   variant: E10S2
   area: determinism
   measure: x.e10.digest
   expect: identical
-  fault: rate_x1.5 no_shuffle pool_class pool_corridor shift_corridor drop_window1 no_conversion flip_relay cases_1pct
+  fault: rate_x1.5 no_shuffle pool_class pool_corridor shift_corridor drop_window1 no_conversion flip_relay cases_1pct flat_corridor threshold_x2
   source: the surrogate is a pure function of its inputs (prediction digest)
-  measured: pending
+  measured: "e15437d90953e20a -> e15437d90953e20a"
+  verdict: pass
 - id: P1.E10U.verdicts
   base: E10SU
   variant: E10A
@@ -2026,7 +2038,8 @@ rows:
   band: [0.75, 1.33]
   fault: rate_x1.5
   source: fully open loop, the calibration's own exposure standing in for the target's traffic
-  measured: pending
+  measured: "99212 -> 83797 (ratio 0.8446)"
+  verdict: pass
 - id: P1.E10U.ma-batch
   base: E10SU
   variant: E10A
@@ -2034,9 +2047,10 @@ rows:
   measure: x.e10.ma_batch
   expect: ratio
   band: [0.75, 1.33]
-  fault: rate_x1.5
+  fault: drop_window1 threshold_x2 rate_x1.5
   source: fully open loop
-  measured: pending
+  measured: "20000 -> 20000 (ratio 1)"
+  verdict: pass
 - id: P1.E10U.free-share
   base: E10SU
   variant: E10A
@@ -2046,4 +2060,5 @@ rows:
   band: [-0.10, 0.10]
   fault: pool_class
   source: fully open loop
-  measured: pending
+  measured: "0.993953 -> 0.98259 (delta -0.01136)"
+  verdict: pass
