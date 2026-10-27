@@ -3313,6 +3313,9 @@ pub fn rsu_services(scenario: &Scenario, roles: &[String]) -> ServiceSet {
         spat: has("spat") && role("spat"),
         map: has("map") && role("map"),
         ssm: has("ssm") && role("spat"),
+        // Infrastructure collective perception (TS 103 324 §7.1.3): the unit's own
+        // sensors' objects (`crate::perception`, `perception.rsu`).
+        cpm: has("cpm") && role("cpm"),
         ..ServiceSet::NONE
     }
 }
@@ -3725,6 +3728,11 @@ fn apply_security_profile(runtime: &mut ObuRuntime, scenario: &Scenario, env: No
         (s.map, v2xw_msg::MsgType::Map),
         (s.srm, v2xw_msg::MsgType::Srm),
         (s.ssm, v2xw_msg::MsgType::Ssm),
+        // The CPM's ITS-AID (639), which was missing here until 2026-10-27. It did not
+        // bite while only vehicles sent CPMs; a roadside unit's certificate permits exactly
+        // this list, so without it every receiver refused every infrastructure CPM
+        // (1609.2 §5.2, `psid-not-permitted`).
+        (s.cpm, v2xw_msg::MsgType::Cpm),
     ] {
         if on {
             sends.push(msg);

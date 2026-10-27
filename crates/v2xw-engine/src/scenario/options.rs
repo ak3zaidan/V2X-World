@@ -450,6 +450,10 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Broadcasts the junction's lane geometry.",
         ),
         ("actors.rsus[].roles[]", "spat-map") => w("Signal timing and map", "Both of the above."),
+        ("actors.rsus[].roles[]", "cpm") => w(
+            "Infrastructure collective perception (CPM)",
+            "Its own cameras or radars watch the junction and it broadcasts what they see.",
+        ),
         // --- world ----------------------------------------------------------------
         ("world.highway_preset", "urban-us-nyc") => w(
             "New York City",
@@ -1031,13 +1035,14 @@ pub fn slot_values(path: &str, registry: &Registry) -> Option<(Vec<Value>, bool)
 }
 
 /// The RSU roles the engine reads (`phase2`, `wiring::rsu_services`).
-const RSU_ROLES: [&str; 6] = [
+const RSU_ROLES: [&str; 7] = [
     "report-forward",
     "crl",
     "provisioning-proxy",
     "spat",
     "map",
     "spat-map",
+    "cpm",
 ];
 
 /// Closed sets that are not a `CHOICES` row, a reflected enum or a slot, with whether the

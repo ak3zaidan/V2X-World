@@ -1028,6 +1028,8 @@ impl ObuRuntime {
                     sensor_type: s.sensor_type,
                     range_m: s.range_m,
                     half_fov_rad: s.half_fov_rad,
+                    azimuth_rad: s.azimuth_rad,
+                    mount_m: s.mount_m,
                 })
                 .collect()
         });
@@ -1038,6 +1040,8 @@ impl ObuRuntime {
             reference_time: cam::timestamp_its(self.config.wall, believed).ok()?,
             objects,
             sensors,
+            // A roadside unit's CPM is an infrastructure CPM (TS 103 324 §7.1.3).
+            rsu: self.config.station_type == ParticipantType::Infrastructure,
         };
         let message = v2xw_msg::cpm::build_cpm(&input).ok()?;
         Some(v2xw_msg::cpm::encode_cpm(&message).ok()?.bytes)

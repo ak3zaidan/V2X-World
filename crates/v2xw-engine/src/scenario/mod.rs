@@ -291,6 +291,7 @@ impl Scenario {
             experiment: None,
             scale: None,
             traffic: None,
+            perception: None,
         }
     }
 }

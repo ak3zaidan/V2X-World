@@ -130,6 +130,13 @@ pub struct Scenario {
     /// does not mention it keeps its content hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub traffic: Option<Traffic>,
+    /// The sensors of the vehicles and roadside units that send CPMs — a suite per vehicle
+    /// class with each sensor's mount and azimuth, the roadside units' suite — and the
+    /// occlusion rule (`crate::perception`). Absent keeps the default front suite and the
+    /// centre-line rule, and is left out of the serialised scenario so a scenario that
+    /// does not mention it keeps its content hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perception: Option<PerceptionSpec>,
 }
 
 /// How the traffic behaves at junctions and in jams ([`Scenario::traffic`]).
@@ -1625,7 +1632,8 @@ pub struct Rsu {
     /// ([`v2xw_world::Site::antenna_position`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position_m: Option<[f64; 3]>,
-    /// What it does: `crl`, `provisioning-proxy`, `report-forward`, `spat`, `map`, `wsa`.
+    /// What it does: `crl`, `provisioning-proxy`, `report-forward`, `spat`, `map`, `wsa`,
+    /// `cpm` (infrastructure collective perception from its own sensors, `perception.rsu`).
     #[serde(default)]
     pub roles: Vec<String>,
     /// Its hardware profile id.
@@ -3697,6 +3705,132 @@ pub(crate) fn is_true(b: &bool) -> bool {
 /// `true`, as a function, for `#[serde(default = …)]`.
 pub(crate) fn truth() -> bool {
     true
+}
+
+/// The sensors of the vehicles and roadside units that send CPMs, and how a road user is
+/// hidden from them ([`Scenario::perception`], `crate::perception`).
+///
+/// Absent, every CPM-sending vehicle carries the default front suite (a 250 m ±9°
+/// long-range radar, a 70 m ±45° short-range radar and an 80 m ±26° camera) and occlusion
+/// is the centre-line rule, as before 2026-10-26.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerceptionSpec {
+    /// How a road user is hidden from a sensor: `centre-line` (the line to its reference
+    /// point; other vehicles are discs half a body width across) or `outline` (seen when
+    /// any corner of its outline is in view with a clear line; other vehicles are their
+    /// oriented body rectangles; the visible-corner rule of Günther et al., IEEE VNC
+    /// 2016).
+    #[serde(default)]
+    pub occlusion: OcclusionSpec,
+    /// The suite every CPM-sending vehicle carries unless its class has its own. Absent:
+    /// the default front suite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vehicle: Option<Vec<SensorConf>>,
+    /// Suites by vehicle class (`passenger`, `truck`, `bus`, …), over `vehicle`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub classes: BTreeMap<String, Vec<SensorConf>>,
+    /// The suite of every roadside unit with the `cpm` role; its azimuths are
+    /// counter-clockwise from east and its offsets east, north and up from the unit's
+    /// antenna. Absent: four 80 m cameras with a 90° opening facing east, north, west and
+    /// south.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rsu: Option<Vec<SensorConf>>,
+}
+
+/// How a road user is hidden from a sensor ([`PerceptionSpec::occlusion`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OcclusionSpec {
+    /// The line to the reference point; other vehicles are discs.
+    #[default]
+    CentreLine,
+    /// Any visible outline corner; other vehicles are oriented rectangles.
+    Outline,
+}
+
+/// What a sensor is ([`SensorConf::kind`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SensorKindSpec {
+    /// A radar (CPM `SensorType` 1).
+    #[default]
+    Radar,
+    /// A mono camera (CPM `SensorType` 3).
+    Camera,
+    /// A lidar (CPM `SensorType` 2).
+    Lidar,
+}
+
+/// Where on the body a vehicle sensor's offset is measured from ([`SensorConf::mount`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MountSpec {
+    /// The front bumper.
+    #[default]
+    Front,
+    /// The rear bumper.
+    Rear,
+    /// The body's centre.
+    Centre,
+}
+
+/// One sensor of a suite ([`PerceptionSpec`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SensorConf {
+    /// Its id within the station, 1 to 7: the CPM's `sensorId`.
+    pub id: u8,
+    /// What it is: `radar`, `camera` or `lidar`.
+    #[serde(default)]
+    pub kind: SensorKindSpec,
+    /// How far it sees, metres (at most 409.5, the CPM's `StandardLength12b`).
+    pub range_m: f64,
+    /// Its full horizontal opening, degrees (360 sees all round).
+    pub fov_deg: f64,
+    /// Its boresight, degrees counter-clockwise from the vehicle's heading (180 looks
+    /// back; from east at a roadside unit).
+    #[serde(default)]
+    pub azimuth_deg: f64,
+    /// What the offset is measured from on a vehicle: `front`, `rear` or `centre`.
+    #[serde(default)]
+    pub mount: MountSpec,
+    /// The offset ahead of the mount, metres (negative is behind it; east at a roadside
+    /// unit).
+    #[serde(default)]
+    pub ahead_m: f64,
+    /// The offset to the left, metres (north at a roadside unit).
+    #[serde(default)]
+    pub left_m: f64,
+    /// The height above the reference point, metres.
+    #[serde(default = "SensorConf::default_height")]
+    pub height_m: f64,
+    /// Detection probability at the sensor (default 0.99).
+    #[serde(default = "SensorConf::default_pd_near")]
+    pub pd_near: f64,
+    /// Detection probability at the range limit (default 0.90).
+    #[serde(default = "SensorConf::default_pd_far")]
+    pub pd_far: f64,
+    /// Position error σ at the sensor, metres. Absent: 0.10 for radar, 0.20 for a camera,
+    /// 0.03 for lidar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sigma_base_m: Option<f64>,
+    /// Position error σ growth as a fraction of range. Absent: 0.005 for radar, 0.02 for
+    /// a camera, 0.001 for lidar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sigma_range_fraction: Option<f64>,
+}
+
+impl SensorConf {
+    fn default_height() -> f64 {
+        0.6
+    }
+    fn default_pd_near() -> f64 {
+        0.99
+    }
+    fn default_pd_far() -> f64 {
+        0.90
+    }
 }
 
 #[cfg(test)]
