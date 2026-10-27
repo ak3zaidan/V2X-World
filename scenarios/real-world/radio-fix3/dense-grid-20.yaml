@@ -1,0 +1,10 @@
+# radio-fix3 R3.2.DENSE-SENSED base: dense-grid.yaml cut to 20 s, so the receptions-level
+# recording (every phy.rx, for each frame's sensed airtime at each unit) fits a run slot.
+schema: v2xw/scenario/1
+meta:
+  base: dense-grid.yaml
+  name: radio-fix3 dense-grid-20
+  description: dense-grid, 20 s.
+  tags: [radio-fix3, experiment, cbr]
+time:
+  duration_s: 20.0

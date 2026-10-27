@@ -602,6 +602,29 @@ fn turn_control(start: Vec3, end: Vec3, from: Dir4) -> Vec3 {
     Vec3::new(start.x + fx * along, start.y + fy * along, start.z)
 }
 
+/// The lowest limit a US limited-access highway is posted at, m/s: 55 mph (FHWA,
+/// Methods and Practices for Setting Speed Limits, FHWA-SA-12-004, 2012; the same figure
+/// as `v2xw_mobility::drivers::FREEWAY_MIN_LIMIT_MPS`).
+pub const MOTORWAY_MIN_LIMIT_MPS: f64 = 24.587;
+
+/// The road class of a grid's streets, as an on-board map would carry it.
+///
+/// A grid with no signals, no pedestrian crossings and a limit of at least 55 mph is a
+/// limited-access highway (`Motorway`: OSM `highway=motorway`, "a restricted access major
+/// divided highway"); every other grid is a town's streets (`Residential`). Before
+/// radio-fix3 every grid was `Residential`, so the built-in six-lane 65 mph highway told
+/// the C2C-CC DENM services' digital-map check it was an urban street
+/// (radio-fix3.yaml R3.3.CLASS).
+#[must_use]
+pub fn street_class(params: &GridParams) -> RoadClass {
+    if !params.signalised && !params.crossings && params.speed_limit_mps >= MOTORWAY_MIN_LIMIT_MPS
+    {
+        RoadClass::Motorway
+    } else {
+        RoadClass::Residential
+    }
+}
+
 /// Builds a grid world (04-models.md §1.2, model id [`MODEL_ID`]).
 ///
 /// Deterministic from `params` alone: no random draws, no wall clock, no hash iteration.
@@ -697,7 +720,7 @@ pub fn grid(params: &GridParams, opts: &ImportOptions) -> Result<World> {
             to: to_j,
             lanes: lane_ids,
             name,
-            road_class: RoadClass::Residential,
+            road_class: street_class(params),
         });
         incoming_edge.insert((to_j.index(), d.code()), edge_id);
         outgoing_edge.insert((from_j.index(), d.code()), edge_id);
@@ -1679,6 +1702,38 @@ pub fn card() -> ModelCard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// radio-fix3 R3.3.CLASS: the built-in highway (scenarios/highway-congestion.yaml: no
+    /// signals, no crossings, 29.06 m/s) is a motorway on every street edge; a signalised
+    /// or slower grid stays residential. Fault that proved it: `street_class` returning
+    /// `Residential` always (the old tag).
+    #[test]
+    fn an_unsignalised_65_mph_grid_is_a_motorway() {
+        let mut p = GridParams::legacy();
+        p.cols = 2;
+        p.rows = 2;
+        p.block_x_m = 1500.0;
+        p.block_y_m = 60.0;
+        p.lanes_per_direction = 3;
+        p.sidewalk_m = 0.0;
+        p.speed_limit_mps = 29.06;
+        p.signalised = false;
+        p.crossings = false;
+        let w = grid(&p, &ImportOptions::default()).expect("the highway grid builds");
+        let street: Vec<_> = w.roads.edges().iter().filter(|e| !e.is_internal()).collect();
+        assert!(!street.is_empty());
+        assert!(street.iter().all(|e| e.road_class == RoadClass::Motorway));
+        assert_eq!(street_class(&p), RoadClass::Motorway);
+        let mut slow = p.clone();
+        slow.speed_limit_mps = 11.176;
+        assert_eq!(street_class(&slow), RoadClass::Residential);
+        let mut lit = p.clone();
+        lit.signalised = true;
+        assert_eq!(street_class(&lit), RoadClass::Residential);
+        let mut walked = p;
+        walked.crossings = true;
+        assert_eq!(street_class(&walked), RoadClass::Residential);
+    }
 
     #[test]
     fn direction_algebra() {

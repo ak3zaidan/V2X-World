@@ -1,0 +1,10 @@
+# radio-fix3 R3.1.RETX: p1-e5-lte-l1 with the blind retransmission off (one copy per BSM).
+schema: v2xw/scenario/1
+meta:
+  base: ../paper1/p1-e5-lte-l1.yaml
+  name: radio-fix3 lte-retx1
+  description: P1-E5 LTE load 1 with radio.models.sidelink max_transmissions 1.
+  tags: [radio-fix3, experiment]
+radio:
+  models:
+    sidelink: {id: access/sidelink/engine-coupling, params: {max_transmissions: 1}}

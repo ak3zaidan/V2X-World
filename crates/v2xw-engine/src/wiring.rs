@@ -72,8 +72,9 @@ pub fn build_world(scenario: &Scenario) -> Result<World> {
 /// the junction track's rounded lane corners and arc connectors, fork lane assignment,
 /// passage lanes and ITE change intervals changed it again. Revision 4: `footway=crossing`
 /// ways became crosswalk lanes and signalised junctions gained MUTCD pedestrian intervals
-/// (`v2xw_world::walk`).
-pub const IMPORTER_REVISION: u32 = 4;
+/// (`v2xw_world::walk`). Revision 5: a procedural grid with no signals, no crossings and a
+/// freeway limit tags its streets `Motorway`, not `Residential` (radio-fix3 R3.3.CLASS).
+pub const IMPORTER_REVISION: u32 = 5;
 
 /// The key a world is cached under: a digest of everything that decides what the import
 /// produces — the scenario's `world` section (less `cache` itself), the bytes of the source

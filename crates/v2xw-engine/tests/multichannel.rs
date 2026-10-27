@@ -362,3 +362,119 @@ fn the_loader_refuses_a_map_the_band_plan_cannot_carry() {
     // An empty map is the default and loads.
     assert_eq!(refusals(&base), "");
 }
+
+/// radio-fix3 R3.2.DCC: an ETSI gatekeeper runs per channel. TS 102 687's adaptive gate
+/// spaces a unit's frames by `T_on / delta`, and `delta` follows the CBR of the channel the
+/// gate serves (Annex A). A constant jammer riding one roadside unit on the safety channel
+/// (172) drives that radio's CBR to 1, so its gate's `delta` falls to `delta_min` and
+/// `T_off` to hundreds of ms; the unit's MAP goes on the service channel (174, every
+/// 100 ms here) through its second radio, whose gate reads 174's CBR, so it is spaced no
+/// more than with no jammer. One gate shared by the two radios, fed with 172's CBR,
+/// throttles the MAP with the SPaT. `delta` falls by at most G-max (0.00025) per 200 ms
+/// update, so it takes about 10 s of jamming to pass `T_on / 100 ms`; the run is 20 s.
+///
+/// (The first version compared waits with no jammer: a unit generates its SPaT and MAP in
+/// different node ticks, over 40 ms apart, so a shared 25 ms gate never bound and the test
+/// passed with the fault in.)
+/// Open (radio-fix3 R3.2.DCC2): the shared-gate fault, `dcc_service` never built, does
+/// not turn this red (MAP 199 -> 199), so it is a non-regression check only: the jammed
+/// unit's own CBR or its roadside frames do not reach the gate the way this test assumes
+/// (its SPaT and MAP records carry no DCC state), and the per-channel gate is not yet
+/// pinned by a test that can fail.
+#[test]
+fn the_etsi_gate_spaces_each_channel_on_its_own() {
+    let gated = || {
+        let mut s = with_map(
+            intersections(20.0),
+            serde_json::json!([{"channel": 174, "messages": ["map"]}]),
+        );
+        s.messages.map_interval_ms = Some(100);
+        s.radio.models.insert(
+            "dcc".to_string(),
+            v2xw_engine::scenario::ModelChoice {
+                id: "dcc/etsi/adaptive-ts102687".to_string(),
+                params: serde_json::Value::Null,
+            },
+        );
+        s
+    };
+    let (_, clean) = run(gated());
+    let clean_n = sent_by(&clean);
+    let rsu = clean_n
+        .keys()
+        .find(|(_, m, _)| m == "spat")
+        .map(|(n, _, _)| *n)
+        .expect("a SPaT sender");
+    let mut s = gated();
+    s.threats.jammers = vec![v2xw_engine::scenario::ModelChoice {
+        id: "attacker/jammer/constant".to_string(),
+        params: serde_json::json!({ "follow_node": rsu, "power_dbm": 23.0, "from_s": 2.0 }),
+    }];
+    let (_, jammed) = run(s);
+    let jammed_n = sent_by(&jammed);
+    let n = |m: &BTreeMap<(u64, String, u16), usize>, t: &str, c: u16| {
+        m.get(&(rsu, t.to_string(), c)).copied().unwrap_or(0)
+    };
+    let (map0, map1) = (n(&clean_n, "map", 174), n(&jammed_n, "map", 174));
+    println!("unit {rsu}: MAP on 174 {map0} -> {map1} with a 172 jammer, ETSI DCC");
+    assert!(map0 >= 150, "too few MAPs: {map0}");
+    assert!(
+        map1 + 2 >= map0,
+        "the service channel's gate followed the safety channel's CBR: MAP {map0} -> {map1}"
+    );
+}
+
+/// Frames by (sender, message type, channel).
+fn sent_by(recorder: &MemoryRecorder) -> BTreeMap<(u64, String, u16), usize> {
+    let mut out = BTreeMap::new();
+    for v in views::<NodeTxView>(recorder) {
+        if let (Some(m), Some(c)) = (v.msg_type, v.channel) {
+            *out.entry((u64::from(v.node.index()), m, c)).or_insert(0) += 1;
+        }
+    }
+    out
+}
+
+/// radio-fix3 R3.2.JAM: a jammer acts on its own channel. A constant jammer riding one
+/// roadside unit on the safety channel (172) holds that unit's 172 radio busy, so its SPaT
+/// waits (the denial of channel access a constant jammer causes); its second radio on the
+/// service channel (174) senses through its own channel filter, where the jammer is not,
+/// so its MAP goes out as often as with no jammer. Before the fix the energy detector of
+/// every radio counted every jammer, whatever its channel, and the MAP was held with the
+/// SPaT. The fault that proves it: the `a.channel == ch` filter removed from the jamming
+/// field's power at a receiver (`JammingField::power_mw`), which the energy detector reads.
+/// (Removing the same filter from the engine's `medium_busy_since` / `medium_idle_at` does
+/// not turn it red: those only date a busy period the PHY's per-channel CCA has declared.)
+#[test]
+fn a_safety_channel_jammer_leaves_the_service_radio_free() {
+    let mapped = || {
+        with_map(
+            intersections(8.0),
+            serde_json::json!([{"channel": 174, "messages": ["map"]}]),
+        )
+    };
+    let (_, clean) = run(mapped());
+    let clean_n = sent_by(&clean);
+    let rsu = clean_n
+        .keys()
+        .find(|(_, m, _)| m == "spat")
+        .map(|(n, _, _)| *n)
+        .expect("a SPaT sender");
+    let mut s = mapped();
+    s.threats.jammers = vec![v2xw_engine::scenario::ModelChoice {
+        id: "attacker/jammer/constant".to_string(),
+        params: serde_json::json!({ "follow_node": rsu, "power_dbm": 23.0, "from_s": 2.0 }),
+    }];
+    let (_, jammed) = run(s);
+    let jammed_n = sent_by(&jammed);
+    let n = |m: &BTreeMap<(u64, String, u16), usize>, t: &str, c: u16| {
+        m.get(&(rsu, t.to_string(), c)).copied().unwrap_or(0)
+    };
+    let (spat0, spat1) = (n(&clean_n, "spat", 172), n(&jammed_n, "spat", 172));
+    let (map0, map1) = (n(&clean_n, "map", 174), n(&jammed_n, "map", 174));
+    println!("unit {rsu}: SPaT {spat0} -> {spat1}, MAP {map0} -> {map1}");
+    assert!(spat0 >= 60 && map0 >= 6, "too few frames: {spat0} SPaT, {map0} MAP");
+    // The jammer denies the safety channel from 2 s: at most the first 2 s of SPaT.
+    assert!(spat1 * 2 < spat0, "the jammer did not deny the safety channel: {spat0} -> {spat1}");
+    assert!(map1 + 1 >= map0, "the service radio was held by a 172 jammer: MAP {map0} -> {map1}");
+}

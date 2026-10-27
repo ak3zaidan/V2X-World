@@ -1,0 +1,17 @@
+# radio-fix3 R3.2.DENSE base: connected-intersections (procedural 6x6 grid with buildings,
+# four RSUs sending SPaT and MAP, DSRC on 172, J2945/1) at 12,000 veh/h for 40 s, so the
+# safety channel is loaded; one channel.
+schema: v2xw/scenario/1
+meta:
+  base: ../../connected-intersections.yaml
+  name: radio-fix3 dense-grid
+  description: connected-intersections at 12,000 veh/h, 40 s, single channel.
+  tags: [radio-fix3, experiment, cbr]
+time:
+  duration_s: 40.0
+actors:
+  vehicles:
+    demand:
+      rate_veh_per_h: 12000.0
+exporters:
+  - id: jsonl

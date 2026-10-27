@@ -1,0 +1,10 @@
+# radio-fix3 R3.3.CPM variant: highway-cpm.yaml with T_GenCpm following the DCC's T_off
+# (messages.cpm_dcc_limited, TS 103 324 §6.1.2.1 and Annex D).
+schema: v2xw/scenario/1
+meta:
+  base: highway-cpm.yaml
+  name: radio-fix3 highway-cpm-dcc
+  description: highway-cpm with cpm_dcc_limited.
+  tags: [radio-fix3, experiment, highway, cpm]
+messages:
+  cpm_dcc_limited: true

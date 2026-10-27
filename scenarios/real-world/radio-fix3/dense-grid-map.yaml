@@ -1,0 +1,11 @@
+# radio-fix3 R3.2.DENSE variant: dense-grid.yaml with SPaT and MAP moved to service
+# channel 174 (IEEE 1609.4-2016 §6.2.5; the RSUs' second radio, rsu.radios default 2).
+schema: v2xw/scenario/1
+meta:
+  base: dense-grid.yaml
+  name: radio-fix3 dense-grid-map
+  description: dense-grid with SPaT and MAP on channel 174.
+  tags: [radio-fix3, experiment, cbr]
+radio:
+  channels:
+    - {channel: 174, messages: [spat, map]}

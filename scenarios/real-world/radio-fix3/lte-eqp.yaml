@@ -1,0 +1,12 @@
+# radio-fix3 R3.1.EQP: p1-e5-lte-l1 with the OBU at 17 dBm conducted (20 dBm EIRP through the
+# 3 dBi antenna), the DSRC run's J2945/1 radiated power, as the UDOT 2021 field test ran both.
+schema: v2xw/scenario/1
+meta:
+  base: ../paper1/p1-e5-lte-l1.yaml
+  name: radio-fix3 lte-eqp
+  description: P1-E5 LTE load 1 at DSRC's 20 dBm EIRP.
+  tags: [radio-fix3, experiment]
+radio:
+  devices:
+    obu:
+      tx_power_dbm: 17.0
