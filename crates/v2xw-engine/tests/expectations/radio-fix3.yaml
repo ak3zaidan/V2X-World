@@ -488,7 +488,7 @@ rows:
   verdict: wrong-expectation
   note: >-
     The mechanism is the row's own: T_GenCpm moves only where T_off passes 100 ms. Of
-    141,500 frames in the variant, 3 carried T_off over 40 ms, one of them 297 ms (a CAM of
+    141,540 frames in the variant, 3 carried T_off over 40 ms, one of them 297 ms (a CAM of
     node 30 at 109.7 s): EN 302 571's floor, T_on (4000 (CBR - 0.62) / CBR - 1), which binds
     only above CBR 0.62, so that node's smoothed CBR passed 0.62 for a moment (about 0.74
     from the floor's formula) although the run's p90 is 0.47. The row assumed no unit got

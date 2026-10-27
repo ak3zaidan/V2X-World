@@ -487,6 +487,17 @@ trustworthy or comparable; later waves add behaviours and radio features.
     (RS_tcTrJa_120/146), `eventHistory` (RS_BSP_544), `roadType` and `lanePosition`; CPM
     segmentation by `MTU_CPM` and Annex E VoI. The 30 s friction-estimate hold and the
     motorway/trunk non-urban mapping are this build's choices, stated on the cards.
+- Status 2026-10-27, radio-fix3 follow-up (expectations `radio-fix3.yaml` R3.3): the built-in
+  highway (procedural, unsignalised, 65 mph) now tags its streets Motorway (it said
+  Residential, so the services thought it urban; traction loss used the urban 4 s
+  repetition). Measured on it: end-of-queue and local slow-down DENMs follow RS 2007 (each
+  originator once; local slow-down from every vehicle standing 30 s), traction loss on ice
+  repeats at 1 s with 10 Hz updates (CBR 0.21 -> 0.36), `cpm_dcc_limited` moves one CPM in
+  59,454 at CBR 0.37 (only where a unit passes 0.62). A DENM's cause is now in `node.tx`
+  content (`denm_cause`). Open: the built-in highway is a grid with at-grade junctions and
+  queues with no incident; emergency-brake-light DENMs at 33 per 100 vehicle-km in free flow
+  and 132 events on ice (limiters after the car-following model ignore mu g); no
+  end-of-queue DENM without forward sensors or hazard lights until a local slow-down exists.
 
 ### Wave 5: channels, sensors, imported calibrations
 
@@ -519,6 +530,15 @@ trustworthy or comparable; later waves add behaviours and radio features.
   jammers act per node, not per channel; ACS beyond the alternate channel is held at the
   alternate figure (conservative); the USDOT RSU Spec v4.1 two-radio clause is not yet checked
   against a cached copy; C-V2X runs refuse a map.
+- Status 2026-10-27, radio-fix3 follow-up (R3.2): the DCC gate is per channel (a second ETSI
+  gatekeeper fed with the service channel's CBR) and jammers act on their own channel (carrier
+  sense and reactive triggers), each pinned by a `multichannel.rs` test that a fault turns
+  red; the 14th `phase2` test keeps one record channel (peak 94 MB, was 2,554 MB);
+  multichannel 7/7, radio_channel 8/8, scms_scale 1/1. Dense CBR with the map on: the
+  built-in highway at 296 vehicles reaches CBR 0.456 with J2945/1 acting; on the grid,
+  moving SPaT/MAP lowers CBR172 by their share at the listeners less the 174->172 leakage
+  (0.923 against 0.9215 predicted). Open: leaked energy is sensed against -85 dBm for DSRC
+  too (802.11 CCA would count a non-decodable leak only above -65 dBm).
 
 **WP-14 Configurable sensors, RSU sensors, outline occlusion** (M, 7 days). Source: O-P3a.
 - Scope: a sensor suite per vehicle class with mount point and azimuth (front and rear radars,
