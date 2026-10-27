@@ -1158,6 +1158,66 @@ impl ScmsPki {
         Ok(self.extra.len() - 1)
     }
 
+    /// Issues the provider's further ACA instance `inst` (`aca-<inst>.<label>`, `inst` >= 1)
+    /// in the core ACA's form: under the same ICA, with the published ACA lifetime, SSP
+    /// version, encryption key, region and CRACA, valid from the core ACA's start, its keys
+    /// drawn from `seed` and its name (after every core draw, so no other certificate
+    /// moves). SAESOL's published chain files (2025-07-17, 2025-08-13) carry two ACA
+    /// certificates of one form (audit-gov GOV.D1.acas). Returns its index in
+    /// [`ScmsPki::extra`]; one already held is not issued again.
+    ///
+    /// # Errors
+    /// The certificate does not encode.
+    pub fn issue_aca_instance(&mut self, seed: u64, inst: u32) -> Result<usize> {
+        let label = self
+            .aca
+            .name
+            .split_once('.')
+            .map_or("provider-a", |(_, l)| l)
+            .to_string();
+        let name = format!("aca-{inst}.{label}");
+        if let Some(k) = self.extra.iter().position(|a| a.name == name) {
+            return Ok(k);
+        }
+        let mut seed_label = b"pki-aca-instance:".to_vec();
+        seed_label.extend_from_slice(name.as_bytes());
+        let mut g = Drbg::new(seed, &seed_label);
+        let profile = self.profile;
+        let form = Form::sub_ca(profile, &self.root, &self.ica);
+        let start = self.aca.cert.0.to_be_signed.validity_period.start.0.0;
+        let ssp = SecurityMgmtSsp::aca(AcaSsp::new(Uint8(
+            crate::scms::governance::ssp_version(profile, "pca"),
+        )));
+        let a = Self::issue_full(
+            &self.ica,
+            &mut g,
+            &name,
+            crate::scms::governance::published_lifetime(profile, "pca"),
+            2,
+            &ssp,
+            false,
+            profile.spec("pca").encryption,
+            start,
+            &[],
+            &form,
+        )?;
+        self.extra.push(a);
+        Ok(self.extra.len() - 1)
+    }
+
+    /// The ACA that signs at instance `inst`: the core one at 0, else its
+    /// [`ScmsPki::issue_aca_instance`] certificate (the core one when none was issued).
+    pub fn aca_at(&self, inst: u32) -> &Authority {
+        if inst == 0 {
+            return &self.aca;
+        }
+        let prefix = format!("aca-{inst}.");
+        self.extra
+            .iter()
+            .find(|a| a.name.starts_with(&prefix))
+            .unwrap_or(&self.aca)
+    }
+
     /// The verification key of `cert` if it chains to this PKI: an explicit component
     /// certificate whose issuer signature verifies, or an implicit end-entity
     /// certificate whose key is reconstructed (ECQV-1609) under its issuer.

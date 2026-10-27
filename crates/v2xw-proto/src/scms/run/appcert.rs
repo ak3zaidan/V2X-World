@@ -463,7 +463,7 @@ impl ScmsRun {
         let current = self.state.app_period_at(kind, at);
         let mut scratch: Kernel<ScmsMsg> = Kernel::new_at(self.kernel.net().clone(), 0);
         let p = self.state.params;
-        for (node, spec) in self.state.nodes.backend_service_models(&p) {
+        for (node, spec) in self.state.backend_hosts() {
             scratch.host(node, &spec, p.backend_profile);
         }
         host_governance(&mut scratch, &self.state.gov, &p);

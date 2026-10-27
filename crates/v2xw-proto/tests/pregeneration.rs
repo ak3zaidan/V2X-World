@@ -568,3 +568,42 @@ fn the_weekly_job_sends_one_batch_shuffled_across_every_account() {
     assert_eq!(st.ra.unrouted_responses, 0);
     assert_eq!(run.state.devices[&DEVICE_A].credentials.len(), 40);
 }
+
+/// [PRIMER] p.6: the RA "adds one week every week". At each i-period boundary every
+/// account gets the week that comes into `ra-maxPreloadTime`, whether or not its device
+/// asks for it, in one population batch on the run's clock: its RA-ACA requests leave at
+/// the boundary (within `ra-maxGenDelay`). Before, the engine generated only weeks a
+/// device asked for, so with the 3-year horizon the RA never reached the LAs or the ACA
+/// in the run (scms-fix3-ra RA.boundary-job). Fault (2026-10-27): `arm_boundary_jobs`
+/// returning at once.
+#[test]
+fn every_account_gets_its_next_horizon_week_at_the_boundary_without_asking() {
+    let mut run = bytes_run(&[DEVICE_A, DEVICE_B]);
+    provisioned(&mut run, DEVICE_A, 614, 1, 1);
+    provisioned(&mut run, DEVICE_B, 614, 1, 1);
+    let far = 614 + 156;
+    let before = count(&run, SpduKind::RaAcaCertRequest);
+    // Half a week: no boundary yet, nothing added.
+    run.run_until(WEEK_NS / 2).expect("runs");
+    assert_eq!(count(&run, SpduKind::RaAcaCertRequest), before);
+    run.run_until(WEEK_NS + 600 * 1_000_000_000).expect("runs");
+    assert_eq!(run.state.ra.boundary_jobs, 1, "one week, one job, both accounts");
+    for d in [DEVICE_A, DEVICE_B] {
+        assert!(run.state.ra.accounts[&d].generated.contains(&far), "{d:?}");
+    }
+    let added: Vec<u64> = run
+        .state
+        .pdus
+        .iter()
+        .filter(|p| p.kind == SpduKind::RaAcaCertRequest)
+        .skip(before)
+        .map(|p| p.at)
+        .collect();
+    assert_eq!(added.len(), 2, "one certificate (jmax 1) per account");
+    assert!(
+        added.iter().all(|t| (WEEK_NS..WEEK_NS + 600 * 1_000_000_000).contains(t)),
+        "at the boundary: {added:?}"
+    );
+    // Neither device asked: no top-off ran.
+    assert_eq!(run.state.ra.pregen_deferred, 0);
+}
