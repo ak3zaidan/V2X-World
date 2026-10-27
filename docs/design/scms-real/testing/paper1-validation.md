@@ -298,5 +298,5 @@ Short form: the Tampa RSU deafness locked to the first half of the UTC 100 ms in
 modelled (`radio.devices.rsu.off_channel`) and matches every interval share; KS 0.071 and
 0.076 on two seeds with Tampa's free clock and the log's stamp jitter, against 0.0747 (open).
 RSU ids now start at `ROADSIDE_ID_BASE`, so a vehicle's draws do not depend on the RSU count
-(golden digests of scenarios with RSUs re-blessed); `attack_start` is the first falsified
+(the golden digests of scenarios with RSUs, tests/regression phase2-path and i-s1-phase2-60s, are expected to move and are not yet re-blessed: the test lock was not free); `attack_start` is the first falsified
 message, and the six k-rule budget rows pass.
