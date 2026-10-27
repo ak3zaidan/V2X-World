@@ -130,3 +130,98 @@ fn the_lust_sample_imports_with_nothing_dropped_silently() {
     assert_eq!(d.max_accel_mps2, Some(3.0));
     assert_eq!(d.sigma, Some(0.5));
 }
+
+/// Runs `xml` on the grid for `steps` of 100 ms: every spawn, and the speed of trip `seq`
+/// at each step it is on the road.
+fn run_grid(
+    xml: &str,
+    steps: usize,
+    seq: u64,
+) -> (Vec<v2xw_mobility::views::ActorSpawn>, Vec<f64>) {
+    let opts = SumoOptions::default().imported_at("1970-01-01T00:00:00Z");
+    let (world, _) = import_sumo_net(root().join("worlds/sumo/grid3.net.xml"), &opts).unwrap();
+    let file = RouteFile::parse(xml).unwrap();
+    let rng = RngRegistry::new(3);
+    let mut engine = NativeMobility::new(EngineParams::default());
+    let mut ctx = MobilityCtx::new(0, &world, &rng);
+    engine
+        .init(&mut ctx, Box::new(RouteFileDemand::new(file)))
+        .unwrap();
+    let mut spawned = Vec::new();
+    let mut speeds = Vec::new();
+    let mut t = 0;
+    let mut actor = None;
+    for _ in 0..steps {
+        let mut ctx = MobilityCtx::new(t, &world, &rng);
+        let u = engine.step(&mut ctx, Duration::from_millis(100));
+        t = u.t;
+        if let Some(s) = u.spawned.iter().find(|s| s.seq == seq) {
+            actor = Some(s.actor);
+        }
+        spawned.extend(u.spawned);
+        if let Some(a) = actor
+            && let Some((_, k)) = u.states.iter().find(|(x, _)| *x == a)
+        {
+            speeds.push(k.vel.x.hypot(k.vel.y));
+        }
+    }
+    (spawned, speeds)
+}
+
+/// WP-15 follow-up: a vType's `carFollowModel` is the model its vehicles drive. On a free
+/// road from standstill, SUMO's Krauss (sigma 0) speeds up at exactly `accel` until its
+/// maximum, `v(t) = accel·t` (Krauss 1998, the `v + a·Δt` term of the desired speed),
+/// while the IDM's free-road term `a·(1 − (v/v0)⁴)` (Treiber et al. 2000) falls short of
+/// it as `v` nears `v0`: the same vType without a model drives the engine's IDM.
+#[test]
+fn a_vtypes_car_following_model_drives_its_vehicles() {
+    let xml = |model: &str| {
+        format!(
+            r#"<routes>
+  <vType id="t" vClass="passenger" accel="1.5" decel="4.5" sigma="0" maxSpeed="12" speedFactor="1" {model}/>
+  <vehicle id="a" type="t" depart="0" departLane="0"><route edges="A1B1 B1C1"/></vehicle>
+</routes>"#
+        )
+    };
+    let (_, krauss) = run_grid(&xml(r#"carFollowModel="Krauss""#), 61, 0);
+    let (_, idm) = run_grid(&xml(""), 61, 0);
+    assert!(krauss.len() > 50 && idm.len() > 50);
+    let (vk, vi) = (krauss[krauss.len() - 1], idm[idm.len() - 1]);
+    let t = (krauss.len() - 1) as f64 * 0.1;
+    eprintln!("after {t:.1} s: Krauss {vk:.3} m/s, IDM {vi:.3} m/s, a·t {:.3}", 1.5 * t);
+    assert!((vk - 1.5 * t).abs() < 0.05, "Krauss at a·t: {vk} against {}", 1.5 * t);
+    assert!(vi < vk - 0.3, "the IDM falls short of a·t: {vi} against {vk}");
+}
+
+/// WP-15 follow-up: a stated `departSpeed` above the safe insertion speed delays the
+/// insertion, as SUMO documents ("If that speed is unsafe, departure is delayed"), and the
+/// vehicle then enters at exactly the stated speed; `max` instead enters at once, slower.
+#[test]
+fn an_unsafe_stated_depart_speed_delays_the_insertion() {
+    let xml = |speed: &str| {
+        format!(
+            r#"<routes>
+  <vType id="t" vClass="passenger" sigma="0"/>
+  <vehicle id="l" type="t" depart="0" departLane="0" departSpeed="0"><route edges="A1B1 B1C1"/></vehicle>
+  <vehicle id="f" type="t" depart="1" departLane="0" departSpeed="{speed}"><route edges="A1B1 B1C1"/></vehicle>
+</routes>"#
+        )
+    };
+    let at = |speed: &str| {
+        let (spawned, _) = run_grid(&xml(speed), 200, 1);
+        let f = spawned
+            .iter()
+            .find(|s| s.seq == 1)
+            .expect("the follower enters");
+        let v = f.kinematics.vel.x.hypot(f.kinematics.vel.y);
+        (f.t as f64 / 1e9, v)
+    };
+    let (t_num, v_num) = at("13");
+    let (t_max, v_max) = at("max");
+    eprintln!(
+        "departSpeed 13: in at {t_num:.1} s at {v_num:.2} m/s; max: {t_max:.1} s at {v_max:.2} m/s"
+    );
+    assert!((v_num - 13.0).abs() < 1e-9, "enters at the stated speed: {v_num}");
+    assert!(t_num > t_max + 1.0, "delayed: {t_num} against {t_max}");
+    assert!(v_max < 13.0, "max is lowered to the safe speed: {v_max}");
+}

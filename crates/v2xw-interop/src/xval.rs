@@ -334,6 +334,119 @@ pub struct Observer<'a> {
     approach: BTreeMap<ActorId, LaneId>,
     lane_exit: BTreeMap<LaneId, f64>,
     ssm: v2xw_metrics::ssm::SsmTracker,
+    /// The network mode's junction knowledge (WP-11): conflict zones, each trip's route
+    /// and each approach lane's connector onto an edge.
+    ssm_net: Option<SsmNet>,
+}
+
+/// What the network-mode surrogate measures read in the cross-validation.
+struct SsmNet {
+    zones: v2xw_mobility::intersection::zones::ConflictZones,
+    routes: BTreeMap<u64, Vec<LaneId>>,
+    via: BTreeMap<(LaneId, EdgeId), LaneId>,
+    /// Each actor's last (lane, front position, next lane), advanced at its speed while
+    /// it has no lane (SUMO's internal lanes are not world lanes).
+    pos: BTreeMap<ActorId, (LaneId, f64, Option<LaneId>)>,
+}
+
+impl v2xw_metrics::ssm::SsmNetwork for SsmNet {
+    fn zone(&self, a: u32, b: u32) -> Option<v2xw_metrics::ssm::ZoneRef> {
+        self.zones
+            .first_zone(LaneId::new(a), LaneId::new(b))
+            .map(|z| v2xw_metrics::ssm::ZoneRef {
+                s_a: z.s_self,
+                s_b: z.s_other,
+                half_a: z.half_self,
+                half_b: z.half_other,
+                merge: z.merge,
+            })
+    }
+}
+
+impl SsmNet {
+    fn new(world: &World, trips: &[(TripRequest, Vec<LaneId>)]) -> Self {
+        let mut via = BTreeMap::new();
+        for c in world.roads.connections() {
+            if let Some(v) = c.via {
+                via.entry((c.from_lane, world.lane(c.to_lane).edge)).or_insert(v);
+            }
+        }
+        Self {
+            zones: v2xw_mobility::intersection::zones::ConflictZones::build(world),
+            routes: trips.iter().map(|(t, r)| (t.seq, r.clone())).collect(),
+            via,
+            pos: BTreeMap::new(),
+        }
+    }
+
+    /// The lane after `lane` on the trip's route: the route's own lane, or, when the
+    /// vehicle is on another lane of the edge, that lane's connector onto the edge the
+    /// route takes next.
+    fn next_on_route(&self, world: &World, seq: u64, lane: LaneId) -> Option<LaneId> {
+        let route = self.routes.get(&seq)?;
+        let edge = world.lane(lane).edge;
+        let i = route.iter().position(|l| world.lane(*l).edge == edge)?;
+        let next = *route.get(i + 1)?;
+        if route[i] == lane || world.lane(next).junction.is_none() {
+            return Some(next);
+        }
+        let after = route.get(i + 2).map(|l| world.lane(*l).edge);
+        Some(after.and_then(|e| self.via.get(&(lane, e)).copied()).unwrap_or(next))
+    }
+
+    /// Updates every actor's position and returns the paths ahead.
+    fn paths(
+        &mut self,
+        world: &World,
+        u: &MobilityUpdate,
+        spawn: &BTreeMap<ActorId, (u64, f64)>,
+        dt_s: f64,
+        range_m: f64,
+    ) -> BTreeMap<ActorId, Vec<v2xw_metrics::ssm::PathLane>> {
+        let mut out = BTreeMap::new();
+        let mut pos = BTreeMap::new();
+        for (a, k) in &u.states {
+            let now = match (k.lane, self.pos.get(a)) {
+                (Some(lp), _) => {
+                    let next = spawn
+                        .get(a)
+                        .and_then(|(seq, _)| self.next_on_route(world, *seq, lp.lane));
+                    Some((lp.lane, lp.s_m, next))
+                }
+                (None, Some(&(lane, s, next))) => {
+                    let v = v2xw_core::math::hypot(k.vel.x, k.vel.y);
+                    let (mut lane, mut s, mut next) = (lane, s + v * dt_s, next);
+                    while s > world.lane(lane).length_m {
+                        let Some(n) = next.or_else(|| self.zones.exit_of(lane)) else {
+                            break;
+                        };
+                        s -= world.lane(lane).length_m;
+                        lane = n;
+                        next = None;
+                    }
+                    Some((lane, s, next))
+                }
+                (None, None) => None,
+            };
+            if let Some((lane, s, next)) = now {
+                pos.insert(*a, (lane, s, next));
+                let p = self
+                    .zones
+                    .path_ahead(world, lane, s, next, range_m)
+                    .into_iter()
+                    .map(|(l, start_m, length_m, internal)| v2xw_metrics::ssm::PathLane {
+                        lane: l.index(),
+                        start_m,
+                        length_m,
+                        internal,
+                    })
+                    .collect();
+                out.insert(*a, p);
+            }
+        }
+        self.pos = pos;
+        out
+    }
 }
 
 impl<'a> Observer<'a> {
@@ -387,6 +500,10 @@ impl<'a> Observer<'a> {
                     .map_or(true, |v| v != "no-extrapolation"),
                 ..v2xw_metrics::ssm::SsmParams::default()
             }),
+            // The network mode is SUMO's classification; `V2XW_XVAL_SSM_MODE=geometric`
+            // measures every pair by geometry alone (the WP-11 first cut), for comparison.
+            ssm_net: (std::env::var("V2XW_XVAL_SSM_MODE").as_deref() != Ok("geometric"))
+                .then(|| SsmNet::new(world, trips)),
         }
     }
 
@@ -431,7 +548,13 @@ impl<'a> Observer<'a> {
                 lane: None,
             })
             .collect();
-        self.ssm.step(t1, &ssm_actors, &[]);
+        if let Some(net) = self.ssm_net.as_mut() {
+            let range = self.ssm.params().range_m;
+            let paths = net.paths(self.world, u, &self.spawn, dt_s, range);
+            self.ssm.step_network(t1, &ssm_actors, &[], &paths, &*net);
+        } else {
+            self.ssm.step(t1, &ssm_actors, &[]);
+        }
         let mut halting = 0u64;
         let mut speed_sum = 0.0;
         for (a, k) in &u.states {

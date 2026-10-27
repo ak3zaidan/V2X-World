@@ -429,8 +429,34 @@ impl SsmTracker {
         self.encounters
     }
 
-    /// One step at `t_s`: `actors` (any order) and the caller's following pairs.
+    /// One step at `t_s`: `actors` (any order) and the caller's following pairs, every
+    /// other pair by geometry alone.
     pub fn step(&mut self, t_s: f64, actors: &[SsmActor], follows: &[Follow]) {
+        self.step_inner(t_s, actors, follows, None);
+    }
+
+    /// One step in the **network mode** (SUMO's classification): every actor in `paths`
+    /// is measured against every other in `paths` by its route through the network, read
+    /// from `net` ([`evaluate_pair_network`]); a pair either of whose actors has no path
+    /// is measured by geometry, as [`SsmTracker::step`] measures it.
+    pub fn step_network(
+        &mut self,
+        t_s: f64,
+        actors: &[SsmActor],
+        follows: &[Follow],
+        paths: &BTreeMap<ActorId, Vec<PathLane>>,
+        net: &dyn SsmNetwork,
+    ) {
+        self.step_inner(t_s, actors, follows, Some((paths, net)));
+    }
+
+    fn step_inner(
+        &mut self,
+        t_s: f64,
+        actors: &[SsmActor],
+        follows: &[Follow],
+        network: Option<(&BTreeMap<ActorId, Vec<PathLane>>, &dyn SsmNetwork)>,
+    ) {
         let mut sorted: Vec<SsmActor> = actors.to_vec();
         sorted.sort_by_key(|a| a.actor);
         sorted.dedup_by_key(|a| a.actor);
@@ -478,13 +504,16 @@ impl SsmTracker {
                 named.insert(key, e);
             }
         }
-        // The neighbour grid: cells of `range_m`, integer keys.
-        let cell = self.params.range_m.max(1.0);
+        // The neighbour grid: cells of `range_m`, integer keys. In the network mode two
+        // vehicles each within range of one junction can be twice the range apart.
+        let reach = if network.is_some() { 2.0 } else { 1.0 };
+        let cell = (reach * self.params.range_m).max(1.0);
         let mut grid: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
         for (i, a) in sorted.iter().enumerate() {
             grid.entry(cell_of(a, cell)).or_default().push(i);
         }
-        let r2 = self.params.range_m * self.params.range_m;
+        let r2 = cell * cell;
+        let r2_geometric = self.params.range_m * self.params.range_m;
         let mut evals: Vec<((ActorId, ActorId), PairEval)> = Vec::new();
         for (i, a) in sorted.iter().enumerate() {
             let (cx, cy) = cell_of(a, cell);
@@ -509,6 +538,19 @@ impl SsmTracker {
                 }
                 let (dx, dy) = (b.x_m - a.x_m, b.y_m - a.y_m);
                 if dx * dx + dy * dy > r2 {
+                    continue;
+                }
+                if let Some((paths, net)) = network
+                    && let (Some(pa), Some(pb)) = (paths.get(&a.actor), paths.get(&b.actor))
+                {
+                    if let Some(e) =
+                        evaluate_pair_network(a, pa, acc[i], b, pb, acc[j], net, &self.params)
+                    {
+                        evals.push((key, e));
+                    }
+                    continue;
+                }
+                if dx * dx + dy * dy > r2_geometric {
                     continue;
                 }
                 if let Some(e) =
@@ -988,6 +1030,242 @@ pub fn evaluate_pair(a: &SsmActor, b: &SsmActor, p: &SsmParams) -> Option<PairEv
     }
 }
 
+// --- the network mode (SUMO's SSM-device classification) ---------------------------------
+
+/// One lane of a road user's path ahead, for the network mode.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PathLane {
+    /// The lane.
+    pub lane: u32,
+    /// The distance along the path from the user's front bumper to this lane's start, m:
+    /// zero or negative for the lane it is on.
+    pub start_m: f64,
+    /// The lane's length, m.
+    pub length_m: f64,
+    /// True for a junction's internal lane (a connector through the junction).
+    pub internal: bool,
+}
+
+/// Where the paths of two internal lanes meet, as the network mode reads it from the
+/// junction (`v2xw_mobility::intersection::zones::Zone`, seen from the first lane).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZoneRef {
+    /// Arc length along the first lane at the meeting point, m.
+    pub s_a: f64,
+    /// Arc length along the second lane at the meeting point, m.
+    pub s_b: f64,
+    /// Half the stretch of the first lane the second path's corridor covers, m.
+    pub half_a: f64,
+    /// Half the stretch of the second lane the first path's corridor covers, m.
+    pub half_b: f64,
+    /// The paths merge there (onto one exit) rather than cross.
+    pub merge: bool,
+}
+
+/// The junction knowledge the network mode reads.
+pub trait SsmNetwork {
+    /// The first place the paths of internal lanes `a` and `b` meet, when their movements
+    /// are foes in the junction's right-of-way matrix; `None` when they are not.
+    fn zone(&self, a: u32, b: u32) -> Option<ZoneRef>;
+}
+
+/// The time to drive `d` metres from `v` at `acc`, of which only braking is extrapolated
+/// (`min(0, acc)`, as SUMO's device times the conflict area); infinite if the vehicle
+/// stops first or stands.
+fn arrival(d: f64, v: f64, acc: f64) -> f64 {
+    if d <= 0.0 {
+        return 0.0;
+    }
+    if v < STANDING_MPS {
+        return f64::INFINITY;
+    }
+    let a = acc.min(0.0);
+    if a >= 0.0 {
+        return d / v;
+    }
+    let disc = v * v + 2.0 * a * d;
+    if disc < 0.0 {
+        return f64::INFINITY;
+    }
+    (-v + math::sqrt(disc)) / a
+}
+
+/// The measures of a pair from their paths through the network, classified as SUMO's SSM
+/// device classifies them (SUMO documentation, "Simulation/Output/SSM Device";
+/// `MSDevice_SSM` read for behaviour only, no code copied):
+///
+/// * **following** when one's current lane lies on the other's path ahead: the gap is the
+///   distance along the path from the follower's front to the leader's rear, and the
+///   measures are those of [`evaluate_following`];
+/// * **crossing** or **merging** when the two paths enter one junction on movements its
+///   right-of-way matrix makes foes ([`SsmNetwork::zone`]), each within `range_m` of the
+///   junction along its path. Each vehicle's entry to the conflict area (front reaching
+///   it) and exit (rear leaving it) are timed at the current speed, or at the current
+///   deceleration while it brakes (acceleration is not extrapolated). A crossing pair has
+///   a TTC when the second vehicle arrives before the first has left, `TTC = d₂ / v₂`,
+///   with the DRAC and MDRAC delay rules of the geometric mode; otherwise its PPET is
+///   `t_in₂ − t_out₁`. A merging pair, at constant speed, has the TTC `d_f / v_f` when the
+///   follower reaches the merge point before the leader's rear has passed it, else the
+///   time the follower then needs to close on the leader;
+/// * **no encounter** otherwise: two vehicles whose movements are not foes, opposing
+///   straight-through traffic, parallel streets (SUMO's "no conflict ahead"). SUMO's
+///   oncoming type is two vehicles on one lane in opposite directions, which a graph of
+///   one-way lanes never holds.
+///
+/// Without extrapolation (`p.extrapolate` false, the validation's fault) only following
+/// pairs are measured.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn evaluate_pair_network(
+    a: &SsmActor,
+    pa: &[PathLane],
+    acc_a: f64,
+    b: &SsmActor,
+    pb: &[PathLane],
+    acc_b: f64,
+    net: &dyn SsmNetwork,
+    p: &SsmParams,
+) -> Option<PairEval> {
+    let (Some(ca), Some(cb)) = (pa.first(), pb.first()) else {
+        return None;
+    };
+    // Following: the leader's current lane on the follower's path ahead.
+    let follow = |pf: &[PathLane], l: &SsmActor, cl: &PathLane| {
+        let k = pf.iter().find(|x| x.lane == cl.lane)?;
+        let gap = k.start_m - cl.start_m - l.length_m;
+        (gap > 0.0 && gap <= p.range_m).then_some(gap)
+    };
+    if let Some(gap) = follow(pa, b, cb) {
+        return evaluate_following(a, b, gap, p);
+    }
+    if let Some(gap) = follow(pb, a, ca) {
+        return evaluate_following(b, a, gap, p);
+    }
+    if !p.extrapolate {
+        return None;
+    }
+    let mut best: Option<PairEval> = None;
+    for la in pa.iter().filter(|x| x.internal && x.start_m <= p.range_m) {
+        for lb in pb.iter().filter(|x| x.internal && x.start_m <= p.range_m) {
+            if la.lane == lb.lane {
+                continue;
+            }
+            let Some(z) = net.zone(la.lane, lb.lane) else {
+                continue;
+            };
+            let e = if z.merge {
+                merging_measures(a, la.start_m + z.s_a, b, lb.start_m + z.s_b, p)
+            } else {
+                crossing_measures(
+                    (a, acc_a, la.start_m + z.s_a - z.half_a, la.start_m + z.s_a + z.half_a),
+                    (b, acc_b, lb.start_m + z.s_b - z.half_b, lb.start_m + z.s_b + z.half_b),
+                    p,
+                )
+            };
+            let Some(e) = e else { continue };
+            let better = match (&best, e.ttc_s) {
+                (None, _) => true,
+                (Some(o), Some(t)) => o.ttc_s.is_none_or(|u| t < u),
+                (Some(o), None) => {
+                    o.ttc_s.is_none() && e.ppet_s.is_some_and(|x| o.ppet_s.is_none_or(|y| x < y))
+                }
+            };
+            if better {
+                best = Some(e);
+            }
+        }
+    }
+    best
+}
+
+/// A crossing pair: each `(actor, acceleration, distance to the area's near edge, to its
+/// far edge)`, measured from the front bumper along the path.
+fn crossing_measures(
+    a: (&SsmActor, f64, f64, f64),
+    b: (&SsmActor, f64, f64, f64),
+    p: &SsmParams,
+) -> Option<PairEval> {
+    let times = |(x, acc, d_in, d_far): (&SsmActor, f64, f64, f64)| {
+        let d_out = d_far + x.length_m;
+        if d_out < 0.0 {
+            return None;
+        }
+        let v = x.speed_mps.max(0.0);
+        Some((d_in, v, arrival(d_in, v, acc), arrival(d_out, v, acc)))
+    };
+    let ta = times(a)?;
+    let tb = times(b)?;
+    // The first is the one entering first.
+    let (first, second) = if ta.2 <= tb.2 { (ta, tb) } else { (tb, ta) };
+    let (d2, v2, in2, _) = second;
+    let out1 = first.3;
+    // Both inside the area (SUMO's "both entered" phase), or the second never arrives.
+    if d2 <= 0.0 || !in2.is_finite() {
+        return None;
+    }
+    if in2 <= out1 {
+        let r = p.reaction_s;
+        let mdrac = if out1 > r && d2 - v2 * r > 0.0 {
+            delay_decel(d2 - v2 * r, v2, out1 - r)
+        } else {
+            None
+        };
+        Some(PairEval {
+            ty: EncounterType::Crossing,
+            ttc_s: Some(d2 / v2),
+            drac_mps2: delay_decel(d2, v2, out1),
+            mdrac_mps2: mdrac,
+            ppet_s: None,
+        })
+    } else {
+        Some(PairEval {
+            ty: EncounterType::Crossing,
+            ttc_s: None,
+            drac_mps2: None,
+            mdrac_mps2: None,
+            ppet_s: Some(in2 - out1),
+        })
+    }
+}
+
+/// A merging pair: each actor's distance along its path from its front bumper to the
+/// merge point.
+fn merging_measures(a: &SsmActor, da: f64, b: &SsmActor, db: f64, p: &SsmParams) -> Option<PairEval> {
+    let (va, vb) = (a.speed_mps.max(0.0), b.speed_mps.max(0.0));
+    if va < STANDING_MPS || vb < STANDING_MPS || da + a.length_m < 0.0 || db + b.length_m < 0.0 {
+        return None;
+    }
+    let (ta, tb) = (da.max(0.0) / va, db.max(0.0) / vb);
+    // The leader reaches the merge point first.
+    let ((dl, vl, ll), (df, vf, tf)) = if ta <= tb {
+        ((da, va, a.length_m), (db, vb, tb))
+    } else {
+        ((db, vb, b.length_m), (da, va, ta))
+    };
+    if df <= 0.0 {
+        return None;
+    }
+    let exit_l = (dl + ll).max(0.0) / vl;
+    let (ttc, drac, closing) = if exit_l >= tf {
+        (df / vf, Some(vf * vf / (2.0 * df)), vf)
+    } else {
+        let dv = vf - vl;
+        if dv <= 0.0 {
+            return None;
+        }
+        let gap = df - vf * exit_l;
+        let g0 = df - dl - ll;
+        (exit_l + gap / dv, (g0 > 0.0).then(|| dv * dv / (2.0 * g0)), dv)
+    };
+    Some(PairEval {
+        ty: EncounterType::Merging,
+        ttc_s: Some(ttc),
+        drac_mps2: drac,
+        mdrac_mps2: mdrac_closing(closing, ttc, p.reaction_s),
+        ppet_s: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1325,5 +1603,151 @@ mod tests {
         }
         assert_eq!(EncounterType::from_sumo_code(4), None);
         assert_eq!(EncounterType::from_sumo_code(0), None);
+    }
+
+    // --- the network mode ------------------------------------------------------------
+
+    /// A junction where connector 10 (from approach lane 1) crosses connector 20 (from
+    /// lane 2), connector 30 (from lane 3) merges with 10 onto one exit, and connector 40
+    /// is a foe of nothing.
+    struct Junction;
+
+    impl SsmNetwork for Junction {
+        fn zone(&self, a: u32, b: u32) -> Option<ZoneRef> {
+            match (a, b) {
+                (10, 20) => Some(ZoneRef { s_a: 8.0, s_b: 6.0, half_a: 1.0, half_b: 1.25, merge: false }),
+                (20, 10) => Some(ZoneRef { s_a: 6.0, s_b: 8.0, half_a: 1.25, half_b: 1.0, merge: false }),
+                (10, 30) => Some(ZoneRef { s_a: 12.0, s_b: 10.0, half_a: 2.0, half_b: 2.0, merge: true }),
+                (30, 10) => Some(ZoneRef { s_a: 10.0, s_b: 12.0, half_a: 2.0, half_b: 2.0, merge: true }),
+                _ => None,
+            }
+        }
+    }
+
+    /// The path of a vehicle whose front is `to_junction` metres short of `connector`.
+    fn path(approach: u32, connector: u32, to_junction: f64) -> Vec<PathLane> {
+        vec![
+            PathLane { lane: approach, start_m: -(60.0 - to_junction), length_m: 60.0, internal: false },
+            PathLane { lane: connector, start_m: to_junction, length_m: 15.0, internal: true },
+            PathLane { lane: 99, start_m: to_junction + 15.0, length_m: 100.0, internal: false },
+        ]
+    }
+
+    /// Hand-computed crossing on foe movements. A (10 m/s, 4 m) is 20 m short of
+    /// connector 10, whose conflict area is s 7..9: it enters at 27/10 = 2.7 s and leaves
+    /// at (20 + 9 + 4)/10 = 3.3 s. B (8 m/s) is 15 m short of connector 20 (area s
+    /// 4.75..7.25): in at 19.75/8 = 2.46875 s, out at 26.25/8 = 3.28125 s. B is first; A
+    /// arrives at 2.7 s before B has left: TTC = 27/10 = 2.7 s (SUMO: the second's entry
+    /// distance over its speed), DRAC = 2(10·3.28125 − 27)/3.28125² (A arriving no earlier
+    /// than B's exit).
+    #[test]
+    fn network_crossing_on_foe_movements_is_hand_computed() {
+        let a = car(1, 0.0, 0.0, 0.0, 10.0);
+        let b = car(2, 30.0, -30.0, FRAC_PI_2, 8.0);
+        let p = SsmParams::default();
+        let e = evaluate_pair_network(&a, &path(1, 10, 20.0), 0.0, &b, &path(2, 20, 15.0), 0.0, &Junction, &p)
+            .unwrap();
+        assert_eq!(e.ty, EncounterType::Crossing);
+        assert!(close(e.ttc_s.unwrap(), 2.7), "{e:?}");
+        let t = 26.25 / 8.0;
+        assert!(close(e.drac_mps2.unwrap(), 2.0 * (10.0 * t - 27.0) / (t * t)), "{e:?}");
+        // MDRAC, 1 s reaction: d = 27 − 10 = 17, T = 2.28125: 2(22.8125 − 17)/T².
+        let tr = t - 1.0;
+        assert!(close(e.mdrac_mps2.unwrap(), 2.0 * (10.0 * tr - 17.0) / (tr * tr)), "{e:?}");
+        // B 10 m further back: in at 29.75/8 = 3.71875 s, after A has left at 3.3 s: no
+        // TTC, PPET = 3.71875 − 3.3.
+        let e = evaluate_pair_network(&a, &path(1, 10, 20.0), 0.0, &b, &path(2, 20, 25.0), 0.0, &Junction, &p)
+            .unwrap();
+        assert_eq!(e.ttc_s, None);
+        assert!(close(e.ppet_s.unwrap(), 29.75 / 8.0 - 3.3), "{e:?}");
+    }
+
+    /// The same two vehicles on movements that are not foes (connector 40, say a right
+    /// turn) are no encounter, whatever their straight lines do; and without
+    /// extrapolation (the validation's fault) the crossing is missed.
+    #[test]
+    fn network_pairs_that_are_not_foes_are_no_encounter() {
+        let a = car(1, 0.0, 0.0, 0.0, 10.0);
+        let b = car(2, 30.0, -30.0, FRAC_PI_2, 8.0);
+        let p = SsmParams::default();
+        assert_eq!(
+            evaluate_pair_network(&a, &path(1, 10, 20.0), 0.0, &b, &path(2, 40, 15.0), 0.0, &Junction, &p),
+            None
+        );
+        let off = SsmParams { extrapolate: false, ..SsmParams::default() };
+        assert_eq!(
+            evaluate_pair_network(&a, &path(1, 10, 20.0), 0.0, &b, &path(2, 20, 15.0), 0.0, &Junction, &off),
+            None
+        );
+    }
+
+    /// Braking is extrapolated, acceleration is not (SUMO's `min(0, a)`): A braking at
+    /// 3 m/s² stops in 10²/6 = 16.7 m, short of the area 27 m ahead, so there is no TTC;
+    /// accelerating at 2 m/s² it is timed at constant speed (TTC 2.7 s).
+    #[test]
+    fn network_braking_is_extrapolated_and_acceleration_is_not() {
+        let a = car(1, 0.0, 0.0, 0.0, 10.0);
+        let b = car(2, 30.0, -30.0, FRAC_PI_2, 8.0);
+        let p = SsmParams::default();
+        let run = |acc: f64| {
+            evaluate_pair_network(&a, &path(1, 10, 20.0), acc, &b, &path(2, 20, 15.0), 0.0, &Junction, &p)
+        };
+        assert!(run(-3.0).is_none_or(|e| e.ttc_s.is_none()), "{:?}", run(-3.0));
+        assert!(close(run(2.0).unwrap().ttc_s.unwrap(), 2.7));
+        // A braking at 1 m/s² still arrives: 27 = 10t − t²/2, t = 10 − √46 = 3.2177 s,
+        // which is after B's exit at 3.28125 s? No: 3.2177 < 3.28125, so TTC = 2.7 s.
+        assert!(close(run(-1.0).unwrap().ttc_s.unwrap(), 2.7));
+    }
+
+    /// A following pair through the junction: B on connector 10, its rear 6 m past the
+    /// connector's start; A on the approach 12 m short of it, so the gap along the path
+    /// is 18 m, and closing at 4 m/s the TTC is 4.5 s. Then a merge onto one exit (below).
+    #[test]
+    fn network_following_runs_along_the_path_and_merging_is_timed() {
+        let a = car(1, 0.0, 0.0, 0.0, 10.0);
+        let b = car(2, 30.0, 0.0, 0.0, 6.0);
+        let p = SsmParams::default();
+        // B's front 10 m into connector 10 (rear at 6 m).
+        let pb = vec![
+            PathLane { lane: 10, start_m: -10.0, length_m: 15.0, internal: true },
+            PathLane { lane: 99, start_m: 5.0, length_m: 100.0, internal: false },
+        ];
+        let e = evaluate_pair_network(&a, &path(1, 10, 12.0), 0.0, &b, &pb, 0.0, &Junction, &p).unwrap();
+        assert_eq!(e.ty, EncounterType::Following);
+        assert!(close(e.ttc_s.unwrap(), 18.0 / 4.0), "{e:?}");
+        // Merging: A 8 m short of connector 10 (merge point at s 12, so 20 m) at 10 m/s,
+        // C 8 m short of connector 30 (merge at s 10, so 18 m) at 9 m/s. A in at 2.0 s,
+        // C at 2.0 s: A first (ties to A); A's rear clears at 24/10 = 2.4 s, after C
+        // arrives: TTC = 18/9 = 2.0 s, DRAC = 9²/(2·18).
+        let c = car(3, 20.0, -20.0, FRAC_PI_2, 9.0);
+        let e = evaluate_pair_network(&a, &path(1, 10, 8.0), 0.0, &c, &path(3, 30, 8.0), 0.0, &Junction, &p).unwrap();
+        assert_eq!(e.ty, EncounterType::Merging);
+        assert!(close(e.ttc_s.unwrap(), 2.0), "{e:?}");
+        assert!(close(e.drac_mps2.unwrap(), 81.0 / 36.0), "{e:?}");
+    }
+
+    /// The tracker in the network mode: a crossing on foe movements is logged, the same
+    /// geometry on movements that are not foes is not.
+    #[test]
+    fn the_network_tracker_logs_only_foe_crossings() {
+        let run = |connector_b: u32| {
+            let mut tr = SsmTracker::new(SsmParams::default());
+            for k in 0..20 {
+                let t = f64::from(k) * 0.1;
+                let a = car(1, -27.0 + 10.0 * t, 0.0, 0.0, 10.0);
+                let b = car(2, 0.0, -20.0 + 8.0 * t, FRAC_PI_2, 8.0);
+                let mut paths = BTreeMap::new();
+                paths.insert(a.actor, path(1, 10, 20.0 - 10.0 * t));
+                paths.insert(b.actor, path(2, connector_b, 15.0 - 8.0 * t));
+                tr.step_network(t, &[a, b], &[], &paths, &Junction);
+            }
+            tr.close_all();
+            tr.take_conflicts()
+        };
+        let log = run(20);
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert_eq!(log[0].ty, EncounterType::Crossing);
+        assert!(log[0].ttc_below(SSM_TTC_S));
+        assert!(run(40).is_empty());
     }
 }

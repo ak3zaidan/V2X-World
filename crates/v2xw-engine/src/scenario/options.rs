@@ -405,6 +405,38 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "No vehicles",
             "No vehicle demand: pedestrians, roadside units and the backend only.",
         ),
+        ("actors.vehicles.demand.kind", "mobility/demand/sumo-rou") => w(
+            "SUMO route file (.rou.xml)",
+            "Every vehicle, flow and vehicle type of a SUMO route file, each driven by its own type.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/routes") => w(
+            "Saved routes (v2xw/routes/1)",
+            "The trips and chosen routes a traffic assignment saved, run again as they are.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/trips") => w(
+            "Trip list",
+            "A list of trips, each with its own departure, origin and destination.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/od-matrix") => w(
+            "Origin-destination matrix",
+            "Trips drawn from a zone-to-zone matrix, as SUMO's od2trips draws them.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/counts") => w(
+            "Traffic counts",
+            "Routes and trips sampled to reproduce observed counts, as SUMO's routeSampler does.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/gtfs") => w(
+            "Transit timetable (GTFS)",
+            "Buses and trams on their scheduled routes, from a GTFS feed.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/purposes") => w(
+            "Trips by purpose",
+            "A day of home-based tours and other trips, each departing on its purpose's profile.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/composite") => w(
+            "Several demand models together",
+            "The trips of several demand models at once, for example commuters plus transit.",
+        ),
         ("actors.vehicles.drivers.realism", "calibrated") => w(
             "Calibrated city drivers",
             "Each driver their own free speed, reaction at a green and following style; tuned to HCM saturation flow.",
@@ -931,6 +963,15 @@ pub fn slot_values(path: &str, registry: &Registry) -> Option<(Vec<Value>, bool)
                 "mobility/demand/poisson",
                 "mobility/demand/tr36885-drop",
                 "mobility/demand/none",
+                // A SUMO `.rou.xml` imported whole (WP-15) and the `v2xw-demand` models.
+                v2xw_interop::routes::MODEL_ID,
+                v2xw_demand::scenario::KINDS[0],
+                v2xw_demand::scenario::KINDS[1],
+                v2xw_demand::scenario::KINDS[2],
+                v2xw_demand::scenario::KINDS[3],
+                v2xw_demand::scenario::KINDS[4],
+                v2xw_demand::scenario::KINDS[5],
+                v2xw_demand::scenario::KINDS[6],
             ]
             .iter()
             .filter(|id| crate::wiring::DEMAND_KINDS.contains(id))
@@ -1754,7 +1795,15 @@ mod tests {
             [
                 "mobility/demand/poisson",
                 "mobility/demand/tr36885-drop",
-                "mobility/demand/none"
+                "mobility/demand/none",
+                "mobility/demand/sumo-rou",
+                "mobility/demand/routes",
+                "mobility/demand/trips",
+                "mobility/demand/od-matrix",
+                "mobility/demand/counts",
+                "mobility/demand/gtfs",
+                "mobility/demand/purposes",
+                "mobility/demand/composite",
             ]
         );
         assert_eq!(row("actors.vehicles.demand.kind")["kind"], "enum");

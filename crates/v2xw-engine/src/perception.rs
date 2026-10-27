@@ -35,6 +35,10 @@
 //!   silhouette count) — the visible-corner rule of the Artery environment model
 //!   (Günther, Riebl et al., "Realizing Collective Perception in a Vehicle", IEEE VNC
 //!   2016), as segment / oriented-rectangle intersection in this crate's own geometry.
+//!   The outline rule is 2.5D: the line runs from the sensor's mount height to the top
+//!   of the target's corner, and a vehicle body blocks it only where the line passes
+//!   over its footprint below its roof, so a mast camera or a truck-cab camera sees over
+//!   cars (`corner_hidden`).
 //!   Re-implemented from Günther et al. 2016 and TS 103 324 V2.1.1 §7.1.4 (the sensor
 //!   information container). Artery was read for behaviour only and no code was copied.
 //! * **Tracking**: detections are associated to tracks (by the object itself — a perfect
@@ -814,6 +818,8 @@ struct Rect {
     axis: (f64, f64),
     half_len: f64,
     half_wid: f64,
+    /// The body's top, metres above the datum (its ground height plus its height).
+    top_m: f64,
 }
 
 impl Rect {
@@ -832,6 +838,7 @@ impl Rect {
             axis: (c, s),
             half_len: 0.5 * len,
             half_wid: 0.5 * x.k.dims.width_m.max(0.2),
+            top_m: x.k.pos.z + x.k.dims.height_m.max(0.0),
         }
     }
 
@@ -850,7 +857,14 @@ impl Rect {
     /// Whether the segment from `a` to `b` passes through the rectangle's interior over a
     /// positive length (a segment grazing an edge or ending on it does not). The segment
     /// is clipped against the rectangle in its own frame (the Liang–Barsky slab test).
+    #[cfg(test)]
     fn crossed_by(&self, a: (f64, f64), b: (f64, f64)) -> bool {
+        self.crossing(a, b).is_some()
+    }
+
+    /// The parameters `[t0, t1]` along the segment from `a` (0) to `b` (1) over which it
+    /// is inside the rectangle, when it crosses it over a positive length.
+    fn crossing(&self, a: (f64, f64), b: (f64, f64)) -> Option<(f64, f64)> {
         const EPS: f64 = 1e-6;
         let (c, s) = self.axis;
         let local = |p: (f64, f64)| {
@@ -862,7 +876,7 @@ impl Rect {
         let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
         let (hl, hw) = (self.half_len - EPS, self.half_wid - EPS);
         if hl <= 0.0 || hw <= 0.0 {
-            return false;
+            return None;
         }
         for (p, q) in [
             (-d.0, p0.0 + hl),
@@ -872,7 +886,7 @@ impl Rect {
         ] {
             if p.abs() < 1e-12 {
                 if q < 0.0 {
-                    return false;
+                    return None;
                 }
                 continue;
             }
@@ -883,17 +897,28 @@ impl Rect {
                 t1 = t1.min(r);
             }
             if t0 > t1 {
-                return false;
+                return None;
             }
         }
         let len = math::hypot(d.0, d.1);
-        (t1 - t0) * len > EPS
+        ((t1 - t0) * len > EPS).then_some((t0, t1))
     }
 }
 
 /// Whether the line from sensor `m` to corner `q` of the subject `own` is blocked: by a
 /// building, by another vehicle's body, or by the subject's own body (a corner on its far
 /// side is not on its silhouette).
+///
+/// In 2.5D: the sight line runs from the sensor's height to the top of the subject's
+/// corner (`own.top_m`), and a body blocks it only where the line passes over the body's
+/// footprint **below the body's top**. The line's height is linear along it, so it is
+/// lowest over a footprint at one end of the stretch it crosses. A camera on a mast or a
+/// truck cab above the cars around it sees over them; a bumper radar 0.6 m up behind a
+/// 1.5 m car does not. This is the line-of-sight test of 2.5D vehicle-blockage models
+/// (Boban, Barros and Tonguz, "Geometry-Based Vehicle-to-Vehicle Channel Modeling for
+/// Large-Scale Simulation", IEEE Trans. Veh. Technol. 63(9), 2014: vehicles as boxes of
+/// their height, a link blocked when the line between antennas meets a box) applied to
+/// the sensor's line. Buildings stay full height.
 fn corner_hidden(
     world: &World,
     m: Vec3,
@@ -903,13 +928,16 @@ fn corner_hidden(
     bodies: &[(ActorId, Rect)],
 ) -> bool {
     let a = (m.x, m.y);
-    if own.crossed_by(a, q) {
+    let below = |r: &Rect| {
+        r.crossing(a, q).is_some_and(|(t0, t1)| {
+            let z = |t: f64| m.z + (own.top_m - m.z) * t;
+            z(t0).min(z(t1)) < r.top_m
+        })
+    };
+    if below(own) {
         return true;
     }
-    if bodies
-        .iter()
-        .any(|(id, r)| *id != subject && r.crossed_by(a, q))
-    {
+    if bodies.iter().any(|(id, r)| *id != subject && below(r)) {
         return true;
     }
     !world
@@ -1205,6 +1233,49 @@ mod tests {
         let east = &cams[..1];
         let out = seen_by(east, Occlusion::Outline, &rsu, &around);
         assert_eq!(out, vec![(1, 1 << 1)]);
+    }
+
+    /// 2.5D outline occlusion: a camera on a 6 m mast sees a car over the car in front of
+    /// it (the line is still 3.47 m up where it leaves the near car's footprint, over a
+    /// 1.5 m roof) but not over a 3.5 m truck (3.07 m up where it leaves the truck's
+    /// footprint); a truck cab's
+    /// camera 2.6 m up sees over a car ahead, and a bumper radar 0.6 m up does not.
+    #[test]
+    fn a_camera_above_the_cars_sees_over_them_and_not_over_a_truck() {
+        let cams = perfect(default_rsu_sensors());
+        let rsu = Observer {
+            node: NodeId::new(900),
+            actor: None,
+            k: Kinematics::at_rest(0, Vec3::new(0.0, 0.0, 6.0)),
+            frame: Frame::Fixed,
+            suite: 1,
+        };
+        // Facing east: a car whose rear is 18 m out, and a car 40 m out in line behind it.
+        let near = car(2, 18.0, 0.0, 0.0, Dims::CAR);
+        let far = car(3, 40.0, 0.0, 0.0, Dims::CAR);
+        let ids = |v: Vec<(u32, u8)>| v.into_iter().map(|x| x.0).collect::<Vec<_>>();
+        assert_eq!(ids(seen_by(&cams, Occlusion::Outline, &rsu, &[near, far])), vec![2, 3]);
+        let truck = car(2, 14.0, 0.0, 0.0, TRUCK);
+        assert_eq!(ids(seen_by(&cams, Occlusion::Outline, &rsu, &[truck, far])), vec![2]);
+        // A truck's cab camera, 2.6 m up, over a car 10 m ahead to one 30 m ahead.
+        let me = car(1, 0.0, 0.0, 0.0, TRUCK);
+        let mut cab = perfect(default_sensors());
+        for s in &mut cab {
+            s.offset_m = [-0.5, 0.0, 2.6];
+        }
+        let ahead = car(5, 22.0, 0.0, 0.0, Dims::CAR);
+        let beyond = car(6, 42.0, 0.0, 0.0, Dims::CAR);
+        let o = observer_of(&me, 0);
+        assert_eq!(ids(seen_by(&cab, Occlusion::Outline, &o, &[ahead, beyond])), vec![5, 6]);
+        // The same truck's bumper radar and camera at 0.6 m see only the car ahead.
+        let low = perfect(default_sensors());
+        assert_eq!(ids(seen_by(&low, Occlusion::Outline, &o, &[ahead, beyond])), vec![5]);
+        // A car's own bumper sensors behind a car see nothing past it.
+        let me = car(1, 0.0, 0.0, 0.0, Dims::CAR);
+        let o = observer_of(&me, 0);
+        let ahead = car(5, 12.0, 0.0, 0.0, Dims::CAR);
+        let beyond = car(6, 30.0, 0.0, 0.0, Dims::CAR);
+        assert_eq!(ids(seen_by(&low, Occlusion::Outline, &o, &[ahead, beyond])), vec![5]);
     }
 
     #[test]
