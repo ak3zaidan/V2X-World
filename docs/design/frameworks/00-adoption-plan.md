@@ -601,7 +601,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: two concurrent through phases gap out independently; ring pointers meet at each
   barrier; the FHWA manual's 8-phase example timing reproduces; SPaT `minEndTime`/`maxEndTime`
   stay consistent with the controller state; existing single-ring scenarios are unchanged.
-- Prep (2026-10-27): build plan §WP-17, 10 pieces (P17.1 caches STM 2nd ed. and MUTCD and pins every default). The new `nema.rs` re-projects the composite ring intervals into `SignalPlan` each step, so the 8 plan consumers and the SPaT-is-the-signal rule are unchanged. Plans with more than 4 legs fall back to single ring, counted.
+- Prep (2026-10-27): build plan §WP-17, 10 pieces (P17.1 caches STM 2nd ed. and MUTCD and pins every default). The new `nema.rs` re-projects the composite ring intervals into `SignalPlan` each step, so the 10 files that read the plan and the SPaT-is-the-signal rule are unchanged. Plans with more than 4 legs fall back to single ring, counted.
 
 **WP-18 GEMV²-style channel enrichment** (M, 5-7 days). Source: O-P4.
 - Scope: small-scale σ growing with vehicle and obstacle density inside the link ellipse,

@@ -257,7 +257,7 @@ and the `geonet.rs` alternating test. List them in the commit.
   - the plan is a clock, `SignalPlan::phase_at` (`v2xw-world/src/model.rs:2568`), and a
     phase is a full state vector over `controlled` movements (`SignalPhase`,
     `model.rs:2465`).
-- The plan is consumed in 8 places: `infra.rs` (SPaT), `priority.rs`, `app_truth.rs`,
+- The plan is read in 10 source files besides `model.rs` itself: `infra.rs` (SPaT), `priority.rs`, `app_truth.rs`,
   `actuated.rs`, mobility `engine.rs`, `audit.rs`, `calibration.rs`, `meso`,
   `signal_fixed_time.rs`, and world `walk.rs`.
 - SPaT `minEndTime`/`maxEndTime` come from `infra.rs:287-346` `spat_with` plus the
@@ -276,7 +276,7 @@ and the `geonet.rs` alternating test. List them in the commit.
    - then the predicted intervals under the current calls, each ring at its max;
    - `cycle_s` set to their sum, and `offset_s` set so that `phase_at(now)` lands in
      composite 0.
-3. **Why re-projection.** All 8 consumers keep calling `phase_at` and `states_at`
+3. **Why re-projection.** All of them keep calling `phase_at` and `states_at`
    unchanged, and "the SPaT is the signal by construction" (`actuated.rs:5-10`) still
    holds. A live-state override would change every consumer.
 4. **The SPaT bounds** come from the controller's outlook:
