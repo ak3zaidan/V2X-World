@@ -39,7 +39,10 @@
 //! **Assumptions (labelled, not cited):** the identification period is 30 days, so the
 //! validity is `hours(721)` (CAMP says "1 month"); `id` is `none` for both types; the
 //! identification certificate's `appPermissions` are BSM (0x20) and SRM (0x204096, signal
-//! preemption), with no SSP; the RSU certificate carries SPaT/MAP (0x82) only.
+//! preemption), with no SSP; the RSU certificate carries the PSIDs of the unit's enabled
+//! applications ([`request_tbs_for`]; SPaT/MAP 0x82 when none is named), with no SSP, in
+//! one certificate (ASSUMPTION: a deployment may issue one per application instead; the
+//! receiver's check is the same, 1609.2 §5.2).
 
 use p256::Scalar;
 use rasn::types::{FixedOctetString, Integer, OctetString};
@@ -263,6 +266,19 @@ pub fn request_tbs(
     verify_key: &Point,
     valid_from: u32,
 ) -> Result<ToBeSignedCertificate> {
+    request_tbs_for(kind, kind.psids(), verify_key, valid_from)
+}
+
+/// [`request_tbs`] with the device's own `appPermissions` PSIDs (ascending), in place of
+/// the kind's default ([`AppCertKind::psids`]): what a roadside unit asks for when it runs
+/// applications beyond SPaT/MAP. An empty list takes the default.
+pub fn request_tbs_for(
+    kind: AppCertKind,
+    psids: &[u64],
+    verify_key: &Point,
+    valid_from: u32,
+) -> Result<ToBeSignedCertificate> {
+    let psids = if psids.is_empty() { kind.psids() } else { psids };
     Ok(ToBeSignedCertificate::new(
         CertificateId::none(()),
         HashedId3(FixedOctetString::from([0u8; 3])),
@@ -274,7 +290,7 @@ pub fn request_tbs(
         None,
         None,
         Some(SequenceOfPsidSsp(
-            kind.psids()
+            psids
                 .iter()
                 .map(|p| PsidSsp::new(Psid(Integer::from(*p)), None))
                 .collect(),
@@ -296,6 +312,17 @@ pub fn request_tbs(
 /// and `additionalParams.original {ck, H, ek}`.
 pub fn ee_ra_cert_request(
     kind: AppCertKind,
+    generation_time: u32,
+    keys: &RequestKeys,
+    valid_from: u32,
+) -> Result<ScmsPdu> {
+    ee_ra_cert_request_for(kind, kind.psids(), generation_time, keys, valid_from)
+}
+
+/// [`ee_ra_cert_request`] asking for `psids` ([`request_tbs_for`]).
+pub fn ee_ra_cert_request_for(
+    kind: AppCertKind,
+    psids: &[u64],
     generation_time: u32,
     keys: &RequestKeys,
     valid_from: u32,
@@ -324,7 +351,7 @@ pub fn ee_ra_cert_request(
             Uint8(2),
             Time32(Uint32(generation_time)),
             CertificateType::implicit,
-            request_tbs(kind, &vk, valid_from)?,
+            request_tbs_for(kind, psids, &vk, valid_from)?,
             Some(params),
         )),
     )))
@@ -627,6 +654,19 @@ pub fn ee_open_response(
     period: u32,
     requested_from: u32,
 ) -> Result<AppCredential> {
+    ee_open_response_for(pki, spdu, keys, kind, kind.psids(), period, requested_from)
+}
+
+/// [`ee_open_response`] for a request that asked for `psids` ([`request_tbs_for`]).
+pub fn ee_open_response_for(
+    pki: &ScmsPki,
+    spdu: &[u8],
+    keys: &RequestKeys,
+    kind: AppCertKind,
+    psids: &[u64],
+    period: u32,
+    requested_from: u32,
+) -> Result<AppCredential> {
     let o = pdu::open_signed(spdu, pki)?;
     let signer_id8 = pdu::cert_id8(&o.signer);
     if !pki.is_role(&pki.aca, &signer_id8) {
@@ -658,7 +698,12 @@ pub fn ee_open_response(
     if matches!(t.id, CertificateId::linkageData(_)) {
         return Err(PduError::Shape("no LinkageData"));
     }
-    let want = request_tbs(kind, &Point::mul_base(&keys.ecqv_private()), requested_from)?;
+    let want = request_tbs_for(
+        kind,
+        psids,
+        &Point::mul_base(&keys.ecqv_private()),
+        requested_from,
+    )?;
     if t.validity_period != want.validity_period || t.app_permissions != want.app_permissions {
         return Err(PduError::Shape(
             "validity or permissions differ from the request",
@@ -701,7 +746,22 @@ pub fn ee_request_spdu(
     valid_from: u32,
     g: &mut Drbg,
 ) -> Result<Vec<u8>> {
-    let p = ee_ra_cert_request(kind, generation_time, keys, valid_from)?;
+    ee_request_spdu_for(pki, enrolment, kind, kind.psids(), generation_time, keys, valid_from, g)
+}
+
+/// [`ee_request_spdu`] asking for `psids` ([`request_tbs_for`]).
+#[allow(clippy::too_many_arguments)]
+pub fn ee_request_spdu_for(
+    pki: &ScmsPki,
+    enrolment: &pdu::EnrolmentCredential,
+    kind: AppCertKind,
+    psids: &[u64],
+    generation_time: u32,
+    keys: &RequestKeys,
+    valid_from: u32,
+    g: &mut Drbg,
+) -> Result<Vec<u8>> {
+    let p = ee_ra_cert_request_for(kind, psids, generation_time, keys, valid_from)?;
     let ra_key = pki
         .ra
         .enc_public()

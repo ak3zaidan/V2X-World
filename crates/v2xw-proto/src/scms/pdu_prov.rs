@@ -441,6 +441,22 @@ pub fn aca_issue_request(
     now: u32,
     g: &mut Drbg,
 ) -> Result<AcaIssue> {
+    aca_issue_request_at(pki, &pki.aca, keys, request, now, g)
+}
+
+/// [`aca_issue_request`] at the provider's ACA `aca` (one of its ACA instances,
+/// [`ScmsPki::aca_at`]): it issues, encrypts and signs under its own certificate and key.
+///
+/// # Errors
+/// As [`aca_issue_request`].
+pub fn aca_issue_request_at(
+    pki: &ScmsPki,
+    aca: &pdu::Authority,
+    keys: Option<&LaAcaKeys>,
+    request: &[u8],
+    now: u32,
+    g: &mut Drbg,
+) -> Result<AcaIssue> {
     let (p, signer) = pdu::open_signed_cert_request(request, pki)?;
     let RequestSignerFound::Cert(signer) = signer else {
         return Err(PduError::Signer("RaAcaCertRequestSpdu is SignerSingleCert"));
@@ -533,14 +549,13 @@ pub fn aca_issue_request(
         }
     };
     t.craca_id = HashedId3(FixedOctetString::from(pki.craca_id()));
-    let d_aca = pki
-        .aca
+    let d_aca = aca
         .private
         .as_ref()
         .ok_or(PduError::Key("ACA scalar"))?;
     let issued = cert::issue_implicit(
         &t,
-        &pki.aca.cert,
+        &aca.cert,
         &Point::mul_base(d_aca),
         d_aca,
         &request_public,
@@ -560,8 +575,8 @@ pub fn aca_issue_request(
     let private = Pdu::new(pdu::encrypted_signed(
         &resp,
         &enc_key,
-        &pki.aca.cert,
-        &pki.aca.key,
+        &aca.cert,
+        &aca.key,
         g,
     )?);
     let request_hash = hashedid::id8_bytes(&hashedid::hashed_id8(request));
@@ -573,7 +588,7 @@ pub fn aca_issue_request(
             AcaResponse::private(pdu::decode(private.bytes())?),
         )),
     ));
-    let to_ra = Pdu::new(pdu::signed(&to_ra, &pki.aca.cert, &pki.aca.key)?);
+    let to_ra = Pdu::new(pdu::signed(&to_ra, &aca.cert, &aca.key)?);
     Ok(AcaIssue {
         private,
         to_ra,
@@ -596,7 +611,22 @@ pub fn aca_issue(
     now: u32,
     g: &mut Drbg,
 ) -> Result<AcaIssued> {
-    let x = aca_issue_request(pki, Some(keys), request, now, g)?;
+    aca_issue_at(pki, &pki.aca, keys, request, now, g)
+}
+
+/// [`aca_issue`] at the provider's ACA `aca` ([`ScmsPki::aca_at`]).
+///
+/// # Errors
+/// As [`aca_issue`].
+pub fn aca_issue_at(
+    pki: &ScmsPki,
+    aca: &pdu::Authority,
+    keys: &LaAcaKeys,
+    request: &[u8],
+    now: u32,
+    g: &mut Drbg,
+) -> Result<AcaIssued> {
+    let x = aca_issue_request_at(pki, aca, Some(keys), request, now, g)?;
     let (Some(lv), Some(i)) = (x.lv, x.i) else {
         return Err(PduError::Shape("linkageInfo absent"));
     };

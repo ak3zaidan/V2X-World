@@ -3320,6 +3320,28 @@ pub fn rsu_services(scenario: &Scenario, roles: &[String]) -> ServiceSet {
     }
 }
 
+/// The PSIDs (ITS-AIDs on the ETSI stack) a roadside unit's application certificate must
+/// permit: one for each message its enabled applications sign ([`rsu_services`],
+/// `v2xw_msg::registry`), deduplicated and ascending. Empty for a unit that runs no
+/// broadcast application (the certificate kind's default then applies).
+pub fn rsu_app_psids(scenario: &Scenario, roles: &[String]) -> Vec<u64> {
+    let s = rsu_services(scenario, roles);
+    let sends: Vec<v2xw_msg::MsgType> = [
+        (s.bsm, v2xw_msg::MsgType::Bsm),
+        (s.cam, v2xw_msg::MsgType::Cam),
+        (s.denm, v2xw_msg::MsgType::Denm),
+        (s.spat, v2xw_msg::MsgType::Spat),
+        (s.map, v2xw_msg::MsgType::Map),
+        (s.srm, v2xw_msg::MsgType::Srm),
+        (s.ssm, v2xw_msg::MsgType::Ssm),
+        (s.cpm, v2xw_msg::MsgType::Cpm),
+    ]
+    .into_iter()
+    .filter_map(|(on, m)| on.then_some(m))
+    .collect();
+    v2xw_msg::registry::permissions(&sends, etsi_facilities(scenario))
+}
+
 /// Whether the node's facilities layer is ETSI's: the GeoNetworking/BTP stack.
 pub fn etsi_facilities(scenario: &Scenario) -> bool {
     scenario.net.layer == "gn-btp"

@@ -1,0 +1,379 @@
+# SCMS fix round 3, RA and PKI track: (1) the RA serves a week that fell due before the
+# request as held (the two failing SCMS tests), (2) R-PQUNSEC under PQ, (3) provider-b's
+# second ACA and provider-qualified backend failure nodes, (4) roadside application
+# certificates that permit what the unit's applications sign.
+#
+# Every row was written, with `measured: pending`, before the run it judges: the direction
+# and, where the source gives one, the size, with the source. Measures are read from each
+# run's run-report.json by a short reader (scratchpad sum.py: phase2 exchange latencies,
+# access bytes, receiver_validation refusals, the cpm block, event counts) and from
+# /usr/bin/time -l, never from engine code.
+#
+# Binaries: "rel" = the integrator's release build of f4982788, copied (behaviour that
+# predates the Paper 1 part 2 and WP-10..15 merges: the RA's lazy weekly job, the B3b RSU
+# certificate, R-PQUNSEC's 82533437 and the provider-qualified failures' 0de68cac are all
+# in it); "fix" = this branch's opt-level-2 debug build. A defect fix's before/after
+# necessarily spans the two; every knob comparison (base and variant) uses one binary.
+# Run cost compares event counts across binaries and wall time/peak memory only within one.
+#
+# verdict: pass | fixed (an engine defect fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+schema: v2xw/scms-run-expectations/1
+runs:
+  B:
+    scenario: scenarios/scms-fix3/base.yaml
+    note: rel; credential-lifecycle at 180 s
+  F:
+    scenario: scenarios/scms-fix3/base.yaml
+    note: fix
+  F2:
+    scenario: scenarios/scms-fix3/base.yaml
+    note: fix, again (determinism)
+  BS:
+    scenario: scenarios/scms-fix3/slow-aca.yaml
+    note: rel; the ACA 4 s slow per message, 0-300 s
+  FS:
+    scenario: scenarios/scms-fix3/slow-aca.yaml
+    note: fix
+  FSL:
+    scenario: scenarios/scms-fix3/slow-aca-late.yaml
+    note: fix; the ACA 4 s slow from 30 s only (after the top-offs' weeks fell due)
+  FH:
+    scenario: scenarios/scms-fix3/h2.yaml
+    note: fix; ra-maxPreloadTime 2 weeks (each later week is an in-run weekly job), ACA slow
+  FH20:
+    scenario: scenarios/scms-fix3/h2-poll20.yaml
+    note: fix; FH with download-minWait 20 s
+  CB:
+    scenario: scenarios/scms-fix3/ci-scms.yaml
+    note: rel; connected-intersections under the US SCMS (SPaT/MAP/SSM units, WSMP)
+  CF:
+    scenario: scenarios/scms-fix3/ci-scms.yaml
+    note: fix
+  CPF:
+    scenario: scenarios/scms-fix3/ci-scms-cpm.yaml
+    note: fix; GN/BTP, CAM + CPM, four roadside-camera units under the US SCMS
+  Gp:
+    scenario: scenarios/scms-fix3/base.yaml
+    note: second build (52432316, provider-b's second ACA and the boundary job), before 6869fb6a
+  G:
+    scenario: scenarios/scms-fix3/base.yaml
+    note: third build (6869fb6a, aca/1 holds the ACA's issue permissions)
+  G2:
+    scenario: scenarios/scms-fix3/base.yaml
+    note: G again (determinism)
+  FSB:
+    scenario: scenarios/scms-fix3/slow-aca-b.yaml
+    note: first build (one ACA at provider-b); provider-b's core ACA 4 s slow
+  GSB:
+    scenario: scenarios/scms-fix3/slow-aca-b.yaml
+    note: third build
+  FSBH:
+    scenario: scenarios/scms-fix3/slow-aca-b-h2.yaml
+    note: first build; provider-b's core ACA 4 s slow on the 2-week horizon
+  GSBH:
+    scenario: scenarios/scms-fix3/slow-aca-b-h2.yaml
+    note: third build
+  PQF:
+    scenario: scenarios/scms-pq-relay-repro.yaml
+    note: fix; hybrid Falcon-512, the PDU layer off (R-PQUNSEC)
+rows:
+# --- (1) the RA serves a past-due week as held ---------------------------------------------
+- id: RA.topup-mean
+  base: B
+  variant: F
+  area: metrics
+  measure: phase2.access.exchange_latency.topup mean, ms
+  expect: 'F < 1,000 ms and F <= B - 1,500 ms (B about 2,340: the 2 s first_batch_delay plus the exchanges)'
+  source: '[PRIMER] p.6 (the RA keeps 3 years generated, adds a week every week); [SMP] Table 3 ra-maxPreloadTime; 1609.2.1 §6.3.5.4/§8.2 (a top-off is the .info request and the batch download of a file the RA holds: nextDlTime now)'
+  measured: 'B 2,337.7 ms against F 337.1 ms (59 top-ups each): -2,000.6 ms'
+  verdict: pass
+- id: RA.topup-max
+  base: F
+  variant: F
+  area: metrics
+  measure: topup max, ms
+  expect: '< 1,000 ms: no top-up waits for a generation'
+  source: as RA.topup-mean
+  measured: 'F max 341.3 ms'
+  verdict: pass
+- id: RA.topups-completed
+  base: B
+  variant: F
+  area: metrics
+  measure: phase2 topups_completed, certs_topped_up
+  expect: 'F >= B (a shorter exchange is cut off less often by a departure or the run end); certs_topped_up = 5 x topups_completed in both'
+  source: CAMP-EE §2.1.5.3.2 (one i-period of certs_per_period = 5 per top-up)
+  measured: 'B 59 / 295 certs, F 59 / 295 certs (5 x 59 in both)'
+  verdict: pass
+- id: RA.backend-bytes
+  base: B
+  variant: F
+  area: network
+  measure: phase2.access.backend_bytes (in run)
+  expect: 'F < B: the RA-LA-ACA hops of the pre-generated weeks happened when the weeks fell due (here before the run), not at each top-up'
+  source: '[CAMP122] 5.2.7.6.4 (the RA pre-generates); [PRIMER] p.6'
+  measured: 'B 1,482,343 against F 959,355 bytes (-35 %)'
+  verdict: wrong-expectation
+  note: 'as written it passes, but the expectation is not the deployment: a real RA adds week (i + horizon) for every account at each boundary, in the run ([PRIMER] p.6), so the in-run RA-LA-ACA load is about one week per account per boundary. The engine generates only weeks a device asks for; with the 3-year horizon none is generated in the run, and scms_knobs_runs the_architecture_is_the_deployments fails (no RA-LA message in the run). Open: run the far-horizon weekly job in the run. Taken up by RA.boundary-job (ScmsRun::arm_boundary_jobs)'
+- id: RA.uu-bytes-per-topup
+  base: B
+  variant: F
+  area: network
+  measure: (uu_ul_bytes + uu_dl_bytes) / topups_completed
+  expect: 'within +-10 %: the device side of a top-off (.info, its answer, the batch download, CRL fetches, reports) is the same exchange; only the wait moved'
+  source: 1609.2.1 §6.3.5.4 (the same two downloads)
+  measured: 'B 13,465.5 against F 13,465.5 bytes per top-up (0 %)'
+  verdict: pass
+- id: RA.events
+  base: B
+  variant: F
+  area: cost
+  measure: sum of events_by_class
+  expect: 'F < B (fewer in-run backend deliveries); within -20 % (vehicles, radio and mobility dominate)'
+  source: event accounting (the backend share of credential-lifecycle's events is small)
+  measured: 'B 883,278 against F 883,278'
+  verdict: wrong-expectation
+  note: 'events_by_class counts the engine''s classes (vehicles, radio, mobility); the SCMS backend kernel''s deliveries are not in it: equal to the event while backend bytes fell 35 %'
+- id: RA.peak-memory
+  base: F
+  variant: FS
+  area: cost
+  measure: /usr/bin/time -l peak memory footprint
+  expect: within +-15 % (one binary; the scratch kernel of a past-due week is dropped after it)
+  source: ScmsRun::generate_past_due (a kernel per job, as a preload)
+  measured: 'F 68.2 MB against FS 66.7 MB (-2.2 %)'
+  verdict: pass
+- id: RA.determinism
+  base: F
+  variant: F2
+  area: determinism
+  measure: stream_digest
+  expect: byte-identical
+  source: engine determinism contract (same seed, same build)
+  measured: 'F and F2 stream_digest 05c33f02c0bf'
+  verdict: pass
+- id: RA.slow-aca-held
+  base: F
+  variant: FS
+  area: metrics
+  measure: topup mean, ms
+  expect: 'FS within +-10 % of F: an ACA slow in the run does not delay a week the RA generated before the request'
+  source: '[PRIMER] p.6; ScmsRun::generate_past_due (the job runs at its due instant, here t = 0 to 20 s, under the faults then; its file is held long before the 60 s top-ups)'
+  measured: 'F 337.1 ms against FS 4,947.3 ms (max 8,341)'
+  verdict: wrong-expectation
+  note: 'the fault (0-300 s) covered the instants the weeks fell due (the fleet''s acceptance), so the RA''s job ran under the slow ACA and finished after the 60 s top-offs asked: they waited for it, as at a real RA. Corrected by RA.slow-aca-late-held (slow from 30 s: 337.1 ms = F). Still well under the old lazy job (BS 16,412 ms)'
+- id: RA.slow-aca-late-held
+  base: F
+  variant: FSL
+  area: metrics
+  measure: topup mean, ms
+  expect: 'FSL within +-10 % (+50 ms) of F: the weeks the 60 s top-offs ask for fell due when the fleet was accepted (before 30 s) and were generated with the ACA on time, so a slowdown from 30 s does not reach them'
+  source: '[PRIMER] p.6; [CAMP122] 5.2.7.6.4 (the RA generates the horizon at acceptance); written after FS failed, before FSL ran'
+  measured: 'F 337.1 ms against FSL 337.1 ms (59 top-ups each)'
+  verdict: pass
+- id: RA.slow-aca-old
+  base: B
+  variant: BS
+  area: metrics
+  measure: topup mean, ms
+  expect: 'BS > B + 10,000 ms: the old lazy job ran the ACA work at the request (scms_knobs_runs measured 19,182 ms)'
+  source: integrator trace 2026-10-26 (validation summary §6 item 27)
+  measured: 'B 2,337.7 ms (59 top-ups, max 2,342) against BS 16,411.7 ms (35, max 69,315): +14,074 ms'
+  verdict: pass
+- id: RA.download-wait
+  base: FH
+  variant: FH20
+  area: metrics
+  measure: topup mean, ms
+  expect: 'FH20 > FH + 5,000 ms: a week generated at its in-run boundary under a 4 s slow ACA is not ready at nextDlTime; a 20 s download-minWait finds it up to 20 s later than a 2 s one'
+  source: SCMS Manager EE profile Table 3 download-minWait; [SMP] Table 3 ra-maxPreloadTime 2 weeks minimum
+  measured: 'FH 14,886 ms against FH20 17,170 ms (+2,284); cert_unavailable 12.3 -> 53.1 s, max 8.3 -> 22.0 s; starved 2 -> 7. scms_knobs_runs (full lifecycle): 24,859 -> 25,142 ms, top-up messages 1,774 -> 1,192'
+  verdict: wrong-expectation
+  note: 'only a late top-off polls again, and most of a top-off''s time on the 2-week horizon is the scheduled wait to nextDlTime: the mean moves by the late share times (20 s - 2 s) / 2, not by 5 s. The knob acts where theory says (fewer polls, longer certificate gaps). The test now bounds the shift by the late share it counts from the records (pending build 2)'
+- id: RA.download-wait-boundary
+  base: scms_knobs_runs h2 base (third build)
+  variant: same, download_poll_interval_s 20
+  area: metrics
+  measure: topup mean of completed top-ups; polls; completions
+  expect: 'variant > base (the test a_longer_download_wait_lengthens_a_late_topup, unchanged), as on the first build (24,859 -> 25,142 ms)'
+  source: SCMS Manager EE profile Table 3 download-minWait
+  measured: 'base 12,477 ms (107 of 212 completed, 63 late of 157, 3,209 polls) against variant 9,165 ms (101 of 206, 59 late, 451 polls): the test fails'
+  verdict: open
+  note: 'the boundary job now puts every account''s week on the 4 s slow ACA at each boundary, so a late top-off waits about 100 s (51 polls at 2 s) and many end with the run; with 20 s polls six fewer complete, and the mean over completed top-ups is censored. The knob acts as theory says on polls (3,209 -> 451). Needs a measure that counts the unfinished top-offs (or cert_unavailable), then a run; not weakened'
+- id: RA.h2-in-run-jobs
+  base: FS
+  variant: FH
+  area: network
+  measure: backend_bytes; topup mean
+  expect: 'FH > FS on both: with a 2-week horizon each later week is the weekly job at its boundary in the run, its RA-LA-ACA hops on the run, and the device waits for the slow ACA'
+  source: '[PRIMER] p.6 (adds one week every week); [SMP] Table 3'
+  measured: 'backend FH 1,197,991 > FS 959,355 bytes; topup FH 14,886 > FS 4,947 ms'
+  verdict: pass
+# --- (1b) the RA's weekly job at every boundary, unasked (RA.backend-bytes open item) ------
+# Written 2026-10-27 12:20 before the second build ran. G = base.yaml on the second build
+# (arm_boundary_jobs and provider-b's second ACA); base.yaml's i-period is 60 s, so the run
+# crosses the boundaries at 60 s and 120 s.
+- id: RA.boundary-job
+  base: F
+  variant: G
+  area: network
+  measure: phase2.access.backend_bytes (in run)
+  expect: 'G > F, and G - F > B - F: at each of the two boundaries every account adds the week that comes into ra-maxPreloadTime, so the RA-LA-ACA hops of one week per account per boundary are on the run (more weeks than the 59 the lazy RA generated on request in B)'
+  source: '[PRIMER] p.6 (the RA adds one week every week); [CAMP122] 5.2.7.6.4; [SMP] Table 3 ra-maxPreloadTime'
+  measured: 'backend F 959,355 against G 1,720,133 bytes (+760,778; B - F = 522,988): two boundaries, every account''s next week on the run. scms_knobs_runs the_architecture_is_the_deployments pending its run; pregeneration every_account_gets_its_next_horizon_week_at_the_boundary_without_asking passes'
+  verdict: pending
+- id: RA.boundary-metrics
+  base: F
+  variant: G
+  area: metrics
+  measure: topup mean, topups_completed, receiver_validation refused
+  expect: 'top-up mean within +-10 % (the boundary week is not one any device asks for in the run; the RA serves .info and downloads from held files while the job runs), topups_completed equal, refusals equal'
+  source: 1609.2.1 §6.3.5.4 (the top-off of a held week is .info + download); queueing at an RA with backend_servers parallel servers
+  measured: 'topup F 337.1 ms against G 337.1 ms (59 each), topups 121/59/295 both, refusals 0 both'
+  verdict: pending
+- id: RA.boundary-cost
+  base: F
+  variant: G
+  area: cost
+  measure: events (engine classes), wall, peak memory (one binary each: F on fix1, G on fix2)
+  expect: 'events within +-1 % (the backend kernel is not in events_by_class, RA.events); peak memory within +10 % (one more week of files per account per boundary); wall reported, not judged across binaries'
+  source: event accounting; RA repository size
+  measured: 'events 883,278 both; peak F 68.2 MB against G 72.6 MB (+6.4 %); wall F 70.7 s, G 63.7 s (different binaries, not judged)'
+  verdict: pass
+# --- (2) R-PQUNSEC -------------------------------------------------------------------------
+- id: PQ.rsu-own-reports
+  base: PQF
+  variant: PQF
+  area: metrics
+  measure: phase2 reports_from_rsus; reports_not_filed_by (roadside key)
+  expect: 'reports_from_rsus 0 and a roadside not-filed count > 0 under PQ, as under P-256 (R-UNSEC)'
+  source: '[SM-MBR] §3 and §2.3.1.4.1 (an SM-MBR is signed with a pseudonym certificate; the reporter is an OBE); USDOT RSU Specification v4.1 p. 15 (no reporting function)'
+  measured: 'PQF reports_from_rsus 0; roadside not-filed 204'
+  verdict: pass
+- id: PQ.relay-case-kept
+  base: PQF
+  variant: PQF
+  area: metrics
+  measure: ma_revoke_decisions, rsu_crls_installed, rsu_revoked_receptions
+  expect: 'all > 0: the MA still revokes (the vehicle reporter, actor 112) and the units refuse the revoked sender (R-PQRSUCRL)'
+  source: testing/pq-profile.md §3; pq_relay.rs
+  measured: 'PQF revoke decisions 3, rsu_crls_installed 150, rsu_revoked_receptions 3,864'
+  verdict: pass
+# --- (4) roadside application certificates -------------------------------------------------
+- id: RSU.ssm-refused-before
+  base: CB
+  variant: CB
+  area: metrics
+  measure: receiver_validation.refused psid-not-permitted
+  expect: '> 0: a unit''s certificate permitted SPaT/MAP (0x82) only, so every receiver refused its SSMs (PSID 0x204095)'
+  source: IEEE 1609.2 §5.2 (the SPDU PSID must be in the signer's appPermissions); IEEE PSID registry (SSM psid-traffic-signal-priority-status 2113685)
+  measured: 'CB: psid-not-permitted 299 of 118,988 checked; 4 units in the cycle, 8 certificates preloaded'
+  verdict: pass
+- id: RSU.ssm-accepted-after
+  base: CB
+  variant: CF
+  area: metrics
+  measure: receiver_validation.refused psid-not-permitted
+  expect: '0 in CF: the unit''s certificate lists 0x82 and 0x204095, the PSIDs of its enabled applications'
+  source: USDOT RSU Specification v4.1 p. 15 (certificates to support the unit's transmissions, by PSID); [CAMP122] Table 1 (no SSP for SPaT/MAP or SSM)
+  measured: 'CF: psid-not-permitted 0 (no refusal of 118,971 checked); 4 units, 8 certificates'
+  verdict: pass
+- id: RSU.cpm-verified
+  base: CPF
+  variant: CPF
+  area: metrics
+  measure: cpm.rsu_cpms_sent, rsu_cpms_verified
+  expect: 'both > 10: a receiver accepts the roadside CPM signed with the SCMS application certificate (ITS-AID 639 listed)'
+  source: ETSI TS 103 324 (CPM, ITS-AID 639 psid-collective-perception-service); IEEE 1609.2 §5.2
+  measured: 'CPF: rsu_cpms_sent 160, rsu_cpms_verified 142'
+  verdict: pass
+# --- (3) provider-b's second ACA (GOV.D1.acas) ----------------------------------------------
+# Runs: G = base.yaml, GSB = slow-aca-b.yaml, G2 = G again, on this branch's second build (the
+# ACA instance certified, hosted, linked, sent its share of requests and signing what it
+# issues); compared with F / FSB (the first build: one ACA serves provider-b). Rows written
+# before the second build ran.
+- id: D1.certs
+  base: G
+  variant: G
+  area: network
+  measure: provider-b ACA instances with a certificate in its PKI (pki.state component records; test pki_view / provider_runs)
+  expect: '2 ACAs, 2 certificates (was 2 placed, 1 certified)'
+  source: SAESOL published chain files 2025-07-17 and 2025-08-13 (two ACA certificates); audit-gov GOV.D1.acas
+  measured: 'provider_runs provider_bs_second_aca_is_certified_and_issues_its_share (third build): 2 provider-b ACA components in pki.state, both with a certificate'
+  verdict: pending
+- id: D1.form
+  base: G
+  variant: G
+  area: network
+  measure: aca/1 certificate against aca/0
+  expect: 'same issuer (provider-b ICA), validity, SSP, region, CRACA and encryption-key presence; a different verification key'
+  source: the two published SAESOL ACA certificates share one form; audit-prov §4.1 design
+  measured: 'same test: issuer, validity, appPermissions, certIssuePermissions, region, CRACA, CRL series and encryption-key presence equal; verification keys differ (first equal only after 6869fb6a, D1.chain-permissions)'
+  verdict: pending
+- id: D1.split
+  base: G
+  variant: G
+  area: network
+  measure: provider-b RaAcaCertRequest SPDUs to aca/0 and aca/1 (test)
+  expect: 'each ACA gets half of every release within one request (round-robin over the shuffled batch, ASSUMPTION: the split rule is not published); every certificate is verified by its device and signed by the ACA that received its request (same-ACA rule, 1609.2.1 §6.3.5.4)'
+  source: audit-prov §4.1; IEEE 1609.2.1 (AcaEeCertResponse signed by the issuing ACA)
+  measured: 'same test: a 20-certificate provisioning sends 10 RaAcaCertRequest SPDUs to aca/0 and 10 to aca/1; the device installs 20, 10 signed by aca/1; 0 PDU rejections'
+  verdict: pending
+- id: D1.chain-permissions
+  base: Gp
+  variant: G
+  area: metrics
+  measure: receiver_validation refused (all reasons)
+  expect: '0 refusals, as F: a pseudonym aca/1 issued chains to provider-b's root through an ACA certificate whose certIssuePermissions covers it, as the core ACA's does (both published SAESOL ACA certificates hold {all, 1, 0, app})'
+  source: IEEE 1609.2 §5.1.2.4 (chain permissions); SAESOL chain files 2025-07-17, 2025-08-13
+  measured: 'Gp 81,410 chain-permission-not-covered (aca/1 issued with no certIssuePermissions: tbs_for read the role from the name prefix aca-1); G 0'
+  verdict: fixed
+  test: provider_runs provider_bs_second_aca_is_certified_and_issues_its_share (cert_issue_permissions equal)
+- id: D1.metrics-unchanged
+  base: F
+  variant: G
+  area: metrics
+  measure: topup mean, topups_completed, receiver_validation refused, checked, uu bytes per top-up
+  expect: 'top-up mean within +-2 % (an on-time ACA is not a bottleneck: the wait is the exchange), topups_completed equal, 0 refusals, checked within +-1 % (pseudonyms from the second ACA have the same form and size), uu bytes per top-up within +-1 %'
+  source: queueing (M/D/c with utilisation near 0 at the ACA); same certificate form
+  measured: 'topup F 337.1 / G 337.1 ms; topups_completed 59 / 59; refusals 0 / 0; checked 346,489 / 346,489; uu bytes per top-up 13,465.5 / 13,467.6 (+0.02 %)'
+  verdict: pending
+- id: D1.slow-aca-halved
+  base: FSB
+  variant: GSB
+  area: metrics
+  measure: topup mean, ms; cert_unavailable_ns
+  expect: 'GSB < FSB on both: provider-b sends half its requests to the healthy aca/1, so its jobs under the slow core ACA finish sooner (the slow server carries half the work); provider-a untouched'
+  source: queueing (work at the slow server halved); audit-prov §4.1. (An unqualified `pca` fault is provider-a's ACA, crypto_config::failure_target, so slow-aca.yaml cannot show it.)
+  measured: 'FSB 337.1 ms (59 top-ups) = F 337.1 ms, cert_unavailable 0 in both; measured before the third build'
+  verdict: wrong-expectation
+  note: 'on the 3-year horizon every top-off in the run is of a held week (.info + download, RA only): no device request reaches an ACA, so a slow ACA moves no device metric with one ACA or two. Corrected by D1.slow-aca-h2, where the weeks are in-run jobs'
+- id: D1.slow-aca-h2
+  base: FSBH
+  variant: GSBH
+  area: metrics
+  measure: topup mean, ms; cert_unavailable_ns
+  expect: 'GSBH < FSBH on both: provider-b (32 of 72 devices) sends half of each in-run job to the healthy aca/1, so its weeks are ready sooner; provider-a untouched. Upper bound on the drop: provider-b''s share of the slow-ACA excess (FH - F on one ACA, 14,886 - 337 ms, times 32/72, halved): about 3.2 s. Confounded: GSBH also starts each week at its boundary unasked (RA.boundary-job), which can only make it earlier'
+  source: queueing (the slow server carries half the work); audit-prov §4.1; written before FSBH and GSBH ran
+  measured: 'topup FSBH 18,544.7 ms (58 of 121 completed) against GSBH 5,244.7 ms (42 of 105); cert_unavailable 0 in both. Control on the same two binaries with provider-a''s ACA slow (h2.yaml): FH 14,886 ms (34 of 103) against GH 14,338 ms (34 of 103), so the boundary job alone moves the mean by -548 ms and no completions'
+  verdict: pending
+  note: 'the direction holds (-13.3 s) and the boundary job is not the cause (GH = FH in completions, -0.5 s). The size bound was wrong: FSBH''s excess is all provider-b''s, not 32/72 of FH''s. Open: GSBH starts 16 fewer top-ups and completes 16 fewer (58 -> 42) with no device starved, which halving the slow server''s work does not explain; per-provider top-up counts are not in the report, so it needs a recorded run'
+- id: D1.cost
+  base: F
+  variant: G
+  area: cost
+  measure: events, peak memory
+  expect: 'events within +-1 %; peak memory within +-10 % (one more hosted node, a second ACA certificate)'
+  source: one backend node more per provider-b run
+  measured: 'events 883,278 / 883,278; peak 68.2 / 72.6 MB (+6.4 %, includes the boundary job)'
+  verdict: pending
+- id: D1.determinism
+  base: G
+  variant: G2
+  area: determinism
+  measure: stream_digest
+  expect: byte-identical
+  source: engine determinism contract
+  measured: 'G 8d2e40153d8e = G2 8d2e40153d8e (and Gp = Gp again, d8c53aeb2a42)'
+  verdict: pass

@@ -3048,8 +3048,10 @@ impl Phase2 {
         &self.rsus
     }
 
-    /// Records the node id the engine gave one roadside unit.
-    pub fn note_rsu(&mut self, node: NodeId) {
+    /// Records the node id the engine gave one roadside unit; `app_psids` are the PSIDs of
+    /// the applications it runs ([`crate::wiring::rsu_app_psids`]), which its application
+    /// certificate is requested for.
+    pub fn note_rsu(&mut self, node: NodeId, app_psids: &[u64]) {
         let index = self.rsu_nodes.len();
         self.rsu_nodes.push(node);
         self.report.rsus += 1;
@@ -3060,7 +3062,7 @@ impl Phase2 {
             self.compromised_nodes.insert(node, index);
             self.report.compromised_rsus += 1;
         }
-        self.join_rsu_cycle(node, index);
+        self.join_rsu_cycle(node, index, app_psids);
     }
 
     /// Puts roadside unit `node` into its provider's application-certificate cycle
@@ -3068,7 +3070,7 @@ impl Phase2 {
     /// week's when its backhaul is up), then renewing weekly over its own backhaul line.
     /// Only under the SCMS with its PDU layer; otherwise the unit keeps the factory
     /// certificate (`wiring::bootstrap_credentials`).
-    fn join_rsu_cycle(&mut self, node: NodeId, index: usize) {
+    fn join_rsu_cycle(&mut self, node: NodeId, index: usize, app_psids: &[u64]) {
         if !self.camp || self.etsi.is_some() {
             return;
         }
@@ -3105,6 +3107,11 @@ impl Phase2 {
         if !bh.connected {
             run.set_backhaul_outage(device, now, SimTime::MAX);
         }
+        // The certificate permits what the unit's applications sign: SPaT and MAP, the
+        // signal status it answers requests with, its own CPMs. With SPaT/MAP alone every
+        // receiver refused a unit's SSM and CPM (1609.2 §5.2, `psid-not-permitted`), and
+        // on the ETSI stack its SPATEM/MAPEM too (ITS-AIDs 137/138, not 0x82).
+        run.set_app_psids(device, app_psids);
         if let Err(e) = run.preload_app_cert(
             device,
             v2xw_proto::scms::appcert::AppCertKind::RsuApplication,

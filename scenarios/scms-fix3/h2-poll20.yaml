@@ -1,0 +1,9 @@
+# scms-fix3 h2-poll20: h2 with download-minWait 20 s.
+schema: v2xw/scenario/1
+meta:
+  base: h2.yaml
+  name: scms-fix3 h2-poll20
+security:
+  protocol:
+    params:
+      download_poll_interval_s: 20

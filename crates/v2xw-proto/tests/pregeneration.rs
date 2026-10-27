@@ -252,11 +252,17 @@ fn the_preload_horizon_is_held_between_two_weeks_and_three_years() {
     }
 }
 
+/// The `.info` answer is one Time32 and the device comes back for the batch no earlier.
+/// The week asked for is the first beyond the 156-week horizon, which the weekly job
+/// generates at the boundary (one week after acceptance), so the answer names the boundary
+/// plus the generation time. (Before the RA served a past-due week as held, this test
+/// asked for week 1, which the RA had held since acceptance; the wait it saw was the lazy
+/// job's.)
 #[test]
 fn the_info_answer_is_one_time32_the_device_acts_on() {
     let mut run = bytes_run(&[DEVICE_A]);
     provisioned(&mut run, DEVICE_A, 0, 1, 2);
-    let t = run.topup(DEVICE_A, 1, 2);
+    let t = run.topup(DEVICE_A, 156, 2);
     run.run().expect("runs");
     let step = run
         .kernel
@@ -269,7 +275,36 @@ fn the_info_answer_is_one_time32_the_device_acts_on() {
     let ack = run.kernel.stages.at(t, StageId::Acknowledged).unwrap();
     let dl = run.kernel.stages.at(t, StageId::Downloaded).unwrap();
     let wait = run.state.params.first_batch_delay.as_nanos();
-    assert!(dl >= ack + wait - 1_000_000_000, "ack {ack} dl {dl}");
+    assert!(ack < WEEK_NS, "asked before the boundary: {ack}");
+    assert!(dl >= WEEK_NS + wait - 1_000_000_000, "ack {ack} dl {dl}");
+}
+
+/// A top-off of a week the RA's schedule reached before the request finds the file held
+/// ([PRIMER] p.6: the RA keeps every week within `ra-maxPreloadTime` generated and adds one
+/// a week; 1609.2.1 §6.3.5.4: the top-off is the `.info` request and the download). The
+/// `.info` answer is now, the device downloads at once, and the top-off itself crosses no
+/// RA-ACA hop; the week's certificates were issued all the same. Fault (2026-10-27): with
+/// `ScmsRun::generate_past_due` returning at once, the device waits `first_batch_delay`
+/// (60 s) for a job run at its request, and the ACA hops are in the top-off.
+#[test]
+fn a_week_that_fell_due_before_the_request_is_held_and_downloaded_at_once() {
+    let mut run = bytes_run(&[DEVICE_A]);
+    provisioned(&mut run, DEVICE_A, 0, 1, 2);
+    let issued = run.state.pca.issued_count;
+    let mark = run.kernel.steps.len();
+    let t = run.topup(DEVICE_A, 1, 2);
+    run.run().expect("runs");
+    let ack = run.kernel.stages.at(t, StageId::Acknowledged).unwrap();
+    let dl = run.kernel.stages.at(t, StageId::Downloaded).unwrap();
+    let wait = run.state.params.first_batch_delay.as_nanos();
+    assert!(wait >= 10_000_000_000, "the quick profile's generation time");
+    assert!(dl < ack + wait / 6, "ack {ack} dl {dl}");
+    assert!(run.kernel.stages.at(t, StageId::Installed).is_some());
+    assert_eq!(run.state.pca.issued_count, issued + 2, "week 1 was issued");
+    let pca = run.state.nodes.pca;
+    let to_aca = run.kernel.steps[mark..].iter().filter(|s| s.to == pca).count();
+    assert_eq!(to_aca, 0, "the top-off crossed an RA-ACA hop");
+    assert_eq!(run.state.devices[&DEVICE_A].credentials.len(), 4);
 }
 
 #[test]
@@ -482,11 +517,17 @@ fn the_period_grid_a_device_reads_is_the_backends() {
 /// batch file by the request's hash alone.
 #[test]
 fn the_weekly_job_sends_one_batch_shuffled_across_every_account() {
-    let mut run = bytes_run(&[DEVICE_A, DEVICE_B]);
+    // The week is the first past a 2-week ra-maxPreloadTime ([SMP] Table 3 floor), so the
+    // weekly job runs at its boundary on the run's clock. (Week 1, inside the horizon, is
+    // held since acceptance and generated off the run's clock, `generate_past_due`.)
+    let mut p = ScmsParams::default().quick();
+    p.pdu.keep_bytes = true;
+    p.max_periods_ahead = 2;
+    let mut run = run_with(p, &[DEVICE_A, DEVICE_B]);
     provisioned(&mut run, DEVICE_A, 0, 1, 20);
     provisioned(&mut run, DEVICE_B, 0, 1, 20);
     let mark = run.state.pdus.len();
-    run.topup(DEVICE_A, 1, 20);
+    run.topup(DEVICE_A, 2, 20);
     run.run().expect("runs");
     let st = &run.state;
     let pca = st.nodes.pca.index();
@@ -499,7 +540,7 @@ fn the_weekly_job_sends_one_batch_shuffled_across_every_account() {
         .iter()
         .filter(|p| p.kind == SpduKind::RaAcaCertRequest && p.to == pca)
         .collect();
-    assert_eq!(reqs.len(), 40, "week 1 of both accounts");
+    assert_eq!(reqs.len(), 40, "week 2 of both accounts");
     let mut steps: Vec<_> = reqs.iter().map(|p| p.step).collect();
     steps.sort_unstable();
     steps.dedup();
@@ -514,16 +555,55 @@ fn the_weekly_job_sends_one_batch_shuffled_across_every_account() {
         switches >= 10,
         "the batch left grouped by device: {switches} switches"
     );
-    // B never asked, yet its file for week 1 is whole, and A holds its week: the RA routed
+    // B never asked, yet its file for week 2 is whole, and A holds its week: the RA routed
     // all 40 answers by hash.
     for d in [DEVICE_B] {
         let files = st.ra.batch_files(d);
         let week1 = files
             .iter()
-            .find(|(n, _)| n.ends_with("_1.zip"))
-            .expect("week 1 filed");
+            .find(|(n, _)| n.ends_with("_2.zip"))
+            .expect("week 2 filed");
         assert_eq!(week1.1.len(), 20, "{d:?}: {week1:?}");
     }
     assert_eq!(st.ra.unrouted_responses, 0);
     assert_eq!(run.state.devices[&DEVICE_A].credentials.len(), 40);
+}
+
+/// [PRIMER] p.6: the RA "adds one week every week". At each i-period boundary every
+/// account gets the week that comes into `ra-maxPreloadTime`, whether or not its device
+/// asks for it, in one population batch on the run's clock: its RA-ACA requests leave at
+/// the boundary (within `ra-maxGenDelay`). Before, the engine generated only weeks a
+/// device asked for, so with the 3-year horizon the RA never reached the LAs or the ACA
+/// in the run (scms-fix3-ra RA.boundary-job). Fault (2026-10-27): `arm_boundary_jobs`
+/// returning at once.
+#[test]
+fn every_account_gets_its_next_horizon_week_at_the_boundary_without_asking() {
+    let mut run = bytes_run(&[DEVICE_A, DEVICE_B]);
+    provisioned(&mut run, DEVICE_A, 614, 1, 1);
+    provisioned(&mut run, DEVICE_B, 614, 1, 1);
+    let far = 614 + 156;
+    let before = count(&run, SpduKind::RaAcaCertRequest);
+    // Half a week: no boundary yet, nothing added.
+    run.run_until(WEEK_NS / 2).expect("runs");
+    assert_eq!(count(&run, SpduKind::RaAcaCertRequest), before);
+    run.run_until(WEEK_NS + 600 * 1_000_000_000).expect("runs");
+    assert_eq!(run.state.ra.boundary_jobs, 1, "one week, one job, both accounts");
+    for d in [DEVICE_A, DEVICE_B] {
+        assert!(run.state.ra.accounts[&d].generated.contains(&far), "{d:?}");
+    }
+    let added: Vec<u64> = run
+        .state
+        .pdus
+        .iter()
+        .filter(|p| p.kind == SpduKind::RaAcaCertRequest)
+        .skip(before)
+        .map(|p| p.at)
+        .collect();
+    assert_eq!(added.len(), 2, "one certificate (jmax 1) per account");
+    assert!(
+        added.iter().all(|t| (WEEK_NS..WEEK_NS + 600 * 1_000_000_000).contains(t)),
+        "at the boundary: {added:?}"
+    );
+    // Neither device asked: no top-off ran.
+    assert_eq!(run.state.ra.pregen_deferred, 0);
 }

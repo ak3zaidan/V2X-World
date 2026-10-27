@@ -1,0 +1,12 @@
+# scms-fix3 slow-aca-b-h2: provider-b's core ACA 4 s slow per message on the 2-week horizon,
+# where each week past the horizon is the RA's in-run weekly job and a device waits for it.
+# With one ACA every provider-b request waits on it; with SAESOL's two (GOV.D1.acas) half
+# of each batch goes to the healthy aca/1.
+schema: v2xw/scenario/1
+meta:
+  base: slow-aca-b.yaml
+  name: scms-fix3 slow-aca-b-h2
+security:
+  protocol:
+    params:
+      max_periods_ahead: 2

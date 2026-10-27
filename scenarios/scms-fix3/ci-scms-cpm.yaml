@@ -1,0 +1,25 @@
+# scms-fix3 ci-scms-cpm: ci-scms on GeoNetworking/BTP with CAMs and CPMs, the four units
+# roadside cameras (`cpm` role, WP-14), 40 % equipped, 40 pedestrians without a device
+# (the cpm_metrics test's setting), 20 s.
+schema: v2xw/scenario/1
+meta:
+  base: ci-scms.yaml
+  name: scms-fix3 ci-scms-cpm
+time:
+  duration_s: 20.0
+net:
+  layer: gn-btp
+messages:
+  sets: [cam, cpm]
+  codec_tier: uper
+actors:
+  vehicles:
+    equipped_fraction: 0.4
+  vru:
+    pedestrians: 40
+    device_fraction: 0.0
+  rsus:
+    - {site: 8, roles: [cpm], profile: rsu/commsignia-its-rs4}
+    - {site: 14, roles: [cpm], profile: rsu/commsignia-its-rs4}
+    - {site: 20, roles: [cpm], profile: rsu/commsignia-its-rs4}
+    - {site: 26, roles: [cpm], profile: rsu/commsignia-its-rs4}

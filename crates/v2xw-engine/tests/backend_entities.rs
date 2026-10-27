@@ -934,8 +934,15 @@ fn a_top_up_whose_vehicle_leaves_the_area_is_counted_as_leaving() {
     let mut s = grid(END, 1800.0);
     cellular(&mut s);
     let mut params = compressed();
-    // The batch takes a while to be ready, so some vehicles leave with it in flight.
+    // The batch takes a while to be ready, so some vehicles leave with it in flight. Only a
+    // week the RA generates in the run is late: on the 3-year horizon every week a device
+    // asks for here is held (the RA generated it at acceptance, [PRIMER] p.6) and its
+    // top-off is .info + download at once, so none is in flight when its vehicle leaves
+    // (228 of 228 completed, 3c40282a). On ra-maxPreloadTime's 2-week minimum ([SMP]
+    // Table 3) each later week is the weekly job at its boundary, ready
+    // first_batch_delay after it.
     params["first_batch_delay_s"] = json!(10);
+    params["max_periods_ahead"] = json!(2);
     lifecycle(&mut s, v2xw_engine::phase2::CAMP_SCMS, params);
     let (report, rec) = run(s);
     let p = &report.phase2;

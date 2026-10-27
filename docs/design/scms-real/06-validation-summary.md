@@ -303,8 +303,8 @@ them). Most are not engine problems:
   - Governance, 3: `GOV.L.onecert` (the ECA and ACA each hold a PDU-layer certificate
     that signs and a different governance one for chain files and rollover),
     `GOV.L.counters` (the cross-provider count is fixed; left: provider-b's ICA counter
-    reads 6 against 7 in the records, from that duality) and `GOV.D1.acas` (provider-b's
-    second ACA has no certificate and no traffic).
+    reads 6 against 7 in the records, from that duality) and ~~`GOV.D1.acas` (provider-b's
+    second ACA has no certificate and no traffic)~~ fixed 2026-10-27 (§6 item 27).
   - Provisioning, 2: `PV.aca-cannot-group` (a privacy deviation: each RA→ACA message
     carries one device's week of 20 requests, so the ACA can group them; owner decision) and
     `PV.rsu-cert` (no record carries an RSU application certificate).
@@ -948,6 +948,9 @@ whether a full-fleet misbehaviour rate is a real-world number.
     roadside check. The fix is one line. It was held because it could leave the `pq_relay`
     test's MA without a case; that test now has a vehicle reporter of its own (actor 112,
     item 9), so the fix may no longer empty it. Not tried; owner decision.
+    **Fixed (82533437) and pinned 2026-10-27:** `pq_relay::under_the_post_quantum_profile_a_roadside_unit_fetches_the_crl_and_refuses_the_revoked`
+    asserts `reports_from_rsus` 0 with roadside detections not filed and the MA's case kept
+    (scms-fix3-ra PQ.*); red with the pki check moved back above the roadside gate.
 11. **Post-quantum path, modelled only** (pq-profile §3; final-run §3).
     - RSUs have no application-certificate cycle under PQ.
     - Receivers check CRL entries against the Generator's list, not a signed CRL.
@@ -1194,7 +1197,7 @@ whether a full-fleet misbehaviour rate is a real-world number.
     - Matrix: uu-tls13 now runs past its 55 top-ups (`uutls-topups-same` compared 0 with 0);
       the ten `77cffb5b` variants re-measured, 0 fail; uutls-report-latency and the lte
       cost corrected.
-    **Open:** provider-b's second ACA has no certificate (GOV.D1.acas); the governance
+    **Open:** ~~provider-b's second ACA has no certificate (GOV.D1.acas)~~ fixed 2026-10-27; the governance
     rows GOV.E.dcm-hop and GOV.L.rollover-wire are pending their run; the records rows'
     measured and verdict fields, the audit checkers and the fixed-binary runs (S, sf, onair
     A/B/C, AUD) are owed; a SlowDrift test for `onset_to_detection` (the phase2 onset test
@@ -1250,6 +1253,24 @@ whether a full-fleet misbehaviour rate is a real-world number.
     held) removes test 2's fictitious wait. It also takes away test 1's premise, because
     an in-run ACA slowdown would no longer delay a pre-generated batch. Both tests need
     to be re-read together with the change, and every SCMS digest moves.
+    **Done 2026-10-27 (scms-fix3-ra, crates/v2xw-engine/tests/expectations/scms-fix3-ra.yaml):**
+    a week that fell due before the request is generated at its due instant
+    (`ScmsRun::generate_past_due`) and served as held: top-up 2,338 ms (release f4982788)
+    → 337 ms, a slow ACA from 30 s no longer reaches it (FSL = F). The download-wait and
+    one-poll tests moved to the 2-week horizon, where the weekly job is in the run. The RA
+    now also adds the week entering `ra-maxPreloadTime` for every account at each
+    boundary (`ScmsRun::arm_boundary_jobs`, [PRIMER] p.6): backend bytes 959,355 → 1,720,133
+    on base.yaml, device metrics unchanged. RSU application certificates list their
+    applications' PSIDs (299 SSM refusals → 0). Provider-b's second ACA (GOV.D1.acas)
+    is certified and issues half of each batch. Regression digests re-blessed
+    (record digests only; frames unchanged). **Open:** `sensitivity_security::the_backhaul_latency_and_bandwidth_move_relay_topups`
+    fails on the third build: the 5 ms line sends 272 messages against 264. A device
+    that asks while the boundary job for its week is still running is told
+    `now + first_batch_delay` and polls again on a fast line; the RA's `.info` estimate for
+    a week being generated in the run needs a rule. `backend_entities::a_top_up_whose_vehicle_leaves_the_area_is_counted_as_leaving`
+    lost its premise (held weeks complete at once: 228 of 228); moved to the 2-week
+    horizon, not yet run. D1.slow-aca-h2: 16 fewer top-ups started with provider-b's two
+    ACAs, unexplained.
 
 ## 7. Every unverifiable item and how it is modelled (29)
 
@@ -1401,7 +1422,7 @@ The totals count each row as its own checklist records it, with the changes in �
 - ~~**PV.aca-cannot-group**~~: fixed 2026-10-25 (`0d62f322`, audit-prov §4.1): one RA→ACA
   request per message in a seeded order across devices, answers routed by request hash, the
   weekly job for every account; the ACA-side grouping attack is at the population baseline
-  (PV.aca-grouping-attack). Left: provider-b's second ACA (GOV.D1.acas).
+  (PV.aca-grouping-attack). ~~Left: provider-b's second ACA (GOV.D1.acas).~~ Fixed 2026-10-27.
 - ~~Renaming `p2pcd_requests`~~: renamed `digest_misses` 2026-10-25, the old name kept as
   an alias.
 - ~~Whether the ECA and ACA should hold one certificate~~: one certificate per component

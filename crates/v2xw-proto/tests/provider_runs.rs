@@ -42,15 +42,82 @@ fn a_peer_run_is_its_providers_own_on_the_shared_ctl() {
     assert!(ScmsRun::new_peer(&home, 0).is_err());
     assert!(ScmsRun::new_peer(&home, 2).is_err());
 
+    // Provider-b runs two ACAs (audit-gov GOV.D1.acas): each pseudonym is one of theirs.
+    let b_acas = [b_aca, p.pki.as_ref().unwrap().aca_at(1).id8()];
     let device = NodeId::new(5_000_123);
     peer.preload(device, 0, 1, 2).expect("provisions");
     let dev = &peer.state.devices[&device];
     assert!(!dev.credentials.is_empty());
     for c in dev.credentials.values() {
         let imp = c.implicit.as_ref().expect("an implicit pseudonym");
-        assert_eq!(imp.aca_id8, b_aca, "issued by provider-b's ACA");
+        assert!(b_acas.contains(&imp.aca_id8), "issued by provider-b's ACAs");
         assert_ne!(imp.aca_id8, a_aca);
     }
+}
+
+/// Audit-gov GOV.D1.acas: SAESOL's published chain files (2025-07-17, 2025-08-13) carry
+/// two ACA certificates, and provider-b places two ACAs. The second (`aca/1`) holds a
+/// certificate of the core ACA's form (same ICA, validity, SSP, region, CRACA, an
+/// encryption key; its own keys), is hosted and linked to the RA and the MA, takes its
+/// share of the RA's shuffled requests (round-robin, ASSUMPTION: the split rule is not
+/// published) and signs what it issues, so the device's same-ACA check passes and the MA
+/// asks it about its own certificates. Fault (before): `aca/1` placed with no certificate
+/// and no traffic, every request to `aca/0`.
+#[test]
+fn provider_bs_second_aca_is_certified_and_issues_its_share() {
+    use v2xw_proto::scms::pdu::SpduKind;
+    let (home, peer) = runs();
+    assert!(home.state.aca_extra.is_empty(), "provider-a runs one ACA");
+    let p = &peer.state;
+    assert_eq!(p.aca_extra.len(), 1, "provider-b's aca/1");
+    let pki = std::sync::Arc::clone(p.pki.as_ref().unwrap());
+    let (a0, a1) = (&pki.aca, pki.aca_at(1));
+    assert!(a1.name.starts_with("aca-1."), "{}", a1.name);
+    let (t0, t1) = (&a0.cert.0.to_be_signed, &a1.cert.0.to_be_signed);
+    assert_eq!(a0.cert.0.issuer, a1.cert.0.issuer, "both under provider-b's ICA");
+    assert_eq!(t0.validity_period, t1.validity_period);
+    assert_eq!(t0.app_permissions, t1.app_permissions);
+    assert_eq!(t0.cert_issue_permissions, t1.cert_issue_permissions);
+    assert_eq!(t0.region, t1.region);
+    assert_eq!(t0.craca_id, t1.craca_id);
+    assert_eq!(t0.crl_series, t1.crl_series);
+    assert_eq!(t0.encryption_key.is_some(), t1.encryption_key.is_some());
+    assert_ne!(t0.verify_key_indicator, t1.verify_key_indicator, "its own key");
+    // The records list it with its certificate.
+    let mut tracker = v2xw_proto::scms::pki_view::PkiTracker::default();
+    let runs = [peer];
+    let s = v2xw_proto::scms::pki_view::pki_state(&runs, 0, &mut tracker).expect("a state");
+    let acas: Vec<_> = s
+        .providers
+        .iter()
+        .flat_map(|q| q.components.iter())
+        .filter(|c| c.provider == "provider-b" && c.role == "aca")
+        .collect();
+    assert_eq!(acas.len(), 2, "{acas:?}");
+    assert!(acas.iter().all(|c| c.cert.is_some()), "{acas:?}");
+    let [mut peer] = runs;
+    // A provisioning: the requests go to both ACAs, half each, and every certificate the
+    // device installs is the receiving ACA's and verifies.
+    let device = NodeId::new(5_000_131);
+    peer.preload(device, 0, 1, 20).expect("provisions");
+    let st = &peer.state;
+    let (n0, n1) = (st.nodes.pca.index(), st.aca_extra[0].index());
+    let to = |n: u32| {
+        st.pdus
+            .iter()
+            .filter(|x| x.kind == SpduKind::RaAcaCertRequest && x.to == n)
+            .count()
+    };
+    assert_eq!((to(n0), to(n1)), (10, 10), "round-robin over the shuffled batch");
+    let id1 = pki.aca_at(1).id8();
+    let by1 = st.devices[&device]
+        .credentials
+        .values()
+        .filter(|c| c.implicit.as_ref().is_some_and(|i| i.aca_id8 == id1))
+        .count();
+    assert_eq!(by1, 10, "aca/1 issued and signed its ten");
+    assert!(st.pdu_rejections.is_empty(), "{:?}", st.pdu_rejections);
+    assert_eq!(st.devices[&device].credentials.len(), 20);
 }
 
 /// A report provider-a's MA shares about a provider-b certificate reaches provider-b's

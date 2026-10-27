@@ -69,6 +69,9 @@ impl ScmsRun {
         jmax: u32,
         flow: FlowId,
     ) -> FlowRun {
+        if flow == FlowId::Topup {
+            self.generate_past_due(device, start_i, at);
+        }
         let run = self.new_run();
         let mut seed = [0u8; butterfly::SEED_BYTES];
         {
@@ -147,6 +150,173 @@ impl ScmsRun {
         self.start_provisioning(device, at, i, 1, jmax, FlowId::Topup)
     }
 
+    /// Arms the RA's weekly job at every i-period boundary in the run up to `horizon`: at
+    /// boundary `b` each account adds the week that comes into `ra-maxPreloadTime`
+    /// (`firstI + horizon + (b - p0) - 1`), whether or not its device asks for it
+    /// ([PRIMER] p.6: the RA "adds one week every week"; [CAMP122] 5.2.7.6.4; [SMP] Table 3
+    /// `ra-maxPreloadTime`, `ra-maxGenDelay`). One timer per distinct week; its job's
+    /// population batch takes every account due for that week
+    /// ([`ScmsState::start_pregen_week`]), so the RA-LA-ACA hops happen at the boundary,
+    /// on the run's clock and under its faults. Before this the engine generated only the
+    /// weeks a device asked for, so with the 3-year horizon no RA-LA traffic ran in the run
+    /// (scms-fix3-ra RA.boundary-job). Only the run's own clock arms them ([`Self::run`],
+    /// draining a scratch kernel, does not).
+    pub(super) fn arm_boundary_jobs(&mut self, horizon: SimTime) {
+        let now = self.kernel.now();
+        let from = self.state.ra.boundaries_armed.unwrap_or(now).max(now);
+        if horizon <= from {
+            return;
+        }
+        self.state.ra.boundaries_armed = Some(horizon);
+        let p = self.state.params;
+        let h = self.state.gov.lpf.policy.max_periods_ahead.clamp(
+            crate::scms::params::RA_MIN_PRELOAD_PERIODS,
+            crate::scms::params::RA_MAX_PRELOAD_PERIODS,
+        );
+        let mut b = p.period_at(from).saturating_add(1);
+        let last = b.saturating_add(100_000);
+        loop {
+            let t = p.period_start(b);
+            if t > horizon || b >= last {
+                break;
+            }
+            if t > from {
+                // The week each account adds at `b`, and the first account (in node order)
+                // that carries it: the job's own flow; the rest join its population batch.
+                let mut weeks: BTreeMap<u32, NodeId> = BTreeMap::new();
+                let st = &self.state;
+                for (d, a) in &st.ra.accounts {
+                    let p0 = p.period_at(a.accepted_at);
+                    if b <= p0 || st.ra.blocklist.contains(d) {
+                        continue;
+                    }
+                    let i = a.first_i.saturating_add(h).saturating_add(b - p0 - 1);
+                    if !a.generated.contains(&i) && st.pregen_due(a, i) == Some(t) {
+                        weeks.entry(i).or_insert(*d);
+                    }
+                }
+                for (i, device) in weeks {
+                    if !self.state.ra.pregen_timers.insert((device, i)) {
+                        continue;
+                    }
+                    self.state.ra.boundary_jobs += 1;
+                    let run = self.new_run();
+                    let ra = self.state.nodes.ra;
+                    self.inject_at(
+                        t,
+                        ra,
+                        ScmsMsg::PregenTimer { device, i },
+                        FlowId::Pregeneration,
+                        run,
+                    );
+                }
+            }
+            b += 1;
+        }
+    }
+
+    /// Runs the RA's weekly job for week `i` of `device`'s account at the instant the
+    /// schedule reached it, when that was at least `first_batch_delay` (the RA's
+    /// generation time, its `nextDlTime` for a fresh batch) before the device asks at `at`.
+    ///
+    /// A real RA does not wait for a device's `.info`: it generates every week within
+    /// `ra-maxPreloadTime` of `firstI` when it accepts the request and adds one week at
+    /// each i-period boundary for every account ([PRIMER] p.6; [CAMP122] 5.2.7.6.4;
+    /// [SMP] Table 3 `ra-maxGenDelay`), so a top-off of such a week is only the `.info`
+    /// request and the batch download (1609.2.1 §6.3.5.4, §8.2): the file is held and
+    /// `nextDlTime` is now. The engine generates weeks lazily; before this, a week that
+    /// fell due long ago was expanded and certified when the device first asked, and the
+    /// device was told `now + first_batch_delay` and waited through the ACA's work in the
+    /// run (`sensitivity_security::the_backhaul_latency_and_bandwidth_move_relay_topups`,
+    /// whose 128 kbit/s line came out faster than the default because the wait swamped
+    /// it). The job runs here on a scratch kernel at its due instant, under the faults in
+    /// force then, exactly as [`ScmsRun::preload_at`] runs a pre-run pool: every entity's
+    /// state is what the job would have left, its PDUs are marked off the run's kernel,
+    /// and when the job's last answer came after the run's clock (an ACA slow or down
+    /// at the boundary) the `.info` answer names that instant (`held_from`). Every account
+    /// whose week is due by `at` joins the job's population batch, as it would have in
+    /// the run. A week that fell due later than that is left to the run's own weekly job
+    /// ([`ScmsState::pregen_next`]), whose timing and faults are the run's.
+    fn generate_past_due(&mut self, device: NodeId, i: u32, at: SimTime) {
+        let st = &self.state;
+        let Some(account) = st.ra.accounts.get(&device) else {
+            return;
+        };
+        if account.generated.contains(&i)
+            || st.ra.blocklist.contains(&device)
+            || st.ra.repos.get(&device).is_some_and(|r| r.contains_key(&i))
+        {
+            return;
+        }
+        let Some(due) = st.pregen_due(account, i) else {
+            return;
+        };
+        if st.params.first_batch_delay.after(due) > at || due > self.kernel.now() {
+            return;
+        }
+        let mut scratch: Kernel<ScmsMsg> = Kernel::new_at(self.kernel.net().clone(), due);
+        let p = self.state.params;
+        for (node, spec) in self.state.backend_hosts() {
+            scratch.host(node, &spec, p.backend_profile);
+        }
+        host_governance(&mut scratch, &self.state.gov, &p);
+        host_committees(&mut scratch, &self.state.committees, &p);
+        let mut real = core::mem::replace(&mut self.kernel, scratch);
+        let pdu0 = self.state.pdus.len();
+        // The run's jobs (an in-run request in its shuffle, another week in flight) stay
+        // the run's: the scratch kernel sees only this job, and they are put back after.
+        let run_jobs = core::mem::take(&mut self.state.ra.jobs);
+        let had: BTreeSet<NodeId> = self
+            .state
+            .ra
+            .repos
+            .iter()
+            .filter(|(_, r)| r.contains_key(&i))
+            .map(|(d, _)| *d)
+            .collect();
+        self.state.ra.population_until = Some(at);
+        let run = self.new_run();
+        let ra = self.state.nodes.ra;
+        self.inject_at(
+            due,
+            ra,
+            ScmsMsg::PregenTimer { device, i },
+            FlowId::Pregeneration,
+            run,
+        );
+        let outcome = Self::drain_into(&mut self.state, &mut self.kernel);
+        let finished = self.kernel.now();
+        core::mem::swap(&mut self.kernel, &mut real);
+        self.state.ra.population_until = None;
+        let run_now = self.kernel.now();
+        for p in &mut self.state.pdus[pdu0..] {
+            p.step = None;
+            p.preload = true;
+            p.at = p.at.min(run_now);
+        }
+        let leftover = core::mem::replace(&mut self.state.ra.jobs, run_jobs);
+        self.state.ra.jobs.extend(leftover);
+        if finished > run_now {
+            let filed: Vec<NodeId> = self
+                .state
+                .ra
+                .repos
+                .iter()
+                .filter(|(d, r)| r.contains_key(&i) && !had.contains(d))
+                .map(|(d, _)| *d)
+                .collect();
+            for d in filed {
+                self.state.ra.held_from.insert((d, i), finished);
+            }
+        }
+        if let Err(e) = outcome {
+            // The job's own failure is the device's to find: its `.info` and download
+            // polls see no file, as they would after a failed job in the run.
+            self.state.ra.past_due_failures += 1;
+            let _ = e;
+        }
+    }
+
     /// Enrols and provisions `device` **before the run**, leaving the backend's clock,
     /// queues and logs untouched.
     ///
@@ -190,7 +360,7 @@ impl ScmsRun {
         }
         let mut scratch: Kernel<ScmsMsg> = Kernel::new_at(self.kernel.net().clone(), at);
         let p = self.state.params;
-        for (node, spec) in self.state.nodes.backend_service_models(&p) {
+        for (node, spec) in self.state.backend_hosts() {
             scratch.host(node, &spec, p.backend_profile);
         }
         host_governance(&mut scratch, &self.state.gov, &p);
@@ -424,12 +594,17 @@ impl ScmsState {
             .get(&device)
             .is_some_and(|r| r.contains_key(&i))
         {
-            // Held already (the weekly job of another account's request made it): ready
-            // for this flow now.
+            // Held already (the weekly job, this account's or another's, made it): ready
+            // for this flow now, or when a job run after the fact assembled it.
             if self.ra.ready_told.insert(run) {
                 out.stage_at(StageId::BatchReady, self.nodes.ra, None, flow, run);
             }
-            return Some(at);
+            return Some(
+                self.ra
+                    .held_from
+                    .get(&(device, i))
+                    .map_or(at, |t| (*t).max(at)),
+            );
         }
         let ready_after = self.params.first_batch_delay;
         if account.generated.contains(&i) {
@@ -476,6 +651,8 @@ impl ScmsState {
     ) {
         self.ra.pregen_batches += 1;
         let batch = self.ra.pregen_batches;
+        // A job run after the fact takes every account due by the request it serves.
+        let until = self.ra.population_until.map_or(at, |t| t.max(at));
         let others: Vec<NodeId> = self
             .ra
             .accounts
@@ -484,7 +661,7 @@ impl ScmsState {
                 **d != device
                     && !self.ra.blocklist.contains(d)
                     && !a.generated.contains(&i)
-                    && self.pregen_due(a, i).is_some_and(|t| t <= at)
+                    && self.pregen_due(a, i).is_some_and(|t| t <= until)
             })
             .map(|(d, _)| *d)
             .collect();
@@ -623,10 +800,34 @@ impl ScmsState {
         Duration::from_secs(u64::from(t.saturating_sub(self.time32(at))))
     }
 
+    /// The ACA the RA's next certificate request goes to: the provider's ACAs in turn
+    /// ([`ScmsState::aca_extra`]; the core one alone under an ACA committee).
+    fn next_aca(&mut self) -> NodeId {
+        if self.aca_extra.is_empty() || self.committees.role("pca").is_some() {
+            return self.nodes.pca;
+        }
+        let n = self.aca_extra.len() as u64 + 1;
+        let k = self.ra.aca_next % n;
+        self.ra.aca_next += 1;
+        match k {
+            0 => self.nodes.pca,
+            k => self.aca_extra[usize::try_from(k).unwrap_or(0) - 1],
+        }
+    }
+
+    /// The ACA instance `node` hosts: 0 for the core ACA, `k` for `aca/k`.
+    pub(super) fn aca_instance(&self, node: NodeId) -> u32 {
+        self.aca_extra
+            .iter()
+            .position(|a| *a == node)
+            .map_or(0, |k| u32::try_from(k).unwrap_or(0) + 1)
+    }
+
     /// The PCA's answer to the RA: the certified batch.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn send_batch(
         &mut self,
+        aca: NodeId,
         i: u32,
         credentials: Vec<IssuedCredential>,
         answers: Vec<[u8; 32]>,
@@ -638,7 +839,7 @@ impl ScmsState {
         let n = self.nodes;
         let count = u32::try_from(credentials.len()).unwrap_or(u32::MAX);
         if self.pca.certified_runs.insert(run) {
-            out.stage_at(StageId::Certified, n.pca, None, flow, run);
+            out.stage_at(StageId::Certified, aca, None, flow, run);
         }
         // The real path: one `AcaRaCertResponseSpdu` per certificate, charged its bytes.
         let mut real = 0u32;
@@ -647,7 +848,7 @@ impl ScmsState {
             if let Some(p) = &c.response {
                 any = true;
                 real = real.saturating_add(
-                    self.emit_pdu(SpduKind::AcaRaCertResponse, n.pca, n.ra, at, p)
+                    self.emit_pdu(SpduKind::AcaRaCertResponse, aca, n.ra, at, p)
                         .bytes(),
                 );
             }
@@ -702,7 +903,7 @@ impl ScmsState {
     fn release_jobs(
         &mut self,
         out: &mut Outbox<ScmsMsg>,
-        n: ScmsNodes,
+        _n: ScmsNodes,
         to: NodeId,
         at: SimTime,
         batch: Option<u64>,
@@ -809,6 +1010,10 @@ impl ScmsState {
         };
         for (st, spdu) in staged.into_iter().zip(spdus) {
             let job = &mut jobs[st.job];
+            // The provider's ACAs share the batch, one request each in turn over the
+            // shuffled order (SAESOL runs two, audit-gov GOV.D1.acas; the split rule is not
+            // published, ASSUMPTION: round-robin). A committee ACA is the core one only.
+            let aca = self.next_aca();
             // The PCA's handle on this certificate: the hash of this one request
             // (Brecht §VI-D), unique per certificate; the RA alone maps it back.
             let handle = match &spdu {
@@ -840,7 +1045,7 @@ impl ScmsState {
                     // The RA signs every request it forwards.
                     Self::sign(out, 1);
                     let b = self
-                        .emit_pdu(SpduKind::RaAcaCertRequest, to, n.pca, at, p)
+                        .emit_pdu(SpduKind::RaAcaCertRequest, to, aca, at, p)
                         .bytes();
                     WireSize::real(b, "RaAcaCertRequestSpdu")
                 }
@@ -858,7 +1063,7 @@ impl ScmsState {
                 spdu,
             };
             out.send(
-                n.pca,
+                aca,
                 ScmsMsg::CertRequest {
                     i: st.i,
                     items: Box::new(vec![item]),
@@ -1747,6 +1952,7 @@ impl ScmsState {
                         Self::sign(out, count.saturating_mul(2));
                     }
                     let pki = self.pki.clone().expect("checked");
+                    let signer = pki.aca_at(self.aca_instance(to));
                     let keys = self.la_aca.unwrap_or(pdu_prov::LaAcaKeys::new(0, 0));
                     let now32 = self.time32(at);
                     let mut credentials = Vec::new();
@@ -1755,12 +1961,17 @@ impl ScmsState {
                     // order (`pdu::par_map_drbg`: the bytes of the sequential loop).
                     let issued = pdu::par_map_drbg(&mut self.pdu_rng, items.len(), |k, g| {
                         let spdu = items[k].spdu.as_ref().expect("checked");
-                        pdu_prov::aca_issue(&pki, &keys, spdu.bytes(), now32, g)
+                        pdu_prov::aca_issue_at(&pki, signer, &keys, spdu.bytes(), now32, g)
                     });
                     for (item, issued) in items.into_iter().zip(issued) {
                         let (lci1, lci2) = (item.lci1, item.lci2);
                         match issued {
                             Ok(iss) => {
+                                if to != n.pca {
+                                    self.pca
+                                        .issued_by
+                                        .insert((u32::from(iss.i), *iss.lv.as_bytes()), to);
+                                }
                                 self.pca.issued.insert(
                                     (u32::from(iss.i), *iss.lv.as_bytes()),
                                     PcaLookup {
@@ -1812,7 +2023,7 @@ impl ScmsState {
                         );
                         return Ok(());
                     }
-                    self.send_batch(i, credentials, answers, flow, run, at, out);
+                    self.send_batch(to, i, credentials, answers, flow, run, at, out);
                     return Ok(());
                 }
                 // Per certificate: two decryptions of the pre-linkage values, one ECQV
@@ -1898,7 +2109,7 @@ impl ScmsState {
                     );
                     return Ok(());
                 }
-                self.send_batch(i, credentials, answers, flow, run, at, out);
+                self.send_batch(to, i, credentials, answers, flow, run, at, out);
             }
             ScmsMsg::CertResponse {
                 i,

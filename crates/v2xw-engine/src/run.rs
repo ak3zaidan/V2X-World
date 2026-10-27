@@ -2212,7 +2212,7 @@ impl Engine {
             self.rsus.insert(id, spec.position);
             self.report.nodes_created += 1;
             if let Some(phase2) = self.phase2.as_mut() {
-                phase2.note_rsu(id);
+                phase2.note_rsu(id, &crate::wiring::rsu_app_psids(&self.scenario, &spec.roles));
                 phase2.arm_rsu_detector(id);
             }
             // Under the SCMS the unit signs only with the application certificates its

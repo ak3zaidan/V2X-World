@@ -463,7 +463,7 @@ impl ScmsRun {
         let current = self.state.app_period_at(kind, at);
         let mut scratch: Kernel<ScmsMsg> = Kernel::new_at(self.kernel.net().clone(), 0);
         let p = self.state.params;
-        for (node, spec) in self.state.nodes.backend_service_models(&p) {
+        for (node, spec) in self.state.backend_hosts() {
             scratch.host(node, &spec, p.backend_profile);
         }
         host_governance(&mut scratch, &self.state.gov, &p);
@@ -843,12 +843,14 @@ impl ScmsState {
                             .params
                             .period_start_time32_of(self.app_period_len(kind), period);
                         let t = self.time32(at);
+                        let psids = self.app_psids_of(device, kind);
                         let built =
                             RequestKeys::fresh(kind, period, &mut self.apps.rng).and_then(|keys| {
-                                appcert::ee_request_spdu(
+                                appcert::ee_request_spdu_for(
                                     &pki,
                                     &enrol,
                                     kind,
+                                    &psids,
                                     t,
                                     &keys,
                                     valid_from,
@@ -1379,11 +1381,13 @@ impl ScmsState {
                 Self::decrypt(out, 1);
                 out.charge(ECQV, PrimitiveOpKind::Verify, 1);
                 out.stage_at(StageId::Downloaded, device, None, flow, run);
-                match appcert::ee_open_response(
+                let psids = self.app_psids_of(device, kind);
+                match appcert::ee_open_response_for(
                     &pki,
                     file.bytes(),
                     &p.keys,
                     kind,
+                    &psids,
                     period,
                     p.valid_from,
                 ) {

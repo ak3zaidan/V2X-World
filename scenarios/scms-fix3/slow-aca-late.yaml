@@ -1,0 +1,11 @@
+# scms-fix3 slow-aca-late: the ACA 4 s slow per message from 30 s to 300 s, after the weeks
+# the 60 s top-offs ask for fell due (the fleet's requests are accepted in the first 20 s):
+# the RA generated those weeks with an ACA on time, so the slowdown must not reach them.
+schema: v2xw/scenario/1
+meta:
+  base: base.yaml
+  name: scms-fix3 slow-aca-late
+actors:
+  backend:
+    failures:
+      - {node: pca, mode: slow, from_s: 30.0, to_s: 300.0, extra_ms: 4000.0}

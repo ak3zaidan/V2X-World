@@ -148,3 +148,64 @@ fn a_unit_without_backhaul_starves_when_its_week_lapses_and_signs_nothing() {
         p.rsu_messages_withheld
     );
 }
+
+/// Runs one of the RA-track scenarios (`scenarios/scms-fix3/`) to its end.
+fn run_fix3(name: &str) -> RunReport {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let s = Scenario::load(root.join("scenarios/scms-fix3").join(name)).expect("loads");
+    let mut engine = Engine::build(s, "").expect("builds");
+    engine
+        .run(&mut v2xw_engine::NullRecorder::new())
+        .expect("runs")
+}
+
+/// A roadside unit's application certificate permits what its applications sign (USDOT
+/// RSU Specification v4.1 p. 15: certificates to support the unit's transmissions, by
+/// PSID; IEEE 1609.2 §5.2: a receiver refuses an SPDU whose PSID the signer's
+/// `appPermissions` do not list). The four connected-intersections units run SPaT/MAP and
+/// answer signal requests with SSM (PSID 0x204095, `psid-traffic-signal-priority-status`).
+/// Their SCMS certificate used to carry SPaT/MAP (0x82) only, so every receiver refused
+/// every SSM: 299 `psid-not-permitted` on the f4982788 release (scms-fix3-ra.yaml CB).
+/// Fault (2026-10-27): `wiring::rsu_app_psids` returning an empty list puts the 299 back.
+#[test]
+fn a_roadside_units_scms_certificate_permits_the_ssm_it_answers_with() {
+    let r = run_fix3("ci-scms.yaml");
+    let p = &r.phase2;
+    println!(
+        "rsus in cycle {}, preloaded {}, refused {:?}, checked {}",
+        p.rsus_in_cert_cycle,
+        p.rsu_app_certs_preloaded,
+        r.receiver_validation.refused,
+        r.receiver_validation.checked
+    );
+    assert_eq!(p.rsus_in_cert_cycle, 4, "every unit signs with its SCMS certificate");
+    assert!(p.rsu_app_certs_preloaded >= 4);
+    assert_eq!(
+        r.receiver_validation
+            .refused
+            .get("psid-not-permitted")
+            .copied()
+            .unwrap_or(0),
+        0,
+        "{:?}",
+        r.receiver_validation.refused
+    );
+}
+
+/// WP-14's roadside CPMs under the US SCMS: the unit's application certificate lists the
+/// CPM's ITS-AID (639, `psid-collective-perception-service`, ETSI TS 103 324) once the
+/// `cpm` role is on, so the vehicles around it verify and decode the infrastructure CPMs.
+/// Fault (2026-10-27): with SPaT/MAP alone (`rsu_app_psids` empty) no roadside CPM
+/// verifies.
+#[test]
+fn under_the_us_scms_a_roadside_cpm_signed_with_its_application_certificate_verifies() {
+    let r = run_fix3("ci-scms-cpm.yaml");
+    let c = r.cpm.clone().expect("CPM figures");
+    println!("{c:?} refused {:?}", r.receiver_validation.refused);
+    assert_eq!(r.phase2.rsus_in_cert_cycle, 4);
+    assert!(c.rsu_cpms_sent > 10, "the units send CPMs: {c:?}");
+    assert!(
+        c.rsu_cpms_verified > 10 && c.rsu_objects_decoded > 10,
+        "vehicles verify and decode them: {c:?}"
+    );
+}

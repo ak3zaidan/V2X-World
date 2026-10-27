@@ -1,0 +1,14 @@
+# scms-fix3 ci-scms: connected-intersections (four SPaT/MAP units that answer signal
+# requests with SSM, WSMP, 60 s) with the US SCMS backend, so each unit signs with the
+# application certificate its provider issues (WP-B3b), not the factory's.
+schema: v2xw/scenario/1
+meta:
+  base: ../connected-intersections.yaml
+  name: scms-fix3 ci-scms
+actors:
+  backend:
+    protocol: protocol/scms/camp
+security:
+  protocol:
+    id: protocol/scms/camp
+    params: {}

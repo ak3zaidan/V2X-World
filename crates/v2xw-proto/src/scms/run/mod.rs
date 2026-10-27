@@ -157,6 +157,10 @@ pub struct DeviceState {
     /// [`crate::scms::params::PduLayer::pseudonym_psids`]. Set with
     /// [`ScmsRun::set_device_psids`].
     pub psids: Option<crate::scms::params::PsidList>,
+    /// The PSIDs this device's application certificate (a roadside unit's) is requested
+    /// for: one per application the unit runs ([`ScmsRun::set_app_psids`]). `None` takes
+    /// the certificate kind's default ([`crate::scms::appcert::AppCertKind::psids`]).
+    pub app_psids: Option<crate::scms::params::PsidList>,
     /// The EE → RA request the device is waiting on an answer to (SCMS-522): its
     /// sequence number, the message to send again, and its flow. `None` when nothing is
     /// outstanding.
@@ -298,6 +302,7 @@ impl DeviceState {
             info_requests: 0,
             topoffs_unavailable: 0,
             psids: None,
+            app_psids: None,
             awaiting: None,
             request_seq: 0,
             retry_log: Vec::new(),
@@ -499,6 +504,25 @@ pub struct RaState {
     ready_watchers: BTreeMap<(NodeId, u32), Vec<(FlowId, FlowRun)>>,
     /// The flows already told `batch_ready`, so a re-poll does not stamp it twice.
     ready_told: BTreeSet<FlowRun>,
+    /// `(device, i)` weeks the weekly job generated on its own clock
+    /// ([`ScmsRun::generate_past_due`]) and finished after the run's clock at that moment:
+    /// the instant the RA held the file, which its `.info` answer is no earlier than.
+    held_from: BTreeMap<(NodeId, u32), SimTime>,
+    /// While a past-due week is generated off the run's clock: the request instant, up to
+    /// which every account whose week is due joins the weekly job's population batch.
+    population_until: Option<SimTime>,
+    /// Past-due weekly jobs ([`ScmsRun::generate_past_due`]) whose scratch run failed.
+    pub past_due_failures: u32,
+    /// The run's clock up to which the i-period boundaries' weekly jobs are armed
+    /// ([`ScmsRun::arm_boundary_jobs`]).
+    boundaries_armed: Option<SimTime>,
+    /// Weekly jobs a boundary of the run started on its own (week `i + horizon` for every
+    /// account, [PRIMER] p.6), one per distinct week.
+    pub boundary_jobs: u32,
+    /// Certificate requests sent to the ACAs so far: the next one goes to ACA
+    /// `aca_next % n` (round-robin over the provider's ACAs; the deployment's split rule is
+    /// not published, ASSUMPTION, audit-prov §4.1).
+    pub aca_next: u64,
     /// Weekly pre-generation jobs run (population batches), and certificate-request
     /// releases: the keys of their own shuffle streams.
     pregen_batches: u64,
@@ -519,12 +543,14 @@ struct AcaRoute {
 /// `ra-maxGenDelay` 1 week; [PRIMER] p.6 "keeps 3 years generated and adds one week every
 /// week"; 03 §6.4).
 ///
-/// Generation is evaluated lazily against that schedule: a period the schedule has
-/// already reached is expanded and certified when first asked for, without the age-based
-/// request shuffle (CAMP 1.2.2 `max_cert_request_age` applies to initial requests only,
-/// [CAMP122] Table 68), and a later one at the weekly job's instant. **Modelled**: the
-/// backend hops of a period generated on demand are charged at that instant, not at the
-/// (earlier) job instant.
+/// Generation is evaluated lazily against that schedule, without the age-based request
+/// shuffle (CAMP 1.2.2 `max_cert_request_age` applies to initial requests only,
+/// [CAMP122] Table 68). A week the schedule reached at least `first_batch_delay` before
+/// the device asks is generated when first asked for, on a scratch kernel at the instant
+/// it fell due ([`ScmsRun::generate_past_due`]), so the device finds it held, as it would
+/// at a real RA; a week that falls due later runs at the weekly job's instant on the run's
+/// kernel. **Modelled**: the backend hops of a week generated after the fact are off the
+/// run's kernel (marked pre-run, as a preload's are), not charged at the job instant.
 #[derive(Debug, Clone)]
 pub struct PregenAccount {
     /// The request as accepted (butterfly keys `A`, `H`, `ck`, `ek`; no SPDU).
@@ -668,6 +694,9 @@ struct ProvisioningJob {
 pub struct PcaState {
     /// `(i, linkage value)` → what the PCA stored when it issued that certificate.
     pub issued: BTreeMap<(u32, [u8; 9]), PcaLookup>,
+    /// `(i, linkage value)` → the ACA instance node that issued it, for a certificate a
+    /// further ACA (`aca/1`, ...) issued: the MA asks the issuer its certificate names.
+    pub issued_by: BTreeMap<(u32, [u8; 9]), NodeId>,
     /// How many certificates it has issued.
     pub issued_count: u64,
     /// Linkage-value lookups it answered for the Misbehaviour Authority.
@@ -990,6 +1019,11 @@ pub struct ScmsState {
     /// The other providers' PDU-layer PKIs under their own governance roots and ICAs, in
     /// deployment order (empty with the layer off or with one provider).
     pub peer_pki: Vec<(String, std::sync::Arc<crate::scms::pdu::ScmsPki>)>,
+    /// This provider's further ACA instances (`aca/1`, ...: SAESOL runs two, audit-gov
+    /// GOV.D1.acas), hosted and linked to its RA and MA like the core ACA
+    /// (`nodes.pca`), each with its own certificate ([`crate::scms::pdu::ScmsPki::aca_at`]).
+    /// The RA spreads its certificate requests over all of them.
+    pub aca_extra: Vec<NodeId>,
     /// Which provider of [`ScmsState::deployment`] this run is (WP-D1: one run per
     /// provider; 0 is the home provider, whose run owns the SCMS Manager's decisions).
     pub provider: usize,
@@ -1220,6 +1254,11 @@ impl ScmsRun {
             net.connect(nodes.lop, nodes.ra, transparent);
         }
         let peer_links = peer_topology(&deployment, &mut net, backend);
+        let home_acas = extra_acas(&deployment, 0);
+        for &a in &home_acas {
+            net.connect(nodes.ra, a, backend);
+            net.connect(nodes.ma, a, backend);
+        }
         let mut kernel = Kernel::new_at(net, t0);
         for (node, spec) in nodes.backend_service_models(&params) {
             let spec = if node == nodes.lop && !deployment.options.lop {
@@ -1231,7 +1270,7 @@ impl ScmsRun {
         }
         let plain =
             crate::service::ServiceModelSpec::new(params.backend_servers, params.backend_overhead);
-        for node in peer_links {
+        for node in peer_links.into_iter().chain(home_acas.iter().copied()) {
             kernel.host(node, &plain, params.backend_profile);
         }
         host_governance(&mut kernel, &gov, &params);
@@ -1244,15 +1283,25 @@ impl ScmsRun {
             // wire ([SMP] §6.1; audit-gov GOV.L.onecert). It was a second set drawn
             // under the governance ICA.
             let label = &deployment.providers[0].name;
-            Some(std::sync::Arc::new(pdu_pki_of(&gov, label)?))
+            Some(std::sync::Arc::new(with_aca_instances(
+                pdu_pki_of(&gov, label)?,
+                &deployment,
+                0,
+                params.master_seed,
+            )?))
         } else {
             None
         };
         // Every other provider's PDU PKI: its own governance root, ICA and components.
         let mut peer_pki = Vec::new();
         if pki.is_some() {
-            for p in &deployment.providers[1..] {
-                let peer = pdu_pki_of(&gov, &p.name)?;
+            for (k, p) in deployment.providers.iter().enumerate().skip(1) {
+                let peer = with_aca_instances(
+                    pdu_pki_of(&gov, &p.name)?,
+                    &deployment,
+                    k,
+                    params.master_seed,
+                )?;
                 peer_pki.push((p.name.clone(), std::sync::Arc::new(peer)));
             }
         }
@@ -1298,6 +1347,7 @@ impl ScmsRun {
                 deployment,
                 ma_trust,
                 peer_pki,
+                aca_extra: home_acas,
                 provider: 0,
                 shared: SharedReports::default(),
             },
@@ -1353,6 +1403,11 @@ impl ScmsRun {
         for (a, b) in governance_links(&nodes, &gov) {
             net.connect(a, b, backend);
         }
+        let aca_extra = extra_acas(&deployment, k);
+        for &a in &aca_extra {
+            net.connect(nodes.ra, a, backend);
+            net.connect(nodes.ma, a, backend);
+        }
         let transparent = Link {
             latency: Duration::ZERO,
             bandwidth_bps: u64::MAX,
@@ -1381,6 +1436,11 @@ impl ScmsRun {
                 spec
             };
             kernel.host(node, &spec, params.backend_profile);
+        }
+        let plain =
+            crate::service::ServiceModelSpec::new(params.backend_servers, params.backend_overhead);
+        for &a in &aca_extra {
+            kernel.host(a, &plain, params.backend_profile);
         }
         host_governance(&mut kernel, &gov, &params);
         let committees = build_committees(
@@ -1455,6 +1515,7 @@ impl ScmsRun {
                 deployment,
                 ma_trust,
                 peer_pki,
+                aca_extra,
                 provider: k,
                 shared: SharedReports::default(),
             },
@@ -1575,6 +1636,22 @@ impl ScmsRun {
         }
         if let Some(d) = self.state.devices.get_mut(&device) {
             d.psids = Some(psids);
+        }
+    }
+
+    /// Gives `device` the PSIDs its application certificate is requested for (adding the
+    /// device if it is new): a roadside unit's enabled applications, as its enrolment
+    /// with its operator's SCMS states them (USDOT RSU Specification v4.1, 2016, p. 15:
+    /// the unit holds certificates to support the transmissions of its applications, by
+    /// PSID; IEEE 1609.2 §5.2: a receiver refuses an SPDU whose PSID its signer's
+    /// `appPermissions` do not list).
+    /// Set before the unit's first request; an empty list keeps the kind's default.
+    pub fn set_app_psids(&mut self, device: NodeId, psids: &[u64]) {
+        if !self.state.devices.contains_key(&device) {
+            self.add_device(device);
+        }
+        if let Some(d) = self.state.devices.get_mut(&device) {
+            d.app_psids = (!psids.is_empty()).then(|| crate::scms::params::PsidList::of(psids));
         }
     }
 
@@ -1869,6 +1946,7 @@ impl ScmsRun {
     /// # Errors
     /// Whatever [`Kernel::dispatch`] or a handler returns.
     pub fn run_until(&mut self, horizon: SimTime) -> Result<()> {
+        self.arm_boundary_jobs(horizon);
         let ScmsRun { state, kernel } = self;
         while let Some(d) = kernel.next_delivery_before(horizon) {
             Self::step(state, kernel, d)?;
@@ -1898,6 +1976,30 @@ impl ScmsState {
             .get(&device)
             .and_then(|d| d.psids)
             .unwrap_or(self.params.pdu.pseudonym_psids)
+    }
+
+    /// Every backend node this provider hosts with its service model: the reference
+    /// components and the further ACA instances ([`ScmsState::aca_extra`]), as a scratch
+    /// kernel (a pre-run pool, a past-due week) hosts them.
+    pub fn backend_hosts(&self) -> Vec<(NodeId, crate::service::ServiceModelSpec)> {
+        let p = &self.params;
+        let plain = crate::service::ServiceModelSpec::new(p.backend_servers, p.backend_overhead);
+        let mut v = self.nodes.backend_service_models(p);
+        v.extend(self.aca_extra.iter().map(|a| (*a, plain)));
+        v
+    }
+
+    /// The PSIDs `device`'s application certificate of `kind` is requested for: its own
+    /// list ([`DeviceState::app_psids`]) or the kind's default.
+    pub fn app_psids_of(
+        &self,
+        device: NodeId,
+        kind: crate::scms::appcert::AppCertKind,
+    ) -> Vec<u64> {
+        self.devices
+            .get(&device)
+            .and_then(|d| d.app_psids)
+            .map_or_else(|| kind.psids().to_vec(), |l| l.as_slice().to_vec())
     }
 
     /// `Time32` (TAI seconds since the 1609.2 epoch) at simulated time `at`.
@@ -1972,7 +2074,10 @@ impl ScmsState {
                 answers,
                 flow,
                 run,
-            } => self.send_batch(i, *credentials, *answers, flow, run, _at, out),
+            } => {
+                let aca = self.nodes.pca;
+                self.send_batch(aca, i, *credentials, *answers, flow, run, _at, out);
+            }
             Pending::PublishCrl { flow, run } => {
                 // The simulation's real ECDSA signature stands in for the committee's (a
                 // CGGMP21 output *is* one; a FROST one is a Schnorr signature the size
@@ -2288,6 +2393,38 @@ pub fn provider_seed(master: u64, label: &str) -> u64 {
 
 /// Links the other providers' online components inside their regions and every MA to
 /// every other (report sharing, WP-D1). Returns the peer nodes to host.
+/// Provider `k`'s further ACA instances (`aca/1`, ...), in instance order.
+fn extra_acas(d: &crate::scms::deployment::Deployment, k: usize) -> Vec<NodeId> {
+    d.nodes(k)
+        .instances
+        .into_iter()
+        .filter(|(r, i, _)| r == "aca" && *i > 0)
+        .map(|(_, _, n)| n)
+        .collect()
+}
+
+/// `pki` with a certificate for each further ACA instance provider `k` runs
+/// ([`crate::scms::pdu::ScmsPki::issue_aca_instance`], keys from the provider's seed).
+fn with_aca_instances(
+    mut pki: crate::scms::pdu::ScmsPki,
+    d: &crate::scms::deployment::Deployment,
+    k: usize,
+    master_seed: u64,
+) -> Result<crate::scms::pdu::ScmsPki> {
+    let Some(p) = d.providers.get(k) else {
+        return Ok(pki);
+    };
+    let seed = provider_seed(master_seed, &p.name);
+    for inst in 1..p.count("aca") {
+        pki.issue_aca_instance(seed, inst)
+            .map_err(|e| ProtoError::Payload {
+                what: "SCMS PKI",
+                detail: format!("{} aca/{inst}: {e}", p.name),
+            })?;
+    }
+    Ok(pki)
+}
+
 fn peer_topology(
     d: &crate::scms::deployment::Deployment,
     net: &mut BackendNet,

@@ -173,6 +173,16 @@ impl ScmsRun {
 
 impl ScmsState {
     /// Handles every message of this flow; [`ScmsState::handle`] routes here.
+    /// The ACA that issued the certificate of `(i, lv)`: the issuer its certificate names
+    /// (a further ACA instance, audit-gov GOV.D1.acas), else the core one.
+    fn issuing_aca(&self, i: u32, lv: &v2xw_sec::linkage::LinkageValue) -> NodeId {
+        self.pca
+            .issued_by
+            .get(&(i, *lv.as_bytes()))
+            .copied()
+            .unwrap_or(self.nodes.pca)
+    }
+
     #[allow(unused_variables)]
     pub(super) fn handle_revoke(
         &mut self,
@@ -185,7 +195,7 @@ impl ScmsState {
             ScmsMsg::PcaLookupRequest { i, lv } if to == n.ma => {
                 out.stage_at(StageId::Decision, to, None, flow, run);
                 out.send(
-                    n.pca,
+                    self.issuing_aca(i, &lv),
                     ScmsMsg::PcaLookupRequest { i, lv },
                     "pca-lookup-request",
                     self.sizes.pca_lookup_request(),
@@ -237,7 +247,7 @@ impl ScmsState {
                 } else if case.lookups.len() == 1 {
                     let (i, lv) = case.subjects[1];
                     out.send(
-                        n.pca,
+                        self.issuing_aca(i, &lv),
                         ScmsMsg::PcaLookupRequest { i, lv },
                         "pca-lookup-request",
                         self.sizes.pca_lookup_request(),
