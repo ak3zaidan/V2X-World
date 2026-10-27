@@ -2994,6 +2994,12 @@ impl NativeMobility {
                 MobilityCommand::Stop { actor, until } => {
                     if let Some(a) = self.actors.get_mut(&actor) {
                         a.stopped_until = Some(until.unwrap_or(SimTime::MAX));
+                        // The stop supersedes a braking command still in force: left set,
+                        // the brake turned into an open-ended hold on the step the vehicle
+                        // stood (pass 7) and overwrote this stop's own release. A transit
+                        // bus braked to its pole, was told to stand until its dwell ended,
+                        // and stood there for the rest of the run.
+                        a.forced_brake = None;
                     }
                 }
                 MobilityCommand::Despawn { actor } => {
