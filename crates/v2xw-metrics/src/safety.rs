@@ -1124,6 +1124,28 @@ fn add_ssm_card(card: &mut ModelCard, p: &SsmParams) {
         card.parameters
             .push(cards::param(name, unit, json!(v), json!(lo), json!(hi), sumo(what)));
     }
+    let ward = cards::paper(
+        "Ward, Agamennoni, Worrall, Bender, Nebot 2015, Extending time to collision for \
+         probabilistic reasoning in general traffic scenarios, Transportation Research \
+         Part C 51 (constant turn rate and velocity extrapolation)",
+    );
+    card.parameters.push(cards::param(
+        "ssm_min_yaw_rps",
+        "rad/s",
+        json!(p.min_yaw_rps),
+        json!(0.0),
+        json!(1.0),
+        ward.clone(),
+    ));
+    card.parameters.push(cards::param(
+        "ssm_turning_horizon_s",
+        "s",
+        json!(p.turning_horizon_s),
+        json!(1.0),
+        json!(20.0),
+        ward.clone(),
+    ));
+    card.sources.push(ward);
     card.sources.push(cards::paper(
         "D. Gettman, L. Pu, T. Sayed, S. Shelby, Surrogate Safety Assessment Model and \
          Validation: Final Report, FHWA-HRT-08-051, 2008 (conflict-angle classes 30°/85°)",
@@ -1139,9 +1161,10 @@ fn add_ssm_card(card: &mut ModelCard, p: &SsmParams) {
          Transportation 2017 (MDRAC)",
     ));
     card.limitations.push(
-        "Full SSM: trajectories are extrapolated in a straight line at the current velocity, \
-         so a turning vehicle's predicted path leaves its lane; SUMO's device extrapolates \
-         along the route. Bodies are the class's declared length and width. Re-implemented \
+        "Full SSM: trajectories are extrapolated at the current speed, straight or, for a \
+         vehicle turning faster than ssm_min_yaw_rps, on a constant-turn-rate arc; neither \
+         follows the lane, which SUMO's device does by extrapolating along the route. PPET \
+         and the crossing DRAC rule are computed for straight pairs only. Bodies are the class's declared length and width. Re-implemented \
          from the cited papers and SUMO's documentation; SUMO was read for behaviour only \
          and no code was copied."
             .to_string(),

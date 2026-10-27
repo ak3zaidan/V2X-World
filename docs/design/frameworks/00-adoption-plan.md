@@ -354,6 +354,34 @@ trustworthy or comparable; later waves add behaviours and radio features.
   on a shared scenario run through the existing TraCI cross-validation, conflict counts by
   type agree with SUMO's SSM device within a stated tolerance. Fault: dropping extrapolation
   misses the crossing case.
+- Status (2026-10-27, WP-11 agent, branch `worktree-wf_6a49856b-494-2` of `f4982788`):
+  **partly done; the SUMO agreement line FAILS for crossing and merging.**
+  - Done: `crates/v2xw-metrics/src/ssm.rs` (re-implemented from Gettman et al. 2008,
+    Laureshyn et al. 2010, Fazekas et al. 2017, Ward et al. 2015 and SUMO's SSM-device
+    documentation; no code copied): TTC for every pair within 50 m by the exact
+    separating-axis sweep of two rectangles, or a 0.1 s sweep on arcs at the current yaw
+    rate with constant acceleration (stopping where it stops); crossing DRAC; MDRAC (1 s
+    reaction); PPET; SSAM angle classes; encounters with begin/end and a conflict log; SUMO
+    defaults as thresholds. Same-lane pairs keep each caller's own gap. Opt-in metric group
+    `ssm` (`metrics: [all, ssm]`, documented in the `metrics` key), off by default: no golden
+    moves (existing samples byte-identical, tested). New trafficval check
+    `safety/surrogate-measures`; the cross-validation's SUMO runs carry SUMO's SSM device and
+    compare (`crates/v2xw-interop/src/ssmval.rs`, tolerance factor 1.5 stated before the run).
+  - Validated: hand-computed crossing (TTC 2.5 s, DRAC, MDRAC), merging (45°), PPET,
+    oncoming, arc and braking cases; same-lane equality; determinism. Faults shown red:
+    dropping extrapolation (6 unit tests, and the check row 71 → 0 crossing conflicts on the
+    Midtown grid), the DRAC, MDRAC, PPET, extra-time, oncoming and gap faults, arcs off. Not
+    yet shown red: the braking test (constant-speed fault) and the ssmval parser tests.
+  - Grid at 1800 veh/h, same SUMO trajectories, conflicts with min TTC < 3 s: following 413
+    against SUMO's 328 (1.26×, inside), merging 47 against 26 (1.81×), crossing 362 against
+    20 (18×), oncoming 28 against 0. Arcs and acceleration moved crossing only from 364 to 362,
+    so turning and braking cars are not the cause.
+  - Open: trace the crossing excess pair by pair (likely SUMO counts only pairs whose routes
+    cross inside a junction, which straight or arc extrapolation does not know; the fix may be
+    to restrict crossing conflicts to the junction conflict zones the world already builds);
+    run Manhattan; confirm that SUMO's device uses acceleration; no conflict-log file is
+    written by an engine run (counts and distributions only); the traffic-validation report
+    and the cross-validation report were not regenerated.
 
 **WP-12 CPM rate and content under load, two DENM triggers** (S ×2, 4 days). Sources: O-P3b, O-P9.
 - Scope: `T_GenCpm` clamped to the DCC interval; object ordering by the TS 103 324 utility

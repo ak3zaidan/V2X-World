@@ -103,6 +103,24 @@ pub const SSAM_REAR_END_DEG: f64 = 30.0;
 pub const SSAM_CROSSING_DEG: f64 = 85.0;
 /// This module's crossing / oncoming boundary, degrees (see the module documentation).
 pub const ONCOMING_DEG: f64 = 150.0;
+/// The yaw rate above which a vehicle is extrapolated on an arc, rad/s: 0.02 rad/s is a
+/// 500 m radius at 10 m/s, straighter than any urban street's curve, so a car driving
+/// straight stays on a straight line. The arc (constant turn rate and velocity) is the
+/// motion model of Ward, Agamennoni, Worrall, Bender and Nebot 2015, "Extending time to
+/// collision for probabilistic reasoning in general traffic scenarios", *Transportation
+/// Research Part C* 51, 66-82; straight-line extrapolation sends a turning car across the
+/// cross street's stop line, where SUMO's route-based extrapolation does not.
+pub const SSM_MIN_YAW_RPS: f64 = 0.02;
+/// How far ahead a turning pair is swept, s: beyond the 3.0 s TTC threshold with margin,
+/// short enough that an arc does not wrap round a full circle at junction turn rates.
+pub const SSM_TURNING_HORIZON_S: f64 = 5.0;
+/// The acceleration above which a vehicle's speed is extrapolated as changing, m/s²: a car
+/// braking for a red light is predicted to stop at it, as Fazekas et al. 2017 assume a
+/// constant initial acceleration (SUMO's device is understood to estimate its conflict
+/// entry times with the current acceleration too; to be confirmed against its cached
+/// documentation). 0.1 m/s² is below any
+/// deliberate speed change and above step-to-step noise.
+pub const SSM_MIN_ACC_MPS2: f64 = 0.1;
 /// Below this speed a vehicle is standing (SUMO's halting threshold, 0.1 m/s).
 const STANDING_MPS: f64 = 0.1;
 
@@ -194,6 +212,14 @@ pub struct SsmParams {
     /// following pair is measured only for overlap now: the fault the validation injects
     /// to show the crossing case depends on extrapolation.
     pub extrapolate: bool,
+    /// Above this yaw rate a vehicle is extrapolated on a constant-turn-rate arc rather than
+    /// a straight line, rad/s; infinite turns it off (straight lines only).
+    pub min_yaw_rps: f64,
+    /// How far ahead a turning pair is swept, s.
+    pub turning_horizon_s: f64,
+    /// Above this acceleration or braking a vehicle's speed is extrapolated as changing,
+    /// m/s²; infinite holds every speed constant.
+    pub min_acc_mps2: f64,
 }
 
 impl Default for SsmParams {
@@ -207,6 +233,9 @@ impl Default for SsmParams {
             extra_time_s: SSM_EXTRA_TIME_S,
             reaction_s: SSM_REACTION_S,
             extrapolate: true,
+            min_yaw_rps: SSM_MIN_YAW_RPS,
+            turning_horizon_s: SSM_TURNING_HORIZON_S,
+            min_acc_mps2: SSM_MIN_ACC_MPS2,
         }
     }
 }
@@ -368,6 +397,10 @@ pub struct SsmTracker {
     open: BTreeMap<(ActorId, ActorId), Open>,
     log: Vec<Conflict>,
     encounters: u64,
+    /// Each actor's last (time, heading), for its yaw rate.
+    last_heading: BTreeMap<ActorId, (f64, f64)>,
+    /// Each actor's last (time, speed), for its acceleration.
+    last_speed: BTreeMap<ActorId, (f64, f64)>,
 }
 
 impl SsmTracker {
@@ -379,6 +412,8 @@ impl SsmTracker {
             open: BTreeMap::new(),
             log: Vec::new(),
             encounters: 0,
+            last_heading: BTreeMap::new(),
+            last_speed: BTreeMap::new(),
         }
     }
 
@@ -401,6 +436,37 @@ impl SsmTracker {
         sorted.dedup_by_key(|a| a.actor);
         let index: BTreeMap<ActorId, usize> =
             sorted.iter().enumerate().map(|(i, a)| (a.actor, i)).collect();
+        // Yaw rates from each actor's previous heading (within a second), wrapped to ±π.
+        let yaw: Vec<f64> = sorted
+            .iter()
+            .map(|a| match self.last_heading.get(&a.actor) {
+                Some((tp, hp)) if t_s > *tp && t_s - *tp <= 1.0 => {
+                    let tau = core::f64::consts::TAU;
+                    let d = (a.heading_rad - hp + core::f64::consts::PI).rem_euclid(tau)
+                        - core::f64::consts::PI;
+                    d / (t_s - tp)
+                }
+                _ => 0.0,
+            })
+            .collect();
+        // Accelerations from each actor's previous speed, the same way.
+        let acc: Vec<f64> = sorted
+            .iter()
+            .map(|a| match self.last_speed.get(&a.actor) {
+                Some((tp, vp)) if t_s > *tp && t_s - *tp <= 1.0 => {
+                    (a.speed_mps - vp) / (t_s - tp)
+                }
+                _ => 0.0,
+            })
+            .collect();
+        self.last_heading = sorted
+            .iter()
+            .map(|a| (a.actor, (t_s, a.heading_rad)))
+            .collect();
+        self.last_speed = sorted
+            .iter()
+            .map(|a| (a.actor, (t_s, a.speed_mps)))
+            .collect();
         let mut named: BTreeMap<(ActorId, ActorId), PairEval> = BTreeMap::new();
         for f in follows {
             let (Some(&fi), Some(&li)) = (index.get(&f.follower), index.get(&f.leader)) else {
@@ -445,7 +511,9 @@ impl SsmTracker {
                 if dx * dx + dy * dy > r2 {
                     continue;
                 }
-                if let Some(e) = evaluate_pair(a, b, &self.params) {
+                if let Some(e) =
+                    evaluate_pair_motion(a, b, (yaw[i], acc[i]), (yaw[j], acc[j]), &self.params)
+                {
                     evals.push((key, e));
                 }
             }
@@ -653,6 +721,162 @@ fn delay_decel(d: f64, v: f64, t: f64) -> Option<f64> {
         return Some(stop);
     }
     Some((2.0 * (v * t - d) / (t * t)).max(0.0))
+}
+
+/// The body of `a` after `t` seconds with yaw rate and acceleration `m = (w, acc)`: the
+/// path's curvature `w / v` is held (constant turn rate at the current speed), the speed
+/// changes at `acc` and a braking vehicle stays where it stops (constant initial
+/// acceleration, Fazekas et al. 2017); a straight line at constant speed when both are 0.
+fn body_at(a: &SsmActor, m: (f64, f64), t: f64) -> Body {
+    let (w, acc) = m;
+    let v = a.speed_mps.max(0.0);
+    let tt = if acc < 0.0 { t.min(v / -acc) } else { t };
+    let d = (v * tt + 0.5 * acc * tt * tt).max(0.0);
+    let speed = (v + acc * tt).max(0.0);
+    let k = if v > STANDING_MPS { w / v } else { 0.0 };
+    let (x, y, h) = if k.abs() < 1e-9 {
+        let (s, c) = math::sin_cos(a.heading_rad);
+        (a.x_m + c * d, a.y_m + s * d, a.heading_rad)
+    } else {
+        let h = a.heading_rad + k * d;
+        let (s0, c0) = math::sin_cos(a.heading_rad);
+        let (s1, c1) = math::sin_cos(h);
+        (a.x_m + (s1 - s0) / k, a.y_m - (c1 - c0) / k, h)
+    };
+    body(&SsmActor {
+        x_m: x,
+        y_m: y,
+        heading_rad: h,
+        speed_mps: speed,
+        ..*a
+    })
+}
+
+/// The first overlap of two bodies on their extrapolated paths within `horizon_s`, by a
+/// 0.1 s sweep refined by bisection to 1 ms; with the bodies then.
+fn curved_overlap(
+    a: &SsmActor,
+    b: &SsmActor,
+    wa: (f64, f64),
+    wb: (f64, f64),
+    horizon_s: f64,
+) -> Option<(f64, Body, Body)> {
+    let hit = |t: f64| {
+        let (x, y) = (body_at(a, wa, t), body_at(b, wb, t));
+        overlap_interval(&x, &y, false).map(|_| (x, y))
+    };
+    let dt = 0.1;
+    let steps = (horizon_s / dt).ceil() as u32;
+    let mut lo = 0.0;
+    for k in 0..=steps {
+        let t = f64::from(k) * dt;
+        if hit(t).is_some() {
+            if k == 0 {
+                let (x, y) = hit(0.0)?;
+                return Some((0.0, x, y));
+            }
+            let mut hi = t;
+            while hi - lo > 1e-3 {
+                let mid = 0.5 * (lo + hi);
+                if hit(mid).is_some() {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            let (x, y) = hit(hi)?;
+            return Some((hi, x, y));
+        }
+        lo = t;
+    }
+    None
+}
+
+/// The measures of a pair on constant-turn-rate paths: TTC from the curved sweep, the type
+/// from the angle at the collision, DRAC and MDRAC from the closing speed then.
+fn evaluate_turning(
+    a: &SsmActor,
+    b: &SsmActor,
+    wa: (f64, f64),
+    wb: (f64, f64),
+    p: &SsmParams,
+) -> Option<PairEval> {
+    let (ttc, xa, xb) = curved_overlap(a, b, wa, wb, p.turning_horizon_s)?;
+    if ttc <= 0.0 {
+        return Some(PairEval {
+            ty: EncounterType::Collision,
+            ttc_s: Some(0.0),
+            drac_mps2: None,
+            mdrac_mps2: None,
+            ppet_s: None,
+        });
+    }
+    let cos_t = dot(xa.u, xb.u).clamp(-1.0, 1.0);
+    let sin_t = cross(xa.u, xb.u);
+    let angle_deg = math::atan2(sin_t.abs(), cos_t).to_degrees();
+    let ty = if angle_deg >= ONCOMING_DEG {
+        EncounterType::Oncoming
+    } else if angle_deg >= SSAM_CROSSING_DEG {
+        EncounterType::Crossing
+    } else if angle_deg >= SSAM_REAR_END_DEG {
+        EncounterType::Merging
+    } else {
+        let d = (xb.c.0 - xa.c.0, xb.c.1 - xa.c.1);
+        let lat = dot(d, xa.n).abs();
+        if lat < xa.half_w + xb.half_l * sin_t.abs() + xb.half_w * cos_t.abs() {
+            EncounterType::Following
+        } else {
+            EncounterType::Merging
+        }
+    };
+    let w = (xb.v.0 - xa.v.0, xb.v.1 - xa.v.1);
+    let closing = math::hypot(w.0, w.1);
+    Some(PairEval {
+        ty,
+        ttc_s: Some(ttc),
+        drac_mps2: Some(closing / (2.0 * ttc)),
+        mdrac_mps2: mdrac_closing(closing, ttc, p.reaction_s),
+        ppet_s: None,
+    })
+}
+
+/// As [`evaluate_pair`], with each vehicle's yaw rate, rad/s: a pair either of which is
+/// turning faster than `min_yaw_rps` is extrapolated on constant-turn-rate arcs.
+#[must_use]
+pub fn evaluate_pair_turning(
+    a: &SsmActor,
+    b: &SsmActor,
+    wa: f64,
+    wb: f64,
+    p: &SsmParams,
+) -> Option<PairEval> {
+    evaluate_pair_motion(a, b, (wa, 0.0), (wb, 0.0), p)
+}
+
+/// As [`evaluate_pair`], with each vehicle's `(yaw rate, acceleration)`: a pair either of
+/// which turns faster than `min_yaw_rps` or accelerates or brakes harder than
+/// `min_acc_mps2` is swept on its extrapolated path (arc at the current curvature,
+/// constant acceleration, stopping where it stops).
+#[must_use]
+pub fn evaluate_pair_motion(
+    a: &SsmActor,
+    b: &SsmActor,
+    ma: (f64, f64),
+    mb: (f64, f64),
+    p: &SsmParams,
+) -> Option<PairEval> {
+    let turn = |w: f64| {
+        if p.min_yaw_rps.is_finite() && w.abs() > p.min_yaw_rps { w } else { 0.0 }
+    };
+    let accel = |x: f64| {
+        if p.min_acc_mps2.is_finite() && x.abs() > p.min_acc_mps2 { x } else { 0.0 }
+    };
+    let ma = (turn(ma.0), accel(ma.1));
+    let mb = (turn(mb.0), accel(mb.1));
+    if p.extrapolate && (ma != (0.0, 0.0) || mb != (0.0, 0.0)) {
+        return evaluate_turning(a, b, ma, mb, p);
+    }
+    evaluate_pair(a, b, p)
 }
 
 /// The measures of a pair that is not a named following pair, by trajectory extrapolation.
@@ -1037,6 +1261,61 @@ mod tests {
             format!("{:?}", tr.take_conflicts())
         };
         assert_eq!(run(false), run(true));
+    }
+
+    /// A car turning left on a 10 m radius (8 m/s, 0.8 rad/s) past a car standing 12 m
+    /// ahead across its straight-line path: the straight line predicts a crossing conflict
+    /// at (11.1 − 4.5) / 8 = 0.825 s; on the arc the turning car's outer front corner stays
+    /// within 11.79 m of the turn centre (0, 10), so it never reaches the standing car's
+    /// side at x = 11.1 while y is within ±2.25 m: no conflict. Straight again (yaw rate
+    /// zero), the arc case is the straight one.
+    #[test]
+    fn a_turning_car_is_extrapolated_on_its_arc() {
+        let mut a = car(1, 0.0, 0.0, 0.0, 8.0);
+        a.length_m = 4.5;
+        a.width_m = 1.8;
+        let mut b = car(2, 12.0, -2.25, FRAC_PI_2, 0.0);
+        b.length_m = 4.5;
+        b.width_m = 1.8;
+        let p = SsmParams::default();
+        let straight = evaluate_pair_turning(&a, &b, 0.0, 0.0, &p).expect("straight hit");
+        assert_eq!(straight.ty, EncounterType::Crossing);
+        assert!(close(straight.ttc_s.unwrap(), 0.825), "{straight:?}");
+        assert_eq!(evaluate_pair_turning(&a, &b, 0.8, 0.0, &p), None);
+        // On the arc it does hit a car standing on the arc: at (10, 10) facing east, which
+        // the reference point reaches after a quarter turn (π/2 / 0.8 = 1.96 s).
+        let c = car(3, 9.0, 10.0, 0.0, 0.0);
+        let e = evaluate_pair_turning(&a, &c, 0.8, 0.0, &p).expect("arc hit");
+        assert!(e.ttc_s.unwrap() < 1.96 && e.ttc_s.unwrap() > 0.5, "{e:?}");
+        // The tracker derives the yaw rate from the previous heading.
+        let mut tr = SsmTracker::new(p);
+        for k in 0..12 {
+            let t = f64::from(k) * 0.1;
+            let h = 0.8 * t;
+            let ak = SsmActor {
+                x_m: 10.0 * math::sin(h),
+                y_m: 10.0 - 10.0 * math::cos(h),
+                heading_rad: h,
+                ..a
+            };
+            tr.step(t, &[ak, b], &[]);
+        }
+        tr.close_all();
+        let log = tr.take_conflicts();
+        assert!(log.iter().all(|c| c.min_ttc.is_none_or(|(t, _)| t < 0.05)), "{log:?}");
+    }
+
+    /// The hand-computed crossing with the northbound car braking at 8 m/s²: it stops after
+    /// 1 s and 4 m, its front at y = −12, short of A's path at y = −1: no conflict. At
+    /// constant speed it is the 2.5 s crossing.
+    #[test]
+    fn a_car_braking_short_of_the_crossing_is_no_conflict() {
+        let a = car(1, -30.0, 0.0, 0.0, 10.0);
+        let b = car(2, 0.0, -20.0, FRAC_PI_2, 8.0);
+        let p = SsmParams::default();
+        assert_eq!(evaluate_pair_motion(&a, &b, (0.0, 0.0), (0.0, -8.0), &p), None);
+        let e = evaluate_pair_motion(&a, &b, (0.0, 0.0), (0.0, 0.0), &p).unwrap();
+        assert!(close(e.ttc_s.unwrap(), 2.5));
     }
 
     #[test]
