@@ -215,7 +215,16 @@ rows:
     jammer; a gate shared with 172 throttles it to a few a second
   source: ETSI TS 102 687 V1.2.1 Annex A (delta from the gate's channel CBR, T_off <= 1 s)
   fault: dcc_service never built (one gate for both radios)
-  measured: pending
+  measured: "with the fault in: MAP on 174 79 -> 79 (8 s run), 199 -> 199 (20 s run, delta given 18 s to fall)"
+  verdict: open
+  note: >-
+    The rewritten test cannot fail either, so the per-channel gate (dcc_service, 57272543)
+    is unverified. Not found in the time left: why a shared gate fed with a jammed 172 does
+    not throttle the unit's 174 MAP. Leads: the unit's SPaT and MAP records carry no DCC
+    state (dcc_state null; the vehicles' BSMs carry it), so the roadside unit's CBR feed or
+    its gate may not be the vehicles' path; and the CBR the gate reads may not include the
+    unit's own rider jammer. The test is kept as a non-regression check (MAP unharmed by a
+    172 jammer with DCC on) and says in its comment that its fault does not turn it red
 - id: R3.2.JAM
   test: v2xw-engine tests/multichannel.rs a_safety_channel_jammer_leaves_the_service_radio_free
   expect: >-

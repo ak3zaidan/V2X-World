@@ -392,7 +392,7 @@ fn without_either_distribution_path_the_revocation_never_reaches_a_vehicle() {
         rsu.roles.retain(|r| r != "crl");
     }
     lifecycle(&mut scenario, "crl_fetch_interval_s", 1.0e6);
-    let (report, recorder) = run_channel(scenario, "proto.revocationX");
+    let (report, recorder) = run_channel(scenario, "proto.revocation");
     assert!(recorder.seen > 0, "the run wrote no records");
     let rsu_rows: Vec<serde_json::Value> = recorder
         .kept
