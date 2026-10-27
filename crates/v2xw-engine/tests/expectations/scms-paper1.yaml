@@ -1903,7 +1903,8 @@ rows:
   measure: x.ma.sig
   expect: identical
   source: 'P1-E8 null: a BenignClassMimic with no disguise is its ConstPos payload, so the MA receives exactly the same reports (attack_evasion no_disguise_is_the_payload_exactly)'
-  measured: pending
+  measured: 'f41deaa21f24 -> f41deaa21f24'
+  verdict: pass
 - id: P1.E8.null-red
   base: EV0
   variant: EVB
@@ -1912,7 +1913,8 @@ rows:
   expect: down
   min_change: 0.5
   source: 'the null can go red: the disguised run changes the MA view (its attack reports read free), so its x.ma.sig differs from EV0''s'
-  measured: pending
+  measured: '0.248 -> 0.039 (EVB x.ma.sig e4026ee19ace, EV0 f41deaa21f24)'
+  verdict: pass
 - id: P1.E8.evp-same-reports
   base: EV0
   variant: EVP
@@ -1921,7 +1923,8 @@ rows:
   expect: same
   tol: 0.0
   source: 'no side effect: a constant secMark shift leaves every consecutive-BSM dt unchanged and SM-MBR ignores the stated accuracy, so the same reports are filed and delivered'
-  measured: pending
+  measured: '6755 -> 6755'
+  verdict: pass
 - id: P1.E8.evp-pseudonym-k
   base: EV0
   variant: EVP
@@ -1930,7 +1933,9 @@ rows:
   expect: same
   tol: 0.0
   source: 'pseudonym-k reads no device-class feature, so the disguise buys it no attack budget'
-  measured: pending
+  measured: '573.7 -> 616.8'
+  verdict: open
+  note: 'red as measured, but not because of the MA: 0 of the 370 rule x attacker decision times moved (ma-replay-attackers.csv). gt.device_exposure attack_start is the first on-air edit (phase2 first_on_air). The disguise restamps secMark from the window start, 0.1-4 s before ConstPos first changes a claim, so every budget starts earlier. The record doc says first falsified message: fix the start (first_falsified), or measure from the payload start'
 - id: P1.E8.evp-device-k
   base: EV0
   variant: EVP
@@ -1939,7 +1944,9 @@ rows:
   expect: same
   tol: 0.0
   source: 'device-k reads no device-class feature, so the disguise buys it no attack budget'
-  measured: pending
+  measured: '3210.8 -> 3426.4'
+  verdict: open
+  note: 'red as measured, but not because of the MA: 0 of the 370 rule x attacker decision times moved (ma-replay-attackers.csv). gt.device_exposure attack_start is the first on-air edit (phase2 first_on_air). The disguise restamps secMark from the window start, 0.1-4 s before ConstPos first changes a claim, so every budget starts earlier. The record doc says first falsified message: fix the start (first_falsified), or measure from the payload start'
 - id: P1.E8.eva-same-reports
   base: EV0
   variant: EVA
@@ -1948,7 +1955,8 @@ rows:
   expect: same
   tol: 0.0
   source: 'no side effect: a constant secMark shift leaves every consecutive-BSM dt unchanged and SM-MBR ignores the stated accuracy, so the same reports are filed and delivered'
-  measured: pending
+  measured: '6755 -> 6755'
+  verdict: pass
 - id: P1.E8.eva-pseudonym-k
   base: EV0
   variant: EVA
@@ -1957,7 +1965,9 @@ rows:
   expect: same
   tol: 0.0
   source: 'pseudonym-k reads no device-class feature, so the disguise buys it no attack budget'
-  measured: pending
+  measured: '573.7 -> 616.8'
+  verdict: open
+  note: 'red as measured, but not because of the MA: 0 of the 370 rule x attacker decision times moved (ma-replay-attackers.csv). gt.device_exposure attack_start is the first on-air edit (phase2 first_on_air). The disguise restamps secMark from the window start, 0.1-4 s before ConstPos first changes a claim, so every budget starts earlier. The record doc says first falsified message: fix the start (first_falsified), or measure from the payload start'
 - id: P1.E8.eva-device-k
   base: EV0
   variant: EVA
@@ -1966,7 +1976,9 @@ rows:
   expect: same
   tol: 0.0
   source: 'device-k reads no device-class feature, so the disguise buys it no attack budget'
-  measured: pending
+  measured: '3210.8 -> 3426.4'
+  verdict: open
+  note: 'red as measured, but not because of the MA: 0 of the 370 rule x attacker decision times moved (ma-replay-attackers.csv). gt.device_exposure attack_start is the first on-air edit (phase2 first_on_air). The disguise restamps secMark from the window start, 0.1-4 s before ConstPos first changes a claim, so every budget starts earlier. The record doc says first falsified message: fix the start (first_falsified), or measure from the payload start'
 - id: P1.E8.evb-same-reports
   base: EV0
   variant: EVB
@@ -1975,7 +1987,8 @@ rows:
   expect: same
   tol: 0.0
   source: 'no side effect: a constant secMark shift leaves every consecutive-BSM dt unchanged and SM-MBR ignores the stated accuracy, so the same reports are filed and delivered'
-  measured: pending
+  measured: '6755 -> 6755'
+  verdict: pass
 - id: P1.E8.evb-pseudonym-k
   base: EV0
   variant: EVB
@@ -1984,7 +1997,9 @@ rows:
   expect: same
   tol: 0.0
   source: 'pseudonym-k reads no device-class feature, so the disguise buys it no attack budget'
-  measured: pending
+  measured: '573.7 -> 616.8'
+  verdict: open
+  note: 'red as measured, but not because of the MA: 0 of the 370 rule x attacker decision times moved (ma-replay-attackers.csv). gt.device_exposure attack_start is the first on-air edit (phase2 first_on_air). The disguise restamps secMark from the window start, 0.1-4 s before ConstPos first changes a claim, so every budget starts earlier. The record doc says first falsified message: fix the start (first_falsified), or measure from the payload start'
 - id: P1.E8.evb-device-k
   base: EV0
   variant: EVB
@@ -1993,7 +2008,9 @@ rows:
   expect: same
   tol: 0.0
   source: 'device-k reads no device-class feature, so the disguise buys it no attack budget'
-  measured: pending
+  measured: '3210.8 -> 3426.4'
+  verdict: open
+  note: 'red as measured, but not because of the MA: 0 of the 370 rule x attacker decision times moved (ma-replay-attackers.csv). gt.device_exposure attack_start is the first on-air edit (phase2 first_on_air). The disguise restamps secMark from the window start, 0.1-4 s before ConstPos first changes a claim, so every budget starts earlier. The record doc says first falsified message: fix the start (first_falsified), or measure from the payload start'
 - id: P1.E8.ev0-locked-attack
   base: EV0
   variant: EV0
@@ -2002,7 +2019,8 @@ rows:
   expect: ge
   value: 0.15
   source: 'about 25 % of attackers are locked at the Tampa share 0.230 (p1-realdata-baseline T8), and the MA reads the evidence secMark (item F fix)'
-  measured: pending
+  measured: '0.248'
+  verdict: pass
 - id: P1.E8.evp-free
   base: EVP
   variant: EVP
@@ -2011,7 +2029,9 @@ rows:
   expect: eq
   value: 0.0
   source: 'a 25 ms constant shift puts every attack report 24-26 ms off the 50 ms epoch: the MA reads none as locked'
-  measured: pending
+  measured: '0.039'
+  verdict: wrong-expectation
+  note: 'the two locked attackers read 0.0 locked in EVP (85 and 19 reports). The 0.039 comes from the free attackers: their own phase is uniform and stays uniform under a constant shift, so about 2 of 50 ms land in the locked window by chance. The expectation assumed every attacker was locked'
 - id: P1.E8.l1-honest-locked
   base: L1
   variant: L1
@@ -2020,7 +2040,8 @@ rows:
   expect: ge
   value: 0.8
   source: 'item F: with every OBU locked the MA reads honest reports as locked (locked > 80 % within 1 ms, p1-realdata-baseline T7); from generationTime (27 ms jitter) about 6 % would read locked'
-  measured: pending
+  measured: '1.000 (fault: the pre-fix release binary f4982788 on the same scenario reads 0.091)'
+  verdict: pass
 - id: P1.E8.rerun
   base: EVP
   variant: EVP2
@@ -2028,7 +2049,8 @@ rows:
   measure: digest.record
   expect: identical
   source: 'same seed, same build, byte-identical record stream'
-  measured: pending
+  measured: '72b8acb27a8b0d25 -> 72b8acb27a8b0d25'
+  verdict: pass
 - id: P1.E8.evp-catch
   base: EV0
   variant: EVP
@@ -2037,7 +2059,9 @@ rows:
   expect: ratio
   band: [1.0, 1000.0]
   source: 'reported, not predicted in size: the attack budget the disguise buys under catch (a ratio of 1 is "buys nothing")'
-  measured: pending
+  measured: '1147.4 -> 1233.6 (ratio 1.075)'
+  verdict: pass
+  note: 'in band, but the whole gain is the attack_start shift: 0 decisions moved. The disguise buys catch nothing here: 99 % of attack reports lead with constantPositionFrozen, which catch weighs 1 whatever the stated accuracy'
 - id: P1.E8.evp-cluster
   base: EV0
   variant: EVP
@@ -2046,7 +2070,9 @@ rows:
   expect: ratio
   band: [1.0, 1000.0]
   source: 'reported, not predicted in size: the attack budget the disguise buys under cluster (a ratio of 1 is "buys nothing")'
-  measured: pending
+  measured: '826.2 -> 869.4 (ratio 1.052)'
+  verdict: pass
+  note: 'in band, but the whole gain is the attack_start shift: 0 decisions moved. Per-report classes leak: about 4 % of the reports of free devices read locked (honest locked share 0.078), so the locked class is crowded too and both classes need m*k'
 - id: P1.E8.eva-catch
   base: EV0
   variant: EVA
@@ -2055,7 +2081,9 @@ rows:
   expect: ratio
   band: [1.0, 1000.0]
   source: 'reported, not predicted in size: the attack budget the disguise buys under catch (a ratio of 1 is "buys nothing")'
-  measured: pending
+  measured: '1147.4 -> 1233.6 (ratio 1.075)'
+  verdict: pass
+  note: 'in band, but the whole gain is the attack_start shift: 0 decisions moved. The disguise buys catch nothing here: 99 % of attack reports lead with constantPositionFrozen, which catch weighs 1 whatever the stated accuracy'
 - id: P1.E8.eva-cluster
   base: EV0
   variant: EVA
@@ -2064,7 +2092,9 @@ rows:
   expect: ratio
   band: [1.0, 1000.0]
   source: 'reported, not predicted in size: the attack budget the disguise buys under cluster (a ratio of 1 is "buys nothing")'
-  measured: pending
+  measured: '826.2 -> 869.4 (ratio 1.052)'
+  verdict: pass
+  note: 'in band, but the whole gain is the attack_start shift: 0 decisions moved. Per-report classes leak: about 4 % of the reports of free devices read locked (honest locked share 0.078), so the locked class is crowded too and both classes need m*k'
 - id: P1.E8.evb-catch
   base: EV0
   variant: EVB
@@ -2073,7 +2103,9 @@ rows:
   expect: ratio
   band: [1.0, 1000.0]
   source: 'reported, not predicted in size: the attack budget the disguise buys under catch (a ratio of 1 is "buys nothing")'
-  measured: pending
+  measured: '1147.4 -> 1233.6 (ratio 1.075)'
+  verdict: pass
+  note: 'in band, but the whole gain is the attack_start shift: 0 decisions moved. The disguise buys catch nothing here: 99 % of attack reports lead with constantPositionFrozen, which catch weighs 1 whatever the stated accuracy'
 - id: P1.E8.evb-cluster
   base: EV0
   variant: EVB
@@ -2082,7 +2114,9 @@ rows:
   expect: ratio
   band: [1.0, 1000.0]
   source: 'reported, not predicted in size: the attack budget the disguise buys under cluster (a ratio of 1 is "buys nothing")'
-  measured: pending
+  measured: '826.2 -> 869.4 (ratio 1.052)'
+  verdict: pass
+  note: 'in band, but the whole gain is the attack_start shift: 0 decisions moved. Per-report classes leak: about 4 % of the reports of free devices read locked (honest locked share 0.078), so the locked class is crowded too and both classes need m*k'
 - id: P1.E8.l1b-catch
   base: L1
   variant: L1B
@@ -2092,6 +2126,7 @@ rows:
   band: [1.0, 1000.0]
   source: 'reported: the budget under catch when the disguised attackers are the only free class'
   measured: pending
+  note: 'not run in this package (run budget): L1 ran, L1B did not'
 - id: P1.E8.l1b-cluster
   base: L1
   variant: L1B
@@ -2101,3 +2136,4 @@ rows:
   band: [1.0, 1000.0]
   source: 'reported: the budget under cluster when the disguised attackers are the only free class'
   measured: pending
+  note: 'not run in this package (run budget): L1 ran, L1B did not'
