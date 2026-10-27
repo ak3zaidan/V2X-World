@@ -1,0 +1,12 @@
+# P1-E5 follow-up, pre-registered after E5-D1 failed its KS test: p1-e5-dsrc-l1 with the
+# high propagation tier, which adds Nakagami-m fast fading (the medium tier passes NoFading,
+# crates/v2xw-radio/src/budget.rs). Hypothesis: Tampa's multi-interval gaps are fading losses.
+schema: v2xw/scenario/1
+meta:
+  base: p1-e5-dsrc-l1.yaml
+  name: Paper 1 p1-e5-dsrc-l1-fading
+  description: P1-E5 DSRC load 1 with Nakagami fast fading (propagation tier high).
+  tags: [paper1, experiment]
+radio:
+  tiers:
+    propagation: high

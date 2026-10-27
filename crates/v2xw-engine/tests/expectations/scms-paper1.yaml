@@ -305,6 +305,10 @@ runs:
     scenario: scenarios/real-world/paper1/p1-attack.yaml
     base: E6-A
     note: not a simulation - the offline store replay of E6-A at a 16,384 B quota (tools/realworld/paper1/e6replay.py)
+  E5-D1H:
+    scenario: scenarios/real-world/paper1/p1-e5-dsrc-l1-fading.yaml
+    base: E5-D1
+    note: E5-D1 with propagation tier high (Nakagami fading); pre-registered after E5-D1 failed its KS row
 rows:
 - id: P1.TS.rp-share0
   base: B
@@ -2423,4 +2427,22 @@ rows:
   expect: ratio
   band: [0.8, 1.25]
   source: 'the replay''s quota deletions at 4,500 B are within 20 % of the engine''s'
+  measured: pending
+- id: P1.E5.ks-dsrc-l1-fading
+  base: E5-D1H
+  variant: E5-D1H
+  area: metrics
+  measure: x.e5.rsu.ks_tampa
+  expect: le
+  value: 0.0748
+  source: 'hypothesis written after E5-D1 failed P1.E5.ks-dsrc-l1 (engine one-interval share 0.898 vs Tampa 0.759, p90 151 vs 303 ms): Tampa''s multi-interval gaps are fast-fading losses the medium tier (NoFading) cannot make; with Nakagami-m fading the KS distance falls inside the same pre-fixed tolerance'
+  measured: pending
+- id: P1.E5.fading-1int-down
+  base: E5-D1
+  variant: E5-D1H
+  area: metrics
+  measure: x.e5.rsu.share_1int
+  expect: down
+  min_change: 0.0
+  source: 'fast fading turns some always-decoded links into intermittent ones, so fewer gaps are a single interval'
   measured: pending
