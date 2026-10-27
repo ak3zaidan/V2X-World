@@ -418,3 +418,56 @@ fn the_etsi_gate_spaces_each_channel_on_its_own() {
     assert_eq!(map_held, 0, "a MAP waited at a gate its own channel never shut");
     assert_eq!(spat_held, 0, "a SPaT waited at a gate its own channel never shut");
 }
+
+/// Frames by (sender, message type, channel).
+fn sent_by(recorder: &MemoryRecorder) -> BTreeMap<(u64, String, u16), usize> {
+    let mut out = BTreeMap::new();
+    for v in views::<NodeTxView>(recorder) {
+        if let (Some(m), Some(c)) = (v.msg_type, v.channel) {
+            *out.entry((u64::from(v.node.index()), m, c)).or_insert(0) += 1;
+        }
+    }
+    out
+}
+
+/// radio-fix3 R3.2.JAM: a jammer acts on its own channel. A constant jammer riding one
+/// roadside unit on the safety channel (172) holds that unit's 172 radio busy, so its SPaT
+/// waits (the denial of channel access a constant jammer causes); its second radio on the
+/// service channel (174) senses through its own channel filter, where the jammer is not,
+/// so its MAP goes out as often as with no jammer. Before the fix the energy detector of
+/// every radio counted every jammer, whatever its channel, and the MAP was held with the
+/// SPaT. The fault that proved it: the `a.channel == channel` filter removed from the
+/// engine's carrier sense.
+#[test]
+fn a_safety_channel_jammer_leaves_the_service_radio_free() {
+    let mapped = || {
+        with_map(
+            intersections(8.0),
+            serde_json::json!([{"channel": 174, "messages": ["map"]}]),
+        )
+    };
+    let (_, clean) = run(mapped());
+    let clean_n = sent_by(&clean);
+    let rsu = clean_n
+        .keys()
+        .find(|(_, m, _)| m == "spat")
+        .map(|(n, _, _)| *n)
+        .expect("a SPaT sender");
+    let mut s = mapped();
+    s.threats.jammers = vec![v2xw_engine::scenario::ModelChoice {
+        id: "attacker/jammer/constant".to_string(),
+        params: serde_json::json!({ "follow_node": rsu, "power_dbm": 23.0, "from_s": 2.0 }),
+    }];
+    let (_, jammed) = run(s);
+    let jammed_n = sent_by(&jammed);
+    let n = |m: &BTreeMap<(u64, String, u16), usize>, t: &str, c: u16| {
+        m.get(&(rsu, t.to_string(), c)).copied().unwrap_or(0)
+    };
+    let (spat0, spat1) = (n(&clean_n, "spat", 172), n(&jammed_n, "spat", 172));
+    let (map0, map1) = (n(&clean_n, "map", 174), n(&jammed_n, "map", 174));
+    println!("unit {rsu}: SPaT {spat0} -> {spat1}, MAP {map0} -> {map1}");
+    assert!(spat0 >= 60 && map0 >= 6, "too few frames: {spat0} SPaT, {map0} MAP");
+    // The jammer denies the safety channel from 2 s: at most the first 2 s of SPaT.
+    assert!(spat1 * 2 < spat0, "the jammer did not deny the safety channel: {spat0} -> {spat1}");
+    assert!(map1 + 1 >= map0, "the service radio was held by a 172 jammer: MAP {map0} -> {map1}");
+}

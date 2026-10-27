@@ -785,6 +785,7 @@ impl Engine {
     /// every receiver of that frame.
     pub(super) fn react_to_frame(
         &mut self,
+        frame_channel: ChannelId,
         tx: NodeId,
         tx_pos: Vec3,
         tx_power_dbm: f64,
@@ -796,6 +797,12 @@ impl Engine {
             return;
         }
         let channel = self.access_channel();
+        // A reactive jammer listens on the channel it jams: a frame on the channel map's
+        // service channel is not one it hears, and its receivers there are not the ones
+        // its energy lands on (radio-fix3 R3.2.JAM).
+        if frame_channel != channel {
+            return;
+        }
         let count = self.jamming.jammers.len();
         for k in 0..count {
             let (id, kind, from_a, to_a) = {

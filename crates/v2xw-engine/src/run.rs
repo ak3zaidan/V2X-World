@@ -6868,8 +6868,15 @@ impl Engine {
                 since = since.min(state.start);
             }
         }
+        // Only a jammer on this radio's channel: the energy detector is behind the
+        // channel filter (radio-fix3 R3.2.JAM; the PHY's SINR and the CBR meter were
+        // already per channel).
         for a in self.phy.jamming().at(node) {
-            if a.power_dbm >= threshold && a.window.from <= now && a.window.to > now {
+            if a.channel == channel
+                && a.power_dbm >= threshold
+                && a.window.from <= now
+                && a.window.to > now
+            {
                 since = since.min(a.window.from);
             }
         }
@@ -6908,8 +6915,13 @@ impl Engine {
         }
         // A jammer above the energy-detection threshold holds the medium busy for as long
         // as its window lasts: the denial of channel access a constant jammer causes.
+        // On this radio's channel only (radio-fix3 R3.2.JAM).
         for a in self.phy.jamming().at(node) {
-            if a.power_dbm >= threshold && a.window.from <= now && a.window.to > now {
+            if a.channel == channel
+                && a.power_dbm >= threshold
+                && a.window.from <= now
+                && a.window.to > now
+            {
                 clear = clear.max(a.window.to);
             }
         }
@@ -7242,6 +7254,7 @@ impl Engine {
         }
         // A reactive jammer that hears this frame jams it at its receivers.
         self.react_to_frame(
+            state.descriptor.channel,
             state.tx,
             state.tx_pos,
             state.descriptor.tx_power_dbm,
