@@ -1,0 +1,6 @@
+# detect-fix3: ts-base with every OBU stating Orem's constant 2.00 m one-sigma accuracy.
+schema: v2xw/scenario/1
+meta: {base: ts-base.yaml, name: detect-fix3 ts orem accuracy}
+actors:
+  vehicles:
+    gnss: {smoothing_tau_s: 100.0, static_hold_mps: 0.3, stated_sigma_m: 2.0}
