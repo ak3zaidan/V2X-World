@@ -86,6 +86,7 @@ def summarise(run_dir, grid_deg=GRID_DEG, band_m=BAND_M):
     subject_of, corr_of_rep = {}, {}
     relayed = set()
     ma = []                                           # (t_s, ma, set_aside)
+    stored = []                                       # (t_s, 'stored', subject, corridor)
     cases = 0
     with open(os.path.join(run_dir, 'recording.mcap'), 'rb') as f:
         for _, ch, m in make_reader(f).iter_messages():
@@ -117,11 +118,19 @@ def summarise(run_dir, grid_deg=GRID_DEG, band_m=BAND_M):
                 if r not in subject_of:
                     subject_of[r] = q['subject']
                     corr_of_rep[r] = last_pos.get(q['subject'])
+                if q['fate'] == 'stored':
+                    stored.append((q['t'] / NS, 'stored', q['subject'], last_pos.get(q['subject'])))
             elif t == 'ma.received':
                 q = json.loads(m.data)
                 ma.append((q['t'] / NS, q['ma'], q.get('set_aside')))
             elif t in ('ma.case', 'pki.case'):
                 cases += 1
+    # The trigger stream: the detector verdicts (det.observation) when the recording has
+    # them, else each report put in the device's store (this build's events-level
+    # recordings carry no det.observation; the run report's verdicts_fired is the total).
+    trigger = 'det.observation' if verdicts else 'stored'
+    if not verdicts:
+        verdicts = stored
     cls = {p: devclass.classify(*devclass.locked_fraction(v)) for p, v in secmarks.items()}
     exposure = collections.defaultdict(float)
     for (p, w, k), n in expo.items():
@@ -151,7 +160,8 @@ def summarise(run_dir, grid_deg=GRID_DEG, band_m=BAND_M):
         'corridors': {'grid_deg': grid_deg, 'band_m': band_m},
         'exposure_s': dict(sorted(exposure.items())),
         'verdicts': V, 'reports': R, 'subjects': subjects, 'ma': sorted(ma, key=lambda x: (x[0], x[1])),
-        'cases': cases,
+        'cases': cases, 'trigger': trigger,
+        'verdicts_fired': int(_param(rep_txt, 'verdicts_fired', 0)),
         'not_filed': int(_param(rep_txt, 'reports_not_filed', 0)),
         'shuffle': {'window_s': _param(rep_txt, 'report_shuffle_window_s', 86400.0),
                     'threshold': _param(rep_txt, 'report_shuffle_threshold', 10000.0)},

@@ -82,7 +82,7 @@ class FitAndPredict(unittest.TestCase):
         cal, tgt = synth(1), synth(2)
         p = sg.predict(sg.fit(cal), tgt['exposure_s'], tgt['windows'])
         o = sg.observe(tgt)
-        for m in ('x.e10.verdicts', 'x.e10.stored', 'x.e10.uploaded', 'x.e10.ma_batch'):
+        for m in ('x.e10.triggers', 'x.e10.stored', 'x.e10.uploaded', 'x.e10.ma_batch'):
             self.assertLess(abs(p[m] / o[m] - 1.0), 0.2, m)
         self.assertLess(abs(p['x.e10.ma_first_t'] - o['x.e10.ma_first_t']), 120.0)
 
@@ -91,18 +91,18 @@ class FitAndPredict(unittest.TestCase):
         tgt = synth(2, scale=2.0)
         p1 = sg.predict(r, synth(2)['exposure_s'], WINDOWS)
         p2 = sg.predict(r, tgt['exposure_s'], WINDOWS)
-        self.assertAlmostEqual(p2['x.e10.verdicts'] / p1['x.e10.verdicts'], 2.0, places=6)
+        self.assertAlmostEqual(p2['x.e10.triggers'] / p1['x.e10.triggers'], 2.0, places=6)
 
     def test_unseen_cell_falls_back_to_its_class(self):
         r = sg.fit(synth(1))
         p = sg.predict(r, {'0|free|av+9': 60.0}, WINDOWS)
-        self.assertAlmostEqual(p['x.e10.verdicts'], 60.0 * r['lambda_class_per_s']['free']['randomPosition'])
+        self.assertAlmostEqual(p['x.e10.triggers'], 60.0 * r['lambda_class_per_s']['free']['randomPosition'])
 
     def test_every_fault_moves_its_measure(self):
         cal, tgt = synth(1), synth(2)
         r = sg.fit(cal)
-        moved = {'rate_x1.5': 'x.e10.verdicts', 'no_shuffle': 'x.e10.ma_first_t',
-                 'pool_class': 'x.e10.verdicts.free_share', 'drop_window1': 'x.e10.verdicts.w1',
+        moved = {'rate_x1.5': 'x.e10.triggers', 'no_shuffle': 'x.e10.ma_first_t',
+                 'pool_class': 'x.e10.triggers.free_share', 'drop_window1': 'x.e10.triggers.w1',
                  'no_conversion': 'x.e10.uploaded'}
         mixed = {'0|free|av+1': 600.0, '0|locked|av+1': 600.0}   # both classes in one corridor
         for f, m in moved.items():
@@ -165,6 +165,54 @@ class Projection(unittest.TestCase):
         out = sg.project(r, dict(self.PROFILE, quota_reports=5, drive_s_per_day=36000.0))
         self.assertGreater(sum(d['lost_quota'] for d in out['per_day']), 0)
         self.assertEqual(sum(d['uploaded'] for d in out['per_day']), 0)
+
+
+class Fill(unittest.TestCase):
+    TABLE = """# head comment
+schema: v2xw/scms-run-expectations/1
+runs:
+  X: {scenario: x}
+  E10A: {scenario: a}
+  E10S: {scenario: s}
+rows:
+- id: OTHER.row
+  base: X
+  variant: X
+  measure: m
+  expect: eq
+  value: 1
+  measured: pending
+# a comment between rows
+- id: P1.E10.a
+  base: E10S
+  variant: E10A
+  measure: x.e10.triggers
+  expect: ratio
+  band: [0.75, 1.33]
+  measured: pending
+- id: P1.E10.b
+  base: E10S
+  variant: E10A
+  measure: x.e10.triggers
+  expect: ratio
+  band: [0.75, 0.9]
+  measured: pending
+"""
+
+    def test_fill_writes_only_its_rows_and_goes_red(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, 't.yaml')
+        open(p, 'w').write(self.TABLE)
+        for run, v in (('E10A', 100.0), ('E10S', 105.0)):
+            os.makedirs(os.path.join(d, run))
+            json.dump({'x.e10.triggers': v}, open(os.path.join(d, run, 'realism.json'), 'w'))
+        sg.fill(p, d)
+        s = open(p).read()
+        self.assertIn('# a comment between rows', s)
+        self.assertEqual(s.count('measured: pending'), 1)        # OTHER.row untouched
+        self.assertIn('verdict: pass', s)                        # 0.952 in [0.75, 1.33]
+        self.assertIn('verdict: FAIL', s)                        # 0.952 outside [0.75, 0.9]
 
 
 if __name__ == '__main__':

@@ -5,6 +5,10 @@
 # strict US profile on secMark, and the report records the surrogate reads
 # (research/synthesis/p1-experiments.md, P1-E10; tools/surrogate).
 # FB3/FB4 records are not on main, so the quarter fleet stands in (task brief).
+# The run is cut at 87,300 s: day 1 holds every live second of the two-day file,
+# and the RA's one-day report shuffle releases day 1's reports at about 86,430 s. Day 2
+# is fast-forward only, and on the shared machine it cost about 88 wall-s per simulated
+# hour (2026-10-27), so it is left out.
 schema: v2xw/scenario/1
 
 meta:
@@ -14,6 +18,12 @@ meta:
     The quarter-fleet two-day Midtown SCMS benchmark with the CV-pilot BSM timing classes
     and the report records: the full engine run P1-E10's surrogate is judged against.
   tags: [paper1, validation, surrogate, benchmark, quarter]
+
+time:
+  duration_s: 87300.0
+  fast_forward:
+    - {from_s: 60.0, to_s: 43185.0}
+    - {from_s: 43215.0, to_s: 87300.0}
 
 actors:
   vehicles:

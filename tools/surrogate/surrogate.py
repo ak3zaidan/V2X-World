@@ -8,6 +8,8 @@ from engine runs and simulates nothing; nothing it prints is an engine result.
     python3 -I tools/surrogate/surrogate.py observe <summary.json> <realism.json>
     python3 -I tools/surrogate/surrogate.py predict <rates.json> <exposure-summary.json> <realism.json> [--fault F]
     python3 -I tools/surrogate/surrogate.py project <rates.json> <profile.json> <out.json>
+    python3 -I tools/surrogate/surrogate.py compare <rates.json> <target-summary.json> <runs-dir>
+    python3 -I tools/surrogate/surrogate.py fill <table.yaml> <runs-dir>
     python3 -I tools/surrogate/surrogate.py selftest <table.yaml> <runs-dir>
 
 The model, stage by stage (each stage's numbers come from the calibration run only):
@@ -62,12 +64,13 @@ def observe(S):
                                 r.get('left_with_device', DAY)) < DAY]
     batch = [m for m in S['ma'] if m[0] < DAY + 7200.0]
     out = {
-        'x.e10.verdicts': len(V),
+        'x.e10.triggers': len(V),
+        'x.e10.verdicts': S.get('verdicts_fired', len(V)) if S.get('trigger') == 'stored' else len(V),
         'x.e10.stored': sum(1 for r in R if r.get('stored', DAY) < DAY),
         'x.e10.uploaded': len(up),
         'x.e10.lost': len(lost),
         'x.e10.relay_share': (sum(1 for r in up if r['relay']) / len(up)) if up else 0.0,
-        'x.e10.verdicts.free_share': (sum(1 for v in V if v['cls'] == 'free') / len(V)) if V else 0.0,
+        'x.e10.triggers.free_share': (sum(1 for v in V if v['cls'] == 'free') / len(V)) if V else 0.0,
         'x.e10.ma_batch': len(batch),
         'x.e10.ma_first_t': S['ma'][0][0] if S['ma'] else -1.0,
         'x.e10.cases': S['cases'],
@@ -75,7 +78,7 @@ def observe(S):
     }
     for w in range(len(S['windows'])):
         if S['windows'][w][0] < DAY:
-            out[f'x.e10.verdicts.w{w}'] = sum(1 for v in V if v['w'] == w)
+            out[f'x.e10.triggers.w{w}'] = sum(1 for v in V if v['w'] == w)
     return out
 
 
@@ -151,8 +154,10 @@ def fit(S):
         'lambda_unlocated_per_s': {d: n / Etot for d, n in sorted(unloc.items())} if Etot else {},
         'dispersion_shape': _dispersion(S.get('subjects', [])),
         'conversion': conv, 'first_upload_after_window_s': first_up, 'ma': ma,
-        'shuffle': S['shuffle'], 'not_filed_per_verdict':
-            S['not_filed'] / len(S['verdicts']) if S['verdicts'] else 0.0,
+        'shuffle': S['shuffle'], 'trigger': S.get('trigger', 'det.observation'),
+        'verdicts_per_trigger': (S['verdicts_fired'] / len(S['verdicts']))
+            if S.get('trigger') == 'stored' and S['verdicts'] else 1.0,
+        'not_filed_per_trigger': S['not_filed'] / len(S['verdicts']) if S['verdicts'] else 0.0,
     }
 
 
@@ -256,12 +261,13 @@ def predict(rates, exposure_s, windows, fault=None):
         relay += s * cv['uploaded'] * cv['relay_share']
     first_up = windows[0][0] + r['first_upload_after_window_s']
     out = {
-        'x.e10.verdicts': nV,
+        'x.e10.triggers': nV,
+        'x.e10.verdicts': nV * r.get('verdicts_per_trigger', 1.0),
         'x.e10.stored': stored,
         'x.e10.uploaded': up,
         'x.e10.lost': lost,
         'x.e10.relay_share': relay / up if up else 0.0,
-        'x.e10.verdicts.free_share': by_cls.get('free', 0.0) / nV if nV else 0.0,
+        'x.e10.triggers.free_share': by_cls.get('free', 0.0) / nV if nV else 0.0,
         'x.e10.ma_batch': up * r['ma']['received_per_upload'],
         'x.e10.ma_first_t': first_up + r['ma']['first_after_first_upload_s'] if up else -1.0,
         'x.e10.cases': round(r['ma']['cases_per_received'] * up * r['ma']['received_per_upload']),
@@ -271,13 +277,13 @@ def predict(rates, exposure_s, windows, fault=None):
     corr = {}
     for (w, c, k), n in V.items():
         corr[k] = corr.get(k, 0.0) + n
-        out[f'x.e10.verdicts.w{w}'] = out.get(f'x.e10.verdicts.w{w}', 0.0) + n
+        out[f'x.e10.triggers.w{w}'] = out.get(f'x.e10.triggers.w{w}', 0.0) + n
     if unloc:
         corr['None'] = unloc
     out['corridor_profile'] = {k: v / nV for k, v in sorted(corr.items())} if nV else {}
     for w in range(len(windows)):
         if windows[w][0] < DAY:
-            out.setdefault(f'x.e10.verdicts.w{w}', 0.0)
+            out.setdefault(f'x.e10.triggers.w{w}', 0.0)
     out['x.e10.digest'] = hashlib.sha256(json.dumps(out, sort_keys=True).encode()).hexdigest()
     return out
 
@@ -324,13 +330,13 @@ def project(rates, profile):
     drive = float(P.get('drive_s_per_day', 3600.0))
     start_h = float(P.get('drive_hour_local', 8.0)) - float(P.get('t0_hour_local', 17.0))
     quota = int(P.get('quota_reports', 58))
-    per_day = [dict(day=d + 1, verdicts=0, stored=0, uploaded=0, lost_quota=0, ma=0)
+    per_day = [dict(day=d + 1, verdicts=0, stored=0, uploaded=0, lost=0, lost_quota=0, ma=0)
                for d in range(days + 2)]
-    uploads = []                              # (t, device)
+    uploads = []                              # (t, device, reports): one chunk per device-day
     for dev in range(ndev):
         u = rng.random()
         c = classes[next(i for i, x in enumerate(cum) if u <= x + 1e-12)]
-        cv = rates['conversion'].get(c, {'stored_per_verdict': 0.0, 'uploaded': 0.0})
+        cv = rates['conversion'].get(c, {'stored_per_verdict': 0.0, 'uploaded': 0.0, 'lost': 0.0})
         m = mix.get(c, {})
         msum = sum(m.values())
         rate = sum(sum(lam.get(f'{c}|{k}', lam_c.get(c, {})).values()) * e / msum
@@ -341,57 +347,65 @@ def project(rates, profile):
             t_start = d * DAY + (start_h % 24.0) * 3600.0
             n = _poisson(rng, rate * drive)
             per_day[d]['verdicts'] += n
-            s = _binom(rng, n, cv['stored_per_verdict'] if cv['stored_per_verdict'] <= 1 else 1.0)
+            s = _binom(rng, n, min(1.0, cv['stored_per_verdict']))
             per_day[d]['stored'] += s
-            k_up = _binom(rng, s, cv['uploaded'])
-            held += s - k_up
+            gone = _binom(rng, s, cv.get('lost', 0.0))
+            per_day[d]['lost'] += gone
+            # the day's new reports and the held ones get the day's upload chance
+            pool = held + s - gone
+            k_up = _binom(rng, pool, cv['uploaded'])
+            held = pool - k_up
             if held > quota:
                 per_day[d]['lost_quota'] += held - quota
                 held = quota
             per_day[d]['uploaded'] += k_up
-            for _ in range(k_up):
-                uploads.append((t_start + rng.random() * drive, dev))
-    # the RA's shuffle and the MA's k-rules
+            if k_up:
+                uploads.append((t_start + rng.random() * drive, dev, k_up))
+    # the RA's shuffle (count-based), then the MA's receipts per device
     uploads.sort()
     p_ma = rates['ma']['received_per_upload']
     ma_t = {}
-    batch, armed = [], None
-    for t, dev in uploads:
+    batch, armed, nb = [], None, 0
+
+    def release(at):
+        for dv, k in batch:
+            got = _binom(rng, k, min(1.0, p_ma))
+            if got:
+                ma_t.setdefault(dv, []).append((at, got))
+    for t, dev, k in uploads:
         if armed is not None and t >= armed + W:
-            for dv in batch:
-                ma_t.setdefault(dv, []).append(armed + W)
-            batch, armed = [], None
+            release(armed + W)
+            batch, armed, nb = [], None, 0
         if armed is None:
             armed = t
-        batch.append(dev)
-        if len(batch) >= thr:
-            for dv in batch:
-                ma_t.setdefault(dv, []).append(t)
-            batch, armed = [], None
+        batch.append((dev, k))
+        nb += k
+        if nb >= thr:
+            release(t)
+            batch, armed, nb = [], None, 0
     if batch:
-        for dv in batch:
-            ma_t.setdefault(dv, []).append(armed + W)
-    for dv in list(ma_t):
-        ma_t[dv] = [t for t in ma_t[dv] if rng.random() < p_ma]
+        release(armed + W)
     for ts in ma_t.values():
-        for t in ts:
+        for t, k in ts:
             d = int(t // DAY)
             if d < len(per_day):
-                per_day[d]['ma'] += 1
+                per_day[d]['ma'] += k
     win = float(P.get('window_days', 7)) * DAY
     rules = {}
+    dev_h = ndev * drive * days / 3600.0
     for k in P.get('k_rules', [1, 2, 5, 10, 20, 50]):
         blocked = 0
         for ts in ma_t.values():
             ts = sorted(ts)
-            j = 0
+            j, run = 0, 0
             for i in range(len(ts)):
-                while ts[i] - ts[j] >= win:
+                run += ts[i][1]
+                while ts[i][0] - ts[j][0] >= win:
+                    run -= ts[j][1]
                     j += 1
-                if i - j + 1 >= k:
+                if run >= k:
                     blocked += 1
                     break
-        dev_h = ndev * drive * days / 3600.0
         rules[str(k)] = {'honest_blocked': blocked,
                          'per_1e6_device_hours': blocked / dev_h * 1e6 if dev_h else 0.0}
     return {'schema': 'v2xw.surrogate.projection.v1', 'label': 'analytical',
@@ -474,6 +488,38 @@ def selftest(table, runs_dir):
     return 1 if bad else 0
 
 
+def fill(table, runs_dir):
+    """Judges the P1.E10 rows on `<runs-dir>/<run>/realism.json` and writes each row's
+    `measured` and `verdict` in place, leaving every other row and comment untouched
+    (matrix.py --fill re-dumps the whole file)."""
+    doc, rows = e10_rows(table)
+    meas = {}
+    for run in ('E10A', 'E10S', 'E10S2', 'E10SU'):
+        p = os.path.join(runs_dir, run, 'realism.json')
+        meas[run] = json.load(open(p)) if os.path.exists(p) else {}
+    res = judge_rows(rows, meas)
+    lines = open(table).read().split('\n')
+    out, cur = [], None
+    for ln in lines:
+        if ln.startswith('- id: '):
+            cur = ln[6:].strip()
+        if cur in res and ln.startswith('  measured:'):
+            ok, shown = res[cur]
+            out.append(f'  measured: {json.dumps(shown)}')
+            out.append(f"  verdict: {'pass' if ok else ('MISSING' if ok is None else 'FAIL')}")
+            continue
+        if cur in res and ln.startswith('  verdict:'):
+            continue
+        out.append(ln)
+    open(table, 'w').write('\n'.join(out))
+    tally = {}
+    for i, (ok, shown) in res.items():
+        st = 'PASS' if ok else ('MISSING' if ok is None else 'FAIL')
+        tally[st] = tally.get(st, 0) + 1
+        print(f'{st:7} {i:24} {shown}'[:160])
+    print('e10:', tally)
+
+
 def _f(v):
     return f'{v:.4g}' if isinstance(v, float) else str(v)[:12]
 
@@ -502,6 +548,8 @@ def main(argv):
         _dump(project(load(argv[2]), load(argv[3])), argv[4])
     elif cmd == 'selftest':
         return selftest(argv[2], argv[3])
+    elif cmd == 'fill':
+        fill(argv[2], argv[3])
     elif cmd == 'compare':
         # compare <rates.json> <target-summary.json> <runs-dir>: writes the realism.json of
         # E10A (engine), E10S and E10S2 (prediction on the target's exposure, twice) and

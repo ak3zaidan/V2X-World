@@ -1,0 +1,12 @@
+{
+ "_about": "P1-E10 projection profile (ANALYTICAL). A week of a Midtown-like honest fleet at the calibration's class mix. ASSUMPTIONS: one hour of driving per device per day (US daily driving time is about an hour per driver; NHTS 2017 order of magnitude), starting 08:00 local, every day; rates held at the calibration's (rush hour, quarter fleet); SM-MBR store quota 58 reports (the engine's 64 KiB / 1,119 B); MA rule: k LA-linked receipts in a rolling 7 days.",
+ "devices": 10000,
+ "days": 7,
+ "seed": 1,
+ "drive_s_per_day": 3600.0,
+ "drive_hour_local": 8.0,
+ "t0_hour_local": 17.0,
+ "quota_reports": 58,
+ "window_days": 7,
+ "k_rules": [1, 2, 5, 10, 20, 50, 100]
+}

@@ -48,4 +48,18 @@ Each row names the injected surrogate faults that must turn it red (`surrogate.p
 selftest`): rates ×1.5, no shuffle, classes pooled, corridors pooled or shifted one band,
 the rollover window dropped, the store stage removed, relay share flipped, and 1 % cases.
 
+**Amendments, made before either run was read (2026-10-27).**
+
+1. This build's events-level recording has no `det.observation` channel; a format check on
+   the calibration run's first window found none. So the per-class, per-corridor trigger is
+   the report put in the device's store (`pki.report_fate` `stored`). The verdict total is
+   the run report's `verdicts_fired`, predicted as triggers × the calibration's verdicts
+   per trigger. The window, share and corridor rows now read triggers. The bands are
+   unchanged.
+2. Both runs stop at 87,300 s. Day 2 of the file is fast-forward only, and on the
+   shared machine the first attempt ran at 88-128 wall-s per simulated hour. Day 1 and the
+   RA's release of its reports (about 86,430 s) are inside it. The first attempt on the
+   450 MB tiny slots was stopped by the slot's memory cap at the rollover window (462 MB);
+   the runs were repeated on the 1.2 GB slot.
+
 **Result.** Pending: the runs had not been read when this was committed.

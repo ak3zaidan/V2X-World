@@ -1894,6 +1894,10 @@ rows:
 # receipt within 120 s (the shuffle is one day after the first upload, which lands inside
 # the 0-60 s window), and the case count exactly. `fault` names the injected surrogate
 # faults (surrogate.py FAULTS) that must turn the row red (surrogate.py selftest).
+# Amended before either run was read (2026-10-27): this build's events-level recording has
+# no det.observation channel, so the per-class, per-corridor trigger is the report put in
+# the device's store (pki.report_fate stored); the verdict total is the run report's
+# verdicts_fired. Bands unchanged.
 - id: P1.E10.verdicts
   base: E10S
   variant: E10A
@@ -1902,23 +1906,23 @@ rows:
   expect: ratio
   band: [0.75, 1.33]
   fault: rate_x1.5
-  source: day-1 detector verdicts, per-class per-corridor rates x the target's exposure
+  source: day-1 detector verdicts (run report verdicts_fired) = triggers x the calibration's verdicts per trigger
   measured: pending
-- id: P1.E10.verdicts-w0
+- id: P1.E10.triggers-w0
   base: E10S
   variant: E10A
   area: surrogate
-  measure: x.e10.verdicts.w0
+  measure: x.e10.triggers.w0
   expect: ratio
   band: [0.6, 1.67]
   fault: shift_corridor
   source: the rush-hour window (0-60 s, inside the 4x demand fill)
   measured: pending
-- id: P1.E10.verdicts-w1
+- id: P1.E10.triggers-w1
   base: E10S
   variant: E10A
   area: surrogate
-  measure: x.e10.verdicts.w1
+  measure: x.e10.triggers.w1
   expect: ratio
   band: [0.6, 1.67]
   fault: drop_window1 shift_corridor
@@ -1928,11 +1932,11 @@ rows:
   base: E10S
   variant: E10A
   area: surrogate
-  measure: x.e10.verdicts.free_share
+  measure: x.e10.triggers.free_share
   expect: delta
   band: [-0.10, 0.10]
   fault: pool_class
-  source: the free (secMark not on the fix epoch) class's share of verdicts, P1-E2 classifier
+  source: the free (secMark not on the fix epoch) class's share of triggers, P1-E2 classifier
   measured: pending
 - id: P1.E10.corridor-tvd
   base: E10S
@@ -1942,7 +1946,7 @@ rows:
   expect: le
   value: 0.15
   fault: shift_corridor
-  source: total-variation distance between the engine's and the surrogate's verdicts by avenue band
+  source: total-variation distance between the engine's and the surrogate's triggers by avenue band
   measured: pending
 - id: P1.E10.stored
   base: E10S
@@ -2037,7 +2041,7 @@ rows:
   base: E10SU
   variant: E10A
   area: surrogate
-  measure: x.e10.verdicts.free_share
+  measure: x.e10.triggers.free_share
   expect: delta
   band: [-0.10, 0.10]
   fault: pool_class
