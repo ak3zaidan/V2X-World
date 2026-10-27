@@ -198,6 +198,23 @@ rows:
     gate holds every MAP sent within 25 ms of the unit's last SPaT (about a quarter of them)
   source: ETSI TS 102 687 V1.2.1 Annex A (adaptive gate, T_off per channel CBR); EN 302 571 §4.2.10.4
   fault: dcc_service never built (one gate for both radios)
+  measured: "map held 0/40, spat held 0/398 -- and the same with the fault in"
+  verdict: wrong-expectation
+  note: >-
+    A check that could not fail: a unit generates SPaT and MAP in different node ticks, over
+    40 ms apart (probe: closest MAP 40.6 ms from a SPaT, at 1 s and at 130 ms MAP intervals),
+    so a shared 25 ms gate never binds at low load. Replaced by R3.2.DCC2
+- id: R3.2.DCC2
+  test: v2xw-engine tests/multichannel.rs the_etsi_gate_spaces_each_channel_on_its_own (rewritten)
+  disclosure: written after R3.2.DCC's test passed with its fault in
+  expect: >-
+    Where per-channel gates differ from a shared one is load: a constant 23 dBm jammer riding
+    a unit on 172 drives that radio's CBR to 1, so 172's adaptive gate has delta at delta_min
+    and T_off of hundreds of ms (capped at 1 s). The unit's MAP on 174 every 100 ms passes a
+    gate fed with 174's CBR (T_off 25 ms), so it sends at most 2 fewer MAPs than with no
+    jammer; a gate shared with 172 throttles it to a few a second
+  source: ETSI TS 102 687 V1.2.1 Annex A (delta from the gate's channel CBR, T_off <= 1 s)
+  fault: dcc_service never built (one gate for both radios)
   measured: pending
 - id: R3.2.JAM
   test: v2xw-engine tests/multichannel.rs a_safety_channel_jammer_leaves_the_service_radio_free
@@ -210,7 +227,17 @@ rows:
     every channel, and a reactive jammer reacted to service-channel frames
   source: IEEE 802.11-2020 §17.3.10.6 (CCA on the operating channel); IEEE 1609.4-2016 §6.2.5
   fault: the a.channel == channel filter removed from medium_busy_since / medium_idle_at
-  measured: pending
+  measured: "unit 0: SPaT 80 -> 20, MAP 8 -> 8"
+  verdict: pass
+  fault: "the a.channel == ch filter removed from JammingField::power_mw (the energy the PHY's CCA reads): MAP 8 -> 2, red"
+  note: >-
+    The row's stated fault did not turn the test red (re-run 2026-10-27): the PHY's CCA was
+    already per channel (JammingField::power_mw filters by channel), and the engine's
+    medium_busy_since / medium_idle_at only date a busy period the CCA has declared, so the
+    "carrier sense counted it on every channel" premise was wrong and that part of the fix
+    (57272543) is a consistency change with no measured effect. The reactive jammer's channel
+    filter (react_to_frame) is a real fix but no test pins it yet (open). The test is kept
+    with the PHY-level fault, which it catches
 - id: R3.2.P2-14
   test: v2xw-engine tests/phase2.rs without_either_distribution_path_the_revocation_never_reaches_a_vehicle
   expect: >-
@@ -221,6 +248,7 @@ rows:
   fault: "the recorder keeping a channel no record is written on (no unit row, red)"
   measured: "pass, peak 94 MB (was 2,554 MB), 168 s wall (test profile)"
   verdict: pass
+  fault: "the recorder keeping proto.revocationX: phase2.rs:407 (no unit row), red"
 - id: R3.2.SUITES
   test: v2xw-engine tests scms_scale, radio_channel (each binary alone)
   expect: green on the merged tree with this branch's changes (no expectation in them moved)
@@ -350,7 +378,9 @@ rows:
     services it was a town street, and the traction-loss service used its urban repetition
   source: C2C-CC RS 2007 / RS 2002 (R1.6.10); FHWA-SA-12-004 (55 mph freeway floor)
   fault: street_class returning Residential always
-  measured: pending
+  measured: "pass; the built-in highway's streets are Motorway (were Residential)"
+  verdict: fixed
+  fault: "street_class returning Residential always: procedural.rs:1725 assertion, red"
 - id: R3.3.FREE
   run: H-FREE
   metric: DENMs sent by cause (trafficCondition 1, dangerousEndOfQueue 27, adhesion 6)
