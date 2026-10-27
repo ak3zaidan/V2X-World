@@ -56,8 +56,8 @@ use v2xw_core::geom::Vec3;
 use v2xw_core::ids::{JunctionId, LaneId};
 use v2xw_core::time::{Duration, SimTime, WallClock};
 use v2xw_msg::j2735::map::{
-    Connection, GenericLane, IntersectionGeometry, LaneAttributes, LaneDirection, MapData, NodeXy,
-    Position3D, lane_width_cm, xy_offset,
+    Connection, CrosswalkLaneAttributes, GenericLane, IntersectionGeometry, LaneAttributes,
+    LaneDirection, MapData, NodeXy, Position3D, lane_width_cm, xy_offset,
 };
 use v2xw_msg::j2735::spat::{
     IntersectionReferenceId, IntersectionState, IntersectionStatus, MovementEvent,
@@ -526,6 +526,41 @@ fn build_map(
             maneuvers: None,
             nodes,
             connects_to: Vec::new(),
+        });
+    }
+    // Every signalised crosswalk, as a `crosswalk` lane under its pedestrian signal group:
+    // J2735 relates a SPaT movement to the ground only through a lane's
+    // `connectsTo.signalGroup`, so a walk signal with no crosswalk lane is one no receiver
+    // can place. A crossing walked both ways is one lane (its lowest-id directed lane's
+    // centre line, walked both ways), and it names itself as the connecting lane: the
+    // movement it carries crosses the lane rather than leaving it for another.
+    let mut crossings: BTreeMap<u8, LaneId> = BTreeMap::new();
+    for h in &plan.heads {
+        if h.kind == v2xw_world::SignalHeadKind::Pedestrian {
+            let first = crossings.entry(signal_group_id(h.group)).or_insert(h.lane);
+            *first = (*first).min(h.lane);
+        }
+    }
+    for (sg, crossing) in crossings {
+        if next > 255 {
+            break;
+        }
+        let Some(lane) = world.roads.try_lane(crossing) else {
+            continue;
+        };
+        let Some(nodes) = node_list(&lane.centreline, false, reference) else {
+            continue;
+        };
+        let id = next as u8;
+        next += 1;
+        lanes.push(GenericLane {
+            lane_id: id,
+            ingress_approach: None,
+            egress_approach: None,
+            attributes: LaneAttributes::crosswalk(CrosswalkLaneAttributes::NONE),
+            maneuvers: None,
+            nodes,
+            connects_to: vec![Connection::signalised(id, sg)],
         });
     }
     if lanes.is_empty() {

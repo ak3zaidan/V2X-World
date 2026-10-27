@@ -228,7 +228,14 @@ impl SpsParams {
             cc: None,
             cbr_threshold_dbm: crate::sidelink::CBR_SRSSI_THRESHOLD_DBM,
             sensing: true,
-            srssi_ranking: true,
+            // NR mode 2 has no S-RSSI ranking: after the exclusion and the 3 dB step-up
+            // until X % of the candidates survive, the PHY reports S_A to the MAC, which
+            // picks uniformly from it (TS 38.214 §8.1.4 steps 5 to 7; TS 38.321
+            // §5.22.1.1). The 20 %-lowest-S-RSSI list is LTE's step 8 (TS 36.213
+            // §14.1.1.6) only. Before 2026-10-25 this profile ranked too, which made the
+            // candidate percentage the size of a ranked list rather than the floor of
+            // S_A (radio-2026-10-24.md §5, the `candidate_percent` row).
+            srssi_ranking: false,
             reevaluation: true,
             preemption: true,
             max_per_reserve: 3,
@@ -831,12 +838,18 @@ impl SpsEngine {
     /// ring holds.
     #[must_use]
     pub fn sidelink_cbr(&self, node: NodeId, slot: u64) -> f64 {
+        self.sidelink_cbr_over(node, slot, 100 * u64::from(self.pool.mu.slots_per_ms()))
+    }
+
+    /// The same busy share over the last `slots` slots before `slot`, clamped to what the
+    /// sensing ring holds: the mean of the 100 ms CBR readings that tile a report window,
+    /// for a report longer than one CBR window (`mac.cbr` once per metric flush).
+    #[must_use]
+    pub fn sidelink_cbr_over(&self, node: NodeId, slot: u64, slots: u64) -> f64 {
         let Some(st) = self.ues.get(&node.index()) else {
             return 0.0;
         };
-        let window = (100 * u64::from(self.pool.mu.slots_per_ms()))
-            .min(st.history.window_slots())
-            .min(slot);
+        let window = slots.min(st.history.window_slots()).min(slot);
         let s = self.pool.subchannels();
         if window == 0 || s == 0 {
             return 0.0;
@@ -1026,18 +1039,31 @@ impl SpsEngine {
 
         for slot in history_from..trigger_slot {
             // The UE could not sense this slot, so every reservation it would have
-            // announced is unknown: exclude the resources it would have reserved.
-            let unmonitored = st.history.transmitted_in(slot);
+            // announced is unknown: exclude the resources it would have reserved, on
+            // every sub-channel (TS 36.213 §14.1.1.6 step 5; TS 38.214 §8.1.4 step 5).
+            //
+            // Whatever else the engine wrote into the slot's cells does not lift this: a
+            // co-slot transmission's energy (or its in-band emission, which reaches every
+            // sub-channel) is noted at every receiver in range, the transmitting one
+            // included, but a half-duplex radio measured none of it and decoded no SCI.
+            // Before 2026-10-25 any such cell skipped the rule, so a UE that had shared
+            // its slot with a neighbour saw that slot as unsensed-and-quiet (S-RSSI 0)
+            // and re-picked it at reselection, onto the neighbour it could never hear;
+            // with exact periodic phases that made sensing collide nine times more than
+            // random selection (radio-2026-10-24.md §4, `cv2x_sensing_avoids_collisions`).
+            if st.history.transmitted_in(slot) {
+                if self.params.rri.0 > 0 {
+                    let period = self.params.rri.slots(self.pool.mu);
+                    let mut t = slot + period;
+                    while t <= to {
+                        drop_resource(t, 0, s, &mut keep);
+                        t += period;
+                    }
+                }
+                continue;
+            }
             for sc in 0..s {
                 let Some(cell) = st.history.cell(slot, sc) else {
-                    if unmonitored && self.params.rri.0 > 0 {
-                        let period = self.params.rri.slots(self.pool.mu);
-                        let mut t = slot + period;
-                        while t <= to {
-                            drop_resource(t, sc, sc + 1, &mut keep);
-                            t += period;
-                        }
-                    }
                     continue;
                 };
                 if cell.rri_slots == 0 || cell.rsrp_dbm < threshold_dbm {
@@ -1108,40 +1134,9 @@ impl SpsEngine {
             let mut scored: Vec<(SlResource, f64, u64)> = surviving
                 .iter()
                 .map(|r| {
-                    let mut acc = 0.0;
-                    if let Some(st) = st {
-                        // S-RSSI averaged over the slots n − T·j, j = 1..10
-                        // [TS 36.214 §5.1.28 via 04-models.md §5.1 step 5].
-                        //
-                        // Clamped to the slots the sensing window actually holds. This is
-                        // not a refinement, it is a correctness condition: a pool whose
-                        // sensing window is 100 slots (`sl-SensingWindow-r16 ms100` at
-                        // µ = 0) and whose reservation period is 100 ms has room for
-                        // *one* period of history, and asking the ring for
-                        // `slot − 100·j` at `j >= 2` reads a cell that has since been
-                        // overwritten by a newer slot. Unclamped, every sample came back
-                        // zero, every candidate tied, and the tie-break below then handed
-                        // every UE the same "quietest" resources — which measured as
-                        // sensing being *worse* than random selection.
-                        let mut samples = Vec::with_capacity(10);
-                        for j in 1..=10u64 {
-                            let Some(slot) = r.slot.checked_sub(period * j) else {
-                                break;
-                            };
-                            if slot > trigger_slot || trigger_slot.saturating_sub(slot) >= window {
-                                break;
-                            }
-                            let mut sum = 0.0;
-                            for sc in r.range() {
-                                sum += st.history.srssi_mw(slot, sc);
-                            }
-                            samples.push(sum);
-                        }
-                        if !samples.is_empty() {
-                            acc = v2xw_core::math::sum_ordered(samples.iter().copied())
-                                / samples.len() as f64;
-                        }
-                    }
+                    let acc = st.map_or(0.0, |st| {
+                        ranking_srssi_mw(&st.history, *r, trigger_slot, period, window)
+                    });
                     (*r, acc, tiebreak(node, *r))
                 })
                 .collect();
@@ -1412,6 +1407,53 @@ impl SpsEngine {
                     .slot_start(a.into_iter().chain(b).min().unwrap_or(0)),
             ),
         }
+    }
+}
+
+/// The S-RSSI metric step 5 ranks a candidate by, mW: the average over the slots
+/// `r.slot − period·j`, `j = 1..10`, of the S-RSSI summed over its sub-channels
+/// [TS 36.214 §5.1.28 via 04-models.md §5.1 step 5]. Zero when no slot was measured.
+///
+/// Clamped to the slots the sensing window actually holds. This is not a refinement, it is
+/// a correctness condition: a pool whose sensing window is 100 slots
+/// (`sl-SensingWindow-r16 ms100` at µ = 0) and whose reservation period is 100 ms has room
+/// for *one* period of history, and asking the ring for `slot − 100·j` at `j >= 2` reads a
+/// cell that has since been overwritten by a newer slot. Unclamped, every sample came back
+/// zero, every candidate tied, and the tie-break then handed every UE the same "quietest"
+/// resources — which measured as sensing being *worse* than random selection.
+///
+/// Only the slots the UE monitored carry a measurement (TS 36.213 §14.1.1.6 steps 2 and 8:
+/// the UE monitors every subframe except those it transmits in), so the average is over
+/// those. Before 2026-10-25 a slot it transmitted in counted as a 0 mW sample, which
+/// ranked a candidate quieter the more of its history fell on the UE's own transmissions.
+fn ranking_srssi_mw(
+    history: &SensingHistory,
+    r: SlResource,
+    trigger_slot: u64,
+    period: u64,
+    window: u64,
+) -> f64 {
+    let mut samples = Vec::with_capacity(10);
+    for j in 1..=10u64 {
+        let Some(slot) = r.slot.checked_sub(period * j) else {
+            break;
+        };
+        if slot > trigger_slot || trigger_slot.saturating_sub(slot) >= window {
+            break;
+        }
+        if history.transmitted_in(slot) {
+            continue;
+        }
+        let mut sum = 0.0;
+        for sc in r.range() {
+            sum += history.srssi_mw(slot, sc);
+        }
+        samples.push(sum);
+    }
+    if samples.is_empty() {
+        0.0
+    } else {
+        v2xw_core::math::sum_ordered(samples.iter().copied()) / samples.len() as f64
     }
 }
 
@@ -1782,9 +1824,12 @@ fn card(tier: Tier, pool: &PoolConfig, params: &SpsParams) -> ModelCard {
                             candidate set with the lowest metric; pick uniformly"
                 .to_string(),
             notes: Some(
-                "|S_B| = R_sel·|S_A_total| per TS 36.213 §14.1.1.6, not R_sel of the \
-                 survivors: the two readings differ by a factor of R_sel and the second \
-                 concentrates every UE onto the same few resources under load."
+                "LTE Mode 4 only (TS 36.213 §14.1.1.6 step 8); NR Mode 2 picks uniformly \
+                 from the exclusion's survivors S_A (TS 38.214 §8.1.4). The average skips \
+                 the slots the UE transmitted in. |S_B| = R_sel·|S_A_total| per TS 36.213 \
+                 §14.1.1.6, not R_sel of the survivors: the two readings differ by a factor \
+                 of R_sel and the second concentrates every UE onto the same few resources \
+                 under load."
                     .to_string(),
             ),
         },
@@ -2040,6 +2085,105 @@ mod tests {
         // Slot 110, every sub-channel.
         assert_eq!(excluded.len(), 4);
         assert!(excluded.iter().all(|r| r.slot == 110));
+    }
+
+    /// TS 36.213 §14.1.1.6 step 5 excludes every resource an unmonitored subframe could
+    /// have reserved, whatever else landed in it. The engine notes a co-slot neighbour's
+    /// energy (and its in-band emission, which reaches every sub-channel) at every receiver
+    /// in range, the transmitting UE included; before 2026-10-25 that energy lifted the
+    /// exclusion, so the UE re-picked the slot it had shared with a neighbour it could
+    /// never hear.
+    #[test]
+    fn a_slot_the_ue_transmitted_in_stays_unsensed_when_a_neighbour_shared_it() {
+        let mut e = engine(SpsParams::molina_masegosa(10));
+        let node = NodeId::new(1);
+        e.note_transmitted(node, SlResource::new(10, 0, 1));
+        // A neighbour on sub-channels 2 and 3 of the same slot, and its emission into 1.
+        e.note_energy(node, 10, 1, -95.0);
+        e.note_energy(node, 10, 2, -70.0);
+        e.note_energy(node, 10, 3, -70.0);
+        let keep = e.exclude(node, 50, 1, -110.0);
+        let excluded: Vec<SlResource> = e
+            .candidates(50, 1)
+            .iter()
+            .zip(&keep)
+            .filter_map(|(c, k)| (!k).then_some(*c))
+            .collect();
+        assert_eq!(
+            excluded,
+            (0..4)
+                .map(|sc| SlResource::new(110, sc, 1))
+                .collect::<Vec<_>>(),
+            "slot 110 must be excluded on every sub-channel"
+        );
+    }
+
+    /// NR mode 2 reports the exclusion's survivors S_A to the MAC, which picks uniformly
+    /// (TS 38.214 §8.1.4 steps 5 to 7; TS 38.321 §5.22.1.1): there is no S-RSSI ranking,
+    /// so energy without an SCI steers nothing. Ranked (LTE's step 8), every pick here
+    /// would land on the one quiet sub-channel, which is exactly the 20 % kept.
+    #[test]
+    fn nr_mode_2_picks_from_the_survivors_without_an_srssi_ranking() {
+        let pool = PoolConfig::todisco_nr(
+            Numerology::Mu0,
+            crate::sidelink::nr_mcs(21).expect("MCS 21"),
+        );
+        let s = pool.subchannels();
+        assert_eq!(
+            s, 5,
+            "one quiet sub-channel of five is the 20 % a ranking keeps"
+        );
+        let mut e = SpsEngine::new(
+            Tier::High,
+            pool,
+            SpsParams::ali_todisco(Numerology::Mu0, true),
+        );
+        let mut ctx = TestCtx::new(5);
+        let mut loud = 0;
+        for n in 0..60u32 {
+            let node = NodeId::new(n + 100);
+            // The candidates are slots 502..517; their history slots 402..417 are loud
+            // on every sub-channel but the last.
+            for slot in 400..500u64 {
+                for sc in 0..s - 1 {
+                    e.note_energy(node, slot, sc, -60.0);
+                }
+            }
+            let out = e
+                .select(&mut ctx, node, 500, 1, SelectionReason::NoReservation)
+                .expect("selects");
+            if out.resource.subch != s - 1 {
+                loud += 1;
+            }
+        }
+        // Uniform over S_A: 4/5 of 60 = 48 on average.
+        assert!(
+            loud >= 30,
+            "{loud} of 60 picks on loud sub-channels, want about 48"
+        );
+    }
+
+    /// Step 5's S-RSSI metric averages the slots the UE monitored; one it transmitted in
+    /// measured nothing and is not a 0 mW sample (TS 36.213 §14.1.1.6 steps 2 and 8).
+    #[test]
+    fn the_srssi_metric_averages_only_the_slots_the_ue_monitored() {
+        let mut h = SensingHistory::new(4, 1000);
+        h.note_transmitted(110);
+        h.note_energy(10, 0, 2.0e-9);
+        // Candidate (210, 0): its samples are slots 110 (own transmission) and 10.
+        let m = ranking_srssi_mw(&h, SlResource::new(210, 0, 1), 205, 100, 1000);
+        assert!(
+            (m - 2.0e-9).abs() < 1e-21,
+            "metric {m:e} mW, want the one monitored sample 2e-9 mW"
+        );
+        // Nothing monitored at all reads zero.
+        let mut own = SensingHistory::new(4, 1000);
+        own.note_transmitted(110);
+        own.note_transmitted(10);
+        assert_eq!(
+            ranking_srssi_mw(&own, SlResource::new(210, 0, 1), 205, 100, 1000),
+            0.0
+        );
     }
 
     #[test]

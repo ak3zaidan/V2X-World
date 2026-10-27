@@ -279,6 +279,10 @@ pub struct SensitivityRecorder {
     access_n: u64,
     airtime_us: u64,
     airtime_n: u64,
+    /// Sum of each frame's transmit power, dBm, and the frames it covers: the power a
+    /// J2945/1 or ETSI power control leaves the radio at.
+    power_dbm_sum: f64,
+    power_n: u64,
     e2e_us: BTreeMap<u64, u64>,
     e2e_sum_us: u128,
     delivered: u64,
@@ -380,6 +384,10 @@ impl RunRecorder for SensitivityRecorder {
                     if let Some(a) = v.airtime_us {
                         self.airtime_us += a;
                         self.airtime_n += 1;
+                    }
+                    if let Some(p) = v.power_dbm {
+                        self.power_dbm_sum += p;
+                        self.power_n += 1;
                     }
                 }
             }
@@ -498,6 +506,12 @@ impl SensitivityRecorder {
         }
         if self.airtime_n > 0 {
             put("airtime_us", self.airtime_us as f64 / self.airtime_n as f64);
+        }
+        if self.power_n > 0 {
+            put(
+                "tx_power_dbm_mean",
+                self.power_dbm_sum / self.power_n as f64,
+            );
         }
         if report.air_bytes.frames > 0 {
             put(

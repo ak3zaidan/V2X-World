@@ -193,6 +193,7 @@ fn on_air_signal_groups() -> BTreeMap<u16, (BTreeSet<u8>, BTreeSet<u8>)> {
     let mut maps = 0usize;
     let mut wrong_feed_caught = 0usize;
     let mut groups_by_id: BTreeMap<u16, (BTreeSet<u8>, BTreeSet<u8>)> = BTreeMap::new();
+    let ped = v2xw_engine::infra::signal_group_id(v2xw_world::walk::PEDESTRIAN_GROUP_BASE);
     for (_, r) in rec
         .inner
         .records()
@@ -274,6 +275,19 @@ fn on_air_signal_groups() -> BTreeMap<u16, (BTreeSet<u8>, BTreeSet<u8>)> {
                         .iter()
                         .flat_map(|l| l.connects_to.iter().filter_map(|c| c.signal_group)),
                 );
+                // A pedestrian group sits on crosswalk lanes only, a vehicle group on
+                // vehicle lanes only.
+                for l in &g.lanes {
+                    for sg in l.connects_to.iter().filter_map(|c| c.signal_group) {
+                        assert_eq!(
+                            l.attributes.is_vehicle(),
+                            sg < ped,
+                            "MAP {msg}: lane {} ({:?}) under signal group {sg}",
+                            l.lane_id,
+                            l.attributes.lane_type
+                        );
+                    }
+                }
                 maps += 1;
             }
             _ => {}
@@ -292,19 +306,18 @@ fn on_air_signal_groups() -> BTreeMap<u16, (BTreeSet<u8>, BTreeSet<u8>)> {
         wrong_feed_caught * 2 > spats,
         "only {wrong_feed_caught} of {spats} SPaT disagree with the plan half a cycle on: the comparison is too loose"
     );
-    // Vehicle signal groups: every one the SPaT carries is a MAP connection's, and back.
-    // Pedestrian heads (plan groups from PEDESTRIAN_GROUP_BASE, J2735 ids from 101) are
-    // split off: the MAP codec models vehicle lanes only, so no crosswalk lane can carry
-    // them yet (`every_spat_signal_group_has_a_map_lane`, ignored, is that open defect).
-    let ped = v2xw_engine::infra::signal_group_id(v2xw_world::walk::PEDESTRIAN_GROUP_BASE);
+    // Vehicle signal groups: every one the SPaT carries is a MAP vehicle connection's, and
+    // back. Pedestrian heads (plan groups from PEDESTRIAN_GROUP_BASE, J2735 ids from 101)
+    // are on crosswalk lanes, which `every_spat_signal_group_has_a_map_lane` checks.
     for (id, (in_spat, in_map)) in &groups_by_id {
         assert!(
             !in_map.is_empty(),
             "intersection {id}: the MAP connects no lane under a signal group"
         );
         let vehicle: BTreeSet<u8> = in_spat.iter().copied().filter(|g| *g < ped).collect();
+        let in_map_vehicle: BTreeSet<u8> = in_map.iter().copied().filter(|g| *g < ped).collect();
         assert_eq!(
-            &vehicle, in_map,
+            vehicle, in_map_vehicle,
             "intersection {id}: SPaT vehicle groups vs the MAP's connection groups"
         );
     }
@@ -320,14 +333,18 @@ fn the_spat_and_map_on_the_air_are_the_plan_and_the_survey() {
 
 /// Every signal group a SPaT carries has a MAP lane under it: SAE J2735 relates a SPaT
 /// movement to lanes only through a MAP `connectsTo.signalGroup` (a crosswalk lane's, for
-/// a pedestrian head), so a receiver cannot place a group no lane names. Open: at
-/// intersection 8 the SPaT carries pedestrian groups 101-104 and the MAP names 1 and 2,
-/// because `v2xw_msg::j2735::map::LaneAttributes` models the `vehicle` lane type only
-/// (platform validation 2026-10-24, open item 7). Un-ignore when crosswalk lanes are encoded.
+/// a pedestrian head), so a receiver cannot place a group no lane names. Before crosswalk
+/// lanes were encoded, intersection 8's SPaT carried pedestrian groups 101-104 and its MAP
+/// named 1 and 2 only (platform validation 2026-10-24, open item 7).
 #[test]
-#[ignore = "open: the MAP has no crosswalk lanes, so pedestrian signal groups have no MAP lane"]
 fn every_spat_signal_group_has_a_map_lane() {
-    for (id, (in_spat, in_map)) in &on_air_signal_groups() {
+    let groups = on_air_signal_groups();
+    let ped = v2xw_engine::infra::signal_group_id(v2xw_world::walk::PEDESTRIAN_GROUP_BASE);
+    assert!(
+        groups.values().any(|(s, _)| s.iter().any(|g| *g >= ped)),
+        "no SPaT carries a pedestrian group, so the check below proves nothing"
+    );
+    for (id, (in_spat, in_map)) in &groups {
         assert_eq!(
             in_spat, in_map,
             "intersection {id}: SPaT groups vs the MAP's connection groups"
@@ -368,4 +385,38 @@ fn a_spec_row_measures_the_traffic_state_and_the_metric_samples() {
     ] {
         assert!(m.get(k).is_some(), "{k} is not measured");
     }
+}
+
+/// `mac.cbr` is the share of its own window the channel was busy, so it follows the offered
+/// airtime whatever the BSM period (ETSI TS 102 687: CBR is busy time over the
+/// measurement interval; well below saturation airtime is linear in the frame rate).
+/// Before, it was each node's last 100 ms read at the 1 s flush: with a fleet started
+/// together, a 200 ms interval left that 100 ms empty, and the busy ratio fell ×0.146
+/// where the frames fell ×0.503 (row CW.cbr-window).
+#[test]
+fn the_channel_busy_ratio_follows_the_airtime_at_any_bsm_interval() {
+    let base = Scenario::load(scenarios().join("sensitivity/dsrc-grid.yaml")).expect("loads");
+    let run = |itt_ms: u64| {
+        let mut set = BTreeMap::new();
+        set.insert("radio.dcc.enabled".to_string(), serde_json::json!(false));
+        set.insert(
+            "messages.generator".to_string(),
+            serde_json::json!({"id": "generator/bsm-j2945-1",
+                               "params": {"nominal_itt_ms": itt_ms}}),
+        );
+        let s = v2xw_engine::sensitivity::apply(&base, &set).expect("the set applies");
+        let m = v2xw_engine::sensitivity::measure(s).expect("runs");
+        let frames = m.get("report.air_by_type.bsm.frames").expect("frames");
+        let cbr = m.get("cbr_mean").expect("cbr_mean");
+        (frames, cbr)
+    };
+    let (f100, c100) = run(100);
+    let (f200, c200) = run(200);
+    let frames = f200 / f100;
+    let cbr = c200 / c100;
+    assert!((0.48..=0.52).contains(&frames), "frames x{frames:.3}");
+    assert!(
+        (0.42..=0.58).contains(&cbr),
+        "cbr_mean {c100:.4} -> {c200:.4}: x{cbr:.3} where the frames went x{frames:.3}"
+    );
 }

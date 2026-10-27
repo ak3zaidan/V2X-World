@@ -55,7 +55,7 @@
 //! │   │   ├── name  OPTIONAL   refused
 //! │   │   ├── ingressApproach OPT  ApproachID
 //! │   │   ├── egressApproach  OPT  ApproachID
-//! │   │   ├── laneAttributes   { directionalUse, sharedWith, laneType: vehicle only }
+//! │   │   ├── laneAttributes   { directionalUse, sharedWith, laneType: vehicle or crosswalk }
 //! │   │   ├── maneuvers OPT    AllowedManeuvers
 //! │   │   ├── nodeList         NodeListXY: nodes only (2..63 NodeXY), computed refused
 //! │   │   ├── connectsTo OPT   1..16 Connection
@@ -188,6 +188,11 @@ pub const LANE_SHARING_BITS: u32 = 10;
 /// 2026-09-30; the codec wrote the eight bits alone until the `pycrate` oracle ran and
 /// failed 113 of 112 MAP vectors on the missing bit).
 pub const LANE_ATTRIBUTES_VEHICLE_BITS: u32 = 8;
+/// `LaneAttributes-Crosswalk ::= BIT STRING {...} (SIZE (16))`: nine named bits, 9 to 15
+/// reserved, and a fixed size with no extension marker (SAE J2735; the pycrate oracle's
+/// crosswalk vector, `infra_oracle.py`, encodes a 16-bit string against the compiled
+/// module).
+pub const LANE_ATTRIBUTES_CROSSWALK_BITS: u32 = 16;
 /// `AllowedManeuvers ::= BIT STRING (SIZE(12))`.
 pub const ALLOWED_MANEUVERS_BITS: u32 = 12;
 
@@ -218,8 +223,10 @@ pub const NODE_LIST_NODES_INDEX: u64 = 0;
 /// Root alternatives of `LaneTypeAttributes`: vehicle, crosswalk, bikeLane, sidewalk,
 /// median, striping, trackedVehicle, parking.
 pub const LANE_TYPE_ALTERNATIVES: u64 = 8;
-/// Choice index of `LaneTypeAttributes.vehicle`, the one alternative this codec models.
+/// Choice index of `LaneTypeAttributes.vehicle`.
 pub const LANE_TYPE_VEHICLE_INDEX: u64 = 0;
+/// Choice index of `LaneTypeAttributes.crosswalk`.
+pub const LANE_TYPE_CROSSWALK_INDEX: u64 = 1;
 
 /// Bytes of the smallest MAP this codec emits: one intersection, one lane, two nodes, no
 /// optional field anywhere.
@@ -344,6 +351,57 @@ impl VehicleLaneAttributes {
     /// The union of two masks.
     pub const fn with(self, other: Self) -> Self {
         Self(self.0 | other.0)
+    }
+}
+
+/// `LaneAttributes-Crosswalk ::= BIT STRING (SIZE(16))` — a crosswalk lane's properties.
+///
+/// Right-aligned in a `u16`, ASN.1 bit `(0)` the most significant of the sixteen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct CrosswalkLaneAttributes(pub u16);
+
+impl CrosswalkLaneAttributes {
+    /// No bit set.
+    pub const NONE: Self = Self(0);
+    /// `crosswalkRevocableLane(0)`.
+    pub const REVOCABLE: Self = Self(1 << 15);
+    /// `bicyleUseAllowed(1)` (sic).
+    pub const BICYCLE_USE_ALLOWED: Self = Self(1 << 14);
+    /// `isXwalkFlyOverLane(2)`.
+    pub const FLY_OVER: Self = Self(1 << 13);
+    /// `fixedCycleTime(3)`: the walk interval is timed, not requested.
+    pub const FIXED_CYCLE_TIME: Self = Self(1 << 12);
+    /// `biDirectionalCycleTimes(4)`.
+    pub const BIDIRECTIONAL_CYCLE_TIMES: Self = Self(1 << 11);
+    /// `hasPushToWalkButton(5)`.
+    pub const PUSH_TO_WALK_BUTTON: Self = Self(1 << 10);
+    /// `audioSupport(6)`.
+    pub const AUDIO_SUPPORT: Self = Self(1 << 9);
+    /// `rfSignalRequestPresent(7)`.
+    pub const RF_SIGNAL_REQUEST: Self = Self(1 << 8);
+    /// `unsignalizedSegmentsPresent(8)`.
+    pub const UNSIGNALIZED_SEGMENTS: Self = Self(1 << 7);
+
+    /// The union of two masks.
+    pub const fn with(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
+/// `LaneTypeAttributes ::= CHOICE { … }`, the two alternatives this codec models: a
+/// motor-vehicle lane and a crosswalk. The other six (bikeLane, sidewalk, median,
+/// striping, trackedVehicle, parking) are refused on decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LaneType {
+    /// `vehicle`.
+    Vehicle(VehicleLaneAttributes),
+    /// `crosswalk`.
+    Crosswalk(CrosswalkLaneAttributes),
+}
+
+impl Default for LaneType {
+    fn default() -> Self {
+        Self::Vehicle(VehicleLaneAttributes::NONE)
     }
 }
 
@@ -561,18 +619,19 @@ impl NodeXy {
 
 /// `LaneAttributes ::= SEQUENCE { directionalUse, sharedWith, laneType, regional OPTIONAL }`
 ///
-/// `laneType` is modelled as `vehicle` only: the other seven alternatives (crosswalk,
-/// bikeLane, sidewalk, median, striping, trackedVehicle, parking) are refused on decode
-/// and cannot be constructed here, because a codec that guessed at a 16-bit bit string it
-/// had never read would shift every bit after it.
+/// `laneType` is modelled as `vehicle` or `crosswalk`: the other six alternatives
+/// (bikeLane, sidewalk, median, striping, trackedVehicle, parking) are refused on decode
+/// and cannot be constructed here. A crosswalk is what carries a pedestrian signal group
+/// on a MAP: J2735 relates a SPaT movement to lanes only through `connectsTo.signalGroup`,
+/// so without one a receiver cannot place a walk signal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct LaneAttributes {
     /// `directionalUse`.
     pub directional_use: LaneDirection,
     /// `sharedWith`.
     pub shared_with: LaneSharing,
-    /// `laneType`, restricted to the `vehicle` alternative.
-    pub vehicle: VehicleLaneAttributes,
+    /// `laneType`.
+    pub lane_type: LaneType,
 }
 
 impl LaneAttributes {
@@ -581,8 +640,22 @@ impl LaneAttributes {
         Self {
             directional_use,
             shared_with: LaneSharing::NONE,
-            vehicle: VehicleLaneAttributes::NONE,
+            lane_type: LaneType::Vehicle(VehicleLaneAttributes::NONE),
         }
+    }
+
+    /// A signalised crosswalk: walked both ways, by pedestrians.
+    pub const fn crosswalk(attributes: CrosswalkLaneAttributes) -> Self {
+        Self {
+            directional_use: LaneDirection::BOTH,
+            shared_with: LaneSharing::PEDESTRIAN_TRAFFIC,
+            lane_type: LaneType::Crosswalk(attributes),
+        }
+    }
+
+    /// True for a motor-vehicle lane: the only kind a vehicle can be matched to.
+    pub const fn is_vehicle(&self) -> bool {
+        matches!(self.lane_type, LaneType::Vehicle(_))
     }
 }
 
@@ -718,6 +791,10 @@ const F_SHARED_WITH: Field = Field::new("laneAttributes.sharedWith", "LaneSharin
 const F_LANE_TYPE: Field = Field::new("laneAttributes.laneType", "LaneTypeAttributes");
 const F_LANE_TYPE_VEHICLE: Field =
     Field::new("laneAttributes.laneType.vehicle", "LaneAttributes-Vehicle");
+const F_LANE_TYPE_CROSSWALK: Field = Field::new(
+    "laneAttributes.laneType.crosswalk",
+    "LaneAttributes-Crosswalk",
+);
 const F_MANEUVERS: Field = Field::new("genericLane.maneuvers", "AllowedManeuvers");
 const F_NODE_LIST: Field = Field::new("genericLane.nodeList", "NodeListXY");
 const F_NODES_LEN: Field = Field::new("nodeListXY.nodes", "SEQUENCE (SIZE(2..63)) OF NodeXY");
@@ -897,19 +974,38 @@ fn write_lane_attributes(w: &mut BitWriter, a: &LaneAttributes) -> Result<(), Up
         u64::from(a.shared_with.0),
         LANE_SHARING_BITS,
     )?;
-    write_choice_index(
-        w,
-        F_LANE_TYPE,
-        EXT_LANE_TYPE_ATTRIBUTES,
-        LANE_TYPE_VEHICLE_INDEX,
-        LANE_TYPE_ALTERNATIVES,
-    )?;
-    write_extensible_bit_string(
-        w,
-        F_LANE_TYPE_VEHICLE,
-        u64::from(a.vehicle.0),
-        LANE_ATTRIBUTES_VEHICLE_BITS,
-    )
+    match a.lane_type {
+        LaneType::Vehicle(v) => {
+            write_choice_index(
+                w,
+                F_LANE_TYPE,
+                EXT_LANE_TYPE_ATTRIBUTES,
+                LANE_TYPE_VEHICLE_INDEX,
+                LANE_TYPE_ALTERNATIVES,
+            )?;
+            write_extensible_bit_string(
+                w,
+                F_LANE_TYPE_VEHICLE,
+                u64::from(v.0),
+                LANE_ATTRIBUTES_VEHICLE_BITS,
+            )
+        }
+        LaneType::Crosswalk(c) => {
+            write_choice_index(
+                w,
+                F_LANE_TYPE,
+                EXT_LANE_TYPE_ATTRIBUTES,
+                LANE_TYPE_CROSSWALK_INDEX,
+                LANE_TYPE_ALTERNATIVES,
+            )?;
+            write_fixed_bit_string(
+                w,
+                F_LANE_TYPE_CROSSWALK,
+                u64::from(c.0),
+                LANE_ATTRIBUTES_CROSSWALK_BITS,
+            )
+        }
+    }
 }
 
 fn read_lane_attributes(r: &mut BitReader<'_>) -> Result<LaneAttributes, UperError> {
@@ -923,19 +1019,24 @@ fn read_lane_attributes(r: &mut BitReader<'_>) -> Result<LaneAttributes, UperErr
         EXT_LANE_TYPE_ATTRIBUTES,
         LANE_TYPE_ALTERNATIVES,
     )?;
-    if index != LANE_TYPE_VEHICLE_INDEX {
-        return Err(UperError::Unsupported {
-            construct: "LaneAttributes.laneType",
-            detail: "the lane type is not `vehicle`; this codec models motor-vehicle lanes \
-                     only, and the other alternatives' bit strings differ in length, so \
-                     reading on would desynchronise every field after them",
-        });
-    }
-    let vehicle = VehicleLaneAttributes(read_extensible_bit_string(
-        r,
-        "LaneAttributes-Vehicle",
-        LANE_ATTRIBUTES_VEHICLE_BITS,
-    )? as u8);
+    let lane_type = match index {
+        LANE_TYPE_VEHICLE_INDEX => LaneType::Vehicle(VehicleLaneAttributes(
+            read_extensible_bit_string(r, "LaneAttributes-Vehicle", LANE_ATTRIBUTES_VEHICLE_BITS)?
+                as u8,
+        )),
+        LANE_TYPE_CROSSWALK_INDEX => LaneType::Crosswalk(CrosswalkLaneAttributes(
+            read_fixed_bit_string(r, LANE_ATTRIBUTES_CROSSWALK_BITS)? as u16,
+        )),
+        _ => {
+            return Err(UperError::Unsupported {
+                construct: "LaneAttributes.laneType",
+                detail: "the lane type is neither `vehicle` nor `crosswalk`; this codec \
+                         models those two only, and the other alternatives' bit strings \
+                         were not read from the module, so reading on could desynchronise \
+                         every field after them",
+            });
+        }
+    };
     if pre.has(0) {
         return Err(UperError::Unsupported {
             construct: "LaneAttributes.regional",
@@ -946,7 +1047,7 @@ fn read_lane_attributes(r: &mut BitReader<'_>) -> Result<LaneAttributes, UperErr
     Ok(LaneAttributes {
         directional_use,
         shared_with,
-        vehicle,
+        lane_type,
     })
 }
 
@@ -1686,7 +1787,7 @@ mod tests {
         lane.attributes = LaneAttributes {
             directional_use: LaneDirection::BOTH,
             shared_with: LaneSharing::BUS.with(LaneSharing::TAXI),
-            vehicle: VehicleLaneAttributes::HOV_ONLY,
+            lane_type: LaneType::Vehicle(VehicleLaneAttributes::HOV_ONLY),
         };
         lane.nodes.push(NodeXy {
             delta: NodeOffset::Xy(XyOffset {
@@ -1743,6 +1844,53 @@ mod tests {
             encode_message_frame(&map).expect("frames").size,
             MINIMAL_MAP_MESSAGE_FRAME_SIZE_B
         );
+    }
+
+    /// A crosswalk lane is the minimal lane with the `crosswalk` alternative: its
+    /// attributes are a fixed 16-bit string where a vehicle lane's are an extension bit
+    /// and eight, so the MAP grows by 7 bits (225 + 7 = 232 bits, still 29 octets) and the
+    /// bits after the lane type stay aligned.
+    #[test]
+    fn a_crosswalk_lane_is_sixteen_attribute_bits_and_round_trips() {
+        let mut map = minimal();
+        let lane = &mut map.intersections[0].lanes[0];
+        lane.attributes = LaneAttributes::crosswalk(
+            CrosswalkLaneAttributes::FIXED_CYCLE_TIME
+                .with(CrosswalkLaneAttributes::PUSH_TO_WALK_BUTTON),
+        );
+        lane.connects_to = vec![Connection::signalised(lane.lane_id, 101)];
+        let bytes = encode_map(&map).expect("encodes").bytes;
+        let back = decode_map(&bytes).expect("decodes");
+        assert_eq!(back, map);
+        let a = back.intersections[0].lanes[0].attributes;
+        assert!(!a.is_vehicle());
+        assert_eq!(a.directional_use, LaneDirection::BOTH);
+        assert_eq!(
+            a.lane_type,
+            LaneType::Crosswalk(CrosswalkLaneAttributes(0b0001_0100_0000_0000))
+        );
+        // The lane type's bits, read back raw: choice index 1 in 1 + 3 bits, then the 16.
+        let mut w = BitWriter::new();
+        write_lane_attributes(&mut w, &a).expect("writes");
+        let raw = w.into_bytes();
+        let mut r = BitReader::new(&raw);
+        assert_eq!(
+            r.read_bits(1 + 2 + 10).expect("preamble and flags"),
+            0b0_11_0000000001
+        );
+        assert_eq!(
+            r.read_bits(4).expect("choice"),
+            0b0001,
+            "not extended, index 1"
+        );
+        assert_eq!(r.read_bits(16).expect("crosswalk"), 0b0001_0100_0000_0000);
+        // Seven bits more than the minimal vehicle lane.
+        let mut plain = minimal();
+        plain.intersections[0].lanes[0].connects_to =
+            map.intersections[0].lanes[0].connects_to.clone();
+        let vehicle = encode_map(&plain).expect("encodes");
+        let crosswalk = encode_map(&map).expect("encodes");
+        assert!(crosswalk.size >= vehicle.size && crosswalk.size <= vehicle.size + 1);
     }
 
     #[test]
@@ -1863,7 +2011,7 @@ mod tests {
             "{err}"
         );
 
-        // A lane type other than `vehicle`.
+        // A lane type other than `vehicle` and `crosswalk`.
         let mut w = BitWriter::new();
         write_preamble(&mut w, EXT_LANE_ATTRIBUTES, &[false]);
         write_fixed_bit_string(&mut w, F_DIRECTIONAL_USE, 0b10, LANE_DIRECTION_BITS)
@@ -1873,13 +2021,13 @@ mod tests {
             &mut w,
             F_LANE_TYPE,
             EXT_LANE_TYPE_ATTRIBUTES,
-            1, // crosswalk
+            2, // bikeLane
             LANE_TYPE_ALTERNATIVES,
         )
         .expect("choice");
         let bytes = w.into_bytes();
         let mut r = BitReader::new(&bytes);
-        let err = read_lane_attributes(&mut r).expect_err("a crosswalk is not modelled");
+        let err = read_lane_attributes(&mut r).expect_err("a bike lane is not modelled");
         assert!(
             matches!(err, UperError::Unsupported { construct, .. } if construct == "LaneAttributes.laneType"),
             "{err}"

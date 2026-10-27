@@ -555,16 +555,32 @@ impl NetBytes {
     }
 }
 
+/// What a MAC report's busy ratio is measured from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BusyShare {
+    /// A carrier-sensing MAC's merged busy time over the report's window: the record
+    /// carries `busy_us` and `window_us`, and the ratio is their quotient.
+    Time {
+        /// Busy time inside the window, ns.
+        busy_ns: u64,
+        /// The window's length, ns.
+        window_ns: u64,
+    },
+    /// A ratio with no time behind it (a sidelink's sub-channel busy share).
+    Ratio(f64),
+}
+
 impl MacCbr {
     /// One node's MAC report for a window: the measured busy ratio (quantised to D9's ratio
-    /// grid), the EDCA queue depth, and what was offered to and refused by the MAC.
+    /// grid, with the busy and window times where the MAC measures time), the EDCA queue
+    /// depth, and what was offered to and refused by the MAC.
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn report(
         t: SimTime,
         node: NodeId,
         channel: u16,
-        cbr: f64,
+        busy: BusyShare,
         queue_depth: u64,
         mac_drops: u64,
         offered_frames: u64,
@@ -572,13 +588,28 @@ impl MacCbr {
         offered_airtime_us: u64,
         span_ns: u64,
     ) -> Self {
+        let (cbr, busy_us, window_us) = match busy {
+            BusyShare::Time { busy_ns, window_ns } => {
+                // Whole microseconds, the ratio from the same rounded numbers the record
+                // carries, so a reader recomputing it gets this value.
+                let busy_us = busy_ns / 1_000;
+                let window_us = window_ns / 1_000;
+                let cbr = if window_us == 0 {
+                    0.0
+                } else {
+                    (busy_us as f64 / window_us as f64).clamp(0.0, 1.0)
+                };
+                (cbr, Some(busy_us.min(window_us)), Some(window_us))
+            }
+            BusyShare::Ratio(r) => (r, None, None),
+        };
         MacCbr(MacCbrView {
             t,
             node,
             channel: Some(channel),
             cbr: quantize_to(cbr, 1e-4),
-            busy_us: None,
-            window_us: None,
+            busy_us,
+            window_us,
             queue_depth: Some(queue_depth),
             mac_drops: Some(mac_drops),
             offered_frames: Some(offered_frames),
@@ -790,12 +821,30 @@ mod tests {
         assert_eq!(view.bucket, ByteBucket::Backhaul);
         assert_eq!(view.id, Some(77));
 
-        let cbr = MacCbr::report(5, NodeId::new(4), 172, 0.123_456_7, 3, 1, 10, 3000, 4240, 1);
+        let ratio = BusyShare::Ratio(0.123_456_7);
+        let cbr = MacCbr::report(5, NodeId::new(4), 172, ratio, 3, 1, 10, 3000, 4240, 1);
         let owned = cbr.to_owned_record().expect("serialises");
         let view: MacCbrView = decode(&owned).expect("decodes");
         assert_eq!(view.cbr, 0.1235);
+        assert_eq!((view.busy_us, view.window_us), (None, None));
         assert_eq!(view.queue_depth, Some(3));
         assert_eq!(view.offered_bytes, Some(3000));
+        v2xw_record::grid::scan_record("mac.cbr", &owned.json).expect("on its declared grid");
+
+        // A carrier-sensing MAC's report carries the busy time and its window, and the
+        // ratio is their quotient.
+        let time = BusyShare::Time {
+            busy_ns: 12_345_678,
+            window_ns: 1_000_000_000,
+        };
+        let cbr = MacCbr::report(5, NodeId::new(4), 172, time, 0, 0, 5, 1500, 2000, 1);
+        let owned = cbr.to_owned_record().expect("serialises");
+        let view: MacCbrView = decode(&owned).expect("decodes");
+        assert_eq!(
+            (view.busy_us, view.window_us),
+            (Some(12_345), Some(1_000_000))
+        );
+        assert_eq!(view.cbr, 0.0123);
         v2xw_record::grid::scan_record("mac.cbr", &owned.json).expect("on its declared grid");
     }
 
