@@ -105,6 +105,13 @@ Status 2026-10-24 (merged onto `main`, not pushed):
 - **Real-data baseline (feeds E1/E2), delivered:** `tools/realdata` v1.0.0 and `research/synthesis/p1-realdata-baseline.md`. Wyoming (held out) passes the frozen locked bound; the free class has no out-of-sample test yet, and P1-E3 needs the raw Wyoming frames.
 - A: not part of this wave (see the SCMS benchmark sections of `docs/design/BUILD-STATUS.md`). F, G: not started.
 
+Status 2026-10-27 (merged onto `main`, not pushed; results in `research/synthesis/p1-experiments.md`):
+- **A, in progress:** FB4 rows written before the run, and `tools/realworld/fullbench.py` judges them. FB4 (full fleet) did not finish: about 61 wall-s per simulated second under load, stopped at 96 s. It needs one unbroken run of about 5 h. QD4 (quarter fleet) passes 6 of 7 rows. QD4.cost is open: peak memory is +12.5 % over QD25, with no cause found yet.
+- **B, fix:** `ffaebbf9`. Before it, every stop and start jumped the reported position by the error walk. Only runs with timing on are affected. Paper 1 rows that ran with timing on (E4 etc.) may move when re-run.
+- **F, delivered:** `ma.received` secMark phase now comes from the judged BSM. New evasion attacker `BenignClassMimic`. P1-E8: the disguise buys 0 s under all four rule families. Open: budget start should be `first_falsified`, and L1B was not run.
+- **G, delivered (analytical):** `tools/surrogate` v1.0.0. P1-E10 passes 15 of 15 rows on a quarter-fleet day. The rollover window sits at the band edge. The rates must be re-measured on FB4.
+- **P1-E5 fails** its KS test (0.129 vs 0.0747): the engine's RSU gaps are too clean. **P1-E6 passes** both nulls. **P1-E7:** after the B fix, only the k=2 rules block an honest device (1 per seed).
+
 Total: about 3–5 weeks of engine work after item A, in line with `final.md`'s estimate. Items B and C are the critical path: until they exist, no engine number in Paper 1 means anything.
 
 ### 1.5 Venue and deadline
