@@ -1,0 +1,124 @@
+# Radio and messaging follow-ups (WP-12, WP-13 status notes in
+# docs/design/frameworks/00-adoption-plan.md; research/synthesis/p1-experiments.md P1-E5 side
+# findings). Every `expect` was written with `measured: pending` and committed before the run
+# that judges it, except rows marked `disclosure:` (a diagnostic run read first, said so).
+# `measured` is base -> variant, or the run's value. Judged by
+#   python3 -I tools/realworld/radiofix3.py <run dir> ...   (per-run measures)
+# against `band`.
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+schema: v2xw/scms-run-expectations/1
+runs:
+  D1:
+    scenario: scenarios/real-world/paper1/p1-e5-dsrc-l1.yaml
+    binary: f4982788 release copy
+    note: Midtown, 600 veh/h, 60 s (30 s live), DSRC, --record-level receptions
+  L1:
+    scenario: scenarios/real-world/paper1/p1-e5-lte-l1.yaml
+    binary: f4982788 release copy
+    note: D1 on LTE-V2X (J3161/1 profile, channel 183)
+  N1:
+    scenario: scenarios/real-world/paper1/p1-e5-nr-l1.yaml
+    binary: f4982788 release copy
+    note: D1 on NR-V2X (EN 303 798 profile)
+  L1-RETX1:
+    scenario: scenarios/real-world/radio-fix3/lte-retx1.yaml
+    base: L1
+    binary: f4982788 release copy
+  L1-EQP:
+    scenario: scenarios/real-world/radio-fix3/lte-eqp.yaml
+    base: L1
+    binary: f4982788 release copy
+rows:
+# ---- Item 1: reception within 300 m against theory and published measurements ----
+- id: R3.1.DSRC-NLOS-EDGE
+  run: D1
+  metric: distance where reception within the 50 m bins first falls under 0.5, m
+  band: [100, 200]
+  expect: >-
+    The DSRC budget is EIRP 20 dBm (J2945/1 vRP max, "rp=20.0dBm" on every BSM) + 3 dBi
+    - (-92 dBm: J2945/1 and the Unex OBU-301 datasheet's "RX threshold <-92 dBm") = 115 dB.
+    TR 37.885 urban NLOS 36.85 + 30 log10 d + 18.9 log10 5.86 reaches 115 dB at 133 m; the
+    urban LOS law at 775 m. Midtown pairs within 300 m are mostly on different streets, so
+    the 0.5 crossing sits near the NLOS edge, between it and 1.5x it.
+  source: 3GPP TR 37.885 V15.3.0 Table 6.2.1-1; SAE J2945/1 §6.3.8; Unex OBU-301 datasheet (R7 §A10)
+  disclosure: D1/L1/N1 were run as diagnostics before these rows were written; their rows are analytic checks on numbers already seen
+  measured: pending
+- id: R3.1.LTE-NLOS-EDGE
+  run: L1
+  metric: distance where reception within the 50 m bins first falls under 0.5, m
+  band: [300, 450]
+  expect: >-
+    LTE budget EIRP 26 dBm (23 dBm power class + 3 dBi; under 47 CFR §95.3204's 27 dBm
+    near-horizon cap on channel 183) + 3 dBi - (-102 dBm, the run's measured 50 % point with
+    two chase-combined copies) = 131 dB; TR 37.885 NLOS reaches it at 455 m, and 90 % (-98 dBm)
+    at 335 m: the 0.5 crossing between 300 and 450 m.
+  source: 3GPP TR 37.885 V15.3.0 Table 6.2.1-1; TR 36.885 Table A.1.2-1 (23 dBm); 47 CFR §95.3204(a)
+  disclosure: as R3.1.DSRC-NLOS-EDGE
+  measured: pending
+- id: R3.1.NR-NLOS-EDGE
+  run: N1
+  metric: distance where reception within the 50 m bins first falls under 0.5, m
+  band: [200, 300]
+  expect: >-
+    NR budget EIRP 26 dBm + 3 dBi - (-94 dBm, the measured 50 % point of one 16QAM-490 copy,
+    TS 38.214 Table 5.1.3.1-2 MCS 7, no blind retransmission in the EN 303 798 profile) =
+    123 dB: TR 37.885 NLOS reaches it at 250 m.
+  source: 3GPP TR 37.885 V15.3.0 Table 6.2.1-1; TS 38.214 Table 5.1.3.1-2
+  disclosure: as R3.1.DSRC-NLOS-EDGE
+  measured: pending
+- id: R3.1.LTE-RETX-DEFAULT
+  run: L1
+  metric: sidelink transmissions per BSM generated (frames on air / BSMs), and run-report max_transmissions
+  band: [1.95, 2.0]
+  expect: >-
+    The J3161/1 deployed profile sends every BSM twice ("each packet is transmitted twice
+    when HARQ is turned ON"; 5GAA P-190033 Table 32 "Blind HARQ: Yes"); congestion control
+    gives the copy up only at high CBR, so at CBR 0.016 the ratio is 2 less the rare drops.
+  source: 5GAA P-190033 Table 32; Qualcomm 80-PE732-67 §4 Q5; TS 36.213 §14.1.1.4C
+  measured: pending
+- id: R3.1.RETX1-FRAMES
+  run: L1-RETX1
+  metric: sidelink frames on air, variant / base
+  band: [0.49, 0.52]
+  expect: one copy per BSM instead of two halves the frames (BSM count unchanged, mobility identical)
+  source: TS 36.213 §14.1.1.4C (one blind retransmission); arithmetic
+  measured: pending
+- id: R3.1.RETX1-PDR
+  run: L1-RETX1
+  metric: reception within 300 m
+  band: [0.83, 0.91]
+  expect: >-
+    Chase combining two copies gains up to 10 log10 2 = 3 dB of SNR plus a second fade
+    (TS 36.213; Molina-Masegosa 2020 blind retransmission gain); reading the base's measured
+    RSSI->delivery curve 2-3 dB higher predicts 0.893-0.864 from the base 0.943 (predict.py);
+    losing the time diversity can take it a little lower.
+  source: TS 36.213 §14.1.1.4C; chase-combining SNR gain; base curve
+  measured: pending
+- id: R3.1.RETX1-WALL
+  run: L1-RETX1
+  metric: wall time, variant / base
+  band: [0.5, 1.0]
+  expect: half the sidelink frames is half the reception decisions and interference sums; the rest of the run (mobility, security, SCMS) is unchanged, so the run gets faster, not slower
+  source: cost model (the sidelink decisions scale with frames x receivers)
+  measured: pending
+- id: R3.1.EQP-PDR
+  run: L1-EQP
+  metric: reception within 300 m
+  band: [0.72, 0.78]
+  expect: every link 6 dB weaker (26 -> 20 dBm EIRP; the attempt set is fixed at the reference EIRP, so the denominator stays); the base curve read 6 dB lower predicts 0.748
+  source: base curve (predict.py); link budget
+  measured: pending
+- id: R3.1.EQP-UDOT
+  run: L1-EQP
+  metric: LTE 0.5-crossing distance at 20 dBm EIRP / DSRC 0.5-crossing distance (D1)
+  band: [1.33, 1.9]
+  expect: >-
+    UDOT's 2021 field test of deployed dual-mode RSUs in Salt Lake City, both radios at
+    20 dBm: C-V2X range of reception over 90 % longer in LOS, over 33 % longer in NLOS
+    (about 25 % over all tests). Midtown is NLOS-dominated, so the ratio should sit near the
+    NLOS end. The engine's own budgets (10 dB receiver advantage at the 50 % point, 30 dB a
+    decade NLOS) predict 2.15: above the band, which this row tests.
+  source: Panasonic for UDOT, "Range of Reception DSRC/C-V2X" final report (2021), Findings and Table 1
+  measured: pending
