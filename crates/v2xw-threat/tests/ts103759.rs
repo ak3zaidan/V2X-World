@@ -251,6 +251,8 @@ fn class_one_fires_on_an_oversized_message_and_is_unchecked_without_the_size() {
     let x = CrossCheckInputs {
         perception: &NoPerception,
         envelope: Some(&extras),
+        frame: None,
+        own: None,
     };
     let mut fired = BTreeSet::new();
     for i in 0..2u64 {
@@ -592,6 +594,8 @@ fn class_three_fires_on_a_certificate_from_another_region_and_is_unchecked_witho
     let x = CrossCheckInputs {
         perception: &NoPerception,
         envelope: Some(&extras),
+        frame: None,
+        own: None,
     };
     let mut fired = BTreeSet::new();
     for i in 0..2u64 {
@@ -622,6 +626,8 @@ fn class_three_fires_on_a_certificate_from_another_region_and_is_unchecked_witho
     let x_same = CrossCheckInputs {
         perception: &NoPerception,
         envelope: Some(&same),
+        frame: None,
+        own: None,
     };
     let v = one(
         &mut suite,
