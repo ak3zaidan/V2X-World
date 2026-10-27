@@ -498,7 +498,7 @@ fn honest_gauss_markov_traffic_stays_under_the_stated_bounds() {
     };
     let out = sim::run(&opts);
     assert!(out.tap.len() > 20_000, "only {} deliveries", out.tap.len());
-    let digest = |tap: &[(SelfBelief, f64, ObservedMessage)]| {
+    let digest = |tap: &[(SelfBelief, f64, ObservedMessage)], conf: Option<f64>| {
         let mut suites: BTreeMap<NodeId, Ts103759Suite> = BTreeMap::new();
         let mut ctx = CollectingCtx::new(9);
         let frame = FrameExtras::with_size(CAR_L, CAR_W);
@@ -517,7 +517,11 @@ fn honest_gauss_markov_traffic_stays_under_the_stated_bounds() {
             let s = suites
                 .entry(me.node)
                 .or_insert_with(Ts103759Suite::cited_defaults);
-            let v = s.check(&mut ctx, me, m, &NoMap, &x);
+            let mut m = m.clone();
+            if let Some(c) = conf {
+                m.claimed_pos_confidence_m = c;
+            }
+            let v = s.check(&mut ctx, me, &m, &NoMap, &x);
             for (c, sc) in &v.scores {
                 *eval.entry(*c).or_default() += 1;
                 h = (h ^ sc.to_bits()).wrapping_mul(0x100_0000_01b3);
@@ -528,13 +532,21 @@ fn honest_gauss_markov_traffic_stays_under_the_stated_bounds() {
         }
         (eval, fire, h)
     };
-    let (eval, fire, h1) = digest(&out.tap);
+    let (eval, fire, h1) = digest(&out.tap, None);
     let mut report = String::new();
     for (c, n) in &eval {
         let f = fire.get(c).copied().unwrap_or(0);
         report.push_str(&format!("{c}: {f}/{n}\n"));
     }
-    eprintln!("deliveries {}\n{report}", out.tap.len());
+    let mut confs: Vec<f64> = out.tap.iter().map(|(_, _, m)| m.claimed_pos_confidence_m).collect();
+    confs.sort_by(f64::total_cmp);
+    eprintln!(
+        "deliveries {} broadcast confidence p5/p50/p95 {:.2}/{:.2}/{:.2} m\n{report}",
+        out.tap.len(),
+        confs[confs.len() / 20],
+        confs[confs.len() / 2],
+        confs[confs.len() * 19 / 20]
+    );
     for c in [
         Ts103759Check::KalmanConsistency,
         Ts103759Check::PositionSpeedEnvelope,
@@ -547,6 +559,21 @@ fn honest_gauss_markov_traffic_stays_under_the_stated_bounds() {
         assert!(f < FP_BOUND, "{c}: honest false-positive rate {f} over {FP_BOUND}\n{report}");
     }
     // Determinism: the same deliveries give byte-identical scores.
-    let (_, _, h2) = digest(&out.tap);
+    let (_, _, h2) = digest(&out.tap, None);
     assert_eq!(h1, h2);
+    // Diagnostic, not a bound: the same deliveries from a receiver that under-reports its
+    // confidence as 1 m (the Kalman R then sits on its 4 m floor).
+    let (e1, f1, _) = digest(&out.tap, Some(1.0));
+    for c in [
+        Ts103759Check::KalmanConsistency,
+        Ts103759Check::PositionSpeedEnvelope,
+        Ts103759Check::PositionSpeedMaxConsistency,
+        Ts103759Check::BoxIntersection,
+    ] {
+        eprintln!(
+            "conf 1 m: {c}: {}/{}",
+            f1.get(&c).copied().unwrap_or(0),
+            e1.get(&c).copied().unwrap_or(0)
+        );
+    }
 }
