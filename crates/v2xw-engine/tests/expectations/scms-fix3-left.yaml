@@ -25,9 +25,6 @@ runs:
     scenario: scenarios/live-scms/kem.yaml
     note: kem ml-kem-768 (the 1609.2.1 PDU layer off)
 rows:
-# ---- R-P2PCD-ASYM: every vehicle's factory pool came from the home ACA, so every
-# provider-b device held provider-a's ACA, unanchored, and never asked for it by P2PCD.
-# Fix: CredentialFactory::pseudonym issues from the node's own provider's ACA.
 - id: F3.CHP.b-from-a
   base: L
   variant: CHP
@@ -37,11 +34,11 @@ rows:
   band:
   - 0.95
   - 1.0
-  source: 'IEEE 1609.2 clause 8 P2PCD is symmetric: a provider-b receiver learns provider-a''s ACA
-    and ICA within a few BSMs, as provider-a receivers already do for provider-b (release: a<-b
-    82,474 -> 82,016, ratio 0.994). Release b<-a: 82,047 -> 33'
-  measured: pending
-  verdict: pending
+  source: 'IEEE 1609.2 clause 8 P2PCD is symmetric: a provider-b receiver learns provider-a''s ACA and
+    ICA within a few BSMs, as provider-a receivers already do for provider-b (release: a<-b 82,474 ->
+    82,016, ratio 0.994). Release b<-a: 82,047 -> 33'
+  measured: 82047 -> 82006 (ratio 0.9995)
+  verdict: pass
 - id: F3.CHP.a-from-b
   base: L
   variant: CHP
@@ -52,8 +49,13 @@ rows:
   - 0.98
   - 1.0
   source: the direction that worked is unchanged by the fix (release ratio 0.994)
-  measured: pending
-  verdict: pending
+  measured: 82474 -> 82761 (ratio 1.003)
+  verdict: wrong-expectation
+  note: 'the 1.0 ceiling assumed CHP only loses frames. On the fixed build every pair verifies slightly
+    more under CHP (a<-a +0.30 %, b<-b +0.69 %, a<-b +0.35 %): the second attacker''s decision came at
+    151.7 s against 141.0 s and missed the 150 s CRL, so revoked-sender refusals fell 3,242 -> 3,074
+    (loss 0.00345 -> 0.00179) and that attacker''s later frames verify. Within 0.5 % of L either way.
+    Why reports received rise 327 -> 429 under CHP is not traced (open)'
 - id: F3.CHP.unknown
   base: L
   variant: CHP
@@ -63,10 +65,10 @@ rows:
   band:
   - 0.0075
   - 0.02
-  source: 'L''s newcomer loss (0.0075) plus about 0.5 % of each direction''s frames until the
-    P2PCD answer is learned (release: 0.046, all of provider-a''s frames lost at provider-b)'
-  measured: pending
-  verdict: pending
+  source: 'L''s newcomer loss (0.0075) plus about 0.5 % of each direction''s frames until the P2PCD answer
+    is learned (release: 0.046, all of provider-a''s frames lost at provider-b)'
+  measured: '0.00765507'
+  verdict: pass
 - id: F3.CHP.delivery
   base: L
   variant: CHP
@@ -77,8 +79,11 @@ rows:
   - 0.95
   - 1.0
   source: 'verified delivery only loses the learning window (release: 0.160 -> 0.122, ratio 0.76)'
-  measured: pending
-  verdict: pending
+  measured: 0.160084 -> 0.160655 (ratio 1.004)
+  verdict: wrong-expectation
+  note: 'as F3.CHP.a-from-b: +0.4 % is the CRL-boundary effect (revoked-sender loss 0.0034 -> 0.0018);
+    the P2PCD learning window costs under 0.1 % (unknown-signer loss 0.00752 -> 0.00766). The release
+    CHP (the fault) gives 0.76'
 - id: F3.CHP.responses
   base: L
   variant: CHP
@@ -88,10 +93,10 @@ rows:
   band:
   - 110
   - 200
-  source: 'both providers now ask, so about twice the release''s 77 answers (one direction);
-    an answer heard by many receivers is learned by all, so less than 2x per receiver'
-  measured: pending
-  verdict: pending
+  source: both providers now ask, so about twice the release's 77 answers (one direction); an answer heard
+    by many receivers is learned by all, so less than 2x per receiver
+  measured: '161'
+  verdict: pass
 - id: F3.CHP.cpu
   base: L
   variant: CHP
@@ -101,10 +106,10 @@ rows:
   band:
   - 0.85
   - 1.5
-  source: 'provider-b now verifies provider-a''s 82 k messages again and P2PCD adds ~150 frames:
-    run cost close to L (release 45.4 -> 43.5 s with b dropping a''s frames before verifying)'
-  measured: pending
-  verdict: pending
+  source: 'provider-b now verifies provider-a''s 82 k messages again and P2PCD adds ~150 frames: run cost
+    close to L (release 45.4 -> 43.5 s with b dropping a''s frames before verifying)'
+  measured: 69.98 -> 68.72 (ratio 0.982)
+  verdict: pass
 - id: F3.L.share-b
   base: L
   variant: L2
@@ -113,8 +118,8 @@ rows:
   expect: same
   tol: 0.0
   source: determinism of the fixed build on the per-provider measure
-  measured: pending
-  verdict: pending
+  measured: 0.437596 -> 0.437596
+  verdict: pass
 - id: F3.L.det
   base: L
   variant: L2
@@ -122,11 +127,8 @@ rows:
   measure: digest.records
   expect: identical
   source: 'same seed, same build stamp: the record stream byte for byte'
-  measured: pending
-  verdict: pending
-# ---- KEM download bytes: the batch is charged right (pki.flow batch-download 172 -> 363 kB);
-# the Uu downlink fell short because with the PDU layer off a CRL fetch was sized as one
-# list (292 B) instead of the 1609.2.1 composite the RA serves (3,298 B in L), 53 fetches.
+  measured: e9d40d62d6219933 -> e9d40d62d6219933
+  verdict: pass
 - id: F3.KEM.dl-delta
   base: L
   variant: KEM
@@ -136,11 +138,11 @@ rows:
   band:
   - 160000
   - 215000
-  source: 'ML-KEM-768 ciphertext 1,088 B against ECIES-P256 65 + 16 B (FIPS 203 Table 3; IEEE
-    1609.2 EciesP256EncryptedKey) on each of 295 certificates: batch +191 kB, info-response
-    +9.7 kB, successor enrolment -14.8 kB, CRL fetches unchanged = +186 kB (release: +26.6 kB)'
-  measured: pending
-  verdict: pending
+  source: 'ML-KEM-768 ciphertext 1,088 B against ECIES-P256 65 + 16 B (FIPS 203 Table 3; IEEE 1609.2 EciesP256EncryptedKey)
+    on each of 295 certificates: batch +191 kB, info-response +9.7 kB, successor enrolment -14.8 kB, CRL
+    fetches unchanged = +186 kB (release: +26.6 kB)'
+  measured: 381511 -> 560195 (delta 1.787e+05)
+  verdict: pass
 - id: F3.KEM.crl-fetch-share
   base: L
   variant: KEM
@@ -149,8 +151,8 @@ rows:
   expect: same
   tol: 0.0
   source: the KEM changes neither the poll schedule nor what changed (53 fetches in both)
-  measured: pending
-  verdict: pending
+  measured: 53 -> 53
+  verdict: pass
 - id: F3.KEM.cpu
   base: L
   variant: KEM
@@ -161,5 +163,5 @@ rows:
   - 0.7
   - 1.3
   source: a byte count changes; no new work (release 45.4 -> 41 s)
-  measured: pending
-  verdict: pending
+  measured: 69.98 -> 49.72 (ratio 0.7105)
+  verdict: pass
