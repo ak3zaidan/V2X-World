@@ -13,6 +13,8 @@ publish = false
 v2xw-core = { workspace = true }
 v2xw-world = { workspace = true }
 v2xw-mobility = { workspace = true }
+# The full surrogate safety measures (adoption plan WP-11).
+v2xw-metrics = { workspace = true }
 # The scenario loader and the wiring the kernel uses, so a shipped scenario's traffic is
 # validated exactly as the page runs it. Not a `workspace = true` entry because
 # `v2xw-engine` is a workspace member the root does not list (see v2xw-cli's manifest).

@@ -216,6 +216,7 @@ pub fn run(
     step: Duration,
     seconds: f64,
     audit: AuditParams,
+    ssm: v2xw_metrics::ssm::SsmParams,
     events: &[Event],
     tamper: Option<Tamper>,
     mut watch: impl FnMut(f64, &[AuditActor]),
@@ -228,7 +229,7 @@ pub fn run(
     let mut calib = CalibrationObserver::new(world);
     let mut auditor = TrafficAuditor::new(world, audit);
     auditor.audit_world(world);
-    let mut safety = SafetyObserver::new(world);
+    let mut safety = SafetyObserver::new(world).with_ssm(ssm);
     let mut motion = MotionObserver::default();
     let horizon = (seconds * 1e9) as u64;
     let mut pending: Vec<&Event> = events.iter().collect();

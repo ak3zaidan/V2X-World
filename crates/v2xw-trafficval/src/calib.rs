@@ -81,6 +81,9 @@ pub enum GridVariant {
     /// 2 sneakers per cycle, and impatience growing to full after 180 s when the flag is
     /// true (false: the same drivers with impatience off, the check's fault).
     Patience(bool),
+    /// As shipped, with the full surrogate measures' trajectory extrapolation dropped
+    /// (WP-11's injected fault): the driving is unchanged.
+    SsmNoExtrapolation,
 }
 
 /// A car-following model that delegates to the city IDM but hands out broken drivers.
@@ -227,6 +230,10 @@ pub fn grid_study(
             params.step,
             seconds as f64,
             AuditParams::default(),
+            v2xw_metrics::ssm::SsmParams {
+                extrapolate: variant != GridVariant::SsmNoExtrapolation,
+                ..v2xw_metrics::ssm::SsmParams::default()
+            },
             &[],
             if variant == GridVariant::Tampered {
                 tamper

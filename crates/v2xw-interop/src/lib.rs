@@ -19,6 +19,7 @@
 pub mod netexport;
 pub mod radio;
 pub mod routes;
+pub mod ssmval;
 pub mod sumo;
 pub mod traci;
 pub mod xval;
