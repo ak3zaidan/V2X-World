@@ -183,28 +183,28 @@ runs:
     note: P1-E5 DSRC at 600 veh/h, 60 s (30 s live), --record-level receptions; e5gaps.py run --tampa
   E5-D2:
     scenario: scenarios/real-world/paper1/p1-e5-dsrc-l2.yaml
-    note: P1-E5 DSRC at 1800 veh/h, 60 s (30 s live), --record-level receptions; e5gaps.py run --tampa
+    note: P1-E5 DSRC at 1800 veh/h, 40 s (10 s live; cut after the 1,800 veh/h 60 s run hit the 1.2 GB cap), --record-level receptions; e5gaps.py run --tampa
   E5-D3:
     scenario: scenarios/real-world/paper1/p1-e5-dsrc-l3.yaml
-    note: P1-E5 DSRC at 5400 veh/h, 60 s (30 s live), --record-level receptions; e5gaps.py run --tampa
+    note: P1-E5 DSRC at 3600 veh/h, 40 s (10 s live; cut after the 1,800 veh/h 60 s run hit the 1.2 GB cap), --record-level receptions; e5gaps.py run --tampa
   E5-L1:
     scenario: scenarios/real-world/paper1/p1-e5-lte-l1.yaml
     note: P1-E5 LTE at 600 veh/h, 60 s (30 s live), --record-level receptions; e5gaps.py run --tampa
   E5-L2:
     scenario: scenarios/real-world/paper1/p1-e5-lte-l2.yaml
-    note: P1-E5 LTE at 1800 veh/h, 60 s (30 s live), --record-level receptions; e5gaps.py run --tampa
+    note: P1-E5 LTE at 1800 veh/h, 40 s (10 s live; cut after the 1,800 veh/h 60 s run hit the 1.2 GB cap), --record-level receptions; e5gaps.py run --tampa
   E5-L3:
     scenario: scenarios/real-world/paper1/p1-e5-lte-l3.yaml
-    note: P1-E5 LTE at 5400 veh/h, 60 s (30 s live), --record-level receptions; e5gaps.py run --tampa
+    note: P1-E5 LTE at 3600 veh/h, 40 s (10 s live; cut after the 1,800 veh/h 60 s run hit the 1.2 GB cap), --record-level receptions; e5gaps.py run --tampa
   E5-N1:
     scenario: scenarios/real-world/paper1/p1-e5-nr-l1.yaml
     note: P1-E5 NR at 600 veh/h, 60 s (30 s live), --record-level receptions; e5gaps.py run --tampa
   E5-N2:
     scenario: scenarios/real-world/paper1/p1-e5-nr-l2.yaml
-    note: P1-E5 NR at 1800 veh/h, 60 s (30 s live), --record-level receptions; e5gaps.py run --tampa
+    note: P1-E5 NR at 1800 veh/h, 40 s (10 s live; cut after the 1,800 veh/h 60 s run hit the 1.2 GB cap), --record-level receptions; e5gaps.py run --tampa
   E5-N3:
     scenario: scenarios/real-world/paper1/p1-e5-nr-l3.yaml
-    note: P1-E5 NR at 5400 veh/h, 60 s (30 s live), --record-level receptions; e5gaps.py run --tampa
+    note: P1-E5 NR at 3600 veh/h, 40 s (10 s live; cut after the 1,800 veh/h 60 s run hit the 1.2 GB cap), --record-level receptions; e5gaps.py run --tampa
   E5-D1b:
     scenario: scenarios/real-world/paper1/p1-e5-dsrc-l1.yaml
     note: E5-D1 again (determinism)
@@ -2041,7 +2041,7 @@ rows:
   measure: x.e5.cbr_mean
   expect: up
   min_change: 1.0
-  source: 'DSRC: 9x the demand at least doubles the live channel busy ratio (offered airtime grows with the neighbours in sensing range below saturation)'
+  source: 'DSRC: 6x the demand (3,600 against 600 veh/h; 40 s against 60 s) at least doubles the live channel busy ratio (offered airtime grows with the neighbours in sensing range below saturation)'
   measured: pending
 - id: P1.E5.pdr-load-dsrc
   base: E5-D1
@@ -2068,7 +2068,7 @@ rows:
   measure: x.e5.cbr_mean
   expect: up
   min_change: 1.0
-  source: 'LTE-V2X: 9x the demand at least doubles the live channel busy ratio (offered airtime grows with the neighbours in sensing range below saturation)'
+  source: 'LTE-V2X: 6x the demand (3,600 against 600 veh/h; 40 s against 60 s) at least doubles the live channel busy ratio (offered airtime grows with the neighbours in sensing range below saturation)'
   measured: pending
 - id: P1.E5.pdr-load-lte-v2x
   base: E5-L1
@@ -2095,7 +2095,7 @@ rows:
   measure: x.e5.cbr_mean
   expect: up
   min_change: 1.0
-  source: 'NR-V2X: 9x the demand at least doubles the live channel busy ratio (offered airtime grows with the neighbours in sensing range below saturation)'
+  source: 'NR-V2X: 6x the demand (3,600 against 600 veh/h; 40 s against 60 s) at least doubles the live channel busy ratio (offered airtime grows with the neighbours in sensing range below saturation)'
   measured: pending
 - id: P1.E5.pdr-load-nr-v2x
   base: E5-N1

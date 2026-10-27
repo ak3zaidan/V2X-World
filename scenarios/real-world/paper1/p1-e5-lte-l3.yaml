@@ -1,11 +1,14 @@
-# P1-E5: p1-e5-lte-l1 at 5400 veh/h.
+# P1-E5: p1-e5-lte-l1 at 3600 veh/h, 40 s: cut from 60 s after
+# the 1,800 veh/h 60 s run hit the 1.2 GB run-slot cap (load 3 cut from 5,400 to 3,600 veh/h).
 schema: v2xw/scenario/1
 meta:
   base: p1-e5-lte-l1.yaml
   name: Paper 1 p1-e5-lte-l3
-  description: P1-E5 LTE, l3 (5400 veh/h), 60 s.
+  description: P1-E5 LTE, l3 (3600 veh/h), 40 s (10 s live).
   tags: [paper1, experiment]
 actors:
   vehicles:
     demand:
-      rate_veh_per_h: 5400.0
+      rate_veh_per_h: 3600.0
+time:
+  duration_s: 40.0

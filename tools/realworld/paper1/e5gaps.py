@@ -52,6 +52,9 @@ def summary(gaps_ms, ref=None):
     d = {"gaps": n,
          "share_1int": (sum(1 for x in g if 50 <= x < 150) / n) if n else None,
          "share_le500": (sum(1 for x in g if x <= 500) / n) if n else None,
+         "share_lt50": (sum(1 for x in g if x < 50) / n) if n else None,
+         "share_2int": (sum(1 for x in g if 150 <= x < 250) / n) if n else None,
+         "share_3to5": (sum(1 for x in g if 250 <= x <= 500) / n) if n else None,
          "p50_ms": q(g, 0.5), "p90_ms": q(g, 0.9), "p99_ms": q(g, 0.99)}
     if ref is not None:
         d["ks_tampa"] = ks(g, ref)
