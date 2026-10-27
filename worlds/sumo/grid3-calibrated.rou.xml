@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Demand for grid3.net.xml run by this engine's native mobility (scenarios/interop/sumo-rou-native.yaml):
+     a vType distribution with its own calibration, Bernoulli flows and SUMO departure keywords,
+     read whole by v2xw_interop::routes (WP-15). -->
+<routes>
+  <vTypeDistribution id="private">
+    <vType id="calm" vClass="passenger" accel="2.0" decel="4.0" tau="1.4" sigma="0.3" minGap="2.5" maxSpeed="16" speedFactor="normc(1,0.1,0.2,2)" probability="0.7"/>
+    <vType id="brisk" vClass="passenger" accel="3.0" decel="4.5" tau="1.0" sigma="0.6" minGap="1.5" maxSpeed="20" speedFactor="normc(1.1,0.1,0.2,2)" probability="0.3"/>
+  </vTypeDistribution>
+  <flow id="we" type="private" begin="0" end="3600" probability="0.15" from="A1B1" to="B1C1" departLane="best" departSpeed="max" departPos="base"/>
+  <flow id="sn" type="private" begin="0" end="3600" probability="0.15" from="B0B1" to="B1B2" departLane="random" departSpeed="desired"/>
+  <flow id="turn" type="private" begin="0" end="3600" period="exp(0.05)" from="C2C1" to="C1C0" departLane="best" departSpeed="max"/>
+</routes>

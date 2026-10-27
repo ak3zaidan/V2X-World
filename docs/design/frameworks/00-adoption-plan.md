@@ -394,6 +394,32 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: a vType's `accel`, `decel`, `tau`, `sigma` and `minGap` reach the actor's model; the
   count variance of a Bernoulli flow is within tolerance of n·p·(1−p); a LuST or MoST sample
   (licence checked) imports with zero silently dropped attributes.
+- Status (2026-10-27): done (branch worktree-wf_6a49856b-494-6). `routes.rs` reads every vType attribute into an
+  `ImportLedger` (applied / approximated / not modelled / cosmetic, plus unmodelled elements and
+  `<param>` keys), so every attribute is counted. accel, decel, tau, minGap, sigma,
+  speedFactor/speedDev (norm/normc, redrawn inside bounds), maxSpeed/desiredMaxSpeed and departSpeed
+  reach the actor through the new `Demand::trip_driver` hook (`TripDriver`; default `None`). An
+  imported vehicle drives its vType exactly, on SUMO's vClass defaults, with no engine style or
+  spread. Krauss reads `DriverProfile.sigma` (serde-skipped when None). vTypeDistribution and
+  routeDistribution are drawn per vehicle; `probability` flows are Bernoulli trials each second
+  (`ProbabilityFlows::EqualSpacing` keeps the old behaviour); `period="exp(λ)"` is a Poisson stream
+  (defect: it was read as a period of λ s). departLane best/random, departPos random/negative and
+  departSpeed max/desired/speedLimit/random are applied. New scenario kind
+  `mobility/demand/sumo-rou {path, probability_flows: bernoulli|equal-spacing}`, plus
+  `scenarios/interop/sumo-rou-native.yaml`. LuST sample (MIT; MoST is GPL-3.0 so it was not
+  used) is in `worlds/sumo/lust-sample.rou.xml`.
+  Validated: 7 unit tests + `tests/rou_import.rs` (3), all green. Fault runs: 8 faults, each turned
+  its test red (Bernoulli→spacing, exp read as a period, vType ignored by the engine, Krauss
+  ignoring sigma, a not-modelled attribute dropped, distribution weights ignored, seed ignored,
+  departSpeed not applied). Bernoulli count variance is within 20 % of n·p·(1−p) over 400 seeds.
+  The LuST ledger total equals the file's attribute count, with 0 approximated.
+  End to end: the same seed gives a byte-identical content digest. A slow vType (accel 0.8,
+  maxSpeed 6) cut completed trips from 34 to 7 with the same 50 arrivals. A Poisson grid run gives
+  the same digest as the f4982788 release, so no golden moved.
+  Open: per-type body length/width, emergencyDecel, lc*/jm* params, per-type carFollowModel
+  (mapped by `library_model` but not applied per vehicle), stops/persons and arrival* are counted
+  but not modelled. Occupancy keywords (free/allowed/last/avg/stop) fall back and are counted.
+  An unsafe stated departSpeed is capped rather than delayed.
 
 ### Wave 6: US signal control, channel switching, channel realism
 

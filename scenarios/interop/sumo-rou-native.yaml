@@ -1,0 +1,39 @@
+# A SUMO route file driven by this engine's own mobility (WP-15): every vehicle drives its
+# own vType (accel, decel, tau, sigma, minGap, speedFactor), the flows keep SUMO's Bernoulli
+# and Poisson arrivals, and departLane/departSpeed keywords apply. No SUMO install needed.
+schema: v2xw/scenario/1
+meta:
+  name: SUMO route file, native mobility
+  description: >-
+    The 3 x 3 SUMO grid with worlds/sumo/grid3-calibrated.rou.xml imported whole as this
+    engine's demand: a two-type vTypeDistribution, Bernoulli probability flows and an
+    exponential-period flow.
+  tags: [interop, sumo, demand]
+  created: "2026-10-27"
+seed: "0xC0FFEE_5EED"
+time:
+  t0: "2027-03-04T12:00:00Z"
+  duration_s: 120.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+world:
+  source:
+    kind: sumo-net
+    path: worlds/sumo/grid3.net.xml
+  imported_at: "2026-10-07T00:00:00Z"
+actors:
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/sumo-rou
+      params:
+        path: worlds/sumo/grid3-calibrated.rou.xml
+        probability_flows: bernoulli
+radio:
+  rat: dsrc-80211p
+messages:
+  sets: [bsm]
+security:
+  envelope: ieee1609.2
+  signature: ecdsa-p256
+  crypto_mode: modeled
