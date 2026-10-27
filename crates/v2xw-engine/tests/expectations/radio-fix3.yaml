@@ -390,7 +390,9 @@ rows:
     (TRCO_1), these vehicles carry no forward sensors in this scenario (TRCO_6), and the
     first relevant DENM (TRCO_3/4) is the first local slow-down at 108.5 s, which then
     unlocks the end-of-queue ones. With radar fitted (most new US cars) the warning would
-    lead the queue by about 40 s
+    lead the queue: H-CPM (the same run with the CPM's sensors fitted, so TRCO_6 can hold)
+    raised its first end-of-queue DENM at 31.4 s (a junction queue) and 32 events from 30
+    originators
 - id: R3.3.TC
   run: H
   metric: trafficCondition (1) DENMs
@@ -492,4 +494,12 @@ rows:
     hearing those within a few hundred metres, loads the channel well under the 0.28 at
     which delta leaves delta_max: the regime R3.3.CPM-RATE assumes
   source: airtime arithmetic (TS 103 324 CPM sizes, 6 Mb/s)
-  measured: pending
+  measured: "0.369 (p90 0.467); H without CPM 0.209; 59,454 CPMs, 321 per sender (2.1 Hz), 24.7 s of CPM airtime vs 28.5 s of CAM in the run; wall 491 s, peak 1,552 MB"
+  verdict: wrong-expectation
+  note: >-
+    The arithmetic left out how much the CAMs alone load this channel: H's CAM+DENM is
+    already 0.209, and the CPMs (about 2 Hz each, 0.42 ms) add 0.16. At 0.37 mean (0.47 p90)
+    the adaptive gate's delta leaves delta_max (beta (0.68 - 0.37) / alpha = 0.023; 0.016 at
+    the p90), so T_off = T_on / delta is 21-31 ms: still under the 100 ms floor of
+    T_GenCpm's clamp, so R3.3.CPM-RATE's prediction (no change) still holds for this load;
+    it would move only past about CBR 0.63
