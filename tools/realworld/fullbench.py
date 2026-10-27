@@ -27,8 +27,17 @@ def _wall_at(lines, t):
     return None
 
 
+def _windows(out):
+    import yaml
+    t = yaml.safe_load(open(os.path.join(out, 'scenario.resolved.yaml'))).get('time') or {}
+    FF[:] = [(float(w['from_s']), float(w['to_s'])) for w in t.get('fast_forward') or []]
+    return float(t.get('warmup_s') or 0.0)
+
+
 def summarise(out, log, dst):
     s = {}
+    warm = _windows(out)
+    s['ff.windows'] = FF[:]
     txt = open(log, errors='replace').read()
     m = re.findall(r'rc=(\d+)', txt)
     s['run.rc'] = int(m[-1]) if m else None
@@ -45,6 +54,7 @@ def summarise(out, log, dst):
     if prog:
         end = prog[-1]['wall_s']
         w240, w1, w2 = _wall_at(prog, FF[0][0]), _wall_at(prog, FF[0][1]), _wall_at(prog, FF[1][0])
+        w240 = w240 if w240 is not None else end
         s['wall.first_window_s'] = w240
         if w1 is not None:
             s['wall.ff1_s'] = w1 - w240
@@ -56,16 +66,18 @@ def summarise(out, log, dst):
         s['progress.t_end'] = prog[-1]['t_s']
         first = [x['t_s'] for x in prog if x['census'].get('scms.ma_reports', 0) > 0]
         s['census.ma_first_receipt_s'] = first[0] if first else None
-        s['census.ma_reports_end'] = prog[-1]['census'].get('scms.ma_reports')
+        for k in ('scms.ma_reports', 'scms.pca_issued', 'scms.devices', 'scms.ra_requests',
+                  'scms.issued_enrolment', 'scms.kernel_steps', 'scms.la0_chains', 'nodes'):
+            s['census.end.' + k] = prog[-1]['census'].get(k)
         for x in prog:
-            if abs(x['t_s'] - 240) < 1e-6 or abs(x['t_s'] - 43230) < 1e-6:
+            if any(abs(x['t_s'] - w) < 1e-6 for w in (FF[0][0], FF[1][0])):
                 s[f"census.nodes_{int(x['t_s'])}"] = x['census'].get('nodes')
                 s[f"census.footprint_{int(x['t_s'])}"] = x.get('footprint_mb')
                 s[f"census.kernel_steps_{int(x['t_s'])}"] = x['census'].get('scms.kernel_steps')
                 s[f"census.pca_issued_{int(x['t_s'])}"] = x['census'].get('scms.pca_issued')
     mp = os.path.join(out, 'metrics.json')
     if os.path.exists(mp) and os.path.getsize(mp):
-        _metrics(json.load(open(mp))['samples'], s)
+        _metrics(json.load(open(mp))['samples'], s, warm)
     rp = os.path.join(out, 'run-report.json')
     if os.path.exists(rp):
         _report(json.load(open(rp)), s)
@@ -77,14 +89,16 @@ def _live(t):
     return not any(a < t <= b for a, b in FF) or t in (FF[0][0], FF[1][0])
 
 
-def _metrics(samples, s):
+def _metrics(samples, s, warm=0.0):
     by = {}
     for x in samples:
         by.setdefault((x['metric'], tuple(sorted(x['dims'].items()))), []).append(x)
     ends = sorted({x['t'] / 1e9 for x in samples})
     s['win.ends'] = ends
-    s['win.has_240'] = 240.0 in ends
-    s['win.has_43230'] = 43230.0 in ends
+    s['win.has_ff1_start'] = FF[0][0] in ends
+    s['win.has_ff2_start'] = FF[1][0] in ends
+    s['win.has_ff1_end'] = FF[0][1] in ends
+    s['win.has_ff2_end'] = FF[1][1] in ends
     frozen = [t for t in ends if not _live(t)]
     s['win.frozen_ends'] = frozen
 
@@ -103,10 +117,12 @@ def _metrics(samples, s):
                 val = v.get('point', v.get('mean', v.get('value')))
                 if isinstance(val, (int, float)):
                     vr[x['t'] / 1e9] = vr.get(x['t'] / 1e9, 0.0) + val
-    s['win.verify_rate_240'] = vr.get(240.0)
+    s['win.verify_rate_ff1_start'] = vr.get(FF[0][0])
+    s['win.verify_rate_ff2_start'] = vr.get(FF[1][0])
+    s['win.verify_rate_ff1_frozen'] = vr.get(FF[0][1])
     s['win.verify_rate_series'] = sorted(vr.items())
     cbr = [v for (name, dims), xs in by.items() if name == 'cbr' for x in xs
-           if _live(x['t'] / 1e9) and x['t'] / 1e9 > 120 for v in [x['value']]]
+           if _live(x['t'] / 1e9) and x['t'] / 1e9 > warm for v in [x['value']]]
     if cbr:
         s['live.cbr_mean'] = sum(v['mean'] * v['n'] for v in cbr if v.get('n')) / max(1, sum(v['n'] for v in cbr if v.get('n')))
         s['live.cbr_p95_max'] = max(v.get('p95') or 0 for v in cbr)
@@ -121,21 +137,24 @@ def _metrics(samples, s):
                         den += v.get('trials') or v.get('denominator') or 0
         if den:
             s['live.pdr_' + r] = num / den
-    e = [v for t, v in series('e2e_latency', (('msg_type', 'bsm'),)) if _live(t) and t > 120 and v.get('mean') is not None]
+    e = [v for t, v in series('e2e_latency', (('msg_type', 'bsm'),)) if _live(t) and t > warm and v.get('mean') is not None]
     if e:
         s['live.bsm_e2e_ms'] = sum(v['mean'] * v['n'] for v in e) / sum(v['n'] for v in e)
         s['live.bsm_e2e_p99_max'] = max(v.get('p99') or 0 for v in e)
     pool = {t: v for t, v in series('cert_pool_valid')}
-    pv = pool.get(43210.0)
+    pv = [v for t, v in sorted(pool.items()) if 43200.0 < t <= 43210.0]
     if pv:
-        s['pool.after_43210'] = pv.get('mean', pv.get('point'))
+        s['pool.after_43210'] = pv[0].get('mean', pv[0].get('point'))
+    pv = [v for t, v in sorted(pool.items()) if 43170.0 <= t <= 43200.0]
+    if pv:
+        s['pool.before_43200'] = pv[-1].get('mean', pv[-1].get('point'))
     for name, dims in (('unverified_ratio', ()), ('full_cert_share', ()), ('aoi', ()),
                        ('pseudonym_change_rate', ()), ('mean_speed', ())):
-        vals = [v.get('point', v.get('mean')) for t, v in series(name, dims) if _live(t) and t > 120]
+        vals = [v.get('point', v.get('mean')) for t, v in series(name, dims) if _live(t) and t > warm]
         vals = [x for x in vals if x is not None]
         if vals:
             s[f'live.{name}_min'], s[f'live.{name}_max'] = min(vals), max(vals)
-    sp = [v.get('p50') for t, v in series('speed') if _live(t) and t > 120 and v.get('p50') is not None]
+    sp = [v.get('p50') for t, v in series('speed') if _live(t) and t > warm and v.get('p50') is not None]
     if sp:
         s['live.speed_p50_series'] = sp
     for b in ('bytes_backend',):
@@ -180,6 +199,13 @@ def _report(R, s):
               'sdus_fragmented', 'fragments_sent', 'events'):
         if isinstance(rep.get(k), (int, float)):
             s['r.' + k] = rep[k]
+    # CAMP per-device provisioning: PCA certificates beyond 40 at entry + 20 per top-up
+    # (the census's scms.* entities are the home provider's: scale the top-ups by its share)
+    dev = s.get('census.end.scms.ra_requests')
+    pca = s.get('census.end.scms.pca_issued')
+    if dev and pca is not None and s.get('p2.devices'):
+        home_topups = done * dev / s['p2.devices']
+        s['camp.pca_extra_per_device'] = (pca - 40 * dev - 20 * home_topups) / dev
     # the second fast-forward's cost per stop: its wall over its stops (crl-poll dominates)
     if s.get('wall.ff2_s') and ff.get('backend_ticks'):
         s['ff2.ms_per_stop'] = 1000 * s['wall.ff2_s'] / ff['backend_ticks']
