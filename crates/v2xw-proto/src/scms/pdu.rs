@@ -559,6 +559,12 @@ fn component_tbs(
     // `cert_issue_permissions`, the one per-provider profile both engine PKIs use, so the
     // RA devices see and the RA the governance hierarchy certifies agree (WP-F2 finding 1).
     let role = name.split('.').next().unwrap_or("");
+    // A provider's further ACA instance (`aca-1`, ...: SAESOL's second ACA, GOV.D1.acas)
+    // holds the ACA's permissions: its published certificate has the core one's form.
+    let role = role
+        .split_once('-')
+        .filter(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(role, |(r, _)| r);
     let published = match role {
         "root" | "ica" | "eca" | "ra" => crate::scms::governance::cert_issue_permissions(role),
         "aca" => crate::scms::governance::cert_issue_permissions("pca"),
