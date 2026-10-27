@@ -2994,6 +2994,12 @@ impl NativeMobility {
                 MobilityCommand::Stop { actor, until } => {
                     if let Some(a) = self.actors.get_mut(&actor) {
                         a.stopped_until = Some(until.unwrap_or(SimTime::MAX));
+                        // The stop supersedes a braking command still in force: left set,
+                        // the brake turned into an open-ended hold on the step the vehicle
+                        // stood (pass 7) and overwrote this stop's own release. A transit
+                        // bus braked to its pole, was told to stand until its dwell ended,
+                        // and stood there for the rest of the run.
+                        a.forced_brake = None;
                     }
                 }
                 MobilityCommand::Despawn { actor } => {
@@ -6296,14 +6302,22 @@ impl Mobility for NativeMobility {
                                 }
                             }
                         } else if violating
-                            && tti < actor.traits.amber_go_tti_s
                             && actor.traits.red_tolerance_s > 0.0
                             && tti - left <= actor.traits.red_tolerance_s
                         {
-                            // A red-light runner: they will reach the line after the red,
-                            // but within their tolerance of it.
+                            // A red-light runner (`ViolationParams`: "at the amber onset
+                            // they go if, at their present speed, they reach the line no
+                            // later than their tolerance after the red"), whatever their
+                            // amber threshold. Gated on `tti < amber_go_tti_s` as it was,
+                            // the arm only ever took drivers who reach the line before the
+                            // red: one red entry in an hour of a 600 veh/h approach, against
+                            // the field's 3-6 per 1,000 (TTI 0-4196-P1, Table 1). Tagged a red run
+                            // when they would not clear with the stop-or-go margin, as the
+                            // arm above tags its own late goers.
                             decision = EntryDecision::Proceed;
-                            violation |= crate::audit::intent::RED_RUN;
+                            if tti + AMBER_GO_MARGIN_S > left {
+                                violation |= crate::audit::intent::RED_RUN;
+                            }
                             if tti >= AMBER_DILEMMA_TTI_S.1 {
                                 violation |= crate::audit::intent::AMBER_RUN;
                             }
@@ -11058,6 +11072,45 @@ mod tests {
 
     // ---- WP-08: rule violations and crash states ------------------------------------
 
+    /// A fixed list of trips, released at their times: the arrivals of [`approach_run`].
+    struct ArrivalList {
+        inner: NoDemand,
+        trips: Vec<TripRequest>,
+        next: usize,
+    }
+
+    impl ArrivalList {
+        fn new(trips: Vec<TripRequest>) -> Self {
+            Self {
+                inner: NoDemand::new(),
+                trips,
+                next: 0,
+            }
+        }
+    }
+
+    impl Model for ArrivalList {
+        fn card(&self) -> &v2xw_core::card::ModelCard {
+            self.inner.card()
+        }
+    }
+
+    impl crate::traits::Demand for ArrivalList {
+        fn spawns_in(
+            &mut self,
+            _ctx: &mut dyn MobCtx,
+            _from: SimTime,
+            to: SimTime,
+        ) -> Vec<TripRequest> {
+            let mut out = Vec::new();
+            while self.next < self.trips.len() && self.trips[self.next].t < to {
+                out.push(self.trips[self.next].clone());
+                self.next += 1;
+            }
+            out
+        }
+    }
+
     /// What one run of Poisson arrivals on a signalised approach produced.
     struct ApproachRun {
         /// Vehicles that entered the junction from the approach.
@@ -11081,7 +11134,28 @@ mod tests {
         duration_s: f64,
         seed: u64,
     ) -> ApproachRun {
-        let world = grid(true);
+        approach_run_on(
+            GridParams::legacy().with_signals(true),
+            params,
+            rate_veh_per_h,
+            duration_s,
+            seed,
+            true,
+        )
+    }
+
+    /// [`approach_run`] on a grid of `grid` (its signal cycle, say), keeping every
+    /// published state only when `keep_states` is set: a day of steps is too many to hold.
+    fn approach_run_on(
+        grid: GridParams,
+        params: EngineParams,
+        rate_veh_per_h: f64,
+        duration_s: f64,
+        seed: u64,
+        keep_states: bool,
+    ) -> ApproachRun {
+        let world =
+            v2xw_world::procedural::grid(&grid, &ImportOptions::default()).expect("grid");
         let (approach, beyond) = signalised_approach(&world);
         let rng = RngRegistry::new(seed);
         let junction = world.edge(world.lane(approach).edge).to;
@@ -11110,7 +11184,31 @@ mod tests {
             arrivals.push(secs_to_ns(t_s));
             k += 1;
         }
-        let mut engine = engine_on(&world, params, &rng);
+        // The arrivals are offered as demand, so a trip whose origin has no room waits in
+        // the engine's insertion queue (SUMO's `--max-depart-delay`) as every scenario's
+        // trips do. Offered as `MobilityCommand::Spawn`, a refused trip was simply lost:
+        // with every car entering at rest 5 m into the lane, the Poisson clusters lost about
+        // 40 % of the arrivals and the hour put only 355 vehicles through the junction.
+        let trips: Vec<TripRequest> = arrivals
+            .iter()
+            .enumerate()
+            .map(|(i, &at)| TripRequest {
+                seq: i as u64,
+                t: at,
+                origin: approach,
+                origin_s_m: 5.0,
+                destination: beyond,
+                class: VehicleClass::Passenger,
+                desired_speed_mps: 13.89,
+            })
+            .collect();
+        let mut engine = NativeMobility::new(params);
+        {
+            let mut ctx = MobilityCtx::new(0, &world, &rng);
+            engine
+                .init(&mut ctx, Box::new(ArrivalList::new(trips)))
+                .expect("init");
+        }
         let audit = crate::audit::AuditParams::default();
         let mut tagged = crate::audit::TrafficAuditor::new(&world, audit);
         let mut untagged = crate::audit::TrafficAuditor::new(&world, audit);
@@ -11122,28 +11220,12 @@ mod tests {
             states: Vec::new(),
             cycle_s,
         };
-        let mut next = 0usize;
         let mut red_since: Option<SimTime> = None;
         let mut on_approach: BTreeSet<ActorId> = BTreeSet::new();
         let mut t = 0;
         let end = secs_to_ns(duration_s);
         while t < end {
             let mut ctx = MobilityCtx::new(t, &world, &rng);
-            while next < arrivals.len() && arrivals[next] <= t {
-                engine.command(
-                    &mut ctx,
-                    MobilityCommand::Spawn(TripRequest {
-                        seq: next as u64,
-                        t,
-                        origin: approach,
-                        origin_s_m: 5.0,
-                        destination: beyond,
-                        class: VehicleClass::Passenger,
-                        desired_speed_mps: 13.89,
-                    }),
-                );
-                next += 1;
-            }
             let state = signals
                 .state_for(plan, movement, ns_to_secs(t))
                 .expect("controlled");
@@ -11171,7 +11253,9 @@ mod tests {
                 .map(|a| crate::audit::AuditActor { intent: 0, ..*a })
                 .collect();
             untagged.observe(&world, t, t1, &stripped, &update.despawned);
-            run.states.push(update.states);
+            if keep_states {
+                run.states.push(update.states);
+            }
             t = t1;
         }
         run.tagged = tagged.report();
@@ -11196,13 +11280,25 @@ mod tests {
     /// 1,000 vehicles, 1.0 per 10,000 vehicle-cycles), entries come early in the red
     /// (median under 0.5 s, Figure 4; none beyond 4.0 s, Table 3), every one of them is
     /// tagged, and the same entries untagged are caught as defects.
+    ///
+    /// The approach runs a 90 s cycle for two days. The guide's 1.0 per 10,000
+    /// vehicle-cycles "equates to 3 to 6 violations per 1000 vehicles for cycle lengths in
+    /// the range of 60 to 120 s" — 360/C per 1,000, so 6.0 at 60 s, the band's upper edge,
+    /// and 4.0 at 90 s, its middle. The test ran the grid's 60 s cycle for an hour: the
+    /// model's own expectation sat on the edge, and four entries (6.72 per 1,000, median
+    /// of four 0.60 s) could not judge a rate or a median.
     #[test]
     fn red_light_running_sits_in_the_field_band_and_untagged_it_is_a_defect() {
-        let run = approach_run(violations_on(), 600.0, 3600.0, 21);
+        let duration_s = 48.0 * 3600.0;
+        let grid = GridParams {
+            cycle_s: 90.0,
+            ..GridParams::legacy().with_signals(true)
+        };
+        let run = approach_run_on(grid, violations_on(), 600.0, duration_s, 21, false);
         let v = run.into_red_s.len() as f64;
         let n = run.entries as f64;
         let per_1000_veh = 1000.0 * v / n;
-        let cycles = 3600.0 / run.cycle_s;
+        let cycles = duration_s / run.cycle_s;
         let per_1000_cycles = 1000.0 * v / cycles;
         let per_10k_veh_cycles = per_1000_veh * run.cycle_s / 360.0;
         let mut into = run.into_red_s.clone();
@@ -11220,7 +11316,8 @@ mod tests {
             )
         );
         let (lo, hi) = crate::drivers::RED_RUN_PER_1000_VEH_BAND;
-        assert!(n > 400.0, "too few entries to judge a rate: {n}");
+        assert!(n > 10_000.0, "too few entries to judge a rate: {n}");
+        assert!(v >= 30.0, "too few red entries to judge a median: {v}");
         assert!(
             (lo..=hi).contains(&per_1000_veh),
             "{per_1000_veh:.2} red entries per 1,000 vehicles, outside the field band {lo}-{hi}"
@@ -11275,16 +11372,16 @@ mod tests {
             },
             ..base
         };
-        let a = approach_run(base, 600.0, 400.0, 5);
-        let b = approach_run(off, 600.0, 400.0, 5);
-        let c = approach_run(inert, 600.0, 400.0, 5);
+        let a = approach_run(base, 600.0, 3600.0, 5);
+        let b = approach_run(off, 600.0, 3600.0, 5);
+        let c = approach_run(inert, 600.0, 3600.0, 5);
         assert!(a.states == b.states, "enabled: false moved a state");
         assert!(
             a.states == c.states,
             "violations on with every violation zero moved a state"
         );
-        let on1 = approach_run(violations_on(), 600.0, 400.0, 5);
-        let on2 = approach_run(violations_on(), 600.0, 400.0, 5);
+        let on1 = approach_run(violations_on(), 600.0, 3600.0, 5);
+        let on2 = approach_run(violations_on(), 600.0, 3600.0, 5);
         assert!(on1.states == on2.states, "same seed, different states");
         assert!(on1.states != a.states, "violations on changed nothing");
     }
@@ -11293,12 +11390,39 @@ mod tests {
     /// is blocked (the car behind stops short of them), and after the clearance time both
     /// leave with `Collision`. A crash a tagged violation caused is behaviour to the
     /// auditor; the same crash between untagged vehicles is still an overlap defect.
+    ///
+    /// The tagged vehicle is a red runner as the engine leaves one — committed to the
+    /// junction ahead while it shows red, tag set — so the decision pass keeps its tag. A
+    /// bare tag on a vehicle committed to nothing is cleared by that pass, as it must be: a
+    /// driver who is not violating anything is untagged before the collision check reads it.
     #[test]
     fn a_collision_becomes_a_crash_that_blocks_the_lane_until_cleared() {
         let world = grid(true);
-        let (approach, _) = signalised_approach(&world);
-        let route = vec![approach];
+        let (approach, beyond) = signalised_approach(&world);
+        let route = vec![approach, beyond];
         let rng = RngRegistry::new(3);
+        // The first step at which the approach shows red, and the junction it leads to.
+        let junction = world.edge(world.lane(approach).edge).to;
+        let plan = match world.roads.junction(junction).control {
+            JunctionControl::Signalised { plan } => world.signal_plan(plan).expect("a plan"),
+            _ => unreachable!("chosen signalised"),
+        };
+        let movement = world
+            .successors(approach)
+            .iter()
+            .find(|c| c.to_lane == beyond)
+            .and_then(|c| c.via)
+            .expect("an internal connector");
+        let step_ns = EngineParams::default().step.as_nanos();
+        let t0 = (0..)
+            .map(|k| k * step_ns)
+            .find(|t| {
+                FixedTimeSignals::default().state_for(plan, movement, ns_to_secs(*t))
+                    == Some(SignalState::Red)
+            })
+            .expect("a red");
+        // Within the junction look-ahead of the line, so the commitment is read.
+        let line = world.lane(approach).length_m;
         let params = EngineParams {
             intersections: IntersectionMode::SignalsOnly,
             lane_changes: false,
@@ -11314,30 +11438,32 @@ mod tests {
             let driver = engine.driver_for(VehicleClass::Passenger);
             let car = VehicleClass::Passenger;
             let a = engine
-                .spawn_with_route(&world, 0, car, driver, route.clone(), 32.0)
+                .spawn_with_route(&world, t0, car, driver, route.clone(), line - 28.0)
                 .expect("spawn");
             let b = engine
-                .spawn_with_route(&world, 0, car, driver, route.clone(), 30.0)
+                .spawn_with_route(&world, t0, car, driver, route.clone(), line - 30.0)
                 .expect("spawn");
             let c = engine
-                .spawn_with_route(&world, 0, car, driver, route.clone(), 6.0)
+                .spawn_with_route(&world, t0, car, driver, route.clone(), line - 60.0)
                 .expect("spawn");
             engine.set_speed(b, 8.0).expect("speed");
             engine.set_speed(c, 8.0).expect("speed");
             if tag {
-                engine.actors.get_mut(&b).expect("b").violation = crate::audit::intent::RED_RUN;
+                let x = engine.actors.get_mut(&b).expect("b");
+                x.violation = crate::audit::intent::RED_RUN;
+                x.amber_commit = Some(junction);
             }
             let mut auditor =
                 crate::audit::TrafficAuditor::new(&world, crate::audit::AuditParams::default());
             let mut gone = Vec::new();
-            let mut t = 0;
-            while t < secs_to_ns(12.0) {
+            let mut t = t0;
+            while t < t0 + secs_to_ns(12.0) {
                 let mut ctx = MobilityCtx::new(t, &world, &rng);
                 let update = engine.step(&mut ctx, params.step);
                 let t1 = t + params.step.as_nanos();
                 let actors = engine.audit_actors(&world, t1);
                 auditor.observe(&world, t, t1, &actors, &update.despawned);
-                if t == 0 {
+                if t == t0 {
                     for id in [a, b] {
                         let x = &engine.actors[&id];
                         assert!(x.crash.is_some(), "{id:?} did not crash");

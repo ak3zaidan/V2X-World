@@ -73,7 +73,7 @@ fn position(rng: &mut Rng) -> PositionEstimate {
             rng.range(-5_000.0, 5_000.0),
             rng.range(-20.0, 200.0),
         ),
-        vel: Vec3::new(speed * heading.cos(), speed * heading.sin(), 0.0),
+        vel: Vec3::new(speed * v2xw_core::math::cos(heading), speed * v2xw_core::math::sin(heading), 0.0),
         heading_rad: heading,
         semi_major_m: rng.range(0.5, 20.0),
         semi_minor_m: rng.range(0.2, 0.5),

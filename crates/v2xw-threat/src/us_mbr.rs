@@ -371,8 +371,8 @@ impl UsSmMbr {
                         }
                     };
                     // ENU, heading 0 = east, counter-clockwise (crate::obs).
-                    let px = r.x + along * r.heading.cos();
-                    let py = r.y + along * r.heading.sin();
+                    let px = r.x + along * v2xw_core::math::cos(r.heading);
+                    let py = r.y + along * v2xw_core::math::sin(r.heading);
                     if math::hypot(m.claimed_x_m - px, m.claimed_y_m - py) > p.gps_drift_m {
                         out.push(DetectorId::PositionJump);
                     }

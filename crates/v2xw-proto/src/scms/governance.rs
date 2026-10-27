@@ -64,7 +64,7 @@
 //! not published, so the federal one is an assumption. The provider's own CRL of revoked
 //! components (series 2/256) is the CRL work package's.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use p256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};
@@ -2541,7 +2541,7 @@ impl Governance {
 /// bytes live.
 fn shared_cert(c: &Certificate) -> Arc<Certificate> {
     struct Pool {
-        by_hash: HashMap<[u8; 32], Weak<Certificate>>,
+        by_hash: BTreeMap<[u8; 32], Weak<Certificate>>,
         prune_at: usize,
     }
     static POOL: OnceLock<Mutex<Pool>> = OnceLock::new();
@@ -2551,7 +2551,7 @@ fn shared_cert(c: &Certificate) -> Arc<Certificate> {
     let mut pool = POOL
         .get_or_init(|| {
             Mutex::new(Pool {
-                by_hash: HashMap::new(),
+                by_hash: BTreeMap::new(),
                 prune_at: 1024,
             })
         })

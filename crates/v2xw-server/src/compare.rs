@@ -530,9 +530,17 @@ pub fn digest_dir() -> Option<std::path::PathBuf> {
 /// fatal: the in-memory history still works.
 pub fn save_digest(d: &RunDigest) {
     let Some(dir) = digest_dir() else { return };
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |t| t.as_millis());
+    // The store's order is its file names' numeric prefix: one past the newest stored, so
+    // a new digest sorts after every earlier one without reading a clock (ADR 0004; the
+    // firewall's wall-clock check). Earlier stores named by milliseconds keep their order.
+    let stamp = stored_files(&dir)
+        .iter()
+        .filter_map(|p| {
+            let name = p.file_name()?.to_str()?;
+            name.split('-').next()?.parse::<u128>().ok()
+        })
+        .max()
+        .map_or(0, |n| n + 1);
     let id: String = d
         .run_id
         .chars()

@@ -72,7 +72,7 @@ fn left_offset(points: &[v2xw_core::geom::Vec3], off: f64) -> Vec<(f64, f64)> {
             let a = points[i.saturating_sub(1)];
             let b = points[(i + 1).min(n - 1)];
             let (dx, dy) = (b.x - a.x, b.y - a.y);
-            let len = dx.hypot(dy).max(1e-9);
+            let len = v2xw_core::math::hypot(dx, dy).max(1e-9);
             // Left normal of the travel direction.
             (points[i].x - dy / len * off, points[i].y + dx / len * off)
         })

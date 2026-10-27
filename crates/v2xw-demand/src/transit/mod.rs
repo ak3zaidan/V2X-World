@@ -179,8 +179,13 @@ pub fn build_schedule(world: &World, p: &TransitParams, date: u32) -> Result<Sch
             o.lon_deg + x / proj.metres_per_degree_longitude(),
         )
     };
-    let (s, w) = corner(b.min.x, b.min.y);
-    let (n, e) = corner(b.max.x, b.max.y);
+    // Padded by the matching radius: a stop pole stands on the sidewalk, and the sidewalk
+    // of a street along the world's edge lies outside the box of its lanes. Unpadded, the
+    // filter dropped every stop of an edge street before the matcher, which looks
+    // `radius_m` round each stop anyway, could place it on the lane beside it.
+    let pad = p.matching.radius_m.max(0.0);
+    let (s, w) = corner(b.min.x - pad, b.min.y - pad);
+    let (n, e) = corner(b.max.x + pad, b.max.y + pad);
     let types = if p.route_types.is_empty() {
         Vec::new()
     } else {

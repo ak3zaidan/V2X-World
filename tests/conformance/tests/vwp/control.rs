@@ -9,29 +9,36 @@ use v2xw_server::error::ServerError;
 use v2xw_server::openrpc;
 use v2xw_server::rpc::{CONNECTION_SCOPED, METHODS, parse};
 
-/// **R1** — "All 33 methods of §6.15 are implemented and appear in `rpc.discover`."
+/// **R1** — "All methods of §6.15 are implemented and appear in `rpc.discover`."
 ///
-/// 33 since `scenario.schema` (the generated settings surface) joined the inventory; §6.15
-/// lists it. The server's own `tests/rpc.rs` counts the same 33.
+/// The inventory is read from §6.15 itself — its bold count and every back-quoted name in
+/// its table — rather than from a number written here. The kit said 33 until the PKI view
+/// (WP-E1 to E3), the city library and the run history brought §6.15 to 44 and the check
+/// went red on a stale constant; §6.15 says the conformance tests count from the lists.
 ///
 /// The inventory and the self-description have to be the same set. A method in one and not
 /// the other is the failure a generated client hits first: `rpc.discover` is how every
 /// binding, stub and CLI completion is produced.
 #[test]
-fn r1_all_thirty_three_methods_are_implemented_and_discoverable() {
+fn r1_every_method_of_the_inventory_is_implemented_and_discoverable() {
+    let (count, listed) = inventory_of_section_6_15();
     assert_eq!(
-        METHODS.len(),
-        33,
-        "§6.15 lists 32 methods plus rpc.discover"
+        count,
+        listed.len(),
+        "§6.15's bold count disagrees with its own table"
+    );
+    let mut unique = METHODS.to_vec();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), METHODS.len(), "the inventory has a duplicate");
+    assert_eq!(
+        unique, listed,
+        "the dispatcher's inventory and §6.15's table disagree"
     );
     assert!(
         METHODS.contains(&"scenario.schema"),
         "§6.15 names scenario.schema"
     );
-    let mut unique = METHODS.to_vec();
-    unique.sort_unstable();
-    unique.dedup();
-    assert_eq!(unique.len(), 33, "the inventory has a duplicate");
 
     let doc = openrpc::document(None);
     let described: Vec<&str> = doc["methods"]
@@ -132,4 +139,31 @@ fn r10_a_json_rpc_batch_array_is_refused_with_32600() {
             .code(),
         -32600
     );
+}
+
+/// §6.15 of `docs/protocol/vwp-v1.md`: the method count it states in bold, and every
+/// back-quoted name in its table, sorted and deduplicated.
+fn inventory_of_section_6_15() -> (usize, Vec<String>) {
+    let path = v2xw_conformance::repo_root().join("docs/protocol/vwp-v1.md");
+    let text = std::fs::read_to_string(&path).expect("vwp-v1.md is readable");
+    let start = text
+        .find("### 6.15 Method inventory")
+        .expect("vwp-v1.md has §6.15");
+    let section = &text[start..];
+    let section = &section[..section.find("\n---").unwrap_or(section.len())];
+    let count: usize = section
+        .split("**")
+        .nth(1)
+        .and_then(|n| n.trim().parse().ok())
+        .expect("§6.15 states its count in bold");
+    let mut names: Vec<String> = Vec::new();
+    for row in section.lines().filter(|l| l.starts_with("| ") && !l.starts_with("| Group")) {
+        let cells: Vec<&str> = row.split('|').collect();
+        let Some(methods) = cells.get(2) else { continue };
+        names.extend(methods.split('`').skip(1).step_by(2).map(str::to_string));
+    }
+    names.sort_unstable();
+    names.dedup();
+    assert!(names.len() > 30, "the §6.15 table parsed to {names:?}");
+    (count, names)
 }

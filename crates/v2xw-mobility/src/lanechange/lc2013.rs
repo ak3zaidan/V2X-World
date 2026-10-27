@@ -240,7 +240,7 @@ impl Lc2013Params {
     ) -> Option<Motive> {
         if v_this - RIGHT_MARGIN_MPS > r.v_safe {
             // The right lane is clearly slower: its benefit halves per second.
-            state.gain_right *= 0.5_f64.powf(dt);
+            state.gain_right *= v2xw_core::math::pow(0.5, dt);
         } else {
             state.gain_right += dt * relative_gain(r.v_safe, v_this);
             if self.keep_right_due(state, dt, road, r) {
@@ -279,9 +279,9 @@ impl Lc2013Params {
     ) -> bool {
         let gain = relative_gain(l.v_safe, v_this);
         state.gain_left = if v_this > l.v_safe {
-            state.gain_left * 0.5_f64.powf(dt)
+            state.gain_left * v2xw_core::math::pow(0.5, dt)
         } else if v_this == l.v_safe {
-            state.gain_left * 0.8_f64.powf(dt)
+            state.gain_left * v2xw_core::math::pow(0.8, dt)
         } else {
             state.gain_left + dt * gain
         };

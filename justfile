@@ -100,7 +100,7 @@ validation-report *ARGS:
 
 [doc("Cross-validate against SUMO (traffic on a grid and Midtown, radio against Veins/OpenCV2X) and write docs/validation/cross-validation.md; needs SUMO via SUMO_HOME or V2XW_SUMO_VENV (--quick: shorter runs)")]
 cross-validate *ARGS:
-    cargo run --release --quiet -p v2xw-interop --bin cross_validate -- {{ARGS}}
+    cargo run --release --quiet -p v2xw-cli --bin cross_validate -- {{ARGS}}
 
 [doc("Check a scenario without running it; prints the field-level errors")]
 validate SCENARIO:

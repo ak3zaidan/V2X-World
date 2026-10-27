@@ -26,7 +26,7 @@
 #   description     the area the box covers
 #   drive_lane_km   kilometres of driving lane in the imported network, and
 #   signals         signalised intersections in it — both measured by the city audit
-#                   (`cargo run -p v2xw-trafficval --bin city_audit -- <scenario>`); a fixed
+#                   (`cargo run -p v2xw-cli --bin city_audit -- <scenario>`); a fixed
 #                   arrival rate moved to another city is rescaled by the lane-km ratio
 #
 # Every city is imported and its traffic run under the traffic auditor before it is offered:

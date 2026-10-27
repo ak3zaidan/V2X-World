@@ -450,15 +450,15 @@ impl SumoMobility {
                 _ => continue,
             };
             let h = std::f64::consts::FRAC_PI_2 - angle.to_radians();
-            let h = h.sin().atan2(h.cos());
+            let h = v2xw_core::math::atan2(v2xw_core::math::sin(h), v2xw_core::math::cos(h));
             let yaw = if tr.heading.is_finite() && dt_s > 0.0 {
                 let d = h - tr.heading;
-                d.sin().atan2(d.cos()) / dt_s
+                v2xw_core::math::atan2(v2xw_core::math::sin(d), v2xw_core::math::cos(d)) / dt_s
             } else {
                 0.0
             };
             tr.heading = h;
-            let (c, s) = (h.cos(), h.sin());
+            let (c, s) = (v2xw_core::math::cos(h), v2xw_core::math::sin(h));
             let lane_pos_world = if lane.starts_with(':') {
                 None
             } else if let Some(l) = self.ids.lane_of.get(&lane) {
