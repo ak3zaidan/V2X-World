@@ -18,8 +18,8 @@ rows:
   expect: ratio inside 1/1.5..1.5 (ssmval TOLERANCE); geometric base 362/20 = 18x
   source: SUMO SSM device documentation (crossing only on foe links of one junction, range along the network, braking only extrapolated); MSDevice_SSM read for behaviour
   fault: zone lookup ignores the foe matrix (every connector pair a zone) -> excess returns
-  measured: pending
-  verdict: pending
+  measured: 'grid@1800: 21 vs SUMO 20 (1.05x; geometric base 362, 18.1x); manhattan@900: 1 vs 1; manhattan@2400: 8 vs 7. Fault no-extrapolation: 0 (0.00x, FAIL)'
+  verdict: pass
 - id: W11.xval.merging
   change: as W11.xval.crossing
   base: as W11.xval.crossing
@@ -28,8 +28,8 @@ rows:
   expect: ratio inside 1/1.5..1.5 (geometric base 47/26 = 1.81x)
   source: SUMO SSM documentation (merging = foe links onto one outgoing lane)
   fault: as W11.xval.crossing
-  measured: pending
-  verdict: pending
+  measured: 'grid@1800: 27 vs 26 (1.04x; base 47, 1.81x); manhattan@900: 3 vs 3; manhattan@2400: 11 vs 13. Fault: 0'
+  verdict: pass
 - id: W11.xval.following
   change: as W11.xval.crossing
   base: as W11.xval.crossing
@@ -38,8 +38,8 @@ rows:
   expect: stays inside 1/1.5..1.5 (geometric base 413/328 = 1.26x); the gap is now along the route, as SUMO's
   source: SUMO SSM documentation (lead/follow along the lane sequence)
   fault: none new (the following measure is unchanged in form)
-  measured: pending
-  verdict: pending
+  measured: 'grid@1800: 366 vs 328 (1.12x; base 1.26x); manhattan@900: 157 vs 116 (1.35x; base 198, 1.71x FAIL); manhattan@2400: 591 vs 462 (1.28x)'
+  verdict: pass
 - id: W11.xval.oncoming
   change: as W11.xval.crossing
   base: as W11.xval.crossing
@@ -48,8 +48,8 @@ rows:
   expect: 0 (SUMO 0: oncoming is two vehicles on one lane in opposite directions; one-way lanes never hold it); geometric base 28
   source: SUMO SSM documentation, encounter type 20
   fault: as W11.xval.crossing
-  measured: pending
-  verdict: pending
+  measured: '0 on every case (geometric base 28 on grid@1800)'
+  verdict: pass
 - id: W11.xval.driving-unchanged
   change: as W11.xval.crossing (an observer change only)
   base: as W11.xval.crossing
@@ -58,8 +58,8 @@ rows:
   expect: identical between base and variant (the measures read the trajectories, never feed them)
   source: design (detectors and observers read state only)
   fault: n/a
-  measured: pending
-  verdict: pending
+  measured: 'grid@1800 reports differ only in the SSM table and verdict lines (diff)'
+  verdict: pass
 - id: W11.xval.cost
   change: as W11.xval.crossing
   base: as W11.xval.crossing
@@ -68,8 +68,8 @@ rows:
   expect: within +25 % of the base (path building is O(vehicles) per step; pairs in a 100 m grid instead of 50 m, each a few lane lookups; SUMO's own run dominates)
   source: complexity of the code
   fault: n/a
-  measured: pending
-  verdict: pending
+  measured: 'grid@1800: 10.40 s, 78.4 MB against geometric 11.06 s, 78.9 MB'
+  verdict: pass
 - id: W11.tv.crossing
   change: traffic validation safety/surrogate-measures in network mode
   base: none (held row)

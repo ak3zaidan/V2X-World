@@ -857,6 +857,7 @@ impl Rect {
     /// Whether the segment from `a` to `b` passes through the rectangle's interior over a
     /// positive length (a segment grazing an edge or ending on it does not). The segment
     /// is clipped against the rectangle in its own frame (the Liang–Barsky slab test).
+    #[cfg(test)]
     fn crossed_by(&self, a: (f64, f64), b: (f64, f64)) -> bool {
         self.crossing(a, b).is_some()
     }

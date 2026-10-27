@@ -415,6 +415,23 @@ trustworthy or comparable; later waves add behaviours and radio features.
     run Manhattan; confirm that SUMO's device uses acceleration; no conflict-log file is
     written by an engine run (counts and distributions only); the traffic-validation report
     and the cross-validation report were not regenerated.
+  - Follow-up (2026-10-27, traffic-fix round 3, branch of `4aa798bb`): **the SUMO agreement
+    line now PASSES.** Cause of the excess: SUMO's device classifies by the network, not
+    by geometry (SSM documentation; `MSDevice_SSM` read for behaviour): crossing and
+    merging only when both entry links are foes in the junction's right-of-way matrix
+    (merging: onto one outgoing lane), range along the route, oncoming only on one lane,
+    conflict-area times at current speed or braking (`min(0, a)`), crossing TTC = the
+    second vehicle's entry distance over its speed. New network mode
+    (`SsmTracker::step_network`, `evaluate_pair_network`; zones from `ConflictZones`,
+    paths from each route) used by the cross-validation and `safety/surrogate-measures`;
+    `V2XW_XVAL_SSM_MODE=geometric` keeps the first cut. Same SUMO trajectories, ours
+    against SUMO's: grid@1800 following 366/328, merging 27/26, crossing 21/20 (was
+    362/20), oncoming 0/0; Manhattan@900 157/116, 3/3, 1/1 (geometric failed following
+    1.71x); Manhattan@2400 591/462, 11/13, 8/7. Driving unchanged, cost unchanged. Fault
+    (no extrapolation) turns it red (0.00x). Rows in `traffic-fix3.yaml`. Open: the
+    engine-run `ssm` metric group still measures by geometry (the published frames carry
+    no route) and writes no conflict-log file; the native run's crossing and merging
+    counts in network mode are 0 on both cities (traced no further).
 
 **WP-12 CPM rate and content under load, two DENM triggers** (S ×2, 4 days). Sources: O-P3b, O-P9.
 - Scope: `T_GenCpm` clamped to the DCC interval; object ordering by the TS 103 324 utility
@@ -545,6 +562,12 @@ trustworthy or comparable; later waves add behaviours and radio features.
   `cpm` unit inside that cycle signs CPMs a receiver refuses; no 3D (mast see-over)
   occlusion; no run-level byte comparison against the f4982788 binary (the PSID fix
   changes certificate bytes); outline default left for the owner to flip.
+  Follow-up (2026-10-27, traffic-fix round 3): the outline rule is 2.5D (mount height to
+  the target corner's top; a body blocks only where the line passes over its footprint
+  below its roof, after Boban et al. 2014), so a mast or truck-cab camera sees over cars
+  and not over a truck; unit test with the hand-computed heights. Centre-line (default)
+  unchanged. `awareness_direct_permille = 0` in the CPM test scenario: diagnosis pending
+  (no CAM is credited in `cpm_on_receive`; the run was not reached in this round).
 
 **WP-15 Complete `.rou.xml` import** (S-M, 3 days). Source: S-P8.
 - Scope: every vType attribute, `vTypeDistribution`, Bernoulli `probability` flows with their
@@ -580,6 +603,13 @@ trustworthy or comparable; later waves add behaviours and radio features.
   (mapped by `library_model` but not applied per vehicle), stops/persons and arrival* are counted
   but not modelled. Occupancy keywords (free/allowed/last/avg/stop) fall back and are counted.
   An unsafe stated departSpeed is capped rather than delayed.
+  Follow-up (2026-10-27, traffic-fix round 3): a vType's `carFollowModel` is driven per
+  vehicle (`TripDriver::car_following`, `library::build_one`, the engine's `VehicleCf`
+  dispatch; CACC and unknown models counted not modelled); a stated departSpeed (number,
+  desired, speedLimit) above the safe speed delays the insertion as SUMO documents (max and
+  random are lowered); the settings form's demand dropdown lists sumo-rou and the seven
+  `v2xw-demand` kinds with words. Tests written (`rou_import.rs`, routes unit test, options
+  test); results in `traffic-fix3.yaml`.
 
 ### Wave 6: US signal control, channel switching, channel realism
 
