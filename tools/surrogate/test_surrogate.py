@@ -131,7 +131,7 @@ class FitAndPredict(unittest.TestCase):
 
 class Projection(unittest.TestCase):
     PROFILE = {'devices': 300, 'days': 4, 'seed': 7, 'drive_s_per_day': 120.0,
-               'drive_hour_local': 8.0, 't0_hour_local': 17.0, 'quota_reports': 58,
+               'drive_hour_local': 8.0, 't0_hour_local': 17.0,
                'k_rules': [1, 5, 50]}
 
     def test_deterministic(self):
@@ -158,12 +158,18 @@ class Projection(unittest.TestCase):
         self.assertGreaterEqual(b[0], b[1])
         self.assertGreaterEqual(b[1], b[2])
 
-    def test_quota_caps_what_a_device_holds(self):
+    def test_held_reports_carry_over(self):
         r = sg.fit(synth(1))
         for cv in r['conversion'].values():
-            cv['uploaded'] = 0.0                               # a device that never uploads
-        out = sg.project(r, dict(self.PROFILE, quota_reports=5, drive_s_per_day=36000.0))
-        self.assertGreater(sum(d['lost_quota'] for d in out['per_day']), 0)
+            cv['uploaded'], cv['lost'] = 0.5, 0.0                # half go each day
+        out = sg.project(r, dict(self.PROFILE, days=6))
+        st = sum(d['stored'] for d in out['per_day'])
+        up = sum(d['uploaded'] for d in out['per_day'])
+        # steady state holds one day of reports: 5 of 6 days uploaded (0.5 without carry-over)
+        self.assertGreater(up / st, 0.75)
+        for cv in r['conversion'].values():
+            cv['uploaded'] = 0.0
+        out = sg.project(r, dict(self.PROFILE, days=6))
         self.assertEqual(sum(d['uploaded'] for d in out['per_day']), 0)
 
 

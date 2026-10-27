@@ -140,8 +140,16 @@ def fit(S):
     first_up = (ups[0] - w0) if ups else 0.0
     batch = [m for m in S['ma'] if m[0] < DAY + 7200.0]
     n_up = sum(1 for r in S['reports'] if r.get('uploaded', DAY) < DAY)
+    n_ra = max(1, len({m[1] for m in S['ma']}))
+    sh = S['shuffle']
+    # the shuffle model run on the calibration's own upload instants: what it releases
+    # by the horizon, against what the MAs received (the delivery share)
+    released, first_rel = shuffle_release(ups, sh['window_s'], sh['threshold'], n_ra, DAY + 7200.0)
     ma = {
         'received_per_upload': len(batch) / n_up if n_up else 0.0,
+        'delivered_per_released': len(batch) / released if released else 0.0,
+        'latency_s': (S['ma'][0][0] - first_rel) if (S['ma'] and first_rel is not None) else 0.0,
+        'ras': n_ra,
         'first_after_first_upload_s': (S['ma'][0][0] - ups[0]) if (S['ma'] and ups) else S['shuffle']['window_s'],
         'cases_per_received': S['cases'] / len(S['ma']) if S['ma'] else 0.0,
         'providers': sorted({m[1] for m in S['ma']}),
@@ -159,6 +167,49 @@ def fit(S):
             if S.get('trigger') == 'stored' and S['verdicts'] else 1.0,
         'not_filed_per_trigger': S['not_filed'] / len(S['verdicts']) if S['verdicts'] else 0.0,
     }
+
+
+def shuffle_release(ups, window_s, threshold, n_ra, horizon):
+    """The RA report shuffle (CAMP-EE SCMS-765, `release_report_shuffle`): the first
+    report arms a timer of `window_s`; the batch goes to the MA when the timer fires or the
+    moment it holds `threshold` reports. Uploads are split evenly over `n_ra` RAs
+    (ASSUMPTION: devices are assigned to providers evenly). Returns (reports released by
+    `horizon`, the first release instant or None)."""
+    released, first = 0, None
+    for i in range(n_ra):
+        mine = ups[i::n_ra]
+        armed, nb = None, 0
+        for t in mine:
+            if armed is not None and t >= armed + window_s:
+                if armed + window_s < horizon:
+                    released += nb
+                    first = armed + window_s if first is None else min(first, armed + window_s)
+                armed, nb = None, 0
+            if armed is None:
+                armed = t
+            nb += 1
+            if nb >= threshold:
+                if t < horizon:
+                    released += nb
+                    first = t if first is None else min(first, t)
+                armed, nb = None, 0
+        if armed is not None and armed + window_s < horizon:
+            released += nb
+            first = armed + window_s if first is None else min(first, armed + window_s)
+    return released, first
+
+
+def _upload_times(n_by_window, windows, first_up):
+    """Expected upload instants: each window's uploads spread evenly over the window (the
+    first window from the calibration's first-upload offset on)."""
+    out = []
+    for w, n in sorted(n_by_window.items()):
+        a, b = windows[w]
+        if w == 0:
+            a = min(b, a + first_up)
+        k = int(round(n))
+        out.extend(a + (b - a) * (j + 0.5) / k for j in range(k)) if k else None
+    return sorted(out)
 
 
 def _dispersion(subjects):
@@ -260,6 +311,17 @@ def predict(rates, exposure_s, windows, fault=None):
         lost += s * cv['lost']
         relay += s * cv['uploaded'] * cv['relay_share']
     first_up = windows[0][0] + r['first_upload_after_window_s']
+    up_w = {}
+    for (w, c, k), n in V.items():
+        cv = r['conversion'].get(c)
+        if cv:
+            up_w[w] = up_w.get(w, 0.0) + n * cv['stored_per_verdict'] * cv['uploaded']
+    m = r['ma']
+    W, thr = r['shuffle']['window_s'], r['shuffle']['threshold']
+    if fault == 'no_shuffle':
+        W, thr = 0.0, 1.0
+    rel, first_rel = shuffle_release(_upload_times(up_w, windows, r['first_upload_after_window_s']),
+                                     W, thr, m.get('ras', 1), DAY + 7200.0)
     out = {
         'x.e10.triggers': nV,
         'x.e10.verdicts': nV * r.get('verdicts_per_trigger', 1.0),
@@ -268,9 +330,9 @@ def predict(rates, exposure_s, windows, fault=None):
         'x.e10.lost': lost,
         'x.e10.relay_share': relay / up if up else 0.0,
         'x.e10.triggers.free_share': by_cls.get('free', 0.0) / nV if nV else 0.0,
-        'x.e10.ma_batch': up * r['ma']['received_per_upload'],
-        'x.e10.ma_first_t': first_up + r['ma']['first_after_first_upload_s'] if up else -1.0,
-        'x.e10.cases': round(r['ma']['cases_per_received'] * up * r['ma']['received_per_upload']),
+        'x.e10.ma_batch': rel * m.get('delivered_per_released', 1.0),
+        'x.e10.ma_first_t': first_rel + m.get('latency_s', 0.0) if first_rel is not None else -1.0,
+        'x.e10.cases': round(m['cases_per_received'] * rel * m.get('delivered_per_released', 1.0)),
         'surrogate': {'label': 'analytical', 'version': VERSION, 'fault': fault,
                       'from_run': r['from_run']},
     }
@@ -306,7 +368,12 @@ def project(rates, profile):
 
     profile: devices, days, seed, drive_s_per_day, class_share {cls: share}, drive_hour_local
     (the hour the day's driving starts), t0_hour_local (the local hour of t = 0),
-    quota_reports, k_rules [k...], window_days (the MA's rolling window)."""
+    k_rules [k...], window_days (the MA's rolling window).
+
+    A device is followed as the *subject* of reports. Store effects (the SM-MBR quota,
+    decay, a device leaving with its store) act on the reporters' stores, so they enter
+    only through the calibration's measured `lost` and `uploaded` shares; a report neither
+    uploaded nor lost on its day gets the same chance again the next day."""
     P = dict(profile)
     rng = random.Random(P.get('seed', 1))
     days, ndev = int(P['days']), int(P['devices'])
@@ -329,8 +396,7 @@ def project(rates, profile):
         cum.append(acc)
     drive = float(P.get('drive_s_per_day', 3600.0))
     start_h = float(P.get('drive_hour_local', 8.0)) - float(P.get('t0_hour_local', 17.0))
-    quota = int(P.get('quota_reports', 58))
-    per_day = [dict(day=d + 1, verdicts=0, stored=0, uploaded=0, lost=0, lost_quota=0, ma=0)
+    per_day = [dict(day=d + 1, verdicts=0, stored=0, uploaded=0, lost=0, ma=0)
                for d in range(days + 2)]
     uploads = []                              # (t, device, reports): one chunk per device-day
     for dev in range(ndev):
@@ -353,17 +419,14 @@ def project(rates, profile):
             per_day[d]['lost'] += gone
             # the day's new reports and the held ones get the day's upload chance
             pool = held + s - gone
-            k_up = _binom(rng, pool, cv['uploaded'])
+            k_up = _binom(rng, pool, min(1.0, cv['uploaded'] / max(1e-12, 1.0 - cv.get('lost', 0.0))))
             held = pool - k_up
-            if held > quota:
-                per_day[d]['lost_quota'] += held - quota
-                held = quota
             per_day[d]['uploaded'] += k_up
             if k_up:
                 uploads.append((t_start + rng.random() * drive, dev, k_up))
     # the RA's shuffle (count-based), then the MA's receipts per device
     uploads.sort()
-    p_ma = rates['ma']['received_per_upload']
+    p_ma = rates['ma'].get('delivered_per_released', rates['ma']['received_per_upload'])
     ma_t = {}
     batch, armed, nb = [], None, 0
 
