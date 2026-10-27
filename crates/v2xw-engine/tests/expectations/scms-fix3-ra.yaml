@@ -143,8 +143,8 @@ rows:
   measure: topup mean, ms
   expect: 'BS > B + 10,000 ms: the old lazy job ran the ACA work at the request (scms_knobs_runs measured 19,182 ms)'
   source: integrator trace 2026-10-26 (validation summary §6 item 27)
-  measured: pending
-  verdict: pending
+  measured: 'B 2,337.7 ms (59 top-ups, max 2,342) against BS 16,411.7 ms (35, max 69,315): +14,074 ms'
+  verdict: pass
 - id: RA.download-wait
   base: FH
   variant: FH20
@@ -190,8 +190,8 @@ rows:
   measure: receiver_validation.refused psid-not-permitted
   expect: '> 0: a unit''s certificate permitted SPaT/MAP (0x82) only, so every receiver refused its SSMs (PSID 0x204095)'
   source: IEEE 1609.2 §5.2 (the SPDU PSID must be in the signer's appPermissions); IEEE PSID registry (SSM psid-traffic-signal-priority-status 2113685)
-  measured: pending
-  verdict: pending
+  measured: 'CB: psid-not-permitted 299 of 118,988 checked; 4 units in the cycle, 8 certificates preloaded'
+  verdict: pass
 - id: RSU.ssm-accepted-after
   base: CB
   variant: CF

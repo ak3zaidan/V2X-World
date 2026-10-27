@@ -69,6 +69,9 @@ impl ScmsRun {
         jmax: u32,
         flow: FlowId,
     ) -> FlowRun {
+        if flow == FlowId::Topup {
+            self.generate_past_due(device, start_i, at);
+        }
         let run = self.new_run();
         let mut seed = [0u8; butterfly::SEED_BYTES];
         {
@@ -145,6 +148,108 @@ impl ScmsRun {
     pub fn topup_at(&mut self, device: NodeId, at: SimTime, i: u32, jmax: u32) -> FlowRun {
         let at = at.max(self.kernel.now());
         self.start_provisioning(device, at, i, 1, jmax, FlowId::Topup)
+    }
+
+    /// Runs the RA's weekly job for week `i` of `device`'s account at the instant the
+    /// schedule reached it, when that was at least `first_batch_delay` (the RA's
+    /// generation time, its `nextDlTime` for a fresh batch) before the device asks at `at`.
+    ///
+    /// A real RA does not wait for a device's `.info`: it generates every week within
+    /// `ra-maxPreloadTime` of `firstI` when it accepts the request and adds one week at
+    /// each i-period boundary for every account ([PRIMER] p.6; [CAMP122] 5.2.7.6.4;
+    /// [SMP] Table 3 `ra-maxGenDelay`), so a top-off of such a week is only the `.info`
+    /// request and the batch download (1609.2.1 §6.3.5.4, §8.2): the file is held and
+    /// `nextDlTime` is now. The engine generates weeks lazily; before this, a week that
+    /// fell due long ago was expanded and certified when the device first asked, and the
+    /// device was told `now + first_batch_delay` and waited through the ACA's work in the
+    /// run (`sensitivity_security::the_backhaul_latency_and_bandwidth_move_relay_topups`,
+    /// whose 128 kbit/s line came out faster than the default because the wait swamped
+    /// it). The job runs here on a scratch kernel at its due instant, under the faults in
+    /// force then, exactly as [`ScmsRun::preload_at`] runs a pre-run pool: every entity's
+    /// state is what the job would have left, its PDUs are marked off the run's kernel,
+    /// and when the job's last answer came after the run's clock (an ACA slow or down
+    /// at the boundary) the `.info` answer names that instant (`held_from`). Every account
+    /// whose week is due by `at` joins the job's population batch, as it would have in
+    /// the run. A week that fell due later than that is left to the run's own weekly job
+    /// ([`ScmsState::pregen_next`]), whose timing and faults are the run's.
+    fn generate_past_due(&mut self, device: NodeId, i: u32, at: SimTime) {
+        let st = &self.state;
+        let Some(account) = st.ra.accounts.get(&device) else {
+            return;
+        };
+        if account.generated.contains(&i)
+            || st.ra.blocklist.contains(&device)
+            || st.ra.repos.get(&device).is_some_and(|r| r.contains_key(&i))
+        {
+            return;
+        }
+        let Some(due) = st.pregen_due(account, i) else {
+            return;
+        };
+        if st.params.first_batch_delay.after(due) > at || due > self.kernel.now() {
+            return;
+        }
+        let mut scratch: Kernel<ScmsMsg> = Kernel::new_at(self.kernel.net().clone(), due);
+        let p = self.state.params;
+        for (node, spec) in self.state.nodes.backend_service_models(&p) {
+            scratch.host(node, &spec, p.backend_profile);
+        }
+        host_governance(&mut scratch, &self.state.gov, &p);
+        host_committees(&mut scratch, &self.state.committees, &p);
+        let mut real = core::mem::replace(&mut self.kernel, scratch);
+        let pdu0 = self.state.pdus.len();
+        // The run's jobs (an in-run request in its shuffle, another week in flight) stay
+        // the run's: the scratch kernel sees only this job, and they are put back after.
+        let run_jobs = core::mem::take(&mut self.state.ra.jobs);
+        let had: BTreeSet<NodeId> = self
+            .state
+            .ra
+            .repos
+            .iter()
+            .filter(|(_, r)| r.contains_key(&i))
+            .map(|(d, _)| *d)
+            .collect();
+        self.state.ra.population_until = Some(at);
+        let run = self.new_run();
+        let ra = self.state.nodes.ra;
+        self.inject_at(
+            due,
+            ra,
+            ScmsMsg::PregenTimer { device, i },
+            FlowId::Pregeneration,
+            run,
+        );
+        let outcome = Self::drain_into(&mut self.state, &mut self.kernel);
+        let finished = self.kernel.now();
+        core::mem::swap(&mut self.kernel, &mut real);
+        self.state.ra.population_until = None;
+        let run_now = self.kernel.now();
+        for p in &mut self.state.pdus[pdu0..] {
+            p.step = None;
+            p.preload = true;
+            p.at = p.at.min(run_now);
+        }
+        let leftover = core::mem::replace(&mut self.state.ra.jobs, run_jobs);
+        self.state.ra.jobs.extend(leftover);
+        if finished > run_now {
+            let filed: Vec<NodeId> = self
+                .state
+                .ra
+                .repos
+                .iter()
+                .filter(|(d, r)| r.contains_key(&i) && !had.contains(d))
+                .map(|(d, _)| *d)
+                .collect();
+            for d in filed {
+                self.state.ra.held_from.insert((d, i), finished);
+            }
+        }
+        if let Err(e) = outcome {
+            // The job's own failure is the device's to find: its `.info` and download
+            // polls see no file, as they would after a failed job in the run.
+            self.state.ra.past_due_failures += 1;
+            let _ = e;
+        }
     }
 
     /// Enrols and provisions `device` **before the run**, leaving the backend's clock,
@@ -424,12 +529,17 @@ impl ScmsState {
             .get(&device)
             .is_some_and(|r| r.contains_key(&i))
         {
-            // Held already (the weekly job of another account's request made it): ready
-            // for this flow now.
+            // Held already (the weekly job, this account's or another's, made it): ready
+            // for this flow now, or when a job run after the fact assembled it.
             if self.ra.ready_told.insert(run) {
                 out.stage_at(StageId::BatchReady, self.nodes.ra, None, flow, run);
             }
-            return Some(at);
+            return Some(
+                self.ra
+                    .held_from
+                    .get(&(device, i))
+                    .map_or(at, |t| (*t).max(at)),
+            );
         }
         let ready_after = self.params.first_batch_delay;
         if account.generated.contains(&i) {
@@ -476,6 +586,8 @@ impl ScmsState {
     ) {
         self.ra.pregen_batches += 1;
         let batch = self.ra.pregen_batches;
+        // A job run after the fact takes every account due by the request it serves.
+        let until = self.ra.population_until.map_or(at, |t| t.max(at));
         let others: Vec<NodeId> = self
             .ra
             .accounts
@@ -484,7 +596,7 @@ impl ScmsState {
                 **d != device
                     && !self.ra.blocklist.contains(d)
                     && !a.generated.contains(&i)
-                    && self.pregen_due(a, i).is_some_and(|t| t <= at)
+                    && self.pregen_due(a, i).is_some_and(|t| t <= until)
             })
             .map(|(d, _)| *d)
             .collect();

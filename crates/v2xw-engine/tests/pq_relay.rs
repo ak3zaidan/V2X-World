@@ -108,6 +108,15 @@ fn an_oversized_relayed_report_or_crl_frame_is_fragmented_and_acted_on_whole() {
 /// `rsu_revoked_receptions` 0 under PQ). It now fetches the composite CRL over its backhaul
 /// as every end entity does, modelled as the vehicles' is, and its gate refuses what the
 /// CRL revokes.
+///
+/// R-PQUNSEC (validation summary §6 item 10, owner decision delegated): a unit's own
+/// detection is not filed under PQ either, by the R-UNSEC rule ([SM-MBR] §3 signs a report
+/// with a pseudonym certificate, which a unit does not hold; USDOT RSU Specification v4.1
+/// p. 15 gives a unit no reporting function). Before the gate order in `real_mbr` was
+/// fixed (82533437), PQ turned the PDU layer off and returned before the roadside check,
+/// and the units filed their own reports (PQHFC 7, PQHMC 9). The MA still has a case
+/// here: the vehicle reporter (actor 112) is what revokes. Fault (2026-10-27): the pki
+/// check moved back above the roadside gate gives `reports_from_rsus` > 0.
 #[test]
 fn under_the_post_quantum_profile_a_roadside_unit_fetches_the_crl_and_refuses_the_revoked() {
     let (r, _) = run(scenario());
@@ -123,6 +132,17 @@ fn under_the_post_quantum_profile_a_roadside_unit_fetches_the_crl_and_refuses_th
         p.revoked_receptions
     );
     assert!(p.ma_revoke_decisions > 0, "the scenario revoked no one");
+    assert_eq!(
+        p.reports_from_rsus, 0,
+        "a roadside unit filed its own report under PQ (R-PQUNSEC)"
+    );
+    assert!(
+        p.reports_not_filed_by
+            .iter()
+            .any(|(k, n)| k.contains("roadside") && *n > 0),
+        "no roadside detection was refused: {:?}",
+        p.reports_not_filed_by
+    );
     assert!(p.rsu_crls_installed > 0, "no roadside unit installed a CRL");
     assert_eq!(p.rsu_crls_refused, 0, "a roadside unit refused a CRL");
     assert!(

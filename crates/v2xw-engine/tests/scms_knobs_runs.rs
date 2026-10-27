@@ -230,12 +230,17 @@ fn the_request_shuffle_does_not_touch_in_run_topups() {
     // week is the RA's pre-generation from the same keys, sent to the ACA at the period
     // boundary without waiting in the request shuffle (CAMP Primer p.6, provision.rs
     // `ready && pregen`). So the shuffle settings are published as partial; this test
-    // pins it, and goes red the day a run makes a first request in-run.
+    // pins it, and goes red the day a run makes a first request in-run. It runs on the
+    // 2-week ra-maxPreloadTime ([SMP] Table 3 floor): a week inside the horizon is held
+    // since the request and its top-off crosses no RA-ACA hop at all
+    // (`a_slow_aca_does_not_delay_a_week_the_ra_already_holds`), so only weeks the weekly
+    // job makes at an in-run boundary reach the ACA in the run.
     let (b, v) = (
-        base(),
-        with(json!({"cert_shuffle_threshold": 1, "cert_shuffle_window_s": 600})),
+        h2_base(),
+        with(json!({"max_periods_ahead": 2,
+            "cert_shuffle_threshold": 1, "cert_shuffle_window_s": 600})),
     );
-    knob("cert_shuffle_threshold 1000 -> 1, window 5 -> 600 s", b, &v);
+    knob("cert_shuffle_threshold 1000 -> 1, window 5 -> 600 s (2-week horizon)", b, &v);
     assert!(
         b.between("topup", "ra", "aca") + b.between("topup", "ra", "pca") > 0,
         "{:?}",
@@ -249,8 +254,17 @@ fn the_request_shuffle_does_not_touch_in_run_topups() {
     assert_eq!(v.topup_ms(), b.topup_ms());
 }
 
-/// The base with the ACA slow (4 s more per message for the whole run), so a batch is
-/// not ready at the RA's nextDlTime and the device polls again (download-minWait), up to
+/// The base on the 2-week ra-maxPreloadTime ([SMP] Table 3 floor): every week after the
+/// request's horizon is the RA's weekly job at its in-run i-period boundary.
+fn h2_base() -> &'static Out {
+    static BASE: OnceLock<Out> = OnceLock::new();
+    BASE.get_or_init(|| with(json!({"max_periods_ahead": 2})))
+}
+
+/// The base with the ACA slow (4 s more per message for the whole run). A week the RA
+/// generated before the request is held and the slowness does not reach the device; a
+/// week the weekly job makes in the run (the 2-week horizon, `slow_h2_base`) is not ready
+/// at the RA's nextDlTime and the device polls again (download-minWait), up to
 /// download-maxReqs times.
 fn slow_aca(lifecycle: Value) -> Out {
     let mut doc = base_doc();
@@ -265,18 +279,53 @@ fn slow_base() -> &'static Out {
     BASE.get_or_init(|| slow_aca(json!({})))
 }
 
+/// The slow ACA on the 2-week horizon: each top-off's week is made by the weekly job at
+/// its in-run boundary, through the slow ACA.
+fn slow_h2_base() -> &'static Out {
+    static BASE: OnceLock<Out> = OnceLock::new();
+    BASE.get_or_init(|| slow_aca(json!({"max_periods_ahead": 2})))
+}
+
+#[test]
+fn a_slow_aca_does_not_delay_a_week_the_ra_already_holds() {
+    // A real RA generates every week within ra-maxPreloadTime when it accepts the request
+    // and adds one a week ([PRIMER] p.6; [CAMP122] 5.2.7.6.4), so a top-off of such a week
+    // is the .info request and the download of a file it holds (1609.2.1 §6.3.5.4): no
+    // generation wait, no RA-ACA hop in the top-off, and an ACA slow in the run does not
+    // reach it. Before the fix the RA ran the week's job when the device asked and told
+    // it now + first_batch_delay: 2,340 ms per top-up on this base, 19,182 ms with the ACA
+    // slow. Fault (2026-10-27): `ScmsRun::generate_past_due` returning at once.
+    let (b, v) = (base(), slow_base());
+    knob("pca slow 4 s, weeks held since the request", b, &v);
+    assert!(b.topup_ms() > 0.0, "the base tops up");
+    assert!(b.topup_ms() < 1_000.0, "a held week: {} ms", b.topup_ms());
+    assert!(
+        (v.topup_ms() - b.topup_ms()).abs() < 0.1 * b.topup_ms() + 50.0,
+        "{} vs {}",
+        v.topup_ms(),
+        b.topup_ms()
+    );
+    assert_eq!(
+        b.between("topup", "ra", "aca") + b.between("topup", "ra", "pca"),
+        0,
+        "a top-off of a held week crossed an RA-ACA hop"
+    );
+}
+
 #[test]
 fn a_longer_download_wait_lengthens_a_late_topup() {
     // download-minWait (SCMS Manager EE profile Table 3): a batch that is not ready at
     // nextDlTime is asked for again after this long. With the ACA 4 s late, a 2 s wait
-    // finds it at the second or third poll, a 20 s wait at the next one 20 s on. First run
-    // (ACA on time): no change at all, as the model's nextDlTime is exact; the knob only
-    // acts on a late batch.
+    // finds it at the second or third poll, a 20 s wait at the next one 20 s on. A week the
+    // RA already holds is never late, so the batch here is one the weekly job makes at its
+    // in-run boundary: the 2-week ra-maxPreloadTime ([SMP] Table 3 floor). First run (ACA
+    // on time): no change at all, as the model's nextDlTime is exact; the knob only acts
+    // on a late batch.
     let (b, v) = (
-        slow_base(),
-        slow_aca(json!({"download_poll_interval_s": 20})),
+        slow_h2_base(),
+        slow_aca(json!({"max_periods_ahead": 2, "download_poll_interval_s": 20})),
     );
-    knob("download_poll_interval_s 2 -> 20 (ACA 4 s slow)", b, &v);
+    knob("download_poll_interval_s 2 -> 20 (ACA 4 s slow, 2-week horizon)", b, &v);
     assert!(
         v.topup_ms() > b.topup_ms() + 5_000.0,
         "{} vs {}",
@@ -290,8 +339,11 @@ fn one_download_poll_gives_up_on_a_late_batch() {
     // download-maxReqs 1: with the ACA 4 s late the one poll at nextDlTime finds nothing
     // and the device makes no other. First run (ACA on time): no change, as the poll at
     // the exact nextDlTime always succeeds.
-    let (b, v) = (slow_base(), slow_aca(json!({"max_download_polls": 1})));
-    knob("max_download_polls 100 -> 1 (ACA 4 s slow)", b, &v);
+    let (b, v) = (
+        slow_h2_base(),
+        slow_aca(json!({"max_periods_ahead": 2, "max_download_polls": 1})),
+    );
+    knob("max_download_polls 100 -> 1 (ACA 4 s slow, 2-week horizon)", b, &v);
     let (pb, pv) = (&b.report.phase2, &v.report.phase2);
     assert!(pb.topups_completed > 0);
     assert!(
