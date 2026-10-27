@@ -2772,6 +2772,7 @@ dependencies = [
  "serde",
  "serde_json",
  "v2xw-core",
+ "v2xw-metrics",
  "v2xw-mobility",
  "v2xw-radio",
  "v2xw-world",
@@ -2985,6 +2986,7 @@ dependencies = [
  "serde_json",
  "v2xw-core",
  "v2xw-engine",
+ "v2xw-metrics",
  "v2xw-mobility",
  "v2xw-world",
 ]

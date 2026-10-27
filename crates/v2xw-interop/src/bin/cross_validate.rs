@@ -79,6 +79,57 @@ struct Case {
     runs: Vec<Measured>,
 }
 
+/// Surrogate-safety conflicts by type (WP-11): this engine's measures on every run's
+/// published states, and SUMO's SSM device on its own runs; the same trajectories read by
+/// two implementations are held to `ssmval::TOLERANCE`.
+fn ssm_table(s: &mut String, runs: &[Measured], window: (f64, f64)) {
+    use v2xw_interop::ssmval::{self, TypeCounts};
+    use v2xw_metrics::ssm::EncounterType;
+    let _ = writeln!(
+        s,
+        "\nSurrogate safety, conflicts with minimum TTC < 3.0 s by type at the minimum TTC, encounters beginning in the window (SUMO SSM device defaults; `crates/v2xw-interop/src/ssmval.rs`):\n"
+    );
+    let _ = writeln!(
+        s,
+        "| measured by, on | following | merging | crossing | oncoming | collision | conflicts logged |"
+    );
+    let _ = writeln!(s, "|---|---:|---:|---:|---:|---:|---:|");
+    let row = |s: &mut String, who: &str, n: &TypeCounts| {
+        let _ = write!(s, "| {who} |");
+        for ty in EncounterType::ALL {
+            let _ = write!(s, " {} |", n.of(ty));
+        }
+        let _ = writeln!(s, " {} |", n.logged);
+    };
+    let mut verdicts = Vec::new();
+    for r in runs {
+        let ours = ssmval::count_engine(&r.ssm, window);
+        row(s, &format!("this engine's SSM, on {}", r.label), &ours);
+        if let Some(log) = &r.sumo_ssm {
+            let theirs = ssmval::count_sumo(log, window);
+            row(s, &format!("SUMO's SSM device, on {}", r.label), &theirs);
+            let (ok, bad) = ssmval::agreement(&ours, &theirs);
+            verdicts.push(format!(
+                "{} on {}: every type SUMO counts at least {} of within a factor {}{}; SUMO logged {} duplicates and {} TTC conflicts of no main type",
+                if ok { "PASS" } else { "FAIL" },
+                r.label,
+                ssmval::MIN_COUNT,
+                ssmval::TOLERANCE,
+                if bad.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (outside: {})", bad.join(", "))
+                },
+                theirs.duplicates,
+                theirs.untyped
+            ));
+        }
+    }
+    for v in verdicts {
+        let _ = writeln!(s, "\n- {v}");
+    }
+}
+
 fn metrics_table(s: &mut String, runs: &[Measured]) {
     let _ = write!(s, "| measure |");
     for r in runs {
@@ -335,6 +386,7 @@ fn main() {
                 let _ = writeln!(body, "\n- {}: {e}", r.label);
             }
         }
+        ssm_table(&mut body, &c.runs, (timing.warm_s, timing.demand_s));
         if c.runs.len() >= 2 {
             let _ = writeln!(
                 body,

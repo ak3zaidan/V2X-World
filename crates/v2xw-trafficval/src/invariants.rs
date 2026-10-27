@@ -238,6 +238,7 @@ pub fn scenario_run(
         s.time.mobility_step(),
         s.time.duration_s,
         audit,
+        v2xw_metrics::ssm::SsmParams::default(),
         events,
         tamper,
         watch,

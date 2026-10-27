@@ -242,6 +242,11 @@ pub struct Measured {
     /// into a junction, where the second had been halting within the last
     /// [`DISCHARGE_QUEUED_S`] and the headway is under [`DISCHARGE_MAX_S`].
     pub discharge_s: Vec<f64>,
+    /// This engine's surrogate-safety conflict log over the run ([`v2xw_metrics::ssm`]),
+    /// read from the published states, whichever simulator drove them.
+    pub ssm: Vec<v2xw_metrics::ssm::Conflict>,
+    /// SUMO's own SSM device output, for a SUMO run that wrote one.
+    pub sumo_ssm: Option<Vec<crate::ssmval::SumoConflict>>,
 }
 
 /// A vehicle counts as discharging from a queue when it halted this recently, s.
@@ -327,6 +332,7 @@ pub struct Observer<'a> {
     halted_at: BTreeMap<ActorId, f64>,
     approach: BTreeMap<ActorId, LaneId>,
     lane_exit: BTreeMap<LaneId, f64>,
+    ssm: v2xw_metrics::ssm::SsmTracker,
 }
 
 impl<'a> Observer<'a> {
@@ -372,6 +378,14 @@ impl<'a> Observer<'a> {
             halted_at: BTreeMap::new(),
             approach: BTreeMap::new(),
             lane_exit: BTreeMap::new(),
+            // SUMO's SSM-device defaults. `V2XW_XVAL_SSM_FAULT=no-extrapolation` is the
+            // validation's injected fault (WP-11): the measures without trajectory
+            // extrapolation, which must miss the crossing conflicts.
+            ssm: v2xw_metrics::ssm::SsmTracker::new(v2xw_metrics::ssm::SsmParams {
+                extrapolate: std::env::var("V2XW_XVAL_SSM_FAULT")
+                    .map_or(true, |v| v != "no-extrapolation"),
+                ..v2xw_metrics::ssm::SsmParams::default()
+            }),
         }
     }
 
@@ -399,6 +413,24 @@ impl<'a> Observer<'a> {
             self.approach.remove(a);
         }
         let in_window = t1 > self.window.0 && t1 <= self.window.1;
+        // The full surrogate measures on the published states, by geometry alone (no lane
+        // pairing): SUMO's states inside a junction have no lane, and the rectangles'
+        // overlap gives a rear-end pair its bumper-gap TTC anyway.
+        let ssm_actors: Vec<v2xw_metrics::ssm::SsmActor> = u
+            .states
+            .iter()
+            .map(|(a, k)| v2xw_metrics::ssm::SsmActor {
+                actor: *a,
+                x_m: k.pos.x,
+                y_m: k.pos.y,
+                heading_rad: k.heading_rad,
+                speed_mps: v2xw_core::math::hypot(k.vel.x, k.vel.y),
+                length_m: k.dims.length_m,
+                width_m: k.dims.width_m,
+                lane: None,
+            })
+            .collect();
+        self.ssm.step(t1, &ssm_actors, &[]);
         let mut halting = 0u64;
         let mut speed_sum = 0.0;
         for (a, k) in &u.states {
@@ -492,6 +524,8 @@ impl<'a> Observer<'a> {
 
     /// The result.
     pub fn finish(mut self) -> Measured {
+        self.ssm.close_all();
+        self.m.ssm = self.ssm.take_conflicts();
         self.m.left_in_network = self.in_network;
         self.m.halting_mean = self.halting_samples.0 / self.halting_samples.1.max(1e-9);
         self.m.wait_per_trip_s = self.wait_total / (self.m.inserted.max(1) as f64);
@@ -787,6 +821,16 @@ pub fn run_sumo(
     cfg.shift_m = study.import.shift_m;
     cfg.seed = seed;
     cfg.extra_args = extra.iter().map(|s| (*s).to_string()).collect();
+    // SUMO's SSM device on every vehicle (WP-11): passive, so the driving is unchanged.
+    let ssm_file = study.net.with_file_name(format!(
+        "ssm-{}.xml",
+        label
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>()
+    ));
+    let _ = std::fs::remove_file(&ssm_file);
+    cfg.extra_args.extend(crate::ssmval::sumo_args(&ssm_file));
     let mut sumo = SumoMobility::new(cfg, study.ids.clone());
     let mut obs = Observer::new(
         world,
@@ -816,6 +860,10 @@ pub fn run_sumo(
         m.error = Some(m.error.map_or(note.clone(), |e| format!("{e}; {note}")));
     }
     sumo.shutdown();
+    m.sumo_ssm = std::fs::read_to_string(&ssm_file)
+        .ok()
+        .and_then(|x| crate::ssmval::parse_sumo_ssm(&x).ok());
+    let _ = std::fs::remove_file(&ssm_file);
     m.wall_s = started.elapsed().as_secs_f64();
     (m, version)
 }

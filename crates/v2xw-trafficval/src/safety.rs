@@ -30,6 +30,10 @@ use v2xw_mobility::intersection::zones::ConflictZones;
 use v2xw_world::World;
 
 use crate::calib::{GridVariant, grid_study};
+use v2xw_metrics::ssm::{
+    Conflict, EncounterType, Follow, SSM_TTC_S, SsmActor, SsmParams, SsmTracker,
+};
+
 use crate::{Check, Group, Lab, Outcome, Row, Variant};
 
 /// SSAM's default maximum TTC for a conflict, seconds.
@@ -69,6 +73,8 @@ pub struct SafetyObserver {
     pet: Vec<f64>,
     simultaneous: u64,
     junction_entries: u64,
+    /// The full surrogate measures (WP-11, `v2xw_metrics::ssm`).
+    ssm: SsmTracker,
 }
 
 /// What it measured.
@@ -100,6 +106,10 @@ pub struct SafetyStats {
     pub junction_entries: u64,
     /// A few examples of a collision or an unavoidable one.
     pub examples: Vec<String>,
+    /// The full surrogate measures' conflict log (WP-11), every encounter type.
+    pub ssm: Vec<Conflict>,
+    /// Encounters the full surrogate measures closed, conflicts or not.
+    pub ssm_encounters: u64,
 }
 
 impl SafetyObserver {
@@ -129,7 +139,15 @@ impl SafetyObserver {
             pet: Vec::new(),
             simultaneous: 0,
             junction_entries: 0,
+            ssm: SsmTracker::new(SsmParams::default()),
         }
+    }
+
+    /// With the full surrogate measures' parameters.
+    #[must_use]
+    pub fn with_ssm(mut self, params: SsmParams) -> Self {
+        self.ssm = SsmTracker::new(params);
+        self
     }
 
     /// One step's vehicles, at `t_s`, `dt_s` after the last.
@@ -145,6 +163,7 @@ impl SafetyObserver {
             v.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
         }
         let mut still = BTreeSet::new();
+        let mut follows: Vec<Follow> = Vec::new();
         for (i, f) in actors.iter().enumerate() {
             if f.changing.is_some() {
                 continue;
@@ -186,6 +205,13 @@ impl SafetyObserver {
             }
             self.closing_s += dt_s;
             let gap = gap.max(1e-3);
+            // The same pair and gap for the full surrogate measures, so their following
+            // results are this check's own.
+            follows.push(Follow {
+                follower: f.actor,
+                leader: l.actor,
+                gap_m: gap,
+            });
             let ttc = gap / dv;
             let drac = dv * dv / (2.0 * gap);
             if drac > DRAC_CONFLICT_MPS2 {
@@ -223,6 +249,24 @@ impl SafetyObserver {
                 self.conflict_min_ttc.push(m);
             }
         }
+
+        // The full surrogate measures: every pair within range by trajectory extrapolation,
+        // the same-lane pairs above as they are. A vehicle changing lanes is measured by
+        // geometry against everyone, so a cut-in is a merging encounter.
+        let ssm_actors: Vec<SsmActor> = actors
+            .iter()
+            .map(|a| SsmActor {
+                actor: a.actor,
+                x_m: a.pos.x,
+                y_m: a.pos.y,
+                heading_rad: a.heading_rad,
+                speed_mps: a.speed_mps.max(0.0),
+                length_m: a.length_m,
+                width_m: a.width_m,
+                lane: a.changing.is_none().then(|| a.lane.index()),
+            })
+            .collect();
+        self.ssm.step(t_s, &ssm_actors, &follows);
 
         // Post-encroachment time at crossing zones.
         let mut present = BTreeSet::new();
@@ -292,6 +336,9 @@ impl SafetyObserver {
     pub fn stats(&self) -> SafetyStats {
         let mut ttc = self.conflict_min_ttc.clone();
         ttc.extend(self.active.values().copied());
+        // The encounters still open at the end close with the run.
+        let mut ssm = self.ssm.clone();
+        ssm.close_all();
         SafetyStats {
             vehicle_km: self.veh_m / 1000.0,
             vehicle_h: self.veh_s / 3600.0,
@@ -310,6 +357,8 @@ impl SafetyObserver {
             simultaneous: self.simultaneous,
             junction_entries: self.junction_entries,
             examples: self.examples.clone(),
+            ssm: ssm.take_conflicts(),
+            ssm_encounters: ssm.encounters(),
         }
     }
 }
@@ -341,6 +390,22 @@ pub fn checks() -> Vec<Check> {
                 last crossing vehicle left, recorded up to SSAM's 5 s.",
             faults: &["junction control switched off (no signals, no yielding)"],
             run: pet_check,
+        },
+        Check {
+            id: "safety/surrogate-measures",
+            group: Group::Safety,
+            title: "Crossing, merging and oncoming conflicts are found by trajectory extrapolation, beside the same-lane ones",
+            procedure: "The same study, read by the full surrogate safety measures \
+                (`v2xw_metrics::ssm`, adoption plan WP-11) at SUMO's SSM-device defaults: \
+                every pair of vehicles within 50 m, each body a rectangle extrapolated at its \
+                current velocity, TTC the first overlap (Laureshyn et al. 2010); the \
+                same-lane pairs of `safety/time-to-collision` with their own gaps; the type \
+                from the conflict angle (SSAM: rear-end < 30°, crossing > 85°); an \
+                encounter logged as a conflict when its minimum TTC falls below 3.0 s, its \
+                DRAC or MDRAC (1 s reaction) rises above 3.0 or 3.4 m/s², or its predicted \
+                PET falls below 2.0 s.",
+            faults: &["trajectory extrapolation dropped: pairs are measured for overlap now only"],
+            run: ssm_check,
         },
     ]
 }
@@ -464,4 +529,112 @@ fn pet_check(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
             s.junction_entries
         )],
     })
+}
+
+fn ssm_check(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
+    let gv = if variant.is_fault() {
+        GridVariant::SsmNoExtrapolation
+    } else {
+        GridVariant::Shipped
+    };
+    let s = grid_study(lab, gv, None)?.safety;
+    let ttc_conflicts = |ty: EncounterType| {
+        s.ssm
+            .iter()
+            .filter(|c| c.ty == ty && c.ttc_below(SSM_TTC_S))
+            .count()
+    };
+    let per_km = |n: usize| {
+        if s.vehicle_km > 0.0 {
+            n as f64 / s.vehicle_km
+        } else {
+            f64::NAN
+        }
+    };
+    let crossing = ttc_conflicts(EncounterType::Crossing);
+    let mut rows = vec![Row::held(
+        "crossing conflicts with minimum TTC < 3.0 s found",
+        crossing as f64,
+        (1.0, 1e9),
+        "permitted left turns across opposing traffic make crossing conflicts at signalised \
+         junctions (Gettman et al. 2008, FHWA-HRT-08-051 §2 conflict types); held at least \
+         one, since no field rate this street could be held to was found",
+    )
+    .n(crossing)];
+    for ty in [
+        EncounterType::Following,
+        EncounterType::Merging,
+        EncounterType::Crossing,
+        EncounterType::Oncoming,
+    ] {
+        let n = ttc_conflicts(ty);
+        rows.push(
+            Row::reported(
+                format!("{} conflicts (minimum TTC < 3.0 s) per vehicle-km", ty.label()),
+                per_km(n),
+                "SUMO SSM device default TTC threshold 3.0 s; reported",
+            )
+            .n(n),
+        );
+    }
+    let collisions = s
+        .ssm
+        .iter()
+        .filter(|c| c.ty == EncounterType::Collision)
+        .count();
+    rows.push(Row::reported(
+        "encounters whose bodies overlapped (any pair, any lane)",
+        collisions as f64,
+        "the rectangles of two vehicles overlapping; the lane-based collision row of \
+         safety/time-to-collision is held at zero, this one is reported",
+    ));
+    let mdrac = s
+        .ssm
+        .iter()
+        .filter(|c| c.max_mdrac.is_some_and(|(_, v)| v > 3.4))
+        .count();
+    rows.push(Row::reported(
+        "conflicts with MDRAC > 3.4 m/s² per vehicle-km",
+        per_km(mdrac),
+        "Fazekas et al. 2017 MDRAC, 1 s reaction; SUMO default threshold 3.4; reported",
+    ));
+    let ppet = s
+        .ssm
+        .iter()
+        .filter(|c| c.min_ppet.is_some_and(|(_, v)| v < 2.0))
+        .count();
+    rows.push(Row::reported(
+        "crossing or merging near-misses with predicted PET < 2.0 s per vehicle-km",
+        per_km(ppet),
+        "SUMO default PPET threshold 2.0 s; reported",
+    ));
+    let mut min_ttc: Vec<f64> = s
+        .ssm
+        .iter()
+        .filter(|c| c.ty == EncounterType::Crossing)
+        .filter_map(|c| c.min_ttc.map(|(_, v)| v))
+        .collect();
+    min_ttc.sort_by(f64::total_cmp);
+    rows.push(Row::reported(
+        "crossing conflicts' minimum TTC, median, s",
+        min_ttc.get(min_ttc.len() / 2).copied().unwrap_or(f64::NAN),
+        "reported",
+    ));
+    let mut notes = vec![format!(
+        "{} encounters closed, {} logged as conflicts, over {:.1} vehicle-km.",
+        s.ssm_encounters,
+        s.ssm.len(),
+        s.vehicle_km
+    )];
+    for c in s.ssm.iter().filter(|c| c.ty == EncounterType::Crossing).take(3) {
+        notes.push(format!(
+            "crossing: actors {} and {}, {:.1}-{:.1} s, minimum TTC {} s",
+            c.a.index(),
+            c.b.index(),
+            c.begin_s,
+            c.end_s,
+            c.min_ttc.map_or("—".to_string(), |(_, v)| format!("{v:.2}"))
+        ));
+    }
+    Ok(Outcome { rows, notes })
 }

@@ -3418,7 +3418,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Which metric providers to install; 'all' selects every registered one. \
                Opt-in groups beside it: 'signing', 'traffic', and 'detection-scores' (MCC, \
                informedness, markedness and Cohen's kappa at the report, vehicle and \
-               per-message levels; it also records the local detectors' det.observation).",
+               per-message levels; it also records the local detectors' det.observation), \
+               and 'ssm' (the full surrogate safety measures: crossing, merging and \
+               oncoming TTC by trajectory extrapolation within 50 m, DRAC, MDRAC with a 1 s \
+               reaction time, predicted PET, conflicts by type; SUMO SSM-device default \
+               thresholds TTC 3.0 s, DRAC 3.0 m/s², MDRAC 3.4 m/s², PPET 2.0 s; Gettman et \
+               al. 2008, Laureshyn et al. 2010, Fazekas et al. 2017; off by default).",
     },
     KeyStatus {
         path: "exporters",
@@ -7258,6 +7263,7 @@ fn metrics_and_exporters(s: &Scenario, e: &mut Vec<ScenarioError>) {
         m == v2xw_metrics::signing::GROUP
             || m == v2xw_metrics::traffic::GROUP
             || m == v2xw_metrics::detection::SCORES_GROUP
+            || m == v2xw_metrics::safety::SSM_GROUP
     };
     if s.metrics.iter().any(|m| m == "all") && s.metrics.iter().filter(|m| !opt_in(m)).count() > 1 {
         e.push(conflict(

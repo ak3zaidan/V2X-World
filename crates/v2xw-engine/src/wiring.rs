@@ -3103,12 +3103,14 @@ pub fn build_metrics_for(
     if security_path {
         candidates.push(Box::new(crate::privacy_metrics::PrivacyProvider::new()));
     }
+    let ssm = ssm_named(scenario);
     for provider in candidates {
+        // The `ssm` group selects the safety provider, which carries the group's metrics.
         let wanted = all
-            || provider
-                .defs()
-                .iter()
-                .any(|d| scenario.metrics.contains(&d.name.to_string()));
+            || provider.defs().iter().any(|d| {
+                scenario.metrics.contains(&d.name.to_string())
+                    || (ssm && d.name.starts_with("ssm_"))
+            });
         if wanted {
             set.register(registry, provider)?;
         }
@@ -3125,6 +3127,15 @@ pub fn build_metrics_for(
 /// they were in every run's catalogue and never once had a value. The sample interval is
 /// the scenario's step, because Edie weights each sample by it (a 50 ms run read at the
 /// 100 ms default would report twice the flow).
+/// Whether the metric list names the full surrogate safety measures (`ssm`, or an `ssm_*`
+/// metric): opt-in, so a bare `all` keeps the digests it had (adoption plan WP-11).
+fn ssm_named(scenario: &Scenario) -> bool {
+    scenario
+        .metrics
+        .iter()
+        .any(|m| m == v2xw_metrics::safety::SSM_GROUP || m.starts_with("ssm_"))
+}
+
 fn safety_provider(
     scenario: &Scenario,
     world: Option<&World>,
@@ -3133,7 +3144,13 @@ fn safety_provider(
         .with_sample_interval(v2xw_core::time::Duration::from_millis(
             scenario.time.mobility_step_ms.max(1),
         ))
-        .with_per_lane(false);
+        .with_per_lane(false)
+        .with_ssm(ssm_named(scenario));
+    // The full surrogate measures' rectangles: every class's own body.
+    for class in v2xw_mobility::VehicleClass::ALL {
+        let d = class.dims();
+        p.declare_class_dims(class.as_str(), d.length_m, d.width_m);
+    }
     // The lanes traffic drives on: a sidewalk or a crossing full of pedestrians is not
     // road density, and a parking lane's parked cars are not flow.
     let motorised = |k: v2xw_world::LaneKind| {
