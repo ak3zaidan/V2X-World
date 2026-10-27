@@ -406,7 +406,18 @@ trustworthy or comparable; later waves add behaviours and radio features.
     300 ms DCC gap gives 10 CPMs in 3 s through the runtime, 30 unrestricted or with the
     knob off). Engine `tests/cpm_denm_load.rs`: knobs off equal the default run `node.tx`
     record for record; all on is deterministic, ≤ 2 objects per CPM; the loader refuses
-    each knob without its service and out of range.
+    each knob without its service and out of range. `scenario::publish` 13/13 (after
+    `touch build.rs`; units added for `cpm_max_objects` and `cpm_quality_threshold`).
+  - Faults (one run, all injected, then restored): DCC gap ignored, threshold not
+    applied, cut unsorted, object age in seconds, slow-down average compared the wrong
+    way, non-urban precondition dropped, speed drop on TRCO_0 alone, friction 5 s hold
+    skipped, four slow CAMs enough, triggers on regardless of the knob, runtime handing
+    a zero DCC gap, wiring dropping the threshold and budget: all 13 new tests went red
+    (11 `v2xw-node` lib, `the_cpm_rate_follows_a_300_ms_dcc_interval`, the engine
+    knobs-on test); the refusal test and the 3 older CPM tests stayed green.
+  - Regression on the restored tree: engine `cpm_metrics` 1/1, `message_sets` 6/6,
+    `cpm_denm_load` 2/2; node `firewall_sentinel` 7/7, `runtime_behaviour` 22/22; msg
+    `etsi_oracle` 1/1. Goldens: none moved and none re-blessed (every knob off).
   - Open: a run on a highway world with the binary (the C2C-CC services are non-urban
     and the built-in highway is procedural: its road class and a measured DENM count are
     owed); RS 2007 TRCO_2 (others' hazard lights in CAMs), TRCO_5 (special vehicles),
