@@ -532,8 +532,10 @@ trustworthy or comparable; later waves add behaviours and radio features.
   against a cached copy; C-V2X runs refuse a map.
 - Status 2026-10-27, radio-fix3 follow-up (R3.2): the DCC gate is per channel (a second ETSI
   gatekeeper fed with the service channel's CBR) and jammers act on their own channel (carrier
-  sense and reactive triggers), each pinned by a `multichannel.rs` test that a fault turns
-  red; the 14th `phase2` test keeps one record channel (peak 94 MB, was 2,554 MB);
+  sense and reactive triggers). The jammer test turns red under the PHY-level fault (the
+  CCA was already per channel; the engine-side filter only dates busy periods); the DCC
+  test does not turn red with the per-channel gate removed (R3.2.DCC2, open: roadside
+  frames carry no DCC state), and the reactive-jammer filter has no test yet; the 14th `phase2` test keeps one record channel (peak 94 MB, was 2,554 MB);
   multichannel 7/7, radio_channel 8/8, scms_scale 1/1. Dense CBR with the map on: the
   built-in highway at 296 vehicles reaches CBR 0.456 with J2945/1 acting; on the grid,
   moving SPaT/MAP lowers CBR172 by their share at the listeners less the 174->172 leakage
