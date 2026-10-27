@@ -289,6 +289,22 @@ runs:
   E7-F0b:
     scenario: scenarios/real-world/paper1/p1-e7-f0.yaml
     note: E7-F0 again (determinism)
+  E6-R0:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+    base: E6-A
+    note: not a simulation - the offline store replay of E6-A at a 0 B quota (tools/realworld/paper1/e6replay.py)
+  E6-R2:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+    base: E6-A
+    note: not a simulation - the offline store replay of E6-A at a 2,300 B quota (tools/realworld/paper1/e6replay.py)
+  E6-R4:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+    base: E6-A
+    note: not a simulation - the offline store replay of E6-A at a 4,500 B quota (tools/realworld/paper1/e6replay.py)
+  E6-R16:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+    base: E6-A
+    note: not a simulation - the offline store replay of E6-A at a 16,384 B quota (tools/realworld/paper1/e6replay.py)
 rows:
 - id: P1.TS.rp-share0
   base: B
@@ -2362,4 +2378,49 @@ rows:
   measure: digest.record
   expect: identical
   source: 'same seed, byte-identical'
+  measured: pending
+- id: P1.E6.replay-q0
+  base: E6-Q0
+  variant: E6-R0
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [-0.001, 0.001]
+  source: 'the offline store replay (e6replay.py, written before any E6 result was read) reproduces the engine at a zero quota exactly'
+  measured: pending
+- id: P1.E6.replay-q2
+  base: E6-Q2
+  variant: E6-R2
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [-0.05, 0.05]
+  source: 'the offline replay of the default-quota run at 2,300 B is within 0.05 of the engine''s attack-evidence lost share'
+  measured: pending
+- id: P1.E6.replay-q4
+  base: E6-Q4
+  variant: E6-R4
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [-0.05, 0.05]
+  source: 'the offline replay of the default-quota run at 4,500 B is within 0.05 of the engine''s attack-evidence lost share'
+  measured: pending
+- id: P1.E6.replay-q16
+  base: E6-Q16
+  variant: E6-R16
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [-0.05, 0.05]
+  source: 'the offline replay of the default-quota run at 16,384 B is within 0.05 of the engine''s attack-evidence lost share'
+  measured: pending
+- id: P1.E6.replay-evicted-q4
+  base: E6-Q4
+  variant: E6-R4
+  area: architecture
+  measure: x.fate.evicted_quota
+  expect: ratio
+  band: [0.8, 1.25]
+  source: 'the replay''s quota deletions at 4,500 B are within 20 % of the engine''s'
   measured: pending

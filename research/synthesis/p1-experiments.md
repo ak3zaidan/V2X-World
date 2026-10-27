@@ -45,6 +45,12 @@ number, not a full-scale one.
   16,384 and the default 65,536 B. `--record-level events`.
 - **Falsification tests:** an attack-free run loses zero attack evidence (and names no
   attacker); a zero-quota run loses all of it and delivers nothing.
+- **Offline replay** (`tools/realworld/paper1/e6replay.py`, added after the E6 runs started and
+  before any E6 result was read): the default-quota run's fate log replayed through the §2.2
+  store at 0, 2,300, 4,500 and 16,384 B. Its own falsification test: it must reproduce the
+  engine at a zero quota exactly, and be within 0.05 of the engine's attack-evidence lost share
+  at the other quotas (deletions within 20 % at 4,500 B). Only if it passes does the replay
+  extend the quota sweep.
 - Theory rows: attack-evidence lost share non-increasing in quota; fewer honest triggers
   (larger gpsDrift, more locked devices) crowd out no more; fewer RSUs or no cellular upload no
   less.
