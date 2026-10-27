@@ -7,7 +7,7 @@
 #
 # verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
 #          wrong-expectation (corrected with the evidence in `note`) | open (documented).
-schema: v2xw/traffic-fix-expectations/1
+schema: v2xw/scms-run-expectations/1
 rows:
 # --- WP-11: surrogate safety measures against SUMO's SSM device -------------------------
 - id: W11.xval.crossing

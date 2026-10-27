@@ -23,7 +23,7 @@
 #
 # expect: eq | le | ge | band (variant's value); same | ratio_band (variant against base).
 # verdict: pass | fixed | wrong-expectation | open.
-schema: v2xw/detect-fix3-expectations/1
+schema: v2xw/scms-run-expectations/1
 runs:
   T0: {scenario: scenarios/detect-fix3/ts-base.yaml, note: attack-free, TS suite}
   T0b: {scenario: scenarios/detect-fix3/ts-base.yaml, note: T0 again (determinism)}
