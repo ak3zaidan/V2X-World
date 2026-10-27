@@ -34,7 +34,7 @@ All of them were written before the runs and are machine-judged by `tools/realwo
 
 **FB4 (full fleet, 172,800 s).** Started on the main run slot with 4 threads. On a machine
 shared with other agents (load 10–18), the first window slowed from 15 to 61 wall-s per
-simulated second as the fleet grew from 888 to 1,320 nodes. Footprint was 990 MB at 90 s.
+simulated second as the fleet grew from 888 to 1,463 nodes. Footprint was 990 MB at 90 s.
 The run would have needed about five more hours, and a run is killed when its session
 ends. A checkpoint resumes by replaying the elapsed time, and the replay ran at full cost
 here, so splitting the run across sessions saves almost nothing. Every FB4 number is

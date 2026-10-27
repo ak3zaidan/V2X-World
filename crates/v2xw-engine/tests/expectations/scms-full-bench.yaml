@@ -233,8 +233,9 @@ rows:
     (FB3 4,767); second fast-forward 700-2,100 s (FB3 2,014); 9,000-15,300 s awake in all
     (FB3 15,255). Peak footprint 1,900-2,450 MB (FB3 2,105; QD25 +9 % untraced)
   source: "full-bench.md FB3; final-run.md FB2; honest-density.md §6; rerun-2026-10-25 QD25-memory"
-  measured: pending
+  measured: "not finished: stopped by SIGTERM at 96 s of the first window (checkpoint written, t 95,999,999,999 ns) after 3,874 s of wall; 15, 33 and 61 wall-s per simulated second for 0-30, 30-60 and 60-90 s on a machine at load 10-18 (FB3 averaged 35 on an idle machine); footprint 452 / 678 / 990 MB at 888 / 1,164 / 1,463 nodes; reports filed 1 / 6 / 53 (so the full fleet files in the first window, unlike QD4); home RA requests 424 / 552 / 710. A resume replays the elapsed time: 30 s of replay took 496 s, so the checkpoint saves almost nothing"
   verdict: open
+  note: "Owed: one unbroken run of about 5 h on a quiet machine (full-bench.md §6.2). The other FB4 rows stay pending until it runs."
   checks:
   - [run.rc, eq, 0]
   - [run.peak_mb, band, [1900, 2450]]

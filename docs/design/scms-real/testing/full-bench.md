@@ -107,7 +107,7 @@ FB4 started at 23:45 on the main run slot (4 rayon threads, `--checkpoint-every 
 machine was shared the whole time (load average 10–18 on 8 cores; other agents' builds and
 simulations; 23 GB of pages in the compressor). The first window ran at **15, 33 and 61
 wall-s per simulated second** for 0–30, 30–60 and 60–90 s (FB3 averaged 35 over 240 s on
-an idle machine): 55 min for 90 simulated seconds, footprint 452 → 990 MB at 888 → 1,320
+an idle machine): 55 min for 90 simulated seconds, footprint 452 → 990 MB at 888 → 1,463
 nodes. At that rate the 240 s window alone needed about four more hours, past this
 session's end (a background run is killed when the agent reports).
 
@@ -117,7 +117,11 @@ state is not stored; `v2xw resume` re-runs the elapsed time with outputs off, do
 about 0.6 of the original cost). On this machine the replay ran at the original speed (30 s
 in 496 s). So splitting FB4 over sessions saves almost nothing. **FB4 needs one unbroken
 run of about 5 h on a quiet machine, or a session allowed to outlive it.** Its rows stay
-`pending`. The partial run's checkpoint and progress are in the scratchpad (`fb4/out`).
+`pending`. A resume was started and stopped during its replay (21 min, 30 s replayed) to give the
+slot back; the 96 s checkpoint is intact. The partial run's checkpoint and progress are in
+the scratchpad (`fb4/out`). One thing the partial run does show: the full fleet files
+reports inside the first window (1, 6 and 53 by 30, 60 and 90 s), unlike QD4, so FB4's MA
+release should come about a day after roughly 30 s.
 
 ### 6.3 QD4: the quarter fleet end to end on `f4982788`
 
