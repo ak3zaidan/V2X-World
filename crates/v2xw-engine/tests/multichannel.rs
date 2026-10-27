@@ -362,3 +362,59 @@ fn the_loader_refuses_a_map_the_band_plan_cannot_carry() {
     // An empty map is the default and loads.
     assert_eq!(refusals(&base), "");
 }
+
+/// Each frame's wait between the MAC hand-off and the air, ms, by message type.
+fn gate_waits_ms(recorder: &MemoryRecorder) -> BTreeMap<String, Vec<f64>> {
+    let mut out: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    for (_, r) in recorder.records() {
+        if r.channel != "node.tx" {
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_slice(&r.json).expect("json");
+        let (Some(t), Some(h), Some(m)) =
+            (v["t"].as_u64(), v["t_handoff"].as_u64(), v["msg_type"].as_str())
+        else {
+            continue;
+        };
+        out.entry(m.to_string())
+            .or_default()
+            .push(t.saturating_sub(h) as f64 / 1e6);
+    }
+    out
+}
+
+/// radio-fix3 R3.2.DCC: an ETSI gatekeeper runs per channel. The roadside units send SPaT
+/// at 10 Hz on the safety channel and, with the map, MAP at 1 Hz on the service channel
+/// through their second radio. TS 102 687's adaptive gate at low load spaces a unit's
+/// transmissions by `T_on / delta_max`, held to its 25 ms floor, and the CBR that sets it
+/// is the channel's own: on its own channel neither a SPaT (100 ms apart) nor a MAP (1 s
+/// apart) finds its gate shut, so no frame waits more than an access delay (AIFS plus
+/// backoff, well under 1 ms). One gate shared by the two radios holds every MAP sent
+/// within 25 ms of the unit's last SPaT, or the SPaT after it.
+/// The fault that proved it: `dcc_service` never built (the shared gate).
+#[test]
+fn the_etsi_gate_spaces_each_channel_on_its_own() {
+    let mut s = with_map(
+        intersections(10.0),
+        serde_json::json!([{"channel": 174, "messages": ["map"]}]),
+    );
+    s.radio.models.insert(
+        "dcc".to_string(),
+        v2xw_engine::scenario::ModelChoice {
+            id: "dcc/etsi/adaptive-ts102687".to_string(),
+            params: serde_json::Value::Null,
+        },
+    );
+    let (_, rec) = run(s);
+    let waits = gate_waits_ms(&rec);
+    let held = |m: &str| {
+        let v = waits.get(m).map(Vec::as_slice).unwrap_or_default();
+        (v.iter().filter(|w| **w > 1.0).count(), v.len())
+    };
+    let (map_held, maps) = held("map");
+    let (spat_held, spats) = held("spat");
+    println!("map held {map_held}/{maps}, spat held {spat_held}/{spats}");
+    assert!(maps >= 20 && spats >= 200, "too few frames: {maps} MAP, {spats} SPaT");
+    assert_eq!(map_held, 0, "a MAP waited at a gate its own channel never shut");
+    assert_eq!(spat_held, 0, "a SPaT waited at a gate its own channel never shut");
+}

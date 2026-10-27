@@ -23,7 +23,7 @@ use std::sync::OnceLock;
 
 use serde_json::json;
 use v2xw_engine::scenario::ModelChoice;
-use v2xw_engine::{DigestRecorder, Engine, MemoryRecorder, RunReport, Scenario};
+use v2xw_engine::{DigestRecorder, Engine, RunReport, Scenario};
 
 fn scenarios() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -82,10 +82,38 @@ fn run(scenario: Scenario) -> (RunReport, regression::Pinned) {
     (report, pinned)
 }
 
-/// [`run`] keeping every record.
-fn run_recorded(scenario: Scenario) -> (RunReport, MemoryRecorder) {
+
+/// A recorder that keeps one channel's records and drops the rest as they come.
+///
+/// `MemoryRecorder` holds every `phy.rx` of a Midtown run, which took the distribution
+/// test past the 2.5 GB run cap (adoption plan WP-13 status); the test reads one channel.
+#[derive(Default)]
+struct ChannelRecorder {
+    channel: &'static str,
+    kept: Vec<v2xw_core::ctx::OwnedRecord>,
+    seen: u64,
+}
+
+impl v2xw_engine::RunRecorder for ChannelRecorder {
+    fn write(&mut self, _at: v2xw_core::time::SimTime, record: &v2xw_core::ctx::OwnedRecord) {
+        self.seen += 1;
+        if record.channel == self.channel {
+            self.kept.push(record.clone());
+        }
+    }
+
+    fn records_written(&self) -> Option<u64> {
+        Some(self.seen)
+    }
+}
+
+/// [`run`] keeping only `channel`'s records.
+fn run_channel(scenario: Scenario, channel: &'static str) -> (RunReport, ChannelRecorder) {
     let mut engine = Engine::build(scenario, "").expect("builds");
-    let mut recorder = MemoryRecorder::new();
+    let mut recorder = ChannelRecorder {
+        channel,
+        ..ChannelRecorder::default()
+    };
     let report = engine.run(&mut recorder).expect("runs");
     (report, recorder)
 }
@@ -364,12 +392,12 @@ fn without_either_distribution_path_the_revocation_never_reaches_a_vehicle() {
         rsu.roles.retain(|r| r != "crl");
     }
     lifecycle(&mut scenario, "crl_fetch_interval_s", 1.0e6);
-    let (report, recorder) = run_recorded(scenario);
+    let (report, recorder) = run_channel(scenario, "proto.revocation");
+    assert!(recorder.seen > 0, "the run wrote no records");
     let rsu_rows: Vec<serde_json::Value> = recorder
-        .records()
+        .kept
         .iter()
-        .filter(|(_, r)| r.channel == "proto.revocation")
-        .map(|(_, r)| serde_json::from_slice::<serde_json::Value>(&r.json).expect("json"))
+        .map(|r| serde_json::from_slice::<serde_json::Value>(&r.json).expect("json"))
         .filter(|v| v["stage"] == "rsu_installed")
         .collect();
     let units: std::collections::BTreeSet<u64> = rsu_rows

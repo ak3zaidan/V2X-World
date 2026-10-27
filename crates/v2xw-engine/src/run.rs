@@ -1011,6 +1011,14 @@ pub struct Engine {
     mac: Option<EdcaOcbMac>,
     /// Congestion control, at the medium and high tiers.
     dcc: Option<crate::wiring::EngineDcc>,
+    /// The gatekeeper of the channel map's service channel, a second instance of the
+    /// run's ETSI algorithm fed with that channel's own busy ratio (WP-13 follow-up,
+    /// radio-fix3 R3.2.DCC). DCC is a per-channel loop: the gate's `T_off` is set by the
+    /// channel's CBR (TS 102 687 Annex A) and spaces the transmissions on that channel,
+    /// and a unit's second radio is a second transmitter; one gate for both channels let a
+    /// MAP on the service channel hold the next SPaT on the safety channel back. `None`
+    /// without a service channel or with J2945/1, which does not gate.
+    dcc_service: Option<crate::wiring::EngineDcc>,
     /// J2945/1's channel-quality bookkeeping (the BSMs each unit sent and each heard),
     /// and the last sub-interval each unit updated its indicator in. Empty unless the
     /// run's congestion control is J2945/1.
@@ -1672,6 +1680,11 @@ impl Engine {
             // On a sidelink `build_dcc` returns only SAE J3161/1's rate control, which
             // never gates: the sidelink's CR limits are its MAC's.
             dcc: crate::wiring::build_dcc(&scenario_for_radio),
+            dcc_service: channel_plan
+                .as_ref()
+                .and_then(|p| p.service)
+                .and_then(|_| crate::wiring::build_dcc(&scenario_for_radio))
+                .filter(crate::wiring::EngineDcc::gates),
             actors: BTreeMap::new(),
             node_actor: BTreeMap::new(),
             deferred_records: Vec::new(),
@@ -4494,6 +4507,17 @@ impl Engine {
                 Some(g) => g.global(node, local, now),
                 None => local,
             });
+        // The service channel's own busy ratio, for its own gate, at a unit tuned to it.
+        let service_cbr = match (self.dcc_service.as_ref(), self.channel_plan.as_ref()) {
+            (Some(_), Some(plan)) => plan.service.filter(|&sc| self.tuned(node, sc)).and_then(
+                |sc| {
+                    self.mac
+                        .as_ref()
+                        .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, sc, now))
+                },
+            ),
+            _ => None,
+        };
         // The unit's own state as its position estimate has it: the J2945/1 local
         // estimator. Only an on-board unit tracks itself; a roadside unit does not move.
         let own = (!self.rsus.contains_key(&node))
@@ -4554,12 +4578,16 @@ impl Engine {
                 provenance,
                 params,
                 dcc,
+                dcc_service,
                 ..
             } = self;
             let mut null = crate::ctx::NullRecorder::new();
             let mut ctx = EngineCtx::new(
                 scheduler, rng, world, snapshot, provenance, params, &mut null,
             );
+            if let (Some(ds), Some(cbr)) = (dcc_service.as_mut(), service_cbr) {
+                ds.on_cbr(&mut ctx, node, cbr);
+            }
             let dcc = dcc.as_mut().expect("checked above");
             if let Some(cbr) = cbr {
                 dcc.on_cbr(&mut ctx, node, cbr);
@@ -6604,15 +6632,25 @@ impl Engine {
                         provenance,
                         params,
                         dcc,
+                        dcc_service,
+                        channel_plan,
                         ..
                     } = self;
                     let mut null = crate::ctx::NullRecorder::new();
                     let mut ctx = EngineCtx::new(
                         scheduler, rng, world, snapshot, provenance, params, &mut null,
                     );
-                    dcc.as_mut()
-                        .expect("checked above")
-                        .gate(&mut ctx, node, &req)
+                    // A frame on the service channel passes that channel's own gate.
+                    let on_service = channel_plan
+                        .as_ref()
+                        .is_some_and(|p| p.service == Some(channel));
+                    match dcc_service.as_mut().filter(|_| on_service) {
+                        Some(ds) => ds.gate(&mut ctx, node, &req),
+                        None => dcc
+                            .as_mut()
+                            .expect("checked above")
+                            .gate(&mut ctx, node, &req),
+                    }
                 };
                 match decision {
                     v2xw_radio::GateDecision::Now { .. } => {}
