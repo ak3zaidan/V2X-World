@@ -53,9 +53,12 @@ runs:
   CPF:
     scenario: scenarios/scms-fix3/ci-scms-cpm.yaml
     note: fix; GN/BTP, CAM + CPM, four roadside-camera units under the US SCMS
+  Gp:
+    scenario: scenarios/scms-fix3/base.yaml
+    note: second build (52432316, provider-b's second ACA and the boundary job), before 6869fb6a
   G:
     scenario: scenarios/scms-fix3/base.yaml
-    note: second build (provider-b's second ACA)
+    note: third build (6869fb6a, aca/1 holds the ACA's issue permissions)
   G2:
     scenario: scenarios/scms-fix3/base.yaml
     note: G again (determinism)
@@ -64,7 +67,7 @@ runs:
     note: first build (one ACA at provider-b); provider-b's core ACA 4 s slow
   GSB:
     scenario: scenarios/scms-fix3/slow-aca-b.yaml
-    note: second build
+    note: third build
   PQF:
     scenario: scenarios/scms-pq-relay-repro.yaml
     note: fix; hybrid Falcon-512, the PDU layer off (R-PQUNSEC)
@@ -301,6 +304,16 @@ rows:
   source: audit-prov §4.1; IEEE 1609.2.1 (AcaEeCertResponse signed by the issuing ACA)
   measured: pending
   verdict: pending
+- id: D1.chain-permissions
+  base: Gp
+  variant: G
+  area: metrics
+  measure: receiver_validation refused (all reasons)
+  expect: '0 refusals, as F: a pseudonym aca/1 issued chains to provider-b's root through an ACA certificate whose certIssuePermissions covers it, as the core ACA's does (both published SAESOL ACA certificates hold {all, 1, 0, app})'
+  source: IEEE 1609.2 §5.1.2.4 (chain permissions); SAESOL chain files 2025-07-17, 2025-08-13
+  measured: 'Gp 81,410 chain-permission-not-covered (aca/1 issued with no certIssuePermissions: tbs_for read the role from the name prefix aca-1); G pending'
+  verdict: fixed
+  test: provider_runs provider_bs_second_aca_is_certified_and_issues_its_share (cert_issue_permissions equal)
 - id: D1.metrics-unchanged
   base: F
   variant: G
