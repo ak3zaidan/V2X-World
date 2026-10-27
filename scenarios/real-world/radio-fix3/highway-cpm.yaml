@@ -1,0 +1,10 @@
+# radio-fix3 R3.3.CPM base: highway-denm.yaml with the CPM on (TS 103 324), its generation
+# interval the default T_GenCpm (messages.cpm_dcc_limited off).
+schema: v2xw/scenario/1
+meta:
+  base: highway-denm.yaml
+  name: radio-fix3 highway-cpm
+  description: highway-denm with CPM, DCC limit off.
+  tags: [radio-fix3, experiment, highway, cpm]
+messages:
+  sets: [cam, denm, cpm]

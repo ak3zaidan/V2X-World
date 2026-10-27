@@ -38,12 +38,16 @@ def main():
     denm_cause = collections.Counter()
     denm_senders = collections.defaultdict(set)
     cpm_by_node = collections.Counter()
+    air_by_type = collections.Counter()
+    denm_t = collections.defaultdict(list)
     tx_path = os.path.join(J, "node_tx.jsonl")
     if os.path.exists(tx_path):
         for line in open(tx_path):
             r = json.loads(line)
             t = r.get("msg_type")
             by_type[t] += 1
+            if r["t"] >= w0 and r.get("airtime_us") is not None:
+                air_by_type[f'{t}@{r.get("channel")}'] += r["airtime_us"]
             if t == "bsm" and r["t_generated"] >= w0:
                 bsm_gen += 1
             if t == "denm":
@@ -51,13 +55,20 @@ def main():
                 k = c.get("cause") or c.get("cause_code") or c.get("event") or "?"
                 denm_cause[str(k)] += 1
                 denm_senders[str(k)].add(r["node"])
+                denm_t[(str(k), r["node"])].append(r["t"] / 1e9)
             if t == "cpm":
                 cpm_by_node[r["node"]] += 1
     out["tx_by_type"] = dict(by_type)
     out["bsm_generated_live"] = bsm_gen
+    out["air_us_by_type_live"] = dict(air_by_type)
     if denm_cause:
         out["denm_by_cause"] = dict(denm_cause)
         out["denm_senders_by_cause"] = {k: len(v) for k, v in denm_senders.items()}
+        # Per (cause, sender): first frame time, frames, and the median repetition gap.
+        out["denm_series"] = {
+            f"{k}/{n}": [round(ts[0], 2), len(ts), round(sorted(b - a for a, b in zip(ts, ts[1:]))[len(ts) // 2 - 1], 3) if len(ts) > 1 else None]
+            for (k, n), ts in sorted(denm_t.items())
+        }
     if cpm_by_node:
         out["cpm_per_sender_mean"] = sum(cpm_by_node.values()) / len(cpm_by_node)
     bins = collections.defaultdict(lambda: [0, 0])

@@ -50,6 +50,14 @@ runs:
     scenario: scenarios/real-world/radio-fix3/highway-denm-ice.yaml
     base: H
     binary: this branch's debug build (opt-level 2)
+  H-CPM:
+    scenario: scenarios/real-world/radio-fix3/highway-cpm.yaml
+    base: H
+    binary: this branch's debug build (opt-level 2)
+  H-CPM-DCC:
+    scenario: scenarios/real-world/radio-fix3/highway-cpm-dcc.yaml
+    base: H-CPM
+    binary: this branch's debug build (opt-level 2)
 rows:
 # ---- Item 1: reception within 300 m against theory and published measurements ----
 - id: R3.1.DSRC-NLOS-EDGE
@@ -175,6 +183,18 @@ rows:
   source: ETSI TS 102 687 V1.2.1 Annex A (adaptive gate, T_off per channel CBR); EN 302 571 §4.2.10.4
   fault: dcc_service never built (one gate for both radios)
   measured: pending
+- id: R3.2.JAM
+  test: v2xw-engine tests/multichannel.rs a_safety_channel_jammer_leaves_the_service_radio_free
+  expect: >-
+    A jammer's energy is on its channel: a receiver's energy detector sits behind its
+    channel filter, so a constant 23 dBm jammer on 172 riding an RSU holds that RSU's 172
+    radio busy (SPaT denied after 2 s: fewer than half the clean run's) while its 174 radio
+    still sends every MAP the clean run sends (at most one fewer). The PHY's SINR and the CBR
+    meter already counted the jammer per channel; the engine's carrier sense counted it on
+    every channel, and a reactive jammer reacted to service-channel frames
+  source: IEEE 802.11-2020 §17.3.10.6 (CCA on the operating channel); IEEE 1609.4-2016 §6.2.5
+  fault: the a.channel == channel filter removed from medium_busy_since / medium_idle_at
+  measured: pending
 - id: R3.2.P2-14
   test: v2xw-engine tests/phase2.rs without_either_distribution_path_the_revocation_never_reaches_a_vehicle
   expect: >-
@@ -182,7 +202,7 @@ rows:
     (MemoryRecorder held every phy.rx of the Midtown run) takes its peak under the 2.5 GB run
     cap with every assertion unchanged
   source: WP-13 status (the 14th phase2 test hit the 2.5 GB cap at 2,554 MB)
-  fault: the recorder keeping a channel no record is written on (no unit row: red)
+  fault: "the recorder keeping a channel no record is written on (no unit row, red)"
   measured: pending
 - id: R3.2.SUITES
   test: v2xw-engine tests scms_scale, radio_channel (each binary alone)
@@ -202,7 +222,7 @@ rows:
 - id: R3.2.DENSE-MOVE
   run: G-MAP
   metric: CBR172(map) / CBR172(base)
-  band: [s-0.03, s+0.03] around 1 - s, s = the SPaT+MAP share of 172 airtime in G (air_by_type)
+  band: "[s-0.03, s+0.03] around 1 - s, s = the SPaT+MAP share of 172 airtime in G (air_by_type)"
   expect: >-
     Moving SPaT and MAP to 174 removes their busy time from 172; the BSM load (J2945/1 rate by
     density, which the move does not change) stays, so CBR172 falls by their airtime share.
@@ -242,14 +262,14 @@ rows:
 - id: R3.3.EOQ
   run: H
   metric: dangerousEndOfQueue (27) originators; events per originator
-  band: [1, vehicles that reached the queue tail]; events per originator <= ceil((150 - 60) / 60) = 2
+  band: "[1, vehicles that reached the queue tail]; events per originator <= ceil((150 - 60) / 60) = 2"
   expect: >-
     Each vehicle that brakes from over 80 km/h into the queue behind a breakdown while its own
     sensors see the lane blocked under 50 km/h meets TRCO_0 and raises one end-of-queue DENM,
     then is blocked for 60 s: so originators are the vehicles that arrived at the tail at
     speed (a minority of all, since followers already slow), at most two events each in the
     90 s after the first breakdown. Each event repeats every 0.5 s for 20 s (<= 40 frames)
-  source: C2C-CC RS 2007 (sudden speed drop: hold 10 s, blocking 60 s, 0.5 s x 20 s)
+  source: "C2C-CC RS 2007 (sudden speed drop, hold 10 s, blocking 60 s, 0.5 s x 20 s)"
   measured: pending
 - id: R3.3.TC
   run: H
@@ -260,12 +280,12 @@ rows:
     this run has) or 30 s stationary with >= 5 slow CAMs / a relevant DENM / >= 5 slow vehicles
     seen within 100 m: possible only for vehicles stopped behind a breakdown from about 90 s,
     so few, all from vehicles standing in the queue, each once (180 s blocking)
-  source: C2C-CC RS 2007 (local slow down: 5 s hold, 180 s blocking, 1 s x 60 s)
+  source: "C2C-CC RS 2007 (local slow down, 5 s hold, 180 s blocking, 1 s x 60 s)"
   measured: pending
 - id: R3.3.ICE
   run: H-ICE
   metric: adhesion (6) DENM originators; their repetition interval
-  band: [1, all braking vehicles]; repetition 1 s (non-urban), not the urban 4 s
+  band: "[1, all braking vehicles]; repetition 1 s (non-urban), not the urban 4 s"
   expect: >-
     On ice (mu 0.1) braking for the queue is at the adhesion limit, ABS regulates, the
     friction estimate |a|/g = 0.1 < 0.2 holds 5 s, and RS 2002 condition j raises a traction-
@@ -279,4 +299,27 @@ rows:
   band: [0, 1.0]
   expect: ice caps braking at 0.98 m/s2 and lengthens following gaps, so throughput past the breakdowns does not rise
   source: AASHTO (2018) §3.2.2 stopping sight distance; the surface cap
+  measured: pending
+- id: R3.3.CPM-RATE
+  run: H-CPM-DCC
+  metric: CPMs sent, variant / base; content digest
+  band: [1.0, 1.0]
+  expect: >-
+    cpm_dcc_limited sets T_GenCpm = clamp(T_off, 100, 1000) ms. TS 102 687's adaptive gate
+    (alpha 0.016, beta 0.0012, target 0.68, delta_max 0.03) gives delta = min(0.03,
+    beta (0.68 - CBR) / alpha), which stays at 0.03 for any CBR under 0.28, so T_off =
+    max(25 ms, T_on / delta) is 25 ms for a sub-ms frame: under 100 ms, and the clamp
+    returns the default 100 ms. The CPM rate cannot move unless CBR exceeds about 0.63
+    (delta < T_on / 100 ms); at this highway's load the two runs send the same CPMs
+  source: ETSI TS 103 324 V2.1.1 §6.1.2.1 and Annex D; TS 102 687 V1.2.1 Annex A.2
+  measured: pending
+- id: R3.3.CPM-CBR
+  run: H-CPM
+  metric: mean CBR (172 or run), live window
+  band: [0.0, 0.28]
+  expect: >-
+    CAM at 1-10 Hz plus CPM at up to 10 Hz from about 300 vehicles on 3 km of six lanes, each
+    hearing those within a few hundred metres, loads the channel well under the 0.28 at
+    which delta leaves delta_max: the regime R3.3.CPM-RATE assumes
+  source: airtime arithmetic (TS 103 324 CPM sizes, 6 Mb/s)
   measured: pending
