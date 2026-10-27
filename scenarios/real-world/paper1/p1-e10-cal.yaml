@@ -1,0 +1,12 @@
+# P1-E10 calibration run: p1-e10-day.yaml on another seed. The surrogate's per-class,
+# per-corridor rates are measured here and only here; of the run it is judged against
+# (p1-e10-day.yaml, the scenario's own seed) only the BSM census (traffic exposure) is read.
+schema: v2xw/scenario/1
+
+meta:
+  base: p1-e10-day.yaml
+  name: Paper 1 p1-e10-cal
+  description: The P1-E10 run on a second seed, read only for the surrogate's input rates.
+  tags: [paper1, validation, surrogate, calibration]
+
+seed: "0xBE7C_0002"
