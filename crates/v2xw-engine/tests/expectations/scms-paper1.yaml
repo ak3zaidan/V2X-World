@@ -309,6 +309,33 @@ runs:
     scenario: scenarios/real-world/paper1/p1-e5-dsrc-l1-fading.yaml
     base: E5-D1
     note: E5-D1 with propagation tier high (Nakagami fading); pre-registered after E5-D1 failed its KS row
+  E7C-F0:
+    scenario: scenarios/real-world/paper1/p1-e7c-f0.yaml
+    note: P1-E7 calibrated receiver (velocity_noise_mps 0) on the stop-fix engine build, free share 0 %; then v2xw ma-replay
+  E7C-F10:
+    scenario: scenarios/real-world/paper1/p1-e7c-f10.yaml
+    note: P1-E7 calibrated receiver (velocity_noise_mps 0) on the stop-fix engine build, free share 10 %; then v2xw ma-replay
+  E7C-F25:
+    scenario: scenarios/real-world/paper1/p1-e7c-f25.yaml
+    note: P1-E7 calibrated receiver (velocity_noise_mps 0) on the stop-fix engine build, free share 25 %; then v2xw ma-replay
+  E7C-F50:
+    scenario: scenarios/real-world/paper1/p1-e7c-f50.yaml
+    note: P1-E7 calibrated receiver (velocity_noise_mps 0) on the stop-fix engine build, free share 50 %; then v2xw ma-replay
+  E7C-F75:
+    scenario: scenarios/real-world/paper1/p1-e7c-f75.yaml
+    note: P1-E7 calibrated receiver (velocity_noise_mps 0) on the stop-fix engine build, free share 75 %; then v2xw ma-replay
+  E7C-F100:
+    scenario: scenarios/real-world/paper1/p1-e7c-f100.yaml
+    note: P1-E7 calibrated receiver (velocity_noise_mps 0) on the stop-fix engine build, free share 100 %; then v2xw ma-replay
+  E7C-F0S2:
+    scenario: scenarios/real-world/paper1/p1-e7c-f0-s2.yaml
+    note: E7C-F0 on seed 0xBE7C_0002
+  E7C-F100S2:
+    scenario: scenarios/real-world/paper1/p1-e7c-f100-s2.yaml
+    note: E7C-F100 on seed 0xBE7C_0002
+  E7C-F0b:
+    scenario: scenarios/real-world/paper1/p1-e7c-f0.yaml
+    note: E7C-F0 again (determinism)
 rows:
 - id: P1.TS.rp-share0
   base: B
@@ -2445,4 +2472,66 @@ rows:
   expect: down
   min_change: 0.0
   source: 'fast fading turns some always-decoded links into intermittent ones, so fewer gaps are a single interval'
+  measured: pending
+- id: P1.E7C.zero-f0
+  base: E7C-F0
+  variant: E7C-F0
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: eq
+  value: 0
+  source: 'P1-E7 falsification test re-run on the calibrated receiver and the stop fix (pre-registered after E7-F0 failed): with the free class at 0 %, every sound rule revokes zero honest devices'
+  measured: pending
+- id: P1.E7C.zero-f0s2
+  base: E7C-F0S2
+  variant: E7C-F0S2
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: eq
+  value: 0
+  source: 'P1-E7 falsification test re-run on the calibrated receiver and the stop fix (pre-registered after E7-F0 failed): with the free class at 0 %, every sound rule revokes zero honest devices (seed 2)'
+  measured: pending
+- id: P1.E7C.attackers-f0
+  base: E7C-F0
+  variant: E7C-F0
+  area: architecture
+  measure: x.ma.sound_attackers_max
+  expect: ge
+  value: 1
+  source: 'the rules are not ''revoke nothing'' on the calibrated receiver'
+  measured: pending
+- id: P1.E7C.red-f100
+  base: E7C-F100
+  variant: E7C-F100
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: ge
+  value: 1
+  source: 'the fault for the null: every OBU free, some sound rule blocks an honest device'
+  measured: pending
+- id: P1.E7C.red-f100s2
+  base: E7C-F100S2
+  variant: E7C-F100S2
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: ge
+  value: 1
+  source: 'the fault for the null, seed 2'
+  measured: pending
+- id: P1.E7C.unsound-up
+  base: E7C-F0
+  variant: E7C-F100
+  area: architecture
+  measure: x.ma.unsound_honest_max
+  expect: up
+  min_change: 0.0
+  source: 'the unsound k = 1 baseline blocks more honest devices from 0 to 100 % free'
+  measured: pending
+- id: P1.E7C.det
+  base: E7C-F0
+  variant: E7C-F0b
+  area: architecture
+  measure: digest.record
+  expect: identical
+  source: 'same seed, byte-identical'
   measured: pending
