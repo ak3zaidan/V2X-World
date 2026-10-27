@@ -2228,8 +2228,8 @@ rows:
   value: 1
   fault: swap-detector
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '489'
+  verdict: pass
   source: 'certValidity is the check built for ExpiredCert; the BSM verifies, its certificate expired 5 s before (expired_cert_lag_s 5 > cert_slack_s 1)'
 - id: F4.M.ExpiredCert.no-signature
   base: C2Mf
@@ -2240,8 +2240,8 @@ rows:
   value: 0
   fault: crossfire
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'its signature is good, and the validity rule refuses before the CRL is read, so no receiver reports a bad signature about it (613 before the fix)'
 - id: F4.M.ExpiredCert.decided
   base: C2Mf
@@ -2251,8 +2251,8 @@ rows:
   expect: ge
   value: 1
   fault: no-revocation
-  measured: pending
-  verdict: pending
+  measured: '1'
+  verdict: pass
   source: 'certValidity evidence is not set aside (only signature-only evidence is, phase2.rs evidence-unverifiable); with every verdict filed (M) the corroborated MA gets 3 events x 2 reporters in 60 s'
 - id: F4.M.crossfire-down
   base: C2M
@@ -2274,8 +2274,8 @@ rows:
   expect: eq
   value: 0
   fault: honest-revoked
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'the fix adds a check that fires only on an out-of-window certificate'
 - id: F4.M.NotYetValid.certValidity
   base: C3Mf
@@ -2286,8 +2286,8 @@ rows:
   value: 1
   fault: swap-detector
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '549'
+  verdict: pass
   source: 'certValidity is built for NotYetValid; the certificate starts 5 s after the BSM (not_yet_valid_lead_s 5 > cert_slack_s 1)'
 - id: F4.M.NotYetValid.no-signature
   base: C3Mf
@@ -2298,8 +2298,8 @@ rows:
   value: 0
   fault: crossfire
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'as F4.M.ExpiredCert.no-signature (642 before the fix)'
 - id: F4.L.ExpiredCert.verdicts
   base: C2Lf
@@ -2310,8 +2310,8 @@ rows:
   value: 1
   fault: detector-blind
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '1157'
+  verdict: pass
   source: 'the research suite fires certValidity under L as under M; only filing differs'
 - id: F4.L.ExpiredCert.decided
   base: C2Lf
@@ -2321,8 +2321,8 @@ rows:
   expect: eq
   value: 0
   fault: all-caught
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'certValidity has no SM-MBR v1.1 subtype, so a US device files none of it (OF-2)'
 - id: F4.U.ExpiredCert.reported
   base: C2Uf
@@ -2332,8 +2332,8 @@ rows:
   expect: eq
   value: 0
   fault: all-caught
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'the US profile checks only verified BSM pairs and has no certificate check: a refused BSM is not judged, before or after the fix'
 - id: F4.U.no-honest
   base: C2Uf
@@ -2343,8 +2343,8 @@ rows:
   expect: eq
   value: 0
   fault: honest-revoked
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'nothing honest changes under U'
 # F5 fix: k = intensity x magnitude_scale now scales RandomSpeed's (and StopAndGo's) lie.
 - id: F5.k1-untouched
@@ -2366,8 +2366,8 @@ rows:
   value: 1
   fault: detector-blind
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '1781'
+  verdict: pass
   source: 'claimed = v + 3(u - v), u ~ U[0, 40]: over MaxSpeed 90 m/s when u > 30 + 2v/3, about 8 % of draws at v = 10 m/s'
 # F6: the legacy implausibleAcceleration reads the newest fix at least detector_lag_s
 # (1.5 s) old, i.e. dt 1.8 to 2 s at a 0.9 to 1 s check rate, not the 1 s the 10-25
