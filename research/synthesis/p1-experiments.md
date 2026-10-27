@@ -335,6 +335,79 @@ Qualifiers:
   is open.
 
 
+## P1 engine gaps: E5 gap shape, E6 confound, E8 attack start, L1 (2026-10-27)
+
+Binary: optimised debug build of `f4a0f5cc` (runs `G-*`); the pre-fix release `f4982788` for
+the E6 fault (`O-*`). Rows `P1.GAP.*` in `scms-paper1.yaml`, each committed `pending` before
+its run (`f4a0f5cc`, `216c9abc`, `9f34cd69`, `8ab65178`). 40 rows: 30 pass, 6 open, 3 wrong
+expectations (corrected with evidence in the row), 1 pass read from the run report.
+`variants_faults.py`: 30 red, 0 silent.
+
+**What Tampa's RSU log says (msgCnt-attested, `nm7w-nvbm`).**
+- The missing BSMs were sent. A gap of k intervals carries a msgCnt step of k in 84-89 % of
+  pairs, so "msgCnt +1 on 78 %" is the one-interval share itself, not sender skips.
+- The loss is locked to the UTC 100 ms interval. Free devices lose 0.51 of BSMs generated
+  10-30 ms into it and 0.22 at 50-99 ms. This holds in every 0.005° cell, and no locked
+  device was within 300 m (so it is not synchronised collisions). It is an RSU deafness in
+  the first half of the IEEE 1609.4 sync interval (the control-channel interval).
+- The sub-50 ms gaps (1.6 %) are log artefacts: 224 of 547 carry msgCnt −1 (logged out of
+  order), and 157 carry a +100 ms secMark step.
+- The log stamps with its own clock. On one-interval pairs the rx-gap IQR is 11 ms against
+  the secMark gap's 4 ms.
+
+**Engine changes.**
+- `radio.devices.rsu.off_channel` (flag; `run/off_channel.rs`, cause `off-channel`). In each
+  UTC sync interval, independently, a unit is away with probability p from `from_ms` for a
+  duration in `[min, max]`. It is fitted on Tampa (`tools/realworld/paper1/fitoff.py`,
+  `data/calibration/rsu-off-channel-tampa.yaml`): p 0.45, away 18-50 ms.
+- E6 defect fix: unit i is node `ROADSIDE_ID_BASE + i` (0x4000_0000), so vehicle ids and
+  every node-keyed draw no longer depend on the RSU count.
+- `gt.device_exposure.attack_start` is the first falsified message, as its doc says.
+
+| Change | Expected (before) | Measured | Verdict |
+|---|---|---|---|
+| E5 base, phase-locked excess | ±0.05 | −0.023 | pass |
+| off-channel: excess, 10-30 vs 50-99 ms | 0.15-0.35 (Tampa 0.25) | 0.334 | pass |
+| off-channel: one / two / 3-5 intervals | 0.74-0.86; two up | 0.805 / 0.106 / 0.066 (Tampa 0.759 / 0.112 / 0.065) | pass |
+| off-channel: p90 | up | 147 → 242 ms (Tampa 303) | pass |
+| off-channel: OBU gaps, frames, events, wall | same; ±2 %; ±5 %; ±25 % | identical; 1.00; 0.957; 0.96 | pass |
+| off-channel: KS ≤ 0.0747 | predicted still above | 0.144 (max moved 156 → 97 ms) | open |
+| Nakagami at medium tier | rest loss up | already on in base (`wiring.rs` FixedMedium) | wrong expectation |
+| + Tampa-only free clock: p50 | 103-107 ms | 105.3 | pass |
+| + Tampa clock: KS raw / with log stamp jitter | down | 0.165 / 0.071 (post hoc) | open |
+| seed 2, with log stamp jitter, written before | ≤ 0.0748 | 0.0764 | open (narrow) |
+| E6: 30 → 10 RSUs, vehicle exposure digest | identical | identical (pre-fix binary: differs) | pass |
+| E6: uploads | non-increasing | 1,987 → 1,939 (pre-fix: 1,870 → 1,932) | pass |
+| E8: pseudonym-k, device-k budget (EVP, EVA, EVB) | identical | 560.5 and 3,059.2 s in all four | pass (6 rows) |
+| L1 on this binary | reproduces | 33 honest blocked | pass |
+| L1 calibrated receiver (velocity noise 0) | down; ≤ 2 | 33 → 4; implausibleAcceleration 327 → 0 | pass; open |
+| L1B under cluster | gain (≥ 1) | 685 → 591 s | wrong expectation |
+
+**Reading.**
+- The RSU off-channel schedule closes every interval-scale feature of the Tampa gaps.
+- What is left of the KS sits inside the 100 ms peak. Two things put it there: the free-class
+  clock, which is pooled and mostly Orem's (Tampa's alone is drift p50 3 ms, with 91 % of
+  periods within ±5 ms), and the public log's own stamp jitter, which is an observation
+  model, not channel.
+- Two seeds with both fall at 0.071 and 0.076, against a tolerance of 0.0747.
+- L1 against MAL1R is the binary, not the scenario: MAL1R predates the v3 timing fit
+  (`204d5d85`, grid hops). L1's honest blocks are E7's hop × velocity-noise
+  MaxAcceleration.
+- E6: the earlier P1.E6 attack-loss numbers were measured on a renumbered fleet. On the
+  fixed numbering the 4,500 B anchor loses 0 of 188 attack reports (was 22 of 272), so the
+  P1-E6 quota curve should be re-measured.
+
+**Open.**
+- More seeds for the E5 pipeline. A per-stamp (not Gaussian) log jitter.
+- The deployment's free-class mix and clock are scenario knobs. Tampa's free clock lives in
+  `data/calibration/bsm-timing-cvpilot-tampa-free.yaml`.
+- L1C's 4 remaining honest blocks (k ≤ 5) need their accusing detector. The EV family
+  records no jsonl.
+- E4 is not moved by this work. Wyoming has only 0.3 % multi-interval pairs, and its KS of
+  all pairs against 100 ms pairs only is 0.022. E4's re-run on the renumbered fleet is still
+  owed.
+- An absent RSU's own transmissions are not deferred.
+
 ## P1-E10: multi-day projection (item G), ANALYTICAL
 
 **What it is.** `tools/surrogate` (v1.0.0, shared with Paper 3): an open-loop surrogate of
