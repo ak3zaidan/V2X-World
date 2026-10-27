@@ -191,6 +191,16 @@ rows:
   measured: 'FH 14,886 ms against FH20 17,170 ms (+2,284); cert_unavailable 12.3 -> 53.1 s, max 8.3 -> 22.0 s; starved 2 -> 7. scms_knobs_runs (full lifecycle): 24,859 -> 25,142 ms, top-up messages 1,774 -> 1,192'
   verdict: wrong-expectation
   note: 'only a late top-off polls again, and most of a top-off''s time on the 2-week horizon is the scheduled wait to nextDlTime: the mean moves by the late share times (20 s - 2 s) / 2, not by 5 s. The knob acts where theory says (fewer polls, longer certificate gaps). The test now bounds the shift by the late share it counts from the records (pending build 2)'
+- id: RA.download-wait-boundary
+  base: scms_knobs_runs h2 base (third build)
+  variant: same, download_poll_interval_s 20
+  area: metrics
+  measure: topup mean of completed top-ups; polls; completions
+  expect: 'variant > base (the test a_longer_download_wait_lengthens_a_late_topup, unchanged), as on the first build (24,859 -> 25,142 ms)'
+  source: SCMS Manager EE profile Table 3 download-minWait
+  measured: 'base 12,477 ms (107 of 212 completed, 63 late of 157, 3,209 polls) against variant 9,165 ms (101 of 206, 59 late, 451 polls): the test fails'
+  verdict: open
+  note: 'the boundary job now puts every account''s week on the 4 s slow ACA at each boundary, so a late top-off waits about 100 s (51 polls at 2 s) and many end with the run; with 20 s polls six fewer complete, and the mean over completed top-ups is censored. The knob acts as theory says on polls (3,209 -> 451). Needs a measure that counts the unfinished top-offs (or cert_unavailable), then a run; not weakened'
 - id: RA.h2-in-run-jobs
   base: FS
   variant: FH

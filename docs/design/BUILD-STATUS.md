@@ -4061,7 +4061,11 @@ variant of one comparison use one binary.
 - **Open:** sensitivity_security backhaul test (5 ms line 272 against 264 messages: the
   `.info` estimate for a week the boundary job is still generating);
   backend_entities left-area test moved to the 2-week horizon, not yet run; the full
-  scms_knobs_runs binary not re-run on the third build; D1.slow-aca-h2 top-up count.
+  scms_knobs_runs on the third build: the architecture and slow-ACA tests pass, but
+  `a_longer_download_wait_lengthens_a_late_topup` fails. Its mean covers only the
+  top-ups that finished, so it is censored: base 12,477 ms, variant 9,165 ms, 6 fewer
+  completed, polls 3,209 → 451. The other 17 tests were not re-run.
+  D1.slow-aca-h2 top-up count.
 
 ## 2026-10-26: four-round integration (FIXWAVE3, WAVE754, WAVE5BC, SCMS fix round 2 tests)
 
