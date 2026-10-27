@@ -1,0 +1,17 @@
+# radio-fix3 R3.2.DENSE-HWY: the built-in highway (highway-congestion.yaml: BSM on DSRC 172,
+# J2945/1 rate and power control, 48,000 veh/h offered) with the channel map on, cut to 24 s
+# with an 18 s warm-up so a run fits a slot; the live window is the last 6 s.
+schema: v2xw/scenario/1
+meta:
+  base: ../../highway-congestion.yaml
+  name: radio-fix3 dense-hwy-map
+  description: Built-in highway at its own demand, channel map on, 24 s.
+  tags: [radio-fix3, experiment, cbr]
+time:
+  duration_s: 24.0
+  warmup_s: 18.0
+radio:
+  channels:
+    - {channel: 174, messages: [spat, map]}
+exporters:
+  - id: jsonl
