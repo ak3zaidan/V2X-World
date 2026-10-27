@@ -98,5 +98,59 @@ def main():
     print(json.dumps(out, sort_keys=True))
 
 
+def _ratio(a, b):
+    return a / b if a is not None and b else None
+
+
+# Each judged row: its measure from the runs' summaries (`<runs>/<RUN>.json`, written by
+# the per-run mode above). `run` is the row's run; `base` its base run.
+MEASURES = {
+    "R3.1.DSRC-NLOS-EDGE": lambda s, run, base: s[run]["cross50_m"],
+    "R3.1.LTE-NLOS-EDGE": lambda s, run, base: s[run]["cross50_m"],
+    "R3.1.NR-NLOS-EDGE": lambda s, run, base: s[run]["cross50_m"],
+    "R3.1.LTE-RETX-DEFAULT": lambda s, run, base: _ratio(
+        s[run]["frames_transmitted"], (s[run]["sidelink"] or {}).get("grants")),
+    "R3.1.RETX1-FRAMES": lambda s, run, base: _ratio(
+        s[run]["frames_transmitted"], s[base]["frames_transmitted"]),
+    "R3.1.RETX1-PDR": lambda s, run, base: s[run]["pdr300"],
+    "R3.1.RETX1-WALL": lambda s, run, base: _ratio(s[run].get("wall_s"), s[base].get("wall_s")),
+    "R3.1.EQP-PDR": lambda s, run, base: s[run]["pdr300"],
+    "R3.1.EQP-UDOT": lambda s, run, base: _ratio(s[run]["cross50_m"], s["D1"]["cross50_m"]),
+}
+
+
+def judge(spec_path, runs_dir, swaps):
+    """Judges every row with a measure; `swaps` (`RUN=OTHER`) is the fault proof: the row is
+    judged on another real run, one without the mechanism the row is about."""
+    import yaml
+
+    spec = yaml.safe_load(open(spec_path))
+    names = {r: r for r in spec.get("runs", {})}
+    names.update(dict(s.split("=", 1) for s in swaps))
+    summaries = {}
+    for r in spec.get("runs", {}):
+        p = os.path.join(runs_dir, names[r] + ".json")
+        if os.path.exists(p):
+            summaries[r] = json.load(open(p))
+    bad = 0
+    for row in spec.get("rows", []):
+        f = MEASURES.get(row["id"])
+        if f is None:
+            continue
+        run = row.get("run")
+        base = (spec["runs"].get(run) or {}).get("base")
+        try:
+            v = f(summaries, run, base)
+        except KeyError:
+            v = None
+        lo, hi = row["band"]
+        ok = v is not None and lo <= v <= hi
+        bad += not ok
+        print(f"{'PASS' if ok else 'FAIL'} {row['id']}: {v if v is None else round(v, 4)} in [{lo}, {hi}]")
+    return bad
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "judge":
+        sys.exit(1 if judge(sys.argv[2], sys.argv[3], sys.argv[4:]) else 0)
     main()

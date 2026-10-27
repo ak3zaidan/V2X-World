@@ -44,7 +44,9 @@ rows:
     the 0.5 crossing sits near the NLOS edge, between it and 1.5x it.
   source: 3GPP TR 37.885 V15.3.0 Table 6.2.1-1; SAE J2945/1 §6.3.8; Unex OBU-301 datasheet (R7 §A10)
   disclosure: D1/L1/N1 were run as diagnostics before these rows were written; their rows are analytic checks on numbers already seen
-  measured: pending
+  measured: "175 m (bins 0.96/0.85/0.58/0.25/0.18/0.13 from 0 to 300 m; pdr300 0.346; 63 % of attempts within 300 m below -92 dBm)"
+  verdict: pass
+  fault: "judged on L1 (the LTE budget): 425, red"
 - id: R3.1.LTE-NLOS-EDGE
   run: L1
   metric: distance where reception within the 50 m bins first falls under 0.5, m
@@ -56,7 +58,9 @@ rows:
     at 335 m: the 0.5 crossing between 300 and 450 m.
   source: 3GPP TR 37.885 V15.3.0 Table 6.2.1-1; TR 36.885 Table A.1.2-1 (23 dBm); 47 CFR §95.3204(a)
   disclosure: as R3.1.DSRC-NLOS-EDGE
-  measured: pending
+  measured: "425 m (pdr300 0.943; 50 % delivery at -102 dBm, 90 % at -98 dBm)"
+  verdict: pass
+  fault: "judged on D1: 175, red"
 - id: R3.1.NR-NLOS-EDGE
   run: N1
   metric: distance where reception within the 50 m bins first falls under 0.5, m
@@ -67,7 +71,10 @@ rows:
     123 dB: TR 37.885 NLOS reaches it at 250 m.
   source: 3GPP TR 37.885 V15.3.0 Table 6.2.1-1; TS 38.214 Table 5.1.3.1-2
   disclosure: as R3.1.DSRC-NLOS-EDGE
-  measured: pending
+  measured: "275 m (pdr300 0.657; 50 % delivery at -94 dBm)"
+  verdict: pass
+  fault: "judged on L1: 425, red"
+  note: "NR sits below LTE because its default profile sends one 16QAM copy where LTE sends two QPSK copies: a profile choice (no NR-V2X deployment exists to copy), not a channel defect; open item O-NR-PROFILE"
 - id: R3.1.LTE-RETX-DEFAULT
   run: L1
   metric: sidelink transmissions per BSM generated (frames on air / BSMs), and run-report max_transmissions
@@ -77,14 +84,18 @@ rows:
     when HARQ is turned ON"; 5GAA P-190033 Table 32 "Blind HARQ: Yes"); congestion control
     gives the copy up only at high CBR, so at CBR 0.016 the ratio is 2 less the rare drops.
   source: 5GAA P-190033 Table 32; Qualcomm 80-PE732-67 §4 Q5; TS 36.213 §14.1.1.4C
-  measured: pending
+  measured: "1.9998 (18,970 frames / 9,486 grants; max_transmissions 2, retransmissions 9,484)"
+  verdict: pass
+  fault: "judged on L1-RETX1: 1.0, red"
 - id: R3.1.RETX1-FRAMES
   run: L1-RETX1
   metric: sidelink frames on air, variant / base
   band: [0.49, 0.52]
   expect: one copy per BSM instead of two halves the frames (BSM count unchanged, mobility identical)
   source: TS 36.213 §14.1.1.4C (one blind retransmission); arithmetic
-  measured: pending
+  measured: "0.5006 (18,970 -> 9,496)"
+  verdict: pass
+  fault: "base judged as variant: 1.998, red"
 - id: R3.1.RETX1-PDR
   run: L1-RETX1
   metric: reception within 300 m
@@ -95,21 +106,28 @@ rows:
     RSSI->delivery curve 2-3 dB higher predicts 0.893-0.864 from the base 0.943 (predict.py);
     losing the time diversity can take it a little lower.
   source: TS 36.213 §14.1.1.4C; chase-combining SNR gain; base curve
-  measured: pending
+  measured: "0.943 -> 0.857 (50 % crossing 425 -> 325 m)"
+  verdict: pass
+  fault: "base judged as variant: 0.943, red"
+  note: "just under the 2-3 dB curve-shift prediction (0.864-0.893): the lost second fade, as the row allowed"
 - id: R3.1.RETX1-WALL
   run: L1-RETX1
   metric: wall time, variant / base
   band: [0.5, 1.0]
   expect: half the sidelink frames is half the reception decisions and interference sums; the rest of the run (mobility, security, SCMS) is unchanged, so the run gets faster, not slower
   source: cost model (the sidelink decisions scale with frames x receivers)
-  measured: pending
+  measured: "29.95 -> 26.29 s (0.878)"
+  verdict: pass
+  fault: "base judged as variant: 1.14 (the base's own wall over the variant's), red"
 - id: R3.1.EQP-PDR
   run: L1-EQP
   metric: reception within 300 m
   band: [0.72, 0.78]
   expect: every link 6 dB weaker (26 -> 20 dBm EIRP; the attempt set is fixed at the reference EIRP, so the denominator stays); the base curve read 6 dB lower predicts 0.748
   source: base curve (predict.py); link budget
-  measured: pending
+  measured: "0.943 -> 0.755 (predicted 0.748)"
+  verdict: pass
+  fault: "base judged as variant: 0.943, red"
 - id: R3.1.EQP-UDOT
   run: L1-EQP
   metric: LTE 0.5-crossing distance at 20 dBm EIRP / DSRC 0.5-crossing distance (D1)
@@ -121,4 +139,7 @@ rows:
     NLOS end. The engine's own budgets (10 dB receiver advantage at the 50 % point, 30 dB a
     decade NLOS) predict 2.15: above the band, which this row tests.
   source: Panasonic for UDOT, "Range of Reception DSRC/C-V2X" final report (2021), Findings and Table 1
-  measured: pending
+  measured: "1.857 (325 / 175 m)"
+  verdict: pass
+  fault: "L1 (26 dBm) judged in place of L1-EQP: 2.43, red"
+  note: "inside UDOT's band but at its LOS end, though Midtown is NLOS-dominated; the 50 m bins resolve the ratio only to about +-0.3. At the deployed powers (26 vs 20 dBm EIRP) the engine's LTE/DSRC ratio is 2.43, which no equal-power field test bounds; the C-V2X OBU power J3161/1 sets is not in a cached source (open item O-CV2X-POWER)"
