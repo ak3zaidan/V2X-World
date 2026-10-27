@@ -17,6 +17,7 @@
 //! | `redundancy_milli` | object reports received in CPMs, over distinct (receiver, object, second) triples: how many times a receiver hears about the same object each second |
 //! | `size_*` | the CPM's facilities-layer payload, octets: median, 95th percentile, and 100-octet bins |
 //! | `generation_mhz` | CPMs per CPM-sending station per second, ×1000 |
+//! | `cpms_verified` | CPMs (from any station) a vehicle's own receiver verified and decoded (counted when the vehicle runs applications, which is when it parses the payload) |
 //! | `rsu_cpms_sent` | infrastructure CPMs: those roadside units with the `cpm` role handed to the radio |
 //! | `rsu_cpms_verified` | infrastructure CPMs a vehicle's own receiver verified and decoded, recognised by the message's `originatingRsuContainer` (counted when the vehicle runs applications, which is when it parses the payload) |
 //! | `rsu_objects_decoded` | perceived objects in those |
@@ -74,6 +75,9 @@ pub struct CpmTally {
     pub awareness_direct_permille: u64,
     /// Share known with CPMs as well, ‰.
     pub awareness_with_cpm_permille: u64,
+    /// CPMs vehicles verified and decoded (left out of the report when none).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub cpms_verified: u64,
     /// Infrastructure CPMs handed to the radio (left out of the report when none, so a
     /// run with no roadside CPM keeps its report).
     #[serde(skip_serializing_if = "is_zero")]
@@ -108,6 +112,7 @@ pub(super) struct CpmMeter {
     direct: u64,
     with_cpm: u64,
     rsu_sent: u64,
+    verified: u64,
     rsu_verified: u64,
     rsu_objects: u64,
 }
@@ -210,6 +215,7 @@ impl Engine {
             return;
         }
         let origin = self.world.origin.into();
+        let mut all = 0u64;
         let mut cpms = 0u64;
         let mut objects = 0u64;
         for m in delivered {
@@ -225,6 +231,7 @@ impl Engine {
             else {
                 continue;
             };
+            all += 1;
             if !v2xw_msg::cpm::from_rsu(&cpm) {
                 continue;
             }
@@ -232,6 +239,7 @@ impl Engine {
             objects += v2xw_msg::cpm::objects_of(&cpm, origin).map_or(0, |(_, o)| o.len() as u64);
         }
         if let Some(m) = self.cpm_meter.as_mut() {
+            m.verified += all;
             m.rsu_verified += cpms;
             m.rsu_objects += objects;
         }
@@ -338,6 +346,7 @@ impl Engine {
             awareness_pairs: m.pairs,
             awareness_direct_permille: permille(m.direct),
             awareness_with_cpm_permille: permille(m.with_cpm),
+            cpms_verified: m.verified,
             rsu_cpms_sent: m.rsu_sent,
             rsu_cpms_verified: m.rsu_verified,
             rsu_objects_decoded: m.rsu_objects,

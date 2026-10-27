@@ -361,6 +361,20 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
 /// leaf publishes an empty unit, which is what it would publish without this list.
 #[cfg(test)]
 const DIMENSIONLESS: &[&str] = &[
+    // The sensor suites (WP-14): the CPM sensorId, detection probabilities and the
+    // position error as a fraction of range.
+    "perception.vehicle[].id",
+    "perception.vehicle[].pd_near",
+    "perception.vehicle[].pd_far",
+    "perception.vehicle[].sigma_range_fraction",
+    "perception.classes.*[].id",
+    "perception.classes.*[].pd_near",
+    "perception.classes.*[].pd_far",
+    "perception.classes.*[].sigma_range_fraction",
+    "perception.rsu[].id",
+    "perception.rsu[].pd_near",
+    "perception.rsu[].pd_far",
+    "perception.rsu[].sigma_range_fraction",
     // The SCMS deployment (WP-D1): instance counts, elector counts and fractions.
     "security.scms.deployment.providers[].components.*",
     "security.scms.deployment.providers[].fleet_share",

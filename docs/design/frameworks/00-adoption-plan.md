@@ -385,6 +385,23 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: the default suite reproduces today's detections (or the golden change is listed); a
   car fully behind a truck's outline is not detected and a partly visible one is; a rear radar
   detects an overtaking car; an RSU camera at a junction produces CPMs a vehicle decodes.
+- Status (2026-10-27): done (branch `worktree-wf_6a49856b-494-5`). `SensorSpec` has a mount
+  (front/rear/centre anchor plus offset) and a boresight azimuth; an optional `perception`
+  block gives the vehicle suite, suites per class, the RSU suite (default four 80 m 90°
+  cameras) and `occlusion: centre-line | outline` (outline off by default: any visible
+  outline corner, vehicles as oriented rectangles, own segment/rectangle clipping after
+  Günther et al. VNC 2016). New RSU role `cpm` sends infrastructure CPMs
+  (`originatingRsuContainer`); the sensor container states mount and opening about the
+  boresight when the block is present. The node's certificate permission list now
+  carries the CPM ITS-AID 639 (without it every RSU CPM was refused
+  `psid-not-permitted`; vehicle CPMs verified either way). Validated: legacy
+  scan reproduced draw for draw on 40 random scenes; truck/partial/crossing-truck,
+  rear-radar, RSU-approach unit tests; RSU CPMs verified by vehicles (49 of 91 in 12 s);
+  asn1tools reads the new containers; schema refusals. Each shown red under its fault.
+  Open: SCMS-cycle RSU application certificates still carry only the SPaT/MAP PSID, so a
+  `cpm` unit inside that cycle signs CPMs a receiver refuses; no 3D (mast see-over)
+  occlusion; no run-level byte comparison against the f4982788 binary (the PSID fix
+  changes certificate bytes); outline default left for the owner to flip.
 
 **WP-15 Complete `.rou.xml` import** (S-M, 3 days). Source: S-P8.
 - Scope: every vType attribute, `vTypeDistribution`, Bernoulli `probability` flows with their

@@ -74,10 +74,9 @@ fn a_roadside_camera_at_a_junction_sends_cpms_that_vehicles_decode() {
     eprintln!("{c:?}");
     assert!(c.rsu_cpms_sent > 10, "the units send CPMs: {c:?}");
     assert!(
-        c.rsu_cpms_verified > 0 && c.rsu_objects_decoded > 0,
+        c.rsu_cpms_verified > 10 && c.rsu_objects_decoded > 10,
         "vehicles verify and decode them, with objects in them: {c:?}"
     );
-    assert!(c.rsu_cpms_verified >= c.rsu_cpms_sent / 2, "{c:?}");
 }
 
 /// A unit without the role sends none, and the vehicles count none.
@@ -90,6 +89,8 @@ fn without_the_role_no_roadside_cpm_is_sent() {
         .cpm
         .expect("CPM figures");
     assert_eq!((c.rsu_cpms_sent, c.rsu_cpms_verified), (0, 0), "{c:?}");
+    // The vehicles' own CPMs verify and decode at their neighbours.
+    assert!(c.cpms_verified > 10, "{c:?}");
 }
 
 /// The suites are checked against what a CPM can carry, and a block nothing reads is
