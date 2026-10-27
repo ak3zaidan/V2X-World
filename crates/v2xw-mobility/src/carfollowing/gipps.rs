@@ -117,6 +117,7 @@ impl Gipps {
             comfort_decel_mps2: 2.0 * a,
             time_headway_s: GIPPS_TAU_S,
             min_gap_m: (GIPPS_EFFECTIVE_SIZE_M - spec.length_m).max(1.0),
+            sigma: None,
         }
     }
 

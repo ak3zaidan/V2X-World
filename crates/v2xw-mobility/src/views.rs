@@ -51,6 +51,12 @@ pub struct DriverProfile {
     pub time_headway_s: f64,
     /// Standstill (jam) distance `s0`, metres.
     pub min_gap_m: f64,
+    /// This driver's own imperfection `σ` (SUMO's vType `sigma`, `0..=1`), when a vehicle
+    /// type states one: a model with a dawdle (Krauss) uses it in place of its model-wide
+    /// value. `None` for every engine-drawn driver, and then left out of the serialised
+    /// form, so records written before the field existed are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sigma: Option<f64>,
 }
 
 impl DriverProfile {
@@ -531,6 +537,68 @@ pub struct TripRequest {
     pub desired_speed_mps: f64,
 }
 
+/// The vehicle type a demand model states for one trip (a SUMO `<vType>`), which the
+/// engine applies at insertion in place of its own driver draws
+/// ([`crate::traits::Demand::trip_driver`]).
+///
+/// A vehicle with a stated type drives exactly that type, as in SUMO: its base is the
+/// SUMO default of its vClass ([`crate::carfollowing::krauss::Krauss::class_profile`]),
+/// every field given here replaces the base's, and the engine's own style and parameter
+/// spread are not applied on top. `None` everywhere means "the class default".
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TripDriver {
+    /// `accel`, m/s².
+    pub max_accel_mps2: Option<f64>,
+    /// `decel`, m/s².
+    pub comfort_decel_mps2: Option<f64>,
+    /// `tau`, seconds.
+    pub time_headway_s: Option<f64>,
+    /// `minGap`, metres.
+    pub min_gap_m: Option<f64>,
+    /// `sigma`, `0..=1`.
+    pub sigma: Option<f64>,
+    /// This vehicle's drawn `speedFactor` and the law it was drawn from (mean, deviation),
+    /// which replaces the engine's own draw.
+    pub speed_factor: Option<(f64, f64, f64)>,
+    /// `departSpeed`.
+    pub depart_speed: Option<DepartSpeed>,
+}
+
+impl TripDriver {
+    /// `base` with every field this type states put in its place.
+    #[must_use]
+    pub fn over(&self, base: DriverProfile) -> DriverProfile {
+        DriverProfile {
+            max_accel_mps2: self.max_accel_mps2.unwrap_or(base.max_accel_mps2),
+            comfort_decel_mps2: self.comfort_decel_mps2.unwrap_or(base.comfort_decel_mps2),
+            time_headway_s: self.time_headway_s.unwrap_or(base.time_headway_s),
+            min_gap_m: self.min_gap_m.unwrap_or(base.min_gap_m),
+            sigma: self.sigma.or(base.sigma),
+            ..base
+        }
+    }
+}
+
+/// A SUMO `departSpeed` (SUMO documentation, "Definition of Vehicles, Vehicle Types, and
+/// Routes", departSpeed). Every value is capped at the speed from which the vehicle can
+/// still stop behind whatever is ahead of it, so an insertion never forces a hard brake
+/// (SUMO instead delays an insertion whose stated speed is unsafe).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DepartSpeed {
+    /// A number, m/s.
+    Mps(f64),
+    /// `max`: the highest safe speed.
+    Max,
+    /// `desired`: the vehicle's desired speed on the lane (limit × speedFactor, capped by
+    /// maxSpeed).
+    Desired,
+    /// `speedLimit`: the lane's posted limit.
+    SpeedLimit,
+    /// `random`: uniform on `[0, desired]`; the uniform draw `u` in `[0, 1)` is the
+    /// demand model's, from its own keyed stream.
+    Random(f64),
+}
+
 /// A new actor the mobility model has put on the road.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActorSpawn {
@@ -878,6 +946,7 @@ mod tests {
             comfort_decel_mps2: 2.0,
             time_headway_s: 1.5,
             min_gap_m: 2.0,
+            sigma: None,
         }
     }
 

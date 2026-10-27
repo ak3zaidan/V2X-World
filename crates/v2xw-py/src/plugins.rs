@@ -462,6 +462,7 @@ impl CarFollowing for PyCarFollowing {
                 comfort_decel_mps2: get("comfort_decel_mps2")?,
                 time_headway_s: get("time_headway_s")?,
                 min_gap_m: get("min_gap_m")?,
+                sigma: None,
             })
         });
         custom.unwrap_or_else(|| {

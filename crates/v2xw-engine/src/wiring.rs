@@ -645,10 +645,11 @@ pub const fn is_vru_class(class: VehicleClass) -> bool {
 /// `mobility/demand/poisson` is the scenario spelling of the thinned-Poisson model, whose
 /// card id is `mobility/demand/poisson-thinned`; both are accepted.
 ///
-/// The last seven are the `v2xw-demand` crate's ([`v2xw_demand::scenario::KINDS`]): saved
+/// The next seven are the `v2xw-demand` crate's ([`v2xw_demand::scenario::KINDS`]): saved
 /// routes, trip files, OD matrices, link counts, GTFS transit, trip purposes and a
-/// composite of several.
-pub const DEMAND_KINDS: [&str; 11] = [
+/// composite of several. The last is a SUMO `.rou.xml` imported whole
+/// ([`v2xw_interop::routes`], WP-15), on a world read from the `net.xml` it was written for.
+pub const DEMAND_KINDS: [&str; 12] = [
     "mobility/demand/none",
     "mobility/demand/poisson",
     v2xw_mobility::demand::poisson::MODEL_ID,
@@ -660,7 +661,20 @@ pub const DEMAND_KINDS: [&str; 11] = [
     v2xw_demand::scenario::KINDS[4],
     v2xw_demand::scenario::KINDS[5],
     v2xw_demand::scenario::KINDS[6],
+    v2xw_interop::routes::MODEL_ID,
 ];
+
+/// The parameters of `mobility/demand/sumo-rou`.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SumoRouParams {
+    /// The `.rou.xml` file.
+    path: std::path::PathBuf,
+    /// `bernoulli` (SUMO's definition, the default) or `equal-spacing` (the mean rate
+    /// without the variance).
+    #[serde(default)]
+    probability_flows: Option<String>,
+}
 
 /// The vehicle classes `actors.vehicles.classes` may name: the motorised ones. A cyclist
 /// or a pedestrian is a vulnerable road user and belongs in `actors.vru`.
@@ -703,6 +717,30 @@ pub fn build_demand(scenario: &Scenario, world: &World) -> Result<Box<dyn Demand
         .collect();
     match d.kind.as_str() {
         "mobility/demand/none" => Ok(Box::new(NoDemand::new())),
+        // A SUMO route file, every vehicle driven by its own vType. Draws are keyed by the
+        // scenario seed.
+        k if k == v2xw_interop::routes::MODEL_ID => {
+            use v2xw_interop::routes::{ImportOptions, ProbabilityFlows, RouteFile, RouteFileDemand};
+            let p: SumoRouParams = serde_json::from_value(d.params.clone())
+                .map_err(|e| bad("SUMO route-file import", e.to_string()))?;
+            let probability_flows = match p.probability_flows.as_deref() {
+                None | Some("bernoulli") => ProbabilityFlows::Bernoulli,
+                Some("equal-spacing") => ProbabilityFlows::EqualSpacing,
+                Some(o) => {
+                    return Err(bad(
+                        "SUMO route-file import",
+                        format!("probability_flows '{o}' is neither bernoulli nor equal-spacing"),
+                    ));
+                }
+            };
+            let opts = ImportOptions {
+                seed: scenario.seed,
+                probability_flows,
+            };
+            let file = RouteFile::read_with(&p.path, &opts)
+                .map_err(|e| bad("SUMO route-file import", e))?;
+            Ok(Box::new(RouteFileDemand::new(file)))
+        }
         // The demand-and-route-choice crate's kinds: everything it needs from the scenario
         // is in the context, and its errors name the parameter that is wrong.
         k if v2xw_demand::scenario::KINDS.contains(&k) => {
@@ -822,7 +860,8 @@ pub fn register_demand(
     scenario: &Scenario,
     demand: &dyn Demand,
 ) -> Result<()> {
-    if !v2xw_demand::scenario::KINDS.contains(&scenario.actors.vehicles.demand.kind.as_str()) {
+    let kind = scenario.actors.vehicles.demand.kind.as_str();
+    if !v2xw_demand::scenario::KINDS.contains(&kind) && kind != v2xw_interop::routes::MODEL_ID {
         return Ok(());
     }
     let card = v2xw_core::model::Model::card(demand).clone();

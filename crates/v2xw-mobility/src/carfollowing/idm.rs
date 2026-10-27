@@ -340,6 +340,7 @@ impl IdmPreset {
                 comfort_decel_mps2: 2.0,
                 time_headway_s: 2.0,
                 min_gap_m: 4.0,
+                sigma: None,
             },
             IdmPreset::UrbanHcm if heavy => DriverProfile {
                 desired_speed_mps: 23.6,
@@ -347,6 +348,7 @@ impl IdmPreset {
                 comfort_decel_mps2: 2.0,
                 time_headway_s: URBAN_HCM_TRUCK_TIME_HEADWAY_S,
                 min_gap_m: 4.0,
+                sigma: None,
             },
             IdmPreset::Kesting2010 => DriverProfile {
                 desired_speed_mps: 33.3,
@@ -354,6 +356,7 @@ impl IdmPreset {
                 comfort_decel_mps2: 2.0,
                 time_headway_s: 1.5,
                 min_gap_m: 2.0,
+                sigma: None,
             },
             IdmPreset::UrbanHcm => DriverProfile {
                 desired_speed_mps: 33.3,
@@ -361,6 +364,7 @@ impl IdmPreset {
                 comfort_decel_mps2: 2.0,
                 time_headway_s: URBAN_HCM_TIME_HEADWAY_S,
                 min_gap_m: 2.0,
+                sigma: None,
             },
             IdmPreset::Treiber2000 => DriverProfile {
                 desired_speed_mps: 33.3,
@@ -368,6 +372,7 @@ impl IdmPreset {
                 comfort_decel_mps2: 1.67,
                 time_headway_s: 1.6,
                 min_gap_m: 2.0,
+                sigma: None,
             },
             IdmPreset::Kesting2007 if heavy => DriverProfile {
                 desired_speed_mps: 22.2,
@@ -375,6 +380,7 @@ impl IdmPreset {
                 comfort_decel_mps2: 2.0,
                 time_headway_s: 1.2,
                 min_gap_m: 2.0,
+                sigma: None,
             },
             IdmPreset::Kesting2007 => DriverProfile {
                 desired_speed_mps: 33.3,
@@ -382,6 +388,7 @@ impl IdmPreset {
                 comfort_decel_mps2: 2.0,
                 time_headway_s: 1.2,
                 min_gap_m: 2.0,
+                sigma: None,
             },
             IdmPreset::Legacy => {
                 let legacy = match class {
@@ -403,6 +410,7 @@ impl IdmPreset {
                     comfort_decel_mps2: spec.decel_mps2,
                     time_headway_s: 1.3,
                     min_gap_m: 2.5,
+                    sigma: None,
                 }
             }
         }
@@ -630,6 +638,7 @@ impl Idm {
             comfort_decel_mps2: effects.cap_decel(ego.driver.comfort_decel_mps2),
             time_headway_s: effects.apply_to_headway(ego.driver.time_headway_s),
             min_gap_m: ego.driver.min_gap_m,
+            sigma: ego.driver.sigma,
         };
         let a = match leader {
             None => self.accel_with(

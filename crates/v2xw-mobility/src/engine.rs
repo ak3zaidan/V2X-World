@@ -578,6 +578,7 @@ pub fn bicycle_driver() -> DriverProfile {
         comfort_decel_mps2: spec.decel_mps2,
         time_headway_s: 1.0,
         min_gap_m: spec.min_gap_m,
+        sigma: None,
     }
 }
 
@@ -3422,7 +3423,7 @@ impl NativeMobility {
         trip: &TripRequest,
         now: SimTime,
         reserved: Option<ActorId>,
-        traits: DriverTraits,
+        mut traits: DriverTraits,
     ) -> Insertion {
         let costs = self.costs(world);
         // A cyclist prefers a cycle lane where one exists ([`CyclistSpeeds::shared_lane_cost`]).
@@ -3644,6 +3645,21 @@ impl NativeMobility {
                 self.params.human.parameter_spread,
             );
         }
+        // A vehicle type the demand states (an imported `.rou.xml` vType) is driven
+        // exactly: SUMO's vClass default under the type's own numbers, its own drawn
+        // speedFactor, and none of the engine's style or spread on top. No other demand
+        // model states one, so every other run is as before.
+        let vtype = self.demand.as_ref().and_then(|d| d.trip_driver(trip));
+        if let Some(vt) = vtype {
+            driver = vt.over(DriverProfile {
+                desired_speed_mps: trip.desired_speed_mps,
+                ..crate::carfollowing::krauss::Krauss::class_profile(trip.class)
+            });
+            if let Some((factor, mean, dev)) = vt.speed_factor {
+                traits.speed_factor = factor;
+                traits.style = crate::style::DriverStyle::of_speed_factor_around(factor, mean, dev);
+            }
+        }
         self.actors.insert(
             id,
             Actor {
@@ -3691,6 +3707,12 @@ impl NativeMobility {
         self.next_seq = self.next_seq.max(trip.seq + 1);
         if at_speed {
             let v = self.insertion_speed(world, id);
+            if let Some(a) = self.actors.get_mut(&id) {
+                a.speed_mps = v;
+            }
+        }
+        if let Some(ds) = vtype.and_then(|vt| vt.depart_speed) {
+            let v = self.stated_depart_speed(world, id, ds);
             if let Some(a) = self.actors.get_mut(&id) {
                 a.speed_mps = v;
             }
@@ -3778,6 +3800,30 @@ impl NativeMobility {
     /// of the lane (a red signal there is not yet known), and by the speed that keeps the
     /// IDM's desired gap `s0 + v T` to the vehicle ahead on the lane and lets it brake to
     /// that vehicle's speed within the gap.
+    /// The speed a vehicle with a stated `departSpeed` enters at: the stated value, never
+    /// above the safe [`Self::depart_speed`].
+    fn stated_depart_speed(&self, world: &World, id: ActorId, ds: crate::views::DepartSpeed) -> f64 {
+        use crate::views::DepartSpeed;
+        let Some(a) = self.actors.get(&id) else {
+            return 0.0;
+        };
+        let lane = world.lane(a.lane);
+        let safe = self.depart_speed(world, id);
+        let desired = a
+            .driver
+            .desired_speed_mps
+            .min(lane.speed_limit_mps * a.traits.speed_factor)
+            .max(0.0);
+        let wanted = match ds {
+            DepartSpeed::Mps(v) => v.max(0.0),
+            DepartSpeed::Max => safe,
+            DepartSpeed::Desired => desired,
+            DepartSpeed::SpeedLimit => lane.speed_limit_mps,
+            DepartSpeed::Random(u) => u.clamp(0.0, 1.0) * desired,
+        };
+        wanted.min(safe)
+    }
+
     fn depart_speed(&self, world: &World, id: ActorId) -> f64 {
         let Some(a) = self.actors.get(&id) else {
             return 0.0;
@@ -3967,6 +4013,7 @@ impl NativeMobility {
                             comfort_decel_mps2: 0.0,
                             time_headway_s: 0.0,
                             min_gap_m: 0.0,
+                            sigma: None,
                         },
                         seq: self.next_seq,
                         requested: None,

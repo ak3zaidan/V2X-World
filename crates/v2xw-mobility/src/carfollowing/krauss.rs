@@ -112,6 +112,7 @@ impl Krauss {
             comfort_decel_mps2: s.decel_mps2,
             time_headway_s: SUMO_TAU_S,
             min_gap_m: s.min_gap_m,
+            sigma: None,
         }
     }
 
@@ -138,7 +139,9 @@ impl Krauss {
                 driver.time_headway_s,
             ));
         }
-        let sigma = self.params.sigma;
+        // A vehicle type's own `sigma` (an imported `.rou.xml` vType) wins over the
+        // model-wide one, as in SUMO where `sigma` is a vType attribute.
+        let sigma = driver.sigma.unwrap_or(self.params.sigma);
         let dawdle = if v_des < a {
             sigma * v_des * dt * eta
         } else {
@@ -170,7 +173,7 @@ impl CarFollowing for Krauss {
             self.params.road_context,
         );
         let dt = self.clock.dt_s();
-        let eta = if self.params.sigma > 0.0 {
+        let eta = if ego.driver.sigma.unwrap_or(self.params.sigma) > 0.0 {
             common::keyed_uniform(self.seed, MODEL_ID, ego.actor, self.clock.step_index(), 0)
         } else {
             0.0

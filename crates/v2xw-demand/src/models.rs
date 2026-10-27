@@ -272,6 +272,13 @@ impl Demand for CompositeDemand {
         self.parts[part].planned_route(world, &own)
     }
 
+    fn trip_driver(&self, trip: &TripRequest) -> Option<v2xw_mobility::views::TripDriver> {
+        let (part, seq) = *self.origin.get(&trip.seq)?;
+        let mut own = trip.clone();
+        own.seq = seq;
+        self.parts[part].trip_driver(&own)
+    }
+
     fn wants_progress(&self) -> bool {
         self.parts.iter().any(|p| p.wants_progress())
     }
