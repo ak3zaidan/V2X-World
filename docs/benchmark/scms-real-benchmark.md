@@ -6,7 +6,7 @@ only. It is the baseline an attack study is compared against. Every number below
 run it came from (§1.3), and each one is compared with a published or literature value
 where one exists. A value that looks implausible is flagged and was investigated (§9).
 
-**Status (2026-10-23, evening).** §000 has the end-of-run report: the full-scale file ran to 172,800 s on `fe3757b9` (after finalize 4). **Status (2026-10-23).** §00 has the full-scale run after fix wave 3: both live windows complete, stopped in the second fast-forward. **Status (2026-10-22).** §0 has the full-scale run on current code. It was stopped by the
+**Status (2026-10-27).** §0000: FB4, the full-scale re-run on `f4982788`, did not finish on the shared machine (stopped at 96 s of the first window); the quarter fleet (QD4) was run end to end on the same code instead. **Status (2026-10-23, evening).** §000 has the end-of-run report: the full-scale file ran to 172,800 s on `fe3757b9` (after finalize 4). **Status (2026-10-23).** §00 has the full-scale run after fix wave 3: both live windows complete, stopped in the second fast-forward. **Status (2026-10-22).** §0 has the full-scale run on current code. It was stopped by the
 memory cap at about 155 simulated seconds; its complete metric windows and a complete 40 s
 run are reported there. §1–§10 are the 2026-10-18 report, unchanged.
 
@@ -25,6 +25,52 @@ their commands and the cost model that bounds them).
 pedestrians, the reports fill a quarter of the channel's airtime, and the MAs revoked 10
 honest devices in two days. Until it is fixed, no misbehaviour, airtime or revocation
 number from a scenario with VRU handsets is a real-world number.
+
+## 0000. FB4 on `f4982788` (2026-10-27): not finished; the quarter fleet on current code
+
+Method, expectations and the full tables: `docs/design/scms-real/testing/full-bench.md` §6
+and the `FB4.*` / `QD4.*` rows of `crates/v2xw-engine/tests/expectations/scms-full-bench.yaml`.
+All of them were written before the runs and are machine-judged by `tools/realworld/fullbench.py`.
+
+**FB4 (full fleet, 172,800 s).** Started on the main run slot with 4 threads. On a machine
+shared with other agents (load 10–18), the first window slowed from 15 to 61 wall-s per
+simulated second as the fleet grew from 888 to 1,463 nodes. Footprint was 990 MB at 90 s.
+The run would have needed about five more hours, and a run is killed when its session
+ends. A checkpoint resumes by replaying the elapsed time, and the replay ran at full cost
+here, so splitting the run across sessions saves almost nothing. Every FB4 number is
+still owed. It needs one unbroken run of about 5 h on a quiet machine.
+
+**QD4 (quarter fleet, 172,800 s, same code).**
+- **Honest traffic:** 0 cases and 0 revocations. 80 detector verdicts, the same as on
+  `8becf72a`, and no report filed in the first window (density rules).
+- **Reports:** 12 uploaded (11 cellular, 1 relayed), and all 12 reached the MAs, 0 lost.
+  This confirms the relay fix.
+- **Top-ups:** 278 of 278, 20 certificates each, inside 10 s of the 43,200 s boundary.
+  The pool went from 20 to 39.7.
+- **CRLs:** 11,291 hourly CRL polls, all answered 412. 0 CRLs issued, 60 RSU installs.
+- **Metric windows:** every live metric window is reported at its own end (R-FFWIN fix
+  confirmed).
+- **Run cost:** peak footprint 278.5 MB, +12.5 % on `8becf72a` (open, not attributed).
+
+**What QD4 shows about the specified system.**
+- **The day-long report shuffle starts at the RA's first upload.** With honest traffic
+  that files nothing in the first window, the MAs first heard of a report at 129,600 s,
+  36 h into the run. The CAMP-EE SCMS-765 one-day shuffle compounds with low report
+  volume: the quieter the region, the later the first decision can start.
+- **The RA's weekly job is one population batch.** It pre-generates a week of 20
+  certificates for accounts that did not ask, here 146 weeks for about 124 home top-ups by
+  fleet share, so about 20 accounts that had left the map (2.9 extra certificates per home
+  device). That stays inside CAMP's 20 a week per
+  account. It also means the PCA's weekly load follows the registered population, not the
+  vehicles present.
+
+| Entity (QD4, home provider) | Load | CAMP per device | Reading |
+|---|---|---|---|
+| ECA / RA provisioning | 169 enrolments; 142 butterfly requests in 60 s (2.4/s) | 1 in life (≈ 0.54/s national) | scenario-start burst |
+| PCA | 8,880 certificates (40 at entry + 20 a week + 2.9) | 20 a week | as specified, plus the population batch |
+| RA top-ups | 278/278 in 10 s; kernel steps 0 → 7,626 in that minute | 1 batch file a week | a synchronous boundary burst |
+| RA CRL polls | 11,291 (≈ 34 per device in 48 h), all 412 | at least weekly | 1 h is an assumption inside the bound |
+| MA (×2) | 12 reports, 0 cases | — | released a day after the first upload |
 
 ## 000. The full-scale run to the end on main `fe3757b9` (2026-10-23, after finalize 4)
 
