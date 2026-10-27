@@ -30,7 +30,8 @@ exit and is censored there. It is summed over attackers, per rule and parameter
   which leaves every Δt unchanged, and states `stated_accuracy_m`. The legacy catalogue
   is untouched.
 
-**Runs.** Quarter fleet, 120 s, locked share 0.25 (Tampa), 3 % attackers from 30 s, US
+**Runs.** Quarter fleet, 60 s live after a 30 s warm-up (cut from 120 s before any run
+finished: 120 s peaked at 483 MB, over the small run slot), locked share 0.25 (Tampa), 3 % attackers from 30 s, US
 profile on secMark, report shuffle 10 s (the stated P1-E7 assumption). One seed. Runs:
 EV0 plain ConstPos; EVN mimic with no disguise; EVP 25 ms phase shift; EVA stated 9 m;
 EVB both; EVP2 EVP again; L1 and L1B are EV0 and EVB with every OBU locked.

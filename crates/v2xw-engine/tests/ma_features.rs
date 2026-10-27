@@ -25,7 +25,7 @@ struct Out {
 
 impl RunRecorder for Out {
     fn write(&mut self, _at: SimTime, r: &OwnedRecord) {
-        match r.channel.as_str() {
+        match &*r.channel {
             "ma.received" => self
                 .received
                 .push(serde_json::from_slice(&r.json).expect("ma.received parses")),

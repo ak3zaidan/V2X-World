@@ -180,7 +180,7 @@ runs:
     note: E4V again (determinism)
   EV0:
     scenario: scenarios/real-world/paper1/p1-ev-plain.yaml
-    note: P1-E8 reference, quarter fleet 120 s, locked 0.25, 3 % ConstPos from 30 s undisguised; then v2xw ma-replay
+    note: P1-E8 reference, quarter fleet 60 s live, locked 0.25, 3 % ConstPos from 30 s undisguised; then v2xw ma-replay
   EVN:
     scenario: scenarios/real-world/paper1/p1-ev-none.yaml
     base: EV0

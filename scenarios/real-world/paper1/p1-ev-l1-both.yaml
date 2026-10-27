@@ -1,9 +1,9 @@
-# P1-E8: p1-ev-both.yaml with every OBU locked: the disguised attackers are the only free class.
+# P1-E8: p1-ev-both.yaml with every OBU locked, so the disguised attackers are the only free class.
 schema: v2xw/scenario/1
 meta:
   base: p1-ev-both.yaml
   name: Paper 1 evasion l1-both
-  description: p1-ev-both.yaml with every OBU locked: the disguised attackers are the only free class.
+  description: p1-ev-both.yaml with every OBU locked, so the disguised attackers are the only free class.
   tags: [paper1, validation, ma-replay, evasion]
 actors:
   vehicles:
