@@ -1,47 +1,47 @@
 {
   "case": "grid-traffic",
-  "scenario_hash": "4333866c3917468a98e9c14a15e2d9b3541f685c459fbc8a6ce63477d018195a",
+  "scenario_hash": "71fe19075da454704fc817e37f192177a3ef74bd301505699304e7da417c7c5c",
   "world_hash": "5f87bbe41a0f1bd2b76ee9a5c886103e5b15274f45c52382f683482ad5c5e0ef",
   "master_seed": 26719282226331630,
   "end_ns": 10000000000,
-  "records": 16038,
-  "record_digest": "d6884693959df43a14dfe3d2cdb2f7a7e11447676ba618cf0e3d16ad478b8107",
+  "records": 16500,
+  "record_digest": "334152fade9d98204cabbbe68c20837cca0de9c940ef9ff085e67602b4803087",
   "per_channel": {
     "gt.kinematics": [
       619,
-      111733
+      111785
     ],
     "mac.cbr": [
-      57,
-      11473
+      69,
+      14117
     ],
     "metric.sample": [
-      1605,
-      416995
+      2055,
+      522482
     ],
     "node.rx": [
       4157,
-      2194397
+      2194366
     ],
     "node.telemetry": [
       55,
-      13837
+      14832
     ],
     "node.tx": [
       618,
-      520831
+      508295
     ],
     "node.verify": [
       4157,
-      1027390
+      1027288
     ],
     "phy.prr": [
       612,
-      64470
+      64524
     ],
     "phy.rx": [
       4157,
-      804597
+      804566
     ],
     "scenario.event": [
       1,
