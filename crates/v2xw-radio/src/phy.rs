@@ -404,8 +404,17 @@ pub struct OfdmPhy {
     /// over the arrival set is in id order and can never leak a hash order into an
     /// outcome.
     arrivals: BTreeMap<(u32, u64), Arrival>,
-    /// The interval each node is transmitting for, for the half-duplex test.
-    tx_intervals: BTreeMap<u32, Vec<BusyInterval>>,
+    /// The interval each node is transmitting for, per channel, for the half-duplex
+    /// test: keyed `(node, channel)`, because a unit with a second radio (WP-13,
+    /// `radio.devices.*.radios`) transmits on one channel while it listens on the other.
+    /// A single-radio unit only ever transmits on its one channel, so for it the per-
+    /// channel answer is the per-node one.
+    tx_intervals: BTreeMap<(u32, u16), Vec<BusyInterval>>,
+    /// The adjacent-channel interference ratio between the run's own channels, dB, keyed
+    /// `(aggressor channel, victim channel)` (WP-13 own-channel leakage; built from
+    /// [`crate::regulation::own_channel_leakage`]). Empty in every single-channel run,
+    /// and every query short-circuits on that.
+    leakage: BTreeMap<(u16, u16), f64>,
     /// Deliberate interference, per receiver, as the engine declares it
     /// ([`crate::jamming`]). Empty in every run without a jammer, and every jamming query
     /// short-circuits on that, so an unjammed run pays nothing for this field.
@@ -435,6 +444,7 @@ impl OfdmPhy {
             transmissions: BTreeMap::new(),
             arrivals: BTreeMap::new(),
             tx_intervals: BTreeMap::new(),
+            leakage: BTreeMap::new(),
             jamming: JammingField::new(),
             ledger: AirtimeLedger::new(),
         }
@@ -672,15 +682,28 @@ impl OfdmPhy {
     ) -> f64 {
         // The map is keyed `(receiver, tx id)`, so this node's arrivals are one range, in
         // the same tx-id order a filtered walk of the whole map visits them.
-        let contributors: Vec<(NodeId, f64)> = self
-            .arrivals
-            .range((node.index(), 0)..=(node.index(), u64::MAX))
-            .map(|(_, a)| a)
-            .filter(|a| {
-                a.rx == node && a.frame.channel == ch && a.start <= started_by && at < a.end
-            })
-            .map(|a| (a.tx, numeric::dbm_to_mw(a.power_dbm)))
-            .collect();
+        let contributors: Vec<(NodeId, f64)> = if self.leakage.is_empty() {
+            self.arrivals
+                .range((node.index(), 0)..=(node.index(), u64::MAX))
+                .map(|(_, a)| a)
+                .filter(|a| {
+                    a.rx == node && a.frame.channel == ch && a.start <= started_by && at < a.end
+                })
+                .map(|a| (a.tx, numeric::dbm_to_mw(a.power_dbm)))
+                .collect()
+        } else {
+            // Own-channel leakage (WP-13): an arrival on another of the run's channels
+            // is energy here too, less the ACIR between the two.
+            self.arrivals
+                .range((node.index(), 0)..=(node.index(), u64::MAX))
+                .map(|(_, a)| a)
+                .filter(|a| a.rx == node && a.start <= started_by && at < a.end)
+                .filter_map(|a| {
+                    self.leaked_dbm(a.power_dbm, a.frame.channel, ch)
+                        .map(|p| (a.tx, numeric::dbm_to_mw(p)))
+                })
+                .collect()
+        };
         // A jammer's energy is energy: it makes carrier sense report a busy medium and it
         // shows up in the channel busy ratio, which is exactly why telling a jammed frame
         // from a congested one needs the loss cause rather than the CBR
@@ -709,23 +732,79 @@ impl OfdmPhy {
     /// [`TX_INTERVAL_RETENTION_NS`].
     #[must_use]
     pub fn tx_interval_count(&self, node: NodeId) -> usize {
-        self.tx_intervals.get(&node.index()).map_or(0, Vec::len)
+        self.node_intervals(node).map(|(_, v)| v.len()).sum()
     }
 
-    /// True when this node is transmitting at `at` (802.11p is half duplex).
+    /// Every channel's transmit intervals of one node, in channel order.
+    fn node_intervals(&self, node: NodeId) -> impl Iterator<Item = (u16, &Vec<BusyInterval>)> {
+        self.tx_intervals
+            .range((node.index(), 0)..=(node.index(), u16::MAX))
+            .map(|(&(_, ch), v)| (ch, v))
+    }
+
+    /// True when this node is transmitting at `at` on any of its radios (802.11p is
+    /// half duplex).
     #[must_use]
     pub fn is_transmitting(&self, node: NodeId, at: SimTime) -> bool {
+        self.node_intervals(node)
+            .any(|(_, v)| v.iter().any(|i| i.from <= at && at < i.to))
+    }
+
+    /// True when this node's radio on `ch` is transmitting at `at`.
+    #[must_use]
+    pub fn is_transmitting_on(&self, node: NodeId, ch: ChannelId, at: SimTime) -> bool {
         self.tx_intervals
-            .get(&node.index())
+            .get(&(node.index(), ch.0))
             .is_some_and(|v| v.iter().any(|i| i.from <= at && at < i.to))
     }
 
-    /// True when this node is transmitting at any instant of `[from, to)`.
+    /// True when this node is transmitting at any instant of `[from, to)`, on any radio.
     #[must_use]
     pub fn transmits_during(&self, node: NodeId, from: SimTime, to: SimTime) -> bool {
+        self.node_intervals(node)
+            .any(|(_, v)| v.iter().any(|i| i.from < to && from < i.to))
+    }
+
+    /// True when this node's radio on `ch` transmits at any instant of `[from, to)`: the
+    /// half-duplex test of a reception on `ch`.
+    #[must_use]
+    pub fn transmits_during_on(
+        &self,
+        node: NodeId,
+        ch: ChannelId,
+        from: SimTime,
+        to: SimTime,
+    ) -> bool {
         self.tx_intervals
-            .get(&node.index())
+            .get(&(node.index(), ch.0))
             .is_some_and(|v| v.iter().any(|i| i.from < to && from < i.to))
+    }
+
+    /// Sets the leakage between the run's own channels (WP-13): `(aggressor, victim)` →
+    /// ACIR dB, from [`crate::regulation::own_channel_leakage`]. An empty table is ideal
+    /// channel filters: a frame on one channel puts no energy into another.
+    pub fn set_channel_leakage(&mut self, table: BTreeMap<(u16, u16), f64>) {
+        self.leakage = table;
+    }
+
+    /// The leakage table in force (empty when off or single-channel).
+    #[must_use]
+    pub fn channel_leakage(&self) -> &BTreeMap<(u16, u16), f64> {
+        &self.leakage
+    }
+
+    /// What `power_dbm` received from a transmitter on `from` amounts to inside a
+    /// receiver tuned to `to`: itself on the same channel, `power − ACIR(from → to)` on
+    /// one the leakage table prices (3GPP TR 36.942 §5.1.1.3), and nothing (`None`)
+    /// otherwise.
+    #[must_use]
+    pub fn leaked_dbm(&self, power_dbm: f64, from: ChannelId, to: ChannelId) -> Option<f64> {
+        if from == to {
+            return Some(power_dbm);
+        }
+        self.leakage
+            .get(&(from.0, to.0))
+            .map(|acir| power_dbm - acir)
     }
 
     /// The SINR windows of one arrival: `(start, end, sinr_db)` for every interval over
@@ -1019,7 +1098,7 @@ impl<C: Ctx + ?Sized> Phy<C> for OfdmPhy {
         self.next_tx_id += 1;
         self.transmissions
             .insert(handle.id, Transmission { handle, frame: *f });
-        let intervals = self.tx_intervals.entry(tx.index()).or_default();
+        let intervals = self.tx_intervals.entry((tx.index(), f.channel.0)).or_default();
         // Drop what can no longer matter, before appending. Without this the list grows
         // for the whole run — at the 02-architecture.md §7 design target (10,000 nodes,
         // 10 Hz, 600 s) that is 6e7 intervals and a 6,000-entry linear scan inside every
@@ -1044,7 +1123,7 @@ impl<C: Ctx + ?Sized> Phy<C> for OfdmPhy {
 
     fn cca(&self, ctx: &C, node: NodeId, ch: ChannelId) -> CcaState {
         let at = ctx.now();
-        if self.is_transmitting(node, at) {
+        if self.is_transmitting_on(node, ch, at) {
             // A transmitting radio is not listening; the medium is busy by definition.
             return CcaState::Busy {
                 energy_dbm: f64::INFINITY,
@@ -1131,7 +1210,12 @@ impl OfdmPhy {
     /// the receiver sits in (02-architecture.md §7.3).
     #[must_use]
     pub fn decide(&self, arrival: &Arrival, high: bool, draw: f64) -> RxOutcome {
-        if self.transmits_during(arrival.rx, arrival.start, arrival.end) {
+        if self.transmits_during_on(
+            arrival.rx,
+            arrival.frame.channel,
+            arrival.start,
+            arrival.end,
+        ) {
             return RxOutcome::Lost(LossCause::HalfDuplex);
         }
         if arrival.power_dbm < self.sensitivity_dbm(arrival.frame.mcs) {
@@ -1530,6 +1614,55 @@ mod tests {
             frame: f,
             interferers: Vec::new(),
         }
+    }
+
+    /// WP-13 own-channel leakage: a frame on channel 174 reaching a receiver tuned to 172
+    /// is energy there at its received power less the ACIR `regulation.rs` computes for
+    /// the pair (EN 302 571 mask, Table 8 selectivity, TR 36.942 §5.1.1.3), and as an
+    /// interferer it raises the noise a 172 frame is decoded against by exactly
+    /// `10·log10(1 + 10^((P − ACIR − N)/10))`. With ideal filters (no table) it is
+    /// neither, and a frame on the receiver's own channel is untouched either way.
+    #[test]
+    fn own_channel_leakage_raises_the_noise_by_the_regulation_acir() {
+        use crate::regulation::{Region, Technology, adjacent_acir_db, own_channel_leakage};
+        let g5 = Technology::Ieee80211p;
+        let table = own_channel_leakage(Region::Us2016, g5, &[172, 174, 180], 2);
+        let acir = adjacent_acir_db(Region::Us2016, g5, 174, g5, 172, 2).expect("adjacent");
+        assert_eq!(table.get(&(174, 172)), Some(&acir));
+        assert_eq!(table.len(), 6, "every ordered pair of distinct channels: {table:?}");
+        // Adjacent: the 802.11p 6 Mbit/s ACS (13 dB) dominates the mask's ACLR.
+        assert!((10.0..16.0).contains(&acir), "ACIR 174 -> 172 = {acir} dB");
+        let mut phy = OfdmPhy::new(Tier::Medium);
+        phy.set_channel_leakage(table);
+        let mut on174 = frame(400, Mcs::R6Qpsk12);
+        on174.channel = ChannelId(174);
+        let mut on172 = frame(400, Mcs::R6Qpsk12);
+        on172.channel = ChannelId(172);
+        let p = -50.0;
+        phy.register_arrival(arrival(2, 0, p, 0, on174));
+        let rx = NodeId::new(0);
+        let e = phy.energy_dbm(rx, ChannelId(172), 1_000);
+        assert!((e - (p - acir)).abs() < 1e-9, "energy {e} dBm, want {}", p - acir);
+        assert!((phy.energy_dbm(rx, ChannelId(174), 1_000) - p).abs() < 1e-9);
+        let leak = phy
+            .leaked_dbm(p, ChannelId(174), ChannelId(172))
+            .expect("the pair is priced");
+        let mut wanted = arrival(1, 0, -80.0, 0, on172);
+        wanted
+            .interferers
+            .push(InterferenceSource::new(NodeId::new(2), leak, 0, wanted.end));
+        let w = phy.sinr_windows(&wanted);
+        assert_eq!(w.len(), 1);
+        let n = phy.noise_floor();
+        let rise = (-80.0 - w[0].2) - n;
+        let want = 10.0 * math::log10(1.0 + math::pow(10.0, (p - acir - n) / 10.0));
+        assert!((rise - want).abs() < 1e-9, "noise rise {rise} dB, want {want} dB");
+        // Ideal filters: no energy across channels and nothing to add as an interferer.
+        let mut ideal = OfdmPhy::new(Tier::Medium);
+        ideal.register_arrival(arrival(2, 0, p, 0, on174));
+        assert_eq!(ideal.energy_dbm(rx, ChannelId(172), 1_000), f64::NEG_INFINITY);
+        assert!(ideal.leaked_dbm(p, ChannelId(174), ChannelId(172)).is_none());
+        assert_eq!(ideal.leaked_dbm(p, ChannelId(172), ChannelId(172)), Some(p));
     }
 
     #[test]

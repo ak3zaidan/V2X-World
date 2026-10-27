@@ -293,6 +293,10 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     // An IEEE 802.11 channel number, `(f_c − 5000 MHz)/5`: a name, not a quantity.
     ("radio.channel", "channel number"),
     ("radio.adjacent_channel[].channel", "channel number"),
+    ("radio.channels[].channel", "channel number"),
+    ("radio.devices.obu.radios", "radios"),
+    ("radio.devices.rsu.radios", "radios"),
+    ("radio.devices.vru.radios", "radios"),
     ("radio.mac.cw_min_vo", "slots"),
     ("radio.mac.cw_min_vi", "slots"),
     ("radio.mac.aifsn_vo", "slots"),

@@ -1063,7 +1063,9 @@ pub fn extra_values(path: &str) -> Option<(Vec<Value>, bool)> {
             ],
             false,
         )),
-        "radio.channel" | "radio.adjacent_channel[].channel" => Some((channel_rows(), true)),
+        "radio.channel" | "radio.adjacent_channel[].channel" | "radio.channels[].channel" => {
+            Some((channel_rows(), true))
+        }
         "actors.rsu_placement.profile" => Some((
             validate::all_profile_ids()
                 .into_iter()

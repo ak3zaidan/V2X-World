@@ -128,6 +128,7 @@ mod air_bytes;
 pub use air_bytes::{AirBytes, TypeAir};
 pub mod jamming;
 mod link;
+pub(crate) mod channels;
 mod radios;
 pub mod sidelink;
 
@@ -541,6 +542,24 @@ pub struct RunReport {
     /// They are interference at the receivers they share with a reception attempt, and
     /// energy in a sidelink receiver's sensing window; they are not reception attempts.
     pub faint_arrivals: u64,
+    /// WP-13 (`radio.channels`): (frame, receiver) pairs a frame reached on a channel the
+    /// receiver has no radio on. They are energy there — leakage into its own channel —
+    /// and not reception attempts.
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub untuned_arrivals: u64,
+    /// WP-13: messages a unit could not send because the channel map puts them on a
+    /// channel it has no radio for (a single-radio unit's service-channel message).
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub untuned_tx_drops: u64,
+    /// WP-13: per channel, the busy time every unit tuned to it measured, summed over the
+    /// metric windows, ns. With [`RunReport::channel_window_ns`], the mean channel busy
+    /// ratio of each of the run's channels. Empty in a single-channel run.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub channel_busy_ns: BTreeMap<u16, u64>,
+    /// WP-13: per channel, the listening time those windows span, summed over the units
+    /// tuned to it, ns.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub channel_window_ns: BTreeMap<u16, u64>,
     /// How many of those attempts decoded — the numerator of the packet delivery ratio.
     pub receptions_ok: u64,
     /// The attempts that did not decode, by the single loss cause invariant I-R3 allows.
@@ -1081,6 +1100,12 @@ pub struct Engine {
     ///
     /// [`CbrMeter::busy_total_ns`]: v2xw_radio::mac::CbrMeter::busy_total_ns
     cbr_mark: BTreeMap<NodeId, (SimTime, u64)>,
+    /// The run's own channel map (WP-13, `radio.channels`); `None` in a single-channel
+    /// run, where every path below is the one it always was.
+    channel_plan: Option<channels::ChannelPlan>,
+    /// [`Engine::cbr_mark`] per `(node, channel)` for the per-channel busy totals of a
+    /// multi-channel run ([`RunReport::channel_busy_ns`]).
+    chan_mark: BTreeMap<(NodeId, u16), (SimTime, u64)>,
     /// `node.rx` fates settled where no recorder is in hand (a receiver retired), written
     /// at the next point that has one.
     orphaned_rx: Vec<NodeRx>,
@@ -1574,6 +1599,13 @@ impl Engine {
         // The radio stack is selected from the scenario, which the struct literal below
         // moves; the clone is one `Scenario` per run, not per anything.
         let scenario_for_radio = scenario.clone();
+        // WP-13: the run's own channel map. The loader has refused a bad one; a sidelink
+        // run keeps its single resource pool.
+        let channel_plan = if sidelink.is_some() {
+            None
+        } else {
+            channels::plan(&scenario).ok().flatten()
+        };
         let frag_plan = match scenario_for_radio.net.fragmenter.as_ref() {
             None => crate::frag::FragPlan::none(),
             Some(choice) => crate::frag::FragPlan::from_choice(choice)
@@ -1616,7 +1648,15 @@ impl Engine {
             propagation,
             fading,
             coherence,
-            phy: crate::wiring::build_phy(&scenario_for_radio),
+            phy: {
+                let mut phy = crate::wiring::build_phy(&scenario_for_radio);
+                if let Some(plan) = channel_plan.as_ref()
+                    && !plan.leakage.is_empty()
+                {
+                    phy.set_channel_leakage(plan.leakage.clone());
+                }
+                phy
+            },
             // 802.11p's EDCA and J2945/1 congestion control belong to the DSRC stack; a
             // sidelink scenario runs the SPS engine in `sidelink` instead.
             mac: if sidelink.is_some() {
@@ -1679,6 +1719,8 @@ impl Engine {
             cert_cycles: BTreeMap::new(),
             mac_window: BTreeMap::new(),
             cbr_mark: BTreeMap::new(),
+            channel_plan: channel_plan.clone(),
+            chan_mark: BTreeMap::new(),
             orphaned_rx: Vec::new(),
             frames: BTreeMap::new(),
             live_at_rx: BTreeMap::new(),
@@ -2055,6 +2097,11 @@ impl Engine {
         // Its first `mac.cbr` window starts when it does, not at the window's start.
         let now = self.scheduler.now();
         self.cbr_mark.insert(id, (now, 0));
+        if let Some(plan) = self.channel_plan.as_ref() {
+            for ch in [Some(plan.primary), plan.service].into_iter().flatten() {
+                self.chan_mark.insert((id, ch.0), (now, 0));
+            }
+        }
         // The node's CRL gate reads its period off its own clock on the i-period calendar,
         // as a device does, so it is right from its first reception even when the
         // credential it holds is from an expired pool (06-validation-summary §6 item 22).
@@ -3893,6 +3940,11 @@ impl Engine {
                 self.node_class.remove(&node);
                 self.mac_window.remove(&node);
                 self.cbr_mark.remove(&node);
+                if let Some(plan) = self.channel_plan.as_ref() {
+                    for ch in [Some(plan.primary), plan.service].into_iter().flatten() {
+                        self.chan_mark.remove(&(node, ch.0));
+                    }
+                }
                 self.node_wake.remove(&node);
                 // Node ids are never reused, so a retired node's J2945/1 sub-interval is
                 // read by nothing again; kept, it grew with every vehicle of a run of days.
@@ -5404,6 +5456,20 @@ impl Engine {
             self.report.suppressed_frames += 1;
             return HandDown::NotSent;
         }
+        // WP-13: a message the channel map puts on a channel this unit has no radio for
+        // is not sent; its certificate reached no one.
+        if let Some(ch) = self
+            .channel_plan
+            .as_ref()
+            .map(|p| p.channel_for(tx.msg_type))
+            && !self.tuned(node, ch)
+        {
+            self.report.untuned_tx_drops += 1;
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.security_mut().withdraw_certificate(tx.msg_type);
+            }
+            return HandDown::NotSent;
+        }
         // `security.signature`: a scheme other than P-256 changes the octets on the air
         // (`crate::signature`); the SPDU the node built is the P-256 one. Everything below
         // — padding, fragmentation, the MTU check — sees the resized SPDU.
@@ -5734,10 +5800,13 @@ impl Engine {
         // The transmit power is congestion control's, not the scenario's: J2945/1 controls
         // power as well as rate, and the SUPRA filter's output is what the link budget has
         // to be evaluated at. With no DCC model (the abstract tier) it is the profile's.
-        let channel = self
-            .sidelink
-            .as_ref()
-            .map_or(self.dsrc_channel, |sl| sl.channel);
+        let channel = match self.sidelink.as_ref() {
+            Some(sl) => sl.channel,
+            None => self
+                .channel_plan
+                .as_ref()
+                .map_or(self.dsrc_channel, |p| p.channel_for(tx.msg_type)),
+        };
         let tx_power_dbm = self.tx_power_dbm(node);
         // J2945/1: a BSM is on its way, carrying the unit's own state. Whether the
         // neighbours are taken to have it is a Bernoulli trial on the channel quality,
@@ -6402,7 +6471,7 @@ impl Engine {
         // The medium is sampled here, at this node's own timer, which can be slots after
         // another frame began. The backoff must stop counting when the medium went busy,
         // not now (EN 302 663 Annex C.4.2), so the MAC is told that instant first.
-        let busy_since = busy.then(|| self.medium_busy_since(node, now));
+        let busy_since = busy.then(|| self.medium_busy_since(node, channel, now));
         {
             let Engine {
                 scheduler,
@@ -6431,10 +6500,31 @@ impl Engine {
         //    because `Mac::enqueue` arms the backoff against the medium state and would
         //    otherwise arm it against the state at the previous timer.
         let mut ready: Vec<(SimTime, FrameSeq)> = Vec::new();
+        let multi = self.channel_plan.is_some();
+        let frames = &self.frames;
         if let Some(pending) = self.pending_tx.get_mut(&node) {
             pending.sort_unstable();
             let split = pending.partition_point(|(t, _)| *t <= now);
-            ready.extend(pending.drain(..split));
+            if multi {
+                // WP-13: this timer is this channel's MAC; a frame for the unit's other
+                // radio waits for that radio's timer, which its hand-off scheduled.
+                let due: Vec<(SimTime, FrameSeq)> = pending.drain(..split).collect();
+                let mut kept: Vec<(SimTime, FrameSeq)> = Vec::new();
+                for (t, f) in due {
+                    if frames
+                        .get(&f)
+                        .is_none_or(|st| st.descriptor.channel == channel)
+                    {
+                        ready.push((t, f));
+                    } else {
+                        kept.push((t, f));
+                    }
+                }
+                kept.append(pending);
+                *pending = kept;
+            } else {
+                ready.extend(pending.drain(..split));
+            }
             if pending.is_empty() {
                 self.pending_tx.remove(&node);
             }
@@ -6633,7 +6723,7 @@ impl Engine {
         //    until the next one becomes ready — which at 10 Hz is a tenth of a second of
         //    access delay invented by the poll cadence.
         if busy {
-            let clear = self.medium_idle_at(node, now);
+            let clear = self.medium_idle_at(node, channel, now);
             if clear > now && clear <= horizon {
                 self.schedule_mac_timer(clear, node, channel.0);
             }
@@ -6670,7 +6760,7 @@ impl Engine {
             .filter(move |state| state.tx == node && state.tx_handle.is_some())
     }
 
-    fn medium_busy_since(&self, node: NodeId, now: SimTime) -> SimTime {
+    fn medium_busy_since(&self, node: NodeId, channel: ChannelId, now: SimTime) -> SimTime {
         // The earliest start among the transmissions holding this node's medium busy now:
         // the arrivals at or above the CCA threshold, this node's own frame, and a jammer
         // above the energy-detection threshold. A busy period chained from frames that
@@ -6687,15 +6777,17 @@ impl Engine {
             let sensed = state.start.saturating_add(cca_time);
             if sensed <= now
                 && state.end > now
-                && state
-                    .arrivals
-                    .get(&node)
-                    .is_some_and(|&(p, _)| p >= threshold)
+                && self
+                    .power_on(state, node, channel)
+                    .is_some_and(|p| p >= threshold)
             {
                 since = since.min(sensed);
             }
         }
         for state in self.own_on_air(node) {
+            if state.descriptor.channel != channel {
+                continue;
+            }
             if state.start <= now && state.end > now {
                 since = since.min(state.start);
             }
@@ -6719,23 +6811,22 @@ impl Engine {
     /// It is the engine's job rather than the PHY's because the PHY is asked "is it busy
     /// *now*" and answering "until when" needs the arrival set, the CCA configuration and
     /// the frame table together.
-    fn medium_idle_at(&self, node: NodeId, now: SimTime) -> SimTime {
+    fn medium_idle_at(&self, node: NodeId, channel: ChannelId, now: SimTime) -> SimTime {
         let threshold = self.phy.cca_config().cca_threshold_dbm();
         let mut clear = now;
         for frame in self.live_at_rx.get(&node).into_iter().flatten() {
             let Some(state) = self.frames.get(frame) else {
                 continue;
             };
-            if state
-                .arrivals
-                .get(&node)
-                .is_some_and(|&(p, _)| p >= threshold)
+            if self
+                .power_on(state, node, channel)
+                .is_some_and(|p| p >= threshold)
             {
                 clear = clear.max(state.end);
             }
         }
         for state in self.own_on_air(node) {
-            if state.end > now {
+            if state.descriptor.channel == channel && state.end > now {
                 clear = clear.max(state.end);
             }
         }
@@ -7019,6 +7110,13 @@ impl Engine {
                 self.report.faint_arrivals += 1;
                 continue;
             }
+            // WP-13: a receiver with no radio on this frame's channel gets its energy only,
+            // which leaks into the channel it does listen on.
+            if !self.tuned(rx, state.descriptor.channel) {
+                state.faint.insert(rx, rssi);
+                self.report.untuned_arrivals += 1;
+                continue;
+            }
             state.arrivals.insert(rx, (rssi, dist));
             if self.sidelink.is_some() {
                 let rx_vel = velocities.get(&rx).copied().unwrap_or(Vec3::ZERO);
@@ -7103,17 +7201,28 @@ impl Engine {
         // that start in the same nanosecond could not have sensed each other either way,
         // and stay undetermined (a plain collision).
         let cca_dbm = self.phy.cca_config().cca_threshold_dbm();
+        let phy = &self.phy;
         let power_at = |f: &FrameState, n: NodeId| -> Option<f64> {
             f.arrivals
                 .get(&n)
                 .map(|&(p, _)| p)
                 .or_else(|| f.faint.get(&n).copied())
         };
+        // WP-13: a frame on another of the run's channels reaches a receiver tuned to
+        // `to`'s channel at its power less the ACIR between them, or not at all with
+        // ideal filters. On one channel it is the power itself.
+        let onto = |p: f64, from: &FrameState, to: &FrameState| -> Option<f64> {
+            phy.leaked_dbm(p, from.descriptor.channel, to.descriptor.channel)
+        };
         let audible = |earlier: &FrameState, later: &FrameState| -> Option<bool> {
             if earlier.start == later.start {
                 return None;
             }
-            Some(power_at(earlier, later.tx).is_some_and(|p| p >= cca_dbm))
+            Some(
+                power_at(earlier, later.tx)
+                    .and_then(|p| onto(p, earlier, later))
+                    .is_some_and(|p| p >= cca_dbm),
+            )
         };
         let receivers: std::collections::BTreeSet<NodeId> = state
             .arrivals
@@ -7152,14 +7261,13 @@ impl Engine {
                 } else {
                     audible(&state, o)
                 };
-                if my_attempt {
-                    let mut source = InterferenceSource::new(o.tx, o_power, o.start, o.end);
+                if my_attempt && let Some(p) = onto(o_power, o, &state) {
+                    let mut source = InterferenceSource::new(o.tx, p, o.start, o.end);
                     source.audible_to_victim_tx = heard;
                     overlaps.push((rx, source, RxHandle { tx: tx_id, rx }));
                 }
-                if o_attempt {
-                    let mut source =
-                        InterferenceSource::new(state.tx, my_power, state.start, state.end);
+                if o_attempt && let Some(p) = onto(my_power, &state, o) {
+                    let mut source = InterferenceSource::new(state.tx, p, state.start, state.end);
                     source.audible_to_victim_tx = heard;
                     overlaps.push((rx, source, RxHandle { tx: o.tx_id(), rx }));
                 }
@@ -7183,7 +7291,56 @@ impl Engine {
             if power >= v2xw_radio::phy::CBR_BUSY_THRESHOLD_DBM
                 && let Some(mac) = self.mac.as_mut()
             {
-                mac.note_busy(rx, self.dsrc_channel, state.start, state.end);
+                mac.note_busy(rx, state.descriptor.channel, state.start, state.end);
+            }
+        }
+        // WP-13 own-channel leakage: the frame is energy on every other channel a
+        // receiver listens on, less the ACIR. A receiver with no radio on its channel
+        // holds it as an energy-only arrival, so that its carrier sense on its own
+        // channel reads the leak; `on_phy_end` forgets it.
+        if let Some(plan) = self.channel_plan.as_ref()
+            && !plan.leakage.is_empty()
+        {
+            let ch = state.descriptor.channel;
+            let mut busy: Vec<(NodeId, ChannelId)> = Vec::new();
+            let mut energy_only: Vec<(NodeId, f64)> = Vec::new();
+            for (&rx, &power) in state
+                .arrivals
+                .iter()
+                .map(|(rx, (p, _))| (rx, p))
+                .chain(state.faint.iter())
+            {
+                let class = self.class_of(rx);
+                if !plan.tuned(class, ch) && power >= floor_dbm {
+                    energy_only.push((rx, power));
+                }
+                for other in plan.channels_of(class) {
+                    if other != ch
+                        && self
+                            .phy
+                            .leaked_dbm(power, ch, other)
+                            .is_some_and(|p| p >= v2xw_radio::phy::CBR_BUSY_THRESHOLD_DBM)
+                    {
+                        busy.push((rx, other));
+                    }
+                }
+            }
+            for (rx, power) in energy_only {
+                self.phy.register_arrival(Arrival {
+                    tx_id,
+                    tx: state.tx,
+                    rx,
+                    power_dbm: power,
+                    start: state.start,
+                    end: state.end,
+                    frame: state.descriptor,
+                    interferers: Vec::new(),
+                });
+            }
+            if let Some(mac) = self.mac.as_mut() {
+                for (rx, other) in busy {
+                    mac.note_busy(rx, other, state.start, state.end);
+                }
             }
         }
         for (_, source, victim) in overlaps {
@@ -7300,6 +7457,23 @@ impl Engine {
         if self.sidelink.is_some() {
             self.sidelink_phy_end(recorder, frame, state, now);
             return;
+        }
+        // WP-13: the energy-only arrivals `start_frame` held for receivers with no radio
+        // on this frame's channel.
+        if self
+            .channel_plan
+            .as_ref()
+            .is_some_and(|p| !p.leakage.is_empty())
+        {
+            let untuned: Vec<NodeId> = state
+                .faint
+                .keys()
+                .copied()
+                .filter(|&rx| !self.tuned(rx, state.descriptor.channel))
+                .collect();
+            for rx in untuned {
+                self.phy.forget_arrival(RxHandle { tx: tx_id, rx });
+            }
         }
         let mut outcomes: Vec<LinkOutcome> = self.dsrc_outcomes(&state);
 
@@ -9482,6 +9656,41 @@ impl Engine {
         crate::wiring::device_for(&self.scenario, class)
     }
 
+    /// The kind of unit a node is, for its radio count.
+    fn class_of(&self, node: NodeId) -> v2xw_radio::ActorClass {
+        if self.rsus.contains_key(&node) {
+            v2xw_radio::ActorClass::Rsu
+        } else {
+            self.node_class
+                .get(&node)
+                .copied()
+                .unwrap_or(v2xw_radio::ActorClass::Car)
+        }
+    }
+
+    /// Whether a node has a radio on `ch` (WP-13): always, in a single-channel run.
+    fn tuned(&self, node: NodeId, ch: ChannelId) -> bool {
+        self.channel_plan
+            .as_ref()
+            .is_none_or(|p| p.tuned(self.class_of(node), ch))
+    }
+
+    /// What a frame's power at `node` amounts to on `channel`: the attempt's power on its
+    /// own channel; on another, its power there (an attempt or energy only) less the ACIR
+    /// between the two (WP-13); `None` when it puts nothing on `channel`.
+    fn power_on(&self, state: &FrameState, node: NodeId, channel: ChannelId) -> Option<f64> {
+        if state.descriptor.channel == channel {
+            return state.arrivals.get(&node).map(|&(p, _)| p);
+        }
+        let raw = state
+            .arrivals
+            .get(&node)
+            .map(|&(p, _)| p)
+            .or_else(|| state.faint.get(&node).copied())?;
+        self.phy
+            .leaked_dbm(raw, state.descriptor.channel, channel)
+    }
+
     /// The metric phase: every provider flushes its window, and the samples are recorded
     /// on `metric.sample`.
     ///
@@ -9599,6 +9808,21 @@ impl Engine {
             } else {
                 return;
             };
+            if let (Some(plan), Some(mac)) = (self.channel_plan.as_ref(), self.mac.as_ref()) {
+                for ch in plan.channels_of(self.class_of(node)) {
+                    let (from, busy_then) = self
+                        .chan_mark
+                        .get(&(node, ch.0))
+                        .copied()
+                        .unwrap_or((self.metric_window_start, 0));
+                    let total = mac.busy_total_ns(node, ch, now);
+                    let from = from.max(self.metric_window_start).min(now);
+                    *self.report.channel_busy_ns.entry(ch.0).or_insert(0) +=
+                        total.saturating_sub(busy_then);
+                    *self.report.channel_window_ns.entry(ch.0).or_insert(0) += now - from;
+                    self.chan_mark.insert((node, ch.0), (now, total));
+                }
+            }
             let w = self.mac_window.remove(&node).unwrap_or_default();
             reports.push(MacCbr::report(
                 now,

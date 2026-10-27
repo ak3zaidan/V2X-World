@@ -1761,6 +1761,20 @@ pub struct Radio {
     /// interference ratio.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adjacent_channel: Vec<AdjacentEmitter>,
+    /// The run's own channel map (WP-13): which messages leave the safety channel
+    /// (`radio.channel`) for a service channel of the region's band plan, as an RSU's
+    /// SPaT, MAP and WSA do on a multi-channel deployment (IEEE 1609.4-2016 §6.2.5; SAE
+    /// J2945/1 keeps the BSM on channel 172; ETSI EN 302 663 / TS 103 141 in Europe).
+    /// A unit hears and sends on the service channel only with a second radio
+    /// (`radio.devices.*.radios: 2`). Empty, the default: every message on
+    /// `radio.channel`, exactly as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<ChannelAssignment>,
+    /// Whether the run's own channels leak into each other through the transmitter mask
+    /// and the receiver's selectivity (the ACIR of `v2xw_radio::regulation`), WP-13.
+    /// Unset is on; `false` is ideal channel filters. Only acts with `radio.channels`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_leakage: Option<bool>,
     /// The 802.11p receiver and transmitter settings a researcher varies: data rate (MCS),
     /// noise figure, receiver sensitivity, carrier-sense threshold and capture threshold.
     /// Each one left unset keeps the model's cited default.
@@ -2101,6 +2115,19 @@ impl RadioRegion {
     }
 }
 
+/// One entry of the run's own channel map (`radio.channels`, WP-13).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelAssignment {
+    /// The IEEE channel number in the region's band plan (US 2016: 172-184; EU 172-184).
+    pub channel: u16,
+    /// The message sets that go out on it (`spat`, `map`, `wsa`, `srm`, `ssm`, `crl`,
+    /// `mbr`, `denm`, `cpm`, ...). The safety broadcasts (`bsm`, `cam`, `psm`, `vam`)
+    /// stay on `radio.channel`, which is the one to change to move them.
+    #[serde(default)]
+    pub messages: Vec<String>,
+}
+
 /// The radio hardware of each kind of node (04-models.md §3.7).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2141,6 +2168,11 @@ pub struct ObuRadio {
     /// `antenna_pattern` on every vehicle. Unset, the default, changes nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampled_pattern: Option<SampledPattern>,
+    /// How many 802.11p radios the unit carries (WP-13): 1, the default (SAE J2945/1's
+    /// on-board unit, continuously on the safety channel), or 2, which adds one on the
+    /// service channel of `radio.channels`. Acts only with `radio.channels`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radios: Option<u8>,
 }
 
 /// A measured antenna pattern every vehicle carries (`radio.devices.obu.sampled_pattern`,
@@ -2233,6 +2265,7 @@ impl Default for ObuRadio {
             antenna_height_m: None,
             antenna_pattern: ObuAntennaPattern::Tr37885,
             sampled_pattern: None,
+            radios: None,
         }
     }
 }
@@ -2253,6 +2286,12 @@ pub struct RsuRadio {
     /// Antenna height above the ground, metres; unset, the site's own mast height.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub antenna_height_m: Option<f64>,
+    /// How many 802.11p radios the unit carries (WP-13): 2, the default, one on the
+    /// safety channel and one on the service channel of `radio.channels` (the USDOT DSRC
+    /// Roadside Unit Specification v4.1 calls for two radios), or 1. Acts only with
+    /// `radio.channels`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radios: Option<u8>,
 }
 
 impl RsuRadio {
@@ -2271,6 +2310,7 @@ impl Default for RsuRadio {
             antenna_gain_dbi: Self::gain(),
             cable_loss_db: 0.0,
             antenna_height_m: None,
+            radios: None,
         }
     }
 }
@@ -2291,6 +2331,10 @@ pub struct VruRadio {
     /// Antenna height above the ground, metres.
     #[serde(default = "VruRadio::height")]
     pub antenna_height_m: f64,
+    /// How many 802.11p radios the device carries (WP-13): 1, the default (SAE J2945/9's
+    /// personal device on the safety channel), or 2. Acts only with `radio.channels`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radios: Option<u8>,
 }
 
 impl VruRadio {
@@ -2309,6 +2353,7 @@ impl Default for VruRadio {
             antenna_gain_dbi: 0.0,
             cable_loss_db: 0.0,
             antenna_height_m: Self::height(),
+            radios: None,
         }
     }
 }

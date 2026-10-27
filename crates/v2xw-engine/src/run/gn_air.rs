@@ -422,9 +422,12 @@ impl Engine {
         if !cbf {
             self.gn_count_forward(node, &state);
         }
+        // The radio the frame goes out on: its own channel (WP-13 keeps a forwarded
+        // packet on the channel it arrived for).
+        let channel = state.descriptor.channel.0;
         self.frames.insert(seq, state);
         self.pending_tx.entry(node).or_default().push((at, seq));
-        self.schedule_mac_timer(at, node, self.dsrc_channel.0);
+        self.schedule_mac_timer(at, node, channel);
     }
 
     fn gn_count_forward(&mut self, node: NodeId, state: &FrameState) {
