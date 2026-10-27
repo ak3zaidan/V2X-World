@@ -364,6 +364,57 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: at a CBR that forces a 300 ms DCC interval the CPM rate follows it; truncation keeps
   the highest-utility objects; free flow raises no jam DENM and a queue meeting the documented
   condition does; low friction with wheel slip raises the traction-loss DENM. Fault per item.
+- Status 2026-10-27 (WP-12 agent, branch of `f4982788`). Sources cached first:
+  `research/papers/etsi2023ts103324v211.pdf` (TS 103 324 V2.1.1),
+  `c2ccc2026rs2007trafficcondition.pdf` and `c2ccc2026rs2002adverseweather.pdf` (C2C-CC
+  RS 2007 and RS 2002, R1.6.10, 2026-07-24; the 2026-10-06 reading of RS 2003/2006 was
+  not cached, these are). Every item is behind its own knob, off by default, so no golden
+  moves; each knob is in the schema, guide, options, `configuration-reference.md` and
+  `config-inventory-network.md` with default, unit and citation.
+  - Done, CPM (`cpm.rs`): `messages.cpm_dcc_limited` clamps `T_GenCpm` to
+    `[100, 1000] ms` around the DCC's `T_off` (§6.1.2.1, Annex D; the runtime hands the
+    node's `DccState::t_off` to the service). `messages.cpm_quality_threshold` computes
+    §7.1.8.6 `objectPerceptionQuality` (Table F.4: α 0.5, weights 1; `c_t` is the
+    detecting sensors' detection probability, now carried from `perception.rs`), selects
+    only objects whose quality exceeds the threshold (Table F.1: 3) and encodes the
+    computed quality. `messages.cpm_max_objects` orders the selection by the §6.1.3.2
+    utility (Table F.2 ramps) and cuts the lowest-utility objects, which stay due.
+    Table F.4 also settles 04-models.md's "weights and α TODO: calibrate".
+  - Done, DENM (`denm_triggers.rs`, new, wired in `events.rs`):
+    `messages.denm_traffic_condition` runs RS 2007 sudden speed drop (`dangerousEndOfQueue`
+    27: TRCO_0 AND (hazards 3 s / relevant DENM / own sensors see the lane blocked under
+    50 km/h); 10 s condition hold, 60 s blocking, 0.5 s × 20 s repetition, validity 20 s,
+    upstream) and local slow down (`trafficCondition` 1: 120 s average ≤ 30 km/h, or 30 s
+    stationary AND (relevant DENM, ≥ 5 relevant slow CAMs, ≥ 5 slow vehicles seen within
+    100 m); 5 s hold, 180 s blocking, 1 s × 60 s, validity 60 s; Table 8 quality), both
+    only non-urban (> 80 km/h for 30 s in the 60/180 s before, or the nav map's road class
+    motorway/trunk). `messages.denm_traction_loss` runs RS 2002 §3.3 conditions i/j
+    (friction estimate < 0.3 / < 0.2 for 5 s; quality 6/7; updates ≥ 0.1 s apart while it
+    holds and one when it ends; 1 s × 300 s, validity 600 s, urban 4 s × 180 s and 300 s).
+    The estimate is the own ABS's: the bus's new `abs_active` (braking at ≥ 97 % of the
+    surface's μ·g, `vehicle_bus.rs`) held 200 ms gives μ̂ = |a|/g, kept 30 s, dropped by a
+    0.3 g stop without ABS. The engine runs perception for a vehicle whose traffic-condition
+    trigger reads its sensors.
+  - Validated: `v2xw-node` lib `cpm::` 7/7 (new: DCC interval 300 ms → 10 of 30 events,
+    1 s cap, 100 ms floor, off ignores it; §7.1.8.6 by hand; stale track held back; the
+    cut keeps qualities 9 and 8 of 6/9/7/8 and the larger position change),
+    `events::wp12_tests` 7/7 (free flow none; queue → `trafficCondition` once at 160-170 s,
+    quality 1; slow city street none; standing queue with 5 slow CAMs → quality 2, 4 CAMs
+    none; 5 m/s² stop behind a seen standing car → `dangerousEndOfQueue` quality 2, without
+    it none; ice ABS stop → `adhesion` quality 7 at 5.1-5.4 s with ≥ 100 updates, wet and
+    no-slip none; triggers off by default), `tests/runtime_behaviour.rs` 22/22 (new: a
+    300 ms DCC gap gives 10 CPMs in 3 s through the runtime, 30 unrestricted or with the
+    knob off). Engine `tests/cpm_denm_load.rs`: knobs off equal the default run `node.tx`
+    record for record; all on is deterministic, ≤ 2 objects per CPM; the loader refuses
+    each knob without its service and out of range.
+  - Open: a run on a highway world with the binary (the C2C-CC services are non-urban
+    and the built-in highway is procedural: its road class and a measured DENM count are
+    owed); RS 2007 TRCO_2 (others' hazard lights in CAMs), TRCO_5 (special vehicles),
+    mobile-radio TRCO_3; RS 2002 conditions a-h (the car-following models do not expose
+    the brake or throttle demand the µ-high comparison needs); AT-change blocking
+    (RS_tcTrJa_120/146), `eventHistory` (RS_BSP_544), `roadType` and `lanePosition`; CPM
+    segmentation by `MTU_CPM` and Annex E VoI. The 30 s friction-estimate hold and the
+    motorway/trunk non-urban mapping are this build's choices, stated on the cards.
 
 ### Wave 5: channels, sensors, imported calibrations
 

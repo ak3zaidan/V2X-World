@@ -309,6 +309,9 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("security.scms.rx_max_future_s", "s"),
     ("nodes.hsm_sign_lower_us", "us"),
     ("messages.path_history_points", "points"),
+    // WP-12: TS 103 324's objects per CPM; the quality threshold is a 0-15 rating.
+    ("messages.cpm_max_objects", "objects"),
+    ("messages.cpm_quality_threshold", "rating (0-15)"),
     // SCMS settings audit (docs/guides/config-inventory-scms.md)
     ("security.scms.lifecycle.certs_per_period", "certificates"),
     ("security.scms.lifecycle.pool_periods", "i-periods"),

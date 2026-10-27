@@ -75,15 +75,15 @@ fn knobs(s: &mut Scenario, on: bool) {
     s.messages.denm_traction_loss = Some(on);
     if on {
         s.messages.cpm_quality_threshold = Some(3);
-        s.messages.cpm_max_objects = Some(8);
+        s.messages.cpm_max_objects = Some(2);
     }
 }
 
 /// Every WP-12 knob set to off is the default run, `node.tx` record for record (the
 /// default path does not move); with every knob on the run is deterministic and the
-/// quality threshold and the 8-object budget change the CPMs on the air. Fault: wiring
-/// `utility_order: true` unconditionally reorders every CPM's objects and moves the
-/// default run's bytes.
+/// quality threshold and the 2-object budget cut what each CPM carries (the cut objects
+/// wait for the next event, so more, smaller CPMs go). Fault: wiring that drops
+/// `cpm_quality_threshold` and `cpm_max_objects` leaves the CPMs at the default run's.
 #[test]
 fn the_wp12_knobs_off_are_the_default_run_and_on_is_deterministic() {
     let base = etsi_cpm();
@@ -96,17 +96,22 @@ fn the_wp12_knobs_off_are_the_default_run_and_on_is_deterministic() {
     let (l1, l1tx) = run(on.clone());
     let (l2, l2tx) = run(on);
     let sent = |r: &RunReport| r.cpm.as_ref().map_or(0, |c| c.cpms_sent);
+    let objects = |r: &RunReport| r.cpm.as_ref().map_or(0, |c| c.objects_sent);
     let bytes = |tx: &[serde_json::Value]| -> u64 {
         tx.iter()
-            .filter_map(|v| v.get("bytes").and_then(serde_json::Value::as_u64))
+            .filter_map(|v| v.get("bytes_on_wire").and_then(serde_json::Value::as_u64))
             .sum()
     };
     eprintln!(
-        "cpms default {} off {} on {} / {}; tx records {} {} {}; bytes {} {} {}",
+        "cpms default {} off {} on {} / {}; objects {} {} {} / {}; tx records {} {} {}; bytes {} {} {}",
         sent(&b),
         sent(&o),
         sent(&l1),
         sent(&l2),
+        objects(&b),
+        objects(&o),
+        objects(&l1),
+        objects(&l2),
         btx.len(),
         otx.len(),
         l1tx.len(),
@@ -119,7 +124,21 @@ fn the_wp12_knobs_off_are_the_default_run_and_on_is_deterministic() {
     assert!(otx == btx, "off must put the default run's frames on the air");
     assert_eq!(sent(&l1), sent(&l2), "same seed, same CPMs");
     assert!(l1tx == l2tx, "same seed, same frames");
-    assert!(l1tx != btx, "the knobs on changed nothing on the air");
+    assert_eq!(objects(&l1), objects(&l2));
+    // The budget holds: no CPM carries more than two objects, so the objects the default
+    // run packs into one CPM go out over more of them (the cut ones stay due).
+    assert!(
+        objects(&l1) <= 2 * sent(&l1),
+        "{} objects in {} CPMs breaks the 2-object budget",
+        objects(&l1),
+        sent(&l1)
+    );
+    assert!(
+        objects(&b) > sent(&b) && (sent(&l1), objects(&l1)) != (sent(&b), objects(&b)),
+        "the threshold and the 2-object budget changed nothing: {} CPMs, {} objects",
+        sent(&l1),
+        objects(&l1)
+    );
 }
 
 /// The loader refuses each WP-12 knob without its service, and out-of-range numbers.
