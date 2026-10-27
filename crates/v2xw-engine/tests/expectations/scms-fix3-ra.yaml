@@ -346,8 +346,9 @@ rows:
   measure: topup mean, ms; cert_unavailable_ns
   expect: 'GSBH < FSBH on both: provider-b (32 of 72 devices) sends half of each in-run job to the healthy aca/1, so its weeks are ready sooner; provider-a untouched. Upper bound on the drop: provider-b''s share of the slow-ACA excess (FH - F on one ACA, 14,886 - 337 ms, times 32/72, halved): about 3.2 s. Confounded: GSBH also starts each week at its boundary unasked (RA.boundary-job), which can only make it earlier'
   source: queueing (the slow server carries half the work); audit-prov §4.1; written before FSBH and GSBH ran
-  measured: pending
+  measured: 'topup FSBH 18,544.7 ms (58 of 121 completed) against GSBH 5,244.7 ms (42 of 105); cert_unavailable 0 in both. Control on the same two binaries with provider-a''s ACA slow (h2.yaml): FH 14,886 ms (34 of 103) against GH 14,338 ms (34 of 103), so the boundary job alone moves the mean by -548 ms and no completions'
   verdict: pending
+  note: 'the direction holds (-13.3 s) and the boundary job is not the cause (GH = FH in completions, -0.5 s). The size bound was wrong: FSBH''s excess is all provider-b''s, not 32/72 of FH''s. Open: GSBH starts 16 fewer top-ups and completes 16 fewer (58 -> 42) with no device starved, which halving the slow server''s work does not explain; per-provider top-up counts are not in the report, so it needs a recorded run'
 - id: D1.cost
   base: F
   variant: G
