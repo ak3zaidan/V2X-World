@@ -1,0 +1,9 @@
+# P1-E5: p1-e5-dsrc-l1 with every radio on nr-v2x-pc5.
+schema: v2xw/scenario/1
+meta:
+  base: p1-e5-dsrc-l1.yaml
+  name: Paper 1 p1-e5-nr-l1
+  description: P1-E5 NR, load 1 (600 veh/h), 60 s.
+  tags: [paper1, experiment]
+radio:
+  rat: nr-v2x-pc5

@@ -226,6 +226,164 @@ runs:
     scenario: scenarios/real-world/paper1/p1-ev-l1-both.yaml
     base: L1
     note: EVB with every OBU locked (the disguised attackers are the only free class)
+  E5-D1:
+    scenario: scenarios/real-world/paper1/p1-e5-dsrc-l1.yaml
+    note: P1-E5 DSRC at 600 veh/h, 60 s (30 s live), --record-level receptions; e5gaps.py run --tampa
+  E5-D2:
+    scenario: scenarios/real-world/paper1/p1-e5-dsrc-l2.yaml
+    note: P1-E5 DSRC at 1800 veh/h, 40 s (10 s live; cut after the 1,800 veh/h 60 s run hit the 1.2 GB cap), --record-level receptions; e5gaps.py run --tampa
+  E5-D3:
+    scenario: scenarios/real-world/paper1/p1-e5-dsrc-l3.yaml
+    note: P1-E5 DSRC at 3600 veh/h, 40 s (10 s live; cut after the 1,800 veh/h 60 s run hit the 1.2 GB cap), --record-level receptions; e5gaps.py run --tampa
+  E5-L1:
+    scenario: scenarios/real-world/paper1/p1-e5-lte-l1.yaml
+    note: P1-E5 LTE at 600 veh/h, 60 s (30 s live), --record-level receptions; e5gaps.py run --tampa
+  E5-L2:
+    scenario: scenarios/real-world/paper1/p1-e5-lte-l2.yaml
+    note: P1-E5 LTE at 1800 veh/h, 40 s (10 s live; cut after the 1,800 veh/h 60 s run hit the 1.2 GB cap), --record-level receptions; e5gaps.py run --tampa
+  E5-L3:
+    scenario: scenarios/real-world/paper1/p1-e5-lte-l3.yaml
+    note: P1-E5 LTE at 3600 veh/h, 40 s (10 s live; cut after the 1,800 veh/h 60 s run hit the 1.2 GB cap), --record-level receptions; e5gaps.py run --tampa
+  E5-N1:
+    scenario: scenarios/real-world/paper1/p1-e5-nr-l1.yaml
+    note: P1-E5 NR at 600 veh/h, 60 s (30 s live), --record-level receptions; e5gaps.py run --tampa
+  E5-N2:
+    scenario: scenarios/real-world/paper1/p1-e5-nr-l2.yaml
+    note: P1-E5 NR at 1800 veh/h, 40 s (10 s live; cut after the 1,800 veh/h 60 s run hit the 1.2 GB cap), --record-level receptions; e5gaps.py run --tampa
+  E5-N3:
+    scenario: scenarios/real-world/paper1/p1-e5-nr-l3.yaml
+    note: P1-E5 NR at 3600 veh/h, 40 s (10 s live; cut after the 1,800 veh/h 60 s run hit the 1.2 GB cap), --record-level receptions; e5gaps.py run --tampa
+  E5-D1b:
+    scenario: scenarios/real-world/paper1/p1-e5-dsrc-l1.yaml
+    note: E5-D1 again (determinism)
+  E6-A:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+    note: P1-E6 anchor at the default 64 KiB quota (also the P1-E7 75 % free cell); --record-level events
+  E6-Q0:
+    scenario: scenarios/real-world/paper1/p1-q0.yaml
+    note: P1-E6 one-change variant (quota sweep, or against p1-q4 at 4,500 B); --record-level events
+  E6-Q2:
+    scenario: scenarios/real-world/paper1/p1-q2.yaml
+    note: P1-E6 one-change variant (quota sweep, or against p1-q4 at 4,500 B); --record-level events
+  E6-Q4:
+    scenario: scenarios/real-world/paper1/p1-q4.yaml
+    note: P1-E6 one-change variant (quota sweep, or against p1-q4 at 4,500 B); --record-level events
+  E6-Q16:
+    scenario: scenarios/real-world/paper1/p1-e6-q16.yaml
+    note: P1-E6 one-change variant (quota sweep, or against p1-q4 at 4,500 B); --record-level events
+  E6-Q4N:
+    scenario: scenarios/real-world/paper1/p1-e6-q4-noatk.yaml
+    note: P1-E6 one-change variant (quota sweep, or against p1-q4 at 4,500 B); --record-level events
+  E6-GD05:
+    scenario: scenarios/real-world/paper1/p1-e6-gd05.yaml
+    note: P1-E6 one-change variant (quota sweep, or against p1-q4 at 4,500 B); --record-level events
+  E6-GD2:
+    scenario: scenarios/real-world/paper1/p1-e6-gd2.yaml
+    note: P1-E6 one-change variant (quota sweep, or against p1-q4 at 4,500 B); --record-level events
+  E6-GD5:
+    scenario: scenarios/real-world/paper1/p1-e6-gd5.yaml
+    note: P1-E6 one-change variant (quota sweep, or against p1-q4 at 4,500 B); --record-level events
+  E6-LK100:
+    scenario: scenarios/real-world/paper1/p1-e6-lk100.yaml
+    note: P1-E6 one-change variant (quota sweep, or against p1-q4 at 4,500 B); --record-level events
+  E6-LK0:
+    scenario: scenarios/real-world/paper1/p1-e6-lk0.yaml
+    note: P1-E6 one-change variant (quota sweep, or against p1-q4 at 4,500 B); --record-level events
+  E6-RSU10:
+    scenario: scenarios/real-world/paper1/p1-e6-rsu10.yaml
+    note: P1-E6 one-change variant (quota sweep, or against p1-q4 at 4,500 B); --record-level events
+  E6-RSU60:
+    scenario: scenarios/real-world/paper1/p1-e6-rsu60.yaml
+    note: P1-E6 one-change variant (quota sweep, or against p1-q4 at 4,500 B); --record-level events
+  E6-C0:
+    scenario: scenarios/real-world/paper1/p1-e6-cell0.yaml
+    note: P1-E6 one-change variant (quota sweep, or against p1-q4 at 4,500 B); --record-level events
+  E6-C100:
+    scenario: scenarios/real-world/paper1/p1-e6-cell100.yaml
+    note: P1-E6 one-change variant (quota sweep, or against p1-q4 at 4,500 B); --record-level events
+  E7-F0:
+    scenario: scenarios/real-world/paper1/p1-e7-f0.yaml
+    note: P1-E7 free share 0 %; --record-level events, then v2xw ma-replay
+  E7-F0S2:
+    scenario: scenarios/real-world/paper1/p1-e7-f0-s2.yaml
+    note: E7-F0 on seed 0xBE7C_0002
+  E7-F10:
+    scenario: scenarios/real-world/paper1/p1-e7-f10.yaml
+    note: P1-E7 free share 10 %; --record-level events, then v2xw ma-replay
+  E7-F10S2:
+    scenario: scenarios/real-world/paper1/p1-e7-f10-s2.yaml
+    note: E7-F10 on seed 0xBE7C_0002
+  E7-F25:
+    scenario: scenarios/real-world/paper1/p1-e7-f25.yaml
+    note: P1-E7 free share 25 %; --record-level events, then v2xw ma-replay
+  E7-F25S2:
+    scenario: scenarios/real-world/paper1/p1-e7-f25-s2.yaml
+    note: E7-F25 on seed 0xBE7C_0002
+  E7-F50:
+    scenario: scenarios/real-world/paper1/p1-e7-f50.yaml
+    note: P1-E7 free share 50 %; --record-level events, then v2xw ma-replay
+  E7-F50S2:
+    scenario: scenarios/real-world/paper1/p1-e7-f50-s2.yaml
+    note: E7-F50 on seed 0xBE7C_0002
+  E7-F100:
+    scenario: scenarios/real-world/paper1/p1-e7-f100.yaml
+    note: P1-E7 free share 100 %; --record-level events, then v2xw ma-replay
+  E7-F100S2:
+    scenario: scenarios/real-world/paper1/p1-e7-f100-s2.yaml
+    note: E7-F100 on seed 0xBE7C_0002
+  E7-F75S2:
+    scenario: scenarios/real-world/paper1/p1-e7-f75-s2.yaml
+    note: E6-A (the 75 % free cell) on seed 0xBE7C_0002
+  E7-F0b:
+    scenario: scenarios/real-world/paper1/p1-e7-f0.yaml
+    note: E7-F0 again (determinism)
+  E6-R0:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+    base: E6-A
+    note: not a simulation - the offline store replay of E6-A at a 0 B quota (tools/realworld/paper1/e6replay.py)
+  E6-R2:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+    base: E6-A
+    note: not a simulation - the offline store replay of E6-A at a 2,300 B quota (tools/realworld/paper1/e6replay.py)
+  E6-R4:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+    base: E6-A
+    note: not a simulation - the offline store replay of E6-A at a 4,500 B quota (tools/realworld/paper1/e6replay.py)
+  E6-R16:
+    scenario: scenarios/real-world/paper1/p1-attack.yaml
+    base: E6-A
+    note: not a simulation - the offline store replay of E6-A at a 16,384 B quota (tools/realworld/paper1/e6replay.py)
+  E5-D1H:
+    scenario: scenarios/real-world/paper1/p1-e5-dsrc-l1-fading.yaml
+    base: E5-D1
+    note: E5-D1 with propagation tier high (Nakagami fading); pre-registered after E5-D1 failed its KS row
+  E7C-F0:
+    scenario: scenarios/real-world/paper1/p1-e7c-f0.yaml
+    note: P1-E7 calibrated receiver (velocity_noise_mps 0) on the stop-fix engine build, free share 0 %; then v2xw ma-replay
+  E7C-F10:
+    scenario: scenarios/real-world/paper1/p1-e7c-f10.yaml
+    note: P1-E7 calibrated receiver (velocity_noise_mps 0) on the stop-fix engine build, free share 10 %; then v2xw ma-replay
+  E7C-F25:
+    scenario: scenarios/real-world/paper1/p1-e7c-f25.yaml
+    note: P1-E7 calibrated receiver (velocity_noise_mps 0) on the stop-fix engine build, free share 25 %; then v2xw ma-replay
+  E7C-F50:
+    scenario: scenarios/real-world/paper1/p1-e7c-f50.yaml
+    note: P1-E7 calibrated receiver (velocity_noise_mps 0) on the stop-fix engine build, free share 50 %; then v2xw ma-replay
+  E7C-F75:
+    scenario: scenarios/real-world/paper1/p1-e7c-f75.yaml
+    note: P1-E7 calibrated receiver (velocity_noise_mps 0) on the stop-fix engine build, free share 75 %; then v2xw ma-replay
+  E7C-F100:
+    scenario: scenarios/real-world/paper1/p1-e7c-f100.yaml
+    note: P1-E7 calibrated receiver (velocity_noise_mps 0) on the stop-fix engine build, free share 100 %; then v2xw ma-replay
+  E7C-F0S2:
+    scenario: scenarios/real-world/paper1/p1-e7c-f0-s2.yaml
+    note: E7C-F0 on seed 0xBE7C_0002
+  E7C-F100S2:
+    scenario: scenarios/real-world/paper1/p1-e7c-f100-s2.yaml
+    note: E7C-F100 on seed 0xBE7C_0002
+  E7C-F0b:
+    scenario: scenarios/real-world/paper1/p1-e7c-f0.yaml
+    note: E7C-F0 again (determinism)
 rows:
 - id: P1.TS.rp-share0
   base: B
@@ -2332,3 +2490,586 @@ rows:
   source: 'reported: the budget under cluster when the disguised attackers are the only free class'
   measured: pending
   note: 'not run in this package (run budget): L1 ran, L1B did not'
+- id: P1.E5.ks-dsrc-l1
+  base: E5-D1
+  variant: E5-D1
+  area: metrics
+  measure: x.e5.rsu.ks_tampa
+  expect: le
+  value: 0.0748
+  source: 'P1-E5 falsification test (paper plan 1.3): the RSU-received gap distribution matches Tampa''s (nm7w-nvbm, 34,186 gaps within 10 s, 226 temp IDs). Tolerance fixed before any E5 run: p95 of Tampa''s own split-half KS over 400 random ID splits = 0.0747'
+  measured: '0.129365'
+  verdict: open
+  note: 'FAIL as pre-registered: engine RSU gaps are too clean (one interval 0.898 vs 0.759, two 0.060 vs 0.112, 3-5 0.023 vs 0.065, p90 151 vs 303 ms); losses are whole blocked links (pdr300 0.35) rather than intermittent ones. See p1-experiments.md P1-E5.'
+- id: P1.E5.1int-dsrc-l1
+  base: E5-D1
+  variant: E5-D1
+  area: metrics
+  measure: x.e5.rsu.share_1int
+  expect: band
+  band: [0.609, 0.909]
+  source: 'Tampa: 0.759 of RSU-received gaps in [50, 150) ms (one BSM interval); band +-0.15'
+  measured: '0.897986'
+  verdict: pass
+- id: P1.E5.le500-dsrc-l1
+  base: E5-D1
+  variant: E5-D1
+  area: metrics
+  measure: x.e5.rsu.share_le500
+  expect: band
+  band: [0.903, 1.0]
+  source: 'Tampa: 0.953 of RSU-received gaps <= 0.5 s; band +-0.05'
+  measured: '0.980885'
+  verdict: pass
+- id: P1.E5.fault-drop2
+  base: E5-D1
+  variant: E5-D1
+  area: metrics
+  measure: x.e5.rsu.ks_tampa_drop2
+  expect: ge
+  value: 0.0748
+  source: 'injected fault for the KS row: every second decoded BSM of each stream dropped must put the KS distance over the tolerance'
+  measured: '0.777208'
+  verdict: pass
+- id: P1.E5.cbr-up-dsrc
+  base: E5-D1
+  variant: E5-D3
+  area: metrics
+  measure: x.e5.cbr_mean
+  expect: up
+  min_change: 1.0
+  source: 'DSRC: 6x the demand (3,600 against 600 veh/h; 40 s against 60 s) at least doubles the live channel busy ratio (offered airtime grows with the neighbours in sensing range below saturation)'
+  measured: '0.00258409 -> 0.0143597'
+  verdict: pass
+- id: P1.E5.pdr-load-dsrc
+  base: E5-D1
+  variant: E5-D3
+  area: metrics
+  measure: x.e5.pdr300
+  expect: ratio
+  band: [0.8, 1.005]
+  source: 'DSRC: the BSM reception ratio within 300 m is non-increasing in load and, at the small fleets'' low channel load, drops by under 20 %'
+  measured: '0.345698 -> 0.346032 (ratio 1.001)'
+  verdict: pass
+- id: P1.E5.judged-load-dsrc
+  base: E5-D1
+  variant: E5-D3
+  area: metrics
+  measure: x.e5.judged_share
+  expect: ratio
+  band: [0.9, 1.005]
+  source: 'DSRC: the share of verified BSMs the US profile can pair (secMark dt <= 0.5 s) is non-increasing in load and stays within 10 %'
+  measured: '0.967591 -> 0.980212 (ratio 1.013)'
+  verdict: open
+  note: 'the share rises 1.3 %; loads 2-3 have a 10 s live window against 30 s (the 1.2 GB cap), a confound; the channel is never loaded (CBR <= 0.014).'
+- id: P1.E5.cbr-up-lte-v2x
+  base: E5-L1
+  variant: E5-L3
+  area: metrics
+  measure: x.e5.cbr_mean
+  expect: up
+  min_change: 1.0
+  source: 'LTE-V2X: 6x the demand (3,600 against 600 veh/h; 40 s against 60 s) at least doubles the live channel busy ratio (offered airtime grows with the neighbours in sensing range below saturation)'
+  measured: '0.0155477 -> 0.0730923'
+  verdict: pass
+- id: P1.E5.pdr-load-lte-v2x
+  base: E5-L1
+  variant: E5-L3
+  area: metrics
+  measure: x.e5.pdr300
+  expect: ratio
+  band: [0.8, 1.005]
+  source: 'LTE-V2X: the BSM reception ratio within 300 m is non-increasing in load and, at the small fleets'' low channel load, drops by under 20 %'
+  measured: '0.942993 -> 0.91302 (ratio 0.9682)'
+  verdict: pass
+- id: P1.E5.judged-load-lte-v2x
+  base: E5-L1
+  variant: E5-L3
+  area: metrics
+  measure: x.e5.judged_share
+  expect: ratio
+  band: [0.9, 1.005]
+  source: 'LTE-V2X: the share of verified BSMs the US profile can pair (secMark dt <= 0.5 s) is non-increasing in load and stays within 10 %'
+  measured: '0.977704 -> 0.976986 (ratio 0.9993)'
+  verdict: pass
+- id: P1.E5.cbr-up-nr-v2x
+  base: E5-N1
+  variant: E5-N3
+  area: metrics
+  measure: x.e5.cbr_mean
+  expect: up
+  min_change: 1.0
+  source: 'NR-V2X: 6x the demand (3,600 against 600 veh/h; 40 s against 60 s) at least doubles the live channel busy ratio (offered airtime grows with the neighbours in sensing range below saturation)'
+  measured: '0.00538523 -> 0.028821'
+  verdict: pass
+- id: P1.E5.pdr-load-nr-v2x
+  base: E5-N1
+  variant: E5-N3
+  area: metrics
+  measure: x.e5.pdr300
+  expect: ratio
+  band: [0.8, 1.005]
+  source: 'NR-V2X: the BSM reception ratio within 300 m is non-increasing in load and, at the small fleets'' low channel load, drops by under 20 %'
+  measured: '0.65689 -> 0.64764 (ratio 0.9859)'
+  verdict: pass
+- id: P1.E5.judged-load-nr-v2x
+  base: E5-N1
+  variant: E5-N3
+  area: metrics
+  measure: x.e5.judged_share
+  expect: ratio
+  band: [0.9, 1.005]
+  source: 'NR-V2X: the share of verified BSMs the US profile can pair (secMark dt <= 0.5 s) is non-increasing in load and stays within 10 %'
+  measured: '0.95807 -> 0.96504 (ratio 1.007)'
+  verdict: open
+  note: 'rises 0.7 %, same duration confound; CBR <= 0.029.'
+- id: P1.E5.judged-dsrc-l1
+  base: E5-D1
+  variant: E5-D1
+  area: metrics
+  measure: x.e5.judged_share
+  expect: ge
+  value: 0.9
+  source: 'at low load nearly every verified BSM follows another of its pseudonym within 0.5 s (a > 0.5 s gap needs >= 4 consecutive losses; Tampa''s RSU share <= 0.5 s is 0.953)'
+  measured: '0.967591'
+  verdict: pass
+- id: P1.E5.det
+  base: E5-D1
+  variant: E5-D1b
+  area: determinism
+  measure: digest.record
+  expect: identical
+  source: 'same seed, byte-identical'
+  measured: '4fa51ce4c3db003b -> 4fa51ce4c3db003b'
+  verdict: pass
+- id: P1.E6.null-free
+  base: E6-Q4N
+  variant: E6-Q4N
+  area: architecture
+  measure: x.fate.attack_lost
+  expect: eq
+  value: 0
+  source: 'P1-E6 falsification test (paper plan 1.3): an attack-free run loses zero attack evidence'
+  measured: '0'
+  verdict: pass
+- id: P1.E6.null-free-none
+  base: E6-Q4N
+  variant: E6-Q4N
+  area: architecture
+  measure: x.fate.attack_reports
+  expect: eq
+  value: 0
+  source: 'the truth join names no attacker in an attack-free run'
+  measured: '0'
+  verdict: pass
+- id: P1.E6.null-q4-present
+  base: E6-Q4
+  variant: E6-Q4
+  area: architecture
+  measure: x.fate.attack_reports
+  expect: ge
+  value: 1
+  source: 'the 4,500 B anchor files attack reports, so its lost share is measured'
+  measured: '272'
+  verdict: pass
+- id: P1.E6.null-q0
+  base: E6-Q0
+  variant: E6-Q0
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: eq
+  value: 1.0
+  source: 'P1-E6 falsification test: a zero quota loses all attack evidence'
+  measured: '1'
+  verdict: pass
+- id: P1.E6.null-q0-delivered
+  base: E6-Q0
+  variant: E6-Q0
+  area: architecture
+  measure: x.fate.delivered
+  expect: eq
+  value: 0
+  source: 'a zero quota delivers nothing'
+  measured: '0'
+  verdict: pass
+- id: P1.E6.quota-2-4
+  base: E6-Q2
+  variant: E6-Q4
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [-1.0, 0.0]
+  source: 'SM-MBR 2.2: a larger quota evicts no more (lost share non-increasing in quota)'
+  measured: '0.0992647 -> 0.0808824 (delta -0.01838)'
+  verdict: pass
+- id: P1.E6.quota-4-16
+  base: E6-Q4
+  variant: E6-Q16
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [-1.0, 0.0]
+  source: 'lost share non-increasing in quota'
+  measured: '0.0808824 -> 0.0147059 (delta -0.06618)'
+  verdict: pass
+- id: P1.E6.quota-16-64
+  base: E6-Q16
+  variant: E6-A
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [-1.0, 0.0]
+  source: 'lost share non-increasing in quota'
+  measured: '0.0147059 -> 0 (delta -0.01471)'
+  verdict: pass
+- id: P1.E6.gd5-honest
+  base: E6-Q4
+  variant: E6-GD5
+  area: architecture
+  measure: x.fate.honest_reports
+  expect: down
+  min_change: 0.3
+  source: 'SM-MBR RandomPosition fires when the residual exceeds gpsDrift: 5 m cuts the honest reports by over 30 % (urban one-epoch hops are v x 0.1 s < 1.5 m)'
+  measured: '1708 -> 1534'
+  verdict: wrong-expectation
+  note: 'RandomPosition verdicts fall 6,603 -> 10 as theory says, but filed honest reports fall only 10 %: the rest are ConstantPosition (11,755 verdicts, independent of gpsDrift). The row measured reports where the theory speaks of RandomPosition triggers.'
+- id: P1.E6.gd05-honest
+  base: E6-Q4
+  variant: E6-GD05
+  area: architecture
+  measure: x.fate.honest_reports
+  expect: up
+  min_change: 0.1
+  source: 'gpsDrift 0.5 m raises the honest reports by over 10 %'
+  measured: '1708 -> 2080'
+  verdict: pass
+- id: P1.E6.gd2-honest
+  base: E6-Q4
+  variant: E6-GD2
+  area: architecture
+  measure: x.fate.honest_reports
+  expect: down
+  min_change: 0.0
+  source: 'gpsDrift 2 m lowers the honest reports'
+  measured: '1708 -> 1551'
+  verdict: pass
+- id: P1.E6.gd5-lost
+  base: E6-Q4
+  variant: E6-GD5
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [-1.0, 0.0]
+  source: 'fewer honest reports crowd out no more attack evidence'
+  measured: '0.0808824 -> 0.0808824 (delta 0)'
+  verdict: pass
+- id: P1.E6.gd05-lost
+  base: E6-Q4
+  variant: E6-GD05
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [0.0, 1.0]
+  source: 'more honest reports crowd out no less attack evidence'
+  measured: '0.0808824 -> 0.0551471 (delta -0.02574)'
+  verdict: open
+  note: 'lost share falls 22 -> 15 of 272 although honest reports rise; small counts, and more reports also revoke attackers sooner. Not resolved.'
+- id: P1.E6.lk100-honest
+  base: E6-Q4
+  variant: E6-LK100
+  area: architecture
+  measure: x.fate.honest_reports
+  expect: down
+  min_change: 0.5
+  source: 'every OBU locked removes the free class''s triggers (real data: locked ~0.17 vs free 20-195 per ID-minute): honest reports fall by over 50 %'
+  measured: '1708 -> 77'
+  verdict: pass
+- id: P1.E6.lk100-lost
+  base: E6-Q4
+  variant: E6-LK100
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [-1.0, 0.0]
+  source: 'no free class, no more attack evidence crowded out'
+  measured: '0.0808824 -> 0.0641509 (delta -0.01673)'
+  verdict: pass
+- id: P1.E6.lk0-honest
+  base: E6-Q4
+  variant: E6-LK0
+  area: architecture
+  measure: x.fate.honest_reports
+  expect: up
+  min_change: 0.1
+  source: 'every OBU free raises the honest reports by over 10 %'
+  measured: '1708 -> 2341'
+  verdict: pass
+- id: P1.E6.lk0-lost
+  base: E6-Q4
+  variant: E6-LK0
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [0.0, 1.0]
+  source: 'more honest reports crowd out no less attack evidence'
+  measured: '0.0808824 -> 0.0820896 (delta 0.001207)'
+  verdict: pass
+- id: P1.E6.rsu10-uploaded
+  base: E6-Q4
+  variant: E6-RSU10
+  area: architecture
+  measure: x.fate.uploaded
+  expect: delta
+  band: [-1000000, 0]
+  source: 'a third of the RSUs gives the offline 20 % fewer report-forward contacts: uploads non-increasing'
+  measured: '1870 -> 1932 (delta 62)'
+  verdict: open
+  note: 'confounded: RSUs are nodes 0..N-1, so the count renumbers every vehicle and changes its keyed draws (access, timing class). Relay uploads 273 -> 98, cellular 1,597 -> 1,834.'
+- id: P1.E6.rsu60-uploaded
+  base: E6-Q4
+  variant: E6-RSU60
+  area: architecture
+  measure: x.fate.uploaded
+  expect: delta
+  band: [0, 1000000]
+  source: 'twice the RSUs: uploads non-decreasing'
+  measured: '1870 -> 1691 (delta -179)'
+  verdict: open
+  note: 'confounded as rsu10 (vehicle draws re-keyed): relay 273 -> 227, cellular 1,597 -> 1,464.'
+- id: P1.E6.cell0-delivered
+  base: E6-Q4
+  variant: E6-C0
+  area: architecture
+  measure: x.fate.delivered
+  expect: down
+  min_change: 0.3
+  source: 'no cellular modem: only RSU contacts upload, so delivered reports fall by over 30 % (80 % of the base fleet uploads over Uu)'
+  measured: '1661 -> 1364'
+  verdict: wrong-expectation
+  note: '30 RSUs relay most reports within 120 s: delivered falls 18 % (1,661 -> 1,364), not over 30 %; the lost share triples (0.081 -> 0.238).'
+- id: P1.E6.cell0-lost
+  base: E6-Q4
+  variant: E6-C0
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [0.0, 1.0]
+  source: 'reports held longer are evicted no less'
+  measured: '0.0808824 -> 0.238095 (delta 0.1572)'
+  verdict: pass
+- id: P1.E6.cell100-delivered
+  base: E6-Q4
+  variant: E6-C100
+  area: architecture
+  measure: x.fate.delivered
+  expect: delta
+  band: [0, 1000000]
+  source: 'every vehicle cellular: delivered non-decreasing'
+  measured: '1661 -> 1761 (delta 100)'
+  verdict: pass
+- id: P1.E7.zero-f0
+  base: E7-F0
+  variant: E7-F0
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: eq
+  value: 0
+  source: 'P1-E7 falsification test (paper plan 1.3): with the free class at 0 %, every sound rule (k >= 2, theta >= 2) revokes zero honest devices'
+  measured: '11'
+  verdict: fixed
+  note: '11 honest blocked: 38 MaxAcceleration reports (default GNSS velocity noise on 50 ms grid hops; the calibrated receiver sets velocity_noise_mps 0) and 32 RandomPosition reports (bsm_timing dropped its error walk at stops; fixed ffaebbf9). Re-run as P1.E7C.zero-*: 1 honest left, by k = 2 only.'
+  test: crates/v2xw-node/src/bsm_timing.rs a_stop_keeps_the_error_walk_on_the_reported_position
+- id: P1.E7.zero-f0s2
+  base: E7-F0S2
+  variant: E7-F0S2
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: eq
+  value: 0
+  source: 'P1-E7 falsification test (paper plan 1.3): with the free class at 0 %, every sound rule (k >= 2, theta >= 2) revokes zero honest devices (seed 2)'
+  measured: '30'
+  verdict: fixed
+  note: '30 honest blocked, same causes as zero-f0; E7C seed 2: 1.'
+  test: crates/v2xw-node/src/bsm_timing.rs a_stop_keeps_the_error_walk_on_the_reported_position
+- id: P1.E7.attackers-f0
+  base: E7-F0
+  variant: E7-F0
+  area: architecture
+  measure: x.ma.sound_attackers_max
+  expect: ge
+  value: 1
+  source: 'the rules are not ''revoke nothing'': some sound rule revokes an injected attacker'
+  measured: '3'
+  verdict: pass
+- id: P1.E7.red-f100
+  base: E7-F100
+  variant: E7-F100
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: ge
+  value: 1
+  source: 'the fault for the null: every OBU free gives honest devices corroborated reports, and some sound rule blocks one'
+  measured: '50'
+  verdict: pass
+- id: P1.E7.unsound-up
+  base: E7-F0
+  variant: E7-F100
+  area: architecture
+  measure: x.ma.unsound_honest_max
+  expect: up
+  min_change: 0.0
+  source: 'the unsound k = 1 baseline blocks more honest devices as the free share rises from 0 to 100 %'
+  measured: '21 -> 55'
+  verdict: pass
+- id: P1.E7.det
+  base: E7-F0
+  variant: E7-F0b
+  area: determinism
+  measure: digest.record
+  expect: identical
+  source: 'same seed, byte-identical'
+  measured: '0ff2bff64fdef4a1 -> 0ff2bff64fdef4a1'
+  verdict: pass
+- id: P1.E6.replay-q0
+  base: E6-Q0
+  variant: E6-R0
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [-0.001, 0.001]
+  source: 'the offline store replay (e6replay.py, written before any E6 result was read) reproduces the engine at a zero quota exactly'
+  measured: '1 -> 1 (delta 0)'
+  verdict: pass
+- id: P1.E6.replay-q2
+  base: E6-Q2
+  variant: E6-R2
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [-0.05, 0.05]
+  source: 'the offline replay of the default-quota run at 2,300 B is within 0.05 of the engine''s attack-evidence lost share'
+  measured: '0.0992647 -> 0.0735294 (delta -0.02574)'
+  verdict: pass
+- id: P1.E6.replay-q4
+  base: E6-Q4
+  variant: E6-R4
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [-0.05, 0.05]
+  source: 'the offline replay of the default-quota run at 4,500 B is within 0.05 of the engine''s attack-evidence lost share'
+  measured: '0.0808824 -> 0.0551471 (delta -0.02574)'
+  verdict: pass
+- id: P1.E6.replay-q16
+  base: E6-Q16
+  variant: E6-R16
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [-0.05, 0.05]
+  source: 'the offline replay of the default-quota run at 16,384 B is within 0.05 of the engine''s attack-evidence lost share'
+  measured: '0.0147059 -> 0.0147059 (delta 0)'
+  verdict: pass
+- id: P1.E6.replay-evicted-q4
+  base: E6-Q4
+  variant: E6-R4
+  area: architecture
+  measure: x.fate.evicted_quota
+  expect: ratio
+  band: [0.8, 1.25]
+  source: 'the replay''s quota deletions at 4,500 B are within 20 % of the engine''s'
+  measured: '94 -> 84 (ratio 0.8936)'
+  verdict: pass
+- id: P1.E5.ks-dsrc-l1-fading
+  base: E5-D1H
+  variant: E5-D1H
+  area: metrics
+  measure: x.e5.rsu.ks_tampa
+  expect: le
+  value: 0.0748
+  source: 'hypothesis written after E5-D1 failed P1.E5.ks-dsrc-l1 (engine one-interval share 0.898 vs Tampa 0.759, p90 151 vs 303 ms): Tampa''s multi-interval gaps are fast-fading losses the medium tier (NoFading) cannot make; with Nakagami-m fading the KS distance falls inside the same pre-fixed tolerance'
+  measured: '0.149434'
+  verdict: open
+  note: 'hypothesis refuted: the high tier (fading plus diffraction) moves KS away (0.149).'
+- id: P1.E5.fading-1int-down
+  base: E5-D1
+  variant: E5-D1H
+  area: metrics
+  measure: x.e5.rsu.share_1int
+  expect: down
+  min_change: 0.0
+  source: 'fast fading turns some always-decoded links into intermittent ones, so fewer gaps are a single interval'
+  measured: '0.897986 -> 0.918991'
+  verdict: open
+  note: 'refuted: diffraction opens more links, so the one-interval share rises.'
+- id: P1.E7C.zero-f0
+  base: E7C-F0
+  variant: E7C-F0
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: eq
+  value: 0
+  source: 'P1-E7 falsification test re-run on the calibrated receiver and the stop fix (pre-registered after E7-F0 failed): with the free class at 0 %, every sound rule revokes zero honest devices'
+  measured: '1'
+  verdict: open
+  note: 'FAIL as pre-registered: 1 honest device blocked by k = 2 rules only (pseudonym-k 2, device-k 2, catch theta 2), accused by ConstantPosition at creep speed (0.9 cm at 0.62 m/s); Tampa locked devices trip ConstantPosition at 13.0 per ID-minute. Every rule with k >= 3 blocks 0.'
+- id: P1.E7C.zero-f0s2
+  base: E7C-F0S2
+  variant: E7C-F0S2
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: eq
+  value: 0
+  source: 'P1-E7 falsification test re-run on the calibrated receiver and the stop fix (pre-registered after E7-F0 failed): with the free class at 0 %, every sound rule revokes zero honest devices (seed 2)'
+  measured: '1'
+  verdict: open
+  note: 'as zero-f0: 1 honest device, k = 2 rules only.'
+- id: P1.E7C.attackers-f0
+  base: E7C-F0
+  variant: E7C-F0
+  area: architecture
+  measure: x.ma.sound_attackers_max
+  expect: ge
+  value: 1
+  source: 'the rules are not ''revoke nothing'' on the calibrated receiver'
+  measured: '3'
+  verdict: pass
+- id: P1.E7C.red-f100
+  base: E7C-F100
+  variant: E7C-F100
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: ge
+  value: 1
+  source: 'the fault for the null: every OBU free, some sound rule blocks an honest device'
+  measured: '50'
+  verdict: pass
+- id: P1.E7C.red-f100s2
+  base: E7C-F100S2
+  variant: E7C-F100S2
+  area: architecture
+  measure: x.ma.sound_honest_max
+  expect: ge
+  value: 1
+  source: 'the fault for the null, seed 2'
+  measured: '64'
+  verdict: pass
+- id: P1.E7C.unsound-up
+  base: E7C-F0
+  variant: E7C-F100
+  area: architecture
+  measure: x.ma.unsound_honest_max
+  expect: up
+  min_change: 0.0
+  source: 'the unsound k = 1 baseline blocks more honest devices from 0 to 100 % free'
+  measured: '4 -> 55'
+  verdict: pass
+- id: P1.E7C.det
+  base: E7C-F0
+  variant: E7C-F0b
+  area: architecture
+  measure: digest.record
+  expect: identical
+  source: 'same seed, byte-identical'
+  measured: 'ea861eaa345b5701 -> ea861eaa345b5701'
+  verdict: pass

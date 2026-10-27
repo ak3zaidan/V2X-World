@@ -1,0 +1,15 @@
+# P1-E7 on the calibrated receiver (pre-registered after E7-F0 failed its null): p1-e7-f10.yaml with
+# gnss.velocity_noise_mps 0, as the final P1-E4 run (p1-e4-u.yaml), so the BSM speed noise is
+# bsm_timing's fitted output_noise (CV-pilot locked: consecutive speeds differ by sd 0.045 m/s)
+# and not the default GNSS white velocity noise on top of it. Run on the engine with the
+# bsm_timing stop fix (the error walk held, not dropped, while standing).
+schema: v2xw/scenario/1
+meta:
+  base: p1-e7-f10.yaml
+  name: Paper 1 p1-e7c-f10
+  description: P1-E7 calibrated receiver, free share 10 %.
+  tags: [paper1, experiment]
+actors:
+  vehicles:
+    gnss:
+      velocity_noise_mps: 0.0

@@ -64,6 +64,7 @@ def fates(d, run):
     d["x.fate.records"] = len(rows)
     d["x.fate.reports"] = len(term)
     d["x.fate.attack_reports"] = len(attack)
+    d["x.fate.honest_reports"] = len(term) - len(attack)
     d["x.fate.attack_lost"] = sum(1 for k in lost if k in attack)
     d["x.fate.attack_lost_share"] = (d["x.fate.attack_lost"] / len(attack)) if attack else None
     d["x.fate.lost_share"] = (len(lost) / len(term)) if term else None

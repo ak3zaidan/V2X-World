@@ -1,0 +1,8 @@
+# P1-E7: p1-attack (the 75 % free cell) on a second master seed.
+schema: v2xw/scenario/1
+meta:
+  base: p1-attack.yaml
+  name: Paper 1 p1-e7-f75-s2
+  description: p1-attack, seed 2.
+  tags: [paper1, experiment]
+seed: "0xBE7C_0002"

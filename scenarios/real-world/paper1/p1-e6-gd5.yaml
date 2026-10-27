@@ -1,0 +1,13 @@
+# P1-E6: p1-q4 with RandomPosition gpsDrift 5.0 m (SM-MBR default 1 m).
+schema: v2xw/scenario/1
+meta:
+  base: p1-q4.yaml
+  name: Paper 1 p1-e6-gd5
+  description: p1-q4 with gpsDrift 5.0 m.
+  tags: [paper1, experiment]
+detection:
+  local:
+    - id: detect/us-sm-mbr
+      params:
+        time_base: secmark
+        gps_drift_m: 5.0

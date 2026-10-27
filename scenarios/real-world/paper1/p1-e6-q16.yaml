@@ -1,0 +1,11 @@
+# P1-E6: p1-attack with a quota of 16,384 bytes (fourteen reports).
+schema: v2xw/scenario/1
+meta:
+  base: p1-attack.yaml
+  name: Paper 1 p1-e6-q16
+  description: p1-attack with a 16,384 B quota.
+  tags: [paper1, experiment]
+security:
+  scms:
+    lifecycle:
+      report_store_quota_bytes: 16384

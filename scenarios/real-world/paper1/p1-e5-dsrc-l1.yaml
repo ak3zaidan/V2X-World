@@ -1,0 +1,15 @@
+# P1-E5 (research/synthesis/p1-experiments.md): receiver-side BSM gaps against Tampa's
+# RSU-received gaps. The honest Paper 1 base (CV-pilot timing, 25 % locked) cut to 60 s
+# (30 s warm-up, 30 s live) at 600 veh/h on DSRC. Run with --record-level receptions.
+schema: v2xw/scenario/1
+meta:
+  base: p1-base.yaml
+  name: Paper 1 p1-e5-dsrc-l1
+  description: P1-E5 DSRC, load 1 (600 veh/h), 60 s.
+  tags: [paper1, experiment]
+time:
+  duration_s: 60.0
+actors:
+  vehicles:
+    demand:
+      rate_veh_per_h: 600.0

@@ -1,0 +1,12 @@
+# P1-E7: p1-attack (3 % ConstPos, default quota, report records, 10 s shuffle) with the
+# free-class share 10 % (locked share 0.9). p1-attack itself is the 75 % cell.
+schema: v2xw/scenario/1
+meta:
+  base: p1-attack.yaml
+  name: Paper 1 p1-e7-f10
+  description: p1-attack at free share 10 %.
+  tags: [paper1, experiment]
+actors:
+  vehicles:
+    bsm_timing:
+      locked_share: 0.9

@@ -721,8 +721,19 @@ impl BsmTimingDevice {
         if !belief.fix.has_position() {
             return None;
         }
-        // The error walk advances one fix epoch per wake: (error now, error at the next epoch).
+        // J2735 Speed LSB: below it the vehicle is not moving and a repeat is no repeat.
+        let moving = belief.ground_speed_mps() >= 0.02;
+        // The error walk advances one fix epoch per wake while the vehicle moves: (error
+        // now, error at the next epoch). Standing, the receiver holds its solution (static
+        // hold), so the walk holds too and its error stays on the reported position: left
+        // off at a stop, the position jumped by the whole walk (sd about 0.7 m) at every
+        // stop and start, which SM-MBR RandomPosition read as a jump on honest locked cars
+        // in queues (P1-E7 E7-F0: 32 honest RandomPosition reports at the MA, each one a
+        // stop/start toggle; CV-pilot locked devices show 0.00 % below 5 m/s, T4).
         let pn = pn_step.map(|(wa, wc, tau)| {
+            if !moving {
+                return (self.pos_err, self.pos_err);
+            }
             let (sh, ch) = belief.heading_rad.sin_cos();
             // along = (cos h, sin h), left of track = (-sin h, cos h): ENU, h from east.
             let w = (wa * ch - wc * sh, wa * sh + wc * ch);
@@ -822,13 +833,10 @@ impl BsmTimingDevice {
             belief.pos.y - belief.vel.y * age_s,
             belief.pos.z - belief.vel.z * age_s,
         );
-        // J2735 Speed LSB: below it the vehicle is not moving and a repeat is no repeat.
-        let moving = belief.ground_speed_mps() >= 0.02;
         // The reported position's error at the generation instant, between this epoch's and
-        // the next one's (fitted at speed only, so a standing vehicle reports its fix).
-        if let Some((cur, next)) = pn
-            && moving
-        {
+        // the next one's (a standing vehicle's walk is held, so it reports its fix plus the
+        // error it stopped with).
+        if let Some((cur, next)) = pn {
             let inst = tick.map_or(epoch + hop_ns, |g| g);
             let f = ((inst.saturating_sub(t - t % iv)) as f64 / iv as f64).clamp(0.0, 1.0);
             pos.x += cur.0 + f * (next.0 - cur.0);
@@ -1347,5 +1355,42 @@ classes:
             v2.check().is_err(),
             "a v2 file may not carry position_noise"
         );
+    }
+
+    /// P1-E7: with the walk left off at a stop, a stopping or starting car's reported
+    /// position jumped by the whole walk (RandomPosition on honest locked cars in queues).
+    #[test]
+    fn a_stop_keeps_the_error_walk_on_the_reported_position() {
+        let mut cal = locked_v3();
+        cal.classes[0].position_noise = Some(PositionNoise {
+            dist: "normal_mixture".to_string(),
+            tau_s: 1.0e4,
+            p: vec![1.0],
+            along_m: vec![0.2],
+            cross_m: vec![0.2],
+        });
+        cal.check().expect("a valid v3 calibration");
+        let mut r = rng(11);
+        let mut d = BsmTimingDevice::assign(&cal, &mut r);
+        let mut last: Option<(f64, f64, f64)> = None;
+        let mut x = 0.0;
+        let mut worst: f64 = 0.0;
+        for i in 0..400u64 {
+            // 10 m/s for 20 s, standing for 10 s, then 10 m/s again.
+            let v = if (200..300).contains(&i) { 0.0 } else { 10.0 };
+            x += v * 0.1;
+            let mut b = belief(10_000 + 100 * i, v);
+            b.pos = Vec3::new(x, 0.0, 0.0);
+            let rep = d.report(&cal, &mut r, &b).unwrap();
+            if let Some((px, py, pxt)) = last {
+                // the reported step less the true step: the error's own change
+                let e = ((rep.pos.x - px - (x - pxt)).powi(2) + (rep.pos.y - py).powi(2)).sqrt();
+                worst = worst.max(e);
+            }
+            last = Some((rep.pos.x, rep.pos.y, x));
+        }
+        // One increment is under ~4.5 sigma (0.9 m per axis), where the walk after 200
+        // epochs has sd 0.2 * sqrt(200) = 2.8 m per axis, which a stop used to throw away.
+        assert!(worst < 1.3, "a stop or start moved the error by {worst:.2} m");
     }
 }

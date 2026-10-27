@@ -1,0 +1,9 @@
+# P1-E5: p1-e5-dsrc-l1 with every radio on lte-v2x-pc5.
+schema: v2xw/scenario/1
+meta:
+  base: p1-e5-dsrc-l1.yaml
+  name: Paper 1 p1-e5-lte-l1
+  description: P1-E5 LTE, load 1 (600 veh/h), 60 s.
+  tags: [paper1, experiment]
+radio:
+  rat: lte-v2x-pc5
