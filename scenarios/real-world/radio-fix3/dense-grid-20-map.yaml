@@ -1,0 +1,10 @@
+# radio-fix3 R3.2.DENSE-SENSED variant: dense-grid-20.yaml with SPaT and MAP on 174.
+schema: v2xw/scenario/1
+meta:
+  base: dense-grid-20.yaml
+  name: radio-fix3 dense-grid-20-map
+  description: dense-grid-20 with SPaT and MAP on channel 174.
+  tags: [radio-fix3, experiment, cbr]
+radio:
+  channels:
+    - {channel: 174, messages: [spat, map]}

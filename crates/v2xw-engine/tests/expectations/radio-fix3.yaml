@@ -58,6 +58,14 @@ runs:
     scenario: scenarios/real-world/radio-fix3/highway-cpm-dcc.yaml
     base: H-CPM
     binary: this branch's debug build (opt-level 2)
+  G20:
+    scenario: scenarios/real-world/radio-fix3/dense-grid-20.yaml
+    binary: this branch's debug build (opt-level 2)
+    note: G cut to 20 s, recorded at --record-level receptions (every phy.rx)
+  G20-MAP:
+    scenario: scenarios/real-world/radio-fix3/dense-grid-20-map.yaml
+    base: G20
+    binary: this branch's debug build (opt-level 2)
 rows:
 # ---- Item 1: reception within 300 m against theory and published measurements ----
 - id: R3.1.DSRC-NLOS-EDGE
@@ -236,6 +244,21 @@ rows:
   band: [0.8, 1.25]
   expect: the same frames go on air (on two channels instead of one); the per-(node, channel) MAC and leakage bookkeeping add little, so the wall time stays within 25 %
   source: cost model
+  measured: pending
+- id: R3.2.DENSE-SENSED
+  run: G20-MAP
+  disclosure: written after G and G-MAP were read (R3.2.DENSE-MOVE measured 0.954 against its airtime-share band)
+  metric: CBR172(map) / CBR172(base), report busy/window
+  band: "[p-0.01, p+0.01], p = 1 - (B_moved - B_leak) / B_all from G20's phy.rx"
+  expect: >-
+    A unit's busy time is the airtime of the frames it senses at or above -85 dBm (TS 102 687
+    CBR threshold), not the airtime the senders emit, so the moved messages' share at the
+    listeners is B_moved = sum over SPaT, MAP, SRM, SSM arrivals at >= -85 dBm of their
+    airtime (SRM and SSM go too: a single-radio OBU never hears a MAP on 174, so it never
+    requests). On 174 they still leak into 172 through the 174->172 ACIR (12.98 dB, EN 302 571
+    mask + ACS): an arrival at >= -85 + 12.98 dBm is still busy on 172 (B_leak). So the CBR
+    ratio is 1 - (B_moved - B_leak) / B_all, within overlap (CBR 0.03: about 1 %)
+  source: ETSI TS 102 687 V1.2.1 §4.2 (CBR at -85 dBm); EN 302 571 V2.1.1 §4.2.4; WP-13 ACIR test
   measured: pending
 # ---- Item 3: WP-12 on the built-in highway ----
 - id: R3.3.CLASS
