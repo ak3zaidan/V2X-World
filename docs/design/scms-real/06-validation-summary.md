@@ -1393,6 +1393,10 @@ The totals count each row as its own checklist records it, with the changes in ย
     incl. C2Mb/C2MJ/SYM10b on the fixed binary, live-rsu FS0 for byte identity plus Sout
     and FSout, live-chains signal/pedestrian/seed-2/Craton2/CRLG, Studio s2-scms and the
     soak, 117 scenarios); `tests/live_rsu.rs` (ignored) has not been run.
+    2026-10-27 (release `f4982788`): live-scms, live-atk, live-rsu, live-chains and the
+    scenario rows were judged; the remaining open rows are listed in each live report.
+    `tests/live_rsu.rs` ran: the outage test passes, the backhaul-once test fails with
+    316 against 306 (the double booking, run.rs:8728-8737, open).
 
 **Owner decisions**
 - **What the RA and PCA keep for each device** (ยง6 item 4): request records, cocoons,
