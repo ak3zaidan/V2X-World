@@ -234,7 +234,13 @@ rows:
     the safety channel is in the congested regime J2945/1's power control acts in (vMinChanUtil
     0.5 to vMaxChanUtil 0.8) or approaching it, not at the 0.003-0.03 of the P1-E5 small fleets
   source: SAE J2945/1 §6.3.8 (CBR thresholds 50 % / 80 %); airtime arithmetic
-  measured: pending
+  measured: "0.0335 (p90 0.059); 115 vehicles spawned in 40 s; BSM airtime 0.319 ms"
+  verdict: wrong-expectation
+  note: >-
+    The grid never got dense: 40 s of 12,000 veh/h put 115 vehicles on 1.6 x 0.5 km of
+    built-up grid (50 % reception at 175 m). 0.0335 / (10 Hz x 0.319 ms) = 10.5 senders
+    sensed, which is what that fleet gives; the expectation's tens of senders needed a full
+    grid. The dense check is R3.2.DENSE-HWY48 (the built-in highway, 296 vehicles, CBR 0.456)
 - id: R3.2.DENSE-MOVE
   run: G-MAP
   metric: CBR172(map) / CBR172(base)
@@ -245,14 +251,21 @@ rows:
     Power control may raise BSM power a little as CBR falls, so the ratio may sit slightly
     above 1 - s
   source: WP-13 accept rule (lowers its CBR by the moved share); IEEE 1609.4-2016 §6.2.5
-  measured: pending
+  measured: "0.954 (0.03348 -> 0.03193); s = 0.093 (SPaT+MAP+SRM+SSM 0.758 s of 8.12 s emitted), band [0.877, 0.937]"
+  verdict: wrong-expectation
+  note: >-
+    CBR is busy time at the listeners, not airtime at the senders: an RSU's 23 dBm frames from
+    a mast are sensed by far more units than a BSM, and on 174 they still leak into 172
+    (ACIR 12.98 dB). R3.2.DENSE-SENSED states the share at the listeners and passes
 - id: R3.2.DENSE-WALL
   run: G-MAP
   metric: wall time, variant / base
   band: [0.8, 1.25]
   expect: the same frames go on air (on two channels instead of one); the per-(node, channel) MAC and leakage bookkeeping add little, so the wall time stays within 25 %
   source: cost model
-  measured: pending
+  measured: "59.57 -> 56.32 s (0.945); peak 293 -> 272 MB"
+  verdict: pass
+  fault: "G20 (20 s) judged as the variant: 0.364, red"
 - id: R3.2.DENSE-SENSED
   run: G20-MAP
   disclosure: written after G and G-MAP were read (R3.2.DENSE-MOVE measured 0.954 against its airtime-share band)
@@ -267,7 +280,15 @@ rows:
     mask + ACS): an arrival at >= -85 + 12.98 dBm is still busy on 172 (B_leak). So the CBR
     ratio is 1 - (B_moved - B_leak) / B_all, within overlap (CBR 0.03: about 1 %)
   source: ETSI TS 102 687 V1.2.1 §4.2 (CBR at -85 dBm); EN 302 571 V2.1.1 §4.2.4; WP-13 ACIR test
-  measured: pending
+  measured: "0.9233 (0.02190 -> 0.02022); p = 0.9215 (B_moved 0.267, B_leak 0.188 of B_all at the listeners), band [0.9115, 0.9315]; G20 record digest d5d31adf reproduced on the rerun"
+  verdict: pass
+  fault: "the prediction without the 174->172 leakage, p = 0.733: measured outside [0.723, 0.743], red"
+  note: >-
+    Open (model card 04-models.md §4.5): the engine senses leaked energy against the ETSI
+    -85 dBm CBR threshold for DSRC too. J2945/1's CBP is the 802.11 CCA busy time, where a
+    frame that is not decodable on 172 counts only above energy detect (-65 dBm for 10 MHz,
+    IEEE 802.11-2020 §17.3.10.6), so a US unit would sense a 174 leak only from arrivals at
+    >= -52 dBm on 174: the US CBR172 drop on moving SPaT/MAP would be larger than measured here
 - id: R3.2.DENSE-HWY
   run: HD-MAP
   metric: mean CBR on 172 over the live window, per unit-measurement; BSM ITT and power under J2945/1
