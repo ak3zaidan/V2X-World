@@ -1946,6 +1946,13 @@ impl VruDeviceRuntime {
     fn classify(&mut self, ctx: &mut dyn NodeCtx, frame: &RxFrame) -> VerificationState {
         // A refusal is this frame's only if this judgement makes it.
         let _ = self.security.take_last_refusal();
+        // The SPDU-level validity rule reads the certificate alone and costs nothing, so
+        // it refuses before any signature is checked (crate::rxval, `validate_inner`).
+        if crate::runtime::frame_outside_validity(frame).is_some() {
+            self.security
+                .note_refusal(crate::rxval::RxReject::GenerationTimeOutsideValidity);
+            return VerificationState::Invalid;
+        }
         // The revocation check reads the certificate's own `linkageData` (iCert and the
         // linkage value), out of the certificate the signature was checked against: the
         // field a linked CRL entry is matched against [1609.2 §5.1.3.4]. Nothing else
@@ -2045,6 +2052,8 @@ impl VruDeviceRuntime {
             claimed_heading_rad: frame.claimed_heading_rad,
             bsm: frame.bsm,
             verification,
+            outside_validity: crate::runtime::frame_outside_validity(frame)
+                .filter(|_| verification == VerificationState::Invalid),
             payload: None,
         }
     }

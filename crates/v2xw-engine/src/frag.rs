@@ -408,3 +408,49 @@ impl FragGroup {
         sdu_loss(&per_fragment, amplifies)
     }
 }
+
+/// The attached-certificate octets one fragment of an SDU carries: the certificate's
+/// `cert` octets apportioned to the fragment that carries SDU octets
+/// `[before, before + carried)` of `sdu`, by cumulative integer division so that the
+/// fragments of one SDU sum back to `cert` exactly ([`v2xw_net::FrameLayers::fragment`]
+/// apportions the payload/envelope split the same way: an accounting convention, not a
+/// claim about which octets a fragment holds).
+///
+/// Every fragment used to repeat the whole certificate, so a certificate-bearing SDU in
+/// `n` pieces counted `n` certificates against one envelope and `cert_bytes_share` rose
+/// above 1 (live-scenarios finding 1: PSMs under `hybrid-falcon512-ecdsa-p256` and
+/// `fragmenter/generic-sdu`, 1.37).
+pub fn fragment_cert_share(cert: u32, sdu: u32, before: u32, carried: u32) -> u32 {
+    if sdu == 0 {
+        return 0;
+    }
+    let upto = |n: u32| (u64::from(cert) * u64::from(n.min(sdu)) / u64::from(sdu)) as u32;
+    upto(before.saturating_add(carried)) - upto(before)
+}
+
+#[cfg(test)]
+mod cert_share_tests {
+    use super::fragment_cert_share;
+
+    #[test]
+    fn a_certificate_is_counted_once_across_the_fragments_of_its_sdu() {
+        // A 2,535-octet SDU in two pieces carrying a 1,680-octet hybrid certificate.
+        let (a, b) = (1_300, 1_235);
+        let first = fragment_cert_share(1_680, a + b, 0, a);
+        let second = fragment_cert_share(1_680, a + b, a, b);
+        assert_eq!(first + second, 1_680);
+        assert!(first <= a && second <= b);
+        // Uneven sizes, many pieces: the sum is still exact.
+        let sizes = [7_u32, 400, 1, 999, 33];
+        let sdu: u32 = sizes.iter().sum();
+        let mut before = 0;
+        let mut total = 0;
+        for c in sizes {
+            total += fragment_cert_share(1_000, sdu, before, c);
+            before += c;
+        }
+        assert_eq!(total, 1_000);
+        assert_eq!(fragment_cert_share(0, sdu, 0, sdu), 0);
+        assert_eq!(fragment_cert_share(5, 0, 0, 0), 0);
+    }
+}

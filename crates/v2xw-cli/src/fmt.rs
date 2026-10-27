@@ -59,6 +59,7 @@ pub fn run(o: &RunOutcome) -> String {
         r.reception_attempts, r.frames_received
     );
     let _ = writeln!(s, "suppressed      {}", r.suppressed_frames);
+    let _ = writeln!(s, "signed past end {}", r.signed_past_end);
     let _ = writeln!(
         s,
         "records         {} written, {} refused",

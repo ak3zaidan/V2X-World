@@ -1,0 +1,13 @@
+# Live RSU track, SCMS family interaction (2026-10-26): the 240 s two-list run with the carousel
+# at 4 s. In scms-lat2000-bc3-240.yaml the lists came 30 s apart (on the 10 s cadence grid),
+# a multiple of the 3 s carousel, so every later list met a tick 2.146 s after it, exactly as
+# the first did, and the unaligned case was not exercised. With 4 s a list 10 or 30 s after
+# the one that armed the carousel meets a tick 0.146 s after its publication.
+schema: v2xw/scenario/1
+meta:
+  base: scms-lat2000-bc3-240.yaml
+  name: live-rsu scms lat2000-bc4 240s
+security:
+  scms:
+    lifecycle:
+      crl_broadcast_interval_s: 4.0

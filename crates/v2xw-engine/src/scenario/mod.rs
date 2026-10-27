@@ -54,7 +54,7 @@ pub use schema::{
     Threats, Time, TimelineItem, TimelineKind, VehicleClassSpec, Vehicles, Vru, Weather, WorldSpec,
 };
 pub use validate::{
-    detection_policy_warnings, pq_rsu_proxy_warnings, preflight, resolve_path,
+    detection_policy_warnings, pq_rsu_proxy_warnings, preflight, resolve_path, names_a_default_section, fill_default_section,
     signature_mtu_warnings, validate,
 };
 

@@ -280,6 +280,12 @@ impl ExperimentPlan {
         let mut document =
             serde_json::to_value(base).map_err(|e| ExperimentError::json("the scenario", e))?;
         for (path, value) in &run.cell.values {
+            // A field inside a section the document leaves out at its default (`apps`
+            // when every application setting is the default) is a field all the same: the
+            // section is written in full first, as the validator accepted it (live-rsu §3).
+            if let Some(axis) = base.experiment.as_ref().and_then(|x| x.sweep.get(path)) {
+                v2xw_engine::scenario::fill_default_section(&mut document, path, axis);
+            }
             set_path(&mut document, path, value.clone())?;
         }
         let mut scenario = Scenario::from_document(document)?;

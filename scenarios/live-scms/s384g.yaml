@@ -1,0 +1,8 @@
+# live-scms variant s384g: signature ecdsa-p384 on the generic no-HSM SoC (base lg), whose
+# profile prices P-384 itself (8,104 us sign, 5,721 us verify, R5 B.5).
+schema: v2xw/scenario/1
+meta:
+  base: lg.yaml
+  name: live-scms s384g
+security:
+  signature: ecdsa-p384

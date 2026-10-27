@@ -1,7 +1,11 @@
 # Live RSU track, SCMS family: scms-base.yaml with one change (unit 5 is off from 30 s to the end).
+# A list replaces its base's list, so the base's own event (midtown-scms-benchmark.yaml: four
+# times the demand for the first 90 s) is repeated here; without it the 10-25 Sout run had a
+# third of the vehicles, published no list and was not a one-change variant (live-rsu §3).
 schema: v2xw/scenario/1
 meta:
   base: scms-base.yaml
   name: live-rsu scms out
 events:
+  - {t: 0.0, until: 90.0, type: demand.multiplier, value: 4.0}
   - {t: 30.0, until: 120.0, type: outage, target: 5}

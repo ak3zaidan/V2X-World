@@ -205,3 +205,41 @@ fn a_block_with_no_sweep_is_replications_of_one_configuration() {
     assert_eq!(plan.runs.len(), 5);
     assert_eq!(plan.seed_slots, vec![scenario.seed]);
 }
+
+/// A field inside a section the serialised scenario leaves out at its default is a field
+/// all the same (live-rsu §3: `glosa-energy.yaml`'s own `apps.glosa_compliance` sweep was
+/// refused, "does not name a field", on a variant whose `apps` was the default, and the
+/// sweep could not write it either). Both the validator and `materialise` see it.
+#[test]
+fn a_field_of_a_section_left_out_at_its_default_is_swept() {
+    let scenario = swept(
+        vec![("apps.glosa_compliance", vec![json!(0.0), json!(1.0)])],
+        vec![],
+        1,
+    );
+    assert!(
+        scenario.apps.is_default(),
+        "the fixture's apps must be the default, or the test tests nothing"
+    );
+    scenario.validate().expect("the sweep names a field");
+    let plan = ExperimentPlan::expand(&scenario).expect("the block expands");
+    let cells: Vec<f64> = plan
+        .runs
+        .iter()
+        .map(|r| {
+            plan.materialise(&scenario, r)
+                .expect("each cell is a valid scenario")
+                .apps
+                .glosa_compliance
+        })
+        .collect();
+    assert_eq!(cells, vec![0.0, 1.0]);
+
+    // Negative controls: a key the section does not have is still refused by name, and so
+    // is a key written straight into an existing object.
+    let wrong = swept(vec![("apps.no_such_field", vec![json!(1.0)])], vec![], 1);
+    let e = wrong.validate().expect_err("apps has no such field");
+    assert!(format!("{e}").contains("apps.no_such_field"), "{e}");
+    let leaf = swept(vec![("time.no_such_field", vec![json!(1.0)])], vec![], 1);
+    assert!(leaf.validate().is_err());
+}

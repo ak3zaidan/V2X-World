@@ -567,6 +567,14 @@ pub struct RunReport {
     /// How many frames were *not* generated because the instant fell in a time-dilation
     /// window (02-architecture.md §5.4).
     pub suppressed_frames: u64,
+    /// How many messages a node generated and began to sign whose signature (with its
+    /// hand-off) completes after the run's end, so they never reached the MAC. A healthy
+    /// run counts only the last instants' messages, about one per node; a signer that
+    /// cannot keep up (a sign time above the message interval: SLH-DSA-SHA2-128s on an
+    /// automotive SoC signs in seconds) counts nearly every message here. Before this
+    /// count such a run put nothing on the air and no counter said why (live-chains
+    /// finding 8).
+    pub signed_past_end: u64,
     /// The credential system's calendar (`time.calendar`, WP-D2): `real`, the
     /// deployment's weekly grid from the 2015 epoch, or `compressed`, whose i-period
     /// numbers and calendar waits are not the deployment's. Empty for a run without a
@@ -820,10 +828,13 @@ struct FrameState {
     /// revocation path needs and no node runtime generates.
     app: Option<AppPayload>,
     /// Whether the frame's signature verifies. `false` only for an attacker's forged or
-    /// tampered message, or one signed under a certificate outside its validity window;
-    /// the SPDU's signature octets are then corrupted, so a receiver that checks the bytes
-    /// finds it out by checking them, and one that has no bytes reads this field.
+    /// tampered message; the SPDU's signature octets are then corrupted, so a receiver
+    /// that checks the bytes finds it out by checking them, and one that has no bytes
+    /// reads this field.
     signature_valid: bool,
+    /// The validity period of the genuine certificate an attacker signed under outside
+    /// that period (`ExpiredCert`, `NotYetValid`): [`v2xw_node::RxFrame::signer_validity`].
+    signer_validity: Option<(SimTime, SimTime)>,
     /// The signed SPDU as it goes on the air, when the node's own generator built one.
     ///
     /// `None` for the two frames the engine synthesises on a node's behalf (the
@@ -1123,6 +1134,9 @@ pub struct Engine {
     /// Each roadside unit's CRL download in flight over its backhaul, and when it lands
     /// (live-rsu §3): the unit installs and broadcasts the list only once it has it.
     rsu_crl_fetch: BTreeMap<NodeId, SimTime>,
+    /// When each unit's fetch of this step's due list lands (in flight or landed), for the
+    /// carousel start: the list rides each unit's line once, as the unit's own fetch.
+    rsu_crl_landing: BTreeMap<NodeId, SimTime>,
     next_node: u32,
     next_frame: u32,
     /// The producer of the normative `Keyframe`/`Delta` stream (vwp-v1 §3.3, §3.4).
@@ -1682,6 +1696,7 @@ impl Engine {
             next_backend_bytes: 0,
             crl_timer_armed: false,
             rsu_crl_fetch: BTreeMap::new(),
+            rsu_crl_landing: BTreeMap::new(),
             next_node: 0,
             next_frame: 0,
             snapshots,
@@ -2176,6 +2191,7 @@ impl Engine {
         // The backend runs once per mobility step: a download that lands inside this step
         // is installed now, a later one at the first step it has landed by.
         let step_end = self.scenario.time.mobility_step().after(now);
+        self.rsu_crl_landing.clear();
         for rsu in due {
             // A unit that is switched off fetches nothing; it fetches when it is back on.
             if self.node_is_off(rsu) {
@@ -2199,6 +2215,7 @@ impl Engine {
                     at
                 }
             };
+            self.rsu_crl_landing.insert(rsu, lands);
             if lands >= step_end {
                 continue;
             }
@@ -5380,6 +5397,7 @@ impl Engine {
         // The signature's end, before the hand-off [`Engine::hand_down`] added.
         let t_signed = ready.saturating_sub(self.pending_handoff).max(t_sign_start);
         if ready > horizon {
+            self.report.signed_past_end += 1;
             return HandDown::NotSent;
         }
         if self.is_dilated(ready) {
@@ -5526,6 +5544,7 @@ impl Engine {
                 .unwrap_or_else(|| belief.map_or(0.0, |b| b.heading_rad)),
         );
         let mut signature_valid = true;
+        let mut signer_validity: Option<(SimTime, SimTime)> = None;
         let mut claimed_generation = tx.generation_time;
         let mut bsm = tx.bsm;
         let mut ghosts: Vec<v2xw_threat::attack::Emission> = Vec::new();
@@ -5620,13 +5639,23 @@ impl Engine {
                     e.heading_rad,
                 );
                 // What the attacker's edit does to the envelope, rendered on the air: a
-                // forged signature, a certificate outside its validity window (the
-                // receiver's IEEE 1609.2 validity check refuses it as surely as a bad
-                // signature), and the generation time the message claims (a delayed,
-                // replayed or out-of-order message).
+                // forged signature, a certificate outside its validity window, and the
+                // generation time the message claims (a delayed, replayed or
+                // out-of-order message).
+                //
+                // A certificate outside its window is a genuine certificate used out of
+                // time, so its signature verifies: what refuses the frame is the
+                // receiver's IEEE 1609.2 §5.2 generation-time-in-validity rule, and the
+                // receiver knows that is why. Rendering it as a corrupted signature made
+                // every receiver report a bad signature (`signatureVerification`, 613
+                // reports about one ExpiredCert attacker in live-atk C2M) and left
+                // `certValidity` unreachable (live-atk F4).
                 let window_forged = (e.cert_valid_from, e.cert_valid_to) != cert
                     && !(e.cert_valid_from..=e.cert_valid_to).contains(&believed);
-                signature_valid = e.signature_valid && !window_forged;
+                signature_valid = e.signature_valid;
+                if window_forged {
+                    signer_validity = Some((e.cert_valid_from, e.cert_valid_to));
+                }
                 // The model edits the time it was handed (`believed`); its edit moves the
                 // message's own stamp by the same amount, so an attack that leaves the
                 // time alone leaves the frame's generation time exactly as it was.
@@ -5854,6 +5883,7 @@ impl Engine {
             tx_heading: None,
             app,
             signature_valid,
+            signer_validity,
             spdu: tx.signed.as_ref().map(|f| {
                 let mut spdu = f.spdu.clone();
                 // The signature is the SPDU's last field (IEEE 1609.2 SignedData), so
@@ -5941,6 +5971,10 @@ impl Engine {
                     .map(|l| air_of(l.psdu_bytes()).as_nanos() / 1_000)
                     .sum();
                 self.report.sdus_fragmented += 1;
+                // The SDU's attached certificate is counted once across its pieces, each
+                // carrying its share as it carries its share of the envelope.
+                let whole_cert = base.cert_bytes;
+                let mut carried_before = 0_u32;
                 for (k, (desc, layers)) in pieces.into_iter().zip(layered).enumerate() {
                     let seq = if k == 0 {
                         frame
@@ -5963,6 +5997,15 @@ impl Engine {
                     state.end = air.after(ready);
                     state.payload_bytes = split.map(|_| layers.payload);
                     state.envelope_bytes = split.map(|_| layers.security);
+                    state.cert_bytes = whole_cert.map(|c| {
+                        crate::frag::fragment_cert_share(
+                            c,
+                            sdu_bytes,
+                            carried_before,
+                            desc.payload_bytes,
+                        )
+                    });
+                    carried_before = carried_before.saturating_add(desc.payload_bytes);
                     state.layers = layers;
                     state.frag = Some(crate::frag::FragMeta {
                         desc,
@@ -6138,6 +6181,7 @@ impl Engine {
             st.claimed_speed_mps = claim.1;
             st.claimed_heading_rad = claim.2;
             st.signature_valid = true;
+            st.signer_validity = None;
             st.spdu = Some(signed.spdu.clone());
             st.payload_bytes = split.map(|(p, _)| p);
             st.envelope_bytes = split.map(|(_, e)| e);
@@ -8442,28 +8486,43 @@ impl Engine {
 
         // 4. A newly published list starts the roadside broadcast.
         if tick.published.is_some() && !self.crl_timer_armed {
-            // The list goes down each broadcasting unit's backhaul line, its bytes queued
-            // with whatever else the line carries; the broadcast starts when the first
-            // unit has it.
+            // The broadcast starts when the first broadcasting unit has the list. A unit in
+            // the certificate cycle fetched it over its own line in step 3b, and its timing
+            // is that fetch's: the list rides the line once (live-rsu §3, the double booking
+            // fixed 2026-10-26: each publication went down every unit's line a second time,
+            // 30 extra messages per list on the Midtown base). A unit outside the cycle has
+            // no fetch, and the list goes down its line here, queued with whatever else the
+            // line carries. A unit that is switched off has nothing on the air to start.
+            let landing = std::mem::take(&mut self.rsu_crl_landing);
+            let units: Vec<NodeId> = self
+                .phase2
+                .as_ref()
+                .map(|p| {
+                    p.rsus_with_role("crl")
+                        .into_iter()
+                        .filter(|n| p.rsu_spec_of(*n).is_some_and(|s| s.backhaul.connected))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let units: Vec<NodeId> = units
+                .into_iter()
+                .filter(|n| !self.node_is_off(*n))
+                .collect();
             let at = self
                 .phase2
                 .as_mut()
                 .and_then(|p| {
                     let size = p.crl_size(p.published_crl().0);
-                    let units: Vec<NodeId> = p
-                        .rsus_with_role("crl")
-                        .into_iter()
-                        .filter(|n| p.rsu_spec_of(*n).is_some_and(|s| s.backhaul.connected))
-                        .collect();
                     units
                         .into_iter()
-                        .filter_map(|n| {
-                            p.access_mut().rsu_send(
+                        .filter_map(|n| match landing.get(&n) {
+                            Some(&lands) => Some(lands),
+                            None => p.access_mut().rsu_send(
                                 n,
                                 v2xw_radio::cellular::Direction::Downlink,
                                 size,
                                 now,
-                            )
+                            ),
                         })
                         .min()
                 })
@@ -10081,6 +10140,7 @@ fn rx_frame(state: &FrameState, bytes: u32) -> RxFrame {
         // is, unless an attacker forged it). The receiver only learns it by *spending* the
         // verification time, which `ObuRuntime::step` charges against its servers.
         signature_valid: state.signature_valid,
+        signer_validity: state.signer_validity,
         spdu: state.spdu.clone(),
         signer_certificate: state.signer_certificate.clone(),
         bsm: state.bsm,

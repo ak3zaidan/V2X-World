@@ -776,6 +776,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "Off (today); on for smooth stops behind queues (the realistic benchmark sets it).",
     },
     Basic {
+        path: "traffic.depart_speed_max",
+        explain: "Whether cars enter the road already moving, at the fastest speed that is safe there, as traffic joining a freeway does, rather than appearing parked in the lane and pulling away from rest.",
+        recommended: "Off (today, SUMO's default); on for freeways and other roads entered at speed (SUMO departSpeed=max).",
+    },
+    Basic {
         path: "traffic.lane_bend_speed",
         explain: "Whether drivers slow for sharp bends in a street's mapped centreline as they do for corners at junctions; without it a car follows a kink in the map at full speed.",
         recommended: "Off (today); on with turn_curve_window_m 6 for kinked city streets (the realistic benchmark sets it).",

@@ -496,6 +496,7 @@ fn frames_of(out: &v2xw_node::runtime::StepOutcome) -> Vec<v2xw_node::runtime::R
                 claimed_generation_time: t.generation_time,
                 full_certificate: t.full_certificate,
                 signature_valid: true,
+                signer_validity: None,
                 spdu: Some(s.spdu.clone()),
                 signer_certificate: None,
                 bsm: Default::default(),

@@ -169,13 +169,23 @@ fn member_name(name: &str) -> Option<(&str, u16)> {
     Some((role, k.parse().ok()?))
 }
 
-/// The backend node a failure names, in a deployment `run` hosts.
+/// The backend node a failure names among the home provider's components, in the run
+/// `run` hosts (the role or committee member, unqualified).
 #[must_use]
 pub fn failure_node(name: &str, run: &ScmsRun) -> Option<NodeId> {
+    role_node(name, &run.state.nodes, run)
+}
+
+/// `role` (or `<role>-member-<k>`) among the components `n` names. Committee member ids
+/// are the same block in every provider's run, so any provider's `run` resolves them.
+fn role_node(
+    name: &str,
+    n: &v2xw_proto::scms::params::ScmsNodes,
+    run: &ScmsRun,
+) -> Option<NodeId> {
     if let Some((role, k)) = member_name(name) {
         return run.committee_members(role).get(usize::from(k)).copied();
     }
-    let n = run.state.nodes;
     Some(match name {
         "ra" => n.ra,
         "pca" => n.pca,
@@ -192,24 +202,83 @@ pub fn failure_node(name: &str, run: &ScmsRun) -> Option<NodeId> {
     })
 }
 
-/// The faults `actors.backend.failures` declares, resolved against `run`.
+/// Why a failure's node does not resolve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FailureNodeError {
+    /// `<provider>/...` names no provider of the deployment; the providers it has.
+    Provider(String),
+    /// The role or member is unknown.
+    Role,
+}
+
+/// The provider index and node a failure names, in the deployment `home` (provider 0's
+/// run) hosts.
+///
+/// An unqualified name (`crlg`) is the home provider's component, as before. A
+/// provider-qualified one (`provider-b/crlg`, `provider-b/pca-member-1`) names that
+/// provider's: in a multi-provider deployment each provider runs its own CRL Generator,
+/// CRL Store, MA, RA and ACA (WP-D1), and an outage of one provider's server delays only
+/// what that server carries.
 ///
 /// # Errors
-/// A conflict naming the failure: an unknown server, an unknown mode, a slow server with
-/// no extra time.
-pub fn backend_faults(s: &Scenario, run: &ScmsRun) -> Result<Vec<Fault>, EngineError> {
+/// [`FailureNodeError`] when the provider or role is unknown.
+pub fn failure_target(name: &str, home: &ScmsRun) -> Result<(usize, NodeId), FailureNodeError> {
+    let Some((provider, role)) = name.split_once('/') else {
+        return failure_node(name, home)
+            .map(|n| (0, n))
+            .ok_or(FailureNodeError::Role);
+    };
+    let d = &home.state.deployment;
+    let k = d
+        .providers
+        .iter()
+        .position(|p| p.name == provider)
+        .ok_or_else(|| {
+            FailureNodeError::Provider(
+                d.providers
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
+        })?;
+    let nodes = if k == 0 {
+        home.state.nodes
+    } else {
+        d.nodes(k).online
+    };
+    role_node(role, &nodes, home)
+        .map(|n| (k, n))
+        .ok_or(FailureNodeError::Role)
+}
+
+/// The faults `actors.backend.failures` declares, resolved against the deployment `home`
+/// (provider 0's run) hosts, each with the index of the provider whose run hosts its node
+/// (the run that delivers to it, and so the one whose fault plan must hold it).
+///
+/// # Errors
+/// A conflict naming the failure: an unknown provider or server, an unknown mode, a slow
+/// server with no extra time.
+pub fn backend_faults(s: &Scenario, home: &ScmsRun) -> Result<Vec<(usize, Fault)>, EngineError> {
     let mut out = Vec::new();
     for (i, f) in s.actors.backend.failures.iter().enumerate() {
         let field = format!("actors.backend.failures[{i}]");
-        let node = failure_node(&f.node, run).ok_or_else(|| {
+        let (provider, node) = failure_target(&f.node, home).map_err(|e| {
             conflict(
                 &format!("{field}.node"),
-                format!(
-                    "'{}' is neither a backend role (ra, pca, la1, la2, ma, crlg, lop, \
-                     crl_store, crl_broadcast, eca, dcm) nor a member of a configured \
-                     committee (<role>-member-<k>, k below security.threshold's size)",
-                    f.node
-                ),
+                match e {
+                    FailureNodeError::Provider(names) => format!(
+                        "'{}' names no provider of this deployment; providers: {names}",
+                        f.node
+                    ),
+                    FailureNodeError::Role => format!(
+                        "'{}' is neither a backend role (ra, pca, la1, la2, ma, crlg, lop, \
+                         crl_store, crl_broadcast, eca, dcm) nor a member of a configured \
+                         committee (<role>-member-<k>, k below security.threshold's size), \
+                         optionally qualified by its provider (<provider>/<role>)",
+                        f.node
+                    ),
+                },
             )
         })?;
         let kind = match f.mode.as_str() {
@@ -238,12 +307,15 @@ pub fn backend_faults(s: &Scenario, run: &ScmsRun) -> Result<Vec<Fault>, EngineE
         let until = f
             .to_s
             .map_or(u64::MAX, |t| (t.max(0.0) * 1e9).round() as u64);
-        out.push(Fault {
-            node,
-            kind,
-            from,
-            until,
-        });
+        out.push((
+            provider,
+            Fault {
+                node,
+                kind,
+                from,
+                until,
+            },
+        ));
     }
     Ok(out)
 }
@@ -275,6 +347,20 @@ pub fn check(s: &Scenario) -> Result<(), EngineError> {
         threshold: t,
         ..v2xw_proto::ScmsParams::default()
     };
-    let run = ScmsRun::new(params).map_err(|e| conflict("actors.backend", e.to_string()))?;
+    // The scenario's own deployment, so a provider-qualified node resolves against the
+    // providers it runs; a deployment that does not load is refused by its own check.
+    let camp = s
+        .actors
+        .backend
+        .protocol
+        .clone()
+        .or_else(|| s.security.protocol.as_ref().map(|c| c.id.clone()))
+        .as_deref()
+        == Some(crate::phase2::CAMP_SCMS);
+    let run = match crate::phase2::deployment_of(s, camp) {
+        Ok(d) => ScmsRun::new_deployed(params, 0, d),
+        Err(_) => ScmsRun::new(params),
+    }
+    .map_err(|e| conflict("actors.backend", e.to_string()))?;
     backend_faults(s, &run).map(|_| ())
 }

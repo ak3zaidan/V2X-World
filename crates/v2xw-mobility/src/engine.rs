@@ -892,6 +892,14 @@ pub struct EngineParams {
     /// `traffic.standing_leader_stop`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub standing_leader_stop: bool,
+    /// Whether a trip enters the road already moving, at the highest speed it may safely
+    /// drive there (SUMO's `departSpeed="max"`): the lower of its desired speed on the
+    /// lane, the speed it can still stop from before the lane's end, and the speed that
+    /// keeps the IDM's desired gap to the vehicle ahead. Off, every trip departs at rest
+    /// (SUMO's default `departSpeed="0"`), which on a freeway puts a standing car mid-lane
+    /// on a 29 m/s road (live-scenarios finding 3). `traffic.depart_speed_max`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub depart_speed_max: bool,
     /// Whether the bends of a through lane's polyline are driven no faster than the
     /// turn-speed rule allows (`sqrt(turn_lateral_accel_mps2 · R)`, with R judged over the
     /// tightest [`EngineParams::turn_curve_window_m`] of the lane, 6 m when that is 0), as
@@ -1053,6 +1061,7 @@ impl Default for EngineParams {
             start_reaction_median_s: REACTION_MEDIAN_S,
             heavy_vehicle_gap_terms: false,
             standing_leader_stop: false,
+            depart_speed_max: false,
             lane_bend_speed: false,
             permitted_left_critical_headway_s:
                 crate::intersection::signal_fixed_time::HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S,
@@ -3673,6 +3682,12 @@ impl NativeMobility {
                 lc: crate::lanechange::lc2013::Lc2013State::default(),
             },
         );
+        if self.along_path() && self.params.depart_speed_max {
+            let v = self.depart_speed(world, id);
+            if let Some(a) = self.actors.get_mut(&id) {
+                a.speed_mps = v;
+            }
+        }
         self.next_seq = self.next_seq.max(trip.seq + 1);
         if at_speed {
             let v = self.insertion_speed(world, id);
@@ -3755,6 +3770,38 @@ impl NativeMobility {
             }
         }
         math::q3(v)
+    }
+
+    /// The speed a newly inserted vehicle departs at under `depart_at_speed`: its desired
+    /// speed on the lane (its own limit, and the slower lane or turn it anticipates),
+    /// capped by the speed it can stop from at its comfortable deceleration before the end
+    /// of the lane (a red signal there is not yet known), and by the speed that keeps the
+    /// IDM's desired gap `s0 + v T` to the vehicle ahead on the lane and lets it brake to
+    /// that vehicle's speed within the gap.
+    fn depart_speed(&self, world: &World, id: ActorId) -> f64 {
+        let Some(a) = self.actors.get(&id) else {
+            return 0.0;
+        };
+        let lane = world.lane(a.lane);
+        let b = a.driver.comfort_decel_mps2.max(0.1);
+        let mut v = a
+            .driver
+            .desired_speed_mps
+            .min(lane.speed_limit_mps * a.traits.speed_factor)
+            .min(self.anticipated_speed(world, a));
+        v = v.min((2.0 * b * (lane.length_m - a.s_m).max(0.0)).sqrt());
+        let s0 = a.driver.min_gap_m;
+        let t = a.driver.time_headway_s.max(0.1);
+        for o in self.actors.values() {
+            if o.id == id || o.lane != a.lane || o.s_m <= a.s_m {
+                continue;
+            }
+            let room = (o.s_m - o.class.spec().length_m - a.s_m - s0).max(0.0);
+            v = v
+                .min(room / t)
+                .min((o.speed_mps * o.speed_mps + 2.0 * b * room).sqrt());
+        }
+        v.max(0.0)
     }
 
     /// Whether `follower` can take a vehicle standing `gap_m` ahead of it without braking
@@ -9267,6 +9314,53 @@ mod tests {
             }
         }
         panic!("the grid has no routable pair of long driving lanes");
+    }
+
+    /// `depart_speed_max` (SUMO `departSpeed="max"`): a trip enters at its desired speed
+    /// when the lane ahead is clear, slower behind a vehicle it would otherwise crowd
+    /// (keeping the IDM's `s0 + v T`), never faster than it could stop from before the
+    /// lane's end; off, every trip departs at rest (live-scenarios finding 3).
+    #[test]
+    fn a_trip_departs_at_the_highest_safe_speed_when_asked() {
+        let world = grid(false);
+        let rng = RngRegistry::new(29);
+        let (origin, destination) = long_lane_and_destination(&world);
+        let lane = world.lane(origin);
+        let trip_at = |s_m: f64, seq: u64| TripRequest {
+            seq,
+            t: 0,
+            origin,
+            origin_s_m: s_m,
+            destination,
+            class: VehicleClass::Passenger,
+            desired_speed_mps: 13.89,
+        };
+        let speeds = |depart_speed_max: bool| {
+            let params = EngineParams {
+                depart_speed_max,
+                ..EngineParams::default()
+            };
+            let mut engine = engine_on(&world, params, &rng);
+            let lead = engine.insert_trip(&world, &trip_at(60.0, 0), 0).expect("lead");
+            let body = VehicleClass::Passenger.spec().length_m;
+            let back = engine
+                .insert_trip(&world, &trip_at(60.0 - body - 8.0, 1), 0)
+                .expect("behind");
+            let st = engine.longitudinal_states();
+            let v = |id| st.iter().find(|x| x.0 == id).map(|x| x.3).unwrap();
+            let d = engine.actors[&back].driver;
+            (v(lead), v(back), d, engine.actors[&lead].traits.speed_factor)
+        };
+        let (lead0, back0, _, _) = speeds(false);
+        assert_eq!((lead0, back0), (0.0, 0.0), "off: every trip departs at rest");
+        let (lead, back, d, factor) = speeds(true);
+        let cap = 13.89_f64.min(lane.speed_limit_mps * factor);
+        let stop = (2.0 * d.comfort_decel_mps2 * (lane.length_m - 60.0)).sqrt();
+        assert!(lead > 0.5 * cap.min(stop), "the clear lane's trip departs moving: {lead}");
+        assert!(lead <= cap.min(stop) + 1e-9, "{lead} over min({cap}, {stop})");
+        let room = 8.0 - d.min_gap_m;
+        assert!(back <= room / d.time_headway_s + 1e-9, "{back} crowds the leader");
+        assert!(back < lead, "the trip 8 m behind departs slower: {back} vs {lead}");
     }
 
     #[test]

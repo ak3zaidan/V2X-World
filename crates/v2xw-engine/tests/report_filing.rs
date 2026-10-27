@@ -122,3 +122,38 @@ fn the_research_setting_keeps_the_modelled_path_and_files_nothing_away() {
         "no unmappable report went out modelled"
     );
 }
+
+/// R-KEMFILE (docs/validation/live-scms-2026-10-25.md, finding 2): a post-quantum KEM
+/// turns the 1609.2.1 PDU layer off, and `Phase2::real_mbr` returned `Off` before the US
+/// profile's filing gates, so every detection was uploaded on the modelled path. The
+/// SM-MBR filing rules (a v1.1 subtype must map the checks; no roadside reporter) do not
+/// depend on the encryption: on the 180 s live KEM variant (ConstPos from 60 s) the
+/// ML-KEM-768 run must refuse what the US profile refuses. Before the fix its
+/// `reports_not_filed` was 0 (255 in the classical base). 100 s is too short: the base
+/// binary sent one report by then.
+#[test]
+fn a_post_quantum_kem_keeps_the_us_filing_rules() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let s = Scenario::load(root.join("scenarios/live-scms/kem.yaml")).expect("loads");
+    assert_eq!(s.security.kem, "ml-kem-768");
+    let mut engine = Engine::build(s, "").expect("builds");
+    let r = engine
+        .run(&mut v2xw_engine::NullRecorder::new())
+        .expect("runs");
+    let p = &r.phase2;
+    println!(
+        "kem: sent {} received {} not filed {} {:?}",
+        p.reports_sent, p.reports_received, p.reports_not_filed, p.reports_not_filed_by
+    );
+    assert!(
+        p.reports_not_filed > 0,
+        "under ML-KEM-768 no detection was refused: the US filing gates were skipped"
+    );
+    assert!(
+        p.reports_not_filed_by
+            .keys()
+            .any(|k| k.contains("subtype") || k.contains("roadside")),
+        "{:?}",
+        p.reports_not_filed_by
+    );
+}

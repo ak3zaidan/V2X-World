@@ -110,8 +110,31 @@ pub struct RxFrame {
     /// the frame carries its SPDU (the certificate is in the bytes) or when the engine
     /// has none to attach.
     pub signer_certificate: Option<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
+    /// The validity period (`from`, `to`, on the simulation timeline) of the certificate
+    /// the sender really signed under, when it is not the one the frame's bytes name: an
+    /// attacker signing under a genuine certificate it holds outside that certificate's
+    /// validity (`ExpiredCert`: one that has expired; `NotYetValid`: one not yet valid).
+    /// Such a signature verifies; what refuses the frame is the IEEE 1609.2 §5.2 rule that
+    /// `generationTime` lie inside the signer's validity period, which a receiver checks
+    /// from the certificate, before any signature. The simulation does not mint the
+    /// out-of-window certificate, so its period travels here; a receiver reads it only as
+    /// that certificate's `validityPeriod` ([`frame_outside_validity`]). `None` for every
+    /// other frame.
+    pub signer_validity: Option<(SimTime, SimTime)>,
     /// A BSM's `secMark` and `accelSet` (default for anything else).
     pub bsm: crate::bsm_timing::BsmExtras,
+}
+
+/// The validity period a frame's signer certificate states, when the frame's
+/// `generationTime` lies outside it: the IEEE 1609.2 §5.2 receiver rule
+/// ([`crate::rxval::RxReject::GenerationTimeOutsideValidity`]) for the certificate of
+/// [`RxFrame::signer_validity`]. `None` when the frame names no such certificate or its
+/// generation time is inside the period.
+#[must_use]
+pub fn frame_outside_validity(frame: &RxFrame) -> Option<(SimTime, SimTime)> {
+    frame
+        .signer_validity
+        .filter(|(from, to)| !(*from..=*to).contains(&frame.claimed_generation_time))
 }
 
 /// A message this node received and has an opinion about — the
@@ -139,6 +162,11 @@ pub struct VerifiedMessage {
     pub claimed_heading_rad: f64,
     /// What this node concluded about the signature.
     pub verification: VerificationState,
+    /// The signer certificate's validity period (`from`, `to`), when this node refused
+    /// the message because its `generationTime` lies outside it (IEEE 1609.2 §5.2;
+    /// [`frame_outside_validity`]): the reason a misbehaviour detector reports as a
+    /// certificate-validity failure rather than a bad signature. `None` otherwise.
+    pub outside_validity: Option<(SimTime, SimTime)>,
     /// The facilities-layer payload the SPDU carried, when the node's applications read
     /// the message's content ([`crate::apps`]).
     pub payload: Option<std::sync::Arc<[u8]>>,
@@ -602,7 +630,7 @@ impl ObuRuntime {
             || profile
                 .hsm
                 .ops
-                .get(config.verify_op)
+                .get(profile.priced_op(config.verify_op))
                 .and_then(crate::profile::HsmOp::range_us)
                 .is_some();
         let stores = Stores {
@@ -1766,6 +1794,13 @@ impl ObuRuntime {
     fn classify(&mut self, ctx: &mut dyn NodeCtx, frame: &RxFrame) -> VerificationState {
         // A refusal is this frame's only if this judgement makes it.
         let _ = self.security.take_last_refusal();
+        // The SPDU-level validity rule reads the certificate alone and costs nothing, so
+        // it refuses before any signature is checked (crate::rxval, `validate_inner`).
+        if frame_outside_validity(frame).is_some() {
+            self.security
+                .note_refusal(crate::rxval::RxReject::GenerationTimeOutsideValidity);
+            return VerificationState::Invalid;
+        }
         // The revocation check reads the certificate's own `linkageData` (iCert and the
         // linkage value), out of the certificate the signature was checked against: the
         // field a linked CRL entry is matched against [1609.2 §5.1.3.4]. Nothing else
@@ -1941,6 +1976,8 @@ impl ObuRuntime {
             claimed_heading_rad: frame.claimed_heading_rad,
             bsm: frame.bsm,
             verification,
+            outside_validity: frame_outside_validity(frame)
+                .filter(|_| verification == VerificationState::Invalid),
             // The facilities payload, out of the SPDU as it arrived, for the messages an
             // application reads beyond the claims above (`crate::apps`). Only when the
             // node runs applications: the parse is not free and nothing else reads it.
@@ -2190,6 +2227,7 @@ impl ObuRuntime {
                     claimed_generation_time: r.1,
                     full_certificate,
                     signature_valid: true,
+                    signer_validity: None,
                     spdu: None,
                     signer_certificate: None,
                     bsm: bsm_fields,

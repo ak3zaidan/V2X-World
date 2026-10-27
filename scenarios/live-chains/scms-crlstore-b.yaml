@@ -1,0 +1,10 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains scms-crlstore-b
+  base: scms-base.yaml
+  description: >-
+    Provider-b's CRL store (where its CRL generator publishes, and every RA reads its list from) offline from 60 s to 200 s.
+actors:
+  backend:
+    failures:
+      - {node: provider-b/crl_store, mode: offline, from_s: 60.0, to_s: 200.0}

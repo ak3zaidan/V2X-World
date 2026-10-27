@@ -1,0 +1,7 @@
+schema: v2xw/scenario/1
+meta:
+  name: live-chains r160-c2sw-high
+  base: r160-c2sw.yaml
+  description: >-
+    r160-c2sw at the high compute tier: the dual-core CPU verifies on both cores.
+nodes: {default_obu: obu/unex-obu-301-craton2-software, compute_tier: high}

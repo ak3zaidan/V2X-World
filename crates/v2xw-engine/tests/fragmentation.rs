@@ -452,3 +452,43 @@ fn padding_without_a_splitting_fragmenter_is_refused() {
         "{errors:#?}"
     );
 }
+
+/// A certificate-bearing SPDU split by `fragmenter/generic-sdu` counts its certificate
+/// once: each piece's `cert_bytes` is its share and never exceeds the piece's envelope, so
+/// `Σ cert ≤ Σ envelope` per message type (live-scenarios finding 1: every piece used to
+/// repeat the whole hybrid certificate, `cert_bytes_share{psm}` 1.37 on matrix/pq-hybrid).
+#[test]
+fn a_split_certificate_is_counted_once_across_its_pieces() {
+    let mut s = grid(4.0);
+    s.security.signature = "hybrid-falcon512-ecdsa-p256".to_string();
+    // The grid's Craton2 publishes no Falcon; the matrix/pq-hybrid run the finding came
+    // from uses the generic SoC, which publishes both halves.
+    s.nodes.default_obu = "obu/generic-automotive-soc-no-hsm".to_string();
+    s.net.fragmenter = fragmenter(v2xw_net::FRAGMENTER_GENERIC_ID, serde_json::json!({}));
+    let (report, recorder) = run(s);
+    assert!(report.sdus_fragmented > 0, "nothing was split");
+    let l = ledger(&recorder);
+    let mut sums: BTreeMap<String, (u64, u64)> = BTreeMap::new();
+    let mut groups: BTreeMap<(u32, u64), u64> = BTreeMap::new();
+    let mut split_with_cert = 0;
+    for t in &l.tx {
+        let (Some(e), Some(c)) = (t.envelope_bytes, t.cert_bytes) else {
+            continue;
+        };
+        assert!(c <= e, "a frame's certificate octets {c} exceed its envelope {e}: {t:?}");
+        let s = sums.entry(t.msg_type.clone().unwrap_or_default()).or_default();
+        s.0 += c;
+        s.1 += e;
+        if c > 0 && t.frag_header_bytes.unwrap_or(0) > 0 {
+            split_with_cert += 1;
+            *groups.entry((t.node.index(), t.msg.unwrap_or(0))).or_default() += c;
+        }
+    }
+    assert!(split_with_cert > 0, "no certificate-bearing SPDU was split");
+    for (ty, (c, e)) in &sums {
+        assert!(c <= e, "{ty}: Σ cert {c} > Σ envelope {e}");
+    }
+    // Every split certificate sums back to one hybrid certificate's size.
+    let sizes: BTreeSet<u64> = groups.values().copied().collect();
+    assert_eq!(sizes.len(), 1, "split certificates sum to different sizes: {sizes:?}");
+}

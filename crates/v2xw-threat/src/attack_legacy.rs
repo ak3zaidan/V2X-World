@@ -360,12 +360,6 @@ impl LegacyAttacker {
     ) -> (f64, f64, f64, f64) {
         let m = &self.params.magnitudes;
         let k = self.params.k();
-        let scale = self
-            .params
-            .magnitude_scale
-            .get(&self.params.kind)
-            .copied()
-            .unwrap_or(1.0);
         let t_s = ns_to_secs(t);
         let t_int = t / NS_PER_S;
         let (mx, my, mspeed, mheading) =
@@ -404,14 +398,18 @@ impl LegacyAttacker {
             AttackKind::ConstSpeedOffset => cs = mspeed + m.const_speed_offset_mps * k,
             AttackKind::RandomSpeed => {
                 // The draw is unconditional, so the stream position never depends on the
-                // scale; at scale 1.0 the claimed speed is the historic absolute value.
+                // dial; at k = 1 the claimed speed is the historic absolute value. The lie
+                // (the draw's distance from the true speed) is × k, intensity included,
+                // as the card states for every magnitude: the legacy `r.uniform(0, 40)`
+                // read only the per-type scale, so `attack_intensity` was a dead dial on
+                // this type (live-atk 2026-10-25 F5: intensity 3 still drew ≤ 40 m/s).
                 let mut rng = ctx.rng(RngDomain::Attack, entity);
                 let u = rng.uniform(0.0, m.random_speed_max_mps);
                 drop(rng);
-                cs = if scale == 1.0 {
+                cs = if k == 1.0 {
                     u
                 } else {
-                    (mspeed + (u - mspeed) * scale).max(0.0)
+                    (mspeed + (u - mspeed) * k).max(0.0)
                 };
             }
             AttackKind::StopAndGo => {
@@ -420,10 +418,11 @@ impl LegacyAttacker {
                 } else {
                     m.stop_and_go_speed_mps
                 };
-                cs = if scale == 1.0 {
+                // × k, intensity included, as RandomSpeed above (live-atk F5).
+                cs = if k == 1.0 {
                     go
                 } else {
-                    (mspeed + (go - mspeed) * scale).max(0.0)
+                    (mspeed + (go - mspeed) * k).max(0.0)
                 };
             }
             AttackKind::ReversedHeading => ch = wrap_heading(mheading + core::f64::consts::PI),

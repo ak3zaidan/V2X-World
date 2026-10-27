@@ -248,6 +248,11 @@ pub struct Traffic {
     /// with its acceleration, low for vans and trucks) arrives too late. Unset is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub standing_leader_stop: Option<bool>,
+    /// Whether a trip enters the road already moving, at the highest safe speed there
+    /// (SUMO's `departSpeed="max"`) instead of at rest (SUMO's default, `departSpeed="0"`):
+    /// a freeway entry merges at speed. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depart_speed_max: Option<bool>,
     /// Whether the bends of a through lane's polyline are driven no faster than the
     /// turn-speed rule allows (`turn_lateral_accel_mps2` over the tightest
     /// `turn_curve_window_m`, 6 m when unset), as a junction connector is. Unset is off.
@@ -377,6 +382,7 @@ impl Default for Traffic {
             impatience_foe_braking: None,
             permissive_sneakers: None,
             standing_leader_stop: None,
+            depart_speed_max: None,
             lane_bend_speed: None,
             kerbside: None,
             depart_at_speed: None,
@@ -3196,7 +3202,9 @@ impl ThresholdSpec {
 #[serde(deny_unknown_fields)]
 pub struct BackendFailureSpec {
     /// The server: a role (`pca`, `la1`, `la2`, `ma`, `crlg`, `ra`, …) or a committee
-    /// member, `<role>-member-<k>` (`pca-member-0`, `linkage-member-2`, `crl-member-1`).
+    /// member, `<role>-member-<k>` (`pca-member-0`, `linkage-member-2`, `crl-member-1`);
+    /// the home provider's, unless qualified by its provider, `<provider>/<role>`
+    /// (`provider-b/crlg`).
     pub node: String,
     /// `offline`, `slow` or `malicious`.
     pub mode: String,

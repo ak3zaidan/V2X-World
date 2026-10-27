@@ -1533,8 +1533,10 @@ pub struct Phase2Report {
     /// Sybil ghost frames put on the air: each a genuine SPDU signed under one of the
     /// attacker's concurrent pseudonyms, with its certificate attached.
     pub ghost_frames: u64,
-    /// Delivered messages the local detectors did not check because they state nothing
-    /// about their sender's motion: relayed reports, CRLs, P2PCD responses, WSAs.
+    /// Delivered messages the local detectors did not check: ones that state nothing
+    /// about their sender's motion (relayed reports, CRLs, P2PCD responses, WSAs), ones
+    /// from a revoked signer (unless `judge_revoked`), and ones the verification policy
+    /// delivered unverified.
     pub messages_not_checked: u64,
     /// How many messages the local detectors checked.
     pub messages_checked: u64,
@@ -2711,18 +2713,31 @@ impl Phase2 {
             )
         })?;
         apply_backend_topology(scenario, &mut scms)?;
+        // Each failure goes to the run of the provider that hosts its node: that run
+        // delivers to the node (its own flows, and the MA-to-MA reports other providers
+        // share with it), so its fault plan is the one that must hold them. Before this a
+        // failure could only name the home provider's servers.
         let faults = crate::crypto_config::backend_faults(scenario, &scms)?;
-        scms.set_faults(faults);
+        let fault_of = |k: usize| -> Vec<v2xw_proto::fault::Fault> {
+            faults
+                .iter()
+                .filter(|(p, _)| *p == k)
+                .map(|(_, f)| *f)
+                .collect()
+        };
+        scms.set_faults(fault_of(0));
         // One run per provider (WP-D1): every other provider's run is built from the
         // home one, on the same CTL, electors and clock, under its own PKI and seed.
         let mut runs = Vec::with_capacity(scms.state.deployment.providers.len());
         for k in 1..scms.state.deployment.providers.len() {
-            runs.push(ScmsRun::new_peer(&scms, k).map_err(|e| {
+            let mut peer = ScmsRun::new_peer(&scms, k).map_err(|e| {
                 conflict(
                     "security.scms.deployment",
                     format!("provider {k}'s backend refused to start: {e}"),
                 )
-            })?);
+            })?;
+            peer.set_faults(fault_of(k));
+            runs.push(peer);
         }
         runs.insert(0, scms);
         // Per provider (WP-D1): its own CRL publication rule, and its own MA mode when
@@ -4239,6 +4254,20 @@ impl Phase2 {
                 self.report.messages_not_checked += 1;
                 continue;
             }
+            // A message this node's policy delivered without checking its signature is
+            // not judged: misbehaviour detection reads authenticated BSMs ([SM-MBR]
+            // 2.3.1.2.1: the evidence is the signed BSMs, which the reporter has checked),
+            // and the suite zeroes every check of an unverified message anyway. Before, it
+            // was still fed to the detector and counted as checked: under on-demand
+            // verification `messages_checked` rose 45,071 -> 49,194 while 97 % of
+            // receptions went unverified (live-scms VOD), and the trackers' state moved on
+            // content nobody had authenticated. A compromised unit still keeps what it
+            // heard (its forgeries frame a vehicle it heard, verified or not).
+            let unverified = m.verification == v2xw_node::stores::VerificationState::Unverified;
+            if unverified && !compromised {
+                self.report.messages_not_checked += 1;
+                continue;
+            }
             if self.us_profile.is_none()
                 && let Some(last) = self.checked_at.get(&(node, key))
                 && m.received_at
@@ -4250,7 +4279,7 @@ impl Phase2 {
             }
             // The rate-limit stamp is read only by the research suite's 1 s rate (above);
             // the US profile checks every message and never reads it, so it is not kept.
-            if self.us_profile.is_none() {
+            if self.us_profile.is_none() && !unverified {
                 self.checked_at.insert((node, key), m.received_at);
             }
             let claimed = m.claimed_pos.unwrap_or(Vec3::ZERO);
@@ -4270,6 +4299,10 @@ impl Phase2 {
             } else {
                 LEGACY_CONFIDENCE_M
             };
+            // The research suite reads a validity refusal as such (live-atk F4); the US
+            // profile checks only verified BSM pairs and has no certificate subtype, so it
+            // sees the refusal as before.
+            let research_validity = m.outside_validity.filter(|_| self.us_profile.is_none());
             let observed = ObservedMessage {
                 bsm: m.bsm,
                 signer: key,
@@ -4285,8 +4318,10 @@ impl Phase2 {
                 claimed_heading_rad: m.claimed_heading_rad,
                 claimed_pos_confidence_m: confidence_m,
                 repetitions: 1,
-                cert_valid_from: 0,
-                cert_valid_to: SimTime::MAX,
+                // The signer certificate's validity period, when the receiver refused the
+                // message for lying outside it; every other message passed that rule.
+                cert_valid_from: research_validity.map_or(0, |w| w.0),
+                cert_valid_to: research_validity.map_or(SimTime::MAX, |w| w.1),
                 // A PSM is a vulnerable road user's own declaration (J2735 PSM; a CAM's
                 // stationType does the same in Europe): the suite then drops the vehicle
                 // kinematic and map checks a pedestrian would fail honestly.
@@ -4297,6 +4332,16 @@ impl Phase2 {
                 },
                 verification: match m.verification {
                     v2xw_node::stores::VerificationState::Verified => VerificationState::Valid,
+                    // Refused by the generation-time-in-validity rule alone: a genuine
+                    // certificate used out of its period, whose signature is good. The
+                    // research suite judges it as the legacy corpus does (signature
+                    // valid, certificate out of window), so its `certValidity` check
+                    // names the failure; it is not a bad signature.
+                    v2xw_node::stores::VerificationState::Invalid
+                        if research_validity.is_some() =>
+                    {
+                        VerificationState::Valid
+                    }
                     v2xw_node::stores::VerificationState::Invalid => {
                         VerificationState::BadSignature
                     }
@@ -4308,6 +4353,10 @@ impl Phase2 {
             };
             if compromised {
                 heard.push(observed.clone());
+            }
+            if unverified {
+                self.report.messages_not_checked += 1;
+                continue;
             }
             // The BSMs this judgement is about, named before the suite moves on to `m`.
             let judged = detector.judged_times(&observed);
@@ -5290,9 +5339,15 @@ impl Phase2 {
         r: &MisbehaviourReport,
         location: v2xw_sec::envelope::GenerationLocation,
     ) -> MbrBuild {
-        if self.etsi.is_some() || self.home().state.pki.is_none() {
+        if self.etsi.is_some() {
             return MbrBuild::Off;
         }
+        // The two filing rules of the US profile come before the PDU layer's check
+        // (R-KEMFILE, R-PQUNSEC): neither depends on how the report would be encrypted or
+        // whether its bytes are built. Under a post-quantum KEM (which turns the
+        // 1609.2.1 PDU layer off) a detection no SM-MBR v1.1 subtype maps, or a roadside
+        // unit's own detection, had nothing to file before and still has nothing: before,
+        // `Off` came first and 255 such detections were uploaded on the modelled path.
         if r.reporter.is_some_and(|n| self.rsu_spec_of(n).is_some()) {
             // R-UNSEC: the US profile has no roadside reporter, so a unit's own detection
             // is not filed (`Phase2::files_report`; sized-only on the modelled path only
@@ -5313,6 +5368,10 @@ impl Phase2 {
         let Some(subtype) = r.reason_codes.iter().find_map(|c| us_subtype(c, us)) else {
             return MbrBuild::Unmapped;
         };
+        if self.home().state.pki.is_none() {
+            // No PDU layer: the report is fileable and travels on the modelled path.
+            return MbrBuild::Off;
+        }
         if !r.reporter.is_some_and(|n| {
             self.run_of(device_of(n))
                 .state
@@ -9080,6 +9139,123 @@ mod join_crl_tests {
             p.nodes[&early].crl_serial, s0,
             "an earlier joiner is untouched"
         );
+    }
+}
+
+#[cfg(test)]
+mod provider_failure_tests {
+    use super::*;
+
+    fn two_providers(failures: &[(&str, f64, f64)]) -> Phase2 {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        s.actors.backend.failures = failures
+            .iter()
+            .map(|(node, from, to)| crate::scenario::schema::BackendFailureSpec {
+                node: (*node).to_string(),
+                mode: "offline".to_string(),
+                from_s: *from,
+                to_s: Some(*to),
+                extra_ms: None,
+            })
+            .collect();
+        assert!(
+            crate::crypto_config::check(&s).is_ok(),
+            "the loader accepts {failures:?}"
+        );
+        let engine = crate::Engine::build(s, "").expect("builds");
+        Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend")
+    }
+
+    /// Live-chains finding 5 (docs/validation/live-chains-2026-10-25.md): a backend
+    /// failure could name only the home provider's servers, so an outage of the CRL
+    /// Generator or CRL Store that held a revocation (provider-b's, in the
+    /// credential-lifecycle runs) could not be declared, and the CRL-outage chain was
+    /// never tested. A provider-qualified node (`provider-b/crl_store`) takes down that
+    /// provider's server in that provider's run: its CRL Generator's renewal at `nextCrl`
+    /// waits in the Generator's queue (held, not dropped) until the store is back, the
+    /// list every RA serves (and so every device CRL fetch) carries provider-b's new list
+    /// only from then, and the home provider's store and list are untouched. Fault (the
+    /// first form, `failure_node` on the home run only): the loader refuses the name.
+    #[test]
+    fn a_provider_qualified_crl_store_outage_holds_that_providers_list_from_every_fetch() {
+        let week = 7.0 * 86_400.0;
+        let (from, to) = (week - 60.0, week + 600.0);
+        let mut p = two_providers(&[("provider-b/crl_store", from, to)]);
+        assert_eq!(p.runs.len(), 2, "us-production-2025: two providers");
+        let b_store = p.home().state.deployment.nodes(1).online.crl_store;
+        assert!(p.runs[0].state.faults.faults.is_empty(), "the home run is up");
+        assert_eq!(p.runs[1].state.faults.faults.len(), 1);
+        assert_eq!(p.runs[1].state.faults.faults[0].node, b_store);
+        let next_crl = p.runs[1].state.params.crl.next_crl;
+        assert_eq!(next_crl.as_secs_f64(), week, "the cited weekly nextCrl");
+        let store = |p: &Phase2, k: usize| p.runs[k].state.crl_store.versions;
+        let generated = |p: &Phase2, k: usize| p.runs[k].state.crlg.versions;
+        let served_serial = |p: &Phase2, k: usize| {
+            p.visible_versions(0)
+                .iter()
+                .find(|(j, _)| *j == k)
+                .map_or(0, |(_, v)| v.serial)
+        };
+        let s = |t: f64| (t * 1e9) as SimTime;
+        let (a0, b0, g0) = (store(&p, 0), store(&p, 1), generated(&p, 1));
+        // The t0 lists are served through `prerun_crl`, not the feeds; put provider-b's
+        // in its feed (as the CRL-composition test above does) so "the old list" is the
+        // one an RA serves, not an empty feed's 0.
+        p.crl_feeds[1].push(CrlVersion {
+            at: 0,
+            version: 0,
+            entries: Vec::new(),
+            secured: Vec::new(),
+            serial: b0,
+        });
+        p.advance(s(week + 120.0));
+        assert_eq!(generated(&p, 1), g0 + 1, "provider-b renewed its list at nextCrl");
+        assert_eq!(store(&p, 1), b0, "provider-b's store is down: nothing landed");
+        assert!(p.runs[1].state.faults.held >= 1, "the publication is held, not lost");
+        assert_eq!(p.runs[1].state.faults.dropped, 0);
+        assert_eq!(store(&p, 0), a0 + 1, "the home store published its renewal");
+        assert_eq!(p.runs[0].state.faults.held, 0);
+        assert_eq!(
+            served_serial(&p, 1),
+            b0,
+            "the RA serves provider-b's old list while its store is down"
+        );
+        p.advance(s(to + 300.0));
+        assert_eq!(store(&p, 1), b0 + 1, "delivered on the retry after the outage");
+        assert_eq!(served_serial(&p, 1), b0 + 1, "every RA serves it from then");
+        let at = p.crl_feeds[1].last().expect("a version").at;
+        assert!(at >= s(to), "provider-b's list is served from the store's return");
+    }
+
+    /// The unqualified name keeps its meaning (the home provider's server), and a
+    /// provider the deployment does not have is refused by name.
+    #[test]
+    fn an_unqualified_failure_is_the_home_providers_and_an_unknown_provider_is_refused() {
+        let p = two_providers(&[("crlg", 0.0, 10.0), ("provider-a/ma", 0.0, 10.0)]);
+        let home = p.home().state.nodes;
+        let f = &p.runs[0].state.faults.faults;
+        assert_eq!((f[0].node, f[1].node), (home.crlg, home.ma));
+        assert!(p.runs[1].state.faults.faults.is_empty());
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.actors.backend.failures = vec![crate::scenario::schema::BackendFailureSpec {
+            node: "provider-z/crlg".to_string(),
+            mode: "offline".to_string(),
+            from_s: 0.0,
+            to_s: None,
+            extra_ms: None,
+        }];
+        let e = crate::crypto_config::check(&s).expect_err("no provider-z").to_string();
+        assert!(e.contains("provider-a, provider-b"), "{e}");
     }
 }
 

@@ -1,0 +1,10 @@
+# One RandomSpeed attacker alone (cat2's actor 33) from 20 s, suite L of base.yaml: every
+# fired motion check in the run is about it (B0L: 2 honest verdicts in 150 s), which is
+# what the F6 accel-per-PSI row reads.
+schema: v2xw/scenario/1
+meta: {base: base.yaml, name: live-atk RandomSpeed alone, suite L}
+threats:
+  attackers:
+    - id: threat/attacker/legacy/RandomSpeed
+      actor_ids: [33]
+      schedule: {from_s: 20.0, to_s: 150.0}

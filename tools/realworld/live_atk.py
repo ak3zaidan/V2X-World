@@ -11,7 +11,12 @@ against rows written before the runs (docs/validation/live-atk-2026-10-25.md).
 proto.revocation) and the run-lock wrapper's cost line. Measures:
 
 - `p2.<key>`: every scalar of the report's phase-2 section; `p2.verdicts.<detector>`;
-  `p2.not_filed_unmapped` (reports a US device could not encode as an SM-MBR subtype).
+  `p2.not_filed_unmapped` (reports a US device could not encode as an SM-MBR subtype);
+  `p2.accel_per_psi` (fired implausibleAcceleration / fired positionSpeedInconsistency).
+  For a RandomSpeed sender (U[0, 40] each BSM) checked at 0.9 to 1 s against the newest
+  fix at least 1.5 s old (Δt 1.8 to 2 s), with the two-check streak gate, a Monte Carlo
+  of the legacy formulas gives 0.026 to 0.044 accel firings per check and a ratio of
+  0.05 to 0.45 to PSI over true speeds 0 to 12 m/s and confidences 3 to 5 m.
 - `ao.*`: from the per-attacker outcomes: `ao.n`, `ao.reported`, `ao.decided`,
   `ao.reported_share`, `ao.decided_share`, `ao.ttd_med_s` / `ao.ttd_max_s` (onset to the
   first report), `ao.ttr_med_s` / `ao.ttr_max_s` (onset to the MA's decision),
@@ -98,8 +103,14 @@ def derive(raw):
     for k, v in p.items():
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             d['p2.' + k] = v
-    for k, v in (p.get('verdicts_by_detector') or {}).items():
+    vb = p.get('verdicts_by_detector') or {}
+    for k, v in vb.items():
         d['p2.verdicts.' + k] = v
+    # Fired implausibleAcceleration per fired positionSpeedInconsistency: on a RandomSpeed
+    # sender both are read off the same checks, so the ratio needs no count of checks
+    # (live-atk F6; the model is tools/realworld/live_atk.py's docstring, measure list).
+    if vb.get('positionSpeedInconsistency'):
+        d['p2.accel_per_psi'] = (vb.get('implausibleAcceleration') or 0) / vb['positionSpeedInconsistency']
     d['p2.not_filed_unmapped'] = sum(
         v for k, v in (p.get('reports_not_filed_by') or {}).items() if 'subtype' in k)
     end_ns = rep.get('end_ns') or 0
@@ -225,7 +236,7 @@ def fault(raw, name, row):
             rec['ma.decision'].append({'t': 0, 'subject': hon, 'decision': 'revoke'})
     elif name == 'attack-off':  # the attack is never put on the air
         for k in list(p):
-            if isinstance(p[k], (int, float)) and ('attack' in k or 'falsified' in k):
+            if isinstance(p[k], (int, float)) and ('attack' in k or 'falsified' in k or 'ghost' in k):
                 p[k] = 0
         p['attacker_outcomes'] = []
         p['verdicts_by_detector'] = {}

@@ -125,6 +125,29 @@ runs:
   FS0:
     scenario: scenarios/live-rsu/scms-base.yaml
     note: S0 on the fixed binary (this branch, opt-level 2 debug build)
+  # 2026-10-26 (part 2). Two binaries, two runs folders: the rows of the 10-25 fix (FS*, Sout,
+  # the 240 s pair) compare the 486c8cba release with the opt-level 2 build of 4399f8f8 (the
+  # fix alone); every other pending row is judged on the 938fb16a release (which carries the
+  # fix), its bases G0, Gc0 and S0 re-run on it. D* runs are the double-booking fix of this
+  # part (opt-level 2 debug build of this branch) against the 938fb16a release.
+  S240:
+    scenario: scenarios/live-rsu/scms-lat2000-bc3-240.yaml
+    note: 2,000 ms backhaul, 3 s carousel, 240 s, on the 486c8cba release (before the fix)
+  FS240:
+    scenario: scenarios/live-rsu/scms-lat2000-bc3-240.yaml
+    note: S240 on the 4399f8f8 build (the fix alone)
+  S240bc4:
+    scenario: scenarios/live-rsu/scms-lat2000-bc4-240.yaml
+    note: S240 with the carousel at 4 s (lists 30 s apart are not aligned with it), 486c8cba release
+  FS240bc4:
+    scenario: scenarios/live-rsu/scms-lat2000-bc4-240.yaml
+    note: S240bc4 on the 4399f8f8 build (the fix alone)
+  DS0:
+    scenario: scenarios/live-rsu/scms-base.yaml
+    note: S0 with each list booked once on each unit's line (this branch)
+  DSlat2000bc3:
+    scenario: scenarios/live-rsu/scms-lat2000-bc3.yaml
+    note: Slat2000bc3 with each list booked once on each unit's line (this branch)
 rows:
 - id: LR.G.spat-rate-min
   base: G0
@@ -197,8 +220,11 @@ rows:
   source: fewer stop-and-go cycles burn less (Treiber and Kesting 2014, about 4 % fuel; Tielert et al.
     2012 ITST)
   measured: 11.1701 -> 11.1177
-  verdict: open
-  note: down 0.47 % on one seed, under the 0.5 % floor; the seed-2/3 pairs were not run in the window
+  verdict: wrong-expectation
+  note: 'down 0.47 % on one seed, under the 0.5 % floor (10-25). 2026-10-26: the measure, not the engine - the
+    energy metrics are cumulative and the reader summed every window''s running ratio; the run''s own ratio
+    (final sample) fell 1.2 % on this seed and 2.3 % on seed 2 (LR.G.c1.fuel-final*), rose 0.9 % on the
+    congested seed 3 (open)'
 - id: LR.G.c1.co2
   base: Gc0
   variant: G0
@@ -208,10 +234,11 @@ rows:
   min_change: 0.005
   source: CO2 is proportional to fuel under HBEFA (as LR.G.c1.fuel)
   measured: 191.439 -> 194.177
-  verdict: open
-  note: 'CO2 per km rose 1.4 % while fuel per km fell 0.5 % in the same passenger class: CO2 is fuel x
-    a per-fuel factor under HBEFA, so this needs the diesel/petrol/EV split of the two runs (possible
-    energy-layer accounting issue); owed'
+  verdict: wrong-expectation
+  note: 'CO2 per km rose 1.4 % while fuel per km fell 0.5 % in the same passenger class (10-25). 2026-10-26:
+    no accounting issue. co2_per_km divides by every km (EVs included), fuel_per_100km by combustion km
+    only (v2xw_energy provider.rs), and the EV share of the km fell 28.5 -> 27.4 %; CO2 per combustion km
+    fell 1.2 % with fuel, CO2 per litre held at 2,407 g/L (LR.G.c1.co2-ice-final, LR.G.co2-per-litre)'
 - id: LR.G.c1.speed
   base: Gc0
   variant: G0
@@ -231,7 +258,9 @@ rows:
   measure: g.stops_per_km
   expect: down
   source: 'half the drivers following removes part of the stops (Katsaros 2011: the gain grows with penetration)'
-  measured: pending
+  measured: "1.15842 -> 1.11812"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.c05-c1.stops
   base: Gc05
   variant: G0
@@ -239,7 +268,9 @@ rows:
   measure: g.stops_per_km
   expect: down
   source: monotone in compliance (Katsaros 2011)
-  measured: pending
+  measured: "1.11812 -> 1.10097"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.c0.advice-issued
   base: Gc0
   variant: Gc0
@@ -260,7 +291,9 @@ rows:
   expect: eq
   value: 0
   source: an application that is not enabled issues nothing (apps.enabled)
-  measured: pending
+  measured: "0"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.off-vs-c0.stops
   base: Gc0
   variant: Goff
@@ -271,7 +304,9 @@ rows:
   fault: use:G0
   source: advice nobody follows cannot move a vehicle, so GLOSA off and GLOSA ignored drive the same traffic,
     identically (the compliance draw is made only when compliance > 0)
-  measured: pending
+  measured: "1.15842 -> 1.15842"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.p30.power-on-air
   base: G0
   variant: Gp30
@@ -280,7 +315,9 @@ rows:
   expect: eq
   value: 30.0
   source: radio.devices.rsu.tx_power_dbm is the unit's conducted power
-  measured: pending
+  measured: "30"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.p30.range50
   base: G0
   variant: Gp30
@@ -290,12 +327,15 @@ rows:
   band:
   - 0.95
   - 1.15
+  fault: scale:g.spat_range50_m:0.5
   source: 'rewritten before the run (Gp10 evidence): TR 37.885 Table 6.2.1-1 urban LOS, PL = 38.77 + 16.7
     log10 d + 18.2 log10 5.9 GHz: with 3 dBi each end and about -92 dBm sensitivity the LOS budget at
     10 dBm reaches ~2 km and at 0 dBm ~510 m, both beyond the 300 m blocks; the PRR fall at 200-400 m
     is the NLOS share (urban NLOS, 30 log10 d: 77 m at 10 dBm), which power moves; so the 50 % edge stays
     at the block geometry within [0.95, 1.15]'
-  measured: pending
+  measured: "300 -> 340 (ratio 1.133)"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.p10.range50
   base: G0
   variant: Gp10
@@ -323,12 +363,15 @@ rows:
   band:
   - 0.6
   - 1.05
+  fault: scale:g.spat_range50_m:0.5
   source: 'rewritten before the run (Gp10 evidence): TR 37.885 Table 6.2.1-1 urban LOS, PL = 38.77 + 16.7
     log10 d + 18.2 log10 5.9 GHz: with 3 dBi each end and about -92 dBm sensitivity the LOS budget at
     10 dBm reaches ~2 km and at 0 dBm ~510 m, both beyond the 300 m blocks; the PRR fall at 200-400 m
     is the NLOS share (urban NLOS, 30 log10 d: 77 m at 10 dBm), which power moves; so the 50 % edge stays
     at the block geometry within [0.6, 1.05]'
-  measured: pending
+  measured: "300 -> 280 (ratio 0.9333)"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.p30.prr-300-400
   base: G0
   variant: Gp30
@@ -338,7 +381,9 @@ rows:
   min_change: 0.05
   source: 'rewritten before the run: more power reaches more NLOS receivers at 300-400 m (Gp10 moved this
     ring 0.283 -> 0.205)'
-  measured: pending
+  measured: "0.282677 -> 0.597266"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.p30.spat-frames
   base: G0
   variant: Gp30
@@ -348,7 +393,9 @@ rows:
   tol: 0.001
   fault: half:spat
   source: power changes reach, not the SPaT rate
-  measured: pending
+  measured: "7497 -> 7497"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.p30.advice-cap
   base: G0
   variant: Gp30
@@ -359,7 +406,9 @@ rows:
   fault: advice-far
   source: GLOSA advises within glosa_range_m = 300 m whatever the radio reach (apps.rs SignalAppParams;
     CTI 4501 approach distance)
-  measured: pending
+  measured: "277"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.p10.advice-dist
   base: G0
   variant: Gp10
@@ -381,7 +430,10 @@ rows:
   expect: down
   min_change: 0.2
   source: a unit heard only near the junction advises fewer vehicles for less time
-  measured: pending
+  measured: "3025 -> 3019"
+  verdict: wrong-expectation
+  judged: 2026-10-26
+  note: "at 0 dBm the LOS budget still reaches about 510 m (TR 37.885 UMi LOS), beyond the 300 m advice range, and a SPaT at 10 Hz is fresh within 1 s even at PRR 0.2; range50 fell only 300 -> 280 m and advice 3,025 -> 3,019 (-0.2 %)"
 - id: LR.G.p10.stops
   base: G0
   variant: Gp10
@@ -413,7 +465,9 @@ rows:
   expect: up
   source: more receivers per frame within reach (receptions scale with the covered area), more reception
     events at the same frame count
-  measured: pending
+  measured: "2378373 -> 2486627"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.C.p0.events
   base: G0
   variant: Gp0
@@ -421,7 +475,9 @@ rows:
   measure: c.events
   expect: down
   source: as LR.C.p30.events, fewer receivers
-  measured: pending
+  measured: "2378373 -> 2209314"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.nomap.advice
   base: G0
   variant: Gnomap
@@ -522,7 +578,9 @@ rows:
   measure: g.stops_per_km
   expect: down
   source: LR.G.c1.stops on seed 2
-  measured: pending
+  measured: "1.07707 -> 0.899292"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.c1.stops-seed3
   base: Gc0s3
   variant: Gs3
@@ -530,7 +588,9 @@ rows:
   measure: g.stops_per_km
   expect: down
   source: LR.G.c1.stops on seed 3
-  measured: pending
+  measured: "1.51516 -> 1.4628"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.c1.fuel-seed2
   base: Gc0s2
   variant: Gs2
@@ -538,7 +598,9 @@ rows:
   measure: g.fuel_per_100km
   expect: down
   source: LR.G.c1.fuel on seed 2
-  measured: pending
+  measured: "10.4431 -> 10.2825"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.c1.fuel-seed3
   base: Gc0s3
   variant: Gs3
@@ -546,7 +608,10 @@ rows:
   measure: g.fuel_per_100km
   expect: down
   source: LR.G.c1.fuel on seed 3
-  measured: pending
+  measured: "12.2106 -> 12.3734"
+  verdict: open
+  judged: 2026-10-26
+  note: "the congested seed (stops 1.6/km, 7.8 m/s): stops -3.2 %, fuel +1.3 % summed; over seeds 1-3 the run's own fuel ratio moves -1.2, -2.3, +0.9 % (mean -0.9 %); a 150 s window is too short to separate it from trajectory noise"
 - id: LR.S.fibre.hop
   base: S0
   variant: S0
@@ -586,7 +651,9 @@ rows:
   source: 'the report is 1,123 B on the line (S0 pilot); VDSL2: 5 km x 4.9 us + 6 hops x 50 us + 8 ms
     interleaving + 1,123 x 8 / 20 Mbit/s = 8.77 ms (WiredLink::copper; ITU-T G.993.2 delay_max; Openreach
     SIN 498 80/20)'
-  measured: pending
+  measured: "8.77147"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.mw.hop
   base: S0
   variant: Smw
@@ -598,7 +665,9 @@ rows:
   - 0.28
   source: 'the report is 1,123 B on the line (S0 pilot); microwave: 10 km x 3.336 us (light in air) +
     4 x 50 us + 1,123 x 8 / 400 Mbit/s = 0.256 ms (WiredLink::microwave)'
-  measured: pending
+  measured: "0.255107"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.cell.hop
   base: S0
   variant: Scell
@@ -611,7 +680,10 @@ rows:
   source: 'the report is 1,123 B on the line (S0 pilot); cellular: the Uu one way, half the 29.2 ms LTE
     first-hop RTT (Narayanan et al. WWW 2020) plus the 14.4 ms core-to-backend leg, + 1,123 x 8 / 28 Mbit/s
     = 29.3 ms'
-  measured: pending
+  measured: "18.4141"
+  verdict: wrong-expectation
+  judged: 2026-10-26
+  note: "a cellular backhaul takes the scenario's own Uu (cell-capacity-mm1, backend.rs nominal_uu: radio/2 + 2.355 ms transport + 0.34 ms server, about 4.0 ms) plus the 14.4 ms internet leg = 18.41 ms; the 14.6 ms LTE half-RTT of the Rsu card is only the fallback. Every report took exactly 18.414 ms: no jitter (gap, section 4)"
 - id: LR.S.lat50.hop
   base: S0
   variant: Slat50
@@ -622,7 +694,9 @@ rows:
   - 50.0
   - 50.5
   source: 'backhaul_params.latency_ms replaces the fixed part: 50 ms + 9 us serialisation'
-  measured: pending
+  measured: "50.0083"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.lat2000.hop
   base: S0
   variant: Slat2000
@@ -646,7 +720,9 @@ rows:
   - 0.2
   source: 'each loss costs a TCP retransmission after the 200 ms RTO floor (Linux TCP_RTO_MIN; RFC 6298):
     retransmissions per message = p + p^2 + p^3 + p^4 = 0.111 at p = 0.1'
-  measured: pending
+  measured: "0.099723"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.loss10.delay
   base: S0
   variant: Sloss10
@@ -658,7 +734,9 @@ rows:
   - 60.0
   source: mean hop = 0.3 ms + 200 ms x 0.111 = 22.5 ms; the band allows the binomial spread of a few dozen
     reports
-  measured: pending
+  measured: "53.3973"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.loss30.retx
   base: S0
   variant: Sloss30
@@ -669,7 +747,9 @@ rows:
   - 0.3
   - 0.55
   source: 'as LR.S.loss10.retx at p = 0.3: 0.3 + 0.09 + 0.027 + 0.008 = 0.425'
-  measured: pending
+  measured: "0.393352"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.loss30.delay
   base: S0
   variant: Sloss30
@@ -680,7 +760,10 @@ rows:
   - 40.0
   - 150.0
   source: mean hop = 0.3 + 200 x 0.425 = 85 ms
-  measured: pending
+  measured: "163.71"
+  verdict: wrong-expectation
+  judged: 2026-10-26
+  note: "the line delivers in order, so a report behind another one's retransmission waits for it (TCP head-of-line, RFC 793); in Sloss10k 35 reports were delayed, 17 by their own loss (18 expected at p = 0.1) and 18 behind an earlier report on the same unit, about doubling the own-loss mean: 2 x 85 ms = 170 ms against 163.7 measured"
 - id: LR.S.loss30.delivered
   base: S0
   variant: Sloss30
@@ -690,7 +773,9 @@ rows:
   tol: 0.05
   fault: use:Snone
   source: 'TCP retransmits until delivered: loss delays reports and loses none (RFC 793 reliability)'
-  measured: pending
+  measured: "186 -> 191"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.none.relayed
   base: S0
   variant: Snone
@@ -699,7 +784,9 @@ rows:
   expect: eq
   value: 0
   source: a unit with no backhaul cannot forward a report (store-and-forward only, 06-node-models.md §3)
-  measured: pending
+  measured: "0"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.none.crl-frames
   base: S0
   variant: Snone
@@ -708,7 +795,9 @@ rows:
   expect: eq
   value: 0
   source: a unit whose backhaul never brought the list has no list to broadcast
-  measured: pending
+  measured: "0"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.none.rsu-installs
   base: S0
   variant: Snone
@@ -717,7 +806,9 @@ rows:
   expect: eq
   value: 0
   source: no backhaul, no CRL fetch
-  measured: pending
+  measured: "0"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.rsu0.relayed
   base: S0
   variant: Srsu0
@@ -726,7 +817,9 @@ rows:
   expect: eq
   value: 0
   source: no unit, no relay path for a relay-only vehicle
-  measured: pending
+  measured: "0"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.rsu5.relayed
   base: S0
   variant: Srsu5
@@ -735,7 +828,9 @@ rows:
   expect: down
   min_change: 0.2
   source: 'five units cover a sixth of the junctions: fewer reports are uttered within range of one'
-  measured: pending
+  measured: "186 -> 52"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.rsu5.veh-crl
   base: S0
   variant: Srsu5
@@ -744,7 +839,9 @@ rows:
   expect: down
   min_change: 0.2
   source: fewer broadcasting units, fewer relay-only vehicles hear the CRL inside the window
-  measured: pending
+  measured: "102 -> 0"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.C.rsu0.events
   base: S0
   variant: Srsu0
@@ -752,7 +849,9 @@ rows:
   measure: c.events
   expect: down
   source: 'no unit: no CRL frames, relays or unit receptions to simulate'
-  measured: pending
+  measured: "484840 -> 310521"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.bc1.crl-frames
   base: S0
   variant: Sbc1
@@ -764,7 +863,9 @@ rows:
   - 5.5
   source: the carousel repeats 5x as often (crl_broadcast_interval_s 5 -> 1) over the same span after
     the first list
-  measured: pending
+  measured: "240 -> 1200 (ratio 5)"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.bc20.crl-frames
   base: S0
   variant: Sbc20
@@ -776,7 +877,9 @@ rows:
   - 0.45
   source: a quarter as often (5 -> 20 s); the first frame of each list is not repeated, so the ratio is
     a little above 0.25
-  measured: pending
+  measured: "240 -> 90 (ratio 0.375)"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.bc20.veh-lag
   base: S0
   variant: Sbc20
@@ -785,7 +888,10 @@ rows:
   expect: up
   source: 'a vehicle passing a unit hears the list only on a repetition: the mean wait grows with the
     period'
-  measured: pending
+  measured: "1.22535 -> 0.980258"
+  verdict: wrong-expectation
+  judged: 2026-10-26
+  note: "the measure is conditional on a download: with a 20 s period the vehicles that would hear a later repetition are not counted, so the mean of those counted fell (1.23 -> 0.98 s); the downloads fell as theory says (102 -> 96)"
 - id: LR.S.lat2000.crl-lag
   base: S0
   variant: Slat2000
@@ -816,7 +922,10 @@ rows:
   expect: eq
   value: 0
   source: a unit that is down transmits nothing, CRL frames included (outage event, run.rs)
-  measured: pending
+  measured: "8"
+  verdict: fixed
+  judged: 2026-10-26
+  note: "the defect on the 486c8cba release (8 frames from the down unit after 30 s); FSout on 4399f8f8 has 0 (LR.S.fix.out.crl-frames)"
 - id: LR.S.out.crl-units
   base: S0
   variant: Sout
@@ -825,7 +934,10 @@ rows:
   expect: eq
   value: 29
   source: the other 29 units keep broadcasting
-  measured: pending
+  measured: "30"
+  verdict: fixed
+  judged: 2026-10-26
+  note: "30 on the release (the down unit kept broadcasting), 29 on 4399f8f8 (FSout)"
 - id: LR.S.lat2000bc3.crl-lag
   base: S0bc3
   variant: Slat2000bc3
@@ -840,7 +952,10 @@ rows:
   verdict: open
   note: 'held on the base binary because only one revocation list was published in the 120 s window (published
     stage 1): the unaligned-tick case was not exercised. The defect is from code reading (install_rsu_crls
-    dropped rsu_send arrival); a 240 s window with two lists is owed'
+    dropped rsu_send arrival); a 240 s window with two lists is owed. 2026-10-26: the 240 s 3 s pair was
+    aligned too (lists 30 s apart); with a 4 s carousel the release puts a later list on the air 0.146 s
+    after publication (LR.S.l240.bc4.base.lag-min), and so does the fix for 10 of 30 units (LR.S.l240.bc4.fix.*,
+    a unit with no fetch due broadcasts the global list)'
 - id: LR.S.bc3.crl-lag
   base: S0
   variant: S0bc3
@@ -850,8 +965,10 @@ rows:
   value: 3.2
   source: 'on fibre a list is on the air by the next tick: lag <= 3 s carousel period + 0.1 s step + 0.05
     s signing'
-  fault: use:Slat2000bc3
-  measured: pending
+  fault: scale:s.crl_first_frame_lag_s_max:25
+  measured: "0.146324"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.p10.heard
   base: G0
   variant: Gp10
@@ -870,7 +987,9 @@ rows:
   expect: up
   min_change: 0.05
   source: 'written before the run: +7 dB adds NLOS receivers'
-  measured: pending
+  measured: "132216 -> 179701"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.G.p0.heard
   base: G0
   variant: Gp0
@@ -879,7 +998,9 @@ rows:
   expect: down
   min_change: 0.25
   source: 'written before the run: -23 dB, more than Gp10 lost'
-  measured: pending
+  measured: "132216 -> 67390"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.fix.lat2000bc3.crl-lag
   base: S0bc3
   variant: FSlat2000bc3
@@ -903,7 +1024,9 @@ rows:
   value: 0
   fault: use:Sout
   source: LR.S.out.crl-frames on the fixed binary
-  measured: pending
+  measured: "0"
+  verdict: pass
+  judged: 2026-10-26
 - id: LR.S.fix.neutral
   base: S0
   variant: FS0
@@ -913,4 +1036,387 @@ rows:
   fault: record-flip
   source: 'the fix moves nothing on a backhaul faster than one mobility step with every unit on: the base
     records are byte-identical'
-  measured: pending
+  measured: "bea8a0f6a357ee3f -> bea8a0f6a357ee3f"
+  verdict: pass
+  judged: 2026-10-26
+# ---- 2026-10-26 (part 2), written before the runs they judge.
+# GLOSA energy, corrected measure: the energy metrics are cumulative, so the run's ratio is
+# the final sample (g.final_*), and co2_per_km divides by every km while fuel_per_100km
+# divides by combustion km only (v2xw_energy provider.rs). On the 938fb16a release.
+- id: LR.G.c1.fuel-final
+  base: Gc0
+  variant: G0
+  area: glosa
+  measure: g.final_fuel_per_100km
+  expect: down
+  min_change: 0.005
+  source: correction row for LR.G.c1.fuel (the run's own ratio, the final cumulative sample); fewer stop-and-go
+    cycles burn less (Treiber and Kesting 2014, about 4 % for advised vehicles; Tielert et al. 2012 ITST)
+  measured: "10.7588 -> 10.6295"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.G.c1.fuel-final-seed2
+  base: Gc0s2
+  variant: Gs2
+  area: glosa
+  measure: g.final_fuel_per_100km
+  expect: down
+  min_change: 0.005
+  source: LR.G.c1.fuel-final on seed 2
+  measured: "10.1907 -> 9.95931"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.G.c1.fuel-final-seed3
+  base: Gc0s3
+  variant: Gs3
+  area: glosa
+  measure: g.final_fuel_per_100km
+  expect: down
+  min_change: 0.005
+  source: LR.G.c1.fuel-final on seed 3
+  measured: "11.708 -> 11.8122"
+  verdict: open
+  judged: 2026-10-26
+  note: "as LR.G.c1.fuel-seed3 (+0.9 % on the final sample)"
+- id: LR.G.c1.co2-ice-final
+  base: Gc0
+  variant: G0
+  area: glosa
+  measure: g.final_co2_per_ice_km
+  expect: down
+  min_change: 0.005
+  source: correction row for LR.G.c1.co2 - CO2 per combustion km (co2 grams over fuel's own denominator) follows
+    fuel under HBEFA 3, where both are fits of the same engine power (Krajzewicz et al. 2015); the EV share of
+    the distance, which moves co2_per_km and not fuel_per_100km, is taken out
+  measured: "259.011 -> 255.889"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.G.c1.co2-ice-final-seed2
+  base: Gc0s2
+  variant: Gs2
+  area: glosa
+  measure: g.final_co2_per_ice_km
+  expect: down
+  min_change: 0.005
+  source: LR.G.c1.co2-ice-final on seed 2
+  measured: "245.517 -> 239.991"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.G.c1.co2-ice-final-seed3
+  base: Gc0s3
+  variant: Gs3
+  area: glosa
+  measure: g.final_co2_per_ice_km
+  expect: down
+  min_change: 0.005
+  source: LR.G.c1.co2-ice-final on seed 3
+  measured: "279.133 -> 281.57"
+  verdict: open
+  judged: 2026-10-26
+  note: "as LR.G.c1.fuel-seed3 (+0.9 %); CO2 per litre unchanged (2,384.1 -> 2,383.7)"
+- id: LR.G.co2-per-litre
+  base: G0
+  variant: G0
+  area: glosa
+  measure: g.final_co2_per_litre
+  expect: band
+  band:
+  - 2350.0
+  - 2500.0
+  fault: scale:g.final_co2_per_litre:1.1
+  source: tailpipe CO2 per litre burned, petrol about 2,310-2,370 g/L, diesel 2,640-2,680 g/L (carbon content;
+    HBEFA 3 / JEC WTW v5); a Euro 6 fleet with a third diesel gives about 2,420 g/L
+  measured: "2407.36"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.G.c1.co2-per-litre-same
+  base: Gc0
+  variant: G0
+  area: glosa
+  measure: g.final_co2_per_litre
+  expect: same
+  tol: 0.01
+  fault: scale:g.final_co2_per_litre:1.05
+  source: driving style changes how much fuel is burned, not the carbon in a litre; only a shift of the
+    petrol/diesel split of the burn could move it, by well under 1 %
+  measured: "2407.43 -> 2407.36"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.G.c1.stops-final
+  base: Gc0
+  variant: G0
+  area: glosa
+  measure: g.final_stops_per_km
+  expect: down
+  min_change: 0.03
+  source: LR.G.c1.stops on the run's own ratio (Treiber and Kesting 2014, about 15 % fewer stops for advised
+    vehicles; at least 3 % over the class)
+  measured: "1.20246 -> 1.10275"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.G.c1.stops-final-seed2
+  base: Gc0s2
+  variant: Gs2
+  area: glosa
+  measure: g.final_stops_per_km
+  expect: down
+  min_change: 0.03
+  source: LR.G.c1.stops-final on seed 2
+  measured: "1.17866 -> 0.991062"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.G.c1.stops-final-seed3
+  base: Gc0s3
+  variant: Gs3
+  area: glosa
+  measure: g.final_stops_per_km
+  expect: down
+  min_change: 0.03
+  source: LR.G.c1.stops-final on seed 3
+  measured: "1.59463 -> 1.54374"
+  verdict: pass
+  judged: 2026-10-26
+# The RSU CRL double booking (live-rsu §3 open item), fixed on this branch: a new list rides
+# each unit's line once, as the unit's own fetch. 938fb16a release (S*) against this branch (DS*).
+- id: LR.S.dbl.base-unexplained
+  base: S0
+  variant: S0
+  area: backhaul
+  measure: s.line_msgs_unexplained
+  expect: ge
+  value: 30
+  fault: scale:s.line_msgs_unexplained:0
+  source: 'the defect on the release: step 4 sends each list that starts the carousel down every crl unit''s
+    line again, 30 messages per firing (10-25 S0: 366 = 186 reports + 120 fetches + 60)'
+  measured: "60"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.S.dbl.unexplained
+  base: S0
+  variant: DS0
+  area: backhaul
+  measure: s.line_msgs_unexplained
+  expect: eq
+  value: 0
+  fault: use:S0
+  source: 'a unit relays the list it downloaded, unchanged ([PRIMER] p.5): its line carries the reports it
+    forwards and its own CRL fetches, nothing else (fibre: every fetch lands inside its step)'
+- id: LR.S.dbl.messages
+  base: S0
+  variant: DS0
+  area: backhaul
+  measure: s.backhaul_messages
+  expect: down
+  min_change: 0.05
+  source: 30 x k messages fewer (k = 2 on the 10-25 S0, 60 of 366)
+- id: LR.S.dbl.bytes
+  base: S0
+  variant: DS0
+  area: backhaul
+  measure: s.backhaul_line_bytes
+  expect: down
+  min_change: 0.05
+  source: the second copy of each list off the line
+- id: LR.S.dbl.relayed
+  base: S0
+  variant: DS0
+  area: backhaul
+  measure: s.relayed_reports
+  expect: same
+  tol: 0.05
+  fault: scale:s.relayed_reports:0.8
+  source: reports ride the line as before; the carousel starts a few microseconds earlier, which perturbs
+    the radio only slightly
+- id: LR.S.dbl.installs
+  base: S0
+  variant: DS0
+  area: backhaul
+  measure: s.rsu_crls_installed
+  expect: same
+  tol: 0.05
+  fault: scale:s.rsu_crls_installed:0.8
+  source: every unit still fetches and installs each list
+- id: LR.S.dbl.lag
+  base: S0
+  variant: DS0
+  area: backhaul
+  measure: s.crl_first_frame_lag_s_min
+  expect: same
+  tol: 0.01
+  fault: scale:s.crl_first_frame_lag_s_min:1.5
+  source: the carousel starts when the first unit's own fetch lands instead of the second copy behind it, one
+    CRL serialisation (microseconds) earlier
+- id: LR.S.dbl.events
+  base: S0
+  variant: DS0
+  area: cost
+  measure: c.events
+  expect: same
+  tol: 0.02
+  fault: scale:c.events:1.1
+  source: 60 line messages of about 486,000 events
+- id: LR.S.dbl.lat2000.unexplained
+  base: Slat2000bc3
+  variant: DSlat2000bc3
+  area: backhaul
+  measure: s.line_msgs_unexplained
+  expect: le
+  value: 30
+  fault: use:Slat2000bc3
+  source: on the 2 s line only the fetches still in flight at the horizon are unexplained (one list x 30 units
+    at most, since lists come every 10 s)
+- id: LR.S.dbl.lat2000.lag
+  base: Slat2000bc3
+  variant: DSlat2000bc3
+  area: backhaul
+  measure: s.crl_first_frame_lag_s_min
+  expect: ge
+  value: 2.0
+  fault: delay-zero
+  source: the carousel still waits for the units' 2,000 ms download
+# The 10-25 fix (4399f8f8) on two revocation lists: 486c8cba release (S240) against the fix alone (FS240).
+- id: LR.S.l240.lists
+  base: FS240
+  variant: FS240
+  area: crl
+  measure: s.crl_published
+  expect: ge
+  value: 2
+  fault: scale:s.crl_published:0.4
+  source: 'precondition: at least two lists with entries in 240 s (one fell in the 120 s Slat2000bc3 window;
+    S0 had 3 in 120 s on fibre)'
+  measured: "3"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.S.l240.fix.lag-min
+  base: FS240
+  variant: FS240
+  area: crl
+  measure: s.crl_first_frame_lag_s_min
+  expect: ge
+  value: 2.0
+  fault: delay-zero
+  source: no list is on the air before its 2,000 ms download has landed, including a list that finds the 3 s
+    carousel already ticking
+  measured: "2.14597"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.S.l240.fix.unit-lag-min
+  base: FS240
+  variant: FS240
+  area: crl
+  measure: s.crl_unit_lag_s_min
+  expect: ge
+  value: 2.0
+  fault: delay-zero
+  source: as LR.S.l240.fix.lag-min, every unit's first frame of each list
+  measured: "2.14597"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.S.l240.fix.lag-max
+  base: FS240
+  variant: FS240
+  area: crl
+  measure: s.crl_first_frame_lag_s_max
+  expect: band
+  band:
+  - 2.0
+  - 5.2
+  fault: scale:s.crl_first_frame_lag_s_max:3
+  source: 2 s download + up to one 3 s carousel period + the 0.1 s step and 0.05 s signing
+  measured: "2.14603"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.S.l240.base.lag-max
+  base: S240
+  variant: S240
+  area: crl
+  measure: s.crl_first_frame_lag_s_max
+  expect: le
+  value: 3.15
+  fault: scale:s.crl_first_frame_lag_s_max:2
+  source: 'the defect: a unit installs at publication, so a later list waits only for the next 3 s tick (the
+    first list arms the carousel at the 2.15 s arrival)'
+  measured: "2.14603"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.S.l240.veh-lag
+  base: S240
+  variant: FS240
+  area: crl
+  measure: s.veh_crl_lag_s_mean
+  expect: up
+  source: vehicles hear a later list only after its download (10-25 120 s pair 2.88 -> 3.67 s)
+  measured: "11.0633 -> 12.1329"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.S.l240.cost
+  base: S240
+  variant: FS240
+  area: cost
+  measure: c.events
+  expect: same
+  tol: 0.02
+  fault: scale:c.events:1.1
+  source: the fix moves CRL frames in time, not the run's size
+  measured: "1708049 -> 1708078"
+  verdict: pass
+  judged: 2026-10-26
+# Correction rows (2026-10-26, written after S240/FS240 and before S240bc4/FS240bc4): in the
+# 240 s pair the three lists came 30 s apart, a multiple of the 3 s carousel, so the later
+# lists met a tick 2.146 s after publication on both binaries and the l240 rows above passed
+# without exercising the unaligned case. With a 4 s carousel a list 10 or 30 s after the
+# arming one meets a tick (2.146 - 30) mod 4 = 0.146 s after its publication.
+- id: LR.S.l240.bc4.base.lag-min
+  base: S240bc4
+  variant: S240bc4
+  area: crl
+  measure: s.crl_first_frame_lag_s_min
+  expect: le
+  value: 1.0
+  fault: scale:s.crl_first_frame_lag_s_min:15
+  source: 'the defect on the release: a unit holds a later list from its publication step, so the next 4 s
+    tick puts it on the air 0.146 s after it, whatever the 2,000 ms line'
+  measured: "0.145968"
+  verdict: pass
+  judged: 2026-10-26
+- id: LR.S.l240.bc4.fix.lag-min
+  base: FS240bc4
+  variant: FS240bc4
+  area: crl
+  measure: s.crl_first_frame_lag_s_min
+  expect: ge
+  value: 2.0
+  fault: delay-zero
+  source: no list on the air before its 2,000 ms download lands; the later list's first frame comes at the
+    first tick after landing, 4.146 s
+  measured: "0.145968"
+  verdict: fail
+  judged: 2026-10-26
+  note: "engine defect, open (traced): on the fix alone 10 of 30 units put the 120.004 s list on the air 0.146 s after publication, before any 2 s download could land; on_flow_timer broadcasts phase2.broadcast_crl() (the latest list) from every unit with no fetch in flight, so a unit whose own fetch was not due (its RA's version unchanged) broadcasts a list it never downloaded"
+- id: LR.S.l240.bc4.fix.lag-max
+  base: FS240bc4
+  variant: FS240bc4
+  area: crl
+  measure: s.crl_first_frame_lag_s_max
+  expect: band
+  band:
+  - 4.0
+  - 6.3
+  fault: scale:s.crl_first_frame_lag_s_max:2
+  source: 2 s download + up to one 4 s carousel period (+0.1 s step, 0.05 s signing); the 4.146 s of the
+    later lists
+  measured: "2.14603"
+  verdict: fail
+  judged: 2026-10-26
+  note: "as LR.S.l240.bc4.fix.lag-min: the 2.146 s maximum is the first list; the later list's earliest frames are the defect's 0.146 s"
+- id: LR.S.l240.bc4.veh-lag
+  base: S240bc4
+  variant: FS240bc4
+  area: crl
+  measure: s.veh_crl_lag_s_mean
+  expect: up
+  source: vehicles hear a later list 4 s later than on the release
+  measured: "13.2204 -> 13.8726"
+  verdict: pass
+  judged: 2026-10-26
