@@ -972,8 +972,19 @@ rows:
   expect: up
   source: the first message under a new pseudonym carries its certificate (audit db1-3 F2)
   measured: 0.100699 -> 0.100699
-  verdict: open
-  note: '2026-10-26 (938fb16a): node.tx certificate frames 5,489 of 54,500 in both L and PT30. Age changes
+  verdict: wrong-expectation
+  note: '2026-10-27 (f4982788 release, folder r1): explained, no defect. A replay of the 1 s cadence
+    (a certificate when none was attached for 1 s, and on the first frame after a change) on each
+    vehicle''s recorded BSM instants reproduces all 54,494 recorded signer choices in both runs, and
+    the same replay without the changes gives 5,480 certificates (and mismatches 4,249 recorded choices, so
+    the replay can tell a missing restart): the changes add 3 in L and 3 in
+    PT30. An age change lands on the cadence grid (30 s after a certificate frame). An expiry change
+    off the grid sends one certificate early and shifts the grid later by its offset f, which costs
+    one certificate before the vehicle''s last frame unless that frame is at least f past a grid
+    instant; at 180 s the last frames and the expiries both sit on whole wall seconds, so 33 of L''s
+    59 and 30 of PT30''s 54 off-grid expiry changes net 3. The share rises only with changes off the
+    grid whose shift survives to the vehicle''s last frame (tools/realworld/cert_cadence_replay.py).
+    2026-10-26 (938fb16a): node.tx certificate frames 5,489 of 54,500 in both L and PT30. Age changes
     are phase-locked with the cadence: both count from the device''s first fix, so the restarted cadence
     lands on a frame whose certificate was due anyway (repro, node 3: change 5.056 s, certificate 5.067
     s, then every 1.000 s as before). Expiry changes (54 against 59) should add one certificate where
