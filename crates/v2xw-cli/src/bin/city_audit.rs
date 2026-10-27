@@ -2,7 +2,7 @@
 //! briefly, under the traffic auditor.
 //!
 //! ```text
-//! cargo run -p v2xw-trafficval --bin city_audit -- <scenario.yaml> \
+//! cargo run -p v2xw-cli --bin city_audit -- <scenario.yaml> \
 //!     [--only id,id,...] [--seconds S] [--json OUT.jsonl]
 //! ```
 //!
@@ -20,9 +20,9 @@
 //! `cities/portland` and `cities/berlin` hold in the validation suite.
 
 use std::io::Write as _;
-use std::time::Instant;
 
 use serde_json::json;
+use v2xw_cli::wall::Stopwatch;
 use v2xw_core::rng::RngRegistry;
 use v2xw_engine::Scenario;
 use v2xw_mobility::audit::{AuditParams, Check as Class, TrafficAuditor};
@@ -119,12 +119,12 @@ fn audit_city(path: &str, id: &str, seconds: f64) -> serde_json::Value {
         .rsu_placement
         .as_ref()
         .map_or(0, |p| p.count);
-    let t = Instant::now();
+    let t = Stopwatch::start();
     let world = match v2xw_engine::wiring::build_world(&scenario) {
         Ok(w) => w,
         Err(e) => return fail(format!("import: {e}")),
     };
-    let import_s = t.elapsed().as_secs_f64();
+    let import_s = t.elapsed_s();
     // `CITY_AUDIT_OD=1`: how many of the connected OD law's pairs the router can drive.
     if std::env::var("CITY_AUDIT_OD").is_ok() {
         use v2xw_mobility::demand::{OdModel, OdParams};
@@ -218,7 +218,7 @@ fn audit_city(path: &str, id: &str, seconds: f64) -> serde_json::Value {
     auditor.audit_world(&world);
     let step = scenario.time.mobility_step();
     let horizon = (scenario.time.duration_s * 1e9) as u64;
-    let started = Instant::now();
+    let started = Stopwatch::start();
     let mut t = 0u64;
     while t < horizon {
         let mut ctx = MobilityCtx::new(t, &world, &rng);
@@ -229,7 +229,7 @@ fn audit_city(path: &str, id: &str, seconds: f64) -> serde_json::Value {
         auditor.observe_with_pedestrians(&world, t, t1, &actors, &update.despawned, &people);
         t = t1;
     }
-    let run_s = started.elapsed().as_secs_f64();
+    let run_s = started.elapsed_s();
     let report = auditor.report();
     let safety: u64 = SAFETY.iter().map(|c| report.count(*c)).sum();
     let rate: u64 = RATE.iter().map(|c| report.count(*c)).sum();

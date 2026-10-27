@@ -737,7 +737,7 @@ impl BsmTimingDevice {
             let (sh, ch) = belief.heading_rad.sin_cos();
             // along = (cos h, sin h), left of track = (-sin h, cos h): ENU, h from east.
             let w = (wa * ch - wc * sh, wa * sh + wc * ch);
-            let rho = (-cal.fix_interval_ms * 1e-3 / tau).exp();
+            let rho = v2xw_core::math::exp(-cal.fix_interval_ms * 1e-3 / tau);
             let cur = self.pos_err;
             let next = (rho * cur.0 + w.0, rho * cur.1 + w.1);
             self.pos_err = next;

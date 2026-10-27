@@ -151,7 +151,7 @@ pub fn make_trips(
         return out;
     }
     loop {
-        t += -(1.0 - rng.unit()).ln() * 3600.0 / rate_vph;
+        t += -v2xw_core::math::ln(1.0 - rng.unit()) * 3600.0 / rate_vph;
         if t >= demand_s {
             break;
         }
@@ -222,7 +222,8 @@ pub struct Measured {
     pub bins: Vec<(f64, f64, f64)>,
     /// What went wrong, if anything.
     pub error: Option<String>,
-    /// Wall-clock seconds the run took.
+    /// Wall-clock seconds the run took: 0 here, filled in by the caller that owns a clock
+    /// (`v2xw-cli`'s `cross_validate`, through `v2xw_cli::wall`); this crate reads none.
     pub wall_s: f64,
     /// Stops over the whole run: a vehicle that had moved faster than 1 m/s falling below
     /// the halting threshold.
@@ -434,7 +435,7 @@ impl<'a> Observer<'a> {
         let mut halting = 0u64;
         let mut speed_sum = 0.0;
         for (a, k) in &u.states {
-            let v = k.vel.x.hypot(k.vel.y);
+            let v = v2xw_core::math::hypot(k.vel.x, k.vel.y);
             speed_sum += v;
             self.m.vkt_all += v * dt_s / 1000.0;
             let lane = k.lane.map(|l| (self.world.lane(l.lane), l.s_m));
@@ -698,7 +699,6 @@ pub fn run_native(
     timing: Timing,
     seed: u64,
 ) -> Measured {
-    let started = std::time::Instant::now();
     let world = &study.world;
     let rng = RngRegistry::new(seed);
     // A scenario's shipped defaults (`v2xw_engine::wiring::native_mobility` with no
@@ -771,7 +771,7 @@ pub fn run_native(
             if let Some(a) = traced
                 && let Some((_, k)) = u.states.iter().find(|(x, _)| *x == a)
             {
-                let v = k.vel.x.hypot(k.vel.y);
+                let v = v2xw_core::math::hypot(k.vel.x, k.vel.y);
                 let lane = k.lane.map_or(LaneId::new(u32::MAX), |l| l.lane);
                 let now = (lane, v < HALTING_MPS);
                 if last != Some(now) {
@@ -800,7 +800,6 @@ pub fn run_native(
             engine.dropped_trips()
         ));
     }
-    m.wall_s = started.elapsed().as_secs_f64();
     m
 }
 
@@ -814,7 +813,6 @@ pub fn run_sumo(
     label: &str,
     extra: &[&str],
 ) -> (Measured, Option<String>) {
-    let started = std::time::Instant::now();
     let world = &study.world;
     let rng = RngRegistry::new(seed);
     let mut cfg = SumoConfig::new(home, &study.net);
@@ -864,7 +862,6 @@ pub fn run_sumo(
         .ok()
         .and_then(|x| crate::ssmval::parse_sumo_ssm(&x).ok());
     let _ = std::fs::remove_file(&ssm_file);
-    m.wall_s = started.elapsed().as_secs_f64();
     (m, version)
 }
 

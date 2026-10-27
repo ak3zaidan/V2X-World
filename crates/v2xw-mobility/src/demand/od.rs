@@ -252,7 +252,7 @@ impl OdModel {
                     let d = |l: LaneId| {
                         let lane = world.lane(l);
                         let p = lane.centreline[lane.centreline.len() / 2];
-                        (p.x - mid.x).hypot(p.y - mid.y)
+                        v2xw_core::math::hypot(p.x - mid.x, p.y - mid.y)
                     };
                     d(*a).total_cmp(&d(*b)).then(a.cmp(b))
                 })

@@ -352,13 +352,16 @@ impl Traci {
     /// # Errors
     /// The last connection error, or a failed version handshake.
     pub fn connect(port: u16, wait: StdDuration) -> TResult<Self> {
-        let deadline = std::time::Instant::now() + wait;
+        // Counted attempts 50 ms apart rather than a deadline on a real clock: the wait is
+        // the same to within the connect calls' own time, and the crate reads no clock.
+        let pause = StdDuration::from_millis(50);
+        let mut attempts = wait.as_millis() / pause.as_millis();
         let stream = loop {
             match TcpStream::connect(("127.0.0.1", port)) {
                 Ok(s) => break s,
-                Err(e) if std::time::Instant::now() < deadline => {
-                    let _ = e;
-                    std::thread::sleep(StdDuration::from_millis(50));
+                Err(_) if attempts > 0 => {
+                    attempts -= 1;
+                    std::thread::sleep(pause);
                 }
                 Err(e) => return Err(e.into()),
             }

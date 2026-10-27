@@ -386,8 +386,8 @@ const EXPLICIT_MEMO_MAX: usize = 4_096;
 thread_local! {
     /// `(whole-certificate hash of a certificate, of its issuer)` → whether the issuer's
     /// signature on it verifies.
-    static EXPLICIT_MEMO: std::cell::RefCell<std::collections::HashMap<(Vec<u8>, Vec<u8>), bool>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static EXPLICIT_MEMO: std::cell::RefCell<std::collections::BTreeMap<(Vec<u8>, Vec<u8>), bool>> =
+        std::cell::RefCell::new(std::collections::BTreeMap::new());
     /// How many explicit-certificate signatures this thread has actually verified.
     static EXPLICIT_CHECKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

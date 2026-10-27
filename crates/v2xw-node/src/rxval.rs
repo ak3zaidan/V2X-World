@@ -70,7 +70,7 @@
 //! passed silently. Group linkage CRL entries are not installed.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use v2xw_msg::scms_types::WireEdition;
@@ -564,7 +564,7 @@ enum Memo {
 }
 
 thread_local! {
-    static CHAIN_MEMO: RefCell<HashMap<[u8; 32], Memo>> = RefCell::new(HashMap::new());
+    static CHAIN_MEMO: RefCell<BTreeMap<[u8; 32], Memo>> = RefCell::new(BTreeMap::new());
 }
 
 fn id8(c: &Certificate) -> Option<[u8; 8]> {
@@ -629,7 +629,7 @@ fn location_in(region: &GeographicRegion, lat: f64, lon: f64) -> Option<bool> {
             // Equirectangular distance: within 0.1 % of the great circle at the radii a
             // certificate region uses (Uint16 metres, at most 65.5 km).
             let r = 6_371_008.8_f64;
-            let x = (lon - clon).to_radians() * ((lat + clat) / 2.0).to_radians().cos();
+            let x = (lon - clon).to_radians() * v2xw_core::math::cos(((lat + clat) / 2.0).to_radians());
             let y = (lat - clat).to_radians();
             Some((x * x + y * y).sqrt() * r <= f64::from(c.radius.0))
         }

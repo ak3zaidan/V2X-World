@@ -224,7 +224,9 @@ pub struct Sweep {
     pub bases: BTreeMap<String, Fingerprint>,
     /// The expectation verdicts.
     pub verdicts: Vec<Verdict>,
-    /// Wall-clock seconds the runs took.
+    /// Wall-clock seconds the runs took. The engine reads no clock (ADR 0004): this is
+    /// 0 from [`run_cached`] and the caller that owns a clock (`v2xw-cli`'s `wall`) fills
+    /// it in.
     pub wall_s: f64,
 }
 
@@ -980,7 +982,6 @@ pub fn run_cached(
             .ok()
             .map(Mutex::new)
     });
-    let started = std::time::Instant::now();
     let used: BTreeSet<&String> = settings.iter().flat_map(|s| s.families.iter()).collect();
     let mut base_fp = BTreeMap::new();
     for name in used {
@@ -1057,7 +1058,7 @@ pub fn run_cached(
             .filter_map(|(k, v)| v.ok().map(|v| (k, v)))
             .collect(),
         verdicts: Vec::new(),
-        wall_s: started.elapsed().as_secs_f64(),
+        wall_s: 0.0,
     };
     sweep.verdicts = sweep.judge(expectations);
     Ok(sweep)

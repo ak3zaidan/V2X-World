@@ -25,6 +25,16 @@ path = "src/main.rs"
 name = "v2xw-server"
 path = "src/bin/v2xw-server.rs"
 
+# The SUMO cross-validation and the city audit report their own wall time, so they live
+# where the workspace's one real clock does (`src/wall.rs`; the conformance firewall).
+[[bin]]
+name = "cross_validate"
+path = "src/bin/cross_validate.rs"
+
+[[bin]]
+name = "city_audit"
+path = "src/bin/city_audit.rs"
+
 [dependencies]
 v2xw-core = { workspace = true }
 v2xw-world = { workspace = true }
@@ -47,6 +57,8 @@ v2xw-server = { workspace = true }
 v2xw-engine = { path = "../v2xw-engine", version = "0.1.0" }
 # `v2xw export-sumo`.
 v2xw-interop = { path = "../v2xw-interop", version = "0.1.0" }
+# `city_audit`'s invariant tables.
+v2xw-trafficval = { path = "../v2xw-trafficval", version = "0.1.0" }
 # The experiment runner behind `v2xw experiment`. Same reason it is a path dependency: the
 # root manifest's shared table does not list it. The dependency goes this way round on
 # purpose — the runner does not know about the command line, it takes a `RunExecutor`, and
