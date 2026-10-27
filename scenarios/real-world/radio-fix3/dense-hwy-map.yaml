@@ -13,5 +13,6 @@ time:
 radio:
   channels:
     - {channel: 174, messages: [spat, map]}
+events: []
 exporters:
   - id: jsonl

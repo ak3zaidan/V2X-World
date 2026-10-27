@@ -40,6 +40,10 @@ def main():
     cpm_by_node = collections.Counter()
     air_by_type = collections.Counter()
     denm_t = collections.defaultdict(list)
+    kin_last = {}
+    veh_m = 0.0
+    bsm_live_pw = []
+    bsm_live_t = collections.defaultdict(list)
     tx_path = os.path.join(J, "node_tx.jsonl")
     if os.path.exists(tx_path):
         for line in open(tx_path):
@@ -50,6 +54,17 @@ def main():
                 air_by_type[f'{t}@{r.get("channel")}'] += r["airtime_us"]
             if t == "bsm" and r["t_generated"] >= w0:
                 bsm_gen += 1
+                if r.get("power_dbm") is not None:
+                    bsm_live_pw.append(r["power_dbm"])
+                bsm_live_t[r["node"]].append(r["t_generated"] / 1e9)
+            if t in ("cam", "bsm"):
+                c = r.get("content") or {}
+                v = c.get("claimed_speed_mps")
+                if v is not None:
+                    prev = kin_last.get(r["node"])
+                    if prev is not None:
+                        veh_m += v * (r["t"] - prev) / 1e9
+                    kin_last[r["node"]] = r["t"]
             if t == "denm":
                 c = r.get("content") or {}
                 k = c.get("denm_cause") or "?"
@@ -65,10 +80,26 @@ def main():
         out["denm_by_cause"] = dict(denm_cause)
         out["denm_senders_by_cause"] = {k: len(v) for k, v in denm_senders.items()}
         # Per (cause, sender): first frame time, frames, and the median repetition gap.
+        # Events per cause: a sender's frames of one cause split at gaps over 3 s.
+        ev = collections.Counter()
+        rep = collections.defaultdict(list)
+        for (k, n), ts in denm_t.items():
+            ev[k] += 1 + sum(1 for a, b in zip(ts, ts[1:]) if b - a > 3.0)
+            rep[k] += [round(b - a, 2) for a, b in zip(ts, ts[1:]) if b - a <= 3.0]
+        out["denm_events_by_cause"] = dict(ev)
+        out["denm_median_gap_by_cause"] = {k: (sorted(v)[len(v) // 2] if v else None) for k, v in rep.items()}
+        out["denm_first_t_by_cause"] = {k: round(min(ts[0] for (kk, _), ts in denm_t.items() if kk == k), 2) for k in ev}
+        out["vehicle_km"] = round(veh_m / 1000.0, 2)
+    if "--series" in sys.argv and denm_cause:
         out["denm_series"] = {
             f"{k}/{n}": [round(ts[0], 2), len(ts), round(sorted(b - a for a, b in zip(ts, ts[1:]))[len(ts) // 2 - 1], 3) if len(ts) > 1 else None]
             for (k, n), ts in sorted(denm_t.items())
         }
+    if bsm_live_pw:
+        out["bsm_power_dbm_live_mean"] = round(sum(bsm_live_pw) / len(bsm_live_pw), 2)
+        gaps = sorted(b - a for ts in bsm_live_t.values() for a, b in zip(ts, ts[1:]))
+        out["bsm_itt_s_live_median"] = round(gaps[len(gaps) // 2], 3) if gaps else None
+        out["bsm_itt_s_live_mean"] = round(sum(gaps) / len(gaps), 3) if gaps else None
     if cpm_by_node:
         out["cpm_per_sender_mean"] = sum(cpm_by_node.values()) / len(cpm_by_node)
     bins = collections.defaultdict(lambda: [0, 0])

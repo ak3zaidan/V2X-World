@@ -70,6 +70,10 @@ runs:
     scenario: scenarios/real-world/radio-fix3/dense-hwy-map.yaml
     binary: this branch's debug build (opt-level 2)
     note: built-in highway at 48,000 veh/h offered, BSM + J2945/1, channel map on, 24 s (live 18-24 s), --record-level events
+  HD-MAP-48:
+    scenario: scenarios/real-world/radio-fix3/dense-hwy-map-48.yaml
+    binary: this branch's debug build (opt-level 2)
+    note: HD-MAP run 48 s (live 42-48 s)
 rows:
 # ---- Item 1: reception within 300 m against theory and published measurements ----
 - id: R3.1.DSRC-NLOS-EDGE
@@ -281,6 +285,28 @@ rows:
     receptions grow with the square of the fleet, so wall s per simulated s is several times
     H's 1.6
   source: SAE J2945/1 §6.3.8 (vMinChanUtil 0.5, vMaxChanUtil 0.8, RP 10-20 dBm); Ahmad et al. 2019 (J2945/1 CC evaluation, CBP plateau in the controlled band); airtime arithmetic
+  measured: "CBR172 0.271 (p90 0.334); 154 vehicles entered (not 250), about 124 sending in the live window (7,419 BSMs in 6 s); ITT 100 ms; power 17.0 dBm on 97 % of BSMs (no reduction, CBP < 0.5); wall 1.86 s per simulated s, peak 167 MB"
+  verdict: wrong-expectation
+  note: >-
+    The fleet premise was wrong: 48,000 veh/h offered enters at about 23,000 veh/h (6.4 veh/s,
+    the entry lanes' capacity), so 154 vehicles, not 250. With the fleet the run had, the
+    arithmetic holds: 0.271 / (10 Hz x 0.318 ms) = 85 senders sensed at >= -85 dBm, 55-70 % of
+    the fleet on a 3 km LOS road; under vMinChanUtil, so J2945/1 keeps 100 ms and full power,
+    as it should. R3.2.DENSE-HWY48 doubles the run to reach the congested regime
+- id: R3.2.DENSE-HWY48
+  run: HD-MAP-48
+  metric: mean CBR on 172 over the live window; mean BSM power; median ITT
+  band: "CBR [0.42, 0.62]; power < 17 dBm; ITT 0.1-0.15 s"
+  expect: >-
+    Entry at 6.4 veh/s for 48 s is about 300 vehicles, none leaving yet (3 km at 29 m/s is
+    103 s). Sensed senders scale with the fleet (HD-MAP: 85 of about 140 mean): about 180, so
+    the uncontrolled CBR would be 180 x 10 x 0.318 ms = 0.57. Over vMinChanUtil 0.5 J2945/1's
+    power control lowers RP (target 20 - 10 (CBP - 0.5)/0.3 dBm, in the engine capped at the
+    OBU's 17 dBm), which shrinks the sensed range and holds CBR near 0.5-0.55; the density
+    within 100 m (two parallel roads 60 m apart, about 20 vehicles) stays near B = 25, so ITT
+    stays near 100 ms with a few vehicles at 110-150 ms. Run performance: receptions grow
+    with the square of the fleet, so the second 24 s costs about 4x the first
+  source: SAE J2945/1 §6.3.8 (CBP 0.5/0.8 thresholds, power and rate control); Ahmad et al. 2019; airtime arithmetic from HD-MAP
   measured: pending
 # ---- Item 3: WP-12 on the built-in highway ----
 - id: R3.3.CLASS
