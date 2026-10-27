@@ -219,12 +219,14 @@ rows:
     cap with every assertion unchanged
   source: WP-13 status (the 14th phase2 test hit the 2.5 GB cap at 2,554 MB)
   fault: "the recorder keeping a channel no record is written on (no unit row, red)"
-  measured: pending
+  measured: "pass, peak 94 MB (was 2,554 MB), 168 s wall (test profile)"
+  verdict: pass
 - id: R3.2.SUITES
   test: v2xw-engine tests scms_scale, radio_channel (each binary alone)
   expect: green on the merged tree with this branch's changes (no expectation in them moved)
   source: WP-13 status (owed)
-  measured: pending
+  measured: "multichannel 7/7 (with the two new tests), radio_channel 8/8, scms_scale 1/1 (long_fleet_scale_run_cost is #[ignore]d and left to the merge step); each binary alone, peaks 79, 64, 185 MB"
+  verdict: pass
 - id: R3.2.DENSE-CBR
   run: G
   metric: mean CBR on 172 over the live window, per unit-measurement
@@ -417,14 +419,34 @@ rows:
     loss DENM (quality 7) repeated every 1 s on a non-urban road (urban: 4 s). Before the class
     fix the map said urban
   source: C2C-CC RS 2002 §3.3 (conditions i/j; 1 s x 300 s non-urban, 4 s x 180 s urban)
-  measured: pending
+  measured: "129 originators of 183 vehicles, 129 events; 49,261 frames; gaps over 0.2 s: 1.0 s x 2,421, none at 4 s; first at 15.5 s; a rerun gave the same counts to the frame"
+  verdict: pass
+  fault: "judged with the urban rule (4 s x 180 s): no 4.0 s gap in 2,421, red"
+  note: >-
+    Side findings. (1) While the condition holds, RS_tcAdWe_169 (b) asks for an update
+    every 0.1 s, so the frames are mostly 10 Hz updates (median gap 0.1 s) and the CAM+DENM
+    channel load rose from 0.209 to 0.362 CBR: per the rule as written. (2) Open for the
+    traffic track: 132 emergency-brake-light events on ice (dry: 53), each from a true
+    deceleration of 6 m/s2 or more on mu 0.1, which tyres cannot deliver. The car-following
+    model is capped at mu g (idm.rs), but the limiters applied after it in
+    v2xw-mobility engine.rs (stop-line and signal stops via static_obstacle_accel, the
+    bend floor, standing_leader_stop down to the class's emergency deceleration) are not;
+    a final clamp at -mu g (and the overshoot or collision it implies) is the physical fix
 - id: R3.3.ICE-FREE-CMP
   run: H-ICE
   metric: H-ICE vehicles completing the run's trips / H's
   band: [0, 1.0]
   expect: ice caps braking at 0.98 m/s2 and lengthens following gaps, so throughput past the breakdowns does not rise
   source: AASHTO (2018) §3.2.2 stopping sight distance; the surface cap
-  measured: pending
+  measured: "56 / 41 = 1.37 trips completed (H-FREE 53)"
+  verdict: wrong-expectation
+  note: >-
+    The comparison is confounded by the breakdowns themselves: a broken-down car on ice also
+    brakes at the 0.98 m/s2 cap, so from 29 m/s it stands only after about 30 s; H-ICE's first
+    stationary-vehicle DENM is at 100.45 s (H: 80.02 s, i.e. 10 s trigger timer after a
+    quick stop) and its second breakdown never stood before leaving. The queue formed 20 s
+    later and 16 vehicles stood >= 30 s (H: 64, H-FREE: 16), so more trips completed. Ice did
+    what the surface cap says; the row's premise (the same blockage in both runs) did not hold
 - id: R3.3.EEBL-FREE
   run: H-FREE
   disclosure: written after H was read (16 vehicles sent 100 ms emergency-brake-light DENM series before the first breakdown at 60 s)
