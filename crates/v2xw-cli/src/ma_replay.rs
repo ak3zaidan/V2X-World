@@ -379,6 +379,13 @@ pub struct Row {
     pub tta_median_s: Option<f64>,
     /// Longest, s.
     pub tta_max_s: Option<f64>,
+    /// The attack budget: summed over attackers, the seconds from attack start to the
+    /// first revocation decision, or to the attacker's exit (run end) when none came
+    /// (P1-E8). Censored at the exit, so a lower bound for an unrevoked attacker.
+    pub attack_budget_s: f64,
+    /// Per attacker (by its opaque `la_link`, which pairs across runs of one seed): attack
+    /// start, decision (`None`: not revoked) and budget, s.
+    pub per_attacker: Vec<(String, f64, Option<f64>, f64)>,
 }
 
 /// Scores one rule's decisions against ground truth.
@@ -421,6 +428,22 @@ pub fn score(rule: &dyn MaRule, decisions: &[Revocation], truth: &Truth) -> Row 
         .collect();
     tta.sort_by(f64::total_cmp);
     let attackers = truth.devices.iter().filter(|d| d.attacker).count();
+    let per_attacker: Vec<(String, f64, Option<f64>, f64)> = truth
+        .devices
+        .iter()
+        .filter(|d| d.attacker)
+        .map(|d| {
+            let start = d.attack_start.unwrap_or(d.joined);
+            let decided = first.get(&d.node).copied();
+            let end = decided.unwrap_or(d.left).min(d.left).max(start);
+            (
+                d.la_link.clone(),
+                start as f64 / 1e9,
+                decided.map(|t| t as f64 / 1e9),
+                (end - start) as f64 / 1e9,
+            )
+        })
+        .collect();
     Row {
         rule: rule.name().to_string(),
         params: rule.params(),
@@ -438,6 +461,8 @@ pub fn score(rule: &dyn MaRule, decisions: &[Revocation], truth: &Truth) -> Row 
         attackers_revoked: tta.len(),
         tta_median_s: (!tta.is_empty()).then(|| tta[tta.len() / 2]),
         tta_max_s: tta.last().copied(),
+        attack_budget_s: per_attacker.iter().map(|a| a.3).sum(),
+        per_attacker,
     }
 }
 
@@ -556,13 +581,14 @@ pub fn load(dir: &Path) -> Result<(Vec<MaView>, Truth)> {
 pub fn csv(rows: &[Row]) -> String {
     let mut s = String::from(
         "rule,params,sound,decisions,honest_devices,honest_device_hours,honest_blocked,\
-         honest_blocked_per_1e6_dh,attackers,attackers_revoked,tta_median_s,tta_max_s\n",
+         honest_blocked_per_1e6_dh,attackers,attackers_revoked,tta_median_s,tta_max_s,\
+         attack_budget_s\n",
     );
     let o = |x: Option<f64>| x.map_or(String::new(), |v| format!("{v:.1}"));
     for r in rows {
         let _ = writeln!(
             s,
-            "{},{},{},{},{},{:.3},{},{:.1},{},{},{},{}",
+            "{},{},{},{},{},{:.3},{},{:.1},{},{},{},{},{:.1}",
             r.rule,
             r.params,
             r.sound,
@@ -574,8 +600,28 @@ pub fn csv(rows: &[Row]) -> String {
             r.attackers,
             r.attackers_revoked,
             o(r.tta_median_s),
-            o(r.tta_max_s)
+            o(r.tta_max_s),
+            r.attack_budget_s
         );
+    }
+    s
+}
+
+/// The per-attacker CSV of `rows` (`ma-replay-attackers.csv`): one line per rule,
+/// parameter and attacker, for paired comparisons across runs of one seed (P1-E8).
+#[must_use]
+pub fn attackers_csv(rows: &[Row]) -> String {
+    let mut s = String::from("rule,params,attacker,attack_start_s,revoked_s,budget_s\n");
+    for r in rows {
+        for (a, start, decided, budget) in &r.per_attacker {
+            let _ = writeln!(
+                s,
+                "{},{},{a},{start:.1},{},{budget:.1}",
+                r.rule,
+                r.params,
+                decided.map_or(String::new(), |t| format!("{t:.1}"))
+            );
+        }
     }
     s
 }
@@ -632,6 +678,12 @@ pub fn run(dir: &Path) -> Result<String> {
     let rows = replay(&rules, &log, &truth);
     let out = dir.join("ma-replay.csv");
     std::fs::write(&out, csv(&rows)).map_err(|source| CliError::Io {
+        what: "cannot write",
+        path: out.display().to_string(),
+        source,
+    })?;
+    let out = dir.join("ma-replay-attackers.csv");
+    std::fs::write(&out, attackers_csv(&rows)).map_err(|source| CliError::Io {
         what: "cannot write",
         path: out.display().to_string(),
         source,
@@ -744,6 +796,62 @@ mod tests {
             .unwrap();
         assert_eq!(dk.attackers_revoked, 1);
         assert_eq!(dk.tta_median_s, Some(140.0));
+    }
+
+    #[test]
+    fn the_attack_budget_runs_to_the_decision_or_the_exit() {
+        let (mut log, mut truth) = honest_world();
+        truth.devices.push(device(99, true));
+        truth.subject_device.insert("pa".into(), NodeId::new(99));
+        for (i, rep) in ["r1", "r2", "r3", "r4", "r5"].iter().enumerate() {
+            log.push(row(200 + i as u64 * 10, rep, "pa", "dev99"));
+        }
+        log.sort_by_key(|r| r.t);
+        let rows = replay(&family(), &log, &truth);
+        let get = |rule: &str, params: &str| {
+            rows.iter()
+                .find(|r| r.rule == rule && r.params == params)
+                .unwrap()
+        };
+        // Revoked at the third reporter (220 s): 120 s after the 100 s attack start.
+        assert_eq!(get("pseudonym-k", "k=3").attack_budget_s, 120.0);
+        // Never revoked: the whole exposure after the start, censored at the exit.
+        let k10 = get("pseudonym-k", "k=10");
+        assert_eq!(k10.attack_budget_s, 3_500.0);
+        assert_eq!(k10.per_attacker[0].2, None);
+        assert!(attackers_csv(&rows).contains("pseudonym-k,k=3,dev99,100.0,220.0,120.0"));
+    }
+
+    /// A free class crowded with honest accused devices, and one attacker accused by five
+    /// reporters: locked, it is outside the crowd and `cluster` (k = 3) revokes it; under
+    /// a free-class secMark phase it is inside, needs m·k = 9 and is not revoked.
+    #[test]
+    fn a_free_class_phase_buys_the_crowd_multiplier_under_cluster() {
+        let budget = |phase: u32| {
+            let mut log = Vec::new();
+            let mut truth = Truth::default();
+            for n in 0..6u32 {
+                truth.devices.push(device(n, false));
+                let mut r = row(50 + u64::from(n), &format!("h{n}"), &format!("p{n}"), &format!("dev{n}"));
+                r.secmark_phase_ms = 23;
+                log.push(r);
+            }
+            truth.devices.push(device(99, true));
+            for (i, rep) in ["r1", "r2", "r3", "r4", "r5"].iter().enumerate() {
+                let mut r = row(200 + i as u64 * 10, rep, "pa", "dev99");
+                r.secmark_phase_ms = phase;
+                log.push(r);
+            }
+            let rows = replay(&family(), &log, &truth);
+            let c = rows
+                .iter()
+                .find(|r| r.rule == "cluster" && r.params == "k=3 c=3 m=3 w=3600s")
+                .unwrap();
+            assert_eq!(c.honest_blocked, 0);
+            c.attack_budget_s
+        };
+        assert_eq!(budget(0), 120.0);
+        assert_eq!(budget(25), 3_500.0);
     }
 
     #[test]

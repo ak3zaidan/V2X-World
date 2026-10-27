@@ -1197,6 +1197,8 @@ struct AttackerSlot {
 struct AttackerSpec {
     id: String,
     params: LegacyAttackerParams,
+    /// `threat/attacker/evasion/BenignClassMimic`: the disguise worn over the payload.
+    disguise: Option<v2xw_threat::Disguise>,
     count: Option<u32>,
     fraction: Option<f64>,
     actor_ids: BTreeSet<u32>,
@@ -1359,6 +1361,9 @@ struct ReportLog {
     /// When each SCMS vehicle joined and left.
     joined: BTreeMap<NodeId, SimTime>,
     left: BTreeMap<NodeId, SimTime>,
+    /// Each report's judged BSM `secMark`, ms within the minute: what the MA reads from
+    /// the evidence BSMs the report carries ([SM-MBR] §2.3.1.2.1), for `ma.received`.
+    secmark: BTreeMap<String, u16>,
 }
 
 /// How many of each certificate's latest signed BSMs on the air are kept, with their
@@ -2210,14 +2215,21 @@ pub fn broadcast_accuracy_95_m(
     msg_type: v2xw_msg::MsgType,
     belief: &v2xw_core::PositionEstimate,
 ) -> Option<f64> {
+    stated_accuracy_95_m(msg_type, belief.semi_major_m)
+}
+
+/// [`broadcast_accuracy_95_m`] for a 95 % radius the sender states, `semi_major_m`, which
+/// is its own estimate unless it lies about it (`v2xw_threat::attack_evasion`).
+#[must_use]
+pub fn stated_accuracy_95_m(msg_type: v2xw_msg::MsgType, semi_major_m: f64) -> Option<f64> {
     use v2xw_msg::j2735::bsm;
     match msg_type {
         // A VAM states its position confidence as a CAM does (the ETSI ReferencePosition).
         v2xw_msg::MsgType::Cam | v2xw_msg::MsgType::Vam => {
-            let cm = v2xw_msg::units::semi_axis_length(belief.semi_major_m);
+            let cm = v2xw_msg::units::semi_axis_length(semi_major_m);
             (cm < 4095).then(|| f64::from(cm) / 100.0)
         }
-        _ => bsm::semi_axis_sigma_m(bsm::semi_axis_accuracy_from_95(belief.semi_major_m))
+        _ => bsm::semi_axis_sigma_m(bsm::semi_axis_accuracy_from_95(semi_major_m))
             .map(|sigma| sigma * bsm::RADIUS_95_PER_SIGMA),
     }
 }
@@ -2638,16 +2650,24 @@ impl Phase2 {
         // `validate` refuses a population named by two waves.
         let waves = crate::timeline::attack_windows(scenario);
         for (population, a) in scenario.threats.attackers.iter().enumerate() {
+            let evasion = evasion_params(&a.id, &a.params)?;
+            let kind = match &evasion {
+                Some((k, _, _)) => Some(*k),
+                None => a
+                    .id
+                    .strip_prefix("threat/attacker/legacy/")
+                    .and_then(AttackKind::parse),
+            };
             let kind =
-                a.id.strip_prefix("threat/attacker/legacy/")
-                    .and_then(AttackKind::parse)
+                kind
                     .ok_or_else(|| {
                         conflict(
                             "threats.attackers[].id",
                             format!(
                                 "{} is not an attacker this build ships: the legacy family is \
                                  `threat/attacker/legacy/<Kind>`, e.g. \
-                                 threat/attacker/legacy/ConstPos",
+                                 threat/attacker/legacy/ConstPos, and the evasion family \
+                                 `threat/attacker/evasion/BenignClassMimic`",
                                 a.id
                             ),
                         )
@@ -2662,7 +2682,10 @@ impl Phase2 {
                     ),
                 ));
             }
-            let params = attacker_params(kind, &a.params)?;
+            let (params, disguise) = match evasion {
+                Some((_, d, p)) => (p, Some(d)),
+                None => (attacker_params(kind, &a.params)?, None),
+            };
             let horizon = (scenario.time.duration_s * 1e9).round().max(0.0) as u64;
             let (from, to) = match (waves.get(&population), &a.schedule) {
                 (Some((from_s, to_s)), _) => (
@@ -2678,6 +2701,7 @@ impl Phase2 {
             specs.push(AttackerSpec {
                 id: a.id.clone(),
                 params,
+                disguise,
                 count: a.count,
                 fraction: a.fraction,
                 actor_ids: a.actor_ids.iter().copied().collect(),
@@ -4038,16 +4062,21 @@ impl Phase2 {
                 to: spec.to,
                 ..v2xw_threat::AttackSchedule::default()
             };
+            let payload = LegacyAttacker::new(
+                node,
+                spec.params.clone(),
+                v2xw_threat::Capabilities::insider(self.params.jmax),
+                schedule.clone(),
+                Vec::new(),
+            );
+            let model: Box<dyn v2xw_threat::Attacker> = match spec.disguise {
+                Some(d) => Box::new(v2xw_threat::BenignClassMimic::new(payload, d)),
+                None => Box::new(payload),
+            };
             self.attackers.insert(
                 node,
                 AttackerSlot {
-                    model: Box::new(LegacyAttacker::new(
-                        node,
-                        spec.params.clone(),
-                        v2xw_threat::Capabilities::insider(self.params.jmax),
-                        schedule.clone(),
-                        Vec::new(),
-                    )),
+                    model,
                     id: spec.id.clone(),
                     from: spec.from,
                     to: spec.to,
@@ -4405,6 +4434,9 @@ impl Phase2 {
                 // reporter's (`detection_time`). The MA compares the two.
                 report.st_tstart = m.claimed_generation_time;
                 report.st_tend = m.claimed_generation_time;
+                if let (Some(log), Some(sm)) = (self.report_log.as_mut(), m.bsm.sec_mark_ms) {
+                    log.secmark.insert(report.report_id.clone(), sm);
+                }
                 // The evidence is the signed BSMs this receiver judged ([SM-MBR] §2.3.1.2.1
                 // and §2.3.1.3.1), taken now, when the report is generated: the
                 // certificate's frames on the air with exactly those generation times. A
@@ -4696,6 +4728,14 @@ impl Phase2 {
         let Some(log) = self.report_log.as_mut() else {
             return;
         };
+        // The phase is the judged BSM's own `secMark`, as the evidence carries it: the
+        // 1609.2 `generationTime` is the device's clock with its own jitter (28 ms sd on
+        // the CV pilots, `bsm-timing-cvpilot.yaml`), which put a locked device's phase off
+        // the epoch on most reports. A report with no BSM evidence keeps the evidence time.
+        let secmark_phase_ms = log.secmark.get(&r.report_id).map_or(
+            ((r.st_tend / 1_000_000) % 50) as u32,
+            |sm| u32::from(*sm) % 50,
+        );
         log.received.push(crate::report_records::MaReceived {
             t,
             report_id: r.report_id.clone(),
@@ -4708,7 +4748,7 @@ impl Phase2 {
             evidence_end: r.st_tend,
             excess: v2xw_threat::records::q(r.detector_score),
             pos_accuracy_m: v2xw_threat::records::q(r.subject_pos_confidence),
-            secmark_phase_ms: ((r.st_tend / 1_000_000) % 50) as u32,
+            secmark_phase_ms,
             issuer,
             la_link,
             set_aside: set_aside.map(str::to_string),
@@ -8184,6 +8224,82 @@ pub fn attacker_params(
         }
     }
     Ok(p)
+}
+
+/// `threat/attacker/evasion/<Kind>` (P1-E8, `v2xw_threat::attack_evasion`): the payload
+/// kind, the disguise and the payload's own parameters. `Ok(None)` for any other id.
+///
+/// The parameters are the payload's legacy ones plus `payload` (a legacy kind's name,
+/// default `ConstPos`), `secmark_shift_ms` (1..=99) and `stated_accuracy_m` (> 0).
+///
+/// # Errors
+/// An unknown evasion kind, an unknown or unrendered payload, or a disguise value out of
+/// range.
+pub fn evasion_params(
+    id: &str,
+    params: &serde_json::Value,
+) -> Result<Option<(AttackKind, v2xw_threat::Disguise, LegacyAttackerParams)>> {
+    let Some(name) = id.strip_prefix(v2xw_threat::attack_evasion::ID_PREFIX) else {
+        return Ok(None);
+    };
+    if v2xw_threat::EvasionKind::parse(name).is_none() {
+        return Err(conflict(
+            "threats.attackers[].id",
+            format!("{id} is not an evasion attack this build ships: BenignClassMimic"),
+        ));
+    }
+    let mut rest = serde_json::Map::new();
+    let mut kind = AttackKind::ConstPos;
+    let mut d = v2xw_threat::Disguise::default();
+    if let Some(map) = params.as_object() {
+        for (key, value) in map {
+            let field = format!("threats.attackers[].params.{key}");
+            match key.as_str() {
+                "payload" => {
+                    kind = value
+                        .as_str()
+                        .and_then(AttackKind::parse)
+                        .filter(|k| unrendered(*k).is_none())
+                        .ok_or_else(|| {
+                            conflict(
+                                &field,
+                                format!(
+                                    "must name a legacy attack the engine renders, got {value}"
+                                ),
+                            )
+                        })?;
+                }
+                "secmark_shift_ms" => {
+                    let v = value
+                        .as_f64()
+                        .filter(|v| v.fract() == 0.0 && (1.0..=99.0).contains(v))
+                        .ok_or_else(|| {
+                            conflict(&field, format!("must be a whole 1..=99 ms, got {value}"))
+                        })?;
+                    d.secmark_shift_ms = Some(v as u16);
+                }
+                "stated_accuracy_m" => {
+                    let v = value
+                        .as_f64()
+                        .filter(|v| v.is_finite() && *v > 0.0)
+                        .ok_or_else(|| {
+                            conflict(&field, format!("must be a positive number, got {value}"))
+                        })?;
+                    d.stated_accuracy_m = Some(v);
+                }
+                _ => {
+                    rest.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    } else if !params.is_null() {
+        return Err(conflict(
+            "threats.attackers[].params",
+            "must be an object".to_string(),
+        ));
+    }
+    let p = attacker_params(kind, &serde_json::Value::Object(rest))?;
+    Ok(Some((kind, d, p)))
 }
 
 /// `net.backend_net`: the links between backend entities.
