@@ -1831,8 +1831,9 @@ rows:
   measure: p2.reports_about_attackers
   expect: up
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '2 -> 2'
+  verdict: open
+  note: '2026-10-27 (f4982788 release): no effect, 2 -> 2 (both are positionSpeedInconsistency about one attacker, as at intensity 0.01; the digests differ, so the dial is read: attack_legacy.rs:380 draws U(-60, 60) x k). The PSI check (detect.rs:648) fires when |disp - v dt| exceeds 3 x max(stated confidence, 2.5 m); the error a ±6 m offset adds to a displacement is the difference of two draws, over 9 m in 20 % of checks, 12 m in 2.5 % and 15 m in 0.05 % (Monte Carlo), and the two-check streak gate squares that. So the prediction holds only if the stated semi-major is near 3 m. Owed: the stated confidence of these BSMs from a receptions-level run, then correct or keep the row.'
   source: '6 m random jumps exceed the stated-accuracy tolerance on some pairs, 0.6 m on none'
 
 - id: TRL.decided-monotone
@@ -1971,8 +1972,8 @@ rows:
   expect: eq
   value: 0
   fault: honest-revoked
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'attack-free: whatever the rule, honest noise this sparse (B0L) gives no revocation'
 
 - id: ME6.decided-down
@@ -2018,8 +2019,8 @@ rows:
   measure: p2.reports_about_honest
   expect: up
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '11 -> 52'
+  verdict: pass
   source: 'half the drift allowance: honest GNSS noise and integration error over 0.1 s cross it more often'
 
 - id: RI02.more-reports
@@ -2104,8 +2105,8 @@ rows:
   measure: p2.reports_about_honest
   expect: up
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '25 -> 19381'
+  verdict: pass
   source: 'raw noise hurts the tolerance-free US profile far more than the research suite: under raw fixes U files more honest reports than L'
 
 # ---- 7. judge_revoked (engine flag added on this branch) ---------------------------------
@@ -2216,8 +2217,9 @@ rows:
   measure: digest
   expect: identical
   fault: nondeterministic
-  measured: pending
-  verdict: pending
+  measured: 'B0L (938fb16a) ac21ba05… -> B0Lf (f4982788) ec1e84d7…'
+  verdict: open
+  note: '2026-10-27: the digests differ, but 938fb16a..f4982788 holds more engine changes than F4 (adoption WP-04 to WP-09 and the four-round integration), so the difference cannot be put on F4. Owed: B0L on a build of 3ae7d414^ against B0Lf on 3ae7d414 (one-commit pair).'
   source: 'the fix changes only frames under an out-of-window certificate and RandomSpeed/StopAndGo at k != 1; an attack-free run is byte-identical'
 - id: F4.M.ExpiredCert.certValidity
   base: C2Mf
@@ -2228,8 +2230,8 @@ rows:
   value: 1
   fault: swap-detector
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '489'
+  verdict: pass
   source: 'certValidity is the check built for ExpiredCert; the BSM verifies, its certificate expired 5 s before (expired_cert_lag_s 5 > cert_slack_s 1)'
 - id: F4.M.ExpiredCert.no-signature
   base: C2Mf
@@ -2240,8 +2242,8 @@ rows:
   value: 0
   fault: crossfire
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'its signature is good, and the validity rule refuses before the CRL is read, so no receiver reports a bad signature about it (613 before the fix)'
 - id: F4.M.ExpiredCert.decided
   base: C2Mf
@@ -2251,8 +2253,8 @@ rows:
   expect: ge
   value: 1
   fault: no-revocation
-  measured: pending
-  verdict: pending
+  measured: '1'
+  verdict: pass
   source: 'certValidity evidence is not set aside (only signature-only evidence is, phase2.rs evidence-unverifiable); with every verdict filed (M) the corroborated MA gets 3 events x 2 reporters in 60 s'
 - id: F4.M.crossfire-down
   base: C2M
@@ -2263,8 +2265,9 @@ rows:
   min_change: 0.3
   fault: crossfire
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '1244 -> 633'
+  verdict: pass
+  note: '2026-10-27: C2Mf on the f4982788 release (it carries F4) against the C2M value 1,244 recorded on 938fb16a (the base binary is gone), so other changes between the two binaries are in the difference too. The ExpiredCert share of the cross-fire went to 0 (F4.M.ExpiredCert.no-signature); the 633 left are about other attack types.'
   source: 'the ExpiredCert share of the cross-fire (613 of 1,225 on 486c8cba) goes; the CRL-refused part (F2, flag default) stays'
 - id: F4.M.no-honest
   base: C2Mf
@@ -2274,8 +2277,8 @@ rows:
   expect: eq
   value: 0
   fault: honest-revoked
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'the fix adds a check that fires only on an out-of-window certificate'
 - id: F4.M.NotYetValid.certValidity
   base: C3Mf
@@ -2286,8 +2289,8 @@ rows:
   value: 1
   fault: swap-detector
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '549'
+  verdict: pass
   source: 'certValidity is built for NotYetValid; the certificate starts 5 s after the BSM (not_yet_valid_lead_s 5 > cert_slack_s 1)'
 - id: F4.M.NotYetValid.no-signature
   base: C3Mf
@@ -2298,8 +2301,8 @@ rows:
   value: 0
   fault: crossfire
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'as F4.M.ExpiredCert.no-signature (642 before the fix)'
 - id: F4.L.ExpiredCert.verdicts
   base: C2Lf
@@ -2310,8 +2313,8 @@ rows:
   value: 1
   fault: detector-blind
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '1157'
+  verdict: pass
   source: 'the research suite fires certValidity under L as under M; only filing differs'
 - id: F4.L.ExpiredCert.decided
   base: C2Lf
@@ -2321,8 +2324,8 @@ rows:
   expect: eq
   value: 0
   fault: all-caught
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'certValidity has no SM-MBR v1.1 subtype, so a US device files none of it (OF-2)'
 - id: F4.U.ExpiredCert.reported
   base: C2Uf
@@ -2332,8 +2335,8 @@ rows:
   expect: eq
   value: 0
   fault: all-caught
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'the US profile checks only verified BSM pairs and has no certificate check: a refused BSM is not judged, before or after the fix'
 - id: F4.U.no-honest
   base: C2Uf
@@ -2343,8 +2346,8 @@ rows:
   expect: eq
   value: 0
   fault: honest-revoked
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'nothing honest changes under U'
 # F5 fix: k = intensity x magnitude_scale now scales RandomSpeed's (and StopAndGo's) lie.
 - id: F5.k1-untouched
@@ -2354,8 +2357,9 @@ rows:
   measure: digest
   expect: identical
   fault: nondeterministic
-  measured: pending
-  verdict: pending
+  measured: 'not judgeable on one binary: TSU1f 0a16dc5e…, TSU1p0 (938fb16a) digest not recorded'
+  verdict: open
+  note: '2026-10-27 (f4982788 release): the row compares TSU1p0 on 938fb16a with the fix build; F5 is in f4982788, so both runs on that binary would be the same run, and the 938fb16a binary and its TSU1p0 digest are gone. Owed: TSU1p0 on a build of 3ae7d414^ against TSU1f on 3ae7d414.'
   source: 'at k = 1 the claimed speed is the historic draw; the run is byte-identical'
 - id: F5.maxspeed-at-k3
   base: TSU3f
@@ -2366,8 +2370,8 @@ rows:
   value: 1
   fault: detector-blind
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '1781'
+  verdict: pass
   source: 'claimed = v + 3(u - v), u ~ U[0, 40]: over MaxSpeed 90 m/s when u > 30 + 2v/3, about 8 % of draws at v = 10 m/s'
 # F6: the legacy implausibleAcceleration reads the newest fix at least detector_lag_s
 # (1.5 s) old, i.e. dt 1.8 to 2 s at a 0.9 to 1 s check rate, not the 1 s the 10-25
