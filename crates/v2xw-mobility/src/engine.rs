@@ -11128,7 +11128,28 @@ mod tests {
         duration_s: f64,
         seed: u64,
     ) -> ApproachRun {
-        let world = grid(true);
+        approach_run_on(
+            GridParams::legacy().with_signals(true),
+            params,
+            rate_veh_per_h,
+            duration_s,
+            seed,
+            true,
+        )
+    }
+
+    /// [`approach_run`] on a grid of `grid` (its signal cycle, say), keeping every
+    /// published state only when `keep_states` is set: a day of steps is too many to hold.
+    fn approach_run_on(
+        grid: GridParams,
+        params: EngineParams,
+        rate_veh_per_h: f64,
+        duration_s: f64,
+        seed: u64,
+        keep_states: bool,
+    ) -> ApproachRun {
+        let world =
+            v2xw_world::procedural::grid(&grid, &ImportOptions::default()).expect("grid");
         let (approach, beyond) = signalised_approach(&world);
         let rng = RngRegistry::new(seed);
         let junction = world.edge(world.lane(approach).edge).to;
@@ -11226,7 +11247,9 @@ mod tests {
                 .map(|a| crate::audit::AuditActor { intent: 0, ..*a })
                 .collect();
             untagged.observe(&world, t, t1, &stripped, &update.despawned);
-            run.states.push(update.states);
+            if keep_states {
+                run.states.push(update.states);
+            }
             t = t1;
         }
         run.tagged = tagged.report();
@@ -11251,13 +11274,25 @@ mod tests {
     /// 1,000 vehicles, 1.0 per 10,000 vehicle-cycles), entries come early in the red
     /// (median under 0.5 s, Figure 4; none beyond 4.0 s, Table 3), every one of them is
     /// tagged, and the same entries untagged are caught as defects.
+    ///
+    /// The approach runs a 90 s cycle for two days. The guide's 1.0 per 10,000
+    /// vehicle-cycles "equates to 3 to 6 violations per 1000 vehicles for cycle lengths in
+    /// the range of 60 to 120 s" — 360/C per 1,000, so 6.0 at 60 s, the band's upper edge,
+    /// and 4.0 at 90 s, its middle. The test ran the grid's 60 s cycle for an hour: the
+    /// model's own expectation sat on the edge, and four entries (6.72 per 1,000, median
+    /// of four 0.60 s) could not judge a rate or a median.
     #[test]
     fn red_light_running_sits_in_the_field_band_and_untagged_it_is_a_defect() {
-        let run = approach_run(violations_on(), 600.0, 3600.0, 21);
+        let duration_s = 48.0 * 3600.0;
+        let grid = GridParams {
+            cycle_s: 90.0,
+            ..GridParams::legacy().with_signals(true)
+        };
+        let run = approach_run_on(grid, violations_on(), 600.0, duration_s, 21, false);
         let v = run.into_red_s.len() as f64;
         let n = run.entries as f64;
         let per_1000_veh = 1000.0 * v / n;
-        let cycles = 3600.0 / run.cycle_s;
+        let cycles = duration_s / run.cycle_s;
         let per_1000_cycles = 1000.0 * v / cycles;
         let per_10k_veh_cycles = per_1000_veh * run.cycle_s / 360.0;
         let mut into = run.into_red_s.clone();
@@ -11275,7 +11310,8 @@ mod tests {
             )
         );
         let (lo, hi) = crate::drivers::RED_RUN_PER_1000_VEH_BAND;
-        assert!(n > 400.0, "too few entries to judge a rate: {n}");
+        assert!(n > 10_000.0, "too few entries to judge a rate: {n}");
+        assert!(v >= 30.0, "too few red entries to judge a median: {v}");
         assert!(
             (lo..=hi).contains(&per_1000_veh),
             "{per_1000_veh:.2} red entries per 1,000 vehicles, outside the field band {lo}-{hi}"
