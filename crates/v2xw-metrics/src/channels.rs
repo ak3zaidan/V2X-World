@@ -464,6 +464,12 @@ pub struct MsgContentView {
     /// How many Part II containers the BSM carried.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub part_ii: Option<u8>,
+    /// A DENM's cause, decoded from its situation container (EN 302 637-3 `eventType`,
+    /// TS 102 894-2 `CauseCodeChoice`): the ASN.1 alternative's name, which carries the
+    /// code (`dangerousEndOfQueue27`, `trafficCondition1`, `adhesion6`, ...);
+    /// `termination` for a cancellation or negation, which has no situation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denm_cause: Option<String>,
     /// The claimed position in the world frame, metres east.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_x_m: Option<f64>,

@@ -10711,6 +10711,21 @@ fn message_content(
                 .then(|| quantize_to(f64::from(k.accel_set.long) * 0.01, Q_M));
         }
     }
+    // A DENM's cause, decoded from the octets the node encoded, as a receiver (or a
+    // sniffer) reads it: the situation container's `eventType` (radio-fix3 R3.3; the
+    // C2C-CC trigger counts were not recoverable from the records before).
+    if msg_type == v2xw_msg::MsgType::Denm
+        && let Some(bytes) = payload
+        && let Ok(d) = v2xw_msg::denm::decode_denm(bytes)
+    {
+        c.denm_cause = Some(match d.denm.situation.as_ref() {
+            Some(sit) => {
+                let name = format!("{:?}", sit.event_type.cc_and_scc);
+                name.split('(').next().unwrap_or("").to_string()
+            }
+            None => "termination".to_string(),
+        });
+    }
     // A pedestrian's or a cyclist's PSM, decoded from the octets its device encoded: the
     // same fields a BSM's Part I shows, from the same J2735 data elements.
     if msg_type == v2xw_msg::MsgType::Psm

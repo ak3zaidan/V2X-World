@@ -52,7 +52,7 @@ def main():
                 bsm_gen += 1
             if t == "denm":
                 c = r.get("content") or {}
-                k = c.get("cause") or c.get("cause_code") or c.get("event") or "?"
+                k = c.get("denm_cause") or "?"
                 denm_cause[str(k)] += 1
                 denm_senders[str(k)].add(r["node"])
                 denm_t[(str(k), r["node"])].append(r["t"] / 1e9)
