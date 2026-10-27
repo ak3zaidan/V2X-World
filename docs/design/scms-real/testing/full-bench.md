@@ -76,3 +76,95 @@ O(fleet) stop cost, 27 incomplete top-ups (traced 2026-10-24: vehicles that left
 with a top-up in flight, now `topups_left_area`; 06 §6 item 5), and 268 uploaded reports that never
 reached an MA (1,715 uploaded, 1,447 received; not traced, possibly TESTS' open item that
 `reports_uploaded_relay` counts on-air reports).
+
+## 6. FB4: the full-scale file on `f4982788` (2026-10-27), and QD4
+
+Expectations: rows `FB4.*` and `QD4.*` in `scms-full-bench.yaml`, committed before each run
+(`7369a0dc`, `65deb86f`). Each row now carries machine `checks`, judged by
+`tools/realworld/fullbench.py` (`summarise` reads progress.jsonl, metrics.json, run-report.json
+and the `/usr/bin/time -l` tail; `check --inject` moves every measured value just outside its
+expectation and requires the check to go red: 0 of 33 QD4 checks could not fail). Binary:
+the integrator's release build of `f4982788`, copied to the scratchpad. Seed `0xBE7C_0001`,
+`--record-level metrics --no-verify --progress-every 30s`.
+
+### 6.1 What changed since FB3, and what it should do (written before the runs)
+
+| Change since `d90a6298` | Expected against FB3 | Row |
+|---|---|---|
+| Density rules on in the benchmark (`0588ae6c`: `standing_leader_stop`, `lane_bend_speed`) | implausibleAcceleration 1,249 → 500–1,000 (QD −28 %); constantPositionFrozen untouched; 0 cases | FB4.honest-verdicts |
+| Relay confirmation, RFC 6298 retries (BACKEND) | uploaded = at the MAs within 2 % (FB3: 268 of 1,715 missing); lost ≤ 5 | FB4.reports-relay |
+| RA report shuffle permuted (`58367e2d`) | counts and release instant unchanged | FB4.reports-relay |
+| `topups_left_area` (`bdcac292`) | FB3's 27 incomplete counted as left the area; 0 unexplained | FB4.topups |
+| RA shuffles certificate requests, one per message; weekly job as one population batch (`0d62f322`) | same certificates, more backend messages; its known wrong download time could delay top-ups | FB4.topups, FB4.pki |
+| R-FFWIN (`Engine::next_metric_flush`) | windows at 240 s and 43,230 s at their own end; live verify rate in the 230–240 s window | FB4.metric-windows |
+| Provisioning crypto on rayon, key-range `ops_of`, explicit-certificate memo | wall: first window 5,000–8,000 s, rollover 2,500–4,800 s, second fast-forward 700–2,100 s | FB4.completes, FB4.ff-stops |
+| `mac.cbr` own-window share, unknown-signer cost, detection skips unverified | CBR mean as FB3, p95 ≤ 0.17; unverified share ≤ 7.1 % | FB4.traffic-radio |
+| QD +9 % memory (QD25, untraced) | peak 1,900–2,450 MB under the 2,500 MB cap | FB4.completes |
+
+### 6.2 FB4 did not finish in this session
+
+FB4 started at 23:45 on the main run slot (4 rayon threads, `--checkpoint-every 1h`). The
+machine was shared the whole time (load average 10–18 on 8 cores; other agents' builds and
+simulations; 23 GB of pages in the compressor). The first window ran at **15, 33 and 61
+wall-s per simulated second** for 0–30, 30–60 and 60–90 s (FB3 averaged 35 over 240 s on
+an idle machine): 55 min for 90 simulated seconds, footprint 452 → 990 MB at 888 → 1,320
+nodes. At that rate the 240 s window alone needed about four more hours, past this
+session's end (a background run is killed when the agent reports).
+
+A SIGTERM writes a checkpoint at the next simulated second (`signal.rs`), and one was
+written at 96 s. But a checkpoint here is a **replay point** (`checkpoint.rs`: the engine's
+state is not stored; `v2xw resume` re-runs the elapsed time with outputs off, documented at
+about 0.6 of the original cost). On this machine the replay ran at the original speed (30 s
+in 496 s). So splitting FB4 over sessions saves almost nothing. **FB4 needs one unbroken
+run of about 5 h on a quiet machine, or a session allowed to outlive it.** Its rows stay
+`pending`. The partial run's checkpoint and progress are in the scratchpad (`fb4/out`).
+
+### 6.3 QD4: the quarter fleet end to end on `f4982788`
+
+Tiny run slot (1 rayon thread, 450 MB cap), run beside FB4's replay.
+
+| Row | Expected (before) | Measured | Verdict |
+|---|---|---|---|
+| QD4.honest | 0 cases, 0 honest revoked; 20–140 verdicts | 0 / 0; 80 verdicts (implausibleAcceleration 79, positionJump 1), identical to QD25; all 16 reports filed in the rollover window | pass |
+| QD4.relay-reports | uploaded = at the MAs; 0 lost; MA receipt at 86,400–86,500 s | 12 = 12 (11 cellular, 1 relay), 0 lost; first MA receipt **129,600 s**, 86,400 s after the first filing | **wrong expectation**, corrected |
+| QD4.topups | 278/278 of 20; pool 20 → ~40 | 278/278, 5,560 certificates, 0 left the area, 0 incomplete; pool 20.0 → 39.71 at 43,210 s | pass |
+| QD4.pki | 11,291 polls all 412; 0 CRLs; 60 installs; PCA 40 + 20 per top-up (+ ≤ 20 per account) | 11,291 / 0 / 60; home PCA 8,880 = 40 × 149 + the top-ups + 2.9 per device | pass |
+| QD4.metric-windows | windows at 60 and 43,215 s; live verify rate | both; frozen spans end at 43,185 and 172,800 s; 13,049/s and 19,247/s | pass |
+| QD4.cost | stops 11,000–11,800; peak 220–275 MB; wall 180–400 s | 11,393 stops; **278.5 MB**; **446.6 s** (1 thread, contended) | open |
+| QD4.privacy | 0 changes, 0 links | 0 / 0 | pass |
+
+**The wrong expectation.** The RA arms its one-day shuffle timer at its first upload
+(`v2xw-proto` `scms/run/report.rs`). FB3 filed reports in the first window, so its release
+came at 86,430 s. With the density rules, QD files none in the first window: census
+`p2.filed` is 0 at 60 s and 16 at 43,200 s. So the first upload falls in the rollover
+window, and the MAs hear about it at 129,600 s, a day and a half after the start. The
+check is now the delay from the first filing (86,370–86,460 s). FB4's row was corrected
+the same way before FB4 reports.
+
+**Backend load per entity, quarter fleet, against CAMP sizing** ([CAMP122] §6.3: one
+provisioning request per vehicle life, then 20 certificates a week):
+
+| Entity | QD4 (48 h, 333 devices; home 169) | Per device | CAMP | Reading |
+|---|---|---|---|---|
+| ECA | 169 home enrolments, 162 in the first 60 s | 1 | 1 in life | scenario-start burst |
+| RA, provisioning | 149 butterfly requests, 142 in 60 s (2.4/s) | 1 | ≈ 0.54/s national design rate | 4× in one box: provisioning at entry is a modelling artefact |
+| PCA | 8,880 home certificates | 40 at entry + 20 a week + 2.9 | 20 a week | the population batch also pre-generates for accounts that left the map |
+| RA, top-ups | 278 of 278, 5,560 certificates, in the 10 s after 43,200 s; home kernel steps 0 → 7,626 in that minute; 0.95 MB backend in that window | 0.83 in 2 days | 1 batch file a week | as specified |
+| RA, CRL polls | 11,291 conditional polls, all 412 | ≈ 34 in 48 h | at least weekly | the 1 h interval is an assumption inside CAMP's weekly bound |
+| MA (×2) | 12 reports (9 shared to the home MA), 0 cases | 0.04 | — | released one day after the first upload |
+| CRL Generator / Store | 2 versions (the t0 lists), 0 entries; 60 RSU installs | — | one-business-day SLA | nothing to revoke |
+
+### 6.4 Fixed, corrected, open
+
+- **Fixed in the engine:** nothing. No engine defect was found, and no golden moved.
+- **Corrected with evidence:** QD4.relay-reports and FB4.reports-relay. The MA release is
+  one day after the first upload, not one day after 0 s.
+- **Open:**
+  - FB4 itself (§6.2).
+  - QD4.cost: peak footprint +12.5 % on QD25 (278.5 against 247.5 MB). It is a transient
+    inside one 30 s progress slice, since the samples peak at 223 MB. Not attributed; a
+    bisect of `8becf72a..f4982788` is owed. The same growth at full scale puts FB3's
+    2,105 MB near 2,370 MB, under the 2,500 MB cap with little margin.
+  - The wall timing (contended, 1 thread).
+- **Not reached at full scale:** the acagroup fix's known wrong download time. It did not
+  delay any QD4 top-up.
