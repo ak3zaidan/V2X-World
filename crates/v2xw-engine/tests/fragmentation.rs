@@ -461,6 +461,9 @@ fn padding_without_a_splitting_fragmenter_is_refused() {
 fn a_split_certificate_is_counted_once_across_its_pieces() {
     let mut s = grid(4.0);
     s.security.signature = "hybrid-falcon512-ecdsa-p256".to_string();
+    // The grid's Craton2 publishes no Falcon; the matrix/pq-hybrid run the finding came
+    // from uses the generic SoC, which publishes both halves.
+    s.nodes.default_obu = "obu/generic-automotive-soc-no-hsm".to_string();
     s.net.fragmenter = fragmenter(v2xw_net::FRAGMENTER_GENERIC_ID, serde_json::json!({}));
     let (report, recorder) = run(s);
     assert!(report.sdus_fragmented > 0, "nothing was split");

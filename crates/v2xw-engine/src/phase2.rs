@@ -9206,6 +9206,16 @@ mod provider_failure_tests {
         };
         let s = |t: f64| (t * 1e9) as SimTime;
         let (a0, b0, g0) = (store(&p, 0), store(&p, 1), generated(&p, 1));
+        // The t0 lists are served through `prerun_crl`, not the feeds; put provider-b's
+        // in its feed (as the CRL-composition test above does) so "the old list" is the
+        // one an RA serves, not an empty feed's 0.
+        p.crl_feeds[1].push(CrlVersion {
+            at: 0,
+            version: 0,
+            entries: Vec::new(),
+            secured: Vec::new(),
+            serial: b0,
+        });
         p.advance(s(week + 120.0));
         assert_eq!(generated(&p, 1), g0 + 1, "provider-b renewed its list at nextCrl");
         assert_eq!(store(&p, 1), b0, "provider-b's store is down: nothing landed");

@@ -288,7 +288,10 @@ fn the_intensity_dial_scales_the_speed_lies_too() {
             "{a} at intensity 1 became {b} at intensity 3"
         );
     }
-    assert!(max(&r3) > 90.0, "intensity 3 never claimed more than 90 m/s");
+    // At intensity 3 the ceiling is 15 + 3 x (40 - 15) = 90 m/s, reached only by a draw of
+    // exactly 40, so "> 90" could never hold; "> 80" (twice the intensity-1 ceiling) needs a
+    // draw above 36.7 m/s, which 400 uniform draws give with certainty in practice.
+    assert!(max(&r3) > 80.0, "intensity 3 never claimed more than 80 m/s");
     let s3 = speeds(AttackKind::StopAndGo, 3.0);
     assert!(
         (max(&s3) - (SPEED_MPS + (35.0 - SPEED_MPS) * 3.0)).abs() < 1e-9,
