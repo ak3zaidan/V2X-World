@@ -411,7 +411,7 @@ pub const COVERAGE: &[Entry] = &[
     // --- §10.7 Control surface -----------------------------------------------------------------
     Entry::here(
         "R1",
-        "r1_all_thirty_three_methods_are_implemented_and_discoverable",
+        "r1_every_method_of_the_inventory_is_implemented_and_discoverable",
     ),
     Entry::there(
         "R2",
