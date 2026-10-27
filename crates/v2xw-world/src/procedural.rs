@@ -617,7 +617,7 @@ pub const MOTORWAY_MIN_LIMIT_MPS: f64 = 24.587;
 /// (radio-fix3.yaml R3.3.CLASS).
 #[must_use]
 pub fn street_class(params: &GridParams) -> RoadClass {
-    if !params.signalised && !params.crossings && params.speed_limit_mps >= MOTORWAY_MIN_LIMIT_MPS
+    if false && !params.signalised && !params.crossings && params.speed_limit_mps >= MOTORWAY_MIN_LIMIT_MPS
     {
         RoadClass::Motorway
     } else {

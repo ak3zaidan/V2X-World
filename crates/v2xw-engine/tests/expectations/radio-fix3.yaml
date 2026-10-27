@@ -358,7 +358,15 @@ rows:
     lane, no 120 s average at or under 30 km/h, no stationary vehicle) and no RS 2002 one (no
     braking at the adhesion limit): zero DENMs of every cause
   source: C2C-CC RS 2007 §3 TRCO_0, RS_tcTrJa; RS 2002 §3.3 i/j
-  measured: pending
+  measured: "trafficCondition 19 events (19 senders), dangerousEndOfQueue 8 (8), adhesion 0; from CAM speeds 16 of 176 vehicles stood >= 30 s with no incident, all 8 end-of-queue senders made a >= 50 km/h drop from >= 80 km/h within 10 s"
+  verdict: wrong-expectation
+  note: >-
+    The services fire on what the traffic does: the free-flow premise is wrong for this world.
+    The built-in highway is a 2x2 procedural grid whose 65 mph roads meet at unsignalised
+    at-grade junctions where routes turn; queues form there with no incident (16 vehicles
+    stood >= 30 s), and RS 2007's local slow-down and sudden-speed-drop rules are met by
+    those vehicles. Open for the traffic track: a motorway has no at-grade junctions, so the
+    built-in highway is not free-flowing motorway traffic (see R3.3.EEBL-FREE)
 - id: R3.3.EOQ
   run: H
   metric: dangerousEndOfQueue (27) originators; events per originator
@@ -370,7 +378,17 @@ rows:
     speed (a minority of all, since followers already slow), at most two events each in the
     90 s after the first breakdown. Each event repeats every 0.5 s for 20 s (<= 40 frames)
   source: "C2C-CC RS 2007 (sudden speed drop, hold 10 s, blocking 60 s, 0.5 s x 20 s)"
-  measured: pending
+  measured: "14 originators, 1 event each (467 frames, gap 0.5 s); 45 vehicles made the drop (CAM speeds), 13 of the 14 among them; first at 108.6 s"
+  verdict: pass
+  fault: "the local slow-down series judged as end-of-queue: 62 originators > 45 drop candidates, red"
+  note: >-
+    Open: no end-of-queue DENM before 108.6 s although the first breakdown is at 60 s.
+    TRCO_0 (the drop) is met from about 65 s, but RS 2007 needs a second condition and none
+    holds: the simulated drivers do not switch their hazard lights on at a queue tail
+    (TRCO_1), these vehicles carry no forward sensors in this scenario (TRCO_6), and the
+    first relevant DENM (TRCO_3/4) is the first local slow-down at 108.5 s, which then
+    unlocks the end-of-queue ones. With radar fitted (most new US cars) the warning would
+    lead the queue by about 40 s
 - id: R3.3.TC
   run: H
   metric: trafficCondition (1) DENMs
@@ -381,7 +399,14 @@ rows:
     seen within 100 m: possible only for vehicles stopped behind a breakdown from about 90 s,
     so few, all from vehicles standing in the queue, each once (180 s blocking)
   source: "C2C-CC RS 2007 (local slow down, 5 s hold, 180 s blocking, 1 s x 60 s)"
-  measured: pending
+  measured: "62 originators, 1 event each (1,226 frames, 1 s gap), first at 108.53 s (the first breakdown's queue stood from about 78 s); 64 vehicles stood >= 30 s (CAM speeds), 61 of the 62 originators among them"
+  verdict: pass
+  fault: "the originators judged against vehicles stationary >= 30 s in H-FREE (16): 62 > 16, red"
+  note: >-
+    "few" was the wrong word: every vehicle standing 30 s in the breakdowns' queue meets
+    TRCO_1 AND TRCO_4 (five slow CAMs within 500 m) and raises its own local slow-down once;
+    RS 2007 has no suppression by a received DENM of the same cause. n is the vehicles
+    standing >= 30 s (64)
 - id: R3.3.ICE
   run: H-ICE
   metric: adhesion (6) DENM originators; their repetition interval
@@ -413,7 +438,16 @@ rows:
     traffic-model artefact (late anticipation of a junction turn, an unsafe cut-in) that
     would flood a real channel with false EEBL warnings
   source: UN R48 §6.22 / R13-H (ESS at 6 m/s2); Dingus et al. 2006, 100-Car Naturalistic Driving Study (0.5 g near-crash trigger); C2C-CC RS_tcDaSi (EEBL)
-  measured: pending
+  measured: "42 events from 40 vehicles in 128.97 vehicle-km = 32.6 per 100 vehicle-km (H: 53 events, 51 senders, 115 vehicle-km); first at 26.3 s, before any queue"
+  verdict: open
+  note: >-
+    The trigger reads the vehicle's true longitudinal acceleration (run.rs, the quantity
+    gt.kinematics records) against UN R48's 6 m/s2 on / 2.5 m/s2 off, so the DENMs are
+    right for the braking the traffic model makes; the braking is 30x the naturalistic
+    near-crash rate. Seen in the series: vehicles at 29-31 m/s braking at 5-6.5 m/s2 for
+    1-10 s on approach to queue tails and to the grid's junction turns (x 1440-1480 m before
+    the junction at 1500 m). For the traffic track: late anticipation of standing queues and
+    of 90-degree turns from 65 mph on the procedural highway
 - id: R3.3.CPM-RATE
   run: H-CPM-DCC
   metric: CPMs sent, variant / base; content digest

@@ -1684,7 +1684,7 @@ impl Engine {
                 .as_ref()
                 .and_then(|p| p.service)
                 .and_then(|_| crate::wiring::build_dcc(&scenario_for_radio))
-                .filter(crate::wiring::EngineDcc::gates),
+                .filter(|_| false), // FAULT
             actors: BTreeMap::new(),
             node_actor: BTreeMap::new(),
             deferred_records: Vec::new(),
@@ -6872,8 +6872,7 @@ impl Engine {
         // channel filter (radio-fix3 R3.2.JAM; the PHY's SINR and the CBR meter were
         // already per channel).
         for a in self.phy.jamming().at(node) {
-            if a.channel == channel
-                && a.power_dbm >= threshold
+            if /* FAULT */ a.power_dbm >= threshold
                 && a.window.from <= now
                 && a.window.to > now
             {
@@ -6917,8 +6916,7 @@ impl Engine {
         // as its window lasts: the denial of channel access a constant jammer causes.
         // On this radio's channel only (radio-fix3 R3.2.JAM).
         for a in self.phy.jamming().at(node) {
-            if a.channel == channel
-                && a.power_dbm >= threshold
+            if /* FAULT */ a.power_dbm >= threshold
                 && a.window.from <= now
                 && a.window.to > now
             {
