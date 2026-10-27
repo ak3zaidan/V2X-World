@@ -48,6 +48,13 @@ def obj(v):
 
 
 def fates(d, run):
+    # P1-E6 common random numbers: every vehicle's exposure row (node, la_link, joined,
+    # left, attacker, attack start) is the vehicle's own draws; an RSU-count change must
+    # leave it byte-identical. RSUs have no row.
+    ex = sorted(json.dumps({k: v for k, v in r.items() if k != "t"}, sort_keys=True)
+                for r in jl(os.path.join(run, "jsonl", "gt_device_exposure.jsonl")))
+    d["x.exposure.rows"] = len(ex)
+    d["x.exposure.sig"] = hashlib.sha256("\n".join(ex).encode()).hexdigest()
     last, attack, rows = {}, set(), []
     for r in jl(os.path.join(run, "jsonl", "pki_report_fate.jsonl")):
         t = obj(r.get("truth")) or {}

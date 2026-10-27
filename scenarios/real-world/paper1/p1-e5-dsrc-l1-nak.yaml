@@ -1,0 +1,14 @@
+# P1 gaps (2026-10-27): p1-e5-dsrc-l1 with Nakagami-m fast fading at the medium tier, so
+# diffraction does not open new links (the refuted E5-D1H used the high tier, which adds
+# both). m = 3, the 802.11p default; one fade per coherence time (doppler). Hypothesis:
+# the phase-independent part of Tampa's RSU loss (0.22 at 50-99 ms) is fast fading.
+schema: v2xw/scenario/1
+meta:
+  base: p1-e5-dsrc-l1.yaml
+  name: Paper 1 p1-e5-dsrc-l1-nak
+  description: P1-E5 DSRC load 1 with Nakagami fading at the medium tier.
+  tags: [paper1, experiment]
+radio:
+  channel_model:
+    fading: nakagami
+    fading_coherence: doppler

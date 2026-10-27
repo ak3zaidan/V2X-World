@@ -4834,8 +4834,11 @@ impl Phase2 {
                 joined: *joined,
                 left: log.left.get(node).copied().unwrap_or(now),
                 attacker: attacker.is_some(),
+                // The first falsified message, as the record documents: not the first
+                // edit on the air, which a disguise that only restamps secMark (P1-E8's
+                // `BenignClassMimic`) makes 0.1-4 s earlier than its payload's first lie.
                 attack_start: attacker
-                    .map(|a| self.first_on_air.get(node).copied().unwrap_or(a.from)),
+                    .map(|a| self.first_falsified.get(node).copied().unwrap_or(a.from)),
             });
         }
         (fates, received, exposure)

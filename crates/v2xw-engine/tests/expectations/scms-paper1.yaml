@@ -384,6 +384,42 @@ runs:
   E7C-F0b:
     scenario: scenarios/real-world/paper1/p1-e7c-f0.yaml
     note: E7C-F0 again (determinism)
+  G-D1:
+    scenario: scenarios/real-world/paper1/p1-e5-dsrc-l1.yaml
+    note: P1 gaps (2026-10-27) E5 DSRC low-load base on this branch's binary (RSU ids from ROADSIDE_ID_BASE, first_falsified); --record-level receptions; e5gaps.py run --tampa
+  G-D1b:
+    scenario: scenarios/real-world/paper1/p1-e5-dsrc-l1.yaml
+    note: G-D1 again (determinism)
+  G-OFF:
+    scenario: scenarios/real-world/paper1/p1-e5-dsrc-l1-off.yaml
+    base: G-D1
+    note: G-D1 with radio.devices.rsu.off_channel fitted on Tampa (tools/realdata data, scratch fitoff.py)
+  G-NAK:
+    scenario: scenarios/real-world/paper1/p1-e5-dsrc-l1-nak.yaml
+    base: G-D1
+    note: G-D1 with Nakagami m=3 fading at the medium tier (no diffraction), doppler coherence
+  G-Q4:
+    scenario: scenarios/real-world/paper1/p1-q4.yaml
+    note: P1-E6 4,500 B anchor (30 RSUs) on this branch's binary; --record-level events
+  G-RSU10:
+    scenario: scenarios/real-world/paper1/p1-e6-rsu10.yaml
+    base: G-Q4
+    note: G-Q4 with 10 RSUs (common random numbers after the RSU id fix)
+  G-EV0:
+    scenario: scenarios/real-world/paper1/p1-ev-plain.yaml
+    note: P1-E8 EV0 on this branch's binary (attack_start = first falsified); then v2xw ma-replay
+  G-EVP:
+    scenario: scenarios/real-world/paper1/p1-ev-phase.yaml
+    base: G-EV0
+    note: EVP on this branch's binary
+  G-EVA:
+    scenario: scenarios/real-world/paper1/p1-ev-acc.yaml
+    base: G-EV0
+    note: EVA on this branch's binary
+  G-EVB:
+    scenario: scenarios/real-world/paper1/p1-ev-both.yaml
+    base: G-EV0
+    note: EVB on this branch's binary
 rows:
 - id: P1.TS.rp-share0
   base: B
@@ -3073,3 +3109,248 @@ rows:
   source: 'same seed, byte-identical'
   measured: 'ea861eaa345b5701 -> ea861eaa345b5701'
   verdict: pass
+- id: P1.GAP.base-bump-flat
+  base: G-D1
+  variant: G-D1
+  area: metrics
+  measure: x.e5.rsu.loss_bump_excess
+  expect: band
+  band: [-0.05, 0.05]
+  source: 'the engine channel has no mechanism locked to the UTC 100 ms interval: the loss at 10-30 ms equals the loss at 50-99 ms within sampling noise. Tampa nm7w-nvbm RSU log, msgCnt-attested losses (scratch tgaps/tclass/tbump.py, 2026-10-27): a k-interval rx gap carries a msgCnt step of k in 84-89 % of pairs (the BSMs were sent); free devices lose 0.51 of BSMs generated 10-30 ms into the UTC 100 ms interval and 0.22 at 50-99 ms, at every 0.005-degree cell, with no locked device within 300 m'
+  measured: pending
+- id: P1.GAP.off-bump-excess
+  base: G-OFF
+  variant: G-OFF
+  area: metrics
+  measure: x.e5.rsu.loss_bump_excess
+  expect: band
+  band: [0.15, 0.35]
+  source: 'with the fitted off-channel schedule the RSU loses about Tampa''s excess (all devices, 10-30 ms minus 50-99 ms: 0.505 - 0.25 = 0.25) +-0.10. Tampa nm7w-nvbm RSU log, msgCnt-attested losses (scratch tgaps/tclass/tbump.py, 2026-10-27): a k-interval rx gap carries a msgCnt step of k in 84-89 % of pairs (the BSMs were sent); free devices lose 0.51 of BSMs generated 10-30 ms into the UTC 100 ms interval and 0.22 at 50-99 ms, at every 0.005-degree cell, with no locked device within 300 m'
+  measured: pending
+- id: P1.GAP.off-rest-same
+  base: G-D1
+  variant: G-OFF
+  area: metrics
+  measure: x.e5.rsu.loss_rest
+  expect: delta
+  band: [-0.03, 0.03]
+  source: 'the absence ends before 50 ms (from_ms + max_duration_ms <= 50), so the loss in the interval''s second half does not move beyond noise'
+  measured: pending
+- id: P1.GAP.off-1int-down
+  base: G-D1
+  variant: G-OFF
+  area: metrics
+  measure: x.e5.rsu.share_1int
+  expect: band
+  band: [0.74, 0.86]
+  source: 'about 10 % more frames lost at the RSU (p x mean absence / 100 ms) moves the one-interval share from 0.898 toward Tampa''s 0.759: Bernoulli estimate 0.80, band +-0.06'
+  measured: pending
+- id: P1.GAP.off-2int-up
+  base: G-D1
+  variant: G-OFF
+  area: metrics
+  measure: x.e5.rsu.share_2int
+  expect: up
+  source: 'single missed BSMs become more common: the two-interval share rises from 0.060 toward Tampa''s 0.112'
+  measured: pending
+- id: P1.GAP.off-p90-up
+  base: G-D1
+  variant: G-OFF
+  area: metrics
+  measure: x.e5.rsu.p90_ms
+  expect: up
+  source: 'Tampa p90 303 ms against the engine''s 151: the added losses lengthen the tail'
+  measured: pending
+- id: P1.GAP.off-ks
+  base: G-OFF
+  variant: G-OFF
+  area: metrics
+  measure: x.e5.rsu.ks_tampa
+  expect: le
+  value: 0.0748
+  source: 'the pre-registered P1-E5 test (tolerance 0.0747 fixed before any E5 run) on the off-channel run. Predicted before the run: still above, because the rest-of-interval loss (Tampa 0.22) is not modelled'
+  measured: pending
+- id: P1.GAP.off-ks-down
+  base: G-D1
+  variant: G-OFF
+  area: metrics
+  measure: x.e5.rsu.ks_tampa
+  expect: down
+  source: 'the off-channel schedule moves the RSU gap distribution toward Tampa''s'
+  measured: pending
+- id: P1.GAP.off-lt50
+  base: G-OFF
+  variant: G-OFF
+  area: metrics
+  measure: x.e5.rsu.share_lt50
+  expect: eq
+  value: 0.0
+  source: 'Tampa''s 1.6 % of sub-50 ms rx gaps are log artefacts, not channel: 224 of 547 carry msgCnt -1 (logged out of order) and 157 a +100 ms secMark step; no receiver model makes them, so the engine stays at 0'
+  measured: pending
+- id: P1.GAP.off-cause
+  base: G-OFF
+  variant: G-OFF
+  area: metrics
+  measure: r.rx_loss.off-channel
+  expect: ge
+  value: 1
+  source: 'the recorded network state names the mechanism: frames lost as off-channel at the RSUs'
+  measured: pending
+- id: P1.GAP.base-cause
+  base: G-D1
+  variant: G-D1
+  area: metrics
+  measure: r.rx_loss.off-channel
+  expect: eq
+  value: 0
+  source: 'unset, no unit ever leaves the channel (the flag''s default changes nothing)'
+  measured: pending
+- id: P1.GAP.off-obu-same
+  base: G-D1
+  variant: G-OFF
+  area: metrics
+  measure: x.e5.obu.share_1int
+  expect: same
+  tol: 0.0
+  source: 'the schedule touches roadside receivers only: every vehicle-received gap is unchanged'
+  measured: pending
+- id: P1.GAP.off-frames
+  base: G-D1
+  variant: G-OFF
+  area: performance
+  measure: r.frames_transmitted
+  expect: ratio
+  band: [0.98, 1.02]
+  source: 'no transmitter changes (an absent unit''s own frames are not deferred, stated): frames within 2 %'
+  measured: pending
+- id: P1.GAP.off-events
+  base: G-D1
+  variant: G-OFF
+  area: performance
+  measure: cost.events
+  expect: ratio
+  band: [0.95, 1.05]
+  source: 'one keyed draw per RSU arrival and fewer RSU verifications: events within 5 %'
+  measured: pending
+- id: P1.GAP.off-wall
+  base: G-D1
+  variant: G-OFF
+  area: performance
+  measure: cost.wall_s
+  expect: ratio
+  band: [0.75, 1.25]
+  source: 'the decision is O(1) per arrival: wall time within 25 % (shared machine)'
+  measured: pending
+- id: P1.GAP.nak-rest-up
+  base: G-D1
+  variant: G-NAK
+  area: metrics
+  measure: x.e5.rsu.loss_rest
+  expect: up
+  source: 'fast fading (Nakagami m = 3, the 802.11p fit) turns links near sensitivity intermittent: the phase-independent loss rises toward Tampa''s 0.22-0.25'
+  measured: pending
+- id: P1.GAP.nak-bump-flat
+  base: G-NAK
+  variant: G-NAK
+  area: metrics
+  measure: x.e5.rsu.loss_bump_excess
+  expect: band
+  band: [-0.05, 0.05]
+  source: 'fading is not locked to the UTC interval: no phase excess (only the off-channel schedule can make one)'
+  measured: pending
+- id: P1.GAP.nak-1int-down
+  base: G-D1
+  variant: G-NAK
+  area: metrics
+  measure: x.e5.rsu.share_1int
+  expect: down
+  source: 'intermittent losses make fewer single-interval gaps (medium tier: no diffraction opening new links, unlike the refuted high-tier run E5-D1H)'
+  measured: pending
+- id: P1.GAP.det
+  base: G-D1
+  variant: G-D1b
+  area: architecture
+  measure: digest.record
+  expect: identical
+  source: 'same seed, byte-identical'
+  measured: pending
+- id: P1.GAP.rsu10-exposure
+  base: G-Q4
+  variant: G-RSU10
+  area: architecture
+  measure: x.exposure.sig
+  expect: identical
+  source: 'P1-E6 confound fixed: RSU ids no longer share the vehicle counter, so 10 instead of 30 RSUs leaves every vehicle''s node id and keyed draws (spawn, attacker arming, la_link, attack start) byte-identical. Fault: tests/stable_node_keys.rs red with units on the vehicle counter'
+  measured: pending
+- id: P1.GAP.rsu10-uploaded
+  base: G-Q4
+  variant: G-RSU10
+  area: architecture
+  measure: x.fate.uploaded
+  expect: delta
+  band: [-1000000, 0]
+  source: 'a third of the RSUs on common random numbers: fewer report-forward contacts, so uploads non-increasing (the confounded E6 row measured +62)'
+  measured: pending
+- id: P1.GAP.rsu10-attack-lost
+  base: G-Q4
+  variant: G-RSU10
+  area: architecture
+  measure: x.fate.attack_lost_share
+  expect: delta
+  band: [0, 1]
+  source: 'attack-evidence loss lives on the RSU-relay path (E6 cellular row): fewer RSUs lose no less'
+  measured: pending
+- id: P1.GAP.evp-pseudonym-k
+  base: G-EV0
+  variant: G-EVP
+  area: architecture
+  measure: x.ma.budget.pseudonym-k
+  expect: same
+  tol: 0.0
+  source: 're-judges P1.E8.evp-pseudonym-k after the attack_start fix (gt.device_exposure = first falsified message): pseudonym-k reads no device-class feature and no decision moved, so the budget is identical'
+  measured: pending
+- id: P1.GAP.eva-pseudonym-k
+  base: G-EV0
+  variant: G-EVA
+  area: architecture
+  measure: x.ma.budget.pseudonym-k
+  expect: same
+  tol: 0.0
+  source: 're-judges P1.E8.eva-pseudonym-k after the attack_start fix (gt.device_exposure = first falsified message): pseudonym-k reads no device-class feature and no decision moved, so the budget is identical'
+  measured: pending
+- id: P1.GAP.evb-pseudonym-k
+  base: G-EV0
+  variant: G-EVB
+  area: architecture
+  measure: x.ma.budget.pseudonym-k
+  expect: same
+  tol: 0.0
+  source: 're-judges P1.E8.evb-pseudonym-k after the attack_start fix (gt.device_exposure = first falsified message): pseudonym-k reads no device-class feature and no decision moved, so the budget is identical'
+  measured: pending
+- id: P1.GAP.evp-device-k
+  base: G-EV0
+  variant: G-EVP
+  area: architecture
+  measure: x.ma.budget.device-k
+  expect: same
+  tol: 0.0
+  source: 're-judges P1.E8.evp-device-k after the attack_start fix (gt.device_exposure = first falsified message): device-k reads no device-class feature and no decision moved, so the budget is identical'
+  measured: pending
+- id: P1.GAP.eva-device-k
+  base: G-EV0
+  variant: G-EVA
+  area: architecture
+  measure: x.ma.budget.device-k
+  expect: same
+  tol: 0.0
+  source: 're-judges P1.E8.eva-device-k after the attack_start fix (gt.device_exposure = first falsified message): device-k reads no device-class feature and no decision moved, so the budget is identical'
+  measured: pending
+- id: P1.GAP.evb-device-k
+  base: G-EV0
+  variant: G-EVB
+  area: architecture
+  measure: x.ma.budget.device-k
+  expect: same
+  tol: 0.0
+  source: 're-judges P1.E8.evb-device-k after the attack_start fix (gt.device_exposure = first falsified message): device-k reads no device-class feature and no decision moved, so the budget is identical'
+  measured: pending

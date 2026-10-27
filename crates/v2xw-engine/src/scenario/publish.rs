@@ -368,6 +368,8 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
 /// leaf publishes an empty unit, which is what it would publish without this list.
 #[cfg(test)]
 const DIMENSIONLESS: &[&str] = &[
+    // P1-E5: the share of sync intervals a roadside unit leaves the safety channel in.
+    "radio.devices.rsu.off_channel.probability",
     // The sensor suites (WP-14): the CPM sensorId, detection probabilities and the
     // position error as a fraction of range.
     "perception.vehicle[].id",

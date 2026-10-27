@@ -124,6 +124,29 @@ fn the_ma_reads_the_evidence_secmark_phase_and_a_mimic_reads_free() {
             .collect()
     };
     assert_eq!(who(&plain), who(&mimic));
+    // `gt.device_exposure`'s attack start is the first *falsified* message. The disguise
+    // only restamps secMark (no claim changes), so it edits bytes on the air from the
+    // window's start while its payload lies later: the mimic's attack starts when the
+    // plain attacker's does. Fault: read it from the first on-air edit (the engine before
+    // 2026-10-27), which starts every mimic's budget 0.1-4 s early (P1-E8 test 2b).
+    let starts = |o: &Out| -> Vec<(String, Option<SimTime>)> {
+        o.exposure
+            .iter()
+            .filter(|e| e.attacker)
+            .map(|e| (e.la_link.clone(), e.attack_start))
+            .collect()
+    };
+    assert!(
+        starts(&plain)
+            .iter()
+            .any(|(_, s)| s.is_some_and(|s| s > 60 * v2xw_core::time::NS_PER_S)),
+        "no attacker's first lie lies after its window opens: the check is vacuous"
+    );
+    assert_eq!(
+        starts(&plain),
+        starts(&mimic),
+        "a secMark-only disguise moved the attack start"
+    );
 
     // With no disguise the mimic is its payload, report for report.
     let bare = run(doc(attacker(

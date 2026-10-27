@@ -63,6 +63,7 @@ These are listed so that the inventory is complete. The paths and sources are in
 | Transmit power, antenna gain, cable loss, height, pattern (OBU, RSU, VRU), sidelink power | `radio.devices` (sidelink uses the device power, `CV2X_TX_POWER_DBM` only labels the card) | `radio.devices.*` |
 | Region, channel, EIRP caps, spectrum masks | `regulation.rs` | `radio.region`, `radio.channel`, `radio.adjacent_channel` |
 | Own channel map, second radio, own-channel leakage (WP-13) | `run/channels.rs`, `regulation.rs` `own_channel_leakage`, `phy.rs` `leaked_dbm` | `radio.channels: [{channel (channel number), messages: [spat, map, wsa, ...]}]` (default empty: one channel); `radio.devices.{obu,vru}.radios` (default 1), `radio.devices.rsu.radios` (default 2; USDOT RSU Spec v4.1); `radio.channel_leakage` (default on: ACIR from the EN 302 571 mask and Table 8 ACS, TR 36.942 §5.1.1.3) |
+| RSU away from the safety channel in IEEE 1609.4 sync intervals (P1-E5, Tampa-fitted) | `run/off_channel.rs`, cause `off-channel` | `radio.devices.rsu.off_channel: {probability, from_ms, min_duration_ms, max_duration_ms}` (default unset: always on the channel) |
 | Path-loss law, presets, exponent, shadowing sigma and decorrelation, fading law and shapes | `prop.rs`, `fading.rs`, `winner.rs` | `radio.models.propagation`, `radio.channel_model.*` |
 | Sommer building loss β, γ; vehicle blockage | `prop.rs` `SommerCoefficients`, `obstacle.rs` | `radio.channel_model.building_*`, `.vehicle_blockage`, `radio.models.obstacle` |
 | Rain attenuation (ITU-R P.838) | `prop.rs` | `weather.*` |
