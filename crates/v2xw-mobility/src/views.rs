@@ -562,6 +562,12 @@ pub struct TripDriver {
     pub speed_factor: Option<(f64, f64, f64)>,
     /// `departSpeed`.
     pub depart_speed: Option<DepartSpeed>,
+    /// `carFollowModel`, as the driving library's short name
+    /// (`crate::carfollowing::library::build_one`): the vehicle drives that model at its
+    /// cited defaults under this type's numbers; `None` drives the engine's model.
+    pub car_following: Option<&'static str>,
+    /// The seed of that model's keyed noise (the run's seed, through the demand).
+    pub model_seed: u64,
 }
 
 impl TripDriver {
@@ -580,9 +586,9 @@ impl TripDriver {
 }
 
 /// A SUMO `departSpeed` (SUMO documentation, "Definition of Vehicles, Vehicle Types, and
-/// Routes", departSpeed). Every value is capped at the speed from which the vehicle can
-/// still stop behind whatever is ahead of it, so an insertion never forces a hard brake
-/// (SUMO instead delays an insertion whose stated speed is unsafe).
+/// Routes", departSpeed). `max` and `random` are lowered to the speed from which the
+/// vehicle can still stop behind whatever is ahead of it; a number, `desired` and
+/// `speedLimit` above that speed delay the insertion, as SUMO delays it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DepartSpeed {
     /// A number, m/s.

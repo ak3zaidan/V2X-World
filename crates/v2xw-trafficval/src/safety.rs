@@ -31,8 +31,47 @@ use v2xw_world::World;
 
 use crate::calib::{GridVariant, grid_study};
 use v2xw_metrics::ssm::{
-    Conflict, EncounterType, Follow, SSM_TTC_S, SsmActor, SsmParams, SsmTracker,
+    Conflict, EncounterType, Follow, PathLane, SSM_TTC_S, SsmActor, SsmNetwork, SsmParams,
+    SsmTracker, ZoneRef,
 };
+
+/// The junctions' conflict zones as the network-mode surrogate measures read them.
+pub struct ZonesNet<'a>(pub &'a ConflictZones);
+
+impl SsmNetwork for ZonesNet<'_> {
+    fn zone(&self, a: u32, b: u32) -> Option<ZoneRef> {
+        self.0
+            .first_zone(LaneId::new(a), LaneId::new(b))
+            .map(|z| ZoneRef {
+                s_a: z.s_self,
+                s_b: z.s_other,
+                half_a: z.half_self,
+                half_b: z.half_other,
+                merge: z.merge,
+            })
+    }
+}
+
+/// A vehicle's path ahead for the network-mode surrogate measures.
+pub fn ssm_path(
+    zones: &ConflictZones,
+    world: &World,
+    lane: LaneId,
+    s_front: f64,
+    next: Option<LaneId>,
+    range_m: f64,
+) -> Vec<PathLane> {
+    zones
+        .path_ahead(world, lane, s_front, next, range_m)
+        .into_iter()
+        .map(|(l, start_m, length_m, internal)| PathLane {
+            lane: l.index(),
+            start_m,
+            length_m,
+            internal,
+        })
+        .collect()
+}
 
 use crate::{Check, Group, Lab, Outcome, Row, Variant};
 
@@ -266,7 +305,18 @@ impl SafetyObserver {
                 lane: a.changing.is_none().then(|| a.lane.index()),
             })
             .collect();
-        self.ssm.step(t_s, &ssm_actors, &follows);
+        // Classified by the network as SUMO's SSM device classifies (crossing and merging
+        // only on foe movements of one junction, each vehicle on its route).
+        let range = self.ssm.params().range_m;
+        let paths: BTreeMap<ActorId, Vec<PathLane>> = actors
+            .iter()
+            .map(|a| {
+                let p = ssm_path(&self.zones, world, a.lane, a.s_m, a.route_next, range);
+                (a.actor, p)
+            })
+            .collect();
+        let net = ZonesNet(&self.zones);
+        self.ssm.step_network(t_s, &ssm_actors, &follows, &paths, &net);
 
         // Post-encroachment time at crossing zones.
         let mut present = BTreeSet::new();
@@ -394,17 +444,20 @@ pub fn checks() -> Vec<Check> {
         Check {
             id: "safety/surrogate-measures",
             group: Group::Safety,
-            title: "Crossing, merging and oncoming conflicts are found by trajectory extrapolation, beside the same-lane ones",
+            title: "Crossing and merging conflicts are found on foe movements of one junction by extrapolation along each route, beside the same-lane ones",
             procedure: "The same study, read by the full surrogate safety measures \
-                (`v2xw_metrics::ssm`, adoption plan WP-11) at SUMO's SSM-device defaults: \
-                every pair of vehicles within 50 m, each body a rectangle extrapolated at its \
-                current velocity, TTC the first overlap (Laureshyn et al. 2010); the \
-                same-lane pairs of `safety/time-to-collision` with their own gaps; the type \
-                from the conflict angle (SSAM: rear-end < 30°, crossing > 85°); an \
+                (`v2xw_metrics::ssm`, adoption plan WP-11) at SUMO's SSM-device defaults, \
+                classified as SUMO's device classifies (network mode): a following pair \
+                when one's lane lies on the other's route ahead, with the gap along it; a \
+                crossing or merging pair only when both routes enter one junction on \
+                movements its right-of-way matrix makes foes, each within 50 m of it, the \
+                conflict area that of `ConflictZones`, each vehicle timed to it at its \
+                current speed or braking; the same-lane pairs of `safety/time-to-collision` \
+                with their own gaps; an \
                 encounter logged as a conflict when its minimum TTC falls below 3.0 s, its \
                 DRAC or MDRAC (1 s reaction) rises above 3.0 or 3.4 m/s², or its predicted \
                 PET falls below 2.0 s.",
-            faults: &["trajectory extrapolation dropped: pairs are measured for overlap now only"],
+            faults: &["extrapolation dropped: only following pairs and overlap now are measured"],
             run: ssm_check,
         },
     ]

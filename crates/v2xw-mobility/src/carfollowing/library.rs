@@ -272,6 +272,23 @@ pub fn factory(name: &str) -> Option<&'static CfFactory> {
     FACTORIES.iter().find(|f| f.short == name || f.id == name)
 }
 
+/// One model by short name or id at its cited defaults, for the vehicles of a stated
+/// vehicle type that names it (an imported `.rou.xml` vType's `carFollowModel`, WP-15).
+/// `None` for an unknown name or a cooperative model, which needs the run's cooperative
+/// link and its subscribed classes: such a type drives the engine's model.
+#[must_use]
+pub fn build_one(name: &str, seed: u64) -> Option<SharedCf> {
+    let f = factory(name)?;
+    if f.cooperative {
+        return None;
+    }
+    let ctx = BuildCtx {
+        seed,
+        link: Arc::new(CoopLink::new(CoopParams::default(), Vec::new())),
+    };
+    (f.build)(&serde_json::Value::Null, &ctx).ok()
+}
+
 /// The id of the per-class composite.
 pub const BY_CLASS_ID: &str = "mobility/car-following/by-class";
 

@@ -175,6 +175,15 @@ pub fn library_model(sumo: &str) -> Option<&'static str> {
     })
 }
 
+/// The library model a vType's `carFollowModel` is driven by per vehicle: the
+/// [`library_model`] it maps to, when that model is not cooperative (a cooperative model
+/// needs the run's own cooperative link and drives the engine's model instead).
+pub fn applied_model(sumo: &str) -> Option<&'static str> {
+    library_model(sumo).filter(|m| {
+        v2xw_mobility::carfollowing::library::factory(m).is_some_and(|f| !f.cooperative)
+    })
+}
+
 /// A `departLane`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DepartLane {
@@ -314,6 +323,8 @@ pub struct RouteFile {
     pub vehicles: Vec<RouteVehicle>,
     /// How every attribute was used.
     pub ledger: ImportLedger,
+    /// The import seed: also the seed of the per-type car-following models' keyed noise.
+    pub seed: u64,
 }
 
 fn class_of(name: &str) -> Option<VehicleClass> {
@@ -353,6 +364,7 @@ fn applied_attrs(element: &str) -> &'static [&'static str] {
             "speedFactor",
             "speedDev",
             "probability",
+            "carFollowModel",
         ],
         "vTypeDistribution" => &["id", "vTypes", "probabilities"],
         "routeDistribution" => &["id", "routes", "probabilities"],
@@ -581,6 +593,13 @@ impl Parser {
             None => None,
         };
         let car_follow_model = all.get("carFollowModel").cloned();
+        // Applied when the driving library has the model and it needs no cooperative link
+        // (`v2xw_mobility::carfollowing::library::build_one`); otherwise not modelled.
+        if let Some(m) = &car_follow_model
+            && applied_model(m).is_none()
+        {
+            self.unsupported("vType", "carFollowModel", m);
+        }
         let probability = num("probability");
         if let Some(d) = dist {
             self.type_dists
@@ -864,7 +883,10 @@ impl RouteFile {
     pub fn parse_with(xml: &str, opts: &ImportOptions) -> Result<Self, String> {
         let mut reader = quick_xml::Reader::from_str(xml);
         let mut p = Parser {
-            out: RouteFile::default(),
+            out: RouteFile {
+                seed: opts.seed,
+                ..RouteFile::default()
+            },
             opts: *opts,
             rng: RngRegistry::new(opts.seed),
             routes: BTreeMap::new(),
@@ -1094,6 +1116,8 @@ impl RouteFile {
             sigma: t.and_then(|t| t.sigma),
             speed_factor: v.speed_factor,
             depart_speed: v.depart_speed,
+            car_following: t.and_then(|t| t.car_follow_model.as_deref()).and_then(applied_model),
+            model_seed: self.seed,
         }
     }
 }
@@ -1187,16 +1211,20 @@ impl RouteFileDemand {
         );
         card.limitations.push(
             "A vehicle type's body size (length, width, height), emergencyDecel, \
-             apparentDecel, laneChangeModel and lc*/jm* parameters, actionStepLength and \
-             per-type carFollowModel are counted in the import ledger and not applied: the \
-             vClass's body and the run's own driving models are used."
+             apparentDecel, laneChangeModel and lc*/jm* parameters and actionStepLength are \
+             counted in the import ledger and not applied: the vClass's body and the run's \
+             own lane-change model are used. A type's carFollowModel is driven per vehicle \
+             at the library model's cited defaults under the type's own accel, decel, tau, \
+             minGap and sigma; CACC (cooperative) and unknown models are not modelled and \
+             drive the run's model."
                 .to_string(),
         );
         card.limitations.push(
             "departLane free/allowed, departPos free/last/stop and departSpeed avg/last \
              need the occupancy at the instant of insertion: they fall back to first, base \
-             and max and are counted as approximations. A stated departSpeed above the safe \
-             insertion speed is lowered to it (SUMO delays such an insertion instead)."
+             and max and are counted as approximations. A stated departSpeed (a number, desired \
+             or speedLimit) above the safe insertion speed delays the insertion, as SUMO \
+             does; max and random are lowered to it."
                 .to_string(),
         );
         card.limitations.push(
@@ -1557,7 +1585,9 @@ mod tests {
         let l = &f.ledger;
         assert_eq!(l.not_modelled.get("vType@length"), Some(&1));
         assert_eq!(l.not_modelled.get("vType@lcStrategic"), Some(&1));
-        assert_eq!(l.not_modelled.get("vType@carFollowModel"), Some(&1));
+        // WP-15 follow-up: an IDM type is driven by the library's IDM per vehicle.
+        assert_eq!(l.applied.get("vType@carFollowModel"), Some(&1));
+        assert_eq!(l.not_modelled.get("vType@carFollowModel"), None);
         assert_eq!(l.not_modelled.get("vType/param[has.rerouting.device]@value"), Some(&1));
         assert_eq!(l.not_modelled.get("stop@busStop"), Some(&1));
         assert_eq!(l.approximated.get("vehicle@departLane=free"), Some(&1));
@@ -1567,5 +1597,41 @@ mod tests {
         assert_eq!(l.elements_not_modelled.get("stop"), Some(&1));
         assert_eq!(library_model("IDM"), Some("idm"));
         assert_eq!(f.vtypes["t"].car_follow_model.as_deref(), Some("IDM"));
+    }
+
+    /// A vType's carFollowModel reaches the vehicle as the library model it maps to; a
+    /// cooperative or unknown model is counted not modelled and reaches no vehicle.
+    #[test]
+    fn a_types_car_following_model_reaches_its_vehicles() {
+        let xml = r#"<routes>
+  <vType id="i" carFollowModel="IDM"/>
+  <vType id="k" carFollowModel="Krauss"/>
+  <vType id="c" carFollowModel="CACC"/>
+  <vType id="x" carFollowModel="Wiedemann"/>
+  <vType id="d"/>
+  <vehicle id="vi" type="i" depart="0"><route edges="a b"/></vehicle>
+  <vehicle id="vk" type="k" depart="0"><route edges="a b"/></vehicle>
+  <vehicle id="vc" type="c" depart="0"><route edges="a b"/></vehicle>
+  <vehicle id="vx" type="x" depart="0"><route edges="a b"/></vehicle>
+  <vehicle id="vd" type="d" depart="0"><route edges="a b"/></vehicle>
+</routes>"#;
+        let f = RouteFile::parse(xml).unwrap();
+        let model = |id: &str| {
+            let v = f.vehicles.iter().find(|v| v.id == id).unwrap();
+            f.trip_driver(v).car_following
+        };
+        assert_eq!(model("vi"), Some("idm"));
+        assert_eq!(model("vk"), Some("krauss"));
+        assert_eq!(model("vc"), None, "cooperative: the run's own link is needed");
+        assert_eq!(model("vx"), None);
+        assert_eq!(model("vd"), None);
+        let l = &f.ledger;
+        assert_eq!(l.applied.get("vType@carFollowModel"), Some(&2));
+        assert_eq!(l.not_modelled.get("vType@carFollowModel=CACC"), Some(&1));
+        assert_eq!(l.not_modelled.get("vType@carFollowModel=Wiedemann"), Some(&1));
+        assert!(
+            v2xw_mobility::carfollowing::library::build_one("idm", 1).is_some()
+                && v2xw_mobility::carfollowing::library::build_one("cacc-milanes", 1).is_none()
+        );
     }
 }

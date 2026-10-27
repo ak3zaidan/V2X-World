@@ -1587,6 +1587,12 @@ fn lateral_heading_offset(lateral_rate: f64, speed_mps: f64) -> f64 {
 pub struct NativeMobility {
     params: EngineParams,
     cf: Arc<dyn CarFollowing + Send + Sync>,
+    /// Vehicles whose stated vehicle type names its own car-following model (an imported
+    /// `.rou.xml` vType's `carFollowModel`, WP-15), with that model; every other vehicle
+    /// drives `cf`.
+    vtype_cf: BTreeMap<ActorId, Arc<dyn CarFollowing + Send + Sync>>,
+    /// One instance per named model, shared by the vehicles of every type that names it.
+    vtype_models: BTreeMap<&'static str, Arc<dyn CarFollowing + Send + Sync>>,
     lane_change: Option<Mobil>,
     gap: GapAcceptance,
     signals: FixedTimeSignals,
@@ -1763,6 +1769,8 @@ impl NativeMobility {
             card: card(&params, &cf.card().id),
             params,
             cf,
+            vtype_cf: BTreeMap::new(),
+            vtype_models: BTreeMap::new(),
             lane_change: params.lane_changes.then_some(mobil),
             gap: GapAcceptance::new(GapAcceptanceParams {
                 gap_factor: params.critical_gap_factor,
@@ -2059,7 +2067,7 @@ impl NativeMobility {
             }
             let mut moved = *ego;
             moved.lane = beside.lane;
-            if self.cf.accel(&moved, Some(&l), &lane_view, &self.weather)
+            if VehicleCf(&self.cf, &self.vtype_cf).accel(&moved, Some(&l), &lane_view, &self.weather)
                 < -PULL_OUT_FOLLOWER_DECEL_MPS2
             {
                 return None;
@@ -2071,7 +2079,7 @@ impl NativeMobility {
             if f.gap_m < fv.driver.min_gap_m {
                 return None;
             }
-            let a = self.cf.accel(
+            let a = VehicleCf(&self.cf, &self.vtype_cf).accel(
                 fv,
                 Some(&LeaderView::of(*ego, f.gap_m)),
                 &lane_view,
@@ -3711,10 +3719,42 @@ impl NativeMobility {
                 a.speed_mps = v;
             }
         }
+        if let Some((name, seed)) =
+            vtype.and_then(|vt| vt.car_following.map(|m| (m, vt.model_seed)))
+        {
+            let model = match self.vtype_models.get(name) {
+                Some(m) => Some(Arc::clone(m)),
+                None => {
+                    let m = crate::carfollowing::library::build_one(name, seed);
+                    if let Some(m) = &m {
+                        self.vtype_models.insert(name, Arc::clone(m));
+                    }
+                    m
+                }
+            };
+            if let Some(m) = model {
+                self.vtype_cf.insert(id, m);
+            }
+        }
         if let Some(ds) = vtype.and_then(|vt| vt.depart_speed) {
-            let v = self.stated_depart_speed(world, id, ds);
-            if let Some(a) = self.actors.get_mut(&id) {
-                a.speed_mps = v;
+            match self.stated_depart_speed(world, id, ds) {
+                Some(v) => {
+                    if let Some(a) = self.actors.get_mut(&id) {
+                        a.speed_mps = v;
+                    }
+                }
+                None => {
+                    // SUMO delays a departure whose stated speed is unsafe (SUMO
+                    // documentation, "Definition of Vehicles", departSpeed): the vehicle
+                    // is taken off again and the trip waits for the next step, as an
+                    // occupied origin does.
+                    self.actors.remove(&id);
+                    self.vtype_cf.remove(&id);
+                    if reserved.is_none() && id.index() + 1 == self.next_actor {
+                        self.next_actor -= 1;
+                    }
+                    return Insertion::Occupied;
+                }
             }
         }
         Insertion::Placed(id)
@@ -3774,7 +3814,7 @@ impl NativeMobility {
             let safe = |speed: f64| {
                 let mut probe = a.clone();
                 probe.speed_mps = speed;
-                self.cf
+                VehicleCf(&self.cf, &self.vtype_cf)
                     .accel(&probe.view(world), Some(&obstacle), &view, &self.weather)
                     >= -b
             };
@@ -3800,13 +3840,18 @@ impl NativeMobility {
     /// of the lane (a red signal there is not yet known), and by the speed that keeps the
     /// IDM's desired gap `s0 + v T` to the vehicle ahead on the lane and lets it brake to
     /// that vehicle's speed within the gap.
-    /// The speed a vehicle with a stated `departSpeed` enters at: the stated value, never
-    /// above the safe [`Self::depart_speed`].
-    fn stated_depart_speed(&self, world: &World, id: ActorId, ds: crate::views::DepartSpeed) -> f64 {
+    /// The speed a vehicle with a stated `departSpeed` enters at, as SUMO documents it:
+    /// `max` and `random` are lowered to the safe [`Self::depart_speed`] (SUMO adapts
+    /// them to the leader); a number, `desired` and `speedLimit` above the safe speed are
+    /// `None`, a departure SUMO delays rather than slows.
+    fn stated_depart_speed(
+        &self,
+        world: &World,
+        id: ActorId,
+        ds: crate::views::DepartSpeed,
+    ) -> Option<f64> {
         use crate::views::DepartSpeed;
-        let Some(a) = self.actors.get(&id) else {
-            return 0.0;
-        };
+        let a = self.actors.get(&id)?;
         let lane = world.lane(a.lane);
         let safe = self.depart_speed(world, id);
         let desired = a
@@ -3821,7 +3866,12 @@ impl NativeMobility {
             DepartSpeed::SpeedLimit => lane.speed_limit_mps,
             DepartSpeed::Random(u) => u.clamp(0.0, 1.0) * desired,
         };
-        wanted.min(safe)
+        match ds {
+            DepartSpeed::Max | DepartSpeed::Random(_) => Some(wanted.min(safe)),
+            // A millimetre per second of slack: the safe speed is rounded to q3.
+            _ if wanted > safe + 1e-3 => None,
+            _ => Some(wanted.min(safe)),
+        }
     }
 
     fn depart_speed(&self, world: &World, id: ActorId) -> f64 {
@@ -3868,7 +3918,7 @@ impl NativeMobility {
         }
         let mut lane = LaneView::of(world.lane(follower.lane));
         lane.speed_limit_mps *= follower.traits.speed_factor;
-        let a = self.cf.accel(
+        let a = VehicleCf(&self.cf, &self.vtype_cf).accel(
             &follower.view(world),
             Some(&LeaderView::virtual_obstacle(gap_m, 0.0)),
             &lane,
@@ -5145,7 +5195,7 @@ impl NativeMobility {
                 if f.gap_m < fv.driver.min_gap_m {
                     continue;
                 }
-                let a = self.cf.accel(
+                let a = VehicleCf(&self.cf, &self.vtype_cf).accel(
                     fv,
                     Some(&LeaderView::of(*ego, f.gap_m)),
                     &LaneView::of(target_lane),
@@ -5195,7 +5245,7 @@ impl NativeMobility {
             }
             let mut moved = *ego;
             moved.lane = target.lane;
-            if self.cf.accel(&moved, Some(&l), &lane_view, &self.weather)
+            if VehicleCf(&self.cf, &self.vtype_cf).accel(&moved, Some(&l), &lane_view, &self.weather)
                 < -PULL_OUT_FOLLOWER_DECEL_MPS2
             {
                 return None;
@@ -5207,7 +5257,7 @@ impl NativeMobility {
             if f.gap_m < fv.driver.min_gap_m {
                 return None;
             }
-            let a = self.cf.accel(
+            let a = VehicleCf(&self.cf, &self.vtype_cf).accel(
                 fv,
                 Some(&LeaderView::of(*ego, f.gap_m)),
                 &lane_view,
@@ -5971,6 +6021,9 @@ impl Mobility for NativeMobility {
         // The car-following model's step clock (`CarFollowing::begin_step`): before any
         // `accel` of this step, so every evaluation in the step sees the same instant.
         self.cf.begin_step(t0, dt);
+        for m in self.vtype_models.values() {
+            m.begin_step(t0, dt);
+        }
 
         // --- pass 1: commands ---------------------------------------------
         let commanded: Vec<ActorId> = self.apply_commands(&*ctx, t0);
@@ -6741,7 +6794,7 @@ impl Mobility for NativeMobility {
                     actor.driver.comfort_decel_mps2,
                 )
             } else {
-                self.cf
+                VehicleCf(&self.cf, &self.vtype_cf)
                     .accel(&ego_capped, leader.as_ref(), &lane_view, &self.weather)
             };
             // A merge partner that reaches the merge point first is fallen in behind by the
@@ -6783,7 +6836,7 @@ impl Mobility for NativeMobility {
                 // still slows for it. Without this, the relaxed stop for a line 60 m away
                 // (−0.8 m/s²) overrode the anticipation of a 6 m/s turn, the car reached
                 // the connector at 9.7 m/s, and the model braked it there at −5.6 m/s².
-                accel = accel.min(self.cf.accel(&ego_capped, None, &lane_view, &self.weather));
+                accel = accel.min(VehicleCf(&self.cf, &self.vtype_cf).accel(&ego_capped, None, &lane_view, &self.weather));
                 // Whatever the stop line allows, the car ahead still binds. The relaxed
                 // stop lets a vehicle creep up to a line (or a crosswalk's edge) it is
                 // already inside its standstill gap of; with a car standing just beyond
@@ -6793,7 +6846,7 @@ impl Mobility for NativeMobility {
                 if let Some(v) = nearest_vehicle {
                     accel =
                         accel.min(
-                            self.cf
+                            VehicleCf(&self.cf, &self.vtype_cf)
                                 .accel(&ego_capped, Some(&v), &lane_view, &self.weather),
                         );
                 }
@@ -6822,7 +6875,7 @@ impl Mobility for NativeMobility {
                     .max(line - STOP_LINE_MARGIN_M + actor.driver.min_gap_m);
                 let slack = (line - 0.2) - stop.gap_m;
                 let a_stop = static_obstacle_accel(
-                    self.cf
+                    VehicleCf(&self.cf, &self.vtype_cf)
                         .accel(&ego_capped, Some(&stop), &lane_view, &self.weather),
                     ego.speed_mps,
                     stop.gap_m,
@@ -11378,5 +11431,23 @@ mod tests {
                 assert_eq!(r.count(crate::audit::Check::MidRoadDespawn), 2);
             }
         }
+    }
+}
+
+/// The model a vehicle drives: its type's own when it has one, else the engine's.
+struct VehicleCf<'a>(
+    &'a Arc<dyn CarFollowing + Send + Sync>,
+    &'a BTreeMap<ActorId, Arc<dyn CarFollowing + Send + Sync>>,
+);
+
+impl VehicleCf<'_> {
+    fn accel(
+        &self,
+        ego: &crate::views::VehicleView,
+        leader: Option<&LeaderView>,
+        lane: &LaneView,
+        w: &WeatherState,
+    ) -> f64 {
+        self.1.get(&ego.actor).unwrap_or(self.0).accel(ego, leader, lane, w)
     }
 }

@@ -1,0 +1,165 @@
+# Traffic fix round 3 (WP-11, WP-14, WP-15 follow-ups; branch of 4aa798bb).
+#
+# Every row was written BEFORE the run or test that judges it: the predicted direction or
+# value with its source, `measured: pending` and `verdict: pending` until it ran. Base and
+# variant of a comparison use one binary and one seed. Each row names the injected fault
+# that turns it red (shown red, then restored).
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+schema: v2xw/traffic-fix-expectations/1
+rows:
+# --- WP-11: surrogate safety measures against SUMO's SSM device -------------------------
+- id: W11.xval.crossing
+  change: SSM network mode (SUMO's classification) in place of geometry alone
+  base: cross_validate grid 1800 veh/h, V2XW_XVAL_SSM_MODE=geometric
+  variant: the same case, network mode (default)
+  measure: crossing conflicts (min TTC < 3 s), this engine's SSM on SUMO's trajectories, over SUMO's SSM device count
+  expect: ratio inside 1/1.5..1.5 (ssmval TOLERANCE); geometric base 362/20 = 18x
+  source: SUMO SSM device documentation (crossing only on foe links of one junction, range along the network, braking only extrapolated); MSDevice_SSM read for behaviour
+  fault: zone lookup ignores the foe matrix (every connector pair a zone) -> excess returns
+  measured: pending
+  verdict: pending
+- id: W11.xval.merging
+  change: as W11.xval.crossing
+  base: as W11.xval.crossing
+  variant: as W11.xval.crossing
+  measure: merging conflicts, ours over SUMO's
+  expect: ratio inside 1/1.5..1.5 (geometric base 47/26 = 1.81x)
+  source: SUMO SSM documentation (merging = foe links onto one outgoing lane)
+  fault: as W11.xval.crossing
+  measured: pending
+  verdict: pending
+- id: W11.xval.following
+  change: as W11.xval.crossing
+  base: as W11.xval.crossing
+  variant: as W11.xval.crossing
+  measure: following conflicts, ours over SUMO's
+  expect: stays inside 1/1.5..1.5 (geometric base 413/328 = 1.26x); the gap is now along the route, as SUMO's
+  source: SUMO SSM documentation (lead/follow along the lane sequence)
+  fault: none new (the following measure is unchanged in form)
+  measured: pending
+  verdict: pending
+- id: W11.xval.oncoming
+  change: as W11.xval.crossing
+  base: as W11.xval.crossing
+  variant: as W11.xval.crossing
+  measure: oncoming conflicts, ours
+  expect: 0 (SUMO 0: oncoming is two vehicles on one lane in opposite directions; one-way lanes never hold it); geometric base 28
+  source: SUMO SSM documentation, encounter type 20
+  fault: as W11.xval.crossing
+  measured: pending
+  verdict: pending
+- id: W11.xval.driving-unchanged
+  change: as W11.xval.crossing (an observer change only)
+  base: as W11.xval.crossing
+  variant: as W11.xval.crossing
+  measure: SUMO and native traffic figures of the report (completed trips, travel times, halts)
+  expect: identical between base and variant (the measures read the trajectories, never feed them)
+  source: design (detectors and observers read state only)
+  fault: n/a
+  measured: pending
+  verdict: pending
+- id: W11.xval.cost
+  change: as W11.xval.crossing
+  base: as W11.xval.crossing
+  variant: as W11.xval.crossing
+  measure: wall time and peak RSS of the case
+  expect: within +25 % of the base (path building is O(vehicles) per step; pairs in a 100 m grid instead of 50 m, each a few lane lookups; SUMO's own run dominates)
+  source: complexity of the code
+  fault: n/a
+  measured: pending
+  verdict: pending
+- id: W11.tv.crossing
+  change: traffic validation safety/surrogate-measures in network mode
+  base: none (held row)
+  variant: Midtown grid study, shipped
+  measure: crossing conflicts with min TTC < 3 s
+  expect: at least 1 (permitted left turns against opposing traffic are foe movements, Gettman et al. 2008); far fewer than the geometric 71
+  source: FHWA-HRT-08-051 §2; SUMO SSM classification
+  fault: extrapolation dropped -> 0
+  measured: pending
+  verdict: pending
+- id: W11.unit.network
+  change: evaluate_pair_network
+  measure: hand-computed crossing TTC 2.7 s / DRAC / MDRAC / PPET, non-foe none, braking 3 m/s^2 none, following gap along the path 18 m, merge TTC 2.0 s
+  expect: equal to the hand computation
+  source: SUMO SSM documentation formulas
+  fault: braking not extrapolated; foe check dropped; following gap ignoring the leader's length
+  measured: pending
+  verdict: pending
+- id: W11.unit.braking-geometric
+  change: none (red-under-fault owed by WP-11)
+  measure: a_car_braking_short_of_the_crossing_is_no_conflict
+  expect: red when acceleration is not extrapolated (constant-speed fault)
+  source: Fazekas et al. 2017 constant initial acceleration
+  fault: accel term forced to 0
+  measured: pending
+  verdict: pending
+- id: W11.unit.ssmval
+  change: none (red-under-fault owed by WP-11)
+  measure: ssmval parser and count tests
+  expect: red when the minTTC type is not read, and when duplicates are not merged
+  source: SUMO SSM output format
+  fault: minTTC type dropped; duplicate key ignored
+  measured: pending
+  verdict: pending
+# --- WP-14: perception -------------------------------------------------------------------
+- id: W14.cpm.direct
+  change: none yet (diagnosis of awareness_direct_permille = 0)
+  base: cpm_metrics test scenario (connected-intersections, 12 s, 40 % equipped, CAM + CPM, gn-btp, etsi103097)
+  measure: awareness_direct_permille
+  expect: above 0, near the equipped share of neighbours times the CAM delivery ratio (0.4 x ~0.9 ~ 350 permille), since 40 % of the vehicles send CAMs at >= 1 Hz (EN 302 637-2) and the window is 1 s+
+  source: EN 302 637-2 CAM generation; the metric's definition
+  fault: n/a (diagnosis first)
+  measured: pending
+  verdict: pending
+- id: W14.mast
+  change: 2.5D outline occlusion (mount height, vehicle heights), outline option only
+  measure: a_camera_above_the_cars_sees_over_them_and_not_over_a_truck
+  expect: a 6 m mast camera sees a car over a car (line 3.47 m up over a 1.5 m roof) and not over a 3.5 m truck (3.07 m); a 2.6 m cab camera sees over a car; 0.6 m bumper sensors do not
+  source: Boban et al. 2014 (vehicles as boxes of their height, blocked when the line meets a box)
+  fault: heights ignored (2D) -> the mast and cab cases red
+  measured: pending
+  verdict: pending
+- id: W14.default-unchanged
+  change: as W14.mast
+  measure: the legacy draw-for-draw test and every centre-line run
+  expect: unchanged (the default occlusion never reads heights)
+  source: design
+  fault: n/a
+  measured: pending
+  verdict: pending
+# --- WP-15: route-file import --------------------------------------------------------------
+- id: W15.cf
+  change: per-type carFollowModel applied per vehicle
+  measure: speed after 6 s from standstill on a free road, vType accel 1.5, sigma 0, maxSpeed 12
+  expect: Krauss type at a*t = 9.0 m/s within 0.05; the same type with no model (the engine's IDM) at least 0.3 m/s slower (a(1-(v/v0)^4))
+  source: Krauss 1998; Treiber et al. 2000; SUMO vType carFollowModel
+  fault: VehicleCf ignores the per-vehicle map -> Krauss run equals the IDM run
+  measured: pending
+  verdict: pending
+- id: W15.depart
+  change: an unsafe stated departSpeed delays the insertion
+  measure: follower with departSpeed 13 behind a vehicle that departed at 0 m/s, against departSpeed max
+  expect: 13 enters later (by > 1 s) at exactly 13 m/s; max enters earlier below 13 m/s
+  source: SUMO documentation, departSpeed ("If that speed is unsafe, departure is delayed"; max/random adapted)
+  fault: the old cap (wanted.min(safe)) -> enters at once below 13
+  measured: pending
+  verdict: pending
+- id: W15.form
+  change: the settings form's demand dropdown
+  measure: options("actors.vehicles.demand.kind")
+  expect: poisson, tr36885-drop, none, sumo-rou and the seven v2xw-demand kinds, each with words
+  source: wiring::DEMAND_KINDS (what Check accepts)
+  fault: the old three-row list
+  measured: pending
+  verdict: pending
+- id: W15.unchanged
+  change: as W15.cf and W15.depart
+  measure: a Poisson scenario run (no vType) content digest, same seed twice and against the base commit's build
+  expect: byte-identical (no demand states a vType, and the per-type models' seed comes through the demand, so no RNG stream is added)
+  source: design (keyed streams, RngRegistry)
+  fault: n/a
+  measured: pending
+  verdict: pending

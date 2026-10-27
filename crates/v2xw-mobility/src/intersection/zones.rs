@@ -170,6 +170,52 @@ impl ConflictZones {
     pub fn is_empty(&self) -> bool {
         self.zones.is_empty()
     }
+
+    /// The first zone where `internal`'s path meets `other`'s, if the two movements are
+    /// foes.
+    pub fn first_zone(&self, internal: LaneId, other: LaneId) -> Option<&Zone> {
+        self.of(internal).iter().find(|z| z.other == other)
+    }
+
+    /// The lanes a vehicle drives next, for the network-mode surrogate safety measures:
+    /// `(lane, distance from the front bumper to its start, length, internal)`, starting
+    /// with `lane` (front at `s_front`), then `next` (the route's next lane, when known),
+    /// then each internal lane's exit, until `range_m` is passed or the route is unknown.
+    pub fn path_ahead(
+        &self,
+        world: &World,
+        lane: LaneId,
+        s_front: f64,
+        next: Option<LaneId>,
+        range_m: f64,
+    ) -> Vec<(LaneId, f64, f64, bool)> {
+        let Some(l) = world.try_lane(lane) else {
+            return Vec::new();
+        };
+        let mut out = vec![(lane, -s_front, l.length_m, l.junction.is_some())];
+        let mut end = l.length_m - s_front;
+        let mut cur = lane;
+        while end <= range_m && out.len() < 5 {
+            let internal = world.lane(cur).junction.is_some();
+            let n = if cur == lane && next.is_some() {
+                next
+            } else if internal {
+                self.exit_of(cur)
+            } else {
+                None
+            };
+            let Some(n) = n.filter(|n| *n != cur) else {
+                break;
+            };
+            let Some(nl) = world.try_lane(n) else {
+                break;
+            };
+            out.push((n, end, nl.length_m, nl.junction.is_some()));
+            end += nl.length_m;
+            cur = n;
+        }
+        out
+    }
 }
 
 /// Where two polylines intersect, as arc lengths along each. Segment endpoints count, so
