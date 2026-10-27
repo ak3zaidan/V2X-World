@@ -8,11 +8,11 @@ the figures. SCMS validation lives in `docs/design/scms-real/` and `testing/`, n
 
 | Report | Date | Pass | Fixed | Corrected | Open | Notes |
 |---|---|---|---|---|---|---|
-| [live-scenarios-2026-10-25.md](live-scenarios-2026-10-25.md) | 2026-10-25 | 28 | 0 | 5 | 9 | rows in `live-scenarios.yaml`; 115 runs, 117 scenarios not run |
-| [live-scms-2026-10-25.md](live-scms-2026-10-25.md) | 2026-10-25 | 36 | 0 | 1 | 3 | rows in `live-scms.yaml`; 68 pending; R-P2PCD-ASYM, R-KEMFILE open |
+| [live-scenarios-2026-10-25.md](live-scenarios-2026-10-25.md) | 2026-10-25, upd. 10-26 | 28 | 0 | 5 | 9 | rows in `live-scenarios.yaml`; 115 runs, 117 scenarios not run; 10-26: split-certificate fix `2ef94049`, finding-3 flag renamed `traffic.depart_speed_max` at integration (WP-05 holds `traffic.depart_at_speed`); 10-26 counts in the report, not re-tallied here |
+| [live-scms-2026-10-25.md](live-scms-2026-10-25.md) | 2026-10-25, upd. 10-26 | 36 | 0 | 1 | 3 | rows in `live-scms.yaml`; 68 pending; R-P2PCD-ASYM, R-KEMFILE open; 10-26: 68 owed rows judged on `938fb16a` (58 pass, 9 corrected, 1 open); of the three engine tests failing since `0d62f322`, the pseudonym-strategy test is fixed at integration and the download-wait and backhaul tests stay open (owner decision: RA serving a past-due period as held) |
 | [live-atk-2026-10-25.md](live-atk-2026-10-25.md) | 2026-10-25 | 107 | 0 | 5 | 10 | rows in `live-atk.yaml`; 54 pending; Sybil onset fixed `9cdb1639` |
 | [live-rsu-2026-10-25.md](live-rsu-2026-10-25.md) | 2026-10-25 | 14 | 0 | 3 | 3 | rows in `live-rsu.yaml`; 54 pending; RSU CRL install fixed `4399f8f8` |
-| [live-chains-2026-10-25.md](live-chains-2026-10-25.md) | 2026-10-25 | 54 | 0 | 3 | 16 | rows in `live-chains.yaml`; 21 not run |
+| [live-chains-2026-10-25.md](live-chains-2026-10-25.md) | 2026-10-25, upd. 10-26 | 54 | 0 | 3 | 16 | rows in `live-chains.yaml`; 21 not run; 10-26: provider-qualified backend failures `0de68cac`, its CRL-outage test fixed at integration |
 | [live-studio-2026-10-25.md](live-studio-2026-10-25.md) | 2026-10-25, 2026-10-26 | 32 | 2 | 7 | 10 | rows in `live-studio.yaml` (59); compare peak pooling fixed `ce532c6e`, thin-window pooling fixed `dfa0e13e`; 8 rows pending (s3b, soak, lifecycle) |
 | [platform-2026-10-24.md](platform-2026-10-24.md) | 2026-10-24/25, upd. 10-26 | 24 | 8 | 3 | 14 | rows in `platform-validation.yaml`; third session fixed CBR window share (`9de6e99e`) and MAP crosswalk lanes (`38230208`); open includes DCC x density interaction red (item 18) |
 | [radio-2026-10-24.md](radio-2026-10-24.md) | 2026-10-24, upd. 10-26 | 31 | 3 | 1 | 2 | rows in `radio-validation.yaml`; §6: PC5 no-jitter fix landed (`454b4372`), sensing per TS 36.213/38.214 (`53b9aed8`), both NR selection-window rows fixed; open = fault runs for RV-PER-NIST, RV-BACKHAUL-CELL |

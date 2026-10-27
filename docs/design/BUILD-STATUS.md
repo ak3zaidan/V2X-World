@@ -4036,6 +4036,41 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-26: four-round integration (FIXWAVE3, WAVE754, WAVE5BC, SCMS fix round 2 tests)
+
+One integrator replaced the four stalled ones. It worked in the main checkout and ran one heavy command at a time.
+
+- **Merged `--no-ff` onto `938fb16a`, in this order:**
+  - `integ/fixwave3` (`17f38317`, engine fix wave 3: platform, radio, traffic): no conflict.
+  - `integ/wave754` (`e7b9fb12`, adoption waves 2-3: WP-04, 05, 06, 08, 09): no conflict. WP-07 delivered nothing and is left out.
+  - `integ/wave5bc` (`c49a7e90`, live testing part 2): merge `c539c59e`. Its wip snapshot was read and kept as committed: three test-setup fixes, among them RandomSpeed's `> 90` ceiling (unreachable at exactly 15 + 3 × 25 m/s).
+- **Conflicts in the wave5bc merge:**
+  - Two implementations claimed `traffic.depart_at_speed`, with opposite assertions on interior origins. WP-05 keeps the name (map-edge entrants). The live-scenarios finding-3 flag is now `traffic.depart_speed_max` (every trip, SUMO departSpeed="max"); its expectation rows and report were renamed.
+  - `docs/validation/README.md`: the newer rows from both sides were kept.
+- **Fixes:**
+  - Pseudonym-strategy test (`3b7f175d`): it checks on the records that the first frame after each change carries the certificate, and it pools three seeds for `q <= t`. With `withdraw_certificate` made a no-op it goes red: 52 of 60 changes opened with a digest.
+  - Merge fixes (`04697568`): WP-06 FCD trig now goes through `v2xw_core::math`, as the firewall requires. The CRL-outage test now reads one step after the inter-provider hop; it was red before and is green now.
+  - Re-blessed (`d3069c14`): `i-s1-phase2-60s` and `phase2-path`, whose frame digests are unchanged, and conformance `grid-traffic` (CBR window, new metric).
+  - `cargo fmt --all`: `1af0673d`.
+- **Checks:**
+  - `cargo check --workspace --tests` is clean, with known warnings only.
+  - **276 test binaries, each run once through its own heavy.sh call: 4,142 pass, 20 fail, 40 ignored.** `scms_knobs_runs` hit the 30-minute cap and was re-run alone: 18/18 plus the known failure. After the fixes, 16 failures remain.
+  - Merge-caused: WP-08's 4 tests (mobility ×3, engine `violations`). The feature is off by default; they were known at the wave integration and were not chased past the 45-minute cap (adoption plan WP-08).
+  - Pre-existing: `scms_knobs_runs::a_longer_download_wait…` and `sensitivity_security::the_backhaul…`, which are open pending an owner decision (validation summary §6 item 27). The known `longrun_budget`, `energy_glosa`, `a_bus_serves_its_stops`, `pedestrian_invariants` ×2 and kerbside `realism`. Conformance firewall ×3 (hash containers and wall clocks in rxval, governance and interop; std transcendentals in interop and compare) and `vwp` r1 (44 methods against 33): none of the flagged lines is new.
+  - Python: realdata 35/35; oracle selftest 412/412; verify-emitted 10/10.
+  - UI (`e2e-engine/support.ts` changed): protocol and viewer `tsc -b` clean, Studio typecheck clean, vitest 326/326.
+- **Release:** `cargo build --release -j 2 -p v2xw-cli --bins` in 11 m. `v2xw-server --scenario scenarios/manhattan-5min.yaml --port 8758 --paused --speed 0` answered `/agent/status` and `/rpc/schema` with 200 within 5 s and was stopped by PID.
+- **Still open:**
+  - The two SCMS tests: serving a past-due period as held fixes the backhaul test but removes the download-wait test's premise, and it moves every SCMS digest.
+  - WP-08 calibration: the red-onset decision is locked at first sight, and 355 of 600 trips entered.
+  - WP-07 needs an owner decision.
+  - The conformance firewall's pre-existing hits and `vwp` r1.
+- **Cleanup:**
+  - Worktrees `integ-{fixwave3,wave754,wave5bc}` were checked merged and clean, then removed. The `wf_*` worktrees were already gone.
+  - Deleted with `-d`: `integ/*` and the merged `worktree-wf_*` branches (`06761ffa-754-*`, `2ff1403a-f41-*`, `c987ee2e-5bc-*`, and `c046b4e4-514-*` at `938fb16a`).
+  - Kept, because they are not merged: `worktree-wf_1faba59c-7f5-2`, `76b395d3-1fc-{4,6}`, `7be0da11-34e-{4,6}` and `wip/fix2-m1-tests`.
+  - Deleted `target/agents`. `worlds/cache` is intact.
+
 ## 2026-10-26: live-run wave integration (SCENARIOS, SCMSKNOBS, ATTACKS, RSUAPPS, CHAINS, STUDIOLIVE)
 
 Six live-run validation tracks, each run on copies of the `486c8cba` release binary with every row committed before its run. All six worktrees were clean (no wip snapshot needed). Merged `--no-ff` onto `adbbc4c8` in order, no conflicts: scenarios `da82b654` (merge `f798aac0`), scmsknobs `e0167332` (`f6872255`), attacks `b3bffb1d` (`be6579b9`), rsuapps `aa64f57f` (`8ae7cbff`), chains `a5e890fa` (`f107b7f3`), studiolive `4045383a` (`06a5d15c`). `cargo fmt --all` as its own commit (`f99ec1e3`, 12 files, formatting left by earlier merges).

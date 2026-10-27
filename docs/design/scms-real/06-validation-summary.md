@@ -8,6 +8,11 @@ again 2026-10-23 at `d90a6298`** (main), after:
 - the full-scale benchmark to the end (BENCH, merged at `d90a6298`: FB3, docs and the
   `scms-full-bench.yaml` expectations only).
 
+**Updated 2026-10-26 (later)** after the four-round integration on main (fix wave 3,
+framework adoption waves 2-3, live testing part 2, and the SCMS fix round 2 test
+failures; BUILD-STATUS "four-round integration"). No rule verdict moved; §2, §6 item 27
+and §9 give the details.
+
 **Updated 2026-10-26** after the live-run wave (SCENARIOS, SCMSKNOBS, ATTACKS, RSUAPPS,
 CHAINS, STUDIOLIVE), merged onto `adbbc4c8` (BUILD-STATUS "live-run wave integration").
 §2.2, §6 item 26 and §9 state its results: six new tables, 545 rows written before their
@@ -139,6 +144,14 @@ and a grid-hop BSM's speed. Configuration rows: 951, of which 760 pass, 56 fixed
 corrected and 73 open (§2.2), plus 26 Paper 1 rows and 2 governance rows written before
 their runs and still pending. The records branch's audit rows were not re-judged on the
 fixed binary (§9).
+
+**What moved in the 2026-10-26 four-round integration: no rule verdict.** Of the three
+engine tests failing since `0d62f322` (PV.aca-cannot-group), one was fixed by a better
+test: the pseudonym-strategy test now checks the mechanism on the records and pools three
+seeds (red under its fault). The other two stay open and wait for an owner decision
+(§6 item 27). The `i-s1-phase2-60s`, `phase2-path` and conformance `grid-traffic`
+digests were re-blessed. Their frame digests did not change; only the record content
+moved. The configuration-row totals are unchanged.
 
 **What moved in the 2026-10-26 live-run wave: no rule verdict.** Six live tracks ran the
 `486c8cba` release binary (scenarios, SCMS knobs, attacks, RSU applications, cross-domain
@@ -1225,6 +1238,19 @@ whether a full-fleet misbehaviour rate is a real-world number.
     signers; item 25 saw it pass, so the stale-artefact explanation there is in doubt:
     both runs here compiled v2xw-engine afresh). Not root-caused.
 
+27. **The four-round integration** (2026-10-26, on main from `938fb16a`). Merged fix
+    wave 3, adoption waves 2-3 (WP-04, 05, 06, 08, 09) and live testing part 2. Fixed at
+    integration: a CRL-outage test that read provider-a's RA before the inter-provider
+    hop, and WP-06's std trig. `traffic.depart_at_speed` named two different behaviours,
+    so the live-scenarios one is now `traffic.depart_speed_max`.
+    **Open, owner decision:** `scms_knobs_runs::a_longer_download_wait_lengthens_a_late_topup`
+    and `sensitivity_security::the_backhaul_latency_and_bandwidth_move_relay_topups`.
+    Both come from the lazy weekly job, which tells a device `now + first_batch_delay`
+    for a period that fell due long ago. The fix at the cause (serve such a period as
+    held) removes test 2's fictitious wait. It also takes away test 1's premise, because
+    an in-run ACA slowdown would no longer delay a pre-generated batch. Both tests need
+    to be re-read together with the change, and every SCMS digest moves.
+
 ## 7. Every unverifiable item and how it is modelled (29)
 
 ### Cryptography and data formats (5)
@@ -1380,6 +1406,10 @@ The totals count each row as its own checklist records it, with the changes in �
   an alias.
 - ~~Whether the ECA and ACA should hold one certificate~~: one certificate per component
   since 2026-10-25 (`GOV.L.onecert`).
+- From the four-round integration (§6 item 27): whether the RA serves a period that fell
+  due before the request as already held, which fixes the backhaul test, removes the
+  download-wait test's premise and moves every SCMS digest; and WP-07, blocked by a
+  safety check.
 - From the live-run wave (§6 item 26): price software crypto at the medium compute tier on
   the profile's core count or behind a flag; a loader warning when us-sm-mbr runs on raw
   GNSS fixes; whether a CLI `--duration` may clip fast-forward windows, events and warmup;

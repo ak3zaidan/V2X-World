@@ -161,6 +161,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
   calibration check and its fault, the L0w/L0s/L0p/L0pR runs, whether the default should
   become on (a defect fix that would move the phase2 digests).
 - Integration (2026-10-26): merged into main (wave-2 integration; `engine.rs` `DriverTraits` conflict with WP-05 resolved keeping both `reroutes` and `gap_z`). Compiles after one fix (ambiguous float literals in the critical-gap test). `intersection::gap_acceptance` (15) and `signal_fixed_time` (11) unit tests pass. Still open: the fault proofs, `traffic_validation --only permitted-left-gap` and its fault, the TV.wp04 runs (L0w, L0s, L0p, L0pR), the owner decision on sneakers by default, the box-wait overlap test.
+- Main integration (2026-10-26, wave-2/3 merge onto main with fix wave 3 and live testing part 2): merged; the workspace test run passes its unit tests (`intersection::gap_acceptance`, `signal_fixed_time`, the mobility lib's 314 passing tests). Sneakers and per-driver gaps stay off by default. Still open: the fault proofs, `traffic_validation --only permitted-left-gap` and the TV.wp04 runs, the owner decision on sneakers by default.
 
 **WP-05 Small traffic fixes** (S ×3, 4-5 days). Sources: S-P9, S-P14, S-P16.
 - Scope: vehicles entering at map boundaries are inserted at the desired speed, capped by the
@@ -204,6 +205,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
     an engine-level V2X re-route run (breakdown with DENM on), and the red-under-fault
     proofs for every new check.
 - Integration (2026-10-26): merged into main. `engine::reroute_tests` (4) pass. One fix: `traffic.reroute_share` published no unit (`publish::every_number_publishes_a_unit` failed); it is now in `publish::DIMENSIONLESS`. Still open: `invariants/boundary-insertion` and its fault, the P16 `city_audit` trace, the V2X reroute end to end, fault proofs and golden/digest checks.
+- Main integration (2026-10-26): merged. Name clash resolved: live testing part 2 committed its own finding-3 fix under the same key `traffic.depart_at_speed` (every trip departs at the highest safe speed, SUMO departSpeed="max"). WP-05 keeps `traffic.depart_at_speed` (map-edge entrants at the lane start, interior origins at rest, as its `reroute_tests` assert); the other becomes `traffic.depart_speed_max` (`EngineParams::depart_speed_max`), with its live-scenarios rows renamed. Both off by default; both unit tests pass. Still open as listed above.
 
 **WP-06 SUMO-format outputs** (S, 2 days). Source: S-P7.
 - Scope: FCD XML, tripinfo, edgeData/laneData, summary, and E1/E2 virtual detectors at named
@@ -229,6 +231,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
   patches the cached copy. Open: compile, run the test, inject faults in the totals and
   recount checks, review the E2 halting-duration semantics.
 - Integration (2026-10-26): merged into main. `sumo_outputs` unit tests (4) and `v2xw-cli --test sumo_outputs` pass against SUMO 1.27.1 (the scratch venv needed `sumo-data`, `sumolib` and `traci` pinned to 1.27.1; `sumo-data` 1.28.0 left the binary without `libproj`). Still open: the fault proofs (tripinfo totals, edgeData recount, summary), the E2 halting/jam and FCD past-lane-end review.
+- Main integration (2026-10-26): merged. `sumo_outputs.rs` called std `cos`/`sin` for the FCD front position, which the conformance firewall (`no_std_transcendental_is_called`) rejects; now `v2xw_core::math::{cos, sin}`. `v2xw-cli --test sumo_outputs` passes. Still open: the fault proofs listed above.
 
 ### Wave 3: attacks, violators and cheap radio laws
 
@@ -247,6 +250,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
   replay compiles only against `AttackerView` receptions; the legacy catalogue and ML corpus
   digests are unchanged.
 - Integration (2026-10-26): nothing delivered (no commits; the agent's attempt to write `attack_f2md.rs` was stopped by a safety check). Needs a decision before it is reassigned. The agent's reading notes: only `threat/attacker/legacy/*` attackers are armed; `falsify` gets an empty `own_rx` and `observe` is never called, so neighbour replay needs engine changes; DoS repetitions are not rendered and a changed `out.signer` is not re-signed; `VEREMI_EXT_CODES` matches the last name segment only; `CatalogEntry` names must be unique.
+- Main integration (2026-10-26): still nothing delivered; blocked by a safety check. **Owner decision needed** before it is reassigned.
 
 **WP-08 Rule violations and crash states** (M, 5-7 days). Source: S-P2.
 - Scope: per-driver propensity for red-light running after red onset, amber running beyond the
@@ -282,6 +286,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
   DENM/TIM for a crash; vehicle-pedestrian collisions are not resolved; and the
   rate-per-1,000-veh band is still unmeasured on the engine.
 - Integration (2026-10-26): merged into main; compiles after one fix (the new `Actor` fields were missing from the `engine/tiering.rs` hand-off that landed after the base). Its own tests FAIL on first run: `violations_off_change_nothing_and_on_is_deterministic` (violations on changed nothing in 400 s), `red_light_running_sits_in_the_field_band...` (355 entries, under its 400 floor), `a_collision_becomes_a_crash...` (`by_violation` false when tagged: the decision pass clears `violation` before `resolve_collisions` reads it), and engine `violations.rs` (RLVW 0 -> 0). The feature is off by default; the other suites pass as before. A crashed vehicle released by tiering loses its crash state.
+- Main integration (2026-10-26): merged; off by default, and every default-path suite and golden passes with it in. Its own four tests still FAIL as at the wave integration (not chased, at the 45-minute cap): mobility `violations_off_change_nothing_and_on_is_deterministic` ("violations on changed nothing"), `red_light_running_sits_in_the_field_band...` (355 entries under the 400 floor; 1 red entry, 2.82 per 1,000 veh against the 3.0-5.3 band), `a_collision_becomes_a_crash...` (`by_violation` false: the test's hand-set tag is cleared by the decision pass before `resolve_collisions`, as a real runner's tag is not), and engine `violations.rs` (RLVW 0 -> 0). Reading of the code: the red-onset branch locks `signal_look` at the first sight of red, far upstream, so a runner never gets a later look; and the amber branch's red-run arm requires `tti < amber_go_tti_s`. Both are calibration and design choices for the WP-08 owner.
 
 **WP-09 Two-ray interference and measured antennas** (S ×2, 3 days). Sources: O-P5, O-P6.
 - Scope: the two-ray interference law with the Fresnel ground reflection (Rappaport §4.6;
@@ -316,6 +321,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
   bias). Γ∥ (vertical polarisation) not shipped because
   its sign convention against Sommer's calibration is unverified.
 - Integration (2026-10-26): merged into main. The radio closed-form test failed again on the peaks and fades nearer than 30 m (1.24 dB at 17.6 m, 0.94 dB peak at 16.0 m) against its 2 dB / 1 dB floors; the floors are now 0.5 / 0.4 dB plus an ordering check (each fade and peak shallower than the one beyond it), and it passes. The engine sampled-pattern and Veins tests pass; the engine closed-form test stays ignored (1.85 m height). Still open: fault injections, Γ∥, terrain heights.
+- Main integration (2026-10-26): merged; the radio closed-form test (with the floors the wave integrator lowered to 0.5 / 0.4 dB), the sampled-pattern and Veins tests pass. Still open: fault injections, Γ∥, terrain heights; a review of the lowered floors.
 
 ### Wave 4: stronger detection, safety measures, message generation
 
