@@ -34,6 +34,15 @@ runs:
       the full-fleet benchmark end to end (172,800 s: 240 s live, fast-forward, 60 s live
       across the 614 -> 615 rollover, fast-forward), fe3757b9 opt-level 2, 4 threads, run
       lock with a 3,500 MB cap, --checkpoint-every 1h
+  FB4:
+    scenario: scenarios/real-world/midtown-scms-benchmark.yaml
+    note: >-
+      the full-fleet benchmark end to end on f4982788 (every fix since FB3: R-FFWIN, relay
+      confirmation, topups_left_area, both RA shuffles, density rules on, provisioning crypto
+      on rayon); the integrator's release build, 4 rayon threads, main run slot (2,500 MB
+      cap), --record-level metrics --no-verify --checkpoint-every 1h --progress-every 30s.
+      FB4 rows were written before the run; each `checks` entry is machine-judged by
+      tools/realworld/fullbench.py and shown red under its injected fault
 
 rows:
 # ---------------------------------------------------------------- (1) R-FFSLOW
@@ -198,3 +207,182 @@ rows:
     live step, and the providers that divide by elapsed time count the frozen hours.
     Counts are right; rates, CBR and per-second loads in those two samples are not. Read
     the full-scale tables from the other windows. Not fixed here (no build budget left).
+# ---------------------------------------------------------------- (3) FB4 on f4982788
+# Expected changes against FB3 from the merges since d90a6298 (BUILD-STATUS 2026-10-23 to
+# 2026-10-26), written before FB4 ran. `checks`: [key, op, value or band].
+- id: FB4.completes
+  base: FB3
+  variant: FB4
+  area: performance
+  measure: rc, wall per part, CPU, peak footprint
+  expect: >-
+    rc 0 under the 2,500 MB cap. Release build (FB2 release first window 7,113 s against FB3
+    opt-level-2 8,334 s), fewer honest reports (density rules), per-certificate provisioning
+    crypto on rayon (cc1ed05e: burst 93 -> 43 s at 8 threads), key-range ops_of and the
+    explicit-certificate memo (QD: rollover 100.3 -> 84.3 s, second fast-forward 20.6 -> 9.9 s).
+    So: first window 5,000-8,000 s; first fast-forward 60-300 s; rollover window 2,500-4,800 s
+    (FB3 4,767); second fast-forward 700-2,100 s (FB3 2,014); 9,000-15,300 s awake in all
+    (FB3 15,255). Peak footprint 1,900-2,450 MB (FB3 2,105; QD25 +9 % untraced)
+  source: "full-bench.md FB3; final-run.md FB2; honest-density.md §6; rerun-2026-10-25 QD25-memory"
+  measured: pending
+  verdict: open
+  checks:
+  - [run.rc, eq, 0]
+  - [run.peak_mb, band, [1900, 2450]]
+  - [wall.first_window_s, band, [5000, 8000]]
+  - [wall.ff1_s, band, [60, 300]]
+  - [wall.rollover_s, band, [2500, 4800]]
+  - [wall.ff2_s, band, [700, 2100]]
+- id: FB4.ff-stops
+  base: FB3
+  variant: FB4
+  area: performance
+  measure: fast_forward stops_by_cause and the cost of a stop
+  expect: >-
+    the stops are the cellular devices' hourly conditional CRL polls (CRL_FETCH_INTERVAL_S;
+    FB3 69,076 crl-poll stops), 60 s jump caps and kernel events, unchanged by the fixes
+    within the fleet's run-to-run spread (65,000-73,000 crl-poll); the cost per stop of the
+    second fast-forward falls with the memo and the key-range read (QD 2.1x faster): 10-25 ms
+    (FB3 29 ms)
+  source: "full-bench.md §2 and FB3.completes; honest-density.md §6"
+  measured: pending
+  verdict: open
+  checks:
+  - [ff.crl_poll_stops, band, [65000, 73000]]
+  - [ff2.ms_per_stop, band, [10, 25]]
+- id: FB4.traffic-radio
+  base: FB3
+  variant: FB4
+  area: metrics
+  measure: nodes, CBR, PDR, BSM latency, verification load in the first window
+  expect: >-
+    as FB3 within run-to-run spread, with three known moves: mac.cbr is now the busy share of
+    its own 10 s window (9de6e99e), so the mean stays 0.07-0.09 while the across-node p95 of
+    window averages is no higher than FB3's 0.17; frames no application received are no
+    longer counted unverified (52fd05a2) and detection skips unverified messages (82533437),
+    so the unverified share is at most FB3's 7.1 %; the sibling-connector rule and the stalled
+    lane change (c71c8e77, afd4d43c) move nodes at 240 s by under 5 % (FB3 1,830). PDR 100 m
+    0.80-0.86, 300 m 0.26-0.31; BSM e2e mean 11.5-13.5 ms; 230-290 verifications per node
+    per second (J2945/1: no power adaptation below vMinCU 0.5)
+  source: "full-bench.md FB3.traffic-radio; BUILD-STATUS 2026-10-25 platform/radio/traffic"
+  measured: pending
+  verdict: open
+  checks:
+  - [live.nodes_240, band, [1740, 1920]]
+  - [live.cbr_mean, band, [0.06, 0.095]]
+  - [live.cbr_p95_max, le, 0.17]
+  - [live.pdr_100, band, [0.80, 0.86]]
+  - [live.pdr_300, band, [0.26, 0.31]]
+  - [live.bsm_e2e_ms, band, [11.5, 13.5]]
+  - [live.verif_per_node_s, band, [230, 290]]
+- id: FB4.honest-verdicts
+  base: FB3
+  variant: FB4
+  area: metrics
+  measure: detector verdicts by detector, cases, honest revocations
+  expect: >-
+    the benchmark now sets standing_leader_stop and lane_bend_speed (0588ae6c), which removed
+    the one-step -8.5 m/s2 stop behind a standing vehicle: QD implausibleAcceleration 110 -> 79
+    (-28 %) and positionJump 3 -> 1; at full fleet implausibleAcceleration falls at least as much
+    (gridlock means more stops behind standing leaders): FB3 1,249 -> 500-1,000;
+    constantPositionFrozen is not touched by either rule (FB3 567; 300-750); positionJump at
+    most FB3's 267. Total 900-1,800 (FB3 2,083). 0 cases, 0 honest revoked
+  source: "honest-density.md (100-Car braking target); rerun-2026-10-25 QD25-verdicts"
+  measured: pending
+  verdict: open
+  checks:
+  - [p2.verdicts.implausibleAcceleration, band, [500, 1000]]
+  - [p2.verdicts.constantPositionFrozen, band, [300, 750]]
+  - [p2.verdicts.positionJump, le, 267]
+  - [p2.verdicts_total, band, [900, 1800]]
+  - [p2.cases_opened, eq, 0]
+  - [p2.revoked_honest, eq, 0]
+- id: FB4.reports-relay
+  base: FB3
+  variant: FB4
+  area: architecture
+  measure: reports filed, uploaded by bearer, lost, at the MAs, and when the MAs got them
+  expect: >-
+    BACKEND's relay confirmation (relay_delivered, RFC 6298 retries): an upload is counted only
+    when the forwarding unit confirmed it, so uploaded (cellular + relay) equals reports at the
+    MAs up to the few still stored or unsent at the end (FB3 1,715 vs 1,447: 268 missing; now
+    at most 2 %) and reports_lost 0-5 (FB3 1). Fewer verdicts mean fewer reports (FB3 2,001
+    decided; now 800-1,700). The RA report shuffle (58367e2d) permutes each batch, so counts and
+    the release instant are unchanged: the one-day timer (CAMP-EE SCMS-765) releases them at
+    86,400-86,500 s
+  source: "BUILD-STATUS 2026-10-24 BACKEND; audit-mbpipe.md; QD25 relay row"
+  measured: pending
+  verdict: open
+  checks:
+  - [p2.reports_sent, band, [800, 1700]]
+  - [rep.uploaded_minus_at_ma_share, le, 0.02]
+  - [p2.reports_lost, le, 5]
+  - [census.ma_first_receipt_s, band, [86400, 86500]]
+- id: FB4.topups
+  base: FB3
+  variant: FB4
+  area: architecture
+  measure: top-ups started, completed, left the area, incomplete; certificates per top-up
+  expect: >-
+    about one 20-certificate top-up per vehicle on the map at the boundary (FB3 1,800 started;
+    1,700-1,900); the 27 FB3 left incomplete are now counted as topups_left_area (bdcac292):
+    left_area 10-50 and completed + left_area = started (0 unexplained). The PCA-grouping fix
+    (0d62f322) sends one request per RA->ACA message and answers by handle; its lazy weekly job
+    is known to tell devices a wrong download time (three SCMS tests, root-caused, not fixed),
+    so a top-up that misses its download is the expected failure mode if it bites at scale.
+    Pool 20 -> about 40 within 10 s of 43,200 s
+  source: "full-bench.md §5; BUILD-STATUS 2026-10-25 RESIDUAL; audit-prov.md PV.aca-cannot-group"
+  measured: pending
+  verdict: open
+  checks:
+  - [p2.topups_started, band, [1700, 1900]]
+  - [topup.left_area, band, [10, 50]]
+  - [topup.incomplete, eq, 0]
+  - [topup.certs_per_topup, eq, 20]
+  - [pool.after_43210, band, [38, 41]]
+- id: FB4.pki
+  base: FB3
+  variant: FB4
+  area: architecture
+  measure: provisioning, CRL polls and publications, RSU installs
+  expect: >-
+    unchanged by the fixes: about 2,100 devices; home RA ~940 butterfly requests in the first
+    240 s; ~71,000 hourly conditional polls (FB3 70,946), all 412; 2 CRL versions (the t0
+    lists), 0 issued, 60 RSU installs (30 x 2)
+  source: "full-bench.md FB3.pki; constants.md CRL_FETCH_INTERVAL_S"
+  measured: pending
+  verdict: open
+  checks:
+  - [p2.devices, band, [2000, 2250]]
+  - [p2.crl_polls_not_modified, band, [66000, 76000]]
+  - [p2.crl_downloads, eq, 0]
+  - [p2.crls_issued, eq, 0]
+  - [p2.rsu_crls_installed, eq, 60]
+- id: FB4.metric-windows
+  base: FB3
+  variant: FB4
+  area: metrics
+  measure: the windows around each fast-forward (R-FFWIN fix)
+  expect: >-
+    a live window closes where a fast-forward starts: samples stamped 240 s and 43,230 s, the
+    frozen spans their own windows (240-43,170 and 43,230-172,800), and the 230-240 s
+    verify_rate the live rate (FB3 4.85e5/s fleet-wide; 3.5e5-6e5) instead of FB3's 115.7/s
+  source: "BUILD-STATUS 2026-10-24 BACKEND (Engine::next_metric_flush); QD25 R-FFWIN row"
+  measured: pending
+  verdict: open
+  checks:
+  - [win.has_240, true, null]
+  - [win.has_43230, true, null]
+  - [win.verify_rate_240, band, [350000, 600000]]
+- id: FB4.privacy
+  base: FB3
+  variant: FB4
+  area: metrics
+  measure: pseudonym changes and observer link claims
+  expect: "as FB3: no CERTCHG in 60 s of gridlock and the old certificate valid to 46,800 s: 0 changes, 0 link claims"
+  source: "testing/fast-forward.md §3; J2945/1 CERTCHG"
+  measured: pending
+  verdict: open
+  checks:
+  - [p2.pseudonym_changes, eq, 0]
+  - [p2.privacy_links_claimed, eq, 0]
