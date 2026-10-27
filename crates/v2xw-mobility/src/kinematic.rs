@@ -264,6 +264,7 @@ impl Mobility for KinematicLaneFollow {
                             comfort_decel_mps2: actor.class.spec().decel_mps2,
                             time_headway_s: 0.0,
                             min_gap_m: actor.class.spec().min_gap_m,
+                            sigma: None,
                         },
                         seq: actor.seq,
                         requested: None,

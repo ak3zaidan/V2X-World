@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+A sample of the Luxembourg SUMO Traffic (LuST) Scenario, https://github.com/lcodeca/LuSTScenario (master, fetched 2026-10-27): scenario/vtypes.add.xml whole, the first 20 vehicles of scenario/DUARoutes/local.0.rou.xml and the first 3 of scenario/buslines.rou.xml, unchanged. Used by v2xw-interop/tests/lust_sample.rs to show the .rou.xml import counts every attribute.
+
+The MIT License (MIT)
+
+Copyright (c) 2016 Lara CODECA [codeca@gmail.com], VehicularLab [vehicular-lab@uni.lu]
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+
+<routes>
+    <vTypeDistribution id="private">
+        <vType vClass="passenger" id="passenger1"  color=".8,.2,.2" accel="2.6" decel="4.5" sigma="0.5" length="5.0" minGap="1.5" maxSpeed="70" probability=".40" speedDev="0.1" guiShape="passenger/sedan"/>
+        <vType vClass="passenger" id="passenger2a" color=".8,.8,.8" accel="3.0" decel="4.5" sigma="0.5" length="4.5" minGap="1.5" maxSpeed="50" probability=".20" speedDev="0.1" guiShape="passenger/hatchback"/>
+        <vType vClass="passenger" id="passenger2b" color=".2,.2,.8" accel="2.8" decel="4.5" sigma="0.5" length="4.5" minGap="1.0" maxSpeed="50" probability=".20" speedDev="0.1" guiShape="passenger/hatchback"/>
+        <vType vClass="passenger" id="passenger3"  color=".3,.3,.3" accel="2.7" decel="4.5" sigma="0.5" length="6.0" minGap="1.5" maxSpeed="70" probability=".10" speedDev="0.1" guiShape="passenger/wagon"/>
+        <vType vClass="passenger" id="passenger4"  color=".9,.9,.9" accel="2.4" decel="4.5" sigma="0.5" length="5.5" minGap="1.5" maxSpeed="30" probability=".05" speedDev="0.1" guiShape="passenger/van"/>
+        <vType vClass="passenger" id="passenger5"  color=".8,.8,.0" accel="2.3" decel="4.5" sigma="0.5" length="7.0" minGap="2.5" maxSpeed="30" probability=".05" speedDev="0.1" guiShape="delivery"/>
+    </vTypeDistribution>
+	<vType vClass="bus" id="bus" accel="2.6" decel="4.5" sigma="0.5" length="12.0" minGap="3" maxSpeed="30" speedDev="0.1" guiShape="bus">
+    <param key="has.rerouting.device" value="false"/>
+  </vType>
+    <vehicle id="randUni18368:1" type="passenger2a" depart="0.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="-31606#0 -31606#1 --31634 --30768#1 --30768#0 -31230#2 -32628 --31272#2 --31272#1 --31272#0 -30528#21 -30528#22 -30528#23 -30528#24 -30528#25 -30528#26 -30528#27 -30528#28 -30528#29 -30528#30 -31888#0 -31888#1 -30496#4"/>
+    </vehicle>
+    <vehicle id="randUni834:1" type="passenger2b" depart="5.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="--32406#3 --32406#2 --32406#1 --31212"/>
+    </vehicle>
+    <vehicle id="randUni11317:1" type="passenger2a" depart="11.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="--31490 -31818#20 -31818#21 -30694#0 -30694#1 -32820#0 -32820#1 -30528#25 -30528#26 -30528#27 -30528#28 -30528#29 -30528#30 -30528#31 -30528#32 -30854#0 -30854#1 -30854#2 -31290#1"/>
+    </vehicle>
+    <vehicle id="randUni20481:1" type="passenger1" depart="13.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="--32468#2 -32964#9 -32964#10 -32964#11 --31890 --32410#0 -30528#16 -30528#17 -30528#18 -30528#19 -30528#20 -30528#21 -30528#22 -30528#23 -30528#24 -30528#25 -30528#26 -30528#27 -30528#28 -30528#29 -30528#30 -30528#31 -30528#32 -30528#33 -30528#34 -30528#35 -30528#36 -30528#37 -30528#38 -30528#39 -30528#40 -30528#41 -30528#42 -30528#43 -30528#44 -30528#45 -30528#46 -30528#47 -30528#48 -30528#49 -30528#50 -30528#51 -30528#52"/>
+    </vehicle>
+    <vehicle id="randUni16882:1" type="passenger1" depart="14.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="-32340#7 -32770#6 -32278#0 --32940#1 --32940#0 --32340#2 -32660"/>
+    </vehicle>
+    <vehicle id="randUni1854:1" type="passenger5" depart="25.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="--30988#2 --30988#1 --30988#0 --32072#0 --32404#0 --30632#1 --30632#0 -30338 -31780 -31504#0 -31504#1 -31504#2 -30962#0 -30962#1 -30962#2 -30256#0 -30256#1 -30256#2 -30256#3 -31940#0 -31940#1 -31940#2 -31940#3 -31940#4 -31940#5 -31940#6 -32830#2 -32830#3 -32830#4 --31372 -30924#2 -30924#3 -30924#4 -31768#0 -31768#1 -31768#2 -31768#3 -31768#4 -31768#5 -31768#6 -31768#7 -31768#8"/>
+    </vehicle>
+    <vehicle id="randUni13606:1" type="passenger4" depart="27.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="--32244 --30334#1 --30334#0 -30648#11 -30648#12 -30648#13 -30648#14 -30648#15 -31492#0 -31492#1 -30528#0 -30528#1 -31068#0 -31068#1"/>
+    </vehicle>
+    <vehicle id="randUni5299:1" type="passenger1" depart="37.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="--32326#1 --31566 -30370#3 --31458#2 --31458#1 --31458#0 -31496#12 -31496#13 -31496#14 -32750#0 -32750#1 -32750#2 -32750#3 --32924#14 --32924#13 --32924#12 --32924#11 --32924#10 --32924#9 -30892#10 -30892#11 -30892#12 -30892#13 -30892#14 -30892#15 -30892#16 --31272#6 --31272#5 --31272#4 --31272#3 --31272#2 --31272#1 --31272#0 -30528#21 -30528#22 -30528#23 -30528#24 -30528#25 -30528#26 -30528#27 -30528#28 -30528#29 -30528#30 -30528#31 -30528#32 -30854#0 -30854#1 -30854#2 -31290#1 -31290#2 -31126#0 -32902#0 -32902#1"/>
+    </vehicle>
+    <vehicle id="randUni10684:1" type="passenger1" depart="41.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="-32694 --32058#0 -31852#1 -31910#1 -31910#2 --31768#0 -30924#1 -31372 -32830#1 --31940#6 --31940#5 --31940#4 --31940#3 --31940#2 --31940#1 --31940#0 --30256#3 --30256#2 --30256#1 --30256#0 --31834#2 --31834#1 --31834#0 -30528#4 -30528#5 -30528#6 -30528#7 -30528#8 -30528#9 -30528#10 -30528#11 -30528#12 -30528#13 -30528#14 -30528#15 -30528#16 -30528#17 -30528#18 -30528#19 -30528#20 -30528#21 -30528#22 -30528#23 -30528#24 -30528#25 -30528#26 -30528#27 -30528#28 -30528#29 -30528#30 -30528#31 -30528#32 -30528#33 -30528#34 -30528#35 -30528#36 -30528#37 -30528#38 -30528#39 -30528#40 -30528#41 -30528#42 --31794#7 --31794#6 --31794#5 --31794#4 -31884#0 -31884#1 -31884#2 -31884#3 -31884#4 -31034#0 -31034#1 -31034#2 -31034#3 -31034#4 --32756#2 --32756#1"/>
+    </vehicle>
+    <vehicle id="randUni14395:1" type="passenger1" depart="50.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="-31272#0 -31272#1 -31272#2 -31272#3 -31272#4 -31272#5 -31272#6 --30892#16 --30892#15 --30892#14 --30892#13 --30892#12 --30892#11 --30892#10 -32924#9 -32924#10 -32924#11 -32924#12 -32924#13 -32924#14 --32750#3 --32750#2 --32750#1 --32750#0 --31496#14 --31496#13 --31496#12 --31496#11 --31496#10 --31496#9 --31496#8 --31496#7 --31496#6 --31496#5 --31496#4 --31496#3 --31466#3 --31466#2 --31466#1 --31466#0 -30888#1 -30888#2 -30404#0 -30404#1 -30404#2 -30404#3 -30404#4 -30404#5 --30358#11 --30358#10 --30358#9 --30358#8 -31396"/>
+    </vehicle>
+    <vehicle id="randUni12488:1" type="passenger1" depart="87.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="--31490 -31818#20 -32964#0 -32964#1 -32432#15 -32382#2 --32468#7 --32468#6 --32468#5 --32468#4 --32468#3 --32468#2 --32468#1 --32178 -30608#9 -30608#10 -30568 -31232 -31030 -31380#0 -31380#1 -31380#2 --30528#7 --30528#6 --30528#5 --30528#4 --30528#3 --30528#2 -31068#0 -31068#1 -30620 --32278#6 --32278#5 --32278#4 --32278#3 --32278#2 --32642#0 --32660 -32340#2 -32940#0 -32940#1"/>
+    </vehicle>
+    <vehicle id="randUni1749:1" type="passenger1" depart="92.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="-30774 --30806#2 --30806#1 --30806#0 --31668#7 --31096#2 --31768#2 --31768#1 --31768#0 -30924#1 -31372 -32830#1 --31940#6 --31940#5 --31940#4 --31940#3 --31940#2 --31940#1 --31940#0 --30256#3 --30256#2 --30256#1 --30256#0 --31834#2 --31834#1 --31834#0 --30528#3 --30528#2 --30528#1 --30528#0 -31492#2 --32674#9 --32674#8 --32674#7 --32674#6 --32674#5 --32674#4 --32674#3 --30472#2 --30472#1 --30472#0 -32712#0 -32712#1 -32466"/>
+    </vehicle>
+    <vehicle id="randUni7357:1" type="passenger1" depart="102.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="-30988#3 -31492#0 -31492#1 -31492#2 --32674#9 --32674#8 --32674#7 --32674#6 --32674#5 --32674#4 --32674#3 --30472#2 -32190"/>
+    </vehicle>
+    <vehicle id="randUni7405:1" type="passenger1" depart="107.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="-32372#2 -31622#10-AddedOnRampEdge -31622#10 -31622#10-AddedOffRampEdge -32932 --32306#1 --32306#0 -31496#4 -31496#5 -31496#6 -31496#7 -31496#8 -31496#9 -31496#10 -31496#11 -31496#12 -31496#13 -31496#14 -32750#0 -32750#1 -32750#2 -32750#3 -32750#4 -32750#5 -32750#6 -32750#7 -32750#8 -32750#9 --30892#5 --30892#4 --30892#3 --30892#2 --30892#1 --30892#0 -30892 --31834#2 -30384#6 -30384#7 -30944 --31504#2 --31504#1 --31504#0 -30620 --32278#6 -32974#1 -30766#4 -30766#5 --30554"/>
+    </vehicle>
+    <vehicle id="randUni18438:1" type="passenger1" depart="110.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="-31146#0 --32354#1 --32354#0 --31768#7 --31768#6 --31768#5 --31768#4 --31768#3 --31768#2 --31768#1 --31768#0 -30924#1 -31372 -32830#1 --31940#6 --31940#5 --31940#4 --31940#3 --31940#2 --31940#1 --31940#0 --30256#3 --30256#2 --30256#1 --30256#0 --31834#2 -30384#6 -30384#7 -30944 --31504#2 --31504#1 --31504#0 -32574 -30632#0 -30632#1 -30860#0 -30860#1 -30860#2 -30860#3 -30860#4 -30860#5 --31478#1 --31478#0 -31892#0"/>
+    </vehicle>
+    <vehicle id="randUni15799:1" type="passenger2b" depart="116.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="--31394#0 -32610 --31176#1 --31176#0 --30860#6 --30860#5 --30860#4 --30860#3 --30860#2 --30860#1 --30860#0 --30632#1 --30632#0 -30338 -31780 -31504#0 -31504#1 -31504#2 -30962#0 -30962#1 -30962#2 --30892 -30892#0 -30892#1 -30892#2 -30892#3 -30892#4 -30892#5 --32750#9 --32750#8 --32750#7 --32750#6 --32750#5 --32750#4 --32750#3 --32750#2 --32750#1 --32750#0 --31496#14 --31496#13 --31496#12 --31496#11 --31496#10 --31496#9 --31496#8 --31496#7 --31496#6 --31496#5 --31496#4 -32306#0 -32306#1 -32306#2 -32306#3 -32306#4 -30772#3 --31562#4 --31562#3 --31562#2 --31562#1"/>
+    </vehicle>
+    <vehicle id="randUni10908:1" type="passenger2b" depart="127.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="-31302 --30916#0 -31952#12 -31952#13 -31952#14 -31952#15 -31952#16 -31952#17 -31952#18 --31812 -30582#0 -30582#1 --31152#1 -31204#0 -31204#1 -31204#2 -31610#4 -31610#5 --32160#3"/>
+    </vehicle>
+    <vehicle id="randUni1024:1" type="passenger2b" depart="139.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="-32924#6 -32924#7 -32924#8 -30892#10 -30892#11 -30892#12 -30892#13 -30892#14 -30892#15 -30892#16 -30892#17 -30892#18 -30892#19 --30560 --31966#13 --31966#12 --31966#11 --31966#10 --32742#5 --32742#4 --32742#3 --32742#2 -32504#0 -32392#0 -32392#1"/>
+    </vehicle>
+    <vehicle id="randUni12782:1" type="passenger2b" depart="177.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="--30528#56 --30528#55 --30528#54 --30528#53 --30528#52 --30528#51 --30528#50 --30528#49 --30528#48 --30528#47 --30528#46 --30528#45 --30528#44 --30528#43 --30528#42 --30528#41 --30528#40 --30528#39 --30528#38 --30528#37 --30528#36 --30528#35 --30528#34 --30528#33 --30528#32 --30528#31 --30528#30 --30528#29 --30528#28 --30528#27 --30528#26 --30528#25 --30528#24 --30528#23 --30528#22 --30528#21 --30528#20 --30528#19 --30528#18 --30528#17 --30528#16 -32410#0 -32410#1 -32410#2 -32410#3 -31994 --31492#1 --31492#0 --30648#15 --30648#14 --30648#13 --30648#12 --30648#11 --30648#10 --30648#9 --30648#8 --31802 --31000#1 -30980"/>
+    </vehicle>
+    <vehicle id="randUni1785:1" type="passenger1" depart="192.00" departPos="random" departSpeed="0.00" arrivalPos="random" arrivalSpeed="0.00">
+        <route edges="-30458#3 -30458#4 --32586#1 --32586#0 --31636#0 --30528#45 --30528#44 --30528#43 --30528#42 --30528#41 --30528#40 --30528#39 --30528#38 --30528#37 --30528#36 --30528#35 --30528#34 --30528#33 --30528#32 --30528#31 --30528#30 --30528#29 --30528#28 --30528#27 --30528#26 --30528#25 --30528#24 --30528#23 --30528#22 --30528#21 -31272#0 -31272#1 -31272#2 -31272#3 -31272#4 -31272#5 -31272#6 -30892#17 -30892#18 -30892#19 --30560 --31966#13 -32172#0 --32650#6"/>
+    </vehicle>
+    <vehicle id="CNA____NBNA_0" type="bus" depart="2.00" departLane="best" departPos="0.00" arrivalPos="-1.00" color="green">
+        <route edges="-32278#1 -32278#2 -32278#3 -30738 -31778#3 -31778#4 -31708#0 -31708#1 -32674#4 -32674#5 -32674#6 -32674#7 -32674#8 -32674#9 --31648#5 --31648#4 --31648#3 --31648#2 --31648#1 --31648#0 -30528#5 -30528#6 --32924#4 --32924#3 --32924#2 --32924#1 --32924#0"/>
+        <stop busStop="607" duration="20.00"/>
+        <stop busStop="58" duration="20.00"/>
+        <stop busStop="557" duration="20.00"/>
+        <stop busStop="560" duration="20.00"/>
+        <stop busStop="217" duration="20.00"/>
+        <stop busStop="239" duration="20.00"/>
+    </vehicle>
+    <vehicle id="CNA____NBNA_1" type="bus" depart="2.00" departLane="best" departPos="0.00" arrivalPos="-1.00" color="green">
+        <route edges="-32924#0 -32924#1 -32924#2 -32924#3 -32924#4 --30528#6 --30528#5 -31648#0 -31648#1 -31648#2 -31648#3 -31648#4 -31648#5 --32674#9 --32674#8 --32674#7 --32674#6 --32674#5 --32674#4 --31708#1 --31708#0 -31778#1 -31778#2 --30536 --32278#3 --32278#2 --32278#1"/>
+        <stop busStop="240" duration="20.00"/>
+        <stop busStop="218" duration="20.00"/>
+        <stop busStop="561" duration="20.00"/>
+        <stop busStop="556" duration="20.00"/>
+        <stop busStop="57" duration="20.00"/>
+        <stop busStop="606" duration="20.00"/>
+    </vehicle>
+    <vehicle id="AVL---_CN_1_0" type="bus" depart="21.00" departLane="best" departPos="0.00" arrivalPos="-1.00" color="green">
+        <route edges="--31272#8 --31272#7 -30892#17 -31320#1 -31320#2 --31272#4 --31272#3 --31272#2 --31272#1 --31272#0 --30528#20 --30528#19 --30528#18 --30528#17 --30528#16 --30528#15 --30528#14 --30528#13 --30528#12 --30528#11 --30528#10 --30528#9 --30528#8 --30528#7 --30528#6 --30528#5 -31648#0 -31648#1 -31648#2 --32672 -31068#0 -31068#1 -32574 -30338 --32652#9 --30796 -31208#1 --31056#0 -31780 --31068#1 --31068#0 -32672 -31648#3 -31648#4 -31648#5 --32674#9 --32674#8 --32674#7 --32674#6 --32674#5 --32674#4 --32674#3 --32674#2 --31134#1 --31134#0 --30856#15 --30856#14 --30856#13 --30856#12 --30856#11 --30856#10 --30856#9 --30856#8 --30856#7 --30856#6 --30856#5 --30856#4 --30856#3 --30856#2 --30856#1 --30856#0 -32674#7 -32674#8 -32674#9 --31492#2 -30528#0 -30528#1 -30528#2 -30528#3 -30812 --31648#1 --31648#0 -30528#5 -30528#6 --32924#4 --32924#3 --32924#2 --32924#1 --32924#0 --32410#3 --32410#2 --32410#1 --32410#0 -30528#16"/>
+        <stop busStop="633" duration="20.00"/>
+        <stop busStop="523" duration="20.00"/>
+        <stop busStop="50" duration="20.00"/>
+        <stop busStop="371" duration="20.00"/>
+        <stop busStop="457" duration="20.00"/>
+        <stop busStop="135" duration="20.00"/>
+        <stop busStop="259" duration="20.00"/>
+        <stop busStop="218" duration="20.00"/>
+        <stop busStop="613" duration="20.00"/>
+        <stop busStop="620" duration="20.00"/>
+        <stop busStop="79" duration="20.00"/>
+        <stop busStop="124" duration="20.00"/>
+        <stop busStop="561" duration="20.00"/>
+        <stop busStop="556" duration="20.00"/>
+        <stop busStop="334" duration="20.00"/>
+        <stop busStop="96" duration="20.00"/>
+        <stop busStop="192" duration="20.00"/>
+        <stop busStop="211" duration="20.00"/>
+        <stop busStop="57" duration="20.00"/>
+        <stop busStop="410" duration="20.00"/>
+        <stop busStop="73" duration="20.00"/>
+        <stop busStop="422" duration="20.00"/>
+        <stop busStop="155" duration="20.00"/>
+        <stop busStop="487" duration="20.00"/>
+        <stop busStop="300" duration="20.00"/>
+        <stop busStop="354" duration="20.00"/>
+        <stop busStop="242" duration="20.00"/>
+        <stop busStop="47" duration="20.00"/>
+        <stop busStop="515" duration="20.00"/>
+        <stop busStop="605" duration="20.00"/>
+        <stop busStop="254" duration="20.00"/>
+        <stop busStop="462" duration="20.00"/>
+        <stop busStop="563" duration="20.00"/>
+        <stop busStop="335" duration="20.00"/>
+        <stop busStop="557" duration="20.00"/>
+        <stop busStop="217" duration="20.00"/>
+        <stop busStop="239" duration="20.00"/>
+        <stop busStop="187" duration="20.00"/>
+        <stop busStop="81" duration="20.00"/>
+    </vehicle>
+</routes>

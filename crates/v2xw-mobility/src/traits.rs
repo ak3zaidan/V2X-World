@@ -290,6 +290,15 @@ pub trait Demand: Model + Send + Sync {
         None
     }
 
+    /// The vehicle type this model states for `trip` (an imported `.rou.xml` vType's
+    /// `accel`, `decel`, `tau`, `minGap`, `sigma`, `speedFactor` and `departSpeed`), which
+    /// the engine applies at insertion in place of its own driver draws
+    /// ([`crate::views::TripDriver`]). `None` (the default) keeps the engine's drivers, so
+    /// every other demand model is unaffected.
+    fn trip_driver(&self, _trip: &TripRequest) -> Option<crate::views::TripDriver> {
+        None
+    }
+
     /// True if this model wants [`Demand::observe`] called after every step. `false` by
     /// default, and then the engine builds nothing for it.
     fn wants_progress(&self) -> bool {

@@ -145,10 +145,10 @@ pub use traits::{
     VruMobility,
 };
 pub use views::{
-    ActorSpawn, ConflictView, DespawnCause, DriverProfile, EMERGENCY_BRAKE_ONSET_JERK_MPS3,
+    ActorSpawn, ConflictView, DepartSpeed, DespawnCause, DriverProfile, EMERGENCY_BRAKE_ONSET_JERK_MPS3,
     EdgeCost, EntryDecision, GnssEnv, INTENT_HORIZON_M, Intent, JunctionView, LaneChangeDecision,
     LaneNeighbors, LaneView, LeaderView, MobilityCommand, MobilityUpdate, PhaseState,
-    ReroutePolicy, Route, Side, SideNeighbors, SkyView, TripRequest, VehicleView,
+    ReroutePolicy, Route, Side, SideNeighbors, SkyView, TripDriver, TripRequest, VehicleView,
 };
 pub use vru::{SocialForce, SocialForceParams};
 pub use weather::{RoadContext, WeatherResponse};

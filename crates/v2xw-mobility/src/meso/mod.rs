@@ -963,6 +963,7 @@ pub(crate) fn class_driver(class: VehicleClass) -> DriverProfile {
         comfort_decel_mps2: spec.decel_mps2,
         time_headway_s: 1.0,
         min_gap_m: spec.min_gap_m,
+        sigma: None,
     }
 }
 

@@ -178,6 +178,7 @@ impl W99 {
             comfort_decel_mps2: spec.decel_mps2,
             time_headway_s: cc[1],
             min_gap_m: cc[0],
+            sigma: None,
         }
     }
 

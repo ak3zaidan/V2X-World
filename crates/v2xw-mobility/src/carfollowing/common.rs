@@ -73,6 +73,7 @@ pub fn situation(
             comfort_decel_mps2: effects.cap_decel(ego.driver.comfort_decel_mps2),
             time_headway_s: effects.apply_to_headway(ego.driver.time_headway_s),
             min_gap_m: ego.driver.min_gap_m,
+            sigma: ego.driver.sigma,
         },
         grip_decel_mps2: effects.max_decel_mps2,
         headway_factor: effects.apply_to_headway(1.0),
