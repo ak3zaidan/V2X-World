@@ -502,6 +502,57 @@ impl LocalPerception for DiscSensor {
     }
 }
 
+/// The frame fields beyond [`ObservedMessage`] that the WP-10 checks of
+/// [`crate::ts103759`] read: the sender's broadcast vehicle size (J2735 `VehicleSize`,
+/// CAM `vehicleLength`/`vehicleWidth`), its speed and heading confidences and where its
+/// reference position sits on its footprint.
+///
+/// Every field is what the **frame** says, never what the sender is. `None` is "the frame
+/// did not carry it", and a check that needs it is then unchecked, not passed.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct FrameExtras {
+    /// The broadcast vehicle length, metres.
+    pub length_m: Option<f64>,
+    /// The broadcast vehicle width, metres.
+    pub width_m: Option<f64>,
+    /// The broadcast speed confidence, m/s.
+    pub speed_confidence_mps: Option<f64>,
+    /// The broadcast heading confidence, radians.
+    pub heading_confidence_rad: Option<f64>,
+    /// Where the claimed position sits on the footprint (BSM centre, CAM front centre).
+    pub reference: crate::consistency::ReferencePoint,
+}
+
+impl FrameExtras {
+    /// Extras carrying only a broadcast vehicle size, with the BSM centre reference.
+    #[must_use]
+    pub const fn with_size(length_m: f64, width_m: f64) -> Self {
+        Self {
+            length_m: Some(length_m),
+            width_m: Some(width_m),
+            speed_confidence_mps: None,
+            heading_confidence_rad: None,
+            reference: crate::consistency::ReferencePoint::Centre,
+        }
+    }
+}
+
+/// The receiver's own footprint, from **its own belief**: its believed position and
+/// heading and its own configured vehicle size. The box-intersection check tests every
+/// claim against it, because a ghost placed on top of the receiver is the cheapest ghost
+/// there is to catch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OwnFootprint {
+    /// The heading this node believes it has, ENU radians.
+    pub heading_rad: f64,
+    /// This node's own length, metres.
+    pub length_m: f64,
+    /// This node's own width, metres.
+    pub width_m: f64,
+    /// Where [`SelfBelief`]'s position sits on the footprint.
+    pub reference: crate::consistency::ReferencePoint,
+}
+
 /// The two envelope fields a receiver reads off a frame that [`ObservedMessage`] does not
 /// carry, for the checks that need them.
 ///

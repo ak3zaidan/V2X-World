@@ -341,6 +341,9 @@ pub struct SimOptions {
     pub detector: DetectorParams,
     /// The authority's operating point.
     pub ma: MaParams,
+    /// Keep every delivered message with the receiver's belief in [`SimOut::tap`], so a
+    /// test can run another detector suite over exactly what each node received.
+    pub tap: bool,
 }
 
 impl Default for SimOptions {
@@ -389,6 +392,7 @@ impl Default for SimOptions {
             record: None,
             detector: DetectorParams::default(),
             ma: MaParams::default(),
+            tap: false,
         }
     }
 }
@@ -483,6 +487,9 @@ pub struct SimOut {
     pub same_instant_repeats: u64,
     /// The largest `kalmanConsistency` score any message produced, unrounded.
     pub kalman_peak: f64,
+    /// With [`SimOptions::tap`]: every delivered message in delivery order, with the
+    /// receiving node's own belief and its believed heading.
+    pub tap: Vec<(SelfBelief, f64, ObservedMessage)>,
     /// The actors that took an attack action that changed bytes on the air.
     pub true_attacker_actors: BTreeSet<ActorId>,
     /// Firings whose subject was a true attacker, by check id.
@@ -979,6 +986,11 @@ pub fn run(opts: &SimOptions) -> SimOut {
                     if v.fired() {
                         verdicts.push((id, me.believed_time, v, m.clone()));
                     }
+                }
+            }
+            if opts.tap {
+                for m in &heard {
+                    out.tap.push((me, belief.heading_rad, m.clone()));
                 }
             }
             last_rx.insert(id, heard);

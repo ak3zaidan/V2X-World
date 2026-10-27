@@ -155,6 +155,7 @@ pub mod attack_rsu;
 pub mod capability;
 pub mod cards;
 pub mod catalog;
+pub mod consistency;
 pub mod ctx;
 pub mod detect;
 pub mod ma;
@@ -187,8 +188,8 @@ pub use detect::{
 pub use ma::{LegacyWindow, MaAction, MaParams, MaPipeline};
 pub use ma_corroborate::{CorroboratedMa, CorroborationParams, EvidenceSummary};
 pub use obs::{
-    DiscSensor, EnvelopeExtras, LocalEnvironment, LocalPerception, NoMap, NoPerception,
-    ObservedKind, ObservedMessage, PeerBelief, PerceivedObject, RegionId, SelfBelief, SensedObject,
+    DiscSensor, EnvelopeExtras, FrameExtras, LocalEnvironment, LocalPerception, NoMap, NoPerception,
+    ObservedKind, ObservedMessage, OwnFootprint, PeerBelief, PerceivedObject, RegionId, SelfBelief, SensedObject,
     StationType, VerificationState,
 };
 pub use poison::{PoisonParams, ReportPoisoner};
@@ -200,6 +201,6 @@ pub use records::{
 pub use report::{CertValidity, Evidence, ForgeryProfile, MisbehaviourReport, forge};
 pub use resolve::{Authority, Case, CaseOutcome, ResolutionParams, TwoAuthorityResolution};
 pub use ts103759::{
-    AcceptanceRanges, BeaconProfile, CrossCheckInputs, ObservationClass, RadioEnvironment,
+    AcceptanceRanges, BeaconProfile, CrossCheckInputs, Fusion, ObservationClass, RadioEnvironment, Scoring,
     Ts103759Check, Ts103759Params, Ts103759Suite, TsObservation, TsVerdict,
 };

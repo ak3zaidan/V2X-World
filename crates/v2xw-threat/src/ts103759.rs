@@ -72,15 +72,19 @@
 //!   Nothing fires, nothing is scored, and [`Ts103759Suite::deferred`] counts it. An
 //!   absence of evidence is not evidence of misbehaviour.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use crate::capability::{angle_diff_rad, bearing_rad};
-use crate::cards::{LEGACY_PY, design, legacy_param, standard};
+use crate::cards::{LEGACY_PY, design, legacy_param, paper, standard};
+use crate::consistency::{
+    CvKalman, Footprint, chi2_quantile, chord_factor, circle_inside_fraction,
+    interval_inside_fraction, overlap_ratio, reachable_distance,
+};
 use crate::ctx::{ThreatCtx, ThreatCtxExt};
 use crate::detect::DetectorCost;
 use crate::obs::{
-    EnvelopeExtras, LocalEnvironment, LocalPerception, NoPerception, ObservedKind, ObservedMessage,
-    PerceivedObject, RegionId, SelfBelief, VerificationState,
+    EnvelopeExtras, FrameExtras, LocalEnvironment, LocalPerception, NoPerception, ObservedKind,
+    ObservedMessage, OwnFootprint, PerceivedObject, RegionId, SelfBelief, VerificationState,
 };
 use crate::records::DetObservation;
 use v2xw_core::card::{
@@ -179,11 +183,24 @@ pub enum Ts103759Check {
     SignatureInvalid,
     /// The signer's certificate chain could not be built.
     CertificateUnknown,
+    /// The time-averaged normalised innovation squared of a constant-velocity Kalman
+    /// filter on the claimed track exceeds its χ² gate (WP-10, f2md.md §5 P5).
+    KalmanConsistency,
+    /// The claimed displacement lies outside the distance reachable between the two
+    /// claimed speeds under the vehicle classes' acceleration and braking limits (WP-10,
+    /// f2md.md §5 P7).
+    PositionSpeedEnvelope,
+    /// The mean speed the displacement implies is further from the claimed speeds than
+    /// the acceleration and braking limits allow (F2MD PositionSpeedMaxConsistency).
+    PositionSpeedMaxConsistency,
+    /// The claimed oriented footprint overlaps another station's, or this receiver's own,
+    /// by more than the threshold share (WP-10, f2md.md §5 P6).
+    BoxIntersection,
 }
 
 impl Ts103759Check {
     /// Every check, grouped by class.
-    pub const ALL: [Ts103759Check; 19] = [
+    pub const ALL: [Ts103759Check; 23] = [
         Ts103759Check::RangePlausibility,
         Ts103759Check::SpeedPlausibility,
         Ts103759Check::AccelerationPlausibility,
@@ -196,11 +213,15 @@ impl Ts103759Check {
         Ts103759Check::BeaconFrequency,
         Ts103759Check::GenerationTimeOrder,
         Ts103759Check::SuddenAppearance,
+        Ts103759Check::KalmanConsistency,
+        Ts103759Check::PositionSpeedEnvelope,
+        Ts103759Check::PositionSpeedMaxConsistency,
         Ts103759Check::PositionPlausibility,
         Ts103759Check::ForeignRegion,
         Ts103759Check::PerceptionCrossCheck,
         Ts103759Check::Intersection,
         Ts103759Check::CpmConsistency,
+        Ts103759Check::BoxIntersection,
         Ts103759Check::SignatureInvalid,
         Ts103759Check::CertificateUnknown,
     ];
@@ -228,6 +249,10 @@ impl Ts103759Check {
             Ts103759Check::CpmConsistency => "cpmConsistency",
             Ts103759Check::SignatureInvalid => "signatureInvalid",
             Ts103759Check::CertificateUnknown => "certificateUnknown",
+            Ts103759Check::KalmanConsistency => "kalmanConsistencyTs",
+            Ts103759Check::PositionSpeedEnvelope => "positionSpeedEnvelope",
+            Ts103759Check::PositionSpeedMaxConsistency => "positionSpeedMaxConsistency",
+            Ts103759Check::BoxIntersection => "boxIntersection",
         }
     }
 
@@ -252,12 +277,17 @@ impl Ts103759Check {
             | Ts103759Check::PositionHeadingConsistency
             | Ts103759Check::BeaconFrequency
             | Ts103759Check::GenerationTimeOrder
-            | Ts103759Check::SuddenAppearance => ObservationClass::PreviousMessages,
+            | Ts103759Check::SuddenAppearance
+            | Ts103759Check::KalmanConsistency
+            | Ts103759Check::PositionSpeedEnvelope
+            | Ts103759Check::PositionSpeedMaxConsistency => ObservationClass::PreviousMessages,
             Ts103759Check::PositionPlausibility | Ts103759Check::ForeignRegion => {
                 ObservationClass::LocalEnvironment
             }
             Ts103759Check::PerceptionCrossCheck => ObservationClass::OnBoardSensors,
-            Ts103759Check::Intersection | Ts103759Check::CpmConsistency => {
+            Ts103759Check::Intersection
+            | Ts103759Check::CpmConsistency
+            | Ts103759Check::BoxIntersection => {
                 ObservationClass::OtherStations
             }
             Ts103759Check::SignatureInvalid | Ts103759Check::CertificateUnknown => {
@@ -386,9 +416,15 @@ pub struct Ts103759Params {
     pub acceptance_ranges: AcceptanceRanges,
     /// The fastest a vehicle plausibly goes, m/s (F2MD `MIN_MAX_SPEED`, 40).
     pub max_plausible_speed_mps: f64,
-    /// The hardest a vehicle plausibly accelerates, m/s² (F2MD `MIN_MAX_ACCEL`, 3).
+    /// The hardest a vehicle plausibly accelerates, m/s²: the largest `accel_mps2` over
+    /// the engine's vehicle classes (`v2xw_mobility::classes`, motorcycle 6.0, SUMO vType
+    /// defaults). A receiver does not know a sender's class, so the limit covers them
+    /// all. F2MD's `MAX_PLAUSIBLE_ACCEL` 3 is [`Ts103759Params::f2md_kinematics`].
     pub max_plausible_accel_mps2: f64,
-    /// The hardest a vehicle plausibly brakes, m/s² (F2MD `MIN_MAX_DECEL`, 4.5).
+    /// The hardest a vehicle plausibly brakes, m/s²: the largest `emergency_decel_mps2`
+    /// over the engine's vehicle classes (motorcycle and moped 10.0, passenger 9.0).
+    /// F2MD's `MAX_PLAUSIBLE_DECEL` 4.5 flags every honest emergency stop (WP-10); it is
+    /// [`Ts103759Params::f2md_kinematics`].
     pub max_plausible_decel_mps2: f64,
     /// The largest plausible broadcast position confidence, metres (F2MD
     /// `MAX_CONFIDENCE_RANGE`, 10).
@@ -462,6 +498,123 @@ pub struct Ts103759Params {
     ///
     /// `None` leaves [`Ts103759Check::ForeignRegion`] unevaluated — not passed.
     pub own_region: Option<RegionId>,
+    /// The floor on the Kalman check's position measurement σ, metres (F2MD's Kalman
+    /// checks floor the confidence at 4 m; f2md.md §4.3).
+    pub kalman_pos_floor_m: f64,
+    /// The floor on the Kalman check's speed measurement σ, m/s (F2MD, 1 m/s).
+    pub kalman_speed_floor_mps: f64,
+    /// The white-noise-acceleration spectral density q, m²/s³. Default b² · T with b the
+    /// hardest braking of any vehicle class (10 m/s²) and T the BSM nominal interval
+    /// (0.1 s): Bar-Shalom et al. 2001 §6.2.2 size q so that √(q·T) is the largest
+    /// velocity change over one sampling interval.
+    pub kalman_q_m2ps3: f64,
+    /// The standard-normal quantile of the Kalman check's χ² gate (3.0902: p = 0.999).
+    pub kalman_gate_z: f64,
+    /// How many messages the NIS is averaged over (Bar-Shalom et al. §5.4.2, the
+    /// time-average NIS; 1 is the single-message test).
+    pub kalman_window: u32,
+    /// The envelope's distance margin, metres (F2MD `MAX_MGT_RNG`, 4), added to the
+    /// confidence term `Z · √(c₀² + c₁²)`.
+    pub envelope_margin_m: f64,
+    /// The PositionSpeedMaxConsistency margin on the acceleration limits, m/s² (F2MD's
+    /// `+ 4`).
+    pub psmax_margin_mps2: f64,
+    /// The share of the smaller footprint two claims must have in common before the
+    /// box-intersection check fires (F2MD, 0.5).
+    pub box_overlap_threshold: f64,
+    /// How claims are turned into per-check scores.
+    pub scoring: Scoring,
+    /// The CaTCh factor at or below which a check counts as failed (F2MD ThresholdApp,
+    /// 0.28125).
+    pub catch_threshold: f64,
+    /// How per-message scores become a firing.
+    pub fusion: Fusion,
+    /// The windowed mean's number of earlier messages (F2MD AggregationApp, 3).
+    pub mean_history: u32,
+    /// The windowed mean's window, seconds (F2MD AggregationApp, 10).
+    pub mean_window_s: f64,
+    /// The leaky bucket's penalty coefficient (F2MD BehavioralApp, 0.0005).
+    pub bucket_coeff: f64,
+    /// The leaky bucket's penalty exponent (F2MD BehavioralApp, 10).
+    pub bucket_exponent: f64,
+    /// What the bucket leaks per message (F2MD BehavioralApp, 1).
+    pub bucket_leak: f64,
+    /// The bucket level above which the pseudonym is reported (F2MD BehavioralApp,
+    /// 5.5066).
+    pub bucket_threshold: f64,
+    /// A pseudonym not heard for this long has its bucket removed, seconds (design: the
+    /// windowed mean's 10 s).
+    pub bucket_expiry_s: f64,
+}
+
+/// How a check's comparison becomes a score (docs/design/frameworks/f2md.md §5 P8 (a)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Scoring {
+    /// The threshold-normalised residual: ≈ 1 at the firing threshold (the default).
+    #[default]
+    Threshold,
+    /// CaTCh (Kamel et al., IEEE WCNC 2019): the share of the claim's confidence region
+    /// that is plausible, a factor f in [0, 1], reported as (1 − f)/(1 − θ) so that the
+    /// score is ≥ 1 exactly when f ≤ θ ([`Ts103759Params::catch_threshold`]). Applies to
+    /// range and speed plausibility, position consistency and the position/speed envelope;
+    /// every other check keeps its threshold score.
+    Catch,
+}
+
+impl Scoring {
+    /// Its settings label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Scoring::Threshold => "threshold",
+            Scoring::Catch => "catch",
+        }
+    }
+
+    /// Parses a settings label.
+    #[must_use]
+    pub fn parse(label: &str) -> Option<Self> {
+        [Scoring::Threshold, Scoring::Catch]
+            .into_iter()
+            .find(|m| m.label() == label)
+    }
+}
+
+/// How the per-message scores of one pseudonym become a firing (f2md.md §5 P8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Fusion {
+    /// A check fires after `min_consecutive` messages in a row scored ≥ 1 (the default).
+    #[default]
+    Consecutive,
+    /// A check fires when the mean of its current score and up to `mean_history` earlier
+    /// scores inside `mean_window_s` is ≥ 1 (F2MD AggregationApp, Kamel et al. TVT 2020).
+    WindowedMean,
+    /// A per-pseudonym leaky bucket: each message adds `coeff · e^(exponent · (1 − f_min))`
+    /// with f_min the lowest check factor, leaks `bucket_leak`, and the checks failing on
+    /// a message fire while the bucket is above `bucket_threshold` (F2MD BehavioralApp,
+    /// TVT 2020). Keyed by pseudonym, so a removal cannot move a level onto another
+    /// pseudonym (F2MD defect D6, fixed).
+    LeakyBucket,
+}
+
+impl Fusion {
+    /// Its settings label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Fusion::Consecutive => "consecutive",
+            Fusion::WindowedMean => "windowed-mean",
+            Fusion::LeakyBucket => "leaky-bucket",
+        }
+    }
+
+    /// Parses a settings label.
+    #[must_use]
+    pub fn parse(label: &str) -> Option<Self> {
+        [Fusion::Consecutive, Fusion::WindowedMean, Fusion::LeakyBucket]
+            .into_iter()
+            .find(|m| m.label() == label)
+    }
 }
 
 impl Default for Ts103759Params {
@@ -471,8 +624,8 @@ impl Default for Ts103759Params {
             environment: RadioEnvironment::Highway,
             acceptance_ranges: AcceptanceRanges::DERIVED,
             max_plausible_speed_mps: 40.0,
-            max_plausible_accel_mps2: 3.0,
-            max_plausible_decel_mps2: 4.5,
+            max_plausible_accel_mps2: 6.0,
+            max_plausible_decel_mps2: 10.0,
             max_confidence_m: 10.0,
             max_payload_bytes: crate::attack::MAX_MSDU_BYTES,
             beacon_profile: BeaconProfile::BSM_J2945_1,
@@ -496,6 +649,24 @@ impl Default for Ts103759Params {
             min_consecutive: 2,
             cpm_unmatched_fraction: 1.0,
             own_region: None,
+            kalman_pos_floor_m: 4.0,
+            kalman_speed_floor_mps: 1.0,
+            kalman_q_m2ps3: 10.0,
+            kalman_gate_z: 3.0902,
+            kalman_window: 10,
+            envelope_margin_m: 4.0,
+            psmax_margin_mps2: 4.0,
+            box_overlap_threshold: 0.5,
+            scoring: Scoring::Threshold,
+            catch_threshold: 0.28125,
+            fusion: Fusion::Consecutive,
+            mean_history: 3,
+            mean_window_s: 10.0,
+            bucket_coeff: 0.0005,
+            bucket_exponent: 10.0,
+            bucket_leak: 1.0,
+            bucket_threshold: 5.5066,
+            bucket_expiry_s: 10.0,
         }
     }
 }
@@ -507,6 +678,16 @@ impl Ts103759Params {
         Self::default()
             .with_environment(env)
             .with_beacon_profile(profile)
+    }
+
+    /// The same thresholds with F2MD's kinematic limits (`MAX_PLAUSIBLE_ACCEL` 3 m/s²,
+    /// `MAX_PLAUSIBLE_DECEL` 4.5 m/s²) in place of the vehicle classes', for a
+    /// like-for-like F2MD comparison. They flag an honest emergency stop.
+    #[must_use]
+    pub fn f2md_kinematics(mut self) -> Self {
+        self.max_plausible_accel_mps2 = 3.0;
+        self.max_plausible_decel_mps2 = 4.5;
+        self
     }
 
     /// The same thresholds for a receiver in another propagation environment.
@@ -593,14 +774,51 @@ impl Ts103759Params {
             // Counts: rounded, and saturating at the type's bounds.
             "min_consecutive" => self.min_consecutive = v.round() as u32,
             "max_payload_bytes" => self.max_payload_bytes = v.round() as u32,
+            "kalman_window" => self.kalman_window = (v.round() as u32).max(1),
+            "mean_history" => self.mean_history = v.round() as u32,
+            "kalman_pos_floor_m" => self.kalman_pos_floor_m = v,
+            "kalman_speed_floor_mps" => self.kalman_speed_floor_mps = v,
+            "kalman_q_m2ps3" => self.kalman_q_m2ps3 = v,
+            "kalman_gate_z" => self.kalman_gate_z = v,
+            "envelope_margin_m" => self.envelope_margin_m = v,
+            "psmax_margin_mps2" => self.psmax_margin_mps2 = v,
+            "box_overlap_threshold" => self.box_overlap_threshold = v,
+            "catch_threshold" => self.catch_threshold = v,
+            "mean_window_s" => self.mean_window_s = v,
+            "bucket_coeff" => self.bucket_coeff = v,
+            "bucket_exponent" => self.bucket_exponent = v,
+            "bucket_leak" => self.bucket_leak = v,
+            "bucket_threshold" => self.bucket_threshold = v,
+            "bucket_expiry_s" => self.bucket_expiry_s = v,
+            _ => return false,
+        }
+        true
+    }
+
+    /// Sets one labelled parameter by name: `fusion` (`consecutive`, `windowed-mean`,
+    /// `leaky-bucket`) or `scoring` (`threshold`, `catch`). False for an unknown key or
+    /// label.
+    pub fn apply_label(&mut self, key: &str, label: &str) -> bool {
+        match key {
+            "fusion" => match Fusion::parse(label) {
+                Some(f) => self.fusion = f,
+                None => return false,
+            },
+            "scoring" => match Scoring::parse(label) {
+                Some(m) => self.scoring = m,
+                None => return false,
+            },
             _ => return false,
         }
         true
     }
 }
 
+/// Every key [`Ts103759Params::apply_label`] reads.
+pub const LABEL_KEYS: [&str; 2] = ["fusion", "scoring"];
+
 /// Every key [`Ts103759Params::apply`] reads.
-pub const PARAM_KEYS: [&str; 32] = [
+pub const PARAM_KEYS: [&str; 48] = [
     "max_plausible_range_m",
     "art_highway_m",
     "art_rural_m",
@@ -633,6 +851,22 @@ pub const PARAM_KEYS: [&str; 32] = [
     "cpm_unmatched_fraction",
     "min_consecutive",
     "max_payload_bytes",
+    "kalman_pos_floor_m",
+    "kalman_speed_floor_mps",
+    "kalman_q_m2ps3",
+    "kalman_gate_z",
+    "kalman_window",
+    "envelope_margin_m",
+    "psmax_margin_mps2",
+    "box_overlap_threshold",
+    "catch_threshold",
+    "mean_history",
+    "mean_window_s",
+    "bucket_coeff",
+    "bucket_exponent",
+    "bucket_leak",
+    "bucket_threshold",
+    "bucket_expiry_s",
 ];
 
 // ---------------------------------------------------------------------------------------
@@ -904,6 +1138,11 @@ pub struct CrossCheckInputs<'a> {
     pub perception: &'a dyn LocalPerception,
     /// The two envelope fields the message itself does not carry.
     pub envelope: Option<&'a EnvelopeExtras>,
+    /// The frame's vehicle size and speed and heading confidences, when the host
+    /// recorded them (the box-intersection and Kalman checks).
+    pub frame: Option<&'a FrameExtras>,
+    /// This receiver's own footprint from its own belief (the box-intersection check).
+    pub own: Option<&'a OwnFootprint>,
 }
 
 impl CrossCheckInputs<'static> {
@@ -916,6 +1155,8 @@ impl CrossCheckInputs<'static> {
         CrossCheckInputs {
             perception: &NoPerception,
             envelope: None,
+            frame: None,
+            own: None,
         }
     }
 }
@@ -927,7 +1168,23 @@ impl<'a> CrossCheckInputs<'a> {
         Self {
             perception,
             envelope: None,
+            frame: None,
+            own: None,
         }
+    }
+
+    /// The same inputs with the frame's extras.
+    #[must_use]
+    pub fn and_frame(mut self, frame: &'a FrameExtras) -> Self {
+        self.frame = Some(frame);
+        self
+    }
+
+    /// The same inputs with this receiver's own footprint.
+    #[must_use]
+    pub fn and_own(mut self, own: &'a OwnFootprint) -> Self {
+        self.own = Some(own);
+        self
     }
 }
 
@@ -938,6 +1195,7 @@ struct Fix {
     y: f64,
     speed: f64,
     heading: f64,
+    conf: f64,
     at: SimTime,
     generation_time: SimTime,
 }
@@ -948,6 +1206,31 @@ struct SubjectState {
     last: Fix,
     first_seen: SimTime,
     streak: BTreeMap<Ts103759Check, u32>,
+    /// The windowed mean's earlier scores per check, oldest first.
+    history: BTreeMap<Ts103759Check, VecDeque<(SimTime, f64)>>,
+}
+
+/// One sender's Kalman track.
+#[derive(Debug, Clone, PartialEq)]
+struct Track {
+    kf: CvKalman,
+    at: SimTime,
+    nis: VecDeque<f64>,
+}
+
+/// One sender's newest footprint claim, for the box-intersection check.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct BoxClaim {
+    footprint: Footprint,
+    speed: f64,
+    at: SimTime,
+}
+
+/// One pseudonym's leaky bucket.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Bucket {
+    level: f64,
+    at: SimTime,
 }
 
 /// The TS 103 759 observation suite.
@@ -958,6 +1241,13 @@ pub struct Ts103759Suite {
     subjects: BTreeMap<[u8; 8], SubjectState>,
     /// The newest claim per signer, for the class-5 intersection check.
     recent: BTreeMap<[u8; 8], (f64, f64, SimTime)>,
+    /// The newest footprint per signer, for the box-intersection check.
+    boxes: BTreeMap<[u8; 8], BoxClaim>,
+    /// The Kalman track per signer.
+    tracks: BTreeMap<[u8; 8], Track>,
+    /// The leaky bucket per pseudonym, keyed by the pseudonym itself (F2MD D6 fixed).
+    buckets: BTreeMap<[u8; 8], Bucket>,
+    skipped_no_size: u64,
     /// When this receiver started listening, on its own clock.
     listening_since: Option<SimTime>,
     deferred: u64,
@@ -977,6 +1267,10 @@ impl Ts103759Suite {
             params,
             subjects: BTreeMap::new(),
             recent: BTreeMap::new(),
+            boxes: BTreeMap::new(),
+            tracks: BTreeMap::new(),
+            buckets: BTreeMap::new(),
+            skipped_no_size: 0,
             listening_since: None,
             deferred: 0,
             class4_evaluated: 0,
@@ -1045,6 +1339,31 @@ impl Ts103759Suite {
         self.skipped_no_region
     }
 
+    /// How many messages the box-intersection check could not run on because the frame
+    /// carried no vehicle size.
+    #[must_use]
+    pub fn skipped_no_size(&self) -> u64 {
+        self.skipped_no_size
+    }
+
+    /// The leaky-bucket level of one pseudonym, `None` when it has no bucket.
+    #[must_use]
+    pub fn bucket(&self, signer: &[u8; 8]) -> Option<f64> {
+        self.buckets.get(signer).map(|b| b.level)
+    }
+
+    /// The pseudonyms that hold a bucket, in order.
+    #[must_use]
+    pub fn bucket_pseudonyms(&self) -> Vec<[u8; 8]> {
+        self.buckets.keys().copied().collect()
+    }
+
+    /// Drops one pseudonym's bucket (for example when the authority revoked it). The
+    /// other pseudonyms' levels stay on their own pseudonyms.
+    pub fn remove_bucket(&mut self, signer: &[u8; 8]) -> bool {
+        self.buckets.remove(signer).is_some()
+    }
+
     /// How many distinct subjects it is tracking.
     #[must_use]
     pub fn tracked_subjects(&self) -> usize {
@@ -1100,6 +1419,202 @@ impl Ts103759Suite {
             }
             None => self.skipped_no_envelope += 1,
         }
+        if p.scoring == Scoring::Catch {
+            // CaTCh: the share of the claim's confidence disc inside the acceptance range,
+            // and the share of its speed interval under the plausible maximum.
+            let f = circle_inside_fraction(m.claimed_pos_confidence_m.max(0.0), d, p.art_m());
+            out.scores
+                .insert(Ts103759Check::RangePlausibility, self.catch_score(f));
+            let cv = speed_conf(x.frame, p.kalman_speed_floor_mps);
+            let v = m.claimed_speed_mps.abs();
+            let f = interval_inside_fraction(v - cv, v + cv, f64::NEG_INFINITY, p.max_plausible_speed_mps);
+            out.scores
+                .insert(Ts103759Check::SpeedPlausibility, self.catch_score(f));
+        }
+    }
+
+    /// A CaTCh factor in [0, 1] as a score on this suite's scale: (1 − f)/(1 − θ).
+    fn catch_score(&self, f: f64) -> f64 {
+        (1.0 - f.clamp(0.0, 1.0)) / (1.0 - self.params.catch_threshold).max(1e-9)
+    }
+
+    /// The WP-10 class-2 checks over one interval `dt` in (0, MAX_TIME_DELTA]: the
+    /// reachable-distance envelope and PositionSpeedMaxConsistency.
+    fn envelope(&self, prev: Fix, m: &ObservedMessage, dt: f64, disp: f64, out: &mut TsVerdict) {
+        let p = &self.params;
+        let (v0, v1) = (prev.speed.abs(), m.claimed_speed_mps.abs());
+        let (lo, hi) = reachable_distance(
+            v0,
+            v1,
+            dt,
+            p.max_plausible_accel_mps2,
+            p.max_plausible_decel_mps2,
+            p.max_plausible_speed_mps,
+        );
+        // The envelope is a path length and the displacement a chord: on a curve the
+        // chord is shorter, by sin(θ/2)/(θ/2) for an arc turning θ.
+        let turn = angle_diff_rad(m.claimed_heading_rad, prev.heading);
+        let lo_chord = lo * chord_factor(turn);
+        // How far the two claimed positions can honestly be off, from their broadcast
+        // confidences.
+        let c = math::hypot(prev.conf.max(0.0), m.claimed_pos_confidence_m.max(0.0));
+        let tol = p.envelope_margin_m + p.z_threshold * c;
+        let env_score = match p.scoring {
+            Scoring::Threshold => (lo_chord - disp).max(disp - hi).max(0.0) / tol.max(1e-9),
+            Scoring::Catch => self.catch_score(interval_inside_fraction(
+                disp - c,
+                disp + c,
+                lo_chord - p.envelope_margin_m,
+                hi + p.envelope_margin_m,
+            )),
+        };
+        out.scores
+            .insert(Ts103759Check::PositionSpeedEnvelope, env_score);
+        // PositionSpeedMaxConsistency: the mean speed d/Δt against the claimed speeds.
+        let mean_v = disp / dt;
+        let slow = v0.max(v1) - mean_v - (p.max_plausible_decel_mps2 + p.psmax_margin_mps2) * dt;
+        let fast = mean_v - v0.min(v1) - (p.max_plausible_accel_mps2 + p.psmax_margin_mps2) * dt;
+        let allowed = tol / dt;
+        out.scores.insert(
+            Ts103759Check::PositionSpeedMaxConsistency,
+            slow.max(fast).max(0.0) / allowed.max(1e-9),
+        );
+    }
+
+    /// The Kalman consistency check: one constant-velocity filter per sender, measurement
+    /// noise from the broadcast confidences (floored), NIS averaged over the last
+    /// `kalman_window` messages against the χ² quantile of 4·n degrees of freedom.
+    fn kalman(&mut self, m: &ObservedMessage, t: SimTime, x: &CrossCheckInputs<'_>, out: &mut TsVerdict) {
+        let p = &self.params;
+        let sp = m.claimed_pos_confidence_m.max(p.kalman_pos_floor_m);
+        let sv = speed_conf(x.frame, p.kalman_speed_floor_mps);
+        let sh = x.frame.and_then(|f| f.heading_confidence_rad).unwrap_or(0.0).max(0.0);
+        let v = m.claimed_speed_mps;
+        let (r_pos, r_vel) = (sp * sp, sv * sv + (v * sh) * (v * sh));
+        let (sn, cs) = math::sin_cos(m.claimed_heading_rad);
+        let z = [m.claimed_x_m, v * cs, m.claimed_y_m, v * sn];
+        let window = p.time_delta_s();
+        let (q, n, gate_z) = (p.kalman_q_m2ps3, p.kalman_window.max(1) as usize, p.kalman_gate_z);
+        match self.tracks.get_mut(&m.signer) {
+            Some(tr) => {
+                let dt = ns_to_secs(t.saturating_sub(tr.at));
+                if dt <= 0.0 {
+                    // Two claims at one instant: no interval to predict over.
+                    return;
+                }
+                if dt > window {
+                    // Too long a gap for a comparison: start again, absent rather than zero.
+                    *tr = Track {
+                        kf: CvKalman::init(z, r_pos, r_vel),
+                        at: t,
+                        nis: VecDeque::new(),
+                    };
+                    return;
+                }
+                let nis = tr.kf.step(dt, q, z, r_pos, r_vel);
+                tr.at = t;
+                tr.nis.push_back(nis);
+                while tr.nis.len() > n {
+                    tr.nis.pop_front();
+                }
+                let sum: f64 = tr.nis.iter().sum();
+                let k = 4.0 * tr.nis.len() as f64;
+                out.scores.insert(
+                    Ts103759Check::KalmanConsistency,
+                    sum / chi2_quantile(k, gate_z).max(1e-9),
+                );
+            }
+            None => {
+                self.tracks.insert(
+                    m.signer,
+                    Track {
+                        kf: CvKalman::init(z, r_pos, r_vel),
+                        at: t,
+                        nis: VecDeque::new(),
+                    },
+                );
+            }
+        }
+        // A track not updated inside the window is dead; the sweep is bounded by the
+        // number of signers heard in one window.
+        let cutoff = t.saturating_sub(v2xw_core::time::secs_to_ns(window));
+        self.tracks.retain(|_, tr| tr.at >= cutoff);
+    }
+
+    /// The box-intersection check: this claim's oriented footprint against every other
+    /// station's newest footprint inside `MAX_DELTA_INTER` (moved on along its claimed
+    /// heading at its claimed speed to this instant) and against this receiver's own
+    /// footprint from its own belief. The overlap share of the smaller footprint is scaled
+    /// down linearly with the other claim's age, (W − age)/W.
+    fn box_intersection(
+        &mut self,
+        me: &SelfBelief,
+        m: &ObservedMessage,
+        t: SimTime,
+        x: &CrossCheckInputs<'_>,
+        out: &mut TsVerdict,
+    ) {
+        let p = &self.params;
+        let w = p.max_delta_inter_s.max(1e-9);
+        let cutoff = t.saturating_sub(v2xw_core::time::secs_to_ns(w));
+        let size = x
+            .frame
+            .and_then(|f| Some((f.length_m?, f.width_m?, f.reference)));
+        let Some((len, wid, reference)) = size else {
+            self.skipped_no_size += 1;
+            self.boxes.retain(|_, b| b.at >= cutoff);
+            return;
+        };
+        let mine = Footprint::from_claim(
+            m.claimed_x_m,
+            m.claimed_y_m,
+            m.claimed_heading_rad,
+            len,
+            wid,
+            reference,
+        );
+        let mut worst: Option<f64> = None;
+        for (signer, b) in &self.boxes {
+            if *signer == m.signer || b.at < cutoff {
+                continue;
+            }
+            let age = ns_to_secs(t.saturating_sub(b.at));
+            let (sn, cs) = math::sin_cos(b.footprint.heading_rad);
+            let moved = b.footprint.shifted(b.speed * age * cs, b.speed * age * sn);
+            let scaled = overlap_ratio(&mine, &moved) * ((w - age) / w).clamp(0.0, 1.0);
+            if worst.is_none_or(|v| scaled > v) {
+                worst = Some(scaled);
+            }
+        }
+        if let Some(own) = x.own {
+            let f = Footprint::from_claim(
+                me.x_m,
+                me.y_m,
+                own.heading_rad,
+                own.length_m,
+                own.width_m,
+                own.reference,
+            );
+            let r = overlap_ratio(&mine, &f);
+            if worst.is_none_or(|v| r > v) {
+                worst = Some(r);
+            }
+        }
+        if let Some(r) = worst {
+            out.scores.insert(
+                Ts103759Check::BoxIntersection,
+                r / p.box_overlap_threshold.max(1e-9),
+            );
+        }
+        self.boxes.insert(
+            m.signer,
+            BoxClaim {
+                footprint: mine,
+                speed: m.claimed_speed_mps,
+                at: t,
+            },
+        );
+        self.boxes.retain(|_, b| b.at >= cutoff);
     }
 
     /// The class-2 checks, which need the previous message from this station.
@@ -1130,20 +1645,31 @@ impl Ts103759Suite {
         if dt <= 0.0 || dt > p.time_delta_s() {
             return;
         }
-        out.scores.insert(
-            Ts103759Check::PositionConsistency,
-            disp / (p.max_plausible_speed_mps * dt + tol),
-        );
+        let pc = match p.scoring {
+            Scoring::Threshold => disp / (p.max_plausible_speed_mps * dt + tol),
+            // CaTCh: the share of this claim's confidence disc inside the disc the previous
+            // claim (widened by its own confidence) can reach at the plausible maximum.
+            Scoring::Catch => self.catch_score(circle_inside_fraction(
+                m.claimed_pos_confidence_m.max(0.0),
+                disp,
+                p.max_plausible_speed_mps * dt + prev.conf.max(0.0),
+            )),
+        };
+        out.scores.insert(Ts103759Check::PositionConsistency, pc);
+        self.envelope(prev, m, dt, disp, out);
         let avg_v = 0.5 * (m.claimed_speed_mps + prev.speed);
         out.scores.insert(
             Ts103759Check::PositionSpeedConsistency,
             (disp - avg_v * dt).abs() / (p.mgt_rng_m + tol),
         );
         let dv = m.claimed_speed_mps - prev.speed;
+        // The speed change allowed over the interval: the vehicle classes' limit, never
+        // less than F2MD's margins (which alone flag an honest car launching at its
+        // 2.6 m/s² class acceleration).
         let allowed = if dv >= 0.0 {
-            p.mgt_rng_up_mps * dt
+            p.mgt_rng_up_mps.max(p.max_plausible_accel_mps2) * dt
         } else {
-            p.mgt_rng_down_mps * dt
+            p.mgt_rng_down_mps.max(p.max_plausible_decel_mps2) * dt
         };
         out.scores.insert(
             Ts103759Check::SpeedConsistency,
@@ -1385,9 +1911,11 @@ impl Ts103759Suite {
                 }
             }
         }
+        self.kalman(m, t, x, &mut out);
         self.class3(m, env, x, &mut out);
         self.class4(me, m, x, &mut out);
         self.class5(me, m, t, x, &mut out);
+        self.box_intersection(me, m, t, x, &mut out);
 
         self.fire(m, t, &mut out);
         // Keep this claim as the previous one for the next message from this station.
@@ -1396,6 +1924,7 @@ impl Ts103759Suite {
             y: m.claimed_y_m,
             speed: m.claimed_speed_mps,
             heading: m.claimed_heading_rad,
+            conf: m.claimed_pos_confidence_m,
             at: t,
             generation_time: m.claimed_generation_time,
         };
@@ -1409,6 +1938,7 @@ impl Ts103759Suite {
                 last: fix,
                 first_seen: t,
                 streak: BTreeMap::new(),
+                history: BTreeMap::new(),
             });
         emit(ctx, me.node, &out);
         out
@@ -1454,23 +1984,83 @@ impl Ts103759Suite {
                     y: m.claimed_y_m,
                     speed: m.claimed_speed_mps,
                     heading: m.claimed_heading_rad,
+                    conf: m.claimed_pos_confidence_m,
                     at: t,
                     generation_time: m.claimed_generation_time,
                 },
                 first_seen: t,
                 streak: BTreeMap::new(),
+                history: BTreeMap::new(),
             });
         let mut fired: Vec<TsObservation> = Vec::new();
-        for (check, score) in &out.scores {
-            let run = entry.streak.entry(*check).or_insert(0);
-            *run = if *score >= 1.0 { *run + 1 } else { 0 };
-            if *run >= min {
-                fired.push(TsObservation {
-                    check: *check,
-                    score: *score,
-                    subject: subject.clone(),
-                    at: t,
-                });
+        let p = &self.params;
+        match p.fusion {
+            Fusion::Consecutive => {
+                for (check, score) in &out.scores {
+                    let run = entry.streak.entry(*check).or_insert(0);
+                    *run = if *score >= 1.0 { *run + 1 } else { 0 };
+                    if *run >= min {
+                        fired.push(TsObservation {
+                            check: *check,
+                            score: *score,
+                            subject: subject.clone(),
+                            at: t,
+                        });
+                    }
+                }
+            }
+            Fusion::WindowedMean => {
+                let cutoff = t.saturating_sub(v2xw_core::time::secs_to_ns(p.mean_window_s));
+                let keep = p.mean_history as usize;
+                for (check, score) in &out.scores {
+                    let h = entry.history.entry(*check).or_default();
+                    while h.front().is_some_and(|(at, _)| *at < cutoff) {
+                        h.pop_front();
+                    }
+                    let n = h.len() as f64 + 1.0;
+                    let mean = (h.iter().map(|(_, v)| *v).sum::<f64>() + *score) / n;
+                    h.push_back((t, *score));
+                    while h.len() > keep {
+                        h.pop_front();
+                    }
+                    if mean >= 1.0 {
+                        fired.push(TsObservation {
+                            check: *check,
+                            score: mean,
+                            subject: subject.clone(),
+                            at: t,
+                        });
+                    }
+                }
+            }
+            Fusion::LeakyBucket => {
+                // The lowest factor over the checks that ran, on the CaTCh scale
+                // f = 1 − s·(1 − θ), so that a score of 1 is the factor θ.
+                let theta = p.catch_threshold;
+                let f_min = out
+                    .scores
+                    .values()
+                    .map(|s| (1.0 - s * (1.0 - theta)).clamp(0.0, 1.0))
+                    .fold(1.0, f64::min);
+                let expiry = t.saturating_sub(v2xw_core::time::secs_to_ns(p.bucket_expiry_s));
+                // Removal by key: no other pseudonym's level moves (F2MD D6).
+                self.buckets.retain(|k, b| *k == m.signer || b.at >= expiry);
+                let b = self.buckets.entry(m.signer).or_insert(Bucket { level: 0.0, at: t });
+                let penalty = p.bucket_coeff * math::exp(p.bucket_exponent * (1.0 - f_min));
+                b.level = (b.level + penalty - p.bucket_leak).max(0.0);
+                b.at = t;
+                if b.level > p.bucket_threshold {
+                    for (check, score) in &out.scores {
+                        if *score >= 1.0 {
+                            fired.push(TsObservation {
+                                check: *check,
+                                score: *score,
+                                subject: subject.clone(),
+                                at: t,
+                            });
+                        }
+                    }
+                }
             }
         }
         fired.sort_by(|a, b| {
@@ -1481,6 +2071,14 @@ impl Ts103759Suite {
         });
         out.fired = fired;
     }
+}
+
+/// The speed confidence a frame broadcasts, floored.
+fn speed_conf(frame: Option<&FrameExtras>, floor: f64) -> f64 {
+    frame
+        .and_then(|f| f.speed_confidence_mps)
+        .unwrap_or(0.0)
+        .max(floor)
 }
 
 impl Model for Ts103759Suite {
@@ -1566,6 +2164,24 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
     use serde_json::json;
     let f2md = design("04-models.md §14 (detector/f2md-checks, veins-f2md F2MDParameters.h)");
     let ts = standard("ETSI TS 103 759 V2.2.1 (2026-01), misbehaviour observation classes 1–5");
+    let tvt = paper(
+        "Kamel, Kaiser, Jemaa, Cincilla, Urien, 'Feasibility study of misbehavior detection \
+         mechanisms in cooperative intelligent transport systems', IEEE TVT 69(6), 2020 \
+         (F2MD check, aggregation and behavioural constants; F2MDParameters.h as read)",
+    );
+    let catch = paper(
+        "Kamel, Jemaa, Kaiser, Urien, 'CaTCh: a confidence range tolerant misbehavior \
+         detection approach', IEEE WCNC 2019",
+    );
+    let bar_shalom = paper(
+        "Bar-Shalom, Li, Kirubarajan, Estimation with Applications to Tracking and \
+         Navigation, Wiley 2001, §5.4.2 (NIS test) and §6.2.2 (white-noise acceleration); \
+         Wilson and Hilferty, PNAS 17, 1931 (χ² quantile)",
+    );
+    let classes = design(
+        "04-models.md vehicle classes (v2xw_mobility::classes, SUMO vType defaults): the \
+         largest accel_mps2 (6.0) and emergency_decel_mps2 (10.0) over the classes",
+    );
     let mut card = ModelCard::new(
         MODEL_ID,
         Family::Detector,
@@ -1598,7 +2214,8 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
         ),
         Equation::new(
             "speed consistency",
-            "|Δv| / (MAX_MGT_RNG_UP·Δt if Δv ≥ 0 else MAX_MGT_RNG_DOWN·Δt)",
+            "|Δv| / (max(MAX_MGT_RNG_UP, a_max)·Δt if Δv ≥ 0 else \
+             max(MAX_MGT_RNG_DOWN, b_max)·Δt), a_max and b_max from the vehicle classes",
         ),
         Equation::new(
             "position/heading consistency",
@@ -1638,6 +2255,41 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
         Equation::new(
             "CPM consistency (class 5)",
             "(uncorroborated visible objects / visible objects) / cpm_unmatched_fraction",
+        ),
+        Equation::new(
+            "Kalman consistency (class 2, WP-10)",
+            "CV filter per sender and axis, x = (p, v), Q = q·[[Δt³/3, Δt²/2], [Δt²/2, Δt]], \
+             z = (x, v cos h, y, v sin h), R = diag(max(conf, 4 m)², max(σ_v, 1 m/s)² + \
+             (v·σ_h)²); score = Σ NIS over the last n messages / χ²(4n, z_gate) \
+             (Wilson–Hilferty)",
+        ),
+        Equation::new(
+            "position/speed envelope (class 2, WP-10)",
+            "[d_min, d_max] reachable from v₀ to v₁ in Δt under a_env, b_env, v_max; \
+             score = max(d_min·sinc(θ/2) − Δs, Δs − d_max, 0) / (MAX_MGT_RNG + Z·√(c₀² + c₁²))",
+        ),
+        Equation::new(
+            "PositionSpeedMaxConsistency (class 2, WP-10)",
+            "max(max(v) − Δs/Δt − (b_env + m)·Δt, Δs/Δt − min(v) − (a_env + m)·Δt, 0) / \
+             ((MAX_MGT_RNG + Z·√(c₀² + c₁²))/Δt)",
+        ),
+        Equation::new(
+            "box intersection (class 5, WP-10)",
+            "max over other claims within W of area(B ∩ B')/min(area) · (W − age)/W, B' moved \
+             on by v'·age along h', and over the receiver's own footprint; / box_overlap_threshold",
+        ),
+        Equation::new(
+            "CaTCh scoring (scoring = catch)",
+            "score = (1 − f)/(1 − θ), f the plausible share of the confidence disc or interval",
+        ),
+        Equation::new(
+            "windowed mean (fusion = windowed-mean)",
+            "fires when mean(current score, ≤ mean_history earlier within mean_window_s) ≥ 1",
+        ),
+        Equation::new(
+            "leaky bucket (fusion = leaky-bucket)",
+            "TMO ← max(0, TMO + coeff·e^(exponent·(1 − f_min)) − leak), f_min = min over checks \
+             of 1 − s·(1 − θ); the failing checks fire while TMO > bucket_threshold",
         ),
     ];
     card.parameters = vec![
@@ -1691,13 +2343,13 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
             "max_plausible_accel_mps2",
             "m/s^2",
             json!(p.max_plausible_accel_mps2),
-            f2md.clone(),
+            classes.clone(),
         ),
         Parameter::new(
             "max_plausible_decel_mps2",
             "m/s^2",
             json!(p.max_plausible_decel_mps2),
-            f2md.clone(),
+            classes.clone(),
         ),
         Parameter::new(
             "max_confidence_m",
@@ -1861,7 +2513,7 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
             json!(p.proximity_range_l_m),
             f2md.clone(),
         ),
-        Parameter::new("max_delta_inter_s", "s", json!(p.max_delta_inter_s), f2md),
+        Parameter::new("max_delta_inter_s", "s", json!(p.max_delta_inter_s), f2md.clone()),
         legacy_param(
             "z_threshold",
             "-",
@@ -1919,6 +2571,51 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
             );
             q
         },
+        Parameter::new("kalman_pos_floor_m", "m", json!(p.kalman_pos_floor_m), tvt.clone()),
+        Parameter::new(
+            "kalman_speed_floor_mps",
+            "m/s",
+            json!(p.kalman_speed_floor_mps),
+            tvt.clone(),
+        ),
+        Parameter::new("kalman_q_m2ps3", "m^2/s^3", json!(p.kalman_q_m2ps3), bar_shalom.clone()),
+        Parameter::new("kalman_gate_z", "-", json!(p.kalman_gate_z), bar_shalom.clone()),
+        Parameter::new("kalman_window", "messages", json!(p.kalman_window), bar_shalom.clone()),
+        Parameter::new("envelope_margin_m", "m", json!(p.envelope_margin_m), f2md),
+        Parameter::new("psmax_margin_mps2", "m/s^2", json!(p.psmax_margin_mps2), tvt.clone()),
+        Parameter::new(
+            "box_overlap_threshold",
+            "-",
+            json!(p.box_overlap_threshold),
+            tvt.clone(),
+        ),
+        {
+            let mut q = Parameter::new("scoring", "-", json!(p.scoring.label()), catch.clone());
+            q.range = Some(vec![json!("threshold"), json!("catch")]);
+            q
+        },
+        Parameter::new("catch_threshold", "-", json!(p.catch_threshold), catch.clone()),
+        {
+            let mut q = Parameter::new("fusion", "-", json!(p.fusion.label()), tvt.clone());
+            q.range = Some(vec![
+                json!("consecutive"),
+                json!("windowed-mean"),
+                json!("leaky-bucket"),
+            ]);
+            q
+        },
+        Parameter::new("mean_history", "messages", json!(p.mean_history), tvt.clone()),
+        Parameter::new("mean_window_s", "s", json!(p.mean_window_s), tvt.clone()),
+        Parameter::new("bucket_coeff", "-", json!(p.bucket_coeff), tvt.clone()),
+        Parameter::new("bucket_exponent", "-", json!(p.bucket_exponent), tvt.clone()),
+        Parameter::new("bucket_leak", "-", json!(p.bucket_leak), tvt.clone()),
+        Parameter::new("bucket_threshold", "-", json!(p.bucket_threshold), tvt.clone()),
+        Parameter::new(
+            "bucket_expiry_s",
+            "s",
+            json!(p.bucket_expiry_s),
+            design("frameworks/00-adoption-plan.md WP-10 (bucket removal after the 10 s window)"),
+        ),
     ];
     card.sources = vec![
         ts.clone(),
@@ -1927,6 +2624,9 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
         design("04-models.md §12.1 (the perception model the class-4 check reads)"),
         standard("ETSI TR 103 460 (misbehaviour-detection taxonomy: ART, eART, CoE, MPP, SAW)"),
         standard("ETSI TS 103 324 (collective perception, the class-5 CPM check's subject)"),
+        tvt.clone(),
+        catch.clone(),
+        bar_shalom.clone(),
     ];
     card.assumptions = vec![
         "Every input is belief: the node's own position estimate, its own clock, its own \
@@ -1981,6 +2681,15 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
          not the longest interval."
             .to_string(),
         "The per-message CPU cost is a placeholder, not a measurement.".to_string(),
+        "WP-10 checks are re-implemented from Kamel et al. TVT 2020, WCNC 2019 and \
+         Bar-Shalom et al. 2001. F2MD was read for behaviour only and no code was copied. \
+         The Kalman check treats the broadcast position confidence as one σ (as F2MD does); \
+         a 95 % confidence makes it conservative by about 2.4x. The box check needs the \
+         frame's vehicle size (FrameExtras) and is unchecked without it."
+            .to_string(),
+        "The suite is not yet selectable in detection.local, so its settings (including \
+         fusion and scoring) reach it only through Ts103759Params::apply / apply_label."
+            .to_string(),
     ];
     card.determinism = Determinism {
         uses_rng: false,
@@ -2001,12 +2710,19 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
             "ts103759::the_1_hz_profile_reproduces_f2md".to_string(),
             "ts103759::the_acceptance_range_is_the_engine_link_budget".to_string(),
             "ts103759::an_honest_los_highway_link_never_fires_and_twice_the_range_does".to_string(),
+            "ts103759_wp10::a_slow_drift_the_pairwise_checks_miss_is_caught_by_the_kalman_check"
+                .to_string(),
+            "ts103759_wp10::boxes_side_by_side_and_in_a_tight_queue_do_not_fire_and_ghosts_do"
+                .to_string(),
+            "ts103759_wp10::an_honest_emergency_stop_is_not_flagged".to_string(),
+            "ts103759_wp10::the_leaky_bucket_keeps_each_level_on_its_own_pseudonym".to_string(),
+            "ts103759_wp10::honest_gauss_markov_traffic_stays_under_the_stated_bounds".to_string(),
         ],
     };
     card.cost = Some(v2xw_core::card::CostClass {
         per_call_us: Some(25.0),
         notes: Some(
-            "Placeholder: nineteen scalar checks, one map query and one nearest-object \
+            "Placeholder: twenty-three scalar checks, one map query and one nearest-object \
              query per message. Not measured."
                 .to_string(),
         ),
@@ -2020,7 +2736,7 @@ mod tests {
 
     #[test]
     fn every_check_parses_and_belongs_to_exactly_one_class() {
-        assert_eq!(Ts103759Check::ALL.len(), 19);
+        assert_eq!(Ts103759Check::ALL.len(), 23);
         for c in Ts103759Check::ALL {
             assert_eq!(Ts103759Check::parse(c.as_str()), Some(c));
         }
@@ -2093,6 +2809,8 @@ mod tests {
             "beacon_min_interval_s",
             "beacon_max_interval_s",
             "beacon_jitter_tolerance_s",
+            "fusion",
+            "scoring",
         ] {
             assert!(
                 c.parameters.iter().any(|p| p.name == name),
@@ -2109,8 +2827,13 @@ mod tests {
         assert_eq!(p.environment, RadioEnvironment::Highway);
         assert_eq!(p.art_m(), AcceptanceRanges::DERIVED.highway_m);
         assert_eq!(p.max_plausible_speed_mps, 40.0);
-        assert_eq!(p.max_plausible_accel_mps2, 3.0);
-        assert_eq!(p.max_plausible_decel_mps2, 4.5);
+        // The vehicle classes' limits, not F2MD's 3 / 4.5 (WP-10 defect fix: F2MD's flag
+        // an honest emergency stop); F2MD's are the f2md_kinematics preset.
+        assert_eq!(p.max_plausible_accel_mps2, 6.0);
+        assert_eq!(p.max_plausible_decel_mps2, 10.0);
+        let f = Ts103759Params::default().f2md_kinematics();
+        assert_eq!(f.max_plausible_accel_mps2, 3.0);
+        assert_eq!(f.max_plausible_decel_mps2, 4.5);
         assert_eq!(p.max_confidence_m, 10.0);
         // The beacon timing is the BSM's (f2md.md §5 P1); the 1 Hz profile gives
         // F2MD's 3.1 / 0.9 / 2.1 s (tests/ts103759.rs::the_1_hz_profile_reproduces_f2md).
