@@ -3411,6 +3411,20 @@ fn node_capacities(scenario: &Scenario) -> NodeConfig {
         c.peer_cache_capacity = n as usize;
     }
     c.cpm_interval = infra_interval(scenario.messages.cpm_interval_ms, v2xw_node::cpm::T_GEN_CPM);
+    // WP-12: the CP service under load and the extra DENM triggers, each off unless set.
+    let m = &scenario.messages;
+    c.cpm = v2xw_node::cpm::CpmConfig {
+        dcc_limited: m.cpm_dcc_limited.unwrap_or(false),
+        quality_threshold: m.cpm_quality_threshold,
+        max_objects: m
+            .cpm_max_objects
+            .map_or(v2xw_node::cpm::MAX_OBJECTS, |n| n as usize),
+        utility_order: m.cpm_max_objects.is_some(),
+    };
+    c.denm_triggers = v2xw_node::events::DenmTriggers {
+        traffic_condition: m.denm_traffic_condition.unwrap_or(false),
+        traction_loss: m.denm_traction_loss.unwrap_or(false),
+    };
     if let Some(n) = scenario.messages.path_history_points {
         c.path_history_points = n as usize;
     }

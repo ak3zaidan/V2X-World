@@ -216,6 +216,7 @@ fn cpms(rng: &mut RngStream) -> Vec<(String, Vec<u8>)> {
                     sigma_m: rng.uniform(0.1, 3.0),
                     sensor_ids: [1, 3, 0],
                     sensor_count: 2,
+                    quality: None,
                 })
                 .collect();
             let input = CpmInput {

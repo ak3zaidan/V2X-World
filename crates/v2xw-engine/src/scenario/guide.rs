@@ -716,6 +716,31 @@ const ADVANCED: &[Basic] = &[
         recommended: "100 ms (ETSI TS 103 324) to 1,000 ms.",
     },
     Basic {
+        path: "messages.cpm_dcc_limited",
+        explain: "Whether vehicles send collective perception messages less often when the channel is congested, following the congestion control as the standard says, instead of at their own rate whatever the load.",
+        recommended: "Off (today); on for a realistic CPM load in dense traffic (ETSI TS 103 324).",
+    },
+    Basic {
+        path: "messages.cpm_quality_threshold",
+        explain: "The lowest perception quality (0 to 15) an object must exceed to be shared in a collective perception message; tracks the sensors have lost for a while fall below it.",
+        recommended: "Empty (not applied, today); 3 as ETSI TS 103 324 recommends.",
+    },
+    Basic {
+        path: "messages.cpm_max_objects",
+        explain: "The most objects one collective perception message carries; when more are due, the most informative go first and the rest wait for the next message.",
+        recommended: "Empty (255, the format's limit); lower to study a size budget.",
+    },
+    Basic {
+        path: "messages.denm_traffic_condition",
+        explain: "Whether vehicles warn the traffic behind them of the end of a queue and of slow or stopped traffic ahead, on non-urban roads, as deployed C-ITS cars do.",
+        recommended: "Off (today); on for highway studies (C2C-CC triggering conditions).",
+    },
+    Basic {
+        path: "messages.denm_traction_loss",
+        explain: "Whether a vehicle whose anti-lock brakes find a slippery road (ice, snow) warns the vehicles around it.",
+        recommended: "Off (today); on for winter-weather studies (C2C-CC triggering conditions).",
+    },
+    Basic {
         path: "messages.path_history_points",
         explain: "How many points of its recent track a vehicle puts in each safety message; more points let receivers follow its path but make every message bigger.",
         recommended: "15 (SAE J2945/1); 0 to 23 (the J2735 limit).",

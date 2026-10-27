@@ -34,6 +34,11 @@ The test runs a baseline and the setting side by side and requires the output to
 | SPaT interval | `v2xw-node/src/generate.rs` `SPAT_INTERVAL` | `messages.spat_interval_ms` | 100 ms (CTI 4501, 04-models.md §8.1) | 100 to 10 000 ms | 200 ms sends about half the SPaTs |
 | MAP interval | `generate.rs` `MAP_INTERVAL` | `messages.map_interval_ms` | 1000 ms (CTI 4501) | 100 to 60 000 ms | 500 ms sends more than 1.5× the MAPs |
 | CPM generation interval `T_GenCpm` | `v2xw-node/src/cpm.rs` `T_GEN_CPM` | `messages.cpm_interval_ms` | 100 ms (ETSI TS 103 324 §6.1.2.3) | 100 to 1000 ms (`T_GenCpmMax`) | 500 ms sends fewer CPMs |
+| CPM `T_GenCpm` under DCC (WP-12) | `v2xw-node/src/cpm.rs` `CpmService::generation_interval` | `messages.cpm_dcc_limited` | off | bool | 300 ms DCC gap gives 3.3 CPM/s (`cpm::tests`) |
+| CPM `ObjectPerceptionQualityThreshold` (WP-12) | `cpm.rs` `OBJECT_PERCEPTION_QUALITY_THRESHOLD` | `messages.cpm_quality_threshold` | unset (TS 103 324 Table F.1: 3) | 0 to 15 | lost tracks are held back |
+| CPM objects per message (WP-12) | `cpm.rs` `MAX_OBJECTS` | `messages.cpm_max_objects` | 255 | 1 to 255 | the cut keeps the highest-utility objects |
+| DENM traffic condition (WP-12) | `v2xw-node/src/denm_triggers.rs` | `messages.denm_traffic_condition` | off (C2C-CC RS 2007 R1.6.10) | bool | a queue on a non-urban road raises `trafficCondition` |
+| DENM traction loss (WP-12) | `denm_triggers.rs` | `messages.denm_traction_loss` | off (C2C-CC RS 2002 R1.6.10) | bool | an ABS stop on ice raises `adhesion` |
 | Verification queue depth | `v2xw-node/src/runtime.rs` `NodeConfig::queue_capacity[1]` | `nodes.verify_queue_depth` | 64 (engine default, no profile publishes one) | 1 to 4096 | depth 1 drops (`verify_overflow`) under load |
 
 The loader refuses each field where the run would not read it:

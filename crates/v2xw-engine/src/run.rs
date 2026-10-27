@@ -4133,6 +4133,7 @@ impl Engine {
                         self.timeline.hazard_lights.contains(&node),
                         night,
                         self.weather.visibility_m,
+                        v2xw_mobility::weather::surface_friction(self.weather.surface),
                         now,
                     ),
                 ))
@@ -4237,7 +4238,13 @@ impl Engine {
                 let runs = nodes
                     .get(&node)
                     .and_then(|n| n.as_obu())
-                    .is_some_and(|o| o.schedule().services().cpm);
+                    .is_some_and(|o| {
+                        // The CPM's objects, and (WP-12) the traffic-condition trigger's
+                        // sensor conditions, read the vehicle's own perception.
+                        o.schedule().services().cpm
+                            || (o.schedule().services().denm
+                                && o.denm_triggers().traffic_condition)
+                    });
                 runs.then_some(crate::perception::Observer {
                     node,
                     actor: *id,
@@ -4303,6 +4310,7 @@ impl Engine {
                     measured_at: p.measured_at,
                     first_seen: p.first_seen,
                     sensors: p.sensors,
+                    detection_confidence: p.detection_confidence,
                 })
                 .collect();
             if let Some(obu) = nodes.get_mut(&o.node).and_then(|n| n.as_obu_mut()) {

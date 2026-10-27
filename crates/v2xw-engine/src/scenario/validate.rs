@@ -1117,6 +1117,20 @@ pub static BOUNDS: &[Bound] = &[
         what: "the CPM generation interval",
     },
     Bound {
+        path: "messages.cpm_quality_threshold",
+        lo: 0.0,
+        hi: 15.0,
+        exclusive_lo: false,
+        what: "the object perception quality threshold",
+    },
+    Bound {
+        path: "messages.cpm_max_objects",
+        lo: 1.0,
+        hi: 255.0,
+        exclusive_lo: false,
+        what: "the objects per CPM",
+    },
+    Bound {
         path: "messages.path_history_points",
         lo: 0.0,
         hi: 23.0,
@@ -3607,6 +3621,39 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Wired,
         note: "T_GenCpm, how often a vehicle checks whether a CPM is due (TS 103 324's \
                100 ms unless set). Refused unless messages.sets has cpm.",
+    },
+    KeyStatus {
+        path: "messages.cpm_dcc_limited",
+        status: Status::Wired,
+        note: "T_GenCpm follows the DCC's T_off, clamped to [100, 1000] ms (TS 103 324 \
+               §6.1.2.1, Annex D). Refused unless messages.sets has cpm.",
+    },
+    KeyStatus {
+        path: "messages.cpm_quality_threshold",
+        status: Status::Wired,
+        note: "ObjectPerceptionQualityThreshold: objects whose §7.1.8.6 quality does not \
+               exceed it are not sent, and the computed quality is encoded (TS 103 324 \
+               §6.1.2.3, Table F.1's 3). Refused unless messages.sets has cpm.",
+    },
+    KeyStatus {
+        path: "messages.cpm_max_objects",
+        status: Status::Wired,
+        note: "Objects per CPM: the selection is ordered by the §6.1.3.2 utility and the \
+               lowest-utility objects past it wait for the next event. Refused unless \
+               messages.sets has cpm.",
+    },
+    KeyStatus {
+        path: "messages.denm_traffic_condition",
+        status: Status::Wired,
+        note: "The C2C-CC RS 2007 sudden-speed-drop (dangerousEndOfQueue 27) and \
+               local-slow-down (trafficCondition 1) DENMs. Refused unless messages.sets \
+               has denm.",
+    },
+    KeyStatus {
+        path: "messages.denm_traction_loss",
+        status: Status::Wired,
+        note: "The C2C-CC RS 2002 traction-loss DENM (adhesion 6) from the own ABS's \
+               friction estimate. Refused unless messages.sets has denm.",
     },
     KeyStatus {
         path: "messages.path_history_points",
@@ -7871,6 +7918,14 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
             m.cpm_interval_ms.map(|v| v as f64),
         ),
         (
+            "messages.cpm_quality_threshold",
+            m.cpm_quality_threshold.map(f64::from),
+        ),
+        (
+            "messages.cpm_max_objects",
+            m.cpm_max_objects.map(f64::from),
+        ),
+        (
             "messages.path_history_points",
             m.path_history_points.map(f64::from),
         ),
@@ -8005,6 +8060,32 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
             e.push(conflict(
                 path,
                 format!("sets the {ty} period, and messages.sets does not include {ty}"),
+            ));
+        }
+    }
+    for (path, set, ty) in [
+        ("messages.cpm_dcc_limited", m.cpm_dcc_limited.is_some(), "cpm"),
+        (
+            "messages.cpm_quality_threshold",
+            m.cpm_quality_threshold.is_some(),
+            "cpm",
+        ),
+        ("messages.cpm_max_objects", m.cpm_max_objects.is_some(), "cpm"),
+        (
+            "messages.denm_traffic_condition",
+            m.denm_traffic_condition.is_some(),
+            "denm",
+        ),
+        (
+            "messages.denm_traction_loss",
+            m.denm_traction_loss.is_some(),
+            "denm",
+        ),
+    ] {
+        if set && !m.sets.iter().any(|x| x == ty) {
+            e.push(conflict(
+                path,
+                format!("configures the {ty} service, and messages.sets does not include {ty}"),
             ));
         }
     }

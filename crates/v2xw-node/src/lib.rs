@@ -89,6 +89,7 @@ pub mod apps;
 pub mod bsm_timing;
 pub mod clock;
 pub mod cpm;
+pub mod denm_triggers;
 pub mod ctx;
 pub mod error;
 pub mod events;

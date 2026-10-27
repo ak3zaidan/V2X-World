@@ -170,6 +170,11 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `messages.codec_tier` | `uper` | `uper`, `size-model` | Real encoding or a size model. |
 | `messages.spat_interval_ms`, `messages.map_interval_ms` **new** | 100 / 1000 ms (CTI 4501) | 100 to 10 000 / 60 000 ms | Roadside SPaT and MAP periods. Refused without that message in `sets`. |
 | `messages.cpm_interval_ms` **new** | 100 ms | 100 to 1000 ms | `T_GenCpm` (ETSI TS 103 324 §6.1.2.3). Refused without `cpm` in `sets`. |
+| `messages.cpm_dcc_limited` **new** (WP-12) | off | bool | `T_GenCpm` follows the DCC's minimum gap `T_off`, clamped to [100, 1000] ms (ETSI TS 103 324 V2.1.1 §6.1.2.1, Annex D; Table F.1). Refused without `cpm` in `sets`. |
+| `messages.cpm_quality_threshold` **new** (WP-12) | unset (not applied) | 0 to 15 (ratio); TS recommends 3 | `ObjectPerceptionQualityThreshold`: a CPM carries only objects whose §7.1.8.6 quality (α 0.5, weights 1, Table F.4) exceeds it, and states that quality. Refused without `cpm` in `sets`. |
+| `messages.cpm_max_objects` **new** (WP-12) | unset (255, perception order) | 1 to 255 objects | Objects per CPM, ordered by the §6.1.3.2 utility (Table F.2 thresholds); the lowest-utility objects past it wait for the next event. Refused without `cpm` in `sets`. |
+| `messages.denm_traffic_condition` **new** (WP-12) | off | bool | The C2C-CC RS 2007 R1.6.10 sudden-speed-drop (`dangerousEndOfQueue` 27) and local-slow-down (`trafficCondition` 1) DENMs, non-urban roads only. Refused without `denm` in `sets`. |
+| `messages.denm_traction_loss` **new** (WP-12) | off | bool | The C2C-CC RS 2002 R1.6.10 §3.3 traction-loss DENM (`adhesion` 6) from the own ABS's friction estimate (< 0.3 or < 0.2 for 5 s). Refused without `denm` in `sets`. |
 | `messages.path_history_points` **new** | 15 | 0 to 23 points | The most path-history points a BSM Part II (or a CAM) carries: SAE J2945/1 recalls 15, J2735 `PathHistoryPointList` allows 23, 0 sends none. About 8 to 9 bytes a point. Refused without `bsm` or `cam` in `sets`. |
 | `security.signer_id_policy.full_cert_every_ms` | 1000 | ms | Certificate attach cadence. A digest is sent otherwise (`digest_otherwise`). 0 attaches the certificate to every message. |
 

@@ -142,6 +142,10 @@ pub struct Perceived {
     pub first_seen: SimTime,
     /// Which sensors saw it this scan, as a bit per sensor id.
     pub sensors: u8,
+    /// The detection confidence of the latest measurement: the highest detection
+    /// probability among the sensors that saw it, at its range (TS 103 324 §7.1.8.6's
+    /// sensor-specific `c_t`, as this model states it).
+    pub detection_confidence: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -230,6 +234,7 @@ impl Perception {
             let bearing = v2xw_msg::j2945::wrap_pi(math::atan2(dy, dx) - o.heading_rad);
             let mut sensors = 0u8;
             let mut sigma = f64::INFINITY;
+            let mut confidence = 0.0_f64;
             for sensor in &self.sensors {
                 if range > sensor.range_m || bearing.abs() > sensor.half_fov_rad {
                     continue;
@@ -241,6 +246,7 @@ impl Perception {
                     .bool(pd);
                 if draw {
                     sensors |= 1 << sensor.id.min(7);
+                    confidence = confidence.max(pd);
                     sigma = sigma.min(sensor.sigma_base_m + sensor.sigma_per_m * range);
                 }
             }
@@ -266,6 +272,7 @@ impl Perception {
                     measured_at: now,
                     first_seen: now,
                     sensors,
+                    detection_confidence: confidence,
                 },
             ));
         }

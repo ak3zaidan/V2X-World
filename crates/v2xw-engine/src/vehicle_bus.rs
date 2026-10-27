@@ -72,6 +72,7 @@ pub fn bus_of(
     hazard_lights: bool,
     night: bool,
     visibility_m: f64,
+    surface_mu: Option<f64>,
     t: SimTime,
 ) -> VehicleBus {
     let q = truth.quantized();
@@ -109,7 +110,42 @@ pub fn bus_of(
             .lane
             .and_then(|l| world.roads.try_lane(l.lane))
             .map_or(0.0, |l| l.speed_limit_mps),
+        non_urban: truth
+            .lane
+            .and_then(|l| world.roads.try_lane(l.lane))
+            .and_then(|l| world.roads.try_edge(l.edge))
+            .and_then(|e| non_urban(e.road_class)),
+        abs_active: abs_regulating(a_long, surface_mu),
     }
+}
+
+/// Whether a road class is outside the urban environment, as an on-board digital map
+/// tells the C2C-CC traffic-condition and traction-loss services (RS 2007 RS_tcTrJa_94
+/// 1.3, RS_tcTrJa_122 3.3; RS 2002 RS_tcAdWe_175). This build's mapping: a motorway or a
+/// trunk road is non-urban; a slip road, a junction's interior and an unclassified road
+/// say nothing; every other class is urban.
+pub fn non_urban(class: v2xw_world::RoadClass) -> Option<bool> {
+    use v2xw_world::RoadClass as R;
+    match class {
+        R::Motorway | R::Trunk => Some(true),
+        R::Link | R::Internal | R::Unclassified => None,
+        _ => Some(false),
+    }
+}
+
+/// The share of the surface's adhesion limit `μ·g` at which the anti-lock braking system
+/// is taken to be regulating. The car-following models cap braking at exactly `μ·g`
+/// (`v2xw_mobility::weather::surface_friction`), so a vehicle braking at the cap is at the
+/// limit; the 3 % margin absorbs the millimetre grid of the bus reading. This build's
+/// choice.
+pub const ABS_LIMIT_SHARE: f64 = 0.97;
+
+/// Standard gravity, m/s².
+const G_MPS2: f64 = 9.806_65;
+
+/// Whether ABS regulates: a slippery surface (`μ` known) and a deceleration at its limit.
+pub fn abs_regulating(a_long_mps2: f64, surface_mu: Option<f64>) -> bool {
+    surface_mu.is_some_and(|mu| a_long_mps2 < 0.0 && -a_long_mps2 >= ABS_LIMIT_SHARE * mu * G_MPS2)
 }
 
 #[cfg(test)]
