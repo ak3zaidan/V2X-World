@@ -1899,7 +1899,8 @@ mod tests {
     fn a_stated_accuracy_changes_the_statement_and_not_the_error() {
         let honest = track(smoothing(), 10.0, 6, 40);
         let radius = honest[0][5].0.semi_major_m;
-        assert!((5.0..5.3).contains(&radius), "honest smoothed radius {radius}");
+        // The whole fitted σ (2.636 m) is the smoothed output's slow part: 2.4477·2.636 m.
+        assert!((6.40..6.50).contains(&radius), "honest smoothed radius {radius}");
         let fixed = track(
             GaussMarkovParams {
                 stated_sigma_m: 2.0,

@@ -35,6 +35,9 @@ runs:
   L0: {scenario: scenarios/live-atk/base.yaml, note: attack-free, legacy-12 (default suite)}
   LT: {scenario: scenarios/detect-fix3/l-base-tampa.yaml, note: 'L0, OBUs state Tampa accuracy'}
   TC: {scenario: scenarios/detect-fix3/ts-base-catch.yaml, note: 'T0 with CaTCh scoring'}
+  T0x: {scenario: scenarios/detect-fix3/ts-base.yaml, note: T0 on binary 2}
+  TCx: {scenario: scenarios/detect-fix3/ts-base-catch.yaml, note: TC on binary 2}
+  T3x: {scenario: scenarios/detect-fix3/ts-cat3.yaml, note: T3 on binary 2}
 rows:
 # --- item 1: the suite is selectable and its inputs are filled -------------------------
 - id: DF.sel.runs
@@ -48,8 +51,8 @@ rows:
     limit: TS 103 759 observations are per message); 40 vehicles x 10 Hz x 150 s x tens of
     neighbours gives >= 1e5'
   fault: 'tsm.honest.evaluated=0 (the suite not hosted)'
-  measured: pending
-  verdict: pending
+  measured: '3.771e+05'
+  verdict: pass
 - id: DF.sel.box_inputs
   base: T0
   variant: T0
@@ -60,8 +63,8 @@ rows:
   source: 'FrameExtras from each BSM''s J2735 VehicleSize (and OwnFootprint from the node''s
     class) now reach the box check; WP-10 left it unchecked for want of them'
   fault: 'tsc.boxIntersection.honest.evaluated=0 (FrameExtras not filled)'
-  measured: pending
-  verdict: pending
+  measured: '3.771e+05'
+  verdict: pass
 - id: DF.sel.every_message
   base: L0
   variant: T0
@@ -71,9 +74,9 @@ rows:
   value: [5.0, 12.0]
   source: 'legacy-12 checks one BSM per sender per second (generation_interval_s 1); the
     TS suite every 10 Hz BSM: about 10x the judgements'
-  fault: 'p2.messages_checked*=1 on T0 (rate-limited like legacy)'
-  measured: pending
-  verdict: pending
+  fault: 'p2.messages_checked=49109 on T0 (rate-limited like legacy: as many as L0)'
+  measured: '7.679 (377122 / 49109)'
+  verdict: pass
 - id: DF.det.same_seed
   base: T0
   variant: T0b
@@ -82,8 +85,8 @@ rows:
   expect: same
   source: 'same seed, same binary: byte-identical stream digest'
   fault: 'digest+=x on T0b'
-  measured: pending
-  verdict: pending
+  measured: 'b5066d551804778298b108c9a80e31b29291b8b5d42b1b14bc9cc3d1bae29eab vs b5066d551804778298b108c9a80e31b29291b8b5d42b1b14bc9cc3d1bae29eab'
+  verdict: pass
 # --- item 2: honest messages under the engine's own stated accuracy ------------------
 - id: DF.acc.conf_plaus
   base: T0
@@ -92,13 +95,15 @@ rows:
   measure: tsc.confidencePlausibility.honest.exceeded_rate
   expect: eq
   value: 0
-  source: 'the smoothed GM receiver states 2.4477*sqrt((1.6*0.022)^2+2.095^2) = 5.13 m at
-    95 % (BSM semiMajor 2.10 m one sigma), under F2MD MAX_CONFIDENCE_RANGE 10 m; the WP-10
+  source: 'the smoothed GM receiver states 2.4477*2.636 = 6.45 m at 95 % (BSM semiMajor
+    2.65 m one sigma after the 0.05 m ceiling, 6.49 m decoded; the pending text said 5.13 m,
+    corrected by the unit test: smoothing moves the whole fitted sigma to the slow part),
+    under F2MD MAX_CONFIDENCE_RANGE 10 m; the WP-10
     harness''s 15.79 m (99.7 % firings) multiplied an already-95 % radius by 2.448 again
     (tests/common/sim.rs:803), the engine does not'
   fault: 'tsc.confidencePlausibility.honest.exceeded_rate=0.997 (the doubled radius)'
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
 - id: DF.acc.tampa_conf
   base: TT
   variant: TT
@@ -109,8 +114,8 @@ rows:
   source: 'Tampa CV pilot: 0.28 % of BSMs state > 10 m at 95 %; the lognormal(0.30 m, 0.81)
     device draw puts P(95 % radius > 10 m) at 0.06 % of devices'
   fault: 'tsc.confidencePlausibility.honest.exceeded_rate=0.05 (NYC-like tail on every device)'
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
 - id: DF.acc.tampa_legacy_up
   base: L0
   variant: LT
@@ -122,8 +127,8 @@ rows:
     shrinking the error, so honest verdicts can only rise (deployed reality: Tampa / NYC
     devices under-state their error ~7x against Reid 2019)'
   fault: 'p2.verdicts_fired=0 on LT'
-  measured: pending
-  verdict: pending
+  measured: '17 vs 2'
+  verdict: pass
 - id: DF.acc.kalman_floor
   base: T0
   variant: TT
@@ -133,8 +138,8 @@ rows:
   source: 'the Kalman R is the stated radius / 2.4477 floored at 4 m (F2MD): 2.10 m and
     0.30 m both sit under the floor, so R and the firings are unchanged'
   fault: 'tsc.kalmanConsistencyTs.honest.fired_rate+=0.01 on TT'
-  measured: pending
-  verdict: pending
+  measured: '0.0 vs 0.0'
+  verdict: pass
 - id: DF.acc.air_same
   base: T0
   variant: TT
@@ -144,8 +149,8 @@ rows:
   source: 'SemiMajorAxisAccuracy is a fixed 8-bit field: what a device states does not change
     a frame''s length, so the bytes on the air are identical'
   fault: 'air.psdu+=1 on TT'
-  measured: pending
-  verdict: pending
+  measured: '12776403 vs 12776403'
+  verdict: pass
 - id: DF.acc.traffic_same
   base: T0
   variant: TT
@@ -155,8 +160,8 @@ rows:
   source: 'no driver, app or controller reads the stated accuracy (apps read claimed
     positions; the draw is in its own random scope): traffic is unchanged'
   fault: 'r.actors_spawned+=1 on TT'
-  measured: pending
-  verdict: pending
+  measured: '55 vs 55'
+  verdict: pass
 - id: DF.acc.perf
   base: T0
   variant: TT
@@ -166,8 +171,8 @@ rows:
   value: [0.8, 1.25]
   source: 'one lognormal draw per device and a constant per estimate: no cost'
   fault: 'cost.wall_s*=2 on TT'
-  measured: pending
-  verdict: pending
+  measured: '1.176 (65.67 / 55.83)'
+  verdict: pass
 # --- item 3: honest false positives per check (WP-10 accept bound 0.1 % per message) ---
 - id: DF.fp.kalman
   base: T0
@@ -178,8 +183,8 @@ rows:
   value: 0.001
   source: 'WP-10 accept bound (0.017 % in the harness at 10 Hz GM)'
   fault: 'tsc.kalmanConsistencyTs.honest.fired_rate=0.01'
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
 - id: DF.fp.envelope
   base: T0
   variant: T0
@@ -189,8 +194,8 @@ rows:
   value: 0.001
   source: 'WP-10 accept bound; class decel limits 10 m/s2 cover honest emergency stops'
   fault: 'tsc.positionSpeedEnvelope.honest.fired_rate=0.01'
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
 - id: DF.fp.psmax
   base: T0
   variant: T0
@@ -200,8 +205,8 @@ rows:
   value: 0.001
   source: WP-10 accept bound
   fault: 'tsc.positionSpeedMaxConsistency.honest.fired_rate=0.01'
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
 - id: DF.fp.box
   base: T0
   variant: T0
@@ -214,8 +219,15 @@ rows:
     adjacent cars'' claims differ by ~3 m sd for minutes, and a pseudonym change leaves
     the old box at the new one''s place for up to 2 s'
   fault: 'tsc.boxIntersection.honest.fired_rate=0.01'
-  measured: pending
-  verdict: pending
+  measured: '0.01362'
+  verdict: open
+  note: 'open: 5,138 of 377,121 honest messages (1.36 %). Causes, in order: (1) each
+    vehicle''s GM bias is drawn independently (sigma_b 2.6 m per axis, tau 1000 s), so two
+    neighbours'' claims differ by ~3.7 m sd for minutes, where real nearby receivers share
+    the common-mode (atmosphere, ephemeris) error and differ by far less; (2) a pseudonym
+    change leaves the old box beside the new for up to 2 s; (3) the BSM position is the
+    engine''s rear-bumper reference (mobility engine.rs), read as the J2945/1 centre. A
+    common-mode GNSS component is the fix (moves every golden: behind a flag, not done)'
 - id: DF.fp.beacon
   base: T0
   variant: T0
@@ -226,8 +238,8 @@ rows:
   source: 'BSM J2945/1 profile (100 ms less jitter tolerance), not F2MD''s 1 Hz 0.9 s
     (f2md.md P1)'
   fault: 'tsc.beaconFrequencyTs.honest.fired_rate=0.9 (the 1 Hz threshold)'
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
 - id: DF.fp.speed_accel
   base: T0
   variant: T0
@@ -237,8 +249,8 @@ rows:
   value: 0.001
   source: 'class limits 6 / 10 m/s2 (WP-10 defect fix of F2MD 3 / 4.5)'
   fault: 'tsc.accelerationPlausibility.honest.fired_rate=0.01 (F2MD limits)'
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
 - id: DF.fp.consistency
   base: T0
   variant: T0
@@ -249,8 +261,8 @@ rows:
   source: 'F2MD position/speed consistency on a smoothed receiver (consecutive outputs agree
     with the reported velocity to cm, R-USFP); bound as WP-10'
   fault: 'tsc.positionSpeedConsistencyTs.honest.fired_rate=0.01'
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
 - id: DF.fp.sudden
   base: T0
   variant: T0
@@ -262,8 +274,8 @@ rows:
     never pass on it (a design property of consecutive fusion); its exceeded rate is the
     diagnostic (pseudonym changes and spawns near a receiver)'
   fault: 'tsc.suddenAppearance.honest.fired_rate=0.01'
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
 - id: DF.fp.any
   base: T0
   variant: T0
@@ -274,8 +286,12 @@ rows:
   source: 'sum of the per-check bounds over the ~20 checks; VeReMi-Ext honest traffic is
     judged per message too'
   fault: 'tsm.honest.fired_rate=0.05'
-  measured: pending
-  verdict: pending
+  measured: '0.04804'
+  verdict: open
+  note: 'open: 4.8 % = positionPlausibility 2.2 % (F2MD 2 m point tolerance under a
+    6.5 m honest 95 % error), intersection 2.0 % (claims compared with others'' 2 s-old
+    positions unpropagated: fixed in ts103759.rs, see DF.fix.*), boxIntersection 1.4 %
+    (DF.fp.box). Every WP-10 check (Kalman, envelope, PSMax) and every class-1/2 check: 0'
 # --- item 3: detection per attacker class (per message, while attacking) --------------
 # VeReMi (van der Heijden et al. 2018, arXiv 1804.06701 §4.2): constant and random
 # positions are detected by most checks; a constant offset (type 2) and a random offset
@@ -290,8 +306,8 @@ rows:
   source: 'VeReMi type 1: "all detectors except SSC very accurately detect the attack";
     a frozen position at speed fails position/speed consistency and the envelope'
   fault: 'tsm.threat/attacker/legacy/ConstPos.fired_rate=0.1'
-  measured: pending
-  verdict: pending
+  measured: '0.683'
+  verdict: pass
 - id: DF.dr.randompos
   base: T1
   variant: T1
@@ -301,8 +317,8 @@ rows:
   value: 0.5
   source: 'VeReMi type 4: "ART and SSC have no problems with this attacker"'
   fault: 'tsm.threat/attacker/legacy/RandomPos.fired_rate=0.1'
-  measured: pending
-  verdict: pending
+  measured: '0.9857'
+  verdict: pass
 - id: DF.dr.invsig
   base: T1
   variant: T1
@@ -313,8 +329,8 @@ rows:
   source: 'signatureInvalid scores 1.5 on every failed verification; after the first two
     every message fires'
   fault: 'tsm.threat/attacker/legacy/InvalidSignature.fired_rate=0.1'
-  measured: pending
-  verdict: pending
+  measured: '0.9881'
+  verdict: pass
 - id: DF.dr.offset_hard
   base: T2
   variant: T2
@@ -325,8 +341,12 @@ rows:
   source: 'VeReMi type 2: "harder to detect for most mechanisms ... poor performance in all
     cases": a constant offset keeps every consistency check consistent'
   fault: 'tsm.threat/attacker/legacy/ConstPosOffset.fired_rate=0.99'
-  measured: pending
-  verdict: pending
+  measured: '0.9247'
+  verdict: wrong-expectation
+  note: 'wrong expectation: VeReMi (2018) ran no map check; the legacy ConstPosOffset
+    vector leaves the road, and TS 103 759 class 3 (positionPlausibility 0.92) catches it.
+    The on-road analogue, AlongRoadOffset (T3), is detected on 19 % of its messages, which
+    is the VeReMi type-2 "poor performance in all cases"'
 - id: DF.dr.slowdrift_kalman
   base: T2
   variant: T2
@@ -337,8 +357,8 @@ rows:
   source: 'WP-10 accept: the Kalman check catches a slow drift the pairwise checks miss
     (F2MD TVT 2020 rates its Kalman checks its strongest single features)'
   fault: 'tsc.kalmanConsistencyTs.threat/attacker/legacy/SlowDrift.fired_rate=0'
-  measured: pending
-  verdict: pending
+  measured: '0.941 vs 0'
+  verdict: pass
 - id: DF.dr.attack_vs_honest
   base: T1
   variant: T1
@@ -348,8 +368,8 @@ rows:
   value: tsm.honest.fired_rate
   source: 'any detector worth hosting fires more on attacking messages than on honest ones'
   fault: 'tsm.attacking.fired_rate=0'
-  measured: pending
-  verdict: pending
+  measured: '0.8921 vs 0.03626'
+  verdict: pass
 # --- added after T0, before TC ran: T0 found three point-tolerance checks firing on honest
 # traffic (positionPlausibility 2.2 %, intersection 2.0 %, boxIntersection 1.4 % of
 # messages): each compares a claimed point with a fixed 2 m (or box overlap) tolerance,
@@ -365,8 +385,10 @@ rows:
   source: 'CaTCh scores the share of the stated confidence disc off the road, so an honest
     claim 2-5 m off the lane centre inside a 5.1 m disc no longer scores 1 (WCNC 2019 §IV)'
   fault: 'tsc.positionPlausibility.honest.fired_rate=1 on TC'
-  measured: pending
-  verdict: pending
+  measured: '0.02232 vs 0.02232'
+  verdict: open
+  note: 'on binary 1 the suite had no CaTCh branch for the map check (only class 2 used
+    the scoring mode); added in ts103759.rs, re-measured as DF.fix.catch_map'
 - id: DF.catch.intersection
   base: T0
   variant: TC
@@ -376,5 +398,44 @@ rows:
   source: 'CaTCh intersection: overlap of the two confidence discs against the proximity
     range, not a point distance'
   fault: 'tsc.intersection.honest.fired_rate=1 on TC'
+  measured: '0.02019 vs 0.02019'
+  verdict: open
+  note: 'the class-5 point check has no CaTCh branch; its honest firings were the
+    unpropagated-claim defect instead (DF.fix.intersection)'
+# --- binary 2 (the intersection propagation fix and the CaTCh map branch), written
+# before its runs: T0x / TCx / T3x are T0 / TC / T3 on binary 2.
+- id: DF.fix.intersection
+  base: T0x
+  variant: T0x
+  area: metrics
+  measure: tsc.intersection.honest.fired_rate
+  expect: le
+  value: 0.002
+  source: 'a follower 1.5-2.5 m behind its leader was compared with the leader''s position
+    up to 2 s old (unmoved); moved on at the claimed velocity, honest neighbours are a
+    car length plus a gap apart (>= 6 m), and 2 m / 6 m < 1'
+  fault: 'tsc.intersection.honest.fired_rate=0.0202 (binary 1)'
+  measured: pending
+  verdict: pending
+- id: DF.fix.sybil_kept
+  base: T3x
+  variant: T3x
+  area: metrics
+  measure: tsc.intersection.threat/attacker/legacy/Sybil.fired_rate
+  expect: ge
+  value: 0.5
+  source: 'Sybil ghosts are placed beside their attacker and move with it: propagation moves
+    both claims alike, so the fix must not blind class 5 to ghosts (binary 1: 0.94)'
+  fault: 'tsc.intersection.threat/attacker/legacy/Sybil.fired_rate=0'
+  measured: pending
+  verdict: pending
+- id: DF.fix.catch_map
+  base: T0x
+  variant: TCx
+  area: metrics
+  measure: tsc.positionPlausibility.honest.fired_rate
+  expect: le_base_half
+  source: 'as DF.catch.map, with the CaTCh branch the map check now has'
+  fault: 'tsc.positionPlausibility.honest.fired_rate=1 on TCx'
   measured: pending
   verdict: pending
