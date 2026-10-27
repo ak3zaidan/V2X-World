@@ -236,23 +236,23 @@ rows:
 - {id: HWY3.off-unchanged, runs: [p1-e4-hwy60-fix], check: same_digest, expect: pass, fault: digest,
    params: {other_of: {p1-e4-hwy60-fix: p1-e4-hwy60}},
    source: "a flag left off changes nothing: record digest identical to the release binary's",
-   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+   verdict: open, measured: "2026-10-27, f4982788 release (carries the fix): not judgeable on one binary: the row compares the flag left off on the fix build with p1-e4-hwy60 on the 938fb16a release, whose binary is gone; p1-e4-hwy60-fix digest d7a625117ddf3eb3. Owed: p1-e4 on a build of the parent of the flag commit against one on it"}
 - {id: HWY3.first-window, runs: [p1-e4-depart60], check: band, expect: pass, fault: "scale:0.1",
    params: {metric: mean_speed, t_to: 10, lo: 15.0, hi: 31.0},
    source: "SUMO departSpeed=max: entry at the safe desired speed; base 9.0 m/s at 10 s",
-   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+   verdict: pass, measured: "2026-10-27, f4982788 release (carries the fix): first 10 s mean speed 24.38 m/s (band 15 to 31; flag off 5.64)"}
 - {id: HWY3.speed, runs: [p1-e4-depart60], check: band, expect: pass, fault: "scale:10",
    params: {metric: mean_speed, lo: 16.5, hi: 23.0},
    source: "entry deficit removed; corners of the grid ring (15 m radius, 9 m/s turn speed) still cap the space-mean speed near the 10-25 steady 18-20 m/s",
-   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+   verdict: pass, measured: "2026-10-27, f4982788 release (carries the fix): 60 s mean speed 18.99 m/s (band 16.5 to 23; flag off 15.49)"}
 - {id: HWY3.vs-base, runs: [p1-e4-depart60], check: ratio_between, expect: pass, fault: "scale:10",
    params: {metric: mean_speed, other: p1-e4-hwy60-fix, lo: 1.05, hi: 1.5},
    source: "same seed, same demand, only the depart speed changes",
-   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+   verdict: pass, measured: "2026-10-27, f4982788 release (carries the fix): 18.99 / 15.49 = 1.226 (band 1.05 to 1.5), same binary, same seed"}
 - {id: HWY3.kinematics, runs: [p1-e4-depart60], check: kinematics_bounds, expect: pass, fault: speed-80,
    params: {vmax: 37.0, amin: -9.0, amax: 5.0},
    source: "inserted below the IDM's safe speed: no braking past ~0.9 g, no speed over 70 mph + 15 %",
-   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+   verdict: pass, measured: "2026-10-27, f4982788 release (carries the fix): no speed over 37 m/s, acceleration inside [-9, 5] m/s2"}
 - {id: HWY3.headway, runs: [p1-e4-depart60], check: band, expect: pass, fault: "scale:10",
    params: {metric: headway_time, lo: 1.0, hi: 10.0}, source: "as W.HWY2.headway",
-   verdict: open, measured: "pending: the fixed binary was not built within the session (the machine-wide build lock queue); fix and tests committed uncompiled"}
+   verdict: pass, measured: "2026-10-27, f4982788 release (carries the fix): headway 2.98 s (flag off 3.01 s; band 1 to 10)"}

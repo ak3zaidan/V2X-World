@@ -788,6 +788,10 @@ rows:
   expect: band
   band: [1.0e-06, 1.0e+03]
   source: 'Webster: the delay a longer cycle adds grows with the degree of saturation x (the 1/(1 - x g/C) factor and the overflow term), so the speed lost to 120 s is larger at 3,000 veh/h'
+  measured: "-0.267942"
+  verdict: open
+  judged: "2026-10-27, f4982788 release (all four sig runs)"
+  note: 'Mean speed: base 6.39, c120 3.95, r3000 5.89, c120-r3000 3.71 m/s (base and c120 equal the 938fb16a runs). The 120 s cycle costs 2.44 m/s at 1,500 veh/h and 2.18 at 3,000; as a share, 38.2 % and 36.9 %. Not traced to a defect: the network-mean density is 1.4 to 2.7 veh/km, so the approaches are likely far from saturation, where Webster''s 1/(1 - x g/C) factor changes the uniform delay by under ~10 % for x 0.15 -> 0.3, and the 180 s window holds 1.5 cycles of 120 s. Owed: per-approach volume against saturation flow (x) from a recorded run, then either a saturated-demand variant or a corrected row.'
 - id: LC.SG.cost-r3000
   base: sig-base
   variant: sig-r3000
@@ -890,6 +894,10 @@ rows:
   measure: digest.record
   expect: identical
   source: 'the fix only routes a failure to the run of the provider that hosts it; with no failure it changes nothing, so the record is byte-identical'
+  measured: "not judgeable on one binary: S2 on f4982788, S-rel (938fb16a) gone"
+  verdict: open
+  judged: "2026-10-27, f4982788 release"
+  note: "2026-10-27: the row compares a run on the 938fb16a release with the same scenario on the fixed binary; the f4982788 release carries the fix, the 938fb16a binary is gone and that run kept no digest (SCMS runs used --no-recording), so the pair cannot be made on two binaries that differ in the fix alone. Owed: the run on a build of the parent of 0de68cac against one on 0de68cac."
 - id: LC.FIX.crlg-home-unmoved
   base: scms-crlg-rel
   variant: scms-crlg2
@@ -897,6 +905,10 @@ rows:
   measure: digest.record
   expect: identical
   source: 'an unqualified name keeps its meaning (the home provider''s server, still in the home run only): the record of scms-crlg is byte-identical on the fixed binary'
+  measured: "not judgeable on one binary: scms-crlg2 on f4982788, scms-crlg-rel (938fb16a) gone"
+  verdict: open
+  judged: "2026-10-27, f4982788 release"
+  note: "2026-10-27: the row compares a run on the 938fb16a release with the same scenario on the fixed binary; the f4982788 release carries the fix, the 938fb16a binary is gone and that run kept no digest (SCMS runs used --no-recording), so the pair cannot be made on two binaries that differ in the fix alone. Owed: the run on a build of the parent of 0de68cac against one on 0de68cac. On one binary, S2 and scms-crlg2 have the same phase-2 counts (the home CRLG still holds no in-window revocation)."
 - id: LC.CRL.b-held
   base: S2
   variant: scms-crlg-b
@@ -905,6 +917,9 @@ rows:
   expect: ge
   value: 1
   source: 'the MA->CRLG revocation requests (~141 s) meet provider-b''s CRLG down and wait in the MA''s queue (component to component: held, retried, crate::fault edge case 3d)'
+  measured: "2"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LC.CRL.b-not-dropped
   base: S2
   variant: scms-crlg-b
@@ -913,6 +928,9 @@ rows:
   expect: eq
   value: 0
   source: 'nothing a device sends goes to a CRLG, and backend-to-backend messages are held, not dropped'
+  measured: "0"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LC.CRL.b-enforcement-lost
   base: S2
   variant: scms-crlg-b
@@ -921,6 +939,9 @@ rows:
   expect: down
   min_change: 0.5
   source: 'enforcement of provider-b''s two starts at ~200 s (retry) + <=30 s (cadence) + <=30 s (fetch), ~225 s, instead of ~157 s: ~15 of 83 s of enforcement left, a loss of ~80 % (50-100 % with the poll phases)'
+  measured: "22318 -> 8166"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LC.CRL.b-latency-up
   base: S2
   variant: scms-crlg-b
@@ -929,6 +950,9 @@ rows:
   expect: up
   min_change: 1.0
   source: 'decision -> enforced carries the rest of the outage (200 - 141 = 59 s) on top of S''s 16.3 s: ~x4.6, at least x2'
+  measured: "16320467886 -> 76320467886"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LC.CRL.b-decisions-unchanged
   base: S2
   variant: scms-crlg-b
@@ -937,6 +961,9 @@ rows:
   expect: same
   tol: 0.0
   source: 'the MA is upstream of the CRLG'
+  measured: "3 -> 3"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LC.CRL.b-delayed-not-lost
   base: S2
   variant: scms-crlg-b
@@ -945,6 +972,9 @@ rows:
   expect: same
   tol: 0.0
   source: 'the held requests reach the CRLG at ~200 s: the entries are issued late, not lost'
+  measured: "3 -> 3"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LC.CRL.b-attackers-reported-longer
   base: S2
   variant: scms-crlg-b
@@ -953,6 +983,10 @@ rows:
   expect: up
   min_change: 0.05
   source: 'the two revoked attackers stay accepted ~68 s longer each, and accepted messages keep being judged and reported (~2.5 reports per attacker-second in S: +~340 of 2,248)'
+  measured: "2248 -> 2062"
+  verdict: open
+  judged: "2026-10-27, f4982788 release"
+  note: "ENGINE FINDING (not traced): with provider-bs CRLG down the two attackers stay accepted 60 s longer (revocation latency 16.3 -> 76.3 s, revoked receptions 22,318 -> 8,166), yet reports about attackers fall 2,248 -> 2,062 while the messages judged do not change (118,536 -> 118,551) and the MA receives 422 -> 1,415 reports. So the outage moves report filing or accounting, not detection: the premise (accepted messages keep being judged and reported) holds for judging and fails for reports. Owed: the pair at --record-level events, ma.report and node report records by time, to find which path the CRLG outage changes. The expectation stands."
 - id: LC.CRL.b-fleet-unchanged
   base: S2
   variant: scms-crlg-b
@@ -961,6 +995,9 @@ rows:
   expect: same
   tol: 0.0
   source: 'a backend outage does not change the fleet'
+  measured: "98 -> 98"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LC.CRL.b-dose
   base: scms-crlg-b
   variant: scms-crlg-b-short
@@ -969,6 +1006,9 @@ rows:
   expect: up
   min_change: 0.5
   source: 'the outage ending at 160 s instead of 200 s starts enforcement ~40 s earlier: ~55 s of enforcement instead of ~15 s (x3.7)'
+  measured: "8166 -> 17499"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LC.CRL.b-store-held
   base: S2
   variant: scms-crlstore-b
@@ -977,6 +1017,9 @@ rows:
   expect: ge
   value: 1
   source: 'the CRLG''s publication of provider-b''s list (~150-170 s) meets its store down and waits in the CRLG''s queue until 200 s'
+  measured: "1"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LC.CRL.b-store-enforcement-lost
   base: S2
   variant: scms-crlstore-b
@@ -985,6 +1028,10 @@ rows:
   expect: down
   min_change: 0.4
   source: 'every RA serves a provider''s list from its CRL store (the composite CRL, 1609.2.1 6.3.5.8): with the store down the new list lands at ~200 s and is enforced from ~215 s: ~25 of 83 s left (-70 %)'
+  measured: "22318 -> 13429"
+  verdict: open
+  judged: "2026-10-27, f4982788 release"
+  note: "Marginal miss: -39.8 % against the > 40 % bound (predicted -70 %). Enforcement is 10 s earlier than with the CRLG down (revocation latency 66.3 s against 76.3 s: the list is generated on time and waits only for the store), and 1 of the 3 revocations is provider-as, which neither outage touches, so it dilutes both drops (CRLG-b -63 %). Owed: revoked receptions by provider of the revoked device, to split the dilution from the store path before the band is corrected or kept."
 - id: LC.CRL.b-store-latency-up
   base: S2
   variant: scms-crlstore-b
@@ -993,6 +1040,9 @@ rows:
   expect: up
   min_change: 1.0
   source: 'decision -> enforced carries the store''s remaining outage (~30-50 s) on top of 16.3 s: at least x2'
+  measured: "16320467886 -> 66316993960"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LC.CRL.b-store-fetches-delayed
   base: S2
   variant: scms-crlstore-b
@@ -1001,6 +1051,9 @@ rows:
   expect: same
   tol: 0.25
   source: 'the RA holds the composite list and answers every poll (412 while nothing is newer): a store outage delays the download of the new list, it does not remove it, when the store is back more than one 30 s poll interval before the end (200 + 30 < 240); only devices that leave between ~157 and ~230 s miss it'
+  measured: "53 -> 65"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LC.CRL.b-store-issuance-unchanged
   base: S2
   variant: scms-crlstore-b
@@ -1009,6 +1062,9 @@ rows:
   expect: same
   tol: 0.0
   source: 'the CRLG still issues on its cadence; only its publication to the store waits'
+  measured: "3 -> 3"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LC.CRL.b-paths
   base: X-crl-paths-b
   variant: X-crl-paths-b
@@ -1017,6 +1073,9 @@ rows:
   expect: band
   band: [-1.0e+09, -1.0e-06]
   source: 'a store outage loses less than an issuance outage of the same window: the CRLG issued on its 30 s cadence before the outage ended and its list waits only for the store, while a CRLG back at 200 s still waits for its next cadence slot (~0-30 s) before it issues'
+  measured: "-5263"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 # chain 5 corrected (the evidence for LC.GN.jumps-g10's note): legacy-12's position-jump
 # score is disp / (avg_v dt + z tol + c) with z = 3, tol >= max(conf, 0.5 c) = 2.5 m and
 # c = 5 m (v2xw-threat detect.rs `motion`), so a 12 m jump scores at most
@@ -1066,6 +1125,10 @@ rows:
   measure: digest.record
   expect: identical
   source: 'the counter writes no record: r40''s record is byte-identical on the fixed binary'
+  measured: "not judgeable on one binary: r40b2 on f4982788, r40-rel (938fb16a) gone"
+  verdict: open
+  judged: "2026-10-27, f4982788 release"
+  note: "2026-10-27: the row compares a run on the 938fb16a release with the same scenario on the fixed binary; the f4982788 release carries the fix, the 938fb16a binary is gone and that run kept no digest (SCMS runs used --no-recording), so the pair cannot be made on two binaries that differ in the fix alone. Owed: the run on a build of the parent of 0de68cac against one on 0de68cac."
 - id: LC.FIX.r40-past-end-small
   base: r40b2
   variant: r40b2
@@ -1074,6 +1137,9 @@ rows:
   expect: le
   value: 80
   source: 'a P-256 signer keeps up (rho ~0.002): only the messages of the last instant are unfinished, at most ~2 per node (38-40 nodes)'
+  measured: "1"
+  verdict: pass
+  judged: "2026-10-27, f4982788 release"
 - id: LC.FIX.slh-past-end-counted
   base: r40b2
   variant: r40-slh2
@@ -1096,6 +1162,7 @@ rows:
   measured: 0 -> 0
   verdict: pass
   measured_on: 2026-10-27, r40-slh2 on the f4982788 release (0de68cac in) against the 938fb16a r40-slh
+  note: "2026-10-27: r40-slh2 on the f4982788 release sends 0 BSMs and counts all 2,101 as signed past the end (LC.FIX.slh-past-end-counted); the base value is the 0 frames recorded for r40-slh on 938fb16a."
 # finding 4: the existing flag nodes.compute_tier high runs the CPU as the profile's cores
 - id: LC.OB.c2sw-high-wait
   base: r160-c2sw-rel

@@ -1428,6 +1428,10 @@ The totals count each row as its own checklist records it, with the changes in ย
     which can lie past the backend tick's `now`; proposed: hold such records to the next
     tick, which moves the SCMS record digests), the SLH-DSA sign queue (unbounded FIFO; no
     published drop policy found), and why CHP raises reports received 327 -> 429.
+    2026-10-27 (release `f4982788`): live-scms, live-atk, live-rsu, live-chains and the
+    scenario rows were judged; the remaining open rows are listed in each live report.
+    `tests/live_rsu.rs` ran: the outage test passes, the backhaul-once test fails with
+    316 against 306 (the double booking, run.rs:8728-8737, open).
 
 **Owner decisions**
 - **What the RA and PCA keep for each device** (ยง6 item 4): request records, cocoons,

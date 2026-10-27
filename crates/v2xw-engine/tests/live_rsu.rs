@@ -15,7 +15,7 @@
 //! * A unit that is down transmits nothing: no CRL frame from unit 5 after 30 s. Before
 //!   the fix the carousel kept broadcasting from it (8 frames in 120 s).
 //!
-//! Costly (a Midtown world and 90 s of radio): `--ignored`.
+//! Costly (a Midtown world and 120 s of radio): `--ignored`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -27,6 +27,18 @@ const S: u64 = 1_000_000_000;
 const OFF_UNIT: u64 = 5;
 const OFF_AT_S: u64 = 30;
 
+/// Loads a scenario of the repository with its map path made absolute: `cargo test` starts
+/// in the crate directory, where the relative `worlds/cache/...` path does not exist.
+fn load(root: &Path, rel: &str) -> Scenario {
+    let mut s = Scenario::load(root.join(rel)).expect("the live-rsu scenario loads");
+    if let v2xw_world::WorldSourceSpec::OsmXml { path, .. } = &mut s.world.source
+        && Path::new(path).is_relative()
+    {
+        *path = root.join(&*path).to_string_lossy().into_owned();
+    }
+    s
+}
+
 fn records(r: &MemoryRecorder, channel: &str) -> Vec<serde_json::Value> {
     r.records()
         .iter()
@@ -36,12 +48,13 @@ fn records(r: &MemoryRecorder, channel: &str) -> Vec<serde_json::Value> {
 }
 
 #[test]
-#[ignore = "a Midtown run of 90 s; cargo test -p v2xw-engine --test live_rsu -- --ignored"]
+#[ignore = "a Midtown run of 120 s; cargo test -p v2xw-engine --test live_rsu -- --ignored"]
 fn a_unit_broadcasts_a_list_only_once_its_backhaul_brought_it_and_not_while_it_is_down() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut s = Scenario::load(root.join("scenarios/live-rsu/scms-lat2000-bc3.yaml"))
-        .expect("the live-rsu scenario loads");
-    s.time.duration_s = 90.0;
+    let mut s = load(&root, "scenarios/live-rsu/scms-lat2000-bc3.yaml");
+    // The file's own 120 s (2026-10-27): the first list of this run is published at 90.004 s
+    // (f4982788 release), so a 90 s cut published none and the test could not check anything.
+    s.time.duration_s = 120.0;
     // A 4 s carousel (2026-10-26): lists come on the 10 s cadence grid, and 3 s divides the
     // 30 s between lists that S240 published, so with 3 s a later list met a tick 2.146 s
     // after it on the release too and this check could not fail; with 4 s a list 10 or 30 s
@@ -56,7 +69,7 @@ fn a_unit_broadcasts_a_list_only_once_its_backhaul_brought_it_and_not_while_it_i
     params.insert("target".to_string(), serde_json::json!(OFF_UNIT));
     s.events.push(TimelineItem {
         t: OFF_AT_S as f64,
-        until: Some(90.0),
+        until: Some(120.0),
         kind: TimelineKind::Outage,
         params,
     });
@@ -107,8 +120,7 @@ fn a_unit_broadcasts_a_list_only_once_its_backhaul_brought_it_and_not_while_it_i
 #[ignore = "a Midtown run of 120 s; cargo test -p v2xw-engine --test live_rsu -- --ignored"]
 fn each_list_rides_each_units_backhaul_once() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let s = Scenario::load(root.join("scenarios/live-rsu/scms-base.yaml"))
-        .expect("the live-rsu scenario loads");
+    let s = load(&root, "scenarios/live-rsu/scms-base.yaml");
     let mut engine = Engine::build(s, "").expect("builds");
     let report = engine.run(&mut MemoryRecorder::new()).expect("runs");
     let p = &report.phase2;

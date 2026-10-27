@@ -253,6 +253,33 @@ predicted.**
    - **2026-10-26: fixed** — the signatures finish after the horizon; counted as
      `signed_past_end`.
 
+## Session 2026-10-27 (release `f4982788`)
+
+- **Binary**: the integrator's release `v2xw` built from `f4982788`, copied to the scratchpad.
+  It carries `0de68cac` and `dadecf1e` (provider-qualified backend failures, `signed_past_end`),
+  so it is the fixed binary the 22 not-run rows wait for. One run per tiny run slot: S2,
+  scms-crlg2, scms-crlg-b, scms-crlg-b-short, scms-crlstore-b (`--no-recording`, 93 to 112 s,
+  90 to 105 MB), r40b2 and r40-slh2, and sig-base, sig-c120, sig-r3000, sig-c120-r3000 (all four
+  on this binary, 50 to 149 s).
+- **Judged**: 22 rows: 16 pass, 6 open.
+  - The provider-b CRL chain holds: the MA's requests are held (2) and none dropped, enforcement
+    falls 22,318 -> 8,166 revoked receptions, latency 16.3 -> 76.3 s, the same 3 decisions and
+    3 revoked attackers, and a shorter outage gives more (8,166 -> 17,499). With the CRL store
+    down: held 1, latency 66.3 s, fetches 53 -> 65, issuance unchanged. X-crl-paths-b -5,263.
+  - `signed_past_end`: 1 on r40 (<= 80), 2,101 on SLH-DSA-128s (>= 1,800), and SLH still sends
+    0 BSMs.
+  - **Open** LC.CRL.b-attackers-reported-longer: reports about attackers fall 2,248 -> 2,062 while
+    the messages judged stay 118,536 -> 118,551 and the MA receives 422 -> 1,415, so the CRLG
+    outage moves report filing or accounting, not detection (not traced; owed a recorded pair).
+  - **Open** LC.CRL.b-store-enforcement-lost: -39.8 % against > 40 % (predicted -70 %); 1 of the 3
+    revocations is provider-a's and dilutes it. Owed: revoked receptions by provider.
+  - **Open** LC.SG.demand-amplifies: the 120 s cycle costs 2.44 m/s at 1,500 veh/h and 2.18 at
+    3,000 (38.2 % and 36.9 %); at 1.4 to 2.7 veh/km the approaches are likely far from saturation.
+  - **Open** FIX.S-unmoved, FIX.crlg-home-unmoved and FIX.r40-record-unmoved: each compares a
+    `938fb16a` run with the fixed binary. That binary is gone and those runs kept no digest, so the
+    pair needs builds of `0de68cac^` and `0de68cac`.
+- **Faults**: `live_chains.py faults` on this folder: 24 rows red (with rows of earlier sessions whose runs this folder now holds), 0 cannot fail.
+
 ## Run cost
 
 | Run | Wall | Peak |

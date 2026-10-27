@@ -125,6 +125,18 @@ W.HWY.* (`highway-congestion`, 80 s run, past the budget), W.MID.headway (needs 
 denser Midtown run), W.GRID.pdr-distance (2 cars), SC.boots for the refusals of finding 10
 (owner choice) and the environment-bound runs (SUMO, GTFS). Owed: the PQH.* and HWY3.* runs on a binary built from this branch, then the highway-congestion row with the flag.
 
+## 2026-10-27 continuation (release `f4982788`)
+
+- **Binary**: the integrator's release `v2xw` built from `f4982788`, copied to the scratchpad; one run per tiny run slot, `--record-level events --build-utc 2026-01-01T00:00:00Z`. It carries `fragment_cert_share` and
+  `traffic.depart_speed_max`, so it is the fixed binary the PQH.* and HWY3.* rows wait for. Runs:
+  the 40 s pq-hybrid overlay, p1-e4 (flag off) and p1-e4 with the flag on (9 to 49 s, 135 to 161 MB).
+- **Judged**: 9 rows, 8 pass, 1 open. PSM `cert_bytes_share` 1.37 -> 0.685 (band 0.55 to 0.80),
+  overhead 0.951. Flag on: first 10 s 5.64 -> 24.38 m/s, 60 s 15.49 -> 18.99 m/s (x1.23), headway
+  2.98 s, kinematics in bounds. HWY3.off-unchanged needs the `938fb16a` run: open.
+- **Faults**: `live_scenarios.py selftest --only` the eight judged rows: all red.
+- The remaining catalogue rows were run on 10-26 (115 of 117); the two that time out at 600 s
+  (`stress/fs-first-window`, the Portland benchmark overlay) belong to the full-scale package.
+
 ## Verdicts (2026-10-25)
 
 | Change / row | Predicted (source) | Measured | Verdict |

@@ -1831,8 +1831,9 @@ rows:
   measure: p2.reports_about_attackers
   expect: up
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '2 -> 2'
+  verdict: open
+  note: '2026-10-27 (f4982788 release): no effect, 2 -> 2 (both are positionSpeedInconsistency about one attacker, as at intensity 0.01; the digests differ, so the dial is read: attack_legacy.rs:380 draws U(-60, 60) x k). The PSI check (detect.rs:648) fires when |disp - v dt| exceeds 3 x max(stated confidence, 2.5 m); the error a ±6 m offset adds to a displacement is the difference of two draws, over 9 m in 20 % of checks, 12 m in 2.5 % and 15 m in 0.05 % (Monte Carlo), and the two-check streak gate squares that. So the prediction holds only if the stated semi-major is near 3 m. Owed: the stated confidence of these BSMs from a receptions-level run, then correct or keep the row.'
   source: '6 m random jumps exceed the stated-accuracy tolerance on some pairs, 0.6 m on none'
 
 - id: TRL.decided-monotone
@@ -1971,8 +1972,8 @@ rows:
   expect: eq
   value: 0
   fault: honest-revoked
-  measured: pending
-  verdict: pending
+  measured: '0'
+  verdict: pass
   source: 'attack-free: whatever the rule, honest noise this sparse (B0L) gives no revocation'
 
 - id: ME6.decided-down
@@ -2018,8 +2019,8 @@ rows:
   measure: p2.reports_about_honest
   expect: up
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '11 -> 52'
+  verdict: pass
   source: 'half the drift allowance: honest GNSS noise and integration error over 0.1 s cross it more often'
 
 - id: RI02.more-reports
@@ -2104,8 +2105,8 @@ rows:
   measure: p2.reports_about_honest
   expect: up
   fault: detector-blind
-  measured: pending
-  verdict: pending
+  measured: '25 -> 19381'
+  verdict: pass
   source: 'raw noise hurts the tolerance-free US profile far more than the research suite: under raw fixes U files more honest reports than L'
 
 # ---- 7. judge_revoked (engine flag added on this branch) ---------------------------------
@@ -2216,8 +2217,9 @@ rows:
   measure: digest
   expect: identical
   fault: nondeterministic
-  measured: pending
-  verdict: pending
+  measured: 'B0L (938fb16a) ac21ba05… -> B0Lf (f4982788) ec1e84d7…'
+  verdict: open
+  note: '2026-10-27: the digests differ, but 938fb16a..f4982788 holds more engine changes than F4 (adoption WP-04 to WP-09 and the four-round integration), so the difference cannot be put on F4. Owed: B0L on a build of 3ae7d414^ against B0Lf on 3ae7d414 (one-commit pair).'
   source: 'the fix changes only frames under an out-of-window certificate and RandomSpeed/StopAndGo at k != 1; an attack-free run is byte-identical'
 - id: F4.M.ExpiredCert.certValidity
   base: C2Mf
@@ -2263,8 +2265,9 @@ rows:
   min_change: 0.3
   fault: crossfire
   absent_is_zero: true
-  measured: pending
-  verdict: pending
+  measured: '1244 -> 633'
+  verdict: pass
+  note: '2026-10-27: C2Mf on the f4982788 release (it carries F4) against the C2M value 1,244 recorded on 938fb16a (the base binary is gone), so other changes between the two binaries are in the difference too. The ExpiredCert share of the cross-fire went to 0 (F4.M.ExpiredCert.no-signature); the 633 left are about other attack types.'
   source: 'the ExpiredCert share of the cross-fire (613 of 1,225 on 486c8cba) goes; the CRL-refused part (F2, flag default) stays'
 - id: F4.M.no-honest
   base: C2Mf
@@ -2354,8 +2357,9 @@ rows:
   measure: digest
   expect: identical
   fault: nondeterministic
-  measured: pending
-  verdict: pending
+  measured: 'not judgeable on one binary: TSU1f 0a16dc5e…, TSU1p0 (938fb16a) digest not recorded'
+  verdict: open
+  note: '2026-10-27 (f4982788 release): the row compares TSU1p0 on 938fb16a with the fix build; F5 is in f4982788, so both runs on that binary would be the same run, and the 938fb16a binary and its TSU1p0 digest are gone. Owed: TSU1p0 on a build of 3ae7d414^ against TSU1f on 3ae7d414.'
   source: 'at k = 1 the claimed speed is the historic draw; the run is byte-identical'
 - id: F5.maxspeed-at-k3
   base: TSU3f
