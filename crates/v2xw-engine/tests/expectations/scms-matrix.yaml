@@ -20,6 +20,11 @@
 # Still carrying 77cffb5b values (owed): silent, nyc-pilot, real-crypto, lte, nr, full-cert,
 # backhaul-cellular, fleet-half, tls12 and fleet2x (re-run 2026-10-26 on 486c8cba below). Rows of no-hsm, pq-hybrid, gnss-rtk,
 # gnss-raw and the realism variants carry 81a12183 values (not re-run on 8becf72a).
+# Re-run 2026-10-27 on the f4982788 release (06-validation-summary §9, tiny slot: 450 MB cap, one
+# rayon thread): M0, no-hsm, pq-hybrid, gnss-rtk and the realism variants cert60, crl-on-decision,
+# ma-auto, no-sharing, off-ctl, region-west, research-suite; 43 rows judged, 0 fail. gnss-raw
+# (458 MB, stopped by the cap) and fleet2x (300 s, ~20 min) keep their earlier values. Rows of the
+# other variants carry 486c8cba / 8becf72a values and are owed on current code.
 schema: v2xw/scms-run-expectations/1
 runs:
   M0:
@@ -160,7 +165,7 @@ rows:
   - 0.9
   source: 'urban DSRC to 500 m among Midtown buildings: most pairs past ~150 m are NLOS and below sensitivity
     (Mangel et al. 2011 NLOS; 04-models PHY); never 1, never near 0'
-  measured: '0.431775'
+  measured: '0.431673'
   verdict: pass
 - id: M0-bsm-latency
   base: M0
@@ -180,7 +185,7 @@ rows:
   expect: le
   value: 0.6
   source: a fifteenth of rush hour stays far below the J2945/1 congestion-control range (CBR 50-80 %)
-  measured: '0.0645'
+  measured: '0.0563'
   verdict: pass
 - id: M0-aoi-peak
   base: M0
@@ -193,7 +198,7 @@ rows:
   - 1000.0
   source: '10 Hz BSMs: a neighbour''s peak age is at least one interval (100 ms), a few intervals with
     loss'
-  measured: '114.405'
+  measured: '114.866'
   verdict: pass
 - id: M0-aoi-mean
   base: M0
@@ -206,7 +211,7 @@ rows:
   - 5000.0
   source: time-average age of a 10 Hz stream with ~36 % PDR is a few hundred ms (Kaul et al. 2011); the
     fast-forward days carry no radio and must not count
-  measured: '69.764'
+  measured: '70.0906'
   verdict: fixed
   note: 'pre-fix M0-b1: 1,693,079 ms, the fast-forward silence charged as age; after: 81.6 ms'
   test: v2xw-metrics awareness::tests::neighbourhood_aoi_restarts_after_a_silence_rather_than_charging_it
@@ -219,7 +224,7 @@ rows:
   value: 0.1
   source: prioritised verification sheds only when the verifier falls behind; at CBR < 5 % the OBU's verifier
     keeps up (verify_wait ~0)
-  measured: '0.0114243'
+  measured: '0.0115216'
   verdict: pass
 - id: M0-sec-overhead
   base: M0
@@ -232,7 +237,7 @@ rows:
   - 0.7
   source: '1609.2 BSM: ~40 B payload against ~100 B security (digest) and ~170 B (certificate once a second):
     security is about half the frame'
-  measured: '0.441223'
+  measured: '0.441574'
   verdict: pass
 - id: M0-full-cert-share
   base: M0
@@ -245,7 +250,7 @@ rows:
   - 0.3
   source: 'J2945/1 §6.1.2.2: certificate once a second, digest otherwise (1 in 10 at 10 Hz), plus the
     new-neighbour rule'
-  measured: '0.128396'
+  measured: '0.128392'
   verdict: pass
 - id: M0-pool
   base: M0
@@ -416,7 +421,7 @@ rows:
   expect: le
   value: 2500.0
   source: the owner's 8 GB machine; realism base 127-229 MB
-  measured: '174.13'
+  measured: '203.916'
   verdict: pass
 - id: nohsm-verify-slower
   base: M0
@@ -427,7 +432,7 @@ rows:
   min_change: 0.2
   source: software ECDSA-P256 verify on an automotive application SoC is slower than the Craton2's verify
     engine (anchors::DEVICES; C4 primitive pricing)
-  measured: 0.458909 -> 0.612916
+  measured: 0.453662 -> 0.605783
   verdict: wrong-expectation
   note: direction holds (+15 %); the pooled verify stage also counts the 30 RSUs and 26 handsets, whose
     hardware this setting does not change, and a vehicle's repeat costs 400 us (Craton2) against 645 us
@@ -450,7 +455,7 @@ rows:
   tol: 0.05
   source: 'crypto time is not on the air: the PHY outcome is unchanged within a few % (only transmit instants
     shift)'
-  measured: 0.431244 -> 0.431183
+  measured: 0.431673 -> 0.43147
   verdict: pass
 - id: pq-security-bytes
   base: no-hsm
@@ -463,7 +468,7 @@ rows:
   - 20.0
   source: 'a Falcon-512 signature is ~666 B and its key 897 B, against 64 B + 33 B for P-256: hybrid security
     bytes several times ECDSA''s (effects PQH: x9.2)'
-  measured: 21680538 -> 204474729 (ratio 9.431)
+  measured: 21680081 -> 204474273 (ratio 9.431)
   verdict: pass
 - id: pq-fragments
   base: no-hsm
@@ -473,7 +478,7 @@ rows:
   expect: ge
   value: 1
   source: a hybrid certificate frame exceeds the 1,400-octet WSMP MTU and is fragmented (post-quantum.yaml)
-  measured: '55257'
+  measured: '56574'
   verdict: pass
 - id: pq-channel-load
   base: no-hsm
@@ -483,7 +488,7 @@ rows:
   expect: up
   min_change: 1.0
   source: 'airtime grows with the frame: channel load at least doubles (effects PQH: x4.2)'
-  measured: 0.0121231 -> 0.0506806
+  measured: 0.0133093 -> 0.0553022
   verdict: pass
 - id: pq-pdr-down
   base: no-hsm
@@ -492,7 +497,7 @@ rows:
   measure: m.pdr
   expect: down
   source: 'longer frames: more collisions, more fragments to lose (a fragmented SDU needs every fragment)'
-  measured: 0.431183 -> 0.401918
+  measured: 0.43147 -> 0.402627
   verdict: pass
 - id: pq-provisioned
   base: no-hsm
@@ -511,7 +516,7 @@ rows:
   measure: m.latency_stage.verify.mean
   expect: up
   source: hybrid verify = ECDSA verify + Falcon verify (the two published costs together)
-  measured: 0.612916 -> 0.798058
+  measured: 0.605783 -> 0.796898
   verdict: pass
 - id: rtk-honest
   base: M0
@@ -535,7 +540,7 @@ rows:
   expect: down
   min_change: 0.5
   source: as rtk-honest
-  measured: 4 -> 4
+  measured: 1 -> 1
   verdict: wrong-expectation
   note: written for raw fixes (7375 -> 6248 then). With the smoothed receiver the base has 5 honest reports,
     from one vehicle below 1 m/s (usfp.md §6), none from GNSS error, so RTK has nothing to remove
@@ -1369,7 +1374,7 @@ rows:
   - -28900.0
   - -28700.0
   source: 'no 8 h review (D3; realism: -28,800 s)'
-  measured: 115151 -> 86351.5 (delta -2.88e+04)
+  measured: 115151 -> 86351.6 (delta -2.88e+04)
   verdict: pass
 - id: maauto-published
   base: M0
