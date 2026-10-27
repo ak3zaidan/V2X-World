@@ -307,7 +307,15 @@ rows:
     stays near 100 ms with a few vehicles at 110-150 ms. Run performance: receptions grow
     with the square of the fleet, so the second 24 s costs about 4x the first
   source: SAE J2945/1 §6.3.8 (CBP 0.5/0.8 thresholds, power and rate control); Ahmad et al. 2019; airtime arithmetic from HD-MAP
-  measured: pending
+  measured: "CBR172 0.456 (p90 0.528); power 16.71 dBm; ITT median 0.100 s, mean 0.119 s; 296 vehicles; wall 352.7 s (7.35 s per simulated s), peak 423 MB"
+  verdict: pass
+  fault: "HD-MAP (24 s) judged in its place: CBR 0.271, power 17.0, red"
+  note: >-
+    In the congested regime published J2945/1 evaluations show for a few hundred vehicles in
+    range, with power control starting to act (CBP p90 over 0.5). Run performance was worse
+    than the row's 4x: the second 24 s cost 6.8x the first (each reception's interference sum
+    also grows with the fleet, so cost grows faster than the square); a performance note,
+    not a band of this row
 # ---- Item 3: WP-12 on the built-in highway ----
 - id: R3.3.CLASS
   test: v2xw-world procedural::tests::an_unsignalised_65_mph_grid_is_a_motorway
