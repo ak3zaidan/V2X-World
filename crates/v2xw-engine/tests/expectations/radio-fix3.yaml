@@ -484,7 +484,16 @@ rows:
     returns the default 100 ms. The CPM rate cannot move unless CBR exceeds about 0.63
     (delta < T_on / 100 ms); at this highway's load the two runs send the same CPMs
   source: ETSI TS 103 324 V2.1.1 §6.1.2.1 and Annex D; TS 102 687 V1.2.1 Annex A.2
-  measured: pending
+  measured: "59,454 -> 59,453 CPMs (0.99998); CBR 0.36896 -> 0.36905; record digests differ (c563a858 -> 00123615; the variant's rerun reproduced 00123615); wall 491 -> 663 s (rerun 593 s: machine load, not the knob)"
+  verdict: wrong-expectation
+  note: >-
+    The mechanism is the row's own: T_GenCpm moves only where T_off passes 100 ms. Of
+    141,500 frames in the variant, 3 carried T_off over 40 ms, one of them 297 ms (a CAM of
+    node 30 at 109.7 s): EN 302 571's floor, T_on (4000 (CBR - 0.62) / CBR - 1), which binds
+    only above CBR 0.62, so that node's smoothed CBR passed 0.62 for a moment (about 0.74
+    from the floor's formula) although the run's p90 is 0.47. The row assumed no unit got
+    there; one did, its next CPM came later, and the run diverged from that frame on. Under
+    this load the knob is a no-op to 2 in 10^5
 - id: R3.3.CPM-CBR
   run: H-CPM
   metric: mean CBR (172 or run), live window
