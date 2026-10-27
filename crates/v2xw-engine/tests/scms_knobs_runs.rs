@@ -89,6 +89,17 @@ impl Out {
             .min()
             .map(|t| t as f64 / 1e9)
     }
+    /// Per top-up flow run: how many batch-download requests its device sent (one when the
+    /// batch was ready at nextDlTime, more when it polled again every download-minWait).
+    fn download_polls(&self) -> Vec<usize> {
+        let mut by: std::collections::BTreeMap<String, usize> = Default::default();
+        for v in self.msgs().filter(|v| v["flow"] == "topup") {
+            if v["name"] == "batch-download-request" && role(&v["from"]) == "ee" {
+                *by.entry(v["instance"].as_str().unwrap_or("").to_string()).or_default() += 1;
+            }
+        }
+        by.into_values().collect()
+    }
     fn topup_ms(&self) -> f64 {
         self.report
             .phase2
@@ -274,6 +285,18 @@ fn slow_aca(lifecycle: Value) -> Out {
     run(doc)
 }
 
+/// The ACA slow from 30 s only: after the weeks the 60 s top-offs ask for fell due.
+fn late_slow_base() -> &'static Out {
+    static BASE: OnceLock<Out> = OnceLock::new();
+    BASE.get_or_init(|| {
+        let mut doc = base_doc();
+        doc["actors"]["backend"]["failures"] = json!([
+            {"node": "pca", "mode": "slow", "from_s": 30.0, "to_s": 300.0, "extra_ms": 4000.0}
+        ]);
+        run(doc)
+    })
+}
+
 fn slow_base() -> &'static Out {
     static BASE: OnceLock<Out> = OnceLock::new();
     BASE.get_or_init(|| slow_aca(json!({})))
@@ -295,8 +318,8 @@ fn a_slow_aca_does_not_delay_a_week_the_ra_already_holds() {
     // reach it. Before the fix the RA ran the week's job when the device asked and told
     // it now + first_batch_delay: 2,340 ms per top-up on this base, 19,182 ms with the ACA
     // slow. Fault (2026-10-27): `ScmsRun::generate_past_due` returning at once.
-    let (b, v) = (base(), slow_base());
-    knob("pca slow 4 s, weeks held since the request", b, &v);
+    let (b, v) = (base(), late_slow_base());
+    knob("pca slow 4 s from 30 s, weeks held since the request", b, v);
     assert!(b.topup_ms() > 0.0, "the base tops up");
     assert!(b.topup_ms() < 1_000.0, "a held week: {} ms", b.topup_ms());
     assert!(
@@ -310,6 +333,13 @@ fn a_slow_aca_does_not_delay_a_week_the_ra_already_holds() {
         0,
         "a top-off of a held week crossed an RA-ACA hop"
     );
+    // Slow from 0 s, the ACA is slow when the weeks fall due (the fleet's acceptance), so
+    // the RA's job for them runs under it and can finish after the top-offs ask: they wait
+    // for it (the .info answer is the job's finish), as at a real RA whose ACA was slow
+    // during the batch (scms-fix3-ra RA.slow-aca-held: 4,947 ms against 337 ms).
+    let early = slow_base();
+    knob("pca slow 4 s from 0 s (when the weeks fell due)", b, early);
+    assert!(early.topup_ms() > b.topup_ms() + 1_000.0, "{}", early.topup_ms());
 }
 
 #[test]
@@ -326,11 +356,39 @@ fn a_longer_download_wait_lengthens_a_late_topup() {
         slow_aca(json!({"max_periods_ahead": 2, "download_poll_interval_s": 20})),
     );
     knob("download_poll_interval_s 2 -> 20 (ACA 4 s slow, 2-week horizon)", b, &v);
+    // Only a late top-off waits longer: one whose batch was not ready at nextDlTime and
+    // that polled again. Its last poll overshoots the batch by U[0, minWait), so each one
+    // late in both runs waits (20 s - 2 s) / 2 = 9 s more on average, and an on-time one
+    // not at all: the mean moves by about the late share times 9 s (scms-fix3-ra
+    // RA.download-wait; the 5 s bound this test had assumed most top-offs late). Half of
+    // that, for the overshoots' spread over a few late top-offs.
+    let (pb, pv) = (b.download_polls(), v.download_polls());
+    let late = pb.iter().filter(|n| **n > 1).count();
+    let n = pb.len().max(1);
+    println!(
+        "late top-offs: base {late} of {n} (polls {}), variant {} of {} (polls {})",
+        pb.iter().sum::<usize>(),
+        pv.iter().filter(|n| **n > 1).count(),
+        pv.len(),
+        pv.iter().sum::<usize>()
+    );
+    assert!(late > 0, "the slow ACA makes some top-offs late");
+    let bound = 0.5 * late as f64 / n as f64 * (20_000.0 - 2_000.0) / 2.0;
     assert!(
-        v.topup_ms() > b.topup_ms() + 5_000.0,
-        "{} vs {}",
+        v.topup_ms() > b.topup_ms() + bound,
+        "{} vs {} (+{bound:.0} ms for {late} late of {n})",
         v.topup_ms(),
         b.topup_ms()
+    );
+    // And a longer wait asks less often: fewer download requests per late top-off.
+    let per = |p: &[usize]| {
+        let late: Vec<_> = p.iter().filter(|n| **n > 1).collect();
+        late.iter().map(|n| **n).sum::<usize>() as f64 / late.len().max(1) as f64
+    };
+    assert!(per(&pv) < per(&pb), "{} vs {}", per(&pv), per(&pb));
+    assert!(
+        v.report.phase2.cert_unavailable_ns > b.report.phase2.cert_unavailable_ns,
+        "vehicles wait longer without a certificate"
     );
 }
 

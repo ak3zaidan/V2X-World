@@ -124,5 +124,8 @@ fn provisioning_gives_the_same_bytes_on_any_number_of_threads() {
 /// PV.aca-cannot-group: one RA→ACA request per message in a seeded order across devices,
 /// and the weekly job for every account) and for one certificate per component (audit-gov
 /// §4 item 1: every component certificate byte moved); one thread = four still. Before
-/// both, `99f8481a…` on `8becf72a`.
-const PINNED: &str = "783c2b499d38bafd058f1fc6a675d498ad1a947993f8b45a6d7958ac6c01f98d";
+/// both, `99f8481a…` on `8becf72a`. Re-pinned 2026-10-27 for the RA's past-due weeks
+/// (`ScmsRun::generate_past_due`: the top-offs' weeks are generated at their due instant
+/// on a scratch kernel, so their SPDUs come first, as pre-run ones, and the top-offs are
+/// .info + download); `783c2b49…` before, one thread = four still.
+const PINNED: &str = "c6e1e2bb1107fc07862ad5807bc0a7829cbc54fce891cebf8913b940e1ca813d";

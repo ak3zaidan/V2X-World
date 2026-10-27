@@ -57,14 +57,48 @@ fn provisioning_emits_its_declared_stages_in_order() {
 
 #[test]
 fn topup_is_the_provisioning_machine_and_emits_the_same_stages() {
+    // A week past a 2-week ra-maxPreloadTime ([SMP] Table 3 floor): the RA's weekly job
+    // runs at its boundary on the run's clock and the asking device's week rides its own
+    // top-up flow, through every provisioning stage.
+    let mut p = scms::ScmsParams::default().quick();
+    p.max_periods_ahead = 2;
+    let mut run = scms::ScmsRun::new(p).expect("certificates encode");
+    run.add_device(DEVICE_A);
+    provisioned(&mut run, DEVICE_A, 0, 1, 2);
+    run.topup(DEVICE_A, 2, 2);
+    run.run().expect("runs");
+    let seen = stages_of(&run, FlowId::Topup);
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0], declared(FlowId::Topup));
+    // And it really added credentials for the new period.
+    let dev = &run.state.devices[&DEVICE_A];
+    assert!(dev.credentials.contains_key(&(2, 0)));
+}
+
+#[test]
+fn a_topup_of_a_held_week_is_the_info_and_the_download_only() {
+    // A week inside ra-maxPreloadTime was generated when it fell due ([PRIMER] p.6;
+    // [CAMP122] 5.2.7.6.4), off the run's clock (`ScmsRun::generate_past_due`): the
+    // top-off is the .info request and the download (1609.2.1 §6.3.5.4), so its flow
+    // skips the generation stages and keeps the rest in the declared order.
     let mut run = deployment(1);
     provisioned(&mut run, DEVICE_A, 0, 1, 2);
     run.topup(DEVICE_A, 1, 2);
     run.run().expect("runs");
     let seen = stages_of(&run, FlowId::Topup);
     assert_eq!(seen.len(), 1);
-    assert_eq!(seen[0], declared(FlowId::Topup));
-    // And it really added credentials for the new period.
+    let generation = [
+        StageId::Expanded,
+        StageId::PreLinkageReady,
+        StageId::Shuffled,
+        StageId::Certified,
+    ];
+    let want: Vec<StageId> = declared(FlowId::Topup)
+        .iter()
+        .copied()
+        .filter(|s| !generation.contains(s))
+        .collect();
+    assert_eq!(seen[0], want);
     let dev = &run.state.devices[&DEVICE_A];
     assert!(dev.credentials.contains_key(&(1, 0)));
 }

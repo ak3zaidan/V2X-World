@@ -77,8 +77,8 @@ rows:
   measure: phase2.access.exchange_latency.topup mean, ms
   expect: 'F < 1,000 ms and F <= B - 1,500 ms (B about 2,340: the 2 s first_batch_delay plus the exchanges)'
   source: '[PRIMER] p.6 (the RA keeps 3 years generated, adds a week every week); [SMP] Table 3 ra-maxPreloadTime; 1609.2.1 §6.3.5.4/§8.2 (a top-off is the .info request and the batch download of a file the RA holds: nextDlTime now)'
-  measured: pending
-  verdict: pending
+  measured: 'B 2,337.7 ms against F 337.1 ms (59 top-ups each): -2,000.6 ms'
+  verdict: pass
 - id: RA.topup-max
   base: F
   variant: F
@@ -86,8 +86,8 @@ rows:
   measure: topup max, ms
   expect: '< 1,000 ms: no top-up waits for a generation'
   source: as RA.topup-mean
-  measured: pending
-  verdict: pending
+  measured: 'F max 341.3 ms'
+  verdict: pass
 - id: RA.topups-completed
   base: B
   variant: F
@@ -95,8 +95,8 @@ rows:
   measure: phase2 topups_completed, certs_topped_up
   expect: 'F >= B (a shorter exchange is cut off less often by a departure or the run end); certs_topped_up = 5 x topups_completed in both'
   source: CAMP-EE §2.1.5.3.2 (one i-period of certs_per_period = 5 per top-up)
-  measured: pending
-  verdict: pending
+  measured: 'B 59 / 295 certs, F 59 / 295 certs (5 x 59 in both)'
+  verdict: pass
 - id: RA.backend-bytes
   base: B
   variant: F
@@ -104,8 +104,9 @@ rows:
   measure: phase2.access.backend_bytes (in run)
   expect: 'F < B: the RA-LA-ACA hops of the pre-generated weeks happened when the weeks fell due (here before the run), not at each top-up'
   source: '[CAMP122] 5.2.7.6.4 (the RA pre-generates); [PRIMER] p.6'
-  measured: pending
-  verdict: pending
+  measured: 'B 1,482,343 against F 959,355 bytes (-35 %)'
+  verdict: open
+  note: 'as written it passes, but the expectation is not the deployment: a real RA adds week (i + horizon) for every account at each boundary, in the run ([PRIMER] p.6), so the in-run RA-LA-ACA load is about one week per account per boundary. The engine generates only weeks a device asks for; with the 3-year horizon none is generated in the run, and scms_knobs_runs the_architecture_is_the_deployments fails (no RA-LA message in the run). Open: run the far-horizon weekly job in the run'
 - id: RA.uu-bytes-per-topup
   base: B
   variant: F
@@ -113,8 +114,8 @@ rows:
   measure: (uu_ul_bytes + uu_dl_bytes) / topups_completed
   expect: 'within +-10 %: the device side of a top-off (.info, its answer, the batch download, CRL fetches, reports) is the same exchange; only the wait moved'
   source: 1609.2.1 §6.3.5.4 (the same two downloads)
-  measured: pending
-  verdict: pending
+  measured: 'B 13,465.5 against F 13,465.5 bytes per top-up (0 %)'
+  verdict: pass
 - id: RA.events
   base: B
   variant: F
@@ -122,8 +123,9 @@ rows:
   measure: sum of events_by_class
   expect: 'F < B (fewer in-run backend deliveries); within -20 % (vehicles, radio and mobility dominate)'
   source: event accounting (the backend share of credential-lifecycle's events is small)
-  measured: pending
-  verdict: pending
+  measured: 'B 883,278 against F 883,278'
+  verdict: wrong-expectation
+  note: 'events_by_class counts the engine''s classes (vehicles, radio, mobility); the SCMS backend kernel''s deliveries are not in it: equal to the event while backend bytes fell 35 %'
 - id: RA.peak-memory
   base: F
   variant: FS
@@ -131,8 +133,8 @@ rows:
   measure: /usr/bin/time -l peak memory footprint
   expect: within +-15 % (one binary; the scratch kernel of a past-due week is dropped after it)
   source: ScmsRun::generate_past_due (a kernel per job, as a preload)
-  measured: pending
-  verdict: pending
+  measured: 'F 68.2 MB against FS 66.7 MB (-2.2 %)'
+  verdict: pass
 - id: RA.determinism
   base: F
   variant: F2
@@ -140,8 +142,8 @@ rows:
   measure: stream_digest
   expect: byte-identical
   source: engine determinism contract (same seed, same build)
-  measured: pending
-  verdict: pending
+  measured: 'F and F2 stream_digest 05c33f02c0bf'
+  verdict: pass
 - id: RA.slow-aca-held
   base: F
   variant: FS
@@ -149,8 +151,9 @@ rows:
   measure: topup mean, ms
   expect: 'FS within +-10 % of F: an ACA slow in the run does not delay a week the RA generated before the request'
   source: '[PRIMER] p.6; ScmsRun::generate_past_due (the job runs at its due instant, here t = 0 to 20 s, under the faults then; its file is held long before the 60 s top-ups)'
-  measured: pending
-  verdict: pending
+  measured: 'F 337.1 ms against FS 4,947.3 ms (max 8,341)'
+  verdict: wrong-expectation
+  note: 'the fault (0-300 s) covered the instants the weeks fell due (the fleet''s acceptance), so the RA''s job ran under the slow ACA and finished after the 60 s top-offs asked: they waited for it, as at a real RA. Corrected by RA.slow-aca-late-held (slow from 30 s: 337.1 ms = F). Still well under the old lazy job (BS 16,412 ms)'
 - id: RA.slow-aca-late-held
   base: F
   variant: FSL
@@ -158,8 +161,8 @@ rows:
   measure: topup mean, ms
   expect: 'FSL within +-10 % (+50 ms) of F: the weeks the 60 s top-offs ask for fell due when the fleet was accepted (before 30 s) and were generated with the ACA on time, so a slowdown from 30 s does not reach them'
   source: '[PRIMER] p.6; [CAMP122] 5.2.7.6.4 (the RA generates the horizon at acceptance); written after FS failed, before FSL ran'
-  measured: pending
-  verdict: pending
+  measured: 'F 337.1 ms against FSL 337.1 ms (59 top-ups each)'
+  verdict: pass
 - id: RA.slow-aca-old
   base: B
   variant: BS
@@ -176,8 +179,9 @@ rows:
   measure: topup mean, ms
   expect: 'FH20 > FH + 5,000 ms: a week generated at its in-run boundary under a 4 s slow ACA is not ready at nextDlTime; a 20 s download-minWait finds it up to 20 s later than a 2 s one'
   source: SCMS Manager EE profile Table 3 download-minWait; [SMP] Table 3 ra-maxPreloadTime 2 weeks minimum
-  measured: pending
-  verdict: pending
+  measured: 'FH 14,886 ms against FH20 17,170 ms (+2,284); cert_unavailable 12.3 -> 53.1 s, max 8.3 -> 22.0 s; starved 2 -> 7. scms_knobs_runs (full lifecycle): 24,859 -> 25,142 ms, top-up messages 1,774 -> 1,192'
+  verdict: wrong-expectation
+  note: 'only a late top-off polls again, and most of a top-off''s time on the 2-week horizon is the scheduled wait to nextDlTime: the mean moves by the late share times (20 s - 2 s) / 2, not by 5 s. The knob acts where theory says (fewer polls, longer certificate gaps). The test now bounds the shift by the late share it counts from the records (pending build 2)'
 - id: RA.h2-in-run-jobs
   base: FS
   variant: FH
@@ -185,8 +189,8 @@ rows:
   measure: backend_bytes; topup mean
   expect: 'FH > FS on both: with a 2-week horizon each later week is the weekly job at its boundary in the run, its RA-LA-ACA hops on the run, and the device waits for the slow ACA'
   source: '[PRIMER] p.6 (adds one week every week); [SMP] Table 3'
-  measured: pending
-  verdict: pending
+  measured: 'backend FH 1,197,991 > FS 959,355 bytes; topup FH 14,886 > FS 4,947 ms'
+  verdict: pass
 # --- (2) R-PQUNSEC -------------------------------------------------------------------------
 - id: PQ.rsu-own-reports
   base: PQF
@@ -195,8 +199,8 @@ rows:
   measure: phase2 reports_from_rsus; reports_not_filed_by (roadside key)
   expect: 'reports_from_rsus 0 and a roadside not-filed count > 0 under PQ, as under P-256 (R-UNSEC)'
   source: '[SM-MBR] §3 and §2.3.1.4.1 (an SM-MBR is signed with a pseudonym certificate; the reporter is an OBE); USDOT RSU Specification v4.1 p. 15 (no reporting function)'
-  measured: pending
-  verdict: pending
+  measured: 'PQF reports_from_rsus 0; roadside not-filed 204'
+  verdict: pass
 - id: PQ.relay-case-kept
   base: PQF
   variant: PQF
@@ -204,8 +208,8 @@ rows:
   measure: ma_revoke_decisions, rsu_crls_installed, rsu_revoked_receptions
   expect: 'all > 0: the MA still revokes (the vehicle reporter, actor 112) and the units refuse the revoked sender (R-PQRSUCRL)'
   source: testing/pq-profile.md §3; pq_relay.rs
-  measured: pending
-  verdict: pending
+  measured: 'PQF revoke decisions 3, rsu_crls_installed 150, rsu_revoked_receptions 3,864'
+  verdict: pass
 # --- (4) roadside application certificates -------------------------------------------------
 - id: RSU.ssm-refused-before
   base: CB
@@ -223,8 +227,8 @@ rows:
   measure: receiver_validation.refused psid-not-permitted
   expect: '0 in CF: the unit''s certificate lists 0x82 and 0x204095, the PSIDs of its enabled applications'
   source: USDOT RSU Specification v4.1 p. 15 (certificates to support the unit's transmissions, by PSID); [CAMP122] Table 1 (no SSP for SPaT/MAP or SSM)
-  measured: pending
-  verdict: pending
+  measured: 'CF: psid-not-permitted 0 (no refusal of 118,971 checked); 4 units, 8 certificates'
+  verdict: pass
 - id: RSU.cpm-verified
   base: CPF
   variant: CPF
@@ -232,8 +236,8 @@ rows:
   measure: cpm.rsu_cpms_sent, rsu_cpms_verified
   expect: 'both > 10: a receiver accepts the roadside CPM signed with the SCMS application certificate (ITS-AID 639 listed)'
   source: ETSI TS 103 324 (CPM, ITS-AID 639 psid-collective-perception-service); IEEE 1609.2 §5.2
-  measured: pending
-  verdict: pending
+  measured: 'CPF: rsu_cpms_sent 160, rsu_cpms_verified 142'
+  verdict: pass
 # --- (3) provider-b's second ACA (GOV.D1.acas) ----------------------------------------------
 # Runs: G = base.yaml, GSB = slow-aca-b.yaml, G2 = G again, on this branch's second build (the
 # ACA instance certified, hosted, linked, sent its share of requests and signing what it
