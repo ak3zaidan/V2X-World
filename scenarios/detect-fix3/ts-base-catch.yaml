@@ -1,0 +1,8 @@
+# detect-fix3: ts-base with CaTCh confidence-overlap scoring (Kamel et al., WCNC 2019) in
+# place of the binary thresholds.
+schema: v2xw/scenario/1
+meta: {base: ts-base.yaml, name: detect-fix3 ts catch}
+detection:
+  local:
+    - id: detect/ts103759
+      params: {scoring: catch}

@@ -376,6 +376,24 @@ trustworthy or comparable; later waves add behaviours and radio features.
   The engine host must fill `FrameExtras`/`OwnFootprint` from J2735 `VehicleSize` and
   the node's own class; until then the box check is unchecked. The BSM centre / CAM front
   reference points are as read, not checked against the standard text.
+- **detect-fix3 (2026-10-27, branch of `4aa798bb`)**: the suite is `detect/ts103759` in
+  `detection.local` (listed alone; card parameters by name plus `environment`,
+  `beacon_profile`, `fusion`, `scoring` and the host keys; the card is in the settings
+  catalogue with default, unit and source). Every message is judged. `FrameExtras` come
+  from each BSM's J2735 `VehicleSize` (centre reference; J2945/1 as cited by US patents
+  8,878,927 and 11,736,891, the standard text not read) or a CAM's size (front centre,
+  EN 302 637-2); `OwnFootprint` from the receiver's belief heading and class dimensions.
+  Run report: `phase2.ts_checks` / `ts_messages` per sender class. Found: the 99.7 %
+  `confidencePlausibility` was the WP-10 harness multiplying an already-95 % radius by
+  2.448 (`tests/common/sim.rs:803`); the engine states 6.45 m and the live rate is 0.
+  CV-pilot BSMs state far less (semiMajor one-sigma medians 0.30 Tampa, 0.40 NYC, 0.50
+  Wyoming, 2.00 m Orem): opt-in `gnss.stated_sigma_m` / `stated_sigma_log_sd`; with
+  Tampa's, the default suite's honest verdicts rise 2 -> 17. Fixed: class-5
+  `intersection` compared claims with 2 s-old unmoved positions. Open: honest
+  `positionPlausibility` 2.2 % (F2MD's 2 m point tolerance; `scoring: catch` now covers
+  it), `boxIntersection` 1.4 % (independent per-vehicle GNSS bias, no common mode; and
+  the BSM position is the engine's rear-bumper reference, not the J2945/1 centre). Rows:
+  `crates/v2xw-engine/tests/expectations/detect-fix3.yaml`.
 
 **WP-11 Full surrogate safety measures** (M, 5 days). Source: S-P7b.
 - Scope: crossing, merging and oncoming TTC by trajectory extrapolation within 50 m; MDRAC

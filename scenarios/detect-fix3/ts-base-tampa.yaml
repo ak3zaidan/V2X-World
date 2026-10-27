@@ -1,0 +1,7 @@
+# detect-fix3: ts-base with every OBU stating a deployed CV-pilot accuracy (Tampa: one-sigma
+# semiMajor median 0.30 m, per-device log-sd 0.81) instead of the model's honest radius.
+schema: v2xw/scenario/1
+meta: {base: ts-base.yaml, name: detect-fix3 ts deployed accuracy}
+actors:
+  vehicles:
+    gnss: {smoothing_tau_s: 100.0, static_hold_mps: 0.3, stated_sigma_m: 0.30, stated_sigma_log_sd: 0.81}

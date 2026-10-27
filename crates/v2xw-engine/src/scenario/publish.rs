@@ -1363,6 +1363,13 @@ fn catalogue() -> Registry {
 pub(crate) fn catalogue_for_guide() -> Registry {
     let mut registry = Registry::new();
     let _ = crate::wiring::register_all(&mut registry);
+    // The TS 103 759 suite's card, so the settings list each of its `detection.local`
+    // parameters with its default, unit and source. Catalogue only: the run's registry
+    // (and so every manifest) is unchanged.
+    let ts = v2xw_threat::ts103759::card(&v2xw_threat::ts103759::Ts103759Params::default());
+    if !registry.contains(&ts.id) {
+        let _ = registry.register(ts);
+    }
     for card in v2xw_world::model_cards() {
         if !registry.contains(&card.id) {
             let _ = registry.register(card);

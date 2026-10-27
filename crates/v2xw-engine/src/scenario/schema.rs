@@ -1194,6 +1194,19 @@ pub struct GnssSettings {
     /// heading noise to `bsm_timing`'s fitted `output_noise`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub velocity_noise_mps: Option<f64>,
+    /// The one-sigma horizontal accuracy the receiver states in each BSM's J2735
+    /// `PositionalAccuracy.semiMajor`, metres (the median over devices). Unset or 0
+    /// states the model's own honest 95 % radius (about 6.5 m with raw fixes, 5.1 m
+    /// smoothed). Deployed OBUs state far less than their real error: the CV-pilot
+    /// medians are 0.30 m Tampa, 0.40 m NYC, 0.50 m Wyoming and a constant 2.00 m Orem
+    /// (detect-fix3, measured with tools/realdata).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stated_sigma_m: Option<f64>,
+    /// The per-device spread of that stated accuracy: a lognormal's log-sd, drawn once
+    /// per receiver. Unset or 0 states the median on every device; Tampa's per-device
+    /// medians give 0.81.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stated_sigma_log_sd: Option<f64>,
 }
 
 impl GnssSettings {
@@ -1223,6 +1236,12 @@ impl GnssSettings {
         }
         if let Some(v) = self.velocity_noise_mps {
             p.sigma_velocity_mps = v;
+        }
+        if let Some(v) = self.stated_sigma_m {
+            p.stated_sigma_m = v;
+        }
+        if let Some(v) = self.stated_sigma_log_sd {
+            p.stated_sigma_log_sd = v;
         }
         p
     }

@@ -1,0 +1,7 @@
+# detect-fix3 (WP-10 follow-ups): the live-atk base (40 vehicles, 150 s, smoothed US
+# receiver) with the ETSI TS 103 759 suite as the local detector, cited defaults. Attack-free.
+schema: v2xw/scenario/1
+meta: {base: ../live-atk/base.yaml, name: detect-fix3 ts base}
+detection:
+  local:
+    - id: detect/ts103759

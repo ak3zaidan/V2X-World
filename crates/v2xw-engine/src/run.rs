@@ -5343,6 +5343,18 @@ impl Engine {
                 || v2xw_metrics::detection::DetectionScoresProvider::metric_names()
                     .contains(&m.as_str())
         });
+        // The receiver's own footprint, from its own belief and its own body (the node's
+        // class dimensions, which its BSM's VehicleSize carries): the TS 103 759 box check
+        // tests every claim against it. A roadside unit has none.
+        let own = belief
+            .zip(self.actor_of(node).map(|a| a.last.dims))
+            .filter(|(_, d)| d.length_m > 0.0 && d.width_m > 0.0)
+            .map(|(b, d)| v2xw_threat::OwnFootprint {
+                heading_rad: b.heading_rad,
+                length_m: d.length_m,
+                width_m: d.width_m,
+                reference: v2xw_threat::consistency::ReferencePoint::Centre,
+            });
         let reports = {
             let Engine {
                 scheduler,
@@ -5370,7 +5382,7 @@ impl Engine {
                 .map(|c| v2xw_core::hash::hex_encode(&c.digest.0[..]));
             let reports = phase2
                 .as_mut()
-                .map(|p| p.detect(&mut ctx, world, node, &me, reporter, delivered))
+                .map(|p| p.detect(&mut ctx, world, node, &me, reporter, delivered, own))
                 .unwrap_or_default();
             drop(ctx);
             deferred_records.extend(
@@ -5852,6 +5864,27 @@ impl Engine {
                 ),
             );
         }
+        // The frame fields the TS 103 759 suite reads (its box-intersection check): the
+        // vehicle size the frame carries, through the encoders' own quantisers, and the
+        // point its standard puts the position at. J2735/J2945/1 report the BSM position
+        // at the centre of the vehicle's ground rectangle; ETSI EN 302 637-2 a CAM's
+        // ReferencePosition at the centre of the front edge. A PSM and a VAM carry no size.
+        if matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
+            && self.phase2.as_ref().is_some_and(crate::phase2::Phase2::wants_frame_extras)
+            && let Some(cred) = credential.as_ref()
+        {
+            let dims = self.actor_of(node).map(|a| a.last.dims);
+            let frame = dims.map_or_else(v2xw_threat::FrameExtras::default, |d| {
+                frame_extras(tx.msg_type, d)
+            });
+            if let Some(p) = self.phase2.as_mut() {
+                p.note_broadcast_frame(
+                    crate::phase2::digest_bytes(&cred.digest),
+                    claimed_generation,
+                    frame,
+                );
+            }
+        }
         // The transmit power is congestion control's, not the scenario's: J2945/1 controls
         // power as well as rate, and the SUPRA filter's output is what the link budget has
         // to be evaluated at. With no DCC model (the abstract tier) it is the profile's.
@@ -6329,8 +6362,21 @@ impl Engine {
             // The engine's own knowledge of who signs under what, and the receivers'
             // view of the ghost's stated accuracy, exactly as for the attacker's own frame.
             self.app_truth.note_signer(&digest.0[..], node);
+            let ghost_dims = self.actor_of(node).map(|a| a.last.dims);
             if let Some(p) = self.phase2.as_mut() {
                 p.note_ghost_frame(node, now);
+                // A ghost BSM carries its attacker's own encoder's VehicleSize.
+                if p.wants_frame_extras()
+                    && matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
+                {
+                    p.note_broadcast_frame(
+                        g.signer,
+                        st.generation_time,
+                        ghost_dims.map_or_else(v2xw_threat::FrameExtras::default, |d| {
+                            frame_extras(tx.msg_type, d)
+                        }),
+                    );
+                }
                 if p.note_digest(node, &digest, i, j)
                     && let Some(actor) = self.node_actor.get(&node).copied()
                 {
@@ -10915,5 +10961,39 @@ mod composite_crl_tests {
             Some((1, 0)),
             "with every CRL verified nothing changes"
         );
+    }
+}
+
+/// The frame fields the TS 103 759 suite reads off one safety message, as its sender's
+/// encoder writes them: a BSM's J2735 `VehicleSize` (1 cm; 0 read as not stated) with the
+/// position at the vehicle's centre, or a CAM's `VehicleLength`/`VehicleWidth` (0.1 m;
+/// `unavailable` and `outOfRange` read as not stated) with the position at the front
+/// edge's centre (EN 302 637-2). Neither carries a speed or heading confidence the suite
+/// can use here (a BSM has none at all), so those stay unstated.
+fn frame_extras(msg_type: v2xw_msg::MsgType, d: v2xw_core::geom::Dims) -> v2xw_threat::FrameExtras {
+    use v2xw_threat::consistency::ReferencePoint;
+    match msg_type {
+        v2xw_msg::MsgType::Cam => {
+            let l = v2xw_msg::units::vehicle_length_value(d.length_m);
+            let w = v2xw_msg::units::vehicle_width(d.width_m);
+            v2xw_threat::FrameExtras {
+                length_m: (l < 1022).then(|| f64::from(l) / 10.0),
+                width_m: (w < 61).then(|| f64::from(w) / 10.0),
+                speed_confidence_mps: None,
+                heading_confidence_rad: None,
+                reference: ReferencePoint::FrontCentre,
+            }
+        }
+        _ => {
+            let l = v2xw_msg::j2735::bsm::vehicle_length(d.length_m);
+            let w = v2xw_msg::j2735::bsm::vehicle_width(d.width_m);
+            v2xw_threat::FrameExtras {
+                length_m: (l > 0).then(|| f64::from(l) / 100.0),
+                width_m: (w > 0).then(|| f64::from(w) / 100.0),
+                speed_confidence_mps: None,
+                heading_confidence_rad: None,
+                reference: ReferencePoint::Centre,
+            }
+        }
     }
 }

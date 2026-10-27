@@ -108,6 +108,10 @@ pub const MODEL_ID: &str = "gnss/error/gauss-markov";
 /// The model version.
 pub const MODEL_VERSION: &str = "1.2.0";
 
+/// The random scope each device's stated accuracy is drawn in (`stated_sigma_log_sd`),
+/// apart from its error stream.
+const STATED_ACCURACY_SCOPE: &str = "gnss/error/gauss-markov/stated-accuracy";
+
 /// Reid 2019 horizontal error percentiles for a production automotive single-frequency
 /// receiver under open sky, metres: 68 %, 95 %, 99 %.
 pub const REID_HORIZONTAL_M: [(f64, f64); 3] = [(0.68, 3.07), (0.95, 5.30), (0.99, 9.38)];
@@ -269,6 +273,19 @@ pub struct GaussMarkovParams {
     /// The static-hold threshold, m/s: below it the receiver holds its position and
     /// reports zero velocity. `0` is off. Read only when `smoothing_tau_s > 0`.
     pub static_hold_mps: f64,
+    /// The one-sigma horizontal accuracy the receiver **states** (J2735
+    /// `PositionalAccuracy.semiMajor`), metres: the median over devices. `0`, the default,
+    /// states the model's own honest 95 % radius (`k·√(σ_w² + σ_b²)`, module docs).
+    /// Deployed OBUs state far less than their measured error: the CV-pilot BSMs'
+    /// semiMajor medians are 0.30 m (Tampa, 34,464 BSMs, 226 devices), 0.40 m (NYC,
+    /// 65,533, 893), 0.50 m (Wyoming, 6,597, 16) and a constant 2.00 m (Orem, 4.1 M,
+    /// 2,914), against Reid 2019's 3.07 m 68th-percentile error.
+    pub stated_sigma_m: f64,
+    /// The per-device spread of the stated accuracy: the log-standard deviation of a
+    /// lognormal around `stated_sigma_m`, drawn once per receiver. `0` states the median
+    /// on every device (Orem's constant 2.00 m). Tampa's per-device medians give
+    /// ln(0.85 / 0.30) / 1.2816 = 0.81 (p90 over p50). Read only when `stated_sigma_m > 0`.
+    pub stated_sigma_log_sd: f64,
 }
 
 impl Default for GaussMarkovParams {
@@ -293,6 +310,8 @@ impl Default for GaussMarkovParams {
             sigma_heading_rad: 0.0,
             smoothing_tau_s: 0.0,
             static_hold_mps: 0.0,
+            stated_sigma_m: 0.0,
+            stated_sigma_log_sd: 0.0,
         }
     }
 }
@@ -312,6 +331,8 @@ struct NodeState {
     burst_until: SimTime,
     /// When the current outage ends.
     outage_until: SimTime,
+    /// The one-sigma accuracy this device states, once drawn (`stated_sigma_m > 0`).
+    stated_sigma: Option<f64>,
 }
 
 /// The fitted Gauss-Markov GNSS model.
@@ -449,6 +470,32 @@ impl GaussMarkovGnss {
         } else {
             FixQuality::ThreeD
         }
+    }
+
+    /// The one-sigma accuracy a deployed OBU states (`stated_sigma_m`), drawn once per
+    /// device; `None` states the model's own radius. The draw comes from its own scope
+    /// (not the receiver's error stream), so turning the knob on changes what the device
+    /// states and nothing about the error it makes.
+    fn stated_sigma(&mut self, ctx: &mut dyn MobCtx, node: NodeId) -> Option<f64> {
+        let median = self.params.stated_sigma_m;
+        if median <= 0.0 {
+            return None;
+        }
+        if let Some(s) = self.state.get(&node).and_then(|s| s.stated_sigma) {
+            return Some(s);
+        }
+        let sd = self.params.stated_sigma_log_sd.max(0.0);
+        let sigma = if sd > 0.0 {
+            ctx.rng(
+                RngDomain::Gnss,
+                EntityRef::custom(STATED_ACCURACY_SCOPE, u64::from(node.index())),
+            )
+            .lognormal(math::ln(median), sd)
+        } else {
+            median
+        };
+        self.state.entry(node).or_default().stated_sigma = Some(sigma);
+        Some(sigma)
     }
 
     /// The horizontal white-noise σ in force, given the environment and the burst state.
@@ -721,7 +768,14 @@ impl GnssModel for GaussMarkovGnss {
             self.receiver_output(node, pos, Vec3::new(nx, ny, nz), vel, dt_s);
         let sigma_nominal = self.sigma_white_h(env, false) * white_out;
         let bias_nominal = self.sigma_bias_h_m * env_scale(env.sky).unwrap_or(1.0);
-        let radius = confidence_95_m(sigma_nominal, bias_nominal, RAYLEIGH_95);
+        // A deployed receiver's stated accuracy grows where its sky does: NYC's CV-pilot
+        // BSMs (Manhattan) state a 95th percentile of 4.10 m against Tampa's 0.90 m, a tail
+        // of the same order as the canyon scale on the error itself, so the device's
+        // statement carries the environment scale as the honest radius does.
+        let radius = match self.stated_sigma(ctx, node) {
+            Some(sigma) => sigma * env_scale(env.sky).unwrap_or(1.0) * RAYLEIGH_95,
+            None => confidence_95_m(sigma_nominal, bias_nominal, RAYLEIGH_95),
+        };
         PositionEstimate {
             pos,
             vel,
@@ -1019,6 +1073,40 @@ pub fn card(
                      smoothing stands in for an automotive receiver's navigation filter"
                         .to_string(),
                 ),
+            },
+        ),
+        Parameter::new(
+            "stated_sigma_m",
+            "m",
+            serde_json::json!(params.stated_sigma_m),
+            Source {
+                kind: SourceKind::Dataset,
+                reference: "USDOT ITS DataHub CV-pilot BSMs, coreData.accuracy.semiMajor \
+                            (one sigma): median 0.30 m Tampa (34,464 BSMs), 0.40 m NYC \
+                            (65,533), 0.50 m Wyoming (6,597), 2.00 m Orem (4.1 M); 0 \
+                            states the model's honest radius"
+                    .to_string(),
+                accessed: Some("2026-10-27".to_string()),
+                note: Some(
+                    "measured with tools/realdata's normaliser over the downloaded \
+                     extracts; the deployed devices state far less than Reid 2019's \
+                     measured error"
+                        .to_string(),
+                ),
+            },
+        ),
+        Parameter::new(
+            "stated_sigma_log_sd",
+            "1",
+            serde_json::json!(params.stated_sigma_log_sd),
+            Source {
+                kind: SourceKind::Dataset,
+                reference: "Tampa CV-pilot per-device semiMajor medians: p50 0.30 m, \
+                            p90 0.85 m, so ln(0.85/0.30)/1.2816 = 0.81 (0: every device \
+                            states the median, as Orem's do)"
+                    .to_string(),
+                accessed: Some("2026-10-27".to_string()),
+                note: None,
             },
         ),
         Parameter::new(
@@ -1801,5 +1889,51 @@ mod tests {
             .card()
             .validate()
             .expect("validates");
+    }
+
+    /// detect-fix3: `stated_sigma_m` changes what a device states (J2735 semiMajor, one
+    /// sigma) and nothing about the error it makes. Unset states the honest radius; set,
+    /// every estimate states `σ·2.4477` at 95 %, a device keeps its draw, devices differ
+    /// under a spread, and the positions are bit-identical to the unset run's.
+    #[test]
+    fn a_stated_accuracy_changes_the_statement_and_not_the_error() {
+        let honest = track(smoothing(), 10.0, 6, 40);
+        let radius = honest[0][5].0.semi_major_m;
+        // The whole fitted σ (2.636 m) is the smoothed output's slow part: 2.4477·2.636 m.
+        assert!((6.40..6.50).contains(&radius), "honest smoothed radius {radius}");
+        let fixed = track(
+            GaussMarkovParams {
+                stated_sigma_m: 2.0,
+                ..smoothing()
+            },
+            10.0,
+            6,
+            40,
+        );
+        let spread = track(
+            GaussMarkovParams {
+                stated_sigma_m: 0.3,
+                stated_sigma_log_sd: 0.81,
+                ..smoothing()
+            },
+            10.0,
+            6,
+            40,
+        );
+        for ((h, f), s) in honest.iter().zip(&fixed).zip(&spread) {
+            for ((a, b), c) in h.iter().zip(f).zip(s) {
+                assert_eq!(a.0.pos, b.0.pos, "the stated accuracy moved the error");
+                assert_eq!(a.0.pos, c.0.pos, "the spread's draw moved the error");
+                assert!((b.0.semi_major_m - 2.0 * RAYLEIGH_95).abs() < 1e-12);
+                assert_eq!(b.0.semi_minor_m, b.0.semi_major_m);
+            }
+            let first = s[1].0.semi_major_m;
+            assert!(s.iter().skip(1).all(|e| e.0.semi_major_m == first), "a device redrew");
+        }
+        let per_device: Vec<f64> = spread.iter().map(|t| t[1].0.semi_major_m).collect();
+        assert!(
+            per_device.windows(2).any(|w| w[0] != w[1]),
+            "every device drew the same stated accuracy under a spread"
+        );
     }
 }

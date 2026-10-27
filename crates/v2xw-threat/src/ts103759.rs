@@ -1248,7 +1248,9 @@ pub struct Ts103759Suite {
     params: Ts103759Params,
     subjects: BTreeMap<[u8; 8], SubjectState>,
     /// The newest claim per signer, for the class-5 intersection check.
-    recent: BTreeMap<[u8; 8], (f64, f64, SimTime)>,
+    /// Each claim keeps its claimed speed and heading, so it is compared where the station
+    /// has since moved to, not where it was.
+    recent: BTreeMap<[u8; 8], (f64, f64, f64, f64, SimTime)>,
     /// The newest footprint per signer, for the box-intersection check.
     boxes: BTreeMap<[u8; 8], BoxClaim>,
     /// The Kalman track per signer.
@@ -1715,10 +1717,19 @@ impl Ts103759Suite {
         out: &mut TsVerdict,
     ) {
         let p = self.params.clone();
-        out.scores.insert(
-            Ts103759Check::PositionPlausibility,
-            env.distance_to_road_m(m.claimed_x_m, m.claimed_y_m) / p.max_distance_from_route_m,
-        );
+        let off = env.distance_to_road_m(m.claimed_x_m, m.claimed_y_m);
+        let score = match p.scoring {
+            Scoring::Threshold => off / p.max_distance_from_route_m,
+            // CaTCh (WCNC 2019): the share of the stated confidence disc that lies within
+            // the plausible band around the road, so an honest claim pushed off the lane
+            // by an error its own confidence states is not scored as off the road.
+            Scoring::Catch => self.catch_score(circle_inside_fraction(
+                m.claimed_pos_confidence_m.max(0.0),
+                off,
+                p.max_distance_from_route_m + m.claimed_pos_confidence_m.max(0.0),
+            )),
+        };
+        out.scores.insert(Ts103759Check::PositionPlausibility, score);
         match (x.envelope.and_then(|e| e.cert_region), p.own_region) {
             (Some(stated), Some(own)) => {
                 let score = if stated == own {
@@ -1777,11 +1788,20 @@ impl Ts103759Suite {
         let window = v2xw_core::time::secs_to_ns(p.max_delta_inter_s);
         let cutoff = t.saturating_sub(window);
         let mut nearest: Option<f64> = None;
-        for (signer, (ox, oy, at)) in &self.recent {
+        for (signer, (ox, oy, speed, heading, at)) in &self.recent {
             if *signer == m.signer || *at < cutoff {
                 continue;
             }
-            let d = math::hypot(*ox - m.claimed_x_m, *oy - m.claimed_y_m);
+            // The other claim moved on at its own claimed velocity, as the box check
+            // moves it: compared where it stood, a follower driving over the spot its
+            // leader claimed up to 2 s earlier "intersected" it (detect-fix3: 2.0 % of
+            // honest messages fired in the live base run).
+            let age = ns_to_secs(t.saturating_sub(*at));
+            let (sn, cs) = math::sin_cos(*heading);
+            let d = math::hypot(
+                *ox + speed * age * cs - m.claimed_x_m,
+                *oy + speed * age * sn - m.claimed_y_m,
+            );
             if nearest.is_none_or(|b| d < b) {
                 nearest = Some(d);
             }
@@ -1792,11 +1812,19 @@ impl Ts103759Suite {
                 p.proximity_distance_m / d.max(1e-9),
             );
         }
-        self.recent
-            .insert(m.signer, (m.claimed_x_m, m.claimed_y_m, t));
+        self.recent.insert(
+            m.signer,
+            (
+                m.claimed_x_m,
+                m.claimed_y_m,
+                m.claimed_speed_mps,
+                m.claimed_heading_rad,
+                t,
+            ),
+        );
         // A cell nobody has claimed inside the window is dead; the sweep is bounded by the
         // number of signers heard in one window.
-        self.recent.retain(|_, (_, _, at)| *at >= cutoff);
+        self.recent.retain(|_, (_, _, _, _, at)| *at >= cutoff);
 
         if let ObservedKind::Cpm(objects) = &m.kind {
             self.cpm_consistency(me, objects, &p, x, out);

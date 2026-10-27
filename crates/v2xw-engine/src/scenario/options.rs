@@ -524,6 +524,10 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Strict US profile (SM-MBR)",
             "Only the SCMS Manager BSM report subtypes at their published thresholds (1 m drift, 90 m/s, 10 m/s²), every BSM checked, no streak gate.",
         ),
+        (_, "detect/ts103759") => w(
+            "ETSI TS 103 759 observations",
+            "The European observation classes 1-5 with F2MD's checks, a Kalman track, the reachable-distance envelope and vehicle-box overlap, every message checked; its thresholds, units and sources are on the threat/detector/ts103759-observations card.",
+        ),
         (_, "threat/ma/corroborated") => w(
             "Corroborating authority",
             "Revokes only on independent, corroborated evidence sustained over time.",
@@ -956,6 +960,7 @@ pub fn slot_values(path: &str, registry: &Registry) -> Option<(Vec<Value>, bool)
         "detection.local[]" => Some(vec![
             crate::phase2::LEGACY_12.to_string(),
             crate::phase2::US_SM_MBR.to_string(),
+            crate::phase2::TS_103_759.to_string(),
         ]),
         "detection.ma" => Some(vec![
             crate::phase2::MA_CORROBORATED.to_string(),

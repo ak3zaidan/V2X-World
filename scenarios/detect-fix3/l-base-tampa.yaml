@@ -1,0 +1,7 @@
+# detect-fix3: the live-atk legacy base (detect/legacy-12) with Tampa's deployed stated
+# accuracy, for the stated-accuracy flag's effect on the default suite.
+schema: v2xw/scenario/1
+meta: {base: ../live-atk/base.yaml, name: detect-fix3 legacy tampa accuracy}
+actors:
+  vehicles:
+    gnss: {smoothing_tau_s: 100.0, static_hold_mps: 0.3, stated_sigma_m: 0.30, stated_sigma_log_sd: 0.81}

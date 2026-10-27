@@ -1,0 +1,7 @@
+# detect-fix3: live-atk catalogue group 1 (one attacker per type from 20 s) under the
+# TS 103 759 suite.
+schema: v2xw/scenario/1
+meta: {base: ../live-atk/cat1.yaml, name: detect-fix3 ts cat1}
+detection:
+  local:
+    - id: detect/ts103759
