@@ -68,6 +68,12 @@ runs:
   GSB:
     scenario: scenarios/scms-fix3/slow-aca-b.yaml
     note: third build
+  FSBH:
+    scenario: scenarios/scms-fix3/slow-aca-b-h2.yaml
+    note: first build; provider-b's core ACA 4 s slow on the 2-week horizon
+  GSBH:
+    scenario: scenarios/scms-fix3/slow-aca-b-h2.yaml
+    note: third build
   PQF:
     scenario: scenarios/scms-pq-relay-repro.yaml
     note: fix; hybrid Falcon-512, the PDU layer off (R-PQUNSEC)
@@ -330,6 +336,16 @@ rows:
   measure: topup mean, ms; cert_unavailable_ns
   expect: 'GSB < FSB on both: provider-b sends half its requests to the healthy aca/1, so its jobs under the slow core ACA finish sooner (the slow server carries half the work); provider-a untouched'
   source: queueing (work at the slow server halved); audit-prov §4.1. (An unqualified `pca` fault is provider-a's ACA, crypto_config::failure_target, so slow-aca.yaml cannot show it.)
+  measured: 'FSB 337.1 ms (59 top-ups) = F 337.1 ms, cert_unavailable 0 in both; measured before the third build'
+  verdict: wrong-expectation
+  note: 'on the 3-year horizon every top-off in the run is of a held week (.info + download, RA only): no device request reaches an ACA, so a slow ACA moves no device metric with one ACA or two. Corrected by D1.slow-aca-h2, where the weeks are in-run jobs'
+- id: D1.slow-aca-h2
+  base: FSBH
+  variant: GSBH
+  area: metrics
+  measure: topup mean, ms; cert_unavailable_ns
+  expect: 'GSBH < FSBH on both: provider-b (32 of 72 devices) sends half of each in-run job to the healthy aca/1, so its weeks are ready sooner; provider-a untouched. Upper bound on the drop: provider-b''s share of the slow-ACA excess (FH - F on one ACA, 14,886 - 337 ms, times 32/72, halved): about 3.2 s. Confounded: GSBH also starts each week at its boundary unasked (RA.boundary-job), which can only make it earlier'
+  source: queueing (the slow server carries half the work); audit-prov §4.1; written before FSBH and GSBH ran
   measured: pending
   verdict: pending
 - id: D1.cost
