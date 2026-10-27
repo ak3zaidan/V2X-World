@@ -3966,6 +3966,16 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
     ));
     take(crate::crypto_config::check(s));
     for (i, a) in s.threats.attackers.iter().enumerate() {
+        if let Err(crate::EngineError::Scenario(ScenarioError::Conflict {
+            field,
+            conflict: why,
+        })) = crate::phase2::evasion_params(&a.id, &a.params)
+        {
+            e.push(conflict(
+                &field.replace("threats.attackers[]", &format!("threats.attackers[{i}]")),
+                why,
+            ));
+        }
         if let Some(kind) =
             a.id.strip_prefix("threat/attacker/legacy/")
                 .and_then(v2xw_threat::AttackKind::parse)

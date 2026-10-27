@@ -72,7 +72,18 @@ def fates(d, run):
     for f in ("evicted_quota", "decayed_out", "expired", "uploaded", "held_at_end", "stored"):
         d["x.fate." + f] = allf.count(f)
     d["x.fate.sig"] = hashlib.sha256(json.dumps(sorted(rows, key=lambda x: (x[0], x[1], x[2]))).encode()).hexdigest()
-    d["x.ma.received"] = sum(1 for _ in jl(os.path.join(run, "jsonl", "ma_received.jsonl")))
+    rx = list(jl(os.path.join(run, "jsonl", "ma_received.jsonl")))
+    d["x.ma.received"] = len(rx)
+    # P1-E8: the MA view's digest (order-free), and how the reports about attackers read.
+    keyed = sorted(json.dumps(r, sort_keys=True) for r in rx)
+    d["x.ma.sig"] = hashlib.sha256("\n".join(keyed).encode()).hexdigest()
+
+    def locked_share(rs):
+        return (sum(1 for r in rs if r["secmark_phase_ms"] <= 1 or r["secmark_phase_ms"] >= 49) / len(rs)) if rs else None
+    att = [r for r in rx if r["report_id"] in attack]
+    d["x.ma.attack_reports"] = len(att)
+    d["x.ma.attack_locked_share"] = locked_share(att)
+    d["x.ma.honest_locked_share"] = locked_share([r for r in rx if r["report_id"] not in attack])
 
 
 def ma(d, run):
@@ -86,6 +97,13 @@ def ma(d, run):
     d["x.ma.attackers"] = max(int(r["attackers"]) for r in rows)
     d["x.ma.unsound_honest_max"] = max([int(r["honest_blocked"]) for r in rows if r["sound"] != "true"] or [0])
     d["x.ma.sound_honest_nonzero"] = sorted(r["rule"] + ":" + r["params"] for r in sound if int(r["honest_blocked"]) > 0)
+    # P1-E8: the attack budget (s, summed over attackers and the family's sound parameter
+    # rows) and the attackers revoked, per rule family.
+    for fam in sorted({r["rule"] for r in sound}):
+        fr = [r for r in sound if r["rule"] == fam]
+        if "attack_budget_s" in fr[0]:
+            d["x.ma.budget." + fam] = round(sum(float(r["attack_budget_s"]) for r in fr), 1)
+        d["x.ma.revoked." + fam] = sum(int(r["attackers_revoked"]) for r in fr)
 
 
 def e4(d, run):

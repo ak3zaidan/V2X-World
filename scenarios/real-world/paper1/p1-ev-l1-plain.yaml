@@ -1,0 +1,11 @@
+# P1-E8: p1-ev-plain.yaml with every OBU locked (no benign free class to hide in).
+schema: v2xw/scenario/1
+meta:
+  base: p1-ev-plain.yaml
+  name: Paper 1 evasion l1-plain
+  description: p1-ev-plain.yaml with every OBU locked (no benign free class to hide in).
+  tags: [paper1, validation, ma-replay, evasion]
+actors:
+  vehicles:
+    bsm_timing:
+      locked_share: 1.0

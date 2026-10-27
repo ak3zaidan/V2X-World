@@ -149,6 +149,7 @@
 #![forbid(unsafe_code)]
 
 pub mod attack;
+pub mod attack_evasion;
 pub mod attack_ext;
 pub mod attack_legacy;
 pub mod attack_rsu;
@@ -173,6 +174,7 @@ pub use attack::{
     HonestClaim, InfraClaim, JamProfile, MAX_MSDU_BYTES, RawEnergy, falsified_count, is_falsified,
     is_falsified_extended, log_actions,
 };
+pub use attack_evasion::{BenignClassMimic, Disguise, EvasionKind};
 pub use attack_ext::{ExtendedAttackKind, ExtendedAttacker, ExtendedAttackerParams, LaneHint};
 pub use attack_legacy::{LegacyAttacker, LegacyAttackerParams, Magnitudes};
 pub use attack_rsu::{CompromisedRsu, ForwardDecision, RsuAttackKind, RsuAttackParams};

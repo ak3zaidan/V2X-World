@@ -5548,6 +5548,9 @@ impl Engine {
         let mut claimed_generation = tx.generation_time;
         let mut bsm = tx.bsm;
         let mut ghosts: Vec<v2xw_threat::attack::Emission> = Vec::new();
+        // The 95 % radius an evasion attacker states in place of its own estimate
+        // (`v2xw_threat::attack_evasion`).
+        let mut stated_accuracy: Option<f64> = None;
         if !p2pcd && self.phase2.as_ref().is_some_and(|p| p.is_attacker(node)) {
             let actor = self
                 .node_actor
@@ -5675,6 +5678,12 @@ impl Engine {
                         .div_euclid(1_000_000);
                     bsm.sec_mark_ms = Some((i128::from(sm) + shift_ms).rem_euclid(60_000) as u16);
                 }
+                // The device-class disguise (P1-E8): a constant secMark shift off the fix
+                // epoch, and the accuracy the message states.
+                if let (Some(sm), Some(shift)) = (bsm.sec_mark_ms, e.sec_mark_shift_ms) {
+                    bsm.sec_mark_ms = Some(((u32::from(sm) + u32::from(shift)) % 60_000) as u16);
+                }
+                stated_accuracy = e.stated_accuracy_m;
             }
         }
         // The passive privacy observer hears the safety frame when it goes on the air
@@ -5728,7 +5737,10 @@ impl Engine {
             p.note_broadcast_accuracy(
                 crate::phase2::digest_bytes(&cred.digest),
                 claimed_generation,
-                crate::phase2::broadcast_accuracy_95_m(tx.msg_type, b),
+                crate::phase2::stated_accuracy_95_m(
+                    tx.msg_type,
+                    stated_accuracy.unwrap_or(b.semi_major_m),
+                ),
             );
         }
         // The transmit power is congestion control's, not the scenario's: J2945/1 controls

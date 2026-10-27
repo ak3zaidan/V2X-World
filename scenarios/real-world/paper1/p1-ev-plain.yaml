@@ -1,0 +1,15 @@
+# P1-E8 base: p1-ma-l1.yaml at the Tampa locked share (0.25), with the 3 % constant-position
+# attackers from 30 s undisguised. The evasion runs change the attacker only. 60 s live after
+# the 30 s warm-up (q60): the 120 s first written here peaked at 483 MB, over the small run slot.
+schema: v2xw/scenario/1
+meta:
+  base: p1-ma-l1.yaml
+  name: Paper 1 evasion plain
+  description: >-
+    The quarter-fleet MA-replay run at a 25 % locked share, 3 % ConstPos
+    attackers without a disguise (the P1-E8 reference).
+  tags: [paper1, validation, ma-replay, evasion]
+actors:
+  vehicles:
+    bsm_timing:
+      locked_share: 0.25

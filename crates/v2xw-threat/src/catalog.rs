@@ -20,10 +20,12 @@
 //! | Legacy renderings (28 ported + selective dropping) | 29 | [`crate::attack_legacy`] |
 //! | New families of §2.2 | 8 | [`crate::attack_ext`] |
 //! | Compromised road-side unit | 6 | [`crate::attack_rsu`] |
+//! | Evasion of the MA's device-class features | 1 | [`crate::attack_evasion`] |
 //! | Report poisoning | 1 | [`crate::poison`] |
 //! | Privacy observer | 1 | [`crate::privacy`] |
 
 use crate::attack::{AttackFamily, AttackKind};
+use crate::attack_evasion::EvasionKind;
 use crate::attack_ext::ExtendedAttackKind;
 use crate::attack_rsu::RsuAttackKind;
 
@@ -36,6 +38,8 @@ pub enum CatalogEntry {
     New(ExtendedAttackKind),
     /// A compromised road-side unit's abuse.
     Rsu(RsuAttackKind),
+    /// Evasion of the MA's device-class features (P1-E8).
+    Evasion(EvasionKind),
     /// An insider filing false misbehaviour reports.
     ReportPoisoning,
     /// A passive adversary measuring how long it can track a vehicle.
@@ -50,6 +54,7 @@ impl CatalogEntry {
             CatalogEntry::Legacy(k) => k.as_str(),
             CatalogEntry::New(k) => k.as_str(),
             CatalogEntry::Rsu(k) => k.as_str(),
+            CatalogEntry::Evasion(k) => k.as_str(),
             CatalogEntry::ReportPoisoning => "ReportPoisoning",
             CatalogEntry::PrivacyObserver => "PrivacyObserver",
         }
@@ -62,6 +67,7 @@ impl CatalogEntry {
             CatalogEntry::Legacy(k) => k.family(),
             CatalogEntry::New(k) => k.family(),
             CatalogEntry::Rsu(k) => k.family(),
+            CatalogEntry::Evasion(k) => k.family(),
             CatalogEntry::ReportPoisoning => AttackFamily::Poisoning,
             CatalogEntry::PrivacyObserver => AttackFamily::Privacy,
         }
@@ -74,6 +80,7 @@ impl CatalogEntry {
             CatalogEntry::Legacy(_) => crate::attack_legacy::MODEL_ID,
             CatalogEntry::New(_) => crate::attack_ext::MODEL_ID,
             CatalogEntry::Rsu(_) => crate::attack_rsu::MODEL_ID,
+            CatalogEntry::Evasion(_) => crate::attack_evasion::MODEL_ID,
             CatalogEntry::ReportPoisoning => crate::poison::MODEL_ID,
             CatalogEntry::PrivacyObserver => crate::privacy::MODEL_ID,
         }
@@ -87,7 +94,7 @@ impl CatalogEntry {
     #[must_use]
     pub const fn touches_the_air(self) -> bool {
         match self {
-            CatalogEntry::Legacy(_) | CatalogEntry::New(_) => true,
+            CatalogEntry::Legacy(_) | CatalogEntry::New(_) | CatalogEntry::Evasion(_) => true,
             CatalogEntry::Rsu(k) => k.is_over_the_air(),
             CatalogEntry::ReportPoisoning | CatalogEntry::PrivacyObserver => false,
         }
@@ -102,6 +109,7 @@ impl CatalogEntry {
             .collect();
         out.extend(ExtendedAttackKind::ALL.into_iter().map(CatalogEntry::New));
         out.extend(RsuAttackKind::ALL.into_iter().map(CatalogEntry::Rsu));
+        out.extend(EvasionKind::ALL.into_iter().map(CatalogEntry::Evasion));
         out.push(CatalogEntry::ReportPoisoning);
         out.push(CatalogEntry::PrivacyObserver);
         out
@@ -110,7 +118,11 @@ impl CatalogEntry {
     /// How many attacks the catalogue holds.
     #[must_use]
     pub fn count() -> usize {
-        AttackKind::ALL.len() + ExtendedAttackKind::ALL.len() + RsuAttackKind::ALL.len() + 2
+        AttackKind::ALL.len()
+            + ExtendedAttackKind::ALL.len()
+            + RsuAttackKind::ALL.len()
+            + EvasionKind::ALL.len()
+            + 2
     }
 
     /// Parses any name in the catalogue.
@@ -124,6 +136,9 @@ impl CatalogEntry {
         }
         if let Some(k) = RsuAttackKind::parse(name) {
             return Some(CatalogEntry::Rsu(k));
+        }
+        if let Some(k) = EvasionKind::parse(name) {
+            return Some(CatalogEntry::Evasion(k));
         }
         match name {
             "ReportPoisoning" => Some(CatalogEntry::ReportPoisoning),
@@ -157,7 +172,7 @@ mod tests {
     fn the_catalogue_is_the_legacy_twenty_nine_plus_the_new_families() {
         let all = CatalogEntry::all();
         assert_eq!(all.len(), CatalogEntry::count());
-        assert_eq!(all.len(), 29 + 8 + 6 + 2);
+        assert_eq!(all.len(), 29 + 8 + 6 + 1 + 2);
         // The legacy entries come first, in the legacy order, so a per-attack table from a
         // ported run lines up row for row with the legacy corpus.
         for (i, k) in AttackKind::ALL.into_iter().enumerate() {

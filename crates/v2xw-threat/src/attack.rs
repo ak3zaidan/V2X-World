@@ -561,6 +561,19 @@ pub struct Emission {
     pub replayed: bool,
     /// Infrastructure messages this node falsifies — a compromised road-side unit only.
     pub infra: Vec<InfraClaim>,
+    /// A constant shift, ms, the host adds to the BSM's `secMark` (wrapped at the minute).
+    ///
+    /// `None` is the device's own `secMark`. `Some` is the device-class disguise of
+    /// [`crate::attack_evasion`]: a device whose `secMark` sits on the GNSS fix epoch
+    /// ("locked") restamps it off the epoch so that the secMark phase the Misbehaviour
+    /// Authority reads from the evidence BSMs looks like the free class's. A constant shift
+    /// leaves every consecutive-BSM `Δt` unchanged, so it costs the attacker no extra
+    /// RandomPosition trigger.
+    pub sec_mark_shift_ms: Option<u16>,
+    /// The positional accuracy, 95 % radius in metres, the message states (J2735
+    /// `PositionalAccuracy`), in place of the sender's own estimate. `None` is the
+    /// sender's own estimate.
+    pub stated_accuracy_m: Option<f64>,
 }
 
 impl Emission {
@@ -595,6 +608,8 @@ impl Emission {
             raw_energy: None,
             replayed: false,
             infra: Vec::new(),
+            sec_mark_shift_ms: None,
+            stated_accuracy_m: None,
         }
     }
 

@@ -1,0 +1,16 @@
+# P1-E8: p1-ev-plain.yaml with the attackers as threat/attacker/evasion/BenignClassMimic
+# over the same ConstPos payload: no disguise; the null, the MA must receive what it receives in p1-ev-plain.
+schema: v2xw/scenario/1
+meta:
+  base: p1-ev-plain.yaml
+  name: Paper 1 evasion none
+  description: p1-ev-plain.yaml with the ConstPos attackers disguised (no disguise; the null, the MA must receive what it receives in p1-ev-plain).
+  tags: [paper1, validation, ma-replay, evasion]
+threats:
+  attackers:
+    - id: threat/attacker/evasion/BenignClassMimic
+      fraction: 0.03
+      params: {payload: ConstPos}
+      schedule:
+        from_s: 30.0
+        to_s: 172800.0
