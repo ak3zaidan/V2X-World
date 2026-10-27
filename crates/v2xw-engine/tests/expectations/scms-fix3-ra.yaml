@@ -35,6 +35,9 @@ runs:
   FS:
     scenario: scenarios/scms-fix3/slow-aca.yaml
     note: fix
+  FSL:
+    scenario: scenarios/scms-fix3/slow-aca-late.yaml
+    note: fix; the ACA 4 s slow from 30 s only (after the top-offs' weeks fell due)
   FH:
     scenario: scenarios/scms-fix3/h2.yaml
     note: fix; ra-maxPreloadTime 2 weeks (each later week is an in-run weekly job), ACA slow
@@ -134,6 +137,15 @@ rows:
   measure: topup mean, ms
   expect: 'FS within +-10 % of F: an ACA slow in the run does not delay a week the RA generated before the request'
   source: '[PRIMER] p.6; ScmsRun::generate_past_due (the job runs at its due instant, here t = 0 to 20 s, under the faults then; its file is held long before the 60 s top-ups)'
+  measured: pending
+  verdict: pending
+- id: RA.slow-aca-late-held
+  base: F
+  variant: FSL
+  area: metrics
+  measure: topup mean, ms
+  expect: 'FSL within +-10 % (+50 ms) of F: the weeks the 60 s top-offs ask for fell due when the fleet was accepted (before 30 s) and were generated with the ACA on time, so a slowdown from 30 s does not reach them'
+  source: '[PRIMER] p.6; [CAMP122] 5.2.7.6.4 (the RA generates the horizon at acceptance); written after FS failed, before FSL ran'
   measured: pending
   verdict: pending
 - id: RA.slow-aca-old
