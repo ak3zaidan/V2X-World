@@ -7261,7 +7261,44 @@ impl Phase2 {
     pub fn crl_download_size(&mut self, node: NodeId) -> u32 {
         let (version, _, secured) = self.published_crl_for(node);
         let h = self.provider_of_device(device_of(node));
+        if secured.is_empty() && self.etsi.is_none() {
+            return self.composite_estimate(h);
+        }
         self.composite_size(h, version, &secured)
+    }
+
+    /// The composite CRL vehicle RA `h` serves when no list was signed (the 1609.2.1 PDU
+    /// layer off, as under a post-quantum KEM): IEEE 1609.2.1 §6.3.5.8's `CompositeCrl`
+    /// is every CTL-listed CRACA's `SecuredCrl` plus the home `MultiSignedCtl`, so it is
+    /// the empty composite's encoding (the CTL and the sequence header, exact) plus each
+    /// provider's list under the size model ([`ScmsSizes::crl`]). The CRL is signed, not
+    /// encrypted, so the KEM changes none of it. It was one list of all entries (292 B
+    /// with none), against the 3,298 B composite the same RA serves with the PDU layer on
+    /// (live-scms KEM: the Uu downlink lost 175 kB of CRL fetches).
+    fn composite_estimate(&self, h: usize) -> u32 {
+        let sizes = &self.home().state.sizes;
+        let visible = self.visible_versions(h);
+        let lists: u32 = (0..self.crl_feeds.len())
+            .filter(|k| !self.provider_off_ctl(*k))
+            .map(|k| {
+                // Before a provider's first in-run publication reaches this RA it
+                // serves that provider's list from before the run (its store's).
+                let n = visible.iter().find(|(j, _)| *j == k).map_or_else(
+                    || self.runs.get(k).map_or(0, |r| r.state.crl_store.entries.len()),
+                    |(_, v)| v.entries.len(),
+                );
+                let n = u32::try_from(n).unwrap_or(u32::MAX);
+                crl_bytes(sizes, n).bytes()
+            })
+            .fold(0u32, u32::saturating_add);
+        let ctl = self
+            .runs
+            .get(h)
+            .and_then(|r| {
+                v2xw_sec::ctl::encode_composite_crl_coer(&[], &r.state.gov.ctl.spdu).ok()
+            })
+            .map_or(0, |b| u32::try_from(b.len()).unwrap_or(u32::MAX));
+        lists.saturating_add(ctl)
     }
 
     /// The bytes of a composite CRL of `secured` under provider `h`'s home CTL; the
@@ -9261,6 +9298,53 @@ mod join_crl_tests {
 #[cfg(test)]
 mod provider_failure_tests {
     use super::*;
+
+    /// Live-scms finding 4 (KEM download bytes, docs/validation/live-scms-2026-10-25.md):
+    /// with the 1609.2.1 PDU layer off (a post-quantum KEM) a vehicle's CRL fetch was
+    /// sized as one list of all entries (292 B with none), while the RA serves the
+    /// 1609.2.1 §6.3.5.8 composite (every CRACA's `SecuredCrl` and the home CTL: 3,298 B
+    /// in live-scms L). The CRL is signed, not encrypted, so the KEM must not change it.
+    /// Fault (the old `crl_size(version)` estimate): the modelled fetch is about a tenth
+    /// of the real one.
+    #[test]
+    fn a_crl_fetch_without_the_pdu_layer_is_sized_as_the_composite_the_ra_serves() {
+        let build = |kem: &str| {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+            let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+            s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+            s.security.protocol = Some(crate::scenario::ModelChoice {
+                id: CAMP_SCMS.to_string(),
+                params: serde_json::json!({}),
+            });
+            s.security.kem = kem.to_string();
+            let engine = crate::Engine::build(s, "").expect("builds");
+            let mut p = Phase2::build(engine.scenario(), engine.world())
+                .expect("builds")
+                .expect("an SCMS backend");
+            p.advance(10_000_000_000);
+            p
+        };
+        let node = NodeId::new(0);
+        let mut real = build("ecies-p256");
+        let mut modelled = build("ml-kem-768");
+        assert!(
+            modelled.published_crl_for(node).2.is_empty() && modelled.prerun_crl.3.is_empty(),
+            "ml-kem-768 turns the PDU layer off: nothing is signed"
+        );
+        let signed = {
+            let s = real.published_crl_for(node).2;
+            if s.is_empty() { real.prerun_crl.3.clone() } else { s }
+        };
+        assert!(signed.len() >= 2, "every CRACA's list is signed: {}", signed.len());
+        let r = real.composite_size(0, 0, &signed);
+        let m = modelled.crl_download_size(node);
+        let ratio = f64::from(m) / f64::from(r);
+        eprintln!("composite CRL: signed {r} B, modelled {m} B (ratio {ratio:.3})");
+        assert!(
+            (0.8..=1.25).contains(&ratio),
+            "the modelled CRL fetch ({m} B) is not the composite the RA serves ({r} B)"
+        );
+    }
 
     fn two_providers(failures: &[(&str, f64, f64)]) -> Phase2 {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
