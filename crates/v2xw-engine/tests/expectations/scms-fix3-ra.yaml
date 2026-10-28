@@ -133,6 +133,21 @@ rows:
   measured: 'B 13,465.5 against F 13,465.5 bytes per top-up (0 %)'
   verdict: pass
   recheck_3cbc95a4: 'F 17,019.3 B per top-up (G recorded 13,467.6, +26 %); backend 2,025,879 B (G 1,720,133). Not judgeable here (B is pre-fix); the shift between the scmsra third build and 3cbc95a4 is untraced. Candidate, not shown: d96f6d58 (a CRL fetch without a signed list is sized as the 1609.2.1 composite, phase2.rs:7541-7584)'
+  recheck_9d0fbc2c: 'traced 2026-10-28 (trace track): explained, not a byte-accounting change. 9d0fbc2c gives the
+    3cbc95a4 values (17,019.3 B per top-up, backend 2,025,879 B). d96f6d58 is not the cause: base.yaml runs
+    with the PDU layer on (real SecuredCrl, so crl_download_size never reaches composite_estimate), and
+    crl_downloads is 0 (all 180 polls were 412s). The measure divides all Uu bytes by the top-ups, and
+    71 % of those bytes are SM-MBR uploads: 660 report ee>ra messages, 714,657 B (pki.flow). The top-up
+    exchange itself (.info, batch request and download, file request and response) is 221,859 B, or
+    3,760 B per top-up. Reports are a property of the realisation, and that changed: engine events on the
+    same seed were 883,278 (B, F, G) and are now 886,721. In the range are f4a0f5cc (vehicle node ids no
+    longer count the scenario''s one RSU, run.rs:774, so every node-keyed draw is re-keyed) and 57272543
+    (the DCC gate per channel). Seed spread on 9d0fbc2c: _5EED 17,019 B per top-up / 660 reports /
+    backend 2.03 MB; _0001 22,537 / 908 / 2.93 MB; _0002 16,312 / 536 / 2.13 MB. G''s 13,468 B fits a
+    draw with about 466 reports at the same non-report bytes. The +305,746 B on the backend is the same
+    kind of term: report-forward ra>ma (300 messages, 221,871 B) and report-shared ma>ma (95, 77,310 B)
+    are reports, and the pre-generation hops scale with the accounts present. To judge the device side of
+    a top-up, measure the topup flow''s bytes, not all Uu'
 - id: RA.events
   base: B
   variant: F
@@ -279,6 +294,18 @@ rows:
   verdict: pass
 # --- (4) roadside application certificates -------------------------------------------------
   recheck_3cbc95a4: 'PQF revoke decisions 2, rsu_crls_installed 120, rsu_revoked_receptions 1,794 (all > 0): holds; each smaller than the branch run (3 / 150 / 3,864), untraced (the PQF digest 28e00b62abd7)'
+  recheck_9d0fbc2c: 'traced 2026-10-28 (trace track), PQF on both releases, events level. 9d0fbc2c: revoke
+    decisions 3, rsu_crls_installed 120, rsu_revoked_receptions 2,071, relay uploads 26 (all > 0: holds).
+    3cbc95a4: 2 / 120 / 1,794. The drop from 3 to 2 was the scmsa PLV defect, since fixed in cfc2e13b.
+    PQ turns the PDU layer off, and on the modelled path only the core ACA opened the sealed PLVs, so
+    every provider-b pool failed and those devices signed with the period-0 stand-in. On 3cbc95a4 that
+    gives Invalid 71,775, crl_period_refusals 809, and no provider-a<-provider-b verification at all.
+    Attacker node 46 then had 0 reports and was never decided. On 9d0fbc2c: Invalid 0, refusals 0, node 46
+    has 116 reports and is decided at 67.0 s. The other two moves (installs 150 -> 120, receptions
+    3,864 -> 2,071) are a new realisation since f4a0f5cc renumbered the vehicles past the 30 units. The
+    first decision is now at 51.5 s, against the 35.6 s revocation this file''s comment describes.
+    Publications come at 60, 70 and 110 s, so each of the 30 units installs 4 lists (120), not 5. The
+    scenario comment''s node ids (56, 82) are pre-renumbering'
 - id: RSU.ssm-refused-before
   base: CB
   variant: CB
