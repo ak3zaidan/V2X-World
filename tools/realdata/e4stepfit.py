@@ -4,6 +4,8 @@
   python3 -I tools/realdata/e4stepfit.py fit <tampa.csv> [--boot N] > fit.json
   python3 -I tools/realdata/e4stepfit.py predict <wyoming.csv> fit.json [--wyoming-speeds]
   python3 -I tools/realdata/e4stepfit.py validate <wyoming.csv>
+  python3 -I tools/realdata/e4stepfit.py yaml fit.json [--wyoming <wyoming.csv>]
+  python3 -I tools/realdata/e4stepfit.py timing fit.json data/calibration/bsm-timing-cvpilot.yaml
 
 `fit` reads Tampa only (the training set). `predict` and `validate` read Wyoming only as the
 KS reference and for its speed distribution (a covariate the engine scenario is matched to,
@@ -647,7 +649,9 @@ def cmd_fit(path, boot=0):
         s_m10, s_010, _ = chain_rates(grp, VMIN)
         g = {"ids": len(grp), "transition_counts": {"%d%+d" % k: n for k, n in c.items()},
              "stay_minus1": s_m, "stay_zero": s_0, "stay_minus1_v10": s_m10, "stay_zero_v10": s_010,
-             "pairs_v10": sum(1 for _, _, seq in grp for x in seq if x is not None and x["v"] >= VMIN)}
+             "pairs_v10": sum(1 for _, _, seq in grp for x in seq if x is not None and x["v"] >= VMIN),
+             "speed_p50_v10": quant([x["v"] for _, _, seq in grp for x in seq
+                                     if x is not None and x["v"] >= VMIN], (0.5,))[0]}
         for wname, per_id in (("walk", True), ("walk_per_pair", False)):
             wp = walk_pairs(grp, per_id)
             pn = calib.position_noise({"pairs": wp}, V3_OUTPUT_NOISE[0], V3_OUTPUT_NOISE[1], 0.0)
@@ -689,8 +693,10 @@ def cmd_fit(path, boot=0):
         s_m, s_0, c = chain_rates([(tid, pm, seq)])
         if sum(c.values()) >= ID_MIN_PAIRS and 0 < s_m < 1 and 0 < s_0 < 1:
             per.append({"pairs": sum(c.values()), "stay_minus1": s_m, "stay_zero": s_0,
-                        "p_minus1": (1 - s_0) / ((1 - s_0) + (1 - s_m))})
+                        "p_minus1": (1 - s_0) / ((1 - s_0) + (1 - s_m)),
+                        "counts": [c[(-1, -1)], c[(-1, 0)], c[(0, 0)], c[(0, -1)]]})
     doc["chain"]["per_id"] = per
+    doc["chain"]["heterogeneity"] = heterogeneity([r["counts"] for r in per])
     # state-dependent steps over every chain-ID pair (the joint model)
     jobs = joint_pairs(chain)
     fits = []
@@ -720,6 +726,31 @@ def cmd_fit(path, boot=0):
             ("along_p50_m", lambda r: r["size"]["along_p50_m"]), ("along_p90_m", lambda r: r["size"]["along_p90_m"]),
             ("cross_p50_m", lambda r: r["size"]["cross_p50_m"]), ("cross_p90_m", lambda r: r["size"]["cross_p90_m"]))}
     return doc
+
+
+def _chi2_sf(x, df):
+    """Wilson-Hilferty: P(chi2_df > x)."""
+    if df <= 0:
+        return 1.0
+    z = ((x / df) ** (1 / 3) - (1 - 2 / (9 * df))) / math.sqrt(2 / (9 * df))
+    return 0.5 * math.erfc(z / math.sqrt(2))
+
+
+def heterogeneity(counts):
+    """Do the chain IDs share one pair of rates? Pearson chi-square of the IDs x {stay, leave}
+    table from each state ([c(-1,-1), c(-1,0), c(0,0), c(0,-1)] per ID)."""
+    out = {}
+    for name, (i, j) in (("stay_minus1", (0, 1)), ("stay_zero", (2, 3))):
+        rows = [(r[i], r[j]) for r in counts if r[i] + r[j] > 0]
+        tot = sum(a + b for a, b in rows)
+        pa = sum(a for a, _ in rows) / tot
+        x2 = 0.0
+        for a, b in rows:
+            n = a + b
+            ea, eb = n * pa, n * (1 - pa)
+            x2 += (a - ea) ** 2 / max(ea, 1e-9) + (b - eb) ** 2 / max(eb, 1e-9)
+        out[name] = {"chi2": x2, "df": len(rows) - 1, "p": _chi2_sf(x2, len(rows) - 1)}
+    return out
 
 
 def random_component(rng, walk):
@@ -830,6 +861,22 @@ def cmd_predict(wy_path, fit_path, n=20000, seeds=(1, 2, 3), v_p50=ENGINE_V_P50)
         print("| %s | %.3f (%.3f-%.3f) | %.2f | %s | %s | %s |" % (
             name, m, min(ks_s), max(ks_s), 100 * sorted(at_s)[len(at_s) // 2],
             " / ".join("%.2f" % (100 * x) for x in qs), "-" if o5 is None else "%.2f" % o5, note))
+    # held-out structure: P(residual > 5 cm | stamp transition), Wyoming against candidates C, E
+    wy = [x for _, _, seq in sequences(normalise.stream_ids(wy_path, "wyoming")) for x in seq
+          if x is not None and x["v"] >= VMIN]
+    cands = {name: kw for name, kw, _ in candidates(fit)}
+    print("| P(r > 5 cm \\| transition) | -1 -> -1 | -1 -> 0 | 0 -> 0 | 0 -> -1 |")
+    print("|---|---|---|---|---|")
+    labs = ((-1, -1), (-1, 0), (0, 0), (0, -1))
+
+    def share(rs, ls, lb):
+        h = [r > 0.05 for r, ll in zip(rs, ls) if ll == lb]
+        return "%.3f (%d)" % (sum(h) / len(h), len(h)) if h else "-"
+    print("| Wyoming (held out) | %s |" % " | ".join(share([x["r"] for x in wy], [(x["o1"], x["o2"]) for x in wy], lb)
+                                                  for lb in labs))
+    for name in [c for c in cands if c.startswith(("C ", "E chain"))]:
+        res, lab = emulate(speeds, n, seed=1, **cands[name])
+        print("| %s | %s |" % (name, " | ".join(share(res, lab, lb).split(" ")[0] for lb in labs)))
     reps = fit.get("joint_boot") or []
     if reps:
         # candidate E on each bootstrap replicate of the Tampa fit (training-sample spread)
@@ -870,6 +917,160 @@ def cmd_validate(wy_path, n=20000):
     return diffs
 
 
+def _f(x, nd=6):
+    return ("%%.%dg" % nd) % x
+
+
+def _lst(xs, nd=6):
+    return "[" + ", ".join(_f(x, nd) for x in xs) + "]"
+
+
+def _ci(fit, name, scale=1.0, nd=3):
+    ci = fit.get("joint_ci", {}).get(name)
+    return "" if not ci else "  # 95 %% bootstrap over chain IDs %s-%s" % (_f(scale * ci[0], nd), _f(scale * ci[2], nd))
+
+
+def cmd_yaml(fit_path, wy_path=None):
+    """The candidates file, data/calibration/bsm-stamp-steps-candidates.yaml."""
+    import contextlib
+    import io
+    with open(fit_path) as f:
+        fit = json.load(f)
+    ch, fx, j, sp, st = fit["chain"], fit["fixed"], fit["joint"], fit["speed"], fit["step"]
+    sz, sz0 = j["size"], j["size_stay_zero"]
+    cw = ch[fit["chosen_walk"]]
+    pm = (1 - ch["stay_zero"]) / ((1 - ch["stay_zero"]) + (1 - ch["stay_minus1"]))
+    het = ch.get("heterogeneity", {})
+    L = [
+        "# CANDIDATE (2026-10-28): the locked-class stamp chain refitted on Tampa's chain devices,",
+        "# with its position steps fitted jointly in rate and size, steps tied to the stamp state,",
+        "# and the speed change that comes with a step. Supersedes the step numbers of",
+        "# bsm-stamp-epoch-candidates.yaml (2026-10-27), whose rate counted only steps over 5 cm",
+        "# and whose size came from the pairs over 5 cm. Analysis: research/synthesis/",
+        "# p1-realdata-baseline.md section 7.5. Derived statistics only; no raw rows.",
+        "# GENERATED by `python3 -I tools/realdata/e4stepfit.py yaml fit.json --wyoming <wyoming.csv>`",
+        "# from `e4stepfit.py fit <tampa.csv> --boot 40` - do not edit by hand.",
+        "provenance:",
+        "  sources:",
+        "    - {dataset: nm7w-nvbm, role: fit, note: \"Tampa, every fitted number; pinned query of tools/realdata/sources.py\"}",
+        "    - {dataset: 7qu7-j8rx, role: held_out, note: \"Wyoming, one OBU: read only by predict (KS reference, speed covariate)\"}",
+        "  manifest_sha256: ee6eeab3f926d0fefac2e790d0dea9c5411531d7823d39558620a5521189d412",
+        "  tool: tools/realdata/e4stepfit.py (tests: test_e4stepfit.py)",
+        "  pairs: \"msgCnt +1, secMark dt within 3 ms of 50/100/150 ms (fits: 100 ms nominal), v1 >= 10 m/s; "
+        "o = secMark offset from the nearest 50 ms epoch\"",
+        "device_split:  # Tampa locked IDs (>= 70 % of secMarks within 1 ms of a 50 ms epoch)",
+        "  locked_ids: %d" % fit["locked_ids"],
+        "  chain_ids: %d      # P(o = -1) >= %s: the two-state stamp chain (Wyoming's OBU is one)" % (
+            fit["chain_ids"], _f(CHAIN_MIN)),
+        "  fixed_ids: %d      # never o = -1" % fit["fixed_ids"],
+        "model: epoch_stamp_chain_state_steps",
+        "position: fix_epoch",
+        "stamp_offset_ms: [-1, 0]",
+        "profiles:",
+        "  tampa_chain:   # candidate E, recommended: Tampa chain devices, joint model (lowest BIC)",
+        "    stay_minus1: %s%s" % (_f(ch["stay_minus1"], 4), _ci(fit, "stay_minus1")),
+        "    stay_zero: %s%s" % (_f(ch["stay_zero"], 4), _ci(fit, "stay_zero")),
+        "    p_offset_minus1: %s" % _f(pm, 4),
+        "    transition_counts: {m1_m1: %d, m1_0: %d, 0_0: %d, 0_m1: %d}   # all speeds" % (
+            ch["transition_counts"]["-1-1"], ch["transition_counts"]["-1+0"], ch["transition_counts"]["+0+0"],
+            ch["transition_counts"]["+0-1"]),
+        "    # the error walk without the steps (core): Gaussian scale mixture per 100 ms epoch",
+        "    walk: {dist: normal_mixture, tau_s: %s, p: %s, along_m: %s, cross_m: %s}" % (
+            _f(j["core"]["tau_s"]), _lst(j["core"]["p"]), _lst(j["core"]["along_m"]), _lst(j["core"]["cross_m"])),
+        "    step:   # a lasting position correction; independent signs and lognormal sizes",
+        "      prob_on_transition: %s%s   # at a 0 -> -1 BSM" % (_f(j["prob_on_transition"], 4),
+                                                             _ci(fit, "prob_on_transition")),
+        "      prob_stay_zero: %s%s   # at a 0 -> 0 BSM" % (_f(j["prob_stay_zero"], 4), _ci(fit, "prob_stay_zero")),
+        "      prob_from_minus1: 0.0   # MLE %s; Wyoming (held out): 0 of 1282 -1 -> -1 pairs over 5 cm" % (
+            _f(j["prob_from_minus1"], 2)),
+        "      along_cm: {p50: %s, p90: %s}%s" % (_f(100 * sz["along_p50_m"], 3), _f(100 * sz["along_p90_m"], 3),
+                                              _ci(fit, "along_p50_m", 100)),
+        "      cross_cm: {p50: %s, p90: %s}%s" % (_f(100 * sz["cross_p50_m"], 3), _f(100 * sz["cross_p90_m"], 3),
+                                              _ci(fit, "cross_p50_m", 100)),
+        "    speed:   # the reported speed steps with the along step and relaxes; v >= 10 m/s chain IDs",
+        "      per_m_along_mps: %s   # dv = this x along step (m), at the step BSM (%d steps)" % (
+            _f(sp["k_mps_per_m"], 3), sp["n_steps"]),
+        "      tau_s: %s           # decay of the speed offset, from the lag 0-5 slopes" % _f(sp["tau_v_s"], 3),
+        "      position_follows: %s  # share of the offset the position moves with (1: no residual later)" % (
+            _f(sp["follow"]["follow_fraction"], 3)),
+        "    # per-device rates (candidate F): chain IDs with >= %d pairs; one pair drawn per device" % ID_MIN_PAIRS,
+        "    per_device_rates: [%s]" % ", ".join("[%s, %s]" % (_f(r["stay_minus1"], 3), _f(r["stay_zero"], 3))
+                                                for r in ch["per_id"]),
+    ]
+    if het:
+        L.append("    # one rate pair for all IDs? chi-square stay_minus1 %.1f (df %d, p %.1g), stay_zero %.1f (df %d, p %.1g)" % (
+            het["stay_minus1"]["chi2"], het["stay_minus1"]["df"], het["stay_minus1"]["p"],
+            het["stay_zero"]["chi2"], het["stay_zero"]["df"], het["stay_zero"]["p"]))
+    L += [
+        "    speed_p50_mps: %s   # Tampa chain IDs, v >= 10 m/s (Wyoming 34.4)" % _f(ch["speed_p50_v10"], 3),
+        "  tampa_chain_transition_only:   # candidate C: steps at 0 -> -1 only, the walk carries the rest",
+        "    stay_minus1: %s" % _f(ch["stay_minus1"], 4),
+        "    stay_zero: %s" % _f(ch["stay_zero"], 4),
+        "    walk: {dist: normal_mixture, tau_s: %s, p: %s, along_m: %s, cross_m: %s}" % (
+            _f(cw["tau_s"]), _lst(cw["p"]), _lst(cw["along_m"]), _lst(cw["cross_m"])),
+        "    step: {prob_on_transition: %s, along_cm: {p50: %s, p90: %s}, cross_cm: {p50: %s, p90: %s}}" % (
+            _f(st["prob"], 4), _f(100 * st["along_p50_m"], 3), _f(100 * st["along_p90_m"], 3),
+            _f(100 * st["cross_p50_m"], 3), _f(100 * st["cross_p90_m"], 3)),
+        "  tampa_fixed:   # the other Tampa locked devices: stamp always on the epoch, no chain",
+        "    walk: {dist: normal_mixture, tau_s: %s, p: %s, along_m: %s, cross_m: %s}" % (
+            _f(fx["walk_per_pair"]["tau_s"]), _lst(fx["walk_per_pair"]["p"]), _lst(fx["walk_per_pair"]["along_m"]),
+            _lst(fx["walk_per_pair"]["cross_m"])),
+        "    pairs_over_5cm: %s" % _f(fx["over5_other"], 3),
+        "    speed_per_m_along_mps: %s   # over its pairs > 5 cm (%d)" % (
+            _f(fit["speed_fixed_ids"]["k_mps_per_m"], 3), fit["speed_fixed_ids"]["n"]),
+        "# Fit checks (Tampa, training): joint model log-lik %.1f, %d pairs (by first state 0->0 / 0->-1 / from -1: %s);" % (
+            j["loglik"], j["pairs"], " / ".join(str(n) for n in j["pairs_by_label"])),
+        "# emulated chain device against Tampa's own chain pairs: KS %.3f (E), %.3f (C), %.3f (C's steps on the v3 walk)." % (
+            j["in_sample_ks"], st["in_sample_ks"], st["in_sample_ks_v3_walk"]),
+    ]
+    for f in fit["joint_models"]:
+        L.append("#   joint K=%d sizes %s: log-lik %.1f, BIC %.1f" % (f["k"], "split" if f["split_sizes"] else "shared",
+                                                                      f["loglik"], f["bic"]))
+    if wy_path:
+        for v in (ENGINE_V_P50, None):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                cmd_predict(wy_path, fit_path, v_p50=v)
+            L.append("# Predicted P1-E4 (held out, emulator; engine runs reproduced within -0.009..+0.014):")
+            L += ["#   " + ln for ln in buf.getvalue().splitlines()]
+    print("\n".join(L))
+
+
+def cmd_timing(fit_path, shipped_path):
+    """data/calibration/bsm-timing-cvpilot-chain-device.yaml: the shipped v3 file with the
+    locked class's position_noise replaced by the chain devices' core walk (candidate E)."""
+    with open(fit_path) as f:
+        fit = json.load(f)
+    with open(shipped_path) as f:
+        lines = f.read().splitlines()
+    core = fit["joint"]["core"]
+    new = "    position_noise: {dist: normal_mixture, tau_s: %s, p: %s, along_m: %s, cross_m: %s}" % (
+        _f(core["tau_s"]), _lst(core["p"]), _lst(core["along_m"]), _lst(core["cross_m"]))
+    out = [
+        "# CANDIDATE (2026-10-28): data/calibration/bsm-timing-cvpilot.yaml (tools/realdata 1.3.0) with ONE",
+        "# change: the locked class's position_noise is the core walk of Tampa's chain devices from",
+        "# the joint stamp-step model (bsm-stamp-steps-candidates.yaml, profile tampa_chain), whose",
+        "# steps come from the stamp chain instead of the walk. Use it only with stamp_chain on and",
+        "# the tampa_chain steps (from state 0); without them the locked tail is missing.",
+        "# GENERATED by `python3 -I tools/realdata/e4stepfit.py timing fit.json "
+        "data/calibration/bsm-timing-cvpilot.yaml` - do not edit by hand.",
+    ]
+    cls, done = None, False
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("- name:"):
+            cls = s.split(":", 1)[1].strip()
+        if cls == "locked" and s.startswith("position_noise:") and not done:
+            out.append("    # was: " + s)
+            out.append(new)
+            done = True
+            continue
+        out.append(ln)
+    if not done:
+        raise SystemExit("no locked position_noise in " + shipped_path)
+    print("\n".join(out))
+
+
 def main(argv):
     if len(argv) >= 2 and argv[0] == "fit":
         boot = int(argv[argv.index("--boot") + 1]) if "--boot" in argv else 0
@@ -879,6 +1080,10 @@ def main(argv):
         cmd_predict(argv[1], argv[2], v_p50=None if argv[3:] == ["--wyoming-speeds"] else ENGINE_V_P50)
     elif len(argv) == 2 and argv[0] == "validate":
         cmd_validate(argv[1])
+    elif len(argv) in (2, 4) and argv[0] == "yaml":
+        cmd_yaml(argv[1], argv[3] if argv[2:3] == ["--wyoming"] else None)
+    elif len(argv) == 3 and argv[0] == "timing":
+        cmd_timing(argv[1], argv[2])
     else:
         print(__doc__)
         return 2
