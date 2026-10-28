@@ -490,6 +490,33 @@ out of scope here.
 - **P17.3** (3 h): `assign_phases` from junction geometry, with unit tests on generated
   4-leg, T and one-way junctions, and the fallback count. Main street = the higher road
   class, then more lanes.
+
+  **Done 2026-10-28 (P17.3).** `v2xw-engine/src/nema/assign.rs`: `assign_phases(world,
+  plan)`, its pure core `assign_approaches`, `assign_all` with
+  `AssignReport::fallback_counts`, and `Assignment::concurrent_foes`. The STM leaves
+  these open; the choices are:
+  - Two approaches are one street when their headings are opposite within 45°. At most
+    two streets, at least 45° apart. Otherwise the junction is `Unmapped`:
+    `too-many-approaches` (more than 4), `not-two-streets` (a Y or a skewed offset),
+    `unknown-movement`, or `skewed-crossing`.
+  - Main street ties after class and lanes go to the street with more green in the
+    junction's own plan, then to the lower edge id.
+  - Through 2 (and 4) is the approach heading most nearly north-east,
+    `cos(h − 45°)`. Eastbound and northbound are 2 and 4 on a compass grid.
+  - A left whose approach has no opposing through rides its own through (one-way
+    streets, the stem of a T). Otherwise it takes the number beside the opposing through
+    (5 beside 2, 1 beside 6, 7 beside 4, 3 beside 8) and records that through as
+    `permissive_with`.
+  - A crosswalk takes the number of the parallel through on whose right-hand side it
+    lies (STM §5.1.1). A crosswalk across a single street gets a pedestrian-only 4 or 8.
+  - The generated conflict matrices record opposing lefts as a level conflict, so
+    `concurrent_foes` flags 1+5 and 3+7 as `opposing_lefts`. The tests allow that pair
+    only.
+  - Open, for P17.6: a left from a lane it shares with the through is given its own phase
+    here. US practice gives a protected left phase only to an exclusive left lane, so
+    P17.6 should demote a shared-lane left to permissive, using the lane geometry.
+  One-way layouts are tested through the pure core, because the graph builder makes
+  two-way streets only.
 - **P17.4** (3 h): the ring state machine as a pure unit (no world):
   - min, extension, max, gap-out;
   - yellow and red clearance;

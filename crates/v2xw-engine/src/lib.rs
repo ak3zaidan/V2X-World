@@ -72,6 +72,7 @@ pub mod export;
 pub mod frag;
 pub mod hosted;
 pub mod infra;
+pub mod nema;
 pub mod manifest;
 pub mod perception;
 pub mod phase2;
