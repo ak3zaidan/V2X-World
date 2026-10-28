@@ -258,7 +258,13 @@ fn the_request_shuffle_does_not_touch_in_run_topups() {
         &v,
     );
     assert!(
-        b.between("topup", "ra", "aca") + b.between("topup", "ra", "pca") > 0,
+        // Since the weekly job runs at every boundary (52432316) those RA-ACA hops are the
+        // job's own flow, `pregeneration`, not a device's `topup`.
+        ["topup", "pregeneration"]
+            .iter()
+            .map(|f| b.between(f, "ra", "aca") + b.between(f, "ra", "pca"))
+            .sum::<usize>()
+            > 0,
         "{:?}",
         b.pairs()
     );
