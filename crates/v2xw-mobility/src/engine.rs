@@ -7357,11 +7357,35 @@ impl Mobility for NativeMobility {
                 None
             };
             let mut ev_move_right = false;
+            // Where across the lane the yielding driver pulls over to, when a sub-lane
+            // model is on (`None` keeps the lane centre): the rule's edge.
+            let mut ev_edge: Option<bool> = None;
             if let Some(ev) = ev_yield {
                 let right = snapshot
                     .adjacent_lane(world, &ego, Side::Right, actor.class.class_mask())
                     .is_some();
-                if ev.lane == actor.lane {
+                let lanes_here = world
+                    .edge(lane.edge)
+                    .lanes
+                    .iter()
+                    .filter(|l| world.lane(**l).kind.is_motorised())
+                    .count();
+                let leftmost = !world.edge(lane.edge).lanes.iter().any(|l| {
+                    let o = world.lane(*l);
+                    o.kind.is_motorised() && o.index > lane.index
+                });
+                // The rescue lane (StVO §11(2)) needs the sub-lane model to open the gap
+                // between the leftmost lane and the one beside it: every driver stays in
+                // lane, the leftmost moving to its left edge and the others to their
+                // right. Without it, and on a single lane, drivers clear the way to the
+                // right as the US rule has them do.
+                let rescue = self.lateral.is_some()
+                    && lanes_here >= 2
+                    && self.params.emergency_yield.rule == crate::rules::EmergencyYield::RescueLane;
+                if self.lateral.is_some() {
+                    ev_edge = Some(rescue && leftmost);
+                }
+                if ev.lane == actor.lane && !rescue {
                     if right {
                         ev_move_right = true;
                         accel = accel.min(0.0);
@@ -7546,6 +7570,18 @@ impl Mobility for NativeMobility {
                         .as_ref()
                         .filter(|_| actor.transition.is_none())
                         .map(|m| {
+                            // Pulled over for an emergency vehicle: to the rule's edge,
+                            // the body kept inside the lane.
+                            if let Some(left) = ev_edge {
+                                return crate::lateral::LateralDecision {
+                                    target_m: crate::lateral::pull_over_offset(
+                                        left,
+                                        ego.dims.width_m,
+                                        lane.width_m,
+                                    ),
+                                    speed_mps: crate::lateral::PULL_OVER_SPEED_LAT_MPS,
+                                };
+                            }
                             crate::lateral::decide_in_lane(
                                 &**m,
                                 &snapshot,
@@ -11613,6 +11649,81 @@ mod tests {
             "without yielding the driver still slowed: {:?}",
             off.iter().map(|x| x.1).fold(f64::INFINITY, f64::min)
         );
+    }
+
+    /// Three lanes, the sub-lane model on, an emergency vehicle in the middle lane and a
+    /// car beside it in each outer lane, 20.5 m ahead of its front: each car's offset from
+    /// its lane centre after 4 s, `(leftmost, rightmost)`.
+    fn rescue_lane_offsets(rule: crate::rules::EmergencyYield) -> (f64, f64) {
+        let world = ring(&RingParams {
+            circumference_m: 800.0,
+            segments: 4,
+            lanes: 3,
+            ..RingParams::default()
+        })
+        .expect("a ring");
+        let params = EngineParams {
+            intersections: IntersectionMode::None,
+            lane_changes: true,
+            dynamic_rerouting: false,
+            emergency_yield: EmergencyYieldParams {
+                enabled: true,
+                rule,
+                ..EmergencyYieldParams::default()
+            },
+            ..EngineParams::default()
+        };
+        let rng = RngRegistry::new(29);
+        let mut engine = NativeMobility::new(params).with_lateral(Arc::new(
+            crate::lateral::Sl2015::new(crate::lateral::Sl2015Params::default()),
+        ));
+        {
+            let mut ctx = MobilityCtx::new(0, &world, &rng);
+            engine
+                .init(&mut ctx, Box::new(NoDemand::new()))
+                .expect("init");
+        }
+        let cycle = |i: u8| -> Vec<LaneId> {
+            let c = crate::worlds::ring_cycle(&world, i);
+            c.iter().cycle().take(c.len() * 4).copied().collect()
+        };
+        let mut spawn = |class: VehicleClass, lane: u8, s: f64, v: f64| {
+            let id = engine
+                .spawn_with_route(
+                    &world,
+                    0,
+                    class,
+                    IdmPreset::Kesting2010.profile(class),
+                    cycle(lane),
+                    s,
+                )
+                .expect("spawn");
+            engine.set_speed(id, v).expect("speed");
+            id
+        };
+        let _ev = spawn(VehicleClass::Emergency, 1, 20.0, 5.0);
+        let left = spawn(VehicleClass::Passenger, 2, 45.0, 3.0);
+        let right = spawn(VehicleClass::Passenger, 0, 45.0, 3.0);
+        let mut t = 0u64;
+        for _ in 0..40 {
+            let mut ctx = MobilityCtx::new(t, &world, &rng);
+            engine.step(&mut ctx, params.step);
+            t += params.step.as_nanos();
+        }
+        (engine.actors[&left].lateral_m, engine.actors[&right].lateral_m)
+    }
+
+    #[test]
+    fn rescue_lane_on_a_three_lane_road() {
+        // StVO §11(2): the leftmost lane to the left, the others to the right.
+        let (l, r) = rescue_lane_offsets(crate::rules::EmergencyYield::RescueLane);
+        assert!(l > 0.5 && r < -0.5, "leftmost {l:.2} m, rightmost {r:.2} m");
+        // Each body stays inside its lane (3.5 m lanes on the ring by default).
+        let half = 0.5 * (3.5 - VehicleClass::Passenger.dims().width_m);
+        assert!(l <= half + 1e-9 && r >= -half - 1e-9, "{l:.3} {r:.3} past {half:.3}");
+        // The US rule pulls everyone right.
+        let (l, r) = rescue_lane_offsets(crate::rules::EmergencyYield::PullRight);
+        assert!(l < -0.5 && r < -0.5, "leftmost {l:.2} m, rightmost {r:.2} m");
     }
 
     #[test]
