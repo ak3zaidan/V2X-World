@@ -4036,6 +4036,24 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-28: fix round 5 integration (scms, stamp, traffic)
+
+One integrator in the main checkout, one heavy command at a time. All three agents had committed their work and their worktrees were clean, so no wip snapshot was needed.
+
+- **Merged `--no-ff` onto `a925db58`, in this order:** scms (`92954e11`: cache-test expectation, `security.scms.crl_overdue_scope`, F5-DOC/F5-TOPUP, owed fault proofs, MWC/MWC2) -> `00522190`; stamp (`ad923272`: `tampa_chain` profile, speed-matched `p1-e4-u`, R4.1.JAM-ED, Europe EMITTER rows) -> `c3d37161`; traffic (`85a6e802`: violations premise, `foe_will_pass`, kinematic defaults on, P17.10 nema-safety, P22.4 drape) -> `cccece18`. The only conflicts were the three branch sections in this file; all were kept. Every item compiled; none was reverted.
+- **Goldens:** only `phase2-path.json` moved, by the traffic track's declared re-bless (frame `69af34e7` -> `736a1216`, record `1bc443ed` -> `8c8c8e56`, records 10,241,996 -> 10,243,380), caused by `lateral_speed_bound`, `braking_tyre_limit` and `foe_will_pass` turning on by default. `phase2` (15 pass, 1 ignored) and `bsm_timing` (4) pass on the merged tree with the branch's digests, so no other merge interacted with them and no second re-bless was needed.
+- **Fixes after the merges:** none were needed. `cargo fmt --all` reformatted 4 files from the traffic track (`2d3b762f`, style only).
+- **Checks** (`build.rs` touched first):
+  - `cargo check --workspace --tests`: clean, known warnings only.
+  - **109 test binaries** (lib and every test binary of engine, mobility, node, radio and trafficval, including the engine's publish (lib), scenario, sensitivity and regression (`phase2`, `bsm_timing`, `trigger_ttc`, `scms_scale`) tests), one heavy.sh call each, 30-minute cap: **1,633 pass, 1 fail, 27 ignored.** `scms_knobs_runs` hit the cap after 7 of its 20 tests; the other 13 ran in one more call and all passed (20/20, the cache test included).
+  - **The 5 known failures are down to 1:** `violations`, both `pedestrian_invariants` tests and the `scms_knobs_runs` cache test now pass. Still red: `realism` kerbside (`overlaps 10 with kerbside stops, 0 without`; each overlap is a lane change beside a standing vehicle, as the traffic track reported).
+- **Release:** `cargo build --release -j 2 -p v2xw-cli --bins` finished (8 m 32 s). `v2xw-server --scenario scenarios/manhattan-5min.yaml --port 8758 --paused --speed 0` answered `/agent/status` with 200 within 4 s and was stopped by PID.
+- **Still open:**
+  - traffic: `invariants/nema-safety` is red by design (NemaPlan::vector never tests concurrent greens against the junction's matrix; 189 foe pairs on Manhattan). The fix belongs to the WP-17 owner, and NEMA should stay off by default until then. Also open: realism kerbside overlaps, the max_recall row (a list setting, so `--expect` cannot sweep it), a synthetic DEM only, and no rigid truck, bus or van power rows.
+  - scms (owner decisions; each moves the goldens): should J2945/1 count RVs at reception, and should late-stamped records be held to the next tick?
+  - stamp: P1-E4 E scores 0.099 and E with the speed change 0.0915, against the 0.092 target. The cause is the GNSS layer's body being too narrow. Per-device rates (F) are not built, and the default stamp profile is the owner's choice.
+- **Cleanup:** the worktrees and branches `worktree-wf_3951a715-ef2-{1,2,3}` were removed after each head was checked to be an ancestor of main and each worktree clean.
+
 ## 2026-10-28: SCMS fix round 5, scms track (branch only, base `a925db58`)
 
 Rows: `crates/v2xw-engine/tests/expectations/scms-fix5.yaml` (runs T, MWC, MWCA; fault footer).
