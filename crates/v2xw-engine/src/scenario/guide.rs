@@ -665,6 +665,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "Off (today, a fixed spread); on for the measured dependence on surroundings.",
     },
     Basic {
+        path: "world.terrain.drape",
+        explain: "Whether the roads, junctions and buildings follow the ground of the terrain file, so a road over a hill climbs and descends with it.",
+        recommended: "Off for flat maps; on with a terrain file wherever grades matter (hills slow heavy trucks).",
+    },
+    Basic {
         path: "world.vegetation",
         explain: "Whether the map import keeps woods, tree rows and single trees, so the radio can charge for signal through foliage.",
         recommended: "Off (today); on with radio.channel_model.foliage where trees line the roads.",

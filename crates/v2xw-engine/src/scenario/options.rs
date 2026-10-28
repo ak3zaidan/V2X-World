@@ -1607,6 +1607,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "radio.channel_model.foliage" => "Trees weaken the signal",
         "radio.channel_model.density_sigma" => "Signal variation grows with traffic and buildings",
         "world.vegetation" => "Import trees and woods",
+        "world.terrain.drape" => "Lay the roads on the terrain",
         "radio.sidelink.candidate_percent" => "Candidate resources kept",
         "radio.sidelink.selection_window_ms" => "Selection window end (T2)",
         // network audit

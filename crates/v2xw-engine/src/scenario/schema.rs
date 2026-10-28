@@ -1365,6 +1365,15 @@ pub struct TerrainOptions {
     /// Path to a DEM raster, when the scenario has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dem: Option<String>,
+    /// Lay the world on the DEM (WP-22 P22.4): every lane centreline point, junction,
+    /// crossing end, building, site and signal head is lifted by the DEM's height at its
+    /// position (`v2xw_world::DrapeOptions::all`; 04-models.md §1.4, "lane z is taken from
+    /// the DEM where the source network has no z"), so a lane has the slope
+    /// `traffic.vehicle_dynamics.grade` reads. Off by default: the DEM is then only the
+    /// ground the radio's knife-edge diffraction reads, and the geometry stays flat. Needs
+    /// `dem`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drape: bool,
 }
 
 /// Everything that moves or transmits.

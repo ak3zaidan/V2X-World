@@ -150,3 +150,23 @@ rows:
   fault: n/a (a run)
   measured: 'nema: digest 8ddf6ea5, gap-outs 37, mean speed 6.56 m/s, 343,364 records, 1.12 wall s per simulated s (debug); fixed-time: digest 68446a37, 6.25 m/s, 353,138 records; 26 vehicles both'
   verdict: pass
+# --- (5) WP-22 P22.4: world.terrain.drape and a hill a shipped file carries ---------------
+- id: R5.drape.geometry
+  change: 'world.terrain.drape true (new key, off by default) with world.terrain.dem scenarios/sensitivity/grade-5pct.asc'
+  base: 'the highway-congestion road (two 1.5 km blocks) with the same DEM, drape false'
+  measure: 'z of every lane point; the end-to-end rise per metre east of every lane longer than 1 km'
+  expect: 'undraped: every point at z = 0 (the DEM is only the radio''s ground, as before); draped: every long lane 0.05 +- 0.002 (the ramp is a plane, and a 2-point lane takes it exactly)'
+  source: '04-models.md 1.4 ("lane z is taken from the DEM where the source network has no z"); v2xw-world dem.rs with_terrain / DrapeOptions::all'
+  fault: 'the drape ignored in wiring.rs attach_terrain (DrapeOptions::none always) -> a_draped_ramp_tilts_the_lanes_and_undraped_nothing_moves red (lane 0 rises 0.0000 per metre)'
+  measured: 'ok (both cases); fault: FAILED, lane 0 rises 0.0000'
+  verdict: pass
+- id: R5.drape.upgrade-row
+  change: 'traffic.vehicle_dynamics.power_limit true, judged on the new grade-truck family (the freight road at 2,400 veh/h, 30 % trailers, draped on the 5 % ramp, grade on in both runs)'
+  base: grade-truck, power limit off
+  measure: traffic.speed_mean_mps
+  expect: 'down (the plan''s upgrade row): a 120 kg/kW truck is held to about 13 m/s on the climb (eta P / m = g (sin theta + c_rr) v); small in the all-vehicle mean, since in 90 s few vehicles pass that speed'
+  source: 'AASHTO Green Book 2001 via NCHRP 505 App. D (120 kg/kW); SUMO KraussPS'
+  fault: 'the power limit not applied (variant = base) -> DEAD, red (as the P22.3 row)'
+  measured: 'PASS 10.5602 -> 10.5282 m/s (-0.3 %). At 6,000 veh/h (the freight family''s demand, congested, 9.74 m/s): 9.7434 -> 9.7262 (-0.2 %)'
+  verdict: pass
+  note: 'no rigid truck, bus or van power row: no single-unit weight-to-power figure has been read (grade-dynamics.md: NCHRP 505 has field data, not read), so per the brief they are left out. The DEM is synthetic (grade-5pct.md): no measured DEM is vendored'

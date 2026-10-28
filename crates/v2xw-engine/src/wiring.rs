@@ -184,9 +184,10 @@ fn import_world(scenario: &Scenario) -> Result<World> {
 ///
 /// The DEM is resampled onto the world's own frame and extent
 /// ([`v2xw_world::dem::import_terrain_for_world`]) and attached **without draping**
-/// ([`v2xw_world::DrapeOptions::none`]): lanes, junctions and buildings keep the `z` the
-/// importer gave them, and the terrain is what the radio's knife-edge diffraction reads as
-/// the ground between two antennas (`obstacle/terrain/knife-edge-p526`, composed by
+/// ([`v2xw_world::DrapeOptions::none`]) unless `world.terrain.drape` asks for it
+/// ([`v2xw_world::DrapeOptions::all`]): undraped, lanes, junctions and buildings keep the
+/// `z` the importer gave them, and the terrain is what the radio's knife-edge diffraction
+/// reads as the ground between two antennas (`obstacle/terrain/knife-edge-p526`, composed by
 /// [`build_obstacles`]). An SRTM `.hgt` tile or an ESRI ASCII grid in geographic
 /// coordinates is read; the world's content hash then covers the grid.
 ///
@@ -199,8 +200,13 @@ fn attach_terrain(scenario: &Scenario, world: World) -> Result<World> {
     let (terrain, report) =
         v2xw_world::dem::import_terrain_for_world(&world, path, &v2xw_world::DemOptions::default())
             .map_err(|e| terrain_error(path, e))?;
-    let (world, _drape) =
-        v2xw_world::dem::with_terrain(&world, terrain, &v2xw_world::DrapeOptions::none(), &report)?;
+    // `world.terrain.drape` lays the geometry on the grid; off, nothing moves.
+    let drape = if scenario.world.terrain.drape {
+        v2xw_world::DrapeOptions::all()
+    } else {
+        v2xw_world::DrapeOptions::none()
+    };
+    let (world, _drape) = v2xw_world::dem::with_terrain(&world, terrain, &drape, &report)?;
     Ok(world)
 }
 

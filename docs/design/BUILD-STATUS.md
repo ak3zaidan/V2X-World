@@ -4082,6 +4082,13 @@ Rows: `crates/v2xw-engine/tests/expectations/traffic-r5.yaml`.
   - **City run.** Manhattan for 60 s at the full engine: 6.25 -> 6.56 m/s.
   - **Model card.** `signals/nema-dual-ring` goes in the catalogue only.
   - **Proposal.** Keep `nema` off by default until the check is green (adoption plan).
+- **WP-22 P22.4: `world.terrain.drape`, a repo DEM and the upgrade row.**
+  - **The key.** The new key (off) lays the world's geometry on `world.terrain.dem`.
+  - **The DEM.** `scenarios/sensitivity/grade-5pct.asc` is a synthetic 5 % ramp; `grade-5pct.md` gives its provenance.
+  - **The test.** Draped lanes rise 0.05 per metre and undraped lanes stay at z = 0. With the drape ignored (the fault), the test is red.
+  - **The upgrade row.** The new `grade-truck` family carries the power-limit row: -0.3 %, small in 90 s.
+  - **Tests.** `vehicle_dynamics` 4/4, `scenario` 15/15, `sensitivity_catalogue` 3/3, `sensitivity_expectations` 4/4, engine lib scenario/sensitivity 40/40.
+  - **Not done.** No rigid truck, bus or van power rows (no sourced figure).
 
 ## 2026-10-28: adoption wave integration (grade, mac, nema: WP-16, 17, 18, 21, 22)
 

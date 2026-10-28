@@ -282,7 +282,10 @@ impl Families {
             let p: PathBuf = dir.join(&f.base);
             let mut s = Scenario::load_unvalidated(&p)?;
             absolutise_world(&mut s, &p);
-            out.insert(f.name.clone(), apply(&s, &f.set)?);
+            // A path the family's own fields name (a map, a DEM) is resolved the same way.
+            let mut s = apply(&s, &f.set)?;
+            absolutise_world(&mut s, &p);
+            out.insert(f.name.clone(), s);
         }
         Ok(out)
     }

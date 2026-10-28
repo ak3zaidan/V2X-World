@@ -120,9 +120,9 @@
 - {setting: actors.vru.red_crossing_share, change: high, metric: traffic.stopped_share, expect: up,
    source: "drivers yield to pedestrians crossing against the signal (Uniform Vehicle Code 11-502; Brosseau et al. 2013 measured 10-30 % red crossings)"}
 
-# ---- Vehicle dynamics (WP-22; docs/design/research/grade-dynamics.md), freight family (flat freeway, 30 % trailers) ----
+# ---- Vehicle dynamics (WP-22; docs/design/research/grade-dynamics.md): the grade on the freight family (flat freeway, 30 % trailers), the power limit on grade-truck (the same on a draped 5 % ramp) ----
 - {setting: traffic.vehicle_dynamics.power_limit, change: true, metric: traffic.speed_mean_mps, expect: down, min_change: 0.001,
-   source: "power = force x speed: the 120 kg/kW design truck (AASHTO Green Book 2001 via NCHRP 505 App. D) gives less than the IDM asks above about 15 m/s, so on a freeway tractor-trailers take longer to reach speed. The plan's row is on an upgrade (AASHTO truck speed-distance curves); the freight family is flat, so this is the flat-road part"}
+   source: "power = force x speed: the 120 kg/kW design truck (AASHTO Green Book 2001 via NCHRP 505 App. D) gives less than the IDM asks above about 15 m/s, so tractor-trailers take longer to reach speed (the flat-road part is pinned by tests/vehicle_dynamics.rs). Judged on the grade-truck family, the same road draped on a 5 % ramp (P22.4), as the plan's upgrade row: a power-limited heavy vehicle loses speed on the climb towards its crawl speed (AASHTO Green Book truck speed-distance curves [verify figure])"}
 - {setting: traffic.vehicle_dynamics.grade, change: true, metric: traffic.speed_mean_mps, expect: same, min_change: 0.0,
    source: "g sin(theta) is zero on a level road (SUMO KraussPS aMax - g sin(slope)); the freight road is flat, so the grade alone moves nothing"}
 
