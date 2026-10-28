@@ -3120,6 +3120,71 @@ impl LanduseClass {
     }
 }
 
+/// What a [`VegetationArea`] is: the OSM feature it was imported from (WP-18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VegetationKind {
+    /// A wood or forest: `natural=wood`, `landuse=forest` (closed way or multipolygon).
+    Wood,
+    /// A line of trees, `natural=tree_row` (a way), buffered to a strip.
+    TreeRow,
+    /// A single tree, `natural=tree` (a node), as a disc of its crown.
+    Tree,
+}
+
+impl VegetationKind {
+    /// The code the content hash and the native format store.
+    pub const fn code(self) -> u8 {
+        match self {
+            VegetationKind::Wood => 0,
+            VegetationKind::TreeRow => 1,
+            VegetationKind::Tree => 2,
+        }
+    }
+
+    /// The kind a stored code names.
+    pub const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(VegetationKind::Wood),
+            1 => Some(VegetationKind::TreeRow),
+            2 => Some(VegetationKind::Tree),
+            _ => None,
+        }
+    }
+}
+
+/// An area of trees the radio's foliage loss crosses (WP-18, `obstacle/foliage/p833`):
+/// trees and grass are both [`LanduseClass::Park`] in the land-use layer, which the
+/// propagation models cannot tell apart, so the trees get their own layer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VegetationArea {
+    /// The outline: counter-clockwise, closed, world-local metres.
+    pub ring: Vec<Vec3>,
+    /// What it is.
+    pub kind: VegetationKind,
+}
+
+impl VegetationArea {
+    /// Builds an area, quantising and closing its ring counter-clockwise.
+    ///
+    /// # Errors
+    ///
+    /// [`WorldError::ShortRing`] if the ring has fewer than three distinct points.
+    pub fn new(ring: impl IntoIterator<Item = Vec3>, kind: VegetationKind) -> Result<Self> {
+        let ring = close_ring(normalise_ring(
+            ring.into_iter().map(quantise_vec3).collect::<Vec<_>>(),
+            true,
+        ));
+        if ring.len() < 4 {
+            return Err(WorldError::ShortRing {
+                what: "vegetation area ring".to_string(),
+                points: ring.len().saturating_sub(1),
+            });
+        }
+        Ok(Self { ring, kind })
+    }
+}
+
 /// A land-use zone: a polygon with a category and a propagation environment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LanduseZone {
@@ -3778,6 +3843,11 @@ pub struct World {
     /// Stretches of lane that run through a building, ordered by `(lane, building)`.
     #[serde(default)]
     pub passages: Vec<Passage>,
+    /// Areas of trees (WP-18), in import order. Empty unless an importer was asked for
+    /// them (`OsmOptions::vegetation`); an empty layer is neither hashed nor written, so
+    /// every world without one keeps its content hash.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vegetation: Vec<VegetationArea>,
     /// The propagation environment outside every land-use zone.
     pub default_env: EnvClass,
     /// The world's interned strings.
@@ -3808,6 +3878,7 @@ impl Clone for World {
             sites: self.sites.clone(),
             landuse: self.landuse.clone(),
             passages: self.passages.clone(),
+            vegetation: self.vegetation.clone(),
             default_env: self.default_env,
             symbols: self.symbols.clone(),
             provenance: self.provenance.clone(),
@@ -3830,6 +3901,7 @@ impl PartialEq for World {
             && self.sites == other.sites
             && self.landuse == other.landuse
             && self.passages == other.passages
+            && self.vegetation == other.vegetation
             && self.default_env == other.default_env
             && self.symbols == other.symbols
             && self.provenance == other.provenance
@@ -4505,6 +4577,7 @@ pub struct WorldBuilder {
     sites: Vec<Site>,
     landuse: Vec<LanduseZone>,
     passages: Vec<Passage>,
+    vegetation: Vec<VegetationArea>,
     default_env: EnvClass,
     symbols: SymbolTable,
     provenance: Option<WorldProvenance>,
@@ -4525,6 +4598,7 @@ impl WorldBuilder {
             sites: Vec::new(),
             landuse: Vec::new(),
             passages: Vec::new(),
+            vegetation: Vec::new(),
             default_env: EnvClass::Urban,
             symbols: SymbolTable::new(),
             provenance: None,
@@ -4574,6 +4648,13 @@ impl WorldBuilder {
     #[must_use]
     pub fn signals(mut self, signals: Vec<SignalPlan>) -> Self {
         self.signals = signals;
+        self
+    }
+
+    /// Sets the vegetation layer (areas of trees, WP-18).
+    #[must_use]
+    pub fn vegetation(mut self, vegetation: Vec<VegetationArea>) -> Self {
+        self.vegetation = vegetation;
         self
     }
 
@@ -4739,6 +4820,7 @@ impl WorldBuilder {
                     ..p
                 })
                 .collect(),
+            vegetation: self.vegetation,
             default_env: self.default_env,
             symbols: self.symbols,
             provenance: {
@@ -4825,6 +4907,8 @@ pub struct WorldParts {
     pub landuse: Vec<LanduseZone>,
     /// Lanes through buildings, ordered by `(lane, building)`.
     pub passages: Vec<Passage>,
+    /// Areas of trees, in import order.
+    pub vegetation: Vec<VegetationArea>,
     /// The environment outside every zone.
     pub default_env: EnvClass,
     /// The interned strings.
@@ -4857,6 +4941,7 @@ impl World {
             sites: parts.sites,
             landuse: parts.landuse,
             passages: parts.passages,
+            vegetation: parts.vegetation,
             default_env: parts.default_env,
             symbols: parts.symbols,
             provenance: parts.provenance,
@@ -4891,6 +4976,7 @@ impl World {
             sites: self.sites.clone(),
             landuse: self.landuse.clone(),
             passages: self.passages.clone(),
+            vegetation: self.vegetation.clone(),
             default_env: self.default_env,
             symbols: self.symbols.clone(),
             provenance: self.provenance.clone(),

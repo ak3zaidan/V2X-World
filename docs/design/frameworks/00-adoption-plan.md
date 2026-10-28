@@ -702,6 +702,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: an empty road gives the class minimum σ and a dense arterial approaches the maximum;
   a link through 30 m of forest loses the P.833 value; disabled, outputs are byte-identical.
 - Prep (2026-10-27): build plan §WP-18, 5 pieces. Today trees and grass are both `LanduseClass::Park` and the `boban-mel` foliage card is referred to but missing. It adds a hash-excluded `World.vegetation` layer, `obstacle/foliage/p833` and a density σ in `prop.rs`. Boban 2014 and P.833 must be cached first (P18.1).
+- P18.2 (2026-10-28): done, off by default, no golden moves. `World.vegetation: Vec<VegetationArea { ring, kind: Wood | TreeRow | Tree }>` (`model.rs`) is threaded through the builder, `WorldParts`, the DEM rebuild and `worlds::rebuild_with`. It is hashed (tag 0x0D) and written (native section 15) **only when non-empty**: `hash::tests::vegetation_is_hashed_only_when_present` pins the 3 × 3 grid's pre-layer hash. The importer gets `OsmOptions.vegetation` (off), which brings in `natural=wood` and `landuse=forest` (closed ways and multipolygon outers), `natural=tree_row` ways buffered to `tree_row_width_m`, and `natural=tree` nodes as 12-gon discs of `diameter_crown` or `tree_crown_m`. Both widths are 8 m, an ASSUMPTION: the OSM wiki gives no width. Woods are still `LanduseClass::Park` zones in the land-use layer. The scenario key (`world.osm.vegetation`) is left for P18.5.
 
 ### Wave 7: SCMS over the air, priority vehicles, scripted situations
 

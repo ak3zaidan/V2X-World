@@ -99,6 +99,9 @@ mod tag {
     /// Passages (lanes through buildings). Absorbed only when there are any, so a world
     /// without one hashes exactly as it did before passages existed.
     pub const PASSAGES: u8 = 0x0C;
+    /// Vegetation areas (WP-18). Absorbed only when there are any, so a world without
+    /// one hashes exactly as it did before the layer existed.
+    pub const VEGETATION: u8 = 0x0D;
     /// End marker, so a truncated stream cannot hash like a complete one.
     pub const END: u8 = 0xFF;
 }
@@ -317,6 +320,13 @@ pub fn content_hash(world: &World) -> [u8; 32] {
                 .u32(u32::from(p.kind.code()))
                 .quantised(p.s_from_m, crate::quant::Q_POSITION_M)
                 .quantised(p.s_to_m, crate::quant::Q_POSITION_M);
+        }
+    }
+
+    if !world.vegetation.is_empty() {
+        h.tag(tag::VEGETATION).count(world.vegetation.len());
+        for v in &world.vegetation {
+            h.u32(u32::from(v.kind.code())).points(&v.ring);
         }
     }
 
@@ -604,5 +614,52 @@ mod tests {
             World::from_parts(parts).is_err(),
             "a renamed street is a different world"
         );
+    }
+
+    /// The 3 × 3 legacy grid's content hash before the vegetation layer existed. The
+    /// layer's only new hashing is behind `!world.vegetation.is_empty()`, so this is the
+    /// value the code before WP-18 computed; a world without trees must keep it, or every
+    /// cached world and every SCMS digest that names one would move.
+    const GRID_3X3_HASH: &str = "c2bd9157aaa6d7b2bc8c27c25dbfa98fd0645ece8d4e238b46d128d4dfa33ead";
+
+    #[test]
+    fn vegetation_is_hashed_only_when_present() {
+        let w = world();
+        assert!(w.vegetation.is_empty());
+        assert_eq!(v2xw_core::hash::hex_encode(&w.content_hash), GRID_3X3_HASH);
+
+        // One wood moves the hash, and the stored hash then no longer matches.
+        let wood = crate::model::VegetationArea::new(
+            [
+                Vec3::new(10.0, 10.0, 0.0),
+                Vec3::new(40.0, 10.0, 0.0),
+                Vec3::new(40.0, 40.0, 0.0),
+            ],
+            crate::model::VegetationKind::Wood,
+        )
+        .expect("a triangle");
+        let mut parts = w.to_parts();
+        parts.vegetation = vec![wood.clone()];
+        assert!(
+            World::from_parts(parts).is_err(),
+            "a wood is a different world"
+        );
+        let mut treed = w.clone();
+        treed.vegetation = vec![wood.clone()];
+        let h = content_hash(&treed);
+        assert_ne!(h, w.content_hash);
+        // Its kind is part of it too.
+        let mut row = treed.clone();
+        row.vegetation[0].kind = crate::model::VegetationKind::TreeRow;
+        assert_ne!(content_hash(&row), h);
+
+        // And the native format carries it: written, read back, the same world.
+        treed.content_hash = h;
+        let back = crate::serde_native::from_bytes(
+            &crate::serde_native::to_bytes(&treed).expect("writes"),
+        )
+        .expect("reads back");
+        assert_eq!(back.vegetation, treed.vegetation);
+        assert_eq!(back.content_hash, h);
     }
 }

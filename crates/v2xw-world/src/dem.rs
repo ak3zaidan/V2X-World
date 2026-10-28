@@ -1678,6 +1678,7 @@ pub fn with_terrain(
         .roads(roads)
         .buildings(buildings)
         .landuse(core::mem::take(&mut parts.landuse))
+        .vegetation(core::mem::take(&mut parts.vegetation))
         .signals(signals)
         .sites(sites)
         .default_env(parts.default_env)

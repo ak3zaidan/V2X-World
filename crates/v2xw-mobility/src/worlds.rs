@@ -322,6 +322,7 @@ pub fn rebuild_with(world: &World, edit: impl FnOnce(&mut WorldEdit)) -> Result<
         .signals(parts.signals)
         .sites(world.sites.clone())
         .landuse(world.landuse.clone())
+        .vegetation(world.vegetation.clone())
         .symbols(world.symbols.clone())
         .default_env(world.default_env)
         .index_options(world.index_options)
