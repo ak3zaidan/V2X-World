@@ -548,6 +548,41 @@ out of scope here.
   STM 8-phase example test waits for P17.5's projection.
 - **P17.5** (3 h): `project` into `SignalPlan`, `World::validate` after the rewrite, and
   the engine wiring through `ActuatedControllers::new` and the step. Drivers obey it.
+
+  **Done 2026-10-28 (P17.5).** `nema/control.rs`: `NemaControllers` over every plan that
+  maps (`assign_all`). The rest keep the single-ring controller, counted by reason in
+  `ActuatedControllers::nema_fallbacks`. `control: nema` now loads; the default stays
+  fixed-time.
+  - **When the plan is rewritten.** Only when the shown vector changes, when composite 0
+    is within two steps of its projected end, or at most once a second when the calls
+    behind the prediction change. Rewriting every step is not needed, because the clock
+    runs on by itself between rewrites.
+  - **How it predicts.** A forward run of a copy of the rings, at 0.5 s steps, for up to
+    240 s or one whole cycle back to now's vector. Called phases that are not green now
+    are assumed extended (so they run to their maximum). A current green keeps its
+    current detector state.
+  - **What each movement shows.** A left with its own phase is green-yield beside its
+    own through's green, and amber in that through's yellow (protected-permissive only).
+  - **Timing.** Yellow is `nema.yellow_s`, else the plan's amber, else STM Eq. 6-1 at the
+    fastest approach. Red is `nema.red_clear_s`, else the plan's all-red, else 0.
+  - **Crosswalks.** Each crosswalk walks for `walk_s`, then shows its clearance as amber
+    (crossing length / `ped_speed_mps`). Every crosswalk phase is on pedestrian recall
+    until P17.7, and its minimum green holds walk + clearance + the MUTCD 3 s buffer,
+    less Y + R.
+  - **Invariants.** `plan_invariants` (World::validate's per-plan rules) is asserted in
+    debug after every rewrite.
+  - **SPaT feed.** `IntersectionFeed::sync` rebuilds the group timelines when the
+    phases change. Fixed-time and single-ring plans never change them, so the default
+    path is untouched.
+  - **Refused until later pieces.** Priority requests at NEMA junctions are skipped
+    (P17.9). The loader refuses `left_turn_mode` other than protected-permissive (P17.6),
+    `ped_recall` (P17.7), and `coordination`, `green_wave_speed_mps` and
+    `short_link_clearance_m` under nema (P17.8).
+  - **Pedestrian fallback.** Walk and speed fall back to `world.signals.pedestrian_*`
+    (set in `Engine::build_with_world`), then to MUTCD 7 s and 1.067 m/s.
+  - **STM example.** `nema::tests::stm_example_timing` is built from Exhibits 6-2, 6-3
+    and 6-9 (the STM has no numeric example). It gives cycle 132.3 s and splits
+    24 / 55.1 / 19 / 34.2 s under max recall.
 - **P17.6** (3 h): left-turn modes, lead/lag, and FYA display, with the SPaT
   `MovementPhaseState` mapping in `infra.rs` and the FYA test.
 - **P17.7** (3 h): pedestrian phases (walk and clearance timing, calls from waiting

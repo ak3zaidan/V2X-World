@@ -4290,11 +4290,12 @@ mod nema_settings_tests {
         }
     }
 
-    /// Errors other than the standing refusal of `control: nema`.
+    /// The block's own errors: not the refusals of the parts later WP-17 pieces build,
+    /// which `nema_loads_and_its_unbuilt_parts_are_refused` checks.
     fn block_errors(n: NemaSettings) -> Vec<String> {
         errors(&nema(n))
             .into_iter()
-            .filter(|e| !e.contains("traffic.signals.control"))
+            .filter(|e| !e.contains("is not run by this build"))
             .collect()
     }
 
@@ -4328,15 +4329,53 @@ mod nema_settings_tests {
         assert!(block_errors(d).is_empty());
     }
 
-    /// `control: nema` is refused until P17.5 wires the controller, and a block beside any
-    /// other control is a setting that would do nothing.
+    /// P17.5 wired the controller: `control: nema` loads with its defaults, and (with the
+    /// P17.2 contract replaced) only what later pieces build is refused: protected-only and
+    /// permissive-only lefts (P17.6), pedestrian recall (P17.7), coordination and the
+    /// load-time plan edits the rings would undo (P17.8). A block beside any other
+    /// control is a setting that would do nothing.
     #[test]
-    fn nema_is_refused_until_the_controller_lands() {
-        let e = errors(&nema(NemaSettings::default()));
+    fn nema_loads_and_its_unbuilt_parts_are_refused() {
+        assert!(errors(&nema(NemaSettings::default())).is_empty());
+        let unbuilt = |n: NemaSettings, field: &str| {
+            let e = errors(&nema(n));
+            assert!(
+                e.iter()
+                    .any(|x| x.contains(field) && x.contains("is not run by this build")),
+                "{field}: {e:?}"
+            );
+        };
+        let d = NemaSettings::default;
+        unbuilt(
+            NemaSettings {
+                left_turn_mode: LeftTurnMode::Protected,
+                ..d()
+            },
+            "nema.left_turn_mode",
+        );
+        unbuilt(
+            NemaSettings {
+                ped_recall: vec![2],
+                ..d()
+            },
+            "nema.ped_recall",
+        );
+        unbuilt(
+            NemaSettings {
+                coordination: true,
+                ..d()
+            },
+            "nema.coordination",
+        );
+        let wave = SignalControl {
+            green_wave_speed_mps: Some(12.0),
+            ..nema(d())
+        };
         assert!(
-            e.iter()
-                .any(|x| x.contains("traffic.signals.control") && x.contains("nema")),
-            "{e:?}"
+            errors(&wave)
+                .iter()
+                .any(|x| x.contains("traffic.signals.green_wave_speed_mps")),
+            "a green wave under the dual ring"
         );
         let stray = SignalControl {
             control: SignalControlKind::Actuated,

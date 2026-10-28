@@ -131,14 +131,24 @@ pub struct ActuatedControllers {
     params: Option<SignalControl>,
     plans: BTreeMap<usize, PlanInfo>,
     counters: ActuatedCounters,
+    /// Under `control: nema`, the junctions the dual ring runs (`crate::nema`); `plans`
+    /// then holds only the ones that fell back to the single ring.
+    nema: Option<crate::nema::control::NemaControllers>,
 }
 
 impl ActuatedControllers {
-    /// Controllers for `control`, or inert ones for fixed-time control.
+    /// Controllers for `control`, or inert ones for fixed-time control. Under
+    /// `control: nema`, every plan that maps to the dual ring runs it and the rest keep
+    /// this single-ring controller (counted in [`Self::nema_fallbacks`]).
     pub fn new(control: &SignalControl, world: &World) -> Self {
-        if control.control != SignalControlKind::Actuated {
+        if !matches!(
+            control.control,
+            SignalControlKind::Actuated | SignalControlKind::Nema
+        ) {
             return Self::default();
         }
+        let nema = (control.control == SignalControlKind::Nema)
+            .then(|| crate::nema::control::NemaControllers::new(control, world));
         let mut approach_of: BTreeMap<LaneId, LaneId> = BTreeMap::new();
         for c in world.roads.connections() {
             if let Some(via) = c.via {
@@ -147,6 +157,9 @@ impl ActuatedControllers {
         }
         let mut plans = BTreeMap::new();
         for (i, plan) in world.signals.iter().enumerate() {
+            if nema.as_ref().is_some_and(|n| n.controls(i)) {
+                continue;
+            }
             let crossing: Vec<bool> = plan
                 .controlled
                 .iter()
@@ -182,13 +195,30 @@ impl ActuatedControllers {
             params: Some(control.clone()),
             plans,
             counters: ActuatedCounters::default(),
+            nema,
         }
+    }
+
+    /// Whether plan `idx` runs under the NEMA dual ring.
+    pub fn is_nema(&self, idx: usize) -> bool {
+        self.nema.as_ref().is_some_and(|n| n.controls(idx))
+    }
+
+    /// Under `control: nema`, the plans left to the single ring, by reason.
+    pub fn nema_fallbacks(&self) -> BTreeMap<&'static str, u64> {
+        self.nema
+            .as_ref()
+            .map(|n| n.fallback_counts().clone())
+            .unwrap_or_default()
     }
 
     /// The window the SPaT of plan `idx` states at `now_s` ([`ActuatedOutlook`]), `None`
     /// under fixed-time control. Outside a vehicle green (an amber, an all-red) nothing
     /// moves the clock, so the window is zero both ways until the next green starts.
     pub fn outlook(&self, world: &World, idx: usize, now_s: f64) -> Option<ActuatedOutlook> {
+        if let Some(n) = self.nema.as_ref().filter(|n| n.controls(idx)) {
+            return n.outlook(idx, now_s);
+        }
         let p = self.params.as_ref()?;
         let st = self.plans.get(&idx)?;
         let plan = world.signals.get(idx)?;
@@ -224,7 +254,13 @@ impl ActuatedControllers {
 
     /// What the controllers have done so far.
     pub fn counters(&self) -> ActuatedCounters {
-        self.counters
+        let mut c = self.counters;
+        if let Some(n) = &self.nema {
+            let k = n.counters();
+            c.gap_outs += k.gap_outs;
+            c.max_outs += k.max_outs;
+        }
+        c
     }
 
     /// The detector calls: every approach lane with a vehicle front in its last
@@ -293,6 +329,9 @@ impl ActuatedControllers {
         let Some(p) = self.params.clone() else {
             return;
         };
+        if let Some(n) = &mut self.nema {
+            n.step(world, extend, calls, now_s, dt_s);
+        }
         for (&idx, st) in &mut self.plans {
             let Some(plan) = world.signals.get(idx) else {
                 continue;

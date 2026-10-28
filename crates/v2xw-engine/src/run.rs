@@ -1448,11 +1448,19 @@ impl Engine {
         // Signal control (`traffic.signals`): a green wave sets the plans' offsets once,
         // before anything reads them; an actuated controller moves them as it runs.
         let mut world = world;
-        let signal_control = scenario
+        let mut signal_control = scenario
             .traffic
             .as_ref()
             .map(|t| t.signals.clone())
             .unwrap_or_default();
+        // The NEMA controller's pedestrian timing falls back to the world's
+        // (`world.signals.pedestrian_*`), then to the MUTCD (`crate::nema::control`).
+        if signal_control.control == crate::scenario::schema::SignalControlKind::Nema {
+            let ws = &scenario.world.signals;
+            let n = signal_control.nema.get_or_insert_with(Default::default);
+            n.walk_s = n.walk_s.or(ws.pedestrian_walk_s);
+            n.ped_speed_mps = n.ped_speed_mps.or(ws.pedestrian_speed_mps);
+        }
         crate::actuated::coordinate(&signal_control, &mut world);
         crate::actuated::clear_short_links(&signal_control, &mut world);
         let actuated = crate::actuated::ActuatedControllers::new(&signal_control, &world);
@@ -5170,6 +5178,12 @@ impl Engine {
             .collect();
         let now_s = v2xw_core::time::ns_to_secs(now);
         for (plan, requester, group, eta) in requests {
+            // A NEMA dual-ring junction rewrites its own plan every few seconds, so a
+            // service that moves the plan's clock would be undone; priority through the
+            // rings is WP-17 P17.9. Until then its requests are not served.
+            if self.actuated.is_nema(plan) {
+                continue;
+            }
             if let Some(rec) =
                 self.priority
                     .request(&self.world, plan, requester, group, eta, now_s)

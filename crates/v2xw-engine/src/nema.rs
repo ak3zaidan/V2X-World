@@ -13,10 +13,16 @@
 //!   extension, gap-out and max-out, yellow and red clearance, barrier synchronisation,
 //!   rest, dual entry and recall.
 //!
-//! The controller is not wired yet: the loader refuses `control: nema`
-//! (`scenario::validate::nema_checks`) until P17.5, so nothing here runs in a scenario.
+//! * [`control`] — the controller on a world (P17.5): the rings re-projected into each
+//!   junction's [`v2xw_world::SignalPlan`] as the composite intervals from now, driven by
+//!   the single-ring controller's detectors through `crate::actuated`.
+//!
+//! `control: nema` is off by default. Left-turn modes other than protected-permissive,
+//! pedestrian push-button calls, coordination and priority are later pieces; the loader
+//! refuses the settings that would need them (`scenario::validate::nema_checks`).
 
 pub mod assign;
+pub mod control;
 
 pub use assign::{AssignedMovement, Assignment, MovementKind, Unmapped, assign_phases};
 
@@ -505,6 +511,8 @@ impl DualRing {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::scenario::schema::{NemaLeftSequence, NemaSettings};
 
@@ -840,6 +848,85 @@ mod tests {
                 });
                 assert!(steps > 0);
             }
+        }
+    }
+
+    /// Accept (WP-17): an eight-phase example's timing reproduces under maximum recall.
+    /// The STM 2nd ed. gives no numeric worked example (P17.1), so this one is built from
+    /// its tables, as the plan says: a 35 mph main street and a 30 mph side street, yellow
+    /// from Exhibit 6-2 (3.6 s and 3.2 s; lefts at 25 mph, 3.0 s), red clearance 1.5 s and
+    /// 1.0 s (Exhibit 6-3's range), maximum greens inside Exhibit 6-9 (main through 50 s,
+    /// main left 20 s, side through 30 s, side left 15 s). With every phase on maximum
+    /// recall, every split is its maximum plus its yellow and red, lead-lead, so the cycle
+    /// is (20+3.0+1.0)+(50+3.6+1.5) on the main street and (15+3.0+1.0)+(30+3.2+1.0) on
+    /// the side street: 132.3 s.
+    #[test]
+    fn stm_example_timing() {
+        let t = |max: f64, y: f64, r: f64| PhaseTiming {
+            min_green_s: 4.0,
+            max_green_s: max,
+            passage_s: 2.5,
+            yellow_s: y,
+            red_clear_s: r,
+        };
+        let (ml, mt, sl, st) = (
+            t(20.0, 3.0, 1.0),
+            t(50.0, 3.6, 1.5),
+            t(15.0, 3.0, 1.0),
+            t(30.0, 3.2, 1.0),
+        );
+        let n = NemaSettings {
+            soft_recall: Vec::new(),
+            max_recall: ALL.to_vec(),
+            ..NemaSettings::default()
+        };
+        let mut config = RingConfig::from_settings(&n, &ALL, mt, ml);
+        for p in [3usize, 7] {
+            config.timing[p] = sl;
+        }
+        for p in [4usize, 8] {
+            config.timing[p] = st;
+        }
+        let mut ctl = DualRing::new(config);
+        // Green start times of every phase, from a step-by-step run.
+        let mut starts: BTreeMap<u8, Vec<f64>> = BTreeMap::new();
+        let mut prev = ctl.greens();
+        let mut time = 0.0;
+        for _ in 0..(600.0 / DT) as usize {
+            ctl.step(&Calls::default(), DT);
+            time += DT;
+            let g = ctl.greens();
+            for r in 0..2 {
+                if g[r] != 0 && g[r] != prev[r] {
+                    starts.entry(g[r]).or_default().push(time);
+                }
+            }
+            prev = g;
+        }
+        let want_cycle =
+            (20.0 + 3.0 + 1.0) + (50.0 + 3.6 + 1.5) + (15.0 + 3.0 + 1.0) + (30.0 + 3.2 + 1.0);
+        assert!((want_cycle - 132.3_f64).abs() < 1e-9);
+        let split = |a: u8, b: u8| {
+            let (sa, sb) = (&starts[&a], &starts[&b]);
+            // The second cycle, past start-up in 2 and 6.
+            let s = sa[1];
+            let next = sb.iter().copied().find(|x| *x > s).expect("next phase");
+            next - s
+        };
+        let near = |x: f64, y: f64| (x - y).abs() <= DT + 1e-6;
+        for (p, q) in [(1u8, 2u8), (5, 6)] {
+            assert!(near(split(p, q), 24.0), "phase {p} split {}", split(p, q));
+        }
+        for (p, q) in [(2u8, 3u8), (6, 7)] {
+            assert!(near(split(p, q), 55.1), "phase {p} split {}", split(p, q));
+        }
+        for (p, q) in [(3u8, 4u8), (7, 8)] {
+            assert!(near(split(p, q), 19.0), "phase {p} split {}", split(p, q));
+        }
+        for p in [1u8, 5] {
+            let s = &starts[&p];
+            let cycle = s[2] - s[1];
+            assert!(near(cycle, want_cycle), "phase {p} cycle {cycle}");
         }
     }
 }

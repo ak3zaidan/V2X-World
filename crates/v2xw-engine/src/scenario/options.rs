@@ -121,11 +121,10 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Actuated (single ring)",
             "Detectors hold a green while cars keep arriving and end it early when the approach goes quiet, one phase at a time.",
         ),
-        ("traffic.signals.control", "nema") => Some((
-            "NEMA dual ring (not available yet)",
-            "Refused by this build until the controller is wired: two rings of four phases time concurrently and meet at barriers, as US controllers do (FHWA Signal Timing Manual 2nd ed.).",
-            false,
-        )),
+        ("traffic.signals.control", "nema") => w(
+            "NEMA dual ring (eight phases)",
+            "Two rings of four phases time concurrently and meet at barriers, as US controllers do (FHWA Signal Timing Manual 2nd ed.); lefts are protected then permissive. Junctions that do not map keep the single ring.",
+        ),
         ("traffic.signals.nema.lefts", "lead-lead") => w(
             "Lead-lead",
             "Both left turns go before their opposing throughs: the most common US sequence (FHWA STM 2nd ed. §5.1.3.6).",
@@ -142,14 +141,16 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Protected, then permissive",
             "A green arrow first, then lefts may turn through gaps in the oncoming traffic.",
         ),
-        ("traffic.signals.nema.left_turn_mode", "protected") => w(
-            "Protected only",
-            "Lefts turn only on their own green arrow.",
-        ),
-        ("traffic.signals.nema.left_turn_mode", "permissive") => w(
-            "Permissive only",
-            "No left-turn phase: lefts turn through gaps in the oncoming traffic.",
-        ),
+        ("traffic.signals.nema.left_turn_mode", "protected") => Some((
+            "Protected only (not available yet)",
+            "Lefts turn only on their own green arrow. Refused by this build until WP-17 P17.6.",
+            false,
+        )),
+        ("traffic.signals.nema.left_turn_mode", "permissive") => Some((
+            "Permissive only (not available yet)",
+            "No left-turn phase: lefts turn through gaps in the oncoming traffic. Refused by this build until WP-17 P17.6.",
+            false,
+        )),
         ("traffic.signals.nema.permissive_display", "fya") => w(
             "Flashing yellow arrow",
             "The permissive left shows a flashing yellow arrow (MUTCD 2009 §4D.20).",

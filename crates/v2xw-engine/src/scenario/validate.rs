@@ -2425,10 +2425,44 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     },
     KeyStatus {
         path: "traffic.signals.nema",
+        status: Status::Partial,
+        note: "The NEMA dual-ring eight-phase controller (control: nema): rings, barriers, \
+               lead/lag, left-turn timing, recalls, yellow, red and pedestrian timing run. \
+               Protected-permissive lefts only; pedestrian calls, coordination and priority \
+               are later WP-17 pieces, and the loader refuses the settings that need them.",
+    },
+    KeyStatus {
+        path: "traffic.signals.nema.permissive_display",
+        status: Status::Partial,
+        note: "Both faces show the same permissive (yield) state to drivers and in SPaT; \
+               the flashing-yellow-arrow face is WP-17 P17.6.",
+    },
+    KeyStatus {
+        path: "traffic.signals.nema.coordination",
         status: Status::Refused,
-        note: "The NEMA dual-ring eight-phase controller's settings. Checked in full, but \
-               control: nema is refused until the controller is wired (WP-17), so the \
-               block cannot load yet.",
+        note: "Refused when on: coordination through the rings is WP-17 P17.8.",
+    },
+    KeyStatus {
+        path: "traffic.signals.nema.force_off",
+        status: Status::Refused,
+        note: "Acts only under coordination, which is refused until WP-17 P17.8.",
+    },
+    KeyStatus {
+        path: "traffic.signals.nema.controller_type",
+        status: Status::Refused,
+        note: "The coordination offset's reference; refused with coordination until \
+               WP-17 P17.8.",
+    },
+    KeyStatus {
+        path: "traffic.signals.nema.coordinate_phases",
+        status: Status::Refused,
+        note: "Acts only under coordination, which is refused until WP-17 P17.8.",
+    },
+    KeyStatus {
+        path: "traffic.signals.nema.ped_recall",
+        status: Status::Refused,
+        note: "Refused when set: pedestrian calls are WP-17 P17.7; until then every \
+               crosswalk phase is on pedestrian recall.",
     },
     KeyStatus {
         path: "actors.vehicles.demand.fleet_size",
@@ -4953,12 +4987,56 @@ pub(crate) fn nema_checks(g: &super::schema::SignalControl, e: &mut Vec<Scenario
         PermissiveDisplay, SignalControlKind,
     };
     if g.control == SignalControlKind::Nema {
-        e.push(conflict(
-            "traffic.signals.control",
-            "is 'nema', the NEMA dual-ring controller, which this build validates but does \
-             not run yet (WP-17 wires it in P17.5); choose fixed-time or actuated"
-                .to_string(),
-        ));
+        // The dual ring rewrites each plan as it runs (`crate::nema::control`), so a
+        // setting that edits the plans once at load would be undone at once; both wait
+        // for coordination through the rings (WP-17 P17.8).
+        for (path, set) in [
+            (
+                "traffic.signals.green_wave_speed_mps",
+                g.green_wave_speed_mps.is_some(),
+            ),
+            (
+                "traffic.signals.short_link_clearance_m",
+                g.short_link_clearance_m.is_some(),
+            ),
+        ] {
+            if set {
+                e.push(conflict(
+                    path,
+                    "edits the plans once at load, and the NEMA dual ring (control: nema) \
+                     rewrites them as it runs; its own coordination is not built yet \
+                     (WP-17 P17.8), so remove this or choose fixed-time or actuated"
+                        .to_string(),
+                ));
+            }
+        }
+        let n = g.nema.clone().unwrap_or_default();
+        // The parts of the controller later pieces build.
+        for (path, unbuilt, piece) in [
+            (
+                "traffic.signals.nema.left_turn_mode",
+                n.left_turn_mode != LeftTurnMode::ProtectedPermissive,
+                "protected-only and permissive-only lefts are P17.6",
+            ),
+            (
+                "traffic.signals.nema.ped_recall",
+                !n.ped_recall.is_empty(),
+                "pedestrian calls and recall are P17.7 (until then every crosswalk phase \
+                 is on pedestrian recall)",
+            ),
+            (
+                "traffic.signals.nema.coordination",
+                n.coordination,
+                "coordination is P17.8",
+            ),
+        ] {
+            if unbuilt {
+                e.push(conflict(
+                    path,
+                    format!("is not run by this build of the NEMA controller: {piece}"),
+                ));
+            }
+        }
     }
     let Some(n) = &g.nema else {
         return;
@@ -6606,7 +6684,10 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
             );
         }
         if g.detector_placement != super::schema::DetectorPlacement::StopLine
-            && g.control != super::schema::SignalControlKind::Actuated
+            && !matches!(
+                g.control,
+                super::schema::SignalControlKind::Actuated | super::schema::SignalControlKind::Nema
+            )
         {
             e.push(conflict(
                 "traffic.signals.detector_placement",

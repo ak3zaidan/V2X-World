@@ -159,6 +159,11 @@ pub struct IntersectionFeed {
     /// The actuated controller's window at the last [`IntersectionFeed::set_actuation`]:
     /// how much sooner and later than the plan's clock the next change may come.
     actuation: Option<crate::actuated::ActuatedOutlook>,
+    /// The plan's phases the group timelines were built from, and each controlled
+    /// connector's approach lane, so a controller that rewrites the phases (the NEMA dual
+    /// ring, `crate::nema::control`) is followed by [`IntersectionFeed::sync`].
+    phases: Vec<v2xw_world::SignalPhase>,
+    approach_of: BTreeMap<LaneId, LaneId>,
 }
 
 impl IntersectionFeed {
@@ -251,6 +256,12 @@ impl IntersectionFeed {
             groups,
             map,
             actuation: None,
+            phases: p.phases.clone(),
+            approach_of: p
+                .controlled
+                .iter()
+                .filter_map(|l| approach_of.get(l).map(|a| (*l, *a)))
+                .collect(),
         })
     }
 
@@ -275,6 +286,21 @@ impl IntersectionFeed {
     pub fn sync(&mut self, plan: &SignalPlan) {
         self.offset_s = plan.offset_s;
         self.cycle_s = plan.cycle_s;
+        // A rewritten plan (the NEMA dual ring) has new phases: rebuild the timelines.
+        // A fixed-time or single-ring plan never changes them, so this never runs there.
+        if plan.phases != self.phases {
+            self.phases = plan.phases.clone();
+            let approach_of = &self.approach_of;
+            self.groups = plan
+                .group_timelines(|l| approach_of.get(&l).copied())
+                .into_iter()
+                .map(|(group, segments)| GroupTimeline {
+                    group,
+                    signal_group: signal_group_id(group),
+                    segments,
+                })
+                .collect();
+        }
     }
 
     /// The SPaT for this junction at `t`: every signal group's state and when it changes.
