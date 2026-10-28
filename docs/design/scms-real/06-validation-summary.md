@@ -786,7 +786,7 @@ could never fail on the engine's capture, and the CRL faults could not reach the
 | veh R10 | Country regions are not checked against a location; they are only counted | None for US pseudonyms, which carry no region (`region_unchecked` = 0) |
 | veh R11 | Same as crypto #38 | Counted |
 | veh C6 | "2 km since the last change" is measured as distance travelled, not straight-line distance | On a winding route a change can come slightly early |
-| veh M11 | Relayed report uploads go on safety channel 172, not on a service channel advertised by WSA | Report airtime on 172 is an upper bound (0.21 % at full fleet in the first run). The radio has no per-channel MAC queues and no channel switch (07 §7 item 4) |
+| veh M11 | Relayed report uploads go on safety channel 172, not on a service channel advertised by WSA. **Fixed under `net.rsu_ip.air: sch` (2026-10-28, WP-19 P19.2/P19.4):** a vehicle relays only to a unit whose WSA it verified, and reports go on the `radio.channels` service channel (`foundations::relayed_reports_move_to_the_advertised_service_channel`); the default `constant` keeps 172 | Report airtime on 172 is an upper bound (0.21 % at full fleet in the first run). The radio has no per-channel MAC queues and no channel switch (07 §7 item 4) |
 | veh U5 | No WSA encoder. **Fixed 2026-10-28 (WP-19 P19.1):** `v2xw_msg::wsa` encodes and decodes the IEEE 1609.3-2016 WSA in UPER, byte-identical to asn1tools on 5 vectors (`tests/wsa_oracle.rs`); `RsuRuntime::wsa_payload` sends an 84-octet SCMS-service WSA (PSID 0x23 ASSUMPTION, IPv6 Routing, the WRA). The engine does not send WSAs yet (P19.2) | M11 still waits for P19.2-P19.4 |
 
 Fourteen of these change nothing a device trusts or does: crypto #30, #35 and proto E7, crypto

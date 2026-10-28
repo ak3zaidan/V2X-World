@@ -3267,8 +3267,10 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                provisioning-proxy or report-forward role signs and sends an IEEE 1609.3 \
                WSA every wsa_interval_ms (PSID 0x23, IPv6 Routing, the WAVE Routing \
                Advertisement; v2xw_msg::wsa), and a vehicle binds to a unit only while it \
-               holds a verified WSA from it no older than 1 s. The air hop itself is still \
-               the constant link: the service-channel path (contact window, PER, SCH load) \
+               holds a verified WSA from it no older than 1 s. A relayed misbehaviour \
+               report goes on the radio.channels service channel when the run has one \
+               (rule gap M11; a one-radio unit then needs alternating access). The air hop \
+               of downloads is still the constant link: the service-channel path (contact window, PER, SCH load) \
                is P19.3-P19.4.",
     },
     KeyStatus {

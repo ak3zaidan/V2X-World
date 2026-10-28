@@ -1010,6 +1010,75 @@ fn a_vehicle_uses_a_roadside_unit_only_after_verifying_its_wsa() {
     assert_eq!(sch_muted.phase2.topups_started, 0, "{:?}", sch_muted.phase2);
 }
 
+/// Rule gap M11 (WP-19 P19.4): under `net.rsu_ip.air: sch` a relayed misbehaviour report
+/// goes out on the service channel the unit's WSA advertises (IEEE 1609.3; [SM-MBR] §4),
+/// not on safety channel 172. Six vehicles with two radios (one on 172, one on the
+/// map's service channel 174), no modem, one attacker, one relaying unit: under
+/// `constant` every report frame is on 172; under `sch` none is, and as many reports
+/// still reach the unit.
+#[test]
+fn relayed_reports_move_to_the_advertised_service_channel() {
+    let run_with = |air: &str| {
+        let mut s = with_backend(deterministic_radio(fleet(6, 30.0)));
+        if let Some(uu) = s.net.uu.as_mut() {
+            uu.params["penetration"] = 0.0.into();
+        }
+        s.actors.rsus = vec![
+            serde_json::from_value(serde_json::json!({
+                "position_m": [420.0, 280.0, 0.0],
+                "roles": ["crl", "provisioning-proxy", "report-forward"],
+                "profile": "rsu/commsignia-its-rs4",
+            }))
+            .expect("an RSU"),
+        ];
+        let lifecycle =
+            Scenario::load(scenarios().join("credential-lifecycle.yaml")).expect("loads");
+        s.threats = lifecycle.threats.clone();
+        s.detection = lifecycle.detection.clone();
+        s.threats.attackers[0].fraction = None;
+        s.threats.attackers[0].count = Some(1);
+        s.threats.attackers[0].schedule = None;
+        s.radio.channels = serde_json::from_value(serde_json::json!([
+            {"channel": 174, "messages": ["ssm"]}
+        ]))
+        .expect("radio.channels");
+        s.radio.devices.obu.radios = Some(2);
+        s.net.rsu_ip =
+            Some(serde_json::from_value(serde_json::json!({"air": air})).expect("net.rsu_ip"));
+        let errors = v2xw_engine::scenario::validate(&s);
+        assert!(errors.is_empty(), "{errors:?}");
+        run(s)
+    };
+    let mbr_channels = |rec: &MemoryRecorder| {
+        let mut by: BTreeMap<u16, usize> = BTreeMap::new();
+        for t in on::<NodeTxView>(rec) {
+            if t.msg_type.as_deref() == Some("mbr") {
+                *by.entry(t.channel.unwrap_or(0)).or_insert(0) += 1;
+            }
+        }
+        by
+    };
+    let (constant, crec) = run_with("constant");
+    let (sch, srec) = run_with("sch");
+    let (c, s) = (mbr_channels(&crec), mbr_channels(&srec));
+    println!(
+        "M11 constant {c:?} relayed {}; sch {s:?} relayed {}",
+        constant.phase2.reports_uploaded_relay, sch.phase2.reports_uploaded_relay
+    );
+    assert!(
+        c.get(&172).copied().unwrap_or(0) > 0,
+        "constant: reports on 172 {c:?}"
+    );
+    assert_eq!(c.get(&174), None, "constant: {c:?}");
+    assert_eq!(
+        s.get(&172),
+        None,
+        "sch: no report on the safety channel {s:?}"
+    );
+    assert!(s.get(&174).copied().unwrap_or(0) > 0, "sch: {s:?}");
+    assert!(sch.phase2.reports_uploaded_relay > 0, "{:?}", sch.phase2);
+}
+
 #[test]
 fn one_attacker_among_six_is_reported_revoked_and_refused_and_the_crl_reaches_everyone() {
     let (report, rec) = backend_run(6, true);

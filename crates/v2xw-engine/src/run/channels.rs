@@ -215,6 +215,16 @@ pub(crate) fn plan(s: &Scenario) -> Result<Option<ChannelPlan>, Vec<(String, Str
         }
         _ => BTreeMap::new(),
     };
+    // WP-19 (rule gap M11): under `net.rsu_ip.air: sch` a vehicle's SCMS traffic to a
+    // relaying unit, its misbehaviour reports, goes on the service channel the unit's WSA
+    // advertises (IEEE 1609.3: the user joins the advertised SCH; [SM-MBR] §4 uploads
+    // "whenever in range of an RSU offering SCMS connectivity"), not on the safety
+    // channel, unless the map places reports itself.
+    if crate::wiring::rsu_ip_sch(s)
+        && let Some(sc) = service_id
+    {
+        by_msg.entry(MsgType::Mbr).or_insert(sc);
+    }
     Ok(Some(ChannelPlan {
         primary: primary_id,
         service: service_id,

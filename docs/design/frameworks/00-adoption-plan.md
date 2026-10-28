@@ -827,6 +827,12 @@ trustworthy or comparable; later waves add behaviours and radio features.
   §4.2 LLC/SNAP). Unit tests hold the ConstantPath limit (PHY air time, 40-56 µs over the
   line rate). Not wired: P19.4 builds the PER curve from the link budget, reads the WP-13
   CBR and puts `carry`'s `RsuBackhaul` air leg on it under `sch`.
+- P19.4 part 1, M11 (2026-10-28, branch only): under `sch`, `ChannelPlan` maps `mbr` to
+  the run's service channel unless `radio.channels` places it (`run/channels.rs`), so a
+  relayed report leaves channel 172. `foundations::relayed_reports_move_to_the_advertised_service_channel`:
+  six two-radio vehicles, one attacker, 174 as service channel: 241 report frames on 172
+  under `constant`, 228 on 174 and none on 172 under `sch`, 79 vs 83 reports relayed.
+  Default unchanged.
 
 **WP-20 Traffic yields to emergency vehicles** (M, 5 days). Source: S-P5.
 - Scope: within a reaction distance civilians pull to the kerb or slow (US move-over, UVC
