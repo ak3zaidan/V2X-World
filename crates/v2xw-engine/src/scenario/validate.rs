@@ -864,6 +864,14 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the carrier-sense threshold",
     },
+    // The same span: -85 dBm reproduces the pre-radio-fix4 carrier sense, -62 is ns-3's.
+    Bound {
+        path: "radio.phy.energy_detect_dbm",
+        lo: -100.0,
+        hi: -50.0,
+        exclusive_lo: false,
+        what: "the energy-detect level",
+    },
     Bound {
         path: "radio.phy.capture_threshold_db",
         lo: 0.0,
@@ -6809,6 +6817,7 @@ fn radio_tuning(s: &Scenario, e: &mut Vec<ScenarioError>) {
         ("radio.phy.noise_figure_db", p.noise_figure_db),
         ("radio.phy.sensitivity_dbm", p.sensitivity_dbm),
         ("radio.phy.cca_threshold_dbm", p.cca_threshold_dbm),
+        ("radio.phy.energy_detect_dbm", p.energy_detect_dbm),
         ("radio.phy.capture_threshold_db", p.capture_threshold_db),
         ("radio.mac.cw_min_vo", m.cw_min_vo.map(f64::from)),
         ("radio.mac.cw_min_vi", m.cw_min_vi.map(f64::from)),

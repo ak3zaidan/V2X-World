@@ -525,6 +525,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "-85 dBm (ETSI); -82 (ns-3); -65 (Veins).",
     },
     Basic {
+        path: "radio.phy.energy_detect_dbm",
+        explain: "The level at which another channel's frame, leaking through the filter, makes the radio hear its own channel as busy.",
+        recommended: "-65 dBm (IEEE 802.11-2020 §17.3.10.6, 10 MHz); -62 (ns-3); -85 reproduces the older single-threshold carrier sense.",
+    },
+    Basic {
         path: "radio.phy.capture_threshold_db",
         explain: "Replaces the error model with a hard rule: a frame survives only if it stays this many dB above interference plus noise.",
         recommended: "Unset (error model); 4 to 10 dB to compare with threshold-based simulators.",

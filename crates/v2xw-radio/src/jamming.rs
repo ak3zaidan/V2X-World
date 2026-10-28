@@ -421,6 +421,25 @@ impl JammingField {
         numeric::sum_powers_mw(&contributors)
     }
 
+    /// [`JammingField::power_mw`] without the adjacent-channel emitters
+    /// ([`is_adjacent_channel_source`]): what carrier sense holds to the preamble-detect
+    /// level, the emitters' leak being held to energy detect (radio-fix4 R4.1). The same
+    /// sum, bit for bit, when no emitter overlaps.
+    #[must_use]
+    pub fn jammer_power_mw(&self, rx: NodeId, ch: ChannelId, from: SimTime, to: SimTime) -> f64 {
+        let contributors: Vec<(NodeId, f64)> = self
+            .at(rx)
+            .iter()
+            .filter(|a| a.channel == ch && a.window.overlaps(from, to))
+            .filter(|a| !is_adjacent_channel_source(a.jammer))
+            .map(|a| (a.jammer, numeric::dbm_to_mw(a.power_dbm)))
+            .collect();
+        if contributors.is_empty() {
+            return 0.0;
+        }
+        numeric::sum_powers_mw(&contributors)
+    }
+
     /// The total jamming power at `rx` on `ch` at one instant, dBm, or negative infinity
     /// when there is none.
     #[must_use]

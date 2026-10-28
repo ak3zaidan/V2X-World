@@ -4031,10 +4031,12 @@ pub fn build_phy(scenario: &Scenario) -> v2xw_radio::OfdmPhy {
     if let Some(s) = ps.sensitivity_dbm {
         phy = phy.with_sensitivity_override_dbm(s);
     }
-    if let Some(cca) = ps.cca_threshold_dbm {
+    if ps.cca_threshold_dbm.is_some() || ps.energy_detect_dbm.is_some() {
         phy = phy.with_cca(v2xw_radio::CcaConfig {
-            busy_dbm: cca,
-            energy_detect_dbm: None,
+            busy_dbm: ps
+                .cca_threshold_dbm
+                .unwrap_or(v2xw_radio::CcaConfig::ETSI.busy_dbm),
+            energy_detect_dbm: ps.energy_detect_dbm,
         });
     }
     if let Some(cp) = ps.capture_threshold_db {
