@@ -6,7 +6,9 @@
 //! services run on a service channel; in Europe ETSI EN 302 663 and TS 103 141 assign the
 //! control and service channels. A unit sends and hears on the service channel only when
 //! it carries a second radio (`radio.devices.*.radios: 2`); with one radio it stays on the
-//! safety channel (alternating access inside the MAC is WP-16). The two channels leak into
+//! safety channel, unless `net.channel_access` is `alternating`: then the one radio
+//! switches to the service channel in each SCH interval (IEEE 1609.4, WP-16, gated in the
+//! EDCA MAC). The two channels leak into
 //! each other through the transmitter mask and the receiver's selectivity, the ACIR of
 //! [`v2xw_radio::regulation::adjacent_acir_db`].
 //!
@@ -70,6 +72,19 @@ impl ChannelPlan {
             v.push(s);
         }
         v
+    }
+}
+
+/// How many radios a unit of `class` carries, from `radio.devices.*.radios` (one on an
+/// on-board or VRU unit, two on a roadside unit when unset), with or without a channel
+/// map: under IEEE 1609.4 alternating access (WP-16) a two-radio unit keeps one radio on
+/// each channel and does not switch.
+pub(crate) fn unit_radios(s: &Scenario, class: ActorClass) -> u8 {
+    let d = &s.radio.devices;
+    match class {
+        ActorClass::Rsu | ActorClass::BaseStation => d.rsu.radios.unwrap_or(2),
+        ActorClass::Pedestrian | ActorClass::Bicycle => d.vru.radios.unwrap_or(1),
+        _ => d.obu.radios.unwrap_or(1),
     }
 }
 

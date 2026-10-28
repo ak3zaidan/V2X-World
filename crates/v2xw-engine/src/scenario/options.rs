@@ -200,7 +200,7 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
         ),
         ("net.channel_access", "alternating") => w(
             "Alternating (IEEE 1609.4)",
-            "One radio switches channel every 50 ms; a message made on the wrong half waits up to 54 ms.",
+            "One radio switches channel every 50 ms; a message made on the wrong half waits up to 54 ms, and one that would run into the 4 ms switch guard waits too.",
         ),
         ("net.geonet.forwarding", "on-air") => w(
             "On the air (recommended)",

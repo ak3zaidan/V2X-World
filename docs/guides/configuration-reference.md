@@ -114,7 +114,7 @@ offered.
 | `radio.mac.cw_min_vo` / `cw_min_vi` **new** | 3 / 7 | 2^k - 1, from 1 to 1023 | Random back-off window (EN 302 663 Table C.4; IEEE 802.11-2020 §9.4.2.28). |
 | `radio.mac.aifsn_vo` / `aifsn_vi` **new** | 2 / 3 | 2 to 15 | `AIFS = AIFSN·13 µs + 32 µs`. |
 | `radio.mac.queue_length` **new** | 64 | 1 to 1024 frames | Per-category queue. A full queue drops (`mac_drops`). |
-| `net.channel_access` | `continuous` | `continuous`, `alternating` | IEEE 1609.4 channel switching. |
+| `net.channel_access` | `continuous` | `continuous`, `alternating` | IEEE 1609.4 channel switching. `alternating` gates the EDCA MAC (WP-16): a one-radio unit sends and hears the safety channel only in the CCH interval and the service channel only in the SCH interval; no frame starts in a 4 ms guard or crosses its interval's end (report `mac_gate_deferrals`, `mac_guard_deferrals`, `straddling_frames`). Two-radio units (`radio.devices.*.radios: 2`) do not switch. Interval lengths UNVERIFIED. |
 
 ## C-V2X sidelink (`radio.sidelink`, `radio.models.sidelink`)
 

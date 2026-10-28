@@ -2865,7 +2865,8 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                channel beside the safety channel (IEEE 1609.4-2016 §6.2.5 service \
                channels; SAE J2945/1 keeps the BSM on 172; ETSI EN 302 663 / TS 103 141 in \
                Europe). A unit sends and hears the service channel only with a second \
-               radio (radio.devices.*.radios: 2); a message for a channel it has no radio \
+               radio (radio.devices.*.radios: 2), or under net.channel_access: \
+               alternating in the SCH intervals; a message for a channel it has no radio \
                on is not sent (untuned_tx_drops). Each channel has its own EDCA queues, \
                carrier sense and busy ratio (channel_busy_ns / channel_window_ns in the \
                report). Empty, the default: the single-channel run, byte for byte.",
@@ -2985,7 +2986,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                generated. 'alternating': a single radio spends 50 ms of every 100 ms on the \
                control channel, less a 4 ms guard at each switch, so a BSM generated in \
                the service-channel interval waits for the next control-channel interval; \
-               the wait shows in the end-to-end latency.",
+               the wait shows in the end-to-end latency. The EDCA MAC holds the grant \
+               (WP-16): no frame starts in a guard or crosses its interval's end \
+               (mac_gate_deferrals, mac_guard_deferrals, straddling_frames = 0 in the \
+               report). A one-radio unit hears the safety channel only in CCH intervals \
+               and the service channel of radio.channels only in SCH intervals, and can \
+               send there; a two-radio unit (radio.devices.*.radios: 2, the roadside \
+               default) keeps one radio on each and never switches. At the abstract MAC \
+               tier and on a sidelink, which have no EDCA MAC, the hand-off waits \
+               instead. Interval lengths UNVERIFIED at the primary level.",
     },
     KeyStatus {
         path: "net.geonet",

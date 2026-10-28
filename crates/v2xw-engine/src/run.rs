@@ -565,6 +565,20 @@ pub struct RunReport {
     /// channel it has no radio for (a single-radio unit's service-channel message).
     #[serde(skip_serializing_if = "is_zero_u64")]
     pub untuned_tx_drops: u64,
+    /// WP-16 (`net.channel_access: alternating`): EDCA countdowns the IEEE 1609.4 gate
+    /// held because the unit's one radio was on the other channel's interval, or the
+    /// countdown ran into the interval end. Zero without alternating access.
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub mac_gate_deferrals: u64,
+    /// WP-16: frames the gate held because they would start in a guard interval or cross
+    /// the end of their channel's interval (IEEE 1609.4-2016 §6.2.5; Veins Mac1609_4's
+    /// `timeLeftInSlot`, behaviour only).
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub mac_guard_deferrals: u64,
+    /// WP-16 invariant: single-radio frames that went on the air in a guard or across
+    /// their interval's end. Must be 0; a late poll is the only way to make one.
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub straddling_frames: u64,
     /// WP-13: per channel, the busy time every unit tuned to it measured, summed over the
     /// metric windows, ns. With [`RunReport::channel_window_ns`], the mean channel busy
     /// ratio of each of the run's channels. Empty in a single-channel run.
@@ -1139,6 +1153,9 @@ pub struct Engine {
     /// The run's own channel map (WP-13, `radio.channels`); `None` in a single-channel
     /// run, where every path below is the one it always was.
     channel_plan: Option<channels::ChannelPlan>,
+    /// WP-16: the IEEE 1609.4 schedule when `net.channel_access` is `alternating` and the
+    /// EDCA MAC carries its gate; `None` otherwise, where every path below is unchanged.
+    wave: Option<v2xw_radio::wave_schedule::ChannelSchedule>,
     /// [`Engine::cbr_mark`] per `(node, channel)` for the per-channel busy totals of a
     /// multi-channel run ([`RunReport::channel_busy_ns`]).
     chan_mark: BTreeMap<(NodeId, u16), (SimTime, u64)>,
@@ -1648,6 +1665,11 @@ impl Engine {
         } else {
             channels::plan(&scenario).ok().flatten()
         };
+        // WP-16: alternating access lives in the EDCA MAC, which a sidelink run and the
+        // abstract MAC tier do not have; there the hand-off deferral stands in for it.
+        let alternating_mac = sidelink.is_none()
+            && scenario.net.channel_access.as_deref() == Some("alternating")
+            && scenario.radio.tiers.mac != v2xw_core::card::Tier::Abstract;
         let frag_plan = match scenario_for_radio.net.fragmenter.as_ref() {
             None => crate::frag::FragPlan::none(),
             Some(choice) => crate::frag::FragPlan::from_choice(choice)
@@ -1704,7 +1726,22 @@ impl Engine {
             mac: if sidelink.is_some() {
                 None
             } else {
-                crate::wiring::build_mac(&scenario_for_radio)
+                // WP-16: IEEE 1609.4 alternating access gates the EDCA grants; the CCH
+                // interval is the safety channel's and the SCH interval the service
+                // channel's (WP-13).
+                crate::wiring::build_mac(&scenario_for_radio).map(|m| {
+                    if alternating_mac {
+                        m.with_alternating(
+                            v2xw_radio::wave_schedule::ChannelSchedule {
+                                access: v2xw_radio::wave_schedule::ChannelAccess::Alternating,
+                            },
+                            channel_plan.as_ref().map_or(dsrc_channel, |p| p.primary),
+                            channel_plan.as_ref().and_then(|p| p.service),
+                        )
+                    } else {
+                        m
+                    }
+                })
             },
             j2945_per: (sidelink.is_none()
                 && crate::wiring::build_dcc(&scenario_for_radio).is_some_and(|d| d.is_j2945()))
@@ -1772,6 +1809,9 @@ impl Engine {
             mac_window: BTreeMap::new(),
             cbr_mark: BTreeMap::new(),
             channel_plan: channel_plan.clone(),
+            wave: alternating_mac.then_some(v2xw_radio::wave_schedule::ChannelSchedule {
+                access: v2xw_radio::wave_schedule::ChannelAccess::Alternating,
+            }),
             chan_mark: BTreeMap::new(),
             orphaned_rx: Vec::new(),
             frames: BTreeMap::new(),
@@ -2882,6 +2922,14 @@ impl Engine {
             self.report.trips_unroutable = unroutable;
         }
         self.report.gcbr = self.gcbr.as_ref().map(|g| g.tally);
+        // WP-16: the 1609.4 gate's holds; zero (and not serialised) without it.
+        if self.wave.is_some()
+            && let Some(mac) = self.mac.as_ref()
+        {
+            let (gate, guard) = mac.total_gate_deferrals();
+            self.report.mac_gate_deferrals = gate;
+            self.report.mac_guard_deferrals = guard;
+        }
         let refusals: u64 = self
             .nodes
             .values()
@@ -4581,15 +4629,14 @@ impl Engine {
                 None => cbr,
             };
             let service_cbr = match (self.dcc_service.as_ref(), self.channel_plan.as_ref()) {
-                (Some(_), Some(plan)) => {
-                    plan.service
-                        .filter(|&sc| self.tuned(node, sc))
-                        .and_then(|sc| {
-                            self.mac
-                                .as_ref()
-                                .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, sc, now))
-                        })
-                }
+                (Some(_), Some(plan)) => plan
+                    .service
+                    .filter(|&sc| self.uses_channel(node, sc))
+                    .and_then(|sc| {
+                        self.mac
+                            .as_ref()
+                            .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, sc, now))
+                    }),
                 _ => None,
             };
             let Engine {
@@ -4630,15 +4677,14 @@ impl Engine {
             });
         // The service channel's own busy ratio, for its own gate, at a unit tuned to it.
         let service_cbr = match (self.dcc_service.as_ref(), self.channel_plan.as_ref()) {
-            (Some(_), Some(plan)) => {
-                plan.service
-                    .filter(|&sc| self.tuned(node, sc))
-                    .and_then(|sc| {
-                        self.mac
-                            .as_ref()
-                            .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, sc, now))
-                    })
-            }
+            (Some(_), Some(plan)) => plan
+                .service
+                .filter(|&sc| self.uses_channel(node, sc))
+                .and_then(|sc| {
+                    self.mac
+                        .as_ref()
+                        .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, sc, now))
+                }),
             _ => None,
         };
         // The unit's own state as its position estimate has it: the J2945/1 local
@@ -5570,8 +5616,13 @@ impl Engine {
             return;
         }
         let mut jitter = self.gen_timing.jitter(&self.rng, node, tx.generation_time);
-        // IEEE 1609.4 alternating access: wait for the control-channel interval.
-        if self.scenario.net.channel_access.as_deref() == Some("alternating") {
+        // IEEE 1609.4 alternating access without an EDCA MAC to gate (the abstract MAC
+        // tier, a sidelink run): wait for the control-channel interval at the hand-off.
+        // With the MAC, the gate holds the frame there instead (WP-16).
+        if self.wave.is_none()
+            && self.mac.is_none()
+            && self.scenario.net.channel_access.as_deref() == Some("alternating")
+        {
             let sched = v2xw_net::stack::wave::ChannelSchedule {
                 access: v2xw_net::stack::wave::ChannelAccess::Alternating,
             };
@@ -5651,7 +5702,7 @@ impl Engine {
             .channel_plan
             .as_ref()
             .map(|p| p.channel_for(tx.msg_type))
-            && !self.tuned(node, ch)
+            && !self.uses_channel(node, ch)
         {
             self.report.untuned_tx_drops += 1;
             if let Some(n) = self.nodes.get_mut(&node) {
@@ -6710,6 +6761,8 @@ impl Engine {
         // another frame began. The backoff must stop counting when the medium went busy,
         // not now (EN 302 663 Annex C.4.2), so the MAC is told that instant first.
         let busy_since = busy.then(|| self.medium_busy_since(node, channel, now));
+        // WP-16: a unit with two radios is not held by the 1609.4 gate.
+        let two_radios = self.wave.is_some() && !self.alternates(node);
         {
             let Engine {
                 scheduler,
@@ -6726,6 +6779,9 @@ impl Engine {
                 scheduler, rng, world, snapshot, provenance, params, &mut null,
             );
             let mac = mac.as_mut().expect("checked above");
+            if two_radios {
+                mac.set_two_radios(node);
+            }
             if let Some(since) = busy_since {
                 mac.freeze_at(node, channel, since);
             }
@@ -6918,9 +6974,19 @@ impl Engine {
                 continue;
             }
             self.report.mac_grants += 1;
+            // WP-16 invariant: under alternating access no single-radio unit's frame
+            // crosses its interval's end or starts in a guard (`straddling_frames` = 0).
+            let gated = self.wave.filter(|_| self.alternates(node));
+            let primary = self.primary_channel();
             if let Some(state) = self.frames.get_mut(&frame) {
                 state.start = at;
                 state.end = state.air.after(at);
+                if let Some(w) = gated
+                    && w.fits(at, state.air.as_nanos(), channel == primary)
+                        .is_err()
+                {
+                    self.report.straddling_frames += 1;
+                }
                 self.report.mac_access_delay_ns += at.saturating_sub(state.ready_at);
                 // The split of the access delay the latency decomposition reports: one
                 // AIFS of the frame's category and the slots the MAC counted down; the
@@ -7372,7 +7438,7 @@ impl Engine {
             }
             // WP-13: a receiver with no radio on this frame's channel gets its energy only,
             // which leaks into the channel it does listen on.
-            if !self.tuned(rx, state.descriptor.channel) {
+            if !self.tuned_at(rx, state.descriptor.channel, state.start, state.end) {
                 state.faint.insert(rx, rssi);
                 self.report.untuned_arrivals += 1;
                 continue;
@@ -7581,7 +7647,7 @@ impl Engine {
                 .chain(state.faint.iter())
             {
                 let class = self.class_of(rx);
-                if !plan.tuned(class, ch) && power >= floor_dbm {
+                if !self.tuned_at(rx, ch, state.start, state.end) && power >= floor_dbm {
                     energy_only.push((rx, power));
                 }
                 for other in plan.channels_of(class) {
@@ -7739,7 +7805,7 @@ impl Engine {
                 .faint
                 .keys()
                 .copied()
-                .filter(|&rx| !self.tuned(rx, state.descriptor.channel))
+                .filter(|&rx| !self.tuned_at(rx, state.descriptor.channel, state.start, state.end))
                 .collect();
             for rx in untuned {
                 self.phy.forget_arrival(RxHandle { tx: tx_id, rx });
@@ -9989,6 +10055,55 @@ impl Engine {
         self.channel_plan
             .as_ref()
             .is_none_or(|p| p.tuned(self.class_of(node), ch))
+    }
+
+    /// WP-16: whether `node` switches its one radio between the control and service
+    /// channels (IEEE 1609.4 alternating access). A unit with two radios keeps one on
+    /// each channel and never alternates.
+    fn alternates(&self, node: NodeId) -> bool {
+        self.wave.is_some() && channels::unit_radios(&self.scenario, self.class_of(node)) < 2
+    }
+
+    /// The run's safety channel: the CCH interval's channel under alternating access.
+    fn primary_channel(&self) -> ChannelId {
+        self.channel_plan
+            .as_ref()
+            .map_or(self.dsrc_channel, |p| p.primary)
+    }
+
+    /// Whether `node` ever sends or measures on `ch`: [`Engine::tuned`], and under
+    /// alternating access (WP-16) also the service channel of a single-radio unit, which
+    /// it reaches in the SCH interval.
+    fn uses_channel(&self, node: NodeId, ch: ChannelId) -> bool {
+        if self.alternates(node) {
+            return ch == self.primary_channel()
+                || self.channel_plan.as_ref().and_then(|p| p.service) == Some(ch);
+        }
+        self.tuned(node, ch)
+    }
+
+    /// Whether `node`'s radio is on `ch` for the whole of a frame on the air from `start`
+    /// to `end` (WP-16). A single-radio unit under alternating access is on the safety
+    /// channel in CCH intervals, on the service channel (if the run has one) in SCH
+    /// intervals and on neither in a guard, so a frame that a switch interrupts is lost
+    /// to it. Everyone else: [`Engine::tuned`].
+    fn tuned_at(&self, node: NodeId, ch: ChannelId, start: SimTime, end: SimTime) -> bool {
+        use v2xw_radio::wave_schedule::Interval;
+        if let Some(w) = self.wave
+            && self.alternates(node)
+        {
+            let iv = w.interval(start);
+            if w.interval(end.saturating_sub(1).max(start)) != iv || w.interval_end_ns(start) < end
+            {
+                return false;
+            }
+            return match iv {
+                Interval::Cch => ch == self.primary_channel(),
+                Interval::Sch => self.channel_plan.as_ref().and_then(|p| p.service) == Some(ch),
+                Interval::Guard => false,
+            };
+        }
+        self.tuned(node, ch)
     }
 
     /// What a frame's power at `node` amounts to on `channel`: the attempt's power on its
