@@ -18,6 +18,11 @@ runs:
   MW:
     scenario: scenarios/edge/multi-week.yaml
     note: the 33-day conformance run on the real calendar (--record-level events)
+  MWC2T:
+    scenario: scenarios/edge/multi-week-crlg-down-late.yaml
+    base: MW
+    note: 'trace track 2026-10-28: the outage moved to 300,000-2,600,000 s, after the changeover (9d0fbc2c,
+      --record-level metrics; a scratch copy at events level gave the same 110,048)'
   MWC:
     scenario: scenarios/edge/multi-week-crlg-down.yaml
     base: MW
@@ -67,8 +72,14 @@ rows:
     receiver in W5 (28.0-28.0 d live) that holds only that home list refuses the home CRACA''s
     messages'
   measured: '0 (rel) -> 0 (fix2)'
-  verdict: open
+  verdict: wrong-expectation
   note: 'Not an overdue-rule defect. Diagnostic build: in W4-W5 receivers hold the old home list (crlCraca af8a..b710ad, nextCrl t0 + 7 d, overdue) and provider-b''s, but every home sender signs under cracaId 4a1086, the new root''s: the root rollover decided at 120 s is published (CTL 1) at 259,320 s, when the home Generator is already down (700-2,600,000 s), and since dc0c0250 the wire PKI follows it. No list under the new CRACA can be signed until the Generator is back, so no device holds one and the overdue rule (per held CRL) has nothing to act on. On 81a12183 certificates kept the old CRACA, hence 152,505. Whether a deployed device refuses certificates of a CRACA it never got a CRL for is not in the cited sources: open. The scenario no longer tests its premise; it needs the outage without the rollover, or after the changeover'
+  note2: 'closed 2026-10-28 (trace track; scms-variants RR.MWC.overdue has the quotes). No clause in
+    [CAMP122], [SMP] v1.0.3 or [SM-EESEC] v2.04 makes a device refuse a certificate whose CRACA it holds
+    no CRL for. Table 67 starts from "a next CRL date", and SCMS-1223 discards only a listed sender. IEEE
+    1609.2 was not read (paywalled). So 0 is right for MWC on the engine''s per-CRACA reading, and the
+    scenario that tests the rule is MWC2, now with its outage after the changeover: 110,048 crl-overdue
+    refusals on 9d0fbc2c. Open reading: Table 67 says "rejecting all of them" (fix spec F5-SCOPE)'
 - id: F4A.MWC.held-overdue
   base: MWC
   variant: MWC
@@ -168,3 +179,19 @@ rows:
     scms-audit-sim-metrics CV.report-fate check pins that sum). reports_sent counts generated reports,
     filed or not, although its doc comment (phase2.rs:1647) says "filed": a naming defect only, see the
     trace track fix specs'
+- id: F4A.MWC2.overdue-after-changeover
+  base: MWC2T
+  variant: MWC2T
+  area: scms
+  measure: rv.refused.crl-overdue; per window, node.security records holding the new home CRACA (4a1086)
+    list and how many are past nextCrl + 14 d
+  expect: 'refusals >= 1. 4a1086 held from W1; none overdue in W1-W3; overdue in W4; none in W5'
+  source: 'R-ROLLCRL: the changeover (CTL 1, 259,320 s) signs a list under the new CRACA while the
+    Generator is up (nextCrl = day 10.0); [CAMP122] Table 67 overdue_CRL_tolerance 2 weeks -> overdue from
+    day 24.0 (2,073,600 s): after W3 (day 21.0), before W4 (day 28.0); the Generator returns at day 30.1'
+  measured: '110,048 refusals. 4a1086 held: W1 1,515, W2 2,350, W3 2,558 (0 overdue), W4 6,638 (6,638
+    overdue, with b710ad; provider-b b0595c current), W5 1,950 (nextCrl day 37.09, 0 overdue). The old
+    200,000 s start: 0 refusals, no 4a1086 list before W5 (the fault)'
+  verdict: pass
+  note: 'Written after the variant runs, from the scenario comment''s design. The scenario change, not an
+    engine change, closes RR.MWC2'

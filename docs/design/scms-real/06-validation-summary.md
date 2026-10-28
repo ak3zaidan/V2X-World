@@ -1459,6 +1459,38 @@ The totals count each row as its own checklist records it, with the changes in �
     `MacTimer` (node 57's BSM moves 100 ms at 244.2 s, not bisected) and RR.MWC/MWC2
     crl-overdue 0. In MWC the root changeover falls inside the CRL Generator outage. Whether
     a real device refuses certificates from a CRACA it holds no CRL for has no source.
+    **2026-10-28 (trace track, on the `9d0fbc2c` release, tiny slot): the five run-level drifts
+    fix round 4 left open.** None is an engine defect. Four are explained, and the fifth was a
+    scenario defect, now fixed.
+    - `M0-enforced` (`scms-matrix.yaml`): this is a wrong expectation. `stage.enforced_s` is
+      measured from the detect stage of the report that tipped the decision, not from t0. The
+      absolute stamps match the deployment: published at the Wed 10:00 ET slot (147,600.0 s),
+      first enforcement 61.6 s later. The tipping report was detected at 170.75 s, which gives
+      147,490.9. The band is now [147,300, 151,180] (slot, first live window, hourly fetch).
+      The 3 cases against 2 (and `M0-attackers-revoked` 3) come from `f4a0f5cc`'s renumbered
+      vehicle ids (run.rs:774): those ids re-key the attacker draws, so 3 reportable vehicles
+      now attack.
+    - base.yaml bytes (`scms-fix3-ra.yaml` RA.uu-bytes-per-topup): the cause is the
+      realisation, not `d96f6d58`. That run has the PDU layer on and 0 CRL downloads. 71 % of
+      the Uu bytes are SM-MBR uploads (660, 714,657 B), and the engine events moved on the
+      same seed (883,278 → 886,721). Seeds _0001/_0002 give 22.5 and 16.3 kB per top-up. The
+      top-up exchange itself is 3,760 B per top-up.
+    - PQF (PQ.relay-case-kept): revoke 3 → 2 on 3cbc95a4 was the PLV defect fixed in
+      `cfc2e13b`. On 3cbc95a4: Invalid 71,775, no provider-b message verified. On 9d0fbc2c:
+      3 decisions, Invalid 0. Installs 150 → 120 and receptions 3,864 → 2,071 are
+      `f4a0f5cc`'s new draw (first decision at 51.5 s, 4 publications for each of 30 units).
+    - reports_received ≪ reports_sent (`scms-fix4-a.yaml` F4A.P2.reports-received-gap): on
+      seed _0001, 2,002 = 103 uploaded + 1,011 roadside detections (R-UNSEC) + 888 with no
+      SM-MBR v1.1 subtype. Only `reports_sent`'s doc comment is wrong ("filed").
+    - RR.MWC/MWC2: no clause in [CAMP122], [SMP] v1.0.3 or [SM-EESEC] v2.04 refuses a
+      certificate whose CRACA has no held CRL. Table 67 is keyed to "a next CRL date", and
+      SCMS-1223 discards only listed senders (quotes in `scms-variants.yaml`). IEEE 1609.2
+      was not read. So MWC's 0 is right, and that row is now a wrong expectation. MWC2's
+      outage (from 200,000 s) also began before the changeover at 259,320 s.
+      `multi-week-crlg-down-late.yaml` now starts it at 300,000 s, which gives 110,048
+      crl-overdue refusals in W4, none in W3, and recovery in W5.
+    - Open: Table 67 says "rejecting all of them", while the engine refuses only the overdue
+      list's CRACA. This is a reading the sources do not settle (fix spec F5-SCOPE).
 
 **Owner decisions**
 - **What the RA and PCA keep for each device** (§6 item 4): request records, cocoons,
