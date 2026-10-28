@@ -96,6 +96,10 @@ pub struct ActuatedOutlook {
     pub cut_s: f64,
     /// Seconds later, at most.
     pub extend_s: f64,
+    /// Under the NEMA dual ring: the soonest any of the junction's indications can change,
+    /// seconds from now, which is every group's `minEndTime` (`crate::nema::control`);
+    /// `None` for the single ring, whose window is `cut_s`.
+    pub earliest_s: Option<f64>,
 }
 
 /// `traffic.control` — the traffic control's own log: actuated signal decisions and
@@ -131,14 +135,24 @@ pub struct ActuatedControllers {
     params: Option<SignalControl>,
     plans: BTreeMap<usize, PlanInfo>,
     counters: ActuatedCounters,
+    /// Under `control: nema`, the junctions the dual ring runs (`crate::nema`); `plans`
+    /// then holds only the ones that fell back to the single ring.
+    nema: Option<crate::nema::control::NemaControllers>,
 }
 
 impl ActuatedControllers {
-    /// Controllers for `control`, or inert ones for fixed-time control.
+    /// Controllers for `control`, or inert ones for fixed-time control. Under
+    /// `control: nema`, every plan that maps to the dual ring runs it and the rest keep
+    /// this single-ring controller (counted in [`Self::nema_fallbacks`]).
     pub fn new(control: &SignalControl, world: &World) -> Self {
-        if control.control != SignalControlKind::Actuated {
+        if !matches!(
+            control.control,
+            SignalControlKind::Actuated | SignalControlKind::Nema
+        ) {
             return Self::default();
         }
+        let nema = (control.control == SignalControlKind::Nema)
+            .then(|| crate::nema::control::NemaControllers::new(control, world));
         let mut approach_of: BTreeMap<LaneId, LaneId> = BTreeMap::new();
         for c in world.roads.connections() {
             if let Some(via) = c.via {
@@ -147,6 +161,9 @@ impl ActuatedControllers {
         }
         let mut plans = BTreeMap::new();
         for (i, plan) in world.signals.iter().enumerate() {
+            if nema.as_ref().is_some_and(|n| n.controls(i)) {
+                continue;
+            }
             let crossing: Vec<bool> = plan
                 .controlled
                 .iter()
@@ -182,13 +199,53 @@ impl ActuatedControllers {
             params: Some(control.clone()),
             plans,
             counters: ActuatedCounters::default(),
+            nema,
         }
+    }
+
+    /// Whether any plan runs under the NEMA dual ring.
+    pub fn has_nema(&self) -> bool {
+        self.nema.is_some()
+    }
+
+    /// The plans under the NEMA dual ring.
+    pub fn nema_plans(&self) -> impl Iterator<Item = usize> + '_ {
+        self.nema.iter().flat_map(|n| n.plan_indices())
+    }
+
+    /// Hands NEMA plan `idx` its standing priority requests, `(signal group, arrival)`
+    /// (`crate::priority::PriorityControllers::requests`), served through its rings.
+    pub fn set_nema_priority(
+        &mut self,
+        idx: usize,
+        requests: &[(u16, f64)],
+        params: &crate::priority::PriorityParams,
+    ) {
+        if let Some(n) = &mut self.nema {
+            n.set_priority(idx, requests, params);
+        }
+    }
+
+    /// Whether plan `idx` runs under the NEMA dual ring.
+    pub fn is_nema(&self, idx: usize) -> bool {
+        self.nema.as_ref().is_some_and(|n| n.controls(idx))
+    }
+
+    /// Under `control: nema`, the plans left to the single ring, by reason.
+    pub fn nema_fallbacks(&self) -> BTreeMap<&'static str, u64> {
+        self.nema
+            .as_ref()
+            .map(|n| n.fallback_counts().clone())
+            .unwrap_or_default()
     }
 
     /// The window the SPaT of plan `idx` states at `now_s` ([`ActuatedOutlook`]), `None`
     /// under fixed-time control. Outside a vehicle green (an amber, an all-red) nothing
     /// moves the clock, so the window is zero both ways until the next green starts.
     pub fn outlook(&self, world: &World, idx: usize, now_s: f64) -> Option<ActuatedOutlook> {
+        if let Some(n) = self.nema.as_ref().filter(|n| n.controls(idx)) {
+            return n.outlook(idx, now_s);
+        }
         let p = self.params.as_ref()?;
         let st = self.plans.get(&idx)?;
         let plan = world.signals.get(idx)?;
@@ -197,6 +254,7 @@ impl ActuatedControllers {
             return Some(ActuatedOutlook {
                 cut_s: 0.0,
                 extend_s: 0.0,
+                earliest_s: None,
             });
         }
         let held = if st.phase == i { st.held_s } else { 0.0 };
@@ -214,6 +272,7 @@ impl ActuatedControllers {
         Some(ActuatedOutlook {
             cut_s: (left - (min - elapsed).max(0.0)).clamp(0.0, left),
             extend_s: (p.max_green_s - elapsed - left).max(0.0),
+            earliest_s: None,
         })
     }
 
@@ -224,7 +283,14 @@ impl ActuatedControllers {
 
     /// What the controllers have done so far.
     pub fn counters(&self) -> ActuatedCounters {
-        self.counters
+        let mut c = self.counters;
+        if let Some(n) = &self.nema {
+            let k = n.counters();
+            c.gap_outs += k.gap_outs;
+            // A coordinated force-off ends a green at a time limit, as a max-out does.
+            c.max_outs += k.max_outs + k.force_offs;
+        }
+        c
     }
 
     /// The detector calls: every approach lane with a vehicle front in its last
@@ -290,9 +356,34 @@ impl ActuatedControllers {
         now_s: f64,
         dt_s: f64,
     ) {
+        self.step_with_pedestrians(
+            world,
+            extend,
+            calls,
+            &crate::nema::control::PedestrianIndex::default(),
+            now_s,
+            dt_s,
+        );
+    }
+
+    /// [`Self::step_with`] with the pedestrians standing at crosswalks, whose push-button
+    /// calls the NEMA controller serves (`crate::nema::control::PedestrianIndex`). The
+    /// single-ring controller does not read them.
+    pub fn step_with_pedestrians(
+        &mut self,
+        world: &mut World,
+        extend: &BTreeSet<LaneId>,
+        calls: &BTreeSet<LaneId>,
+        peds: &crate::nema::control::PedestrianIndex,
+        now_s: f64,
+        dt_s: f64,
+    ) {
         let Some(p) = self.params.clone() else {
             return;
         };
+        if let Some(n) = &mut self.nema {
+            n.step(world, extend, calls, peds, now_s, dt_s);
+        }
         for (&idx, st) in &mut self.plans {
             let Some(plan) = world.signals.get(idx) else {
                 continue;

@@ -159,6 +159,11 @@ pub struct IntersectionFeed {
     /// The actuated controller's window at the last [`IntersectionFeed::set_actuation`]:
     /// how much sooner and later than the plan's clock the next change may come.
     actuation: Option<crate::actuated::ActuatedOutlook>,
+    /// The plan's phases the group timelines were built from, and each controlled
+    /// connector's approach lane, so a controller that rewrites the phases (the NEMA dual
+    /// ring, `crate::nema::control`) is followed by [`IntersectionFeed::sync`].
+    phases: Vec<v2xw_world::SignalPhase>,
+    approach_of: BTreeMap<LaneId, LaneId>,
 }
 
 impl IntersectionFeed {
@@ -251,6 +256,12 @@ impl IntersectionFeed {
             groups,
             map,
             actuation: None,
+            phases: p.phases.clone(),
+            approach_of: p
+                .controlled
+                .iter()
+                .filter_map(|l| approach_of.get(l).map(|a| (*l, *a)))
+                .collect(),
         })
     }
 
@@ -275,6 +286,21 @@ impl IntersectionFeed {
     pub fn sync(&mut self, plan: &SignalPlan) {
         self.offset_s = plan.offset_s;
         self.cycle_s = plan.cycle_s;
+        // A rewritten plan (the NEMA dual ring) has new phases: rebuild the timelines.
+        // A fixed-time or single-ring plan never changes them, so this never runs there.
+        if plan.phases != self.phases {
+            self.phases = plan.phases.clone();
+            let approach_of = &self.approach_of;
+            self.groups = plan
+                .group_timelines(|l| approach_of.get(&l).copied())
+                .into_iter()
+                .map(|(group, segments)| GroupTimeline {
+                    group,
+                    signal_group: signal_group_id(group),
+                    segments,
+                })
+                .collect();
+        }
     }
 
     /// The SPaT for this junction at `t`: every signal group's state and when it changes.
@@ -327,6 +353,14 @@ impl IntersectionFeed {
                     // may gap out as soon as its minimum has run, or be extended up to its
                     // maximum, and every later change moves with it; an amber is certain.
                     _ => match self.actuation {
+                        // The NEMA dual ring: one floor for every group, the soonest any
+                        // indication of the junction can change (`crate::nema::control`),
+                        // ambers included, since its projection quantises their ends.
+                        Some(a) if a.earliest_s.is_some() => (
+                            a.earliest_s.unwrap_or(0.0).min(remaining),
+                            remaining + a.extend_s,
+                            remaining,
+                        ),
                         Some(a) if state != SignalState::Amber => (
                             (remaining - a.cut_s).max(0.0),
                             remaining + a.extend_s,
@@ -704,6 +738,43 @@ impl IntersectionFeed {
                 )
                 .map_err(|e| e.to_string())
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Accept (WP-17 P17.6): a NEMA left's indications reach SPaT as SAE J2735 states.
+    /// Its arrow is protected-Movement-Allowed (6), its flashing-yellow-arrow (or
+    /// circular-green) window permissive-Movement-Allowed (5), the steady yellow after
+    /// either protected-clearance (8), and red stop-And-Remain (3): the sequence a
+    /// protected-permissive left shows (`crate::nema::control::left_rules`). The table
+    /// agrees with the world's own (`SignalState::j2735_phase`), which the page draws.
+    #[test]
+    fn fya_maps_to_permissive_movement_allowed() {
+        use SignalState::{Amber, Green, GreenYield, Red};
+        let sequence = [Green, Amber, GreenYield, Amber, Red];
+        let codes: Vec<u64> = sequence
+            .iter()
+            .map(|s| movement_phase(*s).index())
+            .collect();
+        assert_eq!(codes, [6, 8, 5, 8, 3]);
+        for s in [
+            SignalState::Red,
+            SignalState::RedAmber,
+            SignalState::Amber,
+            SignalState::Green,
+            SignalState::GreenYield,
+            SignalState::FlashingAmber,
+            SignalState::Off,
+        ] {
+            assert_eq!(
+                movement_phase(s).index(),
+                u64::from(s.j2735_phase()),
+                "{s:?}"
+            );
         }
     }
 }

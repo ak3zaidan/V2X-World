@@ -73,6 +73,7 @@ pub mod frag;
 pub mod hosted;
 pub mod infra;
 pub mod manifest;
+pub mod nema;
 pub mod perception;
 pub mod phase2;
 pub mod priority;

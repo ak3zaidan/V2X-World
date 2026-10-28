@@ -415,6 +415,61 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the green-wave heading",
     },
+    // WP-17 NEMA: the left-turn phase's timing, bounded as the through's is. STM 2nd ed.
+    // Exhibit 6-4 (left minimum 2-5 s) and Exhibit 6-9 (left maximum 15-30 s) sit inside.
+    Bound {
+        path: "traffic.signals.nema.left_min_green_s",
+        lo: 2.0,
+        hi: 60.0,
+        exclusive_lo: false,
+        what: "the left-turn minimum green",
+    },
+    Bound {
+        path: "traffic.signals.nema.left_max_green_s",
+        lo: 5.0,
+        hi: 180.0,
+        exclusive_lo: false,
+        what: "the left-turn maximum green",
+    },
+    Bound {
+        path: "traffic.signals.nema.left_passage_s",
+        lo: 0.2,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the left-turn passage time",
+    },
+    // MUTCD 2009 §4D.26 ¶03: a yellow change interval should be 3 to 6 s.
+    Bound {
+        path: "traffic.signals.nema.yellow_s",
+        lo: 3.0,
+        hi: 6.0,
+        exclusive_lo: false,
+        what: "the yellow change interval",
+    },
+    // MUTCD 2009 §4D.26: a red clearance shall not exceed 6 s.
+    Bound {
+        path: "traffic.signals.nema.red_clear_s",
+        lo: 0.0,
+        hi: 6.0,
+        exclusive_lo: false,
+        what: "the red clearance",
+    },
+    // The same MUTCD 2009 §4E.06 limits as world.signals.pedestrian_walk_s and
+    // world.signals.pedestrian_speed_mps.
+    Bound {
+        path: "traffic.signals.nema.walk_s",
+        lo: 4.0,
+        hi: 30.0,
+        exclusive_lo: false,
+        what: "the pedestrian walk interval",
+    },
+    Bound {
+        path: "traffic.signals.nema.ped_speed_mps",
+        lo: 0.8,
+        hi: 1.5,
+        exclusive_lo: false,
+        what: "the pedestrian clearance walking speed",
+    },
     // 1,000 veh/h per lane-km is several times a jammed lane's density at any speed; the
     // ceiling is a guard against a typo, as the rate's is.
     Bound {
@@ -2445,6 +2500,53 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Wired,
         note: "Fixed-time or NEMA-style actuated control, and a green wave; the SPaT shows \
                what the controller does.",
+    },
+    KeyStatus {
+        path: "traffic.signals.nema",
+        status: Status::Partial,
+        note: "The NEMA dual-ring eight-phase controller (control: nema): rings, barriers, \
+               lead/lag, the three left-turn modes and both permissive faces, left-turn \
+               timing, recalls, yellow, red, pedestrian calls, recall and timing, and \
+               coordination run. Priority through the rings is a later WP-17 piece; a \
+               NEMA junction does not serve priority requests yet.",
+    },
+    KeyStatus {
+        path: "traffic.signals.nema.permissive_display",
+        status: Status::Wired,
+        note: "When a permissive left may turn: under a flashing yellow arrow while the \
+               opposing through is green, under a circular green while its own approach is \
+               green (the lead-lag yellow trap). A left sharing the through's lane always \
+               has the circular green.",
+    },
+    KeyStatus {
+        path: "traffic.signals.nema.coordination",
+        status: Status::Wired,
+        note: "Keeps every junction on its plan's cycle and offset (a green wave's, when \
+               one is set): the coordinated phases hold to their yield point, the others \
+               end at their force-offs, and unused time returns to the coordinated phases.",
+    },
+    KeyStatus {
+        path: "traffic.signals.nema.force_off",
+        status: Status::Wired,
+        note: "Under coordination: floating limits each phase to its split; fixed ends it \
+               at its point in the cycle, so a later phase may use time an earlier one left.",
+    },
+    KeyStatus {
+        path: "traffic.signals.nema.controller_type",
+        status: Status::Wired,
+        note: "Under coordination, what the offset references: the start of the \
+               coordinated green (ts2) or of its yellow (type170).",
+    },
+    KeyStatus {
+        path: "traffic.signals.nema.coordinate_phases",
+        status: Status::Wired,
+        note: "Under coordination, the phases that hold to the yield point.",
+    },
+    KeyStatus {
+        path: "traffic.signals.nema.ped_recall",
+        status: Status::Wired,
+        note: "These phases serve their walk every cycle; the others only when a \
+               pedestrian standing at the crosswalk has pressed the button.",
     },
     KeyStatus {
         path: "actors.vehicles.demand.fleet_size",
@@ -4997,6 +5099,262 @@ fn conflict(field: &str, conflict: String) -> ScenarioError {
     ScenarioError::conflict(field, conflict)
 }
 
+/// `traffic.signals.control: nema` and the `traffic.signals.nema` block (WP-17).
+///
+/// The block is checked in full so that a scenario written now still loads when the
+/// controller lands. The phase layout follows the STM 2nd ed. numbering (§5.1.1, Exhibit
+/// 5-1): ring 1 holds phases from 1-4 and ring 2 from 5-8, each in ascending order (the
+/// lead-lead order of Exhibit 5-3); lead or lag is `nema.lefts`, never a ring reordering,
+/// so one scenario cannot state the sequence twice and disagree with itself.
+pub(crate) fn nema_checks(g: &super::schema::SignalControl, e: &mut Vec<ScenarioError>) {
+    use super::schema::{
+        ForceOffMode, LeftTurnMode, NemaControllerType, NemaLeftSequence, NemaSettings,
+        PermissiveDisplay, SignalControlKind,
+    };
+    if g.control == SignalControlKind::Nema {
+        let coordinated = g.nema.as_ref().is_some_and(|n| n.coordination);
+        // The dual ring rewrites each plan as it runs (`crate::nema::control`). A green
+        // wave's offsets reach it only through coordination, which keeps the cycle on
+        // them; free-running rings would ignore them. The short-link rewrite of the
+        // plans' greens has no counterpart in the rings.
+        if g.green_wave_speed_mps.is_some() && !coordinated {
+            e.push(conflict(
+                "traffic.signals.green_wave_speed_mps",
+                "sets the plans' offsets, and the NEMA dual ring runs free unless \
+                 traffic.signals.nema.coordination is true; turn coordination on or remove \
+                 the wave"
+                    .to_string(),
+            ));
+        }
+        if g.short_link_clearance_m.is_some() {
+            e.push(conflict(
+                "traffic.signals.short_link_clearance_m",
+                "rewrites the fixed plans' greens at load, and the NEMA dual ring \
+                 (control: nema) times its own; remove this or choose fixed-time or \
+                 actuated"
+                    .to_string(),
+            ));
+        }
+    }
+    let Some(n) = &g.nema else {
+        return;
+    };
+    if g.control != SignalControlKind::Nema {
+        e.push(conflict(
+            "traffic.signals.nema",
+            "configures the NEMA dual-ring controller, and traffic.signals.control is not \
+             nema; set control to nema or remove the block"
+                .to_string(),
+        ));
+    }
+    for (path, v) in [
+        ("traffic.signals.nema.left_min_green_s", n.left_min_green_s),
+        ("traffic.signals.nema.left_max_green_s", n.left_max_green_s),
+        ("traffic.signals.nema.left_passage_s", n.left_passage_s),
+    ] {
+        bounded_at(path, path, v, e);
+    }
+    for (path, v) in [
+        ("traffic.signals.nema.yellow_s", n.yellow_s),
+        ("traffic.signals.nema.red_clear_s", n.red_clear_s),
+        ("traffic.signals.nema.walk_s", n.walk_s),
+        ("traffic.signals.nema.ped_speed_mps", n.ped_speed_mps),
+    ] {
+        if let Some(v) = v {
+            bounded_at(path, path, v, e);
+        }
+    }
+    if n.left_max_green_s < n.left_min_green_s {
+        e.push(conflict(
+            "traffic.signals.nema.left_max_green_s",
+            format!(
+                "is {} s, below the left-turn minimum green of {} s",
+                n.left_max_green_s, n.left_min_green_s
+            ),
+        ));
+    }
+    // The rings: STM numbers, ascending, no phase twice.
+    let mut seen = [false; 9];
+    for (path, ring, range) in [
+        ("traffic.signals.nema.ring1", &n.ring1, 1u8..=4),
+        ("traffic.signals.nema.ring2", &n.ring2, 5u8..=8),
+    ] {
+        if ring.is_empty() {
+            e.push(conflict(
+                path,
+                "is empty; a ring needs at least one phase".to_string(),
+            ));
+        }
+        for &p in ring {
+            if !range.contains(&p) {
+                e.push(conflict(
+                    path,
+                    format!(
+                        "names phase {p}; this ring holds NEMA phases {} to {} (FHWA Signal \
+                         Timing Manual 2nd ed., Exhibit 5-3)",
+                        range.start(),
+                        range.end()
+                    ),
+                ));
+            } else if seen[usize::from(p)] {
+                e.push(conflict(path, format!("names phase {p} twice")));
+            } else {
+                seen[usize::from(p)] = true;
+            }
+        }
+        if ring.windows(2).any(|w| w[0] >= w[1]) {
+            e.push(conflict(
+                path,
+                format!(
+                    "is {ring:?}; write a ring's phases in ascending order and set lead or \
+                     lag with traffic.signals.nema.lefts"
+                ),
+            ));
+        }
+    }
+    let present = |p: u8| usize::from(p) < seen.len() && seen[usize::from(p)];
+    // The barriers: one phase of each ring, both in the barrier's group.
+    for (path, pair, group) in [
+        (
+            "traffic.signals.nema.barrier_phases",
+            &n.barrier_phases,
+            [3u8, 4, 7, 8],
+        ),
+        (
+            "traffic.signals.nema.barrier2_phases",
+            &n.barrier2_phases,
+            [1u8, 2, 5, 6],
+        ),
+    ] {
+        let ok = pair.len() == 2
+            && pair.iter().all(|&p| group.contains(&p) && present(p))
+            && (1..=4).contains(&pair[0])
+            && (5..=8).contains(&pair[1]);
+        if !ok {
+            e.push(conflict(
+                path,
+                format!(
+                    "is {pair:?}; a barrier is a ring-1 phase then a ring-2 phase, both in the \
+                     rings and both from {group:?}"
+                ),
+            ));
+        }
+    }
+    // Recalls name phases that exist; a pedestrian phase goes with a through (STM 2nd ed.
+    // §5.1.1: pedestrian phases take the parallel through's number).
+    for (path, list) in [
+        ("traffic.signals.nema.min_recall", &n.min_recall),
+        ("traffic.signals.nema.soft_recall", &n.soft_recall),
+        ("traffic.signals.nema.max_recall", &n.max_recall),
+        ("traffic.signals.nema.ped_recall", &n.ped_recall),
+        (
+            "traffic.signals.nema.coordinate_phases",
+            &n.coordinate_phases,
+        ),
+    ] {
+        for &p in list {
+            if !present(p) {
+                e.push(conflict(
+                    path,
+                    format!("names phase {p}, which neither ring holds"),
+                ));
+            }
+        }
+    }
+    for &p in &n.ped_recall {
+        if p % 2 == 1 {
+            e.push(conflict(
+                "traffic.signals.nema.ped_recall",
+                format!(
+                    "names phase {p}, a left turn; a pedestrian phase takes its parallel \
+                     through's number (2, 4, 6 or 8)"
+                ),
+            ));
+        }
+    }
+    let c = &n.coordinate_phases;
+    let concurrent = match c.as_slice() {
+        [a] => (1..=8).contains(a),
+        [a, b] => (1..=4).contains(a) && (5..=8).contains(b) && ((*a <= 2) == (*b <= 6)),
+        _ => false,
+    };
+    if !concurrent {
+        e.push(conflict(
+            "traffic.signals.nema.coordinate_phases",
+            format!(
+                "is {c:?}; coordinate one phase, or a ring-1 and a ring-2 phase on the same \
+                 side of the barrier"
+            ),
+        ));
+    }
+    // Settings that only coordination or only a left phase reads would do nothing.
+    let d = NemaSettings::default();
+    if !n.coordination {
+        for (path, moved) in [
+            (
+                "traffic.signals.nema.force_off",
+                n.force_off != ForceOffMode::default(),
+            ),
+            (
+                "traffic.signals.nema.controller_type",
+                n.controller_type != NemaControllerType::default(),
+            ),
+            (
+                "traffic.signals.nema.coordinate_phases",
+                n.coordinate_phases != d.coordinate_phases,
+            ),
+        ] {
+            if moved {
+                e.push(conflict(
+                    path,
+                    "acts only under coordination, and traffic.signals.nema.coordination is \
+                     false; set it true or remove this"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    if n.left_turn_mode == LeftTurnMode::Permissive {
+        for (path, moved) in [
+            (
+                "traffic.signals.nema.lefts",
+                n.lefts != NemaLeftSequence::default(),
+            ),
+            (
+                "traffic.signals.nema.left_min_green_s",
+                n.left_min_green_s != d.left_min_green_s,
+            ),
+            (
+                "traffic.signals.nema.left_max_green_s",
+                n.left_max_green_s != d.left_max_green_s,
+            ),
+            (
+                "traffic.signals.nema.left_passage_s",
+                n.left_passage_s != d.left_passage_s,
+            ),
+        ] {
+            if moved {
+                e.push(conflict(
+                    path,
+                    "times a protected left-turn phase, and traffic.signals.nema.left_turn_mode \
+                     is permissive, which has none; remove this or choose a protected mode"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    if n.left_turn_mode == LeftTurnMode::Protected
+        && n.permissive_display != PermissiveDisplay::default()
+    {
+        e.push(conflict(
+            "traffic.signals.nema.permissive_display",
+            "is the face of a permissive left, and traffic.signals.nema.left_turn_mode is \
+             protected, which has none; remove this or choose a permissive mode"
+                .to_string(),
+        ));
+    }
+}
+
 /// `value` satisfies the bound [`BOUNDS`] declares for `path`, or an error saying so.
 ///
 /// `path` is the *canonical* path — `threats.attackers[].fraction` — and `field` is the
@@ -6425,7 +6783,10 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
             );
         }
         if g.detector_placement != super::schema::DetectorPlacement::StopLine
-            && g.control != super::schema::SignalControlKind::Actuated
+            && !matches!(
+                g.control,
+                super::schema::SignalControlKind::Actuated | super::schema::SignalControlKind::Nema
+            )
         {
             e.push(conflict(
                 "traffic.signals.detector_placement",
@@ -6457,6 +6818,7 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 ),
             ));
         }
+        nema_checks(g, e);
     }
     if let Some(n) = s.actors.vehicles.demand.fleet_size {
         bounded_at(

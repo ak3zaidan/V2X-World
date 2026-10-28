@@ -456,23 +456,223 @@ out of scope here.
 - **P17.2** (3 h): the schema, validation, options, publish and guide rows for
   `control: nema` and the `nema.*` block, with no behaviour (validation refuses to run
   `nema` until P17.5 lands).
+
+  **Done 2026-10-28 (P17.2).** Decisions where the table above was open or wrong, each
+  checked against its source:
+  - *Barriers follow SUMO's documented names.* SUMO's NEMA page says `barrierPhases` is
+    "usually 4,8" and `barrier2Phases` "usually 2,6" (and `barrier2Phases` are the
+    coordinated phases in coordinate mode). The table had the two reversed, so the defaults
+    are `barrier_phases: [4,8]` and `barrier2_phases: [2,6]`.
+  - *Recall follows STM Exhibit 6-22* (p. 6-22): `min_recall: []` and a new
+    `soft_recall: [2,6]`. SUMO's own `minRecall` default (every phase) is not taken.
+  - *`controller_type` is `ts2` or `type170`*, as SUMO documents it. There is no `ts1`.
+    The two differ only in the reference point of the coordination offset (start of green,
+    or start of yellow), so the key is refused unless `coordination` is on, and P17.8 acts
+    on it.
+  - *`coordinate_phases` has no SUMO name.* WP-23 maps SUMO's `barrier2Phases` onto it
+    when `coordinate-mode` is true.
+  - *Through timing is the existing `traffic.signals.min_green_s`, `max_green_s` and
+    `passage_s`.* The left-turn phases get `nema.left_min_green_s`, `left_max_green_s` and
+    `left_passage_s` (4 / 25 / 2.5). No setting is duplicated.
+  - *Absent means "from somewhere else".* With `yellow_s` and `red_clear_s` absent, each
+    plan's own amber and all-red apply. With `walk_s` and `ped_speed_mps` absent,
+    `world.signals.pedestrian_*` applies, else MUTCD 7 s and 1.067 m/s. Bounds are MUTCD
+    2009 §4D.26 (yellow 3-6 s, red at most 6 s) and §4E.06 (walk 4-30 s, speed 0.8-1.5 m/s).
+  - *Rings are written in ascending order.* Ring 1 must come from phases 1-4 and ring 2
+    from 5-8. Lead or lag comes only from `lefts`, so a scenario cannot state the sequence
+    twice. A barrier is a ring-1 phase then a ring-2 phase from that barrier's group.
+    `ped_recall` names throughs only (STM §5.1.1). `coordinate_phases` is one phase, or a
+    concurrent pair.
+  - *Dead settings are refused*, as the codebase does elsewhere: coordination-only keys
+    without `coordination`, left-phase timing under `permissive`, and the permissive face
+    under `protected`. A `nema` block under another `control` is refused too.
+  Status `traffic.signals.nema`: Refused, until P17.5.
 - **P17.3** (3 h): `assign_phases` from junction geometry, with unit tests on generated
   4-leg, T and one-way junctions, and the fallback count. Main street = the higher road
   class, then more lanes.
+
+  **Done 2026-10-28 (P17.3).** `v2xw-engine/src/nema/assign.rs`: `assign_phases(world,
+  plan)`, its pure core `assign_approaches`, `assign_all` with
+  `AssignReport::fallback_counts`, and `Assignment::concurrent_foes`. The STM leaves
+  these open; the choices are:
+  - Two approaches are one street when their headings are opposite within 45°. At most
+    two streets, at least 45° apart. Otherwise the junction is `Unmapped`:
+    `too-many-approaches` (more than 4), `not-two-streets` (a Y or a skewed offset),
+    `unknown-movement`, or `skewed-crossing`.
+  - Main street ties after class and lanes go to the street with more green in the
+    junction's own plan, then to the lower edge id.
+  - Through 2 (and 4) is the approach heading most nearly north-east,
+    `cos(h − 45°)`. Eastbound and northbound are 2 and 4 on a compass grid.
+  - A left whose approach has no opposing through rides its own through (one-way
+    streets, the stem of a T). Otherwise it takes the number beside the opposing through
+    (5 beside 2, 1 beside 6, 7 beside 4, 3 beside 8) and records that through as
+    `permissive_with`.
+  - A crosswalk takes the number of the parallel through on whose right-hand side it
+    lies (STM §5.1.1). A crosswalk across a single street gets a pedestrian-only 4 or 8.
+  - The generated conflict matrices record opposing lefts as a level conflict, so
+    `concurrent_foes` flags 1+5 and 3+7 as `opposing_lefts`. The tests allow that pair
+    only.
+  - Open, for P17.6: a left from a lane it shares with the through is given its own phase
+    here. US practice gives a protected left phase only to an exclusive left lane, so
+    P17.6 should demote a shared-lane left to permissive, using the lane geometry.
+  One-way layouts are tested through the pure core, because the graph builder makes
+  two-way streets only.
 - **P17.4** (3 h): the ring state machine as a pure unit (no world):
   - min, extension, max, gap-out;
   - yellow and red clearance;
   - barrier synchronisation and rest;
   - the first three tests and their faults.
+
+  **Done 2026-10-28 (P17.4).** `nema.rs`: `PhaseTiming`, `RingState`, `Interval`
+  (`Green`, `Yellow`, `RedClear`, `Idle`), `Calls`, `RingConfig::from_settings`, and the
+  pure `DualRing::step`. Walk and PedClear are left to P17.7: they lie inside the green.
+  The behaviour, where the STM leaves the detail open:
+  - The max timer starts on the first conflicting call and does not reset.
+  - A gap with a conflicting call waiting is latched. The phase is then committed to end
+    and is not re-extended, so a partner held at the barrier ends as a gap-out.
+  - A ring moves within its side on its own. Both rings start their clearances on the
+    same step at a barrier, and both start their next greens on the step the later
+    clearance ends; the earlier ring dwells in red.
+  - A call only behind the rings on this side (say 1 while 2 runs) makes the rings pass
+    straight through the empty far side and back.
+  - On entering a side, each ring serves its first called phase. A ring with no call
+    there serves its barrier phase (dual entry for the throughs, `barrier_phases` and
+    `barrier2_phases`), or `Idle` red when that phase is absent.
+  - Start-up is in 2 and 6.
+  - Soft recall calls its phases only when no other phase has a call.
+  - Lead and lag order each barrier group of a ring.
+  Tests: `a_green_runs_its_minimum_extends_to_its_maximum_and_rests`,
+  `concurrent_throughs_gap_out_independently`, `rings_cross_barriers_together` (1 h, 5
+  seeds, keyed SplitMix arrivals, plus a check that every interval ran in full) and
+  `no_conflicting_greens` (assignment plus rings on a generated crossroads and tee). The
+  STM 8-phase example test waits for P17.5's projection.
 - **P17.5** (3 h): `project` into `SignalPlan`, `World::validate` after the rewrite, and
   the engine wiring through `ActuatedControllers::new` and the step. Drivers obey it.
+
+  **Done 2026-10-28 (P17.5).** `nema/control.rs`: `NemaControllers` over every plan that
+  maps (`assign_all`). The rest keep the single-ring controller, counted by reason in
+  `ActuatedControllers::nema_fallbacks`. `control: nema` now loads; the default stays
+  fixed-time.
+  - **When the plan is rewritten.** Only when the shown vector changes, when composite 0
+    is within two steps of its projected end, or at most once a second when the calls
+    behind the prediction change. Rewriting every step is not needed, because the clock
+    runs on by itself between rewrites.
+  - **How it predicts.** A forward run of a copy of the rings, at 0.5 s steps, for up to
+    240 s or one whole cycle back to now's vector. Called phases that are not green now
+    are assumed extended (so they run to their maximum). A current green keeps its
+    current detector state.
+  - **What each movement shows.** A left with its own phase is green-yield beside its
+    own through's green, and amber in that through's yellow (protected-permissive only).
+  - **Timing.** Yellow is `nema.yellow_s`, else the plan's amber, else STM Eq. 6-1 at the
+    fastest approach. Red is `nema.red_clear_s`, else the plan's all-red, else 0.
+  - **Crosswalks.** Each crosswalk walks for `walk_s`, then shows its clearance as amber
+    (crossing length / `ped_speed_mps`). Every crosswalk phase is on pedestrian recall
+    until P17.7, and its minimum green holds walk + clearance + the MUTCD 3 s buffer,
+    less Y + R.
+  - **Invariants.** `plan_invariants` (World::validate's per-plan rules) is asserted in
+    debug after every rewrite.
+  - **SPaT feed.** `IntersectionFeed::sync` rebuilds the group timelines when the
+    phases change. Fixed-time and single-ring plans never change them, so the default
+    path is untouched.
+  - **Refused until later pieces.** Priority requests at NEMA junctions are skipped
+    (P17.9). The loader refuses `left_turn_mode` other than protected-permissive (P17.6),
+    `ped_recall` (P17.7), and `coordination`, `green_wave_speed_mps` and
+    `short_link_clearance_m` under nema (P17.8).
+  - **Pedestrian fallback.** Walk and speed fall back to `world.signals.pedestrian_*`
+    (set in `Engine::build_with_world`), then to MUTCD 7 s and 1.067 m/s.
+  - **STM example.** `nema::tests::stm_example_timing` is built from Exhibits 6-2, 6-3
+    and 6-9 (the STM has no numeric example). It gives cycle 132.3 s and splits
+    24 / 55.1 / 19 / 34.2 s under max recall.
 - **P17.6** (3 h): left-turn modes, lead/lag, and FYA display, with the SPaT
   `MovementPhaseState` mapping in `infra.rs` and the FYA test.
+
+  **Done 2026-10-28 (P17.6).** `nema::control::left_rules` gives each movement a `Rule`:
+  an `own` phase that protects it and a `permit` phase in whose green it turns, yielding.
+  - The three modes run. Lead/lag was already ring order (P17.4).
+  - **The FYA window is the opposing through's green; the circular green is the left's
+    own approach's.** MUTCD 2009 §4D.20 and §4D.18. Under FYA the left yields to the
+    traffic it watches, so the lead-lag "yellow trap" goes away. Under a circular green
+    the left sees its own head's yellow while the opposing through runs on. The
+    behaviour moves, not just the face. Test: `fya_ends_the_lead_lag_yellow_trap`.
+  - **A protected-permissive left that shares its lane with the through or the right**
+    gets no arrow and runs permissive in its own approach's circular green, counted in
+    `NemaControllers::shared_lane_lefts`. A protected left phase needs an exclusive
+    left-turn lane in US practice (STM 2nd ed. ch. 5, left-turn phasing [verify the
+    clause]): a waiting left would block the through behind it. Under `protected` the
+    arrow is kept, as asked.
+  - Consequence: the procedural grids, whose lefts share the inner lane, run two-phase
+    (2+6, 4+8) under the defaults.
+  - A permissive-only left calls its window's phase.
+  - SPaT already mapped green-yield to permissive-Movement-Allowed (5) and green to
+    protected-Movement-Allowed (6). `infra::tests::fya_maps_to_permissive_movement_allowed`
+    pins that mapping and its agreement with `SignalState::j2735_phase`.
+  - **Open.** The steady yellow after an FYA window is sent as protected-clearance (8),
+    because `SignalState` has a single amber. J2735's permissive-clearance (7) needs a
+    world state, a model change. A left needs its own signal group to show its FYA
+    separately in SPaT, and the generated worlds give a head group per approach, not per
+    left lane.
 - **P17.7** (3 h): pedestrian phases (walk and clearance timing, calls from waiting
   walkers in `v2xw-world/src/walk.rs`) and recall, with the ped test.
+
+  **Done 2026-10-28 (P17.7).** Pedestrian intervals live in the ring machine. Each phase
+  with crosswalks gets one interval, `RingConfig::ped[p] = (walk_s, clearance)`, timed for
+  the longest of its crosswalks at `ped_speed_mps`.
+  - **Calls.** A standing pedestrian (under 0.3 m/s) within `PUSH_BUTTON_REACH_M` = 2.5 m
+    of a crosswalk's kerb end presses its button. MUTCD 2009 §4E.08 sets the button's
+    placement [verify the paragraph]. The call is latched: it waits for the phase's next
+    green, unless the walk now showing lets the pedestrian start.
+  - **Which greens walk.** A green walks when it is called or on `ped_recall`. That green
+    holds walk + clearance + `max(0, 3 s − Y − R)` (the MUTCD buffer may overlap the
+    vehicle change interval). Any other green does not walk, and the crosswalk shows
+    don't walk.
+  - **Pedestrian recycle.** A green resting with no conflicting call serves a new walk
+    on a call, at once. Without it a pedestrian beside a resting main street would wait
+    for a vehicle elsewhere to cycle the controller; typical controller practice
+    [verify against the STM's rest-in-walk text].
+  - **Where the calls come from.** The engine passes standing `VehicleClass::Pedestrian`
+    actors through `ActuatedControllers::step_with_pedestrians` when the dual ring is on.
+    The single ring is unchanged.
+  - **Change from P17.5.** P17.5's blanket pedestrian recall is gone. With
+    `ped_recall: []` (the default) crosswalks walk only when called, so a grid with
+    crosswalks and no pedestrians no longer holds the long pedestrian minimums.
+  - **Tests.** `nema::tests::ped_recall_serves_walk` (recall walks every cycle; a call
+    from a single step is latched and served) and
+    `nema::control::tests::a_pedestrian_at_the_kerb_calls_the_walk` (TR 36.885 urban
+    grid).
 - **P17.8** (3 h): coordination (cycle, offset, force-offs fixed or floating, permissive
   window, yield point), the `green_wave_speed_mps` interplay (`actuated.rs:385`
   `coordinate`), and the coordination test.
+
+  **Done 2026-10-28 (P17.8).** `nema::Coordination` lives on `RingConfig`, and
+  `DualRing::clock_s` is the shared clock; `NemaControllers::step` sets it to `now_s`.
+  - **Cycle and offset.** They are the load-time plan's own. `green_wave_speed_mps` has
+    already set the offset (`actuated::coordinate`), so a green wave reaches the rings
+    through coordination. Without coordination it is refused under nema.
+  - **Splits.** They keep the plan's division of the cycle between the streets. The main
+    group is the load-time phases in which a main-street movement is not red, held to
+    20-80 % of the cycle. Each left's split is its maximum green and clearance, at most a
+    third of its group; the through takes the rest. This is this build's choice: the STM
+    computes splits from volumes, which a plan does not carry.
+  - **Yield point.** The end of the coordinated green: the TS 2 offset references the
+    start of that green, so the yield point is offset + split − Y − R; Type 170's offset
+    references its yellow, so the yield point is at the offset (SUMO's `controllerType`
+    text).
+  - **The coordinated phases.** They are always called and hold to the yield point. They
+    may end only in the permissive window, which lasts until the next phase in the ring
+    could no longer time its minimum before its force-off. A call that misses the window
+    waits a cycle.
+  - **Force-offs.** Floating ends a non-coordinated green at split − Y − R. Fixed ends it
+    at its point in the cycle, with the splits laid end to end from the coordinated
+    clearance (STM §7.3.4, Exhibit 7-14). Force-offs are counted on `RingCounters::force_offs`
+    and logged with the max-outs on `traffic.control`. Unused time returns early to the
+    coordinated phases, which hold.
+  - **Tests.** `nema::tests::coordinated_phases_hold_their_offset`: saturated calls, both
+    force-off modes, and the yield at 13 + 40.4 mod 100 s ±1 step in every cycle.
+    `tests/nema_control.rs::coordinated_rings_with_a_green_wave_run_the_grid`.
+  - **Open.** Offset transition, when a junction joins coordination off its offset, is a
+    plain wait for the next yield point; there is no shortway or dwell transition. There
+    is no early-yield or "max-in-coordination" option, and splits come from the plan,
+    not from volumes.
 - **P17.9** (3 h):
   - `priority.rs` on NEMA (early green and extension per ring, capped by
     `PriorityParams`);
@@ -480,6 +680,35 @@ out of scope here.
   - `tests/nema_spat.rs`;
   - a NEMA adapter function `NemaSettings::from_sumo_params(&BTreeMap<String,String>)`,
     for WP-23.
+
+  **Done 2026-10-28 (P17.9).**
+  - **Priority through the rings.** `PriorityControllers::serve_through_rings` marks the
+    NEMA plans. Their requests are logged and lapsed as before, but never served by
+    moving the clock, and `PriorityControllers::requests` hands them to the rings.
+    `NemaControllers::set_priority` maps the earliest request's signal group to the
+    phase that protects the through movement of the lane the head faces.
+  - **The ring's priority call** (`nema::PriorityCall`). Green extension holds the
+    phase's green until arrival plus the clearance margin, at most its maximum plus
+    `max_extension_s`. Early green ends every conflicting green once it has run
+    `PriorityParams::min_green_s` and any walk it serves, which overrides coordination.
+    No recovery walk is needed: the rings resume, and coordination re-finds its yield
+    point.
+  - **Open.** Phases between the cut and the requested phase are not omitted.
+  - **The SPaT window.** `ActuatedOutlook::earliest_s` carries
+    `DualRing::earliest_change_s` as every group's `minEndTime`: the minimum green, walk
+    edges, and clearance ends, or 0 with an idle ring. `maxEndTime` is
+    `remaining + longest` (green and clearance, or the cycle when coordinated), and
+    `likelyTime` is the projection. The window covers ambers too, because the
+    projection quantises their ends to 0.5 s.
+  - **Test.** `tests/nema_spat.rs`: a 1200 s 3x3-grid junction with keyed calls. Every
+    group change falls inside the window published the step before (100 %), and
+    `likelyTime` is within 0.5 s + 2 steps of the change when the calls have not changed
+    for 2 s.
+  - **SUMO adapter.** `NemaSettings::from_sumo_params` reads `ring1`, `ring2` (order to
+    `lefts`, `0` absent), `barrierPhases`, `barrier2Phases`, `coordinate-mode` (it
+    coordinates `barrier2Phases`), `minRecall` (every phase when unset, SUMO's default),
+    `maxRecall`, `fixForceOff` and `controllerType`. Ring 1 lagging while ring 2 leads
+    cannot be stated, and is an error.
 - **P17.10** (3 h): the `invariants/nema-safety` check, the expectation rows, the city
   run through `runtiny.sh`, the model card, and the status note. The card states:
   "Re-implemented from FHWA STM 2nd ed. and NEMA TS 2-2016; SUMO was read for behaviour
