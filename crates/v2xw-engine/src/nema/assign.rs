@@ -144,10 +144,7 @@ pub const fn class_rank(c: RoadClass) -> u8 {
         RoadClass::Residential => 6,
         RoadClass::Living => 7,
         RoadClass::Service => 8,
-        RoadClass::Internal
-        | RoadClass::Footway
-        | RoadClass::Cycleway
-        | RoadClass::Path => 9,
+        RoadClass::Internal | RoadClass::Footway | RoadClass::Cycleway | RoadClass::Path => 9,
     }
 }
 
@@ -228,7 +225,8 @@ pub fn assign_approaches(
     let mut candidates: Vec<(f64, usize, usize)> = Vec::new();
     for i in 0..approaches.len() {
         for j in i + 1..approaches.len() {
-            let dev = (diff_deg(approaches[i].heading_deg, approaches[j].heading_deg) - 180.0).abs();
+            let dev =
+                (diff_deg(approaches[i].heading_deg, approaches[j].heading_deg) - 180.0).abs();
             if dev <= OPPOSITE_TOL_DEG {
                 candidates.push((dev, i, j));
             }
@@ -258,10 +256,18 @@ pub fn assign_approaches(
     }
     // The main street: higher class, more lanes, more green, lower key.
     let rank = |g: &[usize]| {
-        let best = g.iter().map(|&i| approaches[i].class_rank).min().unwrap_or(u8::MAX);
+        let best = g
+            .iter()
+            .map(|&i| approaches[i].class_rank)
+            .min()
+            .unwrap_or(u8::MAX);
         let lanes: u32 = g.iter().map(|&i| approaches[i].lanes).sum();
         let green: f64 = g.iter().map(|&i| approaches[i].green_s).sum();
-        let key = g.iter().map(|&i| approaches[i].key).min().unwrap_or(u32::MAX);
+        let key = g
+            .iter()
+            .map(|&i| approaches[i].key)
+            .min()
+            .unwrap_or(u32::MAX);
         (best, lanes, green, key)
     };
     if groups.len() == 2 {
@@ -369,7 +375,11 @@ pub fn assign_approaches(
         let h0 = st.slots[0].map_or_else(
             || {
                 let a = st.line_deg.rem_euclid(360.0);
-                if ne_score(a) >= ne_score(a + 180.0) { a } else { a + 180.0 }
+                if ne_score(a) >= ne_score(a + 180.0) {
+                    a
+                } else {
+                    a + 180.0
+                }
             },
             |i| approaches[i].heading_deg,
         );
@@ -597,7 +607,11 @@ pub(crate) fn test_junction(arms: &[((f64, f64), RoadClass, u32)]) -> World {
     let mut edges = Vec::new();
     for (k, ((dx, dy), class, lanes)) in arms.iter().enumerate() {
         nodes.push(Vec3::new_2d(c.x + 150.0 * dx, c.y + 150.0 * dy));
-        edges.push(GraphEdge::new(0, k + 1).with_lanes(*lanes).with_class(*class));
+        edges.push(
+            GraphEdge::new(0, k + 1)
+                .with_lanes(*lanes)
+                .with_class(*class),
+        );
     }
     let graph = build_lane_graph(&nodes, &edges, &GraphOptions::default().with_signals(true))
         .expect("graph");
@@ -665,7 +679,9 @@ mod tests {
     }
 
     fn only(t: &Table, h: u32, k: MovementKind) -> u8 {
-        let v = t.get(&(h, kind_code(k))).unwrap_or_else(|| panic!("{h} {k:?} in {t:?}"));
+        let v = t
+            .get(&(h, kind_code(k)))
+            .unwrap_or_else(|| panic!("{h} {k:?} in {t:?}"));
         assert_eq!(v.len(), 1, "{h} {k:?}: {v:?}");
         v[0]
     }
@@ -785,8 +801,12 @@ mod tests {
         assert_eq!(p, [2, 2, 4, 7, 8, 3]);
         assert_eq!(a.movements[1].permissive_with, None);
         // A westbound one-way numbers into ring 2.
-        let a = assign_approaches(2, &[approach(0, 270.0, 2, &[(0, Straight), (1, Left)])], &[])
-            .expect("maps");
+        let a = assign_approaches(
+            2,
+            &[approach(0, 270.0, 2, &[(0, Straight), (1, Left)])],
+            &[],
+        )
+        .expect("maps");
         assert_eq!(a.phases(), [6]);
     }
 
@@ -857,7 +877,10 @@ mod tests {
             approach(0, 90.0, 4, &[(0, Straight)]),
             approach(1, 110.0, 4, &[(1, Straight)]),
         ];
-        assert_eq!(assign_approaches(2, &near, &[]), Err(Unmapped::NotTwoStreets));
+        assert_eq!(
+            assign_approaches(2, &near, &[]),
+            Err(Unmapped::NotTwoStreets)
+        );
         // A movement the approaches do not name is not guessed.
         let lone = [approach(0, 90.0, 4, &[(0, Straight)])];
         assert_eq!(

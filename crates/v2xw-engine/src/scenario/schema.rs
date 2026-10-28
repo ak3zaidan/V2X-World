@@ -4344,7 +4344,10 @@ mod nema_settings_tests {
             ..SignalControl::default()
         };
         let e = errors(&stray);
-        assert!(e.iter().any(|x| x.contains("traffic.signals.nema")), "{e:?}");
+        assert!(
+            e.iter().any(|x| x.contains("traffic.signals.nema")),
+            "{e:?}"
+        );
         // Neither fires on the default settings.
         assert!(errors(&SignalControl::default()).is_empty());
     }
@@ -4358,20 +4361,62 @@ mod nema_settings_tests {
             assert!(e.iter().any(|x| x.contains(field)), "{field}: {e:?}");
         };
         let d = NemaSettings::default;
-        refused(NemaSettings { ring1: vec![1, 2, 2, 4], ..d() }, "nema.ring1");
-        refused(NemaSettings { ring1: vec![2, 1, 3, 4], ..d() }, "nema.ring1");
-        refused(NemaSettings { ring2: vec![1, 6, 7, 8], ..d() }, "nema.ring2");
-        refused(NemaSettings { ring2: vec![], ..d() }, "nema.ring2");
         refused(
-            NemaSettings { barrier_phases: vec![2, 6], ..d() },
+            NemaSettings {
+                ring1: vec![1, 2, 2, 4],
+                ..d()
+            },
+            "nema.ring1",
+        );
+        refused(
+            NemaSettings {
+                ring1: vec![2, 1, 3, 4],
+                ..d()
+            },
+            "nema.ring1",
+        );
+        refused(
+            NemaSettings {
+                ring2: vec![1, 6, 7, 8],
+                ..d()
+            },
+            "nema.ring2",
+        );
+        refused(
+            NemaSettings {
+                ring2: vec![],
+                ..d()
+            },
+            "nema.ring2",
+        );
+        refused(
+            NemaSettings {
+                barrier_phases: vec![2, 6],
+                ..d()
+            },
             "nema.barrier_phases",
         );
         refused(
-            NemaSettings { barrier2_phases: vec![2], ..d() },
+            NemaSettings {
+                barrier2_phases: vec![2],
+                ..d()
+            },
             "nema.barrier2_phases",
         );
-        refused(NemaSettings { max_recall: vec![9], ..d() }, "nema.max_recall");
-        refused(NemaSettings { ped_recall: vec![1], ..d() }, "nema.ped_recall");
+        refused(
+            NemaSettings {
+                max_recall: vec![9],
+                ..d()
+            },
+            "nema.max_recall",
+        );
+        refused(
+            NemaSettings {
+                ped_recall: vec![1],
+                ..d()
+            },
+            "nema.ped_recall",
+        );
         refused(
             NemaSettings {
                 coordination: true,
@@ -4388,7 +4433,13 @@ mod nema_settings_tests {
             },
             "nema.left_max_green_s",
         );
-        refused(NemaSettings { yellow_s: Some(2.0), ..d() }, "nema.yellow_s");
+        refused(
+            NemaSettings {
+                yellow_s: Some(2.0),
+                ..d()
+            },
+            "nema.yellow_s",
+        );
         // A layout with no side-street lefts (no phases 3 and 7) still loads.
         let t = NemaSettings {
             ring1: vec![1, 2, 4],

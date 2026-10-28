@@ -5004,7 +5004,10 @@ pub(crate) fn nema_checks(g: &super::schema::SignalControl, e: &mut Vec<Scenario
         ("traffic.signals.nema.ring2", &n.ring2, 5u8..=8),
     ] {
         if ring.is_empty() {
-            e.push(conflict(path, "is empty; a ring needs at least one phase".to_string()));
+            e.push(conflict(
+                path,
+                "is empty; a ring needs at least one phase".to_string(),
+            ));
         }
         for &p in ring {
             if !range.contains(&p) {
@@ -5036,8 +5039,16 @@ pub(crate) fn nema_checks(g: &super::schema::SignalControl, e: &mut Vec<Scenario
     let present = |p: u8| usize::from(p) < seen.len() && seen[usize::from(p)];
     // The barriers: one phase of each ring, both in the barrier's group.
     for (path, pair, group) in [
-        ("traffic.signals.nema.barrier_phases", &n.barrier_phases, [3u8, 4, 7, 8]),
-        ("traffic.signals.nema.barrier2_phases", &n.barrier2_phases, [1u8, 2, 5, 6]),
+        (
+            "traffic.signals.nema.barrier_phases",
+            &n.barrier_phases,
+            [3u8, 4, 7, 8],
+        ),
+        (
+            "traffic.signals.nema.barrier2_phases",
+            &n.barrier2_phases,
+            [1u8, 2, 5, 6],
+        ),
     ] {
         let ok = pair.len() == 2
             && pair.iter().all(|&p| group.contains(&p) && present(p))
@@ -5060,7 +5071,10 @@ pub(crate) fn nema_checks(g: &super::schema::SignalControl, e: &mut Vec<Scenario
         ("traffic.signals.nema.soft_recall", &n.soft_recall),
         ("traffic.signals.nema.max_recall", &n.max_recall),
         ("traffic.signals.nema.ped_recall", &n.ped_recall),
-        ("traffic.signals.nema.coordinate_phases", &n.coordinate_phases),
+        (
+            "traffic.signals.nema.coordinate_phases",
+            &n.coordinate_phases,
+        ),
     ] {
         for &p in list {
             if !present(p) {
@@ -5126,7 +5140,10 @@ pub(crate) fn nema_checks(g: &super::schema::SignalControl, e: &mut Vec<Scenario
     }
     if n.left_turn_mode == LeftTurnMode::Permissive {
         for (path, moved) in [
-            ("traffic.signals.nema.lefts", n.lefts != NemaLeftSequence::default()),
+            (
+                "traffic.signals.nema.lefts",
+                n.lefts != NemaLeftSequence::default(),
+            ),
             (
                 "traffic.signals.nema.left_min_green_s",
                 n.left_min_green_s != d.left_min_green_s,

@@ -522,6 +522,30 @@ out of scope here.
   - yellow and red clearance;
   - barrier synchronisation and rest;
   - the first three tests and their faults.
+
+  **Done 2026-10-28 (P17.4).** `nema.rs`: `PhaseTiming`, `RingState`, `Interval`
+  (`Green`, `Yellow`, `RedClear`, `Idle`), `Calls`, `RingConfig::from_settings`, and the
+  pure `DualRing::step`. Walk and PedClear are left to P17.7: they lie inside the green.
+  The behaviour, where the STM leaves the detail open:
+  - The max timer starts on the first conflicting call and does not reset.
+  - A gap with a conflicting call waiting is latched. The phase is then committed to end
+    and is not re-extended, so a partner held at the barrier ends as a gap-out.
+  - A ring moves within its side on its own. Both rings start their clearances on the
+    same step at a barrier, and both start their next greens on the step the later
+    clearance ends; the earlier ring dwells in red.
+  - A call only behind the rings on this side (say 1 while 2 runs) makes the rings pass
+    straight through the empty far side and back.
+  - On entering a side, each ring serves its first called phase. A ring with no call
+    there serves its barrier phase (dual entry for the throughs, `barrier_phases` and
+    `barrier2_phases`), or `Idle` red when that phase is absent.
+  - Start-up is in 2 and 6.
+  - Soft recall calls its phases only when no other phase has a call.
+  - Lead and lag order each barrier group of a ring.
+  Tests: `a_green_runs_its_minimum_extends_to_its_maximum_and_rests`,
+  `concurrent_throughs_gap_out_independently`, `rings_cross_barriers_together` (1 h, 5
+  seeds, keyed SplitMix arrivals, plus a check that every interval ran in full) and
+  `no_conflicting_greens` (assignment plus rings on a generated crossroads and tee). The
+  STM 8-phase example test waits for P17.5's projection.
 - **P17.5** (3 h): `project` into `SignalPlan`, `World::validate` after the rewrite, and
   the engine wiring through `ActuatedControllers::new` and the step. Drivers obey it.
 - **P17.6** (3 h): left-turn modes, lead/lag, and FYA display, with the SPaT
