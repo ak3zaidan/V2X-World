@@ -871,6 +871,19 @@ trustworthy or comparable; later waves add behaviours and radio features.
 | 7 | WP-19, WP-20, WP-21 | M, M, M |
 | 8 | WP-22, WP-23, WP-24 | M, S, M |
 
+### After wave 8: the WP-25+ build plans (`wp25-plus-build-plans.md`)
+
+**WP-25 Power rows for the rigid truck, bus, coach and van** (S-M). Leftover of WP-22.
+- P25.1 (2026-10-28): done, no code. The sources are read, with pages, in
+  `docs/design/research/grade-dynamics.md`:
+  - rigid truck: NCHRP 505 Table 30 straight trucks, 82.9 lb/hp, plus eqs. 20 and 23;
+  - bus and coach: Altoona 1211-P (XD40) and 1209 (X3-45);
+  - van: EPA Test Car List MY2020 Transit wagon.
+
+  PHEMlight HDV files are not open. The transit bus measures about half the acceleration
+  that its rated power at η 0.9 gives, so the bus η values are fitted on the Altoona runs.
+  The TWOPAS equations (App. E) give the design truck a 5 % crawl 7 % below the balance.
+
 ## 3. Deferred and dropped
 
 **Deferred** (useful, but lower value per effort, or waiting on an input):

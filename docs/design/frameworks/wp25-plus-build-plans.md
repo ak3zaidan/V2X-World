@@ -201,6 +201,25 @@ expect: down, source: "<NCHRP 505 table> on a 5 % draped climb with 30 % rigid t
 - **P25.2** (3 h): the rows, the two tests, the trafficval case, the expectation row and the
   faults.
 
+**Sources (2026-10-28, P25.1, done).** All four rows have read sources, with pages, in
+`docs/design/research/grade-dynamics.md` § "Sources for the rigid truck, bus, coach and van":
+- **Rigid truck:** NCHRP 505 Table 30 (p. 55, Gillespie 1985): 26 straight trucks, pooled
+  82.9 lb/hp. App. D has no single-unit split. Air and rolling come from eqs. 20 and 23
+  (pp. 54-55).
+- **Bus and coach:** Altoona 1211-P (New Flyer XD40, ISL9 280, SLW 33,320 lb) and 1209
+  (Prevost X3-45, D13H435, SLW 47,110 lb), with their interval times. At η 0.9 the transit
+  bus is twice as fast as measured, so η is fitted on each run's last interval
+  (0.54, 0.84) and checked on the whole run from rest (+2 %, −9 %).
+- **Van:** EPA Test Car List MY2020, Ford Transit RWD Wagon Med Roof (275 hp, ETW
+  6,500 lb, A/B/C). No full-size cargo van is listed in MY2023 or MY2025.
+- **PHEMlight HDV files:** not open, so dropped.
+- **Crawl band:** App. E's TWOPAS equations, checked against the report's own example,
+  give the design truck 12.04 m/s on 5 %. The balance gives 12.90 m/s (+7 %), so the band
+  stays the balance, with TWOPAS reported beside it.
+- **Rigid-truck crawl case:** its power crawl on 5 % is 22.95 m/s (TWOPAS 22.58 m/s),
+  which is close to a 25 m/s road's desired speed. Whether a held row can go red with the
+  power term off is settled in P25.2.
+
 ---
 
 ## WP-26 A measured DEM and a real hill
@@ -1045,10 +1064,10 @@ parameters from NCHRP 605.
 
 | For | Source | Access | Cached? |
 |---|---|---|---|
-| WP-25 | NCHRP Report 505 (Harwood et al. 2003) | public (TRB) | no (P25.1) |
-| WP-25 | FTA Altoona bus test reports (40 ft transit, 45 ft coach) | public | no |
-| WP-25 | EPA Test Car List data files | public | no |
-| WP-25 | PHEMlight HDV/LCV `.veh` files (SUMO `data/emissions/PHEMlight`) | EPL-2.0 | PC files only |
+| WP-25 | NCHRP Report 505 (Harwood et al. 2003) | public (TRB) | **read** 2026-10-28 (P25.1): Tables 29-30, eqs. 20-23, App. D, App. E (`grade-dynamics.md`) |
+| WP-25 | FTA Altoona bus test reports (40 ft transit, 45 ft coach) | public | **read** 2026-10-28: 1211-P (New Flyer XD40), 1209 (Prevost X3-45) |
+| WP-25 | EPA Test Car List data files | public | **read** 2026-10-28: MY2020 Ford Transit RWD Wagon Med Roof |
+| WP-25 | PHEMlight HDV/LCV `.veh` files (SUMO `data/emissions/PHEMlight`) | EPL-2.0 | PC files only; none open (checked 2026-10-28), dropped |
 | WP-26 | AWS Terrain Tiles (SRTM-format `skadi`); USGS 3DEP | public / public domain | no (P26.1) |
 | WP-28 | FHWA Signal Timing Manual 2e (NCHRP 812), offset transition and lane-use sections | public | read 2026-10-27 (P17.1); sections to pin |
 | WP-28 | MUTCD 2009 §4D | public | [repo] |
