@@ -1,0 +1,54 @@
+# CANDIDATE (not read by the engine yet): locked-class BSM stamp model "position on the fix
+# epoch, whole-ms stamp offset chain" and the position steps tied to it (P1-E4 body and tail).
+# Derived statistics only; no raw rows. Analysis 2026-10-27,
+# research/synthesis/p1-realdata-baseline.md section 7.
+provenance:
+  sources:
+    - {dataset: nm7w-nvbm, role: fit, note: "Tampa locked IDs (>= 70 % of secMarks within 1 ms of a 50 ms epoch), pinned query of tools/realdata/sources.py"}
+    - {dataset: 7qu7-j8rx, role: held_out, note: "Wyoming one-day sample; all 6,597 rows come from ONE OBU (every metadata_logfilename ends in the same link-local address), 16 temporary IDs"}
+    - {dataset: ev64-jn8c, role: contrast, note: "Orem locked IDs, day 2025-02-03 (02-07 has none at v >= 10 m/s)"}
+  manifest_sha256: ee6eeab3f926d0fefac2e790d0dea9c5411531d7823d39558620a5521189d412
+  tools:
+    - "python3 -I tools/realdata/stampjit.py <kind> <csv> [locked]"
+    - "python3 -I tools/realdata/e4stampmc.py wyoming.csv tampa.csv"
+  pairs: "msgCnt +1, secMark dt within 3 ms of 50/100/150 ms, v1 >= 10 m/s, v1.0 RandomPosition residual"
+# Evidence. Mean along-track residual / v (ms) by secMark dt offset e = dt - nominal:
+#   Wyoming (100 ms): e=-1 +1.02 (sd 2.12), e=0 -0.17, e=+1 -1.20 (sd 0.16)
+#   Tampa locked:     e=-1 +2.21 (sd 7.9),  e=0 +0.28, e=+1 -0.86 (sd 0.56)
+#   Orem locked:      e=-1 -0.23, e=0 -0.34, e=+1 -0.36 (sd 2.4-2.7)
+# A position left on the epoch gives -e; a position at the jittered instant gives ~0.
+# Wyoming and Tampa are on the epoch; Orem is at the instant. The shipped v3 fit
+# (bsm-timing-cvpilot.yaml, secmark_phase_ms normal 0.286/0.254, position at the instant)
+# pools the three behaviours.
+model: epoch_stamp_chain
+position: fix_epoch            # the reported position is the fix epoch's, never the instant's
+stamp_offset_ms: [-1, 0]       # secMark = epoch + o, per BSM, both grids (:00 and :50) alike
+profiles:
+  tampa_locked:                # fit set
+    p_offset_minus1: 0.097     # stationary share of BSMs stamped 1 ms early
+    stay_minus1: 0.235         # P(o_k+1 = -1 | o_k = -1)
+    stay_zero: 0.918           # P(o_k+1 = 0 | o_k = 0)
+    step_prob_on_0_to_minus1: 0.697
+    other_pairs_over_5cm: 0.110
+    step_along_cm: {p50: 7.9, p90: 17.4}
+    step_cross_cm: {p50: 4.9, p90: 12.4}
+    speed_p50_mps: 12.8
+  wyoming_obu:                 # HELD-OUT source: using it in the engine makes P1-E4 in-sample
+    p_offset_minus1: 0.461
+    stay_minus1: 0.566
+    stay_zero: 0.630
+    step_prob_on_0_to_minus1: 0.483
+    other_pairs_over_5cm: 0.047
+    step_along_cm: {p50: 6.3, p90: 13.0}
+    step_cross_cm: {p50: 2.4, p90: 5.8}
+    speed_p50_mps: 34.4
+# Steps: a residual > 5 cm is a persistent position step (the next pair does not undo it:
+# 0-2 % of steps are followed by an opposite step of half the size), and it falls on a
+# 0 -> -1 stamp transition far more often than elsewhere (48-70 % vs 5-11 %). The shipped
+# v3 walk draws its heavy increments at every epoch independently of the stamp.
+# Decomposition check (e4stampmc.py; base and step pools from Wyoming itself, so only the
+# stamp model varies), KS against Wyoming's published residual:
+#   epoch chain, Wyoming rates, steps on   0.078   (tolerance 0.092)
+#   epoch chain, Tampa rates, steps on     0.173
+#   instant (engine v3), steps on          0.208
+#   no stamp term, steps on                0.274

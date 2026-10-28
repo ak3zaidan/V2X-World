@@ -544,3 +544,16 @@ which overstates free-flow hours.
 **Open.** Rates by window or time of day (the rollover row). A second density, to make
 the rates transferable. A rate per receiver-pair rather than per accused-exposure-second.
 FB4's full-scale records, once on `main`. Engine determinism at this scenario.
+
+## P1-E4 follow-up: real-data analysis of the remaining KS (2026-10-27, analysis only)
+
+Full tables are in `p1-realdata-baseline.md` §7. No engine runs were made.
+
+- **The remaining KS is the stamp model, not the grid hops or the header clock.**
+  - In Wyoming and in Tampa's locked IDs, the position sits on the fix epoch. The secMark is the epoch or 1 ms earlier, following a two-state chain.
+  - The tail is persistent position steps on 0 → −1 stamp transitions.
+  - The engine instead places the position at a continuous jittered instant.
+  - A decomposition with Wyoming's own pools reaches KS 0.078 under the epoch chain, against 0.208 under the shipped instant model.
+- **The Wyoming sample is one OBU.** The 0.092 tolerance is therefore a within-device spread.
+- **Candidate:** `data/calibration/bsm-stamp-epoch-candidates.yaml`. Expected KS, written before any run: 0.15-0.19 at Tampa rates, ≤ 0.10 at Wyoming rates, ≤ 0.092 with the steps moved onto the transitions.
+- **The P1-E5 RSU loss lock holds** in every hour and at 13 of 15 Tampa RSUs. Two units show none. Per-RSU candidate: `data/calibration/rsu-off-channel-tampa-per-rsu.yaml`.
