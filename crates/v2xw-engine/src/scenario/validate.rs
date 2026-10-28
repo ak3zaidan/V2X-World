@@ -2158,6 +2158,7 @@ const fn choices(path: &'static str, values: &'static [&'static str]) -> Choices
 pub static CHOICES: &[Choices] = &[
     choices("time.des_resolution", &RESOLUTIONS),
     choices("net.layer", &NET_LAYERS),
+    choices("world.sumo.signal_programmes", &["as-file", "static"]),
     choices("net.geonet.area_forwarding", &GN_AREA_FORWARDING),
     choices("net.geonet.non_area_forwarding", &GN_NON_AREA_FORWARDING),
     choices("net.geonet.cbf_variant", &GN_CBF_VARIANTS),
@@ -2397,6 +2398,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Lays lanes, junctions, buildings, sites and signal heads on world.terrain.dem \
                (z += the DEM height), so traffic.vehicle_dynamics.grade has a slope to read. \
                Off by default (the DEM is then only the radio's ground); needs a DEM.",
+    },
+    KeyStatus {
+        path: "world.sumo.signal_programmes",
+        status: Status::Wired,
+        note: "A SUMO net.xml's actuated, delay-based and NEMA tlLogics run as live \
+               controllers (as-file, the default) with their phases' minDur/maxDur and \
+               their params, every attribute and param counted in the import report's \
+               tl_ledger; delay-based runs as actuated, counted. static flattens every \
+               programme to its phase list, as before WP-23. SUMO-network worlds only.",
     },
     KeyStatus {
         path: "world.vegetation",
@@ -6188,6 +6198,16 @@ fn world(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 other.label()
             ),
         )),
+    }
+    if !s.world.sumo.is_default()
+        && !matches!(s.world.source, v2xw_world::WorldSourceSpec::SumoNet { .. })
+    {
+        e.push(conflict(
+            "world.sumo.signal_programmes",
+            "would change nothing: the world is not imported from a SUMO network, so there \
+             are no tlLogic programmes to read"
+                .to_string(),
+        ));
     }
     if let Some(m) = &s.mobility {
         match m.provider.as_str() {

@@ -102,6 +102,9 @@ mod tag {
     /// Vegetation areas (WP-18). Absorbed only when there are any, so a world without
     /// one hashes exactly as it did before the layer existed.
     pub const VEGETATION: u8 = 0x0D;
+    /// Imported signal programmes (WP-23). Absorbed only when there are any, so a world
+    /// without one hashes exactly as it did before the table existed.
+    pub const SIGNAL_PROGRAMMES: u8 = 0x0E;
     /// End marker, so a truncated stream cannot hash like a complete one.
     pub const END: u8 = 0xFF;
 }
@@ -327,6 +330,31 @@ pub fn content_hash(world: &World) -> [u8; 32] {
         h.tag(tag::VEGETATION).count(world.vegetation.len());
         for v in &world.vegetation {
             h.u32(u32::from(v.kind.code())).points(&v.ring);
+        }
+    }
+
+    if !world.signal_programmes.is_empty() {
+        h.tag(tag::SIGNAL_PROGRAMMES)
+            .count(world.signal_programmes.len());
+        let opt = |h: &mut GeometryHasher, v: Option<f64>| {
+            h.bool(v.is_some())
+                .quantised(v.unwrap_or(0.0), crate::quant::Q_TIME_S);
+        };
+        for p in &world.signal_programmes {
+            h.u32(p.plan.index())
+                .u32(u32::from(p.kind.code()))
+                .count(p.phases.len());
+            for ph in &p.phases {
+                for v in [ph.min_s, ph.max_s, ph.vehext_s, ph.yellow_s, ph.red_s] {
+                    opt(&mut h, v);
+                }
+                h.bool(ph.name.is_some())
+                    .text(ph.name.as_deref().unwrap_or(""));
+            }
+            h.count(p.params.len());
+            for (k, v) in &p.params {
+                h.text(k).text(v);
+            }
         }
     }
 

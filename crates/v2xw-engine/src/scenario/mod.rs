@@ -273,6 +273,7 @@ impl Scenario {
                 signals: schema::WorldSignalOptions::default(),
                 service_roads: true,
                 vegetation: false,
+                sumo: schema::WorldSumoOptions::default(),
             },
             actors: Actors::default(),
             weather: Weather::default(),

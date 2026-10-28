@@ -851,6 +851,14 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: a SUMO actuated and a NEMA `tlLogic` import as live controllers; delay-based falls
   back to actuated with a counted anomaly; the TraCI cross-validation signal phases agree.
 - Prep (2026-10-27): build plan §WP-23, 3 pieces. `minDur`/`maxDur`/`<param>` are not read today, and TraCI `TL_STATE` is defined but unused. It adds a hash-excluded per-plan `SignalProgramme` table and a TraCI state comparator that reports "not run" without SUMO. Default `as-file`: the only shipped `net.xml` is static.
+- P23.1 (2026-10-28): the importer reads `<phase>` `minDur`, `maxDur`, `name`, `vehext`, `yellow`, `red` and every programme `<param>`.
+  - **Ledger.** Every `<tlLogic>` and `<phase>` attribute and every `<param>` is counted once in the import report's `tl_ledger`: applied, approximated (`tlLogic@type=delay_based`) or not modelled.
+  - **Table.** A non-static programme becomes a `World.signal_programmes` entry: `{plan, kind: actuated|nema, phases, params}`. The plan chose a `BTreeMap`; this build uses a `Vec` ordered by plan, because JSON map keys must be strings.
+  - **Hash and file format.** The table is hashed (tag `0x0E`) and written (native section 16, JSON) only when it is not empty.
+  - **Anomalies.** New: `delay-based-as-actuated`, and `unknown-programme-type`, which runs as fixed time.
+  - **Setting.** `world.sumo.signal_programmes` is `as-file` (default) or `static`. It is refused off SUMO worlds. All six settings-checklist files are done.
+  - **Goldens: none moved.** By grep, `worlds/sumo/grid3.net.xml` has 9 tlLogics, all `type="static"`. A static network writes no table, and its hash equals the `static`-option import.
+  - **Tests:** `sumo::tests::{actuated_tllogic_imports_with_phase_bounds, nema_tllogic_imports_as_rings, delay_based_becomes_actuated_and_is_counted, every_tl_param_is_in_the_ledger}`.
 
 **WP-24 VeReMi Extension replica and reference ML baseline** (M, 7 days). Sources: F-P10, F-P11. After WP-03, 07, 10.
 - Scope: the LuST subsection (licence checked), 07-09 h and 14-16 h, 30 % attackers on

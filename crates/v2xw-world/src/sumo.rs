@@ -75,7 +75,8 @@ use v2xw_core::ids::{EdgeId, JunctionId, LaneId, SignalId};
 use crate::error::{Result, WorldError};
 use crate::model::{
     ClassMask, ConflictMatrix, Connection, Crossing, CrossingId, Edge, GeoBbox, GeoOrigin,
-    Junction, JunctionControl, Lane, LaneKind, RoadClass, SignalPlan, Terrain, TurnDirection,
+    Junction, JunctionControl, Lane, LaneKind, ProgrammePhase, RoadClass, SignalPlan,
+    SignalProgramme, SignalProgrammeKind, Terrain, TurnDirection,
 };
 use crate::quant::{Q_POSITION_M, Q_TIME_S, quantise};
 
@@ -195,11 +196,18 @@ pub enum SumoAnomaly {
     /// The network declared no geodetic information at all, so the world's origin is null
     /// island.
     NoGeodeticAnchor,
+    /// A `delay_based` `<tlLogic>` (SUMO's time-loss controller) was imported as an
+    /// actuated programme, its phases bounded by `minDur`/`maxDur` and extended by
+    /// detector calls instead of by the time loss of approaching vehicles (WP-23).
+    DelayBasedAsActuated,
+    /// A `<tlLogic type>` was not one of `static`, `actuated`, `delay_based` or `NEMA`,
+    /// so the programme runs its phase list as fixed time (WP-23).
+    UnknownProgrammeType,
 }
 
 impl SumoAnomaly {
     /// Every category, in report order.
-    pub const ALL: [SumoAnomaly; 39] = [
+    pub const ALL: [SumoAnomaly; 41] = [
         SumoAnomaly::MissingJunction,
         SumoAnomaly::EdgeWithoutLanes,
         SumoAnomaly::LaneWithoutShape,
@@ -239,6 +247,8 @@ impl SumoAnomaly {
         SumoAnomaly::SelfIntersectingLane,
         SumoAnomaly::ProjectionNotEvaluated,
         SumoAnomaly::NoGeodeticAnchor,
+        SumoAnomaly::DelayBasedAsActuated,
+        SumoAnomaly::UnknownProgrammeType,
     ];
 
     /// A stable kebab-case label for the report.
@@ -283,6 +293,8 @@ impl SumoAnomaly {
             SumoAnomaly::SelfIntersectingLane => "self-intersecting-lane",
             SumoAnomaly::ProjectionNotEvaluated => "projection-not-evaluated",
             SumoAnomaly::NoGeodeticAnchor => "no-geodetic-anchor",
+            SumoAnomaly::DelayBasedAsActuated => "delay-based-as-actuated",
+            SumoAnomaly::UnknownProgrammeType => "unknown-programme-type",
         }
     }
 }
@@ -446,6 +458,10 @@ pub struct SumoImportReport {
     pub anomalies: BTreeMap<SumoAnomaly, u64>,
     /// Up to [`ANOMALY_SAMPLES`] example element ids per anomaly, for a human.
     pub samples: BTreeMap<SumoAnomaly, Vec<String>>,
+    /// How every `<tlLogic>`, `<phase>` attribute and programme `<param>` was used
+    /// (WP-23). Empty for a network without programmes.
+    #[serde(default, skip_serializing_if = "TlLedger::is_empty")]
+    pub tl_ledger: TlLedger,
     /// The `netconvert` conversion log, when the world came through it
     /// (04-models.md §1.1 requires it in the provenance).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -639,6 +655,186 @@ pub struct SumoOptions {
     /// network carried.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terrain: Option<Terrain>,
+    /// How `<tlLogic>` programmes are imported (WP-23): as the file states them (an
+    /// actuated, delay-based or NEMA programme becomes a live controller in
+    /// `World::signal_programmes`), or all flattened to their static phase lists.
+    #[serde(default, skip_serializing_if = "ProgrammeImport::is_as_file")]
+    pub signal_programmes: ProgrammeImport,
+}
+
+/// How `<tlLogic>` programmes are imported ([`SumoOptions::signal_programmes`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProgrammeImport {
+    /// Each programme runs as its `type` says (the default: flattening an actuated
+    /// programme to fixed time is the importer's stated limitation, which this removes).
+    #[default]
+    AsFile,
+    /// Every programme runs its static phase list, as before WP-23.
+    Static,
+}
+
+impl ProgrammeImport {
+    /// Whether this is the default.
+    pub fn is_as_file(&self) -> bool {
+        *self == ProgrammeImport::AsFile
+    }
+}
+
+/// How every attribute of a `<tlLogic>` and its `<phase>`s, and every programme
+/// `<param>`, was used (WP-23): each occurrence is counted once, under `tlLogic@name`,
+/// `phase@name` or `param@key` (with `=value` for an approximated `type`), so
+/// [`TlLedger::total`] is the number of such attributes and parameters in the file and
+/// nothing is dropped without a count. The pattern is the route importer's ledger
+/// (WP-15, `v2xw_interop::routes::ImportLedger`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TlLedger {
+    /// Read and applied as SUMO defines it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub applied: BTreeMap<String, u64>,
+    /// Read and applied with a nearer supported meaning.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub approximated: BTreeMap<String, u64>,
+    /// Read and not modelled.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub not_modelled: BTreeMap<String, u64>,
+}
+
+impl TlLedger {
+    fn bump(map: &mut BTreeMap<String, u64>, key: String) {
+        *map.entry(key).or_default() += 1;
+    }
+
+    /// Whether nothing was counted.
+    pub fn is_empty(&self) -> bool {
+        self.total() == 0
+    }
+
+    /// Every occurrence counted.
+    pub fn total(&self) -> u64 {
+        [&self.applied, &self.approximated, &self.not_modelled]
+            .iter()
+            .flat_map(|m| m.values())
+            .sum()
+    }
+
+    /// The count under `key` in any of the three maps.
+    pub fn count(&self, key: &str) -> u64 {
+        [&self.applied, &self.approximated, &self.not_modelled]
+            .iter()
+            .filter_map(|m| m.get(key))
+            .sum()
+    }
+
+    /// Counts every attribute and parameter of `logic`, run as `kind`.
+    /// Counts every attribute and parameter of a programme the import ignored (a second
+    /// `programID`) as not modelled.
+    fn record_ignored(&mut self, logic: &RawTlLogic) {
+        for a in &logic.attributes {
+            Self::bump(&mut self.not_modelled, format!("tlLogic@{a}"));
+        }
+        for b in &logic.phase_bounds {
+            for a in &b.attributes {
+                Self::bump(&mut self.not_modelled, format!("phase@{a}"));
+            }
+        }
+        for (k, _) in &logic.params {
+            Self::bump(&mut self.not_modelled, format!("param@{k}"));
+        }
+    }
+
+    fn record(&mut self, logic: &RawTlLogic, kind: SignalProgrammeKind) {
+        for a in &logic.attributes {
+            let key = format!("tlLogic@{a}");
+            match a.as_str() {
+                "type" if logic.logic_type == "delay_based" && kind != SignalProgrammeKind::Static => {
+                    Self::bump(&mut self.approximated, format!("{key}=delay_based"));
+                }
+                "id" | "programID" | "type" | "offset" => Self::bump(&mut self.applied, key),
+                _ => Self::bump(&mut self.not_modelled, key),
+            }
+        }
+        let live = kind != SignalProgrammeKind::Static;
+        let nema = kind == SignalProgrammeKind::Nema;
+        for b in &logic.phase_bounds {
+            for a in &b.attributes {
+                let key = format!("phase@{a}");
+                let applied = match a.as_str() {
+                    "duration" | "state" => true,
+                    "minDur" | "maxDur" => live,
+                    "name" | "vehext" | "yellow" | "red" => nema,
+                    _ => false,
+                };
+                Self::bump(
+                    if applied {
+                        &mut self.applied
+                    } else {
+                        &mut self.not_modelled
+                    },
+                    key,
+                );
+            }
+        }
+        for (k, _) in &logic.params {
+            let applied = match kind {
+                SignalProgrammeKind::Actuated => ACTUATED_PARAMS.contains(&k.as_str()),
+                SignalProgrammeKind::Nema => NEMA_PARAMS.contains(&k.as_str()),
+                SignalProgrammeKind::Static => false,
+            };
+            Self::bump(
+                if applied {
+                    &mut self.applied
+                } else {
+                    &mut self.not_modelled
+                },
+                format!("param@{k}"),
+            );
+        }
+    }
+}
+
+/// The SUMO actuated parameters the engine's actuated controller applies to an imported
+/// programme (`v2xw_engine::actuated`): `max-gap`, the passage time (SUMO
+/// documentation, "Traffic Lights", actuated parameters; default 3 s).
+pub const ACTUATED_PARAMS: [&str; 1] = ["max-gap"];
+
+/// The SUMO NEMA parameters the engine's dual ring reads
+/// (`v2xw_engine::scenario::schema::NemaSettings::from_sumo_params`).
+pub const NEMA_PARAMS: [&str; 9] = [
+    "ring1",
+    "ring2",
+    "barrierPhases",
+    "barrier2Phases",
+    "coordinate-mode",
+    "minRecall",
+    "maxRecall",
+    "fixForceOff",
+    "controllerType",
+];
+
+/// The controller a `<tlLogic type>` names, under `mode`, and the anomaly its import
+/// records, if any.
+fn programme_kind(
+    logic_type: &str,
+    mode: ProgrammeImport,
+) -> (SignalProgrammeKind, Option<SumoAnomaly>) {
+    let (kind, anomaly) = match logic_type {
+        "static" | "" => (SignalProgrammeKind::Static, None),
+        "actuated" => (SignalProgrammeKind::Actuated, None),
+        "delay_based" => (
+            SignalProgrammeKind::Actuated,
+            Some(SumoAnomaly::DelayBasedAsActuated),
+        ),
+        "NEMA" => (SignalProgrammeKind::Nema, None),
+        _ => (
+            SignalProgrammeKind::Static,
+            Some(SumoAnomaly::UnknownProgrammeType),
+        ),
+    };
+    match mode {
+        ProgrammeImport::AsFile => (kind, anomaly),
+        ProgrammeImport::Static => (SignalProgrammeKind::Static, None),
+    }
 }
 
 /// The licence string an import records when the caller does not state one.
@@ -656,6 +852,7 @@ impl Default for SumoOptions {
             roads_attribution: None,
             signal_head_height_m: 5.0,
             terrain: None,
+            signal_programmes: ProgrammeImport::AsFile,
         }
     }
 }
@@ -955,6 +1152,34 @@ pub struct RawTlLogic {
     pub offset_s: f64,
     /// Its phases, in file order: `(duration_s, state)`.
     pub phases: Vec<(f64, String)>,
+    /// Each phase's bounds and NEMA timing, parallel to `phases` (WP-23).
+    #[serde(default)]
+    pub phase_bounds: Vec<RawPhaseBounds>,
+    /// The `<param key value>` children, in file order (WP-23).
+    #[serde(default)]
+    pub params: Vec<(String, String)>,
+    /// Every attribute name of the `<tlLogic>` element, for the ledger.
+    #[serde(default)]
+    pub attributes: Vec<String>,
+}
+
+/// One `<phase>`'s attributes beyond `duration` and `state` (WP-23), as read.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RawPhaseBounds {
+    /// `minDur`, seconds.
+    pub min_dur_s: Option<f64>,
+    /// `maxDur`, seconds.
+    pub max_dur_s: Option<f64>,
+    /// `name`.
+    pub name: Option<String>,
+    /// `vehext` (NEMA passage), seconds.
+    pub vehext_s: Option<f64>,
+    /// `yellow` (NEMA), seconds.
+    pub yellow_s: Option<f64>,
+    /// `red` (NEMA red clearance), seconds.
+    pub red_s: Option<f64>,
+    /// Every attribute name of the element, for the ledger.
+    pub attributes: Vec<String>,
 }
 
 /// One `<type>`, as read: the defaults an edge of that type inherits.
@@ -1219,6 +1444,9 @@ pub fn parse_sumo_net(xml: &[u8]) -> Result<SumoNet> {
                                 logic_type: attr(e, "type").unwrap_or_default(),
                                 offset_s: attr_f(e, "offset").unwrap_or(0.0),
                                 phases: Vec::new(),
+                                phase_bounds: Vec::new(),
+                                params: Vec::new(),
+                                attributes: attr_names(e),
                             };
                             if empty {
                                 net.tl_logics.push(logic);
@@ -1232,6 +1460,24 @@ pub fn parse_sumo_net(xml: &[u8]) -> Result<SumoNet> {
                             let duration = attr_f(e, "duration").unwrap_or(0.0);
                             let state = attr(e, "state").unwrap_or_default();
                             logic.phases.push((duration, state));
+                            logic.phase_bounds.push(RawPhaseBounds {
+                                min_dur_s: attr_f(e, "minDur"),
+                                max_dur_s: attr_f(e, "maxDur"),
+                                name: attr(e, "name"),
+                                vehext_s: attr_f(e, "vehext"),
+                                yellow_s: attr_f(e, "yellow"),
+                                red_s: attr_f(e, "red"),
+                                attributes: attr_names(e),
+                            });
+                        }
+                    }
+                    "param" => {
+                        // Only a programme's parameters are read; an edge's, lane's or
+                        // junction's are not this importer's (and were never read).
+                        if let Some(Pending::TlLogic(logic)) = pending.as_mut()
+                            && let Some(key) = attr(e, "key")
+                        {
+                            logic.params.push((key, attr(e, "value").unwrap_or_default()));
                         }
                     }
                     "prohibition" => {
@@ -1306,6 +1552,14 @@ fn attr(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Every attribute name of `e`, in document order.
+fn attr_names(e: &quick_xml::events::BytesStart<'_>) -> Vec<String> {
+    e.attributes()
+        .filter_map(|a| a.ok())
+        .map(|a| a.key.into_inner().to_string())
+        .collect()
 }
 
 /// An attribute parsed as a finite float.
@@ -2418,11 +2672,39 @@ fn import_parsed(
     // --- stage 7: signal plans ----------------------------------------------------
     let mut signals: Vec<SignalPlan> = Vec::new();
     let mut seen_programme: BTreeSet<&str> = BTreeSet::new();
+    let mut programmes: Vec<SignalProgramme> = Vec::new();
     for logic in &net.tl_logics {
         if !seen_programme.insert(logic.id.as_str()) {
             report.note(SumoAnomaly::ExtraSignalProgramme, &logic.id);
+            report.tl_ledger.record_ignored(logic);
             continue;
         }
+        let (kind, anomaly) = programme_kind(&logic.logic_type, options.signal_programmes);
+        if let Some(a) = anomaly {
+            report.note(a, &logic.id);
+        }
+        report.tl_ledger.record(logic, kind);
+        // Each kept phase's bounds, in the plan's phase order (zero-length phases are
+        // dropped below, and their bounds with them).
+        let bounds: Vec<ProgrammePhase> = logic
+            .phases
+            .iter()
+            .enumerate()
+            .filter(|(_, (duration, _))| *duration > 0.0)
+            .map(|(i, _)| {
+                let b = logic.phase_bounds.get(i).cloned().unwrap_or_default();
+                let q = |v: Option<f64>| v.map(|x| quantise(x, Q_TIME_S));
+                ProgrammePhase {
+                    min_s: q(b.min_dur_s),
+                    max_s: q(b.max_dur_s),
+                    name: b.name,
+                    vehext_s: q(b.vehext_s),
+                    yellow_s: q(b.yellow_s),
+                    red_s: q(b.red_s),
+                }
+            })
+            .collect();
+        let params: BTreeMap<String, String> = logic.params.iter().cloned().collect();
         let phases: Vec<&(f64, String)> = logic
             .phases
             .iter()
@@ -2534,6 +2816,14 @@ fn import_parsed(
                 };
                 if forward >= cycle_s { 0.0 } else { forward }
             };
+            if kind != SignalProgrammeKind::Static {
+                programmes.push(SignalProgramme {
+                    plan: plan_id,
+                    kind,
+                    phases: bounds.clone(),
+                    params: params.clone(),
+                });
+            }
             signals.push(SignalPlan {
                 id: plan_id,
                 junction: JunctionId::new(j as u32),
@@ -2885,6 +3175,7 @@ fn import_parsed(
     let mut builder = World::builder(origin)
         .roads(road_network)
         .signals(signals)
+        .signal_programmes(programmes)
         .default_env(options.import.default_env)
         .symbols(symbols)
         .provenance(provenance)
@@ -3401,8 +3692,12 @@ pub fn card() -> v2xw_core::card::ModelCard {
             "Lane `acceleration`, `changeLeft`, `changeRight`, `endOffset`, `customShape` \
              and the `<neigh>` element."
                 .to_string(),
-            "Actuated and delay-based traffic-light programmes are imported as their \
-             static phase list: the plan's `type` is not carried over."
+            "Actuated, delay-based and NEMA traffic-light programmes are carried into \
+             `World::signal_programmes` with their phases' `minDur`/`maxDur` (and NEMA's \
+             `name`, `vehext`, `yellow`, `red`) and `<param>`s, each counted in the \
+             report's `tl_ledger` (WP-23); a delay-based programme runs as actuated \
+             (`delay-based-as-actuated`), and SUMO's induction-loop detectors are not \
+             imported: the engine's own detectors call the phases."
                 .to_string(),
         ],
         sources: vec![docs(), decision()],
@@ -3857,5 +4152,160 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The crossroads fixture with its static programme replaced by `programme`.
+    fn with_programme(programme: &str) -> String {
+        let fixture = crossroads();
+        let start = fixture.find("<tlLogic").expect("a programme");
+        let end = fixture.find("</tlLogic>").expect("its end") + "</tlLogic>\n".len();
+        format!("{}{}{}", &fixture[..start], programme, &fixture[end..])
+    }
+
+    /// WP-23 Accept: an actuated `tlLogic` imports as a live programme with its phases'
+    /// bounds and parameters, survives the native format, and a static network keeps its
+    /// content hash (no table, nothing hashed).
+    #[test]
+    fn actuated_tllogic_imports_with_phase_bounds() {
+        let xml = with_programme(
+            "<tlLogic id=\"c\" type=\"actuated\" programID=\"0\" offset=\"0\">\n\
+             <param key=\"max-gap\" value=\"2.5\"/>\n\
+             <phase duration=\"31\" minDur=\"5\" maxDur=\"50\" state=\"Gg\"/>\n\
+             <phase duration=\"4\" state=\"yy\"/>\n\
+             <phase duration=\"25\" minDur=\"10\" maxDur=\"40\" state=\"rr\"/>\n</tlLogic>\n",
+        );
+        let (world, report) = import(&xml);
+        assert_eq!(world.signal_programmes.len(), 1, "{report:?}");
+        let p = &world.signal_programmes[0];
+        assert_eq!(p.kind, SignalProgrammeKind::Actuated);
+        assert_eq!(p.plan, world.signals[0].id);
+        assert_eq!(p.phases.len(), world.signals[0].phases.len());
+        assert_eq!((p.phases[0].min_s, p.phases[0].max_s), (Some(5.0), Some(50.0)));
+        assert_eq!((p.phases[1].min_s, p.phases[1].max_s), (None, None));
+        assert_eq!((p.phases[2].min_s, p.phases[2].max_s), (Some(10.0), Some(40.0)));
+        assert_eq!(p.params.get("max-gap").map(String::as_str), Some("2.5"));
+        // The native format carries the table, and the hash covers it.
+        let back = crate::serde_native::from_bytes(&crate::serde_native::to_bytes(&world).unwrap())
+            .expect("reads back");
+        assert_eq!(back.signal_programmes, world.signal_programmes);
+        // Flattened, the same file is the static plan: no table and another hash.
+        let flat = import_sumo_net_bytes(
+            xml.as_bytes(),
+            "fixture",
+            &SumoOptions {
+                signal_programmes: ProgrammeImport::Static,
+                ..options()
+            },
+        )
+        .expect("imports")
+        .0;
+        assert!(flat.signal_programmes.is_empty());
+        assert_ne!(flat.content_hash, world.content_hash);
+        // A static network writes no table, so its hash is the one it always had.
+        let (fixed, _) = import(&crossroads());
+        assert!(fixed.signal_programmes.is_empty());
+        let fixed_flat = import_sumo_net_bytes(
+            crossroads().as_bytes(),
+            "fixture",
+            &SumoOptions {
+                signal_programmes: ProgrammeImport::Static,
+                ..options()
+            },
+        )
+        .expect("imports")
+        .0;
+        assert_eq!(fixed.content_hash, fixed_flat.content_hash);
+    }
+
+    /// WP-23 Accept: a NEMA `tlLogic` imports with its phase numbers, per-phase timing
+    /// and ring parameters.
+    #[test]
+    fn nema_tllogic_imports_as_rings() {
+        let xml = with_programme(
+            "<tlLogic id=\"c\" type=\"NEMA\" programID=\"0\" offset=\"0\">\n\
+             <param key=\"ring1\" value=\"0,2,0,4\"/>\n\
+             <param key=\"ring2\" value=\"0,6,0,8\"/>\n\
+             <param key=\"barrierPhases\" value=\"4,8\"/>\n\
+             <param key=\"barrier2Phases\" value=\"2,6\"/>\n\
+             <param key=\"show-detectors\" value=\"true\"/>\n\
+             <phase duration=\"30\" minDur=\"6\" maxDur=\"40\" vehext=\"2\" yellow=\"3\" red=\"1\" name=\"2\" state=\"Gr\"/>\n\
+             <phase duration=\"20\" minDur=\"5\" maxDur=\"30\" vehext=\"2.5\" yellow=\"3.5\" red=\"1.5\" name=\"4\" state=\"rG\"/>\n\
+             </tlLogic>\n",
+        );
+        let (world, report) = import(&xml);
+        assert_eq!(world.signal_programmes.len(), 1, "{report:?}");
+        let p = &world.signal_programmes[0];
+        assert_eq!(p.kind, SignalProgrammeKind::Nema);
+        let names: Vec<Option<&str>> = p.phases.iter().map(|ph| ph.name.as_deref()).collect();
+        assert_eq!(names, [Some("2"), Some("4")]);
+        let ph = &p.phases[1];
+        assert_eq!(
+            (ph.min_s, ph.max_s, ph.vehext_s, ph.yellow_s, ph.red_s),
+            (Some(5.0), Some(30.0), Some(2.5), Some(3.5), Some(1.5))
+        );
+        assert_eq!(p.params.len(), 5);
+        assert_eq!(p.params.get("ring1").map(String::as_str), Some("0,2,0,4"));
+        // The ring parameters are applied; the display flag is not modelled.
+        assert_eq!(report.tl_ledger.applied.get("param@ring1"), Some(&1));
+        assert_eq!(report.tl_ledger.not_modelled.get("param@show-detectors"), Some(&1));
+    }
+
+    /// WP-23 Accept: a delay-based programme runs as actuated and is counted.
+    #[test]
+    fn delay_based_becomes_actuated_and_is_counted() {
+        let xml = with_programme(
+            "<tlLogic id=\"c\" type=\"delay_based\" programID=\"0\" offset=\"0\">\n\
+             <param key=\"detectorRange\" value=\"100\"/>\n\
+             <phase duration=\"31\" minDur=\"5\" maxDur=\"50\" state=\"Gg\"/>\n\
+             <phase duration=\"4\" state=\"yy\"/>\n\
+             <phase duration=\"25\" minDur=\"10\" maxDur=\"40\" state=\"rr\"/>\n</tlLogic>\n",
+        );
+        let (world, report) = import(&xml);
+        assert_eq!(world.signal_programmes.len(), 1);
+        assert_eq!(world.signal_programmes[0].kind, SignalProgrammeKind::Actuated);
+        assert_eq!(report.anomaly(SumoAnomaly::DelayBasedAsActuated), 1);
+        assert_eq!(
+            report.tl_ledger.approximated.get("tlLogic@type=delay_based"),
+            Some(&1)
+        );
+        assert_eq!(report.tl_ledger.not_modelled.get("param@detectorRange"), Some(&1));
+        // An unknown type is run as fixed time, and counted.
+        let odd = with_programme(
+            "<tlLogic id=\"c\" type=\"rail_crossing\" programID=\"0\" offset=\"0\">\n\
+             <phase duration=\"31\" state=\"Gg\"/>\n</tlLogic>\n",
+        );
+        let (w2, r2) = import(&odd);
+        assert!(w2.signal_programmes.is_empty());
+        assert_eq!(r2.anomaly(SumoAnomaly::UnknownProgrammeType), 1);
+    }
+
+    /// WP-23 Accept: every attribute of a programme and its phases, and every parameter,
+    /// is in the ledger exactly once, whatever the importer makes of it.
+    #[test]
+    fn every_tl_param_is_in_the_ledger() {
+        let programme = "<tlLogic id=\"c\" type=\"actuated\" programID=\"0\" offset=\"3\" extra=\"x\">\n\
+             <param key=\"max-gap\" value=\"2.5\"/>\n\
+             <param key=\"detector-gap\" value=\"2\"/>\n\
+             <param key=\"passing-time\" value=\"1.9\"/>\n\
+             <param key=\"vendor-thing\" value=\"7\"/>\n\
+             <phase duration=\"31\" minDur=\"5\" maxDur=\"50\" next=\"1\" name=\"main\" state=\"Gg\"/>\n\
+             <phase duration=\"4\" state=\"yy\" earliestEnd=\"2\"/>\n\
+             <phase duration=\"25\" minDur=\"10\" maxDur=\"40\" state=\"rr\"/>\n</tlLogic>\n";
+        // Every `key="` in the programme is one attribute; a `<param>`'s key and value
+        // are one parameter, so its two attributes count once.
+        let attributes = programme.matches("=\"").count();
+        let params = programme.matches("<param ").count();
+        let (_, report) = import(&with_programme(programme));
+        let l = &report.tl_ledger;
+        assert_eq!(l.total() as usize, attributes - params, "{l:?}");
+        assert_eq!(l.applied.get("param@max-gap"), Some(&1));
+        for k in ["param@detector-gap", "param@passing-time", "param@vendor-thing"] {
+            assert_eq!(l.not_modelled.get(k), Some(&1), "{k}");
+        }
+        assert_eq!(l.applied.get("phase@minDur"), Some(&2));
+        assert_eq!(l.not_modelled.get("phase@next"), Some(&1));
+        assert_eq!(l.not_modelled.get("phase@earliestEnd"), Some(&1));
+        assert_eq!(l.not_modelled.get("tlLogic@extra"), Some(&1));
+        assert_eq!(l.applied.get("tlLogic@offset"), Some(&1));
     }
 }

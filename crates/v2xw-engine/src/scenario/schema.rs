@@ -1272,6 +1272,29 @@ pub struct WorldSpec {
     /// without it keeps its content hash.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub vegetation: bool,
+    /// How a SUMO `net.xml` import treats its traffic-light programmes (WP-23).
+    #[serde(default, skip_serializing_if = "WorldSumoOptions::is_default")]
+    pub sumo: WorldSumoOptions,
+}
+
+/// How a SUMO `net.xml` import is read (`world.sumo`, WP-23).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorldSumoOptions {
+    /// `as-file` (the default): an actuated, delay-based or NEMA `<tlLogic>` runs as the
+    /// live controller its `type` names, with its phases' `minDur`/`maxDur` and its
+    /// `<param>`s ([`v2xw_world::sumo::ProgrammeImport`]). `static`: every programme runs
+    /// its phase list as fixed time, as before WP-23.
+    #[serde(default)]
+    pub signal_programmes: v2xw_world::sumo::ProgrammeImport,
+}
+
+impl WorldSumoOptions {
+    /// True when nothing differs from the default, so a scenario that never mentions
+    /// `world.sumo` serialises exactly as before.
+    pub fn is_default(&self) -> bool {
+        *self == WorldSumoOptions::default()
+    }
 }
 
 /// How an imported world's synthesised signal plans are coordinated

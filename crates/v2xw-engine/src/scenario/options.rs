@@ -149,6 +149,14 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Permissive only",
             "No left-turn phase: lefts turn through gaps in the oncoming traffic.",
         ),
+        ("world.sumo.signal_programmes", "as-file") => w(
+            "As the file says",
+            "An actuated, delay-based or NEMA programme in the SUMO network runs as a live controller, with its phases' minimum and maximum durations.",
+        ),
+        ("world.sumo.signal_programmes", "static") => w(
+            "Fixed time",
+            "Every programme runs its phase list as written, ignoring its type (the import before WP-23).",
+        ),
         ("traffic.signals.nema.permissive_display", "fya") => w(
             "Flashing yellow arrow",
             "The permissive left shows a flashing yellow arrow (MUTCD 2009 §4D.20).",
@@ -1607,6 +1615,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "radio.channel_model.foliage" => "Trees weaken the signal",
         "radio.channel_model.density_sigma" => "Signal variation grows with traffic and buildings",
         "world.vegetation" => "Import trees and woods",
+        "world.sumo.signal_programmes" => "SUMO traffic-light programmes",
         "world.terrain.drape" => "Lay the roads on the terrain",
         "radio.sidelink.candidate_percent" => "Candidate resources kept",
         "radio.sidelink.selection_window_ms" => "Selection window end (T2)",

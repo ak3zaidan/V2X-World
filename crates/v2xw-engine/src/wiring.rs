@@ -332,6 +332,7 @@ fn build_world_geometry(scenario: &Scenario) -> Result<World> {
         spec @ WorldSourceSpec::SumoNet { .. } => {
             let options = v2xw_world::sumo::SumoOptions {
                 import: opts.clone(),
+                signal_programmes: scenario.world.sumo.signal_programmes,
                 ..v2xw_world::sumo::SumoOptions::default()
             };
             v2xw_world::sumo::SumoSource::with_options(options)
