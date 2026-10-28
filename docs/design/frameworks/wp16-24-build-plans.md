@@ -387,6 +387,72 @@ out of scope here.
   - the left-turn min and max green.
   The ITE guideline is paywalled: record the formula's secondary source if the primary
   cannot be cached.
+
+  **Sources resolved, 2026-10-27 (sources track, no code; `l.N` = this file at commit 081fcab2).** STM = NCHRP Report 812, *Signal
+  Timing Manual* 2nd ed. (2015), public PDF at
+  <https://transops.s3.amazonaws.com/uploaded_files/Signal%20Timing%20Manual%20812.pdf>
+  (sha256 `87d89878dd35…25cc5`, read on 2026-10-27 and not cached, since it is 16 MB).
+  Pages are the printed ones.
+  - *Dual ring (l.303, `ring1` row).* STM §5.1.2, **Exhibit 5-3** "Basic Ring-and-Barrier
+    Diagram", p. 5-4. It has two rings, two barriers and eight phases, with 1, 2, 5, 6
+    compatible and 3, 4, 7, 8 compatible. Numbering is from §5.1.1, Exhibit 5-1, pp. 5-2–5-3.
+    2/6 are the major throughs, 4/8 the minor throughs, 1/5 the major lefts and 3/7 the
+    minor lefts. "Pedestrian phases … are generally assigned the same phase number as the
+    adjacent, parallel vehicular phases." Verified.
+  - *SUMO names (l.330).* Checked against <https://sumo.dlr.de/docs/Simulation/NEMA.html>
+    (last edited 2026-05-04). These exist: `ring1`, `ring2`, `barrierPhases`,
+    `barrier2Phases`, `coordinate-mode`, `minRecall`, `maxRecall`, `fixForceOff`,
+    `controllerType`, `latchingDetectors`, `crossPhaseSwitching:X`. **`coordinatePhases`
+    does not exist.** In SUMO the coordinated phases are `barrier2Phases` with
+    `coordinate-mode=true`, so the `nema.coordinate_phases` bracket must change for WP-23.
+    SUMO's own defaults: `minRecall` is all phases when unset, and `fixForceOff=false`
+    (floating).
+  - *`lefts` lead-lead.* STM §5.1.3.6, p. 5-9: "The most common left-turn phase sequence
+    is the lead-lead sequence". Verified.
+  - *`left_turn_mode`.* STM §5.1.3 and Exhibit 5-4, p. 5-5 list five options. The STM picks
+    no default, so `protected-permissive` stays an ASSUMPTION choice.
+  - *`permissive_display` fya.* MUTCD 2009 §4D.20 ¶03 item 4: "During the permissive
+    left-turn movement, a flashing left-turn YELLOW ARROW signal indication shall be
+    displayed". The permissive-only case is §4D.18 ¶03, and STM §4.3.1.3 is p. 4-19.
+    Verified. Note that the MUTCD 11th ed. (Dec 2023) supersedes 2009. It was not checked.
+  - *Min / max / passage (l.343).* Minimum green is **Exhibit 6-4**, p. 6-6: through on a
+    major arterial >40 mph 10–15 s, ≤40 mph 7–15 s; minor arterial 4–10 s;
+    collector/local 2–10 s; **left turn, any facility, 2–5 s**. Maximum green is
+    **Exhibit 6-9**, p. 6-10: through >40 mph 50–70 s, ≤40 mph 40–60 s, minor arterial
+    30–50 s, collector 20–40 s; **left turn 15–30 s**. Passage is §6.1.5 with Exhibit
+    6-12, p. 6-14 (speed × zone length), and p. 6-12: "Setback detectors typically have
+    passage times between 2 and 3 seconds". The existing through 7 / 45 / 2.5 sits inside
+    the ≤40 mph ranges. Proposed left defaults are **4 / 25 / 2.5 s**. They lie inside the
+    STM ranges, but the exact values are an ASSUMPTION.
+  - *Yellow / red (l.344).* STM Equation 6-1, p. 6-3, cites ITE: Y = t + 1.47v/(2a + 2Gg)
+    (v in mph), with t = 1.0 s and a = 10 ft/s² ("recommended … in NCHRP 731"). Exhibit 6-2,
+    p. 6-4: 25→3.0, 30→3.2, 35→3.6, 40→3.9, 45→4.3, 50→4.7, 55→5.0, 60→5.4 s, plus 0.1 s per
+    1 % downgrade. Red clearance is Exhibit 6-3, p. 6-5, a speed × width table "reduced by 1
+    second" per NCHRP 731. Back-calculation fits R = (W + 20 ft)/(1.47v) − 1, e.g. 30 mph
+    and 50 ft give 0.6, and 25 mph and 30 ft give 0.4. The ITE 2020 primary stays paywalled,
+    so the secondary is STM Eq. 6-1 / Exh. 6-3.
+  - *Walk / ped speed (l.345).* MUTCD 2009 §4E.06: ¶11 says walk "should be at least 7
+    seconds" (Guidance), ¶12 allows 4 s (Option), ¶07 sets clearance at 3.5 ft/s, and ¶14
+    checks walk plus clearance at 3 ft/s. STM pp. 6-16–6-17 agree. Verified.
+  - *`min_recall` [2,6] (l.346): a mismatch.* STM **Exhibit 6-22**, p. 6-22, "Typical
+    Settings … at a Fully-Actuated Intersection", gives Minimum Recall *None* and **Soft
+    Recall on 2 and 6**. So the default as written does not match the STM. Either add
+    `nema.soft_recall: [2,6]` with `min_recall: []`, or keep `[2,6]` labelled as a
+    deviation. P17.2 decides.
+  - *Coordinate phases (l.348).* STM §5.1.1, p. 5-3, says the manual follows the convention
+    that phases 2 and 6 "are the coordinated phases when under coordinated operations".
+    Verified.
+  - *Force-off (l.350).* STM §7.3.4 "Force-Offs" (guidance in §7.4.4), p. 7-11, and Exhibit 7-14, define fixed and
+    floating force-offs and name no default. "Floating" rests on SUMO's default and the
+    STM's statement that floating favours the coordinated phases. That is secondary, so the
+    entry stays labelled.
+  - *Expectation sources (l.371, l.373).* STM §5.1.2, p. 5-4, covers compatible phases
+    timing together. Max recall is STM Exhibit 6-21, p. 6-22. SUMO's docs say `maxRecall`
+    phases "run for their maxDur".
+  - **Not resolved.** NEMA TS 2-2016 (paywalled). The ITE 2020 guideline (paywalled). The
+    **8-phase worked example** for `stm_example_timing`: the STM has no numeric
+    max-recall worked example, only diagrams (Exhibits 5-5 to 5-26, 7-12 Splits, p. 7-11).
+    The test must build its own example from Exhibits 6-2/6-4/6-9 and state that it does.
 - **P17.2** (3 h): the schema, validation, options, publish and guide rows for
   `control: nema` and the `nema.*` block, with no behaviour (validation refuses to run
   `nema` until P17.5 lands).
@@ -524,6 +590,48 @@ by design.
   - write `docs/design/research/gemv2-p833-constants.md` with σ_min, σ_max, ρ_ref per
     class, the P.833 equations and figure values at 5.9 GHz, and the tree-row
     assumption.
+
+  **Sources resolved, 2026-10-27 (sources track, no code; `l.N` = this file at commit 081fcab2).**
+  - *P.833 edition (l.459).* **ITU-R P.833-10 (09/2021)** is in force
+    (<https://www.itu.int/rec/R-REC-P.833/en>). PDF:
+    <https://www.itu.int/dms_pubrec/itu-r/rec/p/R-REC-P.833-10-202109-I!!PDF-E.pdf>.
+    Page numbers below are the PDF's.
+  - **Design defect: the plan names the wrong clause.** Eq. (1), Aev = Am[1 − exp(−dγ/Am)]
+    (§2.1, p. 4), is for a path with **one terminal inside** woodland. For a path blocked
+    by a single tree or a tree row with **both terminals outside**, §3 says "Equation (1)
+    does not apply". §3.1 (≤ 1 GHz, p. 9) gives eq. (7), Aet = dγ, capped at the
+    lowest-loss path around the vegetation (diffraction per P.526). **§3.2.1 (above 1 GHz,
+    terrestrial, pp. 9–10)** requires the RET method: top diffraction (eq. 8, double knife
+    edge per P.526), side diffraction, a ground-reflected component, and the
+    radiative-energy-transfer scattered component. Its fitted parameters are Tables 4–8
+    (pp. 15–19), given at 1.3, 2, 2.2, 11, 37 and 61.5 GHz. **There is no 5.9 GHz column**,
+    so it must be interpolated between 2.2 and 11 GHz (an ASSUMPTION). Table 9 (p. 22)
+    holds default oak-tree scatterer sizes. The γ of Fig. 2 (p. 5) is a plot only and would
+    have to be digitised. **Recommendation:** for 5.9 GHz V2X, `p833` should implement
+    §3.2.1. Failing that, a documented eq. (7) with a P.526 cap, labelled "P.833 §3.1 used
+    above its 1 GHz range".
+  - *Boban 2014 (l.463).* Author preprint arXiv:1305.0124 v3 (2014-04-22), "preprint of
+    an article … IEEE TVT", doi 10.1109/TVT.2014.2317803. Its licence is the arXiv
+    non-exclusive one, so the PDF is cited, not cached. **Table V, p. 8:** LOS σ_min 3.3 dB
+    (Porto open space) and σ_max 5.2 dB (Porto downtown). NLOSv 3.8 dB (Porto highway) and
+    5.3 dB. NLOSb σ_min 0 dB when reflections/diffractions are computed, else 4.1 dB (from
+    Mangel et al.), with σ_max 6.8 dB. **Eq. (10), p. 8, is not the plan's linear clamp:**
+    σ_i = σ_min + (σ_max − σ_min)/2 · (√(N_V,i/N_V,max) + √(A_S,i/A_S,max)). There is one
+    vehicle-density term and one static-object-area term, with square roots. N_V,max and
+    A_S,max are per km² from the Porto data, and **the paper gives no numeric values**, so
+    ρ_ref stays an ASSUMPTION and becomes two references. The ellipse (§IV, p. 4) has foci
+    Tx and Rx, major axis r and minor axis √(r² − d²). r comes from Table VI, p. 8: LOS
+    500 m urban and 1 000 m outside, NLOSv 400 m, NLOSb 300 m. Only single-interaction
+    reflections are modelled (footnote 4), which supports the `single-bounce` option.
+  - *The dangling `boban-mel` references.* GEMV² eq. (4), pp. 6–7, gives foliage loss
+    MEL = 0.79·f^0.61 dB per metre (f in GHz), from Goldhirsh & Vogel (its ref. [34]). That
+    is **2.3 dB/m at 5.9 GHz**, which agrees with Durgin et al. 1998 at 5.85 GHz (ref.
+    [32]). This is the source `boban-mel` should point to.
+  - *OSM (l.491).* <https://wiki.openstreetmap.org/wiki/Tag:natural%3Dtree_row>:
+    `natural=tree_row` is a **way** only. Neither a width nor `diameter_crown` is
+    documented. So `tree_row_width_m` stays an ASSUMPTION, as planned.
+  - **Not resolved.** Digitised P.833 Fig. 2 values. A 5.9 GHz RET parameter set (none is
+    published in P.833). N_V,max / A_S,max for Porto.
 - **P18.2** (3 h): the world vegetation layer, the OSM import, the hash exclusion, and
   the import and hash tests.
 - **P18.3** (3 h): the `obstacle/foliage/p833` card, `VegetationIndex`, the 30 m test and
@@ -645,6 +753,31 @@ changes G-SCMS by design. Re-bless only those cases, and list them.
   - codec generation, or a hand-written codec, with the round-trip test and the oracle
     decode;
   - fill `wsa_payload_bytes` (fixes U5).
+
+  **Sources resolved, 2026-10-27 (sources track, no code; `l.N` = this file at commit 081fcab2).** Full record:
+  `third_party/asn1/ieee1609.3/PROVENANCE.md`. The PSID reasoning is in
+  `scms-real/rule-gap-specs-2026-10-27.md` §2.1.
+  - *Cache (step 3, first bullet): done.* The modules live in `third_party/asn1/ieee1609.3/`.
+    That directory holds `wsa.asn`, `wee.asn`, `wsm.asn` and ISO 17419
+    `CITSapplMgmtIDs`, which WSA imports. They come from TCI_ASN1 commit `63d82d87976b`
+    (2017-05-21), byte-identical. **Upstream states no licence.** They are committed on the
+    same basis as `../etsi/PROVENANCE.md` §3.5–3.7.
+  - *Encoding (l.582): UPER.* It is read from the module headers ("mapping of UPER …
+    validated with the OSS ASN.1 Studio tool", `AUTOMATIC TAGS`). It is cross-checked
+    with asn1tools against the USDOT RSU Spec v4.1 Appendix D example octets. The one
+    mismatch is App. D's TX-power octet, written without UPER's +128 offset. The 1609.3-2020
+    §8 text stays paywalled. The modules are the 2016 edition (WSA version 3).
+  - *`service_psid` (l.614): 0x23 (35)*, "WAVE security management". The source is the
+    IEEE RA registry (<https://standards.ieee.org/products-programs/regauth/psid/public/>)
+    and 1609.2.1 `SecurityMgmtPsid ::= Psid (35)`. It is an ASSUMPTION that US RSUs
+    advertise this exact PSID: FHWA-JPO-20-804 p. 4 names no PSID. Also advertise **IPv6
+    Routing 0x1020407E** (0pEF-FF-FF-FE) beside the WRA, as RSU Spec v4.1 App. D does.
+  - *`wsa_interval_ms` (l.615).* RepeatRate counts **WSAs per 5 s** (RSU Spec v4.1 App. D:
+    50 per 5 s, i.e. 10 Hz). Placement is the CCH (Req_587) in time slot 0 (Req_588). The
+    WSA is signed per 1609.3-2016 Annex H.1 (Req_586).
+  - *`mtu_bytes` (l.613).* RFC 8691 §4.1: "The default MTU for IP packets on 802.11-OCB is
+    inherited from [RFC2464] and, as such, is 1500 octets". RFC 8200's 1 280 minimum also
+    applies. Cite RFC 8691, the OCB-specific RFC, over bare RFC 2464. Verified.
 - **P19.2** (3 h): the RSU sends the encoded WSA on air; `WsaUser` decides; the vehicle
   binds to the RSU only after a WSA in `sch` mode.
 - **P19.3** (3 h): `RsuSchPath` (contact window, PER, CBR access, WP-16 interval) with
@@ -922,6 +1055,29 @@ with its own new pinned digest.
 - **P22.1** (3 h, mostly no cargo): pin the Green Book and HCM figures; write the class
   dynamics table with sources (`docs/design/research/grade-dynamics.md`); add the schema
   keys.
+
+  **Sources checked, 2026-10-27 (sources track, no code; `l.N` = this file at commit
+  081fcab2).** Mostly unresolved, because both primaries are paywalled.
+  - *120 kg/kW (200 lb/hp) truck (l.878).* **Verified, secondary.** NCHRP Report 505,
+    *Review of Truck Characteristics as Factors in Roadway Design* (2003, doi
+    10.17226/23379), App. D "Field Estimates of Truck Weight-to-Power Ratios", pp. 153–159:
+    "for the 2001 Green Book, a truck with a weight-to-power ratio of 120 kg/kW [200 lb/hp]
+    was chosen as the basis for computation of critical length of grade". It adds that the
+    data "could also support a choice in the 90- to 108-kg/kW range". The text was read
+    through a search-index excerpt, because the NAP online page rendered no body text.
+    Critical length is defined as the grade length giving a **15 km/h (10 mph)** reduction
+    for that truck (2001 Green Book, the same secondary). Field studies give 102–108 kg/kW
+    for CA/CO freeways and 126 kg/kW for PA (TRR 1881, doi 10.3141/1881-05; seen in a search summary only,
+    not read). That makes a good sensitivity range for the class table.
+  - **Not resolved.** The current Green Book edition, and the figure number and curve
+    values for the 120 kg/kW deceleration-on-upgrade chart (paywalled; no public
+    reproduction found). That means the **crawl-speed band for 5 %** in
+    `truck_crawls_on_a_five_percent_grade` has no source yet. The HCM 6th/7th ed. truck
+    weight-to-power assumption and chapter (l.880) are unresolved. So is the HCM passenger-car
+    expectation (l.908). Until a copy is bought, the band must be labelled ASSUMPTION. The
+    test should derive it from the steady-state power balance (P·η = m·g·(sin θ + c_rr)·v +
+    ½ρ·C_dA·v³) at 120 kg/kW and state that it does, not cite the Green Book for a number
+    nobody here has read.
 - **P22.2** (3 h): the clamp and grade sampler in `engine.rs`, with the unit tests and
   faults.
 - **P22.3** (3 h): `tests/vehicle_dynamics.rs`, the `calibration/truck-grade-crawl`
@@ -1091,15 +1247,15 @@ until then. The pieces below are ordered so that everything that does not need t
 |---|---|---|
 | WP-16 | IEEE 1609.4-2016 §6.2.5 (intervals, guard) | paywalled; constants stay UNVERIFIED until purchased |
 | WP-16 | Eichler, "Performance evaluation of the IEEE 802.11p WAVE communication standard", IEEE VTC 2007-Fall | IEEE |
-| WP-17 | FHWA Signal Timing Manual 2nd ed., NCHRP Report 812 (2015) | public (TRB) |
+| WP-17 | FHWA Signal Timing Manual 2nd ed., NCHRP Report 812 (2015) | public (TRB); read 2026-10-27 (P17.1 note) |
 | WP-17 | NEMA TS 2-2016 | paywalled; STM is the working text |
 | WP-17 | MUTCD 2009 ch. 4D, 4E (§4E.06 pedestrian intervals) | public (FHWA) |
 | WP-17 | ITE guideline on change and clearance intervals (2020) | paywalled; secondary source allowed with a flag |
 | WP-17, 23 | SUMO documentation: "Traffic Lights", "NEMA" pages | public (behaviour and names only) |
 | WP-18 | Boban, Barros, Tonguz, IEEE TVT 63(9) 2014, doi 10.1109/TVT.2014.2317803 | IEEE; authors' copy if permitted |
-| WP-18 | ITU-R P.833 (latest edition) | public (ITU) |
-| WP-19 | IEEE 1609.3 ASN.1 `wsa.asn`, `wee.asn` (TCI_ASN1 copy, R4 §A.8) | check licence |
-| WP-19 | IEEE 1609.12 PSID allocations | check access |
+| WP-18 | ITU-R P.833 (latest edition) | public (ITU); P.833-10 (09/2021) read 2026-10-27 (P18.1 note) |
+| WP-19 | IEEE 1609.3 ASN.1 `wsa.asn`, `wee.asn` (TCI_ASN1 copy, R4 §A.8) | cached 2026-10-27 in `third_party/asn1/ieee1609.3/` (no licence stated upstream; see its PROVENANCE.md) |
+| WP-19 | IEEE 1609.12 PSID allocations | public: IEEE RA PSID registry page, read 2026-10-27 (P19.1 note) |
 | WP-20 | Uniform Vehicle Code §11-405, §11-106 | NCUTLO text; check access |
 | WP-20 | StVO §11(2), §38(1) | public (gesetze-im-internet.de) |
 | WP-20 | SAE J2735 ASN.1 `SpecialVehicleExtensions`, `EmergencyDetails` | as the existing J2735 codec's source |
