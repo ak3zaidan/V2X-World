@@ -27,6 +27,15 @@
 //!   (green-yield, then amber), or both. The window under a flashing yellow arrow is the
 //!   opposing through's green, and under a circular green its own approach's green. A
 //!   protected-permissive left from a lane it shares with the through runs permissive.
+//! * Two movements the rings can show green together that the junction's conflict matrix
+//!   calls foes are never both protected ([`concurrent_foe_yields`]): while its foe shows
+//!   any green, the one that gives way shows green-yield instead of green. The phase
+//!   numbers keep foes of different approaches apart, but not two lanes of one approach
+//!   whose paths cross inside the junction (a turn across the cycle or bus lane beside
+//!   it), nor foes the geometry of a skewed junction makes. A signal head cannot give one
+//!   lane of a road green and its neighbour red on the same green, so the fixed-time
+//!   import makes the yielding movement of such a pair permissive (SUMO's `g` beside
+//!   `G`), and the dual ring does the same at every instant.
 //! * A crosswalk walks for `walk_s` from the start of a green that serves its walk, then
 //!   shows its pedestrian change interval (amber, the phase's longest crosswalk at
 //!   `ped_speed_mps`), then don't walk (P17.7, [`super::DualRing::crosswalk`]). A green
@@ -162,6 +171,106 @@ pub fn left_rules(
     (rules, demoted)
 }
 
+/// The pairs `(gives way, has right of way)` of `plan`'s vehicle movements that the rules
+/// `rules` can show green together and that `plan`'s junction's conflict matrix calls foes:
+/// the movement that gives way shows green-yield, not green, while the other shows any
+/// green ([`NemaPlan::vector`]).
+///
+/// * Two movements from one approach lane share one head and are never split; two lanes
+///   of one road merging into one exit lane are a lane drop, which the drivers zip. Both
+///   are left out, as `v2xw_mobility::audit::audit_world` leaves them out of a fixed plan.
+/// * Two lefts on their own phases from opposite approaches (1+5, 3+7) that the matrix
+///   leaves level are the dual leading lefts of STM 2nd ed. Exhibit 5-3; the generated
+///   matrices record them as a level conflict because no highway code settles it, and
+///   their turning paths pass each other on a crossroads. They keep their arrows.
+/// * Who gives way: the matrix's response, where it names one (both, where it names
+///   both). Where it leaves them level, the movement that crosses opposing traffic (a left
+///   or U-turn gives way, UVC §11-402), else the later movement, as the fixed-time import
+///   chooses (`v2xw_world::osm`, the permissive pair rule).
+pub fn concurrent_foe_yields(
+    world: &World,
+    plan: &SignalPlan,
+    a: &Assignment,
+    rules: &[Rule],
+) -> Vec<(usize, usize)> {
+    let Some(junction) = world.roads.try_junction(plan.junction) else {
+        return Vec::new();
+    };
+    let mut via: BTreeMap<LaneId, (LaneId, LaneId, v2xw_world::model::TurnDirection)> =
+        BTreeMap::new();
+    for &l in &junction.incoming {
+        for c in world.roads.successors(l) {
+            if let Some(v) = c.via {
+                via.entry(v).or_insert((c.from_lane, c.to_lane, c.direction));
+            }
+        }
+    }
+    let row = |l: LaneId| junction.internal.iter().position(|x| *x == l);
+    let greens = |m: usize| [rules[m].own, rules[m].permit];
+    let mut out = Vec::new();
+    for x in 0..a.movements.len() {
+        for y in x + 1..a.movements.len() {
+            let (mx, my) = (a.movements[x], a.movements[y]);
+            if mx.kind == MovementKind::Crossing || my.kind == MovementKind::Crossing {
+                continue;
+            }
+            let (lx, ly) = (plan.controlled[x], plan.controlled[y]);
+            let (Some(&(fx, tx, dx)), Some(&(fy, ty, dy))) = (via.get(&lx), via.get(&ly)) else {
+                continue;
+            };
+            let (Some(rx), Some(ry)) = (row(lx), row(ly)) else {
+                continue;
+            };
+            if fx == fy || !junction.conflicts.is_foe(rx, ry) {
+                continue;
+            }
+            if tx == ty && world.roads.lane(fx).edge == world.roads.lane(fy).edge {
+                continue;
+            }
+            let together = greens(x).into_iter().flatten().any(|p| {
+                greens(y)
+                    .into_iter()
+                    .flatten()
+                    .any(|q| assign::concurrent(p, q))
+            });
+            if !together {
+                continue;
+            }
+            let (yx, yy) = (
+                junction.conflicts.must_yield(rx, ry),
+                junction.conflicts.must_yield(ry, rx),
+            );
+            let dual_lead = !yx
+                && !yy
+                && mx.kind == MovementKind::Left
+                && my.kind == MovementKind::Left
+                && mx.phase != my.phase
+                && mx.permissive_with.is_some()
+                && my.permissive_with.is_some();
+            if dual_lead {
+                continue;
+            }
+            match (yx, yy) {
+                (true, false) => out.push((x, y)),
+                (false, true) => out.push((y, x)),
+                (true, true) => {
+                    out.push((x, y));
+                    out.push((y, x));
+                }
+                (false, false) => {
+                    let (cx, cy) = (dx.crosses_opposing_traffic(), dy.crosses_opposing_traffic());
+                    if cx && !cy {
+                        out.push((x, y));
+                    } else {
+                        out.push((y, x));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// How close to a crosswalk's kerb end a standing pedestrian must be to have pressed its
 /// push button, metres: the button is at the kerb, within reach of the waiting area
 /// (MUTCD 2009 §4E.08 places it within 5 ft (1.5 m) of the crosswalk's extended edge and
@@ -226,6 +335,9 @@ struct NemaPlan {
     ped: Vec<Option<v2xw_core::geom::Vec3>>,
     /// What each vehicle movement shows ([`left_rules`]).
     rules: Vec<Rule>,
+    /// `(gives way, has right of way)`: the foes the rings can show green together
+    /// ([`concurrent_foe_yields`]).
+    yields: Vec<(usize, usize)>,
     /// The phase a priority request for each signal group asks for (P17.9).
     group_phase: BTreeMap<u16, u8>,
     /// The vector showing, and when it began.
@@ -248,7 +360,8 @@ impl NemaPlan {
             let s = &ring.state[usize::from(assign::ring_of(q) - 1)];
             (s.phase == q).then_some((s.interval, s.held_s))
         };
-        self.assign
+        let shown: Vec<SignalState> = self
+            .assign
             .movements
             .iter()
             .enumerate()
@@ -267,7 +380,20 @@ impl NemaPlan {
                     },
                 }
             })
-            .collect()
+            .collect();
+        // A movement that gives way to a foe showing a green of its own turns permissive.
+        let mut out = shown.clone();
+        for &(loser, winner) in &self.yields {
+            if shown[loser] == SignalState::Green
+                && matches!(
+                    shown[winner],
+                    SignalState::Green | SignalState::GreenYield
+                )
+            {
+                out[loser] = SignalState::GreenYield;
+            }
+        }
+        out
     }
 
     /// The calls of this junction's phases from the detector lane sets: a movement's lane
@@ -577,6 +703,7 @@ impl NemaControllers {
             red_clear_s: red,
         };
         let (rules, demoted) = left_rules(&a, &approach, n);
+        let yields = concurrent_foe_yields(world, plan, &a, &rules);
         // The phases that serve something: each movement's protecting phase, each
         // crosswalk's, and each permissive window's through.
         let mut present: Vec<u8> = Vec::new();
@@ -636,6 +763,7 @@ impl NemaControllers {
             approach,
             ped,
             rules,
+            yields,
             group_phase,
             shown: Vec::new(),
             shown_since_s: 0.0,
@@ -1024,6 +1152,7 @@ mod tests {
                 approach: lanes.clone(),
                 ped: vec![None; 4],
                 rules,
+                yields: Vec::new(),
                 group_phase: BTreeMap::new(),
                 shown: Vec::new(),
                 shown_since_s: 0.0,
@@ -1124,5 +1253,188 @@ mod tests {
         );
         let w = walks(vec![(Vec3::new(kerb.x + 1.0, kerb.y, kerb.z), still)]);
         assert!(w >= 7.0 - 0.1, "the waiting pedestrian got {w} s of walk");
+    }
+
+    /// `world` with plan 0's junction matrix rewritten by `edit`.
+    fn with_matrix(world: &World, edit: impl Fn(&mut v2xw_world::model::ConflictMatrix)) -> World {
+        let j = world.signals[0].junction;
+        let mut junctions = world.roads.junctions().to_vec();
+        edit(&mut junctions[j.as_usize()].conflicts);
+        let mut w = world.clone();
+        w.roads = v2xw_world::model::RoadNetwork::new(
+            world.roads.lanes().to_vec(),
+            world.roads.edges().to_vec(),
+            junctions,
+            world.roads.connections().to_vec(),
+            world.roads.crossings().to_vec(),
+        )
+        .expect("the same network");
+        w
+    }
+
+    /// The NEMA concurrency defect (`invariants/nema-safety` on Manhattan): foes the rings
+    /// show green together are never both protected. On a generated crossroads and tee,
+    /// every pair of vehicle movements from different lanes that may be green together is
+    /// made a foe, a third with the first giving way, a third the second, a third level.
+    /// Ten minutes of random calls: no two foes show green together (the dual leading
+    /// lefts the matrix leaves level excepted, Exhibit 5-3), the one that gives way is the
+    /// one shown green-yield, and protected greens and demotions both occur.
+    #[test]
+    fn concurrent_foes_are_never_both_protected() {
+        let (e, w, n, s) = ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0));
+        let worlds = [
+            assign::test_junction(&[
+                (e, RoadClass::Primary, 2),
+                (n, RoadClass::Residential, 1),
+                (w, RoadClass::Primary, 2),
+                (s, RoadClass::Residential, 1),
+            ]),
+            assign::test_junction(&[
+                (e, RoadClass::Secondary, 1),
+                (w, RoadClass::Secondary, 1),
+                (s, RoadClass::Residential, 1),
+            ]),
+        ];
+        let control = SignalControl {
+            control: crate::scenario::schema::SignalControlKind::Nema,
+            ..SignalControl::default()
+        };
+        for (k, base) in worlds.iter().enumerate() {
+            let probe = NemaControllers::new(&control, base);
+            let (a, rules) = (
+                probe.plans[&0].assign.clone(),
+                probe.plans[&0].rules.clone(),
+            );
+            let plan0 = base.signals[0].clone();
+            let junction = base.roads.junction(plan0.junction).clone();
+            let mut via: BTreeMap<LaneId, (LaneId, LaneId)> = BTreeMap::new();
+            for c in base.roads.connections() {
+                if let Some(v) = c.via {
+                    via.entry(v).or_insert((c.from_lane, c.to_lane));
+                }
+            }
+            let row = |m: usize| {
+                junction
+                    .internal
+                    .iter()
+                    .position(|x| *x == plan0.controlled[m])
+            };
+            let greens = |m: usize| [rules[m].own, rules[m].permit];
+            let mut made: Vec<(usize, usize, u8)> = Vec::new();
+            for x in 0..a.movements.len() {
+                for y in x + 1..a.movements.len() {
+                    let (mx, my) = (a.movements[x], a.movements[y]);
+                    if mx.kind == MovementKind::Crossing || my.kind == MovementKind::Crossing {
+                        continue;
+                    }
+                    let (Some(&(fx, tx)), Some(&(fy, ty))) =
+                        (via.get(&plan0.controlled[x]), via.get(&plan0.controlled[y]))
+                    else {
+                        continue;
+                    };
+                    let (Some(rx), Some(ry)) = (row(x), row(y)) else {
+                        continue;
+                    };
+                    let together = greens(x).into_iter().flatten().any(|p| {
+                        greens(y)
+                            .into_iter()
+                            .flatten()
+                            .any(|q| assign::concurrent(p, q))
+                    });
+                    let drop = tx == ty && base.lane(fx).edge == base.lane(fy).edge;
+                    if fx != fy && !drop && together && !junction.conflicts.is_foe(rx, ry) {
+                        made.push((rx, ry, (made.len() % 3) as u8));
+                    }
+                }
+            }
+            assert!(made.len() >= 2, "world {k}: {} pairs", made.len());
+            let mut world = with_matrix(base, |c| {
+                for &(rx, ry, how) in &made {
+                    c.set_foe(rx, ry, true);
+                    match how {
+                        0 => c.set_response(rx, ry, true),
+                        1 => c.set_response(ry, rx, true),
+                        _ => {}
+                    }
+                }
+            });
+            let j = world.roads.junction(plan0.junction).clone();
+            let mut ctl = NemaControllers::new(&control, &world);
+            assert!(ctl.controls(0));
+            let lanes = j.incoming.clone();
+            let (mut demoted, mut protected) = (0u64, 0u64);
+            let dt = 0.1;
+            for step in 0..6000u64 {
+                let now = step as f64 * dt;
+                let calls: BTreeSet<LaneId> = lanes
+                    .iter()
+                    .copied()
+                    .filter(|l| {
+                        let h = (u64::from(l.index()) + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                            ^ (step / 50 + 31 * k as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                        (h >> 59) < 9
+                    })
+                    .collect();
+                ctl.step(
+                    &mut world,
+                    &calls,
+                    &calls,
+                    &PedestrianIndex::default(),
+                    now,
+                    dt,
+                );
+                let st = world.signals[0].states_at(now).expect("states").to_vec();
+                let go = |x: usize| matches!(st[x], SignalState::Green | SignalState::GreenYield);
+                let ring = &ctl.plans[&0].ring;
+                for x in 0..st.len() {
+                    if st[x] == SignalState::Green {
+                        protected += 1;
+                    }
+                    let own_green = rules[x].own.is_some_and(|q| {
+                        let r = &ring.state[usize::from(assign::ring_of(q) - 1)];
+                        r.phase == q && r.interval == Interval::Green
+                    });
+                    if own_green && st[x] == SignalState::GreenYield {
+                        demoted += 1;
+                    }
+                    for y in 0..st.len() {
+                        let (Some(rx), Some(ry)) = (row(x), row(y)) else {
+                            continue;
+                        };
+                        if x == y || !j.conflicts.is_foe(rx, ry) {
+                            continue;
+                        }
+                        let (mx, my) = (a.movements[x], a.movements[y]);
+                        let dual_lead = !j.conflicts.must_yield(rx, ry)
+                            && !j.conflicts.must_yield(ry, rx)
+                            && mx.kind == MovementKind::Left
+                            && my.kind == MovementKind::Left
+                            && mx.phase != my.phase
+                            && mx.permissive_with.is_some()
+                            && my.permissive_with.is_some();
+                        let same_lane = via.get(&plan0.controlled[x]).map(|v| v.0)
+                            == via.get(&plan0.controlled[y]).map(|v| v.0);
+                        if dual_lead || same_lane {
+                            continue;
+                        }
+                        assert!(
+                            !(st[x] == SignalState::Green && st[y] == SignalState::Green),
+                            "world {k} t {now}: foes {x} and {y} both protected"
+                        );
+                        if j.conflicts.must_yield(rx, ry) && !j.conflicts.must_yield(ry, rx) {
+                            assert!(
+                                !(st[x] == SignalState::Green && go(y)),
+                                "world {k} t {now}: {x} gives way to {y} but keeps its green"
+                            );
+                        }
+                    }
+                }
+            }
+            assert!(demoted > 100, "world {k}: {demoted} demoted movement-steps");
+            assert!(
+                protected > 200,
+                "world {k}: {protected} protected movement-steps"
+            );
+        }
     }
 }

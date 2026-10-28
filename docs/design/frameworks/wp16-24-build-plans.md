@@ -714,6 +714,15 @@ out of scope here.
   "Re-implemented from FHWA STM 2nd ed. and NEMA TS 2-2016; SUMO was read for behaviour
   only".
 
+  **Concurrency fix 2026-10-28.** A movement whose foe the rings show green at the same
+  time gives way: it shows green-yield, and SUMO writes the same pair as `g` beside `G`.
+  The choice, where the plan was silent: the pairs are those `audit_world` holds. Pairs
+  on one approach lane and lane drops are left out. Who gives way is the matrix's
+  response, then the left or U-turn, then the later movement. Dual leading lefts that the
+  matrix leaves level are exempt (Exhibit 5-3). Foe greens on Manhattan fall from 6,000
+  steps to 0. The check stays red on auditor rows that fixed-time control also fails:
+  lane-drop merges and one gridlock (00-adoption-plan WP-17, the same date).
+
 ---
 
 ## WP-18 GEMV²-style channel enrichment
