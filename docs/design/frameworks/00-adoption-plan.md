@@ -369,8 +369,8 @@ trustworthy or comparable; later waves add behaviours and radio features.
   firings (0.017 %), envelope, PSMax and box 0 (bound 0.1 % per evaluated message). A
   receiver under-reporting its confidence as 1 m draws 0.95 % Kalman and 0.85 % envelope
   firings (diagnostic). The same deliveries give byte-identical scores.
-- **Open**: the suite is still not selectable in `detection.local` (no scenario-schema
-  entry; engine hosting is the next step). Found, not fixed (out of scope):
+- **Open**: ~~the suite is still not selectable in `detection.local` (no scenario-schema
+  entry; engine hosting is the next step)~~ (done by detect-fix3, below). Found, not fixed (out of scope):
   `confidencePlausibility` fires on 99.7 % of honest messages, because the engine's GM
   receiver broadcasts a 15.79 m 95 % radius against F2MD's 10 m `MAX_CONFIDENCE_RANGE`.
   The engine host must fill `FrameExtras`/`OwnFootprint` from J2735 `VehicleSize` and
@@ -394,6 +394,11 @@ trustworthy or comparable; later waves add behaviours and radio features.
   it), `boxIntersection` 1.4 % (independent per-vehicle GNSS bias, no common mode; and
   the BSM position is the engine's rear-bumper reference, not the J2945/1 centre). Rows:
   `crates/v2xw-engine/tests/expectations/detect-fix3.yaml`.
+- Integration (2026-10-27, main, merges `f41ee566`..`bfce4774`): the WP-10 code (merged in
+  `4aa798bb`) and detect-fix3 ran in the full test pass; `v2xw-threat` 17 binaries pass
+  (lib 93/93). Merge fixes: `gnss.stated_sigma_log_sd` declared dimensionless (publish test)
+  and `detect-fix3.yaml` given the schema the sweep loader skips. Still owed from
+  detect-fix3: the fix3 tests red under their faults, the DF.fix rows.
 
 **WP-11 Full surrogate safety measures** (M, 5 days). Source: S-P7b.
 - Scope: crossing, merging and oncoming TTC by trajectory extrapolation within 50 m; MDRAC
@@ -450,6 +455,9 @@ trustworthy or comparable; later waves add behaviours and radio features.
     engine-run `ssm` metric group still measures by geometry (the published frames carry
     no route) and writes no conflict-log file; the native run's crossing and merging
     counts in network mode are 0 on both cities (traced no further).
+- Integration (2026-10-27): `v2xw-metrics` passes after listing `ssm.rs`'s routed
+  `math::sqrt` in the discipline test; `traffic-fix3.yaml` schema and one value quoted so
+  the sweep loaders parse it. The network-mode SSM tests pass in the full pass.
 
 **WP-12 CPM rate and content under load, two DENM triggers** (S ×2, 4 days). Sources: O-P3b, O-P9.
 - Scope: `T_GenCpm` clamped to the DCC interval; object ordering by the TS 103 324 utility
@@ -535,6 +543,10 @@ trustworthy or comparable; later waves add behaviours and radio features.
   end-of-queue DENM without forward sensors or hazard lights until a local slow-down exists.
 
 ### Wave 5: channels, sensors, imported calibrations
+- Integration (2026-10-27): every WP-12 knob is off by default; the CPM/DENM tests
+  (`cpm_metrics`, `applications`, node lib) pass in the full test pass. One unexplained
+  shift: `scms_knobs_runs` cache knob sees `MacTimer` 152,541 vs 152,539 (base vs variant;
+  it pinned identical counts), not bisected.
 
 **WP-13 Multi-channel, part 1: channel map, second radio, own-channel leakage** (M, 7 days). Source: O-P1 (a, b, d).
 - Scope: `radio.channels` maps message sets to channels from the region's band plan (US:
@@ -576,6 +588,8 @@ trustworthy or comparable; later waves add behaviours and radio features.
   moving SPaT/MAP lowers CBR172 by their share at the listeners less the 174->172 leakage
   (0.923 against 0.9215 predicted). Open: leaked energy is sensed against -85 dBm for DSRC
   too (802.11 CCA would count a non-decodable leak only above -65 dBm).
+- Integration (2026-10-27): `multichannel` and `radio_channel` pass in the full test
+  pass. R3.2.DCC2 (per-channel DCC gate without a failing test) stays open.
 
 **WP-14 Configurable sensors, RSU sensors, outline occlusion** (M, 7 days). Source: O-P3a.
 - Scope: a sensor suite per vehicle class with mount point and azimuth (front and rear radars,
@@ -598,8 +612,9 @@ trustworthy or comparable; later waves add behaviours and radio features.
   scan reproduced draw for draw on 40 random scenes; truck/partial/crossing-truck,
   rear-radar, RSU-approach unit tests; RSU CPMs verified by vehicles (49 of 91 in 12 s);
   asn1tools reads the new containers; schema refusals. Each shown red under its fault.
-  Open: SCMS-cycle RSU application certificates still carry only the SPaT/MAP PSID, so a
-  `cpm` unit inside that cycle signs CPMs a receiver refuses; no 3D (mast see-over)
+  Open: ~~SCMS-cycle RSU application certificates still carry only the SPaT/MAP PSID, so a
+  `cpm` unit inside that cycle signs CPMs a receiver refuses~~ (fixed 2026-10-27, `3c40282a`:
+  `wiring::rsu_app_psids`, two `rsu_certs` tests); no 3D (mast see-over)
   occlusion; no run-level byte comparison against the f4982788 binary (the PSID fix
   changes certificate bytes); outline default left for the owner to flip.
   Follow-up (2026-10-27, traffic-fix round 3): the outline rule is 2.5D (mount height to
@@ -608,6 +623,8 @@ trustworthy or comparable; later waves add behaviours and radio features.
   and not over a truck; unit test with the hand-computed heights. Centre-line (default)
   unchanged. `awareness_direct_permille = 0` in the CPM test scenario: diagnosis pending
   (no CAM is credited in `cpm_on_receive`; the run was not reached in this round).
+- Integration (2026-10-27): `rsu_certs` 4/4 with the RSU application-PSID fix;
+  perception tests pass. `awareness_direct_permille = 0` stays undiagnosed.
 
 **WP-15 Complete `.rou.xml` import** (S-M, 3 days). Source: S-P8.
 - Scope: every vType attribute, `vTypeDistribution`, Bernoulli `probability` flows with their
@@ -652,6 +669,8 @@ trustworthy or comparable; later waves add behaviours and radio features.
   test); results in `traffic-fix3.yaml`.
 
 ### Wave 6: US signal control, channel switching, channel realism
+- Integration (2026-10-27): `rou_import` 5/5 after the Krauss test was made to judge the
+  last-second slope (the engine's start-up delay offsets v(t) by 0.5 s for every model).
 
 **WP-16 Multi-channel, part 2: IEEE 1609.4 alternating access in the MAC** (M, 5 days). Source: O-P1 (c). After WP-13.
 - Scope: move the `wave.rs` schedule into the MAC as a gate on transmit; per-channel EDCA

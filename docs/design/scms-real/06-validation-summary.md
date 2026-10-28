@@ -1394,26 +1394,26 @@ The totals count each row as its own checklist records it, with the changes in �
     highway speed for P1-E4~~ done 2026-10-25 (`cca82fcd`, `p1-e4-s.yaml`); ~~the heavy-tailed
     noise fit and the :00/:50 grid hops~~ in the v3 model, ~~the grid-hop speed~~ fixed
     (`098c9c3a`), `tools/realdata` 1.3.0; left: the final P1-E4 runs E4V1, E4V and E4V2 on
-    the fixed binary (E4U KS 0.105 against 0.092; rows committed); VR-2; ~~the MaxAcceleration block~~ (fixed by `standing_leader_stop`); TS 103 759
-    selectable in `detection.local`.
+    the fixed binary (E4U KS 0.105 against 0.092; rows committed); VR-2; ~~the MaxAcceleration block~~ (fixed by `standing_leader_stop`); ~~TS 103 759
+    selectable in `detection.local`~~ (done 2026-10-27, `detect/ts103759`).
 11. **db1 component audit leftovers** (§6 items 24, 25): ~~`time_to_detect`, the
     `ma.decision` stamp, `reports_sent`, the certificate-request shuffle, the PDU PKI after
     a rollover, the O-2 certificate, the preload stamps, the per-tick snapshots~~ fixed
-    2026-10-25 (item 25); left: provider-b's second ACA without a certificate
-    (GOV.D1.acas), Q's late `net.bytes`/`proto.revocation` stamps, Q's second
-    fast-forward re-measured with the snapshot keyframe, and a SlowDrift onset test. Owed runs: S on a fixed binary for
+    2026-10-25 (item 25); left: ~~provider-b's second ACA without a certificate
+    (GOV.D1.acas)~~ (fixed 2026-10-27, `52432316`/`6869fb6a`), Q's late `net.bytes`/`proto.revocation` stamps, Q's second
+    fast-forward re-measured with the snapshot keyframe, and ~~a SlowDrift onset test~~ (added 2026-10-27, phase2.rs). Owed runs: S on a fixed binary for
     `MI.samples-recorded`, the metrics thread-count, resume and server/Studio rows
     (`RS.threads`, `RS.resume`, `SV.*`), and the audit checkers re-run on the merged tree.
 
-12. **Live-run wave leftovers** (§6 item 26): R-P2PCD-ASYM, R-KEMFILE, P-384 pricing,
-    KEM download bytes, VOD `messages_checked`, the PT30 change rate and full-cert share,
-    certValidity dates, RandomSpeed intensity, the RSU double CRL booking (re-bless),
-    SLH-DSA-128s silent loss, provider-qualified backend failure nodes, PSM cert bytes
-    under pq-hybrid, highway depart speed, compare `Pool::add`; and the three SCMS test
+12. **Live-run wave leftovers** (§6 item 26): ~~R-P2PCD-ASYM, R-KEMFILE, P-384 pricing,
+    KEM download bytes, VOD `messages_checked`~~, the PT30 change rate and ~~full-cert share~~ (wrong expectation),
+    ~~certValidity dates, RandomSpeed intensity~~, the RSU double CRL booking (re-bless; 10 of 60 extra messages left),
+    ~~SLH-DSA-128s silent loss, provider-qualified backend failure nodes, PSM cert bytes
+    under pq-hybrid~~ (all struck 2026-10-27, see below), highway depart speed, compare `Pool::add`; and the three SCMS test
     failures of item 26. Owed runs: 197 pending live rows (live-scms 31 runs, live-atk
     incl. C2Mb/C2MJ/SYM10b on the fixed binary, live-rsu FS0 for byte identity plus Sout
     and FSout, live-chains signal/pedestrian/seed-2/Craton2/CRLG, Studio s2-scms and the
-    soak, 117 scenarios); `tests/live_rsu.rs` (ignored) has not been run.
+    soak, 117 scenarios); ~~`tests/live_rsu.rs` (ignored) has not been run~~ (run 2026-10-27, below).
     **2026-10-27 (fix round 3, `scms-fix3-left.yaml`):** fixed at the cause, each with a
     test: R-P2PCD-ASYM (factory pseudonyms came from the home ACA, so provider-b devices
     cached provider-a's ACA unanchored and never asked for it; b<-a verified 33 -> 82,006)
@@ -1432,6 +1432,15 @@ The totals count each row as its own checklist records it, with the changes in �
     scenario rows were judged; the remaining open rows are listed in each live report.
     `tests/live_rsu.rs` ran: the outage test passes, the backhaul-once test fails with
     316 against 306 (the double booking, run.rs:8728-8737, open).
+    **2026-10-27 integration (main `bfce4774`+):** fix round 3 merged; re-blessed
+    `i-s1-phase2-60s` (f4277386) and `phase2-path` (7f276c26). The full test pass found
+    branch defects not fixed here: `pq_receivers` (240 honest PSMs `Invalid` at roadside
+    units in the first 16 ms; 0 at `3c40282a`, 185 from `52432316`), four `phase2` CRL-path
+    tests since the roadside renumbering (`f4a0f5cc`: the decision comes at 241.8 s and the
+    list is published past the 300 s horizon), `backend_entities` left-area (228/228
+    top-ups complete with held weeks), scmsleft's composite-CRL unit test (1 signed list at
+    10 s, expects 2) and the cache knob's 2 `MacTimer` events. Still open from item 27: the
+    download-wait and backhaul tests.
 
 **Owner decisions**
 - **What the RA and PCA keep for each device** (§6 item 4): request records, cocoons,
