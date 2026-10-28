@@ -169,7 +169,8 @@ rows:
     distant or pulsed one is)
   source: IEEE 802.11-2020 §17.3.10.6
   measured: not changed
-  verdict: open
+  verdict: fixed
+  note: "fix round 5 (2026-10-28): carrier sense and the J2945/1 CBR hold a jammer to energy detect; rows R5.JAM-ED.* in radio-fix5.yaml"
 # ---- Item 2: the per-channel DCC gate (radio-fix3 R3.2.DCC2) ----
 - id: R4.2.FEED
   test: v2xw-engine tests/multichannel.rs the_etsi_gate_spaces_each_channel_on_its_own (rewritten)

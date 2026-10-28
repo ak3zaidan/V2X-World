@@ -10302,18 +10302,15 @@ impl Engine {
     /// energy detect (radio-fix4 R4.1); ETSI's CBR is the time the received signal
     /// strength on the channel exceeds -85 dBm [EN 302 571 §4.2.10.1; TS 102 687 §4.2],
     /// whatever the signal, so a leak counts from there in Europe.
-    /// The level a jamming arrival must reach to hold carrier sense busy: a jammer's at
-    /// preamble detect (radio-fix4 open item R4.1.JAM-ED), an adjacent-channel emitter's
-    /// leak at energy detect.
+    /// The level a jamming arrival must reach to hold carrier sense busy: energy detect,
+    /// for a jammer and an adjacent-channel emitter alike. Neither carries an 802.11
+    /// preamble, and "the receiver shall hold the CCA signal busy for any signal 20 dB
+    /// above the minimum modulation and coding rate sensitivity" (-65 dBm in 10 MHz) is the
+    /// only clause that applies to such energy (IEEE 802.11-2020 §17.3.10.6). Before fix
+    /// round 5 a jammer was held to the preamble-detect level, -85 dBm (R4.1.JAM-ED).
     fn jam_sense_level(&self) -> impl Fn(&v2xw_radio::JamArrival) -> f64 + use<> {
-        let cca = self.phy.cca_config();
-        move |a: &v2xw_radio::JamArrival| {
-            if v2xw_radio::jamming::is_adjacent_channel_source(a.jammer) {
-                cca.energy_detect_threshold_dbm()
-            } else {
-                cca.cca_threshold_dbm()
-            }
-        }
+        let ed = self.phy.cca_config().energy_detect_threshold_dbm();
+        move |_: &v2xw_radio::JamArrival| ed
     }
 
     pub(crate) fn leak_busy_dbm(&self) -> f64 {
@@ -11542,5 +11539,39 @@ fn frame_extras(msg_type: v2xw_msg::MsgType, d: v2xw_core::geom::Dims) -> v2xw_t
                 reference: ReferencePoint::Centre,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod jam_sense_tests {
+    use v2xw_core::ids::NodeId;
+    use v2xw_radio::jamming::{ADJACENT_CHANNEL_SOURCE_BASE, JamArrival, JamWindow, JammerKind};
+    use v2xw_radio::types::ChannelId;
+
+    /// Fix round 5, R4.1.JAM-ED: the MAC's busy-since and idle-at instants hold a jammer
+    /// and an adjacent-channel emitter alike to the energy-detect level (IEEE 802.11-2020
+    /// §17.3.10.6: neither carries an 802.11 preamble), whatever that level is set to.
+    /// Fault: a jammer held to preamble detect (-85 dBm), the pre-fix
+    /// `Engine::jam_sense_level`.
+    #[test]
+    fn carrier_sense_holds_jamming_to_energy_detect() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = crate::Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.radio.phy.energy_detect_dbm = Some(-60.0);
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let level = engine.jam_sense_level();
+        let at = |source: NodeId, kind: JammerKind| {
+            JamArrival::new(source, -70.0, ChannelId(172), JamWindow::new(0, 1), kind)
+        };
+        for kind in [
+            JammerKind::Constant,
+            JammerKind::Pulsed,
+            JammerKind::Reactive,
+        ] {
+            assert_eq!(level(&at(NodeId::new(7), kind)), -60.0, "{kind:?} jammer");
+        }
+        let emitter = NodeId::new(ADJACENT_CHANNEL_SOURCE_BASE);
+        assert!(v2xw_radio::jamming::is_adjacent_channel_source(emitter));
+        assert_eq!(level(&at(emitter, JammerKind::Constant)), -60.0, "emitter");
     }
 }

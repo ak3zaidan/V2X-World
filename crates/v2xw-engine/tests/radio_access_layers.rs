@@ -491,6 +491,64 @@ fn a_jammer_can_ride_a_vehicle_or_drive_a_path() {
     assert!(!v2xw_engine::scenario::validate(&slow).is_empty());
 }
 
+/// Fix round 5, R4.1.JAM-ED: a jammer's noise carries no 802.11 preamble, so the MAC holds
+/// the medium busy for it only from the energy-detect level (IEEE 802.11-2020
+/// §17.3.10.6), not from the -85 dBm preamble-detect level a frame of the channel uses,
+/// and under J2945/1 it counts in the CBR from there too. A weak constant jammer riding one
+/// unit (-20 dBm: well above -85 dBm at its host, below an energy-detect level set to
+/// -50 dBm, `radio.phy.energy_detect_dbm`) leaves the host sending its BSMs as without it
+/// and its CBR unloaded; the same jammer at 23 dBm, above -50 dBm, still silences it.
+/// Fault: a jammer held to preamble detect (the pre-fix `Engine::jam_sense_level`)
+/// silences the host under the weak jammer.
+#[test]
+fn a_weak_jammer_holds_carrier_sense_only_from_energy_detect() {
+    const FROM_S: f64 = 1.0;
+    let mut base = fleet(20, 4.0);
+    base.radio.phy.energy_detect_dbm = Some(-50.0);
+    let (_, plain) = run_recorded(base.clone());
+    let host = views::<NodeTxView>(&plain)[0].node;
+    let after = |r: &MemoryRecorder| {
+        views::<NodeTxView>(r)
+            .into_iter()
+            .filter(|v| v.node == host && v.t >= (FROM_S * 1.5e9) as u64)
+            .count()
+    };
+    let busy = |r: &MemoryRecorder| {
+        views::<v2xw_metrics::channels::MacCbrView>(r)
+            .into_iter()
+            .filter(|v| v.node == host && v.t >= (FROM_S * 1.5e9) as u64)
+            .map(|v| v.cbr)
+            .fold(0.0_f64, f64::max)
+    };
+    let jammed_at = |dbm: f64| {
+        let mut s = base.clone();
+        s.threats.jammers = vec![jammer(serde_json::json!({
+            "follow_node": host.index(), "power_dbm": dbm, "from_s": FROM_S
+        }))];
+        run_recorded(s).1
+    };
+    let (weak, strong) = (jammed_at(-20.0), jammed_at(23.0));
+    let (n0, n_weak, n_strong) = (after(&plain), after(&weak), after(&strong));
+    let (cbr0, cbr_weak, cbr_strong) = (busy(&plain), busy(&weak), busy(&strong));
+    println!(
+        "host {host:?} BSMs from 1.5 s: clean {n0}, -20 dBm jammer {n_weak}, 23 dBm {n_strong}; \
+         max CBR {cbr0:.3} / {cbr_weak:.3} / {cbr_strong:.3}"
+    );
+    assert!(n0 >= 20, "too few frames from the host: {n0}");
+    assert!(
+        n_weak + 2 >= n0,
+        "a jammer under energy detect held the host: {n0} -> {n_weak} frames"
+    );
+    assert!(
+        cbr_weak <= cbr0 + 0.05,
+        "a jammer under energy detect loaded the host's CBR: {cbr0:.3} -> {cbr_weak:.3}"
+    );
+    assert!(
+        n_strong * 4 <= n0 && cbr_strong > 0.8,
+        "a jammer above energy detect did not deny the host: {n0} -> {n_strong} frames, CBR {cbr_strong:.3}"
+    );
+}
+
 /// On a sidelink the jammer's energy is measured: it raises every nearby UE's CBR. The
 /// counterexample is the same run without it.
 #[test]

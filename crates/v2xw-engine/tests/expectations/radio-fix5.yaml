@@ -1,0 +1,61 @@
+# Radio, fix round 5 (radio-fix4 open items R4.1.JAM-ED, R4.1.EMITTER and the leak-run wall
+# time). Every `expect` was written with `measured: pending` and committed before the run or
+# test that judges it, except rows marked `disclosure:`.
+# `measured` is base -> variant, or the run's value. Runs are judged by
+#   python3 -I tools/realworld/radiofix3.py <run dir>       (PDR, CBR, frames per run)
+# against `band`.
+# Fault proofs: every fault was injected behind an env check (V2XW_FAULT=<name>) in one
+# scratch build of the test binaries, so the same binary gave the green run (unset) and each
+# red run; the hooks were then removed and are in no commit.
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+schema: v2xw/scms-run-expectations/1
+runs: {}
+rows:
+- id: R5.JAM-ED.PHY
+  test: v2xw-radio phy::tests::a_jammer_is_sensed_only_above_energy_detect
+  expect: >-
+    A jammer's noise (constant, pulsed or reactive) carries no 802.11 preamble, so the only
+    CCA clause that applies to it is energy detect: "the receiver shall hold the CCA signal
+    busy for any signal 20 dB above the minimum modulation and coding rate sensitivity",
+    -65 dBm in 10 MHz. A -75 and a -65.5 dBm jammer leave CCA idle, a -64 dBm one holds it;
+    a -80 dBm frame of the channel is busy with or without the jammer; a -90 dBm frame and
+    a -66 dBm jammer sum under -65 dBm (idle) and a second -70 dBm jammer takes the sum over
+    (busy). Before: the PHY added the jammer to the preamble-detect (-85 dBm) sum
+    (phy.rs energy_started_by, with_leakage false: jammer_power_mw)
+  source: IEEE 802.11-2020 §17.3.10.6 (CCA requirements, 10 MHz); ns-3 WifiPhy CcaEdThreshold for non-Wi-Fi energy
+  fault: "jam-phy (jammer back in the preamble-detect sum) -> red at the -75 dBm case"
+  measured: "pass (32/32 phy::); red under jam-phy"
+  verdict: fixed
+- id: R5.JAM-ED.ENGINE
+  test: v2xw-engine run::jam_sense_tests::carrier_sense_holds_jamming_to_energy_detect
+  expect: >-
+    The MAC's busy-since and idle-at instants (Engine::medium_busy_since / medium_idle_at,
+    which date a deferral and schedule its wake) hold every jamming arrival, jammer or
+    adjacent-channel emitter, to the energy-detect level, whatever radio.phy.energy_detect_dbm
+    sets. Before: a jammer at cca_threshold_dbm (-85 dBm) in Engine::jam_sense_level
+  source: IEEE 802.11-2020 §17.3.10.6
+  fault: "jam-engine (jammer at preamble detect) -> red"
+  measured: "pass; red under jam-engine"
+  verdict: fixed
+- id: R5.JAM-ED.RUN
+  test: v2xw-engine radio_access_layers a_weak_jammer_holds_carrier_sense_only_from_energy_detect
+  expect: >-
+    A constant jammer riding one unit of the 20-vehicle Manhattan fleet at -20 dBm (above
+    -85 dBm at its host, below an energy-detect level of -50 dBm) leaves the host's BSMs and
+    its CBR (J2945/1: the share of time 802.11 CCA reads busy, so from energy detect too)
+    as without it; at 23 dBm it still silences the host and loads its CBR to about 1
+  source: IEEE 802.11-2020 §17.3.10.6; SAE J2945/1 §6.3.8 (CBP from the radio's channel-busy indication, as R4.1.CBR)
+  fault: "jam-phy -> red (host 25 -> 0 BSMs); jam-cbr (a jammer counted in the CBR from -85 dBm, the pre-fix run/jamming.rs declare_at) -> red (CBR 0.022 -> 1.000); jam-engine alone stays green (the PHY's CCA gates first; R5.JAM-ED.ENGINE pins it)"
+  measured: "host BSMs from 1.5 s: clean 25, -20 dBm jammer 25, 23 dBm 0; host max CBR 0.022 / 0.022 / 1.000"
+  verdict: fixed
+- id: R5.JAM-ED.SUITES
+  test: v2xw-engine radio_access_layers, radio_access, radio_channel, multichannel (each binary alone)
+  expect: >-
+    The jammer tests already in these suites use 23 dBm jammers riding or near the units they
+    judge, far above -65 dBm where it matters, so they still pass (radio-fix4 R4.1.JAM-ED
+    named them as the runs the change could move)
+  source: link budget (23 dBm, tens of metres)
+  measured: "radio_access_layers 11 pass 1 ignored, radio_access 8/8, radio_channel 8/8, multichannel 7/7"
+  verdict: pass

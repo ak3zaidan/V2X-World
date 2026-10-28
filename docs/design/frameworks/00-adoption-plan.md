@@ -602,6 +602,11 @@ trustworthy or comparable; later waves add behaviours and radio features.
   windows. R3.2.DCC2 is closed by the rewritten multichannel test (R4.2.FEED). Open:
   jammers still held to -85 dBm (R4.1.JAM-ED), frames pruned at their end (R4.2.METER-FRAMES,
   moves every golden), the adjacent-emitter path not run. Rows: `radio-fix4.yaml`.
+- Fix round 5 (2026-10-28, stamp and radio track, branch only): R4.1.JAM-ED closed. A
+  jammer's noise and an adjacent-channel emitter carry no 802.11 preamble, so carrier sense
+  (the PHY's CCA and the engine's busy-since / idle-at) holds both to energy detect only
+  (IEEE 802.11-2020 §17.3.10.6, -65 dBm in 10 MHz), and the J2945/1 CBR counts a jammer from
+  there too (Europe keeps -85 dBm, EN 302 571 §4.2.10.1). Rows `radio-fix5.yaml` R5.JAM-ED.*.
 
 **WP-14 Configurable sensors, RSU sensors, outline occlusion** (M, 7 days). Source: O-P3a.
 - Scope: a sensor suite per vehicle class with mount point and azimuth (front and rear radars,
