@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A self-written fixture (WP-18): a straight two-lane primary road 890 m long on the
+     equator with a wood 110 m deep (lon 0.0035-0.0045, lat +-0.0004) across its middle.
+     Used by crates/v2xw-engine/tests/gemv2_off.rs and the forest sensitivity family. -->
+<osm version="0.6" generator="v2xw-test">
+<bounds minlat="-0.001" minlon="-0.0005" maxlat="0.001" maxlon="0.0085"/>
+<node id="1" lat="0.0000000" lon="0.0000000"/>
+<node id="2" lat="0.0000000" lon="0.0005000"/>
+<node id="3" lat="0.0000000" lon="0.0010000"/>
+<node id="4" lat="0.0000000" lon="0.0015000"/>
+<node id="5" lat="0.0000000" lon="0.0020000"/>
+<node id="6" lat="0.0000000" lon="0.0025000"/>
+<node id="7" lat="0.0000000" lon="0.0030000"/>
+<node id="8" lat="0.0000000" lon="0.0035000"/>
+<node id="9" lat="0.0000000" lon="0.0040000"/>
+<node id="10" lat="0.0000000" lon="0.0045000"/>
+<node id="11" lat="0.0000000" lon="0.0050000"/>
+<node id="12" lat="0.0000000" lon="0.0055000"/>
+<node id="13" lat="0.0000000" lon="0.0060000"/>
+<node id="14" lat="0.0000000" lon="0.0065000"/>
+<node id="15" lat="0.0000000" lon="0.0070000"/>
+<node id="16" lat="0.0000000" lon="0.0075000"/>
+<node id="17" lat="0.0000000" lon="0.0080000"/>
+<node id="100" lat="-0.0004000" lon="0.0035000"/>
+<node id="101" lat="-0.0004000" lon="0.0045000"/>
+<node id="102" lat="0.0004000" lon="0.0045000"/>
+<node id="103" lat="0.0004000" lon="0.0035000"/>
+<way id="1">
+  <nd ref="1"/>
+  <nd ref="2"/>
+  <nd ref="3"/>
+  <nd ref="4"/>
+  <nd ref="5"/>
+  <nd ref="6"/>
+  <nd ref="7"/>
+  <nd ref="8"/>
+  <nd ref="9"/>
+  <nd ref="10"/>
+  <nd ref="11"/>
+  <nd ref="12"/>
+  <nd ref="13"/>
+  <nd ref="14"/>
+  <nd ref="15"/>
+  <nd ref="16"/>
+  <nd ref="17"/>
+  <tag k="highway" v="primary"/>
+  <tag k="lanes" v="2"/>
+</way>
+<way id="2">
+  <nd ref="100"/>
+  <nd ref="101"/>
+  <nd ref="102"/>
+  <nd ref="103"/>
+  <nd ref="100"/>
+  <tag k="natural" v="wood"/>
+</way>
+</osm>

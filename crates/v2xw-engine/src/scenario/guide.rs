@@ -655,6 +655,21 @@ const ADVANCED: &[Basic] = &[
         recommended: "On for realism; off to measure what blockage costs.",
     },
     Basic {
+        path: "radio.channel_model.foliage",
+        explain: "Whether trees between two antennas weaken the signal: about 2.3 dB per metre of trees at 5.9 GHz, up to what bending over the treetops would cost. Needs world.vegetation.",
+        recommended: "Off (today); on with world.vegetation for suburban and rural maps with woods and tree-lined streets.",
+    },
+    Basic {
+        path: "radio.channel_model.density_sigma",
+        explain: "Whether the signal's random variation grows with the traffic and buildings around each link, as measured in Porto (GEMV2): calmer on an empty road, rougher downtown.",
+        recommended: "Off (today, a fixed spread); on for the measured dependence on surroundings.",
+    },
+    Basic {
+        path: "world.vegetation",
+        explain: "Whether the map import keeps woods, tree rows and single trees, so the radio can charge for signal through foliage.",
+        recommended: "Off (today); on with radio.channel_model.foliage where trees line the roads.",
+    },
+    Basic {
         path: "radio.sidelink.candidate_percent",
         explain: "The share of resources that must remain after exclusion before a radio picks one.",
         recommended: "20 % (LTE's fixed value); 35 or 50 % on NR.",

@@ -925,6 +925,12 @@ pub struct WorldSpec {
         skip_serializing_if = "crate::scenario::schema::is_true"
     )]
     pub service_roads: bool,
+    /// Whether the OSM importer keeps the trees as a vegetation layer (WP-18: woods and
+    /// forests, tree rows, single trees; [`v2xw_world::osm::OsmOptions::vegetation`]),
+    /// which `radio.channel_model.foliage` charges. Default `false`, and a world imported
+    /// without it keeps its content hash.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub vegetation: bool,
 }
 
 /// How an imported world's synthesised signal plans are coordinated
@@ -2190,6 +2196,16 @@ pub struct ChannelModelSettings {
     /// radio-transparent, on charges them under every law.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vehicle_blockage: Option<bool>,
+    /// Whether a path through trees loses the foliage excess (ITU-R P.833 §3.1 with
+    /// GEMV²'s 2.3 dB/m at 5.9 GHz, capped at the diffraction over the canopy:
+    /// `obstacle/foliage/p833`). Needs `world.vegetation`. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foliage: Option<bool>,
+    /// Whether the log-distance law's shadowing σ grows with the vehicles and buildings
+    /// around the link (GEMV², Boban et al. 2014 eq. 10: 3.3 dB on an empty road to
+    /// 5.2 dB downtown for line of sight). Unset keeps the preset's fixed σ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub density_sigma: Option<bool>,
 }
 
 impl ChannelModelSettings {

@@ -189,6 +189,7 @@ impl City {
             // The street network, not the alleys and garage ramps behind it
             // (`v2xw_world::osm::OsmLayers::service`).
             service_roads: false,
+            vegetation: keep.is_some_and(|w| w.vegetation),
         })
     }
 

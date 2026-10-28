@@ -272,6 +272,7 @@ impl Scenario {
                 highway_preset: None,
                 signals: schema::WorldSignalOptions::default(),
                 service_roads: true,
+                vegetation: false,
             },
             actors: Actors::default(),
             weather: Weather::default(),

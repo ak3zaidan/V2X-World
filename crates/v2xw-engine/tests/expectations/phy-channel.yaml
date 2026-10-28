@@ -11,3 +11,9 @@
    source: "ETSI EN 302 571 allows 33 dBm EIRP and ETSI DCC does not cut power at low load, against J2945/1's 20 dBm radiated power in us-2016: +6 dB at 23 dBm into 3 dBi (SAE J2945/1 2016 6.3.8)"}
 - {setting: radio.sidelink.noise_figure_db, change: low, metric: prr_600_1000, expect: up,
    source: "noise floor = kTB + NF: 3 dB less NF is 3 dB more SINR at the noise-limited edge (Friis 1944; TS 36.101 Table 7.3 assumes a 9 dB UE NF)"}
+
+# ---- GEMV²-style channel terms (WP-18; docs/design/research/gemv2-p833-constants.md) ----
+- {setting: radio.channel_model.foliage, change: true, metric: prr, expect: down, min_change: 0.005,
+   source: "a path through vegetation adds an excess attenuation growing with its depth, capped at the lowest-loss path around it (ITU-R P.833-10 s3.1 eq. 7; 0.79 f^0.61 dB/m, Boban et al. IEEE TVT 2014 eq. 4); forest family, a road through a 110 m wood"}
+- {setting: radio.channel_model.density_sigma, change: true, metric: prr, expect: changes, min_change: 0.001,
+   source: "small-scale variation grows with the density of vehicles and objects around the link (Boban, Barros, Tonguz, IEEE TVT 63(9) 2014, eq. 10, Table V)"}

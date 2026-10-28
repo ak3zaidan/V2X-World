@@ -73,6 +73,14 @@ families:
     set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: 6000.0,
           actors.vehicles.classes: {passenger: {fraction: 0.7}, trailer: {fraction: 0.3}},
           metrics: [all]}
+  # A two-lane road through a 110 m wood (forest-road.osm.xml, self-written), its trees
+  # imported as vegetation: where radio.channel_model.foliage has trees to charge.
+  - name: forest
+    base: ../phase1-grid.yaml
+    set: {time.duration_s: 40.0, actors.vehicles.demand.rate_veh_per_h: 1800.0,
+          world.source: {kind: osm-xml, path: scenarios/sensitivity/forest-road.osm.xml},
+          world.highway_preset: urban-us-portland, world.buildings.enabled: false,
+          world.vegetation: true, metrics: [all]}
   - name: intersections
     base: ../connected-intersections.yaml
     set: {time.duration_s: 60.0, metrics: [all]}
@@ -114,6 +122,8 @@ routes:
   # NLOSv needs a vehicle within 8 m of a same-street path: 40 vehicles on the DSRC
   # family's 17 km of open street almost never line up in 2 s, the Midtown queues do.
   - {prefix: radio.channel_model.vehicle_blockage, families: [traffic, dsrc]}
+  - {prefix: radio.channel_model.foliage, families: [forest]}
+  - {prefix: radio.channel_model.density_sigma, families: [traffic]}
   - {prefix: radio.channel_model.building_loss_db_per_m, families: [traffic]}
   - {prefix: traffic.right_turn_on_red, families: [osm, traffic]}
   - {prefix: actors.vehicles.drivers.bicycle, families: [pedestrians]}
