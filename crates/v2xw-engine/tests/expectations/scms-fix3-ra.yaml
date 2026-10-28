@@ -16,6 +16,12 @@
 # necessarily spans the two; every knob comparison (base and variant) uses one binary.
 # Run cost compares event counts across binaries and wall time/peak memory only within one.
 #
+# 2026-10-27 (run-only track, after the fix round 3 merge): the eight pending verdicts judged
+# on their recorded values and the integration's test pass; F, F2, FS, FSL, FH, FH20, CF,
+# CPF, PQF, GSB and GSBH re-run on the 3cbc95a4 release copy (one binary, tiny slot, one
+# rayon thread, --no-recording --digest, --build-utc 2026-10-27T00:00:00Z). Each row whose
+# base and variant are both such runs carries `recheck_3cbc95a4`; rows against B/BS/CB
+# (the f4982788 release) or across the branch builds cannot be re-made on one binary.
 # verdict: pass | fixed (an engine defect fixed at its cause; `test` pins it) |
 #          wrong-expectation (corrected with the evidence in `note`) | open (documented).
 schema: v2xw/scms-run-expectations/1
@@ -97,6 +103,7 @@ rows:
   source: as RA.topup-mean
   measured: 'F max 341.3 ms'
   verdict: pass
+  recheck_3cbc95a4: 'F max 341.3 ms (59 top-ups): holds'
 - id: RA.topups-completed
   base: B
   variant: F
@@ -125,6 +132,7 @@ rows:
   source: 1609.2.1 §6.3.5.4 (the same two downloads)
   measured: 'B 13,465.5 against F 13,465.5 bytes per top-up (0 %)'
   verdict: pass
+  recheck_3cbc95a4: 'F 17,019.3 B per top-up (G recorded 13,467.6, +26 %); backend 2,025,879 B (G 1,720,133). Not judgeable here (B is pre-fix); the shift between the scmsra third build and 3cbc95a4 is untraced. Candidate, not shown: d96f6d58 (a CRL fetch without a signed list is sized as the 1609.2.1 composite, phase2.rs:7541-7584)'
 - id: RA.events
   base: B
   variant: F
@@ -144,6 +152,7 @@ rows:
   source: ScmsRun::generate_past_due (a kernel per job, as a preload)
   measured: 'F 68.2 MB against FS 66.7 MB (-2.2 %)'
   verdict: pass
+  recheck_3cbc95a4: 'F 73.7 MB against FS 73.7 MB (0 %): holds'
 - id: RA.determinism
   base: F
   variant: F2
@@ -153,6 +162,7 @@ rows:
   source: engine determinism contract (same seed, same build)
   measured: 'F and F2 stream_digest 05c33f02c0bf'
   verdict: pass
+  recheck_3cbc95a4: 'F and F2 stream_digest 627456a687a4 (byte-identical): holds'
 - id: RA.slow-aca-held
   base: F
   variant: FS
@@ -163,6 +173,7 @@ rows:
   measured: 'F 337.1 ms against FS 4,947.3 ms (max 8,341)'
   verdict: wrong-expectation
   note: 'the fault (0-300 s) covered the instants the weeks fell due (the fleet''s acceptance), so the RA''s job ran under the slow ACA and finished after the 60 s top-offs asked: they waited for it, as at a real RA. Corrected by RA.slow-aca-late-held (slow from 30 s: 337.1 ms = F). Still well under the old lazy job (BS 16,412 ms)'
+  recheck_3cbc95a4: 'F 337.3 ms against FS 7,495.2 ms (57 top-ups, max 12,341): still outside +-10 %, as recorded; the correction (RA.slow-aca-late-held) holds'
 - id: RA.slow-aca-late-held
   base: F
   variant: FSL
@@ -172,6 +183,7 @@ rows:
   source: '[PRIMER] p.6; [CAMP122] 5.2.7.6.4 (the RA generates the horizon at acceptance); written after FS failed, before FSL ran'
   measured: 'F 337.1 ms against FSL 337.1 ms (59 top-ups each)'
   verdict: pass
+  recheck_3cbc95a4: 'F 337.3 ms against FSL 337.3 ms (59 top-ups each): holds'
 - id: RA.slow-aca-old
   base: B
   variant: BS
@@ -191,6 +203,7 @@ rows:
   measured: 'FH 14,886 ms against FH20 17,170 ms (+2,284); cert_unavailable 12.3 -> 53.1 s, max 8.3 -> 22.0 s; starved 2 -> 7. scms_knobs_runs (full lifecycle): 24,859 -> 25,142 ms, top-up messages 1,774 -> 1,192'
   verdict: wrong-expectation
   note: 'only a late top-off polls again, and most of a top-off''s time on the 2-week horizon is the scheduled wait to nextDlTime: the mean moves by the late share times (20 s - 2 s) / 2, not by 5 s. The knob acts where theory says (fewer polls, longer certificate gaps). The test now bounds the shift by the late share it counts from the records (pending build 2)'
+  recheck_3cbc95a4: 'FH 19,078.5 ms against FH20 22,935.8 ms (+3,857; 33 of 103 completed in both); cert_unavailable 58.4 -> 157.5 s, max 12.7 -> 22.0 s; starved 7 -> 9. Under +5,000 ms as before: the correction holds'
 - id: RA.download-wait-boundary
   base: scms_knobs_runs h2 base (third build)
   variant: same, download_poll_interval_s 20
@@ -214,6 +227,7 @@ rows:
 # Written 2026-10-27 12:20 before the second build ran. G = base.yaml on the second build
 # (arm_boundary_jobs and provider-b's second ACA); base.yaml's i-period is 60 s, so the run
 # crosses the boundaries at 60 s and 120 s.
+  recheck_3cbc95a4: 'backend FH 2,409,584 > FS 2,025,879 B; topup FH 19,078.5 > FS 7,495.2 ms: holds'
 - id: RA.boundary-job
   base: F
   variant: G
@@ -222,7 +236,8 @@ rows:
   expect: 'G > F, and G - F > B - F: at each of the two boundaries every account adds the week that comes into ra-maxPreloadTime, so the RA-LA-ACA hops of one week per account per boundary are on the run (more weeks than the 59 the lazy RA generated on request in B)'
   source: '[PRIMER] p.6 (the RA adds one week every week); [CAMP122] 5.2.7.6.4; [SMP] Table 3 ra-maxPreloadTime'
   measured: 'backend F 959,355 against G 1,720,133 bytes (+760,778; B - F = 522,988): two boundaries, every account''s next week on the run. scms_knobs_runs the_architecture_is_the_deployments pending its run; pregeneration every_account_gets_its_next_horizon_week_at_the_boundary_without_asking passes'
-  verdict: pending
+  verdict: pass
+  note: 'judged 2026-10-27 on the recorded values: G - F = 760,778 B > B - F = 522,988 B. scms_knobs_runs the_architecture_is_the_deployments passed in the integration''s full test pass on 3cbc95a4 (BUILD-STATUS 2026-10-27: not among the 14 failures). Merged-tree base.yaml (3cbc95a4 release, run M): backend 2,025,879 B, +305,746 over G; that rise is not this row''s (G and M are different binaries) and is untraced: see recheck on RA.uu-bytes-per-topup'
 - id: RA.boundary-metrics
   base: F
   variant: G
@@ -231,7 +246,8 @@ rows:
   expect: 'top-up mean within +-10 % (the boundary week is not one any device asks for in the run; the RA serves .info and downloads from held files while the job runs), topups_completed equal, refusals equal'
   source: 1609.2.1 §6.3.5.4 (the top-off of a held week is .info + download); queueing at an RA with backend_servers parallel servers
   measured: 'topup F 337.1 ms against G 337.1 ms (59 each), topups 121/59/295 both, refusals 0 both'
-  verdict: pending
+  verdict: pass
+  note: 'judged 2026-10-27 on the recorded values (each within its band: top-up 0 %, counts and refusals equal). Merged-tree base.yaml: topup 337.3 ms (59 of 121), refusals 0'
 - id: RA.boundary-cost
   base: F
   variant: G
@@ -251,6 +267,7 @@ rows:
   source: '[SM-MBR] §3 and §2.3.1.4.1 (an SM-MBR is signed with a pseudonym certificate; the reporter is an OBE); USDOT RSU Specification v4.1 p. 15 (no reporting function)'
   measured: 'PQF reports_from_rsus 0; roadside not-filed 204'
   verdict: pass
+  recheck_3cbc95a4: 'PQF reports_from_rsus 0; roadside not-filed 143: holds'
 - id: PQ.relay-case-kept
   base: PQF
   variant: PQF
@@ -261,6 +278,7 @@ rows:
   measured: 'PQF revoke decisions 3, rsu_crls_installed 150, rsu_revoked_receptions 3,864'
   verdict: pass
 # --- (4) roadside application certificates -------------------------------------------------
+  recheck_3cbc95a4: 'PQF revoke decisions 2, rsu_crls_installed 120, rsu_revoked_receptions 1,794 (all > 0): holds; each smaller than the branch run (3 / 150 / 3,864), untraced (the PQF digest 28e00b62abd7)'
 - id: RSU.ssm-refused-before
   base: CB
   variant: CB
@@ -279,6 +297,7 @@ rows:
   source: USDOT RSU Specification v4.1 p. 15 (certificates to support the unit's transmissions, by PSID); [CAMP122] Table 1 (no SSP for SPaT/MAP or SSM)
   measured: 'CF: psid-not-permitted 0 (no refusal of 118,971 checked); 4 units, 8 certificates'
   verdict: pass
+  recheck_3cbc95a4: 'CF: no refusal of 118,247 checked; 4 units, 8 certificates: holds'
 - id: RSU.cpm-verified
   base: CPF
   variant: CPF
@@ -293,6 +312,7 @@ rows:
 # ACA instance certified, hosted, linked, sent its share of requests and signing what it
 # issues); compared with F / FSB (the first build: one ACA serves provider-b). Rows written
 # before the second build ran.
+  recheck_3cbc95a4: 'CPF: rsu_cpms_sent 168, rsu_cpms_verified 120 (both > 10): holds'
 - id: D1.certs
   base: G
   variant: G
@@ -301,7 +321,8 @@ rows:
   expect: '2 ACAs, 2 certificates (was 2 placed, 1 certified)'
   source: SAESOL published chain files 2025-07-17 and 2025-08-13 (two ACA certificates); audit-gov GOV.D1.acas
   measured: 'provider_runs provider_bs_second_aca_is_certified_and_issues_its_share (third build): 2 provider-b ACA components in pki.state, both with a certificate'
-  verdict: pending
+  verdict: pass
+  note: 'judged 2026-10-27: provider_runs passed on the third build and again in the integration''s full test pass on 3cbc95a4 (not among the 14 failures)'
 - id: D1.form
   base: G
   variant: G
@@ -310,7 +331,8 @@ rows:
   expect: 'same issuer (provider-b ICA), validity, SSP, region, CRACA and encryption-key presence; a different verification key'
   source: the two published SAESOL ACA certificates share one form; audit-prov §4.1 design
   measured: 'same test: issuer, validity, appPermissions, certIssuePermissions, region, CRACA, CRL series and encryption-key presence equal; verification keys differ (first equal only after 6869fb6a, D1.chain-permissions)'
-  verdict: pending
+  verdict: pass
+  note: 'judged 2026-10-27: same test (provider_runs), passing on 3cbc95a4'
 - id: D1.split
   base: G
   variant: G
@@ -319,7 +341,8 @@ rows:
   expect: 'each ACA gets half of every release within one request (round-robin over the shuffled batch, ASSUMPTION: the split rule is not published); every certificate is verified by its device and signed by the ACA that received its request (same-ACA rule, 1609.2.1 §6.3.5.4)'
   source: audit-prov §4.1; IEEE 1609.2.1 (AcaEeCertResponse signed by the issuing ACA)
   measured: 'same test: a 20-certificate provisioning sends 10 RaAcaCertRequest SPDUs to aca/0 and 10 to aca/1; the device installs 20, 10 signed by aca/1; 0 PDU rejections'
-  verdict: pending
+  verdict: pass
+  note: 'judged 2026-10-27: same test (provider_runs), passing on 3cbc95a4. The split rule stays an ASSUMPTION (not published)'
 - id: D1.chain-permissions
   base: Gp
   variant: G
@@ -338,7 +361,8 @@ rows:
   expect: 'top-up mean within +-2 % (an on-time ACA is not a bottleneck: the wait is the exchange), topups_completed equal, 0 refusals, checked within +-1 % (pseudonyms from the second ACA have the same form and size), uu bytes per top-up within +-1 %'
   source: queueing (M/D/c with utilisation near 0 at the ACA); same certificate form
   measured: 'topup F 337.1 / G 337.1 ms; topups_completed 59 / 59; refusals 0 / 0; checked 346,489 / 346,489; uu bytes per top-up 13,465.5 / 13,467.6 (+0.02 %)'
-  verdict: pending
+  verdict: pass
+  note: 'judged 2026-10-27 on the recorded values: every measure inside its band (top-up 0 %, checked 0 %, uu per top-up +0.02 %)'
 - id: D1.slow-aca-halved
   base: FSB
   variant: GSB
@@ -357,8 +381,9 @@ rows:
   expect: 'GSBH < FSBH on both: provider-b (32 of 72 devices) sends half of each in-run job to the healthy aca/1, so its weeks are ready sooner; provider-a untouched. Upper bound on the drop: provider-b''s share of the slow-ACA excess (FH - F on one ACA, 14,886 - 337 ms, times 32/72, halved): about 3.2 s. Confounded: GSBH also starts each week at its boundary unasked (RA.boundary-job), which can only make it earlier'
   source: queueing (the slow server carries half the work); audit-prov §4.1; written before FSBH and GSBH ran
   measured: 'topup FSBH 18,544.7 ms (58 of 121 completed) against GSBH 5,244.7 ms (42 of 105); cert_unavailable 0 in both. Control on the same two binaries with provider-a''s ACA slow (h2.yaml): FH 14,886 ms (34 of 103) against GH 14,338 ms (34 of 103), so the boundary job alone moves the mean by -548 ms and no completions'
-  verdict: pending
+  verdict: open
   note: 'the direction holds (-13.3 s) and the boundary job is not the cause (GH = FH in completions, -0.5 s). The size bound was wrong: FSBH''s excess is all provider-b''s, not 32/72 of FH''s. Open: GSBH starts 16 fewer top-ups and completes 16 fewer (58 -> 42) with no device starved, which halving the slow server''s work does not explain; per-provider top-up counts are not in the report, so it needs a recorded run'
+  note2: 'judged 2026-10-27, open; the direction claimed in the note above is withdrawn. Merged tree (3cbc95a4 release, GSBH again): topup 3,658.0 ms (42 completed, max 56,352), cert_unavailable 0, starved 0; GSB (3-year horizon) equals F to the digit (337.3 ms, 59 of 121). A recorded GSBH (events level, pki.flow, scratch topups.py/acaq.py) gives the cause. Provider-a: 36 of 36 top-ups installed, mean 0.32 s. Provider-b: 23 asked (4 at 60 s, 19 at 120 s) and 6 installed (mean 23.6 s, max 56.3 s); 17 were still waiting when the run ended. At the 120 s boundary the weekly job (provision.rs:164 arm_boundary_jobs) sends every provider-b account''s week to the ACAs in turn (run/mod.rs:523 round-robin): 88 requests to the 4 s slow aca/0 and 87 to aca/1. That queue lasts past the 180 s horizon, and the top-ups asked at 120 s wait for it. So the lower mean is censoring, the same as RA.download-wait-boundary, and not the halving the row expects. Not judgeable as written: it needs a measure that counts unfinished top-ups, and the one-ACA base cannot be re-made on one binary (failure_target, crypto_config.rs:181-198, names no ACA instance). Whether a real RA puts a requested week ahead of its weekly job is not published'
 - id: D1.cost
   base: F
   variant: G
@@ -367,7 +392,8 @@ rows:
   expect: 'events within +-1 %; peak memory within +-10 % (one more hosted node, a second ACA certificate)'
   source: one backend node more per provider-b run
   measured: 'events 883,278 / 883,278; peak 68.2 / 72.6 MB (+6.4 %, includes the boundary job)'
-  verdict: pending
+  verdict: pass
+  note: 'judged 2026-10-27 on the recorded values: events 0 %, peak +6.4 % (inside +10 %). Cross-binary (F fix1, G fix3), as the row says'
 - id: D1.determinism
   base: G
   variant: G2

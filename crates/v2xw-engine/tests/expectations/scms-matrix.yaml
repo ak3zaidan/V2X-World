@@ -319,6 +319,7 @@ rows:
   verdict: wrong-expectation
   note: 'was 3 of 3; the US profile cannot report a PSM, a real detection gap (usfp.md §3). Before the
     R-USFP fix: 1 revoked among 27 decisions'
+  recheck_3cbc95a4: '3 on the 3cbc95a4 release (M0, one thread, events level); the row''s note stands'
 - id: M0-honest-revoked
   base: M0
   variant: M0
@@ -359,6 +360,7 @@ rows:
     EDT = 147,600 s), then the first fetch (realism.md: 147,573.8 s)'
   measured: '147544'
   verdict: pass
+  recheck_3cbc95a4: 'FAIL on the 3cbc95a4 release (found by this re-check; the verdict above is kept, it judges f4982788): 147,490.9 s, 9 s under the band. published_s 147,429.3 (the first RSU broadcast at the same instant), decision 115,080.5 s, 3 cases (f4982788: 2). Untraced; the merged tree adds p1gaps f4a0f5cc (stable vehicle node ids, attack start = first falsified) between the two binaries. Open'
 - id: M0-req-per-obu
   base: M0
   variant: M0
@@ -565,8 +567,10 @@ rows:
   source: 'R-USFP (usfp.md): raw 10 Hz fixes carry fresh 1.6 m white noise, so consecutive honest BSMs
     disagree with their own velocity by 2.65 m at the median and the 1 m RandomPosition check reports
     them'
-  measured: 0 -> 87
+  measured: '0 -> 87'
   verdict: pass
+  measured_on: 2026-10-27, 3cbc95a4 release (1.2 GB slot)
+  note2: 're-run 2026-10-27 on the 3cbc95a4 release with M0 on the same binary (M0 on the tiny slot, 604 s, 244 MB; gnss-raw on the 1.2 GB slot, 3,467 s wall, 991 MB peak, 3,497,558 events). 90 cases, 88,135 reports at the MAs (M0 2,825). Red under injection (gnss-raw replaced by M0: 0 -> 0, FAIL), restored'
 - id: clean-honest-reports
   base: M0
   variant: gnss-clean

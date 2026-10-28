@@ -15,7 +15,7 @@
 # Re-run 2026-10-27 on the f4982788 release (06-validation-summary §9; 450 MB cap, one rayon
 # thread): PQ0, PQHFC, PQHMC, RELAY, M0, MW, MWC, MWC2, Q60, Q60L, Q60X2, Q60P. 49 rows judged:
 # 38 pass, 1 fixed, 5 earlier corrections still hold, 5 open; RR.MW.no-overdue fixed (R-JOINCRL); RR.MWC.overdue and RR.MWC2.overdue now open (0 refusals).
-# Not re-run: PQHM (about 10 min of slot), FS40 (539 MB), GRAW (458 MB, stopped by the cap), PQ0-1.
+# Not re-run: PQHM (about 10 min of slot), PQ0-1. FS40 and GRAW re-run 2026-10-27 on the 3cbc95a4 release (1.2 GB slot): 8 rows pass.
 schema: v2xw/scms-run-expectations/1
 runs:
   PQ0:
@@ -221,8 +221,10 @@ rows:
   value: 10
   source: 'measure §1: with the receiver carried by the mean of the two velocities a stop-and-go Monte
     Carlo gives 4 frozen pairs per 509 before; 165 verdicts before the fix -> about 1, near 0'
-  measured: '2'
+  measured: '5'
   verdict: pass
+  measured_on: 2026-10-27, 3cbc95a4 release (1.2 GB slot)
+  note2: 're-run 2026-10-27 on the 3cbc95a4 release, 1.2 GB slot (FS40: 411 s wall, 556 MB peak, 3,434,582 events). Red under an injected out-of-band value, then restored'
 - id: RR.FS40.links-claimed
   base: FS40
   variant: FS40
@@ -234,6 +236,8 @@ rows:
     counts only links across a change (measure §2)
   measured: '0'
   verdict: pass
+  measured_on: 2026-10-27, 3cbc95a4 release (1.2 GB slot)
+  note2: 're-run 2026-10-27 on the 3cbc95a4 release, 1.2 GB slot (FS40: 411 s wall, 556 MB peak, 3,434,582 events). Red under an injected out-of-band value, then restored'
 - id: RR.FS40.links-spurious
   base: FS40
   variant: FS40
@@ -246,8 +250,10 @@ rows:
   source: the Wiedersheim tracker decides at every first sighting under 10 % sniffers, so the spurious
     claims stay (2,873 on 77cffb5b, measure §2); the band allows the lane-change and turn-rule traffic
     changes since
-  measured: '2863'
+  measured: '3867'
   verdict: pass
+  measured_on: 2026-10-27, 3cbc95a4 release (1.2 GB slot)
+  note2: 're-run 2026-10-27 on the 3cbc95a4 release, 1.2 GB slot (FS40: 411 s wall, 556 MB peak, 3,434,582 events). Red under an injected out-of-band value, then restored (was 2,863 on the earlier binary; inside the band)'
 - id: RR.FS40.position-jump
   base: FS40
   variant: FS40
@@ -257,8 +263,10 @@ rows:
   value: 71
   source: 71 on 77cffb5b before the apex turn rule (memden §2.2), which removed the junction-apex cause;
     through-vehicle polyline vertices remain (06 §6 item 1), so not 0
-  measured: '7'
+  measured: '3'
   verdict: pass
+  measured_on: 2026-10-27, 3cbc95a4 release (1.2 GB slot)
+  note2: 're-run 2026-10-27 on the 3cbc95a4 release, 1.2 GB slot (FS40: 411 s wall, 556 MB peak, 3,434,582 events). Red under an injected out-of-band value, then restored'
 - id: RR.FS40.honest
   base: FS40
   variant: FS40
@@ -269,6 +277,8 @@ rows:
   source: 'honest traffic only and an 8 h manual MA review (D3): no decision inside 40 s'
   measured: '0'
   verdict: pass
+  measured_on: 2026-10-27, 3cbc95a4 release (1.2 GB slot)
+  note2: 're-run 2026-10-27 on the 3cbc95a4 release, 1.2 GB slot (FS40: 411 s wall, 556 MB peak, 3,434,582 events). Red under an injected out-of-band value, then restored'
 - id: RR.FS40.cost
   base: FS40
   variant: FS40
@@ -277,8 +287,10 @@ rows:
   expect: le
   value: 1500
   source: final-bench R-FS40 910 MB at metrics level; events level adds the streamed records only
-  measured: '538.625'
+  measured: '556.123'
   verdict: pass
+  measured_on: 2026-10-27, 3cbc95a4 release (1.2 GB slot)
+  note2: 're-run 2026-10-27 on the 3cbc95a4 release, 1.2 GB slot (FS40: 411 s wall, 556 MB peak, 3,434,582 events). Red under an injected out-of-band value, then restored'
 - id: RR.GRAW.implausible
   base: M0
   variant: GRAW
@@ -290,6 +302,8 @@ rows:
     5), so no report carries evidence whose time the MA finds implausible; 10 before
   measured: '0'
   verdict: pass
+  measured_on: 2026-10-27, 3cbc95a4 release (1.2 GB slot)
+  note2: 're-run 2026-10-27 on the 3cbc95a4 release (GRAW is the matrix gnss-raw run: same scenario, flags and binary). Red under injection (the value set to 10: FAIL), restored'
 - id: RR.GRAW.reports-up
   base: M0
   variant: GRAW
@@ -299,8 +313,10 @@ rows:
   min_change: 1.0
   source: 'raw fixes put the SM-MBR ConstantPosition condition on stopped cars'' Doppler noise (usfp §2:
     the hold is needed); R-USFP is reproduced by construction'
-  measured: 0 -> 7337
+  measured: '19 -> 122054'
   verdict: pass
+  measured_on: 2026-10-27, 3cbc95a4 release (1.2 GB slot)
+  note2: 're-run 2026-10-27 on the 3cbc95a4 release, M0 on the same binary. Both values moved since 81a12183 (0 -> 7,337): M0 now has 19 honest reports, GRAW 122,054 of 127,708 sent; the direction holds, the size change across binaries is untraced. Red under injection (GRAW replaced by M0: 19 -> 19, FAIL), restored'
 - id: RR.M0.honest
   base: M0
   variant: M0
