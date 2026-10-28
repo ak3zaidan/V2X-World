@@ -1396,6 +1396,17 @@ with its own new pinned digest.
   the agreement test (run through the venv under `runtiny.sh` limits), the faults, and
   the status note.
 
+  **Done 2026-10-28 (P23.1, P23.2).** The choices, where the plan was silent:
+  - the side table is a `Vec` ordered by plan, because JSON map keys must be strings;
+  - an unknown `type` runs as fixed time, counted as `unknown-programme-type`;
+  - the NEMA movement mapping comes from the file's phase states (`G` protected, `g`
+    permissive) and not from the geometry, because a SUMO NEMA programme states its
+    own numbering;
+  - an actuated phase whose `minDur` equals its `maxDur` (both default to `duration`)
+    stays fixed, as in SUMO;
+  - the passage is `max-gap`, else 3 s.
+  `grid3.net.xml` is all static (9 tlLogics), so no golden moved. P23.3 is not started.
+
 ---
 
 ## WP-24 VeReMi Extension replica and reference ML baseline

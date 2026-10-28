@@ -57,7 +57,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use v2xw_core::ids::LaneId;
 use v2xw_world::model::LaneKind;
-use v2xw_world::{SignalPhase, SignalPlan, SignalState, World};
+use v2xw_world::{
+    SignalPhase, SignalPlan, SignalProgramme, SignalProgrammeKind, SignalState, World,
+};
 
 use super::assign::{self, Assignment, MovementKind};
 use super::{Calls, DualRing, Interval, PhaseTiming, RingConfig, RingCounters};
@@ -201,7 +203,8 @@ pub fn concurrent_foe_yields(
     for &l in &junction.incoming {
         for c in world.roads.successors(l) {
             if let Some(v) = c.via {
-                via.entry(v).or_insert((c.from_lane, c.to_lane, c.direction));
+                via.entry(v)
+                    .or_insert((c.from_lane, c.to_lane, c.direction));
             }
         }
     }
@@ -269,6 +272,81 @@ pub fn concurrent_foe_yields(
         }
     }
     out
+}
+
+/// The NEMA number a programme phase's `name` states, 1 to 8.
+fn programme_phase(ph: &v2xw_world::ProgrammePhase) -> Option<u8> {
+    ph.name
+        .as_deref()
+        .and_then(|n| n.trim().parse::<u8>().ok())
+        .filter(|q| (1..=8).contains(q))
+}
+
+/// The assignment and rules a SUMO NEMA programme states (WP-23): a movement is protected
+/// by the phase whose state shows it `G` (the first, if several do), and turns
+/// permissively in the phase whose state shows it `g`. The file's own numbering stands,
+/// so the geometry's ([`assign::assign_phases`]) is not used.
+///
+/// # Errors
+///
+/// A label, counted as a fallback: a phase whose `name` is not a NEMA number 1-8, or a
+/// movement no phase serves.
+pub fn programme_rules(
+    world: &World,
+    plan: &SignalPlan,
+    prog: &SignalProgramme,
+) -> Result<(Assignment, Vec<Rule>), &'static str> {
+    let numbers: Vec<u8> = prog
+        .phases
+        .iter()
+        .map(|ph| programme_phase(ph).ok_or("programme-phase-name"))
+        .collect::<Result<_, _>>()?;
+    let mut dir: BTreeMap<LaneId, v2xw_world::model::TurnDirection> = BTreeMap::new();
+    for c in world.roads.connections() {
+        if let Some(v) = c.via {
+            dir.entry(v).or_insert(c.direction);
+        }
+    }
+    let mut movements = Vec::with_capacity(plan.controlled.len());
+    let mut rules = Vec::with_capacity(plan.controlled.len());
+    for (m, l) in plan.controlled.iter().enumerate() {
+        let shown = |want: SignalState| {
+            plan.phases
+                .iter()
+                .zip(&numbers)
+                .find(|(ph, _)| ph.states.get(m) == Some(&want))
+                .map(|(_, q)| *q)
+        };
+        let (own, permit) = (shown(SignalState::Green), shown(SignalState::GreenYield));
+        let phase = own.or(permit).ok_or("programme-unserved-movement")?;
+        let crossing = world
+            .roads
+            .try_lane(*l)
+            .is_some_and(|x| x.kind == LaneKind::Crossing);
+        let kind = if crossing {
+            MovementKind::Crossing
+        } else {
+            match dir.get(l) {
+                Some(d) if d.crosses_opposing_traffic() => MovementKind::Left,
+                Some(v2xw_world::model::TurnDirection::Right) => MovementKind::Right,
+                _ => MovementKind::Through,
+            }
+        };
+        movements.push(assign::AssignedMovement {
+            phase,
+            kind,
+            permissive_with: None,
+        });
+        rules.push(Rule {
+            own,
+            permit: if own.is_some() && permit == own {
+                None
+            } else {
+                permit
+            },
+        });
+    }
+    Ok((Assignment { movements }, rules))
 }
 
 /// How close to a crosswalk's kerb end a standing pedestrian must be to have pressed its
@@ -385,10 +463,7 @@ impl NemaPlan {
         let mut out = shown.clone();
         for &(loser, winner) in &self.yields {
             if shown[loser] == SignalState::Green
-                && matches!(
-                    shown[winner],
-                    SignalState::Green | SignalState::GreenYield
-                )
+                && matches!(shown[winner], SignalState::Green | SignalState::GreenYield)
             {
                 out[loser] = SignalState::GreenYield;
             }
@@ -619,19 +694,48 @@ impl NemaControllers {
     /// Controllers for every plan of `world` that maps to the dual ring
     /// ([`assign::assign_phases`]); the rest are counted by reason and left to the caller's
     /// single-ring controller. Under `control: nema` only.
+    ///
+    /// A plan whose source file gave it a NEMA programme (`World::signal_programmes`,
+    /// WP-23) runs the dual ring the file states, whatever `control.control` is: its
+    /// phases' movements, per-phase timing and SUMO ring parameters
+    /// ([`programme_rules`], `NemaSettings::from_sumo_params`). A plan with an actuated
+    /// programme is the single ring's.
     pub fn new(control: &SignalControl, world: &World) -> Self {
         let n = control.nema.clone().unwrap_or_default();
+        let global = control.control == crate::scenario::schema::SignalControlKind::Nema;
         let mut plans = BTreeMap::new();
         let mut fallback: BTreeMap<&'static str, u64> = BTreeMap::new();
         let mut shared_lane_lefts = 0;
         for (idx, plan) in world.signals.iter().enumerate() {
-            match assign::assign_phases(world, plan) {
-                Ok(a) => {
-                    let (p, demoted) = Self::plan(control, &n, world, plan, a);
-                    shared_lane_lefts += demoted;
-                    plans.insert(idx, p);
+            let programme = world.signal_programmes.iter().find(|p| p.plan == plan.id);
+            match programme {
+                Some(prog) if prog.kind == SignalProgrammeKind::Nema => {
+                    let built = programme_rules(world, plan, prog).and_then(|(a, rules)| {
+                        let mut nf = NemaSettings::from_sumo_params(&prog.params)
+                            .map_err(|_| "programme-params")?;
+                        nf.walk_s = nf.walk_s.or(n.walk_s);
+                        nf.ped_speed_mps = nf.ped_speed_mps.or(n.ped_speed_mps);
+                        Ok((nf, a, rules))
+                    });
+                    match built {
+                        Ok((nf, a, rules)) => {
+                            let (p, _) =
+                                Self::plan(control, &nf, world, plan, a, Some((&rules, prog)));
+                            plans.insert(idx, p);
+                        }
+                        Err(label) => *fallback.entry(label).or_insert(0) += 1,
+                    }
                 }
-                Err(u) => *fallback.entry(u.label()).or_insert(0) += 1,
+                Some(_) => {}
+                None if global => match assign::assign_phases(world, plan) {
+                    Ok(a) => {
+                        let (p, demoted) = Self::plan(control, &n, world, plan, a, None);
+                        shared_lane_lefts += demoted;
+                        plans.insert(idx, p);
+                    }
+                    Err(u) => *fallback.entry(u.label()).or_insert(0) += 1,
+                },
+                None => {}
             }
         }
         NemaControllers {
@@ -647,6 +751,7 @@ impl NemaControllers {
         world: &World,
         plan: &SignalPlan,
         a: Assignment,
+        file: Option<(&[Rule], &SignalProgramme)>,
     ) -> (NemaPlan, u64) {
         let junction = world.roads.junction(plan.junction);
         let mut via: BTreeMap<LaneId, LaneId> = BTreeMap::new();
@@ -702,7 +807,10 @@ impl NemaControllers {
             yellow_s: yellow,
             red_clear_s: red,
         };
-        let (rules, demoted) = left_rules(&a, &approach, n);
+        let (rules, demoted) = match file {
+            Some((r, _)) => (r.to_vec(), 0),
+            None => left_rules(&a, &approach, n),
+        };
         let yields = concurrent_foe_yields(world, plan, &a, &rules);
         // The phases that serve something: each movement's protecting phase, each
         // crosswalk's, and each permissive window's through.
@@ -719,6 +827,21 @@ impl NemaControllers {
         present.sort_unstable();
         present.dedup();
         let mut config = RingConfig::from_settings(n, &present, through, left);
+        // A programme's own timing, phase by phase, where its file states it (SUMO NEMA
+        // `minDur`, `maxDur`, `vehext`, `yellow`, `red`).
+        if let Some((_, prog)) = file {
+            for ph in &prog.phases {
+                let Some(q) = programme_phase(ph) else {
+                    continue;
+                };
+                let t = &mut config.timing[usize::from(q)];
+                t.min_green_s = ph.min_s.unwrap_or(t.min_green_s);
+                t.max_green_s = ph.max_s.unwrap_or(t.max_green_s).max(t.min_green_s);
+                t.passage_s = ph.vehext_s.unwrap_or(t.passage_s);
+                t.yellow_s = ph.yellow_s.unwrap_or(t.yellow_s);
+                t.red_clear_s = ph.red_s.unwrap_or(t.red_clear_s);
+            }
+        }
         let walk = n.walk_s.unwrap_or(MUTCD_WALK_S);
         let speed = n.ped_speed_mps.unwrap_or(MUTCD_PED_SPEED_MPS);
         let mut ped = vec![None; a.movements.len()];

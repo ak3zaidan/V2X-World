@@ -859,6 +859,12 @@ trustworthy or comparable; later waves add behaviours and radio features.
   - **Setting.** `world.sumo.signal_programmes` is `as-file` (default) or `static`. It is refused off SUMO worlds. All six settings-checklist files are done.
   - **Goldens: none moved.** By grep, `worlds/sumo/grid3.net.xml` has 9 tlLogics, all `type="static"`. A static network writes no table, and its hash equals the `static`-option import.
   - **Tests:** `sumo::tests::{actuated_tllogic_imports_with_phase_bounds, nema_tllogic_imports_as_rings, delay_based_becomes_actuated_and_is_counted, every_tl_param_is_in_the_ledger}`.
+- P23.2 (2026-10-28): imported programmes run, whatever `traffic.signals.control` says.
+  - **Actuated.** The single ring runs between each phase's `minDur` and `maxDur`. Each defaults to `duration`, and a phase whose two are equal stays fixed, as in SUMO. The passage is `max-gap`, else 3 s (SUMO's default as recalled [verify]).
+  - **NEMA.** The dual ring is numbered by the file: a phase's `name` is its NEMA number. A movement that shows `G` in a phase is protected by it; one that shows `g` turns permissively in it. Per-phase `minDur`/`maxDur`/`vehext`/`yellow`/`red` override the defaults. Rings, barriers, recalls and coordination come from `NemaSettings::from_sumo_params`.
+  - **Fallbacks.** A programme that cannot map keeps the single ring, counted as `programme-phase-name`, `programme-unserved-movement` or `programme-params`.
+  - **Not modelled:** SUMO's induction loops (the engine's stop-line detectors call phases), `next`, `earliestEnd` and the like, and SUMO's own no-demand behaviour, which differs from rest-in-green [verify].
+  - **Tests:** `actuated::tests::{imported_programme_gaps_out, imported_nema_programme_runs_the_rings}`. With no programmes the default path is unchanged.
 
 **WP-24 VeReMi Extension replica and reference ML baseline** (M, 7 days). Sources: F-P10, F-P11. After WP-03, 07, 10.
 - Scope: the LuST subsection (licence checked), 07-09 h and 14-16 h, 30 % attackers on
