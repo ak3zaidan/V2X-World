@@ -1516,6 +1516,12 @@ The totals count each row as its own checklist records it, with the changes in ย
       tests each go red under their fault. p2pcd_air's named fault (factory pseudonyms from
       the home ACA) no longer reaches its run and leaves it green; the defect's effect (the
       home chain file in every device's cache) turns it red.
+    - Q's late stamps: explained, not changed (audit-sim-metrics.md item 3).
+      `Kernel::dispatch` stamps stages and wire steps at the entity's finish (kernel.rs:596,
+      604, 641), and the engine logs them at the backend tick's `now`. On run T, 611
+      `pki.flow` and 439 `net.bytes` records are stamped up to 8.82 ms after their log
+      time; 606 of the 611 are pregeneration hops. The stamps are the right instants.
+      Holding the records to the next tick moves every SCMS digest (owner).
 
 **Owner decisions**
 - **What the RA and PCA keep for each device** (ยง6 item 4): request records, cocoons,
