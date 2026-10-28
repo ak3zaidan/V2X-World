@@ -311,15 +311,19 @@ rows:
   area: metrics
   measure: p2.revoked_attackers
   expect: eq
-  value: 2
+  value: 3
   source: the 2 vehicle constant-position attackers are caught by the SM-MBR ConstantPosition check and
     revoked after shuffle + review (SM-MBR §2.3; realism.md); the third (actor 103) is a handset sending
     PSMs, and SM-MBR v1.0 defines reports for application PSID 0x20 (the BSM) only (§1, §2.3)
-  measured: '2'
+  measured: '3 (9d0fbc2c)'
   verdict: wrong-expectation
   note: 'was 3 of 3; the US profile cannot report a PSM, a real detection gap (usfp.md §3). Before the
-    R-USFP fix: 1 revoked among 27 decisions'
+    R-USFP fix: 1 revoked among 27 decisions. 2026-10-28: value 2 -> 3, the same rule on a new draw: since
+    f4a0f5cc renumbered the vehicles (run.rs:774), 3 of the 4 ConstPos attackers are vehicles and all 3 are
+    revoked; node 14 is never reported'
   recheck_3cbc95a4: '3 on the 3cbc95a4 release (M0, one thread, events level); the row''s note stands'
+  recheck_9d0fbc2c: '3 on 9d0fbc2c. The premise (a PSM handset cannot be reported) still holds; since f4a0f5cc
+    renumbered the vehicles, 3 of the 4 attackers are reportable vehicles (nodes 46, 58, 62), see M0-enforced'
 - id: M0-honest-revoked
   base: M0
   variant: M0
@@ -354,13 +358,30 @@ rows:
   measure: stage.enforced_s
   expect: band
   band:
-  - 147500.0
-  - 147800.0
-  source: 'reports shuffled one day, 8 h review, next business-day 10:00 ET slot (Wed 2026-10-21 10:00
-    EDT = 147,600 s), then the first fetch (realism.md: 147,573.8 s)'
-  measured: '147544'
-  verdict: pass
+  - 147300.0
+  - 151180.0
+  source: 'stage.enforced_s is relative to the detect stage of the report that tipped the decision
+    (phase2.rs finish_first_revocation: enforced minus the first stage; v2xw-proto sim.rs
+    RevocationLatency::assemble takes Detect from case.report_run), not to t0. Absolute path: reports
+    shuffled one day, 8 h review, the next business-day 10:00 ET slot (Wed 2026-10-21 10:00 EDT =
+    147,600 s after t0), then the first vehicle fetch, within one CRL_FETCH_INTERVAL_S (3,600 s,
+    phase2.rs:484). That detect lies in the first live window, after the attack starts (20-300 s), so
+    the relative value is in [147,600 - 300, 147,600 - 20 + 3,600]'
+  measured: '147490.9 (9d0fbc2c)'
+  verdict: wrong-expectation
+  note: 'corrected 2026-10-28 (trace track; was band [147,500, 147,800], pass at 147,544 on f4982788):
+    the old band put the absolute slot on a relative measure, so it held only for some detection times
+    (f4982788's 147,544 implies the tipping report was detected at 56 s or later). On 9d0fbc2c (M0, tiny slot) the absolute stamps are the deployment''s:
+    published 147,600.0 s (the slot exactly; first RSU broadcast the same instant), first enforcement
+    147,661.6 s (node 66, a cellular fetch 61.6 s later), decision 115,251.3 s = report at the RA
+    86,451.3 + 28,800 s review. The tipping report (subject 6a27b021) was detected at 170.75 s, hence
+    147,490.9. Why it moved, and why 3 cases: f4a0f5cc (stable vehicle node ids, run.rs:774
+    ROADSIDE_ID_BASE) renumbered the vehicles, which re-keyed the node-keyed attacker draws. Now 3 of
+    the 4 ConstPos attackers are vehicles that get reported (nodes 46, 58, 62: 1,559, 696 and 1,256
+    reports; node 14 has none), against 2 vehicles and 1 PSM handset before (M0-attackers-revoked)'
   recheck_3cbc95a4: 'FAIL on the 3cbc95a4 release (found by this re-check; the verdict above is kept, it judges f4982788): 147,490.9 s, 9 s under the band. published_s 147,429.3 (the first RSU broadcast at the same instant), decision 115,080.5 s, 3 cases (f4982788: 2). Untraced; the merged tree adds p1gaps f4a0f5cc (stable vehicle node ids, attack start = first falsified) between the two binaries. Open'
+  recheck_9d0fbc2c: 'the same values as 3cbc95a4 on the 9d0fbc2c release (147,490.9 s, 3 cases, 3 revoke
+    decisions, revoked_honest 0): passes the corrected band'
 - id: M0-req-per-obu
   base: M0
   variant: M0

@@ -380,12 +380,12 @@ rows:
   variant: MWC
   area: metrics
   measure: rv.refused.crl-overdue
-  expect: ge
-  value: 1
+  expect: eq
+  value: 0
   source: '1609.2 CRL overdue rule: with the home Generator down from 700 s the t0 list goes overdue at
     t0 + 21 d and the home CRACA''s messages are refused (rerun §7, R-NOCRL fixed)'
-  measured: '0'
-  verdict: open
+  measured: '0 (9d0fbc2c; receiver_validation.refused is empty, so matrix.py reports the key ABSENT, not 0)'
+  verdict: wrong-expectation
   note: 'Open, 2026-10-27 on the f4982788 release (06 §9): 0 refusals of any kind (rv.refused_total 0;
     was 152,505 on 81a12183). The rule itself acts: the same run with security.scms.crl_overdue_tolerance_s
     0 refuses 33,572 as crl-overdue, and v2xw-node rxval.rs (overdue, lines 985-991) is unchanged since
@@ -394,6 +394,16 @@ rows:
     The likeliest cause is what a mid-run joiner is handed at power-on since R-JOINCRL (2a14d6c4, phase2.rs
     prerun_crl lines 7375-7383: published_crl_for in place of the t0 snapshot), not yet confirmed on
     the records. Before: 152,505, of which 16,618 were the base''s joiners'
+  note2: 'corrected 2026-10-28 (trace track; was ge 1). On 9d0fbc2c the receivers in W3 (1,237 records)
+    and W4 (6,638) hold the t0 home list (CRACA b710ad, nextCrl day 7.0), and it is overdue. But the root
+    changeover (CTL 1 at 259,320 s) came after the Generator went down at 700 s, so every home sender signs
+    under the new CRACA 4a1086, and no list under 4a1086 exists until the 2,600,000 s restart (W5 holds
+    one: nextCrl day 37.26). rxval.rs overdue() (lines 986-992) matches a held list''s crlCraca to the
+    sender''s cracaId, so nothing is refused. Sources: [CAMP122] Table 67 (printed pp. 457-458): overdue_CRL_tolerance is "How long an EE can continue to operate without a CRL update past a next CRL date before deciding that messages are not trustworthy and rejecting all of them (and turning on an appropriate driver warning indicator)", with "This is not expected to be implemented in the EEs for PoC". SCMS-1223 (p. 451): "EEs shall check all received relevant sender certificates ... against the most recent CRL. If the sender certificate is listed, EE shall discard the received message." SCMS-567: the DCM gives the EE the latest CRL at bootstrap. [SMP] v1.0.3 defines only the CRL series and their downloads. [SM-EESEC] v2.04 has no CRL clause. IEEE 1609.2 is paywalled and was not read. No clause says what a device does with a certificate whose CRACA it holds no CRL for. The overdue rule needs "a next CRL date", which a list never received does not have. So this run is the case of a CRACA
+    with no list, and 0 is what the texts give. Scope caveat: read literally, Table 67 rejects all
+    messages once a list is overdue, which would refuse every message in W3-W4 here. The engine scopes
+    the rule to the overdue list''s CRACA (validation/vehicle-and-roadside.md R15). Which reading
+    deployed OBUs follow is not published (trace track fix spec F5-SCOPE)'
 - id: RR.MWC2.overdue
   base: MW
   variant: MWC2
@@ -401,16 +411,26 @@ rows:
   measure: rv.refused.crl-overdue
   expect: ge
   value: 1
-  source: the home CRL of 190,769 s is overdue from 2,005,169 s, inside W4 (stress MWC2.overdue-onset
-    87,823)
-  measured: '0'
-  verdict: open
+  source: 'the root changeover (CTL 1, 259,320 s) signs a list under the new home CRACA while the Generator
+    is up (R-ROLLCRL; nextCrl day 10.0). With the Generator down from 300,000 s, that list is overdue from
+    day 24.0 (2,073,600 s; [CAMP122] Table 67): inside W4, not in W3. Was: the home CRL of 190,769 s is
+    overdue from 2,005,169 s (stress MWC2.overdue-onset 87,823)'
+  measured: '0 -> 110,048 (9d0fbc2c; outage start moved 200,000 -> 300,000 s)'
+  verdict: wrong-expectation
   note: 'Open, 2026-10-27 on the f4982788 release: 0 refusals, as RR.MWC.overdue (same cause, untraced).
     Before (81a12183): passed, but the run no longer tests its premise: MWC2 and MWC refuse exactly the same 152,505
     messages. Both revocations in the multi-week runs are now provider-b''s (the attackers'' providers
     moved with the traffic changes), so the home provider publishes no CRL before its Generator goes down
     at 200,000 s, and MWC2 is MWC. The scenario''s outage needs to start after a home revocation (rerun-2026-10-24-b.md
     §2.5)'
+  note2: 'corrected 2026-10-28 (trace track). The scenario was wrong, not the engine: its outage began at
+    200,000 s, before the changeover at 259,320 s, so MWC2 was MWC again. As written, 9d0fbc2c gives 0
+    refusals: W4 holds b710ad overdue (6,638 records), and no 4a1086 list exists until W5.
+    multi-week-crlg-down-late.yaml now starts the outage at 300,000 s, and 9d0fbc2c gives 110,048
+    crl-overdue refusals. Receivers hold 4a1086 from W1 (1,515 records; 2,350 in W2 and 2,558 in W3, none
+    overdue). In W4 all 6,638 records hold both home lists overdue while provider-b''s b0595c is current,
+    and W5 recovers (nextCrl day 37.09). The repo file and a scratch copy both gave 110,048. Fault: the old
+    200,000 s start gives 0, which turns this row red'
 - id: VB.Q60.rsu-crls
   base: Q60
   variant: Q60
