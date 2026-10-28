@@ -11,15 +11,18 @@
 //!   (P17.3), with the junctions that do not map counted rather than guessed.
 //! * [`DualRing`] — the ring state machine as a pure unit with no world (P17.4): minimum,
 //!   extension, gap-out and max-out, yellow and red clearance, barrier synchronisation,
-//!   rest, dual entry and recall.
-//!
+//!   rest, dual entry and recall; pedestrian intervals, calls and recycle (P17.7);
+//!   coordination with yield points, permissive windows and force-offs (P17.8); priority
+//!   extension and early green (P17.9).
 //! * [`control`] — the controller on a world (P17.5): the rings re-projected into each
 //!   junction's [`v2xw_world::SignalPlan`] as the composite intervals from now, driven by
-//!   the single-ring controller's detectors through `crate::actuated`.
+//!   the single-ring controller's detectors through `crate::actuated`; left-turn modes and
+//!   the flashing yellow arrow (P17.6); pedestrian push buttons (P17.7); the SPaT window
+//!   (P17.9).
 //!
-//! `control: nema` is off by default. Left-turn modes other than protected-permissive,
-//! pedestrian push-button calls, coordination and priority are later pieces; the loader
-//! refuses the settings that would need them (`scenario::validate::nema_checks`).
+//! `control: nema` is off by default. WP-17 P17.10 (the G-TV safety check, expectation
+//! rows, the city run and the model card) is still to come; until then the controller is
+//! not proposed as a default.
 
 pub mod assign;
 pub mod control;

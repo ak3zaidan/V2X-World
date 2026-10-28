@@ -412,8 +412,8 @@ pub enum SignalControlKind {
     Actuated,
     /// The NEMA dual-ring eight-phase controller (FHWA Signal Timing Manual 2nd ed.,
     /// NCHRP Report 812, §5.1.2 Exhibit 5-3): two rings timing concurrently, meeting at
-    /// barriers, with [`SignalControl::nema`] settings. Refused by the loader until the
-    /// controller is wired (WP-17 P17.5).
+    /// barriers, with [`SignalControl::nema`] settings (WP-17). Junctions that do not map
+    /// to the dual ring keep the single-ring actuated controller.
     Nema,
 }
 
@@ -443,7 +443,7 @@ impl DetectorPlacement {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SignalControl {
-    /// Fixed-time or vehicle-actuated.
+    /// Fixed-time, single-ring vehicle-actuated, or the NEMA dual ring.
     #[serde(default)]
     pub control: SignalControlKind,
     /// The shortest an actuated green runs, seconds.

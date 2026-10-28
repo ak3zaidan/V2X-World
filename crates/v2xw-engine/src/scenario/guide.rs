@@ -63,8 +63,8 @@ const BASIC: &[Basic] = &[
     },
     Basic {
         path: "traffic.signals.control",
-        explain: "How the traffic lights decide when to change: on a fixed clock, or actuated by detectors in the road that hold a green while cars keep coming and end it early when the street goes quiet, as most US suburban and many city signals do.",
-        recommended: "fixed-time for a repeatable baseline; actuated to study signal timing or SPaT that changes.",
+        explain: "How the traffic lights decide when to change: on a fixed clock, or actuated by detectors in the road that hold a green while cars keep coming and end it early when the street goes quiet, as most US suburban and many city signals do. nema runs the US eight-phase dual-ring controller: both directions' throughs and lefts time side by side, with pedestrian push buttons, left-turn arrows, coordination and emergency-vehicle priority.",
+        recommended: "fixed-time for a repeatable baseline; actuated to study signal timing or SPaT that changes; nema for US controller behaviour (FHWA Signal Timing Manual 2nd ed.).",
     },
     Basic {
         path: "traffic.gridlock_timeout_s",
