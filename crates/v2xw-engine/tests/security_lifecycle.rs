@@ -980,7 +980,13 @@ fn a_roadside_unit_verifies_and_checks_what_it_hears() {
     let delivered_at_units = |rec: &MemoryRecorder| {
         records(rec, "node.rx")
             .iter()
-            .filter(|r| r["rx"].as_u64().is_some_and(|n| n < 4))
+            // The four units are nodes ROADSIDE_ID_BASE..+4 (before 2026-10-27, nodes 0-3).
+            .filter(|r| {
+                r["rx"].as_u64().is_some_and(|n| {
+                    let base = u64::from(v2xw_engine::run::ROADSIDE_ID_BASE);
+                    (base..base + 4).contains(&n)
+                })
+            })
             .filter(|r| r["outcome"] == "delivered")
             .count()
     };

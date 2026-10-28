@@ -189,7 +189,15 @@ fn a_vtypes_car_following_model_drives_its_vehicles() {
     let (vk, vi) = (krauss[krauss.len() - 1], idm[idm.len() - 1]);
     let t = (krauss.len() - 1) as f64 * 0.1;
     eprintln!("after {t:.1} s: Krauss {vk:.3} m/s, IDM {vi:.3} m/s, a·t {:.3}", 1.5 * t);
-    assert!((vk - 1.5 * t).abs() < 0.05, "Krauss at a·t: {vk} against {}", 1.5 * t);
+    // The slope over the last second, not v at the end: the engine holds a vehicle that
+    // starts from standstill for its start-up delay first (8.25 m/s at 6.0 s on the
+    // 2026-10-27 merged tree is 1.5 m/s² from 0.5 s), whatever its car-following model.
+    let slope = |v: &[f64]| v[v.len() - 1] - v[v.len() - 11];
+    let (sk, si) = (slope(&krauss), slope(&idm));
+    eprintln!("last-second slope: Krauss {sk:.3}, IDM {si:.3} m/s²");
+    assert!((sk - 1.5).abs() < 0.02, "Krauss speeds up at accel: {sk} against 1.5");
+    assert!(vk <= 1.5 * t + 0.05, "Krauss above a·t: {vk} against {}", 1.5 * t);
+    assert!(si < 1.4, "the IDM's free-road term falls short of accel: {si}");
     assert!(vi < vk - 0.3, "the IDM falls short of a·t: {vi} against {vk}");
 }
 

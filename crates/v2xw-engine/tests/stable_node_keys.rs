@@ -47,6 +47,9 @@ fn run(extra_rsus: usize) -> Out {
         .expect("the shipped scenario loads");
     let mut d = serde_json::to_value(&s).expect("serialises");
     d["time"]["duration_s"] = json!(40.0);
+    // The shipped attacker starts at 60 s, past this run's end, which validation refuses;
+    // the BSM sequences compared here are the honest vehicles' own.
+    d["threats"]["attackers"] = json!([]);
     // Two device classes, so the class draw (keyed by the node) is exercised.
     d["actors"]["vehicles"]["bsm_timing"] = json!({"enabled": true, "locked_share": 0.5});
     let first = d["actors"]["rsus"][0].clone();

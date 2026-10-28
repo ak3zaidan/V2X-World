@@ -140,15 +140,16 @@ fn no_std_transcendental_is_called() {
              platform-dependent; use v2xw_core::math",
         );
     }
-    // …and the two square roots the crate does take are the routed ones: the Wilson
-    // interval (stats.rs) and the Matthews correlation coefficient (detection.rs).
+    // …and the square roots the crate does take are the routed ones: the Wilson interval
+    // (stats.rs), the Matthews correlation coefficient (detection.rs) and the time to reach
+    // a conflict under constant braking (ssm.rs, WP-11's network mode: d = v·t + a·t²/2).
     let routed = hits("math::sqrt");
     let files: Vec<&str> = routed.iter().map(|(f, _, _)| f.as_str()).collect();
     assert_eq!(
         files,
-        ["detection.rs", "stats.rs"],
-        "expected exactly two v2xw_core::math::sqrt calls (MCC in detection.rs, the Wilson \
-         interval in stats.rs), found {}: {:?}",
+        ["detection.rs", "ssm.rs", "stats.rs"],
+        "expected exactly three v2xw_core::math::sqrt calls (MCC in detection.rs, the braking \
+         time to a conflict in ssm.rs, the Wilson interval in stats.rs), found {}: {:?}",
         routed.len(),
         routed
     );

@@ -75,10 +75,15 @@ fn a_roadside_unit_judges_the_first_frames_it_hears_in_the_current_period() {
         unit_psms > 0,
         "no unit judged a PSM, so this proves nothing"
     );
+    let invalid: Vec<serde_json::Value> = records(&rec, "node.verify")
+        .into_iter()
+        .filter(|v| v.to_string().contains("nvalid"))
+        .take(3)
+        .collect();
     assert_eq!(
         states.get("Invalid").copied().unwrap_or(0),
         0,
-        "honest frames judged Invalid"
+        "honest frames judged Invalid, e.g. {invalid:?}"
     );
 }
 

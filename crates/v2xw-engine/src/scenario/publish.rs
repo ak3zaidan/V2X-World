@@ -368,6 +368,9 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
 /// leaf publishes an empty unit, which is what it would publish without this list.
 #[cfg(test)]
 const DIMENSIONLESS: &[&str] = &[
+    // detect-fix3: the log-normal spread of a device's stated one-sigma accuracy (the sd of
+    // ln σ, a pure number; the median itself is `stated_sigma_m`).
+    "actors.vehicles.gnss.stated_sigma_log_sd",
     // P1-E5: the share of sync intervals a roadside unit leaves the safety channel in.
     "radio.devices.rsu.off_channel.probability",
     // The sensor suites (WP-14): the CPM sensorId, detection probabilities and the

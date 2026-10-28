@@ -573,7 +573,29 @@ fn a_roadside_unit_is_heard_by_both_vehicles_and_hears_them() {
         "rsu run: {by_type:?} attempts {} ok {}",
         report.reception_attempts, report.receptions_ok
     );
-    assert_eq!(report.reception_attempts, 2 * (40 + 22));
+    // SPaT at 10 Hz and MAP at 1 Hz (CTI 4501; infra.rs SPAT/MAP intervals), from the
+    // unit's first step: its generation phase is keyed by its node id, so how many 100 ms
+    // slots fit before the 2 s end depends on that draw (the unit became node
+    // ROADSIDE_ID_BASE on 2026-10-27, and sends 19 SPaT here). What must hold is the
+    // period and that no slot from the first SPaT to the end is skipped.
+    let mut spat_t: Vec<u64> = txs
+        .iter()
+        .filter(|t| t.msg_type.as_deref() == Some("spat"))
+        .map(|t| t.t)
+        .collect();
+    spat_t.sort_unstable();
+    let first = *spat_t.first().expect("the unit sends SPaT");
+    assert!(first < 200_000_000, "first SPaT at {first} ns");
+    // On-air instants carry the channel access delay (a few ms), so each SPaT is matched
+    // to its 100 ms slot from the first: the k-th lands in slot k, none skipped or doubled.
+    for (k, &t) in spat_t.iter().enumerate() {
+        let slot = ((t - first) as f64 / 1e8).round() as usize;
+        assert_eq!(slot, k, "SPaT period: {spat_t:?}");
+    }
+    let slots = (2_000_000_000 - first - 1) / 100_000_000 + 1;
+    assert_eq!(spat_t.len() as u64, slots, "every SPaT slot to the end: {spat_t:?}");
+    let unit_msgs = spat_t.len() + 2;
+    assert_eq!(report.reception_attempts, 2 * (40 + unit_msgs as u64));
     assert_eq!(report.receptions_ok, report.reception_attempts);
     let units: BTreeSet<_> = txs
         .iter()
@@ -588,8 +610,7 @@ fn a_roadside_unit_is_heard_by_both_vehicles_and_hears_them() {
         .map(|t| t.node)
         .collect();
     assert_eq!(cars.len(), 2);
-    // SPaT at 10 Hz and MAP at 1 Hz (CTI 4501; infra.rs SPAT/MAP intervals).
-    assert_eq!(by_type.get("spat"), Some(&20));
+    assert_eq!(by_type.get("spat"), Some(&spat_t.len()));
     assert_eq!(by_type.get("map"), Some(&2));
     for &car in &cars {
         let heard = rxs
@@ -597,7 +618,7 @@ fn a_roadside_unit_is_heard_by_both_vehicles_and_hears_them() {
             .filter(|r| r.rx == car && r.tx.is_some_and(|t| units.contains(&t)))
             .filter(|r| r.outcome == RxFate::Delivered)
             .count();
-        assert_eq!(heard, 22, "{car:?} heard {heard} of the unit's 22 messages");
+        assert_eq!(heard, unit_msgs, "{car:?} heard {heard} of the unit's {unit_msgs} messages");
     }
     let unit = *units.iter().next().unwrap();
     let at_unit = rxs
