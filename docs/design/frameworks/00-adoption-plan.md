@@ -841,6 +841,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
   - **Sensitivity sweep.** Its families now resolve a relative DEM path, as they already did a map path.
   - **Not done.** There are no rigid truck, bus or van power rows, because no single-unit weight-to-power figure has been read.
   - **Proposal for the owner.** `drape: true` wherever a scenario names a DEM: an undraped DEM gives the radio a hill the roads ignore. This moves only scenarios that carry a DEM.
+- WP-26 P26.1 (2026-10-28, no cargo): done. A measured DEM is in the repo: `worlds/dem/portland-downtown.asc`, 81 × 70 posts at 1 arc-second over the `portland` map box plus about 0.003°, cut unchanged from the AWS Terrain Tiles skadi tile `N45W123.hgt.gz` (public, no login; SHA-256 and the cut rows in `worlds/dem/portland-downtown.md`). Datum WGS84/EGM96 geoid, metres (Joerd `formats.md`); licence 3DEP public domain with the USGS attribution line (Joerd `attribution.md`); Joerd does not say whether SRTM or 3DEP fills a US skadi tile, so the provenance claims neither. Grades over the map's 49.8 km of OSM road (10 m chords, bridges and tunnels left out): 19.6 % of the length above 4 %, the steepest 40 m+ blocks 6.5-7.2 % on SW Columbia, Jefferson and Clay streets towards the West Hills, so the plan's site holds. Upgrade left: the 3DEP 1/3 arc-second GeoTIFF through an offline conversion.
 
 **WP-23 Import actuated and NEMA programmes from `net.xml`** (S, 2 days). Source: S-P4. After WP-17.
 - Files: `crates/v2xw-world/src/sumo.rs`.
