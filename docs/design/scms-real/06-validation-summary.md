@@ -1557,6 +1557,33 @@ Rows were judged by `matrix.py check --fill`. No engine code changed.
   - No harness (they need cargo tests, the `v2xw sensitivity --expect` sweep, or manual
     record reading): `scms-knobs.yaml`, `scms-realism.yaml` and `scms-effects.yaml`.
 
+**Fix round 3 rows and the skipped matrix runs on the `3cbc95a4` release (2026-10-27,
+run-only).** All runs used the release copy. Base and variant of each comparison ran on
+that one binary. No engine code changed.
+- **`scms-fix3-ra.yaml`:** 8 pending verdicts judged.
+  - 7 pass on their recorded values: RA.boundary-job, RA.boundary-metrics, D1.certs,
+    D1.form, D1.split, D1.metrics-unchanged and D1.cost. Their tests (`provider_runs` and
+    the architecture test) pass in the integration's test pass.
+  - D1.slow-aca-h2 stays open, and its earlier "direction holds" is withdrawn. A recorded
+    GSBH shows provider-b completing only 6 of 23 top-ups (17 still waiting when the run
+    ended). The cause is the 120 s weekly job, which puts 88 requests on the slow core
+    ACA (`provision.rs:164`, round-robin at `run/mod.rs:523`). The lower mean is therefore
+    censoring, not halving.
+- **`scms-fix3-ra.yaml` re-checks:** 11 runs repeated (F, F2, FS, FSL, FH, FH20, CF, CPF,
+  PQF, GSB, GSBH). All 12 one-binary rows still hold; F = F2 at `627456a687a4`.
+  - Baseline drift since the scmsra build is untraced: uu bytes per top-up 13,468 → 17,019
+    and backend bytes 1,720,133 → 2,025,879 on base.yaml.
+- **`scms-fix3-left.yaml`:** nothing pending. Its 11 rows were already judged on
+  `f4982788`, and none of them compares against a `938fb16a` run.
+- **Matrix and variants:**
+  - Re-run: M0 (244 MB), then `gnss-raw`/GRAW on the 1.2 GB slot (991 MB peak, 3,467 s).
+  - `raw-honest` (0 → 87), `RR.GRAW.implausible` (0) and `RR.GRAW.reports-up`
+    (19 → 122,054) pass, and each goes red under injection.
+  - FS40 (556 MB peak, 411 s) passes all 6 of its rows, each red under an injected
+    out-of-band value. `links-spurious` is 3,867, against 2,863 before.
+  - Found in passing: `M0-enforced` fails on this binary (147,490.9 s against
+    [147,500, 147,800]; 3 cases against 2). It is untraced and open.
+
 Done in the residual, clock and matrix wave (2026-10-25): the power-on CRL gate period,
 the 27 top-ups explained and counted (`topups_left_area`), provisioning cryptography on
 rayon (burst slice 93.0 → 43.2 s, byte-identical), the MaxAcceleration block closed
