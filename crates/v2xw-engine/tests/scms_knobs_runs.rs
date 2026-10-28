@@ -455,9 +455,15 @@ fn a_longer_download_wait_lengthens_a_late_topup() {
     assert!(n > 0, "no top-off completed in both runs");
     assert!(late > 0, "the slow ACA makes some top-offs late");
     let bound = 0.5 * late as f64 / n as f64 * (20_000.0 - 2_000.0) / 2.0;
-    assert!(mean > bound, "+{mean:.0} ms (bound +{bound:.0} ms for {late} late of {n})");
+    assert!(
+        mean > bound,
+        "+{mean:.0} ms (bound +{bound:.0} ms for {late} late of {n})"
+    );
     // A longer wait never brings a download earlier: the batch is ready at the same instant.
-    assert_eq!(earlier, 0, "a top-off finished earlier with the longer wait");
+    assert_eq!(
+        earlier, 0,
+        "a top-off finished earlier with the longer wait"
+    );
     // And a longer wait asks less often: fewer download requests per late top-off.
     let per = |p: &[usize]| {
         let late: Vec<_> = p.iter().filter(|n| **n > 1).collect();

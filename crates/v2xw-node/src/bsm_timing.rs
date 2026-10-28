@@ -343,7 +343,9 @@ impl TransitionStep {
     /// The (along, cross) step for two standard normals and two signs (u < 0.5 negative).
     fn draw(&self, za: f64, zc: f64, sa: f64, sc: f64) -> (f64, f64) {
         let ln = |p50: f64, p90: f64, z: f64| {
-            v2xw_core::math::exp(v2xw_core::math::ln(p50) + z * v2xw_core::math::ln(p90 / p50) / Z90)
+            v2xw_core::math::exp(
+                v2xw_core::math::ln(p50) + z * v2xw_core::math::ln(p90 / p50) / Z90,
+            )
         };
         let sign = |u: f64| if u < 0.5 { -1.0 } else { 1.0 };
         (
@@ -416,9 +418,8 @@ impl StampChain {
             ));
         }
         if let Some(s) = self.step {
-            let q = |p50: f64, p90: f64| {
-                p50.is_finite() && p50 > 0.0 && p90.is_finite() && p90 >= p50
-            };
+            let q =
+                |p50: f64, p90: f64| p50.is_finite() && p50 > 0.0 && p90.is_finite() && p90 >= p50;
             if !prob(s.prob_on_transition)
                 || !prob(s.prob_elsewhere)
                 || !q(s.along_p50_m, s.along_p90_m)
@@ -1094,14 +1095,12 @@ impl BsmTimingDevice {
         // (data/calibration/bsm-timing-cvpilot.yaml). The timestamp keeps its epoch; a slip
         // moves the position k fixes (later for k > 0).
         // A stamp chain leaves the position on the epoch: only the stamp moves.
-        let at_instant = if tick.is_none()
-            && c.phase_scope == PhaseScope::Message
-            && stamp_early.is_none()
-        {
-            (phase_ms * 1e6).round() as i128
-        } else {
-            0
-        };
+        let at_instant =
+            if tick.is_none() && c.phase_scope == PhaseScope::Message && stamp_early.is_none() {
+                (phase_ms * 1e6).round() as i128
+            } else {
+                0
+            };
         let pos_epoch = (i128::from(epoch)
             + i128::from(hop_ns)
             + at_instant
@@ -1615,7 +1614,10 @@ classes:
             let err = (rep.pos.x - b.pos.x, rep.pos.y - b.pos.y);
             let moved = (err.0 - prev_err.0).abs() > 1e-9 || (err.1 - prev_err.1).abs() > 1e-9;
             let transition = prev_early == Some(false) && early;
-            assert_eq!(moved, transition, "BSM {i}: a step off a 0 -> -1 transition");
+            assert_eq!(
+                moved, transition,
+                "BSM {i}: a step off a 0 -> -1 transition"
+            );
             if transition {
                 transitions += 1;
                 al.push((err.0 - prev_err.0).abs());
@@ -1629,13 +1631,32 @@ classes:
             v.sort_by(f64::total_cmp);
             v[(f * (v.len() - 1) as f64) as usize]
         };
-        assert!((q(&mut al, 0.5) - 0.079).abs() < 0.006, "along p50 {}", q(&mut al, 0.5));
-        assert!((q(&mut al, 0.9) - 0.174).abs() < 0.02, "along p90 {}", q(&mut al, 0.9));
-        assert!((q(&mut cr, 0.5) - 0.049).abs() < 0.005, "cross p50 {}", q(&mut cr, 0.5));
-        assert!((q(&mut cr, 0.9) - 0.124).abs() < 0.015, "cross p90 {}", q(&mut cr, 0.9));
+        assert!(
+            (q(&mut al, 0.5) - 0.079).abs() < 0.006,
+            "along p50 {}",
+            q(&mut al, 0.5)
+        );
+        assert!(
+            (q(&mut al, 0.9) - 0.174).abs() < 0.02,
+            "along p90 {}",
+            q(&mut al, 0.9)
+        );
+        assert!(
+            (q(&mut cr, 0.5) - 0.049).abs() < 0.005,
+            "cross p50 {}",
+            q(&mut cr, 0.5)
+        );
+        assert!(
+            (q(&mut cr, 0.9) - 0.124).abs() < 0.015,
+            "cross p90 {}",
+            q(&mut cr, 0.9)
+        );
         let mut no_walk = cal.clone();
         no_walk.classes[0].position_noise = None;
-        assert!(no_walk.check().is_err(), "steps without a walk to carry them");
+        assert!(
+            no_walk.check().is_err(),
+            "steps without a walk to carry them"
+        );
     }
 
     /// The chain's draws come from their own stream: a device with the chain (no steps)
@@ -1685,8 +1706,16 @@ classes:
             for (what, got, want) in [
                 ("stay_minus1", ch.stay_minus1, f("stay_minus1")),
                 ("stay_zero", ch.stay_zero, f("stay_zero")),
-                ("p_offset_minus1", ch.stationary_minus1(), f("p_offset_minus1")),
-                ("step_prob", s.prob_on_transition, f("step_prob_on_0_to_minus1")),
+                (
+                    "p_offset_minus1",
+                    ch.stationary_minus1(),
+                    f("p_offset_minus1"),
+                ),
+                (
+                    "step_prob",
+                    s.prob_on_transition,
+                    f("step_prob_on_0_to_minus1"),
+                ),
                 ("other", s.prob_elsewhere, f("other_pairs_over_5cm")),
                 ("along p50", s.along_p50_m, cm("step_along_cm", "p50")),
                 ("along p90", s.along_p90_m, cm("step_along_cm", "p90")),

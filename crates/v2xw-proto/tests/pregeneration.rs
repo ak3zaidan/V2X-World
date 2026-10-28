@@ -343,9 +343,7 @@ fn a_device_asking_while_its_week_is_generated_reads_the_jobs_planned_time() {
     let asked = WEEK_NS + 30_000_000_000;
     run.run_until(asked).expect("runs to the ask");
     assert!(
-        run.state.ra.accounts[&DEVICE_A]
-            .generated
-            .contains(&week),
+        run.state.ra.accounts[&DEVICE_A].generated.contains(&week),
         "the weekly job took A's account into its batch"
     );
     let ta = run.topup_at(DEVICE_A, asked, week, 1);
@@ -358,7 +356,10 @@ fn a_device_asking_while_its_week_is_generated_reads_the_jobs_planned_time() {
         .filter(|p| p.kind == SpduKind::EeRaDownloadRequest && p.from == dev && p.at >= asked)
         .map(|p| p.at)
         .collect();
-    assert!(sends.len() >= 2, "the .info request and a download: {sends:?}");
+    assert!(
+        sends.len() >= 2,
+        "the .info request and a download: {sends:?}"
+    );
     let wait = run.state.params.first_batch_delay.as_nanos();
     let planned = WEEK_NS + wait;
     assert!(
