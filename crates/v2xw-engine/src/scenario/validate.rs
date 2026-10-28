@@ -162,6 +162,64 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: true,
         what: "the run length",
     },
+    // WP-21: condition-triggered timeline items. Syntax, not physics: the bounds keep a
+    // clause meaningful (a TTC threshold of a minute is no longer a near miss).
+    Bound {
+        path: "events[].max_fires",
+        lo: 1.0,
+        hi: 1_000_000.0,
+        exclusive_lo: false,
+        what: "how many times the item may fire",
+    },
+    Bound {
+        path: "events[].cooldown_s",
+        lo: 0.0,
+        hi: f64::INFINITY,
+        exclusive_lo: false,
+        what: "the least time between two firings",
+    },
+    Bound {
+        path: "events[].when.ttc_s",
+        lo: 0.0,
+        hi: 60.0,
+        exclusive_lo: true,
+        what: "the time-to-collision threshold",
+    },
+    Bound {
+        path: "events[].when.of[].ttc_s",
+        lo: 0.0,
+        hi: 60.0,
+        exclusive_lo: true,
+        what: "the time-to-collision threshold",
+    },
+    Bound {
+        path: "events[].when.speed_diff_mps",
+        lo: 0.0,
+        hi: 100.0,
+        exclusive_lo: false,
+        what: "the closing speed",
+    },
+    Bound {
+        path: "events[].when.of[].speed_diff_mps",
+        lo: 0.0,
+        hi: 100.0,
+        exclusive_lo: false,
+        what: "the closing speed",
+    },
+    Bound {
+        path: "events[].when.p",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the probability per step",
+    },
+    Bound {
+        path: "events[].when.of[].p",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the probability per step",
+    },
     // ADR 0004 decision 2: below 10 ms no mobility provider is calibrated for the step,
     // and above 100 ms the constant-velocity extrapolation between steps stops being
     // accurate enough for frame-level radio.
@@ -2885,7 +2943,8 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                channel beside the safety channel (IEEE 1609.4-2016 §6.2.5 service \
                channels; SAE J2945/1 keeps the BSM on 172; ETSI EN 302 663 / TS 103 141 in \
                Europe). A unit sends and hears the service channel only with a second \
-               radio (radio.devices.*.radios: 2); a message for a channel it has no radio \
+               radio (radio.devices.*.radios: 2), or under net.channel_access: \
+               alternating in the SCH intervals; a message for a channel it has no radio \
                on is not sent (untuned_tx_drops). Each channel has its own EDCA queues, \
                carrier sense and busy ratio (channel_busy_ns / channel_window_ns in the \
                report). Empty, the default: the single-channel run, byte for byte.",
@@ -3005,7 +3064,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                generated. 'alternating': a single radio spends 50 ms of every 100 ms on the \
                control channel, less a 4 ms guard at each switch, so a BSM generated in \
                the service-channel interval waits for the next control-channel interval; \
-               the wait shows in the end-to-end latency.",
+               the wait shows in the end-to-end latency. The EDCA MAC holds the grant \
+               (WP-16): no frame starts in a guard or crosses its interval's end \
+               (mac_gate_deferrals, mac_guard_deferrals, straddling_frames = 0 in the \
+               report). A one-radio unit hears the safety channel only in CCH intervals \
+               and the service channel of radio.channels only in SCH intervals, and can \
+               send there; a two-radio unit (radio.devices.*.radios: 2, the roadside \
+               default) keeps one radio on each and never switches. At the abstract MAC \
+               tier and on a sidelink, which have no EDCA MAC, the hand-off waits \
+               instead. Interval lengths UNVERIFIED at the primary level.",
     },
     KeyStatus {
         path: "net.geonet",
@@ -3650,7 +3717,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "events",
         status: Status::Wired,
         note: "Every kind acts, at control priority so everything at that instant sees it, \
-               and writes a scenario.event record of what it did. weather.front: the \
+               and writes a scenario.event record of what it did. WP-21: an item with a \
+               when clause (ttc_below, in_polygon, speed_diff_above, probability, or one \
+               all/any of them) is armed at t and fires at the first mobility step the \
+               clause holds on ground truth, up to max_fires times (1) at least cooldown_s \
+               apart (0); a safety.* target may name what the clause bound (when.leader, \
+               when.follower, when.actor). weather.front: the \
                weather drivers and links see. outage: the node goes off. \
                demand.multiplier: the Poisson arrival rate is scaled (the candidate process \
                is sized to the timeline's peak). closure: the lanes of a lane, an edge or a \
@@ -7869,6 +7941,7 @@ fn timeline(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ));
         }
         live_timeline_item(s, i, item, e);
+        trigger_checks(i, item, e);
     }
     // One window per population: the threat crate's `AttackSchedule` carries a single
     // `[from, to)`, so a population two waves name has no schedule that is both.
@@ -7888,6 +7961,158 @@ fn timeline(s: &Scenario, e: &mut Vec<ScenarioError>) {
                     ),
                 ));
             }
+        }
+    }
+}
+
+/// WP-21: the rules of a condition-triggered item. `max_fires` and `cooldown_s` belong to
+/// a `when` item; every clause is in range and an area is a real polygon; a `target` that
+/// names a binding (`when.leader`, `when.follower`, `when.actor`) is on a safety kind and
+/// names one the clause always makes.
+fn trigger_checks(
+    i: usize,
+    item: &crate::scenario::schema::TimelineItem,
+    e: &mut Vec<ScenarioError>,
+) {
+    use crate::scenario::schema::Clause;
+    use crate::timeline::trigger::Role;
+    let field = format!("events[{i}]");
+    if item.when.is_none() {
+        for (key, set) in [
+            ("max_fires", item.max_fires.is_some()),
+            ("cooldown_s", item.cooldown_s.is_some()),
+        ] {
+            if set {
+                e.push(conflict(
+                    &format!("{field}.{key}"),
+                    "applies to an item with a when clause, and this one fires once at t"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    if let Some(n) = item.max_fires {
+        bounded_at(
+            "events[].max_fires",
+            &format!("{field}.max_fires"),
+            f64::from(n),
+            e,
+        );
+    }
+    if let Some(c) = item.cooldown_s {
+        bounded_at("events[].cooldown_s", &format!("{field}.cooldown_s"), c, e);
+    }
+    let role = item
+        .params
+        .get("target")
+        .and_then(Value::as_str)
+        .and_then(Role::parse);
+    let Some(when) = &item.when else {
+        if let Some(r) = role {
+            e.push(conflict(
+                &format!("{field}.target"),
+                format!(
+                    "is '{}', a binding of a when clause, and the item has no when clause",
+                    r.name()
+                ),
+            ));
+        }
+        return;
+    };
+    if item.kind == TimelineKind::AttackWave {
+        e.push(conflict(
+            &format!("{field}.when"),
+            "cannot trigger an attack.wave: the attacker populations' windows are fixed \
+             before the run starts (threat schedule), so give the wave a t and an until"
+                .to_string(),
+        ));
+    }
+    let (_, clauses) = when.clauses();
+    let composite = matches!(
+        when,
+        crate::scenario::schema::Condition::All { .. }
+            | crate::scenario::schema::Condition::Any { .. }
+    );
+    if composite && clauses.is_empty() {
+        e.push(conflict(
+            &format!("{field}.when.of"),
+            "names no clause; an empty all always holds and an empty any never does, so \
+             say what should fire the item"
+                .to_string(),
+        ));
+    }
+    for (k, c) in clauses.iter().enumerate() {
+        let (canon, at) = if composite {
+            ("events[].when.of[]", format!("{field}.when.of[{k}]"))
+        } else {
+            ("events[].when", format!("{field}.when"))
+        };
+        match c {
+            Clause::TtcBelow { ttc_s } => {
+                bounded_at(&format!("{canon}.ttc_s"), &format!("{at}.ttc_s"), *ttc_s, e);
+            }
+            Clause::SpeedDiffAbove { speed_diff_mps } => bounded_at(
+                &format!("{canon}.speed_diff_mps"),
+                &format!("{at}.speed_diff_mps"),
+                *speed_diff_mps,
+                e,
+            ),
+            Clause::Probability { p } => {
+                bounded_at(&format!("{canon}.p"), &format!("{at}.p"), *p, e);
+            }
+            Clause::InPolygon { points_m } => {
+                let finite = points_m.iter().flatten().all(|v| v.is_finite());
+                let n = points_m.len();
+                // The shoelace area: zero for a degenerate polygon (a line or a point).
+                let area = (0..n)
+                    .map(|j| {
+                        let [x0, y0] = points_m[j];
+                        let [x1, y1] = points_m[(j + 1) % n];
+                        x0 * y1 - x1 * y0
+                    })
+                    .sum::<f64>()
+                    / 2.0;
+                if n < 3 || !finite || area.abs() < 1e-6 {
+                    e.push(conflict(
+                        &format!("{at}.points_m"),
+                        format!(
+                            "has {n} corner(s){}, which encloses no area; give at least three \
+                             finite [x, y] corners in metres of the world's local frame (the \
+                             polygon closes itself)",
+                            if finite {
+                                ""
+                            } else {
+                                " and a non-finite value"
+                            }
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(r) = role {
+        if !matches!(
+            item.kind,
+            TimelineKind::HardBrake | TimelineKind::Breakdown | TimelineKind::CutIn
+        ) {
+            e.push(conflict(
+                &format!("{field}.target"),
+                format!(
+                    "is '{}'; only the safety.* kinds act on a vehicle a when clause binds",
+                    r.name()
+                ),
+            ));
+        } else if !when.always_binds(r) {
+            e.push(conflict(
+                &format!("{field}.target"),
+                format!(
+                    "is '{}', which this when clause does not always bind: ttc_below and \
+                     speed_diff_above bind when.leader and when.follower, in_polygon binds \
+                     when.actor; an all binds what any of its clauses binds, an any only \
+                     what every one does",
+                    r.name()
+                ),
+            ));
         }
     }
 }

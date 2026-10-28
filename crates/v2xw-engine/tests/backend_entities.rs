@@ -902,6 +902,9 @@ fn a_switched_off_vehicle_installs_no_list_a_unit_broadcasts() {
         t: from,
         until: Some(END),
         kind: TimelineKind::Outage,
+        when: None,
+        max_fires: None,
+        cooldown_s: None,
         params: [("target".to_string(), json!(node))].into_iter().collect(),
     });
     let (_, off_rec) = run(off);

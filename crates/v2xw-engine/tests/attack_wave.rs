@@ -43,6 +43,9 @@ fn wave(mut s: Scenario, from: f64, to: Option<f64>) -> Scenario {
         t: from,
         until: to,
         kind: TimelineKind::AttackWave,
+        when: None,
+        max_fires: None,
+        cooldown_s: None,
         params: [("ids".to_string(), json!([0]))].into_iter().collect(),
     }];
     s

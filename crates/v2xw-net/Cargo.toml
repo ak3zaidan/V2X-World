@@ -12,6 +12,9 @@ authors.workspace = true
 # The contract crate: SimTime/Duration, typed ids, deterministic math and quantisation,
 # model cards, the Model base trait, Ctx and Record.
 v2xw-core = { workspace = true }
+# The IEEE 1609.4 channel schedule lives in the radio crate, where the EDCA MAC gates
+# its grants on it (WP-16); `stack::wave` re-exports it under its old names.
+v2xw-radio = { workspace = true }
 # Crate error types.
 thiserror = { workspace = true }
 # Card payloads, parameter structs and the records this crate emits.

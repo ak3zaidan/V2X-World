@@ -44,7 +44,7 @@
 //! simulator this is compared against counts them (recorded on the card, since the
 //! standard defines the measurement on receive).
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use v2xw_core::card::{
@@ -62,6 +62,9 @@ use crate::traits::Mac;
 use crate::types::{
     AccessCategory, CcaState, ChannelId, DropCause, MacSdu, ResourceModel, TxGrant, TxHandle,
     timing,
+};
+use crate::wave_schedule::{
+    CCH_INTERVAL_MS, ChannelAccess, ChannelSchedule, GUARD_INTERVAL_MS, Interval,
 };
 
 /// The default queue depth per access category.
@@ -301,6 +304,122 @@ struct NodeState {
     /// Retransmissions. Zero for a run that only sends group-addressed frames, which is
     /// what `a_broadcast_frame_is_never_retransmitted` asserts.
     retransmissions: u64,
+    /// IEEE 1609.4 alternating access (WP-16): countdowns held because the radio was on
+    /// the other channel's interval, or its countdown ran into the interval end.
+    gate_deferrals: u64,
+    /// IEEE 1609.4 alternating access (WP-16): frames held because they would start in a
+    /// guard interval or cross the end of their channel's interval.
+    guard_deferrals: u64,
+}
+
+/// The IEEE 1609.4 alternating-access gate on EDCA grants (WP-16) [IEEE 1609.4-2016
+/// §6.2.5; constants UNVERIFIED].
+///
+/// A single-radio unit is on the control channel `cch` only in CCH intervals and on a
+/// service channel only in SCH intervals. A grant at `due` on a channel needs both
+/// (a) `due` inside that channel's interval, never a guard, and (b) `due + air` at or
+/// before the interval's end, Veins' `timeLeftInSlot` rule (behaviour reference only).
+/// When either fails the countdown is frozen, as on a busy medium, until the next start
+/// of that channel's interval, and AIFS is re-run from that instant. A frame is never
+/// dropped for this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlternatingGate {
+    /// The schedule; a `Continuous` one gates nothing.
+    pub sched: ChannelSchedule,
+    /// The channel that owns the CCH interval (the run's primary channel). Every other
+    /// channel owns the SCH interval.
+    pub cch: ChannelId,
+    /// The service channel a single radio tunes to in the SCH interval, if the run has one.
+    pub sch: Option<ChannelId>,
+}
+
+/// What the gate did to one countdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Deferral {
+    /// The radio was on the other channel, or the countdown ran into the interval end.
+    Gate,
+    /// The frame would have started in a guard or crossed the interval end.
+    Guard,
+}
+
+/// One gate step on an armed, running countdown whose head frame lasts `air` ns, or
+/// `None` when the countdown stands as it is.
+///
+/// With `now = Some(t)` a countdown that would run into the interval end is only moved
+/// once `t` has reached that point, so a busy medium in between still freezes it where
+/// it would have been. With `now = None` the step is taken regardless, which is how
+/// [`Mac::next_poll_at`] looks ahead on an idle medium.
+fn gate_step(
+    sched: &ChannelSchedule,
+    cch: bool,
+    b: &Backoff,
+    air: u64,
+    aifs: u64,
+    now: Option<SimTime>,
+) -> Option<(Backoff, Deferral)> {
+    let r = b.resume_at?;
+    let want = if cch { Interval::Cch } else { Interval::Sch };
+    let iv = sched.interval(r);
+    if iv != want {
+        // Tuned away (or in the guard): the countdown resumes one AIFS after the radio is
+        // back on this channel.
+        let next = sched.next_opportunity_ns(r, cch);
+        let kind = if iv == Interval::Guard {
+            Deferral::Guard
+        } else {
+            Deferral::Gate
+        };
+        return Some((
+            Backoff {
+                resume_at: Some(next + aifs),
+                ..*b
+            },
+            kind,
+        ));
+    }
+    let end = sched.interval_end_ns(r);
+    let start = end - (CCH_INTERVAL_MS - GUARD_INTERVAL_MS) * 1_000_000;
+    if r < start + aifs {
+        // The radio has been on this channel for less than an AIFS: it senses the medium
+        // for a whole AIFS from the switch before counting [EN 302 663 Annex C.4.2].
+        return Some((
+            Backoff {
+                resume_at: Some(start + aifs),
+                ..*b
+            },
+            Deferral::Gate,
+        ));
+    }
+    let slot = timing::SLOT_TIME.as_nanos();
+    let due = r + u64::from(b.remaining) * slot;
+    if due <= end && sched.fits(due, air, cch).is_ok() {
+        return None;
+    }
+    let reach = due.min(end);
+    if now.is_some_and(|t| t < reach) {
+        return None;
+    }
+    // Count the idle slots that elapsed inside the interval; the rest is owed after the
+    // next switch back, one AIFS after it.
+    let counted = if due <= end {
+        u64::from(b.remaining)
+    } else {
+        ((end - r) / slot).min(u64::from(b.remaining))
+    };
+    let next = sched.next_opportunity_ns(end, cch);
+    let kind = if due <= end {
+        Deferral::Guard
+    } else {
+        Deferral::Gate
+    };
+    Some((
+        Backoff {
+            remaining: b.remaining - counted as u32,
+            resume_at: Some(next + aifs),
+            ..*b
+        },
+        kind,
+    ))
 }
 
 /// The instant an armed backoff's countdown reaches zero, if it is running.
@@ -331,6 +450,10 @@ pub struct EdcaOcbMac {
     /// `AIFS` per access category, in the same order.
     aifs: [Duration; 4],
     nodes: BTreeMap<(u32, u16), NodeState>,
+    /// IEEE 1609.4 alternating access, when the run asks for it (WP-16).
+    gate: Option<AlternatingGate>,
+    /// Units with two radios: each radio stays on its channel, so the gate passes them.
+    two_radio: BTreeSet<u32>,
 }
 
 /// The EDCA parameter set of one access category (EN 302 663 Table C.4): what
@@ -375,7 +498,97 @@ impl EdcaOcbMac {
             cw_min: [0, 1, 2, 3].map(|i| ac_of_index(i).cw_min()),
             aifs: [0, 1, 2, 3].map(|i| ac_of_index(i).aifs()),
             nodes: BTreeMap::new(),
+            gate: None,
+            two_radio: BTreeSet::new(),
         }
+    }
+
+    /// The MAC with IEEE 1609.4 alternating access gating its grants (WP-16): see
+    /// [`AlternatingGate`]. A `Continuous` schedule leaves every grant as it was.
+    #[must_use]
+    pub fn with_alternating(
+        mut self,
+        sched: ChannelSchedule,
+        cch: ChannelId,
+        sch: Option<ChannelId>,
+    ) -> Self {
+        self.gate = Some(AlternatingGate { sched, cch, sch });
+        self
+    }
+
+    /// The gate in force, if any.
+    #[must_use]
+    pub fn alternating_gate(&self) -> Option<AlternatingGate> {
+        self.gate
+    }
+
+    /// Marks a unit as carrying two radios: radio 1 stays on the control channel and
+    /// radio 2 on the service channel, so the alternating gate does not hold its frames.
+    pub fn set_two_radios(&mut self, node: NodeId) {
+        self.two_radio.insert(node.index());
+    }
+
+    /// The schedule that gates `node`'s grants on `ch`, and whether `ch` owns the CCH
+    /// interval; `None` for continuous access or a two-radio unit.
+    fn gate_for(&self, node: NodeId, ch: ChannelId) -> Option<(ChannelSchedule, bool)> {
+        let g = self.gate?;
+        if g.sched.access == ChannelAccess::Continuous || self.two_radio.contains(&node.index()) {
+            return None;
+        }
+        Some((g.sched, ch == g.cch))
+    }
+
+    /// Takes every gate step due by `now` on `node`'s countdowns on `ch`, counting them.
+    fn gate_settle(&mut self, node: NodeId, ch: ChannelId, now: SimTime) {
+        let Some((sched, cch)) = self.gate_for(node, ch) else {
+            return;
+        };
+        let aifs = self.aifs;
+        let Some(state) = self.nodes.get_mut(&(node.index(), ch.0)) else {
+            return;
+        };
+        for i in 0..4 {
+            let air = state.queues[i]
+                .front()
+                .map_or(0, |s| air_time(s.frame.bytes, s.frame.mcs).as_nanos());
+            // Each step moves the countdown to a later interval, so a handful suffice;
+            // the bound only guards against a schedule that could never be met.
+            for _ in 0..8 {
+                let Some(b) = state.backoff[i] else { break };
+                let Some((nb, kind)) =
+                    gate_step(&sched, cch, &b, air, aifs[i].as_nanos(), Some(now))
+                else {
+                    break;
+                };
+                state.backoff[i] = Some(nb);
+                match kind {
+                    Deferral::Gate => state.gate_deferrals += 1,
+                    Deferral::Guard => state.guard_deferrals += 1,
+                }
+            }
+        }
+    }
+
+    /// Countdowns the alternating gate held on `ch` at `node` (WP-16): the radio was on
+    /// the other channel's interval, or the countdown ran into the interval end.
+    #[must_use]
+    pub fn gate_deferrals(&self, node: NodeId, ch: ChannelId) -> u64 {
+        self.state_ref(node, ch).map_or(0, |s| s.gate_deferrals)
+    }
+
+    /// Frames the alternating gate held on `ch` at `node` because they would start in a
+    /// guard interval or cross the end of their interval (WP-16).
+    #[must_use]
+    pub fn guard_deferrals(&self, node: NodeId, ch: ChannelId) -> u64 {
+        self.state_ref(node, ch).map_or(0, |s| s.guard_deferrals)
+    }
+
+    /// Both gate counters summed over every node and channel: `(gate, guard)`.
+    #[must_use]
+    pub fn total_gate_deferrals(&self) -> (u64, u64) {
+        self.nodes.values().fold((0, 0), |(g, d), s| {
+            (g + s.gate_deferrals, d + s.guard_deferrals)
+        })
     }
 
     /// The MAC with one access category's EDCA parameters replaced.
@@ -506,6 +719,7 @@ impl EdcaOcbMac {
     /// again"). The caller follows it with [`Mac::on_cca`]`(Busy)` as usual, which finds
     /// every countdown already frozen. A node already frozen is left alone.
     pub fn freeze_at(&mut self, node: NodeId, ch: ChannelId, since: SimTime) {
+        self.gate_settle(node, ch, since);
         let Some(state) = self.nodes.get_mut(&(node.index(), ch.0)) else {
             return;
         };
@@ -633,6 +847,11 @@ impl<C: Ctx + ?Sized> Mac<C> for EdcaOcbMac {
 
     fn on_cca(&mut self, ctx: &mut C, node: NodeId, ch: ChannelId, cca: CcaState) {
         let now = ctx.now();
+        if matches!(cca, CcaState::Busy { .. }) {
+            // A countdown the interval end has already stopped keeps only the slots it
+            // counted inside the interval (WP-16; a no-op without the gate).
+            self.gate_settle(node, ch, now);
+        }
         let aifs = self.aifs;
         let state = self.state(node, ch);
         match cca {
@@ -695,14 +914,33 @@ impl<C: Ctx + ?Sized> Mac<C> for EdcaOcbMac {
             // Every countdown is frozen; the next thing that happens is a CCA report.
             return None;
         }
+        let gate = self.gate_for(node, ch);
         (0..4)
             .filter(|&i| !state.queues[i].is_empty())
-            .filter_map(|i| state.backoff[i].and_then(|b| due_at(&b)))
+            .filter_map(|i| {
+                let mut b = state.backoff[i]?;
+                if let Some((sched, cch)) = gate {
+                    // Look ahead on an idle medium: where the gate puts the grant.
+                    let air = state.queues[i]
+                        .front()
+                        .map_or(0, |s| air_time(s.frame.bytes, s.frame.mcs).as_nanos());
+                    for _ in 0..8 {
+                        match gate_step(&sched, cch, &b, air, self.aifs[i].as_nanos(), None) {
+                            Some((nb, _)) => b = nb,
+                            None => break,
+                        }
+                    }
+                }
+                due_at(&b)
+            })
             .min()
     }
 
     fn poll(&mut self, ctx: &mut C, node: NodeId, ch: ChannelId) -> Option<TxGrant> {
         let now = ctx.now();
+        // IEEE 1609.4 (WP-16): move every countdown the schedule holds to where it may
+        // run; what is left eligible below starts in its interval and ends by its end.
+        self.gate_settle(node, ch, now);
         let state = self.nodes.get_mut(&(node.index(), ch.0))?;
         if state.busy {
             return None;
@@ -999,6 +1237,12 @@ fn edca_card() -> ModelCard {
          rather than one frame per enqueue. A grant is a causal event, so the draw count \
          follows the sequence of grants and not the engine's poll cadence."
             .to_string(),
+        "Under alternating access a countdown that the interval end or the other \
+         channel's interval stops is frozen as on a busy medium and resumes one AIFS \
+         after the next start of its channel's interval; a frame that would cross the \
+         interval end waits (Veins Mac1609_4 timeLeftInSlot, behaviour only). A frame is \
+         never dropped for this. A unit with two radios is not gated."
+            .to_string(),
         "The channel busy ratio is measured over the window ending at the instant the \
          caller asks for (Mac::cbr takes it), so a channel that falls silent decays to \
          zero rather than holding its last busy value."
@@ -1008,14 +1252,17 @@ fn edca_card() -> ModelCard {
         "No RTS/CTS (the Veins reference sets dot11RTSThreshold to 12,000 bit, which \
          disables it for any frame this simulator sends) and no retry limits."
             .to_string(),
-        "No IEEE 1609.4 channel switching: its constants are UNVERIFIED at the primary \
-         level (04-models.md §4.1) and the default is continuous CCH operation."
+        "IEEE 1609.4 alternating access (net.channel_access: alternating) gates grants on \
+         the 100/50/4 ms sync, CCH and guard intervals, whose values are UNVERIFIED at the \
+         primary level (04-models.md §4.1); the default is continuous operation. The \
+         interval boundaries are exact UTC multiples at every unit: no sync tolerance or \
+         clock error is modelled."
             .to_string(),
         "The queue is FIFO per access category with no ageing or preemption.".to_string(),
     ];
     card.ignores = vec![
         "Nothing relative to the slotted abstraction below it; relative to reality: \
-         chipset-specific deferral quirks and the 1609.4 guard interval."
+         chipset-specific deferral quirks."
             .to_string(),
     ];
     card.sources = vec![
@@ -1040,6 +1287,9 @@ fn edca_card() -> ModelCard {
             "a_queue_keeps_draining_across_a_busy_medium".to_string(),
             "a_channel_that_falls_silent_decays_to_zero".to_string(),
             "a_grant_is_at_the_slot_the_backoff_computed_not_at_the_poll".to_string(),
+            "alternating_gate_never_grants_into_a_guard".to_string(),
+            "continuous_gate_is_the_ungated_mac".to_string(),
+            "sch_frame_waits_for_the_sch_interval".to_string(),
         ],
     };
     card.determinism = Determinism {
@@ -2184,5 +2434,167 @@ mod tests {
                 "access delay is the AIFS and the backoff, with no deferral"
             );
         }
+    }
+
+    // ---- WP-16: IEEE 1609.4 alternating access in the MAC ----
+
+    const ALT: ChannelSchedule = ChannelSchedule {
+        access: ChannelAccess::Alternating,
+    };
+    const SCH: ChannelId = ChannelId::SCH1;
+
+    /// One grant as the gate tests compare them.
+    type Granted = (SimTime, u32, ChannelId, AccessCategory, u32);
+
+    /// Drives `mac` through `n` keyed-random enqueues on one node (sizes 50-1 400 B, both
+    /// channels, all four categories), reporting each own transmission to the MAC as a
+    /// busy medium on its channel, and polls exactly at `next_poll_at`. Returns every
+    /// grant in order.
+    fn drive(mac: &mut EdcaOcbMac, seed: u64, n: usize) -> Vec<Granted> {
+        let mut ctx = TestCtx::new(seed);
+        let node = NodeId::new(0);
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15 ^ seed;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let mut idles: Vec<(SimTime, ChannelId)> = Vec::new();
+        let mut out: Vec<Granted> = Vec::new();
+        let drain = |mac: &mut EdcaOcbMac,
+                     ctx: &mut TestCtx,
+                     idles: &mut Vec<(SimTime, ChannelId)>,
+                     out: &mut Vec<Granted>,
+                     until: SimTime| {
+            loop {
+                let polls = [CH, SCH].map(|c| (Mac::<TestCtx>::next_poll_at(mac, node, c), c));
+                let ev = polls
+                    .iter()
+                    .filter_map(|(t, _)| *t)
+                    .chain(idles.iter().map(|(t, _)| *t))
+                    .min();
+                let Some(ev) = ev.filter(|&e| e <= until) else {
+                    return;
+                };
+                ctx.set_now(ev);
+                if let Some(pos) = idles.iter().position(|(t, _)| *t == ev) {
+                    let (_, c) = idles.remove(pos);
+                    Mac::on_cca(mac, ctx, node, c, CcaState::Idle);
+                    continue;
+                }
+                for (t, c) in polls {
+                    if t != Some(ev) {
+                        continue;
+                    }
+                    let g = Mac::poll(mac, ctx, node, c).expect("next_poll_at promised a grant");
+                    assert_eq!(g.at, ev, "granted at the instant next_poll_at named");
+                    let air = air_time(g.sdu.frame.bytes, g.sdu.frame.mcs).as_nanos();
+                    out.push((g.at, g.sdu.frame.bytes, c, g.ac, g.backoff_slots));
+                    Mac::on_cca(mac, ctx, node, c, CcaState::Busy { energy_dbm: -60.0 });
+                    idles.push((g.at + air, c));
+                }
+            }
+        };
+        let mut t: SimTime = 0;
+        for k in 0..n {
+            let r = next();
+            t += r % 20_000_000;
+            drain(mac, &mut ctx, &mut idles, &mut out, t);
+            ctx.set_now(t);
+            let ch = if (r >> 50) & 1 == 0 { CH } else { SCH };
+            let mut s = sdu(50 + ((r >> 20) % 1_351) as u32, t);
+            s.frame.channel = ch;
+            s.frame.sdu_ref = SduRef::new(SduId::new(k as u32 + 1), FrameSeq::new(1));
+            let ac = ac_of_index(((r >> 40) % 4) as usize);
+            let _ = Mac::enqueue(mac, &mut ctx, node, s, ac);
+        }
+        drain(mac, &mut ctx, &mut idles, &mut out, t + 10_000_000_000);
+        out
+    }
+
+    #[test]
+    fn alternating_gate_never_grants_into_a_guard() {
+        let mut mac = EdcaOcbMac::new().with_alternating(ALT, CH, Some(SCH));
+        let grants = drive(&mut mac, 16, 10_000);
+        assert!(grants.len() > 9_900, "{} grants", grants.len());
+        for &(at, bytes, ch, _, _) in &grants {
+            let want = if ch == CH {
+                Interval::Cch
+            } else {
+                Interval::Sch
+            };
+            let air = air_time(bytes, Mcs::R6Qpsk12).as_nanos();
+            assert_eq!(ALT.interval(at), want, "grant at {at} ns on {ch:?}");
+            assert!(
+                at + air <= ALT.interval_end_ns(at),
+                "a {bytes} B frame at {at} ns straddles the interval end {}",
+                ALT.interval_end_ns(at)
+            );
+        }
+        let node = NodeId::new(0);
+        // Both kinds of hold happened, so the check above was exercised.
+        assert!(mac.gate_deferrals(node, CH) > 0 && mac.gate_deferrals(node, SCH) > 0);
+        assert!(mac.guard_deferrals(node, CH) > 0 && mac.guard_deferrals(node, SCH) > 0);
+        let (g, d) = mac.total_gate_deferrals();
+        assert_eq!(
+            (g, d),
+            (
+                mac.gate_deferrals(node, CH) + mac.gate_deferrals(node, SCH),
+                mac.guard_deferrals(node, CH) + mac.guard_deferrals(node, SCH)
+            )
+        );
+    }
+
+    #[test]
+    fn continuous_gate_is_the_ungated_mac() {
+        let continuous = ChannelSchedule {
+            access: ChannelAccess::Continuous,
+        };
+        let mut plain = EdcaOcbMac::new();
+        let mut gated = EdcaOcbMac::new().with_alternating(continuous, CH, Some(SCH));
+        let a = drive(&mut plain, 23, 3_000);
+        let b = drive(&mut gated, 23, 3_000);
+        assert_eq!(a, b, "a continuous schedule must not move a single grant");
+        assert_eq!(gated.total_gate_deferrals(), (0, 0));
+        // The script is one the alternating gate does change, so equality means something.
+        let mut alt = EdcaOcbMac::new().with_alternating(ALT, CH, Some(SCH));
+        assert_ne!(a, drive(&mut alt, 23, 3_000));
+        // A two-radio unit is not gated either.
+        let mut two = EdcaOcbMac::new().with_alternating(ALT, CH, Some(SCH));
+        two.set_two_radios(NodeId::new(0));
+        assert_eq!(a, drive(&mut two, 23, 3_000));
+    }
+
+    #[test]
+    fn sch_frame_waits_for_the_sch_interval() {
+        let mut ctx = TestCtx::new(31);
+        let mut mac = EdcaOcbMac::new().with_alternating(ALT, CH, Some(SCH));
+        let node = NodeId::new(0);
+        let t0 = 10_000_000;
+        ctx.set_now(t0);
+        for i in 0..3u32 {
+            let mut s = sdu(300 + i, t0);
+            s.frame.channel = SCH;
+            Mac::enqueue(&mut mac, &mut ctx, node, s, AccessCategory::Be).expect("queued");
+        }
+        Mac::enqueue(&mut mac, &mut ctx, node, sdu(400, t0), AccessCategory::Vo).expect("queued");
+        // The CCH frame goes now: the CCH interval runs from 4 to 50 ms.
+        let g = Mac::poll(&mut mac, &mut ctx, node, CH).expect("cch granted");
+        assert_eq!((g.at, g.sdu.frame.bytes), (t0, 400));
+        // Nothing on the SCH in the CCH interval.
+        assert!(Mac::poll(&mut mac, &mut ctx, node, SCH).is_none());
+        let first = Mac::<TestCtx>::next_poll_at(&mac, node, SCH).expect("armed");
+        assert_eq!(first, 54_000_000 + AccessCategory::Be.aifs().as_nanos());
+        let mut sizes = Vec::new();
+        while let Some(due) = Mac::<TestCtx>::next_poll_at(&mac, node, SCH) {
+            ctx.set_now(due);
+            let g = Mac::poll(&mut mac, &mut ctx, node, SCH).expect("granted");
+            assert!(g.at >= first && ALT.interval(g.at) == Interval::Sch);
+            sizes.push(g.sdu.frame.bytes);
+        }
+        assert_eq!(sizes, vec![300, 301, 302], "the queue keeps FIFO order");
+        assert!(mac.gate_deferrals(node, SCH) >= 1);
+        assert_eq!(mac.gate_deferrals(node, CH), 0);
     }
 }

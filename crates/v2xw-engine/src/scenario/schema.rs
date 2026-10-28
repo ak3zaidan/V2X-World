@@ -3815,9 +3815,92 @@ pub struct TimelineItem {
     /// What happens.
     #[serde(rename = "type")]
     pub kind: TimelineKind,
+    /// WP-21: the condition that fires it. Unset, the item fires at `t` as always; set,
+    /// it is armed at `t` and fires at the first mobility step at which the condition
+    /// holds on the run's ground truth (the scenario director's hand, not a node's view).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<Condition>,
+    /// WP-21: how many times a `when` item may fire. Unset is once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_fires: Option<u32>,
+    /// WP-21: the least time between two firings of a `when` item, seconds. Unset is 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_s: Option<f64>,
     /// Its parameters, in the shape the kind takes.
     #[serde(default, flatten)]
     pub params: BTreeMap<String, serde_json::Value>,
+}
+
+/// A timeline item's firing condition (WP-21), evaluated once per mobility step on the
+/// run's ground truth, actors visited in actor-id order.
+///
+/// Closed and tagged by `kind`. One level of `all`/`any` over the [`Clause`]s; a clause
+/// that names a pair binds `when.leader` and `when.follower`, one that names an area binds
+/// `when.actor`, and an effect's `target` may name the binding. The design reference is
+/// Artery's storyboard (behaviour only); the use is Euro NCAP-style scripted tests.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Condition {
+    /// A vehicle's time to collision with the vehicle ahead on its lane is below `ttc_s`
+    /// (gap over closing speed; binds the pair).
+    TtcBelow {
+        /// The threshold, seconds.
+        ttc_s: f64,
+    },
+    /// A vehicle is inside the polygon (binds it).
+    InPolygon {
+        /// The polygon's corners in the world's local frame, metres `[x, y]`; it closes
+        /// itself.
+        points_m: Vec<[f64; 2]>,
+    },
+    /// A vehicle closes on the vehicle ahead on its lane, within 100 m, faster than
+    /// `speed_diff_mps` (binds the pair).
+    SpeedDiffAbove {
+        /// The closing speed, m/s.
+        speed_diff_mps: f64,
+    },
+    /// A draw per step, keyed by the seed, the item and the step, holds with
+    /// probability `p`.
+    Probability {
+        /// The probability per mobility step.
+        p: f64,
+    },
+    /// Every clause holds for the same vehicle.
+    All {
+        /// The clauses.
+        of: Vec<Clause>,
+    },
+    /// At least one clause holds.
+    Any {
+        /// The clauses.
+        of: Vec<Clause>,
+    },
+}
+
+/// One clause of an `all` or `any` [`Condition`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Clause {
+    /// See [`Condition::TtcBelow`].
+    TtcBelow {
+        /// The threshold, seconds.
+        ttc_s: f64,
+    },
+    /// See [`Condition::InPolygon`].
+    InPolygon {
+        /// The polygon's corners, metres `[x, y]`.
+        points_m: Vec<[f64; 2]>,
+    },
+    /// See [`Condition::SpeedDiffAbove`].
+    SpeedDiffAbove {
+        /// The closing speed, m/s.
+        speed_diff_mps: f64,
+    },
+    /// See [`Condition::Probability`].
+    Probability {
+        /// The probability per mobility step.
+        p: f64,
+    },
 }
 
 /// The kinds of timeline item (03-interfaces.md §13).

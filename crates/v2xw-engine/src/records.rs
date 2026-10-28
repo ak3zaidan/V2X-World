@@ -215,6 +215,19 @@ pub struct ScenarioEventView {
     /// The vehicle a safety event (`safety.*`) acted on, by node id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<u32>,
+    /// WP-21: the vehicles the item's `when` clause bound when it fired, by actor id: an
+    /// area clause's vehicle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<u32>,
+    /// WP-21: a pair clause's vehicle ahead, by actor id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader: Option<u32>,
+    /// WP-21: a pair clause's follower, by actor id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follower: Option<u32>,
+    /// WP-21: which firing of a `when` item this is, from 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firing: Option<u32>,
 }
 
 impl ScenarioEventView {
@@ -235,6 +248,10 @@ impl ScenarioEventView {
             value: None,
             populations: Vec::new(),
             node: None,
+            actor: None,
+            leader: None,
+            follower: None,
+            firing: None,
         }
     }
 }

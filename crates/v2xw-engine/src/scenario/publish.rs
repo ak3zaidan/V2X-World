@@ -295,6 +295,8 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("security.threshold.umbrella_leaves", "pseudonyms"),
     ("events[].t", "s"),
     ("events[].until", "s"),
+    // WP-21: a count of firings.
+    ("events[].max_fires", "fires"),
     ("experiment.replications", "runs"),
     // An IEEE 802.11 channel number, `(f_c − 5000 MHz)/5`: a name, not a quantity.
     ("radio.channel", "channel number"),
@@ -368,6 +370,9 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
 /// leaf publishes an empty unit, which is what it would publish without this list.
 #[cfg(test)]
 const DIMENSIONLESS: &[&str] = &[
+    // WP-21: a when clause's probability per mobility step.
+    "events[].when.p",
+    "events[].when.of[].p",
     // detect-fix3: the log-normal spread of a device's stated one-sigma accuracy (the sd of
     // ln σ, a pure number; the median itself is `stated_sigma_m`).
     "actors.vehicles.gnss.stated_sigma_log_sd",

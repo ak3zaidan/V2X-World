@@ -15,96 +15,12 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Sync interval, ms [1609.4-2016 §6.2.5].
-pub const SYNC_INTERVAL_MS: u64 = 100;
-/// CCH interval, ms [1609.4-2016 §6.2.5].
-pub const CCH_INTERVAL_MS: u64 = 50;
-/// Guard interval, ms [1609.4-2016 §6.2.5: SyncTolerance/2 + MaxChSwitchTime].
-pub const GUARD_INTERVAL_MS: u64 = 4;
-/// The control channel number, 178 [IEEE 1609.4-2016; clause number not re-checked].
-pub const CCH_CHANNEL: u8 = 178;
-
-/// How a single-radio device uses its channels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ChannelAccess {
-    /// One channel all the time (the deployed J2945/1 profile).
-    Continuous,
-    /// Alternate CCH and SCH every 50 ms [1609.4].
-    Alternating,
-}
-
-/// Which interval a time falls in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Interval {
-    /// The CCH interval (after its guard).
-    Cch,
-    /// The SCH interval (after its guard).
-    Sch,
-    /// A guard interval: no transmission.
-    Guard,
-}
-
-/// The 1609.4 schedule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChannelSchedule {
-    /// The access mode.
-    pub access: ChannelAccess,
-}
-
-impl ChannelSchedule {
-    /// Which interval `t_ns` is in (the sync interval starts at multiples of 100 ms).
-    pub fn interval(&self, t_ns: u64) -> Interval {
-        let ms_in = (t_ns / 1_000) % (SYNC_INTERVAL_MS * 1_000);
-        let g = GUARD_INTERVAL_MS * 1_000;
-        let c = CCH_INTERVAL_MS * 1_000;
-        if ms_in < g || (ms_in >= c && ms_in < c + g) {
-            Interval::Guard
-        } else if ms_in < c {
-            Interval::Cch
-        } else {
-            Interval::Sch
-        }
-    }
-
-    /// The earliest time `>= t_ns` at which a frame for the CCH (`cch = true`) or the SCH
-    /// may start, ns.
-    pub fn next_opportunity_ns(&self, t_ns: u64, cch: bool) -> u64 {
-        if self.access == ChannelAccess::Continuous {
-            return t_ns;
-        }
-        let want = if cch { Interval::Cch } else { Interval::Sch };
-        if self.interval(t_ns) == want {
-            return t_ns;
-        }
-        let sync = SYNC_INTERVAL_MS * 1_000_000;
-        let base = t_ns - t_ns % sync;
-        let offset = if cch {
-            GUARD_INTERVAL_MS
-        } else {
-            CCH_INTERVAL_MS + GUARD_INTERVAL_MS
-        } * 1_000_000;
-        let cand = base + offset;
-        if cand >= t_ns { cand } else { cand + sync }
-    }
-
-    /// The access delay a frame generated at `t_ns` suffers, ns.
-    pub fn access_delay_ns(&self, t_ns: u64, cch: bool) -> u64 {
-        self.next_opportunity_ns(t_ns, cch) - t_ns
-    }
-
-    /// The fraction of time one channel can carry frames: 0.46 alternating (46 of every
-    /// 100 ms), 1.0 continuous.
-    pub fn usable_fraction(&self) -> f64 {
-        match self.access {
-            ChannelAccess::Continuous => 1.0,
-            ChannelAccess::Alternating => {
-                (CCH_INTERVAL_MS - GUARD_INTERVAL_MS) as f64 / SYNC_INTERVAL_MS as f64
-            }
-        }
-    }
-}
+// The 1609.4 schedule moved to `v2xw_radio::wave_schedule` (WP-16) so the EDCA MAC can
+// gate its grants on it; the names stay importable from here.
+pub use v2xw_radio::wave_schedule::{
+    CCH_CHANNEL, CCH_INTERVAL_MS, ChannelAccess, ChannelSchedule, GUARD_INTERVAL_MS, Interval,
+    SYNC_INTERVAL_MS,
+};
 
 /// One advertised service [1609.3-2020 §8.2.4, Provider Service Info].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

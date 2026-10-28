@@ -117,7 +117,7 @@ offered.
 | `radio.mac.cw_min_vo` / `cw_min_vi` **new** | 3 / 7 | 2^k - 1, from 1 to 1023 | Random back-off window (EN 302 663 Table C.4; IEEE 802.11-2020 §9.4.2.28). |
 | `radio.mac.aifsn_vo` / `aifsn_vi` **new** | 2 / 3 | 2 to 15 | `AIFS = AIFSN·13 µs + 32 µs`. |
 | `radio.mac.queue_length` **new** | 64 | 1 to 1024 frames | Per-category queue. A full queue drops (`mac_drops`). |
-| `net.channel_access` | `continuous` | `continuous`, `alternating` | IEEE 1609.4 channel switching. |
+| `net.channel_access` | `continuous` | `continuous`, `alternating` | IEEE 1609.4 channel switching. `alternating` gates the EDCA MAC (WP-16): a one-radio unit sends and hears the safety channel only in the CCH interval and the service channel only in the SCH interval; no frame starts in a 4 ms guard or crosses its interval's end (report `mac_gate_deferrals`, `mac_guard_deferrals`, `straddling_frames`). Two-radio units (`radio.devices.*.radios: 2`) do not switch. Interval lengths UNVERIFIED. |
 
 ## C-V2X sidelink (`radio.sidelink`, `radio.models.sidelink`)
 
@@ -266,6 +266,9 @@ holds those drivers.
 | `time.warmup_s` **new** | none | 0 to less than `duration_s` | Metric samples whose window ends inside it are not recorded (Law, *Simulation Modeling and Analysis*, 5th ed., §9.5.1). The run report's whole-run counters still count it. |
 | `time.metric_period_s` | 1 | 0.1 to 3600 s | Metric sampling interval. |
 | `time.mobility_step_ms` | 100 | 10 to 100 ms | Mobility step (ADR 0004). |
+| `events[].when` **new** (WP-21) | none | `ttc_below {ttc_s}` (0 to 60 s), `in_polygon {points_m}` (≥ 3 corners), `speed_diff_above {speed_diff_mps}` (0 to 100 m/s, leader within 100 m), `probability {p}` (0 to 1), or one `all`/`any` `{of: [...]}` of them | Condition-triggered item: armed at `t`, fires at the first mobility step the clause holds on ground truth (the scenario director's hand, not a detector). TTC is WP-11's gap over closing speed on the time grid. A `safety.*` `target` may be `when.leader`, `when.follower` (pair clauses) or `when.actor` (area). Probability draws are keyed by seed, item and step. Not on `attack.wave`. Design reference Artery's storyboard (behaviour only). |
+| `events[].max_fires` **new** | 1 | 1 to 10⁶ | Firings of a `when` item. |
+| `events[].cooldown_s` **new** | 0 | ≥ 0 s | Least time between two firings of a `when` item. |
 
 ## Not configurable yet
 

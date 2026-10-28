@@ -194,13 +194,33 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "GeoNetworking + BTP (ETSI, Europe)",
             "The European network and transport layers: 44 octets of headers on a CAM.",
         ),
+        ("events[].when.kind" | "events[].when.of[].kind", "ttc_below") => w(
+            "Time to collision below",
+            "A vehicle would reach the one ahead on its lane in under this many seconds at the present speeds.",
+        ),
+        ("events[].when.kind" | "events[].when.of[].kind", "in_polygon") => w(
+            "Vehicle inside an area",
+            "A vehicle is inside a polygon drawn in metres of the map's local frame.",
+        ),
+        ("events[].when.kind" | "events[].when.of[].kind", "speed_diff_above") => w(
+            "Closing speed above",
+            "A vehicle closes on the one ahead (within 100 m) faster than this.",
+        ),
+        ("events[].when.kind" | "events[].when.of[].kind", "probability") => w(
+            "Chance per step",
+            "A seeded draw at every traffic step: the same seed fires at the same steps.",
+        ),
+        ("events[].when.kind", "all") => {
+            w("All of", "Every listed clause holds for the same vehicle.")
+        }
+        ("events[].when.kind", "any") => w("Any of", "At least one listed clause holds."),
         ("net.channel_access", "continuous") => w(
             "Continuous (one channel)",
             "The deployed US profile: safety messages go out on one channel as soon as they are made.",
         ),
         ("net.channel_access", "alternating") => w(
             "Alternating (IEEE 1609.4)",
-            "One radio switches channel every 50 ms; a message made on the wrong half waits up to 54 ms.",
+            "One radio switches channel every 50 ms; a message made on the wrong half waits up to 54 ms, and one that would run into the 4 ms switch guard waits too.",
         ),
         ("net.geonet.forwarding", "on-air") => w(
             "On the air (recommended)",
@@ -1618,6 +1638,9 @@ pub fn title(path: &str) -> Option<&'static str> {
         "net.layer" => "Network layer",
         "net.geonet" => "Multi-hop hazard warnings",
         "net.channel_access" => "Channel switching",
+        "events[].when" => "Fires when",
+        "events[].max_fires" => "Fires at most",
+        "events[].cooldown_s" => "Least time between firings",
         "radio.phy" => "Radio receiver and data rate",
         "radio.phy.data_rate_mbps" => "Data rate (MCS)",
         "radio.phy.noise_figure_db" => "Receiver noise figure",
