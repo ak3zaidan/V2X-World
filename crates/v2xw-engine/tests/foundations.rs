@@ -1008,6 +1008,16 @@ fn a_vehicle_uses_a_roadside_unit_only_after_verifying_its_wsa() {
     assert!((150..=210).contains(&n), "{n} WSAs in 20 s at 100 ms");
     assert!(sch.phase2.topups_completed >= 1, "{:?}", sch.phase2);
     assert_eq!(sch_muted.phase2.topups_started, 0, "{:?}", sch_muted.phase2);
+    // P19.4: under sch the downloads ride TCP/TLS on the service-channel session
+    // (`RsuSchPath`), not the constant air link; under constant nothing does.
+    let (c, s) = (&constant.phase2.access.carrier, &sch.phase2.access.carrier);
+    println!(
+        "SCH carrier: constant {} offered; sch {} offered {} delivered {} failed",
+        c.sch_messages, s.sch_messages, s.sch_delivered, s.sch_failed
+    );
+    assert_eq!(c.sch_messages, 0);
+    assert!(s.sch_delivered > 0, "{s:?}");
+    assert!(s.tls_handshakes > 0, "a TLS session per binding: {s:?}");
 }
 
 /// Rule gap M11 (WP-19 P19.4): under `net.rsu_ip.air: sch` a relayed misbehaviour report

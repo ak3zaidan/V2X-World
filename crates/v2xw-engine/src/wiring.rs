@@ -2167,6 +2167,14 @@ impl CandidateRangePlan {
     /// property of the geometry and not of the transmit power a study varies.
     pub const REFERENCE_EIRP_DBM: f64 = 33.0;
 
+    /// The mean line-of-sight SNR, dB, of a transmission radiated at `eirp_dbm` and heard
+    /// `d_m` away with the run's best receive gain (WP-19: the service-channel loss
+    /// curve). Antennas at 1.5 m, as [`CandidateRangePlan::reach_m`] takes them.
+    pub fn los_snr_db(&self, eirp_dbm: f64, d_m: f64) -> f64 {
+        let loss = los_mean_loss_db(self.choice, self.env, d_m.max(1.0), self.f_hz, 1.5, 1.5);
+        eirp_dbm + self.rx_gain_db - loss - self.noise_floor_dbm
+    }
+
     /// The weakest arrival worth following, dBm: `N − margin`.
     pub fn floor_dbm(&self) -> f64 {
         self.noise_floor_dbm - self.margin_db

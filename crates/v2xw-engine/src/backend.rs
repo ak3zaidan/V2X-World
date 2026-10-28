@@ -37,6 +37,7 @@ use v2xw_radio::ip_transport::{
     BACKHAUL_DSL, BACKHAUL_FIBRE, BACKHAUL_MICROWAVE, PacketPath, TcpConfig, TcpConn,
     TransferReport, WiredLink, handshake as tcp_handshake, stream as tcp_stream,
 };
+use v2xw_radio::rsu_sch::RsuSchPath;
 
 use crate::ctx::EngineCtx;
 use crate::error::{EngineError, Result};
@@ -313,6 +314,9 @@ pub struct Carrier {
     session_max: Duration,
     rsu_lines: BTreeMap<NodeId, (Backhaul, WiredLink)>,
     relay_of: BTreeMap<NodeId, NodeId>,
+    /// Under `net.rsu_ip.air: sch` (WP-19 P19.4): each relayed vehicle's session on its
+    /// unit's service channel, and the TCP/TLS connection that rides it.
+    sch_sessions: BTreeMap<NodeId, (RsuSchPath, TcpConn)>,
     internet: Duration,
     air_latency: Duration,
     air_bps: u64,
@@ -350,6 +354,16 @@ pub struct CarrierStats {
     /// Messages that could not be carried after three attempts and were charged at the
     /// nominal link instead.
     pub fallbacks: u64,
+    /// Under `net.rsu_ip.air: sch`: kernel messages offered to a service-channel session.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub sch_messages: u64,
+    /// Those that arrived.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub sch_delivered: u64,
+    /// Those whose TCP connection gave up (the vehicle left coverage, or the SCH lost
+    /// too much): never delivered, because a PathOracle cannot report a loss.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub sch_failed: u64,
 }
 
 impl Carrier {
@@ -363,6 +377,7 @@ impl Carrier {
             session_max: TLS_SESSION_MAX,
             rsu_lines: BTreeMap::new(),
             relay_of: BTreeMap::new(),
+            sch_sessions: BTreeMap::new(),
             internet,
             air_latency: p.v2x_air_latency,
             air_bps: p.v2x_air_bandwidth_bps,
@@ -481,6 +496,70 @@ impl Carrier {
         Some(bh.delay(bytes).after(t))
     }
 
+    /// One message of a relayed vehicle under `net.rsu_ip.air: sch` (WP-19 P19.4): over its
+    /// TCP/TLS connection on the service-channel session ([`RsuSchPath`]) and its unit's
+    /// line. A connection that gives up is reopened at the next message; the message itself
+    /// never arrives ([`SCH_NEVER`]).
+    fn sch_carry(
+        &mut self,
+        node: NodeId,
+        rsu: NodeId,
+        dir: Direction,
+        bytes: u32,
+        at: SimTime,
+    ) -> SimTime {
+        let Carrier {
+            sch_sessions,
+            rsu_lines,
+            tcp,
+            stats,
+            ..
+        } = self;
+        stats.sch_messages += 1;
+        let (Some((path, conn)), Some((bh, line))) =
+            (sch_sessions.get_mut(&node), rsu_lines.get_mut(&rsu))
+        else {
+            stats.sch_failed += 1;
+            return SCH_NEVER;
+        };
+        if !bh.connected {
+            stats.sch_failed += 1;
+            return SCH_NEVER;
+        }
+        stats.backhaul_messages += 1;
+        stats.backhaul_line_bytes += u64::from(bytes);
+        let mut leg = SchLeg {
+            sch: path,
+            line,
+            rsu,
+        };
+        let mut r = TransferReport {
+            start: at,
+            ..TransferReport::default()
+        };
+        let mut t = Some(at);
+        if !conn.established {
+            stats.tcp_connections += 1;
+            t = tcp_handshake(&mut (), &mut leg, node, conn, tcp, at, &mut r);
+            if t.is_some() {
+                stats.tls_handshakes += 1;
+                stats.tls_handshake_bytes += r.bytes_ul + r.bytes_dl;
+            }
+        }
+        let done =
+            t.and_then(|t| tcp_stream(&mut (), &mut leg, node, conn, tcp, dir, bytes, t, &mut r));
+        stats.tcp_retransmissions += r.retransmissions;
+        stats.tcp_rtos += r.rtos;
+        if let Some(d) = done {
+            stats.sch_delivered += 1;
+            return d;
+        }
+        stats.sch_failed += 1;
+        stats.reconnects += 1;
+        *conn = TcpConn::new(tcp);
+        SCH_NEVER
+    }
+
     /// The sidelink hop between a relayed vehicle and its unit.
     fn air(&self, bytes: u32) -> Duration {
         Link {
@@ -535,6 +614,9 @@ impl Carrier {
             }
             Transport::RsuBackhaul => {
                 let rsu = *self.relay_of.get(&node)?;
+                if self.sch_sessions.contains_key(&node) {
+                    return Some(self.sch_carry(node, rsu, dir, bytes, at));
+                }
                 let air = self.air(bytes);
                 match dir {
                     Direction::Uplink => self.line_carry(rsu, dir, bytes, air.after(at)),
@@ -544,6 +626,45 @@ impl Carrier {
                 }
             }
             _ => None,
+        }
+    }
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// When a message whose service-channel session failed "arrives": past any run's end
+/// (about 146 years), so the flow it belongs to never completes. A
+/// [`v2xw_proto::net::PathOracle`] answers an arrival time and cannot report a loss.
+pub const SCH_NEVER: SimTime = u64::MAX / 4;
+
+/// A vehicle's service-channel session and its unit's backhaul line, as one path: uplink
+/// the SCH hop then the line, downlink the line then the SCH hop.
+struct SchLeg<'a> {
+    sch: &'a mut RsuSchPath,
+    line: &'a mut WiredLink,
+    rsu: NodeId,
+}
+
+impl<C: ?Sized> PacketPath<C> for SchLeg<'_> {
+    fn deliver(
+        &mut self,
+        ctx: &mut C,
+        ue: NodeId,
+        dir: Direction,
+        at: SimTime,
+        bytes: u32,
+    ) -> Option<SimTime> {
+        match dir {
+            Direction::Uplink => {
+                let t = PacketPath::<C>::deliver(self.sch, ctx, ue, dir, at, bytes)?;
+                PacketPath::<C>::deliver(self.line, ctx, self.rsu, dir, t, bytes)
+            }
+            Direction::Downlink => {
+                let t = PacketPath::<C>::deliver(self.line, ctx, self.rsu, dir, at, bytes)?;
+                PacketPath::<C>::deliver(self.sch, ctx, ue, dir, t, bytes)
+            }
         }
     }
 }
@@ -981,7 +1102,18 @@ impl BackendAccess {
 
     /// Notes that vehicle `node`'s next relayed flow goes through unit `rsu`.
     pub fn bind_relay(&mut self, node: NodeId, rsu: NodeId) {
-        self.carrier().relay_of.insert(node, rsu);
+        let mut c = self.carrier();
+        c.relay_of.insert(node, rsu);
+        c.sch_sessions.remove(&node);
+    }
+
+    /// [`BackendAccess::bind_relay`] under `net.rsu_ip.air: sch` (WP-19 P19.4): the flow
+    /// rides `session`, a new service-channel session with its own TCP/TLS connection.
+    pub fn bind_relay_sch(&mut self, node: NodeId, rsu: NodeId, session: RsuSchPath) {
+        let mut c = self.carrier();
+        c.relay_of.insert(node, rsu);
+        let conn = TcpConn::new(&c.tcp);
+        c.sch_sessions.insert(node, (session, conn));
     }
 
     /// One message over unit `rsu`'s backhaul offered at `at`: its arrival, or `None`

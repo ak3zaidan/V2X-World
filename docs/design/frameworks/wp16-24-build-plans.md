@@ -1022,6 +1022,10 @@ changes G-SCMS by design. Re-bless only those cases, and list them.
   `transport/80211p-sch`, 6 unit tests). See the adoption plan's P19.3 note.
 - **P19.4** (3 h): wiring in `backend.rs` `carry`; downloads, CRL and reports moved to
   the SCH; settings and units.
+  **P19.4 built, 2026-10-28:** M11 (`mbr` on the service channel under `sch`) and the
+  download sessions (`Carrier::sch_carry`, TCP/TLS over `RsuSchPath` + the unit's line).
+  The two accept tests are transport-level (`rsu_sch.rs`); a failed transfer is not
+  retried at the next contact yet. See the adoption plan's P19.4 notes.
 - **P19.5** (3 h): `tests/rsu_sch.rs`, the expectation rows, the faults, and
   `scms-real/06-validation-summary.md` rows M11 and U5 updated.
 

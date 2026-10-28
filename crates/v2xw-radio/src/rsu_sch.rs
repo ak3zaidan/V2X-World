@@ -22,7 +22,10 @@
 //!    SCH only inside an SCH interval and never across its end
 //!    ([`ChannelSchedule::fits`], WP-16); a frame that does not fit waits for the next SCH
 //!    interval and runs AIFS again.
-//! 4. **Loss.** The packet error rate at the extrapolated distance, from the link budget
+//! 4. **One medium.** The session's frames, both directions, are sent one after another
+//!    (802.11 is half-duplex on one channel): a TCP window of segments takes its air time,
+//!    not one segment's.
+//! 5. **Loss.** The packet error rate at the extrapolated distance, from the link budget
 //!    at the SCH power and MCS ([`RsuSchPath::per_curve`], a reference-size curve the
 //!    engine computes, scaled to the frame's length as `1 − (1 − p)^(L / L_ref)`), drawn
 //!    with a keyed stream (`RngDomain::plugin(ID)`, one word per offered packet), so a
@@ -88,6 +91,9 @@ pub struct RsuSchPath {
     pub seed: u64,
     /// Packets offered so far: the loss draw's word position.
     pub offered: u64,
+    /// When the session's last frame left the air. The channel is one half-duplex
+    /// medium, so the session's frames, both directions, go one after another.
+    pub free_at: SimTime,
     /// Packets lost to leaving coverage.
     pub lost_contact: u64,
     /// Packets lost to the PER draw.
@@ -123,6 +129,7 @@ impl RsuSchPath {
             framing_bytes: SCH_FRAMING_BYTES,
             seed,
             offered: 0,
+            free_at: 0,
             lost_contact: 0,
             lost_per: 0,
         }
@@ -202,7 +209,7 @@ impl<C: ?Sized> PacketPath<C> for RsuSchPath {
         let frame = bytes.saturating_add(self.framing_bytes);
         let air = crate::phy::air_time(frame, self.mcs);
         let u = self.draw(ue);
-        let mut t = self.access_delay(air).after(at);
+        let mut t = self.access_delay(air).after(at.max(self.free_at));
         // 1609.4: on the SCH only inside its interval and never across the end (WP-16).
         let mut guard = 0;
         while let Err(next) = self.schedule.fits(t, air.as_nanos(), false) {
@@ -213,6 +220,7 @@ impl<C: ?Sized> PacketPath<C> for RsuSchPath {
             }
         }
         let end = air.after(t);
+        self.free_at = end;
         let d = self.distance_at(end);
         if d > self.range_m {
             self.lost_contact += 1;
@@ -399,6 +407,53 @@ mod tests {
         );
         assert!((p.per(200.0, 1_500) - 0.425).abs() < 1e-12);
         assert_eq!(p.per(500.0, 1_500), 0.8);
+    }
+
+    /// The share of HTTPS downloads of `body` octets that finish, out of 40 vehicles
+    /// passing the unit 10 m off its mast at `speed` m/s, each starting at an even step
+    /// along the 600 m it is in range, over TCP/TLS 1.3 (`ip_transport::https_exchange`).
+    fn completed(speed: f64, cbr: f64, body: u32) -> usize {
+        use crate::ip_transport::{TcpConfig, TcpConn, https_exchange};
+        let cfg = TcpConfig::default();
+        (0..40)
+            .filter(|k| {
+                let x0 = -295.0 + f64::from(*k) * 15.0;
+                let mut p = RsuSchPath::new(0, [x0, 10.0], [speed, 0.0], [0.0, 0.0], 300.0, 5);
+                p.cbr = cbr;
+                let mut conn = TcpConn::new(&cfg);
+                https_exchange(&mut (), &mut p, UE, &mut conn, &cfg, 0, 300, body)
+                    .done_at
+                    .is_some()
+            })
+            .count()
+    }
+
+    /// WP-19 accept: download success rises with contact time. At 5, 10, 20 and 30 m/s a
+    /// 4 MB download completes for fewer and fewer of the passes, because the faster
+    /// vehicle leaves the 300 m cell before the transfer ends (FHWA-JPO-20-804 p. 4).
+    #[test]
+    fn download_success_falls_with_speed() {
+        let shares: Vec<usize> = [5.0, 10.0, 20.0, 30.0]
+            .into_iter()
+            .map(|v| completed(v, 0.0, 4_000_000))
+            .collect();
+        println!("SCH speed shares {shares:?} of 40");
+        assert!(shares.windows(2).all(|w| w[0] >= w[1]), "{shares:?}");
+        assert!(shares[3] + 4 <= shares[0], "{shares:?}");
+    }
+
+    /// WP-19 accept: download success falls with SCH load. At busy ratios 0.1, 0.3 and 0.5
+    /// each frame waits longer for the channel, the transfer takes longer, and fewer passes
+    /// at 20 m/s finish in range.
+    #[test]
+    fn download_success_falls_with_sch_load() {
+        let shares: Vec<usize> = [0.1, 0.3, 0.5]
+            .into_iter()
+            .map(|cbr| completed(20.0, cbr, 4_000_000))
+            .collect();
+        println!("SCH load shares {shares:?} of 40");
+        assert!(shares.windows(2).all(|w| w[0] >= w[1]), "{shares:?}");
+        assert!(shares[2] + 3 <= shares[0], "{shares:?}");
     }
 
     #[test]

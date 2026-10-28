@@ -833,6 +833,23 @@ trustworthy or comparable; later waves add behaviours and radio features.
   six two-radio vehicles, one attacker, 174 as service channel: 241 report frames on 172
   under `constant`, 228 on 174 and none on 172 under `sch`, 79 vs 83 reports relayed.
   Default unchanged.
+- P19.4 part 2, downloads (2026-10-28, branch only): under `sch`, binding a relayed vehicle
+  (top-up, re-enrolment, trust fetch) opens a service-channel session
+  (`Engine::sch_session` -> `BackendAccess::bind_relay_sch`): the vehicle's position and
+  velocity at bind (the contact window is a physical law), the mast, the unit's measured
+  CBR on the service channel, alternating access for a one-radio unit, and the run's loss
+  curve (`attach_wsa_providers`: PER of a 1 536-octet frame at the safety MCS against
+  `CandidateRangePlan::los_snr_db` of the RSU's EIRP, every 5 m to 1 km; range = farthest
+  point under 99 %). `Carrier::sch_carry` runs each kernel message over a TCP/TLS 1.3
+  connection on `SchLeg` (the SCH session, then the unit's wired line). The session's
+  frames share one half-duplex medium (`RsuSchPath::free_at`). A connection that gives up
+  is reopened at the next message, and the message never arrives (`SCH_NEVER`), because a
+  `PathOracle` answers an arrival time and cannot report a loss. **Open:** the top-up then
+  stays in flight; a real OBU retries at its next contact (RSU Spec v4.1 §2.2). New
+  carrier counters `sch_messages`, `sch_delivered`, `sch_failed` (serialised only when
+  non-zero). Transport tests `rsu_sch::download_success_falls_with_speed` (40 passes at
+  5/10/20/30 m/s, 4 MB: 38, 36, 31, 27 complete) and `download_success_falls_with_sch_load`
+  (CBR 0.1/0.3/0.5 at 20 m/s: 30, 28, 23). Default byte-identical.
 
 **WP-20 Traffic yields to emergency vehicles** (M, 5 days). Source: S-P5.
 - Scope: within a reaction distance civilians pull to the kerb or slow (US move-over, UVC

@@ -1345,6 +1345,9 @@ pub struct Engine {
     /// Under `net.rsu_ip.air: sch` (WP-19 P19.2), each relaying unit by the /64 prefix
     /// its WAVE Routing Advertisement gives: how a vehicle's learned router names a unit.
     wsa_routers: BTreeMap<[u8; 8], NodeId>,
+    /// Under `net.rsu_ip.air: sch` (WP-19 P19.4), the service-channel session every relayed
+    /// download starts from: the loss curve and range of the run's link budget.
+    sch_template: Option<v2xw_radio::rsu_sch::RsuSchPath>,
     /// Which nodes are dormant this step, when `scale` declares a microscopic box
     /// ([`crate::scale::RadioGate`]).
     radio_gate: Option<crate::scale::RadioGate>,
@@ -1921,6 +1924,7 @@ impl Engine {
             node_wake: BTreeMap::new(),
             infra_feeds: BTreeMap::new(),
             wsa_routers: BTreeMap::new(),
+            sch_template: None,
             radio_gate: None,
             deferred_nodes: BTreeSet::new(),
             report: RunReport::default(),
@@ -2642,6 +2646,42 @@ impl Engine {
             .as_ref()
             .and_then(|p| p.service)
             .map_or(174, |c| u8::try_from(c.0).unwrap_or(174));
+        // The service-channel hop's loss curve (WP-19 P19.4): the PER of a 1 500-octet IP
+        // packet in its 802.11 frame at the safety MCS, against the mean line-of-sight SNR
+        // of the unit's radiated power, every 5 m to 1 km; the range is the farthest point
+        // below 99 % PER.
+        let mcs = crate::wiring::safety_mcs(&self.scenario);
+        let phy = crate::wiring::build_phy(&self.scenario);
+        let eirp =
+            crate::wiring::device_for(&self.scenario, v2xw_radio::ActorClass::Rsu).max_eirp_dbm();
+        let frame = 1_500 + v2xw_radio::rsu_sch::SCH_FRAMING_BYTES;
+        let curve: Vec<(f64, f64)> = (1..=200)
+            .map(|k| {
+                let d = f64::from(k) * 5.0;
+                (
+                    d,
+                    phy.per_model()
+                        .per(frame, mcs, self.range.los_snr_db(eirp, d)),
+                )
+            })
+            .collect();
+        let range_m = curve
+            .iter()
+            .filter(|(_, p)| *p < 0.99)
+            .map(|(d, _)| *d)
+            .fold(5.0, f64::max);
+        let mut template = v2xw_radio::rsu_sch::RsuSchPath::new(
+            0,
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [0.0, 0.0],
+            range_m,
+            self.scenario.seed,
+        );
+        template.per_curve = curve;
+        template.per_ref_bytes = frame;
+        template.mcs = mcs;
+        self.sch_template = Some(template);
         let origin: v2xw_core::geo::GeoOrigin = self.world.origin.into();
         for (i, node, mast) in units {
             let (lat, lon, alt) = origin.to_geodetic(mast);
@@ -2674,6 +2714,41 @@ impl Engine {
                 self.wsa_routers.insert(prefix8, node);
             }
         }
+    }
+
+    /// A new service-channel session of vehicle `node` with unit `rsu` at `now` (WP-19
+    /// P19.4), under `net.rsu_ip.air: sch`: the vehicle's position and velocity now (a
+    /// physical law: the contact window is the vehicle's real motion), the unit's mast, the
+    /// busy ratio the unit measures on the service channel, and alternating access for a
+    /// one-radio unit.
+    fn sch_session(
+        &self,
+        node: NodeId,
+        rsu: NodeId,
+        now: SimTime,
+    ) -> Option<v2xw_radio::rsu_sch::RsuSchPath> {
+        let mut s = self.sch_template.clone()?;
+        let k = self.actor_of(node)?.last;
+        let mast = self.rsus.get(&rsu).copied()?;
+        let ch = self
+            .channel_plan
+            .as_ref()
+            .and_then(|p| p.service)
+            .unwrap_or(self.dsrc_channel);
+        s.start = now;
+        s.vehicle_m = [k.pos.x, k.pos.y];
+        s.velocity_mps = [k.vel.x, k.vel.y];
+        s.rsu_m = [mast.x, mast.y];
+        s.cbr = self
+            .mac
+            .as_ref()
+            .map_or(0.0, |m| Mac::<EngineCtx<'_>>::cbr(m, rsu, ch, now));
+        if self.alternates(node) {
+            s.schedule = v2xw_radio::wave_schedule::ChannelSchedule {
+                access: v2xw_radio::wave_schedule::ChannelAccess::Alternating,
+            };
+        }
+        Some(s)
     }
 
     /// Under `net.rsu_ip.air: sch`, the relaying units `node` may use now: those whose
@@ -9587,6 +9662,16 @@ impl Engine {
                 None
             };
             let among = self.wsa_units(node, now);
+            let session = among
+                .as_ref()
+                .and_then(|_| {
+                    self.phase2.as_ref()?.relay_in_range_among(
+                        pos,
+                        "provisioning-proxy",
+                        among.as_deref(),
+                    )
+                })
+                .and_then(|u| Some((u, self.sch_session(node, u, now)?)));
             let Some(p) = self.phase2.as_mut() else { break };
             let link = match kind {
                 crate::backend::AccessKind::Cellular => {
@@ -9600,7 +9685,10 @@ impl Engine {
                     let unit = p.relay_in_range_among(pos, "provisioning-proxy", among.as_deref());
                     let backhaul = unit.and_then(|u| p.rsu_spec_of(u).map(|s| s.backhaul));
                     if let Some(u) = unit {
-                        p.access_mut().bind_relay(node, u);
+                        match session {
+                            Some((su, s)) if su == u => p.access_mut().bind_relay_sch(node, u, s),
+                            _ => p.access_mut().bind_relay(node, u),
+                        }
                     }
                     p.access_mut().nominal_link(kind, backhaul)
                 }
@@ -9625,6 +9713,16 @@ impl Engine {
                 None
             };
             let among = self.wsa_units(node, now);
+            let session = among
+                .as_ref()
+                .and_then(|_| {
+                    self.phase2.as_ref()?.relay_in_range_among(
+                        pos,
+                        "provisioning-proxy",
+                        among.as_deref(),
+                    )
+                })
+                .and_then(|u| Some((u, self.sch_session(node, u, now)?)));
             let Some(p) = self.phase2.as_mut() else { break };
             let link = match kind {
                 crate::backend::AccessKind::Cellular => {
@@ -9638,7 +9736,10 @@ impl Engine {
                     let unit = p.relay_in_range_among(pos, "provisioning-proxy", among.as_deref());
                     let backhaul = unit.and_then(|u| p.rsu_spec_of(u).map(|s| s.backhaul));
                     if let Some(u) = unit {
-                        p.access_mut().bind_relay(node, u);
+                        match session {
+                            Some((su, s)) if su == u => p.access_mut().bind_relay_sch(node, u, s),
+                            _ => p.access_mut().bind_relay(node, u),
+                        }
                     }
                     p.access_mut().nominal_link(kind, backhaul)
                 }
@@ -9664,6 +9765,16 @@ impl Engine {
                 None
             };
             let among = self.wsa_units(node, now);
+            let session = among
+                .as_ref()
+                .and_then(|_| {
+                    self.phase2.as_ref()?.relay_in_range_among(
+                        pos,
+                        "provisioning-proxy",
+                        among.as_deref(),
+                    )
+                })
+                .and_then(|u| Some((u, self.sch_session(node, u, now)?)));
             let Some(p) = self.phase2.as_mut() else { break };
             let link = match kind {
                 crate::backend::AccessKind::Cellular => {
@@ -9677,7 +9788,10 @@ impl Engine {
                     let unit = p.relay_in_range_among(pos, "provisioning-proxy", among.as_deref());
                     let backhaul = unit.and_then(|u| p.rsu_spec_of(u).map(|s| s.backhaul));
                     if let Some(u) = unit {
-                        p.access_mut().bind_relay(node, u);
+                        match session {
+                            Some((su, s)) if su == u => p.access_mut().bind_relay_sch(node, u, s),
+                            _ => p.access_mut().bind_relay(node, u),
+                        }
                     }
                     p.access_mut().nominal_link(kind, backhaul)
                 }

@@ -3269,8 +3269,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                Advertisement; v2xw_msg::wsa), and a vehicle binds to a unit only while it \
                holds a verified WSA from it no older than 1 s. A relayed misbehaviour \
                report goes on the radio.channels service channel when the run has one \
-               (rule gap M11; a one-radio unit then needs alternating access). The air hop \
-               of downloads is still the constant link: the service-channel path (contact window, PER, SCH load) \
+               (rule gap M11; a one-radio unit then needs alternating access). Downloads \
+               (top-up, re-enrolment, trust fetch) ride TCP/TLS on a service-channel \
+               session (transport/80211p-sch: the vehicle's contact window, EDCA AC_BE on \
+               the unit's measured CBR, 1609.4 intervals, link-budget loss) and the unit's \
+               line; a transfer that fails never completes and is not retried at the next \
+               contact (open). Under constant the air hop is the fixed link: the service-channel path (contact window, PER, SCH load) \
                is P19.3-P19.4.",
     },
     KeyStatus {
