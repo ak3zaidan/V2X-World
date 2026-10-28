@@ -87,7 +87,8 @@ rows:
     receivers near the centre, so frames there are lost to `adjacent-channel`; with no
     emitter or an 80 dB ACIR (leak under the -98 dBm floor beyond a few metres) none is
   source: ETSI EN 302 571 V2.1.1 (mask) and the 6 Mbit/s adjacent-channel rejection (regulation.rs adjacent_acir_db); radio_channel an_adjacent_channel_transmitter_leaks_in_by_its_acir
-  measured: pending
+  measured: "adjacent-channel losses: EUB 0, EUE 13,936, EUE80 0"
+  verdict: pass
 - id: R5.EMITTER.CBR
   run: EUE vs EUB
   metric: live-window mean CBR on 180 (radiofix3.py cbr["180"].mean)
@@ -99,7 +100,8 @@ rows:
     along the streets from the centre). Its CBR reads near 1 there, and the run's mean rises
     by the share of unit-time inside that area (a fifth to a third of the grid)
   source: ETSI EN 302 571 V2.1.1 §4.2.10.1; ETSI TS 102 687 §4.2; the leak-in-CBR rule (Engine::leak_busy_dbm)
-  measured: pending
+  measured: "mean CBR on 180 0.02747 -> 0.27819 (+0.251); p90 0.0473 -> 1.0"
+  verdict: pass
 - id: R5.EMITTER.CCA
   run: EUE vs EUB
   metric: frames_transmitted, EUE / EUB
@@ -110,28 +112,34 @@ rows:
     CBR-busy area run the ETSI adaptive gate at delta_min (TS 102 687 Annex A), which spaces
     their frames to T_on / delta (up to 1 s), so the run sends fewer frames
   source: IEEE 802.11-2020 §17.3.10.6; ETSI TS 102 687 V1.2.1 §5.4, Annex A
-  measured: pending
+  measured: "frames 7,174 -> 5,629 (0.785); pdr300 0.569 -> 0.448, cross50_m 225 -> 175 m"
+  verdict: pass
 - id: R5.EMITTER.ACIR80
   run: EUE80 vs EUB
   metric: frames_transmitted ratio; mean CBR on 180 difference
   band: "frames [0.995, 1.005]; |CBR difference| <= 0.002"
   expect: an 80 dB ACIR leaves the leak below the -85 dBm busy level and near the noise floor only within metres, so neither the DCC nor the CBR moves
   source: link budget (23 - 80 = -57 dBm before path loss)
-  measured: pending
+  measured: "record digest e7b365ee = EUB's: frames 7,174 = 7,174, CBR 0.02747 = 0.02747"
+  verdict: pass
+  note: "Byte-identical, which is more than the band asked: at 80 dB the leak is below every receiver's reach (jammer_reach_m) and is never declared."
 - id: R5.EMITTER.DET
   run: EUE vs EUE2
   metric: record digest
   band: identical
   expect: same seed, same binary, byte-identical records
   source: 02-architecture.md determinism (ADR 0004)
-  measured: pending
+  measured: "599a2b3d -> 599a2b3d"
+  verdict: pass
 - id: R5.EMITTER.WALL
   run: EUE vs EUB
   metric: wall time and peak RSS
   band: "wall [0.8, 1.3]; peak [0.9, 1.15]"
   expect: one more jamming arrival per receiver in reach per step and its leak in each SINR window; the frames fall, so the run may be faster
   source: cost model
-  measured: pending
+  measured: "wall 28.62 -> 25.38 s (0.887); peak 751 -> 630 MB (0.839)"
+  verdict: wrong-expectation
+  note: "Wall inside its band. The peak is under the band's 0.9: the emitter cuts 22 % of the frames (R5.EMITTER.CCA), and the per-frame records and reception state go with them. The band assumed the same frames; with fewer frames a lower peak is what the cost model gives."
 - id: R5.LEAK.WALL
   run: G20-MAP (scenarios/real-world/radio-fix3/dense-grid-20-map.yaml) on the binary before and after the leak-path change
   metric: record digest; wall time
@@ -141,4 +149,6 @@ rows:
     The change targets the hot spot the profile shows on our side, keeps every sum's terms
     and their order, and so leaves every record byte-identical while cutting the time
   source: R4.1.WALL; the profile (sample, 20 s of G20-MAP)
-  measured: pending
+  measured: "same binary, G20-MAP / G20-MAP-ED85: 24.75 / 25.01 s (0.990) and 27.31 / 26.47 s (1.032); digests 9ee0d990 / df5968b2 on both binaries (before and after the JAM-ED change)"
+  verdict: wrong-expectation
+  note: "Premise wrong: there is no leak-path hot spot to fix. A 20 s `sample` of G20-MAP (opt-2 build) has OfdmPhy::energy_started_by in 2 of about 5,800 engine samples on the main thread, and sinr_windows_with in 90. The time goes to the SCMS (create_node, p256 field arithmetic), the mobility step and finish_phy_end, and after the run to the jsonl export (serde_json). The ED-85 run's profile has the same shape. On an idle slot the two runs are within 1-3 % in both orders, so radio-fix4's 1.16-1.18x was the shared machine's load. No code changed, so no result moved."
