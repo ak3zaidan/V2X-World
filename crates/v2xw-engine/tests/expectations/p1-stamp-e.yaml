@@ -41,6 +41,20 @@ runs:
     scenario: scenarios/real-world/paper1/p1-e4-ces.yaml
     base: CE
     note: CE with the speed change (0.499 m/s per m, tau 0.357 s, position follows 0.759)
+  SBM:
+    scenario: scenarios/real-world/paper1/p1-e4-u.yaml
+    note: E4V after the speed match (fix round 5 item 2), chain off
+  CEM:
+    scenario: scenarios/real-world/paper1/p1-e4-ce.yaml
+    base: SBM
+    note: candidate E on the speed-matched run
+  CESM:
+    scenario: scenarios/real-world/paper1/p1-e4-ces.yaml
+    base: CEM
+    note: CEM with the speed change
+  CEM2:
+    scenario: scenarios/real-world/paper1/p1-e4-ce.yaml
+    note: CEM again (determinism)
 rows:
 - id: P1E.SB.off-identical
   base: SBR
@@ -51,7 +65,8 @@ rows:
   source: 'chain off: no StampChain is built and report_inner draws and computes what it did (the
     speed offset is 0.0 and adds nothing; bsm_timing.rs); release and opt-2 debug builds do the same
     IEEE arithmetic (p1-stamp.yaml P1S.SB.off-identical)'
-  measured: pending
+  measured: "a146a8ff2e4f3db2 -> a146a8ff2e4f3db2"
+  verdict: pass
 - id: P1E.CTS.profile-identical
   base: CTSR
   variant: CTS
@@ -60,7 +75,8 @@ rows:
   expect: identical
   source: 'tampa_locked has prob_stay_zero 0 and no speed change: a 0 -> 0 BSM compares the step draw
     against 0 and never steps, the 0 -> -1 rule and the eight chain draws are unchanged'
-  measured: pending
+  measured: "afbf7152d8d77c31 -> afbf7152d8d77c31"
+  verdict: pass
 - id: P1E.CE.early
   base: CE
   variant: CE
@@ -69,7 +85,8 @@ rows:
   expect: band
   band: [0.21, 0.31]
   source: tampa_chain stationary P(o = -1) 0.2596 (candidates file); about 28 IDs, chain correlation
-  measured: pending
+  measured: "0.260878"
+  verdict: pass
 - id: P1E.CE.stay-minus1
   base: CE
   variant: CE
@@ -79,7 +96,8 @@ rows:
   band: [0.27, 0.40]
   source: tampa_chain 0.332; about 2,700 early pairs, binomial sd 0.01, plus pairs lost to the v >= 10
     m/s and msgCnt + 1 filter
-  measured: pending
+  measured: "0.34359"
+  verdict: pass
 - id: P1E.CE.stay-zero
   base: CE
   variant: CE
@@ -88,7 +106,8 @@ rows:
   expect: band
   band: [0.74, 0.79]
   source: tampa_chain 0.766
-  measured: pending
+  measured: "0.768345"
+  verdict: pass
 - id: P1E.CE.over5-0m1
   base: CE
   variant: CE
@@ -98,7 +117,8 @@ rows:
   band: [0.72, 0.78]
   source: 'p1-realdata-baseline.md §7.5, expected before any engine run: the 0 -> -1 share over 5 cm at
     0.72-0.78 (emulator 0.758 at the run speeds)'
-  measured: pending
+  measured: "0.749721"
+  verdict: pass
 - id: P1E.CE.over5-m1m1
   base: CE
   variant: CE
@@ -108,7 +128,9 @@ rows:
   value: 0.005
   source: '§7.5: no step out of state -1 (Wyoming held out 0 of 1,282); the core walk alone (p90 about
     3.5 cm) rarely takes a pair over 5 cm'
-  measured: pending
+  measured: "0.0117271"
+  verdict: open
+  note: "No step leaves state -1 (tampa_chain_steps_only_out_of_state_zero_at_both_rates pins it), so these pairs are over 5 cm for a reason other than the chain. CES 0.0107, -1 -> 0 0.073 (E 0.032) and 0 -> 0 0.048 (E 0.043) are all above the emulator, whose device drives a straight at one speed: this run's pairs include trips accelerating from rest (v p10 13.9 m/s) and the ring's corners. Checked again on the speed-matched run (P1E.CEM.over5-m1m1)."
 - id: P1E.CE.over5-00
   base: CE
   variant: CE
@@ -117,7 +139,8 @@ rows:
   expect: band
   band: [0.025, 0.065]
   source: '§7.5: E 0.043 at 0 -> 0 (Wyoming held out 0.049), from the 0.052 step share'
-  measured: pending
+  measured: "0.0483409"
+  verdict: pass
 - id: P1E.CE.ks
   base: CE
   variant: CE
@@ -127,7 +150,8 @@ rows:
   band: [0.09, 0.11]
   source: '§7.5, written before any engine run: E on the present p1-e4-u.yaml speeds, KS 0.09-0.11
     (emulator 0.099)'
-  measured: pending
+  measured: "0.0984498 (at 0.68 cm; emulator 0.099)"
+  verdict: pass
 - id: P1E.CE.ks-vs-cts
   base: CTS
   variant: CE
@@ -135,7 +159,8 @@ rows:
   measure: x.e4.ks
   expect: down
   source: 'the emulator puts tampa_locked (CTS, engine 0.118) at 0.117 and E at 0.099 on these speeds'
-  measured: pending
+  measured: "0.118436 -> 0.0984498"
+  verdict: pass
 - id: P1E.CE.frames
   base: SB
   variant: CE
@@ -144,7 +169,8 @@ rows:
   expect: same
   source: the chain moves secMark by at most 1 ms and the position by cm; it never changes whether or
     when a BSM is sent
-  measured: pending
+  measured: "13469 -> 13469"
+  verdict: pass
 - id: P1E.CES.ks
   base: CE
   variant: CES
@@ -154,7 +180,8 @@ rows:
   band: [-0.01, 0.01]
   source: '§7.5: adding the speed change moves the KS by at most 0.01 (emulator 0.099 -> 0.098 at these
     speeds)'
-  measured: pending
+  measured: "0.0984498 -> 0.09801 (delta -0.00044)"
+  verdict: pass
 - id: P1E.CES.frames
   base: CE
   variant: CES
@@ -162,7 +189,8 @@ rows:
   measure: r.frames_transmitted
   expect: same
   source: the speed change moves the reported speed and position only
-  measured: pending
+  measured: "13469 -> 13469"
+  verdict: pass
 - id: P1E.CE.wall
   base: SB
   variant: CE
@@ -172,4 +200,97 @@ rows:
   band: [0.8, 1.25]
   source: the same eight chain draws per BSM as CTS (P1S.CTS.wall 0.978); the band is the shared
     machine's noise
+  measured: "27.69 -> 23.62 s (ratio 0.853); peak 729 -> 647 MB"
+  verdict: pass
+# ---- item 2: the speed match (rows written before SBM, CEM, CESM, CEM2 ran) ----
+- id: P1E.SBM.speed-p50
+  base: SBM
+  variant: SBM
+  area: metrics
+  measure: x.e4.v_p50
+  expect: band
+  band: [33.4, 35.4]
+  source: 'Wyoming p50 34.4 m/s, +-1 m/s (§7.5 Finding 7). disclosure: the scenario was tuned on three
+    probe runs of the release binary (header of p1-e4-u.yaml; the last gave 34.6 at a speed factor of
+    0.962, this one is 0.958)'
+  measured: pending
+- id: P1E.SBM.speed-p10
+  base: SBM
+  variant: SBM
+  area: metrics
+  measure: x.e4.v_p10
+  expect: band
+  band: [27.0, 31.0]
+  source: Wyoming p10 28.6 m/s; the probes gave 29.7 (disclosure as P1E.SBM.speed-p50)
+  measured: pending
+- id: P1E.SBM.speed-p90
+  base: SBM
+  variant: SBM
+  area: metrics
+  measure: x.e4.v_p90
+  expect: band
+  band: [34.8, 36.0]
+  source: Wyoming p90 35.3 m/s; the probes gave 35.4 (disclosure as P1E.SBM.speed-p50)
+  measured: pending
+- id: P1E.CEM.ks
+  base: CEM
+  variant: CEM
+  area: metrics
+  measure: x.e4.ks
+  expect: le
+  value: 0.092
+  source: '§7.5, written before any engine run: E on a run speed-matched to Wyoming, KS <= 0.092, point
+    0.082, band 0.063-0.10 (P1-E4 tolerance 0.092)'
+  measured: pending
+- id: P1E.CEM.ks-band
+  base: CEM
+  variant: CEM
+  area: metrics
+  measure: x.e4.ks
+  expect: band
+  band: [0.063, 0.10]
+  source: '§7.5: the bootstrap and nuisance bands of the speed-matched prediction'
+  measured: pending
+- id: P1E.CEM.over5-0m1
+  base: CEM
+  variant: CEM
+  area: recorded-state
+  measure: x.st.over5_on_0m1
+  expect: band
+  band: [0.72, 0.78]
+  source: '§7.5: 0.72-0.78 (emulator 0.754 speed-matched)'
+  measured: pending
+- id: P1E.CEM.over5-m1m1
+  base: CEM
+  variant: CEM
+  area: recorded-state
+  measure: x.st.over5_on_m1m1
+  expect: le
+  value: 0.005
+  source: '§7.5: at most 0.005'
+  measured: pending
+- id: P1E.CESM.ks
+  base: CEM
+  variant: CESM
+  area: metrics
+  measure: x.e4.ks
+  expect: delta
+  band: [-0.01, 0.01]
+  source: '§7.5: the speed change moves the KS by 0.01 or less (emulator 0.082 -> 0.080 speed-matched)'
+  measured: pending
+- id: P1E.CEM.ks-vs-sbm
+  base: SBM
+  variant: CEM
+  area: metrics
+  measure: x.e4.ks
+  expect: down
+  source: '§7.5: the shipped v3 instant at Wyoming''s speeds 0.146 against E 0.082'
+  measured: pending
+- id: P1E.CEM2.determinism
+  base: CEM
+  variant: CEM2
+  area: recorded-state
+  measure: digest.record
+  expect: identical
+  source: same seed, same binary; the chain stream is keyed by (domain, node)
   measured: pending
