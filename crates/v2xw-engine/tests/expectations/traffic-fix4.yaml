@@ -1,0 +1,167 @@
+# Traffic fix round 4 (the traffic tests left failing by fix round 3; base 081fcab2).
+#
+# Every row was written BEFORE the run or test that judges it: the predicted direction or
+# value with its source, `measured: pending` and `verdict: pending` until it ran. Base and
+# variant of a comparison use one binary and one seed. Each row names the injected fault
+# that turns it red (shown red, then restored).
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+schema: v2xw/scms-run-expectations/1
+rows:
+# --- (1) WP-08 in the engine: violations.rs --------------------------------------------
+- id: F4.viol.reach-60
+  change: actors.vehicles.drivers.violations {enabled, fail_to_yield_share 0.2} on connected-intersections
+  base: connected-intersections, 60 s, violations absent (release binary 3cbc95a4, --no-recording --digest)
+  variant: the same, violations block on
+  measure: stream digest, actors spawned, apps tallies
+  expect: >-
+    possibly identical. 48 vehicles enter in 60 s; at the default share 0.6 and mean tolerance 0.6 s a
+    vehicle meeting a red onset runs it with p*mu/C = 0.006 per signal passage (TTI 0-4196-P1 Table 1,
+    1.0 per 10,000 veh-cycles = 3-6 per 1,000 veh), so the expected red runs in the whole run are
+    about 48 x 2 passages x 0.006 = 0.6, and fewer than 0.1 within 150 m of the four SPaT units. The
+    amber tail redraw only moves drivers whose time to the line at the amber onset exceeds 5.5 s.
+  source: TTI 0-4196-P1 Table 1; drivers.rs RED_RUN_SHARE derivation
+  fault: n/a (a diagnosis)
+  measured: 'identical: stream digest 86a68534 both, 48 vehicles, ima 5/3 both, no rlvw issued in either'
+  verdict: pass
+  note: 'the test as written (60 s, default rates) cannot see the violators: the on and off runs are the same run'
+- id: F4.viol.reach-300
+  change: as F4.viol.reach-60
+  base: as F4.viol.reach-60, 300 s
+  variant: as F4.viol.reach-60, 300 s
+  measure: stream digest
+  expect: 'different: about 250 vehicles and some 3 red runs expected at the default rates; if equal, the block does not reach mobility (an engine defect)'
+  source: as F4.viol.reach-60
+  fault: n/a
+  measured: 'digests differ (off ca71a0c4, on 6c95a431; 227/228 vehicles). rlvw issued 34 -> 30, true 0 -> 1, missed 0 -> 3; ima issued 402 -> 448, true 123 -> 139'
+  verdict: pass
+  note: 'the block reaches mobility; there is no engine defect. At 300 s the test would still fail its first assertion: the off run has 34 false RLVW warnings (drivers who stop after all) and the on run fewer'
+- id: F4.viol.hi-60
+  change: as F4.viol.reach-60, with red_run_share 1.0 and red_run_tolerance_mean_s 3.0 (every driver a runner, mean lateness 3 s, cap 4 s)
+  base: F4.viol.reach-60's base (violations absent), 60 s
+  variant: the high-violation block, 60 s
+  measure: stream digest; rlvw issued / true / missed
+  expect: >-
+    digest differs (the block reaches mobility). Red runs per signal passage about E[min(Exp(3 s), 4 s)] / C
+    = 2.2 / 60 = 0.037, so some 4 red runs among 48 vehicles x 2 passages, of which 4/36 at a SPaT junction:
+    rlvw issued still about 0-1 (the labeller's truth covers all 36 signalised junctions, so runs at the 32
+    junctions without a unit are counted missed, not issued)
+  source: drivers.rs red_tolerance_s; app_truth SignalIndex (every plan); the scenario's four units
+  fault: n/a
+  measured: 'digest cce95a54 against 86a68534 (differs); rlvw issued 0, true 0, missed 1; ima 5/3 unchanged'
+  verdict: pass
+  note: 'this row was written after the run (a diagnostic, not a pre-registered prediction)'
+- id: F4.viol.test-36
+  change: the violations.rs test setup, a unit (spat, map) on every one of the 36 junctions and the high-violation block, 120 s
+  base: ci-off36 (36 units, violations absent), 120 s, release binary 3cbc95a4
+  variant: ci-hi36 (36 units, high-violation block), 120 s
+  measure: rlvw issued and true; ima issued and true
+  expect: >-
+    rlvw issued and true both rise from 0 to several (about 0.037 x ~100 vehicles x ~3 passages = 10 red
+    runs, nearly all now at a SPaT junction, less those already braking or out of reception); ima issued
+    rises (a runner enters as the cross street starts on its green; drivers who fail to yield at a
+    permissive green). If so the test's 60 s, four-unit setup was too weak to see the violators, not the engine
+  source: as F4.viol.hi-60; SAE J2945/1-family RLVW logic as apps::rlvw implements it
+  fault: violations block dropped from the variant (= base) -> rlvw on = off, red
+  measured: 'off36 120 s: rlvw 6 issued / 0 true; hi36: 11 / 2 (missed 2); ima 58/27 -> 56/25. With fail_to_yield_share 1.0 (fy36): ima 56/25, rlvw 11/2'
+  verdict: open
+  note: 'RLVW rises as predicted; IMA does not (2 fewer), in either variant. No setup measured satisfies the tests three assertions together, so the test is left unchanged and red: proposed form is 36 units, the high-violation block, 120 s, asserting rlvw true on > off = 0 and issued on > off (both hold), with the IMA claim re-derived (the IMA truth counts only crossing paths with close arrival; a red runner 0-4 s into red meets a cross queue still in its start-up reaction)'
+# --- (2) red-light running: the entry-time distribution ----------------------------------
+- id: F4.rlr.distribution
+  change: none (diagnosis of the 60 s hour's four entries all at 0.60 s); deciles printed by the band test
+  base: red_light_running_sits_in_the_field_band (90 s cycle, 48 h, seed 21), base code
+  measure: entries on red per 1,000, median and spread of the entry time into red
+  expect: >-
+    3-6 per 1,000 (TTI 0-4196-P1 Table 1; 360/C = 4.0 at 90 s); median under 0.5 s (its Figure 4) and
+    98 % within 4 s (its Table 3); entry times spread over several 0.1 s bins, falling with lateness (a
+    uniform arrival over an exponential tolerance gives a decreasing density), not piled on one value
+  source: Bonneson, Zimmerman and Quiroga, TTI 0-4196-P1, Table 1, Figure 4, Table 3
+  fault: the pre-8ba2e738 gate (tti < amber_go_tti_s on the red-runner arm), V2XW_FAULT=wp08-gate -> rate below 3
+  measured: '28,749 entries, 95 on red: 3.30 per 1,000 (0.83 per 10,000 veh-cycles); median 0.30 s, max 2.20 s; deciles 0.00 0.10 0.10 0.20 0.30 0.40 0.70 0.90 1.20 s; 0.1 s bins 14 15 12 10 7 3 5 7 2 2 3 (+15 beyond 1.1 s). Fault wp08-gate: 61 on red, 2.12 per 1,000, red (outside 3-6)'
+  verdict: pass
+  note: 'the density falls with lateness and no bin holds more than 16 %: the 60 s hours four entries at 0.60 s were a four-sample coincidence on the 0.1 s step grid, not a model artefact, so the decision model is unchanged. The band row already has its per-cycle form (0.5-2.0 per 10,000 veh-cycles, 360/C per 1,000) and a 48 h run (tests2, cffd7388)'
+# --- (4) pedestrians: kinematic limits ---------------------------------------------------
+- id: F4.ped.lateral
+  change: EngineParams.lateral_speed_bound (a lane change's lateral rate <= v tan 12 deg, v floored 0.5 m/s)
+  base: pedestrians_and_cyclists_in_signalised_traffic (flag off, the default)
+  variant: with_the_kinematic_limits_signalised_traffic_holds_every_invariant (flag on)
+  measure: in-building and heading-jump counts
+  expect: >-
+    in-building 4 -> 0 (actor 301: began a change at 4.8 m/s, braked to 0.3 m/s, heading 62 deg off the lane);
+    heading deviation of a lane change never above 12 deg, as transition_duration's doc already claims.
+    A car's lateral velocity is v sin(psi) (kinematic bicycle model); lane-change heading angles in field
+    data are a few degrees
+  source: Rajamani, Vehicle Dynamics and Control (2012) ch. 2 kinematic bicycle model; mobil.rs transition_duration
+  fault: flag off = the default test, red (in-building 4)
+  measured: 'flag on: in-building 0, heading-jump 0 (default run); flag off (same binary): in-building 4, heading-jump 2, red'
+  verdict: fixed
+  note: 'behind EngineParams.lateral_speed_bound, off by default: turning it on moves every run with a lane change below about 10 m/s, so the goldens (i-s1-phase2-60s, phase2-path) must be re-blessed before the default flips'
+- id: F4.ped.tyre
+  change: EngineParams.braking_tyre_limit (integrated deceleration >= -emergency_decel_mps2, 9 m/s2 for a car)
+  base: observed_pedestrians_and_two_wheelers (flags off)
+  variant: with_the_kinematic_limits_the_observed_run_holds_every_invariant (both flags on)
+  measure: speed-jump, accel-bound, in-building, pedestrian-overlap
+  expect: >-
+    speed-jump 4 -> 0 and accel-bound 4 -> 0 (actors 255, 292 braked at 9.15-12.7 m/s2); in-building 7 -> 0
+    (253, 411: the lateral bound); pedestrian-overlap stays 0 (255 stopped 1.4 m short of the walker's band,
+    and at 9 m/s2 from 3.39 m/s it needs 0.64 m, so it still stops short)
+  source: SUMO emergencyDecel default 9 m/s2 (passenger); dry-asphalt friction 0.8-1.0 g
+  fault: flags off = the default observed test, red
+  measured: 'flags on (observed run): speed-jump 0, accel-bound 0, in-building 0, heading-jump 0, pedestrian-overlap 0; flags off: 4, 4, 7, 8, 0, red. step-speed 15 in both (not a gated class)'
+  verdict: fixed
+  note: 'behind EngineParams.braking_tyre_limit, off by default, for the same golden reason'
+- id: F4.ped.default-unchanged
+  change: both flags, off by default
+  measure: the default tests' counts with the new code (flags off)
+  expect: identical to the base binary's (rate_scale 1.0 multiplies exactly; no new draw)
+  source: design
+  fault: n/a
+  measured: 'flags off with the new code: default run {heading-jump 2, in-building 4, jerk 1}, observed {accel-bound 4, heading-jump 8, in-building 7, jerk 10, speed-jump 4, step-speed 15}: identical to the base binary'
+  verdict: pass
+# --- (6) fault proofs owed by fix round 3 (one env-gated fault build, faults then removed) ---
+- id: F4.fault.wp08
+  change: none (proof for 8ba2e738, the red-runner arm without the tti < amber_go_tti_s gate)
+  measure: red_light_running_sits_in_the_field_band
+  expect: red with the gate restored (the arm then takes only drivers who reach the line before the red)
+  source: 8ba2e738 commit message (1 red entry in an hour before the fix)
+  fault: V2XW_FAULT=wp08-gate
+  measured: 'fault: 2.12 per 1,000, FAILED (outside 3-6); without: 3.30, ok'
+  verdict: pass
+- id: F4.fault.w11
+  change: none (proofs owed by W11.unit.network, W11.unit.braking-geometric)
+  measure: 'v2xw-metrics ssm:: tests (18)'
+  expect: each fault turns its own test red
+  source: traffic-fix3.yaml rows
+  fault: ssm-brake (arrival at constant speed), ssm-follow-len (leader length dropped from the gap), ssm-geo-acc (geometric accel forced 0)
+  measured: 'none 18/18; ssm-brake: network_braking_is_extrapolated_and_acceleration_is_not FAILED; ssm-follow-len: network_following_runs_along_the_path_and_merging_is_timed FAILED; ssm-geo-acc: a_car_braking_short_of_the_crossing_is_no_conflict FAILED'
+  verdict: pass
+  note: 'the foe-check fault of W11.unit.network was not injected (the foe check lives in the test''s stub network); open'
+- id: F4.fault.ssmval
+  change: none (proof owed by W11.unit.ssmval)
+  measure: 'v2xw-interop ssmval:: tests (3)'
+  expect: red when minTTC's type is not read, and when duplicates are not merged
+  source: traffic-fix3.yaml W11.unit.ssmval
+  fault: ssmval-type, ssmval-dup
+  measured: 'none 3/3; each fault: sumos_ssm_output_is_read_and_counted_once_per_pair FAILED'
+  verdict: pass
+- id: F4.fault.w15
+  change: none (proofs owed by W15.cf, W15.depart)
+  measure: 'rou_import (5 tests); routes::a_types_car_following_model_reaches_its_vehicles'
+  expect: vtype-cf turns a_vtypes_car_following_model_drives_its_vehicles red; depart-cap turns an_unsafe_stated_depart_speed_delays_the_insertion red
+  source: traffic-fix3.yaml W15.cf, W15.depart
+  fault: vtype-cf (VehicleCf ignores the per-vehicle map), depart-cap (the old wanted.min(safe))
+  measured: 'none 5/5; vtype-cf: a_vtypes_car_following_model_drives_its_vehicles FAILED; depart-cap: an_unsafe_stated_depart_speed_delays_the_insertion FAILED. routes unit test stays green under vtype-cf (it tests the parse, not the engine)'
+  verdict: pass
+  note: 'the routes unit test needs a parse-side fault (trip_driver dropping the model), not run; W14.mast and W15.form (engine crate) not run: open'
+# --- (3) kerbside standstill ---------------------------------------------------------------
+- id: F4.kerb.standstill
+  change: none yet (diagnosis; realism.rs gained an env-gated junction trace, V2XW_TRACE_ACTORS/T0/T1)
+  base: buses_taxis_and_deliveries_stop_at_the_kerb_and_the_traffic_goes_round, kerbside on
+  measure: standstill (180 s) count
+  expect: 0, as with kerbside off (a bus at a permissive left gives way to opposing traffic only while it comes, UVC 11-402)
+  source: UVC 11-402; HCM permitted-left gap acceptance
+  fault: n/a
+  measured: 'standstill 1: bus 79 stands at its line (lane 39, s 136.85 of 137, next connector 307) from about 111 s to the end. At 130 s no vehicle stands at any other line of junction 11 (one delivery double-parked on lane 126 at 19.9 m); by 200 s every approach of junction 11 stands (lane 32 queue 137/160/81 at its line, lane 127 queue with 18 at its line)'
+  verdict: open
+  note: 'not the mutual yield tests2 named, at least at its start: at 130 s the bus has no standing foe to yield to, so what holds it then is still to be read from its decision (signal state, exit-lane room on 307''s exit, junction_blocked). Next step: print the bus''s EntryDecision and conflicts at 120-130 s'

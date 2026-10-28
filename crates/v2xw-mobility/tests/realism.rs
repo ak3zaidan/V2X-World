@@ -86,6 +86,61 @@ fn before_realism() -> EngineParams {
     }
 }
 
+/// A diagnostic, off unless `V2XW_TRACE_ACTORS` names actors (comma-separated ids): once a
+/// second between `V2XW_TRACE_T0` and `V2XW_TRACE_T1` (seconds), each watched actor and
+/// every vehicle on, or about to enter, the junction its route enters next.
+fn trace_junction(world: &World, t: u64, actors: &[v2xw_mobility::audit::AuditActor]) {
+    let env = |k: &str| std::env::var(k).ok();
+    let Some(watch) = env("V2XW_TRACE_ACTORS") else {
+        return;
+    };
+    let watch: Vec<u32> = watch
+        .split(',')
+        .filter_map(|x| x.trim().parse().ok())
+        .collect();
+    let t0: f64 = env("V2XW_TRACE_T0")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
+    let t1: f64 = env("V2XW_TRACE_T1")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
+    let ts = t as f64 / 1e9;
+    if ts < t0 || ts > t1 || t % NS_PER_S != 0 {
+        return;
+    }
+    let junction_of = |l: v2xw_core::ids::LaneId| world.roads.lane(l).junction;
+    let line = |a: &v2xw_mobility::audit::AuditActor| {
+        format!(
+            "{} {:?} lane {} s {:.2}/{:.1} v {:.2} acc {:.2} lat {:.2} kerb {:?} changing {:?} next {:?} pos ({:.1},{:.1}) hdg {:.2}",
+            a.actor.index(),
+            a.class,
+            a.lane.index(),
+            a.s_m,
+            world.roads.lane(a.lane).length_m,
+            a.speed_mps,
+            a.accel_mps2,
+            a.lateral_m,
+            a.kerbside,
+            a.changing.map(|(f, to)| (f.index(), to.index())),
+            a.route_next.map(|l| l.index()),
+            a.pos.x,
+            a.pos.y,
+            a.heading_rad
+        )
+    };
+    for a in actors.iter().filter(|a| watch.contains(&a.actor.index())) {
+        eprintln!("t={ts:.0} watch {}", line(a));
+        let j = junction_of(a.lane).or_else(|| a.route_next.and_then(junction_of));
+        let Some(j) = j else { continue };
+        for b in actors.iter().filter(|b| {
+            b.actor != a.actor
+                && (junction_of(b.lane) == Some(j) || b.route_next.and_then(junction_of) == Some(j))
+        }) {
+            eprintln!("        at j{} {}", j.index(), line(b));
+        }
+    }
+}
+
 fn run_mixed(params: EngineParams, seconds: u64) -> (CalibrationReport, AuditReport) {
     let world = grid();
     let rng = RngRegistry::new(0xB05_57095);
@@ -134,6 +189,9 @@ fn run_mixed(params: EngineParams, seconds: u64) -> (CalibrationReport, AuditRep
                     a.class, a.speed_mps, a.lateral_m, a.changing, a.kerbside, a.lane
                 ),
             );
+        }
+        if kerbside.enabled {
+            trace_junction(&world, update.t, &actors);
         }
         harness.observe(&world, t, update.t, &actors, &update.despawned, &[]);
         auditor.observe(&world, t, update.t, &actors, &update.despawned);

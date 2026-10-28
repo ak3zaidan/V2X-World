@@ -323,6 +323,12 @@ const PULL_OUT_FOLLOWER_DECEL_MPS2: f64 = 2.0;
 /// time rather than swinging round on the spot. **A choice**: a walking-to-jogging pace.
 const PULL_OUT_SPEED_MPS: f64 = 2.0;
 
+/// The speed below which [`EngineParams::lateral_speed_bound`] stops slowing a lane
+/// change further, m/s: the floor [`crate::lanechange::mobil::transition_duration`] and
+/// the published heading already take (`speed.max(0.5)`), so a car released to finish a
+/// change at a stand creeps across at `0.5 · tan 12° ≈ 0.11 m/s`.
+const LATERAL_SPEED_FLOOR_MPS: f64 = 0.5;
+
 /// What makes one driver unlike another, beyond the car-following parameters.
 ///
 /// * `speed_factor` — the speed the driver chooses on a free road as a multiple of the
@@ -893,6 +899,27 @@ pub struct EngineParams {
     /// `traffic.standing_leader_stop`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub standing_leader_stop: bool,
+    /// Whether a lane change's sideways motion is bounded by the vehicle's speed along the
+    /// road at every step: a car moves sideways only by steering, so its lateral velocity is
+    /// at most `v · tan(dev_max)` (MOBIL's heading-deviation cap, 12°), with `v` floored at
+    /// 0.5 m/s (2 m/s for a kerbside pull-out) as [`crate::lanechange::mobil::transition_duration`]
+    /// floors it. That function sizes the transition from the speed at its *start* only:
+    /// a car that began a change at 4.8 m/s and braked to 0.3 m/s kept its 1.2 m/s sideways
+    /// rate, its heading swung 62° off the lane and its corner entered a building
+    /// (`tests/pedestrian_invariants.rs`, actor 301); one released from its standstill hold
+    /// slid 2 m sideways in 2 s with its heading on the lane (actor 253). The transition's
+    /// clock is slowed instead, so its heading deviation never exceeds the cap. **A defect
+    /// fix behind a flag**, off by default until the golden digests are re-blessed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub lateral_speed_bound: bool,
+    /// Whether the integrated deceleration is held to the class's emergency deceleration
+    /// ([`crate::classes::ClassSpec::emergency_decel_mps2`], 9 m/s² for a car, SUMO's
+    /// `emergencyDecel`; dry-road tyre friction μ ≈ 0.8-1.0): the decision pass's stops
+    /// for a pedestrian stepping out asked a car for −12.7 m/s² (actor 255) and the
+    /// integration gave it. **A defect fix behind a flag**, off by default until the golden
+    /// digests are re-blessed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub braking_tyre_limit: bool,
     /// Whether a trip enters the road already moving, at the highest speed it may safely
     /// drive there (SUMO's `departSpeed="max"`): the lower of its desired speed on the
     /// lane, the speed it can still stop from before the lane's end, and the speed that
@@ -1062,6 +1089,8 @@ impl Default for EngineParams {
             start_reaction_median_s: REACTION_MEDIAN_S,
             heavy_vehicle_gap_terms: false,
             standing_leader_stop: false,
+            lateral_speed_bound: false,
+            braking_tyre_limit: false,
             depart_speed_max: false,
             lane_bend_speed: false,
             permitted_left_critical_headway_s:
@@ -1130,6 +1159,10 @@ struct Transition {
     /// stand part-way across. One begun at a stand (a car nosing out from a queue) slides
     /// in as before; held, it stood a full lane width out of its new lane.
     began_moving: bool,
+    /// The share of the smoothstep's own lateral rate the vehicle moved at in its last step
+    /// (1 unless [`EngineParams::lateral_speed_bound`] slowed the transition's clock), so
+    /// the published heading and velocity are those of the motion actually made.
+    rate_scale: f64,
 }
 
 /// The road a strategic lane change needs, per lane crossed, metres: at 11 m/s a
@@ -1532,7 +1565,7 @@ impl Actor {
                 return 0.0;
             }
             let p = (ns_to_secs(t.saturating_sub(tr.started)) / dur).clamp(0.0, 1.0);
-            (tr.to_offset_m - tr.from_offset_m) * 6.0 * p * (1.0 - p) / dur
+            (tr.to_offset_m - tr.from_offset_m) * 6.0 * p * (1.0 - p) / dur * tr.rate_scale
         })
     }
 
@@ -7264,6 +7297,14 @@ impl Mobility for NativeMobility {
         let along = self.along_path();
         let kerb_params = self.params.kerbside;
         let no_change_zone_m = self.params.no_change_zone_m;
+        // `EngineParams::lateral_speed_bound`: the tangent of the heading-deviation cap.
+        let lateral_tan_cap = (along && self.params.lateral_speed_bound).then(|| {
+            math::tan(self.lane_change.as_ref().map_or(
+                crate::lanechange::mobil::LEGACY_MAX_HEADING_DEV_DEG.to_radians(),
+                |m| m.params().max_heading_dev_rad,
+            ))
+        });
+        let tyre_limit = along && self.params.braking_tyre_limit;
         for decision in &decisions {
             let Some(actor) = self.actors.get_mut(&decision.actor) else {
                 continue;
@@ -7315,7 +7356,19 @@ impl Mobility for NativeMobility {
                 decision.v0_mps
             };
             let before = actor.speed_mps;
-            actor.speed_mps = (actor.speed_mps + decision.accel_mps2 * dt_s).clamp(0.0, ceiling);
+            // `braking_tyre_limit`: no decision brakes harder than the tyres can.
+            if tyre_limit {
+                let limit = -actor.class.spec().emergency_decel_mps2;
+                if actor.accel_mps2 < limit {
+                    actor.accel_mps2 = limit;
+                }
+            }
+            let accel = if tyre_limit {
+                actor.accel_mps2
+            } else {
+                decision.accel_mps2
+            };
+            actor.speed_mps = (actor.speed_mps + accel * dt_s).clamp(0.0, ceiling);
             // The cap is a braking decision like any other, so it cannot take more than a
             // tyre gives: cutting 1.05 m/s to 0 in one step read as -10.5 m/s² (phase1-grid
             // lane 119, t 88.4 s). Held to `CAP_MAX_DECEL_MPS2` the vehicle overruns the
@@ -7425,6 +7478,7 @@ impl Mobility for NativeMobility {
                     // is 3 m/s): a pull-out round a vehicle at the kerb, or a move to it.
                     pull_out: actor.speed_mps < PULL_OUT_SPEED_MPS,
                     began_moving: actor.speed_mps > STANDSTILL_MPS,
+                    rate_scale: 1.0,
                 });
                 // The route is re-planned from the lane being entered, so the vehicle's
                 // next movement is one that lane actually has. Keeping the old route
@@ -7488,6 +7542,39 @@ impl Mobility for NativeMobility {
                     )
                 {
                     transition.started = transition.started.saturating_add(t1.saturating_sub(t0));
+                }
+                // A car moves sideways only by steering: its lateral velocity is at most
+                // `v · tan(dev_max)` at its present speed (`lateral_speed_bound`). Where
+                // the smoothstep would go faster this step, its clock runs slower by the
+                // same factor, and the published heading follows the motion made.
+                if let Some(tan_cap) = lateral_tan_cap {
+                    let dur = transition.duration.as_secs_f64();
+                    let dt = ns_to_secs(t1.saturating_sub(t0));
+                    transition.rate_scale = 1.0;
+                    if dur > 0.0 && dt > 0.0 {
+                        let mid =
+                            (ns_to_secs(t0.saturating_sub(transition.started)) + 0.5 * dt) / dur;
+                        let p = mid.clamp(0.0, 1.0);
+                        let nominal = (transition.to_offset_m - transition.from_offset_m).abs()
+                            * 6.0
+                            * p
+                            * (1.0 - p)
+                            / dur;
+                        let floor = if transition.pull_out {
+                            PULL_OUT_SPEED_MPS
+                        } else {
+                            LATERAL_SPEED_FLOOR_MPS
+                        };
+                        let cap = tan_cap * actor.speed_mps.max(floor);
+                        if nominal > cap {
+                            let scale = cap / nominal;
+                            let held = (1.0 - scale) * dt;
+                            transition.started = transition
+                                .started
+                                .saturating_add((held * 1e9).round() as SimTime);
+                            transition.rate_scale = scale;
+                        }
+                    }
                 }
                 let elapsed = ns_to_secs(t1.saturating_sub(transition.started));
                 let total = transition.duration.as_secs_f64().max(1e-9);
@@ -10714,6 +10801,7 @@ mod tests {
                     from_s_delta: 0.0,
                     pull_out: false,
                     began_moving: true,
+                    rate_scale: 1.0,
                 });
             }
             let mut t = t_start;
@@ -11392,6 +11480,21 @@ mod tests {
                 run.tagged.count(crate::audit::Check::RedEntry)
             )
         );
+        // The entry-time distribution, in deciles and 0.1 s bins: a pile-up on one value
+        // (the 60 s hour's four entries all at 0.60 s) would be an artefact of the model.
+        let deciles: Vec<String> = (1..10)
+            .map(|k| {
+                format!(
+                    "{:.2}",
+                    into.get(k * into.len() / 10).copied().unwrap_or(f64::NAN)
+                )
+            })
+            .collect();
+        let mut bins = [0u32; 12];
+        for x in &into {
+            bins[((x * 10.0).floor() as usize).min(11)] += 1;
+        }
+        eprintln!("into red deciles {deciles:?}; 0.1 s bins {bins:?}");
         let (lo, hi) = crate::drivers::RED_RUN_PER_1000_VEH_BAND;
         assert!(n > 10_000.0, "too few entries to judge a rate: {n}");
         assert!(v >= 30.0, "too few red entries to judge a median: {v}");
