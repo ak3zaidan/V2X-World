@@ -290,6 +290,8 @@ rows:
     5), so no report carries evidence whose time the MA finds implausible; 10 before
   measured: '0'
   verdict: pass
+  measured_on: 2026-10-27, 3cbc95a4 release (1.2 GB slot)
+  note2: 're-run 2026-10-27 on the 3cbc95a4 release (GRAW is the matrix gnss-raw run: same scenario, flags and binary). Red under injection (the value set to 10: FAIL), restored'
 - id: RR.GRAW.reports-up
   base: M0
   variant: GRAW
@@ -299,8 +301,10 @@ rows:
   min_change: 1.0
   source: 'raw fixes put the SM-MBR ConstantPosition condition on stopped cars'' Doppler noise (usfp §2:
     the hold is needed); R-USFP is reproduced by construction'
-  measured: 0 -> 7337
+  measured: '19 -> 122054'
   verdict: pass
+  measured_on: 2026-10-27, 3cbc95a4 release (1.2 GB slot)
+  note2: 're-run 2026-10-27 on the 3cbc95a4 release, M0 on the same binary. Both values moved since 81a12183 (0 -> 7,337): M0 now has 19 honest reports, GRAW 122,054 of 127,708 sent; the direction holds, the size change across binaries is untraced. Red under injection (GRAW replaced by M0: 19 -> 19, FAIL), restored'
 - id: RR.M0.honest
   base: M0
   variant: M0
