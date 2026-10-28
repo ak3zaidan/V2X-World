@@ -1,11 +1,13 @@
 """Summarise one Paper 1 validation run into <run>/realism.json (matrix.py extract + x.*).
 
-  python3 -I summ.py <run_dir> [--e4] [--veremi] [--ma] [--clean]
+  python3 -I summ.py <run_dir> [--e4] [--stamp] [--veremi] [--ma] [--clean]
 
 x.fate.*   pki.report_fate (the device store's log with the truth join), per report: its
            last fate; lost = evicted_quota | decayed_out | expired.
 x.ma.*     ma.received rows; with --ma, ma-replay.csv (run `v2xw ma-replay` first).
 x.e4.*     RandomPosition residuals from node.tx through tools/realdata, KS against Wyoming.
+x.st.*     the locked stamp model's signature (secMark offset chain, along/v by offset step,
+           > 5 cm share on 0 -> -1 pairs), as tools/realdata/e4stampmc.py reads real data.
 x.vr.*     VeReMi round trip against phy.rx / node.tx, an independent leakage check.
 x.bf.*     TS 103 759 BeaconFrequency replayed on the VeReMi receptions (75 ms, 2 in a row).
 Usage of --e4 needs V2XW_P1_WYOMING (the raw wyoming.csv of tools/realdata).
@@ -161,6 +163,39 @@ def e4(d, run):
     d["x.e4.hop_share"] = hops / len(steps) if steps else None
 
 
+def stamp(d, run):
+    """x.st.*: the locked stamp model's signature on the transmitted BSMs, measured the way
+    tools/realdata/e4stampmc.py measures Wyoming and Tampa (p1-realdata-baseline.md §7.2):
+    o = secMark offset from the nearest 50 ms epoch, per consecutive-msgCnt pair at v >= 10."""
+    import e4stampmc
+    import resid
+    ps = e4stampmc.pairs_from(resid.engine_ids(os.path.join(run, "jsonl", "node_tx.jsonl")), False)
+    d["x.st.pairs"] = len(ps)
+    if not ps:
+        return
+    two = [x for x in ps if x["o1"] in (-1, 0) and x["o2"] in (-1, 0)]
+    d["x.st.offset_other_share"] = 1 - len(two) / len(ps)
+    d["x.st.early_share"] = sum(1 for x in ps if x["o2"] == -1) / len(ps)
+    s_m, s_0 = e4stampmc.chain(ps)
+    d["x.st.stay_minus1"] = s_m
+    d["x.st.stay_zero"] = s_0
+    d["x.st.transition_share"] = sum(1 for x in two if x["o1"] != x["o2"]) / len(ps)
+
+    def grp(a, b):
+        return [x for x in ps if (x["o1"], x["o2"]) == (a, b)]
+
+    for name, (a, b) in (("e_plus1", (-1, 0)), ("e_minus1", (0, -1))):
+        g = [1000.0 * x["al"] / x["v"] for x in grp(a, b)]
+        if g:
+            m = sum(g) / len(g)
+            d["x.st.along_%s_ms" % name] = m
+            d["x.st.along_%s_sd" % name] = (sum((v - m) ** 2 for v in g) / len(g)) ** 0.5
+    tr = grp(0, -1)
+    other = [x for x in ps if (x["o1"], x["o2"]) != (0, -1)]
+    d["x.st.over5_on_0m1"] = sum(1 for x in tr if x["r"] > 0.05) / len(tr) if tr else None
+    d["x.st.over5_other"] = sum(1 for x in other if x["r"] > 0.05) / len(other) if other else None
+
+
 def veremi_lines(run):
     out = []
     for p in sorted(glob.glob(os.path.join(run, "veremi", "traceJSON-*.json"))):
@@ -289,6 +324,8 @@ def main():
         ma(d, run)
     if "--e4" in sys.argv:
         e4(d, run)
+    if "--stamp" in sys.argv:
+        stamp(d, run)
     if "--veremi" in sys.argv:
         veremi(d, run)
     json.dump(d, open(os.path.join(run, "realism.json"), "w"), indent=0, sort_keys=True)

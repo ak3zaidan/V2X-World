@@ -1109,6 +1109,73 @@ pub struct BsmTimingSettings {
     /// share (0.25 built in: Tampa's 48 locked of 190 classified IDs).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locked_share: Option<f64>,
+    /// The locked class's epoch stamp chain (position on the fix epoch, secMark on it or
+    /// 1 ms early, steps at 0 -> -1 transitions). Unset or not enabled is the calibration's
+    /// own stamp (the v3 fit's jittered instant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stamp_chain: Option<StampChainSettings>,
+}
+
+/// The locked class's epoch stamp chain ([`BsmTimingSettings::stamp_chain`],
+/// `v2xw_node::bsm_timing::StampChain`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StampChainSettings {
+    /// Turns the chain on. Unset or false is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// The rate set: `tampa_locked` (default; Tampa's locked IDs, a fit set) or
+    /// `wyoming_obu` (the one Wyoming OBU, P1-E4's held-out source).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// P(the next BSM is stamped 1 ms early | this one is); unset is the profile's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stay_minus1: Option<f64>,
+    /// P(the next BSM is stamped on the epoch | this one is); unset is the profile's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stay_zero: Option<f64>,
+    /// Lasting position steps at 0 -> -1 transitions, at the profile's rate and size.
+    /// Unset is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<bool>,
+}
+
+impl StampChainSettings {
+    /// Whether the chain runs.
+    #[must_use]
+    pub fn is_on(&self) -> bool {
+        self.enabled == Some(true)
+    }
+
+    /// The chain these settings name.
+    ///
+    /// # Errors
+    /// A sentence naming the field and what is wrong with it.
+    pub fn chain(&self) -> Result<v2xw_node::bsm_timing::StampChain, (&'static str, String)> {
+        use v2xw_node::bsm_timing::StampChain;
+        let name = self.profile.as_deref().unwrap_or("tampa_locked");
+        let mut ch = StampChain::profile(name).ok_or_else(|| {
+            (
+                "actors.vehicles.bsm_timing.stamp_chain.profile",
+                format!(
+                    "is {name:?}; the profiles are {}",
+                    StampChain::PROFILES.join(", ")
+                ),
+            )
+        })?;
+        if let Some(v) = self.stay_minus1 {
+            ch.stay_minus1 = v;
+        }
+        if let Some(v) = self.stay_zero {
+            ch.stay_zero = v;
+        }
+        if self.steps == Some(false) {
+            ch.step = None;
+        }
+        ch.check("actors.vehicles.bsm_timing.stamp_chain")
+            .map_err(|e| ("actors.vehicles.bsm_timing.stamp_chain", e))?;
+        Ok(ch)
+    }
 }
 
 impl BsmTimingSettings {
@@ -1142,11 +1209,17 @@ impl BsmTimingSettings {
                 })?
             }
         };
-        match self.locked_share {
-            None => Ok(cal),
+        let cal = match self.locked_share {
+            None => cal,
             Some(share) => cal
                 .with_locked_share(share)
-                .map_err(|e| ("actors.vehicles.bsm_timing.locked_share", e)),
+                .map_err(|e| ("actors.vehicles.bsm_timing.locked_share", e))?,
+        };
+        match &self.stamp_chain {
+            Some(s) if s.is_on() => cal
+                .with_stamp_chain(s.chain()?)
+                .map_err(|e| ("actors.vehicles.bsm_timing.stamp_chain", e)),
+            _ => Ok(cal),
         }
     }
 }

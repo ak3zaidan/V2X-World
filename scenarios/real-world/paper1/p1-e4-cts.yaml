@@ -1,0 +1,16 @@
+# P1-E4 stamp model (research/synthesis/p1-realdata-baseline.md §7.2): p1-e4-ct.yaml with the
+# lasting position steps at 0 -> -1 stamp transitions on (the stamp_chain default), at
+# Tampa's locked rate and size. The out-of-sample candidate for the final P1-E4.
+# Expectations were written before it ran (p1-stamp.yaml, P1S.CTS.*).
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4-u.yaml
+  name: Paper 1 E4 stamp chain Tampa steps
+  description: The final E4 highway with the epoch stamp chain and its transition steps at Tampa locked rates.
+  tags: [paper1, validation, highway, bsm-timing]
+actors:
+  vehicles:
+    bsm_timing:
+      stamp_chain:
+        enabled: true
+        profile: tampa_locked

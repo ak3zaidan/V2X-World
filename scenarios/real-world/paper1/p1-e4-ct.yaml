@@ -1,0 +1,17 @@
+# P1-E4 stamp model (research/synthesis/p1-realdata-baseline.md §7.2): p1-e4-u.yaml with the
+# locked class's epoch stamp chain at Tampa's locked rates (a fit set) and no transition
+# steps: the position is the fix epoch's, secMark the epoch or 1 ms early. The v3 walk is
+# unchanged. Expectations were written before it ran (p1-stamp.yaml, P1S.CT.*).
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4-u.yaml
+  name: Paper 1 E4 stamp chain Tampa
+  description: The final E4 highway with the epoch stamp chain at Tampa locked rates, no steps.
+  tags: [paper1, validation, highway, bsm-timing]
+actors:
+  vehicles:
+    bsm_timing:
+      stamp_chain:
+        enabled: true
+        profile: tampa_locked
+        steps: false

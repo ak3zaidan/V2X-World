@@ -50,6 +50,7 @@ fn timing(s: &mut Scenario, enabled: bool, locked_share: Option<f64>) {
         enabled: Some(enabled),
         calibration: None,
         locked_share,
+        stamp_chain: None,
     });
 }
 
@@ -123,6 +124,7 @@ fn the_settings_load_and_out_of_range_ones_are_refused() {
         enabled: Some(true),
         calibration: Some("/nonexistent/bsm-timing.yaml".to_string()),
         locked_share: None,
+        stamp_chain: None,
     });
     assert!(
         !validate(&s).is_empty(),
@@ -137,4 +139,60 @@ fn the_settings_load_and_out_of_range_ones_are_refused() {
     assert!(validate(&us).is_empty(), "{:?}", validate(&us));
     us.detection.local[0].params = serde_json::json!({"reading": "v2_0"});
     assert!(!validate(&us).is_empty(), "an unknown reading was accepted");
+}
+
+/// `bsm_timing.stamp_chain` (P1-E4 stamp model, p1-realdata-baseline.md §7.2): the named
+/// profiles load on the v3 fit, an unknown profile or an out-of-range rate is refused, and
+/// steps without a walk to carry them (the provisional v1 values) are refused.
+#[test]
+fn the_stamp_chain_settings_load_and_bad_ones_are_refused() {
+    use v2xw_engine::scenario::schema::StampChainSettings;
+    let cvpilot = root()
+        .join("data/calibration/bsm-timing-cvpilot.yaml")
+        .to_string_lossy()
+        .into_owned();
+    let mut s = phase2(10.0);
+    let set = |s: &mut Scenario, cal: Option<&str>, ch: StampChainSettings| {
+        s.actors.vehicles.bsm_timing = Some(BsmTimingSettings {
+            enabled: Some(true),
+            calibration: cal.map(str::to_string),
+            locked_share: Some(1.0),
+            stamp_chain: Some(ch),
+        });
+        validate(s)
+    };
+    let on = |profile: &str| StampChainSettings {
+        enabled: Some(true),
+        profile: Some(profile.to_string()),
+        ..StampChainSettings::default()
+    };
+    for p in ["tampa_locked", "wyoming_obu"] {
+        let e = set(&mut s, Some(&cvpilot), on(p));
+        assert!(e.is_empty(), "{p}: {e:?}");
+    }
+    assert!(
+        !set(&mut s, Some(&cvpilot), on("nyc")).is_empty(),
+        "an unknown profile was accepted"
+    );
+    let bad = StampChainSettings {
+        stay_zero: Some(1.5),
+        ..on("tampa_locked")
+    };
+    assert!(
+        !set(&mut s, Some(&cvpilot), bad).is_empty(),
+        "stay_zero 1.5 was accepted"
+    );
+    assert!(
+        !set(&mut s, None, on("tampa_locked")).is_empty(),
+        "steps were accepted on a calibration with no position_noise walk"
+    );
+    let no_steps = StampChainSettings {
+        steps: Some(false),
+        ..on("tampa_locked")
+    };
+    let e = set(&mut s, None, no_steps);
+    assert!(
+        e.is_empty(),
+        "the chain alone on the provisional values: {e:?}"
+    );
 }

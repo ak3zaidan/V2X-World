@@ -1,0 +1,17 @@
+# P1-E4 stamp model (research/synthesis/p1-realdata-baseline.md §7.2): p1-e4-ct.yaml at the
+# Wyoming OBU's chain rates. Wyoming is P1-E4's held-out source, so this run is in sample on
+# the two chain rates (stay -1, stay 0) and out of sample on everything else. No steps.
+# Expectations were written before it ran (p1-stamp.yaml, P1S.CW.*).
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4-u.yaml
+  name: Paper 1 E4 stamp chain Wyoming
+  description: The final E4 highway with the epoch stamp chain at the Wyoming OBU's rates, no steps.
+  tags: [paper1, validation, highway, bsm-timing]
+actors:
+  vehicles:
+    bsm_timing:
+      stamp_chain:
+        enabled: true
+        profile: wyoming_obu
+        steps: false
