@@ -4046,6 +4046,28 @@ Base `081fcab2`. Rows: `crates/v2xw-engine/tests/expectations/scms-fix4-a.yaml` 
 - **RR.MWC/MWC2 crl-overdue 0, open:** the overdue rule works. Every home sender after the root changeover (CTL published at 259,320 s, after the Generator went down at 700 s) signs under the new CRACA 4a1086. No list under that CRACA can exist until the Generator restarts, so no receiver holds one. Before `dc0c0250` certificates kept the old CRACA. The scenario needs its outage moved off the rollover. R-ROLLCRL (`cfc2e13b`): a changeover now signs the new CRACA's list at once while the Generator is up (unit test).
 - **Owed:** fault proofs for scmsleft's three tests (`scratchpad/scmsleft` no longer exists) and for the new rollover unit test. Not re-run: i-s1 (`bsm_timing`), `scms_scale`, the record digests (records/govpki/acagroup), `scms_wiring`, and MW on the fixed build.
 
+## 2026-10-27: SCMS fix round 4, track B: RA timing and records (branch only)
+
+Rows, runs and verdicts: `crates/v2xw-engine/tests/expectations/scms-fix4-b.yaml` (scenarios in
+`scenarios/scms-fix4/`). Each row was written before its run, and base and variant used one binary.
+
+- **Backhaul test (272 vs 264): the diagnosis was wrong.** The top-up messages were identical on
+  both lines. The 8 extra messages were roadside CRL fetches. A fetch still on a 200 ms line
+  installed the composite as it was on landing, so a list published in flight came free with it.
+  A download now carries the file as served (`RsuCrlFile`). Result: 272 = 272.
+- **The `.info` rule:** for a week whose job is still running, the answer is the job's start plus
+  `first_batch_delay` (SCMS-576, [CAMP122] §5.2.7.8). New proto test. Time32 seconds hide it on
+  credential-lifecycle.
+- **Download-wait test:** it now pairs each top-up across the two runs, because the report mean is
+  censored: +1,791 ms against a bound of +679 ms, none earlier.
+- **Left-area test:** a home ACA 4 s slow (a held week is never in flight). 6 left, books closed.
+- **live_rsu backhaul-once:** units in the cycle are not booked at the carousel start and relay
+  what they installed: 198 = 108 + 90. Broadcasts 300 -> 284.
+- **Faults:** all 5 tests went red (yaml footer).
+- **Goldens:** none moved (phase2-path, i-s1).
+- **Open:** cache MacTimer (traced, not bisected); Q's late stamps; GOV.D1.acas was already done by
+  52432316.
+
 ## 2026-10-27: fix round 3 integration (TESTS, SCMSRA, SCMSLEFT, P1GAPS, DETECT, WPTRAFFIC, WPRADIO, LIVEROWS) and the adoption waves 4-5 checks (WP-10..15)
 
 One integrator in the main checkout, one heavy command at a time. It also finished the adoption waves 4-5 merge (WP-10..15, merged as `4aa798bb` before a usage limit stopped it): the full test pass below covers that code.

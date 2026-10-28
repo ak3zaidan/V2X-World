@@ -115,7 +115,10 @@ fn a_unit_broadcasts_a_list_only_once_its_backhaul_brought_it_and_not_while_it_i
 /// the reports it forwards and its CRL fetches, and nothing else: no certificate-cycle
 /// exchange falls in the window. Before the fix the list that started the carousel went
 /// down every unit's line a second time to time the start: 366 = 186 reports + 120 fetches
-/// + 60 on the 10-25 release.
+/// + 60 on the 10-25 release. After that fix the start still booked the list for a unit in
+/// the cycle whose own fetch was not due that step (its RA served the list one
+/// inter-provider hop later), and the unit fetched it again itself: 214 = 108 + 90 + 16 on
+/// the 3cbc95a4 release (scms-fix4-b LR.once). Such a unit now relays what it installed.
 #[test]
 #[ignore = "a Midtown run of 120 s; cargo test -p v2xw-engine --test live_rsu -- --ignored"]
 fn each_list_rides_each_units_backhaul_once() {

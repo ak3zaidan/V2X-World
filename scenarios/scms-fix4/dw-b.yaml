@@ -1,0 +1,15 @@
+# scms-fix4 dw-b: scms_knobs_runs `slow_h2_base` as a file: credential-lifecycle with the
+# ACA (pca node) 4 s slow per message for the whole run and ra-maxPreloadTime at its 2-week
+# floor, so each in-run week is the weekly job's at its boundary, through the slow ACA.
+schema: v2xw/scenario/1
+meta:
+  base: ../credential-lifecycle.yaml
+  name: scms-fix4 dw-b
+actors:
+  backend:
+    failures:
+      - {node: pca, mode: slow, from_s: 0.0, to_s: 300.0, extra_ms: 4000.0}
+security:
+  scms:
+    lifecycle:
+      max_periods_ahead: 2

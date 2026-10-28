@@ -947,6 +947,12 @@ fn the_attacker_share_moves_detections() {
 /// batch was ready and needed a second poll. With the RA pre-generating, the batch is
 /// ready when asked for, so every line sends the same messages and the 5 ms line is the
 /// fastest.
+/// Each unit's line also carries its CRL fetches. At the start provider-b's list reaches
+/// provider-a's RA one inter-provider hop after its own, so each unit fetches twice. Until
+/// 2026-10-27 a fetch still on a 200 ms line installed the composite as it was on landing,
+/// both lists, and the unit never fetched the second: 264 messages against the 5 ms
+/// line's 272, though the top-up messages were identical (scms-fix4-b BH.cause). A
+/// download now carries the file as the RA served it.
 /// (The thin line was 64 kbit/s until wave 4 of the SCMS realism plan: real enrolment
 /// certificates and stored-zip batch files made each exchange longer, so a 64 kbit/s line
 /// needed one extra poll and no longer met the same-polls precondition.)

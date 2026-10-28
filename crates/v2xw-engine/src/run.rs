@@ -231,6 +231,19 @@ fn host_state(belief: &v2xw_core::PositionEstimate, at: SimTime) -> v2xw_radio::
 /// (2^41 frames is decades at any fleet size).
 const BACKEND_BYTES_ID_BASE: u64 = 1 << 41;
 
+/// A roadside unit's composite CRL as its RA served it when the unit asked: what a
+/// download on the unit's line carries, and, once landed and verified, what the unit holds
+/// and relays. The RA serves the file as it is at the request (1609.2.1 §6.3.5.7, the
+/// download of a file), so a list published while the download is on the line is not in
+/// it: the unit's next fetch brings it.
+#[derive(Debug, Clone, Default)]
+struct RsuCrlFile {
+    version: u32,
+    serial: u64,
+    entries: Vec<v2xw_sec::linkage::CrlLinkageEntry>,
+    secured: Vec<std::sync::Arc<[u8]>>,
+}
+
 /// One node's MAC counters since its last `mac.cbr` report.
 #[derive(Debug, Clone, Copy, Default)]
 struct MacWindow {
@@ -1181,7 +1194,13 @@ pub struct Engine {
     crl_timer_armed: bool,
     /// Each roadside unit's CRL download in flight over its backhaul, and when it lands
     /// (live-rsu §3): the unit installs and broadcasts the list only once it has it.
-    rsu_crl_fetch: BTreeMap<NodeId, SimTime>,
+    rsu_crl_fetch: BTreeMap<NodeId, (SimTime, RsuCrlFile)>,
+    /// The composite CRL each roadside unit in the cycle installed last: what its
+    /// carousel relays, unchanged ([PRIMER] p.5; live-rsu §6.3).
+    rsu_crl_held: BTreeMap<NodeId, RsuCrlFile>,
+    /// A list was published while no unit's fetch was landing: the carousel starts at the
+    /// first step one does.
+    crl_carousel_pending: bool,
     /// When each unit's fetch of this step's due list lands (in flight or landed), for the
     /// carousel start: the list rides each unit's line once, as the unit's own fetch.
     rsu_crl_landing: BTreeMap<NodeId, SimTime>,
@@ -1771,6 +1790,8 @@ impl Engine {
             next_backend_bytes: 0,
             crl_timer_armed: false,
             rsu_crl_fetch: BTreeMap::new(),
+            rsu_crl_held: BTreeMap::new(),
+            crl_carousel_pending: false,
             rsu_crl_landing: BTreeMap::new(),
             next_node: 0,
             next_frame: 0,
@@ -2288,7 +2309,7 @@ impl Engine {
             // The download goes down the unit's backhaul line once, and the unit holds the
             // list only when it has landed (latency, serialisation, retransmissions).
             let lands = match self.rsu_crl_fetch.get(&rsu) {
-                Some(&at) => at,
+                Some((at, _)) => *at,
                 None => {
                     // The real composite CRL's bytes (edge-case package, item 6).
                     let size = p.crl_download_size(rsu);
@@ -2296,7 +2317,18 @@ impl Engine {
                         .access_mut()
                         .rsu_send(rsu, v2xw_radio::cellular::Direction::Downlink, size, now)
                         .unwrap_or(now);
-                    self.rsu_crl_fetch.insert(rsu, at);
+                    // The file as the RA serves it now, not as it is when the download
+                    // lands: on a slow line a list published in between came free with
+                    // it, and the unit fetched once where a fast line fetched twice
+                    // (sensitivity_security's backhaul test, 272 against 264 messages).
+                    let (version, entries, secured) = p.published_crl_for(rsu);
+                    let file = RsuCrlFile {
+                        version,
+                        serial: p.crl_serial_for(rsu),
+                        entries,
+                        secured,
+                    };
+                    self.rsu_crl_fetch.insert(rsu, (at, file));
                     at
                 }
             };
@@ -2304,8 +2336,11 @@ impl Engine {
             if lands >= step_end {
                 continue;
             }
-            self.rsu_crl_fetch.remove(&rsu);
-            let (version, entries, secured) = p.published_crl_for(rsu);
+            let Some((_, file)) = self.rsu_crl_fetch.remove(&rsu) else {
+                continue;
+            };
+            let serial = file.serial;
+            let (version, entries, secured) = (file.version, &file.entries, &file.secured);
             let ctl = p.take_ctl_install(rsu, true);
             let Some(rt) = self.nodes.get_mut(&rsu) else {
                 continue;
@@ -2319,10 +2354,11 @@ impl Engine {
             // entries the RA serves go into its gate as a vehicle's modelled CRL does, each
             // under its own CRACA, and it refuses a revoked sender from now on.
             if secured.is_empty() && p.rsu_crl_is_modelled(rsu) {
-                for e in &entries {
+                for e in entries {
                     rt.stores_mut().crl.add_linkage_entry(*e);
                 }
-                p.note_rsu_crl(rsu, version, true);
+                p.note_rsu_crl(rsu, version, serial, true);
+                self.rsu_crl_held.insert(rsu, file);
                 continue;
             }
             // A fetch for a newer CTL while no CRL is published carries no CRL to verify:
@@ -2335,7 +2371,7 @@ impl Engine {
             let mut crls = Vec::with_capacity(secured.len());
             let mut skipped = 0usize;
             let trusted = rt.security().trust().is_installed();
-            for bytes in &secured {
+            for bytes in secured {
                 match rt.install_secured_crl(bytes, now) {
                     Ok(v) => crls.push(v),
                     Err(_) => skipped += 1,
@@ -2370,10 +2406,13 @@ impl Engine {
                 }
             }
             if let Some(p) = self.phase2.as_mut() {
-                p.note_rsu_crl(rsu, version, ok);
+                p.note_rsu_crl(rsu, version, serial, ok);
                 if ok {
                     records.extend(p.rsu_crl_records(rsu, version, &held, now));
                 }
+            }
+            if ok {
+                self.rsu_crl_held.insert(rsu, file);
             }
         }
         records
@@ -8662,13 +8701,42 @@ impl Engine {
         let header = phase2.crl_size(0);
         let per_entry = phase2.crl_size(1).saturating_sub(header).max(1);
         let per_frame = (mtu.saturating_sub(header) / per_entry).max(1) as usize;
-        let chunks: Vec<Vec<v2xw_sec::linkage::CrlLinkageEntry>> =
-            entries.chunks(per_frame).map(<[_]>::to_vec).collect();
-        let sizes: Vec<u32> = chunks
-            .iter()
-            .map(|c| phase2.crl_size(c.len() as u32))
-            .collect();
-        for rsu in broadcasters {
+        type Chunks = Vec<Vec<v2xw_sec::linkage::CrlLinkageEntry>>;
+        let split = |list: &[v2xw_sec::linkage::CrlLinkageEntry]| -> (Chunks, Vec<u32>) {
+            let chunks: Chunks = list.chunks(per_frame).map(<[_]>::to_vec).collect();
+            let sizes = chunks
+                .iter()
+                .map(|c| phase2.crl_size(c.len() as u32))
+                .collect();
+            (chunks, sizes)
+        };
+        // What each unit relays: a unit in the certificate cycle fetched its RA's composite
+        // CRL over its own line and relays the one it installed, unchanged ([PRIMER] p.5),
+        // and nothing before its first install. Until 2026-10-27 every unit aired the latest
+        // published list, so a unit whose own fetch was not due aired a list it had never
+        // downloaded (live-rsu §6.3). A unit outside the cycle has the list sent down its
+        // line when the broadcast starts (step 4 of the backend step) and relays that.
+        let global = split(&entries);
+        let contents: Vec<(NodeId, u32, Chunks, Vec<u32>, Vec<std::sync::Arc<[u8]>>)> =
+            broadcasters
+                .into_iter()
+                .filter_map(|rsu| {
+                    if phase2.rsu_in_cert_cycle(rsu) || phase2.rsu_crl_is_modelled(rsu) {
+                        let f = self.rsu_crl_held.get(&rsu)?;
+                        let (c, z) = split(&f.entries);
+                        Some((rsu, f.version, c, z, f.secured.clone()))
+                    } else {
+                        Some((
+                            rsu,
+                            version,
+                            global.0.clone(),
+                            global.1.clone(),
+                            secured.clone(),
+                        ))
+                    }
+                })
+                .collect();
+        for (rsu, version, chunks, sizes, secured) in contents {
             let Some(signer) = self
                 .nodes
                 .get(&rsu)
@@ -8902,7 +8970,7 @@ impl Engine {
         }
 
         // 4. A newly published list starts the roadside broadcast.
-        if tick.published.is_some() && !self.crl_timer_armed {
+        if (tick.published.is_some() || self.crl_carousel_pending) && !self.crl_timer_armed {
             // The broadcast starts when the first broadcasting unit has the list. A unit in
             // the certificate cycle fetched it over its own line in step 3b, and its timing
             // is that fetch's: the list rides the line once (live-rsu §3, the double booking
@@ -8910,6 +8978,12 @@ impl Engine {
             // 30 extra messages per list on the Midtown base). A unit outside the cycle has
             // no fetch, and the list goes down its line here, queued with whatever else the
             // line carries. A unit that is switched off has nothing on the air to start.
+            // A unit in the cycle whose own fetch was not due this step (its RA does not
+            // serve the new list yet: another provider's list, before the inter-provider
+            // hop) gets nothing down its line here either: it fetches the list itself when
+            // its RA serves it, and relays what it installed (live-rsu §6.3; the 16 extra
+            // line messages of the Midtown base, scms-fix4-b LR.once). When no unit has a
+            // fetch landing yet, the start waits for the first step one does.
             let landing = std::mem::take(&mut self.rsu_crl_landing);
             let units: Vec<NodeId> = self
                 .phase2
@@ -8925,27 +8999,26 @@ impl Engine {
                 .into_iter()
                 .filter(|n| !self.node_is_off(*n))
                 .collect();
-            let at = self
-                .phase2
-                .as_mut()
-                .and_then(|p| {
-                    let size = p.crl_size(p.published_crl().0);
-                    units
-                        .into_iter()
-                        .filter_map(|n| match landing.get(&n) {
-                            Some(&lands) => Some(lands),
-                            None => p.access_mut().rsu_send(
-                                n,
-                                v2xw_radio::cellular::Direction::Downlink,
-                                size,
-                                now,
-                            ),
-                        })
-                        .min()
-                })
-                .unwrap_or(now)
-                .max(now + 1);
-            if at <= horizon {
+            let any_units = !units.is_empty();
+            let first = self.phase2.as_mut().and_then(|p| {
+                let size = p.crl_size(p.published_crl().0);
+                units
+                    .into_iter()
+                    .filter_map(|n| match landing.get(&n) {
+                        Some(&lands) => Some(lands),
+                        None if p.rsu_in_cert_cycle(n) || p.rsu_crl_is_modelled(n) => None,
+                        None => p.access_mut().rsu_send(
+                            n,
+                            v2xw_radio::cellular::Direction::Downlink,
+                            size,
+                            now,
+                        ),
+                    })
+                    .min()
+            });
+            self.crl_carousel_pending = any_units && first.is_none();
+            let at = first.unwrap_or(now).max(now + 1);
+            if !self.crl_carousel_pending && at <= horizon {
                 self.crl_timer_armed = true;
                 self.scheduler.schedule(
                     at,

@@ -1,0 +1,14 @@
+# scms-fix4 dw-v: dw-b with download-minWait 20 s (download_poll_interval_s 2 -> 20).
+schema: v2xw/scenario/1
+meta:
+  base: ../credential-lifecycle.yaml
+  name: scms-fix4 dw-v
+actors:
+  backend:
+    failures:
+      - {node: pca, mode: slow, from_s: 0.0, to_s: 300.0, extra_ms: 4000.0}
+security:
+  scms:
+    lifecycle:
+      max_periods_ahead: 2
+      download_poll_interval_s: 20

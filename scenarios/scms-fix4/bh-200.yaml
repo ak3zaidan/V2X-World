@@ -1,0 +1,48 @@
+# scms-fix4 bh-200: sensitivity_security `the_backhaul_latency_and_bandwidth_move_relay_topups`
+# as a scenario file (20 vehicles, 45 s, compressed 20 s i-periods, no modem: every top-up
+# rides one of eight provisioning-proxy units on a 200 ms fixed backhaul).
+schema: v2xw/scenario/1
+meta:
+  base: ../phase1-grid.yaml
+  name: scms-fix4 bh-200
+time:
+  duration_s: 45.0
+  calendar: compressed
+world:
+  source:
+    params:
+      cols: 5
+      rows: 8
+  buildings:
+    enabled: false
+actors:
+  vehicles:
+    demand:
+      rate_veh_per_h: 3600000.0
+      params:
+        max_total_vehicles: 20
+  backend:
+    protocol: protocol/scms/camp
+  rsus:
+    - {position_m: [150.0, 150.0, 0.0], roles: [provisioning-proxy], backhaul: backhaul/fixed, backhaul_params: {latency_ms: 200.0}}
+    - {position_m: [150.0, 450.0, 0.0], roles: [provisioning-proxy], backhaul: backhaul/fixed, backhaul_params: {latency_ms: 200.0}}
+    - {position_m: [450.0, 150.0, 0.0], roles: [provisioning-proxy], backhaul: backhaul/fixed, backhaul_params: {latency_ms: 200.0}}
+    - {position_m: [450.0, 450.0, 0.0], roles: [provisioning-proxy], backhaul: backhaul/fixed, backhaul_params: {latency_ms: 200.0}}
+    - {position_m: [750.0, 150.0, 0.0], roles: [provisioning-proxy], backhaul: backhaul/fixed, backhaul_params: {latency_ms: 200.0}}
+    - {position_m: [750.0, 450.0, 0.0], roles: [provisioning-proxy], backhaul: backhaul/fixed, backhaul_params: {latency_ms: 200.0}}
+    - {position_m: [1050.0, 150.0, 0.0], roles: [provisioning-proxy], backhaul: backhaul/fixed, backhaul_params: {latency_ms: 200.0}}
+    - {position_m: [1050.0, 450.0, 0.0], roles: [provisioning-proxy], backhaul: backhaul/fixed, backhaul_params: {latency_ms: 200.0}}
+security:
+  verification_policy: verify-all
+  protocol:
+    id: protocol/scms/camp
+    params:
+      i_period_s: 20
+      cert_lifetime_s: 21
+      certs_per_period: 3
+      pool_periods: 2
+      topup_below_periods: 1
+      cert_shuffle_window_s: 1
+      first_batch_delay_s: 1
+      download_poll_interval_s: 1
+metrics: [all]

@@ -934,16 +934,26 @@ fn a_top_up_whose_vehicle_leaves_the_area_is_counted_as_leaving() {
     let mut s = grid(END, 1800.0);
     cellular(&mut s);
     let mut params = compressed();
-    // The batch takes a while to be ready, so some vehicles leave with it in flight. Only a
-    // week the RA generates in the run is late: on the 3-year horizon every week a device
-    // asks for here is held (the RA generated it at acceptance, [PRIMER] p.6) and its
-    // top-off is .info + download at once, so none is in flight when its vehicle leaves
-    // (228 of 228 completed, 3c40282a). On ra-maxPreloadTime's 2-week minimum ([SMP]
-    // Table 3) each later week is the weekly job at its boundary, ready
-    // first_batch_delay after it.
-    params["first_batch_delay_s"] = json!(10);
+    // The batch must be late for a top-up to be in flight when its vehicle leaves. A week
+    // the RA holds never is: on the 3-year horizon every week a device asks for is held
+    // since its request ([PRIMER] p.6) and the top-off is .info + download at once (228
+    // of 228 completed, 3c40282a); on ra-maxPreloadTime's 2-week minimum ([SMP] Table 3)
+    // the weekly job makes the week at its boundary, and with an ACA on time it has filed
+    // it (20.01 s) before the device asks (20.02 s): 228 of 228 again, every one in 330
+    // ms, whatever first_batch_delay (scms-fix4-b LA.held). What delays a real top-off
+    // is a backend that is slow: here the home ACA takes 4 s more per message for the
+    // whole run, so its weekly batches queue for tens of seconds and some vehicles drive
+    // out of the grid first (scenarios/scms-fix4/la-slow.yaml: 6 of 162 on the 3cbc95a4
+    // release, 29 still in flight at the end, the books closed).
     params["max_periods_ahead"] = json!(2);
     lifecycle(&mut s, v2xw_engine::phase2::CAMP_SCMS, params);
+    s.actors.backend.failures = vec![v2xw_engine::scenario::schema::BackendFailureSpec {
+        node: "pca".to_string(),
+        mode: "slow".to_string(),
+        from_s: 0.0,
+        to_s: Some(END),
+        extra_ms: Some(4000.0),
+    }];
     let (report, rec) = run(s);
     let p = &report.phase2;
     let last = records(&rec, "backend.state").pop().expect("a view");

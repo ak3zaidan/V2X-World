@@ -1,0 +1,8 @@
+# scms-fix4 cache16: scms_knobs_runs `a_small_validated_certificate_cache...` as a file:
+# credential-lifecycle with the receiver's validated-certificate cache 4,096 -> 16.
+schema: v2xw/scenario/1
+meta:
+  base: ../credential-lifecycle.yaml
+  name: scms-fix4 cache16
+nodes:
+  validated_cert_cache: 16

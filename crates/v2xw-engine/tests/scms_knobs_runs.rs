@@ -101,6 +101,48 @@ impl Out {
         }
         by.into_values().collect()
     }
+    /// Each top-up, keyed by its device and request instant (ns): how long it took to
+    /// install (`None`: not installed by the end of the run) and how many batch-download
+    /// requests it sent. The key matches the same top-up across two runs of one seed.
+    fn topups(&self) -> std::collections::BTreeMap<(String, u64), (Option<u64>, usize)> {
+        use std::collections::BTreeMap;
+        let mut requested: BTreeMap<String, (String, u64)> = BTreeMap::new();
+        let mut installed: BTreeMap<String, u64> = BTreeMap::new();
+        for (c, v) in &self.pki {
+            if c != "pki.flow" || v["flow"] != "topup" || v["kind"] != "stage" {
+                continue;
+            }
+            let (Some(i), Some(t)) = (v["instance"].as_str(), v["t"].as_u64()) else {
+                continue;
+            };
+            match v["name"].as_str() {
+                Some("requested") => {
+                    let from = v["from"].as_str().unwrap_or("").to_string();
+                    requested.entry(i.to_string()).or_insert((from, t));
+                }
+                Some("installed") => {
+                    installed.entry(i.to_string()).or_insert(t);
+                }
+                _ => {}
+            }
+        }
+        let mut polls: BTreeMap<String, usize> = BTreeMap::new();
+        for v in self.msgs().filter(|v| v["flow"] == "topup") {
+            if v["name"] == "batch-download-request" && role(&v["from"]) == "ee" {
+                *polls
+                    .entry(v["instance"].as_str().unwrap_or("").to_string())
+                    .or_default() += 1;
+            }
+        }
+        requested
+            .into_iter()
+            .map(|(i, (d, t))| {
+                let took = installed.get(&i).map(|e| e.saturating_sub(t));
+                ((d, t), (took, polls.get(&i).copied().unwrap_or(0)))
+            })
+            .collect()
+    }
+
     fn topup_ms(&self) -> f64 {
         self.report
             .phase2
@@ -381,24 +423,41 @@ fn a_longer_download_wait_lengthens_a_late_topup() {
     // not at all: the mean moves by about the late share times 9 s (scms-fix3-ra
     // RA.download-wait; the 5 s bound this test had assumed most top-offs late). Half of
     // that, for the overshoots' spread over a few late top-offs.
+    //
+    // Paired, not the run report's mean (2026-10-27, scms-fix4-b DW.censored): that mean
+    // covers only the top-ups that finished inside the 300 s, so it is censored. With the
+    // 20 s wait the latest top-offs no longer finish in the run, and the mean of those
+    // that do fell (12,477 -> 9,165 ms on 2beb6717; 10,448 -> 9,357 ms on the f4982788
+    // release, 105 -> 101 completed) though no top-off got faster. The ACA's queue is the
+    // same in both runs (polls end at the RA), so the same top-off's batch is ready at the
+    // same instant and only the poll after it moves: each top-off completed in both runs
+    // is compared with itself.
     let (pb, pv) = (b.download_polls(), v.download_polls());
-    let late = pb.iter().filter(|n| **n > 1).count();
-    let n = pb.len().max(1);
+    let (tb, tv) = (b.topups(), v.topups());
+    let pairs: Vec<(f64, bool)> = tb
+        .iter()
+        .filter_map(|(k, (took, polls))| {
+            let base = (*took)?;
+            let var = tv.get(k)?.0?;
+            Some(((var as f64 - base as f64) / 1e6, *polls > 1))
+        })
+        .collect();
+    let n = pairs.len();
+    let late = pairs.iter().filter(|(_, l)| *l).count();
+    let mean = pairs.iter().map(|(d, _)| d).sum::<f64>() / n.max(1) as f64;
+    let earlier = pairs.iter().filter(|(d, _)| *d < -50.0).count();
     println!(
-        "late top-offs: base {late} of {n} (polls {}), variant {} of {} (polls {})",
+        "paired top-offs: {n} completed in both, {late} late in the base, mean +{mean:.0} ms, \
+         {earlier} earlier; polls base {} variant {}",
         pb.iter().sum::<usize>(),
-        pv.iter().filter(|n| **n > 1).count(),
-        pv.len(),
         pv.iter().sum::<usize>()
     );
+    assert!(n > 0, "no top-off completed in both runs");
     assert!(late > 0, "the slow ACA makes some top-offs late");
     let bound = 0.5 * late as f64 / n as f64 * (20_000.0 - 2_000.0) / 2.0;
-    assert!(
-        v.topup_ms() > b.topup_ms() + bound,
-        "{} vs {} (+{bound:.0} ms for {late} late of {n})",
-        v.topup_ms(),
-        b.topup_ms()
-    );
+    assert!(mean > bound, "+{mean:.0} ms (bound +{bound:.0} ms for {late} late of {n})");
+    // A longer wait never brings a download earlier: the batch is ready at the same instant.
+    assert_eq!(earlier, 0, "a top-off finished earlier with the longer wait");
     // And a longer wait asks less often: fewer download requests per late top-off.
     let per = |p: &[usize]| {
         let late: Vec<_> = p.iter().filter(|n| **n > 1).collect();

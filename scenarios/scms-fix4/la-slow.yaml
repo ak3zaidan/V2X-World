@@ -1,0 +1,42 @@
+# scms-fix4 la-slow: backend_entities `a_top_up_whose_vehicle_leaves_the_area_is_counted_as_leaving`
+# with the ACA (pca) 4 s slow per message from 0 s: the in-run weeks are late, so vehicles
+# drive out of the area with their top-up in flight.
+schema: v2xw/scenario/1
+meta:
+  base: ../phase1-grid.yaml
+  name: scms-fix4 la-slow
+time:
+  duration_s: 150.0
+  calendar: compressed
+world:
+  source:
+    params:
+      cols: 5
+      rows: 8
+actors:
+  vehicles:
+    demand:
+      rate_veh_per_h: 1800.0
+  backend:
+    protocol: protocol/scms/camp
+    failures:
+      - {node: pca, mode: slow, from_s: 0.0, to_s: 150.0, extra_ms: 4000.0}
+net:
+  uu:
+    id: cellular/uu/fixed-latency
+    params: {preset: 4g-east-coast}
+security:
+  protocol:
+    id: protocol/scms/camp
+    params:
+      i_period_s: 20
+      cert_lifetime_s: 21
+      certs_per_period: 3
+      pool_periods: 2
+      topup_below_periods: 1
+      cert_shuffle_window_s: 1
+      first_batch_delay_s: 1
+      download_poll_interval_s: 1
+      reenrol_download_delay_s: 1
+      max_periods_ahead: 2
+metrics: [all]
