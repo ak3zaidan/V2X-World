@@ -4893,8 +4893,15 @@ impl Engine {
             d.on_channel_quality(node, avg);
         }
         // SAE J3161/1 counts the unique neighbours heard at least once in the previous
-        // 1000 ms (Fouda 2023 §II-C); J2945/1 the RVs "in range currently", which is the
-        // neighbour table as it stands.
+        // 1000 ms (Fouda 2023 §II-C); J2945/1 the RVs "in range currently". Both count
+        // the stations *received*, from the temporary IDs of the decoded BSMs, not the
+        // ones whose signature checks have finished: the FMVSS 150 NPRM's preamble (82 FR
+        // 3890) says the density count needs the device to "decode the message enough to
+        // expose the various temporary IDs of the received BSMs", and S5.5.1 (82 FR 4014)
+        // names N(k) "the Vehicle Density within 100 m". The node's `HeardTable` is
+        // filled at the parse; the neighbour table, filled when a check finishes, let a
+        // slow or overflowing verifier thin the density (fix round 5, node 57 at 243.5 s:
+        // 30 RVs against 31).
         let heard_since = self
             .dcc
             .as_ref()
@@ -4904,13 +4911,8 @@ impl Engine {
             let own = v2xw_core::NodeView::position(runtime).pos;
             runtime
                 .stores()
-                .neighbors
-                .iter()
-                .filter(|n| {
-                    n.last_heard >= heard_since
-                        && n.claimed_pos.distance(own) <= J2945_DENSITY_RADIUS_M
-                })
-                .count() as u32
+                .heard
+                .count_within(own, J2945_DENSITY_RADIUS_M, heard_since)
         });
         let nav = self.j2945_nav.get(&node).copied();
         let state = {

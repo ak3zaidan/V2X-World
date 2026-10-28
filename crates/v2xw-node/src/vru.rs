@@ -1184,6 +1184,7 @@ impl VruDeviceRuntime {
         let stores = Stores {
             peers: PeerCertCache::new(config.peer_cache_capacity),
             neighbors: NeighborTable::new(config.neighbor_capacity),
+            heard: crate::stores::HeardTable::new(config.neighbor_capacity),
             ..Default::default()
         };
         let card = card(&profile, &config);
@@ -1498,6 +1499,7 @@ impl VruDeviceRuntime {
         }
         self.p2pcd_send_due(ctx, believed);
         self.stores.neighbors.age(believed);
+        self.stores.heard.age(believed);
         self.stores.certs.travelled(distance_travelled_m);
         self.stores.certs.sweep(believed, &self.stores.crl);
         let changes_before = self.stores.certs.changes();
@@ -1616,6 +1618,12 @@ impl VruDeviceRuntime {
                     verify_done: None,
                 });
                 continue;
+            }
+            // J2945/1's density input, at reception (`HeardTable`), as on a vehicle.
+            if crate::stores::describes_a_station(frame.msg_type)
+                && let (Some(signer), Some(pos)) = (frame.signer.as_ref(), frame.claimed_pos)
+            {
+                self.stores.heard.hear(signer, pos, item.arrived);
             }
             self.learn_or_request(&frame);
             self.p2pcd_rx(ctx, &frame);

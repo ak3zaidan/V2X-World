@@ -931,30 +931,19 @@ fn a_small_validated_certificate_cache_revalidates_and_costs_more_crypto() {
     // mobility, backend and network schedules are untouched: the cost is event-loop work,
     // not more simulated traffic.
     //
-    // The radio is not exactly untouched, and should not be (scms-fix4-b CACHE.mac,
-    // traced 2026-10-28): J2945/1's rate control counts the RVs in the node's own
-    // neighbour table (`Engine::update_dcc`, run.rs `neighbours`), which a verify-all
-    // receiver fills when a check finishes (`ObuRuntime::deliver`), and the variant's
-    // first-sight checks finish later. Node 57 counted 30 RVs at 243.5 s in the base and
-    // 31 in the variant; its smoothed density (above B = 25) moved the ITT by a few µs
-    // (104.366 against 104.363 ms at 243.1 s), and one of its BSMs moved one 100 ms
-    // window (244.167 -> 244.267 s): MacTimer 152,541 against 152,539, PhyEnd equal.
-    // Counting the RVs at arrival instead makes every class but NodeTask identical
-    // (counterfactual run, not shipped), so that coupling is the whole difference. The
-    // MAC and PHY event counts are therefore held to 0.01 % rather than to equality; a
-    // BSM clock that read the receiver's wakes would move them by far more.
+    // The radio is untouched. It once was not (scms-fix4-b CACHE.mac, traced
+    // 2026-10-28): J2945/1's rate control counted the RVs in the node's neighbour table,
+    // which a verify-all receiver fills when a check finishes (`ObuRuntime::deliver`), so
+    // the variant's later first-sight checks moved node 57's count (30 RVs at 243.5 s
+    // against 31), its ITT by a few µs and one BSM by one 100 ms window: MacTimer 152,541
+    // against 152,539. J2945/1 counts the RVs whose BSMs were *received* (FMVSS 150 NPRM,
+    // 82 FR 3890 and S5.5.1), and the density is now counted at reception
+    // (`Stores::heard`), so every class but NodeTask is identical: a cache that only
+    // changes how long checks take cannot move the channel.
     let (eb, ev) = (&b.report.events_by_class, &v.report.events_by_class);
     for (class, n) in eb {
-        match class.as_str() {
-            "NodeTask" => {}
-            "MacTimer" | "PhyEnd" => {
-                let m = ev.get(class).copied().unwrap_or(0);
-                assert!(
-                    m.abs_diff(*n) * 10_000 <= *n,
-                    "{class}: {n} -> {m}, more than 0.01 %: {eb:?} vs {ev:?}"
-                );
-            }
-            _ => assert_eq!(ev.get(class), Some(n), "{class}: {eb:?} vs {ev:?}"),
+        if class != "NodeTask" {
+            assert_eq!(ev.get(class), Some(n), "{class}: {eb:?} vs {ev:?}");
         }
     }
     assert_eq!(eb.len(), ev.len(), "{eb:?} vs {ev:?}");

@@ -1503,6 +1503,14 @@ The totals count each row as its own checklist records it, with the changes in Â
       shipped). The test now holds MAC/PHY counts to 0.01 % (`scms-fix4-b.yaml` CACHE.mac).
       Owner decision: count J2945/1 RVs at reception (the PER window already does); this
       moves every J2945/1 run whose density passes B, and so the SCMS goldens.
+    - **2026-10-28, done (density track):** the source settles it. The FMVSS 150 NPRM
+      preamble (82 FR 3890) says the density count needs the device to "decode the message
+      enough to expose the various temporary IDs of the received BSMs", and names
+      authentication as a separate step; S5.5.1 (82 FR 4014) calls `N(k)` "the Vehicle
+      Density within 100 m". The engine now counts at the parse (`Stores::heard`, filled in
+      `ObuRuntime::receive` before the policy; `Engine::update_dcc`), the default, with no
+      setting. `scms_knobs_runs` cache test holds MAC/PHY to equality again. The G-SCMS
+      digests (`i-s1-phase2-60s`, `phase2-path`, `ttc-triggered-brake`) did not move.
     - F5-SCOPE: `security.scms.crl_overdue_scope` (`craca` default | `all`). With `all`, any
       held series-1 list past `nextCrl` + tolerance refuses every message ([CAMP122]
       Table 67: "rejecting all of them"). `rx_validation`

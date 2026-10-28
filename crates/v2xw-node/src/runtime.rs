@@ -644,6 +644,7 @@ impl ObuRuntime {
         let stores = Stores {
             peers: PeerCertCache::new(config.peer_cache_capacity),
             neighbors: NeighborTable::new(config.neighbor_capacity),
+            heard: crate::stores::HeardTable::new(config.neighbor_capacity),
             ..Default::default()
         };
         ObuRuntime {
@@ -1165,6 +1166,7 @@ impl ObuRuntime {
         self.receive(ctx, believed, inbox, &mut out);
         self.p2pcd_send_due(ctx, believed);
         self.stores.neighbors.age(believed);
+        self.stores.heard.age(believed);
         self.stores.certs.travelled(distance_travelled_m);
         self.stores.certs.sweep(believed, &self.stores.crl);
         let changes_before = self.stores.certs.changes();
@@ -1414,6 +1416,11 @@ impl ObuRuntime {
                 });
                 continue;
             }
+
+            // J2945/1's vehicle density counts the stations whose BSMs were received and
+            // decoded, not the ones whose checks have finished (FMVSS 150 NPRM, 82 FR
+            // 3890; `HeardTable`): record this one now, before the policy queues it.
+            self.hear(&frame, arrived);
 
             // 4. The policy, over the queue as it is at this instant.
             self.learn_or_request(&frame);
@@ -2028,6 +2035,17 @@ impl ObuRuntime {
         }
     }
 
+    /// Records a received frame in the [`crate::stores::HeardTable`]: a frame that
+    /// describes a station (as [`Self::deliver`] judges it for the neighbour table) and
+    /// says where it is.
+    fn hear(&mut self, frame: &RxFrame, arrived: SimTime) {
+        if crate::stores::describes_a_station(frame.msg_type)
+            && let (Some(signer), Some(pos)) = (frame.signer.as_ref(), frame.claimed_pos)
+        {
+            self.stores.heard.hear(signer, pos, arrived);
+        }
+    }
+
     fn deliver(&mut self, m: VerifiedMessage, out: &mut StepOutcome) {
         self.window
             .delivered(m.verification == VerificationState::Verified);
@@ -2039,12 +2057,8 @@ impl ObuRuntime {
         // fills it is their awareness messages. A SPaT, a MAP or a signal request says
         // where a junction is, not where its sender is going, and a DENM describes an
         // event rather than a station; none of them makes its sender a neighbour.
-        let describes_a_station = !matches!(
-            m.msg_type,
-            MsgType::Spat | MsgType::Map | MsgType::Srm | MsgType::Ssm | MsgType::Denm
-        );
         if m.verification != VerificationState::Invalid
-            && describes_a_station
+            && crate::stores::describes_a_station(m.msg_type)
             && let Some(signer) = m.signer.clone()
         {
             if self.stores.neighbors.get(&signer).is_none() {
