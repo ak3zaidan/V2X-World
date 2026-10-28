@@ -469,6 +469,146 @@ Its one engine nuisance is a 4.5 mm white increment per axis (GNSS layer, mobili
 - A deployment-realistic locked class would mix chain devices (`tampa_chain`, 22 of 50 Tampa locked IDs) with fixed-stamp devices (`tampa_fixed`).
 - The Wyoming OBU's larger, longer-lived speed coupling (1.02 m/s per m) comes from one device and is not used.
 
+### 7.6 Why candidate E's body is too narrow at speed: a device speed-scale error (2026-10-28)
+
+This is analysis only. No engine code changed and no engine run was made. The Tampa fit
+reads Tampa (`nm7w-nvbm`) only. Wyoming (`7qu7-j8rx`) is read for its speeds (a covariate)
+and as the KS reference.
+
+- **Tool:** `tools/realdata/e4scalefit.py` (`fit`, `nuisance`, `predict`, `yaml`), with
+  tests in `test_e4scalefit.py` (5 tests). Six injected faults each turn a test red.
+- **Emulator change:** `e4stepfit.emulate` takes an optional `scale`. Unset, it draws
+  nothing, so every §7.5 number is unchanged.
+- **Candidate:** `data/calibration/bsm-timing-cvpilot-chain-device-scale.yaml`.
+
+**What the fix-round-5 runs left open.** Candidate E ran at KS **0.099** on the speed-matched
+E4 highway, against the emulator's 0.082. E with the speed change ran at 0.0915. The miss
+was in the body: 22.5 % of the engine's pairs were under 0.68 cm, against Wyoming's 12.7 %.
+The suspect was the emulator's 4.5 mm engine nuisance, which had been fitted on slower runs.
+
+**Finding 8. The engine nuisance at cruise is 4.0 mm, and with it the emulator reproduces
+the engine.**
+
+The nuisance was refitted on the three speed-matched runs SBM, CEM and CESM. The fit is a
+least-squares fit of the log ratio of the p10 / p25 / p50 / p75 / p90 quantiles, over 0–5 mm
+in 0.5 mm steps (`nuisance`). The best value is **4.0 mm** (error 0.020; 0.036 at 4.5 mm,
+0.054 at 3.0 mm). At 4.0 mm, CEM's emulated quantiles are 0.37 / 0.76 / 1.45 / 3.56 / 9.47 cm,
+against the engine's 0.38 / 0.75 / 1.46 / 3.89 / 9.53 cm.
+
+| at 4.0 mm, speed-matched, 3 seeds | emulator KS | engine KS |
+|---|---|---|
+| E | 0.0945 (0.093–0.097) | 0.0992 |
+| E + speed change | 0.0905 (0.089–0.092) | 0.0915 |
+
+So 0.012 of the 0.017 gap was the nuisance (§7.5 had already put E at 0.094 at 4 mm). The rest
+is inside the run's ±0.01. **The body is still too narrow at the right nuisance:** 22.0 % of
+pairs are under 0.68 cm. The GNSS layer is therefore not the cause, and it needs no change.
+
+The emulator's p75 is 0.33 cm under the engine's (3.56 against 3.89). Predictions that land
+on the shoulder carry that much more uncertainty.
+
+**Finding 9. Real devices report a speed off their own displacement by a steady per-device
+factor.**
+
+On exactly-100 ms same-stamp pairs at v ≥ 10 m/s, under 5 cm, with the pair's acceleration
+removed, ε = along residual / (v·Δt) is steady within an ID and differs between IDs:
+
+| Tampa locked IDs (≥ 15 pairs) | IDs | mean ε | between-ID sd | within-ID se (rms) | device sd |
+|---|---|---|---|---|---|
+| chain | 9 | +0.182 % | 0.246 % | 0.112 % | 0.219 % |
+| fixed | 12 | +0.072 % | 0.203 % | 0.126 % | 0.159 % |
+| **all locked (fitted)** | **21** | **+0.119 %** | 0.223 % | 0.120 % | **0.188 %** |
+
+- Bootstrap over IDs (200 replicates), 95 %: mean 0.031–0.204 %, device sd 0.094–0.238 %.
+- **It is a scale, not a bias.** Four IDs span ≥ 8 m/s. On those, a per-ID scale (y = s·v)
+  fits along/Δt better than a per-ID bias with the same number of parameters (Δ log-lik +8.9).
+- **It is persistent.** The lag-1 correlation of consecutive along residuals on chain IDs
+  is −0.01 at 10–15 m/s (168 pairs) and +0.67 at ≥ 15 m/s (69 pairs). A white term would give
+  −0.5 at every speed. This one grows with v·Δt until it dominates.
+- **J2735 speed rounding is too small to be the cause.** Rounding to 0.02 m/s adds at most
+  0.048 % at 12 m/s.
+- **The engine has no such term.** The transmitted speed in `bsm_timing.rs` `report_inner`
+  is the belief's speed plus white `output_noise`.
+- **Size of the missing term.** At Tampa's 12 m/s it is a 2–3 mm along term, which the core
+  walk had absorbed. At Wyoming's 34.4 m/s it is 6–7 mm.
+- **Held-out diagnosis**, read after the Tampa fit and not used by it: Wyoming's one OBU has
+  ε = −0.18 % on all 9 of its temporary IDs (between-ID sd 0.06 %). That is the same size
+  as Tampa's device sd, with the opposite sign to Tampa's mean.
+
+**The refit.**
+
+- ε is taken out of each chain ID's along residuals. Each ID's value is shrunk to the
+  pooled mean by its standard error.
+- The joint stamp-step model (§7.5, K = 2, one size law) is then refitted, warm-started from
+  E's optimum. Log-lik is 4756.6, against 4638.9 before.
+- Core walk, per epoch: 0.765 × (≈ 0 along, 2.6 mm cross) + 0.235 × (3.6, 10.5 mm).
+  - The main component's along part was entirely the scale term. It sits at the 0.1 mm floor.
+  - The steps barely move: P 0.897 at 0 → −1, 0.052 at 0 → 0; along p50 / p90 6.95 / 18.4 cm,
+    cross 3.8 / 11.8 cm.
+- The candidate (E′) is the refitted core plus a reported-speed scale s = −ε per device,
+  s ~ N(−0.119 %, 0.188 %).
+
+**Predicted P1-E4 KS against Wyoming (held out)**, speed-matched, 3 seeds of 20,000 pairs:
+
+| candidate | nuisance 4.0 mm (engine as it is) | under 0.68 cm | p10 / p25 / p50 / p75 / p90 cm |
+|---|---|---|---|
+| E (shipped `tampa_chain`) | 0.0945 at 0.68 cm | 0.220 | 0.37 / 0.75 / 1.45 / 3.57 / 9.44 |
+| E′ without the scale | 0.114 at 0.74 cm | 0.239 | 0.35 / 0.71 / 1.40 / 3.55 / 9.38 |
+| **E′ + scale (the candidate file)** | **0.094 (0.088–0.103) at 3.3 cm** | **0.180** | 0.42 / 0.89 / 1.58 / 3.19 / 9.34 |
+| E′ + scale + speed change | 0.0945 (0.087–0.103) at 3.2 cm | 0.176 | 0.43 / 0.89 / 1.59 / 3.18 / 9.42 |
+| E′ + scale, zero mean (sensitivity only) | 0.075 (0.067–0.079) at 0.68 cm | 0.197 | 0.41 / 0.81 / 1.49 / 3.45 / 9.30 |
+| Wyoming | — | 0.127 | 0.60 / 0.95 / 1.64 / 4.11 / 5.99 |
+
+- **Spread over the Tampa device sample:** E′ + scale over 30 bootstrap draws of the ID set
+  gives a median of 0.087 (95 % 0.062–0.116). The share at or under 0.092 is 0.63.
+- **With no engine nuisance (0 mm),** E′ + scale gives 0.101 and E gives 0.158. The engine's
+  4 mm GNSS term is part of what makes either work.
+
+**Verdict.**
+
+- **The cause is a device term the engine lacks, not the GNSS layer.** The scale term moves
+  the body the right way: under 0.68 cm, 0.22 → 0.18, against Wyoming's 0.127.
+- **The KS hardly moves**, 0.0945 → 0.094. The maximum gap moves from the body (0.68 cm) to
+  the stamp shoulder (3.2 cm). There, the sign of the mean decides:
+  - Tampa's mean ε is +0.12 %, and the shoulder moves away from Wyoming's (p75 3.19 against 4.11).
+  - Wyoming's OBU has the opposite sign.
+  - The zero-mean row (0.075) shows how much rides on that sign. It is **not** the candidate:
+    picking it would use the held-out device's sign.
+- **The calibration change is the candidate file.** It holds Tampa's numbers. On the present
+  evidence it does not make P1-E4 a robust pass:
+  - point prediction 0.094;
+  - the bootstrap puts 63 % of the mass at or under 0.092.
+- The honest out-of-sample state: the body gets better, and the shoulder depends on a
+  device-population sign that 21 Tampa IDs give as +0.12 % ± 0.09 %.
+
+**Expected, written before any engine run** (E′ + scale on `p1-e4-u.yaml`, once the engine
+reads `speed_scale`):
+
+- KS 0.085–0.105, point 0.094;
+- under 0.68 cm, 0.17–0.19;
+- r p50 1.5–1.7 cm;
+- 0 → −1 over 5 cm, 0.72–0.78;
+- −1 → −1 over 5 cm, at most 0.005;
+- with `speed_scale` absent, byte-identical to CEM.
+
+**Open.**
+
+- **Engine:** `crates/v2xw-node/src/bsm_timing.rs`.
+  - `OutputNoise` gains `speed_scale: Option<{mean, sd}>`. This is `v2xw.bsm_timing.v3`, and
+    `validate` must check it: finite, sd ≥ 0, |mean| < 0.05.
+  - The struct has no `deny_unknown_fields`, so today's loader silently **ignores** the key.
+    The loader must read it or refuse it.
+  - The draw is once per device, by keyed hash on the device key (build-plan rule 5), not a
+    new position in `rng`. That keeps every other draw byte-identical.
+  - The device holds it as `BsmTimingDevice.speed_scale`, set in `assign`, or lazily at the
+    first `report_inner`.
+  - It is applied in `report_inner`, where the transmitted speed is built: `v_at` becomes
+    `v_at * (1 + s)` before `ns + dv`.
+- **Runs:** a `p1-e4-ce.yaml` variant that names the candidate file, plus expectation rows
+  for the numbers above.
+- **Owner choice:** which device population's sign stands for the US deployment. Tampa's 21
+  locked IDs are the only training data.
+
 ---
 
 ## Generated tables

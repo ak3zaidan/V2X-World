@@ -445,7 +445,7 @@ def speed_coupling(seqs, theta, walk, lags=(0, 1, 2, 3, 4, 5)):
 
 def emulate(speeds, n_pairs, stamp="chain", chain=None, step=None, step0=None, walk=V3_WALK, extra_m=EMU_EXTRA_M,
             k_v=0.0, tau_v=1.0, follow=1.0, seed=1, nbsm=300, hop=V3_HOP, on=V3_OUTPUT_NOISE, lat_deg=0.0,
-            heading_deg=90.0, lsb_m=LSB_M):
+            heading_deg=90.0, lsb_m=LSB_M, scale=None):
     """The E4 highway as the engine builds it (bsm_timing.rs report_inner, locked class): a
     straight east-bound device at a constant speed drawn from `speeds`, the walk advancing one
     epoch per BSM (mixture increment, tau), the :00/:50 grid hop (error interpolated half an
@@ -455,8 +455,10 @@ def emulate(speeds, n_pairs, stamp="chain", chain=None, step=None, step0=None, w
     them drawn once per device; step = (prob, along p50, along p90, cross p50, cross p90) m at
     a 0 -> -1 transition, step0 the same at a 0 -> 0 BSM. k_v: the step's speed change per m of
     along step, decaying with tau_v, the position moving with it (follow 1) or keeping the old
-    speed (follow 0). Returns the v1.0 residuals (m) of pairs at v1 >= 10 m/s and their
-    (o1, o2) labels."""
+    speed (follow 0). scale = (mean, sd): a per-device reported-speed scale error s drawn once
+    per device, the transmitted speed v (1 + s) (e4scalefit.py); None draws nothing, so the
+    other candidates' sequences are unchanged. Returns the v1.0 residuals (m) of pairs at
+    v1 >= 10 m/s and their (o1, o2) labels."""
     rng = random.Random(seed)
     out, lab = [], []
     rho = math.exp(-0.1 / walk["tau_s"])
@@ -478,6 +480,7 @@ def emulate(speeds, n_pairs, stamp="chain", chain=None, step=None, step0=None, w
         sh, ch = math.sin(h0), math.cos(h0)
         if stamp == "chain":
             s_m, s_0 = rng.choice(chain) if isinstance(chain, list) else chain
+        sc_v = 1.0 + rng.gauss(*scale) if scale else 1.0
         ea = ec = 0.0
         dv = 0.0
         away = False
@@ -527,7 +530,7 @@ def emulate(speeds, n_pairs, stamp="chain", chain=None, step=None, step0=None, w
             east, north = s_al * sh - err[1] * ch, s_al * ch + err[1] * sh
             xq, yq = round(east / lsb_e) * lsb_e, round(north / lsb_n) * lsb_n
             sm_ms = math.floor(t_ms + stamp_ms + 1e-9)
-            vr = round(max(0.0, v + dv + rng.gauss(0, on[0])) / mc.SPEED_RES_MPS) * mc.SPEED_RES_MPS
+            vr = round(max(0.0, v * sc_v + dv + rng.gauss(0, on[0])) / mc.SPEED_RES_MPS) * mc.SPEED_RES_MPS
             hr = round((h0 + rng.gauss(0, math.radians(on[1]))) / hstep) * hstep
             b = (xq, yq, sm_ms, vr, hr, o)
             if prev is not None and prev[3] >= VMIN:
