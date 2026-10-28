@@ -1507,6 +1507,10 @@ The totals count each row as its own checklist records it, with the changes in ย
       held series-1 list past `nextCrl` + tolerance refuses every message ([CAMP122]
       Table 67: "rejecting all of them"). `rx_validation`
       an_overdue_list_refuses_every_sender_only_under_the_all_scope; default unchanged.
+    - F5-DOC: `reports_sent` is documented as generated, filed or not (see
+      `reports_not_filed`). F5-TOPUP: the extractor's `topup.uu_bytes_per_topup` (the
+      `topup` flow's device-side bytes) gives 3,764 B per top-up on base.yaml, against
+      17,019 B of all Uu (`scms-fix5.yaml` F5.TOPUP.bytes passes).
 
 **Owner decisions**
 - **What the RA and PCA keep for each device** (ยง6 item 4): request records, cocoons,

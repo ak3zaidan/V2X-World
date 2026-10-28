@@ -1,0 +1,46 @@
+# SCMS fix round 5, scms track (base a925db58). Every row was written, with `measured:
+# pending`, before the run it judges. Checker:
+#   python3 -I tools/realworld/matrix.py extract <runs>/<id>
+#   python3 -I tools/realworld/matrix.py check  <this file> <runs> [--fill]
+# Binary: this branch's debug build (opt-level of the dev profile), one rayon thread, the
+# tiny run slot, --record-level events --no-verify --build-utc 2026-10-28T00:00:00Z.
+# verdict: pass | fixed | wrong-expectation | open (as scms-fix3-ra.yaml).
+schema: v2xw/scms-run-expectations/1
+runs:
+  T:
+    scenario: scenarios/scms-fix3/base.yaml
+    note: credential-lifecycle at 180 s (scms-fix3-ra.yaml's B/F/G scenario), this build
+rows:
+# --- F5-TOPUP: the top-up flow's own Uu bytes per top-up ----------------------------------
+- id: F5.TOPUP.bytes
+  base: T
+  variant: T
+  area: network
+  measure: topup.uu_bytes_per_topup
+  expect: band
+  band: [3400, 4100]
+  source: 'scms-fix3-ra.yaml RA.uu-bytes-per-topup recheck_9d0fbc2c (trace track, pki.flow): the
+    top-up exchange (.info, its answer, the batch request and download, the file request and
+    response) is 221,859 B, 3,760 B per top-up; 1609.2.1 6.3.5.4 (the same two downloads).
+    The band is 3,760 B -10 % / +9 %: the bytes per top-up are the protocol''s, not the draw''s'
+  measured: '3,764.3 (222,095 B over 59 completed top-ups, 354 messages); all Uu bytes per top-up
+    on the same run 17,019.3 (the 9d0fbc2c value)'
+  verdict: pass
+  fault: 'the extractor summing every flow''s device-side msg/pdu bytes (the flow filter
+    dropped): 26,324.9, FAIL'
+  note: 'RA.uu-bytes-per-topup divided every Uu byte by the top-ups, so 71 % of it was SM-MBR
+    uploads (a property of the realisation: 13.5, 17.0, 22.5 and 16.3 kB per top-up across
+    builds and seeds). The extractor (runtime_realism.py extract/derive) now sums the `topup`
+    flow''s msg and pdu records with a device (ee/<n>) at one end: topup.uu_bytes,
+    topup.uu_msgs and, per completed top-up, topup.uu_bytes_per_topup. The engine leaves
+    (access.uu_*_bytes) are right for what they say: all Uu traffic'
+- id: F5.TOPUP.share
+  base: T
+  variant: T
+  area: network
+  measure: topup.uu_msgs
+  expect: ge
+  value: 1
+  source: the top-up flow crosses Uu (ee <-> ra/lop) at every top-up
+  measured: '354'
+  verdict: pass
