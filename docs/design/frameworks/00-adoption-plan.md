@@ -794,6 +794,16 @@ trustworthy or comparable; later waves add behaviours and radio features.
   WSA matches USDOT RSU Spec v4.1 App. D except the power byte. SCMS PSID 0x23 is an
   assumption (no deployment document names one). Owed: the oracle copy and the
   vectors-provenance row.
+- P19.1 built (2026-10-28, branch only): `v2xw_msg::wsa` is a hand-written UPER codec of
+  `SrvAdvMsg` with every header, service-info, channel-info and routing extension the
+  object sets list (unknown ids kept as octets). `rasn-compiler` was not used: WEE's
+  `Extension` is the information-object-class idiom it cannot compile (build decision D5).
+  `tests/wsa_oracle.rs` holds it to asn1tools 0.169 byte for byte on 5 vectors, both
+  directions; the oracle copy is `tools/oracle/asn1/ieee1609.3/` and the
+  `vectors-provenance.md` row is written. `RsuRuntime::wsa_payload` sends a real 84-octet
+  SCMS-service WSA (U5 fixed in the node; `wsa_payload_bytes` removed). No golden moves:
+  the engine sends no WSA yet. Not built: a `MessageCodec` arm (no caller needs one) and
+  the 10 Hz RepeatRate default (moves CCH load; with P19.2).
 
 **WP-20 Traffic yields to emergency vehicles** (M, 5 days). Source: S-P5.
 - Scope: within a reaction distance civilians pull to the kerb or slow (US move-over, UVC

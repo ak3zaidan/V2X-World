@@ -206,3 +206,25 @@ owner CAMP) was read from Wireshark's transcription of the IEEE RA list, `epan/d
 (fetched 2026-10-17, sha256 `a8ad7385d6a28902e120e7883ebe132e1bdfb8e7462e92ce036c3d2f8457e559`); the clause 8 rules and the
 Annex C.2.1.3.1 values from IEEE 1609.2a-2017 (ETSI docbox copy, sha256
 `aae52bc1ab7101a1993c2282e157086cfefa1e44146ee93e61104c3ece19bc48`, not vendored: IEEE copyright).
+
+## WP-19 P19.1: the IEEE 1609.3 WSA (rule gap U5)
+
+Added 2026-10-28. The oracle copy of the IEEE 1609.3-2016 WSA modules, byte-identical to
+`third_party/asn1/ieee1609.3/` (TCI_ASN1 `63d82d87976b`, CRLF kept, no upstream licence;
+see that directory's `PROVENANCE.md`):
+
+| Module | Bytes | sha256 |
+|---|---|---|
+| `ieee1609.3/17419_CITSapplMgmtIDs_v1.asn` | 958 | `d357fb4018fd43ef8eb8057eb6d95c27c641d44f244e19308ddd76f4b237bad5` |
+| `ieee1609.3/wee.asn` | 4939 | `60ebab7e5bb79fd0746e815cd0d0fb6d2925be92de8f52b42f72c812ed5eb88c` |
+| `ieee1609.3/wsa.asn` | 6125 | `5f2f0a304506237bb43707869290c5ecd12ef8432aea41a87e0265d2a90fd93e` |
+| `ieee1609.3/wsm.asn` | 9436 | `3bf63da6aee4a02e8e09fc127eca84cb317c26ea2fd6b5a6d0c585b3ee64fb2a` |
+
+| File | Vectors | Source | File sha256 |
+|---|---|---|---|
+| `crates/v2xw-msg/tests/fixtures/wsa_asn1tools.txt` | 5 (`minimal`, `scms-service`, `full`, `psids`, `edges`) | asn1tools 0.169, UPER, compiling the three modules WSA needs, by `crates/v2xw-msg/tests/oracle/wsa_oracle.py emit` | `ea59187fa6f1ecb5788ac40bb85128bcfd5740e501f9b5c2e978dd70734ba0fb` |
+
+The Rust check is `crates/v2xw-msg/tests/wsa_oracle.rs`: the hand-written codec
+(`v2xw_msg::wsa`) writes each vector's octets exactly and decodes asn1tools' octets to the
+same value. The script's `check FILE` mode has asn1tools decode and re-encode octets the
+Rust codec wrote. Encoding rule UPER and PSID 0x23 as `PROVENANCE.md` records them.
