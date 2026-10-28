@@ -123,7 +123,7 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
         ),
         ("traffic.signals.control", "nema") => w(
             "NEMA dual ring (eight phases)",
-            "Two rings of four phases time concurrently and meet at barriers, as US controllers do (FHWA Signal Timing Manual 2nd ed.); lefts are protected then permissive. Junctions that do not map keep the single ring.",
+            "Two rings of four phases time concurrently and meet at barriers, as US controllers do (FHWA Signal Timing Manual 2nd ed.), with protected, permissive or protected-then-permissive lefts. Junctions that do not map keep the single ring.",
         ),
         ("traffic.signals.nema.lefts", "lead-lead") => w(
             "Lead-lead",
@@ -141,16 +141,14 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Protected, then permissive",
             "A green arrow first, then lefts may turn through gaps in the oncoming traffic.",
         ),
-        ("traffic.signals.nema.left_turn_mode", "protected") => Some((
-            "Protected only (not available yet)",
-            "Lefts turn only on their own green arrow. Refused by this build until WP-17 P17.6.",
-            false,
-        )),
-        ("traffic.signals.nema.left_turn_mode", "permissive") => Some((
-            "Permissive only (not available yet)",
-            "No left-turn phase: lefts turn through gaps in the oncoming traffic. Refused by this build until WP-17 P17.6.",
-            false,
-        )),
+        ("traffic.signals.nema.left_turn_mode", "protected") => w(
+            "Protected only",
+            "Lefts turn only on their own green arrow (even from a lane shared with the through, which they then block).",
+        ),
+        ("traffic.signals.nema.left_turn_mode", "permissive") => w(
+            "Permissive only",
+            "No left-turn phase: lefts turn through gaps in the oncoming traffic.",
+        ),
         ("traffic.signals.nema.permissive_display", "fya") => w(
             "Flashing yellow arrow",
             "The permissive left shows a flashing yellow arrow (MUTCD 2009 §4D.20).",

@@ -585,6 +585,32 @@ out of scope here.
     24 / 55.1 / 19 / 34.2 s under max recall.
 - **P17.6** (3 h): left-turn modes, lead/lag, and FYA display, with the SPaT
   `MovementPhaseState` mapping in `infra.rs` and the FYA test.
+
+  **Done 2026-10-28 (P17.6).** `nema::control::left_rules` gives each movement a `Rule`:
+  an `own` phase that protects it and a `permit` phase in whose green it turns, yielding.
+  - The three modes run. Lead/lag was already ring order (P17.4).
+  - **The FYA window is the opposing through's green; the circular green is the left's
+    own approach's.** MUTCD 2009 §4D.20 and §4D.18. Under FYA the left yields to the
+    traffic it watches, so the lead-lag "yellow trap" goes away. Under a circular green
+    the left sees its own head's yellow while the opposing through runs on. The
+    behaviour moves, not just the face. Test: `fya_ends_the_lead_lag_yellow_trap`.
+  - **A protected-permissive left that shares its lane with the through or the right**
+    gets no arrow and runs permissive in its own approach's circular green, counted in
+    `NemaControllers::shared_lane_lefts`. A protected left phase needs an exclusive
+    left-turn lane in US practice (STM 2nd ed. ch. 5, left-turn phasing [verify the
+    clause]): a waiting left would block the through behind it. Under `protected` the
+    arrow is kept, as asked.
+  - Consequence: the procedural grids, whose lefts share the inner lane, run two-phase
+    (2+6, 4+8) under the defaults.
+  - A permissive-only left calls its window's phase.
+  - SPaT already mapped green-yield to permissive-Movement-Allowed (5) and green to
+    protected-Movement-Allowed (6). `infra::tests::fya_maps_to_permissive_movement_allowed`
+    pins that mapping and its agreement with `SignalState::j2735_phase`.
+  - **Open.** The steady yellow after an FYA window is sent as protected-clearance (8),
+    because `SignalState` has a single amber. J2735's permissive-clearance (7) needs a
+    world state, a model change. A left needs its own signal group to show its FYA
+    separately in SPaT, and the generated worlds give a head group per approach, not per
+    left lane.
 - **P17.7** (3 h): pedestrian phases (walk and clearance timing, calls from waiting
   walkers in `v2xw-world/src/walk.rs`) and recall, with the ped test.
 - **P17.8** (3 h): coordination (cycle, offset, force-offs fixed or floating, permissive

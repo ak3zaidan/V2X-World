@@ -22,10 +22,11 @@
 //! # What each movement shows
 //!
 //! * A movement whose phase is green shows green; in its yellow, amber; otherwise red.
-//! * A left turn with its own phase is protected-permissive (the only mode this build
-//!   runs; `nema.left_turn_mode` is checked by the loader): outside its own green it turns
-//!   permissively (green-yield) while the through of its own approach is green, and shows
-//!   amber in that through's yellow.
+//! * A left turn with its own phase follows `nema.left_turn_mode` and
+//!   `nema.permissive_display` ([`left_rules`], P17.6): its arrow, its permissive window
+//!   (green-yield, then amber), or both. The window under a flashing yellow arrow is the
+//!   opposing through's green, and under a circular green its own approach's green. A
+//!   protected-permissive left from a lane it shares with the through runs permissive.
 //! * A crosswalk walks for `walk_s` from the start of its phase's green, then shows its
 //!   pedestrian change interval (amber, `crossing length / ped_speed_mps`), then don't
 //!   walk. Until pedestrian push-button calls exist (P17.7) every crosswalk phase is on
@@ -68,6 +69,99 @@ pub const MUTCD_WALK_S: f64 = 7.0;
 /// See [`MUTCD_WALK_S`].
 pub const MUTCD_PED_SPEED_MPS: f64 = 1.067;
 
+/// What one vehicle movement shows: green (amber) while `own` is green (yellow), else
+/// green-yield (amber) while `permit` is green (yellow), else red.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rule {
+    /// The phase that protects it, or `None` for a permissive-only left.
+    pub own: Option<u8>,
+    /// The phase in whose green it turns permissively, yielding.
+    pub permit: Option<u8>,
+}
+
+/// The through that opposes through `t`: 2 and 6, 4 and 8.
+const fn opposing_through(t: u8) -> u8 {
+    match t {
+        2 => 6,
+        6 => 2,
+        4 => 8,
+        8 => 4,
+        other => other,
+    }
+}
+
+/// Each movement's [`Rule`] under `n.left_turn_mode` and `n.permissive_display`, and how
+/// many protected-permissive left phases were demoted for want of an exclusive lane.
+///
+/// * Every movement but a left with its own phase is protected by its phase.
+/// * `protected`: such a left turns only on its arrow.
+/// * `permissive`: it has no arrow; it turns, yielding, through the permissive window.
+/// * `protected-permissive`: the arrow, then the permissive window. A left whose approach
+///   lane also carries the through or the right has no arrow: a left-turn phase serves only
+///   an exclusive left-turn lane in US practice (a vehicle waiting for the arrow would
+///   hold the through traffic behind it), so it runs permissive and is counted. Under
+///   `protected` it keeps its arrow, as asked, and blocks its lane.
+/// * The permissive window is the display's: under a **flashing yellow arrow** it is the
+///   *opposing* through's green (MUTCD 2009 §4D.20: the FYA "shall be displayed" during the
+///   permissive movement, and the display follows the opposing traffic it yields to, which
+///   is what removes the lead-lag "yellow trap"); under a **circular green** it is the
+///   green of the left's own approach, whose head it shares (§4D.18), so the left sees
+///   that head's yellow while the opposing through may still run. A left in a shared lane
+///   has only the through's head, so its window is always its own approach's green.
+pub fn left_rules(
+    a: &Assignment,
+    approach: &[Option<LaneId>],
+    n: &NemaSettings,
+) -> (Vec<Rule>, u64) {
+    use crate::scenario::schema::PermissiveDisplay;
+    let mut demoted = 0;
+    let rules = a
+        .movements
+        .iter()
+        .enumerate()
+        .map(|(m, am)| {
+            let protect = Rule {
+                own: Some(am.phase),
+                permit: None,
+            };
+            let Some(own_through) = am.permissive_with.filter(|_| am.kind == MovementKind::Left)
+            else {
+                return protect;
+            };
+            let shared = approach[m].is_some_and(|l| {
+                (0..a.movements.len()).any(|k| {
+                    k != m && approach[k] == Some(l) && a.movements[k].kind != MovementKind::Left
+                })
+            });
+            // A shared lane has one head, the through's circular green: no arrow face of
+            // its own to flash.
+            let window = match n.permissive_display {
+                PermissiveDisplay::Fya if !shared => opposing_through(own_through),
+                _ => own_through,
+            };
+            match n.left_turn_mode {
+                LeftTurnMode::Protected => protect,
+                LeftTurnMode::Permissive => Rule {
+                    own: None,
+                    permit: Some(window),
+                },
+                LeftTurnMode::ProtectedPermissive if shared => {
+                    demoted += 1;
+                    Rule {
+                        own: None,
+                        permit: Some(window),
+                    }
+                }
+                LeftTurnMode::ProtectedPermissive => Rule {
+                    own: Some(am.phase),
+                    permit: Some(window),
+                },
+            }
+        })
+        .collect();
+    (rules, demoted)
+}
+
 /// One junction under the dual-ring controller.
 #[derive(Debug, Clone)]
 struct NemaPlan {
@@ -77,8 +171,8 @@ struct NemaPlan {
     approach: Vec<Option<LaneId>>,
     /// `(walk_s, clearance_s)` of each crosswalk movement.
     ped: Vec<Option<(f64, f64)>>,
-    /// Lefts with their own phase also turn permissively.
-    permissive: bool,
+    /// What each vehicle movement shows ([`left_rules`]).
+    rules: Vec<Rule>,
     /// The vector showing, and when it began.
     shown: Vec<SignalState>,
     shown_since_s: f64,
@@ -111,14 +205,11 @@ impl NemaPlan {
                         _ => SignalState::Red,
                     };
                 }
-                match showing(a.phase) {
+                let r = self.rules[m];
+                match r.own.and_then(showing) {
                     Some((Interval::Green, _)) => SignalState::Green,
                     Some((Interval::Yellow, _)) => SignalState::Amber,
-                    _ => match a
-                        .permissive_with
-                        .filter(|_| self.permissive)
-                        .and_then(showing)
-                    {
+                    _ => match r.permit.and_then(showing) {
                         Some((Interval::Green, _)) => SignalState::GreenYield,
                         Some((Interval::Yellow, _)) => SignalState::Amber,
                         _ => SignalState::Red,
@@ -128,12 +219,14 @@ impl NemaPlan {
             .collect()
     }
 
-    /// The calls of this junction's phases from the detector lane sets.
+    /// The calls of this junction's phases from the detector lane sets: a movement's lane
+    /// calls the phase that protects it, or, for a permissive-only left, the phase that
+    /// lets it turn.
     fn calls(&self, calls: &BTreeSet<LaneId>, extend: &BTreeSet<LaneId>) -> Calls {
         let mut c = Calls::default();
-        for (m, a) in self.assign.movements.iter().enumerate() {
-            if let Some(l) = self.approach[m] {
-                let q = usize::from(a.phase);
+        for (m, r) in self.rules.iter().enumerate() {
+            if let (Some(l), Some(q)) = (self.approach[m], r.own.or(r.permit)) {
+                let q = usize::from(q);
                 c.demand[q] |= calls.contains(&l);
                 c.extend[q] |= extend.contains(&l);
             }
@@ -261,6 +354,7 @@ fn plan_interval(
 pub struct NemaControllers {
     plans: BTreeMap<usize, NemaPlan>,
     fallback: BTreeMap<&'static str, u64>,
+    shared_lane_lefts: u64,
 }
 
 impl NemaControllers {
@@ -271,15 +365,22 @@ impl NemaControllers {
         let n = control.nema.clone().unwrap_or_default();
         let mut plans = BTreeMap::new();
         let mut fallback: BTreeMap<&'static str, u64> = BTreeMap::new();
+        let mut shared_lane_lefts = 0;
         for (idx, plan) in world.signals.iter().enumerate() {
             match assign::assign_phases(world, plan) {
                 Ok(a) => {
-                    plans.insert(idx, Self::plan(control, &n, world, plan, a));
+                    let (p, demoted) = Self::plan(control, &n, world, plan, a);
+                    shared_lane_lefts += demoted;
+                    plans.insert(idx, p);
                 }
                 Err(u) => *fallback.entry(u.label()).or_insert(0) += 1,
             }
         }
-        NemaControllers { plans, fallback }
+        NemaControllers {
+            plans,
+            fallback,
+            shared_lane_lefts,
+        }
     }
 
     fn plan(
@@ -288,7 +389,7 @@ impl NemaControllers {
         world: &World,
         plan: &SignalPlan,
         a: Assignment,
-    ) -> NemaPlan {
+    ) -> (NemaPlan, u64) {
         let junction = world.roads.junction(plan.junction);
         let mut via: BTreeMap<LaneId, LaneId> = BTreeMap::new();
         for &l in &junction.incoming {
@@ -343,7 +444,22 @@ impl NemaControllers {
             yellow_s: yellow,
             red_clear_s: red,
         };
-        let mut config = RingConfig::from_settings(n, &a.phases(), through, left);
+        let (rules, demoted) = left_rules(&a, &approach, n);
+        // The phases that serve something: each movement's protecting phase, each
+        // crosswalk's, and each permissive window's through.
+        let mut present: Vec<u8> = Vec::new();
+        for (m, am) in a.movements.iter().enumerate() {
+            let r = rules[m];
+            let serves = if am.kind == MovementKind::Crossing {
+                [Some(am.phase), None]
+            } else {
+                [r.own, r.permit]
+            };
+            present.extend(serves.into_iter().flatten());
+        }
+        present.sort_unstable();
+        present.dedup();
+        let mut config = RingConfig::from_settings(n, &present, through, left);
         let walk = n.walk_s.unwrap_or(MUTCD_WALK_S);
         let speed = n.ped_speed_mps.unwrap_or(MUTCD_PED_SPEED_MPS);
         let mut ped = vec![None; a.movements.len()];
@@ -373,7 +489,7 @@ impl NemaControllers {
             ring,
             approach,
             ped,
-            permissive: n.left_turn_mode == LeftTurnMode::ProtectedPermissive,
+            rules,
             shown: Vec::new(),
             shown_since_s: 0.0,
             projected_end_s: f64::NEG_INFINITY,
@@ -381,7 +497,13 @@ impl NemaControllers {
             projected_at_s: f64::NEG_INFINITY,
         };
         p.shown = p.vector(&p.ring);
-        p
+        (p, demoted)
+    }
+
+    /// Protected-permissive left phases run permissive because their lane also carries
+    /// the through or the right ([`left_rules`]), over every junction.
+    pub fn shared_lane_lefts(&self) -> u64 {
+        self.shared_lane_lefts
     }
 
     /// Whether plan `idx` runs under the dual ring.
@@ -506,6 +628,7 @@ mod tests {
             let lanes: Vec<LaneId> = world.roads.junction(plan0.junction).incoming.clone();
             let junction = world.roads.junction(plan0.junction).clone();
             let a = ctl.plans[&0].assign.clone();
+            let rules = ctl.plans[&0].rules.clone();
             let row: Vec<Option<usize>> = plan0
                 .controlled
                 .iter()
@@ -572,12 +695,15 @@ mod tests {
                         }
                         for (m, st) in ph.states.iter().enumerate() {
                             if *st == SignalState::GreenYield {
-                                let through = a.movements[m].permissive_with.expect("a left");
-                                let own =
-                                    ph.states.iter().zip(&a.movements).any(|(s, mm)| {
-                                        mm.phase == through && *s == SignalState::Green
-                                    });
-                                assert!(own, "world {k}: a permissive left without its through");
+                                // Its window's through is green beside it (P17.6: the
+                                // opposing through under FYA, its own under green ball).
+                                let window = rules[m].permit.expect("a permissive left");
+                                let open = ph.states.iter().zip(&a.movements).any(|(s, mm)| {
+                                    mm.phase == window
+                                        && mm.kind == MovementKind::Through
+                                        && *s == SignalState::Green
+                                });
+                                assert!(open, "world {k}: a permissive left with its window shut");
                             }
                         }
                     }
@@ -590,5 +716,147 @@ mod tests {
                 ctl.counters()
             );
         }
+    }
+
+    use super::super::AssignedMovement;
+    use crate::scenario::schema::{NemaLeftSequence, PermissiveDisplay};
+
+    /// An east-west street: EB through (2), EB left (5), WB through (6), WB left (1); each
+    /// left on its own lane, or (`shared`) on the through's lane.
+    fn street(shared: bool) -> (Assignment, Vec<Option<LaneId>>) {
+        let m = |phase, kind, permissive_with| AssignedMovement {
+            phase,
+            kind,
+            permissive_with,
+        };
+        let a = Assignment {
+            movements: vec![
+                m(2, MovementKind::Through, None),
+                m(5, MovementKind::Left, Some(2)),
+                m(6, MovementKind::Through, None),
+                m(1, MovementKind::Left, Some(6)),
+            ],
+        };
+        let lane = LaneId::new;
+        let approach = if shared {
+            vec![Some(lane(0)), Some(lane(0)), Some(lane(2)), Some(lane(2))]
+        } else {
+            vec![Some(lane(0)), Some(lane(1)), Some(lane(2)), Some(lane(3))]
+        };
+        (a, approach)
+    }
+
+    fn rule(own: Option<u8>, permit: Option<u8>) -> Rule {
+        Rule { own, permit }
+    }
+
+    /// Accept (WP-17 P17.6): the left-turn modes. With exclusive lanes, protected-permissive
+    /// under FYA opens the EB left's window with the opposing (WB) through 6, under a
+    /// circular green with its own through 2; protected keeps only the arrow; permissive
+    /// only the window. A protected-permissive left sharing the through's lane has no arrow
+    /// and no FYA face, so it runs in its own approach's green and is counted.
+    #[test]
+    fn left_modes_follow_the_display_and_the_lane() {
+        let n = |left_turn_mode, permissive_display| NemaSettings {
+            left_turn_mode,
+            permissive_display,
+            ..NemaSettings::default()
+        };
+        let (a, own_lanes) = street(false);
+        let pp = LeftTurnMode::ProtectedPermissive;
+        let (r, d) = left_rules(&a, &own_lanes, &n(pp, PermissiveDisplay::Fya));
+        assert_eq!(
+            r,
+            [
+                rule(Some(2), None),
+                rule(Some(5), Some(6)),
+                rule(Some(6), None),
+                rule(Some(1), Some(2))
+            ]
+        );
+        assert_eq!(d, 0);
+        let (r, _) = left_rules(&a, &own_lanes, &n(pp, PermissiveDisplay::GreenBall));
+        assert_eq!(r[1], rule(Some(5), Some(2)));
+        let (r, _) = left_rules(
+            &a,
+            &own_lanes,
+            &n(LeftTurnMode::Protected, PermissiveDisplay::Fya),
+        );
+        assert_eq!(r[1], rule(Some(5), None));
+        let (r, _) = left_rules(
+            &a,
+            &own_lanes,
+            &n(LeftTurnMode::Permissive, PermissiveDisplay::Fya),
+        );
+        assert_eq!(r[1], rule(None, Some(6)));
+        let (a, shared) = street(true);
+        let (r, d) = left_rules(&a, &shared, &n(pp, PermissiveDisplay::Fya));
+        assert_eq!(r[1], rule(None, Some(2)));
+        assert_eq!(r[3], rule(None, Some(6)));
+        assert_eq!(d, 2);
+    }
+
+    /// The lead-lag "yellow trap", and why the flashing yellow arrow ends it. Ring 1 leads
+    /// (1 then 2), ring 2 lags (6 then 5). When 6 ends while 2 runs on to serve the lagging
+    /// EB left 5, the WB left (phase 1, behind 6) under a circular green sees its own head
+    /// turn yellow while the opposing EB through still runs (the trap). Under FYA it keeps
+    /// turning, yielding, because its window is the opposing through's green.
+    #[test]
+    fn fya_ends_the_lead_lag_yellow_trap() {
+        let (a, lanes) = street(false);
+        let shows = |display| {
+            let n = NemaSettings {
+                lefts: NemaLeftSequence::LeadLag,
+                permissive_display: display,
+                soft_recall: Vec::new(),
+                ..NemaSettings::default()
+            };
+            let (rules, _) = left_rules(&a, &lanes, &n);
+            let t = |min: f64, max: f64| PhaseTiming {
+                min_green_s: min,
+                max_green_s: max,
+                passage_s: 2.5,
+                yellow_s: 3.6,
+                red_clear_s: 1.0,
+            };
+            let ring = DualRing::new(RingConfig::from_settings(
+                &n,
+                &[1, 2, 5, 6],
+                t(7.0, 45.0),
+                t(4.0, 25.0),
+            ));
+            let mut p = NemaPlan {
+                assign: a.clone(),
+                ring,
+                approach: lanes.clone(),
+                ped: vec![None; 4],
+                rules,
+                shown: Vec::new(),
+                shown_since_s: 0.0,
+                projected_end_s: 0.0,
+                projected_calls: Calls::default(),
+                projected_at_s: 0.0,
+            };
+            let mut c = Calls::default();
+            c.demand[2] = true;
+            c.extend[2] = true;
+            c.demand[5] = true;
+            let mut t_s = 0.0;
+            while p.ring.state[1].interval != Interval::Yellow {
+                c.extend[6] = t_s < 10.0;
+                p.ring.step(&c, 0.1);
+                t_s += 0.1;
+                assert!(t_s < 60.0, "6 never ended");
+            }
+            assert_eq!(p.ring.greens()[0], 2, "the EB through runs on");
+            p.vector(&p.ring)
+        };
+        let ball = shows(PermissiveDisplay::GreenBall);
+        let fya = shows(PermissiveDisplay::Fya);
+        // [EB through, EB left, WB through, WB left]
+        assert_eq!(ball[3], SignalState::Amber, "the trap: {ball:?}");
+        assert_eq!(fya[3], SignalState::GreenYield, "FYA: {fya:?}");
+        assert_eq!(fya[2], SignalState::Amber);
+        assert_eq!(fya[0], SignalState::Green);
     }
 }

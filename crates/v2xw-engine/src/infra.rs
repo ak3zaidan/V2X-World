@@ -733,3 +733,40 @@ impl IntersectionFeed {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Accept (WP-17 P17.6): a NEMA left's indications reach SPaT as SAE J2735 states.
+    /// Its arrow is protected-Movement-Allowed (6), its flashing-yellow-arrow (or
+    /// circular-green) window permissive-Movement-Allowed (5), the steady yellow after
+    /// either protected-clearance (8), and red stop-And-Remain (3): the sequence a
+    /// protected-permissive left shows (`crate::nema::control::left_rules`). The table
+    /// agrees with the world's own (`SignalState::j2735_phase`), which the page draws.
+    #[test]
+    fn fya_maps_to_permissive_movement_allowed() {
+        use SignalState::{Amber, Green, GreenYield, Red};
+        let sequence = [Green, Amber, GreenYield, Amber, Red];
+        let codes: Vec<u64> = sequence
+            .iter()
+            .map(|s| movement_phase(*s).index())
+            .collect();
+        assert_eq!(codes, [6, 8, 5, 8, 3]);
+        for s in [
+            SignalState::Red,
+            SignalState::RedAmber,
+            SignalState::Amber,
+            SignalState::Green,
+            SignalState::GreenYield,
+            SignalState::FlashingAmber,
+            SignalState::Off,
+        ] {
+            assert_eq!(
+                movement_phase(s).index(),
+                u64::from(s.j2735_phase()),
+                "{s:?}"
+            );
+        }
+    }
+}

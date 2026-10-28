@@ -2427,15 +2427,18 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "traffic.signals.nema",
         status: Status::Partial,
         note: "The NEMA dual-ring eight-phase controller (control: nema): rings, barriers, \
-               lead/lag, left-turn timing, recalls, yellow, red and pedestrian timing run. \
-               Protected-permissive lefts only; pedestrian calls, coordination and priority \
-               are later WP-17 pieces, and the loader refuses the settings that need them.",
+               lead/lag, the three left-turn modes and both permissive faces, left-turn \
+               timing, recalls, yellow, red and pedestrian timing run. Pedestrian calls, \
+               coordination and priority are later WP-17 pieces, and the loader refuses \
+               the settings that need them.",
     },
     KeyStatus {
         path: "traffic.signals.nema.permissive_display",
-        status: Status::Partial,
-        note: "Both faces show the same permissive (yield) state to drivers and in SPaT; \
-               the flashing-yellow-arrow face is WP-17 P17.6.",
+        status: Status::Wired,
+        note: "When a permissive left may turn: under a flashing yellow arrow while the \
+               opposing through is green, under a circular green while its own approach is \
+               green (the lead-lag yellow trap). A left sharing the through's lane always \
+               has the circular green.",
     },
     KeyStatus {
         path: "traffic.signals.nema.coordination",
@@ -5013,11 +5016,6 @@ pub(crate) fn nema_checks(g: &super::schema::SignalControl, e: &mut Vec<Scenario
         let n = g.nema.clone().unwrap_or_default();
         // The parts of the controller later pieces build.
         for (path, unbuilt, piece) in [
-            (
-                "traffic.signals.nema.left_turn_mode",
-                n.left_turn_mode != LeftTurnMode::ProtectedPermissive,
-                "protected-only and permissive-only lefts are P17.6",
-            ),
             (
                 "traffic.signals.nema.ped_recall",
                 !n.ped_recall.is_empty(),
