@@ -64,6 +64,15 @@ families:
   # Six signalised junctions with SPaT/MAP roadside units and every application on
   # (connected-intersections.yaml): where RLVW, GLOSA, IMA and LTA have signals and
   # crossing traffic to act on. 3000 veh/h, every vehicle equipped.
+  # The freeway family's road with 30 % tractor-trailers (the Green Book design truck,
+  # 120 kg/kW): where traffic.vehicle_dynamics' power limit binds on the way up to
+  # speed (above about 15 m/s; in a 35 mph city it never does). The road is flat, so the
+  # grade alone must move nothing.
+  - name: freight
+    base: ../highway-congestion.yaml
+    set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: 6000.0,
+          actors.vehicles.classes: {passenger: {fraction: 0.7}, trailer: {fraction: 0.3}},
+          metrics: [all]}
   - name: intersections
     base: ../connected-intersections.yaml
     set: {time.duration_s: 60.0, metrics: [all]}
@@ -80,6 +89,7 @@ routes:
   # signalised too), so the row runs on the grid with its signals off: every junction
   # is then a priority junction whose minor arm gives way (context below).
   - {prefix: traffic.critical_gap_factor, families: [traffic]}
+  - {prefix: traffic.vehicle_dynamics, families: [freight]}
   - {prefix: radio.sidelink, families: [cv2x, nr]}
   - {prefix: net.geonet, families: [gn]}
   - {prefix: net, families: [gn, dsrc, security]}

@@ -67,6 +67,17 @@ vehicle's acceleration is held to
   are above their desired speeds, so on the flat only acceleration near the top speed
   changes.
 
+## Where it is checked
+
+- `v2xw-mobility` unit tests: the table, the chord, the crawl, the downhill hold, the car.
+- `calibration/truck-grade-crawl` (`v2xw-trafficval`, fast list of `model_checks`).
+- `crates/v2xw-engine/tests/vehicle_dynamics.rs`: grade-only flat identity, the power
+  limit on a freeway, and the two `freight`-family rows of `expectations/traffic.yaml`.
+- **Not yet reachable from a scenario on a hill.** `world.terrain.dem` is attached
+  without draping (`wiring::attach_terrain`), so a shipped scenario's lanes are flat and
+  `grade` acts only on worlds whose lanes carry z (SUMO `net.xml` with z, a test world).
+  A `world.terrain.drape` key and a DEM in the repo are the next step (P22.4, proposed).
+
 ## Proposed default (owner decision)
 
 `grade: true` on every DEM-draped world: it is SUMO's own KraussPS term and is
