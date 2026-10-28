@@ -259,7 +259,11 @@ impl CcaConfig {
     #[must_use]
     pub fn energy_detect_threshold_dbm(&self) -> f64 {
         let ed = self.energy_detect_dbm.unwrap_or(CCA_ED_10MHZ_DBM);
-        if ed > self.busy_dbm { ed } else { self.busy_dbm }
+        if ed > self.busy_dbm {
+            ed
+        } else {
+            self.busy_dbm
+        }
     }
 }
 

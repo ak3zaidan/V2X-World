@@ -1808,7 +1808,10 @@ mod tests {
         let now = 1_000 * MS;
         meter.note_busy_at(now, now, now + 90 * MS);
         let r = meter.cbr(now);
-        assert!((r - 0.9).abs() < 1e-9, "CBR {r} after the next window is declared");
+        assert!(
+            (r - 0.9).abs() < 1e-9,
+            "CBR {r} after the next window is declared"
+        );
     }
 
     #[test]

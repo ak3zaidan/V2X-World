@@ -4542,14 +4542,15 @@ impl Engine {
                 None => cbr,
             };
             let service_cbr = match (self.dcc_service.as_ref(), self.channel_plan.as_ref()) {
-                (Some(_), Some(plan)) => plan
-                    .service
-                    .filter(|&sc| self.tuned(node, sc))
-                    .and_then(|sc| {
-                        self.mac
-                            .as_ref()
-                            .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, sc, now))
-                    }),
+                (Some(_), Some(plan)) => {
+                    plan.service
+                        .filter(|&sc| self.tuned(node, sc))
+                        .and_then(|sc| {
+                            self.mac
+                                .as_ref()
+                                .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, sc, now))
+                        })
+                }
                 _ => None,
             };
             let Engine {

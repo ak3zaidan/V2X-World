@@ -469,7 +469,10 @@ fn the_etsi_gate_spaces_each_channel_on_its_own() {
         v
     };
     let (spat0, spat1) = (late(&clean, "spat", 172), late(&jammed, "spat", 172));
-    let (map0, map1) = (late(&clean, "map", 174).len(), late(&jammed, "map", 174).len());
+    let (map0, map1) = (
+        late(&clean, "map", 174).len(),
+        late(&jammed, "map", 174).len(),
+    );
     // Each frame closes the gate for min(1 s, its own T_on / delta_min); a frame's start
     // can trail its gate pass by one jammer on-time (90 ms) of carrier-sense wait, so the
     // gap to the next start is at least that interval less 100 ms.
@@ -497,7 +500,11 @@ fn the_etsi_gate_spaces_each_channel_on_its_own() {
         map1 + 2 >= map0,
         "the service channel's gate followed the safety channel's CBR: MAP {map0} -> {map1}"
     );
-    assert!(spat1.len() >= 5, "the jammed unit sent {} SPaT in 10 s", spat1.len());
+    assert!(
+        spat1.len() >= 5,
+        "the jammed unit sent {} SPaT in 10 s",
+        spat1.len()
+    );
     assert!(
         short.is_empty(),
         "the jammed unit's 172 gate did not follow its channel's CBR: {} of {} SPaT gaps \
