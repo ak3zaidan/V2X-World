@@ -73,6 +73,20 @@ families:
     set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: 6000.0,
           actors.vehicles.classes: {passenger: {fraction: 0.7}, trailer: {fraction: 0.3}},
           metrics: [all]}
+  # The freight family on a hill: the same road laid on grade-5pct.asc (a synthetic
+  # constant 5 % ramp, provenance in grade-5pct.md) with world.terrain.drape, and the
+  # grade term on in both runs, so a power limit has a climb to lose speed on (WP-22
+  # P22.4: the Green Book's long 5 % upgrade for its 120 kg/kW design truck). At the
+  # freight family's 6,000 veh/h the road is congested (9.7 m/s mean) and the climb hardly
+  # matters (-0.2 %); at 2,400 veh/h it is -0.3 % (10.56 -> 10.53 m/s): in 90 s few
+  # vehicles reach the about 13 m/s the power limit holds a design truck to on the climb
+  # (eta P / m = g (sin theta + c_rr) v, air neglected).
+  - name: grade-truck
+    base: ../highway-congestion.yaml
+    set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: 2400.0,
+          actors.vehicles.classes: {passenger: {fraction: 0.7}, trailer: {fraction: 0.3}},
+          world.terrain: {dem: scenarios/sensitivity/grade-5pct.asc, drape: true},
+          traffic.vehicle_dynamics: {grade: true}, metrics: [all]}
   # A two-lane road through a 110 m wood (forest-road.osm.xml, self-written), its trees
   # imported as vegetation: where radio.channel_model.foliage has trees to charge.
   - name: forest
@@ -97,6 +111,11 @@ routes:
   # signalised too), so the row runs on the grid with its signals off: every junction
   # is then a priority junction whose minor arm gives way (context below).
   - {prefix: traffic.critical_gap_factor, families: [traffic]}
+  # The power limit is judged on the hill (P22.4: the plan's upgrade row; a setting runs on
+  # the first family that accepts it); its flat-road effect is pinned by
+  # tests/vehicle_dynamics.rs. The grade alone stays on the flat road, where it must change
+  # nothing.
+  - {prefix: traffic.vehicle_dynamics.power_limit, families: [grade-truck, freight]}
   - {prefix: traffic.vehicle_dynamics, families: [freight]}
   - {prefix: radio.sidelink, families: [cv2x, nr]}
   - {prefix: net.geonet, families: [gn]}
@@ -252,6 +271,8 @@ context:
   - {prefix: traffic.signals.max_green_s, set: {traffic.signals.control: actuated}}
   - {prefix: traffic.signals.passage_s, set: {traffic.signals.control: actuated}}
   - {prefix: traffic.signals.detector_m, set: {traffic.signals.control: actuated}}
+  # The dual ring's own settings act only under it (WP-17 P17.10).
+  - {prefix: traffic.signals.nema, set: {traffic.signals.control: nema}}
   - {prefix: scale.traffic.meso, set: {scale.traffic.model: mobility/meso/queue}}
   - {prefix: scale.radio, set: {scale.traffic.model: mobility/meso/queue}}
   # Traffic-flow track (round 15): each setting measured where it acts. The heading only

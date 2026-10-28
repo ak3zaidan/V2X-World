@@ -210,7 +210,7 @@ pub type Tamper = fn(step: u64, actors: &mut Vec<AuditActor>);
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     world: &World,
-    mut engine: NativeMobility,
+    engine: NativeMobility,
     demand: Box<dyn Demand>,
     seed: u64,
     step: Duration,
@@ -219,9 +219,99 @@ pub fn run(
     ssm: v2xw_metrics::ssm::SsmParams,
     events: &[Event],
     tamper: Option<Tamper>,
+    watch: impl FnMut(f64, &[AuditActor]),
+) -> Result<StudyResult, String> {
+    drive(
+        Slot::Shared(world),
+        engine,
+        demand,
+        (seed, step, seconds),
+        audit,
+        ssm,
+        events,
+        tamper,
+        watch,
+        None,
+    )
+}
+
+/// The signal controllers a study steps (WP-17 P17.10), called at the start of every
+/// mobility step, before the drivers look at the lamps: the world whose plans they
+/// rewrite, the step's start and length in seconds, and the vehicles and pedestrians as
+/// the previous step left them (what the detectors and push buttons see). This is the
+/// kernel's order (`v2xw_engine::run`: actuated control reads its detectors and moves its
+/// plans, then mobility steps).
+pub type SignalHook<'a> = &'a mut dyn FnMut(
+    &mut World,
+    f64,
+    f64,
+    &[AuditActor],
+    &[v2xw_mobility::audit::AuditPedestrian],
+);
+
+/// [`run`] on a world the study owns, with `signals` stepping its controllers.
+///
+/// # Errors
+/// The engine's `init`.
+#[allow(clippy::too_many_arguments)]
+pub fn run_controlled(
+    world: &mut World,
+    engine: NativeMobility,
+    demand: Box<dyn Demand>,
+    seed: u64,
+    step: Duration,
+    seconds: f64,
+    audit: AuditParams,
+    ssm: v2xw_metrics::ssm::SsmParams,
+    tamper: Option<Tamper>,
+    watch: impl FnMut(f64, &[AuditActor]),
+    signals: SignalHook<'_>,
+) -> Result<StudyResult, String> {
+    drive(
+        Slot::Owned(world),
+        engine,
+        demand,
+        (seed, step, seconds),
+        audit,
+        ssm,
+        &[],
+        tamper,
+        watch,
+        Some(signals),
+    )
+}
+
+/// The world a study drives: shared (its plans as imported) or the study's own (plans
+/// the study's controllers rewrite).
+enum Slot<'a> {
+    Shared(&'a World),
+    Owned(&'a mut World),
+}
+
+impl Slot<'_> {
+    fn get(&self) -> &World {
+        match self {
+            Slot::Shared(w) => w,
+            Slot::Owned(w) => w,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drive(
+    mut slot: Slot<'_>,
+    mut engine: NativeMobility,
+    demand: Box<dyn Demand>,
+    (seed, step, seconds): (u64, Duration, f64),
+    audit: AuditParams,
+    ssm: v2xw_metrics::ssm::SsmParams,
+    events: &[Event],
+    tamper: Option<Tamper>,
     mut watch: impl FnMut(f64, &[AuditActor]),
+    mut signals: Option<SignalHook<'_>>,
 ) -> Result<StudyResult, String> {
     let rng = RngRegistry::new(seed);
+    let world = slot.get();
     {
         let mut ctx = MobilityCtx::new(0, world, &rng);
         engine.init(&mut ctx, demand).map_err(|e| e.to_string())?;
@@ -235,7 +325,13 @@ pub fn run(
     let mut pending: Vec<&Event> = events.iter().collect();
     let mut t = 0u64;
     let mut k = 0u64;
+    let mut last: Vec<AuditActor> = Vec::new();
+    let mut last_people: Vec<v2xw_mobility::audit::AuditPedestrian> = Vec::new();
     while t < horizon {
+        if let (Some(hook), Slot::Owned(w)) = (signals.as_mut(), &mut slot) {
+            hook(w, t as f64 / 1e9, step.as_secs_f64(), &last, &last_people);
+        }
+        let world = slot.get();
         let mut ctx = MobilityCtx::new(t, world, &rng);
         pending.retain(|e| match e {
             Event::Closure { at_s, lane, closed } => {
@@ -267,6 +363,10 @@ pub fn run(
         safety.observe(world, t1_s, dt_s, &actors);
         motion.observe(world, t1_s, dt_s, &actors);
         watch(t1_s, &actors);
+        if signals.is_some() {
+            last = actors;
+            last_people = people;
+        }
         t = t1;
         k += 1;
     }

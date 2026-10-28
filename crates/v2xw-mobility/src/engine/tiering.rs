@@ -247,6 +247,7 @@ impl NativeMobility {
                 stuck_since: None,
                 human: crate::drivers::HumanState::default(),
                 signal_look: None,
+                held_at: None,
                 violation: 0,
                 crash: None,
                 lc: crate::lanechange::lc2013::Lc2013State::default(),

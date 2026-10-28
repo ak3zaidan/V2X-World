@@ -20,12 +20,93 @@
 //!   the flashing yellow arrow (P17.6); pedestrian push buttons (P17.7); the SPaT window
 //!   (P17.9).
 //!
-//! `control: nema` is off by default. WP-17 P17.10 (the G-TV safety check, expectation
-//! rows, the city run and the model card) is still to come; until then the controller is
-//! not proposed as a default.
+//! `control: nema` is off by default. WP-17 P17.10 added the G-TV check
+//! `invariants/nema-safety` (v2xw-trafficval), two expectation rows
+//! (`expectations/traffic.yaml`), the city run and [`card`]; the default proposal is in
+//! the adoption plan (§WP-17), for the owner.
 
 pub mod assign;
 pub mod control;
+
+/// The model id of the dual-ring controller.
+pub const MODEL_ID: &str = "signals/nema-dual-ring";
+
+/// The model card of the dual-ring controller at the default settings.
+pub fn card() -> v2xw_core::card::ModelCard {
+    use v2xw_core::card::{Equation, Family, ModelCard, Source, SourceKind, Tier};
+    let stm = Source {
+        kind: SourceKind::Standard,
+        reference: "FHWA Signal Timing Manual 2nd ed. (NCHRP Report 812, 2015): ch. 5 \
+                    (§5.1.2 Exhibit 5-3 dual ring, barriers; §5.3 actuated operation), ch. 6 \
+                    (Exhibits 6-3, 6-4, 6-9; Equation 6-1)"
+            .to_string(),
+        accessed: None,
+        note: Some("each timing default cites its exhibit in `crate::nema::PhaseTiming`".to_string()),
+    };
+    let mutcd = Source {
+        kind: SourceKind::Standard,
+        reference: "MUTCD 2009 ch. 4D (signal indications, flashing yellow arrow) and 4E \
+                    (pedestrian intervals, 3.5 ft/s walking speed)"
+            .to_string(),
+        accessed: None,
+        note: None,
+    };
+    let ts2 = Source {
+        kind: SourceKind::Standard,
+        reference: "NEMA TS 2-2016 (paywalled; not read: the STM is the working text)".to_string(),
+        accessed: None,
+        note: Some("cited for the controller and conflict-monitor terms only".to_string()),
+    };
+    let sumo = Source {
+        kind: SourceKind::Code,
+        reference: "SUMO NEMA controller documentation (parameter names and behaviour only)"
+            .to_string(),
+        accessed: None,
+        note: Some("read for behaviour only; no code was copied".to_string()),
+    };
+    let mut card = ModelCard::new(
+        MODEL_ID,
+        Family::Mobility,
+        "1.0.0",
+        "The NEMA dual-ring eight-phase actuated controller (`traffic.signals.control: \
+         nema`): two rings timing concurrently and crossing each barrier together, minimum \
+         green, passage, gap-out and max-out, yellow and red clearance, protected and \
+         protected-permissive lefts with the flashing yellow arrow, pedestrian intervals \
+         on push-button calls, coordination with force-offs, and priority service; the \
+         rings are re-projected into each mapped junction's plan, and junctions that do \
+         not map keep the single-ring controller. Re-implemented from FHWA STM 2nd ed. and \
+         NEMA TS 2-2016; SUMO was read for behaviour only.",
+    );
+    card.tier = vec![Tier::Medium];
+    card.equations = vec![
+        Equation {
+            name: "gap-out".to_string(),
+            latex_or_text: "a green ends when green ≥ min_green, no detection for passage_s, \
+                            and a conflicting call waits"
+                .to_string(),
+            notes: Some("STM 2nd ed. §5.3.2".to_string()),
+        },
+        Equation {
+            name: "max-out".to_string(),
+            latex_or_text: "a green ends at max_green after a conflicting call".to_string(),
+            notes: Some("STM 2nd ed. §5.3.3, Exhibit 6-9".to_string()),
+        },
+        Equation {
+            name: "barrier".to_string(),
+            latex_or_text: "ring 1 and ring 2 leave a barrier group only when both have ended \
+                            their clearance"
+                .to_string(),
+            notes: Some("STM 2nd ed. §5.1.2, Exhibit 5-3".to_string()),
+        },
+        Equation {
+            name: "yellow change".to_string(),
+            latex_or_text: "y = t + v / (2a + 2Gg)".to_string(),
+            notes: Some("STM 2nd ed. Equation 6-1 (ITE)".to_string()),
+        },
+    ];
+    card.sources = vec![stm, mutcd, ts2, sumo];
+    card
+}
 
 pub use assign::{AssignedMovement, Assignment, MovementKind, Unmapped, assign_phases};
 

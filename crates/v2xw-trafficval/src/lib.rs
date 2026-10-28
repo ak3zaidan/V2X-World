@@ -21,6 +21,7 @@
 //! | calibration | [`calib`] | saturation flow, start-up lost time, speeds and accelerations, turning, critical gaps, pedestrians, motorcycles against published measurements |
 //! | safety | [`safety`] | time-to-collision and post-encroachment time, SSAM thresholds, conflicts per vehicle-kilometre |
 //! | invariants | [`invariants`] | the auditor's classes at zero on every shipped scenario and at peak density; metamorphic properties |
+//! | invariants | [`nema_safety`] | Manhattan under the NEMA dual ring: no conflicting greens, no red entry (WP-17 P17.10) |
 //! | cities | [`cities`] | Manhattan, Portland and Berlin import and run with the auditor clean |
 //!
 //! # Determinism
@@ -43,6 +44,7 @@ pub mod cities;
 pub mod fdlab;
 pub mod invariants;
 pub mod model;
+pub mod nema_safety;
 pub mod report;
 pub mod run;
 pub mod safety;
@@ -300,6 +302,7 @@ pub fn checks() -> Vec<Check> {
     out.extend(calib::checks());
     out.extend(safety::checks());
     out.extend(invariants::checks());
+    out.extend(nema_safety::checks());
     out.extend(cities::checks());
     out
 }

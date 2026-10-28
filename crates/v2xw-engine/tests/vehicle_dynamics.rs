@@ -6,7 +6,11 @@
 //! - The power limit slows tractor-trailers on a freeway: the design truck's acceleration
 //!   is power-limited above about 15 m/s.
 //! - The expectation rows of `tests/expectations/traffic.yaml` for the two keys hold on
-//!   the `freight` family (`scenarios/sensitivity/catalogue.yaml`).
+//!   their families (`scenarios/sensitivity/catalogue.yaml`): the grade's on the flat
+//!   `freight` road, the power limit's on `grade-truck`, the same road laid on a 5 % ramp
+//!   (P22.4).
+//! - `world.terrain.drape` lays the lanes on the DEM: on `grade-5pct.asc` every 1.5 km
+//!   lane of that road climbs or falls 5 %, and undraped every lane stays at z = 0.
 
 use std::path::{Path, PathBuf};
 
@@ -167,6 +171,48 @@ fn the_vehicle_dynamics_rows_hold() {
             )
         })
         .collect();
+    // The grade on `freight`, the power limit on `grade-truck` (its first family).
     assert_eq!(result.verdicts.len(), 2);
     assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// `world.terrain.drape` (P22.4) on the shipped ramp `scenarios/sensitivity/grade-5pct.asc`
+/// (a synthetic plane rising 5 % to the east; `grade-5pct.md`): every east-west lane of the
+/// freeway's 1.5 km blocks climbs or falls 5 % end to end, and with the same DEM undraped
+/// every lane point stays on z = 0 (the DEM is then only the radio's ground).
+#[test]
+fn a_draped_ramp_tilts_the_lanes_and_undraped_nothing_moves() {
+    let dem = root().join("scenarios/sensitivity/grade-5pct.asc");
+    let world_with = |drape: bool| {
+        let mut s = freeway_scenario(0.0);
+        s.world.terrain.dem = Some(dem.to_string_lossy().to_string());
+        s.world.terrain.drape = drape;
+        s.validate().expect("the scenario validates");
+        v2xw_engine::wiring::build_world(&s).expect("world")
+    };
+    let flat = world_with(false);
+    assert!(
+        flat.roads
+            .lanes()
+            .iter()
+            .all(|l| l.centreline.iter().all(|p| p.z == 0.0)),
+        "an undraped world moved its lanes"
+    );
+    let hill = world_with(true);
+    let mut long = 0;
+    for l in hill.roads.lanes().iter().filter(|l| l.length_m > 1000.0) {
+        let (a, b) = (l.centreline[0], l.centreline[l.centreline.len() - 1]);
+        assert!(
+            (b.x - a.x).abs() > 900.0,
+            "a long lane that is not east-west: {a:?} -> {b:?}"
+        );
+        let grade = (b.z - a.z) / (b.x - a.x);
+        assert!(
+            (grade - 0.05).abs() < 0.002,
+            "lane {} rises {grade:.4} per metre east, not 0.05",
+            l.id.index()
+        );
+        long += 1;
+    }
+    assert!(long >= 6, "only {long} long lanes");
 }

@@ -2392,6 +2392,13 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                An OSM import is refused without it.",
     },
     KeyStatus {
+        path: "world.terrain.drape",
+        status: Status::Wired,
+        note: "Lays lanes, junctions, buildings, sites and signal heads on world.terrain.dem \
+               (z += the DEM height), so traffic.vehicle_dynamics.grade has a slope to read. \
+               Off by default (the DEM is then only the radio's ground); needs a DEM.",
+    },
+    KeyStatus {
         path: "world.vegetation",
         status: Status::Wired,
         note: "The OSM importer keeps woods, forests, tree rows and single trees as a \
@@ -6600,6 +6607,14 @@ pub fn preflight(s: &Scenario) -> Vec<ScenarioError> {
                 "names the map {path}, which {why}. Put the OpenStreetMap extract there, or \
                  point world.source.path at one that exists"
             ),
+        ));
+    }
+    if s.world.terrain.drape && s.world.terrain.dem.is_none() {
+        e.push(conflict(
+            "world.terrain.drape",
+            "would change nothing: world.terrain.dem is null, so there is no terrain to lay the \
+             roads on. Name a DEM raster, or set drape to false"
+                .to_string(),
         ));
     }
     if let Some(dem) = s.world.terrain.dem.as_deref()

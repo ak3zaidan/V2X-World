@@ -132,26 +132,35 @@ impl Spec {
     }
 }
 
-/// Makes a relative OSM path absolute: against the working directory when it exists there
-/// (the shipped scenarios name `worlds/cache/...` from the repository root), else against
-/// the scenario's own directory.
+/// Makes a relative OSM path, and a relative DEM path (`world.terrain.dem`), absolute:
+/// against the working directory when it exists there (the shipped scenarios name
+/// `worlds/cache/...` from the repository root), else against the scenario's own directory
+/// or the first parent of it that holds the file.
 fn absolutise_world(s: &mut Scenario, scenario_path: &Path) {
-    if let v2xw_world::WorldSourceSpec::OsmXml { path, .. } = &mut s.world.source
-        && Path::new(path).is_relative()
-        && !Path::new(path).exists()
-        && let Some(dir) = scenario_path.parent()
-    {
+    let resolve = |path: &mut String| {
+        if !Path::new(path.as_str()).is_relative() || Path::new(path.as_str()).exists() {
+            return;
+        }
+        let Some(dir) = scenario_path.parent() else {
+            return;
+        };
         let mut d = dir.to_path_buf();
         // Walk up to the directory that holds it (scenarios/sub/x.yaml -> repo root).
         for _ in 0..4 {
-            if d.join(&*path).exists() {
-                *path = d.join(&*path).to_string_lossy().into_owned();
+            if d.join(path.as_str()).exists() {
+                *path = d.join(path.as_str()).to_string_lossy().into_owned();
                 return;
             }
             if !d.pop() {
                 break;
             }
         }
+    };
+    if let v2xw_world::WorldSourceSpec::OsmXml { path, .. } = &mut s.world.source {
+        resolve(path);
+    }
+    if let Some(dem) = s.world.terrain.dem.as_mut() {
+        resolve(dem);
     }
 }
 

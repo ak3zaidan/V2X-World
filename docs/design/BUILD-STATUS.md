@@ -4072,6 +4072,60 @@ Base `a925db58`. Defaults stay off; no golden moves.
 - **R4.1.EMITTER and the leak-run wall time** (rows `radio-fix5.yaml`, 6 pass, 2 wrong-expectation): the Europe scenarios `scenarios/real-world/radio-fix5/` run an LTE-V2X emitter beside ITS-G5. The mean CBR on 180 goes from 0.027 to 0.278 (p90 1.0) and frames fall to 0.785. 13,936 receptions are lost to `adjacent-channel`. ACIR 80 dB is byte-identical to no emitter, and the same seed gives the same digest. The 20 s `sample` of G20-MAP puts `energy_started_by` at 2 of about 5,800 engine samples. On an idle slot G20-MAP and G20-MAP-ED85 are within 1-3 %, in both orders and on two binaries. The 1.16-1.18x was machine load, and no code changed.
 - **Open:** P1-E4 at 0.099 (E) / 0.0915 (E + speed change) against 0.092, because the body is too narrow (GNSS layer, not the chain); per-device rates (F) are not in the engine; the default stamp profile is the owner's choice.
 
+## 2026-10-28: fix round 5, traffic track (branch of a925db58)
+
+Rows: `crates/v2xw-engine/tests/expectations/traffic-r5.yaml`.
+
+- **`violations.rs` (WP-08): green.** The test's premise was wrong, not the engine. At the
+  field rate its 60 s run with four SPaT units had under 0.1 red runners within reach of a
+  unit, and RLVW warns only from a SPaT it heard; the on and off runs were the same run. On
+  the all-signalised grid no violator can produce an IMA conflict: fail-to-yield acts only
+  at a permissive green, whose foe is the opposing stream (LTA's case), and a red runner
+  meets a cross queue that is still standing. The test is now two tests, each with a setup
+  in which its application can see a violator. RLVW: 3 x 3 junctions, a unit at each, every
+  driver a runner, 120 s: issued 12 -> 15, true 1 -> 4. IMA: the same grid without signals,
+  every driver failing to yield to slow foes: issued 95 -> 144, true 45 -> 75. Fault
+  `V2XW_FAULT=viol-off`: both red, and the off runs repeat exactly. A `MemoryRecorder`
+  passed the 4.5 GB cap, so the test uses `NullRecorder`. 289 s for the pair.
+- **Kerbside standstill (bus 79): cause found and fixed behind `EngineParams::foe_will_pass`.**
+  Bus 79 turns left on a permissive green at junction 11. On each green from 180 s it
+  yielded to opposing car 137, which stood at its own line, held by its own full exit
+  (`junction_blocked` true for the whole green), and still carried a 0.7 s tracked arrival.
+  The cars queued behind 137 carried 3.0 and 3.8 s. `permissive_closing_s` took the
+  minimum, so the gap never opened. Now a claimant standing at the line whose own decision
+  last step was to stop there, and any claimant standing behind it in its lane, has no
+  arrival (SUMO `willPass` false; UVC §11-402 "immediate hazard"). Flag on: standstill
+  1 -> 0. The flag is off by default; item 3 turns it on with the goldens. The test is
+  still red on its overlap assertion (24 with the flag off, 38 with it on, against 9 with
+  kerbside off). Every example is a lane change beside a standing vehicle, not a turn: open.
+- **Kinematic limits and `foe_will_pass` on by default; `phase2-path` re-blessed.**
+  `lateral_speed_bound`, `braking_tyre_limit` and `foe_will_pass` now default to true. They
+  are defect fixes: a car moves sideways only by steering forward (kinematic bicycle
+  model), no stop brakes past the tyres (9 m/s²), and a left turner does not wait for a
+  foe that will not pass. `pedestrian_invariants` is 9 / 9 (both former failures green).
+  The observed run first failed on accel-bound 3: a car held exactly at the tyre limit
+  published −9.000000000000004 m/s², so the auditor's lower bound now has the same 1e-6
+  rounding allowance as its upper bound. The lane-change unit test's window is now 15 s,
+  not 5 s: a car at a stand creeps across at 0.106 m/s, and 5 s timed the unbounded slide
+  the bound removes. Goldens: `phase2-path` frame 69af34e7 -> 736a1216, record
+  1bc443ed -> 8c8c8e56, records 10,241,996 -> 10,243,380. `i-s1-phase2-60s` and
+  `ttc-triggered-brake` are unchanged. Mobility: lib 324/324, traffic_invariants 2/2,
+  calibration 2/2. Realism is 3/4: kerbside fails only on overlaps (10 against 0 with
+  kerbside off), and every example is a lane change beside a standing vehicle (open).
+- **WP-17 P17.10: built, and its check is red.**
+  - **The check.** `invariants/nema-safety` is a new G-TV check. The study harness gets `run_controlled`, a hook that steps the kernel's signal controllers. On Manhattan under `control: nema` for 600 s it finds 0 red entries. But two foe movements are protected green together on every step: 189 pairs on 263 plans, against 0 on the fixed-time plans. The cause is that `NemaPlan::vector` never tests concurrent greens against the junction's matrix. In the run, conflict-zone is 73 and standstill is 2. Not fixed (WP-17 owner).
+  - **Rows.** `control: nema` lowers `traffic.stopped_share` (0.165 -> 0.035). Max recall takes gap-outs from 79 to 0, measured by hand: the setting is a list, which `--expect` cannot sweep. Two new `RunReport` leaves: `signal_gap_outs` and `signal_max_outs`.
+  - **City run.** Manhattan for 60 s at the full engine: 6.25 -> 6.56 m/s.
+  - **Model card.** `signals/nema-dual-ring` goes in the catalogue only.
+  - **Proposal.** Keep `nema` off by default until the check is green (adoption plan).
+- **WP-22 P22.4: `world.terrain.drape`, a repo DEM and the upgrade row.**
+  - **The key.** The new key (off) lays the world's geometry on `world.terrain.dem`.
+  - **The DEM.** `scenarios/sensitivity/grade-5pct.asc` is a synthetic 5 % ramp; `grade-5pct.md` gives its provenance.
+  - **The test.** Draped lanes rise 0.05 per metre and undraped lanes stay at z = 0. With the drape ignored (the fault), the test is red.
+  - **The upgrade row.** The new `grade-truck` family carries the power-limit row: -0.3 %, small in 90 s.
+  - **Tests.** `vehicle_dynamics` 4/4, `scenario` 15/15, `sensitivity_catalogue` 3/3, `sensitivity_expectations` 4/4, engine lib scenario/sensitivity 40/40.
+  - **Not done.** No rigid truck, bus or van power rows (no sourced figure).
+
 ## 2026-10-28: adoption wave integration (grade, mac, nema: WP-16, 17, 18, 21, 22)
 
 One integrator in the main checkout, one heavy command at a time. All three agents had committed their work and their worktrees were clean, so no wip snapshot was needed.

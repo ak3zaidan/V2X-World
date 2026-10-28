@@ -282,7 +282,10 @@ impl Families {
             let p: PathBuf = dir.join(&f.base);
             let mut s = Scenario::load_unvalidated(&p)?;
             absolutise_world(&mut s, &p);
-            out.insert(f.name.clone(), apply(&s, &f.set)?);
+            // A path the family's own fields name (a map, a DEM) is resolved the same way.
+            let mut s = apply(&s, &f.set)?;
+            absolutise_world(&mut s, &p);
+            out.insert(f.name.clone(), s);
         }
         Ok(out)
     }
@@ -852,6 +855,14 @@ impl FingerprintRecorder {
                 "report.mac_guard_deferrals",
                 "report.straddling_frames",
             ] {
+                f.entry(k.to_string()).or_insert(0.0);
+            }
+        }
+        // WP-17 P17.10: the signal controllers' counters are serialised only when non-zero.
+        // A run whose controllers ended any green, by gap or at its maximum, ran actuated
+        // or NEMA control, and there a missing count is a zero (max recall: no gap-outs).
+        if report.signal_gap_outs > 0 || report.signal_max_outs > 0 {
+            for k in ["report.signal_gap_outs", "report.signal_max_outs"] {
                 f.entry(k.to_string()).or_insert(0.0);
             }
         }
