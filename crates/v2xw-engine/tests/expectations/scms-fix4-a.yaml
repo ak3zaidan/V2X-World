@@ -109,3 +109,29 @@ rows:
     horizon holds the whole path whichever realisation the node-keyed draws give'
   measured: pending
   verdict: pending
+- id: F4A.MWC.new-craca-held
+  base: MWC
+  variant: MWC
+  area: scms
+  measure: node.security records in W2-W4 holding a home list whose crlCraca is the post-rollover CRACA
+  expect: ge
+  value: 1
+  source: 'the root rollover at 120 s (scms-conformance) gives every later certificate the new CRACA
+    (1609.2 5.1.3.2: a CRL applies to the certificates whose cracaId names its crlCraca); the
+    re-certified CRL Generator, still up before 700 s, signs a list under it at the changeover
+    (R-NOCRL: every CRACA''s CRL exists), so receivers hold three lists from then on. Diagnosis on the
+    rel code: W5 senders carry cracaId 4a1086 (new home CRACA) or b0595c (provider-b), receivers hold
+    only af8a..b710ad (old home root) and c5d9..b0595c, so no home certificate ever matched a held list'
+  measured: pending
+  verdict: pending
+- id: F4A.MWC.no-w4-refusal
+  base: MWC
+  variant: MWC
+  area: scms
+  measure: crl-overdue refusals in W4 (1,814,340-1,814,460 s)
+  expect: eq
+  value: 0
+  source: 'the post-rollover list is issued at the changeover (after 120 s), so it is overdue from
+    changeover + 7 d + 14 d, after W4 ends at t0 + 21 d + 60 s; W4 senders sign under the new CRACA'
+  measured: pending
+  verdict: pending
