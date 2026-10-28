@@ -286,6 +286,50 @@ Along-track residual / v (ms) by secMark-dt offset e = dt − nominal, with msgC
 - It does matter for speed-consistency detectors (MaxAcceleration, the speed-vs-displacement checks).
 - It is one device, so it is listed as an observation, not a calibration.
 
+### 7.4 The stamp chain in the engine (2026-10-27)
+
+The model is `v2xw_node::bsm_timing::StampChain`, selected by `actors.vehicles.bsm_timing.stamp_chain`:
+
+```yaml
+stamp_chain:
+  enabled: true
+  profile: tampa_locked   # the default; or wyoming_obu
+  steps: true             # the default
+  stay_minus1: ...        # optional overrides
+  stay_zero: ...
+```
+
+- It applies to the locked class only: the position stays on the fix epoch and secMark is set to epoch + o, with o in {−1, 0} ms.
+- A 0 → −1 transition can put a lasting along/cross step onto the v3 walk. Its probability is (p_on − p_else)/(1 − p_else), and its size is lognormal through the profile's p50/p90.
+- The chain has its own RNG domain, so the device's other draws do not move.
+- The chain is off unless enabled, so no golden moves. With it off, the record digest matches the 3cbc95a4 release binary.
+- The rows are in `crates/v2xw-engine/tests/expectations/p1-stamp.yaml`: 30 rows, 26 pass, 3 are wrong expectations and 1 is open. All 26 passing rows go red under `variants_faults.py`.
+
+Runs: E4 highway (`p1-e4-u.yaml`), the same seed for all, v p50 29.8 m/s, 10,457 pairs. Wyoming is p50 1.64, p75 4.11, p90 5.99, p99 15.7 cm.
+
+| run | stamp | KS (at) | p50 / p75 / p90 / p99 cm | early share, stays | >5 cm on 0→−1 / other |
+|---|---|---|---|---|---|
+| SB (E4V, 1.3.0 fit) | instant | 0.150 (3.1 cm) | 1.50 / 2.70 / 7.0 / 23.5 | 0.128, 0.12 / 0.87 | 0.15 / 0.14 |
+| CT | chain, Tampa, no steps | 0.130 (2.6 cm) | 1.28 / 2.93 / 6.9 / 23.5 | 0.097, 0.25 / 0.92 | 0.12 / 0.14 |
+| CTS | chain, Tampa, steps | **0.118** | 1.29 / 3.29 / 9.4 / 25.3 | same | 0.66 / 0.14 |
+| CW | chain, Wyoming, no steps | **0.062** | 1.85 / 3.76 / 7.2 / 23.3 | 0.462, 0.57 / 0.63 | 0.14 / 0.15 |
+| CWS | chain, Wyoming, steps | **0.074** | 1.88 / 4.30 / 9.6 / 24.7 | same | 0.43 / 0.15 |
+
+**Against the prediction in §7.2 (written before the runs).**
+- Tampa came out at 0.130, against the predicted 0.15–0.19. The prediction was a wrong expectation: it came from e4stampmc on Wyoming's own base pool.
+  - The engine's KS sits in the 3 cm shoulder, which the chain's ±v·1 ms pairs feed.
+  - So the out-of-sample Tampa form improves on the instant model, 0.150 → 0.118 with steps, but still misses 0.092.
+- Wyoming came out at ≤ 0.10 as predicted, at 0.062 (0.074 with steps). It is in sample on the two chain rates, and with steps on the step rate and size too.
+
+**Open.**
+- The steps make the tail heavier than Wyoming's: p90 9.4–9.6 cm against 6.0. The v3 walk (Tampa + Orem) already has p99 23 cm against 15.7.
+- The step rate assumes every step clears 5 cm, so the share of 0 → −1 pairs over 5 cm comes out short:
+  - CWS gives 0.43 against Wyoming's 0.48;
+  - CTS gives 0.66 against Tampa's 0.70.
+  - The fix is a joint fit in tools/realdata.
+- The coupled speed change (corr 0.6–0.7) is not modelled.
+- Which profile becomes the default is the owner's choice.
+
 ---
 
 ## Generated tables

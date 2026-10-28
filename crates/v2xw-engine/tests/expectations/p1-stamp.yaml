@@ -53,17 +53,16 @@ runs:
     scenario: scenarios/real-world/paper1/p1-e4-cts.yaml
     note: CTS again (determinism)
 rows:
-# --- the flag off moves nothing ------------------------------------------------------------
 - id: P1S.SB.off-identical
   base: SBR
   variant: SB
   area: recorded-state
   measure: digest.record
   expect: identical
-  source: 'chain off: StampChain is never built, report() is the old code path and draws
-    nothing more (bsm_timing.rs report_inner); release and opt-2 debug builds do the same
-    IEEE arithmetic'
-  measured: pending
+  source: 'chain off: StampChain is never built, report() is the old code path and draws nothing more
+    (bsm_timing.rs report_inner); release and opt-2 debug builds do the same IEEE arithmetic'
+  measured: a146a8ff2e4f3db2 -> a146a8ff2e4f3db2
+  verdict: pass
 - id: P1S.SB.off-ks
   base: SBR
   variant: SB
@@ -71,64 +70,82 @@ rows:
   measure: x.e4.ks
   expect: same
   source: same engine behaviour, same seed
-  measured: pending
-# --- the stamp signature: what the real devices show -----------------------------------------
+  measured: 0.149723 -> 0.149723
+  verdict: pass
 - id: P1S.SB.early
   base: SB
   variant: SB
   area: recorded-state
   measure: x.st.early_share
   expect: band
-  band: [0.115, 0.147]
+  band:
+  - 0.115
+  - 0.147
   source: 'instant model: P(j < 0), j ~ N(0.286, 0.254) ms: 0.131 (header comment); 4,000+ pairs'
-  measured: pending
+  measured: '0.128144'
+  verdict: pass
 - id: P1S.SB.along-e1
   base: SB
   variant: SB
   area: recorded-state
   measure: x.st.along_e_plus1_ms
   expect: band
-  band: [-0.75, -0.30]
-  source: 'instant model: -0.53 ms at e = +1 (header comment); the v3 walk adds noise (sd of
-    along/v about 1-4 ms at 30 m/s), so the band is wide'
-  measured: pending
+  band:
+  - -0.75
+  - -0.3
+  source: 'instant model: -0.53 ms at e = +1 (header comment); the v3 walk adds noise (sd of along/v about
+    1-4 ms at 30 m/s), so the band is wide'
+  measured: '-0.577454'
+  verdict: pass
 - id: P1S.CT.early
   base: CT
   variant: CT
   area: recorded-state
   measure: x.st.early_share
   expect: band
-  band: [0.080, 0.115]
-  source: 'Tampa locked stationary P(o = -1) 0.097 (candidates file; summ.stamp on tampa.csv 0.097)'
-  measured: pending
+  band:
+  - 0.08
+  - 0.115
+  source: Tampa locked stationary P(o = -1) 0.097 (candidates file; summ.stamp on tampa.csv 0.097)
+  measured: '0.0969685'
+  verdict: pass
 - id: P1S.CT.stay-minus1
   base: CT
   variant: CT
   area: recorded-state
   measure: x.st.stay_minus1
   expect: band
-  band: [0.17, 0.30]
-  source: 'Tampa locked 0.235; about 400 early pairs, binomial sd 0.02, plus pairs lost to
-    the v >= 10 m/s and msgCnt+1 filter'
-  measured: pending
+  band:
+  - 0.17
+  - 0.3
+  source: Tampa locked 0.235; about 400 early pairs, binomial sd 0.02, plus pairs lost to the v >= 10
+    m/s and msgCnt+1 filter
+  measured: '0.253922'
+  verdict: pass
 - id: P1S.CT.stay-zero
   base: CT
   variant: CT
   area: recorded-state
   measure: x.st.stay_zero
   expect: band
-  band: [0.90, 0.935]
+  band:
+  - 0.9
+  - 0.935
   source: Tampa locked 0.918
-  measured: pending
+  measured: '0.919996'
+  verdict: pass
 - id: P1S.CT.transition
   base: CT
   variant: CT
   area: recorded-state
   measure: x.st.transition_share
   expect: band
-  band: [0.125, 0.170]
-  source: '2 x 0.903 x 0.082 = 0.148 (Tampa real 0.150)'
-  measured: pending
+  band:
+  - 0.125
+  - 0.17
+  source: 2 x 0.903 x 0.082 = 0.148 (Tampa real 0.150)
+  measured: '0.144975'
+  verdict: pass
 - id: P1S.CT.along-e1
   base: SB
   variant: CT
@@ -136,75 +153,113 @@ rows:
   measure: x.st.along_e_plus1_ms
   expect: down
   min_change: 0.4
-  source: 'position on the epoch: -1.0 ms against the instant model''s -0.53 (Wyoming -1.21,
-    Tampa locked -0.82, a position left on the epoch, §7.2 Finding 2)'
-  measured: pending
+  source: 'position on the epoch: -1.0 ms against the instant model''s -0.53 (Wyoming -1.21, Tampa locked
+    -0.82, a position left on the epoch, §7.2 Finding 2)'
+  measured: -0.577454 -> -1.05301
+  verdict: wrong-expectation
+  note: 'The value moved as predicted (-0.53 -> -1.0 ms predicted, -0.58 -> -1.05 measured), but the
+    row was encoded wrong: matrix.py''s down is v / b - 1 < -min_change, and on a negative base a
+    more negative value is +0.82. The intended check is the companion row P1S.CT.along-e1-band.'
+- id: P1S.CT.along-e1-band
+  base: CT
+  variant: CT
+  area: recorded-state
+  measure: x.st.along_e_plus1_ms
+  expect: band
+  band:
+  - -1.25
+  - -0.8
+  source: 'added after the run (P1S.CT.along-e1 was encoded with the wrong sign): the prediction text
+    of that row, -1.0 ms with the same +-0.2 ms noise band as P1S.CW.along-e1'
+  measured: '-1.05301'
+  verdict: pass
+  note: red under the instant model (SB -0.58, outside the band)
 - id: P1S.CW.early
   base: CW
   variant: CW
   area: recorded-state
   measure: x.st.early_share
   expect: band
-  band: [0.43, 0.49]
+  band:
+  - 0.43
+  - 0.49
   source: Wyoming 0.461 (summ.stamp on wyoming.csv)
-  measured: pending
+  measured: '0.4617'
+  verdict: pass
 - id: P1S.CW.stay-minus1
   base: CW
   variant: CW
   area: recorded-state
   measure: x.st.stay_minus1
   expect: band
-  band: [0.54, 0.59]
+  band:
+  - 0.54
+  - 0.59
   source: Wyoming 0.566
-  measured: pending
+  measured: '0.573148'
+  verdict: pass
 - id: P1S.CW.stay-zero
   base: CW
   variant: CW
   area: recorded-state
   measure: x.st.stay_zero
   expect: band
-  band: [0.60, 0.66]
+  band:
+  - 0.6
+  - 0.66
   source: Wyoming 0.630
-  measured: pending
+  measured: '0.633558'
+  verdict: pass
 - id: P1S.CW.transition
   base: CW
   variant: CW
   area: recorded-state
   measure: x.st.transition_share
   expect: band
-  band: [0.37, 0.43]
-  source: '2 x 0.539 x 0.370 = 0.399 (Wyoming real 0.400)'
-  measured: pending
+  band:
+  - 0.37
+  - 0.43
+  source: 2 x 0.539 x 0.370 = 0.399 (Wyoming real 0.400)
+  measured: '0.394281'
+  verdict: pass
 - id: P1S.CW.along-e1
   base: CW
   variant: CW
   area: recorded-state
   measure: x.st.along_e_plus1_ms
   expect: band
-  band: [-1.25, -0.75]
+  band:
+  - -1.25
+  - -0.75
   source: 'position on the epoch: -1.0 ms plus walk noise over about 1,000 pairs (Wyoming -1.21)'
-  measured: pending
-# --- the transition steps -------------------------------------------------------------------
+  measured: '-0.972355'
+  verdict: pass
 - id: P1S.CT.over5-0m1
   base: CT
   variant: CT
   area: recorded-state
   measure: x.st.over5_on_0m1
   expect: band
-  band: [0.10, 0.45]
-  source: 'no steps: a 0 -> -1 pair is the walk plus the +v x 1 ms stamp term (3 cm at 30 m/s),
-    so more of them pass 5 cm than other pairs, far fewer than Tampa''s 0.697'
-  measured: pending
+  band:
+  - 0.1
+  - 0.45
+  source: 'no steps: a 0 -> -1 pair is the walk plus the +v x 1 ms stamp term (3 cm at 30 m/s), so more
+    of them pass 5 cm than other pairs, far fewer than Tampa''s 0.697'
+  measured: '0.124503'
+  verdict: pass
 - id: P1S.CTS.over5-0m1
   base: CTS
   variant: CTS
   area: recorded-state
   measure: x.st.over5_on_0m1
   expect: band
-  band: [0.62, 0.90]
-  source: 'Tampa locked 0.697 (fit); the engine''s 30 m/s puts a 3 cm stamp term on every
-    such pair against Tampa''s 1.3 cm at 12.8 m/s, so it lands at or above 0.697'
-  measured: pending
+  band:
+  - 0.62
+  - 0.9
+  source: Tampa locked 0.697 (fit); the engine's 30 m/s puts a 3 cm stamp term on every such pair against
+    Tampa's 1.3 cm at 12.8 m/s, so it lands at or above 0.697
+  measured: '0.663576'
+  verdict: pass
 - id: P1S.CTS.over5-other
   base: CT
   variant: CTS
@@ -212,19 +267,29 @@ rows:
   measure: x.st.over5_other
   expect: same
   tol: 0.1
-  source: 'a step persists (it goes onto the walk, tau 50 s), so it does not show in the next
-    pair: off-transition pairs keep the walk''s share'
-  measured: pending
+  source: 'a step persists (it goes onto the walk, tau 50 s), so it does not show in the next pair: off-transition
+    pairs keep the walk''s share'
+  measured: 0.139971 -> 0.14059
+  verdict: pass
 - id: P1S.CWS.over5-0m1
   base: CWS
   variant: CWS
   area: recorded-state
   measure: x.st.over5_on_0m1
   expect: band
-  band: [0.45, 0.80]
-  source: 'Wyoming 0.483 at 34 m/s (the same speed as here), plus the engine walk''s own
-    share being above Wyoming''s 0.047'
-  measured: pending
+  band:
+  - 0.45
+  - 0.8
+  source: Wyoming 0.483 at 34 m/s (the same speed as here), plus the engine walk's own share being above
+    Wyoming's 0.047
+  measured: '0.42788'
+  verdict: open
+  note: 'Below Wyoming''s 0.483 (Tampa: 0.664 against 0.697, inside its band). The step probability
+    (p_on - p_else) / (1 - p_else) assumes every step takes its pair over 5 cm, but the step sizes are
+    the p50/p90 of the over-5-cm pool and their sign is symmetric (real: mean along/v at e = -1 is the
+    stamp term''s +1.0 ms alone), so a drawn step of p50 6.3 cm against the +3 cm stamp term often
+    lands under 5 cm. Fix: fit the step probability and size jointly against P(r > 5 cm | 0 -> -1)
+    at the pair''s speed (tools/realdata), not in the engine. Not changed here.'
 - id: P1S.CTS.p99
   base: CT
   variant: CTS
@@ -232,40 +297,53 @@ rows:
   measure: x.e4.r_p99
   expect: up
   min_change: 0.05
-  source: 'steps of p50 7.9 / p90 17.4 cm along on 0.148 / 2 x 0.66 = 4.9 % of pairs add to the
-    walk''s tail'
-  measured: pending
-# --- P1-E4: KS against held-out Wyoming (tolerance 0.092) -----------------------------------
+  source: steps of p50 7.9 / p90 17.4 cm along on 0.148 / 2 x 0.66 = 4.9 % of pairs add to the walk's
+    tail
+  measured: 0.235341 -> 0.252952
+  verdict: pass
 - id: P1S.CT.ks
   base: CT
   variant: CT
   area: metrics
   measure: x.e4.ks
   expect: band
-  band: [0.15, 0.19]
-  source: 'p1-realdata-baseline.md §7.2, written before any engine run: epoch-chain stamps at
-    Tampa rates with the v3 walk unchanged, KS 0.15-0.19 (e4stampmc 0.173)'
-  measured: pending
+  band:
+  - 0.15
+  - 0.19
+  source: 'p1-realdata-baseline.md §7.2, written before any engine run: epoch-chain stamps at Tampa rates
+    with the v3 walk unchanged, KS 0.15-0.19 (e4stampmc 0.173)'
+  measured: '0.129828'
+  verdict: wrong-expectation
+  note: 'The 0.15-0.19 came from e4stampmc on Wyoming''s own base pool, not the engine''s. The engine
+    base (SB, E4V on the 1.3.0 fit) is KS 0.150 located at 3.12 cm, in the shoulder: engine p75 2.70
+    cm against Wyoming 4.11 (CDF at 3.12 cm about 0.79 against 0.642). Wyoming''s shoulder is the
+    stamp term itself (v x 1 ms = 3.4 cm on its 40 % of offset-step pairs). Tampa''s chain puts 3 cm
+    on 14.5 % of pairs, feeding the shoulder: KS 0.130 at 2.56 cm. Out of sample, the P1-E4
+    tolerance 0.092 is still missed; with the Tampa steps 0.118 (P1S.CTS.ks).'
 - id: P1S.CT.ks-vs-base
   base: SB
   variant: CT
   area: metrics
   measure: x.e4.ks
   expect: up
-  source: 'the engine''s body is narrower than Wyoming''s (E4V model p50 1.38 cm vs 1.64);
-    Tampa''s chain removes the ~1 cm instant smear from 85 % of pairs and puts 3 cm on 15 %,
-    narrowing the body further'
-  measured: pending
+  source: the engine's body is narrower than Wyoming's (E4V model p50 1.38 cm vs 1.64); Tampa's chain
+    removes the ~1 cm instant smear from 85 % of pairs and puts 3 cm on 15 %, narrowing the body further
+  measured: 0.149723 -> 0.129828
+  verdict: wrong-expectation
+  note: 'Premise wrong: the base KS is not in the body. SB''s KS sits at 3.12 cm where the engine has
+    too little mass (p75 2.70 vs Wyoming 4.11 cm), and the chain''s 3 cm offset-step pairs add mass
+    there, so the KS falls (see P1S.CT.ks). The narrower body did happen (p50 1.50 -> 1.28 cm).'
 - id: P1S.CW.ks
   base: CW
   variant: CW
   area: metrics
   measure: x.e4.ks
   expect: le
-  value: 0.10
-  source: 'p1-realdata-baseline.md §7.2: with Wyoming rates KS <= 0.10 (e4stampmc 0.078 with
-    steps, 0.150 without on Wyoming''s own base pool)'
-  measured: pending
+  value: 0.1
+  source: 'p1-realdata-baseline.md §7.2: with Wyoming rates KS <= 0.10 (e4stampmc 0.078 with steps, 0.150
+    without on Wyoming''s own base pool)'
+  measured: '0.0620991'
+  verdict: pass
 - id: P1S.CW.p50
   base: SB
   variant: CW
@@ -273,19 +351,23 @@ rows:
   measure: x.e4.r_p50
   expect: up
   min_change: 0.05
-  source: 'Wyoming rates put +-v x 1 ms (3 cm) on 40 % of pairs against the instant''s ~1 cm
-    on all: the body widens toward Wyoming''s p50 1.64 cm'
-  measured: pending
+  source: 'Wyoming rates put +-v x 1 ms (3 cm) on 40 % of pairs against the instant''s ~1 cm on all: the
+    body widens toward Wyoming''s p50 1.64 cm'
+  measured: 0.014963 -> 0.0184514
+  verdict: pass
 - id: P1S.CTS.ks
   base: CT
   variant: CTS
   area: metrics
   measure: x.e4.ks
   expect: delta
-  band: [-0.04, 0.005]
-  source: 'about 5 % of pairs leave the body for the tail; the KS sits in the body (E4U at
-    1.27 cm) where the engine CDF is above Wyoming''s, so it can only fall, by up to ~0.04'
-  measured: pending
+  band:
+  - -0.04
+  - 0.005
+  source: about 5 % of pairs leave the body for the tail; the KS sits in the body (E4U at 1.27 cm) where
+    the engine CDF is above Wyoming's, so it can only fall, by up to ~0.04
+  measured: 0.129828 -> 0.118436 (delta -0.01139)
+  verdict: pass
 - id: P1S.CWS.ks
   base: CWS
   variant: CWS
@@ -293,37 +375,45 @@ rows:
   measure: x.e4.ks
   expect: le
   value: 0.092
-  source: 'p1-realdata-baseline.md §7.2: with the steps on 0 -> -1 transitions, KS <= 0.092
-    (e4stampmc 0.078); in sample on the chain and step rates'
-  measured: pending
-# --- run performance and determinism ---------------------------------------------------------
+  source: 'p1-realdata-baseline.md §7.2: with the steps on 0 -> -1 transitions, KS <= 0.092 (e4stampmc
+    0.078); in sample on the chain and step rates'
+  measured: '0.0738477'
+  verdict: pass
 - id: P1S.CTS.frames
   base: SB
   variant: CTS
   area: metrics
   measure: r.frames_transmitted
   expect: same
-  source: 'the chain moves secMark by at most 1 ms and the position by cm; it never changes
-    whether or when a BSM is sent (tx_delay unchanged), and the mobility does not read it'
-  measured: pending
+  source: the chain moves secMark by at most 1 ms and the position by cm; it never changes whether or
+    when a BSM is sent (tx_delay unchanged), and the mobility does not read it
+  measured: 13469 -> 13469
+  verdict: pass
 - id: P1S.CTS.memory
   base: SB
   variant: CTS
   area: performance
   measure: t.peak_mb
   expect: ratio
-  band: [0.9, 1.1]
+  band:
+  - 0.9
+  - 1.1
   source: one Option<bool> and one RNG stream more per device (~400 devices)
-  measured: pending
+  measured: 564.462 -> 568.476 (ratio 1.007)
+  verdict: pass
 - id: P1S.CTS.wall
   base: SB
   variant: CTS
   area: performance
   measure: t.wall_s
   expect: ratio
-  band: [0.8, 1.25]
-  source: eight more draws per BSM against a run dominated by radio and SCMS work; the band is the shared machine's noise
-  measured: pending
+  band:
+  - 0.8
+  - 1.25
+  source: eight more draws per BSM against a run dominated by radio and SCMS work; the band is the shared
+    machine's noise
+  measured: 24.3 -> 23.76 (ratio 0.9778)
+  verdict: pass
 - id: P1S.CTS2.determinism
   base: CTS
   variant: CTS2
@@ -331,4 +421,5 @@ rows:
   measure: digest.record
   expect: identical
   source: same seed, same binary; the chain stream is keyed by (domain, node)
-  measured: pending
+  measured: afbf7152d8d77c31 -> afbf7152d8d77c31
+  verdict: pass
