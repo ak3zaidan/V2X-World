@@ -116,6 +116,7 @@ pub mod dcc;
 pub mod error;
 pub mod fading;
 pub mod focus;
+pub mod foliage;
 pub mod hybrid;
 pub mod ip_transport;
 pub mod jamming;
@@ -164,6 +165,7 @@ pub use focus::{
     BoundaryObservation, FocusPlan, FocusShape, FocusWarning, LinkEvaluation, LinkPlacement,
     RadioTierSet,
 };
+pub use foliage::{FoliageLoss, VegetationIndex};
 pub use jamming::{
     ConstantJammer, JamArrival, JamWindow, JammerKind, JammerProfile, JammingField, PulsedJammer,
     ReactiveJammer, SensedInterval, blind_area_radius_m, punal_rssi_to_sinr_db,
