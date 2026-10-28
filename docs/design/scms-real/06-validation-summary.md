@@ -1503,6 +1503,10 @@ The totals count each row as its own checklist records it, with the changes in ย
       shipped). The test now holds MAC/PHY counts to 0.01 % (`scms-fix4-b.yaml` CACHE.mac).
       Owner decision: count J2945/1 RVs at reception (the PER window already does); this
       moves every J2945/1 run whose density passes B, and so the SCMS goldens.
+    - F5-SCOPE: `security.scms.crl_overdue_scope` (`craca` default | `all`). With `all`, any
+      held series-1 list past `nextCrl` + tolerance refuses every message ([CAMP122]
+      Table 67: "rejecting all of them"). `rx_validation`
+      an_overdue_list_refuses_every_sender_only_under_the_all_scope; default unchanged.
 
 **Owner decisions**
 - **What the RA and PCA keep for each device** (ยง6 item 4): request records, cocoons,

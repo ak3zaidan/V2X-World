@@ -3391,6 +3391,13 @@ pub struct ScmsSpec {
     /// refuses every message they sign. Two weeks (1,209,600 s) unless set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crl_overdue_tolerance_s: Option<u32>,
+    /// Which messages an overdue pseudonym CRL makes a device refuse
+    /// (`v2xw_node::rxval::CrlOverdueScope`): `craca` (default), the signers whose CRACA is
+    /// the overdue list's; `all`, every message while any held series-1 list is past
+    /// `nextCrl` + the tolerance. CAMP SCMS 1.2.2 Table 67 has the device "rejecting all of
+    /// them", which the sources leave to either reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crl_overdue_scope: Option<String>,
     /// The receiver's `generationTime` relevance window (IEEE 1609.2 §5.2,
     /// `v2xw_node::rxval::GenerationTimeWindow`): the oldest a received BSM, CAM, PSM or
     /// VAM may be on the receiver's own clock, seconds (2 unless set, C2C-CC BSP

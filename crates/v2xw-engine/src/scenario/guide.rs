@@ -1267,6 +1267,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "1,209,600 s (two weeks, CAMP's value); 0 to 2,419,200 s to study a delayed or blocked revocation list. The next list is due a week after each one (nextCrl), so the rule acts only in runs that span weeks of calendar time.",
     },
     Basic {
+        path: "security.scms.crl_overdue_scope",
+        explain: "What a vehicle refuses once a revocation list it holds is overdue past the tolerance. craca: only messages from certificates that list covers (the same certificate authority); all: every message, as CAMP SCMS release 1.2.2 Table 67 has the device \"rejecting all of them\" and warning the driver. The sources leave both readings open; they differ only after a root or CRACA changeover, when a vehicle holds an old authority's list that is no longer renewed.",
+        recommended: "craca (default); all to study the strict reading.",
+    },
+    Basic {
         path: "nodes.validated_cert_cache",
         explain: "How many already-checked certificates of other vehicles each device remembers, so a known sender costs only its signature check; a forgotten one is checked from scratch the next time it is heard. A small cache is what a certificate-flooding attack exhausts.",
         recommended: "4,096 (engine default; no device publishes one); 16 to 65,536. The peer certificate cache (128) usually forgets first.",

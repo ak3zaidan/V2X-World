@@ -1647,6 +1647,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         // SCMS settings audit (docs/guides/config-inventory-scms.md)
         "security.scms.tls" => "Vehicle-to-RA TLS version",
         "security.scms.crl_overdue_tolerance_s" => "Overdue revocation list tolerance",
+        "security.scms.crl_overdue_scope" => "What an overdue revocation list refuses",
         "security.scms.rx_beacon_max_age_s" => "Oldest safety beacon accepted",
         "security.scms.rx_max_age_s" => "Oldest other message accepted",
         "security.scms.rx_max_future_s" => "Future time stamp accepted",
