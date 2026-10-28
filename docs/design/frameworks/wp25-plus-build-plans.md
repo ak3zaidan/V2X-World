@@ -1118,6 +1118,85 @@ cached in the repo.
 - **P42.2** (3 h): areas and manoeuvres.
 - **P42.3** (3 h): the final leg, search, rows and faults.
 
+**Source note, 2026-10-28 (P42.1, sources track, no code; `l.N` = this file at `0570929c`).**
+- *What the importer reads today.* `section.rs:19` already parses both on-street schemes:
+  - the new (2022) `parking[:left|:right|:both]=lane|yes|half_on_kerb|street_side` with
+    `…:orientation`;
+  - the old `parking:lane[:side]=parallel|diagonal|perpendicular|marked`.
+
+  It reads no `…:capacity`. `amenity=parking` areas are not read at all.
+- *Tag counts on the shipped maps.* These are the 64 extracts in `worlds/cache` (`cities.yaml`: 63 US downtown boxes of about
+  1.5 km x 1.5 km, plus Berlin-Mitte), and the two test fixtures. They come from
+  `python3 -I` scripts with `ElementTree.iterparse`, kept in scratch and not committed.
+  - **On-street, the 63 US boxes.** Some parking tag is on 194.9 of 2,686 km of street
+    (primary..living_street), which is **7.3%**. 164 km (6.1%) have actual parking, i.e.
+    neither `no` nor `separate`. At least one tagged way: 48 of the 66 files. Leaders by
+    tagged way: Berlin 572, Milwaukee 354, Providence 304, Boston 166, Minneapolis 162.
+  - **Berlin** is 99.6% tagged; 44% of its street km have parking.
+  - **Values:**
+    - new scheme: `lane` 576, `no` 572, `yes` 447, `street_side` 64, `separate` 32,
+      `on_kerb` 14;
+    - old scheme: `parallel` 513, `no` 115, `diagonal` 67, `no_parking` 36, `marked` 16.
+  - **Capacity on street:** 160 ways carry `parking:lane:*:capacity`, and 4 the new
+    `parking:*:capacity`.
+  - **Off-street.** `amenity=parking` has 10,050 objects (9,748 ways, 258 nodes, 44
+    relations). **949 (9.4%) carry `capacity`** (sum 177,826). Kinds: `surface` 4,119,
+    untagged 3,551, `multi-storey` 1,353, `street_side` 668, `underground` 194, `lane` 148.
+    There are also 3,224 `parking_space` and 3,267 `parking_entrance` objects.
+  - **Area per space where capacity is tagged** (US closed ways, footprint / capacity):
+
+    | Kind | n | Median | IQR |
+    |---|---|---|---|
+    | `surface` | 550 | **27.8 m²** | 23.1-34.4 |
+    | `multi-storey` (footprint x levels) | 110 | **31.5 m²** | 27.0-35.6 |
+    | `street_side` | 102 | 17.7 m² | 15.2-19.9 |
+    | `underground` | 22 | 16.5 m² (no levels tag) | n/a |
+- *What follows for P42.2 (the choice, recorded here).*
+  - **An untagged US street is "unknown", not "no parking".** With 93% of street km
+    untagged, supply from tags alone would leave downtown kerbs empty. So
+    `traffic.parking.untagged_street` is an enum, default **`none`**, with an `assume_both`
+    option for sensitivity. The coverage share is reported in the import report. Nothing is
+    guessed onto the card.
+  - **Off-street capacity** is the tag where present. Otherwise it is area / 27.8 m²
+    (surface) or area x levels / 31.5 m² (multi-storey). Both are this repo's own
+    measurement on the shipped OSM (ODbL, attribution as in `cities.yaml`), and the IQR is
+    the sensitivity band.
+- *Manoeuvre time.*
+  - **HCM.** HCM 2000 parking adjustment `f_p = (N − 0.1 − 18·N_m/3600)/N`: each manoeuvre
+    is assumed to block the adjacent lane **18 s**, with a practical limit of 180
+    manoeuvres/h. This is from the NPTEL Module 7 course page (archive.nptel.ac.in, read
+    2026-10-28, secondary). FHWA HPMS Field Manual App. N (fhwa.dot.gov/ohim/hpmsmanl/
+    appn5.cfm, read) confirms the factor's HCM 2000 basis and the `N_m` defaults: 6 for
+    two-way with parking on one side, 12 for both sides or one-way one side, and 24 for
+    one-way both sides (HCM Exh. 10-20).
+  - **Field, car.** Jayaprakash et al., *Period. Polytech. Transp. Eng.* 54(4):470-480,
+    2026, doi 10.3311/PPtr.41230, CC BY (sha256 `32b77737…0974`), Table 2: **mean 10.25 s,
+    sd 2.98, range 4-20 s, positively skewed** (skew 1.12), at Indian signalised
+    approaches with mixed traffic, about 300 per class. LCV 12.81 s, sd 2.30.
+  - **Manchester.** Yousif & Purnawan, *Proc. ICE Transport* 157(3):189-194, 2004: 11.7 s
+    for parallel parking in, 5.6 s for out (search summaries only; the Salford repository
+    file returned HTTP 403). [verify]
+  - **Choice.** The draw is a **lognormal fitted to mean 10.25 s / sd 2.98 s**, truncated
+    to 4-20 s, for parking in, with LCVs scaled by 12.81/10.25. Parking out is
+    [verify]-gated on Yousif. Until that is read, out = in. The HCM 18 s is the **check
+    row**: lane saturation next to active parking must fall by about `18·N_m/3600` per lane
+    within the simulation spread. It is not the draw, because the field mean is about 57%
+    of 18 s.
+- *Search (behaviour reference: SUMO `Simulation/Rerouter.html` §parkingAreaReroute and
+  `Simulation/ParkingArea.html`, read 2026-10-28).*
+  - SUMO's scoring defaults: only `parking.distanceto.weight = 1` (the rest 0),
+    `parking.memory` 600 s, `parking.frustration` 100, `parking.knowledge` 0,
+    `parking.anywhere` −1 (off).
+  - Its default `maneuverAngleTimes` are `10 3 4, 80 1 11, 110 11 2, 170 8 3, 181 3 4`
+    (angle, in s, out s), doubled for trucks and coaches. These are lower than both field
+    sources, so they are not used.
+  - The engine picks the next area within `search_radius_m` by road distance (the SUMO
+    default weight), with a 600 s memory of full areas.
+  - Realism check (not a calibration target): Shoup, "Cruising for parking", *Transport
+    Policy* 13(6), 2006, abstract (RePEc, read). Across 1927-2001 downtown studies it found
+    3.5-14 min to find a kerb space and 8-74% of traffic cruising. The PDF on eScholarship
+    returned 403. [verify]
+
 ---
 
 ## WP-43 Overtaking in the opposing lane (S-P13)
@@ -1192,7 +1271,7 @@ parameters from NCHRP 605.
 | WP-40 | IEEE 802.11 TGbd link-level submissions | public, but mentor.ieee.org rejected the fetch (HTTP 418) | not read (P40.1 note); WP-40 dropped |
 | WP-40 | 3GPP TR 37.885 | public | channel models summarised in R2c |
 | WP-41 | SUMO zipper documentation; MnDOT zipper-merge evaluations (+ VTRC 05-R6, SWZDI TPF-5(438), NCDOT 2015-08) | public | read 2026-10-28 (P41.1 note); URS 2004 MnDOT report not found |
-| WP-42 | OSM wiki `parking:*`; a manoeuvre-time field study; SUMO parking reroute docs | public | no |
+| WP-42 | OSM wiki `parking:*`; a manoeuvre-time field study; SUMO parking reroute docs | public | read 2026-10-28 (P42.1 note); tag counts measured; Yousif 2004 and Shoup 2006 PDFs refused (403) |
 | WP-43 | NCHRP Report 605 (2008); CAMP VSC-A DNPW report | public | no |
 | WP-33 | IEEE 1609.4-2016 | paywalled | no (constants UNVERIFIED) |
 
