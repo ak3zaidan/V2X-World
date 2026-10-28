@@ -1,16 +1,21 @@
-# multi-week.yaml with the home CRL Generator down from 200,000 s (after its first CRL was
-# published at about 190,769 s) to 2,600,000 s. Devices then hold that CRL (nextCrl =
-# issue + 7 d = about 795,569 s), and from nextCrl + 2 weeks (about 2,005,169 s) every
-# receiver refuses every message under the home CRACA ([CAMP122] Table 67
-# overdue_CRL_tolerance): W4 refuses them all, W3 none, and W5 recovers after the return.
-# multi-week-crlg-down.yaml (down from 700 s) shows the other case: a CRACA that has never
-# published a CRL cannot become overdue. stress.md §2.
+# multi-week.yaml with the home CRL Generator down from 300,000 s to 2,600,000 s, after the root
+# changeover. The root rollover decided at 120 s is published as CTL 1 at 259,320 s (Fri 08:52Z,
+# 3 business days, scms-audit-gov.yaml), and from then on every home certificate names the new
+# CRACA (4a1086). While the Generator is up, the changeover signs a list under that CRACA at once
+# (R-ROLLCRL, nextCrl = day 10.0). Receivers hold it from W1, and it is overdue from nextCrl +
+# 2 weeks (day 24.0, 2,073,600 s; [CAMP122] Table 67 overdue_CRL_tolerance). So W4 refuses the
+# home CRACA's messages, W3 refuses none, and W5 recovers after the return.
+# Moved 2026-10-28 from 200,000 s (trace track, scms-variants RR.MWC2.overdue). That outage
+# began before the changeover, so no list under the new CRACA existed until the restart, and the
+# overdue list (old CRACA b710ad) governed no sender: 0 refusals, against 110,048 now (9d0fbc2c).
+# multi-week-crlg-down.yaml (down from 700 s) shows the other case: senders whose CRACA has no
+# list a receiver holds are never refused, and no published clause says they should be. stress.md §2.
 schema: v2xw/scenario/1
 meta:
   name: edge-multi-week-crlg-down-late
   description: >-
-    Five weeks with the home CRL Generator down from day 2.3 to day 30, after its first
-    CRL: the overdue-CRL rule takes effect in the run.
+    Five weeks with the home CRL Generator down from day 3.5 to day 30, after the root
+    changeover's first list: the overdue-CRL rule takes effect in the run.
   authors: [v2xw]
   tags: [scms, edge-case, calendar, multi-week, crl, overdue, stress]
   created: "2026-10-22"
@@ -18,4 +23,4 @@ meta:
 actors:
   backend:
     failures:
-      - {node: crlg, mode: offline, from_s: 200000.0, to_s: 2600000.0}
+      - {node: crlg, mode: offline, from_s: 300000.0, to_s: 2600000.0}
