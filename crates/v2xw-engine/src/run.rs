@@ -1375,6 +1375,10 @@ struct TimelineState {
     /// `safety.*` items whose `"auto"` pick found no vehicle that fits yet, by item, with
     /// the instant they stop waiting: each mobility step tries them again.
     waiting_safety: BTreeMap<usize, SimTime>,
+    /// WP-21: each `when` item's firings so far and the instant of the last one.
+    trigger_fires: BTreeMap<usize, (u32, SimTime)>,
+    /// WP-21: what each `when` item's clause bound at its last firing.
+    bindings: BTreeMap<usize, crate::timeline::trigger::Binding>,
 }
 
 impl TimelineState {
@@ -1909,6 +1913,8 @@ impl Engine {
             broken_down: BTreeMap::new(),
             hazard_lights: BTreeSet::new(),
             waiting_safety: BTreeMap::new(),
+            trigger_fires: BTreeMap::new(),
+            bindings: BTreeMap::new(),
         };
         let phase2 = crate::phase2::Phase2::build(&engine.scenario, &engine.world)?;
         engine.phase2 = phase2;
@@ -2678,6 +2684,11 @@ impl Engine {
         self.scheduler
             .schedule(0, EventClass::MobilityStep, Event::MobilityStep);
         for (i, item) in self.scenario.events.iter().enumerate() {
+            // WP-21: a `when` item is armed at `t` and fired by `evaluate_triggers`, which
+            // also schedules its end; nothing is put on the calendar for it here.
+            if item.when.is_some() {
+                continue;
+            }
             let at = (item.t * 1e9).round().max(0.0) as u64;
             if at <= horizon {
                 self.scheduler.schedule(
@@ -3013,6 +3024,15 @@ impl Engine {
         use crate::scenario::TimelineKind;
         let now = self.scheduler.now();
         let mut note = crate::records::ScenarioEventView::new(now, index, item.kind, end);
+        // WP-21: a `when` item's record says what its clause bound, and which firing.
+        if item.when.is_some() && !end {
+            if let Some(b) = self.timeline.bindings.get(&index) {
+                note.actor = b.actor.map(|a| a.index());
+                note.leader = b.leader.map(|a| a.index());
+                note.follower = b.follower.map(|a| a.index());
+            }
+            note.firing = self.timeline.trigger_fires.get(&index).map(|(n, _)| *n);
+        }
         match item.kind {
             TimelineKind::WeatherFront => {
                 if end {
@@ -3282,7 +3302,17 @@ impl Engine {
                 )
             })
             .collect();
-        let Some(chosen) = se::pick(&self.world, &candidates, target, purpose) else {
+        // WP-21: a target the item's `when` clause bound is that vehicle, as it fired.
+        let chosen = match target {
+            se::Pick::Bound(role) => self
+                .timeline
+                .bindings
+                .get(&index)
+                .and_then(|b| b.get(role))
+                .and_then(|a| candidates.get(&a).copied()),
+            _ => se::pick(&self.world, &candidates, target, purpose),
+        };
+        let Some(chosen) = chosen else {
             note.effect = "no vehicle in the run fits this event at this instant, so nothing \
                            happened"
                 .to_string();
@@ -3375,6 +3405,104 @@ impl Engine {
     /// Tries again each `safety.*` item still waiting for a vehicle that fits, at the
     /// state this mobility step publishes; one that fires, or whose wait runs out, writes
     /// its `scenario.event`.
+    /// WP-21: evaluates every armed `when` item on the ground truth of this instant and
+    /// fires those whose clause holds, through [`Engine::on_control`] as a timed item fires.
+    ///
+    /// An item is armed from its `t`, fires at most `max_fires` times (1) and at least
+    /// `cooldown_s` apart (0); an `until` ends each firing `until − t` after it. Items are
+    /// visited in list order and vehicles in actor-id order, so a replay fires the same
+    /// items at the same steps on the same vehicles. The scenario director reads ground
+    /// truth by design: it is not a detector (invariants I-T1 to I-T3 do not apply).
+    fn evaluate_triggers(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        now: SimTime,
+        horizon: SimTime,
+    ) {
+        use crate::timeline::trigger::{TriggerActor, TriggerView};
+        let due: Vec<usize> = self
+            .scenario
+            .events
+            .iter()
+            .enumerate()
+            .filter(|(i, item)| {
+                item.when.is_some() && {
+                    let armed_at = (item.t * 1e9).round().max(0.0) as u64;
+                    let (fires, last) = self
+                        .timeline
+                        .trigger_fires
+                        .get(i)
+                        .copied()
+                        .unwrap_or((0, 0));
+                    let cooldown =
+                        Duration::from_secs_f64(item.cooldown_s.unwrap_or(0.0).max(0.0)).as_nanos();
+                    now >= armed_at
+                        && fires < item.max_fires.unwrap_or(1)
+                        && (fires == 0 || now >= last.saturating_add(cooldown))
+                }
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if due.is_empty() {
+            return;
+        }
+        let actors: Vec<TriggerActor> = self
+            .actors
+            .iter()
+            .filter(|(_, a)| !a.class.is_vru())
+            .map(|(id, a)| TriggerActor {
+                actor: *id,
+                node: a.node,
+                x_m: a.last.pos.x,
+                y_m: a.last.pos.y,
+                speed_mps: v2xw_core::math::hypot(a.last.vel.x, a.last.vel.y),
+                heading_rad: a.last.heading_rad,
+                length_m: a.last.dims.length_m,
+                width_m: a.last.dims.width_m,
+                lane: a.last.lane.map(|l| (l.lane.index(), l.s_m)),
+            })
+            .collect();
+        let step = self.report.mobility_steps;
+        for index in due {
+            let Some(item) = self.scenario.events.get(index).cloned() else {
+                continue;
+            };
+            let Some(when) = &item.when else { continue };
+            let view = TriggerView {
+                actors: &actors,
+                seed: self.scenario.seed,
+                item: index,
+                step,
+            };
+            let Some(binding) = when.eval(&view) else {
+                continue;
+            };
+            let fires = self
+                .timeline
+                .trigger_fires
+                .get(&index)
+                .map_or(0, |(n, _)| *n)
+                + 1;
+            self.timeline.trigger_fires.insert(index, (fires, now));
+            self.timeline.bindings.insert(index, binding);
+            self.on_control(recorder, index, false);
+            if let Some(until) = item.until {
+                let end = now
+                    .saturating_add(Duration::from_secs_f64((until - item.t).max(0.0)).as_nanos());
+                if end <= horizon {
+                    self.scheduler.schedule(
+                        end,
+                        EventClass::Control,
+                        Event::Control {
+                            item: index as u32,
+                            end: true,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     fn retry_waiting_safety(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
         if self.timeline.waiting_safety.is_empty() {
             return;
@@ -3495,6 +3623,9 @@ impl Engine {
         self.publish_state_at(recorder);
         self.emit_snapshot(recorder, now)?;
         self.retry_waiting_safety(recorder, now);
+        // WP-21: condition-triggered items read the states of this instant, the ones just
+        // published, and fire here, before the drivers move.
+        self.evaluate_triggers(recorder, now, horizon);
         // The transmit bit is "since the last mobility step", so the window closes with
         // the frame that reports it.
         self.transmitted_since_step.clear();
