@@ -932,6 +932,12 @@ def _ci(fit, name, scale=1.0, nd=3):
     return "" if not ci else "  # 95 %% bootstrap over chain IDs %s-%s" % (_f(scale * ci[0], nd), _f(scale * ci[2], nd))
 
 
+def _cin(fit, name, what, scale=1.0):
+    """A comment: what, then the bootstrap interval."""
+    c = _ci(fit, name, scale)
+    return "  # " + what + ((";" + c[3:]) if c else "")
+
+
 def cmd_yaml(fit_path, wy_path=None):
     """The candidates file, data/calibration/bsm-stamp-steps-candidates.yaml."""
     import contextlib
@@ -957,7 +963,7 @@ def cmd_yaml(fit_path, wy_path=None):
         "    - {dataset: nm7w-nvbm, role: fit, note: \"Tampa, every fitted number; pinned query of tools/realdata/sources.py\"}",
         "    - {dataset: 7qu7-j8rx, role: held_out, note: \"Wyoming, one OBU: read only by predict (KS reference, speed covariate)\"}",
         "  manifest_sha256: ee6eeab3f926d0fefac2e790d0dea9c5411531d7823d39558620a5521189d412",
-        "  tool: tools/realdata/e4stepfit.py (tests: test_e4stepfit.py)",
+        "  tool: \"tools/realdata/e4stepfit.py (tests in test_e4stepfit.py)\"",
         "  pairs: \"msgCnt +1, secMark dt within 3 ms of 50/100/150 ms (fits: 100 ms nominal), v1 >= 10 m/s; "
         "o = secMark offset from the nearest 50 ms epoch\"",
         "device_split:  # Tampa locked IDs (>= 70 % of secMarks within 1 ms of a 50 ms epoch)",
@@ -974,21 +980,21 @@ def cmd_yaml(fit_path, wy_path=None):
         "    stay_zero: %s%s" % (_f(ch["stay_zero"], 4), _ci(fit, "stay_zero")),
         "    p_offset_minus1: %s" % _f(pm, 4),
         "    transition_counts: {m1_m1: %d, m1_0: %d, 0_0: %d, 0_m1: %d}   # all speeds" % (
-            ch["transition_counts"]["-1-1"], ch["transition_counts"]["-1+0"], ch["transition_counts"]["+0+0"],
-            ch["transition_counts"]["+0-1"]),
+            ch["transition_counts"]["-1-1"], ch["transition_counts"]["-1+0"], ch["transition_counts"]["0+0"],
+            ch["transition_counts"]["0-1"]),
         "    # the error walk without the steps (core): Gaussian scale mixture per 100 ms epoch",
         "    walk: {dist: normal_mixture, tau_s: %s, p: %s, along_m: %s, cross_m: %s}" % (
-            _f(j["core"]["tau_s"]), _lst(j["core"]["p"]), _lst(j["core"]["along_m"]), _lst(j["core"]["cross_m"])),
+            "%.1f" % j["core"]["tau_s"], _lst(j["core"]["p"]), _lst(j["core"]["along_m"]), _lst(j["core"]["cross_m"])),
         "    step:   # a lasting position correction; independent signs and lognormal sizes",
-        "      prob_on_transition: %s%s   # at a 0 -> -1 BSM" % (_f(j["prob_on_transition"], 4),
-                                                             _ci(fit, "prob_on_transition")),
-        "      prob_stay_zero: %s%s   # at a 0 -> 0 BSM" % (_f(j["prob_stay_zero"], 4), _ci(fit, "prob_stay_zero")),
+        "      prob_on_transition: %s%s" % (_f(j["prob_on_transition"], 4),
+                                          _cin(fit, "prob_on_transition", "at a 0 -> -1 BSM")),
+        "      prob_stay_zero: %s%s" % (_f(j["prob_stay_zero"], 4), _cin(fit, "prob_stay_zero", "at a 0 -> 0 BSM")),
         "      prob_from_minus1: 0.0   # MLE %s; Wyoming (held out): 0 of 1282 -1 -> -1 pairs over 5 cm" % (
             _f(j["prob_from_minus1"], 2)),
         "      along_cm: {p50: %s, p90: %s}%s" % (_f(100 * sz["along_p50_m"], 3), _f(100 * sz["along_p90_m"], 3),
-                                              _ci(fit, "along_p50_m", 100)),
+                                              _cin(fit, "along_p50_m", "p50", 100)),
         "      cross_cm: {p50: %s, p90: %s}%s" % (_f(100 * sz["cross_p50_m"], 3), _f(100 * sz["cross_p90_m"], 3),
-                                              _ci(fit, "cross_p50_m", 100)),
+                                              _cin(fit, "cross_p50_m", "p50", 100)),
         "    speed:   # the reported speed steps with the along step and relaxes; v >= 10 m/s chain IDs",
         "      per_m_along_mps: %s   # dv = this x along step (m), at the step BSM (%d steps)" % (
             _f(sp["k_mps_per_m"], 3), sp["n_steps"]),
@@ -1009,13 +1015,13 @@ def cmd_yaml(fit_path, wy_path=None):
         "    stay_minus1: %s" % _f(ch["stay_minus1"], 4),
         "    stay_zero: %s" % _f(ch["stay_zero"], 4),
         "    walk: {dist: normal_mixture, tau_s: %s, p: %s, along_m: %s, cross_m: %s}" % (
-            _f(cw["tau_s"]), _lst(cw["p"]), _lst(cw["along_m"]), _lst(cw["cross_m"])),
+            "%.1f" % cw["tau_s"], _lst(cw["p"]), _lst(cw["along_m"]), _lst(cw["cross_m"])),
         "    step: {prob_on_transition: %s, along_cm: {p50: %s, p90: %s}, cross_cm: {p50: %s, p90: %s}}" % (
             _f(st["prob"], 4), _f(100 * st["along_p50_m"], 3), _f(100 * st["along_p90_m"], 3),
             _f(100 * st["cross_p50_m"], 3), _f(100 * st["cross_p90_m"], 3)),
         "  tampa_fixed:   # the other Tampa locked devices: stamp always on the epoch, no chain",
         "    walk: {dist: normal_mixture, tau_s: %s, p: %s, along_m: %s, cross_m: %s}" % (
-            _f(fx["walk_per_pair"]["tau_s"]), _lst(fx["walk_per_pair"]["p"]), _lst(fx["walk_per_pair"]["along_m"]),
+            "%.1f" % fx["walk_per_pair"]["tau_s"], _lst(fx["walk_per_pair"]["p"]), _lst(fx["walk_per_pair"]["along_m"]),
             _lst(fx["walk_per_pair"]["cross_m"])),
         "    pairs_over_5cm: %s" % _f(fx["over5_other"], 3),
         "    speed_per_m_along_mps: %s   # over its pairs > 5 cm (%d)" % (
@@ -1047,7 +1053,7 @@ def cmd_timing(fit_path, shipped_path):
         lines = f.read().splitlines()
     core = fit["joint"]["core"]
     new = "    position_noise: {dist: normal_mixture, tau_s: %s, p: %s, along_m: %s, cross_m: %s}" % (
-        _f(core["tau_s"]), _lst(core["p"]), _lst(core["along_m"]), _lst(core["cross_m"]))
+        "%.1f" % core["tau_s"], _lst(core["p"]), _lst(core["along_m"]), _lst(core["cross_m"]))
     out = [
         "# CANDIDATE (2026-10-28): data/calibration/bsm-timing-cvpilot.yaml (tools/realdata 1.3.0) with ONE",
         "# change: the locked class's position_noise is the core walk of Tampa's chain devices from",
