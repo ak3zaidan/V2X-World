@@ -343,7 +343,7 @@ impl TransitionStep {
     /// The (along, cross) step for two standard normals and two signs (u < 0.5 negative).
     fn draw(&self, za: f64, zc: f64, sa: f64, sc: f64) -> (f64, f64) {
         let ln = |p50: f64, p90: f64, z: f64| {
-            v2xw_core::math::exp(p50.ln() + z * (p90 / p50).ln() / Z90)
+            v2xw_core::math::exp(v2xw_core::math::ln(p50) + z * v2xw_core::math::ln(p90 / p50) / Z90)
         };
         let sign = |u: f64| if u < 0.5 { -1.0 } else { 1.0 };
         (
