@@ -90,6 +90,7 @@ rows:
   run: G20-MAP-ED85
   metric: CBR172(G20-MAP-ED85) / CBR172(G20)
   band: "[p85-0.01, p85+0.01], p85 = 1 - (B_moved - B_leak85) / B_all from G20's node_rx (radiofix4.py shares)"
+  predicted: "p85 0.9222 from G20 (B_leak85 0.1893), band [0.9122, 0.9322]"
   expect: the pre-fix carrier sense reproduces radio-fix3 R3.2.DENSE-SENSED (0.9233 against p 0.9215)
   source: radio-fix3 R3.2.DENSE-SENSED; ETSI TS 102 687 V1.2.1 §4.2 (CBR at -85 dBm)
   measured: pending
@@ -98,6 +99,7 @@ rows:
   run: G20-MAP
   metric: CBR172(G20-MAP) / CBR172(G20)
   band: "[p65-0.01, p65+0.01], p65 = 1 - (B_moved - B_leak65) / B_all from G20's node_rx"
+  predicted: "from G20 (3cbc95a4 copy, CBR172 0.02205): B_moved 0.2671, B_leak65 0.0513, p65 0.7842, band [0.7742, 0.7942] (CBR172 0.0173); B_leak85 0.1893, p85 0.9222"
   expect: >-
     Under SAE J2945/1 the CBP is the share of the 100 ms interval the radio's 802.11 CCA
     reports busy, so a SPaT or MAP on 174 counts on 172 only where its leak reaches -65 dBm
