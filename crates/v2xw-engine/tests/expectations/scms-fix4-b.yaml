@@ -51,7 +51,8 @@ rows:
   expect: 'equal on both lines (272 = 272, 16 = 16): each fetch carries the file as served at the request, so every line fetches the late list itself'
   source: '1609.2.1 §6.3.5.7 (the CRL is a file downloaded from the RA, as served); [PRIMER] p.5'
   test: sensitivity_security::the_backhaul_latency_and_bandwidth_move_relay_topups
-  measured: pending
+  measured: 'FBH200 272, FBH5 272 line messages; the test''s ROWs: 272 on all four lines, top-ups 40/40 each'
+  verdict: fixed
 - id: BH.order
   base: FBH200
   variant: FBH5
@@ -59,7 +60,8 @@ rows:
   measure: topup exchange mean, ms
   expect: '5 ms < 200 ms (BH5 243 < BH200 1,023 on rel); the top-up exchanges unchanged by the CRL fix (40/40)'
   source: the backhaul FIFO adds the line latency to each of the six relayed messages
-  measured: pending
+  measured: '5 ms 243.0 < 200 ms 1,023.0 < 600 ms 2,623.0 ms; 128 kbit/s 1,399.4 ms; FBH5 digest 6dfbd3f1 = BH5'
+  verdict: pass
 - id: INFO.file
   base: DWB
   variant: FDWB
@@ -67,7 +69,9 @@ rows:
   measure: first batch-download request instant - info-response instant, provider-a top-offs of the 60 s week
   expect: 'falls by the gap between the weekly job''s start (60.00 s) and the device''s ask (60.02 s): first poll at 62.0x s against 62.18 s; completed top-ups within 2 (cross-binary)'
   source: 'SCMS-576 / [CAMP122] §5.2.7.8: the RA keeps a .info file per EE current and serves it as it is; 1609.2.1 RaEeCertInfo.nextDlTime; past it, the download is not ready and the EE retries after download-minWait up to download-maxReqs ([SMP] §4.3.1)'
-  measured: pending
+  measured: 'first poll 62.18 s on both binaries; completed 105 = 105'
+  verdict: wrong-expectation
+  note: 'Time32 is whole seconds (1609.2 Time32): the planned 62.00 s and the old 62.05 s both encode as 62 s, so on this run the device acts on the same instant. The rule is pinned where the gap is 30 s: v2xw-proto pregeneration::a_device_asking_while_its_week_is_generated_reads_the_jobs_planned_time (comes back at boundary + 60 s, not + 90 s). FDWB digest bb97d2b3 against DWB a907ac88 (the roadside CRL changes; credential-lifecycle has a crl unit).'
 # --- (1b) the download-wait test ----------------------------------------------------------
 - id: DW.censored
   base: DWB
@@ -96,7 +100,8 @@ rows:
   measure: as DW.paired
   expect: as DW.paired
   source: as DW.paired
-  measured: pending
+  measured: '106 paired, 16 late, mean +1,791 ms against the bound +679 ms, 0 earlier; the test passes (360 s)'
+  verdict: pass
 # --- (2) a top-up in flight when its vehicle leaves ----------------------------------------
 - id: LA.held
   base: LA0
@@ -116,7 +121,8 @@ rows:
   expect: 'left > 0; the books close'
   source: 'FB3 (full-bench.md §4): a vehicle that drives out with its top-up in flight; the ACA 4 s slow queues the weekly batches for tens of seconds (DWB: 88-132 s for the 60 s week)'
   test: backend_entities::a_top_up_whose_vehicle_leaves_the_area_is_counted_as_leaving
-  measured: pending
+  measured: 'rel (fbd 1 s): 162 started = 127 completed + 0 refused + 6 left + 29 in flight; the test on fix: the same, passes (36 s)'
+  verdict: pass
 # --- (3) the validated-certificate cache test -----------------------------------------------
 - id: CACHE.mac
   base: CLB
@@ -125,7 +131,9 @@ rows:
   measure: events_by_class MacTimer
   expect: 'identical (the cache prices validation time; the radio schedule is untouched)'
   source: scms_knobs_runs a_small_validated_certificate_cache_revalidates_and_costs_more_crypto (protocol/flow gaps item 5)
-  measured: pending
+  measured: 'MacTimer 152,541 -> 152,539; PhyEnd 142,838 = 142,838; every frame the same but one: node 57s BSM at 244.167 s goes at 244.267 s instead (each run skips one 100 ms window there, a different one); NodeTask 3,752,634 -> 4,263,729'
+  verdict: open
+  note: 'Traced, not fixed and not bisected: the slower validation moves which 100 ms window node 57s BSM generation skips. Either the BSM clock reads a wake that a signature checks finish schedules (Engine::schedule_wake), which would be an engine defect (a devices own BSM timer should not depend on its receive load), or a CPU shared by verification and signing, which is physical. Next step: find what drops one BSM in [244.0, 244.6] s on node 57 in both runs.'
 # --- (4) each list rides each unit's line once; a unit relays what it installed --------------
 - id: LR.once
   base: LRB
@@ -135,7 +143,8 @@ rows:
   expect: 'rel 16 (214 = 108 + 90 + 16) -> fix 0'
   source: '[PRIMER] p.5 (a unit relays the list it downloaded); live-rsu §6.3'
   test: live_rsu::each_list_rides_each_units_backhaul_once
-  measured: pending
+  measured: 'FLRB 198 = 108 relayed reports + 90 installs + 0 (LRB 214, 16 beyond); live_rsu::each_list_rides_each_units_backhaul_once passes'
+  verdict: fixed
   note: 'rel diagnosis (after the run): one in-run list, provider-b''s at 70.004 s; 16 units had no fetch due that step (their RA serves it one inter-provider hop later), so the carousel start sent it down their lines, and each fetched it again itself.'
 - id: LR.broadcasts
   base: LRB
@@ -144,7 +153,9 @@ rows:
   measure: crl_broadcasts; rsu_revoked_receptions
   expect: 'within 5 % (the units not due air their own list until their fetch lands, about one step)'
   source: the carousel interval and the fetch timing are unchanged
-  measured: pending
+  measured: 'crl_broadcasts 300 -> 284 (-5.3 %); rsu_revoked_receptions 427 = 427'
+  verdict: wrong-expectation
+  note: 'The 16 provider-a units held only the start-of-run lists (no entries) at the first tick after provider-b''s list: they used to air the new list they had not downloaded (16 frames) and now air nothing until their own fetch lands. 300 - 16 = 284 exactly; the vehicles'' revoked receptions are unchanged.'
 - id: LR.lag
   base: FLRB
   variant: FLRB
@@ -153,4 +164,5 @@ rows:
   expect: passes (no unit airs a list before its 2 s download)
   source: live-rsu §3
   test: live_rsu::a_unit_broadcasts_a_list_only_once_its_backhaul_brought_it_and_not_while_it_is_down
-  measured: pending
+  measured: 'passes (60 s for both ignored tests)'
+  verdict: pass

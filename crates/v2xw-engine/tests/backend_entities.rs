@@ -943,7 +943,8 @@ fn a_top_up_whose_vehicle_leaves_the_area_is_counted_as_leaving() {
     // ms, whatever first_batch_delay (scms-fix4-b LA.held). What delays a real top-off
     // is a backend that is slow: here the home ACA takes 4 s more per message for the
     // whole run, so its weekly batches queue for tens of seconds and some vehicles drive
-    // out of the grid first (scenarios/scms-fix4/la-slow.yaml: 6 of 161 on f4982788).
+    // out of the grid first (scenarios/scms-fix4/la-slow.yaml: 6 of 162 on the 3cbc95a4
+    // release, 29 still in flight at the end, the books closed).
     params["max_periods_ahead"] = json!(2);
     lifecycle(&mut s, v2xw_engine::phase2::CAMP_SCMS, params);
     s.actors.backend.failures = vec![v2xw_engine::scenario::schema::BackendFailureSpec {
