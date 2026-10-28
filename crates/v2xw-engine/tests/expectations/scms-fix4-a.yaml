@@ -33,8 +33,10 @@ rows:
   source: 'every PSM in the run is an honest handset''s, signed under a certificate of the i-period its
     clock reads (CAMP-EE 2.1.5.3.2: i-periods are calendar intervals); a 1609.2 receiver whose own
     clock reads the same period judges it plausible (PLAUSIBLE_PERIOD_SKEW 1), so no RSU refuses one'
-  measured: pending
-  verdict: pending
+  measured: '240 (rel) -> 0 (fix test build: Verified 431)'
+  verdict: fixed
+  test: 'pq_receivers::a_roadside_unit_judges_the_first_frames_it_hears_in_the_current_period (also asserts backend_errors 0)'
+  note: 'Cause (diagnostic build): every provider-b pre-run pool failed with "only the PCA may open a sealed pre-linkage value": on the modelled path the PLVs opened only at the core ACA node, and since 52432316 the RA routes half of provider-b''s requests to aca/1. The failure was silent; those handsets signed with the period-0 bootstrap stand-in (iCert 0 against period 614) and every receiver, vehicle or unit, refused them as an implausible period (crl_period_refusals 240). Red without the fix: the rel run (240) and the 10-27 integration failure'
 - id: F4A.CRL.composite-lists
   base: unit
   variant: unit
@@ -45,8 +47,10 @@ rows:
   source: 'IEEE 1609.2.1-2022 6.3.5.8: CompositeCrl is a SEQUENCE OF SecuredCrl, one for each CRACA the
     home CTL lists, plus the home MultiSignedCtl. Each provider''s CRL Generator signed its list before
     the run (R-NOCRL), so both lists exist at every RA from t0'
-  measured: pending
-  verdict: pending
+  measured: '1 (base, BUILD-STATUS 10-27) -> 2; composite 3,216 B signed vs 3,082 B modelled (ratio 0.958)'
+  verdict: fixed
+  test: 'phase2::provider_failure_tests::a_crl_fetch_without_the_pdu_layer_is_sized_as_the_composite_the_ra_serves'
+  note: 'The test was right and the composite wrong: each provider''s standing pre-run list was stamped at the first backend step and then waited the inter-provider lag, so for that lag a peer RA served one SecuredCrl. A version at or below the store''s pre-run serial now carries no lag. The fault proof of scmsleft''s composite_estimate is still owed'
 - id: F4A.MWC.overdue
   base: MW
   variant: MWC
@@ -58,8 +62,9 @@ rows:
     with nextCrl t0 + 7 d is overdue from t0 + 21 d; with the home Generator down until 30.1 d, every
     receiver in W5 (28.0-28.0 d live) that holds only that home list refuses the home CRACA''s
     messages'
-  measured: pending
-  verdict: pending
+  measured: '0 (rel) -> 0 (fix2)'
+  verdict: open
+  note: 'Not an overdue-rule defect. Diagnostic build: in W4-W5 receivers hold the old home list (crlCraca af8a..b710ad, nextCrl t0 + 7 d, overdue) and provider-b''s, but every home sender signs under cracaId 4a1086, the new root''s: the root rollover decided at 120 s is published (CTL 1) at 259,320 s, when the home Generator is already down (700-2,600,000 s), and since dc0c0250 the wire PKI follows it. No list under the new CRACA can be signed until the Generator is back, so no device holds one and the overdue rule (per held CRL) has nothing to act on. On 81a12183 certificates kept the old CRACA, hence 152,505. Whether a deployed device refuses certificates of a CRACA it never got a CRL for is not in the cited sources: open. The scenario no longer tests its premise; it needs the outage without the rollover, or after the changeover'
 - id: F4A.MWC.held-overdue
   base: MWC
   variant: MWC
@@ -68,8 +73,8 @@ rows:
   expect: ge
   value: 1
   source: the premise of F4A.MWC.overdue, read off what receivers hold (belief), not off the backend
-  measured: pending
-  verdict: pending
+  measured: 'W4 1,197 and W5 6,638 node.security records hold an overdue home list (rel and fix2 identical)'
+  verdict: pass
 - id: F4A.MW.no-overdue
   base: MW
   variant: MW
@@ -80,8 +85,9 @@ rows:
   source: 'with both Generators reissuing by nextCrl, no list a device holds is ever two weeks past it,
     and a joiner holds the newest list each CRACA published (R-JOINCRL): the fix must not bring back
     MW''s 16,618 joiner refusals'
-  measured: pending
-  verdict: pending
+  measured: 'rv.refused_total 0 (rel MW)'
+  verdict: pass
+  note: 'MW not re-run on fix2: the changeover reissue is the only change that touches it (a list under the new CRACA at 259,320 s, inside the Generator''s uptime)'
 - id: F4A.P2.decision-spread
   base: P2
   variant: P2
@@ -95,8 +101,9 @@ rows:
     report shuffle (threat/ma/corroborated); the attacker is the first vehicle onto an empty map, so
     its first report depends on which neighbours carry a modem (a node-keyed draw, re-keyed by the
     p1gaps roadside renumbering): a spread over the run, not a constant'
-  measured: pending
-  verdict: pending
+  measured: '241.8 s (5EED), 112.1 s (_0001), 136.0 s (_0002)'
+  verdict: pass
+  note: 'Written after the three seed runs, so it records an observation, not a prediction'
 - id: F4A.P2.path-installed
   base: P2
   variant: P2
@@ -107,8 +114,9 @@ rows:
   source: 'after the decision the path needs the PCA and LA lookups (seconds), the Generator''s 60 s
     cadence and one 30 s fetch interval: a decision at 241.8 s is installed by about 334 s, so a 360 s
     horizon holds the whole path whichever realisation the node-keyed draws give'
-  measured: pending
-  verdict: pending
+  measured: 'rel CLI at 360 s: 59 installs, 5,907 revoked receptions, latency 115.8 s (camp-reference 59, 5,849, 117.5 s); fix test build: the four phase2 tests pass'
+  verdict: pass
+  test: 'phase2 a_report_becomes..., the_revocation_latency..., without_either..., the_honest_revocation_path...'
 - id: F4A.MWC.new-craca-held
   base: MWC
   variant: MWC
@@ -122,8 +130,9 @@ rows:
     (R-NOCRL: every CRACA''s CRL exists), so receivers hold three lists from then on. Diagnosis on the
     rel code: W5 senders carry cracaId 4a1086 (new home CRACA) or b0595c (provider-b), receivers hold
     only af8a..b710ad (old home root) and c5d9..b0595c, so no home certificate ever matched a held list'
-  measured: pending
-  verdict: pending
+  measured: '0 records in W2-W4 (fix2)'
+  verdict: wrong-expectation
+  note: 'Wrong premise: the changeover is at 259,320 s (after the CTL vote), not 120 s, so after the Generator went down; the reissue the fix adds is persisted and runs at the 2,600,000 s restart (W5 then holds 3 lists, as before). The fix (R-ROLLCRL) holds where the Generator is up: phase2::ctl_device_tests::a_root_changeover_publishes_a_list_under_the_new_craca_at_once passes; its fault proof is owed'
 - id: F4A.MWC.no-w4-refusal
   base: MWC
   variant: MWC
@@ -133,5 +142,5 @@ rows:
   value: 0
   source: 'the post-rollover list is issued at the changeover (after 120 s), so it is overdue from
     changeover + 7 d + 14 d, after W4 ends at t0 + 21 d + 60 s; W4 senders sign under the new CRACA'
-  measured: pending
-  verdict: pending
+  measured: '0 refusals in the whole run (fix2)'
+  verdict: pass
