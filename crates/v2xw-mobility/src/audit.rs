@@ -1879,6 +1879,25 @@ impl Obb {
     }
 }
 
+/// Whether two bodies touch, each given as `(rear reference, heading, length, width)` and
+/// laid out as [`Check::Overlap`] lays out a published pose (the body extends forward of
+/// the rear reference along the heading), unshrunk: the engine's test for a vehicle
+/// standing in another's path, which must hold where the auditor's (shrunk) one would.
+pub(crate) fn bodies_touch(a: (Vec3, f64, f64, f64), b: (Vec3, f64, f64, f64)) -> bool {
+    let obb = |(p, h, l, w): (Vec3, f64, f64, f64)| {
+        let (s, c) = math::sin_cos(h);
+        Obb {
+            centre: (p.x + 0.5 * l * c, p.y + 0.5 * l * s),
+            axis: (c, s),
+            half_len: 0.5 * l,
+            half_wid: 0.5 * w,
+        }
+    };
+    let (oa, ob) = (obb(a), obb(b));
+    let reach = 0.5 * (math::sqrt(a.2 * a.2 + a.3 * a.3) + math::sqrt(b.2 * b.2 + b.3 * b.3));
+    dist2(oa.centre, ob.centre) <= reach && oa.intersects(&ob)
+}
+
 /// The static world checks: internal paths outside their junction, lanes through
 /// buildings, conflicting protected greens.
 pub fn audit_world(world: &World) -> Vec<(Check, Example)> {
@@ -2020,6 +2039,27 @@ pub fn audit_world(world: &World) -> Vec<(Check, Example)> {
 mod tests {
     use super::*;
     use v2xw_world::{ImportOptions, procedural::GridParams};
+
+    /// The engine's body test lays a body out forward of its rear reference, as the
+    /// overlap check does: the j13 wedge of `tests/realism.rs` (a car standing at the end
+    /// of one left turn, heading 1.39 rad, and one starting the crossing left turn,
+    /// heading −1.3 rad, 3.1 m between rear references) touches; the same pair 1.5 m
+    /// further apart does not.
+    #[test]
+    fn bodies_touch_lays_bodies_out_forward_of_the_rear_reference() {
+        let standing = (Vec3::new(487.8, 172.6, 0.0), 1.39, 4.5, 1.8);
+        let crossing = (Vec3::new(485.6, 176.6, 0.0), -1.3, 4.5, 1.8);
+        assert!(bodies_touch(crossing, standing));
+        assert!(bodies_touch(standing, crossing));
+        let away = (Vec3::new(484.1, 176.6, 0.0), -1.3, 4.5, 1.8);
+        assert!(!bodies_touch(away, standing));
+        // Centred on the reference instead, the two bodies of the wedge miss each other.
+        let centred = |(p, h, l, w): (Vec3, f64, f64, f64)| {
+            let (s, c) = math::sin_cos(h);
+            (Vec3::new(p.x - 0.5 * l * c, p.y - 0.5 * l * s, 0.0), h, l, w)
+        };
+        assert!(!bodies_touch(centred(crossing), centred(standing)));
+    }
 
     fn grid() -> World {
         v2xw_world::procedural::grid(

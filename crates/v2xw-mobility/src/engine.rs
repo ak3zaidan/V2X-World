@@ -5572,6 +5572,12 @@ impl NativeMobility {
                 return true;
             }
         }
+        if self
+            .standing_foe_in_path(world, snapshot, occupancy, actor, movement, 0.0)
+            .is_some()
+        {
+            return true;
+        }
         let Some(exit) = self.zones.exit_of(movement) else {
             return false;
         };
@@ -5602,6 +5608,88 @@ impl NativeMobility {
         }
         let _ = world;
         room < need
+    }
+
+    /// The first front arc length along connector `movement`, at or past `from_s`, at
+    /// which `actor`'s body would touch the body of a vehicle standing inside the junction
+    /// on a conflicting (non-merging) movement: `None` if its path is free of them.
+    ///
+    /// The conflict zones ([`ConflictZones`]) place a crossing where two centrelines meet
+    /// and judge a vehicle clear of it by arc length. Two left turns from adjacent
+    /// approaches cross mid-turn and then run back towards each other in a narrow wedge,
+    /// so a car standing at the end of one connector (its exit full, VTL §1175) sits
+    /// 0.7 m "past" the zone by arc length with its rear corner still in the other path:
+    /// the crossing car drove into it (kerbside `tests/realism.rs`, actors 1 and 209 at
+    /// j13, 10 overlap steps). A driver yields to a vehicle "lawfully within the
+    /// intersection" (UVC §11-202(a)1, NY VTL §1111(a)1) that is in their way, wherever
+    /// a zone's arithmetic puts it; this tests the bodies themselves, laid out as the
+    /// auditor lays them out ([`crate::audit::bodies_touch`]), at 0.5 m steps.
+    fn standing_foe_in_path(
+        &self,
+        world: &World,
+        snapshot: &ActorSnapshot,
+        occupancy: &BTreeMap<LaneId, Vec<(ActorId, f64, f64)>>,
+        actor: &Actor,
+        movement: LaneId,
+        from_s: f64,
+    ) -> Option<f64> {
+        const STEP_M: f64 = 0.5;
+        let zones = self.zones.of(movement);
+        let mut seen: BTreeSet<ActorId> = BTreeSet::new();
+        let mut standing: Vec<(Vec3, f64, f64, f64)> = Vec::new();
+        for (lane, list) in occupancy {
+            if *lane == movement || !zones.iter().any(|z| z.other == *lane && !z.merge) {
+                continue;
+            }
+            for (other, _, _) in list {
+                if *other == actor.id
+                    || snapshot
+                        .view(*other)
+                        .is_none_or(|v| v.speed_mps >= STUCK_SPEED_MPS)
+                {
+                    continue;
+                }
+                if seen.insert(*other)
+                    && let Some(k) = snapshot.kinematics(*other)
+                {
+                    standing.push((k.pos, k.heading_rad, k.dims.length_m, k.dims.width_m));
+                }
+            }
+        }
+        if standing.is_empty() {
+            return None;
+        }
+        let conn = world.lane(movement);
+        let approach = self.zones.approach_of(movement).map(|l| world.lane(l));
+        let dims = actor.class.dims();
+        let length = actor.class.spec().length_m;
+        let body_at = |s: f64| {
+            let front = smooth_offset_point(conn, s, 0.0);
+            let s_rear = s - length;
+            let rear = if s_rear >= 0.0 {
+                smooth_offset_point(conn, s_rear, 0.0)
+            } else if let Some(app) = approach {
+                smooth_offset_point(app, (app.length_m + s_rear).max(0.0), 0.0)
+            } else {
+                let (sin0, cos0) = math::sin_cos(conn.heading_at(0.0));
+                let p = conn.point_at(0.0);
+                Vec3::new(p.x + s_rear * cos0, p.y + s_rear * sin0, p.z)
+            };
+            let heading = math::atan2(front.y - rear.y, front.x - rear.x);
+            (rear, heading, length, dims.width_m)
+        };
+        let mut s = from_s.max(0.0);
+        while s <= conn.length_m {
+            let me = body_at(s);
+            if standing
+                .iter()
+                .any(|b| crate::audit::bodies_touch(me, *b))
+            {
+                return Some(s);
+            }
+            s += STEP_M;
+        }
+        None
     }
 
     /// The constraint other vehicles inside a junction put on `actor`, as a virtual leader.
@@ -5766,6 +5854,17 @@ impl NativeMobility {
                     }
                 }
             }
+        }
+        // A vehicle standing in the path, wherever the zones put it: stop short of it.
+        // One the body touches already is not braked for (that would only freeze two
+        // vehicles into each other).
+        if inside
+            && let Some(hit) =
+                self.standing_foe_in_path(world, snapshot, occupancy, actor, movement, pos)
+            && hit > pos
+        {
+            let l = LeaderView::virtual_obstacle((hit - pos - 0.5).max(0.0), 0.0);
+            best = Self::closest(best, Some(l));
         }
         Some(JunctionConstraint {
             crossing: best,
