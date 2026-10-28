@@ -747,7 +747,9 @@ impl TlLedger {
         for a in &logic.attributes {
             let key = format!("tlLogic@{a}");
             match a.as_str() {
-                "type" if logic.logic_type == "delay_based" && kind != SignalProgrammeKind::Static => {
+                "type"
+                    if logic.logic_type == "delay_based" && kind != SignalProgrammeKind::Static =>
+                {
                     Self::bump(&mut self.approximated, format!("{key}=delay_based"));
                 }
                 "id" | "programID" | "type" | "offset" => Self::bump(&mut self.applied, key),
@@ -1477,7 +1479,9 @@ pub fn parse_sumo_net(xml: &[u8]) -> Result<SumoNet> {
                         if let Some(Pending::TlLogic(logic)) = pending.as_mut()
                             && let Some(key) = attr(e, "key")
                         {
-                            logic.params.push((key, attr(e, "value").unwrap_or_default()));
+                            logic
+                                .params
+                                .push((key, attr(e, "value").unwrap_or_default()));
                         }
                     }
                     "prohibition" => {
@@ -4180,9 +4184,15 @@ mod tests {
         assert_eq!(p.kind, SignalProgrammeKind::Actuated);
         assert_eq!(p.plan, world.signals[0].id);
         assert_eq!(p.phases.len(), world.signals[0].phases.len());
-        assert_eq!((p.phases[0].min_s, p.phases[0].max_s), (Some(5.0), Some(50.0)));
+        assert_eq!(
+            (p.phases[0].min_s, p.phases[0].max_s),
+            (Some(5.0), Some(50.0))
+        );
         assert_eq!((p.phases[1].min_s, p.phases[1].max_s), (None, None));
-        assert_eq!((p.phases[2].min_s, p.phases[2].max_s), (Some(10.0), Some(40.0)));
+        assert_eq!(
+            (p.phases[2].min_s, p.phases[2].max_s),
+            (Some(10.0), Some(40.0))
+        );
         assert_eq!(p.params.get("max-gap").map(String::as_str), Some("2.5"));
         // The native format carries the table, and the hash covers it.
         let back = crate::serde_native::from_bytes(&crate::serde_native::to_bytes(&world).unwrap())
@@ -4247,7 +4257,10 @@ mod tests {
         assert_eq!(p.params.get("ring1").map(String::as_str), Some("0,2,0,4"));
         // The ring parameters are applied; the display flag is not modelled.
         assert_eq!(report.tl_ledger.applied.get("param@ring1"), Some(&1));
-        assert_eq!(report.tl_ledger.not_modelled.get("param@show-detectors"), Some(&1));
+        assert_eq!(
+            report.tl_ledger.not_modelled.get("param@show-detectors"),
+            Some(&1)
+        );
     }
 
     /// WP-23 Accept: a delay-based programme runs as actuated and is counted.
@@ -4262,13 +4275,22 @@ mod tests {
         );
         let (world, report) = import(&xml);
         assert_eq!(world.signal_programmes.len(), 1);
-        assert_eq!(world.signal_programmes[0].kind, SignalProgrammeKind::Actuated);
+        assert_eq!(
+            world.signal_programmes[0].kind,
+            SignalProgrammeKind::Actuated
+        );
         assert_eq!(report.anomaly(SumoAnomaly::DelayBasedAsActuated), 1);
         assert_eq!(
-            report.tl_ledger.approximated.get("tlLogic@type=delay_based"),
+            report
+                .tl_ledger
+                .approximated
+                .get("tlLogic@type=delay_based"),
             Some(&1)
         );
-        assert_eq!(report.tl_ledger.not_modelled.get("param@detectorRange"), Some(&1));
+        assert_eq!(
+            report.tl_ledger.not_modelled.get("param@detectorRange"),
+            Some(&1)
+        );
         // An unknown type is run as fixed time, and counted.
         let odd = with_programme(
             "<tlLogic id=\"c\" type=\"rail_crossing\" programID=\"0\" offset=\"0\">\n\
@@ -4299,7 +4321,11 @@ mod tests {
         let l = &report.tl_ledger;
         assert_eq!(l.total() as usize, attributes - params, "{l:?}");
         assert_eq!(l.applied.get("param@max-gap"), Some(&1));
-        for k in ["param@detector-gap", "param@passing-time", "param@vendor-thing"] {
+        for k in [
+            "param@detector-gap",
+            "param@passing-time",
+            "param@vendor-thing",
+        ] {
             assert_eq!(l.not_modelled.get(k), Some(&1), "{k}");
         }
         assert_eq!(l.applied.get("phase@minDur"), Some(&2));

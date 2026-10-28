@@ -4151,7 +4151,9 @@ impl World {
                 });
             };
             if prog.phases.len() != plan.phases.len()
-                || self.signal_programmes[..k].iter().any(|q| q.plan == prog.plan)
+                || self.signal_programmes[..k]
+                    .iter()
+                    .any(|q| q.plan == prog.plan)
             {
                 return Err(WorldError::Invariant {
                     invariant: "signal-programme",
