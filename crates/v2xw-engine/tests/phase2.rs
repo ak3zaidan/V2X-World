@@ -586,7 +586,8 @@ fn the_phase_2_path_reproduces_its_regression_digest() {
 /// **Honest revocation on the new topology (WP-F3).** The same Phase 2 path on the earlier
 /// single-SCMS `camp-reference` topology and on the default two-provider one: in both the
 /// attacker, and only the attacker, is revoked, the list reaches the fleet and refuses its
-/// frames, and the vehicles' air traffic is the same. The topology moves backend latency
+/// frames, and the vehicles' air traffic is the same (roadside CRL frames follow the
+/// backend latency). The topology moves backend latency
 /// and which provider certifies whom, not what the honest fleet sends.
 #[test]
 fn the_honest_revocation_path_holds_on_the_old_and_the_new_topology() {
@@ -612,6 +613,10 @@ fn the_honest_revocation_path_holds_on_the_old_and_the_new_topology() {
         n.revocation_latency_ns as f64 / 1e9,
         new.frames_transmitted,
     );
+    println!(
+        "roadside CRL frames: camp-reference {} us-production {}",
+        o.crl_broadcasts, n.crl_broadcasts
+    );
     assert_eq!(o.devices_by_provider.len(), 1, "camp-reference is one SCMS");
     assert!(
         n.devices_by_provider.len() >= 2,
@@ -633,8 +638,12 @@ fn the_honest_revocation_path_holds_on_the_old_and_the_new_topology() {
             "{name}: the entry never refused a frame"
         );
     }
+    // Roadside units air only a list they have installed (scms-fix4-b, the carousel
+    // booking), so their CRL frames follow the topology's backend latency; everything
+    // else on the air, the vehicles' frames included, must be the same.
     assert_eq!(
-        old.frames_transmitted, new.frames_transmitted,
+        old.frames_transmitted - o.crl_broadcasts,
+        new.frames_transmitted - n.crl_broadcasts,
         "the topology changed what the fleet transmits"
     );
 }
