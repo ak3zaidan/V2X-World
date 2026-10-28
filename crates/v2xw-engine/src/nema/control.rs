@@ -937,11 +937,9 @@ mod tests {
         use v2xw_core::geom::Vec3;
         use v2xw_world::ImportOptions;
         use v2xw_world::procedural::GridParams;
-        let base = v2xw_world::procedural::grid(
-            &GridParams::tr36885_urban(),
-            &ImportOptions::default(),
-        )
-        .expect("grid");
+        let base =
+            v2xw_world::procedural::grid(&GridParams::tr36885_urban(), &ImportOptions::default())
+                .expect("grid");
         let control = SignalControl {
             control: crate::scenario::schema::SignalControlKind::Nema,
             ..SignalControl::default()
