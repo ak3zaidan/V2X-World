@@ -4036,6 +4036,38 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-28: fix round 4 integration (SOURCES, LIVERUN, TRAFFIC, RADIO, SCMSA, SCMSB, STAMP)
+
+One integrator in the main checkout, one heavy command at a time. All seven agents had committed their work, so no wip snapshot was needed.
+
+- **Merged `--no-ff` onto `081fcab2`, in this order:** sources (`e74c153d`) -> `c29f7613`; liverun (`412d3ab0`) -> `71de9c89`; traffic (`60410238`) -> `53bf04a5`; radio (`96db6559`) -> `4039f5e0`; scmsa (`4b337eed`) -> `cc49092a`; scmsb (`4a8df845`) -> `2ffdbf55`; stamp (`5bab18b5`) -> `2d3b2eca`. One conflict: this file, where scmsa's and scmsb's branch sections both landed in the same place. Both are kept. The `.asn` files keep their CRLF endings.
+- **Fixes after the merges (no assertion weakened):**
+  - `8131fcce`: stamp's lognormal step draw called the platform `ln`; the conformance firewall (`no_std_transcendental_is_called`) refused it. It now uses `v2xw_core::math::ln`. The chain is off by default, so no golden moves.
+  - `67d0e4c2`: phase2 topology test. Since scmsb, a roadside unit airs only a list it has installed, so its CRL frames follow the backend latency. Measured: camp-reference had 109,923 frames, 228 of them roadside CRL frames; us-production had 109,911, with 216. The test now compares frames less roadside CRL frames (109,695 = 109,695), still exactly.
+  - `dd68c82f`: the engine-lib CRL wake test pushed serial 1. Since scmsa's `prerun_version`, that serial is a pre-run list and wakes nothing (1 week against 1.001 s). It now pushes `seeded_serial + 1`.
+  - `46d5ebef`, re-blessed as defect fixes (scmsa: PLVs opened by aca/1, the pre-run composite, the changeover CRL; scmsb: CRL fetches as served, the carousel airs only installed lists):
+    - `phase2-path`: record fe195bb9 -> 1bc443ed, frame 90c31ea8 -> 69af34e7, records 10,243,301 -> 10,241,996.
+    - `i-s1-phase2-60s`: record f4277386 -> a24806dc; frame digest and 260,299 records unchanged.
+    - Same seed, same digest: both values came out the same in the full pass, in the bless runs and in the check runs after them.
+  - `e79be311`: `cargo fmt --all` (3 files).
+- **Checks:**
+  - `cargo check --workspace --tests`: clean (known warnings only).
+  - **285 test binaries, one heavy.sh call each, 30 min cap: 4,294 pass, 11 fail, 40 ignored.** `scms_knobs_runs` hit the cap; its 10 unreached tests ran in one more call and all passed. These totals include that call.
+  - After the fixes, 6 of the 11 failures pass: kit, phase2 ×2, scms_scale, bsm_timing, and the engine lib (121/121 once `build.rs` was touched; another workflow's worktree had rewritten the shared `scenario_reflect.rs`). v2xw-node passes 304/304.
+  - **5 remain, all known and open:** `violations` (0 -> 0 RLVW), pedestrian_invariants ×2 (until traffic's flags are turned on and the goldens re-blessed), realism kerbside, and the `scms_knobs_runs` cache test (`MacTimer` 152,541 against 152,539).
+  - Fix-3 ended with 14 failures. 9 of them now pass: pq_receivers, phase2 ×4, backend_entities left-area, the composite-CRL unit test, the download-wait test and the sensitivity_security backhaul test.
+  - No `ui/` file changed, so no UI checks were run.
+- **Release:** `cargo build --release -j 2 -p v2xw-cli --bins` finished (8 m 39 s of build time). `v2xw-server --scenario scenarios/manhattan-5min.yaml --port 8758 --paused --speed 0` answered `/agent/status` 200 after 4 s and `/rpc/schema` 200. It was then stopped by PID.
+- **Still open:**
+  - scmsa: RR.MWC/MWC2 crl-overdue, and its owed fault proofs (p2pcd, SlowDrift, composite, rollover).
+  - scmsb: the cache `MacTimer` test, Q's late stamps, and fix-3 scmsra's owed fault proofs.
+  - traffic: `violations`, and the kerbside standstill of bus 79.
+  - radio: R4.1.JAM-ED, R4.2.METER-FRAMES, R4.1.EMITTER, and the 1.16-1.18× wall time on leak runs.
+  - stamp: P1-E4 at 0.118 against 0.092, the step tail, and the default profile (owner).
+  - sources: paywalled NEMA TS 2 and ITE, the oracle copy of the 1609.3 modules, and the SCMS PSID (an assumption).
+  - liverun: M0-enforced fails on 3cbc95a4, and the drift on base.yaml is untraced.
+- **Cleanup:** the worktrees and branches `worktree-wf_85d643c7-94e-{1..7}` were removed. Before removal, each head was checked to be an ancestor of main and each worktree to be clean. No directory under `target` had a space in its name. `target/agents` was kept. The `wf_f9fc4b3e-ac9-*` worktrees belong to another run and were left alone.
+
 ## 2026-10-27: SCMS fix round 4, PKI and CRL track (scms-fix4-a, branch only)
 
 Base `081fcab2`. Rows: `crates/v2xw-engine/tests/expectations/scms-fix4-a.yaml` (9 rows: 2 fixed, 5 pass, 1 wrong expectation, 1 open).

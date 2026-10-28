@@ -1404,6 +1404,12 @@ The totals count each row as its own checklist records it, with the changes in ย
     fast-forward re-measured with the snapshot keyframe, and ~~a SlowDrift onset test~~ (added 2026-10-27, phase2.rs). Owed runs: S on a fixed binary for
     `MI.samples-recorded`, the metrics thread-count, resume and server/Studio rows
     (`RS.threads`, `RS.resume`, `SV.*`), and the audit checkers re-run on the merged tree.
+    **2026-10-28 (fix round 4 merged, main `46d5ebef`):** Q's late stamps are still not
+    started; scmsb's proposal is to hold `proto.revocation`, `net.bytes` and `pki.flow`
+    records stamped after the tick's `now` until the next tick, with byte counters booked at
+    emission (this moves the SCMS digests). D1.slow-aca-h2 stays open (liverun: provider-b
+    finished 6 of 23 top-ups behind 88 boundary-job requests queued on the slow aca/0;
+    needs a measure that counts unfinished top-ups).
 
 12. **Live-run wave leftovers** (ยง6 item 26): ~~R-P2PCD-ASYM, R-KEMFILE, P-384 pricing,
     KEM download bytes, VOD `messages_checked`~~, the PT30 change rate and ~~full-cert share~~ (wrong expectation),
@@ -1441,6 +1447,18 @@ The totals count each row as its own checklist records it, with the changes in ย
     top-ups complete with held weeks), scmsleft's composite-CRL unit test (1 signed list at
     10 s, expects 2) and the cache knob's 2 `MacTimer` events. Still open from item 27: the
     download-wait and backhaul tests.
+    **2026-10-28 integration (fix round 4, main `46d5ebef`):** all of those pass now except
+    the cache knob. pq_receivers 0 `Invalid`: aca/1 opens the sealed PLVs, and a failed
+    pre-run pool counts as a backend error. The four phase2 CRL-path tests pass with the
+    horizon at 360 s; their cause was the re-keyed draws, not a defect. The composite-CRL
+    test passes: the pre-run composite carries every provider's list. Left-area passes with
+    a 4 s slow home ACA. The backhaul test gives 272 = 272: a roadside fetch installs the
+    file as served. The download-wait test passes, paired per top-up (+1,791 ms). The
+    live_rsu double booking is fixed (198 = 108 + 90; broadcasts 300 -> 284). Re-blessed:
+    `phase2-path` (1bc443ed) and `i-s1-phase2-60s` (a24806dc). Still open: the cache knob's
+    `MacTimer` (node 57's BSM moves 100 ms at 244.2 s, not bisected) and RR.MWC/MWC2
+    crl-overdue 0. In MWC the root changeover falls inside the CRL Generator outage. Whether
+    a real device refuses certificates from a CRACA it holds no CRL for has no source.
 
 **Owner decisions**
 - **What the RA and PCA keep for each device** (ยง6 item 4): request records, cocoons,

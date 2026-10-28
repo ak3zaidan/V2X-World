@@ -287,6 +287,11 @@ trustworthy or comparable; later waves add behaviours and radio features.
   rate-per-1,000-veh band is still unmeasured on the engine.
 - Integration (2026-10-26): merged into main; compiles after one fix (the new `Actor` fields were missing from the `engine/tiering.rs` hand-off that landed after the base). Its own tests FAIL on first run: `violations_off_change_nothing_and_on_is_deterministic` (violations on changed nothing in 400 s), `red_light_running_sits_in_the_field_band...` (355 entries, under its 400 floor), `a_collision_becomes_a_crash...` (`by_violation` false when tagged: the decision pass clears `violation` before `resolve_collisions` reads it), and engine `violations.rs` (RLVW 0 -> 0). The feature is off by default; the other suites pass as before. A crashed vehicle released by tiering loses its crash state.
 - Main integration (2026-10-26): merged; off by default, and every default-path suite and golden passes with it in. Its own four tests still FAIL as at the wave integration (not chased, at the 45-minute cap): mobility `violations_off_change_nothing_and_on_is_deterministic` ("violations on changed nothing"), `red_light_running_sits_in_the_field_band...` (355 entries under the 400 floor; 1 red entry, 2.82 per 1,000 veh against the 3.0-5.3 band), `a_collision_becomes_a_crash...` (`by_violation` false: the test's hand-set tag is cleared by the decision pass before `resolve_collisions`, as a real runner's tag is not), and engine `violations.rs` (RLVW 0 -> 0). Reading of the code: the red-onset branch locks `signal_look` at the first sight of red, far upstream, so a runner never gets a later look; and the amber branch's red-run arm requires `tti < amber_go_tti_s`. Both are calibration and design choices for the WP-08 owner.
+- Fix round 4 (2026-10-28, traffic track `60410238`, merged): `violations.rs` is still red
+  and unchanged (0 -> 0 RLVW on its 60 s setup). No setup measured meets all three
+  assertions: at 300 s RLVW goes 34 -> 30 issued (true 0 -> 1), at 36 units and 120 s RLVW
+  6 -> 11 but IMA 58 -> 56. Red-light entry times sit in the TTI band (3.30 per 1,000,
+  median 0.30 s). Rows: `traffic-fix4.yaml`.
 
 **WP-09 Two-ray interference and measured antennas** (S ×2, 3 days). Sources: O-P5, O-P6.
 - Scope: the two-ray interference law with the Fresnel ground reflection (Rappaport §4.6;
@@ -590,6 +595,13 @@ trustworthy or comparable; later waves add behaviours and radio features.
   too (802.11 CCA would count a non-decodable leak only above -65 dBm).
 - Integration (2026-10-27): `multichannel` and `radio_channel` pass in the full test
   pass. R3.2.DCC2 (per-channel DCC gate without a failing test) stays open.
+- Fix round 4 (2026-10-28, radio track `96db6559`, merged): own-channel leakage on DSRC is
+  sensed from -65 dBm, not -85 (IEEE 802.11-2020 §17.3.10.6; new knob
+  `radio.phy.energy_detect_dbm`; ns-3 preset -82/-62); G20-MAP CBR172 ratio 0.7855 against
+  0.7842 predicted. Roadside ETSI gates now get a CBR, and the CBR meter keeps a jammer's
+  windows. R3.2.DCC2 is closed by the rewritten multichannel test (R4.2.FEED). Open:
+  jammers still held to -85 dBm (R4.1.JAM-ED), frames pruned at their end (R4.2.METER-FRAMES,
+  moves every golden), the adjacent-emitter path not run. Rows: `radio-fix4.yaml`.
 
 **WP-14 Configurable sensors, RSU sensors, outline occlusion** (M, 7 days). Source: O-P3a.
 - Scope: a sensor suite per vehicle class with mount point and azimuth (front and rear radars,
@@ -691,6 +703,9 @@ trustworthy or comparable; later waves add behaviours and radio features.
   barrier; the FHWA manual's 8-phase example timing reproduces; SPaT `minEndTime`/`maxEndTime`
   stay consistent with the controller state; existing single-ring scenarios are unchanged.
 - Prep (2026-10-27): build plan §WP-17, 10 pieces (P17.1 caches STM 2nd ed. and MUTCD and pins every default). The new `nema.rs` re-projects the composite ring intervals into `SignalPlan` each step, so the 10 files that read the plan and the SPaT-is-the-signal rule are unchanged. Plans with more than 4 legs fall back to single ring, counted.
+- Sources (2026-10-28): P17.1's [verify] notes resolved in the build plan. Found: `min_recall`
+  [2,6] disagrees with the STM (soft recall); SUMO has no `coordinatePhases`. NEMA TS 2 and
+  the ITE 2020 guideline stay paywalled; the STM has no numeric 8-phase example.
 
 **WP-18 GEMV²-style channel enrichment** (M, 5-7 days). Source: O-P4.
 - Scope: small-scale σ growing with vehicle and obstacle density inside the link ellipse,
@@ -716,6 +731,12 @@ trustworthy or comparable; later waves add behaviours and radio features.
   time and falls with SCH load; a CRL fetch and a report upload complete over an RSU in a test
   scenario; backhaul-only configurations are unchanged.
 - Prep (2026-10-27): build plan §WP-19, 5 pieces. The air hop of `rsu-relay` is a constant `Link` today (`backend.rs:484`); it becomes an `RsuSchPath` `PacketPath` (contact window, PER, SCH CBR, WP-16 interval). The WSA ASN.1 (`wsa.asn`/`wee.asn`) is not in `third_party` and must be cached with its licence. Fixes SCMS rows M11 and U5.
+- Sources (2026-10-28, merged `e74c153d`): the IEEE 1609.3 ASN.1 modules (WSA, WEE, WSM,
+  plus ISO 17419) are in `third_party/asn1/ieee1609.3/` with `PROVENANCE.md` (TCI_ASN1
+  `63d82d87976b`, byte-identical, CRLF kept, no upstream licence). Encoding is UPER; a sample
+  WSA matches USDOT RSU Spec v4.1 App. D except the power byte. SCMS PSID 0x23 is an
+  assumption (no deployment document names one). Owed: the oracle copy and the
+  vectors-provenance row.
 
 **WP-20 Traffic yields to emergency vehicles** (M, 5 days). Source: S-P5.
 - Scope: within a reaction distance civilians pull to the kerb or slow (US move-over, UVC
@@ -745,6 +766,8 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: a heavy truck on a long 5 % upgrade reaches a crawl speed within the band of the
   AASHTO/HCM truck speed-distance curves; flat-road runs are byte-identical.
 - Prep (2026-10-27): build plan §WP-22, 3 pieces. Road-load physics is in `phemlight.rs`/`ev.rs`, not `powertrain.rs`, and `ClassSpec` has no power. It adds a sourced class-dynamics table and an upper-bound clamp at the end of pass 6, with separate `grade` and `power_limit` flags so grade-only flat runs stay byte-identical.
+- Sources (2026-10-28): P22.1 notes added; the Green Book figure, the 5 % crawl band and the
+  HCM chapter are unresolved, and 120 kg/kW rests on a search excerpt.
 
 **WP-23 Import actuated and NEMA programmes from `net.xml`** (S, 2 days). Source: S-P4. After WP-17.
 - Files: `crates/v2xw-world/src/sumo.rs`.
