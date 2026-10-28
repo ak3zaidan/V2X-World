@@ -372,7 +372,7 @@ pub fn plan_invariants(plan: &SignalPlan) -> Result<(), String> {
                 plan.controlled.len()
             ));
         }
-        if !(p.duration_s > 0.0) {
+        if p.duration_s.is_nan() || p.duration_s <= 0.0 {
             return Err(format!("phase {i} lasts {}", p.duration_s));
         }
     }

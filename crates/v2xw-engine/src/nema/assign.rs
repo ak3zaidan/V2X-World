@@ -319,9 +319,8 @@ pub fn assign_approaches(
     };
     for (st, numbers) in [(Some(main), MAIN), (side, SIDE)] {
         let Some(st) = st else { continue };
-        for slot in 0..2 {
+        for (slot, &(through, left)) in numbers.iter().enumerate() {
             let Some(a) = st.slots[slot] else { continue };
-            let (through, left) = numbers[slot];
             let opposed = st.slots[1 - slot].is_some_and(has_through);
             for &(m, t) in &approaches[a].movements {
                 let kind = kind_of(t);

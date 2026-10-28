@@ -648,32 +648,29 @@ impl DualRing {
             let min_g = self.min_green(&s);
             let mut n = s;
             n.held_s += dt_s;
-            match s.interval {
-                Interval::Green => {
-                    let p = s.phase;
-                    n.gap_s = if c.extend[usize::from(p)] {
-                        0.0
-                    } else {
-                        s.gap_s + dt_s
-                    };
-                    let conflicting =
-                        (1..=8u8).any(|q| c.demand[usize::from(q)] && !assign::concurrent(p, q));
-                    n.max_running = s.max_running || conflicting;
-                    if n.max_running {
-                        n.max_s += dt_s;
-                    }
-                    // A gap with a conflicting call commits the phase to end: later
-                    // detections do not re-extend it, and a maximum that runs out while it
-                    // waits at the barrier does not make it a max-out.
-                    if conflicting && n.held_s + 1e-9 >= min_g && n.gap_s + 1e-9 >= t.passage_s {
-                        n.gapped = true;
-                    }
-                    // A served walk holds the green past a shorter maximum.
-                    if !n.gapped && n.max_s + 1e-9 >= t.max_green_s.max(min_g) {
-                        n.maxed = true;
-                    }
+            if s.interval == Interval::Green {
+                let p = s.phase;
+                n.gap_s = if c.extend[usize::from(p)] {
+                    0.0
+                } else {
+                    s.gap_s + dt_s
+                };
+                let conflicting =
+                    (1..=8u8).any(|q| c.demand[usize::from(q)] && !assign::concurrent(p, q));
+                n.max_running = s.max_running || conflicting;
+                if n.max_running {
+                    n.max_s += dt_s;
                 }
-                _ => {}
+                // A gap with a conflicting call commits the phase to end: later detections
+                // do not re-extend it, and a maximum that runs out while it waits at the
+                // barrier does not make it a max-out.
+                if conflicting && n.held_s + 1e-9 >= min_g && n.gap_s + 1e-9 >= t.passage_s {
+                    n.gapped = true;
+                }
+                // A served walk holds the green past a shorter maximum.
+                if !n.gapped && n.max_s + 1e-9 >= t.max_green_s.max(min_g) {
+                    n.maxed = true;
+                }
             }
             if n.interval == Interval::Yellow && n.held_s + 1e-9 >= t.yellow_s {
                 n.interval = Interval::RedClear;
@@ -744,10 +741,10 @@ impl DualRing {
                     self.counters.crossings += 1;
                 }
                 let main = self.main;
-                let entry = [self.entry_phase(0, main, &c), self.entry_phase(1, main, &c)];
-                for r in 0..2 {
-                    self.state[r] = RingState::green(entry[r]);
-                }
+                self.state = [
+                    RingState::green(self.entry_phase(0, main, &c)),
+                    RingState::green(self.entry_phase(1, main, &c)),
+                ];
             }
         }
         // A green that has just started serves its walk if a pedestrian has called it or
@@ -1029,9 +1026,9 @@ mod tests {
         mut on_step: impl FnMut(&DualRing),
     ) -> [bool; 9] {
         let mut rate = [0.0; 9];
-        for p in 1..=8usize {
+        for (p, r) in rate.iter_mut().enumerate().skip(1) {
             // Throughs busier than lefts, main busier than side.
-            rate[p] = match p {
+            *r = match p {
                 2 | 6 => 0.15,
                 4 | 8 => 0.08,
                 _ => 0.03,
