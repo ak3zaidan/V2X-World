@@ -23,7 +23,8 @@
 #
 # Binary: SBR the release build of 3cbc95a4 (copied to the scratchpad); every other run the
 # optimised debug build of this branch (one binary for every comparison); the scenario's
-# seed; --no-verify; one run per run-slot call; 1 rayon thread.
+# seed; --no-verify; one run per run-slot call; default rayon threads. t.wall_s and
+# t.peak_mb are /usr/bin/time -l real and maximum RSS (this run's metrics.json has no cost.peak_mb).
 schema: v2xw/scms-run-expectations/1
 runs:
   SBR:
@@ -309,7 +310,7 @@ rows:
   base: SB
   variant: CTS
   area: performance
-  measure: cost.peak_mb
+  measure: t.peak_mb
   expect: ratio
   band: [0.9, 1.1]
   source: one Option<bool> and one RNG stream more per device (~400 devices)
@@ -318,7 +319,7 @@ rows:
   base: SB
   variant: CTS
   area: performance
-  measure: cost.wall_s
+  measure: t.wall_s
   expect: ratio
   band: [0.8, 1.25]
   source: eight more draws per BSM against a run dominated by radio and SCMS work; the band is the shared machine's noise
