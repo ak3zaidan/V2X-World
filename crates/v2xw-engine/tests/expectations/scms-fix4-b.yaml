@@ -166,3 +166,10 @@ rows:
   test: live_rsu::a_unit_broadcasts_a_list_only_once_its_backhaul_brought_it_and_not_while_it_is_down
   measured: 'passes (60 s for both ignored tests)'
   verdict: pass
+# --- fault proofs (one fault build, sources restored after; 2026-10-27) ----------------------
+# F1 fetch content read at landing (run.rs install_rsu_crls): backhaul test red, 272 vs 264.
+# F2 carousel start books cycle units again: live_rsu each_list... red, 214 vs 198.
+# F3 planned_ready never found (provision.rs pregen_next): proto pregeneration a_device_asking...
+#    red, came back at boundary + 90.1 s.
+# F4 download_poll_interval_s ignored (phase2.rs): scms_knobs_runs download-wait red (0 late, +0 ms).
+# F5 topups_left_area not counted (Phase2::retire): backend_entities left-area red (left 0).

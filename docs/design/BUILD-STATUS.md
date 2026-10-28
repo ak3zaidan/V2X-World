@@ -4036,6 +4036,28 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-27: SCMS fix round 4, track B: RA timing and records (branch only)
+
+Rows, runs and verdicts: `crates/v2xw-engine/tests/expectations/scms-fix4-b.yaml` (scenarios in
+`scenarios/scms-fix4/`). Each row was written before its run, and base and variant used one binary.
+
+- **Backhaul test (272 vs 264): the diagnosis was wrong.** The top-up messages were identical on
+  both lines. The 8 extra messages were roadside CRL fetches. A fetch still on a 200 ms line
+  installed the composite as it was on landing, so a list published in flight came free with it.
+  A download now carries the file as served (`RsuCrlFile`). Result: 272 = 272.
+- **The `.info` rule:** for a week whose job is still running, the answer is the job's start plus
+  `first_batch_delay` (SCMS-576, [CAMP122] §5.2.7.8). New proto test. Time32 seconds hide it on
+  credential-lifecycle.
+- **Download-wait test:** it now pairs each top-up across the two runs, because the report mean is
+  censored: +1,791 ms against a bound of +679 ms, none earlier.
+- **Left-area test:** a home ACA 4 s slow (a held week is never in flight). 6 left, books closed.
+- **live_rsu backhaul-once:** units in the cycle are not booked at the carousel start and relay
+  what they installed: 198 = 108 + 90. Broadcasts 300 -> 284.
+- **Faults:** all 5 tests went red (yaml footer).
+- **Goldens:** none moved (phase2-path, i-s1).
+- **Open:** cache MacTimer (traced, not bisected); Q's late stamps; GOV.D1.acas was already done by
+  52432316.
+
 ## 2026-10-27: fix round 3 integration (TESTS, SCMSRA, SCMSLEFT, P1GAPS, DETECT, WPTRAFFIC, WPRADIO, LIVEROWS) and the adoption waves 4-5 checks (WP-10..15)
 
 One integrator in the main checkout, one heavy command at a time. It also finished the adoption waves 4-5 merge (WP-10..15, merged as `4aa798bb` before a usage limit stopped it): the full test pass below covers that code.
