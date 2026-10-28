@@ -928,14 +928,36 @@ fn a_small_validated_certificate_cache_revalidates_and_costs_more_crypto() {
     // (`Engine::schedule_wake`); a cache hit costs 400 µs and its finish usually falls
     // inside a wake already pending, while a first-sight validation (priced SHA-256 and
     // ECQV) finishes later, at an instant of its own, and needs a wake of its own. The
-    // radio, mobility and backend schedules are untouched: the cost is event-loop work,
+    // mobility, backend and network schedules are untouched: the cost is event-loop work,
     // not more simulated traffic.
+    //
+    // The radio is not exactly untouched, and should not be (scms-fix4-b CACHE.mac,
+    // traced 2026-10-28): J2945/1's rate control counts the RVs in the node's own
+    // neighbour table (`Engine::update_dcc`, run.rs `neighbours`), which a verify-all
+    // receiver fills when a check finishes (`ObuRuntime::deliver`), and the variant's
+    // first-sight checks finish later. Node 57 counted 30 RVs at 243.5 s in the base and
+    // 31 in the variant; its smoothed density (above B = 25) moved the ITT by a few µs
+    // (104.366 against 104.363 ms at 243.1 s), and one of its BSMs moved one 100 ms
+    // window (244.167 -> 244.267 s): MacTimer 152,541 against 152,539, PhyEnd equal.
+    // Counting the RVs at arrival instead makes every class but NodeTask identical
+    // (counterfactual run, not shipped), so that coupling is the whole difference. The
+    // MAC and PHY event counts are therefore held to 0.01 % rather than to equality; a
+    // BSM clock that read the receiver's wakes would move them by far more.
     let (eb, ev) = (&b.report.events_by_class, &v.report.events_by_class);
     for (class, n) in eb {
-        if class != "NodeTask" {
-            assert_eq!(ev.get(class), Some(n), "{class}: {eb:?} vs {ev:?}");
+        match class.as_str() {
+            "NodeTask" => {}
+            "MacTimer" | "PhyEnd" => {
+                let m = ev.get(class).copied().unwrap_or(0);
+                assert!(
+                    m.abs_diff(*n) * 10_000 <= *n,
+                    "{class}: {n} -> {m}, more than 0.01 %: {eb:?} vs {ev:?}"
+                );
+            }
+            _ => assert_eq!(ev.get(class), Some(n), "{class}: {eb:?} vs {ev:?}"),
         }
     }
+    assert_eq!(eb.len(), ev.len(), "{eb:?} vs {ev:?}");
     assert!(ev["NodeTask"] > eb["NodeTask"], "{eb:?} vs {ev:?}");
     assert!(
         ev["NodeTask"] - eb["NodeTask"] <= rv.ee_validations - rb.ee_validations,

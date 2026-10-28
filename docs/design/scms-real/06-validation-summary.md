@@ -1493,6 +1493,16 @@ The totals count each row as its own checklist records it, with the changes in ย
       crl-overdue refusals in W4, none in W3, and recovery in W5.
     - Open: Table 67 says "rejecting all of them", while the engine refuses only the overdue
       list's CRACA. This is a reading the sources do not settle (fix spec F5-SCOPE).
+    **2026-10-28 (fix-5 scms track, base `a925db58`):**
+    - Cache knob `MacTimer` (152,541 against 152,539): traced, a wrong expectation. Node 57's
+      BSM interval is J2945/1's (smoothed density above B = 25, ITT 104-112 ms), and
+      `Engine::update_dcc` counts the RVs in the node's neighbour table, which a verify-all
+      receiver fills when a check finishes. The variant's first-sight checks finish later,
+      so node 57 counted 31 RVs at 243.5 s against 30, and one BSM moved one 100 ms window.
+      Counted at arrival instead, every class but NodeTask is identical (counterfactual, not
+      shipped). The test now holds MAC/PHY counts to 0.01 % (`scms-fix4-b.yaml` CACHE.mac).
+      Owner decision: count J2945/1 RVs at reception (the PER window already does); this
+      moves every J2945/1 run whose density passes B, and so the SCMS goldens.
 
 **Owner decisions**
 - **What the RA and PCA keep for each device** (ยง6 item 4): request records, cocoons,
