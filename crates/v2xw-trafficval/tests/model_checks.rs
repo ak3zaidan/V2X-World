@@ -5,13 +5,15 @@
 use v2xw_trafficval::run::{Verdict, run_check};
 use v2xw_trafficval::{Config, Lab, checks};
 
-const FAST: [&str; 6] = [
+const FAST: [&str; 7] = [
     "model/idm-equation",
     "model/idm-stops-at-s0",
     "model/string-stability",
     "model/mobil-criterion",
     "model/hcm-critical-gaps",
     "model/social-force-parameters",
+    // One vehicle on a generated climb for 160 s: seconds, not a city run.
+    "calibration/truck-grade-crawl",
 ];
 
 #[test]

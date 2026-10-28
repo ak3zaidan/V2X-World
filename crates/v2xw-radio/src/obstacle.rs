@@ -2201,7 +2201,8 @@ fn terrain_card(rule: MultiEdgeRule, exact: bool) -> ModelCard {
          link with the summit at mid-path), two orders of magnitude below anything a 30 m \
          post spacing resolves."
             .to_string(),
-        "Foliage on the summit, which is obstacle/foliage/boban-mel's term.".to_string(),
+        "Foliage on the summit, which is obstacle/foliage/p833's term (crate::foliage)."
+            .to_string(),
     ];
     card.sources = vec![itu.clone()];
     card.validation = Validation {

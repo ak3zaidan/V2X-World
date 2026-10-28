@@ -94,7 +94,7 @@
 //!   recorded as an `ignores` entry rather than implemented.
 //! * **Rounded ridges and ground reflection**, which are P.526's other cases
 //!   ([`crate::obstacle`] records them too).
-//! * **Foliage on the summit**, which is `obstacle/foliage/boban-mel`'s business.
+//! * **Foliage on the summit**, which is `obstacle/foliage/p833`'s business ([`crate::foliage`]).
 
 use serde::{Deserialize, Serialize};
 use v2xw_core::geom::Vec3;

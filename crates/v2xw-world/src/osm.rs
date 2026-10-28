@@ -65,8 +65,8 @@ use crate::model::{
     GeoOrigin, HeightSource, Junction, JunctionControl, LanduseClass, LanduseZone, Lane, LaneKind,
     LayerLicence, MaterialClass, Passage, PassageKind, Projection, RoadClass, RoadNetwork,
     SignalHead, SignalHeadKind, SignalPhase, SignalPlan, SignalState, SymbolId, SymbolTable,
-    Terrain, Transformation, TurnDirection, World, WorldProvenance, WorldSourceKind, ZoneId,
-    normalise_angle, simplify_rdp,
+    Terrain, Transformation, TurnDirection, VegetationArea, VegetationKind, World, WorldProvenance,
+    WorldSourceKind, ZoneId, normalise_angle, simplify_rdp,
 };
 use crate::quant::{Q_ANGLE_RAD, Q_DEGREES, Q_POSITION_M, Q_TIME_S, quantise};
 use crate::{ImportOptions, WorldSource, WorldSourceSpec};
@@ -1417,6 +1417,34 @@ pub struct OsmOptions {
     /// The terrain grid to attach. `None` leaves the world flat at `z = 0`, which is what
     /// Phase 1 does; this is the hook for the DEM importers of 04-models.md §1.4.
     pub terrain: Option<Terrain>,
+    /// Import the trees as a vegetation layer ([`crate::VegetationArea`], WP-18):
+    /// `natural=wood` and `landuse=forest` areas, `natural=tree_row` ways and
+    /// `natural=tree` nodes. Default `false`, and a world imported without it keeps its
+    /// content hash. The land-use layer is unchanged either way (a wood is still a
+    /// [`LanduseClass::Park`] zone there).
+    #[serde(default)]
+    pub vegetation: bool,
+    /// The width a `natural=tree_row` way is buffered to, metres. **ASSUMPTION**: the OSM
+    /// wiki documents no width for a tree row (Tag:natural=tree_row), so it is one crown,
+    /// [`DEFAULT_TREE_CROWN_M`].
+    #[serde(default = "default_tree_crown_m")]
+    pub tree_row_width_m: f64,
+    /// The crown diameter of a `natural=tree` node without a `diameter_crown` tag, metres.
+    /// **ASSUMPTION**: [`DEFAULT_TREE_CROWN_M`].
+    #[serde(default = "default_tree_crown_m")]
+    pub tree_crown_m: f64,
+}
+
+/// The crown diameter of a mapped tree or tree row with no `diameter_crown` tag, metres.
+/// **ASSUMPTION**: no source was read; 8 m is a mid-sized street tree. It only sets the
+/// size of the disc or strip the foliage loss crosses, not the loss per metre.
+pub const DEFAULT_TREE_CROWN_M: f64 = 8.0;
+
+/// The number of sides of a single tree's crown disc.
+const TREE_DISC_SIDES: usize = 12;
+
+fn default_tree_crown_m() -> f64 {
+    DEFAULT_TREE_CROWN_M
 }
 
 impl Default for OsmOptions {
@@ -1443,6 +1471,9 @@ impl Default for OsmOptions {
             crossings_from_nodes: true,
             cross_section: crate::section::CrossSectionOptions::default(),
             terrain: None,
+            vegetation: false,
+            tree_row_width_m: DEFAULT_TREE_CROWN_M,
+            tree_crown_m: DEFAULT_TREE_CROWN_M,
         }
     }
 }
@@ -1507,6 +1538,8 @@ impl OsmOptions {
             ("sidewalk_width_m", self.sidewalk_width_m),
             ("cycleway_width_m", self.cycleway_width_m),
             ("crossing_width_m", self.crossing_width_m),
+            ("tree_row_width_m", self.tree_row_width_m),
+            ("tree_crown_m", self.tree_crown_m),
             ("min_useful_lane_m", self.min_useful_lane_m.max(1.0)),
             (
                 "cross_section.bus_lane_width_m",
@@ -9284,6 +9317,163 @@ fn landuse_class(tags: &Tags) -> Option<LanduseClass> {
     None
 }
 
+/// True for an area of trees: `natural=wood` or `landuse=forest`.
+fn is_wood(tags: &Tags) -> bool {
+    tags.is("natural", "wood") || tags.is("landuse", "forest")
+}
+
+/// A polyline buffered to a closed strip `width_m` wide: each vertex is offset half the
+/// width to either side along the mean of its segments' normals (a mitre, capped at
+/// twice the half-width so a hairpin does not spike), left side forward, right side back.
+fn buffer_polyline(line: &[Vec3], width_m: f64) -> Option<Vec<Vec3>> {
+    if line.len() < 2 || width_m <= 0.0 {
+        return None;
+    }
+    let half = 0.5 * width_m;
+    let normal = |a: Vec3, b: Vec3| -> Option<(f64, f64)> {
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        let len = v2xw_core::math::sqrt(dx * dx + dy * dy);
+        (len > 1e-9).then(|| (-dy / len, dx / len))
+    };
+    let mut left = Vec::with_capacity(line.len());
+    let mut right = Vec::with_capacity(line.len());
+    for i in 0..line.len() {
+        let before = if i > 0 {
+            normal(line[i - 1], line[i])
+        } else {
+            None
+        };
+        let after = if i + 1 < line.len() {
+            normal(line[i], line[i + 1])
+        } else {
+            None
+        };
+        let (nx, ny, scale) = match (before, after) {
+            (Some(a), Some(b)) => {
+                let (mx, my) = (a.0 + b.0, a.1 + b.1);
+                let m = v2xw_core::math::sqrt(mx * mx + my * my);
+                if m < 1e-9 {
+                    (a.0, a.1, 1.0)
+                } else {
+                    let (ux, uy) = (mx / m, my / m);
+                    let cos = (ux * a.0 + uy * a.1).max(0.5);
+                    (ux, uy, 1.0 / cos)
+                }
+            }
+            (Some(a), None) | (None, Some(a)) => (a.0, a.1, 1.0),
+            (None, None) => continue,
+        };
+        let p = line[i];
+        let d = half * scale;
+        left.push(Vec3::new(p.x + nx * d, p.y + ny * d, p.z));
+        right.push(Vec3::new(p.x - nx * d, p.y - ny * d, p.z));
+    }
+    right.reverse();
+    left.extend(right);
+    (left.len() >= 4).then_some(left)
+}
+
+/// A disc of `diameter_m` around `centre`, as a [`TREE_DISC_SIDES`]-gon.
+fn disc(centre: Vec3, diameter_m: f64) -> Vec<Vec3> {
+    let r = 0.5 * diameter_m;
+    (0..TREE_DISC_SIDES)
+        .map(|k| {
+            let a = core::f64::consts::TAU * k as f64 / TREE_DISC_SIDES as f64;
+            let (sin, cos) = v2xw_core::math::sin_cos(a);
+            Vec3::new(centre.x + r * cos, centre.y + r * sin, centre.z)
+        })
+        .collect()
+}
+
+/// Imports the vegetation layer ([`OsmOptions::vegetation`]): woods and forests (closed
+/// ways and multipolygon outers), tree rows (ways, buffered to
+/// [`OsmOptions::tree_row_width_m`]) and single trees (nodes, discs of their
+/// `diameter_crown` or [`OsmOptions::tree_crown_m`]). Each outline is cut to the import
+/// box like a land-use zone's; one too short to keep is an [`Anomaly::RingTooShort`].
+fn build_vegetation(
+    file: &OsmFile,
+    points: &[Vec3],
+    keep: &RingFilter<'_>,
+    options: &OsmOptions,
+    report: &mut ImportReport,
+) -> Vec<VegetationArea> {
+    let mut consumed: BTreeSet<i64> = BTreeSet::new();
+    for relation in &file.relations {
+        if relation.tags.is("type", "multipolygon") && is_wood(&relation.tags) {
+            for member in &relation.members {
+                if member.kind == MemberKind::Way {
+                    consumed.insert(member.id);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut push =
+        |ring: Vec<Vec3>, kind: VegetationKind, element: i64, report: &mut ImportReport| {
+            let Some((kept, cut)) = keep(&ring) else {
+                return;
+            };
+            if cut {
+                report.counts.polygons_clipped += 1;
+            }
+            match VegetationArea::new(kept, kind) {
+                Ok(area) => out.push(area),
+                Err(_) => report.note(Anomaly::RingTooShort, element),
+            }
+        };
+    for way in &file.ways {
+        if way.tags.is("natural", "tree_row") {
+            let line: Vec<Vec3> = dedupe_points(
+                way.nodes
+                    .iter()
+                    .filter_map(|n| file.node_index(*n))
+                    .map(|i| points[i])
+                    .collect(),
+            );
+            match buffer_polyline(&line, options.tree_row_width_m) {
+                Some(ring) => push(ring, VegetationKind::TreeRow, way.id, report),
+                None => report.note(Anomaly::RingTooShort, way.id),
+            }
+            continue;
+        }
+        if consumed.contains(&way.id) || !is_wood(&way.tags) {
+            continue;
+        }
+        if way.nodes.first() != way.nodes.last() {
+            continue; // an open way is a boundary line, not an area
+        }
+        let Some(ring) = resolve_ring(&way.nodes, file, points) else {
+            report.note(Anomaly::RingTooShort, way.id);
+            continue;
+        };
+        push(ring, VegetationKind::Wood, way.id, report);
+    }
+    for relation in &file.relations {
+        if !relation.tags.is("type", "multipolygon") || !is_wood(&relation.tags) {
+            continue;
+        }
+        let (outers, _) = multipolygon_rings(relation, file, points, report);
+        for outer in outers {
+            push(outer, VegetationKind::Wood, relation.id, report);
+        }
+    }
+    for (node, tags) in &file.node_tags {
+        if !tags.is("natural", "tree") {
+            continue;
+        }
+        let Some(i) = file.node_index(*node) else {
+            continue;
+        };
+        let crown = tags
+            .get("diameter_crown")
+            .and_then(|v| v.trim().trim_end_matches('m').trim().parse::<f64>().ok())
+            .filter(|d| d.is_finite() && *d > 0.0 && *d < 100.0)
+            .unwrap_or(options.tree_crown_m);
+        push(disc(points[i], crown), VegetationKind::Tree, *node, report);
+    }
+    out
+}
+
 /// Imports land-use zones: closed `landuse`, `natural` and `leisure` ways and
 /// multipolygons.
 fn build_landuse(
@@ -9791,6 +9981,12 @@ fn import_parsed(file: &OsmFile, options: &OsmOptions, report: &mut ImportReport
         Vec::new()
     };
 
+    let vegetation = if options.vegetation {
+        build_vegetation(file, &points, &keep, options, report)
+    } else {
+        Vec::new()
+    };
+
     let buildings = drop_kiosks_on_the_carriageway(buildings, &net, report);
 
     // --- stage 9b: passages ----------------------------------------------------------
@@ -9864,6 +10060,7 @@ fn import_parsed(file: &OsmFile, options: &OsmOptions, report: &mut ImportReport
         .roads(roads)
         .buildings(buildings)
         .landuse(landuse)
+        .vegetation(vegetation)
         .passages(passages)
         .signals(signals)
         .default_env(options.import.default_env)
@@ -10129,6 +10326,14 @@ fn build_provenance(
     // (and the content hash) it always had.
     if !options.layers.service {
         provenance.record(Transformation::new("osm-layer-omitted").with("layer", "service"));
+    }
+    // Recorded only when on, for the same reason.
+    if options.vegetation {
+        provenance.record(
+            Transformation::new("osm-vegetation")
+                .with("tree_row_width_m", options.tree_row_width_m)
+                .with("tree_crown_m", options.tree_crown_m),
+        );
     }
     provenance.record(
         Transformation::new("local-tangent-plane")

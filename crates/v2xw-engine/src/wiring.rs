@@ -295,6 +295,7 @@ fn build_world_geometry(scenario: &Scenario) -> Result<World> {
             }
             .highway_preset(preset);
             osm.layers.service = scenario.world.service_roads;
+            osm.vegetation = scenario.world.vegetation;
             osm.signals.coordinate = scenario.world.signals.coordinate;
             osm.signals.progression_speed_mps = scenario.world.signals.progression_speed_mps;
             // traffic audit: the synthesised plans' timing (`world.signals`).
@@ -547,6 +548,9 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     }
     if let Some(v) = traffic.lane_bend_speed {
         params.lane_bend_speed = v;
+    }
+    if let Some(d) = traffic.vehicle_dynamics {
+        params.vehicle_dynamics = d.params();
     }
     // SUMO LC2013's motivations: any lc_* field switches them on; the unset ones take
     // SUMO's default of 1 (`v2xw_mobility::lanechange::lc2013`).
@@ -2505,6 +2509,10 @@ pub struct ObstacleStack {
     pub vehicles: Option<v2xw_radio::obstacle::VehicleBlockage>,
     /// Terrain diffraction, when composed.
     pub terrain: Option<v2xw_radio::TerrainDiffraction>,
+    /// Foliage excess over the world's vegetation layer (`radio.channel_model.foliage`).
+    pub foliage: Option<v2xw_radio::FoliageLoss>,
+    /// GEMV²'s density-dependent shadowing σ (`radio.channel_model.density_sigma`).
+    pub density: Option<DensityTerm>,
     /// Whether the building model's *loss* is charged under the run's main law. Kept for
     /// callers that compose one law; the engine decides per link.
     pub building_loss: bool,
@@ -2716,7 +2724,12 @@ impl ObstacleStack {
         if let Some(terrain) = self.terrain.as_mut() {
             terms[2] = v2xw_radio::ObstacleModel::obstacle_loss_db(terrain, ctx, tx, rx, los, f_hz);
         }
-        v2xw_core::math::sum_ordered(terms)
+        let total = v2xw_core::math::sum_ordered(terms);
+        // Added on its own, so a run without foliage sums exactly the three terms it did.
+        match self.foliage.as_ref() {
+            Some(foliage) => total + foliage.loss_db(tx.pos, rx.pos, f_hz),
+            None => total,
+        }
     }
 
     /// Registers the cards of the models in the stack, so the manifest pins them.
@@ -2734,6 +2747,9 @@ impl ObstacleStack {
         }
         if let Some(t) = &self.terrain {
             cards.push(t.card().clone());
+        }
+        if let Some(f) = &self.foliage {
+            cards.push(f.card().clone());
         }
         for card in cards {
             if !registry.contains(&card.id) {
@@ -2836,6 +2852,85 @@ pub fn build_obstacles(scenario: &Scenario, world: &World) -> ObstacleStack {
             .terrain
             .is_some()
             .then(|| v2xw_radio::TerrainDiffraction::new(stack_tier)),
+        foliage: (tuning.foliage == Some(true) && !world.vegetation.is_empty())
+            .then(|| v2xw_radio::FoliageLoss::new(world, stack_tier)),
+        density: (tuning.density_sigma == Some(true)).then(|| DensityTerm::new(world)),
+    }
+}
+
+/// GEMV²'s density-dependent shadowing σ for one run (`radio.channel_model.density_sigma`,
+/// [`v2xw_radio::DensitySigma`]): the table, the world's building footprints as
+/// (centroid, area) behind a grid, and whether the world is urban (Table VI's LOS
+/// ellipse).
+#[derive(Debug)]
+pub struct DensityTerm {
+    /// GEMV²'s σ table and ellipse sizes.
+    pub sigma: v2xw_radio::DensitySigma,
+    /// Whether the LOS ellipse is the urban one (the world's default environment).
+    pub urban: bool,
+    /// Every building footprint as (centroid, area m²), in building-id order.
+    statics: Vec<(v2xw_core::geom::Vec3, f64)>,
+}
+
+impl DensityTerm {
+    /// The term for a world.
+    #[must_use]
+    pub fn new(world: &World) -> Self {
+        let statics = world
+            .buildings
+            .iter()
+            .map(|b| {
+                let ring = &b.footprint;
+                let n = ring.len().max(1) as f64;
+                let (mut x, mut y) = (0.0, 0.0);
+                for p in ring {
+                    x += p.x;
+                    y += p.y;
+                }
+                let area = 0.5 * v2xw_world::ring_signed_area_2x(ring).abs();
+                (v2xw_core::geom::Vec3::new(x / n, y / n, 0.0), area)
+            })
+            .collect();
+        Self {
+            sigma: v2xw_radio::DensitySigma::default(),
+            urban: !matches!(
+                world.default_env,
+                v2xw_world::EnvClass::Rural | v2xw_world::EnvClass::Highway
+            ),
+            statics,
+        }
+    }
+
+    /// The link's σ, dB: the vehicles of `snapshot` (not pedestrians or riders) and the
+    /// footprints inside the ellipse of `tx → rx` for its class.
+    #[must_use]
+    pub fn sigma_db(
+        &self,
+        los: &v2xw_radio::LosResult,
+        tx: v2xw_core::geom::Vec3,
+        rx: v2xw_core::geom::Vec3,
+        snapshot: &v2xw_mobility::snapshot::ActorSnapshot,
+    ) -> f64 {
+        let r = self
+            .sigma
+            .major_axis_m(los.class, self.urban)
+            .max(tx.distance_2d(rx));
+        let centre = tx.lerp(rx, 0.5);
+        let vehicles = snapshot
+            .actors_within(centre, 0.5 * r)
+            .into_iter()
+            .filter_map(|a| snapshot.get(a))
+            .filter(|e| !e.view.class.is_vru())
+            .map(|e| e.kinematics.pos);
+        let density = self.sigma.link_density(
+            los.class,
+            self.urban,
+            tx,
+            rx,
+            vehicles,
+            self.statics.iter().copied(),
+        );
+        self.sigma.sigma_db(los.class, density)
     }
 }
 

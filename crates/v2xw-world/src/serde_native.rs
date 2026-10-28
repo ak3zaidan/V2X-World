@@ -88,6 +88,9 @@ pub mod section {
     /// Passages (lanes through buildings). Optional: written only when there are any, and
     /// a file without the section reads as a world with none.
     pub const PASSAGES: u16 = 14;
+    /// Vegetation areas (WP-18). Optional: written only when there are any, and a file
+    /// without the section reads as a world with none.
+    pub const VEGETATION: u16 = 15;
 }
 
 // ---------------------------------------------------------------------------
@@ -651,6 +654,15 @@ pub fn to_bytes(world: &World) -> Result<Vec<u8>> {
         sections.push((section::PASSAGES, core::mem::take(&mut w.buf)));
     }
 
+    if !world.vegetation.is_empty() {
+        let mut w = Writer::new();
+        w.count(world.vegetation.len());
+        for v in &world.vegetation {
+            w.u8(v.kind.code()).points(&v.ring);
+        }
+        sections.push((section::VEGETATION, core::mem::take(&mut w.buf)));
+    }
+
     let provenance = serde_json::to_vec(&world.provenance)?;
     sections.push((section::PROVENANCE, provenance));
 
@@ -1150,6 +1162,25 @@ pub fn from_bytes(bytes: &[u8]) -> Result<World> {
         }
     };
 
+    let vegetation = match slice(section::VEGETATION) {
+        None => Vec::new(),
+        Some(mut r) => {
+            let n = r.count()?;
+            let mut out = Vec::with_capacity(n.min(1 << 20));
+            for _ in 0..n {
+                let kind = crate::model::VegetationKind::from_code(r.u8()?).ok_or_else(|| {
+                    WorldError::Malformed {
+                        offset: r.base + r.at,
+                        problem: "unknown vegetation kind".to_string(),
+                    }
+                })?;
+                let ring = r.points()?;
+                out.push(crate::model::VegetationArea { ring, kind });
+            }
+            out
+        }
+    };
+
     let mut r = require(section::PROVENANCE, "provenance")?;
     let provenance: WorldProvenance = serde_json::from_slice(r.take(r.bytes.len())?)?;
 
@@ -1163,6 +1194,7 @@ pub fn from_bytes(bytes: &[u8]) -> Result<World> {
         sites,
         landuse,
         passages,
+        vegetation,
         default_env,
         symbols,
         provenance,

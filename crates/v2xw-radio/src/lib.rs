@@ -116,6 +116,7 @@ pub mod dcc;
 pub mod error;
 pub mod fading;
 pub mod focus;
+pub mod foliage;
 pub mod hybrid;
 pub mod ip_transport;
 pub mod jamming;
@@ -164,6 +165,7 @@ pub use focus::{
     BoundaryObservation, FocusPlan, FocusShape, FocusWarning, LinkEvaluation, LinkPlacement,
     RadioTierSet,
 };
+pub use foliage::{FoliageLoss, VegetationIndex};
 pub use jamming::{
     ConstantJammer, JamArrival, JamWindow, JammerKind, JammerProfile, JammingField, PulsedJammer,
     ReactiveJammer, SensedInterval, blind_area_radius_m, punal_rssi_to_sinr_db,
@@ -180,10 +182,10 @@ pub use phy::{
     air_time, sinr_db,
 };
 pub use prop::{
-    DualSlope, FreeSpace, GeometricState, GeometricUrbanV2v, LogDistancePreset,
-    LogDistanceShadowing, LogDistanceTuning, Polarization, RainAttenuation, ShadowProcess,
-    SommerCoefficients, Tr37885, Tr37885State, TwoRayGround, TwoRayInterference, friis_loss_db,
-    mangel_breakpoint_m, mangel_nlos_db, p838_coefficients, rain_attenuation_db,
+    DensitySigma, DualSlope, FreeSpace, GeometricState, GeometricUrbanV2v, LinkDensity,
+    LogDistancePreset, LogDistanceShadowing, LogDistanceTuning, Polarization, RainAttenuation,
+    ShadowProcess, SommerCoefficients, Tr37885, Tr37885State, TwoRayGround, TwoRayInterference,
+    friis_loss_db, mangel_breakpoint_m, mangel_nlos_db, p838_coefficients, rain_attenuation_db,
     two_ray_ground_loss_db, two_ray_interference_envelope_db, two_ray_interference_loss_db,
 };
 pub use terrain::{

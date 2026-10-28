@@ -2252,6 +2252,26 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                An OSM import is refused without it.",
     },
     KeyStatus {
+        path: "world.vegetation",
+        status: Status::Wired,
+        note: "The OSM importer keeps woods, forests, tree rows and single trees as a \
+               vegetation layer for radio.channel_model.foliage. Off by default; OSM \
+               imports only.",
+    },
+    KeyStatus {
+        path: "radio.channel_model.foliage",
+        status: Status::Wired,
+        note: "Foliage excess on paths through world.vegetation: depth times 2.3 dB/m at \
+               5.9 GHz (GEMV2 eq. 4), capped at the knife-edge loss over a 15 m canopy \
+               (P.833 s3.1).",
+    },
+    KeyStatus {
+        path: "radio.channel_model.density_sigma",
+        status: Status::Wired,
+        note: "GEMV2 eq. 10: the log-distance law's shadowing sigma from the vehicles and \
+               building footprints inside each link's ellipse (Table V bounds).",
+    },
+    KeyStatus {
         path: "world.service_roads",
         status: Status::Wired,
         note: "Whether highway=service ways (alleys, driveways, parking aisles) become \
@@ -3906,6 +3926,11 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "The bends of a through lane's polyline get the turn-speed cap a junction connector has.",
     },
     KeyStatus {
+        path: "traffic.vehicle_dynamics",
+        status: Status::Wired,
+        note: "Grade-aware, power-limited acceleration: grade subtracts g sin(theta) of the draped lane from the driver's acceleration (KraussPS); power_limit caps it at eta P/(m v) less rolling and air resistance for passenger cars (PHEMlight PC_D_EU4) and tractor-trailers (Green Book 120 kg/kW). Native engine only.",
+    },
+    KeyStatus {
         path: "traffic.depart_at_speed",
         status: Status::Wired,
         note: "Vehicles entering at the map's edge are put on at the lane's start at their desired speed, capped by the safe speed to the leader and the lane end (SUMO departSpeed).",
@@ -4681,6 +4706,28 @@ fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ));
         }
     }
+    for (path, set) in [
+        ("radio.channel_model.foliage", c.foliage.is_some()),
+        (
+            "radio.channel_model.density_sigma",
+            c.density_sigma.is_some(),
+        ),
+    ] {
+        if set && abstract_tier {
+            e.push(conflict(
+                path,
+                "would change nothing: the abstract propagation tier composes no obstacle"
+                    .to_string(),
+            ));
+        }
+    }
+    if c.foliage == Some(true) && !s.world.vegetation {
+        e.push(conflict(
+            "radio.channel_model.foliage",
+            "would change nothing: world.vegetation is false, so the world has no trees"
+                .to_string(),
+        ));
+    }
     if c.vehicle_blockage.is_some() && abstract_tier {
         e.push(conflict(
             "radio.channel_model.vehicle_blockage",
@@ -5063,6 +5110,7 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             || t.depart_at_speed.is_some()
             || t.reroute_share.is_some()
             || t.reroute_source.is_some()
+            || t.vehicle_dynamics.is_some()
             || t.kerbside.is_some();
         // The LC2013 factors act only on lane changes, and the strategic one only on the
         // changes a route needs.

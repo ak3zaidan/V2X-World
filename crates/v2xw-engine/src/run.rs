@@ -9893,7 +9893,15 @@ impl Engine {
             // this link (`LogDistanceShadowing::shadow_draw_shared`); without one the
             // model draws here.
             let loss = match (drawn_shadow, prop.as_log_distance_mut()) {
-                (Some(draw), Some(m)) => m.loss_db_drawn(&tx_end, &rx_end, &los, draw),
+                (Some(draw), Some(m)) => {
+                    // GEMV²'s σ from the surroundings, when asked for
+                    // (`radio.channel_model.density_sigma`).
+                    let sigma = obstacles
+                        .density
+                        .as_ref()
+                        .map(|d| d.sigma_db(&los, tx_end.pos, rx_end.pos, ctx.actors));
+                    m.loss_db_drawn_sigma(&tx_end, &rx_end, &los, draw, sigma)
+                }
                 _ => prop.loss_db(&mut ctx, &tx_end, &rx_end, freq_hz, &los, weather),
             };
             let obstacle_db = obstacles.loss_db(

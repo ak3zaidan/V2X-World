@@ -3593,3 +3593,98 @@ fn every_manhattan_signal_group_shows_green() {
         assert_eq!(c.count, 0, "{check}: {:#?}", c.examples);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Vegetation (WP-18)
+// ---------------------------------------------------------------------------
+
+/// A crossroads with a wood, a forest multipolygon, a tree row and a single tree beside
+/// it: what `OsmOptions::vegetation` imports, and what it leaves alone when off.
+fn wooded_crossroads() -> String {
+    let road = [("highway", "residential")];
+    // 1e-4 degrees is about 11.1 m at the equator.
+    let corners = |base: i64, lat: f64, lon: f64, d: f64| {
+        [
+            node(base, lat, lon),
+            node(base + 1, lat, lon + d),
+            node(base + 2, lat + d, lon + d),
+            node(base + 3, lat + d, lon),
+        ]
+        .concat()
+    };
+    document(
+        &[
+            crossroads_nodes(),
+            way(100, &[1, 2, 3], &road),
+            way(101, &[4, 2, 5], &road),
+            // A wood, a closed way, NE quadrant.
+            corners(10, 0.0002, 0.0002, 0.0004),
+            way(110, &[10, 11, 12, 13, 10], &[("natural", "wood")]),
+            // A forest as a multipolygon, NW quadrant; its outer way carries no tags.
+            corners(20, 0.0002, -0.0006, 0.0004),
+            way(120, &[20, 21, 22, 23, 20], &[]),
+            relation(
+                121,
+                &[("way", 120, "outer")],
+                &[("type", "multipolygon"), ("landuse", "forest")],
+            ),
+            // A tree row along the south side, about 89 m long, an open way.
+            node(30, -0.0003, -0.0004),
+            node(31, -0.0003, 0.0004),
+            way(130, &[30, 31], &[("natural", "tree_row")]),
+            // A single tree with a 12 m crown, SE.
+            tagged_node(
+                40,
+                -0.0006,
+                0.0006,
+                &[("natural", "tree"), ("diameter_crown", "12")],
+            ),
+            // Grass is not trees.
+            corners(50, -0.0010, -0.0010, 0.0002),
+            way(150, &[50, 51, 52, 53, 50], &[("landuse", "grass")]),
+        ]
+        .concat(),
+    )
+}
+
+#[test]
+fn wood_and_tree_rows_import_as_vegetation() {
+    use v2xw_world::VegetationKind;
+    let xml = wooded_crossroads();
+    let (off, _) = import(&xml);
+    assert!(off.vegetation.is_empty(), "off by default");
+    let options = OsmOptions {
+        vegetation: true,
+        ..opts()
+    };
+    let (on, _) = import_with(&xml, &options);
+    let kinds: Vec<VegetationKind> = on.vegetation.iter().map(|v| v.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            VegetationKind::Wood,
+            VegetationKind::TreeRow,
+            VegetationKind::Wood,
+            VegetationKind::Tree
+        ],
+        "wood and tree row (ways, in id order), forest (relation), tree (node); no grass"
+    );
+    let area = |k: usize| v2xw_world::ring_signed_area_2x(&on.vegetation[k].ring) / 2.0;
+    // The tree row: about 89 m long, buffered to one 8 m crown.
+    let row = area(1);
+    assert!((row - 89.0 * 8.0).abs() < 30.0, "tree row {row} m²");
+    // The wood: about 44.5 m square.
+    let wood = area(0);
+    assert!((wood - 44.5 * 44.5).abs() < 60.0, "wood {wood} m²");
+    // The tree: a 12-gon of its 12 m crown, 3·r² = 108 m².
+    let tree = area(3);
+    assert!((tree - 108.0).abs() < 1.0, "tree {tree} m²");
+    // The layer moves the hash; the roads and the land use are untouched by it.
+    assert_ne!(on.content_hash, off.content_hash);
+    assert_eq!(on.roads, off.roads);
+    assert_eq!(on.landuse, off.landuse);
+    // It survives the native format.
+    let back = serde_native::from_bytes(&serde_native::to_bytes(&on).expect("writes"))
+        .expect("reads back");
+    assert_eq!(back.vegetation, on.vegetation);
+}

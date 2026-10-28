@@ -99,9 +99,10 @@ pub use model::{
     LanduseZone, Lane, LaneKind, LaneProjection, LayerLicence, LodHint, MaterialClass,
     NetworkCounts, Passage, PassageKind, Projection, ROAD_CLEARANCE_M, RoadClass, RoadNetwork,
     SignalHead, SignalHeadKind, SignalPhase, SignalPlan, SignalState, Site, SiteId, SiteKind,
-    SymbolId, SymbolTable, Terrain, Transformation, TurnDirection, World, WorldBuilder, WorldParts,
-    WorldProvenance, WorldSourceKind, ZoneId, convex_hull_ring, point_in_ring, ring_distance_sq_2d,
-    ring_signed_area_2x, road_meets_building, signal_group_wire_id, simplify_rdp,
+    SymbolId, SymbolTable, Terrain, Transformation, TurnDirection, VegetationArea, VegetationKind,
+    World, WorldBuilder, WorldParts, WorldProvenance, WorldSourceKind, ZoneId, convex_hull_ring,
+    point_in_ring, ring_distance_sq_2d, ring_signed_area_2x, road_meets_building,
+    signal_group_wire_id, simplify_rdp,
 };
 pub use serde_vwp::WorldPayload;
 pub use sumo::{SumoAnomaly, SumoImportReport, SumoOptions};

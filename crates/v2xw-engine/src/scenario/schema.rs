@@ -287,6 +287,37 @@ pub struct Traffic {
     /// event on their route: local and belief-only). Unset is navigation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reroute_source: Option<v2xw_mobility::routing::dynamic::RerouteSource>,
+    /// Grade-aware, power-limited acceleration (WP-22): the slope of the draped road and
+    /// the class's power, rolling and air resistance cap how fast a vehicle can speed up,
+    /// so a loaded truck crawls up a long climb. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vehicle_dynamics: Option<VehicleDynamicsSettings>,
+}
+
+/// Grade-aware, power-limited acceleration ([`Traffic::vehicle_dynamics`],
+/// [`v2xw_mobility::VehicleDynamicsParams`]); each unset part is off.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VehicleDynamicsSettings {
+    /// The slope term: a vehicle's acceleration less g times the sine of the road's
+    /// grade, as SUMO's KraussPS has it. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grade: Option<bool>,
+    /// The power term: no more acceleration than the engine's power gives after rolling
+    /// and air resistance, for the classes with a sourced road-load row (passenger car
+    /// and tractor-trailer). Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_limit: Option<bool>,
+}
+
+impl VehicleDynamicsSettings {
+    /// The engine's parameters.
+    pub fn params(self) -> v2xw_mobility::VehicleDynamicsParams {
+        v2xw_mobility::VehicleDynamicsParams {
+            grade: self.grade.unwrap_or(false),
+            power_limit: self.power_limit.unwrap_or(false),
+        }
+    }
 }
 
 // traffic audit
@@ -395,6 +426,7 @@ impl Default for Traffic {
             depart_at_speed: None,
             reroute_share: None,
             reroute_source: None,
+            vehicle_dynamics: None,
         }
     }
 }
@@ -893,6 +925,12 @@ pub struct WorldSpec {
         skip_serializing_if = "crate::scenario::schema::is_true"
     )]
     pub service_roads: bool,
+    /// Whether the OSM importer keeps the trees as a vegetation layer (WP-18: woods and
+    /// forests, tree rows, single trees; [`v2xw_world::osm::OsmOptions::vegetation`]),
+    /// which `radio.channel_model.foliage` charges. Default `false`, and a world imported
+    /// without it keeps its content hash.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub vegetation: bool,
 }
 
 /// How an imported world's synthesised signal plans are coordinated
@@ -2158,6 +2196,16 @@ pub struct ChannelModelSettings {
     /// radio-transparent, on charges them under every law.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vehicle_blockage: Option<bool>,
+    /// Whether a path through trees loses the foliage excess (ITU-R P.833 §3.1 with
+    /// GEMV²'s 2.3 dB/m at 5.9 GHz, capped at the diffraction over the canopy:
+    /// `obstacle/foliage/p833`). Needs `world.vegetation`. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foliage: Option<bool>,
+    /// Whether the log-distance law's shadowing σ grows with the vehicles and buildings
+    /// around the link (GEMV², Boban et al. 2014 eq. 10: 3.3 dB on an empty road to
+    /// 5.2 dB downtown for line of sight). Unset keeps the preset's fixed σ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub density_sigma: Option<bool>,
 }
 
 impl ChannelModelSettings {

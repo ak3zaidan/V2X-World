@@ -655,6 +655,21 @@ const ADVANCED: &[Basic] = &[
         recommended: "On for realism; off to measure what blockage costs.",
     },
     Basic {
+        path: "radio.channel_model.foliage",
+        explain: "Whether trees between two antennas weaken the signal: about 2.3 dB per metre of trees at 5.9 GHz, up to what bending over the treetops would cost. Needs world.vegetation.",
+        recommended: "Off (today); on with world.vegetation for suburban and rural maps with woods and tree-lined streets.",
+    },
+    Basic {
+        path: "radio.channel_model.density_sigma",
+        explain: "Whether the signal's random variation grows with the traffic and buildings around each link, as measured in Porto (GEMV2): calmer on an empty road, rougher downtown.",
+        recommended: "Off (today, a fixed spread); on for the measured dependence on surroundings.",
+    },
+    Basic {
+        path: "world.vegetation",
+        explain: "Whether the map import keeps woods, tree rows and single trees, so the radio can charge for signal through foliage.",
+        recommended: "Off (today); on with radio.channel_model.foliage where trees line the roads.",
+    },
+    Basic {
         path: "radio.sidelink.candidate_percent",
         explain: "The share of resources that must remain after exclusion before a radio picks one.",
         recommended: "20 % (LTE's fixed value); 35 or 50 % on NR.",
@@ -814,6 +829,16 @@ const ADVANCED: &[Basic] = &[
         path: "traffic.lane_bend_speed",
         explain: "Whether drivers slow for sharp bends in a street's mapped centreline as they do for corners at junctions; without it a car follows a kink in the map at full speed.",
         recommended: "Off (today); on with turn_curve_window_m 6 for kinked city streets (the realistic benchmark sets it).",
+    },
+    Basic {
+        path: "traffic.vehicle_dynamics.grade",
+        explain: "Whether hills slow vehicles down: on a climb a driver gets less acceleration from the same pedal, and on a descent the car holds its speed. Needs a map with terrain heights; flat maps are unchanged.",
+        recommended: "Off (today); on for hilly maps (SUMO's KraussPS slope term).",
+    },
+    Basic {
+        path: "traffic.vehicle_dynamics.power_limit",
+        explain: "Whether an engine's power limits how fast a vehicle can speed up, so a loaded tractor-trailer crawls up a long climb at about 46 km/h on a 5% grade while a car keeps the limit. Applies to cars and tractor-trailers; rigid trucks, buses, vans and motorcycles have no sourced figures yet.",
+        recommended: "Off (today); on with grade for hilly maps and freight corridors.",
     },
     Basic {
         path: "traffic.lc_speed_gain",

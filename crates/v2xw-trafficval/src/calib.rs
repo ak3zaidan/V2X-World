@@ -346,7 +346,122 @@ pub fn checks() -> Vec<Check> {
             faults: &["motorcycles given the car's driver parameters"],
             run: motorcycles,
         },
+        Check {
+            id: "calibration/truck-grade-crawl",
+            group: Group::Calibration,
+            title: "A loaded tractor-trailer on a long 5 % climb slows to the crawl speed its power holds",
+            procedure: "One trailer (the Green Book design truck: 120 kg/kW at the 80,000 lb \
+                federal limit, C_dA 5.95 m², c_rr 0.0077) enters a 4 km climb at a constant \
+                5 % (`v2xw_mobility::worlds::graded_ring`) at its desired 23.6 m/s with \
+                `traffic.vehicle_dynamics` grade and power_limit on; its speed 2 km in is \
+                held to the steady crawl speed of the power balance \
+                η·P = m·g·(sin θ + c_rr)·v + ½·ρ·C_dA·v³. ASSUMPTION: the Green Book's \
+                120 kg/kW speed-distance curve is paywalled and not read, so the band is \
+                the balance (docs/design/research/grade-dynamics.md), not the figure.",
+            faults: &["the power term off (grade only)"],
+            run: truck_grade_crawl,
+        },
     ]
+}
+
+/// The design truck's steady crawl speed, m/s: `η·P = m·g·(sin θ + c_rr)·v + ½·ρ·C_dA·v³`
+/// at `grade` (rise over run), by bisection, from the class's road-load row.
+fn crawl_speed_mps(grade: f64) -> f64 {
+    let Some(d) = VehicleClass::Trailer.dynamics() else {
+        return f64::NAN;
+    };
+    let sin = grade / (1.0 + grade * grade).sqrt();
+    let (mut lo, mut hi) = (0.1f64, 60.0f64);
+    for _ in 0..200 {
+        let v = 0.5 * (lo + hi);
+        let surplus = d.eta * d.power_kw * 1000.0
+            - d.mass_kg * 9.81 * (sin + d.c_rr) * v
+            - 0.5 * 1.182 * d.cd_a_m2 * v * v * v;
+        if surplus > 0.0 {
+            lo = v;
+        } else {
+            hi = v;
+        }
+    }
+    lo
+}
+
+/// The trailer's speed after `at_m` of the 5 % climb, m/s.
+fn climb_speed_mps(
+    dynamics: v2xw_mobility::VehicleDynamicsParams,
+    at_m: f64,
+) -> Result<f64, String> {
+    use v2xw_mobility::Mobility;
+    let world =
+        v2xw_mobility::worlds::graded_ring(8000.0, 0.05, 25.0).map_err(|e| e.to_string())?;
+    let cycle = v2xw_mobility::worlds::ring_cycle(&world, 0);
+    let rng = v2xw_core::rng::RngRegistry::new(22);
+    let params = EngineParams {
+        intersections: IntersectionMode::None,
+        lane_changes: false,
+        dynamic_rerouting: false,
+        driver_heterogeneity: false,
+        vehicle_dynamics: dynamics,
+        ..EngineParams::default()
+    };
+    let mut engine = NativeMobility::new(params);
+    {
+        let mut ctx = v2xw_mobility::MobilityCtx::new(0, &world, &rng);
+        engine
+            .init(&mut ctx, Box::new(v2xw_mobility::NoDemand::new()))
+            .map_err(|e| e.to_string())?;
+    }
+    let route = cycle.iter().cycle().take(4).copied().collect();
+    let class = VehicleClass::Trailer;
+    let driver = IdmPreset::Kesting2010.profile(class);
+    let id = engine
+        .spawn_with_route(&world, 0, class, driver, route, 0.0)
+        .map_err(|e| e.to_string())?;
+    engine.set_speed(id, 23.6).map_err(|e| e.to_string())?;
+    let (mut t, mut driven) = (0u64, 0.0);
+    for _ in 0..3000 {
+        let mut ctx = v2xw_mobility::MobilityCtx::new(t, &world, &rng);
+        engine.step(&mut ctx, params.step);
+        let v = engine.longitudinal_states()[0].3;
+        driven += v * params.step.as_secs_f64();
+        if driven >= at_m {
+            return Ok(v);
+        }
+        t += params.step.as_nanos();
+    }
+    Err(format!("the trailer did not drive {at_m} m"))
+}
+
+fn truck_grade_crawl(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
+    let on = v2xw_mobility::VehicleDynamicsParams {
+        grade: true,
+        power_limit: !variant.is_fault(),
+    };
+    let crawl = crawl_speed_mps(0.05);
+    let v = climb_speed_mps(on, 2000.0)?;
+    let v_off = climb_speed_mps(v2xw_mobility::VehicleDynamicsParams::default(), 2000.0)?;
+    Ok(Outcome {
+        rows: vec![
+            Row::held(
+                "trailer speed 2 km into a 5 % climb, m/s",
+                v,
+                (crawl - 0.3, crawl + 0.5),
+                "steady crawl speed of the 120 kg/kW power balance (ASSUMPTION: the Green \
+                 Book curve is not read)",
+            ),
+            Row::reported(
+                "steady crawl speed of the power balance, m/s",
+                crawl,
+                "computed",
+            ),
+            Row::reported(
+                "trailer speed 2 km in with vehicle_dynamics off, m/s",
+                v_off,
+                "reported",
+            ),
+        ],
+        notes: vec![],
+    })
 }
 
 fn saturation(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
