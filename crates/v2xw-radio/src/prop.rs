@@ -497,6 +497,184 @@ impl ShadowProcess {
 }
 
 // =========================================================================================
+// GEMV² small-scale variation: σ grows with the density around the link (WP-18, P18.4)
+// =========================================================================================
+
+/// The density-dependent shadowing σ of GEMV² (Boban, Barros, Tonguz, IEEE TVT 63(9),
+/// 2014, doi 10.1109/TVT.2014.2317803; arXiv:1305.0124 v3), eq. (10), p. 8:
+///
+/// `σ = σ_min + (σ_max − σ_min)/2 · (√(N_V/N_V,max) + √(A_S/A_S,max))`
+///
+/// * `N_V` is the vehicle density inside the link's ellipse (foci at the two antennas,
+///   major axis `r` from Table VI, minor axis `√(r² − d²)`, §IV p. 4), per km².
+/// * `A_S` is the share of the ellipse covered by static objects (building footprints).
+/// * Both ratios are clamped at 1: the paper normalises by the largest value in its Porto
+///   data, so nothing exceeds it.
+///
+/// σ_min and σ_max per link class are Table V, p. 8. The NLOSb σ_min is the 4.1 dB the
+/// paper takes from Mangel et al. for a model that does not compute reflections; this
+/// engine computes none (GEMV² gives 0 dB only when it does).
+///
+/// **ASSUMPTION**: `N_V,max` and `A_S,max`. The paper gives no numbers for them (only
+/// that they are Porto's maxima per km²):
+/// * `N_V,max` = 11,500 veh/km², a jammed road network covering 30 % of the land at one
+///   vehicle per 26 m² of lane (7.5 m spacing on a 3.5 m lane);
+/// * `A_S,max` = 0.6, the footprint share of a dense downtown block.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DensitySigma {
+    /// LOS σ_min, σ_max, dB (Table V: Porto open space, Porto downtown).
+    pub los_db: (f64, f64),
+    /// NLOSv σ_min, σ_max, dB (Table V: Porto highway, downtown).
+    pub nlosv_db: (f64, f64),
+    /// NLOSb σ_min, σ_max, dB (Table V; σ_min from Mangel et al., no reflections).
+    pub nlosb_db: (f64, f64),
+    /// The vehicle density the ratio is normalised by, veh/km². ASSUMPTION.
+    pub vehicles_max_per_km2: f64,
+    /// The static-object share the ratio is normalised by. ASSUMPTION.
+    pub static_max_share: f64,
+    /// The ellipse's major axis for an urban LOS link, metres (Table VI).
+    pub r_los_urban_m: f64,
+    /// The ellipse's major axis for a LOS link outside cities, metres (Table VI).
+    pub r_los_outside_m: f64,
+    /// The ellipse's major axis for an NLOSv link, metres (Table VI).
+    pub r_nlosv_m: f64,
+    /// The ellipse's major axis for an NLOSb link, metres (Table VI).
+    pub r_nlosb_m: f64,
+}
+
+impl Default for DensitySigma {
+    fn default() -> Self {
+        Self {
+            los_db: (3.3, 5.2),
+            nlosv_db: (3.8, 5.3),
+            nlosb_db: (4.1, 6.8),
+            vehicles_max_per_km2: 11_500.0,
+            static_max_share: 0.6,
+            r_los_urban_m: 500.0,
+            r_los_outside_m: 1000.0,
+            r_nlosv_m: 400.0,
+            r_nlosb_m: 300.0,
+        }
+    }
+}
+
+/// What is around one link, inside its ellipse ([`DensitySigma::link_density`]).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct LinkDensity {
+    /// Vehicles inside the ellipse per km².
+    pub vehicles_per_km2: f64,
+    /// The share of the ellipse covered by static objects.
+    pub static_share: f64,
+}
+
+/// GEMV²'s three link classes, from this crate's [`crate::types::LosClass`]: a vehicle in
+/// the way is NLOSv, any building or terrain in the way is NLOSb.
+fn gemv2_class(class: crate::types::LosClass) -> u8 {
+    use crate::types::LosClass as L;
+    match class {
+        L::Los => 0,
+        L::NlosV => 1,
+        _ => 2,
+    }
+}
+
+impl DensitySigma {
+    /// σ_min and σ_max for a link class, dB.
+    #[must_use]
+    pub fn bounds_db(&self, class: crate::types::LosClass) -> (f64, f64) {
+        match gemv2_class(class) {
+            0 => self.los_db,
+            1 => self.nlosv_db,
+            _ => self.nlosb_db,
+        }
+    }
+
+    /// The ellipse's major axis for a link class, metres (Table VI).
+    #[must_use]
+    pub fn major_axis_m(&self, class: crate::types::LosClass, urban: bool) -> f64 {
+        match gemv2_class(class) {
+            0 if urban => self.r_los_urban_m,
+            0 => self.r_los_outside_m,
+            1 => self.r_nlosv_m,
+            _ => self.r_nlosb_m,
+        }
+    }
+
+    /// Eq. (10): σ for a link of `class` with `density` around it, dB.
+    #[must_use]
+    pub fn sigma_db(&self, class: crate::types::LosClass, density: LinkDensity) -> f64 {
+        let (lo, hi) = self.bounds_db(class);
+        let ratio = |x: f64, max: f64| {
+            if max > 0.0 {
+                (x / max).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        let nv = ratio(density.vehicles_per_km2, self.vehicles_max_per_km2);
+        let a_s = ratio(density.static_share, self.static_max_share);
+        lo + 0.5 * (hi - lo) * (math::sqrt(nv) + math::sqrt(a_s))
+    }
+
+    /// The density around the link `tx → rx` of `class`: the `vehicles` positions and
+    /// the `statics` (a footprint's centroid and area, m²) that fall inside its ellipse,
+    /// per its area. A footprint counts whole when its centroid is inside, which is exact
+    /// on average for footprints small beside the ellipse. The link's own two ends are
+    /// not counted.
+    pub fn link_density(
+        &self,
+        class: crate::types::LosClass,
+        urban: bool,
+        tx: Vec3,
+        rx: Vec3,
+        vehicles: impl IntoIterator<Item = Vec3>,
+        statics: impl IntoIterator<Item = (Vec3, f64)>,
+    ) -> LinkDensity {
+        let r = self.major_axis_m(class, urban);
+        let area_m2 = link_ellipse_area_m2(tx, rx, r);
+        if area_m2 <= 0.0 {
+            return LinkDensity::default();
+        }
+        let n = vehicles
+            .into_iter()
+            .filter(|p| p.distance_2d(tx) > 1e-6 && p.distance_2d(rx) > 1e-6)
+            .filter(|p| in_link_ellipse(tx, rx, r, *p))
+            .count();
+        let built: f64 = math::sum_ordered(
+            statics
+                .into_iter()
+                .filter(|(c, _)| in_link_ellipse(tx, rx, r, *c))
+                .map(|(_, a)| a.max(0.0)),
+        );
+        LinkDensity {
+            vehicles_per_km2: n as f64 / (area_m2 * 1e-6),
+            static_share: (built / area_m2).clamp(0.0, 1.0),
+        }
+    }
+}
+
+/// The major axis a link's ellipse is drawn with: Table VI's `r`, or the link length when
+/// the link is longer (an ellipse's major axis cannot be shorter than its focal distance).
+fn effective_major_axis_m(tx: Vec3, rx: Vec3, r_m: f64) -> f64 {
+    r_m.max(tx.distance_2d(rx))
+}
+
+/// Whether `p` lies inside the ellipse with foci `tx`, `rx` and major axis `r_m`
+/// (GEMV² §IV): the sum of its distances to the two foci is at most the major axis.
+#[must_use]
+pub fn in_link_ellipse(tx: Vec3, rx: Vec3, r_m: f64, p: Vec3) -> bool {
+    p.distance_2d(tx) + p.distance_2d(rx) <= effective_major_axis_m(tx, rx, r_m)
+}
+
+/// The area of the link ellipse, m²: `π·(r/2)·(√(r² − d²)/2)`.
+#[must_use]
+pub fn link_ellipse_area_m2(tx: Vec3, rx: Vec3, r_m: f64) -> f64 {
+    let r = effective_major_axis_m(tx, rx, r_m);
+    let d = tx.distance_2d(rx);
+    core::f64::consts::PI * 0.5 * r * 0.5 * math::sqrt((r * r - d * d).max(0.0))
+}
+
+// =========================================================================================
 // §3.5 The Sommer building term, as a Propagation term
 // =========================================================================================
 
@@ -1730,14 +1908,34 @@ impl LogDistanceShadowing {
         los: &LosResult,
         draw: f64,
     ) -> LossBreakdown {
+        self.loss_db_drawn_sigma(tx, rx, los, draw, None)
+    }
+
+    /// [`LogDistanceShadowing::loss_db_drawn`] with the link's shadowing σ given by the
+    /// caller, dB, in place of the preset's: GEMV²'s density-dependent σ
+    /// ([`DensitySigma`]), which only the caller can compute because it needs the
+    /// vehicles around the link. `None` is the preset's σ, exactly `loss_db_drawn`. A
+    /// link whose preset has no shadowing keeps none.
+    pub fn loss_db_drawn_sigma(
+        &mut self,
+        tx: &RadioEndpoint,
+        rx: &RadioEndpoint,
+        los: &LosResult,
+        draw: f64,
+        sigma_db: Option<f64>,
+    ) -> LossBreakdown {
         let d = tx.pos.distance(rx.pos);
         let params = self.params_for(los);
         let path = params.path_loss_db(d);
+        let sigma = match sigma_db {
+            Some(s) if params.sigma_db > 0.0 => s.max(0.0),
+            _ => params.sigma_db,
+        };
         let process = self
             .shadows
             .entry((tx.node.index(), rx.node.index()))
             .or_default();
-        let shadow = process.update(tx.pos, rx.pos, params.sigma_db, self.d_corr_m, draw);
+        let shadow = process.update(tx.pos, rx.pos, sigma, self.d_corr_m, draw);
 
         let obstacle = match (&self.sommer, los.class.has_building()) {
             (Some(c), true) => c.loss_db(los.walls_crossed, los.obstructed_len_m),
@@ -4122,5 +4320,111 @@ mod tests {
         let (pl, state) = model.mean_loss_db(&tx, &rx, f, &plaza);
         assert_eq!(state, GeometricState::NlosCorner);
         assert!((pl - unfolded).abs() < 1e-9, "{pl} vs {unfolded}");
+    }
+
+    // --- GEMV² density σ (WP-18, P18.4) -----------------------------------------------
+
+    /// A 200 m urban link on the x axis and the cars of a jammed six-lane road along it,
+    /// one every 7.5 m per lane, `[x0, x1]`, plus as many again 300 m off to the north.
+    fn arterial(x0: f64, x1: f64) -> (Vec3, Vec3, Vec<Vec3>, Vec<Vec3>) {
+        let (tx, rx) = (Vec3::new(0.0, 0.0, 1.5), Vec3::new(200.0, 0.0, 1.5));
+        let mut on = Vec::new();
+        let mut off = Vec::new();
+        for lane in 0..6 {
+            let y = -9.0 + 3.5 * f64::from(lane);
+            let mut x = x0;
+            while x <= x1 {
+                on.push(Vec3::new(x, y, 1.5));
+                off.push(Vec3::new(x, y + 300.0, 1.5));
+                x += 7.5;
+            }
+        }
+        (tx, rx, on, off)
+    }
+
+    #[test]
+    fn density_sigma_is_class_min_on_an_empty_road() {
+        // Nothing inside the ellipse: every class is at its Table V minimum. A dense road
+        // 300 m away, outside a 500 m urban LOS ellipse of a 200 m link (semi-minor axis
+        // 229 m), does not count.
+        use crate::types::LosClass;
+        let g = DensitySigma::default();
+        let (tx, rx, _, beyond) = arterial(-150.0, 350.0);
+        for (class, want) in [
+            (LosClass::Los, 3.3),
+            (LosClass::NlosV, 3.8),
+            (LosClass::NlosB, 4.1),
+        ] {
+            let empty = g.link_density(class, true, tx, rx, beyond.clone(), Vec::new());
+            assert_eq!(empty.vehicles_per_km2, 0.0, "{class:?}");
+            let s = g.sigma_db(class, empty);
+            assert!((s - want).abs() < 1e-12, "{class:?}: {s} dB");
+        }
+    }
+
+    #[test]
+    fn density_sigma_approaches_max_on_a_dense_arterial() {
+        use crate::types::LosClass;
+        let g = DensitySigma::default();
+        // A jammed arterial through the whole ellipse plus downtown blocks around it:
+        // σ within 0.1 dB of Table V's maximum.
+        let (tx, rx, jam, beyond) = arterial(-150.0, 350.0);
+        let blocks: Vec<(Vec3, f64)> = (0..12)
+            .flat_map(|i| {
+                (0..6).map(move |j| {
+                    (
+                        Vec3::new(
+                            -140.0 + 40.0 * f64::from(i),
+                            -200.0 + 70.0 * f64::from(j),
+                            0.0,
+                        ),
+                        2_400.0,
+                    )
+                })
+            })
+            .collect();
+        let dense = g.link_density(LosClass::Los, true, tx, rx, jam.clone(), blocks.clone());
+        assert!(dense.static_share >= g.static_max_share, "{dense:?}");
+        let s = g.sigma_db(LosClass::Los, dense);
+        let n_ratio = (dense.vehicles_per_km2 / g.vehicles_max_per_km2).min(1.0);
+        // The jam fills a strip of the ellipse, not all of it, so the vehicle term is
+        // below its maximum; the static term is at it. Eq. (10) by hand:
+        let by_hand = 3.3 + 0.5 * (5.2 - 3.3) * (n_ratio.sqrt() + 1.0);
+        assert!((s - by_hand).abs() < 1e-9, "{s} vs {by_hand}");
+        assert!(s > 4.5 && s <= 5.2, "{s} dB");
+        // Saturated (a denser road), it is the maximum.
+        let full = LinkDensity {
+            vehicles_per_km2: 2.0 * g.vehicles_max_per_km2,
+            static_share: 1.0,
+        };
+        assert!((g.sigma_db(LosClass::Los, full) - 5.2).abs() < 0.1);
+        // Only what is inside counts: the same road 300 m away adds nothing.
+        let mut both = jam;
+        both.extend(beyond);
+        let with_far = g.link_density(LosClass::Los, true, tx, rx, both, blocks);
+        assert_eq!(with_far, dense);
+    }
+
+    #[test]
+    fn a_caller_sigma_replaces_the_preset_sigma() {
+        // The first draw is σ·z: twice the σ, twice the shadowing; None is the preset.
+        let los = LosResult::clear();
+        let (tx, rx) = (ep(0, 0.0, 0.0), ep(1, 100.0, 0.0));
+        let mut preset = LogDistanceShadowing::new(
+            Tier::Medium,
+            LogDistancePreset::AbbasLosUrban,
+            EnvClass::Urban,
+        );
+        let sigma = preset.params_for(&los).sigma_db;
+        assert!(sigma > 0.0);
+        let base = preset.loss_db_drawn(&tx, &rx, &los, 1.0);
+        let mut over = LogDistanceShadowing::new(
+            Tier::Medium,
+            LogDistancePreset::AbbasLosUrban,
+            EnvClass::Urban,
+        );
+        let doubled = over.loss_db_drawn_sigma(&tx, &rx, &los, 1.0, Some(2.0 * sigma));
+        assert!((doubled.shadow_db - 2.0 * base.shadow_db).abs() < 1e-12);
+        assert!((base.shadow_db - sigma).abs() < 1e-12);
     }
 }
