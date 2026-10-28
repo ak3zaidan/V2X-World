@@ -22,6 +22,10 @@
    source: "CAMs move from AC_VO (AIFSN 2) to AC_BE (AIFSN 6): 4 more 13 us slots each (IEEE 802.11-2020 Table 9-155 OCB; ETSI TS 102 724 4.2.2)"}
 - {setting: net.channel_access, change: alternating, metric: e2e_ms_mean, expect: up,
    source: "a message generated during the SCH interval waits for the next CCH interval (IEEE 1609.4-2016 6.2.5)"}
+- {setting: net.channel_access, change: alternating, metric: report.mac_guard_deferrals, expect: up,
+   source: "no transmission in the guard interval, and a frame that would cross the interval end waits (IEEE 1609.4-2016 6.2.5, constants UNVERIFIED; Veins Mac1609_4 timeLeftInSlot behaviour)"}
+- {setting: net.channel_access, change: alternating, metric: prr, expect: down,
+   source: "frames held over the SCH interval contend together at the next CCH start (Eichler, IEEE VTC 2007-Fall [verify])"}
 
 # ---- Messages ----
 - {setting: messages.path_history_points, change: high, metric: psdu_bytes, expect: same, min_change: 0.0,

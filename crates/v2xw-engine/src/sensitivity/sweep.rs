@@ -843,6 +843,18 @@ impl FingerprintRecorder {
         if let Ok(v) = serde_json::to_value(report) {
             flatten("report", &v, &mut f);
         }
+        // WP-16: the IEEE 1609.4 gate's counters are serialised only when non-zero, so a
+        // run without alternating access has none. Where the EDCA MAC granted frames that
+        // absence is a zero, and a row comparing the two runs can be judged.
+        if report.mac_grants > 0 {
+            for k in [
+                "report.mac_gate_deferrals",
+                "report.mac_guard_deferrals",
+                "report.straddling_frames",
+            ] {
+                f.entry(k.to_string()).or_insert(0.0);
+            }
+        }
         f.retain(|k, _| !BOOKKEEPING.contains(&k.as_str()));
         for (k, (s, n, _)) in &self.samples {
             f.insert(format!("metric.{k}"), s / n.max(1.0));
