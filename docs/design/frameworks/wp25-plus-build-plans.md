@@ -1005,6 +1005,74 @@ lane drops).
 - **P41.2** (3 h): the conflict type and the import.
 - **P41.3** (3 h): closures and lane drops, the work-zone scenario and rows.
 
+**Source note, 2026-10-28 (P41.1, sources track, no code; `sumo.rs:1570` and `engine.rs:9`,
+`:98` re-checked at `0570929c`).** Each copy was read in scratch and then deleted. Nothing is
+cached in the repo.
+- *SUMO zipper behaviour (behaviour reference only; EPL-2.0 OR GPL-2.0-or-later, no code to
+  copy).*
+  - `sumo.dlr.de/docs/Networks/PlainXML.html`, read 2026-10-28. Node type `zipper`: "connects
+    edges where the number of lanes decreases and traffic needs to merge zipper-style (late
+    merging)". Both lanes "react symmetrically to each other". The connection attribute
+    `visibility`: "For 'zipper'-links, this attribute controls the point at which
+    zipper-merging behavior starts (default 100m)".
+  - `MSLink::getZipperSpeed` (sumo `main`, `src/microsim/MSLink.cpp`, read via raw view;
+    called from `MSVehicle.cpp:3895-3897`, copy sha256 `e39a0d41…6bc5`):
+    1. A foe is ignored unless the ego is within `max(visibility, brakeGap)`.
+    2. A foe counts as *ahead* unless it arrives later and the ego cannot brake for it, or
+       the foe can brake for the ego. A tie in arrival time and distance goes to the lower
+       lane index.
+    3. The ego follows each foe ahead with its car-following `followSpeed`, at a virtual gap
+       of `dist − foe.length − ego.minGap − foeDist`.
+    4. `vZipper = max(vFollow, v − decel·w, vSafeGap)`, where `w = min(1, te/10)` and the
+       target headway is `tf + headwayTime`.
+    5. The zipper link has a 16 s look-ahead (`myLookaheadTimeZipper`), against the default
+       1 s.
+
+    So SUMO's ABAB order *emerges* from arrival times. The order is not a forced token. Plan
+    decision 1 stands; the `zipper_alternates` test should allow a ±1 slip where arrivals
+    tie.
+- *Field data (the decision 2 source; MnDOT's own evaluation is a secondary source).*
+  - **MnDOT** "Late merge … the Zipper System" (dot.state.mn.us, 2 pp., undated, sha256
+    `2b583392…da25`): the backup is reduced "by up to 50% (40% is common)", and the system
+    "has no effect on travel time through the work zone". The underlying evaluation is URS,
+    *Evaluation of 2004 Dynamic Late Merge System* (for MnDOT, 2004). No copy was found. As
+    summarised by NCDOT FHWA/NC/2015-08 (Vaughan et al., 2018, p. 10, ref. 14, sha256
+    `55442d7d…fe31`), it reports on US 10: queue length down about **35%**, travel time not
+    significantly different but more variable, throughput "decreased slightly", and
+    compliance still rising when the deployment ended.
+  - **VTRC 05-R6** (Beacher, Fontaine, Garber, 2004; virginiadot.org, sha256
+    `bae44439…cb9b`), Tappahannock 2-to-1 field test. Closed-lane share is MUTCD **33.66%**
+    (sd 8.59, n 34) vs late merge **38.81%** (sd 8.64, n 100), p < 0.01 (Tables 36-37,
+    p. 48). Throughput is 255.7 vs 258.0 vph, p 0.54 (Tables 38-39). Simulation gave
+    +132 vph only for 3-to-1. For 2-to-1 the late merge helps only at 20% or more heavy
+    vehicles (pp. 53-54). HCM work-zone capacities quoted there (Table 2, p. 12):
+    2-to-1 **1,340 vphpl** (8 studies), 3-to-1 1,170, 3-to-2 1,490.
+  - **SWZDI TPF-5(438)**, Savolainen, Gates, Brown, Dec. 2024 (swzdi.intrans.iastate.edu,
+    183 pp., sha256 `49c0eac2…d72f`), Michigan 2-to-1 freeway zipper sites, video in 5-min
+    bins (Table 25, p. 87). Closed-lane utilisation:
+    - I-94: mean **28.9%** (sd 11.3; 1,447 veh/h);
+    - I-96: **48.6%** (sd 15.9; 530 veh/h but dense);
+    - M-53: **11%**.
+
+    A PCMS adds +2.3 to +5.1 points (p. 4 summary). Utilisation rises about 1 point per
+    10 veh/mi of open-lane density. Under Missouri I-44 *early* merge, 26.0% of traffic is
+    in the closed lane 700 ft before the taper (Table 24).
+  - **NCDOT 2015-08**, NC-58 permanent lane drop: dropped-lane share 31% before, 36% after
+    zipper signs (p < 0.001).
+- *Choice (most realistic, recorded here).*
+  - `traffic.merge.late_merge_share` is defined as **the closing-lane utilisation in the
+    queue**. That is the quantity every field study measures. Perfect zipper compliance is
+    50% at 2-to-1.
+  - The default is **0.29** (I-94, the saturated urban site), with sensitivity range
+    0.11-0.49 (SWZDI). The no-zipper baseline is about 0.26-0.34 (Missouri, VTRC MUTCD).
+  - The work-zone acceptance row:
+    - zipper on vs off: queue length −35% to −50% (URS via NCDOT; MnDOT);
+    - discharge not significantly different;
+    - 2-to-1 discharge against 1,340 vphpl. VTRC quotes only the HCM average, so P41.3
+      pins the tolerance from the HCM study spread or the SWZDI volumes, and does not
+      guess it.
+  - The "early-merge share 1.0" fault in the test table becomes "utilisation 0.0".
+
 ---
 
 ## WP-42 Parking (S-P12)
@@ -1123,7 +1191,7 @@ parameters from NCHRP 605.
 | WP-40 | Anwar, Franchi, Fettweis, VTC2019-Fall | author preprint (vodafone-chair.org) | read 2026-10-28 (P40.1 note): one profile, no speed axis |
 | WP-40 | IEEE 802.11 TGbd link-level submissions | public, but mentor.ieee.org rejected the fetch (HTTP 418) | not read (P40.1 note); WP-40 dropped |
 | WP-40 | 3GPP TR 37.885 | public | channel models summarised in R2c |
-| WP-41 | SUMO zipper documentation; MnDOT zipper-merge evaluations | public | no |
+| WP-41 | SUMO zipper documentation; MnDOT zipper-merge evaluations (+ VTRC 05-R6, SWZDI TPF-5(438), NCDOT 2015-08) | public | read 2026-10-28 (P41.1 note); URS 2004 MnDOT report not found |
 | WP-42 | OSM wiki `parking:*`; a manoeuvre-time field study; SUMO parking reroute docs | public | no |
 | WP-43 | NCHRP Report 605 (2008); CAMP VSC-A DNPW report | public | no |
 | WP-33 | IEEE 1609.4-2016 | paywalled | no (constants UNVERIFIED) |
