@@ -653,6 +653,63 @@ impl DensitySigma {
     }
 }
 
+/// The static objects of [`DensitySigma::link_density`] (a footprint's centroid and area,
+/// m²) behind an R-tree of their centroids, so a link reads the footprints near its
+/// ellipse instead of every footprint in the world (WP-27).
+///
+/// [`FootprintIndex::near_link`] returns a superset of the footprints `in_link_ellipse`
+/// keeps, in the order they were given, so `link_density` over it sums the same areas in
+/// the same order as a scan of all of them: the result is bit-identical.
+#[derive(Debug)]
+pub struct FootprintIndex {
+    statics: Vec<(Vec3, f64)>,
+    tree: rstar::RTree<rstar::primitives::GeomWithData<[f64; 2], u32>>,
+}
+
+impl FootprintIndex {
+    /// The index of `statics`, kept in their given order.
+    #[must_use]
+    pub fn new(statics: Vec<(Vec3, f64)>) -> Self {
+        let points = statics
+            .iter()
+            .enumerate()
+            .filter(|(_, (c, _))| c.x.is_finite() && c.y.is_finite())
+            .map(|(i, (c, _))| rstar::primitives::GeomWithData::new([c.x, c.y], i as u32))
+            .collect();
+        Self {
+            tree: rstar::RTree::bulk_load(points),
+            statics,
+        }
+    }
+
+    /// Every footprint, in the given order (what a scan reads).
+    #[must_use]
+    pub fn all(&self) -> &[(Vec3, f64)] {
+        &self.statics
+    }
+
+    /// The footprints whose centroid may lie inside the ellipse of `tx → rx` with major
+    /// axis `r_m`, in the given order. Every point of that ellipse is within half its
+    /// major axis of the link's midpoint (`2|p − c| ≤ |p − tx| + |p − rx|`), so the query
+    /// is that circle's box, widened by a millimetre against rounding.
+    #[must_use]
+    pub fn near_link(&self, tx: Vec3, rx: Vec3, r_m: f64) -> Vec<(Vec3, f64)> {
+        let half = 0.5 * effective_major_axis_m(tx, rx, r_m) + 1e-3;
+        let c = tx.lerp(rx, 0.5);
+        let envelope =
+            rstar::AABB::from_corners([c.x - half, c.y - half], [c.x + half, c.y + half]);
+        let mut hits: Vec<u32> = self
+            .tree
+            .locate_in_envelope(&envelope)
+            .map(|p| p.data)
+            .collect();
+        // The tree's order is its own; the sum is compensated but still order-sensitive,
+        // so the footprints go back to their given order before they are summed.
+        hits.sort_unstable();
+        hits.into_iter().map(|i| self.statics[i as usize]).collect()
+    }
+}
+
 /// The major axis a link's ellipse is drawn with: Table VI's `r`, or the link length when
 /// the link is longer (an ellipse's major axis cannot be shorter than its focal distance).
 fn effective_major_axis_m(tx: Vec3, rx: Vec3, r_m: f64) -> f64 {
@@ -4426,5 +4483,71 @@ mod tests {
         let doubled = over.loss_db_drawn_sigma(&tx, &rx, &los, 1.0, Some(2.0 * sigma));
         assert!((doubled.shadow_db - 2.0 * base.shadow_db).abs() < 1e-12);
         assert!((base.shadow_db - sigma).abs() < 1e-12);
+    }
+
+    #[test]
+    fn footprint_index_keeps_the_given_order_and_misses_nothing() {
+        // WP-27: what the index keeps inside a link's ellipse is the scan's list, in the
+        // scan's order, on 300 keyed-random links over 600 footprints.
+        let mut state = 0x0027_u64;
+        let mut next = || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            ((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let statics: Vec<(Vec3, f64)> = (0..600)
+            .map(|_| {
+                (
+                    Vec3::new(2_000.0 * next(), 2_000.0 * next(), 0.0),
+                    100.0 + 900.0 * next(),
+                )
+            })
+            .collect();
+        let index = FootprintIndex::new(statics.clone());
+        let (mut kept, mut pruned) = (0usize, 0usize);
+        for _ in 0..300 {
+            let tx = Vec3::new(2_000.0 * next(), 2_000.0 * next(), 0.0);
+            let rx = Vec3::new(
+                tx.x + 400.0 * next() - 200.0,
+                tx.y + 400.0 * next() - 200.0,
+                0.0,
+            );
+            let r = 300.0 + 200.0 * next();
+            let inside = |v: &[(Vec3, f64)]| -> Vec<(u64, u64)> {
+                v.iter()
+                    .filter(|(c, _)| in_link_ellipse(tx, rx, r, *c))
+                    .map(|(c, a)| (c.x.to_bits(), a.to_bits()))
+                    .collect()
+            };
+            let near = index.near_link(tx, rx, r);
+            let i = near
+                .iter()
+                .map(|(c, a)| (c.x.to_bits(), a.to_bits()))
+                .collect::<Vec<_>>();
+            let order: Vec<usize> = i
+                .iter()
+                .map(|h| {
+                    statics
+                        .iter()
+                        .position(|(c, a)| (c.x.to_bits(), a.to_bits()) == *h)
+                        .unwrap()
+                })
+                .collect();
+            assert!(
+                order.windows(2).all(|w| w[0] < w[1]),
+                "not in the given order: {order:?}"
+            );
+            let want = inside(&statics);
+            assert_eq!(inside(&near), want, "the index lost a footprint");
+            kept += want.len();
+            pruned += statics.len() - near.len();
+        }
+        assert!(
+            kept > 3_000,
+            "{kept} footprints inside the ellipses: the check would not bite"
+        );
+        assert!(pruned > 300 * 300, "the index pruned only {pruned}");
     }
 }

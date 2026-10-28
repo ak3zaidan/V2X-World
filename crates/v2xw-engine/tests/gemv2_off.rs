@@ -5,6 +5,7 @@
 //! - On a forest road (a self-written OSM fixture: a road through a 110 m wood), the
 //!   foliage term costs receptions across the wood.
 //! - The density σ reaches the run: it changes what is received on the Midtown grid.
+//! - WP-27: the R-tree of footprint centroids gives the scan's density, bit for bit.
 
 use std::path::{Path, PathBuf};
 
@@ -133,4 +134,80 @@ fn the_gemv2_rows_hold() {
         .collect();
     assert_eq!(result.verdicts.len(), 2);
     assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// SplitMix64: the test's own keyed stream, so the links are the same on every run.
+fn splitmix(state: &mut u64) -> f64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    ((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64
+}
+
+#[test]
+fn density_index_equals_the_scan() {
+    // WP-27: the R-tree of footprint centroids gives the density the scan of every
+    // footprint gives, bit for bit, on 2,000 keyed-random links over Midtown Manhattan.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let mut s = Scenario::load(scenarios().join("phase2-manhattan.yaml")).expect("loads");
+    if let v2xw_world::WorldSourceSpec::OsmXml { path, .. } = &mut s.world.source {
+        *path = root.join(path.as_str()).to_string_lossy().into_owned();
+    }
+    let world = v2xw_engine::wiring::build_world(&s).expect("the Manhattan world builds");
+    assert!(
+        world.buildings.len() > 1_000,
+        "{} buildings",
+        world.buildings.len()
+    );
+    let term = v2xw_engine::wiring::DensityTerm::new(&world);
+    assert_eq!(term.footprints(), world.buildings.len());
+    let anchors: Vec<v2xw_core::geom::Vec3> = world
+        .buildings
+        .iter()
+        .filter_map(|b| b.footprint.first().copied())
+        .collect();
+    let classes = [
+        v2xw_radio::LosClass::Los,
+        v2xw_radio::LosClass::NlosV,
+        v2xw_radio::LosClass::NlosB,
+    ];
+    let mut state = 0x5EED_0027_u64;
+    let (mut built, mut differ) = (0usize, 0usize);
+    let (mut t_scan, mut t_index) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
+    for i in 0..2_000 {
+        let a = anchors[(splitmix(&mut state) * anchors.len() as f64) as usize];
+        let tx = v2xw_core::geom::Vec3::new(a.x + 20.0 * splitmix(&mut state), a.y, 0.0);
+        let (d, th) = (
+            700.0 * splitmix(&mut state),
+            std::f64::consts::TAU * splitmix(&mut state),
+        );
+        let rx = v2xw_core::geom::Vec3::new(tx.x + d * th.cos(), tx.y + d * th.sin(), 0.0);
+        let class = classes[i % 3];
+        let vehicles = [tx.lerp(rx, 0.25), tx.lerp(rx, 0.5)];
+        let t = std::time::Instant::now();
+        let scan = term.link_density_by_scan(class, tx, rx, vehicles);
+        t_scan += t.elapsed();
+        let t = std::time::Instant::now();
+        let index = term.link_density(class, tx, rx, vehicles);
+        t_index += t.elapsed();
+        if scan.static_share > 0.0 {
+            built += 1;
+        }
+        let same = scan.static_share.to_bits() == index.static_share.to_bits()
+            && scan.vehicles_per_km2.to_bits() == index.vehicles_per_km2.to_bits();
+        if !same {
+            differ += 1;
+            eprintln!("link {i}: scan {scan:?}, index {index:?}");
+        }
+    }
+    eprintln!(
+        "WP-27 note: {} footprints, 2,000 links: scan {t_scan:?}, R-tree {t_index:?}",
+        term.footprints()
+    );
+    assert!(
+        built > 1_000,
+        "only {built} links saw a building: the check would not bite"
+    );
+    assert_eq!(differ, 0, "{differ} links differ from the scan");
 }

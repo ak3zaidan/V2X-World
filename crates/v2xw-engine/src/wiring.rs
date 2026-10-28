@@ -2866,16 +2866,18 @@ pub fn build_obstacles(scenario: &Scenario, world: &World) -> ObstacleStack {
 
 /// GEMV²'s density-dependent shadowing σ for one run (`radio.channel_model.density_sigma`,
 /// [`v2xw_radio::DensitySigma`]): the table, the world's building footprints as
-/// (centroid, area) behind a grid, and whether the world is urban (Table VI's LOS
-/// ellipse).
+/// (centroid, area) behind an R-tree of their centroids
+/// ([`v2xw_radio::prop::FootprintIndex`], WP-27), and whether the world is urban
+/// (Table VI's LOS ellipse).
 #[derive(Debug)]
 pub struct DensityTerm {
     /// GEMV²'s σ table and ellipse sizes.
     pub sigma: v2xw_radio::DensitySigma,
     /// Whether the LOS ellipse is the urban one (the world's default environment).
     pub urban: bool,
-    /// Every building footprint as (centroid, area m²), in building-id order.
-    statics: Vec<(v2xw_core::geom::Vec3, f64)>,
+    /// Every building footprint as (centroid, area m²), in building-id order, behind an
+    /// R-tree of the centroids.
+    statics: v2xw_radio::prop::FootprintIndex,
 }
 
 impl DensityTerm {
@@ -2897,6 +2899,7 @@ impl DensityTerm {
                 (v2xw_core::geom::Vec3::new(x / n, y / n, 0.0), area)
             })
             .collect();
+        let statics = v2xw_radio::prop::FootprintIndex::new(statics);
         Self {
             sigma: v2xw_radio::DensitySigma::default(),
             urban: !matches!(
@@ -2928,15 +2931,51 @@ impl DensityTerm {
             .filter_map(|a| snapshot.get(a))
             .filter(|e| !e.view.class.is_vru())
             .map(|e| e.kinematics.pos);
-        let density = self.sigma.link_density(
-            los.class,
+        let density = self.link_density(los.class, tx, rx, vehicles);
+        self.sigma.sigma_db(los.class, density)
+    }
+
+    /// The density around the link `tx → rx` of `class` with `vehicles` about: the
+    /// footprints come from the R-tree, in building-id order.
+    #[must_use]
+    pub fn link_density(
+        &self,
+        class: v2xw_radio::LosClass,
+        tx: v2xw_core::geom::Vec3,
+        rx: v2xw_core::geom::Vec3,
+        vehicles: impl IntoIterator<Item = v2xw_core::geom::Vec3>,
+    ) -> v2xw_radio::LinkDensity {
+        let r = self.sigma.major_axis_m(class, self.urban);
+        let near = self.statics.near_link(tx, rx, r);
+        self.sigma
+            .link_density(class, self.urban, tx, rx, vehicles, near)
+    }
+
+    /// [`Self::link_density`] by a scan of every footprint, as before the R-tree: the
+    /// reference the index is tested against (`gemv2_off.rs`).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn link_density_by_scan(
+        &self,
+        class: v2xw_radio::LosClass,
+        tx: v2xw_core::geom::Vec3,
+        rx: v2xw_core::geom::Vec3,
+        vehicles: impl IntoIterator<Item = v2xw_core::geom::Vec3>,
+    ) -> v2xw_radio::LinkDensity {
+        self.sigma.link_density(
+            class,
             self.urban,
             tx,
             rx,
             vehicles,
-            self.statics.iter().copied(),
-        );
-        self.sigma.sigma_db(los.class, density)
+            self.statics.all().iter().copied(),
+        )
+    }
+
+    /// How many footprints the term holds.
+    #[must_use]
+    pub fn footprints(&self) -> usize {
+        self.statics.all().len()
     }
 }
 
