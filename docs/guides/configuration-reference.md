@@ -261,6 +261,9 @@ holds those drivers.
 | `time.warmup_s` **new** | none | 0 to less than `duration_s` | Metric samples whose window ends inside it are not recorded (Law, *Simulation Modeling and Analysis*, 5th ed., §9.5.1). The run report's whole-run counters still count it. |
 | `time.metric_period_s` | 1 | 0.1 to 3600 s | Metric sampling interval. |
 | `time.mobility_step_ms` | 100 | 10 to 100 ms | Mobility step (ADR 0004). |
+| `events[].when` **new** (WP-21) | none | `ttc_below {ttc_s}` (0 to 60 s), `in_polygon {points_m}` (≥ 3 corners), `speed_diff_above {speed_diff_mps}` (0 to 100 m/s, leader within 100 m), `probability {p}` (0 to 1), or one `all`/`any` `{of: [...]}` of them | Condition-triggered item: armed at `t`, fires at the first mobility step the clause holds on ground truth (the scenario director's hand, not a detector). TTC is WP-11's gap over closing speed on the time grid. A `safety.*` `target` may be `when.leader`, `when.follower` (pair clauses) or `when.actor` (area). Probability draws are keyed by seed, item and step. Not on `attack.wave`. Design reference Artery's storyboard (behaviour only). |
+| `events[].max_fires` **new** | 1 | 1 to 10⁶ | Firings of a `when` item. |
+| `events[].cooldown_s` **new** | 0 | ≥ 0 s | Least time between two firings of a `when` item. |
 
 ## Not configurable yet
 

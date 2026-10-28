@@ -71,6 +71,9 @@ fn a_unit_broadcasts_a_list_only_once_its_backhaul_brought_it_and_not_while_it_i
         t: OFF_AT_S as f64,
         until: Some(120.0),
         kind: TimelineKind::Outage,
+        when: None,
+        max_fires: None,
+        cooldown_s: None,
         params,
     });
     let mut engine = Engine::build(s, "").expect("builds");

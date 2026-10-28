@@ -32,6 +32,8 @@ use v2xw_world::model::LaneKind;
 
 use crate::scenario::schema::{Scenario, TimelineKind};
 
+pub mod trigger;
+
 /// What a closure's `target` names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClosureTarget {

@@ -1086,6 +1086,9 @@ fn a_switched_off_device_reaches_no_scms_until_it_is_back_on() {
         t,
         until: Some(until),
         kind,
+        when: None,
+        max_fires: None,
+        cooldown_s: None,
         params: [("target".to_string(), json!(target))]
             .into_iter()
             .collect(),

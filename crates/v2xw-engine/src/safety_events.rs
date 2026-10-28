@@ -95,6 +95,9 @@ pub enum Pick {
     Node(NodeId),
     /// The first vehicle that fits (see the module notes).
     Auto,
+    /// The vehicle the item's `when` clause bound (WP-21): `when.leader`, `when.follower`
+    /// or `when.actor`.
+    Bound(crate::timeline::trigger::Role),
 }
 
 impl Pick {
@@ -106,11 +109,27 @@ impl Pick {
         match value {
             None => Ok(Pick::Auto),
             Some(v) if v.as_str() == Some("auto") => Ok(Pick::Auto),
+            Some(v)
+                if v.as_str()
+                    .and_then(crate::timeline::trigger::Role::parse)
+                    .is_some() =>
+            {
+                Ok(Pick::Bound(
+                    v.as_str()
+                        .and_then(crate::timeline::trigger::Role::parse)
+                        .expect("matched above"),
+                ))
+            }
             Some(v) => v
                 .as_u64()
                 .and_then(|n| u32::try_from(n).ok())
                 .map(|n| Pick::Node(NodeId::new(n)))
-                .ok_or_else(|| format!("{v} is not a node id or \"auto\"")),
+                .ok_or_else(|| {
+                    format!(
+                        "{v} is not a node id, \"auto\", or a binding of the item's when \
+                         clause (\"when.leader\", \"when.follower\", \"when.actor\")"
+                    )
+                }),
         }
     }
 }
@@ -174,8 +193,12 @@ pub fn pick(
     pick: Pick,
     purpose: Purpose,
 ) -> Option<Candidate> {
-    if let Pick::Node(n) = pick {
-        return candidates.values().find(|c| c.node == Some(n)).copied();
+    match pick {
+        Pick::Node(n) => return candidates.values().find(|c| c.node == Some(n)).copied(),
+        // A binding is resolved by the engine from the firing (WP-21); unresolved, there
+        // is no vehicle.
+        Pick::Bound(_) => return None,
+        Pick::Auto => {}
     }
     let speed = |k: &Kinematics| v2xw_core::math::hypot(k.vel.x, k.vel.y);
     // Vehicles by lane, for the follower test: (lane, s) of each.

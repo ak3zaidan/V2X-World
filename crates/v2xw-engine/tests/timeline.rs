@@ -35,6 +35,9 @@ fn item(t: f64, until: Option<f64>, kind: TimelineKind, params: Value) -> Timeli
         t,
         until,
         kind,
+        when: None,
+        max_fires: None,
+        cooldown_s: None,
         params: params
             .as_object()
             .expect("an object")
