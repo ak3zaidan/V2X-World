@@ -1,0 +1,111 @@
+# SCMS fix round 4, PKI and CRL track (scms-fix4-a): the defects BUILD-STATUS "fix round 3
+# integration" (2026-10-27) left failing, and the fault proofs fix-3 scmsleft owed.
+#
+# Schema v2xw/scms-run-expectations/1 (matrix.py). Every row was written with
+# `measured: pending` before the run or test it judges. Base and variant of a row ran on
+# the same binary unless the row says otherwise:
+#   - rel: the 3cbc95a4 release copy (same engine code as this branch's base 081fcab2);
+#   - fix: the optimised debug build of this branch (CARGO_PROFILE_DEV_OPT_LEVEL=2).
+# Seeds are the scenarios' own. verdict: pass | fixed | wrong-expectation | open.
+schema: v2xw/scms-run-expectations/1
+runs:
+  PQCC:
+    scenario: scenarios/real-world/stress/pq-hybrid-falcon512-certcycle.yaml
+    note: cut to its first 0.5 s, no warm-up, no fast-forward (the pq_receivers test's run)
+  P2:
+    scenario: scenarios/phase2-manhattan.yaml
+    note: every third roadside unit kept (the phase2 test's path run), --record-level metrics
+  MW:
+    scenario: scenarios/edge/multi-week.yaml
+    note: the 33-day conformance run on the real calendar (--record-level events)
+  MWC:
+    scenario: scenarios/edge/multi-week-crlg-down.yaml
+    base: MW
+    note: the home CRL Generator down from 700 s to 2,600,000 s (--record-level events)
+rows:
+- id: F4A.PQCC.rsu-invalid
+  base: PQCC
+  variant: PQCC
+  area: scms
+  measure: phase2.verification_states.Invalid
+  expect: eq
+  value: 0
+  source: 'every PSM in the run is an honest handset''s, signed under a certificate of the i-period its
+    clock reads (CAMP-EE 2.1.5.3.2: i-periods are calendar intervals); a 1609.2 receiver whose own
+    clock reads the same period judges it plausible (PLAUSIBLE_PERIOD_SKEW 1), so no RSU refuses one'
+  measured: pending
+  verdict: pending
+- id: F4A.CRL.composite-lists
+  base: unit
+  variant: unit
+  area: scms
+  measure: signed CRLs in the composite a provider's RA serves at 10 s (two providers, PDU layer on)
+  expect: eq
+  value: 2
+  source: 'IEEE 1609.2.1-2022 6.3.5.8: CompositeCrl is a SEQUENCE OF SecuredCrl, one for each CRACA the
+    home CTL lists, plus the home MultiSignedCtl. Each provider''s CRL Generator signed its list before
+    the run (R-NOCRL), so both lists exist at every RA from t0'
+  measured: pending
+  verdict: pending
+- id: F4A.MWC.overdue
+  base: MW
+  variant: MWC
+  area: scms
+  measure: rv.refused.crl-overdue
+  expect: ge
+  value: 1
+  source: '[CAMP122] Table 67 overdue_CRL_tolerance (2 weeks past nextCrl): the home list signed at t0
+    with nextCrl t0 + 7 d is overdue from t0 + 21 d; with the home Generator down until 30.1 d, every
+    receiver in W5 (28.0-28.0 d live) that holds only that home list refuses the home CRACA''s
+    messages'
+  measured: pending
+  verdict: pending
+- id: F4A.MWC.held-overdue
+  base: MWC
+  variant: MWC
+  area: scms
+  measure: node.security records in W5 whose home CRL is past nextCrl + 14 d
+  expect: ge
+  value: 1
+  source: the premise of F4A.MWC.overdue, read off what receivers hold (belief), not off the backend
+  measured: pending
+  verdict: pending
+- id: F4A.MW.no-overdue
+  base: MW
+  variant: MW
+  area: scms
+  measure: rv.refused_total
+  expect: eq
+  value: 0
+  source: 'with both Generators reissuing by nextCrl, no list a device holds is ever two weeks past it,
+    and a joiner holds the newest list each CRACA published (R-JOINCRL): the fix must not bring back
+    MW''s 16,618 joiner refusals'
+  measured: pending
+  verdict: pending
+- id: F4A.P2.decision-spread
+  base: P2
+  variant: P2
+  area: scms
+  measure: attacker decided_ns across seeds 0xC0FFEE_5EED, 0xC0FFEE_0001, 0xC0FFEE_0002 (rel), seconds
+  expect: band
+  band:
+  - 60
+  - 300
+  source: 'the decision waits for 3 corroborated events from 3 reporters inside a minute behind a 60 s
+    report shuffle (threat/ma/corroborated); the attacker is the first vehicle onto an empty map, so
+    its first report depends on which neighbours carry a modem (a node-keyed draw, re-keyed by the
+    p1gaps roadside renumbering): a spread over the run, not a constant'
+  measured: pending
+  verdict: pending
+- id: F4A.P2.path-installed
+  base: P2
+  variant: P2
+  area: scms
+  measure: phase2.crls_installed and revoked_receptions on the 0xC0FFEE_5EED path run at a 360 s horizon
+  expect: ge
+  value: 1
+  source: 'after the decision the path needs the PCA and LA lookups (seconds), the Generator''s 60 s
+    cadence and one 30 s fetch interval: a decision at 241.8 s is installed by about 334 s, so a 360 s
+    horizon holds the whole path whichever realisation the node-keyed draws give'
+  measured: pending
+  verdict: pending
