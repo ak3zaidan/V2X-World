@@ -1101,8 +1101,8 @@ const ADVANCED: &[Basic] = &[
     },
     Basic {
         path: "actors.vehicles.bsm_timing.stamp_chain.profile",
-        explain: "Which real units' switching rates to use: Tampa's locked units (stamped early on about 10 % of messages) or the Wyoming unit (46 %).",
-        recommended: "tampa_locked (default; keeps the Wyoming comparison out of sample).",
+        explain: "Which real units' switching rates to use: Tampa's locked units (stamped early on about 10 % of messages), the Wyoming unit (46 %), or Tampa's switching units alone (tampa_chain, 26 %, whose positions step only while stamped on the fix; use it with the chain-device timing file).",
+        recommended: "tampa_chain with data/calibration/bsm-timing-cvpilot-chain-device.yaml for the closest out-of-sample match to Wyoming; tampa_locked is the default.",
     },
     Basic {
         path: "actors.vehicles.bsm_timing.stamp_chain.stay_minus1",
@@ -1118,6 +1118,21 @@ const ADVANCED: &[Basic] = &[
         path: "actors.vehicles.bsm_timing.stamp_chain.steps",
         explain: "Whether a switch to early stamping can carry a lasting position step of a few centimetres, as the real units' positioning filter does.",
         recommended: "On (default) with the chain.",
+    },
+    Basic {
+        path: "actors.vehicles.bsm_timing.stamp_chain.speed_per_m",
+        explain: "How much the reported speed jumps, in m/s per metre, when a unit's position takes a step; the jump then fades. Real units' speed steps with their position.",
+        recommended: "Unset (no speed change; it barely moves the position check but matters for speed-consistency detectors); 0.499 for Tampa's switching units.",
+    },
+    Basic {
+        path: "actors.vehicles.bsm_timing.stamp_chain.speed_tau_s",
+        explain: "How quickly the speed jump that comes with a step fades.",
+        recommended: "Unset (Tampa's 0.357 s).",
+    },
+    Basic {
+        path: "actors.vehicles.bsm_timing.stamp_chain.position_follows",
+        explain: "How much of the speed jump the reported position follows: 1 moves the position with the reported speed, 0 leaves it on the old speed.",
+        recommended: "Unset (Tampa's 0.759).",
     },
     // end traffic audit
     // SCMS settings audit (docs/guides/config-inventory-scms.md)

@@ -195,4 +195,71 @@ fn the_stamp_chain_settings_load_and_bad_ones_are_refused() {
         e.is_empty(),
         "the chain alone on the provisional values: {e:?}"
     );
+    // Candidate E (p1-realdata-baseline.md §7.5) on its own calibration, with and without
+    // the speed change; the change's knobs alone, without steps, or out of range are refused.
+    let device = root()
+        .join("data/calibration/bsm-timing-cvpilot-chain-device.yaml")
+        .to_string_lossy()
+        .into_owned();
+    let e = set(&mut s, Some(&device), on("tampa_chain"));
+    assert!(e.is_empty(), "tampa_chain: {e:?}");
+    let speed = StampChainSettings {
+        speed_per_m: Some(0.499),
+        ..on("tampa_chain")
+    };
+    let e = set(&mut s, Some(&device), speed.clone());
+    assert!(e.is_empty(), "tampa_chain with the speed change: {e:?}");
+    let ch = speed.chain().expect("a chain");
+    assert_eq!(
+        ch.step.and_then(|st| st.speed),
+        Some(v2xw_node::bsm_timing::StepSpeed {
+            per_m_along_mps: 0.499,
+            ..v2xw_node::bsm_timing::StampChain::TAMPA_CHAIN_SPEED
+        }),
+        "unset tau and share are Tampa's"
+    );
+    assert_eq!(
+        on("tampa_chain")
+            .chain()
+            .expect("a chain")
+            .step
+            .and_then(|st| st.speed),
+        None,
+        "the speed change is off unless set"
+    );
+    for (what, bad) in [
+        (
+            "tau without speed_per_m",
+            StampChainSettings {
+                speed_tau_s: Some(0.4),
+                ..on("tampa_chain")
+            },
+        ),
+        (
+            "speed_per_m without steps",
+            StampChainSettings {
+                steps: Some(false),
+                ..speed.clone()
+            },
+        ),
+        (
+            "position_follows 1.5",
+            StampChainSettings {
+                position_follows: Some(1.5),
+                ..speed.clone()
+            },
+        ),
+        (
+            "speed_tau_s 0",
+            StampChainSettings {
+                speed_tau_s: Some(0.0),
+                ..speed.clone()
+            },
+        ),
+    ] {
+        assert!(
+            !set(&mut s, Some(&device), bad).is_empty(),
+            "{what} was accepted"
+        );
+    }
 }

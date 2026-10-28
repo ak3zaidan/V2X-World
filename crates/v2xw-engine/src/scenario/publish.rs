@@ -273,6 +273,10 @@ const UNIT_SUFFIXES: &[(&str, &str)] = &[
 /// 13-product-direction.md §2 requires of every field.
 const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("radio.channel_model.building_loss_db_per_m", "dB/m"),
+    (
+        "actors.vehicles.bsm_timing.stamp_chain.speed_per_m",
+        "m/s per m",
+    ),
     ("radio.sidelink.candidate_percent", "%"),
     ("energy.fleet.*.euro", "Euro class"),
     ("energy.ev.params.*", "the EV model card's unit"),
@@ -454,6 +458,7 @@ const DIMENSIONLESS: &[&str] = &[
     "actors.vehicles.bsm_timing.locked_share",
     "actors.vehicles.bsm_timing.stamp_chain.stay_minus1",
     "actors.vehicles.bsm_timing.stamp_chain.stay_zero",
+    "actors.vehicles.bsm_timing.stamp_chain.position_follows",
     // end traffic audit
     "security.on_demand_threshold",
 ];

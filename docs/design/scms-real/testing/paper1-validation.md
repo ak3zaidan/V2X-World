@@ -86,7 +86,7 @@ on secMark. A is B with 3 % ConstPos attackers from 20 s.
 | E4 KS vs Wyoming (≤ 0.092) | ≤ 0.092 | 0.355; after refit 0.337 | **open** E4-BODY |
 | E4 white-noise GNSS; all-free class | > 0.092 | 0.992; 0.412 | pass (red as required) |
 | E4 locked rate at speed | ≤ 0.568 per ID-min | 5.52 → 0.0 after refit | **fixed** (F1) |
-| E4 speed match | p50 25–36 m/s | 20.6; 22.2 at 80 mph | **open** E4-SPEED |
+| E4 speed match | p50 25–36 m/s (tightened 2026-10-28, §10: p50 34.4 ± 1, p10 27–31, p90 34.8–36 m/s) | 20.6; 22.2 at 80 mph; 34.42 / 29.64 / 35.24 after §10 | **pass** (§10) |
 
 **SCMS architecture, from the PKI records.**
 
@@ -300,3 +300,33 @@ modelled (`radio.devices.rsu.off_channel`) and matches every interval share; KS 
 RSU ids now start at `ROADSIDE_ID_BASE`, so a vehicle's draws do not depend on the RSU count
 (the golden digests of scenarios with RSUs, tests/regression phase2-path and i-s1-phase2-60s, are expected to move and are not yet re-blessed: the test lock was not free); `attack_start` is the first falsified
 message, and the six k-rule budget rows pass.
+
+## 10. P1-E4 candidate E in the engine (2026-10-28, fix round 5)
+
+The stamp chain of research/synthesis/p1-realdata-baseline.md §7.5 is in the engine,
+off unless a scenario enables it: `actors.vehicles.bsm_timing.stamp_chain.profile:
+tampa_chain` (Tampa's 22 chain devices: stays 0.332 / 0.766, a step at 0.891 of 0 -> -1
+transitions and 0.052 of 0 -> 0 BSMs, none out of state -1, along 7.0 / 18.2 cm and cross
+3.8 / 11.9 cm at p50 / p90) on `data/calibration/bsm-timing-cvpilot-chain-device.yaml`, and
+the optional speed change `speed_per_m` (0.499 m/s per m; `speed_tau_s` 0.357 s and
+`position_follows` 0.759 when unset). Scenarios `p1-e4-ce.yaml` and `p1-e4-ces.yaml`; rows
+and results in `crates/v2xw-engine/tests/expectations/p1-stamp-e.yaml`.
+
+**Speed match and E4-SPEED, tightened.** `p1-e4-u.yaml` ran its pairs at p10 / p50 / p90
+13.9 / 29.8 / 39.3 m/s against Wyoming's 28.6 / 34.4 / 35.3. It now departs trips at speed,
+has 12 km straights, I-80's mix without buses or motorcycles, and drivers at 0.958 of the
+80 mph limit with a quarter of SUMO's speed spread: 29.64 / 34.42 / 35.24 m/s. E4-SPEED is
+now p50 34.4 ± 1 m/s, p10 27-31 and p90 34.8-36 m/s (rows P1E.SBM.speed-*).
+
+| run (speed-matched) | KS vs Wyoming | at | predicted (§7.5) |
+|---|---|---|---|
+| chain off (E4V) | 0.145 | 3.1 cm | 0.146 |
+| candidate E | **0.099** | 0.68 cm | 0.082 (0.063-0.10) |
+| E + speed change | **0.0915** | 0.73 cm | 0.080 |
+
+P1-E4 (tolerance 0.092) is **still open**: E alone misses it, and E with the speed change is
+under it by 0.0005, inside the run's noise. The gap to the prediction is in the body, not
+the tail: 22.5 % of the engine's pairs are under 0.68 cm against Wyoming's 12.7 %. The
+emulator's 4.5 mm engine nuisance was fitted on runs whose trips started from rest and
+turned corners; at cruise the engine's is smaller (§7.5 gives 0.094 at 4 mm). The tail is as
+predicted (p90 9.5 cm, 0 -> -1 over 5 cm 0.747, -1 -> -1 0.004).

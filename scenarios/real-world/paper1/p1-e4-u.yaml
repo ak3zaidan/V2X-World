@@ -8,14 +8,48 @@
 # BSM-level speed and heading noise and position_noise the position's, so the GNSS layer
 # under them keeps its slow error only. Expectations were written before it ran
 # (scms-paper1.yaml, P1.E4U.*).
+#
+# Speed match (fix round 5, 2026-10-28; p1-realdata-baseline.md §7.5 Finding 7): the pairs ran
+# at p10 / p50 / p90 13.9 / 29.8 / 39.3 m/s against Wyoming's 28.6 / 34.4 / 35.3 m/s (I-80,
+# posted 80 mph). The stamp term v x 1 ms is the shoulder of the residual, so speed is a
+# covariate of the KS, not a device parameter. The slow tail was trips starting from rest
+# (SUMO departSpeed 0), the 2 x 2 ring's corners within 3 km of a start, and buses (85 km/h)
+# with their stops; the fast tail the 10 % desired-speed spread over the posted limit. Now:
+# - trips enter moving (traffic.depart_speed_max, SUMO departSpeed="max");
+# - 12 km straights (block_x_m), so a 90 s trip at 34 m/s meets a corner only from the last
+#   quarter of a straight;
+# - I-80's mix without buses and motorcycles (9 % trucks);
+# - drivers at 0.958 of the limit with a quarter of SUMO's spread (speedFactor mean 0.958,
+#   sd 0.025: Wyoming's p50 sits 0.9 m/s under its p90).
+# Probe runs (release a925db58, chain off): depart at speed + 0.962 / 0.25: 18.7 / 34.4 / 35.4;
+# + 12 km: 22.5 / 34.5 / 35.4; + no buses or motorcycles: 29.7 / 34.6 / 35.4 m/s.
+# The rows of p1-stamp.yaml and scms-paper1.yaml (P1.E4U.*) were measured before this change.
 schema: v2xw/scenario/1
 meta:
   base: p1-e4-s.yaml
   name: Paper 1 E4 final
   description: The speed-matched E4 highway on the v3 timing fit, receiver velocity noise left to the timing model.
   tags: [paper1, validation, highway, bsm-timing]
+world:
+  source:
+    params:
+      block_x_m: 12000.0
+traffic:
+  depart_speed_max: true
 actors:
   vehicles:
+    classes:
+      passenger:
+        fraction: 0.91
+      truck:
+        fraction: 0.09
+      bus:
+        fraction: 0.0
+      motorcycle:
+        fraction: 0.0
+    drivers:
+      speed_factor: 0.958
+      speed_spread: 0.25
     gnss:
       smoothing_tau_s: 100.0
       static_hold_mps: 0.3

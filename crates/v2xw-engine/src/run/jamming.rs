@@ -868,13 +868,14 @@ impl Engine {
         // covers: it enters the CBR and the S-RSSI ranking (it carries no SCI, so it
         // excludes nothing).
         self.sidelink_note_jam(rx, power_dbm, windows);
-        // An adjacent-channel emitter's leak counts in the CBR from the level a leak does
-        // (`Engine::leak_busy_dbm`, radio-fix4 R4.1); a jammer's energy from -85 dBm.
-        let busy_dbm = if v2xw_radio::jamming::is_adjacent_channel_source(jammer) {
-            self.leak_busy_dbm()
-        } else {
-            v2xw_radio::phy::CBR_BUSY_THRESHOLD_DBM
-        };
+        // A jammer's noise and an adjacent-channel emitter's leak carry no 802.11 preamble,
+        // so both count in the CBR from the level a leak does (`Engine::leak_busy_dbm`):
+        // energy detect where the CBP is the share of time 802.11 CCA reads busy (SAE
+        // J2945/1; IEEE 802.11-2020 §17.3.10.6, -65 dBm in 10 MHz), -85 dBm in Europe,
+        // where the CBR is received signal strength whatever the signal (EN 302 571
+        // §4.2.10.1). Before fix round 5 a jammer counted from -85 dBm everywhere
+        // (R4.1.JAM-ED).
+        let busy_dbm = self.leak_busy_dbm();
         // The windows are the coming step's, so the meter is pruned at `now`, not at their
         // ends (radio-fix4 R4.2: pruning at the end read every jammer as CBR 0).
         let now = self.scheduler.now();

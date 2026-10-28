@@ -142,6 +142,7 @@ rows:
   source: cost model
   measured: "wall 35.89 -> 42.51 s (1.184; rerun 41.58 s, 1.159; pre-fix binary 34.57 s); peak 548 -> 573 MB (1.046; rerun 470 MB). Inside the bands, but the +16-18 % is consistent and larger than 'machine noise': not profiled (the second, own-channel energy walk runs on every query where the total is under -65 dBm, i.e. almost all of them)"
   verdict: pass
+  note: "fix round 5 (2026-10-28): profiled; the leak path is under 0.1 % of the engine's samples and the two runs are within 1-3 % on an idle slot (R5.LEAK.WALL in radio-fix5.yaml)"
 - id: R4.1.DET
   run: G20-MAP
   metric: radiofix4.py digest, G20-MAP run twice on the same binary and seed
@@ -158,7 +159,8 @@ rows:
     stays at -85 dBm (EN 302 571 §4.2.10.1 measures received signal strength, whatever it is)
   source: IEEE 802.11-2020 §17.3.10.6; ETSI EN 302 571 V2.1.1 §4.2.10.1
   measured: not measured in this round (no shipped scenario declares an emitter on a DSRC run)
-  verdict: open
+  verdict: pass
+  note: "fix round 5 (2026-10-28): run on scenarios/real-world/radio-fix5 (Europe ITS-G5 beside a 23 dBm LTE-V2X emitter): CBR 0.027 -> 0.278, frames 0.785, 13,936 adjacent-channel losses; ACIR 80 dB byte-identical to no emitter. Rows R5.EMITTER.* in radio-fix5.yaml"
 - id: R4.1.JAM-ED
   expect: >-
     A jammer's noise has no 802.11 preamble either, so by the same clause it should hold
@@ -169,7 +171,8 @@ rows:
     distant or pulsed one is)
   source: IEEE 802.11-2020 §17.3.10.6
   measured: not changed
-  verdict: open
+  verdict: fixed
+  note: "fix round 5 (2026-10-28): carrier sense and the J2945/1 CBR hold a jammer to energy detect; rows R5.JAM-ED.* in radio-fix5.yaml"
 # ---- Item 2: the per-channel DCC gate (radio-fix3 R3.2.DCC2) ----
 - id: R4.2.FEED
   test: v2xw-engine tests/multichannel.rs the_etsi_gate_spaces_each_channel_on_its_own (rewritten)

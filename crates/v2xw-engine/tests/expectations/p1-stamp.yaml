@@ -25,6 +25,11 @@
 # optimised debug build of this branch (one binary for every comparison); the scenario's
 # seed; --no-verify; one run per run-slot call; default rayon threads. t.wall_s and
 # t.peak_mb are /usr/bin/time -l real and maximum RSS (this run's metrics.json has no cost.peak_mb).
+#
+# 2026-10-28 (fix round 5): p1-e4-u.yaml, the base of every run here, was speed-matched to
+# Wyoming after these rows were measured (p50 29.8 -> about 34.4 m/s); the measured values
+# are those of p1-e4-u.yaml at a925db58. Candidate E and the speed-matched runs:
+# p1-stamp-e.yaml.
 schema: v2xw/scms-run-expectations/1
 runs:
   SBR:

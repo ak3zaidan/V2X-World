@@ -133,6 +133,9 @@ def e4(d, run):
     d["x.e4.triggers"] = trig
     d["x.e4.rate_per_idmin"] = trig / idmin if idmin else None
     d["x.e4.v_p50"] = vs[len(vs) // 2] if vs else None
+    # the speed covariate's spread (E4-SPEED: Wyoming p10 / p50 / p90 28.6 / 34.4 / 35.3 m/s)
+    d["x.e4.v_p10"] = vs[len(vs) // 10] if vs else None
+    d["x.e4.v_p90"] = vs[(9 * len(vs)) // 10] if vs else None
     d["x.e4.r_p50"] = resid.q(rs, 0.5)
     d["x.e4.r_p90"] = resid.q(rs, 0.9)
     d["x.e4.r_p99"] = resid.q(rs, 0.99)
@@ -194,6 +197,11 @@ def stamp(d, run):
     other = [x for x in ps if (x["o1"], x["o2"]) != (0, -1)]
     d["x.st.over5_on_0m1"] = sum(1 for x in tr if x["r"] > 0.05) / len(tr) if tr else None
     d["x.st.over5_other"] = sum(1 for x in other if x["r"] > 0.05) / len(other) if other else None
+    # P(r > 5 cm) by transition (p1-realdata-baseline.md §7.5; Wyoming held out:
+    # -1 -> -1 0.000, -1 -> 0 0.105, 0 -> 0 0.049, 0 -> -1 0.483)
+    for name, (a, b) in (("m1m1", (-1, -1)), ("m10", (-1, 0)), ("00", (0, 0))):
+        g = grp(a, b)
+        d["x.st.over5_on_" + name] = sum(1 for x in g if x["r"] > 0.05) / len(g) if g else None
 
 
 def veremi_lines(run):

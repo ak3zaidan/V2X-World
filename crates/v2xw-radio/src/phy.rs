@@ -209,8 +209,11 @@ pub enum CaptureRule {
 /// another channel's frame leaking through the channel filter only from the
 /// energy-detect level (−65 dBm in 10 MHz). Before radio-fix4 the leak was held to
 /// `busy_dbm` too, so a frame on 174 made 172 busy 20 dB further away than an 802.11
-/// receiver does. (A jammer's energy is still held to `busy_dbm`: radio-fix4 open item
-/// R4.1.JAM-ED.)
+/// receiver does. A jammer's noise (constant, pulsed or reactive: no 802.11 preamble) and
+/// an adjacent-channel emitter are energy the receiver cannot decode, so they too hold
+/// CCA busy only from the energy-detect level (fix round 5, R4.1.JAM-ED; before it a jammer
+/// was held to `busy_dbm`). ns-3 draws the same line: a non-Wi-Fi signal is held to
+/// `CcaEdThreshold`, a Wi-Fi one to `CcaSensitivity`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CcaConfig {
     /// The preamble-detect level, dBm: a frame of the operating channel at or above it
@@ -709,10 +712,11 @@ impl OfdmPhy {
     }
 
     /// [`OfdmPhy::sensed_energy_dbm`] without the other channels' leaks (own-channel
-    /// leakage and adjacent-channel emitters): the frames of `ch` itself (and any
-    /// jammer), which carrier sense holds to the preamble-detect
-    /// level while the leaks are held to energy detect ([`CcaConfig`]). Equal to it, bit
-    /// for bit, in a run without leakage.
+    /// leakage and adjacent-channel emitters) and without any jammer: the frames of `ch`
+    /// itself, which carrier sense holds to the preamble-detect level while the leaks and
+    /// the jamming, energy without an 802.11 preamble, are held to energy detect
+    /// ([`CcaConfig`]; IEEE 802.11-2020 §17.3.10.6). Equal to it, bit for bit, in a run
+    /// without leakage and without jamming.
     #[must_use]
     pub fn sensed_own_channel_dbm(&self, node: NodeId, ch: ChannelId, at: SimTime) -> f64 {
         let cutoff = at.saturating_sub(crate::types::timing::CCA_TIME.as_nanos());
@@ -757,15 +761,14 @@ impl OfdmPhy {
         // shows up in the channel busy ratio, which is exactly why telling a jammed frame
         // from a congested one needs the loss cause rather than the CBR
         // (04-models.md §12.3).
-        let jam_mw = if self.jamming.is_empty() {
+        // The preamble-detect sum (`with_leakage` false) holds frames of the channel only:
+        // a jammer's noise and an adjacent-channel emitter carry no 802.11 preamble, so
+        // CCA reads them, with the leaks, against energy detect alone (IEEE 802.11-2020
+        // §17.3.10.6; R4.1.JAM-ED).
+        let jam_mw = if self.jamming.is_empty() || !with_leakage {
             0.0
-        } else if with_leakage {
-            self.jamming.power_mw(node, ch, at, at.saturating_add(1))
         } else {
-            // An adjacent-channel emitter (`radio.adjacent_channel`) is another channel's
-            // leak too: held to energy detect with the rest of it.
-            self.jamming
-                .jammer_power_mw(node, ch, at, at.saturating_add(1))
+            self.jamming.power_mw(node, ch, at, at.saturating_add(1))
         };
         if contributors.is_empty() {
             if jam_mw <= 0.0 {
@@ -2411,6 +2414,82 @@ mod tests {
         old.set_channel_leakage(table);
         old.register_arrival(arrival(2, 0, -75.0 + acir, 0, on174));
         assert!(Phy::cca(&old, &ctx, rx, ChannelId(172)).is_busy());
+    }
+
+    /// Fix round 5, R4.1.JAM-ED: a jammer's noise has no 802.11 preamble, so it holds CCA
+    /// busy only from the energy-detect level (-65 dBm in 10 MHz, IEEE 802.11-2020
+    /// §17.3.10.6), whatever its profile; a frame of the channel still does from -85 dBm,
+    /// and a frame and a jammer together are sensed by their summed energy against energy
+    /// detect. Fault: the jammer held to preamble detect (the pre-fix carrier sense) makes
+    /// the -75 dBm jammer below read busy.
+    #[test]
+    fn a_jammer_is_sensed_only_above_energy_detect() {
+        use crate::jamming::{JamArrival, JamWindow, JammerKind};
+        let mut ctx = TestCtx::new(3);
+        ctx.set_now(100_000);
+        let rx = NodeId::new(0);
+        let jam = |dbm: f64, kind: JammerKind| {
+            JamArrival::new(
+                NodeId::new(9),
+                dbm,
+                ChannelId::CCH,
+                JamWindow::new(0, 1_000_000),
+                kind,
+            )
+        };
+        let busy_with = |dbm: f64, kind: JammerKind| {
+            let mut phy = OfdmPhy::new(Tier::High);
+            phy.note_jamming(rx, jam(dbm, kind));
+            Phy::cca(&phy, &ctx, rx, ChannelId::CCH).is_busy()
+        };
+        for kind in [
+            JammerKind::Constant,
+            JammerKind::Pulsed,
+            JammerKind::Reactive,
+        ] {
+            assert!(
+                !busy_with(-75.0, kind),
+                "a -75 dBm {kind:?} jammer held CCA busy"
+            );
+            assert!(
+                !busy_with(-65.5, kind),
+                "a -65.5 dBm {kind:?} jammer held CCA busy"
+            );
+            assert!(
+                busy_with(-64.0, kind),
+                "a -64 dBm {kind:?} jammer left CCA idle"
+            );
+        }
+        // A frame of the channel at -80 dBm is busy with or without the jammer.
+        let f = frame(300, Mcs::R6Qpsk12);
+        let mut phy = OfdmPhy::new(Tier::High);
+        phy.register_arrival(arrival(1, 0, -80.0, 0, f));
+        phy.note_jamming(rx, jam(-75.0, JammerKind::Constant));
+        assert!(Phy::cca(&phy, &ctx, rx, ChannelId::CCH).is_busy());
+        // A -90 dBm frame (below preamble detect) and a -66 dBm jammer sum to -65.98 dBm,
+        // under energy detect; a second jammer of -70 dBm takes the sum to -64.5 dBm.
+        let mut weak = OfdmPhy::new(Tier::High);
+        weak.register_arrival(arrival(1, 0, -90.0, 0, f));
+        weak.note_jamming(rx, jam(-66.0, JammerKind::Constant));
+        assert!(!Phy::cca(&weak, &ctx, rx, ChannelId::CCH).is_busy());
+        weak.note_jamming(
+            rx,
+            JamArrival::new(
+                NodeId::new(10),
+                -70.0,
+                ChannelId::CCH,
+                JamWindow::new(0, 1_000_000),
+                JammerKind::Constant,
+            ),
+        );
+        assert!(Phy::cca(&weak, &ctx, rx, ChannelId::CCH).is_busy());
+        // The knob: energy detect set to -85 dBm is the pre-fix carrier sense.
+        let mut old = OfdmPhy::new(Tier::High).with_cca(CcaConfig {
+            busy_dbm: -85.0,
+            energy_detect_dbm: Some(-85.0),
+        });
+        old.note_jamming(rx, jam(-75.0, JammerKind::Constant));
+        assert!(Phy::cca(&old, &ctx, rx, ChannelId::CCH).is_busy());
     }
 
     #[test]

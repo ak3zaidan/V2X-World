@@ -1,0 +1,154 @@
+# Radio, fix round 5 (radio-fix4 open items R4.1.JAM-ED, R4.1.EMITTER and the leak-run wall
+# time). Every `expect` was written with `measured: pending` and committed before the run or
+# test that judges it, except rows marked `disclosure:`.
+# `measured` is base -> variant, or the run's value. Runs are judged by
+#   python3 -I tools/realworld/radiofix3.py <run dir>       (PDR, CBR, frames per run)
+# against `band`.
+# Fault proofs: every fault was injected behind an env check (V2XW_FAULT=<name>) in one
+# scratch build of the test binaries, so the same binary gave the green run (unset) and each
+# red run; the hooks were then removed and are in no commit.
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+schema: v2xw/scms-run-expectations/1
+runs:
+  EUB:
+    scenario: scenarios/real-world/radio-fix5/dense-grid-20-eu.yaml
+    binary: this branch's opt-level-2 debug build
+    note: connected-intersections at 12,000 veh/h, 20 s, Europe (ITS-G5 on 180, ETSI adaptive DCC), --record-level receptions
+  EUE:
+    scenario: scenarios/real-world/radio-fix5/dense-grid-20-eu-emitter.yaml
+    base: EUB
+    binary: as EUB
+    note: EUB with a 23 dBm LTE-V2X emitter on 182 at the grid centre, on all the time, ACIR from the rules
+  EUE80:
+    scenario: scenarios/real-world/radio-fix5/dense-grid-20-eu-emitter-acir80.yaml
+    base: EUB
+    binary: as EUB
+    note: EUE with ACIR 80 dB
+  EUE2:
+    scenario: scenarios/real-world/radio-fix5/dense-grid-20-eu-emitter.yaml
+    base: EUE
+    binary: as EUB
+    note: EUE again (determinism)
+rows:
+- id: R5.JAM-ED.PHY
+  test: v2xw-radio phy::tests::a_jammer_is_sensed_only_above_energy_detect
+  expect: >-
+    A jammer's noise (constant, pulsed or reactive) carries no 802.11 preamble, so the only
+    CCA clause that applies to it is energy detect: "the receiver shall hold the CCA signal
+    busy for any signal 20 dB above the minimum modulation and coding rate sensitivity",
+    -65 dBm in 10 MHz. A -75 and a -65.5 dBm jammer leave CCA idle, a -64 dBm one holds it;
+    a -80 dBm frame of the channel is busy with or without the jammer; a -90 dBm frame and
+    a -66 dBm jammer sum under -65 dBm (idle) and a second -70 dBm jammer takes the sum over
+    (busy). Before: the PHY added the jammer to the preamble-detect (-85 dBm) sum
+    (phy.rs energy_started_by, with_leakage false: jammer_power_mw)
+  source: IEEE 802.11-2020 §17.3.10.6 (CCA requirements, 10 MHz); ns-3 WifiPhy CcaEdThreshold for non-Wi-Fi energy
+  fault: "jam-phy (jammer back in the preamble-detect sum) -> red at the -75 dBm case"
+  measured: "pass (32/32 phy::); red under jam-phy"
+  verdict: fixed
+- id: R5.JAM-ED.ENGINE
+  test: v2xw-engine run::jam_sense_tests::carrier_sense_holds_jamming_to_energy_detect
+  expect: >-
+    The MAC's busy-since and idle-at instants (Engine::medium_busy_since / medium_idle_at,
+    which date a deferral and schedule its wake) hold every jamming arrival, jammer or
+    adjacent-channel emitter, to the energy-detect level, whatever radio.phy.energy_detect_dbm
+    sets. Before: a jammer at cca_threshold_dbm (-85 dBm) in Engine::jam_sense_level
+  source: IEEE 802.11-2020 §17.3.10.6
+  fault: "jam-engine (jammer at preamble detect) -> red"
+  measured: "pass; red under jam-engine"
+  verdict: fixed
+- id: R5.JAM-ED.RUN
+  test: v2xw-engine radio_access_layers a_weak_jammer_holds_carrier_sense_only_from_energy_detect
+  expect: >-
+    A constant jammer riding one unit of the 20-vehicle Manhattan fleet at -20 dBm (above
+    -85 dBm at its host, below an energy-detect level of -50 dBm) leaves the host's BSMs and
+    its CBR (J2945/1: the share of time 802.11 CCA reads busy, so from energy detect too)
+    as without it; at 23 dBm it still silences the host and loads its CBR to about 1
+  source: IEEE 802.11-2020 §17.3.10.6; SAE J2945/1 §6.3.8 (CBP from the radio's channel-busy indication, as R4.1.CBR)
+  fault: "jam-phy -> red (host 25 -> 0 BSMs); jam-cbr (a jammer counted in the CBR from -85 dBm, the pre-fix run/jamming.rs declare_at) -> red (CBR 0.022 -> 1.000); jam-engine alone stays green (the PHY's CCA gates first; R5.JAM-ED.ENGINE pins it)"
+  measured: "host BSMs from 1.5 s: clean 25, -20 dBm jammer 25, 23 dBm 0; host max CBR 0.022 / 0.022 / 1.000"
+  verdict: fixed
+- id: R5.JAM-ED.SUITES
+  test: v2xw-engine radio_access_layers, radio_access, radio_channel, multichannel (each binary alone)
+  expect: >-
+    The jammer tests already in these suites use 23 dBm jammers riding or near the units they
+    judge, far above -65 dBm where it matters, so they still pass (radio-fix4 R4.1.JAM-ED
+    named them as the runs the change could move)
+  source: link budget (23 dBm, tens of metres)
+  measured: "radio_access_layers 11 pass 1 ignored, radio_access 8/8, radio_channel 8/8, multichannel 7/7"
+  verdict: pass
+- id: R5.EMITTER.LOSS
+  run: EUB, EUE, EUE80
+  metric: run report rx_losses["adjacent-channel"]
+  band: "EUB 0, EUE > 0, EUE80 0"
+  expect: >-
+    The emitter's leak (23 dBm less an ACIR of about 13 dB) raises the noise at ITS-G5
+    receivers near the centre, so frames there are lost to `adjacent-channel`; with no
+    emitter or an 80 dB ACIR (leak under the -98 dBm floor beyond a few metres) none is
+  source: ETSI EN 302 571 V2.1.1 (mask) and the 6 Mbit/s adjacent-channel rejection (regulation.rs adjacent_acir_db); radio_channel an_adjacent_channel_transmitter_leaks_in_by_its_acir
+  measured: "adjacent-channel losses: EUB 0, EUE 13,936, EUE80 0"
+  verdict: pass
+- id: R5.EMITTER.CBR
+  run: EUE vs EUB
+  metric: live-window mean CBR on 180 (radiofix3.py cbr["180"].mean)
+  band: "EUE - EUB >= +0.05"
+  expect: >-
+    In Europe the CBR is the time the received signal strength exceeds -85 dBm whatever
+    the signal (EN 302 571 §4.2.10.1), so an emitter on all the time counts as busy at every
+    unit where its leak exceeds -85 dBm (path loss under about 95 dB: a few hundred metres
+    along the streets from the centre). Its CBR reads near 1 there, and the run's mean rises
+    by the share of unit-time inside that area (a fifth to a third of the grid)
+  source: ETSI EN 302 571 V2.1.1 §4.2.10.1; ETSI TS 102 687 §4.2; the leak-in-CBR rule (Engine::leak_busy_dbm)
+  measured: "mean CBR on 180 0.02747 -> 0.27819 (+0.251); p90 0.0473 -> 1.0"
+  verdict: pass
+- id: R5.EMITTER.CCA
+  run: EUE vs EUB
+  metric: frames_transmitted, EUE / EUB
+  band: "[0.4, 0.97]"
+  expect: >-
+    Carrier sense holds the emitter to energy detect (-65 dBm, path loss under about 75 dB:
+    tens of metres), so it defers only the units right beside it; but the units in the
+    CBR-busy area run the ETSI adaptive gate at delta_min (TS 102 687 Annex A), which spaces
+    their frames to T_on / delta (up to 1 s), so the run sends fewer frames
+  source: IEEE 802.11-2020 §17.3.10.6; ETSI TS 102 687 V1.2.1 §5.4, Annex A
+  measured: "frames 7,174 -> 5,629 (0.785); pdr300 0.569 -> 0.448, cross50_m 225 -> 175 m"
+  verdict: pass
+- id: R5.EMITTER.ACIR80
+  run: EUE80 vs EUB
+  metric: frames_transmitted ratio; mean CBR on 180 difference
+  band: "frames [0.995, 1.005]; |CBR difference| <= 0.002"
+  expect: an 80 dB ACIR leaves the leak below the -85 dBm busy level and near the noise floor only within metres, so neither the DCC nor the CBR moves
+  source: link budget (23 - 80 = -57 dBm before path loss)
+  measured: "record digest e7b365ee = EUB's: frames 7,174 = 7,174, CBR 0.02747 = 0.02747"
+  verdict: pass
+  note: "Byte-identical, which is more than the band asked: at 80 dB the leak is below every receiver's reach (jammer_reach_m) and is never declared."
+- id: R5.EMITTER.DET
+  run: EUE vs EUE2
+  metric: record digest
+  band: identical
+  expect: same seed, same binary, byte-identical records
+  source: 02-architecture.md determinism (ADR 0004)
+  measured: "599a2b3d -> 599a2b3d"
+  verdict: pass
+- id: R5.EMITTER.WALL
+  run: EUE vs EUB
+  metric: wall time and peak RSS
+  band: "wall [0.8, 1.3]; peak [0.9, 1.15]"
+  expect: one more jamming arrival per receiver in reach per step and its leak in each SINR window; the frames fall, so the run may be faster
+  source: cost model
+  measured: "wall 28.62 -> 25.38 s (0.887); peak 751 -> 630 MB (0.839)"
+  verdict: wrong-expectation
+  note: "Wall inside its band. The peak is under the band's 0.9: the emitter cuts 22 % of the frames (R5.EMITTER.CCA), and the per-frame records and reception state go with them. The band assumed the same frames; with fewer frames a lower peak is what the cost model gives."
+- id: R5.LEAK.WALL
+  run: G20-MAP (scenarios/real-world/radio-fix3/dense-grid-20-map.yaml) on the binary before and after the leak-path change
+  metric: record digest; wall time
+  band: "digest identical; wall after / before <= 0.95"
+  expect: >-
+    radio-fix4 R4.1.WALL measured G20-MAP at 1.16-1.18 x G20-MAP-ED85 and did not profile it.
+    The change targets the hot spot the profile shows on our side, keeps every sum's terms
+    and their order, and so leaves every record byte-identical while cutting the time
+  source: R4.1.WALL; the profile (sample, 20 s of G20-MAP)
+  measured: "same binary, G20-MAP / G20-MAP-ED85: 24.75 / 25.01 s (0.990) and 27.31 / 26.47 s (1.032); digests 9ee0d990 / df5968b2 on both binaries (before and after the JAM-ED change)"
+  verdict: wrong-expectation
+  note: "Premise wrong: there is no leak-path hot spot to fix. A 20 s `sample` of G20-MAP (opt-2 build) has OfdmPhy::energy_started_by in 2 of about 5,800 engine samples on the main thread, and sinr_windows_with in 90. The time goes to the SCMS (create_node, p256 field arithmetic), the mobility step and finish_phy_end, and after the run to the jsonl export (serde_json). The ED-85 run's profile has the same shape. On an idle slot the two runs are within 1-3 % in both orders, so radio-fix4's 1.16-1.18x was the shared machine's load. No code changed, so no result moved."

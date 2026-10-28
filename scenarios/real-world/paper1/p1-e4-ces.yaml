@@ -1,0 +1,15 @@
+# P1-E4 candidate E with the speed change (research/synthesis/p1-realdata-baseline.md §7.5
+# Finding 6): p1-e4-ce.yaml, and at a step the reported speed moves by 0.499 m/s per m of
+# along step, decays with tau 0.357 s, and the position moves with 0.759 of it (Tampa's
+# chain devices; unset tau and share are those). Expectations: p1-stamp-e.yaml.
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4-ce.yaml
+  name: Paper 1 E4 stamp chain candidate E with speed change
+  description: Candidate E with the speed change that comes with a position step.
+  tags: [paper1, validation, highway, bsm-timing]
+actors:
+  vehicles:
+    bsm_timing:
+      stamp_chain:
+        speed_per_m: 0.499

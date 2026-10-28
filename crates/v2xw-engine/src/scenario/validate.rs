@@ -2092,6 +2092,29 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the chance that a BSM stamped on the fix epoch is followed by another",
     },
+    // p1-realdata-baseline.md §7.5 Finding 6: Tampa chain devices 0.499, fixed-stamp
+    // devices 0.92, the Wyoming OBU 1.02 m/s per m; 5 is far past every one.
+    Bound {
+        path: "actors.vehicles.bsm_timing.stamp_chain.speed_per_m",
+        lo: -5.0,
+        hi: 5.0,
+        exclusive_lo: false,
+        what: "the reported speed's change per metre of a stamp-chain position step",
+    },
+    Bound {
+        path: "actors.vehicles.bsm_timing.stamp_chain.speed_tau_s",
+        lo: 0.0,
+        hi: 60.0,
+        exclusive_lo: true,
+        what: "the decay time of a stamp-chain step's speed change",
+    },
+    Bound {
+        path: "actors.vehicles.bsm_timing.stamp_chain.position_follows",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the share of a step's speed change the reported position moves with",
+    },
     // --- end traffic audit ----------------------------------------------------
 ];
 
@@ -5620,6 +5643,18 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 (
                     "actors.vehicles.bsm_timing.stamp_chain.stay_zero",
                     ch.stay_zero,
+                ),
+                (
+                    "actors.vehicles.bsm_timing.stamp_chain.speed_per_m",
+                    ch.speed_per_m,
+                ),
+                (
+                    "actors.vehicles.bsm_timing.stamp_chain.speed_tau_s",
+                    ch.speed_tau_s,
+                ),
+                (
+                    "actors.vehicles.bsm_timing.stamp_chain.position_follows",
+                    ch.position_follows,
                 ),
             ] {
                 if let Some(v) = v {

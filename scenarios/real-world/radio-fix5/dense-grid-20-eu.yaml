@@ -1,0 +1,11 @@
+# R4.1.EMITTER base (fix round 5): radio-fix3 dense-grid-20 (connected-intersections at
+# 12,000 veh/h, 20 s) in Europe, where ITS-G5 runs on channel 180 under ETSI EN 302 571 and
+# the ETSI adaptive DCC (TS 102 687). Rows: tests/expectations/radio-fix5.yaml.
+schema: v2xw/scenario/1
+meta:
+  base: ../radio-fix3/dense-grid-20.yaml
+  name: radio-fix5 dense-grid-20 Europe
+  description: dense-grid-20 under the European band plan (ITS-G5 on 180).
+  tags: [radio-fix5, experiment, cbr]
+radio:
+  region: eu

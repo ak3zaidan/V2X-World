@@ -1,0 +1,18 @@
+# R4.1.EMITTER (fix round 5): dense-grid-20-eu.yaml with an LTE-V2X transmitter beside the
+# ITS-G5 run (radio.adjacent_channel; channel unset: the region's LTE-V2X channel, 182), on all
+# the time at 23 dBm at the grid's centre. Its leak enters ITS-G5 receivers by the ACIR the
+# rules allow (EN 302 571 mask with the 6 Mbit/s adjacent-channel rejection, about 13 dB).
+# Carrier sense holds it to energy detect (-65 dBm, IEEE 802.11-2020 §17.3.10.6); the European
+# CBR counts it from -85 dBm (EN 302 571 §4.2.10.1). Rows: tests/expectations/radio-fix5.yaml.
+schema: v2xw/scenario/1
+meta:
+  base: dense-grid-20-eu.yaml
+  name: radio-fix5 dense-grid-20 Europe with an LTE-V2X emitter
+  description: dense-grid-20 in Europe with a 23 dBm LTE-V2X transmitter on the adjacent channel at the centre.
+  tags: [radio-fix5, experiment, cbr]
+radio:
+  adjacent_channel:
+    - rat: lte-v2x-pc5
+      params:
+        position_m: [822.0, 240.0]
+        power_dbm: 23.0
