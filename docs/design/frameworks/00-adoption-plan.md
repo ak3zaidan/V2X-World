@@ -679,6 +679,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: no frame straddles a guard in a 10-minute dense run; continuous mode is unchanged;
   SCH frames queue across the CCH interval. Fault: removing the end-of-interval check yields a
   straddling frame.
+- Prep (2026-10-27): build plan in `wp16-24-build-plans.md` §WP-16, 4 pieces. Moves `ChannelSchedule` into `v2xw-radio` (radio cannot depend on net) and gates `EdcaOcbMac::poll`/`next_poll_at`; per-(node, channel) queues already exist. The app-layer deferral at `run.rs:5410` goes, and `tuned` becomes time-aware for single-radio units. The 1609.4 constants stay UNVERIFIED.
 
 **WP-17 NEMA dual-ring 8-phase controller** (L, 2-3 weeks). Source: S-P3.
 - Scope: two rings, barriers, concurrent phases, lead/lag and protected/permissive and
@@ -689,6 +690,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: two concurrent through phases gap out independently; ring pointers meet at each
   barrier; the FHWA manual's 8-phase example timing reproduces; SPaT `minEndTime`/`maxEndTime`
   stay consistent with the controller state; existing single-ring scenarios are unchanged.
+- Prep (2026-10-27): build plan §WP-17, 10 pieces (P17.1 caches STM 2nd ed. and MUTCD and pins every default). The new `nema.rs` re-projects the composite ring intervals into `SignalPlan` each step, so the 10 files that read the plan and the SPaT-is-the-signal rule are unchanged. Plans with more than 4 legs fall back to single ring, counted.
 
 **WP-18 GEMV²-style channel enrichment** (M, 5-7 days). Source: O-P4.
 - Scope: small-scale σ growing with vehicle and obstacle density inside the link ellipse,
@@ -699,6 +701,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
   `crates/v2xw-world/src/osm.rs` (tree polygons; sequence after WP-05).
 - Accept: an empty road gives the class minimum σ and a dense arterial approaches the maximum;
   a link through 30 m of forest loses the P.833 value; disabled, outputs are byte-identical.
+- Prep (2026-10-27): build plan §WP-18, 5 pieces. Today trees and grass are both `LanduseClass::Park` and the `boban-mel` foliage card is referred to but missing. It adds a hash-excluded `World.vegetation` layer, `obstacle/foliage/p833` and a density σ in `prop.rs`. Boban 2014 and P.833 must be cached first (P18.1).
 
 ### Wave 7: SCMS over the air, priority vehicles, scripted situations
 
@@ -712,6 +715,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: WSA round-trips through the ASN.1 codec; download success rises with RSU contact
   time and falls with SCH load; a CRL fetch and a report upload complete over an RSU in a test
   scenario; backhaul-only configurations are unchanged.
+- Prep (2026-10-27): build plan §WP-19, 5 pieces. The air hop of `rsu-relay` is a constant `Link` today (`backend.rs:484`); it becomes an `RsuSchPath` `PacketPath` (contact window, PER, SCH CBR, WP-16 interval). The WSA ASN.1 (`wsa.asn`/`wee.asn`) is not in `third_party` and must be cached with its licence. Fixes SCMS rows M11 and U5.
 
 **WP-20 Traffic yields to emergency vehicles** (M, 5 days). Source: S-P5.
 - Scope: within a reaction distance civilians pull to the kerb or slow (US move-over, UVC
@@ -721,6 +725,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: ambulance corridor travel time falls with yielding on; no civilian leaves the
   carriageway; with the V2X variant only receivers react. Fault: yielding off fails the
   travel-time check.
+- Prep (2026-10-27): build plan §WP-20, 5 pieces. A jurisdiction yield table in `rules.rs`, the pull-over through SL2015 with a carriageway clamp, an EV red pass tagged like WP-08 violations, and a V2X trigger from verified BSM `EmergencyDetails`/CAM `EmergencyContainer` (both new encodings, gated). UVC and StVO clauses are [verify].
 
 **WP-21 Condition-triggered scenario events** (M, 5 days). Source: O-P7.
 - Scope: a `when:` clause on timeline items: TTC below x, an actor inside a polygon, a speed
@@ -728,6 +733,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Files: `crates/v2xw-engine/src/scenario/schema.rs` and the timeline evaluator.
 - Accept: a hard brake fires when the follower's TTC drops below 2 s, under several seeds;
   reruns are byte-identical; time-only scenarios are unchanged.
+- Prep (2026-10-27): build plan §WP-21, 3 pieces. A closed `Condition` enum on `TimelineItem.when`, evaluated each mobility step and fired through the existing `on_control`. TTC comes from `v2xw-metrics::ssm`, `probability` draws are keyed per (seed, item, step), and targets bind as `when.leader`.
 
 ### Wave 8: grades, imported controllers, the literature benchmark
 
@@ -738,11 +744,13 @@ trustworthy or comparable; later waves add behaviours and radio features.
   `crates/v2xw-world/src/dem.rs` (reuse).
 - Accept: a heavy truck on a long 5 % upgrade reaches a crawl speed within the band of the
   AASHTO/HCM truck speed-distance curves; flat-road runs are byte-identical.
+- Prep (2026-10-27): build plan §WP-22, 3 pieces. Road-load physics is in `phemlight.rs`/`ev.rs`, not `powertrain.rs`, and `ClassSpec` has no power. It adds a sourced class-dynamics table and an upper-bound clamp at the end of pass 6, with separate `grade` and `power_limit` flags so grade-only flat runs stay byte-identical.
 
 **WP-23 Import actuated and NEMA programmes from `net.xml`** (S, 2 days). Source: S-P4. After WP-17.
 - Files: `crates/v2xw-world/src/sumo.rs`.
 - Accept: a SUMO actuated and a NEMA `tlLogic` import as live controllers; delay-based falls
   back to actuated with a counted anomaly; the TraCI cross-validation signal phases agree.
+- Prep (2026-10-27): build plan §WP-23, 3 pieces. `minDur`/`maxDur`/`<param>` are not read today, and TraCI `TL_STATE` is defined but unused. It adds a hash-excluded per-plan `SignalProgramme` table and a TraCI state comparator that reports "not run" without SUMO. Default `as-file`: the only shipped `net.xml` is static.
 
 **WP-24 VeReMi Extension replica and reference ML baseline** (M, 7 days). Sources: F-P10, F-P11. After WP-03, 07, 10.
 - Scope: the LuST subsection (licence checked), 07-09 h and 14-16 h, 30 % attackers on
@@ -753,6 +761,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
 - Accept: the replica's message counts and attacker share match the published scenario
   description within tolerance; the comparison table lists ours and the published numbers per
   attack; the baseline trains and scores reproducibly from a fixed seed.
+- Prep (2026-10-27): build plan §WP-24, 5 pieces. P24.1-P24.3 (LuST licence and cut, `veremi-ext` GNSS preset, ML recipe on a legacy export) can start now; `messages.rate_hz` already gives 1 Hz. P24.4-P24.5 need `f2md-19`, so they wait on the WP-07 owner decision.
 
 ### Wave summary
 
