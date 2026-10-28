@@ -2428,9 +2428,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Partial,
         note: "The NEMA dual-ring eight-phase controller (control: nema): rings, barriers, \
                lead/lag, the three left-turn modes and both permissive faces, left-turn \
-               timing, recalls, yellow, red, and pedestrian calls, recall and timing run. \
-               Coordination and priority are later WP-17 pieces, and the loader refuses \
-               the settings that need them.",
+               timing, recalls, yellow, red, pedestrian calls, recall and timing, and \
+               coordination run. Priority through the rings is a later WP-17 piece; a \
+               NEMA junction does not serve priority requests yet.",
     },
     KeyStatus {
         path: "traffic.signals.nema.permissive_display",
@@ -2442,24 +2442,27 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     },
     KeyStatus {
         path: "traffic.signals.nema.coordination",
-        status: Status::Refused,
-        note: "Refused when on: coordination through the rings is WP-17 P17.8.",
+        status: Status::Wired,
+        note: "Keeps every junction on its plan's cycle and offset (a green wave's, when \
+               one is set): the coordinated phases hold to their yield point, the others \
+               end at their force-offs, and unused time returns to the coordinated phases.",
     },
     KeyStatus {
         path: "traffic.signals.nema.force_off",
-        status: Status::Refused,
-        note: "Acts only under coordination, which is refused until WP-17 P17.8.",
+        status: Status::Wired,
+        note: "Under coordination: floating limits each phase to its split; fixed ends it \
+               at its point in the cycle, so a later phase may use time an earlier one left.",
     },
     KeyStatus {
         path: "traffic.signals.nema.controller_type",
-        status: Status::Refused,
-        note: "The coordination offset's reference; refused with coordination until \
-               WP-17 P17.8.",
+        status: Status::Wired,
+        note: "Under coordination, what the offset references: the start of the \
+               coordinated green (ts2) or of its yellow (type170).",
     },
     KeyStatus {
         path: "traffic.signals.nema.coordinate_phases",
-        status: Status::Refused,
-        note: "Acts only under coordination, which is refused until WP-17 P17.8.",
+        status: Status::Wired,
+        note: "Under coordination, the phases that hold to the yield point.",
     },
     KeyStatus {
         path: "traffic.signals.nema.ped_recall",
@@ -4990,42 +4993,28 @@ pub(crate) fn nema_checks(g: &super::schema::SignalControl, e: &mut Vec<Scenario
         PermissiveDisplay, SignalControlKind,
     };
     if g.control == SignalControlKind::Nema {
-        // The dual ring rewrites each plan as it runs (`crate::nema::control`), so a
-        // setting that edits the plans once at load would be undone at once; both wait
-        // for coordination through the rings (WP-17 P17.8).
-        for (path, set) in [
-            (
+        let coordinated = g.nema.as_ref().is_some_and(|n| n.coordination);
+        // The dual ring rewrites each plan as it runs (`crate::nema::control`). A green
+        // wave's offsets reach it only through coordination, which keeps the cycle on
+        // them; free-running rings would ignore them. The short-link rewrite of the
+        // plans' greens has no counterpart in the rings.
+        if g.green_wave_speed_mps.is_some() && !coordinated {
+            e.push(conflict(
                 "traffic.signals.green_wave_speed_mps",
-                g.green_wave_speed_mps.is_some(),
-            ),
-            (
-                "traffic.signals.short_link_clearance_m",
-                g.short_link_clearance_m.is_some(),
-            ),
-        ] {
-            if set {
-                e.push(conflict(
-                    path,
-                    "edits the plans once at load, and the NEMA dual ring (control: nema) \
-                     rewrites them as it runs; its own coordination is not built yet \
-                     (WP-17 P17.8), so remove this or choose fixed-time or actuated"
-                        .to_string(),
-                ));
-            }
+                "sets the plans' offsets, and the NEMA dual ring runs free unless \
+                 traffic.signals.nema.coordination is true; turn coordination on or remove \
+                 the wave"
+                    .to_string(),
+            ));
         }
-        let n = g.nema.clone().unwrap_or_default();
-        // The parts of the controller later pieces build.
-        for (path, unbuilt, piece) in [(
-            "traffic.signals.nema.coordination",
-            n.coordination,
-            "coordination is P17.8",
-        )] {
-            if unbuilt {
-                e.push(conflict(
-                    path,
-                    format!("is not run by this build of the NEMA controller: {piece}"),
-                ));
-            }
+        if g.short_link_clearance_m.is_some() {
+            e.push(conflict(
+                "traffic.signals.short_link_clearance_m",
+                "rewrites the fixed plans' greens at load, and the NEMA dual ring \
+                 (control: nema) times its own; remove this or choose fixed-time or \
+                 actuated"
+                    .to_string(),
+            ));
         }
     }
     let Some(n) = &g.nema else {

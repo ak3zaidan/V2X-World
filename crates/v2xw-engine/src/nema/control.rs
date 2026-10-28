@@ -410,6 +410,75 @@ fn plan_interval(
         .fold(0.0, f64::max)
 }
 
+/// The coordination of one junction (P17.8) from its load-time plan: the plan's cycle and
+/// offset (a green wave, `traffic.signals.green_wave_speed_mps`, has already set the
+/// offset), and splits that keep the plan's division of the cycle between the two
+/// streets. The main street's group is every load-time phase in which one of its vehicle
+/// movements is not red (held to 20-80 % of the cycle); within a group each left phase's
+/// split is its maximum green and clearance, at most a third of the group, and the through
+/// takes the rest. The splits are this build's choice: the STM computes them from volumes
+/// (ch. 7), which a plan does not carry.
+fn coordination(
+    n: &NemaSettings,
+    plan: &SignalPlan,
+    a: &Assignment,
+    config: &RingConfig,
+) -> super::Coordination {
+    let cycle = plan.cycle_s;
+    let main: f64 = plan
+        .phases
+        .iter()
+        .filter(|ph| {
+            ph.states.iter().zip(&a.movements).any(|(s, m)| {
+                m.kind != MovementKind::Crossing
+                    && assign::main_side(m.phase)
+                    && !matches!(s, SignalState::Red | SignalState::Off)
+            })
+        })
+        .map(|ph| ph.duration_s)
+        .sum();
+    let main = main.clamp(0.2 * cycle, 0.8 * cycle);
+    let mut split = [0.0; 9];
+    for order in &config.order {
+        for (side, total) in [(true, main), (false, cycle - main)] {
+            let group: Vec<u8> = order
+                .iter()
+                .copied()
+                .filter(|p| assign::main_side(*p) == side)
+                .collect();
+            let throughs = group.iter().filter(|p| *p % 2 == 0).count();
+            let mut lefts_s = 0.0;
+            for &l in group.iter().filter(|p| *p % 2 == 1) {
+                let t = &config.timing[usize::from(l)];
+                let s = if throughs == 0 {
+                    total
+                } else {
+                    (t.max_green_s + t.yellow_s + t.red_clear_s).min(total / 3.0)
+                };
+                split[usize::from(l)] = s;
+                lefts_s += s;
+            }
+            for &th in group.iter().filter(|p| *p % 2 == 0) {
+                split[usize::from(th)] = (total - lefts_s) / throughs as f64;
+            }
+        }
+    }
+    let present: Vec<u8> = config.order.iter().flatten().copied().collect();
+    super::Coordination {
+        cycle_s: cycle,
+        offset_s: plan.offset_s,
+        phases: n
+            .coordinate_phases
+            .iter()
+            .copied()
+            .filter(|p| present.contains(p))
+            .collect(),
+        split_s: split,
+        force_off: n.force_off,
+        reference: n.controller_type,
+    }
+}
+
 /// Every NEMA junction's controller.
 #[derive(Debug, Clone, Default)]
 pub struct NemaControllers {
@@ -542,6 +611,9 @@ impl NemaControllers {
             let longest = config.ped[q].map_or(0.0, |(_, c)| c);
             config.ped[q] = Some((walk, clear.max(longest)));
         }
+        if n.coordination {
+            config.coord = Some(coordination(n, plan, &a, &config));
+        }
         let ring = DualRing::new(config);
         let mut p = NemaPlan {
             assign: a,
@@ -588,6 +660,7 @@ impl NemaControllers {
             c.gap_outs += k.gap_outs;
             c.max_outs += k.max_outs;
             c.crossings += k.crossings;
+            c.force_offs += k.force_offs;
         }
         c
     }
@@ -604,6 +677,13 @@ impl NemaControllers {
             .iter()
             .map(|t| t.max_green_s + t.yellow_s + t.red_clear_s)
             .fold(0.0, f64::max);
+        // A coordinated green may rest a whole cycle.
+        let longest = p
+            .ring
+            .config()
+            .coord
+            .as_ref()
+            .map_or(longest, |k| longest.max(k.cycle_s));
         Some(crate::actuated::ActuatedOutlook {
             cut_s: (p.projected_end_s - now_s).max(0.0),
             extend_s: longest,
@@ -623,6 +703,8 @@ impl NemaControllers {
     ) {
         for (&idx, p) in &mut self.plans {
             let c = p.calls(calls, extend, peds);
+            // The shared clock: coordination keeps every junction's cycle on it.
+            p.ring.clock_s = now_s;
             p.ring.step(&c, dt_s);
             let v = p.vector(&p.ring);
             let mut rewrite = false;

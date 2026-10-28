@@ -642,6 +642,37 @@ out of scope here.
 - **P17.8** (3 h): coordination (cycle, offset, force-offs fixed or floating, permissive
   window, yield point), the `green_wave_speed_mps` interplay (`actuated.rs:385`
   `coordinate`), and the coordination test.
+
+  **Done 2026-10-28 (P17.8).** `nema::Coordination` lives on `RingConfig`, and
+  `DualRing::clock_s` is the shared clock; `NemaControllers::step` sets it to `now_s`.
+  - **Cycle and offset.** They are the load-time plan's own. `green_wave_speed_mps` has
+    already set the offset (`actuated::coordinate`), so a green wave reaches the rings
+    through coordination. Without coordination it is refused under nema.
+  - **Splits.** They keep the plan's division of the cycle between the streets. The main
+    group is the load-time phases in which a main-street movement is not red, held to
+    20-80 % of the cycle. Each left's split is its maximum green and clearance, at most a
+    third of its group; the through takes the rest. This is this build's choice: the STM
+    computes splits from volumes, which a plan does not carry.
+  - **Yield point.** The end of the coordinated green: the TS 2 offset references the
+    start of that green, so the yield point is offset + split − Y − R; Type 170's offset
+    references its yellow, so the yield point is at the offset (SUMO's `controllerType`
+    text).
+  - **The coordinated phases.** They are always called and hold to the yield point. They
+    may end only in the permissive window, which lasts until the next phase in the ring
+    could no longer time its minimum before its force-off. A call that misses the window
+    waits a cycle.
+  - **Force-offs.** Floating ends a non-coordinated green at split − Y − R. Fixed ends it
+    at its point in the cycle, with the splits laid end to end from the coordinated
+    clearance (STM §7.3.4, Exhibit 7-14). Force-offs are counted on `RingCounters::force_offs`
+    and logged with the max-outs on `traffic.control`. Unused time returns early to the
+    coordinated phases, which hold.
+  - **Tests.** `nema::tests::coordinated_phases_hold_their_offset`: saturated calls, both
+    force-off modes, and the yield at 13 + 40.4 mod 100 s ±1 step in every cycle.
+    `tests/nema_control.rs::coordinated_rings_with_a_green_wave_run_the_grid`.
+  - **Open.** Offset transition, when a junction joins coordination off its offset, is a
+    plain wait for the next yield point; there is no shortway or dwell transition. There
+    is no early-yield or "max-in-coordination" option, and splits come from the plan,
+    not from volumes.
 - **P17.9** (3 h):
   - `priority.rs` on NEMA (early green and extension per ring, capped by
     `PriorityParams`);

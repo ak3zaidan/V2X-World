@@ -4329,22 +4329,15 @@ mod nema_settings_tests {
         assert!(block_errors(d).is_empty());
     }
 
-    /// P17.5 wired the controller: `control: nema` loads with its defaults, and (with the
-    /// P17.2 contract replaced) only what later pieces build is refused: coordination and
-    /// the load-time plan edits the rings would undo (P17.8). P17.6 built the
-    /// protected-only and permissive-only lefts and P17.7 pedestrian recall, which now
-    /// load. A block beside any other control is a setting that would do nothing.
+    /// P17.5 wired the controller: `control: nema` loads with its defaults (the P17.2
+    /// contract replaced). P17.6 built the protected-only and permissive-only lefts, P17.7
+    /// pedestrian recall and P17.8 coordination, which now load. What stays refused under
+    /// nema is what the rings would ignore or undo: a green wave without coordination,
+    /// and the short-link rewrite of the plans. A block beside any other control is a
+    /// setting that would do nothing.
     #[test]
     fn nema_loads_and_its_unbuilt_parts_are_refused() {
         assert!(errors(&nema(NemaSettings::default())).is_empty());
-        let unbuilt = |n: NemaSettings, field: &str| {
-            let e = errors(&nema(n));
-            assert!(
-                e.iter()
-                    .any(|x| x.contains(field) && x.contains("is not run by this build")),
-                "{field}: {e:?}"
-            );
-        };
         let d = NemaSettings::default;
         for mode in [LeftTurnMode::Protected, LeftTurnMode::Permissive] {
             let n = NemaSettings {
@@ -4359,12 +4352,14 @@ mod nema_settings_tests {
             ..d()
         };
         assert!(errors(&nema(recall)).is_empty(), "pedestrian recall loads");
-        unbuilt(
-            NemaSettings {
-                coordination: true,
-                ..d()
-            },
-            "nema.coordination",
+        // P17.8 built coordination; a green wave then sets the offsets it keeps.
+        let coordinated = NemaSettings {
+            coordination: true,
+            ..d()
+        };
+        assert!(
+            errors(&nema(coordinated.clone())).is_empty(),
+            "coordination loads"
         );
         let wave = SignalControl {
             green_wave_speed_mps: Some(12.0),
@@ -4374,7 +4369,25 @@ mod nema_settings_tests {
             errors(&wave)
                 .iter()
                 .any(|x| x.contains("traffic.signals.green_wave_speed_mps")),
-            "a green wave under the dual ring"
+            "a green wave under free-running rings"
+        );
+        let coordinated_wave = SignalControl {
+            green_wave_speed_mps: Some(12.0),
+            ..nema(coordinated)
+        };
+        assert!(
+            errors(&coordinated_wave).is_empty(),
+            "a coordinated green wave loads"
+        );
+        let short = SignalControl {
+            short_link_clearance_m: Some(60.0),
+            ..nema(d())
+        };
+        assert!(
+            errors(&short)
+                .iter()
+                .any(|x| x.contains("traffic.signals.short_link_clearance_m")),
+            "the short-link rewrite under the dual ring"
         );
         let stray = SignalControl {
             control: SignalControlKind::Actuated,

@@ -109,3 +109,38 @@ fn the_dual_ring_drives_a_grid_and_reruns_byte_identical() {
     );
     eprintln!("single ring: {:?}, {sv:.3} m/s", ends(&single));
 }
+
+/// WP-17 P17.8: coordination with a green wave runs in the grid. The wave sets the plans'
+/// offsets and the coordinated rings keep their cycle on them. The run moves, and differs
+/// from the free-running rings. (Under this light demand the side greens gap out before
+/// their force-offs; the force-off logic itself is `nema::tests`.)
+#[test]
+fn coordinated_rings_with_a_green_wave_run_the_grid() {
+    let coordinated = |on: bool| {
+        let mut s = grid(SignalControlKind::Nema, 180.0);
+        if let Some(t) = s.traffic.as_mut() {
+            if on {
+                t.signals.green_wave_speed_mps = Some(11.0);
+            }
+            t.signals.nema = Some(v2xw_engine::scenario::schema::NemaSettings {
+                coordination: on,
+                ..Default::default()
+            });
+        }
+        run(s)
+    };
+    let free = coordinated(false);
+    let coord = coordinated(true);
+    let (v, standing) = motion(&coord);
+    assert!(v > 1.0 && standing > 0.0, "{v} m/s, {standing} standing");
+    let (fv, _) = motion(&free);
+    assert!(
+        ends(&coord) != ends(&free) || (fv - v).abs() > 1e-9,
+        "coordination changed nothing"
+    );
+    eprintln!(
+        "coordinated: {:?}, {v:.3} m/s; free: {:?}, {fv:.3} m/s",
+        ends(&coord),
+        ends(&free)
+    );
+}

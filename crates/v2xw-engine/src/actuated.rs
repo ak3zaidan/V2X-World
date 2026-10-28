@@ -263,7 +263,8 @@ impl ActuatedControllers {
         if let Some(n) = &self.nema {
             let k = n.counters();
             c.gap_outs += k.gap_outs;
-            c.max_outs += k.max_outs;
+            // A coordinated force-off ends a green at a time limit, as a max-out does.
+            c.max_outs += k.max_outs + k.force_offs;
         }
         c
     }

@@ -147,6 +147,68 @@ pub struct RingConfig {
     pub ped: [Option<(f64, f64)>; 9],
     /// Phases whose walk is served every cycle without a call (pedestrian recall).
     pub ped_recall: Vec<u8>,
+    /// Coordinated operation (P17.8), or `None` for free (isolated) operation.
+    pub coord: Option<Coordination>,
+}
+
+/// Coordinated operation (STM 2nd ed. ch. 7): a common cycle, an offset, a split per
+/// phase, the coordinated phases' yield point and permissive window, and force-offs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Coordination {
+    /// The common cycle, seconds.
+    pub cycle_s: f64,
+    /// The offset: when, on the shared clock, this junction's cycle reference falls.
+    pub offset_s: f64,
+    /// The coordinated phases (2 and 6 by the STM's convention).
+    pub phases: Vec<u8>,
+    /// Each phase's split: its green, yellow and red clearance, seconds.
+    pub split_s: [f64; 9],
+    /// Fixed or floating force-offs.
+    pub force_off: crate::scenario::schema::ForceOffMode,
+    /// What the offset references: the start of the coordinated green (TS 2) or of its
+    /// yellow (Type 170), SUMO's `controllerType` documentation.
+    pub reference: crate::scenario::schema::NemaControllerType,
+}
+
+impl Coordination {
+    /// The yield point, seconds into the local cycle (whose zero is the offset's
+    /// reference): the end of the coordinated green.
+    pub fn yield_s(&self, t: &[PhaseTiming; 9]) -> f64 {
+        use crate::scenario::schema::NemaControllerType;
+        let c = usize::from(self.phases.first().copied().unwrap_or(2));
+        match self.reference {
+            NemaControllerType::Ts2 => {
+                (self.split_s[c] - t[c].yellow_s - t[c].red_clear_s).rem_euclid(self.cycle_s)
+            }
+            NemaControllerType::Type170 => 0.0,
+        }
+    }
+
+    /// Seconds since the last yield point at shared time `clock_s`.
+    pub fn since_yield_s(&self, clock_s: f64, t: &[PhaseTiming; 9]) -> f64 {
+        (clock_s - self.offset_s - self.yield_s(t)).rem_euclid(self.cycle_s)
+    }
+
+    /// Phase `p`'s fixed force-off, seconds after the yield point: the end of its split's
+    /// green when ring `order`'s splits are laid end to end from the coordinated phase's
+    /// clearance (STM 2nd ed. §7.3.4, Exhibit 7-14). `None` for a coordinated phase.
+    pub fn force_off_s(&self, order: &[u8], p: u8, t: &[PhaseTiming; 9]) -> Option<f64> {
+        let c = order.iter().position(|q| self.phases.contains(q))?;
+        if self.phases.contains(&p) {
+            return None;
+        }
+        let cc = usize::from(order[c]);
+        let mut at = t[cc].yellow_s + t[cc].red_clear_s;
+        for k in 1..order.len() {
+            let q = order[(c + k) % order.len()];
+            let i = usize::from(q);
+            if q == p {
+                return Some(at + self.split_s[i] - t[i].yellow_s - t[i].red_clear_s);
+            }
+            at += self.split_s[i];
+        }
+        None
+    }
 }
 
 /// MUTCD 2009 §4E.06 ¶15: at least 3 s of steady don't walk before a conflicting vehicle
@@ -213,6 +275,7 @@ impl RingConfig {
             ],
             ped: [None; 9],
             ped_recall: keep(&n.ped_recall),
+            coord: None,
         }
     }
 }
@@ -226,6 +289,8 @@ pub struct RingCounters {
     pub max_outs: u64,
     /// Barrier crossings.
     pub crossings: u64,
+    /// Non-coordinated greens ended at their force-off (coordination).
+    pub force_offs: u64,
 }
 
 /// The NEMA dual-ring state machine, with no world: two rings of phases timing
@@ -265,6 +330,8 @@ pub struct DualRing {
     pub crossing: bool,
     /// Pedestrian calls waiting for a phase's next walk (a push button latches).
     pub ped_waiting: [bool; 9],
+    /// The shared clock, seconds: coordination reads its local cycle from it.
+    pub clock_s: f64,
     counters: RingCounters,
 }
 
@@ -300,6 +367,7 @@ impl DualRing {
             main: true,
             crossing: false,
             ped_waiting: [false; 9],
+            clock_s: 0.0,
             counters: RingCounters::default(),
         }
     }
@@ -335,6 +403,14 @@ impl DualRing {
             }
             c.demand[p] = calls.demand[p] || self.ped_waiting[p];
             c.extend[p] = calls.extend[p];
+        }
+        // The coordinated phases are always called: the cycle returns to them.
+        if let Some(k) = &self.config.coord {
+            for &p in &k.phases {
+                if self.present[usize::from(p)] {
+                    c.demand[usize::from(p)] = true;
+                }
+            }
         }
         for &p in &self.config.ped_recall {
             if self.config.ped[usize::from(p)].is_some() {
@@ -411,10 +487,62 @@ impl DualRing {
             Interval::Idle => true,
             Interval::Green => {
                 let t = &self.config.timing[usize::from(s.phase)];
-                s.held_s + 1e-9 >= self.min_green(s)
-                    && (s.maxed || s.gapped || s.gap_s + 1e-9 >= t.passage_s)
+                let past_min = s.held_s + 1e-9 >= self.min_green(s);
+                if let Some(k) = &self.config.coord {
+                    if k.phases.contains(&s.phase) {
+                        // A coordinated green holds to its yield point and may end only in
+                        // the permissive window after it.
+                        return past_min && self.in_permissive_window(k, r);
+                    }
+                    if self.forced_off(k, r) {
+                        return past_min;
+                    }
+                }
+                past_min && (s.maxed || s.gapped || s.gap_s + 1e-9 >= t.passage_s)
             }
             _ => false,
+        }
+    }
+
+    /// Whether the clock is in the coordinated phases' permissive window: from the yield
+    /// point until the phase that follows the coordinated phase in ring `r`'s sequence
+    /// could no longer time its minimum green before its force-off (STM 2nd ed. ch. 7,
+    /// permissive period). A call that misses it waits for the next cycle's yield point.
+    fn in_permissive_window(&self, k: &Coordination, r: usize) -> bool {
+        let t = &self.config.timing;
+        let since = k.since_yield_s(self.clock_s, t);
+        let order = &self.config.order[r];
+        let next = order
+            .iter()
+            .position(|q| k.phases.contains(q))
+            .and_then(|c| {
+                (1..order.len())
+                    .map(|j| order[(c + j) % order.len()])
+                    .next()
+            });
+        // A ring with nothing but its coordinated phase may end whenever after the yield.
+        let window = next
+            .and_then(|q| Some(k.force_off_s(order, q, t)? - t[usize::from(q)].min_green_s))
+            .unwrap_or(k.cycle_s);
+        // At least a second, so a split too short for its minimum still opens the window.
+        since + 1e-9 < window.max(1.0)
+    }
+
+    /// Whether ring `r`'s non-coordinated green has reached its force-off: fixed, at its
+    /// point in the cycle; floating, when it has run its split's green (STM 2nd ed. §7.3.4,
+    /// Exhibit 7-14).
+    fn forced_off(&self, k: &Coordination, r: usize) -> bool {
+        use crate::scenario::schema::ForceOffMode;
+        let s = &self.state[r];
+        let t = &self.config.timing;
+        let i = usize::from(s.phase);
+        match k.force_off {
+            ForceOffMode::Floating => {
+                s.held_s + 1e-9 >= k.split_s[i] - t[i].yellow_s - t[i].red_clear_s
+            }
+            ForceOffMode::Fixed => k
+                .force_off_s(&self.config.order[r], s.phase, t)
+                .is_some_and(|fo| k.since_yield_s(self.clock_s, t) + 1e-9 >= fo),
         }
     }
 
@@ -429,9 +557,16 @@ impl DualRing {
     }
 
     fn end_green(&mut self, r: usize, next: u8) {
+        let forced = self
+            .config
+            .coord
+            .as_ref()
+            .is_some_and(|k| !k.phases.contains(&self.state[r].phase) && self.forced_off(k, r));
         let s = &mut self.state[r];
         if s.interval == Interval::Green {
-            if s.maxed {
+            if forced {
+                self.counters.force_offs += 1;
+            } else if s.maxed {
                 self.counters.max_outs += 1;
             } else {
                 self.counters.gap_outs += 1;
@@ -447,6 +582,7 @@ impl DualRing {
 
     /// Advances the controller by `dt_s` seconds under `calls`.
     pub fn step(&mut self, calls: &Calls, dt_s: f64) {
+        self.clock_s += dt_s;
         // A pedestrian's push-button call waits for the phase's next walk, unless the walk
         // showing now already lets them start.
         for p in 1..=8u8 {
@@ -1136,5 +1272,87 @@ mod tests {
         assert!(greens6 >= 10, "{greens6}");
         assert!(four_walked, "4's single press was not served");
         let _ = green6_s;
+    }
+
+    /// A coordinated controller: a 100 s cycle at offset 13 s, splits 15/45/12/28 s on
+    /// each ring (main street 60 s, side street 40 s), every phase called and extended
+    /// (saturated traffic), coordinated phases 2 and 6.
+    fn coordinated(force_off: crate::scenario::schema::ForceOffMode) -> DualRing {
+        let n = NemaSettings {
+            soft_recall: Vec::new(),
+            coordination: true,
+            force_off,
+            ..NemaSettings::default()
+        };
+        let mut config = RingConfig::from_settings(&n, &ALL, THROUGH, LEFT);
+        let mut split = [0.0; 9];
+        for (p, s) in [(1, 15.0), (2, 45.0), (3, 12.0), (4, 28.0)] {
+            split[p] = s;
+            split[p + 4] = s;
+        }
+        config.coord = Some(Coordination {
+            cycle_s: 100.0,
+            offset_s: 13.0,
+            phases: vec![2, 6],
+            split_s: split,
+            force_off,
+            reference: crate::scenario::schema::NemaControllerType::Ts2,
+        });
+        DualRing::new(config)
+    }
+
+    /// Accept (WP-17 P17.8): coordinated phases hold their offset. Under saturated calls
+    /// every non-coordinated phase would run to its maximum (45 s throughs, 25 s lefts);
+    /// with coordination the coordinated green ends at the yield point (the offset plus
+    /// its split less its yellow and red: 13 + 45 − 3.6 − 1.0 s mod 100 s) within one step,
+    /// in every cycle, under both force-off modes. Floating force-offs hold each
+    /// non-coordinated green to its split's green; fixed ones to its point in the cycle.
+    #[test]
+    fn coordinated_phases_hold_their_offset() {
+        use crate::scenario::schema::ForceOffMode;
+        for mode in [ForceOffMode::Floating, ForceOffMode::Fixed] {
+            let mut ctl = coordinated(mode);
+            let mut c = Calls::default();
+            for p in 1..=8 {
+                c.demand[p] = true;
+                c.extend[p] = true;
+            }
+            let yield_local = 45.0 - THROUGH.yellow_s - THROUGH.red_clear_s;
+            let mut prev = ctl.greens();
+            let mut held4 = 0.0;
+            let mut yields = 0;
+            let mut t = 0.0;
+            while t < 1000.0 {
+                ctl.step(&c, DT);
+                t += DT;
+                let g = ctl.greens();
+                if g[0] == 4 {
+                    held4 += DT;
+                }
+                if prev[0] == 4 && g[0] != 4 {
+                    assert!(
+                        held4 <= 28.0 - THROUGH.yellow_s - THROUGH.red_clear_s + DT + 1e-6,
+                        "{mode:?}: 4 ran {held4} s past its split"
+                    );
+                    held4 = 0.0;
+                }
+                if prev[0] == 2 && g[0] != 2 && t > 100.0 {
+                    let local = (t - 13.0).rem_euclid(100.0);
+                    assert!(
+                        (local - yield_local).abs() <= DT + 1e-6,
+                        "{mode:?}: 2 yielded at {local} s into the cycle, not {yield_local}"
+                    );
+                    yields += 1;
+                }
+                prev = g;
+            }
+            // One yield per cycle after the first: none skipped.
+            assert!(yields >= 8, "{mode:?}: {yields} yields in 9 cycles");
+            assert!(
+                ctl.counters().force_offs > 0,
+                "{mode:?}: {:?}",
+                ctl.counters()
+            );
+        }
     }
 }
