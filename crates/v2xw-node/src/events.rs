@@ -168,6 +168,8 @@ pub struct EventServices {
     /// The SPaT and MAP payloads the unit's controller feed installed.
     spat: Option<Vec<u8>>,
     map: Option<Vec<u8>>,
+    /// The WSA a roadside unit advertises its services in (IEEE 1609.3; WP-19).
+    wsa: Option<Vec<u8>>,
     /// The vehicle's own longitudinal acceleration, m/s², from its own accelerometer.
     own_accel: Option<f64>,
     /// Whether the emergency stop signal is on: on at [`ESS_ON_MPS2`], off below
@@ -218,12 +220,13 @@ pub struct EventServices {
 }
 
 impl EventServices {
-    /// Installs the payload the unit's controller feed produced for `ty` (SPaT or MAP).
-    /// Any other type is ignored.
+    /// Installs the payload the unit's controller feed produced for `ty` (SPaT or MAP),
+    /// or the unit's encoded WSA. Any other type is ignored.
     pub fn set_infra_payload(&mut self, ty: MsgType, bytes: Vec<u8>) {
         match ty {
             MsgType::Spat => self.spat = Some(bytes),
             MsgType::Map => self.map = Some(bytes),
+            MsgType::Wsa => self.wsa = Some(bytes),
             _ => {}
         }
     }
@@ -233,6 +236,7 @@ impl EventServices {
         match ty {
             MsgType::Spat => self.spat.as_deref(),
             MsgType::Map => self.map.as_deref(),
+            MsgType::Wsa => self.wsa.as_deref(),
             _ => None,
         }
     }

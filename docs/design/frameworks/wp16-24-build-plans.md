@@ -1013,6 +1013,9 @@ changes G-SCMS by design. Re-bless only those cases, and list them.
   `RsuRuntime::wsa_payload` (84 octets). See the adoption plan's P19.1 note.
 - **P19.2** (3 h): the RSU sends the encoded WSA on air; `WsaUser` decides; the vehicle
   binds to the RSU only after a WSA in `sch` mode.
+  **P19.2 built, 2026-10-28:** `net.rsu_ip.{air, wsa_interval_ms}`; WSA providers on
+  relaying units, the WSA user in `ObuRuntime::learn_wsa`, relay searches restricted to
+  units with a fresh verified WSA. See the adoption plan's P19.2 note.
 - **P19.3** (3 h): `RsuSchPath` (contact window, PER, CBR access, WP-16 interval) with
   unit tests against `ConstantPath` limits (no loss, infinite contact, so it is equal).
 - **P19.4** (3 h): wiring in `backend.rs` `carry`; downloads, CRL and reports moved to

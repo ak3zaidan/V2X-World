@@ -926,6 +926,90 @@ fn the_backend_tops_up_both_vehicles_over_cellular_and_every_byte_is_booked_once
     }
 }
 
+/// Two vehicles with no modem and one relaying unit at the grid's centre, their pool one
+/// period deep so the top-up is due at once (WP-19 P19.2). `air` is `net.rsu_ip.air`;
+/// `muted` puts the unit's radio at the validator's floor (-20 dBm, -10 dBi, 20 dB cable
+/// loss), so nothing it sends is heard, while it stays within the 300 m relay radius.
+fn relay_run(air: Option<&str>, muted: bool) -> (RunReport, MemoryRecorder) {
+    let mut s = with_backend(deterministic_radio(fleet(2, 20.0)));
+    if let Some(uu) = s.net.uu.as_mut() {
+        uu.params["penetration"] = 0.0.into();
+    }
+    if let Some(p) = s.security.protocol.as_mut() {
+        p.params["pool_periods"] = 1.into();
+    }
+    s.actors.rsus = vec![
+        serde_json::from_value(serde_json::json!({
+            "position_m": [420.0, 280.0, 0.0],
+            "roles": ["crl", "provisioning-proxy", "report-forward"],
+            "profile": "rsu/commsignia-its-rs4",
+        }))
+        .expect("an RSU"),
+    ];
+    if let Some(air) = air {
+        s.net.rsu_ip =
+            Some(serde_json::from_value(serde_json::json!({"air": air})).expect("net.rsu_ip"));
+    }
+    if muted {
+        let rsu = &mut s.radio.devices.rsu;
+        rsu.tx_power_dbm = -20.0;
+        rsu.antenna_gain_dbi = -10.0;
+        rsu.cable_loss_db = 20.0;
+    }
+    let errors = v2xw_engine::scenario::validate(&s);
+    assert!(errors.is_empty(), "{errors:?}");
+    run(s)
+}
+
+/// IEEE 1609.3 service discovery gates the relay (WP-19 P19.2, `net.rsu_ip.air: sch`): a
+/// vehicle uses a roadside unit's SCMS service only after it has verified that unit's WSA
+/// (1609.3 §8.2.3, the user decides on a PSID match; 1609.3-2016 Annex H.1 signs it).
+///
+/// - `constant` (the default): any unit in range serves, heard or not, so the muted unit
+///   still tops both vehicles up and sends no WSA;
+/// - `sch`: the unit sends a WSA every 100 ms and both vehicles top up through it;
+/// - `sch`, muted: no WSA is heard, so no top-up starts, although the unit is in range.
+#[test]
+fn a_vehicle_uses_a_roadside_unit_only_after_verifying_its_wsa() {
+    let wsas = |rec: &MemoryRecorder| {
+        on::<NodeTxView>(rec)
+            .iter()
+            .filter(|t| t.msg_type.as_deref() == Some("wsa"))
+            .count()
+    };
+    let (constant, rec) = relay_run(None, false);
+    let (constant_muted, _) = relay_run(Some("constant"), true);
+    let (sch, sch_rec) = relay_run(Some("sch"), false);
+    let (sch_muted, _) = relay_run(Some("sch"), true);
+    let line = |name: &str, r: &RunReport| {
+        let p = &r.phase2;
+        println!(
+            "RELAY {name}: relay-only {} started {} completed {}",
+            p.access.relay_only_vehicles, p.topups_started, p.topups_completed
+        );
+    };
+    line("constant", &constant);
+    line("constant muted", &constant_muted);
+    line("sch", &sch);
+    line("sch muted", &sch_muted);
+    assert_eq!(constant.phase2.access.relay_only_vehicles, 2);
+    assert_eq!(wsas(&rec), 0, "no WSA without net.rsu_ip.air: sch");
+    assert!(
+        constant.phase2.topups_completed >= 1,
+        "{:?}",
+        constant.phase2
+    );
+    assert!(
+        constant_muted.phase2.topups_completed >= 1,
+        "the constant link ignores the radio"
+    );
+    // About 10 per second over 20 s.
+    let n = wsas(&sch_rec);
+    assert!((150..=210).contains(&n), "{n} WSAs in 20 s at 100 ms");
+    assert!(sch.phase2.topups_completed >= 1, "{:?}", sch.phase2);
+    assert_eq!(sch_muted.phase2.topups_started, 0, "{:?}", sch_muted.phase2);
+}
+
 #[test]
 fn one_attacker_among_six_is_reported_revoked_and_refused_and_the_crl_reaches_everyone() {
     let (report, rec) = backend_run(6, true);

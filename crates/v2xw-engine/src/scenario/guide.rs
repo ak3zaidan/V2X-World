@@ -610,6 +610,16 @@ const ADVANCED: &[Basic] = &[
         recommended: "0.0012 (standard).",
     },
     Basic {
+        path: "net.rsu_ip.air",
+        explain: "How a vehicle without a modem reaches the SCMS through a roadside unit: a fixed link, or only after hearing the unit's signed service advertisement (WSA).",
+        recommended: "constant (default) until the service-channel path is built; sch to study WSA-gated access.",
+    },
+    Basic {
+        path: "net.rsu_ip.wsa_interval_ms",
+        explain: "How often a relaying roadside unit sends its WSA under 'sch'.",
+        recommended: "100 ms (USDOT RSU Specification v4.1).",
+    },
+    Basic {
         path: "radio.dcc.max_itt_ms",
         explain: "The longest gap J2945/1 allows between one vehicle's BSMs under congestion.",
         recommended: "600 ms (standard).",

@@ -631,12 +631,13 @@ impl HeardTable {
 
 /// Whether a message of this type makes its sender a neighbour: the awareness messages
 /// do. A SPaT, a MAP or a signal request says where a junction is, not where its sender
-/// is going, and a DENM describes an event rather than a station.
+/// is going, a DENM describes an event rather than a station, and a WSA advertises a
+/// service.
 pub fn describes_a_station(msg_type: v2xw_msg::MsgType) -> bool {
     use v2xw_msg::MsgType;
     !matches!(
         msg_type,
-        MsgType::Spat | MsgType::Map | MsgType::Srm | MsgType::Ssm | MsgType::Denm
+        MsgType::Spat | MsgType::Map | MsgType::Srm | MsgType::Ssm | MsgType::Denm | MsgType::Wsa
     )
 }
 

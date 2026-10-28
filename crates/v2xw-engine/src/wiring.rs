@@ -3430,7 +3430,7 @@ pub fn rsu_services(scenario: &Scenario, roles: &[String]) -> ServiceSet {
 /// broadcast application (the certificate kind's default then applies).
 pub fn rsu_app_psids(scenario: &Scenario, roles: &[String]) -> Vec<u64> {
     let s = rsu_services(scenario, roles);
-    let sends: Vec<v2xw_msg::MsgType> = [
+    let mut sends: Vec<v2xw_msg::MsgType> = [
         (s.bsm, v2xw_msg::MsgType::Bsm),
         (s.cam, v2xw_msg::MsgType::Cam),
         (s.denm, v2xw_msg::MsgType::Denm),
@@ -3443,7 +3443,25 @@ pub fn rsu_app_psids(scenario: &Scenario, roles: &[String]) -> Vec<u64> {
     .into_iter()
     .filter_map(|(on, m)| on.then_some(m))
     .collect();
+    // Under `net.rsu_ip.air: sch` a relaying unit signs its WSA (IEEE 1609.3-2016 Annex
+    // H.1), so its application certificate permits the WSA PSID (135).
+    if rsu_ip_sch(scenario) && is_relay(roles) {
+        sends.push(v2xw_msg::MsgType::Wsa);
+    }
     v2xw_msg::registry::permissions(&sends, etsi_facilities(scenario))
+}
+
+/// Whether `net.rsu_ip.air` is `sch` (WP-19): relaying units advertise the SCMS service
+/// in a WSA, and a vehicle uses only a unit whose WSA it verified.
+pub fn rsu_ip_sch(scenario: &Scenario) -> bool {
+    scenario.net.rsu_ip.as_ref().is_some_and(|r| r.air == "sch")
+}
+
+/// Whether a roadside unit with these roles relays SCMS traffic for vehicles.
+pub fn is_relay(roles: &[String]) -> bool {
+    roles
+        .iter()
+        .any(|r| r == "provisioning-proxy" || r == "report-forward")
 }
 
 /// Whether the node's facilities layer is ETSI's: the GeoNetworking/BTP stack.

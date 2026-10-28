@@ -568,6 +568,10 @@ pub struct ObuRuntime {
     state: NodeState,
     received: Vec<VerifiedMessage>,
     evidence_capacity: usize,
+    /// The roadside routers this unit has learned an SCMS service from (IEEE 1609.3: a
+    /// verified WSA listing PSID 0x23 with a WAVE Routing Advertisement), by the router's
+    /// advertised /64 prefix, with when the last such WSA arrived (WP-19 P19.2).
+    scms_routers: BTreeMap<[u8; 8], SimTime>,
     window: TelemetryWindow,
     dcc: DccState,
     dcc_state_code: u16,
@@ -685,6 +689,7 @@ impl ObuRuntime {
             state: NodeState::Active,
             received: Vec::new(),
             evidence_capacity: 256,
+            scms_routers: BTreeMap::new(),
             window: TelemetryWindow::new(at),
             dcc: DccState::UNRESTRICTED,
             dcc_state_code: v2xw_record::wire::U16_NONE,
@@ -1064,6 +1069,20 @@ impl ObuRuntime {
     /// unit's schedule signs and sends it at the standard's rate ([`crate::events`]).
     pub fn set_infra_payload(&mut self, msg_type: MsgType, bytes: Vec<u8>) {
         self.events.set_infra_payload(msg_type, bytes);
+    }
+
+    /// Makes this roadside unit a WSA provider (IEEE 1609.3; WP-19 P19.2): it signs and
+    /// sends `wsa` (an encoded [`v2xw_msg::wsa::Wsa`]) every `interval`.
+    pub fn enable_wsa(&mut self, interval: Duration, wsa: Vec<u8>) {
+        self.events.set_infra_payload(MsgType::Wsa, wsa);
+        self.schedule = self.schedule.clone().with_wsa(interval);
+    }
+
+    /// The routers (by advertised /64 prefix) this unit learned an SCMS service from in a
+    /// verified WSA, and when it last heard each. What a WSA user's available-service list
+    /// holds (1609.3 §8.2.3: the user decides on a match of PSID).
+    pub fn scms_routers(&self) -> &BTreeMap<[u8; 8], SimTime> {
+        &self.scms_routers
     }
 
     /// The vehicle's own longitudinal acceleration, m/s², from its own accelerometer —
@@ -2018,11 +2037,13 @@ impl ObuRuntime {
             // Beyond the farthest any application looks (EEBL's 300 m, GLOSA's 300 m to the
             // stop line) the content is not read, which is also what keeps a dense run's
             // cost down: the claims above still reach the neighbour table.
-            payload: if self.apps.is_some()
-                && wants_payload(frame.msg_type)
-                && frame
-                    .claimed_pos
-                    .is_none_or(|p| p.distance_2d(self.belief.pos) <= 320.0)
+            // A WSA is read by the stack itself (the WAVE management entity), apps or not.
+            payload: if frame.msg_type == MsgType::Wsa
+                || (self.apps.is_some()
+                    && wants_payload(frame.msg_type)
+                    && frame
+                        .claimed_pos
+                        .is_none_or(|p| p.distance_2d(self.belief.pos) <= 320.0))
             {
                 frame
                     .spdu
@@ -2075,11 +2096,38 @@ impl ObuRuntime {
                 state: m.verification,
             });
         }
+        self.learn_wsa(&m);
         if self.received.len() >= self.evidence_capacity {
             self.received.remove(0);
         }
         self.received.push(m.clone());
         out.delivered.push(m);
+    }
+
+    /// The WSA user (IEEE 1609.3 §8.2.3): a WSA whose signature verified (1609.3-2016
+    /// Annex H.1 secures it; RSU Spec v4.1 Req_586) and that lists the SCMS service
+    /// ([`v2xw_msg::wsa::PSID_SECURITY_MANAGEMENT`]) beside a WAVE Routing Advertisement
+    /// makes its router available, under the router's advertised prefix.
+    fn learn_wsa(&mut self, m: &VerifiedMessage) {
+        if m.msg_type != MsgType::Wsa || m.verification != VerificationState::Verified {
+            return;
+        }
+        let Some(wsa) = m
+            .payload
+            .as_deref()
+            .and_then(|b| v2xw_msg::wsa::decode_wsa(b).ok())
+        else {
+            return;
+        };
+        let offers_scms = wsa.services.as_ref().is_some_and(|s| {
+            s.iter()
+                .any(|i| i.psid == v2xw_msg::wsa::PSID_SECURITY_MANAGEMENT)
+        });
+        if let (true, Some(ra)) = (offers_scms, wsa.routing) {
+            let mut prefix = [0u8; 8];
+            prefix.copy_from_slice(&ra.prefix[..8]);
+            self.scms_routers.insert(prefix, m.received_at);
+        }
     }
 
     /// Builds, encodes, signs and queues whatever the schedule says is due.
@@ -2483,7 +2531,9 @@ impl ObuRuntime {
             // A roadside unit's intersection messages: what its controller feed installed,
             // signed as it stands. A unit with no feed sends nothing rather than an empty
             // message.
-            MsgType::Spat | MsgType::Map => self.events.infra_payload(msg_type).map(<[u8]>::to_vec),
+            MsgType::Spat | MsgType::Map | MsgType::Wsa => {
+                self.events.infra_payload(msg_type).map(<[u8]>::to_vec)
+            }
             // Nothing else is generated here. A DENM, an SRM and an SSM are the event
             // services' (`crate::events`), and a CRL or a report is the engine's.
             _ => None,

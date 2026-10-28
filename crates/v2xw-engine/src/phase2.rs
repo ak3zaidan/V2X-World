@@ -3820,6 +3820,17 @@ impl Phase2 {
     /// relay radius of `pos`, and which.
     #[must_use]
     pub fn relay_in_range(&self, pos: Vec3, role: &str) -> Option<NodeId> {
+        self.relay_in_range_among(pos, role, None)
+    }
+
+    /// [`ScmsPhase2::relay_in_range`], restricted to `among` when it is given: under
+    /// `net.rsu_ip.air: sch` the units whose WSA the vehicle verified (WP-19 P19.2).
+    pub fn relay_in_range_among(
+        &self,
+        pos: Vec3,
+        role: &str,
+        among: Option<&[NodeId]>,
+    ) -> Option<NodeId> {
         let range = self.access.relay_range_m();
         self.rsu_nodes
             .iter()
@@ -3828,6 +3839,7 @@ impl Phase2 {
             .find(|(n, s)| {
                 s.backhaul.connected
                     && self.rsu_has_role(*n, role)
+                    && among.is_none_or(|a| a.contains(n))
                     && s.position.distance(Vec3::new(pos.x, pos.y, s.position.z)) <= range
             })
             .map(|(n, _)| n)

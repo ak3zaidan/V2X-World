@@ -129,6 +129,10 @@ pub struct MessageSchedule {
     /// `messages.map_interval_ms`); CTI 4501's 10 Hz and 1 Hz by default.
     spat_interval: Duration,
     map_interval: Duration,
+    /// The WSA period, when the unit advertises a service (IEEE 1609.3 `RepeatRate`;
+    /// WP-19). `None`: no WSA.
+    wsa_interval: Option<Duration>,
+    last_wsa: Option<SimTime>,
     generated: u32,
 }
 
@@ -143,8 +147,18 @@ impl MessageSchedule {
             last_map: None,
             spat_interval: SPAT_INTERVAL,
             map_interval: MAP_INTERVAL,
+            wsa_interval: None,
+            last_wsa: None,
             generated: 0,
         }
+    }
+
+    /// The same schedule with a WSA every `interval` (a roadside unit advertising a
+    /// service, IEEE 1609.3; WP-19 P19.2). Periodic like the SPaT, and not DCC-gated.
+    #[must_use]
+    pub fn with_wsa(mut self, interval: Duration) -> Self {
+        self.wsa_interval = Some(interval);
+        self
     }
 
     /// The same schedule with other SPaT and MAP periods (network audit). A period
@@ -270,6 +284,11 @@ impl MessageSchedule {
         }
         if self.services.map
             && let Some(r) = periodic(&mut self.last_map, self.map_interval, MsgType::Map)
+        {
+            out.push(r);
+        }
+        if let Some(i) = self.wsa_interval
+            && let Some(r) = periodic(&mut self.last_wsa, i, MsgType::Wsa)
         {
             out.push(r);
         }

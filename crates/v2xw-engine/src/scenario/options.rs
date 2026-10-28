@@ -275,6 +275,14 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             w("All of", "Every listed clause holds for the same vehicle.")
         }
         ("events[].when.kind", "any") => w("Any of", "At least one listed clause holds."),
+        ("net.rsu_ip.air", "constant") => w(
+            "Constant air link",
+            "The hop to a relaying roadside unit is a fixed delay and rate, and any unit in range serves.",
+        ),
+        ("net.rsu_ip.air", "sch") => w(
+            "Advertised service (IEEE 1609.3)",
+            "Each relaying unit sends a signed WSA for the SCMS service; a vehicle uses a unit only after it verified that unit's WSA.",
+        ),
         ("net.channel_access", "continuous") => w(
             "Continuous (one channel)",
             "The deployed US profile: safety messages go out on one channel as soon as they are made.",
@@ -1709,6 +1717,9 @@ pub fn title(path: &str) -> Option<&'static str> {
         "net.layer" => "Network layer",
         "net.geonet" => "Multi-hop hazard warnings",
         "net.channel_access" => "Channel switching",
+        "net.rsu_ip" => "SCMS through roadside units",
+        "net.rsu_ip.air" => "Roadside air hop",
+        "net.rsu_ip.wsa_interval_ms" => "WSA period",
         "events[].when" => "Fires when",
         "events[].max_fires" => "Fires at most",
         "events[].cooldown_s" => "Least time between firings",

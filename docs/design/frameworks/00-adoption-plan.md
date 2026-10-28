@@ -804,6 +804,19 @@ trustworthy or comparable; later waves add behaviours and radio features.
   SCMS-service WSA (U5 fixed in the node; `wsa_payload_bytes` removed). No golden moves:
   the engine sends no WSA yet. Not built: a `MessageCodec` arm (no caller needs one) and
   the 10 Hz RepeatRate default (moves CCH load; with P19.2).
+- P19.2 built (2026-10-28, branch only): `net.rsu_ip` (`air: constant` default | `sch`;
+  `wsa_interval_ms` 100, RSU Spec v4.1 App. D), full settings checklist. Under `sch` every
+  relaying unit (`provisioning-proxy` or `report-forward`) signs and sends a WSA
+  (`ObuRuntime::enable_wsa`, schedule `with_wsa`) with its own /64 in the WRA and its
+  mast as location; its application certificate permits PSID 135. A vehicle's stack reads
+  a verified WSA listing PSID 0x23 (`ObuRuntime::learn_wsa`) and keeps the router; the
+  engine maps the prefix to the unit (`Engine::wsa_units`), and every relay search
+  (top-up, re-enrolment, trust fetch, report relay, link-up view) is restricted to those
+  units (`relay_in_range_among`), fresh for 1 s (ASSUMPTION, `WSA_SERVICE_FRESH_NS`).
+  `foundations::a_vehicle_uses_a_roadside_unit_only_after_verifying_its_wsa`: a muted
+  unit tops up under `constant` and not under `sch`. WSAs ride the primary channel as a
+  single-hop safety-class frame (1609.4 puts them on the CCH; the engine has no separate
+  CCH). Default byte-identical. The air hop is still the constant link (P19.3-P19.4).
 
 **WP-20 Traffic yields to emergency vehicles** (M, 5 days). Source: S-P5.
 - Scope: within a reaction distance civilians pull to the kerb or slow (US move-over, UVC
