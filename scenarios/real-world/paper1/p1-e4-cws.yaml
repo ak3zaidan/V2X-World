@@ -1,0 +1,16 @@
+# P1-E4 stamp model (research/synthesis/p1-realdata-baseline.md §7.2): p1-e4-cw.yaml with the
+# lasting position steps at 0 -> -1 stamp transitions on, at the Wyoming OBU's rate and size
+# (in sample on the chain rates and the step rate and size; out of sample on the rest).
+# Expectations were written before it ran (p1-stamp.yaml, P1S.CWS.*).
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4-u.yaml
+  name: Paper 1 E4 stamp chain Wyoming steps
+  description: The final E4 highway with the epoch stamp chain and its transition steps at the Wyoming OBU's rates.
+  tags: [paper1, validation, highway, bsm-timing]
+actors:
+  vehicles:
+    bsm_timing:
+      stamp_chain:
+        enabled: true
+        profile: wyoming_obu

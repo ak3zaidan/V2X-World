@@ -31,8 +31,13 @@ N = 20000
 
 
 def pairs(path, kind, locked_only):
+    return pairs_from(normalise.stream_ids(path, kind), locked_only)
+
+
+def pairs_from(ids, locked_only):
+    """pairs() on any (id, [Bsm]) stream, e.g. an engine run's (paper1/resid.engine_ids)."""
     out = []
-    for _, bsms in normalise.stream_ids(path, kind):
+    for _, bsms in ids:
         bs = pairing.dedupe_sort(bsms)
         sms = [b.secmark for b in bs if b.secmark is not None]
         if not sms:
