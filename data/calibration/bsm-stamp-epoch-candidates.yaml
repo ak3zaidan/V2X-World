@@ -1,5 +1,9 @@
-# CANDIDATE (not read by the engine yet): locked-class BSM stamp model "position on the fix
-# epoch, whole-ms stamp offset chain" and the position steps tied to it (P1-E4 body and tail).
+# CANDIDATE: locked-class BSM stamp model "position on the fix epoch, whole-ms stamp offset
+# chain" and the position steps tied to it (P1-E4 body and tail). The engine carries these
+# two profiles built in (v2xw_node::bsm_timing::StampChain::profile, pinned to this file by
+# the test the_stamp_profiles_are_the_candidates_files_numbers), selected by the scenario's
+# actors.vehicles.bsm_timing.stamp_chain {enabled, profile: tampa_locked | wyoming_obu}; off
+# unless enabled. Runs: crates/v2xw-engine/tests/expectations/p1-stamp.yaml.
 # Derived statistics only; no raw rows. Analysis 2026-10-27,
 # research/synthesis/p1-realdata-baseline.md section 7.
 provenance:
