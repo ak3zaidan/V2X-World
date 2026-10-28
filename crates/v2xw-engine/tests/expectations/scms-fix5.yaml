@@ -10,6 +10,13 @@ runs:
   T:
     scenario: scenarios/scms-fix3/base.yaml
     note: credential-lifecycle at 180 s (scms-fix3-ra.yaml's B/F/G scenario), this build
+  MWC:
+    scenario: scenarios/edge/multi-week-crlg-down.yaml
+    note: this build, --record-level metrics (item 6; scms-variants.yaml RR.MWC.overdue)
+  MWCA:
+    scenario: scenarios/scms-fix5/mwc-scope-all.yaml
+    base: MWC
+    note: MWC with security.scms.crl_overdue_scope all, --record-level metrics
 rows:
 # --- F5-TOPUP: the top-up flow's own Uu bytes per top-up ----------------------------------
 - id: F5.TOPUP.bytes
@@ -44,6 +51,23 @@ rows:
   source: the top-up flow crosses Uu (ee <-> ra/lop) at every top-up
   measured: '354'
   verdict: pass
+# --- F5-SCOPE in a run: the strict reading refuses what the CRACA reading lets through -----
+- id: F5.SCOPE.mwc-all
+  base: MWC
+  variant: MWCA
+  area: metrics
+  measure: rv.refused.crl-overdue
+  expect: ge
+  value: 1
+  source: '[CAMP122] Table 67 ("rejecting all of them"). MWC (scms-variants.yaml RR.MWC.overdue
+    note2): W4 receivers hold the t0 home list (CRACA b710ad, nextCrl day 7.0) overdue from day
+    21.0, while every home sender signs under the new CRACA 4a1086, so the craca reading refuses
+    0. Under all, that one overdue list refuses every message in W4'
+  measured: '0 -> 326,316 (every refusal crl-overdue; 709,428 checked). MWC itself: 0 refusals
+    of any kind, MWC2 110,048 (scms-variants.yaml rechecks); MWC 1,487 s, MWCA 1,144 s wall,
+    peak 146 / 143 MB'
+  verdict: pass
+  fault: 'the setting ignored (the engine behaving as craca, i.e. the MWC run judged as MWCA): 0, FAIL'
 # --- fault proofs owed by fix round 4 (scmsa) and fix round 3 (scmsra), 2026-10-28 -----------
 # One fault build (A: F1-F6 together, each test's failure message checked to be its own
 # fault's), F7 and F8 alone; sources restored after each; every test green on the clean

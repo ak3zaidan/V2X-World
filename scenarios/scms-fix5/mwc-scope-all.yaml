@@ -1,0 +1,10 @@
+# MWC (the home CRL Generator down from 700 s to 2,600,000 s) under the strict reading of
+# [CAMP122] Table 67 (F5-SCOPE): any held series-1 list past nextCrl + 14 d refuses every
+# message, not only its own CRACA's (security.scms.crl_overdue_scope: all).
+schema: v2xw/scenario/1
+meta:
+  base: ../edge/multi-week-crlg-down.yaml
+  name: scms-fix5 mwc scope all
+security:
+  scms:
+    crl_overdue_scope: all

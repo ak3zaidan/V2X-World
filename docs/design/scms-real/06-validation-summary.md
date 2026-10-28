@@ -1522,6 +1522,10 @@ The totals count each row as its own checklist records it, with the changes in ย
       `pki.flow` and 439 `net.bytes` records are stamped up to 8.82 ms after their log
       time; 606 of the 611 are pregeneration hops. The stamps are the right instants.
       Holding the records to the next tick moves every SCMS digest (owner).
+    - MWC / MWC2 on this branch's debug build: 0 and 110,048 crl-overdue, both PASS through
+      matrix.py (the release values). MWC under `crl_overdue_scope: all` refuses 326,316
+      (`scms-fix5.yaml` F5.SCOPE.mwc-all): the strict reading of Table 67 cuts the fleet
+      off in W4.
 
 **Owner decisions**
 - **What the RA and PCA keep for each device** (ยง6 item 4): request records, cocoons,
