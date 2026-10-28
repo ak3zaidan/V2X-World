@@ -465,6 +465,7 @@ Its one engine nuisance is a 4.5 mm white increment per axis (GNSS layer, mobili
 
 **Open.**
 - The engine code for state-0 steps, the speed offset and per-device rates. Which profile becomes the default is the owner's choice.
+  - (2026-10-28, fix round 5, stamp track) State-0 steps and the speed offset are in the engine: profile `tampa_chain` (`StampChain::profile`, pinned to the candidates file by `the_stamp_profiles_are_the_candidates_files_numbers`), `TransitionStep.prob_stay_zero`, and `stamp_chain.speed_per_m` / `speed_tau_s` / `position_follows` (off unless set). Scenarios `p1-e4-ce.yaml` and `p1-e4-ces.yaml`; rows `crates/v2xw-engine/tests/expectations/p1-stamp-e.yaml`. Per-device rates (F) are not in the engine.
 - A deployment-realistic locked class would mix chain devices (`tampa_chain`, 22 of 50 Tampa locked IDs) with fixed-stamp devices (`tampa_fixed`).
 - The Wyoming OBU's larger, longer-lived speed coupling (1.02 m/s per m) comes from one device and is not used.
 

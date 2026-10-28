@@ -4036,6 +4036,12 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-28: fix round 5, stamp and radio track (branch only)
+
+Base `a925db58`. Defaults stay off; no golden moves.
+
+- **P1-E4 candidate E** (research/synthesis/p1-realdata-baseline.md §7.5): profile `tampa_chain` (stays 0.3318 / 0.7657; step 0.891 at 0 -> -1, `prob_stay_zero` 0.05216 at 0 -> 0, never out of -1; along 7.00 / 18.2 cm, cross 3.82 / 11.9 cm), `TransitionStep.prob_stay_zero` (serde default 0) and the optional speed change (`stamp_chain.speed_per_m`, `speed_tau_s`, `position_follows`; off unless `speed_per_m` is set). `p1-e4-ce.yaml` / `p1-e4-ces.yaml` run it on `bsm-timing-cvpilot-chain-device.yaml`. Three new node tests, the profile test now reads `bsm-stamp-steps-candidates.yaml` too (and pins the chain-device walk to it), the engine settings test covers the new keys. Rows: `tests/expectations/p1-stamp-e.yaml` (pending until run).
+
 ## 2026-10-28: adoption wave integration (grade, mac, nema: WP-16, 17, 18, 21, 22)
 
 One integrator in the main checkout, one heavy command at a time. All three agents had committed their work and their worktrees were clean, so no wip snapshot was needed.

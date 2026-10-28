@@ -1,0 +1,175 @@
+# P1-E4 stamp model, candidate E (research/synthesis/p1-realdata-baseline.md §7.5,
+# data/calibration/bsm-stamp-steps-candidates.yaml): profile tampa_chain (Tampa's 22 chain
+# devices; steps out of stamp state 0 only, fitted jointly in rate and size) on the
+# chain-device calibration (bsm-timing-cvpilot-chain-device.yaml: the same fit's core walk).
+# Every `expect` was written and committed with `measured: pending` before the run it
+# judges. Checker:
+#   python3 tools/realworld/matrix.py check <this file> <runs>
+# after `V2XW_P1_WYOMING=<raw>/wyoming.csv python3 -I tools/realworld/paper1/summ.py <run> --e4 --stamp`.
+#
+# The KS predictions are the emulator's (e4stepfit.emulate, held out on Wyoming), written in
+# §7.5 before any engine run: E at the run's speeds (p50 29.8 m/s) 0.099 (0.096-0.105 over
+# seeds; expected 0.09-0.11), E speed-matched 0.082 (bootstrap 0.063-0.103), the speed change
+# moving it by 0.01 or less. P1-E4's tolerance is 0.092. The run has about 28 locked IDs and
+# 10,000 pairs, so a KS carries about +-0.01 of run noise on top.
+#
+# verdict: pass | fixed | wrong-expectation | open.
+#
+# Binaries: R = the release build of a925db58 (main's target/release/v2xw, copied to the
+# scratchpad before this branch's first run); every other run the opt-level-2 debug build of
+# this branch (one binary for every comparison); the scenario's seed; --no-verify; one run
+# per run-slot call. t.wall_s and t.peak_mb are /usr/bin/time -l real and maximum RSS.
+schema: v2xw/scms-run-expectations/1
+runs:
+  SBR:
+    scenario: scenarios/real-world/paper1/p1-e4-u.yaml
+    note: E4V (chain off) on the release binary of a925db58 (before candidate E)
+  SB:
+    scenario: scenarios/real-world/paper1/p1-e4-u.yaml
+    note: E4V on this branch's binary, chain off
+  CTSR:
+    scenario: scenarios/real-world/paper1/p1-e4-cts.yaml
+    note: the 10-27 tampa_locked chain with steps on the release binary of a925db58
+  CTS:
+    scenario: scenarios/real-world/paper1/p1-e4-cts.yaml
+    note: CTSR on this branch's binary
+  CE:
+    scenario: scenarios/real-world/paper1/p1-e4-ce.yaml
+    base: SB
+    note: candidate E at the run's present speeds (p1-e4-u.yaml before the speed match)
+  CES:
+    scenario: scenarios/real-world/paper1/p1-e4-ces.yaml
+    base: CE
+    note: CE with the speed change (0.499 m/s per m, tau 0.357 s, position follows 0.759)
+rows:
+- id: P1E.SB.off-identical
+  base: SBR
+  variant: SB
+  area: recorded-state
+  measure: digest.record
+  expect: identical
+  source: 'chain off: no StampChain is built and report_inner draws and computes what it did (the
+    speed offset is 0.0 and adds nothing; bsm_timing.rs); release and opt-2 debug builds do the same
+    IEEE arithmetic (p1-stamp.yaml P1S.SB.off-identical)'
+  measured: pending
+- id: P1E.CTS.profile-identical
+  base: CTSR
+  variant: CTS
+  area: recorded-state
+  measure: digest.record
+  expect: identical
+  source: 'tampa_locked has prob_stay_zero 0 and no speed change: a 0 -> 0 BSM compares the step draw
+    against 0 and never steps, the 0 -> -1 rule and the eight chain draws are unchanged'
+  measured: pending
+- id: P1E.CE.early
+  base: CE
+  variant: CE
+  area: recorded-state
+  measure: x.st.early_share
+  expect: band
+  band: [0.21, 0.31]
+  source: tampa_chain stationary P(o = -1) 0.2596 (candidates file); about 28 IDs, chain correlation
+  measured: pending
+- id: P1E.CE.stay-minus1
+  base: CE
+  variant: CE
+  area: recorded-state
+  measure: x.st.stay_minus1
+  expect: band
+  band: [0.27, 0.40]
+  source: tampa_chain 0.332; about 2,700 early pairs, binomial sd 0.01, plus pairs lost to the v >= 10
+    m/s and msgCnt + 1 filter
+  measured: pending
+- id: P1E.CE.stay-zero
+  base: CE
+  variant: CE
+  area: recorded-state
+  measure: x.st.stay_zero
+  expect: band
+  band: [0.74, 0.79]
+  source: tampa_chain 0.766
+  measured: pending
+- id: P1E.CE.over5-0m1
+  base: CE
+  variant: CE
+  area: recorded-state
+  measure: x.st.over5_on_0m1
+  expect: band
+  band: [0.72, 0.78]
+  source: 'p1-realdata-baseline.md §7.5, expected before any engine run: the 0 -> -1 share over 5 cm at
+    0.72-0.78 (emulator 0.758 at the run speeds)'
+  measured: pending
+- id: P1E.CE.over5-m1m1
+  base: CE
+  variant: CE
+  area: recorded-state
+  measure: x.st.over5_on_m1m1
+  expect: le
+  value: 0.005
+  source: '§7.5: no step out of state -1 (Wyoming held out 0 of 1,282); the core walk alone (p90 about
+    3.5 cm) rarely takes a pair over 5 cm'
+  measured: pending
+- id: P1E.CE.over5-00
+  base: CE
+  variant: CE
+  area: recorded-state
+  measure: x.st.over5_on_00
+  expect: band
+  band: [0.025, 0.065]
+  source: '§7.5: E 0.043 at 0 -> 0 (Wyoming held out 0.049), from the 0.052 step share'
+  measured: pending
+- id: P1E.CE.ks
+  base: CE
+  variant: CE
+  area: metrics
+  measure: x.e4.ks
+  expect: band
+  band: [0.09, 0.11]
+  source: '§7.5, written before any engine run: E on the present p1-e4-u.yaml speeds, KS 0.09-0.11
+    (emulator 0.099)'
+  measured: pending
+- id: P1E.CE.ks-vs-cts
+  base: CTS
+  variant: CE
+  area: metrics
+  measure: x.e4.ks
+  expect: down
+  source: 'the emulator puts tampa_locked (CTS, engine 0.118) at 0.117 and E at 0.099 on these speeds'
+  measured: pending
+- id: P1E.CE.frames
+  base: SB
+  variant: CE
+  area: metrics
+  measure: r.frames_transmitted
+  expect: same
+  source: the chain moves secMark by at most 1 ms and the position by cm; it never changes whether or
+    when a BSM is sent
+  measured: pending
+- id: P1E.CES.ks
+  base: CE
+  variant: CES
+  area: metrics
+  measure: x.e4.ks
+  expect: delta
+  band: [-0.01, 0.01]
+  source: '§7.5: adding the speed change moves the KS by at most 0.01 (emulator 0.099 -> 0.098 at these
+    speeds)'
+  measured: pending
+- id: P1E.CES.frames
+  base: CE
+  variant: CES
+  area: metrics
+  measure: r.frames_transmitted
+  expect: same
+  source: the speed change moves the reported speed and position only
+  measured: pending
+- id: P1E.CE.wall
+  base: SB
+  variant: CE
+  area: performance
+  measure: t.wall_s
+  expect: ratio
+  band: [0.8, 1.25]
+  source: the same eight chain draws per BSM as CTS (P1S.CTS.wall 0.978); the band is the shared
+    machine's noise
+  measured: pending

@@ -1,0 +1,20 @@
+# P1-E4 stamp model, candidate E (research/synthesis/p1-realdata-baseline.md §7.5): the final
+# E4 highway (p1-e4-u.yaml) with the epoch stamp chain at the rates of Tampa's 22 chain
+# devices (profile tampa_chain), its position steps fitted jointly in rate and size and
+# taken out of stamp state 0 only (0.891 at 0 -> -1, 0.052 at 0 -> 0, none out of -1), on
+# the calibration whose locked walk is the same fit's core walk
+# (data/calibration/bsm-timing-cvpilot-chain-device.yaml). Every device number comes from
+# Tampa; Wyoming stays held out. Expectations were written before it ran (p1-stamp-e.yaml).
+schema: v2xw/scenario/1
+meta:
+  base: p1-e4-u.yaml
+  name: Paper 1 E4 stamp chain candidate E
+  description: The final E4 highway with Tampa's chain devices' stamp chain and steps out of state 0 (candidate E).
+  tags: [paper1, validation, highway, bsm-timing]
+actors:
+  vehicles:
+    bsm_timing:
+      calibration: data/calibration/bsm-timing-cvpilot-chain-device.yaml
+      stamp_chain:
+        enabled: true
+        profile: tampa_chain

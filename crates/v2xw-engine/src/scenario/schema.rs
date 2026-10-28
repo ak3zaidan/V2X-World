@@ -1503,8 +1503,10 @@ pub struct StampChainSettings {
     /// Turns the chain on. Unset or false is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
-    /// The rate set: `tampa_locked` (default; Tampa's locked IDs, a fit set) or
-    /// `wyoming_obu` (the one Wyoming OBU, P1-E4's held-out source).
+    /// The rate set: `tampa_locked` (default; Tampa's locked IDs, a fit set),
+    /// `wyoming_obu` (the one Wyoming OBU, P1-E4's held-out source) or `tampa_chain`
+    /// (Tampa's chain devices alone, steps out of state 0 only; use it with
+    /// `data/calibration/bsm-timing-cvpilot-chain-device.yaml`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     /// P(the next BSM is stamped 1 ms early | this one is); unset is the profile's.
@@ -1517,6 +1519,17 @@ pub struct StampChainSettings {
     /// Unset is true.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steps: Option<bool>,
+    /// The reported speed's change with a step, m/s per m of along-track step. Unset is
+    /// no speed change; set, it turns the change on (Tampa's chain devices: 0.499).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_per_m: Option<f64>,
+    /// The speed change's decay time, s; unset is Tampa's 0.357 (needs `speed_per_m`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_tau_s: Option<f64>,
+    /// The share of the speed change the reported position moves with, 0 to 1; unset is
+    /// Tampa's 0.759 (needs `speed_per_m`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_follows: Option<f64>,
 }
 
 impl StampChainSettings {
@@ -1550,6 +1563,28 @@ impl StampChainSettings {
         }
         if self.steps == Some(false) {
             ch.step = None;
+        }
+        if self.speed_per_m.is_none()
+            && (self.speed_tau_s.is_some() || self.position_follows.is_some())
+        {
+            return Err((
+                "actors.vehicles.bsm_timing.stamp_chain.speed_per_m",
+                "is unset, so speed_tau_s and position_follows have nothing to act on".into(),
+            ));
+        }
+        if let Some(per_m) = self.speed_per_m {
+            let Some(s) = ch.step.as_mut() else {
+                return Err((
+                    "actors.vehicles.bsm_timing.stamp_chain.speed_per_m",
+                    "is set and steps are off: the speed change comes with a step".into(),
+                ));
+            };
+            let d = StampChain::TAMPA_CHAIN_SPEED;
+            s.speed = Some(v2xw_node::bsm_timing::StepSpeed {
+                per_m_along_mps: per_m,
+                tau_s: self.speed_tau_s.unwrap_or(d.tau_s),
+                position_follows: self.position_follows.unwrap_or(d.position_follows),
+            });
         }
         ch.check("actors.vehicles.bsm_timing.stamp_chain")
             .map_err(|e| ("actors.vehicles.bsm_timing.stamp_chain", e))?;

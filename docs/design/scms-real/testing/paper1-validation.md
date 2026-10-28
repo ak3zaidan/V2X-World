@@ -300,3 +300,14 @@ modelled (`radio.devices.rsu.off_channel`) and matches every interval share; KS 
 RSU ids now start at `ROADSIDE_ID_BASE`, so a vehicle's draws do not depend on the RSU count
 (the golden digests of scenarios with RSUs, tests/regression phase2-path and i-s1-phase2-60s, are expected to move and are not yet re-blessed: the test lock was not free); `attack_start` is the first falsified
 message, and the six k-rule budget rows pass.
+
+## 10. P1-E4 candidate E in the engine (2026-10-28, fix round 5)
+
+The stamp chain of research/synthesis/p1-realdata-baseline.md §7.5 is in the engine,
+off unless a scenario enables it: `actors.vehicles.bsm_timing.stamp_chain.profile:
+tampa_chain` (Tampa's 22 chain devices: stays 0.332 / 0.766, a step at 0.891 of 0 -> -1
+transitions and 0.052 of 0 -> 0 BSMs, none out of state -1, along 7.0 / 18.2 cm and cross
+3.8 / 11.9 cm at p50 / p90) on `data/calibration/bsm-timing-cvpilot-chain-device.yaml`, and
+the optional speed change `speed_per_m` (0.499 m/s per m; `speed_tau_s` 0.357 s and
+`position_follows` 0.759 when unset). Scenarios `p1-e4-ce.yaml` and `p1-e4-ces.yaml`; rows
+and results in `crates/v2xw-engine/tests/expectations/p1-stamp-e.yaml`.
