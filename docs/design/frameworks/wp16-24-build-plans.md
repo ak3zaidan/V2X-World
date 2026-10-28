@@ -680,6 +680,35 @@ out of scope here.
   - `tests/nema_spat.rs`;
   - a NEMA adapter function `NemaSettings::from_sumo_params(&BTreeMap<String,String>)`,
     for WP-23.
+
+  **Done 2026-10-28 (P17.9).**
+  - **Priority through the rings.** `PriorityControllers::serve_through_rings` marks the
+    NEMA plans. Their requests are logged and lapsed as before, but never served by
+    moving the clock, and `PriorityControllers::requests` hands them to the rings.
+    `NemaControllers::set_priority` maps the earliest request's signal group to the
+    phase that protects the through movement of the lane the head faces.
+  - **The ring's priority call** (`nema::PriorityCall`). Green extension holds the
+    phase's green until arrival plus the clearance margin, at most its maximum plus
+    `max_extension_s`. Early green ends every conflicting green once it has run
+    `PriorityParams::min_green_s` and any walk it serves, which overrides coordination.
+    No recovery walk is needed: the rings resume, and coordination re-finds its yield
+    point.
+  - **Open.** Phases between the cut and the requested phase are not omitted.
+  - **The SPaT window.** `ActuatedOutlook::earliest_s` carries
+    `DualRing::earliest_change_s` as every group's `minEndTime`: the minimum green, walk
+    edges, and clearance ends, or 0 with an idle ring. `maxEndTime` is
+    `remaining + longest` (green and clearance, or the cycle when coordinated), and
+    `likelyTime` is the projection. The window covers ambers too, because the
+    projection quantises their ends to 0.5 s.
+  - **Test.** `tests/nema_spat.rs`: a 1200 s 3x3-grid junction with keyed calls. Every
+    group change falls inside the window published the step before (100 %), and
+    `likelyTime` is within 0.5 s + 2 steps of the change when the calls have not changed
+    for 2 s.
+  - **SUMO adapter.** `NemaSettings::from_sumo_params` reads `ring1`, `ring2` (order to
+    `lefts`, `0` absent), `barrierPhases`, `barrier2Phases`, `coordinate-mode` (it
+    coordinates `barrier2Phases`), `minRecall` (every phase when unset, SUMO's default),
+    `maxRecall`, `fixForceOff` and `controllerType`. Ring 1 lagging while ring 2 leads
+    cannot be stated, and is an error.
 - **P17.10** (3 h): the `invariants/nema-safety` check, the expectation rows, the city
   run through `runtiny.sh`, the model card, and the status note. The card states:
   "Re-implemented from FHWA STM 2nd ed. and NEMA TS 2-2016; SUMO was read for behaviour

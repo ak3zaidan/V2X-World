@@ -226,6 +226,8 @@ struct NemaPlan {
     ped: Vec<Option<v2xw_core::geom::Vec3>>,
     /// What each vehicle movement shows ([`left_rules`]).
     rules: Vec<Rule>,
+    /// The phase a priority request for each signal group asks for (P17.9).
+    group_phase: BTreeMap<u16, u8>,
     /// The vector showing, and when it began.
     shown: Vec<SignalState>,
     shown_since_s: f64,
@@ -615,12 +617,26 @@ impl NemaControllers {
             config.coord = Some(coordination(n, plan, &a, &config));
         }
         let ring = DualRing::new(config);
+        // The phase a priority request for a head's signal group asks for: the phase that
+        // protects the through movement of the lane the head faces.
+        let mut group_phase: BTreeMap<u16, u8> = BTreeMap::new();
+        for h in &plan.heads {
+            let through = (0..a.movements.len()).find_map(|m| {
+                (approach[m] == Some(h.lane) && a.movements[m].kind == MovementKind::Through)
+                    .then_some(rules[m].own)
+                    .flatten()
+            });
+            if let Some(q) = through {
+                group_phase.entry(h.group).or_insert(q);
+            }
+        }
         let mut p = NemaPlan {
             assign: a,
             ring,
             approach,
             ped,
             rules,
+            group_phase,
             shown: Vec::new(),
             shown_since_s: 0.0,
             projected_end_s: f64::NEG_INFINITY,
@@ -629,6 +645,29 @@ impl NemaControllers {
         };
         p.shown = p.vector(&p.ring);
         (p, demoted)
+    }
+
+    /// Serves plan `idx`'s standing priority requests, `(signal group, arrival)` earliest
+    /// first, through its rings: the earliest request whose group maps to a phase
+    /// ([`super::PriorityCall`], with `params`' limits). No request clears it.
+    pub fn set_priority(
+        &mut self,
+        idx: usize,
+        requests: &[(u16, f64)],
+        params: &crate::priority::PriorityParams,
+    ) {
+        let Some(p) = self.plans.get_mut(&idx) else {
+            return;
+        };
+        p.ring.priority = requests.iter().find_map(|(group, eta)| {
+            let phase = *p.group_phase.get(group)?;
+            Some(super::PriorityCall {
+                phase,
+                until_s: eta + params.clearance_margin_s,
+                max_extension_s: params.max_extension_s,
+                min_green_s: params.min_green_s,
+            })
+        });
     }
 
     /// Protected-permissive left phases run permissive because their lane also carries
@@ -665,9 +704,11 @@ impl NemaControllers {
         c
     }
 
-    /// The window the SPaT of plan `idx` may state at `now_s`: until P17.9 gives each
-    /// group its own, the next change may come at once or as late as the longest maximum
-    /// green after the projected one (a bound that always holds, not a tight one).
+    /// The window the SPaT of plan `idx` states at `now_s` (P17.9): the next change comes
+    /// no sooner than the rings' earliest possible change ([`super::DualRing::
+    /// earliest_change_s`]) and no later than the longest green and clearance after the
+    /// projected one (the whole cycle under coordination); `likelyTime` is the projection.
+    /// One window serves every group of the junction, so the bound holds for each.
     pub fn outlook(&self, idx: usize, now_s: f64) -> Option<crate::actuated::ActuatedOutlook> {
         let p = self.plans.get(&idx)?;
         let longest = p
@@ -684,9 +725,12 @@ impl NemaControllers {
             .coord
             .as_ref()
             .map_or(longest, |k| longest.max(k.cycle_s));
+        let remaining = (p.projected_end_s - now_s).max(0.0);
+        let earliest = p.ring.earliest_change_s();
         Some(crate::actuated::ActuatedOutlook {
-            cut_s: (p.projected_end_s - now_s).max(0.0),
+            cut_s: (remaining - earliest).max(0.0),
             extend_s: longest,
+            earliest_s: Some(earliest),
         })
     }
 
@@ -980,6 +1024,7 @@ mod tests {
                 approach: lanes.clone(),
                 ped: vec![None; 4],
                 rules,
+                group_phase: BTreeMap::new(),
                 shown: Vec::new(),
                 shown_since_s: 0.0,
                 projected_end_s: 0.0,

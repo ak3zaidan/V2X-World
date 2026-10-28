@@ -96,6 +96,10 @@ pub struct ActuatedOutlook {
     pub cut_s: f64,
     /// Seconds later, at most.
     pub extend_s: f64,
+    /// Under the NEMA dual ring: the soonest any of the junction's indications can change,
+    /// seconds from now, which is every group's `minEndTime` (`crate::nema::control`);
+    /// `None` for the single ring, whose window is `cut_s`.
+    pub earliest_s: Option<f64>,
 }
 
 /// `traffic.control` — the traffic control's own log: actuated signal decisions and
@@ -204,6 +208,24 @@ impl ActuatedControllers {
         self.nema.is_some()
     }
 
+    /// The plans under the NEMA dual ring.
+    pub fn nema_plans(&self) -> impl Iterator<Item = usize> + '_ {
+        self.nema.iter().flat_map(|n| n.plan_indices())
+    }
+
+    /// Hands NEMA plan `idx` its standing priority requests, `(signal group, arrival)`
+    /// (`crate::priority::PriorityControllers::requests`), served through its rings.
+    pub fn set_nema_priority(
+        &mut self,
+        idx: usize,
+        requests: &[(u16, f64)],
+        params: &crate::priority::PriorityParams,
+    ) {
+        if let Some(n) = &mut self.nema {
+            n.set_priority(idx, requests, params);
+        }
+    }
+
     /// Whether plan `idx` runs under the NEMA dual ring.
     pub fn is_nema(&self, idx: usize) -> bool {
         self.nema.as_ref().is_some_and(|n| n.controls(idx))
@@ -232,6 +254,7 @@ impl ActuatedControllers {
             return Some(ActuatedOutlook {
                 cut_s: 0.0,
                 extend_s: 0.0,
+                earliest_s: None,
             });
         }
         let held = if st.phase == i { st.held_s } else { 0.0 };
@@ -249,6 +272,7 @@ impl ActuatedControllers {
         Some(ActuatedOutlook {
             cut_s: (left - (min - elapsed).max(0.0)).clamp(0.0, left),
             extend_s: (p.max_green_s - elapsed - left).max(0.0),
+            earliest_s: None,
         })
     }
 

@@ -138,6 +138,9 @@ pub struct PriorityControllers {
     params: PriorityParams,
     plans: BTreeMap<usize, PlanState>,
     served: u64,
+    /// Plans whose requests the NEMA rings serve (WP-17 P17.9): logged and lapsed here,
+    /// never served by moving the clock.
+    through_rings: std::collections::BTreeSet<usize>,
 }
 
 impl PriorityControllers {
@@ -147,7 +150,31 @@ impl PriorityControllers {
             params,
             plans: BTreeMap::new(),
             served: 0,
+            through_rings: std::collections::BTreeSet::new(),
         }
+    }
+
+    /// The settings.
+    pub fn params(&self) -> PriorityParams {
+        self.params
+    }
+
+    /// Marks `plans` as served through the NEMA rings: their requests are kept, logged and
+    /// lapsed here, and [`Self::requests`] hands them to the rings.
+    pub fn serve_through_rings(&mut self, plans: impl Iterator<Item = usize>) {
+        self.through_rings.extend(plans);
+    }
+
+    /// The standing requests at `plan`: `(signal group, arrival at the stop line in
+    /// simulation seconds)`, earliest first.
+    pub fn requests(&self, plan: usize) -> Vec<(u16, f64)> {
+        let mut v: Vec<(u16, f64)> = self
+            .plans
+            .get(&plan)
+            .map(|st| st.requests.values().map(|r| (r.group, r.eta_s)).collect())
+            .unwrap_or_default();
+        v.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        v
     }
 
     /// How many requests were served to completion.
@@ -193,6 +220,10 @@ impl PriorityControllers {
 
     /// The service's outlook at `plan`, for the SPaT's max and likely end times.
     pub fn outlook(&self, world: &World, plan: usize, now_s: f64) -> Option<Outlook> {
+        // A NEMA junction's SPaT window comes from its rings (`crate::nema::control`).
+        if self.through_rings.contains(&plan) {
+            return None;
+        }
         let st = self.plans.get(&plan)?;
         let r = st
             .requests
@@ -239,6 +270,11 @@ impl PriorityControllers {
                 });
             }
             finished += (before - st.requests.len()) as u64;
+            // A NEMA dual-ring junction serves its requests through its rings
+            // (`crate::nema`): its clock is not moved here.
+            if self.through_rings.contains(&idx) {
+                continue;
+            }
             let Some((&requester, &req)) = st
                 .requests
                 .iter()

@@ -1742,9 +1742,14 @@ impl Engine {
                 capped: BTreeMap::new(),
                 missing: BTreeMap::new(),
             },
-            priority: crate::priority::PriorityControllers::new(
-                crate::priority::PriorityParams::default(),
-            ),
+            priority: {
+                let mut p = crate::priority::PriorityControllers::new(
+                    crate::priority::PriorityParams::default(),
+                );
+                // NEMA dual-ring junctions serve priority through their rings (P17.9).
+                p.serve_through_rings(actuated.nema_plans());
+                p
+            },
             actuated,
             traffic_log: None,
             perception: scenario_for_radio
@@ -3470,6 +3475,16 @@ impl Engine {
             };
             let calls = self.actuated.calls(&self.world, positions());
             let extend = self.actuated.extension_calls(&self.world, positions());
+            // A NEMA junction serves its standing priority requests through its rings
+            // (WP-17 P17.9): the priority service keeps and lapses them.
+            if self.actuated.has_nema() {
+                let params = self.priority.params();
+                let plans: Vec<usize> = self.actuated.nema_plans().collect();
+                for idx in plans {
+                    let requests = self.priority.requests(idx);
+                    self.actuated.set_nema_priority(idx, &requests, &params);
+                }
+            }
             // The NEMA dual ring also takes the pedestrians standing at its crosswalks'
             // push buttons (WP-17 P17.7); the single ring does not read them.
             let peds = if self.actuated.has_nema() {
@@ -5191,12 +5206,6 @@ impl Engine {
             .collect();
         let now_s = v2xw_core::time::ns_to_secs(now);
         for (plan, requester, group, eta) in requests {
-            // A NEMA dual-ring junction rewrites its own plan every few seconds, so a
-            // service that moves the plan's clock would be undone; priority through the
-            // rings is WP-17 P17.9. Until then its requests are not served.
-            if self.actuated.is_nema(plan) {
-                continue;
-            }
             if let Some(rec) =
                 self.priority
                     .request(&self.world, plan, requester, group, eta, now_s)

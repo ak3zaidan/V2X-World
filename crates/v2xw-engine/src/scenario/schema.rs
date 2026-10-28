@@ -716,6 +716,113 @@ impl NemaSettings {
     }
 }
 
+impl NemaSettings {
+    /// The settings a SUMO `NEMA` `tlLogic`'s `<param>`s state, for WP-23's importer. The
+    /// names are SUMO's documented ones (Simulation/NEMA); SUMO's code was not read.
+    ///
+    /// * `ring1`, `ring2`: phase lists, `0` for an absent phase. SUMO writes lead or lag
+    ///   as the order within a barrier group; here that becomes [`NemaSettings::lefts`]
+    ///   and the rings are written ascending.
+    /// * `barrierPhases`, `barrier2Phases`: the two barriers. With `coordinate-mode`
+    ///   true, SUMO's coordinated phases are `barrier2Phases`.
+    /// * `minRecall`: SUMO calls every phase when it is unset. `maxRecall` is empty when
+    ///   unset. SUMO has no soft recall, so none is set.
+    /// * `fixForceOff`: true is fixed force-offs. `controllerType`: `TS2` or `Type 170`.
+    ///
+    /// Other parameters are not read; the importer counts them.
+    ///
+    /// # Errors
+    ///
+    /// A list that does not parse, or a lead/lag pair this build cannot state (ring 1
+    /// lagging while ring 2 leads).
+    pub fn from_sumo_params(params: &BTreeMap<String, String>) -> Result<Self, String> {
+        let list = |key: &str| -> Result<Option<Vec<u8>>, String> {
+            let Some(v) = params.get(key) else {
+                return Ok(None);
+            };
+            let mut out = Vec::new();
+            for part in v.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+                let p: u8 = part
+                    .parse()
+                    .map_err(|_| format!("{key}: '{part}' is not a phase number"))?;
+                if p != 0 {
+                    out.push(p);
+                }
+            }
+            Ok(Some(out))
+        };
+        let flag = |key: &str| {
+            params
+                .get(key)
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"))
+        };
+        let mut n = NemaSettings {
+            soft_recall: Vec::new(),
+            ..NemaSettings::default()
+        };
+        // Leading when the barrier group's first phase is its left (odd).
+        let mut leads = [true, true];
+        for (k, key) in ["ring1", "ring2"].into_iter().enumerate() {
+            if let Some(ring) = list(key)? {
+                let main: Vec<u8> = ring
+                    .iter()
+                    .copied()
+                    .filter(|p| matches!(p, 1 | 2 | 5 | 6))
+                    .collect();
+                if main.len() == 2 {
+                    leads[k] = main[0] % 2 == 1;
+                }
+                let mut sorted = ring;
+                sorted.sort_unstable();
+                sorted.dedup();
+                if k == 0 {
+                    n.ring1 = sorted;
+                } else {
+                    n.ring2 = sorted;
+                }
+            }
+        }
+        n.lefts = match leads {
+            [true, true] => NemaLeftSequence::LeadLead,
+            [false, false] => NemaLeftSequence::LagLag,
+            [true, false] => NemaLeftSequence::LeadLag,
+            [false, true] => {
+                return Err(
+                    "ring1 lags and ring2 leads; this build states lead-lag as ring 1 leading"
+                        .to_string(),
+                );
+            }
+        };
+        if let Some(b) = list("barrierPhases")? {
+            n.barrier_phases = b;
+        }
+        if let Some(b) = list("barrier2Phases")? {
+            n.barrier2_phases = b;
+        }
+        n.coordination = flag("coordinate-mode");
+        if n.coordination {
+            n.coordinate_phases = n.barrier2_phases.clone();
+        }
+        n.min_recall = match list("minRecall")? {
+            Some(v) => v,
+            None => n.ring1.iter().chain(&n.ring2).copied().collect(),
+        };
+        n.max_recall = list("maxRecall")?.unwrap_or_default();
+        // Both act only under coordination (the loader refuses them otherwise).
+        if n.coordination && flag("fixForceOff") {
+            n.force_off = ForceOffMode::Fixed;
+        }
+        if let Some(t) = params.get("controllerType").filter(|_| n.coordination) {
+            let t = t.trim().to_ascii_lowercase().replace(' ', "");
+            n.controller_type = match t.as_str() {
+                "type170" => NemaControllerType::Type170,
+                _ => NemaControllerType::Ts2,
+            };
+        }
+        Ok(n)
+    }
+}
+
 impl Default for NemaSettings {
     fn default() -> Self {
         NemaSettings {
@@ -4540,5 +4647,57 @@ mod nema_settings_tests {
                 .iter()
                 .any(|x| x.contains("nema.permissive_display"))
         );
+    }
+
+    /// WP-17 P17.9, for WP-23: a SUMO NEMA programme's documented parameters become these
+    /// settings. Ring order states lead or lag, `0` marks an absent phase, coordinate
+    /// mode coordinates `barrier2Phases`, an unset `minRecall` calls every phase (SUMO's
+    /// default), and the result loads.
+    #[test]
+    fn nema_settings_from_sumo_params() {
+        use super::{NemaControllerType, NemaLeftSequence};
+        use std::collections::BTreeMap;
+        let p = |kv: &[(&str, &str)]| -> BTreeMap<String, String> {
+            kv.iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect()
+        };
+        let free = NemaSettings::from_sumo_params(&p(&[
+            ("ring1", "1,2,3,4"),
+            ("ring2", "6,5,0,8"),
+            ("barrierPhases", "4,8"),
+            ("barrier2Phases", "2,6"),
+        ]))
+        .expect("parses");
+        assert_eq!(free.lefts, NemaLeftSequence::LeadLag);
+        assert_eq!(free.ring2, [5, 6, 8]);
+        assert_eq!(free.min_recall, [1, 2, 3, 4, 5, 6, 8]);
+        assert!(!free.coordination);
+        let coordinated = NemaSettings::from_sumo_params(&p(&[
+            ("ring1", "2,1,4,3"),
+            ("ring2", "6,5,8,7"),
+            ("barrierPhases", "4,8"),
+            ("barrier2Phases", "2,6"),
+            ("coordinate-mode", "true"),
+            ("minRecall", "2,6"),
+            ("maxRecall", "4"),
+            ("fixForceOff", "true"),
+            ("controllerType", "Type 170"),
+        ]))
+        .expect("parses");
+        assert_eq!(coordinated.lefts, NemaLeftSequence::LagLag);
+        assert!(coordinated.coordination);
+        assert_eq!(coordinated.coordinate_phases, [2, 6]);
+        assert_eq!(coordinated.min_recall, [2, 6]);
+        assert_eq!(coordinated.max_recall, [4]);
+        assert_eq!(coordinated.force_off, ForceOffMode::Fixed);
+        assert_eq!(coordinated.controller_type, NemaControllerType::Type170);
+        assert!(block_errors(coordinated).is_empty());
+        assert!(block_errors(free).is_empty());
+        assert!(
+            NemaSettings::from_sumo_params(&p(&[("ring1", "2,1,3,4"), ("ring2", "5,6,7,8")]))
+                .is_err()
+        );
+        assert!(NemaSettings::from_sumo_params(&p(&[("ring1", "1,x")])).is_err());
     }
 }

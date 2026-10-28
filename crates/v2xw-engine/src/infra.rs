@@ -353,6 +353,14 @@ impl IntersectionFeed {
                     // may gap out as soon as its minimum has run, or be extended up to its
                     // maximum, and every later change moves with it; an amber is certain.
                     _ => match self.actuation {
+                        // The NEMA dual ring: one floor for every group, the soonest any
+                        // indication of the junction can change (`crate::nema::control`),
+                        // ambers included, since its projection quantises their ends.
+                        Some(a) if a.earliest_s.is_some() => (
+                            a.earliest_s.unwrap_or(0.0).min(remaining),
+                            remaining + a.extend_s,
+                            remaining,
+                        ),
                         Some(a) if state != SignalState::Amber => (
                             (remaining - a.cut_s).max(0.0),
                             remaining + a.extend_s,

@@ -332,7 +332,26 @@ pub struct DualRing {
     pub ped_waiting: [bool; 9],
     /// The shared clock, seconds: coordination reads its local cycle from it.
     pub clock_s: f64,
+    /// The priority request served through the rings, if one stands (P17.9).
+    pub priority: Option<PriorityCall>,
     counters: RingCounters,
+}
+
+/// A priority request as the rings serve it (NTCIP 1211's strategies, with the limits of
+/// `crate::priority::PriorityParams`): a **green extension** holds the requested phase's
+/// green until the vehicle has arrived and cleared, at most `max_extension_s` past its
+/// maximum; an **early green** ends every conflicting green once it has run
+/// `min_green_s` (and any walk it serves), so the rings reach the requested phase sooner.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PriorityCall {
+    /// The phase the vehicle needs.
+    pub phase: u8,
+    /// Hold its green until this clock time: the arrival plus the clearance margin.
+    pub until_s: f64,
+    /// The longest its green is held past its maximum, seconds.
+    pub max_extension_s: f64,
+    /// A conflicting green is never ended before this, seconds.
+    pub min_green_s: f64,
 }
 
 impl DualRing {
@@ -368,6 +387,7 @@ impl DualRing {
             crossing: false,
             ped_waiting: [false; 9],
             clock_s: 0.0,
+            priority: None,
             counters: RingCounters::default(),
         }
     }
@@ -403,6 +423,12 @@ impl DualRing {
             }
             c.demand[p] = calls.demand[p] || self.ped_waiting[p];
             c.extend[p] = calls.extend[p];
+        }
+        // A priority request calls its phase.
+        if let Some(pc) = self.priority
+            && self.present[usize::from(pc.phase)]
+        {
+            c.demand[usize::from(pc.phase)] = true;
         }
         // The coordinated phases are always called: the cycle returns to them.
         if let Some(k) = &self.config.coord {
@@ -488,6 +514,21 @@ impl DualRing {
             Interval::Green => {
                 let t = &self.config.timing[usize::from(s.phase)];
                 let past_min = s.held_s + 1e-9 >= self.min_green(s);
+                if let Some(pc) = self.priority {
+                    if s.phase == pc.phase {
+                        // Green extension: held until the vehicle has cleared, capped.
+                        if self.clock_s < pc.until_s
+                            && s.held_s < t.max_green_s + pc.max_extension_s
+                        {
+                            return false;
+                        }
+                    } else if !assign::concurrent(s.phase, pc.phase)
+                        && !self.greens().contains(&pc.phase)
+                    {
+                        // Early green: a conflicting green ends once past its minimum.
+                        return past_min && s.held_s + 1e-9 >= pc.min_green_s;
+                    }
+                }
                 if let Some(k) = &self.config.coord {
                     if k.phases.contains(&s.phase) {
                         // A coordinated green holds to its yield point and may end only in
@@ -740,6 +781,38 @@ impl DualRing {
                 }
             }
         }
+    }
+
+    /// The soonest any indication can change, seconds from now (for SPaT's
+    /// `minEndTime`): a green not before its minimum (or the end of its walk or
+    /// pedestrian clearance), a yellow or red clearance at its end, and an idle ring at once
+    /// (a call may start it).
+    pub fn earliest_change_s(&self) -> f64 {
+        let mut soonest = f64::INFINITY;
+        for s in &self.state {
+            let t = &self.config.timing[usize::from(s.phase)];
+            let left = match s.interval {
+                Interval::Idle => 0.0,
+                Interval::Yellow => t.yellow_s - s.held_s,
+                Interval::RedClear => t.red_clear_s - s.held_s,
+                Interval::Green => {
+                    let mut g = self.min_green(s) - s.held_s;
+                    if s.walk
+                        && let Some((walk, clear)) = self.config.ped[usize::from(s.phase)]
+                    {
+                        let h = s.held_s - s.walk_from_s;
+                        for edge in [walk, walk + clear] {
+                            if h < edge {
+                                g = g.min(edge - h);
+                            }
+                        }
+                    }
+                    g
+                }
+            };
+            soonest = soonest.min(left.max(0.0));
+        }
+        soonest
     }
 
     /// What a crosswalk of phase `p` shows: walk (green) for the walk interval of a green
@@ -1354,5 +1427,45 @@ mod tests {
                 ctl.counters()
             );
         }
+    }
+
+    /// Accept (WP-17 P17.9): priority through the rings. A quiet 2 against a call on 4
+    /// would end at its 7 s minimum; a request for 2 arriving at 15 s holds it to 15 s
+    /// (green extension), and a request that never arrives holds it only to its maximum
+    /// plus the extension cap (45 + 10 s). Busy 2 and 6 against a call on 4 would run to
+    /// their 45 s maximum; a request for 4 ends them at the 7 s priority minimum (early
+    /// green).
+    #[test]
+    fn priority_extends_and_truncates_through_the_rings() {
+        let ends_at = |pc: Option<PriorityCall>, busy: bool| {
+            let mut ctl = controller(NemaLeftSequence::LeadLead, &ALL);
+            ctl.priority = pc;
+            let mut c = Calls::default();
+            c.demand[4] = true;
+            c.extend[2] = busy;
+            c.extend[6] = busy;
+            let mut t = 0.0;
+            while ctl.greens()[0] == 2 && t < 200.0 {
+                ctl.step(&c, DT);
+                t += DT;
+            }
+            t
+        };
+        let call = |phase, until_s| {
+            Some(PriorityCall {
+                phase,
+                until_s,
+                max_extension_s: 10.0,
+                min_green_s: 7.0,
+            })
+        };
+        assert!(near(ends_at(None, false), 7.0));
+        let held = ends_at(call(2, 15.0), false);
+        assert!(near(held, 15.0), "extension ended 2 at {held}");
+        let capped = ends_at(call(2, 1.0e9), false);
+        assert!(near(capped, 55.0), "the cap ended 2 at {capped}");
+        assert!(near(ends_at(None, true), THROUGH.max_green_s));
+        let cut = ends_at(call(4, 1.0e9), true);
+        assert!(near(cut, 7.0), "early green ended 2 at {cut}");
     }
 }
