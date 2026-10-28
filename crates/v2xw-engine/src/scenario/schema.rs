@@ -4330,10 +4330,10 @@ mod nema_settings_tests {
     }
 
     /// P17.5 wired the controller: `control: nema` loads with its defaults, and (with the
-    /// P17.2 contract replaced) only what later pieces build is refused: pedestrian recall
-    /// (P17.7), coordination and the load-time plan edits the rings would undo (P17.8).
-    /// P17.6 built the protected-only and permissive-only lefts, which now load. A block
-    /// beside any other control is a setting that would do nothing.
+    /// P17.2 contract replaced) only what later pieces build is refused: coordination and
+    /// the load-time plan edits the rings would undo (P17.8). P17.6 built the
+    /// protected-only and permissive-only lefts and P17.7 pedestrian recall, which now
+    /// load. A block beside any other control is a setting that would do nothing.
     #[test]
     fn nema_loads_and_its_unbuilt_parts_are_refused() {
         assert!(errors(&nema(NemaSettings::default())).is_empty());
@@ -4353,13 +4353,12 @@ mod nema_settings_tests {
             };
             assert!(errors(&nema(n)).is_empty(), "{mode:?} loads");
         }
-        unbuilt(
-            NemaSettings {
-                ped_recall: vec![2],
-                ..d()
-            },
-            "nema.ped_recall",
-        );
+        // P17.7 built pedestrian recall.
+        let recall = NemaSettings {
+            ped_recall: vec![2],
+            ..d()
+        };
+        assert!(errors(&nema(recall)).is_empty(), "pedestrian recall loads");
         unbuilt(
             NemaSettings {
                 coordination: true,

@@ -2428,8 +2428,8 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Partial,
         note: "The NEMA dual-ring eight-phase controller (control: nema): rings, barriers, \
                lead/lag, the three left-turn modes and both permissive faces, left-turn \
-               timing, recalls, yellow, red and pedestrian timing run. Pedestrian calls, \
-               coordination and priority are later WP-17 pieces, and the loader refuses \
+               timing, recalls, yellow, red, and pedestrian calls, recall and timing run. \
+               Coordination and priority are later WP-17 pieces, and the loader refuses \
                the settings that need them.",
     },
     KeyStatus {
@@ -2463,9 +2463,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     },
     KeyStatus {
         path: "traffic.signals.nema.ped_recall",
-        status: Status::Refused,
-        note: "Refused when set: pedestrian calls are WP-17 P17.7; until then every \
-               crosswalk phase is on pedestrian recall.",
+        status: Status::Wired,
+        note: "These phases serve their walk every cycle; the others only when a \
+               pedestrian standing at the crosswalk has pressed the button.",
     },
     KeyStatus {
         path: "actors.vehicles.demand.fleet_size",
@@ -5015,19 +5015,11 @@ pub(crate) fn nema_checks(g: &super::schema::SignalControl, e: &mut Vec<Scenario
         }
         let n = g.nema.clone().unwrap_or_default();
         // The parts of the controller later pieces build.
-        for (path, unbuilt, piece) in [
-            (
-                "traffic.signals.nema.ped_recall",
-                !n.ped_recall.is_empty(),
-                "pedestrian calls and recall are P17.7 (until then every crosswalk phase \
-                 is on pedestrian recall)",
-            ),
-            (
-                "traffic.signals.nema.coordination",
-                n.coordination,
-                "coordination is P17.8",
-            ),
-        ] {
+        for (path, unbuilt, piece) in [(
+            "traffic.signals.nema.coordination",
+            n.coordination,
+            "coordination is P17.8",
+        )] {
             if unbuilt {
                 e.push(conflict(
                     path,

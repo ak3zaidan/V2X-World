@@ -3470,10 +3470,23 @@ impl Engine {
             };
             let calls = self.actuated.calls(&self.world, positions());
             let extend = self.actuated.extension_calls(&self.world, positions());
-            self.actuated.step_with(
+            // The NEMA dual ring also takes the pedestrians standing at its crosswalks'
+            // push buttons (WP-17 P17.7); the single ring does not read them.
+            let peds = if self.actuated.has_nema() {
+                crate::nema::control::PedestrianIndex::new(
+                    self.actors
+                        .values()
+                        .filter(|a| a.class == v2xw_mobility::VehicleClass::Pedestrian)
+                        .map(|a| (a.last.pos, a.last.vel)),
+                )
+            } else {
+                crate::nema::control::PedestrianIndex::default()
+            };
+            self.actuated.step_with_pedestrians(
                 &mut self.world,
                 &extend,
                 &calls,
+                &peds,
                 v2xw_core::time::ns_to_secs(now),
                 step.as_secs_f64(),
             );

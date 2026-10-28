@@ -199,6 +199,11 @@ impl ActuatedControllers {
         }
     }
 
+    /// Whether any plan runs under the NEMA dual ring.
+    pub fn has_nema(&self) -> bool {
+        self.nema.is_some()
+    }
+
     /// Whether plan `idx` runs under the NEMA dual ring.
     pub fn is_nema(&self, idx: usize) -> bool {
         self.nema.as_ref().is_some_and(|n| n.controls(idx))
@@ -326,11 +331,33 @@ impl ActuatedControllers {
         now_s: f64,
         dt_s: f64,
     ) {
+        self.step_with_pedestrians(
+            world,
+            extend,
+            calls,
+            &crate::nema::control::PedestrianIndex::default(),
+            now_s,
+            dt_s,
+        );
+    }
+
+    /// [`Self::step_with`] with the pedestrians standing at crosswalks, whose push-button
+    /// calls the NEMA controller serves (`crate::nema::control::PedestrianIndex`). The
+    /// single-ring controller does not read them.
+    pub fn step_with_pedestrians(
+        &mut self,
+        world: &mut World,
+        extend: &BTreeSet<LaneId>,
+        calls: &BTreeSet<LaneId>,
+        peds: &crate::nema::control::PedestrianIndex,
+        now_s: f64,
+        dt_s: f64,
+    ) {
         let Some(p) = self.params.clone() else {
             return;
         };
         if let Some(n) = &mut self.nema {
-            n.step(world, extend, calls, now_s, dt_s);
+            n.step(world, extend, calls, peds, now_s, dt_s);
         }
         for (&idx, st) in &mut self.plans {
             let Some(plan) = world.signals.get(idx) else {

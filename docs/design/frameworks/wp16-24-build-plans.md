@@ -613,6 +613,32 @@ out of scope here.
     left lane.
 - **P17.7** (3 h): pedestrian phases (walk and clearance timing, calls from waiting
   walkers in `v2xw-world/src/walk.rs`) and recall, with the ped test.
+
+  **Done 2026-10-28 (P17.7).** Pedestrian intervals live in the ring machine. Each phase
+  with crosswalks gets one interval, `RingConfig::ped[p] = (walk_s, clearance)`, timed for
+  the longest of its crosswalks at `ped_speed_mps`.
+  - **Calls.** A standing pedestrian (under 0.3 m/s) within `PUSH_BUTTON_REACH_M` = 2.5 m
+    of a crosswalk's kerb end presses its button. MUTCD 2009 §4E.08 sets the button's
+    placement [verify the paragraph]. The call is latched: it waits for the phase's next
+    green, unless the walk now showing lets the pedestrian start.
+  - **Which greens walk.** A green walks when it is called or on `ped_recall`. That green
+    holds walk + clearance + `max(0, 3 s − Y − R)` (the MUTCD buffer may overlap the
+    vehicle change interval). Any other green does not walk, and the crosswalk shows
+    don't walk.
+  - **Pedestrian recycle.** A green resting with no conflicting call serves a new walk
+    on a call, at once. Without it a pedestrian beside a resting main street would wait
+    for a vehicle elsewhere to cycle the controller; typical controller practice
+    [verify against the STM's rest-in-walk text].
+  - **Where the calls come from.** The engine passes standing `VehicleClass::Pedestrian`
+    actors through `ActuatedControllers::step_with_pedestrians` when the dual ring is on.
+    The single ring is unchanged.
+  - **Change from P17.5.** P17.5's blanket pedestrian recall is gone. With
+    `ped_recall: []` (the default) crosswalks walk only when called, so a grid with
+    crosswalks and no pedestrians no longer holds the long pedestrian minimums.
+  - **Tests.** `nema::tests::ped_recall_serves_walk` (recall walks every cycle; a call
+    from a single step is latched and served) and
+    `nema::control::tests::a_pedestrian_at_the_kerb_calls_the_walk` (TR 36.885 urban
+    grid).
 - **P17.8** (3 h): coordination (cycle, offset, force-offs fixed or floating, permissive
   window, yield point), the `green_wave_speed_mps` interplay (`actuated.rs:385`
   `coordinate`), and the coordination test.

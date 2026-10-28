@@ -27,12 +27,14 @@
 //!   (green-yield, then amber), or both. The window under a flashing yellow arrow is the
 //!   opposing through's green, and under a circular green its own approach's green. A
 //!   protected-permissive left from a lane it shares with the through runs permissive.
-//! * A crosswalk walks for `walk_s` from the start of its phase's green, then shows its
-//!   pedestrian change interval (amber, `crossing length / ped_speed_mps`), then don't
-//!   walk. Until pedestrian push-button calls exist (P17.7) every crosswalk phase is on
-//!   pedestrian recall, as is usual downtown, and its minimum green is raised to hold the
-//!   walk, the clearance and the MUTCD 2009 §4E.06 3 s buffer, less the vehicle yellow and
-//!   red that the buffer may overlap.
+//! * A crosswalk walks for `walk_s` from the start of a green that serves its walk, then
+//!   shows its pedestrian change interval (amber, the phase's longest crosswalk at
+//!   `ped_speed_mps`), then don't walk (P17.7, [`super::DualRing::crosswalk`]). A green
+//!   serves the walk when a pedestrian standing within [`PUSH_BUTTON_REACH_M`] of the
+//!   crosswalk's kerb end has called it, or when the phase is on `nema.ped_recall`; that
+//!   green then holds the walk, the clearance and the MUTCD 2009 §4E.06 3 s buffer, less
+//!   the vehicle yellow and red the buffer may overlap. A call made after the walk ended
+//!   waits for the next green.
 //!
 //! # Timing
 //!
@@ -59,9 +61,7 @@ pub const PROJECTION_STEP_S: f64 = 0.5;
 /// maxima (two sides of 45 s and 25 s greens and their clearances is under 160 s).
 pub const PROJECTION_HORIZON_S: f64 = 240.0;
 
-/// MUTCD 2009 §4E.06 ¶15: at least 3 s of steady don't walk before a conflicting vehicle
-/// is released.
-pub const PED_BUFFER_S: f64 = 3.0;
+pub use super::PED_BUFFER_S;
 
 /// The MUTCD 2009 §4E.06 walk and clearance speed used when neither `nema.*` nor
 /// `world.signals.*` states one: 7 s and 3.5 ft/s.
@@ -162,6 +162,59 @@ pub fn left_rules(
     (rules, demoted)
 }
 
+/// How close to a crosswalk's kerb end a standing pedestrian must be to have pressed its
+/// push button, metres: the button is at the kerb, within reach of the waiting area
+/// (MUTCD 2009 §4E.08 places it within 5 ft (1.5 m) of the crosswalk's extended edge and
+/// 1.5 to 6 ft (0.5 to 1.8 m) from the kerb [verify the paragraph]).
+pub const PUSH_BUTTON_REACH_M: f64 = 2.5;
+
+/// A pedestrian below this speed is standing, m/s.
+pub const STANDING_MPS: f64 = 0.3;
+
+/// The standing pedestrians of one step, bucketed on a grid so a crosswalk looks only at
+/// its own neighbourhood.
+#[derive(Debug, Clone, Default)]
+pub struct PedestrianIndex {
+    cells: BTreeMap<(i64, i64), Vec<v2xw_core::geom::Vec3>>,
+}
+
+impl PedestrianIndex {
+    const CELL_M: f64 = 10.0;
+
+    fn cell(p: v2xw_core::geom::Vec3) -> (i64, i64) {
+        (
+            (p.x / Self::CELL_M).floor() as i64,
+            (p.y / Self::CELL_M).floor() as i64,
+        )
+    }
+
+    /// The index over pedestrians at `positions` with velocities, keeping the standing.
+    pub fn new(
+        pedestrians: impl Iterator<Item = (v2xw_core::geom::Vec3, v2xw_core::geom::Vec3)>,
+    ) -> Self {
+        let mut cells: BTreeMap<(i64, i64), Vec<v2xw_core::geom::Vec3>> = BTreeMap::new();
+        for (pos, vel) in pedestrians {
+            if vel.x.hypot(vel.y) < STANDING_MPS {
+                cells.entry(Self::cell(pos)).or_default().push(pos);
+            }
+        }
+        PedestrianIndex { cells }
+    }
+
+    /// Whether a standing pedestrian is within push-button reach of `kerb`.
+    pub fn waiting_at(&self, kerb: v2xw_core::geom::Vec3) -> bool {
+        let (cx, cy) = Self::cell(kerb);
+        (cx - 1..=cx + 1).any(|x| {
+            (cy - 1..=cy + 1).any(|y| {
+                self.cells.get(&(x, y)).is_some_and(|v| {
+                    v.iter()
+                        .any(|p| (p.x - kerb.x).hypot(p.y - kerb.y) <= PUSH_BUTTON_REACH_M)
+                })
+            })
+        })
+    }
+}
+
 /// One junction under the dual-ring controller.
 #[derive(Debug, Clone)]
 struct NemaPlan {
@@ -169,8 +222,8 @@ struct NemaPlan {
     ring: DualRing,
     /// The approach lane of each vehicle movement.
     approach: Vec<Option<LaneId>>,
-    /// `(walk_s, clearance_s)` of each crosswalk movement.
-    ped: Vec<Option<(f64, f64)>>,
+    /// Where each crosswalk movement starts (its kerb end), for the push-button calls.
+    ped: Vec<Option<v2xw_core::geom::Vec3>>,
     /// What each vehicle movement shows ([`left_rules`]).
     rules: Vec<Rule>,
     /// The vector showing, and when it began.
@@ -198,12 +251,8 @@ impl NemaPlan {
             .iter()
             .enumerate()
             .map(|(m, a)| {
-                if let Some((walk, clear)) = self.ped[m] {
-                    return match showing(a.phase) {
-                        Some((Interval::Green, h)) if h + 1e-9 < walk => SignalState::Green,
-                        Some((Interval::Green, h)) if h + 1e-9 < walk + clear => SignalState::Amber,
-                        _ => SignalState::Red,
-                    };
+                if self.ped[m].is_some() {
+                    return ring.crosswalk(a.phase);
                 }
                 let r = self.rules[m];
                 match r.own.and_then(showing) {
@@ -222,13 +271,25 @@ impl NemaPlan {
     /// The calls of this junction's phases from the detector lane sets: a movement's lane
     /// calls the phase that protects it, or, for a permissive-only left, the phase that
     /// lets it turn.
-    fn calls(&self, calls: &BTreeSet<LaneId>, extend: &BTreeSet<LaneId>) -> Calls {
+    fn calls(
+        &self,
+        calls: &BTreeSet<LaneId>,
+        extend: &BTreeSet<LaneId>,
+        peds: &PedestrianIndex,
+    ) -> Calls {
         let mut c = Calls::default();
         for (m, r) in self.rules.iter().enumerate() {
             if let (Some(l), Some(q)) = (self.approach[m], r.own.or(r.permit)) {
                 let q = usize::from(q);
                 c.demand[q] |= calls.contains(&l);
                 c.extend[q] |= extend.contains(&l);
+            }
+        }
+        for (m, start) in self.ped.iter().enumerate() {
+            if let Some(start) = start
+                && peds.waiting_at(*start)
+            {
+                c.ped[usize::from(self.assign.movements[m].phase)] = true;
             }
         }
         c
@@ -467,21 +528,19 @@ impl NemaControllers {
             if am.kind != MovementKind::Crossing {
                 continue;
             }
-            let length = world
+            let Some(lane) = world
                 .roads
                 .try_lane(plan.controlled[m])
                 .filter(|l| l.kind == LaneKind::Crossing)
-                .map_or(0.0, |l| l.length_m);
-            let clear = length / speed;
-            ped[m] = Some((walk, clear));
+            else {
+                continue;
+            };
+            ped[m] = Some(lane.start());
+            // One pedestrian interval per phase, timed for its longest crosswalk.
             let q = usize::from(am.phase);
-            let t = &mut config.timing[q];
-            let need = walk + clear + (PED_BUFFER_S - t.yellow_s - t.red_clear_s).max(0.0);
-            t.min_green_s = t.min_green_s.max(need);
-            t.max_green_s = t.max_green_s.max(t.min_green_s);
-            if !config.min_recall.contains(&am.phase) {
-                config.min_recall.push(am.phase);
-            }
+            let clear = lane.length_m / speed;
+            let longest = config.ped[q].map_or(0.0, |(_, c)| c);
+            config.ped[q] = Some((walk, clear.max(longest)));
         }
         let ring = DualRing::new(config);
         let mut p = NemaPlan {
@@ -558,11 +617,12 @@ impl NemaControllers {
         world: &mut World,
         extend: &BTreeSet<LaneId>,
         calls: &BTreeSet<LaneId>,
+        peds: &PedestrianIndex,
         now_s: f64,
         dt_s: f64,
     ) {
         for (&idx, p) in &mut self.plans {
-            let c = p.calls(calls, extend);
+            let c = p.calls(calls, extend, peds);
             p.ring.step(&c, dt_s);
             let v = p.vector(&p.ring);
             let mut rewrite = false;
@@ -649,7 +709,14 @@ mod tests {
                         (h >> 59) < 9
                     })
                     .collect();
-                ctl.step(&mut world, &calls, &calls, now, dt);
+                ctl.step(
+                    &mut world,
+                    &calls,
+                    &calls,
+                    &PedestrianIndex::default(),
+                    now,
+                    dt,
+                );
                 let plan = &world.signals[0];
                 plan_invariants(plan).unwrap_or_else(|e| panic!("world {k} t {now}: {e}"));
                 let want = ctl.showing(0).expect("controlled");
@@ -858,5 +925,79 @@ mod tests {
         assert_eq!(fya[3], SignalState::GreenYield, "FYA: {fya:?}");
         assert_eq!(fya[2], SignalState::Amber);
         assert_eq!(fya[0], SignalState::Green);
+    }
+
+    /// Accept (WP-17 P17.7): a pedestrian standing at a crosswalk's kerb end calls its walk.
+    /// On the TR 36.885 urban grid (sidewalks and signalised crosswalks), with no vehicle
+    /// and no pedestrian recall, a crosswalk of the first plan never walks in five minutes;
+    /// with one pedestrian standing at its kerb end it walks, and the walk is in the plan
+    /// the pedestrians read. A pedestrian walking past does not press the button.
+    #[test]
+    fn a_pedestrian_at_the_kerb_calls_the_walk() {
+        use v2xw_core::geom::Vec3;
+        use v2xw_world::ImportOptions;
+        use v2xw_world::procedural::GridParams;
+        let base = v2xw_world::procedural::grid(
+            &GridParams::tr36885_urban(),
+            &ImportOptions::default(),
+        )
+        .expect("grid");
+        let control = SignalControl {
+            control: crate::scenario::schema::SignalControlKind::Nema,
+            ..SignalControl::default()
+        };
+        let probe = NemaControllers::new(&control, &base);
+        let crossings = base
+            .signals
+            .iter()
+            .map(|s| {
+                s.controlled
+                    .iter()
+                    .filter(|l| base.roads.lane(**l).kind == LaneKind::Crossing)
+                    .count()
+            })
+            .sum::<usize>();
+        let (idx, m) = probe
+            .plan_indices()
+            .find_map(|i| {
+                let p = &probe.plans[&i];
+                (0..p.ped.len())
+                    .find(|m| p.ped[*m].is_some())
+                    .map(|m| (i, m))
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "no dual-ring plan has a crosswalk: {} plans, {crossings} controlled \
+                     crosswalks, fallbacks {:?}",
+                    base.signals.len(),
+                    probe.fallback_counts()
+                )
+            });
+        let kerb = probe.plans[&idx].ped[m].expect("kerb");
+        let walks = |peds: Vec<(Vec3, Vec3)>| {
+            let mut world = base.clone();
+            let mut ctl = NemaControllers::new(&control, &world);
+            let index = PedestrianIndex::new(peds.into_iter());
+            let none = BTreeSet::new();
+            let mut walked = 0.0;
+            for k in 0..3000u32 {
+                let now = f64::from(k) * 0.1;
+                ctl.step(&mut world, &none, &none, &index, now, 0.1);
+                if world.signals[idx].states_at(now).expect("states")[m] == SignalState::Green {
+                    walked += 0.1;
+                }
+            }
+            walked
+        };
+        let still = Vec3::new(0.0, 0.0, 0.0);
+        assert_eq!(walks(Vec::new()), 0.0, "a walk with nobody waiting");
+        let passing = Vec3::new(1.4, 0.0, 0.0);
+        assert_eq!(
+            walks(vec![(kerb, passing)]),
+            0.0,
+            "a passer-by pressed the button"
+        );
+        let w = walks(vec![(Vec3::new(kerb.x + 1.0, kerb.y, kerb.z), still)]);
+        assert!(w >= 7.0 - 0.1, "the waiting pedestrian got {w} s of walk");
     }
 }

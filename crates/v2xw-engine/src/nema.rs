@@ -80,6 +80,13 @@ pub struct RingState {
     pub gapped: bool,
     /// The phase the clearance leads to, 0 when it leads across the barrier.
     pub next: u8,
+    /// Whether this green serves its pedestrian walk (decided when the green starts, or
+    /// recycled while it rests).
+    pub walk: bool,
+    /// Seconds into the green at which the walk began.
+    pub walk_from_s: f64,
+    /// Whether [`RingState::walk`] has been decided for this green.
+    walk_decided: bool,
 }
 
 impl RingState {
@@ -98,6 +105,9 @@ impl RingState {
             maxed: false,
             gapped: false,
             next: 0,
+            walk: false,
+            walk_from_s: 0.0,
+            walk_decided: false,
         }
     }
 }
@@ -105,10 +115,12 @@ impl RingState {
 /// The detector calls a step sees, by NEMA phase (index 1-8; 0 unused).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Calls {
-    /// A vehicle (or pedestrian) is waiting for the phase: a presence call.
+    /// A vehicle is waiting for the phase: a presence call.
     pub demand: [bool; 9],
     /// A vehicle is on the phase's extension detectors now.
     pub extend: [bool; 9],
+    /// A pedestrian is waiting to cross on the phase's walk (a push-button call).
+    pub ped: [bool; 9],
 }
 
 /// The fixed part of a dual-ring controller: which phases exist, their order and timing,
@@ -129,6 +141,26 @@ pub struct RingConfig {
     /// (dual entry, the usual setting for the through phases; STM 2nd ed. ch. 5
     /// [verify the clause]): `[ring][0 main, 1 side]`, 0 for none.
     pub dual_entry: [[u8; 2]; 2],
+    /// Each phase's pedestrian interval `(walk_s, clearance_s)`, for the phases that carry
+    /// a crosswalk (P17.7). The clearance is the longest crosswalk's at the clearance
+    /// walking speed (MUTCD 2009 §4E.06).
+    pub ped: [Option<(f64, f64)>; 9],
+    /// Phases whose walk is served every cycle without a call (pedestrian recall).
+    pub ped_recall: Vec<u8>,
+}
+
+/// MUTCD 2009 §4E.06 ¶15: at least 3 s of steady don't walk before a conflicting vehicle
+/// is released. The buffer may overlap the vehicle yellow and red.
+pub const PED_BUFFER_S: f64 = 3.0;
+
+impl RingConfig {
+    /// The shortest green of phase `p` when it serves its walk: the walk, the pedestrian
+    /// change interval and whatever of the buffer the yellow and red do not cover.
+    pub fn walk_min_green_s(&self, p: u8) -> Option<f64> {
+        let (walk, clear) = self.ped[usize::from(p)]?;
+        let t = &self.timing[usize::from(p)];
+        Some(walk + clear + (PED_BUFFER_S - t.yellow_s - t.red_clear_s).max(0.0))
+    }
 }
 
 impl RingConfig {
@@ -179,6 +211,8 @@ impl RingConfig {
                 [entry(&n.barrier2_phases, 0), entry(&n.barrier_phases, 0)],
                 [entry(&n.barrier2_phases, 1), entry(&n.barrier_phases, 1)],
             ],
+            ped: [None; 9],
+            ped_recall: keep(&n.ped_recall),
         }
     }
 }
@@ -229,6 +263,8 @@ pub struct DualRing {
     pub main: bool,
     /// A crossing is under way: both rings are clearing towards the other side.
     pub crossing: bool,
+    /// Pedestrian calls waiting for a phase's next walk (a push button latches).
+    pub ped_waiting: [bool; 9],
     counters: RingCounters,
 }
 
@@ -263,6 +299,7 @@ impl DualRing {
             state,
             main: true,
             crossing: false,
+            ped_waiting: [false; 9],
             counters: RingCounters::default(),
         }
     }
@@ -296,8 +333,13 @@ impl DualRing {
             if !self.present[p] {
                 continue;
             }
-            c.demand[p] = calls.demand[p];
+            c.demand[p] = calls.demand[p] || self.ped_waiting[p];
             c.extend[p] = calls.extend[p];
+        }
+        for &p in &self.config.ped_recall {
+            if self.config.ped[usize::from(p)].is_some() {
+                c.demand[usize::from(p)] = true;
+            }
         }
         for &p in &self.config.min_recall {
             c.demand[usize::from(p)] = true;
@@ -369,10 +411,20 @@ impl DualRing {
             Interval::Idle => true,
             Interval::Green => {
                 let t = &self.config.timing[usize::from(s.phase)];
-                s.held_s + 1e-9 >= t.min_green_s
+                s.held_s + 1e-9 >= self.min_green(s)
                     && (s.maxed || s.gapped || s.gap_s + 1e-9 >= t.passage_s)
             }
             _ => false,
+        }
+    }
+
+    /// The minimum of ring state `s`'s green: the vehicle minimum, raised to hold the walk,
+    /// its clearance and the buffer when this green serves the walk.
+    fn min_green(&self, s: &RingState) -> f64 {
+        let t = &self.config.timing[usize::from(s.phase)];
+        match self.config.walk_min_green_s(s.phase) {
+            Some(w) if s.walk => t.min_green_s.max(s.walk_from_s + w),
+            _ => t.min_green_s,
         }
     }
 
@@ -395,11 +447,28 @@ impl DualRing {
 
     /// Advances the controller by `dt_s` seconds under `calls`.
     pub fn step(&mut self, calls: &Calls, dt_s: f64) {
+        // A pedestrian's push-button call waits for the phase's next walk, unless the walk
+        // showing now already lets them start.
+        for p in 1..=8u8 {
+            let i = usize::from(p);
+            if !calls.ped[i] || self.config.ped[i].is_none() {
+                continue;
+            }
+            let s = &self.state[usize::from(assign::ring_of(p) - 1)];
+            let walking = s.phase == p
+                && s.interval == Interval::Green
+                && s.walk
+                && self.config.ped[i].is_some_and(|(w, _)| s.held_s - s.walk_from_s + 1e-9 < w);
+            if !walking {
+                self.ped_waiting[i] = true;
+            }
+        }
         let c = self.effective(calls);
         // Timers.
         for r in 0..2 {
             let s = self.state[r];
             let t = self.config.timing[usize::from(s.phase)];
+            let min_g = self.min_green(&s);
             let mut n = s;
             n.held_s += dt_s;
             match s.interval {
@@ -419,13 +488,11 @@ impl DualRing {
                     // A gap with a conflicting call commits the phase to end: later
                     // detections do not re-extend it, and a maximum that runs out while it
                     // waits at the barrier does not make it a max-out.
-                    if conflicting
-                        && n.held_s + 1e-9 >= t.min_green_s
-                        && n.gap_s + 1e-9 >= t.passage_s
-                    {
+                    if conflicting && n.held_s + 1e-9 >= min_g && n.gap_s + 1e-9 >= t.passage_s {
                         n.gapped = true;
                     }
-                    if !n.gapped && n.max_s + 1e-9 >= t.max_green_s {
+                    // A served walk holds the green past a shorter maximum.
+                    if !n.gapped && n.max_s + 1e-9 >= t.max_green_s.max(min_g) {
                         n.maxed = true;
                     }
                 }
@@ -505,6 +572,60 @@ impl DualRing {
                     self.state[r] = RingState::green(entry[r]);
                 }
             }
+        }
+        // A green that has just started serves its walk if a pedestrian has called it or
+        // it is on pedestrian recall; the call is then answered.
+        for r in 0..2 {
+            let s = self.state[r];
+            if s.interval == Interval::Green && !s.walk_decided {
+                let i = usize::from(s.phase);
+                let walk = self.config.ped[i].is_some()
+                    && (self.ped_waiting[i] || self.config.ped_recall.contains(&s.phase));
+                if walk {
+                    self.ped_waiting[i] = false;
+                }
+                self.state[r].walk = walk;
+                self.state[r].walk_decided = true;
+            } else if s.interval == Interval::Green && self.ped_waiting[usize::from(s.phase)] {
+                // Pedestrian recycle: a green resting with no conflicting call serves a
+                // new walk at once rather than leave the pedestrian waiting for a call
+                // elsewhere to cycle the controller.
+                let i = usize::from(s.phase);
+                let p = s.phase;
+                let resting = !(1..=8u8)
+                    .any(|q| c.demand[usize::from(q)] && q != p && !assign::concurrent(p, q));
+                let done = self.config.ped[i]
+                    .is_some_and(|(w, cl)| !s.walk || s.held_s - s.walk_from_s + 1e-9 >= w + cl);
+                if resting && done {
+                    self.ped_waiting[i] = false;
+                    self.state[r].walk = true;
+                    self.state[r].walk_from_s = s.held_s;
+                    self.state[r].gapped = false;
+                }
+            }
+        }
+    }
+
+    /// What a crosswalk of phase `p` shows: walk (green) for the walk interval of a green
+    /// that serves it, then the pedestrian change interval (amber), else don't walk (red).
+    pub fn crosswalk(&self, p: u8) -> v2xw_world::SignalState {
+        use v2xw_world::SignalState;
+        let Some((walk, clear)) = self.config.ped.get(usize::from(p)).copied().flatten() else {
+            return SignalState::Red;
+        };
+        if p == 0 {
+            return SignalState::Red;
+        }
+        let s = &self.state[usize::from(assign::ring_of(p) - 1)];
+        let h = s.held_s - s.walk_from_s;
+        if s.phase != p || s.interval != Interval::Green || !s.walk {
+            SignalState::Red
+        } else if h + 1e-9 < walk {
+            SignalState::Green
+        } else if h + 1e-9 < walk + clear {
+            SignalState::Amber
+        } else {
+            SignalState::Red
         }
     }
 }
@@ -928,5 +1049,92 @@ mod tests {
             let cycle = s[2] - s[1];
             assert!(near(cycle, want_cycle), "phase {p} cycle {cycle}");
         }
+    }
+
+    /// Accept (WP-17 P17.7): pedestrians are served. Phase 2 is on pedestrian recall with
+    /// a 12 m crosswalk: every one of its greens walks for 7 s (MUTCD 2009 §4E.06 ¶11),
+    /// then clears for 12 m / 1.067 m/s, and lasts at least walk + clearance + what of the
+    /// 3 s buffer the yellow and red leave. Phase 6 has a crosswalk but no recall and no
+    /// call, so it never walks. One press of phase 4's button, a single step, is latched
+    /// and served at 4's next green.
+    #[test]
+    fn ped_recall_serves_walk() {
+        let n = NemaSettings {
+            soft_recall: Vec::new(),
+            ped_recall: vec![2],
+            ..NemaSettings::default()
+        };
+        let mut config = RingConfig::from_settings(&n, &ALL, THROUGH, LEFT);
+        let clear = 12.0 / 1.067;
+        for p in [2usize, 6, 4, 8] {
+            config.ped[p] = Some((7.0, clear));
+        }
+        let mut ctl = DualRing::new(config);
+        let walk_min =
+            7.0 + clear + (PED_BUFFER_S - THROUGH.yellow_s - THROUGH.red_clear_s).max(0.0);
+        let mut calls = Calls::default();
+        calls.demand[4] = true;
+        let mut t = 0.0;
+        let (mut greens2, mut walks2, mut greens6) = (0, 0, 0);
+        let (mut walk_s, mut clear_s, mut green2_s, mut green6_s) = (0.0, 0.0, 0.0, 0.0);
+        let mut prev = ctl.greens();
+        let mut four_walked = false;
+        let mut pressed = false;
+        while t < 900.0 {
+            // Press 4's button once, during a main-street green.
+            let press = !pressed && t > 300.0 && ctl.greens()[0] == 2;
+            calls.ped[4] = press;
+            pressed |= press;
+            ctl.step(&calls, DT);
+            t += DT;
+            let g = ctl.greens();
+            if g[0] == 2 {
+                green2_s += DT;
+                match ctl.crosswalk(2) {
+                    v2xw_world::SignalState::Green => walk_s += DT,
+                    v2xw_world::SignalState::Amber => clear_s += DT,
+                    _ => {}
+                }
+            }
+            if g[1] == 6 {
+                green6_s += DT;
+                assert_eq!(
+                    ctl.crosswalk(6),
+                    v2xw_world::SignalState::Red,
+                    "6 walked uncalled"
+                );
+            }
+            if pressed && g[0] == 4 && ctl.crosswalk(4) == v2xw_world::SignalState::Green {
+                four_walked = true;
+            }
+            if prev[0] == 2 && g[0] != 2 {
+                greens2 += 1;
+                walks2 += usize::from(walk_s > 0.0);
+                assert!(
+                    (walk_s - 7.0).abs() <= DT + 1e-6 && (clear_s - clear).abs() <= DT + 1e-6,
+                    "green {greens2} of 2: walk {walk_s} s, clearance {clear_s} s"
+                );
+                // Counted per step after it; the start-up green began before the first.
+                assert!(
+                    green2_s + DT + 1e-6 >= walk_min,
+                    "2's green {green2_s} < {walk_min}"
+                );
+                walk_s = 0.0;
+                clear_s = 0.0;
+                green2_s = 0.0;
+            }
+            if prev[1] == 6 && g[1] != 6 {
+                greens6 += 1;
+                green6_s = 0.0;
+            }
+            prev = g;
+        }
+        assert!(
+            greens2 >= 10 && walks2 == greens2,
+            "{walks2} walks in {greens2} greens of 2"
+        );
+        assert!(greens6 >= 10, "{greens6}");
+        assert!(four_walked, "4's single press was not served");
+        let _ = green6_s;
     }
 }
