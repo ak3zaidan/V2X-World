@@ -6,6 +6,9 @@
 #   python3 -I tools/realworld/radiofix3.py <run dir>       (PDR, CBR, frames per run)
 #   python3 -I tools/realworld/radiofix4.py shares|digest <run dir>
 # against `band`.
+# Fault proofs: every fault was injected behind an env check (V2XW_FAULT=<name>) in one
+# scratch build of the test binaries, so the same binary gave the green run (unset) and
+# each red run; the hooks were then removed (checked out) and are in no commit.
 #
 # verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
 #          wrong-expectation (corrected with the evidence in `note`) | open (documented).
@@ -43,8 +46,8 @@ rows:
     minimum-rate sensitivity (-85 dBm, 10 MHz) reads busy; "if the preamble portion was
     missed", any signal 20 dB above it (-65 dBm for 10 MHz) holds CCA busy
   fault: CcaConfig::energy_detect_threshold_dbm returning busy_dbm (the leak held to -85 dBm)
-  measured: pending
-  verdict: pending
+  measured: "pass; with the fault (V2XW_FAULT=ed) red: 'a -75 dBm leak from 174 held 172 busy' (phy.rs:2393); radio lib 353/353 green"
+  verdict: pass
 - id: R4.1.NS3
   test: v2xw-radio src/phy.rs cca_is_busy_above_the_threshold_and_while_transmitting
   expect: >-
@@ -53,8 +56,8 @@ rows:
     and the test asserted that (an expectation that encoded the conflation)
   source: ns-3 WifiPhy attributes CcaSensitivity (-82 dBm, Wi-Fi signals) and CcaEdThreshold (-62 dBm, non-Wi-Fi energy)
   fault: cca_threshold_dbm() returning energy_detect_dbm.unwrap_or(busy_dbm) (the old body)
-  measured: pending
-  verdict: pending
+  measured: "pass with the fix; old body (V2XW_FAULT=ns3) red: left -62.0, right -82.0"
+  verdict: fixed
 - id: R4.1.NOOP-G20
   run: G20
   metric: record digest, this branch vs 3cbc95a4
@@ -65,8 +68,8 @@ rows:
     one bit for bit, so the run is byte-identical; so are the published-curve rows on
     single-channel runs (R3.1 DSRC PDR edge, R3.2.DENSE-HWY48's J2945/1 band)
   source: the change's own algebra (energy detect >= preamble detect; own-channel sum equal to the total without leaks)
-  measured: pending
-  verdict: pending
+  measured: "identical: record digest 7f4bd59a both binaries (jsonl 9e562e2c); CBR172 0.02205, pdr300 0.3705, 7,170 frames each"
+  verdict: pass
 - id: R4.1.NOOP-HWY
   run: HD-MAP
   metric: record digest, this branch vs 3cbc95a4
@@ -76,16 +79,16 @@ rows:
     nothing leaks: the J2945/1 dense-highway CBR (R3.2.DENSE-HWY, 0.271) is unchanged, byte
     for byte
   source: as R4.1.NOOP-G20
-  measured: pending
-  verdict: pending
+  measured: "identical: record digest 3fc0ad37 both binaries; CBR172 0.27139 (radio-fix3: 0.271), 18,167 frames"
+  verdict: pass
 - id: R4.1.FLAG
   run: G20-MAP-ED85
   metric: radiofix4.py digest (node_tx, node_rx, mac_cbr), vs G20-MAP on 3cbc95a4
   band: identical
   expect: energy_detect_dbm -85 is the pre-fix carrier sense, so the knob reproduces the old engine's records exactly (the scenario hash differs, hence the jsonl digest)
   source: the change's own algebra
-  measured: pending
-  verdict: pending
+  measured: "identical: jsonl 1f5b1c96 and record digest df5968b2 for both (the record digest matched too)"
+  verdict: pass
 - id: R4.1.CBR-ED85
   run: G20-MAP-ED85
   metric: CBR172(G20-MAP-ED85) / CBR172(G20)
@@ -93,8 +96,8 @@ rows:
   predicted: "p85 0.9222 from G20 (B_leak85 0.1893), band [0.9122, 0.9322]"
   expect: the pre-fix carrier sense reproduces radio-fix3 R3.2.DENSE-SENSED (0.9233 against p 0.9215)
   source: radio-fix3 R3.2.DENSE-SENSED; ETSI TS 102 687 V1.2.1 §4.2 (CBR at -85 dBm)
-  measured: pending
-  verdict: pending
+  measured: "0.9238 (0.02205 -> 0.02037), band [0.9122, 0.9322]"
+  verdict: pass
 - id: R4.1.CBR
   run: G20-MAP
   metric: CBR172(G20-MAP) / CBR172(G20)
@@ -107,8 +110,8 @@ rows:
     shrinks to the strong arrivals near the masts and the CBR on 172 falls further than
     radio-fix3 measured, by (B_leak85 - B_leak65) / B_all, to p65 within overlap (1 %)
   source: IEEE 802.11-2020 §17.3.10.6; SAE J2945/1 §6.3.8 (CBP over vCBPMeasInt 100 ms, from the radio's channel-busy indication; clause text not re-read here, as radio-fix3 R3.2.DENSE-SENSED's note)
-  measured: pending
-  verdict: pending
+  measured: "0.7855 (0.02205 -> 0.01732), band [0.7742, 0.7942]; vs the pre-fix sense 0.02037 -> 0.01732 (-15.0 %)"
+  verdict: fixed
 - id: R4.1.PDR
   run: G20-MAP
   metric: BSM pdr300 and the 50 % crossing (cross50_m), G20-MAP vs G20-MAP-ED85
@@ -121,32 +124,32 @@ rows:
     carrier sense defers, so SINR is the same. The curve stays in the NLOS-edge band
     radio-fix3 R3.1.DSRC-NLOS-EDGE judged against
   source: 3GPP TR 37.885 V15.3.0 Table 6.2.1-1 and SAE J2945/1 §6.3.8 (via R3.1.DSRC-NLOS-EDGE); airtime arithmetic
-  measured: pending
-  verdict: pending
+  measured: "pdr300 0.3719 -> 0.3713 (-0.0006); cross50_m 175 -> 175 (G20 175), inside [100, 200]"
+  verdict: pass
 - id: R4.1.FRAMES
   run: G20-MAP
   metric: frames_transmitted, G20-MAP / G20-MAP-ED85
   band: [0.995, 1.005]
   expect: generation does not read carrier sense, and J2945/1 neither cuts the rate (density under 25 in 100 m) nor the power (CBP under 0.5) at CBR 0.02, so the same frames go on air
   source: SAE J2945/1 §6.3.8 (vMinChanUtil 0.5; MaxITT density rule), via 04-models.md §6
-  measured: pending
-  verdict: pending
+  measured: "7,097 -> 7,097 (1.000)"
+  verdict: pass
 - id: R4.1.WALL
   run: G20-MAP
   metric: wall time and peak RSS, G20-MAP / G20-MAP-ED85 (same binary, one at a time)
   band: "wall [0.8, 1.25]; peak [0.9, 1.1]"
   expect: one extra own-channel energy sum per carrier-sense query, only in runs with leakage or an emitter; the same frames and receptions, so run cost does not move beyond machine noise
   source: cost model
-  measured: pending
-  verdict: pending
+  measured: "wall 35.89 -> 42.51 s (1.184; rerun 41.58 s, 1.159; pre-fix binary 34.57 s); peak 548 -> 573 MB (1.046; rerun 470 MB). Inside the bands, but the +16-18 % is consistent and larger than 'machine noise': not profiled (the second, own-channel energy walk runs on every query where the total is under -65 dBm, i.e. almost all of them)"
+  verdict: pass
 - id: R4.1.DET
   run: G20-MAP
   metric: radiofix4.py digest, G20-MAP run twice on the same binary and seed
   band: identical
   expect: same seed, byte-identical records
   source: 02-architecture.md determinism (ADR 0004)
-  measured: pending
-  verdict: pending
+  measured: "identical: jsonl 5437c8f4, record digest 9ee0d990 on both runs"
+  verdict: pass
 - id: R4.1.EMITTER
   expect: >-
     An adjacent-channel emitter (radio.adjacent_channel: ITS-G5 beside LTE-V2X) is
@@ -229,47 +232,47 @@ rows:
   test: v2xw-engine tests/detect_fix3.rs the_ts_suite_is_selectable_with_its_knobs
   fault: Ts103759Params::apply_label accepting an unknown fusion label
   expect: red ("an unknown fusion label was accepted"); green restored
-  measured: pending
-  verdict: pending
+  measured: "green 2/2; V2XW_FAULT=fusion red: 'an unknown fusion label was accepted' (detect_fix3.rs:60)"
+  verdict: pass
 - id: R4.3.DETECT-INPUTS
   test: v2xw-engine tests/detect_fix3.rs the_ts_suite_judges_every_message_with_its_frame_and_own_inputs
   fault: Phase2::note_broadcast_frame dropping every frame (no VehicleSize reaches the box check)
   expect: red ("the box check never ran"); green restored
-  measured: pending
-  verdict: pending
+  measured: "green; V2XW_FAULT=frame red: 'the box check never ran: no VehicleSize reached it' (detect_fix3.rs:102)"
+  verdict: pass
 - id: R4.3.TS-INTERSECT
   test: v2xw-threat tests/ts103759_fix3.rs a_follower_on_its_leaders_old_spot_does_not_intersect_it
   fault: the intersection check comparing against the other claim where it stood (speed x age dropped)
   expect: red (score 2/0.5... on the first pair instead of 2/7.5); green restored
-  measured: pending
-  verdict: pending
+  measured: "green 2/2; V2XW_FAULT=intersect red: score 2.0e9 at ts103759_fix3.rs:85 (the follower intersected)"
+  verdict: pass
 - id: R4.3.TS-CATCH
   test: v2xw-threat tests/ts103759_fix3.rs catch_scores_the_map_check_on_the_stated_confidence
   fault: CaTCh scoring of the map check replaced by the threshold score
   expect: red ("an honest 4 m offset fired under CaTCh"); green restored
-  measured: pending
-  verdict: pending
+  measured: "green; V2XW_FAULT=catch red: 'an honest 4 m offset fired under CaTCh' (ts103759_fix3.rs:119)"
+  verdict: pass
 - id: R4.3.GNSS-STATED
   test: v2xw-mobility src/gnss/gauss_markov.rs a_stated_accuracy_changes_the_statement_and_not_the_error
   fault: the stated-accuracy draw taken from the receiver's own error stream (RngDomain::Gnss, EntityRef::Node)
   expect: red ("the spread's draw moved the error"); green restored
-  measured: pending
-  verdict: pending
+  measured: "green; V2XW_FAULT=gnss red: 'the spread's draw moved the error' (gauss_markov.rs:1933)"
+  verdict: pass
 - id: R4.3.OFFCH
   test: v2xw-engine src/run/off_channel.rs the_unit_is_away_only_inside_its_window_and_at_its_rate
   fault: the absence window starting at the interval start (from_ns dropped)
   expect: red (away at 2 ms of phase); green restored
-  measured: pending
-  verdict: pending
+  measured: "green; V2XW_FAULT=offch red: away share 0.4045 at 2 ms, want 0.0 (off_channel.rs:121)"
+  verdict: pass
 - id: R4.3.NODEKEYS
   test: v2xw-engine tests/stable_node_keys.rs a_roadside_count_change_leaves_every_vehicle_draw_byte_identical
   fault: roadside units on the vehicle counter (create_rsus taking next_node, the pre-fix numbering)
   expect: red (vehicle ids or BSM sequences differ between 1 and 3 units); green restored
-  measured: pending
-  verdict: pending
+  measured: "green (5.2 s); V2XW_FAULT=nodekeys red: 0 of 13 vehicles' BSM sequences identical (stable_node_keys.rs:89)"
+  verdict: pass
 - id: R4.3.MAFEAT
   test: v2xw-engine tests/ma_features.rs the_ma_reads_the_evidence_secmark_phase_and_a_mimic_reads_free
   fault: gt.device_exposure's attack_start read from the first on-air edit (first_on_air), the pre-fix source
   expect: red ("a secMark-only disguise moved the attack start"); green restored
-  measured: pending
-  verdict: pending
+  measured: "green (262 s); V2XW_FAULT=mafeat red: attack starts 0.1 s early for every mimic (ma_features.rs:154)"
+  verdict: pass
