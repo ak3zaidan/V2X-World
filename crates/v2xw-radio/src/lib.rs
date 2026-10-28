@@ -29,6 +29,7 @@
 //! | The NIST packet-error-rate model | [`per`] | 04-models.md §4.7 |
 //! | Air time, noise, SINR, capture, frame outcomes, air-time accounting | [`phy`] | 04-models.md §4.2, §4.7, §4.8 |
 //! | EDCA in OCB mode, the slotted abstraction, the CBR meter | [`mac`] | 04-models.md §4.3, §4.5 |
+//! | The IEEE 1609.4 alternating-access schedule the EDCA MAC gates on | [`wave_schedule`] | IEEE 1609.4-2016 §6.2.5 (constants UNVERIFIED) |
 //! | The ETSI adaptive and reactive algorithms, the EN 302 571 floor, SAE J2945/1 | [`dcc`] | 04-models.md §6 |
 //! | The calibrated abstract tier, the legacy models, the calibration routine | [`abstract_tier`] | 04-models.md §4.9 |
 //! | Mixed tiers: the focus region, the coupling rule, the boundary bias | [`focus`] | 02-architecture.md §7.3 |
@@ -133,6 +134,7 @@ pub mod terrain;
 pub mod traits;
 pub mod tuning;
 pub mod types;
+pub mod wave_schedule;
 pub mod winner;
 
 #[cfg(test)]

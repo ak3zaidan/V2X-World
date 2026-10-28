@@ -680,6 +680,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
   SCH frames queue across the CCH interval. Fault: removing the end-of-interval check yields a
   straddling frame.
 - Prep (2026-10-27): build plan in `wp16-24-build-plans.md` §WP-16, 4 pieces. Moves `ChannelSchedule` into `v2xw-radio` (radio cannot depend on net) and gates `EdcaOcbMac::poll`/`next_poll_at`; per-(node, channel) queues already exist. The app-layer deferral at `run.rs:5410` goes, and `tuned` becomes time-aware for single-radio units. The 1609.4 constants stay UNVERIFIED.
+- Status P16.1 (2026-10-28): done. `ChannelSchedule`, `ChannelAccess`, `Interval` and the 100/50/4 ms constants moved to `v2xw-radio/src/wave_schedule.rs`; `v2xw_net::stack::wave` re-exports them (v2xw-net now depends on v2xw-radio). New `interval_end_ns(t)` and `fits(t, air, cch) -> Result<(), next_start>`; a frame longer than a whole 46 ms interval is let through at the interval start rather than held for ever (no WSM is: 1 400 B at 3 Mb/s is under 4 ms). Tests `wave_schedule::tests::{the_interval_end_is_the_next_boundary, a_frame_fits_only_inside_its_interval, fits_agrees_with_the_interval_for_random_frames, the_next_opportunity_is_unchanged}`; fault: the end check in `fits` removed -> two of them red. No behaviour change.
 
 **WP-17 NEMA dual-ring 8-phase controller** (L, 2-3 weeks). Source: S-P3.
 - Scope: two rings, barriers, concurrent phases, lead/lag and protected/permissive and
