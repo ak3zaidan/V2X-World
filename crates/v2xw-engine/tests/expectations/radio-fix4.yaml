@@ -186,6 +186,35 @@ rows:
   fault: "a: update_roadside_dcc not called (the unit's gates never fed a CBR); b: dcc_service never built (one gate for both radios)"
   measured: pending
   verdict: pending
+- id: R4.2.METER
+  test: v2xw-radio src/mac.rs windows_declared_ahead_still_count_in_the_reading_at_now; v2xw-engine tests/multichannel.rs the_etsi_gate_spaces_each_channel_on_its_own
+  disclosure: >-
+    found by a diagnostic run (dcc-diag: the R4.2.FEED scenario on the CLI) after the
+    rewritten test failed with the fix in: the unit's mac.cbr reports read 0.91 on 172 while
+    every station's ETSI delta stayed at 0.0300 (vehicles too), i.e. the 100 ms CBR the DCC
+    reads was 0 under the jammer. Cause: CbrMeter::note_busy prunes at the interval's end,
+    and a jammer's windows are declared a step (100 ms) ahead, which folded away everything
+    that ended before now. Fixed with CbrMeter::note_busy_at (pruned at now) on the jamming
+    path only; frames keep note_busy (their end is under an air time ahead, which drops at
+    most one air time from the window: open item R4.2.METER-FRAMES, moving it moves every
+    golden)
+  expect: >-
+    A 90 %-duty pulse train declared a step ahead reads CBR 0.9 at now, before and after the
+    next window is declared; in the engine, a jammed station's DCC sees its channel's load
+    (with R4.2.FEED: the unit's SPaT is gated)
+  source: ETSI EN 302 571 V2.1.1 §4.2.10.1 and TS 102 687 V1.2.1 §4.2 (CBR over the last 100 ms, T_CBR); SAE J2945/1 §6.3.8 (vCBPMeasInt 100 ms)
+  fault: "unit: note_busy_at pruning at `to`; engine: the jamming path back on note_busy"
+  measured: pending
+  verdict: pending
+- id: R4.2.METER-FRAMES
+  expect: >-
+    CbrMeter::note_busy prunes at the noted interval's end; for a frame noted at its start
+    that drops intervals that ended within one air time of the window's start, an
+    underestimate of at most one air time per 100 ms window (under 0.5 % CBR at 6 Mbit/s).
+    Pruning at `from` is exact, but moves every recorded CBR and so every golden
+  source: the meter's own arithmetic
+  measured: not changed (needs a golden re-bless)
+  verdict: open
 - id: R4.2.J2945
   expect: >-
     SAE J2945/1 §6.3 rate and power control is the BSM's and reads the CBP of the BSM

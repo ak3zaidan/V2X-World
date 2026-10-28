@@ -875,11 +875,14 @@ impl Engine {
         } else {
             v2xw_radio::phy::CBR_BUSY_THRESHOLD_DBM
         };
+        // The windows are the coming step's, so the meter is pruned at `now`, not at their
+        // ends (radio-fix4 R4.2: pruning at the end read every jammer as CBR 0).
+        let now = self.scheduler.now();
         if power_dbm >= busy_dbm
             && let Some(mac) = self.mac.as_mut()
         {
             for w in windows {
-                mac.note_busy(rx, channel, w.from, w.to);
+                mac.note_busy_at(rx, channel, now, w.from, w.to);
             }
         }
     }

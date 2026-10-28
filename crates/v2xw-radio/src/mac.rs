@@ -149,6 +149,25 @@ impl CbrMeter {
         }
     }
 
+    /// [`CbrMeter::note_busy`] for an interval recorded ahead of time, at `now`: a
+    /// jammer's windows are declared for the whole coming step. The meter is pruned at
+    /// `now`, not at the interval's end.
+    ///
+    /// `note_busy` prunes at `to`, which is right for a frame noted as it starts (its end
+    /// is under a frame's air time ahead), but a window ending up to a step (100 ms) ahead
+    /// folded away everything that ended before `now`, so the 100 ms reading at `now` held
+    /// only what was still on the air: a 90 %-duty jammer read as CBR 0 by every DCC, while
+    /// the one-second `mac.cbr` reports (from the running sum) read 0.91 (radio-fix4 R4.2).
+    pub fn note_busy_at(&mut self, now: SimTime, from: SimTime, to: SimTime) {
+        if to > from {
+            self.busy.push_back((from, to));
+            let mut v: Vec<(SimTime, SimTime)> = self.busy.iter().copied().collect();
+            v.sort_unstable();
+            self.busy = v.into();
+            self.prune(now);
+        }
+    }
+
     fn prune(&mut self, now: SimTime) {
         let cutoff = now.saturating_sub(self.window.as_nanos());
         // What is about to leave the window is folded into the running sum first, merged
@@ -453,6 +472,18 @@ impl EdcaOcbMac {
     /// transitions instead.
     pub fn note_busy(&mut self, node: NodeId, ch: ChannelId, from: SimTime, to: SimTime) {
         self.state(node, ch).cbr.note_busy(from, to);
+    }
+
+    /// [`Mac::note_busy`] for an interval declared ahead of `now` ([`CbrMeter::note_busy_at`]).
+    pub fn note_busy_at(
+        &mut self,
+        node: NodeId,
+        ch: ChannelId,
+        now: SimTime,
+        from: SimTime,
+        to: SimTime,
+    ) {
+        self.state(node, ch).cbr.note_busy_at(now, from, to);
     }
 
     /// A node's merged busy time on a channel since its meter began, up to `now`, ns
@@ -1086,6 +1117,23 @@ impl SlottedMac {
             .or_default()
             .cbr
             .note_busy(from, to);
+    }
+
+    /// [`SlottedMac::note_busy`] for an interval declared ahead of `now`
+    /// ([`CbrMeter::note_busy_at`]).
+    pub fn note_busy_at(
+        &mut self,
+        node: NodeId,
+        ch: ChannelId,
+        now: SimTime,
+        from: SimTime,
+        to: SimTime,
+    ) {
+        self.nodes
+            .entry((node.index(), ch.0))
+            .or_default()
+            .cbr
+            .note_busy_at(now, from, to);
     }
 }
 
@@ -1735,6 +1783,32 @@ mod tests {
         let loaded = Mac::<TestCtx>::cbr(&light, node, CH, 100_000_000);
         assert!((loaded - 0.058_4).abs() < 1e-9, "{loaded}");
         assert_eq!(Mac::<TestCtx>::cbr(&light, node, CH, 1_000_000_000), 0.0);
+    }
+
+    /// radio-fix4 R4.2: a jammer's windows are declared a step ahead. The 100 ms reading
+    /// at `now` still counts what ended before `now`: a 90 %-duty pulse train (90 ms of
+    /// every 100 ms) reads 0.9. Fault: pruning at the window's end (`note_busy`), which
+    /// folds the last 100 ms away and reads 0.
+    #[test]
+    fn windows_declared_ahead_still_count_in_the_reading_at_now() {
+        const MS: u64 = 1_000_000;
+        let mut meter = CbrMeter::new();
+        for step in 0..10u64 {
+            let now = step * 100 * MS;
+            // The step's own window, declared at its start: [now, now + 90 ms).
+            meter.note_busy_at(now, now, now + 90 * MS);
+            let reading = meter.cbr(now + 100 * MS);
+            if step > 0 {
+                // Read at the next step, before its own window is declared.
+                assert!((reading - 0.9).abs() < 1e-9, "step {step}: CBR {reading}");
+            }
+        }
+        // And read after the next step's window is declared, as the engine does (the
+        // jamming is declared before the DCC reads its CBR).
+        let now = 1_000 * MS;
+        meter.note_busy_at(now, now, now + 90 * MS);
+        let r = meter.cbr(now);
+        assert!((r - 0.9).abs() < 1e-9, "CBR {r} after the next window is declared");
     }
 
     #[test]
