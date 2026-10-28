@@ -9542,12 +9542,15 @@ mod fast_forward_wake_tests {
         let after = crossed + 3_600_000_000_000;
         let (w_before, w_after) = (p.next_wake(before), p.next_wake(after));
         assert_ne!(w_after, Some(after + 1), "nothing else is due at once");
+        // A list published in the run: its serial is past the pre-run lists'
+        // (`prerun_version`), which every device already holds and which wake nothing.
+        let serial = p.seeded_serial[0] + 1;
         p.crl_feeds[0].push(CrlVersion {
             at,
             version: 1,
             entries: Vec::new(),
             secured: Vec::new(),
-            serial: 1,
+            serial,
         });
         let in_transit = p.next_wake(before).expect("a wake");
         assert_eq!(in_transit, w_before.map_or(crossed, |w| w.min(crossed)));
