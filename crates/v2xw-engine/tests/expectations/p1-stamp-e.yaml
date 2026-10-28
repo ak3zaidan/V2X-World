@@ -213,7 +213,8 @@ rows:
   source: 'Wyoming p50 34.4 m/s, +-1 m/s (§7.5 Finding 7). disclosure: the scenario was tuned on three
     probe runs of the release binary (header of p1-e4-u.yaml; the last gave 34.6 at a speed factor of
     0.962, this one is 0.958)'
-  measured: pending
+  measured: "34.42 (pairs 13,221, 31 IDs)"
+  verdict: pass
 - id: P1E.SBM.speed-p10
   base: SBM
   variant: SBM
@@ -222,7 +223,8 @@ rows:
   expect: band
   band: [27.0, 31.0]
   source: Wyoming p10 28.6 m/s; the probes gave 29.7 (disclosure as P1E.SBM.speed-p50)
-  measured: pending
+  measured: "29.64"
+  verdict: pass
 - id: P1E.SBM.speed-p90
   base: SBM
   variant: SBM
@@ -231,7 +233,8 @@ rows:
   expect: band
   band: [34.8, 36.0]
   source: Wyoming p90 35.3 m/s; the probes gave 35.4 (disclosure as P1E.SBM.speed-p50)
-  measured: pending
+  measured: "35.24"
+  verdict: pass
 - id: P1E.CEM.ks
   base: CEM
   variant: CEM
@@ -241,7 +244,9 @@ rows:
   value: 0.092
   source: '§7.5, written before any engine run: E on a run speed-matched to Wyoming, KS <= 0.092, point
     0.082, band 0.063-0.10 (P1-E4 tolerance 0.092)'
-  measured: pending
+  measured: "0.099235 (at 0.68 cm)"
+  verdict: open
+  note: "Misses the 0.092 tolerance and the emulator's 0.082. The KS sits in the body: 22.5 % of the engine's pairs are under 0.68 cm against Wyoming's 12.7 % (0.5 cm: 15.4 % against 6.9 %), so the body is too narrow, not the tail too heavy (p90 9.5 cm, as predicted). The emulator's one engine nuisance, a 4.5 mm white increment per axis, was fitted on the five stamp-track runs of the old p1-e4-u.yaml, whose trips started from rest and turned the ring's corners (v p10 13.9 m/s); at cruise the engine's increment is smaller, and \u00a77.5 itself puts E at 0.094 for a 4 mm nuisance. CE on the old speeds also sat at 0.68 cm (0.098), where the emulator put it at 3.44 cm. With the speed change (CESM) 0.0915. Not tuned here: the body is the GNSS layer's, not the stamp chain's."
 - id: P1E.CEM.ks-band
   base: CEM
   variant: CEM
@@ -250,7 +255,8 @@ rows:
   expect: band
   band: [0.063, 0.10]
   source: '§7.5: the bootstrap and nuisance bands of the speed-matched prediction'
-  measured: pending
+  measured: "0.099235"
+  verdict: pass
 - id: P1E.CEM.over5-0m1
   base: CEM
   variant: CEM
@@ -259,7 +265,8 @@ rows:
   expect: band
   band: [0.72, 0.78]
   source: '§7.5: 0.72-0.78 (emulator 0.754 speed-matched)'
-  measured: pending
+  measured: "0.746713"
+  verdict: pass
 - id: P1E.CEM.over5-m1m1
   base: CEM
   variant: CEM
@@ -268,7 +275,8 @@ rows:
   expect: le
   value: 0.005
   source: '§7.5: at most 0.005'
-  measured: pending
+  measured: "0.004329 (CE at the old speeds 0.0117: those pairs came from trips starting from rest and the corners)"
+  verdict: pass
 - id: P1E.CESM.ks
   base: CEM
   variant: CESM
@@ -277,7 +285,9 @@ rows:
   expect: delta
   band: [-0.01, 0.01]
   source: '§7.5: the speed change moves the KS by 0.01 or less (emulator 0.082 -> 0.080 speed-matched)'
-  measured: pending
+  measured: "0.099235 -> 0.0915 (delta -0.0077)"
+  verdict: pass
+  note: "0.0915 is inside the 0.092 tolerance by 0.0005, with about +-0.01 of run noise at 31 IDs: not a robust pass of P1-E4."
 - id: P1E.CEM.ks-vs-sbm
   base: SBM
   variant: CEM
@@ -285,7 +295,8 @@ rows:
   measure: x.e4.ks
   expect: down
   source: '§7.5: the shipped v3 instant at Wyoming''s speeds 0.146 against E 0.082'
-  measured: pending
+  measured: "0.144946 -> 0.099235"
+  verdict: pass
 - id: P1E.CEM2.determinism
   base: CEM
   variant: CEM2
@@ -293,4 +304,5 @@ rows:
   measure: digest.record
   expect: identical
   source: same seed, same binary; the chain stream is keyed by (domain, node)
-  measured: pending
+  measured: "b039b12dd2fa8801 -> b039b12dd2fa8801"
+  verdict: pass
