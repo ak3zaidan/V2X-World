@@ -384,7 +384,7 @@ rows:
   value: 0
   source: '1609.2 CRL overdue rule: with the home Generator down from 700 s the t0 list goes overdue at
     t0 + 21 d and the home CRACA''s messages are refused (rerun §7, R-NOCRL fixed)'
-  measured: '0 (9d0fbc2c; receiver_validation.refused is empty, so matrix.py reports the key ABSENT, not 0)'
+  measured: '0 (9d0fbc2c; F5-ZERO: the extractor writes every refusal label the run did not produce as 0, so the row now PASSes through matrix.py; one injected crl-overdue refusal reads 1 and does not)'
   verdict: wrong-expectation
   note: 'Open, 2026-10-27 on the f4982788 release (06 §9): 0 refusals of any kind (rv.refused_total 0;
     was 152,505 on 81a12183). The rule itself acts: the same run with security.scms.crl_overdue_tolerance_s

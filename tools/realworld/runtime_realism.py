@@ -69,6 +69,20 @@ def keyset(v, pre=''):
 IDENTITY = {'enrolment', 'canonical_id', 'device', 'reporter'}
 LINKAGE = {'lv', 'subject_lv', 'lci', 'plv', 'plv1', 'plv2', 'seed'}
 
+# The receiver's refusal labels, `receiver_validation.refused`'s keys (v2xw-node rxval.rs
+# `RxReject::name`, the only writer of that map).
+REFUSAL_LABELS = (
+    'chain-empty', 'chain-too-long', 'chain-malformed', 'chain-not-rooted',
+    'chain-bad-root-signature', 'chain-untrusted-root', 'chain-issuer-mismatch',
+    'chain-bad-signature', 'chain-bad-reconstruction', 'chain-permission-not-covered',
+    'chain-ee-type', 'chain-ssp', 'chain-length', 'chain-validity-not-contained',
+    'chain-region-not-contained', 'chain-region-unsupported', 'chain-expired',
+    'unknown-issuer', 'psid-not-permitted', 'generation-time-outside-validity',
+    'outside-region', 'revoked-by-hash', 'issuer-revoked', 'crl-overdue',
+    'generation-time-too-old', 'generation-time-in-future', 'crl-malformed',
+    'crl-signer-untrusted', 'crl-rejected', 'crl-stale',
+)
+
 
 def extract(run_dir):
     from mcap.reader import make_reader
@@ -109,7 +123,14 @@ def extract(run_dir):
     for k, v in (r.get('receiver_validation') or {}).items():
         if isinstance(v, (int, float)):
             out['rv.' + k] = v
-    out['rv.refused_total'] = sum((r.get('receiver_validation') or {}).get('refused', {}).values())
+    refused = (r.get('receiver_validation') or {}).get('refused') or {}
+    # Every refusal label, 0 when the run produced none: the report's map holds only the
+    # labels that fired, and an absent label is a measured 0, not a missing measurement.
+    for k in REFUSAL_LABELS:
+        out['rv.refused.' + k] = 0
+    for k, v in refused.items():
+        out['rv.refused.' + k] = v
+    out['rv.refused_total'] = sum(refused.values())
     air = r.get('air_bytes') or {}
     total_air = air.get('airtime_us', 0)
     out['air.airtime_us'] = total_air
