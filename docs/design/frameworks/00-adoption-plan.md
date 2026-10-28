@@ -857,6 +857,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
   description within tolerance; the comparison table lists ours and the published numbers per
   attack; the baseline trains and scores reproducibly from a fixed seed.
 - Prep (2026-10-27): build plan §WP-24, 5 pieces. P24.1-P24.3 (LuST licence and cut, `veremi-ext` GNSS preset, ML recipe on a legacy export) can start now; `messages.rate_hz` already gives 1 Hz. P24.4-P24.5 need `f2md-19`, so they wait on the WP-07 owner decision.
+- P24.1 (2026-10-28): LuST licence re-checked at `5edb7ecb` (MIT; the GPL line in its docs is SUMO's banner); subsection cut by box to `worlds/sumo/lust-veremi-sub.net.xml` (205 edges, 5 actuated signals, 30.9 lane-km, 1.57 km² against the published ≈ 1.61 km²; box = F2MD LuSTNano's junction extent, edges fully within), provenance in `worlds/sumo/lust-veremi-sub.PROVENANCE.md`, rebuild `worlds/fetch-lust.sh`. The ICC 2020 table numbers are not extracted (paper paywalled, no open copy found).
 
 ### Wave summary
 
