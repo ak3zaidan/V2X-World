@@ -40,9 +40,20 @@ fn shipped() -> Scenario {
     )
 }
 
-/// The shipped scenario with every third roadside unit kept (see the module docs).
+/// The shipped scenario with every third roadside unit kept (see the module docs), run for
+/// 360 s.
+///
+/// The horizon holds the whole path whichever realisation the node-keyed draws give. The
+/// MA decides on three corroborated events behind a 60 s report shuffle, and the attacker is
+/// the first vehicle onto an empty map, so the decision time depends on which neighbours
+/// carry a modem: 112, 136 and 242 s on seeds `0xC0FFEE_0001`, `_0002` and the scenario's
+/// own since the roadside renumbering re-keyed those draws (p1gaps, BUILD-STATUS fix round
+/// 3). After it the path needs the PCA and LA lookups, the Generator's 60 s cadence and one
+/// 30 s fetch interval: a decision at 242 s is installed by about 334 s, past the shipped
+/// 300 s (scms-fix4-a.yaml F4A.P2.*).
 fn phase2() -> Scenario {
     let mut s = shipped();
+    s.time.duration_s = 360.0;
     s.actors.rsus = s
         .actors
         .rsus

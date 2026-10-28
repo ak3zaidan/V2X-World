@@ -2209,6 +2209,12 @@ pub struct Phase2 {
     published: Vec<u32>,
     /// Per provider, the CRL Store publication count last published.
     published_serial: Vec<u32>,
+    /// Per provider, the CRL Store publication count its standing list had when the run
+    /// began (`ScmsRun::seed_standing_crl`): a feed version at or below it was published
+    /// before `t0`, so it had crossed every inter-provider link before the run and every
+    /// RA serves it from the start (IEEE 1609.2.1 §6.3.5.8: the composite carries every
+    /// CTL-listed CRACA's `SecuredCrl`).
+    seeded_serial: Vec<u32>,
     broadcast_version: u32,
     nodes: BTreeMap<NodeId, NodeSec>,
     revocation: Option<Revocation>,
@@ -3009,6 +3015,7 @@ impl Phase2 {
                     .collect(),
             )
         };
+        let seeded_serial: Vec<u32> = runs.iter().map(|r| r.state.crl_store.versions).collect();
         // The deployment sets the elector count and quorum and, under the region model,
         // the intra-region backend latency (WP-D1).
         let params = LifecycleParams {
@@ -3128,6 +3135,7 @@ impl Phase2 {
             cases: Vec::new(),
             published: vec![0; providers],
             published_serial: vec![0; providers],
+            seeded_serial,
             broadcast_version: 0,
             nodes: BTreeMap::new(),
             revocation: None,
@@ -3923,6 +3931,13 @@ impl Phase2 {
             self.params.pool_periods,
             self.params.jmax,
         );
+        if let Err(e) = &preloaded {
+            // A refused pre-run pool is a backend failure, not a quiet empty pool: the
+            // device joins on the bootstrap stand-in. Every provider-b pool failed this
+            // way with `aca/1` and nothing in the report said so (F4A.PQCC.*).
+            self.report.vehicles_unprovisioned += 1;
+            self.note_backend_error(e);
+        }
         if preloaded.is_err() {
             self.nodes.insert(
                 node,
@@ -5248,7 +5263,7 @@ impl Phase2 {
                 run.state.gov.sync_peer_from(&home.state.gov);
             }
         }
-        self.follow_published_pki();
+        self.follow_published_pki(now);
     }
 
     /// A root rollover's changeover on the wire (Provider Req. §3.5.4: after the
@@ -5261,7 +5276,7 @@ impl Phase2 {
     /// root (audit-gov §4 item 2).
     ///
     /// [`ScmsPki::retired`]: v2xw_proto::scms::pdu::ScmsPki::retired
-    fn follow_published_pki(&mut self) {
+    fn follow_published_pki(&mut self, now: SimTime) {
         let st = &self.runs[0].state;
         let Some(old) = st.pki.clone() else {
             return;
@@ -5281,6 +5296,8 @@ impl Phase2 {
         for run in &mut self.runs {
             run.state.follow_pki(&label, std::sync::Arc::clone(&next));
         }
+        // The re-certified CRL Generator's first list under the new CRACA (R-ROLLCRL).
+        self.runs[0].reissue_crl_after_changeover(now);
         self.pki_changeover = true;
     }
 
@@ -6085,7 +6102,7 @@ impl Phase2 {
                 // already served (`visible_versions`). Held to `now + 1`, every version
                 // ever published woke the fast-forward at every mobility step from its
                 // publication on (realism.md R-FF: 255,658 backend ticks in two days).
-                for v in feed {
+                for v in feed.iter().filter(|v| !self.prerun_version(k, v)) {
                     offer(v.at.saturating_add(lag.as_nanos()), "crl-feed");
                 }
             }
@@ -7259,12 +7276,27 @@ impl Phase2 {
                 } else {
                     d.inter_provider_latency(k, h).unwrap_or(Duration::ZERO)
                 };
+                // A list published before the run crossed the link before it began; the
+                // first step that sees it stamps it, so it carries no lag.
                 feed.iter()
                     .rev()
-                    .find(|v| v.at.saturating_add(lag.as_nanos()) <= now)
+                    .find(|v| {
+                        let lag = if self.prerun_version(k, v) {
+                            0
+                        } else {
+                            lag.as_nanos()
+                        };
+                        v.at.saturating_add(lag) <= now
+                    })
                     .map(|v| (k, v))
             })
             .collect()
+    }
+
+    /// Whether provider `k`'s feed version `v` is the list its CRL Store held before the
+    /// run (`seeded_serial`).
+    fn prerun_version(&self, k: usize, v: &CrlVersion) -> bool {
+        self.seeded_serial.get(k).is_some_and(|s| v.serial <= *s)
     }
 
     /// The composite list vehicle `node`'s RA serves (WP-D1): its version (the sum of
@@ -10022,6 +10054,48 @@ mod ctl_device_tests {
         );
         p.governance_due(publish + 1);
         assert!(!p.take_pki_changeover(), "once");
+    }
+
+    /// R-ROLLCRL (scms-fix4-a.yaml F4A.MWC.*): after a root rollover's changeover every
+    /// new certificate names the new CRACA, so the re-certified CRL Generator signs a list
+    /// under it at once and the home RA serves it; until it did, no device held a CRL a
+    /// new certificate matched, and `multi-week-crlg-down` (Generator down from 700 s)
+    /// refused nothing as `crl-overdue` in 33 days. Fault that turns it red: the
+    /// `reissue_crl_after_changeover` call in `follow_published_pki` removed (the first
+    /// list under the new CRACA waits for `nextCrl`, a week).
+    #[test]
+    fn a_root_changeover_publishes_a_list_under_the_new_craca_at_once() {
+        let mut p = phase2();
+        let t0: SimTime = 300 * 1_000_000_000;
+        p.advance(t0);
+        p.params.root_rollover_at = Some(t0);
+        p.governance_due(t0);
+        let (publish, _) = p.home().state.gov.pending[0].clone();
+        p.advance(publish);
+        assert!(p.take_pki_changeover(), "the changeover at publication");
+        let craca = p.home().state.pki.as_ref().expect("PDU layer").craca_id8();
+        // The Generator's flow (sign, store, publish) runs on the backend's links.
+        p.advance(publish + 60 * 1_000_000_000);
+        let node = (0..400)
+            .map(NodeId::new)
+            .find(|n| p.provider_of_device(device_of(*n)) == 0)
+            .expect("a home-provider device");
+        let cracas: Vec<[u8; 8]> = p
+            .published_crl_for(node)
+            .2
+            .iter()
+            .filter_map(|b| v2xw_sec::crl::decode_crl(&b[..]).ok())
+            .map(|c| {
+                let mut a = [0u8; 8];
+                a.copy_from_slice(&c.contents.crl_craca.0[..]);
+                a
+            })
+            .collect();
+        assert!(
+            cracas.contains(&craca),
+            "the home RA serves no list under the new CRACA {craca:02x?} a minute after the \
+             changeover: {cracas:02x?}"
+        );
     }
 }
 
