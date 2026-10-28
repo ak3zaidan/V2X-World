@@ -1,0 +1,79 @@
+# WP-21 example: a condition-triggered emergency brake, in the manner of an Euro NCAP AEB
+# test that scripts the intervention on a measured time to collision rather than at a
+# clock instant.
+#
+# From t = 5 s the last item is armed; at the first mobility step at which any vehicle's time
+# to collision with the vehicle ahead on its lane falls below 2 s (gap over closing speed,
+# WP-11's measure; on a signalised grid this is a car closing on the back of a queue), that
+# follower brakes at 0.5 g for 2 s. The scenario.event record names the pair it bound
+# (leader, follower). The clause reads ground truth: it is the scenario author's hand, not
+# a vehicle's detector. Unequipped, so the run is about the trigger and the traffic.
+# Pinned: tests/regression/ttc-triggered-brake.json (tests/trigger_ttc.rs).
+schema: v2xw/scenario/1
+
+meta:
+  name: ttc-triggered-brake
+  description: >-
+    A safety.hard-brake fired when a follower's time to collision first drops below 2 s
+    (WP-21 condition-triggered event) on a small signalised grid.
+  authors: [v2xw]
+  tags: [edge, timeline, trigger, safety, procedural]
+  created: "2026-10-28"
+
+seed: 21
+
+time:
+  t0: "2027-03-04T08:00:00Z"
+  duration_s: 40.0
+  mobility_step_ms: 100
+
+world:
+  source:
+    kind: procedural
+    generator: world/source/procedural-grid
+    params:
+      cols: 3
+      rows: 3
+      block_x_m: 150.0
+      block_y_m: 150.0
+      lanes_per_direction: 2
+      speed_limit_mps: 13.89
+      signalised: true
+      corner_radius_m: 4.5
+  imported_at: "2026-10-28T00:00:00Z"
+  buildings:
+    enabled: false
+    keep_holes: true
+  terrain:
+    dem: null
+
+weather:
+  initial: clear
+  intensity: 0.0
+
+actors:
+  vehicles:
+    equipped_fraction: 0.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 3600.0
+
+events:
+  # A lead vehicle makes a full ABS stop (8 m/s²) at 10 s and at 20 s (the auto pick has a
+  # follower within 50 m): the calibrated drivers alone rarely close below 2 s.
+  - t: 10.0
+    type: safety.hard-brake
+    decel_mps2: 8.0
+  - t: 20.0
+    type: safety.hard-brake
+    decel_mps2: 8.0
+  # The trigger: armed from 5 s, it fires on the first follower whose TTC is below 2 s.
+  - t: 5.0
+    type: safety.hard-brake
+    when: {kind: ttc_below, ttc_s: 2.0}
+    target: when.follower
+    decel_mps2: 4.9
+    hold_s: 2.0
+
+metrics: []
+exporters: []
