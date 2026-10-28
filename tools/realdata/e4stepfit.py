@@ -77,9 +77,11 @@ ENGINE_RUNS = {
 }
 ENGINE_V_P50 = 29.8
 # The emulator's one nuisance the engine adds that the timing model does not carry (its GNSS
-# layer, mobility): a white increment per axis, m. Chosen on the engine runs' quantiles
-# (validate), never on Wyoming's KS.
-EMU_EXTRA_M = 0.005
+# layer, mobility): a white increment per axis, m. Chosen on the engine runs' p50/p75/p90
+# (the least squared log error over 3.5-6 mm in 0.5 mm steps; validate), never on Wyoming's
+# KS. Predictions move with it: candidate E speed-matched 0.094 / 0.082 / 0.074 / 0.063 at
+# 4 / 4.5 / 5 / 5.5 mm (research/synthesis/p1-realdata-baseline.md section 7.5).
+EMU_EXTRA_M = 0.0045
 LSB_M = math.radians(mc.POS_LSB_DEG) * pairing.R_EARTH  # the engine world sits at latitude 0
 TAMPA_LAT = 27.95
 
@@ -1031,7 +1033,7 @@ def cmd_yaml(fit_path, wy_path=None):
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
                 cmd_predict(wy_path, fit_path, v_p50=v)
-            L.append("# Predicted P1-E4 (held out, emulator; engine runs reproduced within -0.009..+0.014):")
+            L.append("# Predicted P1-E4 (held out, emulator; engine runs reproduced within -0.004..+0.018):")
             L += ["#   " + ln for ln in buf.getvalue().splitlines()]
     print("\n".join(L))
 
