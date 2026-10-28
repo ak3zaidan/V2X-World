@@ -881,7 +881,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
 | Driver distraction episodes (S-P15) | Best after WP-08, which gives it crashes to precede. |
 | Overtaking in the opposing lane (S-P13, L) | Needed only for Do-Not-Pass Warning studies. |
 | DCC_NET CBR sharing (O-P8) | EU stack only; the deployment target is US. |
-| Doppler-aware 802.11p PER tables (O-P12) | Beyond both frameworks, but the link-level source is not cached or checked yet. |
+| Doppler-aware 802.11p PER tables (O-P12) | Beyond both frameworks. **Checked 2026-10-28 (P40.1): no public source gives 11p PER at more than one speed in one profile, so WP-40 is dropped** (`wp25-plus-build-plans.md` WP-40 source note). The TGbd decks could not be fetched and could reopen it. |
 | Hardware-in-the-loop bridge (O-P10, L) | Needs an owner decision and a real OBU on the bench. |
 
 **Dropped** (not useful for this engine): Wiedemann 74 (S-P18, optional, no current user),

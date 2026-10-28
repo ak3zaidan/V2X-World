@@ -911,6 +911,63 @@ down at 300-500 m.
 - **P40.2** (3 h, gated): `PerTable` and its tests.
 - **P40.3** (3 h, gated): the PHY and engine wiring, the row and the faults.
 
+**Source note, 2026-10-28 (P40.1, sources track, no code).** **Verdict: no public source gives
+802.11p PER at more than one relative speed with the channel profile held fixed and the
+standard preamble-LS receiver. By rule 9, WP-40 is dropped (P40.2 and P40.3 leave their
+round) and the card lines at `phy.rs:1603` and `per.rs:530`/`:551` stay as they are.**
+Each check below names the copy that was read. Nothing was cached in the repo. "sha256" is
+the copy read, which was downloaded into scratch and then deleted.
+- *Anwar, Franchi, Fettweis, VTC2019-Fall* (doi 10.1109/VTCFall.2019.8891313). The author
+  preprint is at vodafone-chair.org (sha256 `c3378fed…1660`, 7 pp.). Fig. 1(a)-(b) give PER
+  vs SNR for 11p at 100 B and 1500 B, QPSK 1/2 and 64-QAM 2/3, in **one** profile only:
+  Urban NLOS from Kahn, IEEE 802.11-14/0259r0 (Table III and ref. [18]). There is no speed
+  axis. The text says only that 11p "suffers" from preamble-based estimation, and worse at
+  1500 B (p. 5). This gives a qualitative frame-length effect, not a table.
+- *IEEE 802.11 TGbd / NGV submissions* (11-18/0513 Zhang; "Doppler Impact on OFDM Numerology
+  for NGV", Cao et al., Sept. 2018; 11-19/0016; and Kahn 11-14/0259 for the profiles). These
+  are cited by Naik et al., arXiv 1903.08391, refs [20]-[25], and by the Anwar et al.
+  reliability paper, ref. "11-19/0016r0". **Not reachable**: mentor.ieee.org returns HTTP 418
+  "Request Rejected" to both the document list and direct `dcn/` links. The document numbers
+  of the Cao and Zhang decks stay unpinned. A later P40.1 retry with a browser could reopen
+  WP-40, because these decks are the likeliest multi-speed 11p source.
+- *Checked and rejected* (each read):
+  - Anwar et al., "On the Reliability of NR-V2X and IEEE 802.11bd" (vodafone-chair.org,
+    sha256 `db816c31…8739`): Dopplers of 250/500/1000 Hz, but for 11bd and NR only, no 11p;
+  - Nagalapur, Brännström, Ström, ICC 2014, arXiv 1501.04310 (sha256 `953dcee4…a287`): the
+    standard LT-LS receiver is shown at **100 km/h only** (Fig. 9). The 100/200 km/h curves of
+    Fig. 10 are its modified-frame receiver and perfect CSI, not a deployed receiver;
+  - Sattiraju et al., arXiv 2002.11450 (sha256 `58f34240…422b`):
+    11p BLER vs SNR, 300 B, QPSK 1/2 and 3/4, in the five Kahn/Tiger-team profiles of its
+    Table V (max Doppler 492, 492, 591, 886, 886 Hz, i.e. about 90-162 km/h at 5.9 GHz). Each
+    Doppler comes with its own delay profile, so speed cannot be separated from the profile;
+  - arXiv 1410.8039: BER, not PER, at 0/20/50 km/h with an unstated receiver;
+  - NGMN V2X white paper v1.0 (5gaa.org, sha256 `10c8e174…ab90`): system-level ranges at
+    15/60/70/140 km/h. Its link curves are not published;
+  - Wang et al., J. Commun. Inf. Netw. 2(2), 2017 (doi 10.1007/s41650-017-0022-x): 280 and
+    140 km/h are named in a search abstract, but Springer's cookie wall blocked the copy.
+    **Not read.** It should be retried before WP-40 is finally closed. It is LTE-vs-DSRC from a
+    C-V2X vendor group;
+  - Fernandez et al., IEEE TVT 61(1):3-14, 2012 (doi 10.1109/TVT.2011.2164428): paywalled, and
+    no author copy was found. It uses the Acosta-Marum profiles, where speed is again tied to
+    the profile.
+- *What does exist (profile-indexed, not speed-indexed).* ETSI TR 103 766 V1.1.1 (2021-09),
+  public (etsi.org/deliver, sha256 `f8b434ff…e919`), Figs. 7.13-7.14 p. 58-59: ITS-G5 MCS
+  0/2/4 PER vs SINR, 350 B, for the fast-highway scenario only (WINNER+ B1, fast fading per TR
+  36.843 A.2.1.2.1, Table 7.10). Its data source is ETSI ERM TG37(20)036003, "PHY performance
+  reference for TR103667 and TR103766 simulations" (Jan. 2020; member docbox, not read; per
+  Bazzi et al., arXiv 2003.09510, ref. [13], sha256 `37f7214e…148b`). The numeric tables ship
+  in WiLabV2Xsim (`PERcurves/G5-{HighwayLOS,HighwayNLOS,UrbanLOS,UrbanNLOS,CrossingNLOS}/
+  PER_11p_MCS{0,2,4}_{190,350,550}B.txt`, GPL-3.0, with 2-antenna RX per arXiv 2003.09510
+  §III). They give no speed per folder. Cross-check: `G5-HighwayLOS/PER_11p_MCS2_350B` falls
+  from 0.264 at 2 dB to 0.111 at 3 dB, so PER 0.1 sits near 3.1 dB, which matches "PER=0.1@
+  SINR=3.1dB" in arXiv 2003.09510 Table I.
+- *Choice left for the owner (not built).* A **profile-indexed** 11p PER table (MCS x length
+  x the five profiles above) is buildable from those tables. It would add the frame-length
+  and delay-spread effects the NIST curve lacks, but it is **not** Doppler-aware. The
+  2-antenna receive assumption also has to be undone before it can match the 1-antenna
+  default. It is recorded here as a candidate spare item, not as WP-40. Speed ties to profile
+  only through the scenario label.
+
 ---
 
 ## WP-41 Zipper merge (S-P10)
@@ -1063,8 +1120,8 @@ parameters from NCHRP 605.
 | WP-39 | Dingus et al. 2016, PNAS 113(10) | open access | no |
 | WP-39 | NHTSA visual-manual guidelines, 78 FR 24818 | public | no |
 | WP-39 | 100-Car Phase II, DOT HS 810 593 | public | read ([repo] honest-density.md) |
-| WP-40 | Anwar, Franchi, Fettweis, VTC2019-Fall | IEEE; author copy to find | no |
-| WP-40 | IEEE 802.11 TGbd link-level submissions | public (document server) | no |
+| WP-40 | Anwar, Franchi, Fettweis, VTC2019-Fall | author preprint (vodafone-chair.org) | read 2026-10-28 (P40.1 note): one profile, no speed axis |
+| WP-40 | IEEE 802.11 TGbd link-level submissions | public, but mentor.ieee.org rejected the fetch (HTTP 418) | not read (P40.1 note); WP-40 dropped |
 | WP-40 | 3GPP TR 37.885 | public | channel models summarised in R2c |
 | WP-41 | SUMO zipper documentation; MnDOT zipper-merge evaluations | public | no |
 | WP-42 | OSM wiki `parking:*`; a manoeuvre-time field study; SUMO parking reroute docs | public | no |
