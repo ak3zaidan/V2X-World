@@ -48,3 +48,25 @@ rows:
   fault: 'V2XW_FAULT=viol-off -> both assertions red'
   measured: 'issued 95 -> 144, true 45 -> 75, missed 0 -> 1 (106 / 105 vehicles); fault: 95 -> 95, true 45 -> 45, FAILED'
   verdict: pass
+# --- (2) kerbside: bus 79's standstill ---------------------------------------------------
+- id: R5.kerb.standstill
+  change: EngineParams.foe_will_pass (a permitted left turner ignores opposing claimants that will not pass)
+  base: 'realism.rs buses_taxis_and_deliveries_stop_at_the_kerb_and_the_traffic_goes_round, kerbside on, flag off (the default)'
+  variant: the same with the flag on (default flipped for the run, then restored)
+  measure: auditor standstill count (180 s limit)
+  expect: >-
+    standstill 1 -> 0. Traced (an env-gated print of the decision pass, removed): bus 79 turns left
+    (connector 307) at junction 11 on a permissive green. 120-147 s: its own exit is blocked or a foe
+    comes (107, 138), and its one free 2 s at 145 s ends in the amber. 180-200 s (and each green after):
+    blocked false, decision Stop, because opposing through car 137 stands at its line with a tracked
+    arrival of 0.7 s (engine.rs claims: merge_arrival_s from standstill) while 137's own decision is
+    Stop with junction_blocked true for the whole green (its exit full); the cars standing behind it
+    (160 at 7 m, 81 at 14 m) carry 3.0 and 3.8 s arrivals. permissive_closing_s
+    (signal_fixed_time.rs) takes the minimum, under the bus's critical headway, every step. A foe that
+    will not pass is no immediate hazard (UVC 11-402) and blocks nobody in SUMO (MSLink::blockedByFoe
+    skips !willPass)
+  source: UVC 11-402; SUMO MSLink::setApproaching / blockedByFoe (willPass)
+  fault: flag off (the default) -> standstill 1 (bus 79, 180 s from 111.6 s), the test's invariant assertion red
+  measured: 'flag off: standstill 1, the invariant assertion FAILED (kerbside stops broke an invariant: standstill = 1 (off: 0)); flag on: standstill 0, that assertion passes; conflict-zone 0 and red-entry 0 in both'
+  verdict: fixed
+  note: 'the test stays red on its next assertion, overlaps: 24 (flag off) and 38 (flag on) against 9 with kerbside off and 0 on main. Every example printed is a lane change beside a standing vehicle (t=206.8 car 24 changing 174->175 against delivery 182 on 173; t=250.9 car 62 changing 38->39 against car 84 on 37, centres 4.72 m apart; t=267.5 bus 63 changing 58->59 against bus 257 on 57), none a junction turn; open. The flag is off by default until the goldens are re-blessed (item 3 of this round turns it on)'

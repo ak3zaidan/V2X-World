@@ -4051,6 +4051,17 @@ Rows: `crates/v2xw-engine/tests/expectations/traffic-r5.yaml`.
   every driver failing to yield to slow foes: issued 95 -> 144, true 45 -> 75. Fault
   `V2XW_FAULT=viol-off`: both red, and the off runs repeat exactly. A `MemoryRecorder`
   passed the 4.5 GB cap, so the test uses `NullRecorder`. 289 s for the pair.
+- **Kerbside standstill (bus 79): cause found and fixed behind `EngineParams::foe_will_pass`.**
+  Bus 79 turns left on a permissive green at junction 11. On each green from 180 s it
+  yielded to opposing car 137, which stood at its own line, held by its own full exit
+  (`junction_blocked` true for the whole green), and still carried a 0.7 s tracked arrival.
+  The cars queued behind 137 carried 3.0 and 3.8 s. `permissive_closing_s` took the
+  minimum, so the gap never opened. Now a claimant standing at the line whose own decision
+  last step was to stop there, and any claimant standing behind it in its lane, has no
+  arrival (SUMO `willPass` false; UVC §11-402 "immediate hazard"). Flag on: standstill
+  1 -> 0. The flag is off by default; item 3 turns it on with the goldens. The test is
+  still red on its overlap assertion (24 with the flag off, 38 with it on, against 9 with
+  kerbside off). Every example is a lane change beside a standing vehicle, not a turn: open.
 
 ## 2026-10-28: adoption wave integration (grade, mac, nema: WP-16, 17, 18, 21, 22)
 
