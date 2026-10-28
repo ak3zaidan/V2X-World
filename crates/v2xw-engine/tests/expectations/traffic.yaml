@@ -59,6 +59,11 @@
    source: "actuated control ends green when the queue clears and serves demand as it arrives: less delay at moderate volume (HCM 7th ed. 19.4; FHWA Signal Timing Manual 2e, 5.3)"}
 - {setting: traffic.signals.control, change: actuated, metric: traffic.speed_mean_mps, expect: up,
    source: "less signal delay, higher average travel speed (FHWA Signal Timing Manual 2e)"}
+- {setting: traffic.signals.control, change: nema, metric: traffic.stopped_share, expect: down,
+   source: "the dual ring times both directions' throughs and lefts concurrently within a barrier group instead of in sequence, and each ring gaps out on its own (FHWA Signal Timing Manual 2e, NCHRP Report 812, 5.1.2 Exhibit 5-3 and 5.3)"}
+# traffic.signals.nema.max_recall -> report.signal_gap_outs down (WP-17's second row) is a
+# list-valued setting, which `sensitivity --expect` cannot sweep ("not a published
+# setting"); it is measured by hand in traffic-r5.yaml R5.nema.max-recall (79 -> 0).
 - {setting: traffic.signals.passage_s, change: high, metric: traffic.stopped_share, expect: up,
    source: "a long passage (gap) time extends green after the queue clears while the other approaches wait (FHWA Signal Timing Manual 2e, 5.3.2; Bonneson and McCoy, NCHRP 3-66)"}
 - {setting: traffic.signals.min_green_s, change: low, metric: traffic.stopped_share, expect: down,

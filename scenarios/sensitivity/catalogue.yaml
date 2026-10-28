@@ -252,6 +252,8 @@ context:
   - {prefix: traffic.signals.max_green_s, set: {traffic.signals.control: actuated}}
   - {prefix: traffic.signals.passage_s, set: {traffic.signals.control: actuated}}
   - {prefix: traffic.signals.detector_m, set: {traffic.signals.control: actuated}}
+  # The dual ring's own settings act only under it (WP-17 P17.10).
+  - {prefix: traffic.signals.nema, set: {traffic.signals.control: nema}}
   - {prefix: scale.traffic.meso, set: {scale.traffic.model: mobility/meso/queue}}
   - {prefix: scale.radio, set: {scale.traffic.model: mobility/meso/queue}}
   # Traffic-flow track (round 15): each setting measured where it acts. The heading only

@@ -1395,6 +1395,11 @@ pub(crate) fn catalogue_for_guide() -> Registry {
             let _ = registry.register(card);
         }
     }
+    // The NEMA dual ring (`traffic.signals.control: nema`), catalogue only (WP-17 P17.10).
+    let nema = crate::nema::card();
+    if !registry.contains(&nema.id) {
+        let _ = registry.register(nema);
+    }
     for card in v2xw_world::dem::model_cards() {
         if !registry.contains(&card.id) {
             let _ = registry.register(card);

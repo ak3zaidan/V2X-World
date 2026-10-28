@@ -855,6 +855,14 @@ impl FingerprintRecorder {
                 f.entry(k.to_string()).or_insert(0.0);
             }
         }
+        // WP-17 P17.10: the signal controllers' counters are serialised only when non-zero.
+        // A run whose controllers ended any green, by gap or at its maximum, ran actuated
+        // or NEMA control, and there a missing count is a zero (max recall: no gap-outs).
+        if report.signal_gap_outs > 0 || report.signal_max_outs > 0 {
+            for k in ["report.signal_gap_outs", "report.signal_max_outs"] {
+                f.entry(k.to_string()).or_insert(0.0);
+            }
+        }
         f.retain(|k, _| !BOOKKEEPING.contains(&k.as_str()));
         for (k, (s, n, _)) in &self.samples {
             f.insert(format!("metric.{k}"), s / n.max(1.0));

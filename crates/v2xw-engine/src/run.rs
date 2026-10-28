@@ -579,6 +579,14 @@ pub struct RunReport {
     /// their interval's end. Must be 0; a late poll is the only way to make one.
     #[serde(skip_serializing_if = "is_zero_u64")]
     pub straddling_frames: u64,
+    /// WP-17 P17.10: greens the actuated or NEMA controllers ended early on a gap, over the
+    /// run (the `traffic.control` log's last `gap_outs`). Zero, and not written, under
+    /// fixed-time control.
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub signal_gap_outs: u64,
+    /// WP-17 P17.10: greens they ended at their maximum (`max_outs`).
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub signal_max_outs: u64,
     /// WP-13: per channel, the busy time every unit tuned to it measured, summed over the
     /// metric windows, ns. With [`RunReport::channel_window_ns`], the mean channel busy
     /// ratio of each of the run's channels. Empty in a single-channel run.
@@ -10837,6 +10845,8 @@ impl Engine {
         if !self.actuated.is_active() && g == Default::default() {
             return;
         }
+        self.report.signal_gap_outs = a.gap_outs;
+        self.report.signal_max_outs = a.max_outs;
         let rec = crate::actuated::TrafficControlRecord {
             t: now,
             gap_outs: a.gap_outs,

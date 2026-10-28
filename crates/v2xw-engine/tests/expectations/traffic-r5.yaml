@@ -109,3 +109,44 @@ rows:
   fault: n/a (a re-bless)
   measured: 'phase2-path: frame 69af34e7 -> 736a1216, record 1bc443ed -> 8c8c8e56, records 10,241,996 -> 10,243,380 (phase2 15 / 15 with the bless). i-s1-phase2-60s (a24806dc / 648b5200, 260,299) and ttc-triggered-brake (5047d6fc / ba01d482, 8,184) unchanged: bsm_timing 4 / 4, trigger_ttc 4 / 4, scms_scale I-S1 1 / 1'
   verdict: pass
+# --- (4) WP-17 P17.10: the NEMA dual ring held and measured ------------------------------
+- id: R5.nema.gtv
+  change: 'traffic.signals.control: nema on scenarios/manhattan-5min.yaml (1,500 veh/h, 150 pedestrians), 600 s'
+  base: 'the new G-TV check invariants/nema-safety (v2xw-trafficval nema_safety.rs; the study harness steps ActuatedControllers through study::run_controlled)'
+  measure: 'steps with two foe movements both protected green (the junction''s matrix, audit_world''s rule, every step); untagged red entries; the auditor''s safety classes'
+  expect: '0 conflicting greens and 0 red entries, as the build plan''s accept row states; the same rule on the imported fixed-time plans 0 (the control)'
+  source: FHWA STM 2e 5.1.2 Exhibit 5-3 (barriers); NEMA TS 2-2016 conflict monitor; UVC 11-202(c)
+  fault: 'barrier skipped (every red movement shown green while a foe of the other group is protected green) -> red entries 0 -> 1, the row red'
+  measured: 'red entries 0; conflicting greens on 6,000 of 6,000 steps, 189 distinct pairs on 263 dual-ring plans (control: 0 on the fixed-time plans); safety classes 77 (conflict-zone 73 at junction 207, lateral-offset 1, teleport 1, step-speed 2); standstill 2; gap-outs 1,566, max-outs 16; mean speed 5.28 m/s; 6 plans left to the single ring (not-two-streets 5, too-many-approaches 1). Examples (quick run): plan 0 / junction 106, Left 3563->631 and Straight 3564->639 from the same edge 2571; plan 1 / junction 107, Left 416->4130 and Left 417->207 from edge 265'
+  verdict: open
+  note: "a defect the check exists to show: the dual ring gives two movements of one approach (adjacent lanes, paths crossing in the matrix) protected greens together, where the imported fixed-time plan made one of them yield (GreenYield). Cause: nema/control.rs NemaPlan::vector (l.243-271) shows Green for every movement whose own phase is green, with no test against the junction's conflict matrix among the movements green together; the two movements' phases time concurrently. Not fixed here (WP-17 owner): the fix is to show the turning one of a foe pair GreenYield, as the fixed-time import does"
+- id: R5.nema.row-control
+  change: 'expectations/traffic.yaml: traffic.signals.control nema -> traffic.stopped_share down'
+  base: 'the traffic family (phase1-grid 4 x 6, 1,500 veh/h, 90 s), fixed-time'
+  variant: control nema
+  measure: traffic.stopped_share
+  expect: down (concurrent phases, independent gap-outs)
+  source: FHWA STM 2e 5.1.2, 5.3
+  fault: 'the dual ring ignored (variant = the fixed-time base) -> DEAD, red'
+  measured: 'PASS 0.1650 -> 0.0350 (-78.8 %); fault: 0.1650 -> 0.1650, DEAD'
+  verdict: pass
+- id: R5.nema.max-recall
+  change: 'traffic.signals.nema.max_recall [1..8]'
+  base: 'the traffic family grid under control nema, 90 s (sc grid-nema.yaml), one binary, one seed'
+  variant: the same with max recall on every phase
+  measure: report.signal_gap_outs, report.signal_max_outs (new RunReport leaves)
+  expect: 'gap-outs fall to 0 (every phase called, so each green runs to its maximum); max-outs rise'
+  source: FHWA STM 2e 5.3.2 (recall modes)
+  fault: 'max recall under fixed-time control: refused by the loader (traffic.signals.nema needs control nema); its base has no gap-outs at all (0 -> 0), red'
+  measured: 'gap-outs 79 -> 0, max-outs 0 -> 44 (digests 736e183f -> 67dd7825, 44 vehicles both); fixed-time base: no gap-outs, digest 1fcc2b12'
+  verdict: pass
+  note: 'the build plan put this row in traffic.yaml; `sensitivity --expect` cannot sweep a list-valued setting ("not a published setting"), so it is measured here by hand. A scalar stand-in, nema.left_passage_s 6 s, is DEAD on the grid (79 -> 79: its lefts are rarely called), and was not added'
+- id: R5.nema.city
+  change: 'traffic.signals.control nema on manhattan-5min, the full engine (radio, SCMS), 60 s, `v2xw run --no-recording --digest`'
+  base: the same at fixed-time
+  measure: stream digest, report.signal_gap_outs, mean_speed metric
+  expect: 'runs; differs from fixed-time; gap-outs > 0'
+  source: P17.10 (the city run)
+  fault: n/a (a run)
+  measured: 'nema: digest 8ddf6ea5, gap-outs 37, mean speed 6.56 m/s, 343,364 records, 1.12 wall s per simulated s (debug); fixed-time: digest 68446a37, 6.25 m/s, 353,138 records; 26 vehicles both'
+  verdict: pass

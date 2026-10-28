@@ -4076,6 +4076,12 @@ Rows: `crates/v2xw-engine/tests/expectations/traffic-r5.yaml`.
   `ttc-triggered-brake` are unchanged. Mobility: lib 324/324, traffic_invariants 2/2,
   calibration 2/2. Realism is 3/4: kerbside fails only on overlaps (10 against 0 with
   kerbside off), and every example is a lane change beside a standing vehicle (open).
+- **WP-17 P17.10: built, and its check is red.**
+  - **The check.** `invariants/nema-safety` is a new G-TV check. The study harness gets `run_controlled`, a hook that steps the kernel's signal controllers. On Manhattan under `control: nema` for 600 s it finds 0 red entries. But two foe movements are protected green together on every step: 189 pairs on 263 plans, against 0 on the fixed-time plans. The cause is that `NemaPlan::vector` never tests concurrent greens against the junction's matrix. In the run, conflict-zone is 73 and standstill is 2. Not fixed (WP-17 owner).
+  - **Rows.** `control: nema` lowers `traffic.stopped_share` (0.165 -> 0.035). Max recall takes gap-outs from 79 to 0, measured by hand: the setting is a list, which `--expect` cannot sweep. Two new `RunReport` leaves: `signal_gap_outs` and `signal_max_outs`.
+  - **City run.** Manhattan for 60 s at the full engine: 6.25 -> 6.56 m/s.
+  - **Model card.** `signals/nema-dual-ring` goes in the catalogue only.
+  - **Proposal.** Keep `nema` off by default until the check is green (adoption plan).
 
 ## 2026-10-28: adoption wave integration (grade, mac, nema: WP-16, 17, 18, 21, 22)
 
