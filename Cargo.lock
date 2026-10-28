@@ -2799,6 +2799,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "v2xw-core",
+ "v2xw-energy",
  "v2xw-world",
 ]
 

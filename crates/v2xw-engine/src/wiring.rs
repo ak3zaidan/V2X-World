@@ -548,6 +548,9 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(v) = traffic.lane_bend_speed {
         params.lane_bend_speed = v;
     }
+    if let Some(d) = traffic.vehicle_dynamics {
+        params.vehicle_dynamics = d.params();
+    }
     // SUMO LC2013's motivations: any lc_* field switches them on; the unset ones take
     // SUMO's default of 1 (`v2xw_mobility::lanechange::lc2013`).
     if traffic.lc_strategic.is_some()

@@ -812,6 +812,90 @@ pub fn is_boundary_entry(world: &World, lane: LaneId) -> bool {
         || (b.max.y - p.y).abs() <= BOUNDARY_BAND_M
 }
 
+/// Grade-aware, power-limited acceleration (WP-22; docs/design/research/grade-dynamics.md).
+///
+/// After every other limit of the decision pass, a motor vehicle's acceleration is held
+/// to what its power train and the road's slope allow:
+///
+/// `a ≤ min(a_drv, η·P/(m·v) − c_rr·g − ½·ρ·C_dA·v²/m) − g·sin θ`
+///
+/// with `a_drv` the driver's comfortable acceleration, the power term from the class's
+/// road-load row ([`crate::classes::VehicleClass::dynamics`]) and θ from the lane's draped
+/// centreline ([`lane_grade_sin`]). It is an upper bound only: a model asking for less
+/// (braking, or holding speed downhill) is untouched, so a downgrade never makes a vehicle
+/// overspeed. A physical law, so it reads the ground-truth lane geometry.
+///
+/// The two parts are separate so that a flat road stays byte-identical with only the
+/// grade on: SUMO's KraussPS takes `aMax − g·sin θ` only; the power term can bind on a
+/// flat road at speed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct VehicleDynamicsParams {
+    /// The `− g·sin θ` term, on the driver's comfortable acceleration and (with
+    /// `power_limit`) on the power bound. `traffic.vehicle_dynamics.grade`.
+    pub grade: bool,
+    /// The power, rolling and air terms, for the classes with a road-load row.
+    /// `traffic.vehicle_dynamics.power_limit`.
+    pub power_limit: bool,
+}
+
+impl VehicleDynamicsParams {
+    /// True when neither part is on (the default, and the serialisation skip).
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn is_off(&self) -> bool {
+        !self.grade && !self.power_limit
+    }
+}
+
+/// Half the window the grade is judged over, metres: θ is `(z(s+5) − z(s−5)) / 10` along
+/// the lane's (3-D) arc length, so it is `sin θ` directly. **This crate's choice**: a
+/// 10 m chord averages out a DEM drape's cell steps (SRTM 1″ is 30 m) without missing a
+/// ramp.
+pub const GRADE_HALF_WINDOW_M: f64 = 5.0;
+
+/// The largest grade believed, rise over run, as the energy provider holds it
+/// (`v2xw_energy::provider::GRADE_CLAMP`): a steeper chord is a drape artefact.
+pub const GRADE_CLAMP: f64 = 0.3;
+
+/// `sin θ` of the lane at `s_m`: the height change over the arc length of the chord
+/// `[s − 5, s + 5]`, cut to the lane, clamped to [`GRADE_CLAMP`]. A chord under 1 m (a
+/// junction's shortest connector) and a lane with no height change give exactly 0.
+pub fn lane_grade_sin(lane: &v2xw_world::Lane, s_m: f64) -> f64 {
+    let lo = (s_m - GRADE_HALF_WINDOW_M).max(0.0);
+    let hi = (s_m + GRADE_HALF_WINDOW_M).min(lane.length_m);
+    if hi - lo < 1.0 {
+        return 0.0;
+    }
+    let dz = lane.point_at(hi).z - lane.point_at(lo).z;
+    if dz == 0.0 {
+        return 0.0;
+    }
+    (dz / (hi - lo)).clamp(-GRADE_CLAMP, GRADE_CLAMP)
+}
+
+/// The upper bound [`VehicleDynamicsParams`] puts on a vehicle's acceleration, m/s², or
+/// `None` where it puts none (both parts off; a class without a road-load row on the
+/// flat; the grade alone on a level chord).
+pub fn power_grade_bound(
+    p: VehicleDynamicsParams,
+    class: VehicleClass,
+    a_drv_mps2: f64,
+    sin_theta: f64,
+    v_mps: f64,
+) -> Option<f64> {
+    let power = if p.power_limit {
+        class.dynamics().map(|d| d.flat_accel_bound_mps2(v_mps))
+    } else {
+        None
+    };
+    if p.grade && sin_theta != 0.0 {
+        let cap = power.map_or(a_drv_mps2, |b| b.min(a_drv_mps2));
+        Some(cap - crate::classes::ROAD_LOAD_GRAVITY * sin_theta)
+    } else {
+        power
+    }
+}
+
 /// The engine's parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -938,6 +1022,10 @@ pub struct EngineParams {
     /// `traffic.lane_bend_speed`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub lane_bend_speed: bool,
+    /// Grade-aware, power-limited acceleration ([`VehicleDynamicsParams`]). Both parts off
+    /// by default; `traffic.vehicle_dynamics`.
+    #[serde(default, skip_serializing_if = "VehicleDynamicsParams::is_off")]
+    pub vehicle_dynamics: VehicleDynamicsParams,
     /// A multiplier on the HCM critical gaps and follow-up times at unsignalised
     /// junctions ([`GapAcceptanceParams::gap_factor`]); 1.0.
     pub critical_gap_factor: f64,
@@ -1093,6 +1181,7 @@ impl Default for EngineParams {
             braking_tyre_limit: false,
             depart_speed_max: false,
             lane_bend_speed: false,
+            vehicle_dynamics: VehicleDynamicsParams::default(),
             permitted_left_critical_headway_s:
                 crate::intersection::signal_fixed_time::HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S,
             critical_gap_factor: 1.0,
@@ -7049,6 +7138,25 @@ impl Mobility for NativeMobility {
                     }
                 }
             }
+            // Last of all, what the power train and the slope allow (`vehicle_dynamics`):
+            // an upper bound only, so braking and a downhill hold are untouched.
+            let dynamics = self.params.vehicle_dynamics;
+            if along && !dynamics.is_off() && !actor.class.is_vru() {
+                let sin_theta = if dynamics.grade {
+                    lane_grade_sin(lane, actor.s_m)
+                } else {
+                    0.0
+                };
+                if let Some(bound) = power_grade_bound(
+                    dynamics,
+                    actor.class,
+                    actor.driver.max_accel_mps2,
+                    sin_theta,
+                    actor.speed_mps,
+                ) {
+                    accel = accel.min(bound);
+                }
+            }
             // A car stopping behind one that stands still stops its standstill gap short of
             // it. The car-following model only approaches that gap asymptotically, and the
             // 0.1 s integration of the calibrated city drivers overshot it by up to 5 cm and
@@ -10330,6 +10438,195 @@ mod tests {
             gap > s0 - 0.05 && gap < s0 + 0.5,
             "stood {gap} m behind (s0 {s0} m)"
         );
+    }
+
+    /// The 8 km, 25 m/s [`crate::worlds::graded_ring`]: a 4 km climb at `grade` and the
+    /// 4 km descent back.
+    fn graded_ring(grade: f64) -> World {
+        crate::worlds::graded_ring(8000.0, grade, 25.0).expect("a graded ring")
+    }
+
+    /// One vehicle of `class` driven round [`graded_ring`] from the start of edge `start`
+    /// (0, the climb; 1, the descent) at `v_start`, with `dynamics`: its speed each step
+    /// with the distance it has driven.
+    fn drive_graded(
+        class: VehicleClass,
+        dynamics: VehicleDynamicsParams,
+        start: usize,
+        v_start: f64,
+        steps: usize,
+    ) -> Vec<(f64, f64)> {
+        let world = graded_ring(0.05);
+        let cycle = ring_cycle(&world, 0);
+        let rng = RngRegistry::new(22);
+        let params = EngineParams {
+            intersections: IntersectionMode::None,
+            lane_changes: false,
+            dynamic_rerouting: false,
+            driver_heterogeneity: false,
+            vehicle_dynamics: dynamics,
+            ..EngineParams::default()
+        };
+        let mut engine = engine_on(&world, params, &rng);
+        let route: Vec<LaneId> = cycle.iter().cycle().skip(start).take(4).copied().collect();
+        let driver = IdmPreset::Kesting2010.profile(class);
+        let id = engine
+            .spawn_with_route(&world, 0, class, driver, route, 0.0)
+            .expect("spawned");
+        engine.set_speed(id, v_start).expect("speed");
+        let mut t = 0u64;
+        let mut driven = 0.0;
+        let mut out = Vec::with_capacity(steps);
+        for _ in 0..steps {
+            let mut ctx = MobilityCtx::new(t, &world, &rng);
+            engine.step(&mut ctx, params.step);
+            let (_, _, _, v) = engine.longitudinal_states()[0];
+            driven += v * 0.1;
+            out.push((driven, v));
+            t += 100 * NS_PER_MS;
+        }
+        out
+    }
+
+    /// The design truck's steady crawl speed on a 5 % climb from the power balance alone,
+    /// `η·P = m·g·(sin θ + c_rr)·v + ½·ρ·C_dA·v³`, solved by bisection. **ASSUMPTION**:
+    /// the Green Book's 120 kg/kW speed-distance curve itself is paywalled and has not
+    /// been read (grade-dynamics.md), so the band is this balance, not the figure.
+    fn crawl_speed(class: VehicleClass, grade: f64) -> f64 {
+        let d = class.dynamics().expect("a road-load row");
+        let m = d.mass_kg;
+        let sin = grade / (1.0 + grade * grade).sqrt();
+        let (mut lo, mut hi) = (0.1f64, 60.0f64);
+        for _ in 0..200 {
+            let v = 0.5 * (lo + hi);
+            let surplus = d.eta * d.power_kw * 1000.0
+                - m * 9.81 * (sin + d.c_rr) * v
+                - 0.5 * 1.182 * d.cd_a_m2 * v * v * v;
+            if surplus > 0.0 {
+                lo = v;
+            } else {
+                hi = v;
+            }
+        }
+        lo
+    }
+
+    const BOTH: VehicleDynamicsParams = VehicleDynamicsParams {
+        grade: true,
+        power_limit: true,
+    };
+
+    #[test]
+    fn the_grade_is_the_chord_of_the_draped_lane() {
+        let world = graded_ring(0.05);
+        let climb = world.lane(ring_cycle(&world, 0)[0]);
+        let sin = 0.05 / (1.0f64 + 0.0025).sqrt();
+        assert!((lane_grade_sin(climb, 2000.0) - sin).abs() < 1e-6);
+        // Cut to the lane at its ends, and still the slope.
+        assert!((lane_grade_sin(climb, 0.0) - sin).abs() < 1e-6);
+        assert!((lane_grade_sin(climb, climb.length_m) - sin).abs() < 1e-6);
+        let descent = world.lane(ring_cycle(&world, 0)[1]);
+        assert!((lane_grade_sin(descent, 2000.0) + sin).abs() < 1e-6);
+        // A level lane is exactly level, so the grade alone changes nothing on it.
+        let flat = ring(&RingParams::default()).expect("a ring");
+        assert_eq!(lane_grade_sin(flat.lane(LaneId::new(0)), 50.0), 0.0);
+        assert_eq!(
+            power_grade_bound(
+                VehicleDynamicsParams {
+                    grade: true,
+                    power_limit: false
+                },
+                VehicleClass::Trailer,
+                0.7,
+                0.0,
+                20.0
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn truck_crawls_on_a_five_percent_grade() {
+        // The 36.3 t trailer at 120 kg/kW enters a 4 km 5 % climb at its desired 23.6 m/s;
+        // 2 km in it is at the speed its power holds on that slope (12.9 m/s, 46 km/h).
+        let crawl = crawl_speed(VehicleClass::Trailer, 0.05);
+        assert!(crawl > 11.0 && crawl < 14.0, "crawl {crawl}");
+        let trace = drive_graded(VehicleClass::Trailer, BOTH, 0, 23.6, 1600);
+        let v = trace
+            .iter()
+            .find(|(d, _)| *d >= 2000.0)
+            .map(|(_, v)| *v)
+            .expect("2 km driven");
+        assert!(
+            v > crawl - 0.3 && v < crawl + 0.5,
+            "at 2 km the truck is at {v} m/s, crawl {crawl}"
+        );
+        // Without the bound the model holds its desired speed up the hill.
+        let off = drive_graded(
+            VehicleClass::Trailer,
+            VehicleDynamicsParams::default(),
+            0,
+            23.6,
+            1000,
+        );
+        let v_off = off
+            .iter()
+            .find(|(d, _)| *d >= 2000.0)
+            .map(|(_, v)| *v)
+            .expect("2 km driven");
+        assert!(v_off > 23.0, "{v_off}");
+    }
+
+    #[test]
+    fn downgrade_holds_desired_speed() {
+        // Down the 5 % side the bound is raised by g·sin θ, and only bounds: the model's
+        // desired speed still holds the truck, neither over it (as with the bound off) nor
+        // under it. Overspeed is also barred by the integration's `max(v0, v)` ceiling, so
+        // the half of this test that can go red on its own is the lower one: a bound that
+        // took the grade's sign the wrong way would brake the truck downhill.
+        let on = drive_graded(VehicleClass::Trailer, BOTH, 1, 23.6, 1500);
+        let slowest = on
+            .iter()
+            .take_while(|(d, _)| *d < 3900.0)
+            .map(|(_, v)| *v)
+            .fold(f64::INFINITY, f64::min);
+        assert!(slowest > 23.6 - 0.05, "slowed to {slowest} m/s downhill");
+        let off = drive_graded(
+            VehicleClass::Trailer,
+            VehicleDynamicsParams::default(),
+            1,
+            23.6,
+            1500,
+        );
+        let top = |t: &[(f64, f64)]| {
+            t.iter()
+                .take_while(|(d, _)| *d < 3900.0)
+                .map(|(_, v)| *v)
+                .fold(0.0f64, f64::max)
+        };
+        let (top_on, top_off) = (top(&on), top(&off));
+        assert!(top_on <= top_off + 1e-9, "{top_on} vs {top_off} off");
+        assert!(top_on < 23.6 + 0.05, "{top_on}");
+    }
+
+    #[test]
+    fn passenger_car_keeps_limit_on_five_percent() {
+        // A PHEMlight car has power to spare on 5 %: from rest at the foot of the climb it
+        // reaches 90 % of its 25 m/s within 1 km and holds the limit (ASSUMPTION: the HCM
+        // passenger-car expectation is not read; the power balance gives 47 m/s on 5 %).
+        let trace = drive_graded(VehicleClass::Passenger, BOTH, 0, 0.0, 1600);
+        let reach = trace
+            .iter()
+            .find(|(_, v)| *v >= 0.9 * 25.0)
+            .map(|(d, _)| *d)
+            .expect("reached 90 % of the limit");
+        assert!(reach < 1000.0, "took {reach} m");
+        let v = trace
+            .iter()
+            .find(|(d, _)| *d >= 2000.0)
+            .map(|(_, v)| *v)
+            .expect("2 km driven");
+        assert!(v > 0.97 * 25.0, "{v}");
     }
 
     #[test]

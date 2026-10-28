@@ -20,3 +20,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 # The decide pass maps over actors on the thread pool and merges in id order (crate::par).
 rayon = { workspace = true }
+
+[dev-dependencies]
+# The class road-load table's passenger row is checked against PHEMlight's published car.
+v2xw-energy = { workspace = true }

@@ -346,6 +346,69 @@ pub fn rebuild(
     })
 }
 
+/// A two-edge single-lane [`ring`] of `circumference_m` whose first edge (lane 0) climbs
+/// at `grade` (rise over horizontal run) for its whole length and whose second edge comes
+/// back down at the same grade: a constant-grade climb and descent, joined at the top.
+/// The grade-aware acceleration bound's test world (WP-22, `EngineParams::vehicle_dynamics`).
+///
+/// # Errors
+///
+/// Whatever [`ring`] or the world model rejects.
+pub fn graded_ring(circumference_m: f64, grade: f64, speed_limit_mps: f64) -> Result<World> {
+    let flat = ring(&RingParams {
+        circumference_m,
+        segments: 2,
+        points_per_segment: 64,
+        speed_limit_mps,
+        ..RingParams::default()
+    })?;
+    let mut failed = None;
+    let world = rebuild_with(&flat, |parts| {
+        let mut top = 0.0;
+        for (k, lane) in parts.lanes.iter_mut().enumerate() {
+            let pts = &lane.centreline;
+            let mut run = vec![0.0];
+            for w in pts.windows(2) {
+                let last = run.last().copied().unwrap_or(0.0);
+                run.push(last + w[0].distance_2d(w[1]));
+            }
+            let total = run.last().copied().unwrap_or(0.0);
+            top = grade * total;
+            let raised: Vec<Vec3> = pts
+                .iter()
+                .zip(&run)
+                .map(|(p, r)| {
+                    let z = if k == 0 {
+                        grade * r
+                    } else {
+                        grade * (total - r)
+                    };
+                    Vec3::new(p.x, p.y, z)
+                })
+                .collect();
+            match Lane::new(
+                lane.id,
+                lane.edge,
+                lane.junction,
+                lane.index,
+                lane.kind,
+                raised,
+                lane.width_m,
+                lane.speed_limit_mps,
+                lane.allowed,
+            ) {
+                Ok(l) => *lane = l,
+                Err(e) => failed = Some(e),
+            }
+        }
+        parts.junctions[1].position.z = top;
+    })?;
+    match failed {
+        Some(e) => Err(e.into()),
+        None => Ok(world),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

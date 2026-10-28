@@ -131,7 +131,9 @@ pub use classes::{LegacyClass, Tr37885Type, VehicleClass};
 pub use clock::{DriftFreeClock, Oscillator, OscillatorClock};
 pub use ctx::{CoreCtx, MobCtx, MobilityCtx};
 pub use demand::{DemandProfile, FleetMix, NoDemand, OdModel, PoissonDemand, SpeedLaw};
-pub use engine::{DriverOverride, EngineParams, IntersectionMode, NativeMobility};
+pub use engine::{
+    DriverOverride, EngineParams, IntersectionMode, NativeMobility, VehicleDynamicsParams,
+};
 pub use error::{MobError, Result};
 pub use fd::{FdParams, FdResult};
 pub use gnss::{GaussMarkovGnss, LegacyGnss};

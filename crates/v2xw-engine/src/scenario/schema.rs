@@ -287,6 +287,37 @@ pub struct Traffic {
     /// event on their route: local and belief-only). Unset is navigation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reroute_source: Option<v2xw_mobility::routing::dynamic::RerouteSource>,
+    /// Grade-aware, power-limited acceleration (WP-22): the slope of the draped road and
+    /// the class's power, rolling and air resistance cap how fast a vehicle can speed up,
+    /// so a loaded truck crawls up a long climb. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vehicle_dynamics: Option<VehicleDynamicsSettings>,
+}
+
+/// Grade-aware, power-limited acceleration ([`Traffic::vehicle_dynamics`],
+/// [`v2xw_mobility::VehicleDynamicsParams`]); each unset part is off.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VehicleDynamicsSettings {
+    /// The slope term: a vehicle's acceleration less g times the sine of the road's
+    /// grade, as SUMO's KraussPS has it. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grade: Option<bool>,
+    /// The power term: no more acceleration than the engine's power gives after rolling
+    /// and air resistance, for the classes with a sourced road-load row (passenger car
+    /// and tractor-trailer). Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_limit: Option<bool>,
+}
+
+impl VehicleDynamicsSettings {
+    /// The engine's parameters.
+    pub fn params(self) -> v2xw_mobility::VehicleDynamicsParams {
+        v2xw_mobility::VehicleDynamicsParams {
+            grade: self.grade.unwrap_or(false),
+            power_limit: self.power_limit.unwrap_or(false),
+        }
+    }
 }
 
 // traffic audit
@@ -395,6 +426,7 @@ impl Default for Traffic {
             depart_at_speed: None,
             reroute_share: None,
             reroute_source: None,
+            vehicle_dynamics: None,
         }
     }
 }

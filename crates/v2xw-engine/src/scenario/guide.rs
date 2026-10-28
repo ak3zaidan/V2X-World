@@ -816,6 +816,16 @@ const ADVANCED: &[Basic] = &[
         recommended: "Off (today); on with turn_curve_window_m 6 for kinked city streets (the realistic benchmark sets it).",
     },
     Basic {
+        path: "traffic.vehicle_dynamics.grade",
+        explain: "Whether hills slow vehicles down: on a climb a driver gets less acceleration from the same pedal, and on a descent the car holds its speed. Needs a map with terrain heights; flat maps are unchanged.",
+        recommended: "Off (today); on for hilly maps (SUMO's KraussPS slope term).",
+    },
+    Basic {
+        path: "traffic.vehicle_dynamics.power_limit",
+        explain: "Whether an engine's power limits how fast a vehicle can speed up, so a loaded tractor-trailer crawls up a long climb at about 46 km/h on a 5% grade while a car keeps the limit. Applies to cars and tractor-trailers; rigid trucks, buses, vans and motorcycles have no sourced figures yet.",
+        recommended: "Off (today); on with grade for hilly maps and freight corridors.",
+    },
+    Basic {
         path: "traffic.lc_speed_gain",
         explain: "How readily drivers change lane to get past slower traffic; setting any of the lane-change eagerness settings switches to SUMO's LC2013 lane-changing.",
         recommended: "Unset (today's MOBIL); 1 (SUMO default); 0.5 to 2.",

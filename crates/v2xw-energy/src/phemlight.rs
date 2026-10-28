@@ -294,6 +294,14 @@ impl PhemLight {
     pub fn vehicles() -> &'static [Cep] {
         VEHICLES
     }
+
+    /// PHEMlight's road-load constants, read-only, for the mobility crate's class
+    /// road-load table (`v2xw_mobility::classes::ClassDynamics`): gravity (m/s²), air
+    /// density (kg/m³) and the drivetrain efficiency of every class but city buses.
+    #[must_use]
+    pub const fn road_load_constants() -> (f64, f64, f64) {
+        (G, RHO, ETA_DRIVETRAIN)
+    }
 }
 
 impl Model for PhemLight {

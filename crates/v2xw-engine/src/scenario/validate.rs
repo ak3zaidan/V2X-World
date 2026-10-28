@@ -3906,6 +3906,11 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "The bends of a through lane's polyline get the turn-speed cap a junction connector has.",
     },
     KeyStatus {
+        path: "traffic.vehicle_dynamics",
+        status: Status::Wired,
+        note: "Grade-aware, power-limited acceleration: grade subtracts g sin(theta) of the draped lane from the driver's acceleration (KraussPS); power_limit caps it at eta P/(m v) less rolling and air resistance for passenger cars (PHEMlight PC_D_EU4) and tractor-trailers (Green Book 120 kg/kW). Native engine only.",
+    },
+    KeyStatus {
         path: "traffic.depart_at_speed",
         status: Status::Wired,
         note: "Vehicles entering at the map's edge are put on at the lane's start at their desired speed, capped by the safe speed to the leader and the lane end (SUMO departSpeed).",
@@ -5063,6 +5068,7 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             || t.depart_at_speed.is_some()
             || t.reroute_share.is_some()
             || t.reroute_source.is_some()
+            || t.vehicle_dynamics.is_some()
             || t.kerbside.is_some();
         // The LC2013 factors act only on lane changes, and the strategic one only on the
         // changes a route needs.

@@ -383,6 +383,107 @@ impl VehicleClass {
     }
 }
 
+/// The heavy-truck weight-to-power ratio, kg/kW: the AASHTO Green Book's design truck for
+/// the critical length of grade (2001 edition), 120 kg/kW (200 lb/hp). Read through NCHRP
+/// Report 505, *Review of Truck Characteristics as Factors in Roadway Design* (2003, doi
+/// 10.17226/23379), App. D, pp. 153-159, which adds that the data "could also support a
+/// choice in the 90- to 108-kg/kW range" (docs/design/research/grade-dynamics.md).
+pub const DESIGN_TRUCK_KG_PER_KW: f64 = 120.0;
+
+/// Air density of the road-load bound, kg/m³: PHEMlight's `AIR_DENSITY_CONST`, the value
+/// the energy crate's passenger rows are fitted with (`v2xw_energy::phemlight`).
+pub const ROAD_LOAD_AIR_DENSITY: f64 = 1.182;
+
+/// Gravity of the road-load bound, m/s²: PHEMlight's `GRAVITY_CONST`.
+pub const ROAD_LOAD_GRAVITY: f64 = 9.81;
+
+/// The loaded mass of the design tractor-semitrailer, kg: 80,000 lb, the US federal gross
+/// vehicle weight limit on the Interstate (23 U.S.C. 127(a)), 80,000 × 0.45359237.
+pub const DESIGN_TRAILER_MASS_KG: f64 = 80_000.0 * 0.453_592_37;
+
+/// One class's road-load and power figures, `mobility/classes/road-load`
+/// (docs/design/research/grade-dynamics.md). The engine's power-limited acceleration bound
+/// ([`crate::engine::VehicleDynamicsParams`]) reads it:
+///
+/// `a ≤ (η·P/(m·max(v, 1)) − c_rr·g − ½·ρ·C_dA·v²/m) − g·sin θ`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct ClassDynamics {
+    /// The mass the bound is for, kg. The SUMO class mass ([`ClassSpec::mass_kg`]) where
+    /// the row's source is for that mass; the loaded design mass where the SUMO figure is
+    /// an unladen one (the trailer's 13 t).
+    pub mass_kg: f64,
+    /// Rated engine power, kW.
+    pub power_kw: f64,
+    /// Drag area C_d·A, m².
+    pub cd_a_m2: f64,
+    /// Rolling-resistance coefficient (PHEMlight's speed-independent `f0`), 1.
+    pub c_rr: f64,
+    /// Drivetrain efficiency, engine to wheel, 1.
+    pub eta: f64,
+    /// Where each figure comes from.
+    pub source: &'static str,
+}
+
+impl ClassDynamics {
+    /// The largest acceleration the power train gives at `v_mps` on the flat, m/s²:
+    /// `η·P/(m·v) − c_rr·g − ½·ρ·C_dA·v²/m`, with `v` floored at 1 m/s (the power law's
+    /// singularity at rest; at 1 m/s every row's bound is far above its class's
+    /// comfortable acceleration, so the floor never binds).
+    pub fn flat_accel_bound_mps2(&self, v_mps: f64) -> f64 {
+        let v = v_mps.max(1.0);
+        self.eta * self.power_kw * 1000.0 / (self.mass_kg * v)
+            - self.c_rr * ROAD_LOAD_GRAVITY
+            - 0.5 * ROAD_LOAD_AIR_DENSITY * self.cd_a_m2 * v * v / self.mass_kg
+    }
+}
+
+impl VehicleClass {
+    /// This class's road-load and power row, where one is sourced. `None` otherwise: such
+    /// a class keeps its car-following model's acceleration, and only the grade term
+    /// applies to it.
+    ///
+    /// * **Passenger**: PHEMlight `PC_D_EU4` (`v2xw_energy::phemlight`, SUMO's
+    ///   `PC_D_EU4.PHEMLight.veh`), the published passenger car whose 1,500 kg is the SUMO
+    ///   passenger mass: 93 kW rated, C_d 0.3113 × 2.16 m², `f0` 0.009, drivetrain 0.9.
+    /// * **Trailer**: the Green Book design truck at [`DESIGN_TRUCK_KG_PER_KW`], loaded to
+    ///   [`DESIGN_TRAILER_MASS_KG`] (36.3 t, so 302 kW, 405 hp, a common tractor rating);
+    ///   C_dA 5.95 m², the GEM input of a Phase 2 high-roof sleeper tractor, bin III, the
+    ///   middle of the seven bins (40 CFR 1037.520(b)(3)(iii), Table 5); c_rr 0.0077, the
+    ///   EPA/NHTSA Phase 1 average tractor-trailer (NRC, *Review of the 21st Century Truck
+    ///   Partnership, Second Report*, 2012, ch. 18); drivetrain 0.9, PHEMlight's
+    ///   `DRIVE_TRAIN_EFFICIENCY_All`. The ratio, not the mass, sets the crawl speed.
+    /// * **No row** for the rigid `truck`, the bus, coach, vans and two-wheelers: no
+    ///   weight-to-power figure for them has been read. The design ratio is a
+    ///   tractor-semitrailer's; on SUMO's 4.5 t rigid truck it would give 37.5 kW and cap
+    ///   it near 70 km/h on the flat, which no real truck of that mass does.
+    pub fn dynamics(self) -> Option<ClassDynamics> {
+        match self {
+            VehicleClass::Passenger => Some(ClassDynamics {
+                mass_kg: self.spec().mass_kg,
+                power_kw: 93.0,
+                cd_a_m2: 0.3113 * 2.16,
+                c_rr: 0.009,
+                eta: 0.9,
+                source: "PHEMlight PC_D_EU4 (SUMO PC_D_EU4.PHEMLight.veh): mass, rated \
+                         power, cd x area, f0, DRIVE_TRAIN_EFFICIENCY_All",
+            }),
+            VehicleClass::Trailer => Some(ClassDynamics {
+                mass_kg: DESIGN_TRAILER_MASS_KG,
+                power_kw: DESIGN_TRAILER_MASS_KG / DESIGN_TRUCK_KG_PER_KW,
+                cd_a_m2: 5.95,
+                c_rr: 0.0077,
+                eta: 0.9,
+                source: "mass: 80,000 lb (23 U.S.C. 127(a)); power: AASHTO Green Book 2001 \
+                         design truck 120 kg/kW (NCHRP 505 App. D); CdA: 40 CFR 1037.520 \
+                         Table 5 high-roof sleeper bin III; c_rr: NRC 21st Century Truck \
+                         Partnership review (2012) ch. 18, Phase 1 average tractor-trailer; \
+                         eta: PHEMlight",
+            }),
+            _ => None,
+        }
+    }
+}
+
 impl core::fmt::Display for VehicleClass {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(self.as_str())
@@ -709,6 +810,46 @@ pub fn tr37885_types_card() -> ModelCard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passenger_road_load_is_phemlight_pc_d_eu4() {
+        // The passenger row is PHEMlight's published 1,500 kg diesel car, read from the
+        // energy crate rather than re-typed from memory.
+        let cep = v2xw_energy::phemlight::PhemLight::vehicles()
+            .iter()
+            .find(|c| c.name == "PC_D_EU4")
+            .expect("PHEMlight publishes PC_D_EU4");
+        let (g, rho, eta) = v2xw_energy::phemlight::PhemLight::road_load_constants();
+        let d = VehicleClass::Passenger.dynamics().expect("a passenger row");
+        assert_eq!(cep.mass_kg, VehicleClass::Passenger.spec().mass_kg);
+        assert_eq!(d.power_kw, cep.rated_kw);
+        assert_eq!(d.cd_a_m2, cep.cd * cep.area_m2);
+        assert_eq!(d.c_rr, cep.f[0]);
+        assert_eq!(d.eta, eta);
+        assert_eq!((ROAD_LOAD_GRAVITY, ROAD_LOAD_AIR_DENSITY), (g, rho));
+    }
+
+    #[test]
+    fn heavy_rows_are_the_design_truck_ratio() {
+        // The trailer is the design truck: 120 kg/kW at the 80,000 lb federal limit. The
+        // classes without a sourced row have none.
+        let d = VehicleClass::Trailer.dynamics().expect("a trailer row");
+        assert!((d.mass_kg / d.power_kw - 120.0).abs() < 1e-9);
+        assert!((d.mass_kg - 36_287.39).abs() < 0.01, "{}", d.mass_kg);
+        assert!((d.power_kw - 302.39).abs() < 0.01, "{}", d.power_kw);
+        assert_eq!((d.cd_a_m2, d.c_rr), (5.95, 0.0077));
+        for c in VehicleClass::ALL {
+            if !matches!(c, VehicleClass::Passenger | VehicleClass::Trailer) {
+                assert!(c.dynamics().is_none(), "{c} has no sourced row");
+            }
+        }
+        // A passenger car is never power-limited at its comfortable 2.6 m/s² below
+        // 13 m/s, and the design truck at 25 m/s on the flat has 0.16 m/s² in hand.
+        let p = VehicleClass::Passenger.dynamics().expect("row");
+        assert!(p.flat_accel_bound_mps2(13.0) > 2.6);
+        let a = d.flat_accel_bound_mps2(25.0);
+        assert!(a > 0.14 && a < 0.19, "{a}");
+    }
 
     #[test]
     fn sumo_table_matches_the_document() {
