@@ -4,6 +4,7 @@
   python3 -I tools/realdata/e4stepfit.py fit <tampa.csv> [--boot N] > fit.json
   python3 -I tools/realdata/e4stepfit.py predict <wyoming.csv> fit.json [--wyoming-speeds]
   python3 -I tools/realdata/e4stepfit.py validate <wyoming.csv>
+  python3 -I tools/realdata/e4stepfit.py speedcheck <wyoming.csv> fit.json
   python3 -I tools/realdata/e4stepfit.py yaml fit.json [--wyoming <wyoming.csv>]
   python3 -I tools/realdata/e4stepfit.py timing fit.json data/calibration/bsm-timing-cvpilot.yaml
 
@@ -1044,6 +1045,20 @@ def cmd_yaml(fit_path, wy_path=None):
     print("\n".join(L))
 
 
+def cmd_speedcheck(wy_path, fit_path):
+    """Held out: the step's speed change on Wyoming, with the Tampa fit's posterior (nothing
+    is fitted on Wyoming)."""
+    with open(fit_path) as f:
+        fit = json.load(f)
+    st = fit["step"]
+    th = (st["prob"], st["mu_a"], st["s_a"], st["mu_c"], st["s_c"])
+    r = speed_coupling(sequences(normalise.stream_ids(wy_path, "wyoming")), th, fit["chain"][fit["chosen_walk"]])
+    print("Wyoming (held out): K %.3f m/s per m (%d steps), tau_v %.2f s, follow %s" % (
+        r["k_mps_per_m"], r["n_steps"], r["tau_v_s"], r["follow"]))
+    print("lag, steps, slope dV/along, cumulative later along / along:",
+          [(n, c, round(a, 3), round(b, 3)) for n, c, a, b in r["persistence"]])
+
+
 def cmd_timing(fit_path, shipped_path):
     """data/calibration/bsm-timing-cvpilot-chain-device.yaml: the shipped v3 file with the
     locked class's position_noise replaced by the chain devices' core walk (candidate E)."""
@@ -1090,6 +1105,8 @@ def main(argv):
         cmd_validate(argv[1])
     elif len(argv) in (2, 4) and argv[0] == "yaml":
         cmd_yaml(argv[1], argv[3] if argv[2:3] == ["--wyoming"] else None)
+    elif len(argv) == 3 and argv[0] == "speedcheck":
+        cmd_speedcheck(argv[1], argv[2])
     elif len(argv) == 3 and argv[0] == "timing":
         cmd_timing(argv[1], argv[2])
     else:
