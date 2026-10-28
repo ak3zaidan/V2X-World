@@ -70,3 +70,42 @@ rows:
   measured: 'flag off: standstill 1, the invariant assertion FAILED (kerbside stops broke an invariant: standstill = 1 (off: 0)); flag on: standstill 0, that assertion passes; conflict-zone 0 and red-entry 0 in both'
   verdict: fixed
   note: 'the test stays red on its next assertion, overlaps: 24 (flag off) and 38 (flag on) against 9 with kerbside off and 0 on main. Every example printed is a lane change beside a standing vehicle (t=206.8 car 24 changing 174->175 against delivery 182 on 173; t=250.9 car 62 changing 38->39 against car 84 on 37, centres 4.72 m apart; t=267.5 bus 63 changing 58->59 against bus 257 on 57), none a junction turn; open. The flag is off by default until the goldens are re-blessed (item 3 of this round turns it on)'
+# --- (3) the kinematic limits and foe_will_pass on by default; goldens re-blessed ---------
+- id: R5.ped.defaults
+  change: 'EngineParams defaults: lateral_speed_bound, braking_tyre_limit and foe_will_pass false -> true'
+  base: 'pedestrian_invariants.rs at a925db58 (flags off): pedestrians_and_cyclists_... and observed_pedestrians_... red'
+  variant: the same tests with the new defaults
+  measure: the auditor's safety classes in both tests
+  expect: 'both green: in-building 4 -> 0 and speed-jump / accel-bound 4 -> 0 as F4.ped.lateral and F4.ped.tyre measured with the flags set by hand'
+  source: 'Rajamani, Vehicle Dynamics and Control (2012) ch. 2, kinematic bicycle model (lateral rate v sin psi); SUMO emergencyDecel 9 m/s2, dry-asphalt mu 0.8-1.0; UVC 11-402 and SUMO willPass (R5.kerb.standstill)'
+  fault: 'flags off (the a925db58 default) -> both red (the known failures listed for main)'
+  measured: 'pedestrian_invariants 9 / 9 pass (both formerly red tests green). The observed run first failed on accel-bound 3: actor 267 braking at exactly the tyre limit published (v1 - v0)/dt = -9.000000000000004, see R5.audit.tolerance'
+  verdict: fixed
+- id: R5.audit.tolerance
+  change: 'audit.rs AccelBound: the lower bound gets the 1e-6 m/s2 rounding allowance the upper bound already had'
+  base: observed_pedestrians_and_two_wheelers_hold_every_invariant with the new defaults, the old check
+  measure: accel-bound count
+  expect: '3 -> 0: the three examples are actor 267 at t 68.7-68.9 s at -9.00 m/s2 against the 9.0 bound (AuditStats.max_decel_mps2 9.000000000000004), a stop held at the tyre limit, not past it'
+  source: AASHTO Green Book 2018 3.2.2 (the auditor's 9 m/s2 envelope)
+  fault: 'the allowance removed (the a925db58 check) -> the observed test red, accel-bound 3'
+  measured: 'old check: accel-bound 3, FAILED; new: 0, ok. The jitter fault (+-3 m/s2) and a -12.7 m/s2 stop are still caught (the allowance is 1e-6)'
+  verdict: fixed
+- id: R5.lc.window
+  change: 'engine::tests::a_car_stopped_part_way_across_finishes_the_change_when_the_lane_beside_is_clear: 5 s -> 15 s window'
+  base: the unit test with lateral_speed_bound on by default
+  measure: the car's lateral offset at the end of the window
+  expect: 'at a stand the car creeps across at LATERAL_SPEED_FLOOR_MPS x tan 12 deg = 0.106 m/s, so its 1.2 m left takes about 11.3 s: red at 5 s (1.21 m), green at 15 s; the blocked case still holds (> 1 m off)'
+  source: kinematic bicycle model (as R5.ped.defaults); engine.rs LATERAL_SPEED_FLOOR_MPS
+  fault: 'the 5 s window under the bound -> red (1.21 m off the centre)'
+  measured: '5 s: FAILED, 1.21 m off; 15 s: ok (both cases)'
+  verdict: wrong-expectation
+  note: 'the 5 s window timed the unbounded sideways slide at a stand that lateral_speed_bound removes; the property (it finishes when the lane is clear, not while blocked) is unchanged'
+- id: R5.golden.phase2
+  change: the three defaults above
+  base: 'tests/regression goldens at a925db58'
+  measure: phase2-path, i-s1-phase2-60s, ttc-triggered-brake digests
+  expect: 'phase2-path (a 300 s city run with lane changes below 10 m/s and permitted lefts) moves; i-s1-phase2-60s and ttc-triggered-brake may not (60 s and an 8,184-record edge case)'
+  source: F4.ped.lateral note (the flag moves every run with a lane change below about 10 m/s)
+  fault: n/a (a re-bless)
+  measured: 'phase2-path: frame 69af34e7 -> 736a1216, record 1bc443ed -> 8c8c8e56, records 10,241,996 -> 10,243,380 (phase2 15 / 15 with the bless). i-s1-phase2-60s (a24806dc / 648b5200, 260,299) and ttc-triggered-brake (5047d6fc / ba01d482, 8,184) unchanged: bsm_timing 4 / 4, trigger_ttc 4 / 4, scms_scale I-S1 1 / 1'
+  verdict: pass

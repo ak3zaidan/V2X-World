@@ -4062,6 +4062,20 @@ Rows: `crates/v2xw-engine/tests/expectations/traffic-r5.yaml`.
   1 -> 0. The flag is off by default; item 3 turns it on with the goldens. The test is
   still red on its overlap assertion (24 with the flag off, 38 with it on, against 9 with
   kerbside off). Every example is a lane change beside a standing vehicle, not a turn: open.
+- **Kinematic limits and `foe_will_pass` on by default; `phase2-path` re-blessed.**
+  `lateral_speed_bound`, `braking_tyre_limit` and `foe_will_pass` now default to true. They
+  are defect fixes: a car moves sideways only by steering forward (kinematic bicycle
+  model), no stop brakes past the tyres (9 m/s²), and a left turner does not wait for a
+  foe that will not pass. `pedestrian_invariants` is 9 / 9 (both former failures green).
+  The observed run first failed on accel-bound 3: a car held exactly at the tyre limit
+  published −9.000000000000004 m/s², so the auditor's lower bound now has the same 1e-6
+  rounding allowance as its upper bound. The lane-change unit test's window is now 15 s,
+  not 5 s: a car at a stand creeps across at 0.106 m/s, and 5 s timed the unbounded slide
+  the bound removes. Goldens: `phase2-path` frame 69af34e7 -> 736a1216, record
+  1bc443ed -> 8c8c8e56, records 10,241,996 -> 10,243,380. `i-s1-phase2-60s` and
+  `ttc-triggered-brake` are unchanged. Mobility: lib 324/324, traffic_invariants 2/2,
+  calibration 2/2. Realism is 3/4: kerbside fails only on overlaps (10 against 0 with
+  kerbside off), and every example is a lane change beside a standing vehicle (open).
 
 ## 2026-10-28: adoption wave integration (grade, mac, nema: WP-16, 17, 18, 21, 22)
 

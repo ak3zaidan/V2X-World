@@ -1561,7 +1561,11 @@ impl TrafficAuditor {
             if a.intent & intent::CRASHED != 0 {
                 continue;
             }
-            if a.accel_mps2 > a.max_accel_mps2 + 1e-6 || a.accel_mps2 < -self.params.max_decel_mps2
+            // The same 1e-6 m/s² of rounding both ways: a stop held exactly at the tyre limit
+            // (`EngineParams::braking_tyre_limit`, 9 m/s² for a car) publishes
+            // `(v1 − v0)/dt` = −9.000000000000004, which is the bound, not past it.
+            if a.accel_mps2 > a.max_accel_mps2 + 1e-6
+                || a.accel_mps2 < -self.params.max_decel_mps2 - 1e-6
             {
                 let ex = Self::example(
                     Check::AccelBound,

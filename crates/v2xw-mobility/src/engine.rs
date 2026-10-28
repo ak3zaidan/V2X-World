@@ -996,17 +996,18 @@ pub struct EngineParams {
     /// rate, its heading swung 62° off the lane and its corner entered a building
     /// (`tests/pedestrian_invariants.rs`, actor 301); one released from its standstill hold
     /// slid 2 m sideways in 2 s with its heading on the lane (actor 253). The transition's
-    /// clock is slowed instead, so its heading deviation never exceeds the cap. **A defect
-    /// fix behind a flag**, off by default until the golden digests are re-blessed.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    /// clock is slowed instead, so its heading deviation never exceeds the cap. A defect
+    /// fix; **on by default** since fix round 5 (2026-10-28, goldens re-blessed), off only to
+    /// reproduce the earlier runs.
+    #[serde(skip_serializing_if = "is_true")]
     pub lateral_speed_bound: bool,
     /// Whether the integrated deceleration is held to the class's emergency deceleration
     /// ([`crate::classes::ClassSpec::emergency_decel_mps2`], 9 m/s² for a car, SUMO's
     /// `emergencyDecel`; dry-road tyre friction μ ≈ 0.8-1.0): the decision pass's stops
     /// for a pedestrian stepping out asked a car for −12.7 m/s² (actor 255) and the
-    /// integration gave it. **A defect fix behind a flag**, off by default until the golden
-    /// digests are re-blessed.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    /// integration gave it. A defect fix; **on by default** since fix round 5 (2026-10-28,
+    /// goldens re-blessed), off only to reproduce the earlier runs.
+    #[serde(skip_serializing_if = "is_true")]
     pub braking_tyre_limit: bool,
     /// Whether a trip enters the road already moving, at the highest speed it may safely
     /// drive there (SUMO's `departSpeed="max"`): the lower of its desired speed on the
@@ -1057,9 +1058,10 @@ pub struct EngineParams {
     /// on a permissive green waited 180 s for an opposing car held at its line by its own
     /// full exit, which itself waited on the junction (`tests/realism.rs`, bus 79 at
     /// junction 11). The held foe, once let go, waits in turn for the turner already inside
-    /// (`junction_blocked`). **A defect fix behind a flag**, off by default until the
-    /// golden digests are re-blessed (an engine parameter, not a scenario key).
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    /// (`junction_blocked`). A defect fix; **on by default** since fix round 5 (2026-10-28,
+    /// goldens re-blessed), off only to reproduce the earlier runs (an engine parameter,
+    /// not a scenario key).
+    #[serde(skip_serializing_if = "is_true")]
     pub foe_will_pass: bool,
     /// How motorcycles and mopeds ride ([`TwoWheelerParams`]). Not applied in the legacy
     /// parity mode.
@@ -1160,6 +1162,11 @@ fn is_zero_share(x: &f64) -> bool {
     *x == 0.0
 }
 
+/// Serde's skip for a flag whose default is on: written only when turned off.
+fn is_true(x: &bool) -> bool {
+    *x
+}
+
 fn is_zero_u8(x: &u8) -> bool {
     *x == 0
 }
@@ -1196,8 +1203,8 @@ impl Default for EngineParams {
             start_reaction_median_s: REACTION_MEDIAN_S,
             heavy_vehicle_gap_terms: false,
             standing_leader_stop: false,
-            lateral_speed_bound: false,
-            braking_tyre_limit: false,
+            lateral_speed_bound: true,
+            braking_tyre_limit: true,
             depart_speed_max: false,
             lane_bend_speed: false,
             vehicle_dynamics: VehicleDynamicsParams::default(),
@@ -1206,7 +1213,7 @@ impl Default for EngineParams {
             critical_gap_factor: 1.0,
             junction_patience: crate::intersection::gap_acceptance::JunctionPatience::OFF,
             permissive_sneakers: 0,
-            foe_will_pass: false,
+            foe_will_pass: true,
             two_wheelers: TwoWheelerParams::default(),
             cyclists: CyclistSpeeds::default(),
             amber_commit_lapse: true,
@@ -4844,7 +4851,7 @@ impl NativeMobility {
         for list in out.values_mut() {
             list.sort_by_key(|c| c.actor);
         }
-        if self.params.foe_will_pass {
+        if self.params.foe_will_pass && self.along_path() {
             self.mark_held_claims(&mut out);
         }
         out
@@ -6730,7 +6737,7 @@ impl Mobility for NativeMobility {
                 {
                     decision = EntryDecision::Proceed;
                 }
-                if self.params.foe_will_pass && !judged_line && junction.stop_line_gap_m > 0.0 {
+                if along && self.params.foe_will_pass && !judged_line && junction.stop_line_gap_m > 0.0 {
                     judged_line = true;
                     if matches!(decision, EntryDecision::Stop { .. }) {
                         holds_at = Some(junction.id);
@@ -11181,7 +11188,11 @@ mod tests {
                 });
             }
             let mut t = t_start;
-            while t < t_start + 5 * NS_PER_S {
+            // 15 s: with `lateral_speed_bound` (on by default since fix round 5) a car at
+            // a stand creeps across at `LATERAL_SPEED_FLOOR_MPS · tan 12°` ≈ 0.106 m/s, so
+            // its 1.2 m left takes about 11.3 s; the 5 s this test had was the unbounded
+            // slide the bound removed (a car does not move sideways without moving).
+            while t < t_start + 15 * NS_PER_S {
                 let mut ctx = MobilityCtx::new(t, &world, &rng);
                 engine.step(&mut ctx, params.step);
                 t += params.step.as_nanos();

@@ -400,11 +400,12 @@ fn observed_pedestrians_and_two_wheelers_hold_every_invariant() {
 /// The kinematic limits ([`EngineParams::lateral_speed_bound`],
 /// [`EngineParams::braking_tyre_limit`]): a lane change moves sideways no faster than its
 /// speed along the road lets it steer, and no stop brakes harder than the tyres can. Both
-/// runs above, with the two on, hold every safety invariant. Off (the default), the same
-/// runs are the two tests above, red on `in-building` (a car that braked mid-change swung
-/// 62° off its lane into a block, actor 301; one released from a standstill hold slid 2 m
-/// sideways in 2 s, actor 253) and on `speed-jump`/`accel-bound` (−12.7 m/s² for a
-/// pedestrian stepping out, actor 255).
+/// runs above, with the two on, hold every safety invariant. Both are on by default since
+/// fix round 5 (2026-10-28), so these two now repeat the default tests above by name; off,
+/// the runs were red on `in-building` (a car that braked mid-change swung 62° off its lane
+/// into a block, actor 301; one released from a standstill hold slid 2 m sideways in 2 s,
+/// actor 253) and on `speed-jump`/`accel-bound` (−12.7 m/s² for a pedestrian stepping
+/// out, actor 255).
 fn safety_failures(report: &AuditReport) -> Vec<String> {
     SAFETY
         .iter()
