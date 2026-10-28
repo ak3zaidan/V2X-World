@@ -1,0 +1,9 @@
+# The legacy-attack export (veremi-ext-legacy-export.yaml) on another seed: run s3 of the
+# reference ML baseline (docs/guides/veremi-ext-baseline.md).
+schema: v2xw/scenario/1
+meta:
+  base: veremi-ext-legacy-export.yaml
+  name: VeReMi Extension legacy-attack export s3
+  description: The legacy-attack export on seed 0x24_0203.
+  tags: [benchmark, veremi, misbehaviour, detection, ml]
+seed: "0x24_0203"
