@@ -1466,7 +1466,9 @@ The totals count each row as its own checklist records it, with the changes in Â
       measured from the detect stage of the report that tipped the decision, not from t0. The
       absolute stamps match the deployment: published at the Wed 10:00 ET slot (147,600.0 s),
       first enforcement 61.6 s later. The tipping report was detected at 170.75 s, which gives
-      147,490.9. The band is now [147,300, 151,180] (slot, first live window, hourly fetch).
+      147,490.9. The row is now keyed to the absolute `stage_abs.enforced_s` (F5-ABS), band
+      [147,600, 151,200] (publish slot to slot + one hour): 147,661.6 passes, and the relative
+      key on that band fails.
       The 3 cases against 2 (and `M0-attackers-revoked` 3) come from `f4a0f5cc`'s renumbered
       vehicle ids (run.rs:774): those ids re-key the attacker draws, so 3 reportable vehicles
       now attack.

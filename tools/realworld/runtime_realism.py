@@ -69,6 +69,44 @@ def keyset(v, pre=''):
 IDENTITY = {'enrolment', 'canonical_id', 'device', 'reporter'}
 LINKAGE = {'lv', 'subject_lv', 'lci', 'plv', 'plv1', 'plv2', 'seed'}
 
+# The receiver's refusal labels, `receiver_validation.refused`'s keys (v2xw-node rxval.rs
+# `RxReject::name`, the only writer of that map).
+REFUSAL_LABELS = (
+    'chain-empty', 'chain-too-long', 'chain-malformed', 'chain-not-rooted',
+    'chain-bad-root-signature', 'chain-untrusted-root', 'chain-issuer-mismatch',
+    'chain-bad-signature', 'chain-bad-reconstruction', 'chain-permission-not-covered',
+    'chain-ee-type', 'chain-ssp', 'chain-length', 'chain-validity-not-contained',
+    'chain-region-not-contained', 'chain-region-unsupported', 'chain-expired',
+    'unknown-issuer', 'psid-not-permitted', 'generation-time-outside-validity',
+    'outside-region', 'revoked-by-hash', 'issuer-revoked', 'crl-overdue',
+    'generation-time-too-old', 'generation-time-in-future', 'crl-malformed',
+    'crl-signer-untrusted', 'crl-rejected', 'crl-stale',
+)
+
+
+def stage_abs(stages, rev_t):
+    """`stage_abs.<name>_s`: the absolute sim time of each stage of the first case
+    assembled. The run report's `revocation_stages` are relative to that case's first stage
+    (phase2.rs finish_first_revocation), so the case is the `proto.revocation` id whose
+    recorded stages sit at those offsets from its own first-stage record, and each stage's
+    absolute time is that record's time plus the stage's offset. Empty when the run has no
+    such records (below `--record-level events`) or no id matches."""
+    if not stages:
+        return {}
+    first = stages[0][0]
+    best, score = None, 0
+    for rid, st in sorted(rev_t.items()):
+        if first not in st:
+            continue
+        hit = sum(1 for name, rel in stages if name in st and abs(st[name] - st[first] - rel) <= 1000)
+        miss = sum(1 for name, rel in stages if name in st) - hit
+        if not miss and hit > score:
+            best, score = rid, hit
+    if best is None:
+        return {}
+    t0 = rev_t[best][first]
+    return {f'stage_abs.{name}_s': (t0 + rel) / NS for name, rel in stages}
+
 
 def extract(run_dir):
     from mcap.reader import make_reader
@@ -109,7 +147,14 @@ def extract(run_dir):
     for k, v in (r.get('receiver_validation') or {}).items():
         if isinstance(v, (int, float)):
             out['rv.' + k] = v
-    out['rv.refused_total'] = sum((r.get('receiver_validation') or {}).get('refused', {}).values())
+    refused = (r.get('receiver_validation') or {}).get('refused') or {}
+    # Every refusal label, 0 when the run produced none: the report's map holds only the
+    # labels that fired, and an absent label is a measured 0, not a missing measurement.
+    for k in REFUSAL_LABELS:
+        out['rv.refused.' + k] = 0
+    for k, v in refused.items():
+        out['rv.refused.' + k] = v
+    out['rv.refused_total'] = sum(refused.values())
     air = r.get('air_bytes') or {}
     total_air = air.get('airtime_us', 0)
     out['air.airtime_us'] = total_air
@@ -144,6 +189,8 @@ def extract(run_dir):
     first_held = {}
     next_minus_issue = set()
     preload_crl = collections.Counter()
+    # Each revocation's (`proto.revocation` id) earliest time per stage, ns.
+    rev_t = collections.defaultdict(dict)
     path = os.path.join(run_dir, 'recording.mcap')
     first_state = True
     with open(path, 'rb') as f:
@@ -180,6 +227,11 @@ def extract(run_dir):
                 for c in crls:
                     first_held.setdefault((c['craca'], c['issue_date']), q['t'])
                     next_minus_issue.add(c['next_crl'] - c['issue_date'])
+            elif t == 'record/proto.revocation':
+                q = json.loads(m.data)
+                st = rev_t[q['id']]
+                if q['stage'] not in st or q['t'] < st[q['stage']]:
+                    st[q['stage']] = q['t']
             elif t == 'record/pki.case':
                 q = json.loads(m.data)
                 case_t[q['case']].setdefault(q['stage'], q['t'])
@@ -253,6 +305,7 @@ def extract(run_dir):
     for k, v in stg.items():
         out[f'case.{k}_s'] = statistics.median(v)
     out['case.n'] = len(case_t)
+    out.update(stage_abs(p2.get('revocation_stages') or [], rev_t))
     # Separation of duties from the records.
     bad = []
     allow = {'ra': IDENTITY - {'device'}, 'eca': IDENTITY - {'device'}, 'aca': LINKAGE, 'la1': LINKAGE - {'lv', 'subject_lv'},

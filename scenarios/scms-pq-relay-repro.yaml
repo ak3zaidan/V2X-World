@@ -10,14 +10,14 @@
 # reassembled, and with `fragmenter/none` it is refused and never counted as sent.
 #
 # One attacker is added to the base's 3 % (`threats.attackers`, second entry): actor 112,
-# a passenger car that drives past relay-only vehicle node 56 from 36 s, 35 m away, while
-# node 56 is 24 m from a roadside unit. Since the GNSS fix (gauss-markov 1.2.0,
-# R-FS40) the only relay-only vehicle to report one of the base's three attackers is node 82,
-# at 65 s, about an attacker revoked at 35.6 s whose CRL it had not yet heard; its 12
-# fragments reach no unit (units 4 and 23, 212 m and 218 m away behind Midtown's
-# buildings, receive every one below sensitivity), so no vehicle report reached the
-# proxy through a unit. Moving a unit next to node 82 does not help: the unit's CRL
-# broadcast then reaches the car first and it no longer reports the revoked attacker.
+# a passenger car that drives past a relay-only vehicle near a roadside unit, so a vehicle
+# report reaches the proxy through a unit. Node ids are those since `f4a0f5cc` (stable
+# vehicle ids, units at 0x4000_0000 + i), read from a `--record-level events` run on the
+# 9d0fbc2c release (see run; re-read them after any change to the draw): actor 112 is
+# node 21, revoked at 51.5 s; relay-only node 32 uploads its report on it through a unit
+# (first at 61.4 s), and relay-only nodes 24, 31 and 56 upload theirs on the base's
+# attacker node 58 the same way (4 relayed reporters, 26 relayed reports). The ids 56 and 82
+# this note named before were the pre-`f4a0f5cc` numbering.
 # The base's selection is unchanged (the first entry draws as before, per node, and wins
 # first): the one change is that this car attacks, and what follows from it.
 # ============================================================================
