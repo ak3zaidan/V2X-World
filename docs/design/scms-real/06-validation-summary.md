@@ -1520,6 +1520,43 @@ engine tests were fixed by giving each scenario what its test needs (§6 item 9)
   rule (§6 item 6).
 - **The `d90a6298` plan §4.3 BENCH edit**, if it is still wanted (it was never committed).
 
+**Matrix and variants re-run on the `f4982788` release (2026-10-27, tiny slots).** These runs
+were done alongside fix round 3. Each run had a 450 MB cap and one rayon thread, so wall
+times are not comparable with earlier runs, but memory, events and every SCMS count are.
+Rows were judged by `matrix.py check --fill`. No engine code changed.
+- **Covered:** `scms-matrix.yaml` 33 runs (all but `gnss-raw`, `lte`, `real-crypto`,
+  `fleet2x`, `M0-b1` and `QD`) and `scms-variants.yaml` 12 runs, 0 FAIL in either.
+  - Matrix, 104 rows judged: 83 pass, 7 fixed rows still pass, 12 earlier corrections
+    still hold, 2 corrected now.
+  - Variants, 49 rows judged: 38 pass, 1 fixed, 5 earlier corrections hold, 5 open
+    (2 of them new, below).
+- **Fixed:** `RR.MW.no-overdue`. MW now refuses 0 messages, down from 16,618. This
+  confirms R-JOINCRL (`2a14d6c4`) on the multi-week run.
+- **Newly open:** `RR.MWC.overdue` and `RR.MWC2.overdue`. Both now refuse 0 messages,
+  down from 152,505.
+  - The rule itself works. With `crl_overdue_tolerance_s: 0`, the same run refuses
+    33,572 messages as crl-overdue. `rxval.rs` `overdue` has not changed since `81a12183`.
+  - The home Generator's outage holds: 8 versions are published, against MW's 11.
+  - So no receiver in W4 or W5 holds a home list that is past nextCrl + 14 d.
+  - The likeliest cause is the list a joiner is handed since R-JOINCRL (`phase2.rs`
+    `prerun_crl` 7375–7383). This is not yet confirmed on the records; that needs an
+    events-level MWC run.
+- **Corrected:**
+  - `uutls-topup-latency`. Since `0d62f322`, a rollover top-up waits for the RA's
+    population batch (`provision.rs` 1686–1695). That moves its mean by seconds, not by
+    one RTT: 49.4 → 43.9 s.
+  - `nyc-p2pcd-bounded`. Its count is now `digest_misses` (renamed in `eaf1260f`). The
+    row reads 61.2 → 75.0, ratio 1.226, and goes red under injection.
+- **M0 cost:** peak footprint 174 → 204 MB (+17 %). This is on one thread instead of two,
+  so it is not the thread count. Events 3,295,502 → 3,288,012. The rise is untraced and is
+  input for the memory question (§6 item 23).
+- **Skipped:**
+  - Too much memory: `gnss-raw` and `GRAW` (stopped at 458 MB), FS40 (539 MB).
+  - Longer than the ~10-minute slot: `lte`, `real-crypto`, `fleet2x` (300 s), PQHM.
+  - Too big for the slot: QD.
+  - No harness (they need cargo tests, the `v2xw sensitivity --expect` sweep, or manual
+    record reading): `scms-knobs.yaml`, `scms-realism.yaml` and `scms-effects.yaml`.
+
 Done in the residual, clock and matrix wave (2026-10-25): the power-on CRL gate period,
 the 27 top-ups explained and counted (`topups_left_area`), provisioning cryptography on
 rayon (burst slice 93.0 → 43.2 s, byte-identical), the MaxAcceleration block closed
