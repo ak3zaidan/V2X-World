@@ -370,8 +370,8 @@ rows:
   measured: '147490.9 (9d0fbc2c)'
   verdict: wrong-expectation
   note: 'corrected 2026-10-28 (trace track; was band [147,500, 147,800], pass at 147,544 on f4982788):
-    the old band put the absolute slot on a relative measure, so it held only while the tipping report
-    was detected near 56 s. On 9d0fbc2c (M0, tiny slot) the absolute stamps are the deployment''s:
+    the old band put the absolute slot on a relative measure, so it held only for some detection times
+    (f4982788's 147,544 implies the tipping report was detected at 56 s or later). On 9d0fbc2c (M0, tiny slot) the absolute stamps are the deployment''s:
     published 147,600.0 s (the slot exactly; first RSU broadcast the same instant), first enforcement
     147,661.6 s (node 66, a cellular fetch 61.6 s later), decision 115,251.3 s = report at the RA
     86,451.3 + 28,800 s review. The tipping report (subject 6a27b021) was detected at 170.75 s, hence
