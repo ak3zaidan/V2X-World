@@ -191,8 +191,11 @@ rows:
     first test (count bound from the longest SPaT, T_on 424 us: at most 15 in 10 s): with
     R4.2.FEED alone SPaT 100 -> 100 (red: the meter, R4.2.METER); with both fixes SPaT
     100 -> 18, MAP 100 -> 100 (red against 15). Faults on that binary: a SPaT 100 (red),
-    b MAP 100 -> 10 (red), meter 100 (red). Corrected test: pending
-  verdict: pending
+    b MAP 100 -> 10 (red), meter 100 (red). Corrected test, both fixes in: SPaT on 172 in
+    the last 10 s 100 -> 18, 0 of 17 gaps under T_on/delta_min - 0.1 s; MAP on 174
+    100 -> 100; multichannel 7/7. Faults: a (feed) red, 99 of 99 gaps at 0.100 s;
+    b (shared) red, MAP 100 -> 10; meter (jamming path on note_busy) red, 99 of 99 gaps
+  verdict: fixed
   note: >-
     wrong expectation, corrected before the rerun: the gate closes for each frame's own
     T_on / delta, and SPaTs differ in size (the bound took the longest one for every frame,
@@ -218,8 +221,8 @@ rows:
     (with R4.2.FEED: the unit's SPaT is gated)
   source: ETSI EN 302 571 V2.1.1 §4.2.10.1 and TS 102 687 V1.2.1 §4.2 (CBR over the last 100 ms, T_CBR); SAE J2945/1 §6.3.8 (vCBPMeasInt 100 ms)
   fault: "unit: note_busy_at pruning at `to`; engine: the jamming path back on note_busy"
-  measured: pending
-  verdict: pending
+  measured: "unit test green (radio lib 354/354); fault meterunit red: 'CBR 0 after the next window is declared' (mac.rs:1811); engine fault meter red (R4.2.FEED); radio_access 8/8, radio_channel 8/8, radio_access_layers 10/10 (1 ignored) green with the fix"
+  verdict: fixed
 - id: R4.2.METER-FRAMES
   expect: >-
     CbrMeter::note_busy prunes at the noted interval's end; for a frame noted at its start
@@ -236,8 +239,8 @@ rows:
     are untouched: R4.1.NOOP-G20). TS 102 687's per-channel gate is the clause that applies
     to a two-radio unit, and R4.2.FEED pins it
   source: SAE J2945/1 §6.3.8 (via 04-models.md §6, R1 §E); ETSI TS 102 687 V1.2.1 §5.4
-  measured: by R4.1.NOOP-G20
-  verdict: pending
+  measured: "R4.1.NOOP-G20 identical (US J2945/1 run with four roadside units)"
+  verdict: pass
 # ---- Item 3: fault proofs owed by fix-3 (each test run with its fault in, then restored) ----
 - id: R4.3.DETECT-KNOBS
   test: v2xw-engine tests/detect_fix3.rs the_ts_suite_is_selectable_with_its_knobs
