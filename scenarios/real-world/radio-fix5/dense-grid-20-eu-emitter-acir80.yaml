@@ -1,0 +1,16 @@
+# R4.1.EMITTER control (fix round 5): dense-grid-20-eu-emitter.yaml with the emitter's ACIR
+# set to 80 dB (a measured-hardware figure far past the regulatory mask): its leak is under
+# the noise everywhere, so the run should be the Europe base's. Rows: radio-fix5.yaml.
+schema: v2xw/scenario/1
+meta:
+  base: dense-grid-20-eu-emitter.yaml
+  name: radio-fix5 dense-grid-20 Europe with a well-filtered LTE-V2X emitter
+  description: The Europe emitter run with an 80 dB adjacent-channel interference ratio.
+  tags: [radio-fix5, experiment, cbr]
+radio:
+  adjacent_channel:
+    - rat: lte-v2x-pc5
+      acir_db: 80.0
+      params:
+        position_m: [822.0, 240.0]
+        power_dbm: 23.0
