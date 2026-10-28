@@ -2048,10 +2048,22 @@ impl ScmsState {
                     Self::sign(out, count);
                 }
                 let mut credentials = Vec::new();
+                // The LAs seal each pre-linkage value for the provider's ACA service, not
+                // for one host: the RA picks the instance only after the PLVs are back
+                // (`next_aca`), and every instance holds the LA-ACA keys, as the PDU path's
+                // `aca_issue_at` uses the one `LaAcaKeys` for all of them. An `aca/1` that
+                // could not open them failed every provider-b pre-run pool on the modelled
+                // path and left those devices on the bootstrap stand-in (pq_receivers: 240
+                // honest PSMs refused, scms-fix4-a.yaml F4A.PQCC.*).
+                let opener = if self.aca_extra.contains(&to) {
+                    n.pca
+                } else {
+                    to
+                };
                 for item in items.into_iter() {
                     let (lci1, lci2) = (item.lci1, item.lci2);
                     let (Some(plv1), Some(plv2)) =
-                        (item.plv1.open(to, n.pca), item.plv2.open(to, n.pca))
+                        (item.plv1.open(opener, n.pca), item.plv2.open(opener, n.pca))
                     else {
                         return Err(ProtoError::Flow {
                             flow: "provisioning",

@@ -85,6 +85,16 @@ fn a_roadside_unit_judges_the_first_frames_it_hears_in_the_current_period() {
         0,
         "honest frames judged Invalid, e.g. {invalid:?}"
     );
+    // Every handset holds its provider's pre-run pool. With provider-b's `aca/1` unable to
+    // open the LAs' sealed pre-linkage values, every provider-b pool failed and those
+    // handsets signed with the period-0 bootstrap stand-in that every receiver refused
+    // (scms-fix4-a.yaml F4A.PQCC.*); the failure is a backend error, not a quiet one.
+    assert_eq!(
+        report.phase2.backend_errors, 0,
+        "the backend refused: {}",
+        report.phase2.first_backend_error
+    );
+    assert_eq!(report.phase2.vehicles_unprovisioned, 0);
 }
 
 #[test]

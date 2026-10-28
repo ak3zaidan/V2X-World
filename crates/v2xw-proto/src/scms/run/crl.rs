@@ -245,6 +245,36 @@ impl ScmsRun {
             );
         }
     }
+
+    /// The provider's PDU PKI has followed a root rollover's changeover (Provider Req.
+    /// §3.5.4): its CRL Generator, re-certified under the new root, signs its list again
+    /// now, under the new CRACA, with the superseded CRACA's list beside it
+    /// (`ScmsState::issue_secured_crls`), through the Generator's own reissue flow (so a
+    /// Generator that is down signs when it is back).
+    ///
+    /// Every certificate issued after the changeover names the new CRACA, and a device
+    /// matches a CRL to a certificate by its `cracaId` (IEEE 1609.2 §5.1.3.2), so until
+    /// that CRACA has a list no device can check one of them for revocation or apply the
+    /// overdue rule to it ([CAMP122] Table 67): as R-NOCRL, every CRACA's CRL exists.
+    /// Before, the first list under the new root waited for the next `nextCrl` (a week
+    /// later), and with the Generator down from 700 s (`multi-week-crlg-down`) never came:
+    /// the run refused nothing as `crl-overdue` (RR.MWC.overdue, scms-fix4-a.yaml).
+    pub fn reissue_crl_after_changeover(&mut self, at: SimTime) {
+        if self.state.pki.is_none() {
+            return;
+        }
+        let at = at.max(self.kernel.now());
+        let issued = self.state.crlg.versions;
+        let crlg = self.state.nodes.crlg;
+        let run = self.new_run();
+        self.inject_at(
+            at,
+            crlg,
+            ScmsMsg::CrlReissueTimer { issued },
+            FlowId::CrlIssuance,
+            run,
+        );
+    }
 }
 
 impl ScmsState {
