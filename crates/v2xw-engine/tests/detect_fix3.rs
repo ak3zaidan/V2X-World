@@ -57,9 +57,15 @@ fn the_ts_suite_is_selectable_with_its_knobs() {
     s.detection.local = vec![ts(json!({"max_confidence": 12.0}))];
     assert!(!validate(&s).is_empty(), "a misspelt key was accepted");
     s.detection.local = vec![ts(json!({"fusion": "majority"}))];
-    assert!(!validate(&s).is_empty(), "an unknown fusion label was accepted");
+    assert!(
+        !validate(&s).is_empty(),
+        "an unknown fusion label was accepted"
+    );
     s.detection.local = vec![ts(json!({"environment": "canyon"}))];
-    assert!(!validate(&s).is_empty(), "an unknown environment was accepted");
+    assert!(
+        !validate(&s).is_empty(),
+        "an unknown environment was accepted"
+    );
     s.detection.local = vec![
         ts(serde_json::Value::Null),
         ModelChoice {
@@ -67,7 +73,10 @@ fn the_ts_suite_is_selectable_with_its_knobs() {
             params: serde_json::Value::Null,
         },
     ];
-    assert!(!validate(&s).is_empty(), "the suite was accepted beside another");
+    assert!(
+        !validate(&s).is_empty(),
+        "the suite was accepted beside another"
+    );
 }
 
 #[test]
@@ -80,7 +89,11 @@ fn the_ts_suite_judges_every_message_with_its_frame_and_own_inputs() {
     let report = engine.run(&mut NullRecorder::new()).expect("runs");
     let p = &report.phase2;
     let honest = p.ts_messages.get("honest").copied().unwrap_or_default();
-    assert!(honest.evaluated > 0, "no honest message was judged: {:?}", p.ts_messages);
+    assert!(
+        honest.evaluated > 0,
+        "no honest message was judged: {:?}",
+        p.ts_messages
+    );
     let evaluated = |check: &str| -> u64 {
         p.ts_checks
             .get(check)
@@ -90,7 +103,10 @@ fn the_ts_suite_judges_every_message_with_its_frame_and_own_inputs() {
         evaluated("boxIntersection") > 0,
         "the box check never ran: no VehicleSize reached it"
     );
-    assert!(evaluated("kalmanConsistencyTs") > 0, "the Kalman check never ran");
+    assert!(
+        evaluated("kalmanConsistencyTs") > 0,
+        "the Kalman check never ran"
+    );
     // Every message is judged: the class tallies sum to the host's count.
     let classes: u64 = p.ts_messages.values().map(|c| c.evaluated).sum();
     assert_eq!(classes, p.messages_checked);

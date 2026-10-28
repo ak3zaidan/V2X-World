@@ -178,7 +178,10 @@ fn a_roadside_units_scms_certificate_permits_the_ssm_it_answers_with() {
         r.receiver_validation.refused,
         r.receiver_validation.checked
     );
-    assert_eq!(p.rsus_in_cert_cycle, 4, "every unit signs with its SCMS certificate");
+    assert_eq!(
+        p.rsus_in_cert_cycle, 4,
+        "every unit signs with its SCMS certificate"
+    );
     assert!(p.rsu_app_certs_preloaded >= 4);
     assert_eq!(
         r.receiver_validation

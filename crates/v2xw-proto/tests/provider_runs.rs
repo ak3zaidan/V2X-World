@@ -74,7 +74,10 @@ fn provider_bs_second_aca_is_certified_and_issues_its_share() {
     let (a0, a1) = (&pki.aca, pki.aca_at(1));
     assert!(a1.name.starts_with("aca-1."), "{}", a1.name);
     let (t0, t1) = (&a0.cert.0.to_be_signed, &a1.cert.0.to_be_signed);
-    assert_eq!(a0.cert.0.issuer, a1.cert.0.issuer, "both under provider-b's ICA");
+    assert_eq!(
+        a0.cert.0.issuer, a1.cert.0.issuer,
+        "both under provider-b's ICA"
+    );
     assert_eq!(t0.validity_period, t1.validity_period);
     assert_eq!(t0.app_permissions, t1.app_permissions);
     assert_eq!(t0.cert_issue_permissions, t1.cert_issue_permissions);
@@ -82,7 +85,10 @@ fn provider_bs_second_aca_is_certified_and_issues_its_share() {
     assert_eq!(t0.craca_id, t1.craca_id);
     assert_eq!(t0.crl_series, t1.crl_series);
     assert_eq!(t0.encryption_key.is_some(), t1.encryption_key.is_some());
-    assert_ne!(t0.verify_key_indicator, t1.verify_key_indicator, "its own key");
+    assert_ne!(
+        t0.verify_key_indicator, t1.verify_key_indicator,
+        "its own key"
+    );
     // The records list it with its certificate.
     let mut tracker = v2xw_proto::scms::pki_view::PkiTracker::default();
     let runs = [peer];
@@ -108,7 +114,11 @@ fn provider_bs_second_aca_is_certified_and_issues_its_share() {
             .filter(|x| x.kind == SpduKind::RaAcaCertRequest && x.to == n)
             .count()
     };
-    assert_eq!((to(n0), to(n1)), (10, 10), "round-robin over the shuffled batch");
+    assert_eq!(
+        (to(n0), to(n1)),
+        (10, 10),
+        "round-robin over the shuffled batch"
+    );
     let id1 = pki.aca_at(1).id8();
     let by1 = st.devices[&device]
         .credentials

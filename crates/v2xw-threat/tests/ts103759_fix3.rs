@@ -104,13 +104,24 @@ fn catch_scores_the_map_check_on_the_stated_confidence() {
     let score = |p: &Ts103759Params, off: f64, conf: f64| {
         let mut ctx = CollectingCtx::new(1);
         let mut suite = Ts103759Suite::new(p.clone());
-        one(&mut suite, &mut ctx, &beacon(A, 0.0, 10.0, 0, conf), &OffRoad(off))
-            .score(Ts103759Check::PositionPlausibility)
-            .expect("ran")
+        one(
+            &mut suite,
+            &mut ctx,
+            &beacon(A, 0.0, 10.0, 0, conf),
+            &OffRoad(off),
+        )
+        .score(Ts103759Check::PositionPlausibility)
+        .expect("ran")
     };
     // Threshold: 4 m off against 2 m is a score of 2, whatever the confidence.
     assert!((score(&Ts103759Params::default(), 4.0, 5.0) - 2.0).abs() < 1e-9);
     // CaTCh: inside the stated 5 m disc it is plausible; 20 m off is not.
-    assert!(score(&catch, 4.0, 5.0) < 1.0, "an honest 4 m offset fired under CaTCh");
-    assert!(score(&catch, 20.0, 5.0) >= 1.0, "a claim 20 m off the road passed");
+    assert!(
+        score(&catch, 4.0, 5.0) < 1.0,
+        "an honest 4 m offset fired under CaTCh"
+    );
+    assert!(
+        score(&catch, 20.0, 5.0) >= 1.0,
+        "a claim 20 m off the road passed"
+    );
 }

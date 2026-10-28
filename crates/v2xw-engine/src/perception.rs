@@ -486,7 +486,12 @@ impl Perception {
 
     /// The CPM's description of suite `suite` (the sensor information container): each
     /// sensor's id, type, range and opening, and under a configured model its mount.
-    pub fn sensor_info(&self, suite: usize, frame: Frame, dims: Dims) -> Vec<v2xw_node::cpm::SensorIn> {
+    pub fn sensor_info(
+        &self,
+        suite: usize,
+        frame: Frame,
+        dims: Dims,
+    ) -> Vec<v2xw_node::cpm::SensorIn> {
         self.suite(suite)
             .iter()
             .map(|s| v2xw_node::cpm::SensorIn {
@@ -675,8 +680,9 @@ fn detect(
                     let m = mounts[i];
                     let (dx, dy) = (p.x - m.x, p.y - m.y);
                     let range = math::hypot(dx, dy);
-                    let bearing =
-                        v2xw_msg::j2945::wrap_pi(math::atan2(dy, dx) - heading - sensor.azimuth_rad);
+                    let bearing = v2xw_msg::j2945::wrap_pi(
+                        math::atan2(dy, dx) - heading - sensor.azimuth_rad,
+                    );
                     if range > sensor.range_m || bearing.abs() > sensor.half_fov_rad {
                         continue;
                     }
@@ -692,7 +698,8 @@ fn detect(
                     let hidden = match blocked[i] {
                         Some(b) => b,
                         None => {
-                            let b = occluded(world, m, p, subject.actor, observer.actor, candidates);
+                            let b =
+                                occluded(world, m, p, subject.actor, observer.actor, candidates);
                             for (j, mj) in mounts.iter().enumerate() {
                                 if *mj == m {
                                     blocked[j] = Some(b);
@@ -1058,7 +1065,12 @@ mod tests {
             let stream = rng.stream(RngDomain::Perception, EntityRef::Node(observer.node));
             let ex = stream.normal(0.0, sigma);
             let ey = stream.normal(0.0, sigma);
-            out.push((subject.actor, Vec3::new(p.x + ex, p.y + ey, p.z), sigma, sensors));
+            out.push((
+                subject.actor,
+                Vec3::new(p.x + ex, p.y + ey, p.z),
+                sigma,
+                sensors,
+            ));
         }
         out
     }
@@ -1098,7 +1110,10 @@ mod tests {
         });
         let mut compared = 0usize;
         for scene_no in 0..40u32 {
-            let st = scene.stream(RngDomain::Perception, EntityRef::Node(NodeId::new(scene_no)));
+            let st = scene.stream(
+                RngDomain::Perception,
+                EntityRef::Node(NodeId::new(scene_no)),
+            );
             let subjects: Vec<Subject> = (0..60u32)
                 .map(|i| {
                     let dims = if st.bool(0.2) { TRUCK } else { Dims::CAR };
@@ -1117,25 +1132,45 @@ mod tests {
                 let mut b = RngRegistry::new(u64::from(scene_no));
                 let mut c = RngRegistry::new(u64::from(scene_no));
                 let legacy = legacy_detect(&world, &mut a, &o, &subjects);
-                let now: Vec<_> = detect(default_sensors().as_slice(), Occlusion::CentreLine, &world, &mut b, 0, &o, &subjects)
-                    .into_iter()
-                    .map(|(id, p)| (id, p.pos, p.sigma_m, p.sensors))
-                    .collect();
-                let conf: Vec<_> = detect(configured.suite(0), configured.occlusion(), &world, &mut c, 0, &o, &subjects)
-                    .into_iter()
-                    .map(|(id, p)| (id, p.pos, p.sigma_m, p.sensors))
-                    .collect();
+                let now: Vec<_> = detect(
+                    default_sensors().as_slice(),
+                    Occlusion::CentreLine,
+                    &world,
+                    &mut b,
+                    0,
+                    &o,
+                    &subjects,
+                )
+                .into_iter()
+                .map(|(id, p)| (id, p.pos, p.sigma_m, p.sensors))
+                .collect();
+                let conf: Vec<_> = detect(
+                    configured.suite(0),
+                    configured.occlusion(),
+                    &world,
+                    &mut c,
+                    0,
+                    &o,
+                    &subjects,
+                )
+                .into_iter()
+                .map(|(id, p)| (id, p.pos, p.sigma_m, p.sensors))
+                .collect();
                 assert_eq!(legacy, now, "scene {scene_no}");
                 assert_eq!(legacy, conf, "scene {scene_no}, configured path");
                 compared += legacy.len();
                 // The stream is left where the old model left it, too.
                 let next = |r: &mut RngRegistry| {
-                    r.stream(RngDomain::Perception, EntityRef::Node(o.node)).uniform(0.0, 1.0)
+                    r.stream(RngDomain::Perception, EntityRef::Node(o.node))
+                        .uniform(0.0, 1.0)
                 };
                 assert_eq!(next(&mut a).to_bits(), next(&mut b).to_bits());
             }
         }
-        assert!(compared > 200, "the scenes produced only {compared} detections");
+        assert!(
+            compared > 200,
+            "the scenes produced only {compared} detections"
+        );
     }
 
     /// Outline occlusion: a car squarely behind a truck is hidden; one beside the truck's
@@ -1150,12 +1185,24 @@ mod tests {
         let hidden = car(3, 40.0, 0.0, 0.0, Dims::CAR);
         let partial = car(4, 40.0, 2.0, 0.0, Dims::CAR);
         let out = seen_by(&sensors, Occlusion::Outline, &o, &[truck, hidden]);
-        assert_eq!(out.iter().map(|x| x.0).collect::<Vec<_>>(), vec![2], "{out:?}");
+        assert_eq!(
+            out.iter().map(|x| x.0).collect::<Vec<_>>(),
+            vec![2],
+            "{out:?}"
+        );
         let out = seen_by(&sensors, Occlusion::Outline, &o, &[truck, partial]);
-        assert_eq!(out.iter().map(|x| x.0).collect::<Vec<_>>(), vec![2, 4], "{out:?}");
+        assert_eq!(
+            out.iter().map(|x| x.0).collect::<Vec<_>>(),
+            vec![2, 4],
+            "{out:?}"
+        );
         // The centre-line rule hides the partly visible car.
         let out = seen_by(&sensors, Occlusion::CentreLine, &o, &[truck, partial]);
-        assert_eq!(out.iter().map(|x| x.0).collect::<Vec<_>>(), vec![2], "{out:?}");
+        assert_eq!(
+            out.iter().map(|x| x.0).collect::<Vec<_>>(),
+            vec![2],
+            "{out:?}"
+        );
     }
 
     /// A truck crossing the line of sight side-on hides the car beyond it under the
@@ -1168,9 +1215,17 @@ mod tests {
         let truck = car(2, 20.0, -6.0, 90.0, TRUCK);
         let beyond = car(3, 40.0, -1.0, 0.0, Dims::CAR);
         let out = seen_by(&sensors, Occlusion::Outline, &o, &[truck, beyond]);
-        assert_eq!(out.iter().map(|x| x.0).collect::<Vec<_>>(), vec![2], "{out:?}");
+        assert_eq!(
+            out.iter().map(|x| x.0).collect::<Vec<_>>(),
+            vec![2],
+            "{out:?}"
+        );
         let out = seen_by(&sensors, Occlusion::CentreLine, &o, &[truck, beyond]);
-        assert_eq!(out.iter().map(|x| x.0).collect::<Vec<_>>(), vec![2, 3], "{out:?}");
+        assert_eq!(
+            out.iter().map(|x| x.0).collect::<Vec<_>>(),
+            vec![2, 3],
+            "{out:?}"
+        );
     }
 
     /// A rear radar sees a car overtaking in the next lane, which the front suite cannot.
@@ -1196,13 +1251,31 @@ mod tests {
         let (s, c) = math::sin_cos(30f64.to_radians());
         let (bx, by) = (-10.0, 3.5);
         let overtaking = car(2, c * bx - s * by, s * bx + c * by, 30.0, Dims::CAR);
-        assert!(seen_by(&perfect(default_sensors()), Occlusion::Outline, &o, &[overtaking]).is_empty());
         assert!(
-            seen_by(&perfect(default_sensors()), Occlusion::CentreLine, &o, &[overtaking]).is_empty()
+            seen_by(
+                &perfect(default_sensors()),
+                Occlusion::Outline,
+                &o,
+                &[overtaking]
+            )
+            .is_empty()
+        );
+        assert!(
+            seen_by(
+                &perfect(default_sensors()),
+                Occlusion::CentreLine,
+                &o,
+                &[overtaking]
+            )
+            .is_empty()
         );
         for occlusion in [Occlusion::CentreLine, Occlusion::Outline] {
             let out = seen_by(&suite, occlusion, &o, &[overtaking]);
-            assert_eq!(out, vec![(2, 1 << 4)], "{occlusion:?}: only the rear radar sees it");
+            assert_eq!(
+                out,
+                vec![(2, 1 << 4)],
+                "{occlusion:?}: only the rear radar sees it"
+            );
         }
     }
 
@@ -1254,9 +1327,15 @@ mod tests {
         let near = car(2, 18.0, 0.0, 0.0, Dims::CAR);
         let far = car(3, 40.0, 0.0, 0.0, Dims::CAR);
         let ids = |v: Vec<(u32, u8)>| v.into_iter().map(|x| x.0).collect::<Vec<_>>();
-        assert_eq!(ids(seen_by(&cams, Occlusion::Outline, &rsu, &[near, far])), vec![2, 3]);
+        assert_eq!(
+            ids(seen_by(&cams, Occlusion::Outline, &rsu, &[near, far])),
+            vec![2, 3]
+        );
         let truck = car(2, 14.0, 0.0, 0.0, TRUCK);
-        assert_eq!(ids(seen_by(&cams, Occlusion::Outline, &rsu, &[truck, far])), vec![2]);
+        assert_eq!(
+            ids(seen_by(&cams, Occlusion::Outline, &rsu, &[truck, far])),
+            vec![2]
+        );
         // A truck's cab camera, 2.6 m up, over a car 10 m ahead to one 30 m ahead.
         let me = car(1, 0.0, 0.0, 0.0, TRUCK);
         let mut cab = perfect(default_sensors());
@@ -1266,16 +1345,25 @@ mod tests {
         let ahead = car(5, 22.0, 0.0, 0.0, Dims::CAR);
         let beyond = car(6, 42.0, 0.0, 0.0, Dims::CAR);
         let o = observer_of(&me, 0);
-        assert_eq!(ids(seen_by(&cab, Occlusion::Outline, &o, &[ahead, beyond])), vec![5, 6]);
+        assert_eq!(
+            ids(seen_by(&cab, Occlusion::Outline, &o, &[ahead, beyond])),
+            vec![5, 6]
+        );
         // The same truck's bumper radar and camera at 0.6 m see only the car ahead.
         let low = perfect(default_sensors());
-        assert_eq!(ids(seen_by(&low, Occlusion::Outline, &o, &[ahead, beyond])), vec![5]);
+        assert_eq!(
+            ids(seen_by(&low, Occlusion::Outline, &o, &[ahead, beyond])),
+            vec![5]
+        );
         // A car's own bumper sensors behind a car see nothing past it.
         let me = car(1, 0.0, 0.0, 0.0, Dims::CAR);
         let o = observer_of(&me, 0);
         let ahead = car(5, 12.0, 0.0, 0.0, Dims::CAR);
         let beyond = car(6, 30.0, 0.0, 0.0, Dims::CAR);
-        assert_eq!(ids(seen_by(&low, Occlusion::Outline, &o, &[ahead, beyond])), vec![5]);
+        assert_eq!(
+            ids(seen_by(&low, Occlusion::Outline, &o, &[ahead, beyond])),
+            vec![5]
+        );
     }
 
     #[test]

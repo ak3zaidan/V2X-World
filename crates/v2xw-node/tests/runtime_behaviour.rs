@@ -1247,5 +1247,8 @@ fn the_cpm_rate_follows_a_300_ms_dcc_interval() {
     let ignoring = cpms_under_dcc(false, 300);
     assert_eq!(free, 30, "an unrestricted channel: every 100 ms event");
     assert_eq!(limited, 10, "a 300 ms DCC interval: one CPM every 300 ms");
-    assert_eq!(ignoring, 30, "the knob off: the DCC does not reach the CP service");
+    assert_eq!(
+        ignoring, 30,
+        "the knob off: the DCC does not reach the CP service"
+    );
 }

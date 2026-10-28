@@ -126,9 +126,9 @@ mod cpm_metrics;
 pub use cpm_metrics::CpmTally;
 mod air_bytes;
 pub use air_bytes::{AirBytes, TypeAir};
+pub(crate) mod channels;
 pub mod jamming;
 mod link;
-pub(crate) mod channels;
 mod off_channel;
 mod radios;
 pub mod sidelink;
@@ -2242,7 +2242,10 @@ impl Engine {
             self.rsus.insert(id, spec.position);
             self.report.nodes_created += 1;
             if let Some(phase2) = self.phase2.as_mut() {
-                phase2.note_rsu(id, &crate::wiring::rsu_app_psids(&self.scenario, &spec.roles));
+                phase2.note_rsu(
+                    id,
+                    &crate::wiring::rsu_app_psids(&self.scenario, &spec.roles),
+                );
                 phase2.arm_rsu_detector(id);
             }
             // Under the SCMS the unit signs only with the application certificates its
@@ -4323,16 +4326,12 @@ impl Engine {
             .filter(|(_, a)| !a.class.is_vru())
             .filter_map(|(id, a)| {
                 let node = a.node?;
-                let runs = nodes
-                    .get(&node)
-                    .and_then(|n| n.as_obu())
-                    .is_some_and(|o| {
-                        // The CPM's objects, and (WP-12) the traffic-condition trigger's
-                        // sensor conditions, read the vehicle's own perception.
-                        o.schedule().services().cpm
-                            || (o.schedule().services().denm
-                                && o.denm_triggers().traffic_condition)
-                    });
+                let runs = nodes.get(&node).and_then(|n| n.as_obu()).is_some_and(|o| {
+                    // The CPM's objects, and (WP-12) the traffic-condition trigger's
+                    // sensor conditions, read the vehicle's own perception.
+                    o.schedule().services().cpm
+                        || (o.schedule().services().denm && o.denm_triggers().traffic_condition)
+                });
                 runs.then_some(crate::perception::Observer {
                     node,
                     actor: Some(*id),
@@ -4526,13 +4525,15 @@ impl Engine {
             });
         // The service channel's own busy ratio, for its own gate, at a unit tuned to it.
         let service_cbr = match (self.dcc_service.as_ref(), self.channel_plan.as_ref()) {
-            (Some(_), Some(plan)) => plan.service.filter(|&sc| self.tuned(node, sc)).and_then(
-                |sc| {
-                    self.mac
-                        .as_ref()
-                        .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, sc, now))
-                },
-            ),
+            (Some(_), Some(plan)) => {
+                plan.service
+                    .filter(|&sc| self.tuned(node, sc))
+                    .and_then(|sc| {
+                        self.mac
+                            .as_ref()
+                            .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, sc, now))
+                    })
+            }
             _ => None,
         };
         // The unit's own state as its position estimate has it: the J2945/1 local
@@ -5898,7 +5899,10 @@ impl Engine {
         // at the centre of the vehicle's ground rectangle; ETSI EN 302 637-2 a CAM's
         // ReferencePosition at the centre of the front edge. A PSM and a VAM carry no size.
         if matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
-            && self.phase2.as_ref().is_some_and(crate::phase2::Phase2::wants_frame_extras)
+            && self
+                .phase2
+                .as_ref()
+                .is_some_and(crate::phase2::Phase2::wants_frame_extras)
             && let Some(cred) = credential.as_ref()
         {
             let dims = self.actor_of(node).map(|a| a.last.dims);
@@ -9851,8 +9855,7 @@ impl Engine {
             .get(&node)
             .map(|&(p, _)| p)
             .or_else(|| state.faint.get(&node).copied())?;
-        self.phy
-            .leaked_dbm(raw, state.descriptor.channel, channel)
+        self.phy.leaked_dbm(raw, state.descriptor.channel, channel)
     }
 
     /// The metric phase: every provider flushes its window, and the samples are recorded

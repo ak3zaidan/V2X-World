@@ -32,15 +32,15 @@ use v2xw_core::geom::Vec3;
 
 use crate::asn1::cdd::{
     AngleConfidence, CardinalNumber1B, CartesianAngle, CartesianAngleValue, CartesianCoordinate,
-    CartesianCoordinateLarge, CartesianPosition3d, CartesianCoordinateWithConfidence, CartesianPosition3dWithConfidence,
-    ConfidenceLevel, CoordinateConfidence, DeltaTimeMilliSecondSigned, Identifier1B, Identifier2B,
-    ItsPduHeader, MessageId, ObjectClass, ObjectClassDescription, ObjectClassWithConfidence,
-    ObjectDimension, ObjectDimensionConfidence, ObjectDimensionValue, ObjectPerceptionQuality,
-    OrdinalNumber1B, PerceivedObject, RadialShape, SensorType, SequenceOfIdentifier1B, Shape,
-    SpeedConfidence, StandardLength12b, StationId, TimestampIts, TrafficParticipantType,
-    Velocity3dWithConfidence, VelocityCartesian, VelocityComponent, VelocityComponentValue,
-    VruProfileAndSubprofile, VruSubProfileBicyclist, VruSubProfilePedestrian, Wgs84Angle,
-    Wgs84AngleConfidence, Wgs84AngleValue,
+    CartesianCoordinateLarge, CartesianCoordinateWithConfidence, CartesianPosition3d,
+    CartesianPosition3dWithConfidence, ConfidenceLevel, CoordinateConfidence,
+    DeltaTimeMilliSecondSigned, Identifier1B, Identifier2B, ItsPduHeader, MessageId, ObjectClass,
+    ObjectClassDescription, ObjectClassWithConfidence, ObjectDimension, ObjectDimensionConfidence,
+    ObjectDimensionValue, ObjectPerceptionQuality, OrdinalNumber1B, PerceivedObject, RadialShape,
+    SensorType, SequenceOfIdentifier1B, Shape, SpeedConfidence, StandardLength12b, StationId,
+    TimestampIts, TrafficParticipantType, Velocity3dWithConfidence, VelocityCartesian,
+    VelocityComponent, VelocityComponentValue, VruProfileAndSubprofile, VruSubProfileBicyclist,
+    VruSubProfilePedestrian, Wgs84Angle, Wgs84AngleConfidence, Wgs84AngleValue,
 };
 use crate::asn1::cpm_asn1::{
     CollectivePerceptionMessage, ConstraintWrappedCpmContainers, CpmContainerId,
@@ -290,17 +290,21 @@ pub fn build_cpm(input: &CpmInput) -> Result<CollectivePerceptionMessage, CodecE
                     (0, 3_599)
                 } else {
                     (
-                        ((az - half).rem_euclid(360.0) * 10.0).round().clamp(0.0, 3_599.0) as u16,
-                        ((az + half).rem_euclid(360.0) * 10.0).round().clamp(0.0, 3_599.0) as u16,
+                        ((az - half).rem_euclid(360.0) * 10.0)
+                            .round()
+                            .clamp(0.0, 3_599.0) as u16,
+                        ((az + half).rem_euclid(360.0) * 10.0)
+                            .round()
+                            .clamp(0.0, 3_599.0) as u16,
                     )
                 };
                 // CartesianCoordinate ::= INTEGER (-32768..32767), centimetres.
                 let coord = |m: f64| {
                     CartesianCoordinate((m * 100.0).round().clamp(-32_768.0, 32_767.0) as i16)
                 };
-                let reference = s.mount_m.map(|[x, y, z]| {
-                    CartesianPosition3d::new(coord(x), coord(y), Some(coord(z)))
-                });
+                let reference = s
+                    .mount_m
+                    .map(|[x, y, z]| CartesianPosition3d::new(coord(x), coord(y), Some(coord(z))));
                 SensorInformation::new(
                     Identifier1B(s.id),
                     SensorType(s.sensor_type),

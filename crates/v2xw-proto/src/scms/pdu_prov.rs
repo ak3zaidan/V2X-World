@@ -549,10 +549,7 @@ pub fn aca_issue_request_at(
         }
     };
     t.craca_id = HashedId3(FixedOctetString::from(pki.craca_id()));
-    let d_aca = aca
-        .private
-        .as_ref()
-        .ok_or(PduError::Key("ACA scalar"))?;
+    let d_aca = aca.private.as_ref().ok_or(PduError::Key("ACA scalar"))?;
     let issued = cert::issue_implicit(
         &t,
         &aca.cert,
@@ -573,11 +570,7 @@ pub fn aca_issue_request_at(
         )),
     ));
     let private = Pdu::new(pdu::encrypted_signed(
-        &resp,
-        &enc_key,
-        &aca.cert,
-        &aca.key,
-        g,
+        &resp, &enc_key, &aca.cert, &aca.key, g,
     )?);
     let request_hash = hashedid::id8_bytes(&hashedid::hashed_id8(request));
     let to_ra = pdu::pdu(ScmsPduContent::aca_ra(

@@ -351,7 +351,8 @@ impl CvKalman {
     /// position variance `r_pos` and velocity variance `r_vel`; returns the NIS (four
     /// degrees of freedom).
     pub fn step(&mut self, dt_s: f64, q: f64, z: [f64; 4], r_pos: f64, r_vel: f64) -> f64 {
-        self.x.step(dt_s, q, z[0], z[1], r_pos, r_vel) + self.y.step(dt_s, q, z[2], z[3], r_pos, r_vel)
+        self.x.step(dt_s, q, z[0], z[1], r_pos, r_vel)
+            + self.y.step(dt_s, q, z[2], z[3], r_pos, r_vel)
     }
 
     /// The filtered position.
@@ -431,7 +432,10 @@ mod tests {
         let r = overlap_ratio(&car(0.0, 0.0, 0.0), &car(2.5, 0.0, 0.0));
         assert!((r - 0.5).abs() < 1e-9, "{r}");
         // A box crossing at right angles: the 1.8 × 1.8 square in the middle.
-        let r = intersection_area(&car(0.0, 0.0, 0.0), &car(0.0, 0.0, core::f64::consts::FRAC_PI_2));
+        let r = intersection_area(
+            &car(0.0, 0.0, 0.0),
+            &car(0.0, 0.0, core::f64::consts::FRAC_PI_2),
+        );
         assert!((r - 1.8 * 1.8).abs() < 1e-9, "{r}");
     }
 

@@ -368,7 +368,8 @@ impl SsmNet {
         let mut via = BTreeMap::new();
         for c in world.roads.connections() {
             if let Some(v) = c.via {
-                via.entry((c.from_lane, world.lane(c.to_lane).edge)).or_insert(v);
+                via.entry((c.from_lane, world.lane(c.to_lane).edge))
+                    .or_insert(v);
             }
         }
         Self {
@@ -391,7 +392,11 @@ impl SsmNet {
             return Some(next);
         }
         let after = route.get(i + 2).map(|l| world.lane(*l).edge);
-        Some(after.and_then(|e| self.via.get(&(lane, e)).copied()).unwrap_or(next))
+        Some(
+            after
+                .and_then(|e| self.via.get(&(lane, e)).copied())
+                .unwrap_or(next),
+        )
     }
 
     /// Updates every actor's position and returns the paths ahead.
@@ -434,12 +439,14 @@ impl SsmNet {
                     .zones
                     .path_ahead(world, lane, s, next, range_m)
                     .into_iter()
-                    .map(|(l, start_m, length_m, internal)| v2xw_metrics::ssm::PathLane {
-                        lane: l.index(),
-                        start_m,
-                        length_m,
-                        internal,
-                    })
+                    .map(
+                        |(l, start_m, length_m, internal)| v2xw_metrics::ssm::PathLane {
+                            lane: l.index(),
+                            start_m,
+                            length_m,
+                            internal,
+                        },
+                    )
                     .collect();
                 out.insert(*a, p);
             }

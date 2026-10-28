@@ -617,8 +617,7 @@ pub const MOTORWAY_MIN_LIMIT_MPS: f64 = 24.587;
 /// (radio-fix3.yaml R3.3.CLASS).
 #[must_use]
 pub fn street_class(params: &GridParams) -> RoadClass {
-    if !params.signalised && !params.crossings && params.speed_limit_mps >= MOTORWAY_MIN_LIMIT_MPS
-    {
+    if !params.signalised && !params.crossings && params.speed_limit_mps >= MOTORWAY_MIN_LIMIT_MPS {
         RoadClass::Motorway
     } else {
         RoadClass::Residential
@@ -1720,7 +1719,12 @@ mod tests {
         p.signalised = false;
         p.crossings = false;
         let w = grid(&p, &ImportOptions::default()).expect("the highway grid builds");
-        let street: Vec<_> = w.roads.edges().iter().filter(|e| !e.is_internal()).collect();
+        let street: Vec<_> = w
+            .roads
+            .edges()
+            .iter()
+            .filter(|e| !e.is_internal())
+            .collect();
         assert!(!street.is_empty());
         assert!(street.iter().all(|e| e.road_class == RoadClass::Motorway));
         assert_eq!(street_class(&p), RoadClass::Motorway);

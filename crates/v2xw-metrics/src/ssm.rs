@@ -322,7 +322,8 @@ impl Conflict {
     /// Whether the minimum TTC is below `threshold_s` (compared on the quantised value).
     #[must_use]
     pub fn ttc_below(&self, threshold_s: f64) -> bool {
-        self.min_ttc.is_some_and(|(_, v)| below(v, threshold_s, Quantum::TIME_S))
+        self.min_ttc
+            .is_some_and(|(_, v)| below(v, threshold_s, Quantum::TIME_S))
     }
 }
 
@@ -383,10 +384,18 @@ impl Open {
 
     fn is_conflict(&self, p: &SsmParams) -> bool {
         self.ty == EncounterType::Collision
-            || self.min_ttc.is_some_and(|(_, v)| below(v, p.ttc_s, Quantum::TIME_S))
-            || self.max_drac.is_some_and(|(_, v)| above(v, p.drac_mps2, Quantum::SPEED))
-            || self.max_mdrac.is_some_and(|(_, v)| above(v, p.mdrac_mps2, Quantum::SPEED))
-            || self.min_ppet.is_some_and(|(_, v)| below(v, p.ppet_s, Quantum::TIME_S))
+            || self
+                .min_ttc
+                .is_some_and(|(_, v)| below(v, p.ttc_s, Quantum::TIME_S))
+            || self
+                .max_drac
+                .is_some_and(|(_, v)| above(v, p.drac_mps2, Quantum::SPEED))
+            || self
+                .max_mdrac
+                .is_some_and(|(_, v)| above(v, p.mdrac_mps2, Quantum::SPEED))
+            || self
+                .min_ppet
+                .is_some_and(|(_, v)| below(v, p.ppet_s, Quantum::TIME_S))
     }
 }
 
@@ -460,8 +469,11 @@ impl SsmTracker {
         let mut sorted: Vec<SsmActor> = actors.to_vec();
         sorted.sort_by_key(|a| a.actor);
         sorted.dedup_by_key(|a| a.actor);
-        let index: BTreeMap<ActorId, usize> =
-            sorted.iter().enumerate().map(|(i, a)| (a.actor, i)).collect();
+        let index: BTreeMap<ActorId, usize> = sorted
+            .iter()
+            .enumerate()
+            .map(|(i, a)| (a.actor, i))
+            .collect();
         // Yaw rates from each actor's previous heading (within a second), wrapped to ±π.
         let yaw: Vec<f64> = sorted
             .iter()
@@ -479,9 +491,7 @@ impl SsmTracker {
         let acc: Vec<f64> = sorted
             .iter()
             .map(|a| match self.last_speed.get(&a.actor) {
-                Some((tp, vp)) if t_s > *tp && t_s - *tp <= 1.0 => {
-                    (a.speed_mps - vp) / (t_s - tp)
-                }
+                Some((tp, vp)) if t_s > *tp && t_s - *tp <= 1.0 => (a.speed_mps - vp) / (t_s - tp),
                 _ => 0.0,
             })
             .collect();
@@ -499,8 +509,7 @@ impl SsmTracker {
                 continue;
             };
             let key = ordered(f.follower, f.leader);
-            if let Some(e) = evaluate_following(&sorted[fi], &sorted[li], f.gap_m, &self.params)
-            {
+            if let Some(e) = evaluate_following(&sorted[fi], &sorted[li], f.gap_m, &self.params) {
                 named.insert(key, e);
             }
         }
@@ -908,10 +917,18 @@ pub fn evaluate_pair_motion(
     p: &SsmParams,
 ) -> Option<PairEval> {
     let turn = |w: f64| {
-        if p.min_yaw_rps.is_finite() && w.abs() > p.min_yaw_rps { w } else { 0.0 }
+        if p.min_yaw_rps.is_finite() && w.abs() > p.min_yaw_rps {
+            w
+        } else {
+            0.0
+        }
     };
     let accel = |x: f64| {
-        if p.min_acc_mps2.is_finite() && x.abs() > p.min_acc_mps2 { x } else { 0.0 }
+        if p.min_acc_mps2.is_finite() && x.abs() > p.min_acc_mps2 {
+            x
+        } else {
+            0.0
+        }
     };
     let ma = (turn(ma.0), accel(ma.1));
     let mb = (turn(mb.0), accel(mb.1));
@@ -1001,7 +1018,12 @@ pub fn evaluate_pair(a: &SsmActor, b: &SsmActor, p: &SsmParams) -> Option<PairEv
                 Some((drac, mdrac))
             });
             let (drac, mdrac) = crossing.map_or_else(
-                || (Some(closing / (2.0 * ttc)), mdrac_closing(closing, ttc, p.reaction_s)),
+                || {
+                    (
+                        Some(closing / (2.0 * ttc)),
+                        mdrac_closing(closing, ttc, p.reaction_s),
+                    )
+                },
                 |(d, m)| (Some(d), m),
             );
             Some(PairEval {
@@ -1157,8 +1179,18 @@ pub fn evaluate_pair_network(
                 merging_measures(a, la.start_m + z.s_a, b, lb.start_m + z.s_b, p)
             } else {
                 crossing_measures(
-                    (a, acc_a, la.start_m + z.s_a - z.half_a, la.start_m + z.s_a + z.half_a),
-                    (b, acc_b, lb.start_m + z.s_b - z.half_b, lb.start_m + z.s_b + z.half_b),
+                    (
+                        a,
+                        acc_a,
+                        la.start_m + z.s_a - z.half_a,
+                        la.start_m + z.s_a + z.half_a,
+                    ),
+                    (
+                        b,
+                        acc_b,
+                        lb.start_m + z.s_b - z.half_b,
+                        lb.start_m + z.s_b + z.half_b,
+                    ),
                     p,
                 )
             };
@@ -1230,7 +1262,13 @@ fn crossing_measures(
 
 /// A merging pair: each actor's distance along its path from its front bumper to the
 /// merge point.
-fn merging_measures(a: &SsmActor, da: f64, b: &SsmActor, db: f64, p: &SsmParams) -> Option<PairEval> {
+fn merging_measures(
+    a: &SsmActor,
+    da: f64,
+    b: &SsmActor,
+    db: f64,
+    p: &SsmParams,
+) -> Option<PairEval> {
     let (va, vb) = (a.speed_mps.max(0.0), b.speed_mps.max(0.0));
     if va < STANDING_MPS || vb < STANDING_MPS || da + a.length_m < 0.0 || db + b.length_m < 0.0 {
         return None;
@@ -1255,7 +1293,11 @@ fn merging_measures(a: &SsmActor, da: f64, b: &SsmActor, db: f64, p: &SsmParams)
         }
         let gap = df - vf * exit_l;
         let g0 = df - dl - ll;
-        (exit_l + gap / dv, (g0 > 0.0).then(|| dv * dv / (2.0 * g0)), dv)
+        (
+            exit_l + gap / dv,
+            (g0 > 0.0).then(|| dv * dv / (2.0 * g0)),
+            dv,
+        )
     };
     Some(PairEval {
         ty: EncounterType::Merging,
@@ -1307,8 +1349,17 @@ mod tests {
         let e = evaluate_pair(&a, &b, &SsmParams::default()).expect("a crossing conflict");
         assert_eq!(e.ty, EncounterType::Crossing);
         assert!(close(e.ttc_s.unwrap(), 2.5), "{e:?}");
-        assert!(close(e.drac_mps2.unwrap(), 2.0 * (26.25 - 25.0) / (2.625 * 2.625)), "{e:?}");
-        assert!(close(e.mdrac_mps2.unwrap(), 2.0 * (16.25 - 15.0) / (1.625 * 1.625)), "{e:?}");
+        assert!(
+            close(e.drac_mps2.unwrap(), 2.0 * (26.25 - 25.0) / (2.625 * 2.625)),
+            "{e:?}"
+        );
+        assert!(
+            close(
+                e.mdrac_mps2.unwrap(),
+                2.0 * (16.25 - 15.0) / (1.625 * 1.625)
+            ),
+            "{e:?}"
+        );
         assert_eq!(e.ppet_s, None);
         // Symmetric in the pair.
         let r = evaluate_pair(&b, &a, &SsmParams::default()).unwrap();
@@ -1362,7 +1413,10 @@ mod tests {
         let ext = 1.0 + core::f64::consts::SQRT_2;
         let d = 20.0 - ext - 4.0;
         let t = (20.0 + ext) / 10.0;
-        assert!(close(e.drac_mps2.unwrap(), 2.0 * (10.0 * t - d) / (t * t)), "{e:?}");
+        assert!(
+            close(e.drac_mps2.unwrap(), 2.0 * (10.0 * t - d) / (t * t)),
+            "{e:?}"
+        );
         // The first overlap by brute force, with a test that shares no code with the
         // separating-axis sweep: a corner inside the other body, or two edges crossing.
         let (ba, bb) = (body(&a), body(&b));
@@ -1375,7 +1429,10 @@ mod tests {
             }
         }
         let first = first.expect("they meet");
-        assert!((e.ttc_s.unwrap() - first).abs() < 2e-4, "{e:?} against {first}");
+        assert!(
+            (e.ttc_s.unwrap() - first).abs() < 2e-4,
+            "{e:?} against {first}"
+        );
         // Not before either front reaches the conflict area (1.35858 s).
         assert!(e.ttc_s.unwrap() >= d / 10.0 - 1e-9, "{e:?}");
     }
@@ -1408,9 +1465,8 @@ mod tests {
     fn polygons_overlap(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> bool {
         a.iter().any(|q| inside(*q, b))
             || b.iter().any(|q| inside(*q, a))
-            || (0..4).any(|i| {
-                (0..4).any(|j| segments_cross(a[i], a[(i + 1) % 4], b[j], b[(j + 1) % 4]))
-            })
+            || (0..4)
+                .any(|i| (0..4).any(|j| segments_cross(a[i], a[(i + 1) % 4], b[j], b[(j + 1) % 4])))
     }
 
     /// Head-on: two cars on one line 40 m apart (front to front 32 m) closing at 20 m/s:
@@ -1451,7 +1507,10 @@ mod tests {
         assert_eq!(e.ttc_s, Some(20.0 / 4.0));
         assert_eq!(e.drac_mps2, Some(16.0 / 40.0));
         assert_eq!(e.mdrac_mps2, Some(4.0 / (2.0 * 4.0)));
-        assert_eq!(evaluate_following(&l, &f, 20.0, &SsmParams::default()), None);
+        assert_eq!(
+            evaluate_following(&l, &f, 20.0, &SsmParams::default()),
+            None
+        );
     }
 
     /// The conflict log: the crossing pair, stepped at 10 Hz until it has passed, makes one
@@ -1474,7 +1533,10 @@ mod tests {
             let b = car(2, 0.0, by, FRAC_PI_2, v.1);
             tr.step(t, &[b, a], &[]);
             if k == 30 {
-                assert!(tr.take_conflicts().is_empty(), "closed only after the extra time");
+                assert!(
+                    tr.take_conflicts().is_empty(),
+                    "closed only after the extra time"
+                );
             }
         }
         let log = tr.take_conflicts();
@@ -1580,7 +1642,10 @@ mod tests {
         }
         tr.close_all();
         let log = tr.take_conflicts();
-        assert!(log.iter().all(|c| c.min_ttc.is_none_or(|(t, _)| t < 0.05)), "{log:?}");
+        assert!(
+            log.iter().all(|c| c.min_ttc.is_none_or(|(t, _)| t < 0.05)),
+            "{log:?}"
+        );
     }
 
     /// The hand-computed crossing with the northbound car braking at 8 m/s²: it stops after
@@ -1591,7 +1656,10 @@ mod tests {
         let a = car(1, -30.0, 0.0, 0.0, 10.0);
         let b = car(2, 0.0, -20.0, FRAC_PI_2, 8.0);
         let p = SsmParams::default();
-        assert_eq!(evaluate_pair_motion(&a, &b, (0.0, 0.0), (0.0, -8.0), &p), None);
+        assert_eq!(
+            evaluate_pair_motion(&a, &b, (0.0, 0.0), (0.0, -8.0), &p),
+            None
+        );
         let e = evaluate_pair_motion(&a, &b, (0.0, 0.0), (0.0, 0.0), &p).unwrap();
         assert!(close(e.ttc_s.unwrap(), 2.5));
     }
@@ -1615,10 +1683,34 @@ mod tests {
     impl SsmNetwork for Junction {
         fn zone(&self, a: u32, b: u32) -> Option<ZoneRef> {
             match (a, b) {
-                (10, 20) => Some(ZoneRef { s_a: 8.0, s_b: 6.0, half_a: 1.0, half_b: 1.25, merge: false }),
-                (20, 10) => Some(ZoneRef { s_a: 6.0, s_b: 8.0, half_a: 1.25, half_b: 1.0, merge: false }),
-                (10, 30) => Some(ZoneRef { s_a: 12.0, s_b: 10.0, half_a: 2.0, half_b: 2.0, merge: true }),
-                (30, 10) => Some(ZoneRef { s_a: 10.0, s_b: 12.0, half_a: 2.0, half_b: 2.0, merge: true }),
+                (10, 20) => Some(ZoneRef {
+                    s_a: 8.0,
+                    s_b: 6.0,
+                    half_a: 1.0,
+                    half_b: 1.25,
+                    merge: false,
+                }),
+                (20, 10) => Some(ZoneRef {
+                    s_a: 6.0,
+                    s_b: 8.0,
+                    half_a: 1.25,
+                    half_b: 1.0,
+                    merge: false,
+                }),
+                (10, 30) => Some(ZoneRef {
+                    s_a: 12.0,
+                    s_b: 10.0,
+                    half_a: 2.0,
+                    half_b: 2.0,
+                    merge: true,
+                }),
+                (30, 10) => Some(ZoneRef {
+                    s_a: 10.0,
+                    s_b: 12.0,
+                    half_a: 2.0,
+                    half_b: 2.0,
+                    merge: true,
+                }),
                 _ => None,
             }
         }
@@ -1627,9 +1719,24 @@ mod tests {
     /// The path of a vehicle whose front is `to_junction` metres short of `connector`.
     fn path(approach: u32, connector: u32, to_junction: f64) -> Vec<PathLane> {
         vec![
-            PathLane { lane: approach, start_m: -(60.0 - to_junction), length_m: 60.0, internal: false },
-            PathLane { lane: connector, start_m: to_junction, length_m: 15.0, internal: true },
-            PathLane { lane: 99, start_m: to_junction + 15.0, length_m: 100.0, internal: false },
+            PathLane {
+                lane: approach,
+                start_m: -(60.0 - to_junction),
+                length_m: 60.0,
+                internal: false,
+            },
+            PathLane {
+                lane: connector,
+                start_m: to_junction,
+                length_m: 15.0,
+                internal: true,
+            },
+            PathLane {
+                lane: 99,
+                start_m: to_junction + 15.0,
+                length_m: 100.0,
+                internal: false,
+            },
         ]
     }
 
@@ -1645,19 +1752,43 @@ mod tests {
         let a = car(1, 0.0, 0.0, 0.0, 10.0);
         let b = car(2, 30.0, -30.0, FRAC_PI_2, 8.0);
         let p = SsmParams::default();
-        let e = evaluate_pair_network(&a, &path(1, 10, 20.0), 0.0, &b, &path(2, 20, 15.0), 0.0, &Junction, &p)
-            .unwrap();
+        let e = evaluate_pair_network(
+            &a,
+            &path(1, 10, 20.0),
+            0.0,
+            &b,
+            &path(2, 20, 15.0),
+            0.0,
+            &Junction,
+            &p,
+        )
+        .unwrap();
         assert_eq!(e.ty, EncounterType::Crossing);
         assert!(close(e.ttc_s.unwrap(), 2.7), "{e:?}");
         let t = 26.25 / 8.0;
-        assert!(close(e.drac_mps2.unwrap(), 2.0 * (10.0 * t - 27.0) / (t * t)), "{e:?}");
+        assert!(
+            close(e.drac_mps2.unwrap(), 2.0 * (10.0 * t - 27.0) / (t * t)),
+            "{e:?}"
+        );
         // MDRAC, 1 s reaction: d = 27 − 10 = 17, T = 2.28125: 2(22.8125 − 17)/T².
         let tr = t - 1.0;
-        assert!(close(e.mdrac_mps2.unwrap(), 2.0 * (10.0 * tr - 17.0) / (tr * tr)), "{e:?}");
+        assert!(
+            close(e.mdrac_mps2.unwrap(), 2.0 * (10.0 * tr - 17.0) / (tr * tr)),
+            "{e:?}"
+        );
         // B 10 m further back: in at 29.75/8 = 3.71875 s, after A has left at 3.3 s: no
         // TTC, PPET = 3.71875 − 3.3.
-        let e = evaluate_pair_network(&a, &path(1, 10, 20.0), 0.0, &b, &path(2, 20, 25.0), 0.0, &Junction, &p)
-            .unwrap();
+        let e = evaluate_pair_network(
+            &a,
+            &path(1, 10, 20.0),
+            0.0,
+            &b,
+            &path(2, 20, 25.0),
+            0.0,
+            &Junction,
+            &p,
+        )
+        .unwrap();
         assert_eq!(e.ttc_s, None);
         assert!(close(e.ppet_s.unwrap(), 29.75 / 8.0 - 3.3), "{e:?}");
     }
@@ -1671,12 +1802,33 @@ mod tests {
         let b = car(2, 30.0, -30.0, FRAC_PI_2, 8.0);
         let p = SsmParams::default();
         assert_eq!(
-            evaluate_pair_network(&a, &path(1, 10, 20.0), 0.0, &b, &path(2, 40, 15.0), 0.0, &Junction, &p),
+            evaluate_pair_network(
+                &a,
+                &path(1, 10, 20.0),
+                0.0,
+                &b,
+                &path(2, 40, 15.0),
+                0.0,
+                &Junction,
+                &p
+            ),
             None
         );
-        let off = SsmParams { extrapolate: false, ..SsmParams::default() };
+        let off = SsmParams {
+            extrapolate: false,
+            ..SsmParams::default()
+        };
         assert_eq!(
-            evaluate_pair_network(&a, &path(1, 10, 20.0), 0.0, &b, &path(2, 20, 15.0), 0.0, &Junction, &off),
+            evaluate_pair_network(
+                &a,
+                &path(1, 10, 20.0),
+                0.0,
+                &b,
+                &path(2, 20, 15.0),
+                0.0,
+                &Junction,
+                &off
+            ),
             None
         );
     }
@@ -1690,9 +1842,22 @@ mod tests {
         let b = car(2, 30.0, -30.0, FRAC_PI_2, 8.0);
         let p = SsmParams::default();
         let run = |acc: f64| {
-            evaluate_pair_network(&a, &path(1, 10, 20.0), acc, &b, &path(2, 20, 15.0), 0.0, &Junction, &p)
+            evaluate_pair_network(
+                &a,
+                &path(1, 10, 20.0),
+                acc,
+                &b,
+                &path(2, 20, 15.0),
+                0.0,
+                &Junction,
+                &p,
+            )
         };
-        assert!(run(-3.0).is_none_or(|e| e.ttc_s.is_none()), "{:?}", run(-3.0));
+        assert!(
+            run(-3.0).is_none_or(|e| e.ttc_s.is_none()),
+            "{:?}",
+            run(-3.0)
+        );
         assert!(close(run(2.0).unwrap().ttc_s.unwrap(), 2.7));
         // A braking at 1 m/s² still arrives: 27 = 10t − t²/2, t = 10 − √46 = 3.2177 s,
         // which is after B's exit at 3.28125 s? No: 3.2177 < 3.28125, so TTC = 2.7 s.
@@ -1709,10 +1874,21 @@ mod tests {
         let p = SsmParams::default();
         // B's front 10 m into connector 10 (rear at 6 m).
         let pb = vec![
-            PathLane { lane: 10, start_m: -10.0, length_m: 15.0, internal: true },
-            PathLane { lane: 99, start_m: 5.0, length_m: 100.0, internal: false },
+            PathLane {
+                lane: 10,
+                start_m: -10.0,
+                length_m: 15.0,
+                internal: true,
+            },
+            PathLane {
+                lane: 99,
+                start_m: 5.0,
+                length_m: 100.0,
+                internal: false,
+            },
         ];
-        let e = evaluate_pair_network(&a, &path(1, 10, 12.0), 0.0, &b, &pb, 0.0, &Junction, &p).unwrap();
+        let e = evaluate_pair_network(&a, &path(1, 10, 12.0), 0.0, &b, &pb, 0.0, &Junction, &p)
+            .unwrap();
         assert_eq!(e.ty, EncounterType::Following);
         assert!(close(e.ttc_s.unwrap(), 18.0 / 4.0), "{e:?}");
         // Merging: A 8 m short of connector 10 (merge point at s 12, so 20 m) at 10 m/s,
@@ -1720,7 +1896,17 @@ mod tests {
         // C at 2.0 s: A first (ties to A); A's rear clears at 24/10 = 2.4 s, after C
         // arrives: TTC = 18/9 = 2.0 s, DRAC = 9²/(2·18).
         let c = car(3, 20.0, -20.0, FRAC_PI_2, 9.0);
-        let e = evaluate_pair_network(&a, &path(1, 10, 8.0), 0.0, &c, &path(3, 30, 8.0), 0.0, &Junction, &p).unwrap();
+        let e = evaluate_pair_network(
+            &a,
+            &path(1, 10, 8.0),
+            0.0,
+            &c,
+            &path(3, 30, 8.0),
+            0.0,
+            &Junction,
+            &p,
+        )
+        .unwrap();
         assert_eq!(e.ty, EncounterType::Merging);
         assert!(close(e.ttc_s.unwrap(), 2.0), "{e:?}");
         assert!(close(e.drac_mps2.unwrap(), 81.0 / 36.0), "{e:?}");

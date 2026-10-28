@@ -1900,7 +1900,10 @@ mod tests {
         let honest = track(smoothing(), 10.0, 6, 40);
         let radius = honest[0][5].0.semi_major_m;
         // The whole fitted σ (2.636 m) is the smoothed output's slow part: 2.4477·2.636 m.
-        assert!((6.40..6.50).contains(&radius), "honest smoothed radius {radius}");
+        assert!(
+            (6.40..6.50).contains(&radius),
+            "honest smoothed radius {radius}"
+        );
         let fixed = track(
             GaussMarkovParams {
                 stated_sigma_m: 2.0,
@@ -1928,7 +1931,10 @@ mod tests {
                 assert_eq!(b.0.semi_minor_m, b.0.semi_major_m);
             }
             let first = s[1].0.semi_major_m;
-            assert!(s.iter().skip(1).all(|e| e.0.semi_major_m == first), "a device redrew");
+            assert!(
+                s.iter().skip(1).all(|e| e.0.semi_major_m == first),
+                "a device redrew"
+            );
         }
         let per_device: Vec<f64> = spread.iter().map(|t| t[1].0.semi_major_m).collect();
         assert!(

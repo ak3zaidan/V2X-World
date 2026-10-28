@@ -854,13 +854,22 @@ impl MetricProvider for SafetyProvider {
                 ));
             }
             let dists = [
-                ("ssm_min_ttc", core::mem::replace(&mut self.ssm_min_ttc, Distribution::new())),
-                ("ssm_max_drac", core::mem::replace(&mut self.ssm_max_drac, Distribution::new())),
+                (
+                    "ssm_min_ttc",
+                    core::mem::replace(&mut self.ssm_min_ttc, Distribution::new()),
+                ),
+                (
+                    "ssm_max_drac",
+                    core::mem::replace(&mut self.ssm_max_drac, Distribution::new()),
+                ),
                 (
                     "ssm_max_mdrac",
                     core::mem::replace(&mut self.ssm_max_mdrac, Distribution::new()),
                 ),
-                ("ssm_min_ppet", core::mem::replace(&mut self.ssm_min_ppet, Distribution::new())),
+                (
+                    "ssm_min_ppet",
+                    core::mem::replace(&mut self.ssm_min_ppet, Distribution::new()),
+                ),
             ];
             for (name, d) in dists {
                 push_distribution(&mut out, self.def(name), d);
@@ -1002,8 +1011,19 @@ pub fn ssm_count_name(ty: EncounterType) -> String {
 /// The names of the `ssm` group's metrics.
 #[must_use]
 pub fn ssm_metric_names() -> Vec<String> {
-    let mut v: Vec<String> = EncounterType::ALL.iter().map(|t| ssm_count_name(*t)).collect();
-    v.extend(["ssm_min_ttc", "ssm_max_drac", "ssm_max_mdrac", "ssm_min_ppet"].map(String::from));
+    let mut v: Vec<String> = EncounterType::ALL
+        .iter()
+        .map(|t| ssm_count_name(*t))
+        .collect();
+    v.extend(
+        [
+            "ssm_min_ttc",
+            "ssm_max_drac",
+            "ssm_max_mdrac",
+            "ssm_min_ppet",
+        ]
+        .map(String::from),
+    );
     v
 }
 
@@ -1113,16 +1133,64 @@ fn add_ssm_card(card: &mut ModelCard, p: &SsmParams) {
         ))
     };
     for (name, unit, v, lo, hi, what) in [
-        ("ssm_ttc_threshold_s", "s", p.ttc_s, 0.1, 10.0, "TTC threshold 3.0 s"),
-        ("ssm_drac_threshold_mps2", "m/s²", p.drac_mps2, 0.1, 10.0, "DRAC threshold 3.0 m/s²"),
-        ("ssm_mdrac_threshold_mps2", "m/s²", p.mdrac_mps2, 0.1, 10.0, "MDRAC threshold 3.4 m/s²"),
-        ("ssm_ppet_threshold_s", "s", p.ppet_s, 0.1, 10.0, "PPET threshold 2.0 s"),
+        (
+            "ssm_ttc_threshold_s",
+            "s",
+            p.ttc_s,
+            0.1,
+            10.0,
+            "TTC threshold 3.0 s",
+        ),
+        (
+            "ssm_drac_threshold_mps2",
+            "m/s²",
+            p.drac_mps2,
+            0.1,
+            10.0,
+            "DRAC threshold 3.0 m/s²",
+        ),
+        (
+            "ssm_mdrac_threshold_mps2",
+            "m/s²",
+            p.mdrac_mps2,
+            0.1,
+            10.0,
+            "MDRAC threshold 3.4 m/s²",
+        ),
+        (
+            "ssm_ppet_threshold_s",
+            "s",
+            p.ppet_s,
+            0.1,
+            10.0,
+            "PPET threshold 2.0 s",
+        ),
         ("ssm_range_m", "m", p.range_m, 1.0, 500.0, "range 50 m"),
-        ("ssm_extra_time_s", "s", p.extra_time_s, 0.0, 60.0, "extratime 5 s"),
-        ("ssm_reaction_s", "s", p.reaction_s, 0.0, 5.0, "mdrac.prt 1 s"),
+        (
+            "ssm_extra_time_s",
+            "s",
+            p.extra_time_s,
+            0.0,
+            60.0,
+            "extratime 5 s",
+        ),
+        (
+            "ssm_reaction_s",
+            "s",
+            p.reaction_s,
+            0.0,
+            5.0,
+            "mdrac.prt 1 s",
+        ),
     ] {
-        card.parameters
-            .push(cards::param(name, unit, json!(v), json!(lo), json!(hi), sumo(what)));
+        card.parameters.push(cards::param(
+            name,
+            unit,
+            json!(v),
+            json!(lo),
+            json!(hi),
+            sumo(what),
+        ));
     }
     let ward = cards::paper(
         "Ward, Agamennoni, Worrall, Bender, Nebot 2015, Extending time to collision for \
@@ -1476,7 +1544,15 @@ mod tests {
         assert_eq!(sample(&s, "speed").value.n(), 1);
     }
 
-    fn kin_h(t: SimTime, actor: u32, lane: Option<u32>, x: f64, y: f64, h: f64, v: f64) -> OwnedRecord {
+    fn kin_h(
+        t: SimTime,
+        actor: u32,
+        lane: Option<u32>,
+        x: f64,
+        y: f64,
+        h: f64,
+        v: f64,
+    ) -> OwnedRecord {
         let mut j = json!({
             "t": t, "actor": actor, "x_m": x, "y_m": y, "speed_mps": v, "heading_rad": h,
         });
@@ -1493,9 +1569,9 @@ mod tests {
 
     fn dist_min(s: &MetricSample) -> Option<f64> {
         match &s.value {
-            SampleValue::Distribution(crate::stats::DistributionSummary::Summary { min, .. }) => {
-                Some(*min)
-            }
+            SampleValue::Distribution(crate::stats::DistributionSummary::Summary {
+                min, ..
+            }) => Some(*min),
             _ => None,
         }
     }
@@ -1510,7 +1586,11 @@ mod tests {
             for k in 0..=100u64 {
                 let t = k * 100_000_000;
                 let ts = k as f64 * 0.1;
-                let (xf, vf) = if ts <= 3.0 { (12.0 * ts, 12.0) } else { (36.0 + 8.0 * (ts - 3.0), 8.0) };
+                let (xf, vf) = if ts <= 3.0 {
+                    (12.0 * ts, 12.0)
+                } else {
+                    (36.0 + 8.0 * (ts - 3.0), 8.0)
+                };
                 p.on_event(&kin_h(t, 1, Some(7), xf, 0.0, 0.0, vf));
                 p.on_event(&kin_h(t, 2, Some(7), 20.0 + 8.0 * ts, 0.0, 0.0, 8.0));
             }
@@ -1519,7 +1599,10 @@ mod tests {
         let off = run(false);
         let on = run(true);
         for s in &off {
-            let twin = on.iter().find(|o| o.key() == s.key()).expect("every sample kept");
+            let twin = on
+                .iter()
+                .find(|o| o.key() == s.key())
+                .expect("every sample kept");
             assert_eq!(
                 serde_json::to_string(s).unwrap(),
                 serde_json::to_string(twin).unwrap()
@@ -1532,7 +1615,10 @@ mod tests {
         );
         let ttc = dist_min(sample(&on, "ttc_min")).expect("a ttc");
         assert_eq!(dist_min(sample(&on, "ssm_min_ttc")), Some(ttc));
-        assert_eq!(sample(&on, "ssm_conflicts_crossing").value, SampleValue::count(0));
+        assert_eq!(
+            sample(&on, "ssm_conflicts_crossing").value,
+            SampleValue::count(0)
+        );
     }
 
     /// The crossing case through the provider: two cars on different lanes, headings 0
@@ -1547,10 +1633,26 @@ mod tests {
             let t = k * 100_000_000;
             let ts = k as f64 * 0.1;
             let stop = ts >= 0.5;
-            let (xa, ya) = if stop { (-25.0, 0.0) } else { (-30.0 + 10.0 * ts, 0.0) };
-            let (xb, yb) = if stop { (0.0, -16.0) } else { (0.0, -20.0 + 8.0 * ts) };
+            let (xa, ya) = if stop {
+                (-25.0, 0.0)
+            } else {
+                (-30.0 + 10.0 * ts, 0.0)
+            };
+            let (xb, yb) = if stop {
+                (0.0, -16.0)
+            } else {
+                (0.0, -20.0 + 8.0 * ts)
+            };
             let mut a = kin_h(t, 1, Some(1), xa, ya, 0.0, if stop { 0.0 } else { 10.0 });
-            let mut b = kin_h(t, 2, Some(2), xb, yb, core::f64::consts::FRAC_PI_2, if stop { 0.0 } else { 8.0 });
+            let mut b = kin_h(
+                t,
+                2,
+                Some(2),
+                xb,
+                yb,
+                core::f64::consts::FRAC_PI_2,
+                if stop { 0.0 } else { 8.0 },
+            );
             for r in [&mut a, &mut b] {
                 let mut j: serde_json::Value = serde_json::from_slice(&r.json).unwrap();
                 j["class"] = json!("car");
@@ -1560,8 +1662,14 @@ mod tests {
             p.on_event(&b);
         }
         let s = p.flush(8_100_000_000);
-        assert_eq!(sample(&s, "ssm_conflicts_crossing").value, SampleValue::count(1));
-        assert_eq!(sample(&s, "ssm_conflicts_following").value, SampleValue::count(0));
+        assert_eq!(
+            sample(&s, "ssm_conflicts_crossing").value,
+            SampleValue::count(1)
+        );
+        assert_eq!(
+            sample(&s, "ssm_conflicts_following").value,
+            SampleValue::count(0)
+        );
         // TTC 2.5 − t falls to 2.1 at the last moving frame (0.4 s).
         assert_eq!(dist_min(sample(&s, "ssm_min_ttc")), Some(2.1));
         assert_eq!(sample(&s, "ttc_min").value.n(), 0);

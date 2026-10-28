@@ -721,7 +721,9 @@ pub fn build_demand(scenario: &Scenario, world: &World) -> Result<Box<dyn Demand
         // A SUMO route file, every vehicle driven by its own vType. Draws are keyed by the
         // scenario seed.
         k if k == v2xw_interop::routes::MODEL_ID => {
-            use v2xw_interop::routes::{ImportOptions, ProbabilityFlows, RouteFile, RouteFileDemand};
+            use v2xw_interop::routes::{
+                ImportOptions, ProbabilityFlows, RouteFile, RouteFileDemand,
+            };
             let p: SumoRouParams = serde_json::from_value(d.params.clone())
                 .map_err(|e| bad("SUMO route-file import", e.to_string()))?;
             let probability_flows = match p.probability_flows.as_deref() {

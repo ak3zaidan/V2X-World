@@ -442,12 +442,18 @@ fn etsi_encodings_are_read_identically_by_asn1tools() {
         "{sensors}"
     );
     assert_eq!(
-        (cam[1]["horizontalOpeningAngleStart"].clone(), cam[1]["horizontalOpeningAngleEnd"].clone()),
+        (
+            cam[1]["horizontalOpeningAngleStart"].clone(),
+            cam[1]["horizontalOpeningAngleEnd"].clone()
+        ),
         (json!(450), json!(1_350))
     );
     let rear = &sensors[1]["perceptionRegionShape"]["__choice__"][1];
     assert_eq!(
-        (rear["horizontalOpeningAngleStart"].clone(), rear["horizontalOpeningAngleEnd"].clone()),
+        (
+            rear["horizontalOpeningAngleStart"].clone(),
+            rear["horizontalOpeningAngleEnd"].clone()
+        ),
         (json!(1_050), json!(2_550))
     );
 }

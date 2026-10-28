@@ -52,7 +52,11 @@ fn a_vtype_reaches_the_actor() {
     assert_eq!(a.driver.desired_speed_mps, 12.0);
     // departSpeed 5 on an empty lane.
     let speed = |k: &v2xw_core::kinematics::Kinematics| k.vel.x.hypot(k.vel.y);
-    assert!((speed(&a.kinematics) - 5.0).abs() < 1e-9, "{}", speed(&a.kinematics));
+    assert!(
+        (speed(&a.kinematics) - 5.0).abs() < 1e-9,
+        "{}",
+        speed(&a.kinematics)
+    );
     // A vehicle with no vType drives SUMO's DEFAULT_VEHTYPE for its class: the passenger
     // car's 2.6 / 4.5 m/s², tau 1 s and the class's minGap, with no sigma of its own.
     let b = spawned.iter().find(|s| s.seq == 1).unwrap();
@@ -103,7 +107,15 @@ fn the_lust_sample_imports_with_nothing_dropped_silently() {
     // Six private types in a distribution and the bus.
     assert_eq!(f.vtypes.len(), 7);
     assert_eq!(f.vehicles.len(), 23);
-    for k in ["accel", "decel", "sigma", "minGap", "maxSpeed", "speedDev", "probability"] {
+    for k in [
+        "accel",
+        "decel",
+        "sigma",
+        "minGap",
+        "maxSpeed",
+        "speedDev",
+        "probability",
+    ] {
         let key = format!("vType@{k}");
         let want = if k == "probability" { 6 } else { 7 };
         assert_eq!(l.applied.get(&key), Some(&want), "{key}: {l:#?}");
@@ -120,7 +132,11 @@ fn the_lust_sample_imports_with_nothing_dropped_silently() {
     assert_eq!(l.cosmetic.get("vType@guiShape"), Some(&7));
     // LuST's keywords are all supported: random positions, best lanes, numeric speeds.
     assert!(l.approximated.is_empty(), "{:?}", l.approximated);
-    let first = f.vehicles.iter().find(|v| v.id == "randUni18368:1").unwrap();
+    let first = f
+        .vehicles
+        .iter()
+        .find(|v| v.id == "randUni18368:1")
+        .unwrap();
     assert_eq!(first.vtype.as_deref(), Some("passenger2a"));
     assert!(matches!(
         first.depart_pos,
@@ -188,17 +204,33 @@ fn a_vtypes_car_following_model_drives_its_vehicles() {
     assert!(krauss.len() > 50 && idm.len() > 50);
     let (vk, vi) = (krauss[krauss.len() - 1], idm[idm.len() - 1]);
     let t = (krauss.len() - 1) as f64 * 0.1;
-    eprintln!("after {t:.1} s: Krauss {vk:.3} m/s, IDM {vi:.3} m/s, a·t {:.3}", 1.5 * t);
+    eprintln!(
+        "after {t:.1} s: Krauss {vk:.3} m/s, IDM {vi:.3} m/s, a·t {:.3}",
+        1.5 * t
+    );
     // The slope over the last second, not v at the end: the engine holds a vehicle that
     // starts from standstill for its start-up delay first (8.25 m/s at 6.0 s on the
     // 2026-10-27 merged tree is 1.5 m/s² from 0.5 s), whatever its car-following model.
     let slope = |v: &[f64]| v[v.len() - 1] - v[v.len() - 11];
     let (sk, si) = (slope(&krauss), slope(&idm));
     eprintln!("last-second slope: Krauss {sk:.3}, IDM {si:.3} m/s²");
-    assert!((sk - 1.5).abs() < 0.02, "Krauss speeds up at accel: {sk} against 1.5");
-    assert!(vk <= 1.5 * t + 0.05, "Krauss above a·t: {vk} against {}", 1.5 * t);
-    assert!(si < 1.4, "the IDM's free-road term falls short of accel: {si}");
-    assert!(vi < vk - 0.3, "the IDM falls short of a·t: {vi} against {vk}");
+    assert!(
+        (sk - 1.5).abs() < 0.02,
+        "Krauss speeds up at accel: {sk} against 1.5"
+    );
+    assert!(
+        vk <= 1.5 * t + 0.05,
+        "Krauss above a·t: {vk} against {}",
+        1.5 * t
+    );
+    assert!(
+        si < 1.4,
+        "the IDM's free-road term falls short of accel: {si}"
+    );
+    assert!(
+        vi < vk - 0.3,
+        "the IDM falls short of a·t: {vi} against {vk}"
+    );
 }
 
 /// WP-15 follow-up: a stated `departSpeed` above the safe insertion speed delays the
@@ -229,7 +261,10 @@ fn an_unsafe_stated_depart_speed_delays_the_insertion() {
     eprintln!(
         "departSpeed 13: in at {t_num:.1} s at {v_num:.2} m/s; max: {t_max:.1} s at {v_max:.2} m/s"
     );
-    assert!((v_num - 13.0).abs() < 1e-9, "enters at the stated speed: {v_num}");
+    assert!(
+        (v_num - 13.0).abs() < 1e-9,
+        "enters at the stated speed: {v_num}"
+    );
     assert!(t_num > t_max + 1.0, "delayed: {t_num} against {t_max}");
     assert!(v_max < 13.0, "max is lowered to the safe speed: {v_max}");
 }

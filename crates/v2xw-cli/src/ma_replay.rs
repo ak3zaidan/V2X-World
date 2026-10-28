@@ -832,7 +832,12 @@ mod tests {
             let mut truth = Truth::default();
             for n in 0..6u32 {
                 truth.devices.push(device(n, false));
-                let mut r = row(50 + u64::from(n), &format!("h{n}"), &format!("p{n}"), &format!("dev{n}"));
+                let mut r = row(
+                    50 + u64::from(n),
+                    &format!("h{n}"),
+                    &format!("p{n}"),
+                    &format!("dev{n}"),
+                );
                 r.secmark_phase_ms = 23;
                 log.push(r);
             }

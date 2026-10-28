@@ -84,7 +84,10 @@ fn locked(r: &MaReceived) -> bool {
 }
 
 fn legacy() -> Out {
-    run(doc(attacker("threat/attacker/legacy/ConstPos", json!(null))))
+    run(doc(attacker(
+        "threat/attacker/legacy/ConstPos",
+        json!(null),
+    )))
 }
 
 #[test]
@@ -92,9 +95,15 @@ fn the_ma_reads_the_evidence_secmark_phase_and_a_mimic_reads_free() {
     let plain = legacy();
     let a = about_attackers(&plain);
     let share = a.iter().filter(|r| locked(r)).count() as f64 / a.len().max(1) as f64;
-    println!("legacy, all locked: {} attack reports, {share:.3} locked", a.len());
+    println!(
+        "legacy, all locked: {} attack reports, {share:.3} locked",
+        a.len()
+    );
     assert!(a.len() >= 10, "too few attack reports reached the MA");
-    assert!(share >= 0.8, "a locked fleet's reports read free: {share:.3}");
+    assert!(
+        share >= 0.8,
+        "a locked fleet's reports read free: {share:.3}"
+    );
 
     let mimic = run(doc(attacker(
         "threat/attacker/evasion/BenignClassMimic",
@@ -169,7 +178,10 @@ fn a_bad_disguise_is_refused_at_check() {
         json!({"stated_accuracy_m": -1.0}),
         json!({"const_pos_offset_m": "x"}),
     ] {
-        let d = doc(attacker("threat/attacker/evasion/BenignClassMimic", params.clone()));
+        let d = doc(attacker(
+            "threat/attacker/evasion/BenignClassMimic",
+            params.clone(),
+        ));
         let s = Scenario::from_document(d).expect("deserialises");
         assert!(
             !v2xw_engine::scenario::validate(&s).is_empty(),

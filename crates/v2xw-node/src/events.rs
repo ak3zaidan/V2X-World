@@ -943,8 +943,13 @@ mod wp12_tests {
         let mut e = with(TC);
         let (raised, _) = drive(&mut e, &steady(30.6, 3_000), |e, t, x| {
             for k in 0..8u8 {
-                e.trigger_state
-                    .on_cam([k; 8], Vec3::new(x + 30.0 * f64::from(k), 0.0, 0.0), 30.0, 0.0, t);
+                e.trigger_state.on_cam(
+                    [k; 8],
+                    Vec3::new(x + 30.0 * f64::from(k), 0.0, 0.0),
+                    30.0,
+                    0.0,
+                    t,
+                );
             }
         });
         assert!(raised.is_empty(), "{raised:?}");
@@ -995,8 +1000,13 @@ mod wp12_tests {
             profile.extend(steady(0.0, fill));
             drive(&mut e, &profile, |e, t, x| {
                 for k in 0..cars {
-                    e.trigger_state
-                        .on_cam([k; 8], Vec3::new(x + 10.0 * f64::from(k + 1), 0.0, 0.0), 1.0, 0.0, t);
+                    e.trigger_state.on_cam(
+                        [k; 8],
+                        Vec3::new(x + 10.0 * f64::from(k + 1), 0.0, 0.0),
+                        1.0,
+                        0.0,
+                        t,
+                    );
                 }
             })
             .0

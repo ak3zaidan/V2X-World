@@ -1191,9 +1191,9 @@ impl ScmsPki {
         let profile = self.profile;
         let form = Form::sub_ca(profile, &self.root, &self.ica);
         let start = self.aca.cert.0.to_be_signed.validity_period.start.0.0;
-        let ssp = SecurityMgmtSsp::aca(AcaSsp::new(Uint8(
-            crate::scms::governance::ssp_version(profile, "pca"),
-        )));
+        let ssp = SecurityMgmtSsp::aca(AcaSsp::new(Uint8(crate::scms::governance::ssp_version(
+            profile, "pca",
+        ))));
         let a = Self::issue_full(
             &self.ica,
             &mut g,

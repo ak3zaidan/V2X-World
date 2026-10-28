@@ -72,7 +72,13 @@ impl OffChannel {
     }
 
     /// Whether `unit` is away at any instant of `[start, end]`.
-    pub(crate) fn away(&self, rng: &RngRegistry, unit: NodeId, start: SimTime, end: SimTime) -> bool {
+    pub(crate) fn away(
+        &self,
+        rng: &RngRegistry,
+        unit: NodeId,
+        start: SimTime,
+        end: SimTime,
+    ) -> bool {
         (start / SYNC_INTERVAL_NS..=end / SYNC_INTERVAL_NS).any(|k| {
             self.window(rng, unit, k)
                 .is_some_and(|(a, b)| start < b && end > a)

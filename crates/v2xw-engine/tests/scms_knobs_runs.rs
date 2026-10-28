@@ -95,7 +95,8 @@ impl Out {
         let mut by: std::collections::BTreeMap<String, usize> = Default::default();
         for v in self.msgs().filter(|v| v["flow"] == "topup") {
             if v["name"] == "batch-download-request" && role(&v["from"]) == "ee" {
-                *by.entry(v["instance"].as_str().unwrap_or("").to_string()).or_default() += 1;
+                *by.entry(v["instance"].as_str().unwrap_or("").to_string())
+                    .or_default() += 1;
             }
         }
         by.into_values().collect()
@@ -251,7 +252,11 @@ fn the_request_shuffle_does_not_touch_in_run_topups() {
         with(json!({"max_periods_ahead": 2,
             "cert_shuffle_threshold": 1, "cert_shuffle_window_s": 600})),
     );
-    knob("cert_shuffle_threshold 1000 -> 1, window 5 -> 600 s (2-week horizon)", b, &v);
+    knob(
+        "cert_shuffle_threshold 1000 -> 1, window 5 -> 600 s (2-week horizon)",
+        b,
+        &v,
+    );
     assert!(
         b.between("topup", "ra", "aca") + b.between("topup", "ra", "pca") > 0,
         "{:?}",
@@ -339,7 +344,11 @@ fn a_slow_aca_does_not_delay_a_week_the_ra_already_holds() {
     // during the batch (scms-fix3-ra RA.slow-aca-held: 4,947 ms against 337 ms).
     let early = slow_base();
     knob("pca slow 4 s from 0 s (when the weeks fell due)", b, early);
-    assert!(early.topup_ms() > b.topup_ms() + 1_000.0, "{}", early.topup_ms());
+    assert!(
+        early.topup_ms() > b.topup_ms() + 1_000.0,
+        "{}",
+        early.topup_ms()
+    );
 }
 
 #[test]
@@ -355,7 +364,11 @@ fn a_longer_download_wait_lengthens_a_late_topup() {
         slow_h2_base(),
         slow_aca(json!({"max_periods_ahead": 2, "download_poll_interval_s": 20})),
     );
-    knob("download_poll_interval_s 2 -> 20 (ACA 4 s slow, 2-week horizon)", b, &v);
+    knob(
+        "download_poll_interval_s 2 -> 20 (ACA 4 s slow, 2-week horizon)",
+        b,
+        &v,
+    );
     // Only a late top-off waits longer: one whose batch was not ready at nextDlTime and
     // that polled again. Its last poll overshoots the batch by U[0, minWait), so each one
     // late in both runs waits (20 s - 2 s) / 2 = 9 s more on average, and an on-time one
@@ -401,7 +414,11 @@ fn one_download_poll_gives_up_on_a_late_batch() {
         slow_h2_base(),
         slow_aca(json!({"max_periods_ahead": 2, "max_download_polls": 1})),
     );
-    knob("max_download_polls 100 -> 1 (ACA 4 s slow, 2-week horizon)", b, &v);
+    knob(
+        "max_download_polls 100 -> 1 (ACA 4 s slow, 2-week horizon)",
+        b,
+        &v,
+    );
     let (pb, pv) = (&b.report.phase2, &v.report.phase2);
     assert!(pb.topups_completed > 0);
     assert!(

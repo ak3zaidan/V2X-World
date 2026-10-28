@@ -82,7 +82,6 @@ fn run(scenario: Scenario) -> (RunReport, regression::Pinned) {
     (report, pinned)
 }
 
-
 /// A recorder that keeps one channel's records and drops the rest as they come.
 ///
 /// `MemoryRecorder` holds every `phy.rx` of a Midtown run, which took the distribution
@@ -286,7 +285,11 @@ fn a_slow_drift_onset_is_its_first_centimetre_not_its_first_falsified_claim() {
         );
         assert!(o.attack.ends_with("SlowDrift"), "{}", o.attack);
         if let (Some(on), Some(f)) = (o.onset_ns, o.first_falsified_ns) {
-            assert!(on <= f, "attacker {}: onset {on} after its first lie {f}", o.node);
+            assert!(
+                on <= f,
+                "attacker {}: onset {on} after its first lie {f}",
+                o.node
+            );
             if on < f {
                 ahead += 1;
             }
@@ -306,8 +309,14 @@ fn a_slow_drift_onset_is_its_first_centimetre_not_its_first_falsified_claim() {
     let mut got = p.onset_to_detection_ns.clone();
     got.sort_unstable();
     want.sort_unstable();
-    assert!(!got.is_empty(), "no decided SlowDrift attacker was measured");
-    assert_eq!(got, want, "onset_to_detection_ns is not detected - first change");
+    assert!(
+        !got.is_empty(),
+        "no decided SlowDrift attacker was measured"
+    );
+    assert_eq!(
+        got, want,
+        "onset_to_detection_ns is not detected - first change"
+    );
 }
 
 /// Found by the SCMS effects round (docs/design/scms-real/testing/effects.md, rows

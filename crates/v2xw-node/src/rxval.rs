@@ -629,7 +629,8 @@ fn location_in(region: &GeographicRegion, lat: f64, lon: f64) -> Option<bool> {
             // Equirectangular distance: within 0.1 % of the great circle at the radii a
             // certificate region uses (Uint16 metres, at most 65.5 km).
             let r = 6_371_008.8_f64;
-            let x = (lon - clon).to_radians() * v2xw_core::math::cos(((lat + clat) / 2.0).to_radians());
+            let x =
+                (lon - clon).to_radians() * v2xw_core::math::cos(((lat + clat) / 2.0).to_radians());
             let y = (lat - clat).to_radians();
             Some((x * x + y * y).sqrt() * r <= f64::from(c.radius.0))
         }

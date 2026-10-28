@@ -121,7 +121,10 @@ fn the_wp12_knobs_off_are_the_default_run_and_on_is_deterministic() {
     );
     assert!(sent(&b) > 10, "too few CPMs to compare");
     assert_eq!(sent(&o), sent(&b), "off must be the default path");
-    assert!(otx == btx, "off must put the default run's frames on the air");
+    assert!(
+        otx == btx,
+        "off must put the default run's frames on the air"
+    );
     assert_eq!(sent(&l1), sent(&l2), "same seed, same CPMs");
     assert!(l1tx == l2tx, "same seed, same frames");
     assert_eq!(objects(&l1), objects(&l2));
@@ -173,7 +176,10 @@ fn the_wp12_knobs_are_refused_where_the_run_would_not_read_them() {
     c.messages.cpm_max_objects = Some(0);
     assert!(refused(&c, "messages.cpm_max_objects"), "zero objects");
     c.messages.cpm_max_objects = Some(256);
-    assert!(refused(&c, "messages.cpm_max_objects"), "above the ASN.1 bound");
+    assert!(
+        refused(&c, "messages.cpm_max_objects"),
+        "above the ASN.1 bound"
+    );
     c.messages.cpm_max_objects = Some(255);
     c.messages.cpm_dcc_limited = Some(true);
     assert!(

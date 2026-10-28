@@ -19,8 +19,8 @@ use v2xw_threat::obs::{
     VerificationState,
 };
 use v2xw_threat::ts103759::{
-    BeaconProfile, CrossCheckInputs, Fusion, Scoring, Ts103759Check, Ts103759Params,
-    Ts103759Suite, TsVerdict,
+    BeaconProfile, CrossCheckInputs, Fusion, Scoring, Ts103759Check, Ts103759Params, Ts103759Suite,
+    TsVerdict,
 };
 
 const RX: NodeId = NodeId::new(1);
@@ -164,7 +164,11 @@ fn a_slow_drift_the_pairwise_checks_miss_is_caught_by_the_kalman_check() {
     }
     let first = drift
         .iter()
-        .position(|v| v.fired.iter().any(|o| o.check == Ts103759Check::KalmanConsistency))
+        .position(|v| {
+            v.fired
+                .iter()
+                .any(|o| o.check == Ts103759Check::KalmanConsistency)
+        })
         .expect("the Kalman check missed a 4 m/s drift");
     // Caught within 10 s of the drift starting (message 100 is t = 10 s).
     assert!(first < 200, "caught only at message {first}");
@@ -183,7 +187,11 @@ fn boxes() -> FrameExtras {
 
 /// Two senders' claims at 10 Hz for 3 s, through one suite with sizes; returns the
 /// verdicts on `second`'s messages.
-fn pair(first: (f64, f64, f64), second: (f64, f64, f64), own: Option<&OwnFootprint>) -> Vec<TsVerdict> {
+fn pair(
+    first: (f64, f64, f64),
+    second: (f64, f64, f64),
+    own: Option<&OwnFootprint>,
+) -> Vec<TsVerdict> {
     let mut suite = Ts103759Suite::cited_defaults();
     let mut ctx = CollectingCtx::new(3);
     let f = boxes();
@@ -216,12 +224,18 @@ fn boxes_side_by_side_and_in_a_tight_queue_do_not_fire_and_ghosts_do() {
     // Side by side in adjacent 3.5 m lanes at 15 m/s: 1.7 m of air between the bodies.
     let v = pair((0.0, 0.0, 15.0), (0.0, 3.5, 15.0), None);
     assert_eq!(fired(&v, Ts103759Check::BoxIntersection), 0);
-    assert!(v.iter().all(|v| v.score(Ts103759Check::BoxIntersection) == Some(0.0)));
+    assert!(
+        v.iter()
+            .all(|v| v.score(Ts103759Check::BoxIntersection) == Some(0.0))
+    );
 
     // A stopped queue with a 1.5 m gap between bumpers.
     let v = pair((0.0, 0.0, 0.0), (-(CAR_L + 1.5), 0.0, 0.0), None);
     assert_eq!(fired(&v, Ts103759Check::BoxIntersection), 0);
-    assert!(v.iter().all(|v| v.score(Ts103759Check::BoxIntersection) == Some(0.0)));
+    assert!(
+        v.iter()
+            .all(|v| v.score(Ts103759Check::BoxIntersection) == Some(0.0))
+    );
 
     // A ghost 2.4 m behind a car's centre along the lane: the bodies overlap by 52 %, but
     // the centres are further apart than the point check's 2 m.
@@ -312,7 +326,10 @@ fn f2md_braking_limits_flag_the_same_honest_stop() {
     // The comparison that motivates the class limits: F2MD's 4.5 m/s².
     let mut s = Ts103759Suite::new(Ts103759Params::default().f2md_kinematics());
     let vs = run(&mut s, &stop(22.0, 8.0, 1, 5), None);
-    assert!(vs.iter().any(|v| v.fired()), "F2MD's limits should flag an 8 m/s² stop");
+    assert!(
+        vs.iter().any(|v| v.fired()),
+        "F2MD's limits should flag an 8 m/s² stop"
+    );
 }
 
 #[test]
@@ -372,7 +389,11 @@ fn the_leaky_bucket_keeps_each_level_on_its_own_pseudonym() {
     assert!((s.bucket(&B).unwrap() - lb).abs() < 1e-9);
     assert!((s.bucket(&C).unwrap() - lc).abs() < 1e-9);
     // A's bucket overflowed on one hard fail; B's failing speed check is damped.
-    assert!(va.fired.iter().any(|o| o.check == Ts103759Check::SpeedPlausibility));
+    assert!(
+        va.fired
+            .iter()
+            .any(|o| o.check == Ts103759Check::SpeedPlausibility)
+    );
     assert!(!vb.fired() && !vc.fired());
 
     // B is removed (say, revoked). A and C keep their own levels (F2MD D6 moved them).
@@ -385,7 +406,11 @@ fn the_leaky_bucket_keeps_each_level_on_its_own_pseudonym() {
     // pseudonym only.
     go(&mut s, &at_speed(A, 2 * NS_PER_S, 100.0, 16.0));
     let a2 = la + honest - 1.0;
-    assert!((s.bucket(&A).unwrap() - a2).abs() < 1e-9, "{:?}", s.bucket(&A));
+    assert!(
+        (s.bucket(&A).unwrap() - a2).abs() < 1e-9,
+        "{:?}",
+        s.bucket(&A)
+    );
     assert!((s.bucket(&C).unwrap() - lc).abs() < 1e-9);
 
     // Expiry: C, silent for longer than bucket_expiry_s, is dropped when A is next heard;
@@ -424,7 +449,11 @@ fn the_windowed_mean_damps_a_single_spike_and_fires_on_a_sustained_fault() {
     let sustained = run(&mut s, &msgs(&speeds_sustained), None);
     let first = sustained
         .iter()
-        .position(|v| v.fired.iter().any(|o| o.check == Ts103759Check::SpeedPlausibility))
+        .position(|v| {
+            v.fired
+                .iter()
+                .any(|o| o.check == Ts103759Check::SpeedPlausibility)
+        })
         .expect("a sustained 60 m/s never fired");
     // (0.4 + 1.5·3)/4 = 1.225 on the third 60 m/s message (index 5).
     assert_eq!(first, 5);
@@ -433,7 +462,12 @@ fn the_windowed_mean_damps_a_single_spike_and_fires_on_a_sustained_fault() {
     late.push(msg(A, 20 * NS_PER_S, 320.0, 0.0, 16.0, 0.0, 2.0));
     let mut s = mean();
     let vs = run(&mut s, &late, None);
-    assert!(!vs[3].fired.iter().any(|o| o.check == Ts103759Check::SpeedPlausibility));
+    assert!(
+        !vs[3]
+            .fired
+            .iter()
+            .any(|o| o.check == Ts103759Check::SpeedPlausibility)
+    );
 }
 
 #[test]
@@ -472,7 +506,11 @@ fn catch_scoring_scores_the_confidence_overlap() {
 
 #[test]
 fn fusion_and_scoring_labels_round_trip() {
-    for f in [Fusion::Consecutive, Fusion::WindowedMean, Fusion::LeakyBucket] {
+    for f in [
+        Fusion::Consecutive,
+        Fusion::WindowedMean,
+        Fusion::LeakyBucket,
+    ] {
         assert_eq!(Fusion::parse(f.label()), Some(f));
     }
     assert_eq!(Ts103759Params::default().fusion, Fusion::Consecutive);
@@ -538,7 +576,11 @@ fn honest_gauss_markov_traffic_stays_under_the_stated_bounds() {
         let f = fire.get(c).copied().unwrap_or(0);
         report.push_str(&format!("{c}: {f}/{n}\n"));
     }
-    let mut confs: Vec<f64> = out.tap.iter().map(|(_, _, m)| m.claimed_pos_confidence_m).collect();
+    let mut confs: Vec<f64> = out
+        .tap
+        .iter()
+        .map(|(_, _, m)| m.claimed_pos_confidence_m)
+        .collect();
     confs.sort_by(f64::total_cmp);
     eprintln!(
         "deliveries {} broadcast confidence p5/p50/p95 {:.2}/{:.2}/{:.2} m\n{report}",
@@ -556,7 +598,10 @@ fn honest_gauss_markov_traffic_stays_under_the_stated_bounds() {
         let n = eval.get(&c).copied().unwrap_or(0);
         assert!(n > 10_000, "{c} evaluated only {n} times");
         let f = fire.get(&c).copied().unwrap_or(0) as f64 / n as f64;
-        assert!(f < FP_BOUND, "{c}: honest false-positive rate {f} over {FP_BOUND}\n{report}");
+        assert!(
+            f < FP_BOUND,
+            "{c}: honest false-positive rate {f} over {FP_BOUND}\n{report}"
+        );
     }
     // Determinism: the same deliveries give byte-identical scores.
     let (_, _, h2) = digest(&out.tap, None);

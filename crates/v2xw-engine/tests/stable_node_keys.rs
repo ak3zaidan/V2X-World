@@ -33,7 +33,10 @@ impl RunRecorder for Out {
             return;
         }
         let node = u32::try_from(v["node"].as_u64().expect("node")).expect("u32");
-        let generated = v["t_generated"].as_u64().or_else(|| v["t"].as_u64()).expect("t");
+        let generated = v["t_generated"]
+            .as_u64()
+            .or_else(|| v["t"].as_u64())
+            .expect("t");
         self.bsm
             .entry(node)
             .or_default()
@@ -78,9 +81,16 @@ fn a_roadside_count_change_leaves_every_vehicle_draw_byte_identical() {
     let n = a.len().min(b.len());
     let same = (0..n).filter(|&i| a[i] == b[i]).count();
     println!("{} / {} vehicles' BSM sequences identical", same, n);
-    assert_eq!(a.len(), b.len(), "the RSU count changed how many vehicles transmit");
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "the RSU count changed how many vehicles transmit"
+    );
     assert_eq!(same, n, "an RSU-count change moved a vehicle's own draws");
     // And the node ids themselves: the first vehicle is node 0 in both.
     assert_eq!(one.bsm.keys().next(), Some(&0));
-    assert_eq!(one.bsm.keys().collect::<Vec<_>>(), three.bsm.keys().collect::<Vec<_>>());
+    assert_eq!(
+        one.bsm.keys().collect::<Vec<_>>(),
+        three.bsm.keys().collect::<Vec<_>>()
+    );
 }

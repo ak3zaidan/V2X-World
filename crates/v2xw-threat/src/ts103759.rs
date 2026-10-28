@@ -287,9 +287,7 @@ impl Ts103759Check {
             Ts103759Check::PerceptionCrossCheck => ObservationClass::OnBoardSensors,
             Ts103759Check::Intersection
             | Ts103759Check::CpmConsistency
-            | Ts103759Check::BoxIntersection => {
-                ObservationClass::OtherStations
-            }
+            | Ts103759Check::BoxIntersection => ObservationClass::OtherStations,
             Ts103759Check::SignatureInvalid | Ts103759Check::CertificateUnknown => {
                 ObservationClass::Envelope
             }
@@ -616,9 +614,13 @@ impl Fusion {
     /// Parses a settings label.
     #[must_use]
     pub fn parse(label: &str) -> Option<Self> {
-        [Fusion::Consecutive, Fusion::WindowedMean, Fusion::LeakyBucket]
-            .into_iter()
-            .find(|m| m.label() == label)
+        [
+            Fusion::Consecutive,
+            Fusion::WindowedMean,
+            Fusion::LeakyBucket,
+        ]
+        .into_iter()
+        .find(|m| m.label() == label)
     }
 }
 
@@ -1437,7 +1439,12 @@ impl Ts103759Suite {
                 .insert(Ts103759Check::RangePlausibility, self.catch_score(f));
             let cv = speed_conf(x.frame, p.kalman_speed_floor_mps);
             let v = m.claimed_speed_mps.abs();
-            let f = interval_inside_fraction(v - cv, v + cv, f64::NEG_INFINITY, p.max_plausible_speed_mps);
+            let f = interval_inside_fraction(
+                v - cv,
+                v + cv,
+                f64::NEG_INFINITY,
+                p.max_plausible_speed_mps,
+            );
             out.scores
                 .insert(Ts103759Check::SpeedPlausibility, self.catch_score(f));
         }
@@ -1494,18 +1501,32 @@ impl Ts103759Suite {
     /// The Kalman consistency check: one constant-velocity filter per sender, measurement
     /// noise from the broadcast confidences (floored), NIS averaged over the last
     /// `kalman_window` messages against the χ² quantile of 4·n degrees of freedom.
-    fn kalman(&mut self, m: &ObservedMessage, t: SimTime, x: &CrossCheckInputs<'_>, out: &mut TsVerdict) {
+    fn kalman(
+        &mut self,
+        m: &ObservedMessage,
+        t: SimTime,
+        x: &CrossCheckInputs<'_>,
+        out: &mut TsVerdict,
+    ) {
         let p = &self.params;
         let sp = (m.claimed_pos_confidence_m / p.kalman_conf_divisor.max(1e-9))
             .max(p.kalman_pos_floor_m);
         let sv = speed_conf(x.frame, p.kalman_speed_floor_mps);
-        let sh = x.frame.and_then(|f| f.heading_confidence_rad).unwrap_or(0.0).max(0.0);
+        let sh = x
+            .frame
+            .and_then(|f| f.heading_confidence_rad)
+            .unwrap_or(0.0)
+            .max(0.0);
         let v = m.claimed_speed_mps;
         let (r_pos, r_vel) = (sp * sp, sv * sv + (v * sh) * (v * sh));
         let (sn, cs) = math::sin_cos(m.claimed_heading_rad);
         let z = [m.claimed_x_m, v * cs, m.claimed_y_m, v * sn];
         let window = p.time_delta_s();
-        let (q, n, gate_z) = (p.kalman_q_m2ps3, p.kalman_window.max(1) as usize, p.kalman_gate_z);
+        let (q, n, gate_z) = (
+            p.kalman_q_m2ps3,
+            p.kalman_window.max(1) as usize,
+            p.kalman_gate_z,
+        );
         match self.tracks.get_mut(&m.signer) {
             Some(tr) => {
                 let dt = ns_to_secs(t.saturating_sub(tr.at));
@@ -1729,7 +1750,8 @@ impl Ts103759Suite {
                 p.max_distance_from_route_m + m.claimed_pos_confidence_m.max(0.0),
             )),
         };
-        out.scores.insert(Ts103759Check::PositionPlausibility, score);
+        out.scores
+            .insert(Ts103759Check::PositionPlausibility, score);
         match (x.envelope.and_then(|e| e.cert_region), p.own_region) {
             (Some(stated), Some(own)) => {
                 let score = if stated == own {
@@ -2082,7 +2104,10 @@ impl Ts103759Suite {
                 let expiry = t.saturating_sub(v2xw_core::time::secs_to_ns(p.bucket_expiry_s));
                 // Removal by key: no other pseudonym's level moves (F2MD D6).
                 self.buckets.retain(|k, b| *k == m.signer || b.at >= expiry);
-                let b = self.buckets.entry(m.signer).or_insert(Bucket { level: 0.0, at: t });
+                let b = self
+                    .buckets
+                    .entry(m.signer)
+                    .or_insert(Bucket { level: 0.0, at: t });
                 let penalty = p.bucket_coeff * math::exp(p.bucket_exponent * (1.0 - f_min));
                 b.level = (b.level + penalty - p.bucket_leak).max(0.0);
                 b.at = t;
@@ -2550,7 +2575,12 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
             json!(p.proximity_range_l_m),
             f2md.clone(),
         ),
-        Parameter::new("max_delta_inter_s", "s", json!(p.max_delta_inter_s), f2md.clone()),
+        Parameter::new(
+            "max_delta_inter_s",
+            "s",
+            json!(p.max_delta_inter_s),
+            f2md.clone(),
+        ),
         legacy_param(
             "z_threshold",
             "-",
@@ -2608,7 +2638,12 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
             );
             q
         },
-        Parameter::new("kalman_pos_floor_m", "m", json!(p.kalman_pos_floor_m), tvt.clone()),
+        Parameter::new(
+            "kalman_pos_floor_m",
+            "m",
+            json!(p.kalman_pos_floor_m),
+            tvt.clone(),
+        ),
         Parameter::new(
             "kalman_speed_floor_mps",
             "m/s",
@@ -2619,13 +2654,35 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
             "kalman_conf_divisor",
             "-",
             json!(p.kalman_conf_divisor),
-            design("models/gnss gauss-markov card: reported confidence = RAYLEIGH_95 · √(σ² + σ_b²)"),
+            design(
+                "models/gnss gauss-markov card: reported confidence = RAYLEIGH_95 · √(σ² + σ_b²)",
+            ),
         ),
-        Parameter::new("kalman_q_m2ps3", "m^2/s^3", json!(p.kalman_q_m2ps3), bar_shalom.clone()),
-        Parameter::new("kalman_gate_z", "-", json!(p.kalman_gate_z), bar_shalom.clone()),
-        Parameter::new("kalman_window", "messages", json!(p.kalman_window), bar_shalom.clone()),
+        Parameter::new(
+            "kalman_q_m2ps3",
+            "m^2/s^3",
+            json!(p.kalman_q_m2ps3),
+            bar_shalom.clone(),
+        ),
+        Parameter::new(
+            "kalman_gate_z",
+            "-",
+            json!(p.kalman_gate_z),
+            bar_shalom.clone(),
+        ),
+        Parameter::new(
+            "kalman_window",
+            "messages",
+            json!(p.kalman_window),
+            bar_shalom.clone(),
+        ),
         Parameter::new("envelope_margin_m", "m", json!(p.envelope_margin_m), f2md),
-        Parameter::new("psmax_margin_mps2", "m/s^2", json!(p.psmax_margin_mps2), tvt.clone()),
+        Parameter::new(
+            "psmax_margin_mps2",
+            "m/s^2",
+            json!(p.psmax_margin_mps2),
+            tvt.clone(),
+        ),
         Parameter::new(
             "box_overlap_threshold",
             "-",
@@ -2637,7 +2694,12 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
             q.range = Some(vec![json!("threshold"), json!("catch")]);
             q
         },
-        Parameter::new("catch_threshold", "-", json!(p.catch_threshold), catch.clone()),
+        Parameter::new(
+            "catch_threshold",
+            "-",
+            json!(p.catch_threshold),
+            catch.clone(),
+        ),
         {
             let mut q = Parameter::new("fusion", "-", json!(p.fusion.label()), tvt.clone());
             q.range = Some(vec![
@@ -2647,12 +2709,27 @@ pub fn card(p: &Ts103759Params) -> ModelCard {
             ]);
             q
         },
-        Parameter::new("mean_history", "messages", json!(p.mean_history), tvt.clone()),
+        Parameter::new(
+            "mean_history",
+            "messages",
+            json!(p.mean_history),
+            tvt.clone(),
+        ),
         Parameter::new("mean_window_s", "s", json!(p.mean_window_s), tvt.clone()),
         Parameter::new("bucket_coeff", "-", json!(p.bucket_coeff), tvt.clone()),
-        Parameter::new("bucket_exponent", "-", json!(p.bucket_exponent), tvt.clone()),
+        Parameter::new(
+            "bucket_exponent",
+            "-",
+            json!(p.bucket_exponent),
+            tvt.clone(),
+        ),
         Parameter::new("bucket_leak", "-", json!(p.bucket_leak), tvt.clone()),
-        Parameter::new("bucket_threshold", "-", json!(p.bucket_threshold), tvt.clone()),
+        Parameter::new(
+            "bucket_threshold",
+            "-",
+            json!(p.bucket_threshold),
+            tvt.clone(),
+        ),
         Parameter::new(
             "bucket_expiry_s",
             "s",

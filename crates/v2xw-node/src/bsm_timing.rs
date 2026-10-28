@@ -1391,6 +1391,9 @@ classes:
         }
         // One increment is under ~4.5 sigma (0.9 m per axis), where the walk after 200
         // epochs has sd 0.2 * sqrt(200) = 2.8 m per axis, which a stop used to throw away.
-        assert!(worst < 1.3, "a stop or start moved the error by {worst:.2} m");
+        assert!(
+            worst < 1.3,
+            "a stop or start moved the error by {worst:.2} m"
+        );
     }
 }

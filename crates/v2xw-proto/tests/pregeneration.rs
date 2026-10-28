@@ -297,12 +297,18 @@ fn a_week_that_fell_due_before_the_request_is_held_and_downloaded_at_once() {
     let ack = run.kernel.stages.at(t, StageId::Acknowledged).unwrap();
     let dl = run.kernel.stages.at(t, StageId::Downloaded).unwrap();
     let wait = run.state.params.first_batch_delay.as_nanos();
-    assert!(wait >= 10_000_000_000, "the quick profile's generation time");
+    assert!(
+        wait >= 10_000_000_000,
+        "the quick profile's generation time"
+    );
     assert!(dl < ack + wait / 6, "ack {ack} dl {dl}");
     assert!(run.kernel.stages.at(t, StageId::Installed).is_some());
     assert_eq!(run.state.pca.issued_count, issued + 2, "week 1 was issued");
     let pca = run.state.nodes.pca;
-    let to_aca = run.kernel.steps[mark..].iter().filter(|s| s.to == pca).count();
+    let to_aca = run.kernel.steps[mark..]
+        .iter()
+        .filter(|s| s.to == pca)
+        .count();
     assert_eq!(to_aca, 0, "the top-off crossed an RA-ACA hop");
     assert_eq!(run.state.devices[&DEVICE_A].credentials.len(), 4);
 }
@@ -587,7 +593,10 @@ fn every_account_gets_its_next_horizon_week_at_the_boundary_without_asking() {
     run.run_until(WEEK_NS / 2).expect("runs");
     assert_eq!(count(&run, SpduKind::RaAcaCertRequest), before);
     run.run_until(WEEK_NS + 600 * 1_000_000_000).expect("runs");
-    assert_eq!(run.state.ra.boundary_jobs, 1, "one week, one job, both accounts");
+    assert_eq!(
+        run.state.ra.boundary_jobs, 1,
+        "one week, one job, both accounts"
+    );
     for d in [DEVICE_A, DEVICE_B] {
         assert!(run.state.ra.accounts[&d].generated.contains(&far), "{d:?}");
     }
@@ -601,7 +610,9 @@ fn every_account_gets_its_next_horizon_week_at_the_boundary_without_asking() {
         .collect();
     assert_eq!(added.len(), 2, "one certificate (jmax 1) per account");
     assert!(
-        added.iter().all(|t| (WEEK_NS..WEEK_NS + 600 * 1_000_000_000).contains(t)),
+        added
+            .iter()
+            .all(|t| (WEEK_NS..WEEK_NS + 600 * 1_000_000_000).contains(t)),
         "at the boundary: {added:?}"
     );
     // Neither device asked: no top-off ran.

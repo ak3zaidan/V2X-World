@@ -196,12 +196,7 @@ pub(crate) fn plan(s: &Scenario) -> Result<Option<ChannelPlan>, Vec<(String, Str
                 .iter()
                 .position(|m| *m == mcs)
                 .unwrap_or(2) as u8;
-            v2xw_radio::regulation::own_channel_leakage(
-                region,
-                tech,
-                &[primary.number, sc],
-                index,
-            )
+            v2xw_radio::regulation::own_channel_leakage(region, tech, &[primary.number, sc], index)
         }
         _ => BTreeMap::new(),
     };

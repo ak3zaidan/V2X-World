@@ -356,7 +356,8 @@ impl TriggerState {
 
     fn forget_stale(&mut self, now: SimTime) {
         self.cams.retain(|_, h| within(now, h.at, CAM_FRESH));
-        self.denms.retain(|_, h| within(now, h.at, DENM_HEARD_FRESH));
+        self.denms
+            .retain(|_, h| within(now, h.at, DENM_HEARD_FRESH));
     }
 
     /// Whether the speed was above 80 km/h for a block of at least 30 s within
@@ -378,7 +379,9 @@ impl TriggerState {
     }
 
     fn map_non_urban(&self) -> bool {
-        self.history.back().is_some_and(|s| s.non_urban == Some(true))
+        self.history
+            .back()
+            .is_some_and(|s| s.non_urban == Some(true))
     }
 
     /// Whether the map said non-urban at every reading of the last `d`.
@@ -407,7 +410,9 @@ impl TriggerState {
             if s.v > DROP_INITIAL_MPS
                 && s.a >= -DROP_INITIAL_DECEL_MPS2
                 && s.v - last.v >= DROP_MIN_MPS
-                && window[i + 1..].iter().any(|x| x.a < -DROP_INSTANT_DECEL_MPS2)
+                && window[i + 1..]
+                    .iter()
+                    .any(|x| x.a < -DROP_INSTANT_DECEL_MPS2)
             {
                 return true;
             }
@@ -457,7 +462,11 @@ impl TriggerState {
         }
         let from = now.saturating_sub(SLOW_T1.as_nanos()).max(origin);
         let (mut sum, mut n) = (0.0, 0u32);
-        for s in self.history.iter().filter(|s| s.t >= from && s.v >= STATIONARY_MPS) {
+        for s in self
+            .history
+            .iter()
+            .filter(|s| s.t >= from && s.v >= STATIONARY_MPS)
+        {
             sum += s.v;
             n += 1;
         }
@@ -553,8 +562,8 @@ impl TriggerState {
         stationary_event: bool,
     ) -> Option<u8> {
         self.forget_stale(now);
-        let pre = !stationary_event
-            && (self.map_non_urban() || self.fast_block(now, SLOW_DOWN_LOOKBACK));
+        let pre =
+            !stationary_event && (self.map_non_urban() || self.fast_block(now, SLOW_DOWN_LOOKBACK));
         let stood = self.standing_for(now) >= SLOW_T2.as_nanos();
         // TRCO_0, 1, 2, 4, 5, 6.
         let raw = [

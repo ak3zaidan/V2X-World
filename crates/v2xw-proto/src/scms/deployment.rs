@@ -246,7 +246,10 @@ pub fn great_circle_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
     let dp = p2 - p1;
     let dl = (lon2 - lon1).to_radians();
-    let a = v2xw_core::math::sin(dp / 2.0).powi(2) + v2xw_core::math::cos(p1) * v2xw_core::math::cos(p2) * v2xw_core::math::sin(dl / 2.0).powi(2);
+    let a = v2xw_core::math::sin(dp / 2.0).powi(2)
+        + v2xw_core::math::cos(p1)
+            * v2xw_core::math::cos(p2)
+            * v2xw_core::math::sin(dl / 2.0).powi(2);
     2.0 * EARTH_RADIUS_KM * v2xw_core::math::asin(v2xw_core::math::sqrt(a).min(1.0))
 }
 

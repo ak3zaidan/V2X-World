@@ -2067,8 +2067,12 @@ impl NativeMobility {
             }
             let mut moved = *ego;
             moved.lane = beside.lane;
-            if VehicleCf(&self.cf, &self.vtype_cf).accel(&moved, Some(&l), &lane_view, &self.weather)
-                < -PULL_OUT_FOLLOWER_DECEL_MPS2
+            if VehicleCf(&self.cf, &self.vtype_cf).accel(
+                &moved,
+                Some(&l),
+                &lane_view,
+                &self.weather,
+            ) < -PULL_OUT_FOLLOWER_DECEL_MPS2
             {
                 return None;
             }
@@ -3820,9 +3824,12 @@ impl NativeMobility {
             let safe = |speed: f64| {
                 let mut probe = a.clone();
                 probe.speed_mps = speed;
-                VehicleCf(&self.cf, &self.vtype_cf)
-                    .accel(&probe.view(world), Some(&obstacle), &view, &self.weather)
-                    >= -b
+                VehicleCf(&self.cf, &self.vtype_cf).accel(
+                    &probe.view(world),
+                    Some(&obstacle),
+                    &view,
+                    &self.weather,
+                ) >= -b
             };
             if !safe(v) {
                 let (mut lo, mut hi) = (0.0, v);
@@ -5251,8 +5258,12 @@ impl NativeMobility {
             }
             let mut moved = *ego;
             moved.lane = target.lane;
-            if VehicleCf(&self.cf, &self.vtype_cf).accel(&moved, Some(&l), &lane_view, &self.weather)
-                < -PULL_OUT_FOLLOWER_DECEL_MPS2
+            if VehicleCf(&self.cf, &self.vtype_cf).accel(
+                &moved,
+                Some(&l),
+                &lane_view,
+                &self.weather,
+            ) < -PULL_OUT_FOLLOWER_DECEL_MPS2
             {
                 return None;
             }
@@ -6808,8 +6819,12 @@ impl Mobility for NativeMobility {
                     actor.driver.comfort_decel_mps2,
                 )
             } else {
-                VehicleCf(&self.cf, &self.vtype_cf)
-                    .accel(&ego_capped, leader.as_ref(), &lane_view, &self.weather)
+                VehicleCf(&self.cf, &self.vtype_cf).accel(
+                    &ego_capped,
+                    leader.as_ref(),
+                    &lane_view,
+                    &self.weather,
+                )
             };
             // A merge partner that reaches the merge point first is fallen in behind by the
             // time the ego gets there ([`merge_accel`]), not braked for as if it stood at
@@ -6850,7 +6865,12 @@ impl Mobility for NativeMobility {
                 // still slows for it. Without this, the relaxed stop for a line 60 m away
                 // (−0.8 m/s²) overrode the anticipation of a 6 m/s turn, the car reached
                 // the connector at 9.7 m/s, and the model braked it there at −5.6 m/s².
-                accel = accel.min(VehicleCf(&self.cf, &self.vtype_cf).accel(&ego_capped, None, &lane_view, &self.weather));
+                accel = accel.min(VehicleCf(&self.cf, &self.vtype_cf).accel(
+                    &ego_capped,
+                    None,
+                    &lane_view,
+                    &self.weather,
+                ));
                 // Whatever the stop line allows, the car ahead still binds. The relaxed
                 // stop lets a vehicle creep up to a line (or a crosswalk's edge) it is
                 // already inside its standstill gap of; with a car standing just beyond
@@ -6858,11 +6878,12 @@ impl Mobility for NativeMobility {
                 // for seconds on end (the auditor's gap-below-s0 class, 308 vehicle-steps
                 // on the shipped Midtown run).
                 if let Some(v) = nearest_vehicle {
-                    accel =
-                        accel.min(
-                            VehicleCf(&self.cf, &self.vtype_cf)
-                                .accel(&ego_capped, Some(&v), &lane_view, &self.weather),
-                        );
+                    accel = accel.min(VehicleCf(&self.cf, &self.vtype_cf).accel(
+                        &ego_capped,
+                        Some(&v),
+                        &lane_view,
+                        &self.weather,
+                    ));
                 }
                 // And so does a merge partner ahead: relaxed, two cars converging on a
                 // lane drop crept side by side towards the same crosswalk at 0.1 m/s,
@@ -6889,8 +6910,12 @@ impl Mobility for NativeMobility {
                     .max(line - STOP_LINE_MARGIN_M + actor.driver.min_gap_m);
                 let slack = (line - 0.2) - stop.gap_m;
                 let a_stop = static_obstacle_accel(
-                    VehicleCf(&self.cf, &self.vtype_cf)
-                        .accel(&ego_capped, Some(&stop), &lane_view, &self.weather),
+                    VehicleCf(&self.cf, &self.vtype_cf).accel(
+                        &ego_capped,
+                        Some(&stop),
+                        &lane_view,
+                        &self.weather,
+                    ),
                     ego.speed_mps,
                     stop.gap_m,
                     actor.driver.min_gap_m,
@@ -11207,8 +11232,7 @@ mod tests {
         seed: u64,
         keep_states: bool,
     ) -> ApproachRun {
-        let world =
-            v2xw_world::procedural::grid(&grid, &ImportOptions::default()).expect("grid");
+        let world = v2xw_world::procedural::grid(&grid, &ImportOptions::default()).expect("grid");
         let (approach, beyond) = signalised_approach(&world);
         let rng = RngRegistry::new(seed);
         let junction = world.edge(world.lane(approach).edge).to;
@@ -11574,6 +11598,9 @@ impl VehicleCf<'_> {
         lane: &LaneView,
         w: &WeatherState,
     ) -> f64 {
-        self.1.get(&ego.actor).unwrap_or(self.0).accel(ego, leader, lane, w)
+        self.1
+            .get(&ego.actor)
+            .unwrap_or(self.0)
+            .accel(ego, leader, lane, w)
     }
 }

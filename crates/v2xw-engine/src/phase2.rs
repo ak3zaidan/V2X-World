@@ -238,12 +238,12 @@ impl LocalSuite {
         x: &v2xw_threat::ts103759::CrossCheckInputs<'_>,
     ) -> LocalVerdict {
         match self {
-            LocalSuite::Research(d) => LocalVerdict::Legacy(v2xw_threat::Detector::on_message(
-                &mut **d, ctx, me, m, env,
-            )),
-            LocalSuite::Us(d) => LocalVerdict::Legacy(v2xw_threat::Detector::on_message(
-                &mut **d, ctx, me, m, env,
-            )),
+            LocalSuite::Research(d) => {
+                LocalVerdict::Legacy(v2xw_threat::Detector::on_message(&mut **d, ctx, me, m, env))
+            }
+            LocalSuite::Us(d) => {
+                LocalVerdict::Legacy(v2xw_threat::Detector::on_message(&mut **d, ctx, me, m, env))
+            }
             LocalSuite::Ts(d) => LocalVerdict::Ts(d.check(ctx, me, m, env, x)),
         }
     }
@@ -1621,10 +1621,8 @@ pub struct Phase2Report {
     /// the messages the check ran on, scored at or above 1, and fired after the fusion
     /// gate. The class is ground truth for the run report; no detector reads it.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub ts_checks: std::collections::BTreeMap<
-        String,
-        std::collections::BTreeMap<String, TsCheckCount>,
-    >,
+    pub ts_checks:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, TsCheckCount>>,
     /// `detect/ts103759` only, per sender class: the messages judged, those on which any
     /// check scored at or above 1, and those on which any check fired (the per-message
     /// level F2MD and VeReMi-Ext publish).
@@ -2842,25 +2840,23 @@ impl Phase2 {
             let evasion = evasion_params(&a.id, &a.params)?;
             let kind = match &evasion {
                 Some((k, _, _)) => Some(*k),
-                None => a
-                    .id
-                    .strip_prefix("threat/attacker/legacy/")
-                    .and_then(AttackKind::parse),
+                None => {
+                    a.id.strip_prefix("threat/attacker/legacy/")
+                        .and_then(AttackKind::parse)
+                }
             };
-            let kind =
-                kind
-                    .ok_or_else(|| {
-                        conflict(
-                            "threats.attackers[].id",
-                            format!(
-                                "{} is not an attacker this build ships: the legacy family is \
+            let kind = kind.ok_or_else(|| {
+                conflict(
+                    "threats.attackers[].id",
+                    format!(
+                        "{} is not an attacker this build ships: the legacy family is \
                                  `threat/attacker/legacy/<Kind>`, e.g. \
                                  threat/attacker/legacy/ConstPos, and the evasion family \
                                  `threat/attacker/evasion/BenignClassMimic`",
-                                a.id
-                            ),
-                        )
-                    })?;
+                        a.id
+                    ),
+                )
+            })?;
             if let Some(why) = unrendered(kind) {
                 return Err(conflict(
                     "threats.attackers[].id",
@@ -5006,10 +5002,12 @@ impl Phase2 {
         // 1609.2 `generationTime` is the device's clock with its own jitter (28 ms sd on
         // the CV pilots, `bsm-timing-cvpilot.yaml`), which put a locked device's phase off
         // the epoch on most reports. A report with no BSM evidence keeps the evidence time.
-        let secmark_phase_ms = log.secmark.get(&r.report_id).map_or(
-            ((r.st_tend / 1_000_000) % 50) as u32,
-            |sm| u32::from(*sm) % 50,
-        );
+        let secmark_phase_ms = log
+            .secmark
+            .get(&r.report_id)
+            .map_or(((r.st_tend / 1_000_000) % 50) as u32, |sm| {
+                u32::from(*sm) % 50
+            });
         log.received.push(crate::report_records::MaReceived {
             t,
             report_id: r.report_id.clone(),
@@ -7566,7 +7564,11 @@ impl Phase2 {
                 // Before a provider's first in-run publication reaches this RA it
                 // serves that provider's list from before the run (its store's).
                 let n = visible.iter().find(|(j, _)| *j == k).map_or_else(
-                    || self.runs.get(k).map_or(0, |r| r.state.crl_store.entries.len()),
+                    || {
+                        self.runs
+                            .get(k)
+                            .map_or(0, |r| r.state.crl_store.entries.len())
+                    },
                     |(_, v)| v.entries.len(),
                 );
                 let n = u32::try_from(n).unwrap_or(u32::MAX);
@@ -7576,9 +7578,7 @@ impl Phase2 {
         let ctl = self
             .runs
             .get(h)
-            .and_then(|r| {
-                v2xw_sec::ctl::encode_composite_crl_coer(&[], &r.state.gov.ctl.spdu).ok()
-            })
+            .and_then(|r| v2xw_sec::ctl::encode_composite_crl_coer(&[], &r.state.gov.ctl.spdu).ok())
             .map_or(0, |b| u32::try_from(b.len()).unwrap_or(u32::MAX));
         lists.saturating_add(ctl)
     }
@@ -9634,9 +9634,17 @@ mod provider_failure_tests {
         );
         let signed = {
             let s = real.published_crl_for(node).2;
-            if s.is_empty() { real.prerun_crl.3.clone() } else { s }
+            if s.is_empty() {
+                real.prerun_crl.3.clone()
+            } else {
+                s
+            }
         };
-        assert!(signed.len() >= 2, "every CRACA's list is signed: {}", signed.len());
+        assert!(
+            signed.len() >= 2,
+            "every CRACA's list is signed: {}",
+            signed.len()
+        );
         let r = real.composite_size(0, 0, &signed);
         let m = modelled.crl_download_size(node);
         let ratio = f64::from(m) / f64::from(r);

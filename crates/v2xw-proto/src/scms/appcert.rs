@@ -278,7 +278,11 @@ pub fn request_tbs_for(
     verify_key: &Point,
     valid_from: u32,
 ) -> Result<ToBeSignedCertificate> {
-    let psids = if psids.is_empty() { kind.psids() } else { psids };
+    let psids = if psids.is_empty() {
+        kind.psids()
+    } else {
+        psids
+    };
     Ok(ToBeSignedCertificate::new(
         CertificateId::none(()),
         HashedId3(FixedOctetString::from([0u8; 3])),
@@ -746,7 +750,16 @@ pub fn ee_request_spdu(
     valid_from: u32,
     g: &mut Drbg,
 ) -> Result<Vec<u8>> {
-    ee_request_spdu_for(pki, enrolment, kind, kind.psids(), generation_time, keys, valid_from, g)
+    ee_request_spdu_for(
+        pki,
+        enrolment,
+        kind,
+        kind.psids(),
+        generation_time,
+        keys,
+        valid_from,
+        g,
+    )
 }
 
 /// [`ee_request_spdu`] asking for `psids` ([`request_tbs_for`]).

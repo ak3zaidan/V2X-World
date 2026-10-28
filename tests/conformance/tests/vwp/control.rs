@@ -157,9 +157,14 @@ fn inventory_of_section_6_15() -> (usize, Vec<String>) {
         .and_then(|n| n.trim().parse().ok())
         .expect("§6.15 states its count in bold");
     let mut names: Vec<String> = Vec::new();
-    for row in section.lines().filter(|l| l.starts_with("| ") && !l.starts_with("| Group")) {
+    for row in section
+        .lines()
+        .filter(|l| l.starts_with("| ") && !l.starts_with("| Group"))
+    {
         let cells: Vec<&str> = row.split('|').collect();
-        let Some(methods) = cells.get(2) else { continue };
+        let Some(methods) = cells.get(2) else {
+            continue;
+        };
         names.extend(methods.split('`').skip(1).step_by(2).map(str::to_string));
     }
     names.sort_unstable();

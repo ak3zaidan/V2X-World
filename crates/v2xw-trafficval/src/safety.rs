@@ -316,7 +316,8 @@ impl SafetyObserver {
             })
             .collect();
         let net = ZonesNet(&self.zones);
-        self.ssm.step_network(t_s, &ssm_actors, &follows, &paths, &net);
+        self.ssm
+            .step_network(t_s, &ssm_actors, &follows, &paths, &net);
 
         // Post-encroachment time at crossing zones.
         let mut present = BTreeSet::new();
@@ -605,7 +606,8 @@ fn ssm_check(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         }
     };
     let crossing = ttc_conflicts(EncounterType::Crossing);
-    let mut rows = vec![Row::held(
+    let mut rows =
+        vec![Row::held(
         "crossing conflicts with minimum TTC < 3.0 s found",
         crossing as f64,
         (1.0, 1e9),
@@ -623,7 +625,10 @@ fn ssm_check(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         let n = ttc_conflicts(ty);
         rows.push(
             Row::reported(
-                format!("{} conflicts (minimum TTC < 3.0 s) per vehicle-km", ty.label()),
+                format!(
+                    "{} conflicts (minimum TTC < 3.0 s) per vehicle-km",
+                    ty.label()
+                ),
                 per_km(n),
                 "SUMO SSM device default TTC threshold 3.0 s; reported",
             )
@@ -679,14 +684,20 @@ fn ssm_check(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         s.ssm.len(),
         s.vehicle_km
     )];
-    for c in s.ssm.iter().filter(|c| c.ty == EncounterType::Crossing).take(3) {
+    for c in s
+        .ssm
+        .iter()
+        .filter(|c| c.ty == EncounterType::Crossing)
+        .take(3)
+    {
         notes.push(format!(
             "crossing: actors {} and {}, {:.1}-{:.1} s, minimum TTC {} s",
             c.a.index(),
             c.b.index(),
             c.begin_s,
             c.end_s,
-            c.min_ttc.map_or("—".to_string(), |(_, v)| format!("{v:.2}"))
+            c.min_ttc
+                .map_or("—".to_string(), |(_, v)| format!("{v:.2}"))
         ));
     }
     Ok(Outcome { rows, notes })

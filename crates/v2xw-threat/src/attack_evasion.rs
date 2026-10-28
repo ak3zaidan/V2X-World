@@ -284,7 +284,11 @@ mod tests {
         for i in 0..300u64 {
             let t = i * NS_PER_S / 10;
             let x = 1.5 * i as f64;
-            assert_eq!(step(&mut plain, t, x), step(&mut mimic, t, x), "message {i}");
+            assert_eq!(
+                step(&mut plain, t, x),
+                step(&mut mimic, t, x),
+                "message {i}"
+            );
         }
     }
 
@@ -298,7 +302,10 @@ mod tests {
         let mut mimic = BenignClassMimic::new(legacy(AttackKind::ConstPos), d);
         let (before, a0) = step(&mut mimic, 5 * NS_PER_S, 75.0);
         let _ = step(&mut plain, 5 * NS_PER_S, 75.0);
-        assert_eq!((before.sec_mark_shift_ms, before.stated_accuracy_m), (None, None));
+        assert_eq!(
+            (before.sec_mark_shift_ms, before.stated_accuracy_m),
+            (None, None)
+        );
         assert!(a0.is_empty());
         let (p, pa) = step(&mut plain, 20 * NS_PER_S, 300.0);
         let (m, ma) = step(&mut mimic, 20 * NS_PER_S, 300.0);
@@ -323,6 +330,8 @@ mod tests {
             assert_eq!(EvasionKind::parse(k.as_str()), Some(k));
         }
         assert_eq!(EvasionKind::parse("ConstPos"), None);
-        card(&Disguise::default()).validate().expect("card validates");
+        card(&Disguise::default())
+            .validate()
+            .expect("card validates");
     }
 }

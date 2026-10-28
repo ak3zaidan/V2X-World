@@ -144,7 +144,10 @@ fn the_perception_block_refuses_what_a_cpm_cannot_carry() {
             "{field} is not refused: {errors:#?}"
         );
     }
-    assert!(!errors.iter().any(|e| e.contains("perception.vehicle[0]")), "{errors:#?}");
+    assert!(
+        !errors.iter().any(|e| e.contains("perception.vehicle[0]")),
+        "{errors:#?}"
+    );
     // A well-formed block loads.
     s.perception = Some(PerceptionSpec {
         vehicle: Some(vec![sensor(1, 250.0, 18.0), sensor(4, 80.0, 150.0)]),
@@ -158,7 +161,10 @@ fn the_perception_block_refuses_what_a_cpm_cannot_carry() {
         .iter()
         .map(ToString::to_string)
         .collect();
-    assert!(errors.iter().any(|e| e.contains("perception")), "{errors:?}");
+    assert!(
+        errors.iter().any(|e| e.contains("perception")),
+        "{errors:?}"
+    );
 }
 
 /// An outline-occlusion run with a rear radar on every car is deterministic and still

@@ -1098,7 +1098,10 @@ impl<C: Ctx + ?Sized> Phy<C> for OfdmPhy {
         self.next_tx_id += 1;
         self.transmissions
             .insert(handle.id, Transmission { handle, frame: *f });
-        let intervals = self.tx_intervals.entry((tx.index(), f.channel.0)).or_default();
+        let intervals = self
+            .tx_intervals
+            .entry((tx.index(), f.channel.0))
+            .or_default();
         // Drop what can no longer matter, before appending. Without this the list grows
         // for the whole run — at the 02-architecture.md §7 design target (10,000 nodes,
         // 10 Hz, 600 s) that is 6e7 intervals and a 6,000-entry linear scan inside every
@@ -1629,7 +1632,11 @@ mod tests {
         let table = own_channel_leakage(Region::Us2016, g5, &[172, 174, 180], 2);
         let acir = adjacent_acir_db(Region::Us2016, g5, 174, g5, 172, 2).expect("adjacent");
         assert_eq!(table.get(&(174, 172)), Some(&acir));
-        assert_eq!(table.len(), 6, "every ordered pair of distinct channels: {table:?}");
+        assert_eq!(
+            table.len(),
+            6,
+            "every ordered pair of distinct channels: {table:?}"
+        );
         // Adjacent: the 802.11p 6 Mbit/s ACS (13 dB) dominates the mask's ACLR.
         assert!((10.0..16.0).contains(&acir), "ACIR 174 -> 172 = {acir} dB");
         let mut phy = OfdmPhy::new(Tier::Medium);
@@ -1642,7 +1649,11 @@ mod tests {
         phy.register_arrival(arrival(2, 0, p, 0, on174));
         let rx = NodeId::new(0);
         let e = phy.energy_dbm(rx, ChannelId(172), 1_000);
-        assert!((e - (p - acir)).abs() < 1e-9, "energy {e} dBm, want {}", p - acir);
+        assert!(
+            (e - (p - acir)).abs() < 1e-9,
+            "energy {e} dBm, want {}",
+            p - acir
+        );
         assert!((phy.energy_dbm(rx, ChannelId(174), 1_000) - p).abs() < 1e-9);
         let leak = phy
             .leaked_dbm(p, ChannelId(174), ChannelId(172))
@@ -1656,12 +1667,22 @@ mod tests {
         let n = phy.noise_floor();
         let rise = (-80.0 - w[0].2) - n;
         let want = 10.0 * math::log10(1.0 + math::pow(10.0, (p - acir - n) / 10.0));
-        assert!((rise - want).abs() < 1e-9, "noise rise {rise} dB, want {want} dB");
+        assert!(
+            (rise - want).abs() < 1e-9,
+            "noise rise {rise} dB, want {want} dB"
+        );
         // Ideal filters: no energy across channels and nothing to add as an interferer.
         let mut ideal = OfdmPhy::new(Tier::Medium);
         ideal.register_arrival(arrival(2, 0, p, 0, on174));
-        assert_eq!(ideal.energy_dbm(rx, ChannelId(172), 1_000), f64::NEG_INFINITY);
-        assert!(ideal.leaked_dbm(p, ChannelId(174), ChannelId(172)).is_none());
+        assert_eq!(
+            ideal.energy_dbm(rx, ChannelId(172), 1_000),
+            f64::NEG_INFINITY
+        );
+        assert!(
+            ideal
+                .leaked_dbm(p, ChannelId(174), ChannelId(172))
+                .is_none()
+        );
         assert_eq!(ideal.leaked_dbm(p, ChannelId(172), ChannelId(172)), Some(p));
     }
 

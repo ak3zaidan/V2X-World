@@ -593,7 +593,11 @@ fn a_roadside_unit_is_heard_by_both_vehicles_and_hears_them() {
         assert_eq!(slot, k, "SPaT period: {spat_t:?}");
     }
     let slots = (2_000_000_000 - first - 1) / 100_000_000 + 1;
-    assert_eq!(spat_t.len() as u64, slots, "every SPaT slot to the end: {spat_t:?}");
+    assert_eq!(
+        spat_t.len() as u64,
+        slots,
+        "every SPaT slot to the end: {spat_t:?}"
+    );
     let unit_msgs = spat_t.len() + 2;
     assert_eq!(report.reception_attempts, 2 * (40 + unit_msgs as u64));
     assert_eq!(report.receptions_ok, report.reception_attempts);
@@ -618,7 +622,10 @@ fn a_roadside_unit_is_heard_by_both_vehicles_and_hears_them() {
             .filter(|r| r.rx == car && r.tx.is_some_and(|t| units.contains(&t)))
             .filter(|r| r.outcome == RxFate::Delivered)
             .count();
-        assert_eq!(heard, unit_msgs, "{car:?} heard {heard} of the unit's {unit_msgs} messages");
+        assert_eq!(
+            heard, unit_msgs,
+            "{car:?} heard {heard} of the unit's {unit_msgs} messages"
+        );
     }
     let unit = *units.iter().next().unwrap();
     let at_unit = rxs

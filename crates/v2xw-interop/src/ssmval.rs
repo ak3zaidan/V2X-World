@@ -87,7 +87,9 @@ fn attr(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> {
 }
 
 fn num(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<f64> {
-    attr(e, key).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite())
+    attr(e, key)
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| v.is_finite())
 }
 
 /// Parses SUMO's SSM output.
@@ -284,7 +286,10 @@ mod tests {
         assert_eq!(log[3].min_ppet, Some(1.1));
         let n = count_sumo(&log, (180.0, 900.0));
         assert_eq!(n.duplicates, 1);
-        assert_eq!(n.logged, 3, "the warm-up conflict at 10 s is outside the window");
+        assert_eq!(
+            n.logged, 3,
+            "the warm-up conflict at 10 s is outside the window"
+        );
         assert_eq!(n.of(EncounterType::Crossing), 1);
         assert_eq!(n.of(EncounterType::Following), 1);
         assert_eq!(n.of(EncounterType::Merging), 0);
@@ -323,7 +328,10 @@ mod tests {
         let mut o = TypeCounts::default();
         o.by_type.insert(EncounterType::Following, 140);
         o.by_type.insert(EncounterType::Crossing, 50);
-        assert!(agreement(&o, &s).0, "crossing is below MIN_COUNT, following 1.4x");
+        assert!(
+            agreement(&o, &s).0,
+            "crossing is below MIN_COUNT, following 1.4x"
+        );
         o.by_type.insert(EncounterType::Following, 160);
         assert!(!agreement(&o, &s).0);
         o.by_type.insert(EncounterType::Following, 60);

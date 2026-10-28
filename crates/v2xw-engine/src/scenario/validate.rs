@@ -4739,7 +4739,9 @@ fn perception(s: &Scenario, e: &mut Vec<ScenarioError>) {
             "would change nothing: no roadside unit has the 'cpm' role".to_string(),
         ));
     }
-    let suite = |field: &str, list: &[crate::scenario::schema::SensorConf], e: &mut Vec<ScenarioError>| {
+    let suite = |field: &str,
+                 list: &[crate::scenario::schema::SensorConf],
+                 e: &mut Vec<ScenarioError>| {
         if list.is_empty() || list.len() > 7 {
             e.push(conflict(
                 field,
@@ -4786,13 +4788,15 @@ fn perception(s: &Scenario, e: &mut Vec<ScenarioError>) {
                     e.push(conflict(&f(leaf), format!("{v} is not a probability")));
                 }
             }
-            for (leaf, v) in [("ahead_m", c.ahead_m), ("left_m", c.left_m), ("height_m", c.height_m)] {
+            for (leaf, v) in [
+                ("ahead_m", c.ahead_m),
+                ("left_m", c.left_m),
+                ("height_m", c.height_m),
+            ] {
                 if !v.is_finite() || v.abs() > 327.67 {
                     e.push(conflict(
                         &f(leaf),
-                        format!(
-                            "{v} m is outside ±327.67 m, the CPM shape's CartesianCoordinate"
-                        ),
+                        format!("{v} m is outside ±327.67 m, the CPM shape's CartesianCoordinate"),
                     ));
                 }
             }
@@ -4803,7 +4807,10 @@ fn perception(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 if let Some(v) = v
                     && !(v.is_finite() && v >= 0.0)
                 {
-                    e.push(conflict(&f(leaf), format!("{v} is not a non-negative error")));
+                    e.push(conflict(
+                        &f(leaf),
+                        format!("{v} is not a non-negative error"),
+                    ));
                 }
             }
         }
@@ -8239,10 +8246,7 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
             "messages.cpm_quality_threshold",
             m.cpm_quality_threshold.map(f64::from),
         ),
-        (
-            "messages.cpm_max_objects",
-            m.cpm_max_objects.map(f64::from),
-        ),
+        ("messages.cpm_max_objects", m.cpm_max_objects.map(f64::from)),
         (
             "messages.path_history_points",
             m.path_history_points.map(f64::from),
@@ -8382,13 +8386,21 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
         }
     }
     for (path, set, ty) in [
-        ("messages.cpm_dcc_limited", m.cpm_dcc_limited.is_some(), "cpm"),
+        (
+            "messages.cpm_dcc_limited",
+            m.cpm_dcc_limited.is_some(),
+            "cpm",
+        ),
         (
             "messages.cpm_quality_threshold",
             m.cpm_quality_threshold.is_some(),
             "cpm",
         ),
-        ("messages.cpm_max_objects", m.cpm_max_objects.is_some(), "cpm"),
+        (
+            "messages.cpm_max_objects",
+            m.cpm_max_objects.is_some(),
+            "cpm",
+        ),
         (
             "messages.denm_traffic_condition",
             m.denm_traffic_condition.is_some(),

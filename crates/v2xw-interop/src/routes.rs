@@ -733,7 +733,9 @@ impl Parser {
         let depart_lane = self.depart_lane(el, all, d.lane_u);
         let depart_pos = self.depart_pos(el, all, d.pos_u);
         let depart_speed = self.depart_speed(el, all, d.speed_u);
-        let own = all.get("speedFactor").and_then(|s| s.trim().parse::<f64>().ok());
+        let own = all
+            .get("speedFactor")
+            .and_then(|s| s.trim().parse::<f64>().ok());
         if let Some(s) = all.get("speedFactor")
             && own.is_none()
         {
@@ -968,8 +970,10 @@ impl RouteFile {
                                     .unwrap_or_default();
                                 let d = p.type_dists.entry(id.clone()).or_default();
                                 for (i, m) in list.split_whitespace().enumerate() {
-                                    d.members
-                                        .push((m.to_string(), probs.get(i).copied().unwrap_or(1.0)));
+                                    d.members.push((
+                                        m.to_string(),
+                                        probs.get(i).copied().unwrap_or(1.0),
+                                    ));
                                 }
                             }
                             if !empty {
@@ -989,8 +993,10 @@ impl RouteFile {
                                     .unwrap_or_default();
                                 let d = p.route_dists.entry(id.clone()).or_default();
                                 for (i, m) in list.split_whitespace().enumerate() {
-                                    d.members
-                                        .push((m.to_string(), probs.get(i).copied().unwrap_or(1.0)));
+                                    d.members.push((
+                                        m.to_string(),
+                                        probs.get(i).copied().unwrap_or(1.0),
+                                    ));
                                 }
                             }
                             if !empty {
@@ -1010,7 +1016,11 @@ impl RouteFile {
                                 *nested = edges;
                             } else {
                                 let id = all.get("id").cloned().unwrap_or_else(|| {
-                                    format!("{}#{}", route_dist.clone().unwrap_or_default(), p.routes.len())
+                                    format!(
+                                        "{}#{}",
+                                        route_dist.clone().unwrap_or_default(),
+                                        p.routes.len()
+                                    )
                                 });
                                 if let Some(d) = route_dist.as_ref() {
                                     let w = all
@@ -1116,7 +1126,9 @@ impl RouteFile {
             sigma: t.and_then(|t| t.sigma),
             speed_factor: v.speed_factor,
             depart_speed: v.depart_speed,
-            car_following: t.and_then(|t| t.car_follow_model.as_deref()).and_then(applied_model),
+            car_following: t
+                .and_then(|t| t.car_follow_model.as_deref())
+                .and_then(applied_model),
             model_seed: self.seed,
         }
     }
@@ -1168,7 +1180,6 @@ pub fn lanes_along_edges(
         .search(world, origin, dest, 0, &cost)
         .map(|r| r.lanes)
 }
-
 
 /// The number of lane changes along `lanes`: consecutive lanes not joined by a connection.
 fn lane_changes(world: &World, lanes: &[LaneId]) -> usize {
@@ -1402,7 +1413,6 @@ pub fn write_rou_xml(trips: &[(TripRequest, Vec<String>)], ids: &SumoIds, world:
     s
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1433,7 +1443,10 @@ mod tests {
         let t0 = f.vehicles.iter().find(|v| v.id == "t0").unwrap();
         assert!(!t0.routed);
         assert!(matches!(t0.depart_pos, DepartPos::Random(_)));
-        assert_eq!(f.ledger.approximated.get("trip@departPos=random_free"), Some(&1));
+        assert_eq!(
+            f.ledger.approximated.get("trip@departPos=random_free"),
+            Some(&1)
+        );
         // Sorted by departure.
         assert!(
             f.vehicles
@@ -1459,7 +1472,10 @@ mod tests {
         assert_eq!(d.min_gap_m, Some(3.1));
         assert_eq!(d.depart_speed, Some(DepartSpeed::Desired));
         let (sf, mean, dev) = d.speed_factor.unwrap();
-        assert!((1.0..=1.4).contains(&sf) && mean == 1.2 && dev == 0.05, "{sf}");
+        assert!(
+            (1.0..=1.4).contains(&sf) && mean == 1.2 && dev == 0.05,
+            "{sf}"
+        );
         assert!(matches!(v.depart_lane, DepartLane::Random(_)));
         assert_eq!(v.depart_pos, DepartPos::Metres(-10.0));
         assert_eq!(f.vtypes["t"].max_speed_mps, Some(20.0));
@@ -1485,12 +1501,14 @@ mod tests {
             })
             .collect();
         let m = counts.iter().sum::<f64>() / counts.len() as f64;
-        let var =
-            counts.iter().map(|c| (c - m) * (c - m)).sum::<f64>() / (counts.len() - 1) as f64;
+        let var = counts.iter().map(|c| (c - m) * (c - m)).sum::<f64>() / (counts.len() - 1) as f64;
         let want = n * p * (1.0 - p);
         // 400 samples: the variance estimate's standard error is about 7 %.
         assert!((m - n * p).abs() < 1.0, "mean {m}");
-        assert!((var / want - 1.0).abs() < 0.2, "variance {var}, n·p·(1−p) = {want}");
+        assert!(
+            (var / want - 1.0).abs() < 0.2,
+            "variance {var}, n·p·(1−p) = {want}"
+        );
         // Every departure is on a whole second from `begin`.
         let one = RouteFile::parse(&xml).unwrap();
         assert!(one.vehicles.iter().all(|v| v.depart_s.fract() == 0.0));
@@ -1500,7 +1518,10 @@ mod tests {
             ..ImportOptions::default()
         };
         let a = RouteFile::parse_with(&xml, &eq).unwrap().vehicles.len();
-        let b = RouteFile::parse_with(&xml, &ImportOptions { seed: 9, ..eq }).unwrap().vehicles.len();
+        let b = RouteFile::parse_with(&xml, &ImportOptions { seed: 9, ..eq })
+            .unwrap()
+            .vehicles
+            .len();
         assert_eq!(a, b);
     }
 
@@ -1512,11 +1533,19 @@ mod tests {
         let n = f.vehicles.len() as f64;
         // 2,000 expected; Poisson standard deviation about 45.
         assert!((n - 2000.0).abs() < 200.0, "{n}");
-        let gaps: Vec<f64> = f.vehicles.windows(2).map(|w| w[1].depart_s - w[0].depart_s).collect();
+        let gaps: Vec<f64> = f
+            .vehicles
+            .windows(2)
+            .map(|w| w[1].depart_s - w[0].depart_s)
+            .collect();
         let mean = gaps.iter().sum::<f64>() / gaps.len() as f64;
         let var = gaps.iter().map(|g| (g - mean) * (g - mean)).sum::<f64>() / gaps.len() as f64;
         // An exponential headway has its standard deviation equal to its mean.
-        assert!((var.sqrt() / mean - 1.0).abs() < 0.1, "cv {}", var.sqrt() / mean);
+        assert!(
+            (var.sqrt() / mean - 1.0).abs() < 0.1,
+            "cv {}",
+            var.sqrt() / mean
+        );
     }
 
     /// A vehicle naming a `vTypeDistribution` draws its member by the stated
@@ -1538,11 +1567,26 @@ mod tests {
 </routes>"#;
         let f = RouteFile::parse(xml).unwrap();
         let share = |flow: &str, ty: &str| {
-            let all: Vec<_> = f.vehicles.iter().filter(|v| v.id.starts_with(flow)).collect();
-            all.iter().filter(|v| v.vtype.as_deref() == Some(ty)).count() as f64 / all.len() as f64
+            let all: Vec<_> = f
+                .vehicles
+                .iter()
+                .filter(|v| v.id.starts_with(flow))
+                .collect();
+            all.iter()
+                .filter(|v| v.vtype.as_deref() == Some(ty))
+                .count() as f64
+                / all.len() as f64
         };
-        assert!((share("f.", "a") - 0.75).abs() < 0.03, "{}", share("f.", "a"));
-        assert!((share("g.", "a") - 0.25).abs() < 0.03, "{}", share("g.", "a"));
+        assert!(
+            (share("f.", "a") - 0.75).abs() < 0.03,
+            "{}",
+            share("f.", "a")
+        );
+        assert!(
+            (share("g.", "a") - 0.25).abs() < 0.03,
+            "{}",
+            share("g.", "a")
+        );
         let r1 = f.vehicles.iter().filter(|v| v.edges == ["x", "y"]).count() as f64;
         assert!((r1 / f.vehicles.len() as f64 - 0.5).abs() < 0.03);
         assert!(f.vehicles.iter().all(|v| v.routed && v.edges.len() == 2));
@@ -1561,7 +1605,10 @@ mod tests {
         };
         let a = RouteFile::parse_with(xml, &o(7)).unwrap();
         assert_eq!(a, RouteFile::parse_with(xml, &o(7)).unwrap());
-        assert_ne!(a.vehicles, RouteFile::parse_with(xml, &o(8)).unwrap().vehicles);
+        assert_ne!(
+            a.vehicles,
+            RouteFile::parse_with(xml, &o(8)).unwrap().vehicles
+        );
         // A flow's keywords are counted once for the flow, not per vehicle.
         assert_eq!(a.ledger.count("flow@departLane"), 1);
     }
@@ -1588,7 +1635,11 @@ mod tests {
         // WP-15 follow-up: an IDM type is driven by the library's IDM per vehicle.
         assert_eq!(l.applied.get("vType@carFollowModel"), Some(&1));
         assert_eq!(l.not_modelled.get("vType@carFollowModel"), None);
-        assert_eq!(l.not_modelled.get("vType/param[has.rerouting.device]@value"), Some(&1));
+        assert_eq!(
+            l.not_modelled
+                .get("vType/param[has.rerouting.device]@value"),
+            Some(&1)
+        );
         assert_eq!(l.not_modelled.get("stop@busStop"), Some(&1));
         assert_eq!(l.approximated.get("vehicle@departLane=free"), Some(&1));
         assert_eq!(l.approximated.get("vehicle@departPos=last"), Some(&1));
@@ -1622,13 +1673,20 @@ mod tests {
         };
         assert_eq!(model("vi"), Some("idm"));
         assert_eq!(model("vk"), Some("krauss"));
-        assert_eq!(model("vc"), None, "cooperative: the run's own link is needed");
+        assert_eq!(
+            model("vc"),
+            None,
+            "cooperative: the run's own link is needed"
+        );
         assert_eq!(model("vx"), None);
         assert_eq!(model("vd"), None);
         let l = &f.ledger;
         assert_eq!(l.applied.get("vType@carFollowModel"), Some(&2));
         assert_eq!(l.not_modelled.get("vType@carFollowModel=CACC"), Some(&1));
-        assert_eq!(l.not_modelled.get("vType@carFollowModel=Wiedemann"), Some(&1));
+        assert_eq!(
+            l.not_modelled.get("vType@carFollowModel=Wiedemann"),
+            Some(&1)
+        );
         assert!(
             v2xw_mobility::carfollowing::library::build_one("idm", 1).is_some()
                 && v2xw_mobility::carfollowing::library::build_one("cacc-milanes", 1).is_none()

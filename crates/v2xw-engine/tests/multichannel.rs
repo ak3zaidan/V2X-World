@@ -96,9 +96,16 @@ fn tx_index(recorder: &MemoryRecorder) -> BTreeMap<u64, (String, u16)> {
 fn a_map_of_the_safety_channel_alone_is_the_single_channel_run() {
     let base = intersections(6.0);
     let (r0, rec0) = run(base.clone());
-    let mapped = with_map(base, serde_json::json!([{"channel": 172, "messages": ["spat", "map"]}]));
+    let mapped = with_map(
+        base,
+        serde_json::json!([{"channel": 172, "messages": ["spat", "map"]}]),
+    );
     let (r1, rec1) = run(mapped);
-    assert!(rec0.records().len() > 1_000, "{} records", rec0.records().len());
+    assert!(
+        rec0.records().len() > 1_000,
+        "{} records",
+        rec0.records().len()
+    );
     assert!(r0.channel_busy_ns.is_empty());
     let mut r1_cmp = r1.clone();
     r1_cmp.channel_busy_ns.clear();
@@ -117,7 +124,10 @@ fn a_map_of_the_safety_channel_alone_is_the_single_channel_run() {
     let (a, ra) = multi();
     let (b, rb) = multi();
     assert_eq!(a, b);
-    assert!(digest(&ra) == digest(&rb), "a multi-channel run is not deterministic");
+    assert!(
+        digest(&ra) == digest(&rb),
+        "a multi-channel run is not deterministic"
+    );
 }
 
 /// Moving SPaT and MAP off the safety channel lowers its channel busy ratio by the share
@@ -150,10 +160,7 @@ fn moving_spat_and_map_off_the_safety_channel_lowers_its_cbr_by_their_share() {
         }
         let air = v.t_end.saturating_sub(v.t_start);
         all_ns += air;
-        if tx
-            .get(&msg)
-            .is_some_and(|(m, _)| m == "spat" || m == "map")
-        {
+        if tx.get(&msg).is_some_and(|(m, _)| m == "spat" || m == "map") {
             moved_ns += air;
         }
     }
@@ -170,7 +177,10 @@ fn moving_spat_and_map_off_the_safety_channel_lowers_its_cbr_by_their_share() {
     // The SPaT and MAP really left: every one on 180, every BSM on 172.
     let channels: std::collections::BTreeSet<(String, u16)> =
         tx_index(&rec_multi).into_values().collect();
-    assert!(channels.contains(&("spat".to_string(), 180)), "{channels:?}");
+    assert!(
+        channels.contains(&("spat".to_string(), 180)),
+        "{channels:?}"
+    );
     assert!(
         channels
             .iter()
@@ -273,11 +283,12 @@ fn the_adjacent_channel_noise_rise_is_the_regulation_acir() {
         covered.len(),
         rises.len()
     );
-    assert!(rises.len() >= 5, "{} covered safety frames with a rise", rises.len());
-    let close = rises
-        .iter()
-        .filter(|(m, w)| (m - w).abs() <= 0.3)
-        .count();
+    assert!(
+        rises.len() >= 5,
+        "{} covered safety frames with a rise",
+        rises.len()
+    );
+    let close = rises.iter().filter(|(m, w)| (m - w).abs() <= 0.3).count();
     assert!(
         close * 10 >= rises.len() * 9,
         "{close} of {} noise rises within 0.3 dB of the ACIR's: {rises:?}",
@@ -313,11 +324,18 @@ fn the_second_radio_decides_who_hears_and_sends_the_service_channel() {
     let (r1, rec1) = run(one);
     assert!(r1.untuned_arrivals > 0, "{r1:?}");
     assert_eq!(r1.untuned_tx_drops, 0);
-    assert_eq!(vehicles_hear(&rec1), 0, "a one-radio vehicle heard a SPaT on 180");
+    assert_eq!(
+        vehicles_hear(&rec1),
+        0,
+        "a one-radio vehicle heard a SPaT on 180"
+    );
     let mut two = with_map(intersections(5.0), map.clone());
     two.radio.devices.obu.radios = Some(2);
     let (_, rec2) = run(two);
-    assert!(vehicles_hear(&rec2) > 0, "a two-radio vehicle heard no SPaT");
+    assert!(
+        vehicles_hear(&rec2) > 0,
+        "a two-radio vehicle heard no SPaT"
+    );
     let mut mute = with_map(intersections(5.0), map);
     mute.radio.devices.rsu.radios = Some(1);
     let (r3, rec3) = run(mute);
@@ -333,9 +351,18 @@ fn the_second_radio_decides_who_hears_and_sends_the_service_channel() {
 fn the_loader_refuses_a_map_the_band_plan_cannot_carry() {
     let base = intersections(1.0);
     let cases = [
-        (serde_json::json!([{"channel": 180, "messages": ["bsm"]}]), "radio.channel"),
-        (serde_json::json!([{"channel": 183, "messages": ["spat"]}]), "opens 802.11p"),
-        (serde_json::json!([{"channel": 180, "messages": ["tim"]}]), "not a message set"),
+        (
+            serde_json::json!([{"channel": 180, "messages": ["bsm"]}]),
+            "radio.channel",
+        ),
+        (
+            serde_json::json!([{"channel": 183, "messages": ["spat"]}]),
+            "opens 802.11p",
+        ),
+        (
+            serde_json::json!([{"channel": 180, "messages": ["tim"]}]),
+            "not a message set",
+        ),
         (
             serde_json::json!([
                 {"channel": 180, "messages": ["spat"]},
@@ -356,9 +383,16 @@ fn the_loader_refuses_a_map_the_band_plan_cannot_carry() {
         let r = refusals(&s);
         assert!(r.contains(why), "{map} -> {r}");
     }
-    let mut three = with_map(base.clone(), serde_json::json!([{"channel": 180, "messages": ["spat"]}]));
+    let mut three = with_map(
+        base.clone(),
+        serde_json::json!([{"channel": 180, "messages": ["spat"]}]),
+    );
     three.radio.devices.obu.radios = Some(3);
-    assert!(refusals(&three).contains("radio.devices.obu.radios"), "{}", refusals(&three));
+    assert!(
+        refusals(&three).contains("radio.devices.obu.radios"),
+        "{}",
+        refusals(&three)
+    );
     // An empty map is the default and loads.
     assert_eq!(refusals(&base), "");
 }
@@ -473,8 +507,17 @@ fn a_safety_channel_jammer_leaves_the_service_radio_free() {
     let (spat0, spat1) = (n(&clean_n, "spat", 172), n(&jammed_n, "spat", 172));
     let (map0, map1) = (n(&clean_n, "map", 174), n(&jammed_n, "map", 174));
     println!("unit {rsu}: SPaT {spat0} -> {spat1}, MAP {map0} -> {map1}");
-    assert!(spat0 >= 60 && map0 >= 6, "too few frames: {spat0} SPaT, {map0} MAP");
+    assert!(
+        spat0 >= 60 && map0 >= 6,
+        "too few frames: {spat0} SPaT, {map0} MAP"
+    );
     // The jammer denies the safety channel from 2 s: at most the first 2 s of SPaT.
-    assert!(spat1 * 2 < spat0, "the jammer did not deny the safety channel: {spat0} -> {spat1}");
-    assert!(map1 + 1 >= map0, "the service radio was held by a 172 jammer: MAP {map0} -> {map1}");
+    assert!(
+        spat1 * 2 < spat0,
+        "the jammer did not deny the safety channel: {spat0} -> {spat1}"
+    );
+    assert!(
+        map1 + 1 >= map0,
+        "the service radio was held by a 172 jammer: MAP {map0} -> {map1}"
+    );
 }

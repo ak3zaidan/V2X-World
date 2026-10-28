@@ -425,9 +425,12 @@ impl CpmService {
             ranked.truncate(cut);
             chosen = ranked.into_iter().map(|(_, o)| o).collect();
         }
-        let quality = threshold
-            .is_some()
-            .then(|| chosen.iter().map(|o| self.perception_quality(o, now)).collect());
+        let quality = threshold.is_some().then(|| {
+            chosen
+                .iter()
+                .map(|o| self.perception_quality(o, now))
+                .collect()
+        });
         let sensor_info_due = self
             .last_sensor_info
             .is_none_or(|t| now.saturating_sub(t) >= SENSOR_INFORMATION_EVERY.as_nanos());
@@ -513,9 +516,17 @@ mod tests {
         // 3 s at 100 ms checks: 30 events unrestricted, 10 at 300 ms, 3 at the 1 s cap.
         assert_eq!(count(on, 0), 30);
         assert_eq!(count(on, 50), 30, "T_GenCpmMin is a floor");
-        assert_eq!(count(on, 300), 10, "the CPM rate follows a 300 ms DCC interval");
+        assert_eq!(
+            count(on, 300),
+            10,
+            "the CPM rate follows a 300 ms DCC interval"
+        );
         assert_eq!(count(on, 5_000), 3, "T_GenCpmMax caps it");
-        assert_eq!(count(CpmConfig::default(), 300), 30, "off: the DCC is ignored");
+        assert_eq!(
+            count(CpmConfig::default(), 300),
+            30,
+            "off: the DCC is ignored"
+        );
         assert_eq!(
             CpmService::default()
                 .with_config(on)
@@ -603,7 +614,12 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(k, c)| {
-                let mut o = object(k as u16 + 1, 20.0 + 10.0 * k as f64, 0.0, ObjectKind::Vehicle);
+                let mut o = object(
+                    k as u16 + 1,
+                    20.0 + 10.0 * k as f64,
+                    0.0,
+                    ObjectKind::Vehicle,
+                );
                 o.detection_confidence = *c;
                 o
             })
@@ -611,8 +627,18 @@ mod tests {
         s.set_perception(objects.clone(), vec![]);
         let q: Vec<u8> = objects.iter().map(|o| s.perception_quality(o, 0)).collect();
         assert_eq!(q, vec![6, 9, 7, 8]);
-        let ids: Vec<u16> = s.due(0).expect("first").objects.iter().map(|o| o.id).collect();
-        assert_eq!(ids, vec![2, 4], "the two highest-utility objects, best first");
+        let ids: Vec<u16> = s
+            .due(0)
+            .expect("first")
+            .objects
+            .iter()
+            .map(|o| o.id)
+            .collect();
+        assert_eq!(
+            ids,
+            vec![2, 4],
+            "the two highest-utility objects, best first"
+        );
         // The two cut cars are still new at the next event and go then.
         let next: Vec<u16> = s
             .due(100 * MS)
