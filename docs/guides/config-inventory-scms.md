@@ -64,6 +64,7 @@ scenario could reach are new: `max_download_polls`, `download_request_tolerance_
 | `ma_max_open_cases` | Advanced | 1,000 (an ASSUMPTION) | 1 to 10⁶ | the MA's concurrent cases (before this audit the engine ran one at a time whatever the cap; fixed) |
 | `security.scms.tls` | Advanced | `1.3` (SCMS Manager EE profile §2.1.18 admits 1.2 and 1.3) | `1.3`, `1.2` | 1.2: 2 % more handshake bytes (two more flights, each with its own headers) and one more round trip in every top-up |
 | `security.scms.crl_overdue_tolerance_s` | Advanced | 1,209,600 s, two weeks (CAMP 1.2.2 Table 67 `overdue_CRL_tolerance`) | 0 to 1 y | the moment a device refuses every certificate a stale CRL governs; nextCrl is a week after issue, so it acts only in runs that span weeks |
+| `security.scms.crl_overdue_scope` | Basic | `craca`: the overdue list's CRACA's signers (CAMP 1.2.2 Table 67 says "rejecting all of them"; no source says whether "all" spans other CRACAs) | `craca`, `all` | with `all`, one overdue series-1 list (an old CRACA's after a changeover) refuses every message, from every CRACA (`rx_validation` an_overdue_list_refuses_every_sender_only_under_the_all_scope) |
 | `nodes.validated_cert_cache` | Advanced | 4,096 (engine; no device publishes one) | 1 to 1,048,576 | evictions and first-sight validations; shown under Security & Crypto with the peer cache |
 
 The defaults the settings window shows come from the model's own code

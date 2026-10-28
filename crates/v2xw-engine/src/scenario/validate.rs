@@ -56,6 +56,9 @@ const ENVELOPES: [&str; 2] = ["ieee1609.2", "etsi103097"];
 /// `security.scms.tls`: the TLS versions the US profile admits for `session-scmsAuth`
 /// (SCMS Manager EE profile §2.1.18).
 const SCMS_TLS: [&str; 2] = ["1.3", "1.2"];
+/// `security.scms.crl_overdue_scope`: the two readings of CAMP 1.2.2 Table 67's
+/// "rejecting all of them" (`v2xw_node::rxval::CrlOverdueScope`).
+const SCMS_CRL_OVERDUE_SCOPES: [&str; 2] = v2xw_node::rxval::CrlOverdueScope::NAMES;
 /// The verification policies `v2xw-node` registers.
 const POLICIES: [&str; 3] = ["verify-all", "on-demand", "prioritized"];
 /// The codec tiers build decision D2 settled.
@@ -2151,6 +2154,7 @@ pub static CHOICES: &[Choices] = &[
     choices("messages.sets[]", &MESSAGE_SETS),
     choices("security.envelope", &ENVELOPES),
     choices("security.scms.tls", &SCMS_TLS),
+    choices("security.scms.crl_overdue_scope", &SCMS_CRL_OVERDUE_SCOPES),
     choices("security.verification_policy", &POLICIES),
     choices("security.pseudonym_change.strategy", &STRATEGIES),
     choices("scale.traffic.model", &crate::scale::TRAFFIC_MODELS),
@@ -3393,6 +3397,14 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "How long past a CRL's nextCrl every device keeps trusting the certificates it \
                governs (CAMP 1.2.2 Table 67 overdue_CRL_tolerance, two weeks unless set); \
                after it the device refuses them (rxval `crl-overdue`).",
+    },
+    KeyStatus {
+        path: "security.scms.crl_overdue_scope",
+        status: Status::Wired,
+        note: "Which messages an overdue pseudonym CRL makes every device refuse: craca \
+               (default), the signers whose CRACA is the overdue list's; all, every message \
+               while any held series-1 list is past nextCrl + the tolerance (CAMP 1.2.2 \
+               Table 67: the EE is \"rejecting all of them\"; rxval `crl-overdue`).",
     },
     KeyStatus {
         path: "nodes.validated_cert_cache",
@@ -8833,6 +8845,21 @@ fn scms_lifecycle(s: &Scenario, e: &mut Vec<ScenarioError>) {
             format!(
                 "is '{t}'; the US profile's session-scmsAuth is TLS 1.2 or 1.3: one of {}",
                 SCMS_TLS.join(", ")
+            ),
+        ));
+    }
+    if let Some(t) = s
+        .security
+        .scms
+        .as_ref()
+        .and_then(|x| x.crl_overdue_scope.as_deref())
+        && v2xw_node::rxval::CrlOverdueScope::parse(t).is_none()
+    {
+        e.push(conflict(
+            "security.scms.crl_overdue_scope",
+            format!(
+                "is '{t}'; an overdue CRL refuses its CRACA's signers or every signer: one of {}",
+                SCMS_CRL_OVERDUE_SCOPES.join(", ")
             ),
         ));
     }

@@ -106,6 +106,27 @@ end to end.
    to 0.42 s.** The pre-run provisioning clock leaks into the PKI view's flow times.
 3. **Two Q channels are stamped after the backend tick that logs them:** `net.bytes`
    (8.8 µs at 43,200 s) and `proto.revocation` (118 ms at 86,420 s).
+   - Traced 2026-10-28 (fix-5 scms track), explained, not changed. `Kernel::dispatch`
+     (v2xw-proto kernel.rs:591-668) admits a handler's work to the entity's service queue
+     (`done = queue.admit(at, work)`, line 596) and stamps its stages (line 604) and wire
+     steps (line 641) at `done`, the instant the entity finishes; the kernel's own
+     documentation says so (`Kernel::busy_until`, kernel.rs:450-457). The engine drains
+     those stamps once per backend tick and writes them at the tick's `now`
+     (`Engine::emit`, run.rs: `at = self.scheduler.now()`; net.bytes through
+     `emit_backend_bytes` with the wire step's own `t`, phase2.rs `push_bytes` and
+     run.rs:9152). A stamp is therefore up
+     to one service time (queue wait plus work) after its log time.
+   - Evidence, run T (`scenarios/scms-fix3/base.yaml`, this branch's debug build): 439 of
+     4,402 `net.bytes` and 611 of 13,305 `pki.flow` records are stamped after their log
+     time, median 4.1 / 4.8 ms, at most 8.82 ms (an RSU's `app-cert-request` logged at
+     60.000 s, stamped 60.00882 s); 606 of the 611 are the RA's pregeneration hops
+     (`pre-linkage-request`, `expanded`). Q's 118 ms `proto.revocation` stamp is the same
+     line 604 for a stage whose entity was busy longer.
+   - The stamps are the deployment's instants (when the entity finished), so every
+     latency read from them is right; only the record stream's order differs from stamp
+     order. Holding these records to the first tick at or after their stamp (scmsb's
+     proposal) changes log times and so every SCMS record digest; that is left to the
+     owner. A consumer that needs event order sorts by the record's `t`.
 4. **Run cost on Q.** The run took 778 s against QD's 189 s. Most of the difference is the
    second fast-forward: 453 s, against QD's 9.9 s.
    - With the PKI view on, `pki.state`, `backend.state` and `pki.knowledge` are recorded

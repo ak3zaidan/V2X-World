@@ -4036,6 +4036,32 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-28: SCMS fix round 5, scms track (branch only, base `a925db58`)
+
+Rows: `crates/v2xw-engine/tests/expectations/scms-fix5.yaml` (runs T, MWC, MWCA; fault footer).
+No golden moved; every new test or row went red under its fault.
+
+- **Cache knob `MacTimer` (152,541 vs 152,539): traced, a wrong expectation.** J2945/1's
+  density is counted from the node's neighbour table (`Engine::update_dcc`), which a
+  verify-all receiver fills when a check finishes. Slower first-sight checks moved node
+  57's count (30 vs 31 RVs at 243.5 s) and one BSM by one window. Counting RVs at arrival
+  makes every class but NodeTask identical (counterfactual, not shipped). The test now
+  holds MAC/PHY to 0.01 %. Owner decision: count J2945/1 RVs at reception (moves goldens).
+- **F5-SCOPE:** `security.scms.crl_overdue_scope` `craca` (default) | `all`, full settings
+  checklist ([CAMP122] Table 67). Node and reach tests.
+- **F5-DOC / F5-TOPUP:** `reports_sent` documented as generated; the extractor's
+  `topup.uu_bytes_per_topup` gives 3,764 B per top-up (all Uu: 17,019).
+- **Owed fault proofs:** rollover, composite (size and pre-run lag), SlowDrift, rsu_certs,
+  held week, slow ACA all red under their faults. p2pcd_air's named fault no longer
+  reaches its run; the defect's effect turns it red.
+- **Q's late stamps:** explained (`Kernel::dispatch` stamps at the entity's finish,
+  kernel.rs:596/604/641; the engine logs at the tick). Holding them moves digests (owner).
+- **MWC / MWC2 on the debug build:** 0 and 110,048 crl-overdue; both PASS in matrix.py.
+  MWC with `crl_overdue_scope: all` (`scenarios/scms-fix5/mwc-scope-all.yaml`) refuses
+  326,316 as crl-overdue (F5.SCOPE.mwc-all).
+- **Open:** the J2945/1 density source and the late-stamp hold (both owner, both move
+  goldens).
+
 ## 2026-10-28: adoption wave integration (grade, mac, nema: WP-16, 17, 18, 21, 22)
 
 One integrator in the main checkout, one heavy command at a time. All three agents had committed their work and their worktrees were clean, so no wip snapshot was needed.

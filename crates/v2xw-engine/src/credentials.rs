@@ -63,6 +63,9 @@ pub struct ReceiverLimits {
     /// `security.scms.crl_overdue_tolerance_s`: `overdue_CRL_tolerance`
     /// (`v2xw_node::rxval::OVERDUE_CRL_TOLERANCE_S` unless set).
     pub crl_overdue_tolerance_s: Option<u32>,
+    /// `security.scms.crl_overdue_scope`: which signers an overdue list refuses
+    /// (`v2xw_node::rxval::CrlOverdueScope::Craca` unless set).
+    pub crl_overdue_scope: Option<v2xw_node::rxval::CrlOverdueScope>,
     /// `security.scms.rx_beacon_max_age_s`, `rx_max_age_s` and `rx_max_future_s`: the
     /// `generationTime` relevance window, when any of them is set (each one left out keeps
     /// its `v2xw_node::rxval` default).
@@ -80,6 +83,12 @@ impl ReceiverLimits {
                 .scms
                 .as_ref()
                 .and_then(|s| s.crl_overdue_tolerance_s),
+            crl_overdue_scope: scenario
+                .security
+                .scms
+                .as_ref()
+                .and_then(|s| s.crl_overdue_scope.as_deref())
+                .and_then(v2xw_node::rxval::CrlOverdueScope::parse),
             generation_window: generation_window(scenario),
         }
     }
@@ -95,6 +104,9 @@ impl ReceiverLimits {
         }
         if let Some(s) = self.crl_overdue_tolerance_s {
             t.set_overdue_crl_tolerance(s);
+        }
+        if let Some(s) = self.crl_overdue_scope {
+            t.set_crl_overdue_scope(s);
         }
         if let Some(w) = self.generation_window {
             t.set_generation_time_window(w);

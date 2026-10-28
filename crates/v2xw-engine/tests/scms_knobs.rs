@@ -305,6 +305,21 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
         assert_eq!(f["x-status"], "wired", "{path}");
         assert_eq!(f["default"].as_f64(), Some(default), "{path}");
     }
+    // The overdue scope (F5-SCOPE): a choice, published with its two readings and the
+    // node's default.
+    let scope = fields
+        .iter()
+        .find(|f| f["x-path"] == "security.scms.crl_overdue_scope")
+        .expect("security.scms.crl_overdue_scope is published");
+    for k in ["x-explain", "x-recommended", "x-level", "title"] {
+        assert!(
+            scope[k].as_str().is_some_and(|s| !s.is_empty()),
+            "scope: no {k}"
+        );
+    }
+    assert_eq!(scope["x-status"], "wired");
+    assert_eq!(scope["default"], "craca");
+    assert_eq!(scope["enum"], json!(["craca", "all"]));
     assert_eq!(v2xw_node::rxval::OVERDUE_CRL_TOLERANCE_S, 14 * 86_400);
     // C2C-CC BSP RS_BSP_168 (via Vanetza's check_generation_time): 2 s, 10 min, 40 ms.
     assert_eq!(v2xw_node::rxval::BEACON_MAX_AGE_S, 2.0);
@@ -312,7 +327,11 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
     assert_eq!(v2xw_node::rxval::MAX_FUTURE_S, 0.040);
 
     let mut doc = base_doc();
-    doc["security"]["scms"] = json!({"crl_overdue_tolerance_s": 3_600, "rx_max_future_s": 0.5});
+    doc["security"]["scms"] = json!({
+        "crl_overdue_tolerance_s": 3_600,
+        "crl_overdue_scope": "all",
+        "rx_max_future_s": 0.5
+    });
     doc["nodes"]["validated_cert_cache"] = json!(7);
     assert_eq!(errors(doc.clone()), Vec::<String>::new());
     let s = Scenario::from_document(doc).expect("deserialises");
@@ -322,6 +341,7 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
         ReceiverLimits {
             validated_cert_cache: Some(7),
             crl_overdue_tolerance_s: Some(3_600),
+            crl_overdue_scope: Some(v2xw_node::rxval::CrlOverdueScope::All),
             generation_window: Some(v2xw_node::rxval::GenerationTimeWindow::from_secs(
                 2.0, 600.0, 0.5
             )),
@@ -336,6 +356,11 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
         .with_receiver_limits(limits)
         .install_trust(&mut sec);
     assert_eq!(sec.trust().overdue_crl_tolerance_s(), 3_600);
+    assert_eq!(
+        sec.trust().crl_overdue_scope(),
+        v2xw_node::rxval::CrlOverdueScope::All,
+        "the overdue scope reaches the trust store"
+    );
     assert_eq!(sec.trust().ee_cache().capacity(), 7);
     assert_eq!(
         sec.trust().generation_time_window().max_future_ns,
@@ -368,6 +393,10 @@ fn the_receiver_limits_are_published_refused_out_of_range_and_reach_the_trust_st
         (
             json!({"security": {"scms": {"rx_max_future_s": -0.1}}}),
             "security.scms.rx_max_future_s",
+        ),
+        (
+            json!({"security": {"scms": {"crl_overdue_scope": "every"}}}),
+            "security.scms.crl_overdue_scope",
         ),
     ] {
         let mut doc = base_doc();

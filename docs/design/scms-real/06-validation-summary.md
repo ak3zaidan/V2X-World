@@ -1493,6 +1493,39 @@ The totals count each row as its own checklist records it, with the changes in ย
       crl-overdue refusals in W4, none in W3, and recovery in W5.
     - Open: Table 67 says "rejecting all of them", while the engine refuses only the overdue
       list's CRACA. This is a reading the sources do not settle (fix spec F5-SCOPE).
+    **2026-10-28 (fix-5 scms track, base `a925db58`):**
+    - Cache knob `MacTimer` (152,541 against 152,539): traced, a wrong expectation. Node 57's
+      BSM interval is J2945/1's (smoothed density above B = 25, ITT 104-112 ms), and
+      `Engine::update_dcc` counts the RVs in the node's neighbour table, which a verify-all
+      receiver fills when a check finishes. The variant's first-sight checks finish later,
+      so node 57 counted 31 RVs at 243.5 s against 30, and one BSM moved one 100 ms window.
+      Counted at arrival instead, every class but NodeTask is identical (counterfactual, not
+      shipped). The test now holds MAC/PHY counts to 0.01 % (`scms-fix4-b.yaml` CACHE.mac).
+      Owner decision: count J2945/1 RVs at reception (the PER window already does); this
+      moves every J2945/1 run whose density passes B, and so the SCMS goldens.
+    - F5-SCOPE: `security.scms.crl_overdue_scope` (`craca` default | `all`). With `all`, any
+      held series-1 list past `nextCrl` + tolerance refuses every message ([CAMP122]
+      Table 67: "rejecting all of them"). `rx_validation`
+      an_overdue_list_refuses_every_sender_only_under_the_all_scope; default unchanged.
+    - F5-DOC: `reports_sent` is documented as generated, filed or not (see
+      `reports_not_filed`). F5-TOPUP: the extractor's `topup.uu_bytes_per_topup` (the
+      `topup` flow's device-side bytes) gives 3,764 B per top-up on base.yaml, against
+      17,019 B of all Uu (`scms-fix5.yaml` F5.TOPUP.bytes passes).
+    - Owed fault proofs done (`scms-fix5.yaml` footer): rollover, composite (both the size
+      estimate and the pre-run lag), SlowDrift, scmsra's rsu_certs, held week and slow-ACA
+      tests each go red under their fault. p2pcd_air's named fault (factory pseudonyms from
+      the home ACA) no longer reaches its run and leaves it green; the defect's effect (the
+      home chain file in every device's cache) turns it red.
+    - Q's late stamps: explained, not changed (audit-sim-metrics.md item 3).
+      `Kernel::dispatch` stamps stages and wire steps at the entity's finish (kernel.rs:596,
+      604, 641), and the engine logs them at the backend tick's `now`. On run T, 611
+      `pki.flow` and 439 `net.bytes` records are stamped up to 8.82 ms after their log
+      time; 606 of the 611 are pregeneration hops. The stamps are the right instants.
+      Holding the records to the next tick moves every SCMS digest (owner).
+    - MWC / MWC2 on this branch's debug build: 0 and 110,048 crl-overdue, both PASS through
+      matrix.py (the release values). MWC under `crl_overdue_scope: all` refuses 326,316
+      (`scms-fix5.yaml` F5.SCOPE.mwc-all): the strict reading of Table 67 cuts the fleet
+      off in W4.
 
 **Owner decisions**
 - **What the RA and PCA keep for each device** (ยง6 item 4): request records, cocoons,

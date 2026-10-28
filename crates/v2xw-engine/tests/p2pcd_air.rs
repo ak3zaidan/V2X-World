@@ -215,7 +215,11 @@ fn an_unknown_provider_ca_is_learned_from_a_response_on_the_air() {
 /// that ACA (unanchored) in every provider-b device's cache: provider-b devices then never
 /// raised a request for provider-a's issuer, and lost its traffic as unknown signers.
 /// Fault: `CredentialFactory::pseudonym` issuing from the home ACA again gives provider-b
-/// 0 triggers.
+/// 0 triggers. On `a925db58` that fault leaves this test green (2026-10-28): the run's
+/// devices no longer take their pseudonyms from the factory pool. The defect's effect
+/// still turns it red: every device's CA cache also
+/// holding the home provider's chain file (`CredentialFactory::install_trust_for`) gives
+/// `{0: 8, 1: 0}`.
 #[test]
 fn both_providers_devices_ask_for_the_other_providers_issuer() {
     let r = run("home-provider");

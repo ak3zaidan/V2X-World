@@ -11,7 +11,7 @@
 //! | `generationTime` lies inside the signer's validity period | §5.2, SDEE profile | `GenerationTimeOutsideValidity` |
 //! | `generationLocation` lies inside the signer's region, when it has one | §5.2, SDEE profile | `OutsideRegion` |
 //! | no certificate of the chain is on a hash CRL (series 2, 3, 4, 256) whose `crlCraca` and `crlSeries` match it | §5.1.3; 03 §10 | `RevokedByHash`, `IssuerRevoked` |
-//! | the CRL of the signer's CRACA is not more than `overdue_CRL_tolerance` (2 weeks) past its `nextCrl` | [CAMP122] Table 67 | `CrlOverdue` |
+//! | the CRL of the signer's CRACA (any held series-1 CRL under `CrlOverdueScope::All`) is not more than `overdue_CRL_tolerance` (2 weeks) past its `nextCrl` | [CAMP122] Table 67 | `CrlOverdue` |
 //! | `generationTime` is not older than the message type's maximum age, nor later than the receiver's own time by more than the future tolerance (checked on every received SPDU, before the verification policy) | §5.2 relevance checks; values: C2C-CC BSP RS_BSP_168 (ASSUMPTION for the US) | `GenerationTimeTooOld`, `GenerationTimeInFuture` |
 //!
 //! Series-1 (linkage) revocation stays on the node's [`crate::stores::CrlGate`], which
@@ -91,6 +91,41 @@ pub const OVERDUE_CRL_TOLERANCE_S: u32 = 14 * 86_400;
 
 /// The pseudonym CRL series (linkage based).
 pub const SERIES_PSEUDONYM: u16 = 1;
+
+/// Which messages an overdue pseudonym CRL makes the device refuse
+/// (`security.scms.crl_overdue_scope`).
+///
+/// [CAMP122] Table 67 (printed pp. 457-458) defines `overdue_CRL_tolerance` as "How long an
+/// EE can continue to operate without a CRL update past a next CRL date before deciding
+/// that messages are not trustworthy and rejecting all of them (and turning on an
+/// appropriate driver warning indicator)". "All of them" can be read two ways, and the
+/// sources do not settle which (06-validation-summary.md §9, F5-SCOPE):
+/// - [`CrlOverdueScope::Craca`] (default): the messages whose signer's CRACA is the
+///   overdue list's, the certificates that list governs;
+/// - [`CrlOverdueScope::All`]: every message, once any held series-1 list is overdue.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CrlOverdueScope {
+    /// Refuse the signers the overdue list governs (its CRACA).
+    #[default]
+    Craca,
+    /// Refuse every signer while any held series-1 list is overdue.
+    All,
+}
+
+impl CrlOverdueScope {
+    /// The scenario names, in [`CrlOverdueScope::parse`]'s order.
+    pub const NAMES: [&'static str; 2] = ["craca", "all"];
+
+    /// The scope a scenario names (`craca` or `all`); `None` for anything else.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "craca" => Some(Self::Craca),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
 
 /// The oldest a safety beacon (BSM, CAM, PSM, VAM) may be on arrival, seconds.
 ///
@@ -666,6 +701,8 @@ pub struct RxTrust {
     /// `overdue_CRL_tolerance` for this device, seconds; `None` is the profile's
     /// [`OVERDUE_CRL_TOLERANCE_S`] (`security.scms.crl_overdue_tolerance_s`).
     overdue_tolerance_s: Option<u32>,
+    /// Which signers an overdue list refuses (`security.scms.crl_overdue_scope`).
+    overdue_scope: CrlOverdueScope,
     /// The `generationTime` relevance window; `None` is [`GenerationTimeWindow::default`].
     generation_window: Option<GenerationTimeWindow>,
 }
@@ -811,6 +848,17 @@ impl RxTrust {
     /// The device's `overdue_CRL_tolerance`, seconds.
     pub fn overdue_crl_tolerance_s(&self) -> u32 {
         self.overdue_tolerance_s.unwrap_or(OVERDUE_CRL_TOLERANCE_S)
+    }
+
+    /// Sets which signers an overdue pseudonym CRL refuses ([`CrlOverdueScope`]; the
+    /// overdue list's CRACA unless set).
+    pub fn set_crl_overdue_scope(&mut self, scope: CrlOverdueScope) {
+        self.overdue_scope = scope;
+    }
+
+    /// The device's [`CrlOverdueScope`].
+    pub fn crl_overdue_scope(&self) -> CrlOverdueScope {
+        self.overdue_scope
     }
 
     /// Sets the device's `generationTime` relevance window (`security.scms.rx_*`).
@@ -983,10 +1031,13 @@ impl RxTrust {
         }
     }
 
+    /// Whether a held series-1 list that governs a signer under `craca` is overdue at
+    /// `now32`: the signer's CRACA's list, or any list under [`CrlOverdueScope::All`].
     fn overdue(&self, craca: [u8; 3], now32: u32) -> bool {
+        let all = self.overdue_scope == CrlOverdueScope::All;
         self.crls.iter().any(|((c, s), m)| {
             *s == SERIES_PSEUDONYM
-                && c[5..] == craca
+                && (all || c[5..] == craca)
                 && now32 > m.next_crl.saturating_add(self.overdue_crl_tolerance_s())
         })
     }

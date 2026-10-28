@@ -176,6 +176,12 @@ def extract(run_dir):
     per_dev = collections.defaultdict(collections.Counter)
     inst_t = collections.defaultdict(list)
     topup = collections.defaultdict(dict)
+    # The top-up flow's own device-side bytes (F5-TOPUP): every `topup` message one of whose
+    # ends is a device (`ee/<n>`), i.e. the Uu leg of the exchange (.info, its answer, the
+    # batch request and download, the file request and response). Not all Uu traffic:
+    # reports and CRL fetches ride Uu too and belong to other flows.
+    topup_uu_bytes = 0
+    topup_uu_msgs = 0
     sealed_bad = 0
     sealed_n = 0
     components = set()
@@ -220,6 +226,10 @@ def extract(run_dir):
                 inst_t[(q['flow'], q['instance'])].append(q['t'])
                 if q['flow'] == 'topup' and q['kind'] == 'stage':
                     topup[q['instance']].setdefault(q['name'], q['t'])
+                if (q['flow'] == 'topup' and q['kind'] in ('msg', 'pdu')
+                        and any((e or '').startswith('ee/') for e in (fr, to))):
+                    topup_uu_bytes += q.get('bytes') or 0
+                    topup_uu_msgs += 1
             elif t == 'record/node.security':
                 q = json.loads(m.data)
                 crls = q.get('crls') or []
@@ -277,6 +287,8 @@ def extract(run_dir):
         out[f'flow.{fl}.n'] = len(v)
         out[f'flow.{fl}.median_s'] = statistics.median(v)
         out[f'flow.{fl}.max_s'] = max(v)
+    out['topup.uu_bytes'] = topup_uu_bytes
+    out['topup.uu_msgs'] = topup_uu_msgs
     tl = [(s['installed'] - s['requested']) / NS for s in topup.values() if 'installed' in s and 'requested' in s]
     if tl:
         out['topup.latency_median_s'] = statistics.median(tl)
@@ -366,6 +378,10 @@ def derive(d):
     done = d.get('p2.topups_completed', 0)
     if done:
         d['topup.certs_per_topup'] = d.get('p2.certs_topped_up', 0) / done
+        # The top-up flow's own Uu bytes per completed top-up (F5-TOPUP); all Uu bytes per
+        # top-up (`access.uu_*`) also carry the reports and CRL fetches.
+        if 'topup.uu_bytes' in d:
+            d['topup.uu_bytes_per_topup'] = d['topup.uu_bytes'] / done
     # A top-up whose vehicle drove out of the simulated area is not an SCMS failure: the
     # flow carries on in the backend, unseen (`topups_left_area`, full-bench.md §4's 27).
     d['topup.left_area'] = d.get('p2.topups_left_area', 0)

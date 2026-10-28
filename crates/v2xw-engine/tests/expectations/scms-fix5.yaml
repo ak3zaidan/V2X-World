@@ -1,0 +1,97 @@
+# SCMS fix round 5, scms track (base a925db58). Every row was written, with `measured:
+# pending`, before the run it judges. Checker:
+#   python3 -I tools/realworld/matrix.py extract <runs>/<id>
+#   python3 -I tools/realworld/matrix.py check  <this file> <runs> [--fill]
+# Binary: this branch's debug build (opt-level of the dev profile), one rayon thread, the
+# tiny run slot, --record-level events --no-verify --build-utc 2026-10-28T00:00:00Z.
+# verdict: pass | fixed | wrong-expectation | open (as scms-fix3-ra.yaml).
+schema: v2xw/scms-run-expectations/1
+runs:
+  T:
+    scenario: scenarios/scms-fix3/base.yaml
+    note: credential-lifecycle at 180 s (scms-fix3-ra.yaml's B/F/G scenario), this build
+  MWC:
+    scenario: scenarios/edge/multi-week-crlg-down.yaml
+    note: this build, --record-level metrics (item 6; scms-variants.yaml RR.MWC.overdue)
+  MWCA:
+    scenario: scenarios/scms-fix5/mwc-scope-all.yaml
+    base: MWC
+    note: MWC with security.scms.crl_overdue_scope all, --record-level metrics
+rows:
+# --- F5-TOPUP: the top-up flow's own Uu bytes per top-up ----------------------------------
+- id: F5.TOPUP.bytes
+  base: T
+  variant: T
+  area: network
+  measure: topup.uu_bytes_per_topup
+  expect: band
+  band: [3400, 4100]
+  source: 'scms-fix3-ra.yaml RA.uu-bytes-per-topup recheck_9d0fbc2c (trace track, pki.flow): the
+    top-up exchange (.info, its answer, the batch request and download, the file request and
+    response) is 221,859 B, 3,760 B per top-up; 1609.2.1 6.3.5.4 (the same two downloads).
+    The band is 3,760 B -10 % / +9 %: the bytes per top-up are the protocol''s, not the draw''s'
+  measured: '3,764.3 (222,095 B over 59 completed top-ups, 354 messages); all Uu bytes per top-up
+    on the same run 17,019.3 (the 9d0fbc2c value)'
+  verdict: pass
+  fault: 'the extractor summing every flow''s device-side msg/pdu bytes (the flow filter
+    dropped): 26,324.9, FAIL'
+  note: 'RA.uu-bytes-per-topup divided every Uu byte by the top-ups, so 71 % of it was SM-MBR
+    uploads (a property of the realisation: 13.5, 17.0, 22.5 and 16.3 kB per top-up across
+    builds and seeds). The extractor (runtime_realism.py extract/derive) now sums the `topup`
+    flow''s msg and pdu records with a device (ee/<n>) at one end: topup.uu_bytes,
+    topup.uu_msgs and, per completed top-up, topup.uu_bytes_per_topup. The engine leaves
+    (access.uu_*_bytes) are right for what they say: all Uu traffic'
+- id: F5.TOPUP.share
+  base: T
+  variant: T
+  area: network
+  measure: topup.uu_msgs
+  expect: ge
+  value: 1
+  source: the top-up flow crosses Uu (ee <-> ra/lop) at every top-up
+  measured: '354'
+  verdict: pass
+# --- F5-SCOPE in a run: the strict reading refuses what the CRACA reading lets through -----
+- id: F5.SCOPE.mwc-all
+  base: MWC
+  variant: MWCA
+  area: metrics
+  measure: rv.refused.crl-overdue
+  expect: ge
+  value: 1
+  source: '[CAMP122] Table 67 ("rejecting all of them"). MWC (scms-variants.yaml RR.MWC.overdue
+    note2): W4 receivers hold the t0 home list (CRACA b710ad, nextCrl day 7.0) overdue from day
+    21.0, while every home sender signs under the new CRACA 4a1086, so the craca reading refuses
+    0. Under all, that one overdue list refuses every message in W4'
+  measured: '0 -> 326,316 (every refusal crl-overdue; 709,428 checked). MWC itself: 0 refusals
+    of any kind, MWC2 110,048 (scms-variants.yaml rechecks); MWC 1,487 s, MWCA 1,144 s wall,
+    peak 146 / 143 MB'
+  verdict: pass
+  fault: 'the setting ignored (the engine behaving as craca, i.e. the MWC run judged as MWCA): 0, FAIL'
+# --- fault proofs owed by fix round 4 (scmsa) and fix round 3 (scmsra), 2026-10-28 -----------
+# One fault build (A: F1-F6 together, each test's failure message checked to be its own
+# fault's), F7 and F8 alone; sources restored after each; every test green on the clean
+# build of the same tree.
+# F1 F-ROLLOVER: the reissue_crl_after_changeover call in Phase2::follow_published_pki removed
+#    -> engine lib phase2::ctl_device_tests::a_root_changeover_publishes_a_list_under_the_new_craca_at_once
+#    red ("the home RA serves no list under the new CRACA ... a minute after the changeover").
+# F2 F-COMPOSITE0: a pre-run list given the inter-provider lag (prerun_version ignored in
+#    visible_versions) -> engine lib provider_failure_tests::a_crl_fetch_without_the_pdu_layer...
+#    red ("every CRACA's list is signed: 1").
+# F3 F-SLOWDRIFT: AttackerOutcome::onset_ns read from first_falsified -> phase2
+#    a_slow_drift_onset_is_its_first_centimetre_not_its_first_falsified_claim red (no attacker ahead).
+# F4 F-RSUPSID: wiring::rsu_app_psids empty -> rsu_certs a_roadside_units_scms_certificate_permits_the_ssm...
+#    red (psid-not-permitted 270) and under_the_us_scms_a_roadside_cpm... red.
+# F5 F-PASTDUE: ScmsRun::generate_past_due returning at once -> proto pregeneration
+#    a_week_that_fell_due_before_the_request_is_held_and_downloaded_at_once red (download 60.2 s
+#    after the ack) and scms_knobs_runs a_slow_aca_does_not_delay_a_week_the_ra_already_holds red
+#    (2,363.9 ms).
+# F6 F-P2PCD (the named fault, CredentialFactory::pseudonym from the home ACA): p2pcd_air
+#    both_providers_devices_ask_for_the_other_providers_issuer stays GREEN on a925db58: the run no
+#    longer takes pseudonyms from the factory pool, so that fault cannot reach it.
+# F7 F-P2PCD-C (the defect's effect: install_trust_for also installs the home provider's chain
+#    file on every device) -> the same test red ({0: 8, 1: 0}). The test's doc names both.
+# F8 F-COMPOSITE: crl_download_size sizing the PDU-off fetch as one list (composite_size with no
+#    signed list, the old estimate) -> provider_failure_tests::a_crl_fetch_without... red (212 B
+#    against 3,216 B, ratio 0.066).
+# Clean: lib 2/2, p2pcd_air 1/1, rsu_certs 4/4, phase2 1/1, pregeneration 1/1, slow-ACA 1/1 (886 s).

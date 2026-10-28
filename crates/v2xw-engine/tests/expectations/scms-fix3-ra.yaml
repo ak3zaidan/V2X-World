@@ -148,6 +148,11 @@ rows:
     kind of term: report-forward ra>ma (300 messages, 221,871 B) and report-shared ma>ma (95, 77,310 B)
     are reports, and the pre-generation hops scale with the accounts present. To judge the device side of
     a top-up, measure the topup flow''s bytes, not all Uu'
+  recheck_fix5: 'F5-TOPUP (2026-10-28): the extractor now gives that measure,
+    topup.uu_bytes_per_topup (runtime_realism.py: the topup flow''s msg/pdu bytes with a device
+    at one end, per completed top-up). On T (base.yaml, a925db58+ debug build): 3,764.3 B per
+    top-up against 17,019.3 B of all Uu; scms-fix5.yaml F5.TOPUP.bytes passes. The engine leaf
+    access.uu_*_bytes is all Uu traffic and stays as it is'
 - id: RA.events
   base: B
   variant: F

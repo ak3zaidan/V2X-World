@@ -1644,7 +1644,10 @@ pub struct Phase2Report {
     pub messages_checked: u64,
     /// How many detector verdicts fired.
     pub verdicts_fired: u64,
-    /// How many misbehaviour reports were filed.
+    /// How many misbehaviour reports the vehicles generated, filed or not (see
+    /// [`Phase2Report::reports_not_filed`]): a detection becomes a report here, before the
+    /// device encodes, signs and stores it, so a report that never left the device is
+    /// counted too.
     pub reports_sent: u64,
     /// Of those, uploaded over a cellular modem.
     pub reports_uploaded_cellular: u64,

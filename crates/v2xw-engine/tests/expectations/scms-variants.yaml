@@ -404,6 +404,9 @@ rows:
     messages once a list is overdue, which would refuse every message in W3-W4 here. The engine scopes
     the rule to the overdue list''s CRACA (validation/vehicle-and-roadside.md R15). Which reading
     deployed OBUs follow is not published (trace track fix spec F5-SCOPE)'
+  recheck_fix5: '2026-10-28, a925db58+ debug build (fix-5 scms track, tiny slot, --record-level
+    metrics): 0 crl-overdue, 0 refusals of any kind; matrix.py PASS. The strict reading is now a
+    setting (security.scms.crl_overdue_scope: all; scms-fix5.yaml F5.SCOPE.mwc-all)'
 - id: RR.MWC2.overdue
   base: MW
   variant: MWC2
@@ -431,6 +434,8 @@ rows:
     overdue). In W4 all 6,638 records hold both home lists overdue while provider-b''s b0595c is current,
     and W5 recovers (nextCrl day 37.09). The repo file and a scratch copy both gave 110,048. Fault: the old
     200,000 s start gives 0, which turns this row red'
+  recheck_fix5: '2026-10-28, a925db58+ debug build (fix-5 scms track, tiny slot, --record-level
+    metrics): 110,048 crl-overdue, the 9d0fbc2c release value to the refusal; matrix.py PASS'
 - id: VB.Q60.rsu-crls
   base: Q60
   variant: Q60

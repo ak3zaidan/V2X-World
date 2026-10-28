@@ -1304,6 +1304,75 @@ fn a_configured_overdue_tolerance_moves_the_refusal() {
     assert_eq!(refused(&strict, "crl-overdue"), 1);
 }
 
+/// `security.scms.crl_overdue_scope` (F5-SCOPE): [CAMP122] Table 67 has the device
+/// "rejecting all of them" once a list is overdue. A receiver holding two CRACAs' lists,
+/// the old one past `nextCrl` + tolerance and the current one fresh, accepts a sender
+/// under the current CRACA with `craca` (the default: only the signers the overdue list
+/// governs) and refuses it with `all`. Fault that turns it red: `RxTrust::overdue`
+/// ignoring the scope.
+#[test]
+fn an_overdue_list_refuses_every_sender_only_under_the_all_scope() {
+    use v2xw_node::rxval::CrlOverdueScope;
+    let current = pki();
+    let old = ScmsPki::new(8, t0() - 31_556_952).expect("PKI");
+    assert_ne!(current.craca_id(), old.craca_id(), "two CRACAs");
+    let both = |scope: Option<CrlOverdueScope>| {
+        let mut s = NodeSecurity::new(wall(), CryptoMode::Real, PSID_SAFETY);
+        let cas: Vec<Arc<Certificate>> = current
+            .all()
+            .iter()
+            .chain(old.all().iter())
+            .map(|a| Arc::new(a.cert.clone()))
+            .collect();
+        s.install_trust(
+            &[
+                Arc::new(current.root.cert.clone()),
+                Arc::new(old.root.cert.clone()),
+            ],
+            &cas,
+        );
+        if let Some(scope) = scope {
+            s.trust_mut().set_crl_overdue_scope(scope);
+        }
+        s
+    };
+    // The old CRACA's list: issued at t0, nextCrl a week later, overdue two weeks after.
+    let stale = linkage_crl(&old, &[], t0());
+    // The current CRACA's list: issued two weeks in, due a week later.
+    let fresh = linkage_crl(&current, &[], t0() + 14 * 86_400);
+    let at = u64::from(WEEK + 14 * 86_400 + 60);
+    let sender = pseudonym(&current, &current.aca, 14, |s| {
+        s.valid_from = t0() + WEEK + 14 * 86_400;
+    });
+    let mut default = both(None);
+    assert_eq!(default.trust().crl_overdue_scope(), CrlOverdueScope::Craca);
+    let mut all = both(Some(CrlOverdueScope::All));
+    for rx in [&mut default, &mut all] {
+        rx.verify_secured_crl(&stale, 5 * NS_PER_S)
+            .expect("old list");
+        rx.verify_secured_crl(&fresh, 5 * NS_PER_S)
+            .expect("current list");
+    }
+    assert_eq!(
+        receive(&mut default, &bsm(CryptoMode::Real, &sender, at, None), at),
+        SpduVerdict::Valid,
+        "craca: the overdue list does not govern this sender"
+    );
+    assert_eq!(refused(&default, "crl-overdue"), 0);
+    assert_eq!(
+        receive(&mut all, &bsm(CryptoMode::Real, &sender, at, None), at),
+        SpduVerdict::Refused,
+        "all: any overdue series-1 list refuses every message"
+    );
+    assert_eq!(refused(&all, "crl-overdue"), 1);
+    assert_eq!(CrlOverdueScope::parse("all"), Some(CrlOverdueScope::All));
+    assert_eq!(
+        CrlOverdueScope::parse("craca"),
+        Some(CrlOverdueScope::Craca)
+    );
+    assert_eq!(CrlOverdueScope::parse("every"), None);
+}
+
 /// Rerun §9 item 3: a message a 1609.2 receiver rule refused is reported as that rule, not
 /// as a bad signature. The security stack keeps the rule of its last refusal for the node
 /// to read once, and the handset's report on the frame carries it
