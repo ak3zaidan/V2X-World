@@ -3273,8 +3273,8 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                (top-up, re-enrolment, trust fetch) ride TCP/TLS on a service-channel \
                session (transport/80211p-sch: the vehicle's contact window, EDCA AC_BE on \
                the unit's measured CBR, 1609.4 intervals, link-budget loss) and the unit's \
-               line; a transfer that fails never completes and is not retried at the next \
-               contact (open). Under constant the air hop is the fixed link: the service-channel path (contact window, PER, SCH load) \
+               line; a transfer that fails cuts its flow off, and the vehicle starts it again \
+               while a verified unit is in range (relayed_flows_cut_off). Under constant the air hop is the fixed link: the service-channel path (contact window, PER, SCH load) \
                is P19.3-P19.4.",
     },
     KeyStatus {

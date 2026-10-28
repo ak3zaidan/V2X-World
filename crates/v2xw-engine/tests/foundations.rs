@@ -961,6 +961,63 @@ fn relay_run(air: Option<&str>, muted: bool) -> (RunReport, MemoryRecorder) {
     run(s)
 }
 
+/// WP-19 P19.4: a download the service channel cannot finish is cut off and tried again.
+/// Six vehicles, no modem, one relaying unit under `net.rsu_ip.air: sch`, their pool one
+/// period deep. At 0 dBm every top-up completes on its first try. At -15 dBm a 1,536-octet
+/// frame needs a nearer vehicle than the WSA does: TCP gives up on some transfers, those
+/// flows are dropped (`relayed_flows_cut_off`), and the vehicles start again while they
+/// are still in range (USDOT RSU Specification v4.1 §2.2), so more top-ups start than there
+/// are vehicles and fewer of them complete.
+#[test]
+fn a_cut_off_download_is_retried_at_the_next_contact() {
+    let run_at = |power: f64| {
+        let mut s = with_backend(deterministic_radio(fleet(6, 40.0)));
+        if let Some(uu) = s.net.uu.as_mut() {
+            uu.params["penetration"] = 0.0.into();
+        }
+        if let Some(p) = s.security.protocol.as_mut() {
+            p.params["pool_periods"] = 1.into();
+        }
+        s.actors.rsus = vec![
+            serde_json::from_value(serde_json::json!({
+                "position_m": [420.0, 280.0, 0.0],
+                "roles": ["crl", "provisioning-proxy", "report-forward"],
+                "profile": "rsu/commsignia-its-rs4",
+            }))
+            .expect("an RSU"),
+        ];
+        s.net.rsu_ip =
+            Some(serde_json::from_value(serde_json::json!({"air": "sch"})).expect("net.rsu_ip"));
+        s.radio.devices.rsu.tx_power_dbm = power;
+        run(s).0
+    };
+    let (strong, weak) = (run_at(0.0), run_at(-15.0));
+    for (name, r) in [("0 dBm", &strong), ("-15 dBm", &weak)] {
+        let p = &r.phase2;
+        let c = &p.access.carrier;
+        println!(
+            "CUT {name}: started {} completed {} cut {} | sch {} delivered {} failed {}",
+            p.topups_started,
+            p.topups_completed,
+            p.relayed_flows_cut_off,
+            c.sch_messages,
+            c.sch_delivered,
+            c.sch_failed
+        );
+    }
+    let (s, w) = (&strong.phase2, &weak.phase2);
+    assert_eq!(s.relayed_flows_cut_off, 0, "{s:?}");
+    assert_eq!(s.topups_started, s.topups_completed, "{s:?}");
+    assert!(w.access.carrier.sch_failed > 0, "{:?}", w.access.carrier);
+    assert!(w.relayed_flows_cut_off > 0, "{w:?}");
+    assert!(w.topups_started > 6, "a cut-off top-up starts again: {w:?}");
+    assert!(w.topups_completed >= 1, "{w:?}");
+    let share = |p: &v2xw_engine::phase2::Phase2Report| {
+        p.topups_completed as f64 / p.topups_started.max(1) as f64
+    };
+    assert!(share(w) < share(s), "{} vs {}", share(w), share(s));
+}
+
 /// IEEE 1609.3 service discovery gates the relay (WP-19 P19.2, `net.rsu_ip.air: sch`): a
 /// vehicle uses a roadside unit's SCMS service only after it has verified that unit's WSA
 /// (1609.3 §8.2.3, the user decides on a PSID match; 1609.3-2016 Annex H.1 signs it).

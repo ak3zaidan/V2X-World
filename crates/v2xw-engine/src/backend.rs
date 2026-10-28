@@ -317,6 +317,8 @@ pub struct Carrier {
     /// Under `net.rsu_ip.air: sch` (WP-19 P19.4): each relayed vehicle's session on its
     /// unit's service channel, and the TCP/TLS connection that rides it.
     sch_sessions: BTreeMap<NodeId, (RsuSchPath, TcpConn)>,
+    /// Vehicles whose service-channel transfer gave up since the engine last asked.
+    sch_failed_nodes: std::collections::BTreeSet<NodeId>,
     internet: Duration,
     air_latency: Duration,
     air_bps: u64,
@@ -378,6 +380,7 @@ impl Carrier {
             rsu_lines: BTreeMap::new(),
             relay_of: BTreeMap::new(),
             sch_sessions: BTreeMap::new(),
+            sch_failed_nodes: std::collections::BTreeSet::new(),
             internet,
             air_latency: p.v2x_air_latency,
             air_bps: p.v2x_air_bandwidth_bps,
@@ -510,6 +513,7 @@ impl Carrier {
     ) -> SimTime {
         let Carrier {
             sch_sessions,
+            sch_failed_nodes,
             rsu_lines,
             tcp,
             stats,
@@ -557,6 +561,7 @@ impl Carrier {
         stats.sch_failed += 1;
         stats.reconnects += 1;
         *conn = TcpConn::new(tcp);
+        sch_failed_nodes.insert(node);
         SCH_NEVER
     }
 
@@ -1105,6 +1110,15 @@ impl BackendAccess {
         let mut c = self.carrier();
         c.relay_of.insert(node, rsu);
         c.sch_sessions.remove(&node);
+    }
+
+    /// The vehicles whose service-channel transfer gave up since the last call (WP-19
+    /// P19.4): their flow will never complete, and the vehicle tries again at its next
+    /// contact ([`crate::phase2::ScmsPhase2::abort_cut_off_flows`]).
+    pub fn take_sch_failures(&mut self) -> Vec<NodeId> {
+        std::mem::take(&mut self.carrier().sch_failed_nodes)
+            .into_iter()
+            .collect()
     }
 
     /// [`BackendAccess::bind_relay`] under `net.rsu_ip.air: sch` (WP-19 P19.4): the flow

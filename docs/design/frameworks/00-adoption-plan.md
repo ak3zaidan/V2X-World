@@ -850,6 +850,14 @@ trustworthy or comparable; later waves add behaviours and radio features.
   non-zero). Transport tests `rsu_sch::download_success_falls_with_speed` (40 passes at
   5/10/20/30 m/s, 4 MB: 38, 36, 31, 27 complete) and `download_success_falls_with_sch_load`
   (CBR 0.1/0.3/0.5 at 20 m/s: 30, 28, 23). Default byte-identical.
+- P19.4 part 3, retry (2026-10-28, branch only): a vehicle whose SCH transfer gave up is
+  recorded by the carrier (`take_sch_failures`), and `ScmsPhase2::abort_cut_off_flows`
+  drops its relayed flows (top-up, re-enrolment, trust fetch; `relayed_flows_cut_off`)
+  before the top-ups fall due, so it starts again while a verified unit is in range (RSU
+  Spec v4.1 §2.2). This closes the part 2 open item. A retry is a new request, not a
+  resumed download (ASSUMPTION; CAMP's download resumption is not modelled).
+  `foundations::a_cut_off_download_is_retried_at_the_next_contact`: six vehicles; at
+  0 dBm 12 of 12 top-ups complete; at -15 dBm 24 start, 19 are cut off and 5 complete.
 
 **WP-20 Traffic yields to emergency vehicles** (M, 5 days). Source: S-P5.
 - Scope: within a reaction distance civilians pull to the kerb or slow (US move-over, UVC

@@ -9648,7 +9648,12 @@ impl Engine {
             }
         }
 
-        // 6. Top-ups for pools running low.
+        // 6. Top-ups for pools running low. Under `net.rsu_ip.air: sch` a relayed flow
+        // whose service-channel transfer gave up is dropped first, so it starts again
+        // at the vehicle's next contact (WP-19 P19.4).
+        if let Some(p) = self.phase2.as_mut() {
+            p.abort_cut_off_flows();
+        }
         let due = self
             .phase2
             .as_mut()
