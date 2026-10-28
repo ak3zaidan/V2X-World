@@ -856,6 +856,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "25 m (SUMO's bluelight default); more on a quiet street where a siren carries, less in heavy traffic.",
     },
     Basic {
+        path: "traffic.emergency_yield.red_pass_speed_mps",
+        explain: "How slowly an ambulance or fire engine takes a red light it is allowed to pass: 0 means it stops first, then goes once the junction is clear.",
+        recommended: "0 (a full stop, the fire-service rule); 2 to 4 m/s for services that let their drivers roll through slowly.",
+    },
+    Basic {
         path: "traffic.lc_speed_gain",
         explain: "How readily drivers change lane to get past slower traffic; setting any of the lane-change eagerness settings switches to SUMO's LC2013 lane-changing.",
         recommended: "Unset (today's MOBIL); 1 (SUMO default); 0.5 to 2.",

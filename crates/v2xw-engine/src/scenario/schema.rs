@@ -313,6 +313,11 @@ pub struct EmergencyYieldSettings {
     /// device `reactiondist` default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reaction_distance_m: Option<f64>,
+    /// The speed an emergency vehicle slows to at a red before it passes on, once the
+    /// junction is clear, m/s (UVC §11-106(b)2). Unset is 0: a full stop first, as
+    /// fire-service practice has it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red_pass_speed_mps: Option<f64>,
 }
 
 impl EmergencyYieldSettings {
@@ -325,6 +330,7 @@ impl EmergencyYieldSettings {
         v2xw_mobility::EmergencyYieldParams {
             enabled: self.enabled.unwrap_or(base.enabled),
             reaction_distance_m: self.reaction_distance_m.unwrap_or(base.reaction_distance_m),
+            red_pass_speed_mps: self.red_pass_speed_mps.unwrap_or(base.red_pass_speed_mps),
             ..base
         }
     }

@@ -1748,6 +1748,15 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the emergency-vehicle reaction distance",
     },
+    // UVC 11-106(b)2 gives no figure; 0 (a full stop) to 10 m/s (36 km/h) covers a stop,
+    // a crawl and the slow roll some ambulance services allow.
+    Bound {
+        path: "traffic.emergency_yield.red_pass_speed_mps",
+        lo: 0.0,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the emergency-vehicle red-pass speed",
+    },
     // SUMO's speedFactor: observed urban free-flow means are about 0.9-1.2 of the limit;
     // 0.5-1.5 covers it with room either side. The spread multiplies SUMO's speedDev
     // (0.1 for a car): 3 is a 30 % deviation.
@@ -4159,7 +4168,7 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: "traffic.emergency_yield",
         status: Status::Wired,
-        note: "Drivers with an emergency vehicle running its beacons within reaction_distance_m behind on the same carriageway yield by the jurisdiction's rule (rules::EmergencyYield): in the US they move to the right-hand lane and stop clear of the junction (NY VTL 1144(a), UVC 11-405). Native engine only.",
+        note: "Drivers with an emergency vehicle running its beacons within reaction_distance_m behind on the same carriageway yield by the jurisdiction's rule (rules::EmergencyYield): in the US they move to the right-hand lane and stop clear of the junction (NY VTL 1144(a), UVC 11-405). The emergency vehicle passes a red after stopping (or slowing to red_pass_speed_mps) once the junction is clear (UVC 11-106(b)2). Native engine only.",
     },
     KeyStatus {
         path: "traffic.depart_at_speed",
@@ -5535,16 +5544,25 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 bounded_at(path, path, v, e);
             }
         }
-        if let Some(y) = &t.emergency_yield
-            && let Some(v) = y.reaction_distance_m
-        {
-            let path = "traffic.emergency_yield.reaction_distance_m";
-            bounded_at(path, path, v, e);
-            if y.enabled != Some(true) {
-                e.push(conflict(
-                    path,
-                    "is set, and traffic.emergency_yield.enabled is not true".to_string(),
-                ));
+        if let Some(y) = &t.emergency_yield {
+            for (path, v) in [
+                (
+                    "traffic.emergency_yield.reaction_distance_m",
+                    y.reaction_distance_m,
+                ),
+                (
+                    "traffic.emergency_yield.red_pass_speed_mps",
+                    y.red_pass_speed_mps,
+                ),
+            ] {
+                let Some(v) = v else { continue };
+                bounded_at(path, path, v, e);
+                if y.enabled != Some(true) {
+                    e.push(conflict(
+                        path,
+                        "is set, and traffic.emergency_yield.enabled is not true".to_string(),
+                    ));
+                }
             }
         }
         if let Some(k) = &t.kerbside {

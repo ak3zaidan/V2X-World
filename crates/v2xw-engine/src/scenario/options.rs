@@ -1820,6 +1820,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "traffic.emergency_yield" => "Yield to emergency vehicles",
         "traffic.emergency_yield.enabled" => "Drivers pull over for emergency vehicles",
         "traffic.emergency_yield.reaction_distance_m" => "Siren noticed from (distance behind)",
+        "traffic.emergency_yield.red_pass_speed_mps" => "Emergency vehicle's speed passing a red",
         "traffic.lc_strategic" => "Lane change for the turn: eagerness (LC2013)",
         "traffic.lc_cooperative" => "Lane change to let others in (LC2013)",
         "traffic.lc_speed_gain" => "Lane change for speed: eagerness (LC2013)",
