@@ -4036,6 +4036,22 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-28: fix round 5, traffic track (branch of a925db58)
+
+Rows: `crates/v2xw-engine/tests/expectations/traffic-r5.yaml`.
+
+- **`violations.rs` (WP-08): green.** The test's premise was wrong, not the engine. At the
+  field rate its 60 s run with four SPaT units had under 0.1 red runners within reach of a
+  unit, and RLVW warns only from a SPaT it heard; the on and off runs were the same run. On
+  the all-signalised grid no violator can produce an IMA conflict: fail-to-yield acts only
+  at a permissive green, whose foe is the opposing stream (LTA's case), and a red runner
+  meets a cross queue that is still standing. The test is now two tests, each with a setup
+  in which its application can see a violator. RLVW: 3 x 3 junctions, a unit at each, every
+  driver a runner, 120 s: issued 12 -> 15, true 1 -> 4. IMA: the same grid without signals,
+  every driver failing to yield to slow foes: issued 95 -> 144, true 45 -> 75. Fault
+  `V2XW_FAULT=viol-off`: both red, and the off runs repeat exactly. A `MemoryRecorder`
+  passed the 4.5 GB cap, so the test uses `NullRecorder`. 289 s for the pair.
+
 ## 2026-10-28: adoption wave integration (grade, mac, nema: WP-16, 17, 18, 21, 22)
 
 One integrator in the main checkout, one heavy command at a time. All three agents had committed their work and their worktrees were clean, so no wip snapshot was needed.

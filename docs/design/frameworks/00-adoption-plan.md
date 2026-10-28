@@ -292,6 +292,16 @@ trustworthy or comparable; later waves add behaviours and radio features.
   assertions: at 300 s RLVW goes 34 -> 30 issued (true 0 -> 1), at 36 units and 120 s RLVW
   6 -> 11 but IMA 58 -> 56. Red-light entry times sit in the TTI band (3.30 per 1,000,
   median 0.30 s). Rows: `traffic-fix4.yaml`.
+- Fix round 5 (2026-10-28, traffic track): `violations.rs` is green. The cause was the test's
+  premise, not the engine: at the field rate its 60 s and four SPaT units held under 0.1 red
+  runs within reach of a unit (RLVW warns only from a SPaT it heard), and on the
+  all-signalised grid no violator can make an IMA conflict (fail-to-yield acts only at a
+  permissive green, whose foe is opposing, LTA's case; a red runner meets a standing cross
+  queue). Now two tests: RLVW on a 3 x 3 cut with a unit at every junction and every driver
+  a runner (mean 3 s), 120 s: issued 12 -> 15, true 1 -> 4; IMA on the same grid without
+  signals (priority to the right), every driver failing to yield to slow foes: issued
+  95 -> 144, true 45 -> 75. `V2XW_FAULT=viol-off` turns all four assertions red. Rows:
+  `traffic-r5.yaml` `R5.viol.*`.
 
 **WP-09 Two-ray interference and measured antennas** (S ×2, 3 days). Sources: O-P5, O-P6.
 - Scope: the two-ray interference law with the Fresnel ground reflection (Rappaport §4.6;

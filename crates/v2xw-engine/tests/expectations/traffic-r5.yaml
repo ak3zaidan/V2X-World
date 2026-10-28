@@ -1,0 +1,50 @@
+# Traffic fix round 5 (the traffic tests left failing by fix round 4; base a925db58).
+#
+# Every row states its prediction and source before the run that judges it; `measured`
+# and `verdict` were filled from that run. Base and variant of a comparison use one binary
+# and one seed. Each row names the injected fault that turns it red (shown red, then
+# restored or kept env-gated in the test).
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+schema: v2xw/scms-run-expectations/1
+rows:
+# --- (1) WP-08 in the engine: violations.rs ----------------------------------------------
+- id: R5.viol.premise
+  change: none (diagnosis of violations.rs, RLVW 0 -> 0, from the code)
+  base: 'violations.rs as of a925db58: connected-intersections, 60 s, four SPaT units, field-rate red runners, fail_to_yield_share 0.2'
+  measure: 'which code path could make each of its three assertions true'
+  expect: >-
+    the test, not the engine: (a) at the field rate (drivers.rs RED_RUN_SHARE 0.6, mean 0.6 s; TTI 0-4196-P1
+    Table 1) 48 vehicles in 60 s make about 0.6 red runs and under 0.1 within 150 m of the four units, and RLVW
+    only warns from a SPaT it heard (v2xw-node apps.rs signal_situation, the spat_heard filter), so on = off
+    (F4.viol.reach-60: digests identical); (b) IMA (apps.rs ima: both vehicles >= 1 m/s, crossing 45-135
+    degrees) has no violator to see on an all-signalised grid with no all-red (procedural.rs signal plans):
+    fail-to-yield acts only where junction.signal is None or GreenYield (mobility engine.rs decision pass), a
+    permissive green whose foe is the opposing stream (180 degrees, LTA's case), and a red runner enters while
+    the cross queue still stands in its start-up reaction
+  source: TTI 0-4196-P1 Table 1; SAE J2945/1-family IMA crossing-path geometry as apps::ima implements it
+  fault: n/a (a diagnosis)
+  measured: 'confirmed by F4.viol.reach-60 (identical digests) and F4.viol.test-36 (IMA 58 -> 56 with the runners on); no engine defect found in generation (red entries 3.30 per 1,000, F4.rlr.distribution) or detection'
+  verdict: wrong-expectation
+  note: 'the test premise was wrong; replaced by R5.viol.rlvw and R5.viol.ima, each with a setup in which its application can see a violator'
+- id: R5.viol.rlvw
+  change: actors.vehicles.drivers.violations {enabled, red_run_share 1.0, red_run_tolerance_mean_s 3.0}
+  base: 'connected-intersections cut to 3 x 3 junctions, a SPaT and MAP unit at all nine, 120 s, violations absent (violations.rs rlvw_fires_on_drivers_who_run_the_red_unscripted)'
+  variant: the same, the block on
+  measure: report.apps.rlvw issued and true
+  expect: 'issued and true both rise: every driver a runner with mean lateness 3 s (cap 4 s) gives about 2.2/60 = 0.037 red runs per passage, some 8 among ~100 vehicles x ~2 passages, all at a SPaT junction; the off run issues the few false or late-amber warnings of the default population'
+  source: drivers.rs red_tolerance_s; apps.rs rlvw (required deceleration >= 3.4 m/s2 after 1 s, AASHTO / ITE)
+  fault: 'V2XW_FAULT=viol-off (the block dropped from the on run) -> both assertions red'
+  measured: 'issued 12 -> 15, true 1 -> 4, missed 1 -> 0 (104 / 104 vehicles), 289 s for both tests; fault: 12 -> 12, true 1 -> 1, FAILED; the off run repeats 12 / 1 exactly (deterministic)'
+  verdict: pass
+- id: R5.viol.ima
+  change: actors.vehicles.drivers.violations {enabled, fail_to_yield_share 1.0}
+  base: 'the same 3 x 3 grid with signalised false (priority to the right), no units, BSM only, 120 s, violations absent (violations.rs ima_fires_on_drivers_who_fail_to_yield_unscripted)'
+  variant: the same, the block on
+  measure: report.apps.ima issued and true
+  expect: 'issued and true both rise: a minor-road driver who ignores a foe at or below 5 m/s (SUMO jmIgnoreFoeSpeed semantics) pulls out with the foe arriving inside IMA''s window'
+  source: drivers.rs fail_to_yield_share, IGNORE_FOE_SPEED_MPS; apps.rs ima
+  fault: 'V2XW_FAULT=viol-off -> both assertions red'
+  measured: 'issued 95 -> 144, true 45 -> 75, missed 0 -> 1 (106 / 105 vehicles); fault: 95 -> 95, true 45 -> 45, FAILED'
+  verdict: pass
