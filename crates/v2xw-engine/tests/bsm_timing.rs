@@ -50,6 +50,7 @@ fn timing(s: &mut Scenario, enabled: bool, locked_share: Option<f64>) {
         enabled: Some(enabled),
         calibration: None,
         locked_share,
+        stamp_chain: None,
     });
 }
 
@@ -123,6 +124,7 @@ fn the_settings_load_and_out_of_range_ones_are_refused() {
         enabled: Some(true),
         calibration: Some("/nonexistent/bsm-timing.yaml".to_string()),
         locked_share: None,
+        stamp_chain: None,
     });
     assert!(
         !validate(&s).is_empty(),

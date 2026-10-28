@@ -1954,6 +1954,20 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the share of OBUs whose BSM timestamp is locked to the GNSS fix epoch",
     },
+    Bound {
+        path: "actors.vehicles.bsm_timing.stamp_chain.stay_minus1",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the chance that a BSM stamped 1 ms early is followed by another",
+    },
+    Bound {
+        path: "actors.vehicles.bsm_timing.stamp_chain.stay_zero",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the chance that a BSM stamped on the fix epoch is followed by another",
+    },
     // --- end traffic audit ----------------------------------------------------
 ];
 
@@ -2008,6 +2022,10 @@ pub static CHOICES: &[Choices] = &[
     choices("net.geonet.forwarding", &GN_FORWARDING),
     choices("net.access_categories", &NET_ACCESS_CATEGORIES),
     choices("net.dcc_cbr", &DCC_CBR),
+    choices(
+        "actors.vehicles.bsm_timing.stamp_chain.profile",
+        &v2xw_node::bsm_timing::StampChain::PROFILES,
+    ),
     choices("messages.codec_tier", &CODEC_TIERS),
     choices("messages.sets[]", &MESSAGE_SETS),
     choices("security.envelope", &ENVELOPES),
@@ -5094,6 +5112,30 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 v,
                 e,
             );
+        }
+        if let Some(ch) = &t.stamp_chain {
+            for (path, v) in [
+                (
+                    "actors.vehicles.bsm_timing.stamp_chain.stay_minus1",
+                    ch.stay_minus1,
+                ),
+                (
+                    "actors.vehicles.bsm_timing.stamp_chain.stay_zero",
+                    ch.stay_zero,
+                ),
+            ] {
+                if let Some(v) = v {
+                    bounded_at(path, path, v, e);
+                }
+            }
+            if let Some(p) = &ch.profile {
+                one_of(
+                    "actors.vehicles.bsm_timing.stamp_chain.profile",
+                    p,
+                    &v2xw_node::bsm_timing::StampChain::PROFILES,
+                    e,
+                );
+            }
         }
         if t.is_on()
             && let Err((path, why)) = t.calibration()

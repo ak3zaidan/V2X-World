@@ -281,6 +281,168 @@ pub struct GridHop {
     pub return_prob: f64,
 }
 
+/// The `stamp_chain` block: a locked device that reports the **fix epoch's** position and
+/// stamps `secMark` on that epoch or one millisecond early, the offset `o ∈ {-1, 0}` ms a
+/// two-state Markov chain advanced once per BSM (both :00/:50 grids alike), with persistent
+/// position steps at its `0 -> -1` transitions.
+///
+/// Real data (research/synthesis/p1-realdata-baseline.md §7.2,
+/// `data/calibration/bsm-stamp-epoch-candidates.yaml`): the along-track residual over
+/// speed of locked Wyoming and Tampa devices is `-e` ms at a secMark Δt offset `e = ±1`, a
+/// position left on the epoch, not the ~0 of a position at a jittered instant (the v3
+/// fit's `phase_scope: message` "instant" form, which pools Orem's at-instant units in).
+/// Residuals over 5 cm fall on a `0 -> -1` transition with P 0.48 (Wyoming) to 0.70
+/// (Tampa) against 0.05-0.11 elsewhere, are along-track, and are not undone by the next
+/// pair: a positioning filter's correction, carried here on the error walk.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StampChain {
+    /// P(o_{k+1} = -1 | o_k = -1).
+    pub stay_minus1: f64,
+    /// P(o_{k+1} = 0 | o_k = 0).
+    pub stay_zero: f64,
+    /// The position steps at `0 -> -1` transitions; `None`: no steps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<TransitionStep>,
+}
+
+/// The position step of a [`StampChain`] `0 -> -1` transition.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TransitionStep {
+    /// Real data: the share of `0 -> -1` pairs whose residual is over 5 cm.
+    pub prob_on_transition: f64,
+    /// Real data: the share of every other pair whose residual is over 5 cm. The
+    /// `position_noise` walk was fitted on exactly-100 ms pairs (no transition), so it
+    /// already gives about this share everywhere; the step probability is what is left
+    /// over it ([`TransitionStep::prob`]).
+    pub prob_elsewhere: f64,
+    /// Median |along-track| step, m (lognormal through the p50 and p90).
+    pub along_p50_m: f64,
+    /// 90th percentile |along-track| step, m.
+    pub along_p90_m: f64,
+    /// Median |cross-track| step, m.
+    pub cross_p50_m: f64,
+    /// 90th percentile |cross-track| step, m.
+    pub cross_p90_m: f64,
+}
+
+/// The z of the normal's 90th percentile.
+const Z90: f64 = 1.281_551_565_544_600_5;
+
+impl TransitionStep {
+    /// P(a step at a `0 -> -1` transition): the excess of the transition share over the
+    /// share the walk gives everywhere, `(p_on - p_else) / (1 - p_else)`.
+    #[must_use]
+    pub fn prob(&self) -> f64 {
+        if self.prob_elsewhere >= 1.0 {
+            return 0.0;
+        }
+        ((self.prob_on_transition - self.prob_elsewhere) / (1.0 - self.prob_elsewhere))
+            .clamp(0.0, 1.0)
+    }
+
+    /// The (along, cross) step for two standard normals and two signs (u < 0.5 negative).
+    fn draw(&self, za: f64, zc: f64, sa: f64, sc: f64) -> (f64, f64) {
+        let ln = |p50: f64, p90: f64, z: f64| {
+            v2xw_core::math::exp(p50.ln() + z * (p90 / p50).ln() / Z90)
+        };
+        let sign = |u: f64| if u < 0.5 { -1.0 } else { 1.0 };
+        (
+            sign(sa) * ln(self.along_p50_m, self.along_p90_m, za),
+            sign(sc) * ln(self.cross_p50_m, self.cross_p90_m, zc),
+        )
+    }
+}
+
+impl StampChain {
+    /// The named rate sets, from `data/calibration/bsm-stamp-epoch-candidates.yaml`.
+    pub const PROFILES: [&'static str; 2] = ["tampa_locked", "wyoming_obu"];
+
+    /// A named rate set: `tampa_locked` (Tampa's locked IDs, a fit set: P1-E4 against
+    /// Wyoming stays out of sample) or `wyoming_obu` (the one Wyoming OBU, the P1-E4
+    /// held-out source: using it puts P1-E4 in sample on these rates).
+    #[must_use]
+    pub fn profile(name: &str) -> Option<Self> {
+        match name {
+            "tampa_locked" => Some(Self {
+                stay_minus1: 0.235,
+                stay_zero: 0.918,
+                step: Some(TransitionStep {
+                    prob_on_transition: 0.697,
+                    prob_elsewhere: 0.110,
+                    along_p50_m: 0.079,
+                    along_p90_m: 0.174,
+                    cross_p50_m: 0.049,
+                    cross_p90_m: 0.124,
+                }),
+            }),
+            "wyoming_obu" => Some(Self {
+                stay_minus1: 0.566,
+                stay_zero: 0.630,
+                step: Some(TransitionStep {
+                    prob_on_transition: 0.483,
+                    prob_elsewhere: 0.047,
+                    along_p50_m: 0.063,
+                    along_p90_m: 0.130,
+                    cross_p50_m: 0.024,
+                    cross_p90_m: 0.058,
+                }),
+            }),
+            _ => None,
+        }
+    }
+
+    /// The chain's stationary P(o = -1), which the first BSM is drawn from.
+    #[must_use]
+    pub fn stationary_minus1(&self) -> f64 {
+        let a = 1.0 - self.stay_zero;
+        let b = 1.0 - self.stay_minus1;
+        a / (a + b)
+    }
+
+    /// Checks the rates and the step's shape.
+    ///
+    /// # Errors
+    /// The first problem, as a sentence.
+    pub fn check(&self, at: &str) -> Result<(), String> {
+        let prob = |v: f64| v.is_finite() && (0.0..=1.0).contains(&v);
+        if !prob(self.stay_minus1) || !prob(self.stay_zero) {
+            return Err(format!(
+                "{at}: stamp_chain stay_minus1 and stay_zero must be in 0..1"
+            ));
+        }
+        if self.stay_minus1 + self.stay_zero >= 2.0 {
+            return Err(format!(
+                "{at}: stamp_chain stay_minus1 and stay_zero cannot both be 1 (no stationary state)"
+            ));
+        }
+        if let Some(s) = self.step {
+            let q = |p50: f64, p90: f64| {
+                p50.is_finite() && p50 > 0.0 && p90.is_finite() && p90 >= p50
+            };
+            if !prob(s.prob_on_transition)
+                || !prob(s.prob_elsewhere)
+                || !q(s.along_p50_m, s.along_p90_m)
+                || !q(s.cross_p50_m, s.cross_p90_m)
+            {
+                return Err(format!(
+                    "{at}: stamp_chain step probabilities are in 0..1 and each p50 is > 0 and at most its p90"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The stamp chain's model id, which is also its RNG domain's name.
+pub const CHAIN_MODEL_ID: &str = "node/bsm-timing/stamp-chain";
+
+/// The RNG domain of the stamp chain's draws, apart from the class's own so that turning
+/// the chain on leaves every other draw of the device where it was (a paired comparison).
+#[must_use]
+pub fn chain_rng_domain() -> RngDomain {
+    RngDomain::plugin(CHAIN_MODEL_ID)
+}
+
 /// One device timing class.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimingClass {
@@ -315,6 +477,11 @@ pub struct TimingClass {
     /// The :00/:50 grid hops of a device without a `bsm_clock` (schema v3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid_hop: Option<GridHop>,
+    /// The epoch stamp chain of a device on the fix grid ([`StampChain`]); `None`: the
+    /// `secmark_phase_ms` form. Set from the scenario (`bsm_timing.stamp_chain`) through
+    /// [`BsmTimingCalibration::with_stamp_chain`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stamp_chain: Option<StampChain>,
 }
 
 fn slip_map<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<i32, f64>, D::Error> {
@@ -442,6 +609,19 @@ impl BsmTimingCalibration {
                     ));
                 }
             }
+            if let Some(ch) = &c.stamp_chain {
+                ch.check(&at)?;
+                if c.bsm_clock.is_some() {
+                    return Err(format!(
+                        "{at}: stamp_chain is for a device on the fix grid; a bsm_clock has its own phase"
+                    ));
+                }
+                if ch.step.is_some() && c.position_noise.is_none() {
+                    return Err(format!(
+                        "{at}: stamp_chain steps are carried on the position_noise walk (schema {SCHEMA_V3}); this class has none"
+                    ));
+                }
+            }
             if let Some(k) = &c.bsm_clock {
                 k.drift_ms.check(&format!("{at}.bsm_clock.drift_ms"))?;
                 k.period_dev_ms
@@ -521,6 +701,19 @@ impl BsmTimingCalibration {
         Ok(self)
     }
 
+    /// The calibration with the `locked` class's stamp model replaced by `chain`.
+    ///
+    /// # Errors
+    /// When there is no class named `locked`, or the chain does not check against it.
+    pub fn with_stamp_chain(mut self, chain: StampChain) -> Result<Self, String> {
+        let Some(li) = self.classes.iter().position(|c| c.name == "locked") else {
+            return Err("stamp_chain is set and the calibration has no class named locked".into());
+        };
+        self.classes[li].stamp_chain = Some(chain);
+        self.check()?;
+        Ok(self)
+    }
+
     /// The built-in **provisional** values, until the real-data pipeline writes
     /// `data/calibration/bsm-timing-cvpilot.yaml`. Sources:
     /// research/synthesis/check-realdata-and-vesnos.md §2.2–2.4 and
@@ -565,6 +758,7 @@ impl BsmTimingCalibration {
                     output_noise: None,
                     position_noise: None,
                     grid_hop: None,
+                    stamp_chain: None,
                 },
                 TimingClass {
                     name: "free".to_string(),
@@ -579,6 +773,7 @@ impl BsmTimingCalibration {
                     output_noise: None,
                     position_noise: None,
                     grid_hop: None,
+                    stamp_chain: None,
                 },
             ],
         }
@@ -630,6 +825,9 @@ pub struct BsmTimingDevice {
     /// The previous belief's instant and ground speed (schema v3 `grid_hop`), from which a
     /// hop BSM's speed is carried to its own instant.
     last_speed: Option<(SimTime, f64)>,
+    /// The stamp chain's state at the last BSM (`Some(true)`: stamped 1 ms early), `None`
+    /// before the first.
+    stamp_early: Option<bool>,
 }
 
 impl BsmTimingDevice {
@@ -668,6 +866,7 @@ impl BsmTimingDevice {
             pos_err: (0.0, 0.0),
             away: false,
             last_speed: None,
+            stamp_early: None,
         }
     }
 
@@ -682,11 +881,36 @@ impl BsmTimingDevice {
     ///
     /// Every call consumes the same seven 64-bit draws, whatever the class's numbers, plus
     /// two for a `bsm_clock`, two for `output_noise`, five for `position_noise` and one for
-    /// `grid_hop` when the class has them.
+    /// `grid_hop` when the class has them. A class with a `stamp_chain` draws its eight
+    /// more after those, from `rng` itself; [`Self::report_chained`] takes them from a
+    /// stream of their own instead.
     pub fn report(
         &mut self,
         cal: &BsmTimingCalibration,
         rng: &mut RngStream,
+        belief: &PositionEstimate,
+    ) -> Option<BsmReport> {
+        self.report_inner(cal, rng, None, belief)
+    }
+
+    /// [`Self::report`] with the `stamp_chain` draws (eight per call when the class has a
+    /// chain, none otherwise) from `chain_rng` ([`chain_rng_domain`]), so every other draw
+    /// is the one the device makes without the chain.
+    pub fn report_chained(
+        &mut self,
+        cal: &BsmTimingCalibration,
+        rng: &mut RngStream,
+        chain_rng: &mut RngStream,
+        belief: &PositionEstimate,
+    ) -> Option<BsmReport> {
+        self.report_inner(cal, rng, Some(chain_rng), belief)
+    }
+
+    fn report_inner(
+        &mut self,
+        cal: &BsmTimingCalibration,
+        rng: &mut RngStream,
+        chain_rng: Option<&mut RngStream>,
         belief: &PositionEstimate,
     ) -> Option<BsmReport> {
         let c = &cal.classes[self.class];
@@ -718,11 +942,51 @@ impl BsmTimingDevice {
             (za * n.along_m[j], zc * n.cross_m[j], n.tau_s)
         });
         let u_hop = c.grid_hop.map(|_| rng.uniform(0.0, 1.0));
+        // The stamp chain: its transition, the step's chance, the step's two sizes and two
+        // signs (8 draws).
+        let chain_draws = c.stamp_chain.map(|_| {
+            let r: &mut RngStream = match chain_rng {
+                Some(r) => r,
+                None => &mut *rng,
+            };
+            let u = r.uniform(0.0, 1.0);
+            let us = r.uniform(0.0, 1.0);
+            let za = r.normal(0.0, 1.0);
+            let zc = r.normal(0.0, 1.0);
+            let sa = r.uniform(0.0, 1.0);
+            let sc = r.uniform(0.0, 1.0);
+            (u, us, za, zc, sa, sc)
+        });
         if !belief.fix.has_position() {
             return None;
         }
         // J2735 Speed LSB: below it the vehicle is not moving and a repeat is no repeat.
         let moving = belief.ground_speed_mps() >= 0.02;
+        // The stamp chain advances one BSM: o = -1 (1 ms early) or 0. A 0 -> -1 transition
+        // of a moving device carries, with the step's probability, a persistent position
+        // step (along, cross) that goes onto the error walk below.
+        let mut step = None;
+        let stamp_early = match (c.stamp_chain, chain_draws) {
+            (Some(ch), Some((u, us, za, zc, sa, sc))) => {
+                let prev = self.stamp_early;
+                let early = match prev {
+                    None => u < ch.stationary_minus1(),
+                    Some(true) => u < ch.stay_minus1,
+                    Some(false) => u >= ch.stay_zero,
+                };
+                self.stamp_early = Some(early);
+                if let Some(s) = ch.step
+                    && prev == Some(false)
+                    && early
+                    && moving
+                    && us < s.prob()
+                {
+                    step = Some(s.draw(za, zc, sa, sc));
+                }
+                Some(early)
+            }
+            _ => None,
+        };
         // The error walk advances one fix epoch per wake while the vehicle moves: (error
         // now, error at the next epoch). Standing, the receiver holds its solution (static
         // hold), so the walk holds too and its error stays on the reported position: left
@@ -743,6 +1007,18 @@ impl BsmTimingDevice {
             self.pos_err = next;
             (cur, next)
         });
+        // A transition step is a lasting correction of the reported position: it goes onto
+        // the walk's state (and so decays with its tau) and is already in this BSM's
+        // position, the first one stamped early.
+        let pn = match (pn, step) {
+            (Some((cur, next)), Some((sa, sc))) => {
+                let (sh, ch) = belief.heading_rad.sin_cos();
+                let d = (sa * ch - sc * sh, sa * sh + sc * ch);
+                self.pos_err = (next.0 + d.0, next.1 + d.1);
+                Some(((cur.0 + d.0, cur.1 + d.1), self.pos_err))
+            }
+            (pn, _) => pn,
+        };
         if let (Some(h), Some(u)) = (c.grid_hop, u_hop) {
             self.away = if self.away {
                 u >= h.return_prob
@@ -817,7 +1093,11 @@ impl BsmTimingDevice {
         // jittered instant, not the ±1 ms of a position left on the epoch
         // (data/calibration/bsm-timing-cvpilot.yaml). The timestamp keeps its epoch; a slip
         // moves the position k fixes (later for k > 0).
-        let at_instant = if tick.is_none() && c.phase_scope == PhaseScope::Message {
+        // A stamp chain leaves the position on the epoch: only the stamp moves.
+        let at_instant = if tick.is_none()
+            && c.phase_scope == PhaseScope::Message
+            && stamp_early.is_none()
+        {
             (phase_ms * 1e6).round() as i128
         } else {
             0
@@ -847,9 +1127,14 @@ impl BsmTimingDevice {
             pos = p;
         }
         self.last_pos = Some(pos);
+        // A stamp chain's secMark is the epoch (its grid's) or 1 ms before it.
+        let stamp_ns = match stamp_early {
+            Some(true) => -1_000_000,
+            Some(false) => 0,
+            None => (phase_ms * 1e6).round() as i128,
+        };
         let sec_mark_at = tick.unwrap_or_else(|| {
-            (i128::from(epoch) + i128::from(hop_ns) + (phase_ms * 1e6).round() as i128).max(0)
-                as SimTime
+            (i128::from(epoch) + i128::from(hop_ns) + stamp_ns).max(0) as SimTime
         });
         // A hop BSM is generated half an interval after the belief, its position carried
         // there along the believed velocity (above). Its speed is carried there too, with
@@ -929,6 +1214,22 @@ pub fn card(cal: &BsmTimingCalibration) -> ModelCard {
                 }),
             ));
         }
+        if let Some(ch) = c.stamp_chain {
+            let step = ch.step.map_or(0.0, |s| s.prob());
+            for (name, v) in [
+                ("stamp_chain.stay_minus1", ch.stay_minus1),
+                ("stamp_chain.stay_zero", ch.stay_zero),
+                ("stamp_chain.step_prob", step),
+            ] {
+                card.parameters.push(Parameter::new(
+                    format!("{n}.{name}"),
+                    "-",
+                    serde_json::json!(v),
+                    src("data/calibration/bsm-stamp-epoch-candidates.yaml \
+                         (research/synthesis/p1-realdata-baseline.md §7.2)"),
+                ));
+            }
+        }
     }
     card.sources = vec![
         Source::new(
@@ -961,9 +1262,20 @@ pub fn card(cal: &BsmTimingCalibration) -> ModelCard {
          epoch crossings that drift causes."
             .to_string(),
     ];
+    if cal.classes.iter().any(|c| c.stamp_chain.is_some()) {
+        card.assumptions.push(
+            "stamp_chain: the position is the fix epoch's and secMark the epoch or 1 ms early, \
+             a two-state chain per BSM; a 0 -> -1 transition's step goes onto the error walk."
+                .to_string(),
+        );
+    }
+    let mut domains = vec![rng_domain().as_str().to_string()];
+    if cal.classes.iter().any(|c| c.stamp_chain.is_some()) {
+        domains.push(chain_rng_domain().as_str().to_string());
+    }
     card.determinism = Determinism {
         uses_rng: true,
-        rng_domains: vec![rng_domain().as_str().to_string()],
+        rng_domains: domains,
     };
     card.validation = Validation {
         status: ValidationStatus::UnitTested,
@@ -1216,6 +1528,176 @@ classes:
         c.frozen_repeat_prob = 0.0;
         c.header_jitter_ms = Jitter { sd: 0.0 };
         cal
+    }
+
+    /// P1-E4 stamp model (p1-realdata-baseline.md §7.2): with a stamp chain the reported
+    /// position is the fix epoch's whatever the class's per-message phase, and only
+    /// secMark moves, by 0 or -1 ms; the early share and both stays follow the chain.
+    #[test]
+    fn a_stamp_chain_keeps_the_position_on_the_epoch_and_moves_only_the_stamp() {
+        let mut cal = locked_v3();
+        cal.classes[0].secmark_phase_ms = PhaseDist::Normal {
+            mean: 0.286,
+            sd: 0.254,
+        };
+        cal.classes[0].phase_scope = PhaseScope::Message;
+        let ch = StampChain {
+            stay_minus1: 0.566,
+            stay_zero: 0.630,
+            step: None,
+        };
+        let cal = cal.with_stamp_chain(ch).expect("a valid chain");
+        let (mut r, mut rc) = (rng(11), rng(12));
+        let mut d = BsmTimingDevice::assign(&cal, &mut r);
+        let mut early = Vec::new();
+        for i in 0..20_000u64 {
+            let t = 10_000 + 100 * i;
+            let b = belief(t, 30.0);
+            let rep = d.report_chained(&cal, &mut r, &mut rc, &b).unwrap();
+            assert_eq!(rep.pos, b.pos, "the position is the fix epoch's");
+            let o = i128::from(rep.sec_mark_at) - i128::from(t * 1_000_000);
+            assert!(o == 0 || o == -1_000_000, "secMark offset {o} ns");
+            early.push(o < 0);
+        }
+        let share = early.iter().filter(|e| **e).count() as f64 / early.len() as f64;
+        assert!(
+            (share - ch.stationary_minus1()).abs() < 0.02,
+            "early share {share} vs {}",
+            ch.stationary_minus1()
+        );
+        let stay = |from: bool| {
+            let n = early.windows(2).filter(|w| w[0] == from).count();
+            let s = early
+                .windows(2)
+                .filter(|w| w[0] == from && w[1] == from)
+                .count();
+            s as f64 / n as f64
+        };
+        assert!((stay(true) - 0.566).abs() < 0.02, "stay -1 {}", stay(true));
+        assert!((stay(false) - 0.630).abs() < 0.02, "stay 0 {}", stay(false));
+    }
+
+    /// P1-E4 tail (p1-realdata-baseline.md §7.2 Finding 3): a step lands on the BSM of a
+    /// 0 -> -1 transition, nowhere else, and is not undone; its sizes follow the profile.
+    #[test]
+    fn a_stamp_chain_step_lands_on_a_zero_to_minus1_transition_and_lasts() {
+        let mut cal = locked_v3();
+        cal.classes[0].position_noise = Some(PositionNoise {
+            dist: "normal_mixture".to_string(),
+            tau_s: 1.0e9,
+            p: vec![1.0],
+            along_m: vec![0.0],
+            cross_m: vec![0.0],
+        });
+        let step = TransitionStep {
+            prob_on_transition: 1.0,
+            prob_elsewhere: 0.0,
+            along_p50_m: 0.079,
+            along_p90_m: 0.174,
+            cross_p50_m: 0.049,
+            cross_p90_m: 0.124,
+        };
+        let ch = StampChain {
+            stay_minus1: 0.235,
+            stay_zero: 0.918,
+            step: Some(step),
+        };
+        let cal = cal.with_stamp_chain(ch).expect("a valid chain");
+        let (mut r, mut rc) = (rng(13), rng(14));
+        let mut d = BsmTimingDevice::assign(&cal, &mut r);
+        let (mut prev_err, mut prev_early) = ((0.0, 0.0), None);
+        let (mut al, mut cr, mut transitions) = (Vec::new(), Vec::new(), 0);
+        for i in 0..40_000u64 {
+            let t = 10_000 + 100 * i;
+            let b = belief(t, 30.0);
+            let rep = d.report_chained(&cal, &mut r, &mut rc, &b).unwrap();
+            let early = rep.sec_mark_at < t * 1_000_000;
+            let err = (rep.pos.x - b.pos.x, rep.pos.y - b.pos.y);
+            let moved = (err.0 - prev_err.0).abs() > 1e-9 || (err.1 - prev_err.1).abs() > 1e-9;
+            let transition = prev_early == Some(false) && early;
+            assert_eq!(moved, transition, "BSM {i}: a step off a 0 -> -1 transition");
+            if transition {
+                transitions += 1;
+                al.push((err.0 - prev_err.0).abs());
+                cr.push((err.1 - prev_err.1).abs());
+            }
+            prev_err = err;
+            prev_early = Some(early);
+        }
+        assert!(transitions > 2_000, "{transitions} transitions");
+        let q = |v: &mut Vec<f64>, f: f64| {
+            v.sort_by(f64::total_cmp);
+            v[(f * (v.len() - 1) as f64) as usize]
+        };
+        assert!((q(&mut al, 0.5) - 0.079).abs() < 0.006, "along p50 {}", q(&mut al, 0.5));
+        assert!((q(&mut al, 0.9) - 0.174).abs() < 0.02, "along p90 {}", q(&mut al, 0.9));
+        assert!((q(&mut cr, 0.5) - 0.049).abs() < 0.005, "cross p50 {}", q(&mut cr, 0.5));
+        assert!((q(&mut cr, 0.9) - 0.124).abs() < 0.015, "cross p90 {}", q(&mut cr, 0.9));
+        let mut no_walk = cal.clone();
+        no_walk.classes[0].position_noise = None;
+        assert!(no_walk.check().is_err(), "steps without a walk to carry them");
+    }
+
+    /// The chain's draws come from their own stream: a device with the chain (no steps)
+    /// and its phase on the epoch reports exactly what it reports without the chain.
+    #[test]
+    fn a_stamp_chain_leaves_the_devices_other_draws_where_they_were() {
+        let mut cal = locked_v3();
+        cal.classes[0].position_noise = Some(PositionNoise {
+            dist: "normal_mixture".to_string(),
+            tau_s: 50.0,
+            p: vec![0.8, 0.2],
+            along_m: vec![0.01, 0.1],
+            cross_m: vec![0.005, 0.05],
+        });
+        let chained = cal
+            .clone()
+            .with_stamp_chain(StampChain {
+                stay_minus1: 0.5,
+                stay_zero: 0.5,
+                step: None,
+            })
+            .expect("a valid chain");
+        let (mut r0, mut r1, mut rc) = (rng(15), rng(15), rng(16));
+        let mut d0 = BsmTimingDevice::assign(&cal, &mut r0);
+        let mut d1 = BsmTimingDevice::assign(&chained, &mut r1);
+        for i in 0..2_000u64 {
+            let b = belief(10_000 + 100 * i, 25.0);
+            let a = d0.report(&cal, &mut r0, &b).unwrap();
+            let c = d1.report_chained(&chained, &mut r1, &mut rc, &b).unwrap();
+            assert_eq!(a.pos, c.pos, "BSM {i}: the walk moved with the chain on");
+        }
+    }
+
+    /// The built-in rate sets are the candidates file's numbers.
+    #[test]
+    fn the_stamp_profiles_are_the_candidates_files_numbers() {
+        let y: serde_json::Value = serde_yml::from_str(include_str!(
+            "../../../data/calibration/bsm-stamp-epoch-candidates.yaml"
+        ))
+        .expect("the candidates file parses");
+        for name in StampChain::PROFILES {
+            let p = &y["profiles"][name];
+            let ch = StampChain::profile(name).expect("a built-in profile");
+            let s = ch.step.expect("a step");
+            let f = |k: &str| p[k].as_f64().unwrap_or(f64::NAN);
+            let cm = |k: &str, q: &str| p[k][q].as_f64().unwrap_or(f64::NAN) / 100.0;
+            for (what, got, want) in [
+                ("stay_minus1", ch.stay_minus1, f("stay_minus1")),
+                ("stay_zero", ch.stay_zero, f("stay_zero")),
+                ("p_offset_minus1", ch.stationary_minus1(), f("p_offset_minus1")),
+                ("step_prob", s.prob_on_transition, f("step_prob_on_0_to_minus1")),
+                ("other", s.prob_elsewhere, f("other_pairs_over_5cm")),
+                ("along p50", s.along_p50_m, cm("step_along_cm", "p50")),
+                ("along p90", s.along_p90_m, cm("step_along_cm", "p90")),
+                ("cross p50", s.cross_p50_m, cm("step_cross_cm", "p50")),
+                ("cross p90", s.cross_p90_m, cm("step_cross_cm", "p90")),
+            ] {
+                assert!((got - want).abs() < 2e-3, "{name} {what}: {got} vs {want}");
+            }
+        }
+        let t = StampChain::profile("tampa_locked").unwrap().step.unwrap();
+        assert!((t.prob() - 0.587 / 0.890).abs() < 1e-9, "{}", t.prob());
     }
 
     /// E4-BODY: a locked device that hops to the :50 grid stamps, positions and sends its

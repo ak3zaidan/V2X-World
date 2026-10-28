@@ -1043,6 +1043,31 @@ const ADVANCED: &[Basic] = &[
         explain: "A timing calibration file fitted to real CV-pilot messages.",
         recommended: "data/calibration/bsm-timing-cvpilot.yaml when present; unset uses provisional built-in values.",
     },
+    Basic {
+        path: "actors.vehicles.bsm_timing.stamp_chain.enabled",
+        explain: "Locked units report the position of the GPS fix itself and stamp the message on the fix or one millisecond early, switching between the two as real units do; when a unit switches to early its position often takes a small lasting step.",
+        recommended: "Off (default) keeps earlier runs; on for the most realistic locked-unit timing (CV-pilot Tampa and Wyoming units).",
+    },
+    Basic {
+        path: "actors.vehicles.bsm_timing.stamp_chain.profile",
+        explain: "Which real units' switching rates to use: Tampa's locked units (stamped early on about 10 % of messages) or the Wyoming unit (46 %).",
+        recommended: "tampa_locked (default; keeps the Wyoming comparison out of sample).",
+    },
+    Basic {
+        path: "actors.vehicles.bsm_timing.stamp_chain.stay_minus1",
+        explain: "The chance that a message stamped early is followed by another early one.",
+        recommended: "Unset (the profile's: 0.235 Tampa, 0.566 Wyoming).",
+    },
+    Basic {
+        path: "actors.vehicles.bsm_timing.stamp_chain.stay_zero",
+        explain: "The chance that a message stamped on the fix is followed by another on the fix.",
+        recommended: "Unset (the profile's: 0.918 Tampa, 0.630 Wyoming).",
+    },
+    Basic {
+        path: "actors.vehicles.bsm_timing.stamp_chain.steps",
+        explain: "Whether a switch to early stamping can carry a lasting position step of a few centimetres, as the real units' positioning filter does.",
+        recommended: "On (default) with the chain.",
+    },
     // end traffic audit
     // SCMS settings audit (docs/guides/config-inventory-scms.md)
     Basic {

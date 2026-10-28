@@ -2289,6 +2289,15 @@ impl ObuRuntime {
         );
         let device =
             device.get_or_insert_with(|| crate::bsm_timing::BsmTimingDevice::assign(cal, &mut rng));
+        if cal.classes[device.class()].stamp_chain.is_some() {
+            // The chain's draws have a stream of their own: the device's other draws stay
+            // the ones it makes without the chain.
+            let mut chain_rng = ctx.rng(
+                crate::bsm_timing::chain_rng_domain(),
+                v2xw_core::rng::EntityRef::Node(node),
+            );
+            return device.report_chained(cal, &mut rng, &mut chain_rng, &self.belief);
+        }
         device.report(cal, &mut rng, &self.belief)
     }
 
