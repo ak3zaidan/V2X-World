@@ -3472,9 +3472,11 @@ impl Phase2 {
             .fold(0u32, |a, (_, v)| a.saturating_add(v.version))
     }
 
-    /// Roadside unit `node` installed (or refused) composite CRL `version`.
-    pub fn note_rsu_crl(&mut self, node: NodeId, version: u32, installed: bool) {
-        let serial = self.crl_serial_for(node);
+    /// Roadside unit `node` installed (or refused) composite CRL `version`, whose lists'
+    /// publication counts summed to `serial` when its RA served the file
+    /// ([`Phase2::crl_serial_for`] at the fetch, not at its landing: a list published while
+    /// the download was on the line is not in the file, and the unit fetches it next).
+    pub fn note_rsu_crl(&mut self, node: NodeId, version: u32, serial: u64, installed: bool) {
         if let Some(c) = self.rsu_cycle.get_mut(&node) {
             c.crl_version = c.crl_version.max(version);
             c.crl_serial = c.crl_serial.max(serial);

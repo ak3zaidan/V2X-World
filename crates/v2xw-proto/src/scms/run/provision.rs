@@ -609,13 +609,23 @@ impl ScmsState {
         let ready_after = self.params.first_batch_delay;
         if account.generated.contains(&i) {
             // Being generated (in its weekly job's batch, or its request's own): this flow
-            // is told when the RA has assembled the file.
+            // is told when the RA has assembled the file. Its `.info` answer is the file the
+            // RA wrote when the job started (SCMS-576, [CAMP122] §5.2.7.8): the job's start
+            // plus the generation time, the same for every device whenever it asks, and
+            // `now` once that instant has passed (the device then downloads at once and,
+            // the file not being ready, polls every download-minWait, [SMP] §4.3.1). A week
+            // of the request's own job has no entry: its nextDlTime went in the ack.
             self.ra
                 .ready_watchers
                 .entry((device, i))
                 .or_default()
                 .push((flow, run));
-            return Some(ready_after.after(at));
+            return Some(
+                self.ra
+                    .planned_ready
+                    .get(&(device, i))
+                    .map_or_else(|| ready_after.after(at), |t| (*t).max(at)),
+            );
         }
         if due <= at {
             self.start_pregen_week(device, i, at, out, flow, run);
@@ -665,6 +675,17 @@ impl ScmsState {
             })
             .map(|(d, _)| *d)
             .collect();
+        let planned = self.params.first_batch_delay.after(at);
+        for d in core::iter::once(device).chain(others.iter().copied()) {
+            let fresh = self
+                .ra
+                .accounts
+                .get(&d)
+                .is_some_and(|a| !a.generated.contains(&i));
+            if fresh && !self.ra.blocklist.contains(&d) {
+                self.ra.planned_ready.insert((d, i), planned);
+            }
+        }
         self.start_pregen_job(device, i, out, flow, run, batch);
         for d in others {
             self.next_run += 1;
@@ -1107,6 +1128,7 @@ impl ScmsState {
         let first = !core::mem::replace(&mut job.batch_ready_stamped, true);
         let finished = job.periods_certified >= job.periods;
         self.ra.repos.entry(device).or_default().insert(i, batch);
+        self.ra.planned_ready.remove(&(device, i));
         if first && self.ra.ready_told.insert(run) {
             out.stage_at(StageId::BatchReady, to, None, flow, run);
         }

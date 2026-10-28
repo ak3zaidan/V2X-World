@@ -1,0 +1,156 @@
+# SCMS fix round 4, track B (RA timing and records): (1) the backhaul and download-wait
+# tests and the RA's `.info` answer for a week still being generated, (2) a top-up really in
+# flight when its vehicle leaves, (3) the validated-certificate cache test's MacTimer, (4) a
+# roadside unit's line carries each list once and the unit relays what it installed.
+#
+# Every row was written with `measured: pending` before the run it judges, with the
+# direction and, where the source gives one, the size. Rows marked "diagnosis" record what a
+# run on the unchanged release showed about a failing test's cause; they were written after
+# that run, and say so. Measures come from each run's run-report.json and recording.mcap by
+# short readers (scratchpad scmsb/v.py, flows.py, pair.py, rm.py), never from engine code.
+#
+# Binaries: "rel" = the release build of 3cbc95a4 (same engine code as 081fcab2), copied;
+# "fix" = this branch's opt-level-2 debug build. Base and variant of one comparison always
+# use one binary. Scenarios: scenarios/scms-fix4/.
+#
+# verdict: pass | fixed (an engine defect fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+schema: v2xw/scms-run-expectations/1
+runs:
+  BH5: {scenario: scenarios/scms-fix4/bh-5.yaml, note: rel; the backhaul test's 5 ms line}
+  BH200: {scenario: scenarios/scms-fix4/bh-200.yaml, note: rel; the 200 ms line}
+  FBH5: {scenario: scenarios/scms-fix4/bh-5.yaml, note: fix}
+  FBH200: {scenario: scenarios/scms-fix4/bh-200.yaml, note: fix}
+  DWB: {scenario: scenarios/scms-fix4/dw-b.yaml, note: "rel; ACA 4 s slow, 2-week horizon, download-minWait 2 s"}
+  DWV: {scenario: scenarios/scms-fix4/dw-v.yaml, note: rel; the same with download-minWait 20 s}
+  FDWB: {scenario: scenarios/scms-fix4/dw-b.yaml, note: fix}
+  FDWV: {scenario: scenarios/scms-fix4/dw-v.yaml, note: fix}
+  LA0: {scenario: scenarios/scms-fix4/la-0.yaml, note: "rel; the left-area test as it was (fast ACA, first_batch_delay 10 s)"}
+  LAS: {scenario: scenarios/scms-fix4/la-slow.yaml, note: rel; the home ACA 4 s slow per message}
+  CLB: {scenario: scenarios/credential-lifecycle.yaml, note: rel}
+  C16: {scenario: scenarios/scms-fix4/cache16.yaml, note: rel; validated_cert_cache 16}
+  LRB: {scenario: scenarios/live-rsu/scms-base.yaml, note: "rel; 30 crl units on metro fibre, relay-only"}
+  FLRB: {scenario: scenarios/live-rsu/scms-base.yaml, note: fix}
+rows:
+# --- (1) backhaul test and the .info answer -------------------------------------------------
+- id: BH.cause
+  base: BH200
+  variant: BH5
+  area: diagnosis
+  measure: pki.flow topup messages by name; rsu entity state backhaul_messages, crls_installed
+  expect: 'fix-3 diagnosis: the 8 extra 5 ms line messages are top-up polls (the .info answer for a week being generated)'
+  source: scms-fix3-ra open item; BUILD-STATUS 2026-10-27
+  measured: 'topup messages identical (40 of each of the six names on both lines); line messages 272 vs 264, crls_installed 16 vs 8, line bytes +25,728 = 8 x 3,216 (one composite CRL per unit)'
+  verdict: wrong-expectation
+  note: 'diagnosis row, written after the rel runs. The extra messages are roadside CRL fetches. At t = 0 provider-b''s list reaches provider-a''s RA one inter-provider hop late. On the 5 ms line a unit''s first fetch lands before it and the unit fetches again; on 200 ms the fetch is still on the line, and on landing the unit installed the composite as it was then (both lists) and noted its serial, so it never fetched the second list: a download carried a list published after the RA served it.'
+- id: BH.snapshot
+  base: FBH200
+  variant: FBH5
+  area: architecture
+  measure: backhaul_messages, rsu crls_installed
+  expect: 'equal on both lines (272 = 272, 16 = 16): each fetch carries the file as served at the request, so every line fetches the late list itself'
+  source: '1609.2.1 §6.3.5.7 (the CRL is a file downloaded from the RA, as served); [PRIMER] p.5'
+  test: sensitivity_security::the_backhaul_latency_and_bandwidth_move_relay_topups
+  measured: pending
+- id: BH.order
+  base: FBH200
+  variant: FBH5
+  area: metrics
+  measure: topup exchange mean, ms
+  expect: '5 ms < 200 ms (BH5 243 < BH200 1,023 on rel); the top-up exchanges unchanged by the CRL fix (40/40)'
+  source: the backhaul FIFO adds the line latency to each of the six relayed messages
+  measured: pending
+- id: INFO.file
+  base: DWB
+  variant: FDWB
+  area: metrics
+  measure: first batch-download request instant - info-response instant, provider-a top-offs of the 60 s week
+  expect: 'falls by the gap between the weekly job''s start (60.00 s) and the device''s ask (60.02 s): first poll at 62.0x s against 62.18 s; completed top-ups within 2 (cross-binary)'
+  source: 'SCMS-576 / [CAMP122] §5.2.7.8: the RA keeps a .info file per EE current and serves it as it is; 1609.2.1 RaEeCertInfo.nextDlTime; past it, the download is not ready and the EE retries after download-minWait up to download-maxReqs ([SMP] §4.3.1)'
+  measured: pending
+# --- (1b) the download-wait test ----------------------------------------------------------
+- id: DW.censored
+  base: DWB
+  variant: DWV
+  area: diagnosis
+  measure: phase2.access.exchange_latency.topup mean (completed top-ups only)
+  expect: 'variant > base + late share x 9 s x 0.5 (the test''s assertion)'
+  source: '[SMP] Table 3 download-minWait; scms_knobs_runs a_longer_download_wait_lengthens_a_late_topup'
+  measured: 'base 10,448 ms (105 of 214) against variant 9,357 ms (101 of 210)'
+  verdict: wrong-expectation
+  note: 'diagnosis row, after the rel runs. The mean covers only top-ups that finished inside 300 s: with the 20 s wait the latest no longer finish and drop out, so the mean falls though no top-off got faster. Restricted mean (unfinished counted to 300 s): 45,464 -> 46,866 ms. The ACA''s serial queue sets every batch''s ready instant identically in both runs (provider-a batches ready 88-132 s for the 60 s week in both).'
+- id: DW.paired
+  base: DWB
+  variant: DWV
+  area: metrics
+  measure: per top-up (same device and request instant) completed in both runs, variant - base, mean ms; count earlier by > 50 ms
+  expect: 'mean > 0.5 x late/n x (20 - 2) s / 2; none earlier'
+  source: 'download-minWait: the poll after a late batch overshoots it by U[0, minWait) ([SMP] §4.3.1); the batch''s ready instant does not depend on the device''s polls'
+  test: scms_knobs_runs::a_longer_download_wait_lengthens_a_late_topup
+  measured: 'rel: 106 paired, 16 late in the base, mean +1,791 ms against a bound of +679 ms, 0 earlier (min 0, max +17,985 ms)'
+  verdict: pass
+- id: DW.paired-fix
+  base: FDWB
+  variant: FDWV
+  area: metrics
+  measure: as DW.paired
+  expect: as DW.paired
+  source: as DW.paired
+  measured: pending
+# --- (2) a top-up in flight when its vehicle leaves ----------------------------------------
+- id: LA.held
+  base: LA0
+  variant: LA0
+  area: diagnosis
+  measure: topups started/completed/left_area; per top-up polls and stage instants
+  expect: 'fix-3: first_batch_delay 10 s on the 2-week horizon keeps top-ups in flight for 10 s, so some vehicles leave with one'
+  source: backend_entities a_top_up_whose_vehicle_leaves_the_area_is_counted_as_leaving
+  measured: '228/228 completed, 0 left; every top-up one poll, 330 ms; the weekly job files each week at 20.01 s, before the device asks at 20.02 s'
+  verdict: wrong-expectation
+  note: 'diagnosis row, after the rel run. With an ACA on time the boundary job has filed the week before the .info arrives, so the answer is "held, now" and first_batch_delay never applies. Only a slow backend delays a real top-off.'
+- id: LA.slow
+  base: LAS
+  variant: LAS
+  area: metrics
+  measure: topups_left_area; started = completed + refused + left + in flight (backend.state ee view)
+  expect: 'left > 0; the books close'
+  source: 'FB3 (full-bench.md §4): a vehicle that drives out with its top-up in flight; the ACA 4 s slow queues the weekly batches for tens of seconds (DWB: 88-132 s for the 60 s week)'
+  test: backend_entities::a_top_up_whose_vehicle_leaves_the_area_is_counted_as_leaving
+  measured: pending
+# --- (3) the validated-certificate cache test -----------------------------------------------
+- id: CACHE.mac
+  base: CLB
+  variant: C16
+  area: run-cost
+  measure: events_by_class MacTimer
+  expect: 'identical (the cache prices validation time; the radio schedule is untouched)'
+  source: scms_knobs_runs a_small_validated_certificate_cache_revalidates_and_costs_more_crypto (protocol/flow gaps item 5)
+  measured: pending
+# --- (4) each list rides each unit's line once; a unit relays what it installed --------------
+- id: LR.once
+  base: LRB
+  variant: FLRB
+  area: architecture
+  measure: backhaul_messages - reports_uploaded_relay - rsu_crls_installed
+  expect: 'rel 16 (214 = 108 + 90 + 16) -> fix 0'
+  source: '[PRIMER] p.5 (a unit relays the list it downloaded); live-rsu §6.3'
+  test: live_rsu::each_list_rides_each_units_backhaul_once
+  measured: pending
+  note: 'rel diagnosis (after the run): one in-run list, provider-b''s at 70.004 s; 16 units had no fetch due that step (their RA serves it one inter-provider hop later), so the carousel start sent it down their lines, and each fetched it again itself.'
+- id: LR.broadcasts
+  base: LRB
+  variant: FLRB
+  area: metrics
+  measure: crl_broadcasts; rsu_revoked_receptions
+  expect: 'within 5 % (the units not due air their own list until their fetch lands, about one step)'
+  source: the carousel interval and the fetch timing are unchanged
+  measured: pending
+- id: LR.lag
+  base: FLRB
+  variant: FLRB
+  area: metrics
+  measure: live_rsu::a_unit_broadcasts_a_list_only_once_its_backhaul_brought_it_and_not_while_it_is_down
+  expect: passes (no unit airs a list before its 2 s download)
+  source: live-rsu §3
+  test: live_rsu::a_unit_broadcasts_a_list_only_once_its_backhaul_brought_it_and_not_while_it_is_down
+  measured: pending

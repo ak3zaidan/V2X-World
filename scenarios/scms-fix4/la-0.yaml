@@ -1,0 +1,40 @@
+# scms-fix4 la-0: backend_entities `a_top_up_whose_vehicle_leaves_the_area_is_counted_as_leaving`
+# as a file (5x8 grid, 1,800 veh/h, 150 s, cellular, compressed 20 s i-periods, 2-week
+# ra-maxPreloadTime, first_batch_delay 10 s).
+schema: v2xw/scenario/1
+meta:
+  base: ../phase1-grid.yaml
+  name: scms-fix4 la-0
+time:
+  duration_s: 150.0
+  calendar: compressed
+world:
+  source:
+    params:
+      cols: 5
+      rows: 8
+actors:
+  vehicles:
+    demand:
+      rate_veh_per_h: 1800.0
+  backend:
+    protocol: protocol/scms/camp
+net:
+  uu:
+    id: cellular/uu/fixed-latency
+    params: {preset: 4g-east-coast}
+security:
+  protocol:
+    id: protocol/scms/camp
+    params:
+      i_period_s: 20
+      cert_lifetime_s: 21
+      certs_per_period: 3
+      pool_periods: 2
+      topup_below_periods: 1
+      cert_shuffle_window_s: 1
+      first_batch_delay_s: 10
+      download_poll_interval_s: 1
+      reenrol_download_delay_s: 1
+      max_periods_ahead: 2
+metrics: [all]

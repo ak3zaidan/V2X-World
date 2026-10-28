@@ -313,6 +313,64 @@ fn a_week_that_fell_due_before_the_request_is_held_and_downloaded_at_once() {
     assert_eq!(run.state.devices[&DEVICE_A].credentials.len(), 4);
 }
 
+/// The `.info` answer for a week whose weekly job is still running is the file the RA
+/// wrote when the job started: the job's start plus the RA's generation time
+/// (`first_batch_delay`, 60 s), whenever the device asks (SCMS-576, [CAMP122] §5.2.7.8: the
+/// RA keeps each EE's `.info` current and serves it as it is; 1609.2.1 `RaEeCertInfo`).
+/// Device B's top-off before the boundary arms the weekly job for week 770 at the boundary,
+/// which generates it for A's account too; the ACA is slow from the boundary, so the job is
+/// still running when A asks 30 s later. A comes back at boundary + 60 s. Fault
+/// (2026-10-27): the RA answering `now + first_batch_delay` for such a week, as it did
+/// before (A came back at boundary + 90 s).
+#[test]
+fn a_device_asking_while_its_week_is_generated_reads_the_jobs_planned_time() {
+    let mut run = bytes_run(&[DEVICE_A, DEVICE_B]);
+    provisioned(&mut run, DEVICE_A, 614, 1, 1);
+    provisioned(&mut run, DEVICE_B, 614, 1, 1);
+    let week = 614 + 156;
+    let account = run.state.ra.accounts[&DEVICE_A].clone();
+    assert_eq!(run.state.pregen_due(&account, week), Some(WEEK_NS));
+    let pca = run.state.nodes.pca;
+    run.set_faults(vec![Fault {
+        node: pca,
+        kind: FaultKind::Slow {
+            extra: Duration::from_secs(120),
+        },
+        from: WEEK_NS,
+        until: u64::MAX,
+    }]);
+    let tb = run.topup(DEVICE_B, week, 1);
+    let asked = WEEK_NS + 30_000_000_000;
+    run.run_until(asked).expect("runs to the ask");
+    assert!(
+        run.state.ra.accounts[&DEVICE_A]
+            .generated
+            .contains(&week),
+        "the weekly job took A's account into its batch"
+    );
+    let ta = run.topup_at(DEVICE_A, asked, week, 1);
+    run.run().expect("runs");
+    let dev = DEVICE_A.index();
+    let sends: Vec<u64> = run
+        .state
+        .pdus
+        .iter()
+        .filter(|p| p.kind == SpduKind::EeRaDownloadRequest && p.from == dev && p.at >= asked)
+        .map(|p| p.at)
+        .collect();
+    assert!(sends.len() >= 2, "the .info request and a download: {sends:?}");
+    let wait = run.state.params.first_batch_delay.as_nanos();
+    let planned = WEEK_NS + wait;
+    assert!(
+        (planned - 1_000_000_000..planned + 1_000_000_000).contains(&sends[1]),
+        "A came back at {} s after the boundary, not at the job's planned {} s",
+        (sends[1] - WEEK_NS) as f64 / 1e9,
+        wait / 1_000_000_000
+    );
+    assert!(run.kernel.stages.at(ta, StageId::Installed).is_some());
+    assert!(run.kernel.stages.at(tb, StageId::Installed).is_some());
+}
+
 #[test]
 fn an_info_request_naming_another_devices_file_is_refused() {
     let mut run = bytes_run(&[DEVICE_A, DEVICE_B]);

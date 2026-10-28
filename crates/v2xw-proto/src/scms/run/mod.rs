@@ -508,6 +508,12 @@ pub struct RaState {
     /// ([`ScmsRun::generate_past_due`]) and finished after the run's clock at that moment:
     /// the instant the RA held the file, which its `.info` answer is no earlier than.
     held_from: BTreeMap<(NodeId, u32), SimTime>,
+    /// `(device, i)` weeks in a weekly job still running: the `nextDlTime` the RA wrote
+    /// into the device's `.info` file when the job started (its start plus the RA's
+    /// generation time, `first_batch_delay`). The `.info` is a per-EE file the RA keeps
+    /// current and serves as it is (SCMS-576, [CAMP122] §5.2.7.8; 1609.2.1 `RaEeCertInfo`),
+    /// so every device asking while the job runs reads that same instant, whenever it asks.
+    planned_ready: BTreeMap<(NodeId, u32), SimTime>,
     /// While a past-due week is generated off the run's clock: the request instant, up to
     /// which every account whose week is due joins the weekly job's population batch.
     population_until: Option<SimTime>,
