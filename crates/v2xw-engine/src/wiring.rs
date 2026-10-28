@@ -558,6 +558,9 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(d) = traffic.vehicle_dynamics {
         params.vehicle_dynamics = d.params();
     }
+    if let Some(y) = traffic.emergency_yield {
+        params.emergency_yield = y.apply(params.emergency_yield);
+    }
     // SUMO LC2013's motivations: any lc_* field switches them on; the unset ones take
     // SUMO's default of 1 (`v2xw_mobility::lanechange::lc2013`).
     if traffic.lc_strategic.is_some()

@@ -132,7 +132,8 @@ pub use clock::{DriftFreeClock, Oscillator, OscillatorClock};
 pub use ctx::{CoreCtx, MobCtx, MobilityCtx};
 pub use demand::{DemandProfile, FleetMix, NoDemand, OdModel, PoissonDemand, SpeedLaw};
 pub use engine::{
-    DriverOverride, EngineParams, IntersectionMode, NativeMobility, VehicleDynamicsParams,
+    DriverOverride, EmergencyYieldParams, EngineParams, IntersectionMode, NativeMobility,
+    VehicleDynamicsParams,
 };
 pub use error::{MobError, Result};
 pub use fd::{FdParams, FdResult};

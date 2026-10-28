@@ -34,11 +34,17 @@
 //! Pedestrians are observed to cross mid-block and against the signal either way; the rule
 //! decides whether the run counts those crossings as offences, never whether they happen.
 //!
+//! | Preset | Making way for an emergency vehicle ([`EmergencyYield`]) | Source |
+//! |---|---|---|
+//! | `urban-us-nyc`, none, or unknown | pull right and stop | New York VTL §1144(a), re-read 2026-10-28 (nysenate.gov): on the immediate approach of an authorised emergency vehicle with its red light and audible signal, every other driver "shall yield the right of way" and drive to the right-hand edge or curb (either edge of a one-way roadway three or more lanes wide), clear of any intersection, and stop until it has passed |
+//! | `urban-us`, `urban-us-portland`, `urban-us-<state>` | pull right and stop | Uniform Vehicle Code §11-405(a), the model the state codes follow (ORS 811.145); same wording as New York's (**secondary**: the UVC text was not re-read) |
+//! | `sumo-german`, `urban-de` | the rescue lane on a carriageway of two or more lanes; otherwise clear the way to the right | StVO §38(1), re-read 2026-10-28 (gesetze-im-internet.de): with blue light and siren "Alle übrigen Verkehrsteilnehmer haben sofort freie Bahn zu schaffen"; StVO §11(2) prescribes the gap between the leftmost lane and the one beside it, legally on Autobahnen and roads outside built-up areas with two or more lanes per direction when traffic is at walking pace or stopped. In town §38(1) prescribes no pattern; the rescue lane is taken as how a queue on a multi-lane street clears the way (**a choice**) |
+//!
 //! `urban-us` is the generic rule for a US city outside New York; the world crate has no
 //! preset of that name, so it is only reachable from code. A procedural world (no preset)
 //! keeps the New York rule.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The jurisdiction's rules the mobility engine applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -51,6 +57,26 @@ pub struct TrafficRules {
     /// Whether a pedestrian crossing away from a crosswalk or against the signal commits
     /// an offence (the run counts those crossings either way).
     pub jaywalking_lawful: bool,
+    /// How drivers make way for an emergency vehicle running its beacons
+    /// ([`crate::EmergencyYieldParams`]).
+    pub emergency_yield: EmergencyYield,
+}
+
+/// How a driver makes way for an emergency vehicle approaching from behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EmergencyYield {
+    /// Drive to the right-hand edge, clear of any junction, and stop until it has passed
+    /// (NY VTL §1144(a), UVC §11-405(a)).
+    #[default]
+    PullRight,
+    /// On a carriageway of two or more lanes, the leftmost lane moves left and the others
+    /// right, leaving a gap between the leftmost lane and the one beside it (StVO §11(2));
+    /// on a single lane, [`EmergencyYield::ClearWay`].
+    RescueLane,
+    /// Clear the way: move as far right as the carriageway allows and slow, stopping if
+    /// the vehicle cannot otherwise pass (StVO §38(1) "freie Bahn schaffen").
+    ClearWay,
 }
 
 /// Whether, and when, a motorcycle may ride between lanes of vehicles.
@@ -69,6 +95,7 @@ impl TrafficRules {
         right_turn_on_red: false,
         motorcycle_filtering: Filtering::Prohibited,
         jaywalking_lawful: true,
+        emergency_yield: EmergencyYield::PullRight,
     };
 
     /// The rules of the jurisdiction a highway preset names, by its label; the default
@@ -79,16 +106,19 @@ impl TrafficRules {
                 right_turn_on_red: true,
                 motorcycle_filtering: Filtering::Prohibited,
                 jaywalking_lawful: false,
+                emergency_yield: EmergencyYield::PullRight,
             },
             Some("urban-us-portland") => TrafficRules {
                 right_turn_on_red: true,
                 motorcycle_filtering: Filtering::Prohibited,
                 jaywalking_lawful: false,
+                emergency_yield: EmergencyYield::PullRight,
             },
             Some("sumo-german") | Some("urban-de") => TrafficRules {
                 right_turn_on_red: false,
                 motorcycle_filtering: Filtering::Prohibited,
                 jaywalking_lawful: false,
+                emergency_yield: EmergencyYield::RescueLane,
             },
             // A state of the city library (`urban-us-tx`, ...): right turn on red after a
             // stop everywhere, and the state's own filtering and crossing rules
@@ -104,6 +134,7 @@ impl TrafficRules {
                             Filtering::Prohibited
                         },
                         jaywalking_lawful: j.jaywalking_lawful,
+                        emergency_yield: EmergencyYield::PullRight,
                     }
                 }
                 None => TrafficRules::NEW_YORK_CITY,
@@ -116,6 +147,10 @@ impl TrafficRules {
     pub fn apply(self, params: crate::EngineParams) -> crate::EngineParams {
         crate::EngineParams {
             right_turn_on_red: self.right_turn_on_red,
+            emergency_yield: crate::EmergencyYieldParams {
+                rule: self.emergency_yield,
+                ..params.emergency_yield
+            },
             ..params
         }
     }
@@ -163,6 +198,38 @@ mod tests {
         assert!(TrafficRules::of_highway_preset(Some("urban-us-nyc")).jaywalking_lawful);
         assert!(!TrafficRules::of_highway_preset(Some("urban-us-portland")).jaywalking_lawful);
         assert!(!TrafficRules::of_highway_preset(Some("urban-de")).jaywalking_lawful);
+    }
+
+    #[test]
+    fn us_drivers_pull_right_for_an_emergency_vehicle_and_german_ones_form_a_rescue_lane() {
+        for preset in [
+            None,
+            Some("urban-us-nyc"),
+            Some("urban-us"),
+            Some("urban-us-portland"),
+            Some("urban-us-tx"),
+        ] {
+            assert_eq!(
+                TrafficRules::of_highway_preset(preset).emergency_yield,
+                EmergencyYield::PullRight,
+                "{preset:?}"
+            );
+        }
+        for preset in [Some("urban-de"), Some("sumo-german")] {
+            let r = TrafficRules::of_highway_preset(preset);
+            assert_eq!(r.emergency_yield, EmergencyYield::RescueLane, "{preset:?}");
+            assert_eq!(
+                r.apply(Default::default()).emergency_yield.rule,
+                EmergencyYield::RescueLane
+            );
+        }
+        // The rule is carried, never the switch: yielding stays off unless asked for.
+        assert!(
+            !TrafficRules::of_highway_preset(Some("urban-de"))
+                .apply(Default::default())
+                .emergency_yield
+                .enabled
+        );
     }
 
     #[test]
