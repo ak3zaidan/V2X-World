@@ -41,7 +41,9 @@ pub fn card() -> v2xw_core::card::ModelCard {
                     (Exhibits 6-3, 6-4, 6-9; Equation 6-1)"
             .to_string(),
         accessed: None,
-        note: Some("each timing default cites its exhibit in `crate::nema::PhaseTiming`".to_string()),
+        note: Some(
+            "each timing default cites its exhibit in `crate::nema::PhaseTiming`".to_string(),
+        ),
     };
     let mutcd = Source {
         kind: SourceKind::Standard,

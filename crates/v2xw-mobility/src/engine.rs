@@ -6737,7 +6737,11 @@ impl Mobility for NativeMobility {
                 {
                     decision = EntryDecision::Proceed;
                 }
-                if along && self.params.foe_will_pass && !judged_line && junction.stop_line_gap_m > 0.0 {
+                if along
+                    && self.params.foe_will_pass
+                    && !judged_line
+                    && junction.stop_line_gap_m > 0.0
+                {
                     judged_line = true;
                     if matches!(decision, EntryDecision::Stop { .. }) {
                         holds_at = Some(junction.id);

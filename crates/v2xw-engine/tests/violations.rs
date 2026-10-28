@@ -79,7 +79,10 @@ fn grid(signalised: bool, duration_s: f64) -> Scenario {
                 "signalised: false"
             },
         )
-        .replace("rsu_at_junctions: true", &format!("rsu_at_junctions: {signalised}"))
+        .replace(
+            "rsu_at_junctions: true",
+            &format!("rsu_at_junctions: {signalised}"),
+        )
         .replace(
             "sets: [bsm, spat, map, srm, ssm]",
             if signalised {
@@ -128,8 +131,14 @@ fn rlvw_fires_on_drivers_who_run_the_red_unscripted() {
     let (a, b) = (tally(&off, "rlvw"), tally(&on, "rlvw"));
     eprintln!(
         "rlvw issued {} -> {}, true {} -> {}, missed {} -> {} ({} / {} vehicles)",
-        a.issued, b.issued, a.true_warnings, b.true_warnings, a.missed, b.missed,
-        off.actors_spawned, on.actors_spawned
+        a.issued,
+        b.issued,
+        a.true_warnings,
+        b.true_warnings,
+        a.missed,
+        b.missed,
+        off.actors_spawned,
+        on.actors_spawned
     );
     // RLVW warns a driver who will enter on red: with the runners on, some do, and the
     // labeller (which reads the truth) confirms some of the warnings. The off run's true
@@ -161,8 +170,14 @@ fn ima_fires_on_drivers_who_fail_to_yield_unscripted() {
     let (a, b) = (tally(&off, "ima"), tally(&on, "ima"));
     eprintln!(
         "ima issued {} -> {}, true {} -> {}, missed {} -> {} ({} / {} vehicles)",
-        a.issued, b.issued, a.true_warnings, b.true_warnings, a.missed, b.missed,
-        off.actors_spawned, on.actors_spawned
+        a.issued,
+        b.issued,
+        a.true_warnings,
+        b.true_warnings,
+        a.missed,
+        b.missed,
+        off.actors_spawned,
+        on.actors_spawned
     );
     // IMA warns of a crossing vehicle arriving at about the same time: a driver who
     // pulls out in front of a slow foe it should have given way to is one.

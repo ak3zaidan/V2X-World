@@ -186,9 +186,8 @@ fn nema_safety(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         };
         let calls = control.calls(w, positions());
         let extend = control.extension_calls(w, positions());
-        let peds = v2xw_engine::nema::control::PedestrianIndex::new(
-            people.iter().map(|p| (p.pos, p.vel)),
-        );
+        let peds =
+            v2xw_engine::nema::control::PedestrianIndex::new(people.iter().map(|p| (p.pos, p.vel)));
         control.step_with_pedestrians(w, &extend, &calls, &peds, now_s, dt_s);
         steps += 1;
         let mut here = false;
