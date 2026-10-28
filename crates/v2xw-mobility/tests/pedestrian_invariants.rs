@@ -74,10 +74,51 @@ fn run(params: EngineParams, seconds: u64) -> AuditReport {
         let update = engine.step(&mut ctx, params.step);
         let actors = engine.audit_actors(&world, update.t);
         let people = engine.audit_pedestrians(&world);
+        trace_watched(update.t, &actors);
         auditor.observe_with_pedestrians(&world, t, update.t, &actors, &update.despawned, &people);
         t = update.t;
     }
     auditor.report()
+}
+
+/// A diagnostic, off unless `V2XW_TRACE_ACTORS` names actors: each watched vehicle at
+/// every step between `V2XW_TRACE_T0` and `V2XW_TRACE_T1` seconds.
+fn trace_watched(t: u64, actors: &[v2xw_mobility::audit::AuditActor]) {
+    let env = |k: &str| std::env::var(k).ok();
+    let Some(watch) = env("V2XW_TRACE_ACTORS") else {
+        return;
+    };
+    let watch: Vec<u32> = watch
+        .split(',')
+        .filter_map(|x| x.trim().parse().ok())
+        .collect();
+    let t0: f64 = env("V2XW_TRACE_T0")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
+    let t1: f64 = env("V2XW_TRACE_T1")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
+    let ts = t as f64 / 1e9;
+    if ts < t0 || ts > t1 {
+        return;
+    }
+    for a in actors.iter().filter(|a| watch.contains(&a.actor.index())) {
+        eprintln!(
+            "t={ts:.1} watch {} {:?} lane {} s {:.3} v {:.3} acc {:.2} lat {:.2} changing {:?} pos ({:.2},{:.2}) hdg {:.3} next {:?}",
+            a.actor.index(),
+            a.class,
+            a.lane.index(),
+            a.s_m,
+            a.speed_mps,
+            a.accel_mps2,
+            a.lateral_m,
+            a.changing.map(|(f, to)| (f.index(), to.index())),
+            a.pos.x,
+            a.pos.y,
+            a.heading_rad,
+            a.route_next.map(|l| l.index())
+        );
+    }
 }
 
 /// Every class that is a collision or a rule broken.
@@ -311,6 +352,7 @@ fn observed_run(params: EngineParams, seconds: u64) -> AuditReport {
             .filter(|a| matches!(a.class, VehicleClass::Motorcycle | VehicleClass::Moped))
             .count() as u64;
         let people = engine.audit_pedestrians(&world);
+        trace_watched(update.t, &actors);
         auditor.observe_with_pedestrians(&world, t, update.t, &actors, &update.despawned, &people);
         t = update.t;
     }
@@ -350,6 +392,70 @@ fn observed_pedestrians_and_two_wheelers_hold_every_invariant() {
     assert!(
         report.stats.pedestrian_red_crossings > 0,
         "nobody crossed against the signal: {:?}",
+        report.stats
+    );
+    assert_eq!(report.count(Check::Standstill), 0, "{:?}", report.stats);
+}
+
+/// The kinematic limits ([`EngineParams::lateral_speed_bound`],
+/// [`EngineParams::braking_tyre_limit`]): a lane change moves sideways no faster than its
+/// speed along the road lets it steer, and no stop brakes harder than the tyres can. Both
+/// runs above, with the two on, hold every safety invariant. Off (the default), the same
+/// runs are the two tests above, red on `in-building` (a car that braked mid-change swung
+/// 62° off its lane into a block, actor 301; one released from a standstill hold slid 2 m
+/// sideways in 2 s, actor 253) and on `speed-jump`/`accel-bound` (−12.7 m/s² for a
+/// pedestrian stepping out, actor 255).
+fn safety_failures(report: &AuditReport) -> Vec<String> {
+    SAFETY
+        .iter()
+        .filter(|c| report.count(**c) > 0)
+        .map(|c| format!("{} = {}", c.label(), report.count(*c)))
+        .collect()
+}
+
+fn kinematic_limits() -> EngineParams {
+    EngineParams {
+        lateral_speed_bound: true,
+        braking_tyre_limit: true,
+        ..EngineParams::default()
+    }
+}
+
+#[test]
+fn with_the_kinematic_limits_signalised_traffic_holds_every_invariant() {
+    let report = run(kinematic_limits(), 180);
+    eprintln!("{:?}\n{:?}", report.stats, report.counts);
+    assert!(
+        safety_failures(&report).is_empty(),
+        "invariants violated: {:?}",
+        safety_failures(&report)
+    );
+    assert!(
+        report.stats.pedestrian_steps > 100_000,
+        "{:?}",
+        report.stats
+    );
+    assert!(report.stats.signalised_entries >= 100, "{:?}", report.stats);
+    assert_eq!(report.count(Check::Standstill), 0, "{:?}", report.stats);
+}
+
+#[test]
+fn with_the_kinematic_limits_the_observed_run_holds_every_invariant() {
+    let report = observed_run(kinematic_limits(), 180);
+    eprintln!("{:?}\n{:?}", report.stats, report.counts);
+    assert!(
+        safety_failures(&report).is_empty(),
+        "invariants violated: {:?}",
+        safety_failures(&report)
+    );
+    assert!(
+        report.stats.pedestrian_midblock_steps > 500,
+        "{:?}",
+        report.stats
+    );
+    assert!(
+        report.stats.pedestrian_red_crossings > 0,
+        "{:?}",
         report.stats
     );
     assert_eq!(report.count(Check::Standstill), 0, "{:?}", report.stats);
