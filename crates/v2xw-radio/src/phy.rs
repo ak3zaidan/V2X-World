@@ -76,6 +76,15 @@ pub const NOISE_FIGURE_3GPP_DB: f64 = 9.0;
 /// The CBR busy threshold, −85 dBm [EN 302 571 §4.2.10.1, 04-models.md §4.5].
 pub const CBR_BUSY_THRESHOLD_DBM: f64 = -85.0;
 
+/// The 10 MHz energy-detect CCA level, −65 dBm. A signal whose preamble the receiver did
+/// not detect holds CCA busy only at 20 dB above the minimum-rate sensitivity: "−62 dBm
+/// for 20 MHz channel spacing, −65 dBm for 10 MHz channel spacing, and −68 dBm for 5 MHz"
+/// [IEEE 802.11-2020 §17.3.10.6, CCA requirements]. The −85 dBm of the same clause is
+/// the level at which the start of a *valid OFDM transmission* must read busy (preamble
+/// detection), which is [`CcaConfig::busy_dbm`]. On the operating channel, another
+/// channel's frame that leaks through the channel filter is not such a transmission.
+pub const CCA_ED_10MHZ_DBM: f64 = -65.0;
+
 /// The capture threshold Torrent-Moreno used for 3 Mbit/s BPSK 1/2, 5 dB
 /// [Torrent-Moreno 2009 Eq. 1, R1 §B.4].
 pub const CAPTURE_THRESHOLD_DB: f64 = 5.0;
@@ -194,21 +203,29 @@ pub enum CaptureRule {
 }
 
 /// The CCA thresholds of one PHY instance (04-models.md §4.5).
+///
+/// Two levels, as IEEE 802.11-2020 §17.3.10.6 has them: a frame of the operating channel
+/// holds the medium busy from `busy_dbm` (preamble detection, −85 dBm in 10 MHz), and
+/// another channel's frame leaking through the channel filter only from the
+/// energy-detect level (−65 dBm in 10 MHz). Before radio-fix4 the leak was held to
+/// `busy_dbm` too, so a frame on 174 made 172 busy 20 dB further away than an 802.11
+/// receiver does. (A jammer's energy is still held to `busy_dbm`: radio-fix4 open item
+/// R4.1.JAM-ED.)
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CcaConfig {
-    /// The threshold above which received signal strength makes the channel busy for the
-    /// CBR measurement, dBm. Default −85 dBm [EN 302 571 §4.2.10.1].
+    /// The preamble-detect level, dBm: a frame of the operating channel at or above it
+    /// makes the channel busy. Default −85 dBm [EN 302 571 §4.2.10.1; IEEE 802.11-2020
+    /// §17.3.10.6].
     pub busy_dbm: f64,
-    /// The energy-detect threshold, when a preset distinguishes it. `None` means the same
-    /// threshold as `busy_dbm`, which is what the ETSI default does.
+    /// The energy-detect level, dBm, for another channel's frame on this one. `None` is
+    /// [`CCA_ED_10MHZ_DBM`] (−65 dBm, IEEE 802.11-2020 §17.3.10.6). Never below
+    /// `busy_dbm` ([`CcaConfig::energy_detect_threshold_dbm`]).
     pub energy_detect_dbm: Option<f64>,
 }
 
 impl CcaConfig {
-    /// The ETSI default: the CBR busy threshold, −85 dBm, used for CCA as well.
-    ///
-    /// The card states what this conflates: CCA-ED and the CBR threshold are related but
-    /// are not defined as the same parameter by the standards (04-models.md §4.5).
+    /// The ETSI default: the CBR busy threshold, −85 dBm, for a frame of the channel, and
+    /// the 802.11 10 MHz energy-detect level, −65 dBm, for another channel's leak.
     pub const ETSI: CcaConfig = CcaConfig {
         busy_dbm: CBR_BUSY_THRESHOLD_DBM,
         energy_detect_dbm: None,
@@ -224,10 +241,29 @@ impl CcaConfig {
         energy_detect_dbm: None,
     };
 
-    /// The threshold that decides CCA busy, dBm.
+    /// The level at which a frame of the operating channel makes CCA busy (preamble
+    /// detection), dBm: `busy_dbm`.
+    ///
+    /// Before radio-fix4 this returned the energy-detect level whenever a preset set one,
+    /// so the ns-3 preset sensed an 802.11 frame only from −62 dBm. ns-3's `WifiPhy` holds
+    /// CCA busy for a Wi-Fi signal from `CcaSensitivity` (−82 dBm) and keeps
+    /// `CcaEdThreshold` (−62 dBm) for energy it cannot decode.
     #[must_use]
     pub fn cca_threshold_dbm(&self) -> f64 {
-        self.energy_detect_dbm.unwrap_or(self.busy_dbm)
+        self.busy_dbm
+    }
+
+    /// The level at which another channel's frame, leaking through the channel filter,
+    /// makes CCA busy on this one, dBm: `energy_detect_dbm`, −65 dBm when unset (IEEE
+    /// 802.11-2020 §17.3.10.6), and never below `busy_dbm`.
+    #[must_use]
+    pub fn energy_detect_threshold_dbm(&self) -> f64 {
+        let ed = self.energy_detect_dbm.unwrap_or(CCA_ED_10MHZ_DBM);
+        if ed > self.busy_dbm {
+            ed
+        } else {
+            self.busy_dbm
+        }
     }
 }
 
@@ -661,7 +697,7 @@ impl OfdmPhy {
     /// Sums in id order, like every other power reduction in the crate.
     #[must_use]
     pub fn energy_dbm(&self, node: NodeId, ch: ChannelId, at: SimTime) -> f64 {
-        self.energy_started_by(node, ch, at, at)
+        self.energy_started_by(node, ch, at, at, true)
     }
 
     /// The energy carrier sense sees at `at`: the arrivals that began at least
@@ -669,20 +705,33 @@ impl OfdmPhy {
     #[must_use]
     pub fn sensed_energy_dbm(&self, node: NodeId, ch: ChannelId, at: SimTime) -> f64 {
         let cutoff = at.saturating_sub(crate::types::timing::CCA_TIME.as_nanos());
-        self.energy_started_by(node, ch, at, cutoff)
+        self.energy_started_by(node, ch, at, cutoff, true)
     }
 
-    /// The energy at `at` of the arrivals that began at or before `started_by`.
+    /// [`OfdmPhy::sensed_energy_dbm`] without the other channels' leaks (own-channel
+    /// leakage and adjacent-channel emitters): the frames of `ch` itself (and any
+    /// jammer), which carrier sense holds to the preamble-detect
+    /// level while the leaks are held to energy detect ([`CcaConfig`]). Equal to it, bit
+    /// for bit, in a run without leakage.
+    #[must_use]
+    pub fn sensed_own_channel_dbm(&self, node: NodeId, ch: ChannelId, at: SimTime) -> f64 {
+        let cutoff = at.saturating_sub(crate::types::timing::CCA_TIME.as_nanos());
+        self.energy_started_by(node, ch, at, cutoff, false)
+    }
+
+    /// The energy at `at` of the arrivals that began at or before `started_by`, with or
+    /// without the other channels' leaks.
     fn energy_started_by(
         &self,
         node: NodeId,
         ch: ChannelId,
         at: SimTime,
         started_by: SimTime,
+        with_leakage: bool,
     ) -> f64 {
         // The map is keyed `(receiver, tx id)`, so this node's arrivals are one range, in
         // the same tx-id order a filtered walk of the whole map visits them.
-        let contributors: Vec<(NodeId, f64)> = if self.leakage.is_empty() {
+        let contributors: Vec<(NodeId, f64)> = if self.leakage.is_empty() || !with_leakage {
             self.arrivals
                 .range((node.index(), 0)..=(node.index(), u64::MAX))
                 .map(|(_, a)| a)
@@ -710,8 +759,13 @@ impl OfdmPhy {
         // (04-models.md §12.3).
         let jam_mw = if self.jamming.is_empty() {
             0.0
-        } else {
+        } else if with_leakage {
             self.jamming.power_mw(node, ch, at, at.saturating_add(1))
+        } else {
+            // An adjacent-channel emitter (`radio.adjacent_channel`) is another channel's
+            // leak too: held to energy detect with the rest of it.
+            self.jamming
+                .jammer_power_mw(node, ch, at, at.saturating_add(1))
         };
         if contributors.is_empty() {
             if jam_mw <= 0.0 {
@@ -1139,7 +1193,17 @@ impl<C: Ctx + ?Sized> Phy<C> for OfdmPhy {
         // whichever station the event queue served first silence every other one, and
         // same-slot collisions, the ones CWmin exists to spread, would never happen.
         let energy = self.sensed_energy_dbm(node, ch, at);
-        if energy >= self.cca.cca_threshold_dbm() {
+        // Two levels (IEEE 802.11-2020 §17.3.10.6): all the energy against energy detect,
+        // and the channel's own frames against preamble detect. Without leakage the two
+        // sums are one and the same, and energy detect is never below preamble detect, so
+        // this is the one-threshold test bit for bit.
+        let busy = energy >= self.cca.energy_detect_threshold_dbm()
+            || (if self.leakage.is_empty() && self.jamming.is_empty() {
+                energy
+            } else {
+                self.sensed_own_channel_dbm(node, ch, at)
+            }) >= self.cca.cca_threshold_dbm();
+        if busy {
             CcaState::Busy { energy_dbm: energy }
         } else {
             CcaState::Idle
@@ -1442,9 +1506,10 @@ fn phy_card(sensitivity: SensitivityPreset, rx_impl_loss_db: f64) -> ModelCard {
                     .to_string(),
                 accessed: None,
                 note: Some(
-                    "CCA-ED and the CBR threshold are related but are not defined as the \
-                     same parameter by the standards; this model uses one number for both \
-                     unless a preset separates them (ns3: −82 / −62; veins: −65)."
+                    "The preamble-detect level, for a frame of the operating channel. \
+                     Another channel's frame leaking through the filter is held to the \
+                     energy-detect level instead, −65 dBm in 10 MHz (IEEE 802.11-2020 \
+                     §17.3.10.6; presets: ns3 −82 / −62, veins −65 / −65)."
                         .to_string(),
                 ),
             },
@@ -2282,10 +2347,70 @@ mod tests {
         phy2.register_arrival(arrival(0, 1, -95.0, 0, f));
         assert_eq!(Phy::cca(&phy2, &ctx, node, ChannelId::CCH), CcaState::Idle);
         // The ns-3 and Veins presets move the threshold, as 04-models.md §4.5 records.
+        // ns-3 senses a Wi-Fi frame from CcaSensitivity (-82 dBm) and other energy from
+        // CcaEdThreshold (-62 dBm); before radio-fix4 the preset read -62 for both.
         let phy3 = OfdmPhy::new(Tier::High).with_cca(CcaConfig::NS3);
-        assert_eq!(phy3.cca_config().cca_threshold_dbm(), -62.0);
+        assert_eq!(phy3.cca_config().cca_threshold_dbm(), -82.0);
+        assert_eq!(phy3.cca_config().energy_detect_threshold_dbm(), -62.0);
         let phy4 = OfdmPhy::new(Tier::High).with_cca(CcaConfig::VEINS);
         assert_eq!(phy4.cca_config().cca_threshold_dbm(), -65.0);
+        assert_eq!(phy4.cca_config().energy_detect_threshold_dbm(), -65.0);
+        // ETSI: -85 dBm for a frame of the channel, -65 dBm (802.11-2020 §17.3.10.6) for
+        // anything else; an energy-detect level set below preamble detect is raised to it.
+        assert_eq!(CcaConfig::ETSI.energy_detect_threshold_dbm(), -65.0);
+        let low = CcaConfig {
+            busy_dbm: -85.0,
+            energy_detect_dbm: Some(-90.0),
+        };
+        assert_eq!(low.energy_detect_threshold_dbm(), -85.0);
+    }
+
+    /// radio-fix4 R4.1.PHY: another channel's frame leaking through the filter makes CCA
+    /// busy only from the energy-detect level (-65 dBm, IEEE 802.11-2020 §17.3.10.6), while
+    /// a frame of the channel does from preamble detect (-85 dBm). Fault: the leak held to
+    /// -85 dBm (the pre-fix carrier sense) makes the -75 dBm leak below read busy.
+    #[test]
+    fn a_leak_from_the_next_channel_is_sensed_only_above_energy_detect() {
+        use crate::regulation::{Region, Technology, own_channel_leakage};
+        let table = own_channel_leakage(Region::Us2016, Technology::Ieee80211p, &[172, 174], 2);
+        let acir = *table.get(&(174, 172)).expect("174 -> 172 is priced");
+        let mut ctx = TestCtx::new(3);
+        ctx.set_now(100_000);
+        let rx = NodeId::new(0);
+        let mut on174 = frame(300, Mcs::R6Qpsk12);
+        on174.channel = ChannelId(174);
+        let mut on172 = frame(300, Mcs::R6Qpsk12);
+        on172.channel = ChannelId(172);
+        let leak_at = |dbm_on_172: f64| {
+            let mut phy = OfdmPhy::new(Tier::High);
+            phy.set_channel_leakage(table.clone());
+            phy.register_arrival(arrival(2, 0, dbm_on_172 + acir, 0, on174));
+            Phy::cca(&phy, &ctx, rx, ChannelId(172)).is_busy()
+        };
+        // -75 dBm after the filter: above preamble detect, below energy detect.
+        assert!(!leak_at(-75.0), "a -75 dBm leak from 174 held 172 busy");
+        assert!(leak_at(-64.0), "a -64 dBm leak from 174 left 172 idle");
+        // A 172 frame at -75 dBm is a frame of the channel: busy.
+        let mut phy = OfdmPhy::new(Tier::High);
+        phy.set_channel_leakage(table.clone());
+        phy.register_arrival(arrival(1, 0, -75.0, 0, on172));
+        assert!(Phy::cca(&phy, &ctx, rx, ChannelId(172)).is_busy());
+        // The leaks add up in the energy energy detect reads: one -68 dBm leak is idle,
+        // two (-65 dBm together) are busy.
+        let mut two = OfdmPhy::new(Tier::High);
+        two.set_channel_leakage(table.clone());
+        two.register_arrival(arrival(2, 0, -68.0 + acir, 0, on174));
+        assert!(!Phy::cca(&two, &ctx, rx, ChannelId(172)).is_busy());
+        two.register_arrival(arrival(3, 0, -68.0 + acir, 0, on174));
+        assert!(Phy::cca(&two, &ctx, rx, ChannelId(172)).is_busy());
+        // The knob: energy detect set to -85 dBm is the pre-fix carrier sense.
+        let mut old = OfdmPhy::new(Tier::High).with_cca(CcaConfig {
+            busy_dbm: -85.0,
+            energy_detect_dbm: Some(-85.0),
+        });
+        old.set_channel_leakage(table);
+        old.register_arrival(arrival(2, 0, -75.0 + acir, 0, on174));
+        assert!(Phy::cca(&old, &ctx, rx, ChannelId(172)).is_busy());
     }
 
     #[test]

@@ -1620,6 +1620,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "radio.phy.noise_figure_db" => "Receiver noise figure",
         "radio.phy.sensitivity_dbm" => "Receiver sensitivity",
         "radio.phy.cca_threshold_dbm" => "Carrier-sense threshold",
+        "radio.phy.energy_detect_dbm" => "Energy-detect level",
         "radio.phy.capture_threshold_db" => "Capture threshold",
         "radio.mac" => "Channel access (EDCA)",
         "radio.mac.periodic_access_category" => "Priority of periodic messages",

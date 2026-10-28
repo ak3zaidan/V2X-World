@@ -3487,6 +3487,7 @@ impl Engine {
         self.rebuild_snapshot(&update);
         self.declare_jamming(now, step);
         self.update_beliefs(recorder, now);
+        self.update_roadside_dcc(now);
         self.step_perception(now);
         self.cpm_sample(now);
         self.step_app_truth(recorder, now);
@@ -4511,6 +4512,71 @@ impl Engine {
     /// state with where its neighbours are believed to put it, and hard braking beyond
     /// 0.4 g (`a_long`, its own accelerometer) or the tracking-error draw sends the next
     /// BSM now and at `vRPMax` (Ahmad 2019 §IV). The draw is keyed by node and instant.
+    /// The ETSI gatekeeper's channel load at every roadside unit (radio-fix4 R4.2).
+    ///
+    /// A roadside unit is an ITS station like a vehicle: TS 102 687 §5.4 puts the gate
+    /// between its network layer and its access layer and Annex A drives `delta` from the
+    /// CBR its own radio measures, per channel. [`Engine::update_dcc`] runs only for the
+    /// actors' nodes, so before this a unit's gates never received a CBR: `delta` stayed
+    /// at `delta_max` and the EN 302 571 floor at CBR 0, whatever its channel's load, and
+    /// the per-channel gate (`dcc_service`) could not be told from a shared one
+    /// (radio-fix3 R3.2.DCC2). Only the gates are fed: SAE J2945/1's rate and power control
+    /// is the BSM's, and a roadside unit's SPaT and MAP periods are their standards'
+    /// (SAE J2735 / ISO TS 19091), so no generator `T_off` is handed to the unit.
+    fn update_roadside_dcc(&mut self, now: SimTime) {
+        if !self
+            .dcc
+            .as_ref()
+            .is_some_and(crate::wiring::EngineDcc::gates)
+        {
+            return;
+        }
+        let units: Vec<NodeId> = self.rsus.keys().copied().collect();
+        for node in units {
+            let Some(mac) = self.mac.as_ref() else {
+                return;
+            };
+            let cbr = Mac::<EngineCtx<'_>>::cbr(mac, node, self.dsrc_channel, now);
+            let cbr = match self.gcbr.as_mut() {
+                Some(g) => g.global(node, cbr, now),
+                None => cbr,
+            };
+            let service_cbr = match (self.dcc_service.as_ref(), self.channel_plan.as_ref()) {
+                (Some(_), Some(plan)) => {
+                    plan.service
+                        .filter(|&sc| self.tuned(node, sc))
+                        .and_then(|sc| {
+                            self.mac
+                                .as_ref()
+                                .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, sc, now))
+                        })
+                }
+                _ => None,
+            };
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                dcc,
+                dcc_service,
+                ..
+            } = self;
+            let mut null = crate::ctx::NullRecorder::new();
+            let mut ctx = EngineCtx::new(
+                scheduler, rng, world, snapshot, provenance, params, &mut null,
+            );
+            if let (Some(ds), Some(c)) = (dcc_service.as_mut(), service_cbr) {
+                ds.on_cbr(&mut ctx, node, c);
+            }
+            if let Some(d) = dcc.as_mut() {
+                d.on_cbr(&mut ctx, node, cbr);
+            }
+        }
+    }
+
     fn update_dcc(&mut self, node: NodeId, now: SimTime, a_long: f64) {
         if self.dcc.is_none() {
             return;
@@ -6910,7 +6976,7 @@ impl Engine {
         // have already ended is dated from the oldest frame still on the air.
         // Another node's frame is sensed `aCCATime` after it begins (`Phy::cca`), so that
         // is when it froze this node's countdown.
-        let threshold = self.phy.cca_config().cca_threshold_dbm();
+        let jam_level = self.jam_sense_level();
         let cca_time = v2xw_radio::types::timing::CCA_TIME.as_nanos();
         let mut since = now;
         for frame in self.live_at_rx.get(&node).into_iter().flatten() {
@@ -6922,7 +6988,7 @@ impl Engine {
                 && state.end > now
                 && self
                     .power_on(state, node, channel)
-                    .is_some_and(|p| p >= threshold)
+                    .is_some_and(|p| p >= self.sense_level_dbm(state, channel))
             {
                 since = since.min(sensed);
             }
@@ -6940,7 +7006,7 @@ impl Engine {
         // already per channel).
         for a in self.phy.jamming().at(node) {
             if a.channel == channel
-                && a.power_dbm >= threshold
+                && a.power_dbm >= jam_level(a)
                 && a.window.from <= now
                 && a.window.to > now
             {
@@ -6962,7 +7028,7 @@ impl Engine {
     /// *now*" and answering "until when" needs the arrival set, the CCA configuration and
     /// the frame table together.
     fn medium_idle_at(&self, node: NodeId, channel: ChannelId, now: SimTime) -> SimTime {
-        let threshold = self.phy.cca_config().cca_threshold_dbm();
+        let jam_level = self.jam_sense_level();
         let mut clear = now;
         for frame in self.live_at_rx.get(&node).into_iter().flatten() {
             let Some(state) = self.frames.get(frame) else {
@@ -6970,7 +7036,7 @@ impl Engine {
             };
             if self
                 .power_on(state, node, channel)
-                .is_some_and(|p| p >= threshold)
+                .is_some_and(|p| p >= self.sense_level_dbm(state, channel))
             {
                 clear = clear.max(state.end);
             }
@@ -6985,7 +7051,7 @@ impl Engine {
         // On this radio's channel only (radio-fix3 R3.2.JAM).
         for a in self.phy.jamming().at(node) {
             if a.channel == channel
-                && a.power_dbm >= threshold
+                && a.power_dbm >= jam_level(a)
                 && a.window.from <= now
                 && a.window.to > now
             {
@@ -7357,6 +7423,7 @@ impl Engine {
         // that start in the same nanosecond could not have sensed each other either way,
         // and stay undetermined (a plain collision).
         let cca_dbm = self.phy.cca_config().cca_threshold_dbm();
+        let ed_dbm = self.phy.cca_config().energy_detect_threshold_dbm();
         let phy = &self.phy;
         let power_at = |f: &FrameState, n: NodeId| -> Option<f64> {
             f.arrivals
@@ -7374,10 +7441,17 @@ impl Engine {
             if earlier.start == later.start {
                 return None;
             }
+            // Another channel's frame is heard through the filter only from energy detect
+            // (radio-fix4 R4.1).
+            let level = if earlier.descriptor.channel == later.descriptor.channel {
+                cca_dbm
+            } else {
+                ed_dbm
+            };
             Some(
                 power_at(earlier, later.tx)
                     .and_then(|p| onto(p, earlier, later))
-                    .is_some_and(|p| p >= cca_dbm),
+                    .is_some_and(|p| p >= level),
             )
         };
         let receivers: std::collections::BTreeSet<NodeId> = state
@@ -7458,6 +7532,7 @@ impl Engine {
             && !plan.leakage.is_empty()
         {
             let ch = state.descriptor.channel;
+            let leak_busy_dbm = self.leak_busy_dbm();
             let mut busy: Vec<(NodeId, ChannelId)> = Vec::new();
             let mut energy_only: Vec<(NodeId, f64)> = Vec::new();
             for (&rx, &power) in state
@@ -7475,7 +7550,7 @@ impl Engine {
                         && self
                             .phy
                             .leaked_dbm(power, ch, other)
-                            .is_some_and(|p| p >= v2xw_radio::phy::CBR_BUSY_THRESHOLD_DBM)
+                            .is_some_and(|p| p >= leak_busy_dbm)
                     {
                         busy.push((rx, other));
                     }
@@ -9846,6 +9921,46 @@ impl Engine {
     /// What a frame's power at `node` amounts to on `channel`: the attempt's power on its
     /// own channel; on another, its power there (an attempt or energy only) less the ACIR
     /// between the two (WP-13); `None` when it puts nothing on `channel`.
+    /// The level a frame must reach at a receiver tuned to `channel` to hold its carrier
+    /// sense busy: preamble detect for a frame of that channel, energy detect for another
+    /// channel's frame through the filter (IEEE 802.11-2020 §17.3.10.6; radio-fix4 R4.1).
+    fn sense_level_dbm(&self, state: &FrameState, channel: ChannelId) -> f64 {
+        let cca = self.phy.cca_config();
+        if state.descriptor.channel == channel {
+            cca.cca_threshold_dbm()
+        } else {
+            cca.energy_detect_threshold_dbm()
+        }
+    }
+
+    /// The level at which another channel's frame through the filter counts as busy time
+    /// in this run's channel busy ratio. Under SAE J2945/1 the CBP is the share of the
+    /// measurement interval the radio's 802.11 CCA reports busy, so a leak counts from
+    /// energy detect (radio-fix4 R4.1); ETSI's CBR is the time the received signal
+    /// strength on the channel exceeds -85 dBm [EN 302 571 §4.2.10.1; TS 102 687 §4.2],
+    /// whatever the signal, so a leak counts from there in Europe.
+    /// The level a jamming arrival must reach to hold carrier sense busy: a jammer's at
+    /// preamble detect (radio-fix4 open item R4.1.JAM-ED), an adjacent-channel emitter's
+    /// leak at energy detect.
+    fn jam_sense_level(&self) -> impl Fn(&v2xw_radio::JamArrival) -> f64 + use<> {
+        let cca = self.phy.cca_config();
+        move |a: &v2xw_radio::JamArrival| {
+            if v2xw_radio::jamming::is_adjacent_channel_source(a.jammer) {
+                cca.energy_detect_threshold_dbm()
+            } else {
+                cca.cca_threshold_dbm()
+            }
+        }
+    }
+
+    pub(crate) fn leak_busy_dbm(&self) -> f64 {
+        if crate::wiring::region_of(&self.scenario).0 == v2xw_radio::regulation::Region::Eu {
+            v2xw_radio::phy::CBR_BUSY_THRESHOLD_DBM
+        } else {
+            self.phy.cca_config().energy_detect_threshold_dbm()
+        }
+    }
+
     fn power_on(&self, state: &FrameState, node: NodeId, channel: ChannelId) -> Option<f64> {
         if state.descriptor.channel == channel {
             return state.arrivals.get(&node).map(|&(p, _)| p);

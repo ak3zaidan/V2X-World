@@ -1,0 +1,12 @@
+# radio-fix4 R4.1 base: dense-grid-20-map.yaml with the energy-detect level at -85 dBm,
+# the single-threshold carrier sense the engine had before radio-fix4 (a 174 frame's leak
+# into 172 held to the preamble-detect level). The same binary runs both.
+schema: v2xw/scenario/1
+meta:
+  base: ../radio-fix3/dense-grid-20-map.yaml
+  name: radio-fix4 dense-grid-20-map-ed85
+  description: dense-grid-20-map with radio.phy.energy_detect_dbm -85 (pre-fix carrier sense).
+  tags: [radio-fix4, experiment, cbr]
+radio:
+  phy:
+    energy_detect_dbm: -85.0

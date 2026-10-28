@@ -1,0 +1,292 @@
+# Radio channel access, fix round 4 (radio-fix3 open items: DSRC carrier sense of a
+# leaked adjacent-channel frame, R3.2.DCC2, and the fault proofs fix-3's wpradio, detect and
+# p1gaps tracks owed). Every `expect` was written with `measured: pending` and committed
+# before the run or test that judges it, except rows marked `disclosure:`.
+# `measured` is base -> variant, or the run's value. Judged by
+#   python3 -I tools/realworld/radiofix3.py <run dir>       (PDR, CBR, frames per run)
+#   python3 -I tools/realworld/radiofix4.py shares|digest <run dir>
+# against `band`.
+# Fault proofs: every fault was injected behind an env check (V2XW_FAULT=<name>) in one
+# scratch build of the test binaries, so the same binary gave the green run (unset) and
+# each red run; the hooks were then removed (checked out) and are in no commit.
+#
+# verdict: pass | fixed (an engine defect, fixed at its cause; `test` pins it) |
+#          wrong-expectation (corrected with the evidence in `note`) | open (documented).
+schema: v2xw/scms-run-expectations/1
+runs:
+  G20:
+    scenario: scenarios/real-world/radio-fix3/dense-grid-20.yaml
+    binary: this branch's debug build (opt-level 2); G20-OLD is the 3cbc95a4 release copy
+    note: procedural grid, 12,000 veh/h, 20 s, one channel, --record-level receptions
+  G20-MAP:
+    scenario: scenarios/real-world/radio-fix3/dense-grid-20-map.yaml
+    base: G20
+    binary: this branch's debug build (opt-level 2); G20-MAP-OLD is the 3cbc95a4 release copy
+    note: SPaT and MAP on 174, energy detect at its default (-65 dBm)
+  G20-MAP-ED85:
+    scenario: scenarios/real-world/radio-fix4/dense-grid-20-map-ed85.yaml
+    base: G20-MAP
+    binary: this branch's debug build (opt-level 2)
+    note: G20-MAP with radio.phy.energy_detect_dbm -85 (the pre-fix carrier sense)
+  HD-MAP:
+    scenario: scenarios/real-world/radio-fix3/dense-hwy-map.yaml
+    binary: this branch's debug build and the 3cbc95a4 release copy
+    note: built-in highway, J2945/1, channel map on, 24 s
+rows:
+# ---- Item 1: carrier sense of another channel's frame (IEEE 802.11-2020 §17.3.10.6) ----
+- id: R4.1.PHY
+  test: v2xw-radio src/phy.rs a_leak_from_the_next_channel_is_sensed_only_above_energy_detect
+  expect: >-
+    A 172 receiver's CCA reads a 174 frame's leak (power less the 174->172 ACIR) as busy only
+    from the 10 MHz energy-detect level, -65 dBm, while a 172 frame is busy from -85 dBm
+    (preamble detection); two -68 dBm leaks are busy together (energy adds), one is not;
+    energy_detect_dbm -85 restores the single threshold
+  source: >-
+    IEEE 802.11-2020 §17.3.10.6 (CCA requirements): a valid OFDM transmission at or above the
+    minimum-rate sensitivity (-85 dBm, 10 MHz) reads busy; "if the preamble portion was
+    missed", any signal 20 dB above it (-65 dBm for 10 MHz) holds CCA busy
+  fault: CcaConfig::energy_detect_threshold_dbm returning busy_dbm (the leak held to -85 dBm)
+  measured: "pass; with the fault (V2XW_FAULT=ed) red: 'a -75 dBm leak from 174 held 172 busy' (phy.rs:2393); radio lib 353/353 green"
+  verdict: pass
+- id: R4.1.NS3
+  test: v2xw-radio src/phy.rs cca_is_busy_above_the_threshold_and_while_transmitting
+  expect: >-
+    The ns-3 preset senses an 802.11 frame from CcaSensitivity (-82 dBm) and other energy
+    from CcaEdThreshold (-62 dBm); before the fix cca_threshold_dbm() returned -62 for both,
+    and the test asserted that (an expectation that encoded the conflation)
+  source: ns-3 WifiPhy attributes CcaSensitivity (-82 dBm, Wi-Fi signals) and CcaEdThreshold (-62 dBm, non-Wi-Fi energy)
+  fault: cca_threshold_dbm() returning energy_detect_dbm.unwrap_or(busy_dbm) (the old body)
+  measured: "pass with the fix; old body (V2XW_FAULT=ns3) red: left -62.0, right -82.0"
+  verdict: fixed
+- id: R4.1.NOOP-G20
+  run: G20
+  metric: record digest, this branch vs 3cbc95a4
+  band: identical
+  expect: >-
+    One channel, no adjacent emitter, J2945/1 (no gatekeeper, so R4.2's roadside feed does
+    not run): the leak and emitter terms are zero and the two-level test reduces to the old
+    one bit for bit, so the run is byte-identical; so are the published-curve rows on
+    single-channel runs (R3.1 DSRC PDR edge, R3.2.DENSE-HWY48's J2945/1 band)
+  source: the change's own algebra (energy detect >= preamble detect; own-channel sum equal to the total without leaks)
+  measured: "identical: record digest 7f4bd59a both binaries (jsonl 9e562e2c); CBR172 0.02205, pdr300 0.3705, 7,170 frames each"
+  verdict: pass
+- id: R4.1.NOOP-HWY
+  run: HD-MAP
+  metric: record digest, this branch vs 3cbc95a4
+  band: identical
+  expect: >-
+    The built-in highway has no roadside unit, so its channel map puts nothing on 174 and
+    nothing leaks: the J2945/1 dense-highway CBR (R3.2.DENSE-HWY, 0.271) is unchanged, byte
+    for byte
+  source: as R4.1.NOOP-G20
+  measured: "identical: record digest 3fc0ad37 both binaries; CBR172 0.27139 (radio-fix3: 0.271), 18,167 frames"
+  verdict: pass
+- id: R4.1.FLAG
+  run: G20-MAP-ED85
+  metric: radiofix4.py digest (node_tx, node_rx, mac_cbr), vs G20-MAP on 3cbc95a4
+  band: identical
+  expect: energy_detect_dbm -85 is the pre-fix carrier sense, so the knob reproduces the old engine's records exactly (the scenario hash differs, hence the jsonl digest)
+  source: the change's own algebra
+  measured: "identical: jsonl 1f5b1c96 and record digest df5968b2 for both (the record digest matched too)"
+  verdict: pass
+- id: R4.1.CBR-ED85
+  run: G20-MAP-ED85
+  metric: CBR172(G20-MAP-ED85) / CBR172(G20)
+  band: "[p85-0.01, p85+0.01], p85 = 1 - (B_moved - B_leak85) / B_all from G20's node_rx (radiofix4.py shares)"
+  predicted: "p85 0.9222 from G20 (B_leak85 0.1893), band [0.9122, 0.9322]"
+  expect: the pre-fix carrier sense reproduces radio-fix3 R3.2.DENSE-SENSED (0.9233 against p 0.9215)
+  source: radio-fix3 R3.2.DENSE-SENSED; ETSI TS 102 687 V1.2.1 §4.2 (CBR at -85 dBm)
+  measured: "0.9238 (0.02205 -> 0.02037), band [0.9122, 0.9322]"
+  verdict: pass
+- id: R4.1.CBR
+  run: G20-MAP
+  metric: CBR172(G20-MAP) / CBR172(G20)
+  band: "[p65-0.01, p65+0.01], p65 = 1 - (B_moved - B_leak65) / B_all from G20's node_rx"
+  predicted: "from G20 (3cbc95a4 copy, CBR172 0.02205): B_moved 0.2671, B_leak65 0.0513, p65 0.7842, band [0.7742, 0.7942] (CBR172 0.0173); B_leak85 0.1893, p85 0.9222"
+  expect: >-
+    Under SAE J2945/1 the CBP is the share of the 100 ms interval the radio's 802.11 CCA
+    reports busy, so a SPaT or MAP on 174 counts on 172 only where its leak reaches -65 dBm
+    (an arrival of -52 dBm on 174, ACIR 12.98 dB), not -85 dBm (-72 dBm on 174): B_leak
+    shrinks to the strong arrivals near the masts and the CBR on 172 falls further than
+    radio-fix3 measured, by (B_leak85 - B_leak65) / B_all, to p65 within overlap (1 %)
+  source: IEEE 802.11-2020 §17.3.10.6; SAE J2945/1 §6.3.8 (CBP over vCBPMeasInt 100 ms, from the radio's channel-busy indication; clause text not re-read here, as radio-fix3 R3.2.DENSE-SENSED's note)
+  measured: "0.7855 (0.02205 -> 0.01732), band [0.7742, 0.7942]; vs the pre-fix sense 0.02037 -> 0.01732 (-15.0 %)"
+  verdict: fixed
+- id: R4.1.PDR
+  run: G20-MAP
+  metric: BSM pdr300 and the 50 % crossing (cross50_m), G20-MAP vs G20-MAP-ED85
+  band: "|pdr300 change| <= 0.005; cross50_m within one 50 m bin, inside [100, 200] m"
+  expect: >-
+    The leak-busy time that disappears is about B_leak85 x CBR (0.19 x 0.02 = 0.4 % of a
+    listener's time), and a deferred BSM waited at most one SPaT/MAP air time (under 1 ms)
+    with no queue overflow at this load, so neither delivery nor the reception-range curve
+    moves measurably; the leak still raises the noise at a 172 receiver whether or not
+    carrier sense defers, so SINR is the same. The curve stays in the NLOS-edge band
+    radio-fix3 R3.1.DSRC-NLOS-EDGE judged against
+  source: 3GPP TR 37.885 V15.3.0 Table 6.2.1-1 and SAE J2945/1 §6.3.8 (via R3.1.DSRC-NLOS-EDGE); airtime arithmetic
+  measured: "pdr300 0.3719 -> 0.3713 (-0.0006); cross50_m 175 -> 175 (G20 175), inside [100, 200]"
+  verdict: pass
+- id: R4.1.FRAMES
+  run: G20-MAP
+  metric: frames_transmitted, G20-MAP / G20-MAP-ED85
+  band: [0.995, 1.005]
+  expect: generation does not read carrier sense, and J2945/1 neither cuts the rate (density under 25 in 100 m) nor the power (CBP under 0.5) at CBR 0.02, so the same frames go on air
+  source: SAE J2945/1 §6.3.8 (vMinChanUtil 0.5; MaxITT density rule), via 04-models.md §6
+  measured: "7,097 -> 7,097 (1.000)"
+  verdict: pass
+- id: R4.1.WALL
+  run: G20-MAP
+  metric: wall time and peak RSS, G20-MAP / G20-MAP-ED85 (same binary, one at a time)
+  band: "wall [0.8, 1.25]; peak [0.9, 1.1]"
+  expect: one extra own-channel energy sum per carrier-sense query, only in runs with leakage or an emitter; the same frames and receptions, so run cost does not move beyond machine noise
+  source: cost model
+  measured: "wall 35.89 -> 42.51 s (1.184; rerun 41.58 s, 1.159; pre-fix binary 34.57 s); peak 548 -> 573 MB (1.046; rerun 470 MB). Inside the bands, but the +16-18 % is consistent and larger than 'machine noise': not profiled (the second, own-channel energy walk runs on every query where the total is under -65 dBm, i.e. almost all of them)"
+  verdict: pass
+- id: R4.1.DET
+  run: G20-MAP
+  metric: radiofix4.py digest, G20-MAP run twice on the same binary and seed
+  band: identical
+  expect: same seed, byte-identical records
+  source: 02-architecture.md determinism (ADR 0004)
+  measured: "identical: jsonl 5437c8f4, record digest 9ee0d990 on both runs"
+  verdict: pass
+- id: R4.1.EMITTER
+  expect: >-
+    An adjacent-channel emitter (radio.adjacent_channel: ITS-G5 beside LTE-V2X) is
+    another channel's leak too: its energy is held to energy detect in carrier sense and,
+    outside Europe, in the CBR (Engine::jam_sense_level, leak_busy_dbm); in Europe the CBR
+    stays at -85 dBm (EN 302 571 §4.2.10.1 measures received signal strength, whatever it is)
+  source: IEEE 802.11-2020 §17.3.10.6; ETSI EN 302 571 V2.1.1 §4.2.10.1
+  measured: not measured in this round (no shipped scenario declares an emitter on a DSRC run)
+  verdict: open
+- id: R4.1.JAM-ED
+  expect: >-
+    A jammer's noise has no 802.11 preamble either, so by the same clause it should hold
+    carrier sense busy only from -65 dBm, and count in a J2945/1 CBP only from there; the
+    engine still holds it to -85 dBm. Left as is in this round: it changes every jammer run
+    (radio_access, radio_channel, radio_access_layers, multichannel R3.2.JAM) and needs its
+    own expectation rows (a 23 dBm rider jammer is far above -65 dBm and is not moved; a
+    distant or pulsed one is)
+  source: IEEE 802.11-2020 §17.3.10.6
+  measured: not changed
+  verdict: open
+# ---- Item 2: the per-channel DCC gate (radio-fix3 R3.2.DCC2) ----
+- id: R4.2.FEED
+  test: v2xw-engine tests/multichannel.rs the_etsi_gate_spaces_each_channel_on_its_own (rewritten)
+  disclosure: >-
+    the cause was found by reading run.rs before this row was written: update_dcc runs only
+    for the actors' nodes, so a roadside unit's ETSI gates never receive a CBR (delta stays
+    at delta_max, the EN 302 571 floor at CBR 0), which is why radio-fix3's test could not
+    fail. Fixed in Engine::update_roadside_dcc (gates only; J2945/1 is the BSM's)
+  expect: >-
+    With ETSI adaptive DCC, a pulsed jammer (23 dBm, 90 ms of every 100 ms, from 2 s) riding
+    one unit on 172 holds that radio's CBR near 0.9; delta falls by at most 0.00025 per
+    200 ms to delta_min 0.0006 in about 13 s, so from 20 s the unit's SPaT on 172 is spaced
+    by at least min(1 s, T_on / 0.0006): at most 10 s / that + 1 frames in the last 10 s
+    (the jammer's 10 ms gaps alone pass about one per period). Its MAP on 174 every 100 ms
+    passes a gate fed with 174's CBR: at most 2 fewer than with no jammer
+  source: ETSI TS 102 687 V1.2.1 §5.4 and Annex A (alpha 0.016, beta 0.0012, CBR_target 0.68, delta 0.0006-0.03, G-max- -0.00025, 200 ms update, T_off = T_on/delta in [25 ms, 1 s]); EN 302 571 V2.1.1 §4.2.10 (every ITS-S, roadside included)
+  fault: "a: update_roadside_dcc not called (the unit's gates never fed a CBR); b: dcc_service never built (one gate for both radios)"
+  measured: >-
+    first test (count bound from the longest SPaT, T_on 424 us: at most 15 in 10 s): with
+    R4.2.FEED alone SPaT 100 -> 100 (red: the meter, R4.2.METER); with both fixes SPaT
+    100 -> 18, MAP 100 -> 100 (red against 15). Faults on that binary: a SPaT 100 (red),
+    b MAP 100 -> 10 (red), meter 100 (red). Corrected test, both fixes in: SPaT on 172 in
+    the last 10 s 100 -> 18, 0 of 17 gaps under T_on/delta_min - 0.1 s; MAP on 174
+    100 -> 100; multichannel 7/7. Faults: a (feed) red, 99 of 99 gaps at 0.100 s;
+    b (shared) red, MAP 100 -> 10; meter (jamming path on note_busy) red, 99 of 99 gaps
+  verdict: fixed
+  note: >-
+    wrong expectation, corrected before the rerun: the gate closes for each frame's own
+    T_on / delta, and SPaTs differ in size (the bound took the longest one for every frame,
+    so 18 at a mean T_on near 333 us is what Annex A gives). The rewritten assertion checks
+    every gap against its own frame's T_on / delta_min (capped at 1 s) less 100 ms (a
+    frame's start trails its gate pass by up to one 90 ms jammer on-time of carrier sense);
+    the MAP assertion now comes first so fault b is attributed to it
+- id: R4.2.METER
+  test: v2xw-radio src/mac.rs windows_declared_ahead_still_count_in_the_reading_at_now; v2xw-engine tests/multichannel.rs the_etsi_gate_spaces_each_channel_on_its_own
+  disclosure: >-
+    found by a diagnostic run (dcc-diag: the R4.2.FEED scenario on the CLI) after the
+    rewritten test failed with the fix in: the unit's mac.cbr reports read 0.91 on 172 while
+    every station's ETSI delta stayed at 0.0300 (vehicles too), i.e. the 100 ms CBR the DCC
+    reads was 0 under the jammer. Cause: CbrMeter::note_busy prunes at the interval's end,
+    and a jammer's windows are declared a step (100 ms) ahead, which folded away everything
+    that ended before now. Fixed with CbrMeter::note_busy_at (pruned at now) on the jamming
+    path only; frames keep note_busy (their end is under an air time ahead, which drops at
+    most one air time from the window: open item R4.2.METER-FRAMES, moving it moves every
+    golden)
+  expect: >-
+    A 90 %-duty pulse train declared a step ahead reads CBR 0.9 at now, before and after the
+    next window is declared; in the engine, a jammed station's DCC sees its channel's load
+    (with R4.2.FEED: the unit's SPaT is gated)
+  source: ETSI EN 302 571 V2.1.1 §4.2.10.1 and TS 102 687 V1.2.1 §4.2 (CBR over the last 100 ms, T_CBR); SAE J2945/1 §6.3.8 (vCBPMeasInt 100 ms)
+  fault: "unit: note_busy_at pruning at `to`; engine: the jamming path back on note_busy"
+  measured: "unit test green (radio lib 354/354); fault meterunit red: 'CBR 0 after the next window is declared' (mac.rs:1811); engine fault meter red (R4.2.FEED); radio_access 8/8, radio_channel 8/8, radio_access_layers 10/10 (1 ignored) green with the fix"
+  verdict: fixed
+- id: R4.2.METER-FRAMES
+  expect: >-
+    CbrMeter::note_busy prunes at the noted interval's end; for a frame noted at its start
+    that drops intervals that ended within one air time of the window's start, an
+    underestimate of at most one air time per 100 ms window (under 0.5 % CBR at 6 Mbit/s).
+    Pruning at `from` is exact, but moves every recorded CBR and so every golden
+  source: the meter's own arithmetic
+  measured: not changed (needs a golden re-bless)
+  verdict: open
+- id: R4.2.J2945
+  expect: >-
+    SAE J2945/1 §6.3 rate and power control is the BSM's and reads the CBP of the BSM
+    channel only; a roadside unit sends no BSM, so it gets no J2945/1 state (the US runs
+    are untouched: R4.1.NOOP-G20). TS 102 687's per-channel gate is the clause that applies
+    to a two-radio unit, and R4.2.FEED pins it
+  source: SAE J2945/1 §6.3.8 (via 04-models.md §6, R1 §E); ETSI TS 102 687 V1.2.1 §5.4
+  measured: "R4.1.NOOP-G20 identical (US J2945/1 run with four roadside units)"
+  verdict: pass
+# ---- Item 3: fault proofs owed by fix-3 (each test run with its fault in, then restored) ----
+- id: R4.3.DETECT-KNOBS
+  test: v2xw-engine tests/detect_fix3.rs the_ts_suite_is_selectable_with_its_knobs
+  fault: Ts103759Params::apply_label accepting an unknown fusion label
+  expect: red ("an unknown fusion label was accepted"); green restored
+  measured: "green 2/2; V2XW_FAULT=fusion red: 'an unknown fusion label was accepted' (detect_fix3.rs:60)"
+  verdict: pass
+- id: R4.3.DETECT-INPUTS
+  test: v2xw-engine tests/detect_fix3.rs the_ts_suite_judges_every_message_with_its_frame_and_own_inputs
+  fault: Phase2::note_broadcast_frame dropping every frame (no VehicleSize reaches the box check)
+  expect: red ("the box check never ran"); green restored
+  measured: "green; V2XW_FAULT=frame red: 'the box check never ran: no VehicleSize reached it' (detect_fix3.rs:102)"
+  verdict: pass
+- id: R4.3.TS-INTERSECT
+  test: v2xw-threat tests/ts103759_fix3.rs a_follower_on_its_leaders_old_spot_does_not_intersect_it
+  fault: the intersection check comparing against the other claim where it stood (speed x age dropped)
+  expect: red (score 2/0.5... on the first pair instead of 2/7.5); green restored
+  measured: "green 2/2; V2XW_FAULT=intersect red: score 2.0e9 at ts103759_fix3.rs:85 (the follower intersected)"
+  verdict: pass
+- id: R4.3.TS-CATCH
+  test: v2xw-threat tests/ts103759_fix3.rs catch_scores_the_map_check_on_the_stated_confidence
+  fault: CaTCh scoring of the map check replaced by the threshold score
+  expect: red ("an honest 4 m offset fired under CaTCh"); green restored
+  measured: "green; V2XW_FAULT=catch red: 'an honest 4 m offset fired under CaTCh' (ts103759_fix3.rs:119)"
+  verdict: pass
+- id: R4.3.GNSS-STATED
+  test: v2xw-mobility src/gnss/gauss_markov.rs a_stated_accuracy_changes_the_statement_and_not_the_error
+  fault: the stated-accuracy draw taken from the receiver's own error stream (RngDomain::Gnss, EntityRef::Node)
+  expect: red ("the spread's draw moved the error"); green restored
+  measured: "green; V2XW_FAULT=gnss red: 'the spread's draw moved the error' (gauss_markov.rs:1933)"
+  verdict: pass
+- id: R4.3.OFFCH
+  test: v2xw-engine src/run/off_channel.rs the_unit_is_away_only_inside_its_window_and_at_its_rate
+  fault: the absence window starting at the interval start (from_ns dropped)
+  expect: red (away at 2 ms of phase); green restored
+  measured: "green; V2XW_FAULT=offch red: away share 0.4045 at 2 ms, want 0.0 (off_channel.rs:121)"
+  verdict: pass
+- id: R4.3.NODEKEYS
+  test: v2xw-engine tests/stable_node_keys.rs a_roadside_count_change_leaves_every_vehicle_draw_byte_identical
+  fault: roadside units on the vehicle counter (create_rsus taking next_node, the pre-fix numbering)
+  expect: red (vehicle ids or BSM sequences differ between 1 and 3 units); green restored
+  measured: "green (5.2 s); V2XW_FAULT=nodekeys red: 0 of 13 vehicles' BSM sequences identical (stable_node_keys.rs:89)"
+  verdict: pass
+- id: R4.3.MAFEAT
+  test: v2xw-engine tests/ma_features.rs the_ma_reads_the_evidence_secmark_phase_and_a_mimic_reads_free
+  fault: gt.device_exposure's attack_start read from the first on-air edit (first_on_air), the pre-fix source
+  expect: red ("a secMark-only disguise moved the attack start"); green restored
+  measured: "green (262 s); V2XW_FAULT=mafeat red: attack starts 0.1 s early for every mimic (ma_features.rs:154)"
+  verdict: pass

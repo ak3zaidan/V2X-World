@@ -1963,6 +1963,13 @@ pub struct PhySettings {
     /// ratio. Unset is −85 dBm (ETSI EN 302 571 §4.2.10.1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cca_threshold_dbm: Option<f64>,
+    /// The energy-detect level, dBm: another channel's frame leaking through the channel
+    /// filter holds carrier sense busy only above it (and, under SAE J2945/1, counts in the
+    /// CBP only above it). Unset is −65 dBm, 20 dB above the 10 MHz minimum sensitivity
+    /// (IEEE 802.11-2020 §17.3.10.6); never below `cca_threshold_dbm`. −85 dBm is the
+    /// carrier sense before radio-fix4, which held a leak to the preamble level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy_detect_dbm: Option<f64>,
     /// A hard capture threshold, dB: a frame is decoded only while it stays this far above
     /// the interference plus noise (Torrent-Moreno 2009, Eq. 1). Unset uses the SINR trace
     /// against the error model, as Veins does.

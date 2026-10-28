@@ -868,11 +868,21 @@ impl Engine {
         // covers: it enters the CBR and the S-RSSI ranking (it carries no SCI, so it
         // excludes nothing).
         self.sidelink_note_jam(rx, power_dbm, windows);
-        if power_dbm >= v2xw_radio::phy::CBR_BUSY_THRESHOLD_DBM
+        // An adjacent-channel emitter's leak counts in the CBR from the level a leak does
+        // (`Engine::leak_busy_dbm`, radio-fix4 R4.1); a jammer's energy from -85 dBm.
+        let busy_dbm = if v2xw_radio::jamming::is_adjacent_channel_source(jammer) {
+            self.leak_busy_dbm()
+        } else {
+            v2xw_radio::phy::CBR_BUSY_THRESHOLD_DBM
+        };
+        // The windows are the coming step's, so the meter is pruned at `now`, not at their
+        // ends (radio-fix4 R4.2: pruning at the end read every jammer as CBR 0).
+        let now = self.scheduler.now();
+        if power_dbm >= busy_dbm
             && let Some(mac) = self.mac.as_mut()
         {
             for w in windows {
-                mac.note_busy(rx, channel, w.from, w.to);
+                mac.note_busy_at(rx, channel, now, w.from, w.to);
             }
         }
     }

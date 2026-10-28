@@ -397,29 +397,34 @@ fn the_loader_refuses_a_map_the_band_plan_cannot_carry() {
     assert_eq!(refusals(&base), "");
 }
 
-/// radio-fix3 R3.2.DCC: an ETSI gatekeeper runs per channel. TS 102 687's adaptive gate
-/// spaces a unit's frames by `T_on / delta`, and `delta` follows the CBR of the channel the
-/// gate serves (Annex A). A constant jammer riding one roadside unit on the safety channel
-/// (172) drives that radio's CBR to 1, so its gate's `delta` falls to `delta_min` and
-/// `T_off` to hundreds of ms; the unit's MAP goes on the service channel (174, every
-/// 100 ms here) through its second radio, whose gate reads 174's CBR, so it is spaced no
-/// more than with no jammer. One gate shared by the two radios, fed with 172's CBR,
-/// throttles the MAP with the SPaT. `delta` falls by at most G-max (0.00025) per 200 ms
-/// update, so it takes about 10 s of jamming to pass `T_on / 100 ms`; the run is 20 s.
+/// radio-fix4 R4.2 (radio-fix3 R3.2.DCC2): an ETSI gatekeeper runs per channel, at a
+/// roadside unit too. TS 102 687's adaptive gate spaces a station's frames by
+/// `T_on / delta` (clamped to [25 ms, 1 s]), and `delta` follows the CBR of the channel the
+/// gate serves (§5.4, Annex A): above the 0.68 target it falls by at most 0.00025 per
+/// 200 ms update towards `delta_min` (0.0006), which it reaches about 13 s into a load of
+/// 0.9. A pulsed jammer riding one unit on the safety channel (172), on 90 ms of every
+/// 100 ms, holds that radio's CBR near 0.9 while leaving it 10 ms of idle medium per
+/// period to send in; the unit's MAP goes on the service channel (174, every 100 ms here)
+/// through its second radio, whose gate reads 174's CBR.
 ///
-/// (The first version compared waits with no jammer: a unit generates its SPaT and MAP in
-/// different node ticks, over 40 ms apart, so a shared 25 ms gate never bound and the test
-/// passed with the fault in.)
-/// Open (radio-fix3 R3.2.DCC2): the shared-gate fault, `dcc_service` never built, does
-/// not turn this red (MAP 199 -> 199), so it is a non-regression check only: the jammed
-/// unit's own CBR or its roadside frames do not reach the gate the way this test assumes
-/// (its SPaT and MAP records carry no DCC state), and the per-channel gate is not yet
-/// pinned by a test that can fail.
+/// So from 20 s: (a) each of the unit's SPaT on 172 is followed by a gap of at least its
+/// own `T_on / delta_min` (capped at 1 s) less one jammer on-time of carrier-sense wait,
+/// where the jammer's gaps alone would pass about one per period; and (b) its MAP on 174
+/// goes out as often as with no jammer (at most 2 fewer). Faults: the jamming path's CBR
+/// meter pruned at the windows' ends (it read the jammed channel as idle: a). Faults: the unit's gates never fed a CBR (before
+/// radio-fix4 only the actors' nodes were: a) and one gate for both radios
+/// (`dcc_service` never built: b).
+///
+/// (radio-fix3 tried a constant jammer, which holds the medium busy so that no SPaT
+/// reaches the air either way, and the unit's gates never saw a CBR: its test passed
+/// with both faults in.)
 #[test]
 fn the_etsi_gate_spaces_each_channel_on_its_own() {
+    const SECS: f64 = 30.0;
+    const LATE_NS: u64 = 20_000_000_000;
     let gated = || {
         let mut s = with_map(
-            intersections(20.0),
+            intersections(SECS),
             serde_json::json!([{"channel": 174, "messages": ["map"]}]),
         );
         s.messages.map_interval_ms = Some(100);
@@ -433,28 +438,82 @@ fn the_etsi_gate_spaces_each_channel_on_its_own() {
         s
     };
     let (_, clean) = run(gated());
-    let clean_n = sent_by(&clean);
-    let rsu = clean_n
-        .keys()
-        .find(|(_, m, _)| m == "spat")
-        .map(|(n, _, _)| *n)
+    let rsu = views::<NodeTxView>(&clean)
+        .into_iter()
+        .find(|v| v.msg_type.as_deref() == Some("spat"))
+        .map(|v| u64::from(v.node.index()))
         .expect("a SPaT sender");
     let mut s = gated();
     s.threats.jammers = vec![v2xw_engine::scenario::ModelChoice {
-        id: "attacker/jammer/constant".to_string(),
-        params: serde_json::json!({ "follow_node": rsu, "power_dbm": 23.0, "from_s": 2.0 }),
+        id: "attacker/jammer/pulsed".to_string(),
+        params: serde_json::json!({
+            "follow_node": rsu, "power_dbm": 23.0, "from_s": 2.0,
+            "period_ms": 100.0, "duty": 0.9
+        }),
     }];
     let (_, jammed) = run(s);
-    let jammed_n = sent_by(&jammed);
-    let n = |m: &BTreeMap<(u64, String, u16), usize>, t: &str, c: u16| {
-        m.get(&(rsu, t.to_string(), c)).copied().unwrap_or(0)
+    // The unit's frames of one type on one channel from 20 s, and the longest air time.
+    // The unit's frames of one type on one channel from 20 s: (start, air time), in order.
+    let late = |r: &MemoryRecorder, t: &str, c: u16| -> Vec<(u64, u64)> {
+        let mut v: Vec<(u64, u64)> = views::<NodeTxView>(r)
+            .into_iter()
+            .filter(|v| {
+                u64::from(v.node.index()) == rsu
+                    && v.msg_type.as_deref() == Some(t)
+                    && v.channel == Some(c)
+                    && v.t >= LATE_NS
+            })
+            .map(|v| (v.t, v.airtime_us.unwrap_or(0)))
+            .collect();
+        v.sort_unstable();
+        v
     };
-    let (map0, map1) = (n(&clean_n, "map", 174), n(&jammed_n, "map", 174));
-    println!("unit {rsu}: MAP on 174 {map0} -> {map1} with a 172 jammer, ETSI DCC");
-    assert!(map0 >= 150, "too few MAPs: {map0}");
+    let (spat0, spat1) = (late(&clean, "spat", 172), late(&jammed, "spat", 172));
+    let (map0, map1) = (
+        late(&clean, "map", 174).len(),
+        late(&jammed, "map", 174).len(),
+    );
+    // Each frame closes the gate for min(1 s, its own T_on / delta_min); a frame's start
+    // can trail its gate pass by one jammer on-time (90 ms) of carrier-sense wait, so the
+    // gap to the next start is at least that interval less 100 ms.
+    let short: Vec<(u64, u64, f64)> = spat1
+        .windows(2)
+        .filter_map(|w| {
+            let need_s = (w[0].1 as f64 * 1e-6 / 0.0006).min(1.0) - 0.1;
+            let gap_s = (w[1].0 - w[0].0) as f64 * 1e-9;
+            (gap_s < need_s).then_some((w[0].0, w[0].1, gap_s))
+        })
+        .collect();
+    println!(
+        "unit {rsu}, last 10 s: SPaT on 172 {} -> {} ({} gaps under T_on/delta_min - 0.1 s), \
+         MAP on 174 {map0} -> {map1}",
+        spat0.len(),
+        spat1.len(),
+        short.len()
+    );
+    assert!(
+        spat0.len() >= 80 && map0 >= 80,
+        "too few frames: SPaT {}, MAP {map0}",
+        spat0.len()
+    );
     assert!(
         map1 + 2 >= map0,
         "the service channel's gate followed the safety channel's CBR: MAP {map0} -> {map1}"
+    );
+    assert!(
+        spat1.len() >= 5,
+        "the jammed unit sent {} SPaT in 10 s",
+        spat1.len()
+    );
+    assert!(
+        short.is_empty(),
+        "the jammed unit's 172 gate did not follow its channel's CBR: {} of {} SPaT gaps \
+         under T_on / delta_min (first: at {} ns, T_on {} us, gap {:.3} s)",
+        short.len(),
+        spat1.len() - 1,
+        short[0].0,
+        short[0].1,
+        short[0].2
     );
 }
 
