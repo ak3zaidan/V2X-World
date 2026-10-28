@@ -187,8 +187,19 @@ rows:
     passes a gate fed with 174's CBR: at most 2 fewer than with no jammer
   source: ETSI TS 102 687 V1.2.1 §5.4 and Annex A (alpha 0.016, beta 0.0012, CBR_target 0.68, delta 0.0006-0.03, G-max- -0.00025, 200 ms update, T_off = T_on/delta in [25 ms, 1 s]); EN 302 571 V2.1.1 §4.2.10 (every ITS-S, roadside included)
   fault: "a: update_roadside_dcc not called (the unit's gates never fed a CBR); b: dcc_service never built (one gate for both radios)"
-  measured: pending
+  measured: >-
+    first test (count bound from the longest SPaT, T_on 424 us: at most 15 in 10 s): with
+    R4.2.FEED alone SPaT 100 -> 100 (red: the meter, R4.2.METER); with both fixes SPaT
+    100 -> 18, MAP 100 -> 100 (red against 15). Faults on that binary: a SPaT 100 (red),
+    b MAP 100 -> 10 (red), meter 100 (red). Corrected test: pending
   verdict: pending
+  note: >-
+    wrong expectation, corrected before the rerun: the gate closes for each frame's own
+    T_on / delta, and SPaTs differ in size (the bound took the longest one for every frame,
+    so 18 at a mean T_on near 333 us is what Annex A gives). The rewritten assertion checks
+    every gap against its own frame's T_on / delta_min (capped at 1 s) less 100 ms (a
+    frame's start trails its gate pass by up to one 90 ms jammer on-time of carrier sense);
+    the MAP assertion now comes first so fault b is attributed to it
 - id: R4.2.METER
   test: v2xw-radio src/mac.rs windows_declared_ahead_still_count_in_the_reading_at_now; v2xw-engine tests/multichannel.rs the_etsi_gate_spaces_each_channel_on_its_own
   disclosure: >-

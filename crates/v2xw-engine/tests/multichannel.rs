@@ -407,10 +407,11 @@ fn the_loader_refuses_a_map_the_band_plan_cannot_carry() {
 /// period to send in; the unit's MAP goes on the service channel (174, every 100 ms here)
 /// through its second radio, whose gate reads 174's CBR.
 ///
-/// So from 20 s: (a) the unit's SPaT on 172 is spaced by at least `T_on / delta_min`
-/// (capped at 1 s), at most `10 s / that + 1` frames in the last 10 s, where the jammer's
-/// gaps alone would pass about one per period; and (b) its MAP on 174 goes out as often as
-/// with no jammer (at most 2 fewer). Faults: the unit's gates never fed a CBR (before
+/// So from 20 s: (a) each of the unit's SPaT on 172 is followed by a gap of at least its
+/// own `T_on / delta_min` (capped at 1 s) less one jammer on-time of carrier-sense wait,
+/// where the jammer's gaps alone would pass about one per period; and (b) its MAP on 174
+/// goes out as often as with no jammer (at most 2 fewer). Faults: the jamming path's CBR
+/// meter pruned at the windows' ends (it read the jammed channel as idle: a). Faults: the unit's gates never fed a CBR (before
 /// radio-fix4 only the actors' nodes were: a) and one gate for both radios
 /// (`dcc_service` never built: b).
 ///
@@ -452,37 +453,60 @@ fn the_etsi_gate_spaces_each_channel_on_its_own() {
     }];
     let (_, jammed) = run(s);
     // The unit's frames of one type on one channel from 20 s, and the longest air time.
-    let late = |r: &MemoryRecorder, t: &str, c: u16| -> (usize, u64) {
-        let v: Vec<NodeTxView> = views::<NodeTxView>(r)
+    // The unit's frames of one type on one channel from 20 s: (start, air time), in order.
+    let late = |r: &MemoryRecorder, t: &str, c: u16| -> Vec<(u64, u64)> {
+        let mut v: Vec<(u64, u64)> = views::<NodeTxView>(r)
             .into_iter()
             .filter(|v| {
                 u64::from(v.node.index()) == rsu
                     && v.msg_type.as_deref() == Some(t)
                     && v.channel == Some(c)
+                    && v.t >= LATE_NS
             })
+            .map(|v| (v.t, v.airtime_us.unwrap_or(0)))
             .collect();
-        let air = v.iter().filter_map(|v| v.airtime_us).max().unwrap_or(0);
-        (v.iter().filter(|v| v.t >= LATE_NS).count(), air)
+        v.sort_unstable();
+        v
     };
-    let (spat0, t_on_us) = late(&clean, "spat", 172);
-    let (spat1, _) = late(&jammed, "spat", 172);
-    let (map0, _) = late(&clean, "map", 174);
-    let (map1, _) = late(&jammed, "map", 174);
-    let spacing_s = (t_on_us as f64 * 1e-6 / 0.0006).min(1.0);
-    let bound = (10.0 / spacing_s).floor() as usize + 1;
+    let (spat0, spat1) = (late(&clean, "spat", 172), late(&jammed, "spat", 172));
+    let (map0, map1) = (late(&clean, "map", 174).len(), late(&jammed, "map", 174).len());
+    // Each frame closes the gate for min(1 s, its own T_on / delta_min); a frame's start
+    // can trail its gate pass by one jammer on-time (90 ms) of carrier-sense wait, so the
+    // gap to the next start is at least that interval less 100 ms.
+    let short: Vec<(u64, u64, f64)> = spat1
+        .windows(2)
+        .filter_map(|w| {
+            let need_s = (w[0].1 as f64 * 1e-6 / 0.0006).min(1.0) - 0.1;
+            let gap_s = (w[1].0 - w[0].0) as f64 * 1e-9;
+            (gap_s < need_s).then_some((w[0].0, w[0].1, gap_s))
+        })
+        .collect();
     println!(
-        "unit {rsu}, last 10 s: SPaT on 172 {spat0} -> {spat1} (gate bound {bound}, T_on {t_on_us} us), \
-         MAP on 174 {map0} -> {map1}"
+        "unit {rsu}, last 10 s: SPaT on 172 {} -> {} ({} gaps under T_on/delta_min - 0.1 s), \
+         MAP on 174 {map0} -> {map1}",
+        spat0.len(),
+        spat1.len(),
+        short.len()
     );
-    assert!(spat0 >= 80 && map0 >= 80, "too few frames: SPaT {spat0}, MAP {map0}");
     assert!(
-        spat1 <= bound,
-        "the jammed unit's 172 gate did not follow its channel's CBR: {spat1} SPaT in 10 s, \
-         TS 102 687 allows {bound}"
+        spat0.len() >= 80 && map0 >= 80,
+        "too few frames: SPaT {}, MAP {map0}",
+        spat0.len()
     );
     assert!(
         map1 + 2 >= map0,
         "the service channel's gate followed the safety channel's CBR: MAP {map0} -> {map1}"
+    );
+    assert!(spat1.len() >= 5, "the jammed unit sent {} SPaT in 10 s", spat1.len());
+    assert!(
+        short.is_empty(),
+        "the jammed unit's 172 gate did not follow its channel's CBR: {} of {} SPaT gaps \
+         under T_on / delta_min (first: at {} ns, T_on {} us, gap {:.3} s)",
+        short.len(),
+        spat1.len() - 1,
+        short[0].0,
+        short[0].1,
+        short[0].2
     );
 }
 
