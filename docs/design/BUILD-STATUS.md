@@ -4036,6 +4036,25 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-28: adoption wave integration (grade, mac, nema: WP-16, 17, 18, 21, 22)
+
+One integrator in the main checkout, one heavy command at a time. All three agents had committed their work and their worktrees were clean, so no wip snapshot was needed.
+
+- **Merged `--no-ff` onto `648234f9`, in this order:** grade (`9999e616`: P22.1-P22.3, P18.2-P18.5) -> `efbb7a42`; mac (`3d6e33bb`: P16.1-P16.4, P21.1-P21.3) -> `f6b6c6ec`; nema (`7c4784bb`: P17.2-P17.9) -> `c1866cce`. The only conflicts were in `00-adoption-plan.md` (WP-22 and WP-17 notes); both sides were kept. Every piece compiled; none was reverted.
+- **Goldens:** no golden moved. The only regression file the merges added is mac's new `tests/regression/ttc-triggered-brake.json`. `bsm_timing` (4) and `phase2` (15, 1 ignored) pass with main's `46d5ebef` digests, the stale-at-base digests both mac and nema reported.
+- **No fixes were needed after the merges.** `cargo fmt --all` changed nothing, so there is no style commit.
+- **Checks** (`build.rs` touched first):
+  - `cargo check --workspace --tests`: clean, known warnings only.
+  - **106 test binaries of the touched crates** (engine lib and 88 test binaries; energy, mobility, net, radio, trafficval, world), one heavy.sh call each, 30-minute cap: **1,707 pass, 5 fail, 32 ignored.** `scms_knobs_runs` hit the cap again; 12 of its 20 tests finished (11 pass, the cache test fails). The 8 unreached tests and the cache test ran in one more call (8 pass, the cache test fails again), so it counts as 19 pass, 1 fail.
+  - **The 5 failures are the 5 open from fix round 4, with the same numbers:** `violations` (RLVW 0 -> 0), `pedestrian_invariants` ×2, `realism` kerbside, and `scms_knobs_runs` cache test (`MacTimer` 152,541 against 152,539).
+  - No `ui/` file changed, so no UI checks were run.
+- **Release:** `cargo build --release -j 2 -p v2xw-cli --bins` finished (8 m 31 s). `v2xw-server --scenario scenarios/manhattan-5min.yaml --port 8758 --paused --speed 0` listened within 6 s and answered `/agent/status`; it was stopped by PID.
+- **Still open:**
+  - mac: the SlottedMac gate, a sync-tolerance model, the world-box polygon check; alternating access cuts DSRC-family PRR 0.90 -> 0.29 (default stays continuous; owner).
+  - nema: P17.10 (the G-TV nema-safety check, 2 expectation rows, the Manhattan run, model card, default proposal); no permissive-clearance state, per-left-lane groups or offset transition.
+  - grade: P22.4 terrain drape (no shipped scenario has a hill), power rows for rigid truck, bus and van, an R-tree for `DensityTerm`; the crawl band, canopy height and GEMV² maxima are ASSUMPTIONs.
+- **Cleanup:** the worktrees and branches `worktree-wf_f9fc4b3e-ac9-{1,2,3}` were removed after each head was checked to be an ancestor of main and each worktree clean.
+
 ## 2026-10-28: fix round 4 integration (SOURCES, LIVERUN, TRAFFIC, RADIO, SCMSA, SCMSB, STAMP)
 
 One integrator in the main checkout, one heavy command at a time. All seven agents had committed their work, so no wip snapshot was needed.
