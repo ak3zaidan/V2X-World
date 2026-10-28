@@ -691,6 +691,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
   barrier; the FHWA manual's 8-phase example timing reproduces; SPaT `minEndTime`/`maxEndTime`
   stay consistent with the controller state; existing single-ring scenarios are unchanged.
 - Prep (2026-10-27): build plan §WP-17, 10 pieces (P17.1 caches STM 2nd ed. and MUTCD and pins every default). The new `nema.rs` re-projects the composite ring intervals into `SignalPlan` each step, so the 10 files that read the plan and the SPaT-is-the-signal rule are unchanged. Plans with more than 4 legs fall back to single ring, counted.
+- P17.2 (2026-10-28): adds `traffic.signals.control: nema` and the `traffic.signals.nema` block, which is validated in full. Loading `nema` is still refused. All six settings-checklist files are done. Defaults: barriers are SUMO's documented `[4,8]` and `[2,6]` (the plan had them reversed); soft recall is `[2,6]` with no minimum recall (STM Exhibit 6-22); `controller_type` is ts2 or type170, as SUMO has it. Decisions are recorded under P17.2 in the build plan. Tests: `scenario::schema::nema_settings_tests` (4). No golden moved, and the default signal settings write no `nema` key.
 
 **WP-18 GEMV²-style channel enrichment** (M, 5-7 days). Source: O-P4.
 - Scope: small-scale σ growing with vehicle and obstacle density inside the link ellipse,

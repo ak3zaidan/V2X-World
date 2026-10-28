@@ -456,6 +456,37 @@ out of scope here.
 - **P17.2** (3 h): the schema, validation, options, publish and guide rows for
   `control: nema` and the `nema.*` block, with no behaviour (validation refuses to run
   `nema` until P17.5 lands).
+
+  **Done 2026-10-28 (P17.2).** Decisions where the table above was open or wrong, each
+  checked against its source:
+  - *Barriers follow SUMO's documented names.* SUMO's NEMA page says `barrierPhases` is
+    "usually 4,8" and `barrier2Phases` "usually 2,6" (and `barrier2Phases` are the
+    coordinated phases in coordinate mode). The table had the two reversed, so the defaults
+    are `barrier_phases: [4,8]` and `barrier2_phases: [2,6]`.
+  - *Recall follows STM Exhibit 6-22* (p. 6-22): `min_recall: []` and a new
+    `soft_recall: [2,6]`. SUMO's own `minRecall` default (every phase) is not taken.
+  - *`controller_type` is `ts2` or `type170`*, as SUMO documents it. There is no `ts1`.
+    The two differ only in the reference point of the coordination offset (start of green,
+    or start of yellow), so the key is refused unless `coordination` is on, and P17.8 acts
+    on it.
+  - *`coordinate_phases` has no SUMO name.* WP-23 maps SUMO's `barrier2Phases` onto it
+    when `coordinate-mode` is true.
+  - *Through timing is the existing `traffic.signals.min_green_s`, `max_green_s` and
+    `passage_s`.* The left-turn phases get `nema.left_min_green_s`, `left_max_green_s` and
+    `left_passage_s` (4 / 25 / 2.5). No setting is duplicated.
+  - *Absent means "from somewhere else".* With `yellow_s` and `red_clear_s` absent, each
+    plan's own amber and all-red apply. With `walk_s` and `ped_speed_mps` absent,
+    `world.signals.pedestrian_*` applies, else MUTCD 7 s and 1.067 m/s. Bounds are MUTCD
+    2009 §4D.26 (yellow 3-6 s, red at most 6 s) and §4E.06 (walk 4-30 s, speed 0.8-1.5 m/s).
+  - *Rings are written in ascending order.* Ring 1 must come from phases 1-4 and ring 2
+    from 5-8. Lead or lag comes only from `lefts`, so a scenario cannot state the sequence
+    twice. A barrier is a ring-1 phase then a ring-2 phase from that barrier's group.
+    `ped_recall` names throughs only (STM §5.1.1). `coordinate_phases` is one phase, or a
+    concurrent pair.
+  - *Dead settings are refused*, as the codebase does elsewhere: coordination-only keys
+    without `coordination`, left-phase timing under `permissive`, and the permissive face
+    under `protected`. A `nema` block under another `control` is refused too.
+  Status `traffic.signals.nema`: Refused, until P17.5.
 - **P17.3** (3 h): `assign_phases` from junction geometry, with unit tests on generated
   4-leg, T and one-way junctions, and the fallback count. Main street = the higher road
   class, then more lanes.

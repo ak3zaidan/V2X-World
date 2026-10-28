@@ -112,6 +112,68 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Refused by this build: the hybrid selector arbitrates a direct radio against cellular, which is not wired.",
             false,
         )),
+        // --- traffic signals ------------------------------------------------------
+        ("traffic.signals.control", "fixed-time") => w(
+            "Fixed time",
+            "Every signal runs its plan's clock: each phase lasts its stated time, whatever the traffic.",
+        ),
+        ("traffic.signals.control", "actuated") => w(
+            "Actuated (single ring)",
+            "Detectors hold a green while cars keep arriving and end it early when the approach goes quiet, one phase at a time.",
+        ),
+        ("traffic.signals.control", "nema") => Some((
+            "NEMA dual ring (not available yet)",
+            "Refused by this build until the controller is wired: two rings of four phases time concurrently and meet at barriers, as US controllers do (FHWA Signal Timing Manual 2nd ed.).",
+            false,
+        )),
+        ("traffic.signals.nema.lefts", "lead-lead") => w(
+            "Lead-lead",
+            "Both left turns go before their opposing throughs: the most common US sequence (FHWA STM 2nd ed. §5.1.3.6).",
+        ),
+        ("traffic.signals.nema.lefts", "lag-lag") => w(
+            "Lag-lag",
+            "Both left turns go after their opposing throughs.",
+        ),
+        ("traffic.signals.nema.lefts", "lead-lag") => w(
+            "Lead-lag",
+            "One left leads and the opposing left lags, which suits a green wave in both directions.",
+        ),
+        ("traffic.signals.nema.left_turn_mode", "protected-permissive") => w(
+            "Protected, then permissive",
+            "A green arrow first, then lefts may turn through gaps in the oncoming traffic.",
+        ),
+        ("traffic.signals.nema.left_turn_mode", "protected") => w(
+            "Protected only",
+            "Lefts turn only on their own green arrow.",
+        ),
+        ("traffic.signals.nema.left_turn_mode", "permissive") => w(
+            "Permissive only",
+            "No left-turn phase: lefts turn through gaps in the oncoming traffic.",
+        ),
+        ("traffic.signals.nema.permissive_display", "fya") => w(
+            "Flashing yellow arrow",
+            "The permissive left shows a flashing yellow arrow (MUTCD 2009 §4D.20).",
+        ),
+        ("traffic.signals.nema.permissive_display", "green-ball") => w(
+            "Circular green",
+            "The permissive left shows the circular green of the through (MUTCD 2009 §4D.18).",
+        ),
+        ("traffic.signals.nema.force_off", "floating") => w(
+            "Floating force-offs",
+            "Each side-street phase ends by its own split, so time it leaves goes to the coordinated main street.",
+        ),
+        ("traffic.signals.nema.force_off", "fixed") => w(
+            "Fixed force-offs",
+            "Force-off points are fixed in the cycle, so a later phase may use time an earlier one left.",
+        ),
+        ("traffic.signals.nema.controller_type", "ts2") => w(
+            "NEMA TS 2",
+            "The coordination offset is measured to the start of the coordinated green.",
+        ),
+        ("traffic.signals.nema.controller_type", "type170") => w(
+            "Type 170",
+            "The coordination offset is measured to the start of the coordinated yellow.",
+        ),
         ("radio.region", "us") => w(
             "United States, 2024 rules (FCC 24-123)",
             "C-V2X only on 5.905-5.925 GHz; DSRC is refused because its licences end in December 2026.",
@@ -1495,6 +1557,14 @@ pub fn title(path: &str) -> Option<&'static str> {
         "traffic.keep_junctions_clear" => "Keep junctions clear",
         "traffic.signals.passage_s" => "Passage time (gap-out)",
         "traffic.signals.green_wave_speed_mps" => "Green-wave speed",
+        "traffic.signals.nema" => "NEMA dual-ring controller",
+        "traffic.signals.nema.lefts" => "Left-turn sequence",
+        "traffic.signals.nema.left_turn_mode" => "Left-turn phasing",
+        "traffic.signals.nema.permissive_display" => "Permissive left-turn signal face",
+        "traffic.signals.nema.barrier_phases" => "Phases ending at the side-street barrier",
+        "traffic.signals.nema.barrier2_phases" => "Phases ending at the main-street barrier",
+        "traffic.signals.nema.soft_recall" => "Soft recall (rest in) phases",
+        "traffic.signals.nema.ped_recall" => "Pedestrian recall phases",
         "actors.vehicles.equipped_fraction" => "Share of vehicles with a V2X radio",
         "actors.vru.device_fraction" => "Share of pedestrians and cyclists with a device",
         "actors.vru.crossing_gap_margin_s" => "Pedestrian gap acceptance margin",

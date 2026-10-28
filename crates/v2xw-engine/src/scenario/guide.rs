@@ -903,6 +903,27 @@ const ADVANCED: &[Basic] = &[
         explain: "Under actuated control, where the vehicle detectors sit: a loop at the stop line, or SUMO's single loop per lane about two seconds of travel upstream, which ends the green sooner once a platoon has passed.",
         recommended: "stop-line (FHWA) for US practice; sumo to compare with a SUMO actuated run.",
     },
+    // WP-17: FHWA Signal Timing Manual 2nd ed. (NCHRP 812), Exhibits 6-4, 6-9 and 6-22.
+    Basic {
+        path: "traffic.signals.nema.left_min_green_s",
+        explain: "Under the NEMA dual-ring controller, the shortest a protected left-turn arrow runs once it starts.",
+        recommended: "4 s; 2 to 5 s (FHWA Signal Timing Manual 2nd ed., Exhibit 6-4).",
+    },
+    Basic {
+        path: "traffic.signals.nema.left_max_green_s",
+        explain: "Under the NEMA dual-ring controller, the longest a protected left-turn arrow may be held by arriving cars while another phase waits.",
+        recommended: "25 s; 15 to 30 s (FHWA Signal Timing Manual 2nd ed., Exhibit 6-9).",
+    },
+    Basic {
+        path: "traffic.signals.nema.soft_recall",
+        explain: "Phases the controller returns to when nobody else is waiting, so the main street rests in green.",
+        recommended: "2 and 6, the main-street throughs (FHWA Signal Timing Manual 2nd ed., Exhibit 6-22).",
+    },
+    Basic {
+        path: "traffic.signals.nema.lefts",
+        explain: "Whether the left-turn arrows come before or after the opposing through traffic's green.",
+        recommended: "lead-lead, the most common US sequence (FHWA Signal Timing Manual 2nd ed. §5.1.3.6).",
+    },
     Basic {
         path: "world.signals.pedestrian_speed_mps",
         explain: "The walking speed the flashing don't-walk time is timed for: slower gives pedestrians longer and drivers shorter greens.",

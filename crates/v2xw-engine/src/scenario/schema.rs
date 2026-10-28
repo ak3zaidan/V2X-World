@@ -410,6 +410,11 @@ pub enum SignalControlKind {
     /// detectors keep seeing vehicles within the passage time, ends early (gaps out) when
     /// they stop and another approach is waiting, and never runs past its maximum.
     Actuated,
+    /// The NEMA dual-ring eight-phase controller (FHWA Signal Timing Manual 2nd ed.,
+    /// NCHRP Report 812, §5.1.2 Exhibit 5-3): two rings timing concurrently, meeting at
+    /// barriers, with [`SignalControl::nema`] settings. Refused by the loader until the
+    /// controller is wired (WP-17 P17.5).
+    Nema,
 }
 
 /// Where an actuated controller's vehicle detectors are ([`SignalControl::detector_placement`]).
@@ -471,6 +476,10 @@ pub struct SignalControl {
     /// The direction the green wave runs, degrees clockwise from north (90 is eastbound).
     #[serde(default = "SignalControl::default_wave_heading")]
     pub green_wave_heading_deg: f64,
+    /// The NEMA dual-ring controller's settings, read only with `control: nema`. Absent
+    /// takes every default of the block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nema: Option<NemaSettings>,
 }
 
 impl SignalControl {
@@ -507,6 +516,231 @@ impl Default for SignalControl {
             short_link_clearance_m: None,
             green_wave_speed_mps: None,
             green_wave_heading_deg: Self::default_wave_heading(),
+            nema: None,
+        }
+    }
+}
+
+/// The order of a barrier group's left-turn phase and its opposing through
+/// ([`NemaSettings::lefts`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NemaLeftSequence {
+    /// Both lefts before their throughs (1 and 5 lead 2 and 6): "the most common left-turn
+    /// phase sequence" (STM 2nd ed. §5.1.3.6, p. 5-9).
+    #[default]
+    LeadLead,
+    /// Both lefts after their throughs.
+    LagLag,
+    /// One left leads and the opposing left lags (ring 1's left leads).
+    LeadLag,
+}
+
+/// How a left-turn phase's movement is served ([`NemaSettings::left_turn_mode`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LeftTurnMode {
+    /// A protected arrow in the left phase, then a permissive left yielding to the
+    /// opposing through (STM 2nd ed. §5.1.3, Exhibit 5-4, p. 5-5). The STM names no
+    /// default; this is the choice of this build.
+    #[default]
+    ProtectedPermissive,
+    /// The protected arrow only; the left is held while the opposing through runs.
+    Protected,
+    /// No left phase: the left yields to the opposing through during the through's green.
+    Permissive,
+}
+
+/// The face shown for a permissive left turn ([`NemaSettings::permissive_display`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PermissiveDisplay {
+    /// A flashing yellow arrow (MUTCD 2009 §4D.20 ¶03 item 4).
+    #[default]
+    Fya,
+    /// A circular green (MUTCD 2009 §4D.18 ¶03).
+    GreenBall,
+}
+
+/// Where a coordinated controller's force-offs sit in the cycle
+/// ([`NemaSettings::force_off`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ForceOffMode {
+    /// Each non-coordinated phase is forced off at its own split's end, so time a phase
+    /// leaves unused goes to the coordinated phases (STM 2nd ed. §7.3.4, Exhibit 7-14;
+    /// SUMO `fixForceOff=false`, its default).
+    #[default]
+    Floating,
+    /// Force-off points fixed in the cycle, so a later non-coordinated phase may use time
+    /// an earlier one left (SUMO `fixForceOff=true`).
+    Fixed,
+}
+
+/// The controller hardware the coordination offset is referenced to
+/// ([`NemaSettings::controller_type`]); SUMO `controllerType`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NemaControllerType {
+    /// NEMA TS 2: the offset references the start of the first coordinated phase's green
+    /// (SUMO NEMA documentation; its default).
+    #[default]
+    Ts2,
+    /// A Type 170 controller: the offset references the start of the coordinated phase's
+    /// yellow (SUMO NEMA documentation).
+    Type170,
+}
+
+/// The NEMA dual-ring eight-phase controller ([`SignalControl::nema`]).
+///
+/// The layout is the FHWA Signal Timing Manual 2nd ed. (NCHRP Report 812, 2015): two rings
+/// and two barriers, §5.1.2 Exhibit 5-3 (p. 5-4), with §5.1.1's numbering (2/6 main-street
+/// throughs, 1/5 main-street lefts, 4/8 side throughs, 3/7 side lefts; a pedestrian phase
+/// takes its parallel through's number). The SUMO names in brackets are SUMO's documented
+/// parameters (Simulation/NEMA), kept for import parity; SUMO's code was not read. Every
+/// default and its page: `docs/design/frameworks/wp16-24-build-plans.md` §WP-17.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NemaSettings {
+    /// Ring 1's phases in service order [SUMO `ring1`], NEMA numbers 1-8.
+    #[serde(default = "NemaSettings::default_ring1")]
+    pub ring1: Vec<u8>,
+    /// Ring 2's phases in service order [SUMO `ring2`].
+    #[serde(default = "NemaSettings::default_ring2")]
+    pub ring2: Vec<u8>,
+    /// The pair of phases, one per ring, that end together at the barrier closing the
+    /// side-street group [SUMO `barrierPhases`, "usually 4,8"].
+    #[serde(default = "NemaSettings::default_barrier")]
+    pub barrier_phases: Vec<u8>,
+    /// The pair that end together at the barrier closing the main-street group [SUMO
+    /// `barrier2Phases`, "usually 2,6"].
+    #[serde(default = "NemaSettings::default_barrier2")]
+    pub barrier2_phases: Vec<u8>,
+    /// Lead-lead, lag-lag or lead-lag lefts.
+    #[serde(default)]
+    pub lefts: NemaLeftSequence,
+    /// Protected-permissive, protected-only or permissive-only lefts.
+    #[serde(default)]
+    pub left_turn_mode: LeftTurnMode,
+    /// The permissive left's face: flashing yellow arrow or circular green.
+    #[serde(default)]
+    pub permissive_display: PermissiveDisplay,
+    /// A left-turn phase's minimum green, seconds (through phases use
+    /// `traffic.signals.min_green_s`).
+    #[serde(default = "NemaSettings::default_left_min")]
+    pub left_min_green_s: f64,
+    /// A left-turn phase's maximum green, seconds (through phases use
+    /// `traffic.signals.max_green_s`).
+    #[serde(default = "NemaSettings::default_left_max")]
+    pub left_max_green_s: f64,
+    /// A left-turn phase's passage time, seconds (through phases use
+    /// `traffic.signals.passage_s`).
+    #[serde(default = "NemaSettings::default_left_passage")]
+    pub left_passage_s: f64,
+    /// Every phase's yellow change interval, seconds. Absent takes each plan's own amber.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yellow_s: Option<f64>,
+    /// Every phase's red clearance, seconds. Absent takes each plan's own all-red.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red_clear_s: Option<f64>,
+    /// The pedestrian walk interval, seconds. Absent is `world.signals.pedestrian_walk_s`,
+    /// else 7 s (MUTCD 2009 §4E.06 ¶11).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub walk_s: Option<f64>,
+    /// The walking speed the pedestrian clearance is timed for, m/s. Absent is
+    /// `world.signals.pedestrian_speed_mps`, else 1.067 m/s (3.5 ft/s, MUTCD 2009 §4E.06).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ped_speed_mps: Option<f64>,
+    /// Phases called every cycle and timed to at least their minimum [SUMO `minRecall`].
+    #[serde(default)]
+    pub min_recall: Vec<u8>,
+    /// Phases called only when no conflicting phase has a call, so the controller rests in
+    /// them (STM 2nd ed. Exhibit 6-22, p. 6-22: soft recall on 2 and 6 and no minimum
+    /// recall at a fully actuated intersection).
+    #[serde(default = "NemaSettings::default_soft_recall")]
+    pub soft_recall: Vec<u8>,
+    /// Phases called every cycle and held to their maximum [SUMO `maxRecall`].
+    #[serde(default)]
+    pub max_recall: Vec<u8>,
+    /// Phases whose pedestrian walk is served every cycle without a push-button call.
+    #[serde(default)]
+    pub ped_recall: Vec<u8>,
+    /// The coordinated phases (STM 2nd ed. §5.1.1, p. 5-3: 2 and 6). SUMO coordinates its
+    /// `barrier2Phases` instead.
+    #[serde(default = "NemaSettings::default_coordinated")]
+    pub coordinate_phases: Vec<u8>,
+    /// Coordinated operation: a common cycle, an offset and force-offs [SUMO
+    /// `coordinate-mode`, default false].
+    #[serde(default)]
+    pub coordination: bool,
+    /// Floating or fixed force-offs [SUMO `fixForceOff`].
+    #[serde(default)]
+    pub force_off: ForceOffMode,
+    /// TS 2 or Type 170: where the coordination offset is referenced [SUMO
+    /// `controllerType`].
+    #[serde(default)]
+    pub controller_type: NemaControllerType,
+}
+
+impl NemaSettings {
+    fn default_ring1() -> Vec<u8> {
+        vec![1, 2, 3, 4]
+    }
+    fn default_ring2() -> Vec<u8> {
+        vec![5, 6, 7, 8]
+    }
+    fn default_barrier() -> Vec<u8> {
+        vec![4, 8]
+    }
+    fn default_barrier2() -> Vec<u8> {
+        vec![2, 6]
+    }
+    // STM 2nd ed. Exhibit 6-4 (p. 6-6): left-turn minimum green 2-5 s on any facility;
+    // Exhibit 6-9 (p. 6-10): left-turn maximum green 15-30 s; p. 6-12: setback-detector
+    // passage 2-3 s. 4 / 25 / 2.5 lie inside those ranges; the exact values are this
+    // build's choice.
+    fn default_left_min() -> f64 {
+        4.0
+    }
+    fn default_left_max() -> f64 {
+        25.0
+    }
+    fn default_left_passage() -> f64 {
+        2.5
+    }
+    fn default_soft_recall() -> Vec<u8> {
+        vec![2, 6]
+    }
+    fn default_coordinated() -> Vec<u8> {
+        vec![2, 6]
+    }
+}
+
+impl Default for NemaSettings {
+    fn default() -> Self {
+        NemaSettings {
+            ring1: Self::default_ring1(),
+            ring2: Self::default_ring2(),
+            barrier_phases: Self::default_barrier(),
+            barrier2_phases: Self::default_barrier2(),
+            lefts: NemaLeftSequence::default(),
+            left_turn_mode: LeftTurnMode::default(),
+            permissive_display: PermissiveDisplay::default(),
+            left_min_green_s: Self::default_left_min(),
+            left_max_green_s: Self::default_left_max(),
+            left_passage_s: Self::default_left_passage(),
+            yellow_s: None,
+            red_clear_s: None,
+            walk_s: None,
+            ped_speed_mps: None,
+            min_recall: Vec::new(),
+            soft_recall: Self::default_soft_recall(),
+            max_recall: Vec::new(),
+            ped_recall: Vec::new(),
+            coordinate_phases: Self::default_coordinated(),
+            coordination: false,
+            force_off: ForceOffMode::default(),
+            controller_type: NemaControllerType::default(),
         }
     }
 }
@@ -4023,6 +4257,186 @@ mod gnss_settings_tests {
         assert!(
             default > 0.1,
             "the SPS default is 0.2 m/s at 95 %: {default}"
+        );
+    }
+}
+
+/// WP-17 P17.2: the `control: nema` choice and the `traffic.signals.nema` block load,
+/// check and refuse as the build plan says, with no behaviour behind them yet.
+#[cfg(test)]
+mod nema_settings_tests {
+    use super::{
+        ForceOffMode, LeftTurnMode, NemaSettings, PermissiveDisplay, SignalControl,
+        SignalControlKind, Traffic,
+    };
+
+    fn errors(g: &SignalControl) -> Vec<String> {
+        let mut s = crate::Scenario::minimal();
+        s.traffic = Some(Traffic {
+            signals: g.clone(),
+            ..Traffic::default()
+        });
+        crate::scenario::validate(&s)
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    fn nema(n: NemaSettings) -> SignalControl {
+        SignalControl {
+            control: SignalControlKind::Nema,
+            nema: Some(n),
+            ..SignalControl::default()
+        }
+    }
+
+    /// Errors other than the standing refusal of `control: nema`.
+    fn block_errors(n: NemaSettings) -> Vec<String> {
+        errors(&nema(n))
+            .into_iter()
+            .filter(|e| !e.contains("traffic.signals.control"))
+            .collect()
+    }
+
+    /// The defaults are the STM 2nd ed. layout (Exhibit 5-3; SUMO's "usually 4,8" and
+    /// "2,6" barriers), the P17.1 left-turn timing and Exhibit 6-22's recalls; an empty
+    /// block takes them all, and the default signal settings write no `nema` key (so no
+    /// scenario digest moves).
+    #[test]
+    fn nema_defaults_are_the_stm_layout() {
+        let d = NemaSettings::default();
+        assert_eq!(d.ring1, [1, 2, 3, 4]);
+        assert_eq!(d.ring2, [5, 6, 7, 8]);
+        assert_eq!(d.barrier_phases, [4, 8]);
+        assert_eq!(d.barrier2_phases, [2, 6]);
+        assert_eq!(
+            (d.left_min_green_s, d.left_max_green_s, d.left_passage_s),
+            (4.0, 25.0, 2.5)
+        );
+        assert!(d.min_recall.is_empty() && d.max_recall.is_empty() && d.ped_recall.is_empty());
+        assert_eq!(d.soft_recall, [2, 6]);
+        assert_eq!(d.coordinate_phases, [2, 6]);
+        assert!(!d.coordination);
+        assert_eq!(d.left_turn_mode, LeftTurnMode::ProtectedPermissive);
+        assert_eq!(d.permissive_display, PermissiveDisplay::Fya);
+        assert_eq!(d.force_off, ForceOffMode::Floating);
+        let empty: NemaSettings = serde_json::from_str("{}").expect("an empty block loads");
+        assert_eq!(empty, d);
+        let wire = serde_json::to_value(SignalControl::default()).expect("serialises");
+        assert!(wire.get("nema").is_none(), "{wire}");
+        // The default block is valid in itself.
+        assert!(block_errors(d).is_empty());
+    }
+
+    /// `control: nema` is refused until P17.5 wires the controller, and a block beside any
+    /// other control is a setting that would do nothing.
+    #[test]
+    fn nema_is_refused_until_the_controller_lands() {
+        let e = errors(&nema(NemaSettings::default()));
+        assert!(
+            e.iter()
+                .any(|x| x.contains("traffic.signals.control") && x.contains("nema")),
+            "{e:?}"
+        );
+        let stray = SignalControl {
+            control: SignalControlKind::Actuated,
+            nema: Some(NemaSettings::default()),
+            ..SignalControl::default()
+        };
+        let e = errors(&stray);
+        assert!(e.iter().any(|x| x.contains("traffic.signals.nema")), "{e:?}");
+        // Neither fires on the default settings.
+        assert!(errors(&SignalControl::default()).is_empty());
+    }
+
+    /// A ring, barrier, recall or coordination list that does not describe a dual-ring
+    /// layout is refused, naming the field.
+    #[test]
+    fn a_malformed_ring_layout_is_refused() {
+        let refused = |n: NemaSettings, field: &str| {
+            let e = block_errors(n);
+            assert!(e.iter().any(|x| x.contains(field)), "{field}: {e:?}");
+        };
+        let d = NemaSettings::default;
+        refused(NemaSettings { ring1: vec![1, 2, 2, 4], ..d() }, "nema.ring1");
+        refused(NemaSettings { ring1: vec![2, 1, 3, 4], ..d() }, "nema.ring1");
+        refused(NemaSettings { ring2: vec![1, 6, 7, 8], ..d() }, "nema.ring2");
+        refused(NemaSettings { ring2: vec![], ..d() }, "nema.ring2");
+        refused(
+            NemaSettings { barrier_phases: vec![2, 6], ..d() },
+            "nema.barrier_phases",
+        );
+        refused(
+            NemaSettings { barrier2_phases: vec![2], ..d() },
+            "nema.barrier2_phases",
+        );
+        refused(NemaSettings { max_recall: vec![9], ..d() }, "nema.max_recall");
+        refused(NemaSettings { ped_recall: vec![1], ..d() }, "nema.ped_recall");
+        refused(
+            NemaSettings {
+                coordination: true,
+                coordinate_phases: vec![2, 8],
+                ..d()
+            },
+            "nema.coordinate_phases",
+        );
+        refused(
+            NemaSettings {
+                left_min_green_s: 20.0,
+                left_max_green_s: 10.0,
+                ..d()
+            },
+            "nema.left_max_green_s",
+        );
+        refused(NemaSettings { yellow_s: Some(2.0), ..d() }, "nema.yellow_s");
+        // A layout with no side-street lefts (no phases 3 and 7) still loads.
+        let t = NemaSettings {
+            ring1: vec![1, 2, 4],
+            ring2: vec![5, 6, 8],
+            ..d()
+        };
+        assert!(block_errors(t).is_empty());
+    }
+
+    /// Coordination-only and left-phase-only settings are refused where nothing reads them.
+    #[test]
+    fn nema_settings_that_would_do_nothing_are_refused() {
+        let d = NemaSettings::default;
+        let fixed = NemaSettings {
+            force_off: ForceOffMode::Fixed,
+            ..d()
+        };
+        assert!(
+            block_errors(fixed.clone())
+                .iter()
+                .any(|x| x.contains("nema.force_off"))
+        );
+        assert!(
+            block_errors(NemaSettings {
+                coordination: true,
+                ..fixed
+            })
+            .is_empty()
+        );
+        let permissive_with_timing = NemaSettings {
+            left_turn_mode: LeftTurnMode::Permissive,
+            left_max_green_s: 20.0,
+            ..d()
+        };
+        assert!(
+            block_errors(permissive_with_timing)
+                .iter()
+                .any(|x| x.contains("nema.left_max_green_s"))
+        );
+        let protected_green_ball = NemaSettings {
+            left_turn_mode: LeftTurnMode::Protected,
+            permissive_display: PermissiveDisplay::GreenBall,
+            ..d()
+        };
+        assert!(
+            block_errors(protected_green_ball)
+                .iter()
+                .any(|x| x.contains("nema.permissive_display"))
         );
     }
 }
