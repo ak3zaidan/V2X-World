@@ -22,6 +22,10 @@ runs:
     scenario: scenarios/edge/multi-week-crlg-down.yaml
     base: MW
     note: the home CRL Generator down from 700 s to 2,600,000 s (--record-level events)
+  P2S1:
+    scenario: scenarios/phase2-manhattan.yaml
+    note: 'trace track 2026-10-28: P2 (every third unit) on seed 0xC0FFEE_0001, 300 s, 9d0fbc2c release,
+      --record-level metrics (scmsa scratch p2path-s1.yaml)'
 rows:
 - id: F4A.PQCC.rsu-invalid
   base: PQCC
@@ -144,3 +148,23 @@ rows:
     changeover + 7 d + 14 d, after W4 ends at t0 + 21 d + 60 s; W4 senders sign under the new CRACA'
   measured: '0 refusals in the whole run (fix2)'
   verdict: pass
+- id: F4A.P2.reports-received-gap
+  base: P2S1
+  variant: P2S1
+  area: scms
+  measure: phase2 reports_sent against reports_received and the report fates
+  expect: 'reports_sent = uploaded (cellular + relay) + unsent + evicted + expired + not filed + lost +
+    refused at the MTU, and reports_received = uploaded'
+  source: 'phase2.rs files_report (line 5473) and real_mbr (5675-5700): under the US profile with the PDU
+    layer on, a detection with no SM-MBR v1.1 subtype, or a roadside unit''s own detection, is not filed
+    ([SM-MBR] 2.3 defines PSID 0x20 subtypes only; [SM-MBR] 3 signs with an end-entity pseudonym
+    certificate, and USDOT RSU Specification v4.1 p. 15 gives a unit no reporting function: R-UNSEC)'
+  measured: 'reports_sent 2,002 = 103 uploaded over cellular + 1,899 not filed (1,011 a roadside unit
+    with no pseudonym certificate; 888 no SM-MBR v1.1 subtype); reports_received 103 = reports_at_ma
+    103 (scmsa on 3cbc95a4: 2,002 = 100 + 1,011 + 891)'
+  verdict: pass
+  note: 'Written after the run (the scmsa finding was an observation). Explained, not a defect: 95 % of
+    the gap is detections the US profile cannot file, and the counters partition it exactly (the
+    scms-audit-sim-metrics CV.report-fate check pins that sum). reports_sent counts generated reports,
+    filed or not, although its doc comment (phase2.rs:1647) says "filed": a naming defect only, see the
+    trace track fix specs'
