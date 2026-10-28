@@ -1243,6 +1243,83 @@ parameters from NCHRP 605.
 - **P43.3** (3 h): abort, sight distance and the occupancy rules.
 - **P43.4** (3 h): the scenario, G-TV checks, rows and faults.
 
+**Source note, 2026-10-28 (P43.1, sources track, no code; `lc2013.rs:40` re-checked; `osm.rs`
+reads no `overtaking` key today).** Nothing is cached in the repo. Each copy was read in
+scratch.
+- **NCHRP Report 605** (Harwood, Gilmore, Richard, Dunn, Sun, 2008, doi 10.17226/23278).
+  - The TRB URL now redirects to NAP, whose reader shows no body text. The text was read
+    from the public mirror at comt.ca (69 pp., sha256 `4c597b12…fa35`; its title page and
+    TRB 2008 front matter match). Page numbers are the printed ones (PDF page − 9).
+  - The field data are Missouri/Pennsylvania (60 detailed passes) plus a Texas study (105),
+    Table 24, p. 44:
+
+    | Measure | Combined (n 165) | Missouri/Pennsylvania (n 60) |
+    |---|---|---|
+    | Speed of passing vehicle at abreast position | 69.2 mph, sd 7.1 | 66.1 mph |
+    | Speed of passed vehicle | 55.8 mph, sd 6.9 | 50.7 mph |
+    | **Speed differential** | **13.4 mph, sd 5.1** (0.7-33.1) | 15.4 mph |
+    | **Left-lane time `t2`** | **9.9 s, sd 2.4** (5.0-19.0) | 10.0 s |
+    | Left-lane distance `d2` | 990 ft, sd 225 | 926 ft |
+
+    `t2` percentiles for design: 15th 7.5 s, mean 9.9 s, 85th 12.3 s. The data show no
+    dependence on speed (pp. 45-46, Table 26). The recommended speed differential is
+    **12 mph**, against AASHTO's 10 (Ch. 6 item 10, p. 78).
+  - **The abreast position** comes at 41% of `d2` (116 of 282 m). It is the commitment
+    point: "once the first 40 percent … is completed, the passing driver is committed to
+    complete the remaining 60 percent" (p. 46; p. 78 item 12).
+  - **Aborts:** 7 of 367 passes, i.e. **1.9%**. Left-lane occupancy is 7.1 s (4.1-9.5).
+    Aborts begin at about 36% of the manoeuvre, before abreast. The peak deceleration in 4
+    measured aborts is 0.17-5.27 m/s², "too limited" to choose a rate (p. 47).
+  - **Clearance** to the opposing vehicle is 0.3-5.8 s / 16-321 m (n 7). One is under 1 s.
+  - **Passing frequency** (Tables 27-29): short zones of 120-240 m have 0.4% of all
+    vehicles and 1.6% of those at headway 3 s or less. Long zones have 1.9% and 7.8%. 92%
+    of short-zone passes and 21% of long-zone passes end beyond the zone.
+  - **MUTCD marking PSD** (Table 3, p. 9; recommended for design too): 25/30/35/40/45/50/
+    55/60/65/70 mph -> 450/500/550/600/700/800/900/1,000/1,100/1,200 ft. The minimum
+    passing zone is 400 ft.
+  - **No accepted-gap distribution.** NCHRP 605 reports none, so the planned test
+    `accepted_gaps_match_nchrp_605` cannot be built from it. *Choice, recorded:* that test
+    becomes `passes_match_nchrp_605`. It checks `t2` and the speed differential against
+    Table 24, within the combined sd. The fault is "`t2` in minutes read as seconds".
+  - **Gap acceptance** (the opposing-gap judgement) is gated on Llorca et al., *TR Part C*
+    52:157-172, 2015 (UPV RiuNet open copy; the fetch was stopped by a bot check) and
+    Llorca & Farah, TRB 2016 (TU Delft repository; the connection was refused). [verify]
+    Until one of them is read, P43.2 uses the MUTCD PSD at the 85th-percentile speed as the
+    acceptance threshold. That is the deployed marking rule, so it is a sound fallback.
+- **DNPW: CAMP VSC-A Final Report, DOT HS 811 492A, Sept. 2011** (ROSA P dot/43933, 102 pp.,
+  sha256 `f94e91ca…0097`; the direct curl got 403, so it was fetched through the web
+  reader).
+  - The definition is on p. 6, §2.3: warn the host-vehicle driver "during a passing
+    maneuver attempt when a slower moving vehicle, ahead and in the same lane, cannot be
+    safely passed using a passing zone which is occupied by vehicles with the opposite
+    direction of travel". There is also an advisory when no pass is attempted.
+  - **DNPW needs Which-Lane relative positioning** (better than 1.5 m), against 5 m for
+    Which-Road (Table 7, p. 39). This drives the GNSS-error coupling: the warning must read
+    *believed* positions (rule 6).
+  - **Objective tests** (Table 5, p. 27):
+    - T1, pass with an oncoming RV in the adjacent lane, 25/35 mph, 10 runs: true
+      positive;
+    - T2, a stopped RV in the adjacent lane, 30/40 mph, 10 runs: true positive;
+    - T3, an oncoming RV *not* in the adjacent lane, 45 mph, 2 runs: no false positive.
+
+    These three become the DNPW expectation rows.
+  - The threat thresholds are in Appendix Vol. 1, DOT HS 811 492B, which NHTSA refused
+    (403). They are not read. [verify] before any DNPW timing goes on a card.
+- **OSM `overtaking=*`** (wiki Key:overtaking, read 2026-10-28; status "in use").
+  - Values are `yes` / `no` / `both` / `forward` / `backward` / `caution`, with
+    `overtaking:forward|backward` and `overtaking:hgv`. "Data consumers should not assume a
+    default", because untagged depends on the region.
+  - Worldwide (taginfo, 2026-10-28): `no` 107,728 (68%), `yes` 30,961, `forward` 7,720,
+    `backward` 7,212, `both` 3,183, `caution` 577.
+  - **Shipped maps:** 47 ways in total carry `overtaking*` (`no` 30, `forward` 8, `yes` 8,
+    `backward` 1), in 8 cities. **0 km** of two-way, two-lane, trunk-to-unclassified road has
+    `maxspeed` of 70 km/h or more. There are 165 km of slower such road and 331 km with no
+    maxspeed, all in downtown boxes.
+  - **No shipped map is a rural two-lane highway.** P43.4 must fetch one: a new
+    `cities.yaml`-style entry with its own provenance. Untagged US two-lane roads then take
+    the MUTCD rule: passing is allowed only where the sight distance from `los.rs` and the
+    DEM is at least the MUTCD PSD for the 85th-percentile speed.
+
 ---
 
 ## Sources to cache before the matching pieces
@@ -1272,7 +1349,7 @@ parameters from NCHRP 605.
 | WP-40 | 3GPP TR 37.885 | public | channel models summarised in R2c |
 | WP-41 | SUMO zipper documentation; MnDOT zipper-merge evaluations (+ VTRC 05-R6, SWZDI TPF-5(438), NCDOT 2015-08) | public | read 2026-10-28 (P41.1 note); URS 2004 MnDOT report not found |
 | WP-42 | OSM wiki `parking:*`; a manoeuvre-time field study; SUMO parking reroute docs | public | read 2026-10-28 (P42.1 note); tag counts measured; Yousif 2004 and Shoup 2006 PDFs refused (403) |
-| WP-43 | NCHRP Report 605 (2008); CAMP VSC-A DNPW report | public | no |
+| WP-43 | NCHRP Report 605 (2008); CAMP VSC-A DNPW report | public | read 2026-10-28 (P43.1 note); VSC-A App. Vol. 1 (811 492B) and the Llorca gap papers not reachable |
 | WP-33 | IEEE 1609.4-2016 | paywalled | no (constants UNVERIFIED) |
 
 ---
@@ -1342,7 +1419,9 @@ Notes on the schedule:
 8. **C6 metric and R10 polygons (WP-37).** Which reading of "2 km" the source means, and
    whether Natural Earth polygons may be vendored.
 9. **Distraction on for realistic presets (WP-39).** This moves G-TV.
-10. **Doppler PER default (WP-40), if its source is found.**
+10. **Doppler PER default (WP-40), if its source is found.** *2026-10-28: not found (P40.1
+    note), so WP-40 is dropped. The open choice is whether to build the profile-indexed 11p
+    PER table recorded there as a spare.*
 11. **The default stamp profile (WP-30)**: `tampa_chain`, `tampa_mixed`, or Wyoming.
 12. **Purchases** that would turn [verify] into [cached]: IEEE 1609.4-2016 (WP-33, WP-16),
     SAE J3161/1 (WP-34), IEEE 1609.2.1 body text (WP-35), AASHTO Green Book and HCM 7th ed.
