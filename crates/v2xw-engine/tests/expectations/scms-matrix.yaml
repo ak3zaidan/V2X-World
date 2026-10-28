@@ -355,19 +355,23 @@ rows:
   base: M0
   variant: M0
   area: architecture
-  measure: stage.enforced_s
+  measure: stage_abs.enforced_s
   expect: band
   band:
-  - 147300.0
-  - 151180.0
-  source: 'stage.enforced_s is relative to the detect stage of the report that tipped the decision
-    (phase2.rs finish_first_revocation: enforced minus the first stage; v2xw-proto sim.rs
-    RevocationLatency::assemble takes Detect from case.report_run), not to t0. Absolute path: reports
-    shuffled one day, 8 h review, the next business-day 10:00 ET slot (Wed 2026-10-21 10:00 EDT =
-    147,600 s after t0), then the first vehicle fetch, within one CRL_FETCH_INTERVAL_S (3,600 s,
-    phase2.rs:484). That detect lies in the first live window, after the attack starts (20-300 s), so
-    the relative value is in [147,600 - 300, 147,600 - 20 + 3,600]'
-  measured: '147490.9 (9d0fbc2c)'
+  - 147600.0
+  - 151200.0
+  source: 'the absolute sim time of the first enforcement (runtime_realism.py stage_abs, F5-ABS: the
+    first case assembled, anchored on its first proto.revocation record), not stage.enforced_s, which
+    is relative to the detect stage of the report that tipped the decision (phase2.rs
+    finish_first_revocation). Absolute path: reports shuffled one day, 8 h review, the next
+    business-day 10:00 ET slot (Wed 2026-10-21 10:00 EDT = 147,600 s after t0), then the first vehicle
+    fetch, within one CRL_FETCH_INTERVAL_S (3,600 s, phase2.rs:484): publish slot to slot + one hour.
+    Trace finding (06 §9, 2026-10-28, 9d0fbc2c): published 147,600.0 s, first enforcement 61.6 s later'
+  measured: '147661.6 (9d0fbc2c; stage.enforced_s 147490.9, which the band [147,600, 151,200] would fail)'
+  verdict: wrong-expectation
+  note_rekey: 're-keyed 2026-10-28 (F5-ABS; was stage.enforced_s band [147,300, 151,180], a relative
+    measure bounded by the detect window): the absolute key does not depend on when the tipping report
+    was detected. Fault: the old relative key on this band FAILs (147,490.9 < 147,600)'
   verdict: wrong-expectation
   note: 'corrected 2026-10-28 (trace track; was band [147,500, 147,800], pass at 147,544 on f4982788):
     the old band put the absolute slot on a relative measure, so it held only for some detection times
