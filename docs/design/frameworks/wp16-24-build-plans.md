@@ -1018,6 +1018,8 @@ changes G-SCMS by design. Re-bless only those cases, and list them.
   units with a fresh verified WSA. See the adoption plan's P19.2 note.
 - **P19.3** (3 h): `RsuSchPath` (contact window, PER, CBR access, WP-16 interval) with
   unit tests against `ConstantPath` limits (no loss, infinite contact, so it is equal).
+  **P19.3 built, 2026-10-28:** `crates/v2xw-radio/src/rsu_sch.rs` (`RsuSchPath`, card
+  `transport/80211p-sch`, 6 unit tests). See the adoption plan's P19.3 note.
 - **P19.4** (3 h): wiring in `backend.rs` `carry`; downloads, CRL and reports moved to
   the SCH; settings and units.
 - **P19.5** (3 h): `tests/rsu_sch.rs`, the expectation rows, the faults, and

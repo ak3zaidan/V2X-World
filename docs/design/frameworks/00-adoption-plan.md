@@ -817,6 +817,16 @@ trustworthy or comparable; later waves add behaviours and radio features.
   unit tops up under `constant` and not under `sch`. WSAs ride the primary channel as a
   single-hop safety-class frame (1609.4 puts them on the CCH; the engine has no separate
   CCH). Default byte-identical. The air hop is still the constant link (P19.3-P19.4).
+- P19.3 built (2026-10-28, branch only): `v2xw_radio::rsu_sch::RsuSchPath`
+  (`transport/80211p-sch`, a `PacketPath`; its own module, not `ip_transport.rs`, to keep
+  that file's merge surface small). Per IP packet: constant-velocity contact window
+  against `range_m` at the frame's end; EDCA AC_BE access `AIFS + CWmin/2·slot` (802.11-2020
+  Table 9-155 OCB) plus a busy wait `ρ/(1−ρ)·T_air` (ASSUMPTION, M/D/1 mean) from the SCH
+  CBR; 1609.4 `fits` for a one-radio unit; loss from a reference PER-vs-distance curve
+  scaled `1 − (1 − p)^(L/L_ref)`, keyed draws per offered packet. Framing 36 B (RFC 8691
+  §4.2 LLC/SNAP). Unit tests hold the ConstantPath limit (PHY air time, 40-56 µs over the
+  line rate). Not wired: P19.4 builds the PER curve from the link budget, reads the WP-13
+  CBR and puts `carry`'s `RsuBackhaul` air leg on it under `sch`.
 
 **WP-20 Traffic yields to emergency vehicles** (M, 5 days). Source: S-P5.
 - Scope: within a reaction distance civilians pull to the kerb or slow (US move-over, UVC

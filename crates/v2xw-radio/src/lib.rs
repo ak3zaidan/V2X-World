@@ -128,6 +128,7 @@ pub mod per;
 pub mod phy;
 pub mod prop;
 pub mod regulation;
+pub mod rsu_sch;
 pub mod sidelink;
 pub mod sps;
 pub mod sweep;
