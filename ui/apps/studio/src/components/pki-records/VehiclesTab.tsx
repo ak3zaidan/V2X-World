@@ -471,11 +471,13 @@ function AtAGlance({
             <b className="bad">
               <StatusGlyph shape="ban" /> revoked
             </b>
-            <span className="sub" data-testid="pki-glance-revoked-by">
-              {story && story.lists.length > 0
-                ? `on ${story.lists[0].provider}'s list v${story.lists[0].version}, published at ${secondsText(story.lists[0].issued_at)}`
-                : "a published list names it"}
-              {story?.refusing ? ` · ${story.refusing.installed} of ${story.refusing.of} vehicles refuse it` : ""}
+            <span
+              className="sub"
+              data-testid="pki-glance-revoked-by"
+              title={story && story.lists.length > 0 ? `On ${story.lists[0].provider}'s list v${story.lists[0].version}, published at ${secondsText(story.lists[0].issued_at)}` : undefined}
+            >
+              {story && story.lists.length > 0 ? `${story.lists[0].provider} v${story.lists[0].version}` : "on a published list"}
+              {story?.refusing ? ` · ${story.refusing.installed}/${story.refusing.of} refuse it` : ""}
               {story?.caseId ? (
                 <>
                   {" · "}

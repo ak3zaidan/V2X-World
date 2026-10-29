@@ -127,7 +127,7 @@ function ProviderChain({
       <div className="pki-tc-row">
         <span className="pki-tc-name mono">{p.label}</span>
         <span className={`pki-tc-arrow${p.on_ctl ? "" : " broken"}`} title={p.on_ctl ? "The trust list names this provider's root" : "The trust list does not name this root: devices reject everything under it"}>
-          {p.on_ctl ? "names →" : "✕ not named"}
+          {p.on_ctl ? "trust list names →" : "✕ not on the trust list"}
         </span>
         <Box c={root} label="Root (RCA)" sub="offline, signs once" onSelect={onSelect} selected={selected} />
         <span className="pki-tc-arrow">certifies →</span>
@@ -160,7 +160,7 @@ export function TrustChain({ state, onSelect, selected }: { readonly state: PkiS
   return (
     <section className="pki-trustchain" data-testid="pki-trustchain" aria-label="How trust flows" data-open={open ? "1" : "0"}>
       <div className="pki-tc-summary">
-        <button type="button" className="linklike pki-tc-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="pki-trustchain-toggle">
+        <button type="button" className="linklike pki-tc-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="pki-trustchain-toggle" title="A device accepts a certificate only if this chain holds end to end: the trust list names a root, the root certifies the intermediate, and so on down to the vehicle's certificates.">
           {open ? "▾" : "▸"} Who certifies whom
         </button>
         <span className="dim" data-testid="pki-trustchain-summary" title={`Trust list (CTL) version ${ctl.sequence}`}>
@@ -183,25 +183,11 @@ function TrustChainBody({
   readonly onSelect: (id: string) => void;
   readonly selected: string | null;
 }): React.JSX.Element {
-  const ctl = state.ctl;
   return (
     <>
-      <p className="dim pki-tc-says">A device accepts a certificate only if this chain holds, end to end: the trust list names a root, the root certifies the intermediate, and so on down.</p>
-      <div className="pki-tc-ctl">
-        <span className="pki-tc-box ctl" title="The certificate trust list (CTL): the roots every device trusts, signed by a quorum of electors">
-          <b>Trust list (CTL)</b>
-          <span>
-            version {ctl.sequence} · signed by {ctl.signers.length} of {ctl.electors} electors ({ctl.quorum} needed)
-          </span>
-        </span>
-      </div>
       {state.providers.map((p) => (
         <ProviderChain key={p.label} p={p} issuers={issuers} onSelect={onSelect} selected={selected} />
       ))}
-      <p className="faint pki-tc-foot">
-        The Enrolment CA (ECA) then issues each vehicle its enrolment certificate, and the Pseudonym CA (ACA) its pseudonym certificates; a receiver checks
-        a pseudonym certificate back up this chain to a root the trust list names.
-      </p>
     </>
   );
 }
