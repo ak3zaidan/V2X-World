@@ -798,6 +798,14 @@ pub enum MobilityCommand {
         /// The lane the warning's event position maps to on the receiver's map.
         lane: LaneId,
     },
+    /// The actor's on-board unit warned its driver of a collision ahead (FCW) or of a
+    /// hard-braking vehicle ahead (EEBL), from what the unit heard: a driver looking away
+    /// from the road (`drivers` §6) looks back at once. With glances off, it changes
+    /// nothing.
+    DriverAlerted {
+        /// The warned actor.
+        actor: ActorId,
+    },
     /// Put a specific trip on the road, bypassing the demand model.
     Spawn(TripRequest),
     /// Brake at `decel_mps2` until the vehicle stands, then hold it until `hold_until`

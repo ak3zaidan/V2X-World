@@ -124,6 +124,10 @@ pub struct HumanDriverParams {
     /// Whether trucks and trailers keep out of the leftmost lane of a motorway or trunk
     /// carriageway of three or more lanes.
     pub truck_lane_restriction: bool,
+    /// Glances off the road (module §6); off, it is not serialised, so a parameter set
+    /// without it writes as before.
+    #[serde(skip_serializing_if = "AttentionParams::is_off")]
+    pub attention: AttentionParams,
 }
 
 impl Default for HumanDriverParams {
@@ -135,14 +139,18 @@ impl Default for HumanDriverParams {
             rate_error_per_s: 0.0,
             error_correlation_s: HDM_ERROR_CORRELATION_S,
             truck_lane_restriction: false,
+            attention: AttentionParams::default(),
         }
     }
 }
 
 impl HumanDriverParams {
-    /// Whether the reaction delay or the perception errors act.
+    /// Whether the reaction delay, the perception errors or glances off the road act.
     pub fn imperfect(&self) -> bool {
-        self.reaction_time_s > 0.0 || self.distance_error > 0.0 || self.rate_error_per_s > 0.0
+        self.reaction_time_s > 0.0
+            || self.distance_error > 0.0
+            || self.rate_error_per_s > 0.0
+            || self.attention.enabled
     }
 
     /// Every driver its own parameters, no delay, no errors.
@@ -162,6 +170,7 @@ impl HumanDriverParams {
             rate_error_per_s: HDM_RATE_ERROR_PER_S,
             error_correlation_s: HDM_ERROR_CORRELATION_S,
             truck_lane_restriction: false,
+            attention: AttentionParams::default(),
         }
     }
 }
@@ -386,6 +395,11 @@ fn keyed_uniform(key: u64, step: u64, slot: u64) -> f64 {
 }
 
 impl AttentionParams {
+    /// Whether glances off the road are off.
+    pub fn is_off(&self) -> bool {
+        !self.enabled
+    }
+
     /// One on-path dwell, s, drawn for the dwell that starts at `step`: the inverse
     /// Gaussian by Michael, Schucany & Haas (1976, *Am. Stat.* 30(2)), from a keyed normal
     /// (slot 2) and a keyed uniform (slot 3).
@@ -410,7 +424,7 @@ impl AttentionParams {
 }
 
 /// One driver's glance state.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct AttentionState {
     /// Whether the first dwell has been drawn.
     pub started: bool,

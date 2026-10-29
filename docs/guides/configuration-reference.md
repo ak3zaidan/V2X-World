@@ -233,6 +233,7 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `actors.vehicles.drivers.min_gap_m` **new** | model's (2.0) | 0.5 to 10 m | IDM `s0`. |
 | `actors.vehicles.drivers.politeness` **new** | 0.5 | 0 to 1 | MOBIL `p` (Kesting 2007), all classes. |
 | `actors.vehicles.drivers.lane_change_threshold_mps2` **new** | 0.1 | 0 to 2 m/s² | MOBIL `Δa_th`. |
+| `actors.vehicles.drivers.distraction` **new (WP-39)** | false | bool | Drivers glance off the road: on-path dwells inverse Gaussian (3.56 s, 1.50 s), off-path glances lognormal (−0.21, 0.50; mean 0.92 s, 3.5 % over 2 s), Morando, Victor & Dozza 2019 (IEEE T-ITS 20(8), Fig. 6); 804 glances an hour, 20.5 % eyes off. The vehicle ahead is seen as last seen while the eyes are off; an FCW or EEBL warning from the vehicle's own unit ends the glance. Native engine only. [driver-distraction.md](../design/research/driver-distraction.md). |
 | `world.signals.coordinate`, `.progression_speed_mps` | off | 1 to 40 m/s | Green-wave signal timing. |
 | `world.signals.join_m` **new** | off | 0 to 40 m | Joins signalised junctions this close into one plan (netconvert `--tls.join`, 20 m default there). |
 | `traffic.signals.short_link_clearance_m` **new** | off | 10 to 200 m | Downstream green for a link shorter than this starts 2 s before the upstream green that fills it (FHWA Signal Timing Manual 2e ch. 6, closely spaced signals). |

@@ -1,8 +1,28 @@
 # Driver distraction: eyes-off-road glances (WP-39)
 
-Status: 2026-10-28, P39.1 sources read and fit chosen. Plan:
-`docs/design/frameworks/wp25-plus-build-plans.md` §WP-39. The process is built in P39.2
-(`v2xw-mobility/src/drivers.rs`) and wired in P39.3.
+Status: 2026-10-28. P39.1 read the sources and chose the fit. P39.2 built the process
+(`v2xw-mobility/src/drivers.rs`) and P39.3 wired it. It is behind
+`actors.vehicles.drivers.distraction` and off by default. Plan:
+`docs/design/frameworks/wp25-plus-build-plans.md` §WP-39.
+
+## The wiring (P39.3)
+
+- **Engine.** The human-driver pass of `NativeMobility::step` (`engine.rs`, pass 6) runs
+  for this setting too (`HumanDriverParams::imperfect`). Each step it advances the
+  driver's glance process. While the eyes are off the path, it replaces the vehicle ahead
+  with the one last seen, at the gap and speed it had then. The state goes through the
+  buffered decision, so the Jacobi update is unchanged.
+  - **A choice:** a vehicle that comes into view during a glance, when none was seen
+    before, is seen. This stands in for peripheral detection of a new object ahead.
+  - **No alarm while looking away.** With the decision made from the frozen picture, the
+    alarm rule cannot fire, because the scene does not ask for hard braking.
+- **The warning hook.** `run.rs` reads every `app.warning` record a vehicle's own unit
+  writes. Each FCW or EEBL `issue` or `update` becomes
+  `MobilityCommand::DriverAlerted`, which ends a glance in progress
+  (`AttentionState::interrupt`). Updates come at most once a second while the condition
+  lasts. This is belief only: the warning is the unit's, from what it heard.
+- **Off is byte-identical.** The flag is not serialised when off. The pass and the hook
+  run only when it is on, and the carried state is copied unchanged.
 
 ## The process
 

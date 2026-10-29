@@ -911,6 +911,17 @@ trustworthy or comparable; later waves add behaviours and radio features.
   - **Tests:** the draws pass a KS test against both cited CDFs at the 1 % level, with
     3.5 % of glances over 2 s. The renewal process gives 804 ± 4 % glances per hour and a
     20.5 % eyes-off share. A frozen leader is released by a warning.
+- P39.3 (2026-10-28): done. `actors.vehicles.drivers.distraction` is off by default and
+  no golden moved.
+  - **Wiring:** the human-driver pass sees the vehicle ahead as it was last seen while the
+    eyes are off. `run.rs` turns the vehicle's own FCW/EEBL warnings into
+    `MobilityCommand::DriverAlerted`, which ends the glance.
+  - **Measured:** 11 of 40 lead brakes get a later response, 0.18 s on the mean. A
+    standing warning removes the delay.
+  - **Row:** distraction gives `metric.ttc_conflicts` up. The FCW benefit is pinned by a
+    test, because a list sweep is not supported.
+  - **Proposal for the owner:** `distraction: true` with `realism: human` on US presets.
+    It moves G-TV.
 
 ## 3. Deferred and dropped
 

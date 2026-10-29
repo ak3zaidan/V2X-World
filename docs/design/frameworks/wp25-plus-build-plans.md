@@ -918,6 +918,25 @@ every LTE digest (owner).
   plus determinism.
 - `eyes_off_the_road_see_the_leader_as_last_seen_until_a_warning`.
 
+**P39.3 (2026-10-28, done; off by default, no golden moved).** The wiring is described in
+`driver-distraction.md` §"The wiring".
+- **The key:** `actors.vehicles.drivers.distraction`, in the six settings files (publish
+  reflects it from the schema).
+- **The engine pass:** the human-driver pass freezes the vehicle ahead while the eyes are
+  off. The new `MobilityCommand::DriverAlerted` ends a glance.
+- **The hook:** `run.rs` turns each FCW or EEBL `issue` or `update` from a vehicle's own
+  unit into that command.
+- **Tests:**
+  - `v2xw-mobility/tests/distraction.rs::a_distracted_follower_brakes_later`: 40 lead
+    brakes, each run plain and with a standing warning. 11 of 40 respond later, by 0.18 s
+    on the mean, and none earlier. The plan's 20 % guess was low, because a glance that
+    starts while the IDM's braking builds up also delays the response.
+  - `v2xw-engine/tests/distraction_warning.rs`: the expectation row, and FCW/EEBL on
+    against off with distraction on.
+- **Rows:** `expectations/traffic-distraction.yaml`, `distraction: true` gives
+  `metric.ttc_conflicts` up. The plan's second row (`apps.fcw` under distraction) needs a
+  list-valued sweep (WP-32), so it is a test.
+
 ---
 
 ## WP-40 Doppler-aware 802.11p PER (O-P12), gated on its source

@@ -5439,6 +5439,33 @@ impl Engine {
             }
         }
 
+        // A forward-collision or emergency-brake-light warning a vehicle's own unit issued
+        // to its driver (`actors.vehicles.drivers.distraction`, WP-39): a driver looking
+        // away from the road looks back (`v2xw_mobility::drivers` §6). The warning is the
+        // unit's own, from what it heard (belief, not ground truth).
+        if self.scenario.actors.vehicles.drivers.distraction == Some(true) {
+            let mut commands = Vec::new();
+            for (id, _, records, _) in &results {
+                let Some(actor) = self.node_actor.get(id).copied() else {
+                    continue;
+                };
+                let alerted = records.iter().any(|r| {
+                    r.channel == "app.warning"
+                        && serde_json::from_slice::<serde_json::Value>(&r.json).is_ok_and(|v| {
+                            // Issued, or refreshed while the condition lasts.
+                            matches!(v["kind"].as_str(), Some("issue" | "update"))
+                                && matches!(v["app"].as_str(), Some("fcw" | "eebl"))
+                        })
+                });
+                if alerted {
+                    commands.push(v2xw_mobility::MobilityCommand::DriverAlerted { actor });
+                }
+            }
+            if !commands.is_empty() {
+                self.command_mobility(commands);
+            }
+        }
+
         // GLOSA's advice, followed by the drivers who follow it. Only a periodic step
         // runs the applications; a wake hands over finished checks and advises nothing.
         if !wake && self.glosa.compliance > 0.0 {
