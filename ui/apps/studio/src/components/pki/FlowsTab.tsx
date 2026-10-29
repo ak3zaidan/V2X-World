@@ -174,7 +174,7 @@ function Sequence({
 }
 
 /** For a message the engine sends without encoding it: what it carries, part by part, with an example. */
-function ModelledParts({ name, total }: { readonly name: string; readonly total: number }): React.JSX.Element {
+export function ModelledParts({ name, total }: { readonly name: string; readonly total: number }): React.JSX.Element {
   const m = modelledMessage(name);
   if (m === null) return <p className="faint">The engine counts this message's bytes but does not encode it.</p>;
   const fixed = m.parts.reduce((a, p) => a + (p.bytes ?? 0), 0);

@@ -21,7 +21,8 @@
  * became an overlay and the tab was removed, so both went.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { engine } from "../state/engine.js";
 import { useStudio } from "../state/store.js";
@@ -37,6 +38,9 @@ import { CREDENTIAL_LABEL, GROUND_TRUTH, asVehicles, credentialState } from "../
 import { openPanel } from "../shell/route.js";
 import { vehicleHealth } from "../lib/vehicleHealth.js";
 import { actorNoun } from "../lib/actorNoun.js";
+import { deviceOfNode } from "../lib/pkiNames.js";
+import { noteRadioSample } from "../lib/vehicleHistory.js";
+import { VehicleHistory } from "./VehicleHistory.js";
 
 const capitalise = (w: string): string => w.charAt(0).toUpperCase() + w.slice(1);
 
@@ -92,6 +96,25 @@ export function ObuHud(): React.JSX.Element | null {
     return m;
   }, [telemetry]);
   const health = useMemo(() => vehicleHealth(telemetry, security), [telemetry, security]);
+  // Keep each once-a-second radio report for the vehicle's history (BSMs sent and heard).
+  useEffect(() => {
+    if (telemetryNode === null || !telemetry) return;
+    const r = (k: string): number => {
+      const f = byKey.get(k);
+      return f && typeof f.raw === "number" ? f.raw : 0;
+    };
+    noteRadioSample(Number(telemetryNode), {
+      t: useStudio.getState().simTimeNs,
+      sent: r("msgs_out_per_s"),
+      heard: r("msgs_in_per_s"),
+      fullCert: r("full_cert_msgs"),
+      digestMisses: r("digest_misses"),
+      neighbours: r("nbr_total"),
+      verified: r("nbr_verified"),
+      revokedNeighbours: r("nbr_revoked"),
+      cbr: r("cbr_pm"),
+    });
+  }, [telemetry, telemetryNode, byKey]);
 
   const details = (
     <button
@@ -116,7 +139,7 @@ export function ObuHud(): React.JSX.Element | null {
                 {capitalise(actorNoun(selectedActor))} {selectedNode ?? selectedActor}
               </span>
               <span className="dim">
-                {selectedNode !== null ? "No radio report yet: the radio reports once a simulated second while the run plays." : "Carries no radio, so there is no radio to report on."}
+                {selectedNode !== null ? "Waiting for its first radio report (once a second while the run plays)." : "Carries no radio, so there is no radio to report on."}
               </span>
             </>
           ) : (
@@ -172,7 +195,7 @@ export function ObuHud(): React.JSX.Element | null {
         {head}
         <div className="hud-body">
           {pose && hello ? <PoseRow pose={pose} origin={hello.origin} /> : null}
-          <div className="hud-row dim">No radio report yet: the radio reports once a simulated second while the run plays.</div>
+          <div className="hud-row dim">Waiting for its first radio report (once a second while the run plays).</div>
           {security ? null : <HudCertificates node={telemetryNode} />}
         </div>
       </div>
@@ -222,21 +245,7 @@ export function ObuHud(): React.JSX.Element | null {
             link === null ? null : (
               <Plain key="link" k="backend" v={link} testId="hud-sec-link" tone={security?.link_up === false ? "warn" : undefined} />
             ),
-            hasPkiPool(security) && selectedNode !== null ? (
-              <button
-                key="pki"
-                type="button"
-                className="hud-field plain pkir-link"
-                onClick={() => {
-                  openVehicle(selectedNode);
-                  openPanel("backend");
-                }}
-                data-testid="hud-sec-pki"
-                title="Open its certificates in the certificate system view"
-              >
-                <span className="v">certificates ›</span>
-              </button>
-            ) : null,
+            hasPkiPool(security) && selectedNode !== null ? <HudActions key="actions" node={selectedNode} /> : null,
             cryptoText ? (
               <span key="crypto" className="hud-field plain" data-testid="hud-sec-crypto" title={crypto ? `${crypto.sign ? `sign: ${crypto.sign.basis_text}. ` : ""}${crypto.verify ? `verify: ${crypto.verify.basis_text}. ` : ""}${crypto.explanation}` : undefined}>
                 <span className="v">{cryptoText}</span>
@@ -290,23 +299,12 @@ function HudCertificates({ node }: { readonly node: number }): React.JSX.Element
         </span>
         <Plain k={valid === 1 ? "valid certificate" : "valid certificates"} v={int(valid)} testId="hud-sec-pool" tone={valid === 0 && st !== "revoked" ? "warn" : undefined} />
         <span className="hud-field plain">
-          <span className="v">{st === "revoked" ? "named on a revocation list" : "on no revocation list"}</span>
+          <span className="v">{st === "revoked" ? "on a revocation list" : "not revoked"}</span>
         </span>
-        <button
-          type="button"
-          className="hud-field plain pkir-link"
-          onClick={() => {
-            openVehicle(node);
-            openPanel("backend");
-          }}
-          data-testid="hud-sec-pki"
-          title="Open its certificates in the certificate system view"
-        >
-          <span className="v">certificates ›</span>
-        </button>
-        <span className="hud-field plain dim" title="The vehicle publishes its certificate record when its certificates change">
+        <span className="hud-asof" title="The vehicle publishes its certificate record when its certificates change">
           as of {(t / 1e9).toFixed(1)} s
         </span>
+        <HudActions node={node} device={row.device} />
       </span>
     </div>
   );
@@ -353,5 +351,31 @@ function PoseRow({
         </span>
       </span>
     </div>
+  );
+}
+
+/** The vehicle's two doors: its certificates in the certificate system view, and its full history. */
+function HudActions({ node, device }: { readonly node: number; readonly device?: string }): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const dev = device ?? deviceOfNode(node);
+  return (
+    <span className="hud-actions">
+      <button
+        type="button"
+        className="hud-action"
+        onClick={() => {
+          openVehicle(node);
+          openPanel("backend");
+        }}
+        data-testid="hud-sec-pki"
+        title="Open its certificates in the certificate system view"
+      >
+        Certificates
+      </button>
+      <button type="button" className="hud-action" onClick={() => setOpen(true)} disabled={dev === null} data-testid="hud-history" title="Everything this vehicle did, step by step">
+        History
+      </button>
+      {open && dev !== null ? createPortal(<VehicleHistory node={node} device={dev} onClose={() => setOpen(false)} />, document.body) : null}
+    </span>
   );
 }

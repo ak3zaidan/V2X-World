@@ -1365,3 +1365,56 @@ details.section[open] > summary { margin-bottom: 5px; }
 .scrub .scrub-events .mark:hover { transform: scaleY(1.3); box-shadow: 0 0 0 1px var(--text); }
 .scrub .scrub-events .scenario-mark { top: 1px; }
 .scrub .scrub-events .scenario-mark:hover { box-shadow: 0 0 0 1px var(--text); }
+
+/* ---- HUD actions and the vehicle history (owner, 2026-10-29) ---- */
+.hud-actions { margin-left: auto; display: inline-flex; gap: 6px; }
+.hud-action {
+  font: inherit; font-size: 11px; padding: 2px 9px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border-strong); background: transparent; color: var(--text);
+}
+.hud-action:hover, .hud-action:focus-visible { border-color: var(--accent); color: var(--accent); }
+.hud-asof { color: var(--text-dim); font-size: 10px; }
+
+.vh-backdrop { position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, 0.45); display: flex; justify-content: center; align-items: center; }
+.vh {
+  width: min(860px, calc(100vw - 32px)); height: min(86vh, 900px); display: flex; flex-direction: column;
+  background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  font-size: 13px; color: var(--text);
+}
+.vh-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 14px 16px 8px; border-bottom: 1px solid var(--border); }
+.vh-head h2 { margin: 0 0 2px; font-size: 16px; }
+.vh-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.vh-chip { font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text-dim); cursor: pointer; }
+.vh-chip.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.vh-chip:disabled { opacity: 0.4; cursor: default; }
+.vh-count { opacity: 0.7; margin-left: 2px; }
+.vh-note { margin: 6px 16px 0; font-size: 12px; }
+.vh-steps { list-style: none; margin: 0; padding: 8px 8px 16px; overflow: auto; flex: 1; }
+.vh-empty { padding: 16px; }
+.vh-step { position: relative; }
+.vh-step::before { content: ""; position: absolute; left: 81px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+.vh-step:first-child::before { top: 18px; }
+.vh-step:last-child::before { bottom: calc(100% - 18px); }
+.vh-step-head { all: unset; box-sizing: border-box; width: 100%; display: grid; grid-template-columns: 64px 14px 1fr auto; gap: 10px; align-items: start; padding: 8px 8px; border-radius: 6px; cursor: pointer; }
+.vh-step-head:hover, .vh-step-head:focus-visible { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.vh-time { color: var(--text-dim); text-align: right; font-size: 12px; padding-top: 1px; }
+.vh-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 4px; position: relative; z-index: 1; box-shadow: 0 0 0 3px var(--bg-panel); }
+.vh-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vh-title { font-weight: 500; }
+.vh-summary { color: var(--text-dim); font-size: 12px; }
+.vh-kind { font-size: 11px; white-space: nowrap; padding-top: 2px; }
+.vh-step.open > .vh-step-head { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.vh-detail { margin: 2px 8px 10px 96px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-raised, var(--bg-panel)); font-size: 12px; }
+.vh-detail h4 { margin: 12px 0 4px; font-size: 12px; color: var(--text-dim); font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
+.vh-facts { margin: 0; display: grid; gap: 4px; }
+.vh-facts > div { display: grid; grid-template-columns: 150px 1fr; gap: 10px; }
+.vh-facts dt { color: var(--text-dim); }
+.vh-facts dd { margin: 0; }
+.vh-msgs { width: 100%; border-collapse: collapse; }
+.vh-msgs th { text-align: left; font-weight: 500; color: var(--text-dim); padding: 3px 6px; border-bottom: 1px solid var(--border); }
+.vh-msgs td { padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.vh-msgs .num { text-align: right; white-space: nowrap; }
+.vh-inside td { background: color-mix(in srgb, var(--text) 3%, transparent); }
+.vh-stages { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+.vh-msgs .nowrap { white-space: nowrap; }
+.vh-times { color: var(--accent); font-weight: 600; }
