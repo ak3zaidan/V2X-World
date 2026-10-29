@@ -1246,6 +1246,7 @@ impl ScmsRun {
                 provider: deployment.providers[0].name.clone(),
                 peers: crate::scms::governance::PeerProvider::of_deployment(&deployment),
                 profile: deployment.providers[0].cert_profile,
+                ica_levels: deployment.providers[0].ica_levels,
             },
         );
         for (a, b) in governance_links(&nodes, &gov) {

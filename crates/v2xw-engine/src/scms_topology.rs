@@ -121,8 +121,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: LEVELS,
         status: Status::Refused,
-        note: "Not built yet (08-settings-ux-and-gaps §8, piece C3a): only 1, the US \
-               system's one intermediate CA under each root, loads.",
+        note: "Only 1, the US system's one intermediate CA under each root, loads. The \
+               governance issues 2 to 5 levels (piece C3a); the run waits for piece C3b \
+               (the chain file over P2PCD, the manifest's not-US flag).",
     },
 ];
 
@@ -467,7 +468,8 @@ fn levels_menu() -> Vec<Value> {
             "value": n,
             "label": format!("{n} intermediate CAs (not US)"),
             "description": "A deeper hierarchy, each level issued by the one above; the run \
-                            is then not the US system. Not built yet (08 §8, piece C3a).",
+                            is then not the US system. Not built yet in the run (08 §8, \
+                            piece C3b).",
             "available": false,
         }));
     }

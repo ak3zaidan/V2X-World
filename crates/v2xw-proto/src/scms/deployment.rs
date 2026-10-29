@@ -52,6 +52,11 @@ pub const ROLES: [&str; 13] = [
     "crl_broadcast",
 ];
 
+/// The most intermediate CA levels a provider can run (08-settings-ux-and-gaps §8): a
+/// receiver accepts at most [`v2xw_sec::chain::MAX_CHAIN_LENGTH`] = 8 certificates in a
+/// chain, and root + n levels + ACA + pseudonym <= 8.
+pub const MAX_ICA_LEVELS: u32 = 5;
+
 /// The roles every US provider must run (01 §9: "each needs an offline RCA, an ICA, online
 /// ECA, RA, ACA, LA1/LA2, MA and PG, and a CRL signer"; Provider Req. §2.2 for the MA).
 pub const US_REQUIRED_ROLES: [&str; 10] = [
@@ -636,6 +641,10 @@ pub struct Provider {
     /// A site per role (`providers[].sites.<role>`, 08 §5), overriding the provider's
     /// point for that role's servers; empty puts every role at [`Provider::region`].
     pub sites: BTreeMap<String, Site>,
+    /// Intermediate CA levels between its root and its issuing CAs (08 §8): 1 is the US
+    /// hierarchy (`root → ica → components`); `n` adds `ica-2` ... `ica-n`, each issued
+    /// by the level above, the last issuing what the ICA issues.
+    pub ica_levels: u32,
 }
 
 impl Provider {
@@ -679,6 +688,7 @@ impl Provider {
             cert_profile: crate::scms::governance::CertProfile::default(),
             site: None,
             sites: BTreeMap::new(),
+            ica_levels: 1,
         }
     }
 }
@@ -934,6 +944,18 @@ impl Deployment {
                 return Err(invalid(
                     &format!("providers.{}.components", p.name),
                     "one root and one ICA per provider (01 §2.3: one root per provider)".into(),
+                ));
+            }
+            if !(1..=MAX_ICA_LEVELS).contains(&p.ica_levels) {
+                return Err(invalid(
+                    &format!("providers.{}.ica_levels", p.name),
+                    format!(
+                        "{} is outside 1..={MAX_ICA_LEVELS}: a receiver accepts at most {} \
+                         certificates in a chain (IEEE 1609.2), and root, the levels, the ACA \
+                         and the pseudonym certificate must fit",
+                        p.ica_levels,
+                        v2xw_sec::chain::MAX_CHAIN_LENGTH
+                    ),
                 ));
             }
             if !(p.fleet_share.is_finite() && p.fleet_share >= 0.0) {

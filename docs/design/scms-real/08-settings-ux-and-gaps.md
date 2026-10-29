@@ -831,6 +831,43 @@ every digest must stay the same.
 * C3a: governance issuance at depth n, the permissions, tests 1, 3 and 5.
 * C3b: the chain file, P2PCD, `is_us`, manifest, failure-node names, tests 2 and 4.
 
+**Status, C3a (2026-10-29): built in the governance; the key stays refused in the loader
+until C3b.** `Provider::ica_levels` (1 by default) is set from the deployment, and
+`Deployment::validate` refuses values outside 1..=`MAX_ICA_LEVELS` (5), naming the
+8-certificate chain limit. `GovernanceConfig::ica_levels` (home) and
+`PeerProvider::ica_levels` (each peer) are filled from the deployment, and `rehome` swaps
+them.
+
+What the governance builds: the ceremony (`certify_hierarchy`, `certify_levels`,
+`certify_peer`) and an ICA re-key issue `ica-2` … `ica-n`, each from the level above. The
+last level issues every ICA-issued role, and root-issued roles stay root-issued. Level `k`
+of `n` carries the ICA's groups with `{minChainLength 2 + (n − k), chainLengthRange 0}`
+(`ica_issue_permissions`). Each deeper level has:
+
+* the ICA's profile (`CertProfile::spec` maps `ica-k` to the ICA's row) and its own name
+  `ica-k.<provider>`;
+* its issuer as CRACA, with CRL series `SCMS_COMPONENTS`;
+* the ICA's region;
+* a key from its own stream on the ICA's (offline) node, so level 1's key and bytes are
+  today's.
+
+Where the levels land: the chain files carry every level, because `chain_certs` lists
+every authority. `pdu_pki` adds levels 2…n to `ScmsPki::extra`, so a node resolves and
+validates the deeper chain.
+
+Tests (`tests/scms_hierarchy.rs`):
+
+* Test 1: with 3 levels at provider-a, a pseudonym's chain is 6 long and validates under
+  `v2xw_sec::chain` with no error. A `DeviceTrust` installs the local chain file, which
+  holds both providers (provider-b at 2 levels) and every level.
+* Test 3: 6 levels and 0 levels are refused, and 5 levels load.
+* Test 5: the default run's local chain file is pinned (length and FNV-1a), and
+  `ica_levels: 1` set explicitly builds the same certificates and files. The phase-2
+  regression digest is unchanged.
+
+Left for C3b: a run with `ica_levels > 1` (the loader still refuses it), P2PCD learning
+each level, `is_us` and the manifest, and failure-node names.
+
 ---
 
 ## 9. Choices made under "most realistic" (the owner delegated these)
