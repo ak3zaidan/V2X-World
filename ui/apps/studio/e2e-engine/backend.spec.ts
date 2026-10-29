@@ -72,7 +72,9 @@ test("the PKI view draws every SCMS component, its flows and an SPDU with the en
   // The first snapshot is published a simulated second in.
   await expect(panel.getByTestId("pki-trust")).toBeVisible({ timeout: 60_000 });
   // The wire edition every PDU follows, as the engine reports it.
-  await expect(panel.getByTestId("pki-time")).toContainText("ieee-1609.2-2022");
+  // In words on the page; the engine's raw value stays in the tooltip.
+  await expect(panel.getByTestId("pki-time")).toContainText("Certificate standard: IEEE 1609.2-2022");
+  await expect(panel.getByTestId("pki-time").locator('[title*="ieee-1609.2-2022"]')).toHaveCount(1);
 
   const home = "provider-a";
   for (const role of ["root", "ica", "dcm", "eca", "lop", "ra", "la1", "la2", "aca", "ma", "crlg", "crl-store", "pg"]) {
