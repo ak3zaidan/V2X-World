@@ -1,0 +1,54 @@
+# WP-24 P24.3: the legacy-attack export the reference ML baseline trains on
+# (docs/guides/veremi-ext-baseline.md). Run with `--veremi veremi-ext` at the default record
+# level (full: the exporter needs gt.kinematics for the receivers' own positions).
+#
+# It is a stand-in for the VeReMi Extension replica (P24.2/P24.4), which needs `f2md-19`:
+# the LuST subsection (worlds/sumo/lust-veremi-sub.net.xml, P24.1), 1 Hz beacons as in the
+# VeReMi Extension, and 30 % attackers (the published share) split evenly over the seven
+# frozen legacy families that carry a VeReMi Extension code (crates/v2xw-record/src/
+# dataset/veremi.rs VEREMI_EXT_CODES: 1 ConstPos, 2 ConstPosOffset, 4 RandomPos,
+# 6 ConstSpeedOffset, 7 RandomSpeed, 9 EventualStop, 12 DelayedMessages). The legacy
+# families are this engine's, not F2MD's (f2md.md §4.1), so the numbers it gives are not
+# the VeReMi Extension's and the guide says so. Demand is internal Poisson, not LuST's
+# routes (P24.2). 60 s per run keeps the run under runtiny.sh's 450 MB (120 s reached
+# 672 MB); -s2 and -s3 are the same run on other seeds, so the baseline trains on two runs
+# and tests on a third it never saw.
+schema: v2xw/scenario/1
+meta:
+  name: VeReMi Extension legacy-attack export
+  description: >-
+    The LuST VeReMi subsection for 60 s at 1 Hz beaconing with 30 % attackers over the
+    seven legacy families that have a VeReMi Extension code: the training export of the
+    reference ML baseline.
+  tags: [benchmark, veremi, misbehaviour, detection, ml]
+  created: "2026-10-28"
+seed: "0x24_0003"
+time:
+  t0: "2027-03-04T07:00:00Z"
+  duration_s: 60.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+world:
+  source:
+    kind: sumo-net
+    path: worlds/sumo/lust-veremi-sub.net.xml
+  imported_at: "2026-10-28T00:00:00Z"
+actors:
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h_per_lane_km: 60.0
+messages:
+  rate_hz: 1
+radio:
+  rat: dsrc-80211p
+threats:
+  attackers:
+    - {id: threat/attacker/legacy/ConstPos, fraction: 0.043, schedule: {from_s: 0.0, to_s: 60.0}}
+    - {id: threat/attacker/legacy/ConstPosOffset, fraction: 0.043, schedule: {from_s: 0.0, to_s: 60.0}}
+    - {id: threat/attacker/legacy/RandomPos, fraction: 0.043, schedule: {from_s: 0.0, to_s: 60.0}}
+    - {id: threat/attacker/legacy/ConstSpeedOffset, fraction: 0.043, schedule: {from_s: 0.0, to_s: 60.0}}
+    - {id: threat/attacker/legacy/RandomSpeed, fraction: 0.043, schedule: {from_s: 0.0, to_s: 60.0}}
+    - {id: threat/attacker/legacy/EventualStop, fraction: 0.043, schedule: {from_s: 0.0, to_s: 60.0}}
+    - {id: threat/attacker/legacy/DelayedMessages, fraction: 0.042, schedule: {from_s: 0.0, to_s: 60.0}}
