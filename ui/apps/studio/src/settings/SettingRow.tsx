@@ -337,6 +337,9 @@ function SettingRowImpl({
     : [];
   const recFlat = rec === undefined ? "" : flat(rec).replace(/\.$/, "");
   const current = labelOf(value);
+  // On a menu a recommendation is worth a line only when it names one of the menu's values;
+  // prose ("the one that matches the message format") repeats what the option's own words say.
+  const recNamesChoice = rec !== undefined && (f.choices ?? []).some((c) => flat(rec).startsWith(flat(c.label)) || flat(rec).startsWith(flat(String(c.value))));
   const recSame =
     rec !== undefined &&
     (/^unset$/i.test(recFlat) || defaultSpellings.some((d) => recFlat.startsWith(d) || d.startsWith(recFlat)) || (current !== undefined && flat(current) === recFlat));
@@ -461,7 +464,7 @@ function SettingRowImpl({
               Clear ({f.emptyText})
             </button>
           ) : null}
-          {rec && !recSame ? (
+          {rec && !recSame && (!f.choices || recNamesChoice) ? (
             <span data-testid="setting-recommended" title={`Recommended: ${f.recommended}`}>
               Rec. {rec}
             </span>

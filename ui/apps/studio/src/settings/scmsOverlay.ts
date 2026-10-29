@@ -178,3 +178,15 @@ export const SCMS_OVERLAY: Readonly<Record<string, Overlay>> = {
 export function overlayOf(pointer: string): Overlay | undefined {
   return SCMS_OVERLAY[pointer];
 }
+
+/** One short line under each SCMS sub-heading, in place of the engine's paragraph (kept on hover). */
+export const SUBGROUP_BLURBS: Readonly<Record<string, string>> = {
+  deployment: "Which credential system runs and how its trust list is signed.",
+  providers: "The companies that run an SCMS, and the servers each one runs.",
+  lifecycle: "How a vehicle gets, holds and changes its certificates.",
+  revocation: "How a misbehaving device is revoked and how vehicles learn of it.",
+  ma: "How reports reach the Misbehaviour Authority and how it decides.",
+  receiver: "Which messages a receiving vehicle accepts.",
+  crypto: "Signature schemes, and signing committees.",
+  servers: "Servers that fail during the run, and their hardware and links.",
+};

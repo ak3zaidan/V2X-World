@@ -63,6 +63,7 @@ import "../styles/settings.css";
 import { SettingsDocContext } from "./docContext.js";
 import { SettingRow } from "./SettingRow.js";
 import { localUsVerdict } from "./scmsDeployment.js";
+import { SUBGROUP_BLURBS } from "./scmsOverlay.js";
 import { inheritedValue, movableKeys, moveIntoFields } from "./legacyParams.js";
 
 const SECTION_KEY = "v2xw.settings.section";
@@ -317,7 +318,11 @@ export function SettingsWindow({
       .map(({ s, shown }) => (
         <div key={s.key} className="settings-sub">
           {g.subs.length > 1 ? <h4 data-testid="settings-subheading">{s.label}</h4> : null}
-          {g.subs.length > 1 && s.blurb ? <p className="faint settings-sub-blurb">{oneLine(s.blurb)}</p> : null}
+          {g.subs.length > 1 && s.blurb ? (
+            <p className="faint settings-sub-blurb" title={s.blurb}>
+              {(s.key.startsWith("sg:") ? SUBGROUP_BLURBS[s.key.slice(3)] : undefined) ?? oneLine(s.blurb)}
+            </p>
+          ) : null}
           {shown.map((f) => row(f, s.key))}
         </div>
       ));
