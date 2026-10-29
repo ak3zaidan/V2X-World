@@ -57,6 +57,10 @@ pub struct ServiceModelSpec {
     /// 06-node-models §4 leaves the two-state Markov parameters `todo-calibrate` and this
     /// crate does not invent them.
     pub availability: Option<()>,
+    /// Requests that may wait beyond the busy servers; one more arriving is turned away
+    /// as busy (`capacity.<role>.queue_limit`, 08-settings-ux-and-gaps §6). `None`:
+    /// unlimited, the default.
+    pub queue_limit: Option<u32>,
 }
 
 impl ServiceModelSpec {
@@ -67,6 +71,16 @@ impl ServiceModelSpec {
             fixed_overhead,
             batching: None,
             availability: None,
+            queue_limit: None,
+        }
+    }
+
+    /// The same, with at most `limit` requests waiting beyond the busy servers.
+    #[must_use]
+    pub const fn limited(self, limit: Option<u32>) -> ServiceModelSpec {
+        ServiceModelSpec {
+            queue_limit: limit,
+            ..self
         }
     }
 
@@ -97,6 +111,10 @@ pub struct ServiceQueue {
     /// arrival can be forgotten; what is left is the queue.
     finishing: std::collections::VecDeque<SimTime>,
     servers: u32,
+    /// Requests that may wait beyond the busy servers (`None`: unlimited).
+    limit: Option<u32>,
+    /// Requests turned away because the queue was at its limit.
+    refused: u64,
 }
 
 impl ServiceQueue {
@@ -110,7 +128,31 @@ impl ServiceQueue {
             waited_ns: 0,
             finishing: std::collections::VecDeque::new(),
             servers: spec.servers.max(1),
+            limit: spec.queue_limit,
+            refused: 0,
         }
+    }
+
+    /// The model it was built from (without the batching, which its entity applies).
+    pub const fn spec(&self) -> ServiceModelSpec {
+        ServiceModelSpec::new(self.servers, self.fixed_overhead).limited(self.limit)
+    }
+
+    /// Whether a request arriving at `t` finds the queue full: every server busy and
+    /// `queue_limit` requests already waiting. Always false without a limit.
+    pub fn is_full_at(&self, t: SimTime) -> bool {
+        self.limit
+            .is_some_and(|l| self.depth_at(t) >= self.servers as usize + l as usize)
+    }
+
+    /// Counts a request turned away as busy.
+    pub const fn refuse(&mut self) {
+        self.refused += 1;
+    }
+
+    /// How many requests it turned away as busy.
+    pub const fn refused(&self) -> u64 {
+        self.refused
     }
 
     /// How many requests are in service or waiting at `t`: admitted and not yet finished.

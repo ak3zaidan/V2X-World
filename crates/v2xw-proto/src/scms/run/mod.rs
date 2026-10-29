@@ -1901,6 +1901,19 @@ impl ScmsRun {
         {
             return Ok(());
         }
+        // A server whose queue is at its limit (`capacity.<role>.queue_limit`, 08 §6)
+        // turns a device's request away, as an overloaded HTTP front end answers 503:
+        // the request is gone and the device finds out by timing out and retrying
+        // (SCMS-522/523, `EeRetryTimer`). Only a request from outside the provider is
+        // turned away (a device's, or one the proxy relays); one component's message to
+        // another waits in the queue as before.
+        if d.from != d.to
+            && (d.from == state.nodes.lop || state.devices.contains_key(&d.from))
+            && kernel.is_full_at(d.to, d.at)
+        {
+            kernel.refuse(d.to);
+            return Ok(());
+        }
         let profile = kernel.profile_of(d.to);
         let mut out = state.outbox(profile, d.to, d.at);
         let (at, to) = (d.at, d.to);

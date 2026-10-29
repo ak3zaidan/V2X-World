@@ -533,6 +533,36 @@ Each role takes:
 * C2a: keys, `ServiceQueue` limit, refusal and retry path, tests 2 and 4.
 * C2b: per-provider wiring for peer entities, tests 1, 3 and 5, and the form words.
 
+**Status, C2a (2026-10-29): built.** `ServiceModelSpec::queue_limit` and
+`ServiceQueue::is_full_at`/`refuse`/`refused`/`spec`, plus `Kernel::is_full_at`/`refuse`,
+carry the limit. `ScmsRun::step` turns a request away when it comes from outside the
+provider (a device's, or one the proxy relays) and arrives with every worker busy and
+`queue_limit` requests already waiting. It is dropped, as an overloaded HTTP front end
+answers 503, and the device finds out through its existing SCMS-522 timeout and retries
+within the SCMS-523 cap. A message from one component to another still waits. Choice
+(§9 rule): the plan leaves open what happens to a component's message at a full queue.
+Dropping it would lose protocol state that real services keep in their own retry queues
+(the `fault` model's edge case 3d), so it waits. The count is `refused_busy` on the
+entity's `QueueView` (`backend.state`), left out of the record while zero.
+`apply_capacity` (now `pub`) re-hosts every named role's servers on every provider's run,
+with the block's fields over the present model and profile. The loader refuses three
+combinations: `capacity.<role>.service` together with that role's
+`actors.backend.entities.*.service_model` (naming both), `fifo-1` with `workers` other than
+1, and any capacity under `nodes.backend_tier: abstract`. The plan had the form only grey
+these fields, but a setting silently overridden is a check that cannot fail, so the loader
+refuses it instead. A role no provider runs is refused at build. `providers[].capacity`
+stays refused until C2b. Defaults are unchanged: 4 workers, 1 ms, unlimited (ASSUMPTION).
+Tests: `tests/scms_capacity.rs` (accept tests 2 and 4). Test 2 uses a 44-request burst in 20
+ms against 1 worker and 10 places. The plan's 500-request burst went past the machine's
+4.5 GB memory cap. Each device starts at its own keyed offset.
+
+Finding: with every device starting at the same instant on identical links, 40 of 44
+devices were turned away for 6 h. SCMS-522 retries carry no jitter, so the devices retried
+in lockstep and reached the RA in the same order every time. Real access legs desynchronise
+devices, so the test jitters the start. A lockstep fleet (for example, every vehicle waking
+at one CRL or top-up boundary) would show this herd. Adding access-latency jitter to the run
+is a candidate for a later piece.
+
 ---
 
 ## 7. Gap 3: a declarative, pluggable MA policy and a family sweep

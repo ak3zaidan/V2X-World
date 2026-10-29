@@ -105,10 +105,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     },
     KeyStatus {
         path: CAPACITY,
-        status: Status::Refused,
-        note: "Not built yet (08-settings-ux-and-gaps §6, piece C2a): any capacity is \
-               refused; every server keeps 4 workers, 1 ms overhead and an unlimited queue \
-               (ASSUMPTION).",
+        status: Status::Wired,
+        note: "Each named role's servers on every provider: workers, per-request overhead, \
+               queue limit (a device request past it is turned away as busy and retried \
+               after ee_retry_timeout_s) and service discipline (08 §6). Unset fields keep \
+               today's 4 workers, 1 ms and an unlimited queue (ASSUMPTION: no provider \
+               publishes its capacity).",
     },
     KeyStatus {
         path: PROV_CAPACITY,
@@ -422,17 +424,15 @@ static SERVICE_MENU: &[Opt] = &[
     Opt {
         value: "mmc",
         label: "Workers in parallel (M/M/c)",
-        description: "Each request goes to the first free worker, as today's backend serves. \
-                      Not built yet as a setting (08 §6, piece C2a).",
-        available: false,
+        description: "Each request goes to the first free worker, as today's backend serves \
+                      (ASSUMPTION: no provider publishes how its servers are pooled).",
+        available: true,
     },
     Opt {
         value: "fifo-1",
         label: "One at a time (M/M/1)",
-        description: "One worker serves requests in arrival order. Not built yet as a \
-                      setting (08 §6, piece C2a); actors.backend.entities.*.service_model \
-                      offers it today.",
-        available: false,
+        description: "One worker serves requests in arrival order; the same as workers: 1.",
+        available: true,
     },
 ];
 
@@ -619,18 +619,85 @@ fn capacity_refusals(s: &Scenario, e: &mut Vec<ScenarioError>) {
         return;
     };
     let v = json!(d.capacity);
+    let mut malformed = false;
     for leaf in module_keys::leaves(&v, CAPACITY, CAPACITY, &[CAPACITY], &map_keys, e) {
-        e.push(module_keys::malformed(&leaf).unwrap_or_else(|| {
-            module_keys::not_built(
-                &leaf,
-                "docs/design/scms-real/08-settings-ux-and-gaps.md §6, piece C2a",
-                "leave it unset; every server keeps today's 4 workers and 1 ms",
-            )
-        }));
+        if let Some(err) = module_keys::malformed(&leaf) {
+            malformed = true;
+            e.push(err);
+        }
+    }
+    if !malformed {
+        capacity_conflicts(s, &d.capacity, CAPACITY, e);
     }
     for p in &d.providers {
         provider_refusals(p, Group::Capacity, e);
     }
+}
+
+/// The entity name `actors.backend.entities` uses for a deployment role (the ACA is
+/// CAMP's PCA there).
+fn entity_of(role: &str) -> &str {
+    if role == "aca" { "pca" } else { role }
+}
+
+/// What a capacity block cannot be run with: one worker under `fifo-1` only, not with
+/// the same role's `actors.backend.entities.*.service_model`, and not under the
+/// abstract tier, which gives every server 64 workers and no overhead.
+fn capacity_conflicts(
+    s: &Scenario,
+    capacity: &std::collections::BTreeMap<String, crate::scenario::schema::CapacitySpec>,
+    at: &str,
+    e: &mut Vec<ScenarioError>,
+) {
+    if !capacity.is_empty() && s.nodes.backend_tier == v2xw_core::card::Tier::Abstract {
+        e.push(ScenarioError::conflict(
+            at,
+            "is set with nodes.backend_tier: abstract, which gives every server 64 workers \
+             and no overhead; leave one of them"
+                .to_string(),
+        ));
+    }
+    for (role, c) in capacity {
+        if c.service.as_deref() == Some("fifo-1")
+            && let Some(n) = c.workers.filter(|n| *n != 1)
+        {
+            e.push(ScenarioError::conflict(
+                &format!("{at}.{role}.workers"),
+                format!("is {n} with service: fifo-1, which is one worker; leave one of them"),
+            ));
+        }
+        let entity = entity_of(role);
+        if c.service.is_some()
+            && s.actors
+                .backend
+                .entities
+                .get(entity)
+                .is_some_and(|x| x.service_model.is_some())
+        {
+            e.push(ScenarioError::conflict(
+                &format!("{at}.{role}.service"),
+                format!(
+                    "is set together with actors.backend.entities.{entity}.service_model; \
+                     both choose how the {role} serves, so set one of them"
+                ),
+            ));
+        }
+    }
+}
+
+/// `spec` with a capacity block's fields over it; a field left unset keeps the spec's.
+fn with_capacity(
+    spec: v2xw_proto::ServiceModelSpec,
+    c: &crate::scenario::schema::CapacitySpec,
+) -> v2xw_proto::ServiceModelSpec {
+    let servers = match c.service.as_deref() {
+        Some("fifo-1") => 1,
+        _ => c.workers.unwrap_or(spec.servers),
+    };
+    let overhead = c.overhead_ms.map_or(spec.fixed_overhead, |ms| {
+        v2xw_core::time::Duration::from_nanos((ms * 1e6).round() as u64)
+    });
+    v2xw_proto::ServiceModelSpec::new(servers, overhead).limited(c.queue_limit.or(spec.queue_limit))
 }
 
 /// Every refusal of the topology keys, in document order.
@@ -725,15 +792,50 @@ pub(crate) fn ica_levels(p: &ProviderSpec, _provider: &mut Provider) -> Result<(
 }
 
 /// `security.scms.deployment.capacity` and `providers[].capacity` onto every provider's
-/// run, once each exists (`phase2`, after the peer runs are built). The default, all
-/// unset, keeps each server as `actors.backend` and the tier left it.
+/// run, once each exists (`phase2`, after the peer runs are built; `runs[k]` is provider
+/// `k`'s). Each server of a named role is hosted afresh with the block's fields over its
+/// present model and profile; the default, all unset, keeps each server as
+/// `actors.backend` and the tier left it.
 ///
 /// # Errors
-/// The first refusal of a capacity key.
-pub(crate) fn apply_capacity(s: &Scenario, _runs: &mut [ScmsRun]) -> Result<()> {
+/// The first refusal of a capacity key, and a role no provider runs.
+pub fn apply_capacity(s: &Scenario, runs: &mut [ScmsRun]) -> Result<()> {
     let mut e = Vec::new();
     capacity_refusals(s, &mut e);
-    first(e)
+    first(e)?;
+    let Some(d) = s.security.scms.as_ref().and_then(|x| x.deployment.as_ref()) else {
+        return Ok(());
+    };
+    for (role, c) in &d.capacity {
+        let mut hosted = 0;
+        for (k, run) in runs.iter_mut().enumerate() {
+            let nodes: Vec<_> = run
+                .state
+                .deployment
+                .nodes(k)
+                .instances
+                .into_iter()
+                .filter(|(r, _, _)| r == role)
+                .map(|(_, _, n)| n)
+                .collect();
+            for node in nodes {
+                let Some(q) = run.kernel.queue(node) else {
+                    continue;
+                };
+                let spec = with_capacity(q.spec(), c);
+                let profile = run.kernel.profile_of(node);
+                run.kernel.host(node, &spec, profile);
+                hosted += 1;
+            }
+        }
+        if hosted == 0 && !runs.is_empty() {
+            return Err(EngineError::Scenario(ScenarioError::conflict(
+                &format!("{CAPACITY}.{role}"),
+                format!("names a {role}, which no provider runs as a server"),
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -774,6 +876,8 @@ mod tests {
         assert!(refused(json!({})).is_empty());
         assert!(refused(provider(json!({"ica_levels": 1}))).is_empty());
         assert!(refused(json!({"capacity": {"ra": {}}})).is_empty());
+        assert!(refused(json!({"capacity": {"ra": {"queue_limit": 10}}})).is_empty());
+        assert!(refused(json!({"capacity": {"crlg": {"service": "mmc"}}})).is_empty());
         let at = "security.scms.deployment.providers.provider-a";
         assert!(refused(provider(json!({"site": "gcp-us-west1"}))).is_empty());
         assert!(
@@ -791,14 +895,6 @@ mod tests {
             (
                 provider(json!({"ica_levels": 2})),
                 format!("{at}.ica_levels"),
-            ),
-            (
-                json!({"capacity": {"ra": {"queue_limit": 10}}}),
-                "security.scms.deployment.capacity.ra.queue_limit".to_string(),
-            ),
-            (
-                json!({"capacity": {"crlg": {"service": "mmc"}}}),
-                "security.scms.deployment.capacity.crlg.service".to_string(),
             ),
         ];
         for (deployment, path) in cases {
@@ -868,7 +964,7 @@ mod tests {
             crate::phase2::deployment_of(&scenario(provider(json!({"ica_levels": 1}))), true)
                 .is_ok()
         );
-        let s = scenario(json!({"capacity": {"ra": {"workers": 1}}}));
+        let s = scenario(provider(json!({"capacity": {"ra": {"workers": 1}}})));
         assert!(apply_capacity(&s, &mut []).is_err());
         assert!(apply_capacity(&scenario(json!({})), &mut []).is_ok());
     }
