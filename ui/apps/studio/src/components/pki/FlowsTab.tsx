@@ -11,6 +11,7 @@
  * sent nor received are drawn faint and cannot be opened, because it never saw them.
  */
 
+import { modelledMessage } from "../../lib/modelledMessages.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
@@ -172,6 +173,43 @@ function Sequence({
   );
 }
 
+/** For a message the engine sends without encoding it: what it carries, part by part, with an example. */
+function ModelledParts({ name, total }: { readonly name: string; readonly total: number }): React.JSX.Element {
+  const m = modelledMessage(name);
+  if (m === null) return <p className="faint">The engine counts this message's bytes but does not encode it.</p>;
+  const fixed = m.parts.reduce((a, p) => a + (p.bytes ?? 0), 0);
+  const rest = Math.max(0, total - fixed);
+  const varying = m.parts.filter((p) => p.bytes === null).length;
+  return (
+    <div className="pki-modelled" data-testid="pki-msg-modelled">
+      <p>{m.purpose}</p>
+      <table className="pki-modelled-parts">
+        <thead>
+          <tr>
+            <th>What is sent</th>
+            <th className="num">Bytes</th>
+            <th>Example</th>
+          </tr>
+        </thead>
+        <tbody>
+          {m.parts.map((p, i) => (
+            <tr key={i}>
+              <td>{p.part}</td>
+              <td className="num mono">{p.bytes ?? (varying === 1 && rest > 0 ? rest : "varies")}</td>
+              <td className="mono dim">{p.example}</td>
+            </tr>
+          ))}
+          <tr className="pki-modelled-total">
+            <td>Total sent</td>
+            <td className="num mono">{total}</td>
+            <td className="faint">Modelled: sizes from the protocol, no encoded bytes to decode.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function MessageCard({
   record,
   view,
@@ -210,7 +248,7 @@ function MessageCard({
             {piggyback(record)}
           </p>
         ) : null}
-        {pdus.length === 0 ? <p className="faint" title="A backend control message whose bytes the engine counts but does not encode">No secured message inside.</p> : null}
+        {pdus.length === 0 ? <ModelledParts name={record.name} total={record.bytes ?? 0} /> : null}
         <ul className="pki-pdus">
           {pdus.map((p) => {
             const t = pduText(p.type);
