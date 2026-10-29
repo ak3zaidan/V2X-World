@@ -805,11 +805,7 @@ impl BsmGenerator {
     /// rather than bursting. On the 100 ms grid with a 100 ms interval the two rules send
     /// at the same checks.
     pub fn check(&mut self, now: SimTime, dcc: &DccState) -> Option<GenReason> {
-        let interval = self
-            .params
-            .nominal_itt
-            .max(dcc.t_off)
-            .clamp(self.params.min_itt, self.params.max_itt);
+        let interval = self.interval(dcc);
         let reason = match self.due_anchor {
             None => GenReason::First,
             Some(anchor) => {
@@ -827,6 +823,41 @@ impl BsmGenerator {
         self.last_tx = Some(now);
         self.msg_count = (self.msg_count + 1) % 128;
         Some(reason)
+    }
+
+    /// The interval [`BsmGenerator::check`] measures from the previous BSM's due instant:
+    /// the nominal period stretched by the DCC gap and kept inside `[min_itt, max_itt]`.
+    pub fn interval(&self, dcc: &DccState) -> Duration {
+        self.params
+            .nominal_itt
+            .max(dcc.t_off)
+            .clamp(self.params.min_itt, self.params.max_itt)
+    }
+
+    /// The instant the previous BSM was due, `None` before the first.
+    pub fn due_anchor(&self) -> Option<SimTime> {
+        self.due_anchor
+    }
+
+    /// The J2945/1 interval bounds, `(min_itt, max_itt)`.
+    pub fn itt_bounds(&self) -> (Duration, Duration) {
+        (self.params.min_itt, self.params.max_itt)
+    }
+
+    /// A BSM at an instant the caller chose (`due`, e.g. aligned to a sidelink
+    /// reservation, WP-34), sent at the check at `now`: the same counting as
+    /// [`BsmGenerator::check`], with the next interval measured from `due`. The caller has
+    /// already kept `due` inside the interval bounds ([`BsmGenerator::itt_bounds`]).
+    pub fn fire_at(&mut self, now: SimTime, due: SimTime) -> GenReason {
+        let reason = if self.due_anchor.is_none() {
+            GenReason::First
+        } else {
+            GenReason::Periodic
+        };
+        self.due_anchor = Some(due);
+        self.last_tx = Some(now);
+        self.msg_count = (self.msg_count + 1) % 128;
+        reason
     }
 }
 

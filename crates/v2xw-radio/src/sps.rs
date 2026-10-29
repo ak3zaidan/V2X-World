@@ -594,6 +594,24 @@ struct UeState {
     /// SDUs dropped for their latency budget and not yet handed back to the caller, which
     /// owns whatever the SDU refers to and has to release it.
     expired: Vec<MacSdu>,
+    /// Selections this UE has run: it changes on every (re)selection, which is how an
+    /// application aligned to the reservation learns that it moved (WP-34).
+    selections: u64,
+}
+
+/// A UE's next reserved occasion, for an application that generates its periodic message
+/// just before it (WP-34: SAE J3161/1's alignment of the BSM to the SPS reservation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ReservedOccasion {
+    /// The slot the reservation fires in next.
+    pub slot: u64,
+    /// The instant that slot begins.
+    pub at: SimTime,
+    /// The reservation period.
+    pub period: Duration,
+    /// The UE's selection count when this reservation was made
+    /// ([`SpsEngine::selections_of`]): a new value is a reselection.
+    pub selection: u64,
 }
 
 /// `mac/lte-v2x/sps-sensing` and `mac/nr-v2x/sps-sensing`: the shared engine.
@@ -675,6 +693,7 @@ impl SpsEngine {
             dropped: 0,
             granted: 0,
             expired: Vec::new(),
+            selections: 0,
         })
     }
 
@@ -1255,6 +1274,7 @@ impl SpsEngine {
             retx,
         });
         st.last_selection = Some(outcome);
+        st.selections += 1;
         self.selections += 1;
         *self.by_reason.entry(reason).or_insert(0) += 1;
         Some(outcome)
@@ -1407,6 +1427,41 @@ impl SpsEngine {
                     .slot_start(a.into_iter().chain(b).min().unwrap_or(0)),
             ),
         }
+    }
+}
+
+/// What an application aligned to the reservation reads (WP-34).
+impl SpsEngine {
+    /// The UE's next reserved occasion at or after `now_slot`, whether or not a transport
+    /// block is waiting for it (unlike [`SpsEngine::next_grant_at`]). A reservation the
+    /// engine has not rolled forward yet (no block came round for it) is projected by
+    /// whole periods, as the poll would roll it. `None` with no reservation, or with a
+    /// one-shot one (no period).
+    #[must_use]
+    pub fn next_reserved_at(&self, node: NodeId, now_slot: u64) -> Option<ReservedOccasion> {
+        let st = self.ues.get(&node.index())?;
+        let res = st.reservation?;
+        if res.rri_slots == 0 {
+            return None;
+        }
+        let slot = if res.next_slot >= now_slot {
+            res.next_slot
+        } else {
+            let behind = now_slot - res.next_slot;
+            res.next_slot + behind.div_ceil(res.rri_slots) * res.rri_slots
+        };
+        Some(ReservedOccasion {
+            slot,
+            at: self.pool.slot_start(slot),
+            period: Duration::from_nanos(self.pool.slot().as_nanos() * res.rri_slots),
+            selection: st.selections,
+        })
+    }
+
+    /// How many selections this UE has run (each one a new reservation).
+    #[must_use]
+    pub fn selections_of(&self, node: NodeId) -> u64 {
+        self.ues.get(&node.index()).map_or(0, |s| s.selections)
     }
 }
 
@@ -2796,5 +2851,60 @@ mod tests {
             }
         }
         assert!(first_half > 0);
+    }
+
+    /// WP-34: the next reserved occasion is the reservation's slot while it is ahead, one
+    /// period later after the UE transmitted on it, and projected by whole periods when no
+    /// block came round to roll it; with no reservation there is none.
+    #[test]
+    fn the_next_reserved_occasion_follows_the_reservation_and_its_period() {
+        let mut e = engine(SpsParams::molina_masegosa(10));
+        let mut ctx = TestCtx::new(17);
+        let node = NodeId::new(3);
+        assert_eq!(e.next_reserved_at(node, 0), None, "no reservation yet");
+        Mac::enqueue(&mut e, &mut ctx, node, sdu(150, 0), AccessCategory::Vo).expect("fits");
+        let first = grant_slot(&mut e, &mut ctx, node, 0);
+        let occ = e.next_reserved_at(node, first).expect("reserved");
+        assert_eq!(occ.slot, first + 100, "one RRI after the grant");
+        assert_eq!(occ.at, e.pool().slot_start(first + 100));
+        assert_eq!(occ.period, Duration::from_millis(100));
+        assert_eq!(occ.selection, 1);
+        assert_eq!(e.selections_of(node), 1);
+        // Nothing came for two periods: the occasion is projected, not left in the past.
+        let later = e.next_reserved_at(node, first + 250).expect("reserved");
+        assert_eq!(later.slot, first + 300);
+        assert_eq!(
+            e.next_reserved_at(node, first + 300).map(|o| o.slot),
+            Some(first + 300)
+        );
+    }
+
+    /// WP-34: every reselection is visible as a new selection count, whatever triggered
+    /// it: here a transport block too large for the reservation (TS 36.321 §5.14.1.1).
+    #[test]
+    fn a_reselection_shows_as_a_new_selection_count() {
+        let mut e = engine(SpsParams::molina_masegosa(10));
+        let mut ctx = TestCtx::new(9);
+        let node = NodeId::new(1);
+        Mac::enqueue(&mut e, &mut ctx, node, sdu(150, 0), AccessCategory::Vo).expect("fits");
+        let first = grant_slot(&mut e, &mut ctx, node, 0);
+        let before = e.next_reserved_at(node, first).expect("reserved");
+        let t = e.pool().slot_start(first + 1);
+        Mac::enqueue(&mut e, &mut ctx, node, sdu(250, t), AccessCategory::Vo).expect("fits");
+        let second = grant_slot(&mut e, &mut ctx, node, first + 1);
+        assert_eq!(
+            e.last_selection(node).map(|s| s.reason),
+            Some(SelectionReason::SizeChange)
+        );
+        let after = e.next_reserved_at(node, second).expect("reserved");
+        assert_eq!(after.selection, before.selection + 1);
+        assert_eq!(after.slot, second + 100);
+        // Counter expiry with probResourceKeep = 0 releases the reservation: no occasion
+        // until the next block selects again.
+        let c = e.reservation(node).expect("reserved").c_resel;
+        for _ in 0..c {
+            e.on_transmitted(&mut ctx, node);
+        }
+        assert_eq!(e.next_reserved_at(node, second), None);
     }
 }

@@ -871,6 +871,21 @@ trustworthy or comparable; later waves add behaviours and radio features.
 | 7 | WP-19, WP-20, WP-21 | M, M, M |
 | 8 | WP-22, WP-23, WP-24 | M, S, M |
 
+### WP-25 onwards (build plans in `wp25-plus-build-plans.md`)
+
+**WP-34 SPS-aligned BSM generation for LTE-V2X** (M, 2 pieces). Closes the matrix row
+`lte-latency-budget`. Plan: `wp25-plus-build-plans.md` §WP-34.
+- P34.1 (2026-10-28): done, nothing wired, no run changes. `SpsEngine::next_reserved_at`
+  (the next reserved slot, projected by whole periods when no block came round) and a
+  per-UE selection count (`selections_of`, `ReservedOccasion::selection`) that changes on
+  every reselection. `MessageSchedule::align_to(at, period, dcc)`: the next periodic BSM is
+  due at the first `at + k·period` at or after the last due instant plus the current
+  interval (`vMinITT` at least, the DCC stretch honoured), clamped to `vMaxITT`; an aligned
+  BSM fires at the first check within `ALIGN_TOLERANCE` (0.5 ms, clock drift) of its
+  instant. `ProfileServiceModel::service_time_bound` (the upper edge of a ranged cost) and
+  `ObuRuntime::sign_time_bound`/`align_bsm` give the engine the lead. Unit tests: 3 in
+  `generate.rs`, 2 in `sps.rs`, 1 in `server.rs`; six faults shown red.
+
 ## 3. Deferred and dropped
 
 **Deferred** (useful, but lower value per effort, or waiting on an input):
