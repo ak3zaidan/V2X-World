@@ -13,6 +13,8 @@
  * Framework- and DOM-free (`test/pki-cert.test.ts`).
  */
 
+import { vehicleName } from "./pkiNames.js";
+
 // ---------------------------------------------------------------------------------------------
 // The status vocabulary
 // ---------------------------------------------------------------------------------------------
@@ -178,7 +180,7 @@ export function whySentence(c: Pick<CertLike, "trace" | "time32">, v: Validity |
   if (!f) return null;
   if (f.rule === "validity") {
     if (v && v.end === v.start) {
-      return `It was issued with a lifetime of zero, so it was never valid: every receiver's time check fails${c.time32 !== null && c.time32 > v.end ? ` (its window closed ${spanWords(c.time32 - v.end)} ago)` : ""}.`;
+      return `It was issued with a lifetime of zero, so it was never valid: every receiver's time check fails${c.time32 !== null && c.time32 > v.end ? ` (its window closed ${spanWords(c.time32 - v.end)} ago)` : ""}. This is a limit of the simulator in this scenario, not of the vehicle: its compressed calendar asks for a lifetime under one hour, which the engine writes in whole hours, as zero.`;
     }
     if (v && c.time32 !== null && c.time32 > v.end) return `Its validity ended ${spanWords(c.time32 - v.end)} ago; it lasted ${spanWords(v.end - v.start)}.`;
     if (v && c.time32 !== null && c.time32 < v.start) return `It is not valid yet: its validity starts in ${spanWords(v.start - c.time32)}.`;
@@ -378,15 +380,20 @@ export function certFacts(tree: unknown, role: string | null = null): CertFacts 
   const perms = Array.isArray(tbs.appPermissions)
     ? tbs.appPermissions.map((p) => (isObj(p) && typeof p.psid === "number" ? psidText(p.psid) : "?"))
     : [];
-  const issues = Array.isArray(tbs.certIssuePermissions)
-    ? "May issue certificates"
-    : Array.isArray(tbs.certRequestPermissions)
-      ? "May request pseudonym certificates (enrolment)"
-      : null;
+  const kind = certKind(tbs, role);
+  // Request permissions mean different things by holder: an enrolment certificate may ask for
+  // pseudonym certificates; an RA's lets it ask the Pseudonym CA for them on the vehicles' behalf.
+  const requestText =
+    role === "ra" || kind.short === "RA"
+      ? "May request certificates from the Pseudonym CA on the vehicles' behalf"
+      : kind.short === "EC" || role === null || role === "ee"
+        ? "May request pseudonym certificates (enrolment)"
+        : "May make certificate requests";
+  const issues = Array.isArray(tbs.certIssuePermissions) ? "May issue certificates" : Array.isArray(tbs.certRequestPermissions) ? requestText : null;
   const sig = firstKey(t.signature);
   const vki = firstKey(tbs.verifyKeyIndicator);
   return {
-    kind: certKind(tbs, role),
+    kind,
     subject,
     issuer,
     validity: validityOf(tbs),
@@ -476,11 +483,12 @@ export function chainLinks(
   });
 }
 
-/** A device id in plain words: `ee/1000000` is "Vehicle 1000000", `rsu/3` "Roadside unit 3". */
-export function deviceName(device: string): string {
-  const m = /^(ee|obu|rsu)\/(\w+)$/.exec(device);
-  if (!m) return device;
-  return m[1] === "rsu" ? `Roadside unit ${m[2]}` : `Vehicle ${m[2]}`;
+/**
+ * A device id in the studio's one naming (`lib/pkiNames.ts`): `ee/1000066` is "Vehicle 66" (its
+ * simulation node, as the map and the HUD call it), `rsu/3` "Roadside unit 3".
+ */
+export function deviceName(device: string, node?: number | null): string {
+  return vehicleName(device, node);
 }
 
 /** A HashedId8 in groups of four, which reads and compares more easily than sixteen digits. */

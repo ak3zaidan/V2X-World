@@ -27,7 +27,9 @@ import {
 } from "../../lib/pkiRecords.js";
 import { beatNow, caseHeadline, caseSteps, storyBeats, STAGE_HELP, STAGE_STORY } from "../../lib/pkiCases.js";
 import { deviceName } from "../../lib/pkiCert.js";
+import { GlossText } from "../pki/GlossText.js";
 import { Term } from "../pki/Term.js";
+import { VehicleName } from "../pki/VehicleName.js";
 import { usePki, usePkiView } from "./state.js";
 import { Locked } from "./VehiclesTab.js";
 
@@ -136,7 +138,7 @@ function CaseRow({ c, selected, onSelect }: { readonly c: CaseView; readonly sel
         <span className="faint">
           {c.truth ? (
             <span data-testid="pki-case-parties">
-              accused {c.truth.accused.map((a) => deviceName(a.device)).join(", ") || "unknown"} · {c.truth.reporters.length} reporter
+              accused {c.truth.accused.map((a) => deviceName(a.device, a.node)).join(", ") || "unknown"} · {c.truth.reporters.length} reporter
               {c.truth.reporters.length === 1 ? "" : "s"}
             </span>
           ) : (
@@ -177,17 +179,17 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
           <span>
             accused{" "}
             {c.truth.accused.map((a) => (
-              <b key={a.device} title={a.device}>
-                {deviceName(a.device)}
+              <b key={a.device}>
+                <VehicleName device={a.device} node={a.node} testId="pki-case-accused" />
                 {a.provider ? ` (${a.provider})` : ""}{" "}
               </b>
             ))}
           </span>
-          <span className="faint" title={c.truth.reporters.map((r) => `${r.device}${r.provider ? ` (${r.provider})` : ""}: ${r.reports} report${r.reports === 1 ? "" : "s"}`).join(", ")}>
+          <span className="faint" title={c.truth.reporters.map((r) => `${deviceName(r.device, r.node)}, device ${r.device}${r.provider ? ` (${r.provider})` : ""}: ${r.reports} report${r.reports === 1 ? "" : "s"}`).join(", ")}>
             reported by {c.truth.reporters.length} vehicle{c.truth.reporters.length === 1 ? "" : "s"}:{" "}
             {c.truth.reporters
               .slice(0, 6)
-              .map((r) => `${deviceName(r.device)} (${r.reports} report${r.reports === 1 ? "" : "s"})`)
+              .map((r) => `${deviceName(r.device, r.node)} (${r.reports} report${r.reports === 1 ? "" : "s"})`)
               .join(", ")}
             {c.truth.reporters.length > 6 ? ` +${c.truth.reporters.length - 6}` : ""}
           </span>
@@ -203,19 +205,33 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
                 <span className="faint pki-stage-term" title={STAGE_HELP[s.stage]?.term}>
                   {s.label}
                 </span>
-                {s.reached && s.t !== null ? <span className="mono faint">{secondsText(s.t)}</span> : <span className="faint">not reached</span>}
-                {s.waitNs !== null && s.waitNs >= 5e7 ? <span className="mono faint">{secondsText(s.waitNs)} after the step before</span> : null}
+                {s.reached && s.t !== null ? (
+                  s.waitNs === null ? (
+                    <span className="mono faint">at {secondsText(s.t)}</span>
+                  ) : (
+                    <span className="mono faint" title={`at ${secondsText(s.t)}`}>
+                      {s.waitNs < 5e7 ? "at once" : `+${secondsText(s.waitNs)}`}
+                    </span>
+                  )
+                ) : (
+                  <span className="faint">not reached</span>
+                )}
               </div>
               {STAGE_STORY[s.stage] ? <div className="pki-stage-says">{STAGE_STORY[s.stage].says}</div> : null}
               {s.detail ? <div className="faint pkir-step-detail">{s.detail}</div> : null}
               {s.learned.length > 0 ? (
-                <ul className="pkir-learned" data-testid="pki-case-learned">
-                  {s.learned.map((l, k) => (
-                    <li key={k}>
-                      <b>{l.who}</b> learns {l.what}
-                    </li>
-                  ))}
-                </ul>
+                <details className="pki-learned-fold">
+                  <summary className="faint" data-testid="pki-case-learned-toggle">
+                    Privacy: who learns what ({s.learned.length} fact{s.learned.length === 1 ? "" : "s"})
+                  </summary>
+                  <ul className="pkir-learned" data-testid="pki-case-learned">
+                    {s.learned.map((l, k) => (
+                      <li key={k}>
+                        <b>{l.who}</b> learns <GlossText text={l.what} />
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               ) : null}
               {s.messages.length > 0 ? <StepMessages messages={s.messages} /> : null}
             </div>
@@ -286,16 +302,29 @@ function StepMessageList({ messages }: { readonly messages: readonly CaseStep[] 
  */
 function Story({ c }: { readonly c: CaseView }): React.JSX.Element {
   const beats = storyBeats(c);
+  const t0 = stageTimes(c).find((s) => s.stage === "reports-in")?.t ?? stageTimes(c)[0]?.t ?? null;
+  // Each beat at its simulated time, and how long it took after the beat before: where the time went.
+  let prev: number | null = null;
   return (
     <ol className="pki-story" data-testid="pki-case-story" aria-label="The case in four steps">
-      {beats.map((b) => (
-        <li key={b.key} className={b.done ? "done" : "todo"} data-beat={b.key}>
-          <span className="pki-story-dot" aria-hidden="true" />
-          <b>{b.title}</b>
-          <span className="mono">{b.done && b.at !== null ? (b.key === "reports-in" ? "first report" : b.at < 5e7 ? "at once" : `+${secondsText(b.at)}`) : "not yet"}</span>
-          {b.note ? <span className="faint">{b.note}</span> : null}
-        </li>
-      ))}
+      {beats.map((b) => {
+        const at = b.done && b.at !== null && t0 !== null ? t0 + b.at : null;
+        const step = at !== null && prev !== null ? at - prev : null;
+        if (at !== null) prev = at;
+        return (
+          <li key={b.key} className={b.done ? "done" : "todo"} data-beat={b.key}>
+            <span className="pki-story-dot" aria-hidden="true" />
+            <b>{b.title}</b>
+            <span className="mono" data-testid="pki-story-at">
+              {at === null ? "not yet" : `at ${secondsText(at)}`}
+            </span>
+            <span className="faint mono" data-testid="pki-story-step">
+              {at === null ? "" : step === null ? "the first report" : step < 5e7 ? "at once" : `+${secondsText(step)} after the step before`}
+            </span>
+            {b.note ? <span className="faint">{b.note}</span> : null}
+          </li>
+        );
+      })}
     </ol>
   );
 }

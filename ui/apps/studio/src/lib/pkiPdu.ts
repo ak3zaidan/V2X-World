@@ -160,6 +160,36 @@ export function wordsOf(name: string): string {
   return name.replace(/[-_]+/g, " ");
 }
 
+/** How a message travelled, in words: `cellular-uu` is "cellular (Uu)", the LTE/5G link to the network. */
+export function transportText(transport: string): string {
+  switch (transport) {
+    case "cellular-uu":
+      return "cellular (Uu: the vehicle's LTE/5G link to the network)";
+    case "backend-net":
+      return "the authorities' backend network";
+    case "rsu-backhaul":
+      return "a roadside unit's wired backhaul";
+    case "pc5":
+    case "air":
+      return "the safety radio channel";
+    default:
+      return transport.replace(/-/g, " ");
+  }
+}
+
+/**
+ * Why one message carries more than one secured message, when it is the known case: a vehicle's
+ * misbehaviour report travels with its next certificate download request, one upload to the RA.
+ */
+export function piggyback(r: { readonly flow?: string; readonly pdus?: readonly { readonly type: string }[] }): string | null {
+  const types = (r.pdus ?? []).map((p) => p.type);
+  if (types.length < 2) return null;
+  const report = types.some((t) => /Misbeh?aviou?rReport/i.test(t));
+  const download = types.some((t) => /Download/i.test(t));
+  if (report && download) return "Why two: the report rides with the vehicle's next certificate download request, so one upload to the RA carries both.";
+  return null;
+}
+
 /** A label cut to `max` characters with an ellipsis; the full text stays in the tooltip. */
 export function fitLabel(text: string, max: number): string {
   if (text.length <= max) return text;

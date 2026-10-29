@@ -12,6 +12,7 @@
  * Framework- and DOM-free (`test/pki-topology.test.ts`).
  */
 
+import { vehicleName } from "./pkiNames.js";
 import { GROUND_TRUTH, type PkiComponent, type PkiProvider, type PkiState, type TrustAnswer } from "./pki.js";
 
 // ---------------------------------------------------------------------------------------------
@@ -130,7 +131,7 @@ export function roleShort(role: string): string | null {
  */
 export function componentName(id: string, withProvider = false): string {
   const dev = /^(ee|obu|rsu)\/(\w+)$/.exec(id);
-  if (dev) return dev[1] === "rsu" ? `Roadside unit ${dev[2]}` : `Vehicle ${dev[2]}`;
+  if (dev) return vehicleName(id);
   const [provider, role, n] = id.split("/");
   if (!role) return id;
   const info = roleInfo(role);
@@ -348,11 +349,21 @@ const REGION_HEAD = 34;
 const PAD = 14;
 const GOV_H = 64;
 const GAP = 16;
-/** A region narrower than this cannot hold six columns of nodes. */
-const MIN_REGION_W = 6 * NODE_W + 5 * 8 + 2 * PAD;
+/**
+ * The narrowest node regions may have and still sit side by side: wide enough for "Pseudonym CA"
+ * on one line, so two providers fit next to each other at a 1280 px window instead of stacking
+ * the second below the fold.
+ */
+const MIN_SIDE_NODE_W = 88;
+/** A region narrower than this cannot sit beside another. */
+const MIN_REGION_W = 6 * MIN_SIDE_NODE_W + 5 * 8 + 2 * PAD;
 /** The narrowest node, and so the narrowest region, the diagram draws (wider scrolls). */
 export const MIN_NODE_W = 76;
 const MIN_STACKED_W = 6 * MIN_NODE_W + 5 * 8 + 2 * PAD;
+/** The width from which `n` providers sit side by side. */
+export function sideBySideFrom(n: number): number {
+  return n * MIN_REGION_W + (n - 1) * GAP;
+}
 
 function linkKey(a: string, b: string): string {
   return a < b ? `${a}|${b}` : `${b}|${a}`;
@@ -367,7 +378,7 @@ function linkKey(a: string, b: string): string {
 export function layoutTopology(state: PkiState, width: number, messages: readonly TrustMessage[] = []): Topology {
   const providers = state.providers;
   const n = Math.max(1, providers.length);
-  const sideBySide = n > 1 && width >= n * MIN_REGION_W + (n - 1) * GAP;
+  const sideBySide = n > 1 && width >= sideBySideFrom(n);
   const regionW = Math.max(MIN_STACKED_W, sideBySide ? (width - (n - 1) * GAP) / n : width);
   // Nodes shrink to fit a narrow region (down to MIN_NODE_W), never grow past NODE_W.
   const nodeW = Math.max(MIN_NODE_W, Math.min(NODE_W, (regionW - 2 * PAD - 5 * 8) / 6));
@@ -429,6 +440,9 @@ export function layoutTopology(state: PkiState, width: number, messages: readonl
     const idOf = (role: string): string[] =>
       role === "devices" ? [`devices/${p.label}`] : nodes.filter((nd) => nd.provider === p.label && nd.role === role && nd.kind === "component").map((nd) => nd.id);
     for (const [ra, rb] of DEFINED_LINKS) for (const a of idOf(ra)) for (const b of idOf(rb)) add(a, b, true);
+    // The Location Obscurer Proxy is optional: a provider without one has its devices reach the
+    // RA directly, which is the architecture's own path, not an irregular one.
+    if (idOf("lop").length === 0) for (const b of idOf("ra")) add(`devices/${p.label}`, b, true);
   }
   for (const m of messages) {
     const a = nodeOf(m.from, m.to, m.provider);
@@ -593,8 +607,10 @@ export interface Health {
   readonly pending: number;
   /** Misbehaviour cases opened and not yet enforced or refused. */
   readonly openCases: number | null;
-  /** Seconds since the newest revocation list was issued, per provider, the oldest of them; null before any. */
+  /** Seconds since the newest revocation list (of any provider) was issued; null before any. */
   readonly crlAgeS: number | null;
+  /** Whose list that newest one is, and its version. */
+  readonly crlNewest: { readonly provider: string; readonly version: number } | null;
   /** Whether a provider's newest list is past its nextCrl. */
   readonly crlOverdue: boolean;
   /**
@@ -629,12 +645,17 @@ export function healthOf(
   let age: number | null = null;
   let overdue = false;
   let due: number | null = null;
+  let newestList: { provider: string; version: number } | null = null;
   for (const p of s.providers) {
     const mine = s.crls.filter((h) => h.provider === p.label);
     if (mine.length === 0) continue;
     const newest = mine.reduce((a, b) => (b.issued_at > a.issued_at ? b : a));
     const a = Math.max(0, (trust.t_ns - newest.issued_at) / 1e9);
-    age = age === null ? a : Math.max(age, a);
+    // The newest list across providers: the one a reader asks "how fresh is revocation" about.
+    if (age === null || a < age) {
+      age = a;
+      newestList = { provider: p.label, version: newest.version };
+    }
     if (newest.sla_s < 0) overdue = true;
     due = due === null ? newest.sla_s : Math.min(due, newest.sla_s);
   }
@@ -654,6 +675,7 @@ export function healthOf(
     pending,
     openCases: open,
     crlAgeS: age,
+    crlNewest: newestList,
     crlOverdue: overdue,
     crlDueS: due,
     vehicles: vehicles ? vehicles.length : null,
@@ -712,7 +734,10 @@ export const COUNTER_TEXT: Readonly<Record<string, CounterText>> = {
   successors_refused: { label: "Replacement enrolment certificates refused" },
   batches_held: { label: "Pseudonym batches ready for download" },
   clipped_to_policy: { label: "Requests trimmed to the policy's limits" },
-  enrolled_devices: { label: "Devices registered with it" },
+  enrolled_devices: {
+    label: "Devices registered with it now",
+    means: "Devices whose enrolment it holds at this moment; “vehicles enrolled” counts every enrolment over the run, including vehicles that have since left",
+  },
   files_served: { label: "Policy files served to devices" },
   jobs_pending: { label: "Certificate jobs waiting at the Pseudonym CA (ACA)" },
   refused_blocklisted: { label: "Requests refused: device blocklisted" },
@@ -737,9 +762,9 @@ export const COUNTER_TEXT: Readonly<Record<string, CounterText>> = {
   cases: { label: "Cases opened in total" },
   certificates_issued: { label: "Certificates issued" },
   decisions: { label: "Decisions taken (revoke or not)" },
-  enrolments: { label: "Vehicles enrolled" },
+  enrolments: { label: "Vehicles enrolled over the run", means: "Every enrolment since the run began, including vehicles that have left the run" },
   la_id: { label: "Its Linkage Authority number", means: "1 or 2: which half of every linkage value it supplies" },
-  opened_reports: { label: "Misbehaviour reports it decrypted" },
+  opened_reports: { label: "Misbehaviour reports it has decrypted", means: "Reports it has opened with its own key; one received a moment ago may not be opened yet" },
   per_certificate_handles: { label: "Request handles it keeps, one per certificate", means: "What lets the RA, asked by the MA, find the enrolment certificate behind a pseudonym, without the ACA learning it" },
   plvs_issued: { label: "Pre-linkage values issued", means: "Its encrypted halves of linkage values (PLVs), one per certificate" },
   refused: { label: "Requests refused" },
@@ -748,6 +773,37 @@ export const COUNTER_TEXT: Readonly<Record<string, CounterText>> = {
   successors: { label: "Replacement enrolment certificates issued" },
   enrolment_certificates_issued: { label: "Enrolment certificates issued" },
 };
+
+/**
+ * Counters that count the same thing under two names (the component's own counter and its
+ * knowledge record's): a card lists the first it has and leaves the other under "engine counters
+ * (raw)". A key not here is its own concept.
+ */
+const COUNTER_CONCEPT: Readonly<Record<string, string>> = {
+  reports_received: "reports-in",
+  reports: "reports-in",
+  requests_accepted: "requests",
+  requests: "requests",
+  blocklisted: "blocklist",
+  blocklist: "blocklist",
+  successors_issued: "successors",
+  successors: "successors",
+  plv_issued: "plvs",
+  plvs_issued: "plvs",
+  certs_issued: "certs",
+  certificates_issued: "certs",
+  enrolment_certs_issued: "ecs",
+  enrolment_certificates_issued: "ecs",
+  cases_total: "cases",
+  cases: "cases",
+  open_cases: "open",
+  cases_open: "open",
+};
+
+/** The concept a counter counts, so a card shows one number for it. */
+export function counterConcept(key: string): string {
+  return COUNTER_CONCEPT[key] ?? key;
+}
 
 /** Counters never listed with the readable ones: the card shows them another way. */
 const COUNTER_HIDDEN = new Set(["certificate", "case_open", "cadence_s"]);

@@ -26,6 +26,7 @@ import { engine } from "../state/engine.js";
 import { useStudio } from "../state/store.js";
 import { OVERLAY_SOURCES } from "../lib/provenance.js";
 import { LayersIcon } from "../shell/Icons.js";
+import { MapModeLayerRow } from "./pki-records/RecordsTabs.js";
 
 type Group = "radio" | "security" | "map";
 
@@ -166,6 +167,7 @@ export function OverlayMenu(): React.JSX.Element {
             </div>
           ) : null}
           <div className="menu-rule" />
+          <MapModeLayerRow />
           <label
             className="layer-row"
             title="How street-level views are lit. The map view is always drawn in daylight so the streets stay readable."

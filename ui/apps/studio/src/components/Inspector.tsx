@@ -36,7 +36,7 @@ import { int, radioBreakdown, radioSentence, shortDigest, simClock } from "../li
 import { SPARKLINE_SERIES, hasData, hudGroups, queueRows, type HudField } from "../lib/telemetry.js";
 import { hasPkiPool, linkText, pseudonymLine, signingStatus, untilText } from "../lib/security.js";
 import { CertBadge } from "./pki/CertStatus.js";
-import { openVehicle } from "./pki-records/state.js";
+import { chooseTab, openVehicle } from "./pki-records/state.js";
 import { openPanel } from "../shell/route.js";
 import { vehicleHealth } from "../lib/vehicleHealth.js";
 
@@ -158,6 +158,18 @@ function EmptyState(): React.JSX.Element {
               </>
             ) : null}
           </dl>
+          <button
+            type="button"
+            className="pkir-link"
+            onClick={() => {
+              chooseTab("vehicles");
+              openPanel("backend");
+            }}
+            data-testid="inspector-empty-certificates"
+            title="Every vehicle's certificates, the authorities that issue them, misbehaviour cases and revocation lists (needs a scenario with the US certificate system)"
+          >
+            Certificates of this run ›
+          </button>
         </div>
       ) : null}
     </div>
@@ -307,7 +319,7 @@ function Overview(): React.JSX.Element {
               data-testid="inspector-pki-pool"
               title="Its i × j certificate pool, pseudonym history and the active certificate's validation, in the PKI view"
             >
-              Certificate pool in the PKI view ›
+              Its certificates in the certificate system ›
             </button>
           ) : null,
         ]}
@@ -486,7 +498,8 @@ export function Inspector({ onClose }: { onClose: () => void }): React.JSX.Eleme
 
   const info = selectedNode !== null ? engine.nodes.get(selectedNode) : undefined;
   const kind = info?.kind === 2 ? "Roadside unit" : info?.kind === 1 ? "Pedestrian device" : "Vehicle";
-  const label = selectedNode !== null ? `${kind} ${info?.label || `node ${selectedNode}`}` : "Vehicle details";
+  // A node with no label of its own is named by its number ("Vehicle 46"), as the HUD and every certificate view name it.
+  const label = selectedNode !== null ? `${kind} ${info?.label && !/^node \d+$/.test(info.label) ? info.label : String(selectedNode)}` : "Vehicle details";
   const line = pseudonymLine(security, pseudonym);
 
   // Focus moves into the dialog when it opens, so Escape and the tab keys work at once. Closing it

@@ -104,7 +104,7 @@ test("Trust domain: providers, offline chain, CTL, activity, component card and 
   }
   // Electors are offline; the CTL line names its sequence and roots.
   await expect(panel.getByTestId("pki-comp-scms-manager/elector/0")).toHaveAttribute("data-status", "offline");
-  await expect(panel.getByTestId("pki-ctl")).toContainText("CTL seq 0 · 2 roots");
+  await expect(panel.getByTestId("pki-ctl")).toContainText("CTL version 0 · 2 roots");
   await panel.getByTestId("pki-ctl-history-toggle").click();
   await expect(panel.getByTestId("pki-ctl-history").locator("tbody tr")).toHaveCount(1);
 

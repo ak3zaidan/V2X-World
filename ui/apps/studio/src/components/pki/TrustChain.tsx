@@ -154,11 +154,42 @@ function ProviderChain({
 export function TrustChain({ state, onSelect, selected }: { readonly state: PkiState; readonly onSelect: (id: string) => void; readonly selected: string | null }): React.JSX.Element {
   const ctl = state.ctl;
   const issuers = useIssuers(state);
+  // The diagram above already draws every authority; who certifies whom is one click away.
+  const [open, setOpen] = useState(false);
+  const trusted = state.providers.filter((p) => p.on_ctl).length;
   return (
-    <section className="pki-trustchain" data-testid="pki-trustchain" aria-label="How trust flows">
-      <h3 className="pki-section-title">
-        How trust flows <span className="dim">who vouches for whom: a device accepts a certificate only if this chain holds, end to end</span>
-      </h3>
+    <section className="pki-trustchain" data-testid="pki-trustchain" aria-label="How trust flows" data-open={open ? "1" : "0"}>
+      <div className="pki-tc-summary">
+        <button type="button" className="linklike pki-tc-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="pki-trustchain-toggle">
+          {open ? "▾" : "▸"} How trust flows: who certifies whom
+        </button>
+        <span className="dim" data-testid="pki-trustchain-summary">
+          {trusted === state.providers.length
+            ? `Each provider's root is on the trust list: all ${state.providers.length} root${state.providers.length === 1 ? "" : "s"} trusted`
+            : `${trusted} of ${state.providers.length} providers' roots are on the trust list`}{" "}
+          · trust list (CTL) version {ctl.sequence}, endorsed by {ctl.signers.length} of {ctl.electors} electors ({ctl.quorum} needed)
+        </span>
+      </div>
+      {open ? <TrustChainBody state={state} issuers={issuers} onSelect={onSelect} selected={selected} /> : null}
+    </section>
+  );
+}
+
+function TrustChainBody({
+  state,
+  issuers,
+  onSelect,
+  selected,
+}: {
+  readonly state: PkiState;
+  readonly issuers: ReadonlyMap<string, string | null>;
+  readonly onSelect: (id: string) => void;
+  readonly selected: string | null;
+}): React.JSX.Element {
+  const ctl = state.ctl;
+  return (
+    <>
+      <p className="dim pki-tc-says">A device accepts a certificate only if this chain holds, end to end: the trust list names a root, the root certifies the intermediate, and so on down.</p>
       <div className="pki-tc-ctl">
         <span className="pki-tc-box ctl" title="The certificate trust list (CTL): the roots every device trusts, signed by a quorum of electors">
           <b>Trust list (CTL)</b>
@@ -174,6 +205,6 @@ export function TrustChain({ state, onSelect, selected }: { readonly state: PkiS
         The Enrolment CA (ECA) then issues each vehicle its enrolment certificate, and the Pseudonym CA (ACA) its pseudonym certificates; a receiver checks
         a pseudonym certificate back up this chain to a root the trust list names.
       </p>
-    </section>
+    </>
   );
 }

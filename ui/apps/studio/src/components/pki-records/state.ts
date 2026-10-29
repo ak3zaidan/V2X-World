@@ -10,6 +10,7 @@ import { create } from "zustand";
 
 import { engine } from "../../state/engine.js";
 import { useStudio } from "../../state/store.js";
+import { noteDeviceNodes } from "../../lib/pkiNames.js";
 import { GROUND_TRUTH, type PkiMapMode } from "../../lib/pkiRecords.js";
 
 export type PkiTab = "trust" | "flows" | "vehicles" | "cases" | "crls";
@@ -113,6 +114,8 @@ export function usePki(
     const ask = async (): Promise<void> => {
       try {
         const answer = await engine.request("inspect.pki", params, { quiet: true, timeoutMs: 5000 });
+        // Every answer that pairs a device with its node teaches the one naming (`lib/pkiNames.ts`).
+        noteDeviceNodes(answer);
         if (live) {
           setData(answer);
           setError(null);

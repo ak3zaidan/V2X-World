@@ -14,24 +14,30 @@
 import { useMemo, useState } from "react";
 
 import { CERT_STATUS, VEHICLE_STATE, cellStatus, deviceName, grouped } from "../../lib/pkiCert.js";
+import { vehicleMatches } from "../../lib/pkiNames.js";
 import {
   CELL_LABEL,
   CREDENTIAL_LABEL,
   CREDENTIAL_ORDER,
   GROUND_TRUTH,
+  asCases,
   asCrls,
   asVehicle,
   asVehicles,
   credentialState,
   fullGrid,
+  installedList,
+  installedListText,
   overdueProviders,
   providerColor,
+  revocationStory,
   secondsText,
   slaText,
   type CellState,
   type CredCell,
   type CredentialContext,
   type CredentialState,
+  type CrlHead,
   type VehicleDetail,
   type VehicleRow,
 } from "../../lib/pkiRecords.js";
@@ -39,7 +45,8 @@ import { CertificateCard, CertLink } from "../pki/CertificateCard.js";
 import { useCertStatus } from "../pki/useCert.js";
 import { CertBadge, StatusGlyph } from "../pki/CertStatus.js";
 import { Term } from "../pki/Term.js";
-import { usePki, usePkiView } from "./state.js";
+import { VehicleName } from "../pki/VehicleName.js";
+import { chooseTab, usePki, usePkiView } from "./state.js";
 import { VehicleTimeline } from "./VehicleTimeline.js";
 
 const CELL_PX = 14;
@@ -65,19 +72,52 @@ function uniform<T>(rows: readonly VehicleRow[], f: (r: VehicleRow) => T): { rea
   return { same: rows.every((r) => f(r) === v), value: v };
 }
 
-function crlCell(r: VehicleRow): string {
-  return r.security?.crl_version !== undefined ? `v${r.security.crl_version}` : "none";
+function crlTitle(r: VehicleRow, heads: readonly CrlHead[] | undefined): string {
+  const l = installedList(r.security, heads);
+  if (!l) return "No revocation list installed";
+  return `${l.provider ? `${l.provider}'s` : "A"} revocation list, version ${l.version}, ${l.entries} entr${l.entries === 1 ? "y" : "ies"}${l.provider ? " (matched to the published list by version and entry count)" : ""}`;
 }
 
-function crlTitle(r: VehicleRow): string {
-  const n = r.security?.crl_entries ?? 0;
-  return r.security?.crl_version !== undefined ? `Revocation list version ${r.security.crl_version}, ${n} entr${n === 1 ? "y" : "ies"}` : "No revocation list installed";
+/** Pseudonym certificates it can sign with now (the Metrics "valid certificates held"), and with the weeks downloaded ahead. */
+function poolOf(r: Pick<VehicleRow, "usable" | "security" | "periods_ahead">): { readonly now: number; readonly withAhead: number; readonly ahead: number } {
+  const now = typeof r.security?.pool_valid === "number" ? r.security.pool_valid : r.usable;
+  return { now, withAhead: Math.max(now, r.usable), ahead: r.periods_ahead ?? 0 };
+}
+
+function aheadText(weeks: number): string {
+  return `${weeks} week${weeks === 1 ? "" : "s"} ahead`;
+}
+
+/** A vehicle's certificates in the table: valid now, then with the weeks ahead; a revoked vehicle's are held but refused. */
+function PoolCell({ r, revoked }: { readonly r: VehicleRow; readonly revoked: boolean }): React.JSX.Element {
+  const p = poolOf(r);
+  if (revoked)
+    return (
+      <td className="faint" data-testid="pki-vehicle-pool" data-revoked="1" title="It still holds these, but a published revocation list names it, so receivers refuse every one of them">
+        <span className="mono">{p.withAhead}</span> held · refused
+      </td>
+    );
+  return (
+    <td
+      data-testid="pki-vehicle-pool"
+      title={`${p.now} valid now: what it can sign with this week. ${p.withAhead} including the ${aheadText(p.ahead)} it has already downloaded.${r.provisioned ? "" : " It has not downloaded any pseudonym certificates yet."}`}
+    >
+      <b className="mono">{p.now}</b> now
+      {p.withAhead > p.now ? (
+        <span className="faint">
+          {" "}
+          · <span className="mono">{p.withAhead}</span> incl. {aheadText(p.ahead)}
+        </span>
+      ) : null}
+    </td>
+  );
 }
 
 export function VehiclesTab({ view }: { readonly view: string | null }): React.JSX.Element {
   const node = usePkiView((s) => s.node);
   const set = usePkiView((s) => s.set);
   const [only, setOnly] = useState<CredentialState | null>(null);
+  const [find, setFind] = useState("");
   const gt = view === GROUND_TRUTH;
   const list = asVehicles(usePki(view ? { topic: "vehicles", view } : null).data);
   const crls = asCrls(usePki({ topic: "crls" }, 4000).data);
@@ -100,19 +140,30 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
   const rank = (r: VehicleRow): number => CREDENTIAL_ORDER.indexOf(stateOf.get(r.device) ?? "healthy");
   // Problems first, then routine work, then the vehicles that are fine, then those that left.
   const sorted = [...all].sort((a, b) => rank(a) - rank(b) || a.node - b.node);
-  const rows = only === null ? sorted : sorted.filter((r) => stateOf.get(r.device) === only);
+  const rows = (only === null ? sorted : sorted.filter((r) => stateOf.get(r.device) === only)).filter((r) => vehicleMatches(find, r.device, r.node));
   const chosen = all.find((r) => r.node === node) ?? null;
   const counts = new Map<CredentialState, number>();
   for (const st of stateOf.values()) counts.set(st, (counts.get(st) ?? 0) + 1);
-  // Columns that never differ are one sentence, not a column of copies.
+  // Columns that never differ are one sentence, not a column of copies. A vehicle that left the run
+  // has no next top-up, so the top-up column is judged on the vehicles still driving.
+  const heads = crls?.crls;
+  const driving = all.filter((r) => stateOf.get(r.device) !== "left");
+  const now = list?.t_ns ?? 0;
   const ctl = uniform(all, (r) => r.ctl_sequence ?? null);
-  const crl = uniform(all, crlCell);
+  // The lists and top-ups of the vehicles still driving: one that left keeps its last record, and a
+  // revoked one is blocked from top-ups (its card and its state say so), so neither unfolds a column.
+  const crl = uniform(driving, (r) => installedListText(installedList(r.security, heads)));
+  const topup = uniform(
+    driving.filter((r) => stateOf.get(r.device) !== "revoked"),
+    (r) => nextTopup(r, now),
+  );
   const enrolled = uniform(all, (r) => r.enrolled);
   const allEnrolled = all.length > 0 && enrolled.same && enrolled.value === true;
   const same: string[] = [];
   if (allEnrolled) same.push("enrolled with its provider");
   if (all.length > 0 && ctl.same) same.push(ctl.value === null ? "no trust list (CTL) reported" : `trust list (CTL) version ${String(ctl.value)}`);
-  if (all.length > 0 && crl.same) same.push(crl.value === "none" ? "no revocation list (CRL) installed" : `${crlTitle(all[0]).replace(/^Revocation list/, "revocation list (CRL)")} installed`);
+  if (driving.length > 0 && crl.same) same.push(listSentence(installedList(driving[0].security, heads)));
+  if (driving.length > 0 && topup.same && topup.value !== undefined) same.push(`${topupSentence(topup.value)}${(counts.get("revoked") ?? 0) > 0 ? " (revoked vehicles get none)" : ""}`);
   return (
     <div className={chosen ? "pkir-split" : "pkir-split single"} data-testid="pki-vehicles">
       <div className="pkir-table-wrap">
@@ -123,7 +174,14 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
         </p>
         {all.length > 0 ? (
           <div className="pkir-pad pki-vsummary" data-testid="pki-vehicles-summary" role="group" aria-label="Show only the vehicles in one state">
-            <button type="button" className={only === null ? "pki-chip on" : "pki-chip"} aria-pressed={only === null} onClick={() => setOnly(null)} data-testid="pki-chip-all">
+            <button
+              type="button"
+              className={only === null ? "pki-chip on" : "pki-chip"}
+              aria-pressed={only === null}
+              onClick={() => setOnly(null)}
+              data-testid="pki-chip-all"
+              title={`The ${all.length} vehicles with a certificate record. The strip's device count also includes roadside units, which hold certificates but are not listed here.`}
+            >
               All <b className="mono">{all.length}</b>
             </button>
             {CREDENTIAL_ORDER.filter((s) => (counts.get(s) ?? 0) > 0).map((s) => (
@@ -144,20 +202,36 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
         ) : null}
         {same.length > 0 ? (
           <p className="pkir-pad faint" data-testid="pki-vehicles-same">
-            Every vehicle: {same.join(" · ")}.
+            Every vehicle{(counts.get("left") ?? 0) > 0 ? " still in the run" : ""}: {same.join(" · ")}.
           </p>
+        ) : null}
+        {all.length > 0 ? (
+          <label className="pkir-pad pki-vfind">
+            <span className="dim">Find a vehicle</span>
+            <input
+              type="search"
+              value={find}
+              onChange={(e) => setFind(e.target.value)}
+              placeholder="66, or its device id"
+              aria-label="Find a vehicle by its number on the map or its device id"
+              title="The number the map and the HUD show (Vehicle 66), or the SCMS device id the certificate records use (1000066)"
+              data-testid="pki-vehicle-find"
+            />
+          </label>
         ) : null}
         <table className="pkir-table pki-vtable" data-testid="pki-vehicles-table">
           <thead>
             <tr>
-              <th>Vehicle</th>
+              <th title="Its number on the map and in the HUD, with its SCMS device id under it">Vehicle</th>
               <th title="Its credential state, in the same shapes and colours as every certificate; problems are listed first">State</th>
               <th>Provider</th>
               {allEnrolled ? null : <th title="Holds an enrolment certificate from its provider's ECA">Enrolled</th>}
-              <th title="Pseudonym certificates it can sign with now, and (+) how many weeks ahead it has downloaded">Usable</th>
-              <th title="When it next asks its RA for a batch">Next top-up</th>
+              <th title="Pseudonym certificates (PCs) valid now: what it can sign with this week, the same count as Metrics' “valid pseudonym certificates held”. Then the same including the weeks it has already downloaded ahead.">
+                Pseudonym certificates
+              </th>
+              {topup.same ? null : <th title="When it next asks its RA for a batch">Next top-up</th>}
               {ctl.same ? null : <th title="The certificate trust list (CTL) version it holds">Trust list</th>}
-              {crl.same ? null : <th title="The certificate revocation list (CRL) it installed">Revocation list</th>}
+              {crl.same ? null : <th title="The certificate revocation list (CRL) it installed, and whose list it is">Revocation list</th>}
               <th title="Pseudonym certificates it has signed with so far">Pseudonyms used</th>
             </tr>
           </thead>
@@ -167,6 +241,7 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
               const st = r.node === node ? withEc(st0, ec, r.enrolled) : st0;
               const gone = st === "left";
               const cls = [r.node === node ? "sel" : "", gone ? "left" : ""].filter(Boolean).join(" ");
+              const lst = installedList(r.security, heads);
               return (
                 <tr
                   key={r.device}
@@ -184,7 +259,9 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
                   data-node={r.node}
                   data-state={st}
                 >
-                  <td title={`${r.device} · simulation node ${r.node}`}>{deviceName(r.device)}</td>
+                  <td>
+                    <VehicleName device={r.device} node={r.node} testId="pki-vehicle-name" />
+                  </td>
                   <td>
                     <VehicleStateBadge st={st} testId="pki-vehicle-state" />
                   </td>
@@ -193,18 +270,12 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
                     {r.provider}
                   </td>
                   {allEnrolled ? null : <td>{r.enrolled ? "yes" : "no"}</td>}
-                  <td
-                    className="mono"
-                    title={`${r.usable} usable now; ${r.periods_ahead ?? 0} week(s) downloaded past this one${r.provisioned ? "" : "; it has not downloaded any pseudonym certificates yet"}`}
-                  >
-                    {r.usable}
-                    <span className="faint"> +{r.periods_ahead ?? 0} wk</span>
-                  </td>
-                  <td className="mono">{gone ? "–" : nextTopup(r, list?.t_ns ?? 0)}</td>
+                  <PoolCell r={r} revoked={st === "revoked"} />
+                  {topup.same ? null : <td className="mono">{gone ? "–" : nextTopup(r, now)}</td>}
                   {ctl.same ? null : <td className="mono">{r.ctl_sequence ?? "–"}</td>}
                   {crl.same ? null : (
-                    <td className="mono" title={crlTitle(r)}>
-                      {crlCell(r)}
+                    <td title={crlTitle(r, heads)} data-testid="pki-vehicle-crl">
+                      {installedListText(lst)}
                     </td>
                   )}
                   <td className="mono">{r.pseudonym_changes + (r.active ? 1 : 0)}</td>
@@ -216,22 +287,53 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
         {all.length === 0 ? (
           <p className="dim pkir-pad">No vehicle has published its credentials yet: each vehicle reports its certificates once a simulated second after it enters the run.</p>
         ) : rows.length === 0 ? (
-          <p className="dim pkir-pad">No vehicle is in that state now.</p>
+          <p className="dim pkir-pad">{find.trim() ? `No vehicle${only ? " in that state" : ""} matches “${find.trim()}”.` : "No vehicle is in that state now."}</p>
         ) : null}
         <p className="faint pkir-pad">
           {gt ? "Ground truth: “revoked” includes vehicles a published CRL revokes that have not installed it yet." : `As ${deviceName(view)}: only what that vehicle holds.`}
         </p>
       </div>
       {chosen ? (
-        <VehicleCard device={chosen.device} view={gt ? GROUND_TRUTH : chosen.device} state={stateOf.get(chosen.device) ?? "healthy"} row={chosen} nowNs={list?.t_ns ?? 0} ec={ec} />
+        <VehicleCard
+          device={chosen.device}
+          view={gt ? GROUND_TRUTH : chosen.device}
+          state={stateOf.get(chosen.device) ?? "healthy"}
+          row={chosen}
+          nowNs={list?.t_ns ?? 0}
+          ec={ec}
+          heads={heads ?? null}
+        />
       ) : null}
     </div>
   );
 }
 
+/** The installed list in the "Every vehicle" sentence. */
+function listSentence(l: ReturnType<typeof installedList>): string {
+  if (!l) return "no revocation list (CRL) installed";
+  return `has installed ${l.provider ? `${l.provider}'s ` : "the "}revocation list (CRL) version ${l.version} (${l.entries} entr${l.entries === 1 ? "y" : "ies"})`;
+}
+
+/** The next top-up in the "Every vehicle" sentence. */
+function topupSentence(v: string): string {
+  if (v === "none") return "no top-up planned";
+  if (v === "due" || v === "in flight") return `next pseudonym top-up ${v}`;
+  if (v === "–") return "no top-up reported";
+  return `next pseudonym top-up ${v}`;
+}
+
+/**
+ * An enrolment certificate issued with a lifetime of zero is the engine's rounding of a lifetime
+ * under one hour (a scenario's compressed calendar), not the vehicle's fault: it is shown as a
+ * simulator limitation and does not decide the vehicle's state.
+ */
+function ecFails(ec: { readonly status: string; readonly zeroLifetime?: boolean }): boolean {
+  return !(ec.status === "valid" || ec.status === "expiring" || ec.status === "unknown") && ec.zeroLifetime !== true;
+}
+
 /** A vehicle whose enrolment certificate fails is never "healthy", whatever its pool says. */
-function withEc(state: CredentialState, ec: { readonly status: string }, enrolled: boolean): CredentialState | "ec-bad" {
-  const bad = enrolled && !(ec.status === "valid" || ec.status === "expiring" || ec.status === "unknown");
+function withEc(state: CredentialState, ec: { readonly status: string; readonly zeroLifetime?: boolean }, enrolled: boolean): CredentialState | "ec-bad" {
+  const bad = enrolled && ecFails(ec);
   return bad && (state === "healthy" || state === "between" || state === "topup-due") ? "ec-bad" : state;
 }
 
@@ -255,29 +357,43 @@ function AtAGlance({
   nowNs,
   ec,
   left,
+  heads,
 }: {
   readonly d: VehicleDetail;
   readonly row: VehicleRow;
   readonly nowNs: number;
   readonly ec: ReturnType<typeof useCertStatus>;
   readonly left: boolean;
+  readonly heads: readonly CrlHead[] | null;
 }): React.JSX.Element {
   const a = activeCell(d);
   const thisWeek = d.grid.held.filter((c) => c.i === d.current_i && (c.state === "valid" || c.state === "active")).length;
   const last = [...d.pseudonyms].sort((x, y) => y.since - x.since)[0];
   const revoked = d.revoked || row.security?.self_revoked === true;
   const gtRevoked = (d.truth?.revoked_certs ?? 0) > 0;
-  const ecOk = ec.status === "valid" || ec.status === "expiring" || ec.status === "unknown";
-  const n = row.security?.crl_entries ?? 0;
+  const ecOk = !ecFails(ec);
+  // A lifetime of zero is the engine's rounding (engine request: minutes or seconds), not a fault.
+  const ecLimit = ec.zeroLifetime && ec.status !== "valid" && ec.status !== "expiring" && ec.status !== "unknown";
+  const pool = poolOf({ usable: d.usable, security: row.security, periods_ahead: d.periods_ahead });
+  const validNow = typeof row.security?.pool_valid === "number" ? pool.now : thisWeek;
+  // Which list and which case name it is ground truth: asked only there.
+  const story = useRevocationStory(d.device, d.view === GROUND_TRUTH && (revoked || gtRevoked) ? (d.truth?.revoked_by_crls ?? []) : null, heads);
+  const own = installedList(row.security, heads);
   return (
     <div className="pki-glance" data-testid="pki-vehicle-glance">
-      <div className={ecOk ? "pki-tile" : "pki-tile attn"}>
+      <div className={ecLimit ? "pki-tile limit" : ecOk ? "pki-tile" : "pki-tile attn"} data-testid="pki-glance-ec-tile" data-limit={ecLimit ? "1" : undefined}>
         <span className="k" title="Enrolment certificate (EC): issued once by the provider's Enrolment CA (ECA); proves the vehicle may ask for pseudonym certificates">
           Enrolment certificate (EC)
         </span>
         {d.enrolment ? (
           <span className="pki-tile-cert">
-            <CertBadge status={ec.status} compact testId="pki-glance-ec-status" />
+            {ecLimit ? (
+              <span className="pki-limit-chip" title="A limit of the simulator in this scenario, not a fault of the vehicle" data-testid="pki-glance-ec-limit">
+                <StatusGlyph shape="info" /> simulator limit
+              </span>
+            ) : (
+              <CertBadge status={ec.status} compact testId="pki-glance-ec-status" />
+            )}
             <CertLink id8={d.enrolment} holder={d.device} label={grouped(d.enrolment)} testId="pki-glance-ec" />
           </span>
         ) : (
@@ -286,10 +402,10 @@ function AtAGlance({
         <span className="sub" data-testid="pki-glance-ec-says">
           {!d.enrolled
             ? "not enrolled"
-            : ecOk
-              ? "enrolled with its provider"
-              : ec.zeroLifetime
-                ? "issued with a lifetime of zero, so a receiver's time check reads it as expired (open it)"
+            : ecLimit
+              ? "lifetime not modelled in this scenario (open it for why)"
+              : ecOk
+                ? "enrolled with its provider"
                 : `a receiver reads it as ${CERT_STATUS[ec.status].label.toLowerCase()} (open it)`}
         </span>
       </div>
@@ -325,42 +441,86 @@ function AtAGlance({
           {last && d.active === last.id8 && !left ? ` · since ${secondsText(last.since)}` : last ? ` · last one from ${secondsText(last.since)}` : ""}
         </span>
       </div>
-      <div className="pki-tile">
+      <div className="pki-tile" data-testid="pki-glance-pool" data-revoked={revoked || gtRevoked ? "1" : undefined}>
         <span
           className="k"
-          title={`Pseudonym certificates it can still sign with: what is left of this week's ${d.jmax}, plus the ${d.jmax} a week it has downloaded for the weeks ahead`}
+          title={`Pseudonym certificates it can sign with now: what is left of this week's ${d.jmax}. The second line adds the weeks it has already downloaded ahead.`}
         >
-          Pool
+          Pseudonym certificates
         </span>
-        <b className="mono">{d.usable} usable</b>
-        <span className="sub">
-          {thisWeek} of this week's {d.jmax} left · {d.periods_ahead ?? 0} week{d.periods_ahead === 1 ? "" : "s"} downloaded ahead
-        </span>
+        {revoked || gtRevoked ? (
+          <>
+            <b className="mono dim">{pool.withAhead} held · refused</b>
+            <span className="sub">a published revocation list names this vehicle, so receivers refuse every one of them</span>
+          </>
+        ) : (
+          <>
+            <b className="mono">{validNow} valid now</b>
+            <span className="sub">
+              {thisWeek} of this week's {d.jmax} left
+              {pool.ahead > 0 ? ` · ${pool.withAhead} including the ${aheadText(pool.ahead)}` : " · none downloaded for the weeks ahead yet"}
+            </span>
+          </>
+        )}
       </div>
       <div className="pki-tile">
         <span className="k" title="When it next asks its Registration Authority (RA) for a batch of pseudonym certificates">Next top-up</span>
-        <b className="mono">{left ? "–" : nextTopup(row, nowNs)}</b>
+        <b className="mono">{left ? "–" : revoked || gtRevoked ? "none: blocked" : nextTopup(row, nowNs)}</b>
         <span className="sub">
           {d.pseudonym_changes} pseudonym change{d.pseudonym_changes === 1 ? "" : "s"} so far
         </span>
       </div>
-      <div className="pki-tile">
-        <span className="k" title="Whether a certificate revocation list (CRL) names it">Revocation</span>
-        {revoked ? (
-          <b className="bad">revoked</b>
-        ) : gtRevoked ? (
-          <b className="warn" title="Ground truth: a published list revokes it, but it has not installed that list yet">
-            revoked, not yet heard
-          </b>
+      <div className={revoked || gtRevoked ? "pki-tile attn-bad" : "pki-tile"} data-testid="pki-glance-revocation">
+        <span className="k" title="Whether a certificate revocation list (CRL) names it, and so whether the other vehicles refuse its messages">
+          Revocation
+        </span>
+        {revoked || gtRevoked ? (
+          <>
+            <b className="bad">
+              <StatusGlyph shape="ban" /> revoked
+            </b>
+            <span className="sub" data-testid="pki-glance-revoked-by">
+              {story && story.lists.length > 0
+                ? `on ${story.lists[0].provider}'s list v${story.lists[0].version}, published at ${secondsText(story.lists[0].issued_at)}`
+                : "a published list names it"}
+              {story?.refusing ? ` · ${story.refusing.installed} of ${story.refusing.of} vehicles refuse it` : ""}
+              {story?.caseId ? (
+                <>
+                  {" · "}
+                  <button type="button" className="linklike" onClick={() => openCase(story.caseId as string)} data-testid="pki-glance-case">
+                    {caseLabel(story.caseId)} ›
+                  </button>
+                </>
+              ) : null}
+            </span>
+          </>
         ) : (
-          <b className="ok">not revoked</b>
+          <b className="ok">
+            <StatusGlyph shape="check" /> not revoked
+          </b>
         )}
-        <span className="sub">
-          {row.security?.crl_version !== undefined ? `has list v${row.security.crl_version} (${n} entr${n === 1 ? "y" : "ies"})` : "no list installed"}
+        <span className="sub" data-testid="pki-glance-own-list" title="As a receiver: the list it checks other vehicles' messages against">
+          {own ? `Its own copy of the list: ${installedListText(own)} (${own.entries} entr${own.entries === 1 ? "y" : "ies"})` : "It has not installed a revocation list yet"}
         </span>
       </div>
     </div>
   );
+}
+
+/** "provider-b/case/333" → "case 333". */
+function caseLabel(id: string): string {
+  return `case ${id.split("/").pop() ?? id}`;
+}
+
+function openCase(id: string): void {
+  usePkiView.getState().set({ caseId: id });
+  chooseTab("cases");
+}
+
+/** The lists that revoke a vehicle and its case (ground truth), asked only for a revoked vehicle. */
+function useRevocationStory(device: string, revokedBy: readonly string[] | null, heads: readonly CrlHead[] | null): ReturnType<typeof revocationStory> {
+  const cases = asCases(usePki(revokedBy !== null ? { topic: "cases", view: GROUND_TRUTH } : null, 4000).data);
+  return revokedBy === null ? null : revocationStory(device, revokedBy, heads, cases?.cases ?? null);
 }
 
 function VehicleCard({
@@ -370,6 +530,7 @@ function VehicleCard({
   row,
   nowNs,
   ec,
+  heads,
 }: {
   readonly device: string;
   readonly view: string;
@@ -378,20 +539,21 @@ function VehicleCard({
   readonly nowNs: number;
   /** Its enrolment certificate's state, from the same answer its card reads, so the row, the header and the card agree. */
   readonly ec: ReturnType<typeof useCertStatus>;
+  readonly heads: readonly CrlHead[] | null;
 }): React.JSX.Element {
   const d = asVehicle(usePki({ topic: "vehicle", device, view }, 3000).data);
   const panelNow = usePkiView((s) => s.nowNs);
-  if (!d) return <div className="pkir-card dim">Loading the certificates of {deviceName(device)}…</div>;
+  if (!d) return <div className="pkir-card dim">Loading the certificates of {deviceName(device, row.node)}: its enrolment certificate, pool and history…</div>;
   const left = state === "left";
   const shown = withEc(state, ec, d.enrolled);
   return (
     <div className="pkir-card" data-testid="pki-vehicle-card">
       <h3 className="pki-vehicle-head">
-        <span title={`${d.device} · simulation node ${d.node}`}>{deviceName(d.device)}</span> <span className="dim">· {d.provider}</span>
+        <VehicleName device={d.device} node={d.node} testId="pki-vehicle-card-name" /> <span className="dim">· {d.provider}</span>
         <VehicleStateBadge st={shown} testId="pki-vehicle-card-state" />
       </h3>
       <p className="faint pki-vstate-meaning">{VEHICLE_STATE[shown].meaning}</p>
-      <AtAGlance d={d} row={row} nowNs={nowNs} ec={ec} left={left} />
+      <AtAGlance d={d} row={row} nowNs={nowNs} ec={ec} left={left} heads={heads} />
       <VehicleTimeline d={d} nowNs={Math.max(panelNow, nowNs)} />
       <h4>
         Certificates by week{" "}

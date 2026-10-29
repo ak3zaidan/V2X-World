@@ -561,7 +561,8 @@
 .pki-health .pki-stat { padding: 5px 9px; }
 .pki-stat-main { flex-wrap: nowrap; white-space: nowrap; overflow: hidden; }
 .pki-stat-main > span { overflow: hidden; text-overflow: ellipsis; }
-.pki-stat-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The one-line meaning may take a second line rather than lose its end. */
+.pki-stat-sub { white-space: normal; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 
 /* Topology: node names on one line, the legend above the diagram. */
 .pki-node .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
@@ -611,3 +612,50 @@
 .pki-newer { color: var(--accent); }
 .pki-tree-line { white-space: normal; }
 .pki-beats i { flex: none; width: 100%; }
+
+/* Round 2: one name per vehicle (its node, with the device id under it). */
+.pki-vname { display: inline-flex; flex-direction: column; line-height: 1.15; }
+.pki-vname-sub { font-size: 10px; }
+h3 .pki-vname { flex-direction: row; align-items: baseline; gap: 6px; }
+h3 .pki-vname-sub { font-size: 11px; font-weight: 400; }
+.pki-vfind { display: flex; align-items: center; gap: 8px; margin: 2px 0 6px; font-size: 12px; }
+.pki-vfind input { width: 200px; }
+/* A simulator limitation is neutral: neither a warning nor a pass. */
+.pki-tile.limit { border-style: dashed; }
+.pki-limit-chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border: 1px dashed var(--border-strong); border-radius: 10px; font-size: 10.5px; color: var(--text-dim); white-space: nowrap; }
+.pki-tile.attn-bad { border-color: var(--err); }
+.pki-tile b .pki-glyph { vertical-align: -1px; margin-right: 2px; }
+.pki-tile .sub .linklike { font-size: inherit; padding: 0; }
+/* The diagram: links the architecture does not draw stay thin and grey even when busy. */
+.pki-link.undeclared, .pki-link.undeclared.busy { stroke: var(--text-faint); stroke-width: 1; stroke-dasharray: 4 3; opacity: 0.8; }
+.pki-link-key.solid { border-top-style: solid; border-top-color: var(--border-strong); }
+.pki-link-key.busy { border-top: 3px solid var(--accent); }
+.pki-swatch.outage { background: none; border: 1.5px solid var(--err); border-radius: 2px; }
+/* The chain of trust, folded to one line until it is asked for. */
+.pki-tc-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 12px; }
+.pki-tc-toggle { font-weight: 600; }
+.pki-metrics-link { white-space: nowrap; }
+/* Messages: the examples first, then the newest, reports folded to one line. */
+.pki-flow-group { margin: 8px 0 2px; font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: none; }
+.pki-flow-folded { display: block; margin: 2px 0 4px; font-size: 11.5px; text-align: left; }
+/* Revocation: an open row's versions, indented under it. */
+.pki-crl-versions-row > td { padding: 2px 6px 8px 22px; }
+.pki-crl-versions { background: var(--bg-raised); border-radius: var(--radius); }
+.pki-crltable td, .pki-crltable th { white-space: normal; }
+.pki-crltable td:first-child, .pki-crl-versions td { white-space: nowrap; }
+.pki-nowrap { white-space: nowrap; }
+.pki-provider-rules-one { margin: 0; font-size: 12px; line-height: 1.5; }
+.pkir-truth .pki-vname { flex-direction: row; align-items: baseline; gap: 6px; }
+/* Boxes narrowed to fit two providers side by side keep "Pseudonym CA" whole. */
+.pki-node.narrow .nm { font-size: 10.5px; }
+/* The diagram's corner activity dot sits bottom right, clear of the box's name. */
+.pki-node.pki-comp { padding: 0 4px; }
+.pki-node.pki-comp .pki-dot { top: auto; bottom: 4px; }
+.pki-node.devices .r { flex: none; }
+.pki-devices-line { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A simulator-limit tile: the chip above the certificate id. */
+.pki-tile.limit .pki-tile-cert { flex-direction: column; align-items: flex-start; gap: 2px; }
+/* Decoder: a long byte string folded to its size. */
+.pki-leaf-fold { font-family: var(--sans); font-size: 11px; }
+.pki-leaf-bytes { display: block; word-break: break-all; }
+.pki-learned-fold > summary { cursor: pointer; font-size: 11px; margin-top: 2px; }

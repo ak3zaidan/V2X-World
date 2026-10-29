@@ -12,6 +12,8 @@
  * view's rule for what an entity observed.
  */
 
+import { vehicleName } from "./pkiNames.js";
+
 // ---------------------------------------------------------------------------------------------
 // Shapes (the subset the view reads; every other field is kept on the raw object)
 // ---------------------------------------------------------------------------------------------
@@ -679,7 +681,7 @@ function laneRole(id: string): string {
 }
 
 function laneLabel(id: string): string {
-  if (id.startsWith("ee/")) return `Vehicle ${id.slice(3)}`;
+  if (id.startsWith("ee/")) return vehicleName(id);
   const parts = id.split("/");
   const role = parts[1] ?? id;
   const inst = Number(parts[2] ?? "0");

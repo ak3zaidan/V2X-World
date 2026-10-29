@@ -25,12 +25,39 @@ export function RecordsBody({ tab }: { readonly tab: RecordsTab }): React.JSX.El
   );
 }
 
+/**
+ * The same picker as a row of the map's Layers menu, where the map it colours is in view (the
+ * panel's copy sits over the map). Its legend appears bottom-left once a mode is on.
+ */
+export function MapModeLayerRow(): React.JSX.Element {
+  const mode = usePkiView((s) => s.mapMode);
+  const set = usePkiView((s) => s.set);
+  return (
+    <label className="layer-row" title="Ring each vehicle on the map by its certificate state (healthy, top-up due, revoked…), its provider, or the parties of a misbehaviour case. Needs a scenario with the US certificate system.">
+      <span className="grow">
+        <span className="menu-item-title">Certificates</span>
+        <span className="menu-item-hint">Ring vehicles by their certificates.</span>
+      </span>
+      <select value={mode} onChange={(e) => set({ mapMode: e.target.value as PkiMapMode })} data-testid="layers-pki-map-mode" aria-label="Ring vehicles on the map by">
+        {(Object.keys(MAP_MODE_LABEL) as PkiMapMode[]).map((m) => (
+          <option key={m} value={m}>
+            {MAP_MODE_LABEL[m]}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 /** What the map overlay colours vehicles by. */
 export function MapModePicker(): React.JSX.Element {
   const mode = usePkiView((s) => s.mapMode);
   const set = usePkiView((s) => s.set);
   return (
-    <label className="pkir-picker" title="Colour the vehicles on the map behind this panel: by provider, by credential state, or the chosen case's reporters and accused">
+    <label
+      className="pkir-picker"
+      title="Colour the vehicles on the map behind this panel: by provider, by credential state, or the chosen case's reporters and accused. Close the panel to see the map; the same choice is in the map's Layers menu."
+    >
       <span className="dim">Colour map by</span>
       <select value={mode} onChange={(e) => set({ mapMode: e.target.value as PkiMapMode })} data-testid="pki-map-mode">
         {(Object.keys(MAP_MODE_LABEL) as PkiMapMode[]).map((m) => (
