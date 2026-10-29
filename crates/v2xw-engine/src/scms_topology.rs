@@ -85,9 +85,11 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     },
     KeyStatus {
         path: SITES,
-        status: Status::Refused,
-        note: "Not built yet (08-settings-ux-and-gaps §5, piece C1b): a per-role site is \
-               refused; every role of a provider runs at its region.",
+        status: Status::Wired,
+        note: "Places one role's servers at its own site (08 §5): every link between that \
+               role and the provider's other roles is measured between their points, the \
+               MA-to-MA link from the MA's and the city leg from the RA's. A role the \
+               provider does not run, and custom, are refused.",
     },
     KeyStatus {
         path: LAT,
@@ -434,16 +436,20 @@ static SERVICE_MENU: &[Opt] = &[
     },
 ];
 
-/// The per-role site menu: the site menu, each value refused until per-role sites are
-/// built (08 §5, piece C1b).
+/// Why a role cannot take `custom`: coordinates are the provider's, one pair.
+const ROLE_CUSTOM: &str = "A role takes a catalogue site; for your own coordinates set the \
+                           provider's site to custom with lat_deg and lon_deg.";
+
+/// The per-role site menu: the site menu, with `custom` refused (one coordinate pair per
+/// provider).
 fn per_role_site_menu() -> Vec<Value> {
     SITE_MENU
         .iter()
         .map(|o| {
+            let custom = o.value == CUSTOM_SITE;
             json!({"value": o.value, "label": o.label,
-                   "description": "Not built yet as a per-role site (08 §5, piece C1b); \
-                                   set the provider's site instead.",
-                   "available": false})
+                   "description": if custom { ROLE_CUSTOM } else { o.description },
+                   "available": !custom})
         })
         .collect()
 }
@@ -551,8 +557,14 @@ fn provider_refusals(p: &ProviderSpec, group: Group, e: &mut Vec<ScenarioError>)
         if let Some(err) = module_keys::malformed(&leaf) {
             malformed = true;
             e.push(err);
+        } else if leaf.template == SITES_EACH && leaf.value == json!(CUSTOM_SITE) {
+            malformed = true;
+            e.push(ScenarioError::conflict(
+                &leaf.at,
+                format!("is custom: {ROLE_CUSTOM}"),
+            ));
         } else if !(leaf.template == LEVELS && leaf.value == json!(US_ICA_LEVELS)
-            || [SITE, LAT, LON].contains(&leaf.template.as_str()))
+            || [SITE, LAT, LON, SITES_EACH].contains(&leaf.template.as_str()))
         {
             e.push(module_keys::not_built(&leaf, piece, instead));
         }
@@ -661,16 +673,43 @@ pub(crate) fn apply_sites(p: &ProviderSpec, provider: &mut Provider) -> Result<(
     provider_refusals(p, Group::Sites, &mut e);
     first(e)?;
     let site = match (p.site.as_deref(), p.lat_deg, p.lon_deg) {
-        (None, ..) => return Ok(()),
-        (Some(CUSTOM_SITE), Some(lat), Some(lon)) => Site::custom(lat, lon),
-        (Some(id), ..) => Site::catalogue(id).ok_or_else(|| {
+        (None, ..) => None,
+        (Some(CUSTOM_SITE), Some(lat), Some(lon)) => Some(Site::custom(lat, lon)),
+        (Some(id), ..) => Some(Site::catalogue(id).ok_or_else(|| {
             EngineError::Scenario(ScenarioError::conflict(
                 &format!("security.scms.deployment.providers.{}.site", p.name),
                 format!("'{id}' is not in the site catalogue"),
             ))
-        })?,
+        })?),
     };
-    provider.place(site);
+    if let Some(site) = site {
+        provider.place(site);
+    }
+    place_roles(p, provider)
+}
+
+/// `providers[].sites`: each role onto its own site, once the provider's site is set (a
+/// per-role site overrides it for that role only).
+fn place_roles(p: &ProviderSpec, provider: &mut Provider) -> Result<()> {
+    for (role, id) in &p.sites {
+        let at = format!("security.scms.deployment.providers.{}.sites.{role}", p.name);
+        if provider.count(role) == 0 {
+            return Err(EngineError::Scenario(ScenarioError::conflict(
+                &at,
+                format!(
+                    "{} runs no {role}; a site applies to a role it runs",
+                    provider.name
+                ),
+            )));
+        }
+        let site = Site::catalogue(id).ok_or_else(|| {
+            EngineError::Scenario(ScenarioError::conflict(
+                &at,
+                format!("'{id}' is not in the site catalogue"),
+            ))
+        })?;
+        provider.place_role(role, site);
+    }
     Ok(())
 }
 
@@ -743,11 +782,8 @@ mod tests {
             ))
             .is_empty()
         );
+        assert!(refused(provider(json!({"sites": {"ma": "us-west"}}))).is_empty());
         let cases = [
-            (
-                provider(json!({"sites": {"ma": "us-west"}})),
-                format!("{at}.sites.ma"),
-            ),
             (
                 provider(json!({"capacity": {"ra": {"workers": 4}}})),
                 format!("{at}.capacity.ra.workers"),
@@ -816,16 +852,16 @@ mod tests {
     /// level hooks for every provider, and the capacity hook refuses on its own.
     #[test]
     fn the_build_refuses_without_the_loader() {
-        for fields in [
-            json!({"sites": {"ma": "us-west"}}),
-            json!({"ica_levels": 3}),
+        for (fields, words) in [
+            (json!({"ica_levels": 3}), "not built yet"),
+            (json!({"sites": {"ma": "custom"}}), "is custom"),
+            (json!({"sites": {"lop": "us-west"}}), "runs no lop"),
         ] {
             let s = scenario(provider(fields.clone()));
             let got = crate::phase2::deployment_of(&s, true);
             assert!(
-                got.as_ref()
-                    .is_err_and(|e| e.to_string().contains("not built yet")),
-                "{fields}: deployment_of must refuse it; got {got:?}"
+                got.as_ref().is_err_and(|e| e.to_string().contains(words)),
+                "{fields}: deployment_of must refuse it with '{words}'; got {got:?}"
             );
         }
         assert!(

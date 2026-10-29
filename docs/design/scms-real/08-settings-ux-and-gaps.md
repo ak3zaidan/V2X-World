@@ -444,6 +444,23 @@ provider with no site prints today's manifest line and builds today's `Deploymen
 for A3: guide rows, and the schema doc comments in `schema.rs` that still say "Not built
 yet".
 
+**Status, C1b (2026-10-29): built.** `Provider::sites` (role → `Site`), `Provider::point(role)`
+and `Deployment::between(a, role_a, b, role_b)` carry per-role sites. In the run
+(`scms::run`), every link between two of a provider's nodes costs the leg between their
+roles' points (`role_link`): the backend links, the governance links, the extra ACA links
+and the peer hubs. `inter_provider_latency` is now the MA-to-MA leg between the MAs' points,
+which is what its doc always said, and `city_latency` is measured to the RA, the device's
+front door. With no per-role site every link is the `backend` link itself, so the default
+topology does not change. A role takes a catalogue site. `custom` is refused per role,
+because coordinates are one pair per provider, and its menu row says why. A role the
+provider does not run is refused by `deployment_of` (for example "provider-a runs no
+lop"). The manifest lists each role's site. Test 2 (`scms_sites`): with `sites: {ma:
+us-west}`, a report reaches provider-a's MA 17,525,023 ns later than in the base run
+(Ashburn to Boardman at 2/3 c, less the in-region hop), within 1 µs. Left for A (it is
+`phase2.rs`): the CRL feed's cross-provider lag still uses `inter_provider_latency`, now
+the MA-to-MA leg, instead of a CRL-Generator-to-RA leg. The two differ only when a
+provider places its MA, its CRL Generator or its RA at separate sites.
+
 ---
 
 ## 6. Gap 2: server capacity as settings

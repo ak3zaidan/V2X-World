@@ -633,6 +633,9 @@ pub struct Provider {
     /// The server site it was placed at (`providers[].site`, 08 §5), whose point is then
     /// [`Provider::region`]; `None` keeps the region of the preset or the `region` key.
     pub site: Option<Site>,
+    /// A site per role (`providers[].sites.<role>`, 08 §5), overriding the provider's
+    /// point for that role's servers; empty puts every role at [`Provider::region`].
+    pub sites: BTreeMap<String, Site>,
 }
 
 impl Provider {
@@ -641,6 +644,17 @@ impl Provider {
     pub fn place(&mut self, site: Site) {
         self.region = site.region();
         self.site = Some(site);
+    }
+
+    /// Places `role`'s servers at `site`, leaving its other roles where they are.
+    pub fn place_role(&mut self, role: &str, site: Site) {
+        self.sites.insert(role.to_string(), site);
+    }
+
+    /// The point `role`'s servers run at: its own site, or the provider's.
+    #[must_use]
+    pub fn point(&self, role: &str) -> Region {
+        self.sites.get(role).map_or(self.region, Site::region)
     }
 
     /// How many instances of `role` it runs.
@@ -664,6 +678,7 @@ impl Provider {
             on_ctl: true,
             cert_profile: crate::scms::governance::CertProfile::default(),
             site: None,
+            sites: BTreeMap::new(),
         }
     }
 }
@@ -1082,20 +1097,32 @@ impl Deployment {
     }
 
     /// The one-way latency between providers `a` and `b` (the MA ↔ MA report-sharing
-    /// link): the great-circle distance between their regions.
+    /// link): the great-circle distance between their MAs' points.
     #[must_use]
     pub fn inter_provider_latency(&self, a: usize, b: usize) -> Option<Duration> {
-        let (ra, rb) = (self.providers[a].region, self.providers[b].region);
+        self.between(a, "ma", b, "ma")
+    }
+
+    /// The one-way latency from provider `a`'s `role_a` servers to provider `b`'s `role_b`
+    /// servers: the great-circle distance between their points (08 §5). Two roles at one
+    /// point are one link inside it, [`Deployment::intra_region_latency`].
+    #[must_use]
+    pub fn between(&self, a: usize, role_a: &str, b: usize, role_b: &str) -> Option<Duration> {
+        let (ra, rb) = (
+            self.providers[a].point(role_a),
+            self.providers[b].point(role_b),
+        );
         self.latency.over_km(great_circle_km(
             ra.lat_deg, ra.lon_deg, rb.lat_deg, rb.lon_deg,
         ))
     }
 
-    /// The internet leg from the scenario's city at `(lat, lon)` to provider `k`'s region,
-    /// added after the device's access leg (cellular Uu or RSU backhaul).
+    /// The internet leg from the scenario's city at `(lat, lon)` to provider `k`'s RA (the
+    /// device's front door: every request and report goes to it through the proxy), added
+    /// after the device's access leg (cellular Uu or RSU backhaul).
     #[must_use]
     pub fn city_latency(&self, k: usize, lat_deg: f64, lon_deg: f64) -> Option<Duration> {
-        let r = self.providers[k].region;
+        let r = self.providers[k].point("ra");
         self.latency
             .over_km(great_circle_km(lat_deg, lon_deg, r.lat_deg, r.lon_deg))
     }
@@ -1125,8 +1152,15 @@ impl Deployment {
                 )),
                 Some(s) => out.push(site_assumption(&p.name, "", &s)),
             }
+            for (role, s) in &p.sites {
+                out.push(site_assumption(&p.name, role, s));
+            }
         }
-        if self.providers.iter().any(|p| p.site.is_some()) {
+        if self
+            .providers
+            .iter()
+            .any(|p| p.site.is_some() || !p.sites.is_empty())
+        {
             out.push(site_error_bound(self.latency));
         }
         if self.providers.len() > 1 {

@@ -1,15 +1,20 @@
-//! Exact server locations (docs/design/scms-real/08-settings-ux-and-gaps.md §5, piece C1a):
-//! a provider placed at a cloud site measures every latency from the site's point, the
+//! Exact server locations (docs/design/scms-real/08-settings-ux-and-gaps.md §5, pieces
+//! C1a-C1b): a provider placed at a cloud site measures every latency from the site's
+//! point, a role placed at its own site pays the leg to it on every link it has, the
 //! combinations that cannot run are refused at their path, and the manifest says where
 //! every point comes from.
 
 use serde_json::{Value, json};
+use v2xw_core::ids::NodeId;
 use v2xw_core::time::Duration;
 use v2xw_engine::Scenario;
 use v2xw_engine::phase2::{CAMP_SCMS, deployment_of, deployment_warnings};
+use v2xw_proto::ScmsParams;
 use v2xw_proto::scms::deployment::{
     C_KM_S, Deployment, LatencyModel, Preset, REGIONS, SITES, great_circle_km,
 };
+use v2xw_proto::scms::run::ScmsRun;
+use v2xw_proto::stage::StageId;
 
 /// The Census 2024 Gazetteer internal point of The Dalles city, OR (GEOID 4172950), the
 /// city Google Cloud names for us-west1.
@@ -226,4 +231,68 @@ fn the_manifest_names_every_sites_point_source() {
         "{plain:#?}"
     );
     assert!(!plain.iter().any(|l| l.contains("within about 30 km")));
+}
+
+/// When a report a device files about another's pseudonym reaches provider-a's MA, in a
+/// home run of the deployment the scenario builds.
+fn report_reaches_the_ma(deployment: Value) -> u64 {
+    let d = deployment_of(&scenario(deployment), true).expect("builds");
+    let mut run = ScmsRun::new_deployed(ScmsParams::default().quick(), 0, d).expect("builds");
+    let (accused, reporter) = (NodeId::new(5_000_301), NodeId::new(5_000_302));
+    run.preload(accused, 0, 1, 2).expect("provisions");
+    run.preload(reporter, 0, 1, 2).expect("provisions");
+    let (&(i, _), c) = run.state.devices[&accused]
+        .credentials
+        .iter()
+        .next()
+        .expect("a pseudonym");
+    let flow = run.submit_report(reporter, i, c.lv);
+    run.run_until(3_600_000_000_000).expect("runs");
+    run.kernel
+        .stages
+        .at(flow, StageId::ReportReceived)
+        .expect("the report reached the MA")
+}
+
+/// Accept test 2: `sites: {ma: us-west}` on provider-a. The report's RA -> MA hop is later
+/// than in the base run by the Ashburn -> Boardman leg less the in-region hop, ±1 µs; the
+/// MA-to-MA link is measured from the MA's site and the city leg still from the RA's.
+/// Fault: intra-provider links still use `over_km(0)`.
+#[test]
+fn a_roles_own_site_delays_its_links_by_the_computed_leg() {
+    let moved = json!({"providers": [{"name": "provider-a", "sites": {"ma": "us-west"}}]});
+    let (east, west) = (REGIONS[0], REGIONS[4]);
+    assert_eq!((east.name, west.name), ("us-east", "us-west"));
+    let km = great_circle_km(east.lat_deg, east.lon_deg, west.lat_deg, west.lon_deg);
+    // 3,502.5798 km at 2/3 c is 17,525,023 ns (the proto test's independent figure).
+    let leg_ns = expected_ns(km) - 1e6;
+    assert!((leg_ns - 17_525_023.0).abs() < 2.0, "{leg_ns}");
+
+    let d = deployment_of(&scenario(moved.clone()), true).expect("builds");
+    assert_eq!(d.providers[0].point("ma"), west);
+    assert_eq!(d.providers[0].point("ra"), east);
+    let mama = d.inter_provider_latency(0, 1).expect("the region model");
+    assert!(
+        (mama.as_nanos() as f64 - expected_ns(km)).abs() < 1_000.0,
+        "{mama:?}"
+    );
+    let base = deployment_of(&scenario(json!({})), true).expect("builds");
+    assert_eq!(
+        d.city_latency(0, 40.7128, -74.006),
+        base.city_latency(0, 40.7128, -74.006)
+    );
+
+    let before = report_reaches_the_ma(json!({}));
+    let after = report_reaches_the_ma(moved.clone());
+    let delta = after as f64 - before as f64;
+    assert!(
+        (delta - leg_ns).abs() < 1_000.0,
+        "the RA -> MA hop moved by {delta} ns, not the {leg_ns} ns leg ({before} -> {after})"
+    );
+    let w = deployment_warnings(&scenario(moved));
+    assert!(
+        w.iter()
+            .any(|l| l.contains("provider-a's ma runs at site us-west")),
+        "{w:#?}"
+    );
 }
