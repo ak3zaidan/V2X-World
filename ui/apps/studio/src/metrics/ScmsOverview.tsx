@@ -219,7 +219,7 @@ function MiniSpark({ series, label, base, unit }: { series: Series; label: strin
 function Tile({ t, overview, onOpen }: { t: ScmsTile; overview: Overview; onOpen: (base: string) => void }): React.JSX.Element {
   const spark = t.spark ? overview.series.get(t.spark) : undefined;
   // The tile shows the plain name; the standard term in brackets is in the tooltip.
-  const short = t.title.replace(/\s*\([^)]*\)\s*$/, "") || t.title;
+  const short = t.title.replace(/\s*\([^)]*\)/g, "").trim() || t.title;
   const tip = [short !== t.title ? t.title : null, t.meaning, t.cue, t.pending, t.source, t.metric ? "Click to open its full chart." : null].filter(Boolean).join("\n\n");
   const body = (
     <>
@@ -242,9 +242,8 @@ function Tile({ t, overview, onOpen }: { t: ScmsTile; overview: Overview; onOpen
       ) : null}
       {t.split ? (
         <span className="scms-tile-split mono">
-          {t.split.split(" · ").map((part, i) => (
+          {t.split.split(" · ").map((part) => (
             <span key={part} className="scms-split-part">
-              {i > 0 ? "· " : ""}
               {part}
             </span>
           ))}

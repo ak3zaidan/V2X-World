@@ -564,7 +564,7 @@
 .scms-tile-cue { font-size: 11.5px; line-height: 1.35; font-weight: 600; }
 .scms-tile-cue.caution { color: color-mix(in srgb, var(--warn) 65%, var(--text)); }
 .scms-tile-cue.unhealthy { color: color-mix(in srgb, var(--err) 75%, var(--text)); }
-.scms-tile-split { font-size: 10.5px; color: var(--text-faint); display: flex; flex-wrap: wrap; column-gap: 4px; }
+.scms-tile-split { font-size: 10.5px; color: var(--text-faint); display: flex; flex-wrap: wrap; column-gap: 10px; }
 .scms-split-part { white-space: nowrap; }
 .scms-actions { display: inline-flex; flex-wrap: nowrap; gap: 8px; }
 

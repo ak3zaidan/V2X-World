@@ -45,7 +45,7 @@ export function CasesTab({ view }: { readonly view: string | null }): React.JSX.
     return col !== "enforced" && col !== "refused";
   }).length;
   return (
-    <div className="pkir-split pkir-cases" data-testid="pki-cases">
+    <div className={cases.length === 0 ? "pkir-split pkir-cases single" : "pkir-split pkir-cases"} data-testid="pki-cases">
       <div className="pkir-table-wrap">
         {view !== GROUND_TRUTH ? (
           <p className="faint pkir-pad" data-testid="pki-cases-as">
@@ -56,7 +56,7 @@ export function CasesTab({ view }: { readonly view: string | null }): React.JSX.
           className="pkir-pad dim"
           title="A case follows one misbehaving sender from the first report to the moment other vehicles refuse its messages: reported, decided, traced without naming it, put on the revocation list, enforced."
         >
-          {cases.length} case{cases.length === 1 ? "" : "s"} · {open} open
+          {cases.length === 0 ? null : `${cases.length} case${cases.length === 1 ? "" : "s"} · ${open} open`}
         </p>
         <ol className="pkir-caselist" data-testid="pki-board">
           {[...cases].reverse().map((c) => (
@@ -65,7 +65,7 @@ export function CasesTab({ view }: { readonly view: string | null }): React.JSX.
         </ol>
         {cases.length === 0 ? <p className="dim pkir-pad">No misbehaviour case has been opened{view === GROUND_TRUTH ? "" : " that this entity took part in"}.</p> : null}
       </div>
-      {chosen ? <CaseDetail c={chosen} gt={view === GROUND_TRUTH} /> : <div className="pkir-card dim">Choose a case.</div>}
+      {chosen ? <CaseDetail c={chosen} gt={view === GROUND_TRUTH} /> : cases.length > 0 ? <div className="pkir-card dim">Choose a case.</div> : null}
     </div>
   );
 }

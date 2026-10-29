@@ -210,7 +210,7 @@ function MessageCard({
             {piggyback(record)}
           </p>
         ) : null}
-        {pdus.length === 0 ? <p className="faint">It carried no SPDU of its own: a backend control message whose bytes the engine counts but does not encode.</p> : null}
+        {pdus.length === 0 ? <p className="faint" title="A backend control message whose bytes the engine counts but does not encode">No secured message inside.</p> : null}
         <ul className="pki-pdus">
           {pdus.map((p) => {
             const t = pduText(p.type);
@@ -220,7 +220,7 @@ function MessageCard({
                 <button type="button" className="linklike" disabled={!can} onClick={() => onPdu(p.id)} data-testid={`pki-pdu-${p.id}`} title={can ? "Open it in the decoder" : "This view never saw its bytes"}>
                   <span className="mono">{p.type}</span>
                 </button>
-                <span className="dim"> · {t.what}</span>
+                <span className="dim" title={t.what}> · {t.what.split(":")[0]}</span>
                 <span className="faint mono">
                   {" "}
                   · {formatBytes(p.len)}
@@ -230,7 +230,6 @@ function MessageCard({
             );
           })}
         </ul>
-        {pdus.some((p) => canInspect(p, record, view)) ? <p className="faint">Open one to see its fields explained, and its raw bytes behind a toggle.</p> : null}
         <p className="faint mono" title="The engine's names for this message">
           {record.from} → {record.to} · {record.id}
         </p>
