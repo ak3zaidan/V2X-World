@@ -894,6 +894,17 @@ trustworthy or comparable; later waves add behaviours and radio features.
   - **Open:** an expectation row on a rigid-truck or bus family, which needs per-row family
     routes in the sweep. Emergency vehicles and two-wheelers have no rows.
 
+**WP-39 Driver distraction episodes (S-P15)** (M). From the deferred list (§3).
+- P39.1 (2026-10-28): done, no code. `docs/design/research/driver-distraction.md`.
+  - **The process:** an on-path/off-path glance renewal process, from the naturalistic
+    fits of Morando, Victor & Dozza 2019: inverse Gaussian 3.56/1.50 s on path, lognormal
+    −0.21/0.50 off path. That is 804 glances per hour, 20.5 % of time eyes off road, and
+    3.5 % of glances over 2 s.
+  - **Validation targets:** Klauer 2006 (> 2 s, OR 2.19), Dingus 2016 (51.93 %, OR 2.0)
+    and the NHTSA 2 s/12 s guideline.
+  - **The warning:** a verified FCW/EEBL ends a glance at receipt. No gaze-return latency
+    was readable, so no constant is added.
+
 ## 3. Deferred and dropped
 
 **Deferred** (useful, but lower value per effort, or waiting on an input):

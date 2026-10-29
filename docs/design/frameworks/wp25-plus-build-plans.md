@@ -894,6 +894,23 @@ every LTE digest (owner).
 - **P39.2** (3 h): the pure process and its tests.
 - **P39.3** (3 h): the engine wiring, the warning hook, the rows and the faults.
 
+**Sources (2026-10-28, P39.1, done; `docs/design/research/driver-distraction.md`).**
+- **The fit:** Morando, Victor & Dozza 2019 (IEEE T-ITS 20(8), Fig. 6), from naturalistic
+  manual-driving eye tracking that matches the 100-Car and SHRP 2 baselines. On-path
+  dwells follow an inverse Gaussian (μ 3.56 s, λ 1.50 s); off-path glances follow a
+  lognormal (μ −0.21, σ 0.50; mean 0.92 s; 3.5 % of glances over 2 s).
+- **What it implies:** 804 glance onsets per hour and 20.5 % of time eyes off road. Klauer
+  2006's baseline is about 15 % and 1.1 glances per 6 s (Figs. 6.1-6.2).
+- **Risk and prevalence,** for validation: Klauer 2006 Table 6.2 (> 2 s eyes off road,
+  OR 2.19); Dingus 2016 (51.93 % prevalence, OR 2.0); the NHTSA guidelines (2 s and 12 s;
+  pp. 24821, 24888).
+- **Settings:** the plan's `distraction_rate_per_h` and `glance_dist` become the two dwell
+  distributions, under `actors.vehicles.drivers.distraction`. The onset rate follows from
+  them.
+- **The warning:** no gaze-return latency could be read (Lee et al. 2002 is paywalled;
+  NHTSA refuses scripted access). So a verified FCW/EEBL ends the glance at receipt, and
+  the driver's existing reaction time and alarm rule do the rest. No new constant.
+
 ---
 
 ## WP-40 Doppler-aware 802.11p PER (O-P12), gated on its source
@@ -1097,9 +1114,10 @@ parameters from NCHRP 605.
 | WP-35 | IEEE 1609.2.1 ASN.1 | cached | **cached** (`third_party/asn1/etsi/ieee1609.2.1/`) |
 | WP-35 | IEEE 1609.2.1 body text §6.3.5 | paywalled | no |
 | WP-37 | Natural Earth admin-0 polygons | public domain | no |
-| WP-39 | Klauer et al. 2006, DOT HS 810 594 | public (NHTSA) | no |
-| WP-39 | Dingus et al. 2016, PNAS 113(10) | open access | no |
-| WP-39 | NHTSA visual-manual guidelines, 78 FR 24818 | public | no |
+| WP-39 | Klauer et al. 2006, DOT HS 810 594 | public (NHTSA) | **read** 2026-10-28 (VTechWorks copy): Table 6.2, Figs. 6.1-6.3 (`driver-distraction.md`) |
+| WP-39 | Dingus et al. 2016, PNAS 113(10) | open access | **read** 2026-10-28 (PMC4790996) |
+| WP-39 | NHTSA visual-manual guidelines, 78 FR 24818 | public | **read** 2026-10-28 (govinfo): pp. 24821, 24888 |
+| WP-39 | Morando, Victor & Dozza 2019, IEEE T-ITS 20(8) (glance-duration fits) | author copy (Chalmers) | **read** 2026-10-28: Fig. 6 |
 | WP-39 | 100-Car Phase II, DOT HS 810 593 | public | read ([repo] honest-density.md) |
 | WP-40 | Anwar, Franchi, Fettweis, VTC2019-Fall | IEEE; author copy to find | no |
 | WP-40 | IEEE 802.11 TGbd link-level submissions | public (document server) | no |
