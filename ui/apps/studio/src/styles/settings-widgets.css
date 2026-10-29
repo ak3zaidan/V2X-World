@@ -77,3 +77,17 @@
 .menu-item.preset { flex-direction: column; align-items: flex-start; gap: 1px; white-space: normal; text-align: left; }
 .menu-item.preset .preset-title { display: flex; width: 100%; gap: 8px; }
 .menu-item.preset .preset-desc { color: var(--text-dim); font-size: 11.5px; line-height: 1.35; }
+
+/* 2026-10-29 polish: the "i" beside its menu, the default greyed in an empty box, chips after the box. */
+.choice-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.choice-row select { flex: 1; min-width: 0; }
+.option-explainer.open { flex-basis: 100%; }
+.choice:has(.option-explainer.open) .choice-row { flex-wrap: wrap; }
+.number-presets { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
+.number-presets > input.num { max-width: 130px; flex: none; }
+.preset-chip.active.default { box-shadow: none; border-style: dashed; }
+input.num::placeholder { color: var(--text-faint); }
+.setting-meta .inherited { color: var(--accent); }
+.setting-move { display: flex; align-items: center; gap: 10px; font-size: 12px; margin: -2px 0 8px 15px; }
+.settings-window .setting.bare { grid-template-columns: 3px minmax(0, 1fr); }
+.settings-window .setting.bare .setting-right { grid-column: 2; }

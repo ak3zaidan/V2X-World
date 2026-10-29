@@ -19,6 +19,7 @@ import {
   type PublishedRow,
   type Subgroup,
 } from "../lib/schema.js";
+import { overlayOf } from "./scmsOverlay.js";
 
 /** A field of either source, with the engine's statement about it when the engine published one. */
 export type Field = FormField &
@@ -38,10 +39,29 @@ export function settingsFields(
   schema: unknown,
   doc: unknown,
 ): { readonly fields: readonly Field[]; readonly source: FieldSource } {
-  if (published.length > 0) return { fields: fieldsFromPublished(published, schema, doc), source: "published" };
+  if (published.length > 0) return { fields: fieldsFromPublished(published, schema, doc).map(withOverlay), source: "published" };
   const generated = schema ? fieldsFromJsonSchema(schema) : [];
   if (generated.length > 0) return { fields: generated, source: "schema" };
   return { fields: PHASE1_FIELDS, source: "builtin" };
+}
+
+/** A field with the window's own words, default and relevance for it (`scmsOverlay.ts`). */
+export function withOverlay(f: Field): Field {
+  const o = overlayOf(f.pointer);
+  if (!o) return f;
+  const engineDefault = f.hasDefault === true;
+  return {
+    ...f,
+    ...(o.label ? { label: o.label } : {}),
+    ...(o.help ? { explain: o.help } : {}),
+    ...(o.unit !== undefined ? (o.unit === "" ? { unit: undefined } : { unit: o.unit }) : {}),
+    ...(o.defaultValue !== undefined && !engineDefault ? { hasDefault: true, defaultValue: o.defaultValue } : {}),
+    ...(o.relevantWhen && !f.relevantWhen ? { relevantWhen: o.relevantWhen } : {}),
+    ...(o.level ? { level: o.level } : {}),
+    ...(o.pair && (f.kind === "json" || f.kind === "list") ? { kind: "pair" as const } : {}),
+    ...(o.min !== undefined && f.min === undefined ? { min: o.min } : {}),
+    ...(o.max !== undefined && f.max === undefined ? { max: o.max } : {}),
+  };
 }
 
 /** The dotted path a scenario file spells the field with. */
@@ -513,10 +533,12 @@ export function irrelevantReason(f: Field, doc: unknown, fields: readonly Field[
   if (!w) return undefined;
   const target = `/${w.path.split(".").join("/")}`;
   const value = getPointer(doc, target);
-  const holds = w.in.some((x) => x === value || (value === undefined && x === null));
-  if (holds) return undefined;
+  const is = (x: unknown): boolean => x === value || ((value === undefined || value === null) && x === null);
   const of = fields.find((x) => x.pointer === target);
   const name = of?.label ?? w.path;
+  if (w.notIn) return w.notIn.some(is) ? `Applies only when ${name} is set.` : undefined;
+  const holds = w.in.some(is);
+  if (holds) return undefined;
   const words = w.in
     .map((x) => of?.choices?.find((c) => c.value === x)?.label ?? (x === null ? "unset" : String(x)))
     .join(" or ");

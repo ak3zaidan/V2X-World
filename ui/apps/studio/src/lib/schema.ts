@@ -101,6 +101,8 @@ export function providerSetsOf(node: unknown): ProviderSets | undefined {
 export interface RelevantWhen {
   readonly path: string;
   readonly in: readonly unknown[];
+  /** Applies whenever the value at `path` is none of these (`in` is then ignored). */
+  readonly notIn?: readonly unknown[];
 }
 
 /** A named value for a number (`x-presets`): "Rush hour", "5 minutes (SAE J2945/1)". */

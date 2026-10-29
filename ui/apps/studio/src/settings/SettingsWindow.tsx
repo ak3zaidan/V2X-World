@@ -47,6 +47,7 @@ import {
   isBasic,
   isUnsupported,
   matches,
+  oneLine,
   researchSectionOf,
   settingsFields,
   type Field,
@@ -58,6 +59,7 @@ import "../styles/quick.css";
 import "../styles/settings.css";
 import { SettingsDocContext } from "./docContext.js";
 import { SettingRow } from "./SettingRow.js";
+import { PARAMS_POINTER, inheritedValue, movableKeys, moveIntoFields } from "./legacyParams.js";
 
 const SECTION_KEY = "v2xw.settings.section";
 const ADVANCED_KEY = "v2xw.settings.advanced";
@@ -217,6 +219,7 @@ export function SettingsWindow({
     return out;
   }, [fields, edits, fullTree]);
 
+  const movable = useMemo(() => movableKeys(draft, new Set(fields.map((f) => f.pointer))), [draft, fields]);
   const problems = useMemo(() => errorsByField(fields, validation?.errors ?? []), [fields, validation]);
   const inert = useMemo(() => inertEdits(fields, edits), [fields, edits]);
   const presets = presetsOf(list);
@@ -267,9 +270,20 @@ export function SettingsWindow({
       durationS={f.pointer === "/events" ? durationS : undefined}
       canPick={!detached}
       irrelevant={irrelevantReason(f, draft, fields)}
+      inherited={inheritedValue(draft, f.pointer)}
       onEdit={editSetting}
       onUndo={undoEdit}
     />
+    {f.pointer === PARAMS_POINTER && movable.length > 0 ? (
+      <div className="setting-move" data-testid="params-move">
+        <span className="dim">
+          {movable.length} of these {movable.length === 1 ? "value has a field" : "values have fields"} in the form.
+        </span>
+        <button type="button" className="btn small" onClick={() => moveIntoFields(draft, movable).forEach((w) => editSetting(w.pointer, w.value))}>
+          Move into the form
+        </button>
+      </div>
+    ) : null}
     </SettingsDocContext.Provider>
   );
 
@@ -281,7 +295,7 @@ export function SettingsWindow({
       .map(({ s, shown }) => (
         <div key={s.key} className="settings-sub">
           {g.subs.length > 1 ? <h4 data-testid="settings-subheading">{s.label}</h4> : null}
-          {g.subs.length > 1 && s.blurb ? <p className="faint settings-sub-blurb">{s.blurb}</p> : null}
+          {g.subs.length > 1 && s.blurb ? <p className="faint settings-sub-blurb">{oneLine(s.blurb)}</p> : null}
           {shown.map((f) => row(f, s.key))}
         </div>
       ));

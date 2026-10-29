@@ -18,6 +18,8 @@ import type { ValidationError } from "@vwp/protocol";
 import { EventsEditor } from "../components/EventsEditor.js";
 import { STATUS_BADGE, breadcrumbOf, controlKind, describeValue, fieldPath, isUnsupported, oneLine, type Field } from "./model.js";
 import { durationWords } from "../lib/duration.js";
+import { ScmsProviders } from "./ScmsProviders.js";
+import { PROVIDERS_POINTER } from "./scmsDeployment.js";
 import { ChoiceSelect, ListEditor, MapRows, MultiCheck, NumberWithPresets, RangePair } from "./widgets.js";
 
 /** What one element of a list is called, from the list's title: "Attackers" → "Attacker". */
@@ -45,7 +47,9 @@ function Widget({
   const id = fieldId(field);
   const common = { id, "aria-invalid": invalid || undefined, "aria-describedby": `${id}-desc` } as const;
   if (field.kind === "boolean") {
-    return <input {...common} type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} />;
+    // An unset key shows what the engine does with it, and nothing is written until it is clicked.
+    const on = typeof value === "boolean" ? value : field.defaultValue === true;
+    return <input {...common} type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} />;
   }
   if (field.kind === "map" && field.keyChoices) {
     return (
@@ -60,10 +64,13 @@ function Widget({
     );
   }
   if (field.kind === "pair") {
-    return <RangePair common={common} value={value} min={field.min} max={field.max} unit={field.unit} onChange={onChange} />;
+    return <RangePair common={common} value={value} min={field.min} max={field.max} onChange={onChange} />;
   }
   if (field.kind === "multi" && field.choices) {
     return <MultiCheck common={common} choices={field.choices} value={value} onChange={onChange} />;
+  }
+  if (field.pointer === PROVIDERS_POINTER && field.itemFields) {
+    return <ScmsProviders idBase={id} fields={field.itemFields} onChange={onChange} />;
   }
   if (field.kind === "list" && field.itemFields) {
     return (
@@ -86,6 +93,7 @@ function Widget({
         nullable={field.nullable === true}
         value={value}
         onChange={onChange}
+        {...(field.hasDefault ? { defaultValue: field.defaultValue } : {})}
       />
     );
   }
@@ -117,6 +125,7 @@ function Widget({
         presets={field.presets}
         unit={field.unit}
         onChange={onChange}
+        {...(field.hasDefault ? { defaultValue: field.defaultValue } : {})}
       />
     );
   }
@@ -197,8 +206,18 @@ function Prose({ text }: { text: string }): React.JSX.Element {
   );
 }
 
+/** A recommendation's first clause: "2 s (CAR 2 CAR …; the US …)" → "2 s". The rest is on hover. */
+export function shortRec(text: string): string {
+  const t = text.trim();
+  const cut = t.search(/\s\(|;|\.\s/);
+  const head = cut > 0 ? t.slice(0, cut) : t;
+  return head.length > 48 ? `${head.slice(0, 46)}…` : head;
+}
+
 function StatusBadge({ field }: { field: Field }): React.JSX.Element | null {
   if (!field.status) return null;
+  // "Partly applied" is said in the field's "more"; as a pill on every deployment row it was noise.
+  if (field.status === "partial") return null;
   const badge = STATUS_BADGE[field.status];
   if (!badge) return null;
   return (
@@ -220,6 +239,8 @@ export interface SettingRowProps {
   readonly canPick: boolean;
   /** Why the field does not apply to the document as it stands (`x-relevant-when`). */
   readonly irrelevant?: string;
+  /** The value the older parameter block gives this field while it is unset here. */
+  readonly inherited?: unknown;
   readonly onEdit: (pointer: string, value: unknown) => void;
   readonly onUndo: (pointer: string) => void;
 }
@@ -235,6 +256,7 @@ function SettingRowImpl({
   durationS,
   canPick,
   irrelevant,
+  inherited,
   onEdit,
   onUndo,
 }: SettingRowProps): React.JSX.Element {
@@ -246,6 +268,28 @@ function SettingRowImpl({
   const line = oneLine(f.explain ?? f.help);
   const full = [f.explain, f.help].filter((t): t is string => !!t && t.trim() !== "").join("\n\n");
   const hasMore = full.replace(/[`*]/g, "").replace(/\s+/g, " ").trim() !== line || (f.status !== "wired" && !!f.statusNote);
+  const defaultWords = f.hasDefault ? (f.choices?.find((c) => String(c.value) === String(f.defaultValue))?.label ?? describeValue(f.defaultValue)) : "";
+  const rec = f.recommended ? shortRec(f.recommended) : undefined;
+  const flat = (t: string): string => t.toLowerCase().replace(/[,\s]/g, "");
+  const recSame = rec !== undefined && f.hasDefault === true && (flat(rec).startsWith(flat(defaultWords)) || flat(defaultWords).startsWith(flat(rec)) || /^unset$/i.test(rec));
+  if (f.pointer === PROVIDERS_POINTER && f.itemFields) {
+    // The provider cards carry their own words; the sub-heading above them names them.
+    return (
+      <div className={`setting wide bare${edited ? " edited" : ""}${invalid ? " invalid" : ""}`} data-testid="setting" data-pointer={f.pointer} data-kind="providers" data-edited={edited ? "true" : "false"} id={`setting${f.pointer.replace(/\W/g, "_")}`}>
+        <div className="setting-marker" aria-hidden="true" />
+        <div className="setting-right">
+          <ScmsProviders idBase={id} fields={f.itemFields} onChange={(v) => onEdit(f.pointer, v)} />
+          {invalid ? (
+            <div className="setting-error" role="alert" data-testid="setting-error">
+              {errors.map((e, i) => (
+                <div key={i}>{e.message}</div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
   const wide = f.kind === "list" || f.kind === "multi" || f.kind === "json" || f.kind === "map" || f.pointer === "/events";
   return (
     <div
@@ -309,9 +353,14 @@ function SettingRowImpl({
           {f.pointer === "/events" ? (
             <EventsEditor value={value} onChange={(v) => onEdit(f.pointer, v)} durationS={durationS} canPick={canPick} />
           ) : (
-            <Widget field={f} value={value} onChange={(v) => onEdit(f.pointer, v)} invalid={invalid} />
+            <Widget
+              field={inherited !== undefined ? { ...f, hasDefault: true, defaultValue: inherited } : f}
+              value={value}
+              onChange={(v) => onEdit(f.pointer, v)}
+              invalid={invalid}
+            />
           )}
-          {f.kind === "boolean" ? <span className="dim">{value === true ? "on" : "off"}</span> : null}
+          {f.kind === "boolean" ? <span className="dim">{(typeof value === "boolean" ? value : f.defaultValue === true) ? "on" : "off"}</span> : null}
           {f.unit === "s" && typeof value === "number" && durationWords(value) !== "" ? (
             <span className="dim duration-words" data-testid="duration-words">
               = {durationWords(value)}
@@ -324,26 +373,30 @@ function SettingRowImpl({
           ) : null}
         </div>
         <div className="setting-meta">
-          {f.hasDefault ? (
-            <span>
-              Default <code>{describeValue(f.defaultValue)}</code>
-              {modified ? (
-                <>
-                  {" "}
-                  <button
-                    type="button"
-                    className="linkbutton"
-                    data-testid="setting-reset"
-                    onClick={() => onEdit(f.pointer, f.defaultValue)}
-                    title={`Set this back to the engine's default (${describeValue(f.defaultValue)})`}
-                  >
-                    Reset
-                  </button>
-                </>
-              ) : null}
+          {inherited !== undefined && value === undefined ? (
+            <span className="inherited" data-testid="setting-inherited" title="Set in the older parameter block (security.protocol.params); a value here wins">
+              {describeValue(inherited)} from the older parameter block
             </span>
           ) : null}
-          {f.recommended ? <span data-testid="setting-recommended" title="Recommended range">Rec. {f.recommended}</span> : f.range ? <span title="Allowed range">Range {f.range}</span> : null}
+          {f.hasDefault && modified ? (
+            <span>
+              Default <code>{defaultWords}</code>{" "}
+              <button
+                type="button"
+                className="linkbutton"
+                data-testid="setting-reset"
+                onClick={() => onEdit(f.pointer, f.defaultValue)}
+                title={`Set this back to the engine's default (${defaultWords})`}
+              >
+                Reset
+              </button>
+            </span>
+          ) : null}
+          {rec && !recSame ? (
+            <span data-testid="setting-recommended" title={`Recommended: ${f.recommended}`}>
+              Rec. {rec}
+            </span>
+          ) : null}
         </div>
         {invalid ? (
           <div className="setting-error" role="alert" data-testid="setting-error">
