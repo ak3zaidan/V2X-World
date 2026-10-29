@@ -16,13 +16,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   componentIndex,
-  ctlSummary,
   formatBytes,
   formatSimT,
   formatSpan,
   GROUND_TRUTH,
   knowledgeOf,
-  time32Date,
   type KnowledgeAnswer,
   type PkiActivity,
   type PkiComponent,
@@ -36,8 +34,6 @@ import {
   counterText,
   crlScheduleShort,
   crlScheduleText,
-  deploymentText,
-  editionText,
   flowInfo,
   groupMessages,
   isDevice,
@@ -57,66 +53,12 @@ import { CertLink } from "./CertificateCard.js";
 import { CertBadge } from "./CertStatus.js";
 import { GlossText } from "./GlossText.js";
 import { useCert } from "./useCert.js";
-import { Topology } from "./Topology.js";
-import { TrustChain } from "./TrustChain.js";
+import { Topology, TopoLegend } from "./Topology.js";
 
 /** Messages the Overview remembers for the cards' "recent messages", newest last. */
 const LOG_CAP = 600;
 /** Messages a card lists. */
 const CARD_MESSAGES = 8;
-
-/** The trust list (CTL) in one line under the topology: version, roots, endorsements; history on demand. */
-function TrustList({ trust }: { readonly trust: TrustAnswer }): React.JSX.Element {
-  const s = trust.state;
-  const ctl = ctlSummary(s);
-  const [history, setHistory] = useState(false);
-  return (
-    <section className="pki-ctl-strip">
-      <div className="pki-gov-row">
-        <b title="The certificate trust list (CTL): the roots every device trusts. It changes only when a quorum of electors endorse the change.">Trust list</b>
-        <span className="pki-ctl" data-testid="pki-ctl" title={`Roots (HashedId32): ${s.ctl.roots.map((r) => `${r.slice(0, 16)}…`).join(", ")} · ${s.ctl.bytes} B`}>
-          v{ctl.sequence} · {ctl.roots} root{ctl.roots === 1 ? "" : "s"} · endorsed by {s.ctl.signers.length} of {s.ctl.electors} electors ({s.ctl.quorum} needed) · since {time32Date(s.ctl.effective)}
-        </span>
-        {s.ctl.pending > 0 ? (
-          <span className="pill warn" title="A trust-list change the SCMS Manager decided, not yet in force">
-            {s.ctl.pending} pending
-          </span>
-        ) : null}
-        <span className="grow" />
-        <button type="button" className="linklike" onClick={() => setHistory((h) => !h)} data-testid="pki-ctl-history-toggle" aria-expanded={history}>
-          {history ? "▾" : "▸"} history ({s.ctl.history.length})
-        </button>
-      </div>
-      {ctl.offCtl.length > 0 ? (
-        <p className="warn" data-testid="pki-off-ctl">
-          Not on the trust list: {ctl.offCtl.join(", ")} — devices reject its certificates.
-        </p>
-      ) : null}
-      {history ? (
-        <table className="pki-table" data-testid="pki-ctl-history">
-          <thead>
-            <tr>
-              <th>version</th>
-              <th>effective</th>
-              <th>roots</th>
-              <th>endorsed by electors</th>
-            </tr>
-          </thead>
-          <tbody>
-            {s.ctl.history.map((h) => (
-              <tr key={h.sequence}>
-                <td className="mono">{h.sequence}</td>
-                <td className="mono">{time32Date(h.effective)}</td>
-                <td className="mono">{h.roots}</td>
-                <td className="mono">{h.signers.map((x) => x + 1).join(", ")}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : null}
-    </section>
-  );
-}
 
 /** The other end of a message, in plain words. */
 function endText(end: string | null, home: string): string {
@@ -571,34 +513,22 @@ export function TrustDomain({ trust, view }: { readonly trust: TrustAnswer; read
   const provider = chosen ? (s.providers.find((p) => p.label === chosen.provider) ?? null) : null;
   const devicesOf = selected?.startsWith("devices/") ? (s.providers.find((p) => `devices/${p.label}` === selected) ?? null) : null;
   const drawer = chosen !== null || devicesOf !== null;
-  const total = s.providers.reduce((n, p) => n + p.devices.devices, 0);
+  const [legend, setLegend] = useState(false);
   return (
     <div className={drawer ? "pki-body with-drawer" : "pki-body"} data-testid="pki-trust">
       <div className="pki-main">
         <p className="pki-context dim" data-testid="pki-time" title={`Snapshot at simulated t = ${(trust.t_ns / 1e9).toFixed(0)} s. Click any box for what it does, its certificate and what it knows.`}>
-          <span>
-            <b title={`Deployment preset “${s.preset}”: which providers, policies and rules the run follows`}>{deploymentText(s.preset)}</b> ·{" "}
-            <span title={`Certificate and message format: ${s.edition}`}>{editionText(s.edition)}</span> · {total} devices · click a box for details
-          </span>
+          <button type="button" className="linklike" onClick={() => setLegend((l) => !l)} aria-expanded={legend} data-testid="pki-legend-toggle">
+            {legend ? "▾" : "▸"} Legend
+          </button>
           <span className="grow" />
           <button type="button" className="linklike pki-metrics-link" onClick={() => openPanel("metrics")} data-testid="pki-open-metrics" title="The same system's numbers over the whole run, as charts">
             Charts in Metrics ›
           </button>
         </p>
+        {legend ? <TopoLegend /> : null}
         <Topology trust={trust} messages={fresh} view={view} selected={selected} onSelect={setSelected} />
-        <TrustList trust={trust} />
-        <TrustChain state={s} onSelect={setSelected} selected={selected} />
         {view !== GROUND_TRUTH ? <KnowledgeCard entity={view} view={view} /> : null}
-        <details className="pki-assumptions">
-          <summary className="dim">Assumptions ({s.assumptions.length})</summary>
-          <ul>
-            {s.assumptions.map((a) => (
-              <li key={a} className="dim">
-                {a}
-              </li>
-            ))}
-          </ul>
-        </details>
       </div>
       {chosen ? (
         <ComponentCard c={chosen} provider={provider} activity={trust.activity[chosen.id]} view={view} state={s} log={log} onClose={() => setSelected(null)} />

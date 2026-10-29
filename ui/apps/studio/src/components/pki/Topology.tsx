@@ -166,7 +166,6 @@ export function Topology({
 
   return (
     <div className="pki-topo-wrap" ref={ref} data-testid="pki-topology">
-      <TopoLegend />
       <div className="pki-topo" style={{ width: topo.width, height: topo.height }} data-layout={topo.sideBySide ? "side-by-side" : "stacked"}>
         <div className="pki-topo-gov" style={{ left: 0, top: 0, width: topo.governance.w, height: topo.governance.h }} data-testid="pki-governance" aria-label="Governance">
           {topo.nodes.filter((n) => !topo.regions.some((r) => r.provider.label === n.provider)).map((n) => renderNode(n, 0, 0))}
@@ -244,7 +243,7 @@ export function Topology({
 }
 
 /** What the diagram's colours and marks mean, above it so it is read first. */
-function TopoLegend(): React.JSX.Element {
+export function TopoLegend(): React.JSX.Element {
   return (
     <p className="pki-topo-legend dim" data-testid="pki-topo-legend">
       <span className="faint">Messages:</span>
