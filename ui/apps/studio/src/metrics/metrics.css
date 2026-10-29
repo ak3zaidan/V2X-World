@@ -70,6 +70,11 @@
   font-size: 12px;
 }
 .metrics-nav .nav-item:hover, .metrics-nav .nav-item.current { background: var(--bg-raised); text-decoration: none; }
+/* The nav's key: what its marks and numbers mean, before the reader has to guess. */
+.metrics-nav-key { display: flex; flex-wrap: wrap; gap: 2px 8px; margin: 0 0 6px; padding: 0 8px 8px; border-bottom: 1px solid var(--border); font-size: 10.5px; color: var(--text-faint); line-height: 1.5; }
+.metrics-nav-key > span { display: inline-flex; align-items: center; white-space: nowrap; }
+.metrics-nav-key .hdot { width: 8px; height: 8px; margin-right: 3px; }
+.metrics-nav-key .hdot.caution, .metrics-nav-key .hdot.unhealthy { width: 9px; height: 9px; }
 .metrics-main { overflow: auto; padding: 14px 20px 40px; min-width: 0; }
 .metrics-message { margin: 24px 0; max-width: 70ch; }
 
@@ -367,6 +372,7 @@
 .mhealth-strip { margin-bottom: 22px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); }
 .mhealth-strip h3 { font-size: 14px; font-weight: 600; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
 .mhealth-counts { font-size: 12px; font-weight: 400; }
+.mhealth-when { font-size: 11px; font-weight: 400; padding: 0 6px; border: 1px solid var(--border); border-radius: 9px; }
 .mhealth-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .mhealth-chip { display: inline-flex; align-items: center; font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-raised); color: var(--text); cursor: pointer; }
 .mhealth-chip:hover { border-color: var(--border-strong); }
@@ -406,6 +412,8 @@
 .rsum-verdict.unhealthy { border-color: var(--err); }
 .rsum-verdict.caution { border-color: color-mix(in srgb, var(--warn) 70%, var(--border)); }
 .rsum-verdict.healthy { border-color: color-mix(in srgb, var(--ok) 60%, var(--border)); }
+.rsum-verdict-text { display: flex; flex-direction: column; gap: 3px; }
+.rsum-verdict-counts { font-size: 12px; }
 .rsum-section { margin: 0 0 18px; }
 .rsum-section h3 { font-size: 13px; font-weight: 600; margin: 0 0 8px; text-transform: none; }
 .rsum-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
@@ -562,8 +570,14 @@
 /* The header's buttons keep their words on one line; the run line wraps instead. */
 .metrics-panel .fullpanel-head > button { white-space: nowrap; flex: none; }
 .metrics-panel .fullpanel-head [data-testid="metrics-run"] { min-width: 0; }
-.scms-spark { display: block; width: 100%; height: 22px; margin-top: 3px; }
+/* A tile's trend: its range written at the left, then the line (dots when sparse), on a faint baseline. */
+.scms-spark-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; min-width: 0; }
+.scms-spark-range { flex: none; font-size: 10.5px; color: var(--text-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.scms-spark-row.steady .scms-spark-range { font-family: inherit; }
+.scms-spark { display: block; flex: 1 1 auto; min-width: 40px; height: 22px; }
 .scms-spark path { fill: none; stroke: var(--viz-1); stroke-width: 1.6; stroke-linejoin: round; }
+.scms-spark circle { fill: var(--viz-1); stroke: none; }
+.scms-spark-base { stroke: var(--grid); stroke-width: 1; }
 
 .scms-block { margin-top: 14px; max-width: 980px; }
 .scms-block h5 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 6px; font-size: 12px; font-weight: 650; color: var(--text); }
@@ -571,13 +585,15 @@
 .scms-note { font-size: 11.5px; margin: 6px 0 0; }
 
 /* The report flow: boxes left to right, the arrow between two says how many did not move on. */
-.scms-flow { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; align-items: stretch; row-gap: 8px; }
-.scms-flow-item { display: flex; align-items: stretch; min-width: 0; }
-.scms-step { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 92px; max-width: 150px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-panel); }
+/* One row at 1280: the boxes share the width and shrink before anything wraps. */
+.scms-flow { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: nowrap; align-items: stretch; row-gap: 8px; }
+.scms-flow-item { display: flex; align-items: stretch; min-width: 0; flex: 1 1 0; }
+.scms-flow-item.first { flex: 0.62 1 0; }
+.scms-step { display: flex; flex-direction: column; justify-content: center; gap: 2px; flex: 1 1 auto; min-width: 74px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-panel); }
 .scms-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .scms-step-num { font-size: 18px; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1.2; }
 .scms-step-label { font-size: 11.5px; color: var(--text-dim); line-height: 1.25; }
-.scms-flow-arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 34px; max-width: 112px; padding: 0 6px; text-align: center; }
+.scms-flow-arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 0 1 auto; min-width: 26px; max-width: 118px; padding: 0 4px; text-align: center; }
 .scms-flow-line { font-size: 20px; line-height: 1; color: var(--text-dim); }
 .scms-flow-drop { font-size: 11px; line-height: 1.25; color: color-mix(in srgb, var(--warn) 55%, var(--text-dim)); margin-top: 2px; }
 
@@ -589,9 +605,39 @@
 .scms-panel.pending { border-left-color: var(--text-faint); }
 .scms-idle { font-size: 12.5px; margin: 2px 0 0; color: var(--text); max-width: 110ch; }
 
+/* Not judged on purpose: a flat dash in the neutral colour, the reason in its tooltip. */
+.hdot.none { background: var(--text-faint); border-radius: 1px; width: 10px; height: 3px; align-self: center; vertical-align: middle; }
+.lmark.none { color: var(--text-dim); }
+
+/* The six answers on one row, before the detail. */
+.scms-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; margin: 0 0 12px; }
+.scms-strip-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0;
+  padding: 7px 10px; text-align: left; font: inherit; color: inherit; cursor: pointer;
+  background: var(--bg-panel); border: 1px solid var(--border); border-top: 3px solid var(--border-strong); border-radius: 6px;
+}
+.scms-strip-item:hover { border-color: var(--accent-dim); }
+.scms-strip-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.scms-strip-item.healthy { border-top-color: var(--ok); }
+.scms-strip-item.caution { border-top-color: var(--warn); }
+.scms-strip-item.unhealthy { border-top-color: var(--err); }
+.scms-strip-topic { font-size: 12px; font-weight: 650; color: var(--text); }
+.scms-strip-short { font-size: 11.5px; color: var(--text-dim); line-height: 1.3; }
+
 .scms-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.scms-bar-row { display: grid; grid-template-columns: minmax(160px, 44%) minmax(0, 1fr) 64px; gap: 10px; align-items: center; font-size: 12px; }
-.scms-bar-label { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scms-bar-row { display: grid; grid-template-columns: minmax(160px, 44%) minmax(0, 1fr) 96px; gap: 10px; align-items: center; font-size: 12px; }
+.scms-bar-label { display: flex; flex-direction: column; min-width: 0; color: var(--text-dim); }
+.scms-bar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scms-bar-tag { font-size: 10.5px; color: var(--text-faint); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A scheduling window the scenario compressed: hatched, so it does not read as work the system did. */
+.scms-bar.hatched, .scms-hatch-key {
+  background: repeating-linear-gradient(135deg, var(--viz-seq) 0 3px, color-mix(in srgb, var(--viz-seq) 22%, transparent) 3px 6px);
+}
+.scms-hatch-key { display: inline-block; width: 18px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.scms-caveat { font-size: 12px; line-height: 1.45; margin: 0 0 8px; padding: 6px 10px; border: 1px dashed var(--border-strong); border-radius: 6px; color: var(--text); max-width: 110ch; }
+.scms-total { font-size: 12px; margin: 6px 0 0; color: var(--text); font-weight: 600; }
+.scms-bar-axis { margin-top: -1px; }
+.scms-axis { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-faint); border-top: 1px solid var(--baseline); padding-top: 1px; font-variant-numeric: tabular-nums; }
 .scms-bar-track { position: relative; height: 10px; background: var(--grid); border-radius: 3px; }
 .scms-bar { display: block; height: 100%; background: var(--viz-seq); border-radius: 3px; }
 .scms-bar.healthy { background: var(--ok); }
@@ -605,8 +651,10 @@
 .scms-raw-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
 .scms-raw-entity { margin: 0; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 11.5px; }
 .scms-raw-name { font-weight: 600; margin-bottom: 4px; color: var(--text); }
-.scms-raw-entity dd { margin: 0; display: flex; justify-content: space-between; gap: 8px; }
-.scms-raw-entity dd .mono:last-child { overflow-wrap: anywhere; text-align: right; }
+/* A counter per row: its plain name may wrap, its value never spills across the name. */
+.scms-raw-entity dd { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding: 1px 0; }
+.scms-raw-key { color: var(--text-dim); line-height: 1.3; }
+.scms-raw-val { text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 11em; }
 
 /* The run in brief: the summary's first read, in sentences. */
 .rsum-brief p { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--text); max-width: 95ch; }

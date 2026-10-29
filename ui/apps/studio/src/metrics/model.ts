@@ -877,7 +877,8 @@ export function glanceNumber(v: number): string {
   if (a >= 100) return Math.round(v).toLocaleString("en-US");
   if (a >= 10) return (Math.round(v * 10) / 10).toLocaleString("en-US");
   if (a >= 0.001) return v.toPrecision(3).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
-  return v.toExponential(1);
+  // Never an exponent at a glance: a queue of 0.00014 reads "< 0.001", which is what a reader compares.
+  return v < 0 ? "> -0.001" : "< 0.001";
 }
 
 /** A value and its unit as a reader wants them: a ratio as a percentage, a long time in minutes or hours. */

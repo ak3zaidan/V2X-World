@@ -121,15 +121,68 @@ export function cellularPenetration(scenario: unknown): number | null {
 }
 
 /**
+ * The pseudonym calendar a scenario sets (`security.protocol.params`): certificates valid at once
+ * per period (`certs_per_period`), the period's length (`i_period_s`) and how many periods a vehicle
+ * holds (`pool_periods`). Each part `null` when the scenario leaves it to the protocol's default.
+ */
+export interface PseudonymCalendar {
+  readonly perPeriod: number | null;
+  readonly periodS: number | null;
+  readonly periodsHeld: number | null;
+}
+
+/** The deployment's issue per period (CAMP SCMS: 20 a week, Whyte et al., IEEE VNC 2013), which the engine's pool band assumes. */
+export const DEPLOYMENT_CERTS_PER_PERIOD = 20;
+
+function posNum(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
+}
+
+export function pseudonymCalendar(scenario: unknown): PseudonymCalendar {
+  const p = (scenario as { security?: { protocol?: { params?: Record<string, unknown> } } } | null)?.security?.protocol?.params ?? {};
+  return { perPeriod: posNum(p["certs_per_period"]), periodS: posNum(p["i_period_s"]), periodsHeld: posNum(p["pool_periods"]) };
+}
+
+/** The scenario's certificates per period, when it issues fewer than the deployment's 20 (else `null`: the engine's band stands). */
+export function scaledPool(scenario: unknown): number | null {
+  const n = pseudonymCalendar(scenario).perPeriod;
+  return n !== null && n < DEPLOYMENT_CERTS_PER_PERIOD ? n : null;
+}
+
+/**
+ * The pool band scaled to the scenario's issue. The engine's band (caution under 5, unhealthy
+ * under 1) assumes the deployment's 20 certificates a period; a scenario that issues 5 a period
+ * holds 5 when its pool is full, so the caution line moves with the issue (a quarter of it, as 5 is
+ * of 20) and the unhealthy line (cannot sign) stays at 1.
+ */
+function poolBand(band: HealthBand, scenario: unknown): HealthBand {
+  const n = scaledPool(scenario);
+  if (n === null || band.better !== "higher") return band;
+  const caution = Math.max(band.unhealthy, (band.caution * n) / DEPLOYMENT_CERTS_PER_PERIOD);
+  const per = `${n} a period`;
+  return {
+    ...band,
+    caution,
+    unhealthy: Math.min(band.unhealthy, caution),
+    healthy_note: `vehicles hold most of the ${per} this scenario issues`,
+    caution_note: `vehicles are down to under a quarter of the ${per} this scenario issues`,
+    unhealthy_note: band.unhealthy_note,
+    source: `${band.source}; scaled to this scenario's ${per} (security.protocol.params certs_per_period ${n}, against the deployment's ${DEPLOYMENT_CERTS_PER_PERIOD}), so a full pool here reads about ${n}`,
+  };
+}
+
+/**
  * A band as this run should be judged against it. The engine's bands assume every vehicle is
  * equipped; where the scenario sets something below that on purpose, the band is scaled to the
  * scenario's own expectation and says so, so a deliberate choice is not reported as a fault.
  *
- * Today one band: `backend_link_up` (the share of vehicles that can reach the credential backend)
- * scaled by the scenario's cellular penetration. A vehicle without a modem can still reach the
+ * Two bands: `backend_link_up` (the share of vehicles that can reach the credential backend)
+ * scaled by the scenario's cellular penetration, and `cert_pool_valid` scaled by the scenario's
+ * certificates per period (`poolBand`). A vehicle without a modem can still reach the
  * backend through a relaying roadside unit, so the run should do at least as well as its penetration.
  */
 export function expectedBand(base: string, band: HealthBand, scenario: unknown): HealthBand {
+  if (base === "cert_pool_valid") return poolBand(band, scenario);
   if (base !== "backend_link_up") return band;
   const p = cellularPenetration(scenario);
   if (p === null || band.better !== "higher") return band;
@@ -147,7 +200,7 @@ export function expectedBand(base: string, band: HealthBand, scenario: unknown):
 
 /** Every family's band as this run should be judged against it (`expectedBand`). */
 export function withExpectations<T extends { readonly base: string; readonly health: HealthBand | null }>(families: readonly T[], scenario: unknown): T[] {
-  if (cellularPenetration(scenario) === null) return [...families];
+  if (cellularPenetration(scenario) === null && scaledPool(scenario) === null) return [...families];
   return families.map((f) => (f.health === null ? f : { ...f, health: expectedBand(f.base, f.health, scenario) }));
 }
 
