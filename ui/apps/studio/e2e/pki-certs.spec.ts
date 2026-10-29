@@ -153,7 +153,8 @@ test("a vehicle at a glance; a certificate that fails says why, from the grid", 
   await expect(row).toHaveAttribute("aria-selected", "true");
   const glance = panel.getByTestId("pki-vehicle-glance");
   await expect(glance.getByTestId("pki-glance-pc")).toContainText(vehicle.active.slice(0, 4));
-  await expect(glance).toContainText("week i = 634, certificate j = 0");
+  // The certificate's place in the week's batch, in words: week i = 634, certificate j = 0 of jmax = 20.
+  await expect(glance).toContainText("week 634, certificate 1 of 20");
   await expect(glance).toContainText("not revoked");
   // The certificate it signs with: valid, a pseudonym certificate, its chain to the root.
   const active = panel.getByTestId("pki-vehicle-card").getByTestId("pki-vehicle-cert");
@@ -165,7 +166,9 @@ test("a vehicle at a glance; a certificate that fails says why, from the grid", 
   await panel.locator(`[data-testid="pki-grid"] rect[data-i="${valid2.i}"][data-j="${valid2.j}"]`).click();
   const card = panel.getByTestId("pki-cert-drawer-card");
   await expect(card).toHaveAttribute("data-status", "expired");
-  await expect(card.getByTestId("pki-cert-why")).toContainText("not valid at the policy time");
+  // The reason is a sentence; the engine's own words stay in the tooltip.
+  await expect(card.getByTestId("pki-cert-why")).toContainText("fails the time check");
+  await expect(card.getByTestId("pki-cert-why")).toHaveAttribute("title", /not valid at the policy time/);
   // A failure opens the checks without a click, the failing rule marked.
   await expect(card.getByTestId("pki-cert-trace").locator('li.st-fail[data-rule="validity"]')).toHaveCount(1);
   await page.screenshot({ path: process.env.VWP_SHOT_DIR ? join(process.env.VWP_SHOT_DIR, "pki-vehicle-cert.png") : join(here, "../test-results/pki-vehicle-cert.png") });
@@ -197,6 +200,6 @@ test("the trust chain: every provider's root to its authorities, each opening it
   await tc.getByTestId("pki-tc-provider-a/la1/0").click();
   await expect(panel.getByTestId("pki-card").getByTestId("pki-card-does")).toContainText("pre-linkage values");
   // The health strip says what each number means.
-  await expect(panel.getByTestId("pki-health-pending")).toHaveAttribute("data-tone", /ok|warn/);
-  await expect(panel.getByTestId("pki-health-crl")).toContainText("since the newest revocation list");
+  await expect(panel.getByTestId("pki-health-pending")).toHaveAttribute("data-tone", /ok|info|warn/);
+  await expect(panel.getByTestId("pki-health-crl")).toContainText("last revocation list");
 });

@@ -61,7 +61,7 @@ test("the Cases board holds each case in its pki.case column, and an entity's vi
   }
   const first = [...furthest.keys()][0];
   await page.locator(`[data-case="${first}"]`).click();
-  await expect(page.getByTestId("pki-case-truth")).toContainText("ee/");
+  await expect(page.getByTestId("pki-case-truth")).toContainText(/Vehicle \d+/);
   await expect(page.getByTestId("pki-case-learned").filter({ hasText: "LA1" })).not.toHaveCount(0);
   // The step diagram marks reached exactly the stages pki.case recorded for the case.
   const recorded = [...new Set(rows.filter((r) => r.channel === "pki.case" && r.record.case === first).map((r) => String(r.record.stage)))].sort();
@@ -76,6 +76,7 @@ test("the Cases board holds each case in its pki.case column, and an entity's vi
   await expect(page.locator('[data-testid="pki-case-stages"] .pkir-step-msgs li')).not.toHaveCount(0);
   await expect(page.getByTestId("pki-case-truth")).toHaveCount(0);
   await expect(page.getByTestId("pki-cases")).not.toContainText("ee/");
+  await expect(page.getByTestId("pki-cases")).not.toContainText(/Vehicle \d+/);
 });
 
 test("the Revocation-lists tab decodes a list and joins it to vehicles in ground truth only", async ({ page }) => {
@@ -85,8 +86,9 @@ test("the Revocation-lists tab decodes a list and joins it to vehicles in ground
   await page.locator(`[data-testid="pki-crl-row"][data-key="${head.provider}/${head.series}/${head.kind}"]`).click();
   await page.locator(`[data-testid="pki-crl-version"][data-id8="${id8}"]`).click();
   await expect(page.getByTestId("pki-crl-entry")).toHaveCount(tabs.crl[id8]["ground-truth"].linkage.length);
-  await expect(page.getByTestId("pki-crl-matches").first()).toContainText("ee/");
+  await expect(page.getByTestId("pki-crl-matches").first()).toContainText(/Vehicle \d+/);
   await page.getByTestId("pki-view").selectOption("provider-a/ra/0");
   await expect(page.getByTestId("pki-crl-matches")).toHaveCount(0);
   await expect(page.getByTestId("pki-crl-card")).not.toContainText("ee/");
+  await expect(page.getByTestId("pki-crl-card")).not.toContainText(/Vehicle \d+/);
 });
