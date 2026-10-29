@@ -11,11 +11,13 @@ import {
   PHASE1_FIELDS,
   fieldsFromJsonSchema,
   fieldsFromPublished,
+  getPointer,
   pathOfPointer,
   type FieldStatus,
   type FormField,
   type PublishedFormField,
   type PublishedRow,
+  type Subgroup,
 } from "../lib/schema.js";
 
 /** A field of either source, with the engine's statement about it when the engine published one. */
@@ -394,6 +396,8 @@ export function researchSectionOf(f: Field): string | null {
 export interface ResearchSub {
   readonly key: string;
   readonly label: string;
+  /** The help under an engine sub-heading (`x-subgroup-blurb`). */
+  readonly blurb?: string;
   readonly fields: readonly Field[];
 }
 
@@ -409,6 +413,9 @@ export interface ResearchGroup {
 /** The sub-heading a field sits under inside its section: the scenario key below the top one. */
 export function subKeyOf(f: Field, section: ResearchSection | undefined): string {
   const parts = fieldPath(f).split(".").map((p) => p.replace(/\[\]$/, ""));
+  // The engine's SCMS sub-headings (`x-subgroup`, 08-settings-ux-and-gaps §3) win in the SCMS
+  // section: their order and help live with the engine.
+  if (section?.id === "scms" && f.subgroup) return `sg:${f.subgroup.id}`;
   if (section?.id === "scms") {
     // `security.scms.lifecycle.*` under "lifecycle", `security.scms.pki_view` under General,
     // `security.pseudonym_change.*` under its own key, the backend under "backend".
@@ -457,12 +464,24 @@ export function buildResearchTree(fields: readonly Field[]): ResearchGroup[] {
       s.fields.push(f);
     }
     subs.sort((a, b) => Number(b.key === "") - Number(a.key === ""));
+    // The engine's sub-headings in the engine's order, after the section's general fields.
+    const sg = (key: string): Subgroup | undefined => (key.startsWith("sg:") ? list.find((f) => `sg:${f.subgroup?.id}` === key)?.subgroup : undefined);
+    const rank = (key: string): number => (key === "" ? -1 : sg(key)?.order ?? 1000);
+    subs.sort((a, b) => rank(a.key) - rank(b.key));
     return {
       id: `group-${id}`,
       name,
       blurb,
       count: list.length,
-      subs: subs.map((s) => ({ key: s.key, label: s.key === "" ? "General" : humanise(s.key), fields: s.fields })),
+      subs: subs.map((s) => {
+        const g = sg(s.key);
+        return {
+          key: s.key,
+          label: g ? g.label : s.key === "" ? "General" : humanise(s.key),
+          ...(g?.blurb ? { blurb: g.blurb } : {}),
+          fields: s.fields,
+        };
+      }),
     };
   };
   const out: ResearchGroup[] = [];
@@ -479,6 +498,57 @@ export function buildResearchTree(fields: readonly Field[]): ResearchGroup[] {
     out.push(make(id, e.name, "", e.fields));
   }
   return out;
+}
+
+/**
+ * Why a field does not apply to the document as it stands (`x-relevant-when`), or `undefined` when
+ * it does: "Applies only when Failure mode is Slow". The field is drawn greyed with this sentence,
+ * never hidden, and its value is kept (08-settings-ux-and-gaps §4.2 item 5).
+ *
+ * The condition names a field at a fixed pointer; a condition inside a list element is not drawn
+ * here (the loader still refuses the combination).
+ */
+export function irrelevantReason(f: Field, doc: unknown, fields: readonly Field[]): string | undefined {
+  const w = f.relevantWhen;
+  if (!w) return undefined;
+  const target = `/${w.path.split(".").join("/")}`;
+  const value = getPointer(doc, target);
+  const holds = w.in.some((x) => x === value || (value === undefined && x === null));
+  if (holds) return undefined;
+  const of = fields.find((x) => x.pointer === target);
+  const name = of?.label ?? w.path;
+  const words = w.in
+    .map((x) => of?.choices?.find((c) => c.value === x)?.label ?? (x === null ? "unset" : String(x)))
+    .join(" or ");
+  return `Applies only when ${name} is ${words}.`;
+}
+
+/**
+ * What a row's control is, for `data-kind` on the row (08-settings-ux-and-gaps §4.2 item 9): the
+ * check that keeps every SCMS setting on a menu reads it, so it names what the reader sees.
+ */
+export function controlKind(f: Field): string {
+  switch (f.kind) {
+    case "enum":
+      return "select";
+    case "boolean":
+      return "toggle";
+    case "number":
+    case "integer":
+      return "number";
+    case "multi":
+      return "checks";
+    case "list":
+      return "list";
+    case "map":
+      return f.keyChoices ? "map" : "json";
+    case "pair":
+      return "pair";
+    case "json":
+      return "json";
+    default:
+      return "text";
+  }
 }
 
 /** The first sentence of an explanation, for the one line under a control. */

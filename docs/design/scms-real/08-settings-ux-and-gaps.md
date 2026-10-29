@@ -889,6 +889,31 @@ electors bound), `scms_presets_lie_inside_their_ranges` (a preset moved out of r
 the parser refuses) and `the_promoted_lifecycle_keys_act_like_their_params_spelling` (a key
 dropped from `entries()`). No golden moved.
 
+**Status, A2 (2026-10-29): built.** The UI of §4.2 items 1, 3, 4, 5, 6, 8 and 9, the engine
+facts they read, and the §10 Playwright spec with its twin. Items 2 (composite picker) and 7
+(US banner) are A4's.
+
+* Engine: `x-pair` on `pseudonym_change.silent_period_s`; `x-relevant-when` from
+  `options::relevant_when` (fixed-path conditions only: latency, pseudonym strategy,
+  verification policy, umbrella protocol, RSU air link, the MA pipeline); the twelve
+  `detection.ma.params` keys of both pipelines are typed fields with unit, range, guide row
+  and their pipeline (`x-relevant-when` on `detection.ma.id`), the block carries
+  `x-typed-children` and the form drops its JSON box. The loader (`MaHost::from_scenario`)
+  now enforces those ranges. `detection.ma.id` publishes its default, the corroborating
+  authority an absent key runs; keys only the legacy pipeline takes publish their value as
+  `x-pipeline-value`, not as a default, because writing nothing never runs that pipeline.
+* UI: `MapRows` (a key menu from `x-key-options` and the value's control, or a row of
+  fields for a struct value) at the top level and inside a list row (a provider's
+  `components`, `sites`, `capacity`); `RangePair`; an "i" button beside every menu listing
+  each option with its sentence, US / not-US badge and, for a disabled one, the reason; a
+  "not US" badge on the chosen value; "= 1 week 1 h" beside every `s` number; greyed rows
+  with "Applies only when …" (value kept); the SCMS page's sub-headings, order and help
+  from `x-subgroup`; `data-kind` on every row.
+* Choice under §9: the Security & Crypto page keeps signature, KEM, envelope and
+  verification policy, as the owner's layout has it; their `x-subgroup` files them only
+  when they are shown on the SCMS page. Conditions inside a list element (`failures[].extra_ms`
+  under `slow`, `prov[].ma_review_s` under `manual-review`) are left to the loader's refusal.
+
 After A0, B and C edit only their own files. They make a key live by flipping their own
 module's `KEY_STATUS` and refusal, never by editing `validate.rs`.
 

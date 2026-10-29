@@ -405,6 +405,20 @@ impl MaHost {
                 ),
             )
         };
+        // The ranges the settings form shows (`validate::BOUNDS`, 08 §2.5), checked after the
+        // type checks below so a wrong type keeps its own message.
+        let in_range = || -> Result<()> {
+            for (key, value) in map {
+                let path = format!("detection.ma.params.{key}");
+                if let (Some(b), Some(v)) =
+                    (crate::scenario::validate::bound_of(&path), value.as_f64())
+                    && !b.admits(v)
+                {
+                    return Err(bad(key, value, &format!("in {}", b.describe())));
+                }
+            }
+            Ok(())
+        };
         match choice.id.as_str() {
             MA_LEGACY_WINDOW => {
                 let mut p = MaParams::default();
@@ -420,6 +434,7 @@ impl MaHost {
                         other => return Err(unknown(other, MA_LEGACY_PARAM_KEYS)),
                     }
                 }
+                in_range()?;
                 Ok(MaHost::Legacy(LegacyWindow::new(p)))
             }
             MA_CORROBORATED => {
@@ -437,6 +452,7 @@ impl MaHost {
                         other => return Err(unknown(other, MA_CORROBORATED_PARAM_KEYS)),
                     }
                 }
+                in_range()?;
                 Ok(MaHost::Corroborated(v2xw_threat::CorroboratedMa::new(p)))
             }
             other => Err(conflict(

@@ -2,6 +2,31 @@
 
 .setting-control.wide { max-width: 760px; }
 
+/* SCMS menus (scms-real/08 §4.2): the option explainer, US badges, map rows, range pairs. */
+.option-explainer { position: relative; display: inline-flex; flex-direction: column; align-items: flex-start; }
+.option-list {
+  margin: 4px 0 0;
+  padding: 6px 10px 6px 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  font-size: 12px;
+  line-height: 1.4;
+  max-width: 520px;
+}
+.option-list li.off { opacity: 0.6; }
+.badge-not-us, .badge-us { font-size: 11px; border-radius: 3px; padding: 0 4px; margin-left: 4px; }
+.badge-not-us { border: 1px solid var(--border); color: var(--text-dim); }
+.badge-us { color: var(--text-dim); }
+.map-rows { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.map-row { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; align-self: stretch; }
+.map-row > .list-item-grid { flex: 1; min-width: 240px; }
+.range-pair { display: inline-flex; gap: 8px; align-items: center; }
+.range-pair input { max-width: 90px; }
+.duration-words { font-size: 12px; margin-left: 6px; }
+.setting-irrelevant { font-style: italic; }
+.settings-sub-blurb { margin: 0 0 6px; font-size: 12px; max-width: 72ch; }
+
 .choice { display: flex; flex-direction: column; gap: 4px; }
 .choice select { max-width: 420px; }
 .choice-desc { color: var(--text-dim); font-size: 12px; line-height: 1.4; }

@@ -399,6 +399,13 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
         "revocations",
     ),
     ("security.scms.lifecycle.clock_skew_share", "fraction"),
+    ("detection.ma.params.event_min_reporters", "reporters"),
+    ("detection.ma.params.min_events", "events"),
+    ("detection.ma.params.min_reporters", "reporters"),
+    ("detection.ma.params.reputation_max", "reports"),
+    ("detection.ma.params.report_budget", "reports"),
+    ("detection.ma.params.report_threshold_k", "reporters"),
+    ("detection.ma.params.revoke_min_seconds", "s"),
 ];
 
 /// The numeric leaves that genuinely have no unit, declared rather than left blank.
@@ -835,6 +842,11 @@ impl Walk<'_> {
             // model-parameter blocks — `actors.vehicles.demand.params`,
             // `threats.attackers[].params` — which is to say exactly the fields a
             // generated settings form most needs to be able to name.
+            // A block whose every key is published as a typed field of its own: the form
+            // edits those fields and needs no JSON box (08-settings-ux-and-gaps §2.5).
+            if path == "detection.ma.params" {
+                out.insert("x-typed-children".into(), json!(true));
+            }
             self.with_meta(path, &mut out);
             self.push_leaf(path, "json", &out);
             return Value::Object(out);
@@ -854,6 +866,10 @@ impl Walk<'_> {
             );
             if let Some(template) = options::item_template(path) {
                 out.insert("x-item-template".into(), template);
+            }
+            // A `[from, to]` pair, drawn as two number boxes (08 §4.2 item 3).
+            if options::is_pair(path) {
+                out.insert("x-pair".into(), json!(true));
             }
             self.with_meta(path, &mut out);
             return Value::Object(out);
@@ -1083,6 +1099,11 @@ impl Walk<'_> {
         if let Some(rec) = super::guide::recommended(path) {
             out.insert("x-recommended".into(), json!(rec));
         }
+        // When the field matters (08 §4.2 item 5): the form greys it otherwise, with the
+        // reason, and keeps its value.
+        if let Some((on, values)) = options::relevant_when(path) {
+            out.insert("x-relevant-when".into(), json!({"path": on, "in": values}));
+        }
         if let Some(presets) = options::presets(path) {
             out.insert("x-presets".into(), presets);
         }
@@ -1218,6 +1239,10 @@ impl Walk<'_> {
 /// calendar, `phase2::lifecycle_defaults`). A field whose absence means a rule rather than
 /// a number (`crl_cadence_s`: each provider's publication rule) publishes none.
 fn model_default(path: &str) -> Option<Value> {
+    // An absent `detection.ma` runs the corroborating authority (`MaHost::from_scenario`).
+    if path == "detection.ma.id" {
+        return Some(json!(crate::phase2::MA_CORROBORATED));
+    }
     if path == "security.scms.tls" {
         return Some(json!("1.3"));
     }
@@ -1252,6 +1277,50 @@ const MODEL_PARAM_LEAVES: &[(&str, fn() -> Value)] =
         json!(v2xw_world::procedural::GridParams::default().ew_green_share)
     })];
 
+/// The Misbehaviour Authority's parameters published as fields (`detection.ma.params.<key>`):
+/// the key, its JSON type and its pipeline's value. A key of the corroborating pipeline (the
+/// one an absent `detection.ma` runs) publishes that value as its `default`; a key only the
+/// legacy pipeline takes has no default, because writing nothing never runs it, and publishes
+/// its pipeline's value as `x-pipeline-value`.
+const MA_PARAM_LEAVES: &[(&str, &str, fn() -> Value)] = &[
+    ("event_window_s", "number", || {
+        json!(v2xw_threat::CorroborationParams::default().event_window_s)
+    }),
+    ("event_min_reporters", "integer", || {
+        json!(v2xw_threat::CorroborationParams::default().event_min_reporters)
+    }),
+    ("min_events", "integer", || {
+        json!(v2xw_threat::CorroborationParams::default().min_events)
+    }),
+    ("window_s", "number", || {
+        json!(v2xw_threat::CorroborationParams::default().window_s)
+    }),
+    ("min_reporters", "integer", || {
+        json!(v2xw_threat::CorroborationParams::default().min_reporters)
+    }),
+    ("defence", "boolean", || {
+        json!(v2xw_threat::CorroborationParams::default().defence)
+    }),
+    ("reputation_max", "integer", || {
+        json!(v2xw_threat::CorroborationParams::default().reputation_max)
+    }),
+    ("report_budget", "integer", || {
+        json!(v2xw_threat::CorroborationParams::default().report_budget)
+    }),
+    ("report_threshold_k", "integer", || {
+        json!(v2xw_threat::ma::MaParams::default().report_threshold_k)
+    }),
+    ("revoke_min_seconds", "integer", || {
+        json!(v2xw_threat::ma::MaParams::default().revoke_min_seconds)
+    }),
+    ("revoke_persist_s", "number", || {
+        json!(v2xw_threat::ma::MaParams::default().revoke_persist_s)
+    }),
+    ("revoke_window_s", "number", || {
+        json!(v2xw_threat::ma::MaParams::default().revoke_window_s)
+    }),
+];
+
 /// The published JSON Schema and the flat field index, built together because the index is
 /// the leaves the schema walk found.
 fn walk() -> (Value, Vec<Value>) {
@@ -1281,6 +1350,22 @@ fn walk() -> (Value, Vec<Value>) {
         walk.with_meta(path, &mut out);
         out.insert("default".into(), default());
         walk.push_leaf(path, "number", &out);
+    }
+    // The Misbehaviour Authority's parameters (08-settings-ux-and-gaps §2.5): every key the
+    // two pipelines take (`phase2::MA_*_PARAM_KEYS`), as a typed field with its unit, range,
+    // default and the pipeline it belongs to (`x-relevant-when`), so `detection.ma.params`
+    // needs no JSON.
+    for &(key, kind, default) in MA_PARAM_LEAVES {
+        let path = format!("detection.ma.params.{key}");
+        let mut out = Map::new();
+        out.insert("type".into(), json!(kind));
+        walk.with_meta(&path, &mut out);
+        if crate::phase2::MA_CORROBORATED_PARAM_KEYS.contains(&key) {
+            out.insert("default".into(), default());
+        } else {
+            out.insert("x-pipeline-value".into(), default());
+        }
+        walk.push_leaf(&path, kind, &out);
     }
     if let Value::Object(map) = &mut root {
         map.insert(
@@ -2255,6 +2340,78 @@ mod tests {
                 "{patch} produced no range error at {field}: {errors:?}"
             );
         }
+    }
+
+    /// What the A2 form reads beyond the menus (08 §4.2): every Misbehaviour Authority
+    /// parameter is a field, so `detection.ma.params` needs no JSON, and its range is the
+    /// parser's; every `x-relevant-when` names a published field and values that field
+    /// offers; the silent period is a pair.
+    #[test]
+    fn the_authority_parameters_are_fields_and_relevance_names_real_values() {
+        let all = fields();
+        let by_path = |p: &str| {
+            all.iter()
+                .find(|f| f.get("x-path").and_then(Value::as_str) == Some(p))
+                .cloned()
+        };
+        for key in crate::phase2::MA_CORROBORATED_PARAM_KEYS
+            .iter()
+            .chain(crate::phase2::MA_LEGACY_PARAM_KEYS)
+        {
+            let path = format!("detection.ma.params.{key}");
+            let f = by_path(&path).unwrap_or_else(|| panic!("{path} is not a field"));
+            assert!(
+                f.get("default")
+                    .or_else(|| f.get("x-pipeline-value"))
+                    .is_some(),
+                "{path} states no value"
+            );
+            assert!(
+                f.get("x-relevant-when").is_some(),
+                "{path} names no pipeline"
+            );
+        }
+        let block = by_path("detection.ma.params").expect("the params block is published");
+        assert_eq!(block["x-typed-children"], json!(true));
+        let mut bad = Vec::new();
+        for f in &all {
+            let Some(w) = f.get("x-relevant-when") else {
+                continue;
+            };
+            let path = f["x-path"].as_str().unwrap_or("");
+            let on = w["path"].as_str().unwrap_or("");
+            let Some(target) = by_path(on) else {
+                bad.push(format!("{path}: depends on {on}, which is not a field"));
+                continue;
+            };
+            let offered: Vec<Value> = target["x-options"]
+                .as_array()
+                .map(|r| r.iter().map(|o| o["value"].clone()).collect())
+                .unwrap_or_default();
+            for v in w["in"].as_array().into_iter().flatten() {
+                if !v.is_null() && !offered.contains(v) {
+                    bad.push(format!("{path}: {on} never offers {v}"));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
+        assert!(
+            schema().to_string().contains("\"x-pair\":true"),
+            "the silent period is not published as a pair"
+        );
+        let mut s = crate::Scenario::minimal();
+        s.detection.ma = Some(
+            serde_json::from_value(json!({"id": crate::phase2::MA_CORROBORATED,
+                                          "params": {"window_s": 100_000.0}}))
+            .expect("a choice"),
+        );
+        let errors = validate::validate(&s);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.to_string().contains("detection.ma.params.window_s")),
+            "an authority window past its range loads: {errors:?}"
+        );
     }
 
     /// The surface bundle has every section the page is told to expect.

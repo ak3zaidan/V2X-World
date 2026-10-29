@@ -37,6 +37,7 @@ import { useRevealSetting } from "../lib/links.js";
 import { changedPointers, getPointer } from "../lib/schema.js";
 import {
   buildResearchTree,
+  irrelevantReason,
   describeValue,
   errorPointer,
   errorsByField,
@@ -227,6 +228,7 @@ export function SettingsWindow({
       devDetails={devDetails}
       durationS={f.pointer === "/events" ? durationS : undefined}
       canPick={!detached}
+      irrelevant={irrelevantReason(f, draft, fields)}
       onEdit={editSetting}
       onUndo={undoEdit}
     />
@@ -239,7 +241,8 @@ export function SettingsWindow({
       .filter(({ shown }) => shown.length > 0)
       .map(({ s, shown }) => (
         <div key={s.key} className="settings-sub">
-          {g.subs.length > 1 ? <h4>{s.label}</h4> : null}
+          {g.subs.length > 1 ? <h4 data-testid="settings-subheading">{s.label}</h4> : null}
+          {g.subs.length > 1 && s.blurb ? <p className="faint settings-sub-blurb">{s.blurb}</p> : null}
           {shown.map((f) => row(f, s.key))}
         </div>
       ));

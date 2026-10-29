@@ -1588,26 +1588,28 @@ pub fn extra_values(path: &str) -> Option<(Vec<Value>, bool)> {
             Some((rows_of(path, &crate::phase2::SCMS_ENTITIES), true))
         }
         // The hour the report store re-weights, as the 24 hours of the Eastern clock.
-        "security.scms.lifecycle.report_decay_hour_et" => Some((
-            (0..24)
-                .map(|h| {
-                    json!({
-                        "value": h,
-                        "label": format!("{h:02}:00 ET"),
-                        "description": if h == 5 {
-                            "SCMS Manager MBR v1.0 §2.2: every day at 5 am Eastern time (the US value)."
-                        } else {
-                            "Stored reports are re-weighted every day at this Eastern hour."
-                        },
-                        "available": true,
-                    })
-                })
-                .collect(),
-            true,
-        )),
+        "security.scms.lifecycle.report_decay_hour_et" => Some((hour_rows(), true)),
         // 08-settings-ux-and-gaps §5-§8: the keys an engine module owns.
         _ => crate::scenario::module_keys::options(path),
     }
+}
+
+/// The 24 hours of the Eastern clock, for a daily re-weighting hour (MBR v1.0 §2.2: 05:00).
+fn hour_rows() -> Vec<Value> {
+    (0..24)
+        .map(|h| {
+            json!({
+                "value": h,
+                "label": format!("{h:02}:00 ET"),
+                "description": if h == 5 {
+                    "SCMS Manager MBR v1.0 §2.2: every day at 5 am Eastern time (the US value)."
+                } else {
+                    "Stored reports are re-weighted every day at this Eastern hour."
+                },
+                "available": true,
+            })
+        })
+        .collect()
 }
 
 /// `option_row` for each of `ids`.
@@ -3005,8 +3007,78 @@ pub fn title(path: &str) -> Option<&'static str> {
         "actors.backend.links[].to" => "To",
         "actors.backend.links[].latency_ms" => "Latency",
         "actors.backend.links[].capacity_mbps" => "Capacity",
+        "detection.ma.params" => "Authority parameters",
+        "detection.ma.params.event_window_s" => "One event lasts at most",
+        "detection.ma.params.event_min_reporters" => "Reporters an event needs",
+        "detection.ma.params.min_events" => "Events needed in the window",
+        "detection.ma.params.window_s" => "Evidence window",
+        "detection.ma.params.min_reporters" => "Distinct reporters needed",
+        "detection.ma.params.defence" => "Only trusted reporters count",
+        "detection.ma.params.reputation_max" => "Distrust a reporter reported this often",
+        "detection.ma.params.report_budget" => "Rate-limit a reporter after",
+        "detection.ma.params.report_threshold_k" => "Trusted reporters needed",
+        "detection.ma.params.revoke_min_seconds" => "Distinct seconds of evidence",
+        "detection.ma.params.revoke_persist_s" => "Evidence must persist for",
+        "detection.ma.params.revoke_window_s" => "Evidence window (legacy)",
         // 08-settings-ux-and-gaps §5-§8: the keys an engine module owns.
         _ => return crate::scenario::module_keys::words(path).map(|k| k.title),
+    })
+}
+
+/// Whether the list at `path` is a `[from, to]` pair (`x-pair`, 08 §4.2 item 3).
+pub fn is_pair(path: &str) -> bool {
+    path == "security.pseudonym_change.silent_period_s"
+}
+
+/// When the field at `path` matters (`x-relevant-when`, 08 §4.2 item 5): the path of the
+/// field it depends on and the values under which it acts; `null` stands for that field left
+/// out. Only conditions on a field at a fixed path are listed; a condition inside a list
+/// element (`failures[].extra_ms` under `slow`) is the loader's to refuse.
+pub fn relevant_when(path: &str) -> Option<(&'static str, Vec<Value>)> {
+    let corroborated = crate::phase2::MA_CORROBORATED;
+    let legacy = crate::phase2::MA_LEGACY_WINDOW;
+    Some(match path {
+        "security.scms.deployment.fibre_fraction" | "security.scms.deployment.per_link_ms" => (
+            "security.scms.deployment.latency",
+            vec![json!("region"), Value::Null],
+        ),
+        "security.pseudonym_change.period_s" => {
+            ("security.pseudonym_change.strategy", vec![json!("time")])
+        }
+        "security.pseudonym_change.distance_m" => (
+            "security.pseudonym_change.strategy",
+            vec![json!("distance")],
+        ),
+        "security.pseudonym_change.mix_zone_radius_m"
+        | "security.pseudonym_change.mix_zone_min_age_s" => (
+            "security.pseudonym_change.strategy",
+            vec![json!("mix-zone")],
+        ),
+        "security.on_demand_threshold" => {
+            ("security.verification_policy", vec![json!("on-demand")])
+        }
+        "security.prioritized_horizon_m" => {
+            ("security.verification_policy", vec![json!("prioritized")])
+        }
+        "security.threshold.umbrella_leaves" | "security.threshold.umbrella_inner" => {
+            ("security.threshold.protocol", vec![json!("umbrella")])
+        }
+        "net.rsu_ip.wsa_interval_ms" => ("net.rsu_ip.air", vec![json!("sch")]),
+        "detection.ma.params.event_window_s"
+        | "detection.ma.params.event_min_reporters"
+        | "detection.ma.params.min_events"
+        | "detection.ma.params.window_s"
+        | "detection.ma.params.min_reporters" => ("detection.ma.id", vec![json!(corroborated)]),
+        "detection.ma.params.report_threshold_k"
+        | "detection.ma.params.revoke_min_seconds"
+        | "detection.ma.params.revoke_persist_s"
+        | "detection.ma.params.revoke_window_s" => ("detection.ma.id", vec![json!(legacy)]),
+        "detection.ma.params.defence"
+        | "detection.ma.params.reputation_max"
+        | "detection.ma.params.report_budget" => {
+            ("detection.ma.id", vec![json!(corroborated), json!(legacy)])
+        }
+        _ => return None,
     })
 }
 

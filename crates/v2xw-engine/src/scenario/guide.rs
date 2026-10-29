@@ -1317,6 +1317,67 @@ const ADVANCED: &[Basic] = &[
         explain: "The longest a certificate request may wait in the Registration Authority's mix before it is passed on, full batch or not. A longer wait hides each request among more others and delays a vehicle's certificates.",
         recommended: "172,800 s (two days, CAMP release 1.2.2); 3,600 to 172,800 s. Like the batch size, it acts on a device's first request, which a run makes before the vehicle joins.",
     },
+    // The Misbehaviour Authority's parameters as fields (08-settings-ux-and-gaps §2.5).
+    Basic {
+        path: "detection.ma.params.event_window_s",
+        explain: "Reports about one vehicle that arrive within this long of the first are one event, however many there are (F2MD DELTA_REPORT_TIME).",
+        recommended: "5 s (F2MD); 1 to 30 s.",
+    },
+    Basic {
+        path: "detection.ma.params.event_min_reporters",
+        explain: "How many different trusted vehicles must report an event before it counts as evidence.",
+        recommended: "2; 1 trusts a single reporter.",
+    },
+    Basic {
+        path: "detection.ma.params.min_events",
+        explain: "How many corroborated events inside the window it takes to revoke, so one bad moment is not enough.",
+        recommended: "3; 1 to 10.",
+    },
+    Basic {
+        path: "detection.ma.params.window_s",
+        explain: "The sliding window the events must fall in.",
+        recommended: "60 s; 10 to 600 s.",
+    },
+    Basic {
+        path: "detection.ma.params.min_reporters",
+        explain: "How many different trusted vehicles must have reported across the counted events (the legacy k).",
+        recommended: "3; 1 to 10.",
+    },
+    Basic {
+        path: "detection.ma.params.defence",
+        explain: "Counts only reporters the authority still trusts, so attackers cannot report honest vehicles off the road.",
+        recommended: "On.",
+    },
+    Basic {
+        path: "detection.ma.params.reputation_max",
+        explain: "A reporter that is itself reported this many times in the window is no longer trusted.",
+        recommended: "40 (the legacy engine's PipelineConfig).",
+    },
+    Basic {
+        path: "detection.ma.params.report_budget",
+        explain: "A reporter filing more than this many reports in the window is rate-limited.",
+        recommended: "30 (the legacy engine's PipelineConfig).",
+    },
+    Basic {
+        path: "detection.ma.params.report_threshold_k",
+        explain: "The legacy authority: how many trusted reporters it takes to revoke.",
+        recommended: "3 (PipelineConfig.report_threshold_k).",
+    },
+    Basic {
+        path: "detection.ma.params.revoke_min_seconds",
+        explain: "The legacy authority: the evidence must fall in at least this many different whole seconds.",
+        recommended: "4 (PipelineConfig.revoke_min_seconds).",
+    },
+    Basic {
+        path: "detection.ma.params.revoke_persist_s",
+        explain: "The legacy authority: how long the evidence must persist before it revokes.",
+        recommended: "3 s (PipelineConfig.revoke_persist_s).",
+    },
+    Basic {
+        path: "detection.ma.params.revoke_window_s",
+        explain: "The legacy authority: the sliding window the evidence must be sustained in.",
+        recommended: "15 s (PipelineConfig.revoke_window_s).",
+    },
     // The keys 08-settings-ux-and-gaps §4.1 item 8 promoted from `security.protocol.params`.
     Basic {
         path: "security.scms.lifecycle.ee_retry_timeout_s",
