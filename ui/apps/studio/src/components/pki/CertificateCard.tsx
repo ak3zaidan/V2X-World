@@ -15,17 +15,21 @@ import { useEffect, useMemo, useState } from "react";
 import { time32Date } from "../../lib/pki.js";
 import {
   CERT_STATUS,
+  certErrorText,
   certFacts,
+  deviceName,
   certStatus,
   chainLinks,
   grouped,
   ruleText,
   whyNot,
+  whySentence,
   windowFraction,
   windowWords,
   type ChainLink,
 } from "../../lib/pkiCert.js";
 import { roleInfo } from "../../lib/pkiTopology.js";
+import { Term } from "./Term.js";
 import { CloseIcon } from "../../shell/Icons.js";
 import { usePkiView } from "../pki-records/state.js";
 import { CertBadge, StatusGlyph } from "./CertStatus.js";
@@ -48,9 +52,11 @@ export function CertLink({ id8, holder = null, label, testId }: { readonly id8: 
   );
 }
 
+
+
 function holderText(holder: string | null): string | null {
   if (!holder) return null;
-  if (holder.startsWith("ee/")) return `vehicle ${holder}`;
+  if (holder.startsWith("ee/") || holder.startsWith("rsu/")) return deviceName(holder).replace(/^V/, "v").replace(/^R/, "r");
   const [provider, role, inst] = holder.split("/");
   const info = roleInfo(role ?? holder);
   return `${info.name}${Number(inst) > 0 ? ` ${Number(inst) + 1}` : ""} of ${provider}`;
@@ -133,7 +139,8 @@ export function CertificateCard({
   const failed = cert ? cert.trace.filter((s) => s.status === "fail") : [];
   const [checks, setChecks] = useState<boolean | null>(null);
   const showChecks = checks ?? failed.length > 0;
-  const why = cert ? whyNot(cert) : null;
+  const why = cert ? whySentence(cert, facts?.validity ?? null) : null;
+  const engineWhy = cert ? whyNot(cert) : null;
   const words = facts ? windowWords(facts.validity, cert?.time32 ?? null) : null;
   const issuerHolder = facts && facts.issuer !== "self" ? (owners[facts.issuer] ?? null) : null;
   return (
@@ -155,13 +162,17 @@ export function CertificateCard({
         </span>
         {holderText(known) ? <span className="dim"> · held by {holderText(known)}</span> : null}
       </p>
-      {error ? <p className="faint">The engine could not look this certificate up: {error}</p> : null}
+      {error ? (
+        <p className="faint" title={error} data-testid="pki-cert-error">
+          {certErrorText(error)}
+        </p>
+      ) : null}
       {!cert && !error ? <p className="faint">Checking the certificate as a receiver would…</p> : null}
       {cert && facts ? (
         <>
           <p className="pki-certcard-about dim">{facts.kind.about}</p>
           {why ? (
-            <p className="pki-certcard-why" style={{ color: CERT_STATUS[status].color }} data-testid="pki-cert-why">
+            <p className="pki-certcard-why" style={{ color: CERT_STATUS[status].color }} data-testid="pki-cert-why" title={engineWhy ?? undefined}>
               <StatusGlyph shape={CERT_STATUS[status].shape} /> {why}
             </p>
           ) : null}
@@ -173,6 +184,7 @@ export function CertificateCard({
                 <span className="dim">
                   {words ? `${words} · ` : ""}lifetime {facts.validity.stated}
                 </span>
+
               </div>
             </div>
           ) : null}
@@ -192,7 +204,9 @@ export function CertificateCard({
             <dd>{facts.subject}</dd>
             {facts.permissions.length > 0 ? (
               <>
-                <dt title="Application permissions (appPermissions): the kinds of message it may sign, by PSID">May sign</dt>
+                <dt title="Application permissions (appPermissions): the kinds of message it may sign, by PSID">
+                  May sign (<Term k="psid">PSIDs</Term>)
+                </dt>
                 <dd>
                   <ul className="pki-perms" data-testid="pki-cert-psids">
                     {facts.permissions.map((p) => (
@@ -220,7 +234,13 @@ export function CertificateCard({
                   Linkage
                 </dt>
                 <dd>
-                  week i = <b className="mono">{facts.linkage.iCert}</b> · value <span className="mono">{facts.linkage.value.slice(0, 12)}…</span>
+                  <Term k="ij">
+                    week <b className="mono">{facts.linkage.iCert}</b>
+                  </Term>{" "}
+                  · <Term k="lv">linkage value</Term>{" "}
+                  <span className="mono" title={facts.linkage.value}>
+                    {facts.linkage.value.slice(0, 12)}…
+                  </span>
                 </dd>
               </>
             ) : null}
@@ -228,11 +248,13 @@ export function CertificateCard({
               <>
                 <dt title="crlSeries and cracaId: which revocation list would name it, and the authority that signs that list">Revocation</dt>
                 <dd>
-                  list series <span className="mono">{facts.crlSeries}</span>
+                  would be listed on <Term k="crl-series">revocation list series</Term> <span className="mono">{facts.crlSeries}</span>
                   {facts.cracaId ? (
                     <>
                       {" "}
-                      · CRACA <span className="mono">{facts.cracaId}</span>
+                      <span className="dim" title="cracaId (CRACA, the CRL-signing CA): the low 3 bytes of the hash of the certificate whose holder signs that list">
+                        · signed by the CA ending <span className="mono">{facts.cracaId}</span> (<Term k="craca">CRACA</Term>)
+                      </span>
                     </>
                   ) : null}
                 </dd>
@@ -240,7 +262,17 @@ export function CertificateCard({
             ) : null}
             <dt title="Explicit: carries its public key. Implicit (ECQV): the key is reconstructed from the issuer's, which makes the certificate smaller">Key</dt>
             <dd>
-              {facts.form === "implicit" ? "implicit (ECQV, reconstructed)" : (facts.form ?? "?")}
+              {facts.form === "implicit" ? (
+                <>
+                  <Term k="ecqv">implicit (ECQV)</Term>: the public key is rebuilt from the issuer's, which keeps the certificate small
+                </>
+              ) : facts.form === "explicit" ? (
+                <>
+                  <Term k="explicit">explicit</Term>: the certificate carries its public key
+                </>
+              ) : (
+                (facts.form ?? "?")
+              )}
               {facts.signature ? ` · ${facts.signature}` : ""}
               {facts.encryptionKey ? " · has an encryption key" : ""}
             </dd>
@@ -262,7 +294,9 @@ export function CertificateCard({
                     <li key={s.rule} className={`st-${s.status}`} data-rule={s.rule} title={`${s.rule}: ${t.means}`}>
                       <StatusGlyph shape={s.status === "pass" ? "check" : s.status === "fail" ? "ban" : "dots"} />
                       <b>{t.label}</b>
-                      <span className="dim">{s.status === "fail" && s.detail.length > 0 ? s.detail.join("; ") : s.status === "pass" ? t.means : s.status}</span>
+                      <span className="dim" title={s.detail.length > 0 ? `The engine says: ${s.detail.join("; ")}` : undefined}>
+                        {s.status === "fail" ? (why ?? s.detail.join("; ")) : s.status === "pass" ? t.means : s.status}
+                      </span>
                     </li>
                   );
                 })}

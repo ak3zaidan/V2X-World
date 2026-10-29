@@ -15,9 +15,11 @@
 
 import { useEffect, useState } from "react";
 
-import { GROUND_TRUTH, formatBytes, hexRows, pduOf, treeLines, type PduAnswer, type PduLayer } from "../../lib/pki.js";
+import { GROUND_TRUTH, formatBytes, formatSimT, hexRows, pduOf, treeLines, type PduAnswer, type PduLayer } from "../../lib/pki.js";
 import { fieldGloss, pduText } from "../../lib/pkiPdu.js";
+import { grouped } from "../../lib/pkiCert.js";
 import { entityLabel } from "../../lib/pkiRecords.js";
+import { Term } from "./Term.js";
 import { engine } from "../../state/engine.js";
 import { CloseIcon } from "../../shell/Icons.js";
 
@@ -56,13 +58,17 @@ function Layer({ layer, index, raw }: { readonly layer: PduLayer; readonly index
   return (
     <section className="pki-layer" data-testid={`pdu-layer-${index}`} data-type={layer.type}>
       <h4>
-        <span className="mono">{layer.type}</span>
-        {layer.content ? <span className="pill" title="Which kind of content this envelope carries">{layer.content}</span> : null}
-        <span className="dim mono">
-          {layer.path} · {layer.len} B
+        <span>{t.what.replace(/^./, (c) => c.toUpperCase())}</span>
+        <span className="dim mono">{layer.type}</span>
+        {layer.content ? (
+          <span className="pill" title="Which kind of content this envelope carries">
+            {layer.content}
+          </span>
+        ) : null}
+        <span className="faint mono" title={`Where this layer sits in the message: ${layer.path}`}>
+          {layer.len} B
         </span>
       </h4>
-      <p className="pki-layer-what dim">{t.what}</p>
       <div className="pki-layer-body">
         {raw ? <HexDump hex={layer.hex} testId={`pdu-hex-${index}`} /> : null}
         {layer.jer !== undefined ? (
@@ -107,7 +113,10 @@ export function PduDecoder({ id, view, onClose }: { readonly id: string; readonl
   return (
     <aside className="pki-drawer pki-decoder" data-testid="pdu-decoder">
       <div className="pki-drawer-head">
-        <h3 className="mono">{pdu?.type ?? id}</h3>
+        <h3>
+          Message decoder
+          {pdu ? <span className="dim mono pki-pdu-type"> {pdu.type}</span> : null}
+        </h3>
         <span className="grow" />
         <button type="button" className="icon-button" onClick={onClose} aria-label="Close the decoder" data-testid="pdu-close">
           <CloseIcon />
@@ -122,40 +131,48 @@ export function PduDecoder({ id, view, onClose }: { readonly id: string; readonl
             {what.flow ? <span className="dim"> ({what.flow})</span> : null}.
           </p>
           <dl className="pki-pairs">
-            <dt>from → to</dt>
-            <dd>
+            <dt>From → to</dt>
+            <dd title={`${pdu.from} → ${pdu.to}`}>
               {entityLabel(pdu.from)} → {entityLabel(pdu.to)}
-              <span className="faint mono"> ({pdu.from} → {pdu.to})</span>
             </dd>
-            <dt>size</dt>
+            <dt>Size</dt>
             <dd className="mono">
               {pdu.len} B{pdu.len >= 1000 ? ` (${formatBytes(pdu.len)})` : ""}
             </dd>
             {pdu.id8 ? (
               <>
-                <dt title="HashedId8: the low 8 bytes of its SHA-256, how lists and messages refer to it">HashedId8</dt>
-                <dd className="mono">{pdu.id8}</dd>
+                <dt title="HashedId8: the low 8 bytes of its SHA-256, how lists and messages refer to it">
+                  <Term k="hashedid8">Its id (HashedId8)</Term>
+                </dt>
+                <dd className="mono">{grouped(pdu.id8)}</dd>
               </>
             ) : null}
-            <dt>built at</dt>
-            <dd className="mono">{(pdu.t / 1e9).toFixed(6)} s</dd>
+            <dt>Built at</dt>
+            <dd className="mono" title={`${(pdu.t / 1e9).toFixed(6)} s`}>
+              {formatSimT(pdu.t)}
+            </dd>
             {pdu.sealed_to ? (
               <>
-                <dt>readable by</dt>
+                <dt>Readable by</dt>
                 <dd>{sealedText(pdu.sealed_to)}</dd>
               </>
             ) : null}
-            <dt title="Ground truth sees every byte; an entity sees only what it sent or received, and only the plaintext it opened">seen as</dt>
-            <dd className="mono" data-testid="pdu-view">
+            <dt title="Ground truth sees every byte; an entity sees only what it sent or received, and only the plaintext it opened">Seen as</dt>
+            <dd className="mono" data-testid="pdu-view" title={pdu.view === GROUND_TRUTH ? "everything (ground truth)" : entityLabel(pdu.view)}>
               {pdu.view === GROUND_TRUTH ? "ground truth" : pdu.view}
             </dd>
-            <dt>message id</dt>
+            <dt>Message id</dt>
             <dd className="mono faint">{pdu.id}</dd>
           </dl>
+          <p className="faint pki-pdu-how">
+            Below, each layer of the message from the outside in: every field with what it means beside it (hover a field for more). Encodings are{" "}
+            <Term k="jer">JER</Term>; the raw bytes are one switch away.
+          </p>
           <label className="pki-raw-toggle">
-            <input type="checkbox" checked={raw} onChange={(e) => setRaw(e.target.checked)} data-testid="pdu-raw-toggle" /> show the raw bytes (hex) beside each layer
+            <input type="checkbox" checked={raw} disabled={pdu.hex === null} onChange={(e) => setRaw(e.target.checked)} data-testid="pdu-raw-toggle" /> show the raw bytes (hex)
+            above each layer's fields
           </label>
-          {pdu.hex === null ? <p className="faint">The run kept this message's length only, not its bytes.</p> : null}
+          {pdu.hex === null ? <p className="faint">The run kept this message's length only, not its bytes, so there is no hex to show.</p> : null}
           {pdu.layers.map((l, i) => (
             <Layer key={l.path} layer={l} index={i} raw={raw} />
           ))}

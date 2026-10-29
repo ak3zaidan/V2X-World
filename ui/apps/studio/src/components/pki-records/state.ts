@@ -60,6 +60,10 @@ export interface PkiViewState {
   owners: Readonly<Record<string, string>>;
   /** The CTL's roots as HashedId8 (the last 8 bytes of each HashedId32), from the same snapshot. */
   ctlRoots: readonly string[];
+  /** The newest trust snapshot's simulated time, ns: the panel's "now" (0 before the first). */
+  nowNs: number;
+  /** Each provider's CRL Generator schedule, seconds (its `cadence_s` counter); absent when it publishes by rule. */
+  crlCadence: Readonly<Record<string, number>>;
   /** A certificate card opened from anywhere in the view, by HashedId8, with what is known of its holder. */
   cert: { readonly id8: string; readonly holder: string | null } | null;
   set: (patch: Partial<Omit<PkiViewState, "set">>) => void;
@@ -75,6 +79,8 @@ export const usePkiView = create<PkiViewState>((set) => ({
   tagged: 0,
   owners: {},
   ctlRoots: [],
+  nowNs: 0,
+  crlCadence: {},
   cert: null,
   set: (patch) => set(patch),
 }));

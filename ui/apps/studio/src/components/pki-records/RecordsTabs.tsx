@@ -30,8 +30,8 @@ export function MapModePicker(): React.JSX.Element {
   const mode = usePkiView((s) => s.mapMode);
   const set = usePkiView((s) => s.set);
   return (
-    <label className="pkir-picker">
-      <span className="faint">map</span>
+    <label className="pkir-picker" title="Colour the vehicles on the map behind this panel: by provider, by credential state, or the chosen case's reporters and accused">
+      <span className="dim">Colour map by</span>
       <select value={mode} onChange={(e) => set({ mapMode: e.target.value as PkiMapMode })} data-testid="pki-map-mode">
         {(Object.keys(MAP_MODE_LABEL) as PkiMapMode[]).map((m) => (
           <option key={m} value={m}>{MAP_MODE_LABEL[m]}</option>

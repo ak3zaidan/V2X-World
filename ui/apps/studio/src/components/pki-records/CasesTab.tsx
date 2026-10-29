@@ -25,7 +25,9 @@ import {
   type CaseStep,
   type CaseView,
 } from "../../lib/pkiRecords.js";
-import { caseHeadline, caseSteps, STAGE_HELP, STAGE_STORY } from "../../lib/pkiCases.js";
+import { beatNow, caseHeadline, caseSteps, storyBeats, STAGE_HELP, STAGE_STORY } from "../../lib/pkiCases.js";
+import { deviceName } from "../../lib/pkiCert.js";
+import { Term } from "../pki/Term.js";
 import { usePki, usePkiView } from "./state.js";
 import { Locked } from "./VehiclesTab.js";
 
@@ -73,13 +75,17 @@ function caseName(c: Pick<CaseView, "case">): string {
   return `Case ${n ?? c.case}`;
 }
 
+/** The case's four beats as a labelled bar: the same words as the story on the right. */
 function Progress({ c }: { readonly c: CaseView }): React.JSX.Element {
-  const reached = new Set(c.stages.map((s) => s.stage));
-  const refused = reached.has("refused");
+  const beats = storyBeats(c);
+  const refused = c.stages.some((s) => s.stage === "refused");
   return (
-    <span className="pkir-progress" aria-hidden="true">
-      {BOARD_COLUMNS.map((b) => (
-        <i key={b.stage} className={reached.has(b.stage) ? "on" : refused ? "off refused" : "off"} title={b.label} />
+    <span className="pkir-progress pki-beats" data-testid="pki-case-progress">
+      {beats.map((b) => (
+        <span key={b.key} className={b.done ? "on" : refused ? "off refused" : "off"} data-beat={b.key}>
+          <i aria-hidden="true" />
+          <small>{b.title}</small>
+        </span>
       ))}
     </span>
   );
@@ -87,7 +93,7 @@ function Progress({ c }: { readonly c: CaseView }): React.JSX.Element {
 
 function CaseRow({ c, selected, onSelect }: { readonly c: CaseView; readonly selected: boolean; readonly onSelect: () => void }): React.JSX.Element {
   const col = boardColumn(c);
-  const label = col === "refused" ? "Refused" : (BOARD_COLUMNS.find((b) => b.stage === col)?.label ?? "Seen in steps only");
+  const label = beatNow(c);
   const enf = enforcement(c);
   const head = caseHeadline(c);
   return (
@@ -103,21 +109,39 @@ function CaseRow({ c, selected, onSelect }: { readonly c: CaseView; readonly sel
       >
         <span className="pkir-case-head">
           <b>{caseName(c)}</b>
-          <span className="faint mono">{c.provider}</span>
+          <span className="faint">{c.provider}</span>
           <span className="grow" />
-          <span className={`pkir-stage-pill ${col ?? ""}`}>{label}</span>
+          <span className={`pkir-stage-pill ${col ?? ""}`} title={col ? `MA stage: ${BOARD_COLUMNS.find((b) => b.stage === col)?.label ?? col}` : undefined}>
+            {label}
+          </span>
         </span>
         <Progress c={c} />
+        <span className="pkir-case-numbers">
+          {head.toList !== null ? (
+            <span data-testid="pki-case-to-list">
+              on the list <b className="mono">{secondsText(head.toList)}</b> after the first report
+            </span>
+          ) : head.refused ? (
+            <span>not revoked</span>
+          ) : (
+            <span className="faint">not on a list yet</span>
+          )}
+          {enf ? (
+            <span data-testid="pki-case-refusing">
+              {" "}
+              · <b className="mono">{enf.installed}</b> of {enf.of} vehicles refuse it
+            </span>
+          ) : null}
+        </span>
         <span className="faint">
           {c.truth ? (
             <span data-testid="pki-case-parties">
-              accused {c.truth.accused.map((a) => a.device).join(", ") || "unknown"} · {c.truth.reporters.length} reporter{c.truth.reporters.length === 1 ? "" : "s"}
+              accused {c.truth.accused.map((a) => deviceName(a.device)).join(", ") || "unknown"} · {c.truth.reporters.length} reporter
+              {c.truth.reporters.length === 1 ? "" : "s"}
             </span>
           ) : (
-            `${c.steps.length} steps`
+            `${c.steps.length} step${c.steps.length === 1 ? "" : "s"} seen by this view`
           )}
-          {enf ? ` · installed by ${enf.installed}` : ""}
-          {head.toList !== null ? ` · on the list after ${secondsText(head.toList)}` : ""}
         </span>
       </button>
     </li>
@@ -134,12 +158,11 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
   return (
     <div className="pkir-card" data-testid="pki-case-detail">
       <h3>
-        {caseName(c)} <span className="dim mono">· decided by the MA of {c.provider}</span>
+        {caseName(c)} <span className="dim">· decided by the Misbehaviour Authority (MA) of {c.provider}</span>
       </h3>
-      {first !== undefined && last !== undefined ? (
-        <p className="dim">
-          report to {BOARD_COLUMNS.find((b) => b.stage === times[times.length - 1].stage)?.label.toLowerCase() ?? times[times.length - 1].stage} in{" "}
-          <b className="mono">{secondsText(last - first)}</b>
+      {first !== undefined && last !== undefined && last - first >= 5e7 ? (
+        <p className="dim" data-testid="pki-case-took">
+          From the first report to “{beatNow(c)}” took <b className="mono">{secondsText(last - first)}</b> of simulated time.
         </p>
       ) : null}
       <Story c={c} />
@@ -154,17 +177,17 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
           <span>
             accused{" "}
             {c.truth.accused.map((a) => (
-              <b key={a.device} className="mono">
-                {a.device}
+              <b key={a.device} title={a.device}>
+                {deviceName(a.device)}
                 {a.provider ? ` (${a.provider})` : ""}{" "}
               </b>
             ))}
           </span>
-          <span className="faint" title={c.truth.reporters.map((r) => `${r.device}${r.provider ? ` (${r.provider})` : ""} ×${r.reports}`).join(", ")}>
-            reported by {c.truth.reporters.length} device{c.truth.reporters.length === 1 ? "" : "s"}:{" "}
+          <span className="faint" title={c.truth.reporters.map((r) => `${r.device}${r.provider ? ` (${r.provider})` : ""}: ${r.reports} report${r.reports === 1 ? "" : "s"}`).join(", ")}>
+            reported by {c.truth.reporters.length} vehicle{c.truth.reporters.length === 1 ? "" : "s"}:{" "}
             {c.truth.reporters
               .slice(0, 6)
-              .map((r) => `${r.device} ×${r.reports}`)
+              .map((r) => `${deviceName(r.device)} (${r.reports} report${r.reports === 1 ? "" : "s"})`)
               .join(", ")}
             {c.truth.reporters.length > 6 ? ` +${c.truth.reporters.length - 6}` : ""}
           </span>
@@ -181,10 +204,10 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
                   {s.label}
                 </span>
                 {s.reached && s.t !== null ? <span className="mono faint">{secondsText(s.t)}</span> : <span className="faint">not reached</span>}
-                {s.waitNs !== null && s.waitNs > 0 ? <span className="mono faint">waited {secondsText(s.waitNs)}</span> : null}
+                {s.waitNs !== null && s.waitNs >= 5e7 ? <span className="mono faint">{secondsText(s.waitNs)} after the step before</span> : null}
               </div>
               {STAGE_STORY[s.stage] ? <div className="pki-stage-says">{STAGE_STORY[s.stage].says}</div> : null}
-              {s.detail ? <div className="faint mono pkir-step-detail">{s.detail}</div> : null}
+              {s.detail ? <div className="faint pkir-step-detail">{s.detail}</div> : null}
               {s.learned.length > 0 ? (
                 <ul className="pkir-learned" data-testid="pki-case-learned">
                   {s.learned.map((l, k) => (
@@ -200,7 +223,15 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
         ))}
       </ol>
       {Array.isArray(subjects) ? (
-        <p className="faint mono">accused pseudonym(s): {subjects.map((x: { i?: number; lv?: string }) => `i ${x.i} · LV ${x.lv}`).join("; ")}</p>
+        <p className="faint" data-testid="pki-case-subjects">
+          The accused pseudonym certificate{subjects.length === 1 ? "" : "s"}:{" "}
+          {subjects.map((x: { i?: number; lv?: string }, k: number) => (
+            <span key={k}>
+              {k > 0 ? "; " : ""}
+              <Term k="ij">week {x.i}</Term>, <Term k="lv">linkage value</Term> <span className="mono">{String(x.lv ?? "").slice(0, 12)}…</span>
+            </span>
+          ))}
+        </p>
       ) : null}
       <details>
         <summary className="dim">Every investigation step ({c.steps.length})</summary>
@@ -209,8 +240,8 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
             {c.steps.map((s) => (
               <tr key={s.id} className={`step-${s.kind}`}>
                 <td className="mono">{secondsText(s.t)}</td>
-                <td>{s.kind === "msg" ? `${entityLabel(s.from ?? "")} → ${entityLabel(s.to ?? "")}` : `${entityLabel(s.from ?? "")} stamps`}</td>
-                <td className="mono">{s.name}</td>
+                <td>{s.kind === "msg" ? `${entityLabel(s.from ?? "")} → ${entityLabel(s.to ?? "")}` : `${entityLabel(s.from ?? "")} records a stage`}</td>
+                <td>{s.name.replace(/[-_]+/g, " ")}</td>
                 <td className="mono faint">
                   {s.bytes ? `${s.bytes} B` : ""}
                   {s.pdus.length ? ` · ${s.pdus.map((p) => p.type).join(", ")}` : ""}
@@ -240,7 +271,7 @@ function StepMessageList({ messages }: { readonly messages: readonly CaseStep[] 
     <ul className="pkir-step-msgs">
       {messages.map((m) => (
         <li key={m.id} title={STEP_LEARNS[m.name] ?? m.name}>
-          <span className="mono faint">{secondsText(m.t)}</span> {entityLabel(m.from ?? "")} → {entityLabel(m.to ?? "")} <span className="mono">{m.name.replace(/-/g, " ")}</span>
+          <span className="mono faint">{secondsText(m.t)}</span> {entityLabel(m.from ?? "")} → {entityLabel(m.to ?? "")}: <span>{m.name.replace(/-/g, " ")}</span>
           {m.bytes ? <span className="faint mono"> {m.bytes} B</span> : null}
         </li>
       ))}
@@ -254,27 +285,14 @@ function StepMessageList({ messages }: { readonly messages: readonly CaseStep[] 
  * each with the time since the first report, and how many devices refuse the sender now.
  */
 function Story({ c }: { readonly c: CaseView }): React.JSX.Element {
-  const h = caseHeadline(c);
-  const reached = new Set(c.stages.map((s) => s.stage));
-  const beats: { key: string; title: string; at: number | null; done: boolean; note?: string }[] = [
-    { key: "reports-in", title: "Reported", at: reached.has("reports-in") ? 0 : null, done: reached.has("reports-in") },
-    { key: "decision", title: h.refused ? "Not revoked" : "MA decided", at: h.toDecision, done: reached.has("decision") || h.refused },
-    { key: "crl-published", title: "On the list", at: h.toList, done: reached.has("crl-published") },
-    {
-      key: "enforced",
-      title: "Devices refuse it",
-      at: h.toEnforced,
-      done: reached.has("enforced"),
-      note: h.enforced ? `${h.enforced.installed} of ${h.enforced.of} vehicles` : undefined,
-    },
-  ];
+  const beats = storyBeats(c);
   return (
     <ol className="pki-story" data-testid="pki-case-story" aria-label="The case in four steps">
       {beats.map((b) => (
         <li key={b.key} className={b.done ? "done" : "todo"} data-beat={b.key}>
           <span className="pki-story-dot" aria-hidden="true" />
           <b>{b.title}</b>
-          <span className="mono">{b.done && b.at !== null ? (b.at === 0 ? "t = 0" : `+${secondsText(b.at)}`) : "not yet"}</span>
+          <span className="mono">{b.done && b.at !== null ? (b.key === "reports-in" ? "first report" : b.at < 5e7 ? "at once" : `+${secondsText(b.at)}`) : "not yet"}</span>
           {b.note ? <span className="faint">{b.note}</span> : null}
         </li>
       ))}

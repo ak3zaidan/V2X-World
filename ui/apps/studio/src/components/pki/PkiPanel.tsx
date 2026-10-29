@@ -25,6 +25,7 @@ import { JsonRpcError, RpcErrorCode } from "@vwp/protocol";
 import { GROUND_TRUTH, trustOf, viewOptions, type TrustAnswer } from "../../lib/pki.js";
 import { ctlRootIds, ownersOf } from "../../lib/pkiCert.js";
 import { asCrls, entityLabel, viewChoices } from "../../lib/pkiRecords.js";
+import { componentName } from "../../lib/pkiTopology.js";
 import { engine } from "../../state/engine.js";
 import { useStudio } from "../../state/store.js";
 import { CloseIcon, NetworkIcon } from "../../shell/Icons.js";
@@ -37,6 +38,24 @@ import { FlowsTab } from "./FlowsTab.js";
 import { HealthStrip } from "./HealthStrip.js";
 import { TrustDomain } from "./TrustDomain.js";
 import "../../styles/pki.css";
+
+/** Each provider's CRL Generator schedule in seconds, from its `cadence_s` counter. */
+function crlCadenceOf(state: TrustAnswer["state"]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const p of state.providers) {
+    const g = p.components.find((c) => c.role === "crlg");
+    const v = g?.counters.cadence_s;
+    if (typeof v === "number" && v > 0) out[p.label] = v;
+  }
+  return out;
+}
+
+/** A view choice in words: everything (ground truth), or what one authority knows. */
+function viewLabel(id: string, locked: boolean): string {
+  if (id === GROUND_TRUTH) return locked ? "everything (ground truth, locked)" : "everything (ground truth)";
+  return `what ${componentName(id, true)} knows`;
+}
+
 
 /** How often the open panel asks for a new trust-domain snapshot, wall-clock ms. */
 const POLL_MS = 1000;
@@ -110,6 +129,9 @@ export function PkiPanel({ close }: { readonly close: () => void }): React.JSX.E
         const roots = ctlRootIds(answer.state);
         const was = usePkiView.getState();
         if (JSON.stringify(owners) !== JSON.stringify(was.owners) || roots.join() !== was.ctlRoots.join()) usePkiView.getState().set({ owners, ctlRoots: roots });
+        if (answer.t_ns !== was.nowNs) usePkiView.getState().set({ nowNs: answer.t_ns });
+        const cadence = crlCadenceOf(answer.state);
+        if (JSON.stringify(cadence) !== JSON.stringify(was.crlCadence)) usePkiView.getState().set({ crlCadence: cadence });
       }
       setUnsupported(false);
       setError(answer === null ? "The engine answered inspect.trust, but not with a trust domain." : null);
@@ -168,23 +190,21 @@ export function PkiPanel({ close }: { readonly close: () => void }): React.JSX.E
         </div>
         <span className="grow" />
         <MapModePicker />
-        <label className="pki-view" title="Show the system as ground truth, or as one entity knows it: only the messages it sent or received, only the plaintext it opened">
-          <span className="dim">view</span>
+        <label
+          className="pki-view"
+          title="Everything (ground truth) shows the whole system. Choosing one authority shows only what it knows: the messages it sent or received and the plaintext it opened, with no vehicle named."
+        >
+          <span className="dim">Seen as</span>
           <select value={activeView} onChange={(e) => setView(e.target.value)} data-testid="pki-view">
             {options.map((o) => (
               <option key={o.id} value={o.id}>
-                {o.label}
+                {viewLabel(o.id, locked)}
               </option>
             ))}
           </select>
         </label>
-        {trust ? (
-          <span className="dim mono pki-time" data-testid="pki-time" title="The snapshot's instant: simulated time and Time32">
-            {trust.state.edition} · {trust.state.preset} · t {(trust.t_ns / 1e9).toFixed(0)} s
-          </span>
-        ) : null}
-        <button type="button" className="icon-button" onClick={close} aria-label="Close the PKI view" title="Close (Esc)" data-testid="pki-close">
-          <CloseIcon />
+        <button type="button" className="pki-close" onClick={close} aria-label="Close the certificate system view" title="Close (Esc)" data-testid="pki-close">
+          <CloseIcon /> <span>Close</span>
         </button>
       </div>
       {trust ? <HealthStrip trust={trust} view={locked && activeView === GROUND_TRUTH ? null : activeView} /> : null}

@@ -31,7 +31,15 @@ import {
 } from "../../lib/pki.js";
 import { engine } from "../../state/engine.js";
 import { CloseIcon } from "../../shell/Icons.js";
+import { deviceName } from "../../lib/pkiCert.js";
+import { pduText } from "../../lib/pkiPdu.js";
+import { entityLabel } from "../../lib/pkiRecords.js";
+import { flowInfo } from "../../lib/pkiTopology.js";
+import { arrowLabel, fitLabel, wordsOf } from "../../lib/pkiPdu.js";
 import { PduDecoder } from "./PduDecoder.js";
+
+/** Characters of 11 px text that fit `px`, about. */
+const CHAR_PX = 6.4;
 
 const POLL_MS = 2000;
 const LANE_W = 128;
@@ -45,13 +53,6 @@ function rowHeight(r: SeqRow): number {
   return r.kind === "gap" ? GAP_H : ROW_H;
 }
 
-/** The arrow's label: the SPDU(s) it carried, else the step name. */
-function arrowLabel(r: FlowRecord): string {
-  const types = [...new Set((r.pdus ?? []).map((p) => p.type))];
-  if (types.length === 0) return r.name;
-  const n = r.pdus?.length ?? 0;
-  return `${types.join(", ")}${n > 1 ? ` ×${n}` : ""}`;
-}
 
 function Sequence({
   detail,
@@ -113,7 +114,7 @@ function Sequence({
             <g key={r.record.id} className={r.observed ? "pki-stage" : "pki-stage unobserved"} data-testid={`pki-stage-${r.record.name}`}>
               <path d={`M${cx} ${cy - 5} L${cx + 5} ${cy} L${cx} ${cy + 5} L${cx - 5} ${cy} z`} className="pki-diamond" />
               <text x={cx + 9} y={cy + 4} className="pki-stage-label">
-                {r.record.name} · +{formatSpan(r.dt)}
+                {wordsOf(r.record.name)} · +{formatSpan(r.dt)}
               </text>
             </g>
           );
@@ -137,9 +138,10 @@ function Sequence({
             onKeyDown={clickable ? (e) => (e.key === "Enter" || e.key === " ") && onPick(r.record) : undefined}
           >
             <title>
-              {r.record.name}: {r.record.from} → {r.record.to} · {r.record.bytes ?? 0} B · {formatSimT(r.record.t)}
+              {wordsOf(r.record.name)}: {entityLabel(r.record.from ?? "?")} → {entityLabel(r.record.to ?? "?")} · {r.record.bytes ?? 0} B · {formatSimT(r.record.t)}
               {r.record.transport ? ` · ${r.record.transport}` : ""}
-              {r.observed ? "" : ` — not seen by ${view}`}
+              {(r.record.pdus ?? []).length > 0 ? ` · carries ${[...new Set((r.record.pdus ?? []).map((p) => p.type))].join(", ")}` : ""}
+              {r.observed ? "" : ` — not seen by ${entityLabel(view)}`}
             </title>
             <rect x={Math.min(x1, x2) - 4} y={top + 1} width={Math.abs(x2 - x1) + 8 || 60} height={ROW_H - 2} className="pki-msg-hit" />
             {self ? (
@@ -147,14 +149,19 @@ function Sequence({
             ) : (
               <line x1={x1} x2={x2} y1={cy} y2={cy} className="pki-msg-line" markerEnd="url(#pki-arrowhead)" />
             )}
-            <text x={self ? x1 + 30 : mid} y={cy - 5} textAnchor={self ? "start" : "middle"} className="pki-msg-label">
-              {arrowLabel(r.record)}
-              <tspan className="pki-msg-meta">
-                {" "}
-                {(r.record.pdus?.length ?? 0) > 0 ? `${r.record.name} · ` : ""}
-                {r.record.bytes ?? 0} B · +{formatSpan(r.record.t - t0)}
-              </tspan>
-            </text>
+            {(() => {
+              // The label sits over its arrow and never runs past the diagram's edge.
+              const room = self ? LANE_W - 34 : Math.max(Math.abs(x2 - x1) - 8, LANE_W - 20);
+              const label = fitLabel(arrowLabel(r.record), Math.floor(room / CHAR_PX));
+              const meta = `${formatBytes(r.record.bytes ?? 0)} · +${formatSpan(r.record.t - t0)}`;
+              const both = (label.length + meta.length + 1) * CHAR_PX <= room;
+              return (
+                <text x={self ? x1 + 30 : mid} y={cy - 5} textAnchor={self ? "start" : "middle"} className="pki-msg-label">
+                  {label}
+                  {both ? <tspan className="pki-msg-meta"> {meta}</tspan> : null}
+                </text>
+              );
+            })()}
           </g>
         );
       })}
@@ -173,45 +180,46 @@ function MessageCard({
   readonly onPdu: (id: string) => void;
   readonly onClose: () => void;
 }): React.JSX.Element {
+  const pdus = record.pdus ?? [];
   return (
     <aside className="pki-drawer" data-testid="pki-msg-card">
       <div className="pki-drawer-head">
-        <h3 className="mono">{record.name}</h3>
+        <h3>{wordsOf(record.name).replace(/^./, (c) => c.toUpperCase())}</h3>
         <span className="grow" />
         <button type="button" className="icon-button" onClick={onClose} aria-label="Close" data-testid="pki-msg-close">
           <CloseIcon />
         </button>
       </div>
       <div className="pki-drawer-body">
-        <dl className="pki-pairs">
-          <dt>from → to</dt>
-          <dd className="mono">
-            {record.from} → {record.to}
-          </dd>
-          <dt>left at</dt>
-          <dd className="mono">{formatSimT(record.t)}</dd>
-          <dt>bytes</dt>
-          <dd className="mono">{record.bytes ?? 0}</dd>
-          {record.transport ? (
-            <>
-              <dt>transport</dt>
-              <dd className="mono">{record.transport}</dd>
-            </>
-          ) : null}
-        </dl>
-        {(record.pdus ?? []).length === 0 ? <p className="faint">It carried no SPDU of its own: a backend control message whose bytes the engine counts but does not encode.</p> : null}
+        <p className="pki-pdu-what" data-testid="pki-msg-says">
+          {entityLabel(record.from ?? "?")} sent this to {entityLabel(record.to ?? "?")} at {formatSimT(record.t)}: {formatBytes(record.bytes ?? 0)}
+          {record.transport ? ` over ${record.transport.replace(/-/g, " ")}` : ""}
+          {pdus.length > 0 ? `, carrying ${pdus.length} secured message${pdus.length === 1 ? "" : "s"} (SPDUs).` : "."}
+        </p>
+        {pdus.length === 0 ? <p className="faint">It carried no SPDU of its own: a backend control message whose bytes the engine counts but does not encode.</p> : null}
         <ul className="pki-pdus">
-          {(record.pdus ?? []).map((p) => (
-            <li key={p.id}>
-              <button type="button" className="linklike mono" disabled={!canInspect(p, record, view)} onClick={() => onPdu(p.id)} data-testid={`pki-pdu-${p.id}`}>
-                {p.type}
-              </button>{" "}
-              <span className="dim mono">
-                {p.len} B{p.sealed_to ? ` · encrypted to ${p.sealed_to}` : ""}
-              </span>
-            </li>
-          ))}
+          {pdus.map((p) => {
+            const t = pduText(p.type);
+            const can = canInspect(p, record, view);
+            return (
+              <li key={p.id}>
+                <button type="button" className="linklike" disabled={!can} onClick={() => onPdu(p.id)} data-testid={`pki-pdu-${p.id}`} title={can ? "Open it in the decoder" : "This view never saw its bytes"}>
+                  <span className="mono">{p.type}</span>
+                </button>
+                <span className="dim"> · {t.what}</span>
+                <span className="faint mono">
+                  {" "}
+                  · {formatBytes(p.len)}
+                  {p.sealed_to ? ` · readable only by ${p.sealed_to === "ee" ? "the vehicle" : entityLabel(p.sealed_to)}` : ""}
+                </span>
+              </li>
+            );
+          })}
         </ul>
+        {pdus.some((p) => canInspect(p, record, view)) ? <p className="faint">Open one to see its fields explained, and its raw bytes behind a toggle.</p> : null}
+        <p className="faint mono" title="The engine's names for this message">
+          {record.from} → {record.to} · {record.id}
+        </p>
       </div>
     </aside>
   );
@@ -281,11 +289,15 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
     (r: FlowRecord) => {
       const pdus = r.pdus ?? [];
       const only = pdus.length === 1 ? pdus[0] : undefined;
+      // Opening a message holds its flow: the list keeps growing, the diagram stays put.
+      setInstance(r.instance);
       setMessage(r);
       setPdu(only && canInspect(only, r, view) ? only.id : null);
     },
     [view],
   );
+  const chosenRow = list?.instances.find((i) => i.instance === chosen) ?? null;
+  const newer = instance !== null && chosenRow ? (list?.instances ?? []).filter((i) => i.first_t > chosenRow.first_t).length : 0;
 
   const flowNames = Object.keys(list?.flows ?? {});
   const stages = detail ? stagesOf(detail) : [];
@@ -300,7 +312,7 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
               <option value="">every flow</option>
               {flowNames.map((f) => (
                 <option key={f} value={f}>
-                  {f} ({list?.flows[f] ?? 0})
+                  {flowInfo(f).name} ({list?.flows[f] ?? 0})
                 </option>
               ))}
             </select>
@@ -308,8 +320,24 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
           </div>
           {error ? <p className="faint">The engine said: {error}</p> : null}
           <p className="dim">
-            {list ? `${list.total} instance${list.total === 1 ? "" : "s"}${list.total > list.instances.length ? `, newest ${list.instances.length}` : ""}` : "…"}
+            {list
+              ? `${list.total.toLocaleString()} flow${list.total === 1 ? "" : "s"} so far${list.total > list.instances.length ? `; the newest ${list.instances.length} are listed` : ""}`
+              : "Waiting for the engine's list of flows…"}
           </p>
+          {newer > 0 ? (
+            <button
+              type="button"
+              className="linklike pki-newer"
+              onClick={() => {
+                setInstance(null);
+                setMessage(null);
+                setPdu(null);
+              }}
+              data-testid="pki-flow-newer"
+            >
+              {newer} newer flow{newer === 1 ? "" : "s"} since this one · follow the newest
+            </button>
+          ) : null}
           <ul data-testid="pki-flow-instances">
             {(list?.instances ?? []).map((i) => (
               <li key={i.instance}>
@@ -323,12 +351,15 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
                   }}
                   data-testid={`pki-flow-${i.instance}`}
                 >
-                  <span className="mono">{i.instance}</span>
-                  <span className="dim">
-                    {formatSimT(i.first_t)} · {i.messages} msg · {formatBytes(i.bytes)}
-                    {i.device_count > 0 ? ` · ${i.device_count === 1 ? (i.devices[0] ?? "") : `${i.device_count} devices`}` : ""}
+                  <span title={i.instance}>
+                    <i className="pki-swatch" style={{ background: flowInfo(i.flow).color }} /> {flowInfo(i.flow).name} <span className="faint mono">#{i.instance.split("/").pop()}</span>
+                    <span className="faint"> · {i.provider}</span>
                   </span>
-                  {i.last_stage ? <span className="pill">{i.last_stage}</span> : null}
+                  <span className="dim">
+                    {formatSimT(i.first_t)} · {i.messages} message{i.messages === 1 ? "" : "s"} · {formatBytes(i.bytes)}
+                    {i.device_count > 0 ? ` · ${i.device_count === 1 ? deviceName(i.devices[0] ?? "") : `${i.device_count} vehicles`}` : ""}
+                  </span>
+                  {i.last_stage ? <span className="pill">{wordsOf(i.last_stage)}</span> : null}
                 </button>
               </li>
             ))}
@@ -337,14 +368,16 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
         <div className="pki-flow-main">
           {detail ? (
             <>
-              <h3 className="pki-flow-title">
-                <span className="mono">{detail.instance}</span>{" "}
+              <h3 className="pki-flow-title" title={detail.instance}>
+                {flowInfo(detail.flow).name} #{detail.instance.split("/").pop()} <span className="dim">· {detail.provider}</span>{" "}
                 <span className="dim">
-                  {detail.messages} messages · {detail.stages} stages · {formatBytes(detail.bytes)} · {formatSpan(detail.last_t - detail.first_t)}
-                  {view !== GROUND_TRUTH ? ` · as ${view}` : ""}
+                  · {detail.messages} message{detail.messages === 1 ? "" : "s"} · {detail.stages} stage{detail.stages === 1 ? "" : "s"} · {formatBytes(detail.bytes)} over{" "}
+                  {formatSpan(detail.last_t - detail.first_t)}
+                  {view !== GROUND_TRUTH ? ` · as ${entityLabel(view)}` : ""}
                   {detail.dropped > 0 ? ` · ${detail.dropped} records not kept` : ""}
                 </span>
               </h3>
+              <p className="faint pki-flow-hint">Each arrow is one message; click one to see what it carried and open it in the decoder.</p>
               <div className="pki-seq-wrap">
                 <Sequence detail={detail} view={view} selected={message?.id ?? null} onPick={pick} />
               </div>
@@ -352,18 +385,18 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
                 <table className="pki-table pki-stages" data-testid="pki-stages">
                   <thead>
                     <tr>
-                      <th>stage</th>
-                      <th>stamped by</th>
-                      <th>at</th>
-                      <th>since start</th>
-                      <th>since previous</th>
+                      <th>Stage</th>
+                      <th>Reached by</th>
+                      <th>At</th>
+                      <th>Since the start</th>
+                      <th>Since the stage before</th>
                     </tr>
                   </thead>
                   <tbody>
                     {stages.map((s, i) => (
                       <tr key={`${s.name}${i}`}>
-                        <td className="mono">{s.name}</td>
-                        <td className="mono">{s.by}</td>
+                        <td>{wordsOf(s.name)}</td>
+                        <td title={s.by}>{entityLabel(s.by)}</td>
                         <td className="mono">{formatSimT(s.t)}</td>
                         <td className="mono">{formatSpan(s.dt)}</td>
                         <td className="mono">{formatSpan(s.step)}</td>
@@ -374,7 +407,11 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
               ) : null}
             </>
           ) : (
-            <p className="dim">{list && list.total === 0 ? "No flow recorded yet." : "Choose a flow instance."}</p>
+            <p className="dim">
+              {list && list.total === 0
+                ? "No flow recorded yet: the first appears when a vehicle enrols, downloads certificates or sends a report."
+                : "Choose a flow on the left to see its messages as a sequence diagram."}
+            </p>
           )}
         </div>
       </div>

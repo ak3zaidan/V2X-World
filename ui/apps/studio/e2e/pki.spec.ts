@@ -128,7 +128,8 @@ test("Trust domain: providers, offline chain, CTL, activity, component card and 
   await panel.getByTestId("pki-view").selectOption("provider-a/la1/0");
   await expect(card.getByTestId("pki-knowledge-withheld")).toBeVisible();
   const own = panel.locator(".pki-main").getByTestId("pki-knowledge");
-  await expect(own).toContainText("What provider-a/la1/0 knows");
+  // Named the one way every view names it: plain name, standard acronym, provider.
+  await expect(own).toContainText("What Linkage 1 (LA1), provider-a knows");
   await expect(own.getByTestId("pki-cannot-see").locator("li")).not.toHaveCount(0);
   await expect(own.getByTestId("pki-truth-join")).toHaveCount(0);
   expect(log.some((l) => l.startsWith("inspect.knowledge") && l.includes('"view":"provider-a/la1/0"'))).toBe(true);
@@ -227,7 +228,16 @@ test("Overview: messages travel their links, the cards list them, keyboard works
   await expect(card.getByTestId("pki-card-does")).toContainText("misbehaviour reports");
   const mine = at.messages.filter((m) => m.from === "provider-a/ma/0" || m.to === "provider-a/ma/0");
   expect(mine.length).toBeGreaterThan(0);
-  await expect(card.getByTestId("pki-card-messages").locator("li")).toHaveCount(Math.min(14, mine.length));
+  // Newest first, a burst of the same message between the same two parties within 1 s is one row (`groupMessages`).
+  const rows: { name: string; from: string; to: string; t: number; n: number }[] = [];
+  for (const m of [...mine].reverse() as unknown as { name: string; from: string; to: string; t: number }[]) {
+    const g = rows[rows.length - 1];
+    if (g && g.name === m.name && g.from === m.from && g.to === m.to && Math.abs(m.t - g.t) <= 1e9) g.n += 1;
+    else rows.push({ ...m, n: 1 });
+  }
+  const list = card.getByTestId("pki-card-messages").locator("li");
+  await expect(list).toHaveCount(Math.min(14, rows.length));
+  expect(await list.evaluateAll((els) => els.reduce((n, e) => n + Number(e.getAttribute("data-count") ?? 1), 0))).toBe(rows.slice(0, 14).reduce((n, g) => n + g.n, 0));
   await page.keyboard.press("Escape");
   await expect(card).toHaveCount(0);
   // Tabs: arrow keys move along them.
