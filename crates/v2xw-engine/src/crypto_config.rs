@@ -20,6 +20,22 @@ use crate::scenario::schema::{Scenario, ThresholdSpec};
 pub const THRESHOLD_ROLES: [&str; 3] = ["pca", "crl", "linkage"];
 /// The fault modes `actors.backend.failures[].mode` accepts.
 pub const FAILURE_MODES: [&str; 3] = ["offline", "slow", "malicious"];
+/// The server roles `actors.backend.failures[].node` names (bare for the home provider,
+/// or `<provider>/<role>`), as [`role_node`] resolves them; one list for the error
+/// message and the settings menu.
+pub const FAILURE_ROLES: [&str; 11] = [
+    "ra",
+    "pca",
+    "la1",
+    "la2",
+    "ma",
+    "crlg",
+    "lop",
+    "crl_store",
+    "crl_broadcast",
+    "eca",
+    "dcm",
+];
 /// The most members a committee may have (`v2xw_proto::scms::run::COMMITTEE_STRIDE`).
 pub const MAX_MEMBERS: u16 = 64;
 
@@ -268,11 +284,11 @@ pub fn backend_faults(s: &Scenario, home: &ScmsRun) -> Result<Vec<(usize, Fault)
                         f.node
                     ),
                     FailureNodeError::Role => format!(
-                        "'{}' is neither a backend role (ra, pca, la1, la2, ma, crlg, lop, \
-                         crl_store, crl_broadcast, eca, dcm) nor a member of a configured \
+                        "'{}' is neither a backend role ({}) nor a member of a configured \
                          committee (<role>-member-<k>, k below security.threshold's size), \
                          optionally qualified by its provider (<provider>/<role>)",
-                        f.node
+                        f.node,
+                        FAILURE_ROLES.join(", ")
                     ),
                 },
             )

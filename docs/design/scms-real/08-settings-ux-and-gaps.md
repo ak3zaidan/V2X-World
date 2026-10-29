@@ -849,6 +849,45 @@ without the loader, malformed values named, menus equal to their `_IDS`) and
 title, a menu or unit/range/step, and status `refused`). The `phase2` and `bsm_timing`
 goldens are unchanged.
 
+**Status, A1 (2026-10-29): built.** Engine menus, §4.1 items 1-5, 8 and 9, and the §10 unit
+test. Every SCMS string leaf, list of strings and map key now publishes a menu with a label and
+a sentence per value; every SCMS number a unit and a range.
+
+* Closed sets (item 1): `phase2::{CHAIN_FILE_IDS, MA_MODE_IDS, LATENCY_IDS, BUTTERFLY_IDS,
+  REFUSED_BUTTERFLIES, SERVICE_MODEL_IDS}` and `crypto_config::FAILURE_ROLES` feed both the
+  parsers' "allowed:" messages and `options::extra_values`; preset, region and CRL rule read
+  the existing `deployment.rs` constants. The refused butterflies sit in `phase2`, not
+  `Deployment::REFUSED_BUTTERFLIES`, because `deployment.rs` is agent C's file; a test ties
+  them to `Deployment::butterfly`. `entities.*.service_model` is closed to the two queues the
+  run builds (it listed the whole registry). `failures[].node` and `prov[].name` are open menus.
+* Words (item 2): rows for every §2 set; signature, KEM and committee words come from the
+  scheme registries (`option_row` → `scheme_words`), so a new scheme needs no edit. Rows carry
+  `us: true|false` (`options::us_of`). Map keys (item 5): `x-key-options` for
+  `entities`, `prov[].components`, `prov[].sites`, `capacity` (both), `ma_policies`
+  (open) and `ma_policy.evidence.rules`.
+* Bounds (item 3): 31 `BOUNDS` rows, each enforced by the loader (`validate::scms_menu_bounds`,
+  or `scms_lifecycle` for the lifecycle keys), so the form's range is the loader's. Choices made
+  under §9: `full_cert_every_ms` tops at 3,600,000 ms, not §2's 10,000, because
+  `radio-validation.yaml` uses one hour for "digests only"; `clock_skew_s` is 0 to 3,600 s, not
+  ±3,600, because the lifecycle loader refuses a negative key; `crl_background_entries` tops at
+  10⁶, the clamp the model applies. The SCMS numbers that were "dimensionless" now name a unit.
+* Presets (item 4): `options::SCMS_PRESETS`, 90 rows with their sources; a test keeps each
+  inside its range. `report_decay_hour_et` is a 24-hour menu.
+* Typed keys (item 8): nine of the ten params-only keys are `LifecycleSpec` fields with
+  defaults, guide rows and reference lines; absent they serialise to nothing, so no scenario
+  hash moves. `etsi_butterfly` stays in `security.protocol.params`: `security.scms` is refused
+  on the ETSI protocol, so a typed field there could never apply. `crl_background_entries` now
+  reads the typed field too (`lifecycle_param`).
+* Sub-groups (item 9): `options::SCMS_SUBGROUPS` (the eight §3 groups, help text and order) and
+  `x-subgroup`/`x-subgroup-blurb` on every SCMS node.
+
+Checks, each shown red under its named fault and reverted: `publish::tests::
+every_scms_string_setting_offers_a_menu` (the three §10 faults: butterfly arm, KEM words,
+electors bound), `scms_presets_lie_inside_their_ranges` (a preset moved out of range),
+`the_scms_menu_ranges_are_enforced` (the loader call removed),
+`phase2::settings_menu_tests::the_published_sets_are_the_parsers_sets` (a published latency id
+the parser refuses) and `the_promoted_lifecycle_keys_act_like_their_params_spelling` (a key
+dropped from `entries()`). No golden moved.
 
 After A0, B and C edit only their own files. They make a key live by flipping their own
 module's `KEY_STATUS` and refusal, never by editing `validate.rs`.

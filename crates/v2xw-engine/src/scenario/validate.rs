@@ -1588,6 +1588,248 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the prioritized proximity horizon, metres",
     },
+    // --- SCMS menus (08-settings-ux-and-gaps §4.1 item 3) ----------------------
+    // The numbers that published no range. `scms_menu_bounds` enforces each, so the
+    // form's range and the loader's are one number. Where 08 §2 states a range it is
+    // used; where the code already refuses a value the lower edge is that rule's.
+    // `Deployment::validate`: 1 to 32 electors, a quorum of 1 to the elector count.
+    Bound {
+        path: "security.scms.deployment.electors",
+        lo: 1.0,
+        hi: 32.0,
+        exclusive_lo: false,
+        what: "the trust-list electors (5 in the US)",
+    },
+    Bound {
+        path: "security.scms.deployment.quorum",
+        lo: 1.0,
+        hi: 32.0,
+        exclusive_lo: false,
+        what: "the electors needed to sign the trust list (3 in the US)",
+    },
+    // Light in glass is about 2/3 c; above c is impossible and 0 never arrives.
+    Bound {
+        path: "security.scms.deployment.fibre_fraction",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: true,
+        what: "the signal speed in the fibre, as a fraction of c",
+    },
+    // 1 ms per link is the assumption; 100 ms is a slow transcontinental router chain.
+    Bound {
+        path: "security.scms.deployment.per_link_ms",
+        lo: 0.0,
+        hi: 100.0,
+        exclusive_lo: false,
+        what: "the fixed overhead per backend link",
+    },
+    // A role runs 0 to 8 instances (08 §2.2: one root and one ICA per provider is a
+    // `Deployment::validate` rule, not a range).
+    Bound {
+        path: "security.scms.deployment.providers[].components.*",
+        lo: 0.0,
+        hi: 8.0,
+        exclusive_lo: false,
+        what: "a provider's instances of one server role",
+    },
+    Bound {
+        path: "security.scms.deployment.providers[].fleet_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "a provider's share of the fleet",
+    },
+    // `deployment_of` refuses 0 (use automatic); 30 days is `lifecycle.ma_review_s`'s top.
+    Bound {
+        path: "security.scms.deployment.providers[].ma_review_s",
+        lo: 0.0,
+        hi: 2_592_000.0,
+        exclusive_lo: true,
+        what: "the provider's MA operator review",
+    },
+    // 0 attaches the certificate to every message; one hour is digests only in effect
+    // (the radio-validation rows use it so).
+    Bound {
+        path: "security.signer_id_policy.full_cert_every_ms",
+        lo: 0.0,
+        hi: 3_600_000.0,
+        exclusive_lo: false,
+        what: "the interval between messages carrying the full certificate",
+    },
+    // PRESERVE's silent period is 3 to 13 s; a minute brackets every studied value.
+    Bound {
+        path: "security.pseudonym_change.silent_period_s[]",
+        lo: 0.0,
+        hi: 60.0,
+        exclusive_lo: false,
+        what: "a silent-period edge after a pseudonym change",
+    },
+    // 30 m covers one junction (Freudiger et al. 2007); 500 m is a whole block.
+    Bound {
+        path: "security.pseudonym_change.mix_zone_radius_m",
+        lo: 5.0,
+        hi: 500.0,
+        exclusive_lo: false,
+        what: "the mix-zone radius",
+    },
+    Bound {
+        path: "security.pseudonym_change.mix_zone_min_age_s",
+        lo: 0.0,
+        hi: 3_600.0,
+        exclusive_lo: false,
+        what: "the youngest pseudonym a mix zone changes",
+    },
+    // `crypto_config::MAX_MEMBERS` (the committee id stride); the quorum's upper edge is
+    // the committee size, a rule in `crypto_config::check_spec`.
+    Bound {
+        path: "security.threshold.members",
+        lo: 1.0,
+        hi: 64.0,
+        exclusive_lo: false,
+        what: "the committee size",
+    },
+    Bound {
+        path: "security.threshold.quorum",
+        lo: 1.0,
+        hi: 64.0,
+        exclusive_lo: false,
+        what: "the committee quorum",
+    },
+    Bound {
+        path: "security.threshold.linkage_members",
+        lo: 1.0,
+        hi: 64.0,
+        exclusive_lo: false,
+        what: "the linkage committee size",
+    },
+    Bound {
+        path: "security.threshold.linkage_quorum",
+        lo: 1.0,
+        hi: 64.0,
+        exclusive_lo: false,
+        what: "the linkage committee quorum",
+    },
+    Bound {
+        path: "security.threshold.umbrella_leaves",
+        lo: 1.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "the pseudonyms one umbrella certificate covers",
+    },
+    Bound {
+        path: "security.threshold.round_timeout_ms",
+        lo: 0.0,
+        hi: 60_000.0,
+        exclusive_lo: true,
+        what: "a committee round's timeout",
+    },
+    Bound {
+        path: "security.threshold.retry_after_s",
+        lo: 0.0,
+        hi: 3_600.0,
+        exclusive_lo: true,
+        what: "the wait before a failed committee signing is retried",
+    },
+    Bound {
+        path: "security.threshold.member_latency_ms",
+        lo: 0.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "the one-way latency between committee members",
+    },
+    // A failure window starts at or after 0; `to_s` absent means the end of the run.
+    Bound {
+        path: "actors.backend.failures[].from_s",
+        lo: 0.0,
+        hi: f64::INFINITY,
+        exclusive_lo: false,
+        what: "when the server fails",
+    },
+    Bound {
+        path: "actors.backend.failures[].to_s",
+        lo: 0.0,
+        hi: f64::INFINITY,
+        exclusive_lo: false,
+        what: "when the server recovers",
+    },
+    // `crypto_config::backend_faults` refuses 0; ten minutes per message is a server
+    // that has in effect stopped.
+    Bound {
+        path: "actors.backend.failures[].extra_ms",
+        lo: 0.0,
+        hi: 600_000.0,
+        exclusive_lo: true,
+        what: "the extra service time per message on a slow server",
+    },
+    // The lifecycle keys that were reachable only through `security.protocol.params`
+    // (08 §4.1 item 8). SCMS-522: 10 s; SCMS-523: 10 per hour; 0 turns the retry off.
+    Bound {
+        path: "security.scms.lifecycle.ee_retry_timeout_s",
+        lo: 0.0,
+        hi: 3_600.0,
+        exclusive_lo: false,
+        what: "the device's wait before it retries an unanswered RA request",
+    },
+    Bound {
+        path: "security.scms.lifecycle.ee_retry_max_per_hour",
+        lo: 0.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "the device's RA retries per hour",
+    },
+    Bound {
+        path: "security.scms.lifecycle.crl_background_entries",
+        lo: 0.0,
+        hi: 1_000_000.0,
+        exclusive_lo: false,
+        what: "the earlier revocations already on the CRL",
+    },
+    // `LifecycleParams` refuses a negative value (every lifecycle key is ≥ 0), so the
+    // skew is how far ahead the skewed devices' clocks run; an hour is far past any
+    // GNSS-disciplined clock.
+    Bound {
+        path: "security.scms.lifecycle.clock_skew_s",
+        lo: 0.0,
+        hi: 3_600.0,
+        exclusive_lo: false,
+        what: "how far ahead the skewed devices' clocks run",
+    },
+    Bound {
+        path: "security.scms.lifecycle.clock_skew_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the share of devices whose clock is skewed",
+    },
+    Bound {
+        path: "security.scms.lifecycle.root_rollover_at_s",
+        lo: 0.0,
+        hi: f64::INFINITY,
+        exclusive_lo: false,
+        what: "when the home root rolls over",
+    },
+    Bound {
+        path: "security.scms.lifecycle.root_removal_at_s",
+        lo: 0.0,
+        hi: f64::INFINITY,
+        exclusive_lo: false,
+        what: "when the old home root is removed from the trust list",
+    },
+    Bound {
+        path: "security.scms.lifecycle.peer_root_removal_at_s",
+        lo: 0.0,
+        hi: f64::INFINITY,
+        exclusive_lo: false,
+        what: "when the peer provider's root is removed from the trust list",
+    },
+    // A switch, carried as 0 or 1 like the `security.protocol.params` spelling.
+    Bound {
+        path: "security.scms.lifecycle.modelled_reports",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "whether report sizes are modelled",
+    },
     // A unit must hold at least one certificate; 65 536 is far above any neighbourhood
     // a 1 km radio range holds.
     // A lower edge of the HSM signing time; the upper edge is the profile's own bound,
@@ -4465,6 +4707,7 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     e.extend(crate::driving::validate(s));
     network_audit(s, &mut e);
     scms_lifecycle(s, &mut e);
+    scms_menu_bounds(s, &mut e);
     // 08-settings-ux-and-gaps §5-§8: the keys the MA-policy and topology modules own.
     crate::ma_policy::validate(s, &mut e);
     crate::scms_topology::validate(s, &mut e);
@@ -4472,6 +4715,135 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     absent_radio_holders(s, &mut e);
     perception(s, &mut e);
     e
+}
+
+/// The SCMS numbers whose ranges 08-settings-ux-and-gaps §4.1 item 3 added to [`BOUNDS`],
+/// checked here so the range a menu shows is the range the loader enforces. A field an
+/// earlier rule already refused (a committee check, `deployment_of`) is not named twice.
+fn scms_menu_bounds(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    let mut checks: Vec<(&str, String, f64)> = Vec::new();
+    let sec = &s.security;
+    let sid = &sec.signer_id_policy;
+    checks.push((
+        "security.signer_id_policy.full_cert_every_ms",
+        "security.signer_id_policy.full_cert_every_ms".into(),
+        sid.full_cert_every_ms as f64,
+    ));
+    let pc = &sec.pseudonym_change;
+    for (i, v) in pc.silent_period_s.iter().flatten().enumerate() {
+        checks.push((
+            "security.pseudonym_change.silent_period_s[]",
+            format!("security.pseudonym_change.silent_period_s[{i}]"),
+            *v,
+        ));
+    }
+    for (path, v) in [
+        (
+            "security.pseudonym_change.mix_zone_radius_m",
+            pc.mix_zone_radius_m,
+        ),
+        (
+            "security.pseudonym_change.mix_zone_min_age_s",
+            pc.mix_zone_min_age_s,
+        ),
+    ] {
+        if let Some(v) = v {
+            checks.push((path, path.into(), v));
+        }
+    }
+    if let Some(t) = &sec.threshold {
+        let opt = |v: Option<u16>| v.map(f64::from);
+        for (path, v) in [
+            ("security.threshold.members", Some(f64::from(t.members))),
+            ("security.threshold.quorum", Some(f64::from(t.quorum))),
+            ("security.threshold.linkage_members", opt(t.linkage_members)),
+            ("security.threshold.linkage_quorum", opt(t.linkage_quorum)),
+            (
+                "security.threshold.umbrella_leaves",
+                Some(f64::from(t.umbrella_leaves)),
+            ),
+            (
+                "security.threshold.round_timeout_ms",
+                Some(t.round_timeout_ms),
+            ),
+            ("security.threshold.retry_after_s", Some(t.retry_after_s)),
+            (
+                "security.threshold.member_latency_ms",
+                Some(t.member_latency_ms),
+            ),
+        ] {
+            if let Some(v) = v {
+                checks.push((path, path.into(), v));
+            }
+        }
+    }
+    if let Some(d) = sec.scms.as_ref().and_then(|x| x.deployment.as_ref()) {
+        let at = "security.scms.deployment";
+        for (path, v) in [
+            (
+                "security.scms.deployment.electors",
+                d.electors.map(f64::from),
+            ),
+            ("security.scms.deployment.quorum", d.quorum.map(f64::from)),
+            ("security.scms.deployment.fibre_fraction", d.fibre_fraction),
+            ("security.scms.deployment.per_link_ms", d.per_link_ms),
+        ] {
+            if let Some(v) = v {
+                checks.push((path, path.into(), v));
+            }
+        }
+        for p in &d.providers {
+            let pat = format!("{at}.providers.{}", p.name);
+            for (role, n) in &p.components {
+                checks.push((
+                    "security.scms.deployment.providers[].components.*",
+                    format!("{pat}.components.{role}"),
+                    f64::from(*n),
+                ));
+            }
+            if let Some(v) = p.fleet_share {
+                checks.push((
+                    "security.scms.deployment.providers[].fleet_share",
+                    format!("{pat}.fleet_share"),
+                    v,
+                ));
+            }
+            if let Some(v) = p.ma_review_s {
+                checks.push((
+                    "security.scms.deployment.providers[].ma_review_s",
+                    format!("{pat}.ma_review_s"),
+                    v,
+                ));
+            }
+        }
+    }
+    for (i, f) in s.actors.backend.failures.iter().enumerate() {
+        let at = format!("actors.backend.failures[{i}]");
+        checks.push((
+            "actors.backend.failures[].from_s",
+            format!("{at}.from_s"),
+            f.from_s,
+        ));
+        if let Some(v) = f.to_s {
+            checks.push(("actors.backend.failures[].to_s", format!("{at}.to_s"), v));
+        }
+        if let Some(v) = f.extra_ms {
+            checks.push((
+                "actors.backend.failures[].extra_ms",
+                format!("{at}.extra_ms"),
+                v,
+            ));
+        }
+    }
+    for (path, field, v) in checks {
+        let named = |x: &ScenarioError| match x {
+            ScenarioError::Conflict { field: f, .. } => *f == field,
+            _ => false,
+        };
+        if !e.iter().any(named) {
+            bounded_at(path, &field, v, e);
+        }
+    }
 }
 
 /// Roadside and handset radio settings do nothing when the scenario has no roadside unit

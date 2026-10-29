@@ -376,6 +376,29 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
         "security.scms.lifecycle.report_weight_brake_acceleration",
         "weight",
     ),
+    // 08-settings-ux-and-gaps §10: every SCMS number names its unit (these were declared
+    // dimensionless, which the SCMS menu check does not accept: a count is in something).
+    (
+        "security.scms.deployment.providers[].components.*",
+        "servers",
+    ),
+    (
+        "security.scms.deployment.providers[].fleet_share",
+        "fraction",
+    ),
+    ("security.scms.deployment.electors", "electors"),
+    ("security.scms.deployment.quorum", "electors"),
+    ("security.scms.deployment.fibre_fraction", "× c"),
+    ("security.on_demand_threshold", "score"),
+    (
+        "security.scms.lifecycle.ee_retry_max_per_hour",
+        "retries per hour",
+    ),
+    (
+        "security.scms.lifecycle.crl_background_entries",
+        "revocations",
+    ),
+    ("security.scms.lifecycle.clock_skew_share", "fraction"),
 ];
 
 /// The numeric leaves that genuinely have no unit, declared rather than left blank.
@@ -406,12 +429,6 @@ const DIMENSIONLESS: &[&str] = &[
     "perception.rsu[].pd_near",
     "perception.rsu[].pd_far",
     "perception.rsu[].sigma_range_fraction",
-    // The SCMS deployment (WP-D1): instance counts, elector counts and fractions.
-    "security.scms.deployment.providers[].components.*",
-    "security.scms.deployment.providers[].fleet_share",
-    "security.scms.deployment.electors",
-    "security.scms.deployment.quorum",
-    "security.scms.deployment.fibre_fraction",
     "radio.channel_model.nakagami_shape_far",
     "seed",
     "net.geonet.hop_limit",
@@ -460,7 +477,6 @@ const DIMENSIONLESS: &[&str] = &[
     "actors.vehicles.bsm_timing.stamp_chain.stay_zero",
     "actors.vehicles.bsm_timing.stamp_chain.position_follows",
     // end traffic audit
-    "security.on_demand_threshold",
 ];
 
 /// One place the scenario picks a model, and which registry family fills it.
@@ -864,6 +880,12 @@ impl Walk<'_> {
                 "additionalProperties".into(),
                 self.node(value_ty, &format!("{path}.*"), "", depth + 1),
             );
+            // The keys a map offers, so a form draws a key menu rather than a JSON box
+            // (08-settings-ux-and-gaps §4.1 item 5).
+            if let Some((rows, closed)) = options::key_values(path) {
+                out.insert("x-key-options".into(), Value::Array(rows));
+                out.insert("x-key-options-open".into(), json!(!closed));
+            }
             self.with_meta(path, &mut out);
             return Value::Object(out);
         }
@@ -1037,6 +1059,15 @@ impl Walk<'_> {
         out.insert("x-group".into(), json!(group));
         if !blurb.is_empty() {
             out.insert("x-group-blurb".into(), json!(blurb));
+        }
+        // The SCMS panel's sub-heading, so its order lives with the engine
+        // (08-settings-ux-and-gaps §3, §4.1 item 9).
+        if let Some(g) = options::subgroup(path) {
+            out.insert(
+                "x-subgroup".into(),
+                json!({"id": g.id, "label": g.label, "order": g.order}),
+            );
+            out.insert("x-subgroup-blurb".into(), json!(g.blurb));
         }
         let unit = unit_for(path);
         if !unit.is_empty() {
@@ -2061,6 +2092,169 @@ mod tests {
              name one silently gets the reference profile instead",
             scenario.nodes.default_obu
         );
+    }
+
+    /// Every SCMS setting is a menu or a bounded number (08-settings-ux-and-gaps §10).
+    ///
+    /// The owner's rule: nobody should have to know what to type. So under the SCMS
+    /// paths a string leaf, a list of strings and a map key each publish a menu whose
+    /// every row has a label and a sentence (a disabled row's sentence is its reason),
+    /// and every number publishes a unit and a range. There is deliberately no
+    /// allow-list: a free name passes by publishing open options, and an allow-list is
+    /// how a check like this quietly stops being able to fail.
+    #[test]
+    fn every_scms_string_setting_offers_a_menu() {
+        fn scms(path: &str) -> bool {
+            [
+                "security.",
+                "actors.backend.",
+                "detection.ma",
+                "net.rsu_ip.",
+            ]
+            .iter()
+            .any(|p| path.starts_with(p))
+        }
+        fn rows_ok(path: &str, what: &str, rows: Option<&Value>, bad: &mut Vec<String>) {
+            let Some(rows) = rows.and_then(Value::as_array).filter(|r| !r.is_empty()) else {
+                bad.push(format!("{path}: {what}: no menu"));
+                return;
+            };
+            for r in rows {
+                let txt = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("").trim();
+                if txt("label").is_empty() {
+                    bad.push(format!("{path}: {what}: no label: {r}"));
+                }
+                if txt("description").is_empty() {
+                    let why = if r.get("available") == Some(&json!(false)) {
+                        "a disabled value with no reason"
+                    } else {
+                        "no description"
+                    };
+                    bad.push(format!("{path}: {what}: {why}: {r}"));
+                }
+            }
+        }
+        fn keyed(node: &Value, bad: &mut Vec<String>, seen: &mut usize) {
+            match node {
+                Value::Object(map) => {
+                    let path = map.get("x-path").and_then(Value::as_str).unwrap_or("");
+                    if map.get("x-keyed") == Some(&json!(true)) && scms(path) {
+                        *seen += 1;
+                        rows_ok(path, "map key", map.get("x-key-options"), bad);
+                    }
+                    map.values().for_each(|v| keyed(v, bad, seen));
+                }
+                Value::Array(a) => a.iter().for_each(|v| keyed(v, bad, seen)),
+                _ => {}
+            }
+        }
+        let mut bad = Vec::new();
+        let mut strings = 0;
+        let mut numbers = 0;
+        for f in fields() {
+            let path = f.get("x-path").and_then(Value::as_str).unwrap_or("");
+            if !scms(path) {
+                continue;
+            }
+            let kind = f.get("kind").and_then(Value::as_str).unwrap_or("");
+            match kind {
+                "string" | "enum" => {
+                    strings += 1;
+                    rows_ok(path, "value", f.get("x-options"), &mut bad);
+                }
+                "number" | "integer" => {
+                    numbers += 1;
+                    for k in ["unit", "x-range"] {
+                        if f.get(k).and_then(Value::as_str).is_none_or(str::is_empty) {
+                            bad.push(format!(
+                                "{path}: no {}",
+                                if k == "unit" { "unit" } else { "range" }
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut maps = 0;
+        keyed(&schema(), &mut bad, &mut maps);
+        bad.sort();
+        bad.dedup();
+        assert!(
+            bad.is_empty(),
+            "{} SCMS settings without a menu: {bad:#?}",
+            bad.len()
+        );
+        // The check must have something to check: the SCMS form is large.
+        assert!(
+            strings >= 40 && numbers >= 100 && maps >= 3,
+            "only {strings} string, {numbers} number and {maps} map SCMS settings found"
+        );
+    }
+
+    /// Every SCMS preset is a value the loader accepts: a named value outside its own range
+    /// would be a button that fails Check.
+    #[test]
+    fn scms_presets_lie_inside_their_ranges() {
+        let mut bad = Vec::new();
+        for p in options::SCMS_PRESETS {
+            match validate::bound_of(p.path) {
+                Some(b) if b.admits(p.value) => {}
+                Some(b) => bad.push(format!("{} = {} outside {}", p.path, p.value, b.describe())),
+                None => bad.push(format!("{}: no range", p.path)),
+            }
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    /// The ranges 08 §4.1 item 3 added are the loader's: a value outside each is refused
+    /// at the author's own field.
+    #[test]
+    fn the_scms_menu_ranges_are_enforced() {
+        let cases: &[(Value, &str)] = &[
+            (
+                json!({"security": {"signer_id_policy": {"full_cert_every_ms": 4_000_000}}}),
+                "security.signer_id_policy.full_cert_every_ms",
+            ),
+            (
+                json!({"security": {"pseudonym_change": {"strategy": "mix-zone",
+                                                         "mix_zone_radius_m": 1.0}}}),
+                "security.pseudonym_change.mix_zone_radius_m",
+            ),
+            (
+                json!({"security": {"pseudonym_change": {"silent_period_s": [3.0, 90.0]}}}),
+                "security.pseudonym_change.silent_period_s[1]",
+            ),
+            (
+                json!({"security": {"protocol": {"id": crate::phase2::CAMP_SCMS},
+                                    "scms": {"deployment": {"preset": "us-production-2025",
+                                                            "per_link_ms": 500.0}}}}),
+                "security.scms.deployment.per_link_ms",
+            ),
+            (
+                json!({"security": {"protocol": {"id": crate::phase2::CAMP_SCMS},
+                                    "scms": {"lifecycle": {"ee_retry_timeout_s": 7_200.0}}}}),
+                "security.scms.lifecycle.ee_retry_timeout_s",
+            ),
+            (
+                json!({"actors": {"backend": {"failures": [
+                    {"node": "ra", "mode": "slow", "from_s": 0.0, "extra_ms": 900_000.0}]}}}),
+                "actors.backend.failures[0].extra_ms",
+            ),
+        ];
+        for (patch, field) in cases {
+            let base =
+                serde_json::to_value(crate::Scenario::minimal()).expect("minimal serialises");
+            let doc = crate::scenario::merge::merge(&base, patch);
+            let scenario = crate::Scenario::from_document(doc).expect("still deserialises");
+            let errors = validate::validate(&scenario);
+            assert!(
+                errors.iter().any(|e| matches!(e,
+                    crate::ScenarioError::Conflict { field: f, conflict }
+                        if f == field && conflict.contains("outside"))),
+                "{patch} produced no range error at {field}: {errors:?}"
+            );
+        }
     }
 
     /// The surface bundle has every section the page is told to expect.

@@ -1317,6 +1317,52 @@ const ADVANCED: &[Basic] = &[
         explain: "The longest a certificate request may wait in the Registration Authority's mix before it is passed on, full batch or not. A longer wait hides each request among more others and delays a vehicle's certificates.",
         recommended: "172,800 s (two days, CAMP release 1.2.2); 3,600 to 172,800 s. Like the batch size, it acts on a device's first request, which a run makes before the vehicle joins.",
     },
+    // The keys 08-settings-ux-and-gaps §4.1 item 8 promoted from `security.protocol.params`.
+    Basic {
+        path: "security.scms.lifecycle.ee_retry_timeout_s",
+        explain: "How long a device waits for the Registration Authority's answer before it sends the request again. CAMP SCMS-522.",
+        recommended: "10 s (CAMP SCMS-522); 0 turns the retry off.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.ee_retry_max_per_hour",
+        explain: "The most times a device retries an unanswered request in one hour. CAMP SCMS-523.",
+        recommended: "10 (CAMP SCMS-523); 0 turns the retry off.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.crl_background_entries",
+        explain: "Revocations already on the home provider's revocation list when the run starts, so every CRL download and lookup carries a list of realistic length.",
+        recommended: "0 (only this run's revocations); 10,000 for a list a few years old.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.clock_skew_s",
+        explain: "How far ahead the clocks of the skewed devices run. A receiver judges a message's age by its own clock, so a skewed device's messages look old or from the future.",
+        recommended: "0 (GNSS-disciplined clocks); 0.04 to 2 s brackets the receivers' freshness checks.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.clock_skew_share",
+        explain: "The share of devices whose clock carries the skew, chosen by a fixed hash of each device.",
+        recommended: "1 (every device) when a skew is set; 0.01 to 0.1 for a few faulty units.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.root_rollover_at_s",
+        explain: "When, in seconds into the run, the home provider's root CA rolls over to a new key and devices receive the new trust list.",
+        recommended: "Unset (no rollover); inside the run to study a rollover.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.root_removal_at_s",
+        explain: "When the old home root leaves the trust list; certificates under it stop verifying.",
+        recommended: "Unset; after root_rollover_at_s.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.peer_root_removal_at_s",
+        explain: "When the other provider's root leaves the trust list; devices that install the new list refuse everything that provider certified.",
+        recommended: "Unset; inside the run to study a provider's removal.",
+    },
+    Basic {
+        path: "security.scms.lifecycle.modelled_reports",
+        explain: "Files a detection that cannot be built as a real SM-MBR report (no subtype maps its checks, or nothing to sign it with) as a sized-only report. Not the US system, where such a detection never leaves the device.",
+        recommended: "Off (the US system); on only for studies of research detectors.",
+    },
     Basic {
         path: "security.scms.rx_beacon_max_age_s",
         explain: "How old a received safety beacon (BSM, CAM, PSM, VAM) may be, by the receiver's own clock, before it is thrown away unchecked (IEEE 1609.2 relevance check). It makes a replayed message harmless, and it is why a vehicle whose clock is badly wrong is ignored rather than reported for misbehaviour.",
