@@ -3871,6 +3871,39 @@ pub struct LifecycleSpec {
     /// `initialWeight` of a BrakeAcceleration report (1.0, MBR v1.0 §2.3.1.3.4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report_weight_brake_acceleration: Option<f64>,
+    /// How long a device waits for the RA's answer before it retries the request, s (10,
+    /// CAMP SCMS-522); 0 turns the retry off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ee_retry_timeout_s: Option<f64>,
+    /// The most retries of an unanswered RA request a device makes per hour (10, CAMP
+    /// SCMS-523); 0 turns the retry off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ee_retry_max_per_hour: Option<u32>,
+    /// Earlier revocations already on the home provider's CRL when the run starts (0):
+    /// a standing list makes every CRL download and lookup that much larger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crl_background_entries: Option<u32>,
+    /// How far ahead the skewed devices' clocks run, s (0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_skew_s: Option<f64>,
+    /// The share of devices whose clock is skewed by `clock_skew_s` (1: every device).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_skew_share: Option<f64>,
+    /// When the home provider's root rolls over, s into the run (absent: never).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_rollover_at_s: Option<f64>,
+    /// When the old home root leaves the trust list, s into the run (absent: never).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_removal_at_s: Option<f64>,
+    /// When the peer provider's root leaves the trust list, s into the run (absent:
+    /// never).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_root_removal_at_s: Option<f64>,
+    /// File a detection that cannot be built as a real SM-MBR report as a sized-only
+    /// report (off). Not the US deployment: there such a detection has no bytes and never
+    /// leaves the device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modelled_reports: Option<bool>,
 }
 
 impl LifecycleSpec {
@@ -3923,6 +3956,18 @@ impl LifecycleSpec {
             (
                 "report_weight_brake_acceleration",
                 self.report_weight_brake_acceleration,
+            ),
+            ("ee_retry_timeout_s", self.ee_retry_timeout_s),
+            ("ee_retry_max_per_hour", u(self.ee_retry_max_per_hour)),
+            ("crl_background_entries", u(self.crl_background_entries)),
+            ("clock_skew_s", self.clock_skew_s),
+            ("clock_skew_share", self.clock_skew_share),
+            ("root_rollover_at_s", self.root_rollover_at_s),
+            ("root_removal_at_s", self.root_removal_at_s),
+            ("peer_root_removal_at_s", self.peer_root_removal_at_s),
+            (
+                "modelled_reports",
+                self.modelled_reports.map(|on| if on { 1.0 } else { 0.0 }),
             ),
         ]
         .into_iter()

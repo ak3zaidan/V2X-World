@@ -823,14 +823,11 @@ impl Default for ReportStorePolicy {
 }
 
 impl LifecycleParams {
-    /// The standing CRL's size (`crl_background_entries`), when the scenario sets one.
+    /// The standing CRL's size (`crl_background_entries`), when the scenario sets one:
+    /// the typed `security.scms.lifecycle` field or its `security.protocol.params`
+    /// spelling, the typed field winning (`lifecycle_param`).
     fn background_entries(scenario: &Scenario) -> u32 {
-        scenario
-            .security
-            .protocol
-            .as_ref()
-            .and_then(|c| c.params.get("crl_background_entries"))
-            .and_then(serde_json::Value::as_f64)
+        lifecycle_param(scenario, "crl_background_entries")
             .map_or(0, |v| v.round().clamp(0.0, 1.0e6) as u32)
     }
 }
@@ -1218,6 +1215,15 @@ pub fn lifecycle_defaults() -> Vec<(&'static str, serde_json::Value)> {
             "report_weight_brake_acceleration",
             json!(st.weights.brake_acceleration),
         ),
+        // The keys that were `security.protocol.params`-only (08 §4.1 item 8). The root
+        // events have none: absent, they never happen. The rest are `from_scenario`'s
+        // starting values.
+        ("ee_retry_timeout_s", s(p.ee_retry_timeout)),
+        ("ee_retry_max_per_hour", json!(p.ee_retry_max_per_hour)),
+        ("crl_background_entries", json!(0)),
+        ("clock_skew_s", json!(0.0)),
+        ("clock_skew_share", json!(1.0)),
+        ("modelled_reports", json!(false)),
     ]
 }
 
@@ -8717,6 +8723,33 @@ pub fn evasion_params(
 /// Also the loader's check of the key (`crate::scenario::validate` runs it on a default
 /// parameter set), so a wrong id or parameter is refused at Check, in the same words, and
 /// not first discovered when the run is built.
+/// `security.scms.chain_file`: every CTL provider's CA certificates (the US global chain
+/// file, the default) or only the device's own provider's. One list, read by the loader's
+/// "allowed:" message and published as the settings menu (08-settings-ux-and-gaps §4.1).
+pub const CHAIN_FILE_IDS: [&str; 2] = ["all-providers", "home-provider"];
+
+/// `…providers[].ma_mode`: an operator reviews each case (the CV-pilot MA), or the MA
+/// acts at once.
+pub const MA_MODE_IDS: [&str; 2] = ["manual-review", "automatic"];
+
+/// `security.scms.deployment.latency`: great-circle distance at fibre speed, or the
+/// backend network's fixed latency.
+pub const LATENCY_IDS: [&str; 2] = ["region", "flat"];
+
+/// `security.scms.deployment.options.butterfly` values this build runs: the original
+/// expansion, the only one the US profile uses ([`Deployment::butterfly`]).
+///
+/// [`Deployment::butterfly`]: v2xw_proto::scms::deployment::Deployment::butterfly
+pub const BUTTERFLY_IDS: [&str; 1] = ["original"];
+
+/// Butterfly variants the schema names and the loader refuses (`unified`, `cubk`): shown
+/// in the menu disabled, with the reason, never hidden (08 §9 rule 1).
+pub const REFUSED_BUTTERFLIES: [&str; 2] = ["unified", "cubk"];
+
+/// `actors.backend.entities.*.service_model`: the two queues `apply_backend_topology`
+/// builds (c parallel workers, the default, or one).
+pub const SERVICE_MODEL_IDS: [&str; 2] = ["service/mmc", "service/mm1"];
+
 /// Whether each device's chain file holds only its own provider's CA certificates
 /// (`security.scms.chain_file: home-provider`) rather than every CTL provider's
 /// (`all-providers`, the default).
@@ -8734,7 +8767,10 @@ pub fn home_chain_file_of(scenario: &Scenario) -> Result<bool> {
         Some("home-provider") => Ok(true),
         Some(other) => Err(conflict(
             "security.scms.chain_file",
-            format!("'{other}' is not a chain file scope; allowed: all-providers, home-provider"),
+            format!(
+                "'{other}' is not a chain file scope; allowed: {}",
+                CHAIN_FILE_IDS.join(", ")
+            ),
         )),
     }
 }
@@ -8908,7 +8944,10 @@ pub fn deployment_of(
             Some(other) => {
                 return Err(conflict(
                     &format!("{at}.ma_mode"),
-                    format!("'{other}' is not an MA mode; allowed: manual-review, automatic"),
+                    format!(
+                        "'{other}' is not an MA mode; allowed: {}",
+                        MA_MODE_IDS.join(", ")
+                    ),
                 ));
             }
         }
@@ -8986,7 +9025,10 @@ pub fn deployment_of(
         Some(other) => {
             return Err(conflict(
                 &format!("{field}.latency"),
-                format!("'{other}' is not a latency model; allowed: region, flat"),
+                format!(
+                    "'{other}' is not a latency model; allowed: {}",
+                    LATENCY_IDS.join(", ")
+                ),
             ));
         }
     }
@@ -9199,7 +9241,10 @@ fn apply_backend_topology(scenario: &Scenario, scms: &mut ScmsRun) -> Result<()>
             Some(other) => {
                 return Err(conflict(
                     &format!("actors.backend.entities.{name}.service_model"),
-                    format!("'{other}' is not a service model; allowed: service/mmc, service/mm1"),
+                    format!(
+                        "'{other}' is not a service model; allowed: {}",
+                        SERVICE_MODEL_IDS.join(", ")
+                    ),
                 ));
             }
         };
@@ -10282,5 +10327,124 @@ mod judged_evidence_tests {
         assert_eq!(tags(&judged_bsms(&r, Some(50), 100)), vec![100]);
         // A predecessor is one generated before the judged BSM, never after it.
         assert_eq!(tags(&judged_bsms(&r, Some(400), 200)), vec![200]);
+    }
+}
+
+#[cfg(test)]
+mod settings_menu_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// `scenario` with `security.scms` (and, when given, `security.protocol`) set from JSON.
+    fn with_scms(scms: serde_json::Value, params: Option<serde_json::Value>) -> Scenario {
+        let mut s = Scenario::minimal();
+        s.security.scms = Some(serde_json::from_value(scms).expect("an ScmsSpec"));
+        if let Some(p) = params {
+            s.security.protocol = Some(
+                serde_json::from_value(json!({"id": CAMP_SCMS, "params": p}))
+                    .expect("a model choice"),
+            );
+        }
+        s
+    }
+
+    /// Each closed set the settings menu publishes (08-settings-ux-and-gaps §4.1 item 1) is
+    /// exactly what its parser accepts: every member loads, the refused butterflies are
+    /// refused, and a value outside is refused with the same list in its message.
+    #[test]
+    fn the_published_sets_are_the_parsers_sets() {
+        for id in MA_MODE_IDS {
+            let mut prov = json!({"name": "provider-a", "ma_mode": id});
+            if id == "manual-review" {
+                prov["ma_review_s"] = json!(3_600.0);
+            }
+            let s = with_scms(
+                json!({"deployment": {"preset": "us-production-2025", "providers": [prov]}}),
+                None,
+            );
+            deployment_of(&s, true).unwrap_or_else(|e| panic!("ma_mode {id}: {e}"));
+        }
+        for id in LATENCY_IDS {
+            let s = with_scms(
+                json!({"deployment": {"preset": "us-production-2025", "latency": id}}),
+                None,
+            );
+            deployment_of(&s, true).unwrap_or_else(|e| panic!("latency {id}: {e}"));
+        }
+        for id in CHAIN_FILE_IDS {
+            let s = with_scms(json!({"chain_file": id}), None);
+            home_chain_file_of(&s).unwrap_or_else(|e| panic!("chain_file {id}: {e}"));
+        }
+        for id in BUTTERFLY_IDS {
+            v2xw_proto::scms::deployment::Deployment::butterfly(id)
+                .unwrap_or_else(|e| panic!("butterfly {id}: {e}"));
+        }
+        for id in REFUSED_BUTTERFLIES {
+            assert!(
+                v2xw_proto::scms::deployment::Deployment::butterfly(id).is_err(),
+                "butterfly {id} is published disabled but loads"
+            );
+        }
+        let s = with_scms(
+            json!({"deployment": {"preset": "us-production-2025", "latency": "nearest"}}),
+            None,
+        );
+        let msg = deployment_of(&s, true)
+            .expect_err("an unknown latency model")
+            .to_string();
+        assert!(msg.contains(&LATENCY_IDS.join(", ")), "{msg}");
+        let s = with_scms(json!({"chain_file": "nobody"}), None);
+        let msg = home_chain_file_of(&s)
+            .expect_err("an unknown scope")
+            .to_string();
+        assert!(msg.contains(&CHAIN_FILE_IDS.join(", ")), "{msg}");
+    }
+
+    /// The nine keys that were reachable only through `security.protocol.params` (08 §4.1
+    /// item 8) do the same thing as typed `security.scms.lifecycle` fields, and the typed
+    /// field wins where both are written.
+    #[test]
+    fn the_promoted_lifecycle_keys_act_like_their_params_spelling() {
+        let keys = json!({
+            "ee_retry_timeout_s": 0.0, "ee_retry_max_per_hour": 3,
+            "crl_background_entries": 1234, "clock_skew_s": 2.5, "clock_skew_share": 0.25,
+            "root_rollover_at_s": 100.0, "root_removal_at_s": 200.0,
+            "peer_root_removal_at_s": 300.0,
+        });
+        let mut typed = keys.clone();
+        typed["modelled_reports"] = json!(true);
+        let mut params = keys;
+        params["modelled_reports"] = json!(1.0);
+        let a = with_scms(json!({"lifecycle": typed}), None);
+        let b = with_scms(json!({}), Some(params));
+        let pa = LifecycleParams::from_scenario(&a).expect("the typed fields load");
+        let pb = LifecycleParams::from_scenario(&b).expect("the params spelling loads");
+        let base = LifecycleParams::from_scenario(&Scenario::minimal()).expect("the default");
+        let view = |p: &LifecycleParams| {
+            (
+                p.scms.ee_retry_timeout,
+                p.scms.ee_retry_max_per_hour,
+                p.clock_skew_ns,
+                p.clock_skew_share.to_bits(),
+                p.root_rollover_at,
+                p.root_removal_at,
+                p.peer_root_removal_at,
+                p.modelled_reports,
+            )
+        };
+        assert_eq!(view(&pa), view(&pb));
+        assert_ne!(view(&pa), view(&base), "the keys must move the parameters");
+        assert_eq!(LifecycleParams::background_entries(&a), 1234);
+        assert_eq!(LifecycleParams::background_entries(&b), 1234);
+        let both = with_scms(
+            json!({"lifecycle": {"ee_retry_max_per_hour": 7}}),
+            Some(json!({"ee_retry_max_per_hour": 3})),
+        );
+        let p = LifecycleParams::from_scenario(&both).expect("loads");
+        assert_eq!(p.scms.ee_retry_max_per_hour, 7, "the typed field wins");
+        // Absent, every field serialises to nothing: no scenario hash moves.
+        let empty = serde_json::to_value(crate::scenario::schema::LifecycleSpec::default())
+            .expect("serialises");
+        assert_eq!(empty, json!({}));
     }
 }

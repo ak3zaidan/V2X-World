@@ -746,8 +746,202 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "European CCMS (ETSI TS 102 941)",
             "Authorization tickets, an enrolment authority and passive revocation.",
         ),
+        // --- SCMS (08-settings-ux-and-gaps §2) -------------------------------------
+        ("security.scms.deployment.preset", "us-production-2025") => w(
+            "US system (2025)",
+            "Two providers on one trust list, neutral labels a and b: the deployed US SCMS.",
+        ),
+        ("security.scms.deployment.preset", "us-test-ctl-2025") => w(
+            "US test trust list (17 Jul 2025)",
+            "Six roots, five approved; provider-f's root ships but is not trusted.",
+        ),
+        ("security.scms.deployment.preset", "camp-reference") => w(
+            "CAMP reference design",
+            "One SCMS with LOP, CRL Store, RSU broadcast and a central MA at flat latency: the pre-2025 topology, not the US system.",
+        ),
+        ("security.scms.deployment.preset", "custom") => w(
+            "Custom providers",
+            "You list the providers below; each starts as a copy of a US provider.",
+        ),
+        ("security.scms.deployment.options.butterfly", "original") => w(
+            "Original butterfly key expansion",
+            "The device sends signing and encryption caterpillar keys, the RA expands them into cocoon keys and the ACA encrypts each certificate to the device: the US profile.",
+        ),
+        ("security.scms.deployment.options.butterfly", "unified") => Some((
+            "Unified butterfly",
+            "Not deployed in the US: the US profile uses the original expansion only and the unified response key is unconfirmed, so this build refuses it.",
+            false,
+        )),
+        ("security.scms.deployment.options.butterfly", "cubk") => Some((
+            "Compact unified butterfly",
+            "Not deployed in the US: the US profile uses the original expansion only and the compact unified response key is unconfirmed, so this build refuses it.",
+            false,
+        )),
+        ("security.scms.chain_file", "all-providers") => w(
+            "Every provider's CA certificates",
+            "Each device holds the global chain file with every trusted provider's CAs, so it verifies any provider's vehicles at once.",
+        ),
+        ("security.scms.chain_file", "home-provider") => w(
+            "Only my provider's",
+            "A device learns other providers' ICA and ACA over the air by P2PCD before it can verify their vehicles (an assumption).",
+        ),
+        ("security.scms.deployment.latency", "region") => w(
+            "Distance-based",
+            "Great-circle distance between server sites at fibre speed, plus a fixed overhead per link (an assumption).",
+        ),
+        ("security.scms.deployment.latency", "flat") => w(
+            "Fixed latency",
+            "Every backend link takes the backend network's fixed latency, wherever the servers are.",
+        ),
+        ("security.scms.deployment.providers[].ma_mode", "manual-review") => w(
+            "An operator reviews each case",
+            "The CV-pilot \"minimum viable\" MA: a person reviews the evidence before a revocation (CAMP 1.2.2 §4.2-4.3).",
+        ),
+        ("security.scms.deployment.providers[].ma_mode", "automatic") => w(
+            "Acted on at once",
+            "The MA revokes as soon as its rule decides, with no human review.",
+        ),
+        ("security.scms.deployment.providers[].crl_publication", "sla-1-business-day") => w(
+            "Within one business day",
+            "The provider publishes a revocation within one business day of the decision (SCMS Manager service-level agreement).",
+        ),
+        ("security.scms.deployment.providers[].crl_publication", "cadence") => w(
+            "On a fixed cadence",
+            "The CRL is published on the fixed cadence set under Revocation, as in the CAMP reference design.",
+        ),
+        ("security.scms.deployment.providers[].crl_publication", "on-decision") => w(
+            "As soon as decided",
+            "The CRL is re-signed and published the moment the MA decides.",
+        ),
+        ("security.scms.tls", "1.3") => w(
+            "TLS 1.3",
+            "One round trip to set up the session before the first request (the default; the SCMS Manager EE profile §2.1.18 allows 1.2 or 1.3).",
+        ),
+        ("security.scms.tls", "1.2") => w(
+            "TLS 1.2",
+            "One more round trip than TLS 1.3 before the first request; also allowed by the EE profile.",
+        ),
+        ("security.scms.crl_overdue_scope", "craca") => w(
+            "Only certificates under the overdue list",
+            "While a CRL is overdue, refuse only messages whose certificates that CRL's issuer covers (the default).",
+        ),
+        ("security.scms.crl_overdue_scope", "all") => w(
+            "Every message",
+            "While any series-1 CRL is overdue, refuse every message; CAMP 1.2.2 Table 67 allows either reading.",
+        ),
+        ("security.threshold.roles[]", "pca") => w(
+            "Pseudonym CA",
+            "A committee of servers signs pseudonym certificates; no single server holds the key.",
+        ),
+        ("security.threshold.roles[]", "crl") => {
+            w("CRL Generator", "A committee signs the revocation list.")
+        }
+        ("security.threshold.roles[]", "linkage") => w(
+            "Linkage authorities",
+            "A t-of-n committee releases linkage seeds, so revoking a vehicle needs a quorum.",
+        ),
+        ("actors.backend.failures[].mode", "offline") => w(
+            "Down",
+            "The server is offline for the window: every message delivered to it is dropped.",
+        ),
+        ("actors.backend.failures[].mode", "slow") => w(
+            "Slow",
+            "Each message takes the extra time below on top of its service time, for the window.",
+        ),
+        ("actors.backend.failures[].mode", "malicious") => w(
+            "Lying",
+            "A committee member sends invalid threshold shares; only a committee member can lie.",
+        ),
+        ("actors.backend.entities.*.service_model", "service/mmc") => w(
+            "c parallel workers",
+            "The server runs the backend's worker count in parallel behind one queue (M/M/c, the default).",
+        ),
+        ("actors.backend.entities.*.service_model", "service/mm1") => w(
+            "One worker",
+            "The server handles one message at a time behind one queue (M/M/1).",
+        ),
+        (
+            "security.scms.deployment.providers[].components"
+            | "security.scms.deployment.providers[].sites"
+            | "security.scms.deployment.providers[].capacity"
+            | "security.scms.deployment.capacity"
+            | "actors.backend.entities"
+            | "actors.backend.links[].from"
+            | "actors.backend.links[].to"
+            | "actors.backend.failures[].node",
+            role,
+        ) => role_words(role).map(|(l, d)| (l, d, true)),
         _ => None,
     }
+}
+
+/// A label and a sentence for one SCMS server role: the provider components of
+/// `v2xw_proto::scms::deployment::ROLES` and the backend entities of
+/// `phase2::SCMS_ENTITIES` (`pca` is CAMP's name for the ACA, `dcm` the device's contact).
+fn role_words(role: &str) -> Option<(&'static str, &'static str)> {
+    Some(match role {
+        "root" => (
+            "Root CA",
+            "The provider's offline root of trust; its certificate is on the trust list the electors sign.",
+        ),
+        "ica" => (
+            "Intermediate CA",
+            "Signs the online CAs' certificates under the root.",
+        ),
+        "eca" => (
+            "Enrolment CA",
+            "Issues each device's enrolment certificate once, when it is built or installed.",
+        ),
+        "ra" => (
+            "Registration Authority",
+            "Takes devices' certificate requests, shuffles them and expands their butterfly keys.",
+        ),
+        "aca" => (
+            "Authorization (pseudonym) CA",
+            "Signs the pseudonym certificates vehicles broadcast with (CAMP calls it the PCA).",
+        ),
+        "pca" => (
+            "Pseudonym CA (ACA)",
+            "Signs the pseudonym certificates vehicles broadcast with (IEEE 1609.2.1 calls it the ACA).",
+        ),
+        "la1" => (
+            "Linkage Authority 1",
+            "Issues half of each certificate's linkage value, so no single authority can link a vehicle's pseudonyms.",
+        ),
+        "la2" => (
+            "Linkage Authority 2",
+            "Issues the other half of each certificate's linkage value.",
+        ),
+        "ma" => (
+            "Misbehaviour Authority",
+            "Receives misbehaviour reports, investigates and orders revocations.",
+        ),
+        "crlg" => (
+            "CRL Generator",
+            "Signs and publishes the certificate revocation list.",
+        ),
+        "pg" => (
+            "Policy Generator",
+            "Signs the policy file and the global chain file that devices download.",
+        ),
+        "lop" => (
+            "Location Obscurer Proxy",
+            "Hides a device's network address from the RA with one extra hop; CAMP design only, not US.",
+        ),
+        "crl_store" => (
+            "CRL Store",
+            "Serves the CRL to devices that fetch it; CAMP design only, not US.",
+        ),
+        "crl_broadcast" => (
+            "CRL broadcast",
+            "Pushes the CRL to roadside units that repeat it on the air; CAMP design only, not US.",
+        ),
+        "dcm" => (
+            "Device Configuration Manager",
+            "The device's point of contact for enrolment and certificate downloads.",
+        ),
+        _ => return None,
+    })
 }
 
 /// A label and a description for one legacy attack type (`v2xw_threat::AttackKind`),
@@ -1008,7 +1202,7 @@ pub fn option_row(path: &str, value: &str, fallback: &str) -> Value {
             "available": false,
         });
     }
-    match words(path, value) {
+    let mut row = match words(path, value).or_else(|| scheme_words(path, value)) {
         Some((label, description, available)) => json!({
             "value": value, "label": label, "description": description,
             "available": available,
@@ -1019,6 +1213,96 @@ pub fn option_row(path: &str, value: &str, fallback: &str) -> Value {
             "description": first_sentence(fallback),
             "available": true,
         }),
+    };
+    if let Some(us) = us_of(path, value)
+        && let Value::Object(map) = &mut row
+    {
+        map.insert("us".into(), json!(us));
+    }
+    row
+}
+
+/// The words of a signature, KEM or threshold scheme, from its own registry entry
+/// (`v2xw_sec::scheme`, `v2xw_proto::threshold`), so a scheme registered there gets a
+/// label and its standard in the menu without an edit here (08 §4.1 item 2).
+fn scheme_words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> {
+    match path {
+        "security.signature" => v2xw_sec::scheme::signature(value)
+            .map(|s| (s.label, scheme_sentence(s.notes, s.standard), true)),
+        "security.kem" => v2xw_sec::scheme::kem(value)
+            .map(|k| (k.label, scheme_sentence(k.notes, k.standard), true)),
+        "security.threshold.protocol" | "security.threshold.umbrella_inner" => {
+            let e = v2xw_proto::threshold::THRESHOLD_PROTOCOLS
+                .iter()
+                .find(|e| e.id == value)?;
+            let standard = (e.build)(&v2xw_proto::threshold::ProtocolParams::default()).standard();
+            if path.ends_with("umbrella_inner") && value == "umbrella" {
+                return Some((
+                    e.label,
+                    "Cannot sign its own umbrellas: choose a signing protocol for the umbrella certificates.",
+                    false,
+                ));
+            }
+            Some((e.label, standard, true))
+        }
+        _ => None,
+    }
+}
+
+/// A scheme's notes when it has them, else its standard: the sentence a menu shows.
+fn scheme_sentence(notes: &'static str, standard: &'static str) -> &'static str {
+    if notes.trim().is_empty() {
+        standard
+    } else {
+        notes
+    }
+}
+
+/// Whether `value` at `path` is what the deployed US system uses (`Some(true)`), a value
+/// it does not use (`Some(false)`, shown as a "not US" badge; a run choosing it is flagged
+/// in its manifest by `Deployment::is_us` where that applies), or neither (`None`).
+///
+/// 08-settings-ux-and-gaps §9 rule 1: US values are the defaults; every other value stays
+/// selectable but badged.
+pub fn us_of(path: &str, value: &str) -> Option<bool> {
+    match path {
+        "security.scms.deployment.preset" => match value {
+            "us-production-2025" | "us-test-ctl-2025" => Some(true),
+            "camp-reference" => Some(false),
+            _ => None,
+        },
+        "security.scms.deployment.options.butterfly" => Some(value == "original"),
+        "security.scms.chain_file" => Some(value == "all-providers"),
+        "security.scms.deployment.providers[].ma_mode" => {
+            (value == "manual-review").then_some(true)
+        }
+        "security.scms.deployment.providers[].crl_publication" => match value {
+            "sla-1-business-day" => Some(true),
+            "cadence" => Some(false),
+            _ => None,
+        },
+        "security.scms.deployment.providers[].components"
+        | "security.scms.deployment.providers[].sites"
+        | "security.scms.deployment.providers[].capacity"
+        | "security.scms.deployment.capacity"
+        | "actors.backend.entities"
+        | "actors.backend.links[].from"
+        | "actors.backend.links[].to"
+        | "actors.backend.failures[].node" => match value {
+            "lop" | "crl_store" | "crl_broadcast" => Some(false),
+            _ => None,
+        },
+        "security.envelope" => Some(value == "ieee1609.2"),
+        "security.signature" => Some(value == "ecdsa-p256"),
+        "security.kem" => Some(value == "ecies-p256"),
+        "security.protocol.id" | "actors.backend.protocol" => match value {
+            "protocol/scms/camp" => Some(true),
+            "protocol/etsi/ts102941" => Some(false),
+            _ => None,
+        },
+        // A committee is a research option; the US system has none (08 §2.7).
+        "security.threshold.protocol" | "security.threshold.umbrella_inner" => Some(false),
+        _ => None,
     }
 }
 
@@ -1129,6 +1413,14 @@ pub fn slot_values(path: &str, registry: &Registry) -> Option<(Vec<Value>, bool)
                 .map(str::to_string)
                 .collect(),
         ),
+        // `apply_backend_topology` builds these two queues and refuses any other id, so
+        // the menu is closed to them rather than listing the whole service registry.
+        "actors.backend.entities.*.service_model" => Some(
+            crate::phase2::SERVICE_MODEL_IDS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+        ),
         "actors.backend.entities.*.profile" => Some(
             validate::all_profile_ids()
                 .into_iter()
@@ -1229,9 +1521,196 @@ pub fn extra_values(path: &str) -> Option<(Vec<Value>, bool)> {
                 .collect(),
             true,
         )),
+        // --- SCMS (08-settings-ux-and-gaps §4.1 item 1): each set is the constant its
+        // parser's "allowed:" message reads, so the form and the loader cannot disagree.
+        "security.scms.deployment.preset" => Some((
+            rows_of(path, &v2xw_proto::scms::deployment::Preset::IDS),
+            true,
+        )),
+        "security.scms.deployment.options.butterfly" => Some((
+            rows_of(
+                path,
+                &crate::phase2::BUTTERFLY_IDS
+                    .iter()
+                    .chain(&crate::phase2::REFUSED_BUTTERFLIES)
+                    .copied()
+                    .collect::<Vec<_>>(),
+            ),
+            true,
+        )),
+        "security.scms.chain_file" => Some((rows_of(path, &crate::phase2::CHAIN_FILE_IDS), true)),
+        "security.scms.deployment.latency" => {
+            Some((rows_of(path, &crate::phase2::LATENCY_IDS), true))
+        }
+        "security.scms.deployment.providers[].ma_mode" => {
+            Some((rows_of(path, &crate::phase2::MA_MODE_IDS), true))
+        }
+        "security.scms.deployment.providers[].crl_publication" => Some((
+            rows_of(path, &v2xw_proto::scms::deployment::CrlPublication::IDS),
+            true,
+        )),
+        "security.scms.deployment.providers[].region" => Some((
+            v2xw_proto::scms::deployment::REGIONS
+                .iter()
+                .map(|r| {
+                    json!({
+                        "value": r.name,
+                        "label": format!("{} ({})", r.name, r.metro),
+                        "description": format!(
+                            "Servers assumed near {}: no provider publishes where it hosts, so this is an assumption.",
+                            r.metro
+                        ),
+                        "available": true,
+                    })
+                })
+                .collect(),
+            true,
+        )),
+        // A free name: the preset providers are offered, and under `custom` any name may
+        // be typed (open).
+        "security.scms.deployment.providers[].name" => Some((provider_name_rows(), false)),
+        "security.threshold.protocol" | "security.threshold.umbrella_inner" => Some((
+            rows_of(path, &v2xw_proto::threshold::THRESHOLD_IDS),
+            true,
+        )),
+        "security.threshold.roles[]" => {
+            Some((rows_of(path, &crate::crypto_config::THRESHOLD_ROLES), true))
+        }
+        "actors.backend.failures[].mode" => {
+            Some((rows_of(path, &crate::crypto_config::FAILURE_MODES), true))
+        }
+        // Open: a role may be qualified by its provider (`provider-b/crlg`) or name a
+        // committee member (`pca-member-2`); A4 composes those from the document.
+        "actors.backend.failures[].node" => {
+            Some((rows_of(path, &crate::crypto_config::FAILURE_ROLES), false))
+        }
+        "actors.backend.links[].from" | "actors.backend.links[].to" => {
+            Some((rows_of(path, &crate::phase2::SCMS_ENTITIES), true))
+        }
+        // The hour the report store re-weights, as the 24 hours of the Eastern clock.
+        "security.scms.lifecycle.report_decay_hour_et" => Some((
+            (0..24)
+                .map(|h| {
+                    json!({
+                        "value": h,
+                        "label": format!("{h:02}:00 ET"),
+                        "description": if h == 5 {
+                            "SCMS Manager MBR v1.0 §2.2: every day at 5 am Eastern time (the US value)."
+                        } else {
+                            "Stored reports are re-weighted every day at this Eastern hour."
+                        },
+                        "available": true,
+                    })
+                })
+                .collect(),
+            true,
+        )),
         // 08-settings-ux-and-gaps §5-§8: the keys an engine module owns.
         _ => crate::scenario::module_keys::options(path),
     }
+}
+
+/// `option_row` for each of `ids`.
+fn rows_of(path: &str, ids: &[&str]) -> Vec<Value> {
+    ids.iter().map(|v| option_row(path, v, "")).collect()
+}
+
+/// The provider names the presets use, each saying which presets name it.
+fn provider_name_rows() -> Vec<Value> {
+    use v2xw_proto::scms::deployment::{Deployment, Preset};
+    let mut names: Vec<(String, Vec<&'static str>)> = Vec::new();
+    for id in Preset::IDS {
+        let Some(p) = Preset::parse(id).filter(|p| *p != Preset::Custom) else {
+            continue;
+        };
+        let label = words("security.scms.deployment.preset", id).map_or(id, |w| w.0);
+        for q in Deployment::preset(p).providers {
+            match names.iter_mut().find(|(n, _)| *n == q.name) {
+                Some((_, by)) => by.push(label),
+                None => names.push((q.name.clone(), vec![label])),
+            }
+        }
+    }
+    names
+        .into_iter()
+        .map(|(name, by)| {
+            json!({
+                "value": name,
+                "label": name,
+                "description": format!(
+                    "A provider of: {}. Under Custom providers any name may be typed.",
+                    by.join("; ")
+                ),
+                "available": true,
+            })
+        })
+        .collect()
+}
+
+/// The keys a map at `path` offers (`x-key-options`), and whether the set is closed: the
+/// SCMS role maps, whose keys are server roles, and the MA policy family and rules.
+pub fn key_values(path: &str) -> Option<(Vec<Value>, bool)> {
+    match path {
+        "security.scms.deployment.providers[].components"
+        | "security.scms.deployment.providers[].sites"
+        | "security.scms.deployment.providers[].capacity"
+        | "security.scms.deployment.capacity" => {
+            Some((rows_of(path, &v2xw_proto::scms::deployment::ROLES), true))
+        }
+        "actors.backend.entities" => Some((rows_of(path, &crate::phase2::SCMS_ENTITIES), true)),
+        "security.scms.ma_policy.evidence.rules" | "security.scms.ma_policies.*.evidence.rules" => {
+            Some((
+                crate::ma_policy::RULE_SUBTYPE_IDS
+                    .iter()
+                    .map(|v| {
+                        json!({
+                            "value": v,
+                            "label": humanise_camel(v),
+                            "description": format!(
+                                "The SM-MBR v1.0 {v} report subtype the US device files."
+                            ),
+                            "available": true,
+                        })
+                    })
+                    .collect(),
+                true,
+            ))
+        }
+        // A free name a provider's `ma_policy` then picks; the presets are offered as
+        // names to start from.
+        "security.scms.ma_policies" => Some((
+            crate::ma_policy::PRESET_IDS
+                .iter()
+                .filter(|v| **v != "custom")
+                .map(|v| {
+                    json!({
+                        "value": v,
+                        "label": format!("Policy named \"{v}\""),
+                        "description": format!(
+                            "A named policy, here called after the {v} preset it can start from; any other name may be typed."
+                        ),
+                        "available": true,
+                    })
+                })
+                .collect(),
+            false,
+        )),
+        _ => None,
+    }
+}
+
+/// `RandomPosition` → "Random position".
+fn humanise_camel(id: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in id.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            out.push(' ');
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Every channel any region's band plan opens, from `v2xw_radio::regulation`, with which
@@ -1567,10 +2046,573 @@ pub static PRESETS: &[Preset] = &[
     },
 ];
 
+/// One SCMS preset, written short.
+const fn sp(path: &'static str, label: &'static str, value: f64, note: &'static str) -> Preset {
+    Preset {
+        path,
+        label,
+        value,
+        note,
+    }
+}
+
+/// The SCMS numbers' named values (08-settings-ux-and-gaps §2), each with its source or
+/// "ASSUMPTION" where no figure is published. The US value comes first.
+pub static SCMS_PRESETS: &[Preset] = &[
+    // --- deployment
+    sp(
+        "security.scms.deployment.electors",
+        "5 electors (US)",
+        5.0,
+        "The US trust list's electors (SCMS Manager CTL policy).",
+    ),
+    sp(
+        "security.scms.deployment.quorum",
+        "Any 3 of the electors (US)",
+        3.0,
+        "The US trust list's signing quorum (SCMS Manager CTL policy).",
+    ),
+    sp(
+        "security.scms.deployment.fibre_fraction",
+        "2/3 c, glass fibre",
+        0.667,
+        "Light in silica fibre travels at about c/1.47.",
+    ),
+    sp(
+        "security.scms.deployment.per_link_ms",
+        "1 ms per link",
+        1.0,
+        "ASSUMPTION: router and server stack overhead; no provider publishes one.",
+    ),
+    sp(
+        "security.scms.deployment.providers[].fleet_share",
+        "Half the fleet",
+        0.5,
+        "ASSUMPTION: no provider publishes its market share; equal shares between two providers.",
+    ),
+    sp(
+        "security.scms.deployment.providers[].ma_review_s",
+        "1 hour",
+        3_600.0,
+        "A fast operator.",
+    ),
+    sp(
+        "security.scms.deployment.providers[].ma_review_s",
+        "8 h, one working shift",
+        28_800.0,
+        "ASSUMPTION: the CV pilots' manual review, one shift.",
+    ),
+    sp(
+        "security.scms.deployment.providers[].ma_review_s",
+        "1 business day",
+        86_400.0,
+        "The SCMS Manager's one-business-day service level.",
+    ),
+    // --- certificate lifecycle
+    sp(
+        "security.scms.lifecycle.i_period_s",
+        "1 week (US)",
+        604_800.0,
+        "CAMP-EE §2.1.5.3.2: the US i-period.",
+    ),
+    sp(
+        "security.scms.lifecycle.i_period_s",
+        "1 day (compressed calendar)",
+        86_400.0,
+        "A study value; needs time.calendar: compressed.",
+    ),
+    sp(
+        "security.scms.lifecycle.i_period_s",
+        "60 s (compressed calendar)",
+        60.0,
+        "A study value for short runs; needs time.calendar: compressed.",
+    ),
+    sp(
+        "security.scms.lifecycle.cert_lifetime_s",
+        "i-period + 1 h (US)",
+        608_400.0,
+        "CAMP-EE §2.1.5.3.2: 10,140 minutes, one hour of overlap.",
+    ),
+    sp(
+        "security.scms.lifecycle.cert_lifetime_s",
+        "Same as the i-period",
+        604_800.0,
+        "No overlap between consecutive periods.",
+    ),
+    sp(
+        "security.scms.lifecycle.certs_per_period",
+        "20 a week (US)",
+        20.0,
+        "CAMP-EE Table 2.1.2.6.2.",
+    ),
+    sp(
+        "security.scms.lifecycle.certs_per_period",
+        "60 a week (NYC pilot taxis)",
+        60.0,
+        "NYC CV pilot logs: taxis held the 60 maximum.",
+    ),
+    sp(
+        "security.scms.lifecycle.pool_periods",
+        "2 weeks",
+        2.0,
+        "The engine's starting pool.",
+    ),
+    sp(
+        "security.scms.lifecycle.pool_periods",
+        "1 week (NYC pilot)",
+        1.0,
+        "The NYC CV pilot provisioned one week ahead.",
+    ),
+    sp(
+        "security.scms.lifecycle.topup_below_periods",
+        "1 week",
+        1.0,
+        "Top up when the current week is the last one held.",
+    ),
+    sp(
+        "security.scms.lifecycle.topup_below_periods",
+        "Never top up",
+        0.0,
+        "The device keeps only what it started with.",
+    ),
+    sp(
+        "security.scms.lifecycle.max_periods_ahead",
+        "3 years (US)",
+        156.0,
+        "CAMP Primer p.7 (3,120 = 156 × 20); THEA pilot.",
+    ),
+    sp(
+        "security.scms.lifecycle.max_periods_ahead",
+        "1 week (NYC pilot)",
+        1.0,
+        "The NYC CV pilot's one week ahead.",
+    ),
+    sp(
+        "security.scms.lifecycle.cert_shuffle_threshold",
+        "1,000 requests",
+        1_000.0,
+        "CAMP 1.2.2 Table 67 shuffle_threshold.",
+    ),
+    sp(
+        "security.scms.lifecycle.cert_shuffle_threshold",
+        "10,000 requests",
+        10_000.0,
+        "Brecht et al. 2018, the SCMS design paper.",
+    ),
+    sp(
+        "security.scms.lifecycle.cert_shuffle_window_s",
+        "2 days",
+        172_800.0,
+        "CAMP 1.2.2 Table 67 max_cert_request_age.",
+    ),
+    sp(
+        "security.scms.lifecycle.cert_shuffle_window_s",
+        "1 day",
+        86_400.0,
+        "Brecht et al. 2018.",
+    ),
+    sp(
+        "security.scms.lifecycle.first_batch_delay_s",
+        "1 minute",
+        60.0,
+        "ASSUMPTION: the engine's wait before the first poll.",
+    ),
+    sp(
+        "security.scms.lifecycle.download_poll_interval_s",
+        "5 min (download-minWait)",
+        300.0,
+        "SCMS Manager EE profile Table 3.",
+    ),
+    sp(
+        "security.scms.lifecycle.max_download_polls",
+        "100 polls (download-maxReqs)",
+        100.0,
+        "SCMS Manager EE profile Table 3.",
+    ),
+    sp(
+        "security.scms.lifecycle.download_request_tolerance_s",
+        "5 s",
+        5.0,
+        "CAMP 1.2.2 SCMS-1203 ra.client-signature-ttl-sec.",
+    ),
+    sp(
+        "security.scms.lifecycle.enrolment_lifetime_s",
+        "6 years",
+        189_216_000.0,
+        "CAMP 1.2.2 Table 3.",
+    ),
+    sp(
+        "security.scms.lifecycle.enrolment_lifetime_s",
+        "7 years",
+        220_752_000.0,
+        "CAMP SCMS R1.1.",
+    ),
+    sp(
+        "security.scms.lifecycle.enrolment_lifetime_s",
+        "3 years",
+        94_608_000.0,
+        "The 5GAA draft profile.",
+    ),
+    sp(
+        "security.scms.lifecycle.reenrol_lead_s",
+        "548 days",
+        47_347_200.0,
+        "The middle of the SCMS Manager re-enrolment standard's 12 to 24 months.",
+    ),
+    sp(
+        "security.scms.lifecycle.reenrol_lead_s",
+        "12 months",
+        31_536_000.0,
+        "The re-enrolment standard's shortest lead.",
+    ),
+    sp(
+        "security.scms.lifecycle.reenrol_lead_s",
+        "24 months",
+        63_072_000.0,
+        "The re-enrolment standard's longest lead.",
+    ),
+    sp(
+        "security.scms.lifecycle.reenrol_download_delay_s",
+        "5 min",
+        300.0,
+        "The profile's download-minWait.",
+    ),
+    sp(
+        "security.scms.lifecycle.ee_retry_timeout_s",
+        "10 s",
+        10.0,
+        "CAMP SCMS-522.",
+    ),
+    sp(
+        "security.scms.lifecycle.ee_retry_timeout_s",
+        "No retry",
+        0.0,
+        "The device never retries an unanswered request.",
+    ),
+    sp(
+        "security.scms.lifecycle.ee_retry_max_per_hour",
+        "10 an hour",
+        10.0,
+        "CAMP SCMS-523.",
+    ),
+    sp(
+        "security.scms.lifecycle.clock_skew_s",
+        "True clock",
+        0.0,
+        "Every device's clock is right.",
+    ),
+    // --- revocation
+    sp(
+        "security.scms.lifecycle.crl_cadence_s",
+        "Publish on decision",
+        0.0,
+        "The CRL is re-signed when the MA decides.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_cadence_s",
+        "Every hour",
+        3_600.0,
+        "A fixed cadence for studies.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_cadence_s",
+        "Every day",
+        86_400.0,
+        "A fixed cadence for studies.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_cadence_s",
+        "Every week",
+        604_800.0,
+        "A fixed cadence for studies.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_fetch_interval_s",
+        "1 hour",
+        3_600.0,
+        "ASSUMPTION, inside CAMP's weekly bound.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_fetch_interval_s",
+        "1 week (CAMP upper bound)",
+        604_800.0,
+        "CAMP 1.2.2: devices fetch the CRL at least weekly.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_broadcast_interval_s",
+        "5 s",
+        5.0,
+        "USDOT RSU Specification v4.1, Store and Repeat.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_background_entries",
+        "None",
+        0.0,
+        "The list holds only this run's revocations.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_background_entries",
+        "10,000",
+        10_000.0,
+        "A list after a few years of revocations.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_background_entries",
+        "1,000,000",
+        1_000_000.0,
+        "A stress case: a very long standing list.",
+    ),
+    sp(
+        "security.scms.crl_overdue_tolerance_s",
+        "2 weeks",
+        1_209_600.0,
+        "CAMP 1.2.2 Table 67.",
+    ),
+    sp(
+        "security.scms.crl_overdue_tolerance_s",
+        "Refuse as soon as overdue",
+        0.0,
+        "The strictest receiver.",
+    ),
+    // --- misbehaviour authority
+    sp(
+        "security.scms.lifecycle.ma_review_s",
+        "Automatic",
+        0.0,
+        "The MA acts at once.",
+    ),
+    sp(
+        "security.scms.lifecycle.ma_review_s",
+        "1 hour",
+        3_600.0,
+        "A fast operator.",
+    ),
+    sp(
+        "security.scms.lifecycle.ma_review_s",
+        "8 h, one working shift",
+        28_800.0,
+        "ASSUMPTION: the CV pilots' manual review, one shift.",
+    ),
+    sp(
+        "security.scms.lifecycle.ma_review_s",
+        "1 business day",
+        86_400.0,
+        "The SCMS Manager's one-business-day service level.",
+    ),
+    sp(
+        "security.scms.lifecycle.ma_max_open_cases",
+        "1,000 cases",
+        1_000.0,
+        "ASSUMPTION: no MA capacity is published.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_shuffle_threshold",
+        "10,000 reports",
+        10_000.0,
+        "CAMP-EE SCMS-765.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_shuffle_window_s",
+        "1 day",
+        86_400.0,
+        "CAMP-EE SCMS-765.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_store_quota_bytes",
+        "Keep none",
+        0.0,
+        "The device stores no report.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_store_quota_bytes",
+        "16 KiB",
+        16_384.0,
+        "A small device store.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_store_quota_bytes",
+        "64 KiB",
+        65_536.0,
+        "ASSUMPTION: SCMS Manager MBR v1.0 §2.2 leaves the quota device-specific.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_store_quota_bytes",
+        "1 MiB",
+        1_048_576.0,
+        "A large device store.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_daily_multiplier",
+        "0.9 a day",
+        0.9,
+        "SCMS Manager MBR v1.0 §2.3.1 DailyMultiplier.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_weight_random_position",
+        "1.0",
+        1.0,
+        "MBR v1.0 §2.3.1.2.2 initialWeight.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_weight_constant_position",
+        "1.0",
+        1.0,
+        "MBR v1.0 §2.3.1.2.3 initialWeight.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_weight_max_speed",
+        "1.0",
+        1.0,
+        "MBR v1.0 §2.3.1.3.1 initialWeight.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_weight_max_acceleration",
+        "1.0",
+        1.0,
+        "MBR v1.0 §2.3.1.3.2 initialWeight.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_weight_brake_acceleration",
+        "1.0",
+        1.0,
+        "MBR v1.0 §2.3.1.3.4 initialWeight.",
+    ),
+    // --- receiver checks
+    sp(
+        "security.scms.rx_beacon_max_age_s",
+        "2 s",
+        2.0,
+        "C2C-CC Basic System Profile RS_BSP_168.",
+    ),
+    sp(
+        "security.scms.rx_max_age_s",
+        "10 min",
+        600.0,
+        "C2C-CC Basic System Profile RS_BSP_168.",
+    ),
+    sp(
+        "security.scms.rx_max_future_s",
+        "40 ms",
+        0.04,
+        "C2C-CC Basic System Profile RS_BSP_168.",
+    ),
+    sp(
+        "security.on_demand_threshold",
+        "0.5",
+        0.5,
+        "The engine's middle relevance score.",
+    ),
+    sp(
+        "security.prioritized_horizon_m",
+        "300 m",
+        300.0,
+        "The DSRC/C-V2X design range J2945/1 and ETSI CAM receivers care about.",
+    ),
+    sp(
+        "security.signer_id_policy.full_cert_every_ms",
+        "Once a second",
+        1_000.0,
+        "The SAE J2945/1 reading.",
+    ),
+    sp(
+        "security.signer_id_policy.full_cert_every_ms",
+        "Every 450 ms",
+        450.0,
+        "The NYC CV pilot's reading.",
+    ),
+    sp(
+        "security.pseudonym_change.mix_zone_radius_m",
+        "30 m",
+        30.0,
+        "One junction (Freudiger et al., WiN-ITS 2007).",
+    ),
+    sp(
+        "security.pseudonym_change.mix_zone_min_age_s",
+        "60 s",
+        60.0,
+        "The engine's default youngest pseudonym a zone changes.",
+    ),
+    // --- cryptography (committees: a research option, not US)
+    sp(
+        "security.threshold.members",
+        "5 servers",
+        5.0,
+        "A common t-of-n study size.",
+    ),
+    sp(
+        "security.threshold.quorum",
+        "3 servers",
+        3.0,
+        "A majority of five.",
+    ),
+    sp(
+        "security.threshold.umbrella_leaves",
+        "20 pseudonyms",
+        20.0,
+        "One US week's certificates.",
+    ),
+    sp(
+        "security.threshold.round_timeout_ms",
+        "500 ms",
+        500.0,
+        "The engine's default.",
+    ),
+    sp(
+        "security.threshold.retry_after_s",
+        "30 s",
+        30.0,
+        "The engine's default.",
+    ),
+    sp(
+        "security.threshold.member_latency_ms",
+        "20 ms",
+        20.0,
+        "ASSUMPTION: a WAN between organisations.",
+    ),
+    // --- failures and servers
+    sp(
+        "actors.backend.failures[].extra_ms",
+        "10 ms",
+        10.0,
+        "A loaded server.",
+    ),
+    sp(
+        "actors.backend.failures[].extra_ms",
+        "100 ms",
+        100.0,
+        "A badly overloaded server.",
+    ),
+    sp(
+        "actors.backend.failures[].extra_ms",
+        "1 s",
+        1_000.0,
+        "A server close to stopping.",
+    ),
+    sp(
+        "actors.backend.links[].latency_ms",
+        "10 ms",
+        10.0,
+        "The engine's default backend link.",
+    ),
+    sp(
+        "actors.backend.links[].capacity_mbps",
+        "1 Gbit/s",
+        1_000.0,
+        "The engine's default backend link.",
+    ),
+    sp(
+        "net.rsu_ip.wsa_interval_ms",
+        "100 ms",
+        100.0,
+        "USDOT RSU Specification v4.1, Appendix D.",
+    ),
+];
+
 /// The presets for `path`, as `[{label, value, note}]`, or `None`.
 pub fn presets(path: &str) -> Option<Value> {
     let rows: Vec<Value> = PRESETS
         .iter()
+        .chain(SCMS_PRESETS)
         .filter(|p| p.path == path)
         .map(|p| json!({"label": p.label, "value": p.value, "note": p.note}))
         .collect();
@@ -1881,9 +2923,208 @@ pub fn title(path: &str) -> Option<&'static str> {
         "actors.vehicles.gnss" => "GNSS receivers",
         "actors.vehicles.gnss.rtk" => "RTK-corrected receivers",
         // end traffic audit
+        // --- SCMS menus (08-settings-ux-and-gaps §2) -------------------------------
+        "security.scms.deployment" => "Deployment",
+        "security.scms.deployment.preset" => "Certificate system layout",
+        "security.scms.deployment.electors" => "Trust-list electors",
+        "security.scms.deployment.quorum" => "Electors needed to sign the trust list",
+        "security.scms.deployment.options" => "Design options",
+        "security.scms.deployment.options.lop" => "Location Obscurer Proxy",
+        "security.scms.deployment.options.butterfly" => "Butterfly key expansion",
+        "security.scms.chain_file" => "CA certificates each device holds",
+        "security.scms.deployment.latency" => "Backend latency model",
+        "security.scms.deployment.fibre_fraction" => "Signal speed in fibre",
+        "security.scms.deployment.per_link_ms" => "Overhead per backend link",
+        "security.scms.pki_view" => "Publish the PKI view",
+        "security.scms.deployment.ma_report_sharing" => {
+            "Forward reports to the other provider's MA"
+        }
+        "security.scms.report_records" => "Record every report's fate",
+        "security.scms.deployment.providers" => "Providers",
+        "security.scms.deployment.providers[].name" => "Provider",
+        "security.scms.deployment.providers[].components" => "Servers it runs",
+        "security.scms.deployment.providers[].components.*" => "Instances",
+        "security.scms.deployment.providers[].region" => "Server region (assumed)",
+        "security.scms.deployment.providers[].fleet_share" => "Share of vehicles",
+        "security.scms.deployment.providers[].on_ctl" => "Root on the trust list",
+        "security.scms.deployment.providers[].ma_mode" => "How its MA decides",
+        "security.scms.deployment.providers[].ma_review_s" => "Its MA operator's review time",
+        "security.scms.deployment.providers[].crl_publication" => {
+            "When its revocations are published"
+        }
+        "security.scms.lifecycle.ee_retry_timeout_s" => "Retry an unanswered RA request after",
+        "security.scms.lifecycle.ee_retry_max_per_hour" => "RA request retries per hour",
+        "security.scms.lifecycle.crl_background_entries" => {
+            "Revocation list: earlier revocations already on it"
+        }
+        "security.scms.lifecycle.clock_skew_s" => "Device clock skew",
+        "security.scms.lifecycle.clock_skew_share" => "Share of devices with a skewed clock",
+        "security.scms.lifecycle.root_rollover_at_s" => "Home root rolls over at",
+        "security.scms.lifecycle.root_removal_at_s" => "Old home root leaves the trust list at",
+        "security.scms.lifecycle.peer_root_removal_at_s" => {
+            "Peer provider's root leaves the trust list at"
+        }
+        "security.scms.lifecycle.modelled_reports" => "File unbuildable reports as sized-only",
+        "security.signer_id_policy.full_cert_every_ms" => "Attach the full certificate every",
+        "security.signer_id_policy.digest_otherwise" => {
+            "Send an 8-byte digest between full certificates"
+        }
+        "security.pseudonym_change.period_s" => "Change pseudonym every",
+        "security.pseudonym_change.distance_m" => "Change pseudonym every (distance)",
+        "security.pseudonym_change.silent_period_s" => "Silent period after a change (from, to)",
+        "security.pseudonym_change.mix_zone_radius_m" => "Mix-zone radius",
+        "security.pseudonym_change.mix_zone_min_age_s" => "Youngest pseudonym a mix zone changes",
+        "security.kem" => "Encryption (key encapsulation)",
+        "security.protocol.params" => "Protocol parameters (legacy spelling)",
+        "security.threshold" => "Authority committees (not US)",
+        "security.threshold.protocol" => "Committee protocol",
+        "security.threshold.members" => "Committee size",
+        "security.threshold.quorum" => "Committee quorum",
+        "security.threshold.roles" => "Authorities run by committees",
+        "security.threshold.linkage_members" => "Linkage committee size",
+        "security.threshold.linkage_quorum" => "Linkage committee quorum",
+        "security.threshold.umbrella_leaves" => "Pseudonyms per umbrella certificate",
+        "security.threshold.umbrella_inner" => "Protocol that signs the umbrellas",
+        "security.threshold.preprocessed" => "Do the offline round ahead of time",
+        "security.threshold.round_timeout_ms" => "Committee round timeout",
+        "security.threshold.retry_after_s" => "Retry a failed committee signing after",
+        "security.threshold.ask_all" => "Ask every live member and keep the first quorum",
+        "security.threshold.member_latency_ms" => "Latency between committee members",
+        "actors.backend.failures" => "Server failures",
+        "actors.backend.failures[].node" => "Server",
+        "actors.backend.failures[].mode" => "Failure",
+        "actors.backend.failures[].from_s" => "From",
+        "actors.backend.failures[].to_s" => "Until",
+        "actors.backend.failures[].extra_ms" => "Extra time per message",
+        "actors.backend.entities" => "Per-server hardware and queue",
+        "actors.backend.entities.*.profile" => "Hardware",
+        "actors.backend.entities.*.service_model" => "Queue",
+        "actors.backend.entities.*.net" => "Network (not read)",
+        "actors.backend.links" => "Backend link overrides",
+        "actors.backend.links[].from" => "From",
+        "actors.backend.links[].to" => "To",
+        "actors.backend.links[].latency_ms" => "Latency",
+        "actors.backend.links[].capacity_mbps" => "Capacity",
         // 08-settings-ux-and-gaps §5-§8: the keys an engine module owns.
         _ => return crate::scenario::module_keys::words(path).map(|k| k.title),
     })
+}
+
+/// One sub-heading of the SCMS settings (08-settings-ux-and-gaps §3).
+#[derive(Debug, Clone, Copy)]
+pub struct Subgroup {
+    /// A stable id.
+    pub id: &'static str,
+    /// The heading.
+    pub label: &'static str,
+    /// Its place in the panel, from 1.
+    pub order: u32,
+    /// The help shown under the heading.
+    pub blurb: &'static str,
+}
+
+/// The eight SCMS sub-headings, in panel order (08 §3).
+pub const SCMS_SUBGROUPS: [Subgroup; 8] = [
+    Subgroup {
+        id: "deployment",
+        label: "Deployment",
+        order: 1,
+        blurb: "Which certificate system runs and how it is laid out: the providers on the trust list, the electors who sign that list, and the parts of the design the US does not deploy. Leave it on \"US system (2025)\" for the real deployment. Any change the US does not make is marked not US and recorded in the run's manifest.",
+    },
+    Subgroup {
+        id: "providers",
+        label: "Providers",
+        order: 2,
+        blurb: "The companies that run an SCMS. Each runs its own root, intermediate CA, RA, pseudonym CA, linkage authorities and MA. Names are neutral labels. Where each one's servers sit, and its share of vehicles, are assumptions, because no provider publishes them.",
+    },
+    Subgroup {
+        id: "lifecycle",
+        label: "Certificate lifecycle",
+        order: 3,
+        blurb: "How a vehicle gets and uses its certificates. It enrols once, receives 20 pseudonym certificates per week in batches from the RA, tops up before it runs out, and changes pseudonym while driving so it cannot be followed. Defaults are the US deployment's, with the source on each field.",
+    },
+    Subgroup {
+        id: "revocation",
+        label: "Revocation",
+        order: 4,
+        blurb: "What happens after a device is judged misbehaving: how fast its provider publishes the revocation list (CRL), how often vehicles fetch it, and how a receiver treats a list that is overdue.",
+    },
+    Subgroup {
+        id: "ma",
+        label: "Misbehaviour authority",
+        order: 5,
+        blurb: "How reports of bad messages reach the MA and how the MA decides. Covers what a vehicle stores and uploads, how the RA shuffles reports, the MA's decision rule, and whether a person reviews each case. The US pilots used manual review.",
+    },
+    Subgroup {
+        id: "receiver",
+        label: "Receiver checks",
+        order: 6,
+        blurb: "What a receiving vehicle accepts: how old or how far in the future a message may be, and which messages it verifies when it cannot verify all of them.",
+    },
+    Subgroup {
+        id: "crypto",
+        label: "Cryptography",
+        order: 7,
+        blurb: "The signature and encryption schemes, and whether the mathematics is done (real) or only charged for (modelled). Committees, where t-of-n servers share one authority's key, are a research option and not the US system.",
+    },
+    Subgroup {
+        id: "servers",
+        label: "Failures & servers",
+        order: 8,
+        blurb: "Servers that go down, slow down or lie during the run, and each server's hardware, capacity and links.",
+    },
+];
+
+/// Which SCMS sub-heading each path belongs to: the longest entry that is a prefix of the
+/// path wins. An entry is a character prefix, so `lifecycle.crl_` takes every CRL key of
+/// the lifecycle block and `providers[].ma_` the provider's MA keys (08 §3: "matched on
+/// the longest path prefix and then on the leaf name").
+const SUBGROUP_OF: &[(&str, &str)] = &[
+    ("security.protocol", "deployment"),
+    ("actors.backend.protocol", "deployment"),
+    ("security.scms", "deployment"),
+    ("security.scms.deployment", "deployment"),
+    ("security.scms.deployment.ma_report_sharing", "ma"),
+    ("security.scms.deployment.capacity", "servers"),
+    ("security.scms.deployment.providers", "providers"),
+    ("security.scms.deployment.providers[].ma_", "ma"),
+    (
+        "security.scms.deployment.providers[].crl_publication",
+        "revocation",
+    ),
+    ("security.scms.deployment.providers[].capacity", "servers"),
+    ("security.scms.lifecycle", "lifecycle"),
+    ("security.scms.lifecycle.crl_", "revocation"),
+    ("security.scms.lifecycle.ma_", "ma"),
+    ("security.scms.lifecycle.report_", "ma"),
+    ("security.scms.lifecycle.modelled_reports", "ma"),
+    ("security.scms.tls", "lifecycle"),
+    ("security.scms.crl_overdue_", "revocation"),
+    ("security.scms.rx_", "receiver"),
+    ("security.scms.report_records", "ma"),
+    ("security.scms.ma_polic", "ma"),
+    ("security.pseudonym_change", "lifecycle"),
+    ("security.signer_id_policy", "lifecycle"),
+    ("security.verification_policy", "receiver"),
+    ("security.on_demand_threshold", "receiver"),
+    ("security.prioritized_horizon_m", "receiver"),
+    ("security.envelope", "crypto"),
+    ("security.signature", "crypto"),
+    ("security.kem", "crypto"),
+    ("security.crypto_mode", "crypto"),
+    ("security.threshold", "crypto"),
+    ("detection.ma", "ma"),
+    ("actors.backend", "servers"),
+];
+
+/// The SCMS sub-heading of `path`, if it is an SCMS setting.
+pub fn subgroup(path: &str) -> Option<&'static Subgroup> {
+    let id = SUBGROUP_OF
+        .iter()
+        .filter(|(p, _)| path.starts_with(p))
+        .max_by_key(|(p, _)| p.len())?
+        .1;
+    SCMS_SUBGROUPS.iter().find(|g| g.id == id)
 }
 
 #[cfg(test)]
