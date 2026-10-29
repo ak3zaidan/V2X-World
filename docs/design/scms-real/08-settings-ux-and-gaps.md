@@ -817,6 +817,39 @@ worktree and the shared target directory (see the lean-agent and parallel-Rust n
   `apply_capacity` and `ica_levels`.
 * Each stub refuses any non-default value with "not built yet", so nothing half-works.
 
+**Status, A0 (2026-10-29): built.** Every key of §5-§8 is in `schema.rs` (`MaPolicySpec` and
+its seven blocks, `CapacitySpec`, and `site`, `sites`, `lat_deg`, `lon_deg`, `capacity`,
+`ma_policy`, `ica_levels` on a provider), all absent by default, so every scenario hash is
+unchanged. The engine modules `ma_policy.rs` and `scms_topology.rs` hold each key's
+`_IDS`, `KEY_STATUS` (`refused`), range, title, unit, step and menu (`Opt` rows with
+`available: false` and the reason for every unbuilt value), read through
+`scenario/module_keys.rs` by `validate::status_of`/`bound_of`, `options::title`/`extra_values`
+and `publish` (`unit`, new `x-step`). B and C edit only those two files' tables. The loader
+and the run refuse every non-default value with "not built yet" (the run through
+`MaHost::from_scenario`, `deployment_of` and the `apply_capacity` call after the peer runs);
+only `ma_policy.preset: cv-pilot-manual` and `ica_levels: 1` load. Choices made here (§9 rule):
+
+* `decay` and `population_guard` are blocks with a `mode` select (`{mode: daily-multiplier,
+  factor, hour_et}`) rather than the scalar shorthand of the §7 sketch, so each field is its
+  own control with its own range.
+* `decay.half_life_s` 1 s to 1 year, `defence.reputation_max`/`report_budget` 1 to 10⁶ and
+  `decision.review_s` (0, 30 days]: §7 gives no range; these span every cited horizon.
+  `review_s` keeps `lifecycle.ma_review_s`'s 30-day top but excludes 0, because
+  `decision.mode: automatic` is the no-operator case.
+* Map keys are closed: `evidence.rules` takes the five SM-MBR subtypes; `sites` and
+  `capacity` take `deployment::ROLES`. The `detect/*` rule keys and `ica-2…` roles come with
+  B1 and C3b. `ma_policy` together with `detection.ma` is refused now (§7 Conflicts).
+* Left for A1-A3: `x-key-options` for the map keys, presets (`x-presets`), relevance, guide
+  rows, and the UI reading `x-step`.
+
+Checks (all shown red under a named fault, then reverted): `ma_policy::tests` and
+`scms_topology::tests` (each non-default value refused at its path, the run refusing
+without the loader, malformed values named, menus equal to their `_IDS`) and
+`publish::tests::module_keys_publish_menus_ranges_and_status` (62 leaves, each with a
+title, a menu or unit/range/step, and status `refused`). The `phase2` and `bsm_timing`
+goldens are unchanged.
+
+
 After A0, B and C edit only their own files. They make a key live by flipping their own
 module's `KEY_STATUS` and refusal, never by editing `validate.rs`.
 

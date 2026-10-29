@@ -1229,7 +1229,8 @@ pub fn extra_values(path: &str) -> Option<(Vec<Value>, bool)> {
                 .collect(),
             true,
         )),
-        _ => None,
+        // 08-settings-ux-and-gaps §5-§8: the keys an engine module owns.
+        _ => crate::scenario::module_keys::options(path),
     }
 }
 
@@ -1880,7 +1881,8 @@ pub fn title(path: &str) -> Option<&'static str> {
         "actors.vehicles.gnss" => "GNSS receivers",
         "actors.vehicles.gnss.rtk" => "RTK-corrected receivers",
         // end traffic audit
-        _ => return None,
+        // 08-settings-ux-and-gaps §5-§8: the keys an engine module owns.
+        _ => return crate::scenario::module_keys::words(path).map(|k| k.title),
     })
 }
 
