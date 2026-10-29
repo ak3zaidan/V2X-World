@@ -63,7 +63,7 @@ import "../styles/settings.css";
 import { SettingsDocContext } from "./docContext.js";
 import { SettingRow } from "./SettingRow.js";
 import { localUsVerdict } from "./scmsDeployment.js";
-import { PARAMS_POINTER, inheritedValue, movableKeys, moveIntoFields } from "./legacyParams.js";
+import { inheritedValue, movableKeys, moveIntoFields } from "./legacyParams.js";
 
 const SECTION_KEY = "v2xw.settings.section";
 const ADVANCED_KEY = "v2xw.settings.advanced";
@@ -296,16 +296,7 @@ export function SettingsWindow({
       onEdit={editSetting}
       onUndo={undoEdit}
     />
-    {f.pointer === PARAMS_POINTER && movable.length > 0 ? (
-      <div className="setting-move" data-testid="params-move">
-        <span className="dim">
-          {movable.length} of these {movable.length === 1 ? "value has a field" : "values have fields"} in the form.
-        </span>
-        <button type="button" className="btn small" onClick={() => moveIntoFields(draft, movable).forEach((w) => editSetting(w.pointer, w.value))}>
-          Move into the form
-        </button>
-      </div>
-    ) : null}
+
     </SettingsDocContext.Provider>
   );
 
