@@ -2056,7 +2056,12 @@ mod tests {
         // Centred on the reference instead, the two bodies of the wedge miss each other.
         let centred = |(p, h, l, w): (Vec3, f64, f64, f64)| {
             let (s, c) = math::sin_cos(h);
-            (Vec3::new(p.x - 0.5 * l * c, p.y - 0.5 * l * s, 0.0), h, l, w)
+            (
+                Vec3::new(p.x - 0.5 * l * c, p.y - 0.5 * l * s, 0.0),
+                h,
+                l,
+                w,
+            )
         };
         assert!(!bodies_touch(centred(crossing), centred(standing)));
     }

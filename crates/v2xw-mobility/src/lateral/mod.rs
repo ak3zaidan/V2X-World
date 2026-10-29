@@ -290,7 +290,10 @@ mod tests {
         for (w, lane) in [(2.55, 3.0), (2.16, 2.5), (0.9, 3.5), (2.6, 2.6), (2.6, 2.4)] {
             for left in [false, true] {
                 let d = pull_over_offset(left, w, lane);
-                assert!(d.abs() + 0.5 * w <= 0.5 * lane.max(w) + 1e-12, "{w} in {lane}: {d}");
+                assert!(
+                    d.abs() + 0.5 * w <= 0.5 * lane.max(w) + 1e-12,
+                    "{w} in {lane}: {d}"
+                );
             }
         }
         assert_eq!(pull_over_offset(false, 2.6, 2.4), 0.0);

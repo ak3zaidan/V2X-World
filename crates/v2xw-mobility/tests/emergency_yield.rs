@@ -49,15 +49,14 @@ fn corridor(world: &World) -> Vec<LaneId> {
         .filter(|l| l.kind == LaneKind::Driving)
         .map(|l| l.start().y)
         .collect();
-    let mid = 0.5 * (ys.iter().cloned().fold(f64::INFINITY, f64::min)
-        + ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
+    let mid = 0.5
+        * (ys.iter().cloned().fold(f64::INFINITY, f64::min)
+            + ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
     let first = world
         .roads
         .lanes()
         .iter()
-        .filter(|l| {
-            l.kind == LaneKind::Driving && l.heading_at(0.0).abs() < 0.1 && l.index == 1
-        })
+        .filter(|l| l.kind == LaneKind::Driving && l.heading_at(0.0).abs() < 0.1 && l.index == 1)
         .min_by(|a, b| {
             let key = |l: &v2xw_world::Lane| (l.start().y - mid).abs() * 1e6 + l.start().x;
             key(a).total_cmp(&key(b))
@@ -133,7 +132,14 @@ fn run(seed: u64, yielding: bool) -> (Option<f64>, AuditReport, f64) {
             let driver = v2xw_mobility::carfollowing::idm::IdmPreset::UrbanHcm
                 .profile(VehicleClass::Emergency);
             let id = engine
-                .spawn_with_route(&world, t, VehicleClass::Emergency, driver, route.clone(), 5.0)
+                .spawn_with_route(
+                    &world,
+                    t,
+                    VehicleClass::Emergency,
+                    driver,
+                    route.clone(),
+                    5.0,
+                )
                 .expect("the ambulance");
             ev = Some(id);
         }
@@ -160,7 +166,13 @@ fn run(seed: u64, yielding: bool) -> (Option<f64>, AuditReport, f64) {
                 world.lane(e.lane).length_m,
                 e.speed_mps,
                 e.changing.is_some(),
-                ahead.map(|a| (a.actor.index(), a.class, (a.s_m - e.s_m) as i32, (a.speed_mps * 10.0).round() / 10.0, a.changing.is_some()))
+                ahead.map(|a| (
+                    a.actor.index(),
+                    a.class,
+                    (a.s_m - e.s_m) as i32,
+                    (a.speed_mps * 10.0).round() / 10.0,
+                    a.changing.is_some()
+                ))
             );
         }
         if let Some(id) = ev {
@@ -181,7 +193,11 @@ fn run(seed: u64, yielding: bool) -> (Option<f64>, AuditReport, f64) {
 fn corridor_time_falls_with_yielding() {
     let mut off_sum = 0.0;
     let mut on_sum = 0.0;
-    let seeds: Vec<u64> = std::env::var("V2XW_SEEDS").ok().map_or(vec![11, 12, 13], |v| v.split(',').filter_map(|x| x.parse().ok()).collect());
+    let seeds: Vec<u64> = std::env::var("V2XW_SEEDS")
+        .ok()
+        .map_or(vec![11, 12, 13], |v| {
+            v.split(',').filter_map(|x| x.parse().ok()).collect()
+        });
     for seed in seeds {
         let (off, off_audit, len) = run(seed, false);
         let (on, on_audit, _) = run(seed, true);
@@ -208,13 +224,22 @@ fn corridor_time_falls_with_yielding() {
             );
         }
         assert_eq!(on_audit.count(Check::LateralOffset), 0);
-        assert_eq!(on_audit.count(Check::RedEntry), 0, "{:?}", on_audit.examples);
+        assert_eq!(
+            on_audit.count(Check::RedEntry),
+            0,
+            "{:?}",
+            on_audit.examples
+        );
         off_sum += off;
         on_sum += on;
     }
     let change = on_sum / off_sum - 1.0;
     eprintln!("mean change {:.1} %", 100.0 * change);
-    assert!(change <= -0.15, "the mean fell only {:.1} %", 100.0 * change);
+    assert!(
+        change <= -0.15,
+        "the mean fell only {:.1} %",
+        100.0 * change
+    );
 }
 
 #[test]

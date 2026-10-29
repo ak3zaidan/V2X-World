@@ -66,9 +66,18 @@ fn naming_the_block_off_changes_nothing_but_the_report_leaf() {
     let (plain, plain_digest, plain_frames) = run(s);
     let (mut with, with_digest, with_frames) = run(named);
     assert_eq!(plain.emergency_distance_m, 0, "reported without the block");
-    assert!(with.emergency_distance_m > 0, "the emergency vehicles drove nowhere");
-    assert_eq!(plain_digest, with_digest, "naming the block off moved the records");
-    assert_eq!(plain_frames, with_frames, "naming the block off moved the frames");
+    assert!(
+        with.emergency_distance_m > 0,
+        "the emergency vehicles drove nowhere"
+    );
+    assert_eq!(
+        plain_digest, with_digest,
+        "naming the block off moved the records"
+    );
+    assert_eq!(
+        plain_frames, with_frames,
+        "naming the block off moved the frames"
+    );
     with.emergency_distance_m = 0;
     assert_eq!(plain, with, "naming the block off moved the report");
 }

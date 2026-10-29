@@ -5834,10 +5834,7 @@ impl NativeMobility {
         let mut s = from_s.max(0.0);
         while s <= conn.length_m {
             let me = body_at(s);
-            if standing
-                .iter()
-                .any(|b| crate::audit::bodies_touch(me, *b))
-            {
+            if standing.iter().any(|b| crate::audit::bodies_touch(me, *b)) {
                 return Some(s);
             }
             s += STEP_M;
@@ -6965,7 +6962,8 @@ impl Mobility for NativeMobility {
                                 .view(c.actor)
                                 .is_some_and(|v| v.class == VehicleClass::Emergency)
                             && c.movement_lane.is_some_and(|m| {
-                                m != movement && self.zones.of(movement).iter().any(|z| z.other == m)
+                                m != movement
+                                    && self.zones.of(movement).iter().any(|z| z.other == m)
                             })
                     })
                 {
@@ -11692,11 +11690,7 @@ mod tests {
     /// One emergency vehicle and one civilian on a two-lane ring, for 12 s: the
     /// civilian's lane index (0 = right) and speed each step, and the emergency vehicle's
     /// front arc length along its first lane relative to the civilian's, each step.
-    fn ev_and_civilian(
-        yielding: bool,
-        civilian_lane: u8,
-        civilian_s: f64,
-    ) -> Vec<(u8, f64, f64)> {
+    fn ev_and_civilian(yielding: bool, civilian_lane: u8, civilian_s: f64) -> Vec<(u8, f64, f64)> {
         let world = ring(&RingParams {
             circumference_m: 800.0,
             segments: 4,
@@ -11802,7 +11796,10 @@ mod tests {
         // It stands until then.
         assert!(on[stopped..passed].iter().all(|(_, v, _)| *v < 0.05));
         let (_, v_end, _) = on.last().copied().expect("steps");
-        assert!(v_end > 1.0, "the driver never moved off again: {v_end:.2} m/s");
+        assert!(
+            v_end > 1.0,
+            "the driver never moved off again: {v_end:.2} m/s"
+        );
         let off = ev_and_civilian(false, 0, 50.0);
         assert!(
             off.iter().all(|(_, v, _)| *v > 3.0),
@@ -11870,7 +11867,10 @@ mod tests {
             engine.step(&mut ctx, params.step);
             t += params.step.as_nanos();
         }
-        (engine.actors[&left].lateral_m, engine.actors[&right].lateral_m)
+        (
+            engine.actors[&left].lateral_m,
+            engine.actors[&right].lateral_m,
+        )
     }
 
     #[test]
@@ -11880,10 +11880,16 @@ mod tests {
         assert!(l > 0.5 && r < -0.5, "leftmost {l:.2} m, rightmost {r:.2} m");
         // Each body stays inside its lane (3.5 m lanes on the ring by default).
         let half = 0.5 * (3.5 - VehicleClass::Passenger.dims().width_m);
-        assert!(l <= half + 1e-9 && r >= -half - 1e-9, "{l:.3} {r:.3} past {half:.3}");
+        assert!(
+            l <= half + 1e-9 && r >= -half - 1e-9,
+            "{l:.3} {r:.3} past {half:.3}"
+        );
         // The US rule pulls everyone right.
         let (l, r) = rescue_lane_offsets(crate::rules::EmergencyYield::PullRight);
-        assert!(l < -0.5 && r < -0.5, "leftmost {l:.2} m, rightmost {r:.2} m");
+        assert!(
+            l < -0.5 && r < -0.5,
+            "leftmost {l:.2} m, rightmost {r:.2} m"
+        );
     }
 
     #[test]
@@ -12643,7 +12649,12 @@ mod tests {
         yielding: bool,
         red_pass_speed_mps: f64,
         foe: bool,
-    ) -> (bool, f64, (Option<u64>, Option<u64>), crate::audit::AuditReport) {
+    ) -> (
+        bool,
+        f64,
+        (Option<u64>, Option<u64>),
+        crate::audit::AuditReport,
+    ) {
         let world = grid(true);
         // A straight-on movement into a four-way signalised junction, so a cross street
         // runs over its path.
@@ -12654,8 +12665,7 @@ mod tests {
             .filter(|l| l.kind == LaneKind::Driving)
             .find_map(|l| {
                 let j = world.roads.try_junction(world.edge(l.edge).to)?;
-                if !matches!(j.control, JunctionControl::Signalised { .. })
-                    || j.incoming.len() < 4
+                if !matches!(j.control, JunctionControl::Signalised { .. }) || j.incoming.len() < 4
                 {
                     return None;
                 }
@@ -12725,8 +12735,11 @@ mod tests {
                         // cross street's all-red).
                         let green = (0..=30).any(|i| {
                             matches!(
-                                FixedTimeSignals::default()
-                                    .state_for(plan, via, ns_to_secs(t0 + i * step_ns)),
+                                FixedTimeSignals::default().state_for(
+                                    plan,
+                                    via,
+                                    ns_to_secs(t0 + i * step_ns)
+                                ),
                                 Some(SignalState::Green | SignalState::GreenYield)
                             )
                         });
@@ -12808,7 +12821,10 @@ mod tests {
         use crate::audit::Check;
         for v_pass in [0.0, 3.0] {
             let (entered, slowest, _, r) = ev_at_a_red(true, v_pass, false);
-            assert!(entered, "v_pass {v_pass}: the emergency vehicle waited out the red");
+            assert!(
+                entered,
+                "v_pass {v_pass}: the emergency vehicle waited out the red"
+            );
             assert!(
                 slowest <= v_pass + 0.5,
                 "v_pass {v_pass}: it took the line at {slowest:.2} m/s"
@@ -12826,8 +12842,14 @@ mod tests {
         // A car arriving on the conflicting green is let through first.
         let (entered, _, (ev_in, foe_in), r) = ev_at_a_red(true, 0.0, true);
         let foe_in = foe_in.expect("the car never entered");
-        assert!(entered, "the emergency vehicle never passed once the car had gone");
-        assert!(ev_in.is_some_and(|e| e > foe_in), "ev {ev_in:?}, car {foe_in}");
+        assert!(
+            entered,
+            "the emergency vehicle never passed once the car had gone"
+        );
+        assert!(
+            ev_in.is_some_and(|e| e > foe_in),
+            "ev {ev_in:?}, car {foe_in}"
+        );
         for c in [Check::ConflictZone, Check::Overlap, Check::RedEntry] {
             assert_eq!(r.count(c), 0, "{:?}", r.counts);
         }
